@@ -294,7 +294,7 @@ end
 
         # Planar isoperimetric quotient of a unit square: 4*pi*A/P^2 = pi/4.
         iso_planar = PM.region_isoperimetric_ratio(pi, r; box=box, kind=:planar)
-        @test isapprox(iso_planar, pi/4; atol=1e-10)
+        @test isapprox(iso_planar, Base.MathConstants.pi / 4; atol=1e-10)
 
         # Boundary-to-volume for unit square: perimeter/area = 4.
         b2v = PM.region_boundary_to_volume_ratio(pi, r; box=box)
@@ -303,16 +303,16 @@ end
         # Mean width:
         # - cauchy formula (convex planar) gives 4/pi exactly
         mw_cauchy = PM.region_mean_width(pi, r; box=box, method=:cauchy)
-        @test isapprox(mw_cauchy, 4.0/pi; atol=1e-10)
+        @test isapprox(mw_cauchy, 4.0 / Base.MathConstants.pi; atol=1e-10)
 
         # - cell-based estimate should be close (direction sampling only)
         mw_cells = PM.region_mean_width(pi, r; box=box, method=:cells, ndirs=2000, rng=MersenneTwister(1))
-        @test isapprox(mw_cells, 4.0/pi; atol=0.03)
+        @test isapprox(mw_cells, 4.0 / Base.MathConstants.pi; atol=0.03)
 
         mf = PM.region_minkowski_functionals(pi, r; box=box, mean_width_method=:cauchy)
         @test isapprox(mf.volume, 1.0; atol=1e-12)
         @test isapprox(mf.boundary_measure, 4.0; atol=1e-12)
-        @test isapprox(mf.mean_width, 4.0/pi; atol=1e-10)
+        @test isapprox(mf.mean_width, 4.0 / Base.MathConstants.pi; atol=1e-10)
 end
 
 @testset "Module-level geometry distributions and adjacency graph stats" begin
@@ -338,22 +338,23 @@ end
         # "Module" dimensions per region (using the new restricted_hilbert overload).
         dims = [0, 1, 0]
 
-        vols = PM.region_volume_samples_by_dim(dims, pi; weights=weights)
+        opts = PM.InvariantOptions(box=box)
+        vols = PM.region_volume_samples_by_dim(dims, pi, opts; weights=weights)
         @test sort(vols[0]) == sort([2.0, 5.0])
         @test vols[1] == [2.0]
 
-        b2v = PM.region_boundary_to_volume_samples_by_dim(dims, pi; box=box, weights=weights)
+        b2v = PM.region_boundary_to_volume_samples_by_dim(dims, pi, opts; weights=weights)
         @test sort(b2v[0]) == sort([1.0, 0.4])
         @test b2v[1] == [1.0]
 
-        opts = PM.InvariantOptions()
         gs = PM.region_adjacency_graph_stats(dims, pi, opts; adjacency=adj)
         @test gs.nregions == 3
         @test gs.nedges == 2
-        @test isapprox(gs.total_edge_weight, 2.0; atol=1e-12)
-        @test sort(gs.degrees) == [1, 1, 2]
-        @test isapprox(gs.modularity_by_dim, -0.5; atol=1e-12)
-        @test isapprox(gs.modularity_by_component, 0.0; atol=1e-12)
+        @test isapprox(sum(values(adj)), 2.0; atol=1e-12)
+        @test sort(gs.degrees.degrees) == [1, 1, 2]
+        @test isapprox(gs.modularity, -0.5; atol=1e-12)
+        @test gs.ncomponents == 1
+        @test gs.component_sizes == [3]
 end
 
 @testset "Covariance-based anisotropy and eccentricity (axis backend exact moments)" begin
@@ -416,7 +417,7 @@ end
     Phi   = reshape(QQ[1], 1, 1)
     FG = PM.Flange{QQ}(2, flats, injs, Phi)
     enc = PM.EncodingOptions(backend=:zn, max_regions=100)
-    P, M, pi = PM.encode_pmodule_from_flange(FG, enc)
+    P, M, pi = DF.encode_pmodule_from_flange(FG, enc)
 
     a = [-10,-10]
     b = [ 10, 10]
@@ -695,7 +696,7 @@ end
     FG    = PM.Flange{QQ}(2, flats, injs, Phi)
 
     enc = PM.EncodingOptions(backend=:zn, max_regions=10)
-    P, M, piZ = PM.encode_pmodule_from_flange(FG, enc)
+    P, M, piZ = DF.encode_pmodule_from_flange(FG, enc)
 
     base_box = ([-2, -2], [2, 2])
     scales = [1, 2, 3, 4]

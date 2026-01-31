@@ -36,31 +36,31 @@ using Test
 
     # If Polyhedra is missing, encoding is unavailable by design.
     if !PLP.HAVE_POLY
-        @test_throws ErrorException PM.encode_pmodules_from_PL_fringes(F1, F2, enc_pl)
+        @test_throws ErrorException DF.encode_pmodules_from_PL_fringes(F1, F2, enc_pl)
         return
     end
 
     # Common-encode both PL presentations to the same finite poset P and modules Ms on P.
-    enc = PM.encode_pmodules_from_PL_fringes(F1, F2, enc_pl)
+    enc = DF.encode_pmodules_from_PL_fringes(F1, F2, enc_pl)
     P = enc.P
     Ms = enc.Ms
 
     # Ext computed on P should match ExtRn wrapper (which internally does the same steps).
-    E_explicit = PM.Ext(Ms[1], Ms[2], df2)
-    E_wrap = PM.ExtRn(F1, F2, enc_pl, df2)
+    E_explicit = DF.Ext(Ms[1], Ms[2], df2)
+    E_wrap = DF.ExtRn(F1, F2, enc_pl, df2)
     @test [PM.dim(E_explicit, t) for t in 0:2] == [PM.dim(E_wrap, t) for t in 0:2]
 
     # Resolution wrapper should use the same encoded poset as explicit encoding.
-    enc1 = PM.encode_pmodule_from_PL_fringe(F1, enc_pl)
-    res_wrap = PM.projective_resolution_Rn(F1, enc_pl, res3; return_encoding=true)
+    enc1 = DF.encode_pmodule_from_PL_fringe(F1, enc_pl)
+    res_wrap = DF.projective_resolution_Rn(F1, enc_pl, res3; return_encoding=true)
     @test res_wrap.P.leq == enc1.P.leq
-    @test PM.betti_table(res_wrap.res) == PM.betti_table(PM.projective_resolution(enc1.M, res3))
+    @test DF.betti_table(res_wrap.res) == DF.betti_table(DF.projective_resolution(enc1.M, res3))
 
     # Minimal Betti data: obtain it by requesting a checked-minimal resolution.
     res_min = PM.ResolutionOptions(maxlen=3, minimal=true, check=true)
 
-    bt_wrap = PM.betti(PM.projective_resolution_Rn(F1, enc_pl, res_min))
-    bt_explicit = PM.betti(PM.projective_resolution(enc1.M, res_min))
+    bt_wrap = DF.betti(DF.projective_resolution_Rn(F1, enc_pl, res_min))
+    bt_explicit = DF.betti(DF.projective_resolution(enc1.M, res_min))
     @test bt_wrap == bt_explicit
 end
 

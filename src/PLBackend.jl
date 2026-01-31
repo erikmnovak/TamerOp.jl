@@ -22,6 +22,8 @@ module PLBackend
 
 using ..FiniteFringe
 using ..CoreModules: QQ, AbstractPLikeEncodingMap, EncodingOptions
+using Random
+using LinearAlgebra
 
 import ..CoreModules: locate, dimension, representatives, axes_from_encoding
 import ..RegionGeometry: region_weights, region_bbox, region_diameter, region_adjacency,
@@ -1119,7 +1121,7 @@ function region_mean_width(pi::PLEncodingMapBoxes, r::Integer; box=nothing,
 
     if method === :cauchy
         n == 2 || error("region_mean_width(method=:cauchy) requires n==2, got n=$n")
-        return region_boundary_measure(pi, r; box=box, strict=strict) / pi
+        return region_boundary_measure(pi, r; box=box, strict=strict) / Base.MathConstants.pi
     elseif method !== :cells
         error("region_mean_width: unknown method=$method (use :auto, :cells, :cauchy)")
     end
@@ -1162,7 +1164,8 @@ function region_mean_width(pi::PLEncodingMapBoxes, r::Integer; box=nothing,
 end
 
 """
-    region_principal_directions(pi::PLEncodingMapBoxes, r; box, strict=true, closure=true,
+    region_principal_directions(pi::PLEncodingMapBoxes, r::Integer; box, nsamples=20_000,
+        rng=Random.default_rng(), strict=true, closure=true, max_proposals=10*nsamples,
         return_info=false, nbatches=0)
 
 Compute mean/cov/principal directions for region `r` intersected with a finite
@@ -1184,17 +1187,25 @@ Diagnostics:
   * `n_proposed`: number of candidate cells intersecting the query box
 
 If `return_info=true`, additional (mostly zero) fields are included for API
-compatibility with sampling-based backends.
+compatibility with sampling-based backends. The keywords `nsamples`, `rng`,
+and `max_proposals` are accepted for API consistency but ignored because this
+backend computes exact moments over grid cells.
 """
-function region_principal_directions(pi::PLEncodingMapBoxes, r;
+function region_principal_directions(pi::PLEncodingMapBoxes, r::Integer;
     box=nothing,
+    nsamples::Integer=20_000,
+    rng=Random.default_rng(),
     strict::Bool=true,
     closure::Bool=true,
+    max_proposals::Integer=10*nsamples,
     return_info::Bool=false,
     nbatches::Integer=0)
 
     closure = closure  # silence unused kw warning
     nbatches = nbatches
+    nsamples = nsamples
+    rng = rng
+    max_proposals = max_proposals
 
     box === nothing && error("region_principal_directions: requires a finite box=(a,b)")
     a_in, b_in = box
@@ -1351,7 +1362,7 @@ end
 
 
 """
-    region_adjacency(pi::PLEncodingMapBoxes, box; strict=true) -> Dict{Tuple{Int,Int},Float64}
+    region_adjacency(pi::PLEncodingMapBoxes; box, strict=true) -> Dict{Tuple{Int,Int},Float64}
 
 Compute the (n-1)-dimensional interface measure between every pair of distinct
 regions inside the window `box=(a,b)`.
@@ -1362,8 +1373,8 @@ measure of the shared interface inside `box`.
 This implementation uses the precomputed dense cell table (`pi.cell_to_region`)
 and does *not* recompute signatures per cell.
 """
-function region_adjacency(pi::PLEncodingMapBoxes,
-    box; strict::Bool=true)
+function region_adjacency(pi::PLEncodingMapBoxes;
+    box, strict::Bool=true)
 
     box === nothing && error("region_adjacency: box=(a,b) is required")
     a_in, b_in = box

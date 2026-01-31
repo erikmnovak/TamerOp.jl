@@ -42,27 +42,27 @@ end
     P1 = chain_poset(1)
     S = IR.pmodule_from_fringe(one_by_one_fringe(P1, FF.principal_upset(P1, 1), FF.principal_downset(P1, 1)))
 
-    E = PM.Ext(S, S, PM.DerivedFunctorOptions(maxdeg=3))
+    E = DF.Ext(S, S, PM.DerivedFunctorOptions(maxdeg=3))
     @test PM.dim(E, 0) == 1
     @test all(PM.dim(E, t) == 0 for t in 1:3)
 
-    T = PM.Tor(S, S, PM.DerivedFunctorOptions(maxdeg=3))
+    T = DF.Tor(S, S, PM.DerivedFunctorOptions(maxdeg=3))
     @test PM.dim(T, 0) == 1
     @test all(PM.dim(T, t) == 0 for t in 1:3)
 
     # Zero module: Ext and Tor should vanish in all degrees.
     Z = MD.PModule{QQ}(P1, [0], Dict{Tuple{Int,Int}, Matrix{QQ}}())
 
-    EZS = PM.Ext(Z, S, PM.DerivedFunctorOptions(maxdeg=2))
-    ESZ = PM.Ext(S, Z, PM.DerivedFunctorOptions(maxdeg=2))
-    EZZ = PM.Ext(Z, Z, PM.DerivedFunctorOptions(maxdeg=2))
+    EZS = DF.Ext(Z, S, PM.DerivedFunctorOptions(maxdeg=2))
+    ESZ = DF.Ext(S, Z, PM.DerivedFunctorOptions(maxdeg=2))
+    EZZ = DF.Ext(Z, Z, PM.DerivedFunctorOptions(maxdeg=2))
     @test all(PM.dim(EZS, t) == 0 for t in 0:2)
     @test all(PM.dim(ESZ, t) == 0 for t in 0:2)
     @test all(PM.dim(EZZ, t) == 0 for t in 0:2)
 
-    TZS = PM.Tor(Z, S, PM.DerivedFunctorOptions(maxdeg=2))
-    TSZ = PM.Tor(S, Z, PM.DerivedFunctorOptions(maxdeg=2))
-    TZZ = PM.Tor(Z, Z, PM.DerivedFunctorOptions(maxdeg=2))
+    TZS = DF.Tor(Z, S, PM.DerivedFunctorOptions(maxdeg=2))
+    TSZ = DF.Tor(S, Z, PM.DerivedFunctorOptions(maxdeg=2))
+    TZZ = DF.Tor(Z, Z, PM.DerivedFunctorOptions(maxdeg=2))
     @test all(PM.dim(TZS, t) == 0 for t in 0:2)
     @test all(PM.dim(TSZ, t) == 0 for t in 0:2)
     @test all(PM.dim(TZZ, t) == 0 for t in 0:2)
@@ -71,7 +71,7 @@ end
     P = disjoint_two_chains_poset(2, 2)  # vertices {1,2} and {3,4} are separate components
     S1 = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, 1), FF.principal_downset(P, 1)))
     S3 = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, 3), FF.principal_downset(P, 3)))
-    E13 = PM.Ext(S1, S3, PM.DerivedFunctorOptions(maxdeg=2))
+    E13 = DF.Ext(S1, S3, PM.DerivedFunctorOptions(maxdeg=2))
     @test all(PM.dim(E13, t) == 0 for t in 0:2)
 
     # Cross-check: Ext computed via projectives vs via injectives agree on dimensions.
@@ -79,8 +79,8 @@ end
     A = IR.pmodule_from_fringe(one_by_one_fringe(Pd, FF.principal_upset(Pd, 1), FF.principal_downset(Pd, 1)))
     B = IR.pmodule_from_fringe(one_by_one_fringe(Pd, FF.principal_upset(Pd, 4), FF.principal_downset(Pd, 4)))
 
-    Eproj = PM.Ext(A, B, PM.DerivedFunctorOptions(maxdeg=2))
-    resBinj = PM.injective_resolution(B, PM.ResolutionOptions(maxlen=2))
+    Eproj = DF.Ext(A, B, PM.DerivedFunctorOptions(maxdeg=2))
+    resBinj = DF.injective_resolution(B, PM.ResolutionOptions(maxlen=2))
     Einj = PM.ExtInjective(A, resBinj)
 
     @test [PM.dim(Eproj, t) for t in 0:2] == [PM.dim(Einj, t) for t in 0:2]
@@ -612,7 +612,7 @@ end
     g = PM.ModuleCochainMap(C, C, [B]; tmin=0, tmax=0, check=true)
     gf = PM.ModuleCochainMap(C, C, [BA]; tmin=0, tmax=0, check=true)
 
-    resN = PM.injective_resolution(N, PM.ResolutionOptions(maxlen=1))
+    resN = DF.injective_resolution(N, PM.ResolutionOptions(maxlen=1))
 
     Fmap = PM.rhom_map_first(f, N; maxlen=1, resN=resN, check=true)
     Gmap = PM.rhom_map_first(g, N; maxlen=1, resN=resN, check=true)

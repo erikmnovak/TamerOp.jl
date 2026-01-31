@@ -35,7 +35,7 @@ mk_inj(b, coords; id=:E) = FZ.IndInj(mk_face(length(b), coords), b; id=id)
     df = PM.DerivedFunctorOptions(maxdeg=2)
     res = PM.ResolutionOptions(maxlen=3)
 
-    enc_out = PM.encode_pmodules_from_flanges(FG1, FG2, enc)
+    enc_out = DF.encode_pmodules_from_flanges(FG1, FG2, enc)
     P = enc_out.P
     Ms = enc_out.Ms
 
@@ -43,21 +43,21 @@ mk_inj(b, coords; id=:E) = FZ.IndInj(mk_face(length(b), coords), b; id=id)
     @test Ms[1].Q === P
     @test Ms[2].Q === P
 
-    E_explicit = PM.Ext(Ms[1], Ms[2], df)
-    E_wrap = PM.ExtZn(FG1, FG2, enc, df)
+    E_explicit = DF.Ext(Ms[1], Ms[2], df)
+    E_wrap = DF.ExtZn(FG1, FG2, enc, df)
 
     @test [PM.dim(E_explicit, t) for t in 0:2] == [PM.dim(E_wrap, t) for t in 0:2]
 
     # Resolution wrappers: compare against "encode + resolution" directly.
-    enc1 = PM.encode_pmodule_from_flange(FG1, enc)
-    res_wrap = PM.projective_resolution_Zn(FG1, enc, res; return_encoding=true)
+    enc1 = DF.encode_pmodule_from_flange(FG1, enc)
+    res_wrap = DF.projective_resolution_Zn(FG1, enc, res; return_encoding=true)
     @test res_wrap.P.leq == enc1.P.leq
-    @test PM.betti_table(res_wrap.res) == PM.betti_table(PM.projective_resolution(enc1.M, res))
+    @test DF.betti_table(res_wrap.res) == DF.betti_table(DF.projective_resolution(enc1.M, res))
 
     res_min = PM.ResolutionOptions(maxlen=3, minimal=true, check=true)
 
-    bt_wrap = PM.betti(PM.projective_resolution_Zn(FG1, enc, res_min))
-    bt_explicit = PM.betti(PM.projective_resolution(enc1.M, res_min))
+    bt_wrap = DF.betti(DF.projective_resolution_Zn(FG1, enc, res_min))
+    bt_explicit = DF.betti(DF.projective_resolution(enc1.M, res_min))
     @test bt_wrap == bt_explicit
 end
 
@@ -71,21 +71,21 @@ end
     enc = PM.EncodingOptions(backend=:zn, max_regions=50_000)
     res = PM.ResolutionOptions(maxlen=3, check=true)
 
-    P, M, pi = PM.encode_pmodule_from_flange(FG, enc)
+    P, M, pi = DF.encode_pmodule_from_flange(FG, enc)
 
     # Compare injective resolutions (wrapper vs explicit encode-then-resolve)
-    resI = PM.injective_resolution(M, res)
-    resI_Z = PM.injective_resolution_Zn(FG, enc, res)
-    @test PM.bass_table(resI_Z) == PM.bass_table(resI)
+    resI = DF.injective_resolution(M, res)
+    resI_Z = DF.injective_resolution_Zn(FG, enc, res)
+    @test DF.bass_table(resI_Z) == DF.bass_table(resI)
 
     # Minimal injective resolutions and minimal Bass invariants
     res_min = PM.ResolutionOptions(maxlen=3, minimal=true, check=true)
 
-    resMinI = PM.injective_resolution(M, res_min)
-    resMinI_Z = PM.injective_resolution_Zn(FG, enc, res_min)
-    @test PM.bass_table(resMinI_Z) == PM.bass_table(resMinI)
+    resMinI = DF.injective_resolution(M, res_min)
+    resMinI_Z = DF.injective_resolution_Zn(FG, enc, res_min)
+    @test DF.bass_table(resMinI_Z) == DF.bass_table(resMinI)
 
-    @test PM.bass(resMinI_Z) == PM.bass(resMinI)
+    @test DF.bass(resMinI_Z) == DF.bass(resMinI)
 end
 
 @testset "FlangeZn: IndFlat/IndInj constructors (new API)" begin
@@ -279,7 +279,7 @@ end
     FG = FZ.Flange{QQ}(2, flats, inj, Phi)
 
     enc = PM.EncodingOptions(backend=:zn, max_regions=100)
-    P, M, pi = PM.encode_pmodule_from_flange(FG, enc)
+    P, M, pi = DF.encode_pmodule_from_flange(FG, enc)
 
     # Expected: only 3 regions along coordinate 1 (below, inside, above), and 1 slab along coord 2.
     @test P.n == 3
@@ -319,7 +319,7 @@ end
     )
 
     enc = PM.EncodingOptions(backend=:zn, max_regions=200)
-    P, Ms, pi = PM.encode_pmodules_from_flanges(FG1, FG2, enc)
+    P, Ms, pi = DF.encode_pmodules_from_flanges(FG1, FG2, enc)
     M1, M2 = Ms
 
     # Critical coordinates along g1 are {0,1,2,3} giving <= 5 slabs => P.n <= 5.
@@ -369,7 +369,7 @@ end
     FG    = FZ.Flange{QQ}(2, flats, injs, Phi)
 
     enc = PM.EncodingOptions(backend=:zn, max_regions=100)
-    P, Henc, pi = PM.encode_pmodule_from_flange(FG, enc)
+    P, Henc, pi = DF.encode_pmodule_from_flange(FG, enc)
 
     a = [-2, -3]
     b = [ 3,  4]
@@ -401,7 +401,7 @@ end
     FG    = FZ.Flange{QQ}(2, flats, injs, Phi)
 
     enc = PM.EncodingOptions(backend=:zn, max_regions=100)
-    P, Henc, pi = PM.encode_pmodule_from_flange(FG, enc)
+    P, Henc, pi = DF.encode_pmodule_from_flange(FG, enc)
 
     a = [-50, -500]
     b = [ 49,  499]
@@ -443,7 +443,7 @@ end
     FG    = FZ.Flange{QQ}(2, flats, injs, Phi)
 
     enc = PM.EncodingOptions(backend=:zn, max_regions=100)
-    P, Henc, pi = PM.encode_pmodule_from_flange(FG, enc)
+    P, Henc, pi = DF.encode_pmodule_from_flange(FG, enc)
 
     a = [-50, -500]
     b = [ 49,  499]
@@ -463,7 +463,7 @@ end
     FG    = FZ.Flange{QQ}(2, flats, injs, Phi)
 
     enc = PM.EncodingOptions(backend=:zn, max_regions=100)
-    P, Henc, pi = PM.encode_pmodule_from_flange(FG, enc)
+    P, Henc, pi = DF.encode_pmodule_from_flange(FG, enc)
 
     # Choose an interval length > typemax(Int) while endpoints still fit in Int64.
     a = [-9_000_000_000_000_000_000, 0]

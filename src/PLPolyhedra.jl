@@ -591,7 +591,8 @@ end
 # For sampling-based geometry, exact QQ membership is overkill and can be slow,
 # because it must rationalize every sampled Float64 coordinate.
 function _in_hpoly_float(Af::AbstractMatrix{<:Real}, bf::AbstractVector{<:Real},
-                         x::AbstractVector{<:Real}; tol::Float64=1e-12)::Bool
+                         x::AbstractVector{<:Real}; tol::Float64=1e-12,
+                         closure::Bool=true)::Bool
     m = size(Af, 1)
     n = size(Af, 2)
     length(x) == n || error("_in_hpoly_float: dimension mismatch")
@@ -600,8 +601,15 @@ function _in_hpoly_float(Af::AbstractMatrix{<:Real}, bf::AbstractVector{<:Real},
         for j in 1:n
             s += float(Af[i, j]) * float(x[j])
         end
-        if s > float(bf[i]) + tol
-            return false
+        bfi = float(bf[i])
+        if closure
+            if s > bfi + tol
+                return false
+            end
+        else
+            if s >= bfi - tol
+                return false
+            end
         end
     end
     return true
@@ -738,12 +746,13 @@ end
 # Internal helpers for region_weights ------------------------------------------------
 
 # Exact region weights via Polyhedra volume computations (if available).
-function _region_weights_exact(pi::PLEncodingMap, box)
-    HAVE_POLYHEDRA_CDDLIB || error("method=:exact requires Polyhedra/CDDLib. Use method=:mc instead.")
+function _region_weights_exact(pi::PLEncodingMap, box; closure::Bool=true)
+    HAVE_POLY || error("method=:exact requires Polyhedra/CDDLib. Use method=:mc instead.")
     (ell, u) = box
     n = length(ell)
 
-    w = zeros(Float64, pi.nregions)
+    nregions = length(pi.regions)
+    w = zeros(Float64, nregions)
 
     ellq = QQ.(ell)
     uq = QQ.(u)
@@ -752,9 +761,9 @@ function _region_weights_exact(pi::PLEncodingMap, box)
     bupper = uq
     blower = -ellq
 
-    for r in 1:pi.nregions
+    for r in 1:nregions
         A = pi.regions[r].A
-        b = pi.regions[r].b
+        b = closure ? _relaxed_b(pi.regions[r]) : pi.regions[r].b
         Aall = vcat(A, Aupper, Alower)
         ball = vcat(b, bupper, blower)
         p = Polyhedra.polyhedron(Polyhedra.hrep(Aall, ball), CDDLib.Library(:exact))
@@ -776,16 +785,17 @@ function _region_weights_mc(pi::PLEncodingMap, box;
     n = length(ell)
     ellf = Float64.(ell)
     uf = Float64.(u)
+    nregions = length(pi.regions)
 
     total_vol = 1.0
     @inbounds for i in 1:n
         total_vol *= (uf[i] - ellf[i])
     end
 
-    Af = [Float64.(pi.regions[r].A) for r in 1:pi.nregions]
-    bf = [Float64.(pi.regions[r].b) for r in 1:pi.nregions]
+    Af = [Float64.(pi.regions[r].A) for r in 1:nregions]
+    bf = [Float64.(pi.regions[r].b) for r in 1:nregions]
 
-    counts = zeros(Int, pi.nregions)
+    counts = zeros(Int, nregions)
     x = Vector{Float64}(undef, n)
 
     for _ in 1:nsamples
@@ -793,7 +803,7 @@ function _region_weights_mc(pi::PLEncodingMap, box;
             x[i] = rand(rng) * (uf[i] - ellf[i]) + ellf[i]
         end
         assigned = false
-        for r in 1:pi.nregions
+        for r in 1:nregions
             if _in_hpoly_float(Af[r], bf[r], x; closure=closure, tol=tol)
                 counts[r] += 1
                 assigned = true
@@ -807,9 +817,9 @@ function _region_weights_mc(pi::PLEncodingMap, box;
 
     w = total_vol .* (counts ./ nsamples)
 
-    stderr = Vector{Float64}(undef, pi.nregions)
+    stderr = Vector{Float64}(undef, nregions)
     invn = 1.0 / nsamples
-    @inbounds for r in 1:pi.nregions
+    @inbounds for r in 1:nregions
         p = counts[r] * invn
         stderr[r] = total_vol * sqrt(p * (1.0 - p) * invn)
     end
@@ -838,15 +848,20 @@ CI uses Wilson interval on the binomial proportion scaled by `total_volume`.
 """
 function region_weights(pi::PLEncodingMap;
     box=nothing,
+    cache=nothing,
     method::Symbol=:exact,
     nsamples::Int=100_000,
     rng::AbstractRNG=Random.default_rng(),
     strict::Bool=true,
+    closure::Bool=true,
     return_info::Bool=false,
     alpha::Real=0.05,
 )
+    box = _box_from_cache_or_arg(box, cache)
+    cache isa PolyInBoxCache && _check_cache_compatible(cache, pi, box, closure)
+    nregions = length(pi.regions)
     if box === nothing
-        w = ones(Float64, pi.nregions)
+        w = ones(Float64, nregions)
         if !return_info
             return w
         end
@@ -872,7 +887,7 @@ function region_weights(pi::PLEncodingMap;
     end
 
     if method == :exact
-        w = _region_weights_exact(pi, box)
+        w = _region_weights_exact(pi, box; closure=closure)
         if !return_info
             return w
         end
@@ -889,7 +904,8 @@ function region_weights(pi::PLEncodingMap;
             nsamples=0,
             counts=nothing)
     elseif method == :mc
-        w, stderr, counts = _region_weights_mc(pi, box; nsamples=nsamples, rng=rng, strict=strict)
+        w, stderr, counts = _region_weights_mc(pi, box; nsamples=nsamples, rng=rng,
+            strict=strict, closure=closure)
         if !return_info
             return w
         end

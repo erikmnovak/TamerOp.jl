@@ -260,17 +260,17 @@ end
 
     # Upset indicator resolution
     F, _dF = IR.upset_resolution(M1; maxlen=2)
-    resP = PM.projective_resolution(M1, PM.ResolutionOptions(maxlen=2))
+    resP = DF.projective_resolution(M1, PM.ResolutionOptions(maxlen=2))
 
-    @test PM.betti(F) == PM.betti(resP)
-    @test PM.betti_table(F) == PM.betti_table(resP)
+    @test DF.betti(F) == DF.betti(resP)
+    @test DF.betti_table(F) == DF.betti_table(resP)
 
     # Downset indicator resolution
     E, _dE = IR.downset_resolution(M1; maxlen=2)
-    resI = PM.injective_resolution(M1, PM.ResolutionOptions(maxlen=2))
+    resI = DF.injective_resolution(M1, PM.ResolutionOptions(maxlen=2))
 
-    @test PM.bass(E) == PM.bass(resI)
-    @test PM.bass_table(E) == PM.bass_table(resI)
+    @test DF.bass(E) == DF.bass(resI)
+    @test DF.bass_table(E) == DF.bass_table(resI)
 end
 
 
@@ -1480,7 +1480,8 @@ _is_ascii(s::AbstractString) = all(c -> Int(c) <= 0x7f, s)
         P, H, pi = PLB.encode_fringe_boxes(Ups, Downs, Phi)
 
         box = ([-2.0], [7.0])
-        summ = PM.module_geometry_summary(H, pi; box=box, nbins=4)
+        opts = PM.InvariantOptions(box=box)
+        summ = PM.module_geometry_summary(H, pi, opts; nbins=4)
 
         s = PM.pretty(summ; name="module_geometry_summary", max_items=50, max_list=4)
 
@@ -1511,6 +1512,7 @@ using Test
 
     box = ([-1.0], [3.0])
     w = PM.region_weights(pi; box=box)
+    opts = PM.InvariantOptions(box=box)
 
     # Identify regions robustly using locate (avoid relying on ordering).
     rL = PM.locate(pi, [-0.5])
@@ -1526,15 +1528,15 @@ using Test
     vals[rM] = 1
     vals[rR] = 1
 
-    m0 = PM.measure_by_value(vals, 0, pi; box=box)
-    m1 = PM.measure_by_value(vals, 1, pi; box=box)
+    m0 = PM.measure_by_value(vals, 0, pi, opts)
+    m1 = PM.measure_by_value(vals, 1, pi, opts)
     @test isapprox(m0, 1.0; atol=1e-9)
     @test isapprox(m1, 3.0; atol=1e-9)
 
     mask = falses(P.n)
     mask[rM] = true
     mask[rR] = true
-    sm = PM.support_measure(mask, pi; box=box)
+    sm = PM.support_measure(mask, pi, opts)
     @test isapprox(sm, 3.0; atol=1e-9)
 
     # Betti support by degree (toy numeric example)
@@ -1543,7 +1545,7 @@ using Test
     B[1, rR] = 2
     B[2, rM] = 1
 
-    bs = PM.betti_support_measures(B, pi; box=box)
+    bs = PM.betti_support_measures(B, pi, opts)
     @test isapprox(bs.support_total, 1.0 + 2.0 + 2.0; atol=1e-9)
     @test length(bs.support_by_degree) == 2
 
@@ -1553,7 +1555,7 @@ using Test
         (0, rR) => 2,
         (1, rM) => 1
     )
-    bs2 = PM.betti_support_measures(Bd, pi; box=box)
+    bs2 = PM.betti_support_measures(Bd, pi, opts)
     @test isapprox(bs2.support_total, bs.support_total; atol=1e-9)
 end
 

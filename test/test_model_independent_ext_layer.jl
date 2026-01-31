@@ -162,7 +162,7 @@ end
     N = direct_sum([S2, S2])
 
     # Unified Ext object, canonical basis chosen from the projective model.
-    E = PM.Ext(M, N, PM.DerivedFunctorOptions(maxdeg = 1, model = :unified, canon = :projective))
+    E = DF.Ext(M, N, PM.DerivedFunctorOptions(maxdeg = 1, model = :unified, canon = :projective))
 
     @test PM.dim(E, 1) == 4
 
@@ -250,7 +250,7 @@ end
     # Endomorphism: scale vertex 1 by 2 and vertex 2 by 3.
     g = MD.PMorphism{QQ}(N, N, [fill(QQ(2), 1, 1), fill(QQ(3), 1, 1)])
 
-    res = PM.injective_resolution(N, PM.ResolutionOptions(maxlen=2))
+    res = DF.injective_resolution(N, PM.ResolutionOptions(maxlen=2))
     phis = PM.lift_injective_chainmap(g, res, res; upto=2)
 
     @test length(phis) == 3

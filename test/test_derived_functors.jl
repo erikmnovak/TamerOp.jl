@@ -64,7 +64,7 @@ end
     )
 
     # Projective resolution should be minimal (and certified minimal by the checker).
-    resP = PM.projective_resolution(S1, PM.ResolutionOptions(maxlen=4))
+    resP = DF.projective_resolution(S1, PM.ResolutionOptions(maxlen=4))
     repP = PM.minimality_report(resP)
     @test repP.cover_ok
     @test repP.minimal
@@ -73,7 +73,7 @@ end
     PM.assert_minimal(resP)
 
     # Passing ResolutionOptions(minimal=true, check=true) should succeed and return a minimal resolution.
-    resPmin = PM.projective_resolution(S1, PM.ResolutionOptions(maxlen=4, minimal=true, check=true))
+    resPmin = DF.projective_resolution(S1, PM.ResolutionOptions(maxlen=4, minimal=true, check=true))
     @test PM.is_minimal(resPmin)
 
     # Corrupt the resolution by inserting a diagonal coefficient in d^1 (degree 1 -> 0),
@@ -100,7 +100,7 @@ end
     end
 
     # Injective resolution: also expected to be minimal for these constructions.
-    resI = PM.injective_resolution(S1, PM.ResolutionOptions(maxlen=4))
+    resI = DF.injective_resolution(S1, PM.ResolutionOptions(maxlen=4))
     repI = PM.minimality_report(resI)
     @test repI.hull_ok
     @test repI.minimal
@@ -108,7 +108,7 @@ end
     @test PM.is_minimal(resI)
     PM.assert_minimal(resI)
 
-    resImin = PM.injective_resolution(S1, PM.ResolutionOptions(maxlen=4, minimal=true, check=true))
+    resImin = DF.injective_resolution(S1, PM.ResolutionOptions(maxlen=4, minimal=true, check=true))
     @test PM.is_minimal(resImin)
 end
 
@@ -125,8 +125,8 @@ end
 
     # Minimal projective resolution of S1 on the diamond should have:
     # P0 = P1, P1 = P2 oplus P3, P2 = P4.
-    res = PM.projective_resolution(S1, PM.ResolutionOptions(maxlen=2))
-    b = PM.betti(res)
+    res = DF.projective_resolution(S1, PM.ResolutionOptions(maxlen=2))
+    b = DF.betti(res)
 
     @test length(b) == 4
     @test b[(0, 1)] == 1
@@ -134,7 +134,7 @@ end
     @test b[(1, 3)] == 1
     @test b[(2, 4)] == 1
 
-    Btbl = PM.betti_table(res)
+    Btbl = DF.betti_table(res)
     @test Btbl[1,1] == 1
     @test Btbl[2,2] == 1
     @test Btbl[2,3] == 1
@@ -153,12 +153,12 @@ end
     S1, S2, S3, S4 = Sm
 
     # Compute the target Ext space once so coordinates are comparable.
-    E14 = PM.Ext(S1, S4, PM.DerivedFunctorOptions(maxdeg=2))
+    E14 = DF.Ext(S1, S4, PM.DerivedFunctorOptions(maxdeg=2))
     @test PM.dim(E14, 2) == 1
 
     # Via the chain 1 -> 2 -> 4
-    E24 = PM.Ext(S2, S4, PM.DerivedFunctorOptions(maxdeg=1))
-    E12 = PM.Ext(S1, S2, PM.DerivedFunctorOptions(maxdeg=2))  # needs tmax >= 2 because p+q = 2
+    E24 = DF.Ext(S2, S4, PM.DerivedFunctorOptions(maxdeg=1))
+    E12 = DF.Ext(S1, S2, PM.DerivedFunctorOptions(maxdeg=2))  # needs tmax >= 2 because p+q = 2
     @test PM.dim(E24, 1) == 1
     @test PM.dim(E12, 1) == 1
 
@@ -168,8 +168,8 @@ end
     @test coords_2[1] != 0
 
     # Via the chain 1 -> 3 -> 4
-    E34 = PM.Ext(S3, S4, PM.DerivedFunctorOptions(maxdeg=1))
-    E13 = PM.Ext(S1, S3, PM.DerivedFunctorOptions(maxdeg=2))
+    E34 = DF.Ext(S3, S4, PM.DerivedFunctorOptions(maxdeg=1))
+    E13 = DF.Ext(S1, S3, PM.DerivedFunctorOptions(maxdeg=2))
     _, coords_3 = PM.yoneda_product(E34, 1, [QQ(1)], E13, 1, [QQ(1)]; ELN=E14)
     @test coords_3[1] != 0
 
@@ -195,22 +195,22 @@ end
     S123 = Sm[8]  # {1,2,3}
 
     # Target space: Ext^3(S0, S123) should be 1-dimensional for B3.
-    E03 = PM.Ext(S0, S123, PM.DerivedFunctorOptions(maxdeg=3))
+    E03 = DF.Ext(S0, S123, PM.DerivedFunctorOptions(maxdeg=3))
     @test PM.dim(E03, 3) == 1
 
     # Degree-1 generators on the cover chain:
     #   {} -> {1} -> {1,2} -> {1,2,3}
-    E23 = PM.Ext(S12, S123, PM.DerivedFunctorOptions(maxdeg=3))
-    E12 = PM.Ext(S1,  S12, PM.DerivedFunctorOptions(maxdeg=3))
-    E01 = PM.Ext(S0,  S1,   PM.DerivedFunctorOptions(maxdeg=3))
+    E23 = DF.Ext(S12, S123, PM.DerivedFunctorOptions(maxdeg=3))
+    E12 = DF.Ext(S1,  S12, PM.DerivedFunctorOptions(maxdeg=3))
+    E01 = DF.Ext(S0,  S1,   PM.DerivedFunctorOptions(maxdeg=3))
 
     @test PM.dim(E23, 1) == 1
     @test PM.dim(E12, 1) == 1
     @test PM.dim(E01, 1) == 1
 
     # Intermediate targets in degree 2 (also 1-dimensional for this choice).
-    E13 = PM.Ext(S1,  S123, PM.DerivedFunctorOptions(maxdeg=3))
-    E02 = PM.Ext(S0,  S12, PM.DerivedFunctorOptions(maxdeg=3))
+    E13 = DF.Ext(S1,  S123, PM.DerivedFunctorOptions(maxdeg=3))
+    E02 = DF.Ext(S0,  S12, PM.DerivedFunctorOptions(maxdeg=3))
     @test PM.dim(E13, 2) == 1
     @test PM.dim(E02, 2) == 1
 
@@ -250,10 +250,10 @@ end
 
     # We test delta^2 : Ext^2(M,C) -> Ext^3(M,A), so we need the resolution through degree t+1 = 3.
     t = 2
-    resM = PM.projective_resolution(S1, PM.ResolutionOptions(maxlen=t+1))   # i.e. maxlen=3
-    EMA = PM.Ext(resM, A)
-    EMB = PM.Ext(resM, B)
-    EMC = PM.Ext(resM, C)
+    resM = DF.projective_resolution(S1, PM.ResolutionOptions(maxlen=t+1))   # i.e. maxlen=3
+    EMA = DF.Ext(resM, A)
+    EMB = DF.Ext(resM, B)
+    EMC = DF.Ext(resM, C)
 
     delta2 = PM.connecting_hom(EMA, EMB, EMC, i, p; t=2)
     @test all(delta2 .== 0)
@@ -267,7 +267,7 @@ end
     C1 = S2
     B1, i1, p1 = direct_sum_with_split_sequence(A1, C1)
 
-    resN = PM.injective_resolution(S4, PM.ResolutionOptions(maxlen=2))
+    resN = DF.injective_resolution(S4, PM.ResolutionOptions(maxlen=2))
     EA = PM.ExtInjective(A1, resN)
     EB = PM.ExtInjective(B1, resN)
     EC = PM.ExtInjective(C1, resN)
@@ -298,10 +298,10 @@ end
 
     # Fix M = S1. Then delta^0: Hom(S1,S1) -> Ext^1(S1,S2) sends id to the extension class,
     # so it must be nonzero (hence rank 1, since both sides are 1-dimensional).
-    resM = PM.projective_resolution(S1, PM.ResolutionOptions(maxlen=2))
-    EMA = PM.Ext(resM, S2)
-    EMB = PM.Ext(resM, I12)
-    EMC = PM.Ext(resM, S1)
+    resM = DF.projective_resolution(S1, PM.ResolutionOptions(maxlen=2))
+    EMA = DF.Ext(resM, S2)
+    EMB = DF.Ext(resM, I12)
+    EMC = DF.Ext(resM, S1)
     delta0 = PM.connecting_hom(EMA, EMB, EMC, i, p; t=0)
     @test EX.rankQQ(delta0) == 1
 

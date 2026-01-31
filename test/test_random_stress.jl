@@ -138,13 +138,13 @@ end
 
         # Ext dims: indicator-resolution method vs DerivedFunctors.Ext
         ext_dims = DF.ext_dimensions_via_indicator_resolutions(Hm, Hn; maxlen=3)
-        E = PM.Ext(M, N, PM.DerivedFunctorOptions(maxdeg=2))
+        E = DF.Ext(M, N, PM.DerivedFunctorOptions(maxdeg=2))
         for t in 0:2
             @test PM.dim(E,t) == get(ext_dims, t, 0)
         end
 
         # Ext dims: injective model agrees with projective model
-        resN = PM.injective_resolution(N, PM.ResolutionOptions(maxlen=3))
+        resN = DF.injective_resolution(N, PM.ResolutionOptions(maxlen=3))
         Einj = PM.ExtInjective(M, resN)
         for t in 0:2
             @test PM.dim(Einj,t) == PM.dim(E,t)
@@ -167,7 +167,7 @@ end
         Rop = IR.pmodule_from_fringe(Hr)
         L   = IR.pmodule_from_fringe(Hl)
 
-        T = PM.Tor(Rop, L, PM.DerivedFunctorOptions(maxdeg=2))
+        T = DF.Tor(Rop, L, PM.DerivedFunctorOptions(maxdeg=2))
 
         if length(T.bd) >= 2
             @test nnz(T.bd[1] * T.bd[2]) == 0

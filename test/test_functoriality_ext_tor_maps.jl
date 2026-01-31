@@ -61,7 +61,7 @@ end
     # Build N = S2 oplus S2 so End(N) is noncommutative (Mat_2).
     N = direct_sum(S2, S2)
 
-    EMN = PM.Ext(M, N, PM.DerivedFunctorOptions(maxdeg=2))
+    EMN = DF.Ext(M, N, PM.DerivedFunctorOptions(maxdeg=2))
 
     # Nonvacuous check: Ext^1 should be 4 = 2*2 times Ext^1(S1,S2) (which is 1 on this poset).
     @test PM.dim(EMN, 1) == 4
@@ -109,8 +109,8 @@ end
     L2 = direct_sum(L, L)
 
     # Tor should be additive in each argument, so Tor_1 doubles here.
-    T_R2_L = PM.Tor(R2, L, PM.DerivedFunctorOptions(maxdeg=3))
-    T_R2_L2 = PM.Tor(R2, L2, PM.DerivedFunctorOptions(maxdeg=3))
+    T_R2_L = DF.Tor(R2, L, PM.DerivedFunctorOptions(maxdeg=3))
+    T_R2_L2 = DF.Tor(R2, L2, PM.DerivedFunctorOptions(maxdeg=3))
 
     @test PM.dim(T_R2_L, 1) == 2
     @test PM.dim(T_R2_L2, 1) == 4
@@ -171,9 +171,9 @@ end
 
     LES = PM.TorLongExactSequenceSecond(Rop, i, p, PM.DerivedFunctorOptions(maxdeg=2))
 
-    TorRA = PM.Tor(Rop, A, PM.DerivedFunctorOptions(maxdeg=2))
-    TorRB = PM.Tor(Rop, B, PM.DerivedFunctorOptions(maxdeg=2))
-    TorRC = PM.Tor(Rop, C, PM.DerivedFunctorOptions(maxdeg=2))
+    TorRA = DF.Tor(Rop, A, PM.DerivedFunctorOptions(maxdeg=2))
+    TorRB = DF.Tor(Rop, B, PM.DerivedFunctorOptions(maxdeg=2))
+    TorRC = DF.Tor(Rop, C, PM.DerivedFunctorOptions(maxdeg=2))
     @test LES.maxdeg == 2
     @test length(LES.iH) == 3
     @test length(LES.pH) == 3
@@ -184,7 +184,7 @@ end
     @test [PM.dim(LES.TorC, s) for s in 0:LES.maxdeg] == [PM.dim(TorRC, s) for s in 0:LES.maxdeg]
 
     # Tor algebra (exercise multiplication)
-    T = PM.Tor(Rop, B, PM.DerivedFunctorOptions(model=:second, maxdeg=2))
+    T = DF.Tor(Rop, B, PM.DerivedFunctorOptions(model=:second, maxdeg=2))
 
     Aalg = PM.TorAlgebra(T; mu_chain_gen=PM.DerivedFunctors.trivial_tor_product_generator(T))
 
@@ -214,7 +214,7 @@ end
     C = PM.ModuleCochainComplex([L], MD.PMorphism{QQ}[]; tmin=0, check=true)
 
     HT = PM.hyperTor(Rop, C; maxlen=2)
-    T  = PM.Tor(Rop, L, PM.DerivedFunctorOptions(maxdeg=2))
+    T  = DF.Tor(Rop, L, PM.DerivedFunctorOptions(maxdeg=2))
 
     # Tor_1 is known nonzero in this classical example.
     @test PM.dim(HT, 1) == PM.dim(T, 1)
@@ -277,7 +277,7 @@ end
     Rfr = one_by_one_fringe(Pop, FF.principal_upset(Pop, 2), FF.principal_downset(Pop, 2))
     Rop = IR.pmodule_from_fringe(Rfr)
 
-    T = PM.Tor(Rop, L, PM.DerivedFunctorOptions(maxdeg=3))
+    T = DF.Tor(Rop, L, PM.DerivedFunctorOptions(maxdeg=3))
 
     @test PM.dim(T, 0) == 0
     @test PM.dim(T, 1) == 1
@@ -324,7 +324,7 @@ end
     # Ext action on Tor via the resolve-second model:
     # The Ext^0 unit should act as identity on Tor_1.
     EA = PM.ExtAlgebra(S1, PM.DerivedFunctorOptions(maxdeg=2))
-    Tsec = PM.Tor(S2op, S1, PM.DerivedFunctorOptions(model=:second); res=EA.E.res)
+    Tsec = DF.Tor(S2op, S1, PM.DerivedFunctorOptions(model=:second); res=EA.E.res)
     u = PM.unit(EA)
     act = PM.ext_action_on_tor(EA, Tsec, u; s=1)
 
@@ -337,14 +337,14 @@ end
     Tot = CC.total_complex(DC)
 
     # Tor_n corresponds to H^{-n} of the total cochain complex.
-    Tfirst = PM.Tor(S2op, S1, PM.DerivedFunctorOptions(maxdeg=2))
+    Tfirst = DF.Tor(S2op, S1, PM.DerivedFunctorOptions(maxdeg=2))
     @test CC.cohomology_data(Tot, 0).dimH == PM.dim(Tfirst, 0)
     @test CC.cohomology_data(Tot, -1).dimH == PM.dim(Tfirst, 1)
     @test CC.cohomology_data(Tot, -2).dimH == PM.dim(Tfirst, 2)
 
     # TorAlgebra infrastructure smoke test: a trivial degree-0 product.
     # Choose a projective right module so Tor_0 is 1-dim and higher Tor vanishes.
-    T0 = PM.Tor(P2op, S2, PM.DerivedFunctorOptions(maxdeg=0))
+    T0 = DF.Tor(P2op, S2, PM.DerivedFunctorOptions(maxdeg=0))
     @test PM.dim(T0, 0) == 1
 
     Alg = PM.TorAlgebra(T0)

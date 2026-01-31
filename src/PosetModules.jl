@@ -350,7 +350,12 @@ for M in _ADVANCED_MODULES
     end
 end
 
+# -----------------------------------------------------------------------------
+# 3) Explicitly lift core derived-functor entry points.
+#
+# These are frequently imported (not owned) symbols, so if they are missed by
+# the bulk-lift heuristics we still want them in Advanced for convenience.
+# -----------------------------------------------------------------------------
 end # module Advanced
 
 end # module
-

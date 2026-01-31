@@ -2,6 +2,7 @@ module ModuleComplexes
 
 using LinearAlgebra
 using SparseArrays
+import Base.Threads
 
 using ..CoreModules: QQ, ResolutionOptions, _append_scaled_triplets!
 using ..ExactQQ: rankQQ, solve_fullcolumnQQ

@@ -902,7 +902,7 @@ function region_isoperimetric_ratio(pi, r::Integer; box=nothing,
 
     if kind === :planar
         n == 2 || error("region_isoperimetric_ratio(kind=:planar) requires n==2, got n=$n")
-        return (4.0 * pi * V) / (S * S)
+        return (4.0 * Base.MathConstants.pi * V) / (S * S)
     end
 
     cn = _isoperimetric_constant(n)

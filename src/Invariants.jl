@@ -102,10 +102,10 @@ export rank_map, rank_invariant, rank_invariant_tame, ecc,
     return (; (k => v for (k, v) in pairs(nt) if !(k in bad))...)
 end
 
-# Convert "box-like" input to Box if needed (keeps existing semantics used elsewhere).
+# Convert "box-like" input to a normalized (lo, hi) tuple of Float64 vectors.
 @inline function _coerce_box(box)
     box === nothing && return nothing
-    return (box isa Box) ? box : Box(box[1], box[2])
+    return _normalize_box(box)
 end
 
 # Keywords derived from opts that affect region selection / slicing.
@@ -2233,8 +2233,10 @@ In a finite encoding, the Hilbert function is constant on each region. If
     \\int_W dim M(x) dx  \\approx  \\sum_r w_r * dim(M|_{R_r})
 
 Arguments:
-- `M`: typically a `PModule{QQ}` or `FringeModule{QQ}`.
-- `pi`: an encoding map (any object implementing `region_weights(pi; ...)`).
+- `M`: a `PModule{QQ}`, a `FringeModule{QQ}` (delegates via `restricted_hilbert`),
+  or a vector of integers interpreted as a precomputed restricted Hilbert function.
+- `pi`: an encoding map implementing `region_weights(pi; ...)` (typically a
+  `PLikeEncodingMap`, e.g. `PLEncodingMapBoxes` or `ZnEncodingMap`).
 
 Uses fields of opts:
 - opts.box: window W (via _resolve_box)
@@ -2244,7 +2246,7 @@ Keywords:
 - weights: optional precomputed region weights
 - kwargs...: forwarded to region_weights when weights not provided
 """
-function integrated_hilbert_mass(M::PModule{QQ}, pi::EncodingMap, opts::InvariantOptions; weights=nothing, kwargs...)
+function integrated_hilbert_mass(M::PModule{QQ}, pi, opts::InvariantOptions; weights=nothing, kwargs...)
     if haskey(kwargs, :box) || haskey(kwargs, :strict) || haskey(kwargs, :threads)
         throw(ArgumentError("integrated_hilbert_mass: pass box/strict/threads via opts, not kwargs"))
     end
@@ -2259,6 +2261,44 @@ function integrated_hilbert_mass(M::PModule{QQ}, pi::EncodingMap, opts::Invarian
     end
 
     h = restricted_hilbert(M)
+    length(w) == length(h) || error("integrated_hilbert_mass: weights length does not match restricted_hilbert length")
+
+    acc = 0.0
+    @inbounds for i in eachindex(h)
+        acc += float(w[i]) * float(h[i])
+    end
+    return acc
+end
+
+function integrated_hilbert_mass(H::FringeModule{QQ}, pi, opts::InvariantOptions;
+    weights=nothing, kwargs...)
+    # Convert to restricted Hilbert dims to reuse the vector-based implementation.
+    return integrated_hilbert_mass(restricted_hilbert(H), pi, opts; weights=weights, kwargs...)
+end
+
+"""
+    integrated_hilbert_mass(dims::AbstractVector{<:Integer}, pi, opts::InvariantOptions;
+                            weights=nothing, kwargs...) -> Real
+
+Convenience overload when you already have the restricted Hilbert function `dims`.
+Semantics match the module-based method.
+"""
+function integrated_hilbert_mass(dims::AbstractVector{<:Integer}, pi, opts::InvariantOptions;
+    weights=nothing, kwargs...)
+    if haskey(kwargs, :box) || haskey(kwargs, :strict) || haskey(kwargs, :threads)
+        throw(ArgumentError("integrated_hilbert_mass: pass box/strict/threads via opts, not kwargs"))
+    end
+
+    strict0 = _default_strict(opts.strict)
+
+    w = weights
+    if w === nothing
+        opts.box === nothing && error("integrated_hilbert_mass: provide opts.box (or opts.box=:auto) or pass weights=...")
+        bb = _coerce_box(_resolve_box(pi, opts.box))
+        w = region_weights(pi; box=bb, strict=strict0, kwargs...)
+    end
+
+    h = restricted_hilbert(dims)
     length(w) == length(h) || error("integrated_hilbert_mass: weights length does not match restricted_hilbert length")
 
     acc = 0.0
@@ -2386,9 +2426,14 @@ function dim_stats(M, pi, opts::InvariantOptions; weights=nothing, kwargs...)
 end
 
 """
-    dim_norm(M, pi, opts::InvariantOptions; p=2, weights=nothing, kwargs...) -> Float64
+    dim_norm(M::PModule{QQ}, pi::PLikeEncodingMap, opts::InvariantOptions; p=2, weights=nothing, kwargs...) -> Float64
+    dim_norm(H::FringeModule{QQ}, pi::PLikeEncodingMap, opts::InvariantOptions; p=2, weights=nothing, kwargs...) -> Float64
+    dim_norm(dims::AbstractVector{<:Integer}, pi::PLikeEncodingMap, opts::InvariantOptions; p=2, weights=nothing, kwargs...) -> Float64
 
 Compute an L^p-type norm of the dimension surface of `M` over a window in `pi`.
+
+The `FringeModule` and `dims` overloads use `restricted_hilbert` to obtain the
+dimension values per region.
 
 This opts-primary overload uses:
 - `opts.box` (with `:auto` interpreted as `window_box(pi)`)
@@ -2402,9 +2447,9 @@ For p == Inf:
 
 If `weights` is provided, it is used directly and `region_weights` is not called.
 """
-function dim_norm(M::PModule, pi::PLikeEncodingMap, opts::InvariantOptions; p=2, weights=nothing, kwargs...)
-    h = restricted_hilbert(M)
-
+# Shared implementation once we have a restricted Hilbert vector.
+function _dim_norm_impl(h::AbstractVector{<:Integer}, pi::PLikeEncodingMap, opts::InvariantOptions;
+    p=2, weights=nothing, kwargs...)
     bb = _resolve_box(pi, opts.box)
 
     w = if weights === nothing
@@ -2426,6 +2471,19 @@ function dim_norm(M::PModule, pi::PLikeEncodingMap, opts::InvariantOptions; p=2,
     else
         return (sum((abs.(h) .^ p) .* w))^(1 / p)
     end
+end
+
+function dim_norm(M::PModule{QQ}, pi::PLikeEncodingMap, opts::InvariantOptions; p=2, weights=nothing, kwargs...)
+    return _dim_norm_impl(restricted_hilbert(M), pi, opts; p=p, weights=weights, kwargs...)
+end
+
+function dim_norm(H::FringeModule{QQ}, pi::PLikeEncodingMap, opts::InvariantOptions; p=2, weights=nothing, kwargs...)
+    # Delegate through restricted_hilbert to keep logic and weighting uniform.
+    return _dim_norm_impl(restricted_hilbert(H), pi, opts; p=p, weights=weights, kwargs...)
+end
+
+function dim_norm(dims::AbstractVector{<:Integer}, pi::PLikeEncodingMap, opts::InvariantOptions; p=2, weights=nothing, kwargs...)
+    return _dim_norm_impl(restricted_hilbert(dims), pi, opts; p=p, weights=weights, kwargs...)
 end
 
 
@@ -3153,14 +3211,14 @@ function region_adjacency_graph_stats(M, pi, opts::InvariantOptions; adjacency=n
         adjacency
     end
 
-    degrees = graph_degrees(nregions, edges)
-    comps = graph_components(nregions, edges)
+    degrees = graph_degrees(edges, nregions)
+    comps = graph_connected_components(edges, nregions)
     comp_sizes = sort([length(c) for c in comps]; rev=true)
     ncomps = length(comps)
 
     # Each region is labeled by its Hilbert dimension; use that as a crude "community label".
     labels = [dims[i] for i in 1:nregions]
-    Q = graph_modularity(nregions, edges, labels)
+    Q = graph_modularity(labels, edges; nregions=nregions)
 
     return (
         nregions=nregions,
@@ -3415,13 +3473,27 @@ end
         include_ehrhart=false,
         ehrhart_period=1,
         ehrhart_degree=:auto) -> NamedTuple
+    module_geometry_asymptotics(dims::AbstractVector{<:Integer}, pi::PLikeEncodingMap, opts::InvariantOptions;
+        scales=[1,2,4,8],
+        padding=0.0,
+        fit=:loglog,
+        include_interface=true,
+        include_ehrhart=false,
+        ehrhart_period=1,
+        ehrhart_degree=:auto) -> NamedTuple
 
-Compute window-dependent size/geometry summaries as the window expands.
+Compute window-dependent size and geometry summaries as the window expands.
+
+The `dims` overload treats the vector as a precomputed restricted Hilbert
+function (dimension per region).
 
 If `base_box == :auto`, uses `window_box(pi)`.
 
 For each `s in scales`, expands the base window about its center by factor `s`,
 then adds absolute `padding`.
+
+For lattice encodings, padding is applied in real coordinates and then the
+endpoints are rounded outward to integers so the window remains an integer box.
 
 This is an opts-primary API:
 - `opts.box` provides the base window. If `opts.box === nothing`, we use the legacy
@@ -3438,7 +3510,8 @@ Returns a NamedTuple containing:
   * `interface_measure`: total adjacency weight, if supported
   * fitted log-log growth exponents
 """
-function module_geometry_asymptotics(M::PModule{QQ}, pi::PLikeEncodingMap, opts::InvariantOptions;
+# Shared implementation for PModule and dims to keep behavior uniform.
+function _module_geometry_asymptotics_impl(M, pi::PLikeEncodingMap, opts::InvariantOptions;
     scales::AbstractVector{<:Real} = [1,2,4,8],
     padding::Real = 0.0,
     fit::Symbol = :loglog,
@@ -3470,13 +3543,16 @@ function module_geometry_asymptotics(M::PModule{QQ}, pi::PLikeEncodingMap, opts:
     do_iface = include_interface && hasmethod(region_adjacency, Tuple{typeof(pi)})
 
     for s in scales
-        ell = ell0 .* s
-        u = u0 .* s
         if integerize
-            ell = ceil.(Int, ell)
-            u = floor.(Int, u)
+            # Keep lattice backends on integer boxes after padding.
+            ell = ceil.(Int, (ell0 .* s) .- padding)
+            u = floor.(Int, (u0 .* s) .+ padding)
+            win = (ell, u)
+        else
+            ell = (ell0 .* s) .- padding
+            u = (u0 .* s) .+ padding
+            win = (ell, u)
         end
-        win = (ell .- padding, u .+ padding)
         push!(windows, win)
 
         w = region_weights(pi; box=win, strict=strict0)
@@ -3517,6 +3593,42 @@ function module_geometry_asymptotics(M::PModule{QQ}, pi::PLikeEncodingMap, opts:
         ehrhart_period = ehrhart_period,
         ehrhart_degree = ehrhart_degree,
     )
+end
+
+function module_geometry_asymptotics(M::PModule{QQ}, pi::PLikeEncodingMap, opts::InvariantOptions;
+    scales::AbstractVector{<:Real} = [1,2,4,8],
+    padding::Real = 0.0,
+    fit::Symbol = :loglog,
+    include_interface::Bool = true,
+    include_ehrhart::Bool = false,
+    ehrhart_period::Integer = 1,
+    ehrhart_degree = :auto)
+    return _module_geometry_asymptotics_impl(M, pi, opts;
+        scales=scales,
+        padding=padding,
+        fit=fit,
+        include_interface=include_interface,
+        include_ehrhart=include_ehrhart,
+        ehrhart_period=ehrhart_period,
+        ehrhart_degree=ehrhart_degree)
+end
+
+function module_geometry_asymptotics(dims::AbstractVector{<:Integer}, pi::PLikeEncodingMap, opts::InvariantOptions;
+    scales::AbstractVector{<:Real} = [1,2,4,8],
+    padding::Real = 0.0,
+    fit::Symbol = :loglog,
+    include_interface::Bool = true,
+    include_ehrhart::Bool = false,
+    ehrhart_period::Integer = 1,
+    ehrhart_degree = :auto)
+    return _module_geometry_asymptotics_impl(dims, pi, opts;
+        scales=scales,
+        padding=padding,
+        fit=fit,
+        include_interface=include_interface,
+        include_ehrhart=include_ehrhart,
+        ehrhart_period=ehrhart_period,
+        ehrhart_degree=ehrhart_degree)
 end
 
 
@@ -5564,6 +5676,9 @@ Parameters:
 - `margin`: relative padding (fraction of side-length).
 - `integerize`: `:auto`, `:always`, or `:never`.
 - `method`: `:reps`, `:coords` (uses `axes_from_encoding`), or `:mix`.
+
+If any axis is still degenerate after inference, we expand it by a minimal
+width (1 for lattice encodings, 1.0 otherwise) before applying margin/padding.
 """
 function window_box(pi::PLikeEncodingMap; padding=0.0, margin=0.05, integerize=:auto, method::Symbol=:reps)
     padding < 0 && error("window_box: padding must be nonnegative")
@@ -5610,6 +5725,20 @@ function window_box(pi::PLikeEncodingMap; padding=0.0, margin=0.05, integerize=:
         end
     end
 
+    is_lattice = _is_lattice_encoding(pi)
+    @inbounds for i in 1:length(ell)
+        if abs(u[i] - ell[i]) < 1e-12
+            # Avoid degenerate axes in inferred windows (e.g., free lattice directions).
+            if is_lattice
+                ell[i] -= 1
+                u[i] += 1
+            else
+                ell[i] -= 1.0
+                u[i] += 1.0
+            end
+        end
+    end
+
     @inbounds for i in 1:length(ell)
         w = u[i] - ell[i]
         m = w * float(margin)
@@ -5622,7 +5751,7 @@ function window_box(pi::PLikeEncodingMap; padding=0.0, margin=0.05, integerize=:
     elseif integerize === :never
         false
     elseif integerize === :auto
-        _is_lattice_encoding(pi)
+        is_lattice
     else
         error("window_box: integerize must be :auto, :always, or :never")
     end
@@ -12714,9 +12843,14 @@ end
 
 
 """
-    support_measure_stats(M, pi, opts::InvariantOptions; sep=0.0, kwargs...)
+    support_measure_stats(M::PModule{QQ}, pi::PLikeEncodingMap, opts::InvariantOptions; sep=0.0, min_dim=1) -> NamedTuple
+    support_measure_stats(H::FringeModule{QQ}, pi::PLikeEncodingMap, opts::InvariantOptions; sep=0.0, min_dim=1) -> NamedTuple
+    support_measure_stats(dims::AbstractVector{<:Integer}, pi::PLikeEncodingMap, opts::InvariantOptions; sep=0.0, min_dim=1) -> NamedTuple
 
 Compute simple summary statistics of the support measure on a working window.
+
+The `FringeModule` and `dims` overloads use `restricted_hilbert` to obtain the
+dimension values per region.
 
 Support measure with uncertainty: calls `region_weights(...; return_info=true)` if
 available and returns (estimate, stderr, ci, info).
@@ -12732,20 +12866,19 @@ Returns a NamedTuple with fields like:
 - `total_measure`, `support_measure`, `support_fraction`,
 - and basic bbox summaries.
 """
-function support_measure_stats(M::PModule{QQ}, pi::PLikeEncodingMap, opts::InvariantOptions;
+# Shared implementation for uniform behavior across module/dims inputs.
+function _support_measure_stats_impl(H::AbstractVector{<:Integer}, pi::PLikeEncodingMap, opts::InvariantOptions;
     sep::Real = 0.0,
-    kwargs...)
+    min_dim::Int = 1)
 
     strict0 = opts.strict === nothing ? true : opts.strict
     box0 = opts.box === nothing ? :auto : opts.box
 
-    isempty(kwargs) || throw(ArgumentError("support_measure_stats(::PModule{QQ}, ...): keyword arguments are not supported; pass invariant options via opts"))
-    H = restricted_hilbert(M)
     w = region_weights(pi; box=box0, strict=strict0)
 
     total_measure = sum(float, values(w))
 
-    mask = support_mask(H; weights=w, min_dim=1)
+    mask = support_mask(H; weights=w, min_dim=min_dim)
     support_measure = 0.0
     for (rid, keep) in pairs(mask)
         keep || continue
@@ -12761,6 +12894,33 @@ function support_measure_stats(M::PModule{QQ}, pi::PLikeEncodingMap, opts::Invar
         support_bbox = (lo, hi),
         support_bbox_diameter_L2 = norm(hi .- lo),
     )
+end
+
+function support_measure_stats(M::PModule{QQ}, pi::PLikeEncodingMap, opts::InvariantOptions;
+    sep::Real = 0.0,
+    min_dim::Int = 1,
+    kwargs...)
+
+    isempty(kwargs) || throw(ArgumentError("support_measure_stats(::PModule{QQ}, ...): keyword arguments are not supported; pass invariant options via opts"))
+    return _support_measure_stats_impl(restricted_hilbert(M), pi, opts; sep=sep, min_dim=min_dim)
+end
+
+function support_measure_stats(H::FringeModule{QQ}, pi::PLikeEncodingMap, opts::InvariantOptions;
+    sep::Real = 0.0,
+    min_dim::Int = 1,
+    kwargs...)
+
+    isempty(kwargs) || throw(ArgumentError("support_measure_stats(::FringeModule{QQ}, ...): keyword arguments are not supported; pass invariant options via opts"))
+    return _support_measure_stats_impl(restricted_hilbert(H), pi, opts; sep=sep, min_dim=min_dim)
+end
+
+function support_measure_stats(dims::AbstractVector{<:Integer}, pi::PLikeEncodingMap, opts::InvariantOptions;
+    sep::Real = 0.0,
+    min_dim::Int = 1,
+    kwargs...)
+
+    isempty(kwargs) || throw(ArgumentError("support_measure_stats(dims, ...): keyword arguments are not supported; pass invariant options via opts"))
+    return _support_measure_stats_impl(restricted_hilbert(dims), pi, opts; sep=sep, min_dim=min_dim)
 end
 
 

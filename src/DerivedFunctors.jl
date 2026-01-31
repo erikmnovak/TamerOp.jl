@@ -1847,7 +1847,9 @@ module ExtTorSpaces
 
     using ...CoreModules: QQ, ResolutionOptions, DerivedFunctorOptions
     import ...CoreModules: _append_scaled_triplets!
-    import ...ExactQQ: solve_fullcolumnQQ, SparseRREF, SparseRow, _sparse_rref_push_homogeneous!
+    import ...ExactQQ: solve_fullcolumnQQ, SparseRREF, SparseRow,
+              _sparse_rref_push_homogeneous!, normalize_sparse_row!,
+              _nullspace_from_pivots
 
     using ...IndicatorTypes: UpsetPresentation, DownsetCopresentation
     using ...Modules: PModule, PMorphism, map_leq, cover_cache

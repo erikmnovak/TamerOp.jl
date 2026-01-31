@@ -699,7 +699,7 @@ end
     @test length(C) == length(C1) * P2.n + P1.n * length(C2)
 
     # Hom between constant rank-1 modules should be 1-dimensional.
-    H = PM.Hom(Ms[1], Ms[2])
+    H = DF.Hom(Ms[1], Ms[2])
     @test PM.dim(H) == 1
 
     # Compare against the generic restriction-based pullback (correctness check).
@@ -725,7 +725,7 @@ end
     S2 = IR.pmodule_from_fringe(one_by_one_fringe(P2, FF.principal_upset(P2, 2), FF.principal_downset(P2, 2)))
 
     _, Ms2, _, _ = PM.encode_pmodules_to_common_poset(S1, S2)
-    H2 = PM.Hom(Ms2[1], Ms2[2])
+    H2 = DF.Hom(Ms2[1], Ms2[2])
     @test PM.dim(H2) == 0
 end
 
@@ -754,7 +754,7 @@ end
     @test Ms[1].Q === P
     @test Ms[2].Q === P
 
-    H = PM.Hom(Ms[1], Ms[2])
+    H = DF.Hom(Ms[1], Ms[2])
     @test PM.dim(H) == 1
 end
 
@@ -832,7 +832,7 @@ end
     offs_cod = [0, N.dims[1]]                       # [0,1]
     offs_dom = [0, N.dims[1], N.dims[1]+N.dims[2]]  # [0,1,2]
 
-    Dnew = DF._build_hom_differential(res, N, 1, offs_cod, offs_dom)
+    Dnew = DF.ExtTorSpaces._build_hom_differential(res, N, 1, offs_cod, offs_dom)
     @test issparse(Dnew)
 
     # dense reference:

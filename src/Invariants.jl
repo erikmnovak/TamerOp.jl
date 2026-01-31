@@ -3572,8 +3572,8 @@ function _module_geometry_asymptotics_impl(M, pi::PLikeEncodingMap, opts::Invari
     fit_iface = do_iface ? _loglog_fit(scales, ifaces) : nothing
 
     ehrhart_degree = (ehrhart_degree === :auto ? dim : ehrhart_degree)
-    ehrhart_total = include_ehrhart ? _quasipolyfit(scales, totals; period=ehrhart_period, degree=ehrhart_degree) : nothing
-    ehrhart_iface = include_ehrhart ? (do_iface ? _quasipolyfit(scales, ifaces; period=ehrhart_period, degree=ehrhart_degree) : nothing) : nothing
+    ehrhart_total = include_ehrhart ? _quasipolyfit(scales, totals, ehrhart_degree, ehrhart_period) : nothing
+    ehrhart_iface = include_ehrhart ? (do_iface ? _quasipolyfit(scales, ifaces, ehrhart_degree, ehrhart_period) : nothing) : nothing
 
     return (
         base_box = bb,
@@ -12638,7 +12638,7 @@ Opts usage:
 
 If `adjacency` is not provided, this calls `region_adjacency(pi; box=...)`.
 
-Returns `(comps, sizes)` where `comps` is a vector of vectors of region ids.
+Returns `comps`, a vector of vectors of region ids.
 """
 function support_components(H::HilbertFunction, pi::PLikeEncodingMap, opts::InvariantOptions;
     min_dim::Integer = 1,
@@ -12647,15 +12647,11 @@ function support_components(H::HilbertFunction, pi::PLikeEncodingMap, opts::Inva
     strict0 = opts.strict === nothing ? true : opts.strict
     box0 = opts.box === nothing ? :auto : opts.box
 
-    w = region_weights(pi; box=box0, strict=strict0)
-    mask = support_mask(H; weights=w, min_dim=min_dim)
+    mask = support_mask(H; min_dim=min_dim)
 
     adj = (adjacency === nothing ? region_adjacency(pi; box=box0, strict=strict0) : adjacency)
 
-    comps = connected_components(mask, adj)
-    sizes = [length(c) for c in comps]
-
-    return comps, sizes
+    return _masked_components_from_edges(length(mask), adj, mask)
 end
 
 """
@@ -12706,11 +12702,37 @@ function support_graph_diameter(H::HilbertFunction, pi::PLikeEncodingMap, opts::
     min_dim::Integer = 1,
     adjacency = nothing)
 
-    comps, _ = support_components(H, pi, opts; min_dim=min_dim, adjacency=adjacency)
+    strict0 = opts.strict === nothing ? true : opts.strict
+    box0 = opts.box === nothing ? :auto : opts.box
 
-    # Diameter of a disconnected graph is the max over components.
-    diams = [graph_diameter(c, adjacency === nothing ? nothing : adjacency) for c in comps]
-    return isempty(diams) ? 0 : maximum(diams)
+    mask = support_mask(H; min_dim=min_dim)
+    adj = (adjacency === nothing ? region_adjacency(pi; box=box0, strict=strict0) : adjacency)
+    comps = _masked_components_from_edges(length(mask), adj, mask)
+
+    isempty(comps) && return (Int[], 0)
+
+    # Build neighbor lists once and compute exact eccentricities per component.
+    nbrs = Dict{Int, Vector{Int}}()
+    for ((a, b), _) in adj
+        a == b && continue
+        if mask[a] && mask[b]
+            push!(get!(nbrs, a, Int[]), b)
+            push!(get!(nbrs, b, Int[]), a)
+        end
+    end
+
+    diams = zeros(Int, length(comps))
+    for (i, comp) in enumerate(comps)
+        maxd = 0
+        for v in comp
+            d = _bfs_eccentricity(nbrs, v, mask)
+            if d > maxd
+                maxd = d
+            end
+        end
+        diams[i] = maxd
+    end
+    return diams, maximum(diams)
 end
 
 """
@@ -12730,7 +12752,7 @@ end
 
 
 """
-    support_bbox(M, pi, opts::InvariantOptions; sep=0.0, kwargs...) -> (lo, hi)
+    support_bbox(M, pi, opts::InvariantOptions; sep=0.0, min_dim=1, kwargs...) -> (lo, hi)
 
 Compute an axis-aligned bounding box of the *support* of a module (where Hilbert mass is nonzero).
 
@@ -12740,6 +12762,7 @@ Opts usage:
 """
 function support_bbox(M::PModule{QQ}, pi::PLikeEncodingMap, opts::InvariantOptions;
     sep::Real = 0.0,
+    min_dim::Integer = 1,
     kwargs...)::Tuple{Vector{Float64}, Vector{Float64}}
 
     strict0 = opts.strict === nothing ? true : opts.strict
@@ -12749,26 +12772,26 @@ function support_bbox(M::PModule{QQ}, pi::PLikeEncodingMap, opts::InvariantOptio
     H = restricted_hilbert(M)
     w = region_weights(pi; box=box0, strict=strict0)
 
-    return support_bbox(H, pi, opts; weights=w, sep=sep)
+    return support_bbox(H, pi, opts; weights=w, sep=sep, min_dim=min_dim)
 end
 
 """
-    support_bbox(H, pi, opts::InvariantOptions; weights=nothing, sep=0.0) -> (lo, hi)
+    support_bbox(H, pi, opts::InvariantOptions; weights=nothing, sep=0.0, min_dim=1) -> (lo, hi)
 
 Support bbox from a Hilbert function directly. `weights` may be provided to avoid recomputation.
 """
 function support_bbox(H::HilbertFunction, pi::PLikeEncodingMap, opts::InvariantOptions;
     weights = nothing,
-    sep::Real = 0.0)
+    sep::Real = 0.0,
+    min_dim::Integer = 1)
 
     strict0 = opts.strict === nothing ? true : opts.strict
     box0 = opts.box === nothing ? :auto : opts.box
 
-    bb = region_bbox(pi; box=box0, strict=strict0)
+    bb = _resolve_box(pi, box0)
     w = (weights === nothing ? region_weights(pi; box=box0, strict=strict0) : weights)
 
-    pts = representatives(pi)
-    mask = support_mask(H; weights=w, min_dim=1)
+    mask = support_mask(H; min_dim=min_dim)
 
     ell, u = bb
     lo = fill(Inf, length(ell))
@@ -12776,14 +12799,17 @@ function support_bbox(H::HilbertFunction, pi::PLikeEncodingMap, opts::InvariantO
 
     for (rid, keep) in pairs(mask)
         keep || continue
-        p = pts[rid]
+        w[rid] == 0 && continue
+        # Use per-region bboxes so backend-specific geometry is respected.
+        ell_r, u_r = region_bbox(pi, rid; box=bb)
         for i in 1:length(lo)
-            x = float(p[i])
-            if x < lo[i]
-                lo[i] = x
+            xlo = float(ell_r[i])
+            xhi = float(u_r[i])
+            if xlo < lo[i]
+                lo[i] = xlo
             end
-            if x > hi[i]
-                hi[i] = x
+            if xhi > hi[i]
+                hi[i] = xhi
             end
         end
     end
@@ -12803,7 +12829,9 @@ function support_bbox(H::HilbertFunction, pi::PLikeEncodingMap, opts::InvariantO
 end
 
 """
-    support_geometric_diameter(M, pi, opts::InvariantOptions; metric=:L2, sep=0.0, kwargs...)
+    support_geometric_diameter(M::PModule{QQ}, pi::PLikeEncodingMap, opts::InvariantOptions; metric=:L2, sep=0.0, kwargs...)
+    support_geometric_diameter(H::HilbertFunction, pi::PLikeEncodingMap, opts::InvariantOptions; metric=:L2, sep=0.0, min_dim=1) -> Float64
+    support_geometric_diameter(dims::AbstractVector{<:Integer}, pi::PLikeEncodingMap, opts::InvariantOptions; metric=:L2, sep=0.0, min_dim=1) -> Float64
 
 Compute a coarse geometric diameter of the support by:
 1) computing a support bounding box, then
@@ -12840,6 +12868,41 @@ function support_geometric_diameter(M::PModule{QQ}, pi::PLikeEncodingMap, opts::
     end
 end
 
+function support_geometric_diameter(H::HilbertFunction, pi::PLikeEncodingMap, opts::InvariantOptions;
+    metric::Symbol = :L2,
+    sep::Real = 0.0,
+    min_dim::Integer = 1)
+
+    lo, hi = support_bbox(H, pi, opts; sep=sep, min_dim=min_dim)
+
+    if metric == :L2
+        return norm(hi .- lo)
+    elseif metric == :L1
+        return sum(abs.(hi .- lo))
+    elseif metric == :Linf
+        return maximum(abs.(hi .- lo))
+    else
+        error("support_geometric_diameter: unsupported metric=$metric (use :L2, :L1, or :Linf)")
+    end
+end
+
+function support_geometric_diameter(dims::AbstractVector{<:Integer}, pi::PLikeEncodingMap, opts::InvariantOptions;
+    metric::Symbol = :L2,
+    sep::Real = 0.0,
+    min_dim::Integer = 1)
+    lo, hi = support_bbox(dims, pi, opts; sep=sep, min_dim=min_dim)
+
+    if metric == :L2
+        return norm(hi .- lo)
+    elseif metric == :L1
+        return sum(abs.(hi .- lo))
+    elseif metric == :Linf
+        return maximum(abs.(hi .- lo))
+    else
+        error("support_geometric_diameter: unsupported metric=$metric (use :L2, :L1, or :Linf)")
+    end
+end
+
 
 
 """
@@ -12863,6 +12926,7 @@ Opts usage:
 - `opts.strict` controls region computations (defaults to true).
 
 Returns a NamedTuple with fields like:
+- `estimate`, `stderr`, `ci`, `info`,
 - `total_measure`, `support_measure`, `support_fraction`,
 - and basic bbox summaries.
 """
@@ -12874,11 +12938,24 @@ function _support_measure_stats_impl(H::AbstractVector{<:Integer}, pi::PLikeEnco
     strict0 = opts.strict === nothing ? true : opts.strict
     box0 = opts.box === nothing ? :auto : opts.box
 
-    w = region_weights(pi; box=box0, strict=strict0)
+    info = nothing
+    w = nothing
+    # Prefer return_info when supported to expose uncertainty fields.
+    try
+        info = region_weights(pi; box=box0, strict=strict0, return_info=true)
+        w = info.weights
+    catch e
+        if !(e isa MethodError)
+            rethrow()
+        end
+    end
+    if w === nothing
+        w = region_weights(pi; box=box0, strict=strict0)
+    end
 
     total_measure = sum(float, values(w))
 
-    mask = support_mask(H; weights=w, min_dim=min_dim)
+    mask = support_mask(H; min_dim=min_dim)
     support_measure = 0.0
     for (rid, keep) in pairs(mask)
         keep || continue
@@ -12887,7 +12964,40 @@ function _support_measure_stats_impl(H::AbstractVector{<:Integer}, pi::PLikeEnco
 
     lo, hi = support_bbox(H, pi, opts; weights=w, sep=sep)
 
+    estimate = support_measure
+    stderr = 0.0
+    ci = (estimate, estimate)
+
+    if info !== nothing
+        counts = (haskey(info, :counts) ? info.counts : nothing)
+        nsamples = (haskey(info, :nsamples) ? info.nsamples : 0)
+        if counts !== nothing && nsamples > 0
+            subset = 0
+            for (rid, keep) in pairs(mask)
+                keep || continue
+                subset += counts[rid]
+            end
+            alpha = (haskey(info, :alpha) ? info.alpha : 0.05)
+            (plo, phi) = _wilson_interval(subset, nsamples; alpha=alpha)
+            total = if haskey(info, :total_volume)
+                float(info.total_volume)
+            elseif haskey(info, :total_points)
+                float(info.total_points)
+            else
+                NaN
+            end
+            if isfinite(total)
+                stderr = total * sqrt((subset / nsamples) * (1 - subset / nsamples) / nsamples)
+                ci = (total * plo, total * phi)
+            end
+        end
+    end
+
     return (
+        estimate = estimate,
+        stderr = stderr,
+        ci = ci,
+        info = info,
         total_measure = total_measure,
         support_measure = support_measure,
         support_fraction = (total_measure == 0.0 ? 0.0 : support_measure / total_measure),

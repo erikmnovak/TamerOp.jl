@@ -863,7 +863,7 @@ module IndicatorTypes
 # These mirror the data in Def. 6.4 (Miller) and are used by Hom/Ext assembly.
 
 using SparseArrays
-using ..FiniteFringe: FinitePoset, Upset, Downset  # P, labeling sets
+using ..FiniteFringe: FinitePoset, Upset, Downset, FringeModule  # P, labeling sets
 
 """
     UpsetPresentation{K}
@@ -874,12 +874,14 @@ Fields:
 - `U0`: column labels for F0 (birth upsets)
 - `U1`: row labels for F1
 - `delta`: block monomial matrix delta: (#U1) x (#U0), entries in `K`
+- `H`: source fringe module when available (used for exact derived-functor computations)
 """
 struct UpsetPresentation{K}
     P::FinitePoset
     U0::Vector{Upset}
     U1::Vector{Upset}
     delta::SparseMatrixCSC{K,Int}
+    H::Union{Nothing, FringeModule{K}}
 end
 
 """
@@ -891,12 +893,14 @@ Fields:
 - `D0`: row labels for E^0 (death downsets)
 - `D1`: column labels for E^1
 - `rho`: block monomial matrix rho: (#D1) x (#D0), entries in `K`
+- `H`: target fringe module when available (used for exact derived-functor computations)
 """
 struct DownsetCopresentation{K}
     P::FinitePoset
     D0::Vector{Downset}
     D1::Vector{Downset}
     rho::SparseMatrixCSC{K,Int}
+    H::Union{Nothing, FringeModule{K}}
 end
 
 export UpsetPresentation, DownsetCopresentation

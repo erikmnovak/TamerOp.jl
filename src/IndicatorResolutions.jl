@@ -400,7 +400,7 @@ end
     upset_presentation_one_step(Hfringe::FringeModule)
 Compute the one-step upset presentation (Def. 6.4.1):
     F1 --d1--> F0 --pi0-->> M,
-and return the lightweight wrapper `UpsetPresentation{QQ}(P, U0, U1, delta)`.
+and return the lightweight wrapper `UpsetPresentation{QQ}(P, U0, U1, delta, H)`.
 """
 function upset_presentation_one_step(H::FiniteFringe.FringeModule)
     M = pmodule_from_fringe(H)          # internal PModule over QQ
@@ -484,7 +484,7 @@ function upset_presentation_one_step(H::FiniteFringe.FringeModule)
         end
     end
 
-    UpsetPresentation{QQ}(P, U0, U1, delta)
+    UpsetPresentation{QQ}(P, U0, U1, delta, H)
 end
 
 # ------------------------ downset copresentation (Def. 6.4.2) ------------------------
@@ -628,7 +628,7 @@ function downset_copresentation_one_step(H::FiniteFringe.FringeModule)
         end
     end
 
-    return DownsetCopresentation{QQ}(Q, D0, D1, rho)
+    return DownsetCopresentation{QQ}(Q, D0, D1, rho, H)
 end
 
 
@@ -650,7 +650,7 @@ function prune_zero_relations(F::UpsetPresentation{QQ})
     end
     new_U1 = [F.U1[i] for i in 1:m1 if keep[i]]
     new_delta = F.delta[keep, :]
-    UpsetPresentation{QQ}(F.P, F.U0, new_U1, new_delta)
+    UpsetPresentation{QQ}(F.P, F.U0, new_U1, new_delta, F.H)
 end
 
 """
@@ -695,7 +695,7 @@ function cancel_isolated_unit_pairs(F::UpsetPresentation{QQ})
         U0 = [U0[j] for j in 1:m0 if keep_cols[j]]
         Delta = Delta[keep_rows, keep_cols]
     end
-    UpsetPresentation{QQ}(P, U0, U1, Delta)
+    UpsetPresentation{QQ}(P, U0, U1, Delta, F.H)
 end
 
 """
@@ -728,7 +728,7 @@ function prune_unused_targets(E::DownsetCopresentation{QQ})
     end
     new_D1 = [E.D1[i] for i in 1:m1 if keep[i]]
     new_rho = E.rho[keep, :]
-    DownsetCopresentation{QQ}(E.P, E.D0, new_D1, new_rho)
+    DownsetCopresentation{QQ}(E.P, E.D0, new_D1, new_rho, E.H)
 end
 
 """
@@ -763,7 +763,7 @@ function cancel_isolated_unit_pairs(E::DownsetCopresentation{QQ})
         D0 = [D0[j] for j in 1:m0 if keep_cols[j]]
         R = R[keep_rows, keep_cols]
     end
-    DownsetCopresentation{QQ}(P, D0, D1, R)
+    DownsetCopresentation{QQ}(P, D0, D1, R, E.H)
 end
 
 """
@@ -993,7 +993,7 @@ function upset_resolution(M::PModule{QQ}; maxlen::Union{Int,Nothing}=nothing)
             U1 = Upset[]
             delta = spzeros(QQ, 0, length(U0))
         end
-        F[a] = UpsetPresentation{QQ}(P, U0, U1, delta)
+        F[a] = UpsetPresentation{QQ}(P, U0, U1, delta, nothing)
     end
 
     return F, dF
@@ -1114,7 +1114,7 @@ function downset_resolution(M::PModule{QQ}; maxlen::Union{Int,Nothing}=nothing)
             D1 = Downset[]
             rho_b = spzeros(QQ, 0, length(D0))
         end
-        E[b] = DownsetCopresentation{QQ}(P, D0, D1, rho_b)
+        E[b] = DownsetCopresentation{QQ}(P, D0, D1, rho_b, nothing)
     end
 
     return E, dE

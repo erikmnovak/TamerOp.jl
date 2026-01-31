@@ -1843,17 +1843,18 @@ This submodule should define (move here incrementally):
 - graded-space methods that expose dims/bases/representatives
 """
 module ExtTorSpaces
+    using LinearAlgebra: rank
     using SparseArrays
 
     using ...CoreModules: QQ, ResolutionOptions, DerivedFunctorOptions
     import ...CoreModules: _append_scaled_triplets!
     import ...ExactQQ: solve_fullcolumnQQ, SparseRREF, SparseRow,
               _sparse_rref_push_homogeneous!, normalize_sparse_row!,
-              _nullspace_from_pivots
+              _nullspace_from_pivots, rankQQ, nullspaceQQ, colspaceQQ
 
     using ...IndicatorTypes: UpsetPresentation, DownsetCopresentation
     using ...Modules: PModule, PMorphism, map_leq, cover_cache
-    using ...FiniteFringe: FinitePoset, FringeModule, fiber_dimension
+    using ...FiniteFringe: FinitePoset, FringeModule, fiber_dimension, Upset, Downset
     using ...AbelianCategories: kernel_with_inclusion
     using ...IndicatorResolutions: pmodule_from_fringe, indicator_resolutions,
         minimal_upset_presentation_one_step, minimal_downset_copresentation_one_step,
@@ -1863,7 +1864,8 @@ module ExtTorSpaces
     using ...ChainComplexes
 
     import ..Utils: compose
-    import ..HomExtEngine: ext_dims_via_resolutions
+    import ..HomExtEngine: ext_dims_via_resolutions, build_hom_tot_complex,
+        CompCache, size_block, _block_offset, _component_inclusion_matrix_cached, _accum!
     import ..Resolutions: ProjectiveResolution, InjectiveResolution, _active_upset_indices,
         projective_resolution, injective_resolution, _pad_projective_resolution!
 
@@ -2051,53 +2053,22 @@ module ExtTorSpaces
     """
         hom_ext_first_page(F, E) -> (dimHom, dimExt1)
 
-    Compute degree-0 and degree-1 dimensions (Hom and Ext^1) from the first-page approximation
-    associated to a pair of (co)presentation objects.
+    Compute degree-0 and degree-1 dimensions (Hom and Ext^1) from full indicator
+    resolutions associated to a pair of one-step (co)presentation objects.
+
+    This uses the underlying fringe modules stored on the presentations and
+    runs the full indicator-resolution Ext computation. It is intentionally
+    correctness-first and does not use the indicator-only 2x2 approximation.
 
     This is a derived-functor driver and intentionally does not live in `IndicatorResolutions`.
     """
     function hom_ext_first_page(F::UpsetPresentation{QQ}, E::DownsetCopresentation{QQ})
-        P = F.P
-        U0 = F.U0
-        U1 = F.U1
-        s0 = F.s0
-        s1 = F.s1
-        D0 = E.D0
-        D1 = E.D1
-        t0 = E.t0
-        t1 = E.t1
+        if F.H === nothing || E.H === nothing
+            error("hom_ext_first_page requires presentations built from FringeModule data.")
+        end
 
-        cc = cover_cache(P)
-
-        C0, phi0 = projective_cover(P, U0)
-        C1, phi1 = projective_cover(P, U1)
-        pi0 = PMorphism(C0, C1, phi1 * s0)
-        K0, iK0 = kernel_with_inclusion(pi0; cache=cc)
-
-        E0, psi0 = projective_cover(P, D0)
-        E1, psi1 = projective_cover(P, D1)
-        pi1 = PMorphism(E0, E1, psi1 * t0)
-        K1, iK1 = kernel_with_inclusion(pi1; cache=cc)
-
-        n00 = sum(fiber_dimension(C0, q) * fiber_dimension(E0, q) for q in 1:P.n)
-        n01 = sum(fiber_dimension(C0, q) * fiber_dimension(E1, q) for q in 1:P.n)
-        n10 = sum(fiber_dimension(C1, q) * fiber_dimension(E0, q) for q in 1:P.n)
-
-        d0 = phi0 * t1 + (psi0 * s1) * (-1)
-        n0 = n01 + n10
-        n1 = n00
-
-        dimHom = n0 - rank(Matrix(d0))
-
-        a = sum(fiber_dimension(K0, q) * fiber_dimension(E0, q) for q in 1:P.n)
-        b = sum(fiber_dimension(C0, q) * fiber_dimension(K1, q) for q in 1:P.n)
-
-        d1 = phi0 * iK1 + (iK0 * psi0) * (-1)
-        n2 = a + b
-
-        dimExt1 = n2 - rank(Matrix(d1)) - rank(Matrix(d0))
-
-        return dimHom, dimExt1
+        ext = ext_dimensions_via_indicator_resolutions(F.H, E.H; maxlen=2, verify=false)
+        return get(ext, 0, 0), get(ext, 1, 0)
     end
 
     """

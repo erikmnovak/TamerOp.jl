@@ -105,8 +105,8 @@ end
     U2 = FF.principal_upset(P, 2)
     U3 = FF.principal_upset(P, 3)
 
-    F0 = IR.UpsetPresentation{QQ}(P, [U2, U3], FF.Upset[], spzeros(QQ, 0, 2))
-    F1 = IR.UpsetPresentation{QQ}(P, [U2],     FF.Upset[], spzeros(QQ, 0, 1))
+    F0 = IR.UpsetPresentation{QQ}(P, [U2, U3], FF.Upset[], spzeros(QQ, 0, 2), nothing)
+    F1 = IR.UpsetPresentation{QQ}(P, [U2],     FF.Upset[], spzeros(QQ, 0, 1), nothing)
 
     # delta is |U1| x |U0| = 1 x 2. Put a nonzero at (U2 row, U3 col).
     # Since U2 is not a subset of U3, this must be rejected.
@@ -121,8 +121,8 @@ end
     D2 = FF.principal_downset(P, 2)
     D3 = FF.principal_downset(P, 3)
 
-    E0 = IR.DownsetCopresentation{QQ}(P, [D3], FF.Downset[], spzeros(QQ, 0, 1))
-    E1 = IR.DownsetCopresentation{QQ}(P, [D2], FF.Downset[], spzeros(QQ, 0, 1))
+    E0 = IR.DownsetCopresentation{QQ}(P, [D3], FF.Downset[], spzeros(QQ, 0, 1), nothing)
+    E1 = IR.DownsetCopresentation{QQ}(P, [D2], FF.Downset[], spzeros(QQ, 0, 1), nothing)
 
     rho_bad = spzeros(QQ, 1, 1)
     rho_bad[1, 1] = QQ(1)  # D2 is not a subset of D3
@@ -395,13 +395,13 @@ end
 
     # Clearing and recomputing should produce a fresh cache object.
     MD.clear_cover_cache!()
-    ccA = MD._cover_cache(P)
+    ccA = MD.cover_cache(P)
     MD.clear_cover_cache!()
-    ccB = MD._cover_cache(P)
+    ccB = MD.cover_cache(P)
     @test ccA !== ccB
 
-    cc1 = MD._cover_cache(P)
-    cc2 = MD._cover_cache(P)
+    cc1 = MD.cover_cache(P)
+    cc2 = MD.cover_cache(P)
     @test cc1 === cc2
 
     @test cc1.Q === P
@@ -439,17 +439,20 @@ end
 
     # The chosen-chain cache should now contain at least the (1,3) entry.
     @test length(cc.chain_parent) >= 1
+    n_after_first = sum(length.(cc.chain_parent))
 
     A13b = MD.map_leq(M, 1, 3; cache=cc)
     @test A13b == A13
-    @test sum(length.(cc.chain_parent)) == n_before
+    @test sum(length.(cc.chain_parent)) == n_after_first
 end
 
 
 @testset "map_leq is path-independent on a functorial diamond" begin
     P = diamond_poset()
     cc = MD._cover_cache(P)
-    empty!(cc.chain_parent)
+    for d in cc.chain_parent
+        empty!(d)
+    end
 
     # A functorial module where the two length-2 paths 1->2->4 and 1->3->4 agree.
     dims = [1, 1, 1, 1]

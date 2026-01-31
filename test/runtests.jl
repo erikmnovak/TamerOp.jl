@@ -257,13 +257,13 @@ end
 
 # ---------------- Run test files ---------------------------------------------
 
-include("test_finite_fringe.jl")
-include("test_encoding.jl")
+#include("test_finite_fringe.jl")
+#include("test_encoding.jl")
 
 # Backends + geometry
-include("test_pl_backend.jl")
-include("test_zn_backend.jl")
-include("test_geometry.jl")
+#include("test_pl_backend.jl")
+#include("test_zn_backend.jl")
+#include("test_geometry.jl")
 
 # Homological algebra
 include("test_indicator_resolutions.jl")

@@ -205,6 +205,36 @@ function Base.hash(A::CoverEdgeMapStore, h::UInt)
     return h
 end
 
+# Iterator: yield ((u, v), map) for each cover edge u -> v, ordered by v then preds[v].
+function Base.iterate(store::CoverEdgeMapStore)
+    v = 1
+    while v <= length(store.preds) && isempty(store.preds[v])
+        v += 1
+    end
+    if v > length(store.preds)
+        return nothing
+    end
+    k = 1
+    return ((store.preds[v][k], v), store.maps_from_pred[v][k]), (v, k)
+end
+
+function Base.iterate(store::CoverEdgeMapStore, state::Tuple{Int,Int})
+    v, k = state
+    k += 1
+    if k <= length(store.preds[v])
+        return ((store.preds[v][k], v), store.maps_from_pred[v][k]), (v, k)
+    end
+    v += 1
+    while v <= length(store.preds) && isempty(store.preds[v])
+        v += 1
+    end
+    if v > length(store.preds)
+        return nothing
+    end
+    k = 1
+    return ((store.preds[v][k], v), store.maps_from_pred[v][k]), (v, k)
+end
+
 # ----- helper: binary search in sorted Int vectors -----
 @inline function _find_sorted_index(xs::Vector{Int}, x::Int)::Int
     i = searchsortedfirst(xs, x)

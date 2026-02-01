@@ -25,7 +25,7 @@ function scalar_morphism(M::MD.PModule{QQ}, a::Int)
     comps = Vector{Matrix{QQ}}(undef, M.Q.n)
     for v in 1:M.Q.n
         dv = M.dims[v]
-        comps[v] = dv == 0 ? zeros(QQ, 0, 0) : fill(QQ(a), dv, dv)
+        comps[v] = dv == 0 ? zeros(QQ, 0, 0) : QQ(a) * Matrix{QQ}(I, dv, dv)
     end
     return MD.PMorphism{QQ}(M, M, comps)
 end
@@ -278,6 +278,21 @@ end
     @test CC.cohomology_data(Ce, 1).dimH == 1
 end
 
+@testset "maxdeg_of_complex helpers" begin
+    C = CC.CochainComplex{QQ}(-1, 2, [1, 1, 1, 1], [spzeros(QQ, 1, 1), spzeros(QQ, 1, 1), spzeros(QQ, 1, 1)])
+    @test CC.maxdeg_of_complex(C) == 2
+
+    dims = ones(Int, 2, 4)
+    dv = Array{SparseMatrixCSC{QQ,Int},2}(undef, 2, 4)
+    dh = Array{SparseMatrixCSC{QQ,Int},2}(undef, 2, 4)
+    for i in 1:2, j in 1:4
+        dv[i, j] = spzeros(QQ, 1, 1)
+        dh[i, j] = spzeros(QQ, 1, 1)
+    end
+    DC = CC.DoubleComplex{QQ}(0, 1, -1, 2, dims, dv, dh)
+    @test CC.maxdeg_of_complex(DC) == 3
+end
+
 @testset "ChainComplexes: induced_map_on_cohomology for zero-differential complexes" begin
     # Complexes concentrated in degree 0.
     C = CC.CochainComplex{QQ}(0, 0, [2], SparseMatrixCSC{QQ,Int}[])
@@ -333,13 +348,15 @@ end
 
     # Build the 3-element chain poset: 1 <= 2 <= 3.
     P = FF.FinitePoset([i <= j for i in 1:3, j in 1:3])
-    M = interval_module(P,1,2)
-    N = interval_module(P,2,3)
+    Mf = interval_module(P,1,2)
+    Nf = interval_module(P,2,3)
+    M = IR.pmodule_from_fringe(Mf)
+    N = IR.pmodule_from_fringe(Nf)
 
     C0 = PM.ModuleCochainComplex([M], PM.PMorphism{QQ}[]; tmin=0)
     maxdeg = 2
     E = DF.Ext(M, N, PM.DerivedFunctorOptions(maxdeg=maxdeg, model=:injective))
-    H = PM.hyperExt(C0,N; maxlen=maxdeg)
+    H = PM.hyperExt(C0, Nf; maxlen=maxdeg)
 
     # Graded-space interface sanity checks: HyperExtSpace
     rH = PM.degree_range(H)
@@ -366,8 +383,8 @@ end
     end
 
     if Threads.nthreads() > 1
-        H_serial = PM.hyperExt(C0, N; maxlen = maxdeg, threads = false)
-        H_thread = PM.hyperExt(C0, N; maxlen = maxdeg, threads = true)
+        H_serial = PM.hyperExt(C0, Nf; maxlen = maxdeg, threads = false)
+        H_thread = PM.hyperExt(C0, Nf; maxlen = maxdeg, threads = true)
         @test dim(H_serial, 0) == dim(H_thread, 0)
         @test dim(H_serial, 1) == dim(H_thread, 1)
         @test dim(H_serial, 2) == dim(H_thread, 2)
@@ -385,30 +402,6 @@ end
         @test all(d == 0 for d in Ht.dims)
     end
 
-    # Graded-space interface sanity checks: HyperTorSpace
-    @test PM.dim(HT, -1) == 0
-    rT = PM.degree_range(HT)
-    if !isempty(rT)
-        @test first(rT) >= 0
-        if first(rT) > 0
-            @test PM.dim(HT, first(rT) - 1) == 0
-        end
-        @test PM.dim(HT, last(rT) + 1) == 0
-        for n in rT
-            d = PM.dim(HT, n)
-            B = PM.basis(HT, n)
-            @test length(B) == d
-            if d > 0
-                coords = zeros(QQ, d)
-                coords[1] = QQ(1)
-                z = PM.representative(HT, n, coords)
-                coords2 = PM.coordinates(HT, n, z)
-                @test coords2 == coords
-            end
-        end
-    end
-
-
     # --------------------------
     # 3) RHom functoriality: (g circ f)^* = f^* circ g^*
     # --------------------------
@@ -421,6 +414,7 @@ end
         end
         return MD.PMorphism{QQ}(M,M,comps)
     end
+    scale(H::FF.FringeModule{QQ}, c::Int) = scale(IR.pmodule_from_fringe(H), c)
 
     fM = scale(M,2)
     gM = scale(M,3)
@@ -464,11 +458,35 @@ end
     # The interval [1,3] in P corresponds to the interval [3,1] in Pop.
     Rop = interval_module(Pop, 3, 1)
 
-    Tplain = DF.Tor(Rop,M, PM.DerivedFunctorOptions(maxdeg=maxdeg))
+    RopP = IR.pmodule_from_fringe(Rop)
+    Tplain = DF.Tor(RopP, M, PM.DerivedFunctorOptions(maxdeg=maxdeg))
     HT = PM.hyperTor(Rop,C0; maxlen=maxdeg)
 
     for s in 0:maxdeg
         @test DF.dim(Tplain,s) == PM.dim(HT,s)
+    end
+
+    # Graded-space interface sanity checks: HyperTorSpace
+    @test PM.dim(HT, -1) == 0
+    rT = PM.degree_range(HT)
+    if !isempty(rT)
+        @test first(rT) >= 0
+        if first(rT) > 0
+            @test PM.dim(HT, first(rT) - 1) == 0
+        end
+        @test PM.dim(HT, last(rT) + 1) == 0
+        for n in rT
+            d = PM.dim(HT, n)
+            B = PM.basis(HT, n)
+            @test length(B) == d
+            if d > 0
+                coords = zeros(QQ, d)
+                coords[1] = QQ(1)
+                z = PM.representative(HT, n, coords)
+                coords2 = PM.coordinates(HT, n, z)
+                @test coords2 == coords
+            end
+        end
     end
 
     if Threads.nthreads() > 1
@@ -479,6 +497,22 @@ end
         @test dim(T_serial, 2) == dim(T_thread, 2)
     end
 
+    # FringeModule wrappers for RHom/RHomComplex and rhom_map_first/second.
+    R0_fr = PM.RHomComplex(C0, Nf; maxlen=maxdeg)
+    R0_fr2 = PM.RHomComplex(C0, Nf; maxlen=maxdeg)
+    @test R0_fr.N.dims == R0_fr2.N.dims
+
+    Rtot_fr = PM.RHom(C0, Nf; maxlen=maxdeg)
+    @test Rtot_fr.tmin == R0_fr.tot.tmin
+    @test Rtot_fr.tmax == R0_fr.tot.tmax
+
+    rf = PM.rhom_map_first(fmap, Nf; maxlen=maxdeg)
+    @test size(rf.maps, 1) == rf.tmax - rf.tmin + 1
+
+    gN = IR.id_morphism(Nf)
+    rs = PM.rhom_map_second(gN, C0, Nf, Nf; maxlen=maxdeg)
+    @test size(rs.maps, 1) == rs.tmax - rs.tmin + 1
+
     # --------------------------
     # 5) RHom spectral sequence degenerates at E2 if horizontal differential=0
     # --------------------------
@@ -486,7 +520,7 @@ end
     Ctwo = PM.ModuleCochainComplex([M,M],[IR.zero_morphism(M,M)]; tmin=0)
 
     R = PM.RHomComplex(Ctwo,N; maxlen=maxdeg, resN=resN)
-    ss = PM.spectral_sequence(R.DC; first=:vertical)
+    ss = PM.spectral_sequence(R.DC; first=:horizontal)
     E2 = PM.page(ss,2)
 
     # E2(A,B) should equal Ext^B(C^{-A},N) since d_h=0
@@ -494,7 +528,10 @@ end
         for B in 0:maxdeg
             Mp = (A==0) ? M : M
             Eab = DF.Ext(Mp,N, PM.DerivedFunctorOptions(maxdeg=maxdeg, model=:injective))
-            @test E2[(A,B)] == DF.dim(Eab,B)
+            a = -A
+            b = B
+            E2ab = PM.term(ss, 2, (a, b)).dimH
+            @test E2ab == DF.dim(Eab, B)
         end
     end
 
@@ -565,7 +602,7 @@ end
     M = one_vertex_module(1)
     id = PM.id_morphism(M)
     zM = PM.zero_morphism(M, M)
-    Z  = PM.zero_pmodule(PM.FinitePosets.chain_poset(1), QQ)
+    Z  = PM.zero_pmodule(M.Q, QQ)
 
     C = PM.ModuleCochainComplex([M, M], [id]; tmin=0, check=true)
     D = C
@@ -600,13 +637,13 @@ end
 
 @testset "rhom_map_first strict functoriality under composition" begin
     M = one_vertex_module(2)
-    N = one_vertex_module(2)
+    N = PM.PModule{QQ}(M.Q, copy(M.dims), M.edge_maps)
 
     C = PM.ModuleCochainComplex([M], PM.PMorphism{QQ}[]; tmin=0, check=true)
 
     A = scalar_morphism(M, 2)
     B = scalar_morphism(M, 3)
-    BA = scalar_morphism(M, 6)
+    BA = compose_morphism(B, A)
 
     f = PM.ModuleCochainMap(C, C, [A]; tmin=0, tmax=0, check=true)
     g = PM.ModuleCochainMap(C, C, [B]; tmin=0, tmax=0, check=true)
@@ -614,13 +651,14 @@ end
 
     resN = DF.injective_resolution(N, PM.ResolutionOptions(maxlen=1))
 
-    Fmap = PM.rhom_map_first(f, N; maxlen=1, resN=resN, check=true)
-    Gmap = PM.rhom_map_first(g, N; maxlen=1, resN=resN, check=true)
-    GFmap = PM.rhom_map_first(gf, N; maxlen=1, resN=resN, check=true)
+    R = PM.RHomComplex(C, N; maxlen=1, resN=resN)
+    Fmap = PM.rhom_map_first(f, R, R; check=true)
+    Gmap = PM.rhom_map_first(g, R, R; check=true)
+    GFmap = PM.rhom_map_first(gf, R, R; check=true)
 
     # Contravariance: (gcircf)^* = f^* circ g^*
     t0 = Fmap.tmin
-    @test GFmap.maps[1] == (Fmap.maps[1] * Gmap.maps[1])
+    @test GFmap.maps[1] == (Gmap.maps[1] * Fmap.maps[1])
 end
 
 @testset "rhom_map_second and hyperExt_map_second functoriality" begin
@@ -634,7 +672,7 @@ end
     C = PM.ModuleCochainComplex([S1], PM.PMorphism{QQ}[]; tmin=0, check=true)
 
     # N = S2 oplus S2 (so endomorphisms can be noncommuting 2x2 matrices)
-    N, i1, i2, p1, p2 = PM.direct_sum(S2, S2)
+    N, i1, i2, p1, p2 = PM.direct_sum_with_maps(S2, S2)
 
     H = PM.hyperExt(C, N; maxlen=3)
     @test PM.dim(H, 1) == 2  # Ext^1(S1, S2^2) should be 2
@@ -661,14 +699,14 @@ end
     gC = endo_at_vertex(N, 2, QQ[0 1; 0 0])
     gD = endo_at_vertex(N, 2, QQ[0 0; 1 0])
 
-    MC = PM.hyperExt_map_second(gC, H, H; t=1)
-    MD = PM.hyperExt_map_second(gD, H, H; t=1)
+    MCg = PM.hyperExt_map_second(gC, H, H; t=1)
+    MDg = PM.hyperExt_map_second(gD, H, H; t=1)
 
     gDC = compose_morphism(gD, gC)  # gD circ gC
-    MDC = PM.hyperExt_map_second(gDC, H, H; t=1)
+    MDCg = PM.hyperExt_map_second(gDC, H, H; t=1)
 
     # Covariant functoriality: F(gD circ gC) == F(gD) * F(gC)
-    @test MDC == MD * MC
+    @test MDCg == MDg * MCg
 end
 
 @testset "hyperExt_map_first contravariant functoriality" begin
@@ -677,8 +715,8 @@ end
     S1 = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, 1), FF.principal_downset(P, 1)))
     S2 = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, 2), FF.principal_downset(P, 2)))
 
-    M, _, _, _, _ = PM.direct_sum(S1, S1)
-    N, _, _, _, _ = PM.direct_sum(S2, S2)
+    M, _, _, _, _ = PM.direct_sum_with_maps(S1, S1)
+    N, _, _, _, _ = PM.direct_sum_with_maps(S2, S2)
 
     C = PM.ModuleCochainComplex([M], PM.PMorphism{QQ}[]; tmin=0, check=true)
     H = PM.hyperExt(C, N; maxlen=3)
@@ -776,8 +814,8 @@ end
     B1 = _vspace_module(P, 1)
     C1 = _vspace_module(P, 1)
 
-    f_id = MD.PMorphism{QQ}(A1, B1, [Matrix{QQ}([QQ(1)])])
-    g_id = MD.PMorphism{QQ}(A1, C1, [Matrix{QQ}([QQ(1)])])
+    f_id = MD.PMorphism{QQ}(A1, B1, [reshape(QQ[1], 1, 1)])
+    g_id = MD.PMorphism{QQ}(A1, C1, [reshape(QQ[1], 1, 1)])
 
     Pout, inB, inC, qpo, phi = PM.pushout(f_id, g_id)
     @test Pout.dims == [1]
@@ -785,8 +823,8 @@ end
 
     # Pullback of identities should be the diagonal (dim 1).
     D1 = _vspace_module(P, 1)
-    f_toD = MD.PMorphism{QQ}(B1, D1, [Matrix{QQ}([QQ(1)])])
-    g_toD = MD.PMorphism{QQ}(C1, D1, [Matrix{QQ}([QQ(1)])])
+    f_toD = MD.PMorphism{QQ}(B1, D1, [reshape(QQ[1], 1, 1)])
+    g_toD = MD.PMorphism{QQ}(C1, D1, [reshape(QQ[1], 1, 1)])
 
     Pin, prB, prC, iota, psi = PM.pullback(f_toD, g_toD)
     @test Pin.dims == [1]
@@ -799,8 +837,8 @@ end
     B2 = _vspace_module(P, 2)
     C2 = _vspace_module(P, 1)
 
-    i_mat = Matrix{QQ}([QQ(1); QQ(0)])
-    p_mat = Matrix{QQ}([QQ(0) QQ(1)])
+    i_mat = reshape(QQ[1, 0], 2, 1)
+    p_mat = reshape(QQ[0, 1], 1, 2)
 
     i = MD.PMorphism{QQ}(A2, B2, [i_mat])
     p = MD.PMorphism{QQ}(B2, C2, [p_mat])
@@ -813,7 +851,7 @@ end
     @test PM.is_exact(ses_alias)
 
     # A non-exact variant: switch the projection.
-    p_bad = MD.PMorphism{QQ}(B2, C2, [Matrix{QQ}([QQ(1) QQ(0)])])
+    p_bad = MD.PMorphism{QQ}(B2, C2, [reshape(QQ[1, 0], 1, 2)])
     ses_bad = PM.ShortExactSequence(i, p_bad; check=false)
     @test !PM.is_exact(ses_bad)
 
@@ -824,8 +862,8 @@ end
     At = _vspace_module(P, 1)
     Bt = _vspace_module(P, 2)
     Ct = _vspace_module(P, 1)
-    it = MD.PMorphism{QQ}(At, Bt, [Matrix{QQ}([QQ(1); QQ(0)])])
-    pt = MD.PMorphism{QQ}(Bt, Ct, [Matrix{QQ}([QQ(0) QQ(1)])])
+    it = MD.PMorphism{QQ}(At, Bt, [reshape(QQ[1, 0], 2, 1)])
+    pt = MD.PMorphism{QQ}(Bt, Ct, [reshape(QQ[0, 1], 1, 2)])
     top = PM.ShortExactSequence(it, pt)
 
     # Bottom SES: 0 -> Q^2 -> Q^3 -> Q -> 0
@@ -837,17 +875,17 @@ end
         QQ(0) QQ(1);
         QQ(0) QQ(0)
     ])])
-    pb = MD.PMorphism{QQ}(Bb, Cb, [Matrix{QQ}([QQ(0) QQ(0) QQ(1)])])
+    pb = MD.PMorphism{QQ}(Bb, Cb, [reshape(QQ[0, 0, 1], 1, 3)])
     bottom = PM.ShortExactSequence(ib, pb)
 
     # Vertical maps: alpha injective, beta injective, gamma = 0.
-    alpha = MD.PMorphism{QQ}(At, Ab, [Matrix{QQ}([QQ(1); QQ(0)])])
+    alpha = MD.PMorphism{QQ}(At, Ab, [reshape(QQ[1, 0], 2, 1)])
     beta = MD.PMorphism{QQ}(Bt, Bb, [Matrix{QQ}([
         QQ(1) QQ(0);
         QQ(0) QQ(1);
         QQ(0) QQ(0)
     ])])
-    gamma = MD.PMorphism{QQ}(Ct, Cb, [Matrix{QQ}([QQ(0)])])
+    gamma = MD.PMorphism{QQ}(Ct, Cb, [reshape(QQ[0], 1, 1)])
 
     sn = PM.snake_lemma(top, bottom, alpha, beta, gamma)
     delta = sn.delta
@@ -879,10 +917,10 @@ end
         # --- product/coproduct wrappers exist and return the expected maps
         Pprod, prA, prB = PM.product(A, B)
         Ccop, inA, inB = PM.coproduct(A, B)
-        @test PM.is_morphism(prA)
-        @test PM.is_morphism(prB)
-        @test PM.is_morphism(inA)
-        @test PM.is_morphism(inB)
+        @test prA isa MD.PMorphism{QQ}
+        @test prB isa MD.PMorphism{QQ}
+        @test inA isa MD.PMorphism{QQ}
+        @test inB isa MD.PMorphism{QQ}
 
         # Explicit universal property check for product:
         # given maps f:X->A and g:X->B, we can build (f,g): X -> A x B
@@ -904,14 +942,14 @@ end
         z = PM.zero_morphism(A, B)
 
         E, e = PM.equalizer(h, z)
-        @test PM.is_morphism(e)
+    @test e isa MD.PMorphism{QQ}
         # h o e == 0 o e
         he = compose_morphism(h, e)
         ze = compose_morphism(z, e)
         @test he.comps[1] == ze.comps[1]
 
         Q, q = PM.coequalizer(h, z)
-        @test PM.is_morphism(q)
+    @test q isa MD.PMorphism{QQ}
         # q o h == q o 0
         qh = compose_morphism(q, h)
         qz = compose_morphism(q, z)
@@ -920,22 +958,22 @@ end
         # --- diagram object interface: limit/colimit dispatch
         Ddisc = PM.DiscretePairDiagram(A, B)
         _, dprA, dprB = PM.limit(Ddisc)
-        @test PM.is_morphism(dprA)
-        @test PM.is_morphism(dprB)
+    @test dprA isa MD.PMorphism{QQ}
+    @test dprB isa MD.PMorphism{QQ}
 
         Dpar = PM.ParallelPairDiagram(h, z)
         _, de = PM.limit(Dpar)
-        @test PM.is_morphism(de)
+    @test de isa MD.PMorphism{QQ}
 
         Dspan = PM.SpanDiagram(h, z)  # A -> B, A -> B (same codomain is fine for pushout)
         PO, p1, p2 = PM.colimit(Dspan)
-        @test PM.is_morphism(p1)
-        @test PM.is_morphism(p2)
+    @test p1 isa MD.PMorphism{QQ}
+    @test p2 isa MD.PMorphism{QQ}
 
         Dcosp = PM.CospanDiagram(h, z) # A -> B and A -> B; pullback exists
         PB, r1, r2 = PM.limit(Dcosp)
-        @test PM.is_morphism(r1)
-        @test PM.is_morphism(r2)
+    @test r1 isa MD.PMorphism{QQ}
+    @test r2 isa MD.PMorphism{QQ}
     end
 
 
@@ -955,10 +993,10 @@ _is_ascii(s::AbstractString) = all(c -> Int(c) <= 0x7f, s)
     C = MD.PModule{QQ}(P, [1], edge_maps)
 
     # i : A -> B (inclusion)
-    i = MD.PMorphism{QQ}(A, B, [Matrix{QQ}([QQ(1); QQ(0)])])
+    i = MD.PMorphism{QQ}(A, B, [reshape(QQ[1, 0], 2, 1)])
 
     # p : B -> C (projection)
-    p = MD.PMorphism{QQ}(B, C, [Matrix{QQ}([QQ(0) QQ(1)])])
+    p = MD.PMorphism{QQ}(B, C, [reshape(QQ[0, 1], 1, 2)])
 
     # --- PModule show ---
     sA0 = sprint(show, A)
@@ -1039,16 +1077,16 @@ _is_ascii(s::AbstractString) = all(c -> Int(c) <= 0x7f, s)
         QQ(0) QQ(1);
         QQ(0) QQ(0)
     ])])
-    pb = MD.PMorphism{QQ}(Bb, Cb, [Matrix{QQ}([QQ(0) QQ(0) QQ(1)])])
+    pb = MD.PMorphism{QQ}(Bb, Cb, [reshape(QQ[0, 0, 1], 1, 3)])
     bottom = PM.ShortExactSequence(ib, pb; check=true)
 
-    alpha = MD.PMorphism{QQ}(A, Ab, [Matrix{QQ}([QQ(1); QQ(0)])])
+    alpha = MD.PMorphism{QQ}(A, Ab, [reshape(QQ[1, 0], 2, 1)])
     beta  = MD.PMorphism{QQ}(B, Bb, [Matrix{QQ}([
         QQ(1) QQ(0);
         QQ(0) QQ(1);
         QQ(0) QQ(0)
     ])])
-    gamma = MD.PMorphism{QQ}(C, Cb, [Matrix{QQ}([QQ(0)])])
+    gamma = MD.PMorphism{QQ}(C, Cb, [reshape(QQ[0], 1, 1)])
 
     sn = PM.snake_lemma(top, bottom, alpha, beta, gamma; check=true)
 
@@ -1448,6 +1486,10 @@ end
         d2dims = PM.page_dims_dict(ss, 2)
         @test haskey(d2dims, (0,0))
         @test d2dims[(0,0)] == PM.page(ss, 2)[(0,0)]
+        @test PM.page_dict(ss, 2)[(0,0)] == d2dims[(0,0)]
+
+        p, t = PM.ss_key(ss, 0, 0)
+        @test (p, t) == PM.ss_key(ss.first, 0, 0)
 
         # Diagonal criterion should hold at E_infty for this convergent toy example
         @test PM.diagonal_criterion(ss; r=:inf)

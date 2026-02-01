@@ -209,6 +209,9 @@ struct CochainComplex{K}
     labels::Vector{Vector{Any}}               # optional, per degree
 end
 
+# Max cohomological degree stored in a cochain complex.
+maxdeg_of_complex(C::CochainComplex) = C.tmax
+
 function degree_index(C::CochainComplex, t::Int)
     if t < C.tmin || t > C.tmax
         error("degree out of range")
@@ -971,6 +974,9 @@ struct DoubleComplex{K}
     dh::Array{SparseMatrixCSC{K,Int},2}
 end
 
+# Max total degree stored in a bounded double complex.
+maxdeg_of_complex(DC::DoubleComplex) = DC.amax + DC.bmax
+
 # Internal helpers: safe access to dv^{a,b} and dh^{a,b} blocks.
 #
 # These are convenience functions for debugging / small hand-built examples.
@@ -1220,6 +1226,12 @@ Key features:
   * explicit subquotient models for each term
   * explicit filtration and edge maps
   * collapse/convergence utilities
+
+Indexing note:
+`page(ss,r)` and `term(ss,r,(a,b))` use the double-complex bidegree `(a,b)`
+with `a` in the first axis and `b` in the second axis. If you need the
+filtration/total-degree view, use `ss_key(first,a,b)` or `ss_key(ss,a,b)` to
+map `(a,b)` to `(p,t)` where `p` is the filtration index and `t = a + b`.
 """
 struct SpectralSequence{K}
     DC::DoubleComplex{K}
@@ -1354,6 +1366,22 @@ function _ss_totdim(Tot::CochainComplex{QQ}, t::Int)
     end
     return Tot.dims[t - Tot.tmin + 1]
 end
+
+"""
+    ss_key(first, a, b) -> (p, t)
+
+Return the filtration/total-degree key for bidegree `(a,b)` under the
+chosen filtration `first` (`:vertical` or `:horizontal`). The total degree
+is `t = a + b`.
+"""
+ss_key(first::Symbol, a::Int, b::Int) = (_ss_p(first, a, b), a + b)
+
+"""
+    ss_key(ss, a, b) -> (p, t)
+
+Convenience wrapper using `ss.first`.
+"""
+ss_key(ss::SpectralSequence, a::Int, b::Int) = ss_key(ss.first, a, b)
 
 function _ss_blocks_at(blocks::Vector{Vector{NTuple{4,Int}}}, tmin::Int, t::Int)
     if t < tmin || t > tmin + length(blocks) - 1
@@ -1577,7 +1605,9 @@ function _ss_compute_differential(DC::DoubleComplex{QQ},
         end
 
         tdeg = a + b
-        D = _diff_at(Tot, tdeg)
+        d = _diff_at(Tot, tdeg)
+        src_sq = src
+        tgt_sq = tgt
 
         Itrip = Int[]
         Jtrip = Int[]
@@ -2281,6 +2311,14 @@ function page_dims_dict(ss::SpectralSequence{QQ}, r::Union{Int,Symbol}; nonzero_
     end
     return out
 end
+
+"""
+    page_dict(ss, r; nonzero_only=true) -> Dict{Tuple{Int,Int},Int}
+
+Alias for `page_dims_dict`; returns E_r dimensions keyed by bidegree `(a,b)`.
+"""
+page_dict(ss::SpectralSequence{QQ}, r::Union{Int,Symbol}; nonzero_only::Bool=true) =
+    page_dims_dict(ss, r; nonzero_only=nonzero_only)
 
 """
     diagonal_criterion(ss; r=:inf) -> Bool

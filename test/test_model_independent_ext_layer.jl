@@ -76,7 +76,7 @@ end
 Direct sum of a list of modules on the same finite poset.
 Cover-edge maps are block diagonal.
 """
-function direct_sum(mods::Vector{MD.PModule{QQ}})
+function direct_sum(mods::AbstractVector{<:MD.PModule{QQ}})
     @assert !isempty(mods)
     Q = mods[1].Q
     n = Q.n
@@ -245,7 +245,7 @@ end
     Q = chain_poset(2)
     S1 = simple_pmodule(Q, 1)
     S2 = simple_pmodule(Q, 2)
-    N = PM.direct_sum([S1, S2])
+    N = MD.direct_sum(S1, S2)
 
     # Endomorphism: scale vertex 1 by 2 and vertex 2 by 3.
     g = MD.PMorphism{QQ}(N, N, [fill(QQ(2), 1, 1), fill(QQ(3), 1, 1)])
@@ -269,7 +269,7 @@ end
     end
 
     # Sanity: phi0 commutes with the unique edge (1,2) on E0.
-    e = res.Emods[1].edges[(1,2)]
+    e = res.Emods[1].edge_maps[1, 2]
     @test phis[1].comps[2] * e == e * phis[1].comps[1]
 
     # Convenience wrapper builds resolutions too.

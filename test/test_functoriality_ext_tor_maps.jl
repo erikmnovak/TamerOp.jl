@@ -56,10 +56,10 @@ end
     S2 = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, 2), FF.principal_downset(P, 2)))
 
     # Build M = S1 oplus S1 so End(M) is noncommutative (Mat_2).
-    M = direct_sum(S1, S1)
+    M = MD.direct_sum(S1, S1)
 
     # Build N = S2 oplus S2 so End(N) is noncommutative (Mat_2).
-    N = direct_sum(S2, S2)
+    N = MD.direct_sum(S2, S2)
 
     EMN = DF.Ext(M, N, PM.DerivedFunctorOptions(maxdeg=2))
 
@@ -105,8 +105,8 @@ end
     Rop = IR.pmodule_from_fringe(one_by_one_fringe(Pop, FF.principal_upset(Pop, 2), FF.principal_downset(Pop, 2)))
 
     # Make direct sums to get noncommuting endomorphisms.
-    R2 = direct_sum(Rop, Rop)
-    L2 = direct_sum(L, L)
+    R2 = MD.direct_sum(Rop, Rop)
+    L2 = MD.direct_sum(L, L)
 
     # Tor should be additive in each argument, so Tor_1 doubles here.
     T_R2_L = DF.Tor(R2, L, PM.DerivedFunctorOptions(maxdeg=3))

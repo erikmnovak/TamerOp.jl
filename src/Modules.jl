@@ -177,6 +177,8 @@ struct CoverEdgeMapStore{K,MatT<:AbstractMatrix{K}}
     nedges::Int
 end
 
+Base.length(store::CoverEdgeMapStore) = store.nedges
+
 # Structural equality and hashing for CoverEdgeMapStore.
 # Without this, `==` falls back to object identity, so two stores with the same
 # content compare unequal.
@@ -480,6 +482,7 @@ end
 "Identity morphism."
 id_morphism(M::PModule{K}) where {K} =
     PMorphism{K}(M, M, [Matrix{K}(I, M.dims[i], M.dims[i]) for i in 1:length(M.dims)])
+
 
     
 function _predecessors(Q::FinitePoset)

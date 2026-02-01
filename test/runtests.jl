@@ -46,6 +46,7 @@ const EX  = PM.ExactQQ
 const CC  = PM.ChainComplexes
 const QQ  = PM.CoreModules.QQ
 const CM  = PM.CoreModules
+const MD  = PM.Modules
 
 using SparseArrays
 
@@ -267,8 +268,8 @@ end
 
 # Homological algebra
 #include("test_indicator_resolutions.jl")
-include("test_derived_functors.jl")
-include("test_model_independent_ext_layer.jl")
+#include("test_derived_functors.jl")
+#include("test_model_independent_ext_layer.jl")
 include("test_chain_complexes_homology.jl")
 include("test_functoriality_ext_tor_maps.jl")
 

@@ -23,6 +23,7 @@ using ..Modules: CoverCache, cover_cache, clear_cover_cache!, _cover_cache,
                  CoverEdgeMapStore, _find_sorted_index,
                  PModule, PMorphism, dim_at,
                  zero_pmodule, zero_morphism, map_leq, id_morphism
+import ..Modules: id_morphism
 
 import ..AbelianCategories
 using ..AbelianCategories: kernel_with_inclusion, _cokernel_module
@@ -35,6 +36,9 @@ export pmodule_from_fringe, projective_cover, injective_hull,
        upset_resolution, downset_resolution,
        indicator_resolutions,
        verify_upset_resolution, verify_downset_resolution
+
+id_morphism(H::FiniteFringe.FringeModule{K}) where {K} =
+    id_morphism(pmodule_from_fringe(H))
 
 # ----------------------- from FringeModule to PModule ----------------------------
 

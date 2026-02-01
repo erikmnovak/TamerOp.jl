@@ -1,4 +1,36 @@
 module ModuleComplexes
+using ..DerivedFunctors
+
+function _resolution_offsets(res)
+    return res.offsets
+end
+
+function _resolution_offsets(res::DerivedFunctors.Resolutions.InjectiveResolution)
+    return _gens_offsets(res.gens)
+end
+
+function _gens_offsets(gens)
+    offsets = Vector{Vector{Int}}(undef, length(gens))
+    for i in eachindex(gens)
+        gi = gens[i]
+        if isempty(gi)
+            offsets[i] = Int[]
+            continue
+        end
+        if eltype(gi) <: AbstractVector
+            lens = length.(gi)
+            offs = Vector{Int}(undef, length(lens) + 1)
+            offs[1] = 0
+            for j in 1:length(lens)
+                offs[j + 1] = offs[j] + lens[j]
+            end
+            offsets[i] = offs
+        else
+            offsets[i] = collect(0:length(gi))
+        end
+    end
+    return offsets
+end
 
 using LinearAlgebra
 using SparseArrays
@@ -99,7 +131,29 @@ struct ModuleCochainComplex{K}
     diffs::Vector{PMorphism{K}}    # length = tmax-tmin
 end
 
+"""
+    ModuleCochainComplex(tmin, tmax, terms, diffs)
+
+Internal positional constructor that normalizes abstract vector inputs into the
+concrete storage used by `ModuleCochainComplex{K}`.
+"""
+function ModuleCochainComplex(
+    tmin::Int,
+    tmax::Int,
+    terms::AbstractVector{<:PModule{K}},
+    diffs::AbstractVector{<:PMorphism{K}},
+) where {K}
+    terms_vec = PModule{K}[]
+    append!(terms_vec, terms)
+    diffs_vec = PMorphism{K}[]
+    append!(diffs_vec, diffs)
+    return ModuleCochainComplex{K}(tmin, tmax, terms_vec, diffs_vec)
+end
+
 poset(C::ModuleCochainComplex) = C.terms[1].Q
+
+# Max cohomological degree stored in a module cochain complex.
+maxdeg_of_complex(C::ModuleCochainComplex) = C.tmax
 
 @inline function _matrix_is_zero(M)
     # Fast exact check for "all entries are zero".
@@ -153,8 +207,8 @@ If `check=true`, we validate:
   * d^(t+1) circ d^t = 0 in every degree (fiberwise, vertex-by-vertex).
 """
 function ModuleCochainComplex(
-    terms::Vector{PModule{K}},
-    diffs::Vector{PMorphism{K}};
+    terms::AbstractVector{<:PModule{K}},
+    diffs::AbstractVector{<:PMorphism{K}};
     tmin::Int=0,
     check::Bool=true,
 ) where {K}
@@ -735,7 +789,7 @@ function RHomComplex(
                     dv[ia, ib] = spzeros(QQ, dims[ia, ib], 0)
                 else
                     p = ia - 1
-                    dv[ia, ib] = _precompose_matrix(_diff(C, p), homs[ia, ib + 0], homs[ia + 1, ib])
+                    dv[ia, ib] = _precompose_matrix(homs[ia, ib + 0], homs[ia + 1, ib], _diff(C, p))
                 end
             end
         end
@@ -745,7 +799,7 @@ function RHomComplex(
                 dv[ia, ib] = spzeros(QQ, dims[ia, ib], 0)
             else
                 p = ia - 1
-                dv[ia, ib] = _precompose_matrix(_diff(C, p), homs[ia, ib], homs[ia + 1, ib])
+                dv[ia, ib] = _precompose_matrix(homs[ia, ib], homs[ia + 1, ib], _diff(C, p))
             end
         end
     end
@@ -762,7 +816,7 @@ function RHomComplex(
                     dh[ia, ib] = spzeros(QQ, dims[ia, ib], 0)
                 else
                     q = ib - 1
-                    dh[ia, ib] = _postcompose_matrix(resN.d_mor[q + 1], homs[ia, ib], homs[ia, ib + 1])
+                    dh[ia, ib] = _postcompose_matrix(homs[ia, ib + 1], homs[ia, ib], resN.d_mor[q + 1])
                 end
             end
         end
@@ -772,16 +826,29 @@ function RHomComplex(
                 dh[ia, ib] = spzeros(QQ, dims[ia, ib], 0)
             else
                 q = ib - 1
-                dh[ia, ib] = _postcompose_matrix(resN.d_mor[q + 1], homs[ia, ib], homs[ia, ib + 1])
+                dh[ia, ib] = _postcompose_matrix(homs[ia, ib + 1], homs[ia, ib], resN.d_mor[q + 1])
             end
         end
     end
 
-    return RHomComplex{QQ}(C, N, resN, homs, dv, dh, dims)
+    # Index convention: a = cochain degree in C (0..maxdeg), b = injective degree in resN (0..maxlen).
+    DC = DoubleComplex{QQ}(0, maxdeg, 0, maxlen, dims, dv, dh)
+    tot = total_complex(DC)
+    return RHomComplex{QQ}(C, N, resN, homs, DC, tot)
+end
+
+function RHomComplex(
+    C::ModuleCochainComplex{QQ},
+    H::FF.FringeModule{QQ};
+    kwargs...
+)
+    return RHomComplex(C, IndicatorResolutions.pmodule_from_fringe(H); kwargs...)
 end
 
 
 RHom(C::ModuleCochainComplex{QQ}, N::PModule{QQ}; kwargs...) = RHomComplex(C,N; kwargs...).tot
+RHom(C::ModuleCochainComplex{QQ}, H::FF.FringeModule{QQ}; kwargs...) =
+    RHom(C, IndicatorResolutions.pmodule_from_fringe(H); kwargs...)
 
 
 # ------------------------------------------------------------
@@ -889,10 +956,13 @@ function rhom_map_first(
                 continue
             end
 
-            p = -a
+            # In RHom, the first index is the cochain degree a, so use p = a.
+            p = a
             fp = _map(f, p)
 
-            F = _precompose_matrix(Q, dom_gens, cod_gens, dom_offsets, cod_offsets, fj, i0, i1)
+            Hdom = Rdom.homs[ai_src, bi_src]
+            Hcod = Rcod.homs[ai_tgt, bi_tgt]
+            F = _precompose_matrix(Hdom, Hcod, fp)
 
             # Avoid allocating sparse(F) just to call findnz; append triplets directly.
             _append_scaled_triplets!(I, J, V, F, row_off - 1, col_off - 1)
@@ -921,6 +991,17 @@ function rhom_map_first(
     Rdom = RHomComplex(f.D, N; maxlen=maxlen, resN=resN)
     Rcod = RHomComplex(f.C, N; maxlen=maxlen, resN=resN)
     return rhom_map_first(f, Rdom, Rcod; check=check)
+end
+
+function rhom_map_first(
+    f::ModuleCochainMap{QQ},
+    H::FF.FringeModule{QQ};
+    maxlen::Int=3,
+    resN=nothing,
+    check::Bool=true,
+)
+    return rhom_map_first(f, IndicatorResolutions.pmodule_from_fringe(H);
+        maxlen=maxlen, resN=resN, check=check)
 end
 
 
@@ -1054,33 +1135,70 @@ function rhom_map_second(
         V = QQ[]
 
         # Blocks are indexed by (A,B). For RHom, B is injective resolution degree.
-        for (A, B, off_tgt, _) in offsets_tgt
-            # Find matching source block.
-            off_src = nothing
-            dim_block_src = 0
-            for (A2, B2, os, ds) in offsets_src
-                if A2 == A && B2 == B
-                    off_src = os
-                    dim_block_src = ds
-                    break
-                end
+        for ((A, B), off_tgt) in offsets_tgt
+            if !haskey(offsets_src, (A, B))
+                continue
             end
-            if off_src === nothing
+            off_src = offsets_src[(A, B)]
+
+            ia_src = A - Rsrc.DC.amin + 1
+            ib_src = B - Rsrc.DC.bmin + 1
+            ia_tgt = A - Rtgt.DC.amin + 1
+            ib_tgt = B - Rtgt.DC.bmin + 1
+
+            if ia_src < 1 || ia_src > size(Rsrc.DC.dims, 1) || ib_src < 1 || ib_src > size(Rsrc.DC.dims, 2)
+                continue
+            end
+            if ia_tgt < 1 || ia_tgt > size(Rtgt.DC.dims, 1) || ib_tgt < 1 || ib_tgt > size(Rtgt.DC.dims, 2)
+                continue
+            end
+            if Rsrc.DC.dims[ia_src, ib_src] == 0 || Rtgt.DC.dims[ia_tgt, ib_tgt] == 0
                 continue
             end
 
-            ia = A - Rtgt.DC.amin + 1
-            ib = B - Rtgt.DC.bmin + 1
-
             # Postcompose on Hom(C^p, E^B).
-            Mb = _postcompose_matrix(Rtgt.homs[ia, ib], Rsrc.homs[ia, ib], phis[B + 1])
-            _append_scaled_triplets!(I, J, V, Mb, off_tgt - 1, off_src - 1; scale=c)
+            Mb = _postcompose_matrix(Rtgt.homs[ia_tgt, ib_tgt], Rsrc.homs[ia_src, ib_src], phis[B + 1])
+            _append_scaled_triplets!(I, J, V, Mb, off_tgt - 1, off_src - 1)
         end
 
         maps[t - Rsrc.tot.tmin + 1] = sparse(I, J, V, dim_tgt, dim_src)
     end
 
     return CochainMap(Rsrc.tot, Rtgt.tot, maps; check=check)
+end
+
+function rhom_map_second(
+    g::PMorphism{QQ},
+    C::ModuleCochainComplex{QQ},
+    Hsrc::FF.FringeModule{QQ},
+    Htgt::FF.FringeModule{QQ};
+    maxlen::Int=3,
+    resN=nothing,
+    check::Bool=true,
+)
+    Nsrc = IndicatorResolutions.pmodule_from_fringe(Hsrc)
+    Ntgt = IndicatorResolutions.pmodule_from_fringe(Htgt)
+    if g.dom !== Nsrc || g.cod !== Ntgt
+        g = PMorphism{QQ}(Nsrc, Ntgt, g.comps)
+    end
+    resNsrc = isnothing(resN) ? injective_resolution(Nsrc, ResolutionOptions(maxlen=maxlen)) : resN
+    resNtgt = isnothing(resN) ? injective_resolution(Ntgt, ResolutionOptions(maxlen=maxlen)) : resN
+    Rsrc = RHomComplex(C, Nsrc; maxlen=maxlen, resN=resNsrc)
+    Rtgt = RHomComplex(C, Ntgt; maxlen=maxlen, resN=resNtgt)
+    return rhom_map_second(g, Rsrc, Rtgt; check=check)
+end
+
+function rhom_map_second(
+    gH::FF.FringeModule{QQ},
+    C::ModuleCochainComplex{QQ},
+    Hsrc::FF.FringeModule{QQ},
+    Htgt::FF.FringeModule{QQ};
+    maxlen::Int=3,
+    resN=nothing,
+    check::Bool=true,
+)
+    g = IndicatorResolutions.pmodule_from_fringe(gH)
+    return rhom_map_second(g, C, Hsrc, Htgt; maxlen=maxlen, resN=resN, check=check)
 end
 
 
@@ -1094,6 +1212,10 @@ end
 function hyperExt(C::ModuleCochainComplex{QQ}, N::PModule{QQ}; kwargs...)
     R = RHomComplex(C,N; kwargs...)
     return HyperExtSpace{QQ}(R, cohomology_data(R.tot))
+end
+
+function hyperExt(C::ModuleCochainComplex{QQ}, H::FF.FringeModule{QQ}; kwargs...)
+    return hyperExt(C, IR.pmodule_from_fringe(H); kwargs...)
 end
 
 dim(H::HyperExtSpace, t::Int) = (t < H.R.tot.tmin || t > H.R.tot.tmax) ? 0 : H.cohom[t - H.R.tot.tmin + 1].dimH
@@ -1260,7 +1382,7 @@ function DerivedTensorComplex(
         # This corresponds to a -> a-1 in the projective resolution.
         if A < amax
             gens_am1 = resR.gens[a]        # degree (a-1) generators
-            dP = resR.d_mat[a + 1]         # matrix from gens_a -> gens_am1 (rows = gens_am1, cols = gens_a)
+            dP = resR.d_mat[a]             # matrix from gens_a -> gens_am1 (rows = gens_am1, cols = gens_a)
             offs_cod = _offs_for_gens(Mp, gens_am1)
 
             Itrip = Int[]
@@ -1304,7 +1426,7 @@ function DerivedTensorComplex(
     end
 
     DC = DoubleComplex(amin, amax, bmin, bmax, dims, dv, dh)
-    tot = total_complex(DC; check = check)
+    tot = total_complex(DC)
 
     return DerivedTensorComplex{QQ}(Rop, C, resR, DC, tot)
 end
@@ -1322,6 +1444,10 @@ end
 function hyperTor(Rop::PModule{QQ}, C::ModuleCochainComplex{QQ}; kwargs...)
     T = DerivedTensorComplex(Rop,C; kwargs...)
     return HyperTorSpace{QQ}(T, cohomology_data(T.tot))
+end
+
+function hyperTor(H::FF.FringeModule{QQ}, C::ModuleCochainComplex{QQ}; kwargs...)
+    return hyperTor(IR.pmodule_from_fringe(H), C; kwargs...)
 end
 
 """
@@ -1344,7 +1470,7 @@ function dim(H::HyperTorSpace, n::Int)
     if t < tmin || t > tmax
         return 0
     end
-    return H.cohom[t - tmin + 1].dim
+    return H.cohom[t - tmin + 1].dimH
 end
 
 # ---------------------------------------------------------------------------
@@ -1834,3 +1960,33 @@ end
 
 
 end # module
+function _resolution_offsets(res)
+    return res.offsets
+end
+
+function _resolution_offsets(res::DerivedFunctors.Resolutions.InjectiveResolution)
+    return _gens_offsets(res.gens)
+end
+
+function _gens_offsets(gens)
+    offsets = Vector{Vector{Int}}(undef, length(gens))
+    for i in eachindex(gens)
+        gi = gens[i]
+        if isempty(gi)
+            offsets[i] = Int[]
+            continue
+        end
+        if eltype(gi) <: AbstractVector
+            lens = length.(gi)
+            offs = Vector{Int}(undef, length(lens) + 1)
+            offs[1] = 0
+            for j in 1:length(lens)
+                offs[j + 1] = offs[j] + lens[j]
+            end
+            offsets[i] = offs
+        else
+            offsets[i] = collect(0:length(gi))
+        end
+    end
+    return offsets
+end

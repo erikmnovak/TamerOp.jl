@@ -62,9 +62,15 @@ function _rref_backend(A::AbstractMatrix{QQ}; pivots::Bool=true)
         row > m && break
     end
 
-    return pivots ? (M, Tuple(pivs)) : M
+    return pivots ? (M, collect(pivs)) : M
 end
 
+"""
+    rrefQQ(A::AbstractMatrix{QQ}; pivots::Bool=true)
+
+Return the row-reduced echelon form of `A`. If `pivots=true`, also return the
+pivot column indices as a `Vector{Int}`.
+"""
 function rrefQQ(A::AbstractMatrix{QQ}; pivots::Bool=true)
     return _rref_backend(_to_backend_matrix(A); pivots=pivots)
 end

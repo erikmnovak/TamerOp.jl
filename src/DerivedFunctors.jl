@@ -1843,7 +1843,7 @@ This submodule should define (move here incrementally):
 - graded-space methods that expose dims/bases/representatives
 """
 module ExtTorSpaces
-    using LinearAlgebra: rank
+    using LinearAlgebra: rank, I
     using SparseArrays
 
     using ...CoreModules: QQ, ResolutionOptions, DerivedFunctorOptions
@@ -2044,6 +2044,13 @@ module ExtTorSpaces
 
         return HomSpace{QQ}(M, N, basis, basis_matrix, offs)
     end
+
+    Hom(H::FringeModule{QQ}, N::PModule{QQ}) =
+        Hom(pmodule_from_fringe(H), N)
+    Hom(M::PModule{QQ}, H::FringeModule{QQ}) =
+        Hom(M, pmodule_from_fringe(H))
+    Hom(H1::FringeModule{QQ}, H2::FringeModule{QQ}) =
+        Hom(pmodule_from_fringe(H1), pmodule_from_fringe(H2))
 
 
     dimension(H::HomSpace) = length(H.basis)
@@ -3471,7 +3478,8 @@ module Functoriality
     import ..ExtTorSpaces: ExtSpaceProjective, ExtSpaceInjective, ExtSpace,
         TorSpace, TorSpaceSecond, Ext, Tor, ExtInjective, HomSpace, Hom
     import ..Resolutions: ProjectiveResolution, InjectiveResolution,
-        projective_resolution, injective_resolution, _pad_projective_resolution!
+        projective_resolution, injective_resolution, _pad_projective_resolution!,
+        lift_injective_chainmap
 
     import ..GradedSpaces: dim
 
@@ -4520,7 +4528,7 @@ module Functoriality
         dom_bases = T1.resL.gens[s + 1]
         cod_bases = T2.resL.gens[s + 1]
         F = _tensor_map_on_tor_chains_from_projective_coeff(
-            T1.Rop, dom_bases, cod_bases, coeff, T1.offsets[s + 1], T2.offsets[s + 1]
+            T1.Rop, dom_bases, cod_bases, T1.offsets[s + 1], T2.offsets[s + 1], coeff
         )
         return ChainComplexes.induced_map_on_homology(T1.homol[s + 1], T2.homol[s + 1], F)
     end
@@ -4574,7 +4582,7 @@ module Functoriality
         cod_bases = T2.resRop.gens[s + 1]
 
         F = _tensor_map_on_tor_chains_from_projective_coeff(
-            T1.L, dom_bases, cod_bases, coeff, T1.offsets[s + 1], T2.offsets[s + 1]
+            T1.L, dom_bases, cod_bases, T1.offsets[s + 1], T2.offsets[s + 1], coeff
         )
 
         return ChainComplexes.induced_map_on_homology(T1.homol[s+1], T2.homol[s+1], F)
@@ -6754,6 +6762,7 @@ using .Functoriality:
     connecting_hom, connecting_hom_first,
     ExtLongExactSequenceSecond, ExtLongExactSequenceFirst,
     TorLongExactSequenceFirst, TorLongExactSequenceSecond,
+    _precompose_matrix,
     _precompose_on_hom_cochains_from_projective_coeff,
     _tensor_map_on_tor_chains_from_projective_coeff,
     _tor_blockdiag_map_on_chains

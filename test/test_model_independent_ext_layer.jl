@@ -2,7 +2,7 @@ using Test
 using LinearAlgebra
 using SparseArrays
 
-# Included from test/runtests.jl; uses shared aliases (PM, FF, IR, QQ, ...).
+# Included from test/runtests.jl; uses shared aliases (PM, FF, IR, ...).
 #
 # The fallback helpers below are only for standalone runs; the main test suite
 # does not use them.
@@ -32,15 +32,17 @@ end
 
 if !isdefined(@__MODULE__, :one_by_one_fringe)
     """
-        one_by_one_fringe(P, U, D) -> FF.FringeModule{QQ}
+        one_by_one_fringe(P, U, D; field=QQField()) -> FF.FringeModule
 
     A 1-generator / 1-cogenerator fringe module with phi = [1].
     Fiber at q is 1-dimensional iff q lies in U intersect D.
     """
-    function one_by_one_fringe(P::FF.FinitePoset, U::FF.Upset, D::FF.Downset)
-        phi = spzeros(QQ, 1, 1)
-        phi[1, 1] = QQ(1)
-        return FF.FringeModule{QQ}(P, [U], [D], phi)
+    function one_by_one_fringe(P::FF.FinitePoset, U::FF.Upset, D::FF.Downset;
+                               field::AbstractCoeffField=CM.QQField())
+        K = CM.coeff_type(field)
+        phi = spzeros(K, 1, 1)
+        phi[1, 1] = CM.coerce(field, 1)
+        return FF.FringeModule{K}(field, P, [U], [D], phi)
     end
 end
 
@@ -49,44 +51,46 @@ end
 # ---------------------------------------------------------------------------
 
 """
-    simple_pmodule(P, v) -> MD.PModule{QQ}
+    simple_pmodule(P, v; field=QQField()) -> MD.PModule
 
 The simple module supported only at vertex v (dimension 1 at v, 0 elsewhere).
 """
-function simple_pmodule(P::FF.FinitePoset, v::Int)
-    Hv = one_by_one_fringe(P, FF.principal_upset(P, v), FF.principal_downset(P, v))
+function simple_pmodule(P::FF.FinitePoset, v::Int; field::AbstractCoeffField=CM.QQField())
+    Hv = one_by_one_fringe(P, FF.principal_upset(P, v), FF.principal_downset(P, v); field=field)
     return IR.pmodule_from_fringe(Hv)
 end
 
 """
-    interval_pmodule(P, a, b) -> MD.PModule{QQ}
+    interval_pmodule(P, a, b; field=QQField()) -> MD.PModule
 
 The interval module supported on {q : a <= q <= b}, built via a 1x1 fringe.
 Requires a <= b in the poset.
 """
-function interval_pmodule(P::FF.FinitePoset, a::Int, b::Int)
+function interval_pmodule(P::FF.FinitePoset, a::Int, b::Int; field::AbstractCoeffField=CM.QQField())
     @assert FF.leq(P, a, b)
-    Hab = one_by_one_fringe(P, FF.principal_upset(P, a), FF.principal_downset(P, b))
+    Hab = one_by_one_fringe(P, FF.principal_upset(P, a), FF.principal_downset(P, b); field=field)
     return IR.pmodule_from_fringe(Hab)
 end
 
 """
-    direct_sum(mods) -> MD.PModule{QQ}
+    direct_sum(mods) -> MD.PModule
 
 Direct sum of a list of modules on the same finite poset.
 Cover-edge maps are block diagonal.
 """
-function direct_sum(mods::AbstractVector{<:MD.PModule{QQ}})
+function direct_sum(mods::AbstractVector{<:MD.PModule{K}}) where {K}
     @assert !isempty(mods)
     Q = mods[1].Q
+    field = mods[1].field
     n = Q.n
     for M in mods
         @assert M.Q === Q
+        M.field == field || error("direct_sum: field mismatch")
     end
 
     dims = [sum(M.dims[i] for M in mods) for i in 1:n]
 
-    edge_maps = Dict{Tuple{Int,Int}, Matrix{QQ}}()
+    edge_maps = Dict{Tuple{Int,Int}, Matrix{K}}()
     for (u, v) in FF.cover_edges(Q)
         out_sizes = [M.dims[v] for M in mods]
         in_sizes  = [M.dims[u] for M in mods]
@@ -94,7 +98,7 @@ function direct_sum(mods::AbstractVector{<:MD.PModule{QQ}})
         total_out = sum(out_sizes)
         total_in  = sum(in_sizes)
 
-        B = zeros(QQ, total_out, total_in)
+        B = CM.zeros(field, total_out, total_in)
 
         roff = 0
         coff = 0
@@ -115,35 +119,35 @@ function direct_sum(mods::AbstractVector{<:MD.PModule{QQ}})
         edge_maps[(u, v)] = B
     end
 
-    return MD.PModule{QQ}(Q, dims, edge_maps)
+    return MD.PModule{K}(Q, dims, edge_maps; field=field)
 end
 
 """
-    endo_at_vertex(M, u, A) -> MD.PMorphism{QQ}
+    endo_at_vertex(M, u, A) -> MD.PMorphism
 
 Endomorphism of M which is identity at every vertex except u,
 where it is replaced by A (size dims[u] x dims[u]).
 """
-function endo_at_vertex(M::MD.PModule{QQ}, u::Int, A::Matrix{QQ})
-    comps = Matrix{QQ}[]
+function endo_at_vertex(M::MD.PModule{K}, u::Int, A::AbstractMatrix{K}) where {K}
+    comps = Vector{Matrix{K}}(undef, M.Q.n)
     for v in 1:M.Q.n
         dv = M.dims[v]
-        push!(comps, Matrix{QQ}(I, dv, dv))
+        comps[v] = CM.eye(M.field, dv)
     end
-    comps[u] = A
-    return MD.PMorphism{QQ}(M, M, comps)
+    comps[u] = Matrix{K}(A)
+    return MD.PMorphism(M, M, comps)
 end
 
 """
-    compose_morphism(g, f) -> MD.PMorphism{QQ}
+    compose_morphism(g, f) -> MD.PMorphism
 
 Fiberwise composition: (g o f)_v = g_v * f_v.
 """
-function compose_morphism(g::MD.PMorphism{QQ}, f::MD.PMorphism{QQ})
+function compose_morphism(g::MD.PMorphism{K}, f::MD.PMorphism{K}) where {K}
     @assert f.cod === g.dom
     n = f.dom.Q.n
     comps = [g.comps[v] * f.comps[v] for v in 1:n]
-    return MD.PMorphism{QQ}(f.dom, g.cod, comps)
+    return MD.PMorphism(f.dom, g.cod, comps)
 end
 
 # ---------------------------------------------------------------------------
@@ -152,10 +156,13 @@ end
 
 @testset "Model-independent Ext layer: comparison + coherent transport" begin
     Q = chain_poset(2)
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+    c(x) = CM.coerce(field, x)
 
     # Simples at 1 and 2.
-    S1 = simple_pmodule(Q, 1)
-    S2 = simple_pmodule(Q, 2)
+    S1 = simple_pmodule(Q, 1; field=field)
+    S2 = simple_pmodule(Q, 2; field=field)
 
     # M = S1 oplus S1, N = S2 oplus S2.
     M = direct_sum([S1, S1])
@@ -170,12 +177,12 @@ end
     P2I = PM.comparison_isomorphism(E, 1; from = :projective, to = :injective)
     I2P = PM.comparison_isomorphism(E, 1; from = :injective, to = :projective)
 
-    I4 = Matrix{QQ}(I, 4, 4)
+    I4 = CM.eye(field, 4)
     @test P2I * I2P == I4
     @test I2P * P2I == I4
 
     # Coherent representative transport: coords (canonical) -> inj cocycle -> coords back.
-    e1 = vcat([QQ(1)], zeros(QQ, 3))
+    e1 = vcat([c(1)], zeros(K, 3))
     rep_inj = PM.representative(E, 1, e1; model = :injective)
     coords_back = PM.coordinates(E, 1, rep_inj; model = :injective)
     @test coords_back == e1
@@ -183,9 +190,12 @@ end
 
 @testset "Injective model functoriality in second argument" begin
     Q = chain_poset(2)
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+    c(x) = CM.coerce(field, x)
 
-    S1 = simple_pmodule(Q, 1)
-    S2 = simple_pmodule(Q, 2)
+    S1 = simple_pmodule(Q, 1; field=field)
+    S2 = simple_pmodule(Q, 2; field=field)
 
     M = direct_sum([S1, S1])
     N = direct_sum([S2, S2])
@@ -193,8 +203,8 @@ end
     Einj = PM.ExtInjective(M, N, PM.DerivedFunctorOptions(maxdeg = 2))
 
     # Noncommuting endomorphisms of N at vertex 2 (dims there are 2).
-    C = [QQ(1) QQ(1); QQ(0) QQ(1)]
-    D = [QQ(1) QQ(0); QQ(1) QQ(1)]
+    C = [c(1) c(1); c(0) c(1)]
+    D = [c(1) c(0); c(1) c(1)]
 
     gC = endo_at_vertex(N, 2, C)
     gD = endo_at_vertex(N, 2, D)
@@ -212,43 +222,49 @@ end
     Gid = PM.ext_map_second(Einj, Einj, idN; t = 1)
 
     d = PM.dim(Einj, 1)
-    @test Gid == Matrix{QQ}(I, d, d)
+    @test Gid == CM.eye(field, d)
 end
 
 @testset "Ext long exact sequence in first argument (degree 0 connecting map)" begin
     Q = chain_poset(2)
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+    c(x) = CM.coerce(field, x)
 
-    S1 = simple_pmodule(Q, 1)
-    S2 = simple_pmodule(Q, 2)
-    I12 = interval_pmodule(Q, 1, 2)
+    S1 = simple_pmodule(Q, 1; field=field)
+    S2 = simple_pmodule(Q, 2; field=field)
+    I12 = interval_pmodule(Q, 1, 2; field=field)
 
     # Short exact sequence 0 -> S2 -> I12 -> S1 -> 0 on the chain 1 < 2.
     #
     # Build i: S2 -> I12 and p: I12 -> S1 with correctly-sized component matrices.
-    i_comps = [zeros(QQ, I12.dims[v], S2.dims[v]) for v in 1:Q.n]
-    i_comps[2] = ones(QQ, 1, 1)
-    i = MD.PMorphism{QQ}(S2, I12, i_comps)
+    i_comps = [CM.zeros(field, I12.dims[v], S2.dims[v]) for v in 1:Q.n]
+    i_comps[2] = CM.ones(field, 1, 1)
+    i = MD.PMorphism(S2, I12, i_comps)
 
-    p_comps = [zeros(QQ, S1.dims[v], I12.dims[v]) for v in 1:Q.n]
-    p_comps[1] = ones(QQ, 1, 1)
-    p = MD.PMorphism{QQ}(I12, S1, p_comps)
+    p_comps = [CM.zeros(field, S1.dims[v], I12.dims[v]) for v in 1:Q.n]
+    p_comps[1] = CM.ones(field, 1, 1)
+    p = MD.PMorphism(I12, S1, p_comps)
 
     df0 = PM.DerivedFunctorOptions(maxdeg=0)
     les = PM.ExtLongExactSequenceFirst(S2, I12, S1, S2, i, p, df0)
 
     # Connecting map delta: Ext^0(S2,S2) -> Ext^1(S1,S2) should be nonzero (rank 1).
-    @test PM.rankQQ(les.delta[1]) == 1
+    @test PM.FieldLinAlg.rank(field, les.delta[1]) == 1
     @test size(les.delta[1]) == (PM.dim(les.EC, 1), PM.dim(les.EA, 0))
 end
 
 @testset "Injective chain-map lifting (public API)" begin
     Q = chain_poset(2)
-    S1 = simple_pmodule(Q, 1)
-    S2 = simple_pmodule(Q, 2)
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+    c(x) = CM.coerce(field, x)
+    S1 = simple_pmodule(Q, 1; field=field)
+    S2 = simple_pmodule(Q, 2; field=field)
     N = MD.direct_sum(S1, S2)
 
     # Endomorphism: scale vertex 1 by 2 and vertex 2 by 3.
-    g = MD.PMorphism{QQ}(N, N, [fill(QQ(2), 1, 1), fill(QQ(3), 1, 1)])
+    g = MD.PMorphism(N, N, [fill(c(2), 1, 1), fill(c(3), 1, 1)])
 
     res = DF.injective_resolution(N, PM.ResolutionOptions(maxlen=2))
     phis = PM.lift_injective_chainmap(g, res, res; upto=2)

@@ -20,9 +20,8 @@ module PosetModules
 include("CoreModules.jl")   # defines PosetModules.CoreModules and PosetModules.Stats
 include("RegionGeometry.jl")
 
-# 2) Exact rational linear algebra (Nemo if available, fallback otherwise)
-#    IMPORTANT: ExactQQ fallback is self-contained; no import from IndicatorResolutions.
-include("ExactQQ.jl")
+# 2) Linear algebra engines (field-generic)
+include("FieldLinAlg.jl")
 
 # 3) Finite poset + indicator sets + fringe presentations
 include("FiniteFringe.jl")
@@ -43,28 +42,27 @@ include("FlangeZn.jl")
 # 7) ZnEncoding (needs FlangeZn + FiniteFringe)
 include("ZnEncoding.jl")
 
-# 8) Data ingestion layer (datasets, filtration specs, grid encodings)
-include("DataPipeline.jl")
-
-# 9) PL backends for R^n (general polyhedra + axis-aligned boxes)
+# 8) PL backends for R^n (general polyhedra + axis-aligned boxes)
 include("PLPolyhedra.jl")
 include("PLBackend.jl")
 
-# 10) JSON IO layer (internal formats + external adapters) and 2D visualization
-include("Serialization.jl")
-include("Viz2D.jl")
-
-# 11) Derived-functor and complexes layer
+# 9) Derived-functor and complexes layer
 include("ChainComplexes.jl")
 include("DerivedFunctors.jl")
 include("ModuleComplexes.jl")
 include("ChangeOfPosets.jl")
 
-# 12) Invariants and summaries
+# 10) Invariants and summaries
 include("Invariants.jl")
 
-# 13) High-level workflow wrappers (encode/resolve/ext/tor/invariant, etc.)
+# 11) High-level workflow wrappers (encode/resolve/ext/tor/invariant, etc.)
 include("Workflow.jl")
+
+# 12) JSON IO layer (internal formats + external adapters)
+include("Serialization.jl")
+
+# 13) 2D visualization helpers
+include("Viz2D.jl")
 
 # =============================================================================
 # PublicAPI.jl
@@ -88,10 +86,12 @@ include("Workflow.jl")
 using .CoreModules: QQ,
                     EncodingOptions, ResolutionOptions, DerivedFunctorOptions, InvariantOptions,
                     EncodingResult, ResolutionResult, InvariantResult,
+                    change_field, encode_from_data, ingest,
                     axes_from_encoding,
                     dimension,
                     representatives,
-                    locate
+                    locate,
+                    CompiledEncoding, compile_encoding, encoding_map
 
 using .FlangeZn: Flange, face
 using .PLPolyhedra: PLFringe
@@ -107,7 +107,7 @@ using .FiniteFringe: FiniteFringeOptions,
                      principal_upset, principal_downset,
                      upset_from_generators, downset_from_generators, upset_closure, downset_closure,
                      FringeModule, one_by_one_fringe,
-                     cover_edges, nvertices, leq, leq_matrix, upset_indices, downset_indices,
+                     cover_edges, nvertices, leq, leq_matrix, upset_indices, downset_indices, upset_iter, downset_iter,
                      leq_row, leq_col, poset_equal, poset_equal_opposite
 
 # Encoding-map layer (advanced but still friendly)
@@ -118,6 +118,8 @@ using .Encoding: EncodingMap,
                               build_uptight_encoding_from_fringe,
                               pullback_fringe_along_encoding,
                               pushforward_fringe_along_encoding
+
+
 
 # JSON IO and cache/interoperability helpers
 # These help users reproduce results, checkpoint expensive computations, and
@@ -139,8 +141,8 @@ using .Serialization: save_flange_json, load_flange_json,
                       load_pmodule_json,
                       load_ripser_lower_distance_streaming
 
-using .DataPipeline: PointCloud, ImageNd, GraphData, EmbeddedPlanarGraph2D, GradedComplex,
-                     FiltrationSpec, GridEncodingMap, poset_from_axes, grid_index
+using .Workflow: PointCloud, ImageNd, GraphData, EmbeddedPlanarGraph2D, GradedComplex,
+                 FiltrationSpec, GridEncodingMap, poset_from_axes, grid_index
 
 # Tables are often the default thing users want to see for resolutions.
 using .DerivedFunctors: betti_table, bass_table
@@ -187,16 +189,20 @@ export
        # Accessors (EncodingResult)
        poset, pmodule, classifier, backend, presentation,
 
+       # Field coercion
+       change_field,
+
        # Core finite-poset data types + basic constructors
        Upset, Downset, FringeModule, principal_upset, principal_downset,
        upset_from_generators, downset_from_generators, upset_closure, downset_closure,
        one_by_one_fringe, cover_edges,
-       nvertices, leq, leq_matrix, upset_indices, downset_indices, leq_row, leq_col,
+       nvertices, leq, leq_matrix, upset_indices, downset_indices, upset_iter, downset_iter, leq_row, leq_col,
        poset_equal, poset_equal_opposite,
 
        # Encoding-map layer (controlled compression/refinement of encodings)
        EncodingMap, UptightEncoding, build_uptight_encoding_from_fringe,
        pullback_fringe_along_encoding, pushforward_fringe_along_encoding,
+       CompiledEncoding, compile_encoding, encoding_map,
 
        # JSON IO / caching helpers
        save_flange_json, load_flange_json, save_encoding_json, load_encoding_json, save_mpp_decomposition_json, 
@@ -211,7 +217,7 @@ export
        load_boundary_complex_json, load_reduced_complex_json, load_pmodule_json,
        load_ripser_lower_distance_streaming,
 
-       # Data ingestion layer (datasets + filtration specs)
+# Data ingestion layer (datasets + filtration specs)
        PointCloud, ImageNd, GraphData, EmbeddedPlanarGraph2D, GradedComplex,
        FiltrationSpec, GridEncodingMap, poset_from_axes, grid_index, axes_from_encoding,
        encode_from_data, ingest, fringe_presentation, flange_presentation,
@@ -280,7 +286,6 @@ const _ROOT = parentmodule(@__MODULE__)
 
 import ..CoreModules
 import ..RegionGeometry
-import ..ExactQQ
 import ..FiniteFringe
 import ..IndicatorTypes
 import ..Encoding
@@ -307,7 +312,7 @@ import ..ModuleComplexes
 import ..ChangeOfPosets
 import ..Invariants
 
-export CoreModules, Stats, RegionGeometry, ExactQQ, FiniteFringe, IndicatorTypes, Encoding,
+export CoreModules, Stats, RegionGeometry, FiniteFringe, IndicatorTypes, Encoding,
        Modules, AbelianCategories, IndicatorResolutions, FlangeZn, Serialization, Viz2D,
        PLPolyhedra, PLBackend, ChainComplexes, ZnEncoding, DerivedFunctors,
        Resolutions, ExtTorSpaces, Functoriality, Algebras, SpectralSequences, Backends,
@@ -387,7 +392,6 @@ const _ADVANCED_MODULES = Module[
     _ROOT,
     CoreModules,
     RegionGeometry,
-    ExactQQ,
     FiniteFringe,
     IndicatorTypes,
     Modules,

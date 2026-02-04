@@ -42,7 +42,6 @@ const FZ  = PM.FlangeZn
 const SER = PM.Serialization
 const PLP = PM.PLPolyhedra
 const PLB = PM.PLBackend
-const EX  = PM.ExactQQ
 const CC  = PM.ChainComplexes
 const QQ  = PM.CoreModules.QQ
 const CM  = PM.CoreModules
@@ -180,6 +179,18 @@ function simple_modules_chain2()
     return P, S1, S2
 end
 
+# ---------------- Field test harness ----------------------------------------
+
+const FIELD_QQ = CM.QQField()
+const FIELD_F2 = CM.F2()
+const FIELD_F3 = CM.F3()
+const FIELD_F5 = CM.Fp(5)
+const FIELD_R64 = CM.RealField(Float64; rtol=1e-10, atol=1e-12)
+
+const FIELDS_FULL = (FIELD_QQ, FIELD_F2, FIELD_F3, FIELD_F5, FIELD_R64)
+
+with_fields(fields, f) = foreach(f, fields)
+
 # ---------------- ASCII-only source tree test -------------------------------
 
 @testset "ASCII-only source tree" begin
@@ -266,7 +277,10 @@ end
 end
 
 # ---------------- Run test files ---------------------------------------------
+# Linear algebra engine
+include("test_field_linalg.jl")
 
+# Core functionality
 include("test_finite_fringe.jl")
 include("test_encoding.jl")
 include("test_poset_interface.jl")

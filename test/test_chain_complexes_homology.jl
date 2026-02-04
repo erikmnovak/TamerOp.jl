@@ -5,6 +5,12 @@ import Base.Threads
 
 # Included from test/runtests.jl; uses shared aliases (PM, FF, IR, DF, MD, QQ, ...).
 
+with_fields(FIELDS_FULL) do field
+K = CM.coeff_type(field)
+@inline c(x) = CM.coerce(field, x)
+@inline zmat(m, n) = CM.zeros(field, m, n)
+@inline eye_mat(n) = CM.eye(field, n)
+
 # helper: simple 1 times 1 fringe module on interval [a,b]
 function interval_module(P::FF.FinitePoset, a::Int, b::Int)
     if !FF.leq(P, a, b)
@@ -12,29 +18,29 @@ function interval_module(P::FF.FinitePoset, a::Int, b::Int)
     end
     U = FF.principal_upset(P, a)
     D = FF.principal_downset(P, b)
-    return FF.one_by_one_fringe(P, U, D, QQ(1))
+    return FF.one_by_one_fringe(P, U, D, c(1); field=field)
+# end interval_module
 end
-
 # A tiny helper: one-vertex poset module = just a vector space.
 function one_vertex_module(dim::Int)
     P = chain_poset(1)
-    return MD.PModule{QQ}(P, [dim], Dict{Tuple{Int,Int}, Matrix{QQ}}())
+    return MD.PModule{K}(P, [dim], Dict{Tuple{Int,Int}, Matrix{K}}(); field=field)
 end
 
-function scalar_morphism(M::MD.PModule{QQ}, a::Int)
-    comps = Vector{Matrix{QQ}}(undef, M.Q.n)
+function scalar_morphism(M::MD.PModule{K}, a::Int) where {K}
+    comps = Vector{Matrix{K}}(undef, M.Q.n)
     for v in 1:M.Q.n
         dv = M.dims[v]
-        comps[v] = dv == 0 ? zeros(QQ, 0, 0) : QQ(a) * Matrix{QQ}(I, dv, dv)
+        comps[v] = dv == 0 ? zmat(0, 0) : c(a) * eye_mat(dv)
     end
-    return MD.PMorphism{QQ}(M, M, comps)
+    return MD.PMorphism(M, M, comps)
 end
 
-function compose_morphism(g::MD.PMorphism{QQ}, f::MD.PMorphism{QQ})
+function compose_morphism(g::MD.PMorphism{K}, f::MD.PMorphism{K}) where {K}
     @assert f.cod === g.dom
     n = f.dom.Q.n
     comps = [g.comps[v] * f.comps[v] for v in 1:n]
-    return MD.PMorphism{QQ}(f.dom, g.cod, comps)
+    return MD.PMorphism(f.dom, g.cod, comps)
 end
 
 @testset "Homological algebra edge cases on finite posets" begin
@@ -51,7 +57,7 @@ end
     @test all(PM.dim(T, t) == 0 for t in 1:3)
 
     # Zero module: Ext and Tor should vanish in all degrees.
-    Z = MD.PModule{QQ}(P1, [0], Dict{Tuple{Int,Int}, Matrix{QQ}}())
+    Z = MD.PModule{K}(P1, [0], Dict{Tuple{Int,Int}, Matrix{K}}())
 
     EZS = DF.Ext(Z, S, PM.DerivedFunctorOptions(maxdeg=2))
     ESZ = DF.Ext(S, Z, PM.DerivedFunctorOptions(maxdeg=2))
@@ -88,11 +94,11 @@ end
 
 @testset "ChainComplexes homology_data and homology_coordinates by hand" begin
     # ----------------
-    # Circle: C1=QQ, C0=QQ, d1=0
+    # Circle: C1=k, C0=k, d1=0
     # ----------------
-    d1 = zeros(QQ, 1, 1)      # C1 -> C0
-    d0 = zeros(QQ, 0, 1)      # C0 -> 0
-    d2 = zeros(QQ, 1, 0)      # 0  -> C1
+    d1 = zeros(K, 1, 1)      # C1 -> C0
+    d0 = zeros(K, 0, 1)      # C0 -> 0
+    d2 = zeros(K, 1, 0)      # 0  -> C1
 
     H1 = CC.homology_data(d2, d1, 1)
     @test H1.dimH == 1
@@ -102,14 +108,14 @@ end
 
     # coordinate sanity on the chosen basis representative
     c = CC.homology_coordinates(H1, H1.Hrep[:, 1])
-    @test c == reshape(QQ[1], 1, 1)
+    @test c == reshape(K[1], 1, 1)
 
     # ----------------
-    # Interval: C1=QQ, C0=QQ^2, d1 = [ -1; 1 ]
+    # Interval: C1=k, C0=k^2, d1 = [ -1; 1 ]
     # ----------------
-    d1_int = reshape(QQ[-1, 1], 2, 1)
-    d0_int = zeros(QQ, 0, 2)
-    d2_int = zeros(QQ, 1, 0)
+    d1_int = reshape(K[-1, 1], 2, 1)
+    d0_int = zeros(K, 0, 2)
+    d2_int = zeros(K, 1, 0)
 
     H1_int = CC.homology_data(d2_int, d1_int, 1)
     @test H1_int.dimH == 0
@@ -118,15 +124,15 @@ end
     @test H0_int.dimH == 1
 
     # any nonzero vector in C1 is not a cycle since d1_int is injective
-    @test_throws ErrorException CC.homology_coordinates(H1_int, reshape(QQ[1], 1, 1))
+    @test_throws ErrorException CC.homology_coordinates(H1_int, reshape(K[1], 1, 1))
 
     # boundary class should map to 0 in H0
     b = H0_int.B[:, 1]
     c0 = CC.homology_coordinates(H0_int, b)
-    @test c0 == zeros(QQ, H0_int.dimH, 1)
+    @test c0 == zeros(K, H0_int.dimH, 1)
 
     # ----------------
-    # Filled triangle: C2=QQ, C1=QQ^3, C0=QQ^3
+    # Filled triangle: C2=k, C1=k^3, C0=k^3
     # edge basis: e01,e02,e12; vertex basis: v0,v1,v2; face basis: f012
     # d2(f) = e12 - e02 + e01 => column [1,-1,1]
     # d1 columns are boundary of edges:
@@ -134,15 +140,15 @@ end
     #   e02 -> v2 - v0  => [-1, 0, 1]
     #   e12 -> v2 - v1  => [ 0,-1, 1]
     # ----------------
-    d2_tri = reshape(QQ[1, -1, 1], 3, 1)
-    d1_tri = QQ[
+    d2_tri = reshape(K[1, -1, 1], 3, 1)
+    d1_tri = K[
         -1  -1   0;
          1   0  -1;
          0   1   1
     ]
-    d0_tri = zeros(QQ, 0, 3)
+    d0_tri = zeros(K, 0, 3)
 
-    H2_tri = CC.homology_data(zeros(QQ, 1, 0), d2_tri, 2)
+    H2_tri = CC.homology_data(zeros(K, 1, 0), d2_tri, 2)
     @test H2_tri.dimH == 0
 
     H1_tri = CC.homology_data(d2_tri, d1_tri, 1)
@@ -152,115 +158,10 @@ end
     @test H0_tri.dimH == 1
 end
 
-@testset "ExactQQ linear algebra" begin
-    # Rank test
-    A = QQ[QQ(1) QQ(2);
-           QQ(2) QQ(4)]
-    @test EX.rankQQ(A) == 1
-
-    # Nullspace test: A * v = 0
-    N = EX.nullspaceQQ(A)
-    @test size(N, 1) == 2
-    @test size(N, 2) == 1
-    v = N[:, 1]
-    @test A * v == zeros(QQ, 2)
-
-    # Solve full column rank system B*x = y
-    B = QQ[QQ(1) QQ(0);
-           QQ(0) QQ(1);
-           QQ(1) QQ(1)]
-    x_true = QQ[QQ(1), QQ(2)]
-    y = B * x_true
-    x = EX.solve_fullcolumnQQ(B, y)
-    @test B * x == y
-
-    # Multiple right-hand sides
-    Y = hcat(y, QQ(2) .* y)
-    X = EX.solve_fullcolumnQQ(B, Y)
-    @test B * X == Y
-
-
-       @testset "rrefQQ / colspaceQQ / solve_fullcolumnQQ edge cases" begin
-              # A has rank 2: second row is 2*first, third row breaks full dependence.
-              A = QQ[1 2 3;
-                     2 4 6;
-                     1 1 1]
-              R, piv = EX.rrefQQ(A)
-
-              @test piv == [1, 2]
-              @test R == QQ[1 0 -1;
-                            0 1  2;
-                            0 0  0]
-
-              # colspaceQQ should return exactly the pivot columns of A.
-              C = EX.colspaceQQ(A)
-              @test size(C) == (3, 2)
-              @test C == A[:, piv]
-
-              # solve_fullcolumnQQ should reject matrices that are not full column rank.
-              B = QQ[1 2;
-                     2 4;
-                     3 6]
-              b = QQ[1, 2, 3]
-              @test_throws ErrorException EX.solve_fullcolumnQQ(B, b)
-       end
-end
-
-@testset "Sparse colspaceQQ agrees with dense" begin
-    A = sparse(QQ[1 0 2;
-                  0 1 3;
-                  0 0 0])
-    Cd = EX.colspaceQQ(Matrix{QQ}(A))
-    Cs = EX.colspaceQQ(A)
-
-    @test EX.rankQQ(Cd) == EX.rankQQ(Cs)
-    @test EX.rankQQ(Cs) == EX.rankQQ(A)
-
-    # columns of Cs should lie in col(A): solve_fullcolumn on basis test
-    # Check that each column of Cs is in colspace by solving using dense basis
-    B = EX.colspaceQQ(A)
-    for j in 1:size(Cs,2)
-        x = EX.solve_fullcolumnQQ(B, Cs[:,j])
-        @test B*x == Cs[:,j]
-    end
-end
-
-@testset "FullColumnFactor and cache correctness" begin
-    B = QQ[1 0;
-           0 1;
-           1 1]  # full column rank 3x2
-    y = B * QQ[2, 3]
-
-    EX.clear_fullcolumn_cache!()
-    x1 = EX.solve_fullcolumnQQ(B, y; cache=true)
-    @test B*x1 == y
-
-    # cache should now contain B
-    @test haskey(EX._FULLCOLUMN_FACTOR_CACHE, B)
-
-    # repeated solve should still work
-    x2 = EX.solve_fullcolumnQQ(B, y; cache=true)
-    @test x2 == x1
-
-    # RHS not in column space should throw
-    bady = QQ[1,0,0]
-    @test_throws ErrorException EX.solve_fullcolumnQQ(B, bady; cache=true)
-end
-
-@testset "rankQQ_dim matches exact rank on small matrices" begin
-    A = QQ[1 2 3;
-           2 4 6;
-           1 0 1]
-    @test EX.rankQQ(A) == 2
-    @test EX.rankQQ_dim(A; backend=:auto) == 2
-    @test EX.rankQQ_dim(A; backend=:modular) == 2
-end
-
-
 @testset "ChainComplexes: shift and extend_range" begin
     # Cochain complex C: degrees 0..1, zero differential, dims 1 in each degree.
-    d0 = spzeros(QQ, 1, 1)
-    C = CC.CochainComplex{QQ}(0, 1, [1, 1], [d0])
+    d0 = spzeros(K, 1, 1)
+    C = CC.CochainComplex{K}(0, 1, [1, 1], [d0])
 
     @test CC.cohomology_data(C, 0).dimH == 1
     @test CC.cohomology_data(C, 1).dimH == 1
@@ -279,36 +180,36 @@ end
 end
 
 @testset "maxdeg_of_complex helpers" begin
-    C = CC.CochainComplex{QQ}(-1, 2, [1, 1, 1, 1], [spzeros(QQ, 1, 1), spzeros(QQ, 1, 1), spzeros(QQ, 1, 1)])
+    C = CC.CochainComplex{K}(-1, 2, [1, 1, 1, 1], [spzeros(K, 1, 1), spzeros(K, 1, 1), spzeros(K, 1, 1)])
     @test CC.maxdeg_of_complex(C) == 2
 
     dims = ones(Int, 2, 4)
-    dv = Array{SparseMatrixCSC{QQ,Int},2}(undef, 2, 4)
-    dh = Array{SparseMatrixCSC{QQ,Int},2}(undef, 2, 4)
+    dv = Array{SparseMatrixCSC{K,Int},2}(undef, 2, 4)
+    dh = Array{SparseMatrixCSC{K,Int},2}(undef, 2, 4)
     for i in 1:2, j in 1:4
-        dv[i, j] = spzeros(QQ, 1, 1)
-        dh[i, j] = spzeros(QQ, 1, 1)
+        dv[i, j] = spzeros(K, 1, 1)
+        dh[i, j] = spzeros(K, 1, 1)
     end
-    DC = CC.DoubleComplex{QQ}(0, 1, -1, 2, dims, dv, dh)
+    DC = CC.DoubleComplex{K}(0, 1, -1, 2, dims, dv, dh)
     @test CC.maxdeg_of_complex(DC) == 3
 end
 
 @testset "ChainComplexes: induced_map_on_cohomology for zero-differential complexes" begin
     # Complexes concentrated in degree 0.
-    C = CC.CochainComplex{QQ}(0, 0, [2], SparseMatrixCSC{QQ,Int}[])
-    D = CC.CochainComplex{QQ}(0, 0, [3], SparseMatrixCSC{QQ,Int}[])
+    C = CC.CochainComplex{K}(0, 0, [2], SparseMatrixCSC{K,Int}[])
+    D = CC.CochainComplex{K}(0, 0, [3], SparseMatrixCSC{K,Int}[])
 
     HC = CC.cohomology_data(C, 0)
     HD = CC.cohomology_data(D, 0)
 
     # A concrete linear map f: C^0 -> D^0
-    f = sparse([1,2], [1,2], [QQ(1), QQ(1)], 3, 2)
+    f = sparse([1,2], [1,2], [c(1), c(1)], 3, 2)
     fH = CC.induced_map_on_cohomology(HC, HD, f)
 
     # Since differentials are zero, cohomology equals the underlying vector space.
     @test Matrix(fH) == Matrix(f)
 
-    z = spzeros(QQ, 3, 2)
+    z = spzeros(K, 3, 2)
     zH = CC.induced_map_on_cohomology(HC, HD, z)
     
     @test count(!iszero, zH) == 0
@@ -324,16 +225,16 @@ end
     U = BitVector([i <= b for i in 1:n])
     D = BitVector([i >= a for i in 1:n])
 
-    H = PM.one_by_one_fringe(P, U, D, QQ(1))
+    H = PM.one_by_one_fringe(P, U, D, c(1))
     M = IR.pmodule_from_fringe(H)
 
-    C_from_fringe = PM.ModuleCochainComplex([H], PM.PMorphism{QQ}[]; tmin = 0)
-    C_from_pmodule = PM.ModuleCochainComplex([M], PM.PMorphism{QQ}[]; tmin = 0)
+    C_from_fringe = PM.ModuleCochainComplex([H], PM.PMorphism[]; tmin = 0)
+    C_from_pmodule = PM.ModuleCochainComplex([M], PM.PMorphism[]; tmin = 0)
 
     @test C_from_fringe.tmin == 0
     @test C_from_fringe.tmax == 0
     @test length(C_from_fringe.terms) == 1
-    @test C_from_fringe.terms[1] isa MD.PModule{QQ}
+    @test C_from_fringe.terms[1] isa MD.PModule{K}
 
     # The internal converted term should match explicit conversion.
     @test C_from_fringe.terms[1].dims == C_from_pmodule.terms[1].dims
@@ -353,7 +254,7 @@ end
     M = IR.pmodule_from_fringe(Mf)
     N = IR.pmodule_from_fringe(Nf)
 
-    C0 = PM.ModuleCochainComplex([M], PM.PMorphism{QQ}[]; tmin=0)
+    C0 = PM.ModuleCochainComplex([M], PM.PMorphism[]; tmin=0)
     maxdeg = 2
     E = DF.Ext(M, N, PM.DerivedFunctorOptions(maxdeg=maxdeg, model=:injective))
     H = PM.hyperExt(C0, Nf; maxlen=maxdeg)
@@ -368,8 +269,8 @@ end
             B = PM.basis(H, t)
             @test length(B) == d
             if d > 0
-                coords = zeros(QQ, d)
-                coords[1] = QQ(1)
+                coords = zeros(K, d)
+                coords[1] = c(1)
                 z = PM.representative(H, t, coords)
                 coords2 = PM.coordinates(H, t, z)
                 @test coords2 == coords
@@ -406,22 +307,22 @@ end
     # 3) RHom functoriality: (g circ f)^* = f^* circ g^*
     # --------------------------
     # scaling endomorphisms
-    function scale(M::MD.PModule{QQ}, c::Int)
-        comps = Matrix{QQ}[]
+    function scale(M::MD.PModule{K}, a::Int) where {K}
+        comps = Matrix{K}[]
         for u in 1:M.Q.n
             d = M.dims[u]
-            push!(comps, QQ(c)*Matrix{QQ}(I,d,d))
+            push!(comps, c(a) * eye_mat(d))
         end
-        return MD.PMorphism{QQ}(M,M,comps)
+        return MD.PMorphism(M,M,comps)
     end
-    scale(H::FF.FringeModule{QQ}, c::Int) = scale(IR.pmodule_from_fringe(H), c)
+    scale(H::FF.FringeModule{K}, a::Int) where {K} = scale(IR.pmodule_from_fringe(H), a)
 
     fM = scale(M,2)
     gM = scale(M,3)
     gfM = scale(M,6)
 
-    C1 = PM.ModuleCochainComplex([M], PM.PMorphism{QQ}[]; tmin=0)
-    C2 = PM.ModuleCochainComplex([M], PM.PMorphism{QQ}[]; tmin=0)
+    C1 = PM.ModuleCochainComplex([M], PM.PMorphism[]; tmin=0)
+    C2 = PM.ModuleCochainComplex([M], PM.PMorphism[]; tmin=0)
 
     fmap = PM.ModuleCochainMap(C0,C1,[fM]; tmin=0, tmax=0)
     gmap = PM.ModuleCochainMap(C1,C2,[gM]; tmin=0, tmax=0)
@@ -434,7 +335,7 @@ end
 
     # Smoke test: RHomComplex must carry the Hom-space blocks used to
     # build the double complex, and they should be properly typed.
-    @test R0.homs isa Array{DF.HomSpace{QQ},2}
+    @test R0.homs isa Array{DF.HomSpace{K},2}
     @test size(R0.homs, 2) == maxdeg + 1
 
     # induced maps on Tot are just precomposition matrices degreewise, so compare by multiplication
@@ -480,8 +381,8 @@ end
             B = PM.basis(HT, n)
             @test length(B) == d
             if d > 0
-                coords = zeros(QQ, d)
-                coords[1] = QQ(1)
+                coords = zeros(K, d)
+                coords[1] = c(1)
                 z = PM.representative(HT, n, coords)
                 coords2 = PM.coordinates(HT, n, z)
                 @test coords2 == coords
@@ -559,7 +460,7 @@ end
 
 @testset "ModuleCochainComplex keyword tmin (positional endpoints removed)" begin
     P = chain_poset(1)
-    M = MD.PModule{QQ}(P, [1], Dict{Tuple{Int,Int}, Matrix{QQ}}())
+    M = MD.PModule{K}(P, [1], Dict{Tuple{Int,Int}, Matrix{K}}())
     id = scalar_morphism(M, 1)
 
     terms = [M, M]
@@ -576,7 +477,7 @@ end
     @test_throws MethodError PM.ModuleCochainComplex(terms, diffs, -1, 0; check=true)
 
     # Sanity: diff-length mismatch should fail fast (constructor invariant).
-    @test_throws AssertionError PM.ModuleCochainComplex(terms, PM.PMorphism{QQ}[]; tmin=-1, check=false)
+    @test_throws AssertionError PM.ModuleCochainComplex(terms, PM.PMorphism[]; tmin=-1, check=false)
 end
 
 @testset "ModuleCochainMap chain map validation" begin
@@ -602,7 +503,7 @@ end
     M = one_vertex_module(1)
     id = PM.id_morphism(M)
     zM = PM.zero_morphism(M, M)
-    Z  = PM.zero_pmodule(M.Q, QQ)
+    Z  = PM.zero_pmodule(M.Q; field=field)
 
     C = PM.ModuleCochainComplex([M, M], [id]; tmin=0, check=true)
     D = C
@@ -622,7 +523,7 @@ end
 
 @testset "mapping_cone(identity) is acyclic and id is quasi-iso" begin
     M = one_vertex_module(1)
-    C = PM.ModuleCochainComplex([M], PM.PMorphism{QQ}[]; tmin=0, check=true)
+    C = PM.ModuleCochainComplex([M], PM.PMorphism[]; tmin=0, check=true)
     id = PM.ModuleCochainMap(C, C, [PM.id_morphism(M)]; tmin=0, tmax=0, check=true)
 
     cone = PM.mapping_cone(id)
@@ -637,9 +538,9 @@ end
 
 @testset "rhom_map_first strict functoriality under composition" begin
     M = one_vertex_module(2)
-    N = PM.PModule{QQ}(M.Q, copy(M.dims), M.edge_maps)
+    N = PM.PModule{K}(M.Q, copy(M.dims), M.edge_maps)
 
-    C = PM.ModuleCochainComplex([M], PM.PMorphism{QQ}[]; tmin=0, check=true)
+    C = PM.ModuleCochainComplex([M], PM.PMorphism[]; tmin=0, check=true)
 
     A = scalar_morphism(M, 2)
     B = scalar_morphism(M, 3)
@@ -669,7 +570,7 @@ end
     S2 = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, 2), FF.principal_downset(P, 2)))
 
     # C concentrated in degree 0
-    C = PM.ModuleCochainComplex([S1], PM.PMorphism{QQ}[]; tmin=0, check=true)
+    C = PM.ModuleCochainComplex([S1], PM.PMorphism[]; tmin=0, check=true)
 
     # N = S2 oplus S2 (so endomorphisms can be noncommuting 2x2 matrices)
     N, i1, i2, p1, p2 = PM.direct_sum_with_maps(S2, S2)
@@ -678,26 +579,26 @@ end
     @test PM.dim(H, 1) == 2  # Ext^1(S1, S2^2) should be 2
 
     # helper: endomorphism defined only at vertex u
-    function endo_at_vertex(M::MD.PModule{QQ}, u::Int, A::Matrix{QQ})
-        comps = Vector{Matrix{QQ}}(undef, M.Q.n)
+    function endo_at_vertex(M::MD.PModule{K}, u::Int, A::Matrix{K})
+        comps = Vector{Matrix{K}}(undef, M.Q.n)
         for v in 1:M.Q.n
             dv = M.dims[v]
-            comps[v] = Matrix{QQ}(I, dv, dv)
+            comps[v] = Matrix{K}(I, dv, dv)
         end
         comps[u] = A
-        return MD.PMorphism{QQ}(M, M, comps)
+        return MD.PMorphism(M, M, comps)
     end
 
     idN = IR.id_morphism(N)
     Mid = PM.hyperExt_map_second(idN, H, H; t=1)
-    @test Mid == Matrix{QQ}(I, 2, 2)
+    @test Mid == Matrix{K}(I, 2, 2)
 
     twoN = scalar_morphism(N, 2)
     Mtwo = PM.hyperExt_map_second(twoN, H, H; t=1)
-    @test Mtwo == 2 * Matrix{QQ}(I, 2, 2)
+    @test Mtwo == 2 * Matrix{K}(I, 2, 2)
 
-    gC = endo_at_vertex(N, 2, QQ[0 1; 0 0])
-    gD = endo_at_vertex(N, 2, QQ[0 0; 1 0])
+    gC = endo_at_vertex(N, 2, K[0 1; 0 0])
+    gD = endo_at_vertex(N, 2, K[0 0; 1 0])
 
     MCg = PM.hyperExt_map_second(gC, H, H; t=1)
     MDg = PM.hyperExt_map_second(gD, H, H; t=1)
@@ -718,22 +619,22 @@ end
     M, _, _, _, _ = PM.direct_sum_with_maps(S1, S1)
     N, _, _, _, _ = PM.direct_sum_with_maps(S2, S2)
 
-    C = PM.ModuleCochainComplex([M], PM.PMorphism{QQ}[]; tmin=0, check=true)
+    C = PM.ModuleCochainComplex([M], PM.PMorphism[]; tmin=0, check=true)
     H = PM.hyperExt(C, N; maxlen=3)
     @test PM.dim(H, 1) == 4
 
-    function endo_at_vertex(M::PModule{QQ}, u::Int, A::Matrix{QQ})
-        comps = Vector{Matrix{QQ}}(undef, M.Q.n)
+    function endo_at_vertex(M::MD.PModule{K}, u::Int, A::AbstractMatrix{K}) where {K}
+        comps = Vector{Matrix{K}}(undef, M.Q.n)
         for v in 1:M.Q.n
             dv = M.dims[v]
-            comps[v] = Matrix{QQ}(I, dv, dv)
+            comps[v] = eye_mat(dv)
         end
-        comps[u] = A
-        return MD.PMorphism{QQ}(M, M, comps)
+        comps[u] = Matrix{K}(A)
+        return MD.PMorphism(M, M, comps)
     end
 
-    fA = endo_at_vertex(M, 1, QQ[0 1; 0 0])
-    fB = endo_at_vertex(M, 1, QQ[0 0; 1 0])
+    fA = endo_at_vertex(M, 1, K[0 1; 0 0])
+    fB = endo_at_vertex(M, 1, K[0 0; 1 0])
 
     FA = PM.ModuleCochainMap(C, C, [fA])
     FB = PM.ModuleCochainMap(C, C, [fB])
@@ -754,8 +655,8 @@ end
 
 # Helper: a P-module on a 1-vertex poset (so no edge maps are needed).
 function _vspace_module(P::FF.FinitePoset, d::Int)
-    edge_maps = Dict{Tuple{Int,Int}, Matrix{QQ}}()
-    return MD.PModule{QQ}(P, [d], edge_maps)
+    edge_maps = Dict{Tuple{Int,Int}, Matrix{K}}()
+    return MD.PModule{K}(P, [d], edge_maps; field=FIELD)
 end
 
 @testset "Abelian-category API" begin
@@ -767,16 +668,16 @@ end
     A = _vspace_module(P, 2)
     B = _vspace_module(P, 3)
 
-    f_mat = Matrix{QQ}([
-        QQ(1) QQ(0);
-        QQ(0) QQ(0);
-        QQ(0) QQ(0)
+    f_mat = Matrix{K}([
+        c(1) c(0);
+        c(0) c(0);
+        c(0) c(0)
     ])
-    f = MD.PMorphism{QQ}(A, B, [f_mat])
+    f = MD.PMorphism(A, B, [f_mat])
 
     K, iK = PM.kernel_with_inclusion(f)
     @test K.dims == [1]
-    @test f.comps[1] * iK.comps[1] == zeros(QQ, 3, 1)
+    @test f.comps[1] * iK.comps[1] == zeros(K, 3, 1)
     @test PM.kernel(f).dims == K.dims
 
     Im, iIm = PM.image_with_inclusion(f)
@@ -784,17 +685,17 @@ end
     @test PM.image(f).dims == [1]
 
     # Factorization test: since iIm is an inclusion, f should factor through it.
-    X = EX.solve_fullcolumnQQ(iIm.comps[1], f.comps[1])
+    X = PM.FieldLinAlg.solve_fullcolumn(FIELD, iIm.comps[1], f.comps[1])
     @test iIm.comps[1] * X == f.comps[1]
 
     Cok, q = PM.cokernel_with_projection(f)
     @test Cok.dims == [2]
-    @test q.comps[1] * f.comps[1] == zeros(QQ, 2, 2)
+    @test q.comps[1] * f.comps[1] == zeros(K, 2, 2)
     @test PM.cokernel(f).dims == [2]
 
     Coim, pco = PM.coimage_with_projection(f)
     @test Coim.dims == [1]
-    @test pco.comps[1] * iK.comps[1] == zeros(QQ, 1, 1)
+    @test pco.comps[1] * iK.comps[1] == zeros(K, 1, 1)
     @test PM.coimage(f).dims == [1]
 
     # Quotient by the image submodule should match the cokernel.
@@ -814,8 +715,8 @@ end
     B1 = _vspace_module(P, 1)
     C1 = _vspace_module(P, 1)
 
-    f_id = MD.PMorphism{QQ}(A1, B1, [reshape(QQ[1], 1, 1)])
-    g_id = MD.PMorphism{QQ}(A1, C1, [reshape(QQ[1], 1, 1)])
+    f_id = MD.PMorphism(A1, B1, [reshape(K[1], 1, 1)])
+    g_id = MD.PMorphism(A1, C1, [reshape(K[1], 1, 1)])
 
     Pout, inB, inC, qpo, phi = PM.pushout(f_id, g_id)
     @test Pout.dims == [1]
@@ -823,8 +724,8 @@ end
 
     # Pullback of identities should be the diagonal (dim 1).
     D1 = _vspace_module(P, 1)
-    f_toD = MD.PMorphism{QQ}(B1, D1, [reshape(QQ[1], 1, 1)])
-    g_toD = MD.PMorphism{QQ}(C1, D1, [reshape(QQ[1], 1, 1)])
+    f_toD = MD.PMorphism(B1, D1, [reshape(K[1], 1, 1)])
+    g_toD = MD.PMorphism(C1, D1, [reshape(K[1], 1, 1)])
 
     Pin, prB, prC, iota, psi = PM.pullback(f_toD, g_toD)
     @test Pin.dims == [1]
@@ -837,11 +738,11 @@ end
     B2 = _vspace_module(P, 2)
     C2 = _vspace_module(P, 1)
 
-    i_mat = reshape(QQ[1, 0], 2, 1)
-    p_mat = reshape(QQ[0, 1], 1, 2)
+    i_mat = reshape(K[1, 0], 2, 1)
+    p_mat = reshape(K[0, 1], 1, 2)
 
-    i = MD.PMorphism{QQ}(A2, B2, [i_mat])
-    p = MD.PMorphism{QQ}(B2, C2, [p_mat])
+    i = MD.PMorphism(A2, B2, [i_mat])
+    p = MD.PMorphism(B2, C2, [p_mat])
 
     ses = PM.ShortExactSequence(i, p)
     @test PM.is_exact(ses)
@@ -851,7 +752,7 @@ end
     @test PM.is_exact(ses_alias)
 
     # A non-exact variant: switch the projection.
-    p_bad = MD.PMorphism{QQ}(B2, C2, [reshape(QQ[1, 0], 1, 2)])
+    p_bad = MD.PMorphism(B2, C2, [reshape(K[1, 0], 1, 2)])
     ses_bad = PM.ShortExactSequence(i, p_bad; check=false)
     @test !PM.is_exact(ses_bad)
 
@@ -862,44 +763,44 @@ end
     At = _vspace_module(P, 1)
     Bt = _vspace_module(P, 2)
     Ct = _vspace_module(P, 1)
-    it = MD.PMorphism{QQ}(At, Bt, [reshape(QQ[1, 0], 2, 1)])
-    pt = MD.PMorphism{QQ}(Bt, Ct, [reshape(QQ[0, 1], 1, 2)])
+    it = MD.PMorphism(At, Bt, [reshape(K[1, 0], 2, 1)])
+    pt = MD.PMorphism(Bt, Ct, [reshape(K[0, 1], 1, 2)])
     top = PM.ShortExactSequence(it, pt)
 
     # Bottom SES: 0 -> Q^2 -> Q^3 -> Q -> 0
     Ab = _vspace_module(P, 2)
     Bb = _vspace_module(P, 3)
     Cb = _vspace_module(P, 1)
-    ib = MD.PMorphism{QQ}(Ab, Bb, [Matrix{QQ}([
-        QQ(1) QQ(0);
-        QQ(0) QQ(1);
-        QQ(0) QQ(0)
+    ib = MD.PMorphism(Ab, Bb, [Matrix{K}([
+        c(1) c(0);
+        c(0) c(1);
+        c(0) c(0)
     ])])
-    pb = MD.PMorphism{QQ}(Bb, Cb, [reshape(QQ[0, 0, 1], 1, 3)])
+    pb = MD.PMorphism(Bb, Cb, [reshape(K[0, 0, 1], 1, 3)])
     bottom = PM.ShortExactSequence(ib, pb)
 
     # Vertical maps: alpha injective, beta injective, gamma = 0.
-    alpha = MD.PMorphism{QQ}(At, Ab, [reshape(QQ[1, 0], 2, 1)])
-    beta = MD.PMorphism{QQ}(Bt, Bb, [Matrix{QQ}([
-        QQ(1) QQ(0);
-        QQ(0) QQ(1);
-        QQ(0) QQ(0)
+    alpha = MD.PMorphism(At, Ab, [reshape(K[1, 0], 2, 1)])
+    beta = MD.PMorphism(Bt, Bb, [Matrix{K}([
+        c(1) c(0);
+        c(0) c(1);
+        c(0) c(0)
     ])])
-    gamma = MD.PMorphism{QQ}(Ct, Cb, [reshape(QQ[0], 1, 1)])
+    gamma = MD.PMorphism(Ct, Cb, [reshape(K[0], 1, 1)])
 
     sn = PM.snake_lemma(top, bottom, alpha, beta, gamma)
     delta = sn.delta
 
     @test sn.kerC[1].dims == [1]   # ker(gamma) = Ct
     @test sn.cokA[1].dims == [1]   # coker(alpha) has dim 1
-    @test EX.rankQQ(delta.comps[1]) == 1
+    @test PM.FieldLinAlg.rank(FIELD, delta.comps[1]) == 1
     @test !PM.is_zero_morphism(delta)
 
     @testset "Products/coproducts/equalizers/coequalizers + diagram interface" begin
         # Use a 1-vertex poset to keep the matrices small and the universal
         # property checks completely explicit.
         P1 = chain_poset(1)
-        Z = PM.zero_pmodule(P1, QQ)
+        Z = PM.zero_pmodule(P1; field=field)
 
         A = _vspace_module(P1, 2)
         B = _vspace_module(P1, 3)
@@ -907,20 +808,20 @@ end
         # --- biproduct sanity: p_i o i_j = delta_ij, and i1 p1 + i2 p2 = id
         S, iA, iB, pA, pB = PM.biproduct(A, B)
 
-        @test pA.comps[1] * iA.comps[1] == Matrix{QQ}(I, 2, 2)
-        @test pB.comps[1] * iB.comps[1] == Matrix{QQ}(I, 3, 3)
-        @test pA.comps[1] * iB.comps[1] == zeros(QQ, 2, 3)
-        @test pB.comps[1] * iA.comps[1] == zeros(QQ, 3, 2)
+        @test pA.comps[1] * iA.comps[1] == Matrix{K}(I, 2, 2)
+        @test pB.comps[1] * iB.comps[1] == Matrix{K}(I, 3, 3)
+        @test pA.comps[1] * iB.comps[1] == zeros(K, 2, 3)
+        @test pB.comps[1] * iA.comps[1] == zeros(K, 3, 2)
 
-        @test iA.comps[1] * pA.comps[1] + iB.comps[1] * pB.comps[1] == Matrix{QQ}(I, 5, 5)
+        @test iA.comps[1] * pA.comps[1] + iB.comps[1] * pB.comps[1] == Matrix{K}(I, 5, 5)
 
         # --- product/coproduct wrappers exist and return the expected maps
         Pprod, prA, prB = PM.product(A, B)
         Ccop, inA, inB = PM.coproduct(A, B)
-        @test prA isa MD.PMorphism{QQ}
-        @test prB isa MD.PMorphism{QQ}
-        @test inA isa MD.PMorphism{QQ}
-        @test inB isa MD.PMorphism{QQ}
+        @test prA isa MD.PMorphism
+        @test prB isa MD.PMorphism
+        @test inA isa MD.PMorphism
+        @test inB isa MD.PMorphism
 
         # Explicit universal property check for product:
         # given maps f:X->A and g:X->B, we can build (f,g): X -> A x B
@@ -928,28 +829,28 @@ end
         X = _vspace_module(P1, 2)
         f = PM.id_morphism(X)  # X -> A (both 2-dim, so treat as "identity")
         # A real map X->B: 3x2
-        g = PM.PMorphism{QQ}(X, B, [QQ[1 0; 0 1; 0 0]])
+        g = PM.PMorphism(X, B, [K[1 0; 0 1; 0 0]])
 
         # (f,g) : X -> Pprod has block form [f; g]
-        fg = PM.PMorphism{QQ}(X, Pprod, [vcat(f.comps[1], g.comps[1])])
+        fg = PM.PMorphism(X, Pprod, [vcat(f.comps[1], g.comps[1])])
 
         @test prA.comps[1] * fg.comps[1] == f.comps[1]
         @test prB.comps[1] * fg.comps[1] == g.comps[1]
 
         # --- equalizer/coequalizer checks
         # Build a nonzero map h : A -> B
-        h = PM.PMorphism{QQ}(A, B, [QQ[1 0; 0 1; 0 0]])
+        h = PM.PMorphism(A, B, [K[1 0; 0 1; 0 0]])
         z = PM.zero_morphism(A, B)
 
         E, e = PM.equalizer(h, z)
-    @test e isa MD.PMorphism{QQ}
+    @test e isa MD.PMorphism
         # h o e == 0 o e
         he = compose_morphism(h, e)
         ze = compose_morphism(z, e)
         @test he.comps[1] == ze.comps[1]
 
         Q, q = PM.coequalizer(h, z)
-    @test q isa MD.PMorphism{QQ}
+    @test q isa MD.PMorphism
         # q o h == q o 0
         qh = compose_morphism(q, h)
         qz = compose_morphism(q, z)
@@ -958,25 +859,63 @@ end
         # --- diagram object interface: limit/colimit dispatch
         Ddisc = PM.DiscretePairDiagram(A, B)
         _, dprA, dprB = PM.limit(Ddisc)
-    @test dprA isa MD.PMorphism{QQ}
-    @test dprB isa MD.PMorphism{QQ}
+    @test dprA isa MD.PMorphism
+    @test dprB isa MD.PMorphism
 
         Dpar = PM.ParallelPairDiagram(h, z)
         _, de = PM.limit(Dpar)
-    @test de isa MD.PMorphism{QQ}
+    @test de isa MD.PMorphism
 
         Dspan = PM.SpanDiagram(h, z)  # A -> B, A -> B (same codomain is fine for pushout)
         PO, p1, p2 = PM.colimit(Dspan)
-    @test p1 isa MD.PMorphism{QQ}
-    @test p2 isa MD.PMorphism{QQ}
+    @test p1 isa MD.PMorphism
+    @test p2 isa MD.PMorphism
 
         Dcosp = PM.CospanDiagram(h, z) # A -> B and A -> B; pullback exists
         PB, r1, r2 = PM.limit(Dcosp)
-    @test r1 isa MD.PMorphism{QQ}
-    @test r2 isa MD.PMorphism{QQ}
+    @test r1 isa MD.PMorphism
+    @test r2 isa MD.PMorphism
     end
 
 
+end
+
+@testset "Abelian-category API (all fields)" begin
+    P = chain_poset(1)
+
+    function vmod(d::Int)
+        edge = Dict{Tuple{Int,Int}, Matrix{K}}()
+        return MD.PModule{K}(P, [d], edge; field=field)
+    end
+
+    A = vmod(2)
+    B = vmod(3)
+
+    f_mat = Matrix{K}([
+        one(K)  zero(K);
+        zero(K) zero(K);
+        zero(K) zero(K)
+    ])
+    f = MD.PMorphism(A, B, [f_mat])
+
+    Kmod, iK = PM.kernel_with_inclusion(f)
+    @test Kmod.dims == [1]
+    @test f.comps[1] * iK.comps[1] == zeros(K, 3, 1)
+    @test PM.kernel(f).dims == Kmod.dims
+
+    Im, iIm = PM.image_with_inclusion(f)
+    @test Im.dims == [1]
+    @test PM.image(f).dims == [1]
+
+    Cok, q = PM.cokernel_with_projection(f)
+    @test Cok.dims == [2]
+    @test q.comps[1] * f.comps[1] == zeros(K, 2, 2)
+    @test PM.cokernel(f).dims == [2]
+
+    Coim, pco = PM.coimage_with_projection(f)
+    @test Coim.dims == [1]
+    @test pco.comps[1] * iK.comps[1] == zeros(K, 1, 1)
+    @test PM.coimage(f).dims == [1]
 end
 
 # Local helper: check string is ASCII-only.
@@ -986,17 +925,17 @@ _is_ascii(s::AbstractString) = all(c -> Int(c) <= 0x7f, s)
     P = chain_poset(1)
 
     # 1-vertex PModules (no edge maps needed).
-    edge_maps = Dict{Tuple{Int,Int}, Matrix{QQ}}()
+    edge_maps = Dict{Tuple{Int,Int}, Matrix{K}}()
 
-    A = MD.PModule{QQ}(P, [1], edge_maps)
-    B = MD.PModule{QQ}(P, [2], edge_maps)
-    C = MD.PModule{QQ}(P, [1], edge_maps)
+    A = MD.PModule{K}(P, [1], edge_maps)
+    B = MD.PModule{K}(P, [2], edge_maps)
+    C = MD.PModule{K}(P, [1], edge_maps)
 
     # i : A -> B (inclusion)
-    i = MD.PMorphism{QQ}(A, B, [reshape(QQ[1, 0], 2, 1)])
+    i = MD.PMorphism(A, B, [reshape(K[1, 0], 2, 1)])
 
     # p : B -> C (projection)
-    p = MD.PMorphism{QQ}(B, C, [reshape(QQ[0, 1], 1, 2)])
+    p = MD.PMorphism(B, C, [reshape(K[0, 1], 1, 2)])
 
     # --- PModule show ---
     sA0 = sprint(show, A)
@@ -1007,7 +946,11 @@ _is_ascii(s::AbstractString) = all(c -> Int(c) <= 0x7f, s)
 
     sA1 = sprint(show, MIME("text/plain"), A)
     @test occursin("PModule", sA1)
-    @test occursin("scalars = QQ", sA1)
+    if field isa CM.QQField
+        @test occursin("scalars = QQ", sA1)
+    else
+        @test occursin("scalars = ", sA1)
+    end
     @test occursin("nverts = 1", sA1)
     @test occursin("dims =", sA1)
     @test _is_ascii(sA1)
@@ -1030,7 +973,7 @@ _is_ascii(s::AbstractString) = all(c -> Int(c) <= 0x7f, s)
     # Truncation sanity check under IOContext(:limit=>true).
     Pbig = chain_poset(20)
     dims_big = collect(1:20)
-    Mbig = MD.PModule{QQ}(Pbig, dims_big, Dict{Tuple{Int,Int}, Matrix{QQ}}())
+    Mbig = MD.PModule{K}(Pbig, dims_big, Dict{Tuple{Int,Int}, Matrix{K}}())
 
     sbig = sprint(show, Mbig; context=:limit=>true)
     @test occursin("...", sbig)
@@ -1068,25 +1011,25 @@ _is_ascii(s::AbstractString) = all(c -> Int(c) <= 0x7f, s)
     # Build a small snake lemma instance (1-vertex, so linear algebra is tiny).
     top = PM.ShortExactSequence(i, p; check=true)
 
-    Ab = MD.PModule{QQ}(P, [2], edge_maps)
-    Bb = MD.PModule{QQ}(P, [3], edge_maps)
-    Cb = MD.PModule{QQ}(P, [1], edge_maps)
+    Ab = MD.PModule{K}(P, [2], edge_maps)
+    Bb = MD.PModule{K}(P, [3], edge_maps)
+    Cb = MD.PModule{K}(P, [1], edge_maps)
 
-    ib = MD.PMorphism{QQ}(Ab, Bb, [Matrix{QQ}([
-        QQ(1) QQ(0);
-        QQ(0) QQ(1);
-        QQ(0) QQ(0)
+    ib = MD.PMorphism(Ab, Bb, [Matrix{K}([
+        c(1) c(0);
+        c(0) c(1);
+        c(0) c(0)
     ])])
-    pb = MD.PMorphism{QQ}(Bb, Cb, [reshape(QQ[0, 0, 1], 1, 3)])
+    pb = MD.PMorphism(Bb, Cb, [reshape(K[0, 0, 1], 1, 3)])
     bottom = PM.ShortExactSequence(ib, pb; check=true)
 
-    alpha = MD.PMorphism{QQ}(A, Ab, [reshape(QQ[1, 0], 2, 1)])
-    beta  = MD.PMorphism{QQ}(B, Bb, [Matrix{QQ}([
-        QQ(1) QQ(0);
-        QQ(0) QQ(1);
-        QQ(0) QQ(0)
+    alpha = MD.PMorphism(A, Ab, [reshape(K[1, 0], 2, 1)])
+    beta  = MD.PMorphism(B, Bb, [Matrix{K}([
+        c(1) c(0);
+        c(0) c(1);
+        c(0) c(0)
     ])])
-    gamma = MD.PMorphism{QQ}(C, Cb, [reshape(QQ[0], 1, 1)])
+    gamma = MD.PMorphism(C, Cb, [reshape(K[0], 1, 1)])
 
     sn = PM.snake_lemma(top, bottom, alpha, beta, gamma; check=true)
 
@@ -1103,10 +1046,10 @@ end
 
 @testset "Derived-category primitives: cone triangle and LES" begin
     # C and D concentrated in degree 0, map f = 0.
-    C = CC.CochainComplex{QQ}(0, 0, [1], SparseMatrixCSC{QQ,Int}[]; labels=[["c0"]])
-    D = CC.CochainComplex{QQ}(0, 0, [1], SparseMatrixCSC{QQ,Int}[]; labels=[["d0"]])
+    C = CC.CochainComplex{K}(0, 0, [1], SparseMatrixCSC{K,Int}[]; labels=[["c0"]])
+    D = CC.CochainComplex{K}(0, 0, [1], SparseMatrixCSC{K,Int}[]; labels=[["d0"]])
 
-    f0 = spzeros(QQ, 1, 1)
+    f0 = spzeros(K, 1, 1)
     f = CC.CochainMap(C, D, [f0]; check=true)
 
     tri = CC.mapping_cone_triangle(f)
@@ -1115,7 +1058,7 @@ end
     @test les.tmin == -1
     @test les.tmax == 0
 
-    # At t = -1: H^{-1}(D)=0 -> H^{-1}(Cone)=QQ -> H^0(C)=QQ
+    # At t = -1: H^{-1}(D)=0 -> H^{-1}(Cone)=k -> H^0(C)=k
     idx = (-1) - les.tmin + 1
     @test les.HD[idx].dimH == 0
     @test les.Hcone[idx].dimH == 1
@@ -1124,13 +1067,13 @@ end
     # Connecting map delta^{-1} : H^{-1}(Cone) -> H^0(C) should be an isomorphism in this case.
     delta = les.delta[idx]
     @test size(delta) == (1, 1)
-    @test delta[1, 1] == one(QQ)
+    @test delta[1, 1] == one(K)
 end
 
 @testset "Derived-category primitives: cone of identity is acyclic" begin
     # C: k -> k with zero differential. Cone(id_C) should be contractible, hence acyclic.
-    C = CC.CochainComplex{QQ}(0, 1, [1, 1], [spzeros(QQ, 1, 1)])
-    id1 = sparse([1], [1], [QQ(1)], 1, 1)
+    C = CC.CochainComplex{K}(0, 1, [1, 1], [spzeros(K, 1, 1)])
+    id1 = sparse([1], [1], [c(1)], 1, 1)
     f = CC.CochainMap(C, C, [id1, id1])
     tri = CC.mapping_cone_triangle(f)
     @test all(==(0), CC.homology_dims(tri.cone))
@@ -1143,20 +1086,20 @@ end
     dims = [1 1;
             1 1]
 
-    dv = Array{SparseMatrixCSC{QQ,Int},2}(undef, 2, 2)
-    dh = Array{SparseMatrixCSC{QQ,Int},2}(undef, 2, 2)
+    dv = Array{SparseMatrixCSC{K,Int},2}(undef, 2, 2)
+    dh = Array{SparseMatrixCSC{K,Int},2}(undef, 2, 2)
 
-    dv[1,1] = sparse([1],[1],[one(QQ)], 1, 1)
-    dv[2,1] = spzeros(QQ, 1, 1)
-    dv[1,2] = spzeros(QQ, 0, 1)
-    dv[2,2] = spzeros(QQ, 0, 1)
+    dv[1,1] = sparse([1],[1],[one(K)], 1, 1)
+    dv[2,1] = spzeros(K, 1, 1)
+    dv[1,2] = spzeros(K, 0, 1)
+    dv[2,2] = spzeros(K, 0, 1)
 
-    dh[1,1] = sparse([1],[1],[one(QQ)], 1, 1)
-    dh[1,2] = spzeros(QQ, 1, 1)
-    dh[2,1] = spzeros(QQ, 0, 1)
-    dh[2,2] = spzeros(QQ, 0, 1)
+    dh[1,1] = sparse([1],[1],[one(K)], 1, 1)
+    dh[1,2] = spzeros(K, 1, 1)
+    dh[2,1] = spzeros(K, 0, 1)
+    dh[2,2] = spzeros(K, 0, 1)
 
-    DC = CC.DoubleComplex{QQ}(0, 1, 0, 1, dims, dv, dh)
+    DC = CC.DoubleComplex{K}(0, 1, 0, 1, dims, dv, dh)
     ss = CC.spectral_sequence(DC; first=:vertical)
 
     @test ss.E1_dims == [0 0;
@@ -1186,16 +1129,16 @@ end
     # Double complex concentrated in b=0 with an isomorphism horizontally:
     # (0,0)=k --id--> (1,0)=k. Total complex has zero cohomology.
     dims = reshape([1, 1], 2, 1)  # a=0,1; b=0
-    dv = Array{SparseMatrixCSC{QQ,Int},2}(undef, 2, 1)
-    dh = Array{SparseMatrixCSC{QQ,Int},2}(undef, 2, 1)
+    dv = Array{SparseMatrixCSC{K,Int},2}(undef, 2, 1)
+    dh = Array{SparseMatrixCSC{K,Int},2}(undef, 2, 1)
 
-    dv[1,1] = spzeros(QQ, 0, 1)
-    dv[2,1] = spzeros(QQ, 0, 1)
+    dv[1,1] = spzeros(K, 0, 1)
+    dv[2,1] = spzeros(K, 0, 1)
 
-    dh[1,1] = sparse([1], [1], [QQ(1)], 1, 1)  # identity (0,0)->(1,0)
-    dh[2,1] = spzeros(QQ, 0, 1)                # boundary
+    dh[1,1] = sparse([1], [1], [c(1)], 1, 1)  # identity (0,0)->(1,0)
+    dh[2,1] = spzeros(K, 0, 1)                # boundary
 
-    DC = CC.DoubleComplex{QQ}(0, 1, 0, 0, dims, dv, dh)
+    DC = CC.DoubleComplex{K}(0, 1, 0, 0, dims, dv, dh)
     ss = CC.spectral_sequence(DC; first=:vertical)
 
     @test CC.page(ss, 1)[(0,0)] == 1
@@ -1203,7 +1146,7 @@ end
 
     d1 = CC.differential(ss, 1, (0,0))
     @test size(d1) == (1, 1)
-    @test d1[1,1] == QQ(1)
+    @test d1[1,1] == c(1)
 
     @test CC.page(ss, 2)[(0,0)] == 0
     @test CC.page(ss, 2)[(1,0)] == 0
@@ -1230,6 +1173,13 @@ end
 
     ss = PM.ExtSpectralSequence(M, N; maxlen=2)
 
+    if Threads.nthreads() > 1
+        ss_serial = PM.ExtSpectralSequence(M, N; maxlen=2, threads=false)
+        ss_thread = PM.ExtSpectralSequence(M, N; maxlen=2, threads=true)
+        @test ss_thread.Htot_dims == ss_serial.Htot_dims
+        @test ss_thread.Einf_dims == ss_serial.Einf_dims
+    end
+
     # Compare to ext_dims_via_resolutions on the same truncation.
     F, dF = PM.IndicatorResolutions.upset_resolution(M; maxlen=2)
     E, dE = PM.IndicatorResolutions.downset_resolution(N; maxlen=2)
@@ -1254,6 +1204,54 @@ end
     end
 end
 
+@testset "ExtDoubleComplex threading parity" begin
+    P = chain_poset(3)
+    M = IR.pmodule_from_fringe(one_by_one_fringe(
+        P,
+        FF.principal_upset(P, 1),
+        FF.principal_downset(P, 1),
+    ))
+    N = IR.pmodule_from_fringe(one_by_one_fringe(
+        P,
+        FF.principal_upset(P, 3),
+        FF.principal_downset(P, 3),
+    ))
+
+    DC = PM.ExtDoubleComplex(M, N; maxlen=2, threads=false)
+    @test size(DC.dims) == (3, 3)
+    @test size(DC.dv) == (3, 3)
+    @test size(DC.dh) == (3, 3)
+
+    if Threads.nthreads() > 1
+        DCt = PM.ExtDoubleComplex(M, N; maxlen=2, threads=true)
+        @test DCt.dims == DC.dims
+        @test DCt.dv == DC.dv
+        @test DCt.dh == DC.dh
+    end
+end
+
+@testset "TorSpectralSequence threading parity" begin
+    if Threads.nthreads() > 1
+        P = chain_poset(3)
+        M = IR.pmodule_from_fringe(one_by_one_fringe(
+            P,
+            FF.principal_upset(P, 1),
+            FF.principal_downset(P, 1),
+        ))
+        N = IR.pmodule_from_fringe(one_by_one_fringe(
+            P,
+            FF.principal_upset(P, 3),
+            FF.principal_downset(P, 3),
+        ))
+
+        ss_serial = PM.TorSpectralSequence(M, N; maxlen=2, threads=false)
+        ss_thread = PM.TorSpectralSequence(M, N; maxlen=2, threads=true)
+
+        @test ss_thread.ss.Htot_dims == ss_serial.ss.Htot_dims
+        @test ss_thread.ss.Einf_dims == ss_serial.ss.Einf_dims
+    end
+end
+
 
 @testset "Spectral sequence v2: higher differential d2 example" begin
     # Construct a double complex with a known nontrivial d2:
@@ -1272,29 +1270,29 @@ end
             1 1;
             1 0]  # rows are a=0,1,2; cols are b=0,1
 
-    dv = Array{SparseMatrixCSC{QQ,Int},2}(undef, 3, 2)
-    dh = Array{SparseMatrixCSC{QQ,Int},2}(undef, 3, 2)
+    dv = Array{SparseMatrixCSC{K,Int},2}(undef, 3, 2)
+    dh = Array{SparseMatrixCSC{K,Int},2}(undef, 3, 2)
 
     # dv blocks: dv[a,b] maps (a,b)->(a,b+1)
-    dv[1,1] = spzeros(QQ, 1, 0)                      # (0,0)->(0,1)
-    dv[2,1] = sparse([1],[1],[one(QQ)], 1, 1)        # (1,0)->(1,1) identity
-    dv[3,1] = spzeros(QQ, 0, 1)                      # (2,0)->(2,1) but (2,1)=0
+    dv[1,1] = spzeros(K, 1, 0)                      # (0,0)->(0,1)
+    dv[2,1] = sparse([1],[1],[one(K)], 1, 1)        # (1,0)->(1,1) identity
+    dv[3,1] = spzeros(K, 0, 1)                      # (2,0)->(2,1) but (2,1)=0
 
-    dv[1,2] = spzeros(QQ, 0, 1)                      # (0,1)->(0,2)=0
-    dv[2,2] = spzeros(QQ, 0, 1)                      # (1,1)->(1,2)=0
-    dv[3,2] = spzeros(QQ, 0, 0)                      # (2,1)->(2,2)=0
+    dv[1,2] = spzeros(K, 0, 1)                      # (0,1)->(0,2)=0
+    dv[2,2] = spzeros(K, 0, 1)                      # (1,1)->(1,2)=0
+    dv[3,2] = spzeros(K, 0, 0)                      # (2,1)->(2,2)=0
 
     # dh blocks: dh[a,b] maps (a,b)->(a+1,b)
-    dh[1,1] = spzeros(QQ, 1, 0)                      # (0,0)->(1,0)
-    dh[1,2] = sparse([1],[1],[one(QQ)], 1, 1)        # (0,1)->(1,1) identity
+    dh[1,1] = spzeros(K, 1, 0)                      # (0,0)->(1,0)
+    dh[1,2] = sparse([1],[1],[one(K)], 1, 1)        # (0,1)->(1,1) identity
 
-    dh[2,1] = sparse([1],[1],[one(QQ)], 1, 1)        # (1,0)->(2,0) identity
-    dh[2,2] = spzeros(QQ, 0, 1)                      # (1,1)->(2,1)=0
+    dh[2,1] = sparse([1],[1],[one(K)], 1, 1)        # (1,0)->(2,0) identity
+    dh[2,2] = spzeros(K, 0, 1)                      # (1,1)->(2,1)=0
 
-    dh[3,1] = spzeros(QQ, 0, 1)                      # boundary
-    dh[3,2] = spzeros(QQ, 0, 0)
+    dh[3,1] = spzeros(K, 0, 1)                      # boundary
+    dh[3,2] = spzeros(K, 0, 0)
 
-    DC = CC.DoubleComplex{QQ}(0, 2, 0, 1, dims, dv, dh)
+    DC = CC.DoubleComplex{K}(0, 2, 0, 1, dims, dv, dh)
     ss = CC.spectral_sequence(DC; first=:vertical)
 
     # E2 has 1-dim at (0,1) and (2,0).
@@ -1304,7 +1302,7 @@ end
     # d2: E2^{0,1} -> E2^{2,0} is nonzero (in fact iso).
     d2 = CC.differential(ss, 2, (0,1))
     @test size(d2) == (1, 1)
-    @test d2[1,1] == one(QQ)
+    @test d2[1,1] == one(K)
 
     # After r=3, the page is stable and equals E_infty.
     @test CC.page(ss, 3)[(0,1)] == 0
@@ -1318,16 +1316,16 @@ end
 @testset "Spectral sequence v2: filtration + edge maps on simple example" begin
     # Reuse existing example from earlier test: horizontal identity in b=0.
     dims = reshape([1, 1], 2, 1)
-    dv = Array{SparseMatrixCSC{QQ,Int},2}(undef, 2, 1)
-    dh = Array{SparseMatrixCSC{QQ,Int},2}(undef, 2, 1)
+    dv = Array{SparseMatrixCSC{K,Int},2}(undef, 2, 1)
+    dh = Array{SparseMatrixCSC{K,Int},2}(undef, 2, 1)
 
-    dv[1,1] = spzeros(QQ, 0, 1)
-    dv[2,1] = spzeros(QQ, 0, 1)
+    dv[1,1] = spzeros(K, 0, 1)
+    dv[2,1] = spzeros(K, 0, 1)
 
-    dh[1,1] = sparse([1], [1], [QQ(1)], 1, 1)
-    dh[2,1] = spzeros(QQ, 0, 1)
+    dh[1,1] = sparse([1], [1], [c(1)], 1, 1)
+    dh[2,1] = spzeros(K, 0, 1)
 
-    DC = CC.DoubleComplex{QQ}(0, 1, 0, 0, dims, dv, dh)
+    DC = CC.DoubleComplex{K}(0, 1, 0, 0, dims, dv, dh)
     ss = CC.spectral_sequence(DC; first=:vertical)
 
     # total cohomology is zero, so filtration dims are all zero.
@@ -1346,27 +1344,27 @@ end
             1 1;
             1 0]  # rows are a=0,1,2; cols are b=0,1
 
-    dv = Array{SparseMatrixCSC{QQ,Int},2}(undef, 3, 2)
-    dh = Array{SparseMatrixCSC{QQ,Int},2}(undef, 3, 2)
+    dv = Array{SparseMatrixCSC{K,Int},2}(undef, 3, 2)
+    dh = Array{SparseMatrixCSC{K,Int},2}(undef, 3, 2)
 
-    dv[1,1] = spzeros(QQ, 1, 0)
-    dv[2,1] = sparse([1],[1],[one(QQ)], 1, 1)
-    dv[3,1] = spzeros(QQ, 0, 1)
+    dv[1,1] = spzeros(K, 1, 0)
+    dv[2,1] = sparse([1],[1],[one(K)], 1, 1)
+    dv[3,1] = spzeros(K, 0, 1)
 
-    dv[1,2] = spzeros(QQ, 0, 1)
-    dv[2,2] = spzeros(QQ, 0, 1)
-    dv[3,2] = spzeros(QQ, 0, 0)
+    dv[1,2] = spzeros(K, 0, 1)
+    dv[2,2] = spzeros(K, 0, 1)
+    dv[3,2] = spzeros(K, 0, 0)
 
-    dh[1,1] = spzeros(QQ, 1, 0)
-    dh[1,2] = sparse([1],[1],[one(QQ)], 1, 1)
+    dh[1,1] = spzeros(K, 1, 0)
+    dh[1,2] = sparse([1],[1],[one(K)], 1, 1)
 
-    dh[2,1] = sparse([1],[1],[one(QQ)], 1, 1)
-    dh[2,2] = spzeros(QQ, 0, 1)
+    dh[2,1] = sparse([1],[1],[one(K)], 1, 1)
+    dh[2,2] = spzeros(K, 0, 1)
 
-    dh[3,1] = spzeros(QQ, 0, 1)
-    dh[3,2] = spzeros(QQ, 0, 0)
+    dh[3,1] = spzeros(K, 0, 1)
+    dh[3,2] = spzeros(K, 0, 0)
 
-    DC = CC.DoubleComplex{QQ}(0, 2, 0, 1, dims, dv, dh)
+    DC = CC.DoubleComplex{K}(0, 2, 0, 1, dims, dv, dh)
     ss = CC.spectral_sequence(DC; first=:vertical)
 
     @test CC.dr_target(ss, 2, (0,1)) == (2,0)
@@ -1389,20 +1387,20 @@ end
     dims2 = [1 1;
              1 1]  # rows are a=0,1; cols are b=0,1
 
-    dv2 = Array{SparseMatrixCSC{QQ,Int},2}(undef, 2, 2)
-    dh2 = Array{SparseMatrixCSC{QQ,Int},2}(undef, 2, 2)
+    dv2 = Array{SparseMatrixCSC{K,Int},2}(undef, 2, 2)
+    dh2 = Array{SparseMatrixCSC{K,Int},2}(undef, 2, 2)
 
-    dv2[1,1] = spzeros(QQ, 1, 1)
-    dv2[2,1] = spzeros(QQ, 1, 1)
-    dv2[1,2] = spzeros(QQ, 0, 1)
-    dv2[2,2] = spzeros(QQ, 0, 1)
+    dv2[1,1] = spzeros(K, 1, 1)
+    dv2[2,1] = spzeros(K, 1, 1)
+    dv2[1,2] = spzeros(K, 0, 1)
+    dv2[2,2] = spzeros(K, 0, 1)
 
-    dh2[1,1] = spzeros(QQ, 1, 1)
-    dh2[1,2] = spzeros(QQ, 1, 1)
-    dh2[2,1] = spzeros(QQ, 0, 1)
-    dh2[2,2] = spzeros(QQ, 0, 1)
+    dh2[1,1] = spzeros(K, 1, 1)
+    dh2[1,2] = spzeros(K, 1, 1)
+    dh2[2,1] = spzeros(K, 0, 1)
+    dh2[2,2] = spzeros(K, 0, 1)
 
-    DC2 = CC.DoubleComplex{QQ}(0, 1, 0, 1, dims2, dv2, dh2)
+    DC2 = CC.DoubleComplex{K}(0, 1, 0, 1, dims2, dv2, dh2)
     ss2 = CC.spectral_sequence(DC2; first=:vertical)
 
     @test ss2.Htot_dims == [1,2,1]
@@ -1410,7 +1408,7 @@ end
     # Multiplicative structure helpers (with a toy "unit" multiplication on Tot).
     # This multiplication treats the unique basis element in Tot^0 as a unit and
     # sets all other products to zero.
-    mul = function (t1::Int, x::Vector{QQ}, t2::Int, y::Vector{QQ})
+    mul = function (t1::Int, x::Vector{K}, t2::Int, y::Vector{K})
         tout = t1 + t2
         outdim = ss2.Tot.dims[tout - ss2.Tot.tmin + 1]
         if t1 == 0
@@ -1418,21 +1416,21 @@ end
         elseif t2 == 0
             return y[1] * x
         else
-            return zeros(QQ, outdim)
+            return zeros(K, outdim)
         end
     end
 
     Punit = CC.product_matrix(ss2, 1, (0,0), (0,1), mul)
     @test size(Punit) == (1, 1)
-    @test Punit[1,1] == one(QQ)
+    @test Punit[1,1] == one(K)
 
     Pzero = CC.product_matrix(ss2, 1, (0,1), (1,0), mul)
     @test size(Pzero) == (1, 1)
-    @test Pzero[1,1] == zero(QQ)
+    @test Pzero[1,1] == zero(K)
 
-    cunit = CC.product_coords(ss2, 1, (0,0), [one(QQ)], (0,1), [one(QQ)], mul)
+    cunit = CC.product_coords(ss2, 1, (0,0), [one(K)], (0,1), [one(K)], mul)
     @test size(cunit) == (1, 1)
-    @test cunit[1,1] == one(QQ)
+    @test cunit[1,1] == one(K)
 
     # On total degree t=1, there are two graded pieces: (0,1) and (1,0).
     inc01 = CC.edge_inclusion(ss2, (0,1))
@@ -1449,13 +1447,13 @@ end
     M10 = proj10 * inc10
     @test size(M01) == (1, 1)
     @test size(M10) == (1, 1)
-    @test M01[1,1] == one(QQ)
-    @test M10[1,1] == one(QQ)
+    @test M01[1,1] == one(K)
+    @test M10[1,1] == one(K)
 
     # The chosen splitting gives a direct-sum decomposition of H^1.
     Psum = inc01 * proj01 + inc10 * proj10
-    I2 = [one(QQ) zero(QQ);
-          zero(QQ) one(QQ)]
+    I2 = [one(K) zero(K);
+          zero(K) one(K)]
     @test Psum == I2
 
     spl = CC.split_total_cohomology(ss2, 1)
@@ -1516,8 +1514,9 @@ end
             d = Htot[t]
             @test size(ep.B, 1) == d
             @test size(ep.B, 2) == d
-            @test ep.Binv * ep.B == Matrix{QQ}(I, d, d)
-            @test ep.B * ep.Binv == Matrix{QQ}(I, d, d)
+            @test ep.Binv * ep.B == Matrix{K}(I, d, d)
+            @test ep.B * ep.Binv == Matrix{K}(I, d, d)
         end
     end
 end
+end # with_fields

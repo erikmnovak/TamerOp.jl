@@ -1,6 +1,10 @@
 using Test
 using SparseArrays
 
+with_fields(FIELDS_FULL) do field
+K = CM.coeff_type(field)
+@inline c(x) = CM.coerce(field, x)
+
 @testset "FiniteFringe basics" begin
     P = chain_poset(3)
 
@@ -17,9 +21,9 @@ using SparseArrays
     @test D2.mask == BitVector([true,  true,  false])
 
     # 1x1 interval module supported at {2}
-    phi = spzeros(QQ, 1, 1)
-    phi[1,1] = QQ(1)
-    M = FF.FringeModule{QQ}(P, [U2], [D2], phi)
+    phi = spzeros(K, 1, 1)
+    phi[1,1] = c(1)
+    M = FF.FringeModule{K}(P, [U2], [D2], phi; field=field)
 
     @test FF.fiber_dimension(M, 1) == 0
     @test FF.fiber_dimension(M, 2) == 1
@@ -31,9 +35,9 @@ using SparseArrays
     # Monomial condition should reject nonzero entry when U cap D is empty
     U3 = FF.principal_upset(P, 3)      # {3}
     D1 = FF.principal_downset(P, 1)    # {1}
-    phi_bad = spzeros(QQ, 1, 1)
-    phi_bad[1,1] = QQ(1)
-    @test_throws AssertionError FF.FringeModule{QQ}(P, [U3], [D1], phi_bad)
+    phi_bad = spzeros(K, 1, 1)
+    phi_bad[1,1] = c(1)
+    @test_throws AssertionError FF.FringeModule{K}(P, [U3], [D1], phi_bad; field=field)
 
 
         @testset "FinitePoset validation errors" begin
@@ -183,23 +187,23 @@ using SparseArrays
         D2 = FF.principal_downset(P3, 2)
 
         # Dense 1x1 phi exercises the non-sparse path in _check_monomial_condition.
-        phi_dense = reshape(QQ[1], 1, 1)
-        Mdense = FF.FringeModule{QQ}(P3, [U2], [D2], phi_dense)
+        phi_dense = reshape(K[c(1)], 1, 1)
+        Mdense = FF.FringeModule{K}(P3, [U2], [D2], phi_dense; field=field)
         @test FF.fiber_dimension(Mdense, 2) == 1
 
         # Converting dense -> sparse should preserve values.
         phi_sparse = FF.dense_to_sparse_K(phi_dense)
-        @test phi_sparse isa SparseMatrixCSC{QQ, Int}
+        @test phi_sparse isa SparseMatrixCSC{K, Int}
         @test Matrix(phi_sparse) == phi_dense
 
         # Sparse phi should behave the same.
-        Msparse = FF.FringeModule{QQ}(P3, [U2], [D2], phi_sparse)
+        Msparse = FF.FringeModule{K}(P3, [U2], [D2], phi_sparse; field=field)
         @test FF.fiber_dimension(Msparse, 2) == 1
 
         # Dense constructor should reject nonzero phi when U cap D is empty.
         U3 = FF.principal_upset(P3, 3)
         D1 = FF.principal_downset(P3, 1)
-        @test_throws AssertionError FF.FringeModule{QQ}(P3, [U3], [D1], reshape(QQ[1], 1, 1))
+        @test_throws AssertionError FF.FringeModule{K}(P3, [U3], [D1], reshape(K[c(1)], 1, 1); field=field)
     end
 end
 
@@ -291,7 +295,7 @@ end
         end
 
         intervals = [(a, b) for a in 1:n for b in a:n]
-        mods = Dict{Tuple{Int,Int}, FF.FringeModule{QQ}}()
+        mods = Dict{Tuple{Int,Int}, FF.FringeModule{K}}()
         for (a, b) in intervals
             mods[(a, b)] = interval_module(a, b)
         end
@@ -332,8 +336,8 @@ end
         P = chain_poset(3)
         U = FF.principal_upset(P, 3)      # {3}
         D = FF.principal_downset(P, 1)    # {1}
-        phi0 = spzeros(QQ, 1, 1)          # must be zero since U cap D is empty
-        M0 = FF.FringeModule{QQ}(P, [U], [D], phi0)
+        phi0 = spzeros(K, 1, 1)          # must be zero since U cap D is empty
+        M0 = FF.FringeModule{K}(P, [U], [D], phi0; field=field)
 
         for q in 1:P.n
             @test FF.fiber_dimension(M0, q) == 0
@@ -360,16 +364,18 @@ end
     U_mask = BitVector([i >= 3 for i in 1:P.n])
     D_mask = BitVector([i <= 3 for i in 1:P.n])
 
-    H_mask  = PM.one_by_one_fringe(P, U_mask, D_mask, QQ(1))
-    H_typed = PM.one_by_one_fringe(P, FF.Upset(P, U_mask), FF.Downset(P, D_mask), QQ(1))
+    H_mask  = PM.one_by_one_fringe(P, U_mask, D_mask, c(1); field=field)
+    H_typed = PM.one_by_one_fringe(P, FF.Upset(P, U_mask), FF.Downset(P, D_mask), c(1); field=field)
 
     for q in 1:P.n
         @test FF.fiber_dimension(H_mask, q) == FF.fiber_dimension(H_typed, q)
     end
 
     # Also accept plain Vector{Bool} (not just BitVector).
-    H_vec = PM.one_by_one_fringe(P, collect(U_mask), collect(D_mask), QQ(1))
+    H_vec = PM.one_by_one_fringe(P, collect(U_mask), collect(D_mask), c(1); field=field)
     for q in 1:P.n
         @test FF.fiber_dimension(H_vec, q) == FF.fiber_dimension(H_typed, q)
     end
 end
+
+end # with_fields

@@ -6,7 +6,9 @@ using LinearAlgebra
 @testset "IndicatorResolutions internal invariants + Ext on A2" begin
     # Internal PModule should match fiber_dimension from the fringe.
     P = chain_poset(3)
-    M = one_by_one_fringe(P, FF.principal_upset(P, 2), FF.principal_downset(P, 2))
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+    M = one_by_one_fringe(P, FF.principal_upset(P, 2), FF.principal_downset(P, 2); scalar=one(K), field=field)
     PMM = IR.pmodule_from_fringe(M)
     for q in 1:P.n
         @test PMM.dims[q] == FF.fiber_dimension(M, q)
@@ -15,15 +17,15 @@ using LinearAlgebra
     # Projective cover should be surjective on each vertex (full row rank).
     F0, pi0, _ = IR.projective_cover(PMM)
     for q in 1:P.n
-        @test EX.rankQQ(pi0.comps[q]) == PMM.dims[q]
+        @test PM.FieldLinAlg.rank(field, pi0.comps[q]) == PMM.dims[q]
     end
 
     # Kernel inclusion iota: K -> F0 should be injective and satisfy pi0 * iota = 0.
     K, iota = PM.kernel_with_inclusion(pi0)
     for q in 1:P.n
-        @test EX.rankQQ(iota.comps[q]) == K.dims[q]
+        @test PM.FieldLinAlg.rank(field, iota.comps[q]) == K.dims[q]
         Z = pi0.comps[q] * iota.comps[q]
-        @test Z == zeros(QQ, size(Z,1), size(Z,2))
+        @test Z == CM.zeros(field, size(Z,1), size(Z,2))
     end
 
     # Now test Ext dimensions on the A2 chain: 1 < 2
@@ -72,10 +74,12 @@ end
     # A tiny fringe module that typically forces generators at vertices 2 and 3.
     U = [FF.principal_upset(P, 2), FF.principal_upset(P, 3)]
     D = [FF.principal_downset(P, 4)]
-    Phi = spzeros(QQ, 1, 2)
-    Phi[1,1] = QQ(1)
-    Phi[1,2] = QQ(1)
-    H = FF.FringeModule{QQ}(P, U, D, Phi)
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+    Phi = spzeros(K, 1, 2)
+    Phi[1,1] = CM.coerce(field, 1)
+    Phi[1,2] = CM.coerce(field, 1)
+    H = FF.FringeModule{K}(P, U, D, Phi; field=field)
 
     M = IR.pmodule_from_fringe(H)
 
@@ -99,19 +103,21 @@ end
 
 @testset "verify_upset_resolution / verify_downset_resolution catch illegal monomial support" begin
     P = diamond_poset()
+    field = CM.QQField()
+    K = CM.coeff_type(field)
 
     # Deliberately invalid "resolution step": for upset resolutions, nonzero in delta (row i, col j)
     # requires U_row subset U_col. We violate that on the diamond poset.
     U2 = FF.principal_upset(P, 2)
     U3 = FF.principal_upset(P, 3)
 
-    F0 = IR.UpsetPresentation{QQ}(P, [U2, U3], FF.Upset[], spzeros(QQ, 0, 2), nothing)
-    F1 = IR.UpsetPresentation{QQ}(P, [U2],     FF.Upset[], spzeros(QQ, 0, 1), nothing)
+    F0 = IR.UpsetPresentation{K}(P, [U2, U3], FF.Upset[], spzeros(K, 0, 2), nothing; field=field)
+    F1 = IR.UpsetPresentation{K}(P, [U2],     FF.Upset[], spzeros(K, 0, 1), nothing; field=field)
 
     # delta is |U1| x |U0| = 1 x 2. Put a nonzero at (U2 row, U3 col).
     # Since U2 is not a subset of U3, this must be rejected.
-    delta_bad = spzeros(QQ, 1, 2)
-    delta_bad[1, 2] = QQ(1)
+    delta_bad = spzeros(K, 1, 2)
+    delta_bad[1, 2] = CM.coerce(field, 1)
 
     @test_throws ErrorException IR.verify_upset_resolution([F0, F1], [delta_bad];
         check_d2=false, check_exactness=false)
@@ -121,11 +127,11 @@ end
     D2 = FF.principal_downset(P, 2)
     D3 = FF.principal_downset(P, 3)
 
-    E0 = IR.DownsetCopresentation{QQ}(P, [D3], FF.Downset[], spzeros(QQ, 0, 1), nothing)
-    E1 = IR.DownsetCopresentation{QQ}(P, [D2], FF.Downset[], spzeros(QQ, 0, 1), nothing)
+    E0 = IR.DownsetCopresentation{K}(P, [D3], FF.Downset[], spzeros(K, 0, 1), nothing; field=field)
+    E1 = IR.DownsetCopresentation{K}(P, [D2], FF.Downset[], spzeros(K, 0, 1), nothing; field=field)
 
-    rho_bad = spzeros(QQ, 1, 1)
-    rho_bad[1, 1] = QQ(1)  # D2 is not a subset of D3
+    rho_bad = spzeros(K, 1, 1)
+    rho_bad[1, 1] = CM.coerce(field, 1)  # D2 is not a subset of D3
 
     @test_throws ErrorException IR.verify_downset_resolution([E0, E1], [rho_bad];
         check_d2=false, check_exactness=false)
@@ -154,6 +160,8 @@ end
     # -------------------------------------------------------------------------
 
     P = diamond_poset()
+    field = CM.QQField()
+    K = CM.coeff_type(field)
 
     # Sanity: cover edges should be exactly 1->2, 1->3, 2->4, 3->4.
     C = FF.cover_edges(P)
@@ -177,7 +185,7 @@ end
     @test FF.principal_downset(P, 4).mask == BitVector([true,  true,  true,  true])
 
     # Simple module S_p at vertex p: support only at p, with all structure maps zero.
-    simple_at(p::Int) = one_by_one_fringe(P, FF.principal_upset(P, p), FF.principal_downset(P, p))
+    simple_at(p::Int) = one_by_one_fringe(P, FF.principal_upset(P, p), FF.principal_downset(P, p); scalar=one(K), field=field)
     S = [simple_at(p) for p in 1:P.n]
     S1, S2, S3, S4 = S
 
@@ -234,7 +242,7 @@ end
     @test c + d == 0
 
     # Composition must be 0 (also checked by verify_upset_resolution, but this is "by hand").
-    @test Matrix(delta1 * delta0) == zeros(QQ, 1, 1)
+    @test Matrix(delta1 * delta0) == CM.zeros(field, 1, 1)
 
     # Injective (downset) resolution of S4 should have length 2:
     #   0 -> S4 -> E0 -> E1 -> E2
@@ -277,7 +285,7 @@ end
     @test s1 != 0 && s2 != 0
     @test s1 + s2 == 0
 
-    @test Matrix(rho1 * rho0) == zeros(QQ, 1, 1)
+    @test Matrix(rho1 * rho0) == CM.zeros(field, 1, 1)
 
     # -------------------------------------------------------------------------
     # (B) Ext^0/1/2 between ALL simple modules on the diamond, computed "by hand"
@@ -394,9 +402,9 @@ end
     P = chain_poset(5)
 
     # Clearing and recomputing should produce a fresh cache object.
-    MD.clear_cover_cache!()
+    MD.clear_cover_cache!(P)
     ccA = MD.cover_cache(P)
-    MD.clear_cover_cache!()
+    MD.clear_cover_cache!(P)
     ccB = MD.cover_cache(P)
     @test ccA !== ccB
 
@@ -415,10 +423,40 @@ end
     end
 end
 
+@testset "Poset cache lifecycle" begin
+    P = chain_poset(4)
+    @test isdefined(P, :cache)
+    @test P.cache.cover === nothing
+    @test P.cache.upsets === nothing
+    @test P.cache.downsets === nothing
+
+    cc = MD.cover_cache(P)
+    @test P.cache.cover === cc
+    @test P.cache.cover !== nothing
+
+    u1 = FF.upset_indices(P, 1)
+    d1 = FF.downset_indices(P, 1)
+    @test P.cache.upsets !== nothing
+    @test P.cache.downsets !== nothing
+    @test u1 == P.cache.upsets[1]
+    @test d1 == P.cache.downsets[1]
+
+    MD.clear_cover_cache!(P)
+    @test P.cache.cover === nothing
+    @test P.cache.upsets === nothing
+    @test P.cache.downsets === nothing
+
+    cc2 = MD.cover_cache(P)
+    @test cc2 !== cc
+end
+
 
 @testset "map_leq uses cached chosen-chain pointers" begin
     P = chain_poset(3)
-    cc = MD._cover_cache(P)
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+    c(x) = CM.coerce(field, x)
+    cc = MD.cover_cache(P)
     for d in cc.chain_parent
         empty!(d)
     end
@@ -426,16 +464,16 @@ end
 
     # Build a tiny 1-dimensional module on the chain 1<2<3.
     dims = [1, 1, 1]
-    edge = Dict{Tuple{Int,Int}, Matrix{QQ}}()
+    edge = Dict{Tuple{Int,Int}, Matrix{K}}()
     for (u, v) in FF.cover_edges(P)
-        edge[(u, v)] = zeros(QQ, dims[v], dims[u])
+        edge[(u, v)] = CM.zeros(field, dims[v], dims[u])
     end
-    edge[(1, 2)] = reshape(QQ[2], 1, 1)
-    edge[(2, 3)] = reshape(QQ[3], 1, 1)
-    M = MD.PModule{QQ}(P, dims, edge)
+    edge[(1, 2)] = reshape([c(2)], 1, 1)
+    edge[(2, 3)] = reshape([c(3)], 1, 1)
+    M = MD.PModule{K}(P, dims, edge; field=field)
 
     A13 = MD.map_leq(M, 1, 3; cache=cc)
-    @test A13 == reshape(QQ[6], 1, 1)
+    @test A13 == reshape([c(6)], 1, 1)
 
     # The chosen-chain cache should now contain at least the (1,3) entry.
     @test length(cc.chain_parent) >= 1
@@ -449,25 +487,28 @@ end
 
 @testset "map_leq is path-independent on a functorial diamond" begin
     P = diamond_poset()
-    cc = MD._cover_cache(P)
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+    c(x) = CM.coerce(field, x)
+    cc = MD.cover_cache(P)
     for d in cc.chain_parent
         empty!(d)
     end
 
     # A functorial module where the two length-2 paths 1->2->4 and 1->3->4 agree.
     dims = [1, 1, 1, 1]
-    edge = Dict{Tuple{Int,Int}, Matrix{QQ}}()
+    edge = Dict{Tuple{Int,Int}, Matrix{K}}()
     for (u, v) in FF.cover_edges(P)
-        edge[(u, v)] = reshape(QQ[0], 1, 1)
+        edge[(u, v)] = reshape([c(0)], 1, 1)
     end
-    edge[(1, 2)] = reshape(QQ[2], 1, 1)
-    edge[(2, 4)] = reshape(QQ[5], 1, 1)   # composite 10
-    edge[(1, 3)] = reshape(QQ[1], 1, 1)
-    edge[(3, 4)] = reshape(QQ[10], 1, 1)  # composite also 10
-    M = MD.PModule{QQ}(P, dims, edge)
+    edge[(1, 2)] = reshape([c(2)], 1, 1)
+    edge[(2, 4)] = reshape([c(5)], 1, 1)   # composite 10
+    edge[(1, 3)] = reshape([c(1)], 1, 1)
+    edge[(3, 4)] = reshape([c(10)], 1, 1)  # composite also 10
+    M = MD.PModule{K}(P, dims, edge; field=field)
 
     A14 = MD.map_leq(M, 1, 4; cache=cc)
-    @test A14 == reshape(QQ[10], 1, 1)
+    @test A14 == reshape([c(10)], 1, 1)
 end
 
 @testset "CoverEdgeMapStore correctness" begin
@@ -478,18 +519,21 @@ end
         0 0 1
     ]
     Q = FF.FinitePoset(leq)
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+    c(x) = CM.coerce(field, x)
 
     dims = [1, 1, 1]
 
     # cover edges: (1,2), (2,3)
-    edge_maps = Dict{Tuple{Int,Int}, Matrix{QQ}}()
-    edge_maps[(1,2)] = QQ[1;;]
-    edge_maps[(2,3)] = QQ[2;;]
+    edge_maps = Dict{Tuple{Int,Int}, Matrix{K}}()
+    edge_maps[(1,2)] = reshape([c(1)], 1, 1)
+    edge_maps[(2,3)] = reshape([c(2)], 1, 1)
 
-    M = MD.PModule{QQ}(Q, dims, edge_maps)
+    M = MD.PModule{K}(Q, dims, edge_maps; field=field)
 
-    @test M.edge_maps[1, 2] == QQ[1;;]
-    @test M.edge_maps[2, 3] == QQ[2;;]
+    @test M.edge_maps[1, 2] == reshape([c(1)], 1, 1)
+    @test M.edge_maps[2, 3] == reshape([c(2)], 1, 1)
     @test_throws KeyError M.edge_maps[1, 3]  # not a cover edge
 
     # lock in the stricter API (no tuple indexing)
@@ -498,8 +542,8 @@ end
     # check predecessor alignment
     @test M.edge_maps.preds[2] == [1]
     @test M.edge_maps.preds[3] == [2]
-    @test M.edge_maps.maps_from_pred[2][1] == QQ[1;;]
-    @test M.edge_maps.maps_from_pred[3][1] == QQ[2;;]
+    @test M.edge_maps.maps_from_pred[2][1] == reshape([c(1)], 1, 1)
+    @test M.edge_maps.maps_from_pred[3][1] == reshape([c(2)], 1, 1)
 
     # iteration yields cover edges
     seen = Set{Tuple{Int,Int}}()

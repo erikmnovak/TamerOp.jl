@@ -37,14 +37,15 @@ using JSON3
 using SparseArrays
 using Random
 
-using ..CoreModules: QQ, rational_to_string, string_to_rational
+using ..CoreModules: QQ, AbstractCoeffField, QQField, RealField, PrimeField,
+    coeff_type, coerce, FpElem, rational_to_string, string_to_rational
 import ..FlangeZn: Face, IndFlat, IndInj, Flange, canonical_matrix
 import ..FiniteFringe: AbstractPoset, FinitePoset, ProductOfChainsPoset, GridPoset, ProductPoset,
                        FringeModule, nvertices, leq_matrix
 import ..ZnEncoding: SignaturePoset
 using ..FiniteFringe
-using ..Modules: PModule
-using ..DataPipeline: PointCloud, ImageNd, GraphData, EmbeddedPlanarGraph2D, GradedComplex, FiltrationSpec, GridEncodingMap
+using ..Modules: PModule, clear_cover_cache!
+using ..Workflow: PointCloud, ImageNd, GraphData, EmbeddedPlanarGraph2D, GradedComplex, FiltrationSpec, GridEncodingMap
 import ..ZnEncoding
 import ..PLBackend
 
@@ -67,11 +68,75 @@ export save_flange_json, load_flange_json,
 
 # Schema versions for JSON formats
 const PIPELINE_SCHEMA_VERSION = 1
-const ENCODING_SCHEMA_VERSION = 2
+const ENCODING_SCHEMA_VERSION = 3
 
 # =============================================================================
 # 1) Shared helpers
 # =============================================================================
+
+function _field_to_obj(field::AbstractCoeffField)
+    if field isa QQField
+        return Dict("kind" => "qq")
+    elseif field isa RealField
+        T = coeff_type(field)
+        return Dict("kind" => "real",
+                    "T" => string(T),
+                    "rtol" => field.rtol,
+                    "atol" => field.atol)
+    elseif field isa PrimeField
+        return Dict("kind" => "fp", "p" => field.p)
+    end
+    error("Unsupported coefficient field for JSON serialization: $(typeof(field))")
+end
+
+function _field_from_obj(obj)
+    kind = lowercase(String(obj["kind"]))
+    if kind == "qq"
+        return QQField()
+    elseif kind == "real"
+        Tname = String(obj["T"])
+        T = Tname == "Float64" ? Float64 :
+            Tname == "Float32" ? Float32 :
+            error("Unsupported real field type in JSON: $(Tname)")
+        rtol = haskey(obj, "rtol") ? T(obj["rtol"]) : sqrt(eps(T))
+        atol = haskey(obj, "atol") ? T(obj["atol"]) : zero(T)
+        return RealField(T; rtol=rtol, atol=atol)
+    elseif kind == "fp"
+        p = Int(obj["p"])
+        return PrimeField(p)
+    end
+    error("Unsupported coeff_field kind: $(kind)")
+end
+
+function _scalar_to_json(field::AbstractCoeffField, x)
+    if field isa QQField
+        return rational_to_string(QQ(x))
+    elseif field isa RealField
+        return Float64(x)
+    elseif field isa PrimeField
+        return Int(coerce(field, x).val)
+    end
+    error("Unsupported coefficient field for scalar serialization: $(typeof(field))")
+end
+
+function _scalar_from_json(field::AbstractCoeffField, val)
+    if field isa QQField
+        if val isa Integer
+            return QQ(BigInt(val))
+        end
+        s = String(val)
+        if occursin("/", s)
+            return string_to_rational(s)
+        end
+        return QQ(parse(BigInt, strip(s)))
+    elseif field isa RealField
+        T = coeff_type(field)
+        return val isa AbstractString ? T(parse(Float64, val)) : T(val)
+    elseif field isa PrimeField
+        return coerce(field, val isa AbstractString ? parse(Int, val) : Int(val))
+    end
+    error("Unsupported coefficient field for scalar parsing: $(typeof(field))")
+end
 
 @inline function _json_write(path::AbstractString, obj)
     open(path, "w") do io
@@ -100,29 +165,31 @@ Stable PosetModules-owned schema:
   "n": n,
   "flats":      [ {"b":[...], "tau":[i1,i2,...]}, ... ],
   "injectives": [ {"b":[...], "tau":[...]} , ... ],
+  "coeff_field": { ... },
   "phi": [[ "num/den", ...], ...]   # rows = #injectives, cols = #flats
 }
 
 Notes
 * `tau` is stored as a list of 1-based coordinate indices where the face is true.
-* Scalars are exact QQ encoded as "num/den" strings.
+* Scalars are encoded according to the coefficient field descriptor.
 """
 function save_flange_json(path::AbstractString, FG::Flange)
     n = FG.n
     flats = [Dict("b" => F.b, "tau" => findall(identity, F.tau.coords)) for F in FG.flats]
     injectives = [Dict("b" => E.b, "tau" => findall(identity, E.tau.coords)) for E in FG.injectives]
-    phi = [[rational_to_string(FG.phi[i, j]) for j in 1:length(FG.flats)]
+    phi = [[_scalar_to_json(FG.field, FG.phi[i, j]) for j in 1:length(FG.flats)]
            for i in 1:length(FG.injectives)]
     obj = Dict("kind" => "FlangeZn",
                "n" => n,
                "flats" => flats,
                "injectives" => injectives,
+               "coeff_field" => _field_to_obj(FG.field),
                "phi" => phi)
     return _json_write(path, obj)
 end
 
 # -----------------------------------------------------------------------------
-# A0) Datasets + pipeline specs (DataPipeline)
+# A0) Datasets + pipeline specs (Workflow)
 # -----------------------------------------------------------------------------
 
 function _obj_from_dataset(data)
@@ -456,23 +523,31 @@ function _parse_poset_from_obj(poset_obj)
                 leq[i, j] = x
             end
         end
-        return FinitePoset(leq)
+        P = FinitePoset(leq)
+        clear_cover_cache!(P)
+        return P
     elseif kind == "ProductOfChainsPoset"
         haskey(poset_obj, "sizes") || error("ProductOfChainsPoset missing required key 'sizes'.")
         sizes = Vector{Int}(poset_obj["sizes"])
-        return ProductOfChainsPoset(sizes)
+        P = ProductOfChainsPoset(sizes)
+        clear_cover_cache!(P)
+        return P
     elseif kind == "GridPoset"
         haskey(poset_obj, "coords") || error("GridPoset missing required key 'coords'.")
         coords_any = poset_obj["coords"]
         coords_any isa AbstractVector || error("GridPoset.coords must be a list-of-lists.")
         coords = ntuple(i -> Vector{Float64}(coords_any[i]), length(coords_any))
-        return GridPoset(coords)
+        P = GridPoset(coords)
+        clear_cover_cache!(P)
+        return P
     elseif kind == "ProductPoset"
         haskey(poset_obj, "left") || error("ProductPoset missing required key 'left'.")
         haskey(poset_obj, "right") || error("ProductPoset missing required key 'right'.")
         P1 = _parse_poset_from_obj(poset_obj["left"])
         P2 = _parse_poset_from_obj(poset_obj["right"])
-        return ProductPoset(P1, P2)
+        P = ProductPoset(P1, P2)
+        clear_cover_cache!(P)
+        return P
     elseif kind == "SignaturePoset"
         haskey(poset_obj, "sig_y") || error("SignaturePoset missing required key 'sig_y'.")
         haskey(poset_obj, "sig_z") || error("SignaturePoset missing required key 'sig_z'.")
@@ -492,7 +567,9 @@ function _parse_poset_from_obj(poset_obj)
             row isa AbstractVector || error("SignaturePoset.sig_z row $(i) must be a list.")
             sig_z[i] = BitVector(Bool[x for x in row])
         end
-        return SignaturePoset(sig_y, sig_z)
+        P = SignaturePoset(sig_y, sig_z)
+        clear_cover_cache!(P)
+        return P
     else
         error("Unsupported poset kind: $(kind)")
     end
@@ -553,20 +630,6 @@ function _poset_obj(P::AbstractPoset; include_leq::Bool=true)
     end
 end
 
-function _parse_QQ(x)
-    if x isa Integer
-        return QQ(BigInt(x))
-    end
-    if x isa AbstractFloat
-        return QQ(x)
-    end
-    s = String(x)
-    if occursin("/", s)
-        return string_to_rational(s)
-    end
-    return QQ(parse(BigInt, strip(s)))
-end
-
 """
     load_boundary_complex_json(path) -> GradedComplex
 
@@ -613,24 +676,28 @@ Alias for `load_boundary_complex_json`, intended for reduced boundary matrices.
 load_reduced_complex_json(path::AbstractString) = load_boundary_complex_json(path)
 
 """
-    load_pmodule_json(path) -> PModule{QQ}
+    load_pmodule_json(path; field=nothing) -> PModule
 
 Expected schema:
 {
   "poset": { "kind": "FinitePoset", "n": n, "leq": [[...]] },
   "dims": [d1, d2, ...],
-  "edges": [ {"src": i, "dst": j, "mat": [[...]]}, ... ]
+  "edges": [ {"src": i, "dst": j, "mat": [[...]]}, ... ],
+  "coeff_field": { ... }   // optional; defaults to QQ
 }
 """
-function load_pmodule_json(path::AbstractString)
+function load_pmodule_json(path::AbstractString; field::Union{Nothing,AbstractCoeffField}=nothing)
     obj = _json_read(path)
     haskey(obj, "poset") || error("pmodule JSON missing 'poset'.")
     P = _parse_poset_from_obj(obj["poset"])
+    saved_field = haskey(obj, "coeff_field") ? _field_from_obj(obj["coeff_field"]) : QQField()
+    target_field = field === nothing ? saved_field : field
+    K = coeff_type(target_field)
     haskey(obj, "dims") || error("pmodule JSON missing 'dims'.")
     dims = Vector{Int}(obj["dims"])
     length(dims) == nvertices(P) || error("pmodule dims length mismatch with poset size.")
     haskey(obj, "edges") || error("pmodule JSON missing 'edges'.")
-    edge_maps = Dict{Tuple{Int,Int},Matrix{QQ}}()
+    edge_maps = Dict{Tuple{Int,Int},Matrix{K}}()
     for e in obj["edges"]
         src = Int(e["src"])
         dst = Int(e["dst"])
@@ -638,17 +705,18 @@ function load_pmodule_json(path::AbstractString)
         mat_any isa AbstractVector || error("pmodule edge mat must be a list-of-lists.")
         m = length(mat_any)
         n = m == 0 ? 0 : length(mat_any[1])
-        M = zeros(QQ, m, n)
+        M = zeros(K, m, n)
         for i in 1:m
             row = mat_any[i]
             length(row) == n || error("pmodule edge mat row length mismatch.")
             for j in 1:n
-                M[i, j] = _parse_QQ(row[j])
+                val = _scalar_from_json(saved_field, row[j])
+                M[i, j] = target_field === saved_field ? val : coerce(target_field, val)
             end
         end
         edge_maps[(src, dst)] = M
     end
-    return PModule{QQ}(P, dims, edge_maps)
+    return PModule{K}(P, dims, edge_maps; field=target_field)
 end
 
 # -----------------------------------------------------------------------------
@@ -1154,7 +1222,7 @@ function load_ripser_lower_distance_streaming(path::AbstractString; radius, max_
 end
 
 "Inverse of `save_flange_json`."
-function load_flange_json(path::AbstractString)
+function load_flange_json(path::AbstractString; field::Union{Nothing,AbstractCoeffField}=nothing)
     obj = _json_read(path)
     @assert haskey(obj, "kind") && String(obj["kind"]) == "FlangeZn"
     n = Int(obj["n"])
@@ -1172,13 +1240,19 @@ function load_flange_json(path::AbstractString)
     injectives = [IndInj(mkface(Vector{Int}(e["tau"])), Vector{Int}(e["b"]); id=:E)
                   for e in obj["injectives"]]
 
+    saved_field = haskey(obj, "coeff_field") ? _field_from_obj(obj["coeff_field"]) : QQField()
+    target_field = field === nothing ? saved_field : field
+    K = coeff_type(target_field)
     m = length(injectives)
     k = length(flats)
-    Phi = Matrix{QQ}(undef, m, k)
+    Phi = Matrix{K}(undef, m, k)
     for i in 1:m, j in 1:k
-        Phi[i, j] = string_to_rational(String(obj["phi"][i][j]))
+        Phi[i, j] = _scalar_from_json(saved_field, obj["phi"][i][j])
+        if target_field !== saved_field
+            Phi[i, j] = coerce(target_field, Phi[i, j])
+        end
     end
-    return Flange{QQ}(n, flats, injectives, Phi)
+    return Flange{K}(n, flats, injectives, Phi; field=target_field)
 end
 
 # -----------------------------------------------------------------------------
@@ -1191,6 +1265,9 @@ end
 #   - each Upset/Downset as a Bool mask (BitVector serialized as Bool list)
 #   - phi: exact rationals encoded as "num/den" strings
 @inline function _pi_to_obj(pi)
+    if pi isa CoreModules.CompiledEncoding
+        pi = pi.pi
+    end
     if pi isa GridEncodingMap
         return Dict(
             "kind" => "GridEncodingMap",
@@ -1288,14 +1365,14 @@ function _pi_from_obj(P::AbstractPoset, obj)
     error("Unsupported encoding map kind: $(kind)")
 end
 
-function _encoding_obj(H::FringeModule{QQ}; pi=nothing, include_leq::Bool=true)
+function _encoding_obj(H::FringeModule{K}; pi=nothing, include_leq::Bool=true) where {K}
     P = H.P
 
     U_masks = [collect(Bool, U.mask) for U in H.U]
     D_masks = [collect(Bool, D.mask) for D in H.D]
 
     m, n = size(H.phi)
-    phi = [[rational_to_string(H.phi[i, j]) for j in 1:n] for i in 1:m]
+    phi = [[_scalar_to_json(H.field, H.phi[i, j]) for j in 1:n] for i in 1:m]
 
     obj = Dict(
         "kind" => "FiniteEncodingFringe",
@@ -1303,6 +1380,7 @@ function _encoding_obj(H::FringeModule{QQ}; pi=nothing, include_leq::Bool=true)
         "poset" => _poset_obj(P; include_leq=include_leq),
         "U" => U_masks,
         "D" => D_masks,
+        "coeff_field" => _field_to_obj(H.field),
         "phi" => phi,
     )
     if pi !== nothing
@@ -1311,11 +1389,12 @@ function _encoding_obj(H::FringeModule{QQ}; pi=nothing, include_leq::Bool=true)
     return obj
 end
 
-function save_encoding_json(path::AbstractString, H::FringeModule{QQ}; include_leq::Bool=true)
+function save_encoding_json(path::AbstractString, H::FringeModule{K}; include_leq::Bool=true) where {K}
     return _json_write(path, _encoding_obj(H; include_leq=include_leq))
 end
 
-function save_encoding_json(path::AbstractString, P::AbstractPoset, H::FringeModule{QQ}, pi; include_leq::Bool=true)
+function save_encoding_json(path::AbstractString, P::AbstractPoset, H::FringeModule{K}, pi;
+                            include_leq::Bool=true) where {K}
     P === H.P || error("save_encoding_json: P does not match H.P.")
     return _json_write(path, _encoding_obj(H; pi=pi, include_leq=include_leq))
 end
@@ -1324,7 +1403,9 @@ end
 #
 # This loader is intentionally strict: it expects the schema emitted by
 # save_encoding_json (missing required keys => error).
-function load_encoding_json(path::AbstractString; return_pi::Bool=false)
+function load_encoding_json(path::AbstractString;
+                            return_pi::Bool=false,
+                            field::Union{Nothing,AbstractCoeffField}=nothing)
     obj = _json_read(path)
 
     haskey(obj, "kind") || error("Encoding JSON missing required key 'kind'.")
@@ -1374,17 +1455,9 @@ function load_encoding_json(path::AbstractString; return_pi::Bool=false)
         D[t] = Dc
     end
 
-    # Parse QQ entries: prefer exact rationals "a/b", but allow integer JSON numbers too.
-    parse_QQ(x) = begin
-        if x isa Integer
-            return QQ(BigInt(x))
-        end
-        s = String(x)
-        if occursin("/", s)
-            return string_to_rational(s)
-        end
-        return QQ(parse(BigInt, strip(s)))
-    end
+    saved_field = haskey(obj, "coeff_field") ? _field_from_obj(obj["coeff_field"]) : QQField()
+    target_field = field === nothing ? saved_field : field
+    K = coeff_type(target_field)
 
     m = length(D)
     k = length(U)
@@ -1394,17 +1467,18 @@ function load_encoding_json(path::AbstractString; return_pi::Bool=false)
     phi_any isa AbstractVector || error("'phi' must be a list-of-lists (size m x k).")
     length(phi_any) == m || error("phi must have m=$(m) rows")
 
-    Phi = zeros(QQ, m, k)
+    Phi = zeros(K, m, k)
     for i in 1:m
         row = phi_any[i]
         row isa AbstractVector || error("phi row $(i) must be a list (length k=$(k)).")
         length(row) == k || error("phi row length mismatch (row $(i); expected k=$(k))")
         for j in 1:k
-            Phi[i, j] = parse_QQ(row[j])
+            val = _scalar_from_json(saved_field, row[j])
+            Phi[i, j] = target_field === saved_field ? val : coerce(target_field, val)
         end
     end
 
-    H = FiniteFringe.FringeModule{QQ}(P, U, D, Phi)
+    H = FiniteFringe.FringeModule{K}(P, U, D, Phi; field=target_field)
     if return_pi && haskey(obj, "pi")
         return H, _pi_from_obj(P, obj["pi"])
     end
@@ -1420,7 +1494,7 @@ JSON schema expected from an external CAS (Macaulay2, Singular, ...):
 
 {
   "n": 3,                                   // ambient dimension
-  "field": "QQ",                            // base field (informational)
+  "coeff_field": { "kind": "qq" },          // optional; defaults to QQ
   "flats": [
      {"b":[0,0,0], "tau":[true,false,false], "id":"F1"},
      {"b":[2,1,0], "tau":[false,false,true], "id":"F2"}
@@ -1439,9 +1513,18 @@ Notes:
 * Scalars in `phi` are interpreted in QQ (exact rationals).
 * If `phi` is omitted, we fall back to `canonical_matrix(flats, injectives)`.
 """
-function parse_flange_json(json_src)::Flange{QQ}
+function parse_flange_json(json_src; field::Union{Nothing,AbstractCoeffField}=nothing)
     obj = JSON3.read(json_src)
     n = Int(obj["n"])
+    saved_field = if haskey(obj, "coeff_field")
+        _field_from_obj(obj["coeff_field"])
+    elseif haskey(obj, "field")
+        String(obj["field"]) == "QQ" ? QQField() : QQField()
+    else
+        QQField()
+    end
+    target_field = field === nothing ? saved_field : field
+    K = coeff_type(target_field)
 
     function _mkface(n::Int, tau_any)
         if tau_any isa AbstractVector{Bool}
@@ -1474,7 +1557,7 @@ function parse_flange_json(json_src)::Flange{QQ}
         A = obj["phi"]
         m = length(injectives)
         ncol = length(flats)
-        M = zeros(QQ, m, ncol)
+        M = zeros(K, m, ncol)
         @assert length(A) == m "phi: wrong number of rows"
         for i in 1:m
             row = A[i]
@@ -1482,21 +1565,24 @@ function parse_flange_json(json_src)::Flange{QQ}
             for j in 1:ncol
                 val = row[j]
                 if val isa String
-                    M[i, j] = string_to_rational(val)
+                    M[i, j] = _scalar_from_json(saved_field, val)
                 elseif val isa Integer
-                    M[i, j] = QQ(val)
+                    M[i, j] = _scalar_from_json(saved_field, val)
                 else
                     @warn "phi entry is a non-integer numeric; prefer exact strings \"num/den\" for exactness"
-                    M[i, j] = QQ(val)
+                    M[i, j] = _scalar_from_json(saved_field, val)
+                end
+                if target_field !== saved_field
+                    M[i, j] = coerce(target_field, M[i, j])
                 end
             end
         end
         M
     else
-        canonical_matrix(flats, injectives)
+        canonical_matrix(flats, injectives; field=target_field)
     end
 
-    return Flange{QQ}(n, flats, injectives, Phi)
+    return Flange{K}(n, flats, injectives, Phi; field=target_field)
 end
 
 """
@@ -1505,14 +1591,15 @@ end
 Run a CAS command that prints (or writes) the JSON described in `parse_flange_json`,
 then parse it into a `Flange{QQ}`.
 """
-function flange_from_m2(cmd::Cmd; jsonpath::Union{Nothing,String}=nothing)
+function flange_from_m2(cmd::Cmd; jsonpath::Union{Nothing,String}=nothing,
+                        field::Union{Nothing,AbstractCoeffField}=nothing)
     if jsonpath === nothing
         io = read(cmd, String)
-        return parse_flange_json(io)
+        return parse_flange_json(io; field=field)
     end
     run(cmd)
     open(jsonpath, "r") do io
-        return parse_flange_json(io)
+        return parse_flange_json(io; field=field)
     end
 end
 

@@ -1,59 +1,64 @@
 using Test
 using LinearAlgebra
 
-# Included from test/runtests.jl; uses shared aliases (PM, DF, MD, QQ, ...).
+# Included from test/runtests.jl; uses shared aliases (PM, DF, MD, ...).
 
 
 # Build an endomorphism of M that is the identity everywhere except at vertex u,
 # where it is replaced by the matrix A (assumes A has size M.dims[u] x M.dims[u]).
-function endo_at_vertex(M::MD.PModule{QQ}, u::Int, A::Matrix{QQ})
-    comps = Matrix{QQ}[]
+function endo_at_vertex(M::MD.PModule{K}, u::Int, A::AbstractMatrix{K}) where {K}
+    comps = Vector{Matrix{K}}(undef, M.Q.n)
     for v in 1:M.Q.n
         dv = M.dims[v]
-        push!(comps, Matrix{QQ}(I, dv, dv))
+        comps[v] = CM.eye(M.field, dv)
     end
-    comps[u] = A
-    return MD.PMorphism{QQ}(M, M, comps)
+    comps[u] = Matrix{K}(A)
+    return MD.PMorphism(M, M, comps)
 end
 
 # Compose morphisms fiberwise: (g o f)_u = g_u * f_u.
-function compose_morphism(g::MD.PMorphism{QQ}, f::MD.PMorphism{QQ})
+function compose_morphism(g::MD.PMorphism{K}, f::MD.PMorphism{K}) where {K}
     @assert f.cod === g.dom
     n = f.dom.Q.n
     comps = [g.comps[u] * f.comps[u] for u in 1:n]
-    return MD.PMorphism{QQ}(f.dom, g.cod, comps)
+    return MD.PMorphism(f.dom, g.cod, comps)
 end
 
 # Scalar endomorphism s*id on each fiber.
-function scalar_endo(M::MD.PModule{QQ}, s::QQ)
-    comps = Vector{Matrix{QQ}}(undef, M.Q.n)
+function scalar_endo(M::MD.PModule{K}, s::K) where {K}
+    comps = Vector{Matrix{K}}(undef, M.Q.n)
     for u in 1:M.Q.n
         d = M.dims[u]
-        comps[u] = d == 0 ? zeros(QQ, 0, 0) : s .* Matrix{QQ}(I, d, d)
+        comps[u] = d == 0 ? CM.zeros(M.field, 0, 0) : s .* CM.eye(M.field, d)
     end
-    return MD.PMorphism{QQ}(M, M, comps)
+    return MD.PMorphism(M, M, comps)
 end
 
 # Helper: build a chain-poset module with a single cover edge map.
 # We intentionally keep this tiny; it is enough to test connecting morphisms by hand.
-function _chain_module(P, dims::Vector{Int}, edge_map::Matrix{QQ})
+function _chain_module(P, dims::Vector{Int}, edge_map::AbstractMatrix{K}, field::AbstractCoeffField) where {K}
+    coeff_type(field) == K || error("_chain_module: coeff_type(field) != eltype(edge_map)")
     edges = FF.cover_edges(P)
-    D = Dict{Tuple{Int, Int}, Matrix{QQ}}()
+    D = Dict{Tuple{Int, Int}, Matrix{K}}()
     for (u, v) in edges
-        D[(u, v)] = zeros(QQ, dims[v], dims[u])
+        D[(u, v)] = CM.zeros(field, dims[v], dims[u])
     end
     @assert length(edges) == 1
     D[first(edges)] = edge_map
-    return MD.PModule{QQ}(P, dims, D)
+    return MD.PModule{K}(P, dims, D; field=field)
 end
 
 
+with_fields(FIELDS_FULL) do field
+if !(field isa CM.RealField)
+K = CM.coeff_type(field)
+c(x) = CM.coerce(field, x)
+
 @testset "Ext functoriality (projective model) in both arguments" begin
     P = chain_poset(2)
-
     # Simple at 1 and simple at 2 on P.
-    S1 = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, 1), FF.principal_downset(P, 1)))
-    S2 = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, 2), FF.principal_downset(P, 2)))
+    S1 = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, 1), FF.principal_downset(P, 1); scalar=one(K), field=field))
+    S2 = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, 2), FF.principal_downset(P, 2); scalar=one(K), field=field))
 
     # Build M = S1 oplus S1 so End(M) is noncommutative (Mat_2).
     M = MD.direct_sum(S1, S1)
@@ -67,8 +72,8 @@ end
     @test PM.dim(EMN, 1) == 4
 
     # Two noncommuting endomorphisms of M at vertex 1 (dims there are 2).
-    A = [QQ(1) QQ(1); QQ(0) QQ(1)]
-    B = [QQ(1) QQ(0); QQ(1) QQ(1)]
+    A = [c(1) c(1); c(0) c(1)]
+    B = [c(1) c(0); c(1) c(1)]
     fA = endo_at_vertex(M, 1, A)
     fB = endo_at_vertex(M, 1, B)
 
@@ -80,8 +85,8 @@ end
     @test F_BA == F_A * F_B
 
     # Two noncommuting endomorphisms of N at vertex 2 (dims there are 2).
-    C = [QQ(2) QQ(1); QQ(0) QQ(1)]
-    D = [QQ(1) QQ(0); QQ(1) QQ(2)]
+    C = [c(2) c(1); c(0) c(1)]
+    D = [c(1) c(0); c(1) c(2)]
     gC = endo_at_vertex(N, 2, C)
     gD = endo_at_vertex(N, 2, D)
 
@@ -99,10 +104,10 @@ end
     Pop = FF.FinitePoset(transpose(FF.leq_matrix(P)))
 
     # L = simple at 1 on P (as in existing Tor-by-hand test).
-    L = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, 1), FF.principal_downset(P, 1)))
+    L = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, 1), FF.principal_downset(P, 1); scalar=one(K), field=field))
 
     # Rop = simple at 2 on P^op (as in existing Tor-by-hand test).
-    Rop = IR.pmodule_from_fringe(one_by_one_fringe(Pop, FF.principal_upset(Pop, 2), FF.principal_downset(Pop, 2)))
+    Rop = IR.pmodule_from_fringe(one_by_one_fringe(Pop, FF.principal_upset(Pop, 2), FF.principal_downset(Pop, 2); scalar=one(K), field=field))
 
     # Make direct sums to get noncommuting endomorphisms.
     R2 = MD.direct_sum(Rop, Rop)
@@ -116,8 +121,8 @@ end
     @test PM.dim(T_R2_L2, 1) == 4
 
     # Noncommuting endomorphisms of R2 at vertex 2 (dims there are 2).
-    A = [QQ(1) QQ(1); QQ(0) QQ(1)]
-    B = [QQ(1) QQ(0); QQ(1) QQ(1)]
+    A = [c(1) c(1); c(0) c(1)]
+    B = [c(1) c(0); c(1) c(1)]
     fA = endo_at_vertex(R2, 2, A)
     fB = endo_at_vertex(R2, 2, B)
 
@@ -129,8 +134,8 @@ end
     @test F_BA == F_B * F_A
 
     # Noncommuting endomorphisms of L2 at vertex 1 (dims there are 2).
-    C = [QQ(2) QQ(1); QQ(0) QQ(1)]
-    D = [QQ(1) QQ(0); QQ(1) QQ(2)]
+    C = [c(2) c(1); c(0) c(1)]
+    D = [c(1) c(0); c(1) c(2)]
     gC = endo_at_vertex(L2, 1, C)
     gD = endo_at_vertex(L2, 1, D)
 
@@ -151,23 +156,23 @@ end
     # Choose a genuine short exact sequence 0 -> A -> B -> C -> 0:
     # A = [2,2], B = [1,2], C = [1,1] as interval modules on the chain.
     A = IR.pmodule_from_fringe(one_by_one_fringe(P,
-            FF.principal_upset(P, 2), FF.principal_downset(P, 2)))
+            FF.principal_upset(P, 2), FF.principal_downset(P, 2); scalar=one(K), field=field))
     B = IR.pmodule_from_fringe(one_by_one_fringe(P,
-            FF.principal_upset(P, 1), FF.principal_downset(P, 2)))
+            FF.principal_upset(P, 1), FF.principal_downset(P, 2); scalar=one(K), field=field))
     C = IR.pmodule_from_fringe(one_by_one_fringe(P,
-            FF.principal_upset(P, 1), FF.principal_downset(P, 1)))
+            FF.principal_upset(P, 1), FF.principal_downset(P, 1); scalar=one(K), field=field))
 
     # Explicit inclusion i: A -> B and projection p: B -> C (components per vertex).
     # dims(A) = (0,1,0), dims(B) = (1,1,0), dims(C) = (1,0,0).
-    i = MD.PMorphism{QQ}(A, B, [zeros(QQ, 1, 0), QQ[1;;],         zeros(QQ, 0, 0)])
-    p = MD.PMorphism{QQ}(B, C, [QQ[1;;],         zeros(QQ, 0, 1), zeros(QQ, 0, 0)])
+    i = MD.PMorphism(A, B, [CM.zeros(field, 1, 0), CM.ones(field, 1, 1),         CM.zeros(field, 0, 0)])
+    p = MD.PMorphism(B, C, [CM.ones(field, 1, 1),         CM.zeros(field, 0, 1), CM.zeros(field, 0, 0)])
 
     # Opposite poset
     Pop = FF.FinitePoset(transpose(FF.leq_matrix(P)))
 
     # Right module on P^op (simple at vertex 2).
     Rop = IR.pmodule_from_fringe(one_by_one_fringe(Pop,
-            FF.principal_upset(Pop, 2), FF.principal_downset(Pop, 2)))
+            FF.principal_upset(Pop, 2), FF.principal_downset(Pop, 2); scalar=one(K), field=field))
 
     LES = PM.TorLongExactSequenceSecond(Rop, i, p, PM.DerivedFunctorOptions(maxdeg=2))
 
@@ -204,14 +209,14 @@ end
 
     # L = simple at vertex 1 on P.
     L = IR.pmodule_from_fringe(one_by_one_fringe(P,
-            FF.principal_upset(P, 1), FF.principal_downset(P, 1)))
+            FF.principal_upset(P, 1), FF.principal_downset(P, 1); scalar=one(K), field=field))
 
     # Rop = simple at vertex 2 on P^op.
     Rop = IR.pmodule_from_fringe(one_by_one_fringe(Pop,
-            FF.principal_upset(Pop, 2), FF.principal_downset(Pop, 2)))
+            FF.principal_upset(Pop, 2), FF.principal_downset(Pop, 2); scalar=one(K), field=field))
 
     # Complex concentrated in degree 0.
-    C = PM.ModuleCochainComplex([L], MD.PMorphism{QQ}[]; tmin=0, check=true)
+    C = PM.ModuleCochainComplex([L], MD.PMorphism{K}[]; tmin=0, check=true)
 
     HT = PM.hyperTor(Rop, C; maxlen=2)
     T  = DF.Tor(Rop, L, PM.DerivedFunctorOptions(maxdeg=2))
@@ -221,10 +226,10 @@ end
     d1 = PM.dim(HT, 1)
     @test d1 > 0
 
-    f2 = scalar_endo(Rop, QQ(2))
-    f3 = scalar_endo(Rop, QQ(3))
-    g2 = scalar_endo(L,   QQ(2))
-    g3 = scalar_endo(L,   QQ(3))
+    f2 = scalar_endo(Rop, c(2))
+    f3 = scalar_endo(Rop, c(3))
+    g2 = scalar_endo(L,   c(2))
+    g3 = scalar_endo(L,   c(3))
 
     gC2 = PM.ModuleCochainMap(C, C, [g2]; check=true)
     gC3 = PM.ModuleCochainMap(C, C, [g3]; check=true)
@@ -233,19 +238,19 @@ end
     F2h = PM.hyperTor_map_first(f2, HT, HT; n=1)
     F2t = PM.tor_map_first(f2, T, T; n=1)
     @test F2h == F2t
-    @test F2h == QQ(2) .* Matrix{QQ}(I, d1, d1)
+    @test F2h == c(2) .* CM.eye(field, d1)
 
     G2h = PM.hyperTor_map_second(gC2, HT, HT; n=1)
     G2t = PM.tor_map_second(g2, T, T; n=1)
     @test G2h == G2t
-    @test G2h == QQ(2) .* Matrix{QQ}(I, d1, d1)
+    @test G2h == c(2) .* CM.eye(field, d1)
 
     # --- Identity behavior ---
     Fid = PM.hyperTor_map_first(IR.id_morphism(Rop), HT, HT; n=1)
-    @test Fid == Matrix{QQ}(I, d1, d1)
+    @test Fid == CM.eye(field, d1)
 
     Gid = PM.hyperTor_map_second(PM.idmap(C), HT, HT; n=1)
-    @test Gid == Matrix{QQ}(I, d1, d1)
+    @test Gid == CM.eye(field, d1)
 
     # --- Functoriality in first variable ---
     f32 = compose_morphism(f3, f2)   # f3 o f2 = 6*id
@@ -270,11 +275,11 @@ end
     Pop = FF.FinitePoset(transpose(FF.leq_matrix(P)))
 
     # L = simple at 1 on P
-    Lfr = one_by_one_fringe(P, FF.principal_upset(P, 1), FF.principal_downset(P, 1))
+    Lfr = one_by_one_fringe(P, FF.principal_upset(P, 1), FF.principal_downset(P, 1); scalar=one(K), field=field)
     L = IR.pmodule_from_fringe(Lfr)
 
     # Rop = simple at 2 on Pop (= P^op)
-    Rfr = one_by_one_fringe(Pop, FF.principal_upset(Pop, 2), FF.principal_downset(Pop, 2))
+    Rfr = one_by_one_fringe(Pop, FF.principal_upset(Pop, 2), FF.principal_downset(Pop, 2); scalar=one(K), field=field)
     Rop = IR.pmodule_from_fringe(Rfr)
 
     T = DF.Tor(Rop, L, PM.DerivedFunctorOptions(maxdeg=3))
@@ -291,18 +296,18 @@ end
     Pop = FF.FinitePoset(transpose(FF.leq_matrix(P)))  # opposite
 
     # Left modules on P
-    S1 = _chain_module(P, [1, 0], zeros(QQ, 0, 1))
-    S2 = _chain_module(P, [0, 1], zeros(QQ, 1, 0))
-    P1 = _chain_module(P, [1, 1], QQ[1;;])  # projective at 1
+    S1 = _chain_module(P, [1, 0], CM.zeros(field, 0, 1), field)
+    S2 = _chain_module(P, [0, 1], CM.zeros(field, 1, 0), field)
+    P1 = _chain_module(P, [1, 1], CM.ones(field, 1, 1), field)  # projective at 1
 
     # Right modules (as P^op-modules) on Pop
-    S1op = _chain_module(Pop, [1, 0], zeros(QQ, 1, 0))
-    S2op = _chain_module(Pop, [0, 1], zeros(QQ, 0, 1))
-    P2op = _chain_module(Pop, [1, 1], QQ[1;;])  # projective at 2 (in Pop)
+    S1op = _chain_module(Pop, [1, 0], CM.zeros(field, 1, 0), field)
+    S2op = _chain_module(Pop, [0, 1], CM.zeros(field, 0, 1), field)
+    P2op = _chain_module(Pop, [1, 1], CM.ones(field, 1, 1), field)  # projective at 2 (in Pop)
 
     # Short exact sequence in the second variable: 0 -> S2 -> P1 -> S1 -> 0
-    i = MD.PMorphism{QQ}(S2, P1, [zeros(QQ, 1, 0), QQ[1;;]])
-    p = MD.PMorphism{QQ}(P1, S1, [QQ[1;;], zeros(QQ, 0, 1)])
+    i = MD.PMorphism(S2, P1, [CM.zeros(field, 1, 0), CM.ones(field, 1, 1)])
+    p = MD.PMorphism(P1, S1, [CM.ones(field, 1, 1), CM.zeros(field, 0, 1)])
 
     les2 = PM.TorLongExactSequenceSecond(S2op, i, p, PM.DerivedFunctorOptions(maxdeg=1))
 
@@ -313,8 +318,8 @@ end
     @test les2.delta[2][1, 1] != 0
 
     # Short exact sequence in the first variable: 0 -> S1op -> P2op -> S2op -> 0
-    i1 = MD.PMorphism{QQ}(S1op, P2op, [QQ[1;;], zeros(QQ, 1, 0)])
-    p1 = MD.PMorphism{QQ}(P2op, S2op, [zeros(QQ, 0, 1), QQ[1;;]])
+    i1 = MD.PMorphism(S1op, P2op, [CM.ones(field, 1, 1), CM.zeros(field, 1, 0)])
+    p1 = MD.PMorphism(P2op, S2op, [CM.zeros(field, 0, 1), CM.ones(field, 1, 1)])
 
     les1 = PM.TorLongExactSequenceFirst(S1, i1, p1, PM.DerivedFunctorOptions(maxdeg=1))
 
@@ -329,7 +334,7 @@ end
     act = PM.ext_action_on_tor(EA, Tsec, u; s=1)
 
     @test size(act) == (PM.dim(Tsec, 1), PM.dim(Tsec, 1))
-    @test act[1, 1] == QQ(1)
+    @test act[1, 1] == c(1)
 
     # Tor double complex total cohomology agrees with Tor groups (degree reindexing).
     # Using small lengths is enough for this example.
@@ -348,13 +353,15 @@ end
     @test PM.dim(T0, 0) == 1
 
     Alg = PM.TorAlgebra(T0)
-    PM.set_chain_product!(Alg, 0, 0, sparse(QQ[1;;]))
+    PM.set_chain_product!(Alg, 0, 0, sparse(CM.ones(field, 1, 1)))
     M00 = PM.multiplication_matrix(Alg, 0, 0)
     @test size(M00) == (1, 1)
-    @test M00[1, 1] == QQ(1)
+    @test M00[1, 1] == c(1)
 
-    x = PM.element(Alg, 0, [QQ(1)])
+    x = PM.element(Alg, 0, [c(1)])
     y = PM.multiply(Alg, x, x)
     @test y.deg == 0
-    @test y.coords[1] == QQ(1)
+    @test y.coords[1] == c(1)
+end
+end
 end

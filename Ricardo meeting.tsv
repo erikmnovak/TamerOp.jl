@@ -1,0 +1,840 @@
+start	end	text
+0	18000	The name of that was very generic, Decompositions and Distances of Modules over RN.
+18000	28000	Let me just, okay, space, always visible, where to go.
+28000	33000	And that one probably be a bit bigger scale just because I mentioned like the final, the lifetime stuff.
+33000	35000	This was mainly building on top of what?
+35000	38000	Yeah, sorry, I'm just fiddling with Zoom, just a second.
+38000	42000	Let me get back to my, I'm fiddling in the sense of I have to make your pictures stay up there
+42000	46000	so that it doesn't disappear when I go to some other window.
+46000	61000	Okay, let's see.
+61000	65000	So I have to look at crude report maybe, is that the one?
+65000	66000	Decomposition?
+66000	67000	Probably.
+67000	68000	Yes.
+68000	70000	Yeah.
+70000	75000	For the draft you think it should be a bit more detailed than that maybe?
+75000	77000	A bit more detailed than this?
+77000	83000	And I think that what we should have is sort of, the draft should contain, oh I like this actually, this is good,
+83000	90000	but it should have, it's okay for it to have this stuff too actually, but I think that that should,
+90000	94000	in the end I think that this stuff with the matching is going to be a second paper.
+94000	99000	Yeah, yeah, I just mean like in terms of level of detail, just a bit more than this maybe.
+99000	107000	Level of detail, I think we should try to include, try to include what's going to be in there eventually,
+107000	113000	so have it be a formal definition of lifetime, formal definition of lifetime displacement,
+113000	118000	formal definitions, potential definitions of lifetime distances that you can symmetrize,
+118000	122000	you can take the max, whatever it happens to be, right?
+122000	130000	Yeah, it's just sort of something so that people can get their hands on what lifetimes are and what lifetime displacement is.
+130000	131000	Okay.
+131000	134000	So that we can just hand it out to people and say, here's what we mean.
+134000	142000	The reason why at least one of them wants this is because Herbert Adelsbrunner has a student who is going to decide
+142000	149000	what to write her thesis on and it might be on related stuff and she wants to know what this lifetime stuff is all about.
+149000	150000	Okay, sure.
+150000	152000	So this is good news for us in some sense, right?
+152000	156000	This means that people really want to know this and that this is good.
+156000	162000	Yeah, and then also like motivations are we're thinking about this, obviously have the main results in there as well.
+162000	164000	Right, yes, that's right.
+164000	170000	So have whatever main results you think belong in there and, you know, something that doesn't have to be in final form,
+170000	175000	it just has to be sort of presentable so that someone who wants to know what these things are
+175000	180000	can actually look at the definitions for real and not just look at my slides, which have hopeless little detail.
+180000	184000	They have nice pictures, but not such great detail.
+184000	186000	Sure, okay.
+186000	189000	Yeah, as soon as you can.
+189000	195000	So, you know, I'm hoping that doesn't take more than, you know, a couple of weeks to...
+195000	197000	Yeah, that's what I was thinking, a couple of weeks.
+198000	200000	Great, a couple of weeks is...
+200000	203000	Because I evaluated in my mind how long I think it...
+203000	209000	And I said, Herbert, I told Herbert that probably once we talk about it within a couple of weeks, it'll be doable.
+209000	210000	Yeah.
+210000	213000	Herbert Edelsbrunner?
+213000	214000	Edelsbrunner, yes.
+214000	217000	The man, the myth, the legend himself.
+217000	218000	Well, he used to work at Duke, you know.
+218000	221000	Yeah, I'm aware.
+221000	224000	Yeah, I'm not sure that he was ever here when I was.
+224000	228000	I think I might have, like, maybe overlapped with him for a year or something like that,
+228000	230000	because I didn't really know the area at that point.
+230000	236000	But yeah, now I talk to him all the time at conferences and these things, and we communicate regularly.
+236000	239000	Yeah, he's a good guy.
+239000	241000	He hates algebra, actually.
+241000	247000	I'm aware, when I was originally learning topological data analysis,
+247000	254000	I read one of his papers on the Wasserstein distance being stable.
+254000	258000	And you could definitely tell that he was skirting the algebra very much.
+258000	264000	He was coming up with his own terminology and, like, really, really not going into the algebra there.
+264000	269000	Yeah, I mean, the fact is, he thinks that he's not good at algebra.
+269000	275000	And I think that what this means in the end is that the level of abstraction that he's willing to deal with
+275000	278000	has a definite upper limit.
+278000	283000	But, you know, what this means is that, you know, lifetime filtration?
+283000	286000	You know, really, he doesn't want to do lifetime filtration.
+286000	289000	But a student might want to do something related to this kind of algebra.
+289000	292000	And so it should come from us, that kind of thing, yeah?
+292000	294000	Yeah.
+294000	311000	Okay, so what was going to be the, what's the sort of proposed content of this meeting here?
+311000	313000	Yeah, so there's that.
+313000	315000	I've been, like, rereading Jassy's paper, basically.
+315000	319000	Like, taking notes on what I need to, what should be changed.
+319000	323000	Like, there's some notation stuff we've agreed on that's different.
+323000	328000	Yeah, the bracelet of brackets.
+328000	337000	We should also, at some point, decide on, like, notation and nomenclature for, like, the shifts, slides, and rug pulls.
+337000	340000	But I think that can be down the line.
+340000	342000	Yes, that's a really good point.
+342000	343000	We should decide on notations for that.
+343000	344000	Yeah, we should decide on that.
+344000	345000	Yeah.
+345000	347000	Eric, do you know what those things mean?
+347000	350000	Can you repeat that, sorry?
+350000	352000	Shifts, slides, and rug pulls.
+352000	354000	Rug pulls? Is that an actual thing?
+354000	356000	I have not come across rug pulls.
+356000	358000	We're going to make it into something.
+358000	359000	Go ahead.
+359000	360000	Yeah.
+360000	364000	The first thing is, Eric, do you know these two notations here?
+364000	365000	Sure.
+365000	369000	K adjoin S and K braces.
+369000	370000	Squiggly.
+370000	372000	Yeah, squiggly.
+372000	373000	Remind me of the braces.
+373000	381000	So I was going to tell you this, Eric, it's part of my, so I wrote up notes in, like, you know, sort of on iPad.
+381000	384000	I actually wrote up notes on the airplane to send you.
+384000	392000	And one of them is that for indicator modules, we should write it as K squiggly bracket instead of K square bracket.
+392000	394000	Okay, I was using K square bracket.
+394000	400000	And I also completely took the entire blame for that because in my homological algebra paper, I used the wrong notation.
+400000	404000	I really should have used squiggly brackets, and I didn't, and that was my fault, and it's wrong.
+404000	406000	Okay, all right.
+406000	410000	Yeah, I am using your homological algebra paper as a baseline for everything else.
+410000	414000	Even right now, actually, what I'm going to do is I'm just going to get here.
+414000	418000	I'm going to get to my notes, and I'm just going to send you the email now that has these notes.
+418000	419000	Okay.
+419000	420000	Keep talking, Ricardo.
+420000	424000	Tell them about shift slides and rope pulls because I remember that conversation.
+424000	425000	It was really handy.
+425000	431000	Yeah, and I actually, I don't quite remember which is which, so I'm going to need to look up my notes for that as well.
+431000	437000	Good, because I don't remember which is which either, but we had sort of good reasoning when we did that.
+437000	438000	We did have good reasoning.
+438000	441000	And so if you have it in your notes, that's great.
+441000	446000	I should have it somewhere in a staff document.
+446000	451000	But for the time being, you can just tell them what the three of them are, and then we'll figure out.
+451000	452000	Yeah, anyway.
+452000	453000	Yeah.
+453000	454000	Is it here?
+454000	456000	It's in the notes for Eric.
+462000	463000	Oh, the very first slide, right?
+463000	464000	Okay, squiggly bracket here.
+464000	465000	There you go.
+465000	466000	I found it.
+466000	467000	I found it.
+467000	468000	Okay.
+468000	473000	So the current notations for each one, I'm going to put them in the.
+473000	476000	You can share screen with them.
+476000	479000	Or you can also share your screen.
+479000	480000	It's up to you.
+480000	481000	It's very brief.
+481000	484000	I think I'll just do it here.
+484000	489000	Kind of like this.
+489000	490000	Okay.
+490000	494000	So the first one is what I'm calling a slide.
+494000	495000	These are the current notations.
+495000	496000	Their subject should change.
+496000	499000	The first one is what I'm calling a slide.
+499000	503000	This is just the one where you.
+503000	505000	So you map the vector V by.
+505000	509000	Let's assume it's like homogeneous and you can extend by linearity.
+509000	511000	Homogeneous.
+511000	513000	Yes, that is correct.
+513000	516000	Let's assume it's homogeneous and degree.
+516000	522000	And then you just move it by like the structure map epsilon.
+522000	523000	So the one that just.
+523000	525000	Epsilon is like a vector, I guess.
+525000	527000	You have to start off with what's what.
+527000	531000	So V is a what and epsilon is a what.
+531000	533000	Epsilon is a vector.
+533000	535000	You should think of it as usually one, one, one, one, one, one.
+535000	538000	But it can be any vector that you're going to shift.
+538000	540000	Think of it as an arrow.
+540000	541000	Okay.
+541000	544000	Yeah.
+544000	549000	Q plus meaning like the positive cone.
+550000	552000	Okay.
+552000	554000	It can be anywhere.
+554000	557000	Q here is a partially ordered group.
+557000	562000	Well, Q is a partially ordered group and then Q plus the positive.
+562000	563000	Q.
+563000	564000	Oh, okay.
+564000	567000	I'm telling Eric because Eric is used to working with Q being a poset.
+567000	570000	When we're saying here is that here we're working over a.
+570000	576000	In the most generality, it could be like a it could be like a poset with a shift function or something like that.
+576000	578000	And then epsilon is going to be the shift.
+578000	582000	But for simplicity, let's just talk about Q being a partially ordered group.
+582000	586000	And epsilon is an element in Q plus.
+586000	588000	Okay.
+588000	589000	Yeah.
+589000	592000	So think of it as our end with one, one, one, one, one, one.
+592000	593000	Yeah.
+593000	597000	Anything in the positive or center part and, for example, would work.
+597000	602000	Or actually the non-negative or.
+602000	605000	The closed possible.
+605000	606000	So, yeah.
+606000	609000	So the first one here, you just take V.
+609000	613000	So there's going to be you can think about it like being at a specific point.
+613000	621000	And then they're like, if you just move here by epsilon, since it's going to be higher, then there's going to be a structure map there.
+621000	623000	You just map it by that structure map.
+623000	626000	So this is what we're calling a slide.
+626000	627000	Okay.
+627000	628000	Ah, okay.
+628000	631000	I want to be clear what homogeneous vector means.
+631000	632000	Yeah.
+632000	637000	Our homogeneous vector means an element in ma for some a.
+637000	638000	Oh, okay.
+638000	639000	All right.
+639000	645000	I was thinking sort of like in the coordinate in what's called projective coordinates, but that's not.
+645000	646000	Yeah.
+646000	647000	Yeah.
+647000	648000	Yeah.
+648000	649000	Yeah.
+649000	650000	Yeah.
+650000	651000	It just means an element in some graded piece of some graded module.
+651000	652000	Okay.
+652000	653000	Some Q graded module.
+653000	654000	Yeah.
+654000	655000	Yeah.
+655000	658000	So it's basically it's only supported on one on one degree.
+658000	660000	It's not supported on various degrees.
+660000	665000	But you can extend this to be arbitrarily wherever you want by just white linearity.
+665000	666000	So this is an important.
+666000	669000	It's a class for some fixed parameter.
+669000	671000	It's a homology class over some fixed parameter.
+671000	673000	Yes.
+673000	678000	Then there is the syntax with brackets.
+678000	681000	That one's a bit more complicated to explain.
+681000	694000	Basically, you can imagine taking the entire the entire like module and then you just like move it back.
+694000	696000	Is that it?
+696000	698000	I forgot to move it back or forward.
+698000	699000	Yeah.
+699000	702000	So in the usual notation, this would be M bracket epsilon.
+702000	707000	So what it does is that if you take a module M back, take a module M.
+707000	708000	Yeah.
+709000	711000	How do you write the epsilon?
+711000	714000	I have.
+714000	717000	I can switch my keyboard to Greek if I want.
+717000	719000	Oh, interesting.
+719000	722000	I'm going to have to do it.
+722000	727000	I'm going to do it by literally using my mouse to copy your epsilon and paste it into mine.
+727000	729000	Yep.
+729000	730000	Yeah, that worked.
+730000	731000	That worked.
+731000	736000	So M epsilon sub A equals.
+736000	738000	Oh, boy.
+738000	741000	M sub.
+741000	747000	And then it's going to be epsilon plus A.
+747000	750000	Yes.
+750000	751000	Oh, OK.
+751000	752000	OK.
+752000	753000	OK.
+753000	754000	That's interesting.
+754000	756000	That's a shift and it shifts by the way downwards.
+756000	757000	Your point of view looks like this.
+757000	758000	Yes.
+758000	763000	So if epsilon is this vector one, one, one, one, one, then it shifts it backwards by one, one, one, one, one, one.
+763000	772000	And you can see that even though there's no there's no minus signs in there, this shift means that if you ask in.
+772000	774000	You have to read that that really, really carefully.
+774000	775000	Right.
+775000	781000	So M sub M shifted by epsilon of A is M sub epsilon plus A, which means that it's up here.
+781000	784000	So the original module M is this thing.
+784000	785000	Right.
+785000	787000	The module M, it's this degree.
+787000	791000	So when you when you take when you when you take.
+791000	793000	So but that's supposed to be M.
+793000	797000	So this epsilon plus A sits up here, but it's supposed to be in degree A.
+797000	799000	So it's moved back by anyway.
+799000	800000	You have to figure it out.
+800000	802000	It's really irritating.
+802000	809000	No, but I think now that I see the the squiggly version of the expression, because I have a pretty good grasp of anyway.
+809000	811000	Yeah.
+811000	813000	And squiggly.
+813000	814000	So I want to be clear.
+814000	817000	The squiggly brackets there are really just to say it's tech notation.
+817000	818000	Yeah.
+818000	821000	Because I have to say the entire epsilon plus A is in the subscript.
+821000	822000	Yeah, yeah, yeah.
+822000	823000	That's what I meant. That's what I meant.
+823000	826000	It's I sort of can.
+826000	828000	Yeah, I can.
+828000	829000	I can see it.
+829000	830000	I can see it somewhat.
+830000	836000	And so just to be clear, when I in the second example, the bracket epsilon, if I have like,
+836000	842000	let's say an abstract module like this, with like V being here, and then I shift it by epsilon out here, V shifts along with it.
+842000	846000	So that's position is consistent relative like the lower edge.
+846000	847000	Okay.
+847000	849000	Doesn't move relative to the lower edge.
+849000	850000	So V of epsilon.
+850000	857000	So V of epsilon is the vector V that was in degree A and is now in degree A minus epsilon.
+857000	858000	Yeah.
+858000	859000	So it's basically the same thing.
+859000	860000	It's just moving it around.
+860000	863000	This is just from how interleapings are defined.
+863000	869000	I think we can actually remove this entirely if we just allow maps with nonzero degree.
+869000	871000	But the current literature doesn't do that.
+871000	872000	So.
+872000	873000	Oh, yeah.
+873000	875000	Commutative algebra literature does it all the time.
+875000	876000	Yeah.
+876000	879000	The TDA literature does it from my understanding.
+879000	881000	The TDA literature does not.
+881000	883000	We need to convince them to allow us to do it.
+883000	885000	Because honestly, the right way to do it.
+885000	891000	This confusion is pretty much completely gone as soon as we allow that.
+891000	892000	Yes, I know.
+892000	894000	We only need one of it and then everything else.
+894000	895000	Yes.
+895000	902000	For what it's worth, the first example is a degree epsilon homomorphism or endomorphism.
+902000	904000	Right.
+904000	907000	And then the third case.
+907000	913000	Ricardo, you should write up for this paper on lifetime modules.
+913000	916000	It should be in your thesis somehow, but it should be in this paper.
+916000	920000	We should introduce people to inhomogeneous homomorphisms.
+920000	924000	And the module of all graded shifts of all homomorphisms.
+924000	930000	So that we can start using this in the multi-persistence literature.
+930000	931000	It needs to be there.
+931000	933000	They are all over the place.
+933000	938000	For any multi-persistence person who wants to read the algebra literature, they need to know what this is.
+938000	941000	And so this seems as good a place as any to introduce it.
+941000	944000	I use it all the time in my papers.
+944000	950000	No one likes reading my papers because they find the algebra too opaque.
+950000	953000	Which is so weird because it's so concrete.
+953000	956000	But they're not used to certain notions like this one.
+956000	959000	I like the algebra.
+959000	961000	Yeah, good. Good, good, good.
+961000	968000	So Jan Jandriziak, by the way, is one of these people who has his foot in both worlds and he totally gets the algebra.
+968000	970000	It's so awesome talking to him. He's great.
+970000	974000	You've said the same about Bjorkovic, right?
+974000	978000	Yes. Yes. Bjorkovic knows his stuff.
+978000	981000	Yeah.
+981000	989000	I think Bjorkovic's take on algebra these days is this take on sort of multi-persistence algebra is the most nuanced,
+989000	997000	sort of promising approach of anyone that I've seen from TVA.
+997000	1007000	I think he really gets the algebra. He understands what's trying to happen.
+1007000	1015000	Yeah, so just the third notation there, the V parentheses epsilon as opposed to V brackets epsilon.
+1015000	1018000	I have the definition in terms of the other two written there.
+1018000	1024000	Well, basically, if you think again about the upset here with the vector here.
+1024000	1027000	Let me think about this.
+1027000	1031000	So you do this and then you slide it off. I think it's the same as if you slide it.
+1031000	1034000	It's going to be the same the way they commute.
+1034000	1039000	So basically, you're keeping this one fixed.
+1039000	1041000	Let me say this in a language that Eric might get at.
+1041000	1046000	So remember, if you have an element in a module and this element has degree A, right?
+1046000	1049000	You can you can shift it up.
+1049000	1054000	So you can multiply by X to the epsilon. What does that do?
+1054000	1056000	It moves it up by epsilon. Yes.
+1056000	1058000	So now you have a different element to the module.
+1058000	1064000	It's an element now that sits in the same module, but it's moved up by degree by epsilon.
+1064000	1071000	And now it's the image of this element after you've literally moved it up by the by the structure morphism that goes from here to there.
+1072000	1074000	OK. Yeah.
+1074000	1078000	Yeah. The problem is that in persistence, you might want to do that,
+1078000	1082000	but you might want the results to sit in the same degree that you started it.
+1082000	1084000	Oh, OK. Yes.
+1084000	1086000	So how do you do that?
+1086000	1092000	One way is to multiply it by X to the epsilon and then shift it back by epsilon.
+1092000	1098000	Yeah. Another way is to shift it back by epsilon and then multiply it by epsilon.
+1099000	1106000	So the rug pull is the one where you where you essentially you start with your element here, right?
+1106000	1109000	You want it to land in this degree in this element, but back here.
+1109000	1113000	Yes. The rug pull. I can see it. It's amazing.
+1113000	1115000	I love it. It's amazing.
+1115000	1119000	Yeah. What a name. What an absolute name.
+1119000	1125000	Yeah. These are the names are in order of slide shift and you came up with this card.
+1126000	1129000	I think shift is standard.
+1129000	1131000	No, rug pull. I did not see rug pull.
+1131000	1134000	It was in conversation and I don't remember which of us came up with it.
+1134000	1136000	Yeah, I forgot.
+1136000	1138000	It was during a meeting with Gart. Yes, that's right.
+1138000	1144000	It was during one of our meetings and and and in the end we had this term and it's so the right term.
+1148000	1152000	Yeah, that's pretty good because you're like you're basically you're just sliding out of the way,
+1152000	1154000	but you're keeping it in the same place.
+1154000	1160000	Yeah, the only thing it brings to mind is that magic trick where you have the whole set table.
+1160000	1162000	Yeah, you pull the tablecloth out from under it.
+1162000	1164000	Yeah. Yeah.
+1166000	1175000	But the thing is that if we remove like the only reason we need this stuff is for it's for interleaving from what I can tell.
+1176000	1178000	Something like that, yes.
+1178000	1185000	And if we use like degree epsilon morphisms instead of requiring everything to be degree zero, then all we need is slides.
+1185000	1187000	We no longer need shifts or rug pulls.
+1187000	1189000	Yeah, that's right.
+1189000	1193000	But it's nice to describe things in terms of shifts and rug pulls.
+1194000	1205000	I mean, the shift is basically equivalent to just like the like you use a shift basis to emulate nonzero degree.
+1205000	1207000	Yes, that's right.
+1207000	1215000	In fact, exactly the definition of a nonzero degree homomorphism is a morphism of degree zero from N to a shift of N.
+1215000	1217000	Oh, okay.
+1217000	1220000	That's how commutative algebra, that's how it's defined.
+1220000	1222000	Oh, okay.
+1222000	1224000	That makes complete sense, yeah.
+1224000	1233000	Well, you can also define it more sort of parochially, I suppose, by just saying that it's a homomorphism such that it takes an element of degree A to an element of degree A plus epsilon.
+1233000	1235000	Yeah, that's what I was thinking.
+1235000	1240000	But I also define it to be a homomorphism of degree zero from N to N shifted by epsilon.
+1240000	1242000	Yes, expanding definitions, yes.
+1242000	1244000	Right.
+1245000	1248000	Okay, so that's the notation.
+1248000	1250000	Maybe we should change it, especially the notation.
+1250000	1253000	I'm not too happy with the rug pull one because it's quite similar to shift one.
+1253000	1256000	But maybe that's just something you have to live with.
+1256000	1261000	There's also an argument for not having that at all and just writing out the full expression every time, but that seems.
+1261000	1267000	Yes, and it's going to be, I will leave it up to you for the moment because you're going to try to write things down.
+1267000	1272000	And when you do, you'll figure out which notations are becoming really irritating.
+1272000	1273000	Sure.
+1273000	1274000	Okay.
+1274000	1277000	Yeah, it's one of those things you just try it and see what happens.
+1277000	1281000	And, you know, if it's not working for you, then go, you know, this is just annoying.
+1281000	1283000	It's the same thing with the minus sign.
+1283000	1287000	There should be a minus, you know, M shifted by epsilon should be M shifted by epsilon.
+1287000	1289000	But it's not, it's M shifted back by epsilon.
+1289000	1291000	That's because it's a minus sign.
+1291000	1294000	And you can choose what to do with the minus sign, where to put it.
+1294000	1297000	And sometimes it's annoying and sometimes it's not.
+1297000	1302000	I don't think, I think that one would just like have to keep with what other people are doing and just like deal with the sign.
+1302000	1303000	It makes like...
+1303000	1306000	There's no question that this is the definition of M shifted by epsilon.
+1306000	1311000	The question is whether we want to routinely think of M shifted by minus epsilon or not.
+1311000	1312000	Oh, all right.
+1312000	1314000	Because the answer is not.
+1315000	1319000	I think it like, it makes sense to just define it in a way that it admits that.
+1319000	1322000	But I think in practice that never shows up.
+1322000	1324000	Okay.
+1327000	1330000	Yeah, so that's the, that's the notation stuff.
+1332000	1334000	Oh, right.
+1334000	1336000	Eric introduced me.
+1336000	1339000	Actually, last night, like, I saw your email.
+1339000	1340000	I was getting dinner.
+1340000	1346000	And then right as I'm leaving, coming back from my room, then I see Eric and then we talk about it.
+1346000	1352000	And that's, that's why I, that's why I told you to like ask him if you wanted to show off.
+1352000	1361000	But the, one of the things that we talked about then is one of the ways we want to sort of salvage the things with lifetime.
+1362000	1374000	Stuff is by looking into how the, how the like the act, it actually works in practice.
+1374000	1378000	So that how like people are actually using this stuff for real data sets.
+1378000	1382000	And then let's see the exact wording here.
+1382000	1388000	Formulates conditions under which the screening variants are complete when restricted to push forward measure.
+1389000	1391000	Yes.
+1391000	1396000	And so for that inch like understand how, how people are actually doing this stuff.
+1396000	1399000	And he introduced me to this library called duty.
+1399000	1400000	Oh, yeah.
+1400000	1401000	Is it good?
+1401000	1405000	Is it like, does it do the things you wanted it to do?
+1405000	1406000	It seems like it does.
+1406000	1408000	I haven't had that much time to look into it yet.
+1408000	1412000	Because based on your like descriptions, I'm pretty sure it's exactly what you want.
+1412000	1414000	From what I looked up, it doesn't contribute.
+1414000	1417000	So that's something I need to look into to try to understand what they're doing.
+1417000	1418000	And people also like multi-PERS.
+1418000	1420000	I think they call it multi-PERS.
+1420000	1423000	So multi-PERS is made to interface with Goody.
+1423000	1426000	I think you heard about multi-PERS because of me, actually.
+1426000	1428000	And the people at Nightsake.
+1428000	1430000	Remember, I was just at Nightsake.
+1430000	1431000	Oh, that's true.
+1431000	1434000	Anyway, so multi-PERS is meant to interface with Goody as well.
+1434000	1439000	There is probably overlap at some point, but I think Goody is more on the computational.
+1440000	1444000	Before we encode things, before we process things.
+1444000	1446000	And then multi-PERS is more for the processing.
+1446000	1449000	So I think Goody is more so what you want to call it.
+1449000	1451000	But you can check out multi-PERS as well.
+1451000	1454000	Multi-PERS is more, I think, further along the pipeline.
+1458000	1460000	Sure, I'll just write it down.
+1462000	1464000	So there's that.
+1465000	1472000	I've also been thinking about the other, just because I didn't have too much to think about in regards to that stuff.
+1472000	1482000	I've been thinking about the other rich salvage it, which is attaching supplementary data to lifetime filtration so that it does become discriminating.
+1483000	1502000	What I was thinking in that regard is that the, sort of the interesting thing for, at least in a discriminatory sense with this, is that it's when things are, like they geometrically would be a lifetime.
+1502000	1506000	But algebraically, there's something that prevents them from being a lifetime.
+1506000	1509000	I'm not sure what you mean by that. What do you mean?
+1509000	1521000	So if we think back to the Luis example where you have the cube, right, missing the ends, do you remember the Luis kind of example?
+1521000	1523000	Vaguely, yes.
+1523000	1530000	Yeah, so in that case, if we don't, the one that has the multiplication by alpha and multiplication by beta, right?
+1530000	1531000	Right, yes.
+1532000	1538000	If we don't have those, if we have everything just being the identity map, then the entire module is a lifetime module.
+1538000	1541000	And then you're basically, and then that works.
+1541000	1549000	But when one of the multiplication, multiplication by alpha, or by anything that's not one, then it is no longer your lifetime module.
+1549000	1554000	And that, and so that means that we lose a filtration.
+1554000	1558000	There's one, a filtration that would have, like geometrically should exist because there's a map there.
+1558000	1562000	But I like it supported as if it were a lifetime module.
+1562000	1567000	But the algebra of the map prevents it from being a lifetime module.
+1567000	1573000	Oh, I see, I see. It's not lifetime because the maps are at all constant. They're not all the same.
+1573000	1574000	Yeah.
+1574000	1578000	It's not connected, the morphisms aren't connected or something like that.
+1578000	1579000	Yeah, something like that.
+1579000	1588000	And so this means that we lose some, there's basically a filtration that would exist based on geometry, but doesn't exist because of the algebra.
+1588000	1597000	And I think if we want to solve it in this way, we need a way to like keep that information of like, why does this filtration that should work not work?
+1597000	1600000	Provide some way of like comparing those.
+1600000	1605000	I see. I see. We may also want to just, I mean, include.
+1606000	1611000	Honestly, a filtration is always going to be sort of short, exact sequence.
+1611000	1615000	And then we could record which element in X it is.
+1615000	1619000	So which, which extension of this?
+1619000	1623000	In what sense is a filtration of short, exact sequence?
+1623000	1627000	Well, you have a sub module and then you have a quotient module.
+1627000	1628000	Right?
+1628000	1630000	Oh, right. Sure. At each point.
+1630000	1633000	We're only remembering what is the sub module, what's the quotient module.
+1633000	1637000	We're not remembering what's the extension.
+1637000	1641000	Ah, that might be, that might be something to look into that.
+1641000	1648000	Right. So like, I mean, there's a sense in which if we just remember literally what the extensions are, then we can reconstruct the entire module.
+1648000	1651000	Then it's an invariant because it gives you the whole module back.
+1651000	1656000	Oh, okay. Maybe there's something you can extract from the extensions.
+1656000	1662000	That's what I was going to say. But when you view it that way, it's like, okay, so then what functions on X are we interested in?
+1662000	1667000	Right. We can take the zero function on X and then we just don't care what the extension is.
+1667000	1673000	Well, we could take, we could take more interesting invariants of the X and perhaps get more information and sort of that.
+1673000	1681000	We could sort of build up a theory of how much information do you want from the X, that kind of thing.
+1681000	1687000	Yeah. So those are the three things I've done basically.
+1687000	1689000	Cool.
+1689000	1693000	I think that's clear thinking.
+1693000	1696000	Derek, do you have anything to add?
+1696000	1707000	I'm not the pro here, although I find the idea interesting and I think Goody is the program that should help you with this.
+1707000	1717000	Yeah, I've seen that Goody is C++ with Python bindings. Would you plan on like porting it also to like Julia binding so you can interact with it?
+1717000	1721000	No, my idea would be to port my thing to Python bindings.
+1721000	1722000	Oh, okay.
+1722000	1730000	Julia is my backend. Julia is my C++. I am not good enough to write my thing in C++, so I did it in Julia, which is more expressive.
+1730000	1733000	Sure. And then you write Python binding, like do a Python binding.
+1733000	1741000	Yeah, that's my plan eventually. I haven't done this before. I know there are software that does it for you, so I need to look into that.
+1741000	1746000	Yeah, I'd hope there would be just a library that like converts NumPy arrays to Julia.
+1746000	1754000	Something like that. And so basically your input is in Python and then you convert it to Julia and put that in.
+1754000	1761000	Your output is in Julia and then converts back to Python and then you don't touch anything in between. That would be ideal.
+1761000	1767000	Sure.
+1767000	1770000	I do have something to add.
+1770000	1771000	What?
+1771000	1778000	Unrelated to this, but my example ran successfully, so the library is working.
+1778000	1783000	Oh, good. Good.
+1783000	1790000	There's a sense in which I really wish, actually I really wish both of you could be in Austria for this thing.
+1790000	1793000	This thing that's at the end of March.
+1793000	1797000	I could be in Austria. I just need to plan ahead.
+1797000	1799000	It's during classes.
+1799000	1805000	Yeah, I would need to plan ahead very methodically.
+1805000	1816000	I mean, I can talk with my professors and see what we're doing, but that seems like especially because then it's also when I'm possibly going to be visiting grad school as well.
+1816000	1821000	I have actually heard back from one of them.
+1821000	1827000	And unfortunately, so University of Wisconsin Madison, I put up here the email.
+1827000	1836000	They had over 800 applicants to the program, so they just preliminarily, like early, just like denied a bunch of people.
+1836000	1837000	Including you or no?
+1837000	1842000	Let me tell you, the reason why they denied you is because they think you're not going to go.
+1842000	1844000	That may well be it, yeah.
+1844000	1850000	At UW Madison? But that's not a safety school, so to speak, right? It's quite hard to get into.
+1850000	1851000	Madison?
+1851000	1853000	Yeah.
+1853000	1858000	I mean, they think that Ricardo is going to go someplace better.
+1858000	1867000	He very well might, but OK, I shouldn't be saying this because when I applied to undergrad, NYU did that to me.
+1867000	1876000	This could backfire because it could be that all the better places think, oh, not quite.
+1876000	1879000	Yeah, especially with as many applicants as everyone seems to be getting now.
+1879000	1883000	Well, I'm sorry to hear, Ricardo. I think you're a very high quality applicant.
+1883000	1888000	Keep in mind that these places always receive that many applications. This is not news.
+1888000	1889000	OK.
+1889000	1890000	Sure.
+1890000	1893000	But they are forced, and Duke does the same thing, by the way.
+1893000	1898000	We have explicit conversations about how good someone is and how likely they are to come.
+1898000	1903000	And the fact is that if you applied to Duke, we'd look at your application calls.
+1903000	1910000	Are you going to come here? Come on, let's kind of get into it, and then we'll name some other place.
+1910000	1914000	No, yeah, I just, yeah, it was just a bit, because they sent it so early.
+1914000	1918000	I wasn't expecting anything until late February, and then they sent it literally last week.
+1918000	1920000	I was like, OK, well.
+1920000	1924000	OK, well, again, I'm sorry to hear, Ricardo. I think you're a very high quality applicant.
+1924000	1927000	I have no doubts that you're going to get in somewhere.
+1927000	1928000	Yeah, I hope so.
+1928000	1933000	Well, I mean, I told Ricardo something a little bit more realistic,
+1933000	1938000	which is that there is no reason why he should be rejected from anywhere.
+1938000	1944000	Sure, that's a good thing to say. My only worry for you, Ricardo, is you only apply to four places, so you are...
+1944000	1949000	That doesn't mean I am not going to guarantee they'll get in somewhere,
+1949000	1954000	because it can happen that the stochastics just work not for you.
+1954000	1962000	Yeah, I forgot about this. Ricardo, you only apply to four places, so that is, you know, a worrying factor.
+1962000	1966000	Is there a place that you want to go above everyone else?
+1966000	1968000	Presumably MIT.
+1968000	1974000	There is nowhere that I'm like, sir, do I want to go? But if I had to pick now, there is one that I'm going to go.
+1974000	1976000	Which one?
+1976000	1977000	Johns Hopkins.
+1977000	1978000	Which one?
+1978000	1979000	Johns Hopkins.
+1979000	1981000	Write to somebody at Hopkins.
+1981000	1986000	Emily Reel is actually going to be at Duke in like a month, maybe a month and a half or something like that.
+1986000	1988000	No, she's coming on the 30th.
+1988000	1996000	But write to somebody at Hopkins and say, look, if I had to pick today, Hopkins would be my first choice.
+1996000	1998000	Let me tell you, they don't know that.
+1998000	1999000	Okay.
+1999000	2001000	All right, I'll write that.
+2001000	2006000	Write an email, and you have to do it today, because these decisions are being made now.
+2006000	2015000	And if you tell someone at Hopkins that if you were going to make a decision today that you would choose them over all the other places you apply, you should feel free to tell them what those places are.
+2015000	2021000	You could tell them that you applied, but you could say, I applied to these other places, Berkeley and Harvard.
+2021000	2023000	I don't know where you apply.
+2023000	2027000	But then say, but if I had to choose today, I would choose Hopkins.
+2027000	2031000	Then that will seriously raise the chance of you being admitted there.
+2031000	2032000	It really does. It really does.
+2032000	2038000	From everyone I've heard, everyone I've heard said that you have to play the game.
+2038000	2041000	Yeah, you can't do that to every place that you apply.
+2041000	2052000	But if there's one that you're willing to do it for, then it raises your chance at that place by a lot, because then they don't have to roll the dice anymore.
+2052000	2056000	Okay, I will do that.
+2056000	2060000	Pick a person that's sort of up your alley that you'd like to work with.
+2060000	2065000	You could write them an email. It should be an email that indicates that you know who they are.
+2065000	2071000	Yeah, I think it's an email because I've looked at some of her work before, like I read her book.
+2071000	2075000	Actually, she based it on the reason I'm interested in Category Theory from one of her videos.
+2075000	2080000	That's right. And you could say that. You could say, I know that you're coming to Duke in late April.
+2080000	2081000	I'm talking late March.
+2081000	2087000	But this means that I have to send this message now because it pertains to my application to Johns Hopkins.
+2087000	2094000	And then say the thing about, you know, if today I had to choose one of all the places I apply, it would be Hopkins.
+2094000	2099000	I don't even know what my disposition is. I don't know whether my application has been accepted to other places.
+2099000	2105000	But if I could pick one place to be accepted, it would be Hopkins.
+2105000	2109000	Are you fine with me emailing it to you first so you can proofread it?
+2109000	2113000	Yes. Yes, you can email it to me first. Please do.
+2113000	2118000	I will be as quick as I can. My schedule is off. So if you email it to me at 9 p.m.
+2118000	2121000	I might not see it till, you know, four in the morning. Yeah.
+2124000	2127000	Yeah, I'm jet lagged. I'm getting up really, really early.
+2127000	2133000	Oh, yeah. You also have the jet lag to do it. But even when you are jet lagged, you also have.
+2133000	2140000	Jet lag is perfect. Yeah, my schedule is terrible. But when I'm jet lagged, it's much better.
+2141000	2148000	No, there's no question. My family likes to send me away for a week to Europe so I can come back and get up in the morning.
+2150000	2157000	I remember during like 501, like one of the, I think, it was right before I think the second midterm.
+2157000	2163000	I was working with other people in the homework. I was like, you know, sometimes I'm like, okay, we're not going to get this finished in time.
+2163000	2166000	Let's send Azure an email to get like a couple hours extension.
+2166000	2171000	And then immediately, like, it's like 1 a.m. We resented it like five minutes later and everything was fine.
+2171000	2174000	That was great. Right.
+2176000	2181000	Yeah, 1 a.m. was early. When my schedule was like that, 1 a.m. was early. I'm like, what time is it? It's like 4.
+2183000	2189000	Yeah, I always try to like, sometimes it happens. I was like, okay, now that you got my schedule, I can order it.
+2190000	2197000	Yes. Well, I do that by going, yeah. Actually, that's a good point I have to, I might enlist somebody's help.
+2197000	2211000	I need to, I need to schedule for, for Math 403, I need to schedule a whole bunch of oral exams.
+2211000	2215000	Oh, right. That's what I was talking about.
+2215000	2219000	Does anybody, do you, Ben knows, I'll ask him to do it.
+2219000	2225000	Oh, the oral exams. You're doing oral exams for 403. Oh, that's amazing. See, a little hard, a little hard for me.
+2231000	2233000	I've done oral exams before.
+2236000	2237000	Yeah.
+2245000	2253000	Do 21 lends itself very well to in-class exams?
+2253000	2256000	It does, because it's very, there are a lot of computational questions you can ask.
+2264000	2265000	Okay.
+2266000	2276000	This, this, yeah, this is what I'm doing, I'm doing this one because I cannot, there's just no point in grading written solutions to a, to a week-long take-home interview.
+2277000	2278000	Sure.
+2279000	2280000	Yeah, not with AI.
+2281000	2286000	No, yeah, that's what I discovered in the class that, that you were in, right?
+2287000	2289000	Ricardo wasn't the one that you were in?
+2290000	2292000	In 403 last, last time?
+2292000	2297000	There was one that had some, some AI issues, I think, and the answers were wrong.
+2297000	2303000	Did I stand up in front of the class? Did I stand up in front of your class and say I know that a bunch of you used AI?
+2304000	2309000	Uh, I think so, I'm not entirely sure. I think, yeah, I think a lot, yeah.
+2309000	2311000	You were, you weren't one of those, so.
+2311000	2312000	Yeah, I was not.
+2312000	2313000	You don't remember that so well.
+2313000	2314000	I do not.
+2314000	2315000	But like, half the class was.
+2315000	2326000	I've tried using, I don't know if I don't know how to prompt engineer, I've tried like everyone, so I've been like, okay, this is a homework I did, let's see how the AI fixed that, but it's just, I can't, I can't get it to do anything then, so I just.
+2327000	2331000	I mean, I graded, there was, I can't tell you this.
+2332000	2339000	I know what happens when AI, when AI does the entire, the entirety of midterm one, it got a 46 out of 100.
+2341000	2342000	Okay.
+2342000	2343000	All right.
+2343000	2350000	Yeah, I think Dan has also been trying to like see how AI does when he's grading the homework, just to like.
+2350000	2351000	Yeah, okay.
+2351000	2358000	I'll ask him for help with scheduling, just, I've never used one of these, you know, sort of.
+2359000	2361000	When to meets or whatever they're called.
+2361000	2366000	Sign up genius or when to meets, I don't know, I haven't used these, I've never used one before.
+2366000	2377000	Honestly, I've seen professors literally just post like a Google forms thing or whatever, have people like fill out when they're available and then just try to figure it out from there.
+2377000	2379000	If it's not a big class, that's totally fine.
+2379000	2382000	No, I can't do it that way, that's going to be too much work for me.
+2382000	2390000	I want to just say the exams will all be on Monday from like, you know, noon until 4 p.m. and sign up in the slots.
+2391000	2393000	Oh, sure, yeah, if you.
+2394000	2395000	I don't have to do any work.
+2395000	2401000	It's just that, you know, if somebody can't make it during those times, then I have to figure things out.
+2401000	2409000	But assuming that each person can make it during that time at some point, then they have to figure out amongst themselves how they can manage to sign up.
+2410000	2411000	Sure.
+2411000	2421000	All right, I think that's I think that's about it.
+2421000	2424000	We have only a couple of minutes left before we have the meeting.
+2424000	2426000	Well, I have something to say.
+2427000	2428000	Yes.
+2428000	2443000	So I have an issue, which is I have learned a lot of my math writing more recently in sort of like in conjunction with how it was, how especially chat GPT does its own math writing.
+2443000	2447000	So I asked you about that at our first meeting.
+2448000	2449000	So.
+2458000	2460000	Yeah, I wanted to mention this actually.
+2460000	2462000	AI helped me with the skeleton.
+2462000	2469000	And I quite like the way it does lists sometimes, but it often lists too many lists.
+2470000	2471000	And there are.
+2472000	2477000	But the outline was very AI driven in that sense.
+2477000	2479000	I'm not a fraud.
+2479000	2489000	If that's running through your mind, it's obvious that I couldn't possibly have written some of these things because it's like it involves knowledge that I simply doesn't have.
+2489000	2490000	Yeah.
+2491000	2497000	But and I'm saying this more broadly even maybe because I'm an ESL speaker.
+2497000	2503000	I have this tendency to sort of like imitate the person I'm talking to.
+2503000	2505000	So if I'm talking to.
+2505000	2506000	Right.
+2506000	2507000	I have that as well.
+2507000	2509000	I don't know if it's just ESL, but at least.
+2509000	2523000	But as I've used as I've like used chat GPT to learn things in the past, I've also sort of internalized some of its some of its wording choices a bit more like workflow pipeline.
+2524000	2534000	It's very it's very deployment heavy and it's also very it's very it's very like business jargon.
+2534000	2536000	Let's synthesize our.
+2536000	2538000	I was going to use the word jargon.
+2538000	2539000	It's very jargon.
+2539000	2545000	And I don't like that much for that, but sometimes the jargon comes up with is just so good.
+2545000	2550000	Sometimes it is, but sometimes it's it's it's it's identifiable.
+2550000	2555000	So like, you know, one of the things that chat GPT does, if you ask it to answer a question.
+2555000	2561000	I just remember the exam question I asked about cross audience except it was block matrices.
+2561000	2562000	Right.
+2562000	2563000	Yes.
+2563000	2564000	Yes.
+2564000	2566000	The answer is like two step flags.
+2566000	2569000	You look at you look at those two subspaces in another.
+2569000	2570000	Yeah.
+2570000	2573000	And you get a block matrices and these kinds of things.
+2573000	2574000	Yeah.
+2574000	2577000	There's a there's a there's a generally theoretic way to do that.
+2577000	2580000	It involves ladies subgroups, subgroups, subgroups, things like that.
+2580000	2583000	The problem is that chat GPT knows everything.
+2583000	2584000	Yeah.
+2584000	2585000	Right.
+2585000	2594000	And so when it gives you describe the answer this way, you unfettered uses all the mathematical terminology that it exists.
+2594000	2599000	And it thinks that it's cool to use the right jargon for this.
+2599000	2603000	The problem is that people in Math 403 don't know this jargon yet.
+2603000	2608000	When they use AI to answer this question, it's obvious because they're using terms that they don't know how to define.
+2608000	2609000	Yeah. Yeah.
+2609000	2610000	Yeah. No, that makes sense.
+2610000	2617000	Um, like, you know, like it's, you know, what's a parabolic subgroup?
+2617000	2618000	Yeah.
+2618000	2624000	They might have heard the expression once, but they wouldn't be able to to to deploy it.
+2624000	2626000	I don't think it probably heard it.
+2626000	2628000	They shouldn't have heard it at all.
+2628000	2629000	That's the point.
+2629000	2631000	It's not in any of the books that we use.
+2631000	2633000	It's not in any of our sources.
+2633000	2637000	The only way to know that is to either take a course before to have gotten it from somewhere else.
+2637000	2638000	Yeah.
+2638000	2639000	No, no.
+2639000	2640000	All of that makes sense.
+2640000	2642000	Before, they've learned it in their own time.
+2642000	2643000	Whatever.
+2643000	2645000	Then they'll be able to answer your question during the.
+2645000	2646000	That's my point.
+2646000	2647000	Yes.
+2647000	2648000	If they know what a parabolic subgroup is.
+2648000	2651000	That'll be just the phone conversation you guys are going to have for like five minutes.
+2651000	2652000	Right.
+2652000	2659000	If they actually do know what a parabolic subgroup is, then it's like, OK, I guess for the purpose of this, you learn what a parabolic subgroup is.
+2659000	2664000	I guess I'm OK with that, I suppose.
+2664000	2667000	And then you're going to have like a brief conversation with them about it.
+2667000	2668000	It's going to be fun.
+2668000	2669000	And then you move on to.
+2669000	2670000	Yes.
+2670000	2671000	Yeah.
+2671000	2678000	But I guess the the problem with me is that this is the the first larger math document that I've written in a bit.
+2678000	2682000	And I'm like, oh, my God, I'm starting to I'm starting to sound like AI.
+2682000	2689000	And then I and then I there are certain things were like, AI, this paragraph, how could I make it better?
+2689000	2690000	And then I'm like, oh, no.
+2690000	2693000	And it's all merging into each other.
+2693000	2694000	So I think I need to like.
+2694000	2700000	Well, I've drawn Eric when we meet, when we meet for, you know, for what we're meeting tomorrow.
+2700000	2701000	Right.
+2701000	2702000	Yeah.
+2702000	2703000	We're meeting tomorrow.
+2703000	2709000	And we can talk about, you know, which parts feel more like AI, which parts feel more genuine.
+2709000	2710000	Yeah.
+2710000	2711000	And I can tell.
+2711000	2712000	Oh, I can tell, too.
+2712000	2716000	My voice, my voice is disappearing.
+2716000	2717000	Yeah.
+2717000	2727000	Which is, which is, which is a little bit sad, but also a little bit good because the voice that I used to see was a little sort of.
+2727000	2728000	To floor.
+2728000	2729000	Yeah, I was.
+2729000	2731000	I've always been a very verbose writer.
+2731000	2732000	I've always been a very verbose writer.
+2732000	2737000	A little bit more concise, which is good, but it's also got a little bit more.
+2737000	2740000	For lack of a better word, impersonal.
+2740000	2741000	Yeah, exactly.
+2741000	2742000	I agree.
+2742000	2743000	I agree with that.
+2743000	2744000	I agree with that.
+2744000	2745000	Yeah.
+2745000	2746000	Yeah.
+2746000	2749000	So there are parts where I'm reading and going, yeah, I can really tell that Eric wrote this.
+2749000	2750000	This is, this is what I want to see.
+2750000	2752000	There are parts where it's just like.
+2752000	2757000	Really, I could have written that sentence or even that paragraph or something like that.
+2757000	2758000	Yeah.
+2758000	2759000	My keyboard's on my lap.
+2759000	2760000	No, no, but I understand.
+2760000	2762000	And I fully agree with you.
+2762000	2763000	I fully agree with you.
+2763000	2769000	Writing this has been an interesting introspective moment because I'm like, where am I?
+2769000	2770000	What is this?
+2770000	2777000	And, and how, how much have I come to rely on AI to, to, to build my skeleton for me and everything else?
+2777000	2780000	So this is, this was, yeah, this was an experience.
+2780000	2785000	I am, I am interested in talking more about it tomorrow.
+2786000	2789000	Do you have something to say before we go?
+2789000	2790000	Yeah.
+2790000	2793000	I was just going to say one thing that bothers me about AI is that now whenever I'm writing
+2793000	2795000	something like, oh, it's an M dash.
+2795000	2797000	I was like, wait, is this going to look too much like AI?
+2797000	2798000	Yes.
+2798000	2801000	I also start double, double guessing myself with those things.
+2801000	2806000	I have totally heard, I've heard horror stories about those kinds of things about students
+2806000	2809000	who learn how to write and they actually know how to write.
+2809000	2814000	And then a teacher will look at their writing and says, oh, but you, this AI does that.
+2814000	2815000	It's a horror story.
+2815000	2816000	Yeah.
+2816000	2817000	That's correct.
+2817000	2819000	Like, I mean, would you want me to not use that?
+2819000	2820000	That's how it works.
+2820000	2821000	Yeah.
+2821000	2824000	ABDAC is like super useful, like punctuation stuff.
+2824000	2825000	Yeah.
+2825000	2826000	They're super useful punctuation.
+2826000	2830000	I use them, you know, preferably, certainly no more than once a paragraph.
+2830000	2832000	Perfectly no more than once a page.
+2832000	2833000	Yeah.
+2833000	2836000	If you're using too many M dashes, it means that you haven't organized your thoughts properly.
+2836000	2837000	Yeah.
+2837000	2838000	Too many asides.
+2838000	2840000	Or for doing asides.
+2840000	2841000	Yes.
+2841000	2842000	But.
+2842000	2846000	Yeah, I was going to say at the time now, it's too fast forward, so you need to.
+2846000	2847000	Yes.
+2847000	2850000	I was going to go back and over to the other one.
+2850000	2851000	Okay.
+2851000	2852000	Lovely meeting.
+2852000	2854000	I look forward to seeing more of your progress, Ricardo.
+2854000	2859000	And also trying to figure out how I might be able to help, if at all, with my work.
+2859000	2861000	But I think, well, we'll see.
+2861000	2863000	And by the same token.
+2863000	2865000	Visualization, that's going to be really helpful.
+2865000	2866000	Yeah.
+2866000	2872000	By the same token, you know, Ricardo, you might be able to help Eric do visualization stuff.
+2872000	2873000	Yeah.
+2873000	2874000	Exactly.
+2874000	2876000	I might need some suggestions.
+2876000	2878000	Because right now I don't have any visualization implemented yet.
+2878000	2882000	If you need any input from my side, do you like the stuff I'm doing?
+2882000	2885000	Or do you need like, as a user, what I'd be interested in?
+2885000	2886000	Yes.
+2886000	2887000	The user experience.
+2887000	2888000	That's what I need.
+2888000	2889000	Okay.
+2889000	2890000	All right.
+2890000	2891000	Talk to you guys later.
+2891000	2892000	Ricardo, am I correct?
+2892000	2894000	I cannot meet that.
+2894000	2896000	What's your Tuesday afternoon look like?
+2896000	2898000	Very busy.
+2898000	2902000	I can't meet until like 4.30.
+2902000	2903000	Yeah, okay.
+2903000	2905000	So there's no chance that you're going to join with Eric.
+2905000	2911000	So as far as I'm concerned, I'm happy to have both of you during this time slot at the top.
+2911000	2912000	I cannot.
+2912000	2915000	I have a class at 3.05.
+2915000	2920000	Today, because of the stuff, the class is not happening.
+2920000	2922000	Ah, right.
+2922000	2923000	Good point.
+2923000	2924000	Okay.
+2924000	2925000	What about this half of that?
+2925000	2930000	If necessary, I can show up like every once in a while during Eric's meeting.
+2930000	2932000	When's your meeting on Tuesday?
+2932000	2936000	It's Tuesdays at, what is it, 3?
+2936000	2937000	2.50?
+2937000	2939000	2.50 to 3.50, yeah.
+2939000	2942000	Yeah, so I can occasionally show up to that.
+2942000	2945000	I will need to miss complex analysis, but I'm not enrolled in that.
+2945000	2947000	So it's fine if I miss it every once in a while.
+2947000	2949000	Okay.
+2949000	2952000	So just keep that in mind that this has been very productive.
+2952000	2957000	I think that you two are working on separate things, but they complement each other extremely well.
+2957000	2958000	They do.
+2958000	2962000	I think that your skill sets complement your projects very well.
+2962000	2965000	So Eric, when yours might be missing, Ricardo's really good at doing.
+2965000	2966000	Yes, yes.
+2966000	2971000	The visualization stuff, I'm particularly keen on picking apart Ricardo's brain eventually.
+2971000	2974000	Right, right.
+2974000	2980000	And the alignment project, you have software that can be useful for exploring that.
+2980000	2983000	And for directing what we might actually want to prove.
+2983000	2987000	So we can also think of just having meetings at some completely other time.
+2987000	2989000	But I'm going to head over to the other meeting to have them.
+2989000	2990000	Okay.
+2990000	2991000	All right.
+2991000	2992000	Bye.
+2992000	2993000	Bye.
+2993000	2994000	Bye, guys.
+3004000	3005000	Thank you.

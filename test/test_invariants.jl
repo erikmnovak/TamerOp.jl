@@ -1,5 +1,10 @@
 using Test
+using Random
 import Base.Threads
+
+with_fields(FIELDS_FULL) do field
+K = CM.coeff_type(field)
+@inline c(x) = CM.coerce(field, x)
 
 @testset "PLikeEncodingMap dispatch hook" begin
     @test PM.ZnEncoding.ZnEncodingMap <: PM.CoreModules.PLikeEncodingMap
@@ -13,9 +18,10 @@ end
 
 @testset "Finite-encoding invariants: rank and restricted Hilbert" begin
     P = chain_poset(3)
+    MD.clear_cover_cache!(P)
 
     # Interval module supported on {2,3} for the chain 1 < 2 < 3.
-    H23 = one_by_one_fringe(P, FF.principal_upset(P, 2), FF.principal_downset(P, 3), QQ(1))
+    H23 = one_by_one_fringe(P, FF.principal_upset(P, 2), FF.principal_downset(P, 3), c(1); field=field)
     M23 = IR.pmodule_from_fringe(H23)
 
     @test PM.rank_map(M23, 2, 3) == 1
@@ -35,11 +41,12 @@ end
 
     # Noncomparable pair should error.
     Pd = diamond_poset()
-    Hd2 = one_by_one_fringe(Pd, FF.principal_upset(Pd, 2), FF.principal_downset(Pd, 2))
+    Hd2 = one_by_one_fringe(Pd, FF.principal_upset(Pd, 2), FF.principal_downset(Pd, 2); field=field)
     Md2 = IR.pmodule_from_fringe(Hd2)
     @test_throws ErrorException PM.rank_map(Md2, 2, 3)
 
     if Threads.nthreads() > 1
+        MD.clear_cover_cache!(P)
         rinv_serial = PM.rank_invariant(M23; threads = false)
         rinv_thread = PM.rank_invariant(M23; threads = true)
         @test rinv_thread == rinv_serial
@@ -55,10 +62,10 @@ end
 @testset "Hilbert distances" begin
     P = chain_poset(3)
 
-    H23 = one_by_one_fringe(P, FF.principal_upset(P, 2), FF.principal_downset(P, 3))
+    H23 = one_by_one_fringe(P, FF.principal_upset(P, 2), FF.principal_downset(P, 3); field=field)
     M23 = IR.pmodule_from_fringe(H23)
 
-    H3 = one_by_one_fringe(P, FF.principal_upset(P, 3), FF.principal_downset(P, 3))
+    H3 = one_by_one_fringe(P, FF.principal_upset(P, 3), FF.principal_downset(P, 3); field=field)
     M3 = IR.pmodule_from_fringe(H3)
 
     @test PM.restricted_hilbert(M23) == [0, 1, 1]
@@ -77,11 +84,11 @@ end
     P = chain_poset(3)
 
     # Interval module supported on {2,3} for chain 1<2<3.
-    H23 = one_by_one_fringe(P, FF.principal_upset(P, 2), FF.principal_downset(P, 3), QQ(1))
+    H23 = one_by_one_fringe(P, FF.principal_upset(P, 2), FF.principal_downset(P, 3), c(1); field=field)
     M23 = IR.pmodule_from_fringe(H23)
 
     # Module supported on {3}.
-    H3  = one_by_one_fringe(P, FF.principal_upset(P, 3), FF.principal_downset(P, 3), QQ(1))
+    H3  = one_by_one_fringe(P, FF.principal_upset(P, 3), FF.principal_downset(P, 3), c(1); field=field)
     M3  = IR.pmodule_from_fringe(H3)
 
     # Toy encoding: locate returns the coordinate itself as the poset element.
@@ -164,10 +171,10 @@ end
 @testset "Slice restrictions and 1D barcodes" begin
     P = chain_poset(3)
 
-    H23 = one_by_one_fringe(P, FF.principal_upset(P, 2), FF.principal_downset(P, 3))
+    H23 = one_by_one_fringe(P, FF.principal_upset(P, 2), FF.principal_downset(P, 3); field=field)
     M23 = IR.pmodule_from_fringe(H23)
 
-    H3 = one_by_one_fringe(P, FF.principal_upset(P, 3), FF.principal_downset(P, 3))
+    H3 = one_by_one_fringe(P, FF.principal_upset(P, 3), FF.principal_downset(P, 3); field=field)
     M3 = IR.pmodule_from_fringe(H3)
 
     chain = [1, 2, 3]
@@ -207,10 +214,10 @@ end
     flats = [FZ.IndFlat(I, b; id=:F)]
     injectives = [FZ.IndInj(I, c; id=:E)]
 
-    Phi = spzeros(QQ, 1, 1)
+    Phi = spzeros(K, 1, 1)
     Phi[1, 1] = 1
 
-    FG = FZ.Flange{QQ}(n, flats, injectives, Phi)
+    FG = FZ.Flange{K}(n, flats, injectives, Phi)
 
     enc = PM.EncodingOptions(backend=:zn, max_regions=1000)
     Penc, Henc, pi = PM.encode_from_flange(FG, enc)
@@ -243,7 +250,7 @@ end
     end
 
     P = chain_poset(3)
-    H23 = one_by_one_fringe(P, FF.principal_upset(P, 2), FF.principal_downset(P, 3))
+    H23 = one_by_one_fringe(P, FF.principal_upset(P, 2), FF.principal_downset(P, 3); field=field)
     M23 = IR.pmodule_from_fringe(H23)
 
     pi = ToyPi()
@@ -255,7 +262,7 @@ end
 @testset "Betti/Bass tables from indicator resolutions" begin
     # Use the diamond poset because it supports nontrivial length-2 resolutions.
     P = diamond_poset()
-    S1 = one_by_one_fringe(P, FF.principal_upset(P, 1), FF.principal_downset(P, 1))
+    S1 = one_by_one_fringe(P, FF.principal_upset(P, 1), FF.principal_downset(P, 1); field=field)
     M1 = IR.pmodule_from_fringe(S1)
 
     # Upset indicator resolution
@@ -284,10 +291,10 @@ end
     flats = [FZ.IndFlat(I, b; id=:F)]
     injectives = [FZ.IndInj(I, c; id=:E)]
 
-    Phi = spzeros(QQ, 1, 1)
+    Phi = spzeros(K, 1, 1)
     Phi[1, 1] = 1
 
-    FG = FZ.Flange{QQ}(n, flats, injectives, Phi)
+    FG = FZ.Flange{K}(n, flats, injectives, Phi)
 
     enc = PM.EncodingOptions(backend=:zn, max_regions=1000)
     Penc, _Henc, pi = PM.encode_from_flange(FG, enc)
@@ -342,7 +349,7 @@ end
 
     @testset "Non-chain input rejection" begin
         P = diamond_poset()
-        H = one_by_one_fringe(P, FF.principal_upset(P, 2), FF.principal_downset(P, 2))
+        H = one_by_one_fringe(P, FF.principal_upset(P, 2), FF.principal_downset(P, 2); field=field)
         M = IR.pmodule_from_fringe(H)
 
         # 2 and 3 are incomparable in the diamond poset.
@@ -473,11 +480,11 @@ end
     P = chain_poset(3)
 
     # Module supported on 2 -> 3 (so barcode is (1,3) in the slice values below).
-    H23 = one_by_one_fringe(P, FF.principal_upset(P, 2), FF.principal_downset(P, 3))
+    H23 = one_by_one_fringe(P, FF.principal_upset(P, 2), FF.principal_downset(P, 3); field=field)
     M23 = IR.pmodule_from_fringe(H23)
 
     # Module supported only at 3 (barcode (2,3) in the slice values below).
-    H3 = one_by_one_fringe(P, FF.principal_upset(P, 3), FF.principal_downset(P, 3))
+    H3 = one_by_one_fringe(P, FF.principal_upset(P, 3), FF.principal_downset(P, 3); field=field)
     M3 = IR.pmodule_from_fringe(H3)
 
     # A simple ground-truth barcode and its 1D persistence landscape.
@@ -654,11 +661,11 @@ end
     U2 = FF.principal_upset(P, 3)
     D2 = FF.principal_downset(P, 3)
 
-    Phi = spzeros(QQ, 2, 2)
+    Phi = spzeros(K, 2, 2)
     Phi[1, 1] = 1
     Phi[2, 2] = 1
 
-    Hsum = FF.FringeModule{QQ}(P, [U1, U2], [D1, D2], Phi)
+    Hsum = FF.FringeModule{K}(P, [U1, U2], [D1, D2], Phi)
     Msum = IR.pmodule_from_fringe(Hsum)
 
     slice = (chain=[1, 2, 3], values=[0.0, 1.0, 2.0], weight=1.0)
@@ -679,7 +686,7 @@ end
     @test isapprox(ent_raw, expected; atol=1e-12)
 
     # Also check landscape features shape and a known value for M23.
-    H23 = FF.one_by_one_fringe(P, U1, D1, QQ(1))
+    H23 = FF.one_by_one_fringe(P, U1, D1, c(1); field=field)
     M23 = IR.pmodule_from_fringe(H23)
 
     f_land = PM.slice_features(M23, [slice];
@@ -728,7 +735,7 @@ end
     @test isapprox(k_same, 1.0; atol=1e-12)
 
     # Symmetry and strict inequality for different modules.
-    H3 = FF.one_by_one_fringe(P, U2, D2, QQ(1))
+    H3 = FF.one_by_one_fringe(P, U2, D2, c(1); field=field)
     M3 = IR.pmodule_from_fringe(H3)
     k_diff1 = PM.slice_kernel(M23, M3, [slice]; kind=:bottleneck_gaussian, sigma=1.0)
     k_diff2 = PM.slice_kernel(M3, M23, [slice]; kind=:bottleneck_gaussian, sigma=1.0)
@@ -891,76 +898,79 @@ end
 
     # -------------------------------------------------------------------------
     # 3) Wrapper-level memoization and axes_policy smoke tests (N = 1).
+    #    QQ-only: relies on ZnEncoding defaults.
     # -------------------------------------------------------------------------
-    R = PM.QQ
-    n = 1
-    flats = PM.IndFlat[
-        PM.IndFlat(PM.face(n, []), [0]),
-        PM.IndFlat(PM.face(n, []), [2]),
-    ]
-    injectives = PM.IndInj[
-        PM.IndInj(PM.face(n, []), [1]),
-        PM.IndInj(PM.face(n, []), [3]),
-    ]
-    # Phi must be (#injectives x #flats): rows index injectives, cols index flats.
-    # Here we just take the 2x2 identity (a convenient "direct sum" style choice).
-    Phi = zeros(R, length(injectives), length(flats))
-    Phi[1, 1] = one(R)
-    Phi[2, 2] = one(R)
-    F = PM.Flange{R}(n, flats, injectives, Phi)
+    if field isa CM.QQField
+        R = PM.QQ
+        n = 1
+        flats = PM.IndFlat[
+            PM.IndFlat(PM.face(n, []), [0]),
+            PM.IndFlat(PM.face(n, []), [2]),
+        ]
+        injectives = PM.IndInj[
+            PM.IndInj(PM.face(n, []), [1]),
+            PM.IndInj(PM.face(n, []), [3]),
+        ]
+        # Phi must be (#injectives x #flats): rows index injectives, cols index flats.
+        # Here we just take the 2x2 identity (a convenient "direct sum" style choice).
+        Phi = zeros(R, length(injectives), length(flats))
+        Phi[1, 1] = one(R)
+        Phi[2, 2] = one(R)
+        F = PM.Flange{R}(n, flats, injectives, Phi)
 
-    enc = PM.EncodingOptions(backend=:zn, max_regions=100)
-    (Penc, Henc, pi) = PM.encode_from_flange(F, enc)
-    Menc = IR.pmodule_from_fringe(Henc)
+        enc = PM.EncodingOptions(backend=:zn, max_regions=100)
+        (Penc, Henc, pi) = PM.encode_from_flange(F, enc)
+        Menc = IR.pmodule_from_fringe(Henc)
 
-    axes_user = (collect(-2:6),)
+        axes_user = (collect(-2:6),)
 
-    # Regression test: ZnEncodingMap.coords is axis-wise critical coordinates, so
-    # axes_from_encoding(pi) must return an N-tuple where N == pi.n.
-    enc_axes = PM.axes_from_encoding(pi)
-    @test length(enc_axes) == n
-    @test enc_axes[1] == [-1, 0, 2, 4]
+        # Regression test: ZnEncodingMap.coords is axis-wise critical coordinates, so
+        # axes_from_encoding(pi) must return an N-tuple where N == pi.n.
+        enc_axes = PM.axes_from_encoding(pi)
+        @test length(enc_axes) == n
+        @test enc_axes[1] == [-1, 0, 2, 4]
 
-    cache = PM.Invariants.RankQueryCache(pi)
-    @test typeof(cache).parameters[1] == n
+        cache = PM.Invariants.RankQueryCache(pi)
+        @test typeof(cache).parameters[1] == n
 
-    cache = PM.Invariants.RankQueryCache(pi)
+        cache = PM.Invariants.RankQueryCache(pi)
 
-    sb_enc_1 = PM.rectangle_signed_barcode(Menc, pi;
-        axes=axes_user,
-        axes_policy=:encoding,
-        rq_cache=cache)
+        sb_enc_1 = PM.rectangle_signed_barcode(Menc, pi;
+            axes=axes_user,
+            axes_policy=:encoding,
+            rq_cache=cache)
 
-    sb_enc_2 = PM.rectangle_signed_barcode(Menc, pi;
-        axes=axes_user,
-        axes_policy=:encoding,
-        rq_cache=cache)
+        sb_enc_2 = PM.rectangle_signed_barcode(Menc, pi;
+            axes=axes_user,
+            axes_policy=:encoding,
+            rq_cache=cache)
 
-    # Cache reuse must not change the output.
-    @test sb_enc_1.rects == sb_enc_2.rects
-    @test sb_enc_1.weights == sb_enc_2.weights
-    @test sb_enc_1.axes == sb_enc_2.axes
+        # Cache reuse must not change the output.
+        @test sb_enc_1.rects == sb_enc_2.rects
+        @test sb_enc_1.weights == sb_enc_2.weights
+        @test sb_enc_1.axes == sb_enc_2.axes
 
-    # encoding restriction should keep endpoints and only include encoding-axis points in between.
-    enc_axes = PM.axes_from_encoding(pi)[1]
-    @test first(sb_enc_1.axes[1]) == first(axes_user[1])
-    @test last(sb_enc_1.axes[1]) == last(axes_user[1])
-    @test all(v == first(axes_user[1]) || v == last(axes_user[1]) || (v in enc_axes) for v in sb_enc_1.axes[1])
+        # encoding restriction should keep endpoints and only include encoding-axis points in between.
+        enc_axes = PM.axes_from_encoding(pi)[1]
+        @test first(sb_enc_1.axes[1]) == first(axes_user[1])
+        @test last(sb_enc_1.axes[1]) == last(axes_user[1])
+        @test all(v == first(axes_user[1]) || v == last(axes_user[1]) || (v in enc_axes) for v in sb_enc_1.axes[1])
 
-    # coarsen policy must reduce axis length to max_axis_len.
-    sb_coarse = PM.rectangle_signed_barcode(Menc, pi;
-        axes=axes_user,
-        axes_policy=:coarsen,
-        max_axis_len=4)
-    @test length(sb_coarse.axes[1]) <= 4
+        # coarsen policy must reduce axis length to max_axis_len.
+        sb_coarse = PM.rectangle_signed_barcode(Menc, pi;
+            axes=axes_user,
+            axes_policy=:coarsen,
+            max_axis_len=4)
+        @test length(sb_coarse.axes[1]) <= 4
 
-    # Bulk and local algorithms must agree (modulo ordering and zero pruning).
-    sb_enc_bulk = PM.rectangle_signed_barcode(Menc, pi; axes=axes_user, axes_policy=:encoding,
-                                              rq_cache=cache, method=:bulk)
-    sb_enc_local = PM.rectangle_signed_barcode(Menc, pi; axes=axes_user, axes_policy=:encoding,
-                                               rq_cache=cache, method=:local)
-    @test Dict(zip(sb_enc_bulk.rects, sb_enc_bulk.weights)) ==
-          Dict(zip(sb_enc_local.rects, sb_enc_local.weights))
+        # Bulk and local algorithms must agree (modulo ordering and zero pruning).
+        sb_enc_bulk = PM.rectangle_signed_barcode(Menc, pi; axes=axes_user, axes_policy=:encoding,
+                                                  rq_cache=cache, method=:bulk)
+        sb_enc_local = PM.rectangle_signed_barcode(Menc, pi; axes=axes_user, axes_policy=:encoding,
+                                                   rq_cache=cache, method=:local)
+        @test Dict(zip(sb_enc_bulk.rects, sb_enc_bulk.weights)) ==
+              Dict(zip(sb_enc_local.rects, sb_enc_local.weights))
+    end
 
 end
 
@@ -1006,11 +1016,11 @@ end
     # -------------------------
     # PLPolyhedra: defaults from pi.witnesses
     # -------------------------
-    if PLP.HAVE_POLY
+    if PLP.HAVE_POLY && (field isa CM.QQField)
         # Unit box [0,2]^2 (as an upset/downset pair) so encoding produces a nontrivial pi.
         Upl = [PLP.PLUpset(PLP.PolyUnion(2, [PLP.make_hpoly([-1.0 0.0; 0.0 -1.0], [0.0, 0.0])]))]
         Downl = [PLP.PLDownset(PLP.PolyUnion(2, [PLP.make_hpoly([1.0 0.0; 0.0 1.0], [2.0, 2.0])]))]
-        Phi = reshape(QQ[1], 1, 1)
+        Phi = reshape(K[1], 1, 1)
         Fpl = PLP.PLFringe(Upl, Downl, Phi)
 
         enc_pl = PM.EncodingOptions(backend=:pl)
@@ -1041,7 +1051,7 @@ end
     @test Inv.sliced_bottleneck_distance(M, M, pi, opts) == 0.0
     @test Inv.matching_wasserstein_distance_approx(M, M, pi, opts) == 0.0
 
-    if PLP.HAVE_POLY
+    if PLP.HAVE_POLY && (field isa CM.QQField)
         @test Inv.matching_distance_approx(M2, M2, pi2, opts2) == 0.0
         @test Inv.sliced_wasserstein_distance(M2, M2, pi2, opts2) == 0.0
 
@@ -1088,8 +1098,8 @@ end
         opts_exact = PM.InvariantOptions(box=box)
 
         P = chain_poset(3)
-        M23 = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, 2), FF.principal_downset(P, 3)))
-        M3  = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, 3), FF.principal_downset(P, 3)))
+        M23 = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, 2), FF.principal_downset(P, 3); field=field))
+        M3  = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, 3), FF.principal_downset(P, 3); field=field))
 
         # Slice-chain exactness sanity check at one noncritical line:
         # dir = (1,1) normalized L1 -> (0.5,0.5).
@@ -1114,34 +1124,36 @@ end
 
         # Toy polyhedral encoding: same three vertical stripes, expressed as HPolys.
         # This exercises the polyhedral exact slice extraction path.
-        function hpoly_box(xlo, xhi, ylo, yhi)
-            A = Matrix{PM.QQ}(undef, 4, 2)
-            b = Vector{PM.QQ}(undef, 4)
-            # x >= xlo  <=>  -x <= -xlo
-            A[1,1] = -1; A[1,2] =  0; b[1] = -PM.QQ(xlo)
-            # x <= xhi
-            A[2,1] =  1; A[2,2] =  0; b[2] =  PM.QQ(xhi)
-            # y >= ylo  <=>  -y <= -ylo
-            A[3,1] =  0; A[3,2] = -1; b[3] = -PM.QQ(ylo)
-            # y <= yhi
-            A[4,1] =  0; A[4,2] =  1; b[4] =  PM.QQ(yhi)
-    # Canonical HPoly constructor: always pass strictness data explicitly.
-    strict_mask = falses(size(A, 1))
-    return PM.PLPolyhedra.HPoly(2, A, b, nothing, strict_mask, PM.PLPolyhedra.STRICT_EPS_QQ)
+        if field isa CM.QQField
+            function hpoly_box(xlo, xhi, ylo, yhi)
+                A = Matrix{PM.QQ}(undef, 4, 2)
+                b = Vector{PM.QQ}(undef, 4)
+                # x >= xlo  <=>  -x <= -xlo
+                A[1,1] = -1; A[1,2] =  0; b[1] = -PM.c(xlo)
+                # x <= xhi
+                A[2,1] =  1; A[2,2] =  0; b[2] =  PM.c(xhi)
+                # y >= ylo  <=>  -y <= -ylo
+                A[3,1] =  0; A[3,2] = -1; b[3] = -PM.c(ylo)
+                # y <= yhi
+                A[4,1] =  0; A[4,2] =  1; b[4] =  PM.c(yhi)
+                # Canonical HPoly constructor: always pass strictness data explicitly.
+                strict_mask = falses(size(A, 1))
+                return PM.PLPolyhedra.HPoly(2, A, b, nothing, strict_mask, PM.PLPolyhedra.STRICT_EPS_QQ)
+            end
+
+            hp1 = hpoly_box(0.0, 1.0, 0.0, 3.0)
+            hp2 = hpoly_box(1.0, 2.0, 0.0, 3.0)
+            hp3 = hpoly_box(2.0, 3.0, 0.0, 3.0)
+
+            sigy = [BitVector([false]), BitVector([false]), BitVector([false])]
+            sigz = [BitVector([false]), BitVector([false]), BitVector([false])]
+            witnesses = [[0.5, 1.5], [1.5, 1.5], [2.5, 1.5]]
+
+            pi_poly = PM.PLPolyhedra.PLEncodingMap(2, sigy, sigz, [hp1, hp2, hp3], witnesses)
+
+            d_poly = PM.matching_distance_exact_2d(M23, M3, pi_poly, opts_exact; weight=:lesnick_l1, normalize_dirs=:L1)
+            @test isapprox(d_poly, 1.0; atol=1e-10)
         end
-
-        hp1 = hpoly_box(0.0, 1.0, 0.0, 3.0)
-        hp2 = hpoly_box(1.0, 2.0, 0.0, 3.0)
-        hp3 = hpoly_box(2.0, 3.0, 0.0, 3.0)
-
-        sigy = [BitVector([false]), BitVector([false]), BitVector([false])]
-        sigz = [BitVector([false]), BitVector([false]), BitVector([false])]
-        witnesses = [[0.5, 1.5], [1.5, 1.5], [2.5, 1.5]]
-
-        pi_poly = PM.PLPolyhedra.PLEncodingMap(2, sigy, sigz, [hp1, hp2, hp3], witnesses)
-
-        d_poly = PM.matching_distance_exact_2d(M23, M3, pi_poly, opts_exact; weight=:lesnick_l1, normalize_dirs=:L1)
-        @test isapprox(d_poly, 1.0; atol=1e-10)
 
         # Shared cache for downstream tests.
         cache_full = Inv.fibered_barcode_cache_2d(M23, pi, opts_exact;
@@ -1238,6 +1250,27 @@ end
                 @test d_thread == d_serial
             end
 
+            if Threads.nthreads() > 1
+                # Threading parity: precompute paths
+                arr_s = Inv.fibered_arrangement_2d(pi, opts_exact;
+                                                   normalize_dirs=:L1,
+                                                   precompute=:cells,
+                                                   threads=false)
+                arr_t = Inv.fibered_arrangement_2d(pi, opts_exact;
+                                                   normalize_dirs=:L1,
+                                                   precompute=:cells,
+                                                   threads=true)
+
+                cache_s = Inv.fibered_barcode_cache_2d(M23, arr_s; precompute=:full, threads=false)
+                cache_t = Inv.fibered_barcode_cache_2d(M23, arr_t; precompute=:full, threads=true)
+
+                st_s = Inv.fibered_barcode_cache_stats(cache_s)
+                st_t = Inv.fibered_barcode_cache_stats(cache_t)
+                @test st_s.total_cells == st_t.total_cells
+                @test st_s.n_cells_computed == st_t.n_cells_computed
+                @test st_s.n_index_barcodes_computed == st_t.n_index_barcodes_computed
+            end
+
             # Arrangement-exact sliced kernel: compare to the slice-list backend.
             fam2 = PM.matching_distance_exact_slices_2d(pi, opts_exact; normalize_dirs=:L1)
             slices2 = fam2.slices
@@ -1293,7 +1326,7 @@ end
 
     P, H, pi = PLB.encode_fringe_boxes(Ups, Downs)
     M = IR.pmodule_from_fringe(H)
-    Z = PM.zero_pmodule(M.Q, QQ)
+    Z = PM.zero_pmodule(M.Q; field=field)
     opts_lp = PM.InvariantOptions()
 
     # Deterministic directions/offsets so the test is stable.
@@ -1465,7 +1498,7 @@ _is_ascii(s::AbstractString) = all(c -> Int(c) <= 0x7f, s)
         # 1D example: one upset x >= 0 and one downset x <= 2.
         Ups = [PLB.BoxUpset([0.0])]
         Downs = [PLB.BoxDownset([2.0])]
-        Phi = reshape(QQ[1], 1, 1)
+        Phi = reshape(K[1], 1, 1)
 
         P, H, pi = PLB.encode_fringe_boxes(Ups, Downs, Phi)
 
@@ -1497,7 +1530,7 @@ using Test
     # thresholds at 0 and 2 produce 3 regions with reps near -1, 1, 3.
     Ups = [PLB.BoxUpset([0.0])]
     Downs = [PLB.BoxDownset([2.0])]
-    Phi = reshape(QQ[1], 1, 1)
+    Phi = reshape(K[1], 1, 1)
     P, Hhat, pi = PLB.encode_fringe_boxes(Ups, Downs, Phi)
 
     box = ([-1.0], [3.0])
@@ -1647,8 +1680,8 @@ end
 
     # Simple chain module tests
     P = chain_poset(3)
-    M23 = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, 2), FF.principal_downset(P, 3)))
-    M3  = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, 3), FF.principal_downset(P, 3)))
+    M23 = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, 2), FF.principal_downset(P, 3); field=field))
+    M3  = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, 3), FF.principal_downset(P, 3); field=field))
 
     arr = Inv.projected_arrangement(P, [0.0, 1.0, 2.0])
     c23 = Inv.projected_barcode_cache(M23, arr)
@@ -1665,6 +1698,26 @@ end
 
     ksame = Inv.projected_kernel(c23, c23; kind=:wasserstein_gaussian, sigma=1.0, agg=:mean)
     @test isapprox(ksame, 1.0; atol=1e-12)
+
+    if Threads.nthreads() > 1
+        # Threading parity: projected_* family
+        c23_s = Inv.projected_barcode_cache(M23, arr)
+        c3_s = Inv.projected_barcode_cache(M3, arr)
+        c23_t = Inv.projected_barcode_cache(M23, arr)
+        c3_t = Inv.projected_barcode_cache(M3, arr)
+
+        b23_s = Inv.projected_barcodes(c23_s; threads=false)[1]
+        b23_t = Inv.projected_barcodes(c23_t; threads=true)[1]
+        @test b23_s == b23_t
+
+        d_s = Inv.projected_distance(c23_s, c3_s; dist=:bottleneck, agg=:mean, threads=false)
+        d_t = Inv.projected_distance(c23_t, c3_t; dist=:bottleneck, agg=:mean, threads=true)
+        @test isapprox(d_s, d_t; atol=1e-12, rtol=0.0)
+
+        k_s = Inv.projected_kernel(c23_s, c23_s; kind=:wasserstein_gaussian, sigma=1.0, agg=:mean, threads=false)
+        k_t = Inv.projected_kernel(c23_t, c23_t; kind=:wasserstein_gaussian, sigma=1.0, agg=:mean, threads=true)
+        @test isapprox(k_s, k_t; atol=1e-12, rtol=0.0)
+    end
 
     # Differentiable persistence image agrees with fast version
     bar = Dict((0.0,1.0)=>1, (0.5,1.5)=>1)
@@ -1686,6 +1739,47 @@ end
 
     @test length(fv) == length(xg)*length(yg)
     @test isapprox(reshape(fv, length(yg), length(xg)), pi_diff.values)
+
+    if Threads.nthreads() > 1
+        # Threading parity: persistence image
+        pi_serial = Inv.persistence_image(bar; xgrid=xg, ygrid=yg, sigma=0.3,
+                                          coords=:birth_death, weighting=:none, normalize=:none,
+                                          threads=false)
+        pi_thread = Inv.persistence_image(bar; xgrid=xg, ygrid=yg, sigma=0.3,
+                                          coords=:birth_death, weighting=:none, normalize=:none,
+                                          threads=true)
+        @test isapprox(pi_thread.values, pi_serial.values; atol=1e-12, rtol=0.0)
+    end
+end
+
+@testset "PD distance backends" begin
+    Inv = PM.Invariants
+    Random.seed!(1234)
+
+    function rand_barcode(n::Int)
+        pts = Dict{Tuple{Float64,Float64},Int}()
+        for _ in 1:n
+            b = rand()
+            d = b + rand()
+            key = (b, d)
+            pts[key] = get(pts, key, 0) + 1
+        end
+        return pts
+    end
+
+    for n1 in 0:5, n2 in 0:5
+        b1 = rand_barcode(n1)
+        b2 = rand_barcode(n2)
+        d_h = Inv.wasserstein_distance(b1, b2; p=2, q=2, backend=:hungarian)
+        d_a = Inv.wasserstein_distance(b1, b2; p=2, q=2, backend=:auction)
+        @test isapprox(d_h, d_a; atol=1e-6, rtol=1e-6)
+    end
+
+    b1 = rand_barcode(5)
+    b2 = rand_barcode(4)
+    d_hk = Inv.bottleneck_distance(b1, b2; backend=:hk)
+    d_auto = Inv.bottleneck_distance(b1, b2; backend=:auto)
+    @test d_hk == d_auto
 end
 
 @testset "fibered slice family + typed caches" begin
@@ -1693,14 +1787,14 @@ end
     # Build a simple 2D PLBackend encoding with three vertical stripes (chain of length 3).
     Ups = [PLB.BoxUpset([0.0, -10.0]), PLB.BoxUpset([1.0, -10.0])]
     Downs = PLB.BoxDownset[]
-    Phi = zeros(QQ, 0, length(Ups))
+    Phi = zeros(K, 0, length(Ups))
     P, H, pi = PLB.encode_fringe_boxes(Ups, Downs, Phi)
 
     r2 = PM.locate(pi, [0.5, 0.0])
     r3 = PM.locate(pi, [2.0, 0.0])
 
-    M23 = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, r2), FF.principal_downset(P, r3)))
-    M3  = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, r3), FF.principal_downset(P, r3)))
+    M23 = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, r2), FF.principal_downset(P, r3); field=field))
+    M3  = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, r3), FF.principal_downset(P, r3); field=field))
 
     box = ([-1.0, -1.0], [2.0, 1.0])
     opts = PM.InvariantOptions(box=box)
@@ -1733,4 +1827,30 @@ end
                                direction_weight=:lesnick_l1, cell_weight=:uniform,
                                family=fam, normalize_weights=true, threads=false)
     @test isapprox(k_cache, k_slices; atol=1e-12)
+
+    if Threads.nthreads() > 1
+        # Threading parity: rectangle signed barcode (bulk path)
+        axes = ([1, 2, 3], [1, 2, 3])
+        opts_bulk = PM.InvariantOptions(axes=axes, axes_policy=:as_given)
+        sb_serial = PM.rectangle_signed_barcode(M23, pi, opts_bulk; method=:bulk, threads=false)
+        sb_thread = PM.rectangle_signed_barcode(M23, pi, opts_bulk; method=:bulk, threads=true)
+        @test sb_thread.rects == sb_serial.rects
+        @test sb_thread.weights == sb_serial.weights
+
+        # Threading parity: rectangle signed barcode rank reconstruction
+        rk_serial = PM.rectangle_signed_barcode_rank(sb_serial; threads=false)
+        rk_thread = PM.rectangle_signed_barcode_rank(sb_serial; threads=true)
+        @test rk_thread == rk_serial
+
+        # Threading parity: rectangle signed barcode image
+        img_serial = PM.rectangle_signed_barcode_image(sb_serial; threads=false)
+        img_thread = PM.rectangle_signed_barcode_image(sb_serial; threads=true)
+        @test isapprox(img_thread, img_serial; atol=1e-12, rtol=0.0)
+
+        # Threading parity: MPPI image (same cache, same grids)
+        img_serial2 = Inv.mpp_image(cache23; resolution=6, N=3, sigma=0.25, threads=false)
+        img_thread2 = Inv.mpp_image(cache23; resolution=6, N=3, sigma=0.25, threads=true)
+        @test isapprox(img_thread2.img, img_serial2.img; atol=1e-12, rtol=0.0)
+    end
 end
+end # with_fields

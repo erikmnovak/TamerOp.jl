@@ -5,6 +5,10 @@ using LinearAlgebra
 
 const DO_LONG = lowercase(get(ENV, "POSETMODULES_LONG_TESTS", "true")) in ("1", "true", "yes")
 
+with_fields(FIELDS_FULL) do field
+K = CM.coeff_type(field)
+@inline c(x) = CM.coerce(field, x)
+
 # Helper utilities shared across random stress testsets.
 function random_chain_subposet(n::Int; p::Float64=0.35)
     leq = falses(n, n)
@@ -39,13 +43,13 @@ function random_fringe_module(P::FF.FinitePoset; mbound::Int=3, rbound::Int=3, d
     U = [random_upset(P) for _ in 1:m]
     D = [random_downset(P) for _ in 1:r]
 
-    Phi = spzeros(QQ, r, m)
+    Phi = spzeros(K, r, m)
     for j in 1:r, i in 1:m
         if FF.intersects(U[i], D[j]) && rand() < density
-            Phi[j, i] = QQ(rand(-2:2))
+            Phi[j, i] = c(rand(-2:2))
         end
     end
-    return FF.FringeModule{QQ}(P, U, D, Phi)
+    return FF.FringeModule{K}(P, U, D, Phi; field=field)
 end
 
 @testset "Random stress" begin
@@ -72,7 +76,7 @@ end
                 @test FF.fiber_dimension(M, q) == 0
             else
                 Aq = Matrix(M.phi[rows, cols])
-                @test FF.fiber_dimension(M, q) == EX.rankQQ(Aq)
+            @test FF.fiber_dimension(M, q) == PosetModules.FieldLinAlg.rank(field, Aq)
             end
         end
 
@@ -157,8 +161,8 @@ end
             d = PM.dim(E,t)
             A = PM.ext_map_first(E, E, idM; t=t)
             B = PM.ext_map_second(E, E, idN; t=t)
-            @test Matrix(A) == Matrix{QQ}(I,d,d)
-            @test Matrix(B) == Matrix{QQ}(I,d,d)
+            @test Matrix(A) == Matrix{K}(I,d,d)
+            @test Matrix(B) == Matrix{K}(I,d,d)
         end
 
         # Tor sanity: boundary squares to zero, and identity naturality
@@ -179,8 +183,10 @@ end
             d = PM.dim(T,s)
             A = PM.tor_map_first(T, T, idR; s=s)
             B = PM.tor_map_second(T, T, idL; s=s)
-            @test Matrix(A) == Matrix{QQ}(I,d,d)
-            @test Matrix(B) == Matrix{QQ}(I,d,d)
+            @test Matrix(A) == Matrix{K}(I,d,d)
+            @test Matrix(B) == Matrix{K}(I,d,d)
         end
     end
 end
+
+end # with_fields

@@ -1,8 +1,10 @@
 module FiniteFringe
 
 using SparseArrays, LinearAlgebra
-using ..CoreModules: QQ, FiniteFringeOptions
-import ..ExactQQ: rankQQ
+using ..CoreModules: QQ, QQField, FiniteFringeOptions, AbstractCoeffField, coeff_type, field_from_eltype, coerce
+import ..CoreModules: change_field
+import ..FieldLinAlg
+
 
 @inline _resolve_ff_opts(opts::Union{FiniteFringeOptions,Nothing}) =
     opts === nothing ? FiniteFringeOptions() : opts
@@ -12,6 +14,66 @@ import ..ExactQQ: rankQQ
 # =========================================
 
 abstract type AbstractPoset end
+
+const UPDOWN_CACHE_THRESHOLD = Ref(200_000)
+
+function _ensure_updown_cache!(P::AbstractPoset)
+    hasproperty(P, :cache) || return nothing
+    pc = getproperty(P, :cache)
+    hasproperty(pc, :upsets) || return nothing
+    hasproperty(pc, :downsets) || return nothing
+    upsets = getproperty(pc, :upsets)
+    downsets = getproperty(pc, :downsets)
+    if upsets !== nothing && downsets !== nothing
+        return (upsets, downsets)
+    end
+    n = nvertices(P)
+    n * n > UPDOWN_CACHE_THRESHOLD[] && return nothing
+    lock = hasproperty(pc, :lock) ? getproperty(pc, :lock) : nothing
+    if lock !== nothing
+        Base.lock(lock)
+    end
+    upsets = getproperty(pc, :upsets)
+    downsets = getproperty(pc, :downsets)
+    if upsets === nothing || downsets === nothing
+        up = Vector{Vector{Int}}(undef, n)
+        down = Vector{Vector{Int}}(undef, n)
+        @inbounds for i in 1:n
+            up[i] = Int[]
+            down[i] = Int[]
+        end
+        @inbounds for i in 1:n
+            for j in 1:n
+                if leq(P, i, j)
+                    push!(up[i], j)
+                end
+                if leq(P, j, i)
+                    push!(down[i], j)
+                end
+            end
+        end
+        setproperty!(pc, :upsets, up)
+        setproperty!(pc, :downsets, down)
+        upsets = up
+        downsets = down
+    end
+    if lock !== nothing
+        Base.unlock(lock)
+    end
+    return (upsets, downsets)
+end
+
+function cached_upset_indices(P::AbstractPoset, i::Int)
+    cache = _ensure_updown_cache!(P)
+    cache === nothing && return nothing
+    return cache[1][i]
+end
+
+function cached_downset_indices(P::AbstractPoset, i::Int)
+    cache = _ensure_updown_cache!(P)
+    cache === nothing && return nothing
+    return cache[2][i]
+end
 
 """
     nvertices(P) -> Int
@@ -46,11 +108,15 @@ end
 """
     upset_indices(P, i) -> Vector{Int}
     downset_indices(P, i) -> Vector{Int}
+    upset_iter(P, i)
+    downset_iter(P, i)
 
 Return the indices in the principal upset/downset of `i`.
 Fallback implementations scan the whole poset.
 """
 function upset_indices(P::AbstractPoset, i::Int)
+    cached = cached_upset_indices(P, i)
+    cached === nothing || return cached
     n = nvertices(P)
     out = Int[]
     @inbounds for j in 1:n
@@ -62,6 +128,8 @@ function upset_indices(P::AbstractPoset, i::Int)
 end
 
 function downset_indices(P::AbstractPoset, i::Int)
+    cached = cached_downset_indices(P, i)
+    cached === nothing || return cached
     n = nvertices(P)
     out = Int[]
     @inbounds for j in 1:n
@@ -70,6 +138,28 @@ function downset_indices(P::AbstractPoset, i::Int)
         end
     end
     return out
+end
+
+"""
+    upset_iter(P, i)
+    downset_iter(P, i)
+
+Iterate over indices in the principal upset/downset of `i`.
+This avoids allocating a fresh vector on each call; when cached vectors exist,
+those are returned directly (as iterables).
+"""
+function upset_iter(P::AbstractPoset, i::Int)
+    cached = cached_upset_indices(P, i)
+    cached === nothing || return cached
+    n = nvertices(P)
+    return (j for j in 1:n if leq(P, i, j))
+end
+
+function downset_iter(P::AbstractPoset, i::Int)
+    cached = cached_downset_indices(P, i)
+    cached === nothing || return cached
+    n = nvertices(P)
+    return (j for j in 1:n if leq(P, j, i))
 end
 
 """
@@ -127,6 +217,7 @@ partial order, downstream computations may give nonsense.
 struct FinitePoset <: AbstractPoset
     n::Int
     _leq::BitMatrix           # _leq[i,j] = true  iff i <= j
+    cache::PosetCache
     function FinitePoset(leq::AbstractMatrix{Bool};
                          check::Bool=true,
                          opts::Union{FiniteFringeOptions,Nothing}=nothing)
@@ -144,7 +235,7 @@ struct FinitePoset <: AbstractPoset
             _validate_partial_order_matrix!(L)
         end
 
-        new(n1, L)
+        new(n1, L, PosetCache())
     end
 end
 
@@ -195,6 +286,7 @@ Vertex indices use mixed radix ordering with the first axis varying fastest.
 struct ProductOfChainsPoset{N} <: AbstractPoset
     sizes::NTuple{N,Int}
     strides::NTuple{N,Int}
+    cache::PosetCache
 end
 
 function _poset_strides(sizes::NTuple{N,Int}) where {N}
@@ -207,7 +299,7 @@ function _poset_strides(sizes::NTuple{N,Int}) where {N}
 end
 
 ProductOfChainsPoset(sizes::NTuple{N,Int}) where {N} =
-    ProductOfChainsPoset{N}(sizes, _poset_strides(sizes))
+    ProductOfChainsPoset{N}(sizes, _poset_strides(sizes), PosetCache())
 
 ProductOfChainsPoset(sizes::AbstractVector{<:Integer}) =
     ProductOfChainsPoset(ntuple(i -> Int(sizes[i]), length(sizes)))
@@ -220,8 +312,11 @@ function nvertices(P::ProductOfChainsPoset)
     return n
 end
 
-@inline function _index_to_coords(idx::Int, sizes::NTuple{N,Int}, strides::NTuple{N,Int}) where {N}
-    coords = Vector{Int}(undef, N)
+@inline _coord_at(idx::Int, size::Int, stride::Int) =
+    (div(idx - 1, stride) % size) + 1
+
+@inline function _index_to_coords!(coords::Vector{Int}, idx::Int,
+                                  sizes::NTuple{N,Int}, strides::NTuple{N,Int}) where {N}
     x = idx - 1
     @inbounds for i in 1:N
         coords[i] = div(x, strides[i]) % sizes[i] + 1
@@ -230,10 +325,10 @@ end
 end
 
 @inline function leq(P::ProductOfChainsPoset{N}, i::Int, j::Int) where {N}
-    ci = _index_to_coords(i, P.sizes, P.strides)
-    cj = _index_to_coords(j, P.sizes, P.strides)
     @inbounds for k in 1:N
-        if ci[k] > cj[k]
+        ci = _coord_at(i, P.sizes[k], P.strides[k])
+        cj = _coord_at(j, P.sizes[k], P.strides[k])
+        if ci > cj
             return false
         end
     end
@@ -241,9 +336,8 @@ end
 end
 
 function upset_indices(P::ProductOfChainsPoset{N}, i::Int) where {N}
-    ci = _index_to_coords(i, P.sizes, P.strides)
     out = Int[]
-    ranges = NTuple{N,UnitRange{Int}}(ntuple(k -> ci[k]:P.sizes[k], N))
+    ranges = NTuple{N,UnitRange{Int}}(ntuple(k -> _coord_at(i, P.sizes[k], P.strides[k]):P.sizes[k], N))
     idxs = Vector{Int}(undef, N)
     function rec(dim::Int)
         if dim > N
@@ -264,9 +358,8 @@ function upset_indices(P::ProductOfChainsPoset{N}, i::Int) where {N}
 end
 
 function downset_indices(P::ProductOfChainsPoset{N}, i::Int) where {N}
-    ci = _index_to_coords(i, P.sizes, P.strides)
     out = Int[]
-    ranges = NTuple{N,UnitRange{Int}}(ntuple(k -> 1:ci[k], N))
+    ranges = NTuple{N,UnitRange{Int}}(ntuple(k -> 1:_coord_at(i, P.sizes[k], P.strides[k]), N))
     idxs = Vector{Int}(undef, N)
     function rec(dim::Int)
         if dim > N
@@ -296,6 +389,7 @@ struct GridPoset{N,T} <: AbstractPoset
     coords::NTuple{N,Vector{T}}
     sizes::NTuple{N,Int}
     strides::NTuple{N,Int}
+    cache::PosetCache
 end
 
 function GridPoset(coords::NTuple{N,Vector{T}}) where {N,T}
@@ -308,19 +402,27 @@ function GridPoset(coords::NTuple{N,Vector{T}}) where {N,T}
         end
     end
     sizes = ntuple(i -> length(coords[i]), N)
-    return GridPoset{N,T}(coords, sizes, _poset_strides(sizes))
+    return GridPoset{N,T}(coords, sizes, _poset_strides(sizes), PosetCache())
 end
 
 GridPoset(coords::AbstractVector{<:AbstractVector}) = GridPoset(ntuple(i -> Vector(coords[i]), length(coords)))
 
 nvertices(P::GridPoset) = nvertices(ProductOfChainsPoset(P.sizes))
-leq(P::GridPoset{N}, i::Int, j::Int) where {N} =
-    leq(ProductOfChainsPoset(P.sizes, P.strides), i, j)
+@inline function leq(P::GridPoset{N}, i::Int, j::Int) where {N}
+    @inbounds for k in 1:N
+        ci = _coord_at(i, P.sizes[k], P.strides[k])
+        cj = _coord_at(j, P.sizes[k], P.strides[k])
+        if ci > cj
+            return false
+        end
+    end
+    return true
+end
 
 upset_indices(P::GridPoset{N}, i::Int) where {N} =
-    upset_indices(ProductOfChainsPoset(P.sizes, P.strides), i)
+    upset_indices(ProductOfChainsPoset(P.sizes, P.strides, P.cache), i)
 downset_indices(P::GridPoset{N}, i::Int) where {N} =
-    downset_indices(ProductOfChainsPoset(P.sizes, P.strides), i)
+    downset_indices(ProductOfChainsPoset(P.sizes, P.strides, P.cache), i)
 
 """
     ProductPoset(P1, P2)
@@ -330,9 +432,11 @@ Product of two finite posets with the first factor varying fastest.
 struct ProductPoset{P1<:AbstractPoset,P2<:AbstractPoset} <: AbstractPoset
     P1::P1
     P2::P2
+    cache::PosetCache
 end
 
-ProductPoset(P1::AbstractPoset, P2::AbstractPoset) = ProductPoset{typeof(P1),typeof(P2)}(P1, P2)
+ProductPoset(P1::AbstractPoset, P2::AbstractPoset) =
+    ProductPoset{typeof(P1),typeof(P2)}(P1, P2, PosetCache())
 
 nvertices(P::ProductPoset) = nvertices(P.P1) * nvertices(P.P2)
 
@@ -359,10 +463,11 @@ struct RegionsPoset{P<:AbstractPoset} <: AbstractPoset
     Q::P
     regions::Vector{Vector{Int}}
     n::Int
+    cache::PosetCache
 end
 
 function RegionsPoset(Q::AbstractPoset, regions::Vector{Vector{Int}})
-    return RegionsPoset{typeof(Q)}(Q, regions, length(regions))
+    return RegionsPoset{typeof(Q)}(Q, regions, length(regions), PosetCache())
 end
 
 nvertices(P::RegionsPoset) = P.n
@@ -689,7 +794,7 @@ function cover_edges(P::ProductOfChainsPoset{N};
     edges = Tuple{Int,Int}[]
     coords = Vector{Int}(undef, N)
     @inbounds for idx in 1:n
-        coords .= _index_to_coords(idx, P.sizes, P.strides)
+        _index_to_coords!(coords, idx, P.sizes, P.strides)
         for k in 1:N
             if coords[k] < P.sizes[k]
                 coords[k] += 1
@@ -948,30 +1053,70 @@ hash(D::Downset, h::UInt) = hash(D.P, hash(D.mask, h))
 # Fringe presentations (Defs. 3.16 - 3.17)
 # =========================================
 
-struct FringeModule{K, MAT<:AbstractMatrix{K}}
+struct FringeModule{K, F<:AbstractCoeffField, MAT<:AbstractMatrix{K}}
+    field::F
     P::AbstractPoset
     U::Vector{Upset}                  # birth upsets (columns)
     D::Vector{Downset}                # death downsets (rows)
     phi::MAT                          # size |D| x |U|
 
-    function FringeModule{K,MAT}(P::AbstractPoset,
-                                 U::Vector{Upset},
-                                 D::Vector{Downset},
-                                 phi::MAT) where {K, MAT<:AbstractMatrix{K}}
+    function FringeModule{K,F,MAT}(field::F,
+                                   P::AbstractPoset,
+                                   U::Vector{Upset},
+                                   D::Vector{Downset},
+                                   phi::MAT) where {K, F<:AbstractCoeffField, MAT<:AbstractMatrix{K}}
         @assert size(phi,1) == length(D) && size(phi,2) == length(U)
+        coeff_type(field) == K || error("FringeModule: coeff_type(field) != K")
 
-        M = new{K,MAT}(P, U, D, phi)
+        M = new{K,F,MAT}(field, P, U, D, phi)
         _check_monomial_condition(M)
         return M
     end
+end
+
+# ----------------------------
+# Field coercion helpers
+# ----------------------------
+
+function _coerce_matrix(field::AbstractCoeffField, A::AbstractMatrix{K}) where {K}
+    K2 = coeff_type(field)
+    if A isa SparseMatrixCSC{K,Int}
+        S = spzeros(K2, size(A, 1), size(A, 2))
+        @inbounds for j in 1:size(A, 2)
+            for idx in A.colptr[j]:(A.colptr[j + 1] - 1)
+                i = A.rowval[idx]
+                S[i, j] = coerce(field, A.nzval[idx])
+            end
+        end
+        return S
+    end
+
+    M = Matrix{K2}(undef, size(A, 1), size(A, 2))
+    @inbounds for j in 1:size(A, 2), i in 1:size(A, 1)
+        M[i, j] = coerce(field, A[i, j])
+    end
+    return M
+end
+
+"""
+    change_field(H, field)
+
+Return a FringeModule obtained by coercing `phi` into `field`.
+"""
+function change_field(H::FringeModule{K}, field::AbstractCoeffField) where {K}
+    K2 = coeff_type(field)
+    Phi = _coerce_matrix(field, H.phi)
+    return FringeModule{K2, typeof(field), typeof(Phi)}(field, H.P, H.U, H.D, Phi)
 end
 
 # Allow calls like FringeModule{K}(P, U, D, phi) by inferring MAT from phi.
 function FringeModule{K}(P::AbstractPoset,
                          U::Vector{Upset},
                          D::Vector{Downset},
-                         phi::AbstractMatrix{K}) where {K}
-    return FringeModule{K, typeof(phi)}(P, U, D, phi)
+                         phi::AbstractMatrix{K};
+                         field::AbstractCoeffField=field_from_eltype(K)) where {K}
+    F = typeof(field)
+    return FringeModule{K, F, typeof(phi)}(field, P, U, D, phi)
 end
 
 # Convenience constructor (default dense; set store_sparse=true to store CSC).
@@ -980,13 +1125,15 @@ function FringeModule(P::AbstractPoset,
                       D::Vector{Downset},
                       phi::AbstractMatrix{K};
                       store_sparse::Bool=false,
-                      opts::Union{FiniteFringeOptions,Nothing}=nothing) where {K}
+                      opts::Union{FiniteFringeOptions,Nothing}=nothing,
+                      field::AbstractCoeffField=field_from_eltype(K)) where {K}
     if opts !== nothing
         store_sparse == false || error("FringeModule: pass either store_sparse or opts, not both.")
         store_sparse = opts.store_sparse
     end
     phimat = store_sparse ? SparseArrays.sparse(phi) : Matrix{K}(phi)
-    return FringeModule{K, typeof(phimat)}(P, U, D, phimat)
+    F = typeof(field)
+    return FringeModule{K, F, typeof(phimat)}(field, P, U, D, phimat)
 end
 
 """
@@ -1002,9 +1149,9 @@ This is handy for tests, examples, and quickly building interval-like modules
 on a finite poset without writing out the matrix by hand.
 
 Notes:
-- The 3-argument form defaults to `scalar = QQ(1)`.
+- The 3-argument form defaults to `scalar = one(coeff_type(field))` with `field = QQField()`.
 - The 4-argument form is fully generic in the scalar type `K`.
-- A keyword form `; scalar=...` is also provided for ergonomics.
+- A keyword form `; scalar=..., field=...` is also provided for ergonomics.
 - In addition to `U::Upset` / `D::Downset`, you may also pass membership masks
   `U_mask::AbstractVector{Bool}` and `D_mask::AbstractVector{Bool}`.
 """
@@ -1014,17 +1161,21 @@ function one_by_one_fringe(P::AbstractPoset, U::Upset, D::Downset, scalar::K) wh
     return FringeModule{K}(P, [U], [D], phi)
 end
 
-# Default scalar (the project's base field QQ).
+# Default scalar (by field).
 one_by_one_fringe(P::AbstractPoset, U::Upset, D::Downset) =
-    one_by_one_fringe(P, U, D, QQ(1))
+    one_by_one_fringe(P, U, D; field=QQField())
 
 # Keyword-friendly wrapper.
 one_by_one_fringe(P::AbstractPoset, U::Upset, D::Downset;
-                  scalar=QQ(1),
-                  opts::Union{FiniteFringeOptions,Nothing}=nothing) =
-    opts === nothing ? one_by_one_fringe(P, U, D, scalar) : begin
-        scalar == QQ(1) || error("one_by_one_fringe: pass either scalar or opts, not both.")
-        one_by_one_fringe(P, U, D, opts.scalar)
+                  scalar=nothing,
+                  opts::Union{FiniteFringeOptions,Nothing}=nothing,
+                  field::AbstractCoeffField=QQField()) =
+    opts === nothing ? begin
+        scalar === nothing && (scalar = one(coeff_type(field)))
+        one_by_one_fringe(P, U, D, coerce(field, scalar))
+    end : begin
+        scalar === nothing || error("one_by_one_fringe: pass either scalar or opts, not both.")
+        one_by_one_fringe(P, U, D, coerce(field, opts.scalar))
     end
 
 # ------------------ mask-based convenience overloads ------------------
@@ -1049,16 +1200,20 @@ end
 one_by_one_fringe(P::FinitePoset,
                   U_mask::AbstractVector{Bool},
                   D_mask::AbstractVector{Bool}) =
-    one_by_one_fringe(P, U_mask, D_mask, QQ(1))
+    one_by_one_fringe(P, U_mask, D_mask; field=QQField())
 
 one_by_one_fringe(P::FinitePoset,
                   U_mask::AbstractVector{Bool},
                   D_mask::AbstractVector{Bool};
-                  scalar=QQ(1),
-                  opts::Union{FiniteFringeOptions,Nothing}=nothing) =
-    opts === nothing ? one_by_one_fringe(P, U_mask, D_mask, scalar) : begin
-        scalar == QQ(1) || error("one_by_one_fringe: pass either scalar or opts, not both.")
-        one_by_one_fringe(P, U_mask, D_mask, opts.scalar)
+                  scalar=nothing,
+                  opts::Union{FiniteFringeOptions,Nothing}=nothing,
+                  field::AbstractCoeffField=QQField()) =
+    opts === nothing ? begin
+        scalar === nothing && (scalar = one(coeff_type(field)))
+        one_by_one_fringe(P, U_mask, D_mask, coerce(field, scalar))
+    end : begin
+        scalar === nothing || error("one_by_one_fringe: pass either scalar or opts, not both.")
+        one_by_one_fringe(P, U_mask, D_mask, coerce(field, opts.scalar))
     end
 
 
@@ -1087,17 +1242,21 @@ end
 one_by_one_fringe(P::FinitePoset,
                   U_mask::AbstractVector{Bool},
                   D_mask::AbstractVector{Bool}) =
-    one_by_one_fringe(P, U_mask, D_mask, QQ(1))
+    one_by_one_fringe(P, U_mask, D_mask; field=QQField())
 
 # Keyword form for parity with the Upset/Downset signature.
 one_by_one_fringe(P::FinitePoset,
                   U_mask::AbstractVector{Bool},
                   D_mask::AbstractVector{Bool};
-                  scalar=QQ(1),
-                  opts::Union{FiniteFringeOptions,Nothing}=nothing) =
-    opts === nothing ? one_by_one_fringe(P, U_mask, D_mask, scalar) : begin
-        scalar == QQ(1) || error("one_by_one_fringe: pass either scalar or opts, not both.")
-        one_by_one_fringe(P, U_mask, D_mask, opts.scalar)
+                  scalar=nothing,
+                  opts::Union{FiniteFringeOptions,Nothing}=nothing,
+                  field::AbstractCoeffField=QQField()) =
+    opts === nothing ? begin
+        scalar === nothing && (scalar = one(coeff_type(field)))
+        one_by_one_fringe(P, U_mask, D_mask, coerce(field, scalar))
+    end : begin
+        scalar === nothing || error("one_by_one_fringe: pass either scalar or opts, not both.")
+        one_by_one_fringe(P, U_mask, D_mask, coerce(field, opts.scalar))
     end
 
 
@@ -1140,9 +1299,7 @@ function fiber_dimension(M::FringeModule{K}, q::Int) where {K}
     cols = findall(U -> U.mask[q], M.U)
     rows = findall(D -> D.mask[q], M.D)
     if isempty(cols) || isempty(rows); return 0; end
-
-    phi_q = Matrix{QQ}(M.phi[rows, cols])
-    return rankQQ(phi_q)
+    return FieldLinAlg.rank(M.field, M.phi[rows, cols])
 end
 
 # ------------------ Hom for fringe modules via commuting squares ------------------
@@ -1323,13 +1480,11 @@ function hom_dimension(M::FringeModule{K}, N::FringeModule{K}) where {K}
         end
     end
 
-    Tdense = Matrix{QQ}(T)
-    Sdense = Matrix{QQ}(S)
-    big = hcat(Tdense, -Sdense)
+    big = hcat(T, -S)
 
-    rT   = rankQQ(Tdense)
-    rS   = rankQQ(Sdense)
-    rBig = rankQQ(big)
+    rT   = FieldLinAlg.rank(M.field, T)
+    rS   = FieldLinAlg.rank(M.field, S)
+    rBig = FieldLinAlg.rank(M.field, big)
 
     dimKer_big = (V1_dim + V2_dim) - rBig
     dimKer_T   = V1_dim - rT
@@ -1362,11 +1517,12 @@ dense_to_sparse_K(A::AbstractMatrix{T}) where {T} = dense_to_sparse_K(A, T)
 export FiniteFringeOptions,
        AbstractPoset, FinitePoset, ProductOfChainsPoset, GridPoset, ProductPoset,
        RegionsPoset,
-       nvertices, leq, leq_matrix, upset_indices, downset_indices, leq_row, leq_col,
+       nvertices, leq, leq_matrix, upset_indices, downset_indices, upset_iter, downset_iter, leq_row, leq_col,
        poset_equal, poset_equal_opposite,
        CoverEdges, Upset, Downset, principal_upset, principal_downset,
        upset_from_generators, downset_from_generators, upset_closure, downset_closure, cover_edges,
-       FringeModule, one_by_one_fringe, fiber_dimension, hom_dimension, dense_to_sparse_K
+       FringeModule, one_by_one_fringe, fiber_dimension, hom_dimension, dense_to_sparse_K,
+       change_field
 
 end # module
 

@@ -1,0 +1,2519 @@
+WEBVTT
+
+00:00.000 --> 00:18.000
+The name of that was very generic, Decompositions and Distances of Modules over RN.
+
+00:18.000 --> 00:28.000
+Let me just, okay, space, always visible, where to go.
+
+00:28.000 --> 00:33.000
+And that one probably be a bit bigger scale just because I mentioned like the final, the lifetime stuff.
+
+00:33.000 --> 00:35.000
+This was mainly building on top of what?
+
+00:35.000 --> 00:38.000
+Yeah, sorry, I'm just fiddling with Zoom, just a second.
+
+00:38.000 --> 00:42.000
+Let me get back to my, I'm fiddling in the sense of I have to make your pictures stay up there
+
+00:42.000 --> 00:46.000
+so that it doesn't disappear when I go to some other window.
+
+00:46.000 --> 01:01.000
+Okay, let's see.
+
+01:01.000 --> 01:05.000
+So I have to look at crude report maybe, is that the one?
+
+01:05.000 --> 01:06.000
+Decomposition?
+
+01:06.000 --> 01:07.000
+Probably.
+
+01:07.000 --> 01:08.000
+Yes.
+
+01:08.000 --> 01:10.000
+Yeah.
+
+01:10.000 --> 01:15.000
+For the draft you think it should be a bit more detailed than that maybe?
+
+01:15.000 --> 01:17.000
+A bit more detailed than this?
+
+01:17.000 --> 01:23.000
+And I think that what we should have is sort of, the draft should contain, oh I like this actually, this is good,
+
+01:23.000 --> 01:30.000
+but it should have, it's okay for it to have this stuff too actually, but I think that that should,
+
+01:30.000 --> 01:34.000
+in the end I think that this stuff with the matching is going to be a second paper.
+
+01:34.000 --> 01:39.000
+Yeah, yeah, I just mean like in terms of level of detail, just a bit more than this maybe.
+
+01:39.000 --> 01:47.000
+Level of detail, I think we should try to include, try to include what's going to be in there eventually,
+
+01:47.000 --> 01:53.000
+so have it be a formal definition of lifetime, formal definition of lifetime displacement,
+
+01:53.000 --> 01:58.000
+formal definitions, potential definitions of lifetime distances that you can symmetrize,
+
+01:58.000 --> 02:02.000
+you can take the max, whatever it happens to be, right?
+
+02:02.000 --> 02:10.000
+Yeah, it's just sort of something so that people can get their hands on what lifetimes are and what lifetime displacement is.
+
+02:10.000 --> 02:11.000
+Okay.
+
+02:11.000 --> 02:14.000
+So that we can just hand it out to people and say, here's what we mean.
+
+02:14.000 --> 02:22.000
+The reason why at least one of them wants this is because Herbert Adelsbrunner has a student who is going to decide
+
+02:22.000 --> 02:29.000
+what to write her thesis on and it might be on related stuff and she wants to know what this lifetime stuff is all about.
+
+02:29.000 --> 02:30.000
+Okay, sure.
+
+02:30.000 --> 02:32.000
+So this is good news for us in some sense, right?
+
+02:32.000 --> 02:36.000
+This means that people really want to know this and that this is good.
+
+02:36.000 --> 02:42.000
+Yeah, and then also like motivations are we're thinking about this, obviously have the main results in there as well.
+
+02:42.000 --> 02:44.000
+Right, yes, that's right.
+
+02:44.000 --> 02:50.000
+So have whatever main results you think belong in there and, you know, something that doesn't have to be in final form,
+
+02:50.000 --> 02:55.000
+it just has to be sort of presentable so that someone who wants to know what these things are
+
+02:55.000 --> 03:00.000
+can actually look at the definitions for real and not just look at my slides, which have hopeless little detail.
+
+03:00.000 --> 03:04.000
+They have nice pictures, but not such great detail.
+
+03:04.000 --> 03:06.000
+Sure, okay.
+
+03:06.000 --> 03:09.000
+Yeah, as soon as you can.
+
+03:09.000 --> 03:15.000
+So, you know, I'm hoping that doesn't take more than, you know, a couple of weeks to...
+
+03:15.000 --> 03:17.000
+Yeah, that's what I was thinking, a couple of weeks.
+
+03:18.000 --> 03:20.000
+Great, a couple of weeks is...
+
+03:20.000 --> 03:23.000
+Because I evaluated in my mind how long I think it...
+
+03:23.000 --> 03:29.000
+And I said, Herbert, I told Herbert that probably once we talk about it within a couple of weeks, it'll be doable.
+
+03:29.000 --> 03:30.000
+Yeah.
+
+03:30.000 --> 03:33.000
+Herbert Edelsbrunner?
+
+03:33.000 --> 03:34.000
+Edelsbrunner, yes.
+
+03:34.000 --> 03:37.000
+The man, the myth, the legend himself.
+
+03:37.000 --> 03:38.000
+Well, he used to work at Duke, you know.
+
+03:38.000 --> 03:41.000
+Yeah, I'm aware.
+
+03:41.000 --> 03:44.000
+Yeah, I'm not sure that he was ever here when I was.
+
+03:44.000 --> 03:48.000
+I think I might have, like, maybe overlapped with him for a year or something like that,
+
+03:48.000 --> 03:50.000
+because I didn't really know the area at that point.
+
+03:50.000 --> 03:56.000
+But yeah, now I talk to him all the time at conferences and these things, and we communicate regularly.
+
+03:56.000 --> 03:59.000
+Yeah, he's a good guy.
+
+03:59.000 --> 04:01.000
+He hates algebra, actually.
+
+04:01.000 --> 04:07.000
+I'm aware, when I was originally learning topological data analysis,
+
+04:07.000 --> 04:14.000
+I read one of his papers on the Wasserstein distance being stable.
+
+04:14.000 --> 04:18.000
+And you could definitely tell that he was skirting the algebra very much.
+
+04:18.000 --> 04:24.000
+He was coming up with his own terminology and, like, really, really not going into the algebra there.
+
+04:24.000 --> 04:29.000
+Yeah, I mean, the fact is, he thinks that he's not good at algebra.
+
+04:29.000 --> 04:35.000
+And I think that what this means in the end is that the level of abstraction that he's willing to deal with
+
+04:35.000 --> 04:38.000
+has a definite upper limit.
+
+04:38.000 --> 04:43.000
+But, you know, what this means is that, you know, lifetime filtration?
+
+04:43.000 --> 04:46.000
+You know, really, he doesn't want to do lifetime filtration.
+
+04:46.000 --> 04:49.000
+But a student might want to do something related to this kind of algebra.
+
+04:49.000 --> 04:52.000
+And so it should come from us, that kind of thing, yeah?
+
+04:52.000 --> 04:54.000
+Yeah.
+
+04:54.000 --> 05:11.000
+Okay, so what was going to be the, what's the sort of proposed content of this meeting here?
+
+05:11.000 --> 05:13.000
+Yeah, so there's that.
+
+05:13.000 --> 05:15.000
+I've been, like, rereading Jassy's paper, basically.
+
+05:15.000 --> 05:19.000
+Like, taking notes on what I need to, what should be changed.
+
+05:19.000 --> 05:23.000
+Like, there's some notation stuff we've agreed on that's different.
+
+05:23.000 --> 05:28.000
+Yeah, the bracelet of brackets.
+
+05:28.000 --> 05:37.000
+We should also, at some point, decide on, like, notation and nomenclature for, like, the shifts, slides, and rug pulls.
+
+05:37.000 --> 05:40.000
+But I think that can be down the line.
+
+05:40.000 --> 05:42.000
+Yes, that's a really good point.
+
+05:42.000 --> 05:43.000
+We should decide on notations for that.
+
+05:43.000 --> 05:44.000
+Yeah, we should decide on that.
+
+05:44.000 --> 05:45.000
+Yeah.
+
+05:45.000 --> 05:47.000
+Eric, do you know what those things mean?
+
+05:47.000 --> 05:50.000
+Can you repeat that, sorry?
+
+05:50.000 --> 05:52.000
+Shifts, slides, and rug pulls.
+
+05:52.000 --> 05:54.000
+Rug pulls? Is that an actual thing?
+
+05:54.000 --> 05:56.000
+I have not come across rug pulls.
+
+05:56.000 --> 05:58.000
+We're going to make it into something.
+
+05:58.000 --> 05:59.000
+Go ahead.
+
+05:59.000 --> 06:00.000
+Yeah.
+
+06:00.000 --> 06:04.000
+The first thing is, Eric, do you know these two notations here?
+
+06:04.000 --> 06:05.000
+Sure.
+
+06:05.000 --> 06:09.000
+K adjoin S and K braces.
+
+06:09.000 --> 06:10.000
+Squiggly.
+
+06:10.000 --> 06:12.000
+Yeah, squiggly.
+
+06:12.000 --> 06:13.000
+Remind me of the braces.
+
+06:13.000 --> 06:21.000
+So I was going to tell you this, Eric, it's part of my, so I wrote up notes in, like, you know, sort of on iPad.
+
+06:21.000 --> 06:24.000
+I actually wrote up notes on the airplane to send you.
+
+06:24.000 --> 06:32.000
+And one of them is that for indicator modules, we should write it as K squiggly bracket instead of K square bracket.
+
+06:32.000 --> 06:34.000
+Okay, I was using K square bracket.
+
+06:34.000 --> 06:40.000
+And I also completely took the entire blame for that because in my homological algebra paper, I used the wrong notation.
+
+06:40.000 --> 06:44.000
+I really should have used squiggly brackets, and I didn't, and that was my fault, and it's wrong.
+
+06:44.000 --> 06:46.000
+Okay, all right.
+
+06:46.000 --> 06:50.000
+Yeah, I am using your homological algebra paper as a baseline for everything else.
+
+06:50.000 --> 06:54.000
+Even right now, actually, what I'm going to do is I'm just going to get here.
+
+06:54.000 --> 06:58.000
+I'm going to get to my notes, and I'm just going to send you the email now that has these notes.
+
+06:58.000 --> 06:59.000
+Okay.
+
+06:59.000 --> 07:00.000
+Keep talking, Ricardo.
+
+07:00.000 --> 07:04.000
+Tell them about shift slides and rope pulls because I remember that conversation.
+
+07:04.000 --> 07:05.000
+It was really handy.
+
+07:05.000 --> 07:11.000
+Yeah, and I actually, I don't quite remember which is which, so I'm going to need to look up my notes for that as well.
+
+07:11.000 --> 07:17.000
+Good, because I don't remember which is which either, but we had sort of good reasoning when we did that.
+
+07:17.000 --> 07:18.000
+We did have good reasoning.
+
+07:18.000 --> 07:21.000
+And so if you have it in your notes, that's great.
+
+07:21.000 --> 07:26.000
+I should have it somewhere in a staff document.
+
+07:26.000 --> 07:31.000
+But for the time being, you can just tell them what the three of them are, and then we'll figure out.
+
+07:31.000 --> 07:32.000
+Yeah, anyway.
+
+07:32.000 --> 07:33.000
+Yeah.
+
+07:33.000 --> 07:34.000
+Is it here?
+
+07:34.000 --> 07:36.000
+It's in the notes for Eric.
+
+07:42.000 --> 07:43.000
+Oh, the very first slide, right?
+
+07:43.000 --> 07:44.000
+Okay, squiggly bracket here.
+
+07:44.000 --> 07:45.000
+There you go.
+
+07:45.000 --> 07:46.000
+I found it.
+
+07:46.000 --> 07:47.000
+I found it.
+
+07:47.000 --> 07:48.000
+Okay.
+
+07:48.000 --> 07:53.000
+So the current notations for each one, I'm going to put them in the.
+
+07:53.000 --> 07:56.000
+You can share screen with them.
+
+07:56.000 --> 07:59.000
+Or you can also share your screen.
+
+07:59.000 --> 08:00.000
+It's up to you.
+
+08:00.000 --> 08:01.000
+It's very brief.
+
+08:01.000 --> 08:04.000
+I think I'll just do it here.
+
+08:04.000 --> 08:09.000
+Kind of like this.
+
+08:09.000 --> 08:10.000
+Okay.
+
+08:10.000 --> 08:14.000
+So the first one is what I'm calling a slide.
+
+08:14.000 --> 08:15.000
+These are the current notations.
+
+08:15.000 --> 08:16.000
+Their subject should change.
+
+08:16.000 --> 08:19.000
+The first one is what I'm calling a slide.
+
+08:19.000 --> 08:23.000
+This is just the one where you.
+
+08:23.000 --> 08:25.000
+So you map the vector V by.
+
+08:25.000 --> 08:29.000
+Let's assume it's like homogeneous and you can extend by linearity.
+
+08:29.000 --> 08:31.000
+Homogeneous.
+
+08:31.000 --> 08:33.000
+Yes, that is correct.
+
+08:33.000 --> 08:36.000
+Let's assume it's homogeneous and degree.
+
+08:36.000 --> 08:42.000
+And then you just move it by like the structure map epsilon.
+
+08:42.000 --> 08:43.000
+So the one that just.
+
+08:43.000 --> 08:45.000
+Epsilon is like a vector, I guess.
+
+08:45.000 --> 08:47.000
+You have to start off with what's what.
+
+08:47.000 --> 08:51.000
+So V is a what and epsilon is a what.
+
+08:51.000 --> 08:53.000
+Epsilon is a vector.
+
+08:53.000 --> 08:55.000
+You should think of it as usually one, one, one, one, one, one.
+
+08:55.000 --> 08:58.000
+But it can be any vector that you're going to shift.
+
+08:58.000 --> 09:00.000
+Think of it as an arrow.
+
+09:00.000 --> 09:01.000
+Okay.
+
+09:01.000 --> 09:04.000
+Yeah.
+
+09:04.000 --> 09:09.000
+Q plus meaning like the positive cone.
+
+09:10.000 --> 09:12.000
+Okay.
+
+09:12.000 --> 09:14.000
+It can be anywhere.
+
+09:14.000 --> 09:17.000
+Q here is a partially ordered group.
+
+09:17.000 --> 09:22.000
+Well, Q is a partially ordered group and then Q plus the positive.
+
+09:22.000 --> 09:23.000
+Q.
+
+09:23.000 --> 09:24.000
+Oh, okay.
+
+09:24.000 --> 09:27.000
+I'm telling Eric because Eric is used to working with Q being a poset.
+
+09:27.000 --> 09:30.000
+When we're saying here is that here we're working over a.
+
+09:30.000 --> 09:36.000
+In the most generality, it could be like a it could be like a poset with a shift function or something like that.
+
+09:36.000 --> 09:38.000
+And then epsilon is going to be the shift.
+
+09:38.000 --> 09:42.000
+But for simplicity, let's just talk about Q being a partially ordered group.
+
+09:42.000 --> 09:46.000
+And epsilon is an element in Q plus.
+
+09:46.000 --> 09:48.000
+Okay.
+
+09:48.000 --> 09:49.000
+Yeah.
+
+09:49.000 --> 09:52.000
+So think of it as our end with one, one, one, one, one, one.
+
+09:52.000 --> 09:53.000
+Yeah.
+
+09:53.000 --> 09:57.000
+Anything in the positive or center part and, for example, would work.
+
+09:57.000 --> 10:02.000
+Or actually the non-negative or.
+
+10:02.000 --> 10:05.000
+The closed possible.
+
+10:05.000 --> 10:06.000
+So, yeah.
+
+10:06.000 --> 10:09.000
+So the first one here, you just take V.
+
+10:09.000 --> 10:13.000
+So there's going to be you can think about it like being at a specific point.
+
+10:13.000 --> 10:21.000
+And then they're like, if you just move here by epsilon, since it's going to be higher, then there's going to be a structure map there.
+
+10:21.000 --> 10:23.000
+You just map it by that structure map.
+
+10:23.000 --> 10:26.000
+So this is what we're calling a slide.
+
+10:26.000 --> 10:27.000
+Okay.
+
+10:27.000 --> 10:28.000
+Ah, okay.
+
+10:28.000 --> 10:31.000
+I want to be clear what homogeneous vector means.
+
+10:31.000 --> 10:32.000
+Yeah.
+
+10:32.000 --> 10:37.000
+Our homogeneous vector means an element in ma for some a.
+
+10:37.000 --> 10:38.000
+Oh, okay.
+
+10:38.000 --> 10:39.000
+All right.
+
+10:39.000 --> 10:45.000
+I was thinking sort of like in the coordinate in what's called projective coordinates, but that's not.
+
+10:45.000 --> 10:46.000
+Yeah.
+
+10:46.000 --> 10:47.000
+Yeah.
+
+10:47.000 --> 10:48.000
+Yeah.
+
+10:48.000 --> 10:49.000
+Yeah.
+
+10:49.000 --> 10:50.000
+Yeah.
+
+10:50.000 --> 10:51.000
+It just means an element in some graded piece of some graded module.
+
+10:51.000 --> 10:52.000
+Okay.
+
+10:52.000 --> 10:53.000
+Some Q graded module.
+
+10:53.000 --> 10:54.000
+Yeah.
+
+10:54.000 --> 10:55.000
+Yeah.
+
+10:55.000 --> 10:58.000
+So it's basically it's only supported on one on one degree.
+
+10:58.000 --> 11:00.000
+It's not supported on various degrees.
+
+11:00.000 --> 11:05.000
+But you can extend this to be arbitrarily wherever you want by just white linearity.
+
+11:05.000 --> 11:06.000
+So this is an important.
+
+11:06.000 --> 11:09.000
+It's a class for some fixed parameter.
+
+11:09.000 --> 11:11.000
+It's a homology class over some fixed parameter.
+
+11:11.000 --> 11:13.000
+Yes.
+
+11:13.000 --> 11:18.000
+Then there is the syntax with brackets.
+
+11:18.000 --> 11:21.000
+That one's a bit more complicated to explain.
+
+11:21.000 --> 11:34.000
+Basically, you can imagine taking the entire the entire like module and then you just like move it back.
+
+11:34.000 --> 11:36.000
+Is that it?
+
+11:36.000 --> 11:38.000
+I forgot to move it back or forward.
+
+11:38.000 --> 11:39.000
+Yeah.
+
+11:39.000 --> 11:42.000
+So in the usual notation, this would be M bracket epsilon.
+
+11:42.000 --> 11:47.000
+So what it does is that if you take a module M back, take a module M.
+
+11:47.000 --> 11:48.000
+Yeah.
+
+11:49.000 --> 11:51.000
+How do you write the epsilon?
+
+11:51.000 --> 11:54.000
+I have.
+
+11:54.000 --> 11:57.000
+I can switch my keyboard to Greek if I want.
+
+11:57.000 --> 11:59.000
+Oh, interesting.
+
+11:59.000 --> 12:02.000
+I'm going to have to do it.
+
+12:02.000 --> 12:07.000
+I'm going to do it by literally using my mouse to copy your epsilon and paste it into mine.
+
+12:07.000 --> 12:09.000
+Yep.
+
+12:09.000 --> 12:10.000
+Yeah, that worked.
+
+12:10.000 --> 12:11.000
+That worked.
+
+12:11.000 --> 12:16.000
+So M epsilon sub A equals.
+
+12:16.000 --> 12:18.000
+Oh, boy.
+
+12:18.000 --> 12:21.000
+M sub.
+
+12:21.000 --> 12:27.000
+And then it's going to be epsilon plus A.
+
+12:27.000 --> 12:30.000
+Yes.
+
+12:30.000 --> 12:31.000
+Oh, OK.
+
+12:31.000 --> 12:32.000
+OK.
+
+12:32.000 --> 12:33.000
+OK.
+
+12:33.000 --> 12:34.000
+That's interesting.
+
+12:34.000 --> 12:36.000
+That's a shift and it shifts by the way downwards.
+
+12:36.000 --> 12:37.000
+Your point of view looks like this.
+
+12:37.000 --> 12:38.000
+Yes.
+
+12:38.000 --> 12:43.000
+So if epsilon is this vector one, one, one, one, one, then it shifts it backwards by one, one, one, one, one, one.
+
+12:43.000 --> 12:52.000
+And you can see that even though there's no there's no minus signs in there, this shift means that if you ask in.
+
+12:52.000 --> 12:54.000
+You have to read that that really, really carefully.
+
+12:54.000 --> 12:55.000
+Right.
+
+12:55.000 --> 13:01.000
+So M sub M shifted by epsilon of A is M sub epsilon plus A, which means that it's up here.
+
+13:01.000 --> 13:04.000
+So the original module M is this thing.
+
+13:04.000 --> 13:05.000
+Right.
+
+13:05.000 --> 13:07.000
+The module M, it's this degree.
+
+13:07.000 --> 13:11.000
+So when you when you take when you when you take.
+
+13:11.000 --> 13:13.000
+So but that's supposed to be M.
+
+13:13.000 --> 13:17.000
+So this epsilon plus A sits up here, but it's supposed to be in degree A.
+
+13:17.000 --> 13:19.000
+So it's moved back by anyway.
+
+13:19.000 --> 13:20.000
+You have to figure it out.
+
+13:20.000 --> 13:22.000
+It's really irritating.
+
+13:22.000 --> 13:29.000
+No, but I think now that I see the the squiggly version of the expression, because I have a pretty good grasp of anyway.
+
+13:29.000 --> 13:31.000
+Yeah.
+
+13:31.000 --> 13:33.000
+And squiggly.
+
+13:33.000 --> 13:34.000
+So I want to be clear.
+
+13:34.000 --> 13:37.000
+The squiggly brackets there are really just to say it's tech notation.
+
+13:37.000 --> 13:38.000
+Yeah.
+
+13:38.000 --> 13:41.000
+Because I have to say the entire epsilon plus A is in the subscript.
+
+13:41.000 --> 13:42.000
+Yeah, yeah, yeah.
+
+13:42.000 --> 13:43.000
+That's what I meant. That's what I meant.
+
+13:43.000 --> 13:46.000
+It's I sort of can.
+
+13:46.000 --> 13:48.000
+Yeah, I can.
+
+13:48.000 --> 13:49.000
+I can see it.
+
+13:49.000 --> 13:50.000
+I can see it somewhat.
+
+13:50.000 --> 13:56.000
+And so just to be clear, when I in the second example, the bracket epsilon, if I have like,
+
+13:56.000 --> 14:02.000
+let's say an abstract module like this, with like V being here, and then I shift it by epsilon out here, V shifts along with it.
+
+14:02.000 --> 14:06.000
+So that's position is consistent relative like the lower edge.
+
+14:06.000 --> 14:07.000
+Okay.
+
+14:07.000 --> 14:09.000
+Doesn't move relative to the lower edge.
+
+14:09.000 --> 14:10.000
+So V of epsilon.
+
+14:10.000 --> 14:17.000
+So V of epsilon is the vector V that was in degree A and is now in degree A minus epsilon.
+
+14:17.000 --> 14:18.000
+Yeah.
+
+14:18.000 --> 14:19.000
+So it's basically the same thing.
+
+14:19.000 --> 14:20.000
+It's just moving it around.
+
+14:20.000 --> 14:23.000
+This is just from how interleapings are defined.
+
+14:23.000 --> 14:29.000
+I think we can actually remove this entirely if we just allow maps with nonzero degree.
+
+14:29.000 --> 14:31.000
+But the current literature doesn't do that.
+
+14:31.000 --> 14:32.000
+So.
+
+14:32.000 --> 14:33.000
+Oh, yeah.
+
+14:33.000 --> 14:35.000
+Commutative algebra literature does it all the time.
+
+14:35.000 --> 14:36.000
+Yeah.
+
+14:36.000 --> 14:39.000
+The TDA literature does it from my understanding.
+
+14:39.000 --> 14:41.000
+The TDA literature does not.
+
+14:41.000 --> 14:43.000
+We need to convince them to allow us to do it.
+
+14:43.000 --> 14:45.000
+Because honestly, the right way to do it.
+
+14:45.000 --> 14:51.000
+This confusion is pretty much completely gone as soon as we allow that.
+
+14:51.000 --> 14:52.000
+Yes, I know.
+
+14:52.000 --> 14:54.000
+We only need one of it and then everything else.
+
+14:54.000 --> 14:55.000
+Yes.
+
+14:55.000 --> 15:02.000
+For what it's worth, the first example is a degree epsilon homomorphism or endomorphism.
+
+15:02.000 --> 15:04.000
+Right.
+
+15:04.000 --> 15:07.000
+And then the third case.
+
+15:07.000 --> 15:13.000
+Ricardo, you should write up for this paper on lifetime modules.
+
+15:13.000 --> 15:16.000
+It should be in your thesis somehow, but it should be in this paper.
+
+15:16.000 --> 15:20.000
+We should introduce people to inhomogeneous homomorphisms.
+
+15:20.000 --> 15:24.000
+And the module of all graded shifts of all homomorphisms.
+
+15:24.000 --> 15:30.000
+So that we can start using this in the multi-persistence literature.
+
+15:30.000 --> 15:31.000
+It needs to be there.
+
+15:31.000 --> 15:33.000
+They are all over the place.
+
+15:33.000 --> 15:38.000
+For any multi-persistence person who wants to read the algebra literature, they need to know what this is.
+
+15:38.000 --> 15:41.000
+And so this seems as good a place as any to introduce it.
+
+15:41.000 --> 15:44.000
+I use it all the time in my papers.
+
+15:44.000 --> 15:50.000
+No one likes reading my papers because they find the algebra too opaque.
+
+15:50.000 --> 15:53.000
+Which is so weird because it's so concrete.
+
+15:53.000 --> 15:56.000
+But they're not used to certain notions like this one.
+
+15:56.000 --> 15:59.000
+I like the algebra.
+
+15:59.000 --> 16:01.000
+Yeah, good. Good, good, good.
+
+16:01.000 --> 16:08.000
+So Jan Jandriziak, by the way, is one of these people who has his foot in both worlds and he totally gets the algebra.
+
+16:08.000 --> 16:10.000
+It's so awesome talking to him. He's great.
+
+16:10.000 --> 16:14.000
+You've said the same about Bjorkovic, right?
+
+16:14.000 --> 16:18.000
+Yes. Yes. Bjorkovic knows his stuff.
+
+16:18.000 --> 16:21.000
+Yeah.
+
+16:21.000 --> 16:29.000
+I think Bjorkovic's take on algebra these days is this take on sort of multi-persistence algebra is the most nuanced,
+
+16:29.000 --> 16:37.000
+sort of promising approach of anyone that I've seen from TVA.
+
+16:37.000 --> 16:47.000
+I think he really gets the algebra. He understands what's trying to happen.
+
+16:47.000 --> 16:55.000
+Yeah, so just the third notation there, the V parentheses epsilon as opposed to V brackets epsilon.
+
+16:55.000 --> 16:58.000
+I have the definition in terms of the other two written there.
+
+16:58.000 --> 17:04.000
+Well, basically, if you think again about the upset here with the vector here.
+
+17:04.000 --> 17:07.000
+Let me think about this.
+
+17:07.000 --> 17:11.000
+So you do this and then you slide it off. I think it's the same as if you slide it.
+
+17:11.000 --> 17:14.000
+It's going to be the same the way they commute.
+
+17:14.000 --> 17:19.000
+So basically, you're keeping this one fixed.
+
+17:19.000 --> 17:21.000
+Let me say this in a language that Eric might get at.
+
+17:21.000 --> 17:26.000
+So remember, if you have an element in a module and this element has degree A, right?
+
+17:26.000 --> 17:29.000
+You can you can shift it up.
+
+17:29.000 --> 17:34.000
+So you can multiply by X to the epsilon. What does that do?
+
+17:34.000 --> 17:36.000
+It moves it up by epsilon. Yes.
+
+17:36.000 --> 17:38.000
+So now you have a different element to the module.
+
+17:38.000 --> 17:44.000
+It's an element now that sits in the same module, but it's moved up by degree by epsilon.
+
+17:44.000 --> 17:51.000
+And now it's the image of this element after you've literally moved it up by the by the structure morphism that goes from here to there.
+
+17:52.000 --> 17:54.000
+OK. Yeah.
+
+17:54.000 --> 17:58.000
+Yeah. The problem is that in persistence, you might want to do that,
+
+17:58.000 --> 18:02.000
+but you might want the results to sit in the same degree that you started it.
+
+18:02.000 --> 18:04.000
+Oh, OK. Yes.
+
+18:04.000 --> 18:06.000
+So how do you do that?
+
+18:06.000 --> 18:12.000
+One way is to multiply it by X to the epsilon and then shift it back by epsilon.
+
+18:12.000 --> 18:18.000
+Yeah. Another way is to shift it back by epsilon and then multiply it by epsilon.
+
+18:19.000 --> 18:26.000
+So the rug pull is the one where you where you essentially you start with your element here, right?
+
+18:26.000 --> 18:29.000
+You want it to land in this degree in this element, but back here.
+
+18:29.000 --> 18:33.000
+Yes. The rug pull. I can see it. It's amazing.
+
+18:33.000 --> 18:35.000
+I love it. It's amazing.
+
+18:35.000 --> 18:39.000
+Yeah. What a name. What an absolute name.
+
+18:39.000 --> 18:45.000
+Yeah. These are the names are in order of slide shift and you came up with this card.
+
+18:46.000 --> 18:49.000
+I think shift is standard.
+
+18:49.000 --> 18:51.000
+No, rug pull. I did not see rug pull.
+
+18:51.000 --> 18:54.000
+It was in conversation and I don't remember which of us came up with it.
+
+18:54.000 --> 18:56.000
+Yeah, I forgot.
+
+18:56.000 --> 18:58.000
+It was during a meeting with Gart. Yes, that's right.
+
+18:58.000 --> 19:04.000
+It was during one of our meetings and and and in the end we had this term and it's so the right term.
+
+19:08.000 --> 19:12.000
+Yeah, that's pretty good because you're like you're basically you're just sliding out of the way,
+
+19:12.000 --> 19:14.000
+but you're keeping it in the same place.
+
+19:14.000 --> 19:20.000
+Yeah, the only thing it brings to mind is that magic trick where you have the whole set table.
+
+19:20.000 --> 19:22.000
+Yeah, you pull the tablecloth out from under it.
+
+19:22.000 --> 19:24.000
+Yeah. Yeah.
+
+19:26.000 --> 19:35.000
+But the thing is that if we remove like the only reason we need this stuff is for it's for interleaving from what I can tell.
+
+19:36.000 --> 19:38.000
+Something like that, yes.
+
+19:38.000 --> 19:45.000
+And if we use like degree epsilon morphisms instead of requiring everything to be degree zero, then all we need is slides.
+
+19:45.000 --> 19:47.000
+We no longer need shifts or rug pulls.
+
+19:47.000 --> 19:49.000
+Yeah, that's right.
+
+19:49.000 --> 19:53.000
+But it's nice to describe things in terms of shifts and rug pulls.
+
+19:54.000 --> 20:05.000
+I mean, the shift is basically equivalent to just like the like you use a shift basis to emulate nonzero degree.
+
+20:05.000 --> 20:07.000
+Yes, that's right.
+
+20:07.000 --> 20:15.000
+In fact, exactly the definition of a nonzero degree homomorphism is a morphism of degree zero from N to a shift of N.
+
+20:15.000 --> 20:17.000
+Oh, okay.
+
+20:17.000 --> 20:20.000
+That's how commutative algebra, that's how it's defined.
+
+20:20.000 --> 20:22.000
+Oh, okay.
+
+20:22.000 --> 20:24.000
+That makes complete sense, yeah.
+
+20:24.000 --> 20:33.000
+Well, you can also define it more sort of parochially, I suppose, by just saying that it's a homomorphism such that it takes an element of degree A to an element of degree A plus epsilon.
+
+20:33.000 --> 20:35.000
+Yeah, that's what I was thinking.
+
+20:35.000 --> 20:40.000
+But I also define it to be a homomorphism of degree zero from N to N shifted by epsilon.
+
+20:40.000 --> 20:42.000
+Yes, expanding definitions, yes.
+
+20:42.000 --> 20:44.000
+Right.
+
+20:45.000 --> 20:48.000
+Okay, so that's the notation.
+
+20:48.000 --> 20:50.000
+Maybe we should change it, especially the notation.
+
+20:50.000 --> 20:53.000
+I'm not too happy with the rug pull one because it's quite similar to shift one.
+
+20:53.000 --> 20:56.000
+But maybe that's just something you have to live with.
+
+20:56.000 --> 21:01.000
+There's also an argument for not having that at all and just writing out the full expression every time, but that seems.
+
+21:01.000 --> 21:07.000
+Yes, and it's going to be, I will leave it up to you for the moment because you're going to try to write things down.
+
+21:07.000 --> 21:12.000
+And when you do, you'll figure out which notations are becoming really irritating.
+
+21:12.000 --> 21:13.000
+Sure.
+
+21:13.000 --> 21:14.000
+Okay.
+
+21:14.000 --> 21:17.000
+Yeah, it's one of those things you just try it and see what happens.
+
+21:17.000 --> 21:21.000
+And, you know, if it's not working for you, then go, you know, this is just annoying.
+
+21:21.000 --> 21:23.000
+It's the same thing with the minus sign.
+
+21:23.000 --> 21:27.000
+There should be a minus, you know, M shifted by epsilon should be M shifted by epsilon.
+
+21:27.000 --> 21:29.000
+But it's not, it's M shifted back by epsilon.
+
+21:29.000 --> 21:31.000
+That's because it's a minus sign.
+
+21:31.000 --> 21:34.000
+And you can choose what to do with the minus sign, where to put it.
+
+21:34.000 --> 21:37.000
+And sometimes it's annoying and sometimes it's not.
+
+21:37.000 --> 21:42.000
+I don't think, I think that one would just like have to keep with what other people are doing and just like deal with the sign.
+
+21:42.000 --> 21:43.000
+It makes like...
+
+21:43.000 --> 21:46.000
+There's no question that this is the definition of M shifted by epsilon.
+
+21:46.000 --> 21:51.000
+The question is whether we want to routinely think of M shifted by minus epsilon or not.
+
+21:51.000 --> 21:52.000
+Oh, all right.
+
+21:52.000 --> 21:54.000
+Because the answer is not.
+
+21:55.000 --> 21:59.000
+I think it like, it makes sense to just define it in a way that it admits that.
+
+21:59.000 --> 22:02.000
+But I think in practice that never shows up.
+
+22:02.000 --> 22:04.000
+Okay.
+
+22:07.000 --> 22:10.000
+Yeah, so that's the, that's the notation stuff.
+
+22:12.000 --> 22:14.000
+Oh, right.
+
+22:14.000 --> 22:16.000
+Eric introduced me.
+
+22:16.000 --> 22:19.000
+Actually, last night, like, I saw your email.
+
+22:19.000 --> 22:20.000
+I was getting dinner.
+
+22:20.000 --> 22:26.000
+And then right as I'm leaving, coming back from my room, then I see Eric and then we talk about it.
+
+22:26.000 --> 22:32.000
+And that's, that's why I, that's why I told you to like ask him if you wanted to show off.
+
+22:32.000 --> 22:41.000
+But the, one of the things that we talked about then is one of the ways we want to sort of salvage the things with lifetime.
+
+22:42.000 --> 22:54.000
+Stuff is by looking into how the, how the like the act, it actually works in practice.
+
+22:54.000 --> 22:58.000
+So that how like people are actually using this stuff for real data sets.
+
+22:58.000 --> 23:02.000
+And then let's see the exact wording here.
+
+23:02.000 --> 23:08.000
+Formulates conditions under which the screening variants are complete when restricted to push forward measure.
+
+23:09.000 --> 23:11.000
+Yes.
+
+23:11.000 --> 23:16.000
+And so for that inch like understand how, how people are actually doing this stuff.
+
+23:16.000 --> 23:19.000
+And he introduced me to this library called duty.
+
+23:19.000 --> 23:20.000
+Oh, yeah.
+
+23:20.000 --> 23:21.000
+Is it good?
+
+23:21.000 --> 23:25.000
+Is it like, does it do the things you wanted it to do?
+
+23:25.000 --> 23:26.000
+It seems like it does.
+
+23:26.000 --> 23:28.000
+I haven't had that much time to look into it yet.
+
+23:28.000 --> 23:32.000
+Because based on your like descriptions, I'm pretty sure it's exactly what you want.
+
+23:32.000 --> 23:34.000
+From what I looked up, it doesn't contribute.
+
+23:34.000 --> 23:37.000
+So that's something I need to look into to try to understand what they're doing.
+
+23:37.000 --> 23:38.000
+And people also like multi-PERS.
+
+23:38.000 --> 23:40.000
+I think they call it multi-PERS.
+
+23:40.000 --> 23:43.000
+So multi-PERS is made to interface with Goody.
+
+23:43.000 --> 23:46.000
+I think you heard about multi-PERS because of me, actually.
+
+23:46.000 --> 23:48.000
+And the people at Nightsake.
+
+23:48.000 --> 23:50.000
+Remember, I was just at Nightsake.
+
+23:50.000 --> 23:51.000
+Oh, that's true.
+
+23:51.000 --> 23:54.000
+Anyway, so multi-PERS is meant to interface with Goody as well.
+
+23:54.000 --> 23:59.000
+There is probably overlap at some point, but I think Goody is more on the computational.
+
+24:00.000 --> 24:04.000
+Before we encode things, before we process things.
+
+24:04.000 --> 24:06.000
+And then multi-PERS is more for the processing.
+
+24:06.000 --> 24:09.000
+So I think Goody is more so what you want to call it.
+
+24:09.000 --> 24:11.000
+But you can check out multi-PERS as well.
+
+24:11.000 --> 24:14.000
+Multi-PERS is more, I think, further along the pipeline.
+
+24:18.000 --> 24:20.000
+Sure, I'll just write it down.
+
+24:22.000 --> 24:24.000
+So there's that.
+
+24:25.000 --> 24:32.000
+I've also been thinking about the other, just because I didn't have too much to think about in regards to that stuff.
+
+24:32.000 --> 24:42.000
+I've been thinking about the other rich salvage it, which is attaching supplementary data to lifetime filtration so that it does become discriminating.
+
+24:43.000 --> 25:02.000
+What I was thinking in that regard is that the, sort of the interesting thing for, at least in a discriminatory sense with this, is that it's when things are, like they geometrically would be a lifetime.
+
+25:02.000 --> 25:06.000
+But algebraically, there's something that prevents them from being a lifetime.
+
+25:06.000 --> 25:09.000
+I'm not sure what you mean by that. What do you mean?
+
+25:09.000 --> 25:21.000
+So if we think back to the Luis example where you have the cube, right, missing the ends, do you remember the Luis kind of example?
+
+25:21.000 --> 25:23.000
+Vaguely, yes.
+
+25:23.000 --> 25:30.000
+Yeah, so in that case, if we don't, the one that has the multiplication by alpha and multiplication by beta, right?
+
+25:30.000 --> 25:31.000
+Right, yes.
+
+25:32.000 --> 25:38.000
+If we don't have those, if we have everything just being the identity map, then the entire module is a lifetime module.
+
+25:38.000 --> 25:41.000
+And then you're basically, and then that works.
+
+25:41.000 --> 25:49.000
+But when one of the multiplication, multiplication by alpha, or by anything that's not one, then it is no longer your lifetime module.
+
+25:49.000 --> 25:54.000
+And that, and so that means that we lose a filtration.
+
+25:54.000 --> 25:58.000
+There's one, a filtration that would have, like geometrically should exist because there's a map there.
+
+25:58.000 --> 26:02.000
+But I like it supported as if it were a lifetime module.
+
+26:02.000 --> 26:07.000
+But the algebra of the map prevents it from being a lifetime module.
+
+26:07.000 --> 26:13.000
+Oh, I see, I see. It's not lifetime because the maps are at all constant. They're not all the same.
+
+26:13.000 --> 26:14.000
+Yeah.
+
+26:14.000 --> 26:18.000
+It's not connected, the morphisms aren't connected or something like that.
+
+26:18.000 --> 26:19.000
+Yeah, something like that.
+
+26:19.000 --> 26:28.000
+And so this means that we lose some, there's basically a filtration that would exist based on geometry, but doesn't exist because of the algebra.
+
+26:28.000 --> 26:37.000
+And I think if we want to solve it in this way, we need a way to like keep that information of like, why does this filtration that should work not work?
+
+26:37.000 --> 26:40.000
+Provide some way of like comparing those.
+
+26:40.000 --> 26:45.000
+I see. I see. We may also want to just, I mean, include.
+
+26:46.000 --> 26:51.000
+Honestly, a filtration is always going to be sort of short, exact sequence.
+
+26:51.000 --> 26:55.000
+And then we could record which element in X it is.
+
+26:55.000 --> 26:59.000
+So which, which extension of this?
+
+26:59.000 --> 27:03.000
+In what sense is a filtration of short, exact sequence?
+
+27:03.000 --> 27:07.000
+Well, you have a sub module and then you have a quotient module.
+
+27:07.000 --> 27:08.000
+Right?
+
+27:08.000 --> 27:10.000
+Oh, right. Sure. At each point.
+
+27:10.000 --> 27:13.000
+We're only remembering what is the sub module, what's the quotient module.
+
+27:13.000 --> 27:17.000
+We're not remembering what's the extension.
+
+27:17.000 --> 27:21.000
+Ah, that might be, that might be something to look into that.
+
+27:21.000 --> 27:28.000
+Right. So like, I mean, there's a sense in which if we just remember literally what the extensions are, then we can reconstruct the entire module.
+
+27:28.000 --> 27:31.000
+Then it's an invariant because it gives you the whole module back.
+
+27:31.000 --> 27:36.000
+Oh, okay. Maybe there's something you can extract from the extensions.
+
+27:36.000 --> 27:42.000
+That's what I was going to say. But when you view it that way, it's like, okay, so then what functions on X are we interested in?
+
+27:42.000 --> 27:47.000
+Right. We can take the zero function on X and then we just don't care what the extension is.
+
+27:47.000 --> 27:53.000
+Well, we could take, we could take more interesting invariants of the X and perhaps get more information and sort of that.
+
+27:53.000 --> 28:01.000
+We could sort of build up a theory of how much information do you want from the X, that kind of thing.
+
+28:01.000 --> 28:07.000
+Yeah. So those are the three things I've done basically.
+
+28:07.000 --> 28:09.000
+Cool.
+
+28:09.000 --> 28:13.000
+I think that's clear thinking.
+
+28:13.000 --> 28:16.000
+Derek, do you have anything to add?
+
+28:16.000 --> 28:27.000
+I'm not the pro here, although I find the idea interesting and I think Goody is the program that should help you with this.
+
+28:27.000 --> 28:37.000
+Yeah, I've seen that Goody is C++ with Python bindings. Would you plan on like porting it also to like Julia binding so you can interact with it?
+
+28:37.000 --> 28:41.000
+No, my idea would be to port my thing to Python bindings.
+
+28:41.000 --> 28:42.000
+Oh, okay.
+
+28:42.000 --> 28:50.000
+Julia is my backend. Julia is my C++. I am not good enough to write my thing in C++, so I did it in Julia, which is more expressive.
+
+28:50.000 --> 28:53.000
+Sure. And then you write Python binding, like do a Python binding.
+
+28:53.000 --> 29:01.000
+Yeah, that's my plan eventually. I haven't done this before. I know there are software that does it for you, so I need to look into that.
+
+29:01.000 --> 29:06.000
+Yeah, I'd hope there would be just a library that like converts NumPy arrays to Julia.
+
+29:06.000 --> 29:14.000
+Something like that. And so basically your input is in Python and then you convert it to Julia and put that in.
+
+29:14.000 --> 29:21.000
+Your output is in Julia and then converts back to Python and then you don't touch anything in between. That would be ideal.
+
+29:21.000 --> 29:27.000
+Sure.
+
+29:27.000 --> 29:30.000
+I do have something to add.
+
+29:30.000 --> 29:31.000
+What?
+
+29:31.000 --> 29:38.000
+Unrelated to this, but my example ran successfully, so the library is working.
+
+29:38.000 --> 29:43.000
+Oh, good. Good.
+
+29:43.000 --> 29:50.000
+There's a sense in which I really wish, actually I really wish both of you could be in Austria for this thing.
+
+29:50.000 --> 29:53.000
+This thing that's at the end of March.
+
+29:53.000 --> 29:57.000
+I could be in Austria. I just need to plan ahead.
+
+29:57.000 --> 29:59.000
+It's during classes.
+
+29:59.000 --> 30:05.000
+Yeah, I would need to plan ahead very methodically.
+
+30:05.000 --> 30:16.000
+I mean, I can talk with my professors and see what we're doing, but that seems like especially because then it's also when I'm possibly going to be visiting grad school as well.
+
+30:16.000 --> 30:21.000
+I have actually heard back from one of them.
+
+30:21.000 --> 30:27.000
+And unfortunately, so University of Wisconsin Madison, I put up here the email.
+
+30:27.000 --> 30:36.000
+They had over 800 applicants to the program, so they just preliminarily, like early, just like denied a bunch of people.
+
+30:36.000 --> 30:37.000
+Including you or no?
+
+30:37.000 --> 30:42.000
+Let me tell you, the reason why they denied you is because they think you're not going to go.
+
+30:42.000 --> 30:44.000
+That may well be it, yeah.
+
+30:44.000 --> 30:50.000
+At UW Madison? But that's not a safety school, so to speak, right? It's quite hard to get into.
+
+30:50.000 --> 30:51.000
+Madison?
+
+30:51.000 --> 30:53.000
+Yeah.
+
+30:53.000 --> 30:58.000
+I mean, they think that Ricardo is going to go someplace better.
+
+30:58.000 --> 31:07.000
+He very well might, but OK, I shouldn't be saying this because when I applied to undergrad, NYU did that to me.
+
+31:07.000 --> 31:16.000
+This could backfire because it could be that all the better places think, oh, not quite.
+
+31:16.000 --> 31:19.000
+Yeah, especially with as many applicants as everyone seems to be getting now.
+
+31:19.000 --> 31:23.000
+Well, I'm sorry to hear, Ricardo. I think you're a very high quality applicant.
+
+31:23.000 --> 31:28.000
+Keep in mind that these places always receive that many applications. This is not news.
+
+31:28.000 --> 31:29.000
+OK.
+
+31:29.000 --> 31:30.000
+Sure.
+
+31:30.000 --> 31:33.000
+But they are forced, and Duke does the same thing, by the way.
+
+31:33.000 --> 31:38.000
+We have explicit conversations about how good someone is and how likely they are to come.
+
+31:38.000 --> 31:43.000
+And the fact is that if you applied to Duke, we'd look at your application calls.
+
+31:43.000 --> 31:50.000
+Are you going to come here? Come on, let's kind of get into it, and then we'll name some other place.
+
+31:50.000 --> 31:54.000
+No, yeah, I just, yeah, it was just a bit, because they sent it so early.
+
+31:54.000 --> 31:58.000
+I wasn't expecting anything until late February, and then they sent it literally last week.
+
+31:58.000 --> 32:00.000
+I was like, OK, well.
+
+32:00.000 --> 32:04.000
+OK, well, again, I'm sorry to hear, Ricardo. I think you're a very high quality applicant.
+
+32:04.000 --> 32:07.000
+I have no doubts that you're going to get in somewhere.
+
+32:07.000 --> 32:08.000
+Yeah, I hope so.
+
+32:08.000 --> 32:13.000
+Well, I mean, I told Ricardo something a little bit more realistic,
+
+32:13.000 --> 32:18.000
+which is that there is no reason why he should be rejected from anywhere.
+
+32:18.000 --> 32:24.000
+Sure, that's a good thing to say. My only worry for you, Ricardo, is you only apply to four places, so you are...
+
+32:24.000 --> 32:29.000
+That doesn't mean I am not going to guarantee they'll get in somewhere,
+
+32:29.000 --> 32:34.000
+because it can happen that the stochastics just work not for you.
+
+32:34.000 --> 32:42.000
+Yeah, I forgot about this. Ricardo, you only apply to four places, so that is, you know, a worrying factor.
+
+32:42.000 --> 32:46.000
+Is there a place that you want to go above everyone else?
+
+32:46.000 --> 32:48.000
+Presumably MIT.
+
+32:48.000 --> 32:54.000
+There is nowhere that I'm like, sir, do I want to go? But if I had to pick now, there is one that I'm going to go.
+
+32:54.000 --> 32:56.000
+Which one?
+
+32:56.000 --> 32:57.000
+Johns Hopkins.
+
+32:57.000 --> 32:58.000
+Which one?
+
+32:58.000 --> 32:59.000
+Johns Hopkins.
+
+32:59.000 --> 33:01.000
+Write to somebody at Hopkins.
+
+33:01.000 --> 33:06.000
+Emily Reel is actually going to be at Duke in like a month, maybe a month and a half or something like that.
+
+33:06.000 --> 33:08.000
+No, she's coming on the 30th.
+
+33:08.000 --> 33:16.000
+But write to somebody at Hopkins and say, look, if I had to pick today, Hopkins would be my first choice.
+
+33:16.000 --> 33:18.000
+Let me tell you, they don't know that.
+
+33:18.000 --> 33:19.000
+Okay.
+
+33:19.000 --> 33:21.000
+All right, I'll write that.
+
+33:21.000 --> 33:26.000
+Write an email, and you have to do it today, because these decisions are being made now.
+
+33:26.000 --> 33:35.000
+And if you tell someone at Hopkins that if you were going to make a decision today that you would choose them over all the other places you apply, you should feel free to tell them what those places are.
+
+33:35.000 --> 33:41.000
+You could tell them that you applied, but you could say, I applied to these other places, Berkeley and Harvard.
+
+33:41.000 --> 33:43.000
+I don't know where you apply.
+
+33:43.000 --> 33:47.000
+But then say, but if I had to choose today, I would choose Hopkins.
+
+33:47.000 --> 33:51.000
+Then that will seriously raise the chance of you being admitted there.
+
+33:51.000 --> 33:52.000
+It really does. It really does.
+
+33:52.000 --> 33:58.000
+From everyone I've heard, everyone I've heard said that you have to play the game.
+
+33:58.000 --> 34:01.000
+Yeah, you can't do that to every place that you apply.
+
+34:01.000 --> 34:12.000
+But if there's one that you're willing to do it for, then it raises your chance at that place by a lot, because then they don't have to roll the dice anymore.
+
+34:12.000 --> 34:16.000
+Okay, I will do that.
+
+34:16.000 --> 34:20.000
+Pick a person that's sort of up your alley that you'd like to work with.
+
+34:20.000 --> 34:25.000
+You could write them an email. It should be an email that indicates that you know who they are.
+
+34:25.000 --> 34:31.000
+Yeah, I think it's an email because I've looked at some of her work before, like I read her book.
+
+34:31.000 --> 34:35.000
+Actually, she based it on the reason I'm interested in Category Theory from one of her videos.
+
+34:35.000 --> 34:40.000
+That's right. And you could say that. You could say, I know that you're coming to Duke in late April.
+
+34:40.000 --> 34:41.000
+I'm talking late March.
+
+34:41.000 --> 34:47.000
+But this means that I have to send this message now because it pertains to my application to Johns Hopkins.
+
+34:47.000 --> 34:54.000
+And then say the thing about, you know, if today I had to choose one of all the places I apply, it would be Hopkins.
+
+34:54.000 --> 34:59.000
+I don't even know what my disposition is. I don't know whether my application has been accepted to other places.
+
+34:59.000 --> 35:05.000
+But if I could pick one place to be accepted, it would be Hopkins.
+
+35:05.000 --> 35:09.000
+Are you fine with me emailing it to you first so you can proofread it?
+
+35:09.000 --> 35:13.000
+Yes. Yes, you can email it to me first. Please do.
+
+35:13.000 --> 35:18.000
+I will be as quick as I can. My schedule is off. So if you email it to me at 9 p.m.
+
+35:18.000 --> 35:21.000
+I might not see it till, you know, four in the morning. Yeah.
+
+35:24.000 --> 35:27.000
+Yeah, I'm jet lagged. I'm getting up really, really early.
+
+35:27.000 --> 35:33.000
+Oh, yeah. You also have the jet lag to do it. But even when you are jet lagged, you also have.
+
+35:33.000 --> 35:40.000
+Jet lag is perfect. Yeah, my schedule is terrible. But when I'm jet lagged, it's much better.
+
+35:41.000 --> 35:48.000
+No, there's no question. My family likes to send me away for a week to Europe so I can come back and get up in the morning.
+
+35:50.000 --> 35:57.000
+I remember during like 501, like one of the, I think, it was right before I think the second midterm.
+
+35:57.000 --> 36:03.000
+I was working with other people in the homework. I was like, you know, sometimes I'm like, okay, we're not going to get this finished in time.
+
+36:03.000 --> 36:06.000
+Let's send Azure an email to get like a couple hours extension.
+
+36:06.000 --> 36:11.000
+And then immediately, like, it's like 1 a.m. We resented it like five minutes later and everything was fine.
+
+36:11.000 --> 36:14.000
+That was great. Right.
+
+36:16.000 --> 36:21.000
+Yeah, 1 a.m. was early. When my schedule was like that, 1 a.m. was early. I'm like, what time is it? It's like 4.
+
+36:23.000 --> 36:29.000
+Yeah, I always try to like, sometimes it happens. I was like, okay, now that you got my schedule, I can order it.
+
+36:30.000 --> 36:37.000
+Yes. Well, I do that by going, yeah. Actually, that's a good point I have to, I might enlist somebody's help.
+
+36:37.000 --> 36:51.000
+I need to, I need to schedule for, for Math 403, I need to schedule a whole bunch of oral exams.
+
+36:51.000 --> 36:55.000
+Oh, right. That's what I was talking about.
+
+36:55.000 --> 36:59.000
+Does anybody, do you, Ben knows, I'll ask him to do it.
+
+36:59.000 --> 37:05.000
+Oh, the oral exams. You're doing oral exams for 403. Oh, that's amazing. See, a little hard, a little hard for me.
+
+37:11.000 --> 37:13.000
+I've done oral exams before.
+
+37:16.000 --> 37:17.000
+Yeah.
+
+37:25.000 --> 37:33.000
+Do 21 lends itself very well to in-class exams?
+
+37:33.000 --> 37:36.000
+It does, because it's very, there are a lot of computational questions you can ask.
+
+37:44.000 --> 37:45.000
+Okay.
+
+37:46.000 --> 37:56.000
+This, this, yeah, this is what I'm doing, I'm doing this one because I cannot, there's just no point in grading written solutions to a, to a week-long take-home interview.
+
+37:57.000 --> 37:58.000
+Sure.
+
+37:59.000 --> 38:00.000
+Yeah, not with AI.
+
+38:01.000 --> 38:06.000
+No, yeah, that's what I discovered in the class that, that you were in, right?
+
+38:07.000 --> 38:09.000
+Ricardo wasn't the one that you were in?
+
+38:10.000 --> 38:12.000
+In 403 last, last time?
+
+38:12.000 --> 38:17.000
+There was one that had some, some AI issues, I think, and the answers were wrong.
+
+38:17.000 --> 38:23.000
+Did I stand up in front of the class? Did I stand up in front of your class and say I know that a bunch of you used AI?
+
+38:24.000 --> 38:29.000
+Uh, I think so, I'm not entirely sure. I think, yeah, I think a lot, yeah.
+
+38:29.000 --> 38:31.000
+You were, you weren't one of those, so.
+
+38:31.000 --> 38:32.000
+Yeah, I was not.
+
+38:32.000 --> 38:33.000
+You don't remember that so well.
+
+38:33.000 --> 38:34.000
+I do not.
+
+38:34.000 --> 38:35.000
+But like, half the class was.
+
+38:35.000 --> 38:46.000
+I've tried using, I don't know if I don't know how to prompt engineer, I've tried like everyone, so I've been like, okay, this is a homework I did, let's see how the AI fixed that, but it's just, I can't, I can't get it to do anything then, so I just.
+
+38:47.000 --> 38:51.000
+I mean, I graded, there was, I can't tell you this.
+
+38:52.000 --> 38:59.000
+I know what happens when AI, when AI does the entire, the entirety of midterm one, it got a 46 out of 100.
+
+39:01.000 --> 39:02.000
+Okay.
+
+39:02.000 --> 39:03.000
+All right.
+
+39:03.000 --> 39:10.000
+Yeah, I think Dan has also been trying to like see how AI does when he's grading the homework, just to like.
+
+39:10.000 --> 39:11.000
+Yeah, okay.
+
+39:11.000 --> 39:18.000
+I'll ask him for help with scheduling, just, I've never used one of these, you know, sort of.
+
+39:19.000 --> 39:21.000
+When to meets or whatever they're called.
+
+39:21.000 --> 39:26.000
+Sign up genius or when to meets, I don't know, I haven't used these, I've never used one before.
+
+39:26.000 --> 39:37.000
+Honestly, I've seen professors literally just post like a Google forms thing or whatever, have people like fill out when they're available and then just try to figure it out from there.
+
+39:37.000 --> 39:39.000
+If it's not a big class, that's totally fine.
+
+39:39.000 --> 39:42.000
+No, I can't do it that way, that's going to be too much work for me.
+
+39:42.000 --> 39:50.000
+I want to just say the exams will all be on Monday from like, you know, noon until 4 p.m. and sign up in the slots.
+
+39:51.000 --> 39:53.000
+Oh, sure, yeah, if you.
+
+39:54.000 --> 39:55.000
+I don't have to do any work.
+
+39:55.000 --> 40:01.000
+It's just that, you know, if somebody can't make it during those times, then I have to figure things out.
+
+40:01.000 --> 40:09.000
+But assuming that each person can make it during that time at some point, then they have to figure out amongst themselves how they can manage to sign up.
+
+40:10.000 --> 40:11.000
+Sure.
+
+40:11.000 --> 40:21.000
+All right, I think that's I think that's about it.
+
+40:21.000 --> 40:24.000
+We have only a couple of minutes left before we have the meeting.
+
+40:24.000 --> 40:26.000
+Well, I have something to say.
+
+40:27.000 --> 40:28.000
+Yes.
+
+40:28.000 --> 40:43.000
+So I have an issue, which is I have learned a lot of my math writing more recently in sort of like in conjunction with how it was, how especially chat GPT does its own math writing.
+
+40:43.000 --> 40:47.000
+So I asked you about that at our first meeting.
+
+40:48.000 --> 40:49.000
+So.
+
+40:58.000 --> 41:00.000
+Yeah, I wanted to mention this actually.
+
+41:00.000 --> 41:02.000
+AI helped me with the skeleton.
+
+41:02.000 --> 41:09.000
+And I quite like the way it does lists sometimes, but it often lists too many lists.
+
+41:10.000 --> 41:11.000
+And there are.
+
+41:12.000 --> 41:17.000
+But the outline was very AI driven in that sense.
+
+41:17.000 --> 41:19.000
+I'm not a fraud.
+
+41:19.000 --> 41:29.000
+If that's running through your mind, it's obvious that I couldn't possibly have written some of these things because it's like it involves knowledge that I simply doesn't have.
+
+41:29.000 --> 41:30.000
+Yeah.
+
+41:31.000 --> 41:37.000
+But and I'm saying this more broadly even maybe because I'm an ESL speaker.
+
+41:37.000 --> 41:43.000
+I have this tendency to sort of like imitate the person I'm talking to.
+
+41:43.000 --> 41:45.000
+So if I'm talking to.
+
+41:45.000 --> 41:46.000
+Right.
+
+41:46.000 --> 41:47.000
+I have that as well.
+
+41:47.000 --> 41:49.000
+I don't know if it's just ESL, but at least.
+
+41:49.000 --> 42:03.000
+But as I've used as I've like used chat GPT to learn things in the past, I've also sort of internalized some of its some of its wording choices a bit more like workflow pipeline.
+
+42:04.000 --> 42:14.000
+It's very it's very deployment heavy and it's also very it's very it's very like business jargon.
+
+42:14.000 --> 42:16.000
+Let's synthesize our.
+
+42:16.000 --> 42:18.000
+I was going to use the word jargon.
+
+42:18.000 --> 42:19.000
+It's very jargon.
+
+42:19.000 --> 42:25.000
+And I don't like that much for that, but sometimes the jargon comes up with is just so good.
+
+42:25.000 --> 42:30.000
+Sometimes it is, but sometimes it's it's it's it's identifiable.
+
+42:30.000 --> 42:35.000
+So like, you know, one of the things that chat GPT does, if you ask it to answer a question.
+
+42:35.000 --> 42:41.000
+I just remember the exam question I asked about cross audience except it was block matrices.
+
+42:41.000 --> 42:42.000
+Right.
+
+42:42.000 --> 42:43.000
+Yes.
+
+42:43.000 --> 42:44.000
+Yes.
+
+42:44.000 --> 42:46.000
+The answer is like two step flags.
+
+42:46.000 --> 42:49.000
+You look at you look at those two subspaces in another.
+
+42:49.000 --> 42:50.000
+Yeah.
+
+42:50.000 --> 42:53.000
+And you get a block matrices and these kinds of things.
+
+42:53.000 --> 42:54.000
+Yeah.
+
+42:54.000 --> 42:57.000
+There's a there's a there's a generally theoretic way to do that.
+
+42:57.000 --> 43:00.000
+It involves ladies subgroups, subgroups, subgroups, things like that.
+
+43:00.000 --> 43:03.000
+The problem is that chat GPT knows everything.
+
+43:03.000 --> 43:04.000
+Yeah.
+
+43:04.000 --> 43:05.000
+Right.
+
+43:05.000 --> 43:14.000
+And so when it gives you describe the answer this way, you unfettered uses all the mathematical terminology that it exists.
+
+43:14.000 --> 43:19.000
+And it thinks that it's cool to use the right jargon for this.
+
+43:19.000 --> 43:23.000
+The problem is that people in Math 403 don't know this jargon yet.
+
+43:23.000 --> 43:28.000
+When they use AI to answer this question, it's obvious because they're using terms that they don't know how to define.
+
+43:28.000 --> 43:29.000
+Yeah. Yeah.
+
+43:29.000 --> 43:30.000
+Yeah. No, that makes sense.
+
+43:30.000 --> 43:37.000
+Um, like, you know, like it's, you know, what's a parabolic subgroup?
+
+43:37.000 --> 43:38.000
+Yeah.
+
+43:38.000 --> 43:44.000
+They might have heard the expression once, but they wouldn't be able to to to deploy it.
+
+43:44.000 --> 43:46.000
+I don't think it probably heard it.
+
+43:46.000 --> 43:48.000
+They shouldn't have heard it at all.
+
+43:48.000 --> 43:49.000
+That's the point.
+
+43:49.000 --> 43:51.000
+It's not in any of the books that we use.
+
+43:51.000 --> 43:53.000
+It's not in any of our sources.
+
+43:53.000 --> 43:57.000
+The only way to know that is to either take a course before to have gotten it from somewhere else.
+
+43:57.000 --> 43:58.000
+Yeah.
+
+43:58.000 --> 43:59.000
+No, no.
+
+43:59.000 --> 44:00.000
+All of that makes sense.
+
+44:00.000 --> 44:02.000
+Before, they've learned it in their own time.
+
+44:02.000 --> 44:03.000
+Whatever.
+
+44:03.000 --> 44:05.000
+Then they'll be able to answer your question during the.
+
+44:05.000 --> 44:06.000
+That's my point.
+
+44:06.000 --> 44:07.000
+Yes.
+
+44:07.000 --> 44:08.000
+If they know what a parabolic subgroup is.
+
+44:08.000 --> 44:11.000
+That'll be just the phone conversation you guys are going to have for like five minutes.
+
+44:11.000 --> 44:12.000
+Right.
+
+44:12.000 --> 44:19.000
+If they actually do know what a parabolic subgroup is, then it's like, OK, I guess for the purpose of this, you learn what a parabolic subgroup is.
+
+44:19.000 --> 44:24.000
+I guess I'm OK with that, I suppose.
+
+44:24.000 --> 44:27.000
+And then you're going to have like a brief conversation with them about it.
+
+44:27.000 --> 44:28.000
+It's going to be fun.
+
+44:28.000 --> 44:29.000
+And then you move on to.
+
+44:29.000 --> 44:30.000
+Yes.
+
+44:30.000 --> 44:31.000
+Yeah.
+
+44:31.000 --> 44:38.000
+But I guess the the problem with me is that this is the the first larger math document that I've written in a bit.
+
+44:38.000 --> 44:42.000
+And I'm like, oh, my God, I'm starting to I'm starting to sound like AI.
+
+44:42.000 --> 44:49.000
+And then I and then I there are certain things were like, AI, this paragraph, how could I make it better?
+
+44:49.000 --> 44:50.000
+And then I'm like, oh, no.
+
+44:50.000 --> 44:53.000
+And it's all merging into each other.
+
+44:53.000 --> 44:54.000
+So I think I need to like.
+
+44:54.000 --> 45:00.000
+Well, I've drawn Eric when we meet, when we meet for, you know, for what we're meeting tomorrow.
+
+45:00.000 --> 45:01.000
+Right.
+
+45:01.000 --> 45:02.000
+Yeah.
+
+45:02.000 --> 45:03.000
+We're meeting tomorrow.
+
+45:03.000 --> 45:09.000
+And we can talk about, you know, which parts feel more like AI, which parts feel more genuine.
+
+45:09.000 --> 45:10.000
+Yeah.
+
+45:10.000 --> 45:11.000
+And I can tell.
+
+45:11.000 --> 45:12.000
+Oh, I can tell, too.
+
+45:12.000 --> 45:16.000
+My voice, my voice is disappearing.
+
+45:16.000 --> 45:17.000
+Yeah.
+
+45:17.000 --> 45:27.000
+Which is, which is, which is a little bit sad, but also a little bit good because the voice that I used to see was a little sort of.
+
+45:27.000 --> 45:28.000
+To floor.
+
+45:28.000 --> 45:29.000
+Yeah, I was.
+
+45:29.000 --> 45:31.000
+I've always been a very verbose writer.
+
+45:31.000 --> 45:32.000
+I've always been a very verbose writer.
+
+45:32.000 --> 45:37.000
+A little bit more concise, which is good, but it's also got a little bit more.
+
+45:37.000 --> 45:40.000
+For lack of a better word, impersonal.
+
+45:40.000 --> 45:41.000
+Yeah, exactly.
+
+45:41.000 --> 45:42.000
+I agree.
+
+45:42.000 --> 45:43.000
+I agree with that.
+
+45:43.000 --> 45:44.000
+I agree with that.
+
+45:44.000 --> 45:45.000
+Yeah.
+
+45:45.000 --> 45:46.000
+Yeah.
+
+45:46.000 --> 45:49.000
+So there are parts where I'm reading and going, yeah, I can really tell that Eric wrote this.
+
+45:49.000 --> 45:50.000
+This is, this is what I want to see.
+
+45:50.000 --> 45:52.000
+There are parts where it's just like.
+
+45:52.000 --> 45:57.000
+Really, I could have written that sentence or even that paragraph or something like that.
+
+45:57.000 --> 45:58.000
+Yeah.
+
+45:58.000 --> 45:59.000
+My keyboard's on my lap.
+
+45:59.000 --> 46:00.000
+No, no, but I understand.
+
+46:00.000 --> 46:02.000
+And I fully agree with you.
+
+46:02.000 --> 46:03.000
+I fully agree with you.
+
+46:03.000 --> 46:09.000
+Writing this has been an interesting introspective moment because I'm like, where am I?
+
+46:09.000 --> 46:10.000
+What is this?
+
+46:10.000 --> 46:17.000
+And, and how, how much have I come to rely on AI to, to, to build my skeleton for me and everything else?
+
+46:17.000 --> 46:20.000
+So this is, this was, yeah, this was an experience.
+
+46:20.000 --> 46:25.000
+I am, I am interested in talking more about it tomorrow.
+
+46:26.000 --> 46:29.000
+Do you have something to say before we go?
+
+46:29.000 --> 46:30.000
+Yeah.
+
+46:30.000 --> 46:33.000
+I was just going to say one thing that bothers me about AI is that now whenever I'm writing
+
+46:33.000 --> 46:35.000
+something like, oh, it's an M dash.
+
+46:35.000 --> 46:37.000
+I was like, wait, is this going to look too much like AI?
+
+46:37.000 --> 46:38.000
+Yes.
+
+46:38.000 --> 46:41.000
+I also start double, double guessing myself with those things.
+
+46:41.000 --> 46:46.000
+I have totally heard, I've heard horror stories about those kinds of things about students
+
+46:46.000 --> 46:49.000
+who learn how to write and they actually know how to write.
+
+46:49.000 --> 46:54.000
+And then a teacher will look at their writing and says, oh, but you, this AI does that.
+
+46:54.000 --> 46:55.000
+It's a horror story.
+
+46:55.000 --> 46:56.000
+Yeah.
+
+46:56.000 --> 46:57.000
+That's correct.
+
+46:57.000 --> 46:59.000
+Like, I mean, would you want me to not use that?
+
+46:59.000 --> 47:00.000
+That's how it works.
+
+47:00.000 --> 47:01.000
+Yeah.
+
+47:01.000 --> 47:04.000
+ABDAC is like super useful, like punctuation stuff.
+
+47:04.000 --> 47:05.000
+Yeah.
+
+47:05.000 --> 47:06.000
+They're super useful punctuation.
+
+47:06.000 --> 47:10.000
+I use them, you know, preferably, certainly no more than once a paragraph.
+
+47:10.000 --> 47:12.000
+Perfectly no more than once a page.
+
+47:12.000 --> 47:13.000
+Yeah.
+
+47:13.000 --> 47:16.000
+If you're using too many M dashes, it means that you haven't organized your thoughts properly.
+
+47:16.000 --> 47:17.000
+Yeah.
+
+47:17.000 --> 47:18.000
+Too many asides.
+
+47:18.000 --> 47:20.000
+Or for doing asides.
+
+47:20.000 --> 47:21.000
+Yes.
+
+47:21.000 --> 47:22.000
+But.
+
+47:22.000 --> 47:26.000
+Yeah, I was going to say at the time now, it's too fast forward, so you need to.
+
+47:26.000 --> 47:27.000
+Yes.
+
+47:27.000 --> 47:30.000
+I was going to go back and over to the other one.
+
+47:30.000 --> 47:31.000
+Okay.
+
+47:31.000 --> 47:32.000
+Lovely meeting.
+
+47:32.000 --> 47:34.000
+I look forward to seeing more of your progress, Ricardo.
+
+47:34.000 --> 47:39.000
+And also trying to figure out how I might be able to help, if at all, with my work.
+
+47:39.000 --> 47:41.000
+But I think, well, we'll see.
+
+47:41.000 --> 47:43.000
+And by the same token.
+
+47:43.000 --> 47:45.000
+Visualization, that's going to be really helpful.
+
+47:45.000 --> 47:46.000
+Yeah.
+
+47:46.000 --> 47:52.000
+By the same token, you know, Ricardo, you might be able to help Eric do visualization stuff.
+
+47:52.000 --> 47:53.000
+Yeah.
+
+47:53.000 --> 47:54.000
+Exactly.
+
+47:54.000 --> 47:56.000
+I might need some suggestions.
+
+47:56.000 --> 47:58.000
+Because right now I don't have any visualization implemented yet.
+
+47:58.000 --> 48:02.000
+If you need any input from my side, do you like the stuff I'm doing?
+
+48:02.000 --> 48:05.000
+Or do you need like, as a user, what I'd be interested in?
+
+48:05.000 --> 48:06.000
+Yes.
+
+48:06.000 --> 48:07.000
+The user experience.
+
+48:07.000 --> 48:08.000
+That's what I need.
+
+48:08.000 --> 48:09.000
+Okay.
+
+48:09.000 --> 48:10.000
+All right.
+
+48:10.000 --> 48:11.000
+Talk to you guys later.
+
+48:11.000 --> 48:12.000
+Ricardo, am I correct?
+
+48:12.000 --> 48:14.000
+I cannot meet that.
+
+48:14.000 --> 48:16.000
+What's your Tuesday afternoon look like?
+
+48:16.000 --> 48:18.000
+Very busy.
+
+48:18.000 --> 48:22.000
+I can't meet until like 4.30.
+
+48:22.000 --> 48:23.000
+Yeah, okay.
+
+48:23.000 --> 48:25.000
+So there's no chance that you're going to join with Eric.
+
+48:25.000 --> 48:31.000
+So as far as I'm concerned, I'm happy to have both of you during this time slot at the top.
+
+48:31.000 --> 48:32.000
+I cannot.
+
+48:32.000 --> 48:35.000
+I have a class at 3.05.
+
+48:35.000 --> 48:40.000
+Today, because of the stuff, the class is not happening.
+
+48:40.000 --> 48:42.000
+Ah, right.
+
+48:42.000 --> 48:43.000
+Good point.
+
+48:43.000 --> 48:44.000
+Okay.
+
+48:44.000 --> 48:45.000
+What about this half of that?
+
+48:45.000 --> 48:50.000
+If necessary, I can show up like every once in a while during Eric's meeting.
+
+48:50.000 --> 48:52.000
+When's your meeting on Tuesday?
+
+48:52.000 --> 48:56.000
+It's Tuesdays at, what is it, 3?
+
+48:56.000 --> 48:57.000
+2.50?
+
+48:57.000 --> 48:59.000
+2.50 to 3.50, yeah.
+
+48:59.000 --> 49:02.000
+Yeah, so I can occasionally show up to that.
+
+49:02.000 --> 49:05.000
+I will need to miss complex analysis, but I'm not enrolled in that.
+
+49:05.000 --> 49:07.000
+So it's fine if I miss it every once in a while.
+
+49:07.000 --> 49:09.000
+Okay.
+
+49:09.000 --> 49:12.000
+So just keep that in mind that this has been very productive.
+
+49:12.000 --> 49:17.000
+I think that you two are working on separate things, but they complement each other extremely well.
+
+49:17.000 --> 49:18.000
+They do.
+
+49:18.000 --> 49:22.000
+I think that your skill sets complement your projects very well.
+
+49:22.000 --> 49:25.000
+So Eric, when yours might be missing, Ricardo's really good at doing.
+
+49:25.000 --> 49:26.000
+Yes, yes.
+
+49:26.000 --> 49:31.000
+The visualization stuff, I'm particularly keen on picking apart Ricardo's brain eventually.
+
+49:31.000 --> 49:34.000
+Right, right.
+
+49:34.000 --> 49:40.000
+And the alignment project, you have software that can be useful for exploring that.
+
+49:40.000 --> 49:43.000
+And for directing what we might actually want to prove.
+
+49:43.000 --> 49:47.000
+So we can also think of just having meetings at some completely other time.
+
+49:47.000 --> 49:49.000
+But I'm going to head over to the other meeting to have them.
+
+49:49.000 --> 49:50.000
+Okay.
+
+49:50.000 --> 49:51.000
+All right.
+
+49:51.000 --> 49:52.000
+Bye.
+
+49:52.000 --> 49:53.000
+Bye.
+
+49:53.000 --> 49:54.000
+Bye, guys.
+
+50:04.000 --> 50:05.000
+Thank you.
+

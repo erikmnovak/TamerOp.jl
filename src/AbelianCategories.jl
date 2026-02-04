@@ -12,8 +12,8 @@ Design intent
   short exact sequences, and snake lemma output.
 - Keep code ASCII-only.
 
-Most routines are currently implemented over QQ (ExactQQ.QQ) because they rely
-on exact linear algebra (rank / nullspace / column space).
+Most routines rely on FieldLinAlg and are field-generic. Exactness checks are
+exact for exact fields and tolerance-based for RealField.
 
 Downstream modules (DerivedFunctors, ModuleComplexes, ChangeOfPosets, ...)
 should depend on this module rather than IndicatorResolutions when they only
@@ -26,8 +26,8 @@ using SparseArrays
 import ..FiniteFringe
 using ..FiniteFringe: cover_edges, nvertices
 
-using ..CoreModules: QQ
-using ..ExactQQ: rrefQQ, rankQQ, nullspaceQQ, solve_fullcolumnQQ, colspaceQQ
+using ..CoreModules: AbstractCoeffField, RealField, eye
+using ..FieldLinAlg
 
 using ..Modules: CoverCache, cover_cache,
                  CoverEdgeMapStore, _find_sorted_index,
@@ -50,17 +50,29 @@ export kernel_with_inclusion, kernel,
        AbstractDiagram, DiscretePairDiagram, ParallelPairDiagram, SpanDiagram, CospanDiagram,
        limit, colimit
 
+# ------------------------------- helpers -------------------------------------
+
+function _is_zero_matrix(field::AbstractCoeffField, A::AbstractMatrix)
+    if field isa RealField
+        isempty(A) && return true
+        maxabs = maximum(abs, A)
+        tol = field.atol + field.rtol * maxabs
+        return maxabs <= tol
+    end
+    return all(iszero, A)
+end
+
 # --------------------------- kernel and upset presentation --------------------------
 
 "Kernel of f with inclusion iota : ker(f) to dom(f), degreewise."
-function kernel_with_inclusion(f::PMorphism{QQ}; cache::Union{Nothing,CoverCache}=nothing)
+function kernel_with_inclusion(f::PMorphism{K}; cache::Union{Nothing,CoverCache}=nothing) where {K}
     M = f.dom
     n = nvertices(M.Q)
 
-    basisK = Vector{Matrix{QQ}}(undef, n)
+    basisK = Vector{Matrix{K}}(undef, n)
     K_dims = zeros(Int, n)
     for i in 1:n
-        B = nullspaceQQ(f.comps[i])
+        B = FieldLinAlg.nullspace(f.dom.field, f.comps[i])
         basisK[i] = B
         K_dims[i] = size(B, 2)
     end
@@ -70,8 +82,8 @@ function kernel_with_inclusion(f::PMorphism{QQ}; cache::Union{Nothing,CoverCache
     preds = cc.preds
     succs = cc.succs
 
-    maps_from_pred = [Vector{Matrix{QQ}}(undef, length(preds[v])) for v in 1:n]
-    maps_to_succ   = [Vector{Matrix{QQ}}(undef, length(succs[u])) for u in 1:n]
+    maps_from_pred = [Vector{Matrix{K}}(undef, length(preds[v])) for v in 1:n]
+    maps_to_succ   = [Vector{Matrix{K}}(undef, length(succs[u])) for u in 1:n]
 
     @inbounds for u in 1:n
         su = succs[u]
@@ -83,7 +95,7 @@ function kernel_with_inclusion(f::PMorphism{QQ}; cache::Union{Nothing,CoverCache
 
             # If either stalk is 0, the induced map is the unique 0 map.
             if K_dims[u] == 0 || K_dims[v] == 0
-                X = zeros(QQ, K_dims[v], K_dims[u])
+                X = zeros(K, K_dims[v], K_dims[u])
                 outu[j] = X
                 ip = _find_sorted_index(preds[v], u)
                 maps_from_pred[v][ip] = X
@@ -93,7 +105,7 @@ function kernel_with_inclusion(f::PMorphism{QQ}; cache::Union{Nothing,CoverCache
             # Induced map K(u) -> K(v): express M(u->v)*basisK[u] in basisK[v].
             T  = maps_u_M[j]
             Im = T * basisK[u]
-            X  = solve_fullcolumnQQ(basisK[v], Im; check_rhs=false)
+            X  = FieldLinAlg.solve_fullcolumn(f.dom.field, basisK[v], Im; check_rhs=false)
 
             outu[j] = X
             ip = _find_sorted_index(preds[v], u)
@@ -101,11 +113,11 @@ function kernel_with_inclusion(f::PMorphism{QQ}; cache::Union{Nothing,CoverCache
         end
     end
 
-    storeK = CoverEdgeMapStore{QQ,Matrix{QQ}}(preds, succs, maps_from_pred, maps_to_succ, cc.nedges)
-    K = PModule{QQ,Matrix{QQ}}(M.Q, K_dims, storeK)
+    storeK = CoverEdgeMapStore{K,Matrix{K}}(preds, succs, maps_from_pred, maps_to_succ, cc.nedges)
+    Kmod = PModule{K}(M.Q, K_dims, storeK; field=M.field)
 
-    iota = PMorphism{QQ}(K, M, [basisK[i] for i in 1:n])
-    return K, iota
+    iota = PMorphism{K}(Kmod, M, [basisK[i] for i in 1:n])
+    return Kmod, iota
 end
 
 
@@ -114,20 +126,20 @@ end
 # ----------------------------
 
 """
-    image_with_inclusion(f::PMorphism{QQ}) -> (Im, iota)
+    image_with_inclusion(f::PMorphism{K}) -> (Im, iota)
 
 Compute the image submodule Im subseteq cod(f) with the inclusion morphism iota: Im -> cod(f).
 """
-function image_with_inclusion(f::PMorphism{QQ}; cache::Union{Nothing,CoverCache}=nothing)
+function image_with_inclusion(f::PMorphism{K}; cache::Union{Nothing,CoverCache}=nothing) where {K}
     N = f.cod
     Q = N.Q
     n = nvertices(Q)
 
-    bases = Vector{Matrix{QQ}}(undef, n)
+    bases = Vector{Matrix{K}}(undef, n)
     dims  = zeros(Int, n)
 
     for i in 1:n
-        B = colspaceQQ(f.comps[i])
+        B = FieldLinAlg.colspace(f.dom.field, f.comps[i])
         bases[i] = B
         dims[i]  = size(B, 2)
     end
@@ -137,8 +149,8 @@ function image_with_inclusion(f::PMorphism{QQ}; cache::Union{Nothing,CoverCache}
     preds  = storeN.preds
     succs  = storeN.succs
 
-    maps_from_pred = [Vector{Matrix{QQ}}(undef, length(preds[v])) for v in 1:n]
-    maps_to_succ   = [Vector{Matrix{QQ}}(undef, length(succs[u])) for u in 1:n]
+    maps_from_pred = [Vector{Matrix{K}}(undef, length(preds[v])) for v in 1:n]
+    maps_to_succ   = [Vector{Matrix{K}}(undef, length(succs[u])) for u in 1:n]
 
     @inbounds for u in 1:n
         su = succs[u]
@@ -155,12 +167,12 @@ function image_with_inclusion(f::PMorphism{QQ}; cache::Union{Nothing,CoverCache}
 
             # Induced map Im(u) -> Im(v): express N(u->v)*Bu in Bv.
             Auv = if du == 0
-                zeros(QQ, dv, 0)
+                zeros(K, dv, 0)
             elseif dv == 0
-                zeros(QQ, 0, du)
+                zeros(K, 0, du)
             else
                 T = Nu[j] * Bu
-                solve_fullcolumnQQ(Bv, T)
+                FieldLinAlg.solve_fullcolumn(f.dom.field, Bv, T)
             end
 
             outu[j] = Auv
@@ -169,8 +181,8 @@ function image_with_inclusion(f::PMorphism{QQ}; cache::Union{Nothing,CoverCache}
         end
     end
 
-    storeIm = CoverEdgeMapStore{QQ,Matrix{QQ}}(preds, succs, maps_from_pred, maps_to_succ, storeN.nedges)
-    Im = PModule{QQ,Matrix{QQ}}(Q, dims, storeIm)
+    storeIm = CoverEdgeMapStore{K,Matrix{K}}(preds, succs, maps_from_pred, maps_to_succ, storeN.nedges)
+    Im = PModule{K}(Q, dims, storeIm; field=N.field)
 
     iota = PMorphism(Im, N, [bases[i] for i in 1:n])
     return Im, iota
@@ -179,21 +191,22 @@ end
 # Degreewise cokernel of iota : E0 <- M, produced as a P-module C together with
 # the quotient q : E0 -> C.  The quotient is represented by surjections q_i whose
 # kernels are colspace(iota_i).
-function _cokernel_module(iota::PMorphism{QQ}; cache::Union{Nothing,CoverCache}=nothing)
+function _cokernel_module(iota::PMorphism{K}; cache::Union{Nothing,CoverCache}=nothing) where {K}
     E = iota.cod; Q = E.Q; n = nvertices(Q)
     Cdims  = zeros(Int, n)
-    qcomps = Vector{Matrix{QQ}}(undef, n)     # each is (dim C_i) x (dim E_i)
+    qcomps = Vector{Matrix{K}}(undef, n)     # each is (dim C_i) x (dim E_i)
+    field = E.field
 
     # degreewise quotients
     for i in 1:n
-        Bi = colspaceQQ(iota.comps[i])        # dim E_i x rank
-        Ni = nullspaceQQ(transpose(Bi))       # dim E_i x (dim E_i - rank)
+        Bi = FieldLinAlg.colspace(field, iota.comps[i])        # dim E_i x rank
+        Ni = FieldLinAlg.nullspace(field, transpose(Bi))       # dim E_i x (dim E_i - rank)
         Cdims[i]  = size(Ni, 2)
         qcomps[i] = transpose(Ni)
     end
 
     # structure maps of C
-    Cedges = Dict{Tuple{Int,Int}, Matrix{QQ}}()
+    Cedges = Dict{Tuple{Int,Int}, Matrix{K}}()
     cc = (cache === nothing ? cover_cache(Q) : cache)
 
     @inbounds for u in 1:n
@@ -207,16 +220,16 @@ function _cokernel_module(iota::PMorphism{QQ}; cache::Union{Nothing,CoverCache}=
                 T = maps_u[j]  # E_u -> E_v along this cover edge
 
                 # Induced quotient map: enforce q_v * T = A * q_u.
-                X = solve_fullcolumnQQ(transpose(qcomps[u]), transpose(qcomps[v] * T))
+                X = FieldLinAlg.solve_fullcolumn(field, transpose(qcomps[u]), transpose(qcomps[v] * T))
                 Cedges[(u, v)] = transpose(X)  # dim C_v x dim C_u
             else
-                Cedges[(u, v)] = zeros(QQ, Cdims[v], Cdims[u])
+                Cedges[(u, v)] = zeros(K, Cdims[v], Cdims[u])
             end
         end
     end
 
-    Cmod = PModule{QQ}(Q, Cdims, Cedges)
-    q = PMorphism{QQ}(E, Cmod, qcomps)
+    Cmod = PModule{K}(Q, Cdims, Cedges; field=field)
+    q = PMorphism(E, Cmod, qcomps)
     return Cmod, q
 end
 
@@ -235,7 +248,7 @@ pointwise (vertexwise) and the structure maps of the quotient are induced.
 
 This is the dual companion of `kernel_with_inclusion`.
 """
-function cokernel_with_projection(f::PMorphism{QQ}; cache::Union{Nothing,CoverCache}=nothing)
+function cokernel_with_projection(f::PMorphism{K}; cache::Union{Nothing,CoverCache}=nothing) where {K}
     return _cokernel_module(f; cache=cache)
 end
 
@@ -244,12 +257,12 @@ end
 # ---------------------------------------------------------------------------
 
 # Internal: difference of parallel maps (same dom/cod).
-function _difference_morphism(f::PMorphism{QQ}, g::PMorphism{QQ})
+function _difference_morphism(f::PMorphism{K}, g::PMorphism{K}) where {K}
     if f.dom !== g.dom || f.cod !== g.cod
         error("need parallel morphisms with the same domain and codomain")
     end
-    comps = Matrix{QQ}[f.comps[i] - g.comps[i] for i in 1:nvertices(f.dom.Q)]
-    return PMorphism{QQ}(f.dom, f.cod, comps)
+    comps = Matrix{K}[f.comps[i] - g.comps[i] for i in 1:nvertices(f.dom.Q)]
+    return PMorphism{K}(f.dom, f.cod, comps)
 end
 
 """
@@ -266,7 +279,7 @@ Returns:
 
 See also: `coequalizer`, `kernel_with_inclusion`.
 """
-function equalizer(f::PMorphism{QQ}, g::PMorphism{QQ}; cache=nothing)
+function equalizer(f::PMorphism{K}, g::PMorphism{K}; cache=nothing) where {K}
     h = _difference_morphism(f, g)
     return kernel_with_inclusion(h; cache=cache)
 end
@@ -285,7 +298,7 @@ Returns:
 
 See also: `equalizer`, `cokernel_with_projection`.
 """
-function coequalizer(f::PMorphism{QQ}, g::PMorphism{QQ}; cache=nothing)
+function coequalizer(f::PMorphism{K}, g::PMorphism{K}; cache=nothing) where {K}
     h = _difference_morphism(f, g)
     return cokernel_with_projection(h; cache=cache)
 end
@@ -296,7 +309,7 @@ end
 
 Return only the cokernel module.
 """
-cokernel(f::PMorphism{QQ}; cache::Union{Nothing,CoverCache}=nothing) =
+cokernel(f::PMorphism{K}; cache::Union{Nothing,CoverCache}=nothing) where {K} =
     (cokernel_with_projection(f; cache=cache))[1]
 
 """
@@ -304,7 +317,7 @@ cokernel(f::PMorphism{QQ}; cache::Union{Nothing,CoverCache}=nothing) =
 
 Return only the kernel module.
 """
-kernel(f::PMorphism{QQ}; cache::Union{Nothing,CoverCache}=nothing) =
+kernel(f::PMorphism{K}; cache::Union{Nothing,CoverCache}=nothing) where {K} =
     (kernel_with_inclusion(f; cache=cache))[1]
 
 """
@@ -313,7 +326,7 @@ kernel(f::PMorphism{QQ}; cache::Union{Nothing,CoverCache}=nothing) =
 Return only the image module (a submodule of `codomain(f)`).
 Use `image_with_inclusion` if you also want the inclusion map `Im -> codomain(f)`.
 """
-image(f::PMorphism{QQ}) = (image_with_inclusion(f))[1]
+image(f::PMorphism{K}) where {K} = (image_with_inclusion(f))[1]
 
 """
     coimage_with_projection(f; cache=nothing) -> (Coim, p)
@@ -323,13 +336,13 @@ together with the canonical projection p : A -> Coim.
 
 In an abelian category, the canonical map Coim -> Im is an isomorphism.
 """
-function coimage_with_projection(f::PMorphism{QQ}; cache::Union{Nothing,CoverCache}=nothing)
-    K, iK = kernel_with_inclusion(f; cache=cache)
+function coimage_with_projection(f::PMorphism{K}; cache::Union{Nothing,CoverCache}=nothing) where {K}
+    Kmod, iK = kernel_with_inclusion(f; cache=cache)
     Coim, p = _cokernel_module(iK; cache=cache)
     return Coim, p
 end
 
-coimage(f::PMorphism{QQ}; cache::Union{Nothing,CoverCache}=nothing) =
+coimage(f::PMorphism{K}; cache::Union{Nothing,CoverCache}=nothing) where {K} =
     (coimage_with_projection(f; cache=cache))[1]
 
 # Quotients of submodules: for now we represent a submodule by its inclusion morphism.
@@ -341,7 +354,7 @@ Q = M / N together with the projection q : M -> Q.
 
 This is an alias for `cokernel_with_projection(iota)`.
 """
-function quotient_with_projection(iota::PMorphism{QQ}; cache::Union{Nothing,CoverCache}=nothing)
+function quotient_with_projection(iota::PMorphism{K}; cache::Union{Nothing,CoverCache}=nothing) where {K}
     return cokernel_with_projection(iota; cache=cache)
 end
 
@@ -350,7 +363,7 @@ end
 
 Return only the quotient module M/N for an inclusion iota : N -> M.
 """
-quotient(iota::PMorphism{QQ}; cache::Union{Nothing,CoverCache}=nothing) =
+quotient(iota::PMorphism{K}; cache::Union{Nothing,CoverCache}=nothing) where {K} =
     (quotient_with_projection(iota; cache=cache))[1]
 
 # Small predicates
@@ -361,8 +374,9 @@ quotient(iota::PMorphism{QQ}; cache::Union{Nothing,CoverCache}=nothing) =
 Return true if all components of f are the zero matrix.
 """
 function is_zero_morphism(f::PMorphism{K}) where {K}
+    field = f.dom.field
     for A in f.comps
-        all(iszero, A) || return false
+        _is_zero_matrix(field, A) || return false
     end
     return true
 end
@@ -373,13 +387,13 @@ end
 Check whether f is a monomorphism in the functor category of P-modules.
 For these representations, this is equivalent to f_i being injective for every vertex i.
 
-This method is implemented for QQ using exact rank computations.
+This method uses field-aware ranks (exact for exact fields, tolerance-based for RealField).
 """
-function is_monomorphism(f::PMorphism{QQ})
+function is_monomorphism(f::PMorphism{K}) where {K}
     Q = f.dom.Q
     @assert f.cod.Q === Q
     for i in 1:nvertices(Q)
-        if rankQQ(f.comps[i]) != f.dom.dims[i]
+        if FieldLinAlg.rank(f.dom.field, f.comps[i]) != f.dom.dims[i]
             return false
         end
     end
@@ -390,13 +404,13 @@ end
     is_epimorphism(f) -> Bool
 
 Check whether f is an epimorphism (pointwise surjective).
-Implemented for QQ via exact ranks.
+Implemented via field-aware ranks (exact for exact fields, tolerance-based for RealField).
 """
-function is_epimorphism(f::PMorphism{QQ})
+function is_epimorphism(f::PMorphism{K}) where {K}
     Q = f.dom.Q
     @assert f.cod.Q === Q
     for i in 1:nvertices(Q)
-        if rankQQ(f.comps[i]) != f.cod.dims[i]
+        if FieldLinAlg.rank(f.dom.field, f.comps[i]) != f.cod.dims[i]
             return false
         end
     end
@@ -425,14 +439,10 @@ end
 
 Build a `Submodule` from an inclusion map.
 
-If `check_mono=true`, verify that `incl` is a monomorphism (QQ only).
+If `check_mono=true`, verify that `incl` is a monomorphism.
 """
-function submodule(incl::PMorphism{QQ}; check_mono::Bool=true)
+function submodule(incl::PMorphism{K}; check_mono::Bool=true) where {K}
     check_mono && !is_monomorphism(incl) && error("submodule: given inclusion is not a monomorphism")
-    return Submodule{QQ}(incl)
-end
-function submodule(incl::PMorphism{K}; check_mono::Bool=false) where {K}
-    check_mono && error("submodule: check_mono is only implemented for QQ")
     return Submodule{K}(incl)
 end
 
@@ -451,9 +461,9 @@ end
 
 Compute the quotient M/N given a submodule S representing N <= M.
 """
-quotient_with_projection(S::Submodule{QQ}; cache::Union{Nothing,CoverCache}=nothing) =
+quotient_with_projection(S::Submodule{K}; cache::Union{Nothing,CoverCache}=nothing) where {K} =
     quotient_with_projection(S.incl; cache=cache)
-quotient(S::Submodule{QQ}; cache::Union{Nothing,CoverCache}=nothing) =
+quotient(S::Submodule{K}; cache::Union{Nothing,CoverCache}=nothing) where {K} =
     quotient(S.incl; cache=cache)
 
 """
@@ -463,11 +473,11 @@ quotient(S::Submodule{QQ}; cache::Union{Nothing,CoverCache}=nothing) =
 Convenience methods matching the common mathematical notation `M/N`.
 These verify that `ambient(S) === M`.
 """
-function quotient_with_projection(M::PModule{QQ}, S::Submodule{QQ}; cache::Union{Nothing,CoverCache}=nothing)
+function quotient_with_projection(M::PModule{K}, S::Submodule{K}; cache::Union{Nothing,CoverCache}=nothing) where {K}
     ambient(S) === M || error("quotient_with_projection: submodule is not a submodule of the given ambient module")
     return quotient_with_projection(S; cache=cache)
 end
-quotient(M::PModule{QQ}, S::Submodule{QQ}; cache::Union{Nothing,CoverCache}=nothing) =
+quotient(M::PModule{K}, S::Submodule{K}; cache::Union{Nothing,CoverCache}=nothing) where {K} =
     (quotient_with_projection(M, S; cache=cache))[1]
 
 """
@@ -476,11 +486,11 @@ quotient(M::PModule{QQ}, S::Submodule{QQ}; cache::Union{Nothing,CoverCache}=noth
 
 Convenience overloads where the submodule is given as an inclusion morphism iota : N -> M.
 """
-function quotient_with_projection(M::PModule{QQ}, iota::PMorphism{QQ}; cache::Union{Nothing,CoverCache}=nothing)
+function quotient_with_projection(M::PModule{K}, iota::PMorphism{K}; cache::Union{Nothing,CoverCache}=nothing) where {K}
     iota.cod === M || error("quotient_with_projection: inclusion morphism does not target the given ambient module")
     return quotient_with_projection(iota; cache=cache)
 end
-quotient(M::PModule{QQ}, iota::PMorphism{QQ}; cache::Union{Nothing,CoverCache}=nothing) =
+quotient(M::PModule{K}, iota::PMorphism{K}; cache::Union{Nothing,CoverCache}=nothing) where {K} =
     (quotient_with_projection(M, iota; cache=cache))[1]
 
 """
@@ -488,9 +498,9 @@ quotient(M::PModule{QQ}, iota::PMorphism{QQ}; cache::Union{Nothing,CoverCache}=n
 
 Return ker(f) <= dom(f) as a `Submodule`. (The inclusion is provided by `kernel_with_inclusion`.)
 """
-function kernel_submodule(f::PMorphism{QQ}; cache::Union{Nothing,CoverCache}=nothing)
-    K, iota = kernel_with_inclusion(f; cache=cache)
-    return Submodule{QQ}(iota)
+function kernel_submodule(f::PMorphism{K}; cache::Union{Nothing,CoverCache}=nothing) where {K}
+    Kmod, iota = kernel_with_inclusion(f; cache=cache)
+    return Submodule{K}(iota)
 end
 
 """
@@ -498,9 +508,9 @@ end
 
 Return im(f) <= cod(f) as a `Submodule`.
 """
-function image_submodule(f::PMorphism{QQ})
+function image_submodule(f::PMorphism{K}) where {K}
     Im, iota = image_with_inclusion(f)
-    return Submodule{QQ}(iota)
+    return Submodule{K}(iota)
 end
 
 # -----------------------------------------------------------------------------
@@ -508,13 +518,13 @@ end
 # -----------------------------------------------------------------------------
 
 # Internal: compute a right inverse for a full-row-rank matrix Q (r x m), so Q * rinv = I_r.
-function _right_inverse_full_rowQQ(Q::Matrix{QQ})
+function _right_inverse_full_row(field, Q::Matrix)
     r, m = size(Q)
     if r == 0
-        return zeros(QQ, m, 0)
+        return zeros(eltype(Q), m, 0)
     end
     G = Q * transpose(Q)  # r x r, invertible if Q has full row rank
-    invG = solve_fullcolumnQQ(G, Matrix{QQ}(I, r, r))
+    invG = FieldLinAlg.solve_fullcolumn(field, G, eye(field, r))
     return transpose(Q) * invG  # m x r
 end
 
@@ -535,7 +545,7 @@ Returns:
 
 The maps satisfy inB o f == inC o g.
 """
-function pushout(f::PMorphism{QQ}, g::PMorphism{QQ}; cache::Union{Nothing,CoverCache}=nothing)
+function pushout(f::PMorphism{K}, g::PMorphism{K}; cache::Union{Nothing,CoverCache}=nothing) where {K}
     @assert f.dom === g.dom
     A = f.dom
     B = f.cod
@@ -543,23 +553,23 @@ function pushout(f::PMorphism{QQ}, g::PMorphism{QQ}; cache::Union{Nothing,CoverC
     S, iB, iC, pB, pC = direct_sum_with_maps(B, C)
     Q = S.Q
     # phi = iB o f - iC o g : A -> B oplus C
-    phi_comps = Vector{Matrix{QQ}}(undef, nvertices(Q))
+    phi_comps = Vector{Matrix{K}}(undef, nvertices(Q))
     for u in 1:nvertices(Q)
         phi_comps[u] = iB.comps[u] * f.comps[u] - iC.comps[u] * g.comps[u]
     end
-    phi = PMorphism{QQ}(A, S, phi_comps)
+    phi = PMorphism{K}(A, S, phi_comps)
 
     P, q = _cokernel_module(phi; cache=cache)
 
     # inB = q o iB, inC = q o iC
-    inB_comps = Vector{Matrix{QQ}}(undef, nvertices(Q))
-    inC_comps = Vector{Matrix{QQ}}(undef, nvertices(Q))
+    inB_comps = Vector{Matrix{K}}(undef, nvertices(Q))
+    inC_comps = Vector{Matrix{K}}(undef, nvertices(Q))
     for u in 1:nvertices(Q)
         inB_comps[u] = q.comps[u] * iB.comps[u]
         inC_comps[u] = q.comps[u] * iC.comps[u]
     end
-    inB = PMorphism{QQ}(B, P, inB_comps)
-    inC = PMorphism{QQ}(C, P, inC_comps)
+    inB = PMorphism{K}(B, P, inB_comps)
+    inC = PMorphism{K}(C, P, inC_comps)
 
     return P, inB, inC, q, phi
 end
@@ -631,18 +641,18 @@ Compute a limit of a supported small diagram object.
 
 Supported shapes:
 - `DiscretePairDiagram`: product
-- `ParallelPairDiagram` (over QQ): equalizer
-- `CospanDiagram` (over QQ): pullback
+- `ParallelPairDiagram`: equalizer
+- `CospanDiagram`: pullback
 """
 function limit(D::DiscretePairDiagram{K}; cache=nothing) where {K}
     return product(D.A, D.B)
 end
 
-function limit(D::ParallelPairDiagram{QQ}; cache=nothing)
+function limit(D::ParallelPairDiagram{K}; cache=nothing) where {K}
     return equalizer(D.f, D.g; cache=cache)
 end
 
-function limit(D::CospanDiagram{QQ}; cache=nothing)
+function limit(D::CospanDiagram{K}; cache=nothing) where {K}
     return pullback(D.f, D.g; cache=cache)
 end
 
@@ -653,39 +663,39 @@ Compute a colimit of a supported small diagram object.
 
 Supported shapes:
 - `DiscretePairDiagram`: coproduct
-- `ParallelPairDiagram` (over QQ): coequalizer
-- `SpanDiagram` (over QQ): pushout
+- `ParallelPairDiagram`: coequalizer
+- `SpanDiagram`: pushout
 """
 function colimit(D::DiscretePairDiagram{K}; cache=nothing) where {K}
     return coproduct(D.A, D.B)
 end
 
-function colimit(D::ParallelPairDiagram{QQ}; cache=nothing)
+function colimit(D::ParallelPairDiagram{K}; cache=nothing) where {K}
     return coequalizer(D.f, D.g; cache=cache)
 end
 
-function colimit(D::SpanDiagram{QQ}; cache=nothing)
+function colimit(D::SpanDiagram{K}; cache=nothing) where {K}
     return pushout(D.f, D.g; cache=cache)
 end
 
 
-# Internal: solve A*X = B over QQ, returning one particular solution with free variables set to 0.
-# This duplicates ChainComplexes.solve_particularQQ but avoids introducing a dependency.
-function _solve_particularQQ(A::AbstractMatrix{QQ}, B::AbstractMatrix{QQ})
-    A0 = Matrix{QQ}(A)
-    B0 = Matrix{QQ}(B)
+# Internal: solve A*X = B over a field, returning one particular solution
+# with free variables set to 0.
+function _solve_particular(field, A::AbstractMatrix, B::AbstractMatrix)
+    A0 = Matrix(A)
+    B0 = Matrix(B)
     m, n = size(A0)
     @assert size(B0, 1) == m
 
     Aug = hcat(A0, B0)
-    R, pivs_all = rrefQQ(Aug)
+    R, pivs_all = FieldLinAlg.rref(field, Aug)
     rhs = size(B0, 2)
 
     # consistency check: zero row in A-part with nonzero in RHS-part
     for i in 1:m
         if all(R[i, 1:n] .== 0)
             if any(R[i, n+1:n+rhs] .!= 0)
-                error("_solve_particularQQ: inconsistent system")
+                error("_solve_particular: inconsistent system")
             end
         end
     end
@@ -695,7 +705,7 @@ function _solve_particularQQ(A::AbstractMatrix{QQ}, B::AbstractMatrix{QQ})
         p <= n && push!(pivs, p)
     end
 
-    X = zeros(QQ, n, rhs)
+    X = zeros(eltype(A0), n, rhs)
     for (row, pcol) in enumerate(pivs)
         X[pcol, :] = R[row, n+1:n+rhs]
     end
@@ -719,7 +729,7 @@ Returns:
 
 The projections satisfy f o prB == g o prC.
 """
-function pullback(f::PMorphism{QQ}, g::PMorphism{QQ}; cache::Union{Nothing,CoverCache}=nothing)
+function pullback(f::PMorphism{K}, g::PMorphism{K}; cache::Union{Nothing,CoverCache}=nothing) where {K}
     @assert f.cod === g.cod
     B = f.dom
     C = g.dom
@@ -728,22 +738,22 @@ function pullback(f::PMorphism{QQ}, g::PMorphism{QQ}; cache::Union{Nothing,Cover
     Q = S.Q
 
     # psi = f o pB - g o pC : B oplus C -> D
-    psi_comps = Vector{Matrix{QQ}}(undef, nvertices(Q))
+    psi_comps = Vector{Matrix{K}}(undef, nvertices(Q))
     for u in 1:nvertices(Q)
         psi_comps[u] = f.comps[u] * pB.comps[u] - g.comps[u] * pC.comps[u]
     end
-    psi = PMorphism{QQ}(S, D, psi_comps)
+    psi = PMorphism{K}(S, D, psi_comps)
 
     P, iota = kernel_with_inclusion(psi; cache=cache)  # iota : P -> S
 
-    prB_comps = Vector{Matrix{QQ}}(undef, nvertices(Q))
-    prC_comps = Vector{Matrix{QQ}}(undef, nvertices(Q))
+    prB_comps = Vector{Matrix{K}}(undef, nvertices(Q))
+    prC_comps = Vector{Matrix{K}}(undef, nvertices(Q))
     for u in 1:nvertices(Q)
         prB_comps[u] = pB.comps[u] * iota.comps[u]
         prC_comps[u] = pC.comps[u] * iota.comps[u]
     end
-    prB = PMorphism{QQ}(P, B, prB_comps)
-    prC = PMorphism{QQ}(P, C, prC_comps)
+    prB = PMorphism{K}(P, B, prB_comps)
+    prC = PMorphism{K}(P, C, prC_comps)
 
     return P, prB, prC, iota, psi
 end
@@ -763,7 +773,7 @@ If `check=true` (default), we verify:
 - p is an epimorphism (pointwise surjective)
 - im(i) = ker(p) as submodules of B (pointwise equality)
 
-The check is exact over QQ.
+The check is exact for exact fields and tolerance-based for RealField.
 
 This object caches `ker(p)` and `im(i)` once computed, since many downstream
 constructions (Ext/Tor LES, snake lemma, etc.) use them repeatedly.
@@ -780,11 +790,11 @@ mutable struct ShortExactSequence{K}
     img_i::Union{Nothing,Tuple{PModule{K},PMorphism{K}}}
 end
 
-function ShortExactSequence(i::PMorphism{QQ}, p::PMorphism{QQ};
+function ShortExactSequence(i::PMorphism{K}, p::PMorphism{K};
                            check::Bool=true,
-                           cache::Union{Nothing,CoverCache}=nothing)
+                           cache::Union{Nothing,CoverCache}=nothing) where {K}
     @assert i.cod === p.dom
-    ses = ShortExactSequence{QQ}(i.dom, i.cod, p.cod, i, p, false, false, nothing, nothing)
+    ses = ShortExactSequence{K}(i.dom, i.cod, p.cod, i, p, false, false, nothing, nothing)
     if check
         ok = is_exact(ses; cache=cache)
         ok || error("ShortExactSequence: maps do not form a short exact sequence")
@@ -797,9 +807,9 @@ end
 
 Alias for `ShortExactSequence(i, p; check=..., cache=...)`.
 """
-short_exact_sequence(i::PMorphism{QQ}, p::PMorphism{QQ};
+short_exact_sequence(i::PMorphism{K}, p::PMorphism{K};
                      check::Bool=true,
-                     cache::Union{Nothing,CoverCache}=nothing) =
+                     cache::Union{Nothing,CoverCache}=nothing) where {K} =
     ShortExactSequence(i, p; check=check, cache=cache)
 
 """ 
@@ -808,7 +818,7 @@ short_exact_sequence(i::PMorphism{QQ}, p::PMorphism{QQ};
 Check whether the stored maps define a short exact sequence.
 Results are cached inside the object.
 """
-function is_exact(ses::ShortExactSequence{QQ}; cache::Union{Nothing,CoverCache}=nothing)
+function is_exact(ses::ShortExactSequence{K}; cache::Union{Nothing,CoverCache}=nothing) where {K}
     if ses.checked
         return ses.exact
     end
@@ -824,9 +834,10 @@ function is_exact(ses::ShortExactSequence{QQ}; cache::Union{Nothing,CoverCache}=
     @assert p.cod === C
 
     # p o i = 0
+    field = B.field
     for u in 1:nvertices(B.Q)
         comp = p.comps[u] * i.comps[u]
-        all(iszero, comp) || (ses.checked = true; ses.exact = false; return false)
+        _is_zero_matrix(field, comp) || (ses.checked = true; ses.exact = false; return false)
     end
 
     # i mono, p epi
@@ -843,7 +854,7 @@ function is_exact(ses::ShortExactSequence{QQ}; cache::Union{Nothing,CoverCache}=
     if ses.img_i === nothing
         ses.img_i = image_with_inclusion(i)
     end
-    (K, incK) = ses.ker_p
+    (Kmod, incK) = ses.ker_p
     (Im, incIm) = ses.img_i
 
     # Compare subspaces at each vertex using ranks.
@@ -851,15 +862,15 @@ function is_exact(ses::ShortExactSequence{QQ}; cache::Union{Nothing,CoverCache}=
     for u in 1:nvertices(Q)
         Au = incK.comps[u]
         Bu = incIm.comps[u]
-        rA = rankQQ(Au)
-        rB = rankQQ(Bu)
+        rA = FieldLinAlg.rank(B.field, Au)
+        rB = FieldLinAlg.rank(B.field, Bu)
         if rA != rB
             ses.checked = true
             ses.exact = false
             return false
         end
         # span(Au,Bu) must have same dimension if they are equal.
-        rAB = rankQQ(hcat(Au, Bu))
+        rAB = FieldLinAlg.rank(B.field, hcat(Au, Bu))
         if rAB != rA
             ses.checked = true
             ses.exact = false
@@ -877,45 +888,45 @@ end
 
 Throw an error if `ses` is not exact.
 """
-function assert_exact(ses::ShortExactSequence{QQ}; cache::Union{Nothing,CoverCache}=nothing)
+function assert_exact(ses::ShortExactSequence{K}; cache::Union{Nothing,CoverCache}=nothing) where {K}
     is_exact(ses; cache=cache) || error("ShortExactSequence: sequence is not exact")
     return nothing
 end
 
 # Internal: induced map between kernels, given g : A -> B and kernel inclusions kA : ker(fA) -> A, kB : ker(fB) -> B.
-function _induced_map_to_kernelQQ(g::PMorphism{QQ},
-                                 kA::PMorphism{QQ},
-                                 kB::PMorphism{QQ})
+function _induced_map_to_kernel(g::PMorphism{K},
+                                 kA::PMorphism{K},
+                                 kB::PMorphism{K}) where {K}
     Q = g.dom.Q
     @assert kA.cod === g.dom
     @assert g.cod === kB.cod
     Kdom = kA.dom
     Kcod = kB.dom
-    comps = Vector{Matrix{QQ}}(undef, nvertices(Q))
+    comps = Vector{Matrix{K}}(undef, nvertices(Q))
     for u in 1:nvertices(Q)
         rhs = g.comps[u] * kA.comps[u]  # B_u x dim kerA_u
-        comps[u] = solve_fullcolumnQQ(kB.comps[u], rhs)  # dim kerB_u x dim kerA_u
+        comps[u] = FieldLinAlg.solve_fullcolumn(g.dom.field, kB.comps[u], rhs)  # dim kerB_u x dim kerA_u
     end
-    return PMorphism{QQ}(Kdom, Kcod, comps)
+    return PMorphism{K}(Kdom, Kcod, comps)
 end
 
 # Internal: induced map between cokernels, given h : A -> B and cokernel projections qA : A -> cokerA, qB : B -> cokerB.
-function _induced_map_from_cokernelQQ(h::PMorphism{QQ},
-                                     qA::PMorphism{QQ},
-                                     qB::PMorphism{QQ})
+function _induced_map_from_cokernel(h::PMorphism{K},
+                                    qA::PMorphism{K},
+                                    qB::PMorphism{K}) where {K}
     Q = h.dom.Q
     @assert qA.dom === h.dom
     @assert h.cod === qB.dom
     Cdom = qA.cod
     Ccod = qB.cod
-    comps = Vector{Matrix{QQ}}(undef, nvertices(Q))
+    comps = Vector{Matrix{K}}(undef, nvertices(Q))
     for u in 1:nvertices(Q)
         Qsrc = qA.comps[u]
-        rinv = _right_inverse_full_rowQQ(Qsrc)
+        rinv = _right_inverse_full_row(h.dom.field, Qsrc)
         rhs = qB.comps[u] * h.comps[u]  # cokerB_u x A_u
         comps[u] = rhs * rinv           # cokerB_u x cokerA_u
     end
-    return PMorphism{QQ}(Cdom, Ccod, comps)
+    return PMorphism{K}(Cdom, Ccod, comps)
 end
 
 """
@@ -945,17 +956,18 @@ struct SnakeLemmaResult{K}
 end
 
 # Internal: check commutativity of a square g1 o f1 == g2 o f2 at all vertices.
-function _check_commutative_squareQQ(g1::PMorphism{QQ}, f1::PMorphism{QQ},
-                                     g2::PMorphism{QQ}, f2::PMorphism{QQ})
+function _check_commutative_square(g1::PMorphism{K}, f1::PMorphism{K},
+                                   g2::PMorphism{K}, f2::PMorphism{K}) where {K}
     Q = f1.dom.Q
     @assert f1.cod === g1.dom
     @assert f2.cod === g2.dom
     @assert f1.dom === f2.dom
     @assert g1.cod === g2.cod
+    field = f1.dom.field
     for u in 1:nvertices(Q)
         left = g1.comps[u] * f1.comps[u]
         right = g2.comps[u] * f2.comps[u]
-        left == right || return false
+        _is_zero_matrix(field, left - right) || return false
     end
     return true
 end
@@ -982,13 +994,13 @@ If `check=true`, we verify that both rows are exact and that the two squares com
 The connecting morphism `delta : ker(fC) -> coker(fA)` is computed explicitly using
 linear algebra in each stalk.
 """
-function snake_lemma(top::ShortExactSequence{QQ},
-                     bottom::ShortExactSequence{QQ},
-                     fA::PMorphism{QQ},
-                     fB::PMorphism{QQ},
-                     fC::PMorphism{QQ};
+function snake_lemma(top::ShortExactSequence{K},
+                     bottom::ShortExactSequence{K},
+                     fA::PMorphism{K},
+                     fB::PMorphism{K},
+                     fC::PMorphism{K};
                      check::Bool=true,
-                     cache::Union{Nothing,CoverCache}=nothing)
+                     cache::Union{Nothing,CoverCache}=nothing) where {K}
 
     if check
         assert_exact(top; cache=cache)
@@ -996,10 +1008,10 @@ function snake_lemma(top::ShortExactSequence{QQ},
 
         # Squares must commute:
         # fB o i = i' o fA
-        ok1 = _check_commutative_squareQQ(fB, top.i, bottom.i, fA)
+        ok1 = _check_commutative_square(fB, top.i, bottom.i, fA)
         ok1 || error("snake_lemma: left square does not commute")
         # p' o fB = fC o p
-        ok2 = _check_commutative_squareQQ(bottom.p, fB, fC, top.p)
+        ok2 = _check_commutative_square(bottom.p, fB, fC, top.p)
         ok2 || error("snake_lemma: right square does not commute")
     end
 
@@ -1025,24 +1037,24 @@ function snake_lemma(top::ShortExactSequence{QQ},
 
     # Induced maps on kernels: ker(fA) -> ker(fB) -> ker(fC)
     # k1 : KerA -> KerB induced by top.i : A -> B
-    k1 = _induced_map_to_kernelQQ(top.i, incKerA, incKerB)
+    k1 = _induced_map_to_kernel(top.i, incKerA, incKerB)
 
     # k2 : KerB -> KerC induced by top.p : B -> C
-    k2 = _induced_map_to_kernelQQ(top.p, incKerB, incKerC)
+    k2 = _induced_map_to_kernel(top.p, incKerB, incKerC)
 
     # Induced maps on cokernels: coker(fA) -> coker(fB) -> coker(fC)
     # c1 induced by bottom.i : A' -> B'
-    c1 = _induced_map_from_cokernelQQ(bottom.i, qA, qB)
+    c1 = _induced_map_from_cokernel(bottom.i, qA, qB)
 
     # c2 induced by bottom.p : B' -> C'
-    c2 = _induced_map_from_cokernelQQ(bottom.p, qB, qC)
+    c2 = _induced_map_from_cokernel(bottom.p, qB, qC)
 
     # Connecting morphism delta : ker(fC) -> coker(fA)
-    delta_comps = Vector{Matrix{QQ}}(undef, nvertices(Q))
+    delta_comps = Vector{Matrix{K}}(undef, nvertices(Q))
     for u in 1:nvertices(Q)
         kdim = KerC.dims[u]
         if kdim == 0 || CokA.dims[u] == 0
-            delta_comps[u] = zeros(QQ, CokA.dims[u], kdim)
+            delta_comps[u] = zeros(K, CokA.dims[u], kdim)
             continue
         end
 
@@ -1051,21 +1063,21 @@ function snake_lemma(top::ShortExactSequence{QQ},
 
         # Lift basis elements in C_u to B_u via p : B -> C (top row).
         # Since p_u is surjective in a short exact sequence, we can use a right inverse.
-        rinv_p = _right_inverse_full_rowQQ(top.p.comps[u])  # B_u x C_u
+        rinv_p = _right_inverse_full_row(top.p.dom.field, top.p.comps[u])  # B_u x C_u
         B_lift = rinv_p * Kc  # B_u x kdim
 
         # Apply fB to get elements in B'_u.
         Bp = fB.comps[u] * B_lift  # B'_u x kdim
 
         # Since Kc is in ker(fC), commutativity implies Bp is in ker(p') = im(i').
-        Ap = solve_fullcolumnQQ(bottom.i.comps[u], Bp)  # A'_u x kdim
+        Ap = FieldLinAlg.solve_fullcolumn(bottom.i.dom.field, bottom.i.comps[u], Bp)  # A'_u x kdim
 
         # Project to coker(fA): qA : A' -> CokA
         delta_comps[u] = qA.comps[u] * Ap  # CokA_u x kdim
     end
-    delta = PMorphism{QQ}(KerC, CokA, delta_comps)
+    delta = PMorphism{K}(KerC, CokA, delta_comps)
 
-    return SnakeLemmaResult{QQ}(kerA, kerB, kerC, cokA, cokB, cokC, k1, k2, delta, c1, c2)
+    return SnakeLemmaResult{K}(kerA, kerB, kerC, cokA, cokB, cokC, k1, k2, delta, c1, c2)
 end
 
 """
@@ -1074,11 +1086,11 @@ end
 Convenience overload: provide the four row maps directly instead of pre-constructing
 `ShortExactSequence` objects for the top and bottom rows.
 """
-function snake_lemma(i::PMorphism{QQ}, p::PMorphism{QQ},
-                     i2::PMorphism{QQ}, p2::PMorphism{QQ},
-                     fA::PMorphism{QQ}, fB::PMorphism{QQ}, fC::PMorphism{QQ};
+function snake_lemma(i::PMorphism{K}, p::PMorphism{K},
+                     i2::PMorphism{K}, p2::PMorphism{K},
+                     fA::PMorphism{K}, fB::PMorphism{K}, fC::PMorphism{K};
                      check::Bool=true,
-                     cache::Union{Nothing,CoverCache}=nothing)
+                     cache::Union{Nothing,CoverCache}=nothing) where {K}
     top = ShortExactSequence(i, p; check=check, cache=cache)
     bottom = ShortExactSequence(i2, p2; check=check, cache=cache)
     return snake_lemma(top, bottom, fA, fB, fC; check=check, cache=cache)
@@ -1211,6 +1223,9 @@ function _direct_sum_many_with_maps(mods::AbstractVector{<:PModule{K}}) where {K
             error("_direct_sum_many_with_maps: modules must live on the same poset")
         end
     end
+    for M in mods
+        M.field == mods[1].field || error("_direct_sum_many_with_maps: field mismatch")
+    end
 
     # offsets[u][i] is the 0-based starting index of the i-th summand inside the
     # direct-sum fiber at vertex u. (So offsets[u][1] = 0.)
@@ -1272,7 +1287,7 @@ function _direct_sum_many_with_maps(mods::AbstractVector{<:PModule{K}}) where {K
         end
 
         store = CoverEdgeMapStore{K,Matrix{K}}(preds, succs, maps_from_pred, maps_to_succ, cc.nedges)
-        S = PModule{K,Matrix{K}}(Q, Sdims, store)
+        S = PModule{K}(Q, Sdims, store; field=mods[1].field)
     else
         # Fallback: keyed access (still O(|E|), but slower).
         edge_maps = Dict{Tuple{Int,Int}, Matrix{K}}()
@@ -1294,7 +1309,7 @@ function _direct_sum_many_with_maps(mods::AbstractVector{<:PModule{K}}) where {K
             end
             edge_maps[(u, v)] = Auv
         end
-        S = PModule{K}(Q, Sdims, edge_maps)
+        S = PModule{K}(Q, Sdims, edge_maps; field=mods[1].field)
     end
 
     # Injections and projections (fill diagonal entries directly).
@@ -1343,8 +1358,7 @@ end
 #     * show(SnakeLemmaResult) must NOT recompute anything
 # - Respect IOContext(:limit=>true) by truncating long dim vectors.
 
-# Internal: human-readable scalar name (keeps QQ readable).
-_scalar_name(::Type{QQ}) = "QQ"
+# Internal: human-readable scalar name.
 _scalar_name(::Type{K}) where {K} = string(K)
 
 # Internal: cheap stats for a dims vector (no allocations).

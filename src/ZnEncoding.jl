@@ -4,7 +4,7 @@ using LinearAlgebra
 using SparseArrays
 using Random
 
-using ..CoreModules: QQ, AbstractPLikeEncodingMap, EncodingOptions
+using ..CoreModules: AbstractPLikeEncodingMap, EncodingOptions, AbstractCoeffField, coeff_type, CompiledEncoding
 
 @inline _resolve_encoding_opts(opts::Union{EncodingOptions,Nothing}) =
     opts === nothing ? EncodingOptions() : opts
@@ -12,16 +12,17 @@ using ..Stats: _wilson_interval
 
 import ..CoreModules: locate, dimension, representatives, axes_from_encoding
 import ..RegionGeometry: region_weights, region_adjacency
-using ..ExactQQ: colspaceQQ, solve_fullcolumnQQ
-using ..FiniteFringe: AbstractPoset, FinitePoset, cover_edges, Upset, Downset,
+import ..FieldLinAlg
+using ..FiniteFringe: AbstractPoset, FinitePoset, ProductOfChainsPoset, cover_edges, Upset, Downset,
                        upset_closure, downset_closure, intersects, FringeModule,
                        poset_equal
 import ..FiniteFringe: nvertices, leq, upset_indices, downset_indices
-using ..Modules: PModule
+using ..Modules: PModule, PosetCache
 using ..FlangeZn: Flange, IndFlat, IndInj, in_flat, in_inj
 
 # Build the finite grid poset on [a,b] subset Z^n, ordered coordinatewise.
-# Returns (Q, coords) where coords[i] is an NTuple{n,Int}.
+# Returns (Q, coords) where coords[i] is an NTuple{n,Int} in mixed-radix order.
+# Uses a structured ProductOfChainsPoset to avoid materializing the transitive closure.
 function grid_poset(a::Vector{Int}, b::Vector{Int})
     n = length(a)
     @assert length(b) == n
@@ -29,36 +30,19 @@ function grid_poset(a::Vector{Int}, b::Vector{Int})
     if any(lens .<= 0)
         error("grid_poset: invalid box")
     end
+    sizes = ntuple(i -> lens[i], n)
+    Q = ProductOfChainsPoset(sizes)
 
-    # enumerate all lattice points in the box
-    ranges = [a[i]:b[i] for i in 1:n]
-
-    # Preallocate and fill all lattice points in the box.
     N = prod(lens)
     coords = Vector{NTuple{n, Int}}(undef, N)
-    idx = 1
-    for tup in Iterators.product(ranges...)
-        coords[idx] = tup
-        idx += 1
+    strides = Vector{Int}(undef, n)
+    strides[1] = 1
+    @inbounds for i in 2:n
+        strides[i] = strides[i - 1] * lens[i - 1]
     end
-    @assert idx == N + 1
-
-    leq = BitMatrix(false, N, N)
-    @inbounds for i in 1:N
-        gi = coords[i]
-        @inbounds for j in 1:N
-            gj = coords[j]
-            ok = true
-            @inbounds for k in 1:n
-                if gi[k] > gj[k]
-                    ok = false
-                    break
-                end
-            end
-            leq[i, j] = ok
-        end
+    @inbounds for idx in 1:N
+        coords[idx] = ntuple(k -> a[k] + (div(idx - 1, strides[k]) % lens[k]), n)
     end
-    Q = FinitePoset(leq; check=false)
     return Q, coords
 end
 
@@ -66,20 +50,21 @@ end
 # M_g = im(Phi_g : F_g -> E_g), and maps are induced from the E-structure maps (projections).
 #
 # This returns a PModule over the finite grid poset. It is the object you want for Ext/Tor on that layer.
-function pmodule_on_box(FG::Flange{QQ}; a::Vector{Int}, b::Vector{Int})
+function pmodule_on_box(FG::Flange{K}; a::Vector{Int}, b::Vector{Int}) where {K}
     Q, coords = grid_poset(a, b)
     N = length(coords)
 
     r = length(FG.injectives)
     c = length(FG.flats)
     Phi = FG.phi
+    field = FG.field
 
     # For each vertex, compute:
     # - active injectives (rows) in E_g
     # - active flats (cols) in F_g
     # - B_g = basis matrix for im(Phi_g) inside E_g coordinates
     active_rows = Vector{Vector{Int}}(undef, N)
-    B = Vector{Matrix{QQ}}(undef, N)
+    B = Vector{Matrix{K}}(undef, N)
     dims = zeros(Int, N)
 
     @inbounds for i in 1:N
@@ -101,11 +86,11 @@ function pmodule_on_box(FG::Flange{QQ}; a::Vector{Int}, b::Vector{Int})
         active_rows[i] = rows
 
         if isempty(rows) || isempty(cols)
-            B[i] = zeros(QQ, length(rows), 0)
+            B[i] = zeros(K, length(rows), 0)
             dims[i] = 0
         else
             Phi_g = Phi[rows, cols]
-            Bg = colspaceQQ(Phi_g)   # rows x dim(im)
+            Bg = FieldLinAlg.colspace(field, Phi_g)   # rows x dim(im)
             B[i] = Bg
             dims[i] = size(Bg, 2)
         end
@@ -113,13 +98,13 @@ function pmodule_on_box(FG::Flange{QQ}; a::Vector{Int}, b::Vector{Int})
 
     # Build edge maps along cover edges in the grid poset using induced maps from E (projection).
     C = cover_edges(Q)
-    edge_maps = Dict{Tuple{Int, Int}, Matrix{QQ}}()
+    edge_maps = Dict{Tuple{Int, Int}, Matrix{K}}()
 
     # Helper: build projection E_g -> E_h by selecting the common injective summands (rows_h subset rows_g).
     function projection_matrix(rows_g::Vector{Int}, rows_h::Vector{Int})
         Pg = length(rows_g)
         Ph = length(rows_h)
-        P = zeros(QQ, Ph, Pg)
+        P = zeros(K, Ph, Pg)
         # rows_* are sorted by construction
         j = 1
         for i in 1:Ph
@@ -130,7 +115,7 @@ function pmodule_on_box(FG::Flange{QQ}; a::Vector{Int}, b::Vector{Int})
             if j > Pg || rows_g[j] != target
                 error("pmodule_on_box: projection mismatch; expected rows_h subset rows_g")
             end
-            P[i, j] = one(QQ)
+            P[i, j] = one(K)
         end
         return P
     end
@@ -147,19 +132,19 @@ function pmodule_on_box(FG::Flange{QQ}; a::Vector{Int}, b::Vector{Int})
                 dv = dims[v]
 
                 if dv == 0 || du == 0
-                    edge_maps[(u, v)] = zeros(QQ, dv, du)
+                    edge_maps[(u, v)] = zeros(K, dv, du)
                     continue
                 end
 
                 Pu = projection_matrix(rows_u, rows_v)     # E_u -> E_v
                 Im = Pu * B[u]                             # E_v x du
-                X = solve_fullcolumnQQ(B[v], Im)          # dv x du
+                X = FieldLinAlg.solve_fullcolumn(field, B[v], Im)  # dv x du
                 edge_maps[(u, v)] = X
             end
         end
     end
 
-    return PModule{QQ}(Q, Vector{Int}(dims), edge_maps)
+    return PModule{K}(Q, Vector{Int}(dims), edge_maps; field=field)
 end
 
 # =============================================================================
@@ -213,11 +198,12 @@ struct SignaturePoset <: AbstractPoset
     sig_y::Vector{BitVector}
     sig_z::Vector{BitVector}
     n::Int
+    cache::PosetCache
 end
 
 function SignaturePoset(sig_y::Vector{BitVector}, sig_z::Vector{BitVector})
     length(sig_y) == length(sig_z) || error("SignaturePoset: sig_y and sig_z length mismatch")
-    return SignaturePoset(sig_y, sig_z, length(sig_y))
+    return SignaturePoset(sig_y, sig_z, length(sig_y), PosetCache())
 end
 
 @inline function _sig_subset(a::BitVector, b::BitVector)::Bool
@@ -1738,6 +1724,16 @@ function encode_from_flanges(
 end
 
 
+# -----------------------------------------------------------------------------
+# CompiledEncoding forwarding (treat compiled encodings as primary)
+# -----------------------------------------------------------------------------
+
+@inline _unwrap_encoding(pi::CompiledEncoding) = pi.pi
+
+region_weights(pi::CompiledEncoding{<:ZnEncodingMap}; kwargs...) =
+    region_weights(_unwrap_encoding(pi); kwargs...)
+region_adjacency(pi::CompiledEncoding{<:ZnEncodingMap}; kwargs...) =
+    region_adjacency(_unwrap_encoding(pi); kwargs...)
 
 
 export ZnEncodingMap,

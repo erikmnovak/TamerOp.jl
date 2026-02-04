@@ -4,7 +4,11 @@ using LinearAlgebra
 using Random
 
 # Included from test/runtests.jl.
-# Uses shared aliases defined there (PM, FF, EN, IR, DF, MD, EX, QQ, ...).
+# Uses shared aliases defined there (PM, FF, EN, IR, DF, MD, QQ, ...).
+
+with_fields(FIELDS_FULL) do field
+K = CM.coeff_type(field)
+@inline c(x) = CM.coerce(field, x)
 
 
 @testset "Finite encoding from fringe (Defs 4.12-4.18)" begin
@@ -90,8 +94,8 @@ end
     U4 = FF.upset_closure(Q, BitVector([(a >= 2) && (b >= 1) for (a, b) in coords]))
 
     # No deaths: we only need the upsets to form Y for uptight signatures.
-    phi0 = spzeros(QQ, 0, 4)
-    M = FF.FringeModule{QQ}(Q, [U1, U2, U3, U4], FF.Downset[], phi0)
+    phi0 = spzeros(K, 0, 4)
+    M = FF.FringeModule{K}(Q, [U1, U2, U3, U4], FF.Downset[], phi0)
 
     enc = EN.build_uptight_encoding_from_fringe(M; poset_kind = :dense)
     pi = enc.pi
@@ -138,8 +142,8 @@ end
     # A tiny 1 times 1 fringe module on the chain.
     U = FF.principal_upset(P, 2)
     D = FF.principal_downset(P, 3)
-    Phi = sparse([1], [1], [QQ(1)], 1, 1)
-    H = FF.FringeModule{QQ}(P, [U], [D], Phi)
+    Phi = sparse([1], [1], [c(1)], 1, 1)
+    H = FF.FringeModule{K}(P, [U], [D], Phi)
 
     # A minimal ambient encoding map: point (q,) is sent to region q.
     struct DummyEncodingMap <: CM.AbstractPLikeEncodingMap
@@ -196,8 +200,8 @@ end
     tau0 = FZ.Face(n, [false])
     F1 = FZ.IndFlat(tau0, [1]; id=:F1)
     E1 = FZ.IndInj(tau0, [3]; id=:E1)
-    Phi = reshape(QQ[QQ(1)], 1, 1)
-    FG = FZ.Flange{QQ}(n, [F1], [E1], Phi)
+    Phi = reshape(K[c(1)], 1, 1)
+    FG = FZ.Flange{K}(n, [F1], [E1], Phi)
 
     mktempdir() do dir
         path = joinpath(dir, "flange.json")
@@ -212,6 +216,26 @@ end
         @test FG2.injectives[1].b == FG.injectives[1].b
         @test FG2.flats[1].tau.coords == FG.flats[1].tau.coords
         @test FG2.injectives[1].tau.coords == FG.injectives[1].tau.coords
+    end
+
+    # Flange round-trip with non-QQ field + override coercion
+    field2 = CM.F2()
+    K2 = CM.coeff_type(field2)
+    Phi2 = reshape(K2[CM.coerce(field2, 1)], 1, 1)
+    FGf2 = FZ.Flange{K2}(n, [F1], [E1], Phi2; field=field2)
+    mktempdir() do dir
+        path = joinpath(dir, "flange_f2.json")
+        SER.save_flange_json(path, FGf2)
+        FGf2_loaded = SER.load_flange_json(path)
+        @test FGf2_loaded.field == field2
+        @test eltype(FGf2_loaded.phi) == K2
+        @test FGf2_loaded.phi[1, 1] == CM.coerce(field2, 1)
+
+        FGf2_asQQ = SER.load_flange_json(path; field=CM.QQField())
+        if field isa CM.QQField
+            @test eltype(FGf2_asQQ.phi) == QQ
+            @test FGf2_asQQ.phi[1, 1] == CM.coerce(CM.QQField(), 1)
+        end
     end
 
     # Finite encoding fringe round-trip
@@ -233,8 +257,26 @@ end
         end
     end
 
+    # Finite encoding fringe round-trip with non-QQ field + override coercion
+    M2 = one_by_one_fringe(P, FF.principal_upset(P, 2), FF.principal_downset(P, 2);
+                           scalar=1, field=field2)
+    mktempdir() do dir
+        path = joinpath(dir, "encoding_f2.json")
+        SER.save_encoding_json(path, M2)
+        M2_loaded = SER.load_encoding_json(path)
+        @test M2_loaded.field == field2
+        @test eltype(M2_loaded.phi) == K2
+        @test M2_loaded.phi[1, 1] == CM.coerce(field2, 1)
 
-    # M2/Singular bridge parser (pure JSON input)
+        M2_asQQ = SER.load_encoding_json(path; field=CM.QQField())
+        if field isa CM.QQField
+            @test eltype(M2_asQQ.phi) == QQ
+            @test M2_asQQ.phi[1, 1] == CM.coerce(CM.QQField(), 1)
+        end
+    end
+
+
+    # M2/Singular bridge parser (pure JSON input; QQ-encoded scalar)
     json = """
     {
       "n": 1,
@@ -248,7 +290,7 @@ end
     @test FG3.n == 1
     @test length(FG3.flats) == 1
     @test length(FG3.injectives) == 1
-    @test FG3.phi[1,1] == QQ(1)
+    @test FG3.phi[1,1] == CM.coerce(CM.QQField(), 1)
 end
 
 @testset "M2SingularBridge.parse_flange_json edge cases" begin
@@ -264,7 +306,7 @@ end
     @test H1.n == 1
     @test length(H1.flats) == 1
     @test length(H1.injectives) == 1
-    @test Matrix(H1.phi) == reshape(QQ[1], 1, 1)
+    @test Matrix(H1.phi) == reshape(K[1], 1, 1)
 
     # Explicit phi entries can be rationals in string form.
     json2 = """
@@ -276,7 +318,7 @@ end
     }
     """
     H2 = SER.parse_flange_json(json2)
-    @test Matrix(H2.phi)[1, 1] == (-QQ(2) / QQ(3))
+    @test Matrix(H2.phi)[1, 1] == (-c(2) / c(3))
 
     # Non-intersecting flat/injective pairs must force Phi entries to 0 (monomial condition).
     json3 = """
@@ -288,7 +330,7 @@ end
     }
     """
     H3 = SER.parse_flange_json(json3)
-    @test Matrix(H3.phi) == reshape(QQ[0], 1, 1)
+    @test Matrix(H3.phi) == reshape(K[0], 1, 1)
     @test FZ.dim_at(H3, [0]) == 0
 end
 
@@ -320,7 +362,7 @@ end
     @test length(M.D) == 1
     @test M.U[1].mask == BitVector([false, true, true])
     @test M.D[1].mask == BitVector([true, true, false])
-    @test Matrix(M.phi) == reshape(QQ[QQ(-2,3)], 1, 1)
+    @test Matrix(M.phi) == reshape(K[c(-2//3)], 1, 1)
 end
 
 @testset "Serialization.load_encoding_json rejects legacy schema" begin
@@ -386,20 +428,20 @@ end
     P = chain_poset(1)
     pi = EN.EncodingMap(Q, P, [1,1])
 
-    N = MD.PModule{QQ}(P, [3], Dict{Tuple{Int,Int},SparseMatrixCSC{QQ,Int}}())
+    N = MD.PModule{K}(P, [3], Dict{Tuple{Int,Int},SparseMatrixCSC{K,Int}}())
     pbN = PM.pullback(pi, N)
 
     @test pbN.Q.n == 2
     @test pbN.dims == [3,3]
-    @test Matrix(pbN.edge_maps[1, 2]) == Matrix{QQ}(I, 3, 3)
+    @test Matrix(pbN.edge_maps[1, 2]) == Matrix{K}(I, 3, 3)
 
     # -------------------------------------------------------------------------
     # Left/right Kan extension collapse chain2 -> point (terminal/initial fast path)
     # -------------------------------------------------------------------------
-    A = spzeros(QQ, 2, 1)
-    A[1,1] = QQ(1)  # 1 -> first coordinate
+    A = spzeros(K, 2, 1)
+    A[1,1] = c(1)  # 1 -> first coordinate
 
-    M = MD.PModule{QQ}(Q, [1,2], Dict((1,2)=>A))
+    M = MD.PModule{K}(Q, [1,2], Dict((1,2)=>A))
 
     Lan = PM.pushforward_left(pi, M)
     Ran = PM.pushforward_right(pi, M)
@@ -413,9 +455,9 @@ end
     # -------------------------------------------------------------------------
     # Choose a module endomorphism commuting with A:
     # f1 = [3], f2 = diag(3,5) works because A hits only coord1.
-    f1 = QQ[3]
-    f2 = [QQ(3) QQ(0);
-          QQ(0) QQ(5)]
+    f1 = K[3]
+    f2 = [c(3) c(0);
+          c(0) c(5)]
     f = MD.PMorphism(M, M, [reshape(f1,1,1), f2])
 
     Lan_f = PM.pushforward_left(pi, f)
@@ -449,13 +491,13 @@ end
     piv = EN.EncodingMap(Qv, Pv, [1,1,1])
 
     # dims all 1, maps 1->2 and 1->3 are identity
-    Ev = Dict{Tuple{Int,Int},SparseMatrixCSC{QQ,Int}}()
+    Ev = Dict{Tuple{Int,Int},SparseMatrixCSC{K,Int}}()
     for (u,v) in FF.cover_edges(Qv).edges
-        mat = spzeros(QQ, 1, 1)
-        mat[1,1] = QQ(1)
+        mat = spzeros(K, 1, 1)
+        mat[1,1] = c(1)
         Ev[(u,v)] = mat
     end
-    Mv = MD.PModule{QQ}(Qv, [1,1,1], Ev)
+    Mv = MD.PModule{K}(Qv, [1,1,1], Ev)
 
     Lan_v = PM.pushforward_left(piv, Mv)
     @test Lan_v.dims == [1]   # pushout of k <- k -> k is k
@@ -467,7 +509,7 @@ end
     Pa = chain_poset(1)
     pia = EN.EncodingMap(Qa, Pa, [1,1])
 
-    Ma = MD.PModule{QQ}(Qa, [2,3], Dict{Tuple{Int,Int},SparseMatrixCSC{QQ,Int}}())
+    Ma = MD.PModule{K}(Qa, [2,3], Dict{Tuple{Int,Int},SparseMatrixCSC{K,Int}}())
     Lan_a = PM.pushforward_left(pia, Ma)
     Ran_a = PM.pushforward_right(pia, Ma)
 
@@ -490,6 +532,62 @@ end
 
 end
 
+@testset "Change-of-posets threading parity" begin
+    Q = chain_poset(2)
+    P = chain_poset(1)
+    pi = EN.EncodingMap(Q, P, [1,1])
+
+    A = spzeros(K, 2, 1)
+    A[1,1] = c(1)
+    M = MD.PModule{K}(Q, [1,2], Dict((1,2)=>A))
+
+    Lan_s = PM.pushforward_left(pi, M; threads=false)
+    Lan_t = PM.pushforward_left(pi, M; threads=true)
+    @test Lan_s.dims == Lan_t.dims
+
+    Ran_s = PM.pushforward_right(pi, M; threads=false)
+    Ran_t = PM.pushforward_right(pi, M; threads=true)
+    @test Ran_s.dims == Ran_t.dims
+
+    # Identity encoding to exercise edge map equality.
+    pid = EN.EncodingMap(Q, Q, [1,2])
+    Lan_id_s = PM.pushforward_left(pid, M; threads=false)
+    Lan_id_t = PM.pushforward_left(pid, M; threads=true)
+    @test Lan_id_s.dims == Lan_id_t.dims
+    @test Matrix(Lan_id_s.edge_maps[1, 2]) == Matrix(Lan_id_t.edge_maps[1, 2])
+
+    Ran_id_s = PM.pushforward_right(pid, M; threads=false)
+    Ran_id_t = PM.pushforward_right(pid, M; threads=true)
+    @test Ran_id_s.dims == Ran_id_t.dims
+    @test Matrix(Ran_id_s.edge_maps[1, 2]) == Matrix(Ran_id_t.edge_maps[1, 2])
+
+    # Morphism parity on identity encoding.
+    f1 = K[3]
+    f2 = [c(3) c(0);
+          c(0) c(5)]
+    f = MD.PMorphism(M, M, [reshape(f1,1,1), f2])
+
+    Lf_s = PM.pushforward_left(pid, f; threads=false)
+    Lf_t = PM.pushforward_left(pid, f; threads=true)
+    @test Matrix(Lf_s.comps[1]) == Matrix(Lf_t.comps[1])
+    @test Matrix(Lf_s.comps[2]) == Matrix(Lf_t.comps[2])
+
+    Rf_s = PM.pushforward_right(pid, f; threads=false)
+    Rf_t = PM.pushforward_right(pid, f; threads=true)
+    @test Matrix(Rf_s.comps[1]) == Matrix(Rf_t.comps[1])
+    @test Matrix(Rf_s.comps[2]) == Matrix(Rf_t.comps[2])
+
+    # Derived functors parity on collapse (uses resolutions internally).
+    df = CM.DerivedFunctorOptions(maxdeg=1)
+    Ls = PM.Lpushforward_left(pi, M, df; threads=false)
+    Lt = PM.Lpushforward_left(pi, M, df; threads=true)
+    @test [L.dims for L in Ls] == [L.dims for L in Lt]
+
+    Rs = PM.Rpushforward_right(pi, M, df; threads=false)
+    Rt = PM.Rpushforward_right(pi, M, df; threads=true)
+    @test [R.dims for R in Rs] == [R.dims for R in Rt]
+end
+
 @testset "Derived pushforward maps (morphism action)" begin
     Qtri = triangle_boundary_poset()
     Ppt = chain_poset(1)
@@ -499,27 +597,27 @@ end
 
     # Constant 1D module on Qtri.
     dims = ones(Int, Qtri.n)
-    edge_maps = Dict{Tuple{Int,Int}, SparseMatrixCSC{QQ,Int}}()
+    edge_maps = Dict{Tuple{Int,Int}, SparseMatrixCSC{K,Int}}()
     for (a,b) in FF.cover_edges(Qtri)
-        edge_maps[(a,b)] = sparse(fill(QQ(1), 1, 1))
+        edge_maps[(a,b)] = sparse(fill(c(1), 1, 1))
     end
-    M = MD.PModule{QQ}(Qtri, dims, edge_maps)
+    M = MD.PModule{K}(Qtri, dims, edge_maps)
 
     # Scalar endomorphisms of M.
-    function scalar_endomorphism(M::MD.PModule{QQ}, a::QQ)
+    function scalar_endomorphism(M::MD.PModule{K}, a::K) where {K}
         comps = [fill(a, 1, 1) for _ in 1:M.Q.n]
-        return MD.PMorphism{QQ}(M, M, comps)
+        return MD.PMorphism(M, M, comps)
     end
 
-    f2 = scalar_endomorphism(M, QQ(2))
-    f3 = scalar_endomorphism(M, QQ(3))
+    f2 = scalar_endomorphism(M, c(2))
+    f3 = scalar_endomorphism(M, c(3))
 
     # Compose fiberwise.
-    function compose_morphism(g::MD.PMorphism{QQ}, f::MD.PMorphism{QQ})
+    function compose_morphism(g::MD.PMorphism, f::MD.PMorphism)
         @assert f.cod === g.dom
         n = f.dom.Q.n
         comps = [g.comps[u] * f.comps[u] for u in 1:n]
-        return MD.PMorphism{QQ}(f.dom, g.cod, comps)
+        return MD.PMorphism(f.dom, g.cod, comps)
     end
 
     f6 = compose_morphism(f3, f2)
@@ -538,8 +636,8 @@ end
     Lf3 = PM.Lpushforward_left(pi, f3, CM.DerivedFunctorOptions(maxdeg=1))
     Lf6 = PM.Lpushforward_left(pi, f6, CM.DerivedFunctorOptions(maxdeg=1))
 
-    @test Lf2[1].comps[1] == fill(QQ(2), 1, 1)
-    @test Lf2[2].comps[1] == fill(QQ(2), 1, 1)
+    @test Lf2[1].comps[1] == fill(c(2), 1, 1)
+    @test Lf2[2].comps[1] == fill(c(2), 1, 1)
 
     # Functoriality in each degree: L(f3 o f2) = L(f3) o L(f2)
     @test Lf6[1].comps[1] == Lf3[1].comps[1] * Lf2[1].comps[1]
@@ -550,68 +648,47 @@ end
     Rf3 = PM.Rpushforward_right(pi, f3, CM.DerivedFunctorOptions(maxdeg=1))
     Rf6 = PM.Rpushforward_right(pi, f6, CM.DerivedFunctorOptions(maxdeg=1))
 
-    @test Rf2[1].comps[1] == fill(QQ(2), 1, 1)
-    @test Rf2[2].comps[1] == fill(QQ(2), 1, 1)
+    @test Rf2[1].comps[1] == fill(c(2), 1, 1)
+    @test Rf2[2].comps[1] == fill(c(2), 1, 1)
 
     # Functoriality: R(f3 o f2) = R(f3) o R(f2)
     @test Rf6[1].comps[1] == Rf3[1].comps[1] * Rf2[1].comps[1]
     @test Rf6[2].comps[1] == Rf3[2].comps[1] * Rf2[2].comps[1]
 end
 
+if field isa CM.QQField
 @testset "Sparse naturality systems (no dense QQ matrices)" begin
-    @testset "ExactQQ.nullspaceQQ works on SparseMatrixCSC{QQ}" begin
-        # A is 3x4 with a small nullspace.  Verify:
-        # - returned basis vectors are in the nullspace
-        # - dimension matches dense nullspace dimension
-        A = sparse([1, 1, 2, 3],
-                   [1, 3, 2, 4],
-                   QQ[1, 2, -1, 3],
-                   3, 4)
-
-        Ns = EX.nullspaceQQ(A)
-        Nd = EX.nullspaceQQ(Matrix(A))
-
-        @test size(Ns, 1) == 4
-        @test size(Ns, 2) == size(Nd, 2)
-        @test A * Ns == zeros(QQ, size(A, 1), size(Ns, 2))
-
-        # columns should be independent
-        @test EX.rankQQ(Ns) == size(Ns, 2)
-    end
-
-    @testset "ChainComplexes.solve_particularQQ works on SparseMatrixCSC{QQ}" begin
+    @testset "ChainComplexes.solve_particular works on SparseMatrixCSC{QQ}" begin
         # A is 3x3, consistent system with 2 RHS columns.
         A = sparse([1, 2, 2, 3],
                    [1, 1, 3, 2],
-                   QQ[1, 1, 1, 1],
+                   K[1, 1, 1, 1],
                    3, 3)
 
-        B = QQ[1 0;
+        B = K[1 0;
                0 1;
                1 1]
 
-        Xs = CC.solve_particularQQ(A, B)
-        @test Xs !== nothing
+        Xs = CC.solve_particular(A, B)
         @test A * Xs == B
 
         # Dense version should also solve.
-        Xd = CC.solve_particularQQ(Matrix(A), B)
-        @test Xd !== nothing
+        Xd = CC.solve_particular(CM.QQField(), Matrix(A), B)
         @test A * Xd == B
 
         # Inconsistent system: 0*x = 1.
-        A0 = sparse(Int[], Int[], QQ[], 1, 1)
-        B0 = reshape(QQ[1], 1, 1)
-        @test CC.solve_particularQQ(A0, B0) === nothing
+        A0 = sparse(Int[], Int[], K[], 1, 1)
+        B0 = reshape(K[1], 1, 1)
+        @test_throws ErrorException CC.solve_particular(A0, B0)
     end
 
     @testset "DerivedFunctors.Hom produces correct basis (sanity cases)" begin
         Q = chain_poset(2)
 
         # Case 1: identity edge maps -> Hom is 1-dimensional.
-        edge_id = Dict((1, 2) => Matrix{QQ}(I, 1, 1))
-        M = MD.PModule{QQ}(Q, [1, 1], edge_id)
-        N = MD.PModule{QQ}(Q, [1, 1], edge_id)
+        edge_id = Dict((1, 2) => Matrix{K}(I, 1, 1))
+        M = MD.PModule{K}(Q, [1, 1], edge_id)
+        N = MD.PModule{K}(Q, [1, 1], edge_id)
 
         H = DF.Hom(M, N)
         @test length(H.basis) == 1
@@ -622,9 +699,9 @@ end
         end
 
         # Case 2: zero edge maps -> no coupling between vertices -> dimension 2.
-        edge_zero = Dict((1, 2) => zeros(QQ, 1, 1))
-        M0 = MD.PModule{QQ}(Q, [1, 1], edge_zero)
-        N0 = MD.PModule{QQ}(Q, [1, 1], edge_zero)
+        edge_zero = Dict((1, 2) => zeros(K, 1, 1))
+        M0 = MD.PModule{K}(Q, [1, 1], edge_zero)
+        N0 = MD.PModule{K}(Q, [1, 1], edge_zero)
 
         H0 = DF.Hom(M0, N0)
         @test length(H0.basis) == 2
@@ -635,32 +712,6 @@ end
         end
     end
 end
-
-@testset "ExactQQ restricted rank (sparse submatrix)" begin
-    rng = MersenneTwister(123456)
-
-    m, n = 30, 40
-    nnz_target = 180
-
-    I = rand(rng, 1:m, nnz_target)
-    J = rand(rng, 1:n, nnz_target)
-    V = [QQ(rand(rng, -3:3)) for _ in 1:nnz_target]
-    A = sparse(I, J, V, m, n)
-    dropzeros!(A)
-
-    # Random restricted slices: rankQQ_restricted must match explicit slicing.
-    for _ in 1:25
-        rows = sort!(unique(rand(rng, 1:m, rand(rng, 1:15))))
-        cols = sort!(unique(rand(rng, 1:n, rand(rng, 1:18))))
-        r1 = EX.rankQQ_restricted(A, rows, cols)
-        r2 = EX.rankQQ(A[rows, cols])
-        @test r1 == r2
-    end
-
-    # Edge cases
-    @test EX.rankQQ_restricted(A, Int[], collect(1:n)) == 0
-    @test EX.rankQQ_restricted(A, collect(1:m), Int[]) == 0
-    @test EX.rankQQ_restricted(A, 1:m, 1:n) == EX.rankQQ(A)
 end
 
 @testset "Common refinement encoding for different posets" begin
@@ -668,13 +719,13 @@ end
     # dims[v] = 1 for all v, and every cover-edge map is the 1x1 identity.
     function constant_1_module(P::FF.FinitePoset)
         dims = fill(1, P.n)
-        edge_maps = Dict{Tuple{Int,Int}, Matrix{QQ}}()
+        edge_maps = Dict{Tuple{Int,Int}, Matrix{K}}()
         C = FF.cover_edges(P)
         sizehint!(edge_maps, length(C))
         for (u, v) in C
-            edge_maps[(u, v)] = Matrix{QQ}(I, 1, 1)
+            edge_maps[(u, v)] = Matrix{K}(I, 1, 1)
         end
-        return MD.PModule{QQ}(P, dims, edge_maps)
+        return MD.PModule{K}(P, dims, edge_maps)
     end
 
     P1 = chain_poset(2)
@@ -732,13 +783,13 @@ end
 @testset "Identical leq matrices avoid product blowup" begin
     function constant_1_module(P::FF.FinitePoset)
         dims = fill(1, P.n)
-        edge_maps = Dict{Tuple{Int,Int}, Matrix{QQ}}()
+        edge_maps = Dict{Tuple{Int,Int}, Matrix{K}}()
         C = FF.cover_edges(P)
         sizehint!(edge_maps, length(C))
         for (u, v) in C
-            edge_maps[(u, v)] = Matrix{QQ}(I, 1, 1)
+            edge_maps[(u, v)] = Matrix{K}(I, 1, 1)
         end
-        return MD.PModule{QQ}(P, dims, edge_maps)
+        return MD.PModule{K}(P, dims, edge_maps)
     end
 
     P  = chain_poset(3)
@@ -771,30 +822,30 @@ end
 
 @testset "Sparse triplet assembly helper" begin
     # Dense block, offset placement
-    A = QQ[0 2;
+    A = K[0 2;
            3 0]
-    I = Int[]; J = Int[]; V = QQ[]
+    I = Int[]; J = Int[]; V = K[]
     CM._append_scaled_triplets!(I, J, V, A, 0, 0)
     S = sparse(I, J, V, 2, 2)
     @test S == sparse(A)
 
     # Scaled block into larger matrix
-    I = Int[]; J = Int[]; V = QQ[]
-    CM._append_scaled_triplets!(I, J, V, A, 1, 2; scale = -QQ(2))
+    I = Int[]; J = Int[]; V = K[]
+    CM._append_scaled_triplets!(I, J, V, A, 1, 2; scale = -c(2))
     S = sparse(I, J, V, 3, 4)
-    R = spzeros(QQ, 3, 4)
-    R[2:3, 3:4] = -QQ(2) * A
+    R = spzeros(K, 3, 4)
+    R[2:3, 3:4] = -c(2) * A
     @test S == R
 
     # Indexed (noncontiguous) placement
     rows = [2, 4]
     cols = [1, 3]
-    B = QQ[1 0;
+    B = K[1 0;
            0 2]
-    I = Int[]; J = Int[]; V = QQ[]
+    I = Int[]; J = Int[]; V = K[]
     CM._append_scaled_triplets!(I, J, V, B, rows, cols)
     S = sparse(I, J, V, 5, 5)
-    R = spzeros(QQ, 5, 5)
+    R = spzeros(K, 5, 5)
     R[rows, cols] = B
     @test S == R
 end
@@ -806,7 +857,7 @@ end
     P = FF.FinitePoset(leq; check=true)
 
     dims = [1, 1]
-    edge_maps = Dict((1,2) => QQ[1;;])  # 1x1 matrix
+    edge_maps = Dict((1,2) => K[1;;])  # 1x1 matrix
     N = MD.PModule(P, dims, edge_maps)
 
     # dummy resolution data for _build_hom_differential
@@ -817,7 +868,7 @@ end
     # Coefficient matrix of d_1 : P_1 -> P_0 (rows = cod summands, cols = dom summands)
     # delta is stored with rows = codomain summands (P_0) and cols = domain summands (P_1).
     # Here P_0 has 1 summand (base vertex 1) and P_1 has 2 summands (base vertices 1,2).
-    delta = sparse([1,1], [1,2], [QQ(1), QQ(1)], 1, 2)
+    delta = sparse([1,1], [1,2], [c(1), c(1)], 1, 2)
 
     # Minimal resolution object: only `gens` and `d_mat` are used by _build_hom_differential,
     # but the struct requires the full field list.
@@ -836,7 +887,7 @@ end
     @test issparse(Dnew)
 
     # dense reference:
-    Dref = zeros(QQ, 2, 1)
+    Dref = zeros(K, 2, 1)
     Dref[1,1] = 1   # map_leq(N,1,1)
     Dref[2,1] = 1   # map_leq(N,1,2)
     @test Matrix(Dnew) == Dref
@@ -845,20 +896,20 @@ end
 @testset "CoverEdgeMapStore equality and rebasing" begin
     P = chain_poset(3)
     dims = [1,1,1]
-    edge_maps = Dict{Tuple{Int,Int}, Matrix{QQ}}()
+    edge_maps = Dict{Tuple{Int,Int}, Matrix{K}}()
     for (u,v) in IR.cover_edges(P)
-        edge_maps[(u,v)] = QQ[1;;]
+        edge_maps[(u,v)] = K[1;;]
     end
 
-    M1 = MD.PModule{QQ}(P, dims, edge_maps)
-    M2 = MD.PModule{QQ}(P, dims, edge_maps)
+    M1 = MD.PModule{K}(P, dims, edge_maps)
+    M2 = MD.PModule{K}(P, dims, edge_maps)
 
     # Structural equality of stores (not pointer equality)
     @test M1.edge_maps == M2.edge_maps
 
     # Rebase onto an "equivalent" poset object (same leq matrix, new instance)
     P2 = FF.FinitePoset(copy(FF.leq_matrix(P)))
-    M3 = MD.PModule{QQ}(P2, M1.dims, M1.edge_maps)  # should not error
+    M3 = MD.PModule{K}(P2, M1.dims, M1.edge_maps)  # should not error
     @test M3.dims == M1.dims
     @test M3.edge_maps == M1.edge_maps
 end
@@ -871,14 +922,14 @@ end
     dims = [2, 1, 1, 2]
 
     # Cover maps: (1,2), (1,3), (2,4), (3,4).
-    edge = Dict{Tuple{Int,Int}, Matrix{QQ}}()
-    edge[(1,2)] = QQ[1 0]          # 1x2
-    edge[(1,3)] = QQ[0 1]          # 1x2
+    edge = Dict{Tuple{Int,Int}, Matrix{K}}()
+    edge[(1,2)] = K[1 0]          # 1x2
+    edge[(1,3)] = K[0 1]          # 1x2
     # NOTE: use 2x1 matrices (not length-2 vectors) for cover-edge maps.
-    edge[(2,4)] = QQ[1; 0;;]       # 2x1
-    edge[(3,4)] = QQ[0; 1;;]       # 2x1
+    edge[(2,4)] = K[1; 0;;]       # 2x1
+    edge[(3,4)] = K[0; 1;;]       # 2x1
 
-    M = MD.PModule{QQ}(Q, dims, edge)
+    M = MD.PModule{K}(Q, dims, edge)
 
     store = M.edge_maps
     succs = store.succs
@@ -919,14 +970,14 @@ end
         Qc = chain_poset(3)
 
         dimsC = [1, 1, 1]
-        edgeC = Dict{Tuple{Int,Int}, Matrix{QQ}}()
-        edgeC[(1,2)] = QQ[1;;]
-        edgeC[(2,3)] = QQ[1;;]
-        Mc = MD.PModule{QQ}(Qc, dimsC, edgeC)
+        edgeC = Dict{Tuple{Int,Int}, Matrix{K}}()
+        edgeC[(1,2)] = K[1;;]
+        edgeC[(2,3)] = K[1;;]
+        Mc = MD.PModule{K}(Qc, dimsC, edgeC)
 
         # Zero map Mc -> Mc.
-        fcomps = [zeros(QQ, 1, 1) for _ in 1:3]
-        f = MD.PMorphism{QQ}(Mc, Mc, fcomps)
+        fcomps = [zeros(K, 1, 1) for _ in 1:3]
+        f = MD.PMorphism(Mc, Mc, fcomps)
 
         K, iotaK = PM.kernel_with_inclusion(f)
         Im, iotaIm = PM.image_with_inclusion(f)
@@ -945,3 +996,4 @@ end
         end
     end
 end
+end # with_fields

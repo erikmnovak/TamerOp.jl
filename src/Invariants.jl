@@ -1,14 +1,14 @@
 module Invariants
 
 using LinearAlgebra
-using ..CoreModules: QQ, PLikeEncodingMap, locate, axes_from_encoding, dimension, representatives, InvariantOptions
+using ..CoreModules: PLikeEncodingMap, CompiledEncoding, locate, axes_from_encoding, dimension, representatives, InvariantOptions
 using Statistics: mean
 using ..Stats: _wilson_interval
 using ..Encoding: EncodingMap
 using ..PLPolyhedra
 using ..RegionGeometry
 
-import ..ExactQQ: rankQQ
+using ..FieldLinAlg
 import ..FiniteFringe: AbstractPoset, FinitePoset, FringeModule, Upset, Downset, fiber_dimension,
                        leq, leq_matrix, upset_indices, downset_indices, leq_col, nvertices
 import ..ZnEncoding
@@ -20,8 +20,8 @@ import Base.Threads
 import ..Serialization: save_mpp_decomposition_json, load_mpp_decomposition_json,
                         save_mpp_image_json, load_mpp_image_json
 
-# We implement invariants primarily for the internal exact type QQ.
-import ..Modules: PModule, map_leq, CoverCache, _cover_cache, _chosen_predecessor
+# Invariants are field-generic; some workflows are only exact over QQ.
+import ..Modules: PModule, map_leq, CoverCache, get_cover_cache, _chosen_predecessor
 import ..IndicatorResolutions: pmodule_from_fringe
 
 import ..ZnEncoding: ZnEncodingMap
@@ -29,6 +29,8 @@ import ..ZnEncoding: ZnEncodingMap
 # A "Hilbert function" in this codebase is the vector of fiber dimensions per region.
 # Keep it as a type alias (not a new struct) to make dispatch readable.
 const HilbertFunction = AbstractVector{<:Integer}
+
+@inline _unwrap_compiled(pi) = (pi isa CompiledEncoding ? pi.pi : pi)
 
 
 export rank_map, rank_invariant, rank_invariant_tame, ecc,
@@ -156,24 +158,66 @@ end
 @inline _resolve_opts(opts::Union{InvariantOptions,Nothing}) =
     opts === nothing ? InvariantOptions() : opts
 
+@inline function _eye(::Type{K}, n::Int) where {K}
+    M = zeros(K, n, n)
+    for i in 1:n
+        M[i, i] = one(K)
+    end
+    return M
+end
+
 
 # ----- Rank invariant ----------------------------------------------------------
 
+const RANK_INVARIANT_MEMO_THRESHOLD = Ref(1_000_000)
+
+@inline function _use_array_memo(n::Int)
+    return n * n <= RANK_INVARIANT_MEMO_THRESHOLD[]
+end
+
+@inline function _new_array_memo(::Type{K}, n::Int) where {K}
+    memo = Vector{Union{Nothing,Matrix{K}}}(undef, n * n)
+    fill!(memo, nothing)
+    return memo
+end
+
 # Internal helper: compute M(u->v) with memoization shared across many calls.
+@inline _memo_index(n::Int, u::Int, v::Int) = (u - 1) * n + v
+
+@inline function _memo_get(memo::AbstractVector{Union{Nothing,Matrix{K}}}, n::Int, u::Int, v::Int) where {K}
+    return memo[_memo_index(n, u, v)]
+end
+
+@inline function _memo_set!(memo::AbstractVector{Union{Nothing,Matrix{K}}}, n::Int, u::Int, v::Int, val::Matrix{K}) where {K}
+    memo[_memo_index(n, u, v)] = val
+    return val
+end
+
 function _map_leq_cached(
-    M::PModule{QQ},
+    M::PModule{K},
     u::Int,
     v::Int,
     cc,
-    memo::Dict{Tuple{Int,Int}, Matrix{QQ}}
-)::Matrix{QQ}
-    key = (u, v)
-    if haskey(memo, key)
-        return memo[key]
+    memo
+)::Matrix{K} where {K}
+    if memo isa Dict{Tuple{Int,Int}, Matrix{K}}
+        key = (u, v)
+        if haskey(memo, key)
+            return memo[key]
+        end
+    else
+        n = nvertices(M.Q)
+        X = _memo_get(memo, n, u, v)
+        X === nothing || return X
     end
+
     if u == v
-        X = Matrix{QQ}(I, M.dims[v], M.dims[u])
-        memo[key] = X
+        X = _eye(K, M.dims[v])
+        if memo isa Dict{Tuple{Int,Int}, Matrix{K}}
+            memo[(u, v)] = X
+        else
+            _memo_set!(memo, nvertices(M.Q), u, v, X)
+        end
         return X
     end
 
@@ -182,7 +226,11 @@ function _map_leq_cached(
     if cc.C !== nothing
         if cc.C[u, v]
             X = M.edge_maps[u, v]
-            memo[key] = X
+            if memo isa Dict{Tuple{Int,Int}, Matrix{K}}
+                memo[(u, v)] = X
+            else
+                _memo_set!(memo, nvertices(M.Q), u, v, X)
+            end
             return X
         end
     else
@@ -191,7 +239,11 @@ function _map_leq_cached(
         @inbounds for k in 1:length(pv)
             if pv[k] == u
                 X = M.edge_maps[u, v]
-                memo[key] = X
+                if memo isa Dict{Tuple{Int,Int}, Matrix{K}}
+                    memo[(u, v)] = X
+                else
+                    _memo_set!(memo, nvertices(M.Q), u, v, X)
+                end
                 return X
             end
         end
@@ -202,8 +254,11 @@ function _map_leq_cached(
     w = _chosen_predecessor(cc, u, v)
     X = _map_leq_cached(M, u, w, cc, memo)
     Y = M.edge_maps[w, v]
-    memo[key] = Y * X
-    return memo[key]
+    if memo isa Dict{Tuple{Int,Int}, Matrix{K}}
+        memo[(u, v)] = Y * X
+        return memo[(u, v)]
+    end
+    return _memo_set!(memo, nvertices(M.Q), u, v, Y * X)
 end
 
 
@@ -213,18 +268,18 @@ end
 Return the rank of the structure map `M(a <= b)` for comparable `a <= b`.
 
 This is a "finite encoding" rank invariant query:
-- `M` is a `PModule{QQ}` (or a `FringeModule{QQ}`; see method below)
+- `M` is a `PModule{K}` (or a `FringeModule{K}`; see method below)
 - `a` and `b` are vertex indices in the underlying finite poset
 
 Keyword arguments:
 - `cache`: internal cover-cache object (advanced; used by `rank_invariant`)
-- `memo`: dictionary used to memoize computed maps (advanced)
+- `memo`: memoization cache for computed maps (advanced; Dict or array-backed)
 
 Notes for performance:
 If you will make many rank queries for a `FringeModule`, convert once:
 `Mp = pmodule_from_fringe(H)`, then call `rank_map(Mp, ...)`.
 """
-function rank_map(M::PModule{QQ}, a::Int, b::Int; cache=nothing, memo=nothing)::Int
+function rank_map(M::PModule{K}, a::Int, b::Int; cache=nothing, memo=nothing)::Int where {K}
     Q = M.Q
     (1 <= a <= nvertices(Q)) || error("rank_map: a out of range")
     (1 <= b <= nvertices(Q)) || error("rank_map: b out of range")
@@ -236,16 +291,16 @@ function rank_map(M::PModule{QQ}, a::Int, b::Int; cache=nothing, memo=nothing)::
 
     # Use shared memoization if provided; otherwise fall back to map_leq.
     if memo !== nothing
-        cc = cache === nothing ? _cover_cache(Q) : cache
+        cc = cache === nothing ? get_cover_cache(Q) : cache
         A = _map_leq_cached(M, a, b, cc, memo)
-        return rankQQ(A)
+        return FieldLinAlg.rank(M.field, A)
     end
 
     A = map_leq(M, a, b; cache=cache)
-    return rankQQ(A)
+    return FieldLinAlg.rank(M.field, A)
 end
 
-function rank_map(H::FringeModule{QQ}, a::Int, b::Int; kwargs...)::Int
+function rank_map(H::FringeModule{K}, a::Int, b::Int; kwargs...)::Int where {K}
     Mp = pmodule_from_fringe(H)
     return rank_map(Mp, a, b; kwargs...)
 end
@@ -260,8 +315,8 @@ Uses opts.strict:
 - if strict and either point maps to 0, throws
 - if not strict, unknown regions give rank 0
 """
-function rank_map(M::PModule{QQ}, pi, x, y, opts::InvariantOptions, 
-                  cache = nothing, memo = nothing)::Int
+function rank_map(M::PModule{K}, pi, x, y, opts::InvariantOptions;
+                  cache = nothing, memo = nothing)::Int where {K}
     strict0 = opts.strict === nothing ? true : opts.strict
 
     a = locate(pi, x)
@@ -275,15 +330,15 @@ function rank_map(M::PModule{QQ}, pi, x, y, opts::InvariantOptions,
     return rank_map(M, a, b; cache = cache, memo = memo)
 end
 
-function rank_map(H::FringeModule{QQ}, pi, x, y, opts::InvariantOptions, 
-                  cache = nothing, memo = nothing)::Int
+function rank_map(H::FringeModule{K}, pi, x, y, opts::InvariantOptions;
+                  cache = nothing, memo = nothing)::Int where {K}
     Mp = pmodule_from_fringe(H)
     return rank_map(Mp, pi, x, y, opts; cache = cache, memo = memo)
 end
 
 
 """
-    rank_invariant(M::PModule{QQ}; store_zeros=false, threads=(Threads.nthreads() > 1))
+    rank_invariant(M::PModule{K}; store_zeros=false, threads=(Threads.nthreads() > 1))
 
 Compute the rank invariant of a module `M`, returning a dictionary mapping
 `(a, b)` with `a <= b` to the rank of the structure map `M(a <= b)`.
@@ -297,29 +352,31 @@ Keyword arguments:
   thread uses its own map memo and output dictionary.
 """
 function rank_invariant(
-    M::PModule{QQ},
+    M::PModule{K},
     opts::InvariantOptions;
     store_zeros::Bool = false
-)
+) where {K}
     threads = _default_threads(opts.threads)
     Q = M.Q
-    cc = _cover_cache(Q)
+    cc = get_cover_cache(Q)
+    n = nvertices(Q)
+    use_array_memo = _use_array_memo(n)
 
     if threads && Threads.nthreads() > 1
         nT = Threads.nthreads()
-        memo_by_thread = [Dict{Tuple{Int, Int}, Matrix{QQ}}() for _ in 1:nT]
+        memo_by_thread = use_array_memo ?
+            [_new_array_memo(K, n) for _ in 1:nT] :
+            [Dict{Tuple{Int, Int}, Matrix{K}}() for _ in 1:nT]
         out_by_thread = [Dict{Tuple{Int, Int}, Int}() for _ in 1:nT]
 
         Threads.@threads for a in 1:nvertices(Q)
             tid = Threads.threadid()
             memo = memo_by_thread[tid]
             out = out_by_thread[tid]
-            for b in 1:nvertices(Q)
-                if leq(Q, a, b)
-                    r = rank_map(M, a, b; cache = cc, memo = memo)
-                    if store_zeros || r > 0
-                        out[(a, b)] = r
-                    end
+            for b in upset_indices(Q, a)
+                r = rank_map(M, a, b; cache = cc, memo = memo)
+                if store_zeros || r > 0
+                    out[(a, b)] = r
                 end
             end
         end
@@ -332,10 +389,10 @@ function rank_invariant(
     end
 
     # Serial fallback (unchanged logic).
-    memo = Dict{Tuple{Int, Int}, Matrix{QQ}}()
+    memo = use_array_memo ? _new_array_memo(K, n) : Dict{Tuple{Int, Int}, Matrix{K}}()
     ranks = Dict{Tuple{Int, Int}, Int}()
-    for a in 1:nvertices(Q), b in 1:nvertices(Q)
-        if leq(Q, a, b)
+    for a in 1:nvertices(Q)
+        for b in upset_indices(Q, a)
             r = rank_map(M, a, b; cache = cc, memo = memo)
             if store_zeros || r > 0
                 ranks[(a, b)] = r
@@ -345,7 +402,7 @@ function rank_invariant(
     return ranks
 end
 
-function rank_invariant(H::FringeModule{QQ}, opts::InvariantOptions; store_zeros::Bool = false)
+function rank_invariant(H::FringeModule{K}, opts::InvariantOptions; store_zeros::Bool = false) where {K}
     Mp = pmodule_from_fringe(H)
     return rank_invariant(Mp, opts; store_zeros = store_zeros)
 end
@@ -761,10 +818,12 @@ function RankQueryCache(pi::ZnEncodingMap)
     N = pi.n
     length(pi.coords) == N || error("RankQueryCache: expected length(pi.coords) == pi.n")
 
-        return RankQueryCache{N}(pi, pi.n, Dict{NTuple{N,Int},Int}(),
+    return RankQueryCache{N}(pi, pi.n, Dict{NTuple{N,Int},Int}(),
         Dict{Tuple{Int,Int},Int}(),
     )
 end
+
+RankQueryCache(pi::CompiledEncoding{<:ZnEncodingMap}) = RankQueryCache(pi.pi)
 
 """
     coarsen_axis(axis; max_len, method=:uniform)
@@ -820,6 +879,10 @@ function restrict_axes_to_encoding(axes::NTuple{N,<:AbstractVector{<:Integer}}, 
     enc = axes_from_encoding(pi)
     return ntuple(k -> _restrict_axis_to_encoding(axes[k], enc[k]; keep_endpoints=keep_endpoints), N)
 end
+
+restrict_axes_to_encoding(axes::NTuple{N,<:AbstractVector{<:Integer}}, pi::CompiledEncoding{<:ZnEncodingMap};
+                           keep_endpoints::Bool=true) where {N} =
+    restrict_axes_to_encoding(axes, pi.pi; keep_endpoints=keep_endpoints)
 
 function _restrict_axis_to_encoding(axis::AbstractVector{<:Integer}, enc_axis::Vector{Int}; keep_endpoints::Bool=true)
     ax = sort(unique(Int.(axis)))
@@ -953,7 +1016,8 @@ of the module as a direct sum of rectangle modules).
 function _rectangle_signed_barcode_local(rank_idx::Function, axes::NTuple{N,Vector{Int}};
     drop_zeros::Bool=true,
     tol::Int=0,
-    max_span=nothing) where {N}
+    max_span=nothing,
+    threads::Bool=false) where {N}
 
     @assert tol >= 0 "rectangle_signed_barcode: tol must be nonnegative"
 
@@ -980,65 +1044,151 @@ function _rectangle_signed_barcode_local(rank_idx::Function, axes::NTuple{N,Vect
         end
     end
 
-    for pCI in CI
-        p = pCI.I
+    if threads && Threads.nthreads() > 1
+        total = length(CI)
+        nchunks = min(total, Threads.nthreads())
+        chunk_rects = [Rect{N}[] for _ in 1:nchunks]
+        chunk_weights = [Int[] for _ in 1:nchunks]
+        chunk_size = cld(total, nchunks)
 
-        # Enumerate q indices with p <= q coordinatewise, optionally restricting spans.
-        ranges = ntuple(k -> begin
-            start = p[k]
-            stop = dims[k]
-            if span !== nothing
-                pval = @inbounds axes[k][start]
-                qmax = pval + span[k]
-                qstop = searchsortedlast(axes[k], qmax)
-                stop = min(stop, qstop)
-            end
-            start:stop
-        end, N)
+        Threads.@threads for c in 1:nchunks
+            start_idx = (c - 1) * chunk_size + 1
+            end_idx = min(c * chunk_size, total)
+            start_idx > end_idx && continue
 
-        for qCI in CartesianIndices(ranges)
-            q = qCI.I
+            rects_local = chunk_rects[c]
+            weights_local = chunk_weights[c]
 
-            w = 0
-            @inbounds for (i, eps_p) in enumerate(eps_list), (j, eps_q) in enumerate(eps_list)
-                p2 = _shift_minus(p, eps_p)
-                q2 = _shift_plus(q, eps_q)
+            for idx in start_idx:end_idx
+                pCI = CI[idx]
+                p = pCI.I
 
-                # Ensure shifted indices still satisfy 1 <= p2 <= q2 <= dims.
-                ok = true
-                for k in 1:N
-                    if p2[k] < 1 || q2[k] > dims[k] || p2[k] > q2[k]
-                        ok = false
-                        break
+                # Enumerate q indices with p <= q coordinatewise, optionally restricting spans.
+                ranges = ntuple(k -> begin
+                    start = p[k]
+                    stop = dims[k]
+                    if span !== nothing
+                        pval = @inbounds axes[k][start]
+                        qmax = pval + span[k]
+                        qstop = searchsortedlast(axes[k], qmax)
+                        stop = min(stop, qstop)
+                    end
+                    start:stop
+                end, N)
+
+                for qCI in CartesianIndices(ranges)
+                    q = qCI.I
+
+                    w = 0
+                    @inbounds for (i, eps_p) in enumerate(eps_list), (j, eps_q) in enumerate(eps_list)
+                        p2 = _shift_minus(p, eps_p)
+                        q2 = _shift_plus(q, eps_q)
+
+                        # Ensure shifted indices still satisfy 1 <= p2 <= q2 <= dims.
+                        ok = true
+                        for k in 1:N
+                            if p2[k] < 1 || q2[k] > dims[k] || p2[k] > q2[k]
+                                ok = false
+                                break
+                            end
+                        end
+                        if ok
+                            w += eps_sign[i] * eps_sign[j] * rank_idx(p2, q2)
+                        end
+                    end
+
+                    if abs(w) > tol
+                        # NOTE (parsing pitfall):
+                        # Avoid writing `ntuple(k -> @inbounds axes[k][p[k]], N)` because `@inbounds`
+                        # can accidentally capture the trailing `, N`, leading to a one-argument call
+                        # `ntuple(closure)` and a MethodError at runtime.
+                        lo = ntuple(Val(N)) do k
+                            @inbounds axes[k][p[k]]
+                        end
+                        hi = ntuple(Val(N)) do k
+                            @inbounds axes[k][q[k]]
+                        end
+                        push!(rects_local, Rect{N}(lo, hi))
+                        push!(weights_local, w)
+                    elseif !drop_zeros
+                       lo = ntuple(Val(N)) do k
+                            @inbounds axes[k][p[k]]
+                        end
+                        hi = ntuple(Val(N)) do k
+                            @inbounds axes[k][q[k]]
+                        end
+                        push!(rects_local, Rect{N}(lo, hi))
+                        push!(weights_local, 0)
                     end
                 end
-                if ok
-                    w += eps_sign[i] * eps_sign[j] * rank_idx(p2, q2)
-                end
             end
+        end
 
-            if abs(w) > tol
-                # NOTE (parsing pitfall):
-                # Avoid writing `ntuple(k -> @inbounds axes[k][p[k]], N)` because `@inbounds`
-                # can accidentally capture the trailing `, N`, leading to a one-argument call
-                # `ntuple(closure)` and a MethodError at runtime.
-                lo = ntuple(Val(N)) do k
-                    @inbounds axes[k][p[k]]
+        for c in 1:nchunks
+            append!(rects, chunk_rects[c])
+            append!(weights, chunk_weights[c])
+        end
+    else
+        for pCI in CI
+            p = pCI.I
+
+            # Enumerate q indices with p <= q coordinatewise, optionally restricting spans.
+            ranges = ntuple(k -> begin
+                start = p[k]
+                stop = dims[k]
+                if span !== nothing
+                    pval = @inbounds axes[k][start]
+                    qmax = pval + span[k]
+                    qstop = searchsortedlast(axes[k], qmax)
+                    stop = min(stop, qstop)
                 end
-                hi = ntuple(Val(N)) do k
-                    @inbounds axes[k][q[k]]
+                start:stop
+            end, N)
+
+            for qCI in CartesianIndices(ranges)
+                q = qCI.I
+
+                w = 0
+                @inbounds for (i, eps_p) in enumerate(eps_list), (j, eps_q) in enumerate(eps_list)
+                    p2 = _shift_minus(p, eps_p)
+                    q2 = _shift_plus(q, eps_q)
+
+                    # Ensure shifted indices still satisfy 1 <= p2 <= q2 <= dims.
+                    ok = true
+                    for k in 1:N
+                        if p2[k] < 1 || q2[k] > dims[k] || p2[k] > q2[k]
+                            ok = false
+                            break
+                        end
+                    end
+                    if ok
+                        w += eps_sign[i] * eps_sign[j] * rank_idx(p2, q2)
+                    end
                 end
-                push!(rects, Rect{N}(lo, hi))
-                push!(weights, w)
-            elseif !drop_zeros
-               lo = ntuple(Val(N)) do k
-                    @inbounds axes[k][p[k]]
+
+                if abs(w) > tol
+                    # NOTE (parsing pitfall):
+                    # Avoid writing `ntuple(k -> @inbounds axes[k][p[k]], N)` because `@inbounds`
+                    # can accidentally capture the trailing `, N`, leading to a one-argument call
+                    # `ntuple(closure)` and a MethodError at runtime.
+                    lo = ntuple(Val(N)) do k
+                        @inbounds axes[k][p[k]]
+                    end
+                    hi = ntuple(Val(N)) do k
+                        @inbounds axes[k][q[k]]
+                    end
+                    push!(rects, Rect{N}(lo, hi))
+                    push!(weights, w)
+                elseif !drop_zeros
+                   lo = ntuple(Val(N)) do k
+                        @inbounds axes[k][p[k]]
+                    end
+                    hi = ntuple(Val(N)) do k
+                        @inbounds axes[k][q[k]]
+                    end
+                    push!(rects, Rect{N}(lo, hi))
+                    push!(weights, 0)
                 end
-                hi = ntuple(Val(N)) do k
-                    @inbounds axes[k][q[k]]
-                end
-                push!(rects, Rect{N}(lo, hi))
-                push!(weights, 0)
             end
         end
     end
@@ -1093,7 +1243,8 @@ function _rectangle_signed_barcode_bulk(rank_idx::Function,
                                         axes::NTuple{N,Vector{Int}};
                                         drop_zeros::Bool=true,
                                         tol::Int=0,
-                                        max_span=nothing) where {N}
+                                        max_span=nothing,
+                                        threads::Bool=false) where {N}
     dims = ntuple(i -> length(axes[i]), N)
 
     # Store the rank function r(p,q) on the whole grid (p,q), with the convention
@@ -1110,19 +1261,39 @@ function _rectangle_signed_barcode_bulk(rank_idx::Function,
         end
     else
         CI = CartesianIndices(dims)
-        for pCI in CI
-            p = pCI.I
-            q_ranges = ntuple(k -> p[k]:dims[k], N)
-            for qCI in CartesianIndices(q_ranges)
-                q = qCI.I
-                @inbounds r[p..., q...] = rank_idx(p, q)
+        if threads && Threads.nthreads() > 1
+            total = length(CI)
+            nchunks = min(total, Threads.nthreads())
+            chunk_size = cld(total, nchunks)
+            Threads.@threads for c in 1:nchunks
+                start_idx = (c - 1) * chunk_size + 1
+                end_idx = min(c * chunk_size, total)
+                start_idx > end_idx && continue
+                for idx in start_idx:end_idx
+                    pCI = CI[idx]
+                    p = pCI.I
+                    q_ranges = ntuple(k -> p[k]:dims[k], N)
+                    for qCI in CartesianIndices(q_ranges)
+                        q = qCI.I
+                        @inbounds r[p..., q...] = rank_idx(p, q)
+                    end
+                end
+            end
+        else
+            for pCI in CI
+                p = pCI.I
+                q_ranges = ntuple(k -> p[k]:dims[k], N)
+                for qCI in CartesianIndices(q_ranges)
+                    q = qCI.I
+                    @inbounds r[p..., q...] = rank_idx(p, q)
+                end
             end
         end
     end
 
     rank_idx_cached(p, q) = (@inbounds r[p..., q...])
     return _rectangle_signed_barcode_local(
-        rank_idx_cached, axes; drop_zeros=drop_zeros, tol=tol, max_span=max_span
+        rank_idx_cached, axes; drop_zeros=drop_zeros, tol=tol, max_span=max_span, threads=threads
     )
 end
 
@@ -1159,18 +1330,19 @@ function rectangle_signed_barcode(rank_idx::Function,
                                   tol::Int=0,
                                   max_span=nothing,
                                   method::Symbol=:auto,
-                                  bulk_max_elems::Int=20_000_000) where {N}
+                                  bulk_max_elems::Int=20_000_000,
+                                  threads::Bool = (Threads.nthreads() > 1)) where {N}
     ax = ntuple(i -> collect(Int, axes[i]), N)
     meth = _choose_rectangle_signed_barcode_method(
         method, ax; max_span=max_span, bulk_max_elems=bulk_max_elems
     )
     if meth == :bulk
         return _rectangle_signed_barcode_bulk(
-            rank_idx, ax; drop_zeros=drop_zeros, tol=tol, max_span=max_span
+            rank_idx, ax; drop_zeros=drop_zeros, tol=tol, max_span=max_span, threads=threads
         )
     else
         return _rectangle_signed_barcode_local(
-            rank_idx, ax; drop_zeros=drop_zeros, tol=tol, max_span=max_span
+            rank_idx, ax; drop_zeros=drop_zeros, tol=tol, max_span=max_span, threads=false
         )
     end
 end
@@ -1181,7 +1353,7 @@ end
                              keep_endpoints=true, method=:auto,
                              bulk_max_elems=20_000_000)
 
-Compute the rectangle signed barcode of a QQ-valued Z^n module `M` using a `ZnEncodingMap` `pi`.
+Compute the rectangle signed barcode of a Z^n module `M` using a `ZnEncodingMap` `pi`.
 
 The barcode is the Mobius inversion of the rank invariant restricted to the lattice grid
 `axes` (one integer coordinate vector per dimension).
@@ -1223,7 +1395,8 @@ function rectangle_signed_barcode(M::PModule, pi::ZnEncodingMap, opts::Invariant
                                   rq_cache::Union{Nothing,RankQueryCache}=nothing,
                                   keep_endpoints::Bool=true,
                                   method::Symbol=:auto,
-                                  bulk_max_elems::Int=20_000_000)
+                                  bulk_max_elems::Int=20_000_000,
+                                  threads::Bool = (Threads.nthreads() > 1))
 
     axes = opts.axes
     axes_policy = opts.axes_policy
@@ -1251,7 +1424,7 @@ function rectangle_signed_barcode(M::PModule, pi::ZnEncodingMap, opts::Invariant
         rq_cache.n == pi.n || error("rectangle_signed_barcode: rq_cache has wrong dimension")
     end
 
-    cc = _cover_cache(M.Q)
+    cc = get_cover_cache(M.Q)
 
     region_idx(g) = get!(rq_cache.loc_cache, g) do
         locate(pi, g)
@@ -1287,23 +1460,48 @@ function rectangle_signed_barcode(M::PModule, pi::ZnEncodingMap, opts::Invariant
         end
 
         r = zeros(Int, (dims..., dims...))
-        for pCI in CI
-            a = @inbounds reg[pCI]
-            p = pCI.I
-            q_ranges = ntuple(k -> p[k]:dims[k], pi.n)
-            for qCI in CartesianIndices(q_ranges)
-                b = @inbounds reg[qCI]
-                if a == 0 || b == 0
-                    @inbounds r[pCI, qCI] = 0
-                else
-                    @inbounds r[pCI, qCI] = rank_ab(a, b)
+        if threads && Threads.nthreads() > 1
+            total = length(CI)
+            nchunks = min(total, Threads.nthreads())
+            chunk_size = cld(total, nchunks)
+            Threads.@threads for c in 1:nchunks
+                start_idx = (c - 1) * chunk_size + 1
+                end_idx = min(c * chunk_size, total)
+                start_idx > end_idx && continue
+                for idx in start_idx:end_idx
+                    pCI = CI[idx]
+                    a = @inbounds reg[pCI]
+                    p = pCI.I
+                    q_ranges = ntuple(k -> p[k]:dims[k], pi.n)
+                    for qCI in CartesianIndices(q_ranges)
+                        b = @inbounds reg[qCI]
+                        if a == 0 || b == 0
+                            @inbounds r[pCI, qCI] = 0
+                        else
+                            @inbounds r[pCI, qCI] = rank_ab(a, b)
+                        end
+                    end
+                end
+            end
+        else
+            for pCI in CI
+                a = @inbounds reg[pCI]
+                p = pCI.I
+                q_ranges = ntuple(k -> p[k]:dims[k], pi.n)
+                for qCI in CartesianIndices(q_ranges)
+                    b = @inbounds reg[qCI]
+                    if a == 0 || b == 0
+                        @inbounds r[pCI, qCI] = 0
+                    else
+                        @inbounds r[pCI, qCI] = rank_ab(a, b)
+                    end
                 end
             end
         end
 
         rank_idx_cached_bulk(p, q) = (@inbounds r[p..., q...])
         return _rectangle_signed_barcode_local(
-            rank_idx_cached_bulk, axesN; drop_zeros=drop_zeros, tol=tol, max_span=max_span
+            rank_idx_cached_bulk, axesN; drop_zeros=drop_zeros, tol=tol, max_span=max_span, threads=threads
         )
     end
 
@@ -1326,8 +1524,13 @@ function rectangle_signed_barcode(M::PModule, pi::ZnEncodingMap, opts::Invariant
     end
 
     return _rectangle_signed_barcode_local(
-        rank_idx_cached, axesN; drop_zeros=drop_zeros, tol=tol, max_span=max_span
+        rank_idx_cached, axesN; drop_zeros=drop_zeros, tol=tol, max_span=max_span, threads=false
     )
+end
+
+function rectangle_signed_barcode(M::PModule, pi::CompiledEncoding{<:ZnEncodingMap}, opts::InvariantOptions;
+                                  kwargs...)
+    return rectangle_signed_barcode(M, pi.pi, opts; kwargs...)
 end
 
 rectangle_signed_barcode(M::PModule, pi::ZnEncodingMap;
@@ -1340,6 +1543,9 @@ rectangle_signed_barcode(M::PModule, pi::ZnEncodingMap;
         InvariantOptions(axes = axes, axes_policy = axes_policy, max_axis_len = max_axis_len);
         kwargs...
     )
+
+rectangle_signed_barcode(M::PModule, pi::CompiledEncoding{<:ZnEncodingMap}; kwargs...) =
+    rectangle_signed_barcode(M, pi.pi; kwargs...)
 
 
 
@@ -1424,7 +1630,8 @@ This is the inverse of the Mobius inversion used by `rectangle_signed_barcode`, 
 implemented via a mixed-orientation prefix-sum transform (no per-rectangle scanning).
 """
 function rectangle_signed_barcode_rank(sb::RectSignedBarcode{N};
-                                       zero_noncomparable::Bool=true) where {N}
+                                       zero_noncomparable::Bool=true,
+                                       threads::Bool = (Threads.nthreads() > 1)) where {N}
     axes = sb.axes
     dims = ntuple(i -> length(axes[i]), N)
 
@@ -1450,19 +1657,39 @@ function rectangle_signed_barcode_rank(sb::RectSignedBarcode{N};
         # Convention: rank invariant is only meaningful for comparable pairs p <= q.
         # We zero out noncomparable index pairs for a cleaner array representation.
         CI = CartesianIndices(dims)
-        for pCI in CI
-            p = pCI.I
-            for qCI in CI
-                q = qCI.I
-                comparable = true
-                @inbounds for k in 1:N
-                    if p[k] > q[k]
-                        comparable = false
-                        break
+        if threads && Threads.nthreads() > 1
+            Threads.@threads for idx in 1:length(CI)
+                pCI = CI[idx]
+                p = pCI.I
+                for qCI in CI
+                    q = qCI.I
+                    comparable = true
+                    @inbounds for k in 1:N
+                        if p[k] > q[k]
+                            comparable = false
+                            break
+                        end
+                    end
+                    if !comparable
+                        @inbounds w[pCI, qCI] = 0
                     end
                 end
-                if !comparable
-                    @inbounds w[pCI, qCI] = 0
+            end
+        else
+            for pCI in CI
+                p = pCI.I
+                for qCI in CI
+                    q = qCI.I
+                    comparable = true
+                    @inbounds for k in 1:N
+                        if p[k] > q[k]
+                            comparable = false
+                            break
+                        end
+                    end
+                    if !comparable
+                        @inbounds w[pCI, qCI] = 0
+                    end
                 end
             end
         end
@@ -1558,7 +1785,13 @@ Each rectangle contributes its signed weight to a 2D grid via a Gaussian bump ce
 This is intentionally lightweight and meant for data-analysis pipelines.
 For N != 2, this function errors (a higher-dimensional tensorization would be needed).
 """
-function rectangle_signed_barcode_image(sb::RectSignedBarcode{2}; xs=nothing, ys=nothing, sigma::Real=1.0, mode::Symbol=:center)
+function rectangle_signed_barcode_image(sb::RectSignedBarcode{2};
+    xs=nothing,
+    ys=nothing,
+    sigma::Real=1.0,
+    mode::Symbol=:center,
+    threads::Bool = (Threads.nthreads() > 1)
+)
     xs === nothing && (xs = sb.axes[1])
     ys === nothing && (ys = sb.axes[2])
     sig2 = float(sigma)^2
@@ -1566,22 +1799,47 @@ function rectangle_signed_barcode_image(sb::RectSignedBarcode{2}; xs=nothing, ys
 
     img = zeros(Float64, length(xs), length(ys))
 
-    for (rect, w) in zip(sb.rects, sb.weights)
-        cx, cy = if mode == :center
-            ((rect.lo[1] + rect.hi[1]) / 2, (rect.lo[2] + rect.hi[2]) / 2)
-        elseif mode == :lo
-            (rect.lo[1], rect.lo[2])
-        elseif mode == :hi
-            (rect.hi[1], rect.hi[2])
-        else
-            error("rectangle_signed_barcode_image: unknown mode $(mode)")
+    if threads && Threads.nthreads() > 1
+        Threads.@threads for ix in 1:length(xs)
+            x = xs[ix]
+            for iy in 1:length(ys)
+                y = ys[iy]
+                acc = 0.0
+                for (rect, w) in zip(sb.rects, sb.weights)
+                    cx, cy = if mode == :center
+                        ((rect.lo[1] + rect.hi[1]) / 2, (rect.lo[2] + rect.hi[2]) / 2)
+                    elseif mode == :lo
+                        (rect.lo[1], rect.lo[2])
+                    elseif mode == :hi
+                        (rect.hi[1], rect.hi[2])
+                    else
+                        error("rectangle_signed_barcode_image: unknown mode $(mode)")
+                    end
+                    dx = float(x - cx)
+                    dy = float(y - cy)
+                    acc += float(w) * exp(-(dx * dx + dy * dy) / (2 * sig2))
+                end
+                img[ix, iy] = acc
+            end
         end
+    else
+        for (rect, w) in zip(sb.rects, sb.weights)
+            cx, cy = if mode == :center
+                ((rect.lo[1] + rect.hi[1]) / 2, (rect.lo[2] + rect.hi[2]) / 2)
+            elseif mode == :lo
+                (rect.lo[1], rect.lo[2])
+            elseif mode == :hi
+                (rect.hi[1], rect.hi[2])
+            else
+                error("rectangle_signed_barcode_image: unknown mode $(mode)")
+            end
 
-        for (ix, x) in pairs(xs)
-            dx = float(x - cx)
-            for (iy, y) in pairs(ys)
-                dy = float(y - cy)
-                img[ix, iy] += float(w) * exp(-(dx * dx + dy * dy) / (2 * sig2))
+            for (ix, x) in pairs(xs)
+                dx = float(x - cx)
+                for (iy, y) in pairs(ys)
+                    dy = float(y - cy)
+                    img[ix, iy] += float(w) * exp(-(dx * dx + dy * dy) / (2 * sig2))
+                end
             end
         end
     end
@@ -1618,7 +1876,7 @@ Methods
 - `method=:both` returns `(rectangles=..., slices=...)`.
 - `method=:euler` returns `(euler_surface=..., euler_signed_measure=...)`.
 - `method=:mpp_image` returns a Carriere multiparameter persistence image (`MPPImage`).
-  Note: this requires a 2-parameter (2D) encoding and a QQ-valued module.
+  Note: this requires a 2-parameter (2D) encoding and an exact-field module.
 - `method=:all` returns `(rectangles=..., slices=..., euler_surface=..., euler_signed_measure=...)`.
 
 Keyword argument routing
@@ -1700,6 +1958,14 @@ end
 mma_decomposition(M::PModule, pi::ZnEncodingMap; kwargs...) =
     mma_decomposition(M, pi, InvariantOptions(); kwargs...)
 
+function mma_decomposition(M::PModule, pi::CompiledEncoding{<:ZnEncodingMap}, opts::InvariantOptions;
+                           kwargs...)
+    return mma_decomposition(M, pi.pi, opts; kwargs...)
+end
+
+mma_decomposition(M::PModule, pi::CompiledEncoding{<:ZnEncodingMap}; kwargs...) =
+    mma_decomposition(M, pi.pi; kwargs...)
+
 """
     mma_decomposition(M, pi, opts::InvariantOptions; method=:euler, mpp_kwargs=NamedTuple(), ...)
 
@@ -1716,7 +1982,7 @@ Supported methods
 
 - `method=:euler` returns `(euler_surface=..., euler_signed_measure=...)`.
 - `method=:mpp_image` returns an `MPPImage` via `mpp_image(M, pi; mpp_kwargs...)`.
-  Note: this requires a 2-parameter (2D) encoding and a `PModule{QQ}`.
+  Note: this requires a 2-parameter (2D) encoding and a `PModule{K}`.
 
 Other `method` values are not supported here (use the `ZnEncodingMap` method if you
 need rectangles or slice barcodes).
@@ -1787,13 +2053,13 @@ Restricted Hilbert function on a finite poset: the dimension surface
 `q |-> dim(M_q)` represented as a vector indexed by poset vertices.
 
 Methods:
-- `restricted_hilbert(M::PModule{QQ})` returns `copy(M.dims)`
-- `restricted_hilbert(H::FringeModule{QQ})` computes fiber dimensions via
+- `restricted_hilbert(M::PModule{K})` returns `copy(M.dims)`
+- `restricted_hilbert(H::FringeModule{K})` computes fiber dimensions via
   `fiber_dimension(H, q)` for each vertex
 """
-restricted_hilbert(M::PModule{QQ}) = copy(M.dims)
+restricted_hilbert(M::PModule{K}) where {K} = copy(M.dims)
 
-function restricted_hilbert(H::FringeModule{QQ})
+function restricted_hilbert(H::FringeModule{K}) where {K}
     return [fiber_dimension(H, q) for q in 1:nvertices(H.P)]
 end
 
@@ -1807,7 +2073,7 @@ by first locating its region via `locate(pi, x)`.
 If `strict=true` and `locate` returns 0, an error is thrown.
 If `strict=false`, unknown regions return 0.
 """
-function restricted_hilbert(M::PModule{QQ}, pi, x, opts::InvariantOptions)::Int
+function restricted_hilbert(M::PModule{K}, pi, x, opts::InvariantOptions)::Int where {K}
     strict0 = opts.strict === nothing ? true : opts.strict
 
     p = locate(pi, x)
@@ -1822,7 +2088,7 @@ function restricted_hilbert(M::PModule{QQ}, pi, x, opts::InvariantOptions)::Int
     return M.dims[p]
 end
 
-function restricted_hilbert(H::FringeModule{QQ}, pi, x, opts::InvariantOptions)::Int
+function restricted_hilbert(H::FringeModule{K}, pi, x, opts::InvariantOptions)::Int where {K}
     Mp = pmodule_from_fringe(H)
     return restricted_hilbert(Mp, pi, x, opts)
 end
@@ -1867,7 +2133,7 @@ Compute a fast distance between two modules based on their restricted Hilbert
 functions (dimension surfaces) on a fixed finite encoding.
 
 Inputs:
-* `M`, `N`: `PModule{QQ}` or `FringeModule{QQ}` on the same finite poset.
+* `M`, `N`: `PModule{K}` or `FringeModule{K}` on the same finite poset.
 * `norm`: one of `:L1`, `:L2`, `:Linf`.
 * `weights`: optional per-region weights.
 
@@ -2053,10 +2319,10 @@ function euler_characteristic_surface(obj, pi::PLikeEncodingMap, opts::Invariant
 
     n = dimension(pi)
     use_threads = opts.threads === nothing ? (Threads.nthreads() > 1) : opts.threads
-    x = zeros(Float64, n)
-
     if use_threads
+        xs = [zeros(Float64, n) for _ in 1:Threads.nthreads()]
         Threads.@threads for I in CartesianIndices(size(surf))
+            x = xs[Threads.threadid()]
             for i in 1:n
                 x[i] = float(ax[i][I[i]])
             end
@@ -2064,6 +2330,7 @@ function euler_characteristic_surface(obj, pi::PLikeEncodingMap, opts::Invariant
             surf[I] = (u == 0) ? 0 : chi_dims[u]
         end
     else
+        x = zeros(Float64, n)
         for I in CartesianIndices(size(surf))
             for i in 1:n
                 x[i] = float(ax[i][I[i]])
@@ -2232,7 +2499,7 @@ In a finite encoding, the Hilbert function is constant on each region. If
     \\int_W dim M(x) dx  \\approx  \\sum_r w_r * dim(M|_{R_r})
 
 Arguments:
-- `M`: a `PModule{QQ}`, a `FringeModule{QQ}` (delegates via `restricted_hilbert`),
+- `M`: a `PModule{K}`, a `FringeModule{K}` (delegates via `restricted_hilbert`),
   or a vector of integers interpreted as a precomputed restricted Hilbert function.
 - `pi`: an encoding map implementing `region_weights(pi; ...)` (typically a
   `PLikeEncodingMap`, e.g. `PLEncodingMapBoxes` or `ZnEncodingMap`).
@@ -2245,7 +2512,7 @@ Keywords:
 - weights: optional precomputed region weights
 - kwargs...: forwarded to region_weights when weights not provided
 """
-function integrated_hilbert_mass(M::PModule{QQ}, pi, opts::InvariantOptions; weights=nothing, kwargs...)
+function integrated_hilbert_mass(M::PModule{K}, pi, opts::InvariantOptions; weights=nothing, kwargs...) where {K}
     if haskey(kwargs, :box) || haskey(kwargs, :strict) || haskey(kwargs, :threads)
         throw(ArgumentError("integrated_hilbert_mass: pass box/strict/threads via opts, not kwargs"))
     end
@@ -2269,8 +2536,8 @@ function integrated_hilbert_mass(M::PModule{QQ}, pi, opts::InvariantOptions; wei
     return acc
 end
 
-function integrated_hilbert_mass(H::FringeModule{QQ}, pi, opts::InvariantOptions;
-    weights=nothing, kwargs...)
+function integrated_hilbert_mass(H::FringeModule{K}, pi, opts::InvariantOptions;
+    weights=nothing, kwargs...) where {K}
     # Convert to restricted Hilbert dims to reuse the vector-based implementation.
     return integrated_hilbert_mass(restricted_hilbert(H), pi, opts; weights=weights, kwargs...)
 end
@@ -2425,8 +2692,8 @@ function dim_stats(M, pi, opts::InvariantOptions; weights=nothing, kwargs...)
 end
 
 """
-    dim_norm(M::PModule{QQ}, pi::PLikeEncodingMap, opts::InvariantOptions; p=2, weights=nothing, kwargs...) -> Float64
-    dim_norm(H::FringeModule{QQ}, pi::PLikeEncodingMap, opts::InvariantOptions; p=2, weights=nothing, kwargs...) -> Float64
+    dim_norm(M::PModule{K}, pi::PLikeEncodingMap, opts::InvariantOptions; p=2, weights=nothing, kwargs...) -> Float64
+    dim_norm(H::FringeModule{K}, pi::PLikeEncodingMap, opts::InvariantOptions; p=2, weights=nothing, kwargs...) -> Float64
     dim_norm(dims::AbstractVector{<:Integer}, pi::PLikeEncodingMap, opts::InvariantOptions; p=2, weights=nothing, kwargs...) -> Float64
 
 Compute an L^p-type norm of the dimension surface of `M` over a window in `pi`.
@@ -2472,11 +2739,11 @@ function _dim_norm_impl(h::AbstractVector{<:Integer}, pi::PLikeEncodingMap, opts
     end
 end
 
-function dim_norm(M::PModule{QQ}, pi::PLikeEncodingMap, opts::InvariantOptions; p=2, weights=nothing, kwargs...)
+function dim_norm(M::PModule{K}, pi::PLikeEncodingMap, opts::InvariantOptions; p=2, weights=nothing, kwargs...) where {K}
     return _dim_norm_impl(restricted_hilbert(M), pi, opts; p=p, weights=weights, kwargs...)
 end
 
-function dim_norm(H::FringeModule{QQ}, pi::PLikeEncodingMap, opts::InvariantOptions; p=2, weights=nothing, kwargs...)
+function dim_norm(H::FringeModule{K}, pi::PLikeEncodingMap, opts::InvariantOptions; p=2, weights=nothing, kwargs...) where {K}
     # Delegate through restricted_hilbert to keep logic and weighting uniform.
     return _dim_norm_impl(restricted_hilbert(H), pi, opts; p=p, weights=weights, kwargs...)
 end
@@ -3464,7 +3731,7 @@ end
 
 
 """
-    module_geometry_asymptotics(M::PModule{QQ}, pi::PLikeEncodingMap, opts::InvariantOptions;
+    module_geometry_asymptotics(M::PModule{K}, pi::PLikeEncodingMap, opts::InvariantOptions;
         scales=[1,2,4,8],
         padding=0.0,
         fit=:loglog,
@@ -3594,14 +3861,14 @@ function _module_geometry_asymptotics_impl(M, pi::PLikeEncodingMap, opts::Invari
     )
 end
 
-function module_geometry_asymptotics(M::PModule{QQ}, pi::PLikeEncodingMap, opts::InvariantOptions;
+function module_geometry_asymptotics(M::PModule{K}, pi::PLikeEncodingMap, opts::InvariantOptions;
     scales::AbstractVector{<:Real} = [1,2,4,8],
     padding::Real = 0.0,
     fit::Symbol = :loglog,
     include_interface::Bool = true,
     include_ehrhart::Bool = false,
     ehrhart_period::Integer = 1,
-    ehrhart_degree = :auto)
+    ehrhart_degree = :auto) where {K}
     return _module_geometry_asymptotics_impl(M, pi, opts;
         scales=scales,
         padding=padding,
@@ -4300,6 +4567,11 @@ function slice_chain(pi::ZnEncodingMap, x0::AbstractVector{<:Integer}, dir::Abst
         kwargs...)
 end
 
+function slice_chain(pi::CompiledEncoding{<:ZnEncodingMap}, x0::AbstractVector{<:Integer}, dir::AbstractVector{<:Integer},
+                     opts::InvariantOptions; kwargs...)
+    return slice_chain(pi.pi, x0, dir, opts; kwargs...)
+end
+
 
 
 # Helper: assert that `chain` is a chain in the poset Q (consecutive comparability suffices).
@@ -4358,7 +4630,7 @@ function _extend_values(values::AbstractVector)
 end
 
 """
-    restrict_to_chain(M, chain) -> PModule{QQ}
+    restrict_to_chain(M, chain) -> PModule{K}
 
 Restrict a finite-poset module `M` to a chain of vertices.
 
@@ -4369,7 +4641,7 @@ maps are the corresponding maps in `M`.
 This is useful if you want to inspect the actual matrices along the slice.
 For interval decomposition / barcodes, `slice_barcode` is usually the better entry point.
 """
-function restrict_to_chain(M::PModule{QQ}, chain::AbstractVector{Int})::PModule{QQ}
+function restrict_to_chain(M::PModule{K}, chain::AbstractVector{Int})::PModule{K} where {K}
     _assert_chain(M.Q, chain)
     m = length(chain)
 
@@ -4385,13 +4657,13 @@ function restrict_to_chain(M::PModule{QQ}, chain::AbstractVector{Int})::PModule{
     dims = [M.dims[chain[i]] for i in 1:m]
 
     # Only need cover edges (i,i+1).
-    edge_maps = Dict{Tuple{Int,Int}, Matrix{QQ}}()
-    cc = _cover_cache(M.Q)
-    memo = Dict{Tuple{Int,Int}, Matrix{QQ}}()
+    edge_maps = Dict{Tuple{Int,Int}, Matrix{K}}()
+    cc = get_cover_cache(M.Q)
+    memo = Dict{Tuple{Int,Int}, Matrix{K}}()
     for i in 1:m-1
         edge_maps[(i, i+1)] = _map_leq_cached(M, chain[i], chain[i+1], cc, memo)
     end
-    return PModule{QQ}(Qc, dims, edge_maps)
+    return PModule{K}(Qc, dims, edge_maps)
 end
 
 """
@@ -4419,10 +4691,10 @@ along the chain:
   mult(b,d) = r[b, d-1] - r[b-1, d-1] - r[b, d] + r[b-1, d]
 where r[i,j] = rank(M(q_i -> q_j)) and out-of-range r is treated as 0.
 """
-function slice_barcode(M::PModule{QQ}, chain::AbstractVector{Int};
+function slice_barcode(M::PModule{K}, chain::AbstractVector{Int};
     values=nothing,
     check_chain::Bool=true
-)
+) where {K}
     check_chain && _assert_chain(M.Q, chain)
     m = length(chain)
 
@@ -4435,8 +4707,8 @@ function slice_barcode(M::PModule{QQ}, chain::AbstractVector{Int};
     end
 
     # Compute rank matrix on the chain: r[i,j] = rank(M(q_i -> q_j)).
-    cc = _cover_cache(M.Q)
-    memo = Dict{Tuple{Int,Int}, Matrix{QQ}}()
+    cc = get_cover_cache(M.Q)
+    memo = Dict{Tuple{Int,Int}, Matrix{K}}()
     R = zeros(Int, m, m)
     for i in 1:m
         for j in i:m
@@ -4465,7 +4737,7 @@ function slice_barcode(M::PModule{QQ}, chain::AbstractVector{Int};
 end
 
 # Convenience wrapper: build the chain from a slice in the original domain first.
-function slice_barcode(M::PModule{QQ}, pi, x0::AbstractVector, dir::AbstractVector; kwargs...)
+function slice_barcode(M::PModule{K}, pi, x0::AbstractVector, dir::AbstractVector; kwargs...) where {K}
     # Extract legacy keywords and convert to opts for slice_chain.
     box_kw = haskey(kwargs, :box) ? kwargs[:box] : nothing
     strict_kw = haskey(kwargs, :strict) ? kwargs[:strict] : nothing
@@ -4626,7 +4898,133 @@ Parameters:
 
 Diagonal matching is included in the standard way. The return value is a Float64.
 """
-function wasserstein_distance(bar1, bar2; p::Real=2, q::Real=Inf)
+@inline function _wasserstein_cost(i::Int, j::Int,
+                                   P::Vector{Tuple{Float64,Float64}},
+                                   Q::Vector{Tuple{Float64,Float64}},
+                                   m::Int, n::Int,
+                                   diagP::Vector{Float64},
+                                   diagQ::Vector{Float64},
+                                   q::Real, p::Real)
+    if i <= m
+        if j <= n
+            return _point_distance(P[i], Q[j], q)^p
+        else
+            return diagP[i]^p
+        end
+    else
+        if j <= n
+            return diagQ[j]^p
+        else
+            return 0.0
+        end
+    end
+end
+
+function _auction_assignment(P::Vector{Tuple{Float64,Float64}},
+                             Q::Vector{Tuple{Float64,Float64}};
+                             p::Real=2, q::Real=Inf,
+                             eps_factor::Real=5.0,
+                             eps_min::Real=1e-6,
+                             max_iters::Int=0)
+    m = length(P)
+    n = length(Q)
+    N = m + n
+    N == 0 && return Int[], 0.0
+
+    diagP = Vector{Float64}(undef, m)
+    for i in 1:m
+        diagP[i] = _diag_distance(P[i], q)
+    end
+    diagQ = Vector{Float64}(undef, n)
+    for j in 1:n
+        diagQ[j] = _diag_distance(Q[j], q)
+    end
+
+    # Rough max cost for epsilon scaling.
+    max_cost = 0.0
+    for i in 1:m
+        max_cost = max(max_cost, diagP[i]^p)
+        for j in 1:n
+            max_cost = max(max_cost, _point_distance(P[i], Q[j], q)^p)
+        end
+    end
+    for j in 1:n
+        max_cost = max(max_cost, diagQ[j]^p)
+    end
+    max_cost == 0.0 && return zeros(Int, N), 0.0
+
+    epsilon = max_cost / 4
+    eps_min = max(eps_min, max_cost * 1e-9)
+
+    prices = zeros(Float64, N)
+    owner = zeros(Int, N)   # item -> bidder
+    assign = zeros(Int, N)  # bidder -> item
+
+    max_iters == 0 && (max_iters = 10 * N * N)
+
+    while epsilon > eps_min
+        unassigned = Int[]
+        for i in 1:N
+            if assign[i] == 0
+                push!(unassigned, i)
+            end
+        end
+
+        iters = 0
+        while !isempty(unassigned)
+            iters += 1
+            iters > max_iters && break
+
+            i = pop!(unassigned)
+            best = 0
+            min1 = Inf
+            min2 = Inf
+
+            @inbounds for j in 1:N
+                c = _wasserstein_cost(i, j, P, Q, m, n, diagP, diagQ, q, p) + prices[j]
+                if c < min1
+                    min2 = min1
+                    min1 = c
+                    best = j
+                elseif c < min2
+                    min2 = c
+                end
+            end
+
+            min2 == Inf && (min2 = min1 + epsilon)
+            bid = (min2 - min1) + epsilon
+            prices[best] += bid
+
+            prev = owner[best]
+            owner[best] = i
+            assign[i] = best
+            if prev != 0
+                assign[prev] = 0
+                push!(unassigned, prev)
+            end
+        end
+
+        epsilon /= eps_factor
+    end
+
+    total = 0.0
+    for i in 1:N
+        total += _wasserstein_cost(i, assign[i], P, Q, m, n, diagP, diagQ, q, p)
+    end
+    return assign, total
+end
+
+"""
+    wasserstein_distance(bar1, bar2; p=2, q=Inf, backend=:auto)
+
+Compute the p-Wasserstein distance between two 1-parameter barcodes (persistence diagrams).
+
+`backend` options:
+- `:auto`     (default): Hungarian for small diagrams, auction for larger ones
+- `:hungarian`: always use Hungarian assignment
+- `:auction`  : use auction algorithm with ε-scaling
+"""
+function wasserstein_distance(bar1, bar2; p::Real=2, q::Real=Inf, backend::Symbol=:auto)
     p >= 1 || error("wasserstein_distance: expected p >= 1")
 
     P = _barcode_points(bar1)
@@ -4637,25 +5035,34 @@ function wasserstein_distance(bar1, bar2; p::Real=2, q::Real=Inf)
 
     N == 0 && return 0.0
 
-    C = zeros(Float64, N, N)
+    use_hungarian = backend == :hungarian ||
+                    (backend == :auto && N <= 30)
+    if use_hungarian
+        C = zeros(Float64, N, N)
 
-    for i in 1:m
-        for j in 1:n
-            C[i, j] = _point_distance(P[i], Q[j], q)^p
+        for i in 1:m
+            for j in 1:n
+                C[i, j] = _point_distance(P[i], Q[j], q)^p
+            end
+            for j in (n+1):N
+                C[i, j] = _diag_distance(P[i], q)^p
+            end
         end
-        for j in (n+1):N
-            C[i, j] = _diag_distance(P[i], q)^p
+
+        for i in (m+1):N
+            for j in 1:n
+                C[i, j] = _diag_distance(Q[j], q)^p
+            end
         end
+
+        _, cost = _hungarian(C)
+        return cost^(1 / p)
+    elseif backend == :auction || backend == :auto
+        _, cost = _auction_assignment(P, Q; p=p, q=q)
+        return cost^(1 / p)
+    else
+        error("wasserstein_distance: unknown backend=$(backend)")
     end
-
-    for i in (m+1):N
-        for j in 1:n
-            C[i, j] = _diag_distance(Q[j], q)^p
-        end
-    end
-
-    _, cost = _hungarian(C)
-    return cost^(1 / p)
 end
 
 """
@@ -4693,7 +5100,7 @@ Notes:
 - This wrapper uses `slice_kernel(...; kind=:wasserstein_gaussian, ...)`.
 - `p` and `q` are forwarded to the underlying Wasserstein kernel on barcodes.
 """
-function sliced_wasserstein_kernel(M::PModule{QQ}, N::PModule{QQ}, pi::PLikeEncodingMap, opts::InvariantOptions;
+function sliced_wasserstein_kernel(M::PModule{K}, N::PModule{K}, pi::PLikeEncodingMap, opts::InvariantOptions;
     directions = :auto,
     offsets = :auto,
     n_dirs::Integer = 100,
@@ -4717,7 +5124,7 @@ function sliced_wasserstein_kernel(M::PModule{QQ}, N::PModule{QQ}, pi::PLikeEnco
     box2 = nothing,
 
     # Any extra slice-chain kwargs (tmin/tmax/nsteps, drop_unknown, dedup, etc.).
-    slice_kwargs...)
+    slice_kwargs...) where {K}
 
     strict0 = opts.strict === nothing ? true : opts.strict
 
@@ -4934,8 +5341,8 @@ end
 # combines per-slice distances using either an integration-style aggregate
 # (weight_mode = :integrate) or a matching-style scale-and-max (weight_mode = :scale).
 function _slice_based_barcode_distance(
-    M::PModule{QQ},
-    N::PModule{QQ},
+    M::PModule{K},
+    N::PModule{K},
     pi::PLikeEncodingMap;
     dist_fn::Function = bottleneck_distance,
     dist_kwargs = NamedTuple(),
@@ -4955,7 +5362,7 @@ function _slice_based_barcode_distance(
     agg_norm::Real = 1.0,
     threads::Bool = (Threads.nthreads() > 1),
     slice_kwargs...
-)::Float64
+)::Float64 where {K}
     dataM = slice_barcodes(M, pi;
                           directions = dirs,
                           offsets = offs,
@@ -4997,46 +5404,114 @@ function _slice_based_barcode_distance(
     agg_mode = (agg === mean) ? :mean : (agg === maximum) ? :max : agg
 
     if weight_mode == :scale
+        if threads && Threads.nthreads() > 1
+            nT = Threads.nthreads()
+            best_by_slot = fill(0.0, nT)
+            Threads.@threads for slot in 1:nT
+                best = 0.0
+                for idx in slot:nT:length(bcsM)
+                    w = W[idx]
+                    w == 0.0 && continue
+                    d = dist_fn(bcsM[idx], bcsN[idx]; dist_kwargs...)
+                    best = max(best, w * d)
+                end
+                best_by_slot[slot] = best
+            end
+            return maximum(best_by_slot) / float(agg_norm)
+        end
         best = 0.0
-        for i in axes(bcsM, 1), j in axes(bcsM, 2)
-            w = W[i, j]
+        for idx in eachindex(bcsM)
+            w = W[idx]
             w == 0.0 && continue
-            d = dist_fn(bcsM[i, j], bcsN[i, j]; dist_kwargs...)
+            d = dist_fn(bcsM[idx], bcsN[idx]; dist_kwargs...)
             best = max(best, w * d)
         end
         return best / float(agg_norm)
     elseif weight_mode == :integrate
         if agg_mode == :mean
+            if threads && Threads.nthreads() > 1
+                nT = Threads.nthreads()
+                acc_by_slot = fill(0.0, nT)
+                Threads.@threads for slot in 1:nT
+                    acc = 0.0
+                    for idx in slot:nT:length(bcsM)
+                        w = W[idx]
+                        w == 0.0 && continue
+                        acc += w * dist_fn(bcsM[idx], bcsN[idx]; dist_kwargs...)
+                    end
+                    acc_by_slot[slot] = acc
+                end
+                acc = sum(acc_by_slot)
+                return (acc / sumw) / float(agg_norm)
+            end
             acc = 0.0
-            for i in axes(bcsM, 1), j in axes(bcsM, 2)
-                w = W[i, j]
+            for idx in eachindex(bcsM)
+                w = W[idx]
                 w == 0.0 && continue
-                acc += w * dist_fn(bcsM[i, j], bcsN[i, j]; dist_kwargs...)
+                acc += w * dist_fn(bcsM[idx], bcsN[idx]; dist_kwargs...)
             end
             return (acc / sumw) / float(agg_norm)
         elseif agg_mode == :pmean
             p = float(agg_p)
+            if threads && Threads.nthreads() > 1
+                nT = Threads.nthreads()
+                acc_by_slot = fill(0.0, nT)
+                Threads.@threads for slot in 1:nT
+                    acc = 0.0
+                    for idx in slot:nT:length(bcsM)
+                        w = W[idx]
+                        w == 0.0 && continue
+                        d = dist_fn(bcsM[idx], bcsN[idx]; dist_kwargs...)
+                        acc += w * d^p
+                    end
+                    acc_by_slot[slot] = acc
+                end
+                acc = sum(acc_by_slot)
+                return ((acc / sumw)^(1 / p)) / float(agg_norm)
+            end
             acc = 0.0
-            for i in axes(bcsM, 1), j in axes(bcsM, 2)
-                w = W[i, j]
+            for idx in eachindex(bcsM)
+                w = W[idx]
                 w == 0.0 && continue
-                d = dist_fn(bcsM[i, j], bcsN[i, j]; dist_kwargs...)
+                d = dist_fn(bcsM[idx], bcsN[idx]; dist_kwargs...)
                 acc += w * d^p
             end
             return ((acc / sumw)^(1 / p)) / float(agg_norm)
         elseif agg_mode == :max
+            if threads && Threads.nthreads() > 1
+                nT = Threads.nthreads()
+                best_by_slot = fill(0.0, nT)
+                Threads.@threads for slot in 1:nT
+                    best = 0.0
+                    for idx in slot:nT:length(bcsM)
+                        w = W[idx]
+                        w == 0.0 && continue
+                        d = dist_fn(bcsM[idx], bcsN[idx]; dist_kwargs...)
+                        best = max(best, w * d)
+                    end
+                    best_by_slot[slot] = best
+                end
+                return maximum(best_by_slot) / float(agg_norm)
+            end
             best = 0.0
-            for i in axes(bcsM, 1), j in axes(bcsM, 2)
-                w = W[i, j]
+            for idx in eachindex(bcsM)
+                w = W[idx]
                 w == 0.0 && continue
-                d = dist_fn(bcsM[i, j], bcsN[i, j]; dist_kwargs...)
+                d = dist_fn(bcsM[idx], bcsN[idx]; dist_kwargs...)
                 best = max(best, w * d)
             end
             return best / float(agg_norm)
         elseif agg_mode isa Function
+            if threads && Threads.nthreads() > 1
+                vals = Vector{Float64}(undef, length(bcsM))
+                Threads.@threads for idx in 1:length(bcsM)
+                    vals[idx] = dist_fn(bcsM[idx], bcsN[idx]; dist_kwargs...)
+                end
+                return float(agg_mode(vals)) / float(agg_norm)
+            end
             vals = Float64[]
-            for i in axes(bcsM, 1), j in axes(bcsM, 2)
-                push!(vals, dist_fn(bcsM[i, j], bcsN[i, j]; dist_kwargs...))
+            for idx in eachindex(bcsM)
+                push!(vals, dist_fn(bcsM[idx], bcsN[idx]; dist_kwargs...))
             end
             return float(agg_mode(vals)) / float(agg_norm)
         else
@@ -5082,7 +5557,7 @@ Wasserstein parameters:
 - `p` is the Wasserstein exponent (p >= 1).
 - `q` selects the ground metric on points (q=Inf is L_infty; q=2 Euclidean; q=1 L1).
 """
-function sliced_wasserstein_distance(M::PModule{QQ}, N::PModule{QQ}, pi::PLikeEncodingMap, opts::InvariantOptions;
+function sliced_wasserstein_distance(M::PModule{K}, N::PModule{K}, pi::PLikeEncodingMap, opts::InvariantOptions;
     directions = :auto,
     offsets = :auto,
     n_dirs::Integer = 16,
@@ -5109,7 +5584,7 @@ function sliced_wasserstein_distance(M::PModule{QQ}, N::PModule{QQ}, pi::PLikeEn
     # Optional second clipping box.
     box2 = nothing,
 
-    slice_kwargs...)::Float64
+    slice_kwargs...)::Float64 where {K}
 
     strict0 = opts.strict === nothing ? true : opts.strict
     threads0 = opts.threads === nothing ? (Threads.nthreads() > 1) : opts.threads
@@ -5172,7 +5647,7 @@ Opts usage:
 - `opts.box` controls clipping of each slice chain.
 - `opts.threads` controls parallel barcode computation.
 """
-function sliced_bottleneck_distance(M::PModule{QQ}, N::PModule{QQ}, pi::PLikeEncodingMap, opts::InvariantOptions;
+function sliced_bottleneck_distance(M::PModule{K}, N::PModule{K}, pi::PLikeEncodingMap, opts::InvariantOptions;
     directions = :auto,
     offsets = :auto,
     n_dirs::Integer = 16,
@@ -5192,7 +5667,7 @@ function sliced_bottleneck_distance(M::PModule{QQ}, N::PModule{QQ}, pi::PLikeEnc
 
     box2 = nothing,
 
-    slice_kwargs...)::Float64
+    slice_kwargs...)::Float64 where {K}
 
     strict0 = opts.strict === nothing ? true : opts.strict
     threads0 = opts.threads === nothing ? (Threads.nthreads() > 1) : opts.threads
@@ -5366,13 +5841,16 @@ We use the standard persistence-diagram L_infinity metric:
 
 This implementation is exact for the given finite barcodes (up to floating-point).
 """
-function bottleneck_distance(barA, barB)::Float64
+function bottleneck_distance(barA, barB; backend::Symbol=:auto)::Float64
     A = _barcode_points(barA)
     B = _barcode_points(barB)
 
     if isempty(A) && isempty(B)
         return 0.0
     end
+
+    backend == :auto && (backend = :hk)
+    backend == :hk || error("bottleneck_distance: unknown backend=$(backend)")
 
     # Candidate eps values: all pairwise distances and diagonal costs.
     epss = Float64[0.0]
@@ -5404,7 +5882,7 @@ function bottleneck_distance(barA, barB)::Float64
 end
 
 # Convenience: bottleneck distance between slice barcodes of two modules on the same chain.
-function bottleneck_distance(M::PModule{QQ}, N::PModule{QQ}, chain::AbstractVector{Int}; kwargs...)::Float64
+function bottleneck_distance(M::PModule{K}, N::PModule{K}, chain::AbstractVector{Int}; kwargs...)::Float64 where {K}
     bM = slice_barcode(M, chain; kwargs...)
     bN = slice_barcode(N, chain; kwargs...)
     return bottleneck_distance(bM, bN)
@@ -5414,7 +5892,7 @@ end
 # These accept Wasserstein-style kwargs for API convenience.
 matching_distance(barA, barB; kwargs...)::Float64 = bottleneck_distance(barA, barB)
 matching_wasserstein_distance(barA, barB; p::Real=2, q::Real=1, kwargs...)::Float64 =
-    wasserstein_distance(barA, barB; p=p, q=q)
+    wasserstein_distance(barA, barB; p=p, q=q, kwargs...)
 
 # ----- Approximate matching distance ------------------------------------------
 
@@ -6042,11 +6520,11 @@ Notes:
   in 2D after L1 normalization; set `weight=:none` to disable weighting.
 """
 function matching_distance_approx(
-    M::PModule{QQ},
-    N::PModule{QQ},
+    M::PModule{K},
+    N::PModule{K},
     slices::AbstractVector;
     default_weight=1.0
-)::Float64
+)::Float64 where {K}
     best = 0.0
 
     for spec in slices
@@ -6077,12 +6555,14 @@ function matching_distance_approx(
     return best
 end
 
-matching_distance_approx(
-    M::PModule{QQ},
-    N::PModule{QQ},
+function matching_distance_approx(
+    M::PModule{K},
+    N::PModule{K},
     chain::AbstractVector{Int};
     default_weight=1.0
-)::Float64 = matching_distance_approx(M, N, [chain]; default_weight=default_weight)
+) where {K}
+    return matching_distance_approx(M, N, [chain]; default_weight=default_weight)
+end
 
 """
     matching_distance_approx(M, N, pi, opts::InvariantOptions; ...)
@@ -6096,8 +6576,8 @@ Opts usage:
 - `opts.threads` controls parallel barcode computation.
 """
 function matching_distance_approx(
-    M::PModule{QQ},
-    N::PModule{QQ},
+    M::PModule{K},
+    N::PModule{K},
     pi::PLikeEncodingMap,
     opts::InvariantOptions;
     directions = :auto,
@@ -6111,7 +6591,7 @@ function matching_distance_approx(
     offset_weights = nothing,
     box2 = nothing,
     slice_kwargs...
-)::Float64
+)::Float64 where {K}
 
     strict0 = opts.strict === nothing ? true : opts.strict
     threads0 = opts.threads === nothing ? (Threads.nthreads() > 1) : opts.threads
@@ -6154,8 +6634,8 @@ the "matching_wasserstein_distance_approx" slice-based family member requested i
 screenshot: same structure, Wasserstein per slice, supremum reduction.
 """
 function matching_wasserstein_distance_approx(
-    M::PModule{QQ},
-    N::PModule{QQ},
+    M::PModule{K},
+    N::PModule{K},
     pi,
     # NOTE: opts is positional (refactor pattern)
     opts::InvariantOptions;
@@ -6172,7 +6652,7 @@ function matching_wasserstein_distance_approx(
     p = 2,
     q = 1,
     slice_kwargs...
-)::Float64
+)::Float64 where {K}
 
     strict0 = opts.strict === nothing ? true : opts.strict
     threads0 = opts.threads === nothing ? (Threads.nthreads() > 1) : opts.threads
@@ -6212,13 +6692,13 @@ The output is:
     max_slice ( w * wasserstein_distance(barcode_slice_M, barcode_slice_N; p, q) )
 """
 function matching_wasserstein_distance_approx(
-    M::PModule{QQ},
-    N::PModule{QQ},
+    M::PModule{K},
+    N::PModule{K},
     pi::PLikeEncodingMap,
     slices::Vector;
     p=2,
     q=1
-)::Float64
+)::Float64 where {K}
     d = 0.0
     for slice in slices
         chain = slice isa Vector ? slice : slice[1]
@@ -6446,7 +6926,7 @@ function _critical_points_poly_2d(pi::PLPolyhedra.PLEncodingMap,
                                                      max_vertices=max_vertices)
         if verts !== nothing
             for v in verts
-                # v is a tuple of QQs (dimension 2 here).
+                # v is a tuple of scalars (dimension 2 here).
                 push!(pts, (float(v[1]), float(v[2])))
             end
         else
@@ -6790,6 +7270,7 @@ function slice_chain_exact_2d(
     normalize_dirs::Symbol = :L1,
     atol::Real = 1e-12
 )
+    pi0 = _unwrap_compiled(pi)
     strict0 = opts.strict === nothing ? true : opts.strict
 
     # Legacy default for this exact routine: if opts.box is unset, use encoding_box(pi).
@@ -6801,28 +7282,28 @@ function slice_chain_exact_2d(
     # Normalize direction representation.
     d = _normalize_dir(float.(dir), normalize_dirs)
 
-    if hasproperty(pi, :coords)
-        coords = getproperty(pi, :coords)
+    if hasproperty(pi0, :coords)
+        coords = getproperty(pi0, :coords)
         xs = [float(x) for x in coords[1] if isfinite(x)]
         ys = [float(y) for y in coords[2] if isfinite(y)]
         return _slice_chain_exact_boxes_2d_fast(
-            pi, d, float(offset);
+            pi0, d, float(offset);
             box = bx,
             xs = xs,
             ys = ys,
             strict = strict0,
             atol = atol
         )
-    elseif pi isa PLPolyhedra.PLEncodingMap
+    elseif pi0 isa PLPolyhedra.PLEncodingMap
         return _slice_chain_exact_poly_2d(
-            pi, d, float(offset);
+            pi0, d, float(offset);
             box = bx,
             strict = strict0,
             atol = atol
         )
     end
 
-    error("slice_chain_exact_2d: unsupported encoding map backend $(typeof(pi))")
+    error("slice_chain_exact_2d: unsupported encoding map backend $(typeof(pi0))")
 end
 
 
@@ -7001,9 +7482,9 @@ fibered barcode queries are fast.
 Construct with [`fibered_barcode_cache_2d`](@ref).
 Query with [`fibered_barcode`](@ref).
 """
-mutable struct FiberedBarcodeCache2D
+mutable struct FiberedBarcodeCache2D{K}
     arrangement::FiberedArrangement2D
-    M::PModule{QQ}
+    M::PModule{K}
 
     # index_barcodes[i] is either nothing or an IndexBarcode
     index_barcodes::Vector{Union{Nothing,IndexBarcode}}
@@ -7430,20 +7911,41 @@ function _index_barcode_for_chain!(cache::FiberedBarcodeCache2D, chain_id::Int)
     return bidx
 end
 
-function _precompute_cells!(arr::FiberedArrangement2D)
-    for dir_idx in 1:length(arr.dir_reps)
-        for off_idx in 1:arr.noff[dir_idx]
-            _arr2d_compute_cell!(arr, dir_idx, off_idx)
+function _precompute_cells!(arr::FiberedArrangement2D;
+                            threads::Bool = (Threads.nthreads() > 1))
+    if threads && Threads.nthreads() > 1
+        Threads.@threads for dir_idx in 1:length(arr.dir_reps)
+            for off_idx in 1:arr.noff[dir_idx]
+                _arr2d_compute_cell!(arr, dir_idx, off_idx)
+            end
+        end
+    else
+        for dir_idx in 1:length(arr.dir_reps)
+            for off_idx in 1:arr.noff[dir_idx]
+                _arr2d_compute_cell!(arr, dir_idx, off_idx)
+            end
         end
     end
     return nothing
 end
 
-function _precompute_index_barcodes!(cache::FiberedBarcodeCache2D)
+function _precompute_index_barcodes!(cache::FiberedBarcodeCache2D;
+                                     threads::Bool = (Threads.nthreads() > 1))
     arr = cache.arrangement
     _sync_index_barcodes!(cache)
-    for i in 1:length(arr.chains)
-        _index_barcode_for_chain!(cache, i)
+    if threads && Threads.nthreads() > 1
+        Threads.@threads for i in 1:length(arr.chains)
+            b = cache.index_barcodes[i]
+            if b === nothing
+                chain = arr.chains[i]
+                cache.index_barcodes[i] = slice_barcode(cache.M, chain; values=nothing, check_chain=false)
+            end
+        end
+        cache.n_barcode_computed = count(!isnothing, cache.index_barcodes)
+    else
+        for i in 1:length(arr.chains)
+            _index_barcode_for_chain!(cache, i)
+        end
     end
     return nothing
 end
@@ -7480,9 +7982,11 @@ function fibered_arrangement_2d(
     max_combinations = 200_000,
     max_vertices = 20_000,
     max_cells = 5_000_000,
-    precompute = :none
+    precompute = :none,
+    threads::Bool = (Threads.nthreads() > 1)
 )
-    backend = (pi isa PLPolyhedra.PLEncodingMap ? :poly : :boxes)
+    pi0 = _unwrap_compiled(pi)
+    backend = (pi0 isa PLPolyhedra.PLEncodingMap ? :poly : :boxes)
 
     strict_arg = opts.strict === nothing ? true : opts.strict
     strict0 = (backend == :poly ? false : strict_arg)
@@ -7492,13 +7996,13 @@ function fibered_arrangement_2d(
     bx = ([float(bx_raw[1][1]), float(bx_raw[1][2])],
           [float(bx_raw[2][1]), float(bx_raw[2][2])])
 
-    points = if backend == :boxes && hasproperty(pi, :coords)
-        _critical_points_boxes_2d(pi, bx; atol=atol)
-    elseif backend == :poly && (pi isa PLPolyhedra.PLEncodingMap)
-        _critical_points_poly_2d(pi, bx; max_combinations=max_combinations, max_vertices=max_vertices, atol=atol)
+    points = if backend == :boxes && hasproperty(pi0, :coords)
+        _critical_points_boxes_2d(pi0, bx; atol=atol)
+    elseif backend == :poly && (pi0 isa PLPolyhedra.PLEncodingMap)
+        _critical_points_poly_2d(pi0, bx; max_combinations=max_combinations, max_vertices=max_vertices, atol=atol)
     else
         pts = NTuple{2,Float64}[]
-        for p in representatives(pi)
+        for p in representatives(pi0)
             length(p) == 2 || throw(ArgumentError("fibered_arrangement_2d: expected 2D representatives"))
             push!(pts, (float(p[1]), float(p[2])))
         end
@@ -7540,8 +8044,8 @@ function fibered_arrangement_2d(
     ys = Float64[]
     region_cache = nothing
 
-    if backend == :boxes && hasproperty(pi, :coords)
-        coords = getproperty(pi, :coords)
+    if backend == :boxes && hasproperty(pi0, :coords)
+        coords = getproperty(pi0, :coords)
         xs = [float(x) for x in coords[1] if isfinite(x)]
         ys = [float(y) for y in coords[2] if isfinite(y)]
         _unique_sorted_floats!(xs; atol=atol)
@@ -7551,13 +8055,13 @@ function fibered_arrangement_2d(
         ys = [p[2] for p in points]
         _unique_sorted_floats!(xs; atol=atol)
         _unique_sorted_floats!(ys; atol=atol)
-    elseif backend == :poly && (pi isa PLPolyhedra.PLEncodingMap)
-        region_cache = ([Float64.(hp.A) for hp in pi.regions],
-                        [Float64.(hp.b) for hp in pi.regions])
+    elseif backend == :poly && (pi0 isa PLPolyhedra.PLEncodingMap)
+        region_cache = ([Float64.(hp.A) for hp in pi0.regions],
+                        [Float64.(hp.b) for hp in pi0.regions])
     end
 
     arr = FiberedArrangement2D(
-        pi, bx, normalize_dirs, include_axes, strict0, atol,
+        pi0, bx, normalize_dirs, include_axes, strict0, atol,
         backend, points, slopes, dir_reps, orders, unique_pos,
         noff, start, total_cells, cell_chain_id,
         cell_event_start, cell_event_len, event_pool,
@@ -7567,13 +8071,14 @@ function fibered_arrangement_2d(
         Dict{Tuple{Symbol,Bool},Any}(),
     )
 
-    _precompute_arrangement_cache!(arr, precompute)
+    _precompute_arrangement_cache!(arr, precompute; threads=threads)
     return arr
 end
 
-function _precompute_arrangement_cache!(arr::FiberedArrangement2D, precompute::Symbol)
+function _precompute_arrangement_cache!(arr::FiberedArrangement2D, precompute::Symbol;
+                                        threads::Bool = (Threads.nthreads() > 1))
     if precompute in (:cells, :cells_barcodes, :full, :all)
-        _precompute_cells!(arr)
+        _precompute_cells!(arr; threads=threads)
     end
     return nothing
 end
@@ -7676,7 +8181,7 @@ Notes
   build a fresh one (convenient, but not shared across modules unless you pass it around).
 """
 function fibered_barcode_cache_2d(
-    M::PModule{QQ},
+    M::PModule{K},
     pi,
     opts::InvariantOptions;
     arrangement = nothing,
@@ -7687,8 +8192,9 @@ function fibered_barcode_cache_2d(
     max_combinations = 200_000,
     max_vertices = 20_000,
     max_cells = 5_000_000,
-    arr_precompute = :none
-)
+    arr_precompute = :none,
+    threads::Bool = (Threads.nthreads() > 1)
+) where {K}
     # If we will precompute cell barcodes, ensure the arrangement has cell reps ready.
     if arr_precompute == :none && (precompute in (:cells, :cells_barcodes))
         arr_precompute = :cells
@@ -7701,19 +8207,22 @@ function fibered_barcode_cache_2d(
         max_combinations = max_combinations,
         max_vertices = max_vertices,
         max_cells = max_cells,
-        precompute = arr_precompute
+        precompute = arr_precompute,
+        threads = threads
     ) : arrangement
 
-    cache = fibered_barcode_cache_2d(M, arr; precompute = precompute)
+    cache = fibered_barcode_cache_2d(M, arr; precompute = precompute, threads = threads)
     return cache
 end
 
 
-function fibered_barcode_cache_2d(M::PModule{QQ}, arr::FiberedArrangement2D; precompute::Symbol=:none)
+function fibered_barcode_cache_2d(M::PModule{K}, arr::FiberedArrangement2D;
+                                  precompute::Symbol=:none,
+                                  threads::Bool = (Threads.nthreads() > 1)) where {K}
     cache = FiberedBarcodeCache2D(arr, M, Any[], 0)
     if precompute === :full
-        _precompute_cells!(arr)
-        _precompute_index_barcodes!(cache)
+        _precompute_cells!(arr; threads=threads)
+        _precompute_index_barcodes!(cache; threads=threads)
     elseif precompute !== :none
         throw(ArgumentError("precompute must be :none or :full for this constructor"))
     end
@@ -7732,10 +8241,11 @@ Build a module-specific cache over a shared arrangement.
 - :cells_barcodes (synonym: :full)
 """
 function fibered_barcode_cache_2d(
-    M::PModule{QQ},
+    M::PModule{K},
     arr::FiberedArrangement2D;
     precompute::Symbol = :none,
-)
+    threads::Bool = (Threads.nthreads() > 1),
+) where {K}
     # normalize synonyms
     if precompute == :full
         precompute = :cells_barcodes
@@ -7744,10 +8254,10 @@ function fibered_barcode_cache_2d(
     cache = FiberedBarcodeCache2D(arr, M, Union{Nothing,IndexBarcode}[], 0)
 
     if precompute in (:cells, :cells_barcodes, :all)
-        _precompute_cells!(arr)
+        _precompute_cells!(arr; threads=threads)
     end
     if precompute in (:barcodes, :cells_barcodes, :all)
-        _precompute_index_barcodes!(cache)
+        _precompute_index_barcodes!(cache; threads=threads)
     end
     return cache
 end
@@ -8475,8 +8985,8 @@ All other keyword arguments match the previous API (except `box`, `strict`, `thr
 which are now read from opts).
 """
 function matching_distance_exact_2d(
-    M::PModule{QQ},
-    N::PModule{QQ},
+    M::PModule{K},
+    N::PModule{K},
     pi::PLikeEncodingMap,
     opts::InvariantOptions;
     weight = :lesnick_l1,
@@ -8490,7 +9000,7 @@ function matching_distance_exact_2d(
     arrangement = nothing,
     store_values::Bool = true,
     family = nothing
-)::Float64
+)::Float64 where {K}
 
     threads0 = opts.threads === nothing ? (Threads.nthreads() > 1) : opts.threads
 
@@ -8844,7 +9354,8 @@ function projected_arrangement(pi::PLikeEncodingMap;
                                normalize::Symbol = :L1,
                                enforce_monotone::Symbol = :upper,
                                 Q::Union{Nothing,AbstractPoset}=nothing,
-                                poset_kind::Symbol = :signature)
+                                poset_kind::Symbol = :signature,
+                                threads::Bool = (Threads.nthreads() > 1))
 
     # Determine the region poset Q (either provided or reconstructed from pi).
     Qposet = (Q === nothing) ? region_poset(pi; poset_kind = poset_kind) : Q
@@ -8858,10 +9369,19 @@ function projected_arrangement(pi::PLikeEncodingMap;
                                                    normalize=normalize))
 
     arrs = Vector{ProjectedArrangement1D{typeof(Qposet)}}(undef, length(dirs))
-    for (j,dir) in enumerate(dirs)
-        vals = region_values(pi, x -> _dot(dir, x))
-        tmp = projected_arrangement(Qposet, vals; enforce_monotone=enforce_monotone, dir=dir)
-        arrs[j] = tmp.projections[1]
+    if threads && Threads.nthreads() > 1
+        Threads.@threads for j in eachindex(dirs)
+            dir = dirs[j]
+            vals = region_values(pi, x -> _dot(dir, x))
+            tmp = projected_arrangement(Qposet, vals; enforce_monotone=enforce_monotone, dir=dir)
+            arrs[j] = tmp.projections[1]
+        end
+    else
+        for (j,dir) in enumerate(dirs)
+            vals = region_values(pi, x -> _dot(dir, x))
+            tmp = projected_arrangement(Qposet, vals; enforce_monotone=enforce_monotone, dir=dir)
+            arrs[j] = tmp.projections[1]
+        end
     end
     return ProjectedArrangement(Qposet, arrs)
 end
@@ -8877,17 +9397,17 @@ This is the recommended workflow:
 - build caches for many modules,
 - compare rapidly via `projected_distance` / `projected_kernel`.
 """
-mutable struct ProjectedBarcodeCache
+mutable struct ProjectedBarcodeCache{K}
     arrangement::ProjectedArrangement
-    M::PModule{QQ}
+    M::PModule{K}
     side::Symbol
     barcodes::Vector{Any}
     n_computed::Int
 end
 
-function projected_barcode_cache(M::PModule{QQ}, arr::ProjectedArrangement;
+function projected_barcode_cache(M::PModule{K}, arr::ProjectedArrangement;
                                  side::Symbol = :left,
-                                 precompute::Bool = false)
+                                 precompute::Bool = false) where {K}
     side in (:left, :right) || error("side must be :left or :right")
     barcodes = fill(nothing, length(arr.projections))
     cache = ProjectedBarcodeCache(arr, M, side, barcodes, 0)
@@ -8914,12 +9434,30 @@ end
 
 Return all (or selected) cached projected barcodes.
 """
-function projected_barcodes(cache::ProjectedBarcodeCache; inds=nothing)
+function projected_barcodes(cache::ProjectedBarcodeCache;
+                            inds=nothing,
+                            threads::Bool = (Threads.nthreads() > 1))
     n = length(cache.arrangement.projections)
     inds === nothing && (inds = 1:n)
     out = Vector{Any}(undef, length(inds))
-    for (k,i) in enumerate(inds)
-        out[k] = _projected_barcode(cache, i)
+    if threads && Threads.nthreads() > 1
+        Threads.@threads for k in eachindex(inds)
+            i = inds[k]
+            bc = cache.barcodes[i]
+            if bc === nothing
+                proj = cache.arrangement.projections[i]
+                Mp = cache.side == :left ? pushforward_left(proj.f, cache.M; check=false, threads=false) :
+                                           pushforward_right(proj.f, cache.M; check=false, threads=false)
+                bc = slice_barcode(Mp, proj.chain; values=proj.values, check_chain=false)
+                cache.barcodes[i] = bc
+            end
+            out[k] = bc
+        end
+        cache.n_computed = count(!isnothing, cache.barcodes)
+    else
+        for (k,i) in enumerate(inds)
+            out[k] = _projected_barcode(cache, i)
+        end
     end
     return out
 end
@@ -8933,17 +9471,44 @@ function projected_distances(cacheM::ProjectedBarcodeCache,
                              cacheN::ProjectedBarcodeCache;
                              dist::Symbol = :bottleneck,
                              p::Real = 1,
-                             q::Real = 1)
+                             q::Real = 1,
+                             threads::Bool = (Threads.nthreads() > 1))
     n = length(cacheM.arrangement.projections)
     n == length(cacheN.arrangement.projections) || error("different projection families")
 
     out = Vector{Float64}(undef, n)
-    for i in 1:n
-        b1 = _projected_barcode(cacheM, i)
-        b2 = _projected_barcode(cacheN, i)
-        out[i] = dist == :bottleneck ? bottleneck_distance(b1, b2) :
-                 dist == :wasserstein ? wasserstein_distance(b1, b2; p=p, q=q) :
-                 error("unknown dist=$dist")
+    if threads && Threads.nthreads() > 1
+        Threads.@threads for i in 1:n
+            b1 = cacheM.barcodes[i]
+            if b1 === nothing
+                proj = cacheM.arrangement.projections[i]
+                Mp = cacheM.side == :left ? pushforward_left(proj.f, cacheM.M; check=false, threads=false) :
+                                            pushforward_right(proj.f, cacheM.M; check=false, threads=false)
+                b1 = slice_barcode(Mp, proj.chain; values=proj.values, check_chain=false)
+                cacheM.barcodes[i] = b1
+            end
+            b2 = cacheN.barcodes[i]
+            if b2 === nothing
+                proj = cacheN.arrangement.projections[i]
+                Mp = cacheN.side == :left ? pushforward_left(proj.f, cacheN.M; check=false, threads=false) :
+                                            pushforward_right(proj.f, cacheN.M; check=false, threads=false)
+                b2 = slice_barcode(Mp, proj.chain; values=proj.values, check_chain=false)
+                cacheN.barcodes[i] = b2
+            end
+            out[i] = dist == :bottleneck ? bottleneck_distance(b1, b2) :
+                     dist == :wasserstein ? wasserstein_distance(b1, b2; p=p, q=q) :
+                     error("unknown dist=$dist")
+        end
+        cacheM.n_computed = count(!isnothing, cacheM.barcodes)
+        cacheN.n_computed = count(!isnothing, cacheN.barcodes)
+    else
+        for i in 1:n
+            b1 = _projected_barcode(cacheM, i)
+            b2 = _projected_barcode(cacheN, i)
+            out[i] = dist == :bottleneck ? bottleneck_distance(b1, b2) :
+                     dist == :wasserstein ? wasserstein_distance(b1, b2; p=p, q=q) :
+                     error("unknown dist=$dist")
+        end
     end
     return out
 end
@@ -8960,8 +9525,9 @@ function projected_distance(cacheM::ProjectedBarcodeCache,
                             p::Real = 1,
                             q::Real = 1,
                             agg::Symbol = :mean,
-                            dir_weights = nothing)
-    dvec = projected_distances(cacheM, cacheN; dist=dist, p=p, q=q)
+                            dir_weights = nothing,
+                            threads::Bool = (Threads.nthreads() > 1))
+    dvec = projected_distances(cacheM, cacheN; dist=dist, p=p, q=q, threads=threads)
     n = length(dvec)
 
     w = dir_weights === nothing ? fill(1.0/n, n) : Float64.(collect(dir_weights))
@@ -8993,7 +9559,8 @@ function projected_kernel(cacheM::ProjectedBarcodeCache,
                           p::Real = 1,
                           q::Real = 1,
                           agg::Symbol = :mean,
-                          dir_weights = nothing)
+                          dir_weights = nothing,
+                          threads::Bool = (Threads.nthreads() > 1))
     n = length(cacheM.arrangement.projections)
     n == length(cacheN.arrangement.projections) || error("different projection families")
 
@@ -9004,10 +9571,34 @@ function projected_kernel(cacheM::ProjectedBarcodeCache,
     w ./= s
 
     vals = Vector{Float64}(undef, n)
-    for i in 1:n
-        b1 = _projected_barcode(cacheM, i)
-        b2 = _projected_barcode(cacheN, i)
-        vals[i] = _barcode_kernel(b1, b2; kind=kind, sigma=sigma, p=p, q=q)
+    if threads && Threads.nthreads() > 1
+        Threads.@threads for i in 1:n
+            b1 = cacheM.barcodes[i]
+            if b1 === nothing
+                proj = cacheM.arrangement.projections[i]
+                Mp = cacheM.side == :left ? pushforward_left(proj.f, cacheM.M; check=false, threads=false) :
+                                            pushforward_right(proj.f, cacheM.M; check=false, threads=false)
+                b1 = slice_barcode(Mp, proj.chain; values=proj.values, check_chain=false)
+                cacheM.barcodes[i] = b1
+            end
+            b2 = cacheN.barcodes[i]
+            if b2 === nothing
+                proj = cacheN.arrangement.projections[i]
+                Mp = cacheN.side == :left ? pushforward_left(proj.f, cacheN.M; check=false, threads=false) :
+                                            pushforward_right(proj.f, cacheN.M; check=false, threads=false)
+                b2 = slice_barcode(Mp, proj.chain; values=proj.values, check_chain=false)
+                cacheN.barcodes[i] = b2
+            end
+            vals[i] = _barcode_kernel(b1, b2; kind=kind, sigma=sigma, p=p, q=q)
+        end
+        cacheM.n_computed = count(!isnothing, cacheM.barcodes)
+        cacheN.n_computed = count(!isnothing, cacheN.barcodes)
+    else
+        for i in 1:n
+            b1 = _projected_barcode(cacheM, i)
+            b2 = _projected_barcode(cacheN, i)
+            vals[i] = _barcode_kernel(b1, b2; kind=kind, sigma=sigma, p=p, q=q)
+        end
     end
 
     if agg == :mean
@@ -9679,7 +10270,8 @@ function mpp_image(decomp::MPPDecomposition;
                    sigma::Real=0.05,
                    cutoff_radius::Union{Nothing,Real}=nothing,
                    cutoff_tol::Union{Nothing,Real}=nothing,
-                   segment_prune::Bool=true)
+                   segment_prune::Bool=true,
+                   threads::Bool = (Threads.nthreads() > 1))
 
     sig = Float64(sigma)
     sig > 0.0 || error("mpp_image: sigma must be positive")
@@ -9723,62 +10315,123 @@ function mpp_image(decomp::MPPDecomposition;
     # Loop order:
     # - ix outer, iy inner writes contiguous memory in Julia's column-major layout
     #   because img[iy, ix] has the first index varying fastest.
-    @inbounds for ix in 1:length(xg)
-        x = xg[ix]
-        for iy in 1:length(yg)
-            y = yg[iy]
+    if threads && Threads.nthreads() > 1
+        Threads.@threads for ix in 1:length(xg)
+            x = xg[ix]
+            for iy in 1:length(yg)
+                y = yg[iy]
 
-            acc = 0.0
+                acc = 0.0
 
-            for k in 1:ns
-                wI = weights[k]
-                wI == 0.0 && continue
+                for k in 1:ns
+                    wI = weights[k]
+                    wI == 0.0 && continue
 
-                # Optional approximate pruning: skip summands whose bounding box is farther
-                # than the cutoff radius from the query point.
-                if cutoff2 < Inf
-                    (xmin, xmax, ymin, ymax) = bboxes[k]
-                    if _bbox_dist2_xy(x, y, xmin, xmax, ymin, ymax) > cutoff2
-                        continue
-                    end
-                end
-
-                bestd2 = Inf
-                bestomega = 0.0
-
-                segs = segdata[k]
-                @inbounds for j in 1:length(segs)
-                    seg = segs[j]
-                    (px, py, qx, qy, om, sxmin, sxmax, symin, symax) = seg
-
-                    # Exact pruning: if this segment's bounding box is already farther
-                    # than the best distance found so far, it cannot improve the minimum.
-                    if segment_prune && bestd2 < Inf
-                        if _bbox_dist2_xy(x, y, sxmin, sxmax, symin, symax) >= bestd2
+                    # Optional approximate pruning: skip summands whose bounding box is farther
+                    # than the cutoff radius from the query point.
+                    if cutoff2 < Inf
+                        (xmin, xmax, ymin, ymax) = bboxes[k]
+                        if _bbox_dist2_xy(x, y, xmin, xmax, ymin, ymax) > cutoff2
                             continue
                         end
                     end
 
-                    d2 = _dist2_point_segment_xy(x, y, px, py, qx, qy)
-                    if d2 < bestd2
-                        bestd2 = d2
-                        bestomega = om
-                        if bestd2 == 0.0
-                            break
+                    bestd2 = Inf
+                    bestomega = 0.0
+
+                    segs = segdata[k]
+                    @inbounds for j in 1:length(segs)
+                        seg = segs[j]
+                        (px, py, qx, qy, om, sxmin, sxmax, symin, symax) = seg
+
+                        # Exact pruning: if this segment's bounding box is already farther
+                        # than the best distance found so far, it cannot improve the minimum.
+                        if segment_prune && bestd2 < Inf
+                            if _bbox_dist2_xy(x, y, sxmin, sxmax, symin, symax) >= bestd2
+                                continue
+                            end
+                        end
+
+                        d2 = _dist2_point_segment_xy(x, y, px, py, qx, qy)
+                        if d2 < bestd2
+                            bestd2 = d2
+                            bestomega = om
+                            if bestd2 == 0.0
+                                break
+                            end
                         end
                     end
+
+                    # Optional cutoff: if the nearest segment is still beyond the cutoff,
+                    # the kernel value is below exp(-cutoff^2/sigma^2).
+                    if cutoff2 < Inf && bestd2 > cutoff2
+                        continue
+                    end
+
+                    acc += wI * bestomega * exp(-bestd2 * invsig2)
                 end
 
-                # Optional cutoff: if the nearest segment is still beyond the cutoff,
-                # the kernel value is below exp(-cutoff^2/sigma^2).
-                if cutoff2 < Inf && bestd2 > cutoff2
-                    continue
-                end
-
-                acc += wI * bestomega * exp(-bestd2 * invsig2)
+                img[iy, ix] = acc
             end
+        end
+    else
+        @inbounds for ix in 1:length(xg)
+            x = xg[ix]
+            for iy in 1:length(yg)
+                y = yg[iy]
 
-            img[iy, ix] = acc
+                acc = 0.0
+
+                for k in 1:ns
+                    wI = weights[k]
+                    wI == 0.0 && continue
+
+                    # Optional approximate pruning: skip summands whose bounding box is farther
+                    # than the cutoff radius from the query point.
+                    if cutoff2 < Inf
+                        (xmin, xmax, ymin, ymax) = bboxes[k]
+                        if _bbox_dist2_xy(x, y, xmin, xmax, ymin, ymax) > cutoff2
+                            continue
+                        end
+                    end
+
+                    bestd2 = Inf
+                    bestomega = 0.0
+
+                    segs = segdata[k]
+                    @inbounds for j in 1:length(segs)
+                        seg = segs[j]
+                        (px, py, qx, qy, om, sxmin, sxmax, symin, symax) = seg
+
+                        # Exact pruning: if this segment's bounding box is already farther
+                        # than the best distance found so far, it cannot improve the minimum.
+                        if segment_prune && bestd2 < Inf
+                            if _bbox_dist2_xy(x, y, sxmin, sxmax, symin, symax) >= bestd2
+                                continue
+                            end
+                        end
+
+                        d2 = _dist2_point_segment_xy(x, y, px, py, qx, qy)
+                        if d2 < bestd2
+                            bestd2 = d2
+                            bestomega = om
+                            if bestd2 == 0.0
+                                break
+                            end
+                        end
+                    end
+
+                    # Optional cutoff: if the nearest segment is still beyond the cutoff,
+                    # the kernel value is below exp(-cutoff^2/sigma^2).
+                    if cutoff2 < Inf && bestd2 > cutoff2
+                        continue
+                    end
+
+                    acc += wI * bestomega * exp(-bestd2 * invsig2)
+                end
+
+                img[iy, ix] = acc
+            end
         end
     end
 
@@ -9817,7 +10470,8 @@ function mpp_image(cache::FiberedBarcodeCache2D;
                    tie_break::Symbol=:center,
                    cutoff_radius::Union{Nothing,Real}=nothing,
                    cutoff_tol::Union{Nothing,Real}=nothing,
-                   segment_prune::Bool=true)
+                   segment_prune::Bool=true,
+                   threads::Bool = (Threads.nthreads() > 1))
 
     decomp = mpp_decomposition(cache; N=N, delta=delta, q=q, tie_break=tie_break)
     return mpp_image(decomp;
@@ -9827,7 +10481,8 @@ function mpp_image(cache::FiberedBarcodeCache2D;
                      sigma=sigma,
                      cutoff_radius=cutoff_radius,
                      cutoff_tol=cutoff_tol,
-                     segment_prune=segment_prune)
+                     segment_prune=segment_prune,
+                     threads=threads)
 end
 
 """
@@ -9843,7 +10498,7 @@ This wrapper:
 Opts usage:
 - `opts.box` and `opts.strict` control arrangement/windowing behavior.
 """
-function mpp_decomposition(M::PModule{QQ}, pi::PLikeEncodingMap, opts::InvariantOptions; kwargs...)
+function mpp_decomposition(M::PModule{K}, pi::PLikeEncodingMap, opts::InvariantOptions; kwargs...) where {K}
     arr = fibered_arrangement_2d(pi, opts; include_axes=true)
     cache = fibered_barcode_cache_2d(M, arr; kwargs...)
     return mpp_decomposition(cache)
@@ -9858,13 +10513,13 @@ Compute the 2D MPP image for `M` over `pi` via an exact fibered cache.
 Opts usage:
 - `opts.box` and `opts.strict` control arrangement/windowing behavior.
 """
-function mpp_image(M::PModule{QQ}, pi::PLikeEncodingMap, opts::InvariantOptions; kwargs...)
+function mpp_image(M::PModule{K}, pi::PLikeEncodingMap, opts::InvariantOptions; kwargs...) where {K}
     arr = fibered_arrangement_2d(pi, opts; include_axes=true)
     cache = fibered_barcode_cache_2d(M, arr)
     return mpp_image(cache; kwargs...)
 end
 
-mpp_image(M::PModule{QQ}, pi::PLikeEncodingMap; opts=nothing, kwargs...) =
+mpp_image(M::PModule{K}, pi::PLikeEncodingMap; opts=nothing, kwargs...) where {K} =
     mpp_image(M, pi, _resolve_opts(opts); kwargs...)
 
 # ------------------------ MPPI image operations -------------------------------
@@ -10279,13 +10934,13 @@ with the landscape layer parameter `kmax`).
 See also `mp_landscape_distance` and `mp_landscape_kernel`.
 """
 function mp_landscape(
-    M::PModule{QQ},
+    M::PModule{K},
     slices::AbstractVector;
     kmax::Int=5,
     tgrid,
     default_weight=1.0,
     normalize_weights::Bool=true
-)::MPLandscape
+)::MPLandscape where {K}
     tg = _clean_tgrid(tgrid)
     nt = length(tg)
 
@@ -10333,14 +10988,16 @@ function mp_landscape(
     return MPLandscape(kmax, tg, vals, W, dirs, offs)
 end
 
-mp_landscape(
-    M::PModule{QQ},
+function mp_landscape(
+    M::PModule{K},
     chain::AbstractVector{Int};
     kwargs...
-)::MPLandscape = mp_landscape(M, [chain]; kwargs...)
+) where {K}
+    return mp_landscape(M, [chain]; kwargs...)
+end
 
 function mp_landscape(
-    M::PModule{QQ},
+    M::PModule{K},
     pi,
     opts::InvariantOptions;
     directions = nothing,
@@ -10355,7 +11012,7 @@ function mp_landscape(
     drop_unknown::Bool = true,
     dedup::Bool = true,
     kwargs...,
-)::MPLandscape
+)::MPLandscape where {K}
     if haskey(kwargs, :box) || haskey(kwargs, :strict) || haskey(kwargs, :threads) ||
         haskey(kwargs, :axes) || haskey(kwargs, :axes_policy) || haskey(kwargs, :max_axis_len)
         throw(ArgumentError("mp_landscape: do not pass options fields as keywords; use opts::InvariantOptions"))
@@ -10452,7 +11109,7 @@ function mp_landscape(
     return MPLandscape(kmax, tg, vals, W, dirs_in, offsets)
 end
 
-mp_landscape(M::PModule{QQ}, pi; kwargs...) =
+mp_landscape(M::PModule{K}, pi; kwargs...) where {K} =
     mp_landscape(M, pi, InvariantOptions(); kwargs...)
 
 
@@ -10527,26 +11184,26 @@ function mp_landscape_distance(
 end
 
 function mp_landscape_distance(
-    M::PModule{QQ},
-    N::PModule{QQ},
+    M::PModule{K},
+    N::PModule{K},
     slices::AbstractVector;
     p::Real=2,
     weight_mode::Symbol=:check,
     mp_kwargs...
-)::Float64
+)::Float64 where {K}
     LM = mp_landscape(M, slices; mp_kwargs...)
     LN = mp_landscape(N, slices; mp_kwargs...)
     return mp_landscape_distance(LM, LN; p=p, weight_mode=weight_mode)
 end
 
 function mp_landscape_distance(
-    M::PModule{QQ},
-    N::PModule{QQ},
+    M::PModule{K},
+    N::PModule{K},
     pi;
     p::Real=2,
     weight_mode::Symbol=:check,
     mp_kwargs...
-)::Float64
+)::Float64 where {K}
     LM = mp_landscape(M, pi; mp_kwargs...)
     LN = mp_landscape(N, pi; mp_kwargs...)
     return mp_landscape_distance(LM, LN; p=p, weight_mode=weight_mode)
@@ -10647,8 +11304,8 @@ function mp_landscape_kernel(
 end
 
 function mp_landscape_kernel(
-    M::PModule{QQ},
-    N::PModule{QQ},
+    M::PModule{K},
+    N::PModule{K},
     slices::AbstractVector;
     kind::Symbol=:gaussian,
     sigma::Real=1.0,
@@ -10656,7 +11313,7 @@ function mp_landscape_kernel(
     gamma=nothing,
     weight_mode::Symbol=:check,
     mp_kwargs...
-)::Float64
+)::Float64 where {K}
     LM = mp_landscape(M, slices; mp_kwargs...)
     LN = mp_landscape(N, slices; mp_kwargs...)
     return mp_landscape_kernel(LM, LN;
@@ -10668,8 +11325,8 @@ function mp_landscape_kernel(
 end
 
 function mp_landscape_kernel(
-    M::PModule{QQ},
-    N::PModule{QQ},
+    M::PModule{K},
+    N::PModule{K},
     pi;
     directions=nothing,
     offsets=nothing,
@@ -10679,7 +11336,7 @@ function mp_landscape_kernel(
     gamma=nothing,
     weight_mode::Symbol=:check,
     mp_kwargs...
-)::Float64
+)::Float64 where {K}
     directions === nothing && error("mp_landscape_kernel: provide directions=...")
     offsets === nothing && error("mp_landscape_kernel: provide offsets=...")
 
@@ -10845,7 +11502,8 @@ function persistence_image(bar;
                            weighting=:persistence,
                            p=1,
                            normalize=:none,
-                           differentiable::Bool=false)
+                           differentiable::Bool=false,
+                           threads::Bool = (Threads.nthreads() > 1))
 
     xg = collect(xgrid)
     yg = collect(ygrid)
@@ -10854,22 +11512,47 @@ function persistence_image(bar;
     if !differentiable
         # Fast in-place version (existing behavior)
         img = zeros(Float64, length(yg), length(xg))
-        for (bd, mult) in bar
-            b = bd[1]
-            d = bd[2]
+        if threads && Threads.nthreads() > 1
+            Threads.@threads for ix in 1:length(xg)
+                xgix = xg[ix]
+                for iy in 1:length(yg)
+                    ygiy = yg[iy]
+                    acc = 0.0
+                    for (bd, mult) in bar
+                        b = bd[1]
+                        d = bd[2]
 
-            x, y = coords == :birth_persistence ? (b, d-b) :
-                   coords == :birth_death ? (b, d) :
-                   coords == :midlife_persistence ? (0.5*(b+d), d-b) :
-                   error("unknown coords=$coords")
+                        x, y = coords == :birth_persistence ? (b, d-b) :
+                               coords == :birth_death ? (b, d) :
+                               coords == :midlife_persistence ? (0.5*(b+d), d-b) :
+                               error("unknown coords=$coords")
 
-            w = mult * _interval_weight(weighting, b, d; p=p)
+                        w = mult * _interval_weight(weighting, b, d; p=p)
+                        dx2 = (x - xgix)^2
+                        dy2 = (y - ygiy)^2
+                        acc += w * exp(-(dx2+dy2)*inv2sig2)
+                    end
+                    img[iy, ix] = acc
+                end
+            end
+        else
+            for (bd, mult) in bar
+                b = bd[1]
+                d = bd[2]
 
-            for ix in eachindex(xg)
-                dx2 = (x - xg[ix])^2
-                for iy in eachindex(yg)
-                    dy2 = (y - yg[iy])^2
-                    img[iy,ix] += w * exp(-(dx2+dy2)*inv2sig2)
+                x, y = coords == :birth_persistence ? (b, d-b) :
+                       coords == :birth_death ? (b, d) :
+                       coords == :midlife_persistence ? (0.5*(b+d), d-b) :
+                       error("unknown coords=$coords")
+
+                w = mult * _interval_weight(weighting, b, d; p=p)
+
+                for ix in eachindex(xg)
+                    dx2 = (x - xg[ix])^2
+                    for iy in eachindex(yg)
+                        dy2 = (y - yg[iy])^2
+                        img[iy,ix] += w * exp(-(dx2+dy2)*inv2sig2)
+                    end
                 end
             end
         end
@@ -11178,11 +11861,11 @@ Returns `(barcodes, weights, slices)` where:
 - `barcodes[i]` is the barcode dict for the i-th slice,
 - `weights[i]` is its (optionally normalized) weight.
 """
-function slice_barcodes(M::PModule{QQ}, slices::AbstractVector;
+function slice_barcodes(M::PModule{K}, slices::AbstractVector;
                         default_weight::Real=1.0,
                         normalize_weights::Bool=true,
                         values=nothing,
-                        threads::Bool=Threads.nthreads() > 1)
+                        threads::Bool=Threads.nthreads() > 1) where {K}
     n = length(slices)
     chains = Vector{Vector{Int}}(undef, n)
     vals = Vector{Any}(undef, n)
@@ -11233,7 +11916,7 @@ function slice_barcodes(M::PModule{QQ}, slices::AbstractVector;
 end
 
 
-slice_barcodes(M::PModule{QQ}, chain::AbstractVector{Int}; kwargs...) =
+slice_barcodes(M::PModule{K}, chain::AbstractVector{Int}; kwargs...) where {K} =
     slice_barcodes(M, [chain]; kwargs...)
 
 """
@@ -11260,7 +11943,7 @@ Returns `(barcodes, weights, directions, offsets)` where:
 - `weights[i,j]` is the corresponding slice weight.
 """
 function slice_barcodes(
-    M::PModule{QQ},
+    M::PModule{K},
     pi;
     directions = :auto,
     offsets = :auto,
@@ -11271,7 +11954,7 @@ function slice_barcodes(
     values = nothing,
     threads::Bool = (Threads.nthreads() > 1),
     slice_kwargs...
-)
+) where {K}
     if directions === :auto || directions === nothing
         error("slice_barcodes: provide directions explicitly for non-PLike encodings")
     end
@@ -11345,7 +12028,7 @@ function slice_barcodes(
 end
 
 function slice_barcodes(
-    M::PModule{QQ},
+    M::PModule{K},
     pi::PLikeEncodingMap;
     directions = :auto,
     offsets = :auto,
@@ -11361,7 +12044,7 @@ function slice_barcodes(
     values = nothing,
     threads::Bool = (Threads.nthreads() > 1),
     slice_kwargs...
-)
+) where {K}
     # Determine default directions/offsets if requested.
     dirs0 = directions
     offs0 = offsets
@@ -11487,6 +12170,9 @@ function slice_barcodes(M, pi::ZnEncodingMap, opts::InvariantOptions; kwargs...)
         kwargs2...
     )
 end
+
+slice_barcodes(M, pi::CompiledEncoding{<:ZnEncodingMap}, opts::InvariantOptions; kwargs...) =
+    slice_barcodes(M, pi.pi, opts; kwargs...)
 
 
 
@@ -11699,13 +12385,14 @@ Key options:
 - `unwrap_scalar`: return scalar when the feature dimension is 1 (default true)
 """
 function slice_features(
-    M::PModule{QQ},
+    M::PModule{K},
     slices::AbstractVector;
     featurizer=:landscape,
     aggregate::Symbol=:mean,
     default_weight::Real=1.0,
     normalize_weights::Bool=true,
     unwrap_scalar::Bool=true,
+    threads::Bool = (Threads.nthreads() > 1),
     # Landscape / silhouette defaults:
     kmax::Int=5,
     tgrid=nothing,
@@ -11733,7 +12420,7 @@ function slice_features(
     # Summary options:
     summary_fields=_DEFAULT_BARCODE_SUMMARY_FIELDS,
     summary_normalize_entropy::Bool=true
-)
+) where {K}
     data = slice_barcodes(M, slices; default_weight=default_weight, normalize_weights=normalize_weights)
     bcs = data.barcodes
     W = data.weights
@@ -11762,44 +12449,76 @@ function slice_features(
     end
 
     feats = Vector{Vector{Float64}}(undef, length(bcs))
-    for i in 1:length(bcs)
-        bc = bcs[i]
-        if featurizer == :landscape
-            pl = persistence_landscape(bc; kmax=kmax, tgrid=tg)
-            feats[i] = _landscape_feature_vector(pl)
-        elseif featurizer == :silhouette
-            s = persistence_silhouette(bc; tgrid=tg, weighting=sil_weighting, p=sil_p, normalize=sil_normalize)
-            feats[i] = Float64[s...]
-        elseif featurizer == :image
-            PI = persistence_image(bc;
-                                   xgrid=xg,
-                                   ygrid=yg,
-                                   sigma=img_sigma,
-                                   coords=img_coords,
-                                   weighting=img_weighting,
-                                   p=img_p,
-                                   normalize=img_normalize)
-            feats[i] = _image_feature_vector(PI)
-        elseif featurizer == :entropy
-            e = barcode_entropy(bc; normalize=entropy_normalize, weighting=entropy_weighting, p=entropy_p)
-            feats[i] = Float64[float(e)]
-        elseif featurizer == :summary
-            feats[i] = _barcode_summary_vector(bc; fields=summary_fields, normalize_entropy=summary_normalize_entropy)
-        elseif featurizer isa Function
-            feats[i] = _as_feature_vector(featurizer(bc))
-        else
-            error("slice_features: unknown featurizer $(featurizer)")
+    if threads && Threads.nthreads() > 1
+        Threads.@threads for i in 1:length(bcs)
+            bc = bcs[i]
+            if featurizer == :landscape
+                pl = persistence_landscape(bc; kmax=kmax, tgrid=tg)
+                feats[i] = _landscape_feature_vector(pl)
+            elseif featurizer == :silhouette
+                s = persistence_silhouette(bc; tgrid=tg, weighting=sil_weighting, p=sil_p, normalize=sil_normalize)
+                feats[i] = Float64[s...]
+            elseif featurizer == :image
+                PI = persistence_image(bc;
+                                       xgrid=xg,
+                                       ygrid=yg,
+                                       sigma=img_sigma,
+                                       coords=img_coords,
+                                       weighting=img_weighting,
+                                       p=img_p,
+                                       normalize=img_normalize)
+                feats[i] = _image_feature_vector(PI)
+            elseif featurizer == :entropy
+                e = barcode_entropy(bc; normalize=entropy_normalize, weighting=entropy_weighting, p=entropy_p)
+                feats[i] = Float64[float(e)]
+            elseif featurizer == :summary
+                feats[i] = _barcode_summary_vector(bc; fields=summary_fields, normalize_entropy=summary_normalize_entropy)
+            elseif featurizer isa Function
+                feats[i] = _as_feature_vector(featurizer(bc))
+            else
+                error("slice_features: unknown featurizer $(featurizer)")
+            end
+        end
+    else
+        for i in 1:length(bcs)
+            bc = bcs[i]
+            if featurizer == :landscape
+                pl = persistence_landscape(bc; kmax=kmax, tgrid=tg)
+                feats[i] = _landscape_feature_vector(pl)
+            elseif featurizer == :silhouette
+                s = persistence_silhouette(bc; tgrid=tg, weighting=sil_weighting, p=sil_p, normalize=sil_normalize)
+                feats[i] = Float64[s...]
+            elseif featurizer == :image
+                PI = persistence_image(bc;
+                                       xgrid=xg,
+                                       ygrid=yg,
+                                       sigma=img_sigma,
+                                       coords=img_coords,
+                                       weighting=img_weighting,
+                                       p=img_p,
+                                       normalize=img_normalize)
+                feats[i] = _image_feature_vector(PI)
+            elseif featurizer == :entropy
+                e = barcode_entropy(bc; normalize=entropy_normalize, weighting=entropy_weighting, p=entropy_p)
+                feats[i] = Float64[float(e)]
+            elseif featurizer == :summary
+                feats[i] = _barcode_summary_vector(bc; fields=summary_fields, normalize_entropy=summary_normalize_entropy)
+            elseif featurizer isa Function
+                feats[i] = _as_feature_vector(featurizer(bc))
+            else
+                error("slice_features: unknown featurizer $(featurizer)")
+            end
         end
     end
 
     return _aggregate_feature_vectors(feats, W; aggregate=aggregate, unwrap_scalar=unwrap_scalar)
 end
 
-slice_features(M::PModule{QQ}, chain::AbstractVector{Int}; kwargs...) =
+slice_features(M::PModule{K}, chain::AbstractVector{Int}; kwargs...) where {K} =
     slice_features(M, [chain]; kwargs...)
 
 function slice_features(
-    M::PModule{QQ},
+    M::PModule{K},
     pi;
     directions=nothing,
     offsets=nothing,
@@ -11807,6 +12526,7 @@ function slice_features(
     aggregate::Symbol=:mean,
     normalize_weights::Bool=true,
     unwrap_scalar::Bool=true,
+    threads::Bool = (Threads.nthreads() > 1),
     # Geometric slice parameters:
     tmin::Union{Real,Nothing}=nothing,
     tmax::Union{Real,Nothing}=nothing,
@@ -11847,7 +12567,7 @@ function slice_features(
     summary_fields=_DEFAULT_BARCODE_SUMMARY_FIELDS,
     summary_normalize_entropy::Bool=true,
     slice_kwargs...
-)
+) where {K}
     data = slice_barcodes(M, pi;
                           directions=directions,
                           
@@ -11894,33 +12614,67 @@ function slice_features(
 
     nd, no = size(bcs)
     feats = Array{Vector{Float64}}(undef, nd, no)
-    for i in 1:nd, j in 1:no
-        bc = bcs[i, j]
-        if featurizer == :landscape
-            pl = persistence_landscape(bc; kmax=kmax, tgrid=tg)
-            feats[i, j] = _landscape_feature_vector(pl)
-        elseif featurizer == :silhouette
-            s = persistence_silhouette(bc; tgrid=tg, weighting=sil_weighting, p=sil_p, normalize=sil_normalize)
-            feats[i, j] = Float64[s...]
-        elseif featurizer == :image
-            PI = persistence_image(bc;
-                                   xgrid=xg,
-                                   ygrid=yg,
-                                   sigma=img_sigma,
-                                   coords=img_coords,
-                                   weighting=img_weighting,
-                                   p=img_p,
-                                   normalize=img_normalize)
-            feats[i, j] = _image_feature_vector(PI)
-        elseif featurizer == :entropy
-            e = barcode_entropy(bc; normalize=entropy_normalize, weighting=entropy_weighting, p=entropy_p)
-            feats[i, j] = Float64[float(e)]
-        elseif featurizer == :summary
-            feats[i, j] = _barcode_summary_vector(bc; fields=summary_fields, normalize_entropy=summary_normalize_entropy)
-        elseif featurizer isa Function
-            feats[i, j] = _as_feature_vector(featurizer(bc))
-        else
-            error("slice_features: unknown featurizer $(featurizer)")
+    if threads && Threads.nthreads() > 1
+        Threads.@threads for k in 1:(nd * no)
+            i = div(k - 1, no) + 1
+            j = (k - 1) % no + 1
+            bc = bcs[i, j]
+            if featurizer == :landscape
+                pl = persistence_landscape(bc; kmax=kmax, tgrid=tg)
+                feats[i, j] = _landscape_feature_vector(pl)
+            elseif featurizer == :silhouette
+                s = persistence_silhouette(bc; tgrid=tg, weighting=sil_weighting, p=sil_p, normalize=sil_normalize)
+                feats[i, j] = Float64[s...]
+            elseif featurizer == :image
+                PI = persistence_image(bc;
+                                       xgrid=xg,
+                                       ygrid=yg,
+                                       sigma=img_sigma,
+                                       coords=img_coords,
+                                       weighting=img_weighting,
+                                       p=img_p,
+                                       normalize=img_normalize)
+                feats[i, j] = _image_feature_vector(PI)
+            elseif featurizer == :entropy
+                e = barcode_entropy(bc; normalize=entropy_normalize, weighting=entropy_weighting, p=entropy_p)
+                feats[i, j] = Float64[float(e)]
+            elseif featurizer == :summary
+                feats[i, j] = _barcode_summary_vector(bc; fields=summary_fields, normalize_entropy=summary_normalize_entropy)
+            elseif featurizer isa Function
+                feats[i, j] = _as_feature_vector(featurizer(bc))
+            else
+                error("slice_features: unknown featurizer $(featurizer)")
+            end
+        end
+    else
+        for i in 1:nd, j in 1:no
+            bc = bcs[i, j]
+            if featurizer == :landscape
+                pl = persistence_landscape(bc; kmax=kmax, tgrid=tg)
+                feats[i, j] = _landscape_feature_vector(pl)
+            elseif featurizer == :silhouette
+                s = persistence_silhouette(bc; tgrid=tg, weighting=sil_weighting, p=sil_p, normalize=sil_normalize)
+                feats[i, j] = Float64[s...]
+            elseif featurizer == :image
+                PI = persistence_image(bc;
+                                       xgrid=xg,
+                                       ygrid=yg,
+                                       sigma=img_sigma,
+                                       coords=img_coords,
+                                       weighting=img_weighting,
+                                       p=img_p,
+                                       normalize=img_normalize)
+                feats[i, j] = _image_feature_vector(PI)
+            elseif featurizer == :entropy
+                e = barcode_entropy(bc; normalize=entropy_normalize, weighting=entropy_weighting, p=entropy_p)
+                feats[i, j] = Float64[float(e)]
+            elseif featurizer == :summary
+                feats[i, j] = _barcode_summary_vector(bc; fields=summary_fields, normalize_entropy=summary_normalize_entropy)
+            elseif featurizer isa Function
+                feats[i, j] = _as_feature_vector(featurizer(bc))
+            else
+                error("slice_features: unknown featurizer $(featurizer)")
+            end
         end
     end
 
@@ -12018,8 +12772,8 @@ Supported `kind` values:
 - or any function `(bcM, bcN) -> Float64`
 """
 function slice_kernel(
-    M::PModule{QQ},
-    N::PModule{QQ},
+    M::PModule{K},
+    N::PModule{K},
     slices::AbstractVector;
     kind=:bottleneck_gaussian,
     sigma::Real=1.0,
@@ -12031,10 +12785,17 @@ function slice_kernel(
     # Landscape kernel parameters:
     tgrid=nothing,
     tgrid_nsteps::Int=401,
-    kmax::Int=5
-)::Float64
-    dataM = slice_barcodes(M, slices; default_weight=default_weight, normalize_weights=normalize_weights)
-    dataN = slice_barcodes(N, slices; default_weight=default_weight, normalize_weights=normalize_weights)
+    kmax::Int=5,
+    threads::Bool = (Threads.nthreads() > 1)
+)::Float64 where {K}
+    dataM = slice_barcodes(M, slices;
+                           default_weight=default_weight,
+                           normalize_weights=normalize_weights,
+                           threads=threads)
+    dataN = slice_barcodes(N, slices;
+                           default_weight=default_weight,
+                           normalize_weights=normalize_weights,
+                           threads=threads)
 
     bM = dataM.barcodes
     bN = dataN.barcodes
@@ -12054,23 +12815,42 @@ function slice_kernel(
     sumw = sum(W)
     sumw > 0.0 || error("slice_kernel: total weight is zero")
 
-    acc = 0.0
-    for i in 1:length(bM)
-        w = W[i]
-        w == 0.0 && continue
-        acc += w * _barcode_kernel(bM[i], bN[i]; kind=kind, sigma=sigma, gamma=gamma, p = p, q = q, tgrid=tg, kmax=kmax)
+    if threads && Threads.nthreads() > 1
+        nT = Threads.nthreads()
+        acc_by_slot = fill(0.0, nT)
+        Threads.@threads for slot in 1:nT
+            acc = 0.0
+            for i in slot:nT:length(bM)
+                w = W[i]
+                w == 0.0 && continue
+                acc += w * _barcode_kernel(bM[i], bN[i];
+                                           kind=kind, sigma=sigma, gamma=gamma,
+                                           p=p, q=q, tgrid=tg, kmax=kmax)
+            end
+            acc_by_slot[slot] = acc
+        end
+        acc = sum(acc_by_slot)
+    else
+        acc = 0.0
+        for i in 1:length(bM)
+            w = W[i]
+            w == 0.0 && continue
+            acc += w * _barcode_kernel(bM[i], bN[i];
+                                       kind=kind, sigma=sigma, gamma=gamma,
+                                       p=p, q=q, tgrid=tg, kmax=kmax)
+        end
     end
 
     # Always return the weighted average (not the raw weighted sum).
     return acc / sumw
 end
 
-slice_kernel(M::PModule{QQ}, N::PModule{QQ}, chain::AbstractVector{Int}; kwargs...) =
+slice_kernel(M::PModule{K}, N::PModule{K}, chain::AbstractVector{Int}; kwargs...) where {K} =
     slice_kernel(M, N, [chain]; kwargs...)
 
 function slice_kernel(
-    M::PModule{QQ},
-    N::PModule{QQ},
+    M::PModule{K},
+    N::PModule{K},
     pi;
     directions=nothing,
     offsets=nothing,
@@ -12096,8 +12876,9 @@ function slice_kernel(
     tgrid=nothing,
     tgrid_nsteps::Int=401,
     kmax::Int=5,
+    threads::Bool = (Threads.nthreads() > 1),
     slice_kwargs...
-)::Float64
+)::Float64 where {K}
     dataM = slice_barcodes(M, pi;
                            directions=directions,
                            
@@ -12114,6 +12895,7 @@ function slice_kernel(
                            direction_weight=direction_weight,
                            offset_weights=offset_weights,
                            normalize_weights=normalize_weights,
+                           threads=threads,
                            slice_kwargs...)
 
     dataN = slice_barcodes(N, pi;
@@ -12132,6 +12914,7 @@ function slice_kernel(
                            direction_weight=direction_weight,
                            offset_weights=offset_weights,
                            normalize_weights=normalize_weights,
+                           threads=threads,
                            slice_kwargs...)
 
     bM = dataM.barcodes
@@ -12151,22 +12934,45 @@ function slice_kernel(
     sumw = sum(W)
     sumw > 0.0 || error("slice_kernel: total weight is zero")
 
-    acc = 0.0
     nd, no = size(bM)
-    for i in 1:nd, j in 1:no
-        w = W[i, j]
-        w == 0.0 && continue
-        acc += w * _barcode_kernel(bM[i, j], bN[i, j]; kind=kind, sigma=sigma, gamma=gamma, p = p, q = q, tgrid=tg, kmax=kmax)
+    if threads && Threads.nthreads() > 1
+        nT = Threads.nthreads()
+        acc_by_slot = fill(0.0, nT)
+        Threads.@threads for slot in 1:nT
+            acc = 0.0
+            for k in slot:nT:(nd * no)
+                i = div(k - 1, no) + 1
+                j = (k - 1) % no + 1
+                w = W[i, j]
+                w == 0.0 && continue
+                acc += w * _barcode_kernel(bM[i, j], bN[i, j];
+                                           kind=kind, sigma=sigma, gamma=gamma,
+                                           p=p, q=q, tgrid=tg, kmax=kmax)
+            end
+            acc_by_slot[slot] = acc
+        end
+        acc = sum(acc_by_slot)
+    else
+        acc = 0.0
+        for i in 1:nd, j in 1:no
+            w = W[i, j]
+            w == 0.0 && continue
+            acc += w * _barcode_kernel(bM[i, j], bN[i, j];
+                                       kind=kind, sigma=sigma, gamma=gamma,
+                                       p=p, q=q, tgrid=tg, kmax=kmax)
+        end
     end
 
     return acc / sumw
 end
 
 # Convenience wrappers: allow working directly with presentations.
-slice_barcodes(H::FringeModule{QQ}, args...; kwargs...) = slice_barcodes(pmodule_from_fringe(H), args...; kwargs...)
-slice_features(H::FringeModule{QQ}, args...; kwargs...) = slice_features(pmodule_from_fringe(H), args...; kwargs...)
-slice_kernel(H::FringeModule{QQ}, K::FringeModule{QQ}, args...; kwargs...) =
-    slice_kernel(pmodule_from_fringe(H), pmodule_from_fringe(K), args...; kwargs...)
+slice_barcodes(H::FringeModule{K}, args...; kwargs...) where {K} =
+    slice_barcodes(pmodule_from_fringe(H), args...; kwargs...)
+slice_features(H::FringeModule{K}, args...; kwargs...) where {K} =
+    slice_features(pmodule_from_fringe(H), args...; kwargs...)
+slice_kernel(H::FringeModule{K}, H2::FringeModule{K}, args...; kwargs...) where {K} =
+    slice_kernel(pmodule_from_fringe(H), pmodule_from_fringe(H2), args...; kwargs...)
 
 
 # ----- Betti/Bass tables for indicator resolutions ------------------------------
@@ -12227,7 +13033,7 @@ import ..DerivedFunctors: betti, betti_table, bass, bass_table
 Compute multigraded Betti numbers from an upset indicator resolution.
 
 The input `F` is the `F` returned by `upset_resolution`, i.e. a vector of
-`UpsetPresentation{QQ}` objects. Each term is a direct sum of principal upsets.
+`UpsetPresentation{K}` objects. Each term is a direct sum of principal upsets.
 
 The returned dictionary is keyed by `(a, p)` where:
 * `a` is the homological degree (starting at 0)
@@ -12238,7 +13044,7 @@ The value is the multiplicity of the principal upset based at `p` in term `a`.
 This is the same data returned by `betti(projective_resolution(...))`, but is
 available directly from the indicator-resolution output.
 """
-function betti(F::Vector{UpsetPresentation{QQ}})
+function betti(F::Vector{UpsetPresentation{K}}) where {K}
     length(F) > 0 || return Dict{Tuple{Int,Int},Int}()
     out = Dict{Tuple{Int,Int}, Int}()
     for i in 1:length(F)
@@ -12259,7 +13065,7 @@ Dense Betti table for an upset indicator resolution.
 Row `a+1` and column `p` stores the multiplicity of the principal upset based at
 vertex `p` in homological degree `a`.
 """
-function betti_table(F::Vector{UpsetPresentation{QQ}}; pad_to::Union{Nothing,Int}=nothing)
+function betti_table(F::Vector{UpsetPresentation{K}}; pad_to::Union{Nothing,Int}=nothing) where {K}
     length(F) > 0 || return zeros(Int, 0, 0)
     P = F[1].P
     B = zeros(Int, length(F), nvertices(P))
@@ -12290,7 +13096,7 @@ end
 Compute multigraded Bass numbers from a downset indicator resolution.
 
 The input `E` is the `E` returned by `downset_resolution`, i.e. a vector of
-`DownsetCopresentation{QQ}` objects. Each term is a direct sum of principal
+`DownsetCopresentation{K}` objects. Each term is a direct sum of principal
 downsets.
 
 The returned dictionary is keyed by `(b, p)` where:
@@ -12300,7 +13106,7 @@ The returned dictionary is keyed by `(b, p)` where:
 The value is the multiplicity of the principal downset with top element `p` in
 term `b`.
 """
-function bass(E::Vector{DownsetCopresentation{QQ}})
+function bass(E::Vector{DownsetCopresentation{K}}) where {K}
     length(E) > 0 || return Dict{Tuple{Int,Int},Int}()
     out = Dict{Tuple{Int,Int}, Int}()
     for i in 1:length(E)
@@ -12321,7 +13127,7 @@ Dense Bass table for a downset indicator resolution.
 Row `b+1` and column `p` stores the multiplicity of the principal downset with
 top vertex `p` in cohomological degree `b`.
 """
-function bass_table(E::Vector{DownsetCopresentation{QQ}}; pad_to::Union{Nothing,Int}=nothing)
+function bass_table(E::Vector{DownsetCopresentation{K}}; pad_to::Union{Nothing,Int}=nothing) where {K}
     length(E) > 0 || return zeros(Int, 0, 0)
     P = E[1].P
     B = zeros(Int, length(E), nvertices(P))
@@ -12567,6 +13373,9 @@ Implementation notes
   region_poset is queried many times for the same encoding map.
 """
 function region_poset(pi::PLikeEncodingMap; poset_kind::Symbol = :signature)
+    if pi isa CompiledEncoding
+        return pi.P
+    end
     # Fast path: the encoding itself stores P.
     if hasproperty(pi, :P)
         P = getproperty(pi, :P)
@@ -12966,7 +13775,7 @@ support_vertices(H::AbstractVector{<:Integer}; min_dim::Integer=1) =
 
 Compute restricted Hilbert function on pi and return its support vertices.
 """
-function support_vertices(M::PModule{QQ}, pi; min_dim::Integer = 1)
+function support_vertices(M::PModule{K}, pi; min_dim::Integer = 1) where {K}
     H = restricted_hilbert(M)
     return support_vertices(H; min_dim=min_dim)
 end
@@ -13039,12 +13848,12 @@ end
 
 Convenience overload that first computes `restricted_hilbert(M; pi=pi, kwargs...)`.
 """
-function support_components(M::PModule{QQ}, pi::PLikeEncodingMap, opts::InvariantOptions;
+function support_components(M::PModule{K}, pi::PLikeEncodingMap, opts::InvariantOptions;
     min_dim::Integer = 1,
     adjacency = nothing,
-    kwargs...)
+    kwargs...) where {K}
 
-    isempty(kwargs) || throw(ArgumentError("support_components(::PModule{QQ}, ...): keyword arguments are not supported; pass invariant options via opts"))
+    isempty(kwargs) || throw(ArgumentError("support_components(::PModule{K}, ...): keyword arguments are not supported; pass invariant options via opts"))
     H = restricted_hilbert(M)
     return support_components(H, pi, opts; min_dim=min_dim, adjacency=adjacency)
 end
@@ -13120,12 +13929,12 @@ end
 
 Convenience overload that first computes `restricted_hilbert`.
 """
-function support_graph_diameter(M::PModule{QQ}, pi::PLikeEncodingMap, opts::InvariantOptions;
+function support_graph_diameter(M::PModule{K}, pi::PLikeEncodingMap, opts::InvariantOptions;
     min_dim::Integer = 1,
     adjacency = nothing,
-    kwargs...)
+    kwargs...) where {K}
 
-    isempty(kwargs) || throw(ArgumentError("support_graph_diameter(::PModule{QQ}, ...): keyword arguments are not supported; pass invariant options via opts"))
+    isempty(kwargs) || throw(ArgumentError("support_graph_diameter(::PModule{K}, ...): keyword arguments are not supported; pass invariant options via opts"))
     H = restricted_hilbert(M)
     return support_graph_diameter(H, pi, opts; min_dim=min_dim, adjacency=adjacency)
 end
@@ -13140,15 +13949,15 @@ Opts usage:
 - `opts.box` selects the working window. If unset (`nothing`), we use the legacy default `:auto`.
 - `opts.strict` controls region computations (defaults to true).
 """
-function support_bbox(M::PModule{QQ}, pi::PLikeEncodingMap, opts::InvariantOptions;
+function support_bbox(M::PModule{K}, pi::PLikeEncodingMap, opts::InvariantOptions;
     sep::Real = 0.0,
     min_dim::Integer = 1,
-    kwargs...)::Tuple{Vector{Float64}, Vector{Float64}}
+    kwargs...)::Tuple{Vector{Float64}, Vector{Float64}} where {K}
 
     strict0 = opts.strict === nothing ? true : opts.strict
     box0 = opts.box === nothing ? :auto : opts.box
 
-    isempty(kwargs) || throw(ArgumentError("support_bbox(::PModule{QQ}, ...): keyword arguments are not supported; pass invariant options via opts"))
+    isempty(kwargs) || throw(ArgumentError("support_bbox(::PModule{K}, ...): keyword arguments are not supported; pass invariant options via opts"))
     H = restricted_hilbert(M)
     w = region_weights(pi; box=box0, strict=strict0)
 
@@ -13209,7 +14018,7 @@ function support_bbox(H::HilbertFunction, pi::PLikeEncodingMap, opts::InvariantO
 end
 
 """
-    support_geometric_diameter(M::PModule{QQ}, pi::PLikeEncodingMap, opts::InvariantOptions; metric=:L2, sep=0.0, kwargs...)
+    support_geometric_diameter(M::PModule{K}, pi::PLikeEncodingMap, opts::InvariantOptions; metric=:L2, sep=0.0, kwargs...)
     support_geometric_diameter(H::HilbertFunction, pi::PLikeEncodingMap, opts::InvariantOptions; metric=:L2, sep=0.0, min_dim=1) -> Float64
     support_geometric_diameter(dims::AbstractVector{<:Integer}, pi::PLikeEncodingMap, opts::InvariantOptions; metric=:L2, sep=0.0, min_dim=1) -> Float64
 
@@ -13226,10 +14035,10 @@ Opts usage:
 - `opts.box` chooses the working window (default legacy `:auto` when unset).
 - `opts.strict` controls region computations (defaults to true).
 """
-function support_geometric_diameter(M::PModule{QQ}, pi::PLikeEncodingMap, opts::InvariantOptions;
+function support_geometric_diameter(M::PModule{K}, pi::PLikeEncodingMap, opts::InvariantOptions;
     metric::Symbol = :L2,
     sep::Real = 0.0,
-    kwargs...)::Float64
+    kwargs...)::Float64 where {K}
 
     if haskey(kwargs, :box) || haskey(kwargs, :strict) || haskey(kwargs, :threads)
         throw(ArgumentError("support_geometric_diameter: pass box/strict/threads via opts, not kwargs"))
@@ -13286,8 +14095,8 @@ end
 
 
 """
-    support_measure_stats(M::PModule{QQ}, pi::PLikeEncodingMap, opts::InvariantOptions; sep=0.0, min_dim=1) -> NamedTuple
-    support_measure_stats(H::FringeModule{QQ}, pi::PLikeEncodingMap, opts::InvariantOptions; sep=0.0, min_dim=1) -> NamedTuple
+    support_measure_stats(M::PModule{K}, pi::PLikeEncodingMap, opts::InvariantOptions; sep=0.0, min_dim=1) -> NamedTuple
+    support_measure_stats(H::FringeModule{K}, pi::PLikeEncodingMap, opts::InvariantOptions; sep=0.0, min_dim=1) -> NamedTuple
     support_measure_stats(dims::AbstractVector{<:Integer}, pi::PLikeEncodingMap, opts::InvariantOptions; sep=0.0, min_dim=1) -> NamedTuple
 
 Compute simple summary statistics of the support measure on a working window.
@@ -13386,21 +14195,21 @@ function _support_measure_stats_impl(H::AbstractVector{<:Integer}, pi::PLikeEnco
     )
 end
 
-function support_measure_stats(M::PModule{QQ}, pi::PLikeEncodingMap, opts::InvariantOptions;
+function support_measure_stats(M::PModule{K}, pi::PLikeEncodingMap, opts::InvariantOptions;
     sep::Real = 0.0,
     min_dim::Int = 1,
-    kwargs...)
+    kwargs...) where {K}
 
-    isempty(kwargs) || throw(ArgumentError("support_measure_stats(::PModule{QQ}, ...): keyword arguments are not supported; pass invariant options via opts"))
+    isempty(kwargs) || throw(ArgumentError("support_measure_stats(::PModule{K}, ...): keyword arguments are not supported; pass invariant options via opts"))
     return _support_measure_stats_impl(restricted_hilbert(M), pi, opts; sep=sep, min_dim=min_dim)
 end
 
-function support_measure_stats(H::FringeModule{QQ}, pi::PLikeEncodingMap, opts::InvariantOptions;
+function support_measure_stats(H::FringeModule{K}, pi::PLikeEncodingMap, opts::InvariantOptions;
     sep::Real = 0.0,
     min_dim::Int = 1,
-    kwargs...)
+    kwargs...) where {K}
 
-    isempty(kwargs) || throw(ArgumentError("support_measure_stats(::FringeModule{QQ}, ...): keyword arguments are not supported; pass invariant options via opts"))
+    isempty(kwargs) || throw(ArgumentError("support_measure_stats(::FringeModule{K}, ...): keyword arguments are not supported; pass invariant options via opts"))
     return _support_measure_stats_impl(restricted_hilbert(H), pi, opts; sep=sep, min_dim=min_dim)
 end
 
@@ -13418,15 +14227,15 @@ end
 # Public opts-default wrappers (keyword opts)
 # -----------------------------------------------------------------------------
 
-rank_invariant(H::FringeModule{QQ}; opts=nothing, kwargs...) =
+rank_invariant(H::FringeModule{K}; opts=nothing, kwargs...) where {K} =
     rank_invariant(H, _resolve_opts(opts); kwargs...)
 
 rectangle_signed_barcode(M, pi; opts=nothing, kwargs...) =
     rectangle_signed_barcode(M, pi, _resolve_opts(opts); kwargs...)
 
-restricted_hilbert(M::PModule{QQ}, pi, x; opts=nothing) =
+restricted_hilbert(M::PModule{K}, pi, x; opts=nothing) where {K} =
     restricted_hilbert(M, pi, x, _resolve_opts(opts))
-restricted_hilbert(H::FringeModule{QQ}, pi, x; opts=nothing) =
+restricted_hilbert(H::FringeModule{K}, pi, x; opts=nothing) where {K} =
     restricted_hilbert(H, pi, x, _resolve_opts(opts))
 
 hilbert_distance(M, N, pi; opts=nothing, kwargs...) =

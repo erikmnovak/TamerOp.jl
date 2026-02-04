@@ -2,6 +2,10 @@ using Test
 
 # Included from test/runtests.jl; uses shared aliases (PM, FF, ...).
 
+with_fields(FIELDS_FULL) do field
+K = CM.coeff_type(field)
+@inline c(x) = CM.coerce(field, x)
+
 @testset "Structured posets: leq and cover_edges" begin
     coords = (collect(1:2), collect(10:10:30))
     P = FF.GridPoset(coords)
@@ -32,6 +36,14 @@ using Test
     @test Cprod[idxp(1, 1), idxp(2, 1)]
     @test Cprod[idxp(1, 1), idxp(1, 2)]
     @test !Cprod[idxp(1, 1), idxp(2, 2)]
+end
+
+@testset "upset_iter/downset_iter parity" begin
+    P = chain_poset(5)
+    for i in 1:FF.nvertices(P)
+        @test collect(FF.upset_iter(P, i)) == FF.upset_indices(P, i)
+        @test collect(FF.downset_iter(P, i)) == FF.downset_indices(P, i)
+    end
 end
 
 @testset "GridPoset rejects duplicate or unsorted coords" begin
@@ -79,17 +91,17 @@ end
     dims1 = ones(Int, FF.nvertices(P1))
     dims2 = ones(Int, FF.nvertices(P2))
 
-    edge_maps1 = Dict{Tuple{Int,Int}, Matrix{QQ}}()
+    edge_maps1 = Dict{Tuple{Int,Int}, Matrix{K}}()
     for (u, v) in FF.cover_edges(P1)
-        edge_maps1[(u, v)] = Matrix{QQ}(I, 1, 1)
+        edge_maps1[(u, v)] = Matrix{K}(I, 1, 1)
     end
-    edge_maps2 = Dict{Tuple{Int,Int}, Matrix{QQ}}()
+    edge_maps2 = Dict{Tuple{Int,Int}, Matrix{K}}()
     for (u, v) in FF.cover_edges(P2)
-        edge_maps2[(u, v)] = Matrix{QQ}(I, 1, 1)
+        edge_maps2[(u, v)] = Matrix{K}(I, 1, 1)
     end
 
-    M1 = MD.PModule{QQ}(P1, dims1, edge_maps1)
-    M2 = MD.PModule{QQ}(P2, dims2, edge_maps2)
+    M1 = MD.PModule{K}(P1, dims1, edge_maps1; field=field)
+    M2 = MD.PModule{K}(P2, dims2, edge_maps2; field=field)
 
     out = PM.ChangeOfPosets.encode_pmodules_to_common_poset(M1, M2; method=:product, check_poset=false)
     @test FF.nvertices(out.P) == FF.nvertices(P1) * FF.nvertices(P2)
@@ -138,7 +150,7 @@ end
     tau = FZ.face(1, [false])
     flat = FZ.IndFlat(tau, [0])
     inj = FZ.IndInj(tau, [0])
-    FG = FZ.Flange(1, [flat], [inj], reshape([QQ(1)], 1, 1))
+    FG = FZ.Flange{K}(1, [flat], [inj], reshape([c(1)], 1, 1); field=field)
     opts = CM.EncodingOptions(backend = :zn, max_regions = 16)
 
     P, Hs, pi = PM.ZnEncoding.encode_from_flanges([FG], opts; poset_kind = :signature)
@@ -152,7 +164,7 @@ end
     U1 = FF.principal_upset(Q, 1)
     U2 = FF.principal_upset(Q, 2)
     D1 = FF.principal_downset(Q, 2)
-    M = FF.FringeModule{QQ}(Q, [U1, U2], [D1], reshape([QQ(1), QQ(0)], 1, 2))
+    M = FF.FringeModule{K}(Q, [U1, U2], [D1], reshape([c(1), c(0)], 1, 2); field=field)
 
     upt = PM.Encoding.build_uptight_encoding_from_fringe(M; poset_kind = :regions)
     P = upt.pi.P
@@ -176,3 +188,4 @@ end
     prod2 = PM.ChangeOfPosets.product_poset(Q1, Q2; use_cache=true)
     @test prod1.P === prod2.P
 end
+end # with_fields

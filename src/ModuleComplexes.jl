@@ -36,8 +36,8 @@ using LinearAlgebra
 using SparseArrays
 import Base.Threads
 
-using ..CoreModules: QQ, ResolutionOptions, _append_scaled_triplets!
-using ..ExactQQ: rankQQ, solve_fullcolumnQQ
+using ..CoreModules: ResolutionOptions, _append_scaled_triplets!
+using ..FieldLinAlg
 using ..FiniteFringe
 using ..FiniteFringe: AbstractPoset, FinitePoset, cover_edges, nvertices, upset_indices
 using ..Modules: PModule, PMorphism, id_morphism,
@@ -57,7 +57,7 @@ using ..ChainComplexes:
     CochainComplex, DoubleComplex, CochainMap,
     total_complex, cohomology_data, spectral_sequence,
     cohomology_coordinates, cohomology_representative,
-    solve_fullcolumnQQ, solve_particularQQ
+    solve_particular
 
 using ..DerivedFunctors:
     HomSpace, Hom,
@@ -166,6 +166,16 @@ maxdeg_of_complex(C::ModuleCochainComplex) = C.tmax
     return true
 end
 
+@inline _field_of_complex(C::ModuleCochainComplex) = C.terms[1].field
+
+@inline function _eye(::Type{K}, n::Int) where {K}
+    M = zeros(K, n, n)
+    for i in 1:n
+        M[i, i] = one(K)
+    end
+    return M
+end
+
 # Internal structural equality for PModules used in validation.
 # We avoid defining `==` globally. This is needed because zero modules are
 # often constructed on the fly, so pointer-identity is too strict.
@@ -255,7 +265,7 @@ end
 
 
 _term(C::ModuleCochainComplex{K}, t::Int) where {K} =
-    (t < C.tmin || t > C.tmax) ? zero_pmodule(poset(C), K) : C.terms[t - C.tmin + 1]
+    (t < C.tmin || t > C.tmax) ? zero_pmodule(poset(C); field=_field_of_complex(C)) : C.terms[t - C.tmin + 1]
 
 _diff(C::ModuleCochainComplex{K}, t::Int) where {K} =
     (t < C.tmin || t >= C.tmax) ? zero_morphism(_term(C,t), _term(C,t+1)) : C.diffs[t - C.tmin + 1]
@@ -263,7 +273,7 @@ _diff(C::ModuleCochainComplex{K}, t::Int) where {K} =
 """
     ModuleCochainComplex(
         Hs::AbstractVector{<:FF.FringeModule},
-        ds::AbstractVector{<:IR.PMorphism{QQ}};
+        ds::AbstractVector{<:IR.PMorphism{K}};
         tmin::Integer = 0,
         check::Bool = true,
     )
@@ -275,27 +285,27 @@ This is a mathematician-facing API feature: if you naturally specify terms using
 convert each term to an `IndicatorResolutions.PModule`.
 
 Implementation details:
-- Each `FringeModule` term is converted to a `PModule{QQ}` using
+- Each `FringeModule` term is converted to a `PModule{K}` using
   `IndicatorResolutions.pmodule_from_fringe`.
 - We then call the standard `ModuleCochainComplex(::Vector{PModule}, ::Vector{PMorphism}; ...)`
   constructor.
-- The coefficient field is coerced to `QQ = Rational{BigInt}` by
-  `pmodule_from_fringe`, matching the rest of the IndicatorResolutions pipeline.
+- The coefficient field is taken from each fringe module (and preserved by
+  `pmodule_from_fringe`).
 
 Parameters
 - `Hs`: terms of the cochain complex as fringe modules.
-- `ds`: differentials as `PMorphism{QQ}`. (Same convention as the PModule constructor.)
+- `ds`: differentials as `PMorphism{K}`. (Same convention as the PModule constructor.)
 - `tmin`: cohomological starting degree (term `Hs[1]` is placed in degree `tmin`).
 - `check`: if true, run structural checks (same meaning as in the PModule constructor).
 """
 function ModuleCochainComplex(
     Hs::AbstractVector{<:FF.FringeModule},
-    ds::AbstractVector{<:IR.PMorphism{QQ}};
+    ds::AbstractVector{<:IR.PMorphism{K}};
     tmin::Integer = 0,
     check::Bool = true,
-)
-    # Convert each fringe module into a PModule{QQ}.
-    Ms = Vector{IR.PModule{QQ}}(undef, length(Hs))
+ ) where {K}
+    # Convert each fringe module into a PModule{K}.
+    Ms = Vector{IR.PModule{K}}(undef, length(Hs))
     for i in eachindex(Hs)
         Ms[i] = IR.pmodule_from_fringe(Hs[i])
     end
@@ -303,7 +313,7 @@ function ModuleCochainComplex(
     # Delegate to the existing, fully-checked constructor.
     return ModuleCochainComplex(
         Ms,
-        Vector{IR.PMorphism{QQ}}(ds);
+        Vector{IR.PMorphism{K}}(ds);
         tmin = Int(tmin),
         check = check,
     )
@@ -608,8 +618,12 @@ function mapping_cone_triangle(f::ModuleCochainMap{K}) where {K}
             a = Dt.dims[u]; b = Ct1.dims[u]
             inj = zeros(K, a+b, a)
             proj = zeros(K, b, a+b)
-            if a>0; inj[1:a,1:a] .= Matrix{K}(I,a,a); end
-            if b>0; proj[1:b,a+1:a+b] .= Matrix{K}(I,b,b); end
+            if a > 0
+                inj[1:a, 1:a] .= _eye(K, a)
+            end
+            if b > 0
+                proj[1:b, a+1:a+b] .= _eye(K, b)
+            end
             comps_i[u] = inj
             comps_p[u] = proj
         end
@@ -631,7 +645,7 @@ end
 Return (Z,iZ,B,iB,j,H,q) where:
 Z = ker d^t, B = im d^{t-1}, j: B->Z inclusion, H=Z/B, q:Z->H.
 """
-function cohomology_module_data(C::ModuleCochainComplex{QQ}, t::Int)
+function cohomology_module_data(C::ModuleCochainComplex{K}, t::Int) where {K}
     M  = _term(C,t)
     d0 = _diff(C,t-1)
     d1 = _diff(C,t)
@@ -641,79 +655,82 @@ function cohomology_module_data(C::ModuleCochainComplex{QQ}, t::Int)
 
     # j: B -> Z such that iZ circ j = iB
     Q = poset(C)
-    jcomps = Vector{Matrix{QQ}}(undef, nvertices(Q))
+    jcomps = Vector{Matrix{K}}(undef, nvertices(Q))
+    field = M.field
     for u in 1:nvertices(Q)
         if B.dims[u] == 0
-            jcomps[u] = zeros(QQ, Z.dims[u], 0)
+            jcomps[u] = zeros(K, Z.dims[u], 0)
         elseif Z.dims[u] == 0
-            jcomps[u] = zeros(QQ, 0, B.dims[u])
+            jcomps[u] = zeros(K, 0, B.dims[u])
         else
-            jcomps[u] = solve_fullcolumnQQ(iZ.comps[u], iB.comps[u])
+            jcomps[u] = FieldLinAlg.solve_fullcolumn(field, iZ.comps[u], iB.comps[u])
         end
     end
-    j = PMorphism{QQ}(B,Z,jcomps)
+    j = PMorphism{K}(B,Z,jcomps)
 
     H, q = _cokernel_module(j)
 
     return (Z=Z, iZ=iZ, B=B, iB=iB, j=j, H=H, q=q)
 end
 
-cohomology_module(C::ModuleCochainComplex{QQ}, t::Int) = cohomology_module_data(C,t).H
+cohomology_module(C::ModuleCochainComplex{K}, t::Int) where {K} = cohomology_module_data(C,t).H
 
 # induced map on cohomology modules
-function induced_map_on_cohomology_modules(f::ModuleCochainMap{QQ}, t::Int)
+function induced_map_on_cohomology_modules(f::ModuleCochainMap{K}, t::Int) where {K}
+    field = _field_of_complex(f.C)
     Cd = cohomology_module_data(f.C,t)
     Dd = cohomology_module_data(f.D,t)
 
     ft = _map(f,t)
     # restrict to cycles: ZC -> D^t
-    ZC_to_Dt = PMorphism{QQ}(Cd.Z, _term(f.D,t), [ft.comps[u] * Cd.iZ.comps[u] for u in 1:poset(f.C).n])
+    ZC_to_Dt = PMorphism{K}(Cd.Z, _term(f.D,t), [ft.comps[u] * Cd.iZ.comps[u] for u in 1:poset(f.C).n])
 
     # land in ZD by solving iZD * X = (ft*iZC)
     Q = poset(f.C)
-    ZC_to_ZD = Vector{Matrix{QQ}}(undef, nvertices(Q))
+    ZC_to_ZD = Vector{Matrix{K}}(undef, nvertices(Q))
     for u in 1:nvertices(Q)
         if Dd.Z.dims[u] == 0
-            ZC_to_ZD[u] = zeros(QQ, 0, Cd.Z.dims[u])
+            ZC_to_ZD[u] = zeros(K, 0, Cd.Z.dims[u])
         else
-            ZC_to_ZD[u] = solve_fullcolumnQQ(Dd.iZ.comps[u], ZC_to_Dt.comps[u])
+            ZC_to_ZD[u] = FieldLinAlg.solve_fullcolumn(field, Dd.iZ.comps[u], ZC_to_Dt.comps[u])
         end
     end
-    hZ = PMorphism{QQ}(Cd.Z, Dd.Z, ZC_to_ZD)
+    hZ = PMorphism{K}(Cd.Z, Dd.Z, ZC_to_ZD)
 
     # Want H map: HD circ qC = qD circ hZ
-    compsH = Vector{Matrix{QQ}}(undef, nvertices(Q))
+    compsH = Vector{Matrix{K}}(undef, nvertices(Q))
     for u in 1:nvertices(Q)
         RHS = Dd.q.comps[u] * hZ.comps[u]
         qC = Cd.q.comps[u]
         if size(qC,1) == 0
-            compsH[u] = zeros(QQ, size(RHS,1), 0)
+            compsH[u] = zeros(K, size(RHS,1), 0)
         else
             # qC has full row rank; pick right inverse via (qC*qC')^{-1}
             A = qC * transpose(qC)
-            invA = solve_fullcolumnQQ(A, Matrix{QQ}(I, size(A,1), size(A,2)))
+            invA = FieldLinAlg.solve_fullcolumn(field, A, _eye(K, size(A, 1)))
             rinv = transpose(qC) * invA
             compsH[u] = RHS * rinv
         end
     end
-    return PMorphism{QQ}(Cd.H, Dd.H, compsH)
+    return PMorphism{K}(Cd.H, Dd.H, compsH)
 end
 
 # quasi-isomorphism check
-function is_isomorphism(f::PMorphism{QQ})
+function is_isomorphism(f::PMorphism{K}) where {K}
     Q = f.dom.Q
+    field = f.dom.field
     for u in 1:nvertices(Q)
         if f.dom.dims[u] != f.cod.dims[u]
             return false
         end
-        if rankQQ(f.comps[u]) != f.dom.dims[u]
+        if FieldLinAlg.rank(field, f.comps[u]) != f.dom.dims[u]
             return false
         end
     end
     return true
 end
 
-function is_quasi_isomorphism(f::ModuleCochainMap{QQ})
+function is_quasi_isomorphism(f::ModuleCochainMap{K}) where {K}
     tmin = min(f.C.tmin, f.D.tmin)
     tmax = max(f.C.tmax, f.D.tmax)
     for t in tmin:tmax
@@ -740,19 +757,19 @@ end
 
 
 function RHomComplex(
-    C::ModuleCochainComplex{QQ},
-    N::PModule{QQ};
+    C::ModuleCochainComplex{K},
+    N::PModule{K};
     maxlen::Int = 3,
     resN = nothing,
     threads::Bool = (Threads.nthreads() > 1),
-)
+) where {K}
     Q = N.Q
     maxlen = maxlen
     maxdeg = maxdeg_of_complex(C)
     resN = (resN === nothing) ? injective_resolution(N, ResolutionOptions(maxlen=maxlen)) : resN
 
     na, nb = maxdeg + 1, maxlen + 1
-    homs = Array{HomSpace{QQ}}(undef, na, nb)
+    homs = Array{HomSpace{K}}(undef, na, nb)
     dims = zeros(Int, na, nb)
 
     # Build Hom blocks (expensive) in parallel if requested.
@@ -785,7 +802,7 @@ function RHomComplex(
     end
 
     # Vertical (C direction) differentials.
-    dv = Array{SparseMatrixCSC{QQ, Int}}(undef, na, nb)
+    dv = Array{SparseMatrixCSC{K, Int}}(undef, na, nb)
     if threads && Threads.nthreads() > 1
         nT = Threads.nthreads()
         Threads.@threads for slot in 1:nT
@@ -793,7 +810,7 @@ function RHomComplex(
                 ia = div((idx - 1), nb) + 1
                 ib = (idx - 1) % nb + 1
                 if ia == na
-                    dv[ia, ib] = spzeros(QQ, dims[ia, ib], 0)
+                    dv[ia, ib] = spzeros(K, dims[ia, ib], 0)
                 else
                     p = ia - 1
                     dv[ia, ib] = _precompose_matrix(homs[ia, ib + 0], homs[ia + 1, ib], _diff(C, p))
@@ -803,7 +820,7 @@ function RHomComplex(
     else
         for ia in 1:na, ib in 1:nb
             if ia == na
-                dv[ia, ib] = spzeros(QQ, dims[ia, ib], 0)
+                dv[ia, ib] = spzeros(K, dims[ia, ib], 0)
             else
                 p = ia - 1
                 dv[ia, ib] = _precompose_matrix(homs[ia, ib], homs[ia + 1, ib], _diff(C, p))
@@ -812,7 +829,7 @@ function RHomComplex(
     end
 
     # Horizontal (resolution direction) differentials.
-    dh = Array{SparseMatrixCSC{QQ, Int}}(undef, na, nb)
+    dh = Array{SparseMatrixCSC{K, Int}}(undef, na, nb)
     if threads && Threads.nthreads() > 1
         nT = Threads.nthreads()
         Threads.@threads for slot in 1:nT
@@ -820,7 +837,7 @@ function RHomComplex(
                 ia = div((idx - 1), nb) + 1
                 ib = (idx - 1) % nb + 1
                 if ib == nb
-                    dh[ia, ib] = spzeros(QQ, dims[ia, ib], 0)
+                    dh[ia, ib] = spzeros(K, dims[ia, ib], 0)
                 else
                     q = ib - 1
                     dh[ia, ib] = _postcompose_matrix(homs[ia, ib + 1], homs[ia, ib], resN.d_mor[q + 1])
@@ -830,7 +847,7 @@ function RHomComplex(
     else
         for ia in 1:na, ib in 1:nb
             if ib == nb
-                dh[ia, ib] = spzeros(QQ, dims[ia, ib], 0)
+                dh[ia, ib] = spzeros(K, dims[ia, ib], 0)
             else
                 q = ib - 1
                 dh[ia, ib] = _postcompose_matrix(homs[ia, ib + 1], homs[ia, ib], resN.d_mor[q + 1])
@@ -839,22 +856,22 @@ function RHomComplex(
     end
 
     # Index convention: a = cochain degree in C (0..maxdeg), b = injective degree in resN (0..maxlen).
-    DC = DoubleComplex{QQ}(0, maxdeg, 0, maxlen, dims, dv, dh)
+    DC = DoubleComplex{K}(0, maxdeg, 0, maxlen, dims, dv, dh)
     tot = total_complex(DC)
-    return RHomComplex{QQ}(C, N, resN, homs, DC, tot)
+    return RHomComplex{K}(C, N, resN, homs, DC, tot)
 end
 
 function RHomComplex(
-    C::ModuleCochainComplex{QQ},
-    H::FF.FringeModule{QQ};
+    C::ModuleCochainComplex{K},
+    H::FF.FringeModule{K};
     kwargs...
-)
+) where {K}
     return RHomComplex(C, IndicatorResolutions.pmodule_from_fringe(H); kwargs...)
 end
 
 
-RHom(C::ModuleCochainComplex{QQ}, N::PModule{QQ}; kwargs...) = RHomComplex(C,N; kwargs...).tot
-RHom(C::ModuleCochainComplex{QQ}, H::FF.FringeModule{QQ}; kwargs...) =
+RHom(C::ModuleCochainComplex{K}, N::PModule{K}; kwargs...) where {K} = RHomComplex(C,N; kwargs...).tot
+RHom(C::ModuleCochainComplex{K}, H::FF.FringeModule{K}; kwargs...) where {K} =
     RHom(C, IndicatorResolutions.pmodule_from_fringe(H); kwargs...)
 
 
@@ -900,11 +917,12 @@ that both RHom complexes were built using the same injective resolution
 object (`Rdom.resN === Rcod.resN`).
 """
 function rhom_map_first(
-    f::ModuleCochainMap{QQ},
-    Rdom::RHomComplex{QQ},
-    Rcod::RHomComplex{QQ};
+    f::ModuleCochainMap{K},
+    Rdom::RHomComplex{K},
+    Rcod::RHomComplex{K};
     check::Bool=true,
-)
+    threads::Bool = (Threads.nthreads() > 1),
+) where {K}
     if f.C !== Rcod.C || f.D !== Rdom.C
         error("rhom_map_first: RHom complexes do not match the given map f : C -> D")
     end
@@ -921,61 +939,119 @@ function rhom_map_first(
     tmin = min(tot_src.tmin, tot_tgt.tmin)
     tmax = max(tot_src.tmax, tot_tgt.tmax)
 
-    maps = Vector{SparseMatrixCSC{QQ,Int}}(undef, tmax - tmin + 1)
+    maps = Vector{SparseMatrixCSC{K,Int}}(undef, tmax - tmin + 1)
 
-    for t in tmin:tmax
-        dim_src = _cc_dim_at(tot_src, t)
-        dim_tgt = _cc_dim_at(tot_tgt, t)
+    if threads && Threads.nthreads() > 1 && (tmax >= tmin)
+        Threads.@threads for idx in 1:(tmax - tmin + 1)
+            t = tmin + idx - 1
+            dim_src = _cc_dim_at(tot_src, t)
+            dim_tgt = _cc_dim_at(tot_tgt, t)
 
-        if dim_src == 0 || dim_tgt == 0
-            maps[t - tmin + 1] = spzeros(QQ, dim_tgt, dim_src)
-            continue
+            if dim_src == 0 || dim_tgt == 0
+                maps[idx] = spzeros(K, dim_tgt, dim_src)
+                continue
+            end
+
+            off_src = _tot_block_offsets(Rdom.DC, t)
+            off_tgt = _tot_block_offsets(Rcod.DC, t)
+
+            I = Int[]
+            J = Int[]
+            V = K[]
+
+            for ((a,b), col_off) in off_src
+                if !haskey(off_tgt, (a,b))
+                    continue
+                end
+                row_off = off_tgt[(a,b)]
+
+                ai_src = a - Rdom.DC.amin + 1
+                bi_src = b - Rdom.DC.bmin + 1
+                ai_tgt = a - Rcod.DC.amin + 1
+                bi_tgt = b - Rcod.DC.bmin + 1
+
+                if ai_src < 1 || ai_src > size(Rdom.DC.dims,1) || bi_src < 1 || bi_src > size(Rdom.DC.dims,2)
+                    continue
+                end
+                if ai_tgt < 1 || ai_tgt > size(Rcod.DC.dims,1) || bi_tgt < 1 || bi_tgt > size(Rcod.DC.dims,2)
+                    continue
+                end
+
+                dim_block_src = Rdom.DC.dims[ai_src, bi_src]
+                dim_block_tgt = Rcod.DC.dims[ai_tgt, bi_tgt]
+                if dim_block_src == 0 || dim_block_tgt == 0
+                    continue
+                end
+
+                # In RHom, the first index is the cochain degree a, so use p = a.
+                p = a
+                fp = _map(f, p)
+
+                Hdom = Rdom.homs[ai_src, bi_src]
+                Hcod = Rcod.homs[ai_tgt, bi_tgt]
+                F = _precompose_matrix(Hdom, Hcod, fp)
+
+                # Avoid allocating sparse(F) just to call findnz; append triplets directly.
+                _append_scaled_triplets!(I, J, V, F, row_off - 1, col_off - 1)
+            end
+
+            maps[idx] = sparse(I, J, V, dim_tgt, dim_src)
         end
+    else
+        for t in tmin:tmax
+            dim_src = _cc_dim_at(tot_src, t)
+            dim_tgt = _cc_dim_at(tot_tgt, t)
 
-        off_src = _tot_block_offsets(Rdom.DC, t)
-        off_tgt = _tot_block_offsets(Rcod.DC, t)
-
-        I = Int[]
-        J = Int[]
-        V = QQ[]
-
-        for ((a,b), col_off) in off_src
-            if !haskey(off_tgt, (a,b))
-                continue
-            end
-            row_off = off_tgt[(a,b)]
-
-            ai_src = a - Rdom.DC.amin + 1
-            bi_src = b - Rdom.DC.bmin + 1
-            ai_tgt = a - Rcod.DC.amin + 1
-            bi_tgt = b - Rcod.DC.bmin + 1
-
-            if ai_src < 1 || ai_src > size(Rdom.DC.dims,1) || bi_src < 1 || bi_src > size(Rdom.DC.dims,2)
-                continue
-            end
-            if ai_tgt < 1 || ai_tgt > size(Rcod.DC.dims,1) || bi_tgt < 1 || bi_tgt > size(Rcod.DC.dims,2)
+            if dim_src == 0 || dim_tgt == 0
+                maps[t - tmin + 1] = spzeros(K, dim_tgt, dim_src)
                 continue
             end
 
-            dim_block_src = Rdom.DC.dims[ai_src, bi_src]
-            dim_block_tgt = Rcod.DC.dims[ai_tgt, bi_tgt]
-            if dim_block_src == 0 || dim_block_tgt == 0
-                continue
+            off_src = _tot_block_offsets(Rdom.DC, t)
+            off_tgt = _tot_block_offsets(Rcod.DC, t)
+
+            I = Int[]
+            J = Int[]
+            V = K[]
+
+            for ((a,b), col_off) in off_src
+                if !haskey(off_tgt, (a,b))
+                    continue
+                end
+                row_off = off_tgt[(a,b)]
+
+                ai_src = a - Rdom.DC.amin + 1
+                bi_src = b - Rdom.DC.bmin + 1
+                ai_tgt = a - Rcod.DC.amin + 1
+                bi_tgt = b - Rcod.DC.bmin + 1
+
+                if ai_src < 1 || ai_src > size(Rdom.DC.dims,1) || bi_src < 1 || bi_src > size(Rdom.DC.dims,2)
+                    continue
+                end
+                if ai_tgt < 1 || ai_tgt > size(Rcod.DC.dims,1) || bi_tgt < 1 || bi_tgt > size(Rcod.DC.dims,2)
+                    continue
+                end
+
+                dim_block_src = Rdom.DC.dims[ai_src, bi_src]
+                dim_block_tgt = Rcod.DC.dims[ai_tgt, bi_tgt]
+                if dim_block_src == 0 || dim_block_tgt == 0
+                    continue
+                end
+
+                # In RHom, the first index is the cochain degree a, so use p = a.
+                p = a
+                fp = _map(f, p)
+
+                Hdom = Rdom.homs[ai_src, bi_src]
+                Hcod = Rcod.homs[ai_tgt, bi_tgt]
+                F = _precompose_matrix(Hdom, Hcod, fp)
+
+                # Avoid allocating sparse(F) just to call findnz; append triplets directly.
+                _append_scaled_triplets!(I, J, V, F, row_off - 1, col_off - 1)
             end
 
-            # In RHom, the first index is the cochain degree a, so use p = a.
-            p = a
-            fp = _map(f, p)
-
-            Hdom = Rdom.homs[ai_src, bi_src]
-            Hcod = Rcod.homs[ai_tgt, bi_tgt]
-            F = _precompose_matrix(Hdom, Hcod, fp)
-
-            # Avoid allocating sparse(F) just to call findnz; append triplets directly.
-            _append_scaled_triplets!(I, J, V, F, row_off - 1, col_off - 1)
+            maps[t - tmin + 1] = sparse(I, J, V, dim_tgt, dim_src)
         end
-
-        maps[t - tmin + 1] = sparse(I, J, V, dim_tgt, dim_src)
     end
 
     return CochainMap(tot_src, tot_tgt, maps; tmin=tmin, tmax=tmax, check=check)
@@ -988,27 +1064,29 @@ Convenience wrapper: build RHom complexes using a shared injective resolution,
 then return the induced map on totals.
 """
 function rhom_map_first(
-    f::ModuleCochainMap{QQ},
-    N::PModule{QQ};
+    f::ModuleCochainMap{K},
+    N::PModule{K};
     maxlen::Int=3,
     resN=nothing,
     check::Bool=true,
-)
+    threads::Bool = (Threads.nthreads() > 1),
+) where {K}
     resN = isnothing(resN) ? injective_resolution(N, ResolutionOptions(maxlen=maxlen)) : resN
-    Rdom = RHomComplex(f.D, N; maxlen=maxlen, resN=resN)
-    Rcod = RHomComplex(f.C, N; maxlen=maxlen, resN=resN)
-    return rhom_map_first(f, Rdom, Rcod; check=check)
+    Rdom = RHomComplex(f.D, N; maxlen=maxlen, resN=resN, threads=threads)
+    Rcod = RHomComplex(f.C, N; maxlen=maxlen, resN=resN, threads=threads)
+    return rhom_map_first(f, Rdom, Rcod; check=check, threads=threads)
 end
 
 function rhom_map_first(
-    f::ModuleCochainMap{QQ},
-    H::FF.FringeModule{QQ};
+    f::ModuleCochainMap{K},
+    H::FF.FringeModule{K};
     maxlen::Int=3,
     resN=nothing,
     check::Bool=true,
-)
+    threads::Bool = (Threads.nthreads() > 1),
+) where {K}
     return rhom_map_first(f, IndicatorResolutions.pmodule_from_fringe(H);
-        maxlen=maxlen, resN=resN, check=check)
+        maxlen=maxlen, resN=resN, check=check, threads=threads)
 end
 
 
@@ -1076,17 +1154,17 @@ end
 # Given coefficient matrix C (ncod x ndom) describing a morphism between direct
 # sums of principal downsets, build the corresponding PMorphism.
 function _pmorphism_from_downset_coeff(
-    E::PModule{QQ},
-    Ep::PModule{QQ},
+    E::PModule{K},
+    Ep::PModule{K},
     act_dom::Vector{Vector{Int}},
     act_cod::Vector{Vector{Int}},
-    C::Matrix{QQ}
-)
-    comps = Vector{Matrix{QQ}}(undef, nvertices(E.Q))
+    C::Matrix{K}
+) where {K}
+    comps = Vector{Matrix{K}}(undef, nvertices(E.Q))
     for i in 1:nvertices(E.Q)
         comps[i] = C[act_cod[i], act_dom[i]]
     end
-    return PMorphism{QQ}(E, Ep, comps)
+    return PMorphism{K}(E, Ep, comps)
 end
 
 # NOTE: The authoritative implementation is DerivedFunctors.lift_injective_chainmap.
@@ -1109,14 +1187,15 @@ This is implemented by canonically lifting `g` to a chain map between the
 injective resolutions used inside `Rsrc` and `Rtgt`, then postcomposing on
 each `Hom(C^p, E^b)` block. The result is assembled as a sparse block matrix.
 
-The lift is deterministic (via solve_particularQQ), so repeated calls are stable.
+The lift is deterministic (via solve_particular), so repeated calls are stable.
 """
 function rhom_map_second(
-    g::PMorphism{QQ},
-    Rsrc::RHomComplex{QQ},
-    Rtgt::RHomComplex{QQ};
-    check::Bool = true
-)
+    g::PMorphism{K},
+    Rsrc::RHomComplex{K},
+    Rtgt::RHomComplex{K};
+    check::Bool = true,
+    threads::Bool = (Threads.nthreads() > 1),
+) where {K}
     @assert Rsrc.C === Rtgt.C
     @assert g.dom === Rsrc.N
     @assert g.cod === Rtgt.N
@@ -1127,84 +1206,130 @@ function rhom_map_second(
     # Canonical lift between injective resolutions.
     phis = lift_injective_chainmap(g, Rsrc.resN, Rtgt.resN; check=check)
 
-    maps = Vector{SparseMatrixCSC{QQ, Int}}(undef, Rsrc.tot.tmax - Rsrc.tot.tmin + 1)
+    maps = Vector{SparseMatrixCSC{K, Int}}(undef, Rsrc.tot.tmax - Rsrc.tot.tmin + 1)
 
-    for t in Rsrc.tot.tmin:Rsrc.tot.tmax
-        offsets_src = _tot_block_offsets(Rsrc.DC, t)
-        offsets_tgt = _tot_block_offsets(Rtgt.DC, t)
+    if threads && Threads.nthreads() > 1 && (Rsrc.tot.tmax >= Rsrc.tot.tmin)
+        Threads.@threads for idx in 1:(Rsrc.tot.tmax - Rsrc.tot.tmin + 1)
+            t = Rsrc.tot.tmin + idx - 1
+            offsets_src = _tot_block_offsets(Rsrc.DC, t)
+            offsets_tgt = _tot_block_offsets(Rtgt.DC, t)
 
-        dim_src = Rsrc.tot.dims[t - Rsrc.tot.tmin + 1]
-        dim_tgt = Rtgt.tot.dims[t - Rtgt.tot.tmin + 1]
+            dim_src = Rsrc.tot.dims[idx]
+            dim_tgt = Rtgt.tot.dims[idx]
 
-        I = Int[]
-        J = Int[]
-        V = QQ[]
+            I = Int[]
+            J = Int[]
+            V = K[]
 
-        # Blocks are indexed by (A,B). For RHom, B is injective resolution degree.
-        for ((A, B), off_tgt) in offsets_tgt
-            if !haskey(offsets_src, (A, B))
-                continue
+            # Blocks are indexed by (A,B). For RHom, B is injective resolution degree.
+            for ((A, B), off_tgt) in offsets_tgt
+                if !haskey(offsets_src, (A, B))
+                    continue
+                end
+                off_src = offsets_src[(A, B)]
+
+                ia_src = A - Rsrc.DC.amin + 1
+                ib_src = B - Rsrc.DC.bmin + 1
+                ia_tgt = A - Rtgt.DC.amin + 1
+                ib_tgt = B - Rtgt.DC.bmin + 1
+
+                if ia_src < 1 || ia_src > size(Rsrc.DC.dims, 1) || ib_src < 1 || ib_src > size(Rsrc.DC.dims, 2)
+                    continue
+                end
+                if ia_tgt < 1 || ia_tgt > size(Rtgt.DC.dims, 1) || ib_tgt < 1 || ib_tgt > size(Rtgt.DC.dims, 2)
+                    continue
+                end
+                if Rsrc.DC.dims[ia_src, ib_src] == 0 || Rtgt.DC.dims[ia_tgt, ib_tgt] == 0
+                    continue
+                end
+
+                # Postcompose on Hom(C^p, E^B).
+                Mb = _postcompose_matrix(Rtgt.homs[ia_tgt, ib_tgt], Rsrc.homs[ia_src, ib_src], phis[B + 1])
+                _append_scaled_triplets!(I, J, V, Mb, off_tgt - 1, off_src - 1)
             end
-            off_src = offsets_src[(A, B)]
 
-            ia_src = A - Rsrc.DC.amin + 1
-            ib_src = B - Rsrc.DC.bmin + 1
-            ia_tgt = A - Rtgt.DC.amin + 1
-            ib_tgt = B - Rtgt.DC.bmin + 1
-
-            if ia_src < 1 || ia_src > size(Rsrc.DC.dims, 1) || ib_src < 1 || ib_src > size(Rsrc.DC.dims, 2)
-                continue
-            end
-            if ia_tgt < 1 || ia_tgt > size(Rtgt.DC.dims, 1) || ib_tgt < 1 || ib_tgt > size(Rtgt.DC.dims, 2)
-                continue
-            end
-            if Rsrc.DC.dims[ia_src, ib_src] == 0 || Rtgt.DC.dims[ia_tgt, ib_tgt] == 0
-                continue
-            end
-
-            # Postcompose on Hom(C^p, E^B).
-            Mb = _postcompose_matrix(Rtgt.homs[ia_tgt, ib_tgt], Rsrc.homs[ia_src, ib_src], phis[B + 1])
-            _append_scaled_triplets!(I, J, V, Mb, off_tgt - 1, off_src - 1)
+            maps[idx] = sparse(I, J, V, dim_tgt, dim_src)
         end
+    else
+        for t in Rsrc.tot.tmin:Rsrc.tot.tmax
+            offsets_src = _tot_block_offsets(Rsrc.DC, t)
+            offsets_tgt = _tot_block_offsets(Rtgt.DC, t)
 
-        maps[t - Rsrc.tot.tmin + 1] = sparse(I, J, V, dim_tgt, dim_src)
+            dim_src = Rsrc.tot.dims[t - Rsrc.tot.tmin + 1]
+            dim_tgt = Rtgt.tot.dims[t - Rtgt.tot.tmin + 1]
+
+            I = Int[]
+            J = Int[]
+            V = K[]
+
+            # Blocks are indexed by (A,B). For RHom, B is injective resolution degree.
+            for ((A, B), off_tgt) in offsets_tgt
+                if !haskey(offsets_src, (A, B))
+                    continue
+                end
+                off_src = offsets_src[(A, B)]
+
+                ia_src = A - Rsrc.DC.amin + 1
+                ib_src = B - Rsrc.DC.bmin + 1
+                ia_tgt = A - Rtgt.DC.amin + 1
+                ib_tgt = B - Rtgt.DC.bmin + 1
+
+                if ia_src < 1 || ia_src > size(Rsrc.DC.dims, 1) || ib_src < 1 || ib_src > size(Rsrc.DC.dims, 2)
+                    continue
+                end
+                if ia_tgt < 1 || ia_tgt > size(Rtgt.DC.dims, 1) || ib_tgt < 1 || ib_tgt > size(Rtgt.DC.dims, 2)
+                    continue
+                end
+                if Rsrc.DC.dims[ia_src, ib_src] == 0 || Rtgt.DC.dims[ia_tgt, ib_tgt] == 0
+                    continue
+                end
+
+                # Postcompose on Hom(C^p, E^B).
+                Mb = _postcompose_matrix(Rtgt.homs[ia_tgt, ib_tgt], Rsrc.homs[ia_src, ib_src], phis[B + 1])
+                _append_scaled_triplets!(I, J, V, Mb, off_tgt - 1, off_src - 1)
+            end
+
+            maps[t - Rsrc.tot.tmin + 1] = sparse(I, J, V, dim_tgt, dim_src)
+        end
     end
 
     return CochainMap(Rsrc.tot, Rtgt.tot, maps; check=check)
 end
 
 function rhom_map_second(
-    g::PMorphism{QQ},
-    C::ModuleCochainComplex{QQ},
-    Hsrc::FF.FringeModule{QQ},
-    Htgt::FF.FringeModule{QQ};
+    g::PMorphism{K},
+    C::ModuleCochainComplex{K},
+    Hsrc::FF.FringeModule{K},
+    Htgt::FF.FringeModule{K};
     maxlen::Int=3,
     resN=nothing,
     check::Bool=true,
-)
+    threads::Bool = (Threads.nthreads() > 1),
+) where {K}
     Nsrc = IndicatorResolutions.pmodule_from_fringe(Hsrc)
     Ntgt = IndicatorResolutions.pmodule_from_fringe(Htgt)
     if g.dom !== Nsrc || g.cod !== Ntgt
-        g = PMorphism{QQ}(Nsrc, Ntgt, g.comps)
+        g = PMorphism{K}(Nsrc, Ntgt, g.comps)
     end
     resNsrc = isnothing(resN) ? injective_resolution(Nsrc, ResolutionOptions(maxlen=maxlen)) : resN
     resNtgt = isnothing(resN) ? injective_resolution(Ntgt, ResolutionOptions(maxlen=maxlen)) : resN
-    Rsrc = RHomComplex(C, Nsrc; maxlen=maxlen, resN=resNsrc)
-    Rtgt = RHomComplex(C, Ntgt; maxlen=maxlen, resN=resNtgt)
-    return rhom_map_second(g, Rsrc, Rtgt; check=check)
+    Rsrc = RHomComplex(C, Nsrc; maxlen=maxlen, resN=resNsrc, threads=threads)
+    Rtgt = RHomComplex(C, Ntgt; maxlen=maxlen, resN=resNtgt, threads=threads)
+    return rhom_map_second(g, Rsrc, Rtgt; check=check, threads=threads)
 end
 
 function rhom_map_second(
-    gH::FF.FringeModule{QQ},
-    C::ModuleCochainComplex{QQ},
-    Hsrc::FF.FringeModule{QQ},
-    Htgt::FF.FringeModule{QQ};
+    gH::FF.FringeModule{K},
+    C::ModuleCochainComplex{K},
+    Hsrc::FF.FringeModule{K},
+    Htgt::FF.FringeModule{K};
     maxlen::Int=3,
     resN=nothing,
     check::Bool=true,
-)
+    threads::Bool = (Threads.nthreads() > 1),
+) where {K}
     g = IndicatorResolutions.pmodule_from_fringe(gH)
-    return rhom_map_second(g, C, Hsrc, Htgt; maxlen=maxlen, resN=resN, check=check)
+    return rhom_map_second(g, C, Hsrc, Htgt; maxlen=maxlen, resN=resN, check=check, threads=threads)
 end
 
 
@@ -1215,12 +1340,12 @@ struct HyperExtSpace{K}
     cohom
 end
 
-function hyperExt(C::ModuleCochainComplex{QQ}, N::PModule{QQ}; kwargs...)
+function hyperExt(C::ModuleCochainComplex{K}, N::PModule{K}; kwargs...) where {K}
     R = RHomComplex(C,N; kwargs...)
-    return HyperExtSpace{QQ}(R, cohomology_data(R.tot))
+    return HyperExtSpace{K}(R, cohomology_data(R.tot))
 end
 
-function hyperExt(C::ModuleCochainComplex{QQ}, H::FF.FringeModule{QQ}; kwargs...)
+function hyperExt(C::ModuleCochainComplex{K}, H::FF.FringeModule{K}; kwargs...) where {K}
     return hyperExt(C, IR.pmodule_from_fringe(H); kwargs...)
 end
 
@@ -1272,12 +1397,12 @@ Here `Hcod = hyperExt(C,N)` and `Hdom = hyperExt(D,N)`.
 This is the mathematically expected contravariance in the first argument.
 """
 function hyperExt_map_first(
-    f::ModuleCochainMap{QQ},
-    Hcod::HyperExtSpace{QQ},
-    Hdom::HyperExtSpace{QQ};
+    f::ModuleCochainMap{K},
+    Hcod::HyperExtSpace{K},
+    Hdom::HyperExtSpace{K};
     t::Int,
     check::Bool = true
-)
+) where {K}
     Rmap = rhom_map_first(f, Hcod.R, Hdom.R; check=check)
     return induced_map_on_cohomology(Rmap, Hdom.cohom, Hcod.cohom, t)
 end
@@ -1295,12 +1420,12 @@ Here `Hsrc = hyperExt(C,N)` and `Htgt = hyperExt(C,Np)`.
 This is the mathematically expected covariance in the second argument.
 """
 function hyperExt_map_second(
-    g::PMorphism{QQ},
-    Hsrc::HyperExtSpace{QQ},
-    Htgt::HyperExtSpace{QQ};
+    g::PMorphism{K},
+    Hsrc::HyperExtSpace{K},
+    Htgt::HyperExtSpace{K};
     t::Int,
     check::Bool = true
-)
+) where {K}
     Rmap = rhom_map_second(g, Hsrc.R, Htgt.R; check=check)
     return induced_map_on_cohomology(Rmap, Hsrc.cohom, Htgt.cohom, t)
 end
@@ -1318,13 +1443,13 @@ struct DerivedTensorComplex{K}
 end
 
 function DerivedTensorComplex(
-    Rop::PModule{QQ},
-    C::ModuleCochainComplex{QQ};
+    Rop::PModule{K},
+    C::ModuleCochainComplex{K};
     maxlen::Int = 3,
     maxdeg::Int = C.tmax,
     threads::Bool = (Threads.nthreads() > 1),
     check::Bool = false,
-)
+) where {K}
     resR = projective_resolution(Rop, ResolutionOptions(maxlen=maxlen, minimal=true, check=check))
 
     # Double-complex bidegrees:
@@ -1338,8 +1463,8 @@ function DerivedTensorComplex(
     nb = bmax - bmin + 1
 
     dims = zeros(Int, na, nb)
-    dv = Array{SparseMatrixCSC{QQ, Int}}(undef, na, nb)
-    dh = Array{SparseMatrixCSC{QQ, Int}}(undef, na, nb)
+    dv = Array{SparseMatrixCSC{K, Int}}(undef, na, nb)
+    dh = Array{SparseMatrixCSC{K, Int}}(undef, na, nb)
 
     total_jobs = na * nb
 
@@ -1363,11 +1488,11 @@ function DerivedTensorComplex(
             dC = _diff(C, p)  # PMorphism Mp -> Mp1
             offs_cod = _offs_for_gens(Mp1, gens_a)
 
-            sgn = isodd(a) ? -QQ(1) : QQ(1)
+            sgn = isodd(a) ? -one(K) : one(K)
 
             Itrip = Int[]
             Jtrip = Int[]
-            Vtrip = QQ[]
+            Vtrip = K[]
             for (i, u) in enumerate(gens_a)
                 # Block: dC.comps[u] : Mp[u] -> Mp1[u]
                 _append_scaled_triplets!(
@@ -1381,7 +1506,7 @@ function DerivedTensorComplex(
             dv[ai, bi] = sparse(Itrip, Jtrip, Vtrip, offs_cod[end], offs_dom[end])
         else
             # Unused by total_complex at the top boundary (B == bmax), but keep typed.
-            dv[ai, bi] = spzeros(QQ, 0, offs_dom[end])
+            dv[ai, bi] = spzeros(K, 0, offs_dom[end])
         end
 
         # Horizontal differential: dh(A,B): (A,B) -> (A+1,B)
@@ -1393,7 +1518,7 @@ function DerivedTensorComplex(
 
             Itrip = Int[]
             Jtrip = Int[]
-            Vtrip = QQ[]
+            Vtrip = K[]
             for (i, u) in enumerate(gens_a)
                 for (j, v) in enumerate(gens_am1)
                     c = dP[j, i]
@@ -1411,7 +1536,7 @@ function DerivedTensorComplex(
             dh[ai, bi] = sparse(Itrip, Jtrip, Vtrip, offs_cod[end], offs_dom[end])
         else
             # Unused by total_complex at the right boundary (A == amax), but keep typed.
-            dh[ai, bi] = spzeros(QQ, 0, offs_dom[end])
+            dh[ai, bi] = spzeros(K, 0, offs_dom[end])
         end
 
         return nothing
@@ -1434,25 +1559,25 @@ function DerivedTensorComplex(
     DC = DoubleComplex(amin, amax, bmin, bmax, dims, dv, dh)
     tot = total_complex(DC)
 
-    return DerivedTensorComplex{QQ}(Rop, C, resR, DC, tot)
+    return DerivedTensorComplex{K}(Rop, C, resR, DC, tot)
 end
 
 
 
-DerivedTensor(Rop::PModule{QQ}, C::ModuleCochainComplex{QQ}; kwargs...) =
-    DerivedTensorComplex(Rop,C; kwargs...).tot
+DerivedTensor(Rop::PModule{K}, C::ModuleCochainComplex{K}; kwargs...) where {K} =
+    DerivedTensorComplex(Rop, C; kwargs...).tot
 
 struct HyperTorSpace{K}
     T::DerivedTensorComplex{K}
     cohom
 end
 
-function hyperTor(Rop::PModule{QQ}, C::ModuleCochainComplex{QQ}; kwargs...)
+function hyperTor(Rop::PModule{K}, C::ModuleCochainComplex{K}; kwargs...) where {K}
     T = DerivedTensorComplex(Rop,C; kwargs...)
-    return HyperTorSpace{QQ}(T, cohomology_data(T.tot))
+    return HyperTorSpace{K}(T, cohomology_data(T.tot))
 end
 
-function hyperTor(H::FF.FringeModule{QQ}, C::ModuleCochainComplex{QQ}; kwargs...)
+function hyperTor(H::FF.FringeModule{K}, C::ModuleCochainComplex{K}; kwargs...) where {K}
     return hyperTor(IR.pmodule_from_fringe(H), C; kwargs...)
 end
 
@@ -1506,45 +1631,45 @@ function degree_range(H::HyperTorSpace)
 end
 
 """
-    cycles(H::HyperTorSpace, n::Int) -> Matrix{QQ}
+    cycles(H::HyperTorSpace, n::Int) -> Matrix{K}
 
 Columns form a basis of the cycle space in the relevant total cochain degree
 `t = -n`. Returns a 0 times 0 matrix if `n` is outside `degree_range(H)`.
 """
 function cycles(H::HyperTorSpace, n::Int)
     if n < 0
-        return zeros(QQ, 0, 0)
+        return zeros(K, 0, 0)
     end
     t = -n
     tmin = H.T.tot.tmin
     tmax = H.T.tot.tmax
     if t < tmin || t > tmax
-        return zeros(QQ, 0, 0)
+        return zeros(K, 0, 0)
     end
     return H.cohom[t - tmin + 1].K
 end
 
 """
-    boundaries(H::HyperTorSpace, n::Int) -> Matrix{QQ}
+    boundaries(H::HyperTorSpace, n::Int) -> Matrix{K}
 
 Columns form a basis of the boundary space in the relevant total cochain degree
 `t = -n`. Returns a 0 times 0 matrix if `n` is outside `degree_range(H)`.
 """
 function boundaries(H::HyperTorSpace, n::Int)
     if n < 0
-        return zeros(QQ, 0, 0)
+        return zeros(K, 0, 0)
     end
     t = -n
     tmin = H.T.tot.tmin
     tmax = H.T.tot.tmax
     if t < tmin || t > tmax
-        return zeros(QQ, 0, 0)
+        return zeros(K, 0, 0)
     end
     return H.cohom[t - tmin + 1].B
 end
 
 """
-    representative(H::HyperTorSpace, n::Int, coords::AbstractVector{QQ}) -> Vector{QQ}
+    representative(H::HyperTorSpace, n::Int, coords::AbstractVector{K}) -> Vector{K}
 
 Given coordinates of a class in `hyperTor_n` with respect to the fixed basis,
 return a cocycle representative in total cochain degree `t = -n`.
@@ -1553,7 +1678,7 @@ Requirements:
 - `n` must lie in `degree_range(H)`.
 - `length(coords)` must equal `dim(H,n)`.
 """
-function representative(H::HyperTorSpace, n::Int, coords::AbstractVector{QQ})
+function representative(H::HyperTorSpace, n::Int, coords::AbstractVector{K}) where {K}
     if n < 0
         throw(DomainError(n, "Tor degree n must be nonnegative."))
     end
@@ -1572,12 +1697,12 @@ function representative(H::HyperTorSpace, n::Int, coords::AbstractVector{QQ})
 end
 
 """
-    coordinates(H::HyperTorSpace, n::Int, cocycle::AbstractVector{QQ}) -> Vector{QQ}
+    coordinates(H::HyperTorSpace, n::Int, cocycle::AbstractVector{K}) -> Vector{K}
 
 Compute coordinates of a cocycle representative in `hyperTor_n` relative to the
 fixed basis, via total cochain degree `t = -n`.
 """
-function coordinates(H::HyperTorSpace, n::Int, cocycle::AbstractVector{QQ})
+function coordinates(H::HyperTorSpace, n::Int, cocycle::AbstractVector{K}) where {K}
     if n < 0
         throw(DomainError(n, "Tor degree n must be nonnegative."))
     end
@@ -1593,24 +1718,24 @@ function coordinates(H::HyperTorSpace, n::Int, cocycle::AbstractVector{QQ})
 end
 
 """
-    basis(H::HyperTorSpace, n::Int) -> Vector{Vector{QQ}}
+    basis(H::HyperTorSpace, n::Int) -> Vector{Vector{K}}
 
 Return a list of cocycle representatives forming a basis of `hyperTor_n`.
 If `n` is outside `degree_range(H)` or `dim(H,n) == 0`, returns an empty vector.
 """
 function basis(H::HyperTorSpace, n::Int)
     if n < 0
-        return Vector{Vector{QQ}}()
+        return Vector{Vector{K}}()
     end
     t = -n
     tmin = H.T.tot.tmin
     tmax = H.T.tot.tmax
     if t < tmin || t > tmax
-        return Vector{Vector{QQ}}()
+        return Vector{Vector{K}}()
     end
     Hrep = H.cohom[t - tmin + 1].Hrep
     d = size(Hrep, 2)
-    B = Vector{Vector{QQ}}(undef, d)
+    B = Vector{Vector{K}}(undef, d)
     for i in 1:d
         B[i] = Hrep[:, i]
     end
@@ -1635,7 +1760,7 @@ This is the canonical iterator for graded-space queries:
 degree_range(H::HyperExtSpace) = H.R.tot.tmin:H.R.tot.tmax
 
 """
-    cycles(H::HyperExtSpace, t::Int) -> Matrix{QQ}
+    cycles(H::HyperExtSpace, t::Int) -> Matrix{K}
 
 Columns form a basis of the cycle space `ker(d^t)` inside the total cochain group
 in degree `t`. Returns a 0 times 0 matrix if `t` is outside `degree_range(H)`.
@@ -1644,13 +1769,13 @@ function cycles(H::HyperExtSpace, t::Int)
     tmin = H.R.tot.tmin
     tmax = H.R.tot.tmax
     if t < tmin || t > tmax
-        return zeros(QQ, 0, 0)
+        return zeros(K, 0, 0)
     end
     return H.cohom[t - tmin + 1].K
 end
 
 """
-    boundaries(H::HyperExtSpace, t::Int) -> Matrix{QQ}
+    boundaries(H::HyperExtSpace, t::Int) -> Matrix{K}
 
 Columns form a basis of the boundary space `im(d^(t-1))` inside the total cochain
 group in degree `t`. Returns a 0 times 0 matrix if `t` is outside `degree_range(H)`.
@@ -1659,13 +1784,13 @@ function boundaries(H::HyperExtSpace, t::Int)
     tmin = H.R.tot.tmin
     tmax = H.R.tot.tmax
     if t < tmin || t > tmax
-        return zeros(QQ, 0, 0)
+        return zeros(K, 0, 0)
     end
     return H.cohom[t - tmin + 1].B
 end
 
 """
-    representative(H::HyperExtSpace, t::Int, coords::AbstractVector{QQ}) -> Vector{QQ}
+    representative(H::HyperExtSpace, t::Int, coords::AbstractVector{K}) -> Vector{K}
 
 Given coordinates of a class in `HyperExt^t` with respect to the fixed basis
 chosen by `cohomology_data`, return a cocycle representative in the ambient
@@ -1675,7 +1800,7 @@ Requirements:
 - `t` must lie in `degree_range(H)`.
 - `length(coords)` must equal `dim(H,t)`.
 """
-function representative(H::HyperExtSpace, t::Int, coords::AbstractVector{QQ})
+function representative(H::HyperExtSpace, t::Int, coords::AbstractVector{K}) where {K}
     tmin = H.R.tot.tmin
     tmax = H.R.tot.tmax
     if t < tmin || t > tmax
@@ -1690,7 +1815,7 @@ function representative(H::HyperExtSpace, t::Int, coords::AbstractVector{QQ})
 end
 
 """
-    coordinates(H::HyperExtSpace, t::Int, cocycle::AbstractVector{QQ}) -> Vector{QQ}
+    coordinates(H::HyperExtSpace, t::Int, cocycle::AbstractVector{K}) -> Vector{K}
 
 Compute the coordinate vector of the cohomology class of `cocycle` in `HyperExt^t`,
 relative to the fixed basis chosen by `cohomology_data`.
@@ -1700,7 +1825,7 @@ Notes:
 - If `cocycle` is not a cocycle, the underlying solver may error or return
   coordinates for an implicitly projected class depending on consistency.
 """
-function coordinates(H::HyperExtSpace, t::Int, cocycle::AbstractVector{QQ})
+function coordinates(H::HyperExtSpace, t::Int, cocycle::AbstractVector{K}) where {K}
     tmin = H.R.tot.tmin
     tmax = H.R.tot.tmax
     if t < tmin || t > tmax
@@ -1712,7 +1837,7 @@ function coordinates(H::HyperExtSpace, t::Int, cocycle::AbstractVector{QQ})
 end
 
 """
-    basis(H::HyperExtSpace, t::Int) -> Vector{Vector{QQ}}
+    basis(H::HyperExtSpace, t::Int) -> Vector{Vector{K}}
 
 Return a list of cocycle representatives forming a basis of `HyperExt^t`.
 If `t` is outside `degree_range(H)` or `dim(H,t) == 0`, returns an empty vector.
@@ -1723,11 +1848,11 @@ function basis(H::HyperExtSpace, t::Int)
     tmin = H.R.tot.tmin
     tmax = H.R.tot.tmax
     if t < tmin || t > tmax
-        return Vector{Vector{QQ}}()
+        return Vector{Vector{K}}()
     end
     Hrep = H.cohom[t - tmin + 1].Hrep
     d = size(Hrep, 2)
-    B = Vector{Vector{QQ}}(undef, d)
+    B = Vector{Vector{K}}(undef, d)
     for i in 1:d
         B[i] = Hrep[:, i]
     end
@@ -1739,7 +1864,7 @@ end
 # Chain-level maps for derived tensor (covariant in both vars)
 # ============================================================
 
-@inline function _offs_for_gens(M::PModule{QQ}, gens::Vector{Int})
+@inline function _offs_for_gens(M::PModule{K}, gens::Vector{Int}) where {K}
     o = zeros(Int, length(gens) + 1)
     for i in 1:length(gens)
         u = gens[i]
@@ -1764,11 +1889,12 @@ Strict functoriality at the chain level uses the deterministic lift
 provided by `_lift_pmodule_map_to_projective_resolution_chainmap_coeff`.
 """
 function derived_tensor_map_first(
-    f::PMorphism{QQ},
-    Tdom::DerivedTensorComplex{QQ},
-    Tcod::DerivedTensorComplex{QQ};
-    check::Bool = true
-)
+    f::PMorphism{K},
+    Tdom::DerivedTensorComplex{K},
+    Tcod::DerivedTensorComplex{K};
+    check::Bool = true,
+    threads::Bool = (Threads.nthreads() > 1),
+) where {K}
     f.dom === Tdom.Rop || error("derived_tensor_map_first: f.dom must equal Tdom.Rop")
     f.cod === Tcod.Rop || error("derived_tensor_map_first: f.cod must equal Tcod.Rop")
     Tdom.C === Tcod.C || error("derived_tensor_map_first: complexes must be identical objects for strict functoriality")
@@ -1790,43 +1916,83 @@ function derived_tensor_map_first(
     # Assemble total cochain map degree-by-degree using block structure.
     tmin = min(Tdom.tot.tmin, Tcod.tot.tmin)
     tmax = max(Tdom.tot.tmax, Tcod.tot.tmax)
-    maps = Vector{SparseMatrixCSC{QQ,Int}}(undef, tmax - tmin + 1)
+    maps = Vector{SparseMatrixCSC{K,Int}}(undef, tmax - tmin + 1)
 
-    for t in tmin:tmax
-        off_dom = _tot_block_offsets(Tdom.DC, t)
-        off_cod = _tot_block_offsets(Tcod.DC, t)
-        dim_dom = _cc_dim_at(Tdom.tot, t)
-        dim_cod = _cc_dim_at(Tcod.tot, t)
+    if threads && Threads.nthreads() > 1 && (tmax >= tmin)
+        Threads.@threads for idx in 1:(tmax - tmin + 1)
+            t = tmin + idx - 1
+            off_dom = _tot_block_offsets(Tdom.DC, t)
+            off_cod = _tot_block_offsets(Tcod.DC, t)
+            dim_dom = _cc_dim_at(Tdom.tot, t)
+            dim_cod = _cc_dim_at(Tcod.tot, t)
 
-        I = Int[]; J = Int[]; V = QQ[]
+            I = Int[]; J = Int[]; V = K[]
 
-        for (key, col_off) in off_dom
-            haskey(off_cod, key) || continue
-            row_off = off_cod[key]
-            A, p = key
-            a = -A
-            (a < 0 || a > (length(Tdom.resR.Pmods) - 1)) && continue
-            (a < 0 || a > (length(Tcod.resR.Pmods) - 1)) && continue
+            for (key, col_off) in off_dom
+                haskey(off_cod, key) || continue
+                row_off = off_cod[key]
+                A, p = key
+                a = -A
+                (a < 0 || a > (length(Tdom.resR.Pmods) - 1)) && continue
+                (a < 0 || a > (length(Tcod.resR.Pmods) - 1)) && continue
 
-            Mp = _term(Tdom.C, p)
-            dom_gens = Tdom.resR.gens[a+1]
-            cod_gens = Tcod.resR.gens[a+1]
-            offs_dom = _offs_for_gens(Mp, dom_gens)
-            offs_cod = _offs_for_gens(Mp, cod_gens)
+                Mp = _term(Tdom.C, p)
+                dom_gens = Tdom.resR.gens[a+1]
+                cod_gens = Tcod.resR.gens[a+1]
+                offs_dom = _offs_for_gens(Mp, dom_gens)
+                offs_cod = _offs_for_gens(Mp, cod_gens)
 
-            block = _tensor_map_on_tor_chains_from_projective_coeff(
-                Mp, dom_gens, cod_gens, offs_dom, offs_cod, coeffs[a+1]
-            )
+                block = _tensor_map_on_tor_chains_from_projective_coeff(
+                    Mp, dom_gens, cod_gens, offs_dom, offs_cod, coeffs[a+1]
+                )
 
-            ii, jj, vv = findnz(block)
-            for k in eachindex(vv)
-                push!(I, row_off - 1 + ii[k])
-                push!(J, col_off - 1 + jj[k])
-                push!(V, vv[k])
+                ii, jj, vv = findnz(block)
+                for k in eachindex(vv)
+                    push!(I, row_off - 1 + ii[k])
+                    push!(J, col_off - 1 + jj[k])
+                    push!(V, vv[k])
+                end
             end
-        end
 
-        maps[t - tmin + 1] = sparse(I, J, V, dim_cod, dim_dom)
+            maps[idx] = sparse(I, J, V, dim_cod, dim_dom)
+        end
+    else
+        for t in tmin:tmax
+            off_dom = _tot_block_offsets(Tdom.DC, t)
+            off_cod = _tot_block_offsets(Tcod.DC, t)
+            dim_dom = _cc_dim_at(Tdom.tot, t)
+            dim_cod = _cc_dim_at(Tcod.tot, t)
+
+            I = Int[]; J = Int[]; V = K[]
+
+            for (key, col_off) in off_dom
+                haskey(off_cod, key) || continue
+                row_off = off_cod[key]
+                A, p = key
+                a = -A
+                (a < 0 || a > (length(Tdom.resR.Pmods) - 1)) && continue
+                (a < 0 || a > (length(Tcod.resR.Pmods) - 1)) && continue
+
+                Mp = _term(Tdom.C, p)
+                dom_gens = Tdom.resR.gens[a+1]
+                cod_gens = Tcod.resR.gens[a+1]
+                offs_dom = _offs_for_gens(Mp, dom_gens)
+                offs_cod = _offs_for_gens(Mp, cod_gens)
+
+                block = _tensor_map_on_tor_chains_from_projective_coeff(
+                    Mp, dom_gens, cod_gens, offs_dom, offs_cod, coeffs[a+1]
+                )
+
+                ii, jj, vv = findnz(block)
+                for k in eachindex(vv)
+                    push!(I, row_off - 1 + ii[k])
+                    push!(J, col_off - 1 + jj[k])
+                    push!(V, vv[k])
+                end
+            end
+
+            maps[t - tmin + 1] = sparse(I, J, V, dim_cod, dim_dom)
+        end
     end
 
     return CochainMap(Tdom.tot, Tcod.tot, maps; tmin=tmin, tmax=tmax, check=check)
@@ -1852,11 +2018,12 @@ projective resolution object (or at least same gens ordering). Here we
 require identical gens lists for safety.
 """
 function derived_tensor_map_second(
-    g::ModuleCochainMap{QQ},
-    Tsrc::DerivedTensorComplex{QQ},
-    Ttgt::DerivedTensorComplex{QQ};
-    check::Bool = true
-)
+    g::ModuleCochainMap{K},
+    Tsrc::DerivedTensorComplex{K},
+    Ttgt::DerivedTensorComplex{K};
+    check::Bool = true,
+    threads::Bool = (Threads.nthreads() > 1),
+) where {K}
     g.C === Tsrc.C || error("derived_tensor_map_second: g.C must equal Tsrc.C")
     g.D === Ttgt.C || error("derived_tensor_map_second: g.D must equal Ttgt.C")
     Tsrc.Rop === Ttgt.Rop || error("derived_tensor_map_second: right modules must match")
@@ -1864,52 +2031,101 @@ function derived_tensor_map_second(
 
     tmin = min(Tsrc.tot.tmin, Ttgt.tot.tmin)
     tmax = max(Tsrc.tot.tmax, Ttgt.tot.tmax)
-    maps = Vector{SparseMatrixCSC{QQ,Int}}(undef, tmax - tmin + 1)
+    maps = Vector{SparseMatrixCSC{K,Int}}(undef, tmax - tmin + 1)
 
-    for t in tmin:tmax
-        off_src = _tot_block_offsets(Tsrc.DC, t)
-        off_tgt = _tot_block_offsets(Ttgt.DC, t)
-        dim_src = _cc_dim_at(Tsrc.tot, t)
-        dim_tgt = _cc_dim_at(Ttgt.tot, t)
+    if threads && Threads.nthreads() > 1 && (tmax >= tmin)
+        Threads.@threads for idx in 1:(tmax - tmin + 1)
+            t = tmin + idx - 1
+            off_src = _tot_block_offsets(Tsrc.DC, t)
+            off_tgt = _tot_block_offsets(Ttgt.DC, t)
+            dim_src = _cc_dim_at(Tsrc.tot, t)
+            dim_tgt = _cc_dim_at(Ttgt.tot, t)
 
-        I = Int[]; J = Int[]; V = QQ[]
+            I = Int[]; J = Int[]; V = K[]
 
-        for (key, col_off) in off_src
-            haskey(off_tgt, key) || continue
-            row_off = off_tgt[key]
-            A, p = key
-            a = -A
-            (a < 0 || a > (length(Tsrc.resR.Pmods) - 1)) && continue
+            for (key, col_off) in off_src
+                haskey(off_tgt, key) || continue
+                row_off = off_tgt[key]
+                A, p = key
+                a = -A
+                (a < 0 || a > (length(Tsrc.resR.Pmods) - 1)) && continue
 
-            Mp = _term(Tsrc.C, p)
-            Mp1 = _term(Ttgt.C, p)
-            gp = _map(g, p)
-            gens = Tsrc.resR.gens[a+1]
+                Mp = _term(Tsrc.C, p)
+                Mp1 = _term(Ttgt.C, p)
+                gp = _map(g, p)
+                gens = Tsrc.resR.gens[a+1]
 
-            offs_dom = _offs_for_gens(Mp, gens)
-            offs_cod = _offs_for_gens(Mp1, gens)
+                offs_dom = _offs_for_gens(Mp, gens)
+                offs_cod = _offs_for_gens(Mp1, gens)
 
-            # Sparse block-diagonal assembly
-            for (i,u) in enumerate(gens)
-                row0 = offs_cod[i]
-                col0 = offs_dom[i]
-                block = gp.comps[u]
-                nr = size(block, 1)
-                nc = size(block, 2)
-                for r in 1:nr
-                    for c in 1:nc
-                        x = block[r,c]
-                        if x != 0
-                            push!(I, row_off - 1 + row0 + r)
-                            push!(J, col_off - 1 + col0 + c)
-                            push!(V, x)
+                # Sparse block-diagonal assembly
+                for (i,u) in enumerate(gens)
+                    row0 = offs_cod[i]
+                    col0 = offs_dom[i]
+                    block = gp.comps[u]
+                    nr = size(block, 1)
+                    nc = size(block, 2)
+                    for r in 1:nr
+                        for c in 1:nc
+                            x = block[r,c]
+                            if x != 0
+                                push!(I, row_off - 1 + row0 + r)
+                                push!(J, col_off - 1 + col0 + c)
+                                push!(V, x)
+                            end
                         end
                     end
                 end
             end
-        end
 
-        maps[t - tmin + 1] = sparse(I, J, V, dim_tgt, dim_src)
+            maps[idx] = sparse(I, J, V, dim_tgt, dim_src)
+        end
+    else
+        for t in tmin:tmax
+            off_src = _tot_block_offsets(Tsrc.DC, t)
+            off_tgt = _tot_block_offsets(Ttgt.DC, t)
+            dim_src = _cc_dim_at(Tsrc.tot, t)
+            dim_tgt = _cc_dim_at(Ttgt.tot, t)
+
+            I = Int[]; J = Int[]; V = K[]
+
+            for (key, col_off) in off_src
+                haskey(off_tgt, key) || continue
+                row_off = off_tgt[key]
+                A, p = key
+                a = -A
+                (a < 0 || a > (length(Tsrc.resR.Pmods) - 1)) && continue
+
+                Mp = _term(Tsrc.C, p)
+                Mp1 = _term(Ttgt.C, p)
+                gp = _map(g, p)
+                gens = Tsrc.resR.gens[a+1]
+
+                offs_dom = _offs_for_gens(Mp, gens)
+                offs_cod = _offs_for_gens(Mp1, gens)
+
+                # Sparse block-diagonal assembly
+                for (i,u) in enumerate(gens)
+                    row0 = offs_cod[i]
+                    col0 = offs_dom[i]
+                    block = gp.comps[u]
+                    nr = size(block, 1)
+                    nc = size(block, 2)
+                    for r in 1:nr
+                        for c in 1:nc
+                            x = block[r,c]
+                            if x != 0
+                                push!(I, row_off - 1 + row0 + r)
+                                push!(J, col_off - 1 + col0 + c)
+                                push!(V, x)
+                            end
+                        end
+                    end
+                end
+            end
+
+            maps[t - tmin + 1] = sparse(I, J, V, dim_tgt, dim_src)
+        end
     end
 
     return CochainMap(Tsrc.tot, Ttgt.tot, maps; tmin=tmin, tmax=tmax, check=check)
@@ -1932,12 +2148,12 @@ Here `Hdom = hyperTor(Rop, C)` and `Hcod = hyperTor(Rop', C)`.
 Convention: Tor_n = H^{-n}(Tot).
 """
 function hyperTor_map_first(
-    f::PMorphism{QQ},
-    Hdom::HyperTorSpace{QQ},
-    Hcod::HyperTorSpace{QQ};
+    f::PMorphism{K},
+    Hdom::HyperTorSpace{K},
+    Hcod::HyperTorSpace{K};
     n::Int,
     check::Bool = true
-)
+) where {K}
     Tmap = derived_tensor_map_first(f, Hdom.T, Hcod.T; check=check)
     return induced_map_on_cohomology(Tmap, Hdom.cohom, Hcod.cohom, -n)
 end
@@ -1955,12 +2171,12 @@ Here `Hsrc = hyperTor(Rop, C)` and `Htgt = hyperTor(Rop, C')`.
 Convention: Tor_n = H^{-n}(Tot).
 """
 function hyperTor_map_second(
-    g::ModuleCochainMap{QQ},
-    Hsrc::HyperTorSpace{QQ},
-    Htgt::HyperTorSpace{QQ};
+    g::ModuleCochainMap{K},
+    Hsrc::HyperTorSpace{K},
+    Htgt::HyperTorSpace{K};
     n::Int,
     check::Bool = true
-)
+) where {K}
     Tmap = derived_tensor_map_second(g, Hsrc.T, Htgt.T; check=check)
     return induced_map_on_cohomology(Tmap, Hsrc.cohom, Htgt.cohom, -n)
 end

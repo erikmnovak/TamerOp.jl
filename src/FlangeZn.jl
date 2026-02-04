@@ -1,13 +1,15 @@
 module FlangeZn
 
 using LinearAlgebra
-using ..CoreModules: QQ
-
-import ..ExactQQ: rankQQ
+using ..CoreModules: QQ, AbstractCoeffField, coeff_type, field_from_eltype, QQField, coerce
+using ..CoreModules.CoeffFields: zeros
+import ..FieldLinAlg
+import ..CoreModules: change_field
 
 export Face, face,
        IndFlat, IndInj,
        Flange,
+       change_field,
        canonical_matrix,
        active_flats, active_injectives,
        degree_matrix, dim_at,
@@ -345,18 +347,21 @@ The matrix `phi` is interpreted fiberwise: at a point `g in Z^n`, the active
 injectives/active flats determine a submatrix, and the fiberwise "dimension" is
 the rank of that submatrix.
 """
-struct Flange{K}
+struct Flange{K, F<:AbstractCoeffField}
+    field::F
     n::Int
     flats::Vector{IndFlat}
     injectives::Vector{IndInj}
     phi::Matrix{K}
 
-    function Flange{K}(
+    function Flange{K,F}(
+        field::F,
         n::Int,
         flats::Vector{IndFlat},
         injectives::Vector{IndInj},
         phi::AbstractMatrix{K},
-    ) where {K}
+    ) where {K, F<:AbstractCoeffField}
+        coeff_type(field) == K || error("Flange: coeff_type(field) != K")
         Phi = Matrix{K}(phi)
         if size(Phi, 1) != length(injectives) || size(Phi, 2) != length(flats)
             error(
@@ -370,36 +375,49 @@ struct Flange{K}
         @inbounds for i in 1:length(injectives)
             E = injectives[i]
             for j in 1:length(flats)
-                F = flats[j]
-                if !intersects(F, E)
+                Fflat = flats[j]
+                if !intersects(Fflat, E)
                     Phi[i, j] = zero(K)
                 end
             end
         end
 
-        return new{K}(n, flats, injectives, Phi)
+        return new{K,F}(field, n, flats, injectives, Phi)
     end
 end
 
 # Outer constructors for convenience.
-function Flange{K}(n::Int, flats::Vector{IndFlat}, injectives::Vector{IndInj}, phi::AbstractMatrix) where {K}
-    return Flange{K}(n, flats, injectives, Matrix{K}(phi))
+function Flange{K}(n::Int, flats::Vector{IndFlat}, injectives::Vector{IndInj}, phi::AbstractMatrix;
+                   field::AbstractCoeffField=field_from_eltype(K)) where {K}
+    return Flange{K, typeof(field)}(field, n, flats, injectives, Matrix{K}(phi))
 end
 
-function Flange{K}(n::Int, flats::Vector{IndFlat}, injectives::Vector{IndInj}, phi::AbstractVector) where {K}
+function Flange{K}(n::Int, flats::Vector{IndFlat}, injectives::Vector{IndInj}, phi::AbstractVector;
+                   field::AbstractCoeffField=field_from_eltype(K)) where {K}
     Phi = reshape(collect(phi), length(injectives), length(flats))
-    return Flange{K}(n, flats, injectives, Phi)
+    return Flange{K, typeof(field)}(field, n, flats, injectives, Phi)
 end
 
-function Flange(n::Int, flats::Vector{IndFlat}, injectives::Vector{IndInj}, phi::AbstractMatrix{K}) where {K}
-    return Flange{K}(n, flats, injectives, phi)
+function Flange(n::Int, flats::Vector{IndFlat}, injectives::Vector{IndInj}, phi::AbstractMatrix{K};
+                field::AbstractCoeffField=field_from_eltype(K)) where {K}
+    return Flange{K, typeof(field)}(field, n, flats, injectives, phi)
 end
 
 
-"""Convert a flange over an arbitrary coefficient type to a flange over QQ."""
-function toQQ(FG::Flange{K}) where {K}
-    return Flange{QQ}(FG.n, FG.flats, FG.injectives, QQ.(FG.phi))
+"""
+    change_field(FG, field)
+
+Return a flange obtained by coercing `FG.phi` into the target coefficient field.
+"""
+function change_field(FG::Flange{K}, field::AbstractCoeffField) where {K}
+    K2 = coeff_type(field)
+    Phi = Matrix{K2}(undef, size(FG.phi, 1), size(FG.phi, 2))
+    @inbounds for j in 1:size(Phi, 2), i in 1:size(Phi, 1)
+        Phi[i, j] = coerce(field, FG.phi[i, j])
+    end
+    return Flange{K2, typeof(field)}(field, FG.n, FG.flats, FG.injectives, Phi)
 end
+
 
 # Convenience wrappers accepting a flange directly.
 active_flats(FG::Flange, g::Vector{Int}) = active_flats(FG.flats, g)
@@ -420,7 +438,7 @@ function degree_matrix(FG::Flange{K}, g::Vector{Int}) where {K}
 
     # Convention: if either side is empty at g, treat the local matrix as empty.
     if isempty(rows) || isempty(cols)
-        return (zeros(K, 0, 0), Int[], Int[])
+        return (zeros(FG.field, 0, 0), Int[], Int[])
     end
 
     return (FG.phi[rows, cols], rows, cols)
@@ -433,7 +451,8 @@ Fiberwise dimension of a flange at `g`.
 
 By convention this is the rank of the local submatrix `Phi_g`.
 """
-function dim_at(FG::Flange{K}, g::Vector{Int}; rankfun = rank) where {K}
+function dim_at(FG::Flange{K}, g::Vector{Int};
+                rankfun = A -> FieldLinAlg.rank(FG.field, A)) where {K}
     Phi_g, _, _ = degree_matrix(FG, g)
     if isempty(Phi_g)
         return 0
@@ -530,8 +549,8 @@ end
 # Helper: check whether w is a scalar multiple of v (including the all-zero case).
 #
 # This is used only inside `minimize`, where coefficients are expected to live in
-# a field (e.g. QQ). If you work over a non-field coefficient type, you may want
-# to disable minimization or replace this proportionality test.
+# a field. If you work over a non-field coefficient type, you may want to disable
+# minimization or replace this proportionality test.
 function _is_proportional(v, w)::Bool
     if _is_zero_vec(v)
         return _is_zero_vec(w)
@@ -655,15 +674,17 @@ can intersect.
 
 This is useful for constructing small example flanges.
 """
-function canonical_matrix(flats::Vector{IndFlat}, injectives::Vector{IndInj})
+function canonical_matrix(flats::Vector{IndFlat}, injectives::Vector{IndInj};
+                          field::AbstractCoeffField = QQField())
     m = length(injectives)
     n = length(flats)
-    A = zeros(QQ, m, n)
+    A = zeros(field, m, n)
+    K = coeff_type(field)
 
     for (i, E) in enumerate(injectives)
         for (j, F) in enumerate(flats)
             if intersects(F, E)
-                A[i, j] = QQ(1)
+                A[i, j] = one(K)
             end
         end
     end
@@ -720,30 +741,28 @@ struct AxisFringe{TU,TD,TF}
 
 "Translate Zn indecomposables to axis-aligned PL up/down sets for cross-checking."
 function flange_to_axis(fr::Flange{K}) where {K}
-    # Keep everything over QQ to avoid floating-point artifacts.
     n = fr.n
-    births = AxisUpset{QQ}[]
+    births = AxisUpset{Int}[]
     for F in fr.flats
-        a = Vector{QQ}(undef, n)
+        a = Vector{Int}(undef, n)
         for i in 1:n
             # When F.tau.coords[i] is true (free coordinate), a[i] is never read.
-            # We still store a QQ value to keep the vector concrete.
-            a[i] = QQ(F.b[i])
+            # We still store an Int value to keep the vector concrete.
+            a[i] = F.b[i]
         end
-        push!(births, AxisUpset{QQ}(a, BitVector(F.tau.coords)))
+        push!(births, AxisUpset{Int}(a, BitVector(F.tau.coords)))
     end
-    deaths = AxisDownset{QQ}[]
+    deaths = AxisDownset{Int}[]
     for E in fr.injectives
-        b = Vector{QQ}(undef, n)
+        b = Vector{Int}(undef, n)
         for i in 1:n
             # Same comment as above: b[i] is ignored when the coordinate is free.
-            b[i] = QQ(E.b[i])
+            b[i] = E.b[i]
         end
-        push!(deaths, AxisDownset{QQ}(b, BitVector(E.tau.coords)))
+        push!(deaths, AxisDownset{Int}(b, BitVector(E.tau.coords)))
     end
-    # DO NOT coerce Phi to Float64; keep it exact over QQ.
-    Phi = Matrix{QQ}(fr.phi)
-    return AxisFringe{QQ,QQ,QQ}(n, births, deaths, Phi)
+    Phi = Matrix{K}(fr.phi)
+    return AxisFringe{Int,Int,K}(n, births, deaths, Phi)
 end
 
 "Test membership of a lattice point x in an axis-aligned upset or downset (generic and exact)."
@@ -753,31 +772,31 @@ _contains(D::AxisDownset{T}, x::Vector{T}) where {T} =
     all(D.free[i] || (x[i] <= D.b[i]) for i in 1:length(x))
 
 """
-    cross_validate(fr::Flange; margin=1, rankfun=rankQQ)
+    cross_validate(fr::Flange; margin=1, rankfun=(A)->FieldLinAlg.rank(fr.field, A))
 
 1. Build the convex-projection box [a,b] (heuristic 'bounding_box').
 2. Evaluate 'dim M_g' for all integer 'g in [a,b]' via the flange.
 3. Build an axis-aligned proxy and evaluate the same lattice points.
 4. Compare; return '(all_equal?, report::Dict)'.
 """
-function cross_validate(fr::Flange; margin=1, rankfun=rankQQ)
+function cross_validate(fr::Flange; margin=1,
+                        rankfun = A -> FieldLinAlg.rank(fr.field, A))
     a, b = bounding_box(fr; margin)
     ranges = (a[i]:b[i] for i in 1:fr.n)
     pts = collect(Iterators.product(ranges...))
 
-    # Flange evaluation (exact over QQ if rankfun = rankQQ).
+    # Flange evaluation (use provided rank function).
     dims_Z = Dict{Tuple{Vararg{Int}}, Int}()
     for t in pts
         g = collect(Int.(t))
         dims_Z[Tuple(g...)] = dim_at(fr, g; rankfun=rankfun)
     end
 
-    # Axis-aligned proxy (stay exact; compare apples-to-apples with the flange)
+    # Axis-aligned proxy (compare apples-to-apples with the flange)
     afr = flange_to_axis(fr)
     dims_PL = Dict{Tuple{Vararg{Int}}, Int}()
     for t in pts
-        # Use rationals for coordinates to make membership tests exact.
-        x = QQ.(collect(Int.(t)))
+        x = collect(Int.(t))
         rows = [ _contains(d, x) for d in afr.deaths ]
         cols = [ _contains(u, x) for u in afr.births ]
         idxr = findall(identity, rows)

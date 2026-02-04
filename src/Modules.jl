@@ -1,7 +1,8 @@
 module Modules
 
 using SparseArrays, LinearAlgebra
-using ..CoreModules: QQ, ModuleOptions
+using ..CoreModules: QQ, ModuleOptions, AbstractCoeffField, coeff_type, field_from_eltype, eye, coerce
+import ..CoreModules: change_field
 import ..FiniteFringe
 import ..FiniteFringe: AbstractPoset, FinitePoset, cover_edges, leq, nvertices
 import Base.Threads
@@ -9,12 +10,14 @@ import Base.Threads
 
 export PModule, PMorphism,
        ModuleOptions,
+       change_field,
        zero_pmodule, zero_morphism, direct_sum, direct_sum_with_maps, map_leq
 
 """
     CoverCache(Q)
 
 An internal cache for poset cover data and a hot-path memo used by `map_leq`.
+This cache is stored lazily on each poset object (via `PosetCache`).
 
 Thread-safety:
 
@@ -39,49 +42,54 @@ struct CoverCache
     nedges::Int
 end
 
+mutable struct PosetCache
+    cover::Union{Nothing,CoverCache}
+    lock::Base.ReentrantLock
+    upsets::Union{Nothing,Vector{Vector{Int}}}
+    downsets::Union{Nothing,Vector{Vector{Int}}}
+    PosetCache() = new(nothing, Base.ReentrantLock(), nothing, nothing)
+end
 
-const _COVER_CACHE_MEMO = IdDict{AbstractPoset, CoverCache}()
-
-# Global memo table is shared across threads: must be protected.
-const _COVER_CACHE_LOCK = Base.ReentrantLock()
-
-function cover_cache(Q::AbstractPoset)
-    # Access to IdDict must be locked if there may be concurrent writers.
-    Base.lock(_COVER_CACHE_LOCK)
-    cc = get(_COVER_CACHE_MEMO, Q, nothing)
-    Base.unlock(_COVER_CACHE_LOCK)
-
-    if cc === nothing
-        # Build outside the lock to avoid blocking other threads on heavy work.
-        newcc = _cover_cache(Q)
-
-        Base.lock(_COVER_CACHE_LOCK)
-        cc = get(_COVER_CACHE_MEMO, Q, nothing)
-        if cc === nothing
-            _COVER_CACHE_MEMO[Q] = newcc
-            cc = newcc
+function get_cover_cache(Q::AbstractPoset)
+    if hasproperty(Q, :cache)
+        pc = getproperty(Q, :cache)
+        if pc isa PosetCache
+            if pc.cover === nothing
+                Base.lock(pc.lock)
+                if pc.cover === nothing
+                    pc.cover = _build_cover_cache(Q)
+                end
+                Base.unlock(pc.lock)
+            end
+            return pc.cover
         end
-        Base.unlock(_COVER_CACHE_LOCK)
     end
-
-    return cc
+    error("get_cover_cache: poset type $(typeof(Q)) does not support caching")
 end
 
-"""
-    clear_cover_cache!()
+warm_cache!(Q::AbstractPoset) = (get_cover_cache(Q); Q)
 
-Clear the global `cover_cache` memo table.
+cover_cache(Q::AbstractPoset) = get_cover_cache(Q)
 
-This is mostly useful in tests or benchmarks; it is safe to call in a threaded
-session.
 """
-function clear_cover_cache!()
-    Base.lock(_COVER_CACHE_LOCK)
-    empty!(_COVER_CACHE_MEMO)
-    Base.unlock(_COVER_CACHE_LOCK)
-    empty!(FiniteFringe._COVER_EDGES_OBJ_CACHE)
-    return nothing
+    clear_cover_cache!(Q)
+
+Clear the cached cover data stored on a poset object.
+"""
+function clear_cover_cache!(Q::AbstractPoset)
+    if hasproperty(Q, :cache)
+        pc = getproperty(Q, :cache)
+        if pc isa PosetCache
+            pc.cover = nothing
+            pc.upsets = nothing
+            pc.downsets = nothing
+            return nothing
+        end
+    end
+    error("clear_cover_cache!: poset type $(typeof(Q)) does not support caching")
 end
+
+#
 
 # Packs two Int32-ish values into a UInt64 for faster Dict keys.
 # This is used both here and in the `CoverCache.chain_parent` hot-path memo.
@@ -89,7 +97,7 @@ end
     return (UInt64(u) << 32) | UInt64(v)
 end
 
-function _cover_cache(Q::AbstractPoset)
+function _build_cover_cache(Q::AbstractPoset)
     # Cache enough to quickly traverse the cover graph and to build edge-indexed stores.
 
     # Cover edges in Q (stores both Ce.edges and Ce.mat).
@@ -135,7 +143,6 @@ function _cover_cache(Q::AbstractPoset)
 
     return CoverCache(Q, C, succs, preds, chain_parent, nedges)
 end
-
 
 # Thread-local accessor for the hot-path memo dict.
 @inline function _chain_parent_dict(cc::CoverCache)::Dict{UInt64, Int}
@@ -417,7 +424,8 @@ A `PModule` is a functor `Q -> Vec_K` specified by:
 For performance, cover-edge maps are stored in a `CoverEdgeMapStore`,
 aligned with the cover graph, rather than in a dictionary keyed by `(u,v)`.
 """
-struct PModule{K,MatT<:AbstractMatrix{K}}
+struct PModule{K,F<:AbstractCoeffField,MatT<:AbstractMatrix{K}}
+    field::F
     Q::AbstractPoset
     dims::Vector{Int}
     edge_maps::CoverEdgeMapStore{K,MatT}
@@ -440,42 +448,49 @@ any mapping supporting `(u,v)` keys. Missing cover maps become zero maps.
 """
 function PModule{K}(Q::AbstractPoset, dims::Vector{Int}, edge_maps;
                     check_sizes::Bool=true,
-                    opts::Union{ModuleOptions,Nothing}=nothing) where {K}
+                    opts::Union{ModuleOptions,Nothing}=nothing,
+                    field::AbstractCoeffField=field_from_eltype(K)) where {K}
     if opts !== nothing
         check_sizes == true || error("PModule: pass either check_sizes or opts, not both.")
         check_sizes = opts.check_sizes
     end
+    coeff_type(field) == K || error("PModule: coeff_type(field) != K")
     MatT = _pmodule_mat_type(K, edge_maps)
     store = CoverEdgeMapStore{K,MatT}(Q, dims, edge_maps; check_sizes=check_sizes)
-    return PModule{K,MatT}(Q, dims, store)
+    return PModule{K, typeof(field), MatT}(field, Q, dims, store)
 end
 
 # rebase existing store to this poset (important for ChangeOfPosets)
 function PModule{K}(Q::AbstractPoset, dims::Vector{Int}, store::CoverEdgeMapStore{K,MatT};
                     check_sizes::Bool=true,
-                    opts::Union{ModuleOptions,Nothing}=nothing) where {K,MatT<:AbstractMatrix{K}}
+                    opts::Union{ModuleOptions,Nothing}=nothing,
+                    field::AbstractCoeffField=field_from_eltype(K)) where {K,MatT<:AbstractMatrix{K}}
     if opts !== nothing
         check_sizes == true || error("PModule: pass either check_sizes or opts, not both.")
         check_sizes = opts.check_sizes
     end
-    cc = _cover_cache(Q)
+    cc = get_cover_cache(Q)
     if store.preds === cc.preds && store.succs === cc.succs
-        return PModule{K,MatT}(Q, dims, store)
+        coeff_type(field) == K || error("PModule: coeff_type(field) != K")
+        return PModule{K, typeof(field), MatT}(field, Q, dims, store)
     end
     new_store = CoverEdgeMapStore{K,MatT}(Q, dims, store; cache=cc, check_sizes=check_sizes)
-    return PModule{K,MatT}(Q, dims, new_store)
+    coeff_type(field) == K || error("PModule: coeff_type(field) != K")
+    return PModule{K, typeof(field), MatT}(field, Q, dims, new_store)
 end
 
 # infer coefficient type from first map
 function PModule(Q::AbstractPoset, dims::Vector{Int}, edge_maps;
                  check_sizes::Bool=true,
-                 opts::Union{ModuleOptions,Nothing}=nothing)
+                 opts::Union{ModuleOptions,Nothing}=nothing,
+                 field::Union{AbstractCoeffField,Nothing}=nothing)
     if opts !== nothing
         check_sizes == true || error("PModule: pass either check_sizes or opts, not both.")
         check_sizes = opts.check_sizes
     end
     for (_, A) in edge_maps
-        return PModule{eltype(A)}(Q, dims, edge_maps; check_sizes=check_sizes)
+        return PModule{eltype(A)}(Q, dims, edge_maps; check_sizes=check_sizes,
+                                  field=field === nothing ? field_from_eltype(eltype(A)) : field)
     end
     error("Cannot infer coefficient type K from empty edge_maps; use PModule{K}(...)")
 end
@@ -500,21 +515,84 @@ function dim_at(M::PModule{K}, q::Integer) where {K}
     return M.dims[Int(q)]
 end
 
+# ----------------------------
+# Field coercion helpers
+# ----------------------------
+
+function _coerce_matrix(field::AbstractCoeffField, A::AbstractMatrix{K}) where {K}
+    K2 = coeff_type(field)
+    if A isa SparseMatrixCSC{K,Int}
+        S = spzeros(K2, size(A, 1), size(A, 2))
+        @inbounds for j in 1:size(A, 2)
+            for idx in A.colptr[j]:(A.colptr[j + 1] - 1)
+                i = A.rowval[idx]
+                S[i, j] = coerce(field, A.nzval[idx])
+            end
+        end
+        return S
+    end
+
+    M = Matrix{K2}(undef, size(A, 1), size(A, 2))
+    @inbounds for j in 1:size(A, 2), i in 1:size(A, 1)
+        M[i, j] = coerce(field, A[i, j])
+    end
+    return M
+end
+
+"""
+    change_field(M, field)
+
+Return a P-module obtained by coercing all structure maps into `field`.
+"""
+function change_field(M::PModule{K}, field::AbstractCoeffField) where {K}
+    K2 = coeff_type(field)
+    edge = Dict{Tuple{Int,Int}, AbstractMatrix{K2}}()
+    sizehint!(edge, length(M.edge_maps))
+    for ((u, v), A) in M.edge_maps
+        edge[(u, v)] = _coerce_matrix(field, A)
+    end
+    return PModule{K2}(M.Q, M.dims, edge; field=field)
+end
+
 "Vertexwise morphism of P-modules (components are M_i \to N_i)."
-struct PMorphism{K}
-    dom::PModule{K}
-    cod::PModule{K}
+struct PMorphism{K, F<:AbstractCoeffField}
+    dom::PModule{K,F}
+    cod::PModule{K,F}
     comps::Vector{Matrix{K}}   # comps[i] :: Matrix{K} of size cod.dims[i] \times dom.dims[i]
 end
 
+function PMorphism{K}(dom::PModule{K,F}, cod::PModule{K,F}, comps::Vector{Matrix{K}}) where {K,F}
+    dom.field == cod.field || error("PMorphism: field mismatch")
+    return PMorphism{K,F}(dom, cod, comps)
+end
+
+PMorphism(dom::PModule{K,F}, cod::PModule{K,F}, comps::Vector{Matrix{K}}) where {K,F} =
+    PMorphism{K,F}(dom, cod, comps)
+
+"""
+    change_field(f, field)
+
+Return a PMorphism obtained by coercing domain, codomain, and components into `field`.
+"""
+function change_field(f::PMorphism{K}, field::AbstractCoeffField) where {K}
+    dom2 = change_field(f.dom, field)
+    cod2 = change_field(f.cod, field)
+    K2 = coeff_type(field)
+    comps2 = Vector{Matrix{K2}}(undef, length(f.comps))
+    @inbounds for i in 1:length(f.comps)
+        comps2[i] = _coerce_matrix(field, f.comps[i])
+    end
+    return PMorphism{K2, typeof(field)}(dom2, cod2, comps2)
+end
+
 "Identity morphism."
-id_morphism(M::PModule{K}) where {K} =
-    PMorphism{K}(M, M, [Matrix{K}(I, M.dims[i], M.dims[i]) for i in 1:length(M.dims)])
+id_morphism(M::PModule{K,F}) where {K,F} =
+    PMorphism{K,F}(M, M, [eye(M.field, M.dims[i]) for i in 1:length(M.dims)])
 
 
     
 function _predecessors(Q::AbstractPoset)
-    return _cover_cache(Q).preds
+    return get_cover_cache(Q).preds
 end
 
 
@@ -523,16 +601,17 @@ end
 # ----------------------------
 
 """
-    zero_pmodule(Q::AbstractPoset, ::Type{K}=QQ)
+    zero_pmodule(Q::AbstractPoset; field=QQField())
 
 The zero P-module on a finite poset Q (all stalks 0 and all structure maps 0).
 """
-function zero_pmodule(Q::AbstractPoset, ::Type{K}=QQ) where {K}
+function zero_pmodule(Q::AbstractPoset; field::AbstractCoeffField=QQField())
+    K = coeff_type(field)
     edge = Dict{Tuple{Int,Int}, Matrix{K}}()
     for (u,v) in cover_edges(Q)
         edge[(u,v)] = zeros(K, 0, 0)
     end
-    return PModule{K}(Q, zeros(Int, nvertices(Q)), edge)
+    return PModule{K}(Q, zeros(Int, nvertices(Q)), edge; field=field)
 end
 
 """
@@ -543,12 +622,13 @@ Zero morphism M -> N.
 function zero_morphism(M::PModule{K}, N::PModule{K}) where {K}
     Q = M.Q
     @assert N.Q === Q
+    M.field == N.field || error("zero_morphism: field mismatch")
     n = nvertices(Q)
     comps = Vector{Matrix{K}}(undef, n)
     for i in 1:n
         comps[i] = zeros(K, N.dims[i], M.dims[i])
     end
-    return PMorphism{K}(M, N, comps)
+    return PMorphism{K, typeof(M.field)}(M, N, comps)
 end
 
 """
@@ -560,6 +640,7 @@ function direct_sum(A::PModule{K}, B::PModule{K}) where {K}
     Q = A.Q
     n = nvertices(Q)
     @assert B.Q === Q
+    A.field == B.field || error("direct_sum: field mismatch")
 
     dims = [A.dims[i] + B.dims[i] for i in 1:n]
 
@@ -603,7 +684,7 @@ function direct_sum(A::PModule{K}, B::PModule{K}) where {K}
         end
 
         store = CoverEdgeMapStore{K,Matrix{K}}(preds, succs, maps_from_pred, maps_to_succ, cc.nedges)
-        return PModule{K,Matrix{K}}(Q, dims, store)
+        return PModule{K}(Q, dims, store; field=A.field)
     end
 
     # Fallback (rare): use keyed access.
@@ -623,7 +704,7 @@ function direct_sum(A::PModule{K}, B::PModule{K}) where {K}
         end
         edge[(u, v)] = Muv
     end
-    return PModule{K}(Q, dims, edge)
+    return PModule{K}(Q, dims, edge; field=A.field)
 end
 
 
@@ -667,10 +748,11 @@ function direct_sum_with_maps(A::PModule{K}, B::PModule{K}) where {K}
         pB_comps[u] = pB
     end
 
-    iA = PMorphism{K}(A, S, iA_comps)
-    iB = PMorphism{K}(B, S, iB_comps)
-    pA = PMorphism{K}(S, A, pA_comps)
-    pB = PMorphism{K}(S, B, pB_comps)
+    F = typeof(S.field)
+    iA = PMorphism{K,F}(A, S, iA_comps)
+    iB = PMorphism{K,F}(B, S, iB_comps)
+    pA = PMorphism{K,F}(S, A, pA_comps)
+    pB = PMorphism{K,F}(S, B, pB_comps)
     return S, iA, iB, pA, pB
 end
 
@@ -681,7 +763,7 @@ end
     # Compute M(u<=v) by composing cover-edge maps along the chosen chain.
     # Assumes u < v and u <= v.
     if u == v
-        return Matrix{K}(I, M.dims[v], M.dims[u])
+        return eye(M.field, M.dims[v])
     end
     @inbounds if cc.C !== nothing && cc.C[u, v]
         return M.edge_maps[u, v]
@@ -706,7 +788,7 @@ For a functorial module, the resulting map is independent of the chosen chain;
 the chain is only used as a witness that `u <= v`.
 
 Performance notes:
-  * If `cache` is omitted, a memoized `CoverCache` for `M.Q` is used.
+  * If `cache` is omitted, the per-poset lazy `CoverCache` for `M.Q` is used.
   * The chosen cover chain is cached inside the `CoverCache` via parent pointers,
     so repeated calls avoid rescanning predecessor lists.
 
@@ -721,7 +803,7 @@ function map_leq(M::PModule{K}, u::Int, v::Int;
     n = nvertices(Q)
     (1 <= u <= n && 1 <= v <= n) || error("map_leq: indices out of range")
 
-    u == v && return Matrix{K}(I, M.dims[v], M.dims[u])
+    u == v && return eye(M.field, M.dims[v])
     leq(Q, u, v) || error("map_leq: need u <= v in the poset (got u=$u, v=$v)")
 
     if opts !== nothing

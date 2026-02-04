@@ -5,7 +5,9 @@ using SparseArrays
 const FZ = PM.FlangeZn
 const ZE = PM.ZnEncoding
 const IR = PM.IndicatorResolutions
-const QQ = PM.QQ
+with_fields(FIELDS_FULL) do field
+    K = CM.coeff_type(field)
+    @inline c(x) = CM.coerce(field, x)
 
 # ---------------------------------------------------------------------------
 # Local helpers for the updated FlangeZn indicator API.
@@ -14,22 +16,22 @@ const QQ = PM.QQ
 # (and also disallows ambiguous reordered IndFlat/IndInj constructors) because
 # both inputs are vectors and mixups were a frequent source of subtle bugs.
 # ---------------------------------------------------------------------------
-mk_face(n, coords) = FZ.face(n, coords)
-mk_flat(b, coords; id=:F) = FZ.IndFlat(mk_face(length(b), coords), b; id=id)
-mk_inj(b, coords; id=:E) = FZ.IndInj(mk_face(length(b), coords), b; id=id)
+    mk_face(n, coords) = FZ.face(n, coords)
+    mk_flat(b, coords; id=:F) = FZ.IndFlat(mk_face(length(b), coords), b; id=id)
+    mk_inj(b, coords; id=:E) = FZ.IndInj(mk_face(length(b), coords), b; id=id)
 
 
-@testset "Zn wrappers: common encoding matches explicit encoding route" begin
+    @testset "Zn wrappers: common encoding matches explicit encoding route" begin
     # Two 1D flanges representing interval modules [0,5] and [2,7].
     tau = FZ.face(1, [])  # no free coordinates for n=1 (i.e. an interval-type flange)
 
     F1 = FZ.IndFlat(tau, [0]; id=:F1)
     E1 = FZ.IndInj(tau, [5]; id=:E1)
-    FG1 = FZ.Flange{QQ}(1, [F1], [E1], reshape([QQ(1)], 1, 1))
+    FG1 = FZ.Flange{K}(1, [F1], [E1], reshape([c(1)], 1, 1))
 
     F2 = FZ.IndFlat(tau, [2]; id=:F2)
     E2 = FZ.IndInj(tau, [7]; id=:E2)
-    FG2 = FZ.Flange{QQ}(1, [F2], [E2], reshape([QQ(1)], 1, 1))
+    FG2 = FZ.Flange{K}(1, [F2], [E2], reshape([c(1)], 1, 1))
 
     enc = PM.EncodingOptions(backend=:zn, max_regions=50_000)
     df = PM.DerivedFunctorOptions(maxdeg=2)
@@ -59,14 +61,14 @@ mk_inj(b, coords; id=:E) = FZ.IndInj(mk_face(length(b), coords), b; id=id)
     bt_wrap = DF.betti(DF.projective_resolution_Zn(FG1, enc, res_min))
     bt_explicit = DF.betti(DF.projective_resolution(enc1.M, res_min))
     @test bt_wrap == bt_explicit
-end
+    end
 
-@testset "Wrappers for Z^n: injective resolutions and minimal Bass data" begin
+    @testset "Wrappers for Z^n: injective resolutions and minimal Bass data" begin
     n = 1
     flats = [mk_flat([0],[false]), mk_flat([2],[false])]
     inj   = [mk_inj([4],[false])]
-    Phi = [QQ(1); QQ(1)] |> x -> reshape(x, 1, 2)
-    FG = FZ.Flange{QQ}(n, flats, inj, Phi)
+    Phi = [c(1); c(1)] |> x -> reshape(x, 1, 2)
+    FG = FZ.Flange{K}(n, flats, inj, Phi)
 
     enc = PM.EncodingOptions(backend=:zn, max_regions=50_000)
     res = PM.ResolutionOptions(maxlen=3, check=true)
@@ -86,9 +88,9 @@ end
     @test DF.bass_table(resMinI_Z) == DF.bass_table(resMinI)
 
     @test DF.bass(resMinI_Z) == DF.bass(resMinI)
-end
+    end
 
-@testset "FlangeZn: IndFlat/IndInj constructors (new API)" begin
+    @testset "FlangeZn: IndFlat/IndInj constructors (new API)" begin
     tau = FZ.face(2, [2])
 
     # Canonical constructor order: (tau, b; id=...)
@@ -108,9 +110,9 @@ end
     # (both inputs are vectors, so such constructors were a source of subtle bugs).
     @test_throws MethodError FZ.IndFlat([1, 2], tau, :F2)
     @test_throws MethodError FZ.IndInj([3, 4], tau, :E2)
-end
+    end
 
-@testset "FlangeZn dim_at + minimize invariance" begin
+    @testset "FlangeZn dim_at + minimize invariance" begin
     # n = 1 interval [b,c] via flat (>= b) and injective (<= c)
     n = 1
     tau0 = FZ.Face(n, [false])
@@ -118,12 +120,12 @@ end
     c = 3
     F1 = FZ.IndFlat(tau0, [b]; id=:F1)
     E1 = FZ.IndInj(tau0, [c]; id=:E1)
-    Phi = reshape(QQ[QQ(1)], 1, 1)
-    FG = FZ.Flange{QQ}(n, [F1], [E1], Phi)
+    Phi = reshape(K[c(1)], 1, 1)
+    FG = FZ.Flange{K}(n, [F1], [E1], Phi)
 
     # dim is 1 on [b,c], 0 otherwise
     for g in (b-2):(c+2)
-        d = FZ.dim_at(FG, [g]; rankfun=EX.rankQQ)
+        d = FZ.dim_at(FG, [g]; rankfun=A -> PosetModules.FieldLinAlg.rank(field, A))
         expected = (b <= g <= c) ? 1 : 0
         @test d == expected
     end
@@ -135,36 +137,36 @@ end
 
     # Minimize should merge proportional duplicate columns without changing dim_at
     F2 = FZ.IndFlat(tau0, [b]; id=:F2)
-    Phi2 = reshape(QQ[QQ(1), QQ(2)], 1, 2)    # second column is 2x the first
-    FG2 = FZ.Flange{QQ}(n, [F1, F2], [E1], Phi2)
+    Phi2 = reshape(K[c(1), c(2)], 1, 2)    # second column is 2x the first
+    FG2 = FZ.Flange{K}(n, [F1, F2], [E1], Phi2)
     FG2m = FZ.minimize(FG2)
 
     for g in (b-1):(c+1)
-        d1 = FZ.dim_at(FG2, [g];  rankfun=EX.rankQQ)
-        d2 = FZ.dim_at(FG2m, [g]; rankfun=EX.rankQQ)
+        d1 = FZ.dim_at(FG2, [g];  rankfun=A -> PosetModules.FieldLinAlg.rank(field, A))
+        d2 = FZ.dim_at(FG2m, [g]; rankfun=A -> PosetModules.FieldLinAlg.rank(field, A))
         @test d1 == d2
     end
 
-    @testset "canonical_matrix / degree_matrix / bounding_box" begin
+        @testset "canonical_matrix / degree_matrix / bounding_box" begin
         # 1D: flat is x >= 1, inj is x <= 3.
         flats = [FZ.IndFlat(mk_face(length([1]), [false]), [1]; id=:F)]
         injectives = [FZ.IndInj(mk_face(length([3]), [false]), [3]; id=:E)]
         Phi = FZ.canonical_matrix(flats, injectives)
-        @test Phi == reshape(QQ[1], 1, 1)
+        @test Phi == reshape(K[1], 1, 1)
 
         # Non-intersecting pair: x >= 5 and x <= 3.
         flats_bad = [FZ.IndFlat(mk_face(length([5]), [false]), [5]; id=:Fbad)]
         injectives_bad = [FZ.IndInj(mk_face(length([3]), [false]), [3]; id=:Ebad)]
         Phibad = FZ.canonical_matrix(flats_bad, injectives_bad)
-        @test Phibad == reshape(QQ[0], 1, 1)
+        @test Phibad == reshape(K[0], 1, 1)
 
         # degree_matrix should pick out exactly the active row/col at a given degree.
-        Phi2 = reshape(QQ[2], 1, 1)
-        H = FZ.Flange{QQ}(1, flats, injectives, Phi2)
+        Phi2 = reshape(K[2], 1, 1)
+        H = FZ.Flange{K}(1, flats, injectives, Phi2)
         Phi_sub, rows, cols = FZ.degree_matrix(H, [2])
         @test rows == [1]
         @test cols == [1]
-        @test Phi_sub == reshape(QQ[2], 1, 1)
+        @test Phi_sub == reshape(K[2], 1, 1)
 
         # Outside the intersection, there should be no active flats or injectives.
         Phi_sub2, rows2, cols2 = FZ.degree_matrix(H, [10])
@@ -178,17 +180,17 @@ end
         a_box, b_box = FZ.bounding_box(H; margin=1)
         @test a_box == [0]
         @test b_box == [4]
-    end
+        end
 
-    @testset "minimize: do not merge different labels, but merge proportional duplicates" begin
+        @testset "minimize: do not merge different labels, but merge proportional duplicates" begin
         # Two proportional columns with different underlying flats must not be merged.
         F1 = FZ.IndFlat(mk_face(length([0]), [false]), [0]; id=:F1)
         F2 = FZ.IndFlat(mk_face(length([1]), [false]), [1]; id=:F2)  # different threshold => different upset
         E1 = FZ.IndInj(mk_face(length([2]), [false]), [2]; id=:E1)
 
         # Columns are proportional but flats differ.
-        Phi = QQ[1 2]
-        H = FZ.Flange{QQ}(1, [F1, F2], [E1], Phi)
+        Phi = K[1 2]
+        H = FZ.Flange{K}(1, [F1, F2], [E1], Phi)
         Hmin = FZ.minimize(H)
         @test length(Hmin.flats) == 2
 
@@ -196,16 +198,16 @@ end
         Fin = [FZ.IndFlat(mk_face(length([0]), [false]), [0]; id=:F)]
         Einj1 = FZ.IndInj(mk_face(length([0]), [false]), [0]; id=:E)
         Einj2 = FZ.IndInj(mk_face(length([0]), [false]), [0]; id=:Edup) # same underlying downset as Einj1
-        Phi_rows = reshape(QQ[1, 2], 2, 1)        # 2x1, proportional rows
-        H2 = FZ.Flange{QQ}(1, Fin, [Einj1, Einj2], Phi_rows)
+        Phi_rows = reshape(K[1, 2], 2, 1)        # 2x1, proportional rows
+        H2 = FZ.Flange{K}(1, Fin, [Einj1, Einj2], Phi_rows)
         H2min = FZ.minimize(H2)
         @test length(H2min.injectives) == 1
 
         # Rank at degree 0 should be unchanged by minimization.
         @test FZ.dim_at(H2, [0]) == FZ.dim_at(H2min, [0])
-    end
+        end
 
-    @testset "ZnEncoding: region encoding without enumerating a box" begin
+        @testset "ZnEncoding: region encoding without enumerating a box" begin
         # FG, b, c are in scope here because this testset is nested.
         enc = PM.EncodingOptions(backend=:zn, max_regions=1000)
         P, Henc, pi = PM.encode_from_flange(FG, enc)
@@ -225,7 +227,7 @@ end
         @test FF.fiber_dimension(Henc, PM.locate(pi, [b])) == 1
         @test FF.fiber_dimension(Henc, PM.locate(pi, [c])) == 1
         @test FF.fiber_dimension(Henc, PM.locate(pi, [c+1])) == 0
-    end
+        end
 
     @testset "ZnEncoding: direct flange -> fringe (Remark 6.14 bridge)" begin
         # Build the encoding only, then push FG down to a fringe presentation.
@@ -251,21 +253,21 @@ end
         # strictness: labels not present in the encoding must be rejected.
         F_extra = FZ.IndFlat(mk_face(length([b + 1]), [false]), [b + 1]; id=:Fextra)
         E = FZ.IndInj(mk_face(length([c]), [false]), [c]; id=:E)
-        FG_extra = FZ.Flange{QQ}(1, [FZ.IndFlat(mk_face(length([b]), [false]), [b]; id=:F), F_extra], [E], QQ[1 1])
+        FG_extra = FZ.Flange{K}(1, [FZ.IndFlat(mk_face(length([b]), [false]), [b]; id=:F), F_extra], [E], K[1 1])
 
         @test_throws ErrorException PM.fringe_from_flange(P, pi, FG_extra)
     end
-end
+    end
 
 @testset "CrossValidateFlangePL smoke test" begin
     n = 1
     tau0 = FZ.Face(n, [false])
     F1 = FZ.IndFlat(tau0, [1]; id=:F1)
     E1 = FZ.IndInj(tau0, [3]; id=:E1)
-    Phi = reshape(QQ[QQ(1)], 1, 1)
-    FG = FZ.Flange{QQ}(n, [F1], [E1], Phi)
+    Phi = reshape(K[c(1)], 1, 1)
+    FG = FZ.Flange{K}(n, [F1], [E1], Phi)
 
-    ok, report = FZ.cross_validate(FG; margin=1, rankfun=EX.rankQQ)
+    ok, report = FZ.cross_validate(FG; margin=1, rankfun=A -> PosetModules.FieldLinAlg.rank(field, A))
     @test ok == true
     @test haskey(report, "mismatches")
     @test isempty(report["mismatches"])
@@ -275,8 +277,8 @@ end
     # A 2D flange that depends only on coordinate 1; coordinate 2 is free everywhere.
     flats = [mk_flat([0, 0], [false, true])]
     inj   = [mk_inj([1, 0], [false, true])]
-    Phi   = reshape(QQ[1], 1, 1)
-    FG = FZ.Flange{QQ}(2, flats, inj, Phi)
+    Phi   = reshape(K[1], 1, 1)
+    FG = FZ.Flange{K}(2, flats, inj, Phi)
 
     enc = PM.EncodingOptions(backend=:zn, max_regions=100)
     P, M, pi = DF.encode_pmodule_from_flange(FG, enc)
@@ -307,15 +309,15 @@ end
 
 @testset "ZnEncoding 2D: common encoding for multiple flanges" begin
     # Two slabs along coordinate 1, coordinate 2 free.
-    FG1 = FZ.Flange{QQ}(2,
+    FG1 = FZ.Flange{K}(2,
         [mk_flat([0,0],[false,true])],
         [mk_inj([1,0],[false,true])],
-        reshape(QQ[1], 1, 1)
+        reshape(K[1], 1, 1)
     )
-    FG2 = FZ.Flange{QQ}(2,
+    FG2 = FZ.Flange{K}(2,
         [mk_flat([1,0],[false,true])],
         [mk_inj([2,0],[false,true])],
-        reshape(QQ[1], 1, 1)
+        reshape(K[1], 1, 1)
     )
 
     enc = PM.EncodingOptions(backend=:zn, max_regions=200)
@@ -335,15 +337,15 @@ end
 end
 
 @testset "ZnEncoding 2D: strict fringe_from_flange rejects missing generators" begin
-    FG1 = FZ.Flange{QQ}(2,
+    FG1 = FZ.Flange{K}(2,
         [mk_flat([0,0],[false,true])],
         [mk_inj([1,0],[false,true])],
-        reshape(QQ[1], 1, 1)
+        reshape(K[1], 1, 1)
     )
-    FG2 = FZ.Flange{QQ}(2,
+    FG2 = FZ.Flange{K}(2,
         [mk_flat([10,0],[false,true])],  # new flat label not present in FG1 encoding
         [mk_inj([11,0],[false,true])],
-        reshape(QQ[1], 1, 1)
+        reshape(K[1], 1, 1)
     )
 
     enc = PM.EncodingOptions(backend=:zn, max_regions=200)
@@ -365,8 +367,8 @@ end
     # - one injective at x1 <= 1 (x2 free)
     flats = [mk_flat([0, 0], [false, true])]
     injs  = [mk_inj([1, 0], [false, true])]
-    Phi   = reshape(QQ[1], 1, 1)
-    FG    = FZ.Flange{QQ}(2, flats, injs, Phi)
+    Phi   = reshape(K[1], 1, 1)
+    FG    = FZ.Flange{K}(2, flats, injs, Phi)
 
     enc = PM.EncodingOptions(backend=:zn, max_regions=100)
     P, Henc, pi = DF.encode_pmodule_from_flange(FG, enc)
@@ -397,8 +399,8 @@ end
 @testset "ZnEncodingMap region_weights: Monte Carlo sampling is close (reproducible)" begin
     flats = [mk_flat([0, 0], [false, true])]
     injs  = [mk_inj([1, 0], [false, true])]
-    Phi   = reshape(QQ[1], 1, 1)
-    FG    = FZ.Flange{QQ}(2, flats, injs, Phi)
+    Phi   = reshape(K[1], 1, 1)
+    FG    = FZ.Flange{K}(2, flats, injs, Phi)
 
     enc = PM.EncodingOptions(backend=:zn, max_regions=100)
     P, Henc, pi = DF.encode_pmodule_from_flange(FG, enc)
@@ -439,8 +441,8 @@ end
 @testset "ZnEncodingMap region_weights: auto can be forced to sampling" begin
     flats = [mk_flat([0, 0], [false, true])]
     injs  = [mk_inj([1, 0], [false, true])]
-    Phi   = reshape(QQ[1], 1, 1)
-    FG    = FZ.Flange{QQ}(2, flats, injs, Phi)
+    Phi   = reshape(K[1], 1, 1)
+    FG    = FZ.Flange{K}(2, flats, injs, Phi)
 
     enc = PM.EncodingOptions(backend=:zn, max_regions=100)
     P, Henc, pi = DF.encode_pmodule_from_flange(FG, enc)
@@ -459,8 +461,8 @@ end
 @testset "ZnEncodingMap region_weights: :auto count_type promotes to BigInt on overflow" begin
     flats = [mk_flat([0, 0], [false, true])]
     injs  = [mk_inj([1, 0], [false, true])]
-    Phi   = reshape(QQ[1], 1, 1)
-    FG    = FZ.Flange{QQ}(2, flats, injs, Phi)
+    Phi   = reshape(K[1], 1, 1)
+    FG    = FZ.Flange{K}(2, flats, injs, Phi)
 
     enc = PM.EncodingOptions(backend=:zn, max_regions=100)
     P, Henc, pi = DF.encode_pmodule_from_flange(FG, enc)
@@ -495,8 +497,8 @@ end
         I = FZ.Face(n, Int[])
         flats = [FZ.IndFlat(I, b; id=:F)]
         injectives = [FZ.IndInj(I, c; id=:E)]
-        Phi = spzeros(QQ, 1, 1); Phi[1, 1] = 1
-        FG = FZ.Flange{QQ}(n, flats, injectives, Phi)
+        Phi = spzeros(K, 1, 1); Phi[1, 1] = 1
+        FG = FZ.Flange{K}(n, flats, injectives, Phi)
 
         enc = PM.EncodingOptions(backend=:zn, max_regions=1000)
         Penc, Henc, pi = PM.encode_from_flange(FG, enc)
@@ -542,8 +544,8 @@ end
             D = PLP.PLDownset(PLP.PolyUnion(n, [Dhp]))
 
             # PLFringe requires an explicit Phi of size (#Downs) x (#Ups).
-            F1 = PLP.PLFringe([U], PLP.PLDownset[], zeros(QQ, 0, 1))
-            F2 = PLP.PLFringe(PLP.PLUpset[], [D], zeros(QQ, 1, 0))
+            F1 = PLP.PLFringe([U], PLP.PLDownset[], zeros(K, 0, 1))
+            F2 = PLP.PLFringe(PLP.PLUpset[], [D], zeros(K, 1, 0))
 
             enc = PM.EncodingOptions(backend=:pl, max_regions=10_000)
             Ppl, Hpl, pipl = PLP.encode_from_PL_fringes(F1, F2, enc; poset_kind = :signature)
@@ -624,9 +626,10 @@ end
         Dhp = PLP.make_hpoly([1.0], 2.0)
         U = PLP.PLUpset(PLP.PolyUnion(n, [Uhp]))
         D = PLP.PLDownset(PLP.PolyUnion(n, [Dhp]))
-        F = PLP.PLFringe([U], [D], ones(QQ, 1, 1))
+        F = PLP.PLFringe([U], [D], ones(K, 1, 1))
         enc = PM.EncodingOptions(backend=:pl, max_regions=10_000, poset_kind=:dense)
         P, _H, _pi = PM.encode(F, enc)
         @test P isa PM.FinitePoset
     end
 end
+end # with_fields

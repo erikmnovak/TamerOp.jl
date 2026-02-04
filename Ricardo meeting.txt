@@ -1,0 +1,839 @@
+The name of that was very generic, Decompositions and Distances of Modules over RN.
+Let me just, okay, space, always visible, where to go.
+And that one probably be a bit bigger scale just because I mentioned like the final, the lifetime stuff.
+This was mainly building on top of what?
+Yeah, sorry, I'm just fiddling with Zoom, just a second.
+Let me get back to my, I'm fiddling in the sense of I have to make your pictures stay up there
+so that it doesn't disappear when I go to some other window.
+Okay, let's see.
+So I have to look at crude report maybe, is that the one?
+Decomposition?
+Probably.
+Yes.
+Yeah.
+For the draft you think it should be a bit more detailed than that maybe?
+A bit more detailed than this?
+And I think that what we should have is sort of, the draft should contain, oh I like this actually, this is good,
+but it should have, it's okay for it to have this stuff too actually, but I think that that should,
+in the end I think that this stuff with the matching is going to be a second paper.
+Yeah, yeah, I just mean like in terms of level of detail, just a bit more than this maybe.
+Level of detail, I think we should try to include, try to include what's going to be in there eventually,
+so have it be a formal definition of lifetime, formal definition of lifetime displacement,
+formal definitions, potential definitions of lifetime distances that you can symmetrize,
+you can take the max, whatever it happens to be, right?
+Yeah, it's just sort of something so that people can get their hands on what lifetimes are and what lifetime displacement is.
+Okay.
+So that we can just hand it out to people and say, here's what we mean.
+The reason why at least one of them wants this is because Herbert Adelsbrunner has a student who is going to decide
+what to write her thesis on and it might be on related stuff and she wants to know what this lifetime stuff is all about.
+Okay, sure.
+So this is good news for us in some sense, right?
+This means that people really want to know this and that this is good.
+Yeah, and then also like motivations are we're thinking about this, obviously have the main results in there as well.
+Right, yes, that's right.
+So have whatever main results you think belong in there and, you know, something that doesn't have to be in final form,
+it just has to be sort of presentable so that someone who wants to know what these things are
+can actually look at the definitions for real and not just look at my slides, which have hopeless little detail.
+They have nice pictures, but not such great detail.
+Sure, okay.
+Yeah, as soon as you can.
+So, you know, I'm hoping that doesn't take more than, you know, a couple of weeks to...
+Yeah, that's what I was thinking, a couple of weeks.
+Great, a couple of weeks is...
+Because I evaluated in my mind how long I think it...
+And I said, Herbert, I told Herbert that probably once we talk about it within a couple of weeks, it'll be doable.
+Yeah.
+Herbert Edelsbrunner?
+Edelsbrunner, yes.
+The man, the myth, the legend himself.
+Well, he used to work at Duke, you know.
+Yeah, I'm aware.
+Yeah, I'm not sure that he was ever here when I was.
+I think I might have, like, maybe overlapped with him for a year or something like that,
+because I didn't really know the area at that point.
+But yeah, now I talk to him all the time at conferences and these things, and we communicate regularly.
+Yeah, he's a good guy.
+He hates algebra, actually.
+I'm aware, when I was originally learning topological data analysis,
+I read one of his papers on the Wasserstein distance being stable.
+And you could definitely tell that he was skirting the algebra very much.
+He was coming up with his own terminology and, like, really, really not going into the algebra there.
+Yeah, I mean, the fact is, he thinks that he's not good at algebra.
+And I think that what this means in the end is that the level of abstraction that he's willing to deal with
+has a definite upper limit.
+But, you know, what this means is that, you know, lifetime filtration?
+You know, really, he doesn't want to do lifetime filtration.
+But a student might want to do something related to this kind of algebra.
+And so it should come from us, that kind of thing, yeah?
+Yeah.
+Okay, so what was going to be the, what's the sort of proposed content of this meeting here?
+Yeah, so there's that.
+I've been, like, rereading Jassy's paper, basically.
+Like, taking notes on what I need to, what should be changed.
+Like, there's some notation stuff we've agreed on that's different.
+Yeah, the bracelet of brackets.
+We should also, at some point, decide on, like, notation and nomenclature for, like, the shifts, slides, and rug pulls.
+But I think that can be down the line.
+Yes, that's a really good point.
+We should decide on notations for that.
+Yeah, we should decide on that.
+Yeah.
+Eric, do you know what those things mean?
+Can you repeat that, sorry?
+Shifts, slides, and rug pulls.
+Rug pulls? Is that an actual thing?
+I have not come across rug pulls.
+We're going to make it into something.
+Go ahead.
+Yeah.
+The first thing is, Eric, do you know these two notations here?
+Sure.
+K adjoin S and K braces.
+Squiggly.
+Yeah, squiggly.
+Remind me of the braces.
+So I was going to tell you this, Eric, it's part of my, so I wrote up notes in, like, you know, sort of on iPad.
+I actually wrote up notes on the airplane to send you.
+And one of them is that for indicator modules, we should write it as K squiggly bracket instead of K square bracket.
+Okay, I was using K square bracket.
+And I also completely took the entire blame for that because in my homological algebra paper, I used the wrong notation.
+I really should have used squiggly brackets, and I didn't, and that was my fault, and it's wrong.
+Okay, all right.
+Yeah, I am using your homological algebra paper as a baseline for everything else.
+Even right now, actually, what I'm going to do is I'm just going to get here.
+I'm going to get to my notes, and I'm just going to send you the email now that has these notes.
+Okay.
+Keep talking, Ricardo.
+Tell them about shift slides and rope pulls because I remember that conversation.
+It was really handy.
+Yeah, and I actually, I don't quite remember which is which, so I'm going to need to look up my notes for that as well.
+Good, because I don't remember which is which either, but we had sort of good reasoning when we did that.
+We did have good reasoning.
+And so if you have it in your notes, that's great.
+I should have it somewhere in a staff document.
+But for the time being, you can just tell them what the three of them are, and then we'll figure out.
+Yeah, anyway.
+Yeah.
+Is it here?
+It's in the notes for Eric.
+Oh, the very first slide, right?
+Okay, squiggly bracket here.
+There you go.
+I found it.
+I found it.
+Okay.
+So the current notations for each one, I'm going to put them in the.
+You can share screen with them.
+Or you can also share your screen.
+It's up to you.
+It's very brief.
+I think I'll just do it here.
+Kind of like this.
+Okay.
+So the first one is what I'm calling a slide.
+These are the current notations.
+Their subject should change.
+The first one is what I'm calling a slide.
+This is just the one where you.
+So you map the vector V by.
+Let's assume it's like homogeneous and you can extend by linearity.
+Homogeneous.
+Yes, that is correct.
+Let's assume it's homogeneous and degree.
+And then you just move it by like the structure map epsilon.
+So the one that just.
+Epsilon is like a vector, I guess.
+You have to start off with what's what.
+So V is a what and epsilon is a what.
+Epsilon is a vector.
+You should think of it as usually one, one, one, one, one, one.
+But it can be any vector that you're going to shift.
+Think of it as an arrow.
+Okay.
+Yeah.
+Q plus meaning like the positive cone.
+Okay.
+It can be anywhere.
+Q here is a partially ordered group.
+Well, Q is a partially ordered group and then Q plus the positive.
+Q.
+Oh, okay.
+I'm telling Eric because Eric is used to working with Q being a poset.
+When we're saying here is that here we're working over a.
+In the most generality, it could be like a it could be like a poset with a shift function or something like that.
+And then epsilon is going to be the shift.
+But for simplicity, let's just talk about Q being a partially ordered group.
+And epsilon is an element in Q plus.
+Okay.
+Yeah.
+So think of it as our end with one, one, one, one, one, one.
+Yeah.
+Anything in the positive or center part and, for example, would work.
+Or actually the non-negative or.
+The closed possible.
+So, yeah.
+So the first one here, you just take V.
+So there's going to be you can think about it like being at a specific point.
+And then they're like, if you just move here by epsilon, since it's going to be higher, then there's going to be a structure map there.
+You just map it by that structure map.
+So this is what we're calling a slide.
+Okay.
+Ah, okay.
+I want to be clear what homogeneous vector means.
+Yeah.
+Our homogeneous vector means an element in ma for some a.
+Oh, okay.
+All right.
+I was thinking sort of like in the coordinate in what's called projective coordinates, but that's not.
+Yeah.
+Yeah.
+Yeah.
+Yeah.
+Yeah.
+It just means an element in some graded piece of some graded module.
+Okay.
+Some Q graded module.
+Yeah.
+Yeah.
+So it's basically it's only supported on one on one degree.
+It's not supported on various degrees.
+But you can extend this to be arbitrarily wherever you want by just white linearity.
+So this is an important.
+It's a class for some fixed parameter.
+It's a homology class over some fixed parameter.
+Yes.
+Then there is the syntax with brackets.
+That one's a bit more complicated to explain.
+Basically, you can imagine taking the entire the entire like module and then you just like move it back.
+Is that it?
+I forgot to move it back or forward.
+Yeah.
+So in the usual notation, this would be M bracket epsilon.
+So what it does is that if you take a module M back, take a module M.
+Yeah.
+How do you write the epsilon?
+I have.
+I can switch my keyboard to Greek if I want.
+Oh, interesting.
+I'm going to have to do it.
+I'm going to do it by literally using my mouse to copy your epsilon and paste it into mine.
+Yep.
+Yeah, that worked.
+That worked.
+So M epsilon sub A equals.
+Oh, boy.
+M sub.
+And then it's going to be epsilon plus A.
+Yes.
+Oh, OK.
+OK.
+OK.
+That's interesting.
+That's a shift and it shifts by the way downwards.
+Your point of view looks like this.
+Yes.
+So if epsilon is this vector one, one, one, one, one, then it shifts it backwards by one, one, one, one, one, one.
+And you can see that even though there's no there's no minus signs in there, this shift means that if you ask in.
+You have to read that that really, really carefully.
+Right.
+So M sub M shifted by epsilon of A is M sub epsilon plus A, which means that it's up here.
+So the original module M is this thing.
+Right.
+The module M, it's this degree.
+So when you when you take when you when you take.
+So but that's supposed to be M.
+So this epsilon plus A sits up here, but it's supposed to be in degree A.
+So it's moved back by anyway.
+You have to figure it out.
+It's really irritating.
+No, but I think now that I see the the squiggly version of the expression, because I have a pretty good grasp of anyway.
+Yeah.
+And squiggly.
+So I want to be clear.
+The squiggly brackets there are really just to say it's tech notation.
+Yeah.
+Because I have to say the entire epsilon plus A is in the subscript.
+Yeah, yeah, yeah.
+That's what I meant. That's what I meant.
+It's I sort of can.
+Yeah, I can.
+I can see it.
+I can see it somewhat.
+And so just to be clear, when I in the second example, the bracket epsilon, if I have like,
+let's say an abstract module like this, with like V being here, and then I shift it by epsilon out here, V shifts along with it.
+So that's position is consistent relative like the lower edge.
+Okay.
+Doesn't move relative to the lower edge.
+So V of epsilon.
+So V of epsilon is the vector V that was in degree A and is now in degree A minus epsilon.
+Yeah.
+So it's basically the same thing.
+It's just moving it around.
+This is just from how interleapings are defined.
+I think we can actually remove this entirely if we just allow maps with nonzero degree.
+But the current literature doesn't do that.
+So.
+Oh, yeah.
+Commutative algebra literature does it all the time.
+Yeah.
+The TDA literature does it from my understanding.
+The TDA literature does not.
+We need to convince them to allow us to do it.
+Because honestly, the right way to do it.
+This confusion is pretty much completely gone as soon as we allow that.
+Yes, I know.
+We only need one of it and then everything else.
+Yes.
+For what it's worth, the first example is a degree epsilon homomorphism or endomorphism.
+Right.
+And then the third case.
+Ricardo, you should write up for this paper on lifetime modules.
+It should be in your thesis somehow, but it should be in this paper.
+We should introduce people to inhomogeneous homomorphisms.
+And the module of all graded shifts of all homomorphisms.
+So that we can start using this in the multi-persistence literature.
+It needs to be there.
+They are all over the place.
+For any multi-persistence person who wants to read the algebra literature, they need to know what this is.
+And so this seems as good a place as any to introduce it.
+I use it all the time in my papers.
+No one likes reading my papers because they find the algebra too opaque.
+Which is so weird because it's so concrete.
+But they're not used to certain notions like this one.
+I like the algebra.
+Yeah, good. Good, good, good.
+So Jan Jandriziak, by the way, is one of these people who has his foot in both worlds and he totally gets the algebra.
+It's so awesome talking to him. He's great.
+You've said the same about Bjorkovic, right?
+Yes. Yes. Bjorkovic knows his stuff.
+Yeah.
+I think Bjorkovic's take on algebra these days is this take on sort of multi-persistence algebra is the most nuanced,
+sort of promising approach of anyone that I've seen from TVA.
+I think he really gets the algebra. He understands what's trying to happen.
+Yeah, so just the third notation there, the V parentheses epsilon as opposed to V brackets epsilon.
+I have the definition in terms of the other two written there.
+Well, basically, if you think again about the upset here with the vector here.
+Let me think about this.
+So you do this and then you slide it off. I think it's the same as if you slide it.
+It's going to be the same the way they commute.
+So basically, you're keeping this one fixed.
+Let me say this in a language that Eric might get at.
+So remember, if you have an element in a module and this element has degree A, right?
+You can you can shift it up.
+So you can multiply by X to the epsilon. What does that do?
+It moves it up by epsilon. Yes.
+So now you have a different element to the module.
+It's an element now that sits in the same module, but it's moved up by degree by epsilon.
+And now it's the image of this element after you've literally moved it up by the by the structure morphism that goes from here to there.
+OK. Yeah.
+Yeah. The problem is that in persistence, you might want to do that,
+but you might want the results to sit in the same degree that you started it.
+Oh, OK. Yes.
+So how do you do that?
+One way is to multiply it by X to the epsilon and then shift it back by epsilon.
+Yeah. Another way is to shift it back by epsilon and then multiply it by epsilon.
+So the rug pull is the one where you where you essentially you start with your element here, right?
+You want it to land in this degree in this element, but back here.
+Yes. The rug pull. I can see it. It's amazing.
+I love it. It's amazing.
+Yeah. What a name. What an absolute name.
+Yeah. These are the names are in order of slide shift and you came up with this card.
+I think shift is standard.
+No, rug pull. I did not see rug pull.
+It was in conversation and I don't remember which of us came up with it.
+Yeah, I forgot.
+It was during a meeting with Gart. Yes, that's right.
+It was during one of our meetings and and and in the end we had this term and it's so the right term.
+Yeah, that's pretty good because you're like you're basically you're just sliding out of the way,
+but you're keeping it in the same place.
+Yeah, the only thing it brings to mind is that magic trick where you have the whole set table.
+Yeah, you pull the tablecloth out from under it.
+Yeah. Yeah.
+But the thing is that if we remove like the only reason we need this stuff is for it's for interleaving from what I can tell.
+Something like that, yes.
+And if we use like degree epsilon morphisms instead of requiring everything to be degree zero, then all we need is slides.
+We no longer need shifts or rug pulls.
+Yeah, that's right.
+But it's nice to describe things in terms of shifts and rug pulls.
+I mean, the shift is basically equivalent to just like the like you use a shift basis to emulate nonzero degree.
+Yes, that's right.
+In fact, exactly the definition of a nonzero degree homomorphism is a morphism of degree zero from N to a shift of N.
+Oh, okay.
+That's how commutative algebra, that's how it's defined.
+Oh, okay.
+That makes complete sense, yeah.
+Well, you can also define it more sort of parochially, I suppose, by just saying that it's a homomorphism such that it takes an element of degree A to an element of degree A plus epsilon.
+Yeah, that's what I was thinking.
+But I also define it to be a homomorphism of degree zero from N to N shifted by epsilon.
+Yes, expanding definitions, yes.
+Right.
+Okay, so that's the notation.
+Maybe we should change it, especially the notation.
+I'm not too happy with the rug pull one because it's quite similar to shift one.
+But maybe that's just something you have to live with.
+There's also an argument for not having that at all and just writing out the full expression every time, but that seems.
+Yes, and it's going to be, I will leave it up to you for the moment because you're going to try to write things down.
+And when you do, you'll figure out which notations are becoming really irritating.
+Sure.
+Okay.
+Yeah, it's one of those things you just try it and see what happens.
+And, you know, if it's not working for you, then go, you know, this is just annoying.
+It's the same thing with the minus sign.
+There should be a minus, you know, M shifted by epsilon should be M shifted by epsilon.
+But it's not, it's M shifted back by epsilon.
+That's because it's a minus sign.
+And you can choose what to do with the minus sign, where to put it.
+And sometimes it's annoying and sometimes it's not.
+I don't think, I think that one would just like have to keep with what other people are doing and just like deal with the sign.
+It makes like...
+There's no question that this is the definition of M shifted by epsilon.
+The question is whether we want to routinely think of M shifted by minus epsilon or not.
+Oh, all right.
+Because the answer is not.
+I think it like, it makes sense to just define it in a way that it admits that.
+But I think in practice that never shows up.
+Okay.
+Yeah, so that's the, that's the notation stuff.
+Oh, right.
+Eric introduced me.
+Actually, last night, like, I saw your email.
+I was getting dinner.
+And then right as I'm leaving, coming back from my room, then I see Eric and then we talk about it.
+And that's, that's why I, that's why I told you to like ask him if you wanted to show off.
+But the, one of the things that we talked about then is one of the ways we want to sort of salvage the things with lifetime.
+Stuff is by looking into how the, how the like the act, it actually works in practice.
+So that how like people are actually using this stuff for real data sets.
+And then let's see the exact wording here.
+Formulates conditions under which the screening variants are complete when restricted to push forward measure.
+Yes.
+And so for that inch like understand how, how people are actually doing this stuff.
+And he introduced me to this library called duty.
+Oh, yeah.
+Is it good?
+Is it like, does it do the things you wanted it to do?
+It seems like it does.
+I haven't had that much time to look into it yet.
+Because based on your like descriptions, I'm pretty sure it's exactly what you want.
+From what I looked up, it doesn't contribute.
+So that's something I need to look into to try to understand what they're doing.
+And people also like multi-PERS.
+I think they call it multi-PERS.
+So multi-PERS is made to interface with Goody.
+I think you heard about multi-PERS because of me, actually.
+And the people at Nightsake.
+Remember, I was just at Nightsake.
+Oh, that's true.
+Anyway, so multi-PERS is meant to interface with Goody as well.
+There is probably overlap at some point, but I think Goody is more on the computational.
+Before we encode things, before we process things.
+And then multi-PERS is more for the processing.
+So I think Goody is more so what you want to call it.
+But you can check out multi-PERS as well.
+Multi-PERS is more, I think, further along the pipeline.
+Sure, I'll just write it down.
+So there's that.
+I've also been thinking about the other, just because I didn't have too much to think about in regards to that stuff.
+I've been thinking about the other rich salvage it, which is attaching supplementary data to lifetime filtration so that it does become discriminating.
+What I was thinking in that regard is that the, sort of the interesting thing for, at least in a discriminatory sense with this, is that it's when things are, like they geometrically would be a lifetime.
+But algebraically, there's something that prevents them from being a lifetime.
+I'm not sure what you mean by that. What do you mean?
+So if we think back to the Luis example where you have the cube, right, missing the ends, do you remember the Luis kind of example?
+Vaguely, yes.
+Yeah, so in that case, if we don't, the one that has the multiplication by alpha and multiplication by beta, right?
+Right, yes.
+If we don't have those, if we have everything just being the identity map, then the entire module is a lifetime module.
+And then you're basically, and then that works.
+But when one of the multiplication, multiplication by alpha, or by anything that's not one, then it is no longer your lifetime module.
+And that, and so that means that we lose a filtration.
+There's one, a filtration that would have, like geometrically should exist because there's a map there.
+But I like it supported as if it were a lifetime module.
+But the algebra of the map prevents it from being a lifetime module.
+Oh, I see, I see. It's not lifetime because the maps are at all constant. They're not all the same.
+Yeah.
+It's not connected, the morphisms aren't connected or something like that.
+Yeah, something like that.
+And so this means that we lose some, there's basically a filtration that would exist based on geometry, but doesn't exist because of the algebra.
+And I think if we want to solve it in this way, we need a way to like keep that information of like, why does this filtration that should work not work?
+Provide some way of like comparing those.
+I see. I see. We may also want to just, I mean, include.
+Honestly, a filtration is always going to be sort of short, exact sequence.
+And then we could record which element in X it is.
+So which, which extension of this?
+In what sense is a filtration of short, exact sequence?
+Well, you have a sub module and then you have a quotient module.
+Right?
+Oh, right. Sure. At each point.
+We're only remembering what is the sub module, what's the quotient module.
+We're not remembering what's the extension.
+Ah, that might be, that might be something to look into that.
+Right. So like, I mean, there's a sense in which if we just remember literally what the extensions are, then we can reconstruct the entire module.
+Then it's an invariant because it gives you the whole module back.
+Oh, okay. Maybe there's something you can extract from the extensions.
+That's what I was going to say. But when you view it that way, it's like, okay, so then what functions on X are we interested in?
+Right. We can take the zero function on X and then we just don't care what the extension is.
+Well, we could take, we could take more interesting invariants of the X and perhaps get more information and sort of that.
+We could sort of build up a theory of how much information do you want from the X, that kind of thing.
+Yeah. So those are the three things I've done basically.
+Cool.
+I think that's clear thinking.
+Derek, do you have anything to add?
+I'm not the pro here, although I find the idea interesting and I think Goody is the program that should help you with this.
+Yeah, I've seen that Goody is C++ with Python bindings. Would you plan on like porting it also to like Julia binding so you can interact with it?
+No, my idea would be to port my thing to Python bindings.
+Oh, okay.
+Julia is my backend. Julia is my C++. I am not good enough to write my thing in C++, so I did it in Julia, which is more expressive.
+Sure. And then you write Python binding, like do a Python binding.
+Yeah, that's my plan eventually. I haven't done this before. I know there are software that does it for you, so I need to look into that.
+Yeah, I'd hope there would be just a library that like converts NumPy arrays to Julia.
+Something like that. And so basically your input is in Python and then you convert it to Julia and put that in.
+Your output is in Julia and then converts back to Python and then you don't touch anything in between. That would be ideal.
+Sure.
+I do have something to add.
+What?
+Unrelated to this, but my example ran successfully, so the library is working.
+Oh, good. Good.
+There's a sense in which I really wish, actually I really wish both of you could be in Austria for this thing.
+This thing that's at the end of March.
+I could be in Austria. I just need to plan ahead.
+It's during classes.
+Yeah, I would need to plan ahead very methodically.
+I mean, I can talk with my professors and see what we're doing, but that seems like especially because then it's also when I'm possibly going to be visiting grad school as well.
+I have actually heard back from one of them.
+And unfortunately, so University of Wisconsin Madison, I put up here the email.
+They had over 800 applicants to the program, so they just preliminarily, like early, just like denied a bunch of people.
+Including you or no?
+Let me tell you, the reason why they denied you is because they think you're not going to go.
+That may well be it, yeah.
+At UW Madison? But that's not a safety school, so to speak, right? It's quite hard to get into.
+Madison?
+Yeah.
+I mean, they think that Ricardo is going to go someplace better.
+He very well might, but OK, I shouldn't be saying this because when I applied to undergrad, NYU did that to me.
+This could backfire because it could be that all the better places think, oh, not quite.
+Yeah, especially with as many applicants as everyone seems to be getting now.
+Well, I'm sorry to hear, Ricardo. I think you're a very high quality applicant.
+Keep in mind that these places always receive that many applications. This is not news.
+OK.
+Sure.
+But they are forced, and Duke does the same thing, by the way.
+We have explicit conversations about how good someone is and how likely they are to come.
+And the fact is that if you applied to Duke, we'd look at your application calls.
+Are you going to come here? Come on, let's kind of get into it, and then we'll name some other place.
+No, yeah, I just, yeah, it was just a bit, because they sent it so early.
+I wasn't expecting anything until late February, and then they sent it literally last week.
+I was like, OK, well.
+OK, well, again, I'm sorry to hear, Ricardo. I think you're a very high quality applicant.
+I have no doubts that you're going to get in somewhere.
+Yeah, I hope so.
+Well, I mean, I told Ricardo something a little bit more realistic,
+which is that there is no reason why he should be rejected from anywhere.
+Sure, that's a good thing to say. My only worry for you, Ricardo, is you only apply to four places, so you are...
+That doesn't mean I am not going to guarantee they'll get in somewhere,
+because it can happen that the stochastics just work not for you.
+Yeah, I forgot about this. Ricardo, you only apply to four places, so that is, you know, a worrying factor.
+Is there a place that you want to go above everyone else?
+Presumably MIT.
+There is nowhere that I'm like, sir, do I want to go? But if I had to pick now, there is one that I'm going to go.
+Which one?
+Johns Hopkins.
+Which one?
+Johns Hopkins.
+Write to somebody at Hopkins.
+Emily Reel is actually going to be at Duke in like a month, maybe a month and a half or something like that.
+No, she's coming on the 30th.
+But write to somebody at Hopkins and say, look, if I had to pick today, Hopkins would be my first choice.
+Let me tell you, they don't know that.
+Okay.
+All right, I'll write that.
+Write an email, and you have to do it today, because these decisions are being made now.
+And if you tell someone at Hopkins that if you were going to make a decision today that you would choose them over all the other places you apply, you should feel free to tell them what those places are.
+You could tell them that you applied, but you could say, I applied to these other places, Berkeley and Harvard.
+I don't know where you apply.
+But then say, but if I had to choose today, I would choose Hopkins.
+Then that will seriously raise the chance of you being admitted there.
+It really does. It really does.
+From everyone I've heard, everyone I've heard said that you have to play the game.
+Yeah, you can't do that to every place that you apply.
+But if there's one that you're willing to do it for, then it raises your chance at that place by a lot, because then they don't have to roll the dice anymore.
+Okay, I will do that.
+Pick a person that's sort of up your alley that you'd like to work with.
+You could write them an email. It should be an email that indicates that you know who they are.
+Yeah, I think it's an email because I've looked at some of her work before, like I read her book.
+Actually, she based it on the reason I'm interested in Category Theory from one of her videos.
+That's right. And you could say that. You could say, I know that you're coming to Duke in late April.
+I'm talking late March.
+But this means that I have to send this message now because it pertains to my application to Johns Hopkins.
+And then say the thing about, you know, if today I had to choose one of all the places I apply, it would be Hopkins.
+I don't even know what my disposition is. I don't know whether my application has been accepted to other places.
+But if I could pick one place to be accepted, it would be Hopkins.
+Are you fine with me emailing it to you first so you can proofread it?
+Yes. Yes, you can email it to me first. Please do.
+I will be as quick as I can. My schedule is off. So if you email it to me at 9 p.m.
+I might not see it till, you know, four in the morning. Yeah.
+Yeah, I'm jet lagged. I'm getting up really, really early.
+Oh, yeah. You also have the jet lag to do it. But even when you are jet lagged, you also have.
+Jet lag is perfect. Yeah, my schedule is terrible. But when I'm jet lagged, it's much better.
+No, there's no question. My family likes to send me away for a week to Europe so I can come back and get up in the morning.
+I remember during like 501, like one of the, I think, it was right before I think the second midterm.
+I was working with other people in the homework. I was like, you know, sometimes I'm like, okay, we're not going to get this finished in time.
+Let's send Azure an email to get like a couple hours extension.
+And then immediately, like, it's like 1 a.m. We resented it like five minutes later and everything was fine.
+That was great. Right.
+Yeah, 1 a.m. was early. When my schedule was like that, 1 a.m. was early. I'm like, what time is it? It's like 4.
+Yeah, I always try to like, sometimes it happens. I was like, okay, now that you got my schedule, I can order it.
+Yes. Well, I do that by going, yeah. Actually, that's a good point I have to, I might enlist somebody's help.
+I need to, I need to schedule for, for Math 403, I need to schedule a whole bunch of oral exams.
+Oh, right. That's what I was talking about.
+Does anybody, do you, Ben knows, I'll ask him to do it.
+Oh, the oral exams. You're doing oral exams for 403. Oh, that's amazing. See, a little hard, a little hard for me.
+I've done oral exams before.
+Yeah.
+Do 21 lends itself very well to in-class exams?
+It does, because it's very, there are a lot of computational questions you can ask.
+Okay.
+This, this, yeah, this is what I'm doing, I'm doing this one because I cannot, there's just no point in grading written solutions to a, to a week-long take-home interview.
+Sure.
+Yeah, not with AI.
+No, yeah, that's what I discovered in the class that, that you were in, right?
+Ricardo wasn't the one that you were in?
+In 403 last, last time?
+There was one that had some, some AI issues, I think, and the answers were wrong.
+Did I stand up in front of the class? Did I stand up in front of your class and say I know that a bunch of you used AI?
+Uh, I think so, I'm not entirely sure. I think, yeah, I think a lot, yeah.
+You were, you weren't one of those, so.
+Yeah, I was not.
+You don't remember that so well.
+I do not.
+But like, half the class was.
+I've tried using, I don't know if I don't know how to prompt engineer, I've tried like everyone, so I've been like, okay, this is a homework I did, let's see how the AI fixed that, but it's just, I can't, I can't get it to do anything then, so I just.
+I mean, I graded, there was, I can't tell you this.
+I know what happens when AI, when AI does the entire, the entirety of midterm one, it got a 46 out of 100.
+Okay.
+All right.
+Yeah, I think Dan has also been trying to like see how AI does when he's grading the homework, just to like.
+Yeah, okay.
+I'll ask him for help with scheduling, just, I've never used one of these, you know, sort of.
+When to meets or whatever they're called.
+Sign up genius or when to meets, I don't know, I haven't used these, I've never used one before.
+Honestly, I've seen professors literally just post like a Google forms thing or whatever, have people like fill out when they're available and then just try to figure it out from there.
+If it's not a big class, that's totally fine.
+No, I can't do it that way, that's going to be too much work for me.
+I want to just say the exams will all be on Monday from like, you know, noon until 4 p.m. and sign up in the slots.
+Oh, sure, yeah, if you.
+I don't have to do any work.
+It's just that, you know, if somebody can't make it during those times, then I have to figure things out.
+But assuming that each person can make it during that time at some point, then they have to figure out amongst themselves how they can manage to sign up.
+Sure.
+All right, I think that's I think that's about it.
+We have only a couple of minutes left before we have the meeting.
+Well, I have something to say.
+Yes.
+So I have an issue, which is I have learned a lot of my math writing more recently in sort of like in conjunction with how it was, how especially chat GPT does its own math writing.
+So I asked you about that at our first meeting.
+So.
+Yeah, I wanted to mention this actually.
+AI helped me with the skeleton.
+And I quite like the way it does lists sometimes, but it often lists too many lists.
+And there are.
+But the outline was very AI driven in that sense.
+I'm not a fraud.
+If that's running through your mind, it's obvious that I couldn't possibly have written some of these things because it's like it involves knowledge that I simply doesn't have.
+Yeah.
+But and I'm saying this more broadly even maybe because I'm an ESL speaker.
+I have this tendency to sort of like imitate the person I'm talking to.
+So if I'm talking to.
+Right.
+I have that as well.
+I don't know if it's just ESL, but at least.
+But as I've used as I've like used chat GPT to learn things in the past, I've also sort of internalized some of its some of its wording choices a bit more like workflow pipeline.
+It's very it's very deployment heavy and it's also very it's very it's very like business jargon.
+Let's synthesize our.
+I was going to use the word jargon.
+It's very jargon.
+And I don't like that much for that, but sometimes the jargon comes up with is just so good.
+Sometimes it is, but sometimes it's it's it's it's identifiable.
+So like, you know, one of the things that chat GPT does, if you ask it to answer a question.
+I just remember the exam question I asked about cross audience except it was block matrices.
+Right.
+Yes.
+Yes.
+The answer is like two step flags.
+You look at you look at those two subspaces in another.
+Yeah.
+And you get a block matrices and these kinds of things.
+Yeah.
+There's a there's a there's a generally theoretic way to do that.
+It involves ladies subgroups, subgroups, subgroups, things like that.
+The problem is that chat GPT knows everything.
+Yeah.
+Right.
+And so when it gives you describe the answer this way, you unfettered uses all the mathematical terminology that it exists.
+And it thinks that it's cool to use the right jargon for this.
+The problem is that people in Math 403 don't know this jargon yet.
+When they use AI to answer this question, it's obvious because they're using terms that they don't know how to define.
+Yeah. Yeah.
+Yeah. No, that makes sense.
+Um, like, you know, like it's, you know, what's a parabolic subgroup?
+Yeah.
+They might have heard the expression once, but they wouldn't be able to to to deploy it.
+I don't think it probably heard it.
+They shouldn't have heard it at all.
+That's the point.
+It's not in any of the books that we use.
+It's not in any of our sources.
+The only way to know that is to either take a course before to have gotten it from somewhere else.
+Yeah.
+No, no.
+All of that makes sense.
+Before, they've learned it in their own time.
+Whatever.
+Then they'll be able to answer your question during the.
+That's my point.
+Yes.
+If they know what a parabolic subgroup is.
+That'll be just the phone conversation you guys are going to have for like five minutes.
+Right.
+If they actually do know what a parabolic subgroup is, then it's like, OK, I guess for the purpose of this, you learn what a parabolic subgroup is.
+I guess I'm OK with that, I suppose.
+And then you're going to have like a brief conversation with them about it.
+It's going to be fun.
+And then you move on to.
+Yes.
+Yeah.
+But I guess the the problem with me is that this is the the first larger math document that I've written in a bit.
+And I'm like, oh, my God, I'm starting to I'm starting to sound like AI.
+And then I and then I there are certain things were like, AI, this paragraph, how could I make it better?
+And then I'm like, oh, no.
+And it's all merging into each other.
+So I think I need to like.
+Well, I've drawn Eric when we meet, when we meet for, you know, for what we're meeting tomorrow.
+Right.
+Yeah.
+We're meeting tomorrow.
+And we can talk about, you know, which parts feel more like AI, which parts feel more genuine.
+Yeah.
+And I can tell.
+Oh, I can tell, too.
+My voice, my voice is disappearing.
+Yeah.
+Which is, which is, which is a little bit sad, but also a little bit good because the voice that I used to see was a little sort of.
+To floor.
+Yeah, I was.
+I've always been a very verbose writer.
+I've always been a very verbose writer.
+A little bit more concise, which is good, but it's also got a little bit more.
+For lack of a better word, impersonal.
+Yeah, exactly.
+I agree.
+I agree with that.
+I agree with that.
+Yeah.
+Yeah.
+So there are parts where I'm reading and going, yeah, I can really tell that Eric wrote this.
+This is, this is what I want to see.
+There are parts where it's just like.
+Really, I could have written that sentence or even that paragraph or something like that.
+Yeah.
+My keyboard's on my lap.
+No, no, but I understand.
+And I fully agree with you.
+I fully agree with you.
+Writing this has been an interesting introspective moment because I'm like, where am I?
+What is this?
+And, and how, how much have I come to rely on AI to, to, to build my skeleton for me and everything else?
+So this is, this was, yeah, this was an experience.
+I am, I am interested in talking more about it tomorrow.
+Do you have something to say before we go?
+Yeah.
+I was just going to say one thing that bothers me about AI is that now whenever I'm writing
+something like, oh, it's an M dash.
+I was like, wait, is this going to look too much like AI?
+Yes.
+I also start double, double guessing myself with those things.
+I have totally heard, I've heard horror stories about those kinds of things about students
+who learn how to write and they actually know how to write.
+And then a teacher will look at their writing and says, oh, but you, this AI does that.
+It's a horror story.
+Yeah.
+That's correct.
+Like, I mean, would you want me to not use that?
+That's how it works.
+Yeah.
+ABDAC is like super useful, like punctuation stuff.
+Yeah.
+They're super useful punctuation.
+I use them, you know, preferably, certainly no more than once a paragraph.
+Perfectly no more than once a page.
+Yeah.
+If you're using too many M dashes, it means that you haven't organized your thoughts properly.
+Yeah.
+Too many asides.
+Or for doing asides.
+Yes.
+But.
+Yeah, I was going to say at the time now, it's too fast forward, so you need to.
+Yes.
+I was going to go back and over to the other one.
+Okay.
+Lovely meeting.
+I look forward to seeing more of your progress, Ricardo.
+And also trying to figure out how I might be able to help, if at all, with my work.
+But I think, well, we'll see.
+And by the same token.
+Visualization, that's going to be really helpful.
+Yeah.
+By the same token, you know, Ricardo, you might be able to help Eric do visualization stuff.
+Yeah.
+Exactly.
+I might need some suggestions.
+Because right now I don't have any visualization implemented yet.
+If you need any input from my side, do you like the stuff I'm doing?
+Or do you need like, as a user, what I'd be interested in?
+Yes.
+The user experience.
+That's what I need.
+Okay.
+All right.
+Talk to you guys later.
+Ricardo, am I correct?
+I cannot meet that.
+What's your Tuesday afternoon look like?
+Very busy.
+I can't meet until like 4.30.
+Yeah, okay.
+So there's no chance that you're going to join with Eric.
+So as far as I'm concerned, I'm happy to have both of you during this time slot at the top.
+I cannot.
+I have a class at 3.05.
+Today, because of the stuff, the class is not happening.
+Ah, right.
+Good point.
+Okay.
+What about this half of that?
+If necessary, I can show up like every once in a while during Eric's meeting.
+When's your meeting on Tuesday?
+It's Tuesdays at, what is it, 3?
+2.50?
+2.50 to 3.50, yeah.
+Yeah, so I can occasionally show up to that.
+I will need to miss complex analysis, but I'm not enrolled in that.
+So it's fine if I miss it every once in a while.
+Okay.
+So just keep that in mind that this has been very productive.
+I think that you two are working on separate things, but they complement each other extremely well.
+They do.
+I think that your skill sets complement your projects very well.
+So Eric, when yours might be missing, Ricardo's really good at doing.
+Yes, yes.
+The visualization stuff, I'm particularly keen on picking apart Ricardo's brain eventually.
+Right, right.
+And the alignment project, you have software that can be useful for exploring that.
+And for directing what we might actually want to prove.
+So we can also think of just having meetings at some completely other time.
+But I'm going to head over to the other meeting to have them.
+Okay.
+All right.
+Bye.
+Bye.
+Bye, guys.
+Thank you.

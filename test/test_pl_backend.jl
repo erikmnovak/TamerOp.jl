@@ -2,6 +2,10 @@ using Test
 
 # Included from test/runtests.jl; uses shared aliases (PM, PLP, PLB, FF, QQ, ...).
 
+with_fields(FIELDS_FULL) do field
+    K = CM.coeff_type(field)
+    @inline c(x) = CM.coerce(field, x)
+    if field isa CM.QQField
 
 @testset "Rn wrappers: common encoding matches explicit encoding route" begin
     # This test checks that the one-line R^n wrappers:
@@ -17,18 +21,18 @@ using Test
     # make_hpoly(A, b) builds an HPoly for inequalities A*x <= b.
 
     # F1: support approximately [0,1]^2
-    U1_hp = PLP.make_hpoly(QQ[-1 0; 0 -1], QQ[0, 0])    # x >= 0, y >= 0
-    D1_hp = PLP.make_hpoly(QQ[ 1 0; 0  1], QQ[1, 1])    # x <= 1, y <= 1
+    U1_hp = PLP.make_hpoly(K[c(-1) c(0); c(0) c(-1)], K[c(0), c(0)])    # x >= 0, y >= 0
+    D1_hp = PLP.make_hpoly(K[c(1) c(0); c(0) c(1)], K[c(1), c(1)])      # x <= 1, y <= 1
     U1 = PLP.PLUpset(PLP.PolyUnion(2, [U1_hp]))
     D1 = PLP.PLDownset(PLP.PolyUnion(2, [D1_hp]))
-    F1 = PLP.PLFringe([U1], [D1], reshape(QQ[1], 1, 1))
+    F1 = PLP.PLFringe([U1], [D1], reshape(K[c(1)], 1, 1))
 
     # F2: support approximately [1,2]^2
-    U2_hp = PLP.make_hpoly(QQ[-1 0; 0 -1], QQ[-1, -1])  # x >= 1, y >= 1
-    D2_hp = PLP.make_hpoly(QQ[ 1 0; 0  1], QQ[2, 2])    # x <= 2, y <= 2
+    U2_hp = PLP.make_hpoly(K[c(-1) c(0); c(0) c(-1)], K[c(-1), c(-1)])  # x >= 1, y >= 1
+    D2_hp = PLP.make_hpoly(K[c(1) c(0); c(0) c(1)], K[c(2), c(2)])      # x <= 2, y <= 2
     U2 = PLP.PLUpset(PLP.PolyUnion(2, [U2_hp]))
     D2 = PLP.PLDownset(PLP.PolyUnion(2, [D2_hp]))
-    F2 = PLP.PLFringe([U2], [D2], reshape(QQ[1], 1, 1))
+    F2 = PLP.PLFringe([U2], [D2], reshape(K[c(1)], 1, 1))
 
     enc_pl = PM.EncodingOptions(backend=:pl, max_regions=50_000, strict_eps=PLP.STRICT_EPS_QQ)
     df2 = PM.DerivedFunctorOptions(maxdeg=2)
@@ -75,7 +79,7 @@ end
     if !PLP.HAVE_POLY
         U1 = PLP.PLUpset(PLP.PolyUnion(1, [PLP.make_hpoly([-1.0], [0.0])]))   # x >= 0
         D1 = PLP.PLDownset(PLP.PolyUnion(1, [PLP.make_hpoly([ 1.0], [2.0])])) # x <= 2
-        F1 = PLP.PLFringe([U1], [D1], reshape(QQ[1], 1, 1))
+        F1 = PLP.PLFringe([U1], [D1], reshape(K[c(1)], 1, 1))
 
         @test_throws ErrorException PLP.encode_from_PL_fringes(F1, F1, enc_pl_10k)
     else
@@ -86,8 +90,8 @@ end
         U2 = PLP.PLUpset(PLP.PolyUnion(1, [PLP.make_hpoly([-1.0], [-1.0])]))  # x >= 1
         D2 = PLP.PLDownset(PLP.PolyUnion(1, [PLP.make_hpoly([ 1.0], [ 3.0])]))# x <= 3
 
-        F1 = PLP.PLFringe([U1], [D1], reshape(QQ[1], 1, 1))
-        F2 = PLP.PLFringe([U2], [D2], reshape(QQ[1], 1, 1))
+        F1 = PLP.PLFringe([U1], [D1], reshape(K[c(1)], 1, 1))
+        F2 = PLP.PLFringe([U2], [D2], reshape(K[c(1)], 1, 1))
 
         P, Hs, pi = PLP.encode_from_PL_fringes(F1, F2, enc_pl_10k)
 
@@ -122,11 +126,11 @@ end
 @testset "PLPolyhedra optional backend" begin
     if PLP.HAVE_POLY
         # Unit square: 0 <= x <= 1, 0 <= y <= 1
-        A = QQ[QQ(1)  QQ(0);
-               QQ(0)  QQ(1);
-               QQ(-1) QQ(0);
-               QQ(0)  QQ(-1)]
-        b = QQ[QQ(1), QQ(1), QQ(0), QQ(0)]
+        A = K[c(1)  c(0);
+              c(0)  c(1);
+              c(-1) c(0);
+              c(0)  c(-1)]
+        b = K[c(1), c(1), c(0), c(0)]
         h = PLP.make_hpoly(A, b)
 
         @test PLP._in_hpoly(h, [0, 0]) == true
@@ -136,8 +140,8 @@ end
     else
         # Even without Polyhedra/CDDLib, make_hpoly should still build an HPoly
         # that supports exact membership tests via its stored A*x <= b data.
-        A = reshape(QQ[QQ(1)], 1, 1)
-        b = QQ[QQ(1)]
+        A = reshape(K[c(1)], 1, 1)
+        b = K[c(1)]
         h = PLP.make_hpoly(A, b)
         @test h.poly === nothing
         @test PLP._in_hpoly(h, [0]) == true
@@ -156,7 +160,7 @@ end
     # phi = [1], so the represented module should be supported exactly in the middle region.
     Ups = [PLB.BoxUpset([0.0])]
     Downs = [PLB.BoxDownset([2.0])]
-    Phi = reshape(QQ[1], 1, 1)
+    Phi = reshape(K[c(1)], 1, 1)
 
     # Error guard: if max_regions is too small, the backend should refuse.
     @test_throws ErrorException PLB.encode_fringe_boxes(Ups, Downs, Phi, enc_axis_small)
@@ -213,7 +217,7 @@ end
     @testset "locate caches in 2D" begin
         Ups2 = [PLB.BoxUpset([0.0, 0.0])]
         Downs2 = [PLB.BoxDownset([2.0, 2.0])]
-        Phi2 = reshape(QQ[1], 1, 1)
+        Phi2 = reshape(K[c(1)], 1, 1)
 
         P2, H2, pi2 = PLB.encode_fringe_boxes(Ups2, Downs2, Phi2, enc_axis)
 
@@ -239,3 +243,6 @@ end
     end
 
 end
+
+    end # field isa CM.QQField
+end # with_fields

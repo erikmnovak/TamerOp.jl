@@ -23,7 +23,7 @@ module PLBackend
 using ..FiniteFringe
 import ..FiniteFringe: AbstractPoset, nvertices
 import ..ZnEncoding: SignaturePoset
-using ..CoreModules: QQ, AbstractPLikeEncodingMap, EncodingOptions
+using ..CoreModules: QQ, AbstractPLikeEncodingMap, EncodingOptions, CompiledEncoding
 
 @inline _resolve_encoding_opts(opts::Union{EncodingOptions,Nothing}) =
     opts === nothing ? EncodingOptions() : opts
@@ -2036,5 +2036,34 @@ encode_fringe_boxes(Ups::Vector{BoxUpset},
                     opts::Union{EncodingOptions,Nothing}=nothing,
                     poset_kind::Symbol = :signature) =
     encode_fringe_boxes(Ups, Downs, Phi_vec, _resolve_encoding_opts(opts); poset_kind = poset_kind)
+
+# -----------------------------------------------------------------------------
+# CompiledEncoding forwarding (treat compiled encodings as primary)
+# -----------------------------------------------------------------------------
+
+@inline _unwrap_encoding(pi::CompiledEncoding) = pi.pi
+
+region_weights(pi::CompiledEncoding{<:PLEncodingMapBoxes}; kwargs...) =
+    region_weights(_unwrap_encoding(pi); kwargs...)
+region_bbox(pi::CompiledEncoding{<:PLEncodingMapBoxes}, r; kwargs...) =
+    region_bbox(_unwrap_encoding(pi), r; kwargs...)
+region_diameter(pi::CompiledEncoding{<:PLEncodingMapBoxes}, r; kwargs...) =
+    region_diameter(_unwrap_encoding(pi), r; kwargs...)
+region_adjacency(pi::CompiledEncoding{<:PLEncodingMapBoxes}; kwargs...) =
+    region_adjacency(_unwrap_encoding(pi); kwargs...)
+region_boundary_measure(pi::CompiledEncoding{<:PLEncodingMapBoxes}, r; kwargs...) =
+    region_boundary_measure(_unwrap_encoding(pi), r; kwargs...)
+region_boundary_measure_breakdown(pi::CompiledEncoding{<:PLEncodingMapBoxes}, r; kwargs...) =
+    region_boundary_measure_breakdown(_unwrap_encoding(pi), r; kwargs...)
+region_centroid(pi::CompiledEncoding{<:PLEncodingMapBoxes}, r; kwargs...) =
+    region_centroid(_unwrap_encoding(pi), r; kwargs...)
+region_principal_directions(pi::CompiledEncoding{<:PLEncodingMapBoxes}, r; kwargs...) =
+    region_principal_directions(_unwrap_encoding(pi), r; kwargs...)
+region_chebyshev_ball(pi::CompiledEncoding{<:PLEncodingMapBoxes}, r; kwargs...) =
+    region_chebyshev_ball(_unwrap_encoding(pi), r; kwargs...)
+region_circumradius(pi::CompiledEncoding{<:PLEncodingMapBoxes}, r; kwargs...) =
+    region_circumradius(_unwrap_encoding(pi), r; kwargs...)
+region_mean_width(pi::CompiledEncoding{<:PLEncodingMapBoxes}, r; kwargs...) =
+    region_mean_width(_unwrap_encoding(pi), r; kwargs...)
 
 end # module PLBackend

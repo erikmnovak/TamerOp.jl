@@ -4,6 +4,10 @@ using SparseArrays
 const PM = PosetModules.Advanced
 const IR = PM.IndicatorResolutions
 
+with_fields(FIELDS_FULL) do field
+K = CM.coeff_type(field)
+@inline c(x) = CM.coerce(field, x)
+
 @testset "Data pipeline: JSON round-trips" begin
     mktemp() do path, io
         close(io)
@@ -93,8 +97,9 @@ const IR = PM.IndicatorResolutions
         F = PosetModules.face(1, [1])
         flats = [PosetModules.IndFlat(F, [0]; id=:F)]
         injectives = [PosetModules.IndInj(F, [0]; id=:E)]
-        FG = PosetModules.Flange{PosetModules.QQ}(1, flats, injectives, [PosetModules.QQ(1)])
+        FG = PosetModules.Flange{K}(1, flats, injectives, [c(1)]; field=field)
         enc = PosetModules.encode(FG; backend=:zn)
+        @test enc.pi isa PosetModules.CompiledEncoding
         PosetModules.save_encoding_json(path, enc.P, enc.H, enc.pi)
         H2, pi2 = PosetModules.load_encoding_json(path; return_pi=true)
         @test PosetModules.axes_from_encoding(pi2) == PosetModules.axes_from_encoding(enc.pi)
@@ -105,6 +110,7 @@ const IR = PM.IndicatorResolutions
         Ups = [PosetModules.BoxUpset([0.0, 0.0])]
         Downs = [PosetModules.BoxDownset([1.0, 1.0])]
         enc = PosetModules.encode(Ups, Downs; backend=:pl_backend)
+        @test enc.pi isa PosetModules.CompiledEncoding
         PosetModules.save_encoding_json(path, enc.P, enc.H, enc.pi)
         H2, pi2 = PosetModules.load_encoding_json(path; return_pi=true)
         @test PosetModules.axes_from_encoding(pi2) == PosetModules.axes_from_encoding(enc.pi)
@@ -125,7 +131,7 @@ const IR = PM.IndicatorResolutions
         P = PosetModules.ZnEncoding.SignaturePoset(sig_y, sig_z)
         U = PosetModules.upset_closure(P, trues(PosetModules.nvertices(P)))
         D = PosetModules.downset_closure(P, trues(PosetModules.nvertices(P)))
-        H = PosetModules.FringeModule{PosetModules.QQ}(P, [U], [D], reshape([PosetModules.QQ(1)], 1, 1))
+        H = PosetModules.FringeModule{K}(P, [U], [D], reshape([c(1)], 1, 1); field=field)
         PosetModules.save_encoding_json(path, H; include_leq=false)
         H2 = PosetModules.load_encoding_json(path)
         @test H2.P isa PosetModules.ZnEncoding.SignaturePoset
@@ -137,16 +143,17 @@ end
 @testset "Data pipeline: poset_from_axes kind=:grid" begin
     axes = (Float64[0.0, 1.0], Float64[0.0, 2.0, 4.0])
     P = PosetModules.poset_from_axes(axes; kind=:grid)
-    @test P isa PosetModules.GridPoset
+    @test P isa PosetModules.ProductOfChainsPoset
     @test PosetModules.nvertices(P) == 2 * 3
     @test PosetModules.leq(P, 1, 6)
     @test !PosetModules.leq(P, 6, 1)
 end
 
+end # with_fields
 @testset "Data pipeline: poset_from_axes kind=:grid with orientation -1" begin
     axes = (Float64[0.0, 1.0], Float64[0.0, 2.0, 4.0])
     P = PosetModules.poset_from_axes(axes; orientation=(1, -1), kind=:grid)
-    @test P isa PosetModules.ProductOfChainsPoset
+    @test P isa PosetModules.FinitePoset
     @test PosetModules.nvertices(P) == 2 * 3
 end
 

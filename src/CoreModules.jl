@@ -15,9 +15,222 @@ const QQ = Rational{BigInt}
 export QQ
 
 
+# ----- coefficient field layer ---------------------------------------------------
+module CoeffFields
+using LinearAlgebra
+using Random
+using ..CoreModules: QQ
+
+export AbstractCoeffField, QQField, RealField, PrimeField
+export F2, F3, Fp, coeff_type, coerce
+export FpElem, field_from_eltype, zeros, ones, eye, rand
+
+"Abstract supertype for coefficient fields."
+abstract type AbstractCoeffField end
+
+"Exact rationals (QQ)."
+struct QQField <: AbstractCoeffField end
+
+"Real (floating) field with tolerances."
+struct RealField{T<:AbstractFloat} <: AbstractCoeffField
+    rtol::T
+    atol::T
+end
+
+function RealField(::Type{T}; rtol::T = sqrt(eps(T)), atol::T = zero(T)) where {T<:AbstractFloat}
+    RealField{T}(rtol, atol)
+end
+
+"Prime field of characteristic p."
+struct PrimeField <: AbstractCoeffField
+    p::Int
+    function PrimeField(p::Integer)
+        p > 1 || throw(ArgumentError("prime field requires p > 1"))
+        new(Int(p))
+    end
+end
+
+Base.:(==)(::QQField, ::QQField) = true
+Base.:(==)(a::RealField{T}, b::RealField{T}) where {T<:AbstractFloat} =
+    (a.rtol == b.rtol) && (a.atol == b.atol)
+Base.:(==)(a::PrimeField, b::PrimeField) = a.p == b.p
+
+F2() = PrimeField(2)
+F3() = PrimeField(3)
+Fp(p::Integer) = PrimeField(p)
+
+"Element type for prime fields, parameterized by modulus."
+struct FpElem{p} <: Integer
+    val::Int
+    function FpElem{p}(x::Integer) where {p}
+        new{p}(mod(x, p))
+    end
+end
+
+Base.show(io::IO, x::FpElem{p}) where {p} = print(io, x.val)
+Base.zero(::Type{FpElem{p}}) where {p} = FpElem{p}(0)
+Base.one(::Type{FpElem{p}}) where {p} = FpElem{p}(1)
+Base.iszero(x::FpElem{p}) where {p} = x.val == 0
+Base.conj(x::FpElem{p}) where {p} = x
+Base.hash(x::FpElem{p}, h::UInt) where {p} = hash(x.val, h)
+
+Base.convert(::Type{FpElem{p}}, x::Integer) where {p} = FpElem{p}(x)
+Base.promote_rule(::Type{FpElem{p}}, ::Type{<:Integer}) where {p} = FpElem{p}
+
+Base.:+(a::FpElem{p}, b::FpElem{p}) where {p} = FpElem{p}(a.val + b.val)
+Base.:-(a::FpElem{p}, b::FpElem{p}) where {p} = FpElem{p}(a.val - b.val)
+Base.:-(a::FpElem{p}) where {p} = FpElem{p}(-a.val)
+Base.:*(a::FpElem{p}, b::FpElem{p}) where {p} = FpElem{p}(a.val * b.val)
+Base.:(==)(a::FpElem{p}, b::FpElem{p}) where {p} = a.val == b.val
+
+function Base.inv(a::FpElem{p}) where {p}
+    a.val == 0 && throw(DomainError(a, "division by zero in Fp"))
+    return FpElem{p}(invmod(a.val, p))
+end
+
+Base.:/(a::FpElem{p}, b::FpElem{p}) where {p} = a * inv(b)
+
+"Return the scalar element type used for a given field."
+coeff_type(::QQField) = QQ
+coeff_type(::RealField{T}) where {T<:AbstractFloat} = T
+coeff_type(F::PrimeField) = FpElem{F.p}
+
+"Infer a coefficient field object from an element type."
+field_from_eltype(::Type{QQ}) = QQField()
+field_from_eltype(::Type{<:Rational}) = QQField()
+field_from_eltype(::Type{T}) where {T<:AbstractFloat} = RealField(T)
+field_from_eltype(::Type{FpElem{p}}) where {p} = PrimeField(p)
+field_from_eltype(::Type{K}) where {K} =
+    throw(ArgumentError("no field mapping for element type $(K)"))
+
+"Field-aware zero/one."
+Base.zero(F::AbstractCoeffField) = zero(coeff_type(F))
+Base.one(F::AbstractCoeffField) = one(coeff_type(F))
+
+"Coerce scalars into the given coefficient field."
+coerce(::QQField, x::Integer) = QQ(x)
+coerce(::QQField, x::Rational) = QQ(x)
+coerce(::QQField, x::AbstractFloat) = rationalize(BigInt, x)
+coerce(::QQField, x::QQ) = x
+
+coerce(::RealField{T}, x::Integer) where {T<:AbstractFloat} = T(x)
+coerce(::RealField{T}, x::Rational) where {T<:AbstractFloat} =
+    T(numerator(x)) / T(denominator(x))
+coerce(::RealField{T}, x::AbstractFloat) where {T<:AbstractFloat} = T(x)
+
+function coerce(F::PrimeField, x::Integer)
+    K = coeff_type(F)
+    return K(x)
+end
+
+function coerce(F::PrimeField, x::Rational)
+    p = F.p
+    den = denominator(x)
+    g = gcd(den, p)
+    g == 1 || g == one(g) || throw(ArgumentError("denominator not invertible mod $p"))
+    num = numerator(x)
+    num_mod = Int(mod(num, p))
+    den_mod = Int(mod(den, p))
+    inv_den = invmod(den_mod, p)
+    return FpElem{p}(num_mod * inv_den)
+end
+
+function coerce(F::PrimeField, x::FpElem{p}) where {p}
+    F.p == p || throw(ArgumentError("cannot coerce FpElem{$p} into Fp($(F.p))"))
+    return x
+end
+
+coerce(F::PrimeField, x::AbstractFloat) =
+    throw(ArgumentError("cannot coerce float into Fp($(F.p)) without an explicit rule"))
+
+"Allocate a dense zeros matrix over the field."
+function zeros(F::AbstractCoeffField, m::Integer, n::Integer)
+    K = coeff_type(F)
+    A = Matrix{K}(undef, m, n)
+    fill!(A, zero(K))
+    return A
+end
+
+"Allocate a dense ones matrix over the field."
+function ones(F::AbstractCoeffField, m::Integer, n::Integer)
+    K = coeff_type(F)
+    A = Matrix{K}(undef, m, n)
+    fill!(A, one(K))
+    return A
+end
+
+"Allocate a dense identity matrix over the field."
+function eye(F::AbstractCoeffField, n::Integer)
+    K = coeff_type(F)
+    A = Matrix{K}(undef, n, n)
+    z = zero(K)
+    o = one(K)
+    @inbounds for j in 1:n
+        for i in 1:n
+            A[i, j] = (i == j) ? o : z
+        end
+    end
+    return A
+end
+
+"Allocate a dense random matrix over the field."
+function rand(F::AbstractCoeffField, m::Integer, n::Integer; density::Real=1.0)
+    (0.0 <= density <= 1.0) || throw(ArgumentError("density must be in [0,1]"))
+    K = coeff_type(F)
+    A = Matrix{K}(undef, m, n)
+
+    if density == 1.0
+        @inbounds for j in 1:n, i in 1:m
+            A[i, j] = _rand_scalar(F)
+        end
+        return A
+    end
+
+    z = zero(K)
+    @inbounds for j in 1:n, i in 1:m
+        A[i, j] = (rand() <= density) ? _rand_scalar(F) : z
+    end
+    return A
+end
+
+_rand_scalar(::QQField) = QQ(rand(-5:5))
+_rand_scalar(::RealField{T}) where {T<:AbstractFloat} = rand(T)
+_rand_scalar(F::PrimeField) = FpElem{F.p}(rand(0:F.p-1))
+
+end # module CoeffFields
+
+using .CoeffFields: AbstractCoeffField, QQField, RealField, PrimeField,
+    F2, F3, Fp, coeff_type, coerce, FpElem, field_from_eltype, eye
+export AbstractCoeffField, QQField, RealField, PrimeField,
+    F2, F3, Fp, coeff_type, coerce, FpElem, field_from_eltype, eye
+
 """
-    _append_scaled_triplets!(I, J, V, A, row_off, col_off; scale=one(QQ))
-    _append_scaled_triplets!(I, J, V, A, rows, cols; scale=one(QQ))
+    change_field(x, field)
+
+Coerce a structure into the specified coefficient field.
+"""
+function change_field end
+export change_field
+
+
+"""
+    encode_from_data(data, spec; kwargs...)
+
+High-level ingestion entrypoint. This should turn a dataset + filtration
+spec into a finite-encoded fringe module plus encoding map.
+"""
+function encode_from_data end
+
+"""
+    ingest(data, spec; kwargs...)
+
+Alias for `encode_from_data` to support narrative workflows.
+"""
+function ingest end
+
+"""
+    _append_scaled_triplets!(I, J, V, A, row_off, col_off; scale=one(eltype(A)))
+    _append_scaled_triplets!(I, J, V, A, rows, cols; scale=one(eltype(A)))
 
 Internal helper for assembling sparse matrices via (I,J,V) triplets.
 
@@ -46,12 +259,12 @@ Duplicates are allowed; `sparse(I,J,V,...)` will sum them.
 
 All indexing is 1-based.
 """
-function _append_scaled_triplets!(I::Vector{Int}, J::Vector{Int}, V::Vector{QQ},
-                                 A::AbstractMatrix{QQ},
+function _append_scaled_triplets!(I::Vector{Int}, J::Vector{Int}, V::Vector{K},
+                                 A::AbstractMatrix{K},
                                  row_off::Int, col_off::Int;
-                                 scale::QQ = one(QQ))
+                                 scale::K = one(K)) where {K}
     # Sparse fast-path
-    if A isa SparseMatrixCSC{QQ,Int}
+    if A isa SparseMatrixCSC{K,Int}
         Ii, Jj, Vv = findnz(A)
         @inbounds for k in eachindex(Ii)
             a = Vv[k]
@@ -64,8 +277,8 @@ function _append_scaled_triplets!(I::Vector{Int}, J::Vector{Int}, V::Vector{QQ},
     end
 
     # Transpose/adjoint of sparse: iterate parent nnz and swap indices
-    if (A isa LinearAlgebra.Transpose{QQ,<:SparseMatrixCSC{QQ,Int}}) ||
-       (A isa LinearAlgebra.Adjoint{QQ,<:SparseMatrixCSC{QQ,Int}})
+    if (A isa LinearAlgebra.Transpose{K,<:SparseMatrixCSC{K,Int}}) ||
+       (A isa LinearAlgebra.Adjoint{K,<:SparseMatrixCSC{K,Int}})
         S = parent(A)
         Ii, Jj, Vv = findnz(S)
         @inbounds for k in eachindex(Ii)
@@ -73,7 +286,7 @@ function _append_scaled_triplets!(I::Vector{Int}, J::Vector{Int}, V::Vector{QQ},
             iszero(a) && continue
             push!(I, row_off + Jj[k])
             push!(J, col_off + Ii[k])
-            push!(V, scale * a)   # QQ has no conjugation effect
+            push!(V, scale * a)
         end
         return nothing
     end
@@ -93,15 +306,15 @@ function _append_scaled_triplets!(I::Vector{Int}, J::Vector{Int}, V::Vector{QQ},
     return nothing
 end
 
-function _append_scaled_triplets!(I::Vector{Int}, J::Vector{Int}, V::Vector{QQ},
-                                 A::AbstractMatrix{QQ},
+function _append_scaled_triplets!(I::Vector{Int}, J::Vector{Int}, V::Vector{K},
+                                 A::AbstractMatrix{K},
                                  rows::AbstractVector{<:Integer},
                                  cols::AbstractVector{<:Integer};
-                                 scale::QQ = one(QQ))
+                                 scale::K = one(K)) where {K}
     @assert length(rows) == size(A, 1)
     @assert length(cols) == size(A, 2)
 
-    if A isa SparseMatrixCSC{QQ,Int}
+    if A isa SparseMatrixCSC{K,Int}
         Ii, Jj, Vv = findnz(A)
         @inbounds for k in eachindex(Ii)
             a = Vv[k]
@@ -113,8 +326,8 @@ function _append_scaled_triplets!(I::Vector{Int}, J::Vector{Int}, V::Vector{QQ},
         return nothing
     end
 
-    if (A isa LinearAlgebra.Transpose{QQ,<:SparseMatrixCSC{QQ,Int}}) ||
-       (A isa LinearAlgebra.Adjoint{QQ,<:SparseMatrixCSC{QQ,Int}})
+    if (A isa LinearAlgebra.Transpose{K,<:SparseMatrixCSC{K,Int}}) ||
+       (A isa LinearAlgebra.Adjoint{K,<:SparseMatrixCSC{K,Int}})
         S = parent(A)
         Ii, Jj, Vv = findnz(S)
         @inbounds for k in eachindex(Ii)
@@ -203,6 +416,53 @@ const PLikeEncodingMap = AbstractPLikeEncodingMap
 
 export AbstractPLikeEncodingMap, PLikeEncodingMap
 
+# -----------------------------------------------------------------------------
+# Compiled encoding wrappers (primary type for repeated queries)
+# -----------------------------------------------------------------------------
+
+"""
+    CompiledEncoding(P, pi; axes=nothing, reps=nothing, meta=NamedTuple())
+
+Primary wrapper for encoding maps. Stores the finite encoding poset `P` and
+cached encoding metadata used by hot query paths.
+"""
+struct CompiledEncoding{PiType,PType,AxesType,RepsType,MetaType} <: AbstractPLikeEncodingMap
+    P::PType
+    pi::PiType
+    axes::AxesType
+    reps::RepsType
+    meta::MetaType
+end
+
+@inline encoding_map(enc::CompiledEncoding) = enc.pi
+
+function compile_encoding(P, pi; axes=nothing, reps=nothing, meta=NamedTuple())
+    axes_val = axes
+    reps_val = reps
+    if axes_val === nothing && hasmethod(axes_from_encoding, (typeof(pi),))
+        axes_val = axes_from_encoding(pi)
+    end
+    if reps_val === nothing && hasmethod(representatives, (typeof(pi),))
+        reps_val = representatives(pi)
+    end
+    return CompiledEncoding(P, pi, axes_val, reps_val, meta)
+end
+
+compile_encoding(::Any, ::Nothing; kwargs...) = nothing
+
+function Base.getproperty(enc::CompiledEncoding, name::Symbol)
+    if name === :P || name === :pi || name === :axes || name === :reps || name === :meta
+        return getfield(enc, name)
+    end
+    return getproperty(getfield(enc, :pi), name)
+end
+
+function Base.propertynames(enc::CompiledEncoding, private::Bool=false)
+    return (fieldnames(typeof(enc))..., propertynames(enc.pi, private)...)
+end
+
+export CompiledEncoding, compile_encoding, encoding_map
+
 
 # ----- shared API hooks ----------------------------------------------------------
 
@@ -241,6 +501,8 @@ function locate(pi::AbstractPLikeEncodingMap, x::NTuple{N,<:Real}) where {N}
     return locate(pi, collect(x))
 end
 
+locate(enc::CompiledEncoding, x) = locate(enc.pi, x)
+
 """
     dimension(pi) -> Int
 
@@ -250,6 +512,8 @@ This should match the expected length of the coordinate vector accepted by
 `locate(pi, x::AbstractVector)`.
 """
 function dimension end
+
+dimension(enc::CompiledEncoding) = dimension(enc.pi)
 
 """
     representatives(pi)
@@ -261,6 +525,10 @@ parameter space (for example to infer a bounding box). A representative point
 must be indexable and have length `dimension(pi)`.
 """
 function representatives end
+
+function representatives(enc::CompiledEncoding)
+    enc.reps === nothing ? representatives(enc.pi) : enc.reps
+end
 
 """
     axes_from_encoding(pi)
@@ -276,13 +544,18 @@ explicit `axes`.
 """
 function axes_from_encoding end
 
+function axes_from_encoding(enc::CompiledEncoding)
+    enc.axes === nothing ? axes_from_encoding(enc.pi) : enc.axes
+end
+
 export locate, dimension, representatives, axes_from_encoding
 
 # =============================================================================
 # Option structs (public API)
 
 """
-    EncodingOptions(; backend=:auto, max_regions=nothing, strict_eps=nothing, poset_kind=:signature)
+    EncodingOptions(; backend=:auto, max_regions=nothing, strict_eps=nothing,
+                    poset_kind=:signature, field=QQField())
 
 Options controlling finite encodings. Used by:
 * `ZnEncoding.encode_from_flange(s)` and related helpers (backend=:zn)
@@ -294,18 +567,25 @@ Fields:
 * `max_regions`: Integer cap for region enumeration (backend-dependent defaults).
 * `strict_eps`: QQ tolerance used by PL polyhedra backend (default backend constant).
 * `poset_kind`: `:signature` (structured, default) or `:dense` (materialized `FinitePoset`).
+* `field`: coefficient field used for module data (encoding itself may still use QQ).
 """
 struct EncodingOptions
     backend::Symbol
     max_regions::Union{Nothing, Int}
     strict_eps::Any
     poset_kind::Symbol
+    field::AbstractCoeffField
 end
-EncodingOptions(; backend::Symbol=:auto, max_regions=nothing, strict_eps=nothing, poset_kind::Symbol=:signature) =
+EncodingOptions(; backend::Symbol=:auto,
+                max_regions=nothing,
+                strict_eps=nothing,
+                poset_kind::Symbol=:signature,
+                field::AbstractCoeffField=QQField()) =
     EncodingOptions(backend,
                     max_regions === nothing ? nothing : Int(max_regions),
                     strict_eps,
-                    poset_kind)
+                    poset_kind,
+                    field)
 
 """
     ResolutionOptions(; maxlen=3, minimal=false, check=true)
@@ -383,7 +663,7 @@ DerivedFunctorOptions(; maxdeg::Int=3, model::Symbol=:auto, canon::Symbol=:auto)
     DerivedFunctorOptions(maxdeg, model, canon)
 
 """
-    FiniteFringeOptions(; check=true, cached=true, store_sparse=false, scalar=QQ(1), poset_kind=:regions)
+    FiniteFringeOptions(; check=true, cached=true, store_sparse=false, scalar=1, poset_kind=:regions)
 
 Options for FiniteFringe convenience entrypoints.
 """
@@ -397,7 +677,7 @@ end
 FiniteFringeOptions(; check::Bool=true,
                     cached::Bool=true,
                     store_sparse::Bool=false,
-                    scalar=QQ(1),
+                    scalar=1,
                     poset_kind::Symbol=:regions) =
     FiniteFringeOptions(check, cached, store_sparse, scalar, poset_kind)
 
@@ -453,6 +733,9 @@ EncodingResult(P, M, pi;
                meta=NamedTuple()) =
     EncodingResult(P, M, pi, H, presentation, opts, backend, meta)
 
+compile_encoding(enc::EncodingResult; kwargs...) =
+    enc.pi isa CompiledEncoding ? enc.pi : compile_encoding(enc.P, enc.pi; kwargs...)
+
 Base.length(::EncodingResult) = 3
 Base.IteratorSize(::Type{<:EncodingResult}) = Base.HasLength()
 
@@ -461,6 +744,26 @@ function Base.iterate(enc::EncodingResult, state::Int=1)
     state == 2 && return (enc.M, 3)
     state == 3 && return (enc.pi, 4)
     return nothing
+end
+
+"""
+    change_field(enc, field)
+
+Return an EncodingResult obtained by coercing stored modules into `field`.
+"""
+function change_field(enc::EncodingResult, field::AbstractCoeffField)
+    M2 = change_field(enc.M, field)
+    H2 = enc.H === nothing ? nothing : change_field(enc.H, field)
+    pres2 = enc.presentation
+    if pres2 !== nothing && hasmethod(change_field, (typeof(pres2), AbstractCoeffField))
+        pres2 = change_field(pres2, field)
+    end
+    return EncodingResult(enc.P, M2, enc.pi;
+                          H=H2,
+                          presentation=pres2,
+                          opts=enc.opts,
+                          backend=enc.backend,
+                          meta=enc.meta)
 end
 
 """
@@ -503,6 +806,37 @@ InvariantResult(enc, which, value;
                 opts::InvariantOptions=InvariantOptions(),
                 meta=NamedTuple()) =
     InvariantResult(enc, which, value, opts, meta)
+
+"""
+    change_field(res, field)
+
+Return a ResolutionResult with its stored resolution/encoding coerced into `field`
+when possible.
+"""
+function change_field(res::ResolutionResult, field::AbstractCoeffField)
+    enc2 = res.enc === nothing ? nothing : change_field(res.enc, field)
+    res2 = res.res
+    if res2 !== nothing && hasmethod(change_field, (typeof(res2), AbstractCoeffField))
+        res2 = change_field(res2, field)
+    end
+    return ResolutionResult(res2;
+                            enc=enc2,
+                            betti=res.betti,
+                            minimality=res.minimality,
+                            opts=res.opts,
+                            meta=res.meta)
+end
+
+"""
+    change_field(inv, field)
+
+Return an InvariantResult with its stored encoding coerced into `field`
+when possible.
+"""
+function change_field(inv::InvariantResult, field::AbstractCoeffField)
+    enc2 = change_field(inv.enc, field)
+    return InvariantResult(enc2, inv.which, inv.value; opts=inv.opts, meta=inv.meta)
+end
 
 
 export EncodingOptions, ResolutionOptions, InvariantOptions, DerivedFunctorOptions

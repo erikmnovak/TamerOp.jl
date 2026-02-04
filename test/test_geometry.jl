@@ -3,12 +3,17 @@ using Random
 
 # Included from test/runtests.jl; uses shared aliases (PM, FF, PLP, PLB, QQ, ...).
 
+with_fields(FIELDS_FULL) do field
+K = CM.coeff_type(field)
+@inline c(x) = CM.coerce(field, x)
+
+if field isa CM.QQField
 @testset "Region geometry for PLBackend (axis-aligned boxes)" begin
 
     # 1D example: one upset x >= 0 and one downset x <= 2.
     Ups = [PLB.BoxUpset([0.0])]
     Downs = [PLB.BoxDownset([2.0])]
-    Phi = reshape(QQ[1], 1, 1)  # 1x1 matrix
+    Phi = reshape(K[c(1)], 1, 1)  # 1x1 matrix
 
     P, H, pi = PLB.encode_fringe_boxes(Ups, Downs, Phi)
 
@@ -42,7 +47,7 @@ using Random
     # one downset D = {x <= 0, y <= 0}. Then z = !contains(D, x) is true outside that quadrant.
     Ups2 = PLB.BoxUpset[]
     Downs2 = [PLB.BoxDownset([0.0, 0.0])]
-    Phi2 = zeros(QQ, 1, 0)  # r=1, m=0
+    Phi2 = zeros(K, 1, 0)  # r=1, m=0
 
     P2, H2, pi2 = PLB.encode_fringe_boxes(Ups2, Downs2, Phi2)
 
@@ -73,7 +78,9 @@ using Random
     @test isapprox(PM.region_diameter(pi2, t_out; box=box2, metric=:Linf), 2.0; atol=1e-12)
     @test isapprox(PM.region_diameter(pi2, t_out; box=box2, metric=:L2),   2.0 * sqrt(2.0); atol=1e-12)
 end
+end
 
+if field isa CM.QQField
 @testset "Region geometry for PLEncodingMap (Monte Carlo weights + bbox/diameter)" begin
     # Build a toy 1D polyhedral encoding with two regions:
     #   R1 = [0, 1], R2 = [1, 2]
@@ -121,17 +128,19 @@ end
     @test isapprox(PM.region_diameter(pi, t1; box=box, metric=:L2, method=:bbox),     1.0; atol=1e-12)
     @test isapprox(PM.region_diameter(pi, t1; box=box, metric=:L2, method=:vertices), 1.0; atol=1e-12)
 end
+end
 
+if field isa CM.QQField
 @testset "PLPolyhedra heavy geometry: perimeter/surface/adjacency/PCA" begin
     if !PLP.HAVE_POLY
         @test true
     else
         # 2D: square [0,1]^2 perimeter should be 4
-        A = QQ[ 1 0;
+        A = K[ 1 0;
                 0 1;
                -1 0;
                 0 -1 ]
-        b = QQ[1, 1, 0, 0]
+        b = K[1, 1, 0, 0]
         hp = PLP.make_hpoly(A, b)
 
         sigy = [BitVector()]
@@ -143,13 +152,13 @@ end
         @test isapprox(perim, 4.0; atol=1e-9)
 
         # 3D: cube [0,1]^3 surface area is 6
-        A3 = QQ[ 1 0 0;
+        A3 = K[ 1 0 0;
                  0 1 0;
                  0 0 1;
                 -1 0 0;
                  0 -1 0;
                  0 0 -1 ]
-        b3 = QQ[1, 1, 1, 0, 0, 0]
+        b3 = K[1, 1, 1, 0, 0, 0]
         hp3 = PLP.make_hpoly(A3, b3)
         pi3 = PLP.PLEncodingMap(3, [BitVector()], [BitVector()], [hp3], [Float64[0.5, 0.5, 0.5]])
         box3 = (Float64[0,0,0], Float64[1,1,1])
@@ -158,10 +167,10 @@ end
 
         # Adjacency: two rectangles sharing a vertical edge of length 1
         # R1 = [0,1]x[0,1], R2 = [1,2]x[0,1]
-        A1 = QQ[ 1 0; 0 1; -1 0; 0 -1 ]
-        b1 = QQ[1, 1, 0, 0]
-        A2 = QQ[ 1 0; 0 1; -1 0; 0 -1 ]
-        b2 = QQ[2, 1, -1, 0]
+        A1 = K[ 1 0; 0 1; -1 0; 0 -1 ]
+        b1 = K[1, 1, 0, 0]
+        A2 = K[ 1 0; 0 1; -1 0; 0 -1 ]
+        b2 = K[2, 1, -1, 0]
         hp1 = PLP.make_hpoly(A1, b1)
         hp2 = PLP.make_hpoly(A2, b2)
         sigy2 = [BitVector(), BitVector()]
@@ -262,7 +271,9 @@ end
         @test isapprox(mint, 1.0; atol=1e-8, rtol=0.0)
     end
 end
+end
 
+if field isa CM.QQField
 @testset "Extended region geometry descriptors (axis backend)" begin
         # Build a simple 2D encoding map: split the plane into quadrants by x=0 and y=0.
         # Each quadrant is one region. Intersect with box [-1,1]^2 to get unit squares.
@@ -271,7 +282,7 @@ end
             PLB.BoxUpset([-10.0, 0.0]),   # y >= 0
         ]
         Downs = PLB.BoxDownset[]
-        Phi = zeros(QQ, 0, length(Ups))
+        Phi = zeros(K, 0, length(Ups))
 
         _, _, pi = PLB.encode_fringe_boxes(Ups, Downs, Phi)
 
@@ -314,7 +325,9 @@ end
         @test isapprox(mf.boundary_measure, 4.0; atol=1e-12)
         @test isapprox(mf.mean_width, 4.0 / Base.MathConstants.pi; atol=1e-10)
 end
+end
 
+if field isa CM.QQField
 @testset "Module-level geometry distributions and adjacency graph stats" begin
         # Deterministic 1D encoding map with three regions:
         # thresholds at 0 and 2; intersect with box [-2,7] gives lengths [2,2,5].
@@ -324,7 +337,7 @@ end
         ]
         Downs = PLB.BoxDownset[]
 
-        Phi = zeros(QQ, 0, length(Ups))
+        Phi = zeros(K, 0, length(Ups))
         _, _, pi = PLB.encode_fringe_boxes(Ups, Downs, Phi)
 
         box = ([-2.0], [7.0])
@@ -356,12 +369,14 @@ end
         @test gs.ncomponents == 1
         @test gs.component_sizes == [3]
 end
+end
 
+if field isa CM.QQField
 @testset "Covariance-based anisotropy and eccentricity (axis backend exact moments)" begin
     # Single-region behavior inside the box (bounds chosen to contain the box).
     Ups = [PLB.BoxUpset([-10.0, -10.0])]
     Downs = [PLB.BoxDownset([10.0, 10.0])]
-    Phi = reshape(QQ[1], 1, 1)
+    Phi = reshape(K[c(1)], 1, 1)
     _, _, pi = PLB.encode_fringe_boxes(Ups, Downs, Phi)
 
     # Intersect with a rectangle [-2,2] x [-0.5,0.5].
@@ -384,11 +399,13 @@ end
     @test isapprox(scores.ratio, 16.0; atol=1e-12)
     @test isapprox(scores.eccentricity, sqrt(15.0/16.0); atol=1e-12)
 end
+end
 
+if field isa CM.QQField
 @testset "window_box and box=:auto" begin
     Ups = [PLB.BoxUpset([0.0])]
     Downs = [PLB.BoxDownset([2.0])]
-    Phi = reshape(QQ[1], 1, 1)
+    Phi = reshape(K[c(1)], 1, 1)
     P, Hhat, pi = PLB.encode_fringe_boxes(Ups, Downs, Phi)
 
     wb = PM.window_box(pi)
@@ -406,6 +423,7 @@ end
     m_exp  = PM.integrated_hilbert_mass(dims, pi, opts_wb)
     @test isapprox(m_auto, m_exp; atol=1e-12)
 end
+end
 
 
 @testset "ZnEncodingMap adjacency and asymptotics" begin
@@ -414,8 +432,8 @@ end
     tau = FZ.face(2, [false, true])
     flats = [FZ.IndFlat(tau, [0, 0])]
     injs  = [FZ.IndInj(tau, [1, 0])]
-    Phi   = reshape(QQ[1], 1, 1)
-    FG = PM.Flange{QQ}(2, flats, injs, Phi)
+    Phi   = reshape(K[c(1)], 1, 1)
+    FG = PM.Flange{K}(2, flats, injs, Phi; field=field)
     enc = PM.EncodingOptions(backend=:zn, max_regions=100)
     P, M, pi = DF.encode_pmodule_from_flange(FG, enc)
 
@@ -440,6 +458,7 @@ end
     @test abs(A.exponent_interface_measure - 1.0) < 0.35
 end
 
+if field isa CM.QQField
 @testset "PL asymptotics exponent check" begin
     # Quadrant split example from existing tests (2D PLBackend)
     Ups = [
@@ -447,7 +466,7 @@ end
         PLB.BoxUpset([-10.0, 0.0]),
     ]
     Downs = PLB.BoxDownset[]
-    Phi = zeros(QQ, 0, length(Ups))
+    Phi = zeros(K, 0, length(Ups))
     _, _, pi = PLB.encode_fringe_boxes(Ups, Downs, Phi)
 
     dims = ones(Int, 4)  # 4 quadrants
@@ -463,7 +482,9 @@ end
     @test isfinite(A.exponent_integrated_hilbert_mass)
     @test abs(A.exponent_integrated_hilbert_mass - 2.0) < 0.25
 end
+end
 
+if field isa CM.QQField
 @testset "Global module size summaries and region adjacency" begin
 
     @testset "1D box backend: integrated mass, histograms, adjacency" begin
@@ -472,7 +493,7 @@ end
         #   (-inf,0), (0,2), (2,inf)
         Ups = [PLB.BoxUpset([0.0])]
         Downs = [PLB.BoxDownset([2.0])]
-        Phi = ones(QQ, 1, 1)
+        Phi = ones(K, 1, 1)
 
         P, H, pi = PLB.encode_fringe_boxes(Ups, Downs, Phi)
         box = ([-2.0], [7.0])
@@ -562,7 +583,6 @@ end
         changed = PM.interface_measure_dim_changes(H, pi, opts)
         @test changed == 2.0
     end
-
     @testset "2D box backend: adjacency lengths on a quadrant split" begin
         # Create two upsets that induce thresholds at x=0 and y=0 within the
         # window [-1,1]^2.
@@ -572,7 +592,7 @@ end
             PLB.BoxUpset([-10.0, 0.0])    # y >= 0 matters, x >= -10 always true in box
         ]
         Downs = PLB.BoxDownset[]  # none
-        Phi = zeros(QQ, 0, length(Ups))
+        Phi = zeros(K, 0, length(Ups))
 
         P, H, pi = PLB.encode_fringe_boxes(Ups, Downs, Phi)
         box = ([-1.0, -1.0], [1.0, 1.0])
@@ -605,7 +625,7 @@ end
         # Allow passing a plain vector of region dimensions as "the module".
         Ups = [PLB.BoxUpset([0.0])]
         Downs = [PLB.BoxDownset([2.0])]
-        Phi = reshape(QQ[1], 1, 1)
+        Phi = reshape(K[c(1)], 1, 1)
         P, H, pi = PLB.encode_fringe_boxes(Ups, Downs, Phi)
 
         dims = [3, 0, 0]
@@ -616,12 +636,13 @@ end
         @test summary.total_measure == 1.0
     end
 end
+end
 
 @testset "uncertainty + support geometry + ehrhart" begin
     # --- PLBackend 1D encoding as in region geometry tests ---
     Ups = [PLB.BoxUpset([0.0])]
     Downs = [PLB.BoxDownset([2.0])]
-    Phi = reshape(QQ[1], 1, 1)
+    Phi = reshape(K[c(1)], 1, 1)
     _, _, pi = PLB.encode_fringe_boxes(Ups, Downs, Phi)
     box = ([-2.0], [7.0])
     opts = PM.InvariantOptions(box=box)
@@ -692,8 +713,8 @@ end
     FZ = PM.FlangeZn
     flats = [FZ.IndFlat(FZ.face(2, [true, true]), [0, 0]; id=:F)]  # tau = all free => no cuts, but sets n=2
     injs  = FZ.IndInj[]
-    Phi   = zeros(QQ, 0, 1)
-    FG    = PM.Flange{QQ}(2, flats, injs, Phi)
+    Phi   = zeros(K, 0, 1)
+    FG    = PM.Flange{K}(2, flats, injs, Phi; field=field)
 
     enc = PM.EncodingOptions(backend=:zn, max_regions=10)
     P, M, piZ = DF.encode_pmodule_from_flange(FG, enc)
@@ -722,3 +743,4 @@ end
     @test isapprox(c[3], 16.0; atol=1e-8)
 
 end
+end # with_fields

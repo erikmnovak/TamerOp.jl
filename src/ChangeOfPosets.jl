@@ -13,18 +13,27 @@ module ChangeOfPosets
 using LinearAlgebra
 using SparseArrays
 
+import Base.Threads
 import ..FiniteFringe
 using ..FiniteFringe: AbstractPoset, FinitePoset, ProductPoset, cover_edges, leq, leq_matrix, nvertices, poset_equal,
                       downset_indices, upset_indices
 using ..Encoding: EncodingMap
-using ..CoreModules: QQ, ResolutionOptions, DerivedFunctorOptions
+using ..CoreModules: AbstractCoeffField, ResolutionOptions, DerivedFunctorOptions
 
 @inline _resolve_df_opts(opts::Union{DerivedFunctorOptions,Nothing}) =
     opts === nothing ? DerivedFunctorOptions() : opts
-using ..ExactQQ: nullspaceQQ, solve_fullcolumnQQ
+using ..FieldLinAlg
+
+@inline function _eye(::Type{K}, n::Int) where {K}
+    M = zeros(K, n, n)
+    for i in 1:n
+        M[i, i] = one(K)
+    end
+    return M
+end
 
 import ..IndicatorResolutions
-using ..Modules: PModule, PMorphism, map_leq
+using ..Modules: PModule, PMorphism, map_leq, get_cover_cache
 import ..AbelianCategories: pullback
 
 using ..DerivedFunctors: projective_resolution, injective_resolution,
@@ -144,7 +153,7 @@ end
 # Performance notes:
 #   * Constructing the product leq matrix is inherently O((n1*n2)^2) bits.
 #   * Computing cover edges from scratch on the product is very expensive; we
-#     pre-populate the cover cache using the known cover-edge structure of a
+#     pre-populate the per-poset cover cache using the known cover-edge structure of a
 #     cartesian product poset:
 #         covers are exactly "change one coordinate by a cover edge, keep the other fixed".
 #   * Pullback along projections is implemented without calling map_leq on every edge
@@ -364,7 +373,7 @@ function _pullback_to_product_pr1(
     # Cache identity matrices by dimension to avoid repeated allocations.
     id_cache = Dict{Int, Matrix{K}}()
     get_id(d::Int) = get!(id_cache, d) do
-        Matrix{K}(I, d, d)
+        _eye(K, d)
     end
 
     @inbounds begin
@@ -392,7 +401,7 @@ function _pullback_to_product_pr1(
         end
     end
 
-    return PModule{K}(Pprod, dims_out, edge_maps)
+    return PModule{K}(Pprod, dims_out, edge_maps; field=M.field)
 end
 
 # Fast pullback of a module M on P2 to the product poset P1 x P2 via the projection to P2.
@@ -422,7 +431,7 @@ function _pullback_to_product_pr2(
 
     id_cache = Dict{Int, Matrix{K}}()
     get_id(d::Int) = get!(id_cache, d) do
-        Matrix{K}(I, d, d)
+        _eye(K, d)
     end
 
     @inbounds begin
@@ -448,7 +457,7 @@ function _pullback_to_product_pr2(
         end
     end
 
-    return PModule{K}(Pprod, dims_out, edge_maps)
+    return PModule{K}(Pprod, dims_out, edge_maps; field=M.field)
 end
 
 """
@@ -506,7 +515,7 @@ function encode_pmodules_to_common_poset(
         pi2 = EncodingMap(P1, P2, id)
 
         # Rebase M2 onto P1 (indices match because leq matrices match).
-        M2b = PModule{K}(P1, M2.dims, M2.edge_maps)
+        M2b = PModule{K}(P1, M2.dims, M2.edge_maps; field=M2.field)
         return (P = P1, Ms = [M1, M2b], pi1 = pi1, pi2 = pi2)
     end
 
@@ -544,9 +553,9 @@ end
 # Internal helper: compute pullback module along pi without re-checking monotonicity.
 @inline function _pullback_module_no_check(
     pi::EncodingMap,
-    M::PModule{QQ,MatT},
+    M::PModule{K},
     C,
-) where {QQ<:Rational, MatT<:AbstractMatrix{QQ}}
+) where {K}
     Q = pi.Q
     P = pi.P
     @assert M.Q === P
@@ -556,7 +565,7 @@ end
         dims_out[q] = M.dims[pi.pi_of_q[q]]
     end
 
-    edge_maps_out = Dict{Tuple{Int,Int}, AbstractMatrix{QQ}}()
+    edge_maps_out = Dict{Tuple{Int,Int}, AbstractMatrix{K}}()
     sizehint!(edge_maps_out, length(C))
 
     @inbounds for (u, v) in C
@@ -566,14 +575,14 @@ end
         edge_maps_out[(u, v)] = map_leq(M, iu, iv)
     end
 
-    return PModule{QQ}(Q, dims_out, edge_maps_out)
+    return PModule{K}(Q, dims_out, edge_maps_out; field=M.field)
 end
 
 function pullback(
     pi::EncodingMap,
-    M::PModule{QQ,MatT};
+    M::PModule{K};
     check::Bool = true,
-) where {QQ<:Rational, MatT<:AbstractMatrix{QQ}}
+) where {K}
     check && _check_monotone(pi)
     C = cover_edges(pi.Q)
     return _pullback_module_no_check(pi, M, C)
@@ -581,9 +590,9 @@ end
 
 function pullback(
     pi::EncodingMap,
-    f::PMorphism{QQ};
+    f::PMorphism{K};
     check::Bool = true,
-) where {QQ<:Rational}
+) where {K}
     check && _check_monotone(pi)
     C = cover_edges(pi.Q)
 
@@ -592,7 +601,7 @@ function pullback(
     cod_pb = _pullback_module_no_check(pi, f.cod, C)
 
     # Pull back components pointwise along pi: (f_pb)_q = f_{pi(q)}.
-    comps_pb = Vector{Matrix{QQ}}(undef, nvertices(pi.Q))
+    comps_pb = Vector{Matrix{K}}(undef, nvertices(pi.Q))
     @inbounds for q in 1:nvertices(pi.Q)
         comps_pb[q] = f.comps[pi.pi_of_q[q]]
     end
@@ -614,12 +623,12 @@ Alias for `pullback(pi, N)`.
 # -----------------------------------------------------------------------------
 
 # LeftKanData stores enough to compute maps functorially (including morphisms).
-struct LeftKanData
+struct LeftKanData{K}
     idxs::Vector{Vector{Int}}             # I_p subsets
     off::Vector{Dict{Int,Int}}            # offsets into direct sum
     dimS::Vector{Int}                     # ambient direct sum dimension
-    W::Vector{Matrix{QQ}}                 # section V_p -> S_p
-    L::Vector{Matrix{QQ}}                 # quotient map S_p -> V_p (L*W = I)
+    W::Vector{Matrix{K}}                 # section V_p -> S_p
+    L::Vector{Matrix{K}}                 # quotient map S_p -> V_p (L*W = I)
     dimV::Vector{Int}                     # dim V_p
 end
 
@@ -634,14 +643,14 @@ function _offset_map(idxs::Vector{Int}, d::Vector{Int})
     return off, s
 end
 
-# Left inverse for a full-column-rank matrix using exact QQ linear algebra.
-function _left_inverse_full_column(A::Matrix{QQ})
+# Left inverse for a full-column-rank matrix using exact field linear algebra.
+function _left_inverse_full_column(field::AbstractCoeffField, A::Matrix{K}) where {K}
     m,n = size(A)
     if n == 0
-        return zeros(QQ, 0, m)
+        return zeros(K, 0, m)
     end
     G = transpose(A) * A
-    return solve_fullcolumnQQ(G, transpose(A))
+    return FieldLinAlg.solve_fullcolumn(field, G, transpose(A))
 end
 
 # Fiber downset index sets: I_p = { q | pi(q) <= p }
@@ -666,7 +675,9 @@ function _index_sets_left(pi::EncodingMap)
     return idxs
 end
 
-function _left_kan_data(pi::EncodingMap, M::PModule{QQ}; check::Bool=true)
+function _left_kan_data(pi::EncodingMap, M::PModule{K};
+                        check::Bool=true,
+                        threads::Bool = (Threads.nthreads() > 1)) where {K}
     if check
         _check_monotone(pi)
         if !_same_poset(pi.Q, M.Q)
@@ -677,6 +688,7 @@ function _left_kan_data(pi::EncodingMap, M::PModule{QQ}; check::Bool=true)
     Q = pi.Q
     P = pi.P
     d = M.dims
+    field = M.field
 
     # Use store-aligned cover-edge traversal to avoid keyed edge lookups in hot loops.
     store = M.edge_maps
@@ -684,41 +696,40 @@ function _left_kan_data(pi::EncodingMap, M::PModule{QQ}; check::Bool=true)
     maps_to_succ = store.maps_to_succ
 
     # Build once; reused many times in the terminal-object fast path.
-    cacheQ = IndicatorResolutions._cover_cache(Q)
+    cacheQ = get_cover_cache(Q)
 
     idxs = _index_sets_left(pi)
 
     off = Vector{Dict{Int,Int}}(undef, nvertices(P))
     dimS = Vector{Int}(undef, nvertices(P))
-    W = Vector{Matrix{QQ}}(undef, nvertices(P))
-    L = Vector{Matrix{QQ}}(undef, nvertices(P))
+    W = Vector{Matrix{K}}(undef, nvertices(P))
+    L = Vector{Matrix{K}}(undef, nvertices(P))
     dimV = Vector{Int}(undef, nvertices(P))
 
-    # Build each colimit space V_p as quotient of direct sum by relations.
-    for p in 1:nvertices(P)
+    @inline function _left_kan_at_p(p::Int)
         ip = idxs[p]
         offp, Sp = _offset_map(ip, d)
         off[p] = offp
         dimS[p] = Sp
 
         if isempty(ip)
-            W[p] = zeros(QQ, 0, 0)
-            L[p] = zeros(QQ, 0, 0)
+            W[p] = zeros(K, 0, 0)
+            L[p] = zeros(K, 0, 0)
             dimV[p] = 0
-            continue
+            return
         end
 
         # Fast path: if fiber has a terminal object qmax, colim = M(qmax).
         qmax = _maximum_element(Q, ip)
         if qmax !== nothing
             Vp = d[qmax]
-            Wp = zeros(QQ, Sp, Vp)
-            Lp = zeros(QQ, Vp, Sp)
+            Wp = zeros(K, Sp, Vp)
+            Lp = zeros(K, Vp, Sp)
 
             # W: include the qmax summand (identity block)
             oq = offp[qmax]
             for j in 1:Vp
-                Wp[oq + j, j] = QQ(1)
+                Wp[oq + j, j] = one(K)
             end
 
             # L: send each summand M(q) to M(qmax) via map_leq(q -> qmax)
@@ -728,7 +739,7 @@ function _left_kan_data(pi::EncodingMap, M::PModule{QQ}; check::Bool=true)
                 oq = offp[q]
                 if q == qmax
                     for j in 1:Vp
-                        Lp[j, oq + j] = QQ(1)
+                        Lp[j, oq + j] = one(K)
                     end
                 else
                     A = map_leq(M, q, qmax; cache=cacheQ)
@@ -746,7 +757,7 @@ function _left_kan_data(pi::EncodingMap, M::PModule{QQ}; check::Bool=true)
             W[p] = Wp
             L[p] = Lp
             dimV[p] = Vp
-            continue
+            return
         end
 
         # General case: quotient by relations x_u - M(u<=v)(x_u) in v for cover edges u<v.
@@ -771,7 +782,7 @@ function _left_kan_data(pi::EncodingMap, M::PModule{QQ}; check::Bool=true)
 
         Irows = Int[]
         Jcols = Int[]
-        Vvals = QQ[]
+        Vvals = K[]
         col = 0
 
         @inbounds for u in 1:nvertices(Q)
@@ -796,7 +807,7 @@ function _left_kan_data(pi::EncodingMap, M::PModule{QQ}; check::Bool=true)
                     # +x_u,j
                     push!(Irows, ou + j)
                     push!(Jcols, col)
-                    push!(Vvals, QQ(1))
+                    push!(Vvals, one(K))
 
                     # -(A * x_u)_j in the v-block
                     if A isa SparseMatrixCSC
@@ -822,47 +833,98 @@ function _left_kan_data(pi::EncodingMap, M::PModule{QQ}; check::Bool=true)
 
 
         Rel = sparse(Irows, Jcols, Vvals, Sp, ncols)
-        Wp = nullspaceQQ(transpose(Rel))  # basis of quotient representatives
+        Wp = FieldLinAlg.nullspace(field, transpose(Rel))  # basis of quotient representatives
         Vp = size(Wp, 2)
-        Lp = _left_inverse_full_column(Wp)
+        Lp = _left_inverse_full_column(field, Wp)
 
         W[p] = Wp
         L[p] = Lp
         dimV[p] = Vp
+        return
+    end
+
+    # Build each colimit space V_p as quotient of direct sum by relations.
+    if threads
+        Threads.@threads for p in 1:nvertices(P)
+            _left_kan_at_p(p)
+        end
+    else
+        for p in 1:nvertices(P)
+            _left_kan_at_p(p)
+        end
     end
 
     # Build structure maps along cover edges in P using inclusions of index sets.
-    edge_maps = Dict{Tuple{Int,Int}, SparseMatrixCSC{QQ,Int}}()
-    for (u,v) in cover_edges(P).edges
-        Vu = dimV[u]
-        Vv = dimV[v]
-        if Vu == 0 || Vv == 0
-            edge_maps[(u,v)] = spzeros(QQ, Vv, Vu)
-            continue
+    edges = cover_edges(P).edges
+    edge_maps = Dict{Tuple{Int,Int}, SparseMatrixCSC{K,Int}}()
+    if threads && !isempty(edges)
+        chunks = [Vector{Tuple{Tuple{Int,Int}, SparseMatrixCSC{K,Int}}}() for _ in 1:Threads.nthreads()]
+        Threads.@threads for idx in eachindex(edges)
+            u, v = edges[idx]
+            Vu = dimV[u]
+            Vv = dimV[v]
+            if Vu == 0 || Vv == 0
+                push!(chunks[Threads.threadid()], ((u, v), spzeros(K, Vv, Vu)))
+                continue
+            end
+
+            # Map is induced by inclusion I_u subset I_v.
+            # We avoid building the big inclusion matrix explicitly:
+            #   F = L[v] * J * W[u]
+            # where J embeds the u-direct-sum into the v-direct-sum.
+            Fuv = zeros(K, Vv, Vu)
+            offu = off[u]
+            offv = off[v]
+            Wu = W[u]
+            Lv = L[v]
+
+            for q in idxs[u]
+                dq = d[q]
+                dq == 0 && continue
+                ru = (offu[q]+1):(offu[q]+dq)
+                cv = (offv[q]+1):(offv[q]+dq)
+                @views Fuv .+= Lv[:, cv] * Wu[ru, :]
+            end
+
+            push!(chunks[Threads.threadid()], ((u, v), sparse(Fuv)))
         end
-
-        # Map is induced by inclusion I_u subset I_v.
-        # We avoid building the big inclusion matrix explicitly:
-        #   F = L[v] * J * W[u]
-        # where J embeds the u-direct-sum into the v-direct-sum.
-        Fuv = zeros(QQ, Vv, Vu)
-        offu = off[u]
-        offv = off[v]
-        Wu = W[u]
-        Lv = L[v]
-
-        for q in idxs[u]
-            dq = d[q]
-            dq == 0 && continue
-            ru = (offu[q]+1):(offu[q]+dq)
-            cv = (offv[q]+1):(offv[q]+dq)
-            @views Fuv .+= Lv[:, cv] * Wu[ru, :]
+        for chunk in chunks
+            for (key, val) in chunk
+                edge_maps[key] = val
+            end
         end
+    else
+        for (u,v) in edges
+            Vu = dimV[u]
+            Vv = dimV[v]
+            if Vu == 0 || Vv == 0
+                edge_maps[(u,v)] = spzeros(K, Vv, Vu)
+                continue
+            end
 
-        edge_maps[(u,v)] = sparse(Fuv)
+            # Map is induced by inclusion I_u subset I_v.
+            # We avoid building the big inclusion matrix explicitly:
+            #   F = L[v] * J * W[u]
+            # where J embeds the u-direct-sum into the v-direct-sum.
+            Fuv = zeros(K, Vv, Vu)
+            offu = off[u]
+            offv = off[v]
+            Wu = W[u]
+            Lv = L[v]
+
+            for q in idxs[u]
+                dq = d[q]
+                dq == 0 && continue
+                ru = (offu[q]+1):(offu[q]+dq)
+                cv = (offv[q]+1):(offv[q]+dq)
+                @views Fuv .+= Lv[:, cv] * Wu[ru, :]
+            end
+
+            edge_maps[(u,v)] = sparse(Fuv)
+        end
     end
 
-    Mout = PModule{QQ}(P, dimV, edge_maps)
+    Mout = PModule{K}(P, dimV, edge_maps; field=M.field)
     data = LeftKanData(idxs, off, dimS, W, L, dimV)
     return Mout, data
 end
@@ -880,8 +942,10 @@ This is left adjoint to `pullback(pi, -)`.
 
 Fast path: if `I_p` has a maximum element, the colimit equals `M(max)`.
 """
-function pushforward_left(pi::EncodingMap, M::PModule{QQ}; check::Bool=true)::PModule{QQ}
-    Mout, _ = _left_kan_data(pi, M; check=check)
+function pushforward_left(pi::EncodingMap, M::PModule{K};
+                          check::Bool=true,
+                          threads::Bool = (Threads.nthreads() > 1))::PModule{K} where {K}
+    Mout, _ = _left_kan_data(pi, M; check=check, threads=threads)
     return Mout
 end
 
@@ -890,7 +954,9 @@ end
 
 Push forward a morphism of modules along `pi` using left Kan extension.
 """
-function pushforward_left(pi::EncodingMap, f::PMorphism{QQ}; check::Bool=true)::PMorphism{QQ}
+function pushforward_left(pi::EncodingMap, f::PMorphism{K};
+                          check::Bool=true,
+                          threads::Bool = (Threads.nthreads() > 1))::PMorphism{K} where {K}
     if check
         _check_monotone(pi)
         if !_same_poset(pi.Q, f.dom.Q) || !_same_poset(pi.Q, f.cod.Q)
@@ -898,23 +964,23 @@ function pushforward_left(pi::EncodingMap, f::PMorphism{QQ}; check::Bool=true)::
         end
     end
 
-    dom_out, data_dom = _left_kan_data(pi, f.dom; check=false)
-    cod_out, data_cod = _left_kan_data(pi, f.cod; check=false)
+    dom_out, data_dom = _left_kan_data(pi, f.dom; check=false, threads=threads)
+    cod_out, data_cod = _left_kan_data(pi, f.cod; check=false, threads=threads)
 
     P = pi.P
-    comps = Vector{Matrix{QQ}}(undef, nvertices(P))
+    comps = Vector{Matrix{K}}(undef, nvertices(P))
 
-    for p in 1:nvertices(P)
+    @inline function _left_pushforward_comp(p::Int)
         Vd = data_dom.dimV[p]
         Vc = data_cod.dimV[p]
         if Vd == 0 || Vc == 0
-            comps[p] = zeros(QQ, Vc, Vd)
-            continue
+            comps[p] = zeros(K, Vc, Vd)
+            return
         end
 
         # Induced map:
         #   Vp(dom) --W--> S(dom) --(oplus f_q)--> S(cod) --L--> Vp(cod)
-        Fp = zeros(QQ, Vc, Vd)
+        Fp = zeros(K, Vc, Vd)
         for q in data_dom.idxs[p]
             dd = f.dom.dims[q]
             dc = f.cod.dims[q]
@@ -926,24 +992,37 @@ function pushforward_left(pi::EncodingMap, f::PMorphism{QQ}; check::Bool=true)::
             @views Fp .+= data_cod.L[p][:, cc] * (f.comps[q] * data_dom.W[p][rd, :])
         end
         comps[p] = Fp
+        return
+    end
+
+    if threads
+        Threads.@threads for p in 1:nvertices(P)
+            _left_pushforward_comp(p)
+        end
+    else
+        for p in 1:nvertices(P)
+            _left_pushforward_comp(p)
+        end
     end
 
     return PMorphism(dom_out, cod_out, comps)
 end
 
-left_kan_extension(pi::EncodingMap, M::PModule{QQ}; check::Bool=true) =
-    pushforward_left(pi, M; check=check)
+left_kan_extension(pi::EncodingMap, M::PModule{K};
+                   check::Bool=true,
+                   threads::Bool = (Threads.nthreads() > 1)) where {K} =
+    pushforward_left(pi, M; check=check, threads=threads)
 
 # -----------------------------------------------------------------------------
 # Right Kan extension (right pushforward)
 # -----------------------------------------------------------------------------
 
-struct RightKanData
+struct RightKanData{K}
     idxs::Vector{Vector{Int}}             # J_p subsets
     off::Vector{Dict{Int,Int}}            # offsets into direct sum/product
     dimS::Vector{Int}                     # ambient dimension
-    K::Vector{Matrix{QQ}}                 # section V_p -> S_p  (basis of limit)
-    L::Vector{Matrix{QQ}}                 # coordinate map S_p -> V_p (L*K = I)
+    Ksec::Vector{Matrix{K}}               # section V_p -> S_p  (basis of limit)
+    L::Vector{Matrix{K}}                  # coordinate map S_p -> V_p (L*K = I)
     dimV::Vector{Int}
 end
 
@@ -969,7 +1048,9 @@ function _index_sets_right(pi::EncodingMap)
     return idxs
 end
 
-function _right_kan_data(pi::EncodingMap, M::PModule{QQ}; check::Bool=true)
+function _right_kan_data(pi::EncodingMap, M::PModule{K};
+                         check::Bool=true,
+                         threads::Bool = (Threads.nthreads() > 1)) where {K}
     if check
         _check_monotone(pi)
         if !_same_poset(pi.Q, M.Q)
@@ -980,6 +1061,7 @@ function _right_kan_data(pi::EncodingMap, M::PModule{QQ}; check::Bool=true)
     Q = pi.Q
     P = pi.P
     d = M.dims
+    field = M.field
 
     # Use store-aligned cover-edge traversal to avoid keyed edge lookups in hot loops.
     store = M.edge_maps
@@ -987,35 +1069,35 @@ function _right_kan_data(pi::EncodingMap, M::PModule{QQ}; check::Bool=true)
     maps_to_succ = store.maps_to_succ
 
     # Build once; reused many times in the terminal-object fast path.
-    cacheQ = IndicatorResolutions._cover_cache(Q)
+    cacheQ = get_cover_cache(Q)
 
     idxs = _index_sets_right(pi)
 
     off = Vector{Dict{Int,Int}}(undef, nvertices(P))
     dimS = Vector{Int}(undef, nvertices(P))
-    K = Vector{Matrix{QQ}}(undef, nvertices(P))
-    L = Vector{Matrix{QQ}}(undef, nvertices(P))
+    Ksec = Vector{Matrix{K}}(undef, nvertices(P))
+    L = Vector{Matrix{K}}(undef, nvertices(P))
     dimV = Vector{Int}(undef, nvertices(P))
 
-    for p in 1:nvertices(P)
+    @inline function _right_kan_at_p(p::Int)
         jp = idxs[p]
         offp, Sp = _offset_map(jp, d)
         off[p] = offp
         dimS[p] = Sp
 
         if isempty(jp)
-            K[p] = zeros(QQ, 0, 0)
-            L[p] = zeros(QQ, 0, 0)
+            Ksec[p] = zeros(K, 0, 0)
+            L[p] = zeros(K, 0, 0)
             dimV[p] = 0
-            continue
+            return
         end
 
         # Fast path: if fiber has an initial object qmin, limit = M(qmin).
         qmin = _minimum_element(Q, jp)
         if qmin !== nothing
             Vp = d[qmin]
-            Kp = zeros(QQ, Sp, Vp)
-            Lp = zeros(QQ, Vp, Sp)
+            Kp = zeros(K, Sp, Vp)
+            Lp = zeros(K, Vp, Sp)
 
             # K: cone embedding M(qmin) -> oplus_{q in jp} M(q), q component is map(qmin->q).
             for q in jp
@@ -1024,7 +1106,7 @@ function _right_kan_data(pi::EncodingMap, M::PModule{QQ}; check::Bool=true)
                 oq = offp[q]
                 if q == qmin
                     for j in 1:Vp
-                        Kp[oq + j, j] = QQ(1)
+                        Kp[oq + j, j] = one(K)
                     end
                 else
                     A = map_leq(M, qmin, q; cache=cacheQ)
@@ -1042,13 +1124,13 @@ function _right_kan_data(pi::EncodingMap, M::PModule{QQ}; check::Bool=true)
             # L: projection to qmin component
             oq = offp[qmin]
             for j in 1:Vp
-                Lp[j, oq + j] = QQ(1)
+                Lp[j, oq + j] = one(K)
             end
 
-            K[p] = Kp
+            Ksec[p] = Kp
             L[p] = Lp
             dimV[p] = Vp
-            continue
+            return
         end
 
         # General case: limit as kernel of compatibility constraints x_v = M(u<=v) x_u.
@@ -1071,7 +1153,7 @@ function _right_kan_data(pi::EncodingMap, M::PModule{QQ}; check::Bool=true)
 
         Irows = Int[]
         Jcols = Int[]
-        Vvals = QQ[]
+        Vvals = K[]
         row0 = 0
 
         @inbounds for u in 1:nvertices(Q)
@@ -1097,7 +1179,7 @@ function _right_kan_data(pi::EncodingMap, M::PModule{QQ}; check::Bool=true)
                 for k in 1:dv
                     push!(Irows, row0 + k)
                     push!(Jcols, ov + k)
-                    push!(Vvals, QQ(1))
+                    push!(Vvals, one(K))
                 end
 
                 # Add -A into rows for v-coordinates.
@@ -1126,44 +1208,90 @@ function _right_kan_data(pi::EncodingMap, M::PModule{QQ}; check::Bool=true)
         end
 
         C = sparse(Irows, Jcols, Vvals, nrows, Sp)
-        Kp = nullspaceQQ(C)     # kernel basis
+        Kp = FieldLinAlg.nullspace(field, C)     # kernel basis
         Vp = size(Kp, 2)
-        Lp = _left_inverse_full_column(Kp)
+        Lp = _left_inverse_full_column(field, Kp)
 
-        K[p] = Kp
+        Ksec[p] = Kp
         L[p] = Lp
         dimV[p] = Vp
+        return
+    end
+
+    if threads
+        Threads.@threads for p in 1:nvertices(P)
+            _right_kan_at_p(p)
+        end
+    else
+        for p in 1:nvertices(P)
+            _right_kan_at_p(p)
+        end
     end
 
     # Structure maps: restriction along J_v subset J_u for u<=v in P.
-    edge_maps = Dict{Tuple{Int,Int}, SparseMatrixCSC{QQ,Int}}()
-    for (u,v) in cover_edges(P).edges
-        Vu = dimV[u]
-        Vv = dimV[v]
-        if Vu == 0 || Vv == 0
-            edge_maps[(u,v)] = spzeros(QQ, Vv, Vu)
-            continue
+    edges = cover_edges(P).edges
+    edge_maps = Dict{Tuple{Int,Int}, SparseMatrixCSC{K,Int}}()
+    if threads && !isempty(edges)
+        chunks = [Vector{Tuple{Tuple{Int,Int}, SparseMatrixCSC{K,Int}}}() for _ in 1:Threads.nthreads()]
+        Threads.@threads for idx in eachindex(edges)
+            u, v = edges[idx]
+            Vu = dimV[u]
+            Vv = dimV[v]
+            if Vu == 0 || Vv == 0
+                push!(chunks[Threads.threadid()], ((u, v), spzeros(K, Vv, Vu)))
+                continue
+            end
+
+            Fuv = zeros(K, Vv, Vu)
+            offu = off[u]
+            offv = off[v]
+            Ku = Ksec[u]
+            Lv = L[v]
+
+            for q in idxs[v]
+                dq = d[q]
+                dq == 0 && continue
+                ru = (offu[q]+1):(offu[q]+dq)  # rows in S_u
+                cv = (offv[q]+1):(offv[q]+dq)  # cols in S_v
+                @views Fuv .+= Lv[:, cv] * Ku[ru, :]
+            end
+
+            push!(chunks[Threads.threadid()], ((u, v), sparse(Fuv)))
         end
-
-        Fuv = zeros(QQ, Vv, Vu)
-        offu = off[u]
-        offv = off[v]
-        Ku = K[u]
-        Lv = L[v]
-
-        for q in idxs[v]
-            dq = d[q]
-            dq == 0 && continue
-            ru = (offu[q]+1):(offu[q]+dq)  # rows in S_u
-            cv = (offv[q]+1):(offv[q]+dq)  # cols in S_v
-            @views Fuv .+= Lv[:, cv] * Ku[ru, :]
+        for chunk in chunks
+            for (key, val) in chunk
+                edge_maps[key] = val
+            end
         end
+    else
+        for (u,v) in edges
+            Vu = dimV[u]
+            Vv = dimV[v]
+            if Vu == 0 || Vv == 0
+                edge_maps[(u,v)] = spzeros(K, Vv, Vu)
+                continue
+            end
 
-        edge_maps[(u,v)] = sparse(Fuv)
+            Fuv = zeros(K, Vv, Vu)
+            offu = off[u]
+            offv = off[v]
+            Ku = Ksec[u]
+            Lv = L[v]
+
+            for q in idxs[v]
+                dq = d[q]
+                dq == 0 && continue
+                ru = (offu[q]+1):(offu[q]+dq)  # rows in S_u
+                cv = (offv[q]+1):(offv[q]+dq)  # cols in S_v
+                @views Fuv .+= Lv[:, cv] * Ku[ru, :]
+            end
+
+            edge_maps[(u,v)] = sparse(Fuv)
+        end
     end
 
-    Mout = PModule{QQ}(P, dimV, edge_maps)
-    data = RightKanData(idxs, off, dimS, K, L, dimV)
+    Mout = PModule{K}(P, dimV, edge_maps; field=M.field)
+    data = RightKanData(idxs, off, dimS, Ksec, L, dimV)
     return Mout, data
 end
 
@@ -1180,8 +1308,10 @@ This is right adjoint to `pullback(pi, -)`.
 
 Fast path: if `J_p` has a minimum element, the limit equals `M(min)`.
 """
-function pushforward_right(pi::EncodingMap, M::PModule{QQ}; check::Bool=true)::PModule{QQ}
-    Mout, _ = _right_kan_data(pi, M; check=check)
+function pushforward_right(pi::EncodingMap, M::PModule{K};
+                           check::Bool=true,
+                           threads::Bool = (Threads.nthreads() > 1))::PModule{K} where {K}
+    Mout, _ = _right_kan_data(pi, M; check=check, threads=threads)
     return Mout
 end
 
@@ -1190,7 +1320,9 @@ end
 
 Push forward a morphism of modules along `pi` using right Kan extension.
 """
-function pushforward_right(pi::EncodingMap, f::PMorphism{QQ}; check::Bool=true)::PMorphism{QQ}
+function pushforward_right(pi::EncodingMap, f::PMorphism{K};
+                           check::Bool=true,
+                           threads::Bool = (Threads.nthreads() > 1))::PMorphism{K} where {K}
     if check
         _check_monotone(pi)
         if !_same_poset(pi.Q, f.dom.Q) || !_same_poset(pi.Q, f.cod.Q)
@@ -1198,21 +1330,21 @@ function pushforward_right(pi::EncodingMap, f::PMorphism{QQ}; check::Bool=true):
         end
     end
 
-    dom_out, data_dom = _right_kan_data(pi, f.dom; check=false)
-    cod_out, data_cod = _right_kan_data(pi, f.cod; check=false)
+    dom_out, data_dom = _right_kan_data(pi, f.dom; check=false, threads=threads)
+    cod_out, data_cod = _right_kan_data(pi, f.cod; check=false, threads=threads)
 
     P = pi.P
-    comps = Vector{Matrix{QQ}}(undef, nvertices(P))
+    comps = Vector{Matrix{K}}(undef, nvertices(P))
 
-    for p in 1:nvertices(P)
+    @inline function _right_pushforward_comp(p::Int)
         Vd = data_dom.dimV[p]
         Vc = data_cod.dimV[p]
         if Vd == 0 || Vc == 0
-            comps[p] = zeros(QQ, Vc, Vd)
-            continue
+            comps[p] = zeros(K, Vc, Vd)
+            return
         end
 
-        Fp = zeros(QQ, Vc, Vd)
+        Fp = zeros(K, Vc, Vd)
         for q in data_dom.idxs[p]
             dd = f.dom.dims[q]
             dc = f.cod.dims[q]
@@ -1221,16 +1353,29 @@ function pushforward_right(pi::EncodingMap, f::PMorphism{QQ}; check::Bool=true):
             rd = (data_dom.off[p][q]+1):(data_dom.off[p][q]+dd)
             cc = (data_cod.off[p][q]+1):(data_cod.off[p][q]+dc)
 
-            @views Fp .+= data_cod.L[p][:, cc] * (f.comps[q] * data_dom.K[p][rd, :])
+            @views Fp .+= data_cod.L[p][:, cc] * (f.comps[q] * data_dom.Ksec[p][rd, :])
         end
         comps[p] = Fp
+        return
+    end
+
+    if threads
+        Threads.@threads for p in 1:nvertices(P)
+            _right_pushforward_comp(p)
+        end
+    else
+        for p in 1:nvertices(P)
+            _right_pushforward_comp(p)
+        end
     end
 
     return PMorphism(dom_out, cod_out, comps)
 end
 
-right_kan_extension(pi::EncodingMap, M::PModule{QQ}; check::Bool=true) =
-    pushforward_right(pi, M; check=check)
+right_kan_extension(pi::EncodingMap, M::PModule{K};
+                    check::Bool=true,
+                    threads::Bool = (Threads.nthreads() > 1)) where {K} =
+    pushforward_right(pi, M; check=check, threads=threads)
 
 # -----------------------------------------------------------------------------
 # Derived functors (object-level)
@@ -1246,9 +1391,10 @@ Derived degree is controlled by `df.maxdeg`.
 
 Speed: pass a precomputed `ProjectiveResolution` via `res` to avoid recomputation.
 """
-function pushforward_left_complex(pi::EncodingMap, M::PModule{QQ}, df::DerivedFunctorOptions;
+function pushforward_left_complex(pi::EncodingMap, M::PModule{K}, df::DerivedFunctorOptions;
                                   check::Bool=true,
-                                  res=nothing)
+                                  res=nothing,
+                                  threads::Bool = (Threads.nthreads() > 1)) where {K}
     if check
         _check_monotone(pi)
         if !_same_poset(pi.Q, M.Q)
@@ -1258,31 +1404,32 @@ function pushforward_left_complex(pi::EncodingMap, M::PModule{QQ}, df::DerivedFu
 
     maxlen = df.maxdeg + 1
     if res === nothing
-        res = projective_resolution(M, ResolutionOptions(maxlen=maxlen))
+        res = projective_resolution(M, ResolutionOptions(maxlen=maxlen); threads=threads)
     else
         @assert res.M === M
         @assert length(res.Pmods) >= maxlen + 1
         @assert length(res.d_mor) >= maxlen
     end
 
-    terms = Vector{PModule{QQ}}(undef, maxlen + 1)
-    diffs = Vector{PMorphism{QQ}}(undef, maxlen)
+    terms = Vector{PModule{K}}(undef, maxlen + 1)
+    diffs = Vector{PMorphism{K}}(undef, maxlen)
 
     for k in 0:maxlen
-        terms[maxlen - k + 1] = pushforward_left(pi, res.Pmods[k + 1]; check=false)
+        terms[maxlen - k + 1] = pushforward_left(pi, res.Pmods[k + 1]; check=false, threads=threads)
     end
     for k in 1:maxlen
-        diffs[maxlen - k + 1] = pushforward_left(pi, res.d_mor[k]; check=false)
+        diffs[maxlen - k + 1] = pushforward_left(pi, res.d_mor[k]; check=false, threads=threads)
     end
 
     return ModuleCochainComplex(terms, diffs; tmin=-maxlen, check=check)
 end
 
-pushforward_left_complex(pi::EncodingMap, M::PModule{QQ};
+pushforward_left_complex(pi::EncodingMap, M::PModule{K};
                          opts::Union{DerivedFunctorOptions,Nothing}=nothing,
                          check::Bool=true,
-                         res=nothing) =
-    pushforward_left_complex(pi, M, _resolve_df_opts(opts); check=check, res=res)
+                         res=nothing,
+                         threads::Bool = (Threads.nthreads() > 1)) where {K} =
+    pushforward_left_complex(pi, M, _resolve_df_opts(opts); check=check, res=res, threads=threads)
 
 """
     Lpushforward_left(pi, M, df; check=true)
@@ -1291,30 +1438,34 @@ Return `[L_0, L_1, ..., L_df.maxdeg]` where `L_i = L_i pushforward_left(pi, M)`.
 
 Derived degree is controlled by `df.maxdeg`.
 """
-function Lpushforward_left(pi::EncodingMap, M::PModule{QQ}, df::DerivedFunctorOptions;
-                           check::Bool=true)
+function Lpushforward_left(pi::EncodingMap, M::PModule{K}, df::DerivedFunctorOptions;
+                           check::Bool=true,
+                           threads::Bool = (Threads.nthreads() > 1)) where {K}
     maxdeg = df.maxdeg
-    C = pushforward_left_complex(pi, M, df; check=check)
-    out = Vector{PModule{QQ}}(undef, maxdeg + 1)
+    C = pushforward_left_complex(pi, M, df; check=check, threads=threads)
+    out = Vector{PModule{K}}(undef, maxdeg + 1)
     for i in 0:maxdeg
         out[i + 1] = cohomology_module(C, -i)
     end
     return out
 end
 
-Lpushforward_left(pi::EncodingMap, M::PModule{QQ};
+Lpushforward_left(pi::EncodingMap, M::PModule{K};
                   opts::Union{DerivedFunctorOptions,Nothing}=nothing,
-                  check::Bool=true) =
-    Lpushforward_left(pi, M, _resolve_df_opts(opts); check=check)
+                  check::Bool=true,
+                  threads::Bool = (Threads.nthreads() > 1)) where {K} =
+    Lpushforward_left(pi, M, _resolve_df_opts(opts); check=check, threads=threads)
 
-derived_pushforward_left(pi::EncodingMap, M::PModule{QQ}, df::DerivedFunctorOptions;
-                         check::Bool=true) =
-    Lpushforward_left(pi, M, df; check=check)
+derived_pushforward_left(pi::EncodingMap, M::PModule{K}, df::DerivedFunctorOptions;
+                         check::Bool=true,
+                         threads::Bool = (Threads.nthreads() > 1)) where {K} =
+    Lpushforward_left(pi, M, df; check=check, threads=threads)
 
-derived_pushforward_left(pi::EncodingMap, M::PModule{QQ};
+derived_pushforward_left(pi::EncodingMap, M::PModule{K};
                          opts::Union{DerivedFunctorOptions,Nothing}=nothing,
-                         check::Bool=true) =
-    derived_pushforward_left(pi, M, _resolve_df_opts(opts); check=check)
+                         check::Bool=true,
+                         threads::Bool = (Threads.nthreads() > 1)) where {K} =
+    derived_pushforward_left(pi, M, _resolve_df_opts(opts); check=check, threads=threads)
 
 """
     pushforward_left_complex(pi, f, df; check=true, res_dom=nothing, res_cod=nothing)
@@ -1331,10 +1482,11 @@ Implementation:
 3. apply `pushforward_left` termwise
 4. package as a `ModuleCochainMap`
 """
-function pushforward_left_complex(pi::EncodingMap, f::PMorphism{QQ}, df::DerivedFunctorOptions;
+function pushforward_left_complex(pi::EncodingMap, f::PMorphism{K}, df::DerivedFunctorOptions;
                                   check::Bool=true,
                                   res_dom=nothing,
-                                  res_cod=nothing)
+                                  res_cod=nothing,
+                                  threads::Bool = (Threads.nthreads() > 1)) where {K}
     if check
         _check_monotone(pi)
         @assert _same_poset(pi.Q, f.dom.Q)
@@ -1344,20 +1496,20 @@ function pushforward_left_complex(pi::EncodingMap, f::PMorphism{QQ}, df::Derived
     maxlen = df.maxdeg + 1
 
     if res_dom === nothing
-        res_dom = projective_resolution(f.dom, ResolutionOptions(maxlen=maxlen))
+        res_dom = projective_resolution(f.dom, ResolutionOptions(maxlen=maxlen); threads=threads)
     end
     if res_cod === nothing
-        res_cod = projective_resolution(f.cod, ResolutionOptions(maxlen=maxlen))
+        res_cod = projective_resolution(f.cod, ResolutionOptions(maxlen=maxlen); threads=threads)
     end
 
-    Cdom = pushforward_left_complex(pi, f.dom, df; check=false, res=res_dom)
-    Ccod = pushforward_left_complex(pi, f.cod, df; check=false, res=res_cod)
+    Cdom = pushforward_left_complex(pi, f.dom, df; check=false, res=res_dom, threads=threads)
+    Ccod = pushforward_left_complex(pi, f.cod, df; check=false, res=res_cod, threads=threads)
 
     # Canonical chain-map lifting in coefficient form.
     H = lift_chainmap(res_dom, res_cod, f; maxlen=maxlen)
 
     # Convert coefficient matrices to honest PMorphisms on Q.
-    phi = Vector{PMorphism{QQ}}(undef, maxlen + 1)
+    phi = Vector{PMorphism{K}}(undef, maxlen + 1)
     for k in 0:maxlen
         phi[k + 1] = _pmorphism_from_upset_coeff(res_dom.Pmods[k + 1], res_cod.Pmods[k + 1],
                                                  res_dom.gens[k + 1], res_cod.gens[k + 1],
@@ -1365,22 +1517,23 @@ function pushforward_left_complex(pi::EncodingMap, f::PMorphism{QQ}, df::Derived
     end
 
     # Reverse order to match cochain degrees -(maxlen)..0
-    comps = Vector{PMorphism{QQ}}(undef, maxlen + 1)
+    comps = Vector{PMorphism{K}}(undef, maxlen + 1)
     for k in 0:maxlen
         idx = maxlen - k + 1
-        comps[idx] = pushforward_left(pi, phi[k + 1]; check=false)
+        comps[idx] = pushforward_left(pi, phi[k + 1]; check=false, threads=threads)
     end
 
     return ModuleCochainMap(Cdom, Ccod, comps; check=check)
 end
 
-pushforward_left_complex(pi::EncodingMap, f::PMorphism{QQ};
+pushforward_left_complex(pi::EncodingMap, f::PMorphism{K};
                          opts::Union{DerivedFunctorOptions,Nothing}=nothing,
                          check::Bool=true,
                          res_dom=nothing,
-                         res_cod=nothing) =
+                         res_cod=nothing,
+                         threads::Bool = (Threads.nthreads() > 1)) where {K} =
     pushforward_left_complex(pi, f, _resolve_df_opts(opts);
-                             check=check, res_dom=res_dom, res_cod=res_cod)
+                             check=check, res_dom=res_dom, res_cod=res_cod, threads=threads)
 
 """
     Lpushforward_left(pi, f, df; check=true, res_dom=nothing, res_cod=nothing)
@@ -1393,35 +1546,40 @@ for i = 0..df.maxdeg.
 
 Derived degree is controlled by `df.maxdeg`.
 """
-function Lpushforward_left(pi::EncodingMap, f::PMorphism{QQ}, df::DerivedFunctorOptions;
+function Lpushforward_left(pi::EncodingMap, f::PMorphism{K}, df::DerivedFunctorOptions;
                            check::Bool=true,
                            res_dom=nothing,
-                           res_cod=nothing)
+                           res_cod=nothing,
+                           threads::Bool = (Threads.nthreads() > 1)) where {K}
     maxdeg = df.maxdeg
-    F = pushforward_left_complex(pi, f, df; check=check, res_dom=res_dom, res_cod=res_cod)
-    out = Vector{PMorphism{QQ}}(undef, maxdeg + 1)
+    F = pushforward_left_complex(pi, f, df; check=check, res_dom=res_dom, res_cod=res_cod,
+                                 threads=threads)
+    out = Vector{PMorphism{K}}(undef, maxdeg + 1)
     for i in 0:maxdeg
         out[i + 1] = induced_map_on_cohomology_modules(F, -i)
     end
     return out
 end
 
-Lpushforward_left(pi::EncodingMap, f::PMorphism{QQ};
+Lpushforward_left(pi::EncodingMap, f::PMorphism{K};
                   opts::Union{DerivedFunctorOptions,Nothing}=nothing,
                   check::Bool=true,
                   res_dom=nothing,
-                  res_cod=nothing) =
+                  res_cod=nothing,
+                  threads::Bool = (Threads.nthreads() > 1)) where {K} =
     Lpushforward_left(pi, f, _resolve_df_opts(opts);
-                      check=check, res_dom=res_dom, res_cod=res_cod)
+                      check=check, res_dom=res_dom, res_cod=res_cod, threads=threads)
 
-derived_pushforward_left(pi::EncodingMap, f::PMorphism{QQ}, df::DerivedFunctorOptions;
-                         check::Bool=true) =
-    Lpushforward_left(pi, f, df; check=check)
+derived_pushforward_left(pi::EncodingMap, f::PMorphism{K}, df::DerivedFunctorOptions;
+                         check::Bool=true,
+                         threads::Bool = (Threads.nthreads() > 1)) where {K} =
+    Lpushforward_left(pi, f, df; check=check, threads=threads)
 
-derived_pushforward_left(pi::EncodingMap, f::PMorphism{QQ};
+derived_pushforward_left(pi::EncodingMap, f::PMorphism{K};
                          opts::Union{DerivedFunctorOptions,Nothing}=nothing,
-                         check::Bool=true) =
-    derived_pushforward_left(pi, f, _resolve_df_opts(opts); check=check)
+                         check::Bool=true,
+                         threads::Bool = (Threads.nthreads() > 1)) where {K} =
+    derived_pushforward_left(pi, f, _resolve_df_opts(opts); check=check, threads=threads)
 
 
 """
@@ -1434,9 +1592,10 @@ Derived degree is controlled by `df.maxdeg`
 
 Speed: pass a precomputed `InjectiveResolution` via `res` to avoid recomputation.
 """
-function pushforward_right_complex(pi::EncodingMap, M::PModule{QQ}, df::DerivedFunctorOptions;
+function pushforward_right_complex(pi::EncodingMap, M::PModule{K}, df::DerivedFunctorOptions;
                                    check::Bool=true,
-                                   res=nothing)
+                                   res=nothing,
+                                   threads::Bool = (Threads.nthreads() > 1)) where {K}
     if check
         _check_monotone(pi)
         if !_same_poset(pi.Q, M.Q)
@@ -1446,31 +1605,32 @@ function pushforward_right_complex(pi::EncodingMap, M::PModule{QQ}, df::DerivedF
 
     maxlen = df.maxdeg + 1
     if res === nothing
-        res = injective_resolution(M, ResolutionOptions(maxlen=maxlen))
+        res = injective_resolution(M, ResolutionOptions(maxlen=maxlen); threads=threads)
     else
         @assert res.N === M
         @assert length(res.Emods) >= maxlen + 1
         @assert length(res.d_mor) >= maxlen
     end
 
-    terms = Vector{PModule{QQ}}(undef, maxlen + 1)
-    diffs = Vector{PMorphism{QQ}}(undef, maxlen)
+    terms = Vector{PModule{K}}(undef, maxlen + 1)
+    diffs = Vector{PMorphism{K}}(undef, maxlen)
 
     for k in 0:maxlen
-        terms[k + 1] = pushforward_right(pi, res.Emods[k + 1]; check=false)
+        terms[k + 1] = pushforward_right(pi, res.Emods[k + 1]; check=false, threads=threads)
     end
     for k in 1:maxlen
-        diffs[k] = pushforward_right(pi, res.d_mor[k]; check=false)
+        diffs[k] = pushforward_right(pi, res.d_mor[k]; check=false, threads=threads)
     end
 
     return ModuleCochainComplex(terms, diffs; tmin=0, check=check)
 end
 
-pushforward_right_complex(pi::EncodingMap, M::PModule{QQ};
+pushforward_right_complex(pi::EncodingMap, M::PModule{K};
                           opts::Union{DerivedFunctorOptions,Nothing}=nothing,
                           check::Bool=true,
-                          res=nothing) =
-    pushforward_right_complex(pi, M, _resolve_df_opts(opts); check=check, res=res)
+                          res=nothing,
+                          threads::Bool = (Threads.nthreads() > 1)) where {K} =
+    pushforward_right_complex(pi, M, _resolve_df_opts(opts); check=check, res=res, threads=threads)
 
 """
     Rpushforward_right(pi, M, df; check=true)
@@ -1479,30 +1639,34 @@ Return `[R^0, R^1, ..., R^df.maxdeg]` where `R^i = R^i pushforward_right(pi, M)`
 
 Derived degree is controlled by `df.maxdeg`.
 """
-function Rpushforward_right(pi::EncodingMap, M::PModule{QQ}, df::DerivedFunctorOptions;
-                            check::Bool=true)
+function Rpushforward_right(pi::EncodingMap, M::PModule{K}, df::DerivedFunctorOptions;
+                            check::Bool=true,
+                            threads::Bool = (Threads.nthreads() > 1)) where {K}
     maxdeg = df.maxdeg
-    C = pushforward_right_complex(pi, M, df; check=check)
-    out = Vector{PModule{QQ}}(undef, maxdeg + 1)
+    C = pushforward_right_complex(pi, M, df; check=check, threads=threads)
+    out = Vector{PModule{K}}(undef, maxdeg + 1)
     for i in 0:maxdeg
         out[i + 1] = cohomology_module(C, i)
     end
     return out
 end
 
-Rpushforward_right(pi::EncodingMap, M::PModule{QQ};
+Rpushforward_right(pi::EncodingMap, M::PModule{K};
                    opts::Union{DerivedFunctorOptions,Nothing}=nothing,
-                   check::Bool=true) =
-    Rpushforward_right(pi, M, _resolve_df_opts(opts); check=check)
+                   check::Bool=true,
+                   threads::Bool = (Threads.nthreads() > 1)) where {K} =
+    Rpushforward_right(pi, M, _resolve_df_opts(opts); check=check, threads=threads)
 
-derived_pushforward_right(pi::EncodingMap, M::PModule{QQ}, df::DerivedFunctorOptions;
-                          check::Bool=true) =
-    Rpushforward_right(pi, M, df; check=check)
+derived_pushforward_right(pi::EncodingMap, M::PModule{K}, df::DerivedFunctorOptions;
+                          check::Bool=true,
+                          threads::Bool = (Threads.nthreads() > 1)) where {K} =
+    Rpushforward_right(pi, M, df; check=check, threads=threads)
 
-derived_pushforward_right(pi::EncodingMap, M::PModule{QQ};
+derived_pushforward_right(pi::EncodingMap, M::PModule{K};
                           opts::Union{DerivedFunctorOptions,Nothing}=nothing,
-                          check::Bool=true) =
-    derived_pushforward_right(pi, M, _resolve_df_opts(opts); check=check)
+                          check::Bool=true,
+                          threads::Bool = (Threads.nthreads() > 1)) where {K} =
+    derived_pushforward_right(pi, M, _resolve_df_opts(opts); check=check, threads=threads)
     
 """
     pushforward_right_complex(pi, f, df; check=true, res_dom=nothing, res_cod=nothing)
@@ -1522,10 +1686,11 @@ Implementation:
 3. apply `pushforward_right` termwise
 4. package as a `ModuleCochainMap`
 """
-function pushforward_right_complex(pi::EncodingMap, f::PMorphism{QQ}, df::DerivedFunctorOptions;
+function pushforward_right_complex(pi::EncodingMap, f::PMorphism{K}, df::DerivedFunctorOptions;
                                    check::Bool=true,
                                    res_dom=nothing,
-                                   res_cod=nothing)
+                                   res_cod=nothing,
+                                   threads::Bool = (Threads.nthreads() > 1)) where {K}
     if check
         _check_monotone(pi)
         @assert _same_poset(pi.Q, f.dom.Q)
@@ -1535,33 +1700,34 @@ function pushforward_right_complex(pi::EncodingMap, f::PMorphism{QQ}, df::Derive
     maxlen = df.maxdeg + 1
 
     if res_dom === nothing
-        res_dom = injective_resolution(f.dom, ResolutionOptions(maxlen=maxlen))
+        res_dom = injective_resolution(f.dom, ResolutionOptions(maxlen=maxlen); threads=threads)
     end
     if res_cod === nothing
-        res_cod = injective_resolution(f.cod, ResolutionOptions(maxlen=maxlen))
+        res_cod = injective_resolution(f.cod, ResolutionOptions(maxlen=maxlen); threads=threads)
     end
 
-    Cdom = pushforward_right_complex(pi, f.dom, df; check=false, res=res_dom)
-    Ccod = pushforward_right_complex(pi, f.cod, df; check=false, res=res_cod)
+    Cdom = pushforward_right_complex(pi, f.dom, df; check=false, res=res_dom, threads=threads)
+    Ccod = pushforward_right_complex(pi, f.cod, df; check=false, res=res_cod, threads=threads)
 
     # Canonical injective chain-map lifting (now compatible with current gens format).
     phi = lift_injective_chainmap(f, res_dom, res_cod; upto=maxlen, check=check)
 
-    comps = Vector{PMorphism{QQ}}(undef, maxlen + 1)
+    comps = Vector{PMorphism{K}}(undef, maxlen + 1)
     for k in 0:maxlen
-        comps[k + 1] = pushforward_right(pi, phi[k + 1]; check=false)
+        comps[k + 1] = pushforward_right(pi, phi[k + 1]; check=false, threads=threads)
     end
 
     return ModuleCochainMap(Cdom, Ccod, comps; check=check)
 end
 
-pushforward_right_complex(pi::EncodingMap, f::PMorphism{QQ};
+pushforward_right_complex(pi::EncodingMap, f::PMorphism{K};
                           opts::Union{DerivedFunctorOptions,Nothing}=nothing,
                           check::Bool=true,
                           res_dom=nothing,
-                          res_cod=nothing) =
+                          res_cod=nothing,
+                          threads::Bool = (Threads.nthreads() > 1)) where {K} =
     pushforward_right_complex(pi, f, _resolve_df_opts(opts);
-                              check=check, res_dom=res_dom, res_cod=res_cod)
+                              check=check, res_dom=res_dom, res_cod=res_cod, threads=threads)
 
 
 """
@@ -1575,35 +1741,40 @@ for i = 0..df.maxdeg.
 
 Derived degree is controlled by `df.maxdeg`.
 """
-function Rpushforward_right(pi::EncodingMap, f::PMorphism{QQ}, df::DerivedFunctorOptions;
+function Rpushforward_right(pi::EncodingMap, f::PMorphism{K}, df::DerivedFunctorOptions;
                             check::Bool=true,
                             res_dom=nothing,
-                            res_cod=nothing)
+                            res_cod=nothing,
+                            threads::Bool = (Threads.nthreads() > 1)) where {K}
     maxdeg = df.maxdeg
-    F = pushforward_right_complex(pi, f, df; check=check, res_dom=res_dom, res_cod=res_cod)
-    out = Vector{PMorphism{QQ}}(undef, maxdeg + 1)
+    F = pushforward_right_complex(pi, f, df; check=check, res_dom=res_dom, res_cod=res_cod,
+                                  threads=threads)
+    out = Vector{PMorphism{K}}(undef, maxdeg + 1)
     for i in 0:maxdeg
         out[i + 1] = induced_map_on_cohomology_modules(F, i)
     end
     return out
 end
 
-Rpushforward_right(pi::EncodingMap, f::PMorphism{QQ};
+Rpushforward_right(pi::EncodingMap, f::PMorphism{K};
                    opts::Union{DerivedFunctorOptions,Nothing}=nothing,
                    check::Bool=true,
                    res_dom=nothing,
-                   res_cod=nothing) =
+                   res_cod=nothing,
+                   threads::Bool = (Threads.nthreads() > 1)) where {K} =
     Rpushforward_right(pi, f, _resolve_df_opts(opts);
-                       check=check, res_dom=res_dom, res_cod=res_cod)
+                       check=check, res_dom=res_dom, res_cod=res_cod, threads=threads)
 
-derived_pushforward_right(pi::EncodingMap, f::PMorphism{QQ}, df::DerivedFunctorOptions;
-                          check::Bool=true) =
-    Rpushforward_right(pi, f, df; check=check)
+derived_pushforward_right(pi::EncodingMap, f::PMorphism{K}, df::DerivedFunctorOptions;
+                          check::Bool=true,
+                          threads::Bool = (Threads.nthreads() > 1)) where {K} =
+    Rpushforward_right(pi, f, df; check=check, threads=threads)
 
-derived_pushforward_right(pi::EncodingMap, f::PMorphism{QQ};
+derived_pushforward_right(pi::EncodingMap, f::PMorphism{K};
                           opts::Union{DerivedFunctorOptions,Nothing}=nothing,
-                          check::Bool=true) =
-    derived_pushforward_right(pi, f, _resolve_df_opts(opts); check=check)
+                          check::Bool=true,
+                          threads::Bool = (Threads.nthreads() > 1)) where {K} =
+    derived_pushforward_right(pi, f, _resolve_df_opts(opts); check=check, threads=threads)
 
 # -----------------------------------------------------------------------------
 # Helpers: morphisms between direct sums of principal upsets (projectives)
@@ -1637,21 +1808,21 @@ Internal: build a PMorphism between direct sums of principal upsets from a globa
 `C` has size (#cod_summands) x (#dom_summands).  At vertex `u`, the component is the restriction
 to the summands active at `u`, in canonical order.
 """
-function _pmorphism_from_upset_coeff(dom::PModule{QQ}, cod::PModule{QQ},
+function _pmorphism_from_upset_coeff(dom::PModule{K}, cod::PModule{K},
                                     dom_bases::Vector{Int}, cod_bases::Vector{Int},
-                                    C::AbstractMatrix{QQ})::PMorphism{QQ}
+                                    C::AbstractMatrix{K})::PMorphism{K} where {K}
     Q = dom.Q
     @assert Q === cod.Q
 
     act_dom = _active_upset_indices_from_bases(Q, dom_bases)
     act_cod = _active_upset_indices_from_bases(Q, cod_bases)
 
-    comps = Vector{Matrix{QQ}}(undef, nvertices(Q))
+    comps = Vector{Matrix{K}}(undef, nvertices(Q))
     for u in 1:nvertices(Q)
         rows = act_cod[u]
         cols = act_dom[u]
         if isempty(rows) || isempty(cols)
-            comps[u] = zeros(QQ, length(rows), length(cols))
+            comps[u] = zeros(K, length(rows), length(cols))
         else
             comps[u] = Matrix(C[rows, cols])
         end

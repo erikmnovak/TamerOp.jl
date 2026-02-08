@@ -335,6 +335,51 @@ using SparseArrays
         @test inv2.value == 7
     end
 
+    @testset "SparseRowAccumulator correctness" begin
+        K = QQ
+        acc = FL.SparseRowAccumulator{K}(12)
+        row = FL.SparseRow{K}()
+
+        FL.reset_sparse_row_accumulator!(acc)
+        FL.push_sparse_row_entry!(acc, 4, QQ(2))
+        FL.push_sparse_row_entry!(acc, 2, QQ(3))
+        FL.push_sparse_row_entry!(acc, 4, QQ(-2)) # cancellation
+        FL.push_sparse_row_entry!(acc, 7, QQ(5))
+        FL.push_sparse_row_entry!(acc, 2, QQ(1))
+        FL.materialize_sparse_row!(row, acc)
+        @test row.idx == [2, 7]
+        @test row.val == QQ[4, 5]
+
+        FL.reset_sparse_row_accumulator!(acc)
+        FL.push_sparse_row_entry!(acc, 1, QQ(1))
+        FL.materialize_sparse_row!(row, acc)
+        @test row.idx == [1]
+        @test row.val == QQ[1]
+    end
+
+    @testset "backend matrix storage hooks" begin
+        FQ = CM.QQField()
+        K = CM.coeff_type(FQ)
+        P = chain_poset(2)
+        old_nemo = FL._NEMO_ENABLED[]
+        try
+            FL._NEMO_ENABLED[] = true
+            A = Matrix{K}(I, 256, 256) # above default Nemo threshold (50_000 entries)
+            edge = Dict{Tuple{Int,Int}, Matrix{K}}((1, 2) => A)
+            M = MD.PModule{K}(P, [256, 256], edge; field=FQ)
+            @test M.edge_maps[1, 2] isa CM.BackendMatrix{K}
+            @test Matrix(M.edge_maps[1, 2]) == A
+
+            comps = [Matrix{K}(I, 256, 256), Matrix{K}(I, 256, 256)]
+            f = MD.PMorphism(M, M, comps)
+            @test f.comps[1] isa CM.BackendMatrix{K}
+            @test f.comps[2] isa CM.BackendMatrix{K}
+            @test Matrix(f.comps[1]) == comps[1]
+        finally
+            FL._NEMO_ENABLED[] = old_nemo
+        end
+    end
+
     @testset "F3 rank + rank_dim (dense)" begin
         F3 = CM.F3()
         F3Elem = CM.FpElem{3}
@@ -545,6 +590,94 @@ using SparseArrays
         end
     end
 
+    @testset "rank_restricted API parity (dense + sparse)" begin
+        with_fields(FIELDS_FULL) do field
+            @testset "restricted rank over $(field)" begin
+                Aint = [
+                    1 0 2 1 0 3 1;
+                    0 1 1 0 2 1 0;
+                    1 1 0 2 1 0 2;
+                    0 0 1 1 1 2 0;
+                    2 1 0 1 0 1 1;
+                    1 0 1 0 1 0 1
+                ]
+                A = CM.coerce.(Ref(field), Aint)
+                As = sparse(A)
+                rows = [1, 3, 4, 6]
+                cols = [1, 2, 5, 7]
+
+                rd = FL.rank_restricted(field, A, rows, cols)
+                rd_ref = FL.rank(field, A[rows, cols])
+                @test rd == rd_ref
+
+                rs = FL.rank_restricted(field, As, rows, cols)
+                rs_ref = FL.rank(field, Matrix(As)[rows, cols])
+                @test rs == rs_ref
+
+                @test FL.rank_restricted(field, A, Int[], cols) == 0
+                @test FL.rank_restricted(field, A, rows, Int[]) == 0
+                @test FL.rank_restricted(field, As, Int[], cols) == 0
+                @test FL.rank_restricted(field, As, rows, Int[]) == 0
+            end
+        end
+    end
+
+    @testset "restricted nullspace/solve API parity (dense + sparse)" begin
+        rng = MersenneTwister(20260206)
+        with_fields(FIELDS_FULL) do field
+            K = CM.coeff_type(field)
+            is_real = field isa CM.RealField
+            tol = is_real ? (field.atol + field.rtol + 1e-8) : 0.0
+
+            @testset "restricted nullspace/solve over $(field)" begin
+                Aint = [
+                    1 0 2 1 0;
+                    0 1 1 0 2;
+                    1 1 0 2 1;
+                    0 0 1 1 1;
+                    2 1 0 1 0
+                ]
+                A = CM.coerce.(Ref(field), Aint)
+                As = sparse(A)
+                rows = [1, 3, 4]
+                cols = [1, 2, 5]
+
+                Nd = FL.nullspace_restricted(field, A, rows, cols)
+                Ns = FL.nullspace_restricted(field, As, rows, cols)
+                Aref = A[rows, cols]
+                if is_real
+                    @test norm(Matrix(Aref) * Nd) <= tol
+                    @test norm(Matrix(Aref) * Ns) <= tol
+                else
+                    @test Aref * Nd == zeros(K, length(rows), size(Nd, 2))
+                    @test Aref * Ns == zeros(K, length(rows), size(Ns, 2))
+                end
+                @test size(Nd, 1) == length(cols)
+                @test size(Ns, 1) == length(cols)
+
+                Bn = 3
+                Bm = 6
+                Bfull = vcat(CM.eye(field, Bn), CM.rand(field, Bm - Bn, Bn))
+                Xtrue = CM.rand(field, Bn, 2)
+                Yfull = Bfull * Xtrue
+                srows = [1, 2, 3, 5]
+                scols = [1, 2, 3]
+                Xd = FL.solve_fullcolumn_restricted(field, Bfull, srows, scols, Yfull)
+                Xs = FL.solve_fullcolumn_restricted(field, sparse(Bfull), srows, scols, Yfull)
+                if is_real
+                    @test norm(Matrix(Bfull[srows, scols]) * Xd - Matrix(Yfull[srows, :])) <= tol
+                    @test norm(Matrix(Bfull[srows, scols]) * Xs - Matrix(Yfull[srows, :])) <= tol
+                else
+                    @test Bfull[srows, scols] * Xd == Yfull[srows, :]
+                    @test Bfull[srows, scols] * Xs == Yfull[srows, :]
+                end
+
+                @test size(FL.nullspace_restricted(field, A, Int[], cols), 2) == length(cols)
+                @test size(FL.nullspace_restricted(field, As, rows, Int[])) == (0, 0)
+            end
+        end
+    end
+
     @testset "Characteristic-sensitive rank (small matrix)" begin
         A = [2 0;
              0 0]
@@ -594,14 +727,14 @@ using SparseArrays
                    1 1 1]
             R, piv = FL.rrefQQ(A)
 
-            @test piv == [1, 2]
+            @test piv == (1, 2)
             @test R == QQ[1 0 -1;
                           0 1  2;
                           0 0  0]
 
             C = FL.colspaceQQ(A)
             @test size(C) == (3, 2)
-            @test C == A[:, piv]
+            @test C == A[:, collect(piv)]
 
             B = QQ[1 2;
                    2 4;
@@ -642,6 +775,28 @@ using SparseArrays
         @test x2 == x1
         bady = QQ[1,0,0]
         @test_throws ErrorException FL.solve_fullcolumnQQ(B, bady; cache=true)
+
+        # Nemo factor/cache path
+        FL.clear_fullcolumn_cache!()
+        xn = FL.solve_fullcolumn(CM.QQField(), B, y; backend=:nemo, cache=true)
+        @test B * xn == y
+        @test haskey(FL._NEMO_FULLCOLUMN_FACTOR_CACHE_QQ, B)
+        xn2 = FL.solve_fullcolumn(CM.QQField(), B, y; backend=:nemo, cache=true)
+        @test xn2 == xn
+    end
+
+    @testset "Nemo conversion counters" begin
+        FL.reset_conversion_counters!()
+        A = CM.BackendMatrix(QQ[1 2; 3 4]; backend=:nemo)
+        r1 = FL.rank(CM.QQField(), A; backend=:nemo)
+        @test r1 == 2
+        c1 = FL.conversion_counters()
+        @test c1.qq_to_nemo >= 1
+
+        r2 = FL.rank(CM.QQField(), A; backend=:nemo)
+        @test r2 == r1
+        c2 = FL.conversion_counters()
+        @test c2.qq_to_nemo_cache_hits >= c1.qq_to_nemo_cache_hits
     end
 
     @testset "QQ vs F2 cache parity (basic behavior)" begin
@@ -732,7 +887,7 @@ using SparseArrays
         A = QQ[1 2 3 4;
                0 1 1 0]
         R, pivs = FL.rrefQQ(A)
-        @test pivs == [1, 2]
+        @test pivs == (1, 2)
         @test R == QQ[1 0 1 4;
                       0 1 1 0]
 
@@ -741,7 +896,7 @@ using SparseArrays
                1 1;
                0 0]
         Rb, pivs_b = FL.rrefQQ(B)
-        @test pivs_b == [1, 2]
+        @test pivs_b == (1, 2)
         @test Rb == QQ[1 0;
                        0 1;
                        0 0;
@@ -884,6 +1039,17 @@ using SparseArrays
 
             rd = FL.rank_dim(F5, A; backend=:nemo)
             @test rd == r
+
+            B = fpmat([1 0;
+                       0 1;
+                       1 1;
+                       2 3])
+            Xtrue = fpmat([2 1;
+                           3 4])
+            Y = B * Xtrue
+            Xn = FL.solve_fullcolumn(F5, B, Y; backend=:nemo, cache=true)
+            @test Xn == Xtrue
+            @test haskey(FL._NEMO_FULLCOLUMN_FACTOR_CACHE_FP, B)
         end
     end
 
@@ -915,5 +1081,71 @@ using SparseArrays
         C = FL.colspace(F, A)
         @test size(C, 1) == size(A, 1)
         @test FL.rank(F, C) == r
+    end
+
+    @testset "Tiny <=4x4 fast-path parity" begin
+        for field in FIELDS_FULL
+            K = CM.coeff_type(field)
+            tol = field isa CM.RealField ? (field.atol + 10 * field.rtol) : 0.0
+
+            cmat(A::AbstractMatrix{<:Integer}) = begin
+                m, n = size(A)
+                M = Matrix{K}(undef, m, n)
+                @inbounds for i in 1:m, j in 1:n
+                    M[i, j] = CM.coerce(field, A[i, j])
+                end
+                M
+            end
+
+            A = cmat([
+                1 2 3;
+                2 4 6;
+                0 1 1
+            ])
+            r = FL.rank(field, A)
+            R, pivs = FL.rref(field, A; pivots=true)
+            @test r == length(pivs)
+            @test size(R) == size(A)
+
+            B = cmat([
+                1 2;
+                0 1;
+                1 1
+            ])
+            Xtrue = cmat([
+                1 0;
+                2 1
+            ])
+            Y = B * Xtrue
+            Xhat = FL.solve_fullcolumn(field, B, Y)
+            if field isa CM.RealField
+                @test norm(B * Xhat - Y) <= max(tol, 1e-10)
+            else
+                @test Xhat == Xtrue
+            end
+
+            yv = Y[:, 1]
+            xv = FL.solve_fullcolumn(field, B, yv)
+            if field isa CM.RealField
+                @test norm(B * xv - yv) <= max(tol, 1e-10)
+            else
+                @test xv == Xtrue[:, 1]
+            end
+
+            L = cmat([1 2 0; 0 1 1])
+            Rm = cmat([1 0; 2 1; 0 1])
+            Mtiny = FL._matmul(L, Rm)
+            if field isa CM.RealField
+                @test norm(Mtiny - (L * Rm)) <= max(tol, 1e-10)
+            else
+                @test Mtiny == L * Rm
+            end
+
+            As = sparse(A)
+            rows = [1, 3]
+            cols = [1, 2, 3]
+            rr = FL.rank_restricted(field, As, rows, cols)
+            @test rr == FL.rank(field, Matrix(A)[rows, cols])
+        end
     end
 end

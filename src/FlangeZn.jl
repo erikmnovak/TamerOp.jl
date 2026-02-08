@@ -129,26 +129,31 @@ end
 An indexed flat in Z^n, specified by:
 
 * `tau::Face`  : which coordinates are fixed (the mask in `tau.coords`)
-* `b`          : translation vector in Z^n
+* `b`          : translation tuple in Z^n
 * `id::Symbol` : an arbitrary label (useful when multiple flats share the same
   underlying set)
 
 Canonical constructor shape: `IndFlat(tau, b; id=...)`.
 """
-struct IndFlat
-    b::Vector{Int}
+struct IndFlat{N}
+    b::NTuple{N,Int}
     tau::Face
     id::Symbol
 
     # Only allow canonical positional order (tau, b, id).
     # Defining any inner constructor suppresses Julia's default (b, tau, id) constructor.
-    function IndFlat(tau::Face, b::Vector{Int}, id::Symbol)
-        return new(b, tau, id)
+    function IndFlat{N}(tau::Face, b::NTuple{N,Int}, id::Symbol) where {N}
+        tau.n == N || error("IndFlat: face dimension $(tau.n) does not match b length $(N)")
+        return new{N}(b, tau, id)
     end
 end
 
+function IndFlat(tau::Face, b::NTuple{N,<:Integer}; id::Symbol = :F) where {N}
+    return IndFlat{N}(tau, ntuple(i -> Int(b[i]), N), id)
+end
+
 function IndFlat(tau::Face, b::AbstractVector{<:Integer}; id::Symbol = :F)
-    return IndFlat(tau, Vector{Int}(b), id)
+    return IndFlat{length(b)}(tau, ntuple(i -> Int(b[i]), length(b)), id)
 end
 
 """
@@ -158,25 +163,41 @@ An indexed injective in Z^n (the down-set analogue of `IndFlat`).
 
 Canonical constructor shape: `IndInj(tau, b; id=...)`.
 """
-struct IndInj
-    b::Vector{Int}
+struct IndInj{N}
+    b::NTuple{N,Int}
     tau::Face
     id::Symbol
 
     # Only allow canonical positional order (tau, b, id).
-    function IndInj(tau::Face, b::Vector{Int}, id::Symbol)
-        return new(b, tau, id)
+    function IndInj{N}(tau::Face, b::NTuple{N,Int}, id::Symbol) where {N}
+        tau.n == N || error("IndInj: face dimension $(tau.n) does not match b length $(N)")
+        return new{N}(b, tau, id)
     end
 end
 
+function IndInj(tau::Face, b::NTuple{N,<:Integer}; id::Symbol = :E) where {N}
+    return IndInj{N}(tau, ntuple(i -> Int(b[i]), N), id)
+end
+
 function IndInj(tau::Face, b::AbstractVector{<:Integer}; id::Symbol = :E)
-    return IndInj(tau, Vector{Int}(b), id)
+    return IndInj{length(b)}(tau, ntuple(i -> Int(b[i]), length(b)), id)
 end
 
 
 # Internal predicate: do b and g agree on the fixed coordinates of tau?
-@inline function _matches_on_face(b::Vector{Int}, g::AbstractVector{<:Integer}, tau::Face)::Bool
-    @inbounds for i in 1:tau.n
+@inline function _matches_on_face(b::NTuple{N,Int}, g::AbstractVector{<:Integer}, tau::Face)::Bool where {N}
+    tau.n == N || error("_matches_on_face: face dimension $(tau.n) does not match b length $(N)")
+    @inbounds for i in 1:N
+        if tau.coords[i] && b[i] != g[i]
+            return false
+        end
+    end
+    return true
+end
+
+@inline function _matches_on_face(b::NTuple{N,Int}, g::NTuple{N,<:Integer}, tau::Face)::Bool where {N}
+    tau.n == N || error("_matches_on_face: face dimension $(tau.n) does not match b length $(N)")
+    @inbounds for i in 1:N
         if tau.coords[i] && b[i] != g[i]
             return false
         end
@@ -191,7 +212,17 @@ Return the indices of flats whose underlying sets contain the lattice point `g`.
 
 This is used to form the local (fiberwise) matrix at `g` by selecting columns.
 """
-function active_flats(flats::Vector{IndFlat}, g::Vector{Int})
+function active_flats(flats::Vector{IndFlat{N}}, g::Vector{Int}) where {N}
+    active = Int[]
+    for (j, F) in enumerate(flats)
+        if in_flat(F, g)
+            push!(active, j)
+        end
+    end
+    return active
+end
+
+function active_flats(flats::Vector{IndFlat{N}}, g::NTuple{N,Int}) where {N}
     active = Int[]
     for (j, F) in enumerate(flats)
         if in_flat(F, g)
@@ -208,7 +239,17 @@ Return the indices of injectives whose underlying sets contain the lattice point
 
 This is used to form the local (fiberwise) matrix at `g` by selecting rows.
 """
-function active_injectives(injectives::Vector{IndInj}, g::Vector{Int})
+function active_injectives(injectives::Vector{IndInj{N}}, g::Vector{Int}) where {N}
+    active = Int[]
+    for (i, E) in enumerate(injectives)
+        if in_inj(E, g)
+            push!(active, i)
+        end
+    end
+    return active
+end
+
+function active_injectives(injectives::Vector{IndInj{N}}, g::NTuple{N,Int}) where {N}
     active = Int[]
     for (i, E) in enumerate(injectives)
         if in_inj(E, g)
@@ -339,29 +380,30 @@ A flange over Z^n.
 Fields (canonical, no aliases):
 
 * `n::Int`
-* `flats::Vector{IndFlat}`
-* `injectives::Vector{IndInj}`
+* `flats::Vector{IndFlat{N}}`
+* `injectives::Vector{IndInj{N}}`
 * `phi::Matrix{K}`
 
 The matrix `phi` is interpreted fiberwise: at a point `g in Z^n`, the active
 injectives/active flats determine a submatrix, and the fiberwise "dimension" is
 the rank of that submatrix.
 """
-struct Flange{K, F<:AbstractCoeffField}
+struct Flange{K, F<:AbstractCoeffField, N}
     field::F
     n::Int
-    flats::Vector{IndFlat}
-    injectives::Vector{IndInj}
+    flats::Vector{IndFlat{N}}
+    injectives::Vector{IndInj{N}}
     phi::Matrix{K}
 
-    function Flange{K,F}(
+    function Flange{K,F,N}(
         field::F,
         n::Int,
-        flats::Vector{IndFlat},
-        injectives::Vector{IndInj},
+        flats::Vector{IndFlat{N}},
+        injectives::Vector{IndInj{N}},
         phi::AbstractMatrix{K},
-    ) where {K, F<:AbstractCoeffField}
+    ) where {K, F<:AbstractCoeffField, N}
         coeff_type(field) == K || error("Flange: coeff_type(field) != K")
+        n == N || error("Flange: n=$n does not match flat/injective dimension $N")
         Phi = Matrix{K}(phi)
         if size(Phi, 1) != length(injectives) || size(Phi, 2) != length(flats)
             error(
@@ -382,25 +424,25 @@ struct Flange{K, F<:AbstractCoeffField}
             end
         end
 
-        return new{K,F}(field, n, flats, injectives, Phi)
+        return new{K,F,N}(field, n, flats, injectives, Phi)
     end
 end
 
 # Outer constructors for convenience.
-function Flange{K}(n::Int, flats::Vector{IndFlat}, injectives::Vector{IndInj}, phi::AbstractMatrix;
-                   field::AbstractCoeffField=field_from_eltype(K)) where {K}
-    return Flange{K, typeof(field)}(field, n, flats, injectives, Matrix{K}(phi))
+function Flange{K}(n::Int, flats::Vector{IndFlat{N}}, injectives::Vector{IndInj{N}}, phi::AbstractMatrix;
+                   field::AbstractCoeffField=field_from_eltype(K)) where {K,N}
+    return Flange{K, typeof(field), N}(field, n, flats, injectives, Matrix{K}(phi))
 end
 
-function Flange{K}(n::Int, flats::Vector{IndFlat}, injectives::Vector{IndInj}, phi::AbstractVector;
-                   field::AbstractCoeffField=field_from_eltype(K)) where {K}
+function Flange{K}(n::Int, flats::Vector{IndFlat{N}}, injectives::Vector{IndInj{N}}, phi::AbstractVector;
+                   field::AbstractCoeffField=field_from_eltype(K)) where {K,N}
     Phi = reshape(collect(phi), length(injectives), length(flats))
-    return Flange{K, typeof(field)}(field, n, flats, injectives, Phi)
+    return Flange{K, typeof(field), N}(field, n, flats, injectives, Phi)
 end
 
-function Flange(n::Int, flats::Vector{IndFlat}, injectives::Vector{IndInj}, phi::AbstractMatrix{K};
-                field::AbstractCoeffField=field_from_eltype(K)) where {K}
-    return Flange{K, typeof(field)}(field, n, flats, injectives, phi)
+function Flange(n::Int, flats::Vector{IndFlat{N}}, injectives::Vector{IndInj{N}}, phi::AbstractMatrix{K};
+                field::AbstractCoeffField=field_from_eltype(K)) where {K,N}
+    return Flange{K, typeof(field), N}(field, n, flats, injectives, phi)
 end
 
 
@@ -409,19 +451,21 @@ end
 
 Return a flange obtained by coercing `FG.phi` into the target coefficient field.
 """
-function change_field(FG::Flange{K}, field::AbstractCoeffField) where {K}
+function change_field(FG::Flange{K,F,N}, field::AbstractCoeffField) where {K,F,N}
     K2 = coeff_type(field)
     Phi = Matrix{K2}(undef, size(FG.phi, 1), size(FG.phi, 2))
     @inbounds for j in 1:size(Phi, 2), i in 1:size(Phi, 1)
         Phi[i, j] = coerce(field, FG.phi[i, j])
     end
-    return Flange{K2, typeof(field)}(field, FG.n, FG.flats, FG.injectives, Phi)
+    return Flange{K2, typeof(field), N}(field, FG.n, FG.flats, FG.injectives, Phi)
 end
 
 
 # Convenience wrappers accepting a flange directly.
 active_flats(FG::Flange, g::Vector{Int}) = active_flats(FG.flats, g)
+active_flats(FG::Flange, g::NTuple{N,Int}) where {N} = active_flats(FG.flats, g)
 active_injectives(FG::Flange, g::Vector{Int}) = active_injectives(FG.injectives, g)
+active_injectives(FG::Flange, g::NTuple{N,Int}) where {N} = active_injectives(FG.injectives, g)
 
 """
     degree_matrix(FG, g)
@@ -444,6 +488,17 @@ function degree_matrix(FG::Flange{K}, g::Vector{Int}) where {K}
     return (FG.phi[rows, cols], rows, cols)
 end
 
+function degree_matrix(FG::Flange{K}, g::NTuple{N,Int}) where {K,N}
+    rows = active_injectives(FG, g)
+    cols = active_flats(FG, g)
+
+    if isempty(rows) || isempty(cols)
+        return (zeros(FG.field, 0, 0), Int[], Int[])
+    end
+
+    return (FG.phi[rows, cols], rows, cols)
+end
+
 """
     dim_at(FG, g; rankfun=rank)
 
@@ -453,6 +508,15 @@ By convention this is the rank of the local submatrix `Phi_g`.
 """
 function dim_at(FG::Flange{K}, g::Vector{Int};
                 rankfun = A -> FieldLinAlg.rank(FG.field, A)) where {K}
+    Phi_g, _, _ = degree_matrix(FG, g)
+    if isempty(Phi_g)
+        return 0
+    end
+    return rankfun(Phi_g)
+end
+
+function dim_at(FG::Flange{K}, g::NTuple{N,Int};
+                rankfun = A -> FieldLinAlg.rank(FG.field, A)) where {K,N}
     Phi_g, _, _ = degree_matrix(FG, g)
     if isempty(Phi_g)
         return 0
@@ -533,8 +597,8 @@ end
 # ---------------------------------------------------------------------------
 
 # Helper: a hashable key for grouping flats/injectives by their underlying set.
-@inline _underlying_key(F::IndFlat) = (Tuple(F.tau.coords), Tuple(F.b))
-@inline _underlying_key(E::IndInj) = (Tuple(E.tau.coords), Tuple(E.b))
+@inline _underlying_key(F::IndFlat) = (Tuple(F.tau.coords), F.b)
+@inline _underlying_key(E::IndInj) = (Tuple(E.tau.coords), E.b)
 
 # Helper: test whether a vector is the zero vector.
 @inline function _is_zero_vec(v)
@@ -674,8 +738,8 @@ can intersect.
 
 This is useful for constructing small example flanges.
 """
-function canonical_matrix(flats::Vector{IndFlat}, injectives::Vector{IndInj};
-                          field::AbstractCoeffField = QQField())
+function canonical_matrix(flats::Vector{IndFlat{N}}, injectives::Vector{IndInj{N}};
+                          field::AbstractCoeffField = QQField()) where {N}
     m = length(injectives)
     n = length(flats)
     A = zeros(field, m, n)
@@ -766,10 +830,14 @@ function flange_to_axis(fr::Flange{K}) where {K}
 end
 
 "Test membership of a lattice point x in an axis-aligned upset or downset (generic and exact)."
-_contains(U::AxisUpset{T}, x::Vector{T}) where {T} =
+_contains(U::AxisUpset{T}, x::AbstractVector{T}) where {T} =
     all(U.free[i] || (x[i] >= U.a[i]) for i in 1:length(x))
-_contains(D::AxisDownset{T}, x::Vector{T}) where {T} =
+_contains(D::AxisDownset{T}, x::AbstractVector{T}) where {T} =
     all(D.free[i] || (x[i] <= D.b[i]) for i in 1:length(x))
+_contains(U::AxisUpset{T}, x::NTuple{N,T}) where {N,T} =
+    all(U.free[i] || (x[i] >= U.a[i]) for i in 1:N)
+_contains(D::AxisDownset{T}, x::NTuple{N,T}) where {N,T} =
+    all(D.free[i] || (x[i] <= D.b[i]) for i in 1:N)
 
 """
     cross_validate(fr::Flange; margin=1, rankfun=(A)->FieldLinAlg.rank(fr.field, A))
@@ -782,31 +850,28 @@ _contains(D::AxisDownset{T}, x::Vector{T}) where {T} =
 function cross_validate(fr::Flange; margin=1,
                         rankfun = A -> FieldLinAlg.rank(fr.field, A))
     a, b = bounding_box(fr; margin)
-    ranges = (a[i]:b[i] for i in 1:fr.n)
-    pts = collect(Iterators.product(ranges...))
+    ranges = ntuple(i -> a[i]:b[i], fr.n)
 
     # Flange evaluation (use provided rank function).
     dims_Z = Dict{Tuple{Vararg{Int}}, Int}()
-    for t in pts
-        g = collect(Int.(t))
-        dims_Z[Tuple(g...)] = dim_at(fr, g; rankfun=rankfun)
+    for t in Iterators.product(ranges...)
+        dims_Z[t] = dim_at(fr, t; rankfun=rankfun)
     end
 
     # Axis-aligned proxy (compare apples-to-apples with the flange)
     afr = flange_to_axis(fr)
     dims_PL = Dict{Tuple{Vararg{Int}}, Int}()
-    for t in pts
-        x = collect(Int.(t))
-        rows = [ _contains(d, x) for d in afr.deaths ]
-        cols = [ _contains(u, x) for u in afr.births ]
+    for t in Iterators.product(ranges...)
+        rows = [ _contains(d, t) for d in afr.deaths ]
+        cols = [ _contains(u, t) for u in afr.births ]
         idxr = findall(identity, rows)
         idxc = findall(identity, cols)
         if isempty(idxr) || isempty(idxc)
-            dims_PL[Tuple(Int.(t)...)] = 0
+            dims_PL[t] = 0
         else
             # Rank exactly with the same provided rank function.
             Phi_x = afr.Phi[idxr, idxc]
-            dims_PL[Tuple(Int.(t)...)] = rankfun(Phi_x)
+            dims_PL[t] = rankfun(Phi_x)
         end
     end
 
@@ -816,8 +881,9 @@ function cross_validate(fr::Flange; margin=1,
         if v != dims_PL[k]; mism[k] = (v, dims_PL[k]); end
     end
     ok = isempty(mism)
+    tested = prod(length(r) for r in ranges)
     report = Dict("box" => (a,b), "mismatches" => mism,
-                  "tested" => length(pts), "agree" => length(pts) - length(mism))
+                  "tested" => tested, "agree" => tested - length(mism))
     return ok, report
 end
 

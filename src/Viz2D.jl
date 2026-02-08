@@ -137,7 +137,7 @@ if HAVE_CAIROMAKIE
             g = [ell[1] + ix - 1, ell[2] + iy - 1]
             cols = active_flats(FG, g)
             rows = active_injectives(FG, g)
-            d = (isempty(cols) || isempty(rows)) ? 0 : FieldLinAlg.rank(FG.field, FG.phi[rows, cols])
+            d = (isempty(cols) || isempty(rows)) ? 0 : FieldLinAlg.rank_restricted(FG.field, FG.phi, rows, cols)
             A[iy, ix] = d
         end
 

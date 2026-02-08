@@ -10,12 +10,144 @@ import ..FieldLinAlg
     opts === nothing ? FiniteFringeOptions() : opts
 
 # =========================================
+# Iterator helpers (tuple/iterator-first APIs)
+# =========================================
+
+struct IndicesView
+    data::Vector{Int}
+end
+
+Base.IteratorSize(::Type{IndicesView}) = Base.HasLength()
+Base.eltype(::Type{IndicesView}) = Int
+Base.length(view::IndicesView) = length(view.data)
+Base.size(view::IndicesView) = (length(view.data),)
+Base.getindex(view::IndicesView, i::Int) = view.data[i]
+Base.iterate(view::IndicesView, state::Int=1) =
+    state > length(view.data) ? nothing : (view.data[state], state + 1)
+
+struct PosetLeqIter{P}
+    P::P
+    i::Int
+    is_upset::Bool
+end
+
+Base.IteratorSize(::Type{PosetLeqIter}) = Base.HasLength()
+Base.eltype(::Type{PosetLeqIter}) = Int
+function Base.length(it::PosetLeqIter)
+    n = nvertices(it.P)
+    cnt = 0
+    if it.is_upset
+        @inbounds for j in 1:n
+            cnt += leq(it.P, it.i, j) ? 1 : 0
+        end
+    else
+        @inbounds for j in 1:n
+            cnt += leq(it.P, j, it.i) ? 1 : 0
+        end
+    end
+    return cnt
+end
+function Base.iterate(it::PosetLeqIter, state::Int=1)
+    n = nvertices(it.P)
+    j = state
+    if it.is_upset
+        while j <= n
+            if leq(it.P, it.i, j)
+                return j, j + 1
+            end
+            j += 1
+        end
+    else
+        while j <= n
+            if leq(it.P, j, it.i)
+                return j, j + 1
+            end
+            j += 1
+        end
+    end
+    return nothing
+end
+
+struct BitRowIter{A<:AbstractVector{Bool}}
+    row::A
+end
+
+Base.IteratorSize(::Type{BitRowIter}) = Base.HasLength()
+Base.eltype(::Type{BitRowIter}) = Int
+Base.length(it::BitRowIter) = count(it.row)
+Base.iterate(it::BitRowIter, state::Int=1) = begin
+    j = findnext(it.row, state)
+    j === nothing ? nothing : (j, j + 1)
+end
+
+struct ProductIndexIter{N}
+    cart::CartesianIndices{N,NTuple{N,UnitRange{Int}}}
+    strides::NTuple{N,Int}
+end
+
+Base.IteratorSize(::Type{ProductIndexIter}) = Base.HasLength()
+Base.eltype(::Type{ProductIndexIter}) = Int
+Base.length(it::ProductIndexIter) = length(it.cart)
+function Base.iterate(it::ProductIndexIter{N}, state...) where {N}
+    nxt = iterate(it.cart, state...)
+    nxt === nothing && return nothing
+    I, st = nxt
+    lin = 1
+    @inbounds for k in 1:N
+        lin += (I[k] - 1) * it.strides[k]
+    end
+    return lin, st
+end
+
+# =========================================
 # Poset interface + finite poset and indicator sets
 # =========================================
 
 abstract type AbstractPoset end
 
-const UPDOWN_CACHE_THRESHOLD = Ref(200_000)
+const UPDOWN_CACHE_MODE = Ref(:auto)  # :auto | :always | :never
+const UPDOWN_CACHE_THRESHOLD_FINITE = Ref(500_000)
+const UPDOWN_CACHE_THRESHOLD_GENERIC = Ref(200_000)
+
+@inline _updown_cache_skip_auto(::AbstractPoset) = false
+@inline _updown_cache_threshold(::AbstractPoset) = UPDOWN_CACHE_THRESHOLD_GENERIC[]
+
+"""
+    set_updown_cache_policy!(; mode=:auto, finite_threshold=500_000, generic_threshold=200_000)
+
+Tune lazy upset/downset cache construction:
+- `mode=:auto`: cache only when below thresholds.
+- `mode=:always`: always build cached upset/downset lists.
+- `mode=:never`: never build cached upset/downset lists.
+"""
+function set_updown_cache_policy!(;
+                                  mode::Symbol=UPDOWN_CACHE_MODE[],
+                                  finite_threshold::Integer=UPDOWN_CACHE_THRESHOLD_FINITE[],
+                                  generic_threshold::Integer=UPDOWN_CACHE_THRESHOLD_GENERIC[])
+    mode in (:auto, :always, :never) ||
+        error("set_updown_cache_policy!: mode must be :auto, :always, or :never (got $(repr(mode))).")
+    finite_threshold >= 0 || error("set_updown_cache_policy!: finite_threshold must be >= 0.")
+    generic_threshold >= 0 || error("set_updown_cache_policy!: generic_threshold must be >= 0.")
+    UPDOWN_CACHE_MODE[] = mode
+    UPDOWN_CACHE_THRESHOLD_FINITE[] = Int(finite_threshold)
+    UPDOWN_CACHE_THRESHOLD_GENERIC[] = Int(generic_threshold)
+    return nothing
+end
+
+updown_cache_policy() = (
+    mode = UPDOWN_CACHE_MODE[],
+    finite_threshold = UPDOWN_CACHE_THRESHOLD_FINITE[],
+    generic_threshold = UPDOWN_CACHE_THRESHOLD_GENERIC[],
+)
+
+@inline function _should_cache_updown(P::AbstractPoset, n::Int)
+    mode = UPDOWN_CACHE_MODE[]
+    mode === :always && return true
+    mode === :never && return false
+    mode === :auto || error("UPDOWN cache mode must be one of :auto, :always, :never (got $(repr(mode))).")
+    _updown_cache_skip_auto(P) && return false
+    return n * n <= _updown_cache_threshold(P)
+end
 
 function _ensure_updown_cache!(P::AbstractPoset)
     hasproperty(P, :cache) || return nothing
@@ -28,39 +160,42 @@ function _ensure_updown_cache!(P::AbstractPoset)
         return (upsets, downsets)
     end
     n = nvertices(P)
-    n * n > UPDOWN_CACHE_THRESHOLD[] && return nothing
+    _should_cache_updown(P, n) || return nothing
     lock = hasproperty(pc, :lock) ? getproperty(pc, :lock) : nothing
     if lock !== nothing
         Base.lock(lock)
     end
-    upsets = getproperty(pc, :upsets)
-    downsets = getproperty(pc, :downsets)
-    if upsets === nothing || downsets === nothing
-        up = Vector{Vector{Int}}(undef, n)
-        down = Vector{Vector{Int}}(undef, n)
-        @inbounds for i in 1:n
-            up[i] = Int[]
-            down[i] = Int[]
-        end
-        @inbounds for i in 1:n
-            for j in 1:n
-                if leq(P, i, j)
-                    push!(up[i], j)
-                end
-                if leq(P, j, i)
-                    push!(down[i], j)
+    try
+        upsets = getproperty(pc, :upsets)
+        downsets = getproperty(pc, :downsets)
+        if upsets === nothing || downsets === nothing
+            up = Vector{Vector{Int}}(undef, n)
+            down = Vector{Vector{Int}}(undef, n)
+            @inbounds for i in 1:n
+                up[i] = Int[]
+                down[i] = Int[]
+            end
+            @inbounds for i in 1:n
+                for j in 1:n
+                    if leq(P, i, j)
+                        push!(up[i], j)
+                    end
+                    if leq(P, j, i)
+                        push!(down[i], j)
+                    end
                 end
             end
+            setproperty!(pc, :upsets, up)
+            setproperty!(pc, :downsets, down)
+            upsets = up
+            downsets = down
         end
-        setproperty!(pc, :upsets, up)
-        setproperty!(pc, :downsets, down)
-        upsets = up
-        downsets = down
+        return (upsets, downsets)
+    finally
+        if lock !== nothing
+            Base.unlock(lock)
+        end
     end
-    if lock !== nothing
-        Base.unlock(lock)
-    end
-    return (upsets, downsets)
 end
 
 function cached_upset_indices(P::AbstractPoset, i::Int)
@@ -73,6 +208,190 @@ function cached_downset_indices(P::AbstractPoset, i::Int)
     cache = _ensure_updown_cache!(P)
     cache === nothing && return nothing
     return cache[2][i]
+end
+
+"""
+    CoverEdges
+
+Lightweight cover-relation wrapper that supports:
+- adjacency queries via `C[u,v]`,
+- iteration over cover edges `(u,v)`,
+- matrix recovery via `BitMatrix(C)` / `Matrix(C)`.
+"""
+struct CoverEdges
+    mat::BitMatrix
+    edges::Vector{Tuple{Int,Int}}
+end
+
+Base.size(C::CoverEdges) = size(C.mat)
+Base.getindex(C::CoverEdges, i::Int, j::Int) = C.mat[i,j]
+Base.length(C::CoverEdges) = length(C.edges)
+Base.eltype(::Type{CoverEdges}) = Tuple{Int,Int}
+Base.IteratorSize(::Type{CoverEdges}) = Base.HasLength()
+Base.iterate(C::CoverEdges, state::Int=1) =
+    state > length(C.edges) ? nothing : (C.edges[state], state + 1)
+Base.convert(::Type{BitMatrix}, C::CoverEdges) = C.mat
+Base.convert(::Type{Matrix{Bool}}, C::CoverEdges) = Matrix(C.mat)
+Base.BitArray{2}(C::CoverEdges) = C.mat
+Base.Array{Bool,2}(C::CoverEdges) = Matrix(C.mat)
+Base.BitMatrix(C::CoverEdges) = C.mat
+Base.Matrix(C::CoverEdges) = Matrix(C.mat)
+Base.findall(C::CoverEdges) = C.edges
+
+"""
+    CoverCache(Q)
+
+An internal cache for poset cover data and a hot-path memo used by `map_leq`.
+This cache is stored lazily on each poset object (via `PosetCache`).
+
+Thread-safety:
+
+- `succs`, `preds`, and `C` are read-only once constructed.
+- `chain_parent` is a *vector of dicts*, one dict per Julia thread, so the hot-path
+  memo writes are thread-local and do not require locks.
+"""
+struct CoverCache
+    Q::AbstractPoset
+    C::Union{BitMatrix,Nothing}
+    succs::Vector{Vector{Int}}
+    preds::Vector{Vector{Int}}
+
+    # For each thread, chain_parent[tid][pairkey(a,d)] = chosen predecessor b in preds[d]
+    # with a <= b (used to speed up witness chains in kernel/image constructions).
+    chain_parent::Vector{Dict{UInt64, Int}}
+
+    # Number of cover edges in Q (used to size edge-indexed stores).
+    nedges::Int
+end
+
+mutable struct PosetCache
+    cover_edges::Union{Nothing,CoverEdges}
+    cover::Union{Nothing,CoverCache}
+    lock::Base.ReentrantLock
+    upsets::Union{Nothing,Vector{Vector{Int}}}
+    downsets::Union{Nothing,Vector{Vector{Int}}}
+    PosetCache() = new(nothing, nothing, Base.ReentrantLock(), nothing, nothing)
+end
+
+function get_cover_cache(Q::AbstractPoset)
+    if hasproperty(Q, :cache)
+        pc = getproperty(Q, :cache)
+        if pc isa PosetCache
+            if pc.cover === nothing
+                Base.lock(pc.lock)  # lock only on miss path
+                try
+                    if pc.cover === nothing
+                        pc.cover = _build_cover_cache(Q)
+                    end
+                finally
+                    Base.unlock(pc.lock)
+                end
+            end
+            return pc.cover
+        end
+    end
+    error("get_cover_cache: poset type $(typeof(Q)) does not support caching")
+end
+
+warm_cache!(Q::AbstractPoset) = (get_cover_cache(Q); Q)
+
+cover_cache(Q::AbstractPoset) = get_cover_cache(Q)
+
+"""
+    build_cache!(Q; cover=true, updown=true)
+
+Sequential cache build step for a poset. Use this before entering threaded
+read-only loops to avoid lock contention and duplicate lazy-initialization work.
+"""
+function build_cache!(Q::AbstractPoset; cover::Bool=true, updown::Bool=true)
+    cover && get_cover_cache(Q)
+    updown && _ensure_updown_cache!(Q)
+    return Q
+end
+
+"""
+    clear_cover_cache!(Q)
+
+Clear the cached cover data stored on a poset object.
+"""
+function clear_cover_cache!(Q::AbstractPoset)
+    if hasproperty(Q, :cache)
+        pc = getproperty(Q, :cache)
+        if pc isa PosetCache
+            Base.lock(pc.lock)
+            try
+                pc.cover_edges = nothing
+                pc.cover = nothing
+                pc.upsets = nothing
+                pc.downsets = nothing
+            finally
+                Base.unlock(pc.lock)
+            end
+            return nothing
+        end
+    end
+    error("clear_cover_cache!: poset type $(typeof(Q)) does not support caching")
+end
+
+# Packs two Int32-ish values into a UInt64 for faster Dict keys.
+# This is used both here and in the `CoverCache.chain_parent` hot-path memo.
+@inline function _pairkey(u::Int, v::Int)::UInt64
+    return (UInt64(u) << 32) | UInt64(v)
+end
+
+function _build_cover_cache(Q::AbstractPoset)
+    # Cache enough to quickly traverse the cover graph and to build edge-indexed stores.
+    Ce = cover_edges(Q)
+
+    # BitMatrix adjacency for O(1) cover checks (only for FinitePoset).
+    C = Q isa FinitePoset ? BitMatrix(Ce) : nothing
+
+    nedges = length(Ce)
+    n = nvertices(Q)
+    outdeg = zeros(Int, n)
+    indeg = zeros(Int, n)
+
+    for (a, b) in Ce
+        outdeg[a] += 1
+        indeg[b] += 1
+    end
+
+    succs = [Vector{Int}(undef, outdeg[u]) for u in 1:n]
+    preds = [Vector{Int}(undef, indeg[u]) for u in 1:n]
+    outk = ones(Int, n)
+    ink = ones(Int, n)
+
+    for (a, b) in Ce
+        succs[a][outk[a]] = b
+        preds[b][ink[b]] = a
+        outk[a] += 1
+        ink[b] += 1
+    end
+
+    @inbounds for u in 1:n
+        sort!(succs[u])
+        sort!(preds[u])
+    end
+
+    chain_parent = [Dict{UInt64, Int}() for _ in 1:Base.Threads.nthreads()]
+
+    return CoverCache(Q, C, succs, preds, chain_parent, nedges)
+end
+
+@inline function _chain_parent_dict(cc::CoverCache)::Dict{UInt64, Int}
+    return cc.chain_parent[Base.Threads.threadid()]
+end
+
+function _chosen_predecessor(cc::CoverCache, a::Int, d::Int)
+    k = _pairkey(a, d)
+    chain_parent = _chain_parent_dict(cc)
+    b = get(chain_parent, k, 0)
+    if b == 0
+        b = findfirst(x -> x != a && leq(cc.Q, a, x), cc.preds[d])
+        b = (b === nothing) ? a : cc.preds[d][b]
+        chain_parent[k] = b
+    end
+    return b
 end
 
 """
@@ -106,38 +425,24 @@ function leq_matrix(P::AbstractPoset)
 end
 
 """
-    upset_indices(P, i) -> Vector{Int}
-    downset_indices(P, i) -> Vector{Int}
+    upset_indices(P, i)
+    downset_indices(P, i)
     upset_iter(P, i)
     downset_iter(P, i)
 
-Return the indices in the principal upset/downset of `i`.
+Return an iterable of indices in the principal upset/downset of `i`.
 Fallback implementations scan the whole poset.
 """
 function upset_indices(P::AbstractPoset, i::Int)
     cached = cached_upset_indices(P, i)
-    cached === nothing || return cached
-    n = nvertices(P)
-    out = Int[]
-    @inbounds for j in 1:n
-        if leq(P, i, j)
-            push!(out, j)
-        end
-    end
-    return out
+    cached === nothing || return IndicesView(cached)
+    return PosetLeqIter(P, i, true)
 end
 
 function downset_indices(P::AbstractPoset, i::Int)
     cached = cached_downset_indices(P, i)
-    cached === nothing || return cached
-    n = nvertices(P)
-    out = Int[]
-    @inbounds for j in 1:n
-        if leq(P, j, i)
-            push!(out, j)
-        end
-    end
-    return out
+    cached === nothing || return IndicesView(cached)
+    return PosetLeqIter(P, i, false)
 end
 
 """
@@ -149,17 +454,11 @@ This avoids allocating a fresh vector on each call; when cached vectors exist,
 those are returned directly (as iterables).
 """
 function upset_iter(P::AbstractPoset, i::Int)
-    cached = cached_upset_indices(P, i)
-    cached === nothing || return cached
-    n = nvertices(P)
-    return (j for j in 1:n if leq(P, i, j))
+    return upset_indices(P, i)
 end
 
 function downset_iter(P::AbstractPoset, i::Int)
-    cached = cached_downset_indices(P, i)
-    cached === nothing || return cached
-    n = nvertices(P)
-    return (j for j in 1:n if leq(P, j, i))
+    return downset_indices(P, i)
 end
 
 """
@@ -251,27 +550,20 @@ end
 nvertices(P::FinitePoset) = P.n
 leq(P::FinitePoset, i::Int, j::Int) = P._leq[i,j]
 leq_matrix(P::FinitePoset) = P._leq
+@inline _updown_cache_threshold(::FinitePoset) = UPDOWN_CACHE_THRESHOLD_FINITE[]
 
 function upset_indices(P::FinitePoset, i::Int)
-    row = P._leq[i, :]
-    out = Int[]
-    j = findnext(row, 1)
-    while j !== nothing
-        push!(out, j)
-        j = findnext(row, j + 1)
-    end
-    return out
+    cached = cached_upset_indices(P, i)
+    cached === nothing || return IndicesView(cached)
+    row = @view P._leq[i, :]
+    return BitRowIter(row)
 end
 
 function downset_indices(P::FinitePoset, i::Int)
-    col = P._leq[:, i]
-    out = Int[]
-    j = findnext(col, 1)
-    while j !== nothing
-        push!(out, j)
-        j = findnext(col, j + 1)
-    end
-    return out
+    cached = cached_downset_indices(P, i)
+    cached === nothing || return IndicesView(cached)
+    col = @view P._leq[:, i]
+    return BitRowIter(col)
 end
 
 leq_row(P::FinitePoset, i::Int) = P._leq[i, :]
@@ -301,8 +593,12 @@ end
 ProductOfChainsPoset(sizes::NTuple{N,Int}) where {N} =
     ProductOfChainsPoset{N}(sizes, _poset_strides(sizes), PosetCache())
 
+ProductOfChainsPoset(sizes::NTuple{N,Int}, strides::NTuple{N,Int}) where {N} =
+    ProductOfChainsPoset{N}(sizes, strides, PosetCache())
+
 ProductOfChainsPoset(sizes::AbstractVector{<:Integer}) =
     ProductOfChainsPoset(ntuple(i -> Int(sizes[i]), length(sizes)))
+@inline _updown_cache_skip_auto(::ProductOfChainsPoset) = true
 
 function nvertices(P::ProductOfChainsPoset)
     n = 1
@@ -336,47 +632,17 @@ end
 end
 
 function upset_indices(P::ProductOfChainsPoset{N}, i::Int) where {N}
-    out = Int[]
-    ranges = NTuple{N,UnitRange{Int}}(ntuple(k -> _coord_at(i, P.sizes[k], P.strides[k]):P.sizes[k], N))
-    idxs = Vector{Int}(undef, N)
-    function rec(dim::Int)
-        if dim > N
-            lin = 1
-            @inbounds for k in 1:N
-                lin += (idxs[k] - 1) * P.strides[k]
-            end
-            push!(out, lin)
-            return
-        end
-        for v in ranges[dim]
-            idxs[dim] = v
-            rec(dim + 1)
-        end
-    end
-    rec(1)
-    return out
+    cached = cached_upset_indices(P, i)
+    cached === nothing || return IndicesView(cached)
+    ranges = ntuple(k -> _coord_at(i, P.sizes[k], P.strides[k]):P.sizes[k], N)
+    return ProductIndexIter(CartesianIndices(ranges), P.strides)
 end
 
 function downset_indices(P::ProductOfChainsPoset{N}, i::Int) where {N}
-    out = Int[]
-    ranges = NTuple{N,UnitRange{Int}}(ntuple(k -> 1:_coord_at(i, P.sizes[k], P.strides[k]), N))
-    idxs = Vector{Int}(undef, N)
-    function rec(dim::Int)
-        if dim > N
-            lin = 1
-            @inbounds for k in 1:N
-                lin += (idxs[k] - 1) * P.strides[k]
-            end
-            push!(out, lin)
-            return
-        end
-        for v in ranges[dim]
-            idxs[dim] = v
-            rec(dim + 1)
-        end
-    end
-    rec(1)
-    return out
+    cached = cached_downset_indices(P, i)
+    cached === nothing || return IndicesView(cached)
+    ranges = ntuple(k -> 1:_coord_at(i, P.sizes[k], P.strides[k]), N)
+    return ProductIndexIter(CartesianIndices(ranges), P.strides)
 end
 
 """
@@ -406,6 +672,7 @@ function GridPoset(coords::NTuple{N,Vector{T}}) where {N,T}
 end
 
 GridPoset(coords::AbstractVector{<:AbstractVector}) = GridPoset(ntuple(i -> Vector(coords[i]), length(coords)))
+@inline _updown_cache_skip_auto(::GridPoset) = true
 
 nvertices(P::GridPoset) = nvertices(ProductOfChainsPoset(P.sizes))
 @inline function leq(P::GridPoset{N}, i::Int, j::Int) where {N}
@@ -561,80 +828,8 @@ function _validate_partial_order_matrix!(L::BitMatrix)
     return nothing
 end
 
-
-# Hasse cover relation (needed for resolutions):
-# edge i -> j iff i<j and no k with i<k<j
-#
-# For user convenience, we return a lightweight wrapper that supports:
-#   * adjacency queries via C[u,v] (Bool), and
-#   * iteration over cover edges as (u,v) pairs (so Set(cover_edges(P)) works).
-struct CoverEdges
-    mat::BitMatrix
-    edges::Vector{Tuple{Int,Int}}
-end
-
-Base.size(C::CoverEdges) = size(C.mat)
-Base.getindex(C::CoverEdges, i::Int, j::Int) = C.mat[i,j]
-Base.length(C::CoverEdges) = length(C.edges)
-Base.eltype(::Type{CoverEdges}) = Tuple{Int,Int}
-Base.IteratorSize(::Type{CoverEdges}) = Base.HasLength()
-Base.iterate(C::CoverEdges, state::Int=1) =
-    state > length(C.edges) ? nothing : (C.edges[state], state + 1)
-
-# Allow BitMatrix(C) / Matrix(C) to recover the adjacency matrix when needed.
-Base.convert(::Type{BitMatrix}, C::CoverEdges) = C.mat
-Base.convert(::Type{Matrix{Bool}}, C::CoverEdges) = Matrix(C.mat)
-
-# ---------------------------------------------------------------------------
-# IMPORTANT constructor specializations:
-#
-# `CoverEdges` is iterable (over (i,j) edges). Julia's built-in `BitMatrix(x)` and
-# `Matrix(x)` have generic iterator constructors, so without these methods
-# `BitMatrix(C::CoverEdges)` attempts to interpret the edge iterator as a stream
-# of Bool entries, which fails with a DimensionMismatch.
-#
-# Even though we provide `convert(BitMatrix, C)`, the `BitMatrix(C)` call does not
-# necessarily go through `convert` because the iterator constructor is more
-# specific than `convert` for iterable inputs.
-#
-# These specializations make the docstring guarantee "BitMatrix(C) works" true,
-# and they are O(1) (no allocations).
-# ---------------------------------------------------------------------------
-
-# NOTE: In Julia, `BitMatrix` is a type alias for `BitArray{2}`. In practice,
-# `BitMatrix(C)` may dispatch directly to `BitArray{2}(C)` (the underlying type
-# constructor) instead of going through `convert`.
-#
-# To make `BitMatrix(C)` and `Matrix(C)` reliable (and O(1)), we provide
-# constructors for the underlying types *and* for the alias names.
-
-# Underlying type constructor (this is what `BitMatrix(C)` actually calls).
-Base.BitArray{2}(C::CoverEdges) = C.mat
-
-# A dense Bool matrix can be requested explicitly as `Array{Bool,2}(C)`.
-Base.Array{Bool,2}(C::CoverEdges) = Matrix(C.mat)
-
-# Alias names (readability / discoverability).
-Base.BitMatrix(C::CoverEdges) = C.mat
-Base.Matrix(C::CoverEdges) = Matrix(C.mat)
-
-
-# Convenience: findall(C) returns the list of cover edges.
-Base.findall(C::CoverEdges) = C.edges
-
-# Cache cover edges by the identity of the underlying order matrix `P._leq`.
-#
-# IMPORTANT:
-# - `FinitePoset` is an (immutable) struct, and `WeakKeyDict` requires *mutable*
-#   keys because it attaches a finalizer to the key object.
-# - `P._leq` is a `BitMatrix` (mutable) with stable identity and the same lifetime
-#   as the poset data, so it is a safe weak-key "anchor".
-#
-# This preserves the intended behavior: compute cover edges once per poset,
-# reuse them on repeated queries, and do not leak memory across many temporary
-# posets.
-const _COVER_EDGES_CACHE = WeakKeyDict{BitMatrix, CoverEdges}()
-const _COVER_EDGES_OBJ_CACHE = IdDict{AbstractPoset, CoverEdges}()
+# Cover-edge wrappers and constructor specializations are defined near the
+# poset-cache declarations so cache storage can be strongly typed.
 
 
 # BitVector helpers (chunk-level) for allocation-free set operations.
@@ -717,6 +912,41 @@ function _compute_cover_edges_bitset(L::BitMatrix)::CoverEdges
     return CoverEdges(mat, edges)
 end
 
+function _set_cover_edges_cache!(P::AbstractPoset, C::CoverEdges)
+    hasproperty(P, :cache) || return C
+    pc = getproperty(P, :cache)
+    pc isa PosetCache || return C
+    Base.lock(pc.lock)
+    try
+        pc.cover_edges = C
+    finally
+        Base.unlock(pc.lock)
+    end
+    return C
+end
+
+function _cover_edges_cached_or_build!(builder::Function, P::AbstractPoset, cached::Bool)
+    cached || return builder()
+    hasproperty(P, :cache) || return builder()
+    pc = getproperty(P, :cache)
+    pc isa PosetCache || return builder()
+
+    C = pc.cover_edges
+    C === nothing || return C
+
+    Base.lock(pc.lock)  # lock only on miss path
+    try
+        C = pc.cover_edges
+        if C === nothing
+            C = builder()
+            pc.cover_edges = C
+        end
+        return C
+    finally
+        Base.unlock(pc.lock)
+    end
+end
+
 """
     cover_edges(P; cached=true)
 
@@ -739,16 +969,9 @@ function cover_edges(P::FinitePoset;
         cached == true || error("cover_edges: pass either cached or opts, not both.")
         cached = opts.cached
     end
-    # Use the order-matrix object identity as the cache key.
-    L = P._leq
-    if cached && haskey(_COVER_EDGES_CACHE, L)
-        return _COVER_EDGES_CACHE[L]
+    return _cover_edges_cached_or_build!(P, cached) do
+        _compute_cover_edges_bitset(P._leq)
     end
-    C = _compute_cover_edges_bitset(L)
-    if cached
-        _COVER_EDGES_CACHE[L] = C
-    end
-    return C
 end
 
 function _cover_edges_from_edges(n::Int, edges::Vector{Tuple{Int,Int}})
@@ -766,17 +989,10 @@ function cover_edges(P::AbstractPoset;
         cached == true || error("cover_edges: pass either cached or opts, not both.")
         cached = opts.cached
     end
-    if cached
-        C = get(_COVER_EDGES_OBJ_CACHE, P, nothing)
-        C === nothing || return C
+    return _cover_edges_cached_or_build!(P, cached) do
+        L = leq_matrix(P)
+        _compute_cover_edges_bitset(L isa BitMatrix ? L : BitMatrix(L))
     end
-    L = leq_matrix(P)
-    L = L isa BitMatrix ? L : BitMatrix(L)
-    C = _compute_cover_edges_bitset(L)
-    if cached
-        _COVER_EDGES_OBJ_CACHE[P] = C
-    end
-    return C
 end
 
 function cover_edges(P::ProductOfChainsPoset{N};
@@ -786,32 +1002,26 @@ function cover_edges(P::ProductOfChainsPoset{N};
         cached == true || error("cover_edges: pass either cached or opts, not both.")
         cached = opts.cached
     end
-    if cached
-        C = get(_COVER_EDGES_OBJ_CACHE, P, nothing)
-        C === nothing || return C
-    end
-    n = nvertices(P)
-    edges = Tuple{Int,Int}[]
-    coords = Vector{Int}(undef, N)
-    @inbounds for idx in 1:n
-        _index_to_coords!(coords, idx, P.sizes, P.strides)
-        for k in 1:N
-            if coords[k] < P.sizes[k]
-                coords[k] += 1
-                lin = 1
-                for t in 1:N
-                    lin += (coords[t] - 1) * P.strides[t]
+    return _cover_edges_cached_or_build!(P, cached) do
+        n = nvertices(P)
+        edges = Tuple{Int,Int}[]
+        coords = Vector{Int}(undef, N)
+        @inbounds for idx in 1:n
+            _index_to_coords!(coords, idx, P.sizes, P.strides)
+            for k in 1:N
+                if coords[k] < P.sizes[k]
+                    coords[k] += 1
+                    lin = 1
+                    for t in 1:N
+                        lin += (coords[t] - 1) * P.strides[t]
+                    end
+                    push!(edges, (idx, lin))
+                    coords[k] -= 1
                 end
-                push!(edges, (idx, lin))
-                coords[k] -= 1
             end
         end
+        _cover_edges_from_edges(n, edges)
     end
-    C = _cover_edges_from_edges(n, edges)
-    if cached
-        _COVER_EDGES_OBJ_CACHE[P] = C
-    end
-    return C
 end
 
 function cover_edges(P::GridPoset{N};
@@ -821,15 +1031,9 @@ function cover_edges(P::GridPoset{N};
         cached == true || error("cover_edges: pass either cached or opts, not both.")
         cached = opts.cached
     end
-    if cached
-        C = get(_COVER_EDGES_OBJ_CACHE, P, nothing)
-        C === nothing || return C
+    return _cover_edges_cached_or_build!(P, cached) do
+        cover_edges(ProductOfChainsPoset(P.sizes, P.strides, P.cache); cached=true)
     end
-    C = cover_edges(ProductOfChainsPoset(P.sizes, P.strides); cached=cached)
-    if cached
-        _COVER_EDGES_OBJ_CACHE[P] = C
-    end
-    return C
 end
 
 function cover_edges(P::ProductPoset;
@@ -839,37 +1043,30 @@ function cover_edges(P::ProductPoset;
         cached == true || error("cover_edges: pass either cached or opts, not both.")
         cached = opts.cached
     end
-    if cached
-        C = get(_COVER_EDGES_OBJ_CACHE, P, nothing)
-        C === nothing || return C
-    end
-    n1 = nvertices(P.P1)
-    n2 = nvertices(P.P2)
-    n = n1 * n2
-    edges = Tuple{Int,Int}[]
-    C1 = cover_edges(P.P1; cached=cached)
-    C2 = cover_edges(P.P2; cached=cached)
-    @inbounds for (i1, j1) in C1
-        for i2 in 1:n2
-            src = i1 + (i2 - 1) * n1
-            dst = j1 + (i2 - 1) * n1
-            push!(edges, (src, dst))
+    return _cover_edges_cached_or_build!(P, cached) do
+        n1 = nvertices(P.P1)
+        n2 = nvertices(P.P2)
+        n = n1 * n2
+        edges = Tuple{Int,Int}[]
+        C1 = cover_edges(P.P1; cached=cached)
+        C2 = cover_edges(P.P2; cached=cached)
+        @inbounds for (i1, j1) in C1
+            for i2 in 1:n2
+                src = i1 + (i2 - 1) * n1
+                dst = j1 + (i2 - 1) * n1
+                push!(edges, (src, dst))
+            end
         end
-    end
-    @inbounds for (i2, j2) in C2
-        for i1 in 1:n1
-            src = i1 + (i2 - 1) * n1
-            dst = i1 + (j2 - 1) * n1
-            push!(edges, (src, dst))
+        @inbounds for (i2, j2) in C2
+            for i1 in 1:n1
+                src = i1 + (i2 - 1) * n1
+                dst = i1 + (j2 - 1) * n1
+                push!(edges, (src, dst))
+            end
         end
+        _cover_edges_from_edges(n, edges)
     end
-    C = _cover_edges_from_edges(n, edges)
-    if cached
-        _COVER_EDGES_OBJ_CACHE[P] = C
-    end
-    return C
 end
-
 
 struct Upset
     P::AbstractPoset
@@ -1155,10 +1352,12 @@ Notes:
 - In addition to `U::Upset` / `D::Downset`, you may also pass membership masks
   `U_mask::AbstractVector{Bool}` and `D_mask::AbstractVector{Bool}`.
 """
-function one_by_one_fringe(P::AbstractPoset, U::Upset, D::Downset, scalar::K) where {K}
-    phi = spzeros(K, 1, 1)
-    phi[1, 1] = scalar
-    return FringeModule{K}(P, [U], [D], phi)
+function one_by_one_fringe(P::AbstractPoset, U::Upset, D::Downset, scalar::K;
+                           field::AbstractCoeffField=QQField()) where {K}
+    s = coerce(field, scalar)
+    phi = spzeros(typeof(s), 1, 1)
+    phi[1, 1] = s
+    return FringeModule{typeof(s)}(P, [U], [D], phi; field=field)
 end
 
 # Default scalar (by field).
@@ -1172,10 +1371,10 @@ one_by_one_fringe(P::AbstractPoset, U::Upset, D::Downset;
                   field::AbstractCoeffField=QQField()) =
     opts === nothing ? begin
         scalar === nothing && (scalar = one(coeff_type(field)))
-        one_by_one_fringe(P, U, D, coerce(field, scalar))
+        one_by_one_fringe(P, U, D, coerce(field, scalar); field=field)
     end : begin
         scalar === nothing || error("one_by_one_fringe: pass either scalar or opts, not both.")
-        one_by_one_fringe(P, U, D, coerce(field, opts.scalar))
+        one_by_one_fringe(P, U, D, coerce(field, opts.scalar); field=field)
     end
 
 # ------------------ mask-based convenience overloads ------------------
@@ -1191,10 +1390,11 @@ end
 function one_by_one_fringe(P::FinitePoset,
                            U_mask::AbstractVector{Bool},
                            D_mask::AbstractVector{Bool},
-                           scalar::K) where {K}
+                           scalar::K;
+                           field::AbstractCoeffField=QQField()) where {K}
     Um = _coerce_bool_mask(P, U_mask, "Upset")
     Dm = _coerce_bool_mask(P, D_mask, "Downset")
-    return one_by_one_fringe(P, Upset(P, Um), Downset(P, Dm), scalar)
+    return one_by_one_fringe(P, Upset(P, Um), Downset(P, Dm), coerce(field, scalar); field=field)
 end
 
 one_by_one_fringe(P::FinitePoset,
@@ -1210,54 +1410,12 @@ one_by_one_fringe(P::FinitePoset,
                   field::AbstractCoeffField=QQField()) =
     opts === nothing ? begin
         scalar === nothing && (scalar = one(coeff_type(field)))
-        one_by_one_fringe(P, U_mask, D_mask, coerce(field, scalar))
+        one_by_one_fringe(P, U_mask, D_mask, coerce(field, scalar); field=field)
     end : begin
         scalar === nothing || error("one_by_one_fringe: pass either scalar or opts, not both.")
-        one_by_one_fringe(P, U_mask, D_mask, coerce(field, opts.scalar))
+        one_by_one_fringe(P, U_mask, D_mask, coerce(field, opts.scalar); field=field)
     end
 
-
-# ------------------ mask-based convenience overloads ------------------
-
-# Coerce a Bool mask to a BitVector and sanity-check its length.
-function _coerce_bool_mask(P::FinitePoset, mask::AbstractVector{Bool}, name::AbstractString)::BitVector
-    if length(mask) != P.n
-        error(name * " mask must have length P.n=" * string(P.n) *
-              "; got length " * string(length(mask)) * ".")
-    end
-    return (mask isa BitVector) ? mask : BitVector(mask)
-end
-
-# Allow U/D to be passed as membership masks (BitVector / Vector{Bool}).
-function one_by_one_fringe(P::FinitePoset,
-                           U_mask::AbstractVector{Bool},
-                           D_mask::AbstractVector{Bool},
-                           scalar::K) where {K}
-    Um = _coerce_bool_mask(P, U_mask, "Upset")
-    Dm = _coerce_bool_mask(P, D_mask, "Downset")
-    return one_by_one_fringe(P, Upset(P, Um), Downset(P, Dm), scalar)
-end
-
-# Default scalar also for mask-based call.
-one_by_one_fringe(P::FinitePoset,
-                  U_mask::AbstractVector{Bool},
-                  D_mask::AbstractVector{Bool}) =
-    one_by_one_fringe(P, U_mask, D_mask; field=QQField())
-
-# Keyword form for parity with the Upset/Downset signature.
-one_by_one_fringe(P::FinitePoset,
-                  U_mask::AbstractVector{Bool},
-                  D_mask::AbstractVector{Bool};
-                  scalar=nothing,
-                  opts::Union{FiniteFringeOptions,Nothing}=nothing,
-                  field::AbstractCoeffField=QQField()) =
-    opts === nothing ? begin
-        scalar === nothing && (scalar = one(coeff_type(field)))
-        one_by_one_fringe(P, U_mask, D_mask, coerce(field, scalar))
-    end : begin
-        scalar === nothing || error("one_by_one_fringe: pass either scalar or opts, not both.")
-        one_by_one_fringe(P, U_mask, D_mask, coerce(field, opts.scalar))
-    end
 
 
 
@@ -1299,7 +1457,7 @@ function fiber_dimension(M::FringeModule{K}, q::Int) where {K}
     cols = findall(U -> U.mask[q], M.U)
     rows = findall(D -> D.mask[q], M.D)
     if isempty(cols) || isempty(rows); return 0; end
-    return FieldLinAlg.rank(M.field, M.phi[rows, cols])
+    return FieldLinAlg.rank_restricted(M.field, M.phi, rows, cols)
 end
 
 # ------------------ Hom for fringe modules via commuting squares ------------------
@@ -1517,6 +1675,8 @@ dense_to_sparse_K(A::AbstractMatrix{T}) where {T} = dense_to_sparse_K(A, T)
 export FiniteFringeOptions,
        AbstractPoset, FinitePoset, ProductOfChainsPoset, GridPoset, ProductPoset,
        RegionsPoset,
+       set_updown_cache_policy!, updown_cache_policy,
+       build_cache!,
        nvertices, leq, leq_matrix, upset_indices, downset_indices, upset_iter, downset_iter, leq_row, leq_col,
        poset_equal, poset_equal_opposite,
        CoverEdges, Upset, Downset, principal_upset, principal_downset,
@@ -1545,6 +1705,7 @@ module IndicatorTypes
 
 using SparseArrays
 using ..FiniteFringe: FinitePoset, Upset, Downset, FringeModule  # P, labeling sets
+using ..CoreModules: coeff_type
 
 """
     UpsetPresentation{K}
@@ -1563,6 +1724,11 @@ struct UpsetPresentation{K}
     U1::Vector{Upset}
     delta::SparseMatrixCSC{K,Int}
     H::Union{Nothing, FringeModule{K}}
+
+    function UpsetPresentation{K}(P, U0, U1, delta, H; field = nothing) where {K}
+        deltaK = SparseMatrixCSC{K,Int}(delta)
+        return new{K}(P, U0, U1, deltaK, H)
+    end
 end
 
 """
@@ -1582,6 +1748,43 @@ struct DownsetCopresentation{K}
     D1::Vector{Downset}
     rho::SparseMatrixCSC{K,Int}
     H::Union{Nothing, FringeModule{K}}
+
+    function DownsetCopresentation{K}(P, D0, D1, rho, H; field = nothing) where {K}
+        rhoK = SparseMatrixCSC{K,Int}(rho)
+        return new{K}(P, D0, D1, rhoK, H)
+    end
+end
+
+function UpsetPresentation(
+    P::FinitePoset,
+    U0::Vector{Upset},
+    U1::Vector{Upset},
+    delta::SparseMatrixCSC,
+    H;
+    field = nothing,
+)
+    if field === nothing
+        return IndicatorTypes.UpsetPresentation{eltype(delta)}(P, U0, U1, delta, H)
+    end
+    K = coeff_type(field)
+    deltaK = SparseMatrixCSC{K,Int}(delta)
+    return IndicatorTypes.UpsetPresentation{K}(P, U0, U1, deltaK, H)
+end
+
+function DownsetCopresentation(
+    P::FinitePoset,
+    D0::Vector{Downset},
+    D1::Vector{Downset},
+    rho::SparseMatrixCSC,
+    H;
+    field = nothing,
+)
+    if field === nothing
+        return IndicatorTypes.DownsetCopresentation{eltype(rho)}(P, D0, D1, rho, H)
+    end
+    K = coeff_type(field)
+    rhoK = SparseMatrixCSC{K,Int}(rho)
+    return IndicatorTypes.DownsetCopresentation{K}(P, D0, D1, rhoK, H)
 end
 
 export UpsetPresentation, DownsetCopresentation

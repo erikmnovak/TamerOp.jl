@@ -1,22 +1,29 @@
 module FieldLinAlg
 # Generic linear algebra interface over configurable coefficient fields.
 
+import Nemo
 using LinearAlgebra
 using SparseArrays
 
-using ..CoreModules: AbstractCoeffField, QQField, PrimeField, RealField, FpElem, coeff_type, QQ
+using ..CoreModules: AbstractCoeffField, QQField, PrimeField, RealField, FpElem,
+                     BackendMatrix, coeff_type, eye, QQ,
+                     unwrap_backend_matrix, backend_kind, backend_payload,
+                     set_backend_payload!
 
 export rref, rank, nullspace, colspace, solve_fullcolumn, rank_dim, rank_restricted,
+       nullspace_restricted, solve_fullcolumn_restricted,
        rankQQ, rankQQ_dim, nullityQQ_dim, nullspaceQQ, colspaceQQ, rrefQQ,
        solve_fullcolumnQQ, FullColumnFactor, factor_fullcolumnQQ,
        clear_fullcolumn_cache!, rank_modp_sparse, rank_modp_dense, rankQQ_restricted,
-       have_nemo
+       matrix_backend_trait, conversion_counters, reset_conversion_counters!,
+       have_nemo, SparseRowAccumulator, reset_sparse_row_accumulator!,
+       push_sparse_row_entry!, materialize_sparse_row!
 
 # -----------------------------------------------------------------------------
 # Backend selection + Nemo hooks
 # -----------------------------------------------------------------------------
 
-const _NEMO_ENABLED = Ref(false)
+const _NEMO_ENABLED = Ref(true)
 have_nemo() = _NEMO_ENABLED[]
 
 const NEMO_THRESHOLD = Ref(50_000)     # heuristic: use Nemo if m*n >= threshold
@@ -25,6 +32,128 @@ const MODULAR_NULLSPACE_THRESHOLD = Ref(120_000)
 const MODULAR_SOLVE_THRESHOLD = Ref(120_000)
 const MODULAR_MIN_PRIMES = Ref(2)
 const MODULAR_MAX_PRIMES = Ref(6)
+const ROWPOS_STAMP_MIN_ROWS = Ref(128)
+const ROWPOS_STAMP_DENSITY_NUM = Ref(1) # use stamp when nr/m >= 1/5
+const ROWPOS_STAMP_DENSITY_DEN = Ref(5)
+const TINY_LINALG_MAX_DIM = Ref(4)
+
+abstract type MatrixBackendTrait end
+struct JuliaMatrixBackend <: MatrixBackendTrait end
+struct NemoMatrixBackend <: MatrixBackendTrait end
+
+const _JULIA_BACKEND_TRAIT = JuliaMatrixBackend()
+const _NEMO_BACKEND_TRAIT = NemoMatrixBackend()
+
+@inline function matrix_backend_trait(field::AbstractCoeffField, A;
+                                      op::Symbol=:rank, backend::Symbol=:auto)
+    be = choose_linalg_backend(field, A; op=op, backend=backend)
+    return be == :nemo ? _NEMO_BACKEND_TRAIT : _JULIA_BACKEND_TRAIT
+end
+
+const _QQ_TO_NEMO_CONVERSIONS = Base.Threads.Atomic{Int}(0)
+const _QQ_TO_NEMO_CACHE_HITS = Base.Threads.Atomic{Int}(0)
+const _QQ_FROM_NEMO_CONVERSIONS = Base.Threads.Atomic{Int}(0)
+const _FP_TO_NEMO_CONVERSIONS = Base.Threads.Atomic{Int}(0)
+const _FP_TO_NEMO_CACHE_HITS = Base.Threads.Atomic{Int}(0)
+const _FP_FROM_NEMO_CONVERSIONS = Base.Threads.Atomic{Int}(0)
+
+@inline _bump_counter!(x::Base.Threads.Atomic{Int}) = Base.Threads.atomic_add!(x, 1)
+
+function reset_conversion_counters!()
+    _QQ_TO_NEMO_CONVERSIONS[] = 0
+    _QQ_TO_NEMO_CACHE_HITS[] = 0
+    _QQ_FROM_NEMO_CONVERSIONS[] = 0
+    _FP_TO_NEMO_CONVERSIONS[] = 0
+    _FP_TO_NEMO_CACHE_HITS[] = 0
+    _FP_FROM_NEMO_CONVERSIONS[] = 0
+    return nothing
+end
+
+function conversion_counters()
+    return (
+        qq_to_nemo=_QQ_TO_NEMO_CONVERSIONS[],
+        qq_to_nemo_cache_hits=_QQ_TO_NEMO_CACHE_HITS[],
+        qq_from_nemo=_QQ_FROM_NEMO_CONVERSIONS[],
+        fp_to_nemo=_FP_TO_NEMO_CONVERSIONS[],
+        fp_to_nemo_cache_hits=_FP_TO_NEMO_CACHE_HITS[],
+        fp_from_nemo=_FP_FROM_NEMO_CONVERSIONS[],
+    )
+end
+
+@inline _nemo_dense_compatible(A) = A isa StridedMatrix
+@inline _nemo_dense_compatible(::BackendMatrix) = true
+@inline _use_rowpos_stamp(m::Int, nr::Int) =
+    nr >= ROWPOS_STAMP_MIN_ROWS[] && nr * ROWPOS_STAMP_DENSITY_DEN[] >= m * ROWPOS_STAMP_DENSITY_NUM[]
+@inline _is_tiny_dim(x::Int) = x <= TINY_LINALG_MAX_DIM[]
+@inline _is_tiny_matrix_dims(m::Int, n::Int) = _is_tiny_dim(m) && _is_tiny_dim(n)
+@inline _is_tiny_matrix(A::AbstractMatrix) = _is_tiny_matrix_dims(size(A, 1), size(A, 2))
+@inline function _is_tiny_solve(B, Y)
+    rhs = Y isa AbstractVector ? 1 : size(Y, 2)
+    return _is_tiny_matrix_dims(size(B, 1), size(B, 2)) && _is_tiny_dim(rhs)
+end
+@inline function _is_tiny_mul(A::AbstractMatrix, B::AbstractMatrix)
+    m, k = size(A)
+    k2, n = size(B)
+    return k == k2 && _is_tiny_matrix_dims(m, k) && _is_tiny_matrix_dims(k2, n)
+end
+
+function _matmul_tiny(A::AbstractMatrix{TA}, B::AbstractMatrix{TB}) where {TA,TB}
+    m, k = size(A)
+    k2, n = size(B)
+    k == k2 || throw(DimensionMismatch("A and B inner dimensions must match"))
+    T = promote_type(TA, TB)
+    C = zeros(T, m, n)
+    @inbounds for j in 1:n
+        for t in 1:k
+            bt = B[t, j]
+            iszero(bt) && continue
+            for i in 1:m
+                C[i, j] += A[i, t] * bt
+            end
+        end
+    end
+    return C
+end
+
+@inline function _matmul(A::AbstractMatrix, B::AbstractMatrix)
+    if _is_tiny_mul(A, B)
+        return _matmul_tiny(A, B)
+    end
+    return A * B
+end
+
+struct _RowLocatorDict
+    rowpos::Dict{Int,Int}
+end
+
+struct _RowLocatorStamp
+    pos::Vector{Int}
+    marks::Vector{UInt32}
+    tag::UInt32
+end
+
+function _build_row_locator(rows::AbstractVector{Int}, m::Int)
+    nr = length(rows)
+    if _use_rowpos_stamp(m, nr)
+        pos = zeros(Int, m)
+        marks = zeros(UInt32, m)
+        tag = UInt32(1)
+        @inbounds for (i, r) in enumerate(rows)
+            pos[r] = i
+            marks[r] = tag
+        end
+        return _RowLocatorStamp(pos, marks, tag)
+    end
+    rowpos = Dict{Int,Int}()
+    sizehint!(rowpos, nr)
+    @inbounds for (i, r) in enumerate(rows)
+        rowpos[r] = i
+    end
+    return _RowLocatorDict(rowpos)
+end
+
+@inline _row_lookup(loc::_RowLocatorDict, r::Int) = get(loc.rowpos, r, 0)
+@inline _row_lookup(loc::_RowLocatorStamp, r::Int) = @inbounds (loc.marks[r] == loc.tag ? loc.pos[r] : 0)
 
 function choose_linalg_backend(field::AbstractCoeffField, A; op::Symbol=:rank, backend::Symbol=:auto)
     backend != :auto && return backend
@@ -33,11 +162,21 @@ function choose_linalg_backend(field::AbstractCoeffField, A; op::Symbol=:rank, b
             return :julia_sparse
         end
         m, n = size(A)
-        if op == :nullspace && m * n >= MODULAR_NULLSPACE_THRESHOLD[]
-            return :modular
+        if op == :nullspace
+            if have_nemo() && m * n >= NEMO_THRESHOLD[]
+                return :nemo
+            end
+            if m * n >= MODULAR_NULLSPACE_THRESHOLD[]
+                return :modular
+            end
         end
-        if op == :solve && m * n >= MODULAR_SOLVE_THRESHOLD[]
-            return :modular
+        if op == :solve
+            if have_nemo() && m * n >= NEMO_THRESHOLD[]
+                return :nemo
+            end
+            if m * n >= MODULAR_SOLVE_THRESHOLD[]
+                return :modular
+            end
         end
         if have_nemo() && m * n >= NEMO_THRESHOLD[]
             return :nemo
@@ -51,7 +190,7 @@ function choose_linalg_backend(field::AbstractCoeffField, A; op::Symbol=:rank, b
         return :f3_table
     end
     if field isa PrimeField && field.p > 3
-        if have_nemo() && A isa StridedMatrix
+        if have_nemo() && _nemo_dense_compatible(A)
             return :nemo
         end
         return :julia_exact
@@ -62,13 +201,200 @@ function choose_linalg_backend(field::AbstractCoeffField, A; op::Symbol=:rank, b
     return :julia_exact
 end
 
-_nemo_unavailable() = error("FieldLinAlg: Nemo backend requested but Nemo is not available")
-_nemo_rref(::QQField, A; pivots::Bool=true) = _nemo_unavailable()
-_nemo_rank(::QQField, A) = _nemo_unavailable()
-_nemo_nullspace(::QQField, A) = _nemo_unavailable()
-_nemo_rref(::PrimeField, A; pivots::Bool=true) = _nemo_unavailable()
-_nemo_rank(::PrimeField, A) = _nemo_unavailable()
-_nemo_nullspace(::PrimeField, A) = _nemo_unavailable()
+# Conversions between Matrix{QQ} and Nemo matrices.
+function _to_fmpq_mat(A::AbstractMatrix{QQ})
+    _bump_counter!(_QQ_TO_NEMO_CONVERSIONS)
+    return Nemo.matrix(Nemo.QQ, A)
+end
+
+function _to_fmpq_mat(A::BackendMatrix{QQ})
+    if backend_kind(A) != :nemo
+        return _to_fmpq_mat(unwrap_backend_matrix(A))
+    end
+    payload = backend_payload(A)
+    if payload !== nothing
+        _bump_counter!(_QQ_TO_NEMO_CACHE_HITS)
+        return payload
+    end
+    M = _to_fmpq_mat(unwrap_backend_matrix(A))
+    set_backend_payload!(A, M)
+    return M
+end
+
+function _to_fmpq_mat(A::Transpose{QQ,<:BackendMatrix{QQ}})
+    return transpose(_to_fmpq_mat(parent(A)))
+end
+
+function _to_fmpq_mat(A::Adjoint{QQ,<:BackendMatrix{QQ}})
+    return transpose(_to_fmpq_mat(parent(A)))
+end
+
+# Conversions between Matrix{FpElem{p}} and Nemo matrices over GF(p).
+function _to_nemo_fp_mat(A::AbstractMatrix{FpElem{p}}) where {p}
+    _bump_counter!(_FP_TO_NEMO_CONVERSIONS)
+    Fp = Nemo.GF(p)
+    m, n = size(A)
+    M = Matrix{Int}(undef, m, n)
+    @inbounds for i in 1:m, j in 1:n
+        M[i, j] = A[i, j].val
+    end
+    return Nemo.matrix(Fp, M)
+end
+
+function _to_nemo_fp_mat(A::BackendMatrix{FpElem{p}}) where {p}
+    if backend_kind(A) != :nemo
+        return _to_nemo_fp_mat(unwrap_backend_matrix(A))
+    end
+    payload = backend_payload(A)
+    if payload isa Pair
+        pp = first(payload)
+        if pp == p
+            _bump_counter!(_FP_TO_NEMO_CACHE_HITS)
+            return last(payload)
+        end
+    end
+    M = _to_nemo_fp_mat(unwrap_backend_matrix(A))
+    set_backend_payload!(A, p => M)
+    return M
+end
+
+function _to_nemo_fp_mat(A::Transpose{FpElem{p},<:BackendMatrix{FpElem{p}}}) where {p}
+    return transpose(_to_nemo_fp_mat(parent(A)))
+end
+
+function _to_nemo_fp_mat(A::Adjoint{FpElem{p},<:BackendMatrix{FpElem{p}}}) where {p}
+    return transpose(_to_nemo_fp_mat(parent(A)))
+end
+
+function _from_nemo_fp_mat(M, ::Val{p}) where {p}
+    _bump_counter!(_FP_FROM_NEMO_CONVERSIONS)
+    m, n = size(M)
+    A = Matrix{FpElem{p}}(undef, m, n)
+    @inbounds for i in 1:m, j in 1:n
+        x = M[i, j]
+        A[i, j] = FpElem{p}(Int(Nemo.lift(Nemo.ZZ, x)))
+    end
+    return A
+end
+
+function _from_fmpq_mat(M)
+    _bump_counter!(_QQ_FROM_NEMO_CONVERSIONS)
+    m, n = size(M)
+    A = Matrix{QQ}(undef, m, n)
+    @inbounds for i in 1:m, j in 1:n
+        x = M[i, j]
+        A[i, j] = QQ(BigInt(Nemo.numerator(x)), BigInt(Nemo.denominator(x)))
+    end
+    return A
+end
+
+# Nemo-backed implementations for QQ.
+function _nemo_rref_qq_mat(M; pivots::Bool=true)
+    _, R = Nemo.rref(M)
+    Rq = _from_fmpq_mat(R)
+
+    pivs = Int[]
+    m, n = size(Rq)
+    @inbounds for i in 1:m
+        for j in 1:n
+            if Rq[i, j] != 0
+                push!(pivs, j)
+                break
+            end
+        end
+    end
+
+    return pivots ? (Rq, Tuple(pivs)) : Rq
+end
+
+_nemo_rank_qq_mat(M) = Nemo.rank(M)
+
+function _nemo_pivots_mat(M)
+    _, R = Nemo.rref(M)
+    pivs = Int[]
+    m, n = size(R)
+    @inbounds for i in 1:m
+        for j in 1:n
+            if !iszero(R[i, j])
+                push!(pivs, j)
+                break
+            end
+        end
+    end
+    return Tuple(pivs)
+end
+
+function _nemo_nullspace_qq_mat(M)
+    _, N = Nemo.nullspace(M)
+    return _from_fmpq_mat(N)
+end
+
+function _nemo_rref(::QQField, A::AbstractMatrix{QQ}; pivots::Bool=true)
+    return _nemo_rref_qq_mat(_to_fmpq_mat(A); pivots=pivots)
+end
+
+_nemo_rank(::QQField, A::AbstractMatrix{QQ}) = _nemo_rank_qq_mat(_to_fmpq_mat(A))
+
+function _nemo_nullspace(::QQField, A::AbstractMatrix{QQ})
+    return _nemo_nullspace_qq_mat(_to_fmpq_mat(A))
+end
+
+# Nemo-backed implementations for Fp (p > 3).
+function _nemo_rref_fp_mat(F::PrimeField, M; pivots::Bool=true)
+    p = F.p
+    p > 3 || error("nemo_rref: only for p > 3")
+    _, R = Nemo.rref(M)
+    Rf = _from_nemo_fp_mat(R, Val(p))
+
+    pivs = Int[]
+    m, n = size(Rf)
+    @inbounds for i in 1:m
+        for j in 1:n
+            if Rf[i, j].val != 0
+                push!(pivs, j)
+                break
+            end
+        end
+    end
+    return pivots ? (Rf, Tuple(pivs)) : Rf
+end
+
+function _nemo_rref(F::PrimeField, A::AbstractMatrix{FpElem{p}}; pivots::Bool=true) where {p}
+    p > 3 || error("nemo_rref: only for p > 3")
+    F.p == p || error("nemo_rref: field mismatch")
+    return _nemo_rref_fp_mat(F, _to_nemo_fp_mat(A); pivots=pivots)
+end
+
+function _nemo_rank_fp_mat(F::PrimeField, M)
+    p = F.p
+    p > 3 || error("nemo_rank: only for p > 3")
+    return Nemo.rank(M)
+end
+
+_nemo_rank(F::PrimeField, A::AbstractMatrix{FpElem{p}}) where {p} =
+    (p > 3 ? (F.p == p ? _nemo_rank_fp_mat(F, _to_nemo_fp_mat(A)) : error("nemo_rank: field mismatch")) :
+     error("nemo_rank: only for p > 3"))
+
+function _nemo_nullspace_fp_mat(F::PrimeField, M)
+    p = F.p
+    p > 3 || error("nemo_nullspace: only for p > 3")
+    _, N = Nemo.nullspace(M)
+    return _from_nemo_fp_mat(N, Val(p))
+end
+
+function _nemo_nullspace(F::PrimeField, A::AbstractMatrix{FpElem{p}}) where {p}
+    p > 3 || error("nemo_nullspace: only for p > 3")
+    F.p == p || error("nemo_nullspace: field mismatch")
+    M = _to_nemo_fp_mat(A)
+    return _nemo_nullspace_fp_mat(F, M)
+end
+
+@inline _nemo_matrix(::NemoMatrixBackend, ::QQField, A::AbstractMatrix{QQ}) = _to_fmpq_mat(A)
+@inline function _nemo_matrix(::NemoMatrixBackend, F::PrimeField, A::AbstractMatrix{FpElem{p}}) where {p}
+    p > 3 || error("Nemo backend matrix conversion is only defined for p > 3")
+    F.p == p || error("Field mismatch for Nemo backend matrix conversion")
+    return _to_nemo_fp_mat(A)
+end
 
 # -----------------------------------------------------------------------------
 # F2 full-column solve cache
@@ -212,7 +538,7 @@ function _rref_f3(A::AbstractMatrix{FpElem{3}}; pivots::Bool=true)
     end
 
     R = _f3_from_uint(M)
-    return pivots ? (R, pivs) : R
+    return pivots ? (R, Tuple(pivs)) : R
 end
 
 function _rref_f3(A::SparseMatrixCSC{FpElem{3},Int}; pivots::Bool=true)
@@ -233,7 +559,7 @@ function _rref_f3(A::SparseMatrixCSC{FpElem{3},Int}; pivots::Bool=true)
         end
     end
     pivs = copy(R.pivot_cols)
-    return pivots ? (Md, pivs) : Md
+    return pivots ? (Md, Tuple(pivs)) : Md
 end
 
 function _rank_f3(A::AbstractMatrix{FpElem{3}})
@@ -403,16 +729,13 @@ function _rank_restricted_f3(A::SparseMatrixCSC{FpElem{3},Int},
         end
     end
 
+    m, _ = size(A)
     M = zeros(UInt8, nr, nc)
-    rowpos = Dict{Int,Int}()
-    sizehint!(rowpos, nr)
-    for (i, r) in enumerate(rows)
-        rowpos[r] = i
-    end
+    loc = _build_row_locator(rows, m)
     @inbounds for (jloc, col) in enumerate(cols)
         for ptr in A.colptr[col]:(A.colptr[col + 1] - 1)
             r = A.rowval[ptr]
-            i = get(rowpos, r, 0)
+            i = _row_lookup(loc, r)
             if i != 0
                 v = A.nzval[ptr].val
                 if v != 0
@@ -426,7 +749,7 @@ end
 
 function _pivot_cols_f3(A::AbstractMatrix{FpElem{3}})
     _, pivs = _rref_f3(A; pivots=true)
-    return pivs
+    return collect(pivs)
 end
 
 function _pivot_cols_f3(A::SparseMatrixCSC{FpElem{3},Int})
@@ -513,13 +836,11 @@ function _rank_float(F::RealField, A)
 end
 
 function _nullspace_float(F::RealField, A)
-    S = svd(Matrix(A))
-    tol = _float_tol(F, A)
-    idx = findall(<=(tol), S.S)
-    if isempty(idx)
-        return zeros(eltype(S.Vt), size(A, 2), 0)
-    end
-    return Matrix(S.Vt[idx, :])'
+    S = svd(Matrix(A); full=true)
+    r = _rank_float(F, A)
+    n = size(A, 2)
+    r >= n && return zeros(eltype(S.Vt), n, 0)
+    return Matrix(S.Vt[(r + 1):end, :])'
 end
 
 function _rref_float(F::RealField, A; pivots::Bool=true)
@@ -527,7 +848,7 @@ function _rref_float(F::RealField, A; pivots::Bool=true)
     Q, R, piv = qr(M, Val(true))
     r = _rank_float(F, A)
     pivs = Vector{Int}(piv[1:r])
-    return pivots ? (M, pivs) : M
+    return pivots ? (M, Tuple(pivs)) : M
 end
 
 function _colspace_float(F::RealField, A)
@@ -591,13 +912,17 @@ function _rref_fp(A::AbstractMatrix{FpElem{p}}; pivots::Bool=true) where {p}
         row += 1
     end
 
-    return pivots ? (M, pivs) : M
+    return pivots ? (M, Tuple(pivs)) : M
 end
 
 function _rank_fp(A::AbstractMatrix{FpElem{p}}) where {p}
     _, pivs = _rref_fp(A; pivots=true)
     return length(pivs)
 end
+
+_rank_fp(A::SparseMatrixCSC{FpElem{p},Int}) where {p} = _rank_fp(Matrix(A))
+_rank_fp(A::Transpose{FpElem{p},<:SparseMatrixCSC{FpElem{p},Int}}) where {p} = _rank_fp(Matrix(A))
+_rank_fp(A::Adjoint{FpElem{p},<:SparseMatrixCSC{FpElem{p},Int}}) where {p} = _rank_fp(Matrix(A))
 
 function _nullspace_fp(A::AbstractMatrix{FpElem{p}}) where {p}
     R, pivs = _rref_fp(A; pivots=true)
@@ -629,6 +954,8 @@ function _nullspace_fp(A::AbstractMatrix{FpElem{p}}) where {p}
     end
     return Z
 end
+
+_nullspace_fp(A::SparseMatrixCSC{FpElem{p},Int}) where {p} = _nullspace_fp(Matrix(A))
 
 _nullspace_fp(A::Transpose{FpElem{p},<:SparseMatrixCSC{FpElem{p},Int}}) where {p} = _nullspace_fp(sparse(A))
 _nullspace_fp(A::Adjoint{FpElem{p},<:SparseMatrixCSC{FpElem{p},Int}})  where {p} = _nullspace_fp(sparse(A))
@@ -665,6 +992,12 @@ function _solve_fullcolumn_fp(B::AbstractMatrix{FpElem{p}},
     end
 
     return want_vec ? vec(X) : X
+end
+
+function _solve_fullcolumn_fp(B::SparseMatrixCSC{FpElem{p},Int},
+                              Y::AbstractVecOrMat{FpElem{p}};
+                              check_rhs::Bool=true) where {p}
+    return _solve_fullcolumn_fp(Matrix(B), Y; check_rhs=check_rhs)
 end
 
 @inline function _f2_setbit!(row::Vector{UInt64}, col::Int)
@@ -838,14 +1171,14 @@ function _rref_f2(A::AbstractMatrix{FpElem{2}}; pivots::Bool=true)
     rows, n = _pack_f2(A)
     pivs = _gauss_jordan_f2!(rows, n)
     R = _unpack_f2(rows, size(A, 1), n)
-    return pivots ? (R, pivs) : R
+    return pivots ? (R, Tuple(pivs)) : R
 end
 
 function _rref_f2(A::SparseMatrixCSC{FpElem{2},Int}; pivots::Bool=true)
     rows, n = _pack_f2(A)
     pivs = _gauss_jordan_f2!(rows, n)
     R = _unpack_f2(rows, size(A, 1), n)
-    return pivots ? (R, pivs) : R
+    return pivots ? (R, Tuple(pivs)) : R
 end
 
 function _pivot_cols_f2(A::AbstractMatrix{FpElem{2}})
@@ -967,18 +1300,15 @@ function _rank_restricted_f2(A::SparseMatrixCSC{FpElem{2},Int},
         end
     end
 
-    rowpos = Dict{Int,Int}()
-    sizehint!(rowpos, nr)
-    for (i, r) in enumerate(rows)
-        rowpos[r] = i
-    end
+    m, _ = size(A)
+    loc = _build_row_locator(rows, m)
 
     nb = _f2_blocks(nc)
     subrows = [fill(UInt64(0), nb) for _ in 1:nr]
     @inbounds for (jloc, col) in enumerate(cols)
         for ptr in A.colptr[col]:(A.colptr[col + 1] - 1)
             r = A.rowval[ptr]
-            i = get(rowpos, r, 0)
+            i = _row_lookup(loc, r)
             if i != 0 && A.nzval[ptr].val != 0
                 _f2_setbit!(subrows[i], jloc)
             end
@@ -1177,6 +1507,86 @@ Base.isempty(r::SparseRow) = isempty(r.idx)
 Base.length(r::SparseRow) = length(r.idx)
 Base.copy(r::SparseRow{K}) where {K} = SparseRow{K}(copy(r.idx), copy(r.val))
 
+mutable struct SparseRowAccumulator{K}
+    marks::Vector{UInt32}
+    pos::Vector{Int}
+    cols::Vector{Int}
+    vals::Vector{K}
+    tag::UInt32
+end
+
+function SparseRowAccumulator{K}(nvars::Int) where {K}
+    return SparseRowAccumulator{K}(zeros(UInt32, nvars), zeros(Int, nvars), Int[], K[], UInt32(1))
+end
+
+function reset_sparse_row_accumulator!(acc::SparseRowAccumulator)
+    empty!(acc.cols)
+    empty!(acc.vals)
+    tag = acc.tag + UInt32(1)
+    if tag == 0
+        fill!(acc.marks, 0)
+        tag = UInt32(1)
+    end
+    acc.tag = tag
+    return acc
+end
+
+@inline function push_sparse_row_entry!(acc::SparseRowAccumulator{K}, col::Int, v::K) where {K}
+    iszero(v) && return acc
+    @inbounds if acc.marks[col] != acc.tag
+        acc.marks[col] = acc.tag
+        pos = length(acc.cols) + 1
+        acc.pos[col] = pos
+        push!(acc.cols, col)
+        push!(acc.vals, v)
+    else
+        pos = acc.pos[col]
+        acc.vals[pos] += v
+    end
+    return acc
+end
+
+function _sort_parallel_insertion!(cols::Vector{Int}, vals)
+    n = length(cols)
+    n <= 1 && return
+    @inbounds for i in 2:n
+        c = cols[i]
+        v = vals[i]
+        j = i - 1
+        while j >= 1 && cols[j] > c
+            cols[j + 1] = cols[j]
+            vals[j + 1] = vals[j]
+            j -= 1
+        end
+        cols[j + 1] = c
+        vals[j + 1] = v
+    end
+end
+
+function materialize_sparse_row!(row::SparseRow{K}, acc::SparseRowAccumulator{K}) where {K}
+    cols = acc.cols
+    vals = acc.vals
+    _sort_parallel_insertion!(cols, vals)
+
+    n = length(cols)
+    resize!(row.idx, n)
+    resize!(row.val, n)
+
+    w = 0
+    @inbounds for i in 1:n
+        v = vals[i]
+        if !iszero(v)
+            w += 1
+            row.idx[w] = cols[i]
+            row.val[w] = v
+        end
+    end
+
+    resize!(row.idx, w)
+    resize!(row.val, w)
+    return row
+end
+
 function normalize_sparse_row!(cols::Vector{Int}, vals::Vector{K}) where {K}
     @assert length(cols) == length(vals)
     n = length(cols)
@@ -1259,6 +1669,64 @@ function _row_axpy!(
         else
             v = row.val[i] + a * other.val[j]
             if !iszero(v)
+                push!(tmp_idx, row.idx[i])
+                push!(tmp_val, v)
+            end
+            i += 1
+            j += 1
+        end
+    end
+
+    old_idx = row.idx
+    old_val = row.val
+    row.idx = tmp_idx
+    row.val = tmp_val
+    tmp_idx = old_idx
+    tmp_val = old_val
+    empty!(tmp_idx)
+    empty!(tmp_val)
+    return tmp_idx, tmp_val
+end
+
+function _row_axpy_modp!(
+    row::SparseRow{Int},
+    a::Int,
+    other::SparseRow{Int},
+    p::Int,
+    tmp_idx::Vector{Int},
+    tmp_val::Vector{Int},
+)
+    a = mod(a, p)
+    a == 0 && return tmp_idx, tmp_val
+
+    empty!(tmp_idx)
+    empty!(tmp_val)
+    sizehint!(tmp_idx, length(row.idx) + length(other.idx))
+    sizehint!(tmp_val, length(row.idx) + length(other.idx))
+
+    i = 1
+    j = 1
+    m = length(row.idx)
+    n = length(other.idx)
+
+    @inbounds while i <= m || j <= n
+        if j > n || (i <= m && row.idx[i] < other.idx[j])
+            v = row.val[i]
+            if v != 0
+                push!(tmp_idx, row.idx[i])
+                push!(tmp_val, v)
+            end
+            i += 1
+        elseif i > m || other.idx[j] < row.idx[i]
+            v = mod(a * other.val[j], p)
+            if v != 0
+                push!(tmp_idx, other.idx[j])
+                push!(tmp_val, v)
+            end
+            j += 1
+        else
+            v = mod(row.val[i] + a * other.val[j], p)
+            if v != 0
                 push!(tmp_idx, row.idx[i])
                 push!(tmp_val, v)
             end
@@ -1509,19 +1977,10 @@ end
 # QQ engine (exact rational arithmetic)
 # -----------------------------------------------------------------------------
 
-# Exact linear algebra over QQ (pure Julia). Nemo acceleration is handled
-# by FieldLinAlg when requested.  ASCII-only version.
-
-
-# Nemo integration is provided via FieldLinAlg (optional).
-
-# Hook: an extension may overload this to convert A to a backend-specific
-# matrix representation (e.g. Nemo.fmpq_mat). The fallback is identity.
+# Exact linear algebra over QQ (pure Julia). Nemo acceleration is selected via
+# choose_linalg_backend and dispatched through _nemo_* methods in this module.
+# Keep this hook for optional backend matrix wrappers.
 @inline _to_backend_matrix(A) = A
-
-# Hooked backends:
-# - fallback methods live on AbstractMatrix{QQ}
-# - Nemo extension will add methods on Nemo.fmpq_mat
 
 function _rref_backend(A::AbstractMatrix{QQ}; pivots::Bool=true)
     M = Matrix{QQ}(A)
@@ -1565,14 +2024,14 @@ function _rref_backend(A::AbstractMatrix{QQ}; pivots::Bool=true)
         row > m && break
     end
 
-    return pivots ? (M, collect(pivs)) : M
+    return pivots ? (M, Tuple(pivs)) : M
 end
 
 """
     rrefQQ(A::AbstractMatrix{QQ}; pivots::Bool=true)
 
 Return the row-reduced echelon form of `A`. If `pivots=true`, also return the
-pivot column indices as a `Vector{Int}`.
+pivot column indices as a tuple.
 """
 function rrefQQ(A::AbstractMatrix{QQ}; pivots::Bool=true)
     return _rref_backend(_to_backend_matrix(A); pivots=pivots)
@@ -1614,8 +2073,8 @@ end
 nullspaceQQ(A::AbstractMatrix{QQ}) = _nullspace_backend(_to_backend_matrix(A))
 
 function colspaceQQ(A::AbstractMatrix{QQ})
-    pivs = pivot_columnsQQ(A)
-    return A[:, pivs]
+    cols = collect(pivot_columnsQQ(A))
+    return A[:, cols]
 end
 
 
@@ -1644,9 +2103,21 @@ struct FullColumnFactor{K}
     invB::Matrix{K}
 end
 
+struct NemoFullColumnFactorQQ
+    rows::Vector{Int}
+    invB::Any
+end
+
+struct NemoFullColumnFactorFp{p}
+    rows::Vector{Int}
+    invB::Any
+end
+
 # Cache of factors keyed by the left matrix B.
 # IMPORTANT: values do not reference the key, so WeakKeyDict works correctly.
 const _FULLCOLUMN_FACTOR_CACHE = WeakKeyDict{Any,Any}()
+const _NEMO_FULLCOLUMN_FACTOR_CACHE_QQ = WeakKeyDict{Any,Any}()
+const _NEMO_FULLCOLUMN_FACTOR_CACHE_FP = WeakKeyDict{Any,Any}()
 
 @inline _can_weak_cache_key(x) = Base.ismutabletype(typeof(x))
 
@@ -1655,14 +2126,14 @@ const _FULLCOLUMN_FACTOR_CACHE = WeakKeyDict{Any,Any}()
 # ---------------------------------------------------------------
 
 # Dense pivot columns via rrefQQ
-function pivot_columnsQQ(A::AbstractMatrix{QQ})::Vector{Int}
+function pivot_columnsQQ(A::AbstractMatrix{QQ})
     _, pivs = rrefQQ(A)
-    return collect(pivs)
+    return pivs
 end
 
 # Sparse pivot columns via sparse RREF streaming
 # Sparse pivot columns via sparse RREF streaming
-function pivot_columnsQQ(A::SparseMatrixCSC{QQ,Int})::Vector{Int}
+function pivot_columnsQQ(A::SparseMatrixCSC{QQ,Int})
     m, n = size(A)
     if m == 0 || n == 0
         return Int[]
@@ -1676,7 +2147,7 @@ function pivot_columnsQQ(A::SparseMatrixCSC{QQ,Int})::Vector{Int}
             break
         end
     end
-    return sort!(copy(R.pivot_cols))
+    return Tuple(sort!(copy(R.pivot_cols)))
 end
 
 
@@ -1695,7 +2166,7 @@ function factor_fullcolumnQQ(B::AbstractMatrix{<:QQ})::FullColumnFactor{QQ}
     m, n = size(B)
     n == 0 && return FullColumnFactor{QQ}(Int[], Matrix{QQ}(I, 0, 0))
 
-    rows = pivot_columnsQQ(transpose(B))
+    rows = collect(pivot_columnsQQ(transpose(B)))
     if length(rows) != n
         error("solve_fullcolumnQQ: expected full column rank, got rank $(length(rows)) < $n")
     end
@@ -1810,7 +2281,123 @@ Drop cached FullColumnFactor objects (useful in long sessions).
 """
 function clear_fullcolumn_cache!()
     empty!(_FULLCOLUMN_FACTOR_CACHE)
+    empty!(_NEMO_FULLCOLUMN_FACTOR_CACHE_QQ)
+    empty!(_NEMO_FULLCOLUMN_FACTOR_CACHE_FP)
     return nothing
+end
+
+function _factor_fullcolumn_nemoQQ(B::AbstractMatrix{<:QQ})::NemoFullColumnFactorQQ
+    m, n = size(B)
+    n == 0 && return NemoFullColumnFactorQQ(Int[], Nemo.matrix(Nemo.QQ, Matrix{QQ}(I, 0, 0)))
+
+    _, rows_tup = _nemo_rref(QQField(), transpose(B); pivots=true)
+    rows = collect(rows_tup)
+    if length(rows) != n
+        error("solve_fullcolumn_nemoQQ: expected full column rank, got rank $(length(rows)) < $n")
+    end
+
+    Bsub = Matrix{QQ}(B[rows, :])
+    invB = inv(_to_fmpq_mat(Bsub))
+    return NemoFullColumnFactorQQ(rows, invB)
+end
+
+function _solve_fullcolumn_nemoQQ(B::AbstractMatrix{<:QQ}, Y::AbstractVecOrMat{<:QQ};
+                                  check_rhs::Bool=true, cache::Bool=true,
+                                  factor::Union{Nothing,FullColumnFactor{QQ},NemoFullColumnFactorQQ}=nothing)
+    if factor isa FullColumnFactor{QQ}
+        return _solve_fullcolumn_factorQQ(B, factor, Y; check_rhs=check_rhs)
+    end
+
+    want_vec = false
+    Ymat = Y
+    if Y isa AbstractVector
+        want_vec = true
+        Ymat = reshape(Y, :, 1)
+    end
+
+    m, n = size(B)
+    size(Ymat, 1) == m || throw(DimensionMismatch("B and Y must have same row count"))
+
+    fac = factor
+    if fac === nothing
+        if cache && _can_weak_cache_key(B)
+            fac = get!(_NEMO_FULLCOLUMN_FACTOR_CACHE_QQ, B) do
+                _factor_fullcolumn_nemoQQ(B)
+            end
+        else
+            fac = _factor_fullcolumn_nemoQQ(B)
+        end
+    end
+
+    Ysub = Matrix{QQ}(Ymat[fac.rows, :])
+    Xn = fac.invB * _to_fmpq_mat(Ysub)
+    X = _from_fmpq_mat(Xn)
+
+    if check_rhs && !_verify_solveQQ(B, X, Ymat)
+        error("solve_fullcolumn_nemoQQ: RHS check failed")
+    end
+
+    return want_vec ? vec(X) : X
+end
+
+function _factor_fullcolumn_nemo_fp(F::PrimeField, B::AbstractMatrix{FpElem{p}}) where {p}
+    p > 3 || error("solve_fullcolumn_nemo_fp: only for p > 3")
+    F.p == p || error("solve_fullcolumn_nemo_fp: field mismatch")
+
+    m, n = size(B)
+    n == 0 && return NemoFullColumnFactorFp{p}(Int[], Nemo.matrix(Nemo.GF(p), zeros(Int, 0, 0)))
+
+    _, rows_tup = _nemo_rref(F, transpose(B); pivots=true)
+    rows = collect(rows_tup)
+    if length(rows) != n
+        error("solve_fullcolumn_nemo_fp: expected full column rank, got rank $(length(rows)) < $n")
+    end
+
+    Bsub = Matrix{FpElem{p}}(B[rows, :])
+    invB = inv(_to_nemo_fp_mat(Bsub))
+    return NemoFullColumnFactorFp{p}(rows, invB)
+end
+
+function _solve_fullcolumn_nemo_fp(F::PrimeField, B::AbstractMatrix{FpElem{p}},
+                                   Y::AbstractVecOrMat{FpElem{p}};
+                                   check_rhs::Bool=true, cache::Bool=true,
+                                   factor=nothing) where {p}
+    p > 3 || error("solve_fullcolumn_nemo_fp: only for p > 3")
+    F.p == p || error("solve_fullcolumn_nemo_fp: field mismatch")
+
+    want_vec = false
+    Ymat = Y
+    if Y isa AbstractVector
+        want_vec = true
+        Ymat = reshape(Y, :, 1)
+    end
+
+    m, n = size(B)
+    size(Ymat, 1) == m || throw(DimensionMismatch("B and Y must have same row count"))
+
+    fac = factor
+    if fac !== nothing && !(fac isa NemoFullColumnFactorFp{p})
+        error("solve_fullcolumn_nemo_fp: incompatible factor type $(typeof(fac))")
+    end
+    if fac === nothing
+        if cache && _can_weak_cache_key(B)
+            fac = get!(_NEMO_FULLCOLUMN_FACTOR_CACHE_FP, B) do
+                _factor_fullcolumn_nemo_fp(F, B)
+            end
+        else
+            fac = _factor_fullcolumn_nemo_fp(F, B)
+        end
+    end
+
+    Ysub = Matrix{FpElem{p}}(Ymat[fac.rows, :])
+    Xn = fac.invB * _to_nemo_fp_mat(Ysub)
+    X = _from_nemo_fp_mat(Xn, Val(p))
+
+    if check_rhs && (B * X != Ymat)
+        error("solve_fullcolumn_nemo_fp: RHS check failed")
+    end
+
+    return want_vec ? vec(X) : X
 end
 
 
@@ -1930,7 +2517,7 @@ function _rref_modp_dense(A::AbstractMatrix{QQ}, p::Int)
     return M, pivs
 end
 
-function _nullspace_modp_from_rref(R::Matrix{Int}, pivs::Vector{Int}, n::Int, p::Int)
+function _nullspace_modp_from_rref(R::Matrix{Int}, pivs, n::Int, p::Int)
     npiv = length(pivs)
     free = Int[]
     piv_i = 1
@@ -2018,12 +2605,8 @@ function rankQQ_restricted(
         end
     end
 
-    # Map global row indices to local 1..nr indices (sparse dictionary: avoids O(m) memory).
-    rowpos = Dict{Int,Int}()
-    sizehint!(rowpos, nr)
-    for (i, r) in enumerate(rows)
-        rowpos[r] = i
-    end
+    m, _ = size(A)
+    loc = _build_row_locator(rows, m)
 
     row_idx = [Int[] for _ in 1:nr]
     row_val = [QQ[] for _ in 1:nr]
@@ -2034,7 +2617,7 @@ function rankQQ_restricted(
     @inbounds for (jloc, col) in enumerate(cols)
         for ptr in A.colptr[col]:(A.colptr[col + 1] - 1)
             r = A.rowval[ptr]
-            i = get(rowpos, r, 0)
+            i = _row_lookup(loc, r)
             if i != 0
                 v = A.nzval[ptr]
                 if !iszero(v)
@@ -2054,6 +2637,127 @@ function rankQQ_restricted(
         end
     end
     return _rref_rank(R)
+end
+
+function _rank_restricted_sparse_generic(
+    A::SparseMatrixCSC{K,Int},
+    rows::AbstractVector{Int},
+    cols::AbstractVector{Int};
+    check::Bool=false,
+)::Int where {K}
+    nr = length(rows)
+    nc = length(cols)
+    if nr == 0 || nc == 0
+        return 0
+    end
+
+    if check
+        m, n = size(A)
+        for r in rows
+            @assert 1 <= r <= m
+        end
+        for c in cols
+            @assert 1 <= c <= n
+        end
+    end
+
+    m, _ = size(A)
+    loc = _build_row_locator(rows, m)
+
+    row_idx = [Int[] for _ in 1:nr]
+    row_val = [K[] for _ in 1:nr]
+
+    @inbounds for (jloc, col) in enumerate(cols)
+        for ptr in A.colptr[col]:(A.colptr[col + 1] - 1)
+            r = A.rowval[ptr]
+            i = _row_lookup(loc, r)
+            if i != 0
+                v = A.nzval[ptr]
+                if !iszero(v)
+                    push!(row_idx[i], jloc)
+                    push!(row_val[i], v)
+                end
+            end
+        end
+    end
+
+    R = SparseRREF{K}(nc)
+    maxrank = min(nr, nc)
+    for i in 1:nr
+        _sparse_rref_push_homogeneous!(R, SparseRow{K}(row_idx[i], row_val[i]))
+        if _rref_rank(R) == maxrank
+            break
+        end
+    end
+    return _rref_rank(R)
+end
+
+function _sparse_extract_restricted(
+    A::SparseMatrixCSC{T,Int},
+    rows::AbstractVector{Int},
+    cols::AbstractVector{Int};
+    check::Bool=false,
+) where {T}
+    nr = length(rows)
+    nc = length(cols)
+    if nr == 0 || nc == 0
+        return spzeros(T, nr, nc)
+    end
+
+    if check
+        m, n = size(A)
+        for r in rows
+            @assert 1 <= r <= m
+        end
+        for c in cols
+            @assert 1 <= c <= n
+        end
+    end
+
+    m, _ = size(A)
+    loc = _build_row_locator(rows, m)
+
+    I = Int[]
+    J = Int[]
+    V = T[]
+    sizehint!(I, nnz(A))
+    sizehint!(J, nnz(A))
+    sizehint!(V, nnz(A))
+
+    @inbounds for (jloc, col) in enumerate(cols)
+        for ptr in A.colptr[col]:(A.colptr[col + 1] - 1)
+            r = A.rowval[ptr]
+            i = _row_lookup(loc, r)
+            if i != 0
+                v = A.nzval[ptr]
+                if !iszero(v)
+                    push!(I, i)
+                    push!(J, jloc)
+                    push!(V, v)
+                end
+            end
+        end
+    end
+
+    return sparse(I, J, V, nr, nc)
+end
+
+function _rank_restricted_float_sparse(
+    F::RealField,
+    A::SparseMatrixCSC,
+    rows::AbstractVector{Int},
+    cols::AbstractVector{Int};
+    check::Bool=false,
+)
+    nr = length(rows)
+    nc = length(cols)
+    if nr == 0 || nc == 0
+        return 0
+    end
+    S = _sparse_extract_restricted(A, rows, cols; check=check)
+    R = qr(S).R
+    tol = _float_tol(F, S)
+    return count(x -> abs(x) > tol, diag(R))
 end
 
 
@@ -2078,7 +2782,7 @@ function rank_modp_sparse(A::SparseMatrixCSC{QQ,Int}, p::Int)::Int
         return 0
     end
 
-    # Build per-row dictionaries over Int mod p.
+    # Build sparse rows over Int mod p.
     row_nnz = zeros(Int, m)
     @inbounds for col in 1:n
         for ptr in A.colptr[col]:(A.colptr[col + 1] - 1)
@@ -2086,9 +2790,11 @@ function rank_modp_sparse(A::SparseMatrixCSC{QQ,Int}, p::Int)::Int
         end
     end
 
-    rows = [Dict{Int,Int}() for _ in 1:m]
+    rows_idx = [Int[] for _ in 1:m]
+    rows_val = [Int[] for _ in 1:m]
     @inbounds for i in 1:m
-        sizehint!(rows[i], row_nnz[i])
+        sizehint!(rows_idx[i], row_nnz[i])
+        sizehint!(rows_val[i], row_nnz[i])
     end
 
     @inbounds for col in 1:n
@@ -2098,15 +2804,26 @@ function rank_modp_sparse(A::SparseMatrixCSC{QQ,Int}, p::Int)::Int
             if v != 0
                 a = _modp_qQ(v, p)
                 if a != 0
-                    rows[r][col] = a
+                    push!(rows_idx[r], col)
+                    push!(rows_val[r], a)
                 end
             end
         end
     end
 
-    # Incremental elimination over GF(p) using the same "pivot dict" idea.
-    pivots = Dict{Int,Dict{Int,Int}}()
-    scratch = Int[]
+    rows = Vector{SparseRow{Int}}(undef, m)
+    @inbounds for i in 1:m
+        rows[i] = SparseRow{Int}(rows_idx[i], rows_val[i])
+    end
+
+    pivot_pos = zeros(Int, n)
+    pivot_cols = Int[]
+    pivot_rows = SparseRow{Int}[]
+    scratch_cols = Int[]
+    scratch_coeffs = Int[]
+    tmp_idx = Int[]
+    tmp_val = Int[]
+    maxrank = min(m, n)
 
     for i in 1:m
         row = rows[i]
@@ -2114,78 +2831,60 @@ function rank_modp_sparse(A::SparseMatrixCSC{QQ,Int}, p::Int)::Int
             continue
         end
 
-        # eliminate existing pivots
-        empty!(scratch)
-        for (j, _) in row
-            if haskey(pivots, j)
-                push!(scratch, j)
+        # Eliminate existing pivots (collect first to avoid mutating while iterating row).
+        empty!(scratch_cols)
+        empty!(scratch_coeffs)
+        @inbounds for t in eachindex(row.idx)
+            j = row.idx[t]
+            pos = pivot_pos[j]
+            if pos != 0
+                push!(scratch_cols, j)
+                push!(scratch_coeffs, row.val[t])
             end
         end
-        for j in scratch
-            if haskey(row, j)
-                c = row[j] % p
-                if c != 0
-                    prow = pivots[j]
-                    for (k, vk) in prow
-                        newv = mod(get(row, k, 0) - c * vk, p)
-                        if newv == 0
-                            if haskey(row, k)
-                                delete!(row, k)
-                            end
-                        else
-                            row[k] = newv
-                        end
-                    end
-                end
+        @inbounds for k in eachindex(scratch_cols)
+            j = scratch_cols[k]
+            c = scratch_coeffs[k]
+            if c != 0
+                prow = pivot_rows[pivot_pos[j]]
+                tmp_idx, tmp_val = _row_axpy_modp!(row, -c, prow, p, tmp_idx, tmp_val)
             end
         end
         if isempty(row)
             continue
         end
 
-        piv = minimum(keys(row))
-        a = row[piv] % p
+        piv = row.idx[1]
+        a = row.val[1]
         if a == 0
-            # Should not happen if we drop zeros properly, but guard anyway.
-            delete!(row, piv)
+            # Guard against malformed rows.
             continue
         end
 
         inv_a = invmod(a, p)
-        for (k, vk) in row
-            row[k] = mod(vk * inv_a, p)
+        @inbounds for t in eachindex(row.val)
+            row.val[t] = mod(row.val[t] * inv_a, p)
         end
 
-        # eliminate new pivot from existing pivot rows
-        for (q, prow) in pivots
-            if q == piv
-                continue
-            end
-            if haskey(prow, piv)
-                c = prow[piv] % p
-                if c != 0
-                    for (k, vk) in row
-                        newv = mod(get(prow, k, 0) - c * vk, p)
-                        if newv == 0
-                            if haskey(prow, k)
-                                delete!(prow, k)
-                            end
-                        else
-                            prow[k] = newv
-                        end
-                    end
-                end
+        # Eliminate new pivot from existing pivot rows.
+        for pos in 1:length(pivot_rows)
+            prow = pivot_rows[pos]
+            c = _row_coeff(prow, piv)
+            if c != 0
+                tmp_idx, tmp_val = _row_axpy_modp!(prow, -c, row, p, tmp_idx, tmp_val)
             end
         end
 
-        pivots[piv] = copy(row)
+        push!(pivot_cols, piv)
+        push!(pivot_rows, copy(row))
+        pivot_pos[piv] = length(pivot_rows)
 
-        if length(pivots) == min(m, n)
+        if length(pivot_rows) == maxrank
             break
         end
     end
 
-    return length(pivots)
+    return length(pivot_rows)
 end
 
 # ---------------------------------------------------------------
@@ -2276,10 +2975,10 @@ rank_modp(A::Adjoint{QQ,<:SparseMatrixCSC{QQ,Int}}, p::Int)  = rank_modp_sparse(
 # Modular nullspace / solve with rational reconstruction (QQ only)
 # ---------------------------------------------------------------
 
-function _crt_combine!(A::Matrix{BigInt}, mod::BigInt, B::Matrix{Int}, p::Int)
-    mp = Int(mod(mod, p))
+function _crt_combine!(A::Matrix{BigInt}, modulus::BigInt, B::Matrix{Int}, p::Int)
+    mp = Int(mod(modulus, p))
     invm = invmod(mp, p)
-    m = mod
+    m = modulus
     @inbounds for j in 1:size(A, 2)
         for i in 1:size(A, 1)
             a = A[i, j]
@@ -2300,7 +2999,7 @@ function _rat_reconstruct(r::BigInt, m::BigInt)
     a1 = r
     b0 = BigInt(0)
     b1 = BigInt(1)
-    bound = isqrt(m ÷ 2)
+    bound = isqrt(div(m, 2))
 
     while abs(a1) > bound
         q = div(a0, a1)
@@ -2490,6 +3189,233 @@ end
 
 nullityQQ_dim(A::AbstractMatrix{QQ}; kwargs...) = size(A,2) - rankQQ_dim(A; kwargs...)
 
+function _rank_tiny_exact(A::AbstractMatrix{K}) where {K}
+    m, n = size(A)
+    if m == 0 || n == 0
+        return 0
+    end
+    M = Matrix{K}(A)
+    r = 0
+    row = 1
+    @inbounds for col in 1:n
+        row > m && break
+        piv = 0
+        for rr in row:m
+            if !iszero(M[rr, col])
+                piv = rr
+                break
+            end
+        end
+        piv == 0 && continue
+        if piv != row
+            M[row, :], M[piv, :] = M[piv, :], M[row, :]
+        end
+        invp = inv(M[row, col])
+        for j in col:n
+            M[row, j] *= invp
+        end
+        for rr in (row + 1):m
+            fac = M[rr, col]
+            iszero(fac) && continue
+            for j in col:n
+                M[rr, j] -= fac * M[row, j]
+            end
+        end
+        r += 1
+        row += 1
+    end
+    return r
+end
+
+function _rank_tiny_float(F::RealField, A::AbstractMatrix)
+    m, n = size(A)
+    if m == 0 || n == 0
+        return 0
+    end
+    M = Matrix{Float64}(A)
+    tol = _float_tol(F, M)
+    r = 0
+    row = 1
+    @inbounds for col in 1:n
+        row > m && break
+        piv = 0
+        best = tol
+        for rr in row:m
+            v = abs(M[rr, col])
+            if v > best
+                best = v
+                piv = rr
+            end
+        end
+        piv == 0 && continue
+        if piv != row
+            M[row, :], M[piv, :] = M[piv, :], M[row, :]
+        end
+        pivval = M[row, col]
+        for j in col:n
+            M[row, j] /= pivval
+        end
+        for rr in (row + 1):m
+            fac = M[rr, col]
+            abs(fac) <= tol && continue
+            for j in col:n
+                M[rr, j] -= fac * M[row, j]
+            end
+        end
+        r += 1
+        row += 1
+    end
+    return r
+end
+
+@inline _rank_tiny(field::RealField, A::AbstractMatrix) = _rank_tiny_float(field, A)
+@inline _rank_tiny(::AbstractCoeffField, A::AbstractMatrix) = _rank_tiny_exact(A)
+
+@inline function _rhs_ok(field::RealField, BX::AbstractMatrix, Y::AbstractMatrix)
+    return norm(BX - Y) <= _float_tol(field, BX)
+end
+@inline _rhs_ok(::AbstractCoeffField, BX::AbstractMatrix, Y::AbstractMatrix) = (BX == Y)
+
+function _inverse_tiny_exact(B::Matrix{K}) where {K}
+    n = size(B, 1)
+    size(B, 2) == n || error("_inverse_tiny_exact: expected square matrix")
+    Aug = zeros(K, n, 2 * n)
+    @inbounds for i in 1:n
+        for j in 1:n
+            Aug[i, j] = B[i, j]
+        end
+        Aug[i, n + i] = one(K)
+    end
+    @inbounds for col in 1:n
+        piv = 0
+        for rr in col:n
+            if !iszero(Aug[rr, col])
+                piv = rr
+                break
+            end
+        end
+        piv == 0 && error("_inverse_tiny_exact: matrix not invertible")
+        if piv != col
+            Aug[col, :], Aug[piv, :] = Aug[piv, :], Aug[col, :]
+        end
+        invp = inv(Aug[col, col])
+        for j in col:(2 * n)
+            Aug[col, j] *= invp
+        end
+        for rr in 1:n
+            rr == col && continue
+            fac = Aug[rr, col]
+            iszero(fac) && continue
+            for j in col:(2 * n)
+                Aug[rr, j] -= fac * Aug[col, j]
+            end
+        end
+    end
+    return Matrix(Aug[:, (n + 1):(2 * n)])
+end
+
+function _inverse_tiny_float(F::RealField, B::Matrix{Float64})
+    n = size(B, 1)
+    size(B, 2) == n || error("_inverse_tiny_float: expected square matrix")
+    tol = _float_tol(F, B)
+    Aug = zeros(Float64, n, 2 * n)
+    @inbounds for i in 1:n
+        for j in 1:n
+            Aug[i, j] = B[i, j]
+        end
+        Aug[i, n + i] = 1.0
+    end
+    @inbounds for col in 1:n
+        piv = 0
+        best = tol
+        for rr in col:n
+            v = abs(Aug[rr, col])
+            if v > best
+                best = v
+                piv = rr
+            end
+        end
+        piv == 0 && error("_inverse_tiny_float: matrix not invertible")
+        if piv != col
+            Aug[col, :], Aug[piv, :] = Aug[piv, :], Aug[col, :]
+        end
+        invp = 1.0 / Aug[col, col]
+        for j in col:(2 * n)
+            Aug[col, j] *= invp
+        end
+        for rr in 1:n
+            rr == col && continue
+            fac = Aug[rr, col]
+            abs(fac) <= tol && continue
+            for j in col:(2 * n)
+                Aug[rr, j] -= fac * Aug[col, j]
+            end
+        end
+    end
+    return Matrix(Aug[:, (n + 1):(2 * n)])
+end
+
+@inline _inverse_tiny(field::RealField, B::AbstractMatrix) = _inverse_tiny_float(field, Matrix{Float64}(B))
+@inline _inverse_tiny(::AbstractCoeffField, B::AbstractMatrix{K}) where {K} = _inverse_tiny_exact(Matrix{K}(B))
+
+function _tiny_row_combinations(m::Int, n::Int)
+    if n == 0
+        return [Int[]]
+    elseif n == 1
+        return [[i] for i in 1:m]
+    elseif n == 2
+        out = Vector{Vector{Int}}()
+        for i in 1:(m - 1), j in (i + 1):m
+            push!(out, [i, j])
+        end
+        return out
+    elseif n == 3
+        out = Vector{Vector{Int}}()
+        for i in 1:(m - 2), j in (i + 1):(m - 1), k in (j + 1):m
+            push!(out, [i, j, k])
+        end
+        return out
+    elseif n == 4
+        out = Vector{Vector{Int}}()
+        for i in 1:(m - 3), j in (i + 1):(m - 2), k in (j + 1):(m - 1), l in (k + 1):m
+            push!(out, [i, j, k, l])
+        end
+        return out
+    end
+    return Vector{Vector{Int}}()
+end
+
+function _select_fullrank_rows_tiny(field::AbstractCoeffField, B::AbstractMatrix)
+    m, n = size(B)
+    m < n && return Int[]
+    for rows in _tiny_row_combinations(m, n)
+        if _rank_tiny(field, view(B, rows, :)) == n
+            return rows
+        end
+    end
+    return Int[]
+end
+
+function _solve_fullcolumn_tiny(field::AbstractCoeffField, B, Y; check_rhs::Bool=true)
+    want_vec = Y isa AbstractVector
+    Ymat = want_vec ? reshape(Y, :, 1) : Matrix(Y)
+    m, n = size(B)
+    size(Ymat, 1) == m || throw(DimensionMismatch("B and Y must have same row count"))
+    if n == 0
+        return want_vec ? eltype(Ymat)[] : zeros(eltype(Ymat), 0, size(Ymat, 2))
+    end
+    Bdense = Matrix(B)
+    rows = _select_fullrank_rows_tiny(field, Bdense)
+    isempty(rows) && error("solve_fullcolumn: expected full column rank in tiny solve path")
+    invB = _inverse_tiny(field, view(Bdense, rows, :))
+    X = _matmul(invB, Matrix(Ymat[rows, :]))
+    if check_rhs
+        BX = _matmul(Bdense, X)
+        _rhs_ok(field, BX, Matrix(Ymat)) || error("solve_fullcolumn: RHS check failed in tiny solve path")
+    end
+    return want_vec ? vec(X) : X
+end
+
 
 # -----------------------------------------------------------------------------
 # Public API (field-generic dispatch)
@@ -2497,9 +3423,9 @@ nullityQQ_dim(A::AbstractMatrix{QQ}; kwargs...) = size(A,2) - rankQQ_dim(A; kwar
 
 function rref(field::AbstractCoeffField, A; pivots::Bool=true, backend::Symbol=:auto)
     if field isa QQField
-        be = choose_linalg_backend(field, A; op=:rref, backend=backend)
-        if be == :nemo
-            return _nemo_rref(field, A; pivots=pivots)
+        trait = matrix_backend_trait(field, A; op=:rref, backend=backend)
+        if trait isa NemoMatrixBackend
+            return _nemo_rref_qq_mat(_nemo_matrix(trait, field, A); pivots=pivots)
         end
         return rrefQQ(A; pivots=pivots)
     end
@@ -2510,9 +3436,9 @@ function rref(field::AbstractCoeffField, A; pivots::Bool=true, backend::Symbol=:
         return _rref_f3(A; pivots=pivots)
     end
     if field isa PrimeField && field.p > 3
-        be = choose_linalg_backend(field, A; op=:rref, backend=backend)
-        if be == :nemo
-            return _nemo_rref(field, A; pivots=pivots)
+        trait = matrix_backend_trait(field, A; op=:rref, backend=backend)
+        if trait isa NemoMatrixBackend
+            return _nemo_rref_fp_mat(field, _nemo_matrix(trait, field, A); pivots=pivots)
         end
         return _rref_fp(A; pivots=pivots)
     end
@@ -2523,10 +3449,13 @@ function rref(field::AbstractCoeffField, A; pivots::Bool=true, backend::Symbol=:
 end
 
 function rank(field::AbstractCoeffField, A; backend::Symbol=:auto)
+    if backend == :auto && _is_tiny_matrix(A)
+        return _rank_tiny(field, A)
+    end
     if field isa QQField
-        be = choose_linalg_backend(field, A; op=:rank, backend=backend)
-        if be == :nemo
-            return _nemo_rank(field, A)
+        trait = matrix_backend_trait(field, A; op=:rank, backend=backend)
+        if trait isa NemoMatrixBackend
+            return _nemo_rank_qq_mat(_nemo_matrix(trait, field, A))
         end
         return rankQQ(A)
     end
@@ -2537,9 +3466,9 @@ function rank(field::AbstractCoeffField, A; backend::Symbol=:auto)
         return _rank_f3(A)
     end
     if field isa PrimeField && field.p > 3
-        be = choose_linalg_backend(field, A; op=:rank, backend=backend)
-        if be == :nemo
-            return _nemo_rank(field, A)
+        trait = matrix_backend_trait(field, A; op=:rank, backend=backend)
+        if trait isa NemoMatrixBackend
+            return _nemo_rank_fp_mat(field, _nemo_matrix(trait, field, A))
         end
         return _rank_fp(A)
     end
@@ -2551,10 +3480,11 @@ end
 
 function nullspace(field::AbstractCoeffField, A; backend::Symbol=:auto)
     if field isa QQField
-        be = choose_linalg_backend(field, A; op=:nullspace, backend=backend)
-        if be == :nemo
-            return _nemo_nullspace(field, A)
+        trait = matrix_backend_trait(field, A; op=:nullspace, backend=backend)
+        if trait isa NemoMatrixBackend
+            return _nemo_nullspace_qq_mat(_nemo_matrix(trait, field, A))
         end
+        be = choose_linalg_backend(field, A; op=:nullspace, backend=backend)
         if be == :modular
             if !(A isa SparseMatrixCSC)
                 N = _nullspace_modularQQ(A)
@@ -2570,9 +3500,9 @@ function nullspace(field::AbstractCoeffField, A; backend::Symbol=:auto)
         return _nullspace_f3(A)
     end
     if field isa PrimeField && field.p > 3
-        be = choose_linalg_backend(field, A; op=:nullspace, backend=backend)
-        if be == :nemo
-            return _nemo_nullspace(field, A)
+        trait = matrix_backend_trait(field, A; op=:nullspace, backend=backend)
+        if trait isa NemoMatrixBackend
+            return _nemo_nullspace_fp_mat(field, _nemo_matrix(trait, field, A))
         end
         return _nullspace_fp(A)
     end
@@ -2584,10 +3514,10 @@ end
 
 function colspace(field::AbstractCoeffField, A; backend::Symbol=:auto)
     if field isa QQField
-        be = choose_linalg_backend(field, A; op=:colspace, backend=backend)
-        if be == :nemo
-            _, pivs = _nemo_rref(field, A; pivots=true)
-            return A[:, pivs]
+        trait = matrix_backend_trait(field, A; op=:colspace, backend=backend)
+        if trait isa NemoMatrixBackend
+            pivs = _nemo_pivots_mat(_nemo_matrix(trait, field, A))
+            return A[:, collect(pivs)]
         end
         return colspaceQQ(A)
     end
@@ -2597,16 +3527,16 @@ function colspace(field::AbstractCoeffField, A; backend::Symbol=:auto)
     end
     if field isa PrimeField && field.p == 3
         _, pivs = _rref_f3(A; pivots=true)
-        return A[:, pivs]
+        return A[:, collect(pivs)]
     end
     if field isa PrimeField && field.p > 3
-        be = choose_linalg_backend(field, A; op=:colspace, backend=backend)
-        if be == :nemo
-            _, pivs = _nemo_rref(field, A; pivots=true)
-            return A[:, pivs]
+        trait = matrix_backend_trait(field, A; op=:colspace, backend=backend)
+        if trait isa NemoMatrixBackend
+            pivs = _nemo_pivots_mat(_nemo_matrix(trait, field, A))
+            return A[:, collect(pivs)]
         end
         _, pivs = _rref_fp(A; pivots=true)
-        return A[:, pivs]
+        return A[:, collect(pivs)]
     end
     if field isa RealField
         return _colspace_float(field, A)
@@ -2617,8 +3547,14 @@ end
 function solve_fullcolumn(field::AbstractCoeffField, B, Y;
                           check_rhs::Bool=true, backend::Symbol=:auto,
                           cache::Bool=true, factor=nothing)
+    if backend == :auto && _is_tiny_solve(B, Y)
+        return _solve_fullcolumn_tiny(field, B, Y; check_rhs=check_rhs)
+    end
     if field isa QQField
         be = choose_linalg_backend(field, B; op=:solve, backend=backend)
+        if be == :nemo
+            return _solve_fullcolumn_nemoQQ(B, Y; check_rhs=check_rhs, cache=cache, factor=factor)
+        end
         if be == :modular
             if !(B isa SparseMatrixCSC)
                 X = _solve_fullcolumn_modularQQ(B, Y; check_rhs=check_rhs)
@@ -2636,8 +3572,7 @@ function solve_fullcolumn(field::AbstractCoeffField, B, Y;
     if field isa PrimeField && field.p > 3
         be = choose_linalg_backend(field, B; op=:solve, backend=backend)
         if be == :nemo
-            # Use rref to solve: nemo backend returns dense rref.
-            return _solve_fullcolumn_fp(B, Y; check_rhs=check_rhs)
+            return _solve_fullcolumn_nemo_fp(field, B, Y; check_rhs=check_rhs, cache=cache, factor=factor)
         end
         return _solve_fullcolumn_fp(B, Y; check_rhs=check_rhs)
     end
@@ -2673,6 +3608,11 @@ end
 function rank_restricted(field::AbstractCoeffField, A::SparseMatrixCSC,
                          rows::AbstractVector{Int}, cols::AbstractVector{Int};
                          backend::Symbol=:auto, kwargs...)
+    if _is_tiny_matrix_dims(length(rows), length(cols))
+        check = haskey(kwargs, :check) ? kwargs[:check] : false
+        S = Matrix(_sparse_extract_restricted(A, rows, cols; check=check))
+        return rank(field, S; backend=backend)
+    end
     if field isa QQField
         return rankQQ_restricted(A, rows, cols; kwargs...)
     end
@@ -2683,9 +3623,116 @@ function rank_restricted(field::AbstractCoeffField, A::SparseMatrixCSC,
         return _rank_restricted_f3(A, rows, cols; kwargs...)
     end
     if field isa PrimeField && field.p > 3
-        return _rank_fp(Matrix(A[rows, cols]))
+        return _rank_restricted_sparse_generic(A, rows, cols; kwargs...)
+    end
+    if field isa RealField
+        return _rank_restricted_float_sparse(field, A, rows, cols; kwargs...)
     end
     error("FieldLinAlg.rank_restricted: unsupported field $(typeof(field))")
+end
+
+function rank_restricted(field::AbstractCoeffField, A::AbstractMatrix,
+                         rows::AbstractVector{Int}, cols::AbstractVector{Int};
+                         backend::Symbol=:auto, kwargs...)
+    A isa SparseMatrixCSC && return rank_restricted(field, A, rows, cols; backend=backend, kwargs...)
+    nr = length(rows)
+    nc = length(cols)
+    if nr == 0 || nc == 0
+        return 0
+    end
+    return rank(field, view(A, rows, cols); backend=backend, kwargs...)
+end
+
+@inline function _restricted_rhs_view(Y::AbstractVector, rows::AbstractVector{Int})
+    return view(Y, rows)
+end
+
+@inline function _restricted_rhs_view(Y::AbstractMatrix, rows::AbstractVector{Int})
+    return view(Y, rows, :)
+end
+
+@inline function _drop_check_kw(kwargs::NamedTuple)
+    return (; (k => v for (k, v) in pairs(kwargs) if k != :check)...)
+end
+@inline _drop_check_kw(kwargs::Base.Pairs) = _drop_check_kw(values(kwargs))
+
+function nullspace_restricted(field::AbstractCoeffField, A::SparseMatrixCSC,
+                              rows::AbstractVector{Int}, cols::AbstractVector{Int};
+                              backend::Symbol=:auto, kwargs...)
+    nr = length(rows)
+    nc = length(cols)
+    K = coeff_type(field)
+    if nc == 0
+        return zeros(K, 0, 0)
+    end
+    if nr == 0
+        return eye(field, nc)
+    end
+    check = haskey(kwargs, :check) ? kwargs[:check] : false
+    S = _sparse_extract_restricted(A, rows, cols; check=check)
+    return nullspace(field, S; backend=backend)
+end
+
+function nullspace_restricted(field::AbstractCoeffField, A::AbstractMatrix,
+                              rows::AbstractVector{Int}, cols::AbstractVector{Int};
+                              backend::Symbol=:auto, kwargs...)
+    A isa SparseMatrixCSC && return nullspace_restricted(field, A, rows, cols; backend=backend, kwargs...)
+    nr = length(rows)
+    nc = length(cols)
+    K = coeff_type(field)
+    if nc == 0
+        return zeros(K, 0, 0)
+    end
+    if nr == 0
+        return eye(field, nc)
+    end
+    return nullspace(field, view(A, rows, cols); backend=backend)
+end
+
+function solve_fullcolumn_restricted(field::AbstractCoeffField, B::SparseMatrixCSC,
+                                     rows::AbstractVector{Int}, cols::AbstractVector{Int},
+                                     Y::AbstractVecOrMat;
+                                     check_rhs::Bool=true,
+                                     backend::Symbol=:auto,
+                                     kwargs...)
+    nr = length(rows)
+    nc = length(cols)
+    if nc == 0
+        rhs = Y isa AbstractVector ? 1 : size(Y, 2)
+        K = coeff_type(field)
+        Z = zeros(K, 0, rhs)
+        return Y isa AbstractVector ? vec(Z) : Z
+    end
+    nr == 0 && error("solve_fullcolumn_restricted: cannot solve with zero selected rows and nonzero columns")
+    check = haskey(kwargs, :check) ? kwargs[:check] : false
+    kws = _drop_check_kw(kwargs)
+    Bsub = _sparse_extract_restricted(B, rows, cols; check=check)
+    Ysub = _restricted_rhs_view(Y, rows)
+    return solve_fullcolumn(field, Bsub, Ysub; check_rhs=check_rhs, backend=backend, kws...)
+end
+
+function solve_fullcolumn_restricted(field::AbstractCoeffField, B::AbstractMatrix,
+                                     rows::AbstractVector{Int}, cols::AbstractVector{Int},
+                                     Y::AbstractVecOrMat;
+                                     check_rhs::Bool=true,
+                                     backend::Symbol=:auto,
+                                     kwargs...)
+    B isa SparseMatrixCSC && return solve_fullcolumn_restricted(field, B, rows, cols, Y;
+                                                                check_rhs=check_rhs,
+                                                                backend=backend, kwargs...)
+    nr = length(rows)
+    nc = length(cols)
+    if nc == 0
+        rhs = Y isa AbstractVector ? 1 : size(Y, 2)
+        K = coeff_type(field)
+        Z = zeros(K, 0, rhs)
+        return Y isa AbstractVector ? vec(Z) : Z
+    end
+    nr == 0 && error("solve_fullcolumn_restricted: cannot solve with zero selected rows and nonzero columns")
+    Bsub = view(B, rows, cols)
+    Ysub = _restricted_rhs_view(Y, rows)
+    kws = _drop_check_kw(kwargs)
+    return solve_fullcolumn(field, Bsub, Ysub; check_rhs=check_rhs, backend=backend, kws...)
 end
 
 end # module FieldLinAlg

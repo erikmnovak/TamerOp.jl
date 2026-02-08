@@ -94,9 +94,9 @@ K = CM.coeff_type(field)
 
     mktemp() do path, io
         close(io)
-        F = PosetModules.face(1, [1])
-        flats = [PosetModules.IndFlat(F, [0]; id=:F)]
-        injectives = [PosetModules.IndInj(F, [0]; id=:E)]
+        F = PM.FlangeZn.face(1, [1])
+        flats = [PM.FlangeZn.IndFlat(F, [0]; id=:F)]
+        injectives = [PM.FlangeZn.IndInj(F, [0]; id=:E)]
         FG = PosetModules.Flange{K}(1, flats, injectives, [c(1)]; field=field)
         enc = PosetModules.encode(FG; backend=:zn)
         @test enc.pi isa PosetModules.CompiledEncoding
@@ -155,6 +155,33 @@ end # with_fields
     P = PosetModules.poset_from_axes(axes; orientation=(1, -1), kind=:grid)
     @test P isa PosetModules.FinitePoset
     @test PosetModules.nvertices(P) == 2 * 3
+end
+
+@testset "Data pipeline: auto axes respect orientation signs" begin
+    cells = [Int[1, 2]]
+    boundaries = SparseMatrixCSC{Int,Int}[]
+    grades = [Float64[1.0], Float64[2.0]]
+    G = PosetModules.GradedComplex(cells, boundaries, grades)
+
+    spec_auto = PosetModules.FiltrationSpec(kind=:graded, orientation=(-1,))
+    enc_auto = PosetModules.encode_from_data(G, spec_auto; degree=0)
+    axes_auto = PosetModules.axes_from_encoding(enc_auto.pi)
+    @test axes_auto == (Float64[-2.0, -1.0],)
+
+    # Explicit axes must remain unchanged even with negative orientation.
+    explicit_axes = (Float64[-3.0, -2.0, -1.0],)
+    spec_explicit = PosetModules.FiltrationSpec(kind=:graded, orientation=(-1,), axes=explicit_axes)
+    enc_explicit = PosetModules.encode_from_data(G, spec_explicit; degree=0)
+    @test PosetModules.axes_from_encoding(enc_explicit.pi) == explicit_axes
+end
+
+@testset "Data pipeline: point cloud auto axes honor orientation" begin
+    data = PosetModules.PointCloud([[0.0], [1.0]])
+    spec = PosetModules.FiltrationSpec(kind=:rips, max_dim=1, orientation=(-1,))
+    enc = PosetModules.encode_from_data(data, spec; degree=0)
+    ax = PosetModules.axes_from_encoding(enc.pi)[1]
+    @test minimum(ax) <= 0.0
+    @test maximum(ax) <= 0.0
 end
 
 @testset "Interop adapters: GUDHI/Ripserer/Eirene" begin
@@ -430,12 +457,17 @@ end
     @test length(PosetModules.axes_from_encoding(enc.pi)[1]) == 2
 end
 
-@testset "Data pipeline: cached poset reuse" begin
+@testset "Data pipeline: session cache reuse" begin
     data = PosetModules.PointCloud([[0.0], [1.0]])
     spec = PosetModules.FiltrationSpec(kind=:rips, max_dim=1, axes=([0.0, 1.0],))
-    enc1 = PosetModules.encode_from_data(data, spec; degree=0)
-    enc2 = PosetModules.encode_from_data(data, spec; degree=0)
+    sc = CM.SessionCache()
+    enc1 = PosetModules.encode_from_data(data, spec; degree=0, session_cache=sc)
+    enc2 = PosetModules.encode_from_data(data, spec; degree=0, session_cache=sc)
     @test enc1.P === enc2.P
+
+    CM.clear_session_cache!(sc)
+    enc3 = PosetModules.encode_from_data(data, spec; degree=0, session_cache=sc)
+    @test enc3.P !== enc1.P
 end
 
 @testset "Data pipeline: point cloud guardrails + witness" begin

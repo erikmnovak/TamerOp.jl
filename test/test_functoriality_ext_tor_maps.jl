@@ -36,8 +36,8 @@ end
 
 # Helper: build a chain-poset module with a single cover edge map.
 # We intentionally keep this tiny; it is enough to test connecting morphisms by hand.
-function _chain_module(P, dims::Vector{Int}, edge_map::AbstractMatrix{K}, field::AbstractCoeffField) where {K}
-    coeff_type(field) == K || error("_chain_module: coeff_type(field) != eltype(edge_map)")
+function _chain_module(P, dims::Vector{Int}, edge_map::AbstractMatrix{K}, field::CM.AbstractCoeffField) where {K}
+    CM.coeff_type(field) == K || error("_chain_module: coeff_type(field) != eltype(edge_map)")
     edges = FF.cover_edges(P)
     D = Dict{Tuple{Int, Int}, Matrix{K}}()
     for (u, v) in edges

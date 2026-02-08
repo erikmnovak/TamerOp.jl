@@ -1,6 +1,3 @@
-using Test
-using SparseArrays
-
 with_fields(FIELDS_FULL) do field
 K = CM.coeff_type(field)
 @inline c(x) = CM.coerce(field, x)
@@ -75,7 +72,6 @@ K = CM.coeff_type(field)
     end
 
     @testset "cover_edges correctness and caching" begin
-        using Random
         Random.seed!(12345)
 
         function transitive_closure!(R::BitMatrix)
@@ -140,12 +136,19 @@ K = CM.coeff_type(field)
 
             C2 = FF.cover_edges(P)
             @test C1 === C2  # cached
+            @test P.cache.cover_edges === C1
 
             # cached=false should force recomputation (new object) but same result.
             C3 = FF.cover_edges(P; cached=false)
             @test C3 !== C1
             @test BitMatrix(C3) == BitMatrix(C1)
             @test findall(C3) == findall(C1)
+
+            FF.clear_cover_cache!(P)
+            @test P.cache.cover_edges === nothing
+            C4 = FF.cover_edges(P)
+            @test C4 !== C1
+            @test BitMatrix(C4) == BitMatrix(C1)
 
             mat_ref, edges_ref = naive_cover_edges(R)
             @test BitMatrix(C1) == mat_ref
@@ -207,6 +210,32 @@ K = CM.coeff_type(field)
     end
 end
 
+@testset "build_cache! two-phase warmup" begin
+    old = FF.updown_cache_policy()
+    try
+        FF.set_updown_cache_policy!(mode=:always, finite_threshold=0, generic_threshold=0)
+        P = chain_poset(6)
+        @test P.cache.cover === nothing
+        @test P.cache.upsets === nothing
+        @test P.cache.downsets === nothing
+
+        FF.build_cache!(P; cover=true, updown=true)
+        @test P.cache.cover !== nothing
+        @test P.cache.upsets !== nothing
+        @test P.cache.downsets !== nothing
+
+        cc1 = P.cache.cover
+        FF.build_cache!(P; cover=true, updown=true)
+        @test P.cache.cover === cc1
+    finally
+        FF.set_updown_cache_policy!(;
+            mode=old.mode,
+            finite_threshold=old.finite_threshold,
+            generic_threshold=old.generic_threshold,
+        )
+    end
+end
+
 @testset "HomExt pi0_count (Prop 3.10 sanity)" begin
     # Disjoint union of two chains: intersection has two connected components.
     P = disjoint_two_chains_poset()
@@ -239,10 +268,10 @@ end
         D = FF.downset_from_generators(P, [2, 4])
 
         # k[U] as a fringe image: k[U] -> k[Q] (death = all).
-        kU = one_by_one_fringe(P, U, allD)
+        kU = one_by_one_fringe(P, U, allD; field=field)
 
         # k[D] as a fringe image: k[Q] -> k[D] (birth = all).
-        kD = one_by_one_fringe(P, allU, D)
+        kD = one_by_one_fringe(P, allU, D; field=field)
 
         # Prop 3.10(1): dim Hom_Q(k[U], k[D]) = number of connected components of U cap D.
         # Here U cap D = U = {2,4}, which has 2 components.
@@ -254,8 +283,8 @@ end
         # that lie inside U.
         Uprime = FF.upset_from_generators(P, [2, 4])  # {2,4} (2 components)
         Usmall = FF.upset_from_generators(P, [2])     # {2} (1 component)
-        kUprime = one_by_one_fringe(P, Uprime, allD)
-        kUsmall = one_by_one_fringe(P, Usmall, allD)
+        kUprime = one_by_one_fringe(P, Uprime, allD; field=field)
+        kUsmall = one_by_one_fringe(P, Usmall, allD; field=field)
 
         @test FF.hom_dimension(kUprime, kUsmall) == 1
         @test FF.hom_dimension(kUsmall, kUprime) == 1
@@ -267,8 +296,8 @@ end
         # that lie inside D (note the direction).
         Dall = allD
         Dsmall = FF.downset_from_generators(P, [2])   # {1,2}
-        kDall = one_by_one_fringe(P, allU, Dall)
-        kDsmall = one_by_one_fringe(P, allU, Dsmall)
+        kDall = one_by_one_fringe(P, allU, Dall; field=field)
+        kDsmall = one_by_one_fringe(P, allU, Dsmall; field=field)
 
         @test FF.hom_dimension(kDall, kDsmall) == 1
         @test FF.hom_dimension(kDsmall, kDall) == 1
@@ -291,7 +320,7 @@ end
             @assert 1 <= a <= b <= n
             U = FF.principal_upset(P, a)
             D = FF.principal_downset(P, b)
-            return one_by_one_fringe(P, U, D)
+            return one_by_one_fringe(P, U, D; field=field)
         end
 
         intervals = [(a, b) for a in 1:n for b in a:n]
@@ -346,7 +375,7 @@ end
         # Hom from/to zero should be 0.
         U2 = FF.principal_upset(P, 2)
         D2 = FF.principal_downset(P, 2)
-        M = one_by_one_fringe(P, U2, D2)
+        M = one_by_one_fringe(P, U2, D2; field=field)
 
         @test FF.hom_dimension(M0, M) == 0
         @test FF.hom_dimension(M, M0) == 0
@@ -379,3 +408,32 @@ end
 end
 
 end # with_fields
+
+@testset "Up/down cache policy tuning" begin
+    old = FF.updown_cache_policy()
+    try
+        P = chain_poset(5)
+        FF.set_updown_cache_policy!(mode=:always, finite_threshold=0, generic_threshold=0)
+        _ = FF.upset_indices(P, 1)
+        @test P.cache.upsets !== nothing
+        @test P.cache.downsets !== nothing
+
+        FF.clear_cover_cache!(P)
+        FF.set_updown_cache_policy!(mode=:never, finite_threshold=10_000, generic_threshold=10_000)
+        _ = FF.upset_indices(P, 1)
+        @test P.cache.upsets === nothing
+        @test P.cache.downsets === nothing
+
+        Pc = FF.ProductOfChainsPoset((4, 4))
+        FF.set_updown_cache_policy!(mode=:auto, finite_threshold=10_000, generic_threshold=10_000)
+        _ = FF.upset_indices(Pc, 1)
+        @test Pc.cache.upsets === nothing
+        @test Pc.cache.downsets === nothing
+    finally
+        FF.set_updown_cache_policy!(;
+            mode=old.mode,
+            finite_threshold=old.finite_threshold,
+            generic_threshold=old.generic_threshold,
+        )
+    end
+end

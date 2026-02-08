@@ -164,12 +164,14 @@ function boolean_lattice_B3_poset()
 end
 
 "Convenience: 1x1 fringe module with scalar on the unique entry."
-one_by_one_fringe(P::FF.AbstractPoset, U::FF.Upset, D::FF.Downset; scalar=QQ(1)) =
-    FF.one_by_one_fringe(P, U, D; scalar=scalar)
+one_by_one_fringe(P::FF.AbstractPoset, U::FF.Upset, D::FF.Downset;
+                  scalar=CM.QQ(1), field=CM.QQField()) =
+    FF.one_by_one_fringe(P, U, D; scalar=scalar, field=field)
 
 "Convenience: 1x1 fringe module with a specified scalar (positional)."
-one_by_one_fringe(P::FF.AbstractPoset, U::FF.Upset, D::FF.Downset, scalar) =
-    FF.one_by_one_fringe(P, U, D, scalar)
+one_by_one_fringe(P::FF.AbstractPoset, U::FF.Upset, D::FF.Downset, scalar;
+                  field=CM.QQField()) =
+    FF.one_by_one_fringe(P, U, D, scalar; field=field)
 
 "Simple modules on the chain 1 < 2: S1 supported at 1, S2 supported at 2."
 function simple_modules_chain2()
@@ -189,7 +191,8 @@ const FIELD_R64 = CM.RealField(Float64; rtol=1e-10, atol=1e-12)
 
 const FIELDS_FULL = (FIELD_QQ, FIELD_F2, FIELD_F3, FIELD_F5, FIELD_R64)
 
-with_fields(fields, f) = foreach(f, fields)
+with_fields(fields, f::Function) = foreach(f, fields)
+with_fields(f::Function, fields) = foreach(f, fields)
 
 # ---------------- ASCII-only source tree test -------------------------------
 

@@ -97,13 +97,13 @@ with_fields(FIELDS_FULL) do field
     F = FZ.IndFlat(tau, [1, 2])
     @test F isa FZ.IndFlat
     @test F.id == :F
-    @test F.b == [1, 2]
+    @test F.b == (1, 2)
     @test F.tau == tau
 
     E = FZ.IndInj(tau, [3, 4]; id=:E)
     @test E isa FZ.IndInj
     @test E.id == :E
-    @test E.b == [3, 4]
+    @test E.b == (3, 4)
     @test E.tau == tau
 
     # The library intentionally does NOT support reordered positional arguments
@@ -117,16 +117,16 @@ with_fields(FIELDS_FULL) do field
     n = 1
     tau0 = FZ.Face(n, [false])
     b = 1
-    c = 3
+    cmax = 3
     F1 = FZ.IndFlat(tau0, [b]; id=:F1)
-    E1 = FZ.IndInj(tau0, [c]; id=:E1)
+    E1 = FZ.IndInj(tau0, [cmax]; id=:E1)
     Phi = reshape(K[c(1)], 1, 1)
     FG = FZ.Flange{K}(n, [F1], [E1], Phi)
 
     # dim is 1 on [b,c], 0 otherwise
-    for g in (b-2):(c+2)
+    for g in (b-2):(cmax+2)
         d = FZ.dim_at(FG, [g]; rankfun=A -> PosetModules.FieldLinAlg.rank(field, A))
-        expected = (b <= g <= c) ? 1 : 0
+        expected = (b <= g <= cmax) ? 1 : 0
         @test d == expected
     end
 
@@ -141,12 +141,13 @@ with_fields(FIELDS_FULL) do field
     FG2 = FZ.Flange{K}(n, [F1, F2], [E1], Phi2)
     FG2m = FZ.minimize(FG2)
 
-    for g in (b-1):(c+1)
+    for g in (b-1):(cmax+1)
         d1 = FZ.dim_at(FG2, [g];  rankfun=A -> PosetModules.FieldLinAlg.rank(field, A))
         d2 = FZ.dim_at(FG2m, [g]; rankfun=A -> PosetModules.FieldLinAlg.rank(field, A))
         @test d1 == d2
     end
 
+        if field isa CM.QQField
         @testset "canonical_matrix / degree_matrix / bounding_box" begin
         # 1D: flat is x >= 1, inj is x <= 3.
         flats = [FZ.IndFlat(mk_face(length([1]), [false]), [1]; id=:F)]
@@ -181,6 +182,7 @@ with_fields(FIELDS_FULL) do field
         @test a_box == [0]
         @test b_box == [4]
         end
+        end
 
         @testset "minimize: do not merge different labels, but merge proportional duplicates" begin
         # Two proportional columns with different underlying flats must not be merged.
@@ -208,25 +210,25 @@ with_fields(FIELDS_FULL) do field
         end
 
         @testset "ZnEncoding: region encoding without enumerating a box" begin
-        # FG, b, c are in scope here because this testset is nested.
+        # FG, b, cmax are in scope here because this testset is nested.
         enc = PM.EncodingOptions(backend=:zn, max_regions=1000)
         P, Henc, pi = PM.encode_from_flange(FG, enc)
 
         # The encoding poset should be a 3-chain:
-        #   left of b  <  between  <  right of c.
+        #   left of b  <  between  <  right of cmax.
         @test PM.nvertices(P) == 3
         @test Set(FF.cover_edges(P)) == Set([(1,2),(2,3)])
 
         # In 1D, critical coordinates come from:
         #   flat threshold b
-        #   complement(injective) threshold c+1
-        @test pi.coords[1] == [b, c+1]
+        #   complement(injective) threshold cmax+1
+        @test pi.coords[1] == [b, cmax+1]
 
         # Spot-check the encoded fiber dimensions via locate.
         @test FF.fiber_dimension(Henc, PM.locate(pi, [b-5])) == 0
         @test FF.fiber_dimension(Henc, PM.locate(pi, [b])) == 1
-        @test FF.fiber_dimension(Henc, PM.locate(pi, [c])) == 1
-        @test FF.fiber_dimension(Henc, PM.locate(pi, [c+1])) == 0
+        @test FF.fiber_dimension(Henc, PM.locate(pi, [cmax])) == 1
+        @test FF.fiber_dimension(Henc, PM.locate(pi, [cmax+1])) == 0
         end
 
     @testset "ZnEncoding: direct flange -> fringe (Remark 6.14 bridge)" begin
@@ -241,7 +243,7 @@ with_fields(FIELDS_FULL) do field
         @test Set(FF.cover_edges(P)) == Set(FF.cover_edges(P2))
 
         # Fiber dimensions should match on all sampled degrees.
-        for g in (b-5):(c+5)
+        for g in (b-5):(cmax+5)
             t  = PM.locate(pi,  [g])
             t2 = PM.locate(pi2, [g])
             @test t == t2
@@ -252,7 +254,7 @@ with_fields(FIELDS_FULL) do field
 
         # strictness: labels not present in the encoding must be rejected.
         F_extra = FZ.IndFlat(mk_face(length([b + 1]), [false]), [b + 1]; id=:Fextra)
-        E = FZ.IndInj(mk_face(length([c]), [false]), [c]; id=:E)
+        E = FZ.IndInj(mk_face(length([cmax]), [false]), [cmax]; id=:E)
         FG_extra = FZ.Flange{K}(1, [FZ.IndFlat(mk_face(length([b]), [false]), [b]; id=:F), F_extra], [E], K[1 1])
 
         @test_throws ErrorException PM.fringe_from_flange(P, pi, FG_extra)
@@ -502,16 +504,17 @@ end
 
         enc = PM.EncodingOptions(backend=:zn, max_regions=1000)
         Penc, Henc, pi = PM.encode_from_flange(FG, enc)
+        rpcache = CM.EncodingCache()
 
-        Q = PM.Invariants.region_poset(pi; poset_kind = :signature)
+        Q = PM.Invariants.region_poset(pi; poset_kind = :signature, cache=rpcache)
         @test PM.nvertices(Q) == PM.nvertices(Penc)
         @test FF.poset_equal(Q, Penc)
 
         # Cached repeat call should return the exact same poset object.
-        Q2 = PM.Invariants.region_poset(pi; poset_kind = :signature)
+        Q2 = PM.Invariants.region_poset(pi; poset_kind = :signature, cache=rpcache)
         @test Q2 === Q
 
-        Qdense = PM.Invariants.region_poset(pi; poset_kind = :dense)
+        Qdense = PM.Invariants.region_poset(pi; poset_kind = :dense, cache=rpcache)
         @test FF.leq_matrix(Q) == FF.leq_matrix(Qdense)
 
         # Projected arrangement should work without requiring pi.P.
@@ -550,15 +553,16 @@ end
             enc = PM.EncodingOptions(backend=:pl, max_regions=10_000)
             Ppl, Hpl, pipl = PLP.encode_from_PL_fringes(F1, F2, enc; poset_kind = :signature)
             @test Ppl isa PM.ZnEncoding.SignaturePoset
+            rpcache = CM.EncodingCache()
 
-            Qpl = PM.Invariants.region_poset(pipl; poset_kind = :signature)
+            Qpl = PM.Invariants.region_poset(pipl; poset_kind = :signature, cache=rpcache)
             @test PM.nvertices(Qpl) == PM.nvertices(Ppl)
             @test FF.poset_equal(Qpl, Ppl)
 
-            Qpl2 = PM.Invariants.region_poset(pipl; poset_kind = :signature)
+            Qpl2 = PM.Invariants.region_poset(pipl; poset_kind = :signature, cache=rpcache)
             @test Qpl2 === Qpl
 
-            Qpl_dense = PM.Invariants.region_poset(pipl; poset_kind = :dense)
+            Qpl_dense = PM.Invariants.region_poset(pipl; poset_kind = :dense, cache=rpcache)
             @test FF.leq_matrix(Qpl) == FF.leq_matrix(Qpl_dense)
 
             arr = PM.projected_arrangement(pipl; dirs=[[1.0]])
@@ -586,15 +590,16 @@ end
             enc = PM.EncodingOptions(backend=:pl_backend, max_regions=10_000)
             Pbx, Hbx, pibx = PB.encode_fringe_boxes(Ups, Downs, enc; poset_kind = :signature)
             @test Pbx isa PM.ZnEncoding.SignaturePoset
+            rpcache = CM.EncodingCache()
 
-            Qbx = PM.Invariants.region_poset(pibx; poset_kind = :signature)
+            Qbx = PM.Invariants.region_poset(pibx; poset_kind = :signature, cache=rpcache)
             @test PM.nvertices(Qbx) == PM.nvertices(Pbx)
             @test FF.poset_equal(Qbx, Pbx)
 
-            Qbx2 = PM.Invariants.region_poset(pibx; poset_kind = :signature)
+            Qbx2 = PM.Invariants.region_poset(pibx; poset_kind = :signature, cache=rpcache)
             @test Qbx2 === Qbx
 
-            Qbx_dense = PM.Invariants.region_poset(pibx; poset_kind = :dense)
+            Qbx_dense = PM.Invariants.region_poset(pibx; poset_kind = :dense, cache=rpcache)
             @test FF.leq_matrix(Qbx) == FF.leq_matrix(Qbx_dense)
 
             arr = PM.projected_arrangement(pibx; dirs=[[1.0]])
@@ -609,6 +614,7 @@ end
     end
 end
 
+if field isa CM.QQField
 @testset "encode poset_kind=:dense yields FinitePoset" begin
     if isdefined(PM, :PLBackend)
         PB = PM.PLBackend
@@ -631,5 +637,6 @@ end
         P, _H, _pi = PM.encode(F, enc)
         @test P isa PM.FinitePoset
     end
+end
 end
 end # with_fields

@@ -3,7 +3,71 @@ module DerivedFunctors
 using ..CoreModules: AbstractCoeffField, RealField, coeff_type, field_from_eltype, coerce,
                      EncodingOptions, ResolutionOptions, DerivedFunctorOptions
 using ..FieldLinAlg
+using ..Modules: PModule, PMorphism
+using SparseArrays: sparse, SparseMatrixCSC
 import Base.Threads
+
+"""
+    HomSystemCache{K}()
+    HomSystemCache(K::Type)
+
+Thread-local sharded cache for expensive Hom-system setup reused across derived pipelines.
+
+Stored entries:
+- `hom`: `HomSpace` objects keyed by `(objectid(dom), objectid(cod))`
+- `precompose`: precompose coordinate matrices keyed by `(objectid(Hdom), objectid(Hcod), objectid(f))`
+- `postcompose`: postcompose coordinate matrices keyed by `(objectid(Hdom), objectid(Hcod), objectid(g))`
+"""
+mutable struct HomSystemCache{HV,PV,QV}
+    hom::Vector{Dict{Tuple{UInt,UInt},HV}}
+    precompose::Vector{Dict{Tuple{UInt,UInt,UInt},PV}}
+    postcompose::Vector{Dict{Tuple{UInt,UInt,UInt},QV}}
+end
+
+function HomSystemCache(::Type{HV}, ::Type{PV}, ::Type{QV}) where {HV,PV,QV}
+    nshards = max(1, Threads.maxthreadid())
+    return HomSystemCache(
+        [Dict{Tuple{UInt,UInt},HV}() for _ in 1:nshards],
+        [Dict{Tuple{UInt,UInt,UInt},PV}() for _ in 1:nshards],
+        [Dict{Tuple{UInt,UInt,UInt},QV}() for _ in 1:nshards],
+    )
+end
+
+@inline _cache_tid_index(shards::AbstractVector) =
+    min(length(shards), max(1, Threads.threadid()))
+
+@inline _cache_shard(shards::AbstractVector) = shards[_cache_tid_index(shards)]
+
+function clear_hom_system_cache!(cache::HomSystemCache)
+    for d in cache.hom
+        empty!(d)
+    end
+    for d in cache.precompose
+        empty!(d)
+    end
+    for d in cache.postcompose
+        empty!(d)
+    end
+    return nothing
+end
+
+@inline _cache_key2(a, b) = (UInt(objectid(a)), UInt(objectid(b)))
+@inline _cache_key3(a, b, c) = (UInt(objectid(a)), UInt(objectid(b)), UInt(objectid(c)))
+
+@inline function _cache_lookup(shards::AbstractVector{<:AbstractDict{K,V}}, key::K) where {K,V}
+    d = _cache_shard(shards)
+    return get(d, key, nothing)::Union{Nothing,V}
+end
+
+@inline function _cache_store_or_get!(shards::AbstractVector{<:AbstractDict{K,V}}, key::K, value::V) where {K,V}
+    d = _cache_shard(shards)
+    existing = get(d, key, nothing)::Union{Nothing,V}
+    if existing === nothing
+        d[key] = value
+        return value
+    end
+    return existing
+end
 
 """
 Utils: shared low-level utilities for the derived-functors layer.
@@ -36,7 +100,7 @@ module Utils
         Q = f.dom.Q
         comps = Vector{Matrix{K}}(undef, Q.n)
         for i in 1:Q.n
-            comps[i] = g.comps[i] * f.comps[i]
+            comps[i] = FieldLinAlg._matmul(g.comps[i], f.comps[i])
         end
         return PMorphism{K}(f.dom, g.cod, comps)
     end
@@ -184,7 +248,7 @@ module HomExtEngine
     # -----------------------------------------------------------------------------
 
     using SparseArrays
-    using ...CoreModules: AbstractCoeffField, RealField
+    using ...CoreModules: AbstractCoeffField, RealField, field_from_eltype
     using ...FieldLinAlg
     using ...FiniteFringe: AbstractPoset, FinitePoset, Upset, Downset, cover_edges, nvertices
     using ...IndicatorTypes: UpsetPresentation, DownsetCopresentation
@@ -218,22 +282,25 @@ module HomExtEngine
     The Hom/Ext assembly repeatedly queries connected components of `U.mask .& D.mask`
     across many pairs (U, D). This cache memoizes results keyed by the pair of masks.
     """
-    mutable struct CompCache
+    mutable struct CompCache{K}
         P::AbstractPoset
         adj::Vector{Vector{Int}}
+        components_of_intersection_shards::Vector{Dict{Tuple{UInt,UInt}, Tuple{Vector{Int}, Int}}}
+        component_inclusion_matrix_shards::Vector{Dict{NTuple{4,UInt},SparseMatrixCSC{K,Int}}}
 
-        components_of_mask::Dict{BitVector, Tuple{Vector{Int}, Int}}
-        components_of_intersection::Dict{Tuple{BitVector,BitVector}, Tuple{Vector{Int}, Int}}
-        component_inclusion_matrix::Dict{Tuple{UInt,UInt,UInt,UInt,Type},SparseMatrixCSC}
-
-        function CompCache(P::AbstractPoset)
+        function CompCache{K}(P::AbstractPoset) where {K}
             adj = _hasse_undirected(P)
+            nshards = max(1, Threads.maxthreadid())
             return new(P, adj,
-                       Dict{BitVector, Tuple{Vector{Int}, Int}}(),
-                       Dict{Tuple{BitVector,BitVector}, Tuple{Vector{Int}, Int}}(),
-                       Dict{Tuple{UInt,UInt,UInt,UInt,Type}, SparseMatrixCSC}())
+                       [Dict{Tuple{UInt,UInt}, Tuple{Vector{Int}, Int}}() for _ in 1:nshards],
+                       [Dict{NTuple{4,UInt},SparseMatrixCSC{K,Int}}() for _ in 1:nshards])
         end
     end
+
+    @inline _mask_signature(mask::BitVector)::UInt = UInt(objectid(mask))
+
+    @inline _compcache_shard_index(shards) = min(length(shards), max(1, Threads.threadid()))
+    @inline _compcache_shard(shards) = shards[_compcache_shard_index(shards)]
 
     """
         _components_of_mask(adj, mask) -> (comp_id, ncomp)
@@ -288,15 +355,16 @@ module HomExtEngine
 
     Return the connected components of `U cap D`, using and updating `cache`.
 
-    The cache key uses copies of the bitmasks to remain stable across reuse of objects.
+    The cache key is a compact integer signature of the bitmasks.
     """
     function _components_cached!(C::CompCache, U::Upset, uid::Int, D::Downset, did::Int)
-        k = (BitVector(U.mask), BitVector(D.mask))
-        if haskey(C.components_of_intersection, k)
-            return C.components_of_intersection[k]
+        k = (_mask_signature(U.mask), _mask_signature(D.mask))
+        shard = _compcache_shard(C.components_of_intersection_shards)
+        if haskey(shard, k)
+            return shard[k]
         end
         val = _components_of_intersection(C.P, U, D)
-        C.components_of_intersection[k] = val
+        shard[k] = val
         return val
     end
 
@@ -314,7 +382,7 @@ module HomExtEngine
     cols = big components.
     """
     function _component_inclusion_matrix_cached(
-        C::CompCache,
+        C::CompCache{K},
         Ubig::Upset, Dbig::Downset, uid_big::Int, did_big::Int,
         Usmall::Upset, Dsmall::Downset, uid_small::Int, did_small::Int,
         ::Type{K},
@@ -323,12 +391,13 @@ module HomExtEngine
         # IMPORTANT:
         # The (uid_big, did_big, ...) indices are only *local* enumerate indices inside each (a,b) block,
         # so they collide across different blocks and can return the wrong cached matrix.
-        # Key instead by the identities of the masks, which are stable and unique for each Upset/Downset.
-        key = (objectid(Ubig.mask), objectid(Dbig.mask),
-            objectid(Usmall.mask), objectid(Dsmall.mask), K)
+        # Key instead by content signatures of the masks.
+        key = (_mask_signature(Ubig.mask), _mask_signature(Dbig.mask),
+               _mask_signature(Usmall.mask), _mask_signature(Dsmall.mask))
 
-        if haskey(C.component_inclusion_matrix, key)
-            return C.component_inclusion_matrix[key]
+        shard = _compcache_shard(C.component_inclusion_matrix_shards)
+        if haskey(shard, key)
+            return shard[key]
         end
 
         comps_big, nb = _components_cached!(C, Ubig, uid_big, Dbig, did_big)
@@ -358,7 +427,7 @@ module HomExtEngine
         end
 
         M = sparse(rows, cols, vals, ns, nb)
-        C.component_inclusion_matrix[key] = M
+        shard[key] = M
         return M
     end
 
@@ -443,8 +512,8 @@ module HomExtEngine
         A = length(F) - 1              # top degree on the F-side
         B = length(E) - 1              # top degree on the E-side
         P = F[1].P
-        cache = CompCache(P)
-        caches = threads && Threads.nthreads() > 1 ? [CompCache(P) for _ in 1:Threads.nthreads()] : CompCache[]
+        cache = CompCache{K}(P)
+        caches = threads && Threads.nthreads() > 1 ? [CompCache{K}(P) for _ in 1:Threads.nthreads()] : Vector{CompCache{K}}()
 
         U_by_a = [f.U0 for f in F]
         D_by_b = [e.D0 for e in E]
@@ -639,8 +708,8 @@ module HomExtEngine
         end
 
         P = F[1].P
-        cache = CompCache(P)
-        caches = threads && Threads.nthreads() > 1 ? [CompCache(P) for _ in 1:Threads.nthreads()] : CompCache[]
+        cache = CompCache{K}(P)
+        caches = threads && Threads.nthreads() > 1 ? [CompCache{K}(P) for _ in 1:Threads.nthreads()] : Vector{CompCache{K}}()
         U_by_a = [f.U0 for f in F]
         D_by_b = [e.D0 for e in E]
 
@@ -836,7 +905,7 @@ module HomExtEngine
     of the finite poset `P`.
     """
     function pi0_count(P::AbstractPoset, U::Upset, D::Downset)
-        C = CompCache(P)
+        C = CompCache{Int}(P)
         _, ncomp = _components_cached!(C, U, 0, D, 0)
         return ncomp
     end
@@ -861,7 +930,8 @@ module Resolutions
     using SparseArrays
     import Base.Threads
 
-    using ...CoreModules: AbstractCoeffField, RealField, ResolutionOptions, field_from_eltype, coeff_type
+    using ...CoreModules: AbstractCoeffField, RealField, ResolutionCache,
+                          ResolutionOptions, field_from_eltype, coeff_type
     using ...Modules: PModule, PMorphism
     using ...FiniteFringe: AbstractPoset, FinitePoset, FringeModule, Upset, cover_edges, is_subset,
                            leq, nvertices, poset_equal, upset_indices, downset_indices
@@ -872,6 +942,9 @@ module Resolutions
     using ...FieldLinAlg: SparseRREFAugmented, SparseRow, _sparse_rref_push_augmented!
 
 
+    import ..Utils
+    import ..Utils
+    import ..Utils
     import ..Utils: compose
 
     # ----------------------------
@@ -880,6 +953,69 @@ module Resolutions
 
     function _same_poset(Q1::AbstractPoset, Q2::AbstractPoset)::Bool
         return poset_equal(Q1, Q2)
+    end
+
+    @inline _resolution_cache_shard_index(dicts) =
+        min(length(dicts), max(1, Threads.threadid()))
+
+    @inline function _cache_projective_get(cache::ResolutionCache, key)
+        shard = cache.projective_shards[_resolution_cache_shard_index(cache.projective_shards)]
+        v = get(shard, key, nothing)
+        v === nothing || return v
+        Base.lock(cache.lock)
+        try
+            v = get(cache.projective, key, nothing)
+        finally
+            Base.unlock(cache.lock)
+        end
+        v === nothing || (shard[key] = v)
+        return v
+    end
+
+    @inline function _cache_projective_store!(cache::ResolutionCache, key, val)
+        shard = cache.projective_shards[_resolution_cache_shard_index(cache.projective_shards)]
+        existing = get(shard, key, nothing)
+        existing === nothing || return existing
+        shard[key] = val
+        Base.lock(cache.lock)
+        out = get(cache.projective, key, nothing)
+        if out === nothing
+            cache.projective[key] = val
+            out = val
+        end
+        Base.unlock(cache.lock)
+        shard[key] = out
+        return out
+    end
+
+    @inline function _cache_injective_get(cache::ResolutionCache, key)
+        shard = cache.injective_shards[_resolution_cache_shard_index(cache.injective_shards)]
+        v = get(shard, key, nothing)
+        v === nothing || return v
+        Base.lock(cache.lock)
+        try
+            v = get(cache.injective, key, nothing)
+        finally
+            Base.unlock(cache.lock)
+        end
+        v === nothing || (shard[key] = v)
+        return v
+    end
+
+    @inline function _cache_injective_store!(cache::ResolutionCache, key, val)
+        shard = cache.injective_shards[_resolution_cache_shard_index(cache.injective_shards)]
+        existing = get(shard, key, nothing)
+        existing === nothing || return existing
+        shard[key] = val
+        Base.lock(cache.lock)
+        out = get(cache.injective, key, nothing)
+        if out === nothing
+            cache.injective[key] = val
+            out = val
+        end
+        Base.unlock(cache.lock)
+        shard[key] = out
+        return out
     end
 
     # ----------------------------
@@ -894,7 +1030,7 @@ module Resolutions
         # Using Vector{<:PModule{K}} makes those natural vectors the canonical API.
         Pmods::Vector{<:PModule{K}}                  # P_0 .. P_L
         gens::Vector{Vector{Int}}                    # base vertex per summand (same order as summands)
-        d_mor::Vector{PMorphism{K}}                  # d_a : P_a -> P_{a-1}, a=1..L
+        d_mor::Vector{<:PMorphism{K}}                # d_a : P_a -> P_{a-1}, a=1..L
         d_mat::Vector{SparseMatrixCSC{K, Int}}       # coefficient matrices (rows cod summands, cols dom summands)
         aug::PMorphism{K}                            # P_0 -> M
     end
@@ -1092,7 +1228,7 @@ module Resolutions
 
     # Extract coefficient matrix for a morphism between sums of principal upsets.
     # Domain and codomain are direct sums of principal upsets indexed by base vertex lists.
-    function _coeff_matrix_upsets(dom_bases::Vector{Upset}, cod_bases::Vector{Upset})
+    function _coeff_matrix_upsets(dom_bases::Vector{Upset}, cod_bases::Vector{Upset}, ::Type{K}) where {K}
         n_dom = length(dom_bases)
         n_cod = length(cod_bases)
 
@@ -1168,8 +1304,14 @@ module Resolutions
 
     # Public entrypoint: require ResolutionOptions.
     function projective_resolution(M::PModule{K}, res::ResolutionOptions;
-                                   threads::Bool = (Threads.nthreads() > 1)) where {K}
-        R = _projective_resolution_impl(M, res.maxlen; threads=threads)
+                                   threads::Bool = (Threads.nthreads() > 1),
+                                   cache::Union{Nothing,ResolutionCache}=nothing) where {K}
+        key = (objectid(M), res.maxlen)
+        R = cache === nothing ? nothing : _cache_projective_get(cache, key)
+        if R === nothing
+            R = _projective_resolution_impl(M, res.maxlen; threads=threads)
+            cache === nothing || (R = _cache_projective_store!(cache, key, R))
+        end
         if res.minimal && res.check
             assert_minimal(R; check_cover=true)
         end
@@ -1178,8 +1320,19 @@ module Resolutions
 
     # Convenience overload for fringe modules.
     function projective_resolution(M::FringeModule{K}, res::ResolutionOptions;
-                                   threads::Bool = (Threads.nthreads() > 1)) where {K}
-        return projective_resolution(pmodule_from_fringe(M), res; threads=threads)
+                                   threads::Bool = (Threads.nthreads() > 1),
+                                   cache::Union{Nothing,ResolutionCache}=nothing) where {K}
+        key = (objectid(M), res.maxlen)
+        R = cache === nothing ? nothing : _cache_projective_get(cache, key)
+        if R !== nothing
+            if res.minimal && res.check
+                assert_minimal(R; check_cover=true)
+            end
+            return R
+        end
+        R = projective_resolution(pmodule_from_fringe(M), res; threads=threads, cache=cache)
+        cache === nothing || _cache_projective_store!(cache, key, R)
+        return R
     end
 
     # =============================================================================
@@ -1481,7 +1634,7 @@ module Resolutions
         # Same UnionAll issue as ProjectiveResolution.Pmods.
         Emods::Vector{<:PModule{K}}       # E^0, E^1, ...
         gens::Vector{Vector{Int}}         # base vertices per injective summand in each E^b
-        d_mor::Vector{PMorphism{K}}       # E^b -> E^{b+1}
+        d_mor::Vector{<:PMorphism{K}}     # E^b -> E^{b+1}
         iota0::PMorphism{K}               # N -> E^0
     end
 
@@ -1532,14 +1685,31 @@ module Resolutions
     # This mirrors the existing projective_resolution(::FringeModule) overload and
     # matters because encoding layers (Zn and PL/Rn) naturally produce FringeModule data.
     function injective_resolution(N::FringeModule{K}, res::ResolutionOptions;
-                                  threads::Bool = (Threads.nthreads() > 1)) where {K}
-        return injective_resolution(pmodule_from_fringe(N), res; threads=threads)
+                                  threads::Bool = (Threads.nthreads() > 1),
+                                  cache::Union{Nothing,ResolutionCache}=nothing) where {K}
+        key = (objectid(N), res.maxlen)
+        R = cache === nothing ? nothing : _cache_injective_get(cache, key)
+        if R !== nothing
+            if res.minimal && res.check
+                assert_minimal(R; check_hull=true)
+            end
+            return R
+        end
+        R = injective_resolution(pmodule_from_fringe(N), res; threads=threads, cache=cache)
+        cache === nothing || _cache_injective_store!(cache, key, R)
+        return R
     end
 
     #Pubic entrypoint API:
     function injective_resolution(N::PModule{K}, res::ResolutionOptions;
-                                  threads::Bool = (Threads.nthreads() > 1)) where {K}
-        R = _injective_resolution_impl(N, res.maxlen; threads=threads)
+                                  threads::Bool = (Threads.nthreads() > 1),
+                                  cache::Union{Nothing,ResolutionCache}=nothing) where {K}
+        key = (objectid(N), res.maxlen)
+        R = cache === nothing ? nothing : _cache_injective_get(cache, key)
+        if R === nothing
+            R = _injective_resolution_impl(N, res.maxlen; threads=threads)
+            cache === nothing || (R = _cache_injective_store!(cache, key, R))
+        end
         if res.minimal && res.check
             assert_minimal(R; check_hull=true)
         end
@@ -2050,10 +2220,14 @@ module ExtTorSpaces
     using LinearAlgebra: rank, I
     using SparseArrays
 
-    using ...CoreModules: AbstractCoeffField, RealField, ResolutionOptions, DerivedFunctorOptions, field_from_eltype
+    using ...CoreModules: AbstractCoeffField, RealField, ResolutionCache,
+                          ResolutionOptions, DerivedFunctorOptions, field_from_eltype
     import ...CoreModules: _append_scaled_triplets!
+    import ...FieldLinAlg
     import ...FieldLinAlg: SparseRREF, SparseRow,
-              _sparse_rref_push_homogeneous!, normalize_sparse_row!,
+              SparseRowAccumulator, reset_sparse_row_accumulator!,
+              push_sparse_row_entry!, materialize_sparse_row!,
+              _sparse_rref_push_homogeneous!,
               _nullspace_from_pivots
 
     using ...IndicatorTypes: UpsetPresentation, DownsetCopresentation
@@ -2171,6 +2345,7 @@ module ExtTorSpaces
         # RREF basis of the row space of the constraint system, streamed row-by-row.
         R = SparseRREF{K}(nvars)
         row = SparseRow{K}()
+        acc = SparseRowAccumulator{K}(nvars)
         fullrank = false
 
         storeM = M.edge_maps
@@ -2202,16 +2377,14 @@ module ExtTorSpaces
                 Muv = Mu[j]
 
                 for ii in 1:dNv, jj in 1:du
-                    empty!(row.idx)
-                    empty!(row.val)
+                    reset_sparse_row_accumulator!(acc)
 
                     # Nuv * F_u
                     for k in 1:dNu
                         c = Nuv[ii, k]
                         if !iszero(c)
                             col = offs[u] + k + (jj - 1) * dNu
-                            push!(row.idx, col)
-                            push!(row.val, c)
+                            push_sparse_row_entry!(acc, col, c)
                         end
                     end
 
@@ -2220,12 +2393,11 @@ module ExtTorSpaces
                         c = Muv[l, jj]
                         if !iszero(c)
                             col = offs[v] + ii + (l - 1) * dNv
-                            push!(row.idx, col)
-                            push!(row.val, -c)
+                            push_sparse_row_entry!(acc, col, -c)
                         end
                     end
 
-                    normalize_sparse_row!(row.idx, row.val)
+                    materialize_sparse_row!(row, acc)
                     isempty(row.idx) && continue
                     _sparse_rref_push_homogeneous!(R, row)
 
@@ -2295,8 +2467,9 @@ module ExtTorSpaces
                                                     HN::FringeModule{K};
                                                     maxlen::Int=10,
                                                     verify::Bool=true,
-                                                    vertices::Symbol=:all) where {K}
-        F, dF, E, dE = indicator_resolutions(HM, HN; maxlen=maxlen)
+                                                    vertices::Symbol=:all,
+                                                    cache::Union{Nothing,ResolutionCache}=nothing) where {K}
+        F, dF, E, dE = indicator_resolutions(HM, HN; maxlen=maxlen, cache=cache)
 
         if verify
             verify_upset_resolution(F, dF; vertices=vertices)
@@ -2443,28 +2616,30 @@ module ExtTorSpaces
 
     The options object is required; no keyword-based signature is provided.
     """
-    function Ext(M::PModule{K}, N::PModule{K}, df::DerivedFunctorOptions) where {K}
+    function Ext(M::PModule{K}, N::PModule{K}, df::DerivedFunctorOptions;
+                 cache::Union{Nothing,ResolutionCache}=nothing) where {K}
         maxdeg = df.maxdeg
         model = df.model === :auto ? :projective : df.model
         canon = df.canon === :auto ? :projective : df.canon
 
         if model === :projective
-            return _Ext_projective(M, N; maxdeg=maxdeg)
+            return _Ext_projective(M, N; maxdeg=maxdeg, cache=cache)
         elseif model === :injective
             df_inj = DerivedFunctorOptions(maxdeg=maxdeg, model=:injective, canon=canon)
-            return ExtInjective(M, N, df_inj)
+            return ExtInjective(M, N, df_inj; cache=cache)
         elseif model === :unified
             df_uni = DerivedFunctorOptions(maxdeg=maxdeg, model=:unified, canon=canon)
-            return ExtSpace(M, N, df_uni)
+            return ExtSpace(M, N, df_uni; cache=cache)
         else
             error("Ext: unknown df.model=$(df.model). Supported for Ext: :projective, :injective, :unified, :auto.")
         end
     end
 
-    function Ext(M::FringeModule{K}, N::FringeModule{K}, df::DerivedFunctorOptions) where {K}
+    function Ext(M::FringeModule{K}, N::FringeModule{K}, df::DerivedFunctorOptions;
+                 cache::Union{Nothing,ResolutionCache}=nothing) where {K}
         Mp = pmodule_from_fringe(M)
         Np = pmodule_from_fringe(N)
-        return Ext(Mp, Np, df)
+        return Ext(Mp, Np, df; cache=cache)
     end
 
     function Ext(res::ProjectiveResolution{K}, N::PModule{K}) where {K}
@@ -2491,8 +2666,10 @@ module ExtTorSpaces
 
     # Internal helper: the traditional projective-resolution model of Ext.
     # This is the behavior that `Ext(M,N, DerivedFunctorOptions(...; model=:projective))` uses.
-    function _Ext_projective(M::PModule{K}, N::PModule{K}; maxdeg::Int=3) where {K}
-        res = projective_resolution(M, ResolutionOptions(maxlen=maxdeg))
+    function _Ext_projective(M::PModule{K}, N::PModule{K};
+                             maxdeg::Int=3,
+                             cache::Union{Nothing,ResolutionCache}=nothing) where {K}
+        res = projective_resolution(M, ResolutionOptions(maxlen=maxdeg); cache=cache)
         _pad_projective_resolution!(res, maxdeg)
         return Ext(res, N)
     end
@@ -2737,11 +2914,12 @@ module ExtTorSpaces
     Compute Ext^t(M,N) for 0 <= t <= df.maxdeg using an injective resolution of N.
     Returns an ExtSpaceInjective.
     """
-    function ExtInjective(M::PModule{K}, N::PModule{K}, df::DerivedFunctorOptions) where {K}
+    function ExtInjective(M::PModule{K}, N::PModule{K}, df::DerivedFunctorOptions;
+                          cache::Union{Nothing,ResolutionCache}=nothing) where {K}
         if !(df.model === :auto || df.model === :injective)
             error("ExtInjective: df.model must be :injective or :auto, got $(df.model)")
         end
-        resN = injective_resolution(N, ResolutionOptions(maxlen=df.maxdeg))
+        resN = injective_resolution(N, ResolutionOptions(maxlen=df.maxdeg); cache=cache)
         return ExtInjective(M, resN)
     end
 
@@ -3096,7 +3274,9 @@ module ExtTorSpaces
     :auto is an alias for :projective).
     - df.model must be :unified or :auto.
     """
-    function ExtSpace(M::PModule{K}, N::PModule{K}, df::DerivedFunctorOptions; check::Bool=true) where {K}
+    function ExtSpace(M::PModule{K}, N::PModule{K}, df::DerivedFunctorOptions;
+                      check::Bool=true,
+                      cache::Union{Nothing,ResolutionCache}=nothing) where {K}
         if !(df.model === :auto || df.model === :unified)
             error("ExtSpace: df.model must be :unified or :auto, got $(df.model)")
         end
@@ -3106,8 +3286,8 @@ module ExtTorSpaces
             error("ExtSpace: df.canon must be :projective or :injective (or :auto), got $(df.canon)")
         end
 
-        Eproj = _Ext_projective(M, N; maxdeg=maxdeg)
-        Einj = ExtInjective(M, N, DerivedFunctorOptions(maxdeg=maxdeg, model=:injective))
+        Eproj = _Ext_projective(M, N; maxdeg=maxdeg, cache=cache)
+        Einj = ExtInjective(M, N, DerivedFunctorOptions(maxdeg=maxdeg, model=:injective); cache=cache)
         P2I, I2P = _comparison_projective_injective(Eproj, Einj; maxdeg=maxdeg, check=check)
         return ExtSpace{K}(M, N, Eproj, Einj, P2I, I2P, canon, 0, maxdeg)
     end
@@ -3462,7 +3642,9 @@ module ExtTorSpaces
     You may optionally supply a projective resolution via keyword `res`.
     If supplied, df.maxdeg is ignored and the maximum computed degree is determined by the length of `res`.
     """
-    function Tor(Rop::PModule{K}, L::PModule{K}, df::DerivedFunctorOptions; res=nothing) where {K}
+    function Tor(Rop::PModule{K}, L::PModule{K}, df::DerivedFunctorOptions;
+                 res=nothing,
+                 cache::Union{Nothing,ResolutionCache}=nothing) where {K}
         model = df.model === :auto ? :first : df.model
 
         if res !== nothing && !(res isa ProjectiveResolution{K})
@@ -3473,10 +3655,16 @@ module ExtTorSpaces
             if res !== nothing
                 @assert _same_pmodule(res.M, Rop)
             end
+            if res === nothing && cache !== nothing
+                res = projective_resolution(Rop, ResolutionOptions(maxlen=df.maxdeg); cache=cache)
+            end
             return _Tor_resolve_first(Rop, L; maxdeg=df.maxdeg, res=res)
         elseif model === :second
             if res !== nothing
                 @assert _same_pmodule(res.M, L)
+            end
+            if res === nothing && cache !== nothing
+                res = projective_resolution(L, ResolutionOptions(maxlen=df.maxdeg); cache=cache)
             end
             return _Tor_resolve_second(Rop, L; maxdeg=df.maxdeg, res=res)
         else
@@ -3681,6 +3869,7 @@ module Functoriality
     using ...ChainComplexes
     using ...AbelianCategories
 
+    import ..Utils
     import ..Utils: compose
     import ..ExtTorSpaces: ExtSpaceProjective, ExtSpaceInjective, ExtSpace,
         TorSpace, TorSpaceSecond, Ext, Tor, ExtInjective, HomSpace, Hom
@@ -5197,7 +5386,7 @@ module Algebras
     import ..ExtTorSpaces:
         Ext, Tor,
         ExtSpaceProjective, ExtSpaceInjective,
-        TorSpaceSecond,
+        TorSpace, TorSpaceSecond,
         representative, coordinates, cycles, boundaries
     import ..Functoriality: _lift_cocycle_to_chainmap_coeff
     import ..Functoriality: _tensor_map_on_tor_chains_from_projective_coeff
@@ -5286,6 +5475,15 @@ module Algebras
         offs = E_LN.offsets[deg+1]
         out = zeros(K, offs[end])
 
+        @inline function _accum_scaled_matvec!(block::AbstractVector{K}, A::AbstractMatrix{K},
+                                               x::AbstractVector{K}, c::K, tmp::AbstractVector{K}) where {K}
+            mul!(tmp, A, x)
+            @inbounds for t in eachindex(block)
+                block[t] += c * tmp[t]
+            end
+            return block
+        end
+
         # If Fp is sparse, iterate only over nonzeros in each column.
         if issparse(Fp)
             Fps = sparse(Fp)  # ensure SparseMatrixCSC so colptr/rowval/nzval exist
@@ -5293,6 +5491,7 @@ module Algebras
             for i in 1:length(dom_bases)
                 u = dom_bases[i]
                 block = zeros(K, N.dims[u])
+                tmp = similar(block)
 
                 # Nonzeros in column i live in ptr range [colptr[i], colptr[i+1)-1].
                 ptr_lo = Fps.colptr[i]
@@ -5312,7 +5511,7 @@ module Algebras
                     end
 
                     A = map_leq(N, v, u)           # N_v -> N_u
-                    block .+= c .* (A * beta_parts[j])
+                    _accum_scaled_matvec!(block, A, beta_parts[j], c, tmp)
                 end
 
                 out[(offs[i]+1):offs[i+1]] = block
@@ -5325,6 +5524,7 @@ module Algebras
         for i in 1:length(dom_bases)
             u = dom_bases[i]
             block = zeros(K, N.dims[u])
+            tmp = similar(block)
 
             for j in 1:length(mid_bases)
                 c = Fp[j, i]
@@ -5337,7 +5537,7 @@ module Algebras
                 end
 
                 A = map_leq(N, v, u)
-                block .+= c .* (A * beta_parts[j])
+                _accum_scaled_matvec!(block, A, beta_parts[j], c, tmp)
             end
 
             out[(offs[i]+1):offs[i+1]] = block
@@ -5905,7 +6105,14 @@ module Algebras
         unit_coords::Union{Nothing, Vector{K}}
     end
 
-    TorAlgebra(T; mu_chain=Dict{Tuple{Int, Int}, SparseMatrixCSC{K, Int64}}(), unit_coords=nothing) =
+    TorAlgebra(T::TorSpace{K};
+        mu_chain::Dict{Tuple{Int, Int}, SparseMatrixCSC{K, Int}}=Dict{Tuple{Int, Int}, SparseMatrixCSC{K, Int}}(),
+        unit_coords=nothing) where {K} =
+        TorAlgebra{K}(T, mu_chain, Dict{Tuple{Int, Int}, Matrix{K}}(), unit_coords)
+
+    TorAlgebra(T::TorSpaceSecond{K};
+        mu_chain::Dict{Tuple{Int, Int}, SparseMatrixCSC{K, Int}}=Dict{Tuple{Int, Int}, SparseMatrixCSC{K, Int}}(),
+        unit_coords=nothing) where {K} =
         TorAlgebra{K}(T, mu_chain, Dict{Tuple{Int, Int}, Matrix{K}}(), unit_coords)
 
     """
@@ -5913,12 +6120,22 @@ module Algebras
 
     Constructor with optional lazy generator.
     """
-    function TorAlgebra(T::Any;
+    function TorAlgebra(T::TorSpace{K};
         mu_chain::Dict{Tuple{Int,Int}, SparseMatrixCSC{K,Int}}=Dict{Tuple{Int,Int}, SparseMatrixCSC{K,Int}}(),
         mu_chain_gen::Union{Nothing,Function}=nothing,
         unit_coords::Union{Nothing,Vector{K}}=nothing) where {K}
-
         return TorAlgebra{K}(T, mu_chain, mu_chain_gen, Dict{Tuple{Int,Int}, Matrix{K}}(), unit_coords)
+    end
+
+    function TorAlgebra(T::TorSpaceSecond{K};
+        mu_chain::Dict{Tuple{Int,Int}, SparseMatrixCSC{K,Int}}=Dict{Tuple{Int,Int}, SparseMatrixCSC{K,Int}}(),
+        mu_chain_gen::Union{Nothing,Function}=nothing,
+        unit_coords::Union{Nothing,Vector{K}}=nothing) where {K}
+        return TorAlgebra{K}(T, mu_chain, mu_chain_gen, Dict{Tuple{Int,Int}, Matrix{K}}(), unit_coords)
+    end
+
+    function TorAlgebra(T::Any; kwargs...)
+        error("TorAlgebra: expected TorSpace{K} or TorSpaceSecond{K}, got $(typeof(T))")
     end
 
     # Internal: obtain a chain-level multiplication map, generating it if needed.
@@ -6624,12 +6841,12 @@ module Backends
     # ----------------------------
 
     """
-        pmodule_on_box(FG::Flange{K}; a::Vector{Int}, b::Vector{Int}) -> PModule{K}
+        pmodule_on_box(FG::Flange{K}; a::NTuple{N,Int}, b::NTuple{N,Int}) -> PModule{K}
 
     Restrict the Z^n module presented by a flange `FG` to the finite grid poset
     on the integer box [a,b] (inclusive) and return it as a finite-poset module.
     """
-    function pmodule_on_box(FG::Flange{K}; a::Vector{Int}, b::Vector{Int}) where {K}
+    function pmodule_on_box(FG::Flange{K}; a::NTuple{N,Int}, b::NTuple{N,Int}) where {K,N}
         return ZnEncoding.pmodule_on_box(FG; a=a, b=b)
     end
 
@@ -6645,13 +6862,13 @@ module Backends
     Keyword `method`:
     - `:regions` (default): encode FG1 and FG2 to a common finite encoding poset.
     - `:box`: restrict both to the finite integer box [a,b] and compute on that box.
-    When `method=:box` you must provide integer vectors `a` and `b`.
+    When `method=:box` you must provide integer tuples `a` and `b`.
     """
     function ExtZn(FG1::Flange{K}, FG2::Flange{K},
                 enc::EncodingOptions, df::DerivedFunctorOptions;
                 method::Symbol = :regions,
-                a::Union{Nothing,Vector{Int}} = nothing,
-                b::Union{Nothing,Vector{Int}} = nothing) where {K}
+                a::Union{Nothing,Tuple{Vararg{Int}}} = nothing,
+                b::Union{Nothing,Tuple{Vararg{Int}}} = nothing) where {K}
 
         if method == :box
             a === nothing && error("ExtZn(method=:box): missing keyword a")
@@ -6927,7 +7144,7 @@ module Backends
       method below.
     - `method = :box`: ignore region structure and restrict both modules to the
       integer box [a,b] (inclusive). When `method=:box` you must provide integer
-      vectors `a` and `b`.
+      tuples `a` and `b`.
 
     This 2-argument method exists to give a helpful error message when users
     forget to pass an EncodingOptions for region encoding. It never constructs
@@ -6968,7 +7185,7 @@ module Backends
     Keyword `method`:
     - `:regions` (default): common-encode FG1 and FG2 via region encoding.
     - `:box`: ignore `enc`, restrict to the integer box [a,b], and compute on it.
-      When `method=:box` you must provide integer vectors `a` and `b`.
+      When `method=:box` you must provide integer tuples `a` and `b`.
     """
     function ExtDoubleComplex(FG1::Flange{K}, FG2::Flange{K}, enc::EncodingOptions;
                               method::Symbol = :regions,
@@ -7130,6 +7347,7 @@ import .Functoriality:
     ExtLongExactSequenceSecond, ExtLongExactSequenceFirst,
     TorLongExactSequenceFirst, TorLongExactSequenceSecond,
     _precompose_matrix,
+    _postcompose_matrix,
     _precompose_on_hom_cochains_from_projective_coeff,
     _tensor_map_on_tor_chains_from_projective_coeff,
     _tor_blockdiag_map_on_chains
@@ -7169,27 +7387,107 @@ using .HomExtEngine:
 @inline _resolve_enc_opts(opts::Union{EncodingOptions,Nothing}) =
     opts === nothing ? EncodingOptions() : opts
 
+@inline function HomSystemCache(::Type{K}) where {K}
+    MT = SparseMatrixCSC{K,Int}
+    return HomSystemCache(HomSpace{K}, MT, MT)
+end
+
+HomSystemCache{K}() where {K} = HomSystemCache(K)
+
+@inline _hom_with_cache(M::PModule{K}, N::PModule{K}, ::Nothing) where {K} = Hom(M, N)
+
+function _hom_with_cache(
+    M::PModule{K},
+    N::PModule{K},
+    cache::HomSystemCache{HomSpace{K},SparseMatrixCSC{K,Int},SparseMatrixCSC{K,Int}},
+) where {K}
+    key = _cache_key2(M, N)
+    cached = _cache_lookup(cache.hom, key)
+    cached === nothing || return cached
+    H = Hom(M, N)
+    return _cache_store_or_get!(cache.hom, key, H)
+end
+
+function _hom_with_cache(M::PModule{K}, N::PModule{K}, ::HomSystemCache) where {K}
+    error("hom_with_cache: cache scalar type mismatch for coefficient type $(K).")
+end
+
+function hom_with_cache(M::PModule{K}, N::PModule{K}; cache::Union{Nothing,HomSystemCache}=nothing) where {K}
+    return _hom_with_cache(M, N, cache)
+end
+
+@inline _precompose_cached(Hdom::HomSpace{K}, Hcod::HomSpace{K}, f::PMorphism{K}, ::Nothing) where {K} =
+    sparse(_precompose_matrix(Hdom, Hcod, f))
+
+function _precompose_cached(
+    Hdom::HomSpace{K},
+    Hcod::HomSpace{K},
+    f::PMorphism{K},
+    cache::HomSystemCache{HomSpace{K},SparseMatrixCSC{K,Int},SparseMatrixCSC{K,Int}},
+) where {K}
+    key = _cache_key3(Hdom, Hcod, f)
+    cached = _cache_lookup(cache.precompose, key)
+    cached === nothing || return cached
+    F = sparse(_precompose_matrix(Hdom, Hcod, f))
+    return _cache_store_or_get!(cache.precompose, key, F)
+end
+
+function _precompose_cached(Hdom::HomSpace{K}, Hcod::HomSpace{K}, f::PMorphism{K}, ::HomSystemCache) where {K}
+    error("precompose_matrix_cached: cache scalar type mismatch for coefficient type $(K).")
+end
+
+function precompose_matrix_cached(Hdom::HomSpace{K}, Hcod::HomSpace{K}, f::PMorphism{K}; cache::Union{Nothing,HomSystemCache}=nothing) where {K}
+    return _precompose_cached(Hdom, Hcod, f, cache)
+end
+
+@inline _postcompose_cached(Hdom::HomSpace{K}, Hcod::HomSpace{K}, g::PMorphism{K}, ::Nothing) where {K} =
+    sparse(_postcompose_matrix(Hdom, Hcod, g))
+
+function _postcompose_cached(
+    Hdom::HomSpace{K},
+    Hcod::HomSpace{K},
+    g::PMorphism{K},
+    cache::HomSystemCache{HomSpace{K},SparseMatrixCSC{K,Int},SparseMatrixCSC{K,Int}},
+) where {K}
+    key = _cache_key3(Hdom, Hcod, g)
+    cached = _cache_lookup(cache.postcompose, key)
+    cached === nothing || return cached
+    F = sparse(_postcompose_matrix(Hdom, Hcod, g))
+    return _cache_store_or_get!(cache.postcompose, key, F)
+end
+
+function _postcompose_cached(Hdom::HomSpace{K}, Hcod::HomSpace{K}, g::PMorphism{K}, ::HomSystemCache) where {K}
+    error("postcompose_matrix_cached: cache scalar type mismatch for coefficient type $(K).")
+end
+
+function postcompose_matrix_cached(Hdom::HomSpace{K}, Hcod::HomSpace{K}, g::PMorphism{K}; cache::Union{Nothing,HomSystemCache}=nothing) where {K}
+    return _postcompose_cached(Hdom, Hcod, g, cache)
+end
+
 # -----------------------------------------------------------------------------
 # Public opts-default wrappers
 # -----------------------------------------------------------------------------
 
-projective_resolution(M; opts=nothing) =
-    projective_resolution(M, _resolve_res_opts(opts))
-injective_resolution(M; opts=nothing) =
-    injective_resolution(M, _resolve_res_opts(opts))
+Hom(M, N; cache::Union{Nothing,HomSystemCache}=nothing) =
+    hom_with_cache(M, N; cache=cache)
+
+projective_resolution(M; opts=nothing, cache=nothing) =
+    projective_resolution(M, _resolve_res_opts(opts); cache=cache)
+injective_resolution(M; opts=nothing, cache=nothing) =
+    injective_resolution(M, _resolve_res_opts(opts); cache=cache)
 betti(M; opts=nothing) =
     betti(M, _resolve_res_opts(opts))
 bass(M; opts=nothing) =
     bass(M, _resolve_res_opts(opts))
 
-Ext(M, N; opts=nothing) =
-    Ext(M, N, _resolve_df_opts(opts))
-ExtInjective(M, N; opts=nothing) =
-    ExtInjective(M, N, _resolve_df_opts(opts))
-ExtSpace(M, N; opts=nothing, check::Bool=true) =
-    ExtSpace(M, N, _resolve_df_opts(opts); check=check)
-Tor(Rop, L; opts=nothing, res=nothing) =
-    Tor(Rop, L, _resolve_df_opts(opts); res=res)
+Ext(M, N; opts=nothing, cache=nothing) =
+    Ext(M, N, _resolve_df_opts(opts); cache=cache)
+ExtInjective(M, N; opts=nothing, cache=nothing) =
+    ExtInjective(M, N, _resolve_df_opts(opts); cache=cache)
+ExtSpace(M, N; opts=nothing, check::Bool=true, cache=nothing) =
+    ExtSpace(M, N, _resolve_df_opts(opts); check=check, cache=cache)
+Tor(Rop, L; opts=nothing, res=nothing, cache=nothing) =
+    Tor(Rop, L, _resolve_df_opts(opts); res=res, cache=cache)
 ExtAlgebra(M; opts=nothing) =
     ExtAlgebra(M, _resolve_df_opts(opts))
 ext_action_on_tor(A, T, x; opts=nothing) =

@@ -37,6 +37,7 @@ using JSON3
 using SparseArrays
 using Random
 
+import ..CoreModules
 using ..CoreModules: QQ, AbstractCoeffField, QQField, RealField, PrimeField,
     coeff_type, coerce, FpElem, rational_to_string, string_to_rational
 import ..FlangeZn: Face, IndFlat, IndInj, Flange, canonical_matrix
@@ -45,7 +46,8 @@ import ..FiniteFringe: AbstractPoset, FinitePoset, ProductOfChainsPoset, GridPos
 import ..ZnEncoding: SignaturePoset
 using ..FiniteFringe
 using ..Modules: PModule, clear_cover_cache!
-using ..Workflow: PointCloud, ImageNd, GraphData, EmbeddedPlanarGraph2D, GradedComplex, FiltrationSpec, GridEncodingMap
+using ..CoreModules: PointCloud, ImageNd, GraphData, EmbeddedPlanarGraph2D, GradedComplex,
+                     FiltrationSpec, GridEncodingMap
 import ..ZnEncoding
 import ..PLBackend
 
@@ -175,8 +177,8 @@ Notes
 """
 function save_flange_json(path::AbstractString, FG::Flange)
     n = FG.n
-    flats = [Dict("b" => F.b, "tau" => findall(identity, F.tau.coords)) for F in FG.flats]
-    injectives = [Dict("b" => E.b, "tau" => findall(identity, E.tau.coords)) for E in FG.injectives]
+    flats = [Dict("b" => collect(F.b), "tau" => findall(identity, F.tau.coords)) for F in FG.flats]
+    injectives = [Dict("b" => collect(E.b), "tau" => findall(identity, E.tau.coords)) for E in FG.injectives]
     phi = [[_scalar_to_json(FG.field, FG.phi[i, j]) for j in 1:length(FG.flats)]
            for i in 1:length(FG.injectives)]
     obj = Dict("kind" => "FlangeZn",
@@ -1247,10 +1249,11 @@ function load_flange_json(path::AbstractString; field::Union{Nothing,AbstractCoe
     k = length(flats)
     Phi = Matrix{K}(undef, m, k)
     for i in 1:m, j in 1:k
-        Phi[i, j] = _scalar_from_json(saved_field, obj["phi"][i][j])
+        s = _scalar_from_json(saved_field, obj["phi"][i][j])
         if target_field !== saved_field
-            Phi[i, j] = coerce(target_field, Phi[i, j])
+            s = coerce(target_field, s)
         end
+        Phi[i, j] = s
     end
     return Flange{K}(n, flats, injectives, Phi; field=target_field)
 end
@@ -1282,8 +1285,8 @@ end
             "sig_y" => [collect(Bool, s) for s in pi.sig_y],
             "sig_z" => [collect(Bool, s) for s in pi.sig_z],
             "reps" => [collect(r) for r in pi.reps],
-            "flats" => [Dict("b" => f.b, "tau" => findall(identity, f.tau.coords)) for f in pi.flats],
-            "injectives" => [Dict("b" => e.b, "tau" => findall(identity, e.tau.coords)) for e in pi.injectives],
+            "flats" => [Dict("b" => collect(f.b), "tau" => findall(identity, f.tau.coords)) for f in pi.flats],
+            "injectives" => [Dict("b" => collect(e.b), "tau" => findall(identity, e.tau.coords)) for e in pi.injectives],
         )
     elseif pi isa PLBackend.PLEncodingMapBoxes
         return Dict(
@@ -1315,10 +1318,10 @@ function _pi_from_obj(P::AbstractPoset, obj)
         return GridEncodingMap(P, coords; orientation=orientation)
     elseif kind == "ZnEncodingMap"
         n = Int(obj["n"])
-        coords = [Vector{Int}(ax) for ax in obj["coords"]]
+        coords = ntuple(i -> Vector{Int}(obj["coords"][i]), n)
         sig_y = [BitVector(s) for s in obj["sig_y"]]
         sig_z = [BitVector(s) for s in obj["sig_z"]]
-        reps = [Vector{Int}(r) for r in obj["reps"]]
+        reps = [ntuple(i -> Int(r[i]), n) for r in obj["reps"]]
         mkface(idxs) = begin
             m = falses(n)
             for t in idxs
@@ -1337,10 +1340,10 @@ function _pi_from_obj(P::AbstractPoset, obj)
         return ZnEncoding.ZnEncodingMap(n, coords, sig_y, sig_z, reps, flats, injectives, sig_to_region)
     elseif kind == "PLEncodingMapBoxes"
         n = Int(obj["n"])
-        coords = [Vector{Float64}(ax) for ax in obj["coords"]]
+        coords = ntuple(i -> Vector{Float64}(obj["coords"][i]), n)
         sig_y = [BitVector(s) for s in obj["sig_y"]]
         sig_z = [BitVector(s) for s in obj["sig_z"]]
-        reps = [Vector{Float64}(r) for r in obj["reps"]]
+        reps = [ntuple(i -> Float64(r[i]), n) for r in obj["reps"]]
         Ups = [PLBackend.BoxUpset(Vector{Float64}(u)) for u in obj["Ups"]]
         Downs = [PLBackend.BoxDownset(Vector{Float64}(d)) for d in obj["Downs"]]
         cell_shape = Vector{Int}(obj["cell_shape"])
@@ -1358,7 +1361,7 @@ function _pi_from_obj(P::AbstractPoset, obj)
             zwords = PLBackend._pack_bitvector_words(sig_z[t], Val(MZ))
             sig_to_region[PLBackend.SigKey{MY,MZ}(ywords, zwords)] = t
         end
-        return PLBackend.PLEncodingMapBoxes{MY,MZ}(n, coords, sig_y, sig_z, reps, Ups, Downs,
+        return PLBackend.PLEncodingMapBoxes{n,MY,MZ}(n, coords, sig_y, sig_z, reps, Ups, Downs,
                                                   sig_to_region, cell_shape, cell_strides, cell_to_region,
                                                   coord_flags, axis_is_uniform, axis_step, axis_min)
     end
@@ -1537,7 +1540,7 @@ function parse_flange_json(json_src; field::Union{Nothing,AbstractCoeffField}=no
         return Face(n, bits)
     end
 
-    flats = IndFlat[]
+    flats = IndFlat{n}[]
     for f in obj["flats"]
         b = Vector{Int}(f["b"])
         tau = _mkface(n, f["tau"])
@@ -1545,7 +1548,7 @@ function parse_flange_json(json_src; field::Union{Nothing,AbstractCoeffField}=no
         push!(flats, IndFlat(tau, b; id=id))
     end
 
-    injectives = IndInj[]
+    injectives = IndInj{n}[]
     for e in obj["injectives"]
         b = Vector{Int}(e["b"])
         tau = _mkface(n, e["tau"])

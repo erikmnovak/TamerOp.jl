@@ -426,9 +426,13 @@ end
 @testset "Poset cache lifecycle" begin
     P = chain_poset(4)
     @test isdefined(P, :cache)
+    @test P.cache.cover_edges === nothing
     @test P.cache.cover === nothing
     @test P.cache.upsets === nothing
     @test P.cache.downsets === nothing
+
+    Ce = FF.cover_edges(P)
+    @test P.cache.cover_edges === Ce
 
     cc = MD.cover_cache(P)
     @test P.cache.cover === cc
@@ -438,10 +442,11 @@ end
     d1 = FF.downset_indices(P, 1)
     @test P.cache.upsets !== nothing
     @test P.cache.downsets !== nothing
-    @test u1 == P.cache.upsets[1]
-    @test d1 == P.cache.downsets[1]
+    @test collect(u1) == P.cache.upsets[1]
+    @test collect(d1) == P.cache.downsets[1]
 
     MD.clear_cover_cache!(P)
+    @test P.cache.cover_edges === nothing
     @test P.cache.cover === nothing
     @test P.cache.upsets === nothing
     @test P.cache.downsets === nothing

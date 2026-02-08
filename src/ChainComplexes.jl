@@ -172,37 +172,56 @@ function solve_particular(A::SparseMatrixCSC{K,Int}, B::AbstractMatrix{K}) where
     end
     return X
 end
-
-
-
-@inline _rank_of(A::AbstractMatrix) = FieldLinAlg.rank(_field_of(A), A)
-
 # Extend columns of C (k x r) to an invertible (k x k) matrix by adding standard basis vectors.
+# This uses one elimination pass on transpose(Cbasis) to identify row pivots and then
+# selects complement standard basis vectors from nonpivot rows.
 function extend_to_basis(C::Matrix{K}) where {K}
     k = size(C, 1)
-    r = size(C, 2)
     if k == 0
         return zeros(K, 0, 0)
     end
+    field = field_from_eltype(K)
+
+    Cbasis = if size(C, 2) == 0
+        zeros(K, k, 0)
+    else
+        FieldLinAlg.colspace(field, C)
+    end
+    r = size(Cbasis, 2)
+
+    if r == k
+        return Cbasis
+    end
     if r == 0
-        B = zeros(K, k, k)
-        for i in 1:k
-            B[i, i] = one(K)
+        I = zeros(K, k, k)
+        @inbounds for i in 1:k
+            I[i, i] = one(K)
         end
-        return B
+        return I
     end
 
-    B = Matrix{K}(C)
-    for i in 1:k
-        e = zeros(K, k, 1)
-        e[i, 1] = one(K)
-        if _rank_of(hcat(B, e)) > size(B, 2)
-            B = hcat(B, e)
-        end
-        if size(B, 2) == k
-            break
+    # Pivot columns in transpose(Cbasis) correspond to a maximal set of rows of Cbasis
+    # whose restriction gives an invertible r x r minor.
+    _, pivs = FieldLinAlg.rref(field, Matrix(transpose(Cbasis)); pivots=true)
+    pivot_mask = falses(k)
+    @inbounds for p in pivs
+        if 1 <= p <= k
+            pivot_mask[p] = true
         end
     end
+
+    comp_rows = Int[]
+    @inbounds for i in 1:k
+        if !pivot_mask[i]
+            push!(comp_rows, i)
+        end
+    end
+
+    Q = zeros(K, k, length(comp_rows))
+    @inbounds for (j, irow) in enumerate(comp_rows)
+        Q[irow, j] = one(K)
+    end
+    B = hcat(Cbasis, Q)
 
     if size(B, 2) != k
         error("extend_to_basis: could not extend to a full basis")
@@ -219,7 +238,8 @@ struct CochainComplex{K}
     tmax::Int
     dims::Vector{Int}                         # dims[t - tmin + 1] = dim C^t
     d::Vector{SparseMatrixCSC{K, Int}}        # d[idx] : C^t -> C^{t+1}
-    labels::Vector{Vector{Any}}               # optional, per degree
+    labels::Vector{Vector{Int}}               # typed compute labels, per degree
+    annotations::Union{Nothing,Vector{Vector{Any}}}  # optional heterogeneous boundary metadata
 end
 
 # Max cohomological degree stored in a cochain complex.
@@ -241,9 +261,9 @@ Construct a bounded cochain complex C with degrees tmin..tmax.
 - d[i] is d^{tmin + i - 1} : C^{tmin + i - 1} -> C^{tmin + i}.
 
 `labels` is optional per-degree metadata: a vector of length length(dims),
-where labels[i] is a vector of basis labels for C^{tmin + i - 1}. Labels are not
-used by the homological algebra routines, but are useful for debugging and for
-human-readable output.
+where labels[i] is a vector of basis labels for C^{tmin + i - 1}. Core compute
+paths keep typed integer labels; heterogeneous user metadata is preserved in
+`annotations` and stays out of hot loops.
 
 If labels is omitted, each degree stores an empty label list.
 """
@@ -269,21 +289,43 @@ function CochainComplex{K}(tmin::Int,
         end
     end
 
-    labs = Vector{Vector{Any}}(undef, length(dims))
+    labs = Vector{Vector{Int}}(undef, length(dims))
+    anns = nothing
     if labels === nothing
         for i in 1:length(dims)
-            labs[i] = Any[]
+            labs[i] = Int[]
         end
     else
         if length(labels) != length(dims)
             error("CochainComplex: labels must have the same length as dims.")
         end
+        # Fast typed boundary: integer labels remain in the compute path.
+        all_int = true
         for i in 1:length(dims)
-            labs[i] = Vector{Any}(labels[i])
+            li = labels[i]
+            for x in li
+                if !(x isa Int)
+                    all_int = false
+                    break
+                end
+            end
+            all_int || break
+        end
+        if all_int
+            for i in 1:length(dims)
+                labs[i] = Int.(labels[i])
+            end
+        else
+            anns = Vector{Vector{Any}}(undef, length(dims))
+            for i in 1:length(dims)
+                anns[i] = Vector{Any}(labels[i])
+                # Keep compute-time metadata concrete and dimension-aligned.
+                labs[i] = collect(1:dims[i])
+            end
         end
     end
 
-    return CochainComplex{K}(tmin, tmax, dims, d, labs)
+    return CochainComplex{K}(tmin, tmax, dims, d, labs, anns)
 end
 
 
@@ -653,7 +695,7 @@ end
 
 function _labels_at(C::CochainComplex, t::Int)
     if t < C.tmin || t > C.tmax
-        return Any[]
+        return Int[]
     end
     return C.labels[t - C.tmin + 1]
 end
@@ -681,7 +723,7 @@ function extend_range(C::CochainComplex{K}, tmin::Int, tmax::Int) where {K}
     for t in tmin:(tmax-1)
         push!(d_new, _diff_at(C, t))
     end
-    labels_new = [ Vector{Any}(_labels_at(C, t)) for t in tmin:tmax ]
+    labels_new = [ Vector{Int}(_labels_at(C, t)) for t in tmin:tmax ]
     return CochainComplex{K}(tmin, tmax, dims_new, d_new; labels=labels_new)
 end
 
@@ -698,7 +740,7 @@ function shift(C::CochainComplex{K}, k::Int) where {K}
         end
         push!(d, dt)
     end
-    labels = [ Vector{Any}(_labels_at(C, t+k)) for t in tmin:tmax ]
+    labels = [ Vector{Int}(_labels_at(C, t+k)) for t in tmin:tmax ]
     return CochainComplex{K}(tmin, tmax, dims, d; labels=labels)
 end
 
@@ -793,13 +835,13 @@ function mapping_cone(f::CochainMap{K}) where {K}
     tmax = max(D.tmax, C.tmax - 1)
 
     dims = Int[]
-    labels = Vector{Vector{Any}}()
+    labels = Vector{Vector{Int}}()
     for t in tmin:tmax
         dimD = _dim_at(D, t)
         dimC1 = _dim_at(C, t+1)
         push!(dims, dimD + dimC1)
 
-        labs = Any[]
+        labs = Int[]
         append!(labs, _labels_at(D, t))
         append!(labs, _labels_at(C, t+1))
         push!(labels, labs)
@@ -1328,12 +1370,12 @@ end
 Base.size(P::SpectralTermsPage) = size(P.terms)
 Base.getindex(P::SpectralTermsPage, i::Int, j::Int) = P.terms[i, j]
 
-function Base.getindex(P::SpectralTermsPage, ab::Tuple{Int,Int})
+function Base.getindex(P::SpectralTermsPage{K}, ab::Tuple{Int,Int}) where {K}
     ss = P.ss
     a, b = ab
     if a < ss.DC.amin || a > ss.DC.amax || b < ss.DC.bmin || b > ss.DC.bmax
         # Outside the defined rectangle, terms are zero.
-        return _ss_zero_subquotient(0)
+        return _ss_zero_subquotient(K, 0)
     end
     return P.terms[a - ss.DC.amin + 1, b - ss.DC.bmin + 1]
 end
@@ -2148,7 +2190,7 @@ end
 # -----------------------------------------------------------------------------
 
 # Internal helper: a canonical "zero" SubquotientData with a prescribed ambient dimension.
-function _ss_zero_subquotient(ambient_dim::Int)
+function _ss_zero_subquotient(::Type{K}, ambient_dim::Int) where {K}
     Z0 = zeros(K, ambient_dim, 0)
     return SubquotientData{K}(ambient_dim, 0, 0, 0,
                               Z0, Z0, zeros(K, 0, 0), zeros(K, 0, 0),
@@ -2171,12 +2213,12 @@ Notes:
 """
 function filtration_subquotient(ss::SpectralSequence{K}, p::Int, t::Int) where {K}
     if t < ss.Tot.tmin || t > ss.Tot.tmax
-        return _ss_zero_subquotient(0)
+        return _ss_zero_subquotient(K, 0)
     end
     tidx = t - ss.Tot.tmin + 1
     dimH = ss.Htot_dims[tidx]
     if dimH == 0
-        return _ss_zero_subquotient(0)
+        return _ss_zero_subquotient(K, 0)
     end
 
     a, b = if ss.first == :vertical
@@ -2186,7 +2228,7 @@ function filtration_subquotient(ss::SpectralSequence{K}, p::Int, t::Int) where {
     end
 
     if a < ss.DC.amin || a > ss.DC.amax || b < ss.DC.bmin || b > ss.DC.bmax
-        return _ss_zero_subquotient(dimH)
+        return _ss_zero_subquotient(K, dimH)
     end
 
     return term(ss, :inf, (a, b))

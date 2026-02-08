@@ -52,14 +52,14 @@ include("DerivedFunctors.jl")
 include("ModuleComplexes.jl")
 include("ChangeOfPosets.jl")
 
-# 10) Invariants and summaries
+# 10) JSON IO layer (internal formats + external adapters)
+include("Serialization.jl")
+
+# 11) Invariants and summaries
 include("Invariants.jl")
 
-# 11) High-level workflow wrappers (encode/resolve/ext/tor/invariant, etc.)
+# 12) High-level workflow wrappers (encode/resolve/ext/tor/invariant, etc.)
 include("Workflow.jl")
-
-# 12) JSON IO layer (internal formats + external adapters)
-include("Serialization.jl")
 
 # 13) 2D visualization helpers
 include("Viz2D.jl")
@@ -85,7 +85,10 @@ include("Viz2D.jl")
 
 using .CoreModules: QQ,
                     EncodingOptions, ResolutionOptions, DerivedFunctorOptions, InvariantOptions,
-                    EncodingResult, ResolutionResult, InvariantResult,
+                    ResolutionCache, clear_resolution_cache!,
+                    SessionCache, EncodingCache, ModuleCache,
+                    clear_session_cache!, clear_encoding_cache!, clear_module_cache!,
+                    EncodingResult, ResolutionResult, InvariantResult, unwrap,
                     change_field, encode_from_data, ingest,
                     axes_from_encoding,
                     dimension,
@@ -141,11 +144,17 @@ using .Serialization: save_flange_json, load_flange_json,
                       load_pmodule_json,
                       load_ripser_lower_distance_streaming
 
-using .Workflow: PointCloud, ImageNd, GraphData, EmbeddedPlanarGraph2D, GradedComplex,
-                 FiltrationSpec, GridEncodingMap, poset_from_axes, grid_index
+using .CoreModules: PointCloud, ImageNd, GraphData, EmbeddedPlanarGraph2D, GradedComplex,
+                    FiltrationSpec, GridEncodingMap, grid_index
+using .Workflow: poset_from_axes, fringe_presentation, flange_presentation,
+    encode, coarsen, resolve, hom, ext, tor, ext_algebra, invariant, invariants,
+    rhom, derived_tensor, hyperext, hypertor,
+    rank_invariant, restricted_hilbert, euler_surface, ecc,
+    slice_barcode, slice_barcodes, matching_distance,
+    mp_landscape, mpp_decomposition, mpp_image
 
 # Tables are often the default thing users want to see for resolutions.
-using .DerivedFunctors: betti_table, bass_table
+using .DerivedFunctors: betti_table, bass_table, HomSystemCache, clear_hom_system_cache!
 
 using .Modules: PModule, PMorphism, ModuleOptions
 
@@ -179,8 +188,12 @@ export
        PModule, PMorphism, ModuleOptions, ModuleCochainComplex,
 
        # Results and options
-       EncodingResult, ResolutionResult, InvariantResult,
+       EncodingResult, ResolutionResult, InvariantResult, unwrap,
        EncodingOptions, ResolutionOptions, DerivedFunctorOptions, InvariantOptions,
+       ResolutionCache, clear_resolution_cache!,
+       SessionCache, EncodingCache, ModuleCache,
+       clear_session_cache!, clear_encoding_cache!, clear_module_cache!,
+       HomSystemCache, clear_hom_system_cache!,
 
        # Narrative workflow entrypoints
        encode, coarsen, resolve, hom, ext, tor, ext_algebra, invariant, invariants,

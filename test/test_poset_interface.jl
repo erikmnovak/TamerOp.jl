@@ -41,8 +41,8 @@ end
 @testset "upset_iter/downset_iter parity" begin
     P = chain_poset(5)
     for i in 1:FF.nvertices(P)
-        @test collect(FF.upset_iter(P, i)) == FF.upset_indices(P, i)
-        @test collect(FF.downset_iter(P, i)) == FF.downset_indices(P, i)
+        @test collect(FF.upset_iter(P, i)) == collect(FF.upset_indices(P, i))
+        @test collect(FF.downset_iter(P, i)) == collect(FF.downset_indices(P, i))
     end
 end
 
@@ -184,8 +184,11 @@ end
     P2 = FF.GridPoset((collect(1:2), collect(1:2)))
     Q1 = FF.ProductPoset(P, P2)
     Q2 = FF.ProductPoset(P, P2)
-    prod1 = PM.ChangeOfPosets.product_poset(Q1, Q2; use_cache=true)
-    prod2 = PM.ChangeOfPosets.product_poset(Q1, Q2; use_cache=true)
+    sc = CM.SessionCache()
+    prod1 = PM.ChangeOfPosets.product_poset(Q1, Q2; use_cache=true, session_cache=sc)
+    prod2 = PM.ChangeOfPosets.product_poset(Q1, Q2; use_cache=true, session_cache=sc)
     @test prod1.P === prod2.P
+    _ = FF.cover_edges(prod1.P)
+    @test prod1.P.cache.cover_edges !== nothing
 end
 end # with_fields

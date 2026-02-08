@@ -226,7 +226,7 @@ function _coords_from_generators(Ups::Vector{BoxUpset}, Downs::Vector{BoxDownset
     elseif !isempty(Downs)
         n = length(Downs[1].u)
     else
-        return Vector{Vector{Float64}}()
+        return ()
     end
 
     coords = [Float64[] for _ in 1:n]
@@ -254,17 +254,16 @@ function _coords_from_generators(Ups::Vector{BoxUpset}, Downs::Vector{BoxDownset
         unique!(coords[i])
     end
 
-    return coords
+    return ntuple(i -> coords[i], n)
 end
 
 ##############################
 # Grid helpers for O(1) locate
 ##############################
 
-@inline function _cell_shape(coords::Vector{Vector{Float64}})
-    n = length(coords)
-    shape = Vector{Int}(undef, n)
-    @inbounds for i in 1:n
+@inline function _cell_shape(coords::NTuple{N,Vector{Float64}}) where {N}
+    shape = Vector{Int}(undef, N)
+    @inbounds for i in 1:N
         shape[i] = length(coords[i]) + 1
     end
     return shape
@@ -280,13 +279,12 @@ end
     return strides
 end
 
-function _axis_meta(coords::Vector{Vector{Float64}})
-    n = length(coords)
-    axis_is_uniform = BitVector(undef, n)
-    axis_step = Vector{Float64}(undef, n)
-    axis_min = Vector{Float64}(undef, n)
+function _axis_meta(coords::NTuple{N,Vector{Float64}}) where {N}
+    axis_is_uniform = BitVector(undef, N)
+    axis_step = Vector{Float64}(undef, N)
+    axis_min = Vector{Float64}(undef, N)
 
-    @inbounds for i in 1:n
+    @inbounds for i in 1:N
         ci = coords[i]
         k = length(ci)
         if k >= 2
@@ -315,25 +313,24 @@ end
 # For each axis i and each split coordinate coords[i][j], store bit flags:
 #   0x01 => this coordinate appears as an upset lower bound ell[i]
 #   0x02 => this coordinate appears as a downset upper bound u[i]
-function _coord_flags(coords::Vector{Vector{Float64}}, Ups::Vector{BoxUpset}, Downs::Vector{BoxDownset})
-    n = length(coords)
-    flags = [zeros(UInt8, length(coords[i])) for i in 1:n]
-    idx = [Dict{Float64,Int}() for _ in 1:n]
+function _coord_flags(coords::NTuple{N,Vector{Float64}}, Ups::Vector{BoxUpset}, Downs::Vector{BoxDownset}) where {N}
+    flags = [zeros(UInt8, length(coords[i])) for i in 1:N]
+    idx = [Dict{Float64,Int}() for _ in 1:N]
 
-    @inbounds for i in 1:n
+    @inbounds for i in 1:N
         for (j, c) in pairs(coords[i])
             idx[i][c] = j
         end
     end
 
     @inbounds for U in Ups
-        for i in 1:n
+        for i in 1:N
             j = idx[i][U.ell[i]]
             flags[i][j] |= 0x01
         end
     end
     @inbounds for D in Downs
-        for i in 1:n
+        for i in 1:N
             j = idx[i][D.u[i]]
             flags[i][j] |= 0x02
         end
@@ -363,12 +360,12 @@ on split coordinates, `locate` applies a cheap correction based on whether the
 split came from an upset lower bound (>=) or a downset upper bound (<=), and
 falls back to signature lookup only in truly ambiguous "both" cases.
 """
-struct PLEncodingMapBoxes{MY,MZ} <: AbstractPLikeEncodingMap
+struct PLEncodingMapBoxes{N,MY,MZ} <: AbstractPLikeEncodingMap
     n::Int
-    coords::Vector{Vector{Float64}}
+    coords::NTuple{N,Vector{Float64}}
     sig_y::Vector{BitVector}
     sig_z::Vector{BitVector}
-    reps::Vector{Vector{Float64}}
+    reps::Vector{NTuple{N,Float64}}
     Ups::Vector{BoxUpset}
     Downs::Vector{BoxDownset}
 
@@ -412,7 +409,7 @@ function _signature(x::Vector{Float64}, Ups::Vector{BoxUpset}, Downs::Vector{Box
 end
 
 # Return the axis coordinate lists for this encoding.
-axes_from_encoding(pi::PLEncodingMapBoxes) = ntuple(i -> pi.coords[i], pi.n)
+axes_from_encoding(pi::PLEncodingMapBoxes) = pi.coords
 
 # --- Fast locate -------------------------------------------------------------
 
@@ -467,7 +464,7 @@ end
     return lin, ambiguous
 end
 
-@inline function _sigkey(pi::PLEncodingMapBoxes{MY,MZ}, x) where {MY,MZ}
+@inline function _sigkey(pi::PLEncodingMapBoxes{N,MY,MZ}, x) where {N,MY,MZ}
     ywords = _pack_signature_words(pi.Ups, x, pi.n, Val(MY))
     zwords = _pack_signature_words(pi.Downs, x, pi.n, Val(MZ))
     return SigKey{MY,MZ}(ywords, zwords)
@@ -495,7 +492,7 @@ compute the packed signature key and fall back to `pi.sig_to_region`.
 Returns `0` only in the ambiguous-boundary fallback when the signature does not
 match any full-dimensional region (a measure-zero situation).
 """
-function locate(pi::PLEncodingMapBoxes{MY,MZ}, x::AbstractVector{<:Real}) where {MY,MZ}
+function locate(pi::PLEncodingMapBoxes{N,MY,MZ}, x::AbstractVector{<:Real}) where {N,MY,MZ}
     length(x) == pi.n || error("locate: expected x of length $(pi.n), got $(length(x))")
     isempty(pi.cell_to_region) && error("locate: missing cell_to_region table; construct via encode_fringe_boxes")
 
@@ -509,7 +506,7 @@ end
 # Allocation-free tuple dispatch for point location.
 # Without this, CoreModules.locate(::AbstractPLikeEncodingMap, ::NTuple) falls back
 # to collect(x), which allocates (and breaks the @allocated == 0 tests).
-function locate(pi::PLEncodingMapBoxes, x::NTuple{N,T}) where {N,T<:Real}
+function locate(pi::PLEncodingMapBoxes{N,MY,MZ}, x::NTuple{N,T}) where {N,MY,MZ,T<:Real}
     N == pi.n || error("locate: expected x of length $(pi.n), got $N")
     isempty(pi.cell_to_region) && error("locate: missing cell_to_region table; construct via encode_fringe_boxes")
 
@@ -542,17 +539,6 @@ function locate(pi::PLEncodingMapBoxes, x::NTuple{N,T}) where {N,T<:Real}
     end
 
     # Only for measure-zero ambiguous boundary points:
-    return get(pi.sig_to_region, _sigkey(pi, x), 0)
-end
-
-function locate(pi::PLEncodingMapBoxes{MY,MZ}, x::NTuple{N,T}) where {MY,MZ,N,T<:Real}
-    N == pi.n || error("locate: expected x of length $(pi.n), got $N")
-    isempty(pi.cell_to_region) && error("locate: missing cell_to_region table; construct via encode_fringe_boxes")
-
-    lin, ambiguous = _cell_index_and_ambiguous(pi, x)
-    if !ambiguous
-        return pi.cell_to_region[lin]
-    end
     return get(pi.sig_to_region, _sigkey(pi, x), 0)
 end
 
@@ -833,7 +819,7 @@ end
 
 # Representative point for a cell (for signature evaluation).
 # `idx0` is 0-based cell indices: each idx0[j] in 0:length(coords[j]).
-function _cell_rep_axis(coords::Vector{Vector{Float64}}, idx0::NTuple{N,Int}) where {N}
+function _cell_rep_axis(coords::NTuple{N,Vector{Float64}}, idx0::NTuple{N,Int}) where {N}
     x = Vector{Float64}(undef, N)
     @inbounds for j in 1:N
         s = coords[j]
@@ -966,21 +952,19 @@ function region_chebyshev_ball(pi::PLEncodingMapBoxes, r::Integer; box=nothing,
 
     # If the intersection is empty, return a clamped representative and radius 0.
     if isempty(lows)
-        c = copy(pi.reps[r])
-        @inbounds for j in 1:pi.n
-            c[j] = clamp(c[j], a_box[j], b_box[j])
-        end
+        rep = pi.reps[r]
+        c = ntuple(j -> clamp(rep[j], a_box[j], b_box[j]), pi.n)
         return (center=c, radius=0.0)
     end
 
     best_r = -Inf
-    best_c = copy(pi.reps[r])
+    best_c = pi.reps[r]
 
     @inbounds for k in 1:length(lows)
         lo = lows[k]
         hi = highs[k]
         # candidate center: midpoint of the (clipped) cell
-        c = (lo .+ hi) ./ 2.0
+        c = ntuple(j -> (lo[j] + hi[j]) / 2.0, pi.n)
         # candidate radius: half the minimum side length
         minlen = Inf
         for j in 1:pi.n
@@ -1926,7 +1910,7 @@ function encode_fringe_boxes(Ups::Vector{BoxUpset},
 
     sig_y = BitVector[]
     sig_z = BitVector[]
-    reps = Vector{Vector{Float64}}()
+    reps = Vector{NTuple{n,Float64}}()
 
     cell_to_region = Vector{Int}(undef, n_cells)
     LI = LinearIndices(shapeT)
@@ -1957,7 +1941,7 @@ function encode_fringe_boxes(Ups::Vector{BoxUpset},
             new_id = length(sig_y) + 1
             push!(sig_y, _bitvector_from_words(ywords, m))
             push!(sig_z, _bitvector_from_words(zwords, r))
-            push!(reps, copy(x))
+            push!(reps, ntuple(i -> x[i], n))
             return new_id
         end
 
@@ -1976,7 +1960,7 @@ function encode_fringe_boxes(Ups::Vector{BoxUpset},
     Phi = _monomialize_phi(Phi_in, Uhat, Dhat)
     H = FiniteFringe.FringeModule{QQ}(P, Uhat, Dhat, Phi)
 
-    pi = PLEncodingMapBoxes{MY,MZ}(n,
+    pi = PLEncodingMapBoxes{n,MY,MZ}(n,
                                   coords,
                                   sig_y, sig_z,
                                   reps,

@@ -23,25 +23,22 @@ using ..FlangeZn: Flange, IndFlat, IndInj, in_flat, in_inj
 # Build the finite grid poset on [a,b] subset Z^n, ordered coordinatewise.
 # Returns (Q, coords) where coords[i] is an NTuple{n,Int} in mixed-radix order.
 # Uses a structured ProductOfChainsPoset to avoid materializing the transitive closure.
-function grid_poset(a::Vector{Int}, b::Vector{Int})
-    n = length(a)
-    @assert length(b) == n
-    lens = [b[i] - a[i] + 1 for i in 1:n]
-    if any(lens .<= 0)
+function grid_poset(a::NTuple{N,Int}, b::NTuple{N,Int}) where {N}
+    lens = ntuple(i -> b[i] - a[i] + 1, N)
+    if any(l -> l <= 0, lens)
         error("grid_poset: invalid box")
     end
-    sizes = ntuple(i -> lens[i], n)
-    Q = ProductOfChainsPoset(sizes)
+    Q = ProductOfChainsPoset(lens)
 
-    N = prod(lens)
-    coords = Vector{NTuple{n, Int}}(undef, N)
-    strides = Vector{Int}(undef, n)
+    total = prod(lens)
+    coords = Vector{NTuple{N, Int}}(undef, total)
+    strides = Vector{Int}(undef, N)
     strides[1] = 1
-    @inbounds for i in 2:n
+    @inbounds for i in 2:N
         strides[i] = strides[i - 1] * lens[i - 1]
     end
-    @inbounds for idx in 1:N
-        coords[idx] = ntuple(k -> a[k] + (div(idx - 1, strides[k]) % lens[k]), n)
+    @inbounds for idx in 1:total
+        coords[idx] = ntuple(k -> a[k] + (div(idx - 1, strides[k]) % lens[k]), N)
     end
     return Q, coords
 end
@@ -50,9 +47,9 @@ end
 # M_g = im(Phi_g : F_g -> E_g), and maps are induced from the E-structure maps (projections).
 #
 # This returns a PModule over the finite grid poset. It is the object you want for Ext/Tor on that layer.
-function pmodule_on_box(FG::Flange{K}; a::Vector{Int}, b::Vector{Int}) where {K}
+function pmodule_on_box(FG::Flange{K}; a::NTuple{N,Int}, b::NTuple{N,Int}) where {K,N}
     Q, coords = grid_poset(a, b)
-    N = length(coords)
+    ncoords = length(coords)
 
     r = length(FG.injectives)
     c = length(FG.flats)
@@ -63,12 +60,12 @@ function pmodule_on_box(FG::Flange{K}; a::Vector{Int}, b::Vector{Int}) where {K}
     # - active injectives (rows) in E_g
     # - active flats (cols) in F_g
     # - B_g = basis matrix for im(Phi_g) inside E_g coordinates
-    active_rows = Vector{Vector{Int}}(undef, N)
-    B = Vector{Matrix{K}}(undef, N)
-    dims = zeros(Int, N)
+    active_rows = Vector{Vector{Int}}(undef, ncoords)
+    B = Vector{Matrix{K}}(undef, ncoords)
+    dims = zeros(Int, ncoords)
 
-    @inbounds for i in 1:N
-        g = collect(coords[i])
+    @inbounds for i in 1:ncoords
+        g = coords[i]
 
         rows = Int[]
         for rr in 1:r
@@ -120,8 +117,8 @@ function pmodule_on_box(FG::Flange{K}; a::Vector{Int}, b::Vector{Int}) where {K}
         return P
     end
 
-    for u in 1:N
-        for v in 1:N
+    for u in 1:ncoords
+        for v in 1:ncoords
             if C[u, v]
                 # u < v is a cover edge in grid poset, so coordwise u <= v.
                 # Injectives are downsets: active_rows[v] subset active_rows[u].
@@ -169,7 +166,7 @@ Fields
 * `coords[i]`      : sorted unique critical integers along axis i
 * `sig_y[t]`       : y-signature of region t (BitVector, one per flat)
 * `sig_z[t]`       : z-signature of region t (BitVector, one per injective)
-* `reps[t]`        : representative lattice point for region t
+* `reps[t]`        : representative lattice point for region t (as an `NTuple`)
 * `flats`          : the global flat list used to build signatures
 * `injectives`     : the global injective list used to build signatures
 * `sig_to_region`  : dictionary mapping a signature key to its region index
@@ -177,15 +174,27 @@ Fields
 The method `locate(pi, g)` returns the region index in `1:P.n` for the point
 `g`, or `0` if the signature is not present in the dictionary.
 """
-struct ZnEncodingMap <: AbstractPLikeEncodingMap
+struct ZnEncodingMap{N} <: AbstractPLikeEncodingMap
     n::Int
-    coords::Vector{Vector{Int}}
+    coords::NTuple{N,Vector{Int}}
     sig_y::Vector{BitVector}
     sig_z::Vector{BitVector}
-    reps::Vector{Vector{Int}}
-    flats::Vector{IndFlat}
-    injectives::Vector{IndInj}
+    reps::Vector{NTuple{N,Int}}
+    flats::Vector{IndFlat{N}}
+    injectives::Vector{IndInj{N}}
     sig_to_region::Dict{Tuple{Tuple,Tuple},Int}
+end
+
+function ZnEncodingMap(n::Int,
+                       coords::NTuple{N,Vector{Int}},
+                       sig_y::Vector{BitVector},
+                       sig_z::Vector{BitVector},
+                       reps::Vector{NTuple{N,Int}},
+                       flats::Vector{IndFlat{N}},
+                       injectives::Vector{IndInj{N}},
+                       sig_to_region::Dict{Tuple{Tuple,Tuple},Int}) where {N}
+    n == N || error("ZnEncodingMap: n=$n does not match reps tuple length $N")
+    return ZnEncodingMap{N}(n, coords, sig_y, sig_z, reps, flats, injectives, sig_to_region)
 end
 
 """
@@ -229,28 +238,6 @@ nvertices(P::SignaturePoset) = P.n
 leq(P::SignaturePoset, i::Int, j::Int) =
     _sig_subset(P.sig_y[i], P.sig_y[j]) && _sig_subset(P.sig_z[i], P.sig_z[j])
 
-function upset_indices(P::SignaturePoset, i::Int)
-    n = nvertices(P)
-    out = Int[]
-    @inbounds for j in 1:n
-        if leq(P, i, j)
-            push!(out, j)
-        end
-    end
-    return out
-end
-
-function downset_indices(P::SignaturePoset, i::Int)
-    n = nvertices(P)
-    out = Int[]
-    @inbounds for j in 1:n
-        if leq(P, j, i)
-            push!(out, j)
-        end
-    end
-    return out
-end
-
 # --- Core encoding-map interface ------------------------------------------------
 
 dimension(pi::ZnEncodingMap) = pi.n
@@ -291,10 +278,10 @@ end
 # ---------------------------- Internal helpers ---------------------------------
 
 "Key for identifying an indecomposable flat up to equality of the underlying upset (ignores `id`)."
-_flat_key(F::IndFlat) = (Tuple(F.b), Tuple(F.tau.coords))
+_flat_key(F::IndFlat) = (F.b, Tuple(F.tau.coords))
 
 "Key for identifying an indecomposable injective up to equality of the underlying downset (ignores `id`)."
-_inj_key(E::IndInj) = (Tuple(E.b), Tuple(E.tau.coords))
+_inj_key(E::IndInj) = (E.b, Tuple(E.tau.coords))
 
 """
 Build lookup dictionaries for the generator lists used by an encoding.
@@ -306,8 +293,8 @@ Returns:
 The keys ignore label `id` on purpose: the encoding depends only on the underlying
 (up)set/(down)set, not the symbol used to name it.
 """
-function _generator_index_dicts(flats::Vector{IndFlat},
-                                injectives::Vector{IndInj})
+function _generator_index_dicts(flats::Vector{IndFlat{N}},
+                                injectives::Vector{IndInj{N}}) where {N}
     flat_index = Dict{Tuple{Tuple,Tuple}, Int}()
     for (i, F) in enumerate(flats)
         key = _flat_key(F)
@@ -329,7 +316,7 @@ end
 
 
 "Collect the per-axis critical coordinates needed to make all signatures constant."
-function _critical_coords(flats::Vector{IndFlat}, injectives::Vector{IndInj})
+function _critical_coords(flats::Vector{IndFlat{N}}, injectives::Vector{IndInj{N}}) where {N}
     n = isempty(flats) ? (isempty(injectives) ? 0 : length(injectives[1].b)) : length(flats[1].b)
     coords = [Int[] for _ in 1:n]
 
@@ -354,34 +341,29 @@ function _critical_coords(flats::Vector{IndFlat}, injectives::Vector{IndInj})
         sort!(coords[i])
         unique!(coords[i])
     end
-    return coords
+    return ntuple(i -> coords[i], n)
 end
 
 "Representative lattice point for the product cell indexed by `idx` (0-based slab indices)."
-function _cell_rep(coords::Vector{Vector{Int}}, idx)
-    n = length(coords)
-    g = Vector{Int}(undef, n)
-    @inbounds for i in 1:n
+function _cell_rep(coords::NTuple{N,Vector{Int}}, idx::NTuple{N,Int}) where {N}
+    return ntuple(i -> begin
         ci = coords[i]
         if isempty(ci)
-            # This axis never appears in any generator inequality, so any value works.
-            g[i] = 0
-            continue
+            return 0
         end
         if idx[i] == 0
-            g[i] = ci[1] - 1
+            return ci[1] - 1
         elseif idx[i] == length(ci)
-            g[i] = ci[end]
+            return ci[end]
         else
-            g[i] = ci[idx[i]]
+            return ci[idx[i]]
         end
-    end
-    return g
+    end, N)
 end
 
 "Compute the (y,z) signature at a lattice point g."
 function _signature_at(g::AbstractVector{<:Integer},
-                       flats::Vector{IndFlat}, injectives::Vector{IndInj})
+                       flats::Vector{IndFlat{N}}, injectives::Vector{IndInj{N}}) where {N}
     y = falses(length(flats))
     z = falses(length(injectives))
     @inbounds for i in 1:length(flats)
@@ -394,7 +376,7 @@ function _signature_at(g::AbstractVector{<:Integer},
 end
 
 # Tuple overload avoids allocating `collect(g)` when the lattice point is already an NTuple.
-function _signature_at(g::NTuple{N,<:Integer}, flats::Vector{IndFlat}, injectives::Vector{IndInj}) where {N}
+function _signature_at(g::NTuple{N,<:Integer}, flats::Vector{IndFlat{N}}, injectives::Vector{IndInj{N}}) where {N}
     y = falses(length(flats))
     z = falses(length(injectives))
     @inbounds for i in eachindex(flats)
@@ -420,7 +402,7 @@ function _uptight_from_signatures(sig_y::Vector{BitVector}, sig_z::Vector{BitVec
     for k in 1:rN, i in 1:rN, j in 1:rN
         leq[i,j] = leq[i,j] || (leq[i,k] && leq[k,j])
     end
-    return FinitePoset(leq)
+    return FinitePoset(leq; check=false)
 end
 
 "Images of the chosen generator upsets/downsets on the encoded poset P."
@@ -481,7 +463,8 @@ and quotient by equal (y,z)-signatures.
 Use `fringe_from_flange(P, pi, FG)` to push a flange presentation down to a finite
 fringe presentation on `P` without rebuilding the encoding.
 """
-function encode_poset_from_flanges(FGs::AbstractVector{<:Flange}, opts::EncodingOptions;
+function encode_poset_from_flanges(FGs::Union{AbstractVector{<:Flange}, Tuple{Vararg{Flange}}},
+                                   opts::EncodingOptions;
                                    poset_kind::Symbol = :signature)
     if opts.backend != :auto && opts.backend != :zn
         error("encode_poset_from_flanges: EncodingOptions.backend must be :auto or :zn")
@@ -496,8 +479,8 @@ function encode_poset_from_flanges(FGs::AbstractVector{<:Flange}, opts::Encoding
     end
 
     # Deduplicate generators up to underlying set equality.
-    flats_all = IndFlat[]
-    injectives_all = IndInj[]
+    flats_all = IndFlat{n}[]
+    injectives_all = IndInj{n}[]
     flat_seen = Dict{Tuple{Tuple,Tuple}, Int}()
     inj_seen  = Dict{Tuple{Tuple,Tuple}, Int}()
 
@@ -520,11 +503,11 @@ function encode_poset_from_flanges(FGs::AbstractVector{<:Flange}, opts::Encoding
 
     coords = _critical_coords(flats_all, injectives_all)
 
-    axes = [0:length(coords[i]) for i in 1:n]
+    axes = ntuple(i -> 0:length(coords[i]), n)
     seen = Dict{Tuple{Tuple,Tuple},Int}()
     sig_y = BitVector[]
     sig_z = BitVector[]
-    reps  = Vector{Vector{Int}}()
+    reps  = Vector{NTuple{n,Int}}()
 
     for idx in Iterators.product(axes...)
         g = _cell_rep(coords, idx)
@@ -559,52 +542,41 @@ function encode_poset_from_flanges(FGs::AbstractVector{<:Flange}, opts::Encoding
 end
 
 # Keyword-friendly overloads (opts may be nothing).
-encode_poset_from_flanges(FGs::AbstractVector{<:Flange};
+encode_poset_from_flanges(FGs::Union{AbstractVector{<:Flange}, Tuple{Vararg{Flange}}};
                           opts::Union{EncodingOptions,Nothing}=nothing,
                           poset_kind::Symbol = :signature) =
     encode_poset_from_flanges(FGs, _resolve_encoding_opts(opts); poset_kind = poset_kind)
 
-# Tuple-friendly overload.
-function encode_poset_from_flanges(FGs::Tuple{Vararg{Flange}}, opts::EncodingOptions;
-                                   poset_kind::Symbol = :signature)
-    return encode_poset_from_flanges(collect(FGs), opts; poset_kind = poset_kind)
-end
-
-encode_poset_from_flanges(FGs::Tuple{Vararg{Flange}};
-                          opts::Union{EncodingOptions,Nothing}=nothing,
-                          poset_kind::Symbol = :signature) =
-    encode_poset_from_flanges(collect(FGs), _resolve_encoding_opts(opts); poset_kind = poset_kind)
-
 # Small-arity overloads (avoid "varargs then opts" signatures).
 function encode_poset_from_flanges(FG::Flange, opts::EncodingOptions;
                                    poset_kind::Symbol = :signature)
-    return encode_poset_from_flanges(Flange[FG], opts; poset_kind = poset_kind)
+    return encode_poset_from_flanges((FG,), opts; poset_kind = poset_kind)
 end
 
 encode_poset_from_flanges(FG::Flange;
                           opts::Union{EncodingOptions,Nothing}=nothing,
                           poset_kind::Symbol = :signature) =
-    encode_poset_from_flanges(Flange[FG], _resolve_encoding_opts(opts); poset_kind = poset_kind)
+    encode_poset_from_flanges((FG,), _resolve_encoding_opts(opts); poset_kind = poset_kind)
 
 function encode_poset_from_flanges(FG1::Flange, FG2::Flange, opts::EncodingOptions;
                                    poset_kind::Symbol = :signature)
-    return encode_poset_from_flanges(Flange[FG1, FG2], opts; poset_kind = poset_kind)
+    return encode_poset_from_flanges((FG1, FG2), opts; poset_kind = poset_kind)
 end
 
 encode_poset_from_flanges(FG1::Flange, FG2::Flange;
                           opts::Union{EncodingOptions,Nothing}=nothing,
                           poset_kind::Symbol = :signature) =
-    encode_poset_from_flanges(Flange[FG1, FG2], _resolve_encoding_opts(opts); poset_kind = poset_kind)
+    encode_poset_from_flanges((FG1, FG2), _resolve_encoding_opts(opts); poset_kind = poset_kind)
 
 function encode_poset_from_flanges(FG1::Flange, FG2::Flange, FG3::Flange, opts::EncodingOptions;
                                    poset_kind::Symbol = :signature)
-    return encode_poset_from_flanges(Flange[FG1, FG2, FG3], opts; poset_kind = poset_kind)
+    return encode_poset_from_flanges((FG1, FG2, FG3), opts; poset_kind = poset_kind)
 end
 
 encode_poset_from_flanges(FG1::Flange, FG2::Flange, FG3::Flange;
                           opts::Union{EncodingOptions,Nothing}=nothing,
                           poset_kind::Symbol = :signature) =
-    encode_poset_from_flanges(Flange[FG1, FG2, FG3], _resolve_encoding_opts(opts); poset_kind = poset_kind)
+    encode_poset_from_flanges((FG1, FG2, FG3), _resolve_encoding_opts(opts); poset_kind = poset_kind)
 
 """
     fringe_from_flange(P, pi, FG; strict=true) -> FringeModule{K}
@@ -716,7 +688,7 @@ end
 # This method must NOT accept integer vectors, otherwise it can recurse forever.
 function locate(pi::ZnEncodingMap, x::AbstractVector{<:AbstractFloat})
     length(x) == pi.n || error("locate: expected a vector of length $(pi.n), got $(length(x))")
-    g = round.(Int, x)
+    g = ntuple(i -> round(Int, x[i]), pi.n)
     return locate(pi, g)
 end
 
@@ -806,11 +778,38 @@ end
     return (L <= U) ? (U - L + 1) : BigInt(0)
 end
 
+@inline function _as_int_tuple(::Val{N}, x) where {N}
+    if x isa NTuple{N,Int}
+        return x
+    elseif x isa NTuple{N,<:Integer}
+        return ntuple(i -> Int(x[i]), N)
+    elseif x isa AbstractVector
+        length(x) == N || error("region_weights(Zn): box dimension mismatch")
+        return ntuple(i -> Int(x[i]), N)
+    else
+        v = collect(x)
+        length(v) == N || error("region_weights(Zn): box dimension mismatch")
+        return ntuple(i -> Int(v[i]), N)
+    end
+end
+
 function _box_lattice_size_big(a::Vector{Int}, b::Vector{Int})
     # Total lattice points in the box [a,b] in Z^n, as BigInt (overflow-safe).
     n = length(a)
     tot = BigInt(1)
     @inbounds for i in 1:n
+        li = BigInt(b[i]) - BigInt(a[i]) + 1
+        if li <= 0
+            return BigInt(0)
+        end
+        tot *= li
+    end
+    return tot
+end
+
+function _box_lattice_size_big(a::NTuple{N,Int}, b::NTuple{N,Int}) where {N}
+    tot = BigInt(1)
+    @inbounds for i in 1:N
         li = BigInt(b[i]) - BigInt(a[i]) + 1
         if li <= 0
             return BigInt(0)
@@ -832,8 +831,8 @@ function _choose_count_type(count_type, total_points_big::BigInt)
 end
 
 function _region_weights_cells(pi::ZnEncodingMap,
-                              a::Vector{Int},
-                              b::Vector{Int},
+                              a::AbstractVector{Int},
+                              b::AbstractVector{Int},
                               lo::Vector{Int},
                               hi::Vector{Int};
                               strict::Bool=true,
@@ -974,9 +973,134 @@ function _region_weights_cells(pi::ZnEncodingMap,
     return w
 end
 
+function _region_weights_cells(pi::ZnEncodingMap,
+                              a::NTuple{N,Int},
+                              b::NTuple{N,Int},
+                              lo::Vector{Int},
+                              hi::Vector{Int};
+                              strict::Bool=true,
+                              T::Type=Int) where {N}
+    n = pi.n
+    nregions = length(pi.sig_y)
+    w = zeros(T, nregions)
+
+    reps = Vector{Vector{Int}}(undef, n)
+    cnts = Vector{Vector{T}}(undef, n)
+    @inbounds for i in 1:n
+        ci = pi.coords[i]
+        nslabs = hi[i] - lo[i] + 1
+        reps_i = Vector{Int}(undef, nslabs)
+        cnts_i = Vector{T}(undef, nslabs)
+        k = 1
+        for s in lo[i]:hi[i]
+            reps_i[k] = _slab_rep(ci, s)
+            cnts_i[k] = _slab_count_in_interval(ci, s, a[i], b[i], T)
+            k += 1
+        end
+        reps[i] = reps_i
+        cnts[i] = cnts_i
+    end
+
+    if n == 1
+        reps1 = reps[1]; cnt1 = cnts[1]
+        zT = zero(T)
+        @inbounds for i1 in eachindex(cnt1)
+            c1 = cnt1[i1]
+            c1 == zT && continue
+            t = locate(pi, (reps1[i1],))
+            if t == 0
+                strict && error("region_weights: cell representative left encoding domain (locate==0)")
+            else
+                w[t] += c1
+            end
+        end
+        return w
+    elseif n == 2
+        reps1, reps2 = reps
+        cnt1, cnt2 = cnts
+        zT = zero(T)
+        @inbounds for i1 in eachindex(cnt1)
+            c1 = cnt1[i1]
+            c1 == zT && continue
+            for i2 in eachindex(cnt2)
+                c2 = cnt2[i2]
+                c2 == zT && continue
+                t = locate(pi, (reps1[i1], reps2[i2]))
+                if t == 0
+                    strict && error("region_weights: cell representative left encoding domain (locate==0)")
+                else
+                    w[t] += c1 * c2
+                end
+            end
+        end
+        return w
+    elseif n == 3
+        reps1, reps2, reps3 = reps
+        cnt1, cnt2, cnt3 = cnts
+        zT = zero(T)
+        @inbounds for i1 in eachindex(cnt1)
+            c1 = cnt1[i1]
+            c1 == zT && continue
+            for i2 in eachindex(cnt2)
+                c2 = cnt2[i2]
+                c2 == zT && continue
+                for i3 in eachindex(cnt3)
+                    c3 = cnt3[i3]
+                    c3 == zT && continue
+                    t = locate(pi, (reps1[i1], reps2[i2], reps3[i3]))
+                    if t == 0
+                        strict && error("region_weights: cell representative left encoding domain (locate==0)")
+                    else
+                        w[t] += c1 * c2 * c3
+                    end
+                end
+            end
+        end
+        return w
+    end
+
+    idx = ones(Int, n)
+    maxidx = [length(cnts[i]) for i in 1:n]
+    g = Vector{Int}(undef, n)
+    zT = zero(T)
+    while true
+        vol = one(T)
+        @inbounds for i in 1:n
+            c = cnts[i][idx[i]]
+            if c == zT
+                vol = zT
+                break
+            end
+            vol *= c
+            g[i] = reps[i][idx[i]]
+        end
+
+        if vol != zT
+            t = locate(pi, g)
+            if t == 0
+                strict && error("region_weights: cell representative left encoding domain (locate==0)")
+            else
+                w[t] += vol
+            end
+        end
+
+        k = n
+        @inbounds while k >= 1 && idx[k] == maxidx[k]
+            k -= 1
+        end
+        k == 0 && break
+        idx[k] += 1
+        @inbounds for j in (k+1):n
+            idx[j] = 1
+        end
+    end
+
+    return w
+end
+
 function _region_weights_points(pi::ZnEncodingMap,
-                               a::Vector{Int},
-                               b::Vector{Int};
+                               a::AbstractVector{Int},
+                               b::AbstractVector{Int};
                                strict::Bool=true,
                                T::Type=Int)
     # Exact enumeration of lattice points in [a,b] (only sensible for small boxes).
@@ -1051,9 +1175,86 @@ function _region_weights_points(pi::ZnEncodingMap,
     return w
 end
 
+function _region_weights_points(pi::ZnEncodingMap,
+                               a::NTuple{N,Int},
+                               b::NTuple{N,Int};
+                               strict::Bool=true,
+                               T::Type=Int) where {N}
+    n = pi.n
+    nregions = length(pi.sig_y)
+    w = zeros(T, nregions)
+    oneT = one(T)
+
+    if n == 1
+        @inbounds for x1 in a[1]:b[1]
+            t = locate(pi, (x1,))
+            if t == 0
+                strict && error("region_weights: point left encoding domain (locate==0)")
+                continue
+            end
+            w[t] += oneT
+        end
+        return w
+    elseif n == 2
+        @inbounds for x1 in a[1]:b[1]
+            for x2 in a[2]:b[2]
+                t = locate(pi, (x1, x2))
+                if t == 0
+                    strict && error("region_weights: point left encoding domain (locate==0)")
+                    continue
+                end
+                w[t] += oneT
+            end
+        end
+        return w
+    elseif n == 3
+        @inbounds for x1 in a[1]:b[1]
+            for x2 in a[2]:b[2]
+                for x3 in a[3]:b[3]
+                    t = locate(pi, (x1, x2, x3))
+                    if t == 0
+                        strict && error("region_weights: point left encoding domain (locate==0)")
+                        continue
+                    end
+                    w[t] += oneT
+                end
+            end
+        end
+        return w
+    end
+
+    g = Vector{Int}(undef, n)
+    @inbounds for i in 1:n
+        g[i] = a[i]
+    end
+    while true
+        t = locate(pi, g)
+        if t == 0
+            strict && error("region_weights: point left encoding domain (locate==0)")
+        else
+            w[t] += oneT
+        end
+
+        k = n
+        @inbounds while k >= 1
+            if g[k] < b[k]
+                g[k] += 1
+                for j in (k+1):n
+                    g[j] = a[j]
+                end
+                break
+            end
+            k -= 1
+        end
+        k == 0 && break
+    end
+
+    return w
+end
+
 function _region_weights_sample(pi::ZnEncodingMap,
-                               a::Vector{Int},
-                               b::Vector{Int};
+                               a::AbstractVector{Int},
+                               b::AbstractVector{Int};
                                strict::Bool=true,
                                nsamples::Integer=50_000,
                                rng::Random.AbstractRNG=Random.default_rng())
@@ -1088,6 +1289,43 @@ function _region_weights_sample(pi::ZnEncodingMap,
     weights = total_points .* p
 
     # Per-bin standard error of a Bernoulli proportion (good scale estimate).
+    stderr = total_points .* sqrt.(p .* (1 .- p) ./ ns)
+
+    return weights, stderr, counts, total_points_big
+end
+
+function _region_weights_sample(pi::ZnEncodingMap,
+                               a::NTuple{N,Int},
+                               b::NTuple{N,Int};
+                               strict::Bool=true,
+                               nsamples::Integer=50_000,
+                               rng::Random.AbstractRNG=Random.default_rng()) where {N}
+    n = pi.n
+    nregions = length(pi.sig_y)
+    total_points_big = _box_lattice_size_big(a, b)
+    total_points = Float64(total_points_big)
+
+    ns = Int(nsamples)
+    ns > 0 || error("region_weights: nsamples must be positive")
+
+    counts = zeros(Int, nregions)
+    ranges = ntuple(i -> a[i]:b[i], n)
+    g = Vector{Int}(undef, n)
+
+    @inbounds for s in 1:ns
+        for i in 1:n
+            g[i] = rand(rng, ranges[i])
+        end
+        t = locate(pi, g)
+        if t == 0
+            strict && error("region_weights: sampled point left encoding domain (locate==0)")
+            continue
+        end
+        counts[t] += 1
+    end
+
+    p = counts ./ ns
+    weights = total_points .* p
     stderr = total_points .* sqrt.(p .* (1 .- p) ./ ns)
 
     return weights, stderr, counts, total_points_big
@@ -1134,7 +1372,7 @@ Keyword arguments
   includes `stderr`.
 """
 function region_weights(
-    pi::ZnEncodingMap;
+    pi::ZnEncodingMap{N};
     box=nothing,
     method::Symbol=:auto,
     count_type=:auto,
@@ -1145,7 +1383,7 @@ function region_weights(
     strict::Bool=true,
     return_info::Bool=false,
     alpha::Real=0.05,
-)
+) where {N}
     nregions = length(pi.sig_y)
 
     # No box: return uniform weights (useful when downstream code does not
@@ -1171,12 +1409,8 @@ function region_weights(
 
     a_in, b_in = box
 
-    # Coerce endpoints to Vector{Int} for downstream helpers.
-    a = a_in isa Vector{Int} ? a_in : collect(Int, a_in)
-    b = b_in isa Vector{Int} ? b_in : collect(Int, b_in)
-
-    length(a) == pi.n || error("region_weights(Zn): box dimension mismatch")
-    length(b) == pi.n || error("region_weights(Zn): box dimension mismatch")
+    a = _as_int_tuple(Val(N), a_in)
+    b = _as_int_tuple(Val(N), b_in)
 
     @inbounds for i in 1:pi.n
         a[i] <= b[i] || error("region_weights(Zn): invalid box with b < a")
@@ -1506,7 +1740,7 @@ function encode_from_flange(FG::Flange{K}, opts::EncodingOptions;
     if opts.backend != :auto && opts.backend != :zn
         error("encode_from_flange: EncodingOptions.backend must be :auto or :zn")
     end
-    P, Hs, pi = encode_from_flanges(Flange{K}[FG], opts; poset_kind = poset_kind)
+    P, Hs, pi = encode_from_flanges((FG,), opts; poset_kind = poset_kind)
     return P, Hs[1], pi
 end
 
@@ -1525,7 +1759,7 @@ function encode_from_flange(
     if opts.backend != :auto && opts.backend != :zn
         error("encode_from_flange: EncodingOptions.backend must be :auto or :zn")
     end
-    P2, Hs, pi = encode_from_flanges(P, Flange{K}[FG], opts;
+    P2, Hs, pi = encode_from_flanges(P, (FG,), opts;
                                      check_poset = check_poset, poset_kind = poset_kind)
     return P2, Hs[1], pi
 end
@@ -1558,7 +1792,8 @@ Returns
 - `Hs` : a vector of `FiniteFringe.FringeModule{K}`, one per input flange
 - `pi` : classifier `pi : Z^n -> P` (as `ZnEncodingMap`)
 """
-function encode_from_flanges(FGs::AbstractVector{<:Flange{K}}, opts::EncodingOptions;
+function encode_from_flanges(FGs::Union{AbstractVector{<:Flange{K}}, Tuple{Vararg{Flange{K}}}},
+                             opts::EncodingOptions;
                              poset_kind::Symbol = :signature) where {K}
     if opts.backend != :auto && opts.backend != :zn
         error("encode_from_flanges: EncodingOptions.backend must be :auto or :zn")
@@ -1572,7 +1807,7 @@ function encode_from_flanges(FGs::AbstractVector{<:Flange{K}}, opts::EncodingOpt
     return P, Hs, pi
 end
 
-encode_from_flanges(FGs::AbstractVector{<:Flange{K}};
+encode_from_flanges(FGs::Union{AbstractVector{<:Flange{K}}, Tuple{Vararg{Flange{K}}}};
                     opts::Union{EncodingOptions,Nothing}=nothing,
                     poset_kind::Symbol = :signature) where {K} =
     encode_from_flanges(FGs, _resolve_encoding_opts(opts); poset_kind = poset_kind)
@@ -1586,7 +1821,7 @@ verifies that `P` has the same order as the internally constructed poset.
 """
 function encode_from_flanges(
     P::AbstractPoset,
-    FGs::AbstractVector{<:Flange{K}},
+    FGs::Union{AbstractVector{<:Flange{K}}, Tuple{Vararg{Flange{K}}}},
     opts::EncodingOptions;
     check_poset::Bool = true,
     poset_kind::Symbol = :signature,
@@ -1609,7 +1844,7 @@ end
 
 function encode_from_flanges(
     P::AbstractPoset,
-    FGs::AbstractVector{<:Flange{K}};
+    FGs::Union{AbstractVector{<:Flange{K}}, Tuple{Vararg{Flange{K}}}};
     opts::Union{EncodingOptions,Nothing}=nothing,
     check_poset::Bool = true,
     poset_kind::Symbol = :signature,
@@ -1618,60 +1853,26 @@ function encode_from_flanges(
                                check_poset = check_poset, poset_kind = poset_kind)
 end
 
-# Tuple-friendly overload.
-function encode_from_flanges(FGs::Tuple{Vararg{Flange{K}}}, opts::EncodingOptions;
-                             poset_kind::Symbol = :signature) where {K}
-    return encode_from_flanges(collect(FGs), opts; poset_kind = poset_kind)
-end
-
-encode_from_flanges(FGs::Tuple{Vararg{Flange{K}}};
-                    opts::Union{EncodingOptions,Nothing}=nothing,
-                    poset_kind::Symbol = :signature) where {K} =
-    encode_from_flanges(collect(FGs), _resolve_encoding_opts(opts); poset_kind = poset_kind)
-
-function encode_from_flanges(
-    P::AbstractPoset,
-    FGs::Tuple{Vararg{Flange{K}}},
-    opts::EncodingOptions;
-    check_poset::Bool = true,
-    poset_kind::Symbol = :signature,
-) where {K}
-    return encode_from_flanges(P, collect(FGs), opts;
-                               check_poset = check_poset, poset_kind = poset_kind)
-end
-
-function encode_from_flanges(
-    P::AbstractPoset,
-    FGs::Tuple{Vararg{Flange{K}}},
-    ;
-    opts::Union{EncodingOptions,Nothing}=nothing,
-    check_poset::Bool = true,
-    poset_kind::Symbol = :signature,
-) where {K}
-    return encode_from_flanges(P, collect(FGs), _resolve_encoding_opts(opts);
-                               check_poset = check_poset, poset_kind = poset_kind)
-end
-
 # Small-arity overloads (avoid "varargs then opts" signatures).
 function encode_from_flanges(FG1::Flange{K}, FG2::Flange{K}, opts::EncodingOptions;
                              poset_kind::Symbol = :signature) where {K}
-    return encode_from_flanges(Flange{K}[FG1, FG2], opts; poset_kind = poset_kind)
+    return encode_from_flanges((FG1, FG2), opts; poset_kind = poset_kind)
 end
 
 encode_from_flanges(FG1::Flange{K}, FG2::Flange{K};
                     opts::Union{EncodingOptions,Nothing}=nothing,
                     poset_kind::Symbol = :signature) where {K} =
-    encode_from_flanges(Flange{K}[FG1, FG2], _resolve_encoding_opts(opts); poset_kind = poset_kind)
+    encode_from_flanges((FG1, FG2), _resolve_encoding_opts(opts); poset_kind = poset_kind)
 
 function encode_from_flanges(FG1::Flange{K}, FG2::Flange{K}, FG3::Flange{K}, opts::EncodingOptions;
                              poset_kind::Symbol = :signature) where {K}
-    return encode_from_flanges(Flange{K}[FG1, FG2, FG3], opts; poset_kind = poset_kind)
+    return encode_from_flanges((FG1, FG2, FG3), opts; poset_kind = poset_kind)
 end
 
 encode_from_flanges(FG1::Flange{K}, FG2::Flange{K}, FG3::Flange{K};
                     opts::Union{EncodingOptions,Nothing}=nothing,
                     poset_kind::Symbol = :signature) where {K} =
-    encode_from_flanges(Flange{K}[FG1, FG2, FG3], _resolve_encoding_opts(opts); poset_kind = poset_kind)
+    encode_from_flanges((FG1, FG2, FG3), _resolve_encoding_opts(opts); poset_kind = poset_kind)
 
 function encode_from_flanges(
     P::AbstractPoset,
@@ -1681,7 +1882,7 @@ function encode_from_flanges(
     check_poset::Bool = true,
     poset_kind::Symbol = :signature,
 ) where {K}
-    return encode_from_flanges(P, Flange{K}[FG1, FG2], opts;
+    return encode_from_flanges(P, (FG1, FG2), opts;
                                check_poset = check_poset, poset_kind = poset_kind)
 end
 
@@ -1693,7 +1894,7 @@ function encode_from_flanges(
     check_poset::Bool = true,
     poset_kind::Symbol = :signature,
 ) where {K}
-    return encode_from_flanges(P, Flange{K}[FG1, FG2], _resolve_encoding_opts(opts);
+    return encode_from_flanges(P, (FG1, FG2), _resolve_encoding_opts(opts);
                                check_poset = check_poset, poset_kind = poset_kind)
 end
 
@@ -1706,7 +1907,7 @@ function encode_from_flanges(
     check_poset::Bool = true,
     poset_kind::Symbol = :signature,
 ) where {K}
-    return encode_from_flanges(P, Flange{K}[FG1, FG2, FG3], opts;
+    return encode_from_flanges(P, (FG1, FG2, FG3), opts;
                                check_poset = check_poset, poset_kind = poset_kind)
 end
 
@@ -1719,7 +1920,7 @@ function encode_from_flanges(
     check_poset::Bool = true,
     poset_kind::Symbol = :signature,
 ) where {K}
-    return encode_from_flanges(P, Flange{K}[FG1, FG2, FG3], _resolve_encoding_opts(opts);
+    return encode_from_flanges(P, (FG1, FG2, FG3), _resolve_encoding_opts(opts);
                                check_poset = check_poset, poset_kind = poset_kind)
 end
 

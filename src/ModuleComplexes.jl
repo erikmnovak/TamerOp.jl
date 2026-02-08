@@ -61,6 +61,7 @@ using ..ChainComplexes:
 
 using ..DerivedFunctors:
     HomSpace, Hom,
+    HomSystemCache, hom_with_cache, precompose_matrix_cached, postcompose_matrix_cached,
     ProjectiveResolution, InjectiveResolution,
     injective_resolution, projective_resolution,
     lift_injective_chainmap,
@@ -68,7 +69,6 @@ using ..DerivedFunctors:
 
 # Internal Functoriality helpers live in DerivedFunctors.Functoriality.
 using ..DerivedFunctors.Functoriality:
-    _precompose_matrix, _postcompose_matrix,
     _tensor_map_on_tor_chains_from_projective_coeff,
     _lift_pmodule_map_to_projective_resolution_chainmap_coeff
 
@@ -261,6 +261,22 @@ function ModuleCochainComplex(
     return ModuleCochainComplex{K}(tmin, tmax, terms, diffs)
 end
 
+function ModuleCochainComplex(
+    terms::AbstractVector{<:PModule},
+    diffs::AbstractVector{<:PMorphism};
+    tmin::Int=0,
+    check::Bool=true,
+)
+    isempty(terms) && throw(ArgumentError("ModuleCochainComplex: terms must be nonempty"))
+    K = typeof(terms[1]).parameters[1]
+    return ModuleCochainComplex(
+        Vector{PModule{K}}(terms),
+        Vector{PMorphism{K}}(diffs);
+        tmin = tmin,
+        check = check,
+    )
+end
+
 
 
 
@@ -311,6 +327,26 @@ function ModuleCochainComplex(
     end
 
     # Delegate to the existing, fully-checked constructor.
+    return ModuleCochainComplex(
+        Ms,
+        Vector{IR.PMorphism{K}}(ds);
+        tmin = Int(tmin),
+        check = check,
+    )
+end
+
+function ModuleCochainComplex(
+    Hs::AbstractVector{<:FF.FringeModule},
+    ds::AbstractVector{<:IR.PMorphism};
+    tmin::Integer = 0,
+    check::Bool = true,
+)
+    isempty(Hs) && throw(ArgumentError("ModuleCochainComplex: Hs must be nonempty"))
+    K = eltype(Hs[1].phi)
+    Ms = Vector{IR.PModule{K}}(undef, length(Hs))
+    for i in eachindex(Hs)
+        Ms[i] = IR.pmodule_from_fringe(Hs[i])
+    end
     return ModuleCochainComplex(
         Ms,
         Vector{IR.PMorphism{K}}(ds);
@@ -404,6 +440,24 @@ function ModuleCochainMap(
     end
 
     return ModuleCochainMap{K}(C, D, tmin, tmax, comps)
+end
+
+function ModuleCochainMap(
+    C::ModuleCochainComplex{K},
+    D::ModuleCochainComplex{K},
+    comps::AbstractVector{<:PMorphism};
+    tmin=nothing,
+    tmax=nothing,
+    check::Bool=true,
+) where {K}
+    return ModuleCochainMap(
+        C,
+        D,
+        Vector{PMorphism{K}}(comps);
+        tmin = tmin,
+        tmax = tmax,
+        check = check,
+    )
 end
 
 # Identity cochain map on a module complex.
@@ -514,6 +568,24 @@ function ModuleCochainHomotopy(
     end
 
     return H
+end
+
+function ModuleCochainHomotopy(
+    f::ModuleCochainMap{K},
+    g::ModuleCochainMap{K},
+    comps::AbstractVector{<:PMorphism};
+    tmin=nothing,
+    tmax=nothing,
+    check::Bool=true,
+) where {K}
+    return ModuleCochainHomotopy(
+        f,
+        g,
+        Vector{PMorphism{K}}(comps);
+        tmin = tmin,
+        tmax = tmax,
+        check = check,
+    )
 end
 
 
@@ -761,6 +833,7 @@ function RHomComplex(
     N::PModule{K};
     maxlen::Int = 3,
     resN = nothing,
+    cache::Union{Nothing,HomSystemCache}=nothing,
     threads::Bool = (Threads.nthreads() > 1),
 ) where {K}
     Q = N.Q
@@ -785,7 +858,7 @@ function RHomComplex(
                 Cp = _term(C, p)
                 Eb = resN.Emods[q + 1]
 
-                h = Hom(Cp, Eb)
+                h = hom_with_cache(Cp, Eb; cache=cache)
                 homs[ia, ib] = h
                 dims[ia, ib] = dim(h)
             end
@@ -796,7 +869,7 @@ function RHomComplex(
             q = ib - 1
             Cp = _term(C, p)
             Eb = resN.Emods[q + 1]
-            homs[ia, ib] = Hom(Cp, Eb)
+            homs[ia, ib] = hom_with_cache(Cp, Eb; cache=cache)
             dims[ia, ib] = dim(homs[ia, ib])
         end
     end
@@ -813,7 +886,7 @@ function RHomComplex(
                     dv[ia, ib] = spzeros(K, dims[ia, ib], 0)
                 else
                     p = ia - 1
-                    dv[ia, ib] = _precompose_matrix(homs[ia, ib + 0], homs[ia + 1, ib], _diff(C, p))
+                    dv[ia, ib] = precompose_matrix_cached(homs[ia, ib], homs[ia + 1, ib], _diff(C, p); cache=cache)
                 end
             end
         end
@@ -823,7 +896,7 @@ function RHomComplex(
                 dv[ia, ib] = spzeros(K, dims[ia, ib], 0)
             else
                 p = ia - 1
-                dv[ia, ib] = _precompose_matrix(homs[ia, ib], homs[ia + 1, ib], _diff(C, p))
+                dv[ia, ib] = precompose_matrix_cached(homs[ia, ib], homs[ia + 1, ib], _diff(C, p); cache=cache)
             end
         end
     end
@@ -840,7 +913,7 @@ function RHomComplex(
                     dh[ia, ib] = spzeros(K, dims[ia, ib], 0)
                 else
                     q = ib - 1
-                    dh[ia, ib] = _postcompose_matrix(homs[ia, ib + 1], homs[ia, ib], resN.d_mor[q + 1])
+                    dh[ia, ib] = postcompose_matrix_cached(homs[ia, ib + 1], homs[ia, ib], resN.d_mor[q + 1]; cache=cache)
                 end
             end
         end
@@ -850,7 +923,7 @@ function RHomComplex(
                 dh[ia, ib] = spzeros(K, dims[ia, ib], 0)
             else
                 q = ib - 1
-                dh[ia, ib] = _postcompose_matrix(homs[ia, ib + 1], homs[ia, ib], resN.d_mor[q + 1])
+                dh[ia, ib] = postcompose_matrix_cached(homs[ia, ib + 1], homs[ia, ib], resN.d_mor[q + 1]; cache=cache)
             end
         end
     end
@@ -921,6 +994,7 @@ function rhom_map_first(
     Rdom::RHomComplex{K},
     Rcod::RHomComplex{K};
     check::Bool=true,
+    cache::Union{Nothing,HomSystemCache}=nothing,
     threads::Bool = (Threads.nthreads() > 1),
 ) where {K}
     if f.C !== Rcod.C || f.D !== Rdom.C
@@ -989,7 +1063,7 @@ function rhom_map_first(
 
                 Hdom = Rdom.homs[ai_src, bi_src]
                 Hcod = Rcod.homs[ai_tgt, bi_tgt]
-                F = _precompose_matrix(Hdom, Hcod, fp)
+                F = precompose_matrix_cached(Hdom, Hcod, fp; cache=cache)
 
                 # Avoid allocating sparse(F) just to call findnz; append triplets directly.
                 _append_scaled_triplets!(I, J, V, F, row_off - 1, col_off - 1)
@@ -1044,7 +1118,7 @@ function rhom_map_first(
 
                 Hdom = Rdom.homs[ai_src, bi_src]
                 Hcod = Rcod.homs[ai_tgt, bi_tgt]
-                F = _precompose_matrix(Hdom, Hcod, fp)
+                F = precompose_matrix_cached(Hdom, Hcod, fp; cache=cache)
 
                 # Avoid allocating sparse(F) just to call findnz; append triplets directly.
                 _append_scaled_triplets!(I, J, V, F, row_off - 1, col_off - 1)
@@ -1069,12 +1143,13 @@ function rhom_map_first(
     maxlen::Int=3,
     resN=nothing,
     check::Bool=true,
+    cache::Union{Nothing,HomSystemCache}=nothing,
     threads::Bool = (Threads.nthreads() > 1),
 ) where {K}
     resN = isnothing(resN) ? injective_resolution(N, ResolutionOptions(maxlen=maxlen)) : resN
-    Rdom = RHomComplex(f.D, N; maxlen=maxlen, resN=resN, threads=threads)
-    Rcod = RHomComplex(f.C, N; maxlen=maxlen, resN=resN, threads=threads)
-    return rhom_map_first(f, Rdom, Rcod; check=check, threads=threads)
+    Rdom = RHomComplex(f.D, N; maxlen=maxlen, resN=resN, cache=cache, threads=threads)
+    Rcod = RHomComplex(f.C, N; maxlen=maxlen, resN=resN, cache=cache, threads=threads)
+    return rhom_map_first(f, Rdom, Rcod; check=check, cache=cache, threads=threads)
 end
 
 function rhom_map_first(
@@ -1083,10 +1158,11 @@ function rhom_map_first(
     maxlen::Int=3,
     resN=nothing,
     check::Bool=true,
+    cache::Union{Nothing,HomSystemCache}=nothing,
     threads::Bool = (Threads.nthreads() > 1),
 ) where {K}
     return rhom_map_first(f, IndicatorResolutions.pmodule_from_fringe(H);
-        maxlen=maxlen, resN=resN, check=check, threads=threads)
+        maxlen=maxlen, resN=resN, check=check, cache=cache, threads=threads)
 end
 
 
@@ -1194,6 +1270,7 @@ function rhom_map_second(
     Rsrc::RHomComplex{K},
     Rtgt::RHomComplex{K};
     check::Bool = true,
+    cache::Union{Nothing,HomSystemCache}=nothing,
     threads::Bool = (Threads.nthreads() > 1),
 ) where {K}
     @assert Rsrc.C === Rtgt.C
@@ -1244,7 +1321,7 @@ function rhom_map_second(
                 end
 
                 # Postcompose on Hom(C^p, E^B).
-                Mb = _postcompose_matrix(Rtgt.homs[ia_tgt, ib_tgt], Rsrc.homs[ia_src, ib_src], phis[B + 1])
+                Mb = postcompose_matrix_cached(Rtgt.homs[ia_tgt, ib_tgt], Rsrc.homs[ia_src, ib_src], phis[B + 1]; cache=cache)
                 _append_scaled_triplets!(I, J, V, Mb, off_tgt - 1, off_src - 1)
             end
 
@@ -1285,7 +1362,7 @@ function rhom_map_second(
                 end
 
                 # Postcompose on Hom(C^p, E^B).
-                Mb = _postcompose_matrix(Rtgt.homs[ia_tgt, ib_tgt], Rsrc.homs[ia_src, ib_src], phis[B + 1])
+                Mb = postcompose_matrix_cached(Rtgt.homs[ia_tgt, ib_tgt], Rsrc.homs[ia_src, ib_src], phis[B + 1]; cache=cache)
                 _append_scaled_triplets!(I, J, V, Mb, off_tgt - 1, off_src - 1)
             end
 
@@ -1304,6 +1381,7 @@ function rhom_map_second(
     maxlen::Int=3,
     resN=nothing,
     check::Bool=true,
+    cache::Union{Nothing,HomSystemCache}=nothing,
     threads::Bool = (Threads.nthreads() > 1),
 ) where {K}
     Nsrc = IndicatorResolutions.pmodule_from_fringe(Hsrc)
@@ -1313,9 +1391,9 @@ function rhom_map_second(
     end
     resNsrc = isnothing(resN) ? injective_resolution(Nsrc, ResolutionOptions(maxlen=maxlen)) : resN
     resNtgt = isnothing(resN) ? injective_resolution(Ntgt, ResolutionOptions(maxlen=maxlen)) : resN
-    Rsrc = RHomComplex(C, Nsrc; maxlen=maxlen, resN=resNsrc, threads=threads)
-    Rtgt = RHomComplex(C, Ntgt; maxlen=maxlen, resN=resNtgt, threads=threads)
-    return rhom_map_second(g, Rsrc, Rtgt; check=check, threads=threads)
+    Rsrc = RHomComplex(C, Nsrc; maxlen=maxlen, resN=resNsrc, cache=cache, threads=threads)
+    Rtgt = RHomComplex(C, Ntgt; maxlen=maxlen, resN=resNtgt, cache=cache, threads=threads)
+    return rhom_map_second(g, Rsrc, Rtgt; check=check, cache=cache, threads=threads)
 end
 
 function rhom_map_second(
@@ -1326,10 +1404,11 @@ function rhom_map_second(
     maxlen::Int=3,
     resN=nothing,
     check::Bool=true,
+    cache::Union{Nothing,HomSystemCache}=nothing,
     threads::Bool = (Threads.nthreads() > 1),
 ) where {K}
     g = IndicatorResolutions.pmodule_from_fringe(gH)
-    return rhom_map_second(g, C, Hsrc, Htgt; maxlen=maxlen, resN=resN, check=check, threads=threads)
+    return rhom_map_second(g, C, Hsrc, Htgt; maxlen=maxlen, resN=resN, check=check, cache=cache, threads=threads)
 end
 
 
@@ -1401,9 +1480,10 @@ function hyperExt_map_first(
     Hcod::HyperExtSpace{K},
     Hdom::HyperExtSpace{K};
     t::Int,
-    check::Bool = true
+    check::Bool = true,
+    cache::Union{Nothing,HomSystemCache}=nothing
 ) where {K}
-    Rmap = rhom_map_first(f, Hcod.R, Hdom.R; check=check)
+    Rmap = rhom_map_first(f, Hcod.R, Hdom.R; check=check, cache=cache)
     return induced_map_on_cohomology(Rmap, Hdom.cohom, Hcod.cohom, t)
 end
 
@@ -1424,9 +1504,10 @@ function hyperExt_map_second(
     Hsrc::HyperExtSpace{K},
     Htgt::HyperExtSpace{K};
     t::Int,
-    check::Bool = true
+    check::Bool = true,
+    cache::Union{Nothing,HomSystemCache}=nothing
 ) where {K}
-    Rmap = rhom_map_second(g, Hsrc.R, Htgt.R; check=check)
+    Rmap = rhom_map_second(g, Hsrc.R, Htgt.R; check=check, cache=cache)
     return induced_map_on_cohomology(Rmap, Hsrc.cohom, Htgt.cohom, t)
 end
 
@@ -1723,7 +1804,7 @@ end
 Return a list of cocycle representatives forming a basis of `hyperTor_n`.
 If `n` is outside `degree_range(H)` or `dim(H,n) == 0`, returns an empty vector.
 """
-function basis(H::HyperTorSpace, n::Int)
+function basis(H::HyperTorSpace{K}, n::Int) where {K}
     if n < 0
         return Vector{Vector{K}}()
     end
@@ -1844,7 +1925,7 @@ If `t` is outside `degree_range(H)` or `dim(H,t) == 0`, returns an empty vector.
 
 Each basis element is a cochain vector in the ambient total cochain group.
 """
-function basis(H::HyperExtSpace, t::Int)
+function basis(H::HyperExtSpace{K}, t::Int) where {K}
     tmin = H.R.tot.tmin
     tmax = H.R.tot.tmax
     if t < tmin || t > tmax

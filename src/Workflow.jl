@@ -26,237 +26,46 @@
 #   Section 4: Internal helpers (data ingestion pipeline)
 # =============================================================================
 
+module Workflow
+
 using LinearAlgebra  # UniformScaling I / transpose
 using SparseArrays
 
 # Keep this file self-contained: import the handful of names it mentions
 # in type annotations or uses unqualified.
-using .CoreModules: QQ, QQField, AbstractCoeffField, coeff_type, coerce,
+using ..CoreModules: QQ, QQField, AbstractCoeffField, coeff_type, coerce,
                     EncodingOptions, ResolutionOptions, DerivedFunctorOptions, InvariantOptions,
+                    ResolutionCache, SessionCache, EncodingCache,
+                    encoding_cache!, session_resolution_cache, session_hom_cache, set_session_hom_cache!,
                     EncodingResult, ResolutionResult, InvariantResult,
-                    change_field, encode_from_data, ingest, AbstractPLikeEncodingMap,
-                    CompiledEncoding, compile_encoding
-import .CoreModules: locate, dimension, representatives, axes_from_encoding
+                    change_field, AbstractPLikeEncodingMap,
+                    CompiledEncoding, compile_encoding,
+                    PointCloud, ImageNd, GraphData, EmbeddedPlanarGraph2D,
+                    GradedComplex, FiltrationSpec, GridEncodingMap, grid_index
+import ..CoreModules: encode_from_data, ingest,
+                     locate, dimension, representatives, axes_from_encoding, _grid_strides,
+                     GridEncodingMap
 
-using .IndicatorResolutions: pmodule_from_fringe
-using .FlangeZn: Flange
-using .PLBackend: BoxUpset, BoxDownset, encode_fringe_boxes
-using .Encoding: build_uptight_encoding_from_fringe,
+import ..IndicatorResolutions
+import ..ZnEncoding
+using ..IndicatorResolutions: pmodule_from_fringe
+using ..FlangeZn: Flange
+using ..PLPolyhedra
+using ..PLBackend: BoxUpset, BoxDownset, encode_fringe_boxes
+using ..Encoding: build_uptight_encoding_from_fringe,
                  pushforward_fringe_along_encoding,
                  PostcomposedEncodingMap
-using .Modules: PModule, PMorphism, cover_edges, dim_at
-using .FiniteFringe: AbstractPoset, FinitePoset, GridPoset, ProductOfChainsPoset, nvertices
+using ..Modules: PModule, PMorphism, cover_edges, dim_at
+using ..FiniteFringe: AbstractPoset, FinitePoset, GridPoset, ProductOfChainsPoset, nvertices
+using ..DerivedFunctors
+using ..Invariants
+import ..Modules
+import ..ModuleComplexes
 
-
-# -----------------------------------------------------------------------------
-# Section 2: Lightweight ingestion types (PointCloud, FiltrationSpec, ...)
-# -----------------------------------------------------------------------------
-
-"""
-    PointCloud(points)
-
-Minimal point cloud container. `points` is an n-by-d matrix (rows are points),
-or a vector of coordinate vectors.
-"""
-struct PointCloud{T}
-    points::Vector{Vector{T}}
-end
-
-function PointCloud(points::AbstractMatrix{T}) where {T}
-    pts = [Vector{T}(points[i, :]) for i in 1:size(points, 1)]
-    return PointCloud{T}(pts)
-end
-
-PointCloud(points::AbstractVector{<:AbstractVector{T}}) where {T} =
-    PointCloud{T}([Vector{T}(p) for p in points])
-
-"""
-    ImageNd(data)
-
-Minimal N-dim image/scalar field container. `data` is an N-dim array.
-"""
-struct ImageNd{T,N}
-    data::Array{T,N}
-end
-
-ImageNd(data::Array{T,N}) where {T,N} = ImageNd{T,N}(data)
-
-"""
-    GraphData(n, edges; coords=nothing, weights=nothing)
-
-Minimal graph container. `edges` is a vector of (u,v) pairs (1-based).
-Optional `coords` can store embeddings, and `weights` can store edge weights.
-"""
-struct GraphData{T}
-    n::Int
-    edges::Vector{Tuple{Int,Int}}
-    coords::Union{Nothing, Vector{Vector{T}}}
-    weights::Union{Nothing, Vector{T}}
-end
-
-function GraphData(n::Integer, edges::AbstractVector{<:Tuple{Int,Int}};
-                   coords::Union{Nothing, AbstractVector{<:AbstractVector}}=nothing,
-                   weights::Union{Nothing, AbstractVector}=nothing,
-                   T::Type=Float64)
-    coords_vec = coords === nothing ? nothing : [Vector{T}(c) for c in coords]
-    weights_vec = weights === nothing ? nothing : Vector{T}(weights)
-    return GraphData{T}(Int(n), Vector{Tuple{Int,Int}}(edges), coords_vec, weights_vec)
-end
-
-"""
-    EmbeddedPlanarGraph2D(vertices, edges; polylines=nothing, bbox=nothing)
-
-Embedded planar graph container for 2D applications (e.g. wing veins).
-`vertices` is a vector of 2D coordinate vectors, `edges` are vertex index pairs.
-`polylines` can store per-edge piecewise-linear geometry.
-"""
-struct EmbeddedPlanarGraph2D{T}
-    vertices::Vector{Vector{T}}
-    edges::Vector{Tuple{Int,Int}}
-    polylines::Union{Nothing, Vector{Vector{Vector{T}}}}
-    bbox::Union{Nothing, NTuple{4,T}}
-end
-
-function EmbeddedPlanarGraph2D(vertices::AbstractVector{<:AbstractVector{T}},
-                               edges::AbstractVector{<:Tuple{Int,Int}};
-                               polylines::Union{Nothing, AbstractVector}=nothing,
-                               bbox::Union{Nothing, NTuple{4,T}}=nothing) where {T}
-    verts = [Vector{T}(v) for v in vertices]
-    polys = polylines === nothing ? nothing : [ [Vector{T}(p) for p in poly] for poly in polylines ]
-    return EmbeddedPlanarGraph2D{T}(verts, Vector{Tuple{Int,Int}}(edges), polys, bbox)
-end
-
-"""
-    GradedComplex(cells_by_dim, boundaries, grades; cell_dims=nothing)
-
-Generic graded cell complex container ("escape hatch").
-
-Fields:
-`cells_by_dim`: Vector of cell indices grouped by dimension, e.g. cells_by_dim[d+1]
-                is a vector of cell ids in dimension d.
-`boundaries`: Vector of sparse boundary matrices between dimensions.
-`grades`: Vector of grade vectors (same order as cells concatenated by dimension).
-`cell_dims`: Explicit dimension for each cell (same order as `grades`).
-"""
-struct GradedComplex{N,T}
-    cells_by_dim::Vector{Vector{Int}}
-    boundaries::Vector{SparseMatrixCSC{Int,Int}}
-    grades::Vector{NTuple{N,T}}
-    cell_dims::Vector{Int}
-end
-
-function _cell_dims_from_cells(cells_by_dim::Vector{Vector{Int}})
-    out = Int[]
-    for (d, cells) in enumerate(cells_by_dim)
-        for _ in cells
-            push!(out, d - 1)
-        end
-    end
-    return out
-end
-
-function GradedComplex(cells_by_dim::Vector{Vector{Int}},
-                       boundaries::Vector{SparseMatrixCSC{Int,Int}},
-                       grades::Vector{<:AbstractVector{T}};
-                       cell_dims::Union{Nothing,Vector{Int}}=nothing) where {T}
-    total = sum(length.(cells_by_dim))
-    if cell_dims === nothing
-        if length(grades) == total
-            cell_dims = _cell_dims_from_cells(cells_by_dim)
-        else
-            # Keep construction permissive; downstream validators can reject.
-            cell_dims = fill(0, length(grades))
-        end
-    end
-    N = length(grades[1])
-    ng = Vector{NTuple{N,T}}(undef, length(grades))
-    for i in eachindex(grades)
-        length(grades[i]) == N || error("GradedComplex: grade $i has wrong length.")
-        ng[i] = ntuple(j -> T(grades[i][j]), N)
-    end
-    return GradedComplex{N,T}(cells_by_dim, boundaries, ng, cell_dims)
-end
-
-function GradedComplex(cells_by_dim::Vector{Vector{Int}},
-                       boundaries::Vector{SparseMatrixCSC{Int,Int}},
-                       grades::Vector{<:Tuple};
-                       cell_dims::Union{Nothing,Vector{Int}}=nothing)
-    total = sum(length.(cells_by_dim))
-    if cell_dims === nothing
-        if length(grades) == total
-            cell_dims = _cell_dims_from_cells(cells_by_dim)
-        else
-            # Keep construction permissive; downstream validators can reject.
-            cell_dims = fill(0, length(grades))
-        end
-    end
-    N = length(grades[1])
-    T = eltype(grades[1])
-    ng = Vector{NTuple{N,T}}(undef, length(grades))
-    for i in eachindex(grades)
-        length(grades[i]) == N || error("GradedComplex: grade $i has wrong length.")
-        ng[i] = ntuple(j -> T(grades[i][j]), N)
-    end
-    return GradedComplex{N,T}(cells_by_dim, boundaries, ng, cell_dims)
-end
-
-"""
-    FiltrationSpec(; kind, params...)
-
-Lightweight filtration specification container. This will grow as the ingestion
-layer is implemented; for now it stores a `kind` symbol and a `params` named tuple.
-"""
-struct FiltrationSpec
-    kind::Symbol
-    params::NamedTuple
-end
-
-FiltrationSpec(; kind::Symbol, params...) = FiltrationSpec(kind, NamedTuple(params))
 
 # -----------------------------------------------------------------------------
 # Section 3: GridEncodingMap helpers
 # -----------------------------------------------------------------------------
-
-"""
-    GridEncodingMap(P, coords; orientation=ntuple(_->1, N))
-
-Axis-aligned grid encoding map for a product-of-chains poset.
-
-`coords` is an N-tuple of sorted coordinate vectors. `orientation[i]` is +1
-for sublevel-style axes and -1 for superlevel-style axes (applied by negation
-before indexing).
-"""
-struct GridEncodingMap{N,T,P<:AbstractPoset} <: AbstractPLikeEncodingMap
-    P::P
-    coords::NTuple{N,Vector{T}}
-    orientation::NTuple{N,Int}
-    sizes::NTuple{N,Int}
-    strides::NTuple{N,Int}
-end
-
-function _grid_strides(sizes::NTuple{N,Int}) where {N}
-    strides = Vector{Int}(undef, N)
-    strides[1] = 1
-    for i in 2:N
-        strides[i] = strides[i-1] * sizes[i-1]
-    end
-    return ntuple(i -> strides[i], N)
-end
-
-"""
-    grid_index(idxs, sizes) -> Int
-
-Convert an N-tuple of 1-based indices into a linear index using mixed radix
-ordering with the first axis varying fastest.
-"""
-function grid_index(idxs::NTuple{N,Int}, sizes::NTuple{N,Int}) where {N}
-    strides = _grid_strides(sizes)
-    lin = 1
-    for i in 1:N
-        lin += (idxs[i] - 1) * strides[i]
-    end
-    return lin
-end
 
 """
     poset_from_axes(axes; orientation=ntuple(_->1, N), kind=:grid) -> AbstractPoset
@@ -351,28 +160,43 @@ axes_from_encoding(pi::GridEncodingMap) = pi.coords
 
 function locate(pi::GridEncodingMap{N,T}, x::AbstractVector{<:Real}) where {N,T}
     length(x) == N || error("GridEncodingMap.locate: expected vector length $(N), got $(length(x)).")
-    idxs = Vector{Int}(undef, N)
+    lin = 1
     for i in 1:N
         xi = pi.orientation[i] == 1 ? x[i] : -x[i]
+        if xi == 0
+            xi = zero(xi)
+        end
         idx = searchsortedlast(pi.coords[i], xi)
         if idx < 1
             return 0
         end
-        idxs[i] = idx
+        lin += (idx - 1) * pi.strides[i]
     end
+    return lin
+end
+
+function locate(pi::GridEncodingMap{N,T}, x::NTuple{N,<:Real}) where {N,T}
     lin = 1
-    for i in 1:N
-        lin += (idxs[i] - 1) * pi.strides[i]
+    @inbounds for i in 1:N
+        xi = pi.orientation[i] == 1 ? x[i] : -x[i]
+        if xi == 0
+            xi = zero(xi)
+        end
+        idx = searchsortedlast(pi.coords[i], xi)
+        if idx < 1
+            return 0
+        end
+        lin += (idx - 1) * pi.strides[i]
     end
     return lin
 end
 
 function representatives(pi::GridEncodingMap{N,T}) where {N,T}
     # Cartesian product of coordinate axes (grid points).
-    reps = Vector{Vector{T}}(undef, nvertices(pi.P))
+    reps = Vector{NTuple{N,T}}(undef, nvertices(pi.P))
     idxs = ones(Int, N)
     for lin in 1:nvertices(pi.P)
-        reps[lin] = [pi.coords[i][idxs[i]] for i in 1:N]
+        reps[lin] = ntuple(i -> pi.coords[i][idxs[i]], N)
         # advance mixed radix counter
         for i in 1:N
             idxs[i] += 1
@@ -385,7 +209,7 @@ function representatives(pi::GridEncodingMap{N,T}) where {N,T}
     end
     return reps
 end
-using .ModuleComplexes: ModuleCochainComplex, cohomology_module
+using ..ModuleComplexes: ModuleCochainComplex, cohomology_module
 
 @inline _resolve_encoding_opts(opts::Union{EncodingOptions,Nothing}) =
     opts === nothing ? EncodingOptions() : opts
@@ -402,14 +226,60 @@ end
     opts === nothing ? DerivedFunctorOptions() : opts
 @inline _resolve_invariant_opts(opts::Union{InvariantOptions,Nothing}) =
     opts === nothing ? InvariantOptions() : opts
-using .IndicatorResolutions: projective_cover
-using .FiniteFringe: AbstractPoset, FringeModule, Upset, Downset, principal_upset, principal_downset,
+using ..IndicatorResolutions: projective_cover
+using ..FiniteFringe: AbstractPoset, FringeModule, Upset, Downset, principal_upset, principal_downset,
                      leq, nvertices, poset_equal_opposite
-using .FlangeZn: Face, IndFlat, IndInj, Flange
+using ..FlangeZn: Face, IndFlat, IndInj, Flange
 
-# Cache for cubical structures and posets to reuse across repeated grids.
-const _cubical_cache = Dict{Any,Any}()
-const _poset_cache = Dict{Any,AbstractPoset}()
+const _WORKFLOW_ENCODING_CACHE_KEY = typemax(UInt)
+
+@inline function _workflow_encoding_cache(session_cache::Union{Nothing,SessionCache})
+    session_cache === nothing && return nothing
+    return encoding_cache!(session_cache, _WORKFLOW_ENCODING_CACHE_KEY)
+end
+
+@inline function _compile_encoding_cached(P, pi, session_cache::Union{Nothing,SessionCache})
+    if session_cache === nothing
+        return compile_encoding(P, pi)
+    end
+    ec = encoding_cache!(session_cache, P)
+    return compile_encoding(P, pi; meta=(encoding_cache=ec, session_cache=session_cache))
+end
+
+@inline function _encoding_with_session_cache(enc::EncodingResult,
+                                              session_cache::Union{Nothing,SessionCache})
+    session_cache === nothing && return enc
+    raw_pi = enc.pi isa CompiledEncoding ? enc.pi.pi : enc.pi
+    pi2 = _compile_encoding_cached(enc.P, raw_pi, session_cache)
+    return EncodingResult(enc.P, enc.M, pi2;
+                          H=enc.H,
+                          presentation=enc.presentation,
+                          opts=enc.opts,
+                          backend=enc.backend,
+                          meta=enc.meta)
+end
+
+@inline function _resolution_cache_from_session(cache::Union{Nothing,ResolutionCache},
+                                                session_cache::Union{Nothing,SessionCache},
+                                                M=nothing)
+    cache !== nothing && return cache
+    session_cache === nothing && return nothing
+    return M === nothing ? session_resolution_cache(session_cache) :
+                           session_resolution_cache(session_cache, M)
+end
+
+@inline function _hom_cache_from_session(cache::Union{Nothing,DerivedFunctors.HomSystemCache},
+                                         session_cache::Union{Nothing,SessionCache},
+                                         ::Type{K}) where {K}
+    cache !== nothing && return cache
+    session_cache === nothing && return nothing
+    hs = session_hom_cache(session_cache)
+    if !(hs isa DerivedFunctors.HomSystemCache{DerivedFunctors.HomSpace{K},SparseMatrixCSC{K,Int},SparseMatrixCSC{K,Int}})
+        hs = DerivedFunctors.HomSystemCache{K}()
+        set_session_hom_cache!(session_cache, hs)
+    end
+    return hs
+end
 
 # -----------------------------------------------------------------------------
 # Backend selection for R^n encoding (PLBackend vs PLPolyhedra)
@@ -750,11 +620,21 @@ encode_pmodule_from_fringe(F::PLPolyhedra.PLFringe;
                            opts::Union{EncodingOptions,Nothing}=nothing) =
     encode_pmodule_from_fringe(F, _resolve_encoding_opts(opts))
 
+@inline function _return_encoding(res::EncodingResult, output::Symbol)
+    if output === :result
+        return res
+    elseif output === :raw
+        return (res.P, res.H, res.pi)
+    end
+    error("output must be :result or :raw (got $output)")
+end
+
 # -----------------------------------------------------------------------------
 # Workflow entrypoints (narrative API)
 
 """
-    encode(x; backend=:auto, max_regions=nothing, strict_eps=nothing, poset_kind=:signature) -> EncodingResult
+    encode(x; backend=:auto, max_regions=nothing, strict_eps=nothing, poset_kind=:signature,
+           output=:result) -> EncodingResult
     encode(x1, x2, ...; backend=:auto, ...) -> Vector{EncodingResult}
 
 High-level entrypoint that turns a presentation object into a finite encoding poset model.
@@ -771,6 +651,8 @@ The returned EncodingResult stores:
 - pi: the classifier map from the original domain to P
 - presentation / opts / backend / meta : provenance
 
+Set `output=:raw` to return `(P, H, pi)` instead of an EncodingResult.
+
 Notes
 -----
 * For multiple PL fringes, only the PLPolyhedra backend currently supports common-encoding.
@@ -781,24 +663,29 @@ Notes
 # -----------------------------------------------------------------------------
 
 function encode(x; backend::Symbol=:auto, max_regions=nothing, strict_eps=nothing,
-                poset_kind::Symbol=:signature, field::AbstractCoeffField=QQField())
+                poset_kind::Symbol=:signature, field::AbstractCoeffField=QQField(),
+                output::Symbol=:result,
+                session_cache::Union{Nothing,SessionCache}=nothing)
     enc = EncodingOptions(; backend=backend, max_regions=max_regions,
                           strict_eps=strict_eps, poset_kind=poset_kind, field=field)
-    return encode(x, enc)
+    return encode(x, enc; output=output, session_cache=session_cache)
 end
 
 # -----------------------
 # Z^n presentations
 
-function encode(FG::Flange{K}, enc::EncodingOptions) where {K}
+function encode(FG::Flange{K}, enc::EncodingOptions;
+                output::Symbol=:result,
+                session_cache::Union{Nothing,SessionCache}=nothing) where {K}
     if enc.backend != :auto && enc.backend != :zn
         error("encode(Flange): EncodingOptions.backend must be :auto or :zn (got $(enc.backend))")
     end
     FG2 = (FG.field == enc.field) ? FG : change_field(FG, enc.field)
     P, H, pi = ZnEncoding.encode_from_flange(FG2, enc)
     M = pmodule_from_fringe(H)
-    pi2 = compile_encoding(P, pi)
-    return EncodingResult(P, M, pi2; H=H, presentation=FG2, opts=enc, backend=:zn, meta=(;))
+    pi2 = _compile_encoding_cached(P, pi, session_cache)
+    res = EncodingResult(P, M, pi2; H=H, presentation=FG2, opts=enc, backend=:zn, meta=(;))
+    return _return_encoding(res, output)
 end
 
 function encode(FG::Flange{K};
@@ -808,21 +695,27 @@ function encode(FG::Flange{K};
                 max_regions=nothing,
                 strict_eps=nothing,
                 poset_kind::Symbol=:signature,
-                field::Union{AbstractCoeffField,Nothing}=nothing) where {K}
+                field::Union{AbstractCoeffField,Nothing}=nothing,
+                output::Symbol=:result,
+                session_cache::Union{Nothing,SessionCache}=nothing) where {K}
     if enc !== nothing || opts !== nothing
         if backend != :auto || max_regions !== nothing || strict_eps !== nothing ||
             poset_kind != :signature || field !== nothing
             error("encode(Flange): pass either enc/opts or backend/max_regions/strict_eps/poset_kind/field, not both.")
         end
-        return encode(FG, _resolve_encoding_alias(enc, opts))
+        return encode(FG, _resolve_encoding_alias(enc, opts);
+                      output=output, session_cache=session_cache)
     end
     field === nothing && (field = FG.field)
     enc2 = EncodingOptions(; backend=backend, max_regions=max_regions,
                            strict_eps=strict_eps, poset_kind=poset_kind, field=field)
-    return encode(FG, enc2)
+    return encode(FG, enc2; output=output, session_cache=session_cache)
 end
 
-function encode(FGs::AbstractVector{<:Flange}, enc::EncodingOptions)
+function encode(FGs::Union{AbstractVector{<:Flange}, Tuple{Vararg{Flange}}},
+                enc::EncodingOptions;
+                output::Symbol=:result,
+                session_cache::Union{Nothing,SessionCache}=nothing)
     if enc.backend != :auto && enc.backend != :zn
         error("encode(Vector{Flange}): EncodingOptions.backend must be :auto or :zn (got $(enc.backend))")
     end
@@ -834,88 +727,105 @@ function encode(FGs::AbstractVector{<:Flange}, enc::EncodingOptions)
     end
     P, Hs, pi = ZnEncoding.encode_from_flanges(FGs2, enc)
     out = Vector{EncodingResult}(undef, length(FGs))
-    pi2 = compile_encoding(P, pi)
+    pi2 = _compile_encoding_cached(P, pi, session_cache)
     for i in eachindex(FGs2)
         H = Hs[i]
         out[i] = EncodingResult(P, pmodule_from_fringe(H), pi2;
                                 H=H, presentation=FGs2[i], opts=enc, backend=:zn, meta=(;))
     end
-    return out
+    return output === :result ? out : [_return_encoding(enc_i, output) for enc_i in out]
 end
 
-function encode(FGs::AbstractVector{<:Flange};
+function encode(FGs::Union{AbstractVector{<:Flange}, Tuple{Vararg{Flange}}};
                 enc=nothing,
                 opts=nothing,
                 backend::Symbol=:auto,
                 max_regions=nothing,
                 strict_eps=nothing,
                 poset_kind::Symbol=:signature,
-                field::Union{AbstractCoeffField,Nothing}=nothing)
+                field::Union{AbstractCoeffField,Nothing}=nothing,
+                output::Symbol=:result,
+                session_cache::Union{Nothing,SessionCache}=nothing)
     if enc !== nothing || opts !== nothing
         if backend != :auto || max_regions !== nothing || strict_eps !== nothing ||
             poset_kind != :signature || field !== nothing
             error("encode(Vector{Flange}): pass either enc/opts or backend/max_regions/strict_eps/poset_kind/field, not both.")
         end
-        return encode(FGs, _resolve_encoding_alias(enc, opts))
+        return encode(FGs, _resolve_encoding_alias(enc, opts);
+                      output=output, session_cache=session_cache)
     end
     field === nothing && (field = FGs[1].field)
     enc2 = EncodingOptions(; backend=backend, max_regions=max_regions,
                            strict_eps=strict_eps, poset_kind=poset_kind, field=field)
-    return encode(FGs, enc2)
+    return encode(FGs, enc2; output=output, session_cache=session_cache)
 end
 
 encode(FG1::Flange, FG2::Flange; kwargs...) =
-    encode(Flange[FG1, FG2]; kwargs...)
+    encode((FG1, FG2); kwargs...)
 
 encode(FG1::Flange, FG2::Flange, FG3::Flange; kwargs...) =
-    encode(Flange[FG1, FG2, FG3]; kwargs...)
+    encode((FG1, FG2, FG3); kwargs...)
 
 # -----------------------
 # R^n presentations
 
-function encode(F::PLPolyhedra.PLFringe, enc::Union{EncodingOptions,Nothing}=nothing)
+function encode(F::PLPolyhedra.PLFringe, enc::Union{EncodingOptions,Nothing}=nothing;
+                output::Symbol=:result,
+                session_cache::Union{Nothing,SessionCache}=nothing)
     enc = _resolve_encoding_opts(enc)
     P, H, pi = encode_from_fringe(F, enc)
     M = pmodule_from_fringe(H)
     b = choose_pl_backend(F; opts=enc)
-    pi2 = compile_encoding(P, pi)
-    return EncodingResult(P, M, pi2; H=H, presentation=F, opts=enc, backend=b, meta=(;))
+    pi2 = _compile_encoding_cached(P, pi, session_cache)
+    res = EncodingResult(P, M, pi2; H=H, presentation=F, opts=enc, backend=b, meta=(;))
+    return _return_encoding(res, output)
 end
 
 function encode(Ups::Vector{BoxUpset}, Downs::Vector{BoxDownset}, Phi::AbstractMatrix,
-                enc::Union{EncodingOptions,Nothing}=nothing)
+                enc::Union{EncodingOptions,Nothing}=nothing;
+                output::Symbol=:result,
+                session_cache::Union{Nothing,SessionCache}=nothing)
     enc = _resolve_encoding_opts(enc)
     P, H, pi = encode_from_fringe(Ups, Downs, Phi, enc)
     M = pmodule_from_fringe(H)
     b = choose_pl_backend(Ups, Downs; opts=enc)
-    pi2 = compile_encoding(P, pi)
-    return EncodingResult(P, M, pi2;
-                          H=H, presentation=(Ups=Ups, Downs=Downs, Phi=Phi),
-                          opts=enc, backend=b, meta=(;))
+    pi2 = _compile_encoding_cached(P, pi, session_cache)
+    res = EncodingResult(P, M, pi2;
+                         H=H, presentation=(Ups=Ups, Downs=Downs, Phi=Phi),
+                         opts=enc, backend=b, meta=(;))
+    return _return_encoding(res, output)
 end
 
 # Convenience overloads for common BoxFringe encodings
-encode(Ups::Vector{BoxUpset}, Downs::Vector{BoxDownset}, enc::Union{EncodingOptions,Nothing}=nothing) =
+encode(Ups::Vector{BoxUpset}, Downs::Vector{BoxDownset}, enc::Union{EncodingOptions,Nothing}=nothing;
+       output::Symbol=:result,
+       session_cache::Union{Nothing,SessionCache}=nothing) =
     encode(Ups, Downs,
            reshape(ones(QQ, length(Downs) * length(Ups)), length(Downs), length(Ups)),
-           _resolve_encoding_opts(enc))
+           _resolve_encoding_opts(enc); output=output, session_cache=session_cache)
 
 function encode(Ups::Vector{BoxUpset}, Downs::Vector{BoxDownset};
                 backend::Symbol=:auto, max_regions=nothing, strict_eps=nothing,
-                poset_kind::Symbol=:signature, field::AbstractCoeffField=QQField())
+                poset_kind::Symbol=:signature, field::AbstractCoeffField=QQField(),
+                output::Symbol=:result,
+                session_cache::Union{Nothing,SessionCache}=nothing)
     enc = EncodingOptions(; backend=backend, max_regions=max_regions,
                           strict_eps=strict_eps, poset_kind=poset_kind, field=field)
-    return encode(Ups, Downs, enc)
+    return encode(Ups, Downs, enc; output=output, session_cache=session_cache)
 end
 
 function encode(Ups::Vector{BoxUpset}, Downs::Vector{BoxDownset}, Phi_vec::AbstractVector,
-                enc::Union{EncodingOptions,Nothing}=nothing)
+                enc::Union{EncodingOptions,Nothing}=nothing;
+                output::Symbol=:result,
+                session_cache::Union{Nothing,SessionCache}=nothing)
     enc = _resolve_encoding_opts(enc)
     Phi = reshape(Phi_vec, length(Downs), length(Ups))
-    return encode(Ups, Downs, Phi, enc)
+    return encode(Ups, Downs, Phi, enc; output=output, session_cache=session_cache)
 end
 
-function encode(Fs::AbstractVector{<:PLPolyhedra.PLFringe}, enc::EncodingOptions)
+function encode(Fs::AbstractVector{<:PLPolyhedra.PLFringe}, enc::EncodingOptions;
+                output::Symbol=:result,
+                session_cache::Union{Nothing,SessionCache}=nothing)
     # Today, only the PLPolyhedra backend supports common-encoding multiple PL fringes.
     if _normalize_pl_backend(enc.backend) == :pl_backend
         error("encode(Vector{PLFringe}): common encoding for PLBackend is not implemented; use backend=:pl or backend=:auto.")
@@ -925,17 +835,23 @@ function encode(Fs::AbstractVector{<:PLPolyhedra.PLFringe}, enc::EncodingOptions
     end
     P, Hs, pi = PLPolyhedra.encode_from_PL_fringes(Fs, enc; poset_kind=enc.poset_kind)
     out = Vector{EncodingResult}(undef, length(Fs))
-    pi2 = compile_encoding(P, pi)
+    pi2 = _compile_encoding_cached(P, pi, session_cache)
     for i in eachindex(Fs)
         H = Hs[i]
         out[i] = EncodingResult(P, pmodule_from_fringe(H), pi2;
                                 H=H, presentation=Fs[i], opts=enc, backend=:pl, meta=(;))
     end
-    return out
+    return output === :result ? out : [_return_encoding(enc_i, output) for enc_i in out]
 end
 
-encode(Fs::AbstractVector{<:PLPolyhedra.PLFringe}; enc=nothing, opts=nothing) =
-    encode(Fs, _resolve_encoding_alias(enc, opts))
+encode(Fs::AbstractVector{<:PLPolyhedra.PLFringe};
+       enc=nothing,
+       opts=nothing,
+       output::Symbol=:result,
+       session_cache::Union{Nothing,SessionCache}=nothing) =
+    encode(Fs, _resolve_encoding_alias(enc, opts);
+           output=output,
+           session_cache=session_cache)
 
 encode(F1::PLPolyhedra.PLFringe, F2::PLPolyhedra.PLFringe; kwargs...) =
     encode(PLPolyhedra.PLFringe[F1, F2]; kwargs...)
@@ -984,12 +900,21 @@ function _grid_tuples(sizes::NTuple{N,Int}) where {N}
     return out
 end
 
-function _axes_from_grades(grades::Vector{<:NTuple{N,T}}, n::Int) where {N,T}
-    axes = [T[] for _ in 1:n]
+function _axes_from_grades(grades::Vector{<:NTuple{N,T}}, n::Int;
+                           orientation::Union{Nothing,NTuple{N,Int}}=nothing) where {N,T}
+    n == N || error("grade length $N does not match n=$n")
+    orient = orientation === nothing ? ntuple(_ -> 1, N) : orientation
+    for i in 1:N
+        (orient[i] == 1 || orient[i] == -1) || error("orientation[$i] must be +1 or -1.")
+    end
+
+    RT = promote_type(T, Int)
+    axes = [RT[] for _ in 1:n]
     for g in grades
         length(g) == n || error("grade has length $(length(g)) but expected $n")
         for i in 1:n
-            push!(axes[i], g[i])
+            val = orient[i] == 1 ? RT(g[i]) : -RT(g[i])
+            push!(axes[i], val)
         end
     end
     for i in 1:n
@@ -1063,17 +988,26 @@ function _quantize_grades(G::GradedComplex, eps)
         g = G.grades[i]
         grades[i] = ntuple(j -> round(Float64(g[j]) / eps_vec[j]) * eps_vec[j], N)
     end
-    return GradedComplex(G.cells_by_dim, G.boundaries, [collect(grades[i]) for i in eachindex(grades)]; cell_dims=G.cell_dims)
+    return GradedComplex(G.cells_by_dim, G.boundaries, grades; cell_dims=G.cell_dims)
 end
 
-function _poset_from_axes_cached(axes, orientation)
+function _poset_from_axes_cached(axes, orientation;
+                                 cache::Union{Nothing,EncodingCache}=nothing)
     key = (_axes_key(axes), orientation)
-    P = get(_poset_cache, key, nothing)
-    if P === nothing
-        P = poset_from_axes(axes; orientation=orientation, kind=:grid)
-        _poset_cache[key] = P
+    if cache === nothing
+        return poset_from_axes(axes; orientation=orientation, kind=:grid)
     end
-    return P
+    Base.lock(cache.lock)
+    try
+        P = get(cache.posets, key, nothing)
+        if P === nothing
+            P = poset_from_axes(axes; orientation=orientation, kind=:grid)
+            cache.posets[key] = P
+        end
+        return P
+    finally
+        Base.unlock(cache.lock)
+    end
 end
 
 function _poset_vertex_coords(axes::NTuple{N,Vector{T}}) where {N,T}
@@ -1151,6 +1085,7 @@ end
 
 function _pmodule_from_active_lists(P::AbstractPoset,
                                     active::Vector{Vector{Int}};
+                                    pos_maps::Union{Nothing,Vector{Dict{Int,Int}}}=nothing,
                                     field::AbstractCoeffField=QQField())
     K = coeff_type(field)
     dims = [length(lst) for lst in active]
@@ -1158,9 +1093,14 @@ function _pmodule_from_active_lists(P::AbstractPoset,
     for (u, v) in cover_edges(P)
         Mu = active[u]
         Mv = active[v]
-        pos_v = Dict{Int,Int}()
-        for (i, c) in enumerate(Mv)
-            pos_v[c] = i
+        pos_v = if pos_maps === nothing
+            d = Dict{Int,Int}()
+            for (i, c) in enumerate(Mv)
+                d[c] = i
+            end
+            d
+        else
+            pos_maps[v]
         end
         A = zeros(K, length(Mv), length(Mu))
         for (j, c) in enumerate(Mu)
@@ -1195,7 +1135,7 @@ function cochain_complex_from_graded_complex(G::GradedComplex,
     K = coeff_type(field)
     terms = Vector{PModule{K}}(undef, length(grades_by_dim))
     for d in 1:length(grades_by_dim)
-        terms[d] = _pmodule_from_active_lists(P, active_by_dim[d]; field=field)
+        terms[d] = _pmodule_from_active_lists(P, active_by_dim[d]; pos_maps=pos_by_dim[d], field=field)
     end
 
     diffs = PMorphism{K}[]
@@ -1213,22 +1153,26 @@ function cochain_complex_from_graded_complex(G::GradedComplex,
 
     for k in 1:length(boundaries)
         B = boundaries[k]  # boundary C_{k+1} -> C_k
+        Ii, Jj, Vv_int = findnz(B)
+        Vv = Vector{K}(undef, length(Vv_int))
+        @inbounds for t in eachindex(Vv_int)
+            Vv[t] = coerce(field, Vv_int[t])
+        end
         comps = Vector{Matrix{K}}(undef, nvertices(P))
         for i in 1:nvertices(P)
             Lk = active_by_dim[k][i]
             Lk1 = active_by_dim[k+1][i]
             rowmap = pos_by_dim[k][i]
             colmap = pos_by_dim[k+1][i]
-            M = spzeros(K, length(Lk1), length(Lk))
-            Ii, Jj, Vv = findnz(B)
+            M = zeros(K, length(Lk1), length(Lk))
             @inbounds for t in eachindex(Ii)
                 r = get(rowmap, Ii[t], 0)
                 c = get(colmap, Jj[t], 0)
                 if r != 0 && c != 0
-                    M[c, r] = coerce(field, Vv[t])
+                    M[c, r] = Vv[t]
                 end
             end
-            comps[i] = Matrix{K}(M)
+            comps[i] = M
         end
         push!(diffs, PMorphism{K}(terms[k], terms[k+1], comps))
     end
@@ -1323,14 +1267,14 @@ function flange_presentation(M::PModule{K}, pi::GridEncodingMap) where {K}
     tau = Face(n, falses(n))
     coords = _poset_vertex_coords(pi.coords)
 
-    flats = IndFlat[]
+    flats = IndFlat{n}[]
     for p in 1:nvertices(P)
         for _ in gens_at_F0[p]
             push!(flats, IndFlat(tau, coords[p]; id=:F))
         end
     end
 
-    injectives = IndInj[]
+    injectives = IndInj{n}[]
     for u in 1:nvertices(P)
         for _ in gens_at_E0[u]
             push!(injectives, IndInj(tau, coords[u]; id=:E))
@@ -1423,7 +1367,17 @@ function _filter_params(params::NamedTuple, drop::Vector{Symbol})
     return (; (k => v for (k, v) in pairs(params) if !(k in drop))...)
 end
 
-function _knn_distances(points::Vector{Vector{Float64}}, k::Int)
+@inline function _euclidean_distance(p::AbstractVector{<:Real}, q::AbstractVector{<:Real})
+    length(p) == length(q) || error("PointCloud: point dimension mismatch.")
+    s = 0.0
+    @inbounds for i in 1:length(p)
+        d = Float64(p[i]) - Float64(q[i])
+        s += d * d
+    end
+    return sqrt(s)
+end
+
+function _knn_distances(points::AbstractVector{<:AbstractVector{<:Real}}, k::Int)
     n = length(points)
     dists = Vector{Float64}(undef, n)
     for i in 1:n
@@ -1432,7 +1386,7 @@ function _knn_distances(points::Vector{Vector{Float64}}, k::Int)
             if i == j
                 continue
             end
-            push!(ds, norm(points[i] .- points[j]))
+            push!(ds, _euclidean_distance(points[i], points[j]))
         end
         sort!(ds)
         k <= length(ds) || error("kNN k=$k exceeds number of neighbors.")
@@ -1453,7 +1407,7 @@ function _graded_complex_from_point_cloud(data::PointCloud, spec::FiltrationSpec
     dist = zeros(Float64, n, n)
     for i in 1:n
         for j in (i+1):n
-            d = norm(points[i] .- points[j])
+            d = _euclidean_distance(points[i], points[j])
             dist[i, j] = d
             dist[j, i] = d
         end
@@ -1517,15 +1471,15 @@ function _graded_complex_from_point_cloud(data::PointCloud, spec::FiltrationSpec
         end
     else
         for k in 2:max_dim+1
-            sims = Vector{Vector{Int}}()
-            for comb in _combinations(n, k)
-                push!(sims, comb)
+            if max_simplices !== nothing
+                comb_count = binomial(big(n), big(k))
+                if big(total) + comb_count > big(max_simplices)
+                    error("PointCloud Rips: would exceed max_simplices=$(max_simplices) at simplex dimension $(k - 1).")
+                end
             end
+            sims = _combinations(n, k)
             simplices[k] = sims
             total += length(sims)
-            if max_simplices !== nothing && total > max_simplices
-                error("PointCloud Rips: exceeded max_simplices=$(max_simplices).")
-            end
         end
     end
 
@@ -1550,7 +1504,7 @@ function _graded_complex_from_point_cloud(data::PointCloud, spec::FiltrationSpec
         end
     elseif kind == :rips_density || kind == :rips_knn
         knn_k = get(spec.params, :density_k, 2)
-        dens = _knn_distances([Vector{Float64}(p) for p in points], knn_k)
+        dens = _knn_distances(points, knn_k)
         grades = Vector{NTuple{2,Float64}}()
         for s in simplices[1]
             v = s[1]
@@ -1595,8 +1549,9 @@ function _graded_complex_from_point_cloud(data::PointCloud, spec::FiltrationSpec
 
     cells = [collect(1:length(simplices[k])) for k in 1:length(simplices)]
     G = GradedComplex(cells, boundaries, grades)
-    axes = get(spec.params, :axes, _axes_from_grades(grades, length(grades[1])))
-    orientation = get(spec.params, :orientation, ntuple(_ -> 1, length(axes)))
+    N = length(grades[1])
+    orientation = get(spec.params, :orientation, ntuple(_ -> 1, N))
+    axes = get(spec.params, :axes, _axes_from_grades(grades, N; orientation=orientation))
     return G, axes, orientation
 end
 
@@ -1625,8 +1580,8 @@ function _graded_complex_from_graph(data::GraphData, spec::FiltrationSpec)
             end
             B1 = _simplicial_boundary(simplices1, simplices0)
             G = GradedComplex([collect(1:n), collect(1:length(edges))], [B1], grades)
-            axes = get(spec.params, :axes, _axes_from_grades(grades, N))
             orientation = get(spec.params, :orientation, ntuple(_ -> 1, N))
+            axes = get(spec.params, :axes, _axes_from_grades(grades, N; orientation=orientation))
             return G, axes, orientation
         else
             max_dim = get(spec.params, :max_dim, 2)
@@ -1669,8 +1624,8 @@ function _graded_complex_from_graph(data::GraphData, spec::FiltrationSpec)
             end
             cells = [collect(1:length(simplices[k])) for k in 1:length(simplices)]
             G = GradedComplex(cells, boundaries, grades)
-            axes = get(spec.params, :axes, _axes_from_grades(grades, N))
             orientation = get(spec.params, :orientation, ntuple(_ -> 1, N))
+            axes = get(spec.params, :axes, _axes_from_grades(grades, N; orientation=orientation))
             return G, axes, orientation
         end
     elseif kind == :edge_weighted
@@ -1688,8 +1643,8 @@ function _graded_complex_from_graph(data::GraphData, spec::FiltrationSpec)
         simplices1 = [ [u, v] for (u, v) in edges ]
         B1 = _simplicial_boundary(simplices1, simplices0)
         G = GradedComplex([collect(1:n), collect(1:length(edges))], [B1], grades)
-        axes = get(spec.params, :axes, _axes_from_grades(grades, 1))
         orientation = get(spec.params, :orientation, (1,))
+        axes = get(spec.params, :axes, _axes_from_grades(grades, 1; orientation=orientation))
         return G, axes, orientation
     else
         error("Unsupported graph filtration kind: $(kind).")
@@ -1699,7 +1654,7 @@ end
 function _distance_transform(mask::AbstractArray{Bool})
     dims = size(mask)
     N = length(dims)
-    coords = collect(CartesianIndices(mask))
+    coords = CartesianIndices(mask)
     true_pts = [c for c in coords if mask[c]]
     out = zeros(Float64, dims)
     for c in coords
@@ -1723,11 +1678,17 @@ function _distance_transform(mask::AbstractArray{Bool})
     return out
 end
 
-function _cubical_structure(dims::NTuple{N,Int}) where {N}
+function _cubical_structure(dims::NTuple{N,Int};
+                            cache::Union{Nothing,EncodingCache}=nothing) where {N}
     key = Tuple(dims)
-    cached = get(_cubical_cache, key, nothing)
-    if cached !== nothing
-        return cached
+    if cache !== nothing
+        Base.lock(cache.lock)
+        try
+            cached = get(cache.cubical, key, nothing)
+            cached === nothing || return cached
+        finally
+            Base.unlock(cache.lock)
+        end
     end
     cells_by_dim = Vector{Vector{Tuple{NTuple{N,Int},NTuple{N,Int}}}}(undef, N + 1)
     cell_index = Vector{Dict{Tuple{NTuple{N,Int},NTuple{N,Int}},Int}}(undef, N + 1)
@@ -1790,11 +1751,20 @@ function _cubical_structure(dims::NTuple{N,Int}) where {N}
     end
 
     cached = (cells_by_dim=cells_by_dim, cell_index=cell_index, boundaries=boundaries)
-    _cubical_cache[key] = cached
+    if cache !== nothing
+        Base.lock(cache.lock)
+        try
+            return get!(cache.cubical, key, cached)
+        finally
+            Base.unlock(cache.lock)
+        end
+    end
     return cached
 end
 
-function _graded_complex_from_image_channels(channels::Vector{<:AbstractArray}, spec::FiltrationSpec)
+function _graded_complex_from_image_channels(channels::Vector{<:AbstractArray},
+                                             spec::FiltrationSpec;
+                                             cache::Union{Nothing,EncodingCache}=nothing)
     img = channels[1]
     dims = size(img)
     for c in channels
@@ -1803,7 +1773,7 @@ function _graded_complex_from_image_channels(channels::Vector{<:AbstractArray}, 
     N = length(dims)
     C = length(channels)
 
-    cached = _cubical_structure(dims)
+    cached = _cubical_structure(dims; cache=cache)
     cells_by_dim = cached.cells_by_dim
     cell_index = cached.cell_index
 
@@ -1829,36 +1799,38 @@ function _graded_complex_from_image_channels(channels::Vector{<:AbstractArray}, 
 
     cells = [collect(1:length(cells_by_dim[k+1])) for k in 0:N]
     G = GradedComplex(cells, cached.boundaries, grades)
-    axes = get(spec.params, :axes, _axes_from_grades(grades, C))
     orientation = get(spec.params, :orientation, ntuple(_ -> 1, C))
+    axes = get(spec.params, :axes, _axes_from_grades(grades, C; orientation=orientation))
     return G, axes, orientation
 end
 
-function _graded_complex_from_image(data::ImageNd, spec::FiltrationSpec)
+function _graded_complex_from_image(data::ImageNd, spec::FiltrationSpec;
+                                    cache::Union{Nothing,EncodingCache}=nothing)
     if haskey(spec.params, :channels)
         chans = spec.params[:channels]
-        return _graded_complex_from_image_channels(chans, spec)
+        return _graded_complex_from_image_channels(chans, spec; cache=cache)
     elseif spec.kind == :image_distance_bifiltration
         mask = get(spec.params, :mask, nothing)
         mask === nothing && error("image_distance_bifiltration requires mask.")
         dist = _distance_transform(mask)
         chans = [data.data, dist]
-        return _graded_complex_from_image_channels(chans, spec)
+        return _graded_complex_from_image_channels(chans, spec; cache=cache)
     else
-        return _graded_complex_from_image_channels([data.data], spec)
+        return _graded_complex_from_image_channels([data.data], spec; cache=cache)
     end
 end
 
-function _graded_complex_from_data(data, spec::FiltrationSpec)
+function _graded_complex_from_data(data, spec::FiltrationSpec;
+                                   cache::Union{Nothing,EncodingCache}=nothing)
     if data isa GradedComplex
         N = length(data.grades[1])
-        axes = get(spec.params, :axes, _axes_from_grades(data.grades, N))
         orientation = get(spec.params, :orientation, ntuple(_ -> 1, N))
+        axes = get(spec.params, :axes, _axes_from_grades(data.grades, N; orientation=orientation))
         return data, axes, orientation
     elseif data isa PointCloud
         return _graded_complex_from_point_cloud(data, spec)
     elseif data isa ImageNd
-        return _graded_complex_from_image(data, spec)
+        return _graded_complex_from_image(data, spec; cache=cache)
     elseif data isa GraphData
         return _graded_complex_from_graph(data, spec)
     elseif data isa EmbeddedPlanarGraph2D
@@ -1922,7 +1894,7 @@ function _graded_complex_from_data(data, spec::FiltrationSpec)
             img = ImageNd(chans[1])
             spec2 = FiltrationSpec(; kind=:image_distance_bifiltration, channels=chans,
                                     orientation=get(spec.params, :orientation, (-1, 1)))
-            return _graded_complex_from_image(img, spec2)
+            return _graded_complex_from_image(img, spec2; cache=cache)
         else
             # Treat as a graph with externally supplied vertex grades
             gspec = FiltrationSpec(; kind=spec.kind, spec.params...)
@@ -1936,20 +1908,24 @@ function _graded_complex_from_data(data, spec::FiltrationSpec)
 end
 
 """
-    encode_from_data(data, spec; degree=0) -> EncodingResult
+    encode_from_data(data, spec; degree=0, output=:result) -> EncodingResult
 
 Ingest a dataset + filtration spec into a persistence module and return
-an EncodingResult with a fringe presentation.
+an EncodingResult with a fringe presentation. Use `output=:raw` to get
+`(P, H, pi)` instead.
 """
 function encode_from_data(data, spec::FiltrationSpec;
                           degree::Int=0,
+                          output::Symbol=:result,
                           return_tuple::Bool=false,
                           emit::Symbol=:fringe,
-                          field::AbstractCoeffField=QQField())
-    G, axes, orientation = _graded_complex_from_data(data, spec)
+                          field::AbstractCoeffField=QQField(),
+                          session_cache::Union{Nothing,SessionCache}=nothing)
+    enc_cache = _workflow_encoding_cache(session_cache)
+    G, axes, orientation = _graded_complex_from_data(data, spec; cache=enc_cache)
     if haskey(spec.params, :eps)
         G = _quantize_grades(G, spec.params[:eps])
-        axes = _axes_from_grades(G.grades, length(G.grades[1]))
+        axes = _axes_from_grades(G.grades, length(G.grades[1]); orientation=orientation)
     end
     axes_policy = get(spec.params, :axes_policy, :encoding)
     if axes_policy == :as_given
@@ -1967,29 +1943,38 @@ function encode_from_data(data, spec::FiltrationSpec;
     if emit == :flange && get(spec.params, :axis_kind, nothing) != :zn
         error("encode_from_data: emit=:flange requires axis_kind=:zn (integer axes).")
     end
-    P = _poset_from_axes_cached(axes, orientation)
+    P = _poset_from_axes_cached(axes, orientation; cache=enc_cache)
     pi = GridEncodingMap(P, axes; orientation=orientation)
-    pi2 = compile_encoding(P, pi)
+    pi2 = _compile_encoding_cached(P, pi, session_cache)
     C = cochain_complex_from_graded_complex(G, P, axes; orientation=orientation, field=field)
     M = cohomology_module(C, degree)
     H = fringe_presentation(M)
+    if return_tuple
+        output = :raw
+    end
     if emit == :flange
         FG = flange_presentation(M, pi)
-        return EncodingResult(P, M, pi2; H=H, presentation=(data=data, spec=spec),
-                              opts=EncodingOptions(; backend=:data, field=field), backend=:data,
-                              meta=(; flange=FG))
+        res = EncodingResult(P, M, pi2; H=H, presentation=(data=data, spec=spec),
+                             opts=EncodingOptions(; backend=:data, field=field), backend=:data,
+                             meta=(; flange=FG))
+        return _return_encoding(res, output)
     elseif emit != :fringe
         error("encode_from_data: emit must be :fringe or :flange.")
     end
-    if return_tuple
-        return (P, H, pi2)
-    end
-    return EncodingResult(P, M, pi2; H=H, presentation=(data=data, spec=spec),
-                          opts=EncodingOptions(; backend=:data, field=field), backend=:data, meta=(;))
+    res = EncodingResult(P, M, pi2; H=H, presentation=(data=data, spec=spec),
+                         opts=EncodingOptions(; backend=:data, field=field), backend=:data, meta=(;))
+    return _return_encoding(res, output)
 end
 
-ingest(data, spec::FiltrationSpec; degree::Int=0, field::AbstractCoeffField=QQField()) =
-    encode_from_data(data, spec; degree=degree, return_tuple=true, field=field)
+ingest(data, spec::FiltrationSpec;
+       degree::Int=0,
+       field::AbstractCoeffField=QQField(),
+       session_cache::Union{Nothing,SessionCache}=nothing) =
+    encode_from_data(data, spec;
+                     degree=degree,
+                     output=:raw,
+                     field=field,
+                     session_cache=session_cache)
 
 # -----------------------------------------------------------------------------
 # Coarsening / compression of finite encodings
@@ -2007,7 +1992,9 @@ Currently supported:
 This leaves `enc.backend` unchanged (the ambient encoding backend is still the same),
 but replaces `(P, M, pi, H)` with their coarsened versions.
 """
-function coarsen(enc::EncodingResult; method::Symbol = :uptight)
+function coarsen(enc::EncodingResult;
+                 method::Symbol = :uptight,
+                 session_cache::Union{Nothing,SessionCache}=nothing)
     method === :uptight || error("coarsen: unsupported method=$method. Currently only :uptight is supported.")
 
     # 1) Compute coarsening map pi : (old P) -> (new P2)
@@ -2022,7 +2009,7 @@ function coarsen(enc::EncodingResult; method::Symbol = :uptight)
 
     # 4) Postcompose old ambient classifier with the coarsening map
     pi2 = PostcomposedEncodingMap(enc.pi, pi)
-    pi2c = compile_encoding(pi.P, pi2)
+    pi2c = _compile_encoding_cached(pi.P, pi2, session_cache)
 
     # 5) Preserve meta (Dict or NamedTuple), but record what happened
     meta2 = if enc.meta isa AbstractDict
@@ -2157,28 +2144,41 @@ Compute Hom(A, B) for finite-poset modules.
 
 Convenience overloads accept EncodingResult and unwrap the underlying PModule.
 """
-function hom(A::EncodingResult, B::EncodingResult)
+function hom(A::EncodingResult, B::EncodingResult;
+             cache::Union{Nothing,DerivedFunctors.HomSystemCache}=nothing,
+             session_cache::Union{Nothing,SessionCache}=nothing)
     (A.P === B.P) || error("hom: encodings are on different posets; use encode(x, y; ...) to common-encode first.")
-    return DerivedFunctors.Hom(A.M, B.M)
+    K = coeff_type(A.M.field)
+    cache2 = _hom_cache_from_session(cache, session_cache, K)
+    return DerivedFunctors.Hom(A.M, B.M; cache=cache2)
 end
 
-function hom(A::EncodingResult, B::Modules.PModule{K}) where {K}
+function hom(A::EncodingResult, B::Modules.PModule{K};
+             cache::Union{Nothing,DerivedFunctors.HomSystemCache}=nothing,
+             session_cache::Union{Nothing,SessionCache}=nothing) where {K}
     (A.M.Q === B.Q) || error("hom: posets mismatch.")
-    return DerivedFunctors.Hom(A.M, B)
+    cache2 = _hom_cache_from_session(cache, session_cache, K)
+    return DerivedFunctors.Hom(A.M, B; cache=cache2)
 end
 
-function hom(A::Modules.PModule{K}, B::EncodingResult) where {K}
+function hom(A::Modules.PModule{K}, B::EncodingResult;
+             cache::Union{Nothing,DerivedFunctors.HomSystemCache}=nothing,
+             session_cache::Union{Nothing,SessionCache}=nothing) where {K}
     (A.Q === B.M.Q) || error("hom: posets mismatch.")
-    return DerivedFunctors.Hom(A, B.M)
+    cache2 = _hom_cache_from_session(cache, session_cache, K)
+    return DerivedFunctors.Hom(A, B.M; cache=cache2)
 end
 
-function hom(A::Modules.PModule{K}, B::Modules.PModule{K}) where {K}
+function hom(A::Modules.PModule{K}, B::Modules.PModule{K};
+             cache::Union{Nothing,DerivedFunctors.HomSystemCache}=nothing,
+             session_cache::Union{Nothing,SessionCache}=nothing) where {K}
     (A.Q === B.Q) || error("hom: posets mismatch.")
-    return DerivedFunctors.Hom(A, B)
+    cache2 = _hom_cache_from_session(cache, session_cache, K)
+    return DerivedFunctors.Hom(A, B; cache=cache2)
 end
 
 """
-    tor(Rop, L; maxdeg=3, model=:auto)
+    tor(Rop, L; maxdeg=3, model=:auto, cache=nothing)
 
 Compute Tor_t(Rop, L), where `Rop` is a right-module represented as a module on
 the opposite poset P^op, and `L` is a left-module on P.
@@ -2187,17 +2187,27 @@ For EncodingResult inputs, the underlying posets must be opposite:
     poset_equal_opposite(L.P, Rop.P)
 """
 function tor(Rop::EncodingResult, L::EncodingResult;
-             maxdeg::Int=3, model::Symbol=:auto)
+             maxdeg::Int=3, model::Symbol=:auto,
+             cache::Union{Nothing,ResolutionCache}=nothing,
+             session_cache::Union{Nothing,SessionCache}=nothing)
     poset_equal_opposite(L.P, Rop.P) || error("tor: expected first argument on opposite poset of the second.")
     df = DerivedFunctorOptions(; maxdeg=maxdeg, model=model, canon=:none)
-    return DerivedFunctors.Tor(Rop.M, L.M, df)
+    model_eff = model == :auto ? :first : model
+    cache_target = model_eff == :second ? L.M : Rop.M
+    cache2 = _resolution_cache_from_session(cache, session_cache, cache_target)
+    return DerivedFunctors.Tor(Rop.M, L.M, df; cache=cache2)
 end
 
 function tor(Rop::Modules.PModule{K}, L::Modules.PModule{K};
-             maxdeg::Int=3, model::Symbol=:auto)
+             maxdeg::Int=3, model::Symbol=:auto,
+             cache::Union{Nothing,ResolutionCache}=nothing,
+             session_cache::Union{Nothing,SessionCache}=nothing) where {K}
     poset_equal_opposite(L.Q, Rop.Q) || error("tor: expected first argument on opposite poset of the second.")
     df = DerivedFunctorOptions(; maxdeg=maxdeg, model=model, canon=:none)
-    return DerivedFunctors.Tor(Rop, L, df)
+    model_eff = model == :auto ? :first : model
+    cache_target = model_eff == :second ? L : Rop
+    cache2 = _resolution_cache_from_session(cache, session_cache, cache_target)
+    return DerivedFunctors.Tor(Rop, L, df; cache=cache2)
 end
 
 tor(Rop::EncodingResult, L::Modules.PModule{K}; kwargs...) where {K} = tor(Rop.M, L; kwargs...)
@@ -2215,7 +2225,7 @@ function ext_algebra(enc::EncodingResult; maxdeg::Int=3, model::Symbol=:auto, ca
 end
 
 """
-    ext(A::EncodingResult, B::EncodingResult; maxdeg=3, model=:auto, canon=:auto)
+    ext(A::EncodingResult, B::EncodingResult; maxdeg=3, model=:auto, canon=:auto, cache=nothing)
 
 Compute Ext^t(A, B) using the finite-poset modules stored in EncodingResult.
 
@@ -2224,21 +2234,34 @@ If `A` and `B` are not encoded on the same poset object, you must common-encode 
     E = ext(encs[1], encs[2])
 """
 function ext(A::EncodingResult, B::EncodingResult;
-             maxdeg::Int=3, model::Symbol=:auto, canon::Symbol=:auto)
+             maxdeg::Int=3, model::Symbol=:auto, canon::Symbol=:auto,
+             cache::Union{Nothing,ResolutionCache}=nothing,
+             session_cache::Union{Nothing,SessionCache}=nothing)
     (A.P === B.P) || error("ext: encodings are on different posets; use encode(x, y; ...) to common-encode first.")
     df = DerivedFunctorOptions(; maxdeg=maxdeg, model=model, canon=canon)
-    return DerivedFunctors.Ext(A.M, B.M, df)
+    model_eff = model == :auto ? :projective : model
+    cache_target = model_eff == :injective ? B.M :
+                   model_eff == :projective ? A.M : nothing
+    cache2 = _resolution_cache_from_session(cache, session_cache, cache_target)
+    return DerivedFunctors.Ext(A.M, B.M, df; cache=cache2)
 end
 
 function ext(A::EncodingResult, B::Modules.PModule{K};
-             maxdeg::Int=3, model::Symbol=:auto, canon::Symbol=:auto) where {K}
+             maxdeg::Int=3, model::Symbol=:auto, canon::Symbol=:auto,
+             cache::Union{Nothing,ResolutionCache}=nothing,
+             session_cache::Union{Nothing,SessionCache}=nothing) where {K}
     (A.M.Q === B.Q) || error("ext: module B lives on a different poset; common-encode first.")
     df = DerivedFunctorOptions(; maxdeg=maxdeg, model=model, canon=canon)
-    return DerivedFunctors.Ext(A.M, B, df)
+    model_eff = model == :auto ? :projective : model
+    cache_target = model_eff == :injective ? B :
+                   model_eff == :projective ? A.M : nothing
+    cache2 = _resolution_cache_from_session(cache, session_cache, cache_target)
+    return DerivedFunctors.Ext(A.M, B, df; cache=cache2)
 end
 
 """
-    resolve(enc::EncodingResult; kind=:projective, opts=ResolutionOptions(), minimality=false)
+    resolve(enc::EncodingResult; kind=:projective, opts=ResolutionOptions(),
+            minimality=false, cache=nothing)
 
 Compute a projective or injective resolution starting from an EncodingResult.
 Returns a ResolutionResult that stores the resolution plus provenance.
@@ -2247,24 +2270,30 @@ Returns a ResolutionResult that stores the resolution plus provenance.
 - kind=:injective computes an InjectiveResolution and stores its Bass table in `meta`.
 
 Minimality checks can be expensive; enable with `minimality=true`.
+
+If `cache` is a `ResolutionCache`, repeated calls on the same encoded module and
+`maxlen` reuse previously built projective/injective resolutions.
 """
 function resolve(enc::EncodingResult;
                  kind::Symbol=:projective,
                  opts::Union{ResolutionOptions,Nothing}=nothing,
                  minimality::Bool=false,
-                 check_hull::Bool=true)
+                 check_hull::Bool=true,
+                 cache::Union{Nothing,ResolutionCache}=nothing,
+                 session_cache::Union{Nothing,SessionCache}=nothing)
     opts = _resolve_resolution_opts(opts)
+    cache2 = _resolution_cache_from_session(cache, session_cache, enc.M)
     kind_norm = kind in (:proj, :projective) ? :projective :
                 kind in (:inj, :injective)   ? :injective  :
                 error("resolve: kind must be :projective or :injective (got $(kind))")
 
     if kind_norm == :projective
-        res = DerivedFunctors.projective_resolution(enc.M, opts)
+        res = DerivedFunctors.projective_resolution(enc.M, opts; cache=cache2)
         b = DerivedFunctors.betti(res)
         mrep = minimality ? DerivedFunctors.minimality_report(res) : nothing
         return ResolutionResult(res; enc=enc, betti=b, minimality=mrep, opts=opts, meta=(kind=:projective,))
     else
-        res = DerivedFunctors.injective_resolution(enc.M, opts)
+        res = DerivedFunctors.injective_resolution(enc.M, opts; cache=cache2)
         bass = DerivedFunctors.bass(res)
         mrep = minimality ? DerivedFunctors.minimality_report(res; check_hull=check_hull) : nothing
         return ResolutionResult(res; enc=enc, betti=nothing, minimality=mrep, opts=opts,
@@ -2281,11 +2310,19 @@ end
 
 Compute RHom(C, N) where C is a module cochain complex and N is a module.
 """
-rhom(C::ModuleComplexes.ModuleCochainComplex{K}, N::Modules.PModule{K}; kwargs...) where {K} =
-    ModuleComplexes.RHom(C, N; kwargs...)
+function rhom(C::ModuleComplexes.ModuleCochainComplex{K}, N::Modules.PModule{K};
+              cache::Union{Nothing,DerivedFunctors.HomSystemCache}=nothing,
+              session_cache::Union{Nothing,SessionCache}=nothing,
+              kwargs...) where {K}
+    cache2 = _hom_cache_from_session(cache, session_cache, K)
+    return ModuleComplexes.RHom(C, N; cache=cache2, kwargs...)
+end
 
-rhom(C::ModuleComplexes.ModuleCochainComplex{K}, N::EncodingResult; kwargs...) where {K} =
-    rhom(C, N.M; kwargs...)
+rhom(C::ModuleComplexes.ModuleCochainComplex{K}, N::EncodingResult;
+     cache::Union{Nothing,DerivedFunctors.HomSystemCache}=nothing,
+     session_cache::Union{Nothing,SessionCache}=nothing,
+     kwargs...) where {K} =
+    rhom(C, N.M; cache=cache, session_cache=session_cache, kwargs...)
 
 
 """
@@ -2306,13 +2343,20 @@ derived_tensor(Rop::EncodingResult, C::ModuleComplexes.ModuleCochainComplex{K}; 
 Compute HyperExt^t(C, N) for a module cochain complex C and a module N.
 """
 function hyperext(C::ModuleComplexes.ModuleCochainComplex{K}, N::Modules.PModule{K};
-                  maxdeg::Int=3, kwargs...) where {K}
+                  maxdeg::Int=3,
+                  cache::Union{Nothing,DerivedFunctors.HomSystemCache}=nothing,
+                  session_cache::Union{Nothing,SessionCache}=nothing,
+                  kwargs...) where {K}
     df = DerivedFunctorOptions(; maxdeg=maxdeg, model=:auto, canon=:none)
-    return ModuleComplexes.hyperExt(C, N, df; kwargs...)
+    cache2 = _hom_cache_from_session(cache, session_cache, K)
+    return ModuleComplexes.hyperExt(C, N, df; cache=cache2, kwargs...)
 end
 
-hyperext(C::ModuleComplexes.ModuleCochainComplex{K}, N::EncodingResult; kwargs...) where {K} =
-    hyperext(C, N.M; kwargs...)
+hyperext(C::ModuleComplexes.ModuleCochainComplex{K}, N::EncodingResult;
+         cache::Union{Nothing,DerivedFunctors.HomSystemCache}=nothing,
+         session_cache::Union{Nothing,SessionCache}=nothing,
+         kwargs...) where {K} =
+    hyperext(C, N.M; cache=cache, session_cache=session_cache, kwargs...)
 
 
 """
@@ -2377,11 +2421,13 @@ Compute a single invariant from the `Invariants` submodule and wrap it in an `In
 function invariant(enc::EncodingResult;
                    which=:rank_invariant,
                    opts::Union{InvariantOptions,Nothing}=nothing,
+                   session_cache::Union{Nothing,SessionCache}=nothing,
                    kwargs...)
     opts = _resolve_invariant_opts(opts)
+    enc2 = _encoding_with_session_cache(enc, session_cache)
     f = which isa Symbol ? getfield(Invariants, which) : which
-    val = _call_invariant(f, enc, opts; kwargs...)
-    return InvariantResult(enc, which, val; opts=opts, meta=NamedTuple())
+    val = _call_invariant(f, enc2, opts; kwargs...)
+    return InvariantResult(enc2, which, val; opts=opts, meta=NamedTuple())
 end
 
 
@@ -2397,12 +2443,13 @@ Batch convenience wrapper around `invariant`.
 function invariants(enc::EncodingResult;
                     which=[:rank_invariant],
                     opts::Union{InvariantOptions,Nothing}=nothing,
+                    session_cache::Union{Nothing,SessionCache}=nothing,
                     kwargs...)
     opts = _resolve_invariant_opts(opts)
     if which isa AbstractVector
-        return [invariant(enc; which=w, opts=opts, kwargs...) for w in which]
+        return [invariant(enc; which=w, opts=opts, session_cache=session_cache, kwargs...) for w in which]
     else
-        return [invariant(enc; which=which, opts=opts, kwargs...)]
+        return [invariant(enc; which=which, opts=opts, session_cache=session_cache, kwargs...)]
     end
 end
 
@@ -2448,6 +2495,29 @@ slice_barcode(M::PModule{K}, chain::AbstractVector{Int}, opts::Union{InvariantOp
 
 slice_barcodes(M::PModule{K}, chains::AbstractVector, opts::Union{InvariantOptions,Nothing}=nothing; kwargs...) where {K} =
     Invariants.slice_barcodes(M, chains; kwargs...)
+
+function slice_barcodes(M::PModule{K}, plan::Invariants.CompiledSlicePlan, opts::Union{InvariantOptions,Nothing}=nothing; kwargs...) where {K}
+    opts0 = _resolve_invariant_opts(opts)
+    kwargs_nt = NamedTuple(kwargs)
+    for k in keys(kwargs_nt)
+        (k == :threads || k == :packed || k == :box || k == :strict) && continue
+        throw(ArgumentError("slice_barcodes(plan): unsupported keyword :$k"))
+    end
+    return Invariants.slice_barcodes(M, plan;
+        packed = get(kwargs_nt, :packed, false),
+        threads = get(kwargs_nt, :threads, opts0.threads))
+end
+
+function slice_barcodes(M::PModule{K}, pi, opts::Union{InvariantOptions,Nothing}=nothing; kwargs...) where {K}
+    opts0 = _resolve_invariant_opts(opts)
+    kwargs_nt = NamedTuple(kwargs)
+    kwargs2 = (; (k => v for (k, v) in pairs(kwargs_nt) if k != :box && k != :strict && k != :threads)...)
+    return Invariants.slice_barcodes(M, pi;
+        box = get(kwargs_nt, :box, opts0.box),
+        strict = get(kwargs_nt, :strict, opts0.strict),
+        threads = get(kwargs_nt, :threads, opts0.threads),
+        kwargs2...)
+end
 
 rank_invariant(enc::EncodingResult; opts::Union{InvariantOptions,Nothing}=nothing, kwargs...) =
     invariant(enc; which=:rank_invariant, opts=opts, kwargs...).value
@@ -2524,3 +2594,5 @@ function matching_distance(encA::EncodingResult, encB::EncodingResult;
         error("matching_distance: unknown method=$(method). Supported: :auto, :approx, :exact_2d")
     end
 end
+
+end # module Workflow

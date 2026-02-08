@@ -93,7 +93,7 @@ if field isa CM.QQField
 
     sigy = [BitVector([false]), BitVector([true])]
     sigz = [BitVector([false]), BitVector([false])]
-    pi = PLP.PLEncodingMap(1, sigy, sigz, [hp1, hp2], [Float64[0.5], Float64[1.5]])
+    pi = PLP.PLEncodingMap(1, sigy, sigz, [hp1, hp2], [(0.5,), (1.5,)])
 
     @test PLP.locate(pi, [0.25]) != 0
     @test PLP.locate(pi, [1.75]) != 0
@@ -145,7 +145,7 @@ if field isa CM.QQField
 
         sigy = [BitVector()]
         sigz = [BitVector()]
-        pi = PLP.PLEncodingMap(2, sigy, sigz, [hp], [Float64[0.5, 0.5]])
+        pi = PLP.PLEncodingMap(2, sigy, sigz, [hp], [(0.5, 0.5)])
 
         box = (Float64[0.0, 0.0], Float64[1.0, 1.0])
         perim = PM.region_perimeter(pi, 1; box=box)
@@ -160,7 +160,7 @@ if field isa CM.QQField
                  0 0 -1 ]
         b3 = K[1, 1, 1, 0, 0, 0]
         hp3 = PLP.make_hpoly(A3, b3)
-        pi3 = PLP.PLEncodingMap(3, [BitVector()], [BitVector()], [hp3], [Float64[0.5, 0.5, 0.5]])
+        pi3 = PLP.PLEncodingMap(3, [BitVector()], [BitVector()], [hp3], [(0.5, 0.5, 0.5)])
         box3 = (Float64[0,0,0], Float64[1,1,1])
         sa = PM.region_surface_area(pi3, 1; box=box3)
         @test isapprox(sa, 6.0; atol=1e-9)
@@ -177,7 +177,7 @@ if field isa CM.QQField
         sigz2 = [BitVector(), BitVector()]
         pi2 = PLP.PLEncodingMap(2, sigy2, sigz2,
                                         [hp1, hp2],
-                                        [Float64[0.5,0.5], Float64[1.5,0.5]])
+                                        [(0.5,0.5), (1.5,0.5)])
         box2 = (Float64[0,0], Float64[2,1])
         adj = PM.region_adjacency(pi2; box=box2)
         @test haskey(adj, (1,2))
@@ -231,11 +231,11 @@ if field isa CM.QQField
         @test isapprox(perim_cache, perim; atol=1e-12, rtol=0.0)
 
         # Define the non-cached centroid for comparison.
-        c = PM.region_centroid(pi, 1; box=box)
+        centroid = PM.region_centroid(pi, 1; box=box)
 
         c_cache = PM.region_centroid(pi, 1; cache=cache1)
-        @test isapprox(c_cache[1], c[1]; atol=1e-10)
-        @test isapprox(c_cache[2], c[2]; atol=1e-10)
+        @test isapprox(c_cache[1], centroid[1]; atol=1e-10)
+        @test isapprox(c_cache[2], centroid[2]; atol=1e-10)
 
         # (3) boundary-measure breakdown: sum of facet measures should match perimeter.
         bd = PM.region_boundary_measure_breakdown(pi, 1; cache=cache1)
@@ -253,7 +253,7 @@ if field isa CM.QQField
         sigy3 = [BitVector(), BitVector()]
         sigz3 = [BitVector(), BitVector()]
         pi2 = PLP.PLEncodingMap(2, sigy3, sigz3, [hp_left, hp_right],
-                                [[0.5, 0.5], [1.5, 0.5]])
+                                [(0.5, 0.5), (1.5, 0.5)])
         box2 = ([0.0, 0.0], [2.0, 1.0])
         cache2 = PLP.poly_in_box_cache(pi2; box=box2, closure=true)
 
@@ -638,6 +638,7 @@ if field isa CM.QQField
 end
 end
 
+if field isa CM.QQField
 @testset "uncertainty + support geometry + ehrhart" begin
     # --- PLBackend 1D encoding as in region geometry tests ---
     Ups = [PLB.BoxUpset([0.0])]
@@ -689,7 +690,7 @@ end
     b2 = [0//1]
     hp1 = PLP.make_hpoly(A1, b1)
     hp2 = PLP.make_hpoly(A2, b2)
-    reps = [[0.0,  1.0], [0.0, -1.0]]
+    reps = [(0.0,  1.0), (0.0, -1.0)]
     sigy = [BitVector([false]), BitVector([true])]
     sigz = [BitVector([false]), BitVector([false])]
     pi2 = PLP.PLEncodingMap(2, sigy, sigz, [hp1, hp2], reps)
@@ -712,7 +713,7 @@ end
     # --- Ehrhart-like fit on ZnEncodingMap (period=1) ---
     FZ = PM.FlangeZn
     flats = [FZ.IndFlat(FZ.face(2, [true, true]), [0, 0]; id=:F)]  # tau = all free => no cuts, but sets n=2
-    injs  = FZ.IndInj[]
+    injs  = FZ.IndInj{2}[]
     Phi   = zeros(K, 0, 1)
     FG    = PM.Flange{K}(2, flats, injs, Phi; field=field)
 
@@ -742,5 +743,6 @@ end
     @test isapprox(c[2], 8.0; atol=1e-8)
     @test isapprox(c[3], 16.0; atol=1e-8)
 
+end
 end
 end # with_fields

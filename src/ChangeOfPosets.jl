@@ -18,7 +18,7 @@ import ..FiniteFringe
 using ..FiniteFringe: AbstractPoset, FinitePoset, ProductPoset, cover_edges, leq, leq_matrix, nvertices, poset_equal,
                       downset_indices, upset_indices
 using ..Encoding: EncodingMap
-using ..CoreModules: AbstractCoeffField, ResolutionOptions, DerivedFunctorOptions
+using ..CoreModules: AbstractCoeffField, RealField, ResolutionOptions, DerivedFunctorOptions, SessionCache
 
 @inline _resolve_df_opts(opts::Union{DerivedFunctorOptions,Nothing}) =
     opts === nothing ? DerivedFunctorOptions() : opts
@@ -164,10 +164,11 @@ end
 #     P, Ms, pi1, pi2 = encode_pmodules_to_common_poset(M1, M2)
 #     H = Hom(Ms[1], Ms[2])
 
-# Cache product posets by identity of their leq matrices for dense posets.
-# For structured posets, use object identity directly.
-const _PRODUCT_POSET_CACHE = IdDict{BitMatrix, IdDict{BitMatrix, NamedTuple}}()
-const _PRODUCT_POSET_OBJ_CACHE = IdDict{AbstractPoset, IdDict{AbstractPoset, NamedTuple}}()
+@inline _product_dense_cache(session_cache::Union{Nothing,SessionCache}) =
+    session_cache === nothing ? nothing : session_cache.product_dense
+
+@inline _product_obj_cache(session_cache::Union{Nothing,SessionCache}) =
+    session_cache === nothing ? nothing : session_cache.product_obj
 
 # Pre-populate the FiniteFringe cover-edges cache for the cartesian product poset.
 # This avoids the expensive generic cover-edge computation on P1 x P2.
@@ -208,13 +209,15 @@ function _cache_product_cover_edges!(Pprod::FinitePoset, P1::FinitePoset, P2::Fi
         end
     end
 
-    # FiniteFringe caches cover data keyed by the leq BitMatrix identity.
-    FiniteFringe._COVER_EDGES_CACHE[leq_matrix(Pprod)] = FiniteFringe.CoverEdges(mat, edges)
+    # Pre-populate per-poset cover-edge cache (lazy cover-cache builder reuses this).
+    FiniteFringe._set_cover_edges_cache!(Pprod, FiniteFringe.CoverEdges(mat, edges))
     return nothing
 end
 
 """
-    product_poset(P1::FinitePoset, P2::FinitePoset; check=false, cache_cover_edges=true, use_cache=true)
+    product_poset(P1::FinitePoset, P2::FinitePoset;
+                  check=false, cache_cover_edges=true, use_cache=true,
+                  session_cache=nothing)
 
 Construct the cartesian product poset P = P1 x P2 (vertex set size P1.n * P2.n) and return:
 
@@ -228,7 +231,7 @@ Index convention:
 
 Performance:
   - If `use_cache=true` and `check=false`, repeated calls with the same `P1` and `P2`
-    objects reuse the previously constructed product poset.
+    objects reuse the previously constructed product poset when `session_cache` is set.
   - If `cache_cover_edges=true`, we also pre-fill the cover-edge cache for the product,
     which makes downstream homological algebra much faster.
 """
@@ -238,11 +241,14 @@ function product_poset(
     check::Bool = false,
     cache_cover_edges::Bool = true,
     use_cache::Bool = true,
+    session_cache::Union{Nothing,SessionCache}=nothing,
 )
+    dense_cache = _product_dense_cache(session_cache)
+    cache_enabled = use_cache && !check && cache_cover_edges && dense_cache !== nothing
     # Fast cache path (only for the common "production" settings).
-    if use_cache && !check && cache_cover_edges
-        inner = get!(_PRODUCT_POSET_CACHE, leq_matrix(P1)) do
-            IdDict{BitMatrix, NamedTuple}()
+    if cache_enabled
+        inner = get!(dense_cache, leq_matrix(P1)) do
+            IdDict{Any,Any}()
         end
         if haskey(inner, leq_matrix(P2))
             return inner[leq_matrix(P2)]
@@ -286,9 +292,9 @@ function product_poset(
 
     out = (P = P, pi1 = pi1, pi2 = pi2)
 
-    if use_cache && !check && cache_cover_edges
-        inner = get!(_PRODUCT_POSET_CACHE, leq_matrix(P1)) do
-            IdDict{BitMatrix, NamedTuple}()
+    if cache_enabled
+        inner = get!(dense_cache, leq_matrix(P1)) do
+            IdDict{Any,Any}()
         end
         inner[leq_matrix(P2)] = out
     end
@@ -302,10 +308,13 @@ function product_poset(
     check::Bool = false,
     cache_cover_edges::Bool = true,
     use_cache::Bool = true,
+    session_cache::Union{Nothing,SessionCache}=nothing,
 )
-    if use_cache
-        inner = get!(_PRODUCT_POSET_OBJ_CACHE, P1) do
-            IdDict{AbstractPoset, NamedTuple}()
+    obj_cache = _product_obj_cache(session_cache)
+    cache_enabled = use_cache && obj_cache !== nothing
+    if cache_enabled
+        inner = get!(obj_cache, P1) do
+            IdDict{Any,Any}()
         end
         if haskey(inner, P2)
             return inner[P2]
@@ -330,9 +339,9 @@ function product_poset(
     pi2 = EncodingMap(P, P2, pi2_of_q)
 
     out = (P = P, pi1 = pi1, pi2 = pi2)
-    if use_cache
-        inner = get!(_PRODUCT_POSET_OBJ_CACHE, P1) do
-            IdDict{AbstractPoset, NamedTuple}()
+    if cache_enabled
+        inner = get!(obj_cache, P1) do
+            IdDict{Any,Any}()
         end
         inner[P2] = out
     end
@@ -494,6 +503,7 @@ function encode_pmodules_to_common_poset(
     check_poset::Bool = false,
     cache_cover_edges::Bool = true,
     use_cache::Bool = true,
+    session_cache::Union{Nothing,SessionCache}=nothing,
 ) where {K}
     P1 = M1.Q
     P2 = M2.Q
@@ -523,7 +533,11 @@ function encode_pmodules_to_common_poset(
         error("encode_pmodules_to_common_poset: only method=:product is implemented.")
     end
 
-    prod = product_poset(P1, P2; check = check_poset, cache_cover_edges = cache_cover_edges, use_cache = use_cache)
+    prod = product_poset(P1, P2;
+                         check = check_poset,
+                         cache_cover_edges = cache_cover_edges,
+                         use_cache = use_cache,
+                         session_cache = session_cache)
     P = prod.P
     pi1 = prod.pi1
     pi2 = prod.pi2
@@ -644,13 +658,29 @@ function _offset_map(idxs::Vector{Int}, d::Vector{Int})
 end
 
 # Left inverse for a full-column-rank matrix using exact field linear algebra.
-function _left_inverse_full_column(field::AbstractCoeffField, A::Matrix{K}) where {K}
-    m,n = size(A)
+function _left_inverse_full_column(field::AbstractCoeffField, A::AbstractMatrix{K}) where {K}
+    A0 = Matrix(A)
+    m,n = size(A0)
     if n == 0
         return zeros(K, 0, m)
     end
-    G = transpose(A) * A
-    return FieldLinAlg.solve_fullcolumn(field, G, transpose(A))
+    if field isa RealField
+        return A0 \ Matrix{K}(I, m, m)
+    end
+
+    Aug = hcat(A0, Matrix{K}(I, m, m))
+    R, pivs_all = FieldLinAlg.rref(field, Aug)
+    pivs = Int[]
+    for p in pivs_all
+        p <= n && push!(pivs, p)
+    end
+    length(pivs) == n || error("left_inverse_full_column: expected full column rank, got rank $(length(pivs)) < $n")
+
+    L = zeros(K, n, m)
+    @inbounds for (row, pcol) in enumerate(pivs)
+        L[pcol, :] = R[row, n+1:end]
+    end
+    return L
 end
 
 # Fiber downset index sets: I_p = { q | pi(q) <= p }
@@ -858,7 +888,7 @@ function _left_kan_data(pi::EncodingMap, M::PModule{K};
     edges = cover_edges(P).edges
     edge_maps = Dict{Tuple{Int,Int}, SparseMatrixCSC{K,Int}}()
     if threads && !isempty(edges)
-        chunks = [Vector{Tuple{Tuple{Int,Int}, SparseMatrixCSC{K,Int}}}() for _ in 1:Threads.nthreads()]
+        chunks = [Vector{Tuple{Tuple{Int,Int}, SparseMatrixCSC{K,Int}}}() for _ in 1:Threads.maxthreadid()]
         Threads.@threads for idx in eachindex(edges)
             u, v = edges[idx]
             Vu = dimV[u]
@@ -1232,7 +1262,7 @@ function _right_kan_data(pi::EncodingMap, M::PModule{K};
     edges = cover_edges(P).edges
     edge_maps = Dict{Tuple{Int,Int}, SparseMatrixCSC{K,Int}}()
     if threads && !isempty(edges)
-        chunks = [Vector{Tuple{Tuple{Int,Int}, SparseMatrixCSC{K,Int}}}() for _ in 1:Threads.nthreads()]
+        chunks = [Vector{Tuple{Tuple{Int,Int}, SparseMatrixCSC{K,Int}}}() for _ in 1:Threads.maxthreadid()]
         Threads.@threads for idx in eachindex(edges)
             u, v = edges[idx]
             Vu = dimV[u]

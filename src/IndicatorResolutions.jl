@@ -17,7 +17,7 @@ module IndicatorResolutions
 using SparseArrays, LinearAlgebra
 using ..FiniteFringe
 using ..IndicatorTypes: UpsetPresentation, DownsetCopresentation
-using ..CoreModules: AbstractCoeffField, RealField, coeff_type, eye, field_from_eltype
+using ..CoreModules: AbstractCoeffField, RealField, ResolutionCache, coeff_type, eye, field_from_eltype
 using ..FieldLinAlg
 
 using ..Modules: CoverCache, cover_cache, clear_cover_cache!, get_cover_cache,
@@ -30,6 +30,7 @@ import ..AbelianCategories
 using ..AbelianCategories: kernel_with_inclusion, _cokernel_module
 
 import ..FiniteFringe: AbstractPoset, FinitePoset, Upset, Downset, principal_upset, principal_downset, cover_edges, nvertices
+import ..FiniteFringe: build_cache!
 import Base.Threads
 
 const INDICATOR_MAP_MEMO_THRESHOLD = Ref(1_000_000)
@@ -57,21 +58,12 @@ function _map_leq_cached_indicator(
     u::Int,
     v::Int,
     cc::CoverCache,
-    memo
+    memo::AbstractVector{Union{Nothing,Matrix{K}}}
 )::Matrix{K} where {K}
-    if memo isa Dict{Tuple{Int,Int}, Matrix{K}}
-        key = (u, v)
-        if haskey(memo, key)
-            return memo[key]
-        end
-        X = map_leq(M, u, v; cache=cc)
-        memo[key] = X
-        return X
-    end
     n = nvertices(M.Q)
     X = _indicator_memo_get(memo, n, u, v)
     X === nothing || return X
-    return _indicator_memo_set!(memo, n, u, v, map_leq(M, u, v; cache=cc))
+    return _indicator_memo_set!(memo, n, u, v, Matrix(map_leq(M, u, v; cache=cc)))
 end
 
 # =============================================================================
@@ -86,6 +78,40 @@ id_morphism(H::FiniteFringe.FringeModule{K}) where {K} =
 
 @inline _is_exact_field(field::AbstractCoeffField) = !(field isa RealField)
 
+@inline _resolution_cache_shard_index(dicts) =
+    min(length(dicts), max(1, Threads.threadid()))
+
+@inline function _resolution_cache_indicator_get(cache::ResolutionCache, key)
+    shard = cache.indicator_shards[_resolution_cache_shard_index(cache.indicator_shards)]
+    v = get(shard, key, nothing)
+    v === nothing || return v
+    Base.lock(cache.lock)
+    try
+        v = get(cache.indicator, key, nothing)
+    finally
+        Base.unlock(cache.lock)
+    end
+    v === nothing || (shard[key] = v)
+    return v
+end
+
+@inline function _resolution_cache_indicator_store!(cache::ResolutionCache, key, val)
+    shard = cache.indicator_shards[_resolution_cache_shard_index(cache.indicator_shards)]
+    if haskey(shard, key)
+        return shard[key]
+    end
+    shard[key] = val
+    Base.lock(cache.lock)
+    out = get(cache.indicator, key, nothing)
+    if out === nothing
+        cache.indicator[key] = val
+        out = val
+    end
+    Base.unlock(cache.lock)
+    shard[key] = out
+    return out
+end
+
 function _is_zero_matrix(field::AbstractCoeffField, M)
     if field isa RealField
         tol = field.atol + field.rtol * opnorm(M, 1)
@@ -95,9 +121,6 @@ function _is_zero_matrix(field::AbstractCoeffField, M)
 end
 
 function _rank_restricted_field(field::AbstractCoeffField, A, rows, cols)
-    if field isa RealField
-        return FieldLinAlg.rank(field, Matrix(A[rows, cols]))
-    end
     return FieldLinAlg.rank_restricted(field, A, rows, cols)
 end
 
@@ -126,7 +149,7 @@ function pmodule_from_fringe(H::FiniteFringe.FringeModule{K}) where {K}
             dims[q] = 0
             continue
         end
-        phi_q = H.phi[rows, cols]
+        phi_q = @view H.phi[rows, cols]
         B[q] = FieldLinAlg.colspace(field, phi_q)
         dims[q] = size(B[q], 2)
     end
@@ -146,7 +169,7 @@ function pmodule_from_fringe(H::FiniteFringe.FringeModule{K}) where {K}
     end
 
     # Structure map on a cover u<v: M_u --incl--> E_u --proj--> E_v --coords--> M_v
-    edge_maps = Dict{Tuple{Int,Int}, Matrix{K}}()
+    edge_maps = Dict{Tuple{Int,Int}, AbstractMatrix{K}}()
     C = cover_edges(Q)
 
     @inbounds for (u, v) in C
@@ -218,15 +241,12 @@ function projective_cover(M::PModule{K};
                           threads::Bool = (Threads.nthreads() > 1)) where {K}
     field = M.field
     Q = M.Q; n = nvertices(Q)
+    build_cache!(Q; cover=true, updown=true)
     cc = cache === nothing ? cover_cache(Q) : cache
-    upsets = [upset_indices(Q, i) for i in 1:n]
-    downsets = [downset_indices(Q, i) for i in 1:n]
-    map_memo = _indicator_use_array_memo(n) ?
-        _indicator_new_array_memo(K, n) :
-        Dict{Tuple{Int,Int}, Matrix{K}}()
+    map_memo = _indicator_new_array_memo(K, n)
     memos = threads && Threads.nthreads() > 1 ?
-        [_indicator_use_array_memo(n) ? _indicator_new_array_memo(K, n) : Dict{Tuple{Int,Int}, Matrix{K}}()
-         for _ in 1:Threads.nthreads()] : Any[]
+        [_indicator_new_array_memo(K, n)
+         for _ in 1:Threads.nthreads()] : Vector{Vector{Union{Nothing,Matrix{K}}}}()
 
     # number of generators at each vertex = dim(M_v) - rank(incoming_image)
     gens_at = Vector{Vector{Tuple{Int,Int}}}(undef, n)
@@ -287,7 +307,7 @@ function projective_cover(M::PModule{K};
     if threads && Threads.nthreads() > 1
         Threads.@threads for i in 1:n
             s = 0
-            for p in downsets[i]
+            for p in downset_indices(Q, i)
                 s += gen_of_p[p]
             end
             F0_dims[i] = s
@@ -295,7 +315,7 @@ function projective_cover(M::PModule{K};
     else
         for i in 1:n
             s = 0
-            for p in downsets[i]
+            for p in downset_indices(Q, i)
                 s += gen_of_p[p]
             end
             F0_dims[i] = s
@@ -308,7 +328,7 @@ function projective_cover(M::PModule{K};
     if threads && Threads.nthreads() > 1
         Threads.@threads for i in 1:n
             lst = Tuple{Int,Int}[]
-            for p in downsets[i]
+            for p in downset_indices(Q, i)
                 gen_of_p[p] > 0 || continue
                 append!(lst, gens_at[p])
             end
@@ -322,7 +342,7 @@ function projective_cover(M::PModule{K};
     else
         for i in 1:n
             lst = Tuple{Int,Int}[]
-            for p in downsets[i]
+            for p in downset_indices(Q, i)
                 gen_of_p[p] > 0 || continue
                 append!(lst, gens_at[p])
             end
@@ -335,28 +355,22 @@ function projective_cover(M::PModule{K};
         end
     end
 
-    F0_edges = Dict{Tuple{Int,Int}, Matrix{K}}()
+    F0_edges = Dict{Tuple{Int,Int}, AbstractMatrix{K}}()
     if threads && Threads.nthreads() > 1
-        pairs_chunks = [Tuple{Int,Int}[] for _ in 1:Threads.nthreads()]
-        mats_chunks = [Matrix{K}[] for _ in 1:Threads.nthreads()]
-        Threads.@threads for u in 1:n
-            tid = Threads.threadid()
-            su = cc.succs[u]
-            for v in su
-                Muv = zeros(K, F0_dims[v], F0_dims[u])
-                # Inclusion: every generator active at u is also active at v.
-                for (j, g) in enumerate(active_at[u])
-                    i = pos_at[v][g]
-                    Muv[i, j] = one(K)
-                end
-                push!(pairs_chunks[tid], (u, v))
-                push!(mats_chunks[tid], Muv)
+        edges = cover_edges(Q)
+        mats = Vector{Matrix{K}}(undef, length(edges))
+        Threads.@threads for idx in eachindex(edges)
+            u, v = edges[idx]
+            Muv = zeros(K, F0_dims[v], F0_dims[u])
+            # Inclusion: every generator active at u is also active at v.
+            for (j, g) in enumerate(active_at[u])
+                i = pos_at[v][g]
+                Muv[i, j] = one(K)
             end
+            mats[idx] = Muv
         end
-        for tid in 1:length(pairs_chunks)
-            for k in eachindex(pairs_chunks[tid])
-                F0_edges[pairs_chunks[tid][k]] = mats_chunks[tid][k]
-            end
+        for idx in eachindex(edges)
+            F0_edges[edges[idx]] = mats[idx]
         end
     else
         @inbounds for u in 1:n
@@ -398,7 +412,7 @@ function projective_cover(M::PModule{K};
             Fi = F0_dims[i]
             cols = zeros(K, Mi, Fi)
             col = 1
-            for p in downsets[i]
+            for p in downset_indices(Q, i)
                 k = gen_of_p[p]
                 k == 0 && continue
                 A = _map_leq_cached_indicator(M, p, i, cc, memo)  # M_p -> M_i
@@ -417,7 +431,7 @@ function projective_cover(M::PModule{K};
             Fi = F0_dims[i]
             cols = zeros(K, Mi, Fi)
             col = 1
-            for p in downsets[i]
+            for p in downset_indices(Q, i)
                 k = gen_of_p[p]
                 k == 0 && continue
                 A = _map_leq_cached_indicator(M, p, i, cc, map_memo)  # M_p -> M_i
@@ -496,13 +510,12 @@ function _injective_hull(M::PModule{K};
                          threads::Bool = (Threads.nthreads() > 1)) where {K}
     field = M.field
     Q = M.Q; n = nvertices(Q)
+    build_cache!(Q; cover=true, updown=true)
     cc = cache === nothing ? cover_cache(Q) : cache
-    map_memo = _indicator_use_array_memo(n) ?
-        _indicator_new_array_memo(K, n) :
-        Dict{Tuple{Int,Int}, Matrix{K}}()
+    map_memo = _indicator_new_array_memo(K, n)
     memos = threads && Threads.nthreads() > 1 ?
-        [_indicator_use_array_memo(n) ? _indicator_new_array_memo(K, n) : Dict{Tuple{Int,Int}, Matrix{K}}()
-         for _ in 1:Threads.nthreads()] : Any[]
+        [_indicator_new_array_memo(K, n)
+         for _ in 1:Threads.nthreads()] : Vector{Vector{Union{Nothing,Matrix{K}}}}()
 
     # socle bases at each vertex and their multiplicities
     Soc = Vector{Matrix{K}}(undef, n)
@@ -530,7 +543,7 @@ function _injective_hull(M::PModule{K};
     if threads && Threads.nthreads() > 1
         Threads.@threads for i in 1:n
             s = 0
-            for u in upsets[i]
+            for u in upset_indices(Q, i)
                 s += mult[u]
             end
             Edims[i] = s
@@ -538,7 +551,7 @@ function _injective_hull(M::PModule{K};
     else
         for i in 1:n
             s = 0
-            for u in upsets[i]
+            for u in upset_indices(Q, i)
                 s += mult[u]
             end
             Edims[i] = s
@@ -552,7 +565,7 @@ function _injective_hull(M::PModule{K};
     if threads && Threads.nthreads() > 1
         Threads.@threads for i in 1:n
             lst = Tuple{Int,Int}[]
-            for u in upsets[i]
+            for u in upset_indices(Q, i)
                 mult[u] > 0 || continue
                 append!(lst, gens_at[u])
             end
@@ -566,7 +579,7 @@ function _injective_hull(M::PModule{K};
     else
         for i in 1:n
             lst = Tuple{Int,Int}[]
-            for u in upsets[i]
+            for u in upset_indices(Q, i)
                 mult[u] > 0 || continue
                 append!(lst, gens_at[u])
             end
@@ -581,27 +594,21 @@ function _injective_hull(M::PModule{K};
 
     # E structure maps along cover edges u<v are coordinate projections:
     # keep exactly those generators that are still active at v.
-    Eedges = Dict{Tuple{Int,Int}, Matrix{K}}()
+    Eedges = Dict{Tuple{Int,Int}, AbstractMatrix{K}}()
     if threads && Threads.nthreads() > 1
-        pairs_chunks = [Tuple{Int,Int}[] for _ in 1:Threads.nthreads()]
-        mats_chunks = [Matrix{K}[] for _ in 1:Threads.nthreads()]
-        Threads.@threads for u in 1:n
-            tid = Threads.threadid()
-            su = cc.succs[u]
-            for v in su
-                Muv = zeros(K, Edims[v], Edims[u])
-                for (i, g) in enumerate(active_at[v])
-                    j = pos_at[u][g]
-                    Muv[i, j] = one(K)
-                end
-                push!(pairs_chunks[tid], (u, v))
-                push!(mats_chunks[tid], Muv)
+        edges = cover_edges(Q)
+        mats = Vector{Matrix{K}}(undef, length(edges))
+        Threads.@threads for idx in eachindex(edges)
+            u, v = edges[idx]
+            Muv = zeros(K, Edims[v], Edims[u])
+            for (i, g) in enumerate(active_at[v])
+                j = pos_at[u][g]
+                Muv[i, j] = one(K)
             end
+            mats[idx] = Muv
         end
-        for tid in 1:length(pairs_chunks)
-            for k in eachindex(pairs_chunks[tid])
-                Eedges[pairs_chunks[tid][k]] = mats_chunks[tid][k]
-            end
+        for idx in eachindex(edges)
+            Eedges[edges[idx]] = mats[idx]
         end
     else
         @inbounds for u in 1:n
@@ -628,7 +635,7 @@ function _injective_hull(M::PModule{K};
             memo = memos[Threads.threadid()]
             rows = zeros(K, Edims[i], M.dims[i])
             r = 1
-            for u in upsets[i]
+            for u in upset_indices(Q, i)
                 m = mult[u]
                 m == 0 && continue
                 Mi_to_Mu = _map_leq_cached_indicator(M, i, u, cc, memo)
@@ -642,7 +649,7 @@ function _injective_hull(M::PModule{K};
         for i in 1:n
             rows = zeros(K, Edims[i], M.dims[i])
             r = 1
-            for u in upsets[i]
+            for u in upset_indices(Q, i)
                 m = mult[u]
                 m == 0 && continue
                 Mi_to_Mu = _map_leq_cached_indicator(M, i, u, cc, map_memo)
@@ -1495,7 +1502,24 @@ cuts off each side after that many steps (useful for quick tests).
 function indicator_resolutions(HM::FiniteFringe.FringeModule{K},
                                HN::FiniteFringe.FringeModule{K};
                                maxlen::Union{Int,Nothing}=nothing,
-                               threads::Bool = (Threads.nthreads() > 1)) where {K}
+                               threads::Bool = (Threads.nthreads() > 1),
+                               cache::Union{Nothing,ResolutionCache}=nothing) where {K}
+    if cache !== nothing
+        maxkey = maxlen === nothing ? -1 : Int(maxlen)
+        key = (objectid(HM), objectid(HN), maxkey)
+
+        cached = _resolution_cache_indicator_get(cache, key)
+        cached === nothing || return cached
+
+        out = begin
+            F, dF = upset_resolution(HM; maxlen=maxlen, threads=threads)
+            E, dE = downset_resolution(HN; maxlen=maxlen, threads=threads)
+            (F, dF, E, dE)
+        end
+
+        return _resolution_cache_indicator_store!(cache, key, out)
+    end
+
     F, dF = upset_resolution(HM; maxlen=maxlen, threads=threads)
     E, dE = downset_resolution(HN; maxlen=maxlen, threads=threads)
     return F, dF, E, dE

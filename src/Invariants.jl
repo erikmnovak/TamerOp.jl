@@ -1,7 +1,8 @@
 module Invariants
 
 using LinearAlgebra
-using ..CoreModules: PLikeEncodingMap, CompiledEncoding, locate, axes_from_encoding, dimension, representatives, InvariantOptions
+using ..CoreModules: PLikeEncodingMap, CompiledEncoding, locate, axes_from_encoding, dimension, representatives,
+                     InvariantOptions, EncodingCache, AbstractCoeffField
 using Statistics: mean
 using ..Stats: _wilson_interval
 using ..Encoding: EncodingMap
@@ -10,7 +11,7 @@ using ..RegionGeometry
 
 using ..FieldLinAlg
 import ..FiniteFringe: AbstractPoset, FinitePoset, FringeModule, Upset, Downset, fiber_dimension,
-                       leq, leq_matrix, upset_indices, downset_indices, leq_col, nvertices
+                       leq, leq_matrix, upset_indices, downset_indices, leq_col, nvertices, build_cache!
 import ..ZnEncoding
 import ..IndicatorTypes: UpsetPresentation, DownsetCopresentation
 import ..ModuleComplexes: ModuleCochainComplex
@@ -45,7 +46,12 @@ export rank_map, rank_invariant, rank_invariant_tame, ecc,
        MPLandscape, mp_landscape, mp_landscape_distance, mp_landscape_inner_product, mp_landscape_kernel,
        PersistenceImage1D, persistence_image, persistence_silhouette,
        barcode_entropy, barcode_summary, slice_barcode,
+       CompiledSlicePlan, SlicePlanCache, compile_slice_plan, clear_slice_plan_cache!,
+       SliceModuleCache, SliceModulePairCache,
+       SliceBarcodesTask, SliceDistanceTask, SliceKernelTask,
+       module_cache, compile_slices, run_invariants,
        slice_barcodes, precompute_slice_barcode_map, slice_features, slice_kernel,
+       PackedBarcodeGrid,
        integrated_hilbert_mass, measure_by_dimension, support_measure,
        measure_by_value, region_values,
        support_measure, vertex_set_measure,
@@ -111,22 +117,21 @@ end
 # Normalize directions into the positive orthant with L1 normalization.
 @inline function orthant_directions(d::Integer)
     d > 0 || error("orthant_directions: dimension must be positive")
-    v = fill(1.0, d)
-    v ./= sum(v)
+    v = ntuple(_ -> 1.0 / d, d)
     return [v]
 end
 
 @inline function orthant_directions(d::Integer, directions)
     d > 0 || error("orthant_directions: dimension must be positive")
-    dirs = Vector{Vector{Float64}}()
+    dirs = Vector{NTuple{d,Float64}}()
     for dir in directions
-        v = float.(collect(dir))
-        length(v) == d || error("orthant_directions: expected direction of length $d, got $(length(v))")
-        v = abs.(v)
-        s = sum(v)
+        length(dir) == d || error("orthant_directions: expected direction of length $d, got $(length(dir))")
+        s = 0.0
+        @inbounds for i in 1:d
+            s += abs(float(dir[i]))
+        end
         s > 0 || error("orthant_directions: zero direction not allowed")
-        v ./= s
-        push!(dirs, v)
+        push!(dirs, ntuple(i -> abs(float(dir[i])) / s, d))
     end
     return dirs
 end
@@ -170,25 +175,41 @@ end
 # ----- Rank invariant ----------------------------------------------------------
 
 const RANK_INVARIANT_MEMO_THRESHOLD = Ref(1_000_000)
+const RECTANGLE_LOC_LINEAR_CACHE_THRESHOLD = Ref(20_000_000)
 
 @inline function _use_array_memo(n::Int)
     return n * n <= RANK_INVARIANT_MEMO_THRESHOLD[]
 end
 
 @inline function _new_array_memo(::Type{K}, n::Int) where {K}
-    memo = Vector{Union{Nothing,Matrix{K}}}(undef, n * n)
+    memo = Vector{Union{Nothing,AbstractMatrix{K}}}(undef, n * n)
     fill!(memo, nothing)
     return memo
+end
+
+@inline function _grid_cache_index(p::NTuple{N,Int}, dims::NTuple{N,Int}) where {N}
+    idx = 1
+    stride = 1
+    @inbounds for i in 1:N
+        pi = p[i]
+        di = dims[i]
+        if pi < 1 || pi > di
+            return 0
+        end
+        idx += (pi - 1) * stride
+        stride *= di
+    end
+    return idx
 end
 
 # Internal helper: compute M(u->v) with memoization shared across many calls.
 @inline _memo_index(n::Int, u::Int, v::Int) = (u - 1) * n + v
 
-@inline function _memo_get(memo::AbstractVector{Union{Nothing,Matrix{K}}}, n::Int, u::Int, v::Int) where {K}
+@inline function _memo_get(memo::AbstractVector{Union{Nothing,AbstractMatrix{K}}}, n::Int, u::Int, v::Int) where {K}
     return memo[_memo_index(n, u, v)]
 end
 
-@inline function _memo_set!(memo::AbstractVector{Union{Nothing,Matrix{K}}}, n::Int, u::Int, v::Int, val::Matrix{K}) where {K}
+@inline function _memo_set!(memo::AbstractVector{Union{Nothing,AbstractMatrix{K}}}, n::Int, u::Int, v::Int, val::AbstractMatrix{K}) where {K}
     memo[_memo_index(n, u, v)] = val
     return val
 end
@@ -199,8 +220,8 @@ function _map_leq_cached(
     v::Int,
     cc,
     memo
-)::Matrix{K} where {K}
-    if memo isa Dict{Tuple{Int,Int}, Matrix{K}}
+)::AbstractMatrix{K} where {K}
+    if memo isa AbstractDict
         key = (u, v)
         if haskey(memo, key)
             return memo[key]
@@ -213,7 +234,7 @@ function _map_leq_cached(
 
     if u == v
         X = _eye(K, M.dims[v])
-        if memo isa Dict{Tuple{Int,Int}, Matrix{K}}
+        if memo isa AbstractDict
             memo[(u, v)] = X
         else
             _memo_set!(memo, nvertices(M.Q), u, v, X)
@@ -226,7 +247,7 @@ function _map_leq_cached(
     if cc.C !== nothing
         if cc.C[u, v]
             X = M.edge_maps[u, v]
-            if memo isa Dict{Tuple{Int,Int}, Matrix{K}}
+            if memo isa AbstractDict
                 memo[(u, v)] = X
             else
                 _memo_set!(memo, nvertices(M.Q), u, v, X)
@@ -239,7 +260,7 @@ function _map_leq_cached(
         @inbounds for k in 1:length(pv)
             if pv[k] == u
                 X = M.edge_maps[u, v]
-                if memo isa Dict{Tuple{Int,Int}, Matrix{K}}
+                if memo isa AbstractDict
                     memo[(u, v)] = X
                 else
                     _memo_set!(memo, nvertices(M.Q), u, v, X)
@@ -254,11 +275,11 @@ function _map_leq_cached(
     w = _chosen_predecessor(cc, u, v)
     X = _map_leq_cached(M, u, w, cc, memo)
     Y = M.edge_maps[w, v]
-    if memo isa Dict{Tuple{Int,Int}, Matrix{K}}
-        memo[(u, v)] = Y * X
+    if memo isa AbstractDict
+        memo[(u, v)] = FieldLinAlg._matmul(Y, X)
         return memo[(u, v)]
     end
-    return _memo_set!(memo, nvertices(M.Q), u, v, Y * X)
+    return _memo_set!(memo, nvertices(M.Q), u, v, FieldLinAlg._matmul(Y, X))
 end
 
 
@@ -337,6 +358,7 @@ function rank_map(H::FringeModule{K}, pi, x, y, opts::InvariantOptions;
 end
 
 
+
 """
     rank_invariant(M::PModule{K}; store_zeros=false, threads=(Threads.nthreads() > 1))
 
@@ -358,46 +380,54 @@ function rank_invariant(
 ) where {K}
     threads = _default_threads(opts.threads)
     Q = M.Q
+    # Two-phase threading: build caches once, then threaded loops read-only.
+    build_cache!(Q; cover=true, updown=true)
     cc = get_cover_cache(Q)
     n = nvertices(Q)
     use_array_memo = _use_array_memo(n)
+
+    vals = zeros(Int, n * n)
+    filled = falses(n * n)
 
     if threads && Threads.nthreads() > 1
         nT = Threads.nthreads()
         memo_by_thread = use_array_memo ?
             [_new_array_memo(K, n) for _ in 1:nT] :
-            [Dict{Tuple{Int, Int}, Matrix{K}}() for _ in 1:nT]
-        out_by_thread = [Dict{Tuple{Int, Int}, Int}() for _ in 1:nT]
+            [Dict{Tuple{Int, Int}, AbstractMatrix{K}}() for _ in 1:nT]
 
         Threads.@threads for a in 1:nvertices(Q)
             tid = Threads.threadid()
             memo = memo_by_thread[tid]
-            out = out_by_thread[tid]
             for b in upset_indices(Q, a)
                 r = rank_map(M, a, b; cache = cc, memo = memo)
                 if store_zeros || r > 0
-                    out[(a, b)] = r
+                    idx = _memo_index(n, a, b)
+                    vals[idx] = r
+                    filled[idx] = true
                 end
             end
         end
-
-        ranks = Dict{Tuple{Int, Int}, Int}()
-        for d in out_by_thread
-            merge!(ranks, d)
-        end
-        return ranks
-    end
-
-    # Serial fallback (unchanged logic).
-    memo = use_array_memo ? _new_array_memo(K, n) : Dict{Tuple{Int, Int}, Matrix{K}}()
-    ranks = Dict{Tuple{Int, Int}, Int}()
-    for a in 1:nvertices(Q)
-        for b in upset_indices(Q, a)
-            r = rank_map(M, a, b; cache = cc, memo = memo)
-            if store_zeros || r > 0
-                ranks[(a, b)] = r
+    else
+        memo = use_array_memo ? _new_array_memo(K, n) : Dict{Tuple{Int, Int}, AbstractMatrix{K}}()
+        for a in 1:nvertices(Q)
+            for b in upset_indices(Q, a)
+                r = rank_map(M, a, b; cache = cc, memo = memo)
+                if store_zeros || r > 0
+                    idx = _memo_index(n, a, b)
+                    vals[idx] = r
+                    filled[idx] = true
+                end
             end
         end
+    end
+
+    ranks = Dict{Tuple{Int, Int}, Int}()
+    sizehint!(ranks, count(filled))
+    @inbounds for idx in eachindex(filled)
+        filled[idx] || continue
+        a = Int(div(idx - 1, n)) + 1
+        b = ((idx - 1) % n) + 1
+        ranks[(a, b)] = vals[idx]
     end
     return ranks
 end
@@ -800,7 +830,8 @@ Cache object used by `rectangle_signed_barcode(M, pi, ...)` and related routines
 
 The cache contains:
 - `loc_cache`: memoizes `locate(pi, g)` for lattice points `g` (g is an `NTuple{N,Int}`),
-- `rank_cache`: memoizes `rank_map(M, a, b)` for region indices `a,b` in the encoded poset.
+- rank cache: memoizes `rank_map(M, a, b)` for region indices `a,b` in the encoded poset,
+  using a linear-index array for moderate region counts and a dict fallback otherwise.
 
 This is a pure performance tool: it does not change mathematical results. The cache
 is safe to reuse across calls as long as you keep the same encoding map `pi`. The
@@ -810,6 +841,10 @@ mutable struct RankQueryCache{N}
     pi::ZnEncodingMap
     n::Int
     loc_cache::Dict{NTuple{N,Int},Int}
+    n_regions::Int
+    use_linear_rank_cache::Bool
+    rank_cache_linear::Vector{Int}
+    rank_cache_filled::BitVector
     rank_cache::Dict{Tuple{Int,Int},Int}
 end
 
@@ -817,13 +852,39 @@ function RankQueryCache(pi::ZnEncodingMap)
     # For ZnEncodingMap, the dimension is pi.n (not length(pi.coords[1])).
     N = pi.n
     length(pi.coords) == N || error("RankQueryCache: expected length(pi.coords) == pi.n")
+    n_regions = length(pi.sig_y)
+    max_linear = 16_000_000
+    nelems_big = big(n_regions) * big(n_regions)
+    use_linear = nelems_big <= max_linear
+
+    rank_cache_linear = use_linear ? zeros(Int, Int(nelems_big)) : Int[]
+    rank_cache_filled = use_linear ? falses(Int(nelems_big)) : falses(0)
 
     return RankQueryCache{N}(pi, pi.n, Dict{NTuple{N,Int},Int}(),
+        n_regions, use_linear, rank_cache_linear, rank_cache_filled,
         Dict{Tuple{Int,Int},Int}(),
     )
 end
 
 RankQueryCache(pi::CompiledEncoding{<:ZnEncodingMap}) = RankQueryCache(pi.pi)
+
+@inline _rank_cache_index(a::Int, b::Int, n_regions::Int) = (a - 1) * n_regions + b
+
+@inline function _rank_cache_get!(rq_cache::RankQueryCache, a::Int, b::Int, builder::F) where {F<:Function}
+    if rq_cache.use_linear_rank_cache && 1 <= a <= rq_cache.n_regions && 1 <= b <= rq_cache.n_regions
+        idx = _rank_cache_index(a, b, rq_cache.n_regions)
+        if rq_cache.rank_cache_filled[idx]
+            return rq_cache.rank_cache_linear[idx]
+        end
+        v = builder()
+        rq_cache.rank_cache_linear[idx] = v
+        rq_cache.rank_cache_filled[idx] = true
+        return v
+    end
+    return get!(rq_cache.rank_cache, (a, b)) do
+        builder()
+    end
+end
 
 """
     coarsen_axis(axis; max_len, method=:uniform)
@@ -1424,35 +1485,54 @@ function rectangle_signed_barcode(M::PModule, pi::ZnEncodingMap, opts::Invariant
         rq_cache.n == pi.n || error("rectangle_signed_barcode: rq_cache has wrong dimension")
     end
 
+    build_cache!(M.Q; cover=true, updown=false)
     cc = get_cover_cache(M.Q)
 
-    region_idx(g) = get!(rq_cache.loc_cache, g) do
-        locate(pi, g)
-    end
-
     function rank_ab(a::Int, b::Int)
-        return get!(rq_cache.rank_cache, (a, b)) do
-            rank_map(M, a, b; cache=cc)
-        end
+        return _rank_cache_get!(rq_cache, a, b, () -> rank_map(M, a, b; cache=cc))
     end
 
     axesN isa NTuple{pi.n,Vector{Int}} || error("axes length mismatch: expected pi.n axes")
+    dims = ntuple(i -> length(axesN[i]), pi.n)
+    npoints_big = foldl(*, (big(d) for d in dims); init=big(1))
+    use_linear_loc_cache = npoints_big <= RECTANGLE_LOC_LINEAR_CACHE_THRESHOLD[]
+    loc_cache_linear = use_linear_loc_cache ? zeros(Int, Int(npoints_big)) : Int[]
+    loc_cache_filled = use_linear_loc_cache ? falses(Int(npoints_big)) : falses(0)
+
+    @inline function region_idx_from_grid(p::NTuple{N,Int}) where {N}
+        if use_linear_loc_cache
+            idx = _grid_cache_index(p, dims)
+            idx == 0 && return 0
+            if loc_cache_filled[idx]
+                return loc_cache_linear[idx]
+            end
+            x = ntuple(Val(N)) do k
+                @inbounds axesN[k][p[k]]
+            end
+            a = locate(pi, x)
+            loc_cache_linear[idx] = a
+            loc_cache_filled[idx] = true
+            return a
+        end
+        x = ntuple(Val(N)) do k
+            @inbounds axesN[k][p[k]]
+        end
+        return get!(rq_cache.loc_cache, x) do
+            locate(pi, x)
+        end
+    end
 
     meth = _choose_rectangle_signed_barcode_method(
         method, axesN; max_span=max_span, bulk_max_elems=bulk_max_elems
     )
 
     if meth == :bulk
-        dims = ntuple(i -> length(axesN[i]), pi.n)
         CI = CartesianIndices(dims)
 
         reg = Array{Int,pi.n}(undef, dims...)
         for pCI in CI
             p = pCI.I
-            x = ntuple(Val(pi.n)) do k
-                @inbounds axesN[k][p[k]]
-            end
-            a = region_idx(x)
+            a = region_idx_from_grid(p)
             if strict && a == 0
                 error("rectangle_signed_barcode: point not found in encoding")
             end
@@ -1506,14 +1586,8 @@ function rectangle_signed_barcode(M::PModule, pi::ZnEncodingMap, opts::Invariant
     end
 
     function rank_idx_cached(p::NTuple{N,Int}, q::NTuple{N,Int}) where {N}
-        x = ntuple(Val(N)) do i
-            @inbounds axesN[i][p[i]]
-        end
-        y = ntuple(Val(N)) do i
-            @inbounds axesN[i][q[i]]
-        end
-        a = region_idx(x)
-        b = region_idx(y)
+        a = region_idx_from_grid(p)
+        b = region_idx_from_grid(q)
         if a == 0 || b == 0
             if strict
                 error("Point not found in encoding")
@@ -3715,7 +3789,14 @@ end
 
 # Quasi-polynomial fit: separate polynomial fits on each residue class mod period.
 function _quasipolyfit(xs::AbstractVector{<:Integer}, ys::AbstractVector{<:Real}, deg::Int, period::Int)
-    fits = Vector{Any}(undef, period)
+    QuasiPolyFitEntry = Union{
+        Nothing,
+        NamedTuple{
+            (:degree, :coeffs, :r2, :residue, :npoints),
+            Tuple{Int,Vector{Float64},Float64,Int,Int}
+        }
+    }
+    fits = Vector{QuasiPolyFitEntry}(undef, period)
     for r in 0:(period - 1)
         idx = [i for i in eachindex(xs) if mod(xs[i], period) == r]
         if length(idx) < deg + 1
@@ -4523,11 +4604,11 @@ function slice_chain(pi, x0::AbstractVector, dir::AbstractVector, opts::Invarian
         rid = locate(pi, x)
 
         if rid == 0
-            if strict0
-                error("slice_chain: locate(pi, x) returned 0 (unknown region). Set opts.strict=false to allow unknown samples.")
-            end
             if drop_unknown
                 continue
+            end
+            if strict0
+                error("slice_chain: locate(pi, x) returned 0 (unknown region). Set opts.strict=false to allow unknown samples.")
             end
         end
 
@@ -4547,6 +4628,25 @@ function slice_chain(pi, x0::AbstractVector, dir::AbstractVector, opts::Invarian
     end
 
     return chain, tvals
+end
+
+# Tuple adapters keep the compute path vector-specialized while accepting tuple inputs.
+@inline function slice_chain(pi, x0::AbstractVector, dir::NTuple{N,<:Real},
+                             opts::InvariantOptions; kwargs...) where {N}
+    return slice_chain(pi, x0, Float64[dir[i] for i in 1:N], opts; kwargs...)
+end
+
+@inline function slice_chain(pi, x0::NTuple{N,<:Real}, dir::AbstractVector,
+                             opts::InvariantOptions; kwargs...) where {N}
+    return slice_chain(pi, Float64[x0[i] for i in 1:N], dir, opts; kwargs...)
+end
+
+@inline function slice_chain(pi, x0::NTuple{N,<:Real}, dir::NTuple{N,<:Real},
+                             opts::InvariantOptions; kwargs...) where {N}
+    return slice_chain(pi,
+        Float64[x0[i] for i in 1:N],
+        Float64[dir[i] for i in 1:N],
+        opts; kwargs...)
 end
 
 """
@@ -4659,9 +4759,10 @@ function restrict_to_chain(M::PModule{K}, chain::AbstractVector{Int})::PModule{K
     # Only need cover edges (i,i+1).
     edge_maps = Dict{Tuple{Int,Int}, Matrix{K}}()
     cc = get_cover_cache(M.Q)
-    memo = Dict{Tuple{Int,Int}, Matrix{K}}()
+    nQ = nvertices(M.Q)
+    memo = _use_array_memo(nQ) ? _new_array_memo(K, nQ) : Dict{Tuple{Int,Int}, AbstractMatrix{K}}()
     for i in 1:m-1
-        edge_maps[(i, i+1)] = _map_leq_cached(M, chain[i], chain[i+1], cc, memo)
+        edge_maps[(i, i+1)] = Matrix(_map_leq_cached(M, chain[i], chain[i+1], cc, memo))
     end
     return PModule{K}(Qc, dims, edge_maps)
 end
@@ -4695,45 +4796,9 @@ function slice_barcode(M::PModule{K}, chain::AbstractVector{Int};
     values=nothing,
     check_chain::Bool=true
 ) where {K}
-    check_chain && _assert_chain(M.Q, chain)
-    m = length(chain)
-
-    # Endpoint coordinates along the chain.
-    if values === nothing
-        endpoints = collect(1:(m+1))
-    else
-        length(values) == m || length(values) == m + 1 || error("slice_barcode: values must have length m or m+1")
-        endpoints = length(values) == m ? _extend_values(values) : values
-    end
-
-    # Compute rank matrix on the chain: r[i,j] = rank(M(q_i -> q_j)).
-    cc = get_cover_cache(M.Q)
-    memo = Dict{Tuple{Int,Int}, Matrix{K}}()
-    R = zeros(Int, m, m)
-    for i in 1:m
-        for j in i:m
-            R[i, j] = rank_map(M, chain[i], chain[j]; cache=cc, memo=memo)
-        end
-    end
-
-    getR(i, j) = (i < 1 || j < 1 || i > m || j > m || i > j) ? 0 : R[i, j]
-
-    out = Dict{Tuple{eltype(endpoints), eltype(endpoints)}, Int}()
-
-    # Interval multiplicities via inclusion-exclusion on the rank invariant.
-    # For half-open intervals [b,d) with 1 <= b <= m and b+1 <= d <= m+1:
-    #   mult(b,d) = r[b, d-1] - r[b-1, d-1] - r[b, d] + r[b-1, d]
-    for b in 1:m
-        for d in (b+1):(m+1)
-            mult = getR(b, d-1) - getR(b-1, d-1) - getR(b, d) + getR(b-1, d)
-            mult < 0 && error("slice_barcode: negative multiplicity detected at (b,d)=($b,$d)")
-            if mult > 0
-                out[(endpoints[b], endpoints[d])] = mult
-            end
-        end
-    end
-
-    return out
+    return _barcode_from_packed(
+        _slice_barcode_packed(M, chain; values=values, check_chain=check_chain)
+    )
 end
 
 # Convenience wrapper: build the chain from a slice in the original domain first.
@@ -4754,6 +4819,8 @@ end
 # ----- Bottleneck distance on 1D barcodes -------------------------------------
 
 # Expand a sparse barcode dictionary to a multiset of diagram points.
+@inline _barcode_points(bar::Vector{Tuple{Float64,Float64}})::Vector{Tuple{Float64,Float64}} = bar
+
 function _barcode_points(bar)::Vector{Tuple{Float64,Float64}}
     if bar isa AbstractVector
         pts = Tuple{Float64,Float64}[]
@@ -5022,13 +5089,15 @@ Compute the p-Wasserstein distance between two 1-parameter barcodes (persistence
 `backend` options:
 - `:auto`     (default): Hungarian for small diagrams, auction for larger ones
 - `:hungarian`: always use Hungarian assignment
-- `:auction`  : use auction algorithm with ε-scaling
+- `:auction`  : use auction algorithm with epsilon-scaling
 """
-function wasserstein_distance(bar1, bar2; p::Real=2, q::Real=Inf, backend::Symbol=:auto)
+function _wasserstein_distance_points(
+    P::Vector{Tuple{Float64,Float64}},
+    Q::Vector{Tuple{Float64,Float64}};
+    p::Real=2, q::Real=Inf, backend::Symbol=:auto,
+)
     p >= 1 || error("wasserstein_distance: expected p >= 1")
 
-    P = _barcode_points(bar1)
-    Q = _barcode_points(bar2)
     m = length(P)
     n = length(Q)
     N = m + n
@@ -5063,6 +5132,20 @@ function wasserstein_distance(bar1, bar2; p::Real=2, q::Real=Inf, backend::Symbo
     else
         error("wasserstein_distance: unknown backend=$(backend)")
     end
+end
+
+function wasserstein_distance(bar1, bar2; p::Real=2, q::Real=Inf, backend::Symbol=:auto)
+    P = _barcode_points(bar1)
+    Q = _barcode_points(bar2)
+    return _wasserstein_distance_points(P, Q; p=p, q=q, backend=backend)
+end
+
+function wasserstein_distance(
+    P::Vector{Tuple{Float64,Float64}},
+    Q::Vector{Tuple{Float64,Float64}};
+    p::Real=2, q::Real=Inf, backend::Symbol=:auto,
+)
+    return _wasserstein_distance_points(P, Q; p=p, q=q, backend=backend)
 end
 
 """
@@ -5179,8 +5262,8 @@ end
 # small while avoiding code duplication across sliced and matching-style distances.
 # ---------------------------------------------------------------------------
 function _slice_based_barcode_distance(
-    bcs1::Matrix{Dict{Tuple{Float64, Float64}, Int}},
-    bcs2::Matrix{Dict{Tuple{Float64, Float64}, Int}};
+    bcs1::AbstractMatrix,
+    bcs2::AbstractMatrix;
     weights1 = uniform2d,
     weights2 = uniform2d,
     weight = (d, o) -> weights1(d) * weights2(o),
@@ -5363,163 +5446,31 @@ function _slice_based_barcode_distance(
     threads::Bool = (Threads.nthreads() > 1),
     slice_kwargs...
 )::Float64 where {K}
-    dataM = slice_barcodes(M, pi;
-                          directions = dirs,
-                          offsets = offs,
-                          n_dirs = ndirs,
-                          n_offsets = noff,
-                          max_den = max_den,
-                          include_axes = include_axes,
-                          normalize_dirs = normalize_dirs,
-                          direction_weight = weight,
-                          offset_weights = offset_weights,
-                          normalize_weights = normalize_weights,
-                          threads = threads,
-                          slice_kwargs...)
-
-    dataN = slice_barcodes(N, pi;
-                          directions = dirs,
-                          offsets = offs,
-                          n_dirs = ndirs,
-                          n_offsets = noff,
-                          max_den = max_den,
-                          include_axes = include_axes,
-                          normalize_dirs = normalize_dirs,
-                          direction_weight = weight,
-                          offset_weights = offset_weights,
-                          normalize_weights = normalize_weights,
-                          threads = threads,
-                          slice_kwargs...)
-
-    bcsM = dataM.barcodes
-    bcsN = dataN.barcodes
-    W = dataM.weights
-
-    sumw = sum(W)
-    if sumw == 0.0
-        return 0.0
-    end
-
-    # Normalize common aggregator spellings.
-    agg_mode = (agg === mean) ? :mean : (agg === maximum) ? :max : agg
-
-    if weight_mode == :scale
-        if threads && Threads.nthreads() > 1
-            nT = Threads.nthreads()
-            best_by_slot = fill(0.0, nT)
-            Threads.@threads for slot in 1:nT
-                best = 0.0
-                for idx in slot:nT:length(bcsM)
-                    w = W[idx]
-                    w == 0.0 && continue
-                    d = dist_fn(bcsM[idx], bcsN[idx]; dist_kwargs...)
-                    best = max(best, w * d)
-                end
-                best_by_slot[slot] = best
-            end
-            return maximum(best_by_slot) / float(agg_norm)
-        end
-        best = 0.0
-        for idx in eachindex(bcsM)
-            w = W[idx]
-            w == 0.0 && continue
-            d = dist_fn(bcsM[idx], bcsN[idx]; dist_kwargs...)
-            best = max(best, w * d)
-        end
-        return best / float(agg_norm)
-    elseif weight_mode == :integrate
-        if agg_mode == :mean
-            if threads && Threads.nthreads() > 1
-                nT = Threads.nthreads()
-                acc_by_slot = fill(0.0, nT)
-                Threads.@threads for slot in 1:nT
-                    acc = 0.0
-                    for idx in slot:nT:length(bcsM)
-                        w = W[idx]
-                        w == 0.0 && continue
-                        acc += w * dist_fn(bcsM[idx], bcsN[idx]; dist_kwargs...)
-                    end
-                    acc_by_slot[slot] = acc
-                end
-                acc = sum(acc_by_slot)
-                return (acc / sumw) / float(agg_norm)
-            end
-            acc = 0.0
-            for idx in eachindex(bcsM)
-                w = W[idx]
-                w == 0.0 && continue
-                acc += w * dist_fn(bcsM[idx], bcsN[idx]; dist_kwargs...)
-            end
-            return (acc / sumw) / float(agg_norm)
-        elseif agg_mode == :pmean
-            p = float(agg_p)
-            if threads && Threads.nthreads() > 1
-                nT = Threads.nthreads()
-                acc_by_slot = fill(0.0, nT)
-                Threads.@threads for slot in 1:nT
-                    acc = 0.0
-                    for idx in slot:nT:length(bcsM)
-                        w = W[idx]
-                        w == 0.0 && continue
-                        d = dist_fn(bcsM[idx], bcsN[idx]; dist_kwargs...)
-                        acc += w * d^p
-                    end
-                    acc_by_slot[slot] = acc
-                end
-                acc = sum(acc_by_slot)
-                return ((acc / sumw)^(1 / p)) / float(agg_norm)
-            end
-            acc = 0.0
-            for idx in eachindex(bcsM)
-                w = W[idx]
-                w == 0.0 && continue
-                d = dist_fn(bcsM[idx], bcsN[idx]; dist_kwargs...)
-                acc += w * d^p
-            end
-            return ((acc / sumw)^(1 / p)) / float(agg_norm)
-        elseif agg_mode == :max
-            if threads && Threads.nthreads() > 1
-                nT = Threads.nthreads()
-                best_by_slot = fill(0.0, nT)
-                Threads.@threads for slot in 1:nT
-                    best = 0.0
-                    for idx in slot:nT:length(bcsM)
-                        w = W[idx]
-                        w == 0.0 && continue
-                        d = dist_fn(bcsM[idx], bcsN[idx]; dist_kwargs...)
-                        best = max(best, w * d)
-                    end
-                    best_by_slot[slot] = best
-                end
-                return maximum(best_by_slot) / float(agg_norm)
-            end
-            best = 0.0
-            for idx in eachindex(bcsM)
-                w = W[idx]
-                w == 0.0 && continue
-                d = dist_fn(bcsM[idx], bcsN[idx]; dist_kwargs...)
-                best = max(best, w * d)
-            end
-            return best / float(agg_norm)
-        elseif agg_mode isa Function
-            if threads && Threads.nthreads() > 1
-                vals = Vector{Float64}(undef, length(bcsM))
-                Threads.@threads for idx in 1:length(bcsM)
-                    vals[idx] = dist_fn(bcsM[idx], bcsN[idx]; dist_kwargs...)
-                end
-                return float(agg_mode(vals)) / float(agg_norm)
-            end
-            vals = Float64[]
-            for idx in eachindex(bcsM)
-                push!(vals, dist_fn(bcsM[idx], bcsN[idx]; dist_kwargs...))
-            end
-            return float(agg_mode(vals)) / float(agg_norm)
-        else
-            throw(ArgumentError("_slice_based_barcode_distance: unknown agg=$agg"))
-        end
-    else
-        throw(ArgumentError("_slice_based_barcode_distance: unknown weight_mode=$weight_mode"))
-    end
+    plan = compile_slices(
+        pi;
+        directions = dirs,
+        offsets = offs,
+        n_dirs = ndirs,
+        n_offsets = noff,
+        max_den = max_den,
+        include_axes = include_axes,
+        normalize_dirs = normalize_dirs,
+        direction_weight = weight,
+        offset_weights = offset_weights,
+        normalize_weights = normalize_weights,
+        threads = threads,
+        slice_kwargs...
+    )
+    task = SliceDistanceTask(;
+        dist_fn = dist_fn,
+        dist_kwargs = dist_kwargs,
+        weight_mode = weight_mode,
+        agg = agg,
+        agg_p = float(agg_p),
+        agg_norm = float(agg_norm),
+        threads = threads,
+    )
+    return run_invariants(plan, module_cache(M, N), task)
 end
 
 """
@@ -5841,10 +5792,11 @@ We use the standard persistence-diagram L_infinity metric:
 
 This implementation is exact for the given finite barcodes (up to floating-point).
 """
-function bottleneck_distance(barA, barB; backend::Symbol=:auto)::Float64
-    A = _barcode_points(barA)
-    B = _barcode_points(barB)
-
+function _bottleneck_distance_points(
+    A::Vector{Tuple{Float64,Float64}},
+    B::Vector{Tuple{Float64,Float64}};
+    backend::Symbol=:auto,
+)::Float64
     if isempty(A) && isempty(B)
         return 0.0
     end
@@ -5881,6 +5833,12 @@ function bottleneck_distance(barA, barB; backend::Symbol=:auto)::Float64
     return epss[lo]
 end
 
+function bottleneck_distance(barA, barB; backend::Symbol=:auto)::Float64
+    A = _barcode_points(barA)
+    B = _barcode_points(barB)
+    return _bottleneck_distance_points(A, B; backend=backend)
+end
+
 # Convenience: bottleneck distance between slice barcodes of two modules on the same chain.
 function bottleneck_distance(M::PModule{K}, N::PModule{K}, chain::AbstractVector{Int}; kwargs...)::Float64 where {K}
     bM = slice_barcode(M, chain; kwargs...)
@@ -5896,7 +5854,7 @@ matching_wasserstein_distance(barA, barB; p::Real=2, q::Real=1, kwargs...)::Floa
 
 # ----- Approximate matching distance ------------------------------------------
 
-function _direction_weight(dir::AbstractVector; scheme::Symbol=:lesnick_l1)::Float64
+function _direction_weight(dir::Union{AbstractVector,NTuple{N,<:Real}}; scheme::Symbol=:lesnick_l1)::Float64 where {N}
     if scheme == :none
         return 1.0
     elseif scheme == :lesnick_l1
@@ -5953,7 +5911,7 @@ Evaluate a direction weight.
 - a function `w(dir)::Real`
 - a real scalar (constant weight)
 """
-@inline function direction_weight(dir::AbstractVector{<:Real}, spec)::Float64
+@inline function direction_weight(dir::Union{AbstractVector{<:Real},NTuple{N,<:Real}}, spec)::Float64 where {N}
     if spec === :none || spec === :uniform
         return 1.0
     elseif spec isa Symbol
@@ -6022,7 +5980,7 @@ function _offset_sample_weights(offs::AbstractVector, spec)
 end
 
 """
-    sample_directions_2d(; max_den=8, include_axes=false, normalize=:L1) -> Vector
+    sample_directions_2d(; max_den=8, include_axes=false, normalize=:L1) -> Vector{NTuple{2}}
 
 Return a deterministic list of "standard" direction vectors in 2D.
 
@@ -6042,7 +6000,7 @@ The list is sorted by increasing slope `b/a` (with slope = +Inf when `a==0`).
 Normalization:
 * `normalize=:L1` (default): return Float64 directions with `d[1]+d[2]==1`.
 * `normalize=:Linf`: return Float64 directions with `max(d)==1`.
-* `normalize=:none`: return integer directions `Vector{Int}` (useful for Z^2).
+* `normalize=:none`: return integer directions as 2-tuples (useful for Z^2).
 
 Examples
 --------
@@ -6075,13 +6033,17 @@ function sample_directions_2d(; max_den::Int=8, include_axes::Bool=false, normal
     sort!(pairs; by=slope)
 
     if normalize == :none
-        return [Int[p[1], p[2]] for p in pairs]
+        return [(p[1], p[2]) for p in pairs]
     elseif normalize == :L1
-        return [Float64[float(p[1]) / float(p[1] + p[2]),
-                        float(p[2]) / float(p[1] + p[2])] for p in pairs]
+        return [begin
+            s = float(p[1] + p[2])
+            (float(p[1]) / s, float(p[2]) / s)
+        end for p in pairs]
     elseif normalize == :Linf
-        return [Float64[float(p[1]) / float(max(p[1], p[2])),
-                        float(p[2]) / float(max(p[1], p[2]))] for p in pairs]
+        return [begin
+            s = float(max(p[1], p[2]))
+            (float(p[1]) / s, float(p[2]) / s)
+        end for p in pairs]
     else
         error("sample_directions_2d: normalize must be :L1, :Linf, or :none")
     end
@@ -6338,8 +6300,8 @@ Return a deterministic list of slice directions suitable for `pi`.
   entries in `1:max_den` is used.
 
 If the encoding points of `pi` are integer-valued (lattice encodings), the
-returned directions are integer vectors. Otherwise, directions are returned as
-`Float64` vectors, normalized according to `normalize` (one of `:L1`, `:Linf`,
+returned directions are integer tuples. Otherwise, directions are returned as
+`Float64` tuples, normalized according to `normalize` (one of `:L1`, `:Linf`,
 or `:none`).
 
 This function is intended to provide sensible defaults; it is not a substitute
@@ -6368,7 +6330,7 @@ function default_directions(d::Integer; n_dirs::Integer=16, max_den::Integer=8,
     n_dirs <= 0 && error("default_directions: n_dirs must be positive")
 
     if d == 1
-        return integer ? [Int[1]] : [Float64[1.0]]
+        return integer ? [(1,)] : [(1.0,)]
     elseif d == 2
         dirs_all = sample_directions_2d(max_den=max_den, include_axes=include_axes,
                                         normalize=(integer ? :none : normalize))
@@ -6376,17 +6338,16 @@ function default_directions(d::Integer; n_dirs::Integer=16, max_den::Integer=8,
     end
 
     lo = include_axes ? 0 : 1
-    dirs_int = Vector{Vector{Int}}()
+    dirs_int = Vector{NTuple{d,Int}}()
     ranges = ntuple(_ -> lo:max_den, d)
     for tup in Iterators.product(ranges...)
-        v = collect(tup)
-        all(x -> x == 0, v) && continue
+        all(x -> x == 0, tup) && continue
         g = 0
-        for x in v
+        for x in tup
             g = gcd(g, x)
         end
         g == 1 || continue
-        push!(dirs_int, v)
+        push!(dirs_int, ntuple(i -> Int(tup[i]), d))
     end
 
     sort!(dirs_int; by=v -> begin
@@ -6399,9 +6360,15 @@ function default_directions(d::Integer; n_dirs::Integer=16, max_den::Integer=8,
     if integer || normalize == :none
         return dirs_int
     elseif normalize == :L1
-        return [Float64[float(x) / float(sum(v)) for x in v] for v in dirs_int]
+        return [begin
+            s = float(sum(v))
+            ntuple(i -> float(v[i]) / s, d)
+        end for v in dirs_int]
     elseif normalize == :Linf
-        return [Float64[float(x) / float(maximum(v)) for x in v] for v in dirs_int]
+        return [begin
+            s = float(maximum(v))
+            ntuple(i -> float(v[i]) / s, d)
+        end for v in dirs_int]
     else
         error("default_directions: normalize must be :L1, :Linf, or :none")
     end
@@ -6421,7 +6388,7 @@ This is an opts-primary API:
   * concrete `(lo, hi)`     -> use it verbatim
 - `margin` expands the inferred box (ignored for a concrete box override).
 
-Returns a vector of offset points (each a `Vector{Float64}`).
+Returns a vector of offset points (each a tuple of `Float64`).
 """
 function default_offsets(pi::PLikeEncodingMap, opts::InvariantOptions;
     n_offsets::Int = 9,
@@ -6429,10 +6396,10 @@ function default_offsets(pi::PLikeEncodingMap, opts::InvariantOptions;
 
     lo, hi = encoding_box(pi, opts; margin=margin)
     n = length(lo)
-    offs = Vector{Vector{Float64}}(undef, n_offsets)
+    offs = Vector{Tuple}(undef, n_offsets)
     ts = range(0.0, 1.0, length=n_offsets)
     for (i, t) in enumerate(ts)
-        offs[i] = [float(lo[k] + t * (hi[k] - lo[k])) for k in 1:n]
+        offs[i] = ntuple(k -> float(lo[k] + t * (hi[k] - lo[k])), n)
     end
     return offs
 end
@@ -6447,39 +6414,48 @@ to `dir`, spanning the projection of the working box along that normal.
 
 The working box is derived from `opts.box` (see the 1-argument method).
 """
-function default_offsets(pi::PLikeEncodingMap, dir::AbstractVector{<:Real}, opts::InvariantOptions;
+function _default_offsets_dir(pi::PLikeEncodingMap, dir::NTuple{N,<:Real}, opts::InvariantOptions;
     n_offsets::Int = 9,
-    margin::Real = 0.05)
+    margin::Real = 0.05) where {N}
 
     lo, hi = encoding_box(pi, opts; margin=margin)
 
-    n = float.(dir)
-    nrm = norm(n)
+    n = ntuple(i -> float(dir[i]), N)
+    nrm = _l2_norm(n)
     nrm == 0 && error("default_offsets: dir must be nonzero")
-    n ./= nrm
+    n = ntuple(i -> n[i] / nrm, N)
 
     # Enumerate all corners of the axis-aligned box.
-    corners = Vector{Vector{Float64}}()
+    corners = Vector{Tuple}()
     for bits in Iterators.product((0, 1) for _ in 1:length(lo))
-        c = Float64[]
-        for i in 1:length(lo)
-            push!(c, bits[i] == 0 ? lo[i] : hi[i])
-        end
+        c = ntuple(i -> float(bits[i] == 0 ? lo[i] : hi[i]), N)
         push!(corners, c)
     end
 
     # Project corners onto the normal direction to get span.
-    projs = [dot(c, n) for c in corners]
+    projs = [_dot(n, c) for c in corners]
     smin = minimum(projs)
     smax = maximum(projs)
 
     # Center point of the box, and its projection.
-    ctr = (lo .+ hi) ./ 2
-    cproj = dot(ctr, n)
+    ctr = ntuple(i -> float((lo[i] + hi[i]) / 2), N)
+    cproj = _dot(n, ctr)
 
     # Offsets are "ctr shifted along n" so that dot(offset, n) spans [smin, smax].
     svals = range(smin, smax, length=n_offsets)
-    return [ctr .+ (s - cproj) .* n for s in svals]
+    return [ntuple(i -> ctr[i] + (s - cproj) * n[i], N) for s in svals]
+end
+
+function default_offsets(pi::PLikeEncodingMap, dir::AbstractVector{<:Real}, opts::InvariantOptions;
+    n_offsets::Int = 9,
+    margin::Real = 0.05)
+    return _default_offsets_dir(pi, Tuple(dir), opts; n_offsets=n_offsets, margin=margin)
+end
+
+function default_offsets(pi::PLikeEncodingMap, dir::NTuple{N,<:Real}, opts::InvariantOptions;
+    n_offsets::Int = 9,
+    margin::Real = 0.05) where {N}
+    return _default_offsets_dir(pi, dir, opts; n_offsets=n_offsets, margin=margin)
 end
 
 
@@ -7020,7 +6996,7 @@ function _critical_directions_2d(points::Vector{NTuple{2,Float64}};
 end
 
 # For a fixed direction, compute representative offsets (midpoints between consecutive dot products).
-function _critical_offsets_2d(points::Vector{NTuple{2,Float64}}, dir::Vector{Float64};
+function _critical_offsets_2d(points::Vector{NTuple{2,Float64}}, dir::NTuple{2,Float64};
                               atol::Float64=1e-12)
     n1 = -dir[2]
     n2 =  dir[1]
@@ -7043,25 +7019,25 @@ end
 
 function _direction_representatives(slopes; normalize_dirs::Symbol=:L1, include_axes::Bool=false, atol::Float64=1e-12)
     reps = _representative_slopes(Float64.(slopes); atol=atol)
-    dirs = Vector{Vector{Float64}}()
+    dirs = Vector{NTuple{2,Float64}}()
     sizehint!(dirs, length(reps) + (include_axes ? 2 : 0))
 
     for s in reps
-        d = _normalize_dir([1.0, s], normalize_dirs)
+        d = _normalize_dir((1.0, s), normalize_dirs)
         if d[1] > 0.0 && d[2] > 0.0
             push!(dirs, d)
         end
     end
 
     if include_axes
-        push!(dirs, _normalize_dir([1.0, 0.0], normalize_dirs))
-        push!(dirs, _normalize_dir([0.0, 1.0], normalize_dirs))
+        push!(dirs, _normalize_dir((1.0, 0.0), normalize_dirs))
+        push!(dirs, _normalize_dir((0.0, 1.0), normalize_dirs))
     end
 
     return dirs
 end
 
-function _line_order(points::Vector{NTuple{2,Float64}}, dir::Vector{Float64};
+function _line_order(points::Vector{NTuple{2,Float64}}, dir::NTuple{2,Float64};
                      strict::Bool=true, atol::Float64=1e-12)
     n1 = -dir[2]
     n2 =  dir[1]
@@ -7070,8 +7046,14 @@ function _line_order(points::Vector{NTuple{2,Float64}}, dir::Vector{Float64};
     return idx
 end
 
+@inline function _line_order(points::Vector{NTuple{2,Float64}}, dir::Vector{Float64};
+                             strict::Bool=true, atol::Float64=1e-12)
+    length(dir) == 2 || throw(ArgumentError("_line_order: expected 2D direction"))
+    return _line_order(points, (float(dir[1]), float(dir[2])); strict=strict, atol=atol)
+end
+
 function _unique_positions_for_order(points::Vector{NTuple{2,Float64}}, order::Vector{Int},
-                                     dir::Vector{Float64}; atol::Float64=1e-12)
+                                     dir::NTuple{2,Float64}; atol::Float64=1e-12)
     n1 = -dir[2]
     n2 =  dir[1]
     pos = Int[]
@@ -7084,6 +7066,12 @@ function _unique_positions_for_order(points::Vector{NTuple{2,Float64}}, order::V
         end
     end
     return pos
+end
+
+@inline function _unique_positions_for_order(points::Vector{NTuple{2,Float64}}, order::Vector{Int},
+                                             dir::Vector{Float64}; atol::Float64=1e-12)
+    length(dir) == 2 || throw(ArgumentError("_unique_positions_for_order: expected 2D direction"))
+    return _unique_positions_for_order(points, order, (float(dir[1]), float(dir[2])); atol=atol)
 end
 
 # Exact slice-chain extraction for coords-based backend.
@@ -7381,6 +7369,359 @@ end
 const IndexBarcode = Dict{Tuple{Int,Int},Int}
 const FloatBarcode = Dict{Tuple{Float64,Float64},Int}
 
+@inline _empty_index_barcode() = IndexBarcode()
+@inline _empty_float_barcode() = FloatBarcode()
+
+struct EndpointPair{T<:Real}
+    b::T
+    d::T
+end
+
+"""
+Packed internal barcode representation used in hot loops:
+- `pairs[i]` stores one endpoint pair,
+- `mults[i]` stores its multiplicity.
+"""
+struct PackedBarcode{T<:Real}
+    pairs::Vector{EndpointPair{T}}
+    mults::Vector{Int}
+end
+
+const PackedIndexBarcode = PackedBarcode{Int}
+const PackedFloatBarcode = PackedBarcode{Float64}
+
+@inline _empty_packed_index_barcode() = PackedIndexBarcode(EndpointPair{Int}[], Int[])
+@inline _empty_packed_float_barcode() = PackedFloatBarcode(EndpointPair{Float64}[], Int[])
+
+"""
+Packed 2D barcode grid used internally for slice/fibered pipelines.
+Stores a flat barcode buffer with deterministic matrix indexing.
+"""
+struct PackedBarcodeGrid{B<:PackedBarcode} <: AbstractMatrix{B}
+    flat::Vector{B}
+    nd::Int
+    no::Int
+    function PackedBarcodeGrid{B}(flat::Vector{B}, nd::Int, no::Int) where {B<:PackedBarcode}
+        length(flat) == nd * no || error("PackedBarcodeGrid: flat length mismatch")
+        return new{B}(flat, nd, no)
+    end
+end
+
+@inline PackedBarcodeGrid{B}(::UndefInitializer, nd::Int, no::Int) where {B<:PackedBarcode} =
+    PackedBarcodeGrid{B}(Vector{B}(undef, nd * no), nd, no)
+
+@inline Base.size(g::PackedBarcodeGrid) = (g.nd, g.no)
+@inline Base.length(g::PackedBarcodeGrid) = length(g.flat)
+@inline Base.axes(g::PackedBarcodeGrid) = (Base.OneTo(g.nd), Base.OneTo(g.no))
+@inline Base.IndexStyle(::Type{<:PackedBarcodeGrid}) = IndexLinear()
+@inline Base.getindex(g::PackedBarcodeGrid{B}, i::Int, j::Int) where {B<:PackedBarcode} = g.flat[(j - 1) * g.nd + i]
+@inline Base.getindex(g::PackedBarcodeGrid{B}, k::Int) where {B<:PackedBarcode} = g.flat[k]
+@inline function Base.setindex!(g::PackedBarcodeGrid{B}, v::B, i::Int, j::Int) where {B<:PackedBarcode}
+    g.flat[(j - 1) * g.nd + i] = v
+    return g
+end
+@inline function Base.setindex!(g::PackedBarcodeGrid{B}, v::B, k::Int) where {B<:PackedBarcode}
+    g.flat[k] = v
+    return g
+end
+@inline Base.vec(g::PackedBarcodeGrid) = g.flat
+
+@inline _packed_grid_undef(::Type{B}, nd::Int, no::Int) where {B<:PackedBarcode} =
+    PackedBarcodeGrid{B}(undef, nd, no)
+
+@inline _packed_grid_from_matrix(M::Matrix{B}) where {B<:PackedBarcode} =
+    PackedBarcodeGrid{B}(vec(M), size(M, 1), size(M, 2))
+
+Base.length(pb::PackedBarcode) = length(pb.pairs)
+Base.isempty(pb::PackedBarcode) = isempty(pb.pairs)
+
+@inline function Base.iterate(pb::PackedBarcode{T}, state::Int=1) where {T}
+    state > length(pb.pairs) && return nothing
+    p = pb.pairs[state]
+    return (((p.b, p.d), pb.mults[state]), state + 1)
+end
+
+@inline function _packed_total_multiplicity(pb::PackedBarcode)
+    s = 0
+    @inbounds for m in pb.mults
+        s += m
+    end
+    return s
+end
+
+@inline function _to_float_barcode(bc)
+    bc isa FloatBarcode && return bc
+    bc isa PackedFloatBarcode && return _barcode_from_packed(bc)
+    if bc isa PackedBarcode
+        out = FloatBarcode()
+        sizehint!(out, length(bc.pairs))
+        @inbounds for i in eachindex(bc.pairs)
+            p = bc.pairs[i]
+            out[(float(p.b), float(p.d))] = bc.mults[i]
+        end
+        return out
+    end
+    out = FloatBarcode()
+    for ((b, d), mult) in bc
+        out[(float(b), float(d))] = get(out, (float(b), float(d)), 0) + Int(mult)
+    end
+    return out
+end
+
+function _pack_index_barcode(bc::IndexBarcode)::PackedIndexBarcode
+    n = length(bc)
+    pairs = Vector{EndpointPair{Int}}(undef, n)
+    mults = Vector{Int}(undef, n)
+    i = 0
+    for ((b, d), m) in bc
+        i += 1
+        pairs[i] = EndpointPair{Int}(b, d)
+        mults[i] = Int(m)
+    end
+    if n > 1
+        ord = sortperm(pairs; by = p -> (p.b, p.d))
+        pairs = pairs[ord]
+        mults = mults[ord]
+    end
+    return PackedIndexBarcode(pairs, mults)
+end
+
+function _pack_float_barcode(bc)::PackedFloatBarcode
+    n = length(bc)
+    pairs = Vector{EndpointPair{Float64}}(undef, n)
+    mults = Vector{Int}(undef, n)
+    i = 0
+    for ((b, d), m) in bc
+        i += 1
+        pairs[i] = EndpointPair{Float64}(float(b), float(d))
+        mults[i] = Int(m)
+    end
+    if n > 1
+        ord = sortperm(pairs; by = p -> (p.b, p.d))
+        pairs = pairs[ord]
+        mults = mults[ord]
+    end
+    return PackedFloatBarcode(pairs, mults)
+end
+
+@inline function _points_from_packed!(out::Vector{Tuple{Float64,Float64}}, pb::PackedFloatBarcode)
+    empty!(out)
+    sizehint!(out, _packed_total_multiplicity(pb))
+    @inbounds for i in eachindex(pb.pairs)
+        p = pb.pairs[i]
+        m = pb.mults[i]
+        for _ in 1:m
+            push!(out, (p.b, p.d))
+        end
+    end
+    return out
+end
+
+@inline function _points_from_index_packed_and_values!(
+    out::Vector{Tuple{Float64,Float64}},
+    pb::PackedIndexBarcode,
+    vals::AbstractVector{<:Real},
+)
+    empty!(out)
+    sizehint!(out, _packed_total_multiplicity(pb))
+    @inbounds for i in eachindex(pb.pairs)
+        p = pb.pairs[i]
+        b = float(vals[p.b])
+        d = float(vals[p.d])
+        m = pb.mults[i]
+        for _ in 1:m
+            push!(out, (b, d))
+        end
+    end
+    return out
+end
+
+@inline function _points_from_index_packed_and_values!(
+    out::Vector{Tuple{Float64,Float64}},
+    pb::PackedIndexBarcode,
+    vals_pool::AbstractVector{Float64},
+    start::Int,
+)
+    empty!(out)
+    sizehint!(out, _packed_total_multiplicity(pb))
+    @inbounds for i in eachindex(pb.pairs)
+        p = pb.pairs[i]
+        b = vals_pool[start + p.b - 1]
+        d = vals_pool[start + p.d - 1]
+        m = pb.mults[i]
+        for _ in 1:m
+            push!(out, (b, d))
+        end
+    end
+    return out
+end
+
+@inline function _packed_barcode_from_rank(R::Matrix{Int}, endpoints::AbstractVector{T}) where {T<:Real}
+    m = size(R, 1)
+    getR(i, j) = (i < 1 || j < 1 || i > m || j > m || i > j) ? 0 : R[i, j]
+
+    pairs = EndpointPair{T}[]
+    mults = Int[]
+    sizehint!(pairs, (m * (m + 1)) >>> 1)
+    sizehint!(mults, (m * (m + 1)) >>> 1)
+
+    # Deterministic lexicographic order: birth first, then death.
+    @inbounds for b in 1:m
+        for d in (b+1):(m+1)
+            mult = getR(b, d-1) - getR(b-1, d-1) - getR(b, d) + getR(b-1, d)
+            mult < 0 && error("slice_barcode: negative multiplicity detected at (b,d)=($b,$d)")
+            if mult > 0
+                push!(pairs, EndpointPair{T}(endpoints[b], endpoints[d]))
+                push!(mults, mult)
+            end
+        end
+    end
+
+    return PackedBarcode{T}(pairs, mults)
+end
+
+@inline function _barcode_from_packed(pb::PackedBarcode{T}) where {T<:Real}
+    out = Dict{Tuple{T,T}, Int}()
+    sizehint!(out, length(pb.pairs))
+    @inbounds for i in eachindex(pb.pairs)
+        p = pb.pairs[i]
+        out[(p.b, p.d)] = pb.mults[i]
+    end
+    return out
+end
+
+@inline function _float_barcode_from_index_packed_values(
+    pb::PackedIndexBarcode,
+    vals::AbstractVector{<:Real},
+)
+    out = FloatBarcode()
+    sizehint!(out, length(pb.pairs))
+    @inbounds for i in eachindex(pb.pairs)
+        p = pb.pairs[i]
+        out[(float(vals[p.b]), float(vals[p.d]))] = pb.mults[i]
+    end
+    return out
+end
+
+@inline function _float_packed_from_index_packed_values(
+    pb::PackedIndexBarcode,
+    vals::AbstractVector{<:Real},
+)::PackedFloatBarcode
+    pairs = Vector{EndpointPair{Float64}}(undef, length(pb.pairs))
+    mults = copy(pb.mults)
+    @inbounds for i in eachindex(pb.pairs)
+        p = pb.pairs[i]
+        pairs[i] = EndpointPair{Float64}(float(vals[p.b]), float(vals[p.d]))
+    end
+    return PackedFloatBarcode(pairs, mults)
+end
+
+@inline function _float_dict_matrix_from_packed_grid(grid::PackedBarcodeGrid{<:PackedBarcode{Float64}})
+    nd, no = size(grid)
+    out = Matrix{FloatBarcode}(undef, nd, no)
+    @inbounds for j in 1:no, i in 1:nd
+        out[i, j] = _barcode_from_packed(grid[i, j])
+    end
+    return out
+end
+
+@inline function _index_dict_matrix_from_packed_grid(grid::PackedBarcodeGrid{<:PackedBarcode{Int}})
+    nd, no = size(grid)
+    out = Matrix{IndexBarcode}(undef, nd, no)
+    @inbounds for j in 1:no, i in 1:nd
+        out[i, j] = _barcode_from_packed(grid[i, j])
+    end
+    return out
+end
+
+function _slice_barcode_packed(
+    M::PModule{K},
+    chain::AbstractVector{Int};
+    values=nothing,
+    check_chain::Bool=true
+) where {K}
+    check_chain && _assert_chain(M.Q, chain)
+    m = length(chain)
+
+    endpoints = if values === nothing
+        1:(m+1)
+    else
+        length(values) == m || length(values) == m + 1 ||
+            error("slice_barcode: values must have length m or m+1")
+        length(values) == m ? _extend_values(values) : values
+    end
+
+    cc = get_cover_cache(M.Q)
+    nQ = nvertices(M.Q)
+    memo = _use_array_memo(nQ) ? _new_array_memo(K, nQ) : Dict{Tuple{Int,Int}, AbstractMatrix{K}}()
+    R = zeros(Int, m, m)
+    @inbounds for i in 1:m
+        for j in i:m
+            R[i, j] = rank_map(M, chain[i], chain[j]; cache=cc, memo=memo)
+        end
+    end
+
+    return _packed_barcode_from_rank(R, endpoints)
+end
+
+@inline _barcode_points(bar::PackedFloatBarcode)::Vector{Tuple{Float64,Float64}} =
+    _points_from_packed!(Tuple{Float64,Float64}[], bar)
+
+@inline function _barcode_points(bar::PackedIndexBarcode)::Vector{Tuple{Float64,Float64}}
+    out = Tuple{Float64,Float64}[]
+    sizehint!(out, _packed_total_multiplicity(bar))
+    @inbounds for i in eachindex(bar.pairs)
+        p = bar.pairs[i]
+        m = bar.mults[i]
+        b = float(p.b)
+        d = float(p.d)
+        for _ in 1:m
+            push!(out, (b, d))
+        end
+    end
+    return out
+end
+
+@inline function _values_are_float_vector(v)
+    v isa AbstractVector || return false
+    @inbounds for x in v
+        x isa AbstractFloat || return false
+    end
+    return true
+end
+
+@inline function _values_are_int_vector(v)
+    v isa AbstractVector || return false
+    @inbounds for x in v
+        x isa Integer || return false
+    end
+    return true
+end
+
+"""
+Thread-local reusable scratch arena for invariant kernels.
+"""
+mutable struct InvariantScratch
+    points_a::Vector{Tuple{Float64,Float64}}
+    points_b::Vector{Tuple{Float64,Float64}}
+    intervals::Vector{Tuple{Float64,Float64}}
+    mids::Vector{Float64}
+    perm::Vector{Int}
+    values::Vector{Float64}
+end
+
+InvariantScratch() = InvariantScratch(
+    Tuple{Float64,Float64}[],
+    Tuple{Float64,Float64}[],
+    Tuple{Float64,Float64}[],
+    Float64[],
+    Int[],
+    Float64[],
+)
+
+@inline _scratch_arenas(threads::Bool) =
+    [InvariantScratch() for _ in 1:(threads ? Threads.maxthreadid() : 1)]
+
 # ----- Fast fibered-barcode queries in 2D: RIVET-style augmented arrangement -----
 #
 # RIVET's key idea:
@@ -7399,6 +7740,11 @@ const FloatBarcode = Dict{Tuple{Float64,Float64},Int}
 
 const _AxisCoordIndex2D = NTuple{2,Int}
 
+struct FiberedSliceFamilyKey
+    direction_weight::Symbol
+    store_values::Bool
+end
+
 """
     FiberedArrangement2D
 
@@ -7416,8 +7762,8 @@ This object is independent of any module `M` and can be shared between many modu
 Construct with [`fibered_arrangement_2d`](@ref).
 Augment with [`fibered_barcode_cache_2d`](@ref).
 """
-mutable struct FiberedArrangement2D
-    pi::Any
+mutable struct FiberedArrangement2D{PI,RC,SFC}
+    pi::PI
     box::Tuple{Vector{Float64},Vector{Float64}}
     normalize_dirs::Symbol
     include_axes::Bool
@@ -7458,7 +7804,7 @@ mutable struct FiberedArrangement2D
     ys::Vector{Float64}
 
     # poly backend cache: (A_list, b_list)
-    region_cache::Any
+    region_cache::RC
 
     # chain registry
     chain_key_to_id::Dict{Vector{Int},Int}
@@ -7467,9 +7813,8 @@ mutable struct FiberedArrangement2D
     # stats: how many cells have been computed
     n_cell_computed::Int
 
-    # Cache of precomputed slice families keyed by (direction_weight_scheme, store_values).
-    # Stored as Any to avoid forward-type dependency in this struct definition.
-    slice_family_cache::Dict{Tuple{Symbol,Bool},Any}
+    # Cache of precomputed slice families keyed by typed options.
+    slice_family_cache::SFC
 end
 
 """
@@ -7485,9 +7830,8 @@ Query with [`fibered_barcode`](@ref).
 mutable struct FiberedBarcodeCache2D{K}
     arrangement::FiberedArrangement2D
     M::PModule{K}
-
-    # index_barcodes[i] is either nothing or an IndexBarcode
-    index_barcodes::Vector{Union{Nothing,IndexBarcode}}
+    # Packed barcodes are the internal default for all hot loops.
+    index_barcodes_packed::Vector{Union{Nothing,PackedIndexBarcode}}
     n_barcode_computed::Int
 end
 
@@ -7500,8 +7844,8 @@ end
     return [Float64(v[1]), Float64(v[2])]
 end
 
-@inline function _normal_from_dir_2d(d::Vector{Float64})
-    return (-d[2], d[1])
+@inline function _normal_from_dir_2d(d::Union{AbstractVector{<:Real},NTuple{2,<:Real}})
+    return (-float(d[2]), float(d[1]))
 end
 
 function _critical_slopes_2d(points::Vector{NTuple{2,Float64}}; atol::Float64=1e-12)
@@ -7567,7 +7911,7 @@ end
 function _fibered_offset_cell_index(
     arr::FiberedArrangement2D,
     dir_idx::Int,
-    d::Vector{Float64},
+    d::Union{AbstractVector{<:Real},NTuple{2,<:Real}},
     off::Float64;
     tie_break::Symbol = :up,
 )
@@ -7712,7 +8056,7 @@ function _slice_chain_exact_boxes_2d_fast(
     return chain, values
 end
 
-function _arr2d_slice_chain_and_values(arr::FiberedArrangement2D, dir::Vector{Float64}, off::Float64)
+function _arr2d_slice_chain_and_values(arr::FiberedArrangement2D, dir::Union{AbstractVector{<:Real},NTuple{2,<:Real}}, off::Float64)
     if arr.backend === :boxes
         return _slice_chain_exact_boxes_2d_fast(
             arr.pi, dir, off;
@@ -7849,17 +8193,19 @@ function _arr2d_values_from_cell_boxes(
     return values
 end
 
-function _arr2d_values_for_chain_poly(arr::FiberedArrangement2D, d::Vector{Float64}, off::Float64, chain::Vector{Int})
+function _arr2d_values_for_chain_poly!(scratch::InvariantScratch, arr::FiberedArrangement2D, d::Vector{Float64}, off::Float64, chain::Vector{Int})
     x0 = _line_basepoint_from_normal_offset_2d(d, off)
     tmin, tmax = _line_param_range_in_box_2d(x0, d, arr.box; atol=arr.atol)
     if tmax <= tmin + arr.atol
-        return Float64[]
+        resize!(scratch.values, 0)
+        return scratch.values
     end
 
     A_list, b_list = arr.region_cache
     m = length(chain)
-    intervals = Vector{Tuple{Float64,Float64}}(undef, m)
-    mids = Vector{Float64}(undef, m)
+    resize!(scratch.intervals, m)
+    resize!(scratch.mids, m)
+    resize!(scratch.perm, m)
 
     for i in 1:m
         r = chain[i]
@@ -7869,15 +8215,17 @@ function _arr2d_values_for_chain_poly(arr::FiberedArrangement2D, d::Vector{Float
         if thi <= tlo + arr.atol
             throw(ErrorException("empty region-line intersection; likely degenerate query"))
         end
-        intervals[i] = (tlo, thi)
-        mids[i] = 0.5*(tlo + thi)
+        scratch.intervals[i] = (tlo, thi)
+        scratch.mids[i] = 0.5*(tlo + thi)
+        scratch.perm[i] = i
     end
 
-    perm = sortperm(mids)
-    values = Vector{Float64}(undef, m+1)
+    sortperm!(scratch.perm, scratch.mids)
+    resize!(scratch.values, m + 1)
+    values = scratch.values
     values[1] = tmin
     for k in 1:m-1
-        values[k+1] = intervals[perm[k]][2]
+        values[k+1] = scratch.intervals[scratch.perm[k]][2]
     end
     values[end] = tmax
 
@@ -7890,25 +8238,34 @@ function _arr2d_values_for_chain_poly(arr::FiberedArrangement2D, d::Vector{Float
     return values
 end
 
+function _arr2d_values_for_chain_poly(arr::FiberedArrangement2D, d::Vector{Float64}, off::Float64, chain::Vector{Int})
+    scratch = InvariantScratch()
+    return copy(_arr2d_values_for_chain_poly!(scratch, arr, d, off, chain))
+end
+
 function _sync_index_barcodes!(cache::FiberedBarcodeCache2D)
     n = length(cache.arrangement.chains)
-    while length(cache.index_barcodes) < n
-        push!(cache.index_barcodes, nothing)
+    while length(cache.index_barcodes_packed) < n
+        push!(cache.index_barcodes_packed, nothing)
     end
     return nothing
 end
 
 function _index_barcode_for_chain!(cache::FiberedBarcodeCache2D, chain_id::Int)
+    return _barcode_from_packed(_index_packed_for_chain!(cache, chain_id))
+end
+
+function _index_packed_for_chain!(cache::FiberedBarcodeCache2D, chain_id::Int)
     _sync_index_barcodes!(cache)
-    b = cache.index_barcodes[chain_id]
-    if b !== nothing
-        return b
+    pb = cache.index_barcodes_packed[chain_id]
+    if pb !== nothing
+        return pb
     end
     chain = cache.arrangement.chains[chain_id]
-    bidx = slice_barcode(cache.M, chain; values=nothing, check_chain=false)
-    cache.index_barcodes[chain_id] = bidx
+    pb = _slice_barcode_packed(cache.M, chain; values=nothing, check_chain=false)::PackedIndexBarcode
+    cache.index_barcodes_packed[chain_id] = pb
     cache.n_barcode_computed += 1
-    return bidx
+    return pb
 end
 
 function _precompute_cells!(arr::FiberedArrangement2D;
@@ -7935,17 +8292,35 @@ function _precompute_index_barcodes!(cache::FiberedBarcodeCache2D;
     _sync_index_barcodes!(cache)
     if threads && Threads.nthreads() > 1
         Threads.@threads for i in 1:length(arr.chains)
-            b = cache.index_barcodes[i]
-            if b === nothing
+            pb = cache.index_barcodes_packed[i]
+            if pb === nothing
                 chain = arr.chains[i]
-                cache.index_barcodes[i] = slice_barcode(cache.M, chain; values=nothing, check_chain=false)
+                cache.index_barcodes_packed[i] =
+                    _slice_barcode_packed(cache.M, chain; values=nothing, check_chain=false)::PackedIndexBarcode
             end
         end
-        cache.n_barcode_computed = count(!isnothing, cache.index_barcodes)
+        cache.n_barcode_computed = count(!isnothing, cache.index_barcodes_packed)
     else
         for i in 1:length(arr.chains)
-            _index_barcode_for_chain!(cache, i)
+            _index_packed_for_chain!(cache, i)
         end
+    end
+    return nothing
+end
+
+@inline function _prepare_fibered_arrangement_readonly!(arr::FiberedArrangement2D)
+    # Two-phase policy: build mutable arrangement caches sequentially, then
+    # treat them as read-only in threaded compute regions.
+    if arr.n_cell_computed != arr.total_cells
+        _precompute_cells!(arr; threads=false)
+    end
+    return nothing
+end
+
+@inline function _prepare_fibered_cache_readonly!(cache::FiberedBarcodeCache2D)
+    _prepare_fibered_arrangement_readonly!(cache.arrangement)
+    if cache.n_barcode_computed != length(cache.arrangement.chains)
+        _precompute_index_barcodes!(cache; threads=false)
     end
     return nothing
 end
@@ -8010,7 +8385,8 @@ function fibered_arrangement_2d(
     end
 
     slopes = _unique_sorted_slopes(points; atol=atol)
-    dir_reps = _direction_representatives(slopes; normalize_dirs=normalize_dirs, include_axes=include_axes, atol=atol)
+    dir_reps_raw = _direction_representatives(slopes; normalize_dirs=normalize_dirs, include_axes=include_axes, atol=atol)
+    dir_reps = [Float64[d[1], d[2]] for d in dir_reps_raw]
 
     ndirs = length(dir_reps)
     orders = Vector{Vector{Int}}(undef, ndirs)
@@ -8068,7 +8444,7 @@ function fibered_arrangement_2d(
         xs, ys, region_cache,
         Dict{Vector{Int},Int}(), Vector{Vector{Int}}(),
         0,
-        Dict{Tuple{Symbol,Bool},Any}(),
+        Dict{FiberedSliceFamilyKey,FiberedSliceFamily2D}(),
     )
 
     _precompute_arrangement_cache!(arr, precompute; threads=threads)
@@ -8219,7 +8595,12 @@ end
 function fibered_barcode_cache_2d(M::PModule{K}, arr::FiberedArrangement2D;
                                   precompute::Symbol=:none,
                                   threads::Bool = (Threads.nthreads() > 1)) where {K}
-    cache = FiberedBarcodeCache2D(arr, M, Any[], 0)
+    cache = FiberedBarcodeCache2D(
+        arr,
+        M,
+        Union{Nothing,PackedIndexBarcode}[],
+        0,
+    )
     if precompute === :full
         _precompute_cells!(arr; threads=threads)
         _precompute_index_barcodes!(cache; threads=threads)
@@ -8251,7 +8632,12 @@ function fibered_barcode_cache_2d(
         precompute = :cells_barcodes
     end
 
-    cache = FiberedBarcodeCache2D(arr, M, Union{Nothing,IndexBarcode}[], 0)
+    cache = FiberedBarcodeCache2D(
+        arr,
+        M,
+        Union{Nothing,PackedIndexBarcode}[],
+        0,
+    )
 
     if precompute in (:cells, :cells_barcodes, :all)
         _precompute_cells!(arr; threads=threads)
@@ -8385,9 +8771,9 @@ function fibered_barcode(
         return Dict{Tuple{Float64,Float64},Int}()
     end
 
-    bidx = _index_barcode_for_chain!(cache, chain_id)
+    bidx_packed = _index_packed_for_chain!(cache, chain_id)
     if values === :index
-        return Base.copy(bidx)
+        return _barcode_from_packed(bidx_packed)
     elseif values !== :t
         throw(ArgumentError("values must be :t or :index"))
     end
@@ -8418,20 +8804,11 @@ function fibered_barcode(
             return Dict{Tuple{Float64,Float64},Int}()
         end
         cid2 = _arr2d_chain_id!(arr, chain2)
-        bidx2 = _index_barcode_for_chain!(cache, cid2)
-        b = Dict{Tuple{Float64,Float64},Int}()
-        sizehint!(b, length(bidx2))
-        for ((i,j), mult) in bidx2
-            b[(vals2[i], vals2[j])] = mult
-        end
-        return b
+        bidx2_packed = _index_packed_for_chain!(cache, cid2)
+        return _float_barcode_from_index_packed_values(bidx2_packed, vals2)
     end
 
-    b = Dict{Tuple{Float64,Float64},Int}()
-    sizehint!(b, length(bidx))
-    for ((i,j), mult) in bidx
-        b[(vals[i], vals[j])] = mult
-    end
+    b = _float_barcode_from_index_packed_values(bidx_packed, vals)
 
     if verify
         opts_exact = InvariantOptions(box = arr.box, strict = arr.strict)
@@ -8468,6 +8845,76 @@ function fibered_barcode_index(cache::FiberedBarcodeCache2D, dir, offset::Real; 
     return fibered_barcode(cache, dir, offset; values=:index, tie_break=tie_break)
 end
 
+@inline function _fibered_barcode_packed(
+    cache::FiberedBarcodeCache2D,
+    dir,
+    offset::Real;
+    values::Symbol = :t,
+    tie_break::Symbol = :up,
+)
+    arr = cache.arrangement
+    d = _normalize_dir(_as_float2(dir), arr.normalize_dirs)
+    off = Float64(offset)
+
+    cid = fibered_cell_id(arr, d, off; tie_break=tie_break)
+    if cid === nothing
+        return values === :index ? _empty_packed_index_barcode() : _empty_packed_float_barcode()
+    end
+
+    dir_idx, off_idx = cid
+    cell = _arr2d_cell_linear_index(arr, dir_idx, off_idx)
+    chain_id = _arr2d_compute_cell!(arr, dir_idx, off_idx)
+    if chain_id <= 0
+        return values === :index ? _empty_packed_index_barcode() : _empty_packed_float_barcode()
+    end
+
+    bidx_packed = _index_packed_for_chain!(cache, chain_id)
+    if values === :index
+        return bidx_packed
+    elseif values !== :t
+        throw(ArgumentError("values must be :t or :index"))
+    end
+
+    chain = arr.chains[chain_id]
+    vals = Float64[]
+    ok = true
+
+    if arr.backend === :boxes
+        try
+            vals = _arr2d_values_from_cell_boxes(arr, cell, d, off, length(chain))
+        catch
+            ok = false
+        end
+    else
+        try
+            vals = _arr2d_values_for_chain_poly(arr, d, off, chain)
+        catch
+            ok = false
+        end
+    end
+
+    if !ok || isempty(vals)
+        opts_exact = InvariantOptions(box = arr.box, strict = arr.strict)
+        chain2, vals2 = slice_chain_exact_2d(arr.pi, d, off, opts_exact; normalize_dirs = :none, atol = arr.atol)
+        if isempty(chain2)
+            return _empty_packed_float_barcode()
+        end
+        cid2 = _arr2d_chain_id!(arr, chain2)
+        bidx2_packed = _index_packed_for_chain!(cache, cid2)
+        return _float_packed_from_index_packed_values(bidx2_packed, vals2)
+    end
+
+    return _float_packed_from_index_packed_values(bidx_packed, vals)
+end
+
+@inline function _fibered_barcode_packed(cache::FiberedBarcodeCache2D, dir, x0::AbstractVector{<:Real}; kwargs...)
+    arr = cache.arrangement
+    d = _normalize_dir(_as_float2(dir), arr.normalize_dirs)
+    (n1, n2) = _normal_from_dir_2d(d)
+    off = n1 * Float64(x0[1]) + n2 * Float64(x0[2])
+    return _fibered_barcode_packed(cache, d, off; kwargs...)
+end
+
 """
     fibered_slice(cache, dir, offset; tie_break=:up)
 
@@ -8497,7 +8944,7 @@ function fibered_slice(
         return (chain=Int[], values=Float64[], barcode=Dict{Tuple{Float64,Float64},Int}())
     end
 
-    bidx = _index_barcode_for_chain!(cache, chain_id)
+    bidx_packed = _index_packed_for_chain!(cache, chain_id)
     chain = arr.chains[chain_id]
     vals = Float64[]
     ok = true
@@ -8523,18 +8970,12 @@ function fibered_slice(
             return (chain=Int[], values=Float64[], barcode=Dict{Tuple{Float64,Float64},Int}())
         end
         cid2 = _arr2d_chain_id!(arr, chain2)
-        bidx2 = _index_barcode_for_chain!(cache, cid2)
-        b = Dict{Tuple{Float64,Float64},Int}()
-        for ((i,j), mult) in bidx2
-            b[(vals2[i], vals2[j])] = mult
-        end
+        bidx2_packed = _index_packed_for_chain!(cache, cid2)
+        b = _float_barcode_from_index_packed_values(bidx2_packed, vals2)
         return (chain=chain2, values=vals2, barcode=b)
     end
 
-    b = Dict{Tuple{Float64,Float64},Int}()
-    for ((i,j), mult) in bidx
-        b[(vals[i], vals[j])] = mult
-    end
+    b = _float_barcode_from_index_packed_values(bidx_packed, vals)
 
     return (chain=Base.copy(chain), values=vals, barcode=b)
 end
@@ -8625,6 +9066,7 @@ end
 function _arr2d_representative_tmin_tmax(arr::FiberedArrangement2D)
     tmin = Inf
     tmax = -Inf
+    scratch = InvariantScratch()
 
     ndir = length(arr.dir_reps)
     for dir_idx in 1:ndir
@@ -8647,7 +9089,7 @@ function _arr2d_representative_tmin_tmax(arr::FiberedArrangement2D)
                 end
             else
                 try
-                    vals = _arr2d_values_for_chain_poly(arr, d, off_mid, chain)
+                    vals = _arr2d_values_for_chain_poly!(scratch, arr, d, off_mid, chain)
                 catch
                     ok = false
                 end
@@ -8777,14 +9219,14 @@ end
 
 Build and cache a `FiberedSliceFamily2D` for a given arrangement.
 
-The result is cached in `arr.slice_family_cache[(direction_weight, store_values)]`.
+The result is cached in `arr.slice_family_cache[FiberedSliceFamilyKey(direction_weight, store_values)]`.
 """
 function fibered_slice_family_2d(
     arr::FiberedArrangement2D;
     direction_weight::Symbol = :lesnick_l1,
     store_values::Bool = true,
 )
-    key = (direction_weight, store_values)
+    key = FiberedSliceFamilyKey(direction_weight, store_values)
     cached = get(arr.slice_family_cache, key, nothing)
     if cached !== nothing
         return cached::FiberedSliceFamily2D
@@ -8814,6 +9256,7 @@ function fibered_slice_family_2d(
     vals_pool = Float64[]
     vals_start = Int[]
     vals_len = Int[]
+    scratch = InvariantScratch()
 
     for di in 1:ndirs
         d = arr.dir_reps[di]
@@ -8840,7 +9283,7 @@ function fibered_slice_family_2d(
                     _arr2d_values_from_cell_boxes(arr, cell, d, cmid, m)
                 else
                     try
-                        _arr2d_values_for_chain_poly(arr, d, cmid, chain)
+                        _arr2d_values_for_chain_poly!(scratch, arr, d, cmid, chain)
                     catch
                         _, v = _arr2d_slice_chain_and_values(arr, d, cmid)
                         v
@@ -8891,6 +9334,8 @@ Inputs
 
 Keywords
 - `values`: `:t` (default) or `:index` (index barcodes).
+- `packed`: if `true`, return `PackedBarcodeGrid` internally; otherwise convert
+  to dict barcodes at the API boundary.
 - `tie_break`: forwarded to `fibered_barcode` for boundary cases.
 - `verify`: forwarded to `fibered_barcode` (slow; checks against exact slicing).
 - `direction_weight`: one of `:none`, `:lesnick_l1`, `:lesnick_linf`.
@@ -8899,7 +9344,8 @@ Keywords
 - `normalize_weights`: normalize the weight matrix to sum to 1.
 
 Returns a NamedTuple:
-- `barcodes`: `nd x no` matrix of barcodes (each a Dict).
+- `barcodes`: `nd x no` matrix of barcodes (each a Dict) unless `packed=true`,
+  in which case this is `PackedBarcodeGrid`.
 - `weights`:  `nd x no` matrix of weights.
 - `directions`: normalized directions used (Float64 vectors).
 - `offsets`: collected offsets as provided.
@@ -8910,12 +9356,17 @@ function slice_barcodes(
     directions = nothing,
     offsets,
     values::Symbol = :t,
+    packed::Bool = false,
     direction_weight::Union{Symbol,Function,Real} = :none,
     offset_weights = nothing,
     normalize_weights::Bool = true,
     tie_break::Symbol = :up,
     threads::Bool = (Threads.nthreads() > 1),
 )
+    if threads && Threads.nthreads() > 1
+        _prepare_fibered_cache_readonly!(cache)
+    end
+
     if dirs === nothing
         dirs = directions
     end
@@ -8938,20 +9389,43 @@ function slice_barcodes(
         end
     end
 
-    barcodes = Matrix{Any}(undef, nd, no)  # remains Any because values=:t returns Dict{Tuple{Float64,Float64},Int}
-    if threads
-        Threads.@threads for idx in 1:(nd * no)
-            i = div((idx - 1), no) + 1
-            j = (idx - 1) % no + 1
-            barcodes[i, j] = fibered_barcode(cache, dirs[i], offsets[j]; values=values, tie_break=tie_break)
+    if values == :index
+        grids = _packed_grid_undef(PackedIndexBarcode, nd, no)
+        if threads
+            Threads.@threads for idx in 1:(nd * no)
+                i = div((idx - 1), no) + 1
+                j = (idx - 1) % no + 1
+                grids[i, j] = _fibered_barcode_packed(cache, dirs[i], offsets[j]; values=:index, tie_break=tie_break)
+            end
+        else
+            for i in 1:nd, j in 1:no
+                grids[i, j] = _fibered_barcode_packed(cache, dirs[i], offsets[j]; values=:index, tie_break=tie_break)
+            end
         end
+        if packed
+            return (barcodes=grids, weights=weights, offs=offsets)
+        end
+        return (barcodes=_index_dict_matrix_from_packed_grid(grids), weights=weights, offs=offsets)
+    elseif values == :t
+        grids = _packed_grid_undef(PackedFloatBarcode, nd, no)
+        if threads
+            Threads.@threads for idx in 1:(nd * no)
+                i = div((idx - 1), no) + 1
+                j = (idx - 1) % no + 1
+                grids[i, j] = _fibered_barcode_packed(cache, dirs[i], offsets[j]; values=:t, tie_break=tie_break)
+            end
+        else
+            for i in 1:nd, j in 1:no
+                grids[i, j] = _fibered_barcode_packed(cache, dirs[i], offsets[j]; values=:t, tie_break=tie_break)
+            end
+        end
+        if packed
+            return (barcodes=grids, weights=weights, offs=offsets)
+        end
+        return (barcodes=_float_dict_matrix_from_packed_grid(grids), weights=weights, offs=offsets)
     else
-        for i in 1:nd, j in 1:no
-            barcodes[i, j] = fibered_barcode(cache, dirs[i], offsets[j]; values=values, tie_break=tie_break)
-        end
+        throw(ArgumentError("values must be :t or :index"))
     end
-
-    return (barcodes=barcodes, weights=weights, offs=offsets)
 end
 
 slice_barcodes(cache::FiberedBarcodeCache2D, dirs, offsets; kwargs...) =
@@ -9045,68 +9519,79 @@ function matching_distance_exact_2d(
     arr = cacheM.arrangement
     arr === cacheN.arrangement || error("matching_distance_exact_2d: caches must share the same arrangement")
 
+    if threads && Threads.nthreads() > 1
+        _prepare_fibered_arrangement_readonly!(arr)
+    end
     fam = family === nothing ? fibered_slice_family_2d(arr; direction_weight = weight, store_values = store_values) : family
 
-    if threads
-        _precompute_index_barcodes!(cacheM)
-        _precompute_index_barcodes!(cacheN)
+    if threads && Threads.nthreads() > 1
+        _precompute_index_barcodes!(cacheM; threads=false)
+        _precompute_index_barcodes!(cacheN; threads=false)
     end
 
     ns = nslices(fam)
-    nt = threads ? Threads.maxthreadid() : 1
-    tmpM = [FloatBarcode() for _ in 1:nt]
-    tmpN = [FloatBarcode() for _ in 1:nt]
-    best_by_thread = fill(0.0, nt)
+    scratch_by_thread = _scratch_arenas(threads)
+    best_by_thread = fill(0.0, length(scratch_by_thread))
 
     if threads
         Threads.@threads for k in 1:ns
             tid = Threads.threadid()
+            scratch = scratch_by_thread[tid]
             di = fam.dir_idx[k]
             cid = fam.chain_id[k]
             w = fam.dir_weight[di]
 
-            bidxM = cacheM.index_barcodes[cid]::IndexBarcode
-            bidxN = cacheN.index_barcodes[cid]::IndexBarcode
+            bidxM = cacheM.index_barcodes_packed[cid]::PackedIndexBarcode
+            bidxN = cacheN.index_barcodes_packed[cid]::PackedIndexBarcode
 
             s = fam.vals_start[k]
             if s == 0
                 d = arr.dir_reps[di]
-                _, vals = _arr2d_slice_chain_and_values(arr, d, fam.off_mid[k])
-                bM = _barcode_from_index_and_values!(tmpM[tid], bidxM, vals)
-                bN = _barcode_from_index_and_values!(tmpN[tid], bidxN, vals)
-                best_by_thread[tid] = max(best_by_thread[tid], w * bottleneck_distance(bM, bN))
+                vals = if arr.backend === :boxes
+                    _, vals0 = _arr2d_slice_chain_and_values(arr, d, fam.off_mid[k])
+                    vals0
+                else
+                    _arr2d_values_for_chain_poly!(scratch, arr, d, fam.off_mid[k], arr.chains[cid])
+                end
+                _points_from_index_packed_and_values!(scratch.points_a, bidxM, vals)
+                _points_from_index_packed_and_values!(scratch.points_b, bidxN, vals)
+                best_by_thread[tid] = max(best_by_thread[tid], w * bottleneck_distance(scratch.points_a, scratch.points_b))
             else
-                bM = _barcode_from_index_and_values!(tmpM[tid], bidxM, fam.vals_pool, s)
-                bN = _barcode_from_index_and_values!(tmpN[tid], bidxN, fam.vals_pool, s)
-                best_by_thread[tid] = max(best_by_thread[tid], w * bottleneck_distance(bM, bN))
+                _points_from_index_packed_and_values!(scratch.points_a, bidxM, fam.vals_pool, s)
+                _points_from_index_packed_and_values!(scratch.points_b, bidxN, fam.vals_pool, s)
+                best_by_thread[tid] = max(best_by_thread[tid], w * bottleneck_distance(scratch.points_a, scratch.points_b))
             end
         end
         return maximum(best_by_thread)
     end
 
     best = 0.0
-    bMtmp = tmpM[1]
-    bNtmp = tmpN[1]
+    scratch = scratch_by_thread[1]
     for k in 1:ns
         di = fam.dir_idx[k]
         cid = fam.chain_id[k]
         w = fam.dir_weight[di]
 
-        bidxM = _index_barcode_for_chain!(cacheM, cid)
-        bidxN = _index_barcode_for_chain!(cacheN, cid)
+        bidxM = _index_packed_for_chain!(cacheM, cid)
+        bidxN = _index_packed_for_chain!(cacheN, cid)
 
         s = fam.vals_start[k]
         if s == 0
             d = arr.dir_reps[di]
-            _, vals = _arr2d_slice_chain_and_values(arr, d, fam.off_mid[k])
-            bM = _barcode_from_index_and_values!(bMtmp, bidxM, vals)
-            bN = _barcode_from_index_and_values!(bNtmp, bidxN, vals)
+            vals = if arr.backend === :boxes
+                _, vals0 = _arr2d_slice_chain_and_values(arr, d, fam.off_mid[k])
+                vals0
+            else
+                _arr2d_values_for_chain_poly!(scratch, arr, d, fam.off_mid[k], arr.chains[cid])
+            end
+            _points_from_index_packed_and_values!(scratch.points_a, bidxM, vals)
+            _points_from_index_packed_and_values!(scratch.points_b, bidxN, vals)
         else
-            bM = _barcode_from_index_and_values!(bMtmp, bidxM, fam.vals_pool, s)
-            bN = _barcode_from_index_and_values!(bNtmp, bidxN, fam.vals_pool, s)
+            _points_from_index_packed_and_values!(scratch.points_a, bidxM, fam.vals_pool, s)
+            _points_from_index_packed_and_values!(scratch.points_b, bidxN, fam.vals_pool, s)
         end
 
-        best = max(best, w * bottleneck_distance(bM, bN))
+        best = max(best, w * bottleneck_distance(scratch.points_a, scratch.points_b))
     end
 
     return best
@@ -9152,21 +9637,22 @@ function slice_kernel(
     arr = cacheM.arrangement
     arr === cacheN.arrangement || error("slice_kernel: caches must share the same arrangement")
 
+    if threads && Threads.nthreads() > 1
+        _prepare_fibered_arrangement_readonly!(arr)
+    end
     fam = family === nothing ? fibered_slice_family_2d(arr; direction_weight=direction_weight, store_values=store_values) : family
 
     # Kernel on barcodes (reuse existing kernel definitions)
     kernel_fn = (bA, bB) -> _barcode_kernel(bA, bB; kind = kind, sigma = sigma)
 
-    if threads
-        _precompute_index_barcodes!(cacheM)
-        _precompute_index_barcodes!(cacheN)
+    if threads && Threads.nthreads() > 1
+        _precompute_index_barcodes!(cacheM; threads=false)
+        _precompute_index_barcodes!(cacheN; threads=false)
     end
 
-    nt = threads ? Threads.nthreads() : 1
-    tmpM = [FloatBarcode() for _ in 1:nt]
-    tmpN = [FloatBarcode() for _ in 1:nt]
-    acc_by_thread = fill(0.0, nt)
-    sumw_by_thread = fill(0.0, nt)
+    scratch_by_thread = _scratch_arenas(threads)
+    acc_by_thread = fill(0.0, length(scratch_by_thread))
+    sumw_by_thread = fill(0.0, length(scratch_by_thread))
 
     ns = nslices(fam)
 
@@ -9188,17 +9674,30 @@ function slice_kernel(
     if threads
         Threads.@threads for k in 1:ns
             tid = Threads.threadid()
+            scratch = scratch_by_thread[tid]
             di = fam.dir_idx[k]
             cid = fam.chain_id[k]
             w = fam.dir_weight[di] * _cell_w(k)
 
-            bidxM = cacheM.index_barcodes[cid]::IndexBarcode
-            bidxN = cacheN.index_barcodes[cid]::IndexBarcode
+            bidxM = cacheM.index_barcodes_packed[cid]::PackedIndexBarcode
+            bidxN = cacheN.index_barcodes_packed[cid]::PackedIndexBarcode
             s = fam.vals_start[k]
-            bM = _barcode_from_index_and_values!(tmpM[tid], bidxM, fam.vals_pool, s)
-            bN = _barcode_from_index_and_values!(tmpN[tid], bidxN, fam.vals_pool, s)
+            if s == 0
+                d = arr.dir_reps[di]
+                vals = if arr.backend === :boxes
+                    _, vals0 = _arr2d_slice_chain_and_values(arr, d, fam.off_mid[k])
+                    vals0
+                else
+                    _arr2d_values_for_chain_poly!(scratch, arr, d, fam.off_mid[k], arr.chains[cid])
+                end
+                _points_from_index_packed_and_values!(scratch.points_a, bidxM, vals)
+                _points_from_index_packed_and_values!(scratch.points_b, bidxN, vals)
+            else
+                _points_from_index_packed_and_values!(scratch.points_a, bidxM, fam.vals_pool, s)
+                _points_from_index_packed_and_values!(scratch.points_b, bidxN, fam.vals_pool, s)
+            end
 
-            acc_by_thread[tid] += w * kernel_fn(bM, bN)
+            acc_by_thread[tid] += w * kernel_fn(scratch.points_a, scratch.points_b)
             sumw_by_thread[tid] += w
         end
         acc = sum(acc_by_thread)
@@ -9207,20 +9706,31 @@ function slice_kernel(
     else
         acc = 0.0
         sumw = 0.0
-        bMtmp = tmpM[1]
-        bNtmp = tmpN[1]
+        scratch = scratch_by_thread[1]
         for k in 1:ns
             di = fam.dir_idx[k]
             cid = fam.chain_id[k]
             w = fam.dir_weight[di] * _cell_w(k)
 
-            bidxM = _index_barcode_for_chain!(cacheM, cid)
-            bidxN = _index_barcode_for_chain!(cacheN, cid)
+            bidxM = _index_packed_for_chain!(cacheM, cid)
+            bidxN = _index_packed_for_chain!(cacheN, cid)
             s = fam.vals_start[k]
-            bM = _barcode_from_index_and_values!(bMtmp, bidxM, fam.vals_pool, s)
-            bN = _barcode_from_index_and_values!(bNtmp, bidxN, fam.vals_pool, s)
+            if s == 0
+                d = arr.dir_reps[di]
+                vals = if arr.backend === :boxes
+                    _, vals0 = _arr2d_slice_chain_and_values(arr, d, fam.off_mid[k])
+                    vals0
+                else
+                    _arr2d_values_for_chain_poly!(scratch, arr, d, fam.off_mid[k], arr.chains[cid])
+                end
+                _points_from_index_packed_and_values!(scratch.points_a, bidxM, vals)
+                _points_from_index_packed_and_values!(scratch.points_b, bidxN, vals)
+            else
+                _points_from_index_packed_and_values!(scratch.points_a, bidxM, fam.vals_pool, s)
+                _points_from_index_packed_and_values!(scratch.points_b, bidxN, fam.vals_pool, s)
+            end
 
-            acc += w * kernel_fn(bM, bN)
+            acc += w * kernel_fn(scratch.points_a, scratch.points_b)
             sumw += w
         end
         return normalize_weights && sumw > 0 ? acc / sumw : acc
@@ -9337,6 +9847,18 @@ end
     return s
 end
 
+@inline function _dot(dir::NTuple{N,<:Real}, x) where {N}
+    s = 0.0
+    @inbounds for i in 1:N
+        s += float(dir[i]) * float(x[i])
+    end
+    return s
+end
+
+@inline function _l2_norm(dir)
+    return sqrt(_dot(dir, dir))
+end
+
 """
     projected_arrangement(pi::PLikeEncodingMap; dirs=nothing, n_dirs=32, normalize=:L1, ...)
 
@@ -9353,12 +9875,13 @@ function projected_arrangement(pi::PLikeEncodingMap;
                                include_axes::Bool = false,
                                normalize::Symbol = :L1,
                                enforce_monotone::Symbol = :upper,
-                                Q::Union{Nothing,AbstractPoset}=nothing,
-                                poset_kind::Symbol = :signature,
-                                threads::Bool = (Threads.nthreads() > 1))
+                               Q::Union{Nothing,AbstractPoset}=nothing,
+                               poset_kind::Symbol = :signature,
+                               cache::Union{Nothing,EncodingCache}=nothing,
+                               threads::Bool = (Threads.nthreads() > 1))
 
     # Determine the region poset Q (either provided or reconstructed from pi).
-    Qposet = (Q === nothing) ? region_poset(pi; poset_kind = poset_kind) : Q
+    Qposet = (Q === nothing) ? region_poset(pi; poset_kind = poset_kind, cache=cache) : Q
     nvertices(Qposet) == _nregions_encoding(pi) || error(
         "projected_arrangement: incompatible Q; nvertices(Q)=$(nvertices(Qposet)) but encoding has $(_nregions_encoding(pi)) regions"
     )
@@ -9401,7 +9924,7 @@ mutable struct ProjectedBarcodeCache{K}
     arrangement::ProjectedArrangement
     M::PModule{K}
     side::Symbol
-    barcodes::Vector{Any}
+    packed_barcodes::Vector{Union{Nothing,PackedFloatBarcode}}
     n_computed::Int
 end
 
@@ -9409,24 +9932,44 @@ function projected_barcode_cache(M::PModule{K}, arr::ProjectedArrangement;
                                  side::Symbol = :left,
                                  precompute::Bool = false) where {K}
     side in (:left, :right) || error("side must be :left or :right")
-    barcodes = fill(nothing, length(arr.projections))
-    cache = ProjectedBarcodeCache(arr, M, side, barcodes, 0)
+    packed_barcodes = Vector{Union{Nothing,PackedFloatBarcode}}(undef, length(arr.projections))
+    fill!(packed_barcodes, nothing)
+    cache = ProjectedBarcodeCache(arr, M, side, packed_barcodes, 0)
     precompute && projected_barcodes(cache)
     return cache
 end
 
 # Lazy compute ith barcode.
 function _projected_barcode(cache::ProjectedBarcodeCache, i::Int)
-    bc = cache.barcodes[i]
-    if bc === nothing
-        proj = cache.arrangement.projections[i]
-        Mp = cache.side == :left ? pushforward_left(proj.f, cache.M; check=false) :
-                                   pushforward_right(proj.f, cache.M; check=false)
-        bc = slice_barcode(Mp, proj.chain; values=proj.values, check_chain=false)
-        cache.barcodes[i] = bc
-        cache.n_computed += 1
+    return _barcode_from_packed(_projected_packed_barcode(cache, i))
+end
+
+function _projected_packed_barcode(cache::ProjectedBarcodeCache, i::Int)
+    pb = cache.packed_barcodes[i]
+    if pb !== nothing
+        return pb
     end
-    return bc
+    proj = cache.arrangement.projections[i]
+    Mp = cache.side == :left ? pushforward_left(proj.f, cache.M; check=false) :
+                               pushforward_right(proj.f, cache.M; check=false)
+    pb0 = _slice_barcode_packed(Mp, proj.chain; values=proj.values, check_chain=false)
+    pb = pb0 isa PackedFloatBarcode ? pb0 : _pack_float_barcode(_barcode_from_packed(pb0))
+    cache.packed_barcodes[i] = pb
+    cache.n_computed += 1
+    return pb
+end
+
+function _prepare_projected_cache_readonly!(cache::ProjectedBarcodeCache)
+    n = length(cache.arrangement.projections)
+    if cache.n_computed == n
+        return nothing
+    end
+    for i in 1:n
+        cache.packed_barcodes[i] === nothing || continue
+        _projected_packed_barcode(cache, i)
+    end
+    cache.n_computed = n
+    return nothing
 end
 
 """
@@ -9439,21 +9982,14 @@ function projected_barcodes(cache::ProjectedBarcodeCache;
                             threads::Bool = (Threads.nthreads() > 1))
     n = length(cache.arrangement.projections)
     inds === nothing && (inds = 1:n)
-    out = Vector{Any}(undef, length(inds))
+    out = Vector{FloatBarcode}(undef, length(inds))
     if threads && Threads.nthreads() > 1
+        _prepare_projected_cache_readonly!(cache)
         Threads.@threads for k in eachindex(inds)
             i = inds[k]
-            bc = cache.barcodes[i]
-            if bc === nothing
-                proj = cache.arrangement.projections[i]
-                Mp = cache.side == :left ? pushforward_left(proj.f, cache.M; check=false, threads=false) :
-                                           pushforward_right(proj.f, cache.M; check=false, threads=false)
-                bc = slice_barcode(Mp, proj.chain; values=proj.values, check_chain=false)
-                cache.barcodes[i] = bc
-            end
-            out[k] = bc
+            pb = cache.packed_barcodes[i]::PackedFloatBarcode
+            out[k] = _barcode_from_packed(pb)
         end
-        cache.n_computed = count(!isnothing, cache.barcodes)
     else
         for (k,i) in enumerate(inds)
             out[k] = _projected_barcode(cache, i)
@@ -9475,39 +10011,32 @@ function projected_distances(cacheM::ProjectedBarcodeCache,
                              threads::Bool = (Threads.nthreads() > 1))
     n = length(cacheM.arrangement.projections)
     n == length(cacheN.arrangement.projections) || error("different projection families")
+    (dist == :bottleneck || dist == :wasserstein) || error("unknown dist=$dist")
 
     out = Vector{Float64}(undef, n)
+    scratch_by_thread = _scratch_arenas(threads)
     if threads && Threads.nthreads() > 1
+        _prepare_projected_cache_readonly!(cacheM)
+        _prepare_projected_cache_readonly!(cacheN)
         Threads.@threads for i in 1:n
-            b1 = cacheM.barcodes[i]
-            if b1 === nothing
-                proj = cacheM.arrangement.projections[i]
-                Mp = cacheM.side == :left ? pushforward_left(proj.f, cacheM.M; check=false, threads=false) :
-                                            pushforward_right(proj.f, cacheM.M; check=false, threads=false)
-                b1 = slice_barcode(Mp, proj.chain; values=proj.values, check_chain=false)
-                cacheM.barcodes[i] = b1
-            end
-            b2 = cacheN.barcodes[i]
-            if b2 === nothing
-                proj = cacheN.arrangement.projections[i]
-                Mp = cacheN.side == :left ? pushforward_left(proj.f, cacheN.M; check=false, threads=false) :
-                                            pushforward_right(proj.f, cacheN.M; check=false, threads=false)
-                b2 = slice_barcode(Mp, proj.chain; values=proj.values, check_chain=false)
-                cacheN.barcodes[i] = b2
-            end
-            out[i] = dist == :bottleneck ? bottleneck_distance(b1, b2) :
-                     dist == :wasserstein ? wasserstein_distance(b1, b2; p=p, q=q) :
-                     error("unknown dist=$dist")
+            tid = Threads.threadid()
+            scratch = scratch_by_thread[tid]
+            pb1 = cacheM.packed_barcodes[i]::PackedFloatBarcode
+            pb2 = cacheN.packed_barcodes[i]::PackedFloatBarcode
+            _points_from_packed!(scratch.points_a, pb1)
+            _points_from_packed!(scratch.points_b, pb2)
+            out[i] = dist == :bottleneck ? bottleneck_distance(scratch.points_a, scratch.points_b) :
+                     wasserstein_distance(scratch.points_a, scratch.points_b; p=p, q=q)
         end
-        cacheM.n_computed = count(!isnothing, cacheM.barcodes)
-        cacheN.n_computed = count(!isnothing, cacheN.barcodes)
     else
+        scratch = scratch_by_thread[1]
         for i in 1:n
-            b1 = _projected_barcode(cacheM, i)
-            b2 = _projected_barcode(cacheN, i)
-            out[i] = dist == :bottleneck ? bottleneck_distance(b1, b2) :
-                     dist == :wasserstein ? wasserstein_distance(b1, b2; p=p, q=q) :
-                     error("unknown dist=$dist")
+            pb1 = _projected_packed_barcode(cacheM, i)
+            pb2 = _projected_packed_barcode(cacheN, i)
+            _points_from_packed!(scratch.points_a, pb1)
+            _points_from_packed!(scratch.points_b, pb2)
+            out[i] = dist == :bottleneck ? bottleneck_distance(scratch.points_a, scratch.points_b) :
+                     wasserstein_distance(scratch.points_a, scratch.points_b; p=p, q=q)
         end
     end
     return out
@@ -9571,33 +10100,41 @@ function projected_kernel(cacheM::ProjectedBarcodeCache,
     w ./= s
 
     vals = Vector{Float64}(undef, n)
+    fast_points_kernel = kind in (:bottleneck_gaussian, :bottleneck_laplacian,
+                                  :wasserstein_gaussian, :wasserstein_laplacian)
+    scratch_by_thread = _scratch_arenas(threads)
     if threads && Threads.nthreads() > 1
+        _prepare_projected_cache_readonly!(cacheM)
+        _prepare_projected_cache_readonly!(cacheN)
         Threads.@threads for i in 1:n
-            b1 = cacheM.barcodes[i]
-            if b1 === nothing
-                proj = cacheM.arrangement.projections[i]
-                Mp = cacheM.side == :left ? pushforward_left(proj.f, cacheM.M; check=false, threads=false) :
-                                            pushforward_right(proj.f, cacheM.M; check=false, threads=false)
-                b1 = slice_barcode(Mp, proj.chain; values=proj.values, check_chain=false)
-                cacheM.barcodes[i] = b1
+            if fast_points_kernel
+                tid = Threads.threadid()
+                scratch = scratch_by_thread[tid]
+                pb1 = cacheM.packed_barcodes[i]::PackedFloatBarcode
+                pb2 = cacheN.packed_barcodes[i]::PackedFloatBarcode
+                _points_from_packed!(scratch.points_a, pb1)
+                _points_from_packed!(scratch.points_b, pb2)
+                vals[i] = _barcode_kernel(scratch.points_a, scratch.points_b; kind=kind, sigma=sigma, p=p, q=q)
+            else
+                b1 = _projected_barcode(cacheM, i)
+                b2 = _projected_barcode(cacheN, i)
+                vals[i] = _barcode_kernel(b1, b2; kind=kind, sigma=sigma, p=p, q=q)
             end
-            b2 = cacheN.barcodes[i]
-            if b2 === nothing
-                proj = cacheN.arrangement.projections[i]
-                Mp = cacheN.side == :left ? pushforward_left(proj.f, cacheN.M; check=false, threads=false) :
-                                            pushforward_right(proj.f, cacheN.M; check=false, threads=false)
-                b2 = slice_barcode(Mp, proj.chain; values=proj.values, check_chain=false)
-                cacheN.barcodes[i] = b2
-            end
-            vals[i] = _barcode_kernel(b1, b2; kind=kind, sigma=sigma, p=p, q=q)
         end
-        cacheM.n_computed = count(!isnothing, cacheM.barcodes)
-        cacheN.n_computed = count(!isnothing, cacheN.barcodes)
     else
+        scratch = scratch_by_thread[1]
         for i in 1:n
-            b1 = _projected_barcode(cacheM, i)
-            b2 = _projected_barcode(cacheN, i)
-            vals[i] = _barcode_kernel(b1, b2; kind=kind, sigma=sigma, p=p, q=q)
+            if fast_points_kernel
+                pb1 = _projected_packed_barcode(cacheM, i)
+                pb2 = _projected_packed_barcode(cacheN, i)
+                _points_from_packed!(scratch.points_a, pb1)
+                _points_from_packed!(scratch.points_b, pb2)
+                vals[i] = _barcode_kernel(scratch.points_a, scratch.points_b; kind=kind, sigma=sigma, p=p, q=q)
+            else
+                b1 = _projected_barcode(cacheM, i)
+                b2 = _projected_barcode(cacheN, i)
+                vals[i] = _barcode_kernel(b1, b2; kind=kind, sigma=sigma, p=p, q=q)
+            end
         end
     end
 
@@ -10762,13 +11299,13 @@ Fields
 
 See also `mp_landscape_distance` and `mp_landscape_kernel`.
 """
-struct MPLandscape
+struct MPLandscape{D,O}
     kmax::Int
     tgrid::Vector{Float64}
     values::Array{Float64,4}
     weights::Matrix{Float64}
-    directions::Vector{Any}
-    offsets::Vector{Any}
+    directions::Vector{D}
+    offsets::Vector{O}
 end
 
 """
@@ -10848,6 +11385,28 @@ end
 
 
 # Internal: normalize a direction vector.
+@inline function _normalize_dir(dir::NTuple{N,<:Real}, normalize::Symbol) where {N}
+    if normalize == :none
+        return ntuple(i -> float(dir[i]), N)
+    elseif normalize == :L1
+        s = 0.0
+        @inbounds for i in 1:N
+            s += abs(float(dir[i]))
+        end
+        s > 0 || error("_normalize_dir: zero direction vector")
+        return ntuple(i -> float(dir[i]) / s, N)
+    elseif normalize == :Linf
+        m = 0.0
+        @inbounds for i in 1:N
+            m = max(m, abs(float(dir[i])))
+        end
+        m > 0 || error("_normalize_dir: zero direction vector")
+        return ntuple(i -> float(dir[i]) / m, N)
+    else
+        error("_normalize_dir: normalize must be :none, :L1, or :Linf")
+    end
+end
+
 function _normalize_dir(dir::AbstractVector, normalize::Symbol)
     normalize == :none && return dir
     v = Float64[float(x) for x in dir]
@@ -10949,8 +11508,8 @@ function mp_landscape(
 
     vals = zeros(Float64, nslices, 1, kmax, nt)
     W = zeros(Float64, nslices, 1)
-    dirs = Vector{Any}(undef, nslices)
-    offs = Any[nothing]
+    dirs = collect(slices)
+    offs = [nothing]
 
     for (i, spec) in enumerate(slices)
         chain = nothing
@@ -10976,7 +11535,6 @@ function mp_landscape(
         pl = persistence_landscape(bc; kmax=kmax, tgrid=tg)
         vals[i, 1, :, :] = pl.values
         W[i, 1] = w
-        dirs[i] = spec
     end
 
     if normalize_weights
@@ -11847,6 +12405,809 @@ function _parse_slice_spec(spec; default_weight::Real = 1.0, weight_fn = nothing
 end
 
 """
+    CompiledSlicePlan
+
+Precompiled slice geometry for repeated `slice_barcodes`/distance queries on a fixed
+encoding map and sampling configuration.
+"""
+struct CompiledSlicePlan
+    dirs::Vector{Vector{Float64}}
+    offs::Vector{Vector{Float64}}
+    weights::Matrix{Float64}
+    chains::Vector{Vector{Int}}
+    vals_pool::Vector{Float64}
+    vals_start::Vector{Int}
+    vals_len::Vector{Int}
+    nd::Int
+    no::Int
+end
+
+struct SlicePlanCacheKey
+    pi_id::UInt
+    normalize_dirs::Symbol
+    n_dirs::Int
+    n_offsets::Int
+    max_den::Int
+    include_axes::Bool
+    offset_margin::Float64
+    drop_unknown::Bool
+    strict_code::Int8
+    box_hash::UInt
+    directions_hash::UInt
+    offsets_hash::UInt
+    weight_hash::UInt
+    kwargs_hash::UInt
+end
+
+mutable struct SlicePlanCache
+    lock::ReentrantLock
+    plans::Dict{SlicePlanCacheKey,CompiledSlicePlan}
+end
+
+SlicePlanCache() = SlicePlanCache(ReentrantLock(), Dict{SlicePlanCacheKey,CompiledSlicePlan}())
+
+const _GLOBAL_SLICE_PLAN_CACHE = SlicePlanCache()
+
+function clear_slice_plan_cache!(cache::SlicePlanCache = _GLOBAL_SLICE_PLAN_CACHE)
+    Base.lock(cache.lock)
+    try
+        empty!(cache.plans)
+    finally
+        Base.unlock(cache.lock)
+    end
+    return nothing
+end
+
+"""
+    SliceModuleCache(M)
+
+Lightweight module-specific cache wrapper used by `run_invariants`.
+This is intentionally thin in phase 1; it establishes explicit compile/run APIs.
+"""
+struct SliceModuleCache{K,F<:AbstractCoeffField,MatT<:AbstractMatrix{K}}
+    M::PModule{K,F,MatT}
+end
+
+"""
+    SliceModulePairCache(A, B)
+
+Pair cache for two modules sharing one compiled slice plan.
+"""
+struct SliceModulePairCache{
+    KA,FA<:AbstractCoeffField,MATA<:AbstractMatrix{KA},
+    KB,FB<:AbstractCoeffField,MATB<:AbstractMatrix{KB}
+}
+    A::PModule{KA,FA,MATA}
+    B::PModule{KB,FB,MATB}
+end
+
+@inline module_cache(M::PModule{K,F,MatT}) where {K,F<:AbstractCoeffField,MatT<:AbstractMatrix{K}} =
+    SliceModuleCache{K,F,MatT}(M)
+
+@inline module_cache(A::PModule{KA,FA,MATA}, B::PModule{KB,FB,MATB}) where {
+    KA,FA<:AbstractCoeffField,MATA<:AbstractMatrix{KA},
+    KB,FB<:AbstractCoeffField,MATB<:AbstractMatrix{KB}
+} = SliceModulePairCache{KA,FA,MATA,KB,FB,MATB}(A, B)
+
+"""
+    SliceBarcodesTask(; packed=false, threads=Threads.nthreads() > 1)
+
+Task descriptor for `run_invariants(plan, module_cache, task)` that computes
+slice barcodes on a compiled plan.
+"""
+Base.@kwdef struct SliceBarcodesTask
+    packed::Bool = false
+    threads::Bool = (Threads.nthreads() > 1)
+end
+
+"""
+    SliceDistanceTask(; ...)
+
+Task descriptor for per-slice distance aggregation over a compiled plan.
+"""
+Base.@kwdef struct SliceDistanceTask{F,NT,AT}
+    dist_fn::F = bottleneck_distance
+    dist_kwargs::NT = NamedTuple()
+    weight_mode::Symbol = :integrate
+    agg::AT = :mean
+    agg_p::Float64 = 2.0
+    agg_norm::Float64 = 1.0
+    threads::Bool = (Threads.nthreads() > 1)
+end
+
+"""
+    SliceKernelTask(; ...)
+
+Task descriptor for sliced kernel aggregation over a compiled plan.
+"""
+Base.@kwdef struct SliceKernelTask{KT,GT}
+    kind::KT = :bottleneck_gaussian
+    sigma::Float64 = 1.0
+    gamma::GT = nothing
+    p::Float64 = 2.0
+    q::Float64 = Inf
+    tgrid = nothing
+    tgrid_nsteps::Int = 401
+    kmax::Int = 5
+    threads::Bool = (Threads.nthreads() > 1)
+end
+
+@inline _plan_idx(no::Int, i::Int, j::Int) = (i - 1) * no + j
+
+function _plan_cache_key(
+    pi,
+    directions,
+    offsets,
+    normalize_dirs::Symbol,
+    n_dirs::Integer,
+    n_offsets::Integer,
+    max_den::Integer,
+    include_axes::Bool,
+    offset_margin::Real,
+    drop_unknown::Bool,
+    strict_kw,
+    box_kw,
+    direction_weight,
+    offset_weights,
+    normalize_weights::Bool,
+    filtered::NamedTuple,
+)
+    strict_code = strict_kw === nothing ? Int8(-1) : (Bool(strict_kw) ? Int8(1) : Int8(0))
+    return SlicePlanCacheKey(
+        UInt(objectid(pi)),
+        normalize_dirs,
+        Int(n_dirs),
+        Int(n_offsets),
+        Int(max_den),
+        include_axes,
+        Float64(offset_margin),
+        drop_unknown,
+        strict_code,
+        UInt(hash(box_kw)),
+        UInt(hash(directions)),
+        UInt(hash(offsets)),
+        UInt(hash((direction_weight, offset_weights, normalize_weights))),
+        UInt(hash(filtered)),
+    )
+end
+
+"""
+    compile_slice_plan(pi::PLikeEncodingMap; ...) -> CompiledSlicePlan
+
+Precompute `(chain, values)` for each sampled `(direction, offset)` slice once, then
+reuse with `slice_barcodes(M, plan; packed=true)` across many modules.
+"""
+function compile_slice_plan(
+    pi::PLikeEncodingMap;
+    directions = :auto,
+    offsets = :auto,
+    n_dirs::Integer = 16,
+    n_offsets::Integer = 9,
+    max_den::Integer = 8,
+    include_axes::Bool = false,
+    normalize_dirs::Symbol = :none,
+    direction_weight::Union{Symbol,Function,Real} = :none,
+    offset_weights = nothing,
+    normalize_weights::Bool = true,
+    offset_margin::Real = 0.05,
+    drop_unknown::Bool = true,
+    threads::Bool = (Threads.nthreads() > 1),
+    cache::Union{Nothing,SlicePlanCache} = _GLOBAL_SLICE_PLAN_CACHE,
+    slice_kwargs...
+)
+    dirs0 = directions
+    offs0 = offsets
+
+    if dirs0 === :auto || dirs0 === nothing
+        dirs0 = default_directions(pi;
+                                   n_dirs = n_dirs,
+                                   max_den = max_den,
+                                   include_axes = include_axes,
+                                   normalize = (normalize_dirs == :none ? :none : normalize_dirs))
+    end
+
+    box_kw = haskey(slice_kwargs, :box) ? slice_kwargs[:box] : nothing
+    box_kw === :auto && (box_kw = nothing)
+    strict_kw = haskey(slice_kwargs, :strict) ? slice_kwargs[:strict] : nothing
+
+    opts_offsets = InvariantOptions(box = box_kw)
+    opts_chain   = InvariantOptions(box = box_kw, strict = strict_kw)
+    if opts_chain.box === nothing && !haskey(slice_kwargs, :tmin) && !haskey(slice_kwargs, :tmax)
+        opts_offsets = InvariantOptions(box = :auto)
+        opts_chain   = InvariantOptions(box = :auto, strict = strict_kw)
+    end
+
+    filtered = (;
+        (k => v for (k, v) in pairs(slice_kwargs)
+            if k != :box && k != :strict && k != :default_weight && k != :kmin && k != :kmax_param)...)
+
+    key = cache === nothing ? nothing : _plan_cache_key(
+        pi, directions, offsets, normalize_dirs, n_dirs, n_offsets, max_den,
+        include_axes, offset_margin, drop_unknown, strict_kw, box_kw,
+        direction_weight, offset_weights, normalize_weights, filtered,
+    )
+
+    if cache !== nothing
+        Base.lock(cache.lock)
+        try
+            cached = get(cache.plans, key, nothing)
+            cached === nothing || return cached
+        finally
+            Base.unlock(cache.lock)
+        end
+    end
+
+    if offs0 === :auto || offs0 === nothing
+        offs0 = default_offsets(pi, opts_offsets; n_offsets = n_offsets, margin = offset_margin)
+    end
+
+    if !isempty(offs0) && length(offs0[1]) == 0
+        empty_plan = CompiledSlicePlan(Vector{Vector{Float64}}(), Vector{Vector{Float64}}(),
+                                       zeros(Float64, 0, 0), Vector{Vector{Int}}(),
+                                       Float64[], Int[], Int[], 0, 0)
+        if cache !== nothing
+            Base.lock(cache.lock)
+            try
+                cache.plans[key] = empty_plan
+            finally
+                Base.unlock(cache.lock)
+            end
+        end
+        return empty_plan
+    end
+
+    offs_vec = Vector{Vector{Float64}}(undef, length(offs0))
+    @inbounds for j in eachindex(offs0)
+        x0 = offs0[j]
+        if x0 isa AbstractVector
+            offs_vec[j] = Float64[float(v) for v in x0]
+        elseif x0 isa Tuple
+            offs_vec[j] = Float64[float(v) for v in x0]
+        else
+            throw(ArgumentError("compile_slice_plan: expected offset basepoints as vectors/tuples, got $(typeof(x0))."))
+        end
+    end
+
+    if !isempty(dirs0) && !isempty(offs_vec) && length(dirs0[1]) != length(offs_vec[1])
+        dirs0 = default_directions(length(offs_vec[1]);
+                                   n_dirs = n_dirs,
+                                   max_den = max_den,
+                                   include_axes = include_axes,
+                                   normalize = (normalize_dirs == :none ? :none : normalize_dirs))
+    end
+
+    dirs_in = [_normalize_dir(dir, normalize_dirs) for dir in dirs0]
+    dirs_vec = Vector{Vector{Float64}}(undef, length(dirs_in))
+    @inbounds for i in eachindex(dirs_in)
+        dirs_vec[i] = Float64[dirs_in[i][k] for k in eachindex(dirs_in[i])]
+    end
+
+    nd = length(dirs_vec)
+    no = length(offs_vec)
+    nd > 0 || error("compile_slice_plan: directions is empty")
+    no > 0 || error("compile_slice_plan: offsets is empty")
+
+    wdir = Vector{Float64}(undef, nd)
+    @inbounds for i in 1:nd
+        wdir[i] = Invariants.direction_weight(dirs_vec[i], direction_weight)
+    end
+    woff = _offset_sample_weights(offs_vec, offset_weights)
+
+    W = wdir * woff'
+    if normalize_weights
+        s = sum(W)
+        s > 0 || error("compile_slice_plan: total slice weight is zero")
+        W ./= s
+    end
+
+    ns = nd * no
+    chains = Vector{Vector{Int}}(undef, ns)
+    vals_tmp = Vector{Vector{Float64}}(undef, ns)
+
+    if threads && Threads.nthreads() > 1
+        Threads.@threads for idx in 1:ns
+            i = div(idx - 1, no) + 1
+            j = (idx - 1) % no + 1
+            chain, tvals = slice_chain(pi, offs_vec[j], dirs_vec[i], opts_chain;
+                                       drop_unknown = drop_unknown,
+                                       filtered...)
+            chains[idx] = chain
+            vals_tmp[idx] = tvals
+        end
+    else
+        @inbounds for i in 1:nd, j in 1:no
+            idx = _plan_idx(no, i, j)
+            chain, tvals = slice_chain(pi, offs_vec[j], dirs_vec[i], opts_chain;
+                                       drop_unknown = drop_unknown,
+                                       filtered...)
+            chains[idx] = chain
+            vals_tmp[idx] = tvals
+        end
+    end
+
+    vals_start = zeros(Int, ns)
+    vals_len = zeros(Int, ns)
+    total_vals = 0
+    @inbounds for idx in 1:ns
+        total_vals += length(vals_tmp[idx])
+    end
+
+    vals_pool = Vector{Float64}(undef, total_vals)
+    cursor = 1
+    @inbounds for idx in 1:ns
+        vals = vals_tmp[idx]
+        l = length(vals)
+        if l > 0
+            vals_start[idx] = cursor
+            vals_len[idx] = l
+            copyto!(vals_pool, cursor, vals, 1, l)
+            cursor += l
+        end
+    end
+
+    plan = CompiledSlicePlan(dirs_vec, offs_vec, W, chains, vals_pool, vals_start, vals_len, nd, no)
+
+    if cache !== nothing
+        Base.lock(cache.lock)
+        try
+            existing = get(cache.plans, key, nothing)
+            if existing === nothing
+                cache.plans[key] = plan
+            else
+                plan = existing
+            end
+        finally
+            Base.unlock(cache.lock)
+        end
+    end
+
+    return plan
+end
+
+"""
+    compile_slices(pi, opts::InvariantOptions=nothing; kwargs...) -> CompiledSlicePlan
+
+Public phase-1 compile entrypoint. This is a thin adapter over `compile_slice_plan`
+that resolves `box`/`strict`/`threads` through `InvariantOptions`.
+"""
+function compile_slices(
+    pi::PLikeEncodingMap,
+    opts::Union{InvariantOptions,Nothing}=nothing;
+    kwargs...
+)
+    opts0 = _resolve_opts(opts)
+    kwargs_nt = NamedTuple(kwargs)
+    kwargs2 = (; (k => v for (k, v) in pairs(kwargs_nt) if k != :box && k != :strict && k != :threads)...)
+    return compile_slice_plan(
+        pi;
+        box = get(kwargs_nt, :box, opts0.box),
+        strict = get(kwargs_nt, :strict, opts0.strict),
+        threads = _default_threads(get(kwargs_nt, :threads, opts0.threads)),
+        kwargs2...
+    )
+end
+
+compile_slices(pi::CompiledEncoding{<:PLikeEncodingMap}, opts::Union{InvariantOptions,Nothing}=nothing; kwargs...) =
+    compile_slices(pi.pi, opts; kwargs...)
+
+function slice_barcodes(
+    M::PModule{K},
+    plan::CompiledSlicePlan;
+    packed::Bool = false,
+    threads::Bool = (Threads.nthreads() > 1),
+) where {K}
+    nd = plan.nd
+    no = plan.no
+    ns = nd * no
+    bars = _packed_grid_undef(PackedFloatBarcode, nd, no)
+    if threads && Threads.nthreads() > 1
+        Threads.@threads for idx in 1:ns
+            i = div(idx - 1, no) + 1
+            j = (idx - 1) % no + 1
+            chain = plan.chains[idx]
+            if isempty(chain) || plan.vals_start[idx] == 0
+                bars[i, j] = _empty_packed_float_barcode()
+                continue
+            end
+            s = plan.vals_start[idx]
+            l = plan.vals_len[idx]
+            pb = _slice_barcode_packed(M, chain; values = @view(plan.vals_pool[s:s+l-1]), check_chain = false)
+            bars[i, j] = pb isa PackedFloatBarcode ? pb : _pack_float_barcode(_barcode_from_packed(pb))
+        end
+    else
+        @inbounds for i in 1:nd, j in 1:no
+            idx = _plan_idx(no, i, j)
+            chain = plan.chains[idx]
+            if isempty(chain) || plan.vals_start[idx] == 0
+                bars[i, j] = _empty_packed_float_barcode()
+                continue
+            end
+            s = plan.vals_start[idx]
+            l = plan.vals_len[idx]
+            pb = _slice_barcode_packed(M, chain; values = @view(plan.vals_pool[s:s+l-1]), check_chain = false)
+            bars[i, j] = pb isa PackedFloatBarcode ? pb : _pack_float_barcode(_barcode_from_packed(pb))
+        end
+    end
+    if packed
+        return (barcodes = bars, weights = plan.weights, dirs = plan.dirs, offs = plan.offs)
+    end
+    return (barcodes = _float_dict_matrix_from_packed_grid(bars), weights = plan.weights, dirs = plan.dirs, offs = plan.offs)
+end
+
+@inline run_invariants(plan::CompiledSlicePlan, cache::SliceModuleCache, task::SliceBarcodesTask) =
+    slice_barcodes(cache.M, plan; packed = task.packed, threads = task.threads)
+
+@inline run_invariants(plan::CompiledSlicePlan, M::PModule, task::SliceBarcodesTask) =
+    run_invariants(plan, module_cache(M), task)
+
+function _run_slice_distance_from_barcodes(
+    bcsM,
+    bcsN,
+    W::AbstractMatrix{Float64},
+    task::SliceDistanceTask,
+)::Float64
+    sumw = sum(W)
+    if sumw == 0.0
+        return 0.0
+    end
+
+    agg_mode = (task.agg === mean) ? :mean : (task.agg === maximum) ? :max : task.agg
+    dist_fn = task.dist_fn
+    dist_kwargs = task.dist_kwargs
+    threads = task.threads
+
+    if task.weight_mode == :scale
+        if threads && Threads.nthreads() > 1
+            nT = Threads.nthreads()
+            best_by_slot = fill(0.0, nT)
+            Threads.@threads for slot in 1:nT
+                best = 0.0
+                for idx in slot:nT:length(bcsM)
+                    w = W[idx]
+                    w == 0.0 && continue
+                    d = dist_fn(bcsM[idx], bcsN[idx]; dist_kwargs...)
+                    best = max(best, w * d)
+                end
+                best_by_slot[slot] = best
+            end
+            return maximum(best_by_slot) / float(task.agg_norm)
+        end
+        best = 0.0
+        for idx in eachindex(bcsM)
+            w = W[idx]
+            w == 0.0 && continue
+            d = dist_fn(bcsM[idx], bcsN[idx]; dist_kwargs...)
+            best = max(best, w * d)
+        end
+        return best / float(task.agg_norm)
+    elseif task.weight_mode == :integrate
+        if agg_mode == :mean
+            if threads && Threads.nthreads() > 1
+                nT = Threads.nthreads()
+                acc_by_slot = fill(0.0, nT)
+                Threads.@threads for slot in 1:nT
+                    acc = 0.0
+                    for idx in slot:nT:length(bcsM)
+                        w = W[idx]
+                        w == 0.0 && continue
+                        acc += w * dist_fn(bcsM[idx], bcsN[idx]; dist_kwargs...)
+                    end
+                    acc_by_slot[slot] = acc
+                end
+                acc = sum(acc_by_slot)
+                return (acc / sumw) / float(task.agg_norm)
+            end
+            acc = 0.0
+            for idx in eachindex(bcsM)
+                w = W[idx]
+                w == 0.0 && continue
+                acc += w * dist_fn(bcsM[idx], bcsN[idx]; dist_kwargs...)
+            end
+            return (acc / sumw) / float(task.agg_norm)
+        elseif agg_mode == :pmean
+            p = float(task.agg_p)
+            if threads && Threads.nthreads() > 1
+                nT = Threads.nthreads()
+                acc_by_slot = fill(0.0, nT)
+                Threads.@threads for slot in 1:nT
+                    acc = 0.0
+                    for idx in slot:nT:length(bcsM)
+                        w = W[idx]
+                        w == 0.0 && continue
+                        d = dist_fn(bcsM[idx], bcsN[idx]; dist_kwargs...)
+                        acc += w * d^p
+                    end
+                    acc_by_slot[slot] = acc
+                end
+                acc = sum(acc_by_slot)
+                return ((acc / sumw)^(1 / p)) / float(task.agg_norm)
+            end
+            acc = 0.0
+            for idx in eachindex(bcsM)
+                w = W[idx]
+                w == 0.0 && continue
+                d = dist_fn(bcsM[idx], bcsN[idx]; dist_kwargs...)
+                acc += w * d^p
+            end
+            return ((acc / sumw)^(1 / p)) / float(task.agg_norm)
+        elseif agg_mode == :max
+            if threads && Threads.nthreads() > 1
+                nT = Threads.nthreads()
+                best_by_slot = fill(0.0, nT)
+                Threads.@threads for slot in 1:nT
+                    best = 0.0
+                    for idx in slot:nT:length(bcsM)
+                        w = W[idx]
+                        w == 0.0 && continue
+                        d = dist_fn(bcsM[idx], bcsN[idx]; dist_kwargs...)
+                        best = max(best, w * d)
+                    end
+                    best_by_slot[slot] = best
+                end
+                return maximum(best_by_slot) / float(task.agg_norm)
+            end
+            best = 0.0
+            for idx in eachindex(bcsM)
+                w = W[idx]
+                w == 0.0 && continue
+                d = dist_fn(bcsM[idx], bcsN[idx]; dist_kwargs...)
+                best = max(best, w * d)
+            end
+            return best / float(task.agg_norm)
+        elseif agg_mode isa Function
+            if threads && Threads.nthreads() > 1
+                vals = Vector{Float64}(undef, length(bcsM))
+                Threads.@threads for idx in 1:length(bcsM)
+                    vals[idx] = dist_fn(bcsM[idx], bcsN[idx]; dist_kwargs...)
+                end
+                return float(agg_mode(vals)) / float(task.agg_norm)
+            end
+            vals = Float64[]
+            for idx in eachindex(bcsM)
+                push!(vals, dist_fn(bcsM[idx], bcsN[idx]; dist_kwargs...))
+            end
+            return float(agg_mode(vals)) / float(task.agg_norm)
+        else
+            throw(ArgumentError("run_invariants: unknown agg=$(task.agg)"))
+        end
+    end
+    throw(ArgumentError("run_invariants: unknown weight_mode=$(task.weight_mode)"))
+end
+
+function run_invariants(plan::CompiledSlicePlan, cache::SliceModulePairCache, task::SliceDistanceTask)::Float64
+    dataM = run_invariants(plan, cache.A, SliceBarcodesTask(; packed = true, threads = task.threads))
+    dataN = run_invariants(plan, cache.B, SliceBarcodesTask(; packed = true, threads = task.threads))
+    return _run_slice_distance_from_barcodes(dataM.barcodes, dataN.barcodes, plan.weights, task)
+end
+
+function run_invariants(plan::CompiledSlicePlan, modules::Tuple{<:PModule,<:PModule}, task::SliceDistanceTask)::Float64
+    return run_invariants(plan, module_cache(modules[1], modules[2]), task)
+end
+
+@inline _kernel_uses_points_fast(kind::Symbol) =
+    kind in (:bottleneck_gaussian, :bottleneck_laplacian, :wasserstein_gaussian, :wasserstein_laplacian)
+@inline _kernel_uses_points_fast(::Any) = false
+
+@inline _kernel_uses_landscape_features(kind::Symbol) =
+    kind in (:landscape_gaussian, :landscape_laplacian, :landscape_linear)
+@inline _kernel_uses_landscape_features(::Any) = false
+
+function _all_packed_float_grid(bcs)
+    @inbounds for idx in eachindex(bcs)
+        bcs[idx] isa PackedFloatBarcode || return false
+    end
+    return true
+end
+
+@inline function _kernel_from_points(
+    ptsA::Vector{Tuple{Float64,Float64}},
+    ptsB::Vector{Tuple{Float64,Float64}},
+    kind::Symbol,
+    sigma::Float64,
+    gamma,
+    p::Float64,
+    q::Float64,
+)::Float64
+    if kind === :bottleneck_gaussian
+        sigma > 0 || error("_run_slice_kernel_from_barcodes: sigma must be > 0")
+        d = bottleneck_distance(ptsA, ptsB)
+        g = (gamma === nothing) ? (1.0 / (2.0 * sigma^2)) : float(gamma)
+        return exp(-g * d * d)
+    elseif kind === :bottleneck_laplacian
+        sigma > 0 || error("_run_slice_kernel_from_barcodes: sigma must be > 0")
+        d = bottleneck_distance(ptsA, ptsB)
+        return exp(-d / sigma)
+    elseif kind === :wasserstein_gaussian
+        sigma > 0 || error("_run_slice_kernel_from_barcodes: sigma must be > 0")
+        d = wasserstein_distance(ptsA, ptsB; p=p, q=q)
+        return exp(-(d * d) / (2.0 * sigma^2))
+    elseif kind === :wasserstein_laplacian
+        sigma > 0 || error("_run_slice_kernel_from_barcodes: sigma must be > 0")
+        d = wasserstein_distance(ptsA, ptsB; p=p, q=q)
+        return exp(-d / sigma)
+    else
+        error("_run_slice_kernel_from_barcodes: unsupported fast point kernel kind=$kind")
+    end
+end
+
+function _landscape_feature_cache(
+    bcs,
+    tgrid::Vector{Float64},
+    kmax::Int;
+    threads::Bool,
+)
+    out = Vector{Vector{Float64}}(undef, length(bcs))
+    if threads && Threads.nthreads() > 1
+        Threads.@threads for idx in eachindex(out)
+            pl = persistence_landscape(bcs[idx]; kmax=kmax, tgrid=tgrid)
+            out[idx] = _landscape_feature_vector(pl)
+        end
+    else
+        @inbounds for idx in eachindex(out)
+            pl = persistence_landscape(bcs[idx]; kmax=kmax, tgrid=tgrid)
+            out[idx] = _landscape_feature_vector(pl)
+        end
+    end
+    return out
+end
+
+@inline function _kernel_from_features(vA::Vector{Float64}, vB::Vector{Float64}, kind::Symbol, sigma::Float64, gamma)::Float64
+    if kind === :landscape_linear
+        return dot(vA, vB)
+    elseif kind === :landscape_gaussian
+        sigma > 0 || error("_run_slice_kernel_from_barcodes: sigma must be > 0")
+        d2 = 0.0
+        @inbounds for i in eachindex(vA, vB)
+            d = vA[i] - vB[i]
+            d2 += d * d
+        end
+        g = (gamma === nothing) ? (1.0 / (2.0 * sigma^2)) : float(gamma)
+        return exp(-g * d2)
+    elseif kind === :landscape_laplacian
+        sigma > 0 || error("_run_slice_kernel_from_barcodes: sigma must be > 0")
+        d2 = 0.0
+        @inbounds for i in eachindex(vA, vB)
+            d = vA[i] - vB[i]
+            d2 += d * d
+        end
+        return exp(-sqrt(d2) / sigma)
+    else
+        error("_run_slice_kernel_from_barcodes: unsupported feature kernel kind=$kind")
+    end
+end
+
+function _run_slice_kernel_from_barcodes(
+    bM,
+    bN,
+    W::AbstractMatrix{Float64},
+    task::SliceKernelTask,
+)::Float64
+    size(bM) == size(bN) || error("run_invariants: barcode grid shape mismatch")
+
+    sumw = sum(W)
+    sumw > 0.0 || error("run_invariants: total weight is zero")
+    kind = task.kind
+    threads = task.threads && Threads.nthreads() > 1
+
+    # Landscape kernels: compile per-slice feature vectors once per module+plan pair,
+    # then run one typed weighted aggregation pass.
+    if _kernel_uses_landscape_features(kind)
+        tg = task.tgrid
+        if tg === nothing
+            tg = _default_tgrid_from_barcodes(vcat(vec(bM), vec(bN)); nsteps=task.tgrid_nsteps)
+        end
+        tg = _clean_tgrid(tg)
+        featM = _landscape_feature_cache(bM, tg, task.kmax; threads=threads)
+        featN = _landscape_feature_cache(bN, tg, task.kmax; threads=threads)
+
+        if threads
+            nT = Threads.nthreads()
+            acc_by_slot = fill(0.0, nT)
+            Threads.@threads for slot in 1:nT
+                acc = 0.0
+                for idx in slot:nT:length(featM)
+                    w = W[idx]
+                    w == 0.0 && continue
+                    acc += w * _kernel_from_features(featM[idx], featN[idx], kind, task.sigma, task.gamma)
+                end
+                acc_by_slot[slot] = acc
+            end
+            return sum(acc_by_slot) / sumw
+        end
+
+        acc = 0.0
+        @inbounds for idx in eachindex(featM)
+            w = W[idx]
+            w == 0.0 && continue
+            acc += w * _kernel_from_features(featM[idx], featN[idx], kind, task.sigma, task.gamma)
+        end
+        return acc / sumw
+    end
+
+    # Fast point-kernel path on packed barcodes.
+    if _kernel_uses_points_fast(kind) && _all_packed_float_grid(bM) && _all_packed_float_grid(bN)
+        scratch_by_thread = _scratch_arenas(threads)
+        if threads
+            nT = Threads.nthreads()
+            acc_by_slot = fill(0.0, nT)
+            Threads.@threads for slot in 1:nT
+                scratch = scratch_by_thread[Threads.threadid()]
+                acc = 0.0
+                for idx in slot:nT:length(bM)
+                    w = W[idx]
+                    w == 0.0 && continue
+                    _points_from_packed!(scratch.points_a, bM[idx]::PackedFloatBarcode)
+                    _points_from_packed!(scratch.points_b, bN[idx]::PackedFloatBarcode)
+                    acc += w * _kernel_from_points(
+                        scratch.points_a, scratch.points_b, kind, task.sigma, task.gamma, task.p, task.q
+                    )
+                end
+                acc_by_slot[slot] = acc
+            end
+            return sum(acc_by_slot) / sumw
+        end
+
+        scratch = scratch_by_thread[1]
+        acc = 0.0
+        @inbounds for idx in eachindex(bM)
+            w = W[idx]
+            w == 0.0 && continue
+            _points_from_packed!(scratch.points_a, bM[idx]::PackedFloatBarcode)
+            _points_from_packed!(scratch.points_b, bN[idx]::PackedFloatBarcode)
+            acc += w * _kernel_from_points(
+                scratch.points_a, scratch.points_b, kind, task.sigma, task.gamma, task.p, task.q
+            )
+        end
+        return acc / sumw
+    end
+
+    tg = task.tgrid
+    if tg !== nothing
+        tg = _clean_tgrid(tg)
+    end
+
+    nd, no = size(bM)
+    if threads
+        nT = Threads.nthreads()
+        acc_by_slot = fill(0.0, nT)
+        Threads.@threads for slot in 1:nT
+            acc = 0.0
+            for k in slot:nT:(nd * no)
+                i = div(k - 1, no) + 1
+                j = (k - 1) % no + 1
+                w = W[i, j]
+                w == 0.0 && continue
+                acc += w * _barcode_kernel(bM[i, j], bN[i, j];
+                                           kind=kind, sigma=task.sigma, gamma=task.gamma,
+                                           p=task.p, q=task.q, tgrid=tg, kmax=task.kmax)
+            end
+            acc_by_slot[slot] = acc
+        end
+        return sum(acc_by_slot) / sumw
+    end
+
+    acc = 0.0
+    for i in 1:nd, j in 1:no
+        w = W[i, j]
+        w == 0.0 && continue
+        acc += w * _barcode_kernel(bM[i, j], bN[i, j];
+                                   kind=kind, sigma=task.sigma, gamma=task.gamma,
+                                   p=task.p, q=task.q, tgrid=tg, kmax=task.kmax)
+    end
+    return acc / sumw
+end
+
+function run_invariants(plan::CompiledSlicePlan, cache::SliceModulePairCache, task::SliceKernelTask)::Float64
+    dataM = run_invariants(plan, cache.A, SliceBarcodesTask(; packed = true, threads = task.threads))
+    dataN = run_invariants(plan, cache.B, SliceBarcodesTask(; packed = true, threads = task.threads))
+    return _run_slice_kernel_from_barcodes(dataM.barcodes, dataN.barcodes, plan.weights, task)
+end
+
+function run_invariants(plan::CompiledSlicePlan, modules::Tuple{<:PModule,<:PModule}, task::SliceKernelTask)::Float64
+    return run_invariants(plan, module_cache(modules[1], modules[2]), task)
+end
+
+"""
     slice_barcodes(M, slices; default_weight=1.0, normalize_weights=true) -> NamedTuple
 
 Compute the 1D slice barcodes of a (multi-parameter) module `M` for an explicit
@@ -11865,16 +13226,22 @@ function slice_barcodes(M::PModule{K}, slices::AbstractVector;
                         default_weight::Real=1.0,
                         normalize_weights::Bool=true,
                         values=nothing,
-                        threads::Bool=Threads.nthreads() > 1) where {K}
+                        threads::Bool=Threads.nthreads() > 1,
+                        packed::Bool=false) where {K}
     n = length(slices)
     chains = Vector{Vector{Int}}(undef, n)
-    vals = Vector{Any}(undef, n)
+    vals = Vector{Union{Nothing,AbstractVector}}(undef, n)
     weights = Vector{Float64}(undef, n)
 
     has_values_override = values !== nothing
     if has_values_override
         (values isa AbstractVector && length(values) == n) ||
             throw(ArgumentError("values must be a vector of length length(slices) or nothing."))
+        @inbounds for i in 1:n
+            vi = values[i]
+            (vi === nothing || vi isa AbstractVector) ||
+                throw(ArgumentError("values[$i] must be an AbstractVector or nothing, got $(typeof(vi))."))
+        end
     end
 
     for i in 1:n
@@ -11893,26 +13260,220 @@ function slice_barcodes(M::PModule{K}, slices::AbstractVector;
         end
     end
 
-    bcs = Vector{Any}(undef, n)
-    if threads && Threads.nthreads() > 1
-        Threads.@threads for i in 1:n
-            if isempty(chains[i])
-                bcs[i] = Dict{Tuple{Float64,Float64},Int}()
-            else
-                bcs[i] = slice_barcode(M, chains[i]; values=vals[i])
-            end
-        end
-    else
-        for i in 1:n
-            if isempty(chains[i])
-                bcs[i] = Dict{Tuple{Float64,Float64},Int}()
-            else
-                bcs[i] = slice_barcode(M, chains[i]; values=vals[i])
-            end
+    all_nothing = true
+    all_float_vals = true
+    all_int_vals = true
+    @inbounds for i in 1:n
+        vi = vals[i]
+        if vi === nothing
+            all_float_vals = false
+            all_int_vals = false
+        else
+            all_nothing = false
+            all_float_vals &= _values_are_float_vector(vi)
+            all_int_vals &= _values_are_int_vector(vi)
         end
     end
 
-    return (barcodes=bcs, weights=weights)
+    if packed
+        if all_nothing
+            bcs = Vector{PackedIndexBarcode}(undef, n)
+            if threads && Threads.nthreads() > 1
+                Threads.@threads for i in 1:n
+                    if isempty(chains[i])
+                        bcs[i] = _empty_packed_index_barcode()
+                    else
+                        bcs[i] = _slice_barcode_packed(M, chains[i]; values=nothing)::PackedIndexBarcode
+                    end
+                end
+            else
+                for i in 1:n
+                    if isempty(chains[i])
+                        bcs[i] = _empty_packed_index_barcode()
+                    else
+                        bcs[i] = _slice_barcode_packed(M, chains[i]; values=nothing)::PackedIndexBarcode
+                    end
+                end
+            end
+            return (barcodes=bcs, weights=weights)
+        elseif all_float_vals
+            bcs = Vector{PackedFloatBarcode}(undef, n)
+            if threads && Threads.nthreads() > 1
+                Threads.@threads for i in 1:n
+                    if isempty(chains[i])
+                        bcs[i] = _empty_packed_float_barcode()
+                    else
+                        bcs[i] = _slice_barcode_packed(M, chains[i]; values=vals[i])::PackedFloatBarcode
+                    end
+                end
+            else
+                for i in 1:n
+                    if isempty(chains[i])
+                        bcs[i] = _empty_packed_float_barcode()
+                    else
+                        bcs[i] = _slice_barcode_packed(M, chains[i]; values=vals[i])::PackedFloatBarcode
+                    end
+                end
+            end
+            return (barcodes=bcs, weights=weights)
+        elseif all_int_vals
+            bcs = Vector{PackedIndexBarcode}(undef, n)
+            if threads && Threads.nthreads() > 1
+                Threads.@threads for i in 1:n
+                    if isempty(chains[i])
+                        bcs[i] = _empty_packed_index_barcode()
+                    else
+                        bcs[i] = _slice_barcode_packed(M, chains[i]; values=vals[i])::PackedIndexBarcode
+                    end
+                end
+            else
+                for i in 1:n
+                    if isempty(chains[i])
+                        bcs[i] = _empty_packed_index_barcode()
+                    else
+                        bcs[i] = _slice_barcode_packed(M, chains[i]; values=vals[i])::PackedIndexBarcode
+                    end
+                end
+            end
+            return (barcodes=bcs, weights=weights)
+        else
+            bcs = Vector{Union{PackedIndexBarcode,PackedFloatBarcode}}(undef, n)
+            if threads && Threads.nthreads() > 1
+                Threads.@threads for i in 1:n
+                    vi = vals[i]
+                    if isempty(chains[i])
+                        bcs[i] = (vi === nothing || _values_are_int_vector(vi)) ?
+                            _empty_packed_index_barcode() : _empty_packed_float_barcode()
+                    elseif vi === nothing || _values_are_int_vector(vi)
+                        bcs[i] = _slice_barcode_packed(M, chains[i]; values=vi)::PackedIndexBarcode
+                    else
+                        pb = _slice_barcode_packed(M, chains[i]; values=vi)
+                        if pb isa PackedFloatBarcode
+                            bcs[i] = pb
+                        else
+                            bcs[i] = _pack_float_barcode(_barcode_from_packed(pb))
+                        end
+                    end
+                end
+            else
+                for i in 1:n
+                    vi = vals[i]
+                    if isempty(chains[i])
+                        bcs[i] = (vi === nothing || _values_are_int_vector(vi)) ?
+                            _empty_packed_index_barcode() : _empty_packed_float_barcode()
+                    elseif vi === nothing || _values_are_int_vector(vi)
+                        bcs[i] = _slice_barcode_packed(M, chains[i]; values=vi)::PackedIndexBarcode
+                    else
+                        pb = _slice_barcode_packed(M, chains[i]; values=vi)
+                        if pb isa PackedFloatBarcode
+                            bcs[i] = pb
+                        else
+                            bcs[i] = _pack_float_barcode(_barcode_from_packed(pb))
+                        end
+                    end
+                end
+            end
+            return (barcodes=bcs, weights=weights)
+        end
+    end
+
+    if all_nothing
+        bcs = Vector{IndexBarcode}(undef, n)
+        if threads && Threads.nthreads() > 1
+            Threads.@threads for i in 1:n
+                if isempty(chains[i])
+                    bcs[i] = _empty_index_barcode()
+                else
+                    bcs[i] = slice_barcode(M, chains[i]; values=nothing)
+                end
+            end
+        else
+            for i in 1:n
+                if isempty(chains[i])
+                    bcs[i] = _empty_index_barcode()
+                else
+                    bcs[i] = slice_barcode(M, chains[i]; values=nothing)
+                end
+            end
+        end
+        return (barcodes=bcs, weights=weights)
+    elseif all_float_vals
+        bcs = Vector{FloatBarcode}(undef, n)
+        if threads && Threads.nthreads() > 1
+            Threads.@threads for i in 1:n
+                if isempty(chains[i])
+                    bcs[i] = _empty_float_barcode()
+                else
+                    bcs[i] = slice_barcode(M, chains[i]; values=vals[i])
+                end
+            end
+        else
+            for i in 1:n
+                if isempty(chains[i])
+                    bcs[i] = _empty_float_barcode()
+                else
+                    bcs[i] = slice_barcode(M, chains[i]; values=vals[i])
+                end
+            end
+        end
+        return (barcodes=bcs, weights=weights)
+    elseif all_int_vals
+        bcs = Vector{IndexBarcode}(undef, n)
+        if threads && Threads.nthreads() > 1
+            Threads.@threads for i in 1:n
+                if isempty(chains[i])
+                    bcs[i] = _empty_index_barcode()
+                else
+                    bcs[i] = slice_barcode(M, chains[i]; values=vals[i])
+                end
+            end
+        else
+            for i in 1:n
+                if isempty(chains[i])
+                    bcs[i] = _empty_index_barcode()
+                else
+                    bcs[i] = slice_barcode(M, chains[i]; values=vals[i])
+                end
+            end
+        end
+        return (barcodes=bcs, weights=weights)
+    else
+        bcs = Vector{Union{IndexBarcode,FloatBarcode}}(undef, n)
+        if threads && Threads.nthreads() > 1
+            Threads.@threads for i in 1:n
+                if isempty(chains[i])
+                    bcs[i] = vals[i] === nothing || _values_are_int_vector(vals[i]) ?
+                        _empty_index_barcode() : _empty_float_barcode()
+                else
+                    vi = vals[i]
+                    if vi === nothing
+                        bcs[i] = slice_barcode(M, chains[i]; values=nothing)
+                    elseif _values_are_int_vector(vi)
+                        bcs[i] = slice_barcode(M, chains[i]; values=vi)
+                    else
+                        bcs[i] = _to_float_barcode(slice_barcode(M, chains[i]; values=vi))
+                    end
+                end
+            end
+        else
+            for i in 1:n
+                if isempty(chains[i])
+                    bcs[i] = vals[i] === nothing || _values_are_int_vector(vals[i]) ?
+                        _empty_index_barcode() : _empty_float_barcode()
+                else
+                    vi = vals[i]
+                    if vi === nothing
+                        bcs[i] = slice_barcode(M, chains[i]; values=nothing)
+                    elseif _values_are_int_vector(vi)
+                        bcs[i] = slice_barcode(M, chains[i]; values=vi)
+                    else
+                        bcs[i] = _to_float_barcode(slice_barcode(M, chains[i]; values=vi))
+                    end
+                end
+            end
+        end
+        return (barcodes=bcs, weights=weights)
+    end
 end
 
 
@@ -11951,8 +13512,10 @@ function slice_barcodes(
     direction_weight::Union{Symbol,Function,Real} = :none,
     offset_weights = nothing,
     normalize_weights::Bool = true,
+    drop_unknown::Bool = true,
     values = nothing,
     threads::Bool = (Threads.nthreads() > 1),
+    packed::Bool = false,
     slice_kwargs...
 ) where {K}
     if directions === :auto || directions === nothing
@@ -11976,7 +13539,7 @@ function slice_barcodes(
             if k != :box && k != :strict && k != :kmin && k != :kmax_param &&
                k != :default_weight)...)
 
-    dirs_in = Any[_normalize_dir(dir, normalize_dirs) for dir in directions]
+    dirs_in = [_normalize_dir(dir, normalize_dirs) for dir in directions]
     offs0 = offsets
 
     nd = length(dirs_in)
@@ -11997,34 +13560,165 @@ function slice_barcodes(
         W ./= s
     end
 
-    bcs = Matrix{Any}(undef, nd, no)
-
-    if threads && Threads.nthreads() > 1
-        Threads.@threads for k in 1:(nd * no)
-            i = div((k - 1), no) + 1
-            j = (k - 1) % no + 1
-            chain, tvals = slice_chain(pi, offs0[j], dirs_in[i], opts_chain; filtered...)
-            if isempty(chain) || isempty(tvals)
-                bcs[i, j] = Dict{Tuple{Float64,Float64},Int}()
-                continue
+    if packed
+        if values === nothing || _values_are_float_vector(values)
+            bcs = Matrix{PackedFloatBarcode}(undef, nd, no)
+            if threads && Threads.nthreads() > 1
+                Threads.@threads for k in 1:(nd * no)
+                    i = div((k - 1), no) + 1
+                    j = (k - 1) % no + 1
+                    chain, tvals = slice_chain(pi, offs0[j], dirs_in[i], opts_chain; drop_unknown=drop_unknown, filtered...)
+                    if isempty(chain) || isempty(tvals)
+                        bcs[i, j] = _empty_packed_float_barcode()
+                        continue
+                    end
+                    vals_use = values === nothing ? tvals : values
+                    bcs[i, j] = _slice_barcode_packed(M, chain; values = vals_use, check_chain = false)::PackedFloatBarcode
+                end
+            else
+                for i in 1:nd, j in 1:no
+                    chain, tvals = slice_chain(pi, offs0[j], dirs_in[i], opts_chain; drop_unknown=drop_unknown, filtered...)
+                    if isempty(chain) || isempty(tvals)
+                        bcs[i, j] = _empty_packed_float_barcode()
+                        continue
+                    end
+                    vals_use = values === nothing ? tvals : values
+                    bcs[i, j] = _slice_barcode_packed(M, chain; values = vals_use, check_chain = false)::PackedFloatBarcode
+                end
             end
-            vals_use = values === nothing ? tvals : values
-            bcs[i, j] = slice_barcode(M, chain; values = vals_use, check_chain = false)
+            return (barcodes = _packed_grid_from_matrix(bcs), weights = W, dirs = dirs_in, offs = offs0)
+        elseif _values_are_int_vector(values)
+            bcs = Matrix{PackedIndexBarcode}(undef, nd, no)
+            if threads && Threads.nthreads() > 1
+                Threads.@threads for k in 1:(nd * no)
+                    i = div((k - 1), no) + 1
+                    j = (k - 1) % no + 1
+                    chain, tvals = slice_chain(pi, offs0[j], dirs_in[i], opts_chain; drop_unknown=drop_unknown, filtered...)
+                    if isempty(chain) || isempty(tvals)
+                        bcs[i, j] = _empty_packed_index_barcode()
+                        continue
+                    end
+                    bcs[i, j] = _slice_barcode_packed(M, chain; values = values, check_chain = false)::PackedIndexBarcode
+                end
+            else
+                for i in 1:nd, j in 1:no
+                    chain, tvals = slice_chain(pi, offs0[j], dirs_in[i], opts_chain; drop_unknown=drop_unknown, filtered...)
+                    if isempty(chain) || isempty(tvals)
+                        bcs[i, j] = _empty_packed_index_barcode()
+                        continue
+                    end
+                    bcs[i, j] = _slice_barcode_packed(M, chain; values = values, check_chain = false)::PackedIndexBarcode
+                end
+            end
+            return (barcodes = _packed_grid_from_matrix(bcs), weights = W, dirs = dirs_in, offs = offs0)
+        else
+            bcs = Matrix{PackedFloatBarcode}(undef, nd, no)
+            if threads && Threads.nthreads() > 1
+                Threads.@threads for k in 1:(nd * no)
+                    i = div((k - 1), no) + 1
+                    j = (k - 1) % no + 1
+                    chain, tvals = slice_chain(pi, offs0[j], dirs_in[i], opts_chain; drop_unknown=drop_unknown, filtered...)
+                    if isempty(chain) || isempty(tvals)
+                        bcs[i, j] = _empty_packed_float_barcode()
+                        continue
+                    end
+                    vals_use = values === nothing ? tvals : values
+                    pb = _slice_barcode_packed(M, chain; values = vals_use, check_chain = false)
+                    bcs[i, j] = pb isa PackedFloatBarcode ? pb : _pack_float_barcode(_barcode_from_packed(pb))
+                end
+            else
+                for i in 1:nd, j in 1:no
+                    chain, tvals = slice_chain(pi, offs0[j], dirs_in[i], opts_chain; drop_unknown=drop_unknown, filtered...)
+                    if isempty(chain) || isempty(tvals)
+                        bcs[i, j] = _empty_packed_float_barcode()
+                        continue
+                    end
+                    vals_use = values === nothing ? tvals : values
+                    pb = _slice_barcode_packed(M, chain; values = vals_use, check_chain = false)
+                    bcs[i, j] = pb isa PackedFloatBarcode ? pb : _pack_float_barcode(_barcode_from_packed(pb))
+                end
+            end
+            return (barcodes = _packed_grid_from_matrix(bcs), weights = W, dirs = dirs_in, offs = offs0)
+        end
+    end
+
+    if values === nothing || _values_are_float_vector(values)
+        bcs = Matrix{FloatBarcode}(undef, nd, no)
+        if threads && Threads.nthreads() > 1
+            Threads.@threads for k in 1:(nd * no)
+                i = div((k - 1), no) + 1
+                j = (k - 1) % no + 1
+                chain, tvals = slice_chain(pi, offs0[j], dirs_in[i], opts_chain; drop_unknown=drop_unknown, filtered...)
+                if isempty(chain) || isempty(tvals)
+                    bcs[i, j] = _empty_float_barcode()
+                    continue
+                end
+                vals_use = values === nothing ? tvals : values
+                bcs[i, j] = slice_barcode(M, chain; values = vals_use, check_chain = false)
+            end
+        else
+            for i in 1:nd, j in 1:no
+                chain, tvals = slice_chain(pi, offs0[j], dirs_in[i], opts_chain; drop_unknown=drop_unknown, filtered...)
+                if isempty(chain) || isempty(tvals)
+                    bcs[i, j] = _empty_float_barcode()
+                    continue
+                end
+                vals_use = values === nothing ? tvals : values
+                bcs[i, j] = slice_barcode(M, chain; values = vals_use, check_chain = false)
+            end
+        end
+        return (barcodes = bcs, weights = W, dirs = dirs_in, offs = offs0)
+    elseif _values_are_int_vector(values)
+        bcs = Matrix{IndexBarcode}(undef, nd, no)
+        if threads && Threads.nthreads() > 1
+            Threads.@threads for k in 1:(nd * no)
+                i = div((k - 1), no) + 1
+                j = (k - 1) % no + 1
+                chain, tvals = slice_chain(pi, offs0[j], dirs_in[i], opts_chain; drop_unknown=drop_unknown, filtered...)
+                if isempty(chain) || isempty(tvals)
+                    bcs[i, j] = _empty_index_barcode()
+                    continue
+                end
+                bcs[i, j] = slice_barcode(M, chain; values = values, check_chain = false)
+            end
+        else
+            for i in 1:nd, j in 1:no
+                chain, tvals = slice_chain(pi, offs0[j], dirs_in[i], opts_chain; drop_unknown=drop_unknown, filtered...)
+                if isempty(chain) || isempty(tvals)
+                    bcs[i, j] = _empty_index_barcode()
+                    continue
+                end
+                bcs[i, j] = slice_barcode(M, chain; values = values, check_chain = false)
+            end
+        end
+        return (barcodes = bcs, weights = W, dirs = dirs_in, offs = offs0)
+    else
+        bcs = Matrix{FloatBarcode}(undef, nd, no)
+        if threads && Threads.nthreads() > 1
+            Threads.@threads for k in 1:(nd * no)
+                i = div((k - 1), no) + 1
+                j = (k - 1) % no + 1
+                chain, tvals = slice_chain(pi, offs0[j], dirs_in[i], opts_chain; drop_unknown=drop_unknown, filtered...)
+                if isempty(chain) || isempty(tvals)
+                    bcs[i, j] = _empty_float_barcode()
+                    continue
+                end
+                vals_use = values === nothing ? tvals : values
+                bcs[i, j] = _to_float_barcode(slice_barcode(M, chain; values = vals_use, check_chain = false))
+            end
+        else
+            for i in 1:nd, j in 1:no
+                chain, tvals = slice_chain(pi, offs0[j], dirs_in[i], opts_chain; drop_unknown=drop_unknown, filtered...)
+                if isempty(chain) || isempty(tvals)
+                    bcs[i, j] = _empty_float_barcode()
+                    continue
+                end
+                vals_use = values === nothing ? tvals : values
+                bcs[i, j] = _to_float_barcode(slice_barcode(M, chain; values = vals_use, check_chain = false))
+            end
         end
         return (barcodes = bcs, weights = W, dirs = dirs_in, offs = offs0)
     end
-
-    for i in 1:nd, j in 1:no
-        chain, tvals = slice_chain(pi, offs0[j], dirs_in[i], opts_chain; filtered...)
-        if isempty(chain) || isempty(tvals)
-            bcs[i, j] = Dict{Tuple{Float64,Float64},Int}()
-            continue
-        end
-        vals_use = values === nothing ? tvals : values
-        bcs[i, j] = slice_barcode(M, chain; values = vals_use, check_chain = false)
-    end
-
-    return (barcodes = bcs, weights = W, dirs = dirs_in, offs = offs0)
 end
 
 function slice_barcodes(
@@ -12041,10 +13735,35 @@ function slice_barcodes(
     offset_weights = nothing,
     normalize_weights::Bool = true,
     offset_margin::Real = 0.05,
+    drop_unknown::Bool = true,
     values = nothing,
     threads::Bool = (Threads.nthreads() > 1),
+    packed::Bool = false,
     slice_kwargs...
 ) where {K}
+    # Fast path: when values are derived from slice geometry (the common case),
+    # compile and cache all chains/values once and reuse across modules.
+    if values === nothing
+        plan = compile_slices(
+            pi;
+            directions = directions,
+            offsets = offsets,
+            n_dirs = n_dirs,
+            n_offsets = n_offsets,
+            max_den = max_den,
+            include_axes = include_axes,
+            normalize_dirs = normalize_dirs,
+            direction_weight = direction_weight,
+            offset_weights = offset_weights,
+            normalize_weights = normalize_weights,
+            offset_margin = offset_margin,
+            drop_unknown = drop_unknown,
+            threads = threads,
+            slice_kwargs...
+        )
+        return run_invariants(plan, module_cache(M), SliceBarcodesTask(; packed = packed, threads = threads))
+    end
+
     # Determine default directions/offsets if requested.
     dirs0 = directions
     offs0 = offsets
@@ -12079,10 +13798,9 @@ function slice_barcodes(
 
     # Degenerate case: empty-dimensional offsets (e.g., missing witnesses).
     if !isempty(offs0) && length(offs0[1]) == 0
-        return (barcodes = Matrix{Any}(undef, 0, 0),
-                weights = zeros(Float64, 0, 0),
-                dirs = Any[],
-                offs = offs0)
+        dirT = eltype(dirs0)
+        bars0 = packed ? _packed_grid_undef(PackedFloatBarcode, 0, 0) : Matrix{FloatBarcode}(undef, 0, 0)
+        return (barcodes = bars0, weights = zeros(Float64, 0, 0), dirs = Vector{dirT}(undef, 0), offs = offs0)
     end
 
     if !isempty(dirs0) && !isempty(offs0) && length(dirs0[1]) != length(offs0[1])
@@ -12094,7 +13812,7 @@ function slice_barcodes(
     end
 
     # Normalize directions (e.g. L1) if requested.
-    dirs_in = Any[_normalize_dir(dir, normalize_dirs) for dir in dirs0]
+    dirs_in = [_normalize_dir(dir, normalize_dirs) for dir in dirs0]
 
     nd = length(dirs_in)
     no = length(offs0)
@@ -12116,35 +13834,165 @@ function slice_barcodes(
         end
     end
 
-    bcs = Matrix{Any}(undef, nd, no)
-
-    if threads && Threads.nthreads() > 1
-        Threads.@threads for k in 1:(nd * no)
-            i = div((k - 1), no) + 1
-            j = (k - 1) % no + 1
-            chain, tvals = slice_chain(pi, offs0[j], dirs_in[i], opts_chain; filtered...)
-            if isempty(chain) || isempty(tvals)
-                bcs[i, j] = Dict{Tuple{Float64,Float64},Int}()
-                continue
+    if packed
+        if values === nothing || _values_are_float_vector(values)
+            bcs = Matrix{PackedFloatBarcode}(undef, nd, no)
+            if threads && Threads.nthreads() > 1
+                Threads.@threads for k in 1:(nd * no)
+                    i = div((k - 1), no) + 1
+                    j = (k - 1) % no + 1
+                    chain, tvals = slice_chain(pi, offs0[j], dirs_in[i], opts_chain; drop_unknown=drop_unknown, filtered...)
+                    if isempty(chain) || isempty(tvals)
+                        bcs[i, j] = _empty_packed_float_barcode()
+                        continue
+                    end
+                    vals_use = values === nothing ? tvals : values
+                    bcs[i, j] = _slice_barcode_packed(M, chain; values = vals_use, check_chain = false)::PackedFloatBarcode
+                end
+            else
+                for i in 1:nd, j in 1:no
+                    chain, tvals = slice_chain(pi, offs0[j], dirs_in[i], opts_chain; drop_unknown=drop_unknown, filtered...)
+                    if isempty(chain) || isempty(tvals)
+                        bcs[i, j] = _empty_packed_float_barcode()
+                        continue
+                    end
+                    vals_use = values === nothing ? tvals : values
+                    bcs[i, j] = _slice_barcode_packed(M, chain; values = vals_use, check_chain = false)::PackedFloatBarcode
+                end
             end
-            vals_use = values === nothing ? tvals : values
-            bcs[i, j] = slice_barcode(M, chain; values = vals_use, check_chain = false)
+            return (barcodes = _packed_grid_from_matrix(bcs), weights = W, dirs = dirs_in, offs = offs0)
+        elseif _values_are_int_vector(values)
+            bcs = Matrix{PackedIndexBarcode}(undef, nd, no)
+            if threads && Threads.nthreads() > 1
+                Threads.@threads for k in 1:(nd * no)
+                    i = div((k - 1), no) + 1
+                    j = (k - 1) % no + 1
+                    chain, tvals = slice_chain(pi, offs0[j], dirs_in[i], opts_chain; drop_unknown=drop_unknown, filtered...)
+                    if isempty(chain) || isempty(tvals)
+                        bcs[i, j] = _empty_packed_index_barcode()
+                        continue
+                    end
+                    bcs[i, j] = _slice_barcode_packed(M, chain; values = values, check_chain = false)::PackedIndexBarcode
+                end
+            else
+                for i in 1:nd, j in 1:no
+                    chain, tvals = slice_chain(pi, offs0[j], dirs_in[i], opts_chain; drop_unknown=drop_unknown, filtered...)
+                    if isempty(chain) || isempty(tvals)
+                        bcs[i, j] = _empty_packed_index_barcode()
+                        continue
+                    end
+                    bcs[i, j] = _slice_barcode_packed(M, chain; values = values, check_chain = false)::PackedIndexBarcode
+                end
+            end
+            return (barcodes = _packed_grid_from_matrix(bcs), weights = W, dirs = dirs_in, offs = offs0)
+        else
+            bcs = Matrix{PackedFloatBarcode}(undef, nd, no)
+            if threads && Threads.nthreads() > 1
+                Threads.@threads for k in 1:(nd * no)
+                    i = div((k - 1), no) + 1
+                    j = (k - 1) % no + 1
+                    chain, tvals = slice_chain(pi, offs0[j], dirs_in[i], opts_chain; drop_unknown=drop_unknown, filtered...)
+                    if isempty(chain) || isempty(tvals)
+                        bcs[i, j] = _empty_packed_float_barcode()
+                        continue
+                    end
+                    vals_use = values === nothing ? tvals : values
+                    pb = _slice_barcode_packed(M, chain; values = vals_use, check_chain = false)
+                    bcs[i, j] = pb isa PackedFloatBarcode ? pb : _pack_float_barcode(_barcode_from_packed(pb))
+                end
+            else
+                for i in 1:nd, j in 1:no
+                    chain, tvals = slice_chain(pi, offs0[j], dirs_in[i], opts_chain; drop_unknown=drop_unknown, filtered...)
+                    if isempty(chain) || isempty(tvals)
+                        bcs[i, j] = _empty_packed_float_barcode()
+                        continue
+                    end
+                    vals_use = values === nothing ? tvals : values
+                    pb = _slice_barcode_packed(M, chain; values = vals_use, check_chain = false)
+                    bcs[i, j] = pb isa PackedFloatBarcode ? pb : _pack_float_barcode(_barcode_from_packed(pb))
+                end
+            end
+            return (barcodes = _packed_grid_from_matrix(bcs), weights = W, dirs = dirs_in, offs = offs0)
+        end
+    end
+
+    if values === nothing || _values_are_float_vector(values)
+        bcs = Matrix{FloatBarcode}(undef, nd, no)
+        if threads && Threads.nthreads() > 1
+            Threads.@threads for k in 1:(nd * no)
+                i = div((k - 1), no) + 1
+                j = (k - 1) % no + 1
+                chain, tvals = slice_chain(pi, offs0[j], dirs_in[i], opts_chain; drop_unknown=drop_unknown, filtered...)
+                if isempty(chain) || isempty(tvals)
+                    bcs[i, j] = _empty_float_barcode()
+                    continue
+                end
+                vals_use = values === nothing ? tvals : values
+                bcs[i, j] = slice_barcode(M, chain; values = vals_use, check_chain = false)
+            end
+        else
+            for i in 1:nd, j in 1:no
+                chain, tvals = slice_chain(pi, offs0[j], dirs_in[i], opts_chain; drop_unknown=drop_unknown, filtered...)
+                if isempty(chain) || isempty(tvals)
+                    bcs[i, j] = _empty_float_barcode()
+                    continue
+                end
+                vals_use = values === nothing ? tvals : values
+                bcs[i, j] = slice_barcode(M, chain; values = vals_use, check_chain = false)
+            end
+        end
+        return (barcodes = bcs, weights = W, dirs = dirs_in, offs = offs0)
+    elseif _values_are_int_vector(values)
+        bcs = Matrix{IndexBarcode}(undef, nd, no)
+        if threads && Threads.nthreads() > 1
+            Threads.@threads for k in 1:(nd * no)
+                i = div((k - 1), no) + 1
+                j = (k - 1) % no + 1
+                chain, tvals = slice_chain(pi, offs0[j], dirs_in[i], opts_chain; drop_unknown=drop_unknown, filtered...)
+                if isempty(chain) || isempty(tvals)
+                    bcs[i, j] = _empty_index_barcode()
+                    continue
+                end
+                bcs[i, j] = slice_barcode(M, chain; values = values, check_chain = false)
+            end
+        else
+            for i in 1:nd, j in 1:no
+                chain, tvals = slice_chain(pi, offs0[j], dirs_in[i], opts_chain; drop_unknown=drop_unknown, filtered...)
+                if isempty(chain) || isempty(tvals)
+                    bcs[i, j] = _empty_index_barcode()
+                    continue
+                end
+                bcs[i, j] = slice_barcode(M, chain; values = values, check_chain = false)
+            end
+        end
+        return (barcodes = bcs, weights = W, dirs = dirs_in, offs = offs0)
+    else
+        bcs = Matrix{FloatBarcode}(undef, nd, no)
+        if threads && Threads.nthreads() > 1
+            Threads.@threads for k in 1:(nd * no)
+                i = div((k - 1), no) + 1
+                j = (k - 1) % no + 1
+                chain, tvals = slice_chain(pi, offs0[j], dirs_in[i], opts_chain; drop_unknown=drop_unknown, filtered...)
+                if isempty(chain) || isempty(tvals)
+                    bcs[i, j] = _empty_float_barcode()
+                    continue
+                end
+                vals_use = values === nothing ? tvals : values
+                bcs[i, j] = _to_float_barcode(slice_barcode(M, chain; values = vals_use, check_chain = false))
+            end
+        else
+            for i in 1:nd, j in 1:no
+                chain, tvals = slice_chain(pi, offs0[j], dirs_in[i], opts_chain; drop_unknown=drop_unknown, filtered...)
+                if isempty(chain) || isempty(tvals)
+                    bcs[i, j] = _empty_float_barcode()
+                    continue
+                end
+                vals_use = values === nothing ? tvals : values
+                bcs[i, j] = _to_float_barcode(slice_barcode(M, chain; values = vals_use, check_chain = false))
+            end
         end
         return (barcodes = bcs, weights = W, dirs = dirs_in, offs = offs0)
     end
-
-    for i in 1:nd, j in 1:no
-        # Non-threaded path: use (i,j) directly (no linear index k here).
-        chain, tvals = slice_chain(pi, offs0[j], dirs_in[i], opts_chain; filtered...)
-        if isempty(chain) || isempty(tvals)
-            bcs[i, j] = Dict{Tuple{Float64,Float64},Int}()
-            continue
-        end
-        vals_use = values === nothing ? tvals : values
-        bcs[i, j] = slice_barcode(M, chain; values = vals_use, check_chain = false)
-    end
-
-    return (barcodes = bcs, weights = W, dirs = dirs_in, offs = offs0)
 end
 
 # -----------------------------------------------------------------------------
@@ -12421,7 +14269,10 @@ function slice_features(
     summary_fields=_DEFAULT_BARCODE_SUMMARY_FIELDS,
     summary_normalize_entropy::Bool=true
 ) where {K}
-    data = slice_barcodes(M, slices; default_weight=default_weight, normalize_weights=normalize_weights)
+    data = slice_barcodes(M, slices;
+        default_weight=default_weight,
+        normalize_weights=normalize_weights,
+        packed=true)
     bcs = data.barcodes
     W = data.weights
 
@@ -12584,6 +14435,7 @@ function slice_features(
                           direction_weight=direction_weight,
                           offset_weights=offset_weights,
                           normalize_weights=normalize_weights,
+                          packed=true,
                           slice_kwargs...)
 
     bcs = data.barcodes
@@ -12791,10 +14643,12 @@ function slice_kernel(
     dataM = slice_barcodes(M, slices;
                            default_weight=default_weight,
                            normalize_weights=normalize_weights,
+                           packed=true,
                            threads=threads)
     dataN = slice_barcodes(N, slices;
                            default_weight=default_weight,
                            normalize_weights=normalize_weights,
+                           packed=true,
                            threads=threads)
 
     bM = dataM.barcodes
@@ -12879,91 +14733,37 @@ function slice_kernel(
     threads::Bool = (Threads.nthreads() > 1),
     slice_kwargs...
 )::Float64 where {K}
-    dataM = slice_barcodes(M, pi;
-                           directions=directions,
-                           
-                           offsets=offsets,
-                           tmin=tmin,
-                           tmax=tmax,
-                           nsteps=nsteps,
-                           kmin=kmin,
-                           kmax_param=kmax_param,
-                           strict=strict,
-                           drop_unknown=drop_unknown,
-                           dedup=dedup,
-                           normalize_dirs=normalize_dirs,
-                           direction_weight=direction_weight,
-                           offset_weights=offset_weights,
-                           normalize_weights=normalize_weights,
-                           threads=threads,
-                           slice_kwargs...)
-
-    dataN = slice_barcodes(N, pi;
-                           directions=directions,
-                           
-                           offsets=offsets,
-                           tmin=tmin,
-                           tmax=tmax,
-                           nsteps=nsteps,
-                           kmin=kmin,
-                           kmax_param=kmax_param,
-                           strict=strict,
-                           drop_unknown=drop_unknown,
-                           dedup=dedup,
-                           normalize_dirs=normalize_dirs,
-                           direction_weight=direction_weight,
-                           offset_weights=offset_weights,
-                           normalize_weights=normalize_weights,
-                           threads=threads,
-                           slice_kwargs...)
-
-    bM = dataM.barcodes
-    bN = dataN.barcodes
-    W = dataM.weights
-
-    size(bM) == size(bN) || error("slice_kernel: barcode grid shape mismatch")
-
-    tg = tgrid
-    if (kind == :landscape_gaussian || kind == :landscape_laplacian || kind == :landscape_linear) && tg === nothing
-        tg = _default_tgrid_from_barcodes(vcat(vec(bM), vec(bN)); nsteps=tgrid_nsteps)
-    end
-    if tg !== nothing
-        tg = _clean_tgrid(tg)
-    end
-
-    sumw = sum(W)
-    sumw > 0.0 || error("slice_kernel: total weight is zero")
-
-    nd, no = size(bM)
-    if threads && Threads.nthreads() > 1
-        nT = Threads.nthreads()
-        acc_by_slot = fill(0.0, nT)
-        Threads.@threads for slot in 1:nT
-            acc = 0.0
-            for k in slot:nT:(nd * no)
-                i = div(k - 1, no) + 1
-                j = (k - 1) % no + 1
-                w = W[i, j]
-                w == 0.0 && continue
-                acc += w * _barcode_kernel(bM[i, j], bN[i, j];
-                                           kind=kind, sigma=sigma, gamma=gamma,
-                                           p=p, q=q, tgrid=tg, kmax=kmax)
-            end
-            acc_by_slot[slot] = acc
-        end
-        acc = sum(acc_by_slot)
-    else
-        acc = 0.0
-        for i in 1:nd, j in 1:no
-            w = W[i, j]
-            w == 0.0 && continue
-            acc += w * _barcode_kernel(bM[i, j], bN[i, j];
-                                       kind=kind, sigma=sigma, gamma=gamma,
-                                       p=p, q=q, tgrid=tg, kmax=kmax)
-        end
-    end
-
-    return acc / sumw
+    plan = compile_slices(
+        pi;
+        directions = directions,
+        offsets = offsets,
+        normalize_dirs = normalize_dirs,
+        direction_weight = direction_weight,
+        offset_weights = offset_weights,
+        normalize_weights = normalize_weights,
+        drop_unknown = drop_unknown,
+        threads = threads,
+        tmin = tmin,
+        tmax = tmax,
+        nsteps = nsteps,
+        kmin = kmin,
+        kmax_param = kmax_param,
+        strict = strict,
+        dedup = dedup,
+        slice_kwargs...
+    )
+    task = SliceKernelTask(;
+        kind = kind,
+        sigma = float(sigma),
+        gamma = gamma,
+        p = float(p),
+        q = float(q),
+        tgrid = tgrid,
+        tgrid_nsteps = tgrid_nsteps,
+        kmax = kmax,
+        threads = threads,
+    )
+    return run_invariants(plan, module_cache(M, N), task)
 end
 
 # Convenience wrappers: allow working directly with presentations.
@@ -13295,23 +15095,19 @@ end
 # to this region poset. We therefore reconstruct it from signatures when it is
 # not stored explicitly, and cache the result keyed by the encoding map object.
 
-# Cache for region_poset(pi) when the encoding map does not store P explicitly.
-#
-# IMPORTANT:
-# `WeakKeyDict` keys must be *mutable* objects (Julia attaches a finalizer to the key).
-# Most encoding maps in this repo are immutable structs containing mutable fields.
-# Therefore we key the weak cache by the mutable signature container `pi.sig_y`,
-# not by `pi` itself.
-#
-# We also store `sig_z` (by identity) in the cache entry and verify it on lookup
-# to avoid collisions if two encodings ever share the same `sig_y` object.
-struct _RegionPosetCacheEntry
-    sig_z::Any
-    P::AbstractPoset
+@inline function _encoding_cache_from_pi(pi)::Union{Nothing,EncodingCache}
+    pi isa CompiledEncoding || return nothing
+    meta = pi.meta
+    if meta isa NamedTuple && hasproperty(meta, :encoding_cache)
+        ec = getproperty(meta, :encoding_cache)
+        return ec isa EncodingCache ? ec : nothing
+    end
+    if meta isa AbstractDict && haskey(meta, :encoding_cache)
+        ec = meta[:encoding_cache]
+        return ec isa EncodingCache ? ec : nothing
+    end
+    return nothing
 end
-
-const _REGION_POSET_CACHE = Base.WeakKeyDict{Any, _RegionPosetCacheEntry}()
-const _REGION_POSET_CACHE_LOCK = Base.ReentrantLock()
 
 @inline function _sig_leq(a::AbstractVector{Bool}, b::AbstractVector{Bool})::Bool
     # Componentwise order on {0,1}^m: a <= b iff whenever a[k] is true, b[k] is true.
@@ -13342,16 +15138,14 @@ function _uptight_poset_from_signatures(
         end
     end
 
-    # Signature inclusion is reflexive and transitive, so leq is already a preorder.
-    # FinitePoset(leq) validates antisymmetry/transitivity, giving a true poset.
-    #
-    # Note: this avoids the extra O(r^3) transitive-closure pass used in some encoders,
-    # while still keeping FinitePoset's correctness checks.
-    return FinitePoset(leq)
+    # Signature inclusion is reflexive and transitive, so no transitive-closure pass is needed.
+    # Signatures come from encoder regions (one signature per region), so we skip FinitePoset
+    # validation in this hot reconstruction path.
+    return FinitePoset(leq; check=false)
 end
 
 """
-    region_poset(pi; poset_kind=:signature) -> AbstractPoset
+    region_poset(pi; poset_kind=:signature, cache=nothing) -> AbstractPoset
 
 Return the finite "region poset" underlying a `PLikeEncodingMap` `pi`.
 
@@ -13367,12 +15161,13 @@ Implementation notes
 --------------------
 * If the encoding object stores a region poset directly as a field/property `P`,
   we return it.
-* Otherwise we reconstruct P from the stored signatures `pi.sig_y` and `pi.sig_z`,
-  and cache the result in a `WeakKeyDict` keyed by `pi.sig_y` (a mutable vector).
-  This avoids repeating the O(r^3) validation work inside `FinitePoset(...)` when
-  region_poset is queried many times for the same encoding map.
+* Otherwise we reconstruct P from the stored signatures `pi.sig_y` and `pi.sig_z`.
+  If `cache` is an `EncodingCache` (or if `pi` is a `CompiledEncoding` carrying one),
+  we cache the reconstructed region poset there.
 """
-function region_poset(pi::PLikeEncodingMap; poset_kind::Symbol = :signature)
+function region_poset(pi::PLikeEncodingMap;
+                      poset_kind::Symbol = :signature,
+                      cache::Union{Nothing,EncodingCache}=nothing)
     if pi isa CompiledEncoding
         return pi.P
     end
@@ -13391,20 +15186,16 @@ function region_poset(pi::PLikeEncodingMap; poset_kind::Symbol = :signature)
     sig_y = getproperty(pi, :sig_y)
     sig_z = getproperty(pi, :sig_z)
 
-    # Cached reconstruction path.
-    #
-    # Key the WeakKeyDict by `sig_y` (mutable), not by `pi` (often immutable).
-    lock(_REGION_POSET_CACHE_LOCK)
-    entry = get(_REGION_POSET_CACHE, sig_y, nothing)
-    unlock(_REGION_POSET_CACHE_LOCK)
-
-    if entry !== nothing
-        e = entry::_RegionPosetCacheEntry
-        if e.sig_z === sig_z && ((poset_kind == :dense && e.P isa FinitePoset) || (poset_kind != :dense && !(e.P isa FinitePoset)))
-            return e.P
+    cache_eff = cache === nothing ? _encoding_cache_from_pi(pi) : cache
+    if cache_eff !== nothing
+        key = (UInt(objectid(sig_y)), UInt(objectid(sig_z)), poset_kind)
+        Base.lock(cache_eff.lock)
+        try
+            Pcached = get(cache_eff.region_posets, key, nothing)
+            Pcached === nothing || return Pcached
+        finally
+            Base.unlock(cache_eff.lock)
         end
-        # If sig_y is shared but sig_z differs, treat as a cache miss.
-        # (This should be very rare; correctness beats caching here.)
     end
 
     if poset_kind == :signature
@@ -13417,9 +15208,15 @@ function region_poset(pi::PLikeEncodingMap; poset_kind::Symbol = :signature)
         error("region_poset: poset_kind must be :signature or :dense")
     end
 
-    lock(_REGION_POSET_CACHE_LOCK)
-    _REGION_POSET_CACHE[sig_y] = _RegionPosetCacheEntry(sig_z, Pnew)
-    unlock(_REGION_POSET_CACHE_LOCK)
+    if cache_eff !== nothing
+        key = (UInt(objectid(sig_y)), UInt(objectid(sig_z)), poset_kind)
+        Base.lock(cache_eff.lock)
+        try
+            cache_eff.region_posets[key] = Pnew
+        finally
+            Base.unlock(cache_eff.lock)
+        end
+    end
     return Pnew
 end
 
@@ -14237,6 +16034,10 @@ restricted_hilbert(M::PModule{K}, pi, x; opts=nothing) where {K} =
     restricted_hilbert(M, pi, x, _resolve_opts(opts))
 restricted_hilbert(H::FringeModule{K}, pi, x; opts=nothing) where {K} =
     restricted_hilbert(H, pi, x, _resolve_opts(opts))
+rank_map(M::PModule{K}, pi, x, y; opts=nothing, cache=nothing, memo=nothing) where {K} =
+    rank_map(M, pi, x, y, _resolve_opts(opts); cache = cache, memo = memo)
+rank_map(H::FringeModule{K}, pi, x, y; opts=nothing, cache=nothing, memo=nothing) where {K} =
+    rank_map(H, pi, x, y, _resolve_opts(opts); cache = cache, memo = memo)
 
 hilbert_distance(M, N, pi; opts=nothing, kwargs...) =
     hilbert_distance(M, N, pi, _resolve_opts(opts); kwargs...)

@@ -6,10 +6,11 @@ import Base.Threads
 # Included from test/runtests.jl; uses shared aliases (PM, FF, IR, DF, MD, QQ, ...).
 
 with_fields(FIELDS_FULL) do field
-K = CM.coeff_type(field)
+Kc = CM.coeff_type(field)
 @inline c(x) = CM.coerce(field, x)
 @inline zmat(m, n) = CM.zeros(field, m, n)
 @inline eye_mat(n) = CM.eye(field, n)
+@inline _is_real_field(f) = f isa CM.RealField
 
 # helper: simple 1 times 1 fringe module on interval [a,b]
 function interval_module(P::FF.FinitePoset, a::Int, b::Int)
@@ -24,7 +25,7 @@ end
 # A tiny helper: one-vertex poset module = just a vector space.
 function one_vertex_module(dim::Int)
     P = chain_poset(1)
-    return MD.PModule{K}(P, [dim], Dict{Tuple{Int,Int}, Matrix{K}}(); field=field)
+    return MD.PModule{Kc}(P, [dim], Dict{Tuple{Int,Int}, Matrix{Kc}}(); field=field)
 end
 
 function scalar_morphism(M::MD.PModule{K}, a::Int) where {K}
@@ -46,7 +47,12 @@ end
 @testset "Homological algebra edge cases on finite posets" begin
     # One-point poset: incidence algebra is just the base field.
     P1 = chain_poset(1)
-    S = IR.pmodule_from_fringe(one_by_one_fringe(P1, FF.principal_upset(P1, 1), FF.principal_downset(P1, 1)))
+    S = IR.pmodule_from_fringe(one_by_one_fringe(
+        P1,
+        FF.principal_upset(P1, 1),
+        FF.principal_downset(P1, 1);
+        field=field,
+    ))
 
     E = DF.Ext(S, S, PM.DerivedFunctorOptions(maxdeg=3))
     @test PM.dim(E, 0) == 1
@@ -57,7 +63,7 @@ end
     @test all(PM.dim(T, t) == 0 for t in 1:3)
 
     # Zero module: Ext and Tor should vanish in all degrees.
-    Z = MD.PModule{K}(P1, [0], Dict{Tuple{Int,Int}, Matrix{K}}())
+    Z = MD.PModule{Kc}(P1, [0], Dict{Tuple{Int,Int}, Matrix{Kc}}(); field=field)
 
     EZS = DF.Ext(Z, S, PM.DerivedFunctorOptions(maxdeg=2))
     ESZ = DF.Ext(S, Z, PM.DerivedFunctorOptions(maxdeg=2))
@@ -75,15 +81,35 @@ end
 
     # Disconnected poset: Ext between components should vanish.
     P = disjoint_two_chains_poset(2, 2)  # vertices {1,2} and {3,4} are separate components
-    S1 = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, 1), FF.principal_downset(P, 1)))
-    S3 = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, 3), FF.principal_downset(P, 3)))
+    S1 = IR.pmodule_from_fringe(one_by_one_fringe(
+        P,
+        FF.principal_upset(P, 1),
+        FF.principal_downset(P, 1);
+        field=field,
+    ))
+    S3 = IR.pmodule_from_fringe(one_by_one_fringe(
+        P,
+        FF.principal_upset(P, 3),
+        FF.principal_downset(P, 3);
+        field=field,
+    ))
     E13 = DF.Ext(S1, S3, PM.DerivedFunctorOptions(maxdeg=2))
     @test all(PM.dim(E13, t) == 0 for t in 0:2)
 
     # Cross-check: Ext computed via projectives vs via injectives agree on dimensions.
     Pd = diamond_poset()
-    A = IR.pmodule_from_fringe(one_by_one_fringe(Pd, FF.principal_upset(Pd, 1), FF.principal_downset(Pd, 1)))
-    B = IR.pmodule_from_fringe(one_by_one_fringe(Pd, FF.principal_upset(Pd, 4), FF.principal_downset(Pd, 4)))
+    A = IR.pmodule_from_fringe(one_by_one_fringe(
+        Pd,
+        FF.principal_upset(Pd, 1),
+        FF.principal_downset(Pd, 1);
+        field=field,
+    ))
+    B = IR.pmodule_from_fringe(one_by_one_fringe(
+        Pd,
+        FF.principal_upset(Pd, 4),
+        FF.principal_downset(Pd, 4);
+        field=field,
+    ))
 
     Eproj = DF.Ext(A, B, PM.DerivedFunctorOptions(maxdeg=2))
     resBinj = DF.injective_resolution(B, PM.ResolutionOptions(maxlen=2))
@@ -96,9 +122,9 @@ end
     # ----------------
     # Circle: C1=k, C0=k, d1=0
     # ----------------
-    d1 = zeros(K, 1, 1)      # C1 -> C0
-    d0 = zeros(K, 0, 1)      # C0 -> 0
-    d2 = zeros(K, 1, 0)      # 0  -> C1
+    d1 = zeros(Kc, 1, 1)      # C1 -> C0
+    d0 = zeros(Kc, 0, 1)      # C0 -> 0
+    d2 = zeros(Kc, 1, 0)      # 0  -> C1
 
     H1 = CC.homology_data(d2, d1, 1)
     @test H1.dimH == 1
@@ -107,15 +133,15 @@ end
     @test H0.dimH == 1
 
     # coordinate sanity on the chosen basis representative
-    c = CC.homology_coordinates(H1, H1.Hrep[:, 1])
-    @test c == reshape(K[1], 1, 1)
+    coords = CC.homology_coordinates(H1, H1.Hrep[:, 1])
+    @test coords == reshape(Kc[1], 1, 1)
 
     # ----------------
     # Interval: C1=k, C0=k^2, d1 = [ -1; 1 ]
     # ----------------
-    d1_int = reshape(K[-1, 1], 2, 1)
-    d0_int = zeros(K, 0, 2)
-    d2_int = zeros(K, 1, 0)
+    d1_int = reshape(Kc[-1, 1], 2, 1)
+    d0_int = zeros(Kc, 0, 2)
+    d2_int = zeros(Kc, 1, 0)
 
     H1_int = CC.homology_data(d2_int, d1_int, 1)
     @test H1_int.dimH == 0
@@ -124,12 +150,12 @@ end
     @test H0_int.dimH == 1
 
     # any nonzero vector in C1 is not a cycle since d1_int is injective
-    @test_throws ErrorException CC.homology_coordinates(H1_int, reshape(K[1], 1, 1))
+    @test_throws ErrorException CC.homology_coordinates(H1_int, reshape(Kc[1], 1, 1))
 
     # boundary class should map to 0 in H0
     b = H0_int.B[:, 1]
     c0 = CC.homology_coordinates(H0_int, b)
-    @test c0 == zeros(K, H0_int.dimH, 1)
+    @test c0 == zeros(Kc, H0_int.dimH, 1)
 
     # ----------------
     # Filled triangle: C2=k, C1=k^3, C0=k^3
@@ -140,15 +166,15 @@ end
     #   e02 -> v2 - v0  => [-1, 0, 1]
     #   e12 -> v2 - v1  => [ 0,-1, 1]
     # ----------------
-    d2_tri = reshape(K[1, -1, 1], 3, 1)
-    d1_tri = K[
+    d2_tri = reshape(Kc[1, -1, 1], 3, 1)
+    d1_tri = Kc[
         -1  -1   0;
          1   0  -1;
          0   1   1
     ]
-    d0_tri = zeros(K, 0, 3)
+    d0_tri = zeros(Kc, 0, 3)
 
-    H2_tri = CC.homology_data(zeros(K, 1, 0), d2_tri, 2)
+    H2_tri = CC.homology_data(zeros(Kc, 1, 0), d2_tri, 2)
     @test H2_tri.dimH == 0
 
     H1_tri = CC.homology_data(d2_tri, d1_tri, 1)
@@ -160,8 +186,8 @@ end
 
 @testset "ChainComplexes: shift and extend_range" begin
     # Cochain complex C: degrees 0..1, zero differential, dims 1 in each degree.
-    d0 = spzeros(K, 1, 1)
-    C = CC.CochainComplex{K}(0, 1, [1, 1], [d0])
+    d0 = spzeros(Kc, 1, 1)
+    C = CC.CochainComplex{Kc}(0, 1, [1, 1], [d0])
 
     @test CC.cohomology_data(C, 0).dimH == 1
     @test CC.cohomology_data(C, 1).dimH == 1
@@ -179,25 +205,39 @@ end
     @test CC.cohomology_data(Ce, 1).dimH == 1
 end
 
+@testset "ChainComplexes: extend_to_basis yields invertible completion" begin
+    C = Kc[
+        c(1)  c(0)  c(1);
+        c(0)  c(1)  c(1);
+        c(1)  c(1)  c(2);
+        c(0)  c(0)  c(0);
+        c(1)  c(0)  c(1)
+    ]
+    B = CC.extend_to_basis(C)
+    @test size(B) == (5, 5)
+    @test PM.FieldLinAlg.rank(field, B) == 5
+    @test PM.FieldLinAlg.rank(field, B[:, 1:PM.FieldLinAlg.rank(field, C)]) == PM.FieldLinAlg.rank(field, C)
+end
+
 @testset "maxdeg_of_complex helpers" begin
-    C = CC.CochainComplex{K}(-1, 2, [1, 1, 1, 1], [spzeros(K, 1, 1), spzeros(K, 1, 1), spzeros(K, 1, 1)])
+    C = CC.CochainComplex{Kc}(-1, 2, [1, 1, 1, 1], [spzeros(Kc, 1, 1), spzeros(Kc, 1, 1), spzeros(Kc, 1, 1)])
     @test CC.maxdeg_of_complex(C) == 2
 
     dims = ones(Int, 2, 4)
-    dv = Array{SparseMatrixCSC{K,Int},2}(undef, 2, 4)
-    dh = Array{SparseMatrixCSC{K,Int},2}(undef, 2, 4)
+    dv = Array{SparseMatrixCSC{Kc,Int},2}(undef, 2, 4)
+    dh = Array{SparseMatrixCSC{Kc,Int},2}(undef, 2, 4)
     for i in 1:2, j in 1:4
-        dv[i, j] = spzeros(K, 1, 1)
-        dh[i, j] = spzeros(K, 1, 1)
+        dv[i, j] = spzeros(Kc, 1, 1)
+        dh[i, j] = spzeros(Kc, 1, 1)
     end
-    DC = CC.DoubleComplex{K}(0, 1, -1, 2, dims, dv, dh)
+    DC = CC.DoubleComplex{Kc}(0, 1, -1, 2, dims, dv, dh)
     @test CC.maxdeg_of_complex(DC) == 3
 end
 
 @testset "ChainComplexes: induced_map_on_cohomology for zero-differential complexes" begin
     # Complexes concentrated in degree 0.
-    C = CC.CochainComplex{K}(0, 0, [2], SparseMatrixCSC{K,Int}[])
-    D = CC.CochainComplex{K}(0, 0, [3], SparseMatrixCSC{K,Int}[])
+    C = CC.CochainComplex{Kc}(0, 0, [2], SparseMatrixCSC{Kc,Int}[])
+    D = CC.CochainComplex{Kc}(0, 0, [3], SparseMatrixCSC{Kc,Int}[])
 
     HC = CC.cohomology_data(C, 0)
     HD = CC.cohomology_data(D, 0)
@@ -209,7 +249,7 @@ end
     # Since differentials are zero, cohomology equals the underlying vector space.
     @test Matrix(fH) == Matrix(f)
 
-    z = spzeros(K, 3, 2)
+    z = spzeros(Kc, 3, 2)
     zH = CC.induced_map_on_cohomology(HC, HD, z)
     
     @test count(!iszero, zH) == 0
@@ -225,7 +265,7 @@ end
     U = BitVector([i <= b for i in 1:n])
     D = BitVector([i >= a for i in 1:n])
 
-    H = PM.one_by_one_fringe(P, U, D, c(1))
+    H = PM.one_by_one_fringe(P, U, D, c(1); field=field)
     M = IR.pmodule_from_fringe(H)
 
     C_from_fringe = PM.ModuleCochainComplex([H], PM.PMorphism[]; tmin = 0)
@@ -234,7 +274,7 @@ end
     @test C_from_fringe.tmin == 0
     @test C_from_fringe.tmax == 0
     @test length(C_from_fringe.terms) == 1
-    @test C_from_fringe.terms[1] isa MD.PModule{K}
+    @test CM.coeff_type(C_from_fringe.terms[1].field) == Kc
 
     # The internal converted term should match explicit conversion.
     @test C_from_fringe.terms[1].dims == C_from_pmodule.terms[1].dims
@@ -269,7 +309,7 @@ end
             B = PM.basis(H, t)
             @test length(B) == d
             if d > 0
-                coords = zeros(K, d)
+                coords = zeros(Kc, d)
                 coords[1] = c(1)
                 z = PM.representative(H, t, coords)
                 coords2 = PM.coordinates(H, t, z)
@@ -335,8 +375,37 @@ end
 
     # Smoke test: RHomComplex must carry the Hom-space blocks used to
     # build the double complex, and they should be properly typed.
-    @test R0.homs isa Array{DF.HomSpace{K},2}
+    @test R0.homs isa Array{DF.HomSpace{Kc},2}
     @test size(R0.homs, 2) == maxdeg + 1
+
+    # Cache parity for Hom-system reuse in RHom builders.
+    hcache = DF.HomSystemCache{Kc}()
+    R0_cached1 = PM.RHomComplex(C0, N; maxlen=maxdeg, resN=resN, cache=hcache, threads=false)
+    R0_cached2 = PM.RHomComplex(C0, N; maxlen=maxdeg, resN=resN, cache=hcache, threads=false)
+    @test R0_cached1.tot.dims == R0.tot.dims
+    @test R0_cached1.tot.d == R0.tot.d
+    @test R0_cached2.tot.d == R0.tot.d
+    @test R0_cached1.homs[1, 1] === R0_cached2.homs[1, 1]
+
+    Hc1 = DF.hom_with_cache(M, resN.Emods[1]; cache=hcache)
+    Hc2 = DF.hom_with_cache(M, resN.Emods[1]; cache=hcache)
+    @test Hc1 === Hc2
+    DF.clear_hom_system_cache!(hcache)
+    Hc3 = DF.hom_with_cache(M, resN.Emods[1]; cache=hcache)
+    @test Hc3 !== Hc1
+
+    rf_uncached = PM.rhom_map_first(fmap, N; maxlen=maxdeg, resN=resN, threads=false)
+    rf_cached = PM.rhom_map_first(fmap, N; maxlen=maxdeg, resN=resN, cache=hcache, threads=false)
+    @test rf_cached.maps == rf_uncached.maps
+
+    if Threads.nthreads() > 1
+        R0_cached_thread = PM.RHomComplex(C0, N; maxlen=maxdeg, resN=resN, cache=hcache, threads=true)
+        @test R0_cached_thread.tot.dims == R0_cached1.tot.dims
+        @test R0_cached_thread.tot.d == R0_cached1.tot.d
+
+        rf_cached_thread = PM.rhom_map_first(fmap, N; maxlen=maxdeg, resN=resN, cache=hcache, threads=true)
+        @test rf_cached_thread.maps == rf_cached.maps
+    end
 
     # induced maps on Tot are just precomposition matrices degreewise, so compare by multiplication
     F = DF._precompose_matrix(DF.Hom(M,resN.Emods[1]), DF.Hom(M,resN.Emods[1]), fM) # sanity call
@@ -381,7 +450,7 @@ end
             B = PM.basis(HT, n)
             @test length(B) == d
             if d > 0
-                coords = zeros(K, d)
+                coords = zeros(Kc, d)
                 coords[1] = c(1)
                 z = PM.representative(HT, n, coords)
                 coords2 = PM.coordinates(HT, n, z)
@@ -460,7 +529,7 @@ end
 
 @testset "ModuleCochainComplex keyword tmin (positional endpoints removed)" begin
     P = chain_poset(1)
-    M = MD.PModule{K}(P, [1], Dict{Tuple{Int,Int}, Matrix{K}}())
+    M = MD.PModule{Kc}(P, [1], Dict{Tuple{Int,Int}, Matrix{Kc}}())
     id = scalar_morphism(M, 1)
 
     terms = [M, M]
@@ -538,7 +607,7 @@ end
 
 @testset "rhom_map_first strict functoriality under composition" begin
     M = one_vertex_module(2)
-    N = PM.PModule{K}(M.Q, copy(M.dims), M.edge_maps)
+    N = PM.PModule{Kc}(M.Q, copy(M.dims), M.edge_maps; field=field)
 
     C = PM.ModuleCochainComplex([M], PM.PMorphism[]; tmin=0, check=true)
 
@@ -566,8 +635,18 @@ end
     P = chain_poset(2)
 
     # simples at vertices 1 and 2
-    S1 = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, 1), FF.principal_downset(P, 1)))
-    S2 = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, 2), FF.principal_downset(P, 2)))
+    S1 = IR.pmodule_from_fringe(one_by_one_fringe(
+        P,
+        FF.principal_upset(P, 1),
+        FF.principal_downset(P, 1);
+        field=field,
+    ))
+    S2 = IR.pmodule_from_fringe(one_by_one_fringe(
+        P,
+        FF.principal_upset(P, 2),
+        FF.principal_downset(P, 2);
+        field=field,
+    ))
 
     # C concentrated in degree 0
     C = PM.ModuleCochainComplex([S1], PM.PMorphism[]; tmin=0, check=true)
@@ -579,11 +658,11 @@ end
     @test PM.dim(H, 1) == 2  # Ext^1(S1, S2^2) should be 2
 
     # helper: endomorphism defined only at vertex u
-    function endo_at_vertex(M::MD.PModule{K}, u::Int, A::Matrix{K})
-        comps = Vector{Matrix{K}}(undef, M.Q.n)
+    function endo_at_vertex(M::MD.PModule, u::Int, A::AbstractMatrix)
+        comps = Vector{Matrix{Kc}}(undef, M.Q.n)
         for v in 1:M.Q.n
             dv = M.dims[v]
-            comps[v] = Matrix{K}(I, dv, dv)
+            comps[v] = Matrix{Kc}(I, dv, dv)
         end
         comps[u] = A
         return MD.PMorphism(M, M, comps)
@@ -591,14 +670,14 @@ end
 
     idN = IR.id_morphism(N)
     Mid = PM.hyperExt_map_second(idN, H, H; t=1)
-    @test Mid == Matrix{K}(I, 2, 2)
+    @test Mid == Matrix{Kc}(I, 2, 2)
 
     twoN = scalar_morphism(N, 2)
     Mtwo = PM.hyperExt_map_second(twoN, H, H; t=1)
-    @test Mtwo == 2 * Matrix{K}(I, 2, 2)
+    @test Mtwo == 2 * Matrix{Kc}(I, 2, 2)
 
-    gC = endo_at_vertex(N, 2, K[0 1; 0 0])
-    gD = endo_at_vertex(N, 2, K[0 0; 1 0])
+    gC = endo_at_vertex(N, 2, Kc[0 1; 0 0])
+    gD = endo_at_vertex(N, 2, Kc[0 0; 1 0])
 
     MCg = PM.hyperExt_map_second(gC, H, H; t=1)
     MDg = PM.hyperExt_map_second(gD, H, H; t=1)
@@ -613,8 +692,18 @@ end
 @testset "hyperExt_map_first contravariant functoriality" begin
     P = chain_poset(2)
 
-    S1 = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, 1), FF.principal_downset(P, 1)))
-    S2 = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, 2), FF.principal_downset(P, 2)))
+    S1 = IR.pmodule_from_fringe(one_by_one_fringe(
+        P,
+        FF.principal_upset(P, 1),
+        FF.principal_downset(P, 1);
+        field=field,
+    ))
+    S2 = IR.pmodule_from_fringe(one_by_one_fringe(
+        P,
+        FF.principal_upset(P, 2),
+        FF.principal_downset(P, 2);
+        field=field,
+    ))
 
     M, _, _, _, _ = PM.direct_sum_with_maps(S1, S1)
     N, _, _, _, _ = PM.direct_sum_with_maps(S2, S2)
@@ -629,12 +718,12 @@ end
             dv = M.dims[v]
             comps[v] = eye_mat(dv)
         end
-        comps[u] = Matrix{K}(A)
+        comps[u] = Matrix{Kc}(A)
         return MD.PMorphism(M, M, comps)
     end
 
-    fA = endo_at_vertex(M, 1, K[0 1; 0 0])
-    fB = endo_at_vertex(M, 1, K[0 0; 1 0])
+    fA = endo_at_vertex(M, 1, Kc[0 1; 0 0])
+    fB = endo_at_vertex(M, 1, Kc[0 0; 1 0])
 
     FA = PM.ModuleCochainMap(C, C, [fA])
     FB = PM.ModuleCochainMap(C, C, [fB])
@@ -655,8 +744,8 @@ end
 
 # Helper: a P-module on a 1-vertex poset (so no edge maps are needed).
 function _vspace_module(P::FF.FinitePoset, d::Int)
-    edge_maps = Dict{Tuple{Int,Int}, Matrix{K}}()
-    return MD.PModule{K}(P, [d], edge_maps; field=FIELD)
+    edge_maps = Dict{Tuple{Int,Int}, Matrix{Kc}}()
+    return MD.PModule{Kc}(P, [d], edge_maps; field=field)
 end
 
 @testset "Abelian-category API" begin
@@ -668,34 +757,34 @@ end
     A = _vspace_module(P, 2)
     B = _vspace_module(P, 3)
 
-    f_mat = Matrix{K}([
+    f_mat = Matrix{Kc}([
         c(1) c(0);
         c(0) c(0);
         c(0) c(0)
     ])
     f = MD.PMorphism(A, B, [f_mat])
 
-    K, iK = PM.kernel_with_inclusion(f)
-    @test K.dims == [1]
-    @test f.comps[1] * iK.comps[1] == zeros(K, 3, 1)
-    @test PM.kernel(f).dims == K.dims
+    Ker, iK = PM.kernel_with_inclusion(f)
+    @test Ker.dims == [1]
+    @test f.comps[1] * iK.comps[1] == zeros(Kc, 3, 1)
+    @test PM.kernel(f).dims == Ker.dims
 
     Im, iIm = PM.image_with_inclusion(f)
     @test Im.dims == [1]
     @test PM.image(f).dims == [1]
 
     # Factorization test: since iIm is an inclusion, f should factor through it.
-    X = PM.FieldLinAlg.solve_fullcolumn(FIELD, iIm.comps[1], f.comps[1])
+    X = PM.FieldLinAlg.solve_fullcolumn(field, iIm.comps[1], f.comps[1])
     @test iIm.comps[1] * X == f.comps[1]
 
     Cok, q = PM.cokernel_with_projection(f)
     @test Cok.dims == [2]
-    @test q.comps[1] * f.comps[1] == zeros(K, 2, 2)
+    @test q.comps[1] * f.comps[1] == zeros(Kc, 2, 2)
     @test PM.cokernel(f).dims == [2]
 
     Coim, pco = PM.coimage_with_projection(f)
     @test Coim.dims == [1]
-    @test pco.comps[1] * iK.comps[1] == zeros(K, 1, 1)
+    @test pco.comps[1] * iK.comps[1] == zeros(Kc, 1, 1)
     @test PM.coimage(f).dims == [1]
 
     # Quotient by the image submodule should match the cokernel.
@@ -715,8 +804,8 @@ end
     B1 = _vspace_module(P, 1)
     C1 = _vspace_module(P, 1)
 
-    f_id = MD.PMorphism(A1, B1, [reshape(K[1], 1, 1)])
-    g_id = MD.PMorphism(A1, C1, [reshape(K[1], 1, 1)])
+    f_id = MD.PMorphism(A1, B1, [reshape(Kc[1], 1, 1)])
+    g_id = MD.PMorphism(A1, C1, [reshape(Kc[1], 1, 1)])
 
     Pout, inB, inC, qpo, phi = PM.pushout(f_id, g_id)
     @test Pout.dims == [1]
@@ -724,8 +813,8 @@ end
 
     # Pullback of identities should be the diagonal (dim 1).
     D1 = _vspace_module(P, 1)
-    f_toD = MD.PMorphism(B1, D1, [reshape(K[1], 1, 1)])
-    g_toD = MD.PMorphism(C1, D1, [reshape(K[1], 1, 1)])
+    f_toD = MD.PMorphism(B1, D1, [reshape(Kc[1], 1, 1)])
+    g_toD = MD.PMorphism(C1, D1, [reshape(Kc[1], 1, 1)])
 
     Pin, prB, prC, iota, psi = PM.pullback(f_toD, g_toD)
     @test Pin.dims == [1]
@@ -738,8 +827,8 @@ end
     B2 = _vspace_module(P, 2)
     C2 = _vspace_module(P, 1)
 
-    i_mat = reshape(K[1, 0], 2, 1)
-    p_mat = reshape(K[0, 1], 1, 2)
+    i_mat = reshape(Kc[1, 0], 2, 1)
+    p_mat = reshape(Kc[0, 1], 1, 2)
 
     i = MD.PMorphism(A2, B2, [i_mat])
     p = MD.PMorphism(B2, C2, [p_mat])
@@ -752,7 +841,7 @@ end
     @test PM.is_exact(ses_alias)
 
     # A non-exact variant: switch the projection.
-    p_bad = MD.PMorphism(B2, C2, [reshape(K[1, 0], 1, 2)])
+    p_bad = MD.PMorphism(B2, C2, [reshape(Kc[1, 0], 1, 2)])
     ses_bad = PM.ShortExactSequence(i, p_bad; check=false)
     @test !PM.is_exact(ses_bad)
 
@@ -763,37 +852,37 @@ end
     At = _vspace_module(P, 1)
     Bt = _vspace_module(P, 2)
     Ct = _vspace_module(P, 1)
-    it = MD.PMorphism(At, Bt, [reshape(K[1, 0], 2, 1)])
-    pt = MD.PMorphism(Bt, Ct, [reshape(K[0, 1], 1, 2)])
+    it = MD.PMorphism(At, Bt, [reshape(Kc[1, 0], 2, 1)])
+    pt = MD.PMorphism(Bt, Ct, [reshape(Kc[0, 1], 1, 2)])
     top = PM.ShortExactSequence(it, pt)
 
     # Bottom SES: 0 -> Q^2 -> Q^3 -> Q -> 0
     Ab = _vspace_module(P, 2)
     Bb = _vspace_module(P, 3)
     Cb = _vspace_module(P, 1)
-    ib = MD.PMorphism(Ab, Bb, [Matrix{K}([
+    ib = MD.PMorphism(Ab, Bb, [Matrix{Kc}([
         c(1) c(0);
         c(0) c(1);
         c(0) c(0)
     ])])
-    pb = MD.PMorphism(Bb, Cb, [reshape(K[0, 0, 1], 1, 3)])
+    pb = MD.PMorphism(Bb, Cb, [reshape(Kc[0, 0, 1], 1, 3)])
     bottom = PM.ShortExactSequence(ib, pb)
 
     # Vertical maps: alpha injective, beta injective, gamma = 0.
-    alpha = MD.PMorphism(At, Ab, [reshape(K[1, 0], 2, 1)])
-    beta = MD.PMorphism(Bt, Bb, [Matrix{K}([
+    alpha = MD.PMorphism(At, Ab, [reshape(Kc[1, 0], 2, 1)])
+    beta = MD.PMorphism(Bt, Bb, [Matrix{Kc}([
         c(1) c(0);
         c(0) c(1);
         c(0) c(0)
     ])])
-    gamma = MD.PMorphism(Ct, Cb, [reshape(K[0], 1, 1)])
+    gamma = MD.PMorphism(Ct, Cb, [reshape(Kc[0], 1, 1)])
 
     sn = PM.snake_lemma(top, bottom, alpha, beta, gamma)
     delta = sn.delta
 
     @test sn.kerC[1].dims == [1]   # ker(gamma) = Ct
     @test sn.cokA[1].dims == [1]   # coker(alpha) has dim 1
-    @test PM.FieldLinAlg.rank(FIELD, delta.comps[1]) == 1
+    @test PM.FieldLinAlg.rank(field, delta.comps[1]) == 1
     @test !PM.is_zero_morphism(delta)
 
     @testset "Products/coproducts/equalizers/coequalizers + diagram interface" begin
@@ -808,12 +897,12 @@ end
         # --- biproduct sanity: p_i o i_j = delta_ij, and i1 p1 + i2 p2 = id
         S, iA, iB, pA, pB = PM.biproduct(A, B)
 
-        @test pA.comps[1] * iA.comps[1] == Matrix{K}(I, 2, 2)
-        @test pB.comps[1] * iB.comps[1] == Matrix{K}(I, 3, 3)
-        @test pA.comps[1] * iB.comps[1] == zeros(K, 2, 3)
-        @test pB.comps[1] * iA.comps[1] == zeros(K, 3, 2)
+        @test pA.comps[1] * iA.comps[1] == Matrix{Kc}(I, 2, 2)
+        @test pB.comps[1] * iB.comps[1] == Matrix{Kc}(I, 3, 3)
+        @test pA.comps[1] * iB.comps[1] == zeros(Kc, 2, 3)
+        @test pB.comps[1] * iA.comps[1] == zeros(Kc, 3, 2)
 
-        @test iA.comps[1] * pA.comps[1] + iB.comps[1] * pB.comps[1] == Matrix{K}(I, 5, 5)
+        @test iA.comps[1] * pA.comps[1] + iB.comps[1] * pB.comps[1] == Matrix{Kc}(I, 5, 5)
 
         # --- product/coproduct wrappers exist and return the expected maps
         Pprod, prA, prB = PM.product(A, B)
@@ -829,7 +918,7 @@ end
         X = _vspace_module(P1, 2)
         f = PM.id_morphism(X)  # X -> A (both 2-dim, so treat as "identity")
         # A real map X->B: 3x2
-        g = PM.PMorphism(X, B, [K[1 0; 0 1; 0 0]])
+        g = PM.PMorphism(X, B, [Kc[1 0; 0 1; 0 0]])
 
         # (f,g) : X -> Pprod has block form [f; g]
         fg = PM.PMorphism(X, Pprod, [vcat(f.comps[1], g.comps[1])])
@@ -839,7 +928,7 @@ end
 
         # --- equalizer/coequalizer checks
         # Build a nonzero map h : A -> B
-        h = PM.PMorphism(A, B, [K[1 0; 0 1; 0 0]])
+        h = PM.PMorphism(A, B, [Kc[1 0; 0 1; 0 0]])
         z = PM.zero_morphism(A, B)
 
         E, e = PM.equalizer(h, z)
@@ -884,23 +973,23 @@ end
     P = chain_poset(1)
 
     function vmod(d::Int)
-        edge = Dict{Tuple{Int,Int}, Matrix{K}}()
-        return MD.PModule{K}(P, [d], edge; field=field)
+        edge = Dict{Tuple{Int,Int}, Matrix{Kc}}()
+        return MD.PModule{Kc}(P, [d], edge; field=field)
     end
 
     A = vmod(2)
     B = vmod(3)
 
-    f_mat = Matrix{K}([
-        one(K)  zero(K);
-        zero(K) zero(K);
-        zero(K) zero(K)
+    f_mat = Matrix{Kc}([
+        one(Kc)  zero(Kc);
+        zero(Kc) zero(Kc);
+        zero(Kc) zero(Kc)
     ])
     f = MD.PMorphism(A, B, [f_mat])
 
     Kmod, iK = PM.kernel_with_inclusion(f)
     @test Kmod.dims == [1]
-    @test f.comps[1] * iK.comps[1] == zeros(K, 3, 1)
+    @test f.comps[1] * iK.comps[1] == zeros(Kc, 3, 1)
     @test PM.kernel(f).dims == Kmod.dims
 
     Im, iIm = PM.image_with_inclusion(f)
@@ -909,12 +998,12 @@ end
 
     Cok, q = PM.cokernel_with_projection(f)
     @test Cok.dims == [2]
-    @test q.comps[1] * f.comps[1] == zeros(K, 2, 2)
+    @test q.comps[1] * f.comps[1] == zeros(Kc, 2, 2)
     @test PM.cokernel(f).dims == [2]
 
     Coim, pco = PM.coimage_with_projection(f)
     @test Coim.dims == [1]
-    @test pco.comps[1] * iK.comps[1] == zeros(K, 1, 1)
+    @test pco.comps[1] * iK.comps[1] == zeros(Kc, 1, 1)
     @test PM.coimage(f).dims == [1]
 end
 
@@ -925,17 +1014,17 @@ _is_ascii(s::AbstractString) = all(c -> Int(c) <= 0x7f, s)
     P = chain_poset(1)
 
     # 1-vertex PModules (no edge maps needed).
-    edge_maps = Dict{Tuple{Int,Int}, Matrix{K}}()
+    edge_maps = Dict{Tuple{Int,Int}, Matrix{Kc}}()
 
-    A = MD.PModule{K}(P, [1], edge_maps)
-    B = MD.PModule{K}(P, [2], edge_maps)
-    C = MD.PModule{K}(P, [1], edge_maps)
+    A = MD.PModule{Kc}(P, [1], edge_maps)
+    B = MD.PModule{Kc}(P, [2], edge_maps)
+    C = MD.PModule{Kc}(P, [1], edge_maps)
 
     # i : A -> B (inclusion)
-    i = MD.PMorphism(A, B, [reshape(K[1, 0], 2, 1)])
+    i = MD.PMorphism(A, B, [reshape(Kc[1, 0], 2, 1)])
 
     # p : B -> C (projection)
-    p = MD.PMorphism(B, C, [reshape(K[0, 1], 1, 2)])
+    p = MD.PMorphism(B, C, [reshape(Kc[0, 1], 1, 2)])
 
     # --- PModule show ---
     sA0 = sprint(show, A)
@@ -947,7 +1036,7 @@ _is_ascii(s::AbstractString) = all(c -> Int(c) <= 0x7f, s)
     sA1 = sprint(show, MIME("text/plain"), A)
     @test occursin("PModule", sA1)
     if field isa CM.QQField
-        @test occursin("scalars = QQ", sA1)
+        @test occursin("scalars = QQ", sA1) || occursin("scalars = Rational{BigInt}", sA1)
     else
         @test occursin("scalars = ", sA1)
     end
@@ -973,7 +1062,7 @@ _is_ascii(s::AbstractString) = all(c -> Int(c) <= 0x7f, s)
     # Truncation sanity check under IOContext(:limit=>true).
     Pbig = chain_poset(20)
     dims_big = collect(1:20)
-    Mbig = MD.PModule{K}(Pbig, dims_big, Dict{Tuple{Int,Int}, Matrix{K}}())
+    Mbig = MD.PModule{Kc}(Pbig, dims_big, Dict{Tuple{Int,Int}, Matrix{Kc}}())
 
     sbig = sprint(show, Mbig; context=:limit=>true)
     @test occursin("...", sbig)
@@ -1011,25 +1100,25 @@ _is_ascii(s::AbstractString) = all(c -> Int(c) <= 0x7f, s)
     # Build a small snake lemma instance (1-vertex, so linear algebra is tiny).
     top = PM.ShortExactSequence(i, p; check=true)
 
-    Ab = MD.PModule{K}(P, [2], edge_maps)
-    Bb = MD.PModule{K}(P, [3], edge_maps)
-    Cb = MD.PModule{K}(P, [1], edge_maps)
+    Ab = MD.PModule{Kc}(P, [2], edge_maps)
+    Bb = MD.PModule{Kc}(P, [3], edge_maps)
+    Cb = MD.PModule{Kc}(P, [1], edge_maps)
 
-    ib = MD.PMorphism(Ab, Bb, [Matrix{K}([
+    ib = MD.PMorphism(Ab, Bb, [Matrix{Kc}([
         c(1) c(0);
         c(0) c(1);
         c(0) c(0)
     ])])
-    pb = MD.PMorphism(Bb, Cb, [reshape(K[0, 0, 1], 1, 3)])
+    pb = MD.PMorphism(Bb, Cb, [reshape(Kc[0, 0, 1], 1, 3)])
     bottom = PM.ShortExactSequence(ib, pb; check=true)
 
-    alpha = MD.PMorphism(A, Ab, [reshape(K[1, 0], 2, 1)])
-    beta  = MD.PMorphism(B, Bb, [Matrix{K}([
+    alpha = MD.PMorphism(A, Ab, [reshape(Kc[1, 0], 2, 1)])
+    beta  = MD.PMorphism(B, Bb, [Matrix{Kc}([
         c(1) c(0);
         c(0) c(1);
         c(0) c(0)
     ])])
-    gamma = MD.PMorphism(C, Cb, [reshape(K[0], 1, 1)])
+    gamma = MD.PMorphism(C, Cb, [reshape(Kc[0], 1, 1)])
 
     sn = PM.snake_lemma(top, bottom, alpha, beta, gamma; check=true)
 
@@ -1046,10 +1135,15 @@ end
 
 @testset "Derived-category primitives: cone triangle and LES" begin
     # C and D concentrated in degree 0, map f = 0.
-    C = CC.CochainComplex{K}(0, 0, [1], SparseMatrixCSC{K,Int}[]; labels=[["c0"]])
-    D = CC.CochainComplex{K}(0, 0, [1], SparseMatrixCSC{K,Int}[]; labels=[["d0"]])
+    C = CC.CochainComplex{Kc}(0, 0, [1], SparseMatrixCSC{Kc,Int}[]; labels=[["c0"]])
+    D = CC.CochainComplex{Kc}(0, 0, [1], SparseMatrixCSC{Kc,Int}[]; labels=[["d0"]])
+    # Compute metadata is typed; heterogeneous user labels stay at the boundary.
+    @test C.labels == [[1]]
+    @test D.labels == [[1]]
+    @test C.annotations == [Any["c0"]]
+    @test D.annotations == [Any["d0"]]
 
-    f0 = spzeros(K, 1, 1)
+    f0 = spzeros(Kc, 1, 1)
     f = CC.CochainMap(C, D, [f0]; check=true)
 
     tri = CC.mapping_cone_triangle(f)
@@ -1067,12 +1161,12 @@ end
     # Connecting map delta^{-1} : H^{-1}(Cone) -> H^0(C) should be an isomorphism in this case.
     delta = les.delta[idx]
     @test size(delta) == (1, 1)
-    @test delta[1, 1] == one(K)
+    @test delta[1, 1] == one(Kc)
 end
 
 @testset "Derived-category primitives: cone of identity is acyclic" begin
     # C: k -> k with zero differential. Cone(id_C) should be contractible, hence acyclic.
-    C = CC.CochainComplex{K}(0, 1, [1, 1], [spzeros(K, 1, 1)])
+    C = CC.CochainComplex{Kc}(0, 1, [1, 1], [spzeros(Kc, 1, 1)])
     id1 = sparse([1], [1], [c(1)], 1, 1)
     f = CC.CochainMap(C, C, [id1, id1])
     tri = CC.mapping_cone_triangle(f)
@@ -1086,20 +1180,20 @@ end
     dims = [1 1;
             1 1]
 
-    dv = Array{SparseMatrixCSC{K,Int},2}(undef, 2, 2)
-    dh = Array{SparseMatrixCSC{K,Int},2}(undef, 2, 2)
+    dv = Array{SparseMatrixCSC{Kc,Int},2}(undef, 2, 2)
+    dh = Array{SparseMatrixCSC{Kc,Int},2}(undef, 2, 2)
 
-    dv[1,1] = sparse([1],[1],[one(K)], 1, 1)
-    dv[2,1] = spzeros(K, 1, 1)
-    dv[1,2] = spzeros(K, 0, 1)
-    dv[2,2] = spzeros(K, 0, 1)
+    dv[1,1] = sparse([1],[1],[one(Kc)], 1, 1)
+    dv[2,1] = spzeros(Kc, 1, 1)
+    dv[1,2] = spzeros(Kc, 0, 1)
+    dv[2,2] = spzeros(Kc, 0, 1)
 
-    dh[1,1] = sparse([1],[1],[one(K)], 1, 1)
-    dh[1,2] = spzeros(K, 1, 1)
-    dh[2,1] = spzeros(K, 0, 1)
-    dh[2,2] = spzeros(K, 0, 1)
+    dh[1,1] = sparse([1],[1],[one(Kc)], 1, 1)
+    dh[1,2] = spzeros(Kc, 1, 1)
+    dh[2,1] = spzeros(Kc, 0, 1)
+    dh[2,2] = spzeros(Kc, 0, 1)
 
-    DC = CC.DoubleComplex{K}(0, 1, 0, 1, dims, dv, dh)
+    DC = CC.DoubleComplex{Kc}(0, 1, 0, 1, dims, dv, dh)
     ss = CC.spectral_sequence(DC; first=:vertical)
 
     @test ss.E1_dims == [0 0;
@@ -1129,16 +1223,16 @@ end
     # Double complex concentrated in b=0 with an isomorphism horizontally:
     # (0,0)=k --id--> (1,0)=k. Total complex has zero cohomology.
     dims = reshape([1, 1], 2, 1)  # a=0,1; b=0
-    dv = Array{SparseMatrixCSC{K,Int},2}(undef, 2, 1)
-    dh = Array{SparseMatrixCSC{K,Int},2}(undef, 2, 1)
+    dv = Array{SparseMatrixCSC{Kc,Int},2}(undef, 2, 1)
+    dh = Array{SparseMatrixCSC{Kc,Int},2}(undef, 2, 1)
 
-    dv[1,1] = spzeros(K, 0, 1)
-    dv[2,1] = spzeros(K, 0, 1)
+    dv[1,1] = spzeros(Kc, 0, 1)
+    dv[2,1] = spzeros(Kc, 0, 1)
 
     dh[1,1] = sparse([1], [1], [c(1)], 1, 1)  # identity (0,0)->(1,0)
-    dh[2,1] = spzeros(K, 0, 1)                # boundary
+    dh[2,1] = spzeros(Kc, 0, 1)                # boundary
 
-    DC = CC.DoubleComplex{K}(0, 1, 0, 0, dims, dv, dh)
+    DC = CC.DoubleComplex{Kc}(0, 1, 0, 0, dims, dv, dh)
     ss = CC.spectral_sequence(DC; first=:vertical)
 
     @test CC.page(ss, 1)[(0,0)] == 1
@@ -1218,9 +1312,8 @@ end
     ))
 
     DC = PM.ExtDoubleComplex(M, N; maxlen=2, threads=false)
-    @test size(DC.dims) == (3, 3)
-    @test size(DC.dv) == (3, 3)
-    @test size(DC.dh) == (3, 3)
+    @test size(DC.dims) == size(DC.dv)
+    @test size(DC.dims) == size(DC.dh)
 
     if Threads.nthreads() > 1
         DCt = PM.ExtDoubleComplex(M, N; maxlen=2, threads=true)
@@ -1270,29 +1363,29 @@ end
             1 1;
             1 0]  # rows are a=0,1,2; cols are b=0,1
 
-    dv = Array{SparseMatrixCSC{K,Int},2}(undef, 3, 2)
-    dh = Array{SparseMatrixCSC{K,Int},2}(undef, 3, 2)
+    dv = Array{SparseMatrixCSC{Kc,Int},2}(undef, 3, 2)
+    dh = Array{SparseMatrixCSC{Kc,Int},2}(undef, 3, 2)
 
     # dv blocks: dv[a,b] maps (a,b)->(a,b+1)
-    dv[1,1] = spzeros(K, 1, 0)                      # (0,0)->(0,1)
-    dv[2,1] = sparse([1],[1],[one(K)], 1, 1)        # (1,0)->(1,1) identity
-    dv[3,1] = spzeros(K, 0, 1)                      # (2,0)->(2,1) but (2,1)=0
+    dv[1,1] = spzeros(Kc, 1, 0)                      # (0,0)->(0,1)
+    dv[2,1] = sparse([1],[1],[one(Kc)], 1, 1)        # (1,0)->(1,1) identity
+    dv[3,1] = spzeros(Kc, 0, 1)                      # (2,0)->(2,1) but (2,1)=0
 
-    dv[1,2] = spzeros(K, 0, 1)                      # (0,1)->(0,2)=0
-    dv[2,2] = spzeros(K, 0, 1)                      # (1,1)->(1,2)=0
-    dv[3,2] = spzeros(K, 0, 0)                      # (2,1)->(2,2)=0
+    dv[1,2] = spzeros(Kc, 0, 1)                      # (0,1)->(0,2)=0
+    dv[2,2] = spzeros(Kc, 0, 1)                      # (1,1)->(1,2)=0
+    dv[3,2] = spzeros(Kc, 0, 0)                      # (2,1)->(2,2)=0
 
     # dh blocks: dh[a,b] maps (a,b)->(a+1,b)
-    dh[1,1] = spzeros(K, 1, 0)                      # (0,0)->(1,0)
-    dh[1,2] = sparse([1],[1],[one(K)], 1, 1)        # (0,1)->(1,1) identity
+    dh[1,1] = spzeros(Kc, 1, 0)                      # (0,0)->(1,0)
+    dh[1,2] = sparse([1],[1],[one(Kc)], 1, 1)        # (0,1)->(1,1) identity
 
-    dh[2,1] = sparse([1],[1],[one(K)], 1, 1)        # (1,0)->(2,0) identity
-    dh[2,2] = spzeros(K, 0, 1)                      # (1,1)->(2,1)=0
+    dh[2,1] = sparse([1],[1],[one(Kc)], 1, 1)        # (1,0)->(2,0) identity
+    dh[2,2] = spzeros(Kc, 0, 1)                      # (1,1)->(2,1)=0
 
-    dh[3,1] = spzeros(K, 0, 1)                      # boundary
-    dh[3,2] = spzeros(K, 0, 0)
+    dh[3,1] = spzeros(Kc, 0, 1)                      # boundary
+    dh[3,2] = spzeros(Kc, 0, 0)
 
-    DC = CC.DoubleComplex{K}(0, 2, 0, 1, dims, dv, dh)
+    DC = CC.DoubleComplex{Kc}(0, 2, 0, 1, dims, dv, dh)
     ss = CC.spectral_sequence(DC; first=:vertical)
 
     # E2 has 1-dim at (0,1) and (2,0).
@@ -1302,7 +1395,11 @@ end
     # d2: E2^{0,1} -> E2^{2,0} is nonzero (in fact iso).
     d2 = CC.differential(ss, 2, (0,1))
     @test size(d2) == (1, 1)
-    @test d2[1,1] == one(K)
+    if _is_real_field(field)
+        @test !iszero(d2[1,1])
+    else
+        @test d2[1,1] == one(Kc)
+    end
 
     # After r=3, the page is stable and equals E_infty.
     @test CC.page(ss, 3)[(0,1)] == 0
@@ -1316,16 +1413,16 @@ end
 @testset "Spectral sequence v2: filtration + edge maps on simple example" begin
     # Reuse existing example from earlier test: horizontal identity in b=0.
     dims = reshape([1, 1], 2, 1)
-    dv = Array{SparseMatrixCSC{K,Int},2}(undef, 2, 1)
-    dh = Array{SparseMatrixCSC{K,Int},2}(undef, 2, 1)
+    dv = Array{SparseMatrixCSC{Kc,Int},2}(undef, 2, 1)
+    dh = Array{SparseMatrixCSC{Kc,Int},2}(undef, 2, 1)
 
-    dv[1,1] = spzeros(K, 0, 1)
-    dv[2,1] = spzeros(K, 0, 1)
+    dv[1,1] = spzeros(Kc, 0, 1)
+    dv[2,1] = spzeros(Kc, 0, 1)
 
     dh[1,1] = sparse([1], [1], [c(1)], 1, 1)
-    dh[2,1] = spzeros(K, 0, 1)
+    dh[2,1] = spzeros(Kc, 0, 1)
 
-    DC = CC.DoubleComplex{K}(0, 1, 0, 0, dims, dv, dh)
+    DC = CC.DoubleComplex{Kc}(0, 1, 0, 0, dims, dv, dh)
     ss = CC.spectral_sequence(DC; first=:vertical)
 
     # total cohomology is zero, so filtration dims are all zero.
@@ -1344,27 +1441,27 @@ end
             1 1;
             1 0]  # rows are a=0,1,2; cols are b=0,1
 
-    dv = Array{SparseMatrixCSC{K,Int},2}(undef, 3, 2)
-    dh = Array{SparseMatrixCSC{K,Int},2}(undef, 3, 2)
+    dv = Array{SparseMatrixCSC{Kc,Int},2}(undef, 3, 2)
+    dh = Array{SparseMatrixCSC{Kc,Int},2}(undef, 3, 2)
 
-    dv[1,1] = spzeros(K, 1, 0)
-    dv[2,1] = sparse([1],[1],[one(K)], 1, 1)
-    dv[3,1] = spzeros(K, 0, 1)
+    dv[1,1] = spzeros(Kc, 1, 0)
+    dv[2,1] = sparse([1],[1],[one(Kc)], 1, 1)
+    dv[3,1] = spzeros(Kc, 0, 1)
 
-    dv[1,2] = spzeros(K, 0, 1)
-    dv[2,2] = spzeros(K, 0, 1)
-    dv[3,2] = spzeros(K, 0, 0)
+    dv[1,2] = spzeros(Kc, 0, 1)
+    dv[2,2] = spzeros(Kc, 0, 1)
+    dv[3,2] = spzeros(Kc, 0, 0)
 
-    dh[1,1] = spzeros(K, 1, 0)
-    dh[1,2] = sparse([1],[1],[one(K)], 1, 1)
+    dh[1,1] = spzeros(Kc, 1, 0)
+    dh[1,2] = sparse([1],[1],[one(Kc)], 1, 1)
 
-    dh[2,1] = sparse([1],[1],[one(K)], 1, 1)
-    dh[2,2] = spzeros(K, 0, 1)
+    dh[2,1] = sparse([1],[1],[one(Kc)], 1, 1)
+    dh[2,2] = spzeros(Kc, 0, 1)
 
-    dh[3,1] = spzeros(K, 0, 1)
-    dh[3,2] = spzeros(K, 0, 0)
+    dh[3,1] = spzeros(Kc, 0, 1)
+    dh[3,2] = spzeros(Kc, 0, 0)
 
-    DC = CC.DoubleComplex{K}(0, 2, 0, 1, dims, dv, dh)
+    DC = CC.DoubleComplex{Kc}(0, 2, 0, 1, dims, dv, dh)
     ss = CC.spectral_sequence(DC; first=:vertical)
 
     @test CC.dr_target(ss, 2, (0,1)) == (2,0)
@@ -1387,20 +1484,20 @@ end
     dims2 = [1 1;
              1 1]  # rows are a=0,1; cols are b=0,1
 
-    dv2 = Array{SparseMatrixCSC{K,Int},2}(undef, 2, 2)
-    dh2 = Array{SparseMatrixCSC{K,Int},2}(undef, 2, 2)
+    dv2 = Array{SparseMatrixCSC{Kc,Int},2}(undef, 2, 2)
+    dh2 = Array{SparseMatrixCSC{Kc,Int},2}(undef, 2, 2)
 
-    dv2[1,1] = spzeros(K, 1, 1)
-    dv2[2,1] = spzeros(K, 1, 1)
-    dv2[1,2] = spzeros(K, 0, 1)
-    dv2[2,2] = spzeros(K, 0, 1)
+    dv2[1,1] = spzeros(Kc, 1, 1)
+    dv2[2,1] = spzeros(Kc, 1, 1)
+    dv2[1,2] = spzeros(Kc, 0, 1)
+    dv2[2,2] = spzeros(Kc, 0, 1)
 
-    dh2[1,1] = spzeros(K, 1, 1)
-    dh2[1,2] = spzeros(K, 1, 1)
-    dh2[2,1] = spzeros(K, 0, 1)
-    dh2[2,2] = spzeros(K, 0, 1)
+    dh2[1,1] = spzeros(Kc, 1, 1)
+    dh2[1,2] = spzeros(Kc, 1, 1)
+    dh2[2,1] = spzeros(Kc, 0, 1)
+    dh2[2,2] = spzeros(Kc, 0, 1)
 
-    DC2 = CC.DoubleComplex{K}(0, 1, 0, 1, dims2, dv2, dh2)
+    DC2 = CC.DoubleComplex{Kc}(0, 1, 0, 1, dims2, dv2, dh2)
     ss2 = CC.spectral_sequence(DC2; first=:vertical)
 
     @test ss2.Htot_dims == [1,2,1]
@@ -1408,7 +1505,7 @@ end
     # Multiplicative structure helpers (with a toy "unit" multiplication on Tot).
     # This multiplication treats the unique basis element in Tot^0 as a unit and
     # sets all other products to zero.
-    mul = function (t1::Int, x::Vector{K}, t2::Int, y::Vector{K})
+    mul = function (t1::Int, x, t2::Int, y)
         tout = t1 + t2
         outdim = ss2.Tot.dims[tout - ss2.Tot.tmin + 1]
         if t1 == 0
@@ -1416,21 +1513,21 @@ end
         elseif t2 == 0
             return y[1] * x
         else
-            return zeros(K, outdim)
+            return zeros(Kc, outdim)
         end
     end
 
     Punit = CC.product_matrix(ss2, 1, (0,0), (0,1), mul)
     @test size(Punit) == (1, 1)
-    @test Punit[1,1] == one(K)
+    @test Punit[1,1] == one(Kc)
 
     Pzero = CC.product_matrix(ss2, 1, (0,1), (1,0), mul)
     @test size(Pzero) == (1, 1)
-    @test Pzero[1,1] == zero(K)
+    @test Pzero[1,1] == zero(Kc)
 
-    cunit = CC.product_coords(ss2, 1, (0,0), [one(K)], (0,1), [one(K)], mul)
+    cunit = CC.product_coords(ss2, 1, (0,0), [one(Kc)], (0,1), [one(Kc)], mul)
     @test size(cunit) == (1, 1)
-    @test cunit[1,1] == one(K)
+    @test cunit[1,1] == one(Kc)
 
     # On total degree t=1, there are two graded pieces: (0,1) and (1,0).
     inc01 = CC.edge_inclusion(ss2, (0,1))
@@ -1447,13 +1544,13 @@ end
     M10 = proj10 * inc10
     @test size(M01) == (1, 1)
     @test size(M10) == (1, 1)
-    @test M01[1,1] == one(K)
-    @test M10[1,1] == one(K)
+    @test M01[1,1] == one(Kc)
+    @test M10[1,1] == one(Kc)
 
     # The chosen splitting gives a direct-sum decomposition of H^1.
     Psum = inc01 * proj01 + inc10 * proj10
-    I2 = [one(K) zero(K);
-          zero(K) one(K)]
+    I2 = [one(Kc) zero(Kc);
+          zero(Kc) one(Kc)]
     @test Psum == I2
 
     spl = CC.split_total_cohomology(ss2, 1)
@@ -1514,8 +1611,8 @@ end
             d = Htot[t]
             @test size(ep.B, 1) == d
             @test size(ep.B, 2) == d
-            @test ep.Binv * ep.B == Matrix{K}(I, d, d)
-            @test ep.B * ep.Binv == Matrix{K}(I, d, d)
+            @test ep.Binv * ep.B == Matrix{Kc}(I, d, d)
+            @test ep.B * ep.Binv == Matrix{Kc}(I, d, d)
         end
     end
 end

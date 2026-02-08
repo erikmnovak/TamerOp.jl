@@ -1,10 +1,14 @@
 module Modules
 
 using SparseArrays, LinearAlgebra
-using ..CoreModules: QQ, ModuleOptions, AbstractCoeffField, coeff_type, field_from_eltype, eye, coerce
+using ..CoreModules: QQ, ModuleOptions, AbstractCoeffField, QQField, PrimeField,
+    BackendMatrix, coeff_type, field_from_eltype, eye, coerce
 import ..CoreModules: change_field
 import ..FiniteFringe
-import ..FiniteFringe: AbstractPoset, FinitePoset, cover_edges, leq, nvertices
+import ..FiniteFringe: AbstractPoset, FinitePoset, cover_edges, leq, nvertices,
+       CoverCache, PosetCache, get_cover_cache, warm_cache!, cover_cache,
+       clear_cover_cache!, _pairkey, _chosen_predecessor
+import ..FieldLinAlg
 import Base.Threads
 
 
@@ -12,159 +16,6 @@ export PModule, PMorphism,
        ModuleOptions,
        change_field,
        zero_pmodule, zero_morphism, direct_sum, direct_sum_with_maps, map_leq
-
-"""
-    CoverCache(Q)
-
-An internal cache for poset cover data and a hot-path memo used by `map_leq`.
-This cache is stored lazily on each poset object (via `PosetCache`).
-
-Thread-safety:
-
-- `succs`, `preds`, and `C` are read-only once constructed.
-- `chain_parent` is a *vector of dicts*, one dict per Julia thread, so the hot-path
-  memo writes are thread-local and do not require locks.
-"""
-# --- src/IndicatorResolutions.jl ---
-
-# In the existing struct CoverCache, add the nedges field at the end.
-struct CoverCache
-    Q::AbstractPoset
-    C::Union{BitMatrix,Nothing}
-    succs::Vector{Vector{Int}}
-    preds::Vector{Vector{Int}}
-
-    # For each thread, chain_parent[tid][pairkey(a,d)] = chosen predecessor b in preds[d]
-    # with a <= b (used to speed up witness chains in kernel/image constructions).
-    chain_parent::Vector{Dict{UInt64, Int}}
-
-    # Number of cover edges in Q (used to size edge-indexed stores).
-    nedges::Int
-end
-
-mutable struct PosetCache
-    cover::Union{Nothing,CoverCache}
-    lock::Base.ReentrantLock
-    upsets::Union{Nothing,Vector{Vector{Int}}}
-    downsets::Union{Nothing,Vector{Vector{Int}}}
-    PosetCache() = new(nothing, Base.ReentrantLock(), nothing, nothing)
-end
-
-function get_cover_cache(Q::AbstractPoset)
-    if hasproperty(Q, :cache)
-        pc = getproperty(Q, :cache)
-        if pc isa PosetCache
-            if pc.cover === nothing
-                Base.lock(pc.lock)
-                if pc.cover === nothing
-                    pc.cover = _build_cover_cache(Q)
-                end
-                Base.unlock(pc.lock)
-            end
-            return pc.cover
-        end
-    end
-    error("get_cover_cache: poset type $(typeof(Q)) does not support caching")
-end
-
-warm_cache!(Q::AbstractPoset) = (get_cover_cache(Q); Q)
-
-cover_cache(Q::AbstractPoset) = get_cover_cache(Q)
-
-"""
-    clear_cover_cache!(Q)
-
-Clear the cached cover data stored on a poset object.
-"""
-function clear_cover_cache!(Q::AbstractPoset)
-    if hasproperty(Q, :cache)
-        pc = getproperty(Q, :cache)
-        if pc isa PosetCache
-            pc.cover = nothing
-            pc.upsets = nothing
-            pc.downsets = nothing
-            return nothing
-        end
-    end
-    error("clear_cover_cache!: poset type $(typeof(Q)) does not support caching")
-end
-
-#
-
-# Packs two Int32-ish values into a UInt64 for faster Dict keys.
-# This is used both here and in the `CoverCache.chain_parent` hot-path memo.
-@inline function _pairkey(u::Int, v::Int)::UInt64
-    return (UInt64(u) << 32) | UInt64(v)
-end
-
-function _build_cover_cache(Q::AbstractPoset)
-    # Cache enough to quickly traverse the cover graph and to build edge-indexed stores.
-
-    # Cover edges in Q (stores both Ce.edges and Ce.mat).
-    Ce = cover_edges(Q)
-
-    # BitMatrix adjacency for O(1) cover checks (only for FinitePoset).
-    C = Q isa FinitePoset ? BitMatrix(Ce) : nothing
-
-    # Total number of cover edges (O(1) since CoverEdges stores Ce.edges).
-    nedges = length(Ce)
-
-    n = nvertices(Q)
-    outdeg = zeros(Int, n)
-    indeg = zeros(Int, n)
-
-    # Count degrees.
-    for (a, b) in Ce
-        outdeg[a] += 1
-        indeg[b] += 1
-    end
-
-    succs = [Vector{Int}(undef, outdeg[u]) for u in 1:n]
-    preds = [Vector{Int}(undef, indeg[u]) for u in 1:n]
-
-    outk = ones(Int, n)
-    ink = ones(Int, n)
-
-    for (a, b) in Ce
-        succs[a][outk[a]] = b
-        preds[b][ink[b]] = a
-        outk[a] += 1
-        ink[b] += 1
-    end
-
-    # Ensure sorted adjacency lists for binary-search helpers.
-    @inbounds for u in 1:n
-        sort!(succs[u])
-        sort!(preds[u])
-    end
-
-    # One dict per thread to make the hot-path memo thread-safe without locks.
-    chain_parent = [Dict{UInt64, Int}() for _ in 1:Threads.nthreads()]
-
-    return CoverCache(Q, C, succs, preds, chain_parent, nedges)
-end
-
-# Thread-local accessor for the hot-path memo dict.
-@inline function _chain_parent_dict(cc::CoverCache)::Dict{UInt64, Int}
-    return cc.chain_parent[Threads.threadid()]
-end
-
-# choose b in preds[d] with a <= b and b != a, using memo
-function _chosen_predecessor(cc::CoverCache, a::Int, d::Int)
-    k = _pairkey(a, d)
-
-    chain_parent = _chain_parent_dict(cc)
-    b = get(chain_parent, k, 0)
-
-    if b == 0
-        b = findfirst(x -> x != a && leq(cc.Q, a, x), cc.preds[d])
-        b = (b === nothing) ? a : cc.preds[d][b]
-        chain_parent[k] = b
-    end
-
-    return b
-end
-
 
 """
     CoverEdgeMapStore{K,MatT}
@@ -432,7 +283,34 @@ struct PModule{K,F<:AbstractCoeffField,MatT<:AbstractMatrix{K}}
 end
 
 # choose a storage matrix type from a user-provided mapping
-@inline function _pmodule_mat_type(::Type{K}, edge_maps) where {K}
+@inline _is_nemo_field(field::AbstractCoeffField) =
+    field isa QQField || (field isa PrimeField && field.p > 3)
+
+@inline _is_backend_dense_candidate(A::AbstractMatrix) = !(A isa SparseMatrixCSC)
+
+@inline function _should_backendize_map(field::AbstractCoeffField, A::AbstractMatrix)
+    _is_nemo_field(field) || return false
+    FieldLinAlg.have_nemo() || return false
+    _is_backend_dense_candidate(A) || return false
+    m, n = size(A)
+    return m * n >= FieldLinAlg.NEMO_THRESHOLD[]
+end
+
+function _should_backendize_maps(field::AbstractCoeffField, edge_maps)::Bool
+    _is_nemo_field(field) || return false
+    FieldLinAlg.have_nemo() || return false
+    for (_, A) in edge_maps
+        if A isa AbstractMatrix && _should_backendize_map(field, A)
+            return true
+        end
+    end
+    return false
+end
+
+@inline function _pmodule_mat_type(::Type{K}, edge_maps, field::AbstractCoeffField) where {K}
+    if _should_backendize_maps(field, edge_maps)
+        return BackendMatrix{K}
+    end
     V = Base.valtype(edge_maps)
     if V <: AbstractMatrix{K} && isconcretetype(V)
         return V
@@ -455,7 +333,7 @@ function PModule{K}(Q::AbstractPoset, dims::Vector{Int}, edge_maps;
         check_sizes = opts.check_sizes
     end
     coeff_type(field) == K || error("PModule: coeff_type(field) != K")
-    MatT = _pmodule_mat_type(K, edge_maps)
+    MatT = _pmodule_mat_type(K, edge_maps, field)
     store = CoverEdgeMapStore{K,MatT}(Q, dims, edge_maps; check_sizes=check_sizes)
     return PModule{K, typeof(field), MatT}(field, Q, dims, store)
 end
@@ -470,6 +348,14 @@ function PModule{K}(Q::AbstractPoset, dims::Vector{Int}, store::CoverEdgeMapStor
         check_sizes = opts.check_sizes
     end
     cc = get_cover_cache(Q)
+    if MatT == Matrix{K} && _should_backendize_maps(field, store)
+        dense_edge = Dict{Tuple{Int,Int}, Matrix{K}}()
+        sizehint!(dense_edge, length(store))
+        for ((u, v), A) in store
+            dense_edge[(u, v)] = Matrix{K}(A)
+        end
+        return PModule{K}(Q, dims, dense_edge; check_sizes=check_sizes, field=field)
+    end
     if store.preds === cc.preds && store.succs === cc.succs
         coeff_type(field) == K || error("PModule: coeff_type(field) != K")
         return PModule{K, typeof(field), MatT}(field, Q, dims, store)
@@ -555,19 +441,77 @@ function change_field(M::PModule{K}, field::AbstractCoeffField) where {K}
 end
 
 "Vertexwise morphism of P-modules (components are M_i \to N_i)."
-struct PMorphism{K, F<:AbstractCoeffField}
+struct PMorphism{K, F<:AbstractCoeffField, MatT<:AbstractMatrix{K}}
     dom::PModule{K,F}
     cod::PModule{K,F}
-    comps::Vector{Matrix{K}}   # comps[i] :: Matrix{K} of size cod.dims[i] \times dom.dims[i]
+    comps::Vector{MatT}   # comps[i] has size cod.dims[i] x dom.dims[i]
+    function PMorphism{K,F,MatT}(dom::PModule{K,F}, cod::PModule{K,F},
+                                 comps::Vector{MatT}) where {K,F<:AbstractCoeffField,MatT<:AbstractMatrix{K}}
+        return new{K,F,MatT}(dom, cod, comps)
+    end
 end
 
-function PMorphism{K}(dom::PModule{K,F}, cod::PModule{K,F}, comps::Vector{Matrix{K}}) where {K,F}
+@inline function _morphism_mat_type(::Type{K}, comps, field::AbstractCoeffField) where {K}
+    if _is_nemo_field(field) && FieldLinAlg.have_nemo()
+        for A in comps
+            if A isa AbstractMatrix{K} && _should_backendize_map(field, A)
+                return BackendMatrix{K}
+            end
+        end
+    end
+    T = Base.eltype(comps)
+    if T <: AbstractMatrix{K} && isconcretetype(T)
+        return T
+    end
+    return Matrix{K}
+end
+
+function _build_p_morphism(dom::PModule{K,F}, cod::PModule{K,F},
+                           comps::AbstractVector{<:AbstractMatrix{K}}) where {K,F}
     dom.field == cod.field || error("PMorphism: field mismatch")
-    return PMorphism{K,F}(dom, cod, comps)
+    dom.Q === cod.Q || error("PMorphism: domain/codomain posets differ")
+    n = nvertices(dom.Q)
+    length(comps) == n || error("PMorphism: expected $n vertex components, got $(length(comps))")
+
+    MatT = _morphism_mat_type(K, comps, dom.field)
+    cvec = Vector{MatT}(undef, n)
+    @inbounds for i in 1:n
+        A = comps[i]
+        if size(A, 1) != cod.dims[i] || size(A, 2) != dom.dims[i]
+            error("PMorphism: component $i has size $(size(A)), expected ($(cod.dims[i]),$(dom.dims[i]))")
+        end
+        cvec[i] = convert(MatT, A)
+    end
+    return PMorphism{K,F,MatT}(dom, cod, cvec)
 end
 
-PMorphism(dom::PModule{K,F}, cod::PModule{K,F}, comps::Vector{Matrix{K}}) where {K,F} =
-    PMorphism{K,F}(dom, cod, comps)
+function PMorphism{K}(dom::PModule{K,F}, cod::PModule{K,F},
+                      comps::AbstractVector{<:AbstractMatrix{K}}) where {K,F}
+    return _build_p_morphism(dom, cod, comps)
+end
+
+function PMorphism{K,F}(dom::PModule{K,F}, cod::PModule{K,F},
+                        comps::AbstractVector{<:AbstractMatrix{K}}) where {K,F}
+    return _build_p_morphism(dom, cod, comps)
+end
+
+function PMorphism{K}(dom::PModule{K,F}, cod::PModule{K,F},
+                      comps::Vector{MatT}) where {K,F,MatT<:AbstractMatrix{K}}
+    return _build_p_morphism(dom, cod, comps)
+end
+
+function PMorphism{K,F}(dom::PModule{K,F}, cod::PModule{K,F},
+                        comps::Vector{MatT}) where {K,F,MatT<:AbstractMatrix{K}}
+    return _build_p_morphism(dom, cod, comps)
+end
+
+PMorphism(dom::PModule{K,F}, cod::PModule{K,F},
+          comps::AbstractVector{<:AbstractMatrix{K}}) where {K,F} =
+    _build_p_morphism(dom, cod, comps)
+
+PMorphism(dom::PModule{K,F}, cod::PModule{K,F},
+          comps::Vector{MatT}) where {K,F,MatT<:AbstractMatrix{K}} =
+    _build_p_morphism(dom, cod, comps)
 
 """
     change_field(f, field)
@@ -772,7 +716,7 @@ end
         return M.edge_maps[u, v]
     end
     w = _chosen_predecessor(cc, u, v)
-    return M.edge_maps[w, v] * _map_leq_cover_chain(M, u, w, cc)
+    return FieldLinAlg._matmul(M.edge_maps[w, v], _map_leq_cover_chain(M, u, w, cc))
 end
 
 """

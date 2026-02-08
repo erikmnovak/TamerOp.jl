@@ -298,6 +298,21 @@ function _in_hpoly(h::HPoly, x::AbstractVector)
     return true
 end
 
+function _in_hpoly(h::HPoly, x::NTuple{N,<:Real}) where {N}
+    N == h.n || error("dimension mismatch in _in_hpoly")
+    m = size(h.A, 1)
+    for i in 1:m
+        s = zero(QQ)
+        @inbounds for j in 1:h.n
+            s += h.A[i,j] * _toQQ(x[j])
+        end
+        if s > h.b[i]
+            return false
+        end
+    end
+    return true
+end
+
 # For strict (>=) constraints we store them as (-a) * x <= -(b + strict_eps).
 # For closure computations we want (-a) * x <= -b, i.e. relax those rows by adding strict_eps.
 function _relaxed_b(h::HPoly)
@@ -411,8 +426,9 @@ function _internal_build_poly(in_parts::Vector{HPoly},
     try
         V = Polyhedra.vrep(P)
         pts = Polyhedra.points(V)
-        if length(pts) > 0
-            witness = Vector{Float64}(pts[1])
+        firstpt = iterate(pts)
+        if firstpt !== nothing
+            witness = Vector{Float64}(firstpt[1])
         end
     catch
         witness = nothing
@@ -432,7 +448,7 @@ function enumerate_feasible_regions(Ups::Vector{PLUpset}, Downs::Vector{PLDownse
     r = length(Downs)
     n = (m > 0 ? Ups[1].U.n : (r > 0 ? Downs[1].D.n : 0))
 
-    results = Vector{Tuple{BitVector,BitVector,HPoly,Vector{Float64}}}()
+    results = Vector{Tuple{BitVector,BitVector,HPoly,Tuple}}()
 
     # Helper: all ways to force OUTSIDE a union of HPolys:
     # pick one facet inequality to violate for each part.
@@ -539,7 +555,7 @@ function enumerate_feasible_regions(Ups::Vector{PLUpset}, Downs::Vector{PLDownse
             for out_hs in out_choices
                 hp, wit, isemp = _internal_build_poly(iparts, out_hs; strict_eps=strict_eps)
                 if !isemp
-                    push!(results, (BitVector(y), BitVector(z), hp, wit === nothing ? Float64[] : wit))
+                    push!(results, (BitVector(y), BitVector(z), hp, wit === nothing ? () : Tuple(wit)))
                     if length(results) >= max_regions
                         break
                     end
@@ -558,7 +574,7 @@ function enumerate_feasible_regions(Ups::Vector{PLUpset}, Downs::Vector{PLDownse
 
     # Collapse equivalent (y,z) signatures. Use tuple-of-bools keys (content-hashable).
     seen = Dict{Tuple{Tuple,Tuple},Int}()
-    collapsed = Vector{Tuple{BitVector,BitVector,HPoly,Vector{Float64}}}()
+    collapsed = Vector{Tuple{BitVector,BitVector,HPoly,Tuple}}()
     for rec in results
         key = (Tuple(rec[1]), Tuple(rec[2]))
         if !haskey(seen, key)
@@ -576,7 +592,7 @@ struct PLEncodingMap <: AbstractPLikeEncodingMap
     sig_y::Vector{BitVector}
     sig_z::Vector{BitVector}
     regions::Vector{HPoly}
-    witnesses::Vector{Vector{Float64}}
+    witnesses::Vector{Tuple}
 end
 
 # --- Core encoding-map interface ------------------------------------------------
@@ -587,6 +603,15 @@ representatives(pi::PLEncodingMap) = pi.witnesses
 # Locate by scanning stored region reps (works as long as each signature has a nonempty rep).
 function locate(pi::PLEncodingMap, x::AbstractVector)
     length(x) == pi.n || error("locate: dimension mismatch")
+    for (idx, hp) in enumerate(pi.regions)
+        if _in_hpoly(hp, x)
+            return idx
+        end
+    end
+    return 0
+end
+
+function locate(pi::PLEncodingMap, x::NTuple{N,<:Real}) where {N}
     for (idx, hp) in enumerate(pi.regions)
         if _in_hpoly(hp, x)
             return idx
@@ -2632,7 +2657,7 @@ function _uptight_from_signatures(sig_y::Vector{BitVector}, sig_z::Vector{BitVec
     for k in 1:rN, i in 1:rN, j in 1:rN
         leq[i,j] = leq[i,j] || (leq[i,k] && leq[k,j])
     end
-    return FiniteFringe.FinitePoset(leq)
+    return FiniteFringe.FinitePoset(leq; check=false)
 end
 
 function _images_on_P(P::AbstractPoset,
@@ -2714,15 +2739,16 @@ function encode_from_PL_fringe(Ups::Vector{PLUpset},
         Dhat = FiniteFringe.Downset[FiniteFringe.downset_closure(P, BitVector([false])) for _ in 1:length(Downs)]
         Phi0 = zeros(QQ, length(Downs), length(Ups))
         H = FiniteFringe.FringeModule{QQ}(P, Uhat, Dhat, Phi0)
-        pi = PLEncodingMap((length(Ups) > 0 ? Ups[1].U.n : (length(Downs) > 0 ? Downs[1].D.n : 0)),
-                           BitVector[], BitVector[], HPoly[], Vector{Vector{Float64}}())
+        n0 = (length(Ups) > 0 ? Ups[1].U.n : (length(Downs) > 0 ? Downs[1].D.n : 0))
+        pi = PLEncodingMap(n0, BitVector[], BitVector[], HPoly[], Tuple[])
         return P, H, pi
     end
 
     sigy = Vector{BitVector}(undef, length(feasible))
     sigz = Vector{BitVector}(undef, length(feasible))
     regs = Vector{HPoly}(undef, length(feasible))
-    wits = Vector{Vector{Float64}}(undef, length(feasible))
+    n = feasible[1][3].n
+    wits = Vector{Tuple}(undef, length(feasible))
     for (k, rec) in enumerate(feasible)
         sigy[k] = rec[1]
         sigz[k] = rec[2]
@@ -2744,7 +2770,7 @@ function encode_from_PL_fringe(Ups::Vector{PLUpset},
     Phi = _monomialize_phi(_toQQ_mat(Phi_in), Uhat, Dhat)
     H = FiniteFringe.FringeModule{QQ}(P, Uhat, Dhat, Phi)
 
-    pi = PLEncodingMap(regs[1].n, sigy, sigz, regs, wits)
+    pi = PLEncodingMap(n, sigy, sigz, regs, wits)
     return P, H, pi
 end
 
@@ -2851,14 +2877,15 @@ function encode_from_PL_fringes(Fs::AbstractVector{<:PLFringe}, opts::EncodingOp
             Hs[k] = FiniteFringe.FringeModule{QQ}(P, Uhat, Dhat, Phi0)
         end
 
-        pi = PLEncodingMap(n, BitVector[], BitVector[], HPoly[], Vector{Vector{Float64}}())
+        pi = PLEncodingMap(n, BitVector[], BitVector[], HPoly[], Tuple[])
         return P, Hs, pi
     end
 
     sigy = Vector{BitVector}(undef, length(feasible))
     sigz = Vector{BitVector}(undef, length(feasible))
     regs = Vector{HPoly}(undef, length(feasible))
-    wits = Vector{Vector{Float64}}(undef, length(feasible))
+    nfeas = feasible[1][3].n
+    wits = Vector{Tuple}(undef, length(feasible))
     for (k, rec) in enumerate(feasible)
         sigy[k] = rec[1]
         sigz[k] = rec[2]
@@ -2873,7 +2900,7 @@ function encode_from_PL_fringes(Fs::AbstractVector{<:PLFringe}, opts::EncodingOp
     else
         error("encode_from_PL_fringes: poset_kind must be :signature or :dense")
     end
-    pi = PLEncodingMap(regs[1].n, sigy, sigz, regs, wits)
+    pi = PLEncodingMap(nfeas, sigy, sigz, regs, wits)
 
     Hs = Vector{FiniteFringe.FringeModule{QQ}}(undef, length(Fs))
     for (k, F) in enumerate(Fs)

@@ -38,7 +38,7 @@ if !isdefined(@__MODULE__, :one_by_one_fringe)
     Fiber at q is 1-dimensional iff q lies in U intersect D.
     """
     function one_by_one_fringe(P::FF.FinitePoset, U::FF.Upset, D::FF.Downset;
-                               field::AbstractCoeffField=CM.QQField())
+                               field::CM.AbstractCoeffField=CM.QQField())
         K = CM.coeff_type(field)
         phi = spzeros(K, 1, 1)
         phi[1, 1] = CM.coerce(field, 1)
@@ -55,7 +55,7 @@ end
 
 The simple module supported only at vertex v (dimension 1 at v, 0 elsewhere).
 """
-function simple_pmodule(P::FF.FinitePoset, v::Int; field::AbstractCoeffField=CM.QQField())
+function simple_pmodule(P::FF.FinitePoset, v::Int; field::CM.AbstractCoeffField=CM.QQField())
     Hv = one_by_one_fringe(P, FF.principal_upset(P, v), FF.principal_downset(P, v); field=field)
     return IR.pmodule_from_fringe(Hv)
 end
@@ -66,7 +66,7 @@ end
 The interval module supported on {q : a <= q <= b}, built via a 1x1 fringe.
 Requires a <= b in the poset.
 """
-function interval_pmodule(P::FF.FinitePoset, a::Int, b::Int; field::AbstractCoeffField=CM.QQField())
+function interval_pmodule(P::FF.FinitePoset, a::Int, b::Int; field::CM.AbstractCoeffField=CM.QQField())
     @assert FF.leq(P, a, b)
     Hab = one_by_one_fringe(P, FF.principal_upset(P, a), FF.principal_downset(P, b); field=field)
     return IR.pmodule_from_fringe(Hab)

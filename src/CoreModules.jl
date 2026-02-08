@@ -63,6 +63,7 @@ Fp(p::Integer) = PrimeField(p)
 struct FpElem{p} <: Integer
     val::Int
     function FpElem{p}(x::Integer) where {p}
+        x isa FpElem{p} && return x
         new{p}(mod(x, p))
     end
 end
@@ -75,6 +76,7 @@ Base.conj(x::FpElem{p}) where {p} = x
 Base.hash(x::FpElem{p}, h::UInt) where {p} = hash(x.val, h)
 
 Base.convert(::Type{FpElem{p}}, x::Integer) where {p} = FpElem{p}(x)
+Base.convert(::Type{FpElem{p}}, x::FpElem{p}) where {p} = x
 Base.promote_rule(::Type{FpElem{p}}, ::Type{<:Integer}) where {p} = FpElem{p}
 
 Base.:+(a::FpElem{p}, b::FpElem{p}) where {p} = FpElem{p}(a.val + b.val)
@@ -112,6 +114,7 @@ coerce(::QQField, x::Integer) = QQ(x)
 coerce(::QQField, x::Rational) = QQ(x)
 coerce(::QQField, x::AbstractFloat) = rationalize(BigInt, x)
 coerce(::QQField, x::QQ) = x
+coerce(::QQField, x::FpElem{p}) where {p} = QQ(x.val)
 
 coerce(::RealField{T}, x::Integer) where {T<:AbstractFloat} = T(x)
 coerce(::RealField{T}, x::Rational) where {T<:AbstractFloat} =
@@ -188,21 +191,80 @@ function rand(F::AbstractCoeffField, m::Integer, n::Integer; density::Real=1.0)
 
     z = zero(K)
     @inbounds for j in 1:n, i in 1:m
-        A[i, j] = (rand() <= density) ? _rand_scalar(F) : z
+        A[i, j] = (Base.rand() <= density) ? _rand_scalar(F) : z
     end
     return A
 end
 
-_rand_scalar(::QQField) = QQ(rand(-5:5))
-_rand_scalar(::RealField{T}) where {T<:AbstractFloat} = rand(T)
-_rand_scalar(F::PrimeField) = FpElem{F.p}(rand(0:F.p-1))
+_rand_scalar(::QQField) = QQ(Base.rand(-5:5))
+_rand_scalar(::RealField{T}) where {T<:AbstractFloat} = Base.rand(T)
+_rand_scalar(F::PrimeField) = FpElem{F.p}(Base.rand(0:F.p-1))
 
 end # module CoeffFields
 
 using .CoeffFields: AbstractCoeffField, QQField, RealField, PrimeField,
-    F2, F3, Fp, coeff_type, coerce, FpElem, field_from_eltype, eye
+    F2, F3, Fp, coeff_type, coerce, FpElem, field_from_eltype,
+    eye, zeros, ones, rand
 export AbstractCoeffField, QQField, RealField, PrimeField,
-    F2, F3, Fp, coeff_type, coerce, FpElem, field_from_eltype, eye
+    F2, F3, Fp, coeff_type, coerce, FpElem, field_from_eltype,
+    eye, zeros, ones, rand
+
+"""
+    BackendMatrix{K}
+
+Dense matrix wrapper that can carry an optional backend-native payload
+(e.g. a Nemo matrix) to avoid repeated conversion in hot paths.
+"""
+mutable struct BackendMatrix{K} <: AbstractMatrix{K}
+    data::Matrix{K}
+    backend::Symbol
+    payload::Any
+    function BackendMatrix{K}(data::Matrix{K};
+                              backend::Symbol=:nemo,
+                              payload::Any=nothing) where {K}
+        new{K}(data, backend, payload)
+    end
+end
+
+BackendMatrix(A::AbstractMatrix{K}; backend::Symbol=:nemo, payload::Any=nothing) where {K} =
+    BackendMatrix{K}(Matrix{K}(A); backend=backend, payload=payload)
+
+Base.size(A::BackendMatrix) = size(A.data)
+Base.axes(A::BackendMatrix) = axes(A.data)
+Base.IndexStyle(::Type{<:BackendMatrix}) = IndexCartesian()
+Base.getindex(A::BackendMatrix, i::Int, j::Int) = @inbounds A.data[i, j]
+function Base.setindex!(A::BackendMatrix, v, i::Int, j::Int)
+    @inbounds A.data[i, j] = v
+    # Keep cached backend payload coherent with dense storage.
+    A.payload = nothing
+    return v
+end
+Base.parent(A::BackendMatrix) = A.data
+Base.Matrix(A::BackendMatrix{K}) where {K} = copy(A.data)
+Base.copy(A::BackendMatrix{K}) where {K} =
+    BackendMatrix{K}(copy(A.data); backend=A.backend, payload=nothing)
+Base.convert(::Type{Matrix{K}}, A::BackendMatrix{K}) where {K} = copy(A.data)
+Base.convert(::Type{BackendMatrix{K}}, A::AbstractMatrix{K}) where {K} =
+    BackendMatrix{K}(Matrix{K}(A); backend=:nemo, payload=nothing)
+
+Base.:*(A::BackendMatrix{K}, B::AbstractMatrix{K}) where {K} = A.data * B
+Base.:*(A::AbstractMatrix{K}, B::BackendMatrix{K}) where {K} = A * B.data
+Base.:*(A::BackendMatrix{K}, B::BackendMatrix{K}) where {K} = A.data * B.data
+
+@inline unwrap_backend_matrix(A::BackendMatrix) = A.data
+@inline backend_kind(A::BackendMatrix) = A.backend
+@inline backend_payload(A::BackendMatrix) = A.payload
+@inline function set_backend_payload!(A::BackendMatrix, payload)
+    A.payload = payload
+    return A
+end
+@inline function clear_backend_payload!(A::BackendMatrix)
+    A.payload = nothing
+    return A
+end
+
+export BackendMatrix, unwrap_backend_matrix, backend_kind, backend_payload,
+       set_backend_payload!, clear_backend_payload!
 
 """
     change_field(x, field)
@@ -417,6 +479,212 @@ const PLikeEncodingMap = AbstractPLikeEncodingMap
 export AbstractPLikeEncodingMap, PLikeEncodingMap
 
 # -----------------------------------------------------------------------------
+# Lightweight ingestion types (shared across Workflow + Serialization)
+# -----------------------------------------------------------------------------
+
+"""
+    PointCloud(points)
+
+Minimal point cloud container. `points` is an n-by-d matrix (rows are points),
+or a vector of coordinate vectors.
+"""
+struct PointCloud{T}
+    points::Vector{Vector{T}}
+end
+
+function PointCloud(points::AbstractMatrix{T}) where {T}
+    pts = [Vector{T}(points[i, :]) for i in 1:size(points, 1)]
+    return PointCloud{T}(pts)
+end
+
+PointCloud(points::AbstractVector{<:AbstractVector{T}}) where {T} =
+    PointCloud{T}([Vector{T}(p) for p in points])
+
+"""
+    ImageNd(data)
+
+Minimal N-dim image/scalar field container. `data` is an N-dim array.
+"""
+struct ImageNd{T,N}
+    data::Array{T,N}
+end
+
+ImageNd(data::Array{T,N}) where {T,N} = ImageNd{T,N}(data)
+
+"""
+    GraphData(n, edges; coords=nothing, weights=nothing)
+
+Minimal graph container. `edges` is a vector of (u,v) pairs (1-based).
+Optional `coords` can store embeddings, and `weights` can store edge weights.
+"""
+struct GraphData{T}
+    n::Int
+    edges::Vector{Tuple{Int,Int}}
+    coords::Union{Nothing, Vector{Vector{T}}}
+    weights::Union{Nothing, Vector{T}}
+end
+
+function GraphData(n::Integer, edges::AbstractVector{<:Tuple{Int,Int}};
+                   coords::Union{Nothing, AbstractVector{<:AbstractVector}}=nothing,
+                   weights::Union{Nothing, AbstractVector}=nothing,
+                   T::Type=Float64)
+    coords_vec = coords === nothing ? nothing : [Vector{T}(c) for c in coords]
+    weights_vec = weights === nothing ? nothing : Vector{T}(weights)
+    return GraphData{T}(Int(n), Vector{Tuple{Int,Int}}(edges), coords_vec, weights_vec)
+end
+
+"""
+    EmbeddedPlanarGraph2D(vertices, edges; polylines=nothing, bbox=nothing)
+
+Embedded planar graph container for 2D applications (e.g. wing veins).
+`vertices` is a vector of 2D coordinate vectors, `edges` are vertex index pairs.
+`polylines` can store per-edge piecewise-linear geometry.
+"""
+struct EmbeddedPlanarGraph2D{T}
+    vertices::Vector{Vector{T}}
+    edges::Vector{Tuple{Int,Int}}
+    polylines::Union{Nothing, Vector{Vector{Vector{T}}}}
+    bbox::Union{Nothing, NTuple{4,T}}
+end
+
+function EmbeddedPlanarGraph2D(vertices::AbstractVector{<:AbstractVector{T}},
+                               edges::AbstractVector{<:Tuple{Int,Int}};
+                               polylines::Union{Nothing, AbstractVector}=nothing,
+                               bbox::Union{Nothing, NTuple{4,T}}=nothing) where {T}
+    verts = [Vector{T}(v) for v in vertices]
+    polys = polylines === nothing ? nothing : [ [Vector{T}(p) for p in poly] for poly in polylines ]
+    return EmbeddedPlanarGraph2D{T}(verts, Vector{Tuple{Int,Int}}(edges), polys, bbox)
+end
+
+"""
+    GradedComplex(cells_by_dim, boundaries, grades; cell_dims=nothing)
+
+Generic graded cell complex container ("escape hatch").
+"""
+struct GradedComplex{N,T}
+    cells_by_dim::Vector{Vector{Int}}
+    boundaries::Vector{SparseMatrixCSC{Int,Int}}
+    grades::Vector{NTuple{N,T}}
+    cell_dims::Vector{Int}
+end
+
+function _cell_dims_from_cells(cells_by_dim::Vector{Vector{Int}})
+    out = Int[]
+    for (d, cells) in enumerate(cells_by_dim)
+        for _ in cells
+            push!(out, d - 1)
+        end
+    end
+    return out
+end
+
+function GradedComplex(cells_by_dim::Vector{Vector{Int}},
+                       boundaries::Vector{SparseMatrixCSC{Int,Int}},
+                       grades::Vector{<:AbstractVector{T}};
+                       cell_dims::Union{Nothing,Vector{Int}}=nothing) where {T}
+    total = sum(length.(cells_by_dim))
+    if cell_dims === nothing
+        if length(grades) == total
+            cell_dims = _cell_dims_from_cells(cells_by_dim)
+        else
+            cell_dims = fill(0, length(grades))
+        end
+    end
+    N = length(grades[1])
+    ng = Vector{NTuple{N,T}}(undef, length(grades))
+    for i in eachindex(grades)
+        length(grades[i]) == N || error("GradedComplex: grade $i has wrong length.")
+        ng[i] = ntuple(j -> T(grades[i][j]), N)
+    end
+    return GradedComplex{N,T}(cells_by_dim, boundaries, ng, cell_dims)
+end
+
+function GradedComplex(cells_by_dim::Vector{Vector{Int}},
+                       boundaries::Vector{SparseMatrixCSC{Int,Int}},
+                       grades::Vector{<:Tuple};
+                       cell_dims::Union{Nothing,Vector{Int}}=nothing)
+    total = sum(length.(cells_by_dim))
+    if cell_dims === nothing
+        if length(grades) == total
+            cell_dims = _cell_dims_from_cells(cells_by_dim)
+        else
+            cell_dims = fill(0, length(grades))
+        end
+    end
+    N = length(grades[1])
+    T = eltype(grades[1])
+    ng = Vector{NTuple{N,T}}(undef, length(grades))
+    for i in eachindex(grades)
+        length(grades[i]) == N || error("GradedComplex: grade $i has wrong length.")
+        ng[i] = ntuple(j -> T(grades[i][j]), N)
+    end
+    return GradedComplex{N,T}(cells_by_dim, boundaries, ng, cell_dims)
+end
+
+"""
+    FiltrationSpec(; kind, params...)
+
+Lightweight filtration specification container. Stores a `kind` symbol and a
+`params` named tuple.
+"""
+struct FiltrationSpec
+    kind::Symbol
+    params::NamedTuple
+end
+
+FiltrationSpec(; kind::Symbol, params...) = FiltrationSpec(kind, NamedTuple(params))
+
+"""
+    GridEncodingMap(P, coords; orientation=ntuple(_->1, N))
+
+Axis-aligned grid encoding map for a product-of-chains poset.
+"""
+struct GridEncodingMap{N,T,P} <: AbstractPLikeEncodingMap
+    P::P
+    coords::NTuple{N,Vector{T}}
+    orientation::NTuple{N,Int}
+    sizes::NTuple{N,Int}
+    strides::NTuple{N,Int}
+end
+
+function _grid_strides(sizes::NTuple{N,Int}) where {N}
+    strides = Vector{Int}(undef, N)
+    strides[1] = 1
+    for i in 2:N
+        strides[i] = strides[i-1] * sizes[i-1]
+    end
+    return ntuple(i -> strides[i], N)
+end
+
+"""
+    grid_index(idxs, sizes) -> Int
+
+Convert an N-tuple of 1-based indices into a linear index using mixed radix
+ordering with the first axis varying fastest.
+"""
+function grid_index(idxs::NTuple{N,Int}, sizes::NTuple{N,Int}) where {N}
+    strides = _grid_strides(sizes)
+    lin = 1
+    for i in 1:N
+        lin += (idxs[i] - 1) * strides[i]
+    end
+    return lin
+end
+
+function GridEncodingMap(P, coords::NTuple{N,Vector{T}};
+                         orientation::NTuple{N,Int}=ntuple(_ -> 1, N)) where {N,T}
+    sizes = ntuple(i -> length(coords[i]), N)
+    for i in 1:N
+        o = orientation[i]
+        (o == 1 || o == -1) || error("GridEncodingMap: orientation[$i] must be +1 or -1.")
+    end
+    return GridEncodingMap{N,T,typeof(P)}(P, coords, orientation, sizes, _grid_strides(sizes))
+end
+
+export PointCloud, ImageNd, GraphData, EmbeddedPlanarGraph2D, GradedComplex,
+       FiltrationSpec, GridEncodingMap, grid_index
+
+# -----------------------------------------------------------------------------
 # Compiled encoding wrappers (primary type for repeated queries)
 # -----------------------------------------------------------------------------
 
@@ -502,6 +770,7 @@ function locate(pi::AbstractPLikeEncodingMap, x::NTuple{N,<:Real}) where {N}
 end
 
 locate(enc::CompiledEncoding, x) = locate(enc.pi, x)
+locate(enc::CompiledEncoding, x::NTuple{N,<:Real}) where {N} = locate(enc.pi, x)
 
 """
     dimension(pi) -> Int
@@ -693,6 +962,232 @@ end
 ModuleOptions(; check_sizes::Bool=true, cache=nothing) =
     ModuleOptions(check_sizes, cache)
 
+"""
+    ResolutionCache()
+
+Thread-safe cache object for repeated resolution-oriented computations.
+
+Stored entries:
+- projective resolutions, keyed by `(objectid(module), maxlen)`
+- injective resolutions, keyed by `(objectid(module), maxlen)`
+- indicator resolution tuples, keyed by `(objectid(HM), objectid(HN), maxlen_or_neg1)`
+"""
+mutable struct ResolutionCache
+    lock::Base.ReentrantLock
+    projective::Dict{Tuple{UInt,Int},Any}
+    injective::Dict{Tuple{UInt,Int},Any}
+    indicator::Dict{Tuple{UInt,UInt,Int},Any}
+    # Thread-sharded memo stores for lock-free fast-path lookups/inserts.
+    projective_shards::Vector{Dict{Tuple{UInt,Int},Any}}
+    injective_shards::Vector{Dict{Tuple{UInt,Int},Any}}
+    indicator_shards::Vector{Dict{Tuple{UInt,UInt,Int},Any}}
+end
+
+function ResolutionCache()
+    nshards = max(1, Base.Threads.maxthreadid())
+    return ResolutionCache(
+        Base.ReentrantLock(),
+        Dict{Tuple{UInt,Int},Any}(),
+        Dict{Tuple{UInt,Int},Any}(),
+        Dict{Tuple{UInt,UInt,Int},Any}(),
+        [Dict{Tuple{UInt,Int},Any}() for _ in 1:nshards],
+        [Dict{Tuple{UInt,Int},Any}() for _ in 1:nshards],
+        [Dict{Tuple{UInt,UInt,Int},Any}() for _ in 1:nshards],
+    )
+end
+
+function clear_resolution_cache!(cache::ResolutionCache)
+    Base.lock(cache.lock)
+    empty!(cache.projective)
+    empty!(cache.injective)
+    empty!(cache.indicator)
+    for d in cache.projective_shards
+        empty!(d)
+    end
+    for d in cache.injective_shards
+        empty!(d)
+    end
+    for d in cache.indicator_shards
+        empty!(d)
+    end
+    Base.unlock(cache.lock)
+    return nothing
+end
+
+"""
+    EncodingCache()
+
+Per-encoding cache bucket for geometry/poset-derived artifacts.
+
+Intended contents:
+- `posets`: derived encoding posets (e.g. axes/orientation -> poset)
+- `cubical`: cubical cell structures keyed by grid size
+- `region_posets`: reconstructed region posets keyed by signature identities
+"""
+mutable struct EncodingCache
+    lock::Base.ReentrantLock
+    posets::Dict{Any,Any}
+    cubical::Dict{Any,Any}
+    region_posets::Dict{Tuple{UInt,UInt,Symbol},Any}
+end
+
+EncodingCache() = EncodingCache(Base.ReentrantLock(),
+                                Dict{Any,Any}(),
+                                Dict{Any,Any}(),
+                                Dict{Tuple{UInt,UInt,Symbol},Any}())
+
+function clear_encoding_cache!(cache::EncodingCache)
+    Base.lock(cache.lock)
+    try
+        empty!(cache.posets)
+        empty!(cache.cubical)
+        empty!(cache.region_posets)
+    finally
+        Base.unlock(cache.lock)
+    end
+    return nothing
+end
+
+"""
+    ModuleCache(module_id, field_key)
+
+Module-scoped cache bucket keyed by module identity + field identity.
+"""
+mutable struct ModuleCache
+    module_id::UInt
+    field_key::UInt
+    resolution::ResolutionCache
+    payload::Dict{Symbol,Any}
+end
+
+ModuleCache(module_id::UInt, field_key::UInt) =
+    ModuleCache(module_id, field_key, ResolutionCache(), Dict{Symbol,Any}())
+
+function clear_module_cache!(cache::ModuleCache)
+    clear_resolution_cache!(cache.resolution)
+    empty!(cache.payload)
+    return nothing
+end
+
+"""
+    SessionCache()
+
+Cross-query cache root with explicit lifetime controlled by the caller.
+
+Hierarchy:
+- SessionCache (long-lived, workflow-level)
+  - EncodingCache buckets keyed by poset identity
+  - ModuleCache buckets keyed by `(objectid(module), field_cache_key(module.field))`
+"""
+mutable struct SessionCache
+    lock::Base.ReentrantLock
+    encoding::Dict{UInt,EncodingCache}
+    modules::Dict{Tuple{UInt,UInt},ModuleCache}
+    resolution::ResolutionCache
+    hom_system::Any
+    product_dense::IdDict{Any,Any}
+    product_obj::IdDict{Any,Any}
+end
+
+SessionCache() = SessionCache(Base.ReentrantLock(),
+                              Dict{UInt,EncodingCache}(),
+                              Dict{Tuple{UInt,UInt},ModuleCache}(),
+                              ResolutionCache(),
+                              nothing,
+                              IdDict{Any,Any}(),
+                              IdDict{Any,Any}())
+
+@inline field_cache_key(field)::UInt = UInt(hash((typeof(field), field)))
+@inline poset_cache_key(P)::UInt = UInt(objectid(P))
+@inline function module_cache_key(M)
+    fid = hasproperty(M, :field) ? field_cache_key(getproperty(M, :field)) : UInt(0)
+    return (UInt(objectid(M)), fid)
+end
+
+function encoding_cache!(session::SessionCache, key::UInt)
+    Base.lock(session.lock)
+    try
+        return get!(session.encoding, key) do
+            EncodingCache()
+        end
+    finally
+        Base.unlock(session.lock)
+    end
+end
+
+encoding_cache!(session::SessionCache, P) = encoding_cache!(session, poset_cache_key(P))
+
+function module_cache!(session::SessionCache, key::Tuple{UInt,UInt})
+    Base.lock(session.lock)
+    try
+        return get!(session.modules, key) do
+            ModuleCache(key[1], key[2])
+        end
+    finally
+        Base.unlock(session.lock)
+    end
+end
+
+module_cache!(session::SessionCache, M) = module_cache!(session, module_cache_key(M))
+
+function invalidate_encoding_cache!(session::SessionCache, key::UInt)
+    Base.lock(session.lock)
+    try
+        cache = pop!(session.encoding, key, nothing)
+        cache === nothing || clear_encoding_cache!(cache)
+    finally
+        Base.unlock(session.lock)
+    end
+    return nothing
+end
+
+invalidate_encoding_cache!(session::SessionCache, P) =
+    invalidate_encoding_cache!(session, poset_cache_key(P))
+
+function invalidate_module_cache!(session::SessionCache, key::Tuple{UInt,UInt})
+    Base.lock(session.lock)
+    try
+        cache = pop!(session.modules, key, nothing)
+        cache === nothing || clear_module_cache!(cache)
+    finally
+        Base.unlock(session.lock)
+    end
+    return nothing
+end
+
+invalidate_module_cache!(session::SessionCache, M) =
+    invalidate_module_cache!(session, module_cache_key(M))
+
+@inline session_resolution_cache(session::SessionCache) = session.resolution
+@inline session_resolution_cache(session::SessionCache, M) = module_cache!(session, M).resolution
+
+@inline session_hom_cache(session::SessionCache) = session.hom_system
+@inline function set_session_hom_cache!(session::SessionCache, cache)
+    session.hom_system = cache
+    return cache
+end
+
+function clear_session_cache!(session::SessionCache)
+    Base.lock(session.lock)
+    try
+        for c in values(session.encoding)
+            clear_encoding_cache!(c)
+        end
+        for c in values(session.modules)
+            clear_module_cache!(c)
+        end
+        empty!(session.encoding)
+        empty!(session.modules)
+        clear_resolution_cache!(session.resolution)
+        session.hom_system = nothing
+        empty!(session.product_dense)
+        empty!(session.product_obj)
+    finally
+        Base.unlock(session.lock)
+    end
+    return nothing
+end
+
 
 # -----------------------------------------------------------------------------
 # Workflow / pipeline result objects
@@ -766,6 +1261,8 @@ function change_field(enc::EncodingResult, field::AbstractCoeffField)
                           meta=enc.meta)
 end
 
+unwrap(enc::EncodingResult) = (enc.P, enc.M, enc.pi)
+
 """
     ResolutionResult(res; enc=nothing, betti=nothing, minimality=nothing,
                      opts=ResolutionOptions(), meta=NamedTuple())
@@ -789,6 +1286,8 @@ ResolutionResult(res;
                  meta=NamedTuple()) =
     ResolutionResult(res, enc, betti, minimality, opts, meta)
 
+unwrap(res::ResolutionResult) = res.res
+
 """
     InvariantResult(enc, which, value; opts=InvariantOptions(), meta=NamedTuple())
 
@@ -806,6 +1305,8 @@ InvariantResult(enc, which, value;
                 opts::InvariantOptions=InvariantOptions(),
                 meta=NamedTuple()) =
     InvariantResult(enc, which, value, opts, meta)
+
+unwrap(inv::InvariantResult) = inv.value
 
 """
     change_field(res, field)
@@ -841,7 +1342,14 @@ end
 
 export EncodingOptions, ResolutionOptions, InvariantOptions, DerivedFunctorOptions
 export FiniteFringeOptions, ModuleOptions
-export EncodingResult, ResolutionResult, InvariantResult
+export ResolutionCache, clear_resolution_cache!
+export EncodingCache, ModuleCache, SessionCache
+export clear_encoding_cache!, clear_module_cache!, clear_session_cache!
+export field_cache_key, poset_cache_key, module_cache_key
+export encoding_cache!, module_cache!
+export invalidate_encoding_cache!, invalidate_module_cache!
+export session_resolution_cache, session_hom_cache, set_session_hom_cache!
+export EncodingResult, ResolutionResult, InvariantResult, unwrap
 
 end # module
 

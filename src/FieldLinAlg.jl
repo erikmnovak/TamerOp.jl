@@ -4,6 +4,9 @@ module FieldLinAlg
 import Nemo
 using LinearAlgebra
 using SparseArrays
+using Random
+using TOML
+using Dates
 
 using ..CoreModules: AbstractCoeffField, QQField, PrimeField, RealField, FpElem,
                      BackendMatrix, coeff_type, eye, QQ,
@@ -16,6 +19,8 @@ export rref, rank, nullspace, colspace, solve_fullcolumn, rank_dim, rank_restric
        solve_fullcolumnQQ, FullColumnFactor, factor_fullcolumnQQ,
        clear_fullcolumn_cache!, rank_modp_sparse, rank_modp_dense, rankQQ_restricted,
        matrix_backend_trait, conversion_counters, reset_conversion_counters!,
+       linalg_thresholds_path, current_linalg_fingerprint, current_linalg_thresholds,
+       save_linalg_thresholds!, load_linalg_thresholds!, autotune_linalg_thresholds!,
        have_nemo, SparseRowAccumulator, reset_sparse_row_accumulator!,
        push_sparse_row_entry!, materialize_sparse_row!
 
@@ -27,15 +32,23 @@ const _NEMO_ENABLED = Ref(true)
 have_nemo() = _NEMO_ENABLED[]
 
 const NEMO_THRESHOLD = Ref(50_000)     # heuristic: use Nemo if m*n >= threshold
-const SPARSE_DENSITY_THRESHOLD = Ref(0.15)
+const FP_NEMO_RANK_THRESHOLD = Ref(40_000)
+const FP_NEMO_NULLSPACE_THRESHOLD = Ref(60_000)
+const FP_NEMO_SOLVE_THRESHOLD = Ref(60_000)
+const FLOAT_NULLSPACE_SVD_THRESHOLD = Ref(180_000)
+const FLOAT_SPARSE_SVDS_MIN_DIM = Ref(1_024)
+const FLOAT_SPARSE_SVDS_MIN_NNZ = Ref(120_000)
 const MODULAR_NULLSPACE_THRESHOLD = Ref(120_000)
 const MODULAR_SOLVE_THRESHOLD = Ref(120_000)
 const MODULAR_MIN_PRIMES = Ref(2)
 const MODULAR_MAX_PRIMES = Ref(6)
+const RANKQQ_DIM_SMALL_THRESHOLD = Ref(20_000)
 const ROWPOS_STAMP_MIN_ROWS = Ref(128)
 const ROWPOS_STAMP_DENSITY_NUM = Ref(1) # use stamp when nr/m >= 1/5
 const ROWPOS_STAMP_DENSITY_DEN = Ref(5)
 const TINY_LINALG_MAX_DIM = Ref(4)
+const LINALG_THRESHOLD_SCHEMA_VERSION = 1
+const _LINALG_THRESHOLDS_INITIALIZED = Ref(false)
 
 abstract type MatrixBackendTrait end
 struct JuliaMatrixBackend <: MatrixBackendTrait end
@@ -43,6 +56,7 @@ struct NemoMatrixBackend <: MatrixBackendTrait end
 
 const _JULIA_BACKEND_TRAIT = JuliaMatrixBackend()
 const _NEMO_BACKEND_TRAIT = NemoMatrixBackend()
+const _SVDS_IMPL = Ref{Any}(nothing)
 
 @inline function matrix_backend_trait(field::AbstractCoeffField, A;
                                       op::Symbol=:rank, backend::Symbol=:auto)
@@ -80,8 +94,29 @@ function conversion_counters()
     )
 end
 
+@inline _have_svds_backend() = _SVDS_IMPL[] !== nothing
+
+function _set_svds_impl!(impl)
+    _SVDS_IMPL[] = impl
+    return nothing
+end
+
+function _nullspace_float_svds(F::RealField, A)
+    impl = _SVDS_IMPL[]
+    impl === nothing && return nothing
+    return impl(F, A)
+end
+
 @inline _nemo_dense_compatible(A) = A isa StridedMatrix
 @inline _nemo_dense_compatible(::BackendMatrix) = true
+@inline _is_sparse_like(A) =
+    A isa SparseMatrixCSC ||
+    A isa Transpose{<:Any,<:SparseMatrixCSC} ||
+    A isa Adjoint{<:Any,<:SparseMatrixCSC}
+@inline _sparse_parent(A::SparseMatrixCSC) = A
+@inline _sparse_parent(A::Transpose{<:Any,<:SparseMatrixCSC}) = parent(A)
+@inline _sparse_parent(A::Adjoint{<:Any,<:SparseMatrixCSC}) = parent(A)
+@inline _sparse_nnz(A) = nnz(_sparse_parent(A))
 @inline _use_rowpos_stamp(m::Int, nr::Int) =
     nr >= ROWPOS_STAMP_MIN_ROWS[] && nr * ROWPOS_STAMP_DENSITY_DEN[] >= m * ROWPOS_STAMP_DENSITY_NUM[]
 @inline _is_tiny_dim(x::Int) = x <= TINY_LINALG_MAX_DIM[]
@@ -155,6 +190,545 @@ end
 @inline _row_lookup(loc::_RowLocatorDict, r::Int) = get(loc.rowpos, r, 0)
 @inline _row_lookup(loc::_RowLocatorStamp, r::Int) = @inbounds (loc.marks[r] == loc.tag ? loc.pos[r] : 0)
 
+@inline _linalg_repo_root() = normpath(joinpath(@__DIR__, ".."))
+
+function linalg_thresholds_path(; root::AbstractString=_linalg_repo_root())
+    return joinpath(root, "linalg_thresholds.toml")
+end
+
+function current_linalg_fingerprint()
+    return Dict(
+        "schema_version" => LINALG_THRESHOLD_SCHEMA_VERSION,
+        "cpu_name" => String(Sys.CPU_NAME),
+        "cpu_threads" => Int(Sys.CPU_THREADS),
+        "julia_version" => string(VERSION),
+        "word_size" => Int(Sys.WORD_SIZE),
+        "os" => string(Sys.KERNEL),
+        "blas_threads" => Int(LinearAlgebra.BLAS.get_num_threads()),
+    )
+end
+
+function current_linalg_thresholds()
+    return Dict(
+        "nemo_threshold" => Int(NEMO_THRESHOLD[]),
+        "fp_nemo_rank_threshold" => Int(FP_NEMO_RANK_THRESHOLD[]),
+        "fp_nemo_nullspace_threshold" => Int(FP_NEMO_NULLSPACE_THRESHOLD[]),
+        "fp_nemo_solve_threshold" => Int(FP_NEMO_SOLVE_THRESHOLD[]),
+        "modular_nullspace_threshold" => Int(MODULAR_NULLSPACE_THRESHOLD[]),
+        "modular_solve_threshold" => Int(MODULAR_SOLVE_THRESHOLD[]),
+        "modular_min_primes" => Int(MODULAR_MIN_PRIMES[]),
+        "modular_max_primes" => Int(MODULAR_MAX_PRIMES[]),
+        "rankqq_dim_small_threshold" => Int(RANKQQ_DIM_SMALL_THRESHOLD[]),
+        "float_nullspace_svd_threshold" => Int(FLOAT_NULLSPACE_SVD_THRESHOLD[]),
+        "float_sparse_svds_min_dim" => Int(FLOAT_SPARSE_SVDS_MIN_DIM[]),
+        "float_sparse_svds_min_nnz" => Int(FLOAT_SPARSE_SVDS_MIN_NNZ[]),
+    )
+end
+
+function _apply_linalg_thresholds!(vals)::Bool
+    try
+        NEMO_THRESHOLD[] = Int(get(vals, "nemo_threshold", NEMO_THRESHOLD[]))
+        FP_NEMO_RANK_THRESHOLD[] = Int(get(vals, "fp_nemo_rank_threshold", FP_NEMO_RANK_THRESHOLD[]))
+        FP_NEMO_NULLSPACE_THRESHOLD[] = Int(get(vals, "fp_nemo_nullspace_threshold", FP_NEMO_NULLSPACE_THRESHOLD[]))
+        FP_NEMO_SOLVE_THRESHOLD[] = Int(get(vals, "fp_nemo_solve_threshold", FP_NEMO_SOLVE_THRESHOLD[]))
+        MODULAR_NULLSPACE_THRESHOLD[] = Int(get(vals, "modular_nullspace_threshold", MODULAR_NULLSPACE_THRESHOLD[]))
+        MODULAR_SOLVE_THRESHOLD[] = Int(get(vals, "modular_solve_threshold", MODULAR_SOLVE_THRESHOLD[]))
+        MODULAR_MIN_PRIMES[] = Int(get(vals, "modular_min_primes", MODULAR_MIN_PRIMES[]))
+        MODULAR_MAX_PRIMES[] = Int(get(vals, "modular_max_primes", MODULAR_MAX_PRIMES[]))
+        RANKQQ_DIM_SMALL_THRESHOLD[] = Int(get(vals, "rankqq_dim_small_threshold", RANKQQ_DIM_SMALL_THRESHOLD[]))
+        FLOAT_NULLSPACE_SVD_THRESHOLD[] = Int(get(vals, "float_nullspace_svd_threshold", FLOAT_NULLSPACE_SVD_THRESHOLD[]))
+        FLOAT_SPARSE_SVDS_MIN_DIM[] = Int(get(vals, "float_sparse_svds_min_dim", FLOAT_SPARSE_SVDS_MIN_DIM[]))
+        FLOAT_SPARSE_SVDS_MIN_NNZ[] = Int(get(vals, "float_sparse_svds_min_nnz", FLOAT_SPARSE_SVDS_MIN_NNZ[]))
+        MODULAR_MIN_PRIMES[] = max(1, MODULAR_MIN_PRIMES[])
+        MODULAR_MAX_PRIMES[] = max(MODULAR_MIN_PRIMES[], MODULAR_MAX_PRIMES[])
+        RANKQQ_DIM_SMALL_THRESHOLD[] = max(1, RANKQQ_DIM_SMALL_THRESHOLD[])
+    catch
+        return false
+    end
+    return true
+end
+
+function save_linalg_thresholds!(; path::AbstractString=linalg_thresholds_path())
+    doc = Dict(
+        "meta" => Dict(
+            "created_utc" => Dates.format(Dates.now(Dates.UTC), dateformat"yyyy-mm-ddTHH:MM:SSZ"),
+            "schema_version" => LINALG_THRESHOLD_SCHEMA_VERSION,
+        ),
+        "fingerprint" => current_linalg_fingerprint(),
+        "thresholds" => current_linalg_thresholds(),
+    )
+    mkpath(dirname(path))
+    open(path, "w") do io
+        TOML.print(io, doc)
+    end
+    return path
+end
+
+function _fingerprints_match(a, b)::Bool
+    keys = ("schema_version", "cpu_name", "cpu_threads", "julia_version", "word_size", "os", "blas_threads")
+    for k in keys
+        haskey(a, k) || return false
+        haskey(b, k) || return false
+        if string(a[k]) != string(b[k])
+            return false
+        end
+    end
+    return true
+end
+
+function load_linalg_thresholds!(; path::AbstractString=linalg_thresholds_path(), warn_on_mismatch::Bool=true)::Bool
+    if !isfile(path)
+        return false
+    end
+    doc = try
+        TOML.parsefile(path)
+    catch err
+        @warn "FieldLinAlg: failed to parse thresholds file; using defaults." path exception=(err, catch_backtrace())
+        return false
+    end
+    haskey(doc, "fingerprint") || return false
+    haskey(doc, "thresholds") || return false
+
+    current_fp = current_linalg_fingerprint()
+    stored_fp = doc["fingerprint"]
+    if !_fingerprints_match(stored_fp, current_fp)
+        if warn_on_mismatch
+            @warn "FieldLinAlg: threshold fingerprint mismatch; using defaults. Run `FieldLinAlg.autotune_linalg_thresholds!()` to regenerate." path
+        end
+        return false
+    end
+
+    ok = _apply_linalg_thresholds!(doc["thresholds"])
+    if !ok
+        @warn "FieldLinAlg: malformed thresholds in file; using defaults." path
+        return false
+    end
+    return true
+end
+
+function _bench_elapsed(f; reps::Int=2)
+    f() # warmup
+    tbest = Inf
+    for _ in 1:reps
+        GC.gc()
+        t = @elapsed f()
+        if t < tbest
+            tbest = t
+        end
+    end
+    return tbest
+end
+
+@inline _autotune_nemo_shapes() = ((96, 96), (128, 128), (160, 160), (192, 192), (128, 400))
+@inline _autotune_fp_rank_sizes() = (64, 96, 128)
+@inline _autotune_fp_nullspace_sizes() = (32, 48, 64)
+@inline _autotune_fp_solve_sizes() = (48, 64, 80)
+@inline _autotune_float_dense_sizes() = (96, 128, 160)
+@inline _autotune_float_sparse_dims() = (512, 1024)
+@inline _autotune_float_sparse_densities() = (0.004, 0.01)
+
+@inline _noop_progress_step(::AbstractString) = nothing
+
+mutable struct _AutotuneProgress
+    total::Int
+    done::Int
+    enabled::Bool
+    last_pct::Int
+end
+
+@inline function _progress_bar(done::Int, total::Int; width::Int=24)
+    denom = max(total, 1)
+    frac = clamp(done / denom, 0.0, 1.0)
+    filled = clamp(round(Int, width * frac), 0, width)
+    return "[" * repeat("=", filled) * repeat(".", width - filled) * "]"
+end
+
+function _autotune_progress_init(total::Int; enabled::Bool)
+    return _AutotuneProgress(max(total, 1), 0, enabled, -1)
+end
+
+function _autotune_progress_step!(st::_AutotuneProgress, label::AbstractString)
+    st.done = min(st.total, st.done + 1)
+    st.enabled || return nothing
+    pct = clamp(floor(Int, 100 * st.done / st.total), 0, 99)
+    if pct != st.last_pct || !isempty(label)
+        st.last_pct = pct
+        @info "FieldLinAlg autotune progress" percent=pct bar=_progress_bar(st.done, st.total) step=label
+    end
+    return nothing
+end
+
+function _autotune_progress_finish!(st::_AutotuneProgress)
+    st.done = st.total
+    st.enabled || return nothing
+    @info "FieldLinAlg autotune progress" percent=100 bar=_progress_bar(st.done, st.total) step="complete"
+    return nothing
+end
+
+function _autotune_modular_steps()
+    nmax = max(0, min(length(DEFAULT_MODULAR_PRIMES), 8) - 1) # 2:min(...)
+    nmin = min(4, max(1, MODULAR_MAX_PRIMES[]))
+    # rank-prime sweep + min-prime sweep + nullspace crossover + solve crossover + rank crossover
+    return 3 * nmax + 2 * nmin + 4 + 4 + 4
+end
+
+function _autotune_total_steps(profile::Symbol)
+    steps = 0
+    if have_nemo()
+        steps += length(_autotune_nemo_shapes())
+        steps += length(_autotune_fp_rank_sizes()) +
+                 length(_autotune_fp_nullspace_sizes()) +
+                 length(_autotune_fp_solve_sizes())
+    end
+    steps += length(_autotune_float_dense_sizes())
+    if _have_svds_backend()
+        steps += length(_autotune_float_sparse_dims()) * length(_autotune_float_sparse_densities())
+    end
+    if profile == :full
+        steps += _autotune_modular_steps()
+    end
+    return max(steps, 1)
+end
+
+function _fp_dense_rand(field::PrimeField, m::Int, n::Int; rng=Random.default_rng())
+    p = field.p
+    p > 3 || error("_fp_dense_rand only for p > 3")
+    A = Matrix{FpElem{p}}(undef, m, n)
+    @inbounds for i in 1:m, j in 1:n
+        A[i, j] = FpElem{p}(rand(rng, 0:(p - 1)))
+    end
+    return A
+end
+
+function _qq_dense_rand(m::Int, n::Int; rng=Random.default_rng())
+    A = Matrix{QQ}(undef, m, n)
+    @inbounds for i in 1:m, j in 1:n
+        A[i, j] = QQ(rand(rng, -3:3))
+    end
+    return A
+end
+
+function _qq_dense_singular_rand(n::Int; rng=Random.default_rng())
+    A = _qq_dense_rand(n, n; rng=rng)
+    n >= 2 || return A
+    @inbounds A[:, n] = A[:, 1]
+    return A
+end
+
+function _qq_dense_fullcolumn_rand(m::Int, n::Int; rng=Random.default_rng())
+    B = _qq_dense_rand(m, n; rng=rng)
+    d = min(m, n)
+    @inbounds for i in 1:d
+        B[i, i] = QQ(1)
+    end
+    return B
+end
+
+function _float_sparse_singular_rand(n::Int, density::Float64; rng=Random.default_rng())
+    A = sprand(rng, Float64, n, n, density)
+    if n >= 2
+        A[:, n] = A[:, 1]
+    end
+    if nnz(A) == 0
+        A[1, 1] = 1.0
+        if n >= 2
+            A[1, n] = 1.0
+        end
+    end
+    return A
+end
+
+function _pick_crossover_threshold(works::Vector{Int}, tj::Vector{Float64}, tf::Vector{Float64}, default::Int)
+    @inbounds for i in eachindex(works)
+        if tf[i] < 0.9 * tj[i]
+            return works[i]
+        end
+    end
+    return default
+end
+
+function _autotune_nemo_threshold!(progress_step::Function=_noop_progress_step)
+    if !have_nemo()
+        return
+    end
+    rng = Random.MersenneTwister(0x4e454d4f)
+    shapes = _autotune_nemo_shapes()
+    works = Int[]
+    tj = Float64[]
+    tn = Float64[]
+    F = QQField()
+    for (k, (m, n)) in enumerate(shapes)
+        A = _qq_dense_rand(m, n; rng=rng)
+        push!(works, m * n)
+        push!(tj, _bench_elapsed(() -> rank(F, A; backend=:julia_exact); reps=1))
+        push!(tn, _bench_elapsed(() -> rank(F, A; backend=:nemo); reps=1))
+        progress_step("qq-nemo threshold probe $(k)/$(length(shapes))")
+    end
+    NEMO_THRESHOLD[] = _pick_crossover_threshold(works, tj, tn, NEMO_THRESHOLD[])
+end
+
+function _autotune_fp_thresholds!(progress_step::Function=_noop_progress_step)
+    if !have_nemo()
+        return
+    end
+    F = PrimeField(5)
+    rng = Random.MersenneTwister(0x54414d4552)
+    sizes_rank = _autotune_fp_rank_sizes()
+    sizes_ns = _autotune_fp_nullspace_sizes()
+    sizes_solve = _autotune_fp_solve_sizes()
+
+    wr = Int[]
+    trj = Float64[]
+    trn = Float64[]
+    for (k, n) in enumerate(sizes_rank)
+        A = _fp_dense_rand(F, n, n; rng=rng)
+        push!(wr, n * n)
+        push!(trj, _bench_elapsed(() -> _rank_fp(A); reps=2))
+        push!(trn, _bench_elapsed(() -> _nemo_rank(F, A); reps=2))
+        progress_step("fp-rank threshold probe $(k)/$(length(sizes_rank))")
+    end
+    FP_NEMO_RANK_THRESHOLD[] = _pick_crossover_threshold(wr, trj, trn, FP_NEMO_RANK_THRESHOLD[])
+
+    wn = Int[]
+    tnj = Float64[]
+    tnn = Float64[]
+    for (k, n) in enumerate(sizes_ns)
+        A = _fp_dense_rand(F, n, n; rng=rng)
+        push!(wn, n * n)
+        push!(tnj, _bench_elapsed(() -> _nullspace_fp(A); reps=1))
+        push!(tnn, _bench_elapsed(() -> _nemo_nullspace(F, A); reps=1))
+        progress_step("fp-nullspace threshold probe $(k)/$(length(sizes_ns))")
+    end
+    FP_NEMO_NULLSPACE_THRESHOLD[] = _pick_crossover_threshold(wn, tnj, tnn, FP_NEMO_NULLSPACE_THRESHOLD[])
+
+    ws = Int[]
+    tsj = Float64[]
+    tsn = Float64[]
+    for (k, n) in enumerate(sizes_solve)
+        m = n + max(8, div(n, 2))
+        B = _fp_dense_rand(F, m, n; rng=rng)
+        for i in 1:n
+            B[i, i] = FpElem{5}(1)
+        end
+        X = _fp_dense_rand(F, n, 2; rng=rng)
+        Y = B * X
+        push!(ws, m * n)
+        push!(tsj, _bench_elapsed(() -> _solve_fullcolumn_fp(B, Y; check_rhs=false); reps=1))
+        push!(tsn, _bench_elapsed(() -> _solve_fullcolumn_nemo_fp(F, B, Y; check_rhs=false, cache=false); reps=1))
+        progress_step("fp-solve threshold probe $(k)/$(length(sizes_solve))")
+    end
+    FP_NEMO_SOLVE_THRESHOLD[] = _pick_crossover_threshold(ws, tsj, tsn, FP_NEMO_SOLVE_THRESHOLD[])
+end
+
+function _autotune_float_thresholds!(progress_step::Function=_noop_progress_step)
+    F = RealField(Float64; rtol=1e-10, atol=1e-12)
+    rng = Random.MersenneTwister(0x464c4f4154)
+    sizes = _autotune_float_dense_sizes()
+    works = Int[]
+    tqr = Float64[]
+    tsvd = Float64[]
+    for (k, n) in enumerate(sizes)
+        A = rand(rng, Float64, n, n)
+        push!(works, n * n)
+        push!(tqr, _bench_elapsed(() -> _nullspace_float_qr_dense(F, A); reps=1))
+        push!(tsvd, _bench_elapsed(() -> _nullspace_float_svd(F, A); reps=1))
+        progress_step("float-dense nullspace threshold probe $(k)/$(length(sizes))")
+    end
+    FLOAT_NULLSPACE_SVD_THRESHOLD[] = _pick_crossover_threshold(works, tqr, tsvd, FLOAT_NULLSPACE_SVD_THRESHOLD[])
+end
+
+function _autotune_float_sparse_svds_thresholds!(progress_step::Function=_noop_progress_step)
+    _have_svds_backend() || return
+    F = RealField(Float64; rtol=1e-10, atol=1e-12)
+    rng = Random.MersenneTwister(0x53564453)
+    dims = _autotune_float_sparse_dims()
+    densities = _autotune_float_sparse_densities()
+
+    winning_dims = Int[]
+    winning_nnz = Int[]
+    k = 0
+
+    for n in dims
+        for d in densities
+            A = _float_sparse_singular_rand(n, d; rng=rng)
+            tq = _bench_elapsed(() -> _nullspace_from_qr_sparse_float(F, A); reps=1)
+            ts = _bench_elapsed(() -> begin
+                Z = _nullspace_float_svds(F, A)
+                Z === nothing || return Z
+                return _nullspace_from_qr_sparse_float(F, A)
+            end; reps=1)
+            if ts < 0.9 * tq
+                push!(winning_dims, n)
+                push!(winning_nnz, nnz(A))
+            end
+            k += 1
+            progress_step("float-sparse svds gate probe $(k)/$(length(dims) * length(densities))")
+        end
+    end
+
+    isempty(winning_dims) && return
+    FLOAT_SPARSE_SVDS_MIN_DIM[] = minimum(winning_dims)
+    FLOAT_SPARSE_SVDS_MIN_NNZ[] = minimum(winning_nnz)
+end
+
+function _autotune_modular_thresholds!(progress_step::Function=_noop_progress_step)
+    rng = Random.MersenneTwister(0x4d4f44554c) # "MODUL"
+
+    # Tune modular prime budget for rankQQ_dim using exact-rank parity.
+    rank_mats = [_qq_dense_rand(n, n; rng=rng) for n in (80, 112, 144)]
+    rank_exact = [rankQQ(A) for A in rank_mats]
+    max_candidates = 2:min(length(DEFAULT_MODULAR_PRIMES), 8)
+    best_max = MODULAR_MAX_PRIMES[]
+    best_t = Inf
+    for maxp in max_candidates
+        ok = true
+        ttot = 0.0
+        for (k, (A, rex)) in enumerate(zip(rank_mats, rank_exact))
+            rr = rankQQ_dim(A; backend=:modular,
+                            max_primes=maxp,
+                            primes=DEFAULT_MODULAR_PRIMES,
+                            small_threshold=1)
+            ttot += _bench_elapsed(() -> rankQQ_dim(A; backend=:modular,
+                                                    max_primes=maxp,
+                                                    primes=DEFAULT_MODULAR_PRIMES,
+                                                    small_threshold=1); reps=1)
+            progress_step("modular-rank max_primes=$(maxp) probe $(k)/$(length(rank_mats))")
+            if rr != rex
+                ok = false
+                break
+            end
+        end
+        if ok && ttot < best_t
+            best_t = ttot
+            best_max = maxp
+        end
+    end
+    MODULAR_MAX_PRIMES[] = max(1, best_max)
+
+    # Tune min_primes for reconstruction-based modular paths.
+    ns_probe = _qq_dense_singular_rand(72; rng=rng)
+    solve_B = _qq_dense_fullcolumn_rand(96, 64; rng=rng)
+    solve_X = _qq_dense_rand(64, 2; rng=rng)
+    solve_Y = solve_B * solve_X
+
+    min_candidates = 1:min(4, MODULAR_MAX_PRIMES[])
+    best_min = MODULAR_MIN_PRIMES[]
+    best_min_t = Inf
+    for minp in min_candidates
+        ttot = 0.0
+        N = _nullspace_modularQQ(ns_probe;
+                                 primes=DEFAULT_MODULAR_PRIMES,
+                                 min_primes=minp,
+                                 max_primes=MODULAR_MAX_PRIMES[])
+        Xh = _solve_fullcolumn_modularQQ(solve_B, solve_Y;
+                                         primes=DEFAULT_MODULAR_PRIMES,
+                                         min_primes=minp,
+                                         max_primes=MODULAR_MAX_PRIMES[],
+                                         check_rhs=false)
+        ttot += _bench_elapsed(() -> _nullspace_modularQQ(ns_probe;
+                                                           primes=DEFAULT_MODULAR_PRIMES,
+                                                           min_primes=minp,
+                                                           max_primes=MODULAR_MAX_PRIMES[]); reps=1)
+        progress_step("modular min_primes=$(minp) nullspace probe")
+        ttot += _bench_elapsed(() -> _solve_fullcolumn_modularQQ(solve_B, solve_Y;
+                                                                  primes=DEFAULT_MODULAR_PRIMES,
+                                                                  min_primes=minp,
+                                                                  max_primes=MODULAR_MAX_PRIMES[],
+                                                                  check_rhs=false); reps=1)
+        progress_step("modular min_primes=$(minp) solve probe")
+        ok = (N !== nothing && _verify_nullspaceQQ(ns_probe, N) &&
+              Xh !== nothing && _verify_solveQQ(solve_B, Xh, solve_Y))
+        if ok && ttot < best_min_t
+            best_min_t = ttot
+            best_min = minp
+        end
+    end
+    MODULAR_MIN_PRIMES[] = min(best_min, MODULAR_MAX_PRIMES[])
+
+    # Tune crossover threshold for QQ modular nullspace and solve.
+    wn = Int[]
+    tne = Float64[]
+    tnm = Float64[]
+    for (k, n) in enumerate((56, 72, 88, 104))
+        A = _qq_dense_singular_rand(n; rng=rng)
+        push!(wn, n * n)
+        push!(tne, _bench_elapsed(() -> nullspaceQQ(A); reps=1))
+        push!(tnm, _bench_elapsed(() -> begin
+            N = _nullspace_modularQQ(A;
+                                     primes=DEFAULT_MODULAR_PRIMES,
+                                     min_primes=MODULAR_MIN_PRIMES[],
+                                     max_primes=MODULAR_MAX_PRIMES[])
+            N === nothing ? nullspaceQQ(A) : N
+        end; reps=1))
+        progress_step("modular-nullspace crossover probe $(k)/4")
+    end
+    MODULAR_NULLSPACE_THRESHOLD[] = _pick_crossover_threshold(wn, tne, tnm, MODULAR_NULLSPACE_THRESHOLD[])
+
+    ws = Int[]
+    tse = Float64[]
+    tsm = Float64[]
+    for (k, n) in enumerate((40, 56, 72, 88))
+        m = n + max(8, div(n, 2))
+        B = _qq_dense_fullcolumn_rand(m, n; rng=rng)
+        X = _qq_dense_rand(n, 2; rng=rng)
+        Y = B * X
+        push!(ws, m * n)
+        push!(tse, _bench_elapsed(() -> solve_fullcolumnQQ(B, Y; check_rhs=false); reps=1))
+        push!(tsm, _bench_elapsed(() -> begin
+            Xh = _solve_fullcolumn_modularQQ(B, Y;
+                                             primes=DEFAULT_MODULAR_PRIMES,
+                                             min_primes=MODULAR_MIN_PRIMES[],
+                                             max_primes=MODULAR_MAX_PRIMES[],
+                                             check_rhs=false)
+            Xh === nothing ? solve_fullcolumnQQ(B, Y; check_rhs=false) : Xh
+        end; reps=1))
+        progress_step("modular-solve crossover probe $(k)/4")
+    end
+    MODULAR_SOLVE_THRESHOLD[] = _pick_crossover_threshold(ws, tse, tsm, MODULAR_SOLVE_THRESHOLD[])
+
+    # Tune rankQQ_dim exact/modular crossover.
+    wr = Int[]
+    tre = Float64[]
+    trm = Float64[]
+    for (k, n) in enumerate((64, 96, 128, 160))
+        A = _qq_dense_rand(n, n; rng=rng)
+        push!(wr, n * n)
+        push!(tre, _bench_elapsed(() -> rankQQ(A); reps=1))
+        push!(trm, _bench_elapsed(() -> rankQQ_dim(A; backend=:modular,
+                                                   max_primes=MODULAR_MAX_PRIMES[],
+                                                   primes=DEFAULT_MODULAR_PRIMES,
+                                                   small_threshold=1); reps=1))
+        progress_step("rankQQ_dim crossover probe $(k)/4")
+    end
+    RANKQQ_DIM_SMALL_THRESHOLD[] = _pick_crossover_threshold(wr, tre, trm, RANKQQ_DIM_SMALL_THRESHOLD[])
+end
+
+function autotune_linalg_thresholds!(; path::AbstractString=linalg_thresholds_path(),
+                                     save::Bool=true,
+                                     quiet::Bool=false,
+                                     profile::Symbol=:full)
+    profile in (:full, :startup) || error("autotune_linalg_thresholds!: profile must be :full or :startup.")
+    progress = _autotune_progress_init(_autotune_total_steps(profile); enabled=!quiet)
+    step = label -> _autotune_progress_step!(progress, label)
+    old = current_linalg_thresholds()
+    try
+        _autotune_nemo_threshold!(step)
+        profile == :full && _autotune_modular_thresholds!(step)
+        _autotune_fp_thresholds!(step)
+        _autotune_float_thresholds!(step)
+        _autotune_float_sparse_svds_thresholds!(step)
+    catch err
+        _apply_linalg_thresholds!(old)
+        rethrow(err)
+    end
+    _autotune_progress_finish!(progress)
+    if save
+        save_linalg_thresholds!(; path=path)
+    end
+    quiet || @info "FieldLinAlg: autotuned thresholds." path profile thresholds=current_linalg_thresholds()
+    return current_linalg_thresholds()
+end
+
 function choose_linalg_backend(field::AbstractCoeffField, A; op::Symbol=:rank, backend::Symbol=:auto)
     backend != :auto && return backend
     if field isa QQField
@@ -190,13 +764,36 @@ function choose_linalg_backend(field::AbstractCoeffField, A; op::Symbol=:rank, b
         return :f3_table
     end
     if field isa PrimeField && field.p > 3
+        if _is_sparse_like(A)
+            return :fp_sparse
+        end
         if have_nemo() && _nemo_dense_compatible(A)
-            return :nemo
+            work = size(A, 1) * size(A, 2)
+            if op == :rank && work >= FP_NEMO_RANK_THRESHOLD[]
+                return :nemo
+            elseif op == :nullspace && work >= FP_NEMO_NULLSPACE_THRESHOLD[]
+                return :nemo
+            elseif op == :solve && work >= FP_NEMO_SOLVE_THRESHOLD[]
+                return :nemo
+            end
         end
         return :julia_exact
     end
     if field isa RealField
-        return :float
+        if _is_sparse_like(A)
+            m, n = size(A)
+            if op == :nullspace &&
+               _have_svds_backend() &&
+               min(m, n) >= FLOAT_SPARSE_SVDS_MIN_DIM[] &&
+               _sparse_nnz(A) >= FLOAT_SPARSE_SVDS_MIN_NNZ[]
+                return :float_sparse_svds
+            end
+            return :float_sparse_qr
+        end
+        if op == :nullspace && size(A, 1) * size(A, 2) >= FLOAT_NULLSPACE_SVD_THRESHOLD[]
+            return :float_dense_svd
+        end
+        return :float_dense_qr
     end
     return :julia_exact
 end
@@ -829,18 +1426,124 @@ function _float_tol(F::RealField, A)
     return F.atol + F.rtol * opnorm(A, 1)
 end
 
-function _rank_float(F::RealField, A)
+function _rank_float(F::RealField, A::StridedMatrix{<:Real})
+    R = qr(A, Val(true)).R
+    d = diag(R)
+    tol = _float_tol(F, A)
+    return count(x -> abs(x) > tol, d)
+end
+
+function _rank_float(F::RealField, A::AbstractMatrix{<:Real})
+    return _rank_float(F, Matrix{Float64}(A))
+end
+
+function _rank_float_svd(F::RealField, A)
     s = svdvals(Matrix(A))
     tol = _float_tol(F, A)
     return count(>(tol), s)
 end
 
-function _nullspace_float(F::RealField, A)
+function _rank_float(F::RealField, A::SparseMatrixCSC)
+    m, n = size(A)
+    if m == 0 || n == 0
+        return 0
+    end
+    R = qr(A).R
+    d = diag(R)
+    tol = _float_tol(F, A)
+    return count(x -> abs(x) > tol, d)
+end
+
+function _rank_float(F::RealField, A::Transpose{<:Real,<:SparseMatrixCSC})
+    return _rank_float(F, parent(A))
+end
+
+function _rank_float(F::RealField, A::Adjoint{<:Real,<:SparseMatrixCSC})
+    return _rank_float(F, parent(A))
+end
+
+function _nullspace_from_qr_sparse_float(F::RealField, A)
+    n = size(A, 2)
+    n == 0 && return zeros(Float64, 0, 0)
+
+    Fq = qr(A)
+    R = Fq.R
+    d = diag(R)
+    tol = _float_tol(F, A)
+    r = count(x -> abs(x) > tol, d)
+    nfree = n - r
+    nfree <= 0 && return zeros(Float64, n, 0)
+
+    Zperm = zeros(Float64, n, nfree)
+    if r > 0
+        R11 = Matrix(view(R, 1:r, 1:r))
+        R12 = Matrix(view(R, 1:r, (r + 1):n))
+        Zperm[1:r, :] .= -(R11 \ R12)
+    end
+    @inbounds for j in 1:nfree
+        Zperm[r + j, j] = 1.0
+    end
+
+    Z = zeros(Float64, n, nfree)
+    pcol = Fq.pcol
+    @inbounds for j in 1:n
+        Z[pcol[j], :] .= Zperm[j, :]
+    end
+    return Z
+end
+
+function _nullspace_float_qr_dense(F::RealField, A::AbstractMatrix{<:Real})
+    n = size(A, 2)
+    n == 0 && return zeros(Float64, 0, 0)
+
+    Fq = qr(A, Val(true))
+    R = Fq.R
+    d = diag(R)
+    tol = _float_tol(F, A)
+    r = count(x -> abs(x) > tol, d)
+    nfree = n - r
+    nfree <= 0 && return zeros(Float64, n, 0)
+
+    Zperm = zeros(Float64, n, nfree)
+    if r > 0
+        R11 = Matrix(view(R, 1:r, 1:r))
+        R12 = Matrix(view(R, 1:r, (r + 1):n))
+        Zperm[1:r, :] .= -(R11 \ R12)
+    end
+    @inbounds for j in 1:nfree
+        Zperm[r + j, j] = 1.0
+    end
+
+    Z = zeros(Float64, n, nfree)
+    piv = Vector{Int}(Fq.p[1:n])
+    @inbounds for j in 1:n
+        Z[piv[j], :] .= Zperm[j, :]
+    end
+    return Z
+end
+
+function _nullspace_float_svd(F::RealField, A)
     S = svd(Matrix(A); full=true)
-    r = _rank_float(F, A)
+    r = _rank_float_svd(F, A)
     n = size(A, 2)
     r >= n && return zeros(eltype(S.Vt), n, 0)
     return Matrix(S.Vt[(r + 1):end, :])'
+end
+
+function _nullspace_float(F::RealField, A::AbstractMatrix{<:Real})
+    return _nullspace_float_qr_dense(F, A)
+end
+
+function _nullspace_float(F::RealField, A::SparseMatrixCSC)
+    return _nullspace_from_qr_sparse_float(F, A)
+end
+
+function _nullspace_float(F::RealField, A::Transpose{<:Real,<:SparseMatrixCSC})
+    return _nullspace_from_qr_sparse_float(F, A)
+end
+
+function _nullspace_float(F::RealField, A::Adjoint{<:Real,<:SparseMatrixCSC})
+    return _nullspace_from_qr_sparse_float(F, A)
 end
 
 function _rref_float(F::RealField, A; pivots::Bool=true)
@@ -851,6 +1554,13 @@ function _rref_float(F::RealField, A; pivots::Bool=true)
     return pivots ? (M, Tuple(pivs)) : M
 end
 
+function _rref_float(F::RealField, A::SparseMatrixCSC; pivots::Bool=true)
+    Fq = qr(A)
+    r = _rank_float(F, A)
+    pivs = Vector{Int}(Fq.pcol[1:r])
+    return pivots ? (copy(A), Tuple(pivs)) : copy(A)
+end
+
 function _colspace_float(F::RealField, A)
     Q, R, piv = qr(Matrix(A), Val(true))
     r = _rank_float(F, A)
@@ -858,11 +1568,76 @@ function _colspace_float(F::RealField, A)
     return Matrix(A)[:, cols]
 end
 
+function _colspace_float(F::RealField, A::Transpose{<:Real,<:SparseMatrixCSC})
+    Fq = qr(A)
+    r = _rank_float(F, A)
+    cols = Fq.pcol[1:r]
+    return A[:, cols]
+end
+
+function _colspace_float(F::RealField, A::Adjoint{<:Real,<:SparseMatrixCSC})
+    Fq = qr(A)
+    r = _rank_float(F, A)
+    cols = Fq.pcol[1:r]
+    return A[:, cols]
+end
+
+function _colspace_float(F::RealField, A::SparseMatrixCSC)
+    Fq = qr(A)
+    r = _rank_float(F, A)
+    cols = Fq.pcol[1:r]
+    return A[:, cols]
+end
+
 function _solve_fullcolumn_float(F::RealField, B, Y; check_rhs::Bool=true)
     Ymat = Y isa AbstractVector ? reshape(Y, :, 1) : Matrix(Y)
-    X = Matrix(B) \ Ymat
+    Fq = qr(Matrix(B), Val(true))
+    X = Fq \ Ymat
     if check_rhs
         R = Matrix(B) * X - Ymat
+        tol = _float_tol(F, B)
+        norm(R) <= tol || error("solve_fullcolumn_float: RHS residual too large")
+    end
+    return (Y isa AbstractVector) ? vec(X) : X
+end
+
+const _FLOAT_SPARSE_FACTOR_CACHE = Dict{NTuple{5,UInt},Any}()
+const FLOAT_SPARSE_FACTOR_CACHE_MAX = Ref(128)
+
+@inline function _float_sparse_cache_key(B::SparseMatrixCSC)
+    return (
+        objectid(B.colptr),
+        objectid(B.rowval),
+        objectid(B.nzval),
+        UInt(size(B, 1)),
+        UInt(size(B, 2)),
+    )
+end
+
+function clear_float_sparse_factor_cache!()
+    empty!(_FLOAT_SPARSE_FACTOR_CACHE)
+    return nothing
+end
+
+function _solve_fullcolumn_float(F::RealField, B::SparseMatrixCSC, Y;
+                                 check_rhs::Bool=true, cache::Bool=true, factor=nothing)
+    Ymat = Y isa AbstractVector ? reshape(Y, :, 1) : Matrix(Y)
+    fac = factor
+    if fac === nothing && cache
+        fac = get(_FLOAT_SPARSE_FACTOR_CACHE, _float_sparse_cache_key(B), nothing)
+    end
+    if fac === nothing
+        fac = qr(B)
+        if cache
+            if length(_FLOAT_SPARSE_FACTOR_CACHE) >= FLOAT_SPARSE_FACTOR_CACHE_MAX[]
+                empty!(_FLOAT_SPARSE_FACTOR_CACHE)
+            end
+            _FLOAT_SPARSE_FACTOR_CACHE[_float_sparse_cache_key(B)] = fac
+        end
+    end
+    X = fac \ Ymat
+    if check_rhs
+        R = B * X - Ymat
         tol = _float_tol(F, B)
         norm(R) <= tol || error("solve_fullcolumn_float: RHS residual too large")
     end
@@ -920,9 +1695,25 @@ function _rank_fp(A::AbstractMatrix{FpElem{p}}) where {p}
     return length(pivs)
 end
 
-_rank_fp(A::SparseMatrixCSC{FpElem{p},Int}) where {p} = _rank_fp(Matrix(A))
-_rank_fp(A::Transpose{FpElem{p},<:SparseMatrixCSC{FpElem{p},Int}}) where {p} = _rank_fp(Matrix(A))
-_rank_fp(A::Adjoint{FpElem{p},<:SparseMatrixCSC{FpElem{p},Int}}) where {p} = _rank_fp(Matrix(A))
+function _rank_fp(A::SparseMatrixCSC{FpElem{p},Int}) where {p}
+    m, n = size(A)
+    if m == 0 || n == 0
+        return 0
+    end
+    rows = _sparse_rows(A)
+    R = SparseRREF{FpElem{p}}(n)
+    maxrank = min(m, n)
+    @inbounds for i in 1:m
+        _sparse_rref_push_homogeneous!(R, rows[i])
+        if _rref_rank(R) == maxrank
+            break
+        end
+    end
+    return _rref_rank(R)
+end
+
+_rank_fp(A::Transpose{FpElem{p},<:SparseMatrixCSC{FpElem{p},Int}}) where {p} = _rank_fp(parent(A))
+_rank_fp(A::Adjoint{FpElem{p},<:SparseMatrixCSC{FpElem{p},Int}}) where {p} = _rank_fp(parent(A))
 
 function _nullspace_fp(A::AbstractMatrix{FpElem{p}}) where {p}
     R, pivs = _rref_fp(A; pivots=true)
@@ -955,10 +1746,48 @@ function _nullspace_fp(A::AbstractMatrix{FpElem{p}}) where {p}
     return Z
 end
 
-_nullspace_fp(A::SparseMatrixCSC{FpElem{p},Int}) where {p} = _nullspace_fp(Matrix(A))
+function _nullspace_fp(A::SparseMatrixCSC{FpElem{p},Int}) where {p}
+    m, n = size(A)
+    rows = _sparse_rows(A)
+    R = SparseRREF{FpElem{p}}(n)
+    maxrank = min(m, n)
+    @inbounds for i in 1:m
+        _sparse_rref_push_homogeneous!(R, rows[i])
+        if _rref_rank(R) == maxrank
+            break
+        end
+    end
+    return _nullspace_from_pivots(R, n)
+end
 
-_nullspace_fp(A::Transpose{FpElem{p},<:SparseMatrixCSC{FpElem{p},Int}}) where {p} = _nullspace_fp(sparse(A))
-_nullspace_fp(A::Adjoint{FpElem{p},<:SparseMatrixCSC{FpElem{p},Int}})  where {p} = _nullspace_fp(sparse(A))
+function _nullspace_fp_from_transposed_parent(A::SparseMatrixCSC{FpElem{p},Int}) where {p}
+    # For transpose(A), rows are exactly the original sparse columns of A.
+    m, n = size(A)
+    R = SparseRREF{FpElem{p}}(m)
+    maxrank = min(n, m)
+    for col in 1:n
+        rng = A.colptr[col]:(A.colptr[col + 1] - 1)
+        idx = Int[]
+        val = FpElem{p}[]
+        sizehint!(idx, length(rng))
+        sizehint!(val, length(rng))
+        @inbounds for ptr in rng
+            v = A.nzval[ptr]
+            if !iszero(v)
+                push!(idx, A.rowval[ptr])
+                push!(val, v)
+            end
+        end
+        _sparse_rref_push_homogeneous!(R, SparseRow{FpElem{p}}(idx, val))
+        if _rref_rank(R) == maxrank
+            break
+        end
+    end
+    return _nullspace_from_pivots(R, m)
+end
+
+_nullspace_fp(A::Transpose{FpElem{p},<:SparseMatrixCSC{FpElem{p},Int}}) where {p} = _nullspace_fp_from_transposed_parent(parent(A))
+_nullspace_fp(A::Adjoint{FpElem{p},<:SparseMatrixCSC{FpElem{p},Int}})  where {p} = _nullspace_fp_from_transposed_parent(parent(A))
 
 function _solve_fullcolumn_fp(B::AbstractMatrix{FpElem{p}},
                               Y::AbstractVecOrMat{FpElem{p}};
@@ -997,7 +1826,53 @@ end
 function _solve_fullcolumn_fp(B::SparseMatrixCSC{FpElem{p},Int},
                               Y::AbstractVecOrMat{FpElem{p}};
                               check_rhs::Bool=true) where {p}
-    return _solve_fullcolumn_fp(Matrix(B), Y; check_rhs=check_rhs)
+    want_vec = false
+    Ymat = Y
+    if Y isa AbstractVector
+        want_vec = true
+        Ymat = reshape(Y, :, 1)
+    end
+
+    m, n = size(B)
+    size(Ymat, 1) == m || throw(DimensionMismatch("B and Y must have same row count"))
+
+    rhs = size(Ymat, 2)
+    RA = SparseRREFAugmented{FpElem{p}}(n, rhs)
+    rows = _sparse_rows(B)
+
+    @inbounds for i in 1:m
+        row_rhs = Vector{FpElem{p}}(undef, rhs)
+        for j in 1:rhs
+            row_rhs[j] = Ymat[i, j]
+        end
+        status = _sparse_rref_push_augmented!(RA, rows[i], row_rhs)
+        if status === :inconsistent
+            error("solve_fullcolumn_fp: RHS is not in column space of B")
+        end
+    end
+
+    pivs = RA.rref.pivot_cols
+    if length(pivs) != n
+        error("solve_fullcolumn_fp: expected full column rank, got rank $(length(pivs)) < $n")
+    end
+    @inbounds for pcol in pivs
+        if pcol > n
+            error("solve_fullcolumn_fp: RHS is not in column space of B")
+        end
+    end
+
+    X = zeros(FpElem{p}, n, rhs)
+    @inbounds for (row, pcol) in enumerate(pivs)
+        X[pcol, :] .= RA.pivot_rhs[row]
+    end
+
+    if check_rhs
+        if B * X != Ymat
+            error("solve_fullcolumn_fp: RHS check failed")
+        end
+    end
+
+    return want_vec ? vec(X) : X
 end
 
 @inline function _f2_setbit!(row::Vector{UInt64}, col::Int)
@@ -2283,6 +3158,7 @@ function clear_fullcolumn_cache!()
     empty!(_FULLCOLUMN_FACTOR_CACHE)
     empty!(_NEMO_FULLCOLUMN_FACTOR_CACHE_QQ)
     empty!(_NEMO_FULLCOLUMN_FACTOR_CACHE_FP)
+    empty!(_FLOAT_SPARSE_FACTOR_CACHE)
     return nothing
 end
 
@@ -3148,7 +4024,7 @@ end
 
 """
     rankQQ_dim(A; backend=:auto, max_primes=4, primes=DEFAULT_MODULAR_PRIMES,
-                 small_threshold=20_000) -> Int
+                 small_threshold=RANKQQ_DIM_SMALL_THRESHOLD[]) -> Int
 
 Fast rank intended for dimension-only queries:
 - backend=:exact  uses exact rankQQ
@@ -3159,7 +4035,7 @@ function rankQQ_dim(A::AbstractMatrix{QQ};
                     backend::Symbol=:auto,
                     max_primes::Int=4,
                     primes::Vector{Int}=DEFAULT_MODULAR_PRIMES,
-                    small_threshold::Int=20_000)::Int
+                    small_threshold::Int=RANKQQ_DIM_SMALL_THRESHOLD[])::Int
     m, n = size(A)
     (m == 0 || n == 0) && return 0
 
@@ -3402,6 +4278,12 @@ function _solve_fullcolumn_tiny(field::AbstractCoeffField, B, Y; check_rhs::Bool
     m, n = size(B)
     size(Ymat, 1) == m || throw(DimensionMismatch("B and Y must have same row count"))
     if n == 0
+        if check_rhs
+            z = zero(eltype(Ymat))
+            @inbounds for y in Ymat
+                y == z || error("solve_fullcolumn: right-hand side is not in column space of B")
+            end
+        end
         return want_vec ? eltype(Ymat)[] : zeros(eltype(Ymat), 0, size(Ymat, 2))
     end
     Bdense = Matrix(B)
@@ -3443,6 +4325,7 @@ function rref(field::AbstractCoeffField, A; pivots::Bool=true, backend::Symbol=:
         return _rref_fp(A; pivots=pivots)
     end
     if field isa RealField
+        _ = choose_linalg_backend(field, A; op=:rref, backend=backend)
         return _rref_float(field, A; pivots=pivots)
     end
     error("FieldLinAlg.rref: unsupported field $(typeof(field))")
@@ -3473,6 +4356,10 @@ function rank(field::AbstractCoeffField, A; backend::Symbol=:auto)
         return _rank_fp(A)
     end
     if field isa RealField
+        be = choose_linalg_backend(field, A; op=:rank, backend=backend)
+        if be == :float_dense_svd
+            return _rank_float_svd(field, A)
+        end
         return _rank_float(field, A)
     end
     error("FieldLinAlg.rank: unsupported field $(typeof(field))")
@@ -3507,6 +4394,14 @@ function nullspace(field::AbstractCoeffField, A; backend::Symbol=:auto)
         return _nullspace_fp(A)
     end
     if field isa RealField
+        be = choose_linalg_backend(field, A; op=:nullspace, backend=backend)
+        if be == :float_dense_svd
+            return _nullspace_float_svd(field, A)
+        end
+        if be == :float_sparse_svds
+            Z = _nullspace_float_svds(field, A)
+            Z === nothing || return Z
+        end
         return _nullspace_float(field, A)
     end
     error("FieldLinAlg.nullspace: unsupported field $(typeof(field))")
@@ -3539,6 +4434,7 @@ function colspace(field::AbstractCoeffField, A; backend::Symbol=:auto)
         return A[:, collect(pivs)]
     end
     if field isa RealField
+        _ = choose_linalg_backend(field, A; op=:colspace, backend=backend)
         return _colspace_float(field, A)
     end
     error("FieldLinAlg.colspace: unsupported field $(typeof(field))")
@@ -3547,7 +4443,7 @@ end
 function solve_fullcolumn(field::AbstractCoeffField, B, Y;
                           check_rhs::Bool=true, backend::Symbol=:auto,
                           cache::Bool=true, factor=nothing)
-    if backend == :auto && _is_tiny_solve(B, Y)
+    if backend == :auto && _is_tiny_solve(B, Y) && !(field isa RealField)
         return _solve_fullcolumn_tiny(field, B, Y; check_rhs=check_rhs)
     end
     if field isa QQField
@@ -3577,6 +4473,11 @@ function solve_fullcolumn(field::AbstractCoeffField, B, Y;
         return _solve_fullcolumn_fp(B, Y; check_rhs=check_rhs)
     end
     if field isa RealField
+        be = choose_linalg_backend(field, B; op=:solve, backend=backend)
+        if be == :float_sparse_qr
+            Bs = B isa SparseMatrixCSC ? B : sparse(B)
+            return _solve_fullcolumn_float(field, Bs, Y; check_rhs=check_rhs, cache=cache, factor=factor)
+        end
         return _solve_fullcolumn_float(field, B, Y; check_rhs=check_rhs)
     end
     error("FieldLinAlg.solve_fullcolumn: unsupported field $(typeof(field))")
@@ -3600,6 +4501,10 @@ function rank_dim(field::AbstractCoeffField, A; backend::Symbol=:auto, kwargs...
         return _rank_fp(A)
     end
     if field isa RealField
+        be = choose_linalg_backend(field, A; op=:rank, backend=backend)
+        if be == :float_dense_svd
+            return _rank_float_svd(field, A)
+        end
         return _rank_float(field, A)
     end
     return rank(field, A; backend=backend)
@@ -3608,7 +4513,9 @@ end
 function rank_restricted(field::AbstractCoeffField, A::SparseMatrixCSC,
                          rows::AbstractVector{Int}, cols::AbstractVector{Int};
                          backend::Symbol=:auto, kwargs...)
-    if _is_tiny_matrix_dims(length(rows), length(cols))
+    if _is_tiny_matrix_dims(length(rows), length(cols)) &&
+       !(field isa RealField) &&
+       !(field isa PrimeField && field.p > 3)
         check = haskey(kwargs, :check) ? kwargs[:check] : false
         S = Matrix(_sparse_extract_restricted(A, rows, cols; check=check))
         return rank(field, S; backend=backend)
@@ -3733,6 +4640,21 @@ function solve_fullcolumn_restricted(field::AbstractCoeffField, B::AbstractMatri
     Ysub = _restricted_rhs_view(Y, rows)
     kws = _drop_check_kw(kwargs)
     return solve_fullcolumn(field, Bsub, Ysub; check_rhs=check_rhs, backend=backend, kws...)
+end
+
+function __init__()
+    _LINALG_THRESHOLDS_INITIALIZED[] && return
+    path = linalg_thresholds_path()
+    loaded = load_linalg_thresholds!(; path=path, warn_on_mismatch=true)
+    if !loaded && !isfile(path)
+        try
+            autotune_linalg_thresholds!(; path=path, save=true, quiet=true, profile=:startup)
+        catch err
+            @warn "FieldLinAlg: startup autotune failed; using defaults." path exception=(err, catch_backtrace())
+        end
+    end
+    _LINALG_THRESHOLDS_INITIALIZED[] = true
+    return nothing
 end
 
 end # module FieldLinAlg

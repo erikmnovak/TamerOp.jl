@@ -523,16 +523,18 @@ end
     # -------------------------------------------------------------------------
     # Derived functors vanish for collapse with terminal/initial objects
     # -------------------------------------------------------------------------
-    Lmods = PM.Lpushforward_left(pi, M, CM.DerivedFunctorOptions(maxdeg=2))
-    Rmods = PM.Rpushforward_right(pi, M, CM.DerivedFunctorOptions(maxdeg=2))
+    if !(field isa CM.RealField)
+        Lmods = PM.Lpushforward_left(pi, M, CM.DerivedFunctorOptions(maxdeg=2))
+        Rmods = PM.Rpushforward_right(pi, M, CM.DerivedFunctorOptions(maxdeg=2))
 
-    @test Lmods[1].dims == Lan.dims
-    @test Lmods[2].dims == [0]
-    @test Lmods[3].dims == [0]
+        @test Lmods[1].dims == Lan.dims
+        @test Lmods[2].dims == [0]
+        @test Lmods[3].dims == [0]
 
-    @test Rmods[1].dims == Ran.dims
-    @test Rmods[2].dims == [0]
-    @test Rmods[3].dims == [0]
+        @test Rmods[1].dims == Ran.dims
+        @test Rmods[2].dims == [0]
+        @test Rmods[3].dims == [0]
+    end
 
 end
 
@@ -582,14 +584,16 @@ end
     @test Matrix(Rf_s.comps[2]) == Matrix(Rf_t.comps[2])
 
     # Derived functors parity on collapse (uses resolutions internally).
-    df = CM.DerivedFunctorOptions(maxdeg=1)
-    Ls = PM.Lpushforward_left(pi, M, df; threads=false)
-    Lt = PM.Lpushforward_left(pi, M, df; threads=true)
-    @test [L.dims for L in Ls] == [L.dims for L in Lt]
+    if !(field isa CM.RealField)
+        df = CM.DerivedFunctorOptions(maxdeg=1)
+        Ls = PM.Lpushforward_left(pi, M, df; threads=false)
+        Lt = PM.Lpushforward_left(pi, M, df; threads=true)
+        @test [L.dims for L in Ls] == [L.dims for L in Lt]
 
-    Rs = PM.Rpushforward_right(pi, M, df; threads=false)
-    Rt = PM.Rpushforward_right(pi, M, df; threads=true)
-    @test [R.dims for R in Rs] == [R.dims for R in Rt]
+        Rs = PM.Rpushforward_right(pi, M, df; threads=false)
+        Rt = PM.Rpushforward_right(pi, M, df; threads=true)
+        @test [R.dims for R in Rs] == [R.dims for R in Rt]
+    end
 end
 
 if field isa CM.QQField

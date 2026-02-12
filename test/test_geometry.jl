@@ -78,6 +78,20 @@ if field isa CM.QQField
     @test isapprox(PM.region_diameter(pi2, t_out; box=box2, metric=:Linf), 2.0; atol=1e-12)
     @test isapprox(PM.region_diameter(pi2, t_out; box=box2, metric=:L2),   2.0 * sqrt(2.0); atol=1e-12)
 end
+
+@testset "PL mode contract is strict" begin
+    Ups = [PLB.BoxUpset([0.0])]
+    Downs = [PLB.BoxDownset([1.0])]
+    Phi = zeros(K, 1, 1)
+    _, _, pi = PLB.encode_fringe_boxes(Ups, Downs, Phi)
+
+    @test PLB.locate(pi, [0.25]; mode=:fast) != 0
+    @test PLB.locate(pi, [0.25]; mode=:verified) != 0
+    @test_throws ArgumentError PLB.locate(pi, [0.25]; mode=:hybrid_fast)
+    @test_throws ArgumentError PLB.locate(pi, [0.25]; mode=:hybrid_verified)
+    @test_throws ArgumentError CM.InvariantOptions(pl_mode=:hybrid_fast)
+    @test_throws ArgumentError CM.InvariantOptions(pl_mode=:exact)
+end
 end
 
 if field isa CM.QQField
@@ -127,6 +141,33 @@ if field isa CM.QQField
     # Diameter by bbox and by vertices should match in 1D.
     @test isapprox(PM.region_diameter(pi, t1; box=box, metric=:L2, method=:bbox),     1.0; atol=1e-12)
     @test isapprox(PM.region_diameter(pi, t1; box=box, metric=:L2, method=:vertices), 1.0; atol=1e-12)
+
+    # Batch locate API parity (serial/threaded and cache/non-cache).
+    Xq = [0.25 0.50 0.75 1.25 1.50 1.75;
+          0.00 0.00 0.00 0.00 0.00 0.00]
+    expected = [PLP.locate(pi, [Xq[1, j]]) for j in 1:size(Xq, 2)]
+    expected_verified = [PLP.locate(pi, [Xq[1, j]]; mode=:verified) for j in 1:size(Xq, 2)]
+    @test expected_verified == expected
+    dest_serial = fill(0, size(Xq, 2))
+    dest_threaded = fill(0, size(Xq, 2))
+    PLP.locate_many!(dest_serial, pi, Xq[1:1, :]; threaded=false)
+    PLP.locate_many!(dest_threaded, pi, Xq[1:1, :]; threaded=true)
+    @test dest_serial == expected
+    @test dest_threaded == expected
+
+    dest_verified = fill(0, size(Xq, 2))
+    PLP.locate_many!(dest_verified, pi, Xq[1:1, :]; threaded=false, mode=:verified)
+    @test dest_verified == expected
+
+    if PLP.HAVE_POLY
+        cache = PLP.compile_geometry_cache(pi; box=box)
+        dest_cache = fill(0, size(Xq, 2))
+        PLP.locate_many!(dest_cache, cache, Xq[1:1, :]; threaded=false)
+        @test dest_cache == expected
+        dest_cache_verified = fill(0, size(Xq, 2))
+        PLP.locate_many!(dest_cache_verified, cache, Xq[1:1, :]; threaded=false, mode=:verified)
+        @test dest_cache_verified == expected
+    end
 end
 end
 
@@ -269,6 +310,33 @@ if field isa CM.QQField
         # The only internal neighbor of region 1 in this setup is region 2; its shared edge has length 1.
         mint = sum(e.measure for e in bd1 if e.neighbor == 2)
         @test isapprox(mint, 1.0; atol=1e-8, rtol=0.0)
+
+        # Final-product cache reuse (same key => same cached object instance).
+        bd1_b = PM.region_boundary_measure_breakdown(pi2, 1; cache=cache2, strict=true, mode=:fast)
+        @test bd1_b === bd1
+        adj_cache_a = PM.region_adjacency(pi2; cache=cache2, strict=true, mode=:fast)
+        adj_cache_b = PM.region_adjacency(pi2; cache=cache2, strict=true, mode=:fast)
+        @test adj_cache_b === adj_cache_a
+
+        # Auto-cache parity (no explicit cache argument).
+        bd1_auto = PM.region_boundary_measure_breakdown(pi2, 1; box=box2, strict=true, mode=:fast)
+        @test bd1_auto == bd1
+        adj_auto = PM.region_adjacency(pi2; box=box2, strict=true, mode=:fast)
+        @test adj_auto == adj_cache_a
+
+        # Compile-cache alias should behave like poly_in_box_cache and also accelerate
+        # Monte Carlo membership probes by reusing precompiled float inequalities.
+        cache_comp = PLP.compile_geometry_cache(pi2; box=box2, closure=true)
+        @test cache_comp isa PLP.PolyInBoxCache
+        @test length(cache_comp.Af) == 2
+        @test length(cache_comp.bf_strict) == 2
+        @test length(cache_comp.bf_relaxed) == 2
+
+        rng_mc_a = MersenneTwister(77)
+        rng_mc_b = MersenneTwister(77)
+        w_mc_uncached = PM.region_weights(pi2; box=box2, method=:mc, nsamples=20_000, rng=rng_mc_a, strict=false)
+        w_mc_cached = PM.region_weights(pi2; cache=cache_comp, method=:mc, nsamples=20_000, rng=rng_mc_b, strict=false)
+        @test w_mc_cached == w_mc_uncached
     end
 end
 end

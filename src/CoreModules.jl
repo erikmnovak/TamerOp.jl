@@ -421,23 +421,6 @@ end
 
 
 
-# ----- (optional) thin wrappers so callers can hold 'a QQ matrix' abstractly -----
-abstract type AbstractQQMatrix end
-
-"Plain Julia dense QQ matrix wrapper."
-struct QQDense <: AbstractQQMatrix
-    data::Matrix{QQ}
-end
-
-"Extract a dense matrix of QQ from any AbstractQQMatrix."
-to_dense(A::QQDense) = A.data
-
-# Nemo integration (accelerated QQ linear algebra) is provided via a package
-# extension, so CoreModules has no hard dependency on Nemo and does not
-# dynamically load it here.
-
-export AbstractQQMatrix, QQDense, to_dense
-
 # ----- exact rational <-> string (for JSON round-trips) --------------------------
 "Encode a rational as \"num/den\" so it survives JSON round-trips exactly."
 rational_to_string(x::QQ) = string(numerator(x), "/", denominator(x))
@@ -769,8 +752,16 @@ function locate(pi::AbstractPLikeEncodingMap, x::NTuple{N,<:Real}) where {N}
     return locate(pi, collect(x))
 end
 
+function locate(pi::AbstractPLikeEncodingMap, x::NTuple{N,<:Real}; kwargs...) where {N}
+    return locate(pi, collect(x); kwargs...)
+end
+
 locate(enc::CompiledEncoding, x) = locate(enc.pi, x)
 locate(enc::CompiledEncoding, x::NTuple{N,<:Real}) where {N} = locate(enc.pi, x)
+locate(enc::CompiledEncoding, x::AbstractVector) = locate(enc.pi, x)
+locate(enc::CompiledEncoding, x; kwargs...) = locate(enc.pi, x; kwargs...)
+locate(enc::CompiledEncoding, x::NTuple{N,<:Real}; kwargs...) where {N} = locate(enc.pi, x; kwargs...)
+locate(enc::CompiledEncoding, x::AbstractVector; kwargs...) = locate(enc.pi, x; kwargs...)
 
 """
     dimension(pi) -> Int
@@ -874,12 +865,22 @@ end
 ResolutionOptions(; maxlen::Int=3, minimal::Bool=false, check::Bool=true) =
     ResolutionOptions(maxlen, minimal, check)
 
+@inline function validate_pl_mode(mode::Symbol)::Symbol
+    if mode === :fast
+        return :fast
+    elseif mode === :verified
+        return :verified
+    end
+    throw(ArgumentError("pl_mode must be exactly :fast or :verified (got $(mode))"))
+end
+
 """
     InvariantOptions(; axes=nothing, axes_policy=:encoding, max_axis_len=256,
-                     box=nothing, threads=nothing, strict=nothing)
+                     box=nothing, threads=nothing, strict=nothing, pl_mode=:fast)
 
 Options controlling invariant computations (Euler surface, MMA decomposition,
-signed barcode, distances, etc).
+signed barcode, distances, etc). `pl_mode` controls PL geometry location policy:
+`:fast` (default) or `:verified`.
 """
 struct InvariantOptions
     axes::Any
@@ -888,14 +889,20 @@ struct InvariantOptions
     box::Any
     threads::Union{Nothing,Bool}
     strict::Union{Nothing,Bool}
+    pl_mode::Symbol
 end
 InvariantOptions(; axes=nothing,
                  axes_policy::Symbol=:encoding,
                  max_axis_len::Int=256,
                  box=nothing,
                  threads=nothing,
-                 strict=nothing) =
-    InvariantOptions(axes, axes_policy, max_axis_len, box, threads, strict)
+                 strict=nothing,
+                 pl_mode::Symbol=:fast) =
+    InvariantOptions(axes, axes_policy, max_axis_len, box, threads, strict, validate_pl_mode(pl_mode))
+
+# Preserve positional construction sites while defaulting to :fast mode.
+InvariantOptions(axes, axes_policy::Symbol, max_axis_len::Int, box, threads, strict) =
+    InvariantOptions(axes, axes_policy, max_axis_len, box, threads, strict, :fast)
 
 """
     DerivedFunctorOptions(; maxdeg=3, model=:auto, canon=:auto)
@@ -972,27 +979,41 @@ Stored entries:
 - injective resolutions, keyed by `(objectid(module), maxlen)`
 - indicator resolution tuples, keyed by `(objectid(HM), objectid(HN), maxlen_or_neg1)`
 """
+struct ResolutionKey2
+    a::UInt
+    maxlen::Int
+end
+
+struct ResolutionKey3
+    a::UInt
+    b::UInt
+    maxlen::Int
+end
+
+@inline resolution_key2(a, maxlen::Integer) = ResolutionKey2(UInt(objectid(a)), Int(maxlen))
+@inline resolution_key3(a, b, maxlen::Integer) = ResolutionKey3(UInt(objectid(a)), UInt(objectid(b)), Int(maxlen))
+
 mutable struct ResolutionCache
     lock::Base.ReentrantLock
-    projective::Dict{Tuple{UInt,Int},Any}
-    injective::Dict{Tuple{UInt,Int},Any}
-    indicator::Dict{Tuple{UInt,UInt,Int},Any}
+    projective::Dict{ResolutionKey2,Any}
+    injective::Dict{ResolutionKey2,Any}
+    indicator::Dict{ResolutionKey3,Any}
     # Thread-sharded memo stores for lock-free fast-path lookups/inserts.
-    projective_shards::Vector{Dict{Tuple{UInt,Int},Any}}
-    injective_shards::Vector{Dict{Tuple{UInt,Int},Any}}
-    indicator_shards::Vector{Dict{Tuple{UInt,UInt,Int},Any}}
+    projective_shards::Vector{Dict{ResolutionKey2,Any}}
+    injective_shards::Vector{Dict{ResolutionKey2,Any}}
+    indicator_shards::Vector{Dict{ResolutionKey3,Any}}
 end
 
 function ResolutionCache()
     nshards = max(1, Base.Threads.maxthreadid())
     return ResolutionCache(
         Base.ReentrantLock(),
-        Dict{Tuple{UInt,Int},Any}(),
-        Dict{Tuple{UInt,Int},Any}(),
-        Dict{Tuple{UInt,UInt,Int},Any}(),
-        [Dict{Tuple{UInt,Int},Any}() for _ in 1:nshards],
-        [Dict{Tuple{UInt,Int},Any}() for _ in 1:nshards],
-        [Dict{Tuple{UInt,UInt,Int},Any}() for _ in 1:nshards],
+        Dict{ResolutionKey2,Any}(),
+        Dict{ResolutionKey2,Any}(),
+        Dict{ResolutionKey3,Any}(),
+        [Dict{ResolutionKey2,Any}() for _ in 1:nshards],
+        [Dict{ResolutionKey2,Any}() for _ in 1:nshards],
+        [Dict{ResolutionKey3,Any}() for _ in 1:nshards],
     )
 end
 
@@ -1029,12 +1050,14 @@ mutable struct EncodingCache
     posets::Dict{Any,Any}
     cubical::Dict{Any,Any}
     region_posets::Dict{Tuple{UInt,UInt,Symbol},Any}
+    geometry::Dict{Any,Any}
 end
 
 EncodingCache() = EncodingCache(Base.ReentrantLock(),
                                 Dict{Any,Any}(),
                                 Dict{Any,Any}(),
-                                Dict{Tuple{UInt,UInt,Symbol},Any}())
+                                Dict{Tuple{UInt,UInt,Symbol},Any}(),
+                                Dict{Any,Any}())
 
 function clear_encoding_cache!(cache::EncodingCache)
     Base.lock(cache.lock)
@@ -1042,6 +1065,7 @@ function clear_encoding_cache!(cache::EncodingCache)
         empty!(cache.posets)
         empty!(cache.cubical)
         empty!(cache.region_posets)
+        empty!(cache.geometry)
     finally
         Base.unlock(cache.lock)
     end
@@ -1085,6 +1109,7 @@ mutable struct SessionCache
     modules::Dict{Tuple{UInt,UInt},ModuleCache}
     resolution::ResolutionCache
     hom_system::Any
+    slice_plan::Any
     product_dense::IdDict{Any,Any}
     product_obj::IdDict{Any,Any}
 end
@@ -1093,6 +1118,7 @@ SessionCache() = SessionCache(Base.ReentrantLock(),
                               Dict{UInt,EncodingCache}(),
                               Dict{Tuple{UInt,UInt},ModuleCache}(),
                               ResolutionCache(),
+                              nothing,
                               nothing,
                               IdDict{Any,Any}(),
                               IdDict{Any,Any}())
@@ -1167,6 +1193,12 @@ invalidate_module_cache!(session::SessionCache, M) =
     return cache
 end
 
+@inline session_slice_plan_cache(session::SessionCache) = session.slice_plan
+@inline function set_session_slice_plan_cache!(session::SessionCache, cache)
+    session.slice_plan = cache
+    return cache
+end
+
 function clear_session_cache!(session::SessionCache)
     Base.lock(session.lock)
     try
@@ -1180,6 +1212,7 @@ function clear_session_cache!(session::SessionCache)
         empty!(session.modules)
         clear_resolution_cache!(session.resolution)
         session.hom_system = nothing
+        session.slice_plan = nothing
         empty!(session.product_dense)
         empty!(session.product_obj)
     finally
@@ -1349,6 +1382,7 @@ export field_cache_key, poset_cache_key, module_cache_key
 export encoding_cache!, module_cache!
 export invalidate_encoding_cache!, invalidate_module_cache!
 export session_resolution_cache, session_hom_cache, set_session_hom_cache!
+export session_slice_plan_cache, set_session_slice_plan_cache!
 export EncodingResult, ResolutionResult, InvariantResult, unwrap
 
 end # module

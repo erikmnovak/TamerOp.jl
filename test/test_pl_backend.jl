@@ -49,6 +49,16 @@ with_fields(FIELDS_FULL) do field
     P = enc.P
     Ms = enc.Ms
 
+    # Workflow-level auto-cache: encode() should attach an EncodingCache even
+    # without an explicit SessionCache, and geometry calls should reuse it.
+    enc_one = PM.encode(F1, PM.EncodingOptions(backend=:pl))
+    @test enc_one.pi isa CM.CompiledEncoding
+    @test enc_one.pi.meta isa CM.EncodingCache
+    unit_box = ([0.0, 0.0], [1.0, 1.0])
+    adj_1 = PM.region_adjacency(enc_one.pi; box=unit_box, strict=true, mode=:fast)
+    adj_2 = PM.region_adjacency(enc_one.pi; box=unit_box, strict=true, mode=:fast)
+    @test adj_2 == adj_1
+
     # Ext computed on P should match ExtRn wrapper (which internally does the same steps).
     E_explicit = DF.Ext(Ms[1], Ms[2], df2)
     E_wrap = DF.ExtRn(F1, F2, enc_pl, df2)
@@ -240,6 +250,28 @@ end
         # dynamic module-property dispatch.
         PM.locate(pi2, (1.0, 1.0))
         @test (@allocated PM.locate(pi2, (1.0, 1.0))) == 0
+    end
+
+    @testset "incremental signature traversal consistency" begin
+        Ups3 = [PLB.BoxUpset([0.0, 0.0]), PLB.BoxUpset([2.0, -1.0])]
+        Downs3 = [PLB.BoxDownset([3.0, 1.0]), PLB.BoxDownset([1.0, 2.0])]
+        Phi3 = zeros(K, length(Downs3), length(Ups3))
+
+        _, _, pi3 = PLB.encode_fringe_boxes(Ups3, Downs3, Phi3, enc_axis)
+        MY = cld(length(Ups3), 64)
+        MZ = cld(length(Downs3), 64)
+
+        lin = 1
+        for I in CartesianIndices(Tuple(pi3.cell_shape))
+            idx0 = ntuple(j -> I[j] - 1, pi3.n)
+            x = PLB._cell_rep_axis(pi3.coords, idx0)
+            y, z = PLB._signature(x, Ups3, Downs3)
+            key = PLB._sigkey_from_bitvectors(y, z, Val(MY), Val(MZ))
+            rid = get(pi3.sig_to_region, key, 0)
+            @test rid != 0
+            @test pi3.cell_to_region[lin] == rid
+            lin += 1
+        end
     end
 
 end

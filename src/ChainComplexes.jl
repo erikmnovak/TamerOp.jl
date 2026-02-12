@@ -2,6 +2,7 @@ module ChainComplexes
 
 using LinearAlgebra
 using SparseArrays
+import Base.Threads
 
 using ..CoreModules: AbstractCoeffField, RealField, coeff_type, field_from_eltype
 using ..FieldLinAlg: SparseRow, SparseRREFAugmented, _sparse_rref_push_augmented!
@@ -233,13 +234,13 @@ end
 # Cochain complexes
 # ----------------------------
 
-struct CochainComplex{K}
+struct CochainComplex{K,A}
     tmin::Int
     tmax::Int
     dims::Vector{Int}                         # dims[t - tmin + 1] = dim C^t
     d::Vector{SparseMatrixCSC{K, Int}}        # d[idx] : C^t -> C^{t+1}
     labels::Vector{Vector{Int}}               # typed compute labels, per degree
-    annotations::Union{Nothing,Vector{Vector{Any}}}  # optional heterogeneous boundary metadata
+    annotations::Union{Nothing,Vector{Vector{A}}}  # optional heterogeneous boundary metadata
 end
 
 # Max cohomological degree stored in a cochain complex.
@@ -291,6 +292,7 @@ function CochainComplex{K}(tmin::Int,
 
     labs = Vector{Vector{Int}}(undef, length(dims))
     anns = nothing
+    annT = Any
     if labels === nothing
         for i in 1:length(dims)
             labs[i] = Int[]
@@ -316,16 +318,24 @@ function CochainComplex{K}(tmin::Int,
                 labs[i] = Int.(labels[i])
             end
         else
-            anns = Vector{Vector{Any}}(undef, length(dims))
+            accT = Union{}
             for i in 1:length(dims)
-                anns[i] = Vector{Any}(labels[i])
+                li = labels[i]
+                for x in li
+                    accT = typejoin(accT, typeof(x))
+                end
+            end
+            annT = accT === Union{} ? Any : accT
+            anns = Vector{Vector{annT}}(undef, length(dims))
+            for i in 1:length(dims)
+                anns[i] = Vector{annT}(labels[i])
                 # Keep compute-time metadata concrete and dimension-aligned.
                 labs[i] = collect(1:dims[i])
             end
         end
     end
 
-    return CochainComplex{K}(tmin, tmax, dims, d, labs, anns)
+    return CochainComplex{K,annT}(tmin, tmax, dims, d, labs, anns)
 end
 
 
@@ -422,8 +432,16 @@ If you only need a single degree, use `cohomology_data(C, t)` instead.
 """
 function cohomology_data(C::CochainComplex{K}) where {K}
     out = Vector{CohomologyData{K}}(undef, C.tmax - C.tmin + 1)
-    for (i, t) in enumerate(C.tmin:C.tmax)
-        out[i] = cohomology_data(C, t)
+    if Threads.nthreads() > 1 && length(out) >= 2
+        Threads.@threads for i in eachindex(out)
+            t = C.tmin + i - 1
+            out[i] = cohomology_data(C, t)
+        end
+    else
+        for i in eachindex(out)
+            t = C.tmin + i - 1
+            out[i] = cohomology_data(C, t)
+        end
     end
     return out
 end

@@ -20,6 +20,82 @@ with_fields(FIELDS_FULL) do field
     mk_flat(b, coords; id=:F) = FZ.IndFlat(mk_face(length(b), coords), b; id=id)
     mk_inj(b, coords; id=:E) = FZ.IndInj(mk_face(length(b), coords), b; id=id)
 
+    function _gather_projection_rows_naive(Bu::Matrix{K},
+                                           rows_u::Vector{Int},
+                                           rows_v::Vector{Int}) where {K}
+        Ph = length(rows_v)
+        du = size(Bu, 2)
+        out = Matrix{K}(undef, Ph, du)
+        Pg = length(rows_u)
+        j = 1
+        @inbounds for i in 1:Ph
+            target = rows_v[i]
+            while j <= Pg && rows_u[j] < target
+                j += 1
+            end
+            if j > Pg || rows_u[j] != target
+                error("naive box reference: projection mismatch; expected rows_v subset rows_u")
+            end
+            for c in 1:du
+                out[i, c] = Bu[j, c]
+            end
+        end
+        return out
+    end
+
+    function _naive_pmodule_on_box(FG::FZ.Flange{K},
+                                   a::NTuple{N,Int},
+                                   b::NTuple{N,Int},
+                                   field::CM.AbstractCoeffField) where {K,N}
+        Q, coords = ZE.grid_poset(a, b)
+        ncoords = length(coords)
+        rows_at = Vector{Vector{Int}}(undef, ncoords)
+        B = Vector{Matrix{K}}(undef, ncoords)
+        dims = Vector{Int}(undef, ncoords)
+
+        @inbounds for u in 1:ncoords
+            A, rows, cols = FZ.degree_matrix(FG, coords[u])
+            rows_at[u] = rows
+            if isempty(rows) || isempty(cols)
+                B[u] = zeros(K, length(rows), 0)
+                dims[u] = 0
+            else
+                Bu = PosetModules.FieldLinAlg.colspace(field, A)
+                B[u] = Bu
+                dims[u] = size(Bu, 2)
+            end
+        end
+
+        edge_maps = Dict{Tuple{Int,Int}, Matrix{K}}()
+        for (u, v) in FF.cover_edges(Q)
+            du = dims[u]
+            dv = dims[v]
+            if du == 0 || dv == 0
+                edge_maps[(u, v)] = zeros(K, dv, du)
+                continue
+            end
+            Im = _gather_projection_rows_naive(B[u], rows_at[u], rows_at[v])
+            edge_maps[(u, v)] = PosetModules.FieldLinAlg.solve_fullcolumn(field, B[v], Im)
+        end
+
+        return PM.PModule{K}(Q, dims, edge_maps; field=field)
+    end
+
+    function _sample_comparable_pairs(Q; rng::AbstractRNG, nsample::Int=64)
+        pairs = Tuple{Int,Int}[]
+        n = PM.nvertices(Q)
+        for u in 1:n, v in 1:n
+            FF.leq(Q, u, v) || continue
+            push!(pairs, (u, v))
+        end
+        if length(pairs) <= nsample
+            return pairs
+        end
+        order = collect(1:length(pairs))
+        Random.shuffle!(rng, order)
+        return [pairs[order[i]] for i in 1:nsample]
+    end
+
 
     @testset "Zn wrappers: common encoding matches explicit encoding route" begin
     # Two 1D flanges representing interval modules [0,5] and [2,7].
@@ -336,6 +412,348 @@ end
         @test FZ.dim_at(FG1, g) == M1.dims[u]
         @test FZ.dim_at(FG2, g) == M2.dims[u]
     end
+end
+
+@testset "ZnEncoding advanced cache API: compile_zn_cache + locate_many + box cache" begin
+    FG = FZ.Flange{K}(2,
+        [mk_flat([0, 0], [false, true])],
+        [mk_inj([1, 0], [false, true])],
+        reshape(K[1], 1, 1)
+    )
+
+    enc = PM.EncodingOptions(backend=:zn, max_regions=200)
+    P, M, pi = DF.encode_pmodule_from_flange(FG, enc)
+    zcache = ZE.compile_zn_cache(P, pi)
+    cenc = CM.compile_encoding(P, pi)
+
+    Xint = Int[
+        -2 -1 0 1 2 3
+         7 -3 5 0 9 1
+    ]
+
+    # Integer batched locate parity.
+    d1 = ZE.locate_many(pi, Xint; threaded=false)
+    d2 = ZE.locate_many(zcache, Xint; threaded=true)
+    d3 = ZE.locate_many(cenc, Xint; threaded=true)
+    @test d1 == d2 == d3
+    @test d1 == [PM.locate(pi, Xint[:, j]) for j in 1:size(Xint, 2)]
+    @test pi.cell_to_region !== nothing
+
+    # Fast locate path should not depend on signature dictionary lookups when the
+    # slab-cell lookup table is available.
+    sig_copy = copy(pi.sig_to_region)
+    empty!(pi.sig_to_region)
+    @test ZE.locate_many(pi, Xint; threaded=false) == d1
+    merge!(pi.sig_to_region, sig_copy)
+
+    # Float batched locate parity (round-to-nearest lattice point).
+    Xflt = Float64.(Xint) .+ 0.24
+    d4 = ZE.locate_many(pi, Xflt; threaded=true)
+    @test d4 == [PM.locate(pi, Xflt[:, j]) for j in 1:size(Xflt, 2)]
+
+    # In-place API with destination buffer.
+    d5 = fill(-1, size(Xint, 2))
+    ZE.locate_many!(d5, zcache, Xint; threaded=true)
+    @test d5 == d1
+
+    # Reusable pmodule_on_box basis cache.
+    bcache = ZE.compile_zn_box_cache(FG)
+    Mbox1 = ZE.pmodule_on_box(FG; a=(-2, -2), b=(3, 3), cache=bcache)
+    nentries1 = sum(length(v) for v in values(bcache.basis_cache))
+    ntrans1 = length(bcache.transition_cache)
+    Mbox2 = ZE.pmodule_on_box(FG; a=(-2, -2), b=(3, 3), cache=bcache)
+    nentries2 = sum(length(v) for v in values(bcache.basis_cache))
+    ntrans2 = length(bcache.transition_cache)
+    @test Mbox1.dims == Mbox2.dims
+    @test nentries2 == nentries1
+    @test ntrans2 == ntrans1
+
+    st = ZE.box_cache_stats(bcache)
+    @test st.basis_entries == nentries2
+    @test st.transition_entries == ntrans2
+    @test st.basis_cache_hits >= 0
+    @test st.transition_cache_misses >= 0
+end
+
+@testset "ZnEncoding large oracle fixtures (all fields)" begin
+    # Fixture 1 (1D): independent interval summands with diagonal Phi.
+    # Oracle: dim(g) = number of intervals [b_i, c_i] containing g.
+    bs = [0, 25, 50]
+    cs = [40, 70, 100]
+    flats = [mk_flat([bs[i]], [false]; id=Symbol(:CF, i)) for i in eachindex(bs)]
+    injs  = [mk_inj([cs[i]], [false]; id=Symbol(:CE, i)) for i in eachindex(cs)]
+    Phi = Matrix{K}(I, length(injs), length(flats))
+    FG = FZ.Flange{K}(1, flats, injs, Phi)
+    M = ZE.pmodule_on_box(FG; a=(-10,), b=(120,), cache=ZE.compile_zn_box_cache(FG))
+
+    gvals = -10:120
+    expected = [count(i -> (bs[i] <= g <= cs[i]), eachindex(bs)) for g in gvals]
+    @test M.dims == expected
+
+    # Fixture 2 (2D free-axis): dims are invariant in y for fixed x.
+    FG2 = FZ.Flange{K}(2,
+        [mk_flat([0, 0], [false, true]), mk_flat([30, 0], [false, true]), mk_flat([60, 0], [false, true])],
+        [mk_inj([20, 0], [false, true]), mk_inj([50, 0], [false, true]), mk_inj([90, 0], [false, true])],
+        Matrix{K}(I, 3, 3)
+    )
+    Mxy = ZE.pmodule_on_box(FG2; a=(-5, -40), b=(95, 40), cache=ZE.compile_zn_box_cache(FG2))
+    lensx = 95 - (-5) + 1
+    lensy = 40 - (-40) + 1
+    @test lensx * lensy == length(Mxy.dims)
+    for x in (1, div(lensx, 2), lensx)
+        d0 = Mxy.dims[x]
+        d1 = Mxy.dims[x + (lensy ÷ 2) * lensx]
+        d2 = Mxy.dims[x + (lensy - 1) * lensx]
+        @test d0 == d1 == d2
+    end
+end
+
+@testset "ZnEncoding optimization-branch counters (all fields)" begin
+    FG = FZ.Flange{K}(2,
+        [mk_flat([0, 0], [false, true]), mk_flat([35, 0], [false, true]), mk_flat([70, 0], [false, true])],
+        [mk_inj([25, 0], [false, true]), mk_inj([55, 0], [false, true]), mk_inj([95, 0], [false, true])],
+        Matrix{K}(I, 3, 3)
+    )
+    bcache = ZE.compile_zn_box_cache(FG)
+    M1 = ZE.pmodule_on_box(FG; a=(-10, -50), b=(110, 50), cache=bcache)
+
+    @test bcache.basis_cache_misses > 0
+    @test bcache.full_basis_recomputes > 0
+    @test bcache.incremental_refinements > 0
+    @test bcache.transition_cache_misses > 0
+    @test length(bcache.transition_cache) > 0
+
+    hits_before = bcache.basis_cache_hits
+    thits_before = bcache.transition_cache_hits
+    misses_before = bcache.transition_cache_misses
+    M2 = ZE.pmodule_on_box(FG; a=(-10, -50), b=(110, 50), cache=bcache)
+
+    @test M2.dims == M1.dims
+    @test bcache.basis_cache_hits > hits_before
+    @test bcache.transition_cache_hits > thits_before
+    @test bcache.transition_cache_misses == misses_before
+
+    nedges = length(collect(FF.cover_edges(M1.Q)))
+    @test length(bcache.transition_cache) <= nedges
+    @test bcache.full_basis_recomputes + bcache.incremental_refinements >= bcache.basis_cache_misses
+end
+
+@testset "ZnEncoding edge-map matrix oracle fixtures" begin
+    # 1D hand-computable oracle with two overlapping intervals:
+    # I1=[0,2], I2=[1,3], Phi=I2.
+    FG = FZ.Flange{K}(1,
+        [mk_flat([0], [false]; id=:F1), mk_flat([1], [false]; id=:F2)],
+        [mk_inj([2], [false]; id=:E1), mk_inj([3], [false]; id=:E2)],
+        Matrix{K}(I, 2, 2)
+    )
+    M = ZE.pmodule_on_box(FG; a=(0,), b=(3,), cache=ZE.compile_zn_box_cache(FG))
+    @test M.dims == [1, 2, 2, 1]
+    @test Set(FF.cover_edges(M.Q)) == Set([(1, 2), (2, 3), (3, 4)])
+
+    A12 = M.edge_maps[1, 2]
+    A23 = M.edge_maps[2, 3]
+    A34 = M.edge_maps[3, 4]
+    E12 = reshape(K[c(1), c(0)], 2, 1)
+    E23 = Matrix{K}(I, 2, 2)
+    E34 = reshape(K[c(0), c(1)], 1, 2)
+
+    if field isa CM.RealField
+        @test isapprox(A12, E12; rtol=1e-10, atol=1e-12)
+        @test isapprox(A23, E23; rtol=1e-10, atol=1e-12)
+        @test isapprox(A34, E34; rtol=1e-10, atol=1e-12)
+    else
+        @test A12 == E12
+        @test A23 == E23
+        @test A34 == E34
+    end
+
+    # Composition oracle: map 1->4 should be zero (rank 0).
+    @test PM.rank_map(M, 1, 4) == 0
+end
+
+@testset "ZnEncoding randomized differential vs naive reference (medium grids)" begin
+    function _assert_fast_vs_naive(FG::FZ.Flange{K},
+                                   a::NTuple{2,Int},
+                                   b::NTuple{2,Int},
+                                   rng::AbstractRNG;
+                                   nsample::Int=72) where {K}
+        M_fast = ZE.pmodule_on_box(FG; a=a, b=b, cache=ZE.compile_zn_box_cache(FG))
+        M_ref  = _naive_pmodule_on_box(FG, a, b, field)
+
+        @test FF.poset_equal(M_fast.Q, M_ref.Q)
+        @test M_fast.dims == M_ref.dims
+
+        for (u, v) in FF.cover_edges(M_fast.Q)
+            rf = PosetModules.FieldLinAlg.rank(field, M_fast.edge_maps[u, v])
+            rr = PosetModules.FieldLinAlg.rank(field, M_ref.edge_maps[u, v])
+            @test rf == rr
+        end
+
+        for (u, v) in _sample_comparable_pairs(M_fast.Q; rng=rng, nsample=nsample)
+            @test PM.rank_map(M_fast, u, v) == PM.rank_map(M_ref, u, v)
+        end
+    end
+
+    if field isa CM.RealField
+        # Real-field differential checks are deterministic and numerically stable.
+        rng = MersenneTwister(0xA11CE)
+
+        FG1 = FZ.Flange{K}(2,
+            [mk_flat([0, 0], [false, true]), mk_flat([20, 0], [false, true]), mk_flat([40, 0], [false, true])],
+            [mk_inj([10, 0], [false, true]), mk_inj([30, 0], [false, true]), mk_inj([50, 0], [false, true])],
+            Matrix{K}(I, 3, 3)
+        )
+        _assert_fast_vs_naive(FG1, (-5, -20), (55, 20), rng; nsample=144)
+
+        FG2 = FZ.Flange{K}(2,
+            [mk_flat([-3, -2], [false, false]; id=:RF1),
+             mk_flat([ 0, -1], [false, false]; id=:RF2),
+             mk_flat([ 2,  1], [false, false]; id=:RF3)],
+            [mk_inj([ 4,  2], [false, false]; id=:RE1),
+             mk_inj([ 5,  3], [false, false]; id=:RE2),
+             mk_inj([ 6,  4], [false, false]; id=:RE3)],
+            Matrix{K}(I, 3, 3)
+        )
+        _assert_fast_vs_naive(FG2, (-4, -4), (6, 6), rng; nsample=128)
+    else
+        seeds = (0xC0FFEE, 0xBAD5EED, 0x1234567)
+        for seed in seeds
+            rng = MersenneTwister(seed)
+
+            for trial in 1:4
+                n = 2
+                m = 8
+                r = 8
+
+                flats = Vector{FZ.IndFlat{2}}(undef, m)
+                injs  = Vector{FZ.IndInj{2}}(undef, r)
+                for i in 1:m
+                    bvec = [rand(rng, -6:6), rand(rng, -6:6)]
+                    cvec = [rand(rng, Bool), rand(rng, Bool)]
+                    flats[i] = mk_flat(bvec, cvec; id=Symbol("RF$(seed)_$(trial)_$i"))
+                end
+                for j in 1:r
+                    bvec = [rand(rng, -6:6), rand(rng, -6:6)]
+                    cvec = [rand(rng, Bool), rand(rng, Bool)]
+                    injs[j] = mk_inj(bvec, cvec; id=Symbol("RE$(seed)_$(trial)_$j"))
+                end
+
+                Phi = Matrix{K}(undef, r, m)
+                @inbounds for i in 1:r, j in 1:m
+                    Phi[i, j] = c(rand(rng, -2:2))
+                end
+                FG = FZ.Flange{K}(n, flats, injs, Phi)
+                _assert_fast_vs_naive(FG, (-5, -5), (5, 5), rng; nsample=128)
+            end
+
+            # Adversarial fixture A: repeated/near-repeated columns with shifted windows.
+            flatsA = [mk_flat([i - 3, 0], [false, true]; id=Symbol(:AF, i)) for i in 1:8]
+            injsA  = [mk_inj([i + 1, 0], [false, true]; id=Symbol(:AE, i)) for i in 1:8]
+            PhiA = zeros(K, 8, 8)
+            @inbounds for i in 1:8
+                PhiA[i, i] = c(1)
+                i < 8 && (PhiA[i, i + 1] = c(1))
+            end
+            FGA = FZ.Flange{K}(2, flatsA, injsA, PhiA)
+            _assert_fast_vs_naive(FGA, (-6, -4), (8, 4), rng; nsample=144)
+
+            # Adversarial fixture B: mixed free/locked coordinates creating abrupt signature flips.
+            flatsB = [
+                mk_flat([-4, -1], [false, false]; id=:BF1),
+                mk_flat([-2,  0], [false, true];  id=:BF2),
+                mk_flat([ 0, -2], [true,  false]; id=:BF3),
+                mk_flat([ 2,  1], [false, false]; id=:BF4),
+                mk_flat([ 4,  0], [false, true];  id=:BF5),
+                mk_flat([ 1,  3], [true,  false]; id=:BF6),
+            ]
+            injsB = [
+                mk_inj([ 3,  2], [false, false]; id=:BE1),
+                mk_inj([ 1,  4], [false, true];  id=:BE2),
+                mk_inj([ 5,  1], [true,  false]; id=:BE3),
+                mk_inj([ 7,  3], [false, false]; id=:BE4),
+                mk_inj([ 6,  0], [false, true];  id=:BE5),
+                mk_inj([ 2,  5], [true,  false]; id=:BE6),
+            ]
+            PhiB = Matrix{K}(undef, 6, 6)
+            @inbounds for i in 1:6, j in 1:6
+                PhiB[i, j] = c((i == j) ? 1 : ((i + j) % 3 == 0 ? -1 : 0))
+            end
+            FGB = FZ.Flange{K}(2, flatsB, injsB, PhiB)
+            _assert_fast_vs_naive(FGB, (-6, -6), (8, 8), rng; nsample=160)
+        end
+    end
+end
+
+if field isa CM.QQField
+@testset "ZnEncoding large oracle fixtures + optimization-branch assertions" begin
+    # Fixture 1 (1D, large): independent interval summands with diagonal Phi.
+    # Oracle: dim(g) = number of intervals [b_i, c_i] containing g.
+    n = 1
+    bs = [0, 40, 80, 120]
+    cs = [60, 100, 140, 180]
+    flats = [mk_flat([bs[i]], [false]; id=Symbol(:F, i)) for i in eachindex(bs)]
+    injs  = [mk_inj([cs[i]], [false]; id=Symbol(:E, i)) for i in eachindex(cs)]
+    Phi = Matrix{K}(I, length(injs), length(flats))
+    FG = FZ.Flange{K}(n, flats, injs, Phi)
+
+    bcache = ZE.compile_zn_box_cache(FG)
+    M = ZE.pmodule_on_box(FG; a=(-20,), b=(220,), cache=bcache)
+
+    gvals = -20:220
+    expected = [count(i -> (bs[i] <= g <= cs[i]), eachindex(bs)) for g in gvals]
+    @test M.dims == expected
+
+    # Branch assertions after first run.
+    @test bcache.basis_cache_misses > 0
+    @test bcache.full_basis_recomputes > 0
+    @test bcache.incremental_refinements > 0
+    @test bcache.transition_cache_misses > 0
+
+    hits_before = bcache.basis_cache_hits
+    thits_before = bcache.transition_cache_hits
+    misses_before = bcache.transition_cache_misses
+    M2 = ZE.pmodule_on_box(FG; a=(-20,), b=(220,), cache=bcache)
+    @test M2.dims == expected
+    @test bcache.basis_cache_hits > hits_before
+    @test bcache.transition_cache_hits > thits_before
+    @test bcache.transition_cache_misses == misses_before
+
+    # Fixture 2 (2D free-axis): transition-slot reuse should collapse far below #edges.
+    FG2 = FZ.Flange{K}(2,
+        [mk_flat([0, 0], [false, true]), mk_flat([60, 0], [false, true]), mk_flat([120, 0], [false, true])],
+        [mk_inj([40, 0], [false, true]), mk_inj([100, 0], [false, true]), mk_inj([160, 0], [false, true])],
+        Matrix{K}(I, 3, 3)
+    )
+    bcache2 = ZE.compile_zn_box_cache(FG2)
+    Mxy = ZE.pmodule_on_box(FG2; a=(-10, -60), b=(190, 60), cache=bcache2)
+    nedges = length(collect(FF.cover_edges(Mxy.Q)))
+    @test length(bcache2.transition_cache) < max(10, div(nedges, 25))
+    @test bcache2.incremental_refinements > 0
+
+    # Oracle: because axis 2 is free, dims are invariant along y for fixed x.
+    lensx = 190 - (-10) + 1
+    lensy = 60 - (-60) + 1
+    @test lensx * lensy == length(Mxy.dims)
+    for x in (1, div(lensx, 2), lensx)
+        d0 = Mxy.dims[x]                            # y = 1
+        d1 = Mxy.dims[x + (lensy ÷ 2) * lensx]     # y ~ middle
+        d2 = Mxy.dims[x + (lensy - 1) * lensx]     # y = last
+        @test d0 == d1 == d2
+    end
+
+    # Fixture 3 (2D, sparse-first solve): high-dimensional sparse identity-like regime.
+    k = 96
+    flats3 = [mk_flat([0, 0], [false, true]; id=Symbol(:SF, i)) for i in 1:k]
+    injs3  = [mk_inj([180, 0], [false, true]; id=Symbol(:SE, i)) for i in 1:k]
+    Phi3 = Matrix{K}(I, k, k)
+    FG3 = FZ.Flange{K}(2, flats3, injs3, Phi3)
+    bcache3 = ZE.compile_zn_box_cache(FG3)
+    M3 = ZE.pmodule_on_box(FG3; a=(-5, -20), b=(185, 20), cache=bcache3)
+
+    @test maximum(M3.dims) == k
+    @test bcache3.sparse_transition_solves > 0
+    @test bcache3.dense_transition_solves >= 0
+end
 end
 
 @testset "ZnEncoding 2D: strict fringe_from_flange rejects missing generators" begin

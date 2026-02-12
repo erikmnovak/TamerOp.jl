@@ -18,19 +18,40 @@ Stored entries:
 - `precompose`: precompose coordinate matrices keyed by `(objectid(Hdom), objectid(Hcod), objectid(f))`
 - `postcompose`: postcompose coordinate matrices keyed by `(objectid(Hdom), objectid(Hcod), objectid(g))`
 """
-mutable struct HomSystemCache{HV,PV,QV}
-    hom::Vector{Dict{Tuple{UInt,UInt},HV}}
-    precompose::Vector{Dict{Tuple{UInt,UInt,UInt},PV}}
-    postcompose::Vector{Dict{Tuple{UInt,UInt,UInt},QV}}
+struct _HomKey2
+    a::UInt
+    b::UInt
 end
 
-function HomSystemCache(::Type{HV}, ::Type{PV}, ::Type{QV}) where {HV,PV,QV}
+struct _HomKey3
+    a::UInt
+    b::UInt
+    c::UInt
+end
+
+mutable struct HomSystemCache{HV,PV,QV}
+    hom::Vector{Dict{_HomKey2,HV}}
+    precompose::Vector{Dict{_HomKey3,PV}}
+    postcompose::Vector{Dict{_HomKey3,QV}}
+end
+
+function HomSystemCache(::Type{HV}, ::Type{PV}, ::Type{QV}; shard_capacity::Int=256) where {HV,PV,QV}
     nshards = max(1, Threads.maxthreadid())
-    return HomSystemCache(
-        [Dict{Tuple{UInt,UInt},HV}() for _ in 1:nshards],
-        [Dict{Tuple{UInt,UInt,UInt},PV}() for _ in 1:nshards],
-        [Dict{Tuple{UInt,UInt,UInt},QV}() for _ in 1:nshards],
-    )
+    hom = [Dict{_HomKey2,HV}() for _ in 1:nshards]
+    pre = [Dict{_HomKey3,PV}() for _ in 1:nshards]
+    post = [Dict{_HomKey3,QV}() for _ in 1:nshards]
+    if shard_capacity > 0
+        for d in hom
+            sizehint!(d, shard_capacity)
+        end
+        for d in pre
+            sizehint!(d, shard_capacity)
+        end
+        for d in post
+            sizehint!(d, shard_capacity)
+        end
+    end
+    return HomSystemCache(hom, pre, post)
 end
 
 @inline _cache_tid_index(shards::AbstractVector) =
@@ -51,8 +72,8 @@ function clear_hom_system_cache!(cache::HomSystemCache)
     return nothing
 end
 
-@inline _cache_key2(a, b) = (UInt(objectid(a)), UInt(objectid(b)))
-@inline _cache_key3(a, b, c) = (UInt(objectid(a)), UInt(objectid(b)), UInt(objectid(c)))
+@inline _cache_key2(a, b) = _HomKey2(UInt(objectid(a)), UInt(objectid(b)))
+@inline _cache_key3(a, b, c) = _HomKey3(UInt(objectid(a)), UInt(objectid(b)), UInt(objectid(c)))
 
 @inline function _cache_lookup(shards::AbstractVector{<:AbstractDict{K,V}}, key::K) where {K,V}
     d = _cache_shard(shards)
@@ -67,6 +88,48 @@ end
         return value
     end
     return existing
+end
+
+@inline _total_offset_aidx(a::Int, amin::Int) = a - amin + 1
+
+function _build_total_offsets_grid(
+    amin::Int, amax::Int,
+    bmin::Int, bmax::Int,
+    dims::AbstractMatrix{Int},
+)
+    tmin = amin + bmin
+    tmax = amax + bmax
+    offsets = [fill(-1, amax - amin + 1) for _ in tmin:tmax]
+    dimsCt = zeros(Int, tmax - tmin + 1)
+
+    for t in tmin:tmax
+        off = 0
+        row = offsets[t - tmin + 1]
+        alo = max(amin, t - bmax)
+        ahi = min(amax, t - bmin)
+        for a in alo:ahi
+            ai = _total_offset_aidx(a, amin)
+            b = t - a
+            bi = b - bmin + 1
+            row[ai] = off
+            off += dims[ai, bi]
+        end
+        dimsCt[t - tmin + 1] = off
+    end
+
+    return offsets, dimsCt, tmin, tmax
+end
+
+@inline function _total_offset_get(
+    offsets::Vector{Vector{Int}},
+    t::Int,
+    tmin::Int,
+    amin::Int,
+    a::Int,
+)
+    v = offsets[t - tmin + 1][_total_offset_aidx(a, amin)]
+    v >= 0 || error("_total_offset_get: invalid (t,a)=($t,$a)")
+    return v
 end
 
 """
@@ -252,6 +315,7 @@ module HomExtEngine
     using ...FieldLinAlg
     using ...FiniteFringe: AbstractPoset, FinitePoset, Upset, Downset, cover_edges, nvertices
     using ...IndicatorTypes: UpsetPresentation, DownsetCopresentation
+    import ..DerivedFunctors: _build_total_offsets_grid, _total_offset_get
 
     """
         _hasse_undirected(P) -> adj
@@ -513,15 +577,15 @@ module HomExtEngine
         B = length(E) - 1              # top degree on the E-side
         P = F[1].P
         cache = CompCache{K}(P)
-        caches = threads && Threads.nthreads() > 1 ? [CompCache{K}(P) for _ in 1:Threads.nthreads()] : Vector{CompCache{K}}()
+        caches = threads && Threads.nthreads() > 1 ?
+            [CompCache{K}(P) for _ in 1:max(1, Threads.maxthreadid())] :
+            Vector{CompCache{K}}()
 
         U_by_a = [f.U0 for f in F]
         D_by_b = [e.D0 for e in E]
 
         tmin, tmax = 0, A + B
         T = tmax - tmin + 1
-        dimsCt = zeros(Int, T)
-        offs = Dict{Tuple{Int,Int}, Int}()
         block_sizes = zeros(Int, A+1, B+1)
 
         # size of Hom(F_a, E^b) in the component basis.
@@ -532,7 +596,7 @@ module HomExtEngine
             Threads.@threads for idx in 1:((A + 1) * (B + 1))
                 a = (idx - 1) % (A + 1)
                 b = Int(div(idx - 1, (A + 1)))
-                c = caches[Threads.threadid()]
+                c = caches[_compcache_shard_index(caches)]
                 block_sizes[a+1, b+1] = size_block(c, U_by_a, D_by_b, a, b)
             end
         else
@@ -541,12 +605,7 @@ module HomExtEngine
             end
         end
 
-        for a in 0:A, b in 0:B
-            t = a + b
-            idx = t - tmin + 1
-            offs[(a, b)] = dimsCt[idx]
-            dimsCt[idx] += block_sizes[a+1, b+1]
-        end
+        offs_by_ta, dimsCt, _, _ = _build_total_offsets_grid(0, A, 0, B, block_sizes)
 
         # prepare differentials d^t : C^t to C^{t+1}
         dts = Vector{SparseMatrixCSC{K,Int}}(undef, T-1)
@@ -554,7 +613,7 @@ module HomExtEngine
         # fill post- and pre-composition contributions
         if threads && Threads.nthreads() > 1
             Threads.@threads for t in tmin:(tmax - 1)
-                c = caches[Threads.threadid()]
+                c = caches[_compcache_shard_index(caches)]
                 idx = t - tmin + 1
                 M = spzeros(K, dimsCt[idx+1], dimsCt[idx])
 
@@ -564,11 +623,11 @@ module HomExtEngine
                     b = t - a
                     U = U_by_a[a+1]
                     D = D_by_b[b+1]
-                    src0 = offs[(a,b)]
+                    src0 = _total_offset_get(offs_by_ta, t, tmin, 0, a)
 
                     # post: Hom(F_a,E^b) -> Hom(F_a,E^{b+1}) via rho (if b < B)
                     if b < B
-                        dst0 = offs[(a,b+1)]
+                        dst0 = _total_offset_get(offs_by_ta, t + 1, tmin, 0, a)
                         for (rowD1, D1j) in enumerate(D_by_b[b+2]), (colD0, D0j) in enumerate(D)
                             coeff = dE[b+1][rowD1, colD0]
                             if coeff != zero(K)
@@ -590,7 +649,7 @@ module HomExtEngine
                     # pre: Hom(F_a,E^b) -> Hom(F_{a-1},E^b) via delta (if a < A) with sign (-1)^b
                     if a < A
                         sign = isodd(b) ? -one(K) : one(K)     # (-1)^b
-                        dst0 = offs[(a+1,b)]
+                        dst0 = _total_offset_get(offs_by_ta, t + 1, tmin, 0, a + 1)
 
                         Unexts = U_by_a[a+2]  # U_{a+1}
                         for (rowUnext, Unext) in enumerate(Unexts), (colUcur, Ucur) in enumerate(U)
@@ -623,11 +682,11 @@ module HomExtEngine
                 for a in alo:ahi
                     b = t - a
                     U = U_by_a[a+1]; D = D_by_b[b+1]
-                    src0 = offs[(a,b)]
+                    src0 = _total_offset_get(offs_by_ta, t, tmin, 0, a)
 
                     # post: Hom(F_a,E^b) \to Hom(F_a,E^{b+1}) via rho (if b < B)
                     if b < B
-                        dst0 = offs[(a,b+1)]
+                        dst0 = _total_offset_get(offs_by_ta, t + 1, tmin, 0, a)
                         for (rowD1, D1j) in enumerate(D_by_b[b+2]), (colD0, D0j) in enumerate(D)
                             coeff = dE[b+1][rowD1, colD0]
                             if coeff != zero(K)
@@ -649,7 +708,7 @@ module HomExtEngine
                     # pre: Hom(F_a,E^b) \to Hom(F_{a-1},E^b) via delta (if a >= 1) with sign -(-1)^a
                     if a < A
                         sign = isodd(b) ? -one(K) : one(K)     # (-1)^b
-                        dst0 = offs[(a+1,b)]
+                        dst0 = _total_offset_get(offs_by_ta, t + 1, tmin, 0, a + 1)
 
                         Unexts = U_by_a[a+2]  # U_{a+1}
                         for (rowUnext, Unext) in enumerate(Unexts), (colUcur, Ucur) in enumerate(U)
@@ -709,7 +768,9 @@ module HomExtEngine
 
         P = F[1].P
         cache = CompCache{K}(P)
-        caches = threads && Threads.nthreads() > 1 ? [CompCache{K}(P) for _ in 1:Threads.nthreads()] : Vector{CompCache{K}}()
+        caches = threads && Threads.nthreads() > 1 ?
+            [CompCache{K}(P) for _ in 1:max(1, Threads.maxthreadid())] :
+            Vector{CompCache{K}}()
         U_by_a = [f.U0 for f in F]
         D_by_b = [e.D0 for e in E]
 
@@ -719,7 +780,7 @@ module HomExtEngine
             Threads.@threads for idx in 1:((A + 1) * (B + 1))
                 a = (idx - 1) % (A + 1)
                 b = Int(div(idx - 1, (A + 1)))
-                c = caches[Threads.threadid()]
+                c = caches[_compcache_shard_index(caches)]
                 dims[a+1, b+1] = size_block(c, U_by_a, D_by_b, a, b)
             end
         else
@@ -744,7 +805,7 @@ module HomExtEngine
             Threads.@threads for idx in 1:((A + 1) * B)
                 a = (idx - 1) % (A + 1)
                 b = Int(div(idx - 1, (A + 1)))
-                c = caches[Threads.threadid()]
+                c = caches[_compcache_shard_index(caches)]
                 U = U_by_a[a+1]
                 D0 = D_by_b[b+1]
                 D1 = D_by_b[b+2]
@@ -800,7 +861,7 @@ module HomExtEngine
             Threads.@threads for idx in 1:((A) * (B + 1))
                 a = (idx - 1) % A
                 b = Int(div(idx - 1, A))
-                c = caches[Threads.threadid()]
+                c = caches[_compcache_shard_index(caches)]
                 sign = isodd(b) ? -one(K) : one(K)
                 D0 = D_by_b[b+1]
                 Ucur = U_by_a[a+1]
@@ -877,14 +938,14 @@ module HomExtEngine
         B = length(E) - 1
         tmin, tmax = 0, A + B
 
-        dimsH = Dict{Int,Int}()
+        dimsH_vals = Vector{Int}(undef, tmax - tmin + 1)
         if threads && Threads.nthreads() > 1
             Threads.@threads for t in tmin:tmax
                 i = t - tmin + 1
                 dimC = dimsCt[i]
                 r_next = (t < tmax) ? FieldLinAlg.rank_dim(field, dts[i]) : 0
                 r_prev = (t > tmin) ? FieldLinAlg.rank_dim(field, dts[i-1]) : 0
-                dimsH[t] = dimC - r_next - r_prev
+                dimsH_vals[i] = dimC - r_next - r_prev
             end
         else
             for t in tmin:tmax
@@ -892,8 +953,13 @@ module HomExtEngine
                 dimC = dimsCt[i]
                 r_next = (t < tmax) ? FieldLinAlg.rank_dim(field, dts[i]) : 0
                 r_prev = (t > tmin) ? FieldLinAlg.rank_dim(field, dts[i-1]) : 0
-                dimsH[t] = dimC - r_next - r_prev
+                dimsH_vals[i] = dimC - r_next - r_prev
             end
+        end
+        dimsH = Dict{Int,Int}()
+        sizehint!(dimsH, length(dimsH_vals))
+        @inbounds for t in tmin:tmax
+            dimsH[t] = dimsH_vals[t - tmin + 1]
         end
         return dimsH
     end
@@ -930,7 +996,7 @@ module Resolutions
     using SparseArrays
     import Base.Threads
 
-    using ...CoreModules: AbstractCoeffField, RealField, ResolutionCache,
+    using ...CoreModules: AbstractCoeffField, RealField, ResolutionCache, ResolutionKey2, resolution_key2,
                           ResolutionOptions, field_from_eltype, coeff_type
     using ...Modules: PModule, PMorphism
     using ...FiniteFringe: AbstractPoset, FinitePoset, FringeModule, Upset, cover_edges, is_subset,
@@ -958,24 +1024,28 @@ module Resolutions
     @inline _resolution_cache_shard_index(dicts) =
         min(length(dicts), max(1, Threads.threadid()))
 
-    @inline function _cache_projective_get(cache::ResolutionCache, key)
+    @inline function _cache_projective_get(cache::ResolutionCache, key::ResolutionKey2, ::Type{R}) where {R}
         shard = cache.projective_shards[_resolution_cache_shard_index(cache.projective_shards)]
         v = get(shard, key, nothing)
-        v === nothing || return v
+        v === nothing || return (v::R)
         Base.lock(cache.lock)
         try
             v = get(cache.projective, key, nothing)
         finally
             Base.unlock(cache.lock)
         end
-        v === nothing || (shard[key] = v)
-        return v
+        v === nothing || begin
+            vv = v::R
+            shard[key] = vv
+            return vv
+        end
+        return nothing
     end
 
-    @inline function _cache_projective_store!(cache::ResolutionCache, key, val)
+    @inline function _cache_projective_store!(cache::ResolutionCache, key::ResolutionKey2, val::R) where {R}
         shard = cache.projective_shards[_resolution_cache_shard_index(cache.projective_shards)]
         existing = get(shard, key, nothing)
-        existing === nothing || return existing
+        existing === nothing || return (existing::R)
         shard[key] = val
         Base.lock(cache.lock)
         out = get(cache.projective, key, nothing)
@@ -984,28 +1054,33 @@ module Resolutions
             out = val
         end
         Base.unlock(cache.lock)
-        shard[key] = out
-        return out
+        outR = out::R
+        shard[key] = outR
+        return outR
     end
 
-    @inline function _cache_injective_get(cache::ResolutionCache, key)
+    @inline function _cache_injective_get(cache::ResolutionCache, key::ResolutionKey2, ::Type{R}) where {R}
         shard = cache.injective_shards[_resolution_cache_shard_index(cache.injective_shards)]
         v = get(shard, key, nothing)
-        v === nothing || return v
+        v === nothing || return (v::R)
         Base.lock(cache.lock)
         try
             v = get(cache.injective, key, nothing)
         finally
             Base.unlock(cache.lock)
         end
-        v === nothing || (shard[key] = v)
-        return v
+        v === nothing || begin
+            vv = v::R
+            shard[key] = vv
+            return vv
+        end
+        return nothing
     end
 
-    @inline function _cache_injective_store!(cache::ResolutionCache, key, val)
+    @inline function _cache_injective_store!(cache::ResolutionCache, key::ResolutionKey2, val::R) where {R}
         shard = cache.injective_shards[_resolution_cache_shard_index(cache.injective_shards)]
         existing = get(shard, key, nothing)
-        existing === nothing || return existing
+        existing === nothing || return (existing::R)
         shard[key] = val
         Base.lock(cache.lock)
         out = get(cache.injective, key, nothing)
@@ -1014,8 +1089,9 @@ module Resolutions
             out = val
         end
         Base.unlock(cache.lock)
-        shard[key] = out
-        return out
+        outR = out::R
+        shard[key] = outR
+        return outR
     end
 
     # ----------------------------
@@ -1306,8 +1382,8 @@ module Resolutions
     function projective_resolution(M::PModule{K}, res::ResolutionOptions;
                                    threads::Bool = (Threads.nthreads() > 1),
                                    cache::Union{Nothing,ResolutionCache}=nothing) where {K}
-        key = (objectid(M), res.maxlen)
-        R = cache === nothing ? nothing : _cache_projective_get(cache, key)
+        key = resolution_key2(M, res.maxlen)
+        R = cache === nothing ? nothing : _cache_projective_get(cache, key, ProjectiveResolution{K})
         if R === nothing
             R = _projective_resolution_impl(M, res.maxlen; threads=threads)
             cache === nothing || (R = _cache_projective_store!(cache, key, R))
@@ -1322,8 +1398,8 @@ module Resolutions
     function projective_resolution(M::FringeModule{K}, res::ResolutionOptions;
                                    threads::Bool = (Threads.nthreads() > 1),
                                    cache::Union{Nothing,ResolutionCache}=nothing) where {K}
-        key = (objectid(M), res.maxlen)
-        R = cache === nothing ? nothing : _cache_projective_get(cache, key)
+        key = resolution_key2(M, res.maxlen)
+        R = cache === nothing ? nothing : _cache_projective_get(cache, key, ProjectiveResolution{K})
         if R !== nothing
             if res.minimal && res.check
                 assert_minimal(R; check_cover=true)
@@ -1687,8 +1763,8 @@ module Resolutions
     function injective_resolution(N::FringeModule{K}, res::ResolutionOptions;
                                   threads::Bool = (Threads.nthreads() > 1),
                                   cache::Union{Nothing,ResolutionCache}=nothing) where {K}
-        key = (objectid(N), res.maxlen)
-        R = cache === nothing ? nothing : _cache_injective_get(cache, key)
+        key = resolution_key2(N, res.maxlen)
+        R = cache === nothing ? nothing : _cache_injective_get(cache, key, InjectiveResolution{K})
         if R !== nothing
             if res.minimal && res.check
                 assert_minimal(R; check_hull=true)
@@ -1704,8 +1780,8 @@ module Resolutions
     function injective_resolution(N::PModule{K}, res::ResolutionOptions;
                                   threads::Bool = (Threads.nthreads() > 1),
                                   cache::Union{Nothing,ResolutionCache}=nothing) where {K}
-        key = (objectid(N), res.maxlen)
-        R = cache === nothing ? nothing : _cache_injective_get(cache, key)
+        key = resolution_key2(N, res.maxlen)
+        R = cache === nothing ? nothing : _cache_injective_get(cache, key, InjectiveResolution{K})
         if R === nothing
             R = _injective_resolution_impl(N, res.maxlen; threads=threads)
             cache === nothing || (R = _cache_injective_store!(cache, key, R))
@@ -1941,6 +2017,21 @@ module Resolutions
 
     # Turn a global coefficient matrix into an actual PMorphism by restricting to active
     # summands at each vertex (in the standard injective-hull basis order).
+    @inline function _gather_component_matrix(C::AbstractMatrix{K},
+                                              rows::Vector{Int},
+                                              cols::Vector{Int}) where {K}
+        nr = length(rows)
+        nc = length(cols)
+        M = Matrix{K}(undef, nr, nc)
+        @inbounds for j in 1:nc
+            cj = cols[j]
+            for i in 1:nr
+                M[i, j] = C[rows[i], cj]
+            end
+        end
+        return M
+    end
+
     function _pmorphism_from_downset_coeff(E::PModule{K}, Ep::PModule{K},
                                         act_dom::Vector{Vector{Int}},
                                         act_cod::Vector{Vector{Int}},
@@ -1951,7 +2042,7 @@ module Resolutions
         for u in 1:Q.n
             rows = act_cod[u]
             cols = act_dom[u]
-            comps[u] = C[rows, cols]
+            comps[u] = _gather_component_matrix(C, rows, cols)
         end
         return PMorphism{K}(E, Ep, comps)
     end
@@ -2242,6 +2333,7 @@ module ExtTorSpaces
 
     using ...ChainComplexes
 
+    import ..DerivedFunctors: _build_total_offsets_grid, _total_offset_get
     import ..Utils: compose
     import ..HomExtEngine: ext_dims_via_resolutions, build_hom_tot_complex,
         CompCache, size_block, _block_offset, _component_inclusion_matrix_cached, _accum!
@@ -2576,26 +2668,72 @@ module ExtTorSpaces
         out_dim = offs_dom[end]
         in_dim = offs_cod[end]
 
+        Ii, Jj, Vv = findnz(delta)
+
         Itrip = Int[]
         Jtrip = Int[]
         Vtrip = K[]
+        nnz_delta = length(Vv)
+        do_threads = Threads.nthreads() > 1 && nnz_delta >= 64
 
-        Ii, Jj, Vv = findnz(delta)
+        if do_threads
+            nth = Threads.nthreads()
+            local_I = [Int[] for _ in 1:nth]
+            local_J = [Int[] for _ in 1:nth]
+            local_V = [K[] for _ in 1:nth]
 
-        for k in 1:length(Vv)
-            j = Ii[k]   # cod summand index
-            i = Jj[k]   # dom summand index
-            c = Vv[k]
-            iszero(c) && continue
+            Threads.@threads :static for tid in 1:nth
+                kstart = fld((tid - 1) * nnz_delta, nth) + 1
+                kend = fld(tid * nnz_delta, nth)
+                Ii_loc = local_I[tid]
+                Jj_loc = local_J[tid]
+                Vv_loc = local_V[tid]
 
-            vj = cod_gens[j]
-            ui = dom_gens[i]
+                for k in kstart:kend
+                    j = Ii[k]   # cod summand index
+                    i = Jj[k]   # dom summand index
+                    c = Vv[k]
+                    iszero(c) && continue
 
-            A = map_leq(N, vj, ui)  # N_vj -> N_ui
+                    vj = cod_gens[j]
+                    ui = dom_gens[i]
 
-            # Insert into block (rows for ui) x (cols for vj)
-            _append_scaled_triplets!(Itrip, Jtrip, Vtrip, A,
-                                    offs_dom[i], offs_cod[j]; scale=c)
+                    A = map_leq(N, vj, ui)  # N_vj -> N_ui
+
+                    # Insert into block (rows for ui) x (cols for vj)
+                    _append_scaled_triplets!(Ii_loc, Jj_loc, Vv_loc, A,
+                                            offs_dom[i], offs_cod[j]; scale=c)
+                end
+            end
+
+            total_nnz = 0
+            for tid in 1:nth
+                total_nnz += length(local_V[tid])
+            end
+            sizehint!(Itrip, total_nnz)
+            sizehint!(Jtrip, total_nnz)
+            sizehint!(Vtrip, total_nnz)
+            for tid in 1:nth
+                append!(Itrip, local_I[tid])
+                append!(Jtrip, local_J[tid])
+                append!(Vtrip, local_V[tid])
+            end
+        else
+            for k in 1:nnz_delta
+                j = Ii[k]   # cod summand index
+                i = Jj[k]   # dom summand index
+                c = Vv[k]
+                iszero(c) && continue
+
+                vj = cod_gens[j]
+                ui = dom_gens[i]
+
+                A = map_leq(N, vj, ui)  # N_vj -> N_ui
+
+                # Insert into block (rows for ui) x (cols for vj)
+                _append_scaled_triplets!(Itrip, Jtrip, Vtrip, A,
+                                        offs_dom[i], offs_cod[j]; scale=c)
+            end
         end
 
         return sparse(Itrip, Jtrip, Vtrip, out_dim, in_dim)
@@ -2642,7 +2780,8 @@ module ExtTorSpaces
         return Ext(Mp, Np, df; cache=cache)
     end
 
-    function Ext(res::ProjectiveResolution{K}, N::PModule{K}) where {K}
+    function Ext(res::ProjectiveResolution{K}, N::PModule{K};
+                 threads::Bool=(Threads.nthreads() > 1)) where {K}
         L = length(res.Pmods) - 1
         # build cochain dims and offsets
         dimsC = Int[]
@@ -2654,13 +2793,28 @@ module ExtTorSpaces
         end
 
         # differentials d^a : C^a -> C^{a+1} for a=0..L-1
-        dC = Vector{SparseMatrixCSC{K, Int}}()
-        for a in 1:L
-            push!(dC, _build_hom_differential(res, N, a, offs[a], offs[a+1]))
+        dC = Vector{SparseMatrixCSC{K, Int}}(undef, L)
+        if threads && Threads.nthreads() > 1 && L >= 2
+            Threads.@threads for a in 1:L
+                dC[a] = _build_hom_differential(res, N, a, offs[a], offs[a+1])
+            end
+        else
+            for a in 1:L
+                dC[a] = _build_hom_differential(res, N, a, offs[a], offs[a+1])
+            end
         end
 
         C = ChainComplexes.CochainComplex{K}(0, L, dimsC, dC)
-        cohom = [ChainComplexes.cohomology_data(C, t) for t in 0:L]
+        cohom = Vector{ChainComplexes.CohomologyData{K}}(undef, L + 1)
+        if threads && Threads.nthreads() > 1 && L >= 1
+            Threads.@threads for i in 1:(L + 1)
+                cohom[i] = ChainComplexes.cohomology_data(C, i - 1)
+            end
+        else
+            for i in 1:(L + 1)
+                cohom[i] = ChainComplexes.cohomology_data(C, i - 1)
+            end
+        end
         return ExtSpaceProjective(res, N, C, offs, cohom)
     end
 
@@ -2668,10 +2822,11 @@ module ExtTorSpaces
     # This is the behavior that `Ext(M,N, DerivedFunctorOptions(...; model=:projective))` uses.
     function _Ext_projective(M::PModule{K}, N::PModule{K};
                              maxdeg::Int=3,
+                             threads::Bool=(Threads.nthreads() > 1),
                              cache::Union{Nothing,ResolutionCache}=nothing) where {K}
-        res = projective_resolution(M, ResolutionOptions(maxlen=maxdeg); cache=cache)
+        res = projective_resolution(M, ResolutionOptions(maxlen=maxdeg); threads=threads, cache=cache)
         _pad_projective_resolution!(res, maxdeg)
-        return Ext(res, N)
+        return Ext(res, N; threads=threads)
     end
 
     function dim(E::ExtSpaceProjective, t::Int)
@@ -2919,11 +3074,13 @@ module ExtTorSpaces
         if !(df.model === :auto || df.model === :injective)
             error("ExtInjective: df.model must be :injective or :auto, got $(df.model)")
         end
-        resN = injective_resolution(N, ResolutionOptions(maxlen=df.maxdeg); cache=cache)
-        return ExtInjective(M, resN)
+        threads = Threads.nthreads() > 1
+        resN = injective_resolution(N, ResolutionOptions(maxlen=df.maxdeg); threads=threads, cache=cache)
+        return ExtInjective(M, resN; threads=threads)
     end
 
-    function ExtInjective(M::PModule{K}, resN::InjectiveResolution{K}) where {K}
+    function ExtInjective(M::PModule{K}, resN::InjectiveResolution{K};
+                          threads::Bool=(Threads.nthreads() > 1)) where {K}
         # Build the cochain complex C^b = Hom(M, E^b), where
         #   0 -> N -> E^0 -> E^1 -> ... -> E^L
         # is the chosen injective resolution of N.
@@ -2948,52 +3105,107 @@ module ExtTorSpaces
         # Build differentials dC[b+1] : C^b -> C^{b+1} for b = 0..L-1.
         dC = Vector{SparseMatrixCSC{K, Int}}(undef, L)
 
-        for b in 0:(L - 1)
-            Hb  = homs[b + 1]
-            Hb1 = homs[b + 2]
-            db  = resN.d_mor[b + 1]   # E^b -> E^{b+1}
+        if threads && Threads.nthreads() > 1 && L >= 2
+            Threads.@threads for b in 0:(L - 1)
+                Hb  = homs[b + 1]
+                Hb1 = homs[b + 2]
+                db  = resN.d_mor[b + 1]   # E^b -> E^{b+1}
 
-            dimHb  = dims[b + 1]
-            dimHb1 = dims[b + 2]
+                dimHb  = dims[b + 1]
+                dimHb1 = dims[b + 2]
 
-            # Fast-path: empty source or target.
-            if dimHb == 0 || dimHb1 == 0
-                dC[b + 1] = spzeros(K, dimHb1, dimHb)
-                continue
-            end
-
-            # Assemble the differential as a SparseMatrixCSC directly (column-by-column).
-            colptr = Vector{Int}(undef, dimHb + 1)
-            colptr[1] = 1
-            rowval = Int[]
-            nzval  = K[]
-
-            # Column j is the coordinate vector of compose(db, fj) expressed in the basis of Hb1.
-            for j in 1:dimHb
-                fj = Hb.basis[j]                     # fj : M -> E^b
-                fimg = compose(db, fj)               # compose(db, fj) : M -> E^{b+1}
-
-                # Express fimg in the Hb1 basis by vectorizing and solving
-                # Hb1.basis_matrix * x = vec(fimg).
-                vimg = _morphism_to_vector(fimg, Hb1.offsets)
-                coeffs = FieldLinAlg.solve_fullcolumn(Hb1.dom.field, Hb1.basis_matrix, vimg)
-
-                @inbounds for i in 1:dimHb1
-                    cij = coeffs[i, 1]
-                    if !iszero(cij)
-                        push!(rowval, i)
-                        push!(nzval, cij)
-                    end
+                # Fast-path: empty source or target.
+                if dimHb == 0 || dimHb1 == 0
+                    dC[b + 1] = spzeros(K, dimHb1, dimHb)
+                    continue
                 end
 
-                colptr[j + 1] = length(rowval) + 1
-            end
+                # Assemble the differential as a SparseMatrixCSC directly (column-by-column).
+                colptr = Vector{Int}(undef, dimHb + 1)
+                colptr[1] = 1
+                rowval = Int[]
+                nzval  = K[]
 
-            dC[b + 1] = SparseMatrixCSC(dimHb1, dimHb, colptr, rowval, nzval)
+                # Column j is the coordinate vector of compose(db, fj) expressed in the basis of Hb1.
+                for j in 1:dimHb
+                    fj = Hb.basis[j]                     # fj : M -> E^b
+                    fimg = compose(db, fj)               # compose(db, fj) : M -> E^{b+1}
+
+                    # Express fimg in the Hb1 basis by vectorizing and solving
+                    # Hb1.basis_matrix * x = vec(fimg).
+                    vimg = _morphism_to_vector(fimg, Hb1.offsets)
+                    coeffs = FieldLinAlg.solve_fullcolumn(Hb1.dom.field, Hb1.basis_matrix, vimg)
+
+                    @inbounds for i in 1:dimHb1
+                        cij = coeffs[i, 1]
+                        if !iszero(cij)
+                            push!(rowval, i)
+                            push!(nzval, cij)
+                        end
+                    end
+
+                    colptr[j + 1] = length(rowval) + 1
+                end
+
+                dC[b + 1] = SparseMatrixCSC(dimHb1, dimHb, colptr, rowval, nzval)
+            end
+        else
+            for b in 0:(L - 1)
+                Hb  = homs[b + 1]
+                Hb1 = homs[b + 2]
+                db  = resN.d_mor[b + 1]   # E^b -> E^{b+1}
+
+                dimHb  = dims[b + 1]
+                dimHb1 = dims[b + 2]
+
+                # Fast-path: empty source or target.
+                if dimHb == 0 || dimHb1 == 0
+                    dC[b + 1] = spzeros(K, dimHb1, dimHb)
+                    continue
+                end
+
+                # Assemble the differential as a SparseMatrixCSC directly (column-by-column).
+                colptr = Vector{Int}(undef, dimHb + 1)
+                colptr[1] = 1
+                rowval = Int[]
+                nzval  = K[]
+
+                # Column j is the coordinate vector of compose(db, fj) expressed in the basis of Hb1.
+                for j in 1:dimHb
+                    fj = Hb.basis[j]                     # fj : M -> E^b
+                    fimg = compose(db, fj)               # compose(db, fj) : M -> E^{b+1}
+
+                    # Express fimg in the Hb1 basis by vectorizing and solving
+                    # Hb1.basis_matrix * x = vec(fimg).
+                    vimg = _morphism_to_vector(fimg, Hb1.offsets)
+                    coeffs = FieldLinAlg.solve_fullcolumn(Hb1.dom.field, Hb1.basis_matrix, vimg)
+
+                    @inbounds for i in 1:dimHb1
+                        cij = coeffs[i, 1]
+                        if !iszero(cij)
+                            push!(rowval, i)
+                            push!(nzval, cij)
+                        end
+                    end
+
+                    colptr[j + 1] = length(rowval) + 1
+                end
+
+                dC[b + 1] = SparseMatrixCSC(dimHb1, dimHb, colptr, rowval, nzval)
+            end
         end
 
         C = ChainComplexes.CochainComplex{K}(0, L, dims, dC)
-        cohom = [ChainComplexes.cohomology_data(C, t) for t in 0:L]
+        cohom = Vector{ChainComplexes.CohomologyData{K}}(undef, L + 1)
+        if threads && Threads.nthreads() > 1 && L >= 1
+            Threads.@threads for i in 1:(L + 1)
+                cohom[i] = ChainComplexes.cohomology_data(C, i - 1)
+            end
+        else
+            for i in 1:(L + 1)
+                cohom[i] = ChainComplexes.cohomology_data(C, i - 1)
+            end
+        end
 
         return ExtSpaceInjective(M, resN, homs, C, cohom)
     end
@@ -3018,21 +3230,7 @@ module ExtTorSpaces
     # We qualify DoubleComplex as ChainComplexes.DoubleComplex because ChainComplexes does not
     # export it, and DerivedFunctors should not rely on export lists for internal types.
     function _total_offsets(DC::ChainComplexes.DoubleComplex{K}) where {K}
-        tmin = DC.amin + DC.bmin
-        tmax = DC.amax + DC.bmax
-        offsets = [Dict{Tuple{Int,Int},Int}() for _ in tmin:tmax]
-
-        for t in tmin:tmax
-            off = 0
-            for a in DC.amin:DC.amax
-                b = t - a
-                if DC.bmin <= b <= DC.bmax
-                    offsets[t - tmin + 1][(a,b)] = off
-                    # dims is indexed by (a-amin+1, b-bmin+1)
-                    off += DC.dims[a - DC.amin + 1, b - DC.bmin + 1]
-                end
-            end
-        end
+        offsets, _, tmin, tmax = _build_total_offsets_grid(DC.amin, DC.amax, DC.bmin, DC.bmax, DC.dims)
         return offsets, tmin, tmax
     end
 
@@ -3165,7 +3363,16 @@ module ExtTorSpaces
         tot_offsets, tot_tmin, tot_tmax = _total_offsets(DC)
 
         # Cohomology data for the total complex up to maxdeg.
-        cohomT = [ChainComplexes.cohomology_data(Tot, t) for t in 0:maxdeg]
+        cohomT = Vector{ChainComplexes.CohomologyData{K}}(undef, maxdeg + 1)
+        if Threads.nthreads() > 1 && maxdeg >= 1
+            Threads.@threads for i in 1:(maxdeg + 1)
+                cohomT[i] = ChainComplexes.cohomology_data(Tot, i - 1)
+            end
+        else
+            for i in 1:(maxdeg + 1)
+                cohomT[i] = ChainComplexes.cohomology_data(Tot, i - 1)
+            end
+        end
 
         # For building the injective-side comparison map, we need coordinates in Hom(P0, E^b).
         basesP0 = resP.gens[1]
@@ -3180,7 +3387,7 @@ module ExtTorSpaces
             dom_dim_proj = Eproj.complex.dims[t - Eproj.complex.tmin + 1]
 
             Fproj = zeros(K, tot_dim, dom_dim_proj)
-            off_t0 = tot_offsets[t - tot_tmin + 1][(t, 0)]
+            off_t0 = _total_offset_get(tot_offsets, t, tot_tmin, DC.amin, t)
             block_dim = dims_blocks[t+1, 1]  # (a=t, b=0)
             # Postcompose with iota0: N -> E^0, block-diagonal over generators of P_t.
             block_map = _blockdiag_on_hom_cochains(resE.iota0, resP.gens[t+1], Eproj.offsets[t+1], offs_blocks[t+1, 1])
@@ -3189,7 +3396,7 @@ module ExtTorSpaces
             # ---- cochain map: Hom(M, E^t) -> Tot in degree t via precompose with aug: P0 -> M
             dom_dim_inj = Einj.complex.dims[t - Einj.complex.tmin + 1]
             Finj = zeros(K, tot_dim, dom_dim_inj)
-            off_0t = tot_offsets[t - tot_tmin + 1][(0, t)]
+            off_0t = _total_offset_get(tot_offsets, t, tot_tmin, DC.amin, 0)
             Eb = resE.Emods[t+1]
             offs0t = offs_blocks[1, t+1]     # (a=0, b=t)
             block_dim_0t = dims_blocks[1, t+1]
@@ -3500,6 +3707,7 @@ module ExtTorSpaces
     # Internal implementation: resolve the first argument (existing Tor behavior).
     function _Tor_resolve_first(Rop::PModule{K}, L::PModule{K};
                                 maxdeg::Int=3,
+                                threads::Bool=(Threads.nthreads() > 1),
                                 res::Union{Nothing, ProjectiveResolution{K}}=nothing) where {K}
         Pop = Rop.Q
         P = _op_poset(Pop)
@@ -3507,7 +3715,7 @@ module ExtTorSpaces
 
         # Projective resolution of Rop as a Pop module.
         if res === nothing
-            res = projective_resolution(Rop, ResolutionOptions(maxlen=maxdeg))
+            res = projective_resolution(Rop, ResolutionOptions(maxlen=maxdeg); threads=threads)
         end
         S = length(res.Pmods) - 1
 
@@ -3526,38 +3734,73 @@ module ExtTorSpaces
         end
 
         # Boundary matrices C_s -> C_{s-1}.
-        bd = SparseMatrixCSC{K, Int64}[]
-        for s in 1:S
-            dom_bases = res.gens[s + 1]
-            cod_bases = res.gens[s]
-            delta = res.d_mat[s]   # rows=cod, cols=dom
+        bd = Vector{SparseMatrixCSC{K, Int64}}(undef, S)
+        if threads && Threads.nthreads() > 1 && S >= 2
+            Threads.@threads for s in 1:S
+                dom_bases = res.gens[s + 1]
+                cod_bases = res.gens[s]
+                delta = res.d_mat[s]   # rows=cod, cols=dom
 
-            B = spzeros(K, dims[s], dims[s + 1])
-            I, J, V = findnz(delta)
-            for k in 1:length(V)
-                j = I[k]
-                i = J[k]
-                c = V[k]
-                u = dom_bases[i]
-                v = cod_bases[j]
+                B = spzeros(K, dims[s], dims[s + 1])
+                I, J, V = findnz(delta)
+                for k in 1:length(V)
+                    j = I[k]
+                    i = J[k]
+                    c = V[k]
+                    u = dom_bases[i]
+                    v = cod_bases[j]
 
-                # Nonzero delta entry implies v <=op u in Pop, i.e. u <= v in P,
-                # so L has a structure map L_u -> L_v.
-                Muv = map_leq(L, u, v)
+                    # Nonzero delta entry implies v <=op u in Pop, i.e. u <= v in P,
+                    # so L has a structure map L_u -> L_v.
+                    Muv = map_leq(L, u, v)
 
-                rows = (offs[s][j] + 1):offs[s][j + 1]
-                cols = (offs[s + 1][i] + 1):offs[s + 1][i + 1]
-                B[rows, cols] = c * Muv
+                    rows = (offs[s][j] + 1):offs[s][j + 1]
+                    cols = (offs[s + 1][i] + 1):offs[s + 1][i + 1]
+                    B[rows, cols] = c * Muv
+                end
+                bd[s] = B
             end
-            push!(bd, B)
+        else
+            for s in 1:S
+                dom_bases = res.gens[s + 1]
+                cod_bases = res.gens[s]
+                delta = res.d_mat[s]   # rows=cod, cols=dom
+
+                B = spzeros(K, dims[s], dims[s + 1])
+                I, J, V = findnz(delta)
+                for k in 1:length(V)
+                    j = I[k]
+                    i = J[k]
+                    c = V[k]
+                    u = dom_bases[i]
+                    v = cod_bases[j]
+
+                    # Nonzero delta entry implies v <=op u in Pop, i.e. u <= v in P,
+                    # so L has a structure map L_u -> L_v.
+                    Muv = map_leq(L, u, v)
+
+                    rows = (offs[s][j] + 1):offs[s][j + 1]
+                    cols = (offs[s + 1][i] + 1):offs[s + 1][i + 1]
+                    B[rows, cols] = c * Muv
+                end
+                bd[s] = B
+            end
         end
 
         # Homology data per degree.
         homol = Vector{ChainComplexes.HomologyData{K}}(undef, S + 1)
-        for s in 0:S
-            bd_curr = (s == 0) ? zeros(K, 0, dims[s + 1]) : bd[s]
-            bd_next = (s == S) ? zeros(K, dims[s + 1], 0) : bd[s + 1]
-            homol[s + 1] = ChainComplexes.homology_data(bd_next, bd_curr, s)
+        if threads && Threads.nthreads() > 1 && S >= 1
+            Threads.@threads for s in 0:S
+                bd_curr = (s == 0) ? zeros(K, 0, dims[s + 1]) : bd[s]
+                bd_next = (s == S) ? zeros(K, dims[s + 1], 0) : bd[s + 1]
+                homol[s + 1] = ChainComplexes.homology_data(bd_next, bd_curr, s)
+            end
+        else
+            for s in 0:S
+                bd_curr = (s == 0) ? zeros(K, 0, dims[s + 1]) : bd[s]
+                bd_next = (s == S) ? zeros(K, dims[s + 1], 0) : bd[s + 1]
+                homol[s + 1] = ChainComplexes.homology_data(bd_next, bd_curr, s)
+            end
         end
 
         return TorSpace{K}(res, L, bd, dims, offs, homol)
@@ -3566,13 +3809,14 @@ module ExtTorSpaces
     # Internal implementation: resolve the second argument.
     function _Tor_resolve_second(Rop::PModule{K}, L::PModule{K};
                                 maxdeg::Int=3,
+                                threads::Bool=(Threads.nthreads() > 1),
                                 res::Union{Nothing, ProjectiveResolution{K}}=nothing) where {K}
         Pop = Rop.Q
         P = _op_poset(Pop)
         @assert poset_equal(L.Q, P)
 
         # Projective resolution of L as a P module.
-        resL = (res === nothing) ? projective_resolution(L, ResolutionOptions(maxlen=maxdeg)) : res
+        resL = (res === nothing) ? projective_resolution(L, ResolutionOptions(maxlen=maxdeg); threads=threads) : res
         S = length(resL.Pmods) - 1
 
         # Chain group dims and block offsets: C_s = oplus Rop_u.
@@ -3590,38 +3834,73 @@ module ExtTorSpaces
         end
 
         # Boundary matrices C_s -> C_{s-1}.
-        bd = SparseMatrixCSC{K, Int64}[]
-        for s in 1:S
-            dom_bases = resL.gens[s + 1]
-            cod_bases = resL.gens[s]
-            delta = resL.d_mat[s]   # rows=cod, cols=dom
+        bd = Vector{SparseMatrixCSC{K, Int64}}(undef, S)
+        if threads && Threads.nthreads() > 1 && S >= 2
+            Threads.@threads for s in 1:S
+                dom_bases = resL.gens[s + 1]
+                cod_bases = resL.gens[s]
+                delta = resL.d_mat[s]   # rows=cod, cols=dom
 
-            B = spzeros(K, dims[s], dims[s + 1])
-            I, J, V = findnz(delta)
-            for k in 1:length(V)
-                j = I[k]
-                i = J[k]
-                c = V[k]
-                u = dom_bases[i]
-                v = cod_bases[j]
+                B = spzeros(K, dims[s], dims[s + 1])
+                I, J, V = findnz(delta)
+                for k in 1:length(V)
+                    j = I[k]
+                    i = J[k]
+                    c = V[k]
+                    u = dom_bases[i]
+                    v = cod_bases[j]
 
-                # Nonzero delta entry implies v <= u in P, hence u <=op v in Pop,
-                # so Rop has a structure map Rop_u -> Rop_v.
-                Muv = map_leq(Rop, u, v)
+                    # Nonzero delta entry implies v <= u in P, hence u <=op v in Pop,
+                    # so Rop has a structure map Rop_u -> Rop_v.
+                    Muv = map_leq(Rop, u, v)
 
-                rows = (offs[s][j] + 1):offs[s][j + 1]
-                cols = (offs[s + 1][i] + 1):offs[s + 1][i + 1]
-                B[rows, cols] = c * Muv
+                    rows = (offs[s][j] + 1):offs[s][j + 1]
+                    cols = (offs[s + 1][i] + 1):offs[s + 1][i + 1]
+                    B[rows, cols] = c * Muv
+                end
+                bd[s] = B
             end
-            push!(bd, B)
+        else
+            for s in 1:S
+                dom_bases = resL.gens[s + 1]
+                cod_bases = resL.gens[s]
+                delta = resL.d_mat[s]   # rows=cod, cols=dom
+
+                B = spzeros(K, dims[s], dims[s + 1])
+                I, J, V = findnz(delta)
+                for k in 1:length(V)
+                    j = I[k]
+                    i = J[k]
+                    c = V[k]
+                    u = dom_bases[i]
+                    v = cod_bases[j]
+
+                    # Nonzero delta entry implies v <= u in P, hence u <=op v in Pop,
+                    # so Rop has a structure map Rop_u -> Rop_v.
+                    Muv = map_leq(Rop, u, v)
+
+                    rows = (offs[s][j] + 1):offs[s][j + 1]
+                    cols = (offs[s + 1][i] + 1):offs[s + 1][i + 1]
+                    B[rows, cols] = c * Muv
+                end
+                bd[s] = B
+            end
         end
 
         # Homology data per degree.
         homol = Vector{ChainComplexes.HomologyData{K}}(undef, S + 1)
-        for s in 0:S
-            bd_curr = (s == 0) ? zeros(K, 0, dims[s + 1]) : bd[s]
-            bd_next = (s == S) ? zeros(K, dims[s + 1], 0) : bd[s + 1]
-            homol[s + 1] = ChainComplexes.homology_data(bd_next, bd_curr, s)
+        if threads && Threads.nthreads() > 1 && S >= 1
+            Threads.@threads for s in 0:S
+                bd_curr = (s == 0) ? zeros(K, 0, dims[s + 1]) : bd[s]
+                bd_next = (s == S) ? zeros(K, dims[s + 1], 0) : bd[s + 1]
+                homol[s + 1] = ChainComplexes.homology_data(bd_next, bd_curr, s)
+            end
+        else
+            for s in 0:S
+                bd_curr = (s == 0) ? zeros(K, 0, dims[s + 1]) : bd[s]
+                bd_next = (s == S) ? zeros(K, dims[s + 1], 0) : bd[s + 1]
+                homol[s + 1] = ChainComplexes.homology_data(bd_next, bd_curr, s)
+            end
         end
 
         return TorSpaceSecond{K}(resL, Rop, bd, dims, offs, homol)
@@ -3658,7 +3937,7 @@ module ExtTorSpaces
             if res === nothing && cache !== nothing
                 res = projective_resolution(Rop, ResolutionOptions(maxlen=df.maxdeg); cache=cache)
             end
-            return _Tor_resolve_first(Rop, L; maxdeg=df.maxdeg, res=res)
+            return _Tor_resolve_first(Rop, L; maxdeg=df.maxdeg, threads=(Threads.nthreads() > 1), res=res)
         elseif model === :second
             if res !== nothing
                 @assert _same_pmodule(res.M, L)
@@ -3666,7 +3945,7 @@ module ExtTorSpaces
             if res === nothing && cache !== nothing
                 res = projective_resolution(L, ResolutionOptions(maxlen=df.maxdeg); cache=cache)
             end
-            return _Tor_resolve_second(Rop, L; maxdeg=df.maxdeg, res=res)
+            return _Tor_resolve_second(Rop, L; maxdeg=df.maxdeg, threads=(Threads.nthreads() > 1), res=res)
         else
             error("Tor: unknown df.model=$(df.model). Supported for Tor: :first, :second, :auto.")
         end
@@ -7380,13 +7659,6 @@ using .HomExtEngine:
     build_hom_bicomplex_data,
     ext_dims_via_resolutions, pi0_count
 
-@inline _resolve_res_opts(opts::Union{ResolutionOptions,Nothing}) =
-    opts === nothing ? ResolutionOptions() : opts
-@inline _resolve_df_opts(opts::Union{DerivedFunctorOptions,Nothing}) =
-    opts === nothing ? DerivedFunctorOptions() : opts
-@inline _resolve_enc_opts(opts::Union{EncodingOptions,Nothing}) =
-    opts === nothing ? EncodingOptions() : opts
-
 @inline function HomSystemCache(::Type{K}) where {K}
     MT = SparseMatrixCSC{K,Int}
     return HomSystemCache(HomSpace{K}, MT, MT)
@@ -7471,84 +7743,84 @@ end
 Hom(M, N; cache::Union{Nothing,HomSystemCache}=nothing) =
     hom_with_cache(M, N; cache=cache)
 
-projective_resolution(M; opts=nothing, cache=nothing) =
-    projective_resolution(M, _resolve_res_opts(opts); cache=cache)
-injective_resolution(M; opts=nothing, cache=nothing) =
-    injective_resolution(M, _resolve_res_opts(opts); cache=cache)
-betti(M; opts=nothing) =
-    betti(M, _resolve_res_opts(opts))
-bass(M; opts=nothing) =
-    bass(M, _resolve_res_opts(opts))
+projective_resolution(M; opts::ResolutionOptions=ResolutionOptions(), cache=nothing) =
+    projective_resolution(M, opts; cache=cache)
+injective_resolution(M; opts::ResolutionOptions=ResolutionOptions(), cache=nothing) =
+    injective_resolution(M, opts; cache=cache)
+betti(M; opts::ResolutionOptions=ResolutionOptions()) =
+    betti(M, opts)
+bass(M; opts::ResolutionOptions=ResolutionOptions()) =
+    bass(M, opts)
 
-Ext(M, N; opts=nothing, cache=nothing) =
-    Ext(M, N, _resolve_df_opts(opts); cache=cache)
-ExtInjective(M, N; opts=nothing, cache=nothing) =
-    ExtInjective(M, N, _resolve_df_opts(opts); cache=cache)
-ExtSpace(M, N; opts=nothing, check::Bool=true, cache=nothing) =
-    ExtSpace(M, N, _resolve_df_opts(opts); check=check, cache=cache)
-Tor(Rop, L; opts=nothing, res=nothing, cache=nothing) =
-    Tor(Rop, L, _resolve_df_opts(opts); res=res, cache=cache)
-ExtAlgebra(M; opts=nothing) =
-    ExtAlgebra(M, _resolve_df_opts(opts))
-ext_action_on_tor(A, T, x; opts=nothing) =
-    ext_action_on_tor(A, T, x, _resolve_df_opts(opts))
+Ext(M, N; opts::DerivedFunctorOptions=DerivedFunctorOptions(), cache=nothing) =
+    Ext(M, N, opts; cache=cache)
+ExtInjective(M, N; opts::DerivedFunctorOptions=DerivedFunctorOptions(), cache=nothing) =
+    ExtInjective(M, N, opts; cache=cache)
+ExtSpace(M, N; opts::DerivedFunctorOptions=DerivedFunctorOptions(), check::Bool=true, cache=nothing) =
+    ExtSpace(M, N, opts; check=check, cache=cache)
+Tor(Rop, L; opts::DerivedFunctorOptions=DerivedFunctorOptions(), res=nothing, cache=nothing) =
+    Tor(Rop, L, opts; res=res, cache=cache)
+ExtAlgebra(M; opts::DerivedFunctorOptions=DerivedFunctorOptions()) =
+    ExtAlgebra(M, opts)
+ext_action_on_tor(A, T, x; opts::DerivedFunctorOptions=DerivedFunctorOptions()) =
+    ext_action_on_tor(A, T, x, opts)
 
-ExtDoubleComplex(M, N; opts=nothing) =
-    ExtDoubleComplex(M, N, _resolve_res_opts(opts))
-ExtSpectralSequence(M, N; opts=nothing, first::Symbol=:vertical) =
-    ExtSpectralSequence(M, N, _resolve_res_opts(opts); first=first)
+ExtDoubleComplex(M, N; opts::ResolutionOptions=ResolutionOptions()) =
+    ExtDoubleComplex(M, N, opts)
+ExtSpectralSequence(M, N; opts::ResolutionOptions=ResolutionOptions(), first::Symbol=:vertical) =
+    ExtSpectralSequence(M, N, opts; first=first)
 
-ExtZn(FG1, FG2; enc=nothing, df=nothing, kwargs...) =
-    ExtZn(FG1, FG2, _resolve_enc_opts(enc), _resolve_df_opts(df); kwargs...)
-ExtRn(F1, F2; enc=nothing, df=nothing) =
-    ExtRn(F1, F2, _resolve_enc_opts(enc), _resolve_df_opts(df))
+ExtZn(FG1, FG2; enc::EncodingOptions=EncodingOptions(), df::DerivedFunctorOptions=DerivedFunctorOptions(), kwargs...) =
+    ExtZn(FG1, FG2, enc, df; kwargs...)
+ExtRn(F1, F2; enc::EncodingOptions=EncodingOptions(), df::DerivedFunctorOptions=DerivedFunctorOptions()) =
+    ExtRn(F1, F2, enc, df)
 
-ExtLongExactSequenceSecond(M, A, B, C, i, p; opts=nothing) =
-    ExtLongExactSequenceSecond(M, A, B, C, i, p, _resolve_df_opts(opts))
-ExtLongExactSequenceSecond(M, ses; opts=nothing) =
-    ExtLongExactSequenceSecond(M, ses, _resolve_df_opts(opts))
+ExtLongExactSequenceSecond(M, A, B, C, i, p; opts::DerivedFunctorOptions=DerivedFunctorOptions()) =
+    ExtLongExactSequenceSecond(M, A, B, C, i, p, opts)
+ExtLongExactSequenceSecond(M, ses; opts::DerivedFunctorOptions=DerivedFunctorOptions()) =
+    ExtLongExactSequenceSecond(M, ses, opts)
 
-ExtLongExactSequenceFirst(A, B, C, N, i, p; opts=nothing) =
-    ExtLongExactSequenceFirst(A, B, C, N, i, p, _resolve_df_opts(opts))
-ExtLongExactSequenceFirst(ses, N; opts=nothing) =
-    ExtLongExactSequenceFirst(ses, N, _resolve_df_opts(opts))
+ExtLongExactSequenceFirst(A, B, C, N, i, p; opts::DerivedFunctorOptions=DerivedFunctorOptions()) =
+    ExtLongExactSequenceFirst(A, B, C, N, i, p, opts)
+ExtLongExactSequenceFirst(ses, N; opts::DerivedFunctorOptions=DerivedFunctorOptions()) =
+    ExtLongExactSequenceFirst(ses, N, opts)
 
-TorLongExactSequenceSecond(Rop, i, p; opts=nothing) =
-    TorLongExactSequenceSecond(Rop, i, p, _resolve_df_opts(opts))
-TorLongExactSequenceSecond(Rop, ses; opts=nothing) =
-    TorLongExactSequenceSecond(Rop, ses, _resolve_df_opts(opts))
+TorLongExactSequenceSecond(Rop, i, p; opts::DerivedFunctorOptions=DerivedFunctorOptions()) =
+    TorLongExactSequenceSecond(Rop, i, p, opts)
+TorLongExactSequenceSecond(Rop, ses; opts::DerivedFunctorOptions=DerivedFunctorOptions()) =
+    TorLongExactSequenceSecond(Rop, ses, opts)
 
-TorLongExactSequenceFirst(L, i, p; opts=nothing) =
-    TorLongExactSequenceFirst(L, i, p, _resolve_df_opts(opts))
-TorLongExactSequenceFirst(L, ses; opts=nothing) =
-    TorLongExactSequenceFirst(L, ses, _resolve_df_opts(opts))
+TorLongExactSequenceFirst(L, i, p; opts::DerivedFunctorOptions=DerivedFunctorOptions()) =
+    TorLongExactSequenceFirst(L, i, p, opts)
+TorLongExactSequenceFirst(L, ses; opts::DerivedFunctorOptions=DerivedFunctorOptions()) =
+    TorLongExactSequenceFirst(L, ses, opts)
 
-encode_pmodule_from_flange(FG; enc=nothing) =
-    encode_pmodule_from_flange(FG, _resolve_enc_opts(enc))
-encode_pmodules_from_flanges(FGs; enc=nothing) =
-    encode_pmodules_from_flanges(FGs, _resolve_enc_opts(enc))
+encode_pmodule_from_flange(FG; enc::EncodingOptions=EncodingOptions()) =
+    encode_pmodule_from_flange(FG, enc)
+encode_pmodules_from_flanges(FGs; enc::EncodingOptions=EncodingOptions()) =
+    encode_pmodules_from_flanges(FGs, enc)
 
-encode_pmodule_from_PL_fringe(F; enc=nothing) =
-    encode_pmodule_from_PL_fringe(F, _resolve_enc_opts(enc))
-encode_pmodules_from_PL_fringes(Fs; enc=nothing) =
-    encode_pmodules_from_PL_fringes(Fs, _resolve_enc_opts(enc))
+encode_pmodule_from_PL_fringe(F; enc::EncodingOptions=EncodingOptions()) =
+    encode_pmodule_from_PL_fringe(F, enc)
+encode_pmodules_from_PL_fringes(Fs; enc::EncodingOptions=EncodingOptions()) =
+    encode_pmodules_from_PL_fringes(Fs, enc)
 
-projective_resolution_Zn(FG; enc=nothing, res=nothing, return_encoding::Bool=false,
+projective_resolution_Zn(FG; enc::EncodingOptions=EncodingOptions(), res::ResolutionOptions=ResolutionOptions(), return_encoding::Bool=false,
                          threads::Bool = (Threads.nthreads() > 1)) =
-    projective_resolution_Zn(FG, _resolve_enc_opts(enc), _resolve_res_opts(res);
+    projective_resolution_Zn(FG, enc, res;
                              return_encoding=return_encoding, threads=threads)
-injective_resolution_Zn(FG; enc=nothing, res=nothing, return_encoding::Bool=false,
+injective_resolution_Zn(FG; enc::EncodingOptions=EncodingOptions(), res::ResolutionOptions=ResolutionOptions(), return_encoding::Bool=false,
                         threads::Bool = (Threads.nthreads() > 1)) =
-    injective_resolution_Zn(FG, _resolve_enc_opts(enc), _resolve_res_opts(res);
+    injective_resolution_Zn(FG, enc, res;
                             return_encoding=return_encoding, threads=threads)
 
-projective_resolution_Rn(FG; enc=nothing, res=nothing, return_encoding::Bool=false,
+projective_resolution_Rn(FG; enc::EncodingOptions=EncodingOptions(), res::ResolutionOptions=ResolutionOptions(), return_encoding::Bool=false,
                          threads::Bool = (Threads.nthreads() > 1)) =
-    projective_resolution_Rn(FG, _resolve_enc_opts(enc), _resolve_res_opts(res);
+    projective_resolution_Rn(FG, enc, res;
                              return_encoding=return_encoding, threads=threads)
-injective_resolution_Rn(FG; enc=nothing, res=nothing, return_encoding::Bool=false,
+injective_resolution_Rn(FG; enc::EncodingOptions=EncodingOptions(), res::ResolutionOptions=ResolutionOptions(), return_encoding::Bool=false,
                         threads::Bool = (Threads.nthreads() > 1)) =
-    injective_resolution_Rn(FG, _resolve_enc_opts(enc), _resolve_res_opts(res);
+    injective_resolution_Rn(FG, enc, res;
                             return_encoding=return_encoding, threads=threads)
 
 

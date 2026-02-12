@@ -1,6 +1,7 @@
 using Random
 using LinearAlgebra
 using SparseArrays
+using TOML
 
 @testset "FieldLinAlg engines" begin
     FL = PosetModules.FieldLinAlg
@@ -678,6 +679,81 @@ using SparseArrays
         end
     end
 
+    @testset "restricted sparse exact-oracle fixtures (adversarial patterns)" begin
+        exact_fields = (CM.QQField(), CM.F2(), CM.F3(), CM.Fp(5))
+
+        function _coerce_int_mat(field, Aint::AbstractMatrix{<:Integer})
+            K = CM.coeff_type(field)
+            m, n = size(Aint)
+            A = Matrix{K}(undef, m, n)
+            @inbounds for i in 1:m, j in 1:n
+                A[i, j] = CM.coerce(field, Aint[i, j])
+            end
+            return A
+        end
+
+        # Rows are crafted as linear combinations with disjoint supports so rank/nullity
+        # are known a priori over every exact field.
+        Aint = [
+            1 0 0 0 1 0 0 0 0 0 0;
+            0 1 0 0 0 1 0 0 0 0 0;
+            0 0 1 0 0 0 1 0 0 0 0;
+            0 0 0 1 0 0 0 1 0 0 0;
+            1 1 0 0 1 1 0 0 0 0 0;
+            0 0 1 1 0 0 1 1 0 0 0;
+            1 0 1 0 1 0 1 0 0 0 0;
+            0 1 0 1 0 1 0 1 0 0 0;
+            0 0 0 0 0 0 0 0 0 0 0
+        ]
+        rows = [8, 5, 2, 7, 1, 6]
+        cols = [8, 6, 4, 2, 7, 5, 3, 1]
+        expected_rank = 4
+        expected_nullity = length(cols) - expected_rank
+
+        for field in exact_fields
+            K = CM.coeff_type(field)
+            A = _coerce_int_mat(field, Aint)
+            As = sparse(A)
+
+            rr = FL.rank_restricted(field, As, rows, cols)
+            @test rr == expected_rank
+
+            N = FL.nullspace_restricted(field, As, rows, cols)
+            @test size(N) == (length(cols), expected_nullity)
+            @test As[rows, cols] * N == zeros(K, length(rows), expected_nullity)
+        end
+
+        Bint = [
+            0 0 0 0 0 0;
+            1 0 0 0 0 0;
+            0 0 0 1 0 0;
+            0 0 1 0 0 0;
+            1 0 1 0 0 0;
+            0 1 0 1 0 0;
+            0 0 0 1 0 0;
+            1 0 0 1 0 0
+        ]
+        srows = [2, 4, 5, 7, 8]
+        scols = [1, 3, 4] # restricted block has known full column rank 3
+        Xint = [
+            1 0 1;
+            0 1 1;
+            1 1 0
+        ]
+
+        for field in exact_fields
+            B = _coerce_int_mat(field, Bint)
+            Bs = sparse(B)
+            Xtrue = _coerce_int_mat(field, Xint)
+            Y = B[:, scols] * Xtrue
+
+            Xs = FL.solve_fullcolumn_restricted(field, Bs, srows, scols, Y)
+            Xd = FL.solve_fullcolumn_restricted(field, B, srows, scols, Y)
+            @test Xs == Xtrue
+            @test Xd == Xtrue
+        end
+    end
+
     @testset "Characteristic-sensitive rank (small matrix)" begin
         A = [2 0;
              0 0]
@@ -1029,6 +1105,30 @@ using SparseArrays
             end
         end
 
+        @testset "sparse transpose/adjoint parity" begin
+            A = sparse(fpmat([
+                1 0 2 4;
+                2 1 0 3;
+                0 4 1 2
+            ]))
+            At = transpose(A)
+            Aa = adjoint(A)
+            @test FL.rank(F5, At) == FL.rank(F5, Matrix(At))
+            @test FL.rank(F5, Aa) == FL.rank(F5, Matrix(Aa))
+
+            Nt = FL.nullspace(F5, At)
+            Na = FL.nullspace(F5, Aa)
+            @test At * Nt == zeros(F5Elem, size(At, 1), size(Nt, 2))
+            @test Aa * Na == zeros(F5Elem, size(Aa, 1), size(Na, 2))
+        end
+
+        @testset "backend selection prefers :fp_sparse for sparse" begin
+            A = sparse(fpmat([1 0 2; 0 1 3; 2 3 1]))
+            @test FL.choose_linalg_backend(F5, A; op=:rank) == :fp_sparse
+            @test FL.choose_linalg_backend(F5, transpose(A); op=:nullspace) == :fp_sparse
+            @test FL.choose_linalg_backend(F5, adjoint(A); op=:solve) == :fp_sparse
+        end
+
         @testset "Nemo backend parity (p=5)" begin
             A = fpmat([1 2 3; 2 4 1; 3 1 2; 4 0 3])
             r = FL.rank(F5, A)
@@ -1051,6 +1151,92 @@ using SparseArrays
             @test Xn == Xtrue
             @test haskey(FL._NEMO_FULLCOLUMN_FACTOR_CACHE_FP, B)
         end
+
+        @testset "backend algorithmic oracles on larger planted-rank fixtures" begin
+            function _planted_rank_int(m::Int, n::Int, r::Int, rng::AbstractRNG)
+                U = zeros(Int, m, r)
+                V = zeros(Int, r, n)
+                @inbounds for i in 1:r
+                    U[i, i] = 1
+                    V[i, i] = 1
+                end
+                @inbounds for i in r+1:m, j in 1:r
+                    U[i, j] = rand(rng, 0:1)
+                end
+                @inbounds for i in 1:r, j in r+1:n
+                    V[i, j] = rand(rng, 0:1)
+                end
+                return U * V
+            end
+
+            rng = MersenneTwister(20260214)
+            m, n, r = 84, 116, 42
+            Aint = _planted_rank_int(m, n, r, rng)
+            A = fpmat(Aint)
+
+            rj = FL.rank(F5, A; backend=:julia_exact)
+            rn = FL.rank(F5, A; backend=:nemo)
+            ra = FL.rank(F5, A; backend=:auto)
+            @test rj == r
+            @test rn == r
+            @test ra == r
+
+            Nn = FL.nullspace(F5, A; backend=:nemo)
+            @test size(Nn) == (n, n - r)
+            @test A * Nn == zeros(F5Elem, m, n - r)
+
+            Bint = _planted_rank_int(88, 40, 40, rng)
+            B = fpmat(Bint)
+            Xtrue = fpmat(rand(rng, 0:4, 40, 3))
+            Y = B * Xtrue
+            Xj = FL.solve_fullcolumn(F5, B, Y; backend=:julia_exact)
+            Xn = FL.solve_fullcolumn(F5, B, Y; backend=:nemo)
+            @test Xj == Xtrue
+            @test Xn == Xtrue
+        end
+    end
+
+    @testset "QQ backend algorithmic oracles on larger planted-rank fixtures" begin
+        function _planted_rank_int(m::Int, n::Int, r::Int, rng::AbstractRNG)
+            U = zeros(Int, m, r)
+            V = zeros(Int, r, n)
+            @inbounds for i in 1:r
+                U[i, i] = 1
+                V[i, i] = 1
+            end
+            @inbounds for i in r+1:m, j in 1:r
+                U[i, j] = rand(rng, 0:1)
+            end
+            @inbounds for i in 1:r, j in r+1:n
+                V[i, j] = rand(rng, 0:1)
+            end
+            return U * V
+        end
+
+        rng = MersenneTwister(20260215)
+        m, n, r = 72, 104, 36
+        Aint = _planted_rank_int(m, n, r, rng)
+        A = QQ.(Aint)
+        qf = CM.QQField()
+
+        @test FL.rank(qf, A; backend=:julia_exact) == r
+        @test FL.rank(qf, A; backend=:nemo) == r
+        @test FL.rank(qf, A; backend=:auto) == r
+        @test FL.rank_dim(qf, A; backend=:modular) == r
+
+        Nm = FL.nullspace(qf, A; backend=:modular)
+        @test size(Nm) == (n, n - r)
+        @test A * Nm == zeros(QQ, m, n - r)
+
+        Bint = _planted_rank_int(80, 34, 34, rng)
+        B = QQ.(Bint)
+        Xtrue = QQ.(rand(rng, -2:2, 34, 2))
+        Y = B * Xtrue
+
+        Xm = FL.solve_fullcolumn(qf, B, Y; backend=:modular)
+        Xn = FL.solve_fullcolumn(qf, B, Y; backend=:nemo)
+        @test B * Xm == Y
+        @test B * Xn == Y
     end
 
     @testset "Real engine parity" begin
@@ -1081,6 +1267,353 @@ using SparseArrays
         C = FL.colspace(F, A)
         @test size(C, 1) == size(A, 1)
         @test FL.rank(F, C) == r
+
+        As = sparse(A)
+        rs = FL.rank(F, As)
+        @test rs == r
+
+        Ns = FL.nullspace(F, As)
+        @test size(Ns, 1) == size(A, 2)
+        @test norm(As * Ns) <= 1e-8
+
+        Bs = sparse(B)
+        empty!(FL._FLOAT_SPARSE_FACTOR_CACHE)
+        xs = FL.solve_fullcolumn(F, Bs, y; backend=:float_sparse_qr)
+        @test norm(Bs * xs - y) <= 1e-10
+        @test haskey(FL._FLOAT_SPARSE_FACTOR_CACHE, FL._float_sparse_cache_key(Bs))
+
+        Rs, pivss = FL.rref(F, As; pivots=true)
+        @test length(pivss) == rs
+        @test size(Rs) == size(As)
+
+        Cs = FL.colspace(F, As)
+        @test size(Cs, 1) == size(As, 1)
+        @test FL.rank(F, Cs) == rs
+
+        @test FL.choose_linalg_backend(F, As; op=:rank) == :float_sparse_qr
+    end
+
+    @testset "Real engine algorithmic oracles" begin
+        F = CM.RealField(Float64; rtol=1e-10, atol=1e-12)
+
+        # Oracle 1: rank is known exactly from construction.
+        Adep = [
+            1.0 2.0 3.0 4.0;
+            0.0 1.0 1.0 0.0;
+            1.0 3.0 4.0 4.0; # row1 + row2
+            2.0 4.0 6.0 8.0  # 2*row1
+        ]
+        @test FL.rank(F, Adep; backend=:float_dense_qr) == 2
+        @test FL.rank(F, Adep; backend=:float_dense_svd) == 2
+
+        # Oracle 2: near-diagonal matrix with unambiguous rank outcomes.
+        Ahi = Matrix(Diagonal([1.0, 1e-6, 0.0]))
+        Alo = Matrix(Diagonal([1.0, 1e-14, 0.0]))
+        @test FL.rank(F, Ahi; backend=:float_dense_qr) == 2
+        @test FL.rank(F, Ahi; backend=:float_dense_svd) == 2
+        @test FL.rank(F, Alo; backend=:float_dense_qr) == 1
+        @test FL.rank(F, Alo; backend=:float_dense_svd) == 1
+
+        # Oracle 3: known nullspace direction span{[1,-2,1,0]}.
+        Ak = [
+            1.0 2.0 3.0 0.0;
+            2.0 4.0 6.0 0.0;
+            0.0 1.0 1.0 0.0
+        ]
+        vk = [-1.0, -1.0, 1.0, 0.0]
+        Nq = FL.nullspace(F, Ak; backend=:float_dense_qr)
+        Ns = FL.nullspace(F, Ak; backend=:float_dense_svd)
+        @test size(Nq, 2) == 2
+        @test size(Ns, 2) == 2
+        @test norm(Ak * Nq) <= 1e-8
+        @test norm(Ak * Ns) <= 1e-8
+        # Oracle vector must lie in the span of each returned nullspace basis.
+        cq = Nq \ vk
+        cs = Ns \ vk
+        @test norm(Nq * cq - vk) <= 1e-8
+        @test norm(Ns * cs - vk) <= 1e-8
+
+        # Oracle 4: solve with known exact RHS/solution across dense/sparse QR backends.
+        B = [
+            1.0 0.0 0.0;
+            0.0 1.0 0.0;
+            0.0 0.0 1.0;
+            1.0 1.0 0.0;
+            0.0 1.0 1.0;
+            1.0 0.0 1.0
+        ]
+        Xtrue = [
+            1.0  2.0;
+            -1.0 3.0;
+            0.5 -2.0
+        ]
+        Y = B * Xtrue
+        Xd = FL.solve_fullcolumn(F, B, Y; backend=:float_dense_qr)
+        Xs = FL.solve_fullcolumn(F, sparse(B), Y; backend=:float_sparse_qr)
+        @test norm(Xd - Xtrue) <= 1e-10
+        @test norm(Xs - Xtrue) <= 1e-10
+
+        # Oracle 5: sparse restricted rank with a known submatrix rank.
+        Abase = sparse([
+            1.0 0.0 0.0 0.0 1.0 0.0;
+            0.0 1.0 0.0 0.0 0.0 1.0;
+            0.0 0.0 1.0 0.0 1.0 1.0;
+            0.0 0.0 0.0 1.0 1.0 1.0;
+            1.0 1.0 0.0 0.0 1.0 1.0;
+            0.0 0.0 1.0 1.0 2.0 2.0
+        ])
+        rows = [1, 2, 5, 6]
+        cols = [1, 2, 5, 6]
+        # Submatrix:
+        # [1 0 1 0
+        #  0 1 0 1
+        #  1 1 1 1
+        #  0 0 2 2] has rank 3.
+        @test FL.rank_restricted(F, Abase, rows, cols; backend=:float_sparse_qr) == 3
+
+        # Optional oracle 6: sparse svds backend (when available).
+        if FL._have_svds_backend()
+            m = 30
+            n = 42
+            # [I_m 0] has rank m and nullity n-m.
+            Asv = hcat(sparse(1.0I, m, m), spzeros(m, n - m))
+            Nsv = FL.nullspace(F, Asv; backend=:float_sparse_svds)
+            @test size(Nsv) == (n, n - m)
+            @test norm(Asv * Nsv) <= 1e-7
+            @test FL.rank(F, Asv; backend=:float_sparse_qr) == m
+        end
+    end
+
+    @testset "Fp sparse adversarial oracle families (larger)" begin
+        F5 = CM.Fp(5)
+        F5Elem = CM.FpElem{5}
+        rng = MersenneTwister(20260216)
+
+        function _sparse_planted_rank_fp(rng::AbstractRNG, m::Int, n::Int, r::Int)
+            U = zeros(Int, m, r)
+            V = zeros(Int, r, n)
+            @inbounds for i in 1:r
+                U[i, i] = 1
+                V[i, i] = 1
+            end
+            # Sparse low-density fill to keep structure adversarial but controlled.
+            fill_u = max(1, div((m - r) * r, 14))
+            fill_v = max(1, div(r * (n - r), 14))
+            for _ in 1:fill_u
+                i = rand(rng, r+1:m)
+                j = rand(rng, 1:r)
+                U[i, j] = rand(rng, 1:4)
+            end
+            for _ in 1:fill_v
+                i = rand(rng, 1:r)
+                j = rand(rng, r+1:n)
+                V[i, j] = rand(rng, 1:4)
+            end
+            Aint = (U * V) .% 5
+            return sparse(F5Elem.(Aint))
+        end
+
+        for (m, n, r) in ((80, 120, 45), (96, 144, 51))
+            A = _sparse_planted_rank_fp(rng, m, n, r)
+            @test FL.rank(F5, A; backend=:fp_sparse) == r
+            @test FL.rank(F5, A; backend=:auto) == r
+
+            N = FL.nullspace(F5, A; backend=:fp_sparse)
+            @test size(N) == (n, n - r)
+            @test A * N == zeros(F5Elem, m, n - r)
+
+            Rt, pivs = FL.rref(F5, transpose(A); pivots=true, backend=:fp_sparse)
+            @test length(pivs) == r
+            @test size(Rt) == size(transpose(A))
+
+            C = FL.colspace(F5, A; backend=:fp_sparse)
+            @test size(C, 1) == m
+            @test size(C, 2) == r
+            @test FL.rank(F5, C; backend=:fp_sparse) == r
+        end
+    end
+
+    @testset "Real numerically delicate oracle fixtures (backend-specific envelopes)" begin
+        F = CM.RealField(Float64; rtol=1e-10, atol=1e-12)
+        rng = MersenneTwister(20260217)
+
+        function _orthonormal(rng::AbstractRNG, n::Int)
+            Q = qr(randn(rng, n, n)).Q
+            return Matrix(Q)
+        end
+
+        function _matrix_with_singulars(rng::AbstractRNG, sig::Vector{Float64})
+            n = length(sig)
+            U = _orthonormal(rng, n)
+            V = _orthonormal(rng, n)
+            return U * Diagonal(sig) * V'
+        end
+
+        # Tolerance envelope under F: tol ~= 1e-10 (scaled by opnorm).
+        # So sigma=1e-8 should count, sigma=1e-12 should not.
+        A4 = _matrix_with_singulars(rng, [1.0, 1e-2, 1e-5, 1e-8, 0.0])
+        A3 = _matrix_with_singulars(rng, [1.0, 1e-2, 1e-5, 1e-12, 0.0])
+
+        @test FL.rank(F, A4; backend=:float_dense_qr) == 4
+        @test FL.rank(F, A4; backend=:float_dense_svd) == 4
+        @test FL.rank(F, A3; backend=:float_dense_qr) == 3
+        @test FL.rank(F, A3; backend=:float_dense_svd) == 3
+
+        N4q = FL.nullspace(F, A4; backend=:float_dense_qr)
+        N4s = FL.nullspace(F, A4; backend=:float_dense_svd)
+        @test size(N4q, 2) == 1
+        @test size(N4s, 2) == 1
+        @test norm(A4 * N4q) <= 5e-7
+        @test norm(A4 * N4s) <= 5e-7
+
+        # Sparse delicate fixture with known nullity.
+        As = sparse(A3)
+        Ns_qr = FL.nullspace(F, As; backend=:float_sparse_qr)
+        @test size(Ns_qr, 2) == 2
+        @test norm(As * Ns_qr) <= 1e-6
+        if FL._have_svds_backend()
+            Ns_svds = FL.nullspace(F, As; backend=:float_sparse_svds)
+            @test size(Ns_svds, 2) == 2
+            @test norm(As * Ns_svds) <= 1e-5
+        end
+    end
+
+    @testset "Real sparse extreme conditioning oracles (larger scale)" begin
+        F = CM.RealField(Float64; rtol=1e-10, atol=1e-12)
+        rng = MersenneTwister(20260218)
+
+        function _sparse_rect_diag(diagvals::AbstractVector{<:Real}, m::Int, n::Int)
+            d = min(length(diagvals), m, n)
+            I = collect(1:d)
+            J = collect(1:d)
+            V = Float64.(diagvals[1:d])
+            return sparse(I, J, V, m, n)
+        end
+
+        # Oracle family 1: tiny-pivot transition around tolerance envelope.
+        # For F (rtol=1e-10, atol=1e-12), sigma=1e-6 counts, sigma=1e-14 drops.
+        m = 220
+        n = 320
+        rbase = 170
+        dhi = vcat(ones(rbase), [1e-6], zeros(m - rbase - 1))
+        dlo = vcat(ones(rbase), [1e-14], zeros(m - rbase - 1))
+        Ahi = _sparse_rect_diag(dhi, m, n)
+        Alo = _sparse_rect_diag(dlo, m, n)
+
+        @test FL.rank(F, Ahi; backend=:float_sparse_qr) == rbase + 1
+        @test FL.rank(F, Alo; backend=:float_sparse_qr) == rbase
+
+        Nhi_qr = FL.nullspace(F, Ahi; backend=:float_sparse_qr)
+        Nlo_qr = FL.nullspace(F, Alo; backend=:float_sparse_qr)
+        @test size(Nhi_qr, 2) == n - (rbase + 1)
+        @test size(Nlo_qr, 2) == n - rbase
+        @test norm(Ahi * Nhi_qr) <= 1e-7
+        @test norm(Alo * Nlo_qr) <= 1e-7
+
+        if FL._have_svds_backend()
+            Nhi_svds = FL.nullspace(F, Ahi; backend=:float_sparse_svds)
+            Nlo_svds = FL.nullspace(F, Alo; backend=:float_sparse_svds)
+            @test size(Nhi_svds, 2) == n - (rbase + 1)
+            @test size(Nlo_svds, 2) == n - rbase
+            @test norm(Ahi * Nhi_svds) <= 1e-6
+            @test norm(Alo * Nlo_svds) <= 1e-6
+        end
+
+        # Oracle family 2: large sparse ill-conditioned full-column solve.
+        # We validate by residual envelope rather than exact X recovery.
+        nb = 160
+        mb = 260
+        scales = 10.0 .^ range(0, -8, length=nb)
+        Btop = _sparse_rect_diag(scales, nb, nb)
+        extra_nnz = 8 * (mb - nb)
+        I = rand(rng, 1:(mb - nb), extra_nnz)
+        J = rand(rng, 1:nb, extra_nnz)
+        V = randn(rng, extra_nnz) .* 1e-2
+        Bbot = sparse(I, J, V, mb - nb, nb)
+        B = vcat(Btop, Bbot)
+
+        Xtrue = randn(rng, nb, 3)
+        Y = B * Xtrue
+        Xhat = FL.solve_fullcolumn(F, B, Y; backend=:float_sparse_qr)
+        rel_res = norm(B * Xhat - Y) / max(1.0, norm(Y))
+        @test rel_res <= 1e-7
+    end
+
+    @testset "backend-forced rref/colspace oracle checks (large sparse)" begin
+        # QQ sparse oracle.
+        qf = CM.QQField()
+        mqq, nqq, rqq = 70, 110, 37
+        Aqq = sparse(vcat(Matrix{Int}(I, rqq, rqq), zeros(Int, mqq - rqq, rqq)) *
+                     hcat(Matrix{Int}(I, rqq, rqq), zeros(Int, rqq, nqq - rqq)))
+        Aqq = sparse(QQ.(Matrix(Aqq)))
+        Rq, pivq = FL.rref(qf, Aqq; pivots=true, backend=:julia_sparse)
+        @test length(pivq) == rqq
+        @test size(Rq) == size(Aqq)
+        Cq = FL.colspace(qf, Aqq; backend=:julia_sparse)
+        @test size(Cq, 2) == rqq
+        @test FL.rank(qf, Cq; backend=:julia_exact) == rqq
+
+        # Fp sparse oracle.
+        F5 = CM.Fp(5)
+        F5Elem = CM.FpElem{5}
+        m5, n5, r5 = 76, 118, 44
+        A5int = vcat(Matrix{Int}(I, r5, r5), zeros(Int, m5 - r5, r5)) *
+                hcat(Matrix{Int}(I, r5, r5), zeros(Int, r5, n5 - r5))
+        A5 = sparse(F5Elem.(A5int .% 5))
+        R5, piv5 = FL.rref(F5, A5; pivots=true, backend=:fp_sparse)
+        @test length(piv5) == r5
+        C5 = FL.colspace(F5, A5; backend=:fp_sparse)
+        @test size(C5, 2) == r5
+        @test FL.rank(F5, C5; backend=:fp_sparse) == r5
+
+        # Real sparse oracle.
+        F = CM.RealField(Float64; rtol=1e-10, atol=1e-12)
+        mr, nr, rr = 82, 124, 49
+        Ar = sparse(vcat(Matrix{Float64}(I, rr, rr), zeros(Float64, mr - rr, rr)) *
+                    hcat(Matrix{Float64}(I, rr, rr), zeros(Float64, rr, nr - rr)))
+        Rr, pivr = FL.rref(F, Ar; pivots=true, backend=:float_sparse_qr)
+        @test length(pivr) == rr
+        Cr = FL.colspace(F, Ar; backend=:float_sparse_qr)
+        @test size(Cr, 2) == rr
+        @test FL.rank(F, Cr; backend=:float_sparse_qr) == rr
+    end
+
+    @testset "linalg threshold persistence + fingerprint gating" begin
+        old = FL.current_linalg_thresholds()
+        path = joinpath(mktempdir(), "linalg_thresholds.toml")
+
+        FL.save_linalg_thresholds!(; path=path)
+        FL.FP_NEMO_RANK_THRESHOLD[] = old["fp_nemo_rank_threshold"] + 111
+        @test FL.load_linalg_thresholds!(; path=path, warn_on_mismatch=false)
+        @test FL.FP_NEMO_RANK_THRESHOLD[] == old["fp_nemo_rank_threshold"]
+        @test haskey(old, "modular_nullspace_threshold")
+        @test haskey(old, "modular_solve_threshold")
+        @test haskey(old, "modular_min_primes")
+        @test haskey(old, "modular_max_primes")
+        @test haskey(old, "rankqq_dim_small_threshold")
+
+        doc = TOML.parsefile(path)
+        doc["fingerprint"]["cpu_name"] = string(doc["fingerprint"]["cpu_name"], "_mismatch")
+        open(path, "w") do io
+            TOML.print(io, doc)
+        end
+
+        FL.FP_NEMO_RANK_THRESHOLD[] = old["fp_nemo_rank_threshold"] + 222
+        @test !FL.load_linalg_thresholds!(; path=path, warn_on_mismatch=false)
+        @test FL.FP_NEMO_RANK_THRESHOLD[] == old["fp_nemo_rank_threshold"] + 222
+
+        FL.NEMO_THRESHOLD[] = old["nemo_threshold"]
+        FL.FP_NEMO_RANK_THRESHOLD[] = old["fp_nemo_rank_threshold"]
+        FL.FP_NEMO_NULLSPACE_THRESHOLD[] = old["fp_nemo_nullspace_threshold"]
+        FL.FP_NEMO_SOLVE_THRESHOLD[] = old["fp_nemo_solve_threshold"]
+        FL.MODULAR_NULLSPACE_THRESHOLD[] = old["modular_nullspace_threshold"]
+        FL.MODULAR_SOLVE_THRESHOLD[] = old["modular_solve_threshold"]
+        FL.MODULAR_MIN_PRIMES[] = old["modular_min_primes"]
+        FL.MODULAR_MAX_PRIMES[] = old["modular_max_primes"]
+        FL.RANKQQ_DIM_SMALL_THRESHOLD[] = old["rankqq_dim_small_threshold"]
+        FL.FLOAT_NULLSPACE_SVD_THRESHOLD[] = old["float_nullspace_svd_threshold"]
+        FL.FLOAT_SPARSE_SVDS_MIN_DIM[] = old["float_sparse_svds_min_dim"]
+        FL.FLOAT_SPARSE_SVDS_MIN_NNZ[] = old["float_sparse_svds_min_nnz"]
     end
 
     @testset "Tiny <=4x4 fast-path parity" begin

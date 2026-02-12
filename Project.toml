@@ -1,4 +1,30 @@
 [deps]
+Arpack = "7d9fca2a-8960-54d3-9f78-7d1dccf2cb97"
 CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
+Distances = "b4f34e82-e78d-54a5-968a-f98e89d6e8f7"
 JSON3 = "0f8b85d8-7281-11e9-16c2-39a750bddbf1"
+KernelFunctions = "ec8451be-7e33-11e9-00cf-bbf324bd1392"
 Nemo = "2edaba10-b0f1-5616-af89-8c11ac63239a"
+
+[weakdeps]
+Arrow = "69666777-d1a9-59fb-9406-91d4454c9d45"
+CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
+DataFrames = "a93c6f00-e57e-5684-b7b6-d8193f3e46c0"
+Folds = "41a02a25-b8f0-4f67-bc48-60067656b558"
+NPZ = "15e1cf62-19b3-5cfa-8e77-841668bca605"
+Parquet2 = "98572fba-bba0-415d-956f-fa77e587d26d"
+ProgressLogging = "33c8b6b6-d38a-422a-b730-caa89a2f386d"
+Tables = "bd369af6-aec1-5ad0-b16a-f7cc5008161c"
+
+[extensions]
+TamerOpArpackExt = "Arpack"
+TamerOpArrowExt = ["Arrow", "Tables"]
+TamerOpCSVExt = "CSV"
+TamerOpDataFramesExt = "DataFrames"
+TamerOpDistancesExt = "Distances"
+TamerOpFoldsExt = "Folds"
+TamerOpKernelFunctionsExt = "KernelFunctions"
+TamerOpNPZExt = "NPZ"
+TamerOpParquet2Ext = ["Parquet2", "Tables"]
+TamerOpProgressLoggingExt = "ProgressLogging"
+TamerOpTablesExt = "Tables"

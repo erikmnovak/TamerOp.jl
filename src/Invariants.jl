@@ -1,6 +1,7 @@
 module Invariants
 
 using LinearAlgebra
+using JSON3
 using ..CoreModules: PLikeEncodingMap, CompiledEncoding, locate, axes_from_encoding, dimension, representatives,
                      InvariantOptions, EncodingCache, AbstractCoeffField
 using Statistics: mean
@@ -31,10 +32,34 @@ import ..ZnEncoding: ZnEncodingMap
 # Keep it as a type alias (not a new struct) to make dispatch readable.
 const HilbertFunction = AbstractVector{<:Integer}
 
+"""
+    SliceSpec{W,V}
+
+Typed explicit slice descriptor used in high-throughput slice pipelines.
+"""
+struct SliceSpec{W<:Real,V}
+    chain::Vector{Int}
+    values::V
+    weight::W
+end
+
+function SliceSpec(chain::AbstractVector{<:Integer}; values=nothing, weight::Real=1.0)
+    c = chain isa Vector{Int} ? copy(chain) : Int[chain...]
+    w = float(weight)
+    if values === nothing
+        return SliceSpec{Float64,Nothing}(c, nothing, w)
+    elseif values isa AbstractVector{<:Integer}
+        return SliceSpec{Float64,Vector{Int}}(c, Int[values...], w)
+    elseif values isa AbstractVector{<:Real}
+        return SliceSpec{Float64,Vector{Float64}}(c, Float64[float(v) for v in values], w)
+    end
+    throw(ArgumentError("SliceSpec: values must be nothing, integer vector, or real vector"))
+end
+
 @inline _unwrap_compiled(pi) = (pi isa CompiledEncoding ? pi.pi : pi)
 
 
-export rank_map, rank_invariant, rank_invariant_tame, ecc,
+export rank_map, rank_invariant, rank_invariant_tame,
        restricted_hilbert, hilbert_distance,
        slice_chain, restrict_to_chain, slice_barcode,
        bottleneck_distance, matching_distance_approx,
@@ -47,16 +72,17 @@ export rank_map, rank_invariant, rank_invariant_tame, ecc,
        PersistenceImage1D, persistence_image, persistence_silhouette,
        barcode_entropy, barcode_summary, slice_barcode,
        CompiledSlicePlan, SlicePlanCache, compile_slice_plan, clear_slice_plan_cache!,
+       SliceSpec, collect_slices, save_slices_json, load_slices_json,
        SliceModuleCache, SliceModulePairCache,
        SliceBarcodesTask, SliceDistanceTask, SliceKernelTask,
        module_cache, compile_slices, run_invariants,
-       slice_barcodes, precompute_slice_barcode_map, slice_features, slice_kernel,
+       slice_barcodes, slice_features, slice_kernel,
        PackedBarcodeGrid,
        integrated_hilbert_mass, measure_by_dimension, support_measure,
        measure_by_value, region_values,
        support_measure, vertex_set_measure,
        dim_stats, dim_norm, region_weight_entropy, aspect_ratio_stats,
-       module_size_summary, sliced_bottleneck_distance, sliced_wasserstein_distance_approx,
+       module_size_summary, sliced_bottleneck_distance,
        interface_measure, interface_measure_by_dim_pair, interface_measure_dim_changes,
        Rect, RectSignedBarcode, axes_from_encoding, rectangle_signed_barcode, rectangle_signed_barcode_rank, rectangles_from_grid, 
        rank_from_signed_barcode, truncate_signed_barcode, rectangle_signed_barcode_image, 
@@ -94,11 +120,7 @@ export rank_map, rank_invariant, rank_invariant_tame, ecc,
        mpp_image_distance, mpp_image_inner_product, mpp_image_kernel,
        save_mpp_decomposition_json, load_mpp_decomposition_json,
        save_mpp_image_json, load_mpp_image_json,
-       rectangle_measure, rectangles,
-       upsets_covering, downsets_covering,
-       minimal_primes, socle, associated_primes,
-       multiparameter_landscape, multiparameter_landscape_standard,
-       matching_distance, matching_distance_approx_2d,
+       matching_distance,
        FiberedSliceFamily2D, fibered_slice_family_2d
     
 # -----------------------------------------------------------------------------
@@ -159,9 +181,6 @@ end
         max_axis_len = opts.max_axis_len,
     )
 end
-
-@inline _resolve_opts(opts::Union{InvariantOptions,Nothing}) =
-    opts === nothing ? InvariantOptions() : opts
 
 @inline function _eye(::Type{K}, n::Int) where {K}
     M = zeros(K, n, n)
@@ -356,8 +375,6 @@ function rank_map(H::FringeModule{K}, pi, x, y, opts::InvariantOptions;
     Mp = pmodule_from_fringe(H)
     return rank_map(Mp, pi, x, y, opts; cache = cache, memo = memo)
 end
-
-
 
 """
     rank_invariant(M::PModule{K}; store_zeros=false, threads=(Threads.nthreads() > 1))
@@ -884,6 +901,154 @@ RankQueryCache(pi::CompiledEncoding{<:ZnEncodingMap}) = RankQueryCache(pi.pi)
     return get!(rq_cache.rank_cache, (a, b)) do
         builder()
     end
+end
+
+@inline _rank_cache_get!(builder::F, rq_cache::RankQueryCache, a::Int, b::Int) where {F<:Function} =
+    _rank_cache_get!(rq_cache, a, b, builder)
+
+@inline function _resolve_rank_query_cache(pi::ZnEncodingMap,
+                                           rq_cache::Union{Nothing,RankQueryCache})
+    if rq_cache === nothing
+        return RankQueryCache(pi)
+    end
+    rq_cache.pi === pi || error("rank_query: rq_cache.pi must match pi")
+    rq_cache.n == pi.n || error("rank_query: rq_cache has wrong ambient dimension")
+    return rq_cache
+end
+
+@inline function _rank_query_point_tuple(x::NTuple{N,<:Integer}, n::Int) where {N}
+    N == n || error("rank_query: point dimension mismatch (got $N, expected $n)")
+    return ntuple(i -> Int(x[i]), n)
+end
+
+@inline function _rank_query_point_tuple(x::AbstractVector{<:Integer}, n::Int)
+    length(x) == n || error("rank_query: point dimension mismatch (got $(length(x)), expected $n)")
+    return ntuple(i -> Int(x[i]), n)
+end
+
+@inline function _rank_query_locate!(rq_cache::RankQueryCache{N}, x::NTuple{N,Int}) where {N}
+    return get!(rq_cache.loc_cache, x) do
+        locate(rq_cache.pi, x)
+    end
+end
+
+"""
+    rank_query(M, pi, x, y, opts::InvariantOptions; rq_cache=nothing, cache=nothing, memo=nothing) -> Int
+
+Fast rank-query helper for repeated rank-map evaluations.
+
+- For `ZnEncodingMap`, this reuses `RankQueryCache` to memoize both `locate(pi, x)` and
+  `(a, b) -> rank_map(M, a, b)` values.
+- For other encoding maps, this falls back to `rank_map(M, pi, x, y, opts; ...)`.
+
+Unknown points follow `opts.strict` semantics:
+- strict (default): throw if `locate` returns 0,
+- non-strict: return 0.
+"""
+function rank_query(M::PModule{K},
+                    pi::ZnEncodingMap,
+                    x,
+                    y,
+                    opts::InvariantOptions;
+                    rq_cache::Union{Nothing,RankQueryCache}=nothing,
+                    cache=nothing,
+                    memo=nothing)::Int where {K}
+    rc = _resolve_rank_query_cache(pi, rq_cache)
+    xt = _rank_query_point_tuple(x, rc.n)
+    yt = _rank_query_point_tuple(y, rc.n)
+
+    a = _rank_query_locate!(rc, xt)
+    b = _rank_query_locate!(rc, yt)
+
+    strict0 = opts.strict === nothing ? true : opts.strict
+    if a == 0 || b == 0
+        strict0 && error("rank_query: locate(pi, x) or locate(pi, y) returned 0 (unknown region)")
+        return 0
+    end
+
+    return _rank_cache_get!(rc, a, b) do
+        rank_map(M, a, b; cache=cache, memo=memo)
+    end
+end
+
+function rank_query(M::PModule{K},
+                    pi::CompiledEncoding{<:ZnEncodingMap},
+                    x,
+                    y,
+                    opts::InvariantOptions;
+                    kwargs...)::Int where {K}
+    return rank_query(M, pi.pi, x, y, opts; kwargs...)
+end
+
+function rank_query(M::PModule{K},
+                    pi::ZnEncodingMap,
+                    a::Int,
+                    b::Int;
+                    rq_cache::Union{Nothing,RankQueryCache}=nothing,
+                    cache=nothing,
+                    memo=nothing)::Int where {K}
+    rc = _resolve_rank_query_cache(pi, rq_cache)
+    return _rank_cache_get!(rc, a, b) do
+        rank_map(M, a, b; cache=cache, memo=memo)
+    end
+end
+
+function rank_query(M::PModule{K},
+                    pi::CompiledEncoding{<:ZnEncodingMap},
+                    a::Int,
+                    b::Int;
+                    kwargs...)::Int where {K}
+    return rank_query(M, pi.pi, a, b; kwargs...)
+end
+
+function rank_query(M::PModule{K},
+                    pi::ZnEncodingMap,
+                    a::Int,
+                    b::Int,
+                    opts::InvariantOptions;
+                    kwargs...)::Int where {K}
+    return rank_query(M, pi, a, b; kwargs...)
+end
+
+function rank_query(M::PModule{K},
+                    pi::CompiledEncoding{<:ZnEncodingMap},
+                    a::Int,
+                    b::Int,
+                    opts::InvariantOptions;
+                    kwargs...)::Int where {K}
+    return rank_query(M, pi.pi, a, b; kwargs...)
+end
+
+function rank_query(M::PModule{K}, pi, x, y, opts::InvariantOptions;
+                    cache=nothing, memo=nothing)::Int where {K}
+    return rank_map(M, pi, x, y, opts; cache=cache, memo=memo)
+end
+
+function rank_query(H::FringeModule{K}, pi, x, y, opts::InvariantOptions; kwargs...)::Int where {K}
+    Mp = pmodule_from_fringe(H)
+    return rank_query(Mp, pi, x, y, opts; kwargs...)
+end
+
+function rank_query(H::FringeModule{K}, pi::ZnEncodingMap, a::Int, b::Int; kwargs...)::Int where {K}
+    Mp = pmodule_from_fringe(H)
+    return rank_query(Mp, pi, a, b; kwargs...)
+end
+
+function rank_query(H::FringeModule{K}, pi::CompiledEncoding{<:ZnEncodingMap}, a::Int, b::Int; kwargs...)::Int where {K}
+    Mp = pmodule_from_fringe(H)
+    return rank_query(Mp, pi, a, b; kwargs...)
+end
+
+function rank_query(H::FringeModule{K}, pi::ZnEncodingMap, a::Int, b::Int,
+                    opts::InvariantOptions; kwargs...)::Int where {K}
+    Mp = pmodule_from_fringe(H)
+    return rank_query(Mp, pi, a, b; kwargs...)
+end
+
+function rank_query(H::FringeModule{K}, pi::CompiledEncoding{<:ZnEncodingMap}, a::Int, b::Int,
+                    opts::InvariantOptions; kwargs...)::Int where {K}
+    Mp = pmodule_from_fringe(H)
+    return rank_query(Mp, pi, a, b; kwargs...)
 end
 
 """
@@ -2084,8 +2249,8 @@ function mma_decomposition(M::PModule, pi, opts::InvariantOptions;
     return (euler_surface=surf, euler_signed_measure=pm)
 end
 
-mma_decomposition(M::PModule, pi; opts=nothing, kwargs...) =
-    mma_decomposition(M, pi, _resolve_opts(opts); kwargs...)
+mma_decomposition(M::PModule, pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    mma_decomposition(M, pi, opts; kwargs...)
 
 
 """
@@ -2449,6 +2614,7 @@ euler_surface(obj, pi, opts::InvariantOptions) = euler_characteristic_surface(ob
 
 # Internal: Euler dims on encoding elements.
 _euler_dims(M::PModule) = M.dims
+_euler_dims(dims::AbstractVector{<:Integer}) = [Int(d) for d in dims]
 
 function _euler_dims(C::ModuleCochainComplex)
     # alternating sum over degrees t = C.tmin + (i-1)
@@ -3843,7 +4009,7 @@ For lattice encodings, padding is applied in real coordinates and then the
 endpoints are rounded outward to integers so the window remains an integer box.
 
 This is an opts-primary API:
-- `opts.box` provides the base window. If `opts.box === nothing`, we use the legacy
+- `opts.box` provides the base window. If `opts.box === nothing`, we use the
   default `:auto` (equivalently `window_box(pi)`).
 - `opts.strict` is forwarded to region computations (defaults to `true`).
 
@@ -4802,16 +4968,9 @@ function slice_barcode(M::PModule{K}, chain::AbstractVector{Int};
 end
 
 # Convenience wrapper: build the chain from a slice in the original domain first.
-function slice_barcode(M::PModule{K}, pi, x0::AbstractVector, dir::AbstractVector; kwargs...) where {K}
-    # Extract legacy keywords and convert to opts for slice_chain.
-    box_kw = haskey(kwargs, :box) ? kwargs[:box] : nothing
-    strict_kw = haskey(kwargs, :strict) ? kwargs[:strict] : nothing
-    opts_chain = InvariantOptions(box = box_kw, strict = strict_kw)
-
-    # Remove :box and :strict so we do not forward them as keywords to slice_chain.
-    filtered = (; (k => v for (k, v) in pairs(kwargs) if k != :box && k != :strict)...)
-
-    chain, tvals = slice_chain(pi, x0, dir, opts_chain; filtered...)
+function slice_barcode(M::PModule{K}, pi, x0::AbstractVector, dir::AbstractVector,
+                       opts::InvariantOptions=InvariantOptions(); kwargs...) where {K}
+    chain, tvals = slice_chain(pi, x0, dir, opts; kwargs...)
     return slice_barcode(M, chain; values = tvals)
 end
 
@@ -5444,10 +5603,21 @@ function _slice_based_barcode_distance(
     agg_p::Real = 2.0,
     agg_norm::Real = 1.0,
     threads::Bool = (Threads.nthreads() > 1),
+    cache = nothing,
     slice_kwargs...
 )::Float64 where {K}
+    box0 = get(slice_kwargs, :box, nothing)
+    strict0 = get(slice_kwargs, :strict, nothing)
+    slice_kwargs0 = (; (k => v for (k, v) in pairs(slice_kwargs) if k != :box && k != :strict)...)
+    tmin0 = get(slice_kwargs0, :tmin, nothing)
+    tmax0 = get(slice_kwargs0, :tmax, nothing)
+    if box0 === nothing && tmin0 === nothing && tmax0 === nothing
+        box0 = :auto
+    end
+    opts_compile = InvariantOptions(box = box0, strict = strict0, threads = threads)
     plan = compile_slices(
-        pi;
+        pi,
+        opts_compile;
         directions = dirs,
         offsets = offs,
         n_dirs = ndirs,
@@ -5459,7 +5629,8 @@ function _slice_based_barcode_distance(
         offset_weights = offset_weights,
         normalize_weights = normalize_weights,
         threads = threads,
-        slice_kwargs...
+        cache = cache,
+        slice_kwargs0...
     )
     task = SliceDistanceTask(;
         dist_fn = dist_fn,
@@ -5534,6 +5705,7 @@ function sliced_wasserstein_distance(M::PModule{K}, N::PModule{K}, pi::PLikeEnco
 
     # Optional second clipping box.
     box2 = nothing,
+    cache = nothing,
 
     slice_kwargs...)::Float64 where {K}
 
@@ -5564,6 +5736,7 @@ function sliced_wasserstein_distance(M::PModule{K}, N::PModule{K}, pi::PLikeEnco
         normalize_weights = normalize_weights,
 
         threads = threads0,
+        cache = cache,
 
         # Windowing / strictness now come from opts.
         strict = strict0,
@@ -5617,6 +5790,7 @@ function sliced_bottleneck_distance(M::PModule{K}, N::PModule{K}, pi::PLikeEncod
     normalize_weights::Bool = true,
 
     box2 = nothing,
+    cache = nothing,
 
     slice_kwargs...)::Float64 where {K}
 
@@ -5645,6 +5819,7 @@ function sliced_bottleneck_distance(M::PModule{K}, N::PModule{K}, pi::PLikeEncod
         normalize_weights = normalize_weights,
 
         threads = threads0,
+        cache = cache,
 
         strict = strict0,
         box = opts.box,
@@ -6081,7 +6256,7 @@ function encoding_box(pi::PLikeEncodingMap, opts::InvariantOptions; margin::Real
         return (lo, hi)
     end
 
-    # Inference from representatives (legacy behavior).
+    # Inference from representatives (default behavior).
     reps = representatives(pi)
     n = length(first(reps))
 
@@ -6105,7 +6280,7 @@ function encoding_box(pi::PLikeEncodingMap, opts::InvariantOptions; margin::Real
 end
 
 function encoding_box(axes::Tuple{Vararg{<:AbstractVector}}, opts::InvariantOptions; margin::Real = 0.05)
-    # For an explicit axis tuple, :auto is treated the same as "infer" (legacy).
+    # For an explicit axis tuple, :auto is treated the same as "infer" (default).
     if opts.box !== nothing && opts.box !== :auto
         return _normalize_box(opts.box)
     end
@@ -6501,34 +6676,8 @@ function matching_distance_approx(
     slices::AbstractVector;
     default_weight=1.0
 )::Float64 where {K}
-    best = 0.0
-
-    for spec in slices
-        chain = nothing
-        values = nothing
-        w = float(default_weight)
-
-        if spec isa AbstractVector{Int}
-            chain = spec
-        elseif spec isa NamedTuple
-            chain = spec.chain
-            values = get(spec, :values, nothing)
-            w = float(get(spec, :weight, default_weight))
-        elseif spec isa Tuple
-            length(spec) >= 1 || error("matching_distance_approx: empty tuple slice spec")
-            chain = spec[1]
-            values = length(spec) >= 2 ? spec[2] : nothing
-            w = length(spec) >= 3 ? float(spec[3]) : float(default_weight)
-        else
-            error("matching_distance_approx: unknown slice spec type $(typeof(spec))")
-        end
-
-        bM = slice_barcode(M, chain; values=values)
-        bN = slice_barcode(N, chain; values=values)
-        best = max(best, w * bottleneck_distance(bM, bN))
-    end
-
-    return best
+    specs = collect_slices(slices; default_weight=default_weight)
+    return _matching_distance_approx_specs(M, N, specs)
 end
 
 function matching_distance_approx(
@@ -6566,6 +6715,7 @@ function matching_distance_approx(
     weight::Union{Symbol,Function,Real} = :lesnick_l1,
     offset_weights = nothing,
     box2 = nothing,
+    cache = nothing,
     slice_kwargs...
 )::Float64 where {K}
 
@@ -6574,10 +6724,10 @@ function matching_distance_approx(
 
     return _slice_based_barcode_distance(
         M, N, pi;
-        directions = directions,
-        offsets = offsets,
-        n_dirs = n_dirs,
-        n_offsets = n_offsets,
+        dirs = directions,
+        offs = offsets,
+        ndirs = n_dirs,
+        noff = n_offsets,
         max_den = max_den,
         include_axes = include_axes,
         normalize_dirs = normalize_dirs,
@@ -6585,8 +6735,8 @@ function matching_distance_approx(
         dist_kwargs = NamedTuple(),
         weight = weight,
         offset_weights = offset_weights,
-        default_weight = 1.0,
         threads = threads0,
+        cache = cache,
         strict = strict0,
         box = opts.box,
         box2 = box2,
@@ -6627,6 +6777,7 @@ function matching_wasserstein_distance_approx(
     box2 = nothing,
     p = 2,
     q = 1,
+    cache = nothing,
     slice_kwargs...
 )::Float64 where {K}
 
@@ -6634,10 +6785,10 @@ function matching_wasserstein_distance_approx(
     threads0 = opts.threads === nothing ? (Threads.nthreads() > 1) : opts.threads
 
     return _slice_based_barcode_distance(M, N, pi;
-        directions = directions,
-        offsets = offsets,
-        n_dirs = n_dirs,
-        n_offsets = n_offsets,
+        dirs = directions,
+        offs = offsets,
+        ndirs = n_dirs,
+        noff = n_offsets,
         max_den = max_den,
         include_axes = include_axes,
         normalize_dirs = normalize_dirs,
@@ -6646,8 +6797,8 @@ function matching_wasserstein_distance_approx(
         weight_mode = :scale,
         weight = weight,
         offset_weights = offset_weights,
-        default_weight = 1.0,
         threads = threads0,
+        cache = cache,
         strict = strict0,
         box = opts.box,
         box2 = box2,
@@ -7229,7 +7380,7 @@ arrangement induced by representative points.
 
 Opts usage:
 - `opts.box` provides the working 2D box. If `opts.box === nothing`, we use
-  `encoding_box(pi, InvariantOptions())` (legacy behavior).
+  `encoding_box(pi, InvariantOptions())` (default behavior).
 - `opts.strict` controls locate strictness (defaults to true).
 
 We consider the line with direction `dir` and normal offset `offset`:
@@ -7305,7 +7456,7 @@ Deterministically enumerate the slice representatives used in the exact 2D match
 
 Opts usage:
 - `opts.box` provides the working 2D box. If unset (`nothing`), we use `encoding_box(pi, InvariantOptions())`
-  (legacy behavior).
+  (default behavior).
 - `opts.strict` is forwarded to `locate` as needed (defaults to true).
 
 Returns a vector of NamedTuples with fields:
@@ -8340,7 +8491,7 @@ Build the exact 2D fibered arrangement for `pi`, including:
 Opts usage:
 - `opts.box` supplies the working box (if unset, we infer via `encoding_box(pi, opts)`).
 - `opts.strict` controls locate strictness for "boxes backend" (defaults to true).
-  For `:poly` backend we force `strict=false` (legacy behavior).
+  For `:poly` backend we force `strict=false` (default behavior).
 
 `precompute`:
 - `:none`  : build point-location structure; compute cells lazily on demand
@@ -9886,7 +10037,7 @@ function projected_arrangement(pi::PLikeEncodingMap;
         "projected_arrangement: incompatible Q; nvertices(Q)=$(nvertices(Qposet)) but encoding has $(_nregions_encoding(pi)) regions"
     )
 
-    dirs === nothing && (dirs = default_directions(dim(pi); n_dirs=n_dirs,
+    dirs === nothing && (dirs = default_directions(dimension(pi); n_dirs=n_dirs,
                                                    max_den=max_den,
                                                    include_axes=include_axes,
                                                    normalize=normalize))
@@ -11056,8 +11207,8 @@ function mpp_image(M::PModule{K}, pi::PLikeEncodingMap, opts::InvariantOptions; 
     return mpp_image(cache; kwargs...)
 end
 
-mpp_image(M::PModule{K}, pi::PLikeEncodingMap; opts=nothing, kwargs...) where {K} =
-    mpp_image(M, pi, _resolve_opts(opts); kwargs...)
+mpp_image(M::PModule{K}, pi::PLikeEncodingMap; opts::InvariantOptions=InvariantOptions(), kwargs...) where {K} =
+    mpp_image(M, pi, opts; kwargs...)
 
 # ------------------------ MPPI image operations -------------------------------
 
@@ -11500,6 +11651,23 @@ function mp_landscape(
     default_weight=1.0,
     normalize_weights::Bool=true
 )::MPLandscape where {K}
+    specs = collect_slices(slices; default_weight=default_weight)
+    return mp_landscape(M, specs;
+                        kmax=kmax,
+                        tgrid=tgrid,
+                        default_weight=default_weight,
+                        normalize_weights=normalize_weights)
+end
+
+function mp_landscape(
+    M::PModule{K},
+    slices::AbstractVector{<:SliceSpec{<:Real,Nothing}};
+    kmax::Int=5,
+    tgrid,
+    default_weight=1.0,
+    normalize_weights::Bool=true
+)::MPLandscape where {K}
+    _ = default_weight
     tg = _clean_tgrid(tgrid)
     nt = length(tg)
 
@@ -11511,30 +11679,49 @@ function mp_landscape(
     dirs = collect(slices)
     offs = [nothing]
 
-    for (i, spec) in enumerate(slices)
-        chain = nothing
-        v = nothing
-        w = float(default_weight)
-
-        if spec isa AbstractVector{Int}
-            chain = spec
-        elseif spec isa NamedTuple
-            chain = spec.chain
-            v = get(spec, :values, nothing)
-            w = float(get(spec, :weight, default_weight))
-        elseif spec isa Tuple
-            length(spec) >= 1 || error("mp_landscape: empty tuple slice spec")
-            chain = spec[1]
-            v = length(spec) >= 2 ? spec[2] : nothing
-            w = length(spec) >= 3 ? float(spec[3]) : float(default_weight)
-        else
-            error("mp_landscape: unknown slice spec type $(typeof(spec))")
-        end
-
-        bc = slice_barcode(M, chain; values=v)
+    @inbounds for i in 1:nslices
+        spec = slices[i]
+        bc = slice_barcode(M, spec.chain; values=nothing)
         pl = persistence_landscape(bc; kmax=kmax, tgrid=tg)
         vals[i, 1, :, :] = pl.values
-        W[i, 1] = w
+        W[i, 1] = float(spec.weight)
+    end
+
+    if normalize_weights
+        s = sum(W)
+        s > 0 || error("mp_landscape: total slice weight is zero")
+        W ./= s
+    end
+
+    return MPLandscape(kmax, tg, vals, W, dirs, offs)
+end
+
+function mp_landscape(
+    M::PModule{K},
+    slices::AbstractVector{<:SliceSpec{<:Real,<:AbstractVector}};
+    kmax::Int=5,
+    tgrid,
+    default_weight=1.0,
+    normalize_weights::Bool=true
+)::MPLandscape where {K}
+    _ = default_weight
+    tg = _clean_tgrid(tgrid)
+    nt = length(tg)
+
+    nslices = length(slices)
+    nslices > 0 || error("mp_landscape: slices list is empty")
+
+    vals = zeros(Float64, nslices, 1, kmax, nt)
+    W = zeros(Float64, nslices, 1)
+    dirs = collect(slices)
+    offs = [nothing]
+
+    @inbounds for i in 1:nslices
+        spec = slices[i]
+        bc = slice_barcode(M, spec.chain; values=spec.values)
+        pl = persistence_landscape(bc; kmax=kmax, tgrid=tg)
+        vals[i, 1, :, :] = pl.values
+        W[i, 1] = float(spec.weight)
     end
 
     if normalize_weights
@@ -11569,6 +11756,7 @@ function mp_landscape(
     normalize_weights::Bool = true,
     drop_unknown::Bool = true,
     dedup::Bool = true,
+    cache = nothing,
     kwargs...,
 )::MPLandscape where {K}
     if haskey(kwargs, :box) || haskey(kwargs, :strict) || haskey(kwargs, :threads) ||
@@ -11590,6 +11778,7 @@ function mp_landscape(
         box = box_kw,
         threads = opts.threads,
         strict = strict0,
+        pl_mode = opts.pl_mode,
     )
 
     kmin = get(kwargs, :kmin, nothing)
@@ -11601,7 +11790,6 @@ function mp_landscape(
         directions = orthant_directions(d)
     end
     dirs_in = orthant_directions(d, directions)
-    nd = length(dirs_in)
 
     if tmin === nothing || tmax === nothing || offsets === nothing
         lo, hi = encoding_box(pi, opts_chain)
@@ -11617,54 +11805,51 @@ function mp_landscape(
     end
 
     tg = tgrid === nothing ? collect(LinRange(tmin, tmax, n_t)) : collect(tgrid)
-    nt = length(tg)
-    no = length(offsets)
 
-    dir_weights = if direction_weight == :uniform
-        fill(1.0, nd)
+    if (kmin === nothing) != (kmax_param === nothing)
+        throw(ArgumentError("mp_landscape: provide both kmin and kmax (as keyword :kmax) or neither"))
+    end
+
+    direction_weight_spec = if direction_weight == :uniform
+        :uniform
     elseif direction_weight == :uniform2d
-        [uniform2d(d) for d in dirs_in]
+        uniform2d
     else
         error("mp_landscape: unknown direction_weight mode $(direction_weight)")
     end
-    if normalize_weights
-        dir_weights ./= sum(dir_weights)
-    end
-    W = repeat(dir_weights, 1, no) ./ no
 
-    vals = Array{Float64}(undef, nd, no, kmax, nt)
-    vals .= 0.0
-
-    for i in 1:nd
-        dir = dirs_in[i]
-        for j in 1:no
-            x0 = offsets[j]
-            if (kmin !== nothing) && (kmax_param !== nothing)
-                kmin_int = Int(kmin)
-                kmax_int = Int(kmax_param)
-                chain, tvals = slice_chain(
-                    pi, x0, dir, opts_chain;
-                    ts = kmin_int:kmax_int,
-                    drop_unknown = drop_unknown,
-                    dedup = dedup,
-                    forward...
-                )
-            else
-                chain, tvals = slice_chain(
-                    pi, x0, dir, opts_chain;
-                    ts = tg,
-                    drop_unknown = drop_unknown,
-                    dedup = dedup,
-                    forward...
-                )
-            end
-            bc = slice_barcode(M, chain; values = tvals)
-            pl = persistence_landscape(bc; kmax = kmax, tgrid = tg)
-            vals[i, j, :, :] = pl.values
-        end
+    ts_kwargs = if (kmin !== nothing) && (kmax_param !== nothing)
+        (; ts = Int(kmin):Int(kmax_param))
+    else
+        (; ts = tg)
     end
 
-    return MPLandscape(kmax, tg, vals, W, dirs_in, offsets)
+    threads0 = opts.threads === nothing ? (Threads.nthreads() > 1) : opts.threads
+    plan = compile_slices(
+        pi,
+        opts_chain;
+        directions = dirs_in,
+        offsets = offsets,
+        normalize_dirs = :none,
+        direction_weight = direction_weight_spec,
+        offset_weights = nothing,
+        normalize_weights = normalize_weights,
+        drop_unknown = drop_unknown,
+        dedup = dedup,
+        threads = threads0,
+        cache = cache,
+        ts_kwargs...,
+        forward...,
+    )
+
+    return mp_landscape(
+        M,
+        plan;
+        kmax = kmax,
+        tgrid = tg,
+        normalize_weights = false,
+        threads = threads0,
+    )
 end
 
 mp_landscape(M::PModule{K}, pi; kwargs...) where {K} =
@@ -11762,8 +11947,9 @@ function mp_landscape_distance(
     weight_mode::Symbol=:check,
     mp_kwargs...
 )::Float64 where {K}
-    LM = mp_landscape(M, pi; mp_kwargs...)
-    LN = mp_landscape(N, pi; mp_kwargs...)
+    cache = SlicePlanCache()
+    LM = mp_landscape(M, pi; cache=cache, mp_kwargs...)
+    LN = mp_landscape(N, pi; cache=cache, mp_kwargs...)
     return mp_landscape_distance(LM, LN; p=p, weight_mode=weight_mode)
 end
 
@@ -11898,8 +12084,9 @@ function mp_landscape_kernel(
     directions === nothing && error("mp_landscape_kernel: provide directions=...")
     offsets === nothing && error("mp_landscape_kernel: provide offsets=...")
 
-    LM = mp_landscape(M, pi; directions=directions, offsets=offsets, mp_kwargs...)
-    LN = mp_landscape(N, pi; directions=directions, offsets=offsets, mp_kwargs...)
+    cache = SlicePlanCache()
+    LM = mp_landscape(M, pi; directions=directions, offsets=offsets, cache=cache, mp_kwargs...)
+    LN = mp_landscape(N, pi; directions=directions, offsets=offsets, cache=cache, mp_kwargs...)
     return mp_landscape_kernel(LM, LN;
                                kind=kind,
                                sigma=sigma,
@@ -12369,13 +12556,18 @@ function _image_feature_vector(PI::PersistenceImage1D)::Vector{Float64}
     return out
 end
 
-# Parse slice specs (same conventions as mp_landscape):
-# - chain::Vector{Int}
-# - NamedTuple (chain=..., values=..., weight=...)
-# - Tuple (chain, values, weight)
+# Typed explicit slice specs for stable statistics pipelines.
+#
+# `values === nothing` means endpoint indices are used (index barcode mode).
+# For numeric endpoint values, use `Vector{Int}` or `Vector{Float64}`.
 @inline _to_int_vec(v::Vector{Int}) = v
 @inline _to_int_vec(v::AbstractVector{<:Integer}) = Int.(v)
 
+# Parse slice specs at API boundaries.
+# Supported inputs:
+# - chain::Vector{Int}
+# - NamedTuple/struct with fields (chain, [values], [weight])
+# - Tuple (chain, [values], [weight])
 function _parse_slice_spec(spec; default_weight::Real = 1.0, weight_fn = nothing)
     chain = nothing
     values = nothing
@@ -12383,6 +12575,10 @@ function _parse_slice_spec(spec; default_weight::Real = 1.0, weight_fn = nothing
 
     if spec isa AbstractVector{<:Integer}
         chain = spec
+    elseif spec isa SliceSpec
+        chain = spec.chain
+        values = spec.values
+        w = spec.weight
     elseif spec isa Tuple
         length(spec) >= 1 || error("_parse_slice_spec: tuple slice spec must have at least a chain")
         chain = spec[1]
@@ -12402,6 +12598,261 @@ function _parse_slice_spec(spec; default_weight::Real = 1.0, weight_fn = nothing
     chain isa AbstractVector{<:Integer} || error("_parse_slice_spec: slice chain must be an integer vector")
     chain_vec = chain isa Vector{Int} ? chain : collect(Int, chain)
     return (chain = chain_vec, values = values, weight = float(w))
+end
+
+const _SliceValues = Union{Nothing,Vector{Int},Vector{Float64}}
+
+@inline function _normalize_slice_values(v)::_SliceValues
+    if v === nothing
+        return nothing
+    elseif _values_are_int_vector(v)
+        return (v isa Vector{Int}) ? copy(v) : collect(Int, v)
+    elseif v isa AbstractVector{<:Real}
+        return (v isa Vector{Float64}) ? copy(v) : Float64[float(x) for x in v]
+    elseif v isa AbstractVector && all(x -> x isa Real, v)
+        return Float64[float(x) for x in v]
+    end
+    throw(ArgumentError("collect_slices: unsupported values payload type $(typeof(v))"))
+end
+
+@inline _slice_mode_name(::Type{Nothing}) = :none
+@inline _slice_mode_name(::Type{<:AbstractVector{<:Integer}}) = :int
+@inline _slice_mode_name(::Type{<:AbstractVector{<:AbstractFloat}}) = :float
+@inline _slice_mode_name(::Type{<:AbstractVector{<:Real}}) = :float
+
+function _slice_mode_from_vals(vals::Vector{_SliceValues})::Symbol
+    n_none = 0
+    n_int = 0
+    n_float = 0
+    for v in vals
+        if v === nothing
+            n_none += 1
+        elseif v isa Vector{Int}
+            n_int += 1
+        elseif v isa Vector{Float64}
+            n_float += 1
+        else
+            throw(ArgumentError("collect_slices: unsupported values payload type $(typeof(v))"))
+        end
+    end
+    n = length(vals)
+    if n_none == n
+        return :none
+    elseif n_int == n
+        return :int
+    elseif (n_int + n_float) == n
+        return :float
+    end
+    throw(ArgumentError("collect_slices: mixed values modes (some with values, some without) are not supported in typed mode"))
+end
+
+function _collect_slices_none(chains::Vector{Vector{Int}}, weights::Vector{Float64})
+    out = Vector{SliceSpec{Float64,Nothing}}(undef, length(chains))
+    @inbounds for i in eachindex(chains)
+        out[i] = SliceSpec{Float64,Nothing}(chains[i], nothing, weights[i])
+    end
+    return out
+end
+
+function _collect_slices_int(chains::Vector{Vector{Int}}, vals::Vector{_SliceValues}, weights::Vector{Float64})
+    out = Vector{SliceSpec{Float64,Vector{Int}}}(undef, length(chains))
+    @inbounds for i in eachindex(chains)
+        vi = vals[i]
+        vi === nothing && throw(ArgumentError("collect_slices(values_mode=:int): values[$i] is missing"))
+        if vi isa Vector{Int}
+            out[i] = SliceSpec{Float64,Vector{Int}}(chains[i], copy(vi), weights[i])
+        elseif vi isa Vector{Float64} && _values_are_int_vector(vi)
+            out[i] = SliceSpec{Float64,Vector{Int}}(chains[i], round.(Int, vi), weights[i])
+        else
+            throw(ArgumentError("collect_slices(values_mode=:int): values[$i] is not integer-valued"))
+        end
+    end
+    return out
+end
+
+function _collect_slices_float(chains::Vector{Vector{Int}}, vals::Vector{_SliceValues}, weights::Vector{Float64})
+    out = Vector{SliceSpec{Float64,Vector{Float64}}}(undef, length(chains))
+    @inbounds for i in eachindex(chains)
+        vi = vals[i]
+        vi === nothing && throw(ArgumentError("collect_slices(values_mode=:float): values[$i] is missing"))
+        if vi isa Vector{Float64}
+            out[i] = SliceSpec{Float64,Vector{Float64}}(chains[i], copy(vi), weights[i])
+        elseif vi isa Vector{Int}
+            out[i] = SliceSpec{Float64,Vector{Float64}}(chains[i], Float64[float(v) for v in vi], weights[i])
+        else
+            throw(ArgumentError("collect_slices(values_mode=:float): values[$i] is not numeric"))
+        end
+    end
+    return out
+end
+
+"""
+    collect_slices(slices; default_weight=1.0, values=nothing, values_mode=:auto, weight_fn=nothing)
+
+Normalize boundary slice specs into a concrete, type-stable `Vector{SliceSpec}`.
+
+`values_mode` options:
+- `:auto`  infer from input (all `nothing`, all integer vectors, or all numeric vectors),
+- `:none`  force index-mode slices (`values = nothing`),
+- `:int`   force integer-valued endpoints,
+- `:float` force floating-point endpoints.
+"""
+function collect_slices(slices::AbstractVector;
+                        default_weight::Real=1.0,
+                        values=nothing,
+                        values_mode::Symbol=:auto,
+                        weight_fn=nothing)
+    n = length(slices)
+    chains = Vector{Vector{Int}}(undef, n)
+    vals = Vector{_SliceValues}(undef, n)
+    weights = Vector{Float64}(undef, n)
+
+    has_values_override = values !== nothing
+    if has_values_override
+        (values isa AbstractVector && length(values) == n) ||
+            throw(ArgumentError("collect_slices: values must be a vector of length length(slices) or nothing"))
+    end
+
+    @inbounds for i in 1:n
+        chain, spec_vals, w = _parse_slice_spec(slices[i]; default_weight=default_weight, weight_fn=weight_fn)
+        chains[i] = chain
+        vals[i] = _normalize_slice_values(has_values_override ? values[i] : spec_vals)
+        weights[i] = w
+    end
+
+    mode = values_mode
+    if mode == :auto
+        mode = _slice_mode_from_vals(vals)
+    elseif mode == :index
+        mode = :none
+    elseif !(mode in (:none, :int, :float))
+        throw(ArgumentError("collect_slices: values_mode must be :auto, :none, :int, :float, or :index"))
+    end
+
+    if mode == :none
+        return _collect_slices_none(chains, weights)
+    elseif mode == :int
+        return _collect_slices_int(chains, vals, weights)
+    else
+        return _collect_slices_float(chains, vals, weights)
+    end
+end
+
+# Generic iterable boundary: force materialization once at the boundary.
+collect_slices(slices_iter; kwargs...) = collect_slices(collect(slices_iter); kwargs...)
+
+# Already typed fast-path.
+collect_slices(slices::AbstractVector{<:SliceSpec}; kwargs...) = slices
+
+# Convenience for exact-slice family outputs returning NamedTuple with a :slices field.
+collect_slices(x::NamedTuple; kwargs...) =
+    hasproperty(x, :slices) ? collect_slices(getproperty(x, :slices); kwargs...) :
+    throw(ArgumentError("collect_slices: expected NamedTuple with :slices"))
+
+const SLICE_SPEC_SCHEMA_VERSION = 1
+
+"""
+    save_slices_json(path, slices; kwargs...) -> path
+
+Serialize typed slice specs as JSON for reproducible statistics workflows.
+"""
+function save_slices_json(path::AbstractString, slices; kwargs...)
+    specs = collect_slices(slices; kwargs...)
+    mode = isempty(specs) ? "none" : String(_slice_mode_name(typeof(first(specs).values)))
+    rows = Vector{Dict{String,Any}}(undef, length(specs))
+    @inbounds for i in eachindex(specs)
+        s = specs[i]
+        rows[i] = Dict(
+            "chain" => s.chain,
+            "values" => s.values === nothing ? nothing : s.values,
+            "weight" => float(s.weight),
+        )
+    end
+    obj = Dict(
+        "kind" => "slice_specs",
+        "schema_version" => SLICE_SPEC_SCHEMA_VERSION,
+        "values_mode" => mode,
+        "slices" => rows,
+    )
+    open(path, "w") do io
+        JSON3.write(io, obj; allow_inf=true, indent=2)
+    end
+    return path
+end
+
+"""
+    load_slices_json(path; values_mode=:auto) -> Vector{SliceSpec}
+
+Load typed slice specs from JSON created by `save_slices_json`.
+"""
+function load_slices_json(path::AbstractString; values_mode::Symbol=:auto)
+    obj = open(JSON3.read, path)
+    kind = haskey(obj, "kind") ? String(obj["kind"]) : ""
+    kind == "slice_specs" || throw(ArgumentError("load_slices_json: unsupported kind $(kind)"))
+    ver = haskey(obj, "schema_version") ? Int(obj["schema_version"]) : 0
+    ver <= SLICE_SPEC_SCHEMA_VERSION || throw(ArgumentError("load_slices_json: unsupported schema_version $(ver)"))
+    rows = haskey(obj, "slices") ? obj["slices"] : Any[]
+    spec_rows = Vector{NamedTuple{(:chain,:values,:weight),Tuple{Vector{Int},_SliceValues,Float64}}}(undef, length(rows))
+    @inbounds for i in eachindex(rows)
+        r = rows[i]
+        chain = haskey(r, "chain") ? Vector{Int}(Int.(collect(r["chain"]))) : Int[]
+        vals = haskey(r, "values") ? r["values"] : nothing
+        vals2 = vals === nothing ? nothing : _normalize_slice_values(collect(vals))
+        w = haskey(r, "weight") ? float(r["weight"]) : 1.0
+        spec_rows[i] = (chain=chain, values=vals2, weight=w)
+    end
+    mode = if values_mode == :auto
+        haskey(obj, "values_mode") ? Symbol(String(obj["values_mode"])) : :auto
+    else
+        values_mode
+    end
+    mode == :index && (mode = :none)
+    return collect_slices(spec_rows; values_mode=mode)
+end
+
+function _matching_distance_approx_specs(
+    M::PModule{K},
+    N::PModule{K},
+    slices::AbstractVector{<:SliceSpec{<:Real,Nothing}},
+)::Float64 where {K}
+    best = 0.0
+    @inbounds for spec in slices
+        isempty(spec.chain) && continue
+        bM = slice_barcode(M, spec.chain; values=nothing)
+        bN = slice_barcode(N, spec.chain; values=nothing)
+        best = max(best, float(spec.weight) * bottleneck_distance(bM, bN))
+    end
+    return best
+end
+
+function _matching_distance_approx_specs(
+    M::PModule{K},
+    N::PModule{K},
+    slices::AbstractVector{<:SliceSpec{<:Real,<:AbstractVector{<:Integer}}},
+)::Float64 where {K}
+    best = 0.0
+    @inbounds for spec in slices
+        isempty(spec.chain) && continue
+        bM = slice_barcode(M, spec.chain; values=spec.values)
+        bN = slice_barcode(N, spec.chain; values=spec.values)
+        best = max(best, float(spec.weight) * bottleneck_distance(bM, bN))
+    end
+    return best
+end
+
+function _matching_distance_approx_specs(
+    M::PModule{K},
+    N::PModule{K},
+    slices::AbstractVector{<:SliceSpec{<:Real,<:AbstractVector{<:Real}}},
+)::Float64 where {K}
+    best = 0.0
+    @inbounds for spec in slices
+        isempty(spec.chain) && continue
+        bM = slice_barcode(M, spec.chain; values=spec.values)
+        bN = slice_barcode(N, spec.chain; values=spec.values)
+        best = max(best, float(spec.weight) * bottleneck_distance(bM, bN))
+    end
+    return best
 end
 
 """
@@ -12534,6 +12985,91 @@ end
 
 @inline _plan_idx(no::Int, i::Int, j::Int) = (i - 1) * no + j
 
+"""
+    collect_slices(plan::CompiledSlicePlan; values=:t) -> Vector{SliceSpec}
+
+Convert a compiled slice plan into an explicit typed slice list, useful for
+serialization or passing precompiled slices through other APIs.
+"""
+function collect_slices(plan::CompiledSlicePlan; values::Symbol=:t)
+    ns = plan.nd * plan.no
+    if values == :index
+        specs = Vector{SliceSpec{Float64,Nothing}}(undef, ns)
+        @inbounds for i in 1:plan.nd, j in 1:plan.no
+            idx = _plan_idx(plan.no, i, j)
+            specs[idx] = SliceSpec{Float64,Nothing}(copy(plan.chains[idx]), nothing, plan.weights[i, j])
+        end
+        return specs
+    elseif values == :t
+        specs = Vector{SliceSpec{Float64,Vector{Float64}}}(undef, ns)
+        @inbounds for i in 1:plan.nd, j in 1:plan.no
+            idx = _plan_idx(plan.no, i, j)
+            s = plan.vals_start[idx]
+            l = plan.vals_len[idx]
+            vals = (s > 0 && l > 0) ? Vector{Float64}(@view(plan.vals_pool[s:(s + l - 1)])) : Float64[]
+            specs[idx] = SliceSpec{Float64,Vector{Float64}}(copy(plan.chains[idx]), vals, plan.weights[i, j])
+        end
+        return specs
+    end
+    throw(ArgumentError("collect_slices(plan): values must be :t or :index"))
+end
+
+function mp_landscape(
+    M::PModule{K},
+    plan::CompiledSlicePlan;
+    kmax::Integer = 10,
+    tgrid,
+    normalize_weights::Bool = false,
+    threads::Bool = (Threads.nthreads() > 1),
+)::MPLandscape where {K}
+    kk = Int(kmax)
+    kk > 0 || throw(ArgumentError("mp_landscape(plan): kmax must be positive"))
+    tg = _clean_tgrid(tgrid)
+    nt = length(tg)
+    nd = plan.nd
+    no = plan.no
+    ns = nd * no
+
+    vals = zeros(Float64, nd, no, kk, nt)
+    if threads && Threads.nthreads() > 1
+        Threads.@threads for idx in 1:ns
+            chain = plan.chains[idx]
+            s = plan.vals_start[idx]
+            l = plan.vals_len[idx]
+            if isempty(chain) || s == 0 || l == 0
+                continue
+            end
+            bc = slice_barcode(M, chain; values=@view(plan.vals_pool[s:s + l - 1]), check_chain=false)
+            pl = persistence_landscape(bc; kmax=kk, tgrid=tg)
+            i = div(idx - 1, no) + 1
+            j = (idx - 1) % no + 1
+            vals[i, j, :, :] = pl.values
+        end
+    else
+        @inbounds for i in 1:nd, j in 1:no
+            idx = _plan_idx(no, i, j)
+            chain = plan.chains[idx]
+            s = plan.vals_start[idx]
+            l = plan.vals_len[idx]
+            if isempty(chain) || s == 0 || l == 0
+                continue
+            end
+            bc = slice_barcode(M, chain; values=@view(plan.vals_pool[s:s + l - 1]), check_chain=false)
+            pl = persistence_landscape(bc; kmax=kk, tgrid=tg)
+            vals[i, j, :, :] = pl.values
+        end
+    end
+
+    W = copy(plan.weights)
+    if normalize_weights
+        s = sum(W)
+        s > 0 || error("mp_landscape(plan): total slice weight is zero")
+        W ./= s
+    end
+
+    return MPLandscape(kk, tg, vals, W, copy(plan.dirs), copy(plan.offs))
+end
+
 function _plan_cache_key(
     pi,
     directions,
@@ -12578,7 +13114,8 @@ Precompute `(chain, values)` for each sampled `(direction, offset)` slice once, 
 reuse with `slice_barcodes(M, plan; packed=true)` across many modules.
 """
 function compile_slice_plan(
-    pi::PLikeEncodingMap;
+    pi::PLikeEncodingMap,
+    opts::InvariantOptions=InvariantOptions();
     directions = :auto,
     offsets = :auto,
     n_dirs::Integer = 16,
@@ -12592,7 +13129,7 @@ function compile_slice_plan(
     offset_margin::Real = 0.05,
     drop_unknown::Bool = true,
     threads::Bool = (Threads.nthreads() > 1),
-    cache::Union{Nothing,SlicePlanCache} = _GLOBAL_SLICE_PLAN_CACHE,
+    cache::Union{Nothing,SlicePlanCache} = nothing,
     slice_kwargs...
 )
     dirs0 = directions
@@ -12606,20 +13143,24 @@ function compile_slice_plan(
                                    normalize = (normalize_dirs == :none ? :none : normalize_dirs))
     end
 
-    box_kw = haskey(slice_kwargs, :box) ? slice_kwargs[:box] : nothing
-    box_kw === :auto && (box_kw = nothing)
-    strict_kw = haskey(slice_kwargs, :strict) ? slice_kwargs[:strict] : nothing
+    haskey(slice_kwargs, :box) &&
+        throw(ArgumentError("compile_slice_plan: pass box via opts::InvariantOptions, not keyword :box"))
+    haskey(slice_kwargs, :strict) &&
+        throw(ArgumentError("compile_slice_plan: pass strict via opts::InvariantOptions, not keyword :strict"))
 
-    opts_offsets = InvariantOptions(box = box_kw)
-    opts_chain   = InvariantOptions(box = box_kw, strict = strict_kw)
+    box_kw = opts.box
+    strict_kw = opts.strict
+
+    opts_offsets = InvariantOptions(box = box_kw, pl_mode = opts.pl_mode)
+    opts_chain   = InvariantOptions(box = box_kw, strict = strict_kw, pl_mode = opts.pl_mode)
     if opts_chain.box === nothing && !haskey(slice_kwargs, :tmin) && !haskey(slice_kwargs, :tmax)
-        opts_offsets = InvariantOptions(box = :auto)
-        opts_chain   = InvariantOptions(box = :auto, strict = strict_kw)
+        opts_offsets = InvariantOptions(box = :auto, pl_mode = opts.pl_mode)
+        opts_chain   = InvariantOptions(box = :auto, strict = strict_kw, pl_mode = opts.pl_mode)
     end
 
     filtered = (;
         (k => v for (k, v) in pairs(slice_kwargs)
-            if k != :box && k != :strict && k != :default_weight && k != :kmin && k != :kmax_param)...)
+            if k != :default_weight && k != :kmin && k != :kmax_param && k != :lengthscale)...)
 
     key = cache === nothing ? nothing : _plan_cache_key(
         pi, directions, offsets, normalize_dirs, n_dirs, n_offsets, max_den,
@@ -12765,29 +13306,28 @@ function compile_slice_plan(
 end
 
 """
-    compile_slices(pi, opts::InvariantOptions=nothing; kwargs...) -> CompiledSlicePlan
+    compile_slices(pi, opts::InvariantOptions=InvariantOptions(); kwargs...) -> CompiledSlicePlan
 
 Public phase-1 compile entrypoint. This is a thin adapter over `compile_slice_plan`
 that resolves `box`/`strict`/`threads` through `InvariantOptions`.
 """
 function compile_slices(
     pi::PLikeEncodingMap,
-    opts::Union{InvariantOptions,Nothing}=nothing;
+    opts::InvariantOptions=InvariantOptions();
     kwargs...
 )
-    opts0 = _resolve_opts(opts)
     kwargs_nt = NamedTuple(kwargs)
-    kwargs2 = (; (k => v for (k, v) in pairs(kwargs_nt) if k != :box && k != :strict && k != :threads)...)
-    return compile_slice_plan(
-        pi;
-        box = get(kwargs_nt, :box, opts0.box),
-        strict = get(kwargs_nt, :strict, opts0.strict),
-        threads = _default_threads(get(kwargs_nt, :threads, opts0.threads)),
-        kwargs2...
-    )
+    haskey(kwargs_nt, :box) &&
+        throw(ArgumentError("compile_slices: pass box via opts::InvariantOptions, not keyword :box"))
+    haskey(kwargs_nt, :strict) &&
+        throw(ArgumentError("compile_slices: pass strict via opts::InvariantOptions, not keyword :strict"))
+    kwargs2 = (; (k => v for (k, v) in pairs(kwargs_nt) if k != :threads)...)
+    return compile_slice_plan(pi, opts;
+                              threads = _default_threads(get(kwargs_nt, :threads, opts.threads)),
+                              kwargs2...)
 end
 
-compile_slices(pi::CompiledEncoding{<:PLikeEncodingMap}, opts::Union{InvariantOptions,Nothing}=nothing; kwargs...) =
+compile_slices(pi::CompiledEncoding{<:PLikeEncodingMap}, opts::InvariantOptions=InvariantOptions(); kwargs...) =
     compile_slices(pi.pi, opts; kwargs...)
 
 function slice_barcodes(
@@ -13228,29 +13768,19 @@ function slice_barcodes(M::PModule{K}, slices::AbstractVector;
                         values=nothing,
                         threads::Bool=Threads.nthreads() > 1,
                         packed::Bool=false) where {K}
+    specs = collect_slices(slices; default_weight=default_weight, values=values)
+    return slice_barcodes(M, specs; normalize_weights=normalize_weights, threads=threads, packed=packed)
+end
+
+function slice_barcodes(M::PModule{K}, slices::AbstractVector{<:SliceSpec{<:Real,Nothing}};
+                        normalize_weights::Bool=true,
+                        threads::Bool=Threads.nthreads() > 1,
+                        packed::Bool=false) where {K}
     n = length(slices)
-    chains = Vector{Vector{Int}}(undef, n)
-    vals = Vector{Union{Nothing,AbstractVector}}(undef, n)
     weights = Vector{Float64}(undef, n)
-
-    has_values_override = values !== nothing
-    if has_values_override
-        (values isa AbstractVector && length(values) == n) ||
-            throw(ArgumentError("values must be a vector of length length(slices) or nothing."))
-        @inbounds for i in 1:n
-            vi = values[i]
-            (vi === nothing || vi isa AbstractVector) ||
-                throw(ArgumentError("values[$i] must be an AbstractVector or nothing, got $(typeof(vi))."))
-        end
+    @inbounds for i in 1:n
+        weights[i] = isempty(slices[i].chain) ? 0.0 : float(slices[i].weight)
     end
-
-    for i in 1:n
-        chain, spec_vals, w = _parse_slice_spec(slices[i]; default_weight=default_weight)
-        chains[i] = chain
-        vals[i] = has_values_override ? values[i] : spec_vals
-        weights[i] = isempty(chain) ? 0.0 : w
-    end
-
     if normalize_weights
         s = sum(weights)
         if s > 0
@@ -13260,220 +13790,139 @@ function slice_barcodes(M::PModule{K}, slices::AbstractVector;
         end
     end
 
-    all_nothing = true
-    all_float_vals = true
-    all_int_vals = true
-    @inbounds for i in 1:n
-        vi = vals[i]
-        if vi === nothing
-            all_float_vals = false
-            all_int_vals = false
+    if packed
+        bcs = Vector{PackedIndexBarcode}(undef, n)
+        if threads && Threads.nthreads() > 1
+            Threads.@threads for i in 1:n
+                ch = slices[i].chain
+                bcs[i] = isempty(ch) ? _empty_packed_index_barcode() :
+                    (_slice_barcode_packed(M, ch; values=nothing)::PackedIndexBarcode)
+            end
         else
-            all_nothing = false
-            all_float_vals &= _values_are_float_vector(vi)
-            all_int_vals &= _values_are_int_vector(vi)
+            @inbounds for i in 1:n
+                ch = slices[i].chain
+                bcs[i] = isempty(ch) ? _empty_packed_index_barcode() :
+                    (_slice_barcode_packed(M, ch; values=nothing)::PackedIndexBarcode)
+            end
+        end
+        return (barcodes=bcs, weights=weights)
+    end
+
+    bcs = Vector{IndexBarcode}(undef, n)
+    if threads && Threads.nthreads() > 1
+        Threads.@threads for i in 1:n
+            ch = slices[i].chain
+            bcs[i] = isempty(ch) ? _empty_index_barcode() : slice_barcode(M, ch; values=nothing)
+        end
+    else
+        @inbounds for i in 1:n
+            ch = slices[i].chain
+            bcs[i] = isempty(ch) ? _empty_index_barcode() : slice_barcode(M, ch; values=nothing)
+        end
+    end
+    return (barcodes=bcs, weights=weights)
+end
+
+function slice_barcodes(M::PModule{K}, slices::AbstractVector{<:SliceSpec{<:Real,<:AbstractVector{<:Integer}}};
+                        normalize_weights::Bool=true,
+                        threads::Bool=Threads.nthreads() > 1,
+                        packed::Bool=false) where {K}
+    n = length(slices)
+    weights = Vector{Float64}(undef, n)
+    @inbounds for i in 1:n
+        weights[i] = isempty(slices[i].chain) ? 0.0 : float(slices[i].weight)
+    end
+    if normalize_weights
+        s = sum(weights)
+        if s > 0
+            weights ./= s
+        else
+            weights .= 0.0
         end
     end
 
     if packed
-        if all_nothing
-            bcs = Vector{PackedIndexBarcode}(undef, n)
-            if threads && Threads.nthreads() > 1
-                Threads.@threads for i in 1:n
-                    if isempty(chains[i])
-                        bcs[i] = _empty_packed_index_barcode()
-                    else
-                        bcs[i] = _slice_barcode_packed(M, chains[i]; values=nothing)::PackedIndexBarcode
-                    end
-                end
-            else
-                for i in 1:n
-                    if isempty(chains[i])
-                        bcs[i] = _empty_packed_index_barcode()
-                    else
-                        bcs[i] = _slice_barcode_packed(M, chains[i]; values=nothing)::PackedIndexBarcode
-                    end
-                end
+        bcs = Vector{PackedIndexBarcode}(undef, n)
+        if threads && Threads.nthreads() > 1
+            Threads.@threads for i in 1:n
+                spec = slices[i]
+                bcs[i] = isempty(spec.chain) ? _empty_packed_index_barcode() :
+                    (_slice_barcode_packed(M, spec.chain; values=spec.values)::PackedIndexBarcode)
             end
-            return (barcodes=bcs, weights=weights)
-        elseif all_float_vals
-            bcs = Vector{PackedFloatBarcode}(undef, n)
-            if threads && Threads.nthreads() > 1
-                Threads.@threads for i in 1:n
-                    if isempty(chains[i])
-                        bcs[i] = _empty_packed_float_barcode()
-                    else
-                        bcs[i] = _slice_barcode_packed(M, chains[i]; values=vals[i])::PackedFloatBarcode
-                    end
-                end
-            else
-                for i in 1:n
-                    if isempty(chains[i])
-                        bcs[i] = _empty_packed_float_barcode()
-                    else
-                        bcs[i] = _slice_barcode_packed(M, chains[i]; values=vals[i])::PackedFloatBarcode
-                    end
-                end
-            end
-            return (barcodes=bcs, weights=weights)
-        elseif all_int_vals
-            bcs = Vector{PackedIndexBarcode}(undef, n)
-            if threads && Threads.nthreads() > 1
-                Threads.@threads for i in 1:n
-                    if isempty(chains[i])
-                        bcs[i] = _empty_packed_index_barcode()
-                    else
-                        bcs[i] = _slice_barcode_packed(M, chains[i]; values=vals[i])::PackedIndexBarcode
-                    end
-                end
-            else
-                for i in 1:n
-                    if isempty(chains[i])
-                        bcs[i] = _empty_packed_index_barcode()
-                    else
-                        bcs[i] = _slice_barcode_packed(M, chains[i]; values=vals[i])::PackedIndexBarcode
-                    end
-                end
-            end
-            return (barcodes=bcs, weights=weights)
         else
-            bcs = Vector{Union{PackedIndexBarcode,PackedFloatBarcode}}(undef, n)
-            if threads && Threads.nthreads() > 1
-                Threads.@threads for i in 1:n
-                    vi = vals[i]
-                    if isempty(chains[i])
-                        bcs[i] = (vi === nothing || _values_are_int_vector(vi)) ?
-                            _empty_packed_index_barcode() : _empty_packed_float_barcode()
-                    elseif vi === nothing || _values_are_int_vector(vi)
-                        bcs[i] = _slice_barcode_packed(M, chains[i]; values=vi)::PackedIndexBarcode
-                    else
-                        pb = _slice_barcode_packed(M, chains[i]; values=vi)
-                        if pb isa PackedFloatBarcode
-                            bcs[i] = pb
-                        else
-                            bcs[i] = _pack_float_barcode(_barcode_from_packed(pb))
-                        end
-                    end
-                end
-            else
-                for i in 1:n
-                    vi = vals[i]
-                    if isempty(chains[i])
-                        bcs[i] = (vi === nothing || _values_are_int_vector(vi)) ?
-                            _empty_packed_index_barcode() : _empty_packed_float_barcode()
-                    elseif vi === nothing || _values_are_int_vector(vi)
-                        bcs[i] = _slice_barcode_packed(M, chains[i]; values=vi)::PackedIndexBarcode
-                    else
-                        pb = _slice_barcode_packed(M, chains[i]; values=vi)
-                        if pb isa PackedFloatBarcode
-                            bcs[i] = pb
-                        else
-                            bcs[i] = _pack_float_barcode(_barcode_from_packed(pb))
-                        end
-                    end
-                end
+            @inbounds for i in 1:n
+                spec = slices[i]
+                bcs[i] = isempty(spec.chain) ? _empty_packed_index_barcode() :
+                    (_slice_barcode_packed(M, spec.chain; values=spec.values)::PackedIndexBarcode)
             end
-            return (barcodes=bcs, weights=weights)
+        end
+        return (barcodes=bcs, weights=weights)
+    end
+
+    bcs = Vector{IndexBarcode}(undef, n)
+    if threads && Threads.nthreads() > 1
+        Threads.@threads for i in 1:n
+            spec = slices[i]
+            bcs[i] = isempty(spec.chain) ? _empty_index_barcode() : slice_barcode(M, spec.chain; values=spec.values)
+        end
+    else
+        @inbounds for i in 1:n
+            spec = slices[i]
+            bcs[i] = isempty(spec.chain) ? _empty_index_barcode() : slice_barcode(M, spec.chain; values=spec.values)
+        end
+    end
+    return (barcodes=bcs, weights=weights)
+end
+
+function slice_barcodes(M::PModule{K}, slices::AbstractVector{<:SliceSpec{<:Real,<:AbstractVector{<:Real}}};
+                        normalize_weights::Bool=true,
+                        threads::Bool=Threads.nthreads() > 1,
+                        packed::Bool=false) where {K}
+    n = length(slices)
+    weights = Vector{Float64}(undef, n)
+    @inbounds for i in 1:n
+        weights[i] = isempty(slices[i].chain) ? 0.0 : float(slices[i].weight)
+    end
+    if normalize_weights
+        s = sum(weights)
+        if s > 0
+            weights ./= s
+        else
+            weights .= 0.0
         end
     end
 
-    if all_nothing
-        bcs = Vector{IndexBarcode}(undef, n)
+    if packed
+        bcs = Vector{PackedFloatBarcode}(undef, n)
         if threads && Threads.nthreads() > 1
             Threads.@threads for i in 1:n
-                if isempty(chains[i])
-                    bcs[i] = _empty_index_barcode()
-                else
-                    bcs[i] = slice_barcode(M, chains[i]; values=nothing)
-                end
+                spec = slices[i]
+                bcs[i] = isempty(spec.chain) ? _empty_packed_float_barcode() :
+                    (_slice_barcode_packed(M, spec.chain; values=spec.values)::PackedFloatBarcode)
             end
         else
-            for i in 1:n
-                if isempty(chains[i])
-                    bcs[i] = _empty_index_barcode()
-                else
-                    bcs[i] = slice_barcode(M, chains[i]; values=nothing)
-                end
-            end
-        end
-        return (barcodes=bcs, weights=weights)
-    elseif all_float_vals
-        bcs = Vector{FloatBarcode}(undef, n)
-        if threads && Threads.nthreads() > 1
-            Threads.@threads for i in 1:n
-                if isempty(chains[i])
-                    bcs[i] = _empty_float_barcode()
-                else
-                    bcs[i] = slice_barcode(M, chains[i]; values=vals[i])
-                end
-            end
-        else
-            for i in 1:n
-                if isempty(chains[i])
-                    bcs[i] = _empty_float_barcode()
-                else
-                    bcs[i] = slice_barcode(M, chains[i]; values=vals[i])
-                end
-            end
-        end
-        return (barcodes=bcs, weights=weights)
-    elseif all_int_vals
-        bcs = Vector{IndexBarcode}(undef, n)
-        if threads && Threads.nthreads() > 1
-            Threads.@threads for i in 1:n
-                if isempty(chains[i])
-                    bcs[i] = _empty_index_barcode()
-                else
-                    bcs[i] = slice_barcode(M, chains[i]; values=vals[i])
-                end
-            end
-        else
-            for i in 1:n
-                if isempty(chains[i])
-                    bcs[i] = _empty_index_barcode()
-                else
-                    bcs[i] = slice_barcode(M, chains[i]; values=vals[i])
-                end
-            end
-        end
-        return (barcodes=bcs, weights=weights)
-    else
-        bcs = Vector{Union{IndexBarcode,FloatBarcode}}(undef, n)
-        if threads && Threads.nthreads() > 1
-            Threads.@threads for i in 1:n
-                if isempty(chains[i])
-                    bcs[i] = vals[i] === nothing || _values_are_int_vector(vals[i]) ?
-                        _empty_index_barcode() : _empty_float_barcode()
-                else
-                    vi = vals[i]
-                    if vi === nothing
-                        bcs[i] = slice_barcode(M, chains[i]; values=nothing)
-                    elseif _values_are_int_vector(vi)
-                        bcs[i] = slice_barcode(M, chains[i]; values=vi)
-                    else
-                        bcs[i] = _to_float_barcode(slice_barcode(M, chains[i]; values=vi))
-                    end
-                end
-            end
-        else
-            for i in 1:n
-                if isempty(chains[i])
-                    bcs[i] = vals[i] === nothing || _values_are_int_vector(vals[i]) ?
-                        _empty_index_barcode() : _empty_float_barcode()
-                else
-                    vi = vals[i]
-                    if vi === nothing
-                        bcs[i] = slice_barcode(M, chains[i]; values=nothing)
-                    elseif _values_are_int_vector(vi)
-                        bcs[i] = slice_barcode(M, chains[i]; values=vi)
-                    else
-                        bcs[i] = _to_float_barcode(slice_barcode(M, chains[i]; values=vi))
-                    end
-                end
+            @inbounds for i in 1:n
+                spec = slices[i]
+                bcs[i] = isempty(spec.chain) ? _empty_packed_float_barcode() :
+                    (_slice_barcode_packed(M, spec.chain; values=spec.values)::PackedFloatBarcode)
             end
         end
         return (barcodes=bcs, weights=weights)
     end
+
+    bcs = Vector{FloatBarcode}(undef, n)
+    if threads && Threads.nthreads() > 1
+        Threads.@threads for i in 1:n
+            spec = slices[i]
+            bcs[i] = isempty(spec.chain) ? _empty_float_barcode() : slice_barcode(M, spec.chain; values=spec.values)
+        end
+    else
+        @inbounds for i in 1:n
+            spec = slices[i]
+            bcs[i] = isempty(spec.chain) ? _empty_float_barcode() : slice_barcode(M, spec.chain; values=spec.values)
+        end
+    end
+    return (barcodes=bcs, weights=weights)
 end
 
 
@@ -13506,6 +13955,7 @@ Returns `(barcodes, weights, directions, offsets)` where:
 function slice_barcodes(
     M::PModule{K},
     pi;
+    opts::InvariantOptions = InvariantOptions(),
     directions = :auto,
     offsets = :auto,
     normalize_dirs::Symbol = :none,
@@ -13525,19 +13975,33 @@ function slice_barcodes(
         error("slice_barcodes: provide offsets explicitly for non-PLike encodings")
     end
 
-    # Extract legacy keywords and convert to opts for slice_chain.
-    box_kw = haskey(slice_kwargs, :box) ? slice_kwargs[:box] : :auto
-    if box_kw === nothing && !haskey(slice_kwargs, :tmin) && !haskey(slice_kwargs, :tmax)
-        box_kw = :auto
-    end
-    strict_kw = haskey(slice_kwargs, :strict) ? slice_kwargs[:strict] : nothing
-    opts_chain = InvariantOptions(box = box_kw, strict = strict_kw)
-
-    # Filter out :box and :strict so we do not forward them as keywords to slice_chain.
-    filtered = (;
+    box0 = get(slice_kwargs, :box, opts.box)
+    strict0 = get(slice_kwargs, :strict, opts.strict)
+    slice_kwargs0 = (;
         (k => v for (k, v) in pairs(slice_kwargs)
-            if k != :box && k != :strict && k != :kmin && k != :kmax_param &&
-               k != :default_weight)...)
+            if k != :box && k != :strict)...)
+
+    opts_chain = InvariantOptions(
+        axes = opts.axes,
+        axes_policy = opts.axes_policy,
+        max_axis_len = opts.max_axis_len,
+        box = box0,
+        threads = opts.threads,
+        strict = strict0,
+        pl_mode = opts.pl_mode,
+    )
+    tmin0 = get(slice_kwargs0, :tmin, nothing)
+    tmax0 = get(slice_kwargs0, :tmax, nothing)
+    if opts_chain.box === nothing && tmin0 === nothing && tmax0 === nothing
+        opts_chain = InvariantOptions(box = :auto, strict = opts_chain.strict,
+                                      threads = opts.threads, axes = opts.axes,
+                                      axes_policy = opts.axes_policy, max_axis_len = opts.max_axis_len,
+                                      pl_mode = opts.pl_mode)
+    end
+
+    filtered = (;
+        (k => v for (k, v) in pairs(slice_kwargs0)
+            if k != :kmin && k != :kmax_param && k != :default_weight && k != :lengthscale)...)
 
     dirs_in = [_normalize_dir(dir, normalize_dirs) for dir in directions]
     offs0 = offsets
@@ -13724,6 +14188,7 @@ end
 function slice_barcodes(
     M::PModule{K},
     pi::PLikeEncodingMap;
+    opts::InvariantOptions = InvariantOptions(),
     directions = :auto,
     offsets = :auto,
     n_dirs::Integer = 16,
@@ -13739,13 +14204,30 @@ function slice_barcodes(
     values = nothing,
     threads::Bool = (Threads.nthreads() > 1),
     packed::Bool = false,
+    cache::Union{Nothing,SlicePlanCache} = nothing,
     slice_kwargs...
 ) where {K}
+    box0 = get(slice_kwargs, :box, opts.box)
+    strict0 = get(slice_kwargs, :strict, opts.strict)
+    slice_kwargs0 = (;
+        (k => v for (k, v) in pairs(slice_kwargs)
+            if k != :box && k != :strict)...)
+    opts_compile = InvariantOptions(
+        axes = opts.axes,
+        axes_policy = opts.axes_policy,
+        max_axis_len = opts.max_axis_len,
+        box = box0,
+        threads = opts.threads,
+        strict = strict0,
+        pl_mode = opts.pl_mode,
+    )
+
     # Fast path: when values are derived from slice geometry (the common case),
     # compile and cache all chains/values once and reuse across modules.
     if values === nothing
         plan = compile_slices(
-            pi;
+            pi,
+            opts_compile;
             directions = directions,
             offsets = offsets,
             n_dirs = n_dirs,
@@ -13759,7 +14241,8 @@ function slice_barcodes(
             offset_margin = offset_margin,
             drop_unknown = drop_unknown,
             threads = threads,
-            slice_kwargs...
+            cache = cache,
+            slice_kwargs0...
         )
         return run_invariants(plan, module_cache(M), SliceBarcodesTask(; packed = packed, threads = threads))
     end
@@ -13775,22 +14258,22 @@ function slice_barcodes(
                                   include_axes = include_axes,
                                   normalize = (normalize_dirs == :none ? :none : normalize_dirs))
     end
-    # Extract legacy keywords and convert to opts for default_offsets / slice_chain.
-    box_kw = haskey(slice_kwargs, :box) ? slice_kwargs[:box] : nothing
-    box_kw === :auto && (box_kw = nothing)
-    strict_kw = haskey(slice_kwargs, :strict) ? slice_kwargs[:strict] : nothing
 
-    opts_offsets = InvariantOptions(box = box_kw)
-    opts_chain   = InvariantOptions(box = box_kw, strict = strict_kw)
-    if opts_chain.box === nothing && !haskey(slice_kwargs, :tmin) && !haskey(slice_kwargs, :tmax)
-        opts_offsets = InvariantOptions(box = :auto)
-        opts_chain   = InvariantOptions(box = :auto, strict = strict_kw)
+    opts_offsets = InvariantOptions(box = opts_compile.box, pl_mode = opts_compile.pl_mode)
+    opts_chain   = opts_compile
+    tmin0 = get(slice_kwargs0, :tmin, nothing)
+    tmax0 = get(slice_kwargs0, :tmax, nothing)
+    if opts_chain.box === nothing && tmin0 === nothing && tmax0 === nothing
+        opts_offsets = InvariantOptions(box = :auto, pl_mode = opts_compile.pl_mode)
+        opts_chain   = InvariantOptions(box = :auto, strict = opts_compile.strict,
+                                        threads = opts.threads, axes = opts.axes,
+                                        axes_policy = opts.axes_policy, max_axis_len = opts.max_axis_len,
+                                        pl_mode = opts_compile.pl_mode)
     end
 
-    # Filter out :box and :strict so we do not forward them as keywords to slice_chain.
     filtered = (;
-        (k => v for (k, v) in pairs(slice_kwargs)
-            if k != :box && k != :strict && k != :default_weight && k != :kmin && k != :kmax_param)...)
+        (k => v for (k, v) in pairs(slice_kwargs0)
+            if k != :default_weight && k != :kmin && k != :kmax_param && k != :lengthscale)...)
 
     if offs0 === :auto || offs0 === nothing
         offs0 = default_offsets(pi, opts_offsets; n_offsets = n_offsets, margin = offset_margin)
@@ -14417,6 +14900,7 @@ function slice_features(
     # Summary options:
     summary_fields=_DEFAULT_BARCODE_SUMMARY_FIELDS,
     summary_normalize_entropy::Bool=true,
+    cache::Union{Nothing,SlicePlanCache}=nothing,
     slice_kwargs...
 ) where {K}
     data = slice_barcodes(M, pi;
@@ -14435,6 +14919,7 @@ function slice_features(
                           direction_weight=direction_weight,
                           offset_weights=offset_weights,
                           normalize_weights=normalize_weights,
+                          cache=cache,
                           packed=true,
                           slice_kwargs...)
 
@@ -14733,8 +15218,18 @@ function slice_kernel(
     threads::Bool = (Threads.nthreads() > 1),
     slice_kwargs...
 )::Float64 where {K}
+    box0 = get(slice_kwargs, :box, nothing)
+    strict0 = get(slice_kwargs, :strict, strict)
+    tmin0 = tmin
+    tmax0 = tmax
+    if box0 === nothing && tmin0 === nothing && tmax0 === nothing && pi isa PLikeEncodingMap
+        box0 = :auto
+    end
+    opts_compile = InvariantOptions(box = box0, strict = strict0, threads = threads)
+    slice_kwargs0 = (; (k => v for (k, v) in pairs(slice_kwargs) if k != :box && k != :strict)...)
     plan = compile_slices(
-        pi;
+        pi,
+        opts_compile;
         directions = directions,
         offsets = offsets,
         normalize_dirs = normalize_dirs,
@@ -14748,9 +15243,8 @@ function slice_kernel(
         nsteps = nsteps,
         kmin = kmin,
         kmax_param = kmax_param,
-        strict = strict,
         dedup = dedup,
-        slice_kwargs...
+        slice_kwargs0...
     )
     task = SliceKernelTask(;
         kind = kind,
@@ -15619,7 +16113,7 @@ end
 Compute connected components of the support mask on the region adjacency graph.
 
 Opts usage:
-- `opts.box` chooses the working window (default legacy `:auto` when unset).
+- `opts.box` chooses the working window (default `:auto` when unset).
 - `opts.strict` controls region computations (defaults to true).
 
 If `adjacency` is not provided, this calls `region_adjacency(pi; box=...)`.
@@ -15681,7 +16175,7 @@ end
 Compute the diameter of the support graph (support mask restricted to region adjacency).
 
 Opts usage:
-- `opts.box` chooses the working window (default legacy `:auto` when unset).
+- `opts.box` chooses the working window (default `:auto` when unset).
 - `opts.strict` controls region computations (defaults to true).
 """
 function support_graph_diameter(H::HilbertFunction, pi::PLikeEncodingMap, opts::InvariantOptions;
@@ -15743,7 +16237,7 @@ end
 Compute an axis-aligned bounding box of the *support* of a module (where Hilbert mass is nonzero).
 
 Opts usage:
-- `opts.box` selects the working window. If unset (`nothing`), we use the legacy default `:auto`.
+- `opts.box` selects the working window. If unset (`nothing`), we use the default `:auto`.
 - `opts.strict` controls region computations (defaults to true).
 """
 function support_bbox(M::PModule{K}, pi::PLikeEncodingMap, opts::InvariantOptions;
@@ -15829,7 +16323,7 @@ metric:
 - :L1   sum(u-ell)
 
 Opts usage:
-- `opts.box` chooses the working window (default legacy `:auto` when unset).
+- `opts.box` chooses the working window (default `:auto` when unset).
 - `opts.strict` controls region computations (defaults to true).
 """
 function support_geometric_diameter(M::PModule{K}, pi::PLikeEncodingMap, opts::InvariantOptions;
@@ -15908,7 +16402,7 @@ For exact backends, stderr=0 and ci=(estimate,estimate).
 For Monte Carlo/sample backends, uses binomial Wilson interval on the *subset* count.
 
 Opts usage:
-- `opts.box` chooses the working window (default legacy `:auto` when unset).
+- `opts.box` chooses the working window (default `:auto` when unset).
 - `opts.strict` controls region computations (defaults to true).
 
 Returns a NamedTuple with fields like:
@@ -16024,132 +16518,137 @@ end
 # Public opts-default wrappers (keyword opts)
 # -----------------------------------------------------------------------------
 
-rank_invariant(H::FringeModule{K}; opts=nothing, kwargs...) where {K} =
-    rank_invariant(H, _resolve_opts(opts); kwargs...)
+rank_invariant(H::FringeModule{K}; opts::InvariantOptions=InvariantOptions(), kwargs...) where {K} =
+    rank_invariant(H, opts; kwargs...)
 
-rectangle_signed_barcode(M, pi; opts=nothing, kwargs...) =
-    rectangle_signed_barcode(M, pi, _resolve_opts(opts); kwargs...)
+rectangle_signed_barcode(M, pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    rectangle_signed_barcode(M, pi, opts; kwargs...)
 
-restricted_hilbert(M::PModule{K}, pi, x; opts=nothing) where {K} =
-    restricted_hilbert(M, pi, x, _resolve_opts(opts))
-restricted_hilbert(H::FringeModule{K}, pi, x; opts=nothing) where {K} =
-    restricted_hilbert(H, pi, x, _resolve_opts(opts))
-rank_map(M::PModule{K}, pi, x, y; opts=nothing, cache=nothing, memo=nothing) where {K} =
-    rank_map(M, pi, x, y, _resolve_opts(opts); cache = cache, memo = memo)
-rank_map(H::FringeModule{K}, pi, x, y; opts=nothing, cache=nothing, memo=nothing) where {K} =
-    rank_map(H, pi, x, y, _resolve_opts(opts); cache = cache, memo = memo)
+restricted_hilbert(M::PModule{K}, pi, x; opts::InvariantOptions=InvariantOptions()) where {K} =
+    restricted_hilbert(M, pi, x, opts)
+restricted_hilbert(H::FringeModule{K}, pi, x; opts::InvariantOptions=InvariantOptions()) where {K} =
+    restricted_hilbert(H, pi, x, opts)
+rank_map(M::PModule{K}, pi, x, y; opts::InvariantOptions=InvariantOptions(), cache=nothing, memo=nothing) where {K} =
+    rank_map(M, pi, x, y, opts; cache = cache, memo = memo)
+rank_map(H::FringeModule{K}, pi, x, y; opts::InvariantOptions=InvariantOptions(), cache=nothing, memo=nothing) where {K} =
+    rank_map(H, pi, x, y, opts; cache = cache, memo = memo)
 
-hilbert_distance(M, N, pi; opts=nothing, kwargs...) =
-    hilbert_distance(M, N, pi, _resolve_opts(opts); kwargs...)
+rank_query(M::PModule{K}, pi, x, y; opts::InvariantOptions=InvariantOptions(), kwargs...) where {K} =
+    rank_query(M, pi, x, y, opts; kwargs...)
+rank_query(H::FringeModule{K}, pi, x, y; opts::InvariantOptions=InvariantOptions(), kwargs...) where {K} =
+    rank_query(H, pi, x, y, opts; kwargs...)
 
-euler_surface(obj, pi; opts=nothing, kwargs...) =
-    euler_surface(obj, pi, _resolve_opts(opts); kwargs...)
-euler_signed_measure(obj, pi; opts=nothing, kwargs...) =
-    euler_signed_measure(obj, pi, _resolve_opts(opts); kwargs...)
-euler_distance(obj1, obj2, pi; opts=nothing, kwargs...) =
-    euler_distance(obj1, obj2, pi, _resolve_opts(opts); kwargs...)
+hilbert_distance(M, N, pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    hilbert_distance(M, N, pi, opts; kwargs...)
 
-integrated_hilbert_mass(M, pi; opts=nothing, kwargs...) =
-    integrated_hilbert_mass(M, pi, _resolve_opts(opts); kwargs...)
-measure_by_dimension(M, pi; opts=nothing, kwargs...) =
-    measure_by_dimension(M, pi, _resolve_opts(opts); kwargs...)
-support_measure(M, pi; opts=nothing, kwargs...) =
-    support_measure(M, pi, _resolve_opts(opts); kwargs...)
-dim_stats(M, pi; opts=nothing, kwargs...) =
-    dim_stats(M, pi, _resolve_opts(opts); kwargs...)
-dim_norm(M, pi; opts=nothing, kwargs...) =
-    dim_norm(M, pi, _resolve_opts(opts); kwargs...)
-region_weight_entropy(pi; opts=nothing, kwargs...) =
-    region_weight_entropy(pi, _resolve_opts(opts); kwargs...)
-aspect_ratio_stats(pi; opts=nothing, kwargs...) =
-    aspect_ratio_stats(pi, _resolve_opts(opts); kwargs...)
-module_size_summary(M, pi; opts=nothing, kwargs...) =
-    module_size_summary(M, pi, _resolve_opts(opts); kwargs...)
-interface_measure(pi; opts=nothing, kwargs...) =
-    interface_measure(pi, _resolve_opts(opts); kwargs...)
-interface_measure_by_dim_pair(M, pi; opts=nothing, kwargs...) =
-    interface_measure_by_dim_pair(M, pi, _resolve_opts(opts); kwargs...)
-interface_measure_dim_changes(M, pi; opts=nothing, kwargs...) =
-    interface_measure_dim_changes(M, pi, _resolve_opts(opts); kwargs...)
-region_volume_samples_by_dim(M, pi; opts=nothing, kwargs...) =
-    region_volume_samples_by_dim(M, pi, _resolve_opts(opts); kwargs...)
-region_volume_histograms_by_dim(M, pi; opts=nothing, kwargs...) =
-    region_volume_histograms_by_dim(M, pi, _resolve_opts(opts); kwargs...)
-region_boundary_to_volume_samples_by_dim(M, pi; opts=nothing, kwargs...) =
-    region_boundary_to_volume_samples_by_dim(M, pi, _resolve_opts(opts); kwargs...)
-region_boundary_to_volume_histograms_by_dim(M, pi; opts=nothing, kwargs...) =
-    region_boundary_to_volume_histograms_by_dim(M, pi, _resolve_opts(opts); kwargs...)
-region_adjacency_graph_stats(M, pi; opts=nothing, kwargs...) =
-    region_adjacency_graph_stats(M, pi, _resolve_opts(opts); kwargs...)
-module_geometry_summary(M, pi; opts=nothing, kwargs...) =
-    module_geometry_summary(M, pi, _resolve_opts(opts); kwargs...)
-module_geometry_asymptotics(M, pi; opts=nothing, kwargs...) =
-    module_geometry_asymptotics(M, pi, _resolve_opts(opts); kwargs...)
+euler_surface(obj, pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    euler_surface(obj, pi, opts; kwargs...)
+euler_signed_measure(obj, pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    euler_signed_measure(obj, pi, opts; kwargs...)
+euler_distance(obj1, obj2, pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    euler_distance(obj1, obj2, pi, opts; kwargs...)
 
-slice_chain(pi, x0, dir; opts=nothing, kwargs...) =
-    slice_chain(pi, x0, dir, _resolve_opts(opts); kwargs...)
+integrated_hilbert_mass(M, pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    integrated_hilbert_mass(M, pi, opts; kwargs...)
+measure_by_dimension(M, pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    measure_by_dimension(M, pi, opts; kwargs...)
+support_measure(M, pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    support_measure(M, pi, opts; kwargs...)
+dim_stats(M, pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    dim_stats(M, pi, opts; kwargs...)
+dim_norm(M, pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    dim_norm(M, pi, opts; kwargs...)
+region_weight_entropy(pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    region_weight_entropy(pi, opts; kwargs...)
+aspect_ratio_stats(pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    aspect_ratio_stats(pi, opts; kwargs...)
+module_size_summary(M, pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    module_size_summary(M, pi, opts; kwargs...)
+interface_measure(pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    interface_measure(pi, opts; kwargs...)
+interface_measure_by_dim_pair(M, pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    interface_measure_by_dim_pair(M, pi, opts; kwargs...)
+interface_measure_dim_changes(M, pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    interface_measure_dim_changes(M, pi, opts; kwargs...)
+region_volume_samples_by_dim(M, pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    region_volume_samples_by_dim(M, pi, opts; kwargs...)
+region_volume_histograms_by_dim(M, pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    region_volume_histograms_by_dim(M, pi, opts; kwargs...)
+region_boundary_to_volume_samples_by_dim(M, pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    region_boundary_to_volume_samples_by_dim(M, pi, opts; kwargs...)
+region_boundary_to_volume_histograms_by_dim(M, pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    region_boundary_to_volume_histograms_by_dim(M, pi, opts; kwargs...)
+region_adjacency_graph_stats(M, pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    region_adjacency_graph_stats(M, pi, opts; kwargs...)
+module_geometry_summary(M, pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    module_geometry_summary(M, pi, opts; kwargs...)
+module_geometry_asymptotics(M, pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    module_geometry_asymptotics(M, pi, opts; kwargs...)
 
-sliced_wasserstein_kernel(M, N, pi; opts=nothing, kwargs...) =
-    sliced_wasserstein_kernel(M, N, pi, _resolve_opts(opts); kwargs...)
-sliced_wasserstein_distance(M, N, pi; opts=nothing, kwargs...) =
-    sliced_wasserstein_distance(M, N, pi, _resolve_opts(opts); kwargs...)
-sliced_bottleneck_distance(M, N, pi; opts=nothing, kwargs...) =
-    sliced_bottleneck_distance(M, N, pi, _resolve_opts(opts); kwargs...)
+slice_chain(pi, x0, dir; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    slice_chain(pi, x0, dir, opts; kwargs...)
 
-encoding_box(pi::PLikeEncodingMap; opts=nothing, kwargs...) =
-    encoding_box(pi, _resolve_opts(opts); kwargs...)
-encoding_box(axes::Tuple{Vararg{<:AbstractVector}}; opts=nothing, kwargs...) =
-    encoding_box(axes, _resolve_opts(opts); kwargs...)
+sliced_wasserstein_kernel(M, N, pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    sliced_wasserstein_kernel(M, N, pi, opts; kwargs...)
+sliced_wasserstein_distance(M, N, pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    sliced_wasserstein_distance(M, N, pi, opts; kwargs...)
+sliced_bottleneck_distance(M, N, pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    sliced_bottleneck_distance(M, N, pi, opts; kwargs...)
 
-default_offsets(pi::PLikeEncodingMap; opts=nothing, kwargs...) =
-    default_offsets(pi, _resolve_opts(opts); kwargs...)
-default_offsets(pi::PLikeEncodingMap, dir::AbstractVector{<:Real}; opts=nothing, kwargs...) =
-    default_offsets(pi, dir, _resolve_opts(opts); kwargs...)
+encoding_box(pi::PLikeEncodingMap; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    encoding_box(pi, opts; kwargs...)
+encoding_box(axes::Tuple{Vararg{<:AbstractVector}}; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    encoding_box(axes, opts; kwargs...)
 
-matching_distance_approx(M, N, pi; opts=nothing, kwargs...) =
-    matching_distance_approx(M, N, pi, _resolve_opts(opts); kwargs...)
-matching_wasserstein_distance_approx(M, N, pi; opts=nothing, kwargs...) =
-    matching_wasserstein_distance_approx(M, N, pi, _resolve_opts(opts); kwargs...)
+default_offsets(pi::PLikeEncodingMap; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    default_offsets(pi, opts; kwargs...)
+default_offsets(pi::PLikeEncodingMap, dir::AbstractVector{<:Real}; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    default_offsets(pi, dir, opts; kwargs...)
 
-slice_chain_exact_2d(pi, dir, offset; opts=nothing, kwargs...) =
-    slice_chain_exact_2d(pi, dir, offset, _resolve_opts(opts); kwargs...)
-matching_distance_exact_slices_2d(pi; opts=nothing, kwargs...) =
-    matching_distance_exact_slices_2d(pi, _resolve_opts(opts); kwargs...)
+matching_distance_approx(M, N, pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    matching_distance_approx(M, N, pi, opts; kwargs...)
+matching_wasserstein_distance_approx(M, N, pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    matching_wasserstein_distance_approx(M, N, pi, opts; kwargs...)
 
-fibered_arrangement_2d(pi; opts=nothing, kwargs...) =
-    fibered_arrangement_2d(pi, _resolve_opts(opts); kwargs...)
-fibered_barcode_cache_2d(M, pi; opts=nothing, kwargs...) =
-    fibered_barcode_cache_2d(M, pi, _resolve_opts(opts); kwargs...)
+slice_chain_exact_2d(pi, dir, offset; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    slice_chain_exact_2d(pi, dir, offset, opts; kwargs...)
+matching_distance_exact_slices_2d(pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    matching_distance_exact_slices_2d(pi, opts; kwargs...)
 
-matching_distance_exact_2d(M, N, pi; opts=nothing, kwargs...) =
-    matching_distance_exact_2d(M, N, pi, _resolve_opts(opts); kwargs...)
+fibered_arrangement_2d(pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    fibered_arrangement_2d(pi, opts; kwargs...)
+fibered_barcode_cache_2d(M, pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    fibered_barcode_cache_2d(M, pi, opts; kwargs...)
 
-measure_by_value(values::AbstractVector, pi; opts=nothing, kwargs...) =
-    measure_by_value(values, pi, _resolve_opts(opts); kwargs...)
-measure_by_value(values::AbstractVector, v, pi; opts=nothing, kwargs...) =
-    measure_by_value(values, v, pi, _resolve_opts(opts); kwargs...)
-measure_by_value(f::Function, pi; opts=nothing, kwargs...) =
-    measure_by_value(f, pi, _resolve_opts(opts); kwargs...)
+matching_distance_exact_2d(M, N, pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    matching_distance_exact_2d(M, N, pi, opts; kwargs...)
 
-support_measure(mask::AbstractVector{Bool}, pi; opts=nothing, kwargs...) =
-    support_measure(mask, pi, _resolve_opts(opts); kwargs...)
-vertex_set_measure(vertices::AbstractVector{<:Integer}, pi; opts=nothing, kwargs...) =
-    vertex_set_measure(vertices, pi, _resolve_opts(opts); kwargs...)
-betti_support_measures(B, pi; opts=nothing, kwargs...) =
-    betti_support_measures(B, pi, _resolve_opts(opts); kwargs...)
-bass_support_measures(B, pi; opts=nothing, kwargs...) =
-    bass_support_measures(B, pi, _resolve_opts(opts); kwargs...)
+measure_by_value(values::AbstractVector, pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    measure_by_value(values, pi, opts; kwargs...)
+measure_by_value(values::AbstractVector, v, pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    measure_by_value(values, v, pi, opts; kwargs...)
+measure_by_value(f::Function, pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    measure_by_value(f, pi, opts; kwargs...)
 
-support_components(H, pi; opts=nothing, kwargs...) =
-    support_components(H, pi, _resolve_opts(opts); kwargs...)
-support_graph_diameter(H, pi; opts=nothing, kwargs...) =
-    support_graph_diameter(H, pi, _resolve_opts(opts); kwargs...)
-support_bbox(H, pi; opts=nothing, kwargs...) =
-    support_bbox(H, pi, _resolve_opts(opts); kwargs...)
-support_geometric_diameter(H, pi; opts=nothing, kwargs...) =
-    support_geometric_diameter(H, pi, _resolve_opts(opts); kwargs...)
-support_measure_stats(H, pi; opts=nothing, kwargs...) =
-    support_measure_stats(H, pi, _resolve_opts(opts); kwargs...)
+support_measure(mask::AbstractVector{Bool}, pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    support_measure(mask, pi, opts; kwargs...)
+vertex_set_measure(vertices::AbstractVector{<:Integer}, pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    vertex_set_measure(vertices, pi, opts; kwargs...)
+betti_support_measures(B, pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    betti_support_measures(B, pi, opts; kwargs...)
+bass_support_measures(B, pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    bass_support_measures(B, pi, opts; kwargs...)
+
+support_components(H, pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    support_components(H, pi, opts; kwargs...)
+support_graph_diameter(H, pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    support_graph_diameter(H, pi, opts; kwargs...)
+support_bbox(H, pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    support_bbox(H, pi, opts; kwargs...)
+support_geometric_diameter(H, pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    support_geometric_diameter(H, pi, opts; kwargs...)
+support_measure_stats(H, pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    support_measure_stats(H, pi, opts; kwargs...)
 
 
 end # module

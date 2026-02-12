@@ -305,6 +305,7 @@ include("test_functoriality_ext_tor_maps.jl")
 
 # Invariants
 include("test_invariants.jl")
+include("test_featurizers.jl")
 
 # Stress tests last
 include("test_random_stress.jl")

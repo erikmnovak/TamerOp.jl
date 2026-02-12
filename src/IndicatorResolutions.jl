@@ -17,7 +17,7 @@ module IndicatorResolutions
 using SparseArrays, LinearAlgebra
 using ..FiniteFringe
 using ..IndicatorTypes: UpsetPresentation, DownsetCopresentation
-using ..CoreModules: AbstractCoeffField, RealField, ResolutionCache, coeff_type, eye, field_from_eltype
+using ..CoreModules: AbstractCoeffField, RealField, ResolutionCache, ResolutionKey3, resolution_key3, coeff_type, eye, field_from_eltype
 using ..FieldLinAlg
 
 using ..Modules: CoverCache, cover_cache, clear_cover_cache!, get_cover_cache,
@@ -53,6 +53,75 @@ end
     return val
 end
 
+@inline function _generator_id_ranges(counts::Vector{Int})
+    ranges = Vector{UnitRange{Int}}(undef, length(counts))
+    off = 0
+    @inbounds for i in eachindex(counts)
+        c = counts[i]
+        if c > 0
+            ranges[i] = (off + 1):(off + c)
+            off += c
+        else
+            ranges[i] = 1:0
+        end
+    end
+    return ranges, off
+end
+
+@inline function _write_subsequence_identity!(
+    Muv::Matrix{K},
+    tgt_ids::Vector{Int},
+    src_ids::Vector{Int},
+) where {K}
+    oneK = one(K)
+    i = 1
+    j = 1
+    nt = length(tgt_ids)
+    ns = length(src_ids)
+    @inbounds while i <= nt && j <= ns
+        ti = tgt_ids[i]
+        sj = src_ids[j]
+        if ti == sj
+            Muv[i, j] = oneK
+            i += 1
+            j += 1
+        elseif ti < sj
+            i += 1
+        else
+            error("_write_subsequence_identity!: source generator id missing from target active set")
+        end
+    end
+    j > ns || error("_write_subsequence_identity!: source generator id missing from target active set")
+    return Muv
+end
+
+@inline function _write_projection_identity!(
+    Muv::Matrix{K},
+    tgt_ids::Vector{Int},
+    src_ids::Vector{Int},
+) where {K}
+    oneK = one(K)
+    i = 1
+    j = 1
+    nt = length(tgt_ids)
+    ns = length(src_ids)
+    @inbounds while i <= nt && j <= ns
+        ti = tgt_ids[i]
+        sj = src_ids[j]
+        if ti == sj
+            Muv[i, j] = oneK
+            i += 1
+            j += 1
+        elseif sj < ti
+            j += 1
+        else
+            error("_write_projection_identity!: target generator id missing from source active set")
+        end
+    end
+    i > nt || error("_write_projection_identity!: target generator id missing from source active set")
+    return Muv
+end
+
 function _map_leq_cached_indicator(
     M::PModule{K},
     u::Int,
@@ -63,7 +132,9 @@ function _map_leq_cached_indicator(
     n = nvertices(M.Q)
     X = _indicator_memo_get(memo, n, u, v)
     X === nothing || return X
-    return _indicator_memo_set!(memo, n, u, v, Matrix(map_leq(M, u, v; cache=cc)))
+    Xraw = map_leq(M, u, v; cache=cc)
+    Xmat = Xraw isa Matrix{K} ? Xraw : Matrix{K}(Xraw)
+    return _indicator_memo_set!(memo, n, u, v, Xmat)
 end
 
 # =============================================================================
@@ -80,26 +151,31 @@ id_morphism(H::FiniteFringe.FringeModule{K}) where {K} =
 
 @inline _resolution_cache_shard_index(dicts) =
     min(length(dicts), max(1, Threads.threadid()))
+@inline _thread_local_index(arr) =
+    min(length(arr), max(1, Threads.threadid()))
 
-@inline function _resolution_cache_indicator_get(cache::ResolutionCache, key)
+@inline function _resolution_cache_indicator_get(cache::ResolutionCache, key::ResolutionKey3, ::Type{R}) where {R}
     shard = cache.indicator_shards[_resolution_cache_shard_index(cache.indicator_shards)]
     v = get(shard, key, nothing)
-    v === nothing || return v
+    v === nothing || return (v::R)
     Base.lock(cache.lock)
     try
         v = get(cache.indicator, key, nothing)
     finally
         Base.unlock(cache.lock)
     end
-    v === nothing || (shard[key] = v)
-    return v
+    v === nothing || begin
+        vv = v::R
+        shard[key] = vv
+        return vv
+    end
+    return nothing
 end
 
-@inline function _resolution_cache_indicator_store!(cache::ResolutionCache, key, val)
+@inline function _resolution_cache_indicator_store!(cache::ResolutionCache, key::ResolutionKey3, val::R) where {R}
     shard = cache.indicator_shards[_resolution_cache_shard_index(cache.indicator_shards)]
-    if haskey(shard, key)
-        return shard[key]
-    end
+    existing = get(shard, key, nothing)
+    existing === nothing || return (existing::R)
     shard[key] = val
     Base.lock(cache.lock)
     out = get(cache.indicator, key, nothing)
@@ -108,8 +184,9 @@ end
         out = val
     end
     Base.unlock(cache.lock)
-    shard[key] = out
-    return out
+    outR = out::R
+    shard[key] = outR
+    return outR
 end
 
 function _is_zero_matrix(field::AbstractCoeffField, M)
@@ -246,10 +323,11 @@ function projective_cover(M::PModule{K};
     map_memo = _indicator_new_array_memo(K, n)
     memos = threads && Threads.nthreads() > 1 ?
         [_indicator_new_array_memo(K, n)
-         for _ in 1:Threads.nthreads()] : Vector{Vector{Union{Nothing,Matrix{K}}}}()
+         for _ in 1:max(1, Threads.maxthreadid())] : Vector{Vector{Union{Nothing,Matrix{K}}}}()
 
     # number of generators at each vertex = dim(M_v) - rank(incoming_image)
     gens_at = Vector{Vector{Tuple{Int,Int}}}(undef, n)
+    chosen_at = Vector{Vector{Int}}(undef, n)
     gen_of_p = fill(0, n)
     if threads && Threads.nthreads() > 1
         Threads.@threads for v in 1:n
@@ -268,6 +346,7 @@ function projective_cover(M::PModule{K};
                     end
                 end
             end
+            chosen_at[v] = chosen
             gens_at[v] = [(v, j) for j in chosen]
             gen_of_p[v] = length(chosen)
         end
@@ -288,6 +367,7 @@ function projective_cover(M::PModule{K};
                     end
                 end
             end
+            chosen_at[v] = chosen
             gens_at[v] = [(v, j) for j in chosen]
             gen_of_p[v] = length(chosen)
         end
@@ -322,36 +402,28 @@ function projective_cover(M::PModule{K};
         end
     end
 
-    # Active generator lists (and positions) at each vertex i.
-    active_at = Vector{Vector{Tuple{Int,Int}}}(undef, n)
-    pos_at    = Vector{Dict{Tuple{Int,Int},Int}}(undef, n)
+    gid_ranges, _ = _generator_id_ranges(gen_of_p)
+    # Active generator ids at each vertex i (sorted global dense ids).
+    active_ids = Vector{Vector{Int}}(undef, n)
     if threads && Threads.nthreads() > 1
         Threads.@threads for i in 1:n
-            lst = Tuple{Int,Int}[]
+            lst = Int[]
             for p in downset_indices(Q, i)
                 gen_of_p[p] > 0 || continue
-                append!(lst, gens_at[p])
+                append!(lst, gid_ranges[p])
             end
-            active_at[i] = lst
-            d = Dict{Tuple{Int,Int},Int}()
-            for (k, g) in enumerate(lst)
-                d[g] = k
-            end
-            pos_at[i] = d
+            issorted(lst) || sort!(lst)
+            active_ids[i] = lst
         end
     else
         for i in 1:n
-            lst = Tuple{Int,Int}[]
+            lst = Int[]
             for p in downset_indices(Q, i)
                 gen_of_p[p] > 0 || continue
-                append!(lst, gens_at[p])
+                append!(lst, gid_ranges[p])
             end
-            active_at[i] = lst
-            d = Dict{Tuple{Int,Int},Int}()
-            for (k, g) in enumerate(lst)
-                d[g] = k
-            end
-            pos_at[i] = d
+            issorted(lst) || sort!(lst)
+            active_ids[i] = lst
         end
     end
 
@@ -362,11 +434,7 @@ function projective_cover(M::PModule{K};
         Threads.@threads for idx in eachindex(edges)
             u, v = edges[idx]
             Muv = zeros(K, F0_dims[v], F0_dims[u])
-            # Inclusion: every generator active at u is also active at v.
-            for (j, g) in enumerate(active_at[u])
-                i = pos_at[v][g]
-                Muv[i, j] = one(K)
-            end
+            _write_subsequence_identity!(Muv, active_ids[v], active_ids[u])
             mats[idx] = Muv
         end
         for idx in eachindex(edges)
@@ -377,11 +445,7 @@ function projective_cover(M::PModule{K};
             su = cc.succs[u]
             for v in su
                 Muv = zeros(K, F0_dims[v], F0_dims[u])
-                # Inclusion: every generator active at u is also active at v.
-                for (j, g) in enumerate(active_at[u])
-                    i = pos_at[v][g]
-                    Muv[i, j] = one(K)
-                end
+                _write_subsequence_identity!(Muv, active_ids[v], active_ids[u])
                 F0_edges[(u, v)] = Muv
             end
         end
@@ -393,21 +457,13 @@ function projective_cover(M::PModule{K};
     #
     # Preallocate each component and fill blockwise.
     # Old code used repeated hcat (allocates many temporaries).
-    gen_vertices = [p for p in 1:n if gen_of_p[p] > 0]
-
     # Cache the chosen basis indices in each M_p once.
-    J_at = Vector{Vector{Int}}(undef, n)
-    for p in 1:n
-        J_at[p] = Int[]
-    end
-    for p in gen_vertices
-        J_at[p] = [pair[2] for pair in gens_at[p]]
-    end
+    J_at = chosen_at
 
     comps = Vector{Matrix{K}}(undef, n)
     if threads && Threads.nthreads() > 1
         Threads.@threads for i in 1:n
-            memo = memos[Threads.threadid()]
+            memo = memos[_thread_local_index(memos)]
             Mi = M.dims[i]
             Fi = F0_dims[i]
             cols = zeros(K, Mi, Fi)
@@ -515,7 +571,7 @@ function _injective_hull(M::PModule{K};
     map_memo = _indicator_new_array_memo(K, n)
     memos = threads && Threads.nthreads() > 1 ?
         [_indicator_new_array_memo(K, n)
-         for _ in 1:Threads.nthreads()] : Vector{Vector{Union{Nothing,Matrix{K}}}}()
+         for _ in 1:max(1, Threads.maxthreadid())] : Vector{Vector{Union{Nothing,Matrix{K}}}}()
 
     # socle bases at each vertex and their multiplicities
     Soc = Vector{Matrix{K}}(undef, n)
@@ -558,37 +614,29 @@ function _injective_hull(M::PModule{K};
         end
     end
 
-    # Active generator lists (and positions) at each vertex i.
-    # This ordering matches the row-stacking order used in the inclusion iota below.
-    active_at = Vector{Vector{Tuple{Int,Int}}}(undef, n)
-    pos_at    = Vector{Dict{Tuple{Int,Int},Int}}(undef, n)
+    gid_ranges, _ = _generator_id_ranges(mult)
+    # Active generator ids at each vertex i (sorted global dense ids).
+    # This ordering matches the row-stacking order used in iota below.
+    active_ids = Vector{Vector{Int}}(undef, n)
     if threads && Threads.nthreads() > 1
         Threads.@threads for i in 1:n
-            lst = Tuple{Int,Int}[]
+            lst = Int[]
             for u in upset_indices(Q, i)
                 mult[u] > 0 || continue
-                append!(lst, gens_at[u])
+                append!(lst, gid_ranges[u])
             end
-            active_at[i] = lst
-            d = Dict{Tuple{Int,Int},Int}()
-            for (k, g) in enumerate(lst)
-                d[g] = k
-            end
-            pos_at[i] = d
+            issorted(lst) || sort!(lst)
+            active_ids[i] = lst
         end
     else
         for i in 1:n
-            lst = Tuple{Int,Int}[]
+            lst = Int[]
             for u in upset_indices(Q, i)
                 mult[u] > 0 || continue
-                append!(lst, gens_at[u])
+                append!(lst, gid_ranges[u])
             end
-            active_at[i] = lst
-            d = Dict{Tuple{Int,Int},Int}()
-            for (k, g) in enumerate(lst)
-                d[g] = k
-            end
-            pos_at[i] = d
+            issorted(lst) || sort!(lst)
+            active_ids[i] = lst
         end
     end
 
@@ -601,10 +649,7 @@ function _injective_hull(M::PModule{K};
         Threads.@threads for idx in eachindex(edges)
             u, v = edges[idx]
             Muv = zeros(K, Edims[v], Edims[u])
-            for (i, g) in enumerate(active_at[v])
-                j = pos_at[u][g]
-                Muv[i, j] = one(K)
-            end
+            _write_projection_identity!(Muv, active_ids[v], active_ids[u])
             mats[idx] = Muv
         end
         for idx in eachindex(edges)
@@ -615,10 +660,7 @@ function _injective_hull(M::PModule{K};
             su = cc.succs[u]
             for v in su
                 Muv = zeros(K, Edims[v], Edims[u])
-                for (i, g) in enumerate(active_at[v])
-                    j = pos_at[u][g]
-                    Muv[i, j] = one(K)
-                end
+                _write_projection_identity!(Muv, active_ids[v], active_ids[u])
                 Eedges[(u, v)] = Muv
             end
         end
@@ -632,7 +674,7 @@ function _injective_hull(M::PModule{K};
     comps = Vector{Matrix{K}}(undef, n)
     if threads && Threads.nthreads() > 1
         Threads.@threads for i in 1:n
-            memo = memos[Threads.threadid()]
+            memo = memos[_thread_local_index(memos)]
             rows = zeros(K, Edims[i], M.dims[i])
             r = 1
             for u in upset_indices(Q, i)
@@ -1242,11 +1284,11 @@ function upset_resolution(M::PModule{K};
 
         # Assemble sparse delta: rows index next, cols index prev
         if threads && Threads.nthreads() > 1
-            I_chunks = [Int[] for _ in 1:Threads.nthreads()]
-            J_chunks = [Int[] for _ in 1:Threads.nthreads()]
-            V_chunks = [K[] for _ in 1:Threads.nthreads()]
+            I_chunks = [Int[] for _ in 1:max(1, Threads.maxthreadid())]
+            J_chunks = [Int[] for _ in 1:max(1, Threads.maxthreadid())]
+            V_chunks = [K[] for _ in 1:max(1, Threads.maxthreadid())]
             Threads.@threads for lambda in 1:length(global_prev)
-                tid = Threads.threadid()
+                tid = _thread_local_index(I_chunks)
                 plambda, jlambda = global_prev[lambda]
                 for (theta, (ptheta, jtheta)) in enumerate(global_next)
                     # Containment for principal upsets: Up(ptheta) subseteq Up(plambda)
@@ -1410,11 +1452,11 @@ function downset_resolution(M::PModule{K};
 
         # Assemble sparse rho: rows index D1 (next), cols index D0 (prev)
         if threads && Threads.nthreads() > 1
-            I_chunks = [Int[] for _ in 1:Threads.nthreads()]
-            J_chunks = [Int[] for _ in 1:Threads.nthreads()]
-            V_chunks = [K[] for _ in 1:Threads.nthreads()]
+            I_chunks = [Int[] for _ in 1:max(1, Threads.maxthreadid())]
+            J_chunks = [Int[] for _ in 1:max(1, Threads.maxthreadid())]
+            V_chunks = [K[] for _ in 1:max(1, Threads.maxthreadid())]
             Threads.@threads for lambda in 1:length(globalD0)
-                tid = Threads.threadid()
+                tid = _thread_local_index(I_chunks)
                 ulambda, jlambda = globalD0[lambda]
                 for (theta, (utheta, jtheta)) in enumerate(globalD1)
                     # Containment for principal downsets: D(utheta) subseteq D(ulambda)
@@ -1506,9 +1548,15 @@ function indicator_resolutions(HM::FiniteFringe.FringeModule{K},
                                cache::Union{Nothing,ResolutionCache}=nothing) where {K}
     if cache !== nothing
         maxkey = maxlen === nothing ? -1 : Int(maxlen)
-        key = (objectid(HM), objectid(HN), maxkey)
+        key = resolution_key3(HM, HN, maxkey)
+        cache_val_type = Tuple{
+            Vector{UpsetPresentation{K}},
+            Vector{SparseMatrixCSC{K,Int}},
+            Vector{DownsetCopresentation{K}},
+            Vector{SparseMatrixCSC{K,Int}},
+        }
 
-        cached = _resolution_cache_indicator_get(cache, key)
+        cached = _resolution_cache_indicator_get(cache, key, cache_val_type)
         cached === nothing || return cached
 
         out = begin

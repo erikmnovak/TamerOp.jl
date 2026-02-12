@@ -100,6 +100,7 @@ K = CM.coeff_type(field)
         FG = PosetModules.Flange{K}(1, flats, injectives, [c(1)]; field=field)
         enc = PosetModules.encode(FG; backend=:zn)
         @test enc.pi isa PosetModules.CompiledEncoding
+        @test enc.pi.meta isa CM.EncodingCache
         PosetModules.save_encoding_json(path, enc.P, enc.H, enc.pi)
         H2, pi2 = PosetModules.load_encoding_json(path; return_pi=true)
         @test PosetModules.axes_from_encoding(pi2) == PosetModules.axes_from_encoding(enc.pi)
@@ -111,6 +112,7 @@ K = CM.coeff_type(field)
         Downs = [PosetModules.BoxDownset([1.0, 1.0])]
         enc = PosetModules.encode(Ups, Downs; backend=:pl_backend)
         @test enc.pi isa PosetModules.CompiledEncoding
+        @test enc.pi.meta isa CM.EncodingCache
         PosetModules.save_encoding_json(path, enc.P, enc.H, enc.pi)
         H2, pi2 = PosetModules.load_encoding_json(path; return_pi=true)
         @test PosetModules.axes_from_encoding(pi2) == PosetModules.axes_from_encoding(enc.pi)
@@ -461,12 +463,12 @@ end
     data = PosetModules.PointCloud([[0.0], [1.0]])
     spec = PosetModules.FiltrationSpec(kind=:rips, max_dim=1, axes=([0.0, 1.0],))
     sc = CM.SessionCache()
-    enc1 = PosetModules.encode_from_data(data, spec; degree=0, session_cache=sc)
-    enc2 = PosetModules.encode_from_data(data, spec; degree=0, session_cache=sc)
+    enc1 = PosetModules.encode_from_data(data, spec; degree=0, cache=sc)
+    enc2 = PosetModules.encode_from_data(data, spec; degree=0, cache=sc)
     @test enc1.P === enc2.P
 
     CM.clear_session_cache!(sc)
-    enc3 = PosetModules.encode_from_data(data, spec; degree=0, session_cache=sc)
+    enc3 = PosetModules.encode_from_data(data, spec; degree=0, cache=sc)
     @test enc3.P !== enc1.P
 end
 

@@ -26,7 +26,7 @@ File structure (keep in this order)
 2) A. Internal formats
 3) B. External adapters
 4) C. Invariant caches
-5) D. Compatibility shims (temporary)
+5) D. Additional serializers/loaders
 
 If you add new JSON formats, put them in the appropriate section and keep the
 public API functions (`save_*`, `load_*`, `parse_*`) at the top of that section.
@@ -56,6 +56,8 @@ export save_flange_json, load_flange_json,
        parse_flange_json, flange_from_m2,
        save_mpp_decomposition_json, load_mpp_decomposition_json,
        save_mpp_image_json, load_mpp_image_json,
+       TAMER_FEATURE_SCHEMA_VERSION,
+       feature_schema_header, validate_feature_metadata_schema,
        save_dataset_json, load_dataset_json,
        save_pipeline_json, load_pipeline_json,
        load_gudhi_json, load_ripserer_json, load_eirene_json,
@@ -71,10 +73,45 @@ export save_flange_json, load_flange_json,
 # Schema versions for JSON formats
 const PIPELINE_SCHEMA_VERSION = 1
 const ENCODING_SCHEMA_VERSION = 3
+const TAMER_FEATURE_SCHEMA_VERSION = v"0.2.0"
 
 # =============================================================================
 # 1) Shared helpers
 # =============================================================================
+
+"""
+    feature_schema_header(; format=nothing) -> Dict{String,Any}
+
+Canonical schema header for feature artifacts owned by PosetModules.
+"""
+function feature_schema_header(; format::Union{Nothing,Symbol}=nothing)
+    hdr = Dict{String,Any}(
+        "kind" => "features",
+        "schema_version" => string(TAMER_FEATURE_SCHEMA_VERSION),
+    )
+    format === nothing || (hdr["format"] = String(format))
+    return hdr
+end
+
+"""
+    validate_feature_metadata_schema(meta; max_version=TAMER_FEATURE_SCHEMA_VERSION)
+
+Validate a feature metadata object against the canonical feature schema header.
+Returns `true` on success and throws on invalid/unsupported schema tags.
+"""
+function validate_feature_metadata_schema(meta; max_version::VersionNumber=TAMER_FEATURE_SCHEMA_VERSION)
+    kind = haskey(meta, "kind") ? String(meta["kind"]) : ""
+    kind == "features" || error("Feature metadata has unsupported kind: $(kind)")
+    haskey(meta, "schema_version") || error("Feature metadata missing schema_version")
+    ver = try
+        VersionNumber(String(meta["schema_version"]))
+    catch
+        bad = haskey(meta, "schema_version") ? meta["schema_version"] : missing
+        error("Feature metadata has invalid schema_version: $(bad)")
+    end
+    ver <= max_version || error("Unsupported feature metadata schema_version: $(ver)")
+    return true
+end
 
 function _field_to_obj(field::AbstractCoeffField)
     if field isa QQField
@@ -1333,9 +1370,11 @@ function _pi_from_obj(P::AbstractPoset, obj)
                  for f in obj["flats"]]
         injectives = [IndInj(mkface(Vector{Int}(e["tau"])), Vector{Int}(e["b"]); id=:E)
                       for e in obj["injectives"]]
-        sig_to_region = Dict{Tuple{Tuple,Tuple},Int}()
+        MY = max(1, cld(length(flats), 64))
+        MZ = max(1, cld(length(injectives), 64))
+        sig_to_region = Dict{ZnEncoding.SigKey{MY,MZ},Int}()
         for t in 1:length(sig_y)
-            sig_to_region[(Tuple(sig_y[t]), Tuple(sig_z[t]))] = t
+            sig_to_region[ZnEncoding._sigkey_from_bitvectors(sig_y[t], sig_z[t], Val(MY), Val(MZ))] = t
         end
         return ZnEncoding.ZnEncodingMap(n, coords, sig_y, sig_z, reps, flats, injectives, sig_to_region)
     elseif kind == "PLEncodingMapBoxes"

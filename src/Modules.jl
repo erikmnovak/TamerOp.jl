@@ -326,9 +326,9 @@ any mapping supporting `(u,v)` keys. Missing cover maps become zero maps.
 """
 function PModule{K}(Q::AbstractPoset, dims::Vector{Int}, edge_maps;
                     check_sizes::Bool=true,
-                    opts::Union{ModuleOptions,Nothing}=nothing,
+                    opts::ModuleOptions=ModuleOptions(),
                     field::AbstractCoeffField=field_from_eltype(K)) where {K}
-    if opts !== nothing
+    if opts != ModuleOptions()
         check_sizes == true || error("PModule: pass either check_sizes or opts, not both.")
         check_sizes = opts.check_sizes
     end
@@ -341,9 +341,9 @@ end
 # rebase existing store to this poset (important for ChangeOfPosets)
 function PModule{K}(Q::AbstractPoset, dims::Vector{Int}, store::CoverEdgeMapStore{K,MatT};
                     check_sizes::Bool=true,
-                    opts::Union{ModuleOptions,Nothing}=nothing,
+                    opts::ModuleOptions=ModuleOptions(),
                     field::AbstractCoeffField=field_from_eltype(K)) where {K,MatT<:AbstractMatrix{K}}
-    if opts !== nothing
+    if opts != ModuleOptions()
         check_sizes == true || error("PModule: pass either check_sizes or opts, not both.")
         check_sizes = opts.check_sizes
     end
@@ -368,9 +368,9 @@ end
 # infer coefficient type from first map
 function PModule(Q::AbstractPoset, dims::Vector{Int}, edge_maps;
                  check_sizes::Bool=true,
-                 opts::Union{ModuleOptions,Nothing}=nothing,
+                 opts::ModuleOptions=ModuleOptions(),
                  field::Union{AbstractCoeffField,Nothing}=nothing)
-    if opts !== nothing
+    if opts != ModuleOptions()
         check_sizes == true || error("PModule: pass either check_sizes or opts, not both.")
         check_sizes = opts.check_sizes
     end
@@ -742,7 +742,7 @@ Warning:
 """
 function map_leq(M::PModule{K}, u::Int, v::Int;
                  cache::Union{Nothing,CoverCache}=nothing,
-                 opts::Union{ModuleOptions,Nothing}=nothing) where {K}
+                 opts::ModuleOptions=ModuleOptions()) where {K}
     Q = M.Q
     n = nvertices(Q)
     (1 <= u <= n && 1 <= v <= n) || error("map_leq: indices out of range")
@@ -750,7 +750,7 @@ function map_leq(M::PModule{K}, u::Int, v::Int;
     u == v && return eye(M.field, M.dims[v])
     leq(Q, u, v) || error("map_leq: need u <= v in the poset (got u=$u, v=$v)")
 
-    if opts !== nothing
+    if opts != ModuleOptions()
         cache === nothing || error("map_leq: pass either cache or opts, not both.")
         cache = opts.cache
     end

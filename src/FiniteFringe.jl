@@ -6,9 +6,6 @@ import ..CoreModules: change_field
 import ..FieldLinAlg
 
 
-@inline _resolve_ff_opts(opts::Union{FiniteFringeOptions,Nothing}) =
-    opts === nothing ? FiniteFringeOptions() : opts
-
 # =========================================
 # Iterator helpers (tuple/iterator-first APIs)
 # =========================================
@@ -224,8 +221,12 @@ struct CoverEdges
 end
 
 Base.size(C::CoverEdges) = size(C.mat)
+Base.getindex(C::CoverEdges, i::Int) = C.edges[i]
 Base.getindex(C::CoverEdges, i::Int, j::Int) = C.mat[i,j]
 Base.length(C::CoverEdges) = length(C.edges)
+Base.firstindex(C::CoverEdges) = firstindex(C.edges)
+Base.lastindex(C::CoverEdges) = lastindex(C.edges)
+Base.eachindex(C::CoverEdges) = eachindex(C.edges)
 Base.eltype(::Type{CoverEdges}) = Tuple{Int,Int}
 Base.IteratorSize(::Type{CoverEdges}) = Base.HasLength()
 Base.iterate(C::CoverEdges, state::Int=1) =
@@ -373,13 +374,13 @@ function _build_cover_cache(Q::AbstractPoset)
         sort!(preds[u])
     end
 
-    chain_parent = [Dict{UInt64, Int}() for _ in 1:Base.Threads.nthreads()]
+    chain_parent = [Dict{UInt64, Int}() for _ in 1:max(1, Base.Threads.maxthreadid())]
 
     return CoverCache(Q, C, succs, preds, chain_parent, nedges)
 end
 
 @inline function _chain_parent_dict(cc::CoverCache)::Dict{UInt64, Int}
-    return cc.chain_parent[Base.Threads.threadid()]
+    return cc.chain_parent[min(length(cc.chain_parent), max(1, Base.Threads.threadid()))]
 end
 
 function _chosen_predecessor(cc::CoverCache, a::Int, d::Int)
@@ -518,12 +519,7 @@ struct FinitePoset <: AbstractPoset
     _leq::BitMatrix           # _leq[i,j] = true  iff i <= j
     cache::PosetCache
     function FinitePoset(leq::AbstractMatrix{Bool};
-                         check::Bool=true,
-                         opts::Union{FiniteFringeOptions,Nothing}=nothing)
-        if opts !== nothing
-            check == true || error("FinitePoset: pass either check or opts, not both.")
-            check = opts.check
-        end
+                         check::Bool=true)
         n1, n2 = size(leq)
         @assert n1 == n2 "leq must be square"
 
@@ -541,10 +537,9 @@ end
 # Convenience constructor when you already know n.
 # (This is also useful as a search/replace target in performance hot paths.)
 FinitePoset(n::Int, leq::AbstractMatrix{Bool};
-            check::Bool=true,
-            opts::Union{FiniteFringeOptions,Nothing}=nothing) = begin
+            check::Bool=true) = begin
     @assert size(leq, 1) == n && size(leq, 2) == n "leq must be an n x n Boolean matrix"
-    FinitePoset(leq; check=check, opts=opts)
+    FinitePoset(leq; check=check)
 end
 
 nvertices(P::FinitePoset) = P.n
@@ -963,12 +958,7 @@ For performance, the result is cached per `FinitePoset` instance by default.
 Pass `cached=false` to force recomputation.
 """
 function cover_edges(P::FinitePoset;
-                     cached::Bool=true,
-                     opts::Union{FiniteFringeOptions,Nothing}=nothing)
-    if opts !== nothing
-        cached == true || error("cover_edges: pass either cached or opts, not both.")
-        cached = opts.cached
-    end
+                     cached::Bool=true)
     return _cover_edges_cached_or_build!(P, cached) do
         _compute_cover_edges_bitset(P._leq)
     end
@@ -983,12 +973,7 @@ function _cover_edges_from_edges(n::Int, edges::Vector{Tuple{Int,Int}})
 end
 
 function cover_edges(P::AbstractPoset;
-                     cached::Bool=true,
-                     opts::Union{FiniteFringeOptions,Nothing}=nothing)
-    if opts !== nothing
-        cached == true || error("cover_edges: pass either cached or opts, not both.")
-        cached = opts.cached
-    end
+                     cached::Bool=true)
     return _cover_edges_cached_or_build!(P, cached) do
         L = leq_matrix(P)
         _compute_cover_edges_bitset(L isa BitMatrix ? L : BitMatrix(L))
@@ -996,12 +981,7 @@ function cover_edges(P::AbstractPoset;
 end
 
 function cover_edges(P::ProductOfChainsPoset{N};
-                     cached::Bool=true,
-                     opts::Union{FiniteFringeOptions,Nothing}=nothing) where {N}
-    if opts !== nothing
-        cached == true || error("cover_edges: pass either cached or opts, not both.")
-        cached = opts.cached
-    end
+                     cached::Bool=true) where {N}
     return _cover_edges_cached_or_build!(P, cached) do
         n = nvertices(P)
         edges = Tuple{Int,Int}[]
@@ -1025,24 +1005,14 @@ function cover_edges(P::ProductOfChainsPoset{N};
 end
 
 function cover_edges(P::GridPoset{N};
-                     cached::Bool=true,
-                     opts::Union{FiniteFringeOptions,Nothing}=nothing) where {N}
-    if opts !== nothing
-        cached == true || error("cover_edges: pass either cached or opts, not both.")
-        cached = opts.cached
-    end
+                     cached::Bool=true) where {N}
     return _cover_edges_cached_or_build!(P, cached) do
         cover_edges(ProductOfChainsPoset(P.sizes, P.strides, P.cache); cached=true)
     end
 end
 
 function cover_edges(P::ProductPoset;
-                     cached::Bool=true,
-                     opts::Union{FiniteFringeOptions,Nothing}=nothing)
-    if opts !== nothing
-        cached == true || error("cover_edges: pass either cached or opts, not both.")
-        cached = opts.cached
-    end
+                     cached::Bool=true)
     return _cover_edges_cached_or_build!(P, cached) do
         n1 = nvertices(P.P1)
         n2 = nvertices(P.P2)
@@ -1322,12 +1292,7 @@ function FringeModule(P::AbstractPoset,
                       D::Vector{Downset},
                       phi::AbstractMatrix{K};
                       store_sparse::Bool=false,
-                      opts::Union{FiniteFringeOptions,Nothing}=nothing,
                       field::AbstractCoeffField=field_from_eltype(K)) where {K}
-    if opts !== nothing
-        store_sparse == false || error("FringeModule: pass either store_sparse or opts, not both.")
-        store_sparse = opts.store_sparse
-    end
     phimat = store_sparse ? SparseArrays.sparse(phi) : Matrix{K}(phi)
     F = typeof(field)
     return FringeModule{K, F, typeof(phimat)}(field, P, U, D, phimat)
@@ -1367,15 +1332,11 @@ one_by_one_fringe(P::AbstractPoset, U::Upset, D::Downset) =
 # Keyword-friendly wrapper.
 one_by_one_fringe(P::AbstractPoset, U::Upset, D::Downset;
                   scalar=nothing,
-                  opts::Union{FiniteFringeOptions,Nothing}=nothing,
                   field::AbstractCoeffField=QQField()) =
-    opts === nothing ? begin
-        scalar === nothing && (scalar = one(coeff_type(field)))
-        one_by_one_fringe(P, U, D, coerce(field, scalar); field=field)
-    end : begin
-        scalar === nothing || error("one_by_one_fringe: pass either scalar or opts, not both.")
-        one_by_one_fringe(P, U, D, coerce(field, opts.scalar); field=field)
-    end
+begin
+    scalar === nothing && (scalar = one(coeff_type(field)))
+    one_by_one_fringe(P, U, D, coerce(field, scalar); field=field)
+end
 
 # ------------------ mask-based convenience overloads ------------------
 
@@ -1406,15 +1367,11 @@ one_by_one_fringe(P::FinitePoset,
                   U_mask::AbstractVector{Bool},
                   D_mask::AbstractVector{Bool};
                   scalar=nothing,
-                  opts::Union{FiniteFringeOptions,Nothing}=nothing,
                   field::AbstractCoeffField=QQField()) =
-    opts === nothing ? begin
-        scalar === nothing && (scalar = one(coeff_type(field)))
-        one_by_one_fringe(P, U_mask, D_mask, coerce(field, scalar); field=field)
-    end : begin
-        scalar === nothing || error("one_by_one_fringe: pass either scalar or opts, not both.")
-        one_by_one_fringe(P, U_mask, D_mask, coerce(field, opts.scalar); field=field)
-    end
+begin
+    scalar === nothing && (scalar = one(coeff_type(field)))
+    one_by_one_fringe(P, U_mask, D_mask, coerce(field, scalar); field=field)
+end
 
 
 
@@ -1517,6 +1474,42 @@ function _component_data(adj::Vector{Vector{Int}}, mask::BitVector)
     return comp, cid, comp_masks, reps
 end
 
+# Count connected components in mask_a intersect mask_b without materializing the intersection mask.
+function _component_reps_intersection!(
+    reps::Vector{Int},
+    adj::Vector{Vector{Int}},
+    mask_a::BitVector,
+    mask_b::BitVector,
+    marks::Vector{Int},
+    mark::Int,
+    queue::Vector{Int},
+)
+    empty!(reps)
+    ncomp = 0
+    n = length(mask_a)
+    @inbounds for v in 1:n
+        if marks[v] != mark && mask_a[v] && mask_b[v]
+            ncomp += 1
+            push!(reps, v)
+            marks[v] = mark
+            empty!(queue)
+            push!(queue, v)
+            head = 1
+            while head <= length(queue)
+                x = queue[head]
+                head += 1
+                for y in adj[x]
+                    if marks[y] != mark && mask_a[y] && mask_b[y]
+                        marks[y] = mark
+                        push!(queue, y)
+                    end
+                end
+            end
+        end
+    end
+    return ncomp
+end
+
 "Dimension of Hom(M,N) over a field K using the commuting-square presentation."
 function hom_dimension(M::FringeModule{K}, N::FringeModule{K}) where {K}
     @assert M.P === N.P "Posets must match"
@@ -1550,15 +1543,25 @@ function hom_dimension(M::FringeModule{K}, N::FringeModule{K}) where {K}
     end
 
     # Build W = oplus_{i,t} Hom(k[U_M[i]], k[D_N[t]]) with basis indexed by components of U_i cap D_t.
-    w_index = Dict{Tuple{Int,Int},Int}()   # (iM,tN) -> index into w_data
+    w_index = zeros(Int, nUM, nDN)   # (iM,tN) -> index into w_data
     w_data  = _WPairData[]
     W_dim = 0
+    marks = zeros(Int, P.n)
+    queue = Int[]
+    reps_int = Int[]
+    mark = 1
 
     for iM in 1:nUM
         for tN in 1:nDN
-            mask_int = M.U[iM].mask .& N.D[tN].mask
-            if any(mask_int)
-                _, ncomp_int, _, reps_int = _component_data(adj, mask_int)
+            mark += 1
+            if mark == typemax(Int)
+                fill!(marks, 0)
+                mark = 1
+            end
+            ncomp_int = _component_reps_intersection!(
+                reps_int, adj, M.U[iM].mask, N.D[tN].mask, marks, mark, queue
+            )
+            if ncomp_int > 0
                 base = W_dim
                 W_dim += ncomp_int
 
@@ -1574,7 +1577,7 @@ function hom_dimension(M::FringeModule{K}, N::FringeModule{K}) where {K}
                 end
 
                 push!(w_data, _WPairData(rows_by_u, rows_by_d))
-                w_index[(iM,tN)] = length(w_data)
+                w_index[iM, tN] = length(w_data)
             end
         end
     end
@@ -1611,7 +1614,7 @@ function hom_dimension(M::FringeModule{K}, N::FringeModule{K}) where {K}
         for tN in 1:nDN
             val = N.phi[tN, jN]
             if val != zero(K)
-                pid = get(w_index, (iM,tN), 0)
+                pid = w_index[iM, tN]
                 if pid != 0
                     rows = w_data[pid].rows_by_ucomp[cU]
                     for r in rows
@@ -1627,7 +1630,7 @@ function hom_dimension(M::FringeModule{K}, N::FringeModule{K}) where {K}
         for iM in 1:nUM
             val = M.phi[sM, iM]
             if val != zero(K)
-                pid = get(w_index, (iM,tN), 0)
+                pid = w_index[iM, tN]
                 if pid != 0
                     rows = w_data[pid].rows_by_dcomp[cD]
                     for r in rows
@@ -1853,11 +1856,11 @@ struct PostcomposedEncodingMap{PI<:CoreModules.AbstractPLikeEncodingMap} <: Core
     pi0::PI
     pi_of_q::Vector{Int}              # pi : Q -> P encoded as forward table
     Pn::Int                           # number of regions in P
-    reps_cache::Base.RefValue{Any}    # lazy cache for representatives(::...)
+    reps_cache::Base.RefValue{Union{Nothing,Vector{Tuple}}}    # lazy cache for representatives(::...)
 end
 
 @inline PostcomposedEncodingMap(pi0::CoreModules.AbstractPLikeEncodingMap, pi::EncodingMap) =
-    PostcomposedEncodingMap(pi0, pi.pi_of_q, nvertices(pi.P), Ref{Any}(nothing))
+    PostcomposedEncodingMap(pi0, pi.pi_of_q, nvertices(pi.P), Ref{Union{Nothing,Vector{Tuple}}}(nothing))
 
 @inline function CoreModules.locate(pi::PostcomposedEncodingMap, x::AbstractVector)
     q = CoreModules.locate(pi.pi0, x)
@@ -1889,13 +1892,13 @@ function CoreModules.representatives(pi::PostcomposedEncodingMap)
     cached !== nothing && return cached
 
     reps0 = CoreModules.representatives(pi.pi0)
-    repsP = Vector{eltype(reps0)}(undef, pi.Pn)
+    repsP = Vector{Tuple}(undef, pi.Pn)
     filled = falses(pi.Pn)
 
     @inbounds for q in eachindex(pi.pi_of_q)
         p = pi.pi_of_q[q]
         if !filled[p]
-            repsP[p] = reps0[q]
+            repsP[p] = reps0[q] isa Tuple ? reps0[q] : Tuple(reps0[q])
             filled[p] = true
         end
     end
@@ -1910,13 +1913,47 @@ end
 
 # Partition Q into uptight regions: a ~ b iff they lie in exactly the same members of Y.
 function _uptight_regions(Q::FiniteFringe.AbstractPoset, Y::Vector{FiniteFringe.Upset})
-    # Use tuples of Bool so Dict compares and hashes by contents.
-    sigs = Dict{Tuple{Vararg{Bool}}, Vector{Int}}()
-    for q in 1:nvertices(Q)
-        key = ntuple(i -> Y[i].mask[q], length(Y))  # immutable, content-hashable
-        push!(get!(sigs, key, Int[]), q)
+    m = length(Y)
+    if m <= 64
+        sigs = Dict{UInt64, Vector{Int}}()
+        @inbounds for q in 1:nvertices(Q)
+            key = zero(UInt64)
+            for i in 1:m
+                if Y[i].mask[q]
+                    key |= (UInt64(1) << (i - 1))
+                end
+            end
+            push!(get!(sigs, key, Int[]), q)
+        end
+        return collect(values(sigs))
+    elseif m <= 128
+        sigs = Dict{Tuple{UInt64,UInt64}, Vector{Int}}()
+        @inbounds for q in 1:nvertices(Q)
+            lo = zero(UInt64)
+            hi = zero(UInt64)
+            for i in 1:64
+                if Y[i].mask[q]
+                    lo |= (UInt64(1) << (i - 1))
+                end
+            end
+            for i in 65:m
+                if Y[i].mask[q]
+                    hi |= (UInt64(1) << (i - 65))
+                end
+            end
+            key = (lo, hi)
+            push!(get!(sigs, key, Int[]), q)
+        end
+        return collect(values(sigs))
+    else
+        # Fallback for very large Y: keep content-hashable tuple signatures.
+        sigs = Dict{Tuple{Vararg{Bool}}, Vector{Int}}()
+        @inbounds for q in 1:nvertices(Q)
+            key = ntuple(i -> Y[i].mask[q], m)
+            push!(get!(sigs, key, Int[]), q)
+        end
+        return collect(values(sigs))
     end
-    return collect(values(sigs))
 end
 
 # Build the partial order on regions: A <= B if exists a \in A, b \in B with a <= b in Q (Prop. 4.15),
@@ -2011,12 +2048,7 @@ build the uptight regions (Defs. 4.12 - 4.17), and return the finite encoding `p
 `poset_kind=:regions` returns a structured `RegionsPoset`, `:dense` materializes a `FinitePoset`.
 """
 function build_uptight_encoding_from_fringe(M::FiniteFringe.FringeModule;
-                                            poset_kind::Symbol = :regions,
-                                            opts::Union{FiniteFringeOptions,Nothing}=nothing)
-    if opts !== nothing
-        poset_kind == :regions || error("build_uptight_encoding_from_fringe: pass either poset_kind or opts, not both.")
-        poset_kind = opts.poset_kind
-    end
+                                            poset_kind::Symbol = :regions)
     Q = M.P
     Y = FiniteFringe.Upset[]
     append!(Y, M.U)
@@ -2037,9 +2069,7 @@ Prop. 4.11 (used in the proof of Thm. 6.12): pull back a monomial matrix for a m
 by replacing row labels `D_hat_j` with `pi^{-1}(D_hat_j)` and column labels `U_hat_i` with `pi^{-1}(U_hat_i)`.
 The scalar matrix is unchanged.
 """
-function pullback_fringe_along_encoding(Hhat::FiniteFringe.FringeModule, pi::EncodingMap;
-                                        opts::Union{FiniteFringeOptions,Nothing}=nothing)
-    opts === nothing || nothing
+function pullback_fringe_along_encoding(Hhat::FiniteFringe.FringeModule, pi::EncodingMap)
     UQ = [preimage_upset(pi, Uhat) for Uhat in Hhat.U]
     DQ = [preimage_downset(pi, Dhat) for Dhat in Hhat.D]
     FiniteFringe.FringeModule{eltype(Hhat.phi)}(pi.Q, UQ, DQ, Hhat.phi)
@@ -2054,9 +2084,7 @@ This sends each upset generator `U_i` of `H` to `image_upset(pi, U_i)` and each
 downset generator `D_j` to `image_downset(pi, D_j)`, while keeping the scalar matrix
 `phi` unchanged.
 """
-function pushforward_fringe_along_encoding(H::FiniteFringe.FringeModule, pi::EncodingMap;
-                                           opts::Union{FiniteFringeOptions,Nothing}=nothing)
-    opts === nothing || nothing
+function pushforward_fringe_along_encoding(H::FiniteFringe.FringeModule, pi::EncodingMap)
     Uhat = [image_upset(pi, U) for U in H.U]
     Dhat = [image_downset(pi, D) for D in H.D]
     FiniteFringe.FringeModule{eltype(H.phi)}(pi.P, Uhat, Dhat, H.phi)

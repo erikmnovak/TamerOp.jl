@@ -23,10 +23,7 @@ module PLBackend
 using ..FiniteFringe
 import ..FiniteFringe: AbstractPoset, nvertices
 import ..ZnEncoding: SignaturePoset
-using ..CoreModules: QQ, AbstractPLikeEncodingMap, EncodingOptions, CompiledEncoding
-
-@inline _resolve_encoding_opts(opts::Union{EncodingOptions,Nothing}) =
-    opts === nothing ? EncodingOptions() : opts
+using ..CoreModules: QQ, AbstractPLikeEncodingMap, EncodingOptions, CompiledEncoding, validate_pl_mode
 using Random
 using LinearAlgebra
 
@@ -492,7 +489,8 @@ compute the packed signature key and fall back to `pi.sig_to_region`.
 Returns `0` only in the ambiguous-boundary fallback when the signature does not
 match any full-dimensional region (a measure-zero situation).
 """
-function locate(pi::PLEncodingMapBoxes{N,MY,MZ}, x::AbstractVector{<:Real}) where {N,MY,MZ}
+function locate(pi::PLEncodingMapBoxes{N,MY,MZ}, x::AbstractVector{<:Real}; mode::Symbol=:fast) where {N,MY,MZ}
+    _ = validate_pl_mode(mode)
     length(x) == pi.n || error("locate: expected x of length $(pi.n), got $(length(x))")
     isempty(pi.cell_to_region) && error("locate: missing cell_to_region table; construct via encode_fringe_boxes")
 
@@ -506,7 +504,8 @@ end
 # Allocation-free tuple dispatch for point location.
 # Without this, CoreModules.locate(::AbstractPLikeEncodingMap, ::NTuple) falls back
 # to collect(x), which allocates (and breaks the @allocated == 0 tests).
-function locate(pi::PLEncodingMapBoxes{N,MY,MZ}, x::NTuple{N,T}) where {N,MY,MZ,T<:Real}
+function locate(pi::PLEncodingMapBoxes{N,MY,MZ}, x::NTuple{N,T}; mode::Symbol=:fast) where {N,MY,MZ,T<:Real}
+    _ = validate_pl_mode(mode)
     N == pi.n || error("locate: expected x of length $(pi.n), got $N")
     isempty(pi.cell_to_region) && error("locate: missing cell_to_region table; construct via encode_fringe_boxes")
 
@@ -566,9 +565,11 @@ Return region weights for a PLEncodingMapBoxes backend.
 function region_weights(pi::PLEncodingMapBoxes;
     box=nothing,
     strict::Bool=true,
+    mode::Symbol=:fast,
     return_info::Bool=false,
     alpha::Real=0.05
 )
+    _ = validate_pl_mode(mode)
     nregions = length(pi.sig_y)
 
     if box === nothing
@@ -1363,7 +1364,8 @@ This implementation uses the precomputed dense cell table (`pi.cell_to_region`)
 and does *not* recompute signatures per cell.
 """
 function region_adjacency(pi::PLEncodingMapBoxes;
-    box, strict::Bool=true)
+    box, strict::Bool=true, mode::Symbol=:fast)
+    _ = validate_pl_mode(mode)
 
     box === nothing && error("region_adjacency: box=(a,b) is required")
     a_in, b_in = box
@@ -1484,7 +1486,8 @@ The region is a union of axis-aligned grid cells. The boundary measure is the
 (n-1)-dimensional measure of the boundary of `(region r) cap box`. In 2D this is a
 perimeter, in 3D a surface area, etc.
 """
-function region_boundary_measure(pi::PLEncodingMapBoxes, r::Integer; box=nothing, strict::Bool=true)
+function region_boundary_measure(pi::PLEncodingMapBoxes, r::Integer; box=nothing, strict::Bool=true, mode::Symbol=:fast)
+    _ = validate_pl_mode(mode)
     box === nothing && error("region_boundary_measure: please provide box=(a,b)")
     a_in, b_in = box
     n = pi.n
@@ -1625,7 +1628,8 @@ Each entry has fields:
 
 This is intended for debugging/visualization; it may return many small patches.
 """
-function region_boundary_measure_breakdown(pi::PLEncodingMapBoxes, r::Integer; box=nothing, strict::Bool=true)
+function region_boundary_measure_breakdown(pi::PLEncodingMapBoxes, r::Integer; box=nothing, strict::Bool=true, mode::Symbol=:fast)
+    _ = validate_pl_mode(mode)
     box === nothing && error("region_boundary_measure_breakdown: please provide box=(a,b)")
     a_in, b_in = box
     n = pi.n
@@ -1894,7 +1898,6 @@ function encode_fringe_boxes(Ups::Vector{BoxUpset},
 
     cell_shape = _cell_shape(coords)
     cell_strides = _cell_strides(cell_shape)
-    shapeT = Tuple(cell_shape)
     n_cells = prod(cell_shape)
 
     n_cells <= max_regions || error("Too many grid cells (>$max_regions); increase opts.max_regions or reduce splits")
@@ -1912,29 +1915,101 @@ function encode_fringe_boxes(Ups::Vector{BoxUpset},
     sig_z = BitVector[]
     reps = Vector{NTuple{n,Float64}}()
 
-    cell_to_region = Vector{Int}(undef, n_cells)
-    LI = LinearIndices(shapeT)
+    # Precompute generator-threshold crossing events per axis boundary.
+    # When a slab index on axis `j` increments from `s` to `s+1`, only generators
+    # with threshold index `t == s+1` can change membership on that axis.
+    up_events = [Vector{Vector{Int}}(undef, length(coords[j])) for j in 1:n]
+    down_events = [Vector{Vector{Int}}(undef, length(coords[j])) for j in 1:n]
+    @inbounds for j in 1:n
+        kj = length(coords[j])
+        for t in 1:kj
+            up_events[j][t] = Int[]
+            down_events[j][t] = Int[]
+        end
+    end
+    @inbounds for i in 1:m
+        for j in 1:n
+            t = searchsortedfirst(coords[j], Ups[i].ell[j])
+            push!(up_events[j][t], i)
+        end
+    end
+    @inbounds for d in 1:r
+        for j in 1:n
+            t = searchsortedfirst(coords[j], Downs[d].u[j])
+            push!(down_events[j][t], d)
+        end
+    end
 
+    @inline _set_word_bit!(words::Vector{UInt64}, idx::Int) = begin
+        wi = ((idx - 1) >>> 6) + 1
+        bi = (idx - 1) & 0x3f
+        words[wi] |= (UInt64(1) << bi)
+        nothing
+    end
+    @inline _clear_word_bit!(words::Vector{UInt64}, idx::Int) = begin
+        wi = ((idx - 1) >>> 6) + 1
+        bi = (idx - 1) & 0x3f
+        words[wi] &= ~(UInt64(1) << bi)
+        nothing
+    end
+
+    sat_up = zeros(Int, m)      # number of satisfied upset axis constraints per generator
+    good_down = fill(n, r)      # number of satisfied downset axis constraints (x_j <= u_j) per generator
+    ywords_state = fill(UInt64(0), MY)
+    zwords_state = fill(UInt64(0), MZ)
+
+    # 0-based slab indices for current cell. Traversal uses axis-1-fast odometer order,
+    # matching Julia's column-major linearization of the Cartesian grid.
+    idx0 = zeros(Int, n)
     x = Vector{Float64}(undef, n)
+    @inbounds for j in 1:n
+        x[j] = _cell_rep_axis(coords[j], 0)
+    end
 
-    for I in CartesianIndices(shapeT)
-        @inbounds for j in 1:n
-            sj = I[j] - 1
-            cj = coords[j]
-            k = length(cj)
-            if k == 0
-                x[j] = 0.0
-            elseif sj == 0
-                x[j] = cj[1] - 1.0
-            elseif sj == k
-                x[j] = cj[end] + 1.0
-            else
-                x[j] = (cj[sj] + cj[sj + 1]) / 2.0
+    @inline function _apply_axis_inc!(axis::Int, boundary::Int)
+        evy = up_events[axis][boundary + 1]
+        @inbounds for t in eachindex(evy)
+            i = evy[t]
+            sat_up[i] += 1
+            if sat_up[i] == n
+                _set_word_bit!(ywords_state, i)
             end
         end
+        evz = down_events[axis][boundary + 1]
+        @inbounds for t in eachindex(evz)
+            d = evz[t]
+            good_down[d] -= 1
+            if good_down[d] == n - 1
+                _set_word_bit!(zwords_state, d)
+            end
+        end
+        return nothing
+    end
 
-        ywords = _pack_signature_words(Ups, x, n, Val(MY))
-        zwords = _pack_signature_words(Downs, x, n, Val(MZ))
+    @inline function _apply_axis_dec!(axis::Int, boundary::Int)
+        evy = up_events[axis][boundary + 1]
+        @inbounds for t in eachindex(evy)
+            i = evy[t]
+            if sat_up[i] == n
+                _clear_word_bit!(ywords_state, i)
+            end
+            sat_up[i] -= 1
+        end
+        evz = down_events[axis][boundary + 1]
+        @inbounds for t in eachindex(evz)
+            d = evz[t]
+            if good_down[d] == n - 1
+                _clear_word_bit!(zwords_state, d)
+            end
+            good_down[d] += 1
+        end
+        return nothing
+    end
+
+    cell_to_region = Vector{Int}(undef, n_cells)
+    @inline function _record_cell!(lin::Int)
+        ywords = ntuple(w -> ywords_state[w], MY)
+        zwords = ntuple(w -> zwords_state[w], MZ)
         key = SigKey{MY,MZ}(ywords, zwords)
 
         rid = get!(sig_to_region, key) do
@@ -1944,8 +2019,34 @@ function encode_fringe_boxes(Ups::Vector{BoxUpset},
             push!(reps, ntuple(i -> x[i], n))
             return new_id
         end
+        cell_to_region[lin] = rid
+        return nothing
+    end
 
-        cell_to_region[LI[I]] = rid
+    _record_cell!(1)
+    @inbounds for lin in 2:n_cells
+        axis = 1
+        while true
+            kj = length(coords[axis])
+            if idx0[axis] < kj
+                boundary = idx0[axis]
+                _apply_axis_inc!(axis, boundary)
+                idx0[axis] = boundary + 1
+                x[axis] = _cell_rep_axis(coords[axis], idx0[axis])
+                break
+            end
+
+            # Carry: reset this axis to 0 and restore signature state incrementally.
+            while idx0[axis] > 0
+                boundary = idx0[axis] - 1
+                _apply_axis_dec!(axis, boundary)
+                idx0[axis] -= 1
+            end
+            x[axis] = _cell_rep_axis(coords[axis], 0)
+            axis += 1
+            axis <= n || error("encode_fringe_boxes: internal cell traversal overflow")
+        end
+        _record_cell!(lin)
     end
 
     # Build the region poset on distinct signatures, and push the module to it.
@@ -1979,9 +2080,9 @@ end
 encode_fringe_boxes(Ups::Vector{BoxUpset},
                     Downs::Vector{BoxDownset},
                     Phi_in::AbstractMatrix{QQ};
-                    opts::Union{EncodingOptions,Nothing}=nothing,
+                    opts::EncodingOptions=EncodingOptions(),
                     poset_kind::Symbol = :signature) =
-    encode_fringe_boxes(Ups, Downs, Phi_in, _resolve_encoding_opts(opts); poset_kind = poset_kind)
+    encode_fringe_boxes(Ups, Downs, Phi_in, opts; poset_kind = poset_kind)
 
 
 # Convenience overload: Phi defaults to all-ones.
@@ -1997,9 +2098,9 @@ end
 
 encode_fringe_boxes(Ups::Vector{BoxUpset},
                     Downs::Vector{BoxDownset};
-                    opts::Union{EncodingOptions,Nothing}=nothing,
+                    opts::EncodingOptions=EncodingOptions(),
                     poset_kind::Symbol = :signature) =
-    encode_fringe_boxes(Ups, Downs, _resolve_encoding_opts(opts); poset_kind = poset_kind)
+    encode_fringe_boxes(Ups, Downs, opts; poset_kind = poset_kind)
 
 # Convenience overload: accept Phi as a length (r*m) vector.
 function encode_fringe_boxes(Ups::Vector{BoxUpset},
@@ -2017,9 +2118,9 @@ end
 encode_fringe_boxes(Ups::Vector{BoxUpset},
                     Downs::Vector{BoxDownset},
                     Phi_vec::AbstractVector{QQ};
-                    opts::Union{EncodingOptions,Nothing}=nothing,
+                    opts::EncodingOptions=EncodingOptions(),
                     poset_kind::Symbol = :signature) =
-    encode_fringe_boxes(Ups, Downs, Phi_vec, _resolve_encoding_opts(opts); poset_kind = poset_kind)
+    encode_fringe_boxes(Ups, Downs, Phi_vec, opts; poset_kind = poset_kind)
 
 # -----------------------------------------------------------------------------
 # CompiledEncoding forwarding (treat compiled encodings as primary)

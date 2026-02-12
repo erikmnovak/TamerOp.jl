@@ -351,11 +351,10 @@ coimage(f::PMorphism{K}; cache::Union{Nothing,CoverCache}=nothing) where {K} =
 
 Given a monomorphism iota : N -> M (typically an inclusion), compute the quotient module
 Q = M / N together with the projection q : M -> Q.
-
-This is an alias for `cokernel_with_projection(iota)`.
 """
 function quotient_with_projection(iota::PMorphism{K}; cache::Union{Nothing,CoverCache}=nothing) where {K}
-    return cokernel_with_projection(iota; cache=cache)
+    is_monomorphism(iota) || error("quotient_with_projection: expected a monomorphism (inclusion-like morphism)")
+    return _cokernel_module(iota; cache=cache)
 end
 
 """

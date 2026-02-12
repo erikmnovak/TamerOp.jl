@@ -1,0 +1,26 @@
+[fingerprint]
+blas_threads = 6
+cpu_name = "alderlake"
+julia_version = "1.12.1"
+schema_version = 1
+word_size = 64
+cpu_threads = 12
+os = "Linux"
+
+[meta]
+created_utc = "2026-02-10T18:52:56Z"
+schema_version = 1
+
+[thresholds]
+rankqq_dim_small_threshold = 4096
+fp_nemo_solve_threshold = 6144
+fp_nemo_nullspace_threshold = 1024
+float_sparse_svds_min_dim = 1024
+float_sparse_svds_min_nnz = 120000
+fp_nemo_rank_threshold = 4096
+modular_solve_threshold = 2400
+float_nullspace_svd_threshold = 25600
+nemo_threshold = 9216
+modular_nullspace_threshold = 3136
+modular_min_primes = 1
+modular_max_primes = 5

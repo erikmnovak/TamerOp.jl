@@ -19,9 +19,6 @@ using ..FiniteFringe: AbstractPoset, FinitePoset, ProductPoset, cover_edges, leq
                       downset_indices, upset_indices
 using ..Encoding: EncodingMap
 using ..CoreModules: AbstractCoeffField, RealField, ResolutionOptions, DerivedFunctorOptions, SessionCache
-
-@inline _resolve_df_opts(opts::Union{DerivedFunctorOptions,Nothing}) =
-    opts === nothing ? DerivedFunctorOptions() : opts
 using ..FieldLinAlg
 
 @inline function _eye(::Type{K}, n::Int) where {K}
@@ -1455,11 +1452,11 @@ function pushforward_left_complex(pi::EncodingMap, M::PModule{K}, df::DerivedFun
 end
 
 pushforward_left_complex(pi::EncodingMap, M::PModule{K};
-                         opts::Union{DerivedFunctorOptions,Nothing}=nothing,
+                         opts::DerivedFunctorOptions=DerivedFunctorOptions(),
                          check::Bool=true,
                          res=nothing,
                          threads::Bool = (Threads.nthreads() > 1)) where {K} =
-    pushforward_left_complex(pi, M, _resolve_df_opts(opts); check=check, res=res, threads=threads)
+    pushforward_left_complex(pi, M, opts; check=check, res=res, threads=threads)
 
 """
     Lpushforward_left(pi, M, df; check=true)
@@ -1481,10 +1478,10 @@ function Lpushforward_left(pi::EncodingMap, M::PModule{K}, df::DerivedFunctorOpt
 end
 
 Lpushforward_left(pi::EncodingMap, M::PModule{K};
-                  opts::Union{DerivedFunctorOptions,Nothing}=nothing,
+                  opts::DerivedFunctorOptions=DerivedFunctorOptions(),
                   check::Bool=true,
                   threads::Bool = (Threads.nthreads() > 1)) where {K} =
-    Lpushforward_left(pi, M, _resolve_df_opts(opts); check=check, threads=threads)
+    Lpushforward_left(pi, M, opts; check=check, threads=threads)
 
 derived_pushforward_left(pi::EncodingMap, M::PModule{K}, df::DerivedFunctorOptions;
                          check::Bool=true,
@@ -1492,10 +1489,10 @@ derived_pushforward_left(pi::EncodingMap, M::PModule{K}, df::DerivedFunctorOptio
     Lpushforward_left(pi, M, df; check=check, threads=threads)
 
 derived_pushforward_left(pi::EncodingMap, M::PModule{K};
-                         opts::Union{DerivedFunctorOptions,Nothing}=nothing,
+                         opts::DerivedFunctorOptions=DerivedFunctorOptions(),
                          check::Bool=true,
                          threads::Bool = (Threads.nthreads() > 1)) where {K} =
-    derived_pushforward_left(pi, M, _resolve_df_opts(opts); check=check, threads=threads)
+    derived_pushforward_left(pi, M, opts; check=check, threads=threads)
 
 """
     pushforward_left_complex(pi, f, df; check=true, res_dom=nothing, res_cod=nothing)
@@ -1557,12 +1554,12 @@ function pushforward_left_complex(pi::EncodingMap, f::PMorphism{K}, df::DerivedF
 end
 
 pushforward_left_complex(pi::EncodingMap, f::PMorphism{K};
-                         opts::Union{DerivedFunctorOptions,Nothing}=nothing,
+                         opts::DerivedFunctorOptions=DerivedFunctorOptions(),
                          check::Bool=true,
                          res_dom=nothing,
                          res_cod=nothing,
                          threads::Bool = (Threads.nthreads() > 1)) where {K} =
-    pushforward_left_complex(pi, f, _resolve_df_opts(opts);
+    pushforward_left_complex(pi, f, opts;
                              check=check, res_dom=res_dom, res_cod=res_cod, threads=threads)
 
 """
@@ -1592,12 +1589,12 @@ function Lpushforward_left(pi::EncodingMap, f::PMorphism{K}, df::DerivedFunctorO
 end
 
 Lpushforward_left(pi::EncodingMap, f::PMorphism{K};
-                  opts::Union{DerivedFunctorOptions,Nothing}=nothing,
+                  opts::DerivedFunctorOptions=DerivedFunctorOptions(),
                   check::Bool=true,
                   res_dom=nothing,
                   res_cod=nothing,
                   threads::Bool = (Threads.nthreads() > 1)) where {K} =
-    Lpushforward_left(pi, f, _resolve_df_opts(opts);
+    Lpushforward_left(pi, f, opts;
                       check=check, res_dom=res_dom, res_cod=res_cod, threads=threads)
 
 derived_pushforward_left(pi::EncodingMap, f::PMorphism{K}, df::DerivedFunctorOptions;
@@ -1606,10 +1603,10 @@ derived_pushforward_left(pi::EncodingMap, f::PMorphism{K}, df::DerivedFunctorOpt
     Lpushforward_left(pi, f, df; check=check, threads=threads)
 
 derived_pushforward_left(pi::EncodingMap, f::PMorphism{K};
-                         opts::Union{DerivedFunctorOptions,Nothing}=nothing,
+                         opts::DerivedFunctorOptions=DerivedFunctorOptions(),
                          check::Bool=true,
                          threads::Bool = (Threads.nthreads() > 1)) where {K} =
-    derived_pushforward_left(pi, f, _resolve_df_opts(opts); check=check, threads=threads)
+    derived_pushforward_left(pi, f, opts; check=check, threads=threads)
 
 
 """
@@ -1656,11 +1653,11 @@ function pushforward_right_complex(pi::EncodingMap, M::PModule{K}, df::DerivedFu
 end
 
 pushforward_right_complex(pi::EncodingMap, M::PModule{K};
-                          opts::Union{DerivedFunctorOptions,Nothing}=nothing,
+                          opts::DerivedFunctorOptions=DerivedFunctorOptions(),
                           check::Bool=true,
                           res=nothing,
                           threads::Bool = (Threads.nthreads() > 1)) where {K} =
-    pushforward_right_complex(pi, M, _resolve_df_opts(opts); check=check, res=res, threads=threads)
+    pushforward_right_complex(pi, M, opts; check=check, res=res, threads=threads)
 
 """
     Rpushforward_right(pi, M, df; check=true)
@@ -1682,10 +1679,10 @@ function Rpushforward_right(pi::EncodingMap, M::PModule{K}, df::DerivedFunctorOp
 end
 
 Rpushforward_right(pi::EncodingMap, M::PModule{K};
-                   opts::Union{DerivedFunctorOptions,Nothing}=nothing,
+                   opts::DerivedFunctorOptions=DerivedFunctorOptions(),
                    check::Bool=true,
                    threads::Bool = (Threads.nthreads() > 1)) where {K} =
-    Rpushforward_right(pi, M, _resolve_df_opts(opts); check=check, threads=threads)
+    Rpushforward_right(pi, M, opts; check=check, threads=threads)
 
 derived_pushforward_right(pi::EncodingMap, M::PModule{K}, df::DerivedFunctorOptions;
                           check::Bool=true,
@@ -1693,10 +1690,10 @@ derived_pushforward_right(pi::EncodingMap, M::PModule{K}, df::DerivedFunctorOpti
     Rpushforward_right(pi, M, df; check=check, threads=threads)
 
 derived_pushforward_right(pi::EncodingMap, M::PModule{K};
-                          opts::Union{DerivedFunctorOptions,Nothing}=nothing,
+                          opts::DerivedFunctorOptions=DerivedFunctorOptions(),
                           check::Bool=true,
                           threads::Bool = (Threads.nthreads() > 1)) where {K} =
-    derived_pushforward_right(pi, M, _resolve_df_opts(opts); check=check, threads=threads)
+    derived_pushforward_right(pi, M, opts; check=check, threads=threads)
     
 """
     pushforward_right_complex(pi, f, df; check=true, res_dom=nothing, res_cod=nothing)
@@ -1751,12 +1748,12 @@ function pushforward_right_complex(pi::EncodingMap, f::PMorphism{K}, df::Derived
 end
 
 pushforward_right_complex(pi::EncodingMap, f::PMorphism{K};
-                          opts::Union{DerivedFunctorOptions,Nothing}=nothing,
+                          opts::DerivedFunctorOptions=DerivedFunctorOptions(),
                           check::Bool=true,
                           res_dom=nothing,
                           res_cod=nothing,
                           threads::Bool = (Threads.nthreads() > 1)) where {K} =
-    pushforward_right_complex(pi, f, _resolve_df_opts(opts);
+    pushforward_right_complex(pi, f, opts;
                               check=check, res_dom=res_dom, res_cod=res_cod, threads=threads)
 
 
@@ -1787,12 +1784,12 @@ function Rpushforward_right(pi::EncodingMap, f::PMorphism{K}, df::DerivedFunctor
 end
 
 Rpushforward_right(pi::EncodingMap, f::PMorphism{K};
-                   opts::Union{DerivedFunctorOptions,Nothing}=nothing,
+                   opts::DerivedFunctorOptions=DerivedFunctorOptions(),
                    check::Bool=true,
                    res_dom=nothing,
                    res_cod=nothing,
                    threads::Bool = (Threads.nthreads() > 1)) where {K} =
-    Rpushforward_right(pi, f, _resolve_df_opts(opts);
+    Rpushforward_right(pi, f, opts;
                        check=check, res_dom=res_dom, res_cod=res_cod, threads=threads)
 
 derived_pushforward_right(pi::EncodingMap, f::PMorphism{K}, df::DerivedFunctorOptions;
@@ -1801,10 +1798,10 @@ derived_pushforward_right(pi::EncodingMap, f::PMorphism{K}, df::DerivedFunctorOp
     Rpushforward_right(pi, f, df; check=check, threads=threads)
 
 derived_pushforward_right(pi::EncodingMap, f::PMorphism{K};
-                          opts::Union{DerivedFunctorOptions,Nothing}=nothing,
+                          opts::DerivedFunctorOptions=DerivedFunctorOptions(),
                           check::Bool=true,
                           threads::Bool = (Threads.nthreads() > 1)) where {K} =
-    derived_pushforward_right(pi, f, _resolve_df_opts(opts); check=check, threads=threads)
+    derived_pushforward_right(pi, f, opts; check=check, threads=threads)
 
 # -----------------------------------------------------------------------------
 # Helpers: morphisms between direct sums of principal upsets (projectives)
@@ -1844,6 +1841,19 @@ function _pmorphism_from_upset_coeff(dom::PModule{K}, cod::PModule{K},
     Q = dom.Q
     @assert Q === cod.Q
 
+    @inline function _gather_component_matrix(rows::Vector{Int}, cols::Vector{Int})
+        nr = length(rows)
+        nc = length(cols)
+        M = Matrix{K}(undef, nr, nc)
+        @inbounds for j in 1:nc
+            cj = cols[j]
+            for i in 1:nr
+                M[i, j] = C[rows[i], cj]
+            end
+        end
+        return M
+    end
+
     act_dom = _active_upset_indices_from_bases(Q, dom_bases)
     act_cod = _active_upset_indices_from_bases(Q, cod_bases)
 
@@ -1851,11 +1861,7 @@ function _pmorphism_from_upset_coeff(dom::PModule{K}, cod::PModule{K},
     for u in 1:nvertices(Q)
         rows = act_cod[u]
         cols = act_dom[u]
-        if isempty(rows) || isempty(cols)
-            comps[u] = zeros(K, length(rows), length(cols))
-        else
-            comps[u] = Matrix(C[rows, cols])
-        end
+        comps[u] = _gather_component_matrix(rows, cols)
     end
     return PMorphism(dom, cod, comps)
 end

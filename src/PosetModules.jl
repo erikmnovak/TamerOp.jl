@@ -132,6 +132,8 @@ using .Serialization: save_flange_json, load_flange_json,
                       parse_flange_json, flange_from_m2,
                       save_mpp_decomposition_json, load_mpp_decomposition_json,
                       save_mpp_image_json, load_mpp_image_json,
+                      TAMER_FEATURE_SCHEMA_VERSION,
+                      feature_schema_header, validate_feature_metadata_schema,
                       save_dataset_json, load_dataset_json,
                       save_pipeline_json, load_pipeline_json,
                       load_gudhi_json, load_ripserer_json, load_eirene_json,
@@ -149,9 +151,31 @@ using .CoreModules: PointCloud, ImageNd, GraphData, EmbeddedPlanarGraph2D, Grade
 using .Workflow: poset_from_axes, fringe_presentation, flange_presentation,
     encode, coarsen, resolve, hom, ext, tor, ext_algebra, invariant, invariants,
     rhom, derived_tensor, hyperext, hypertor,
-    rank_invariant, restricted_hilbert, euler_surface, ecc,
+    rank_invariant, restricted_hilbert, euler_surface,
     slice_barcode, slice_barcodes, matching_distance,
-    mp_landscape, mpp_decomposition, mpp_image
+    mp_landscape, mpp_decomposition, mpp_image,
+    AbstractFeaturizerSpec, PersistenceImageSpec, LandscapeSpec, EulerSurfaceSpec,
+    RankGridSpec, SlicedBarcodeSpec, SignedBarcodeImageSpec, ProjectedDistancesSpec,
+    CompositeSpec, AbstractInvariantCache, ModuleInvariantCache, RestrictedHilbertInvariantCache, EncodingInvariantCache,
+    BatchOptions,
+    ExperimentIOConfig, ExperimentSpec, ExperimentArtifact, ExperimentResult,
+    LoadedExperimentArtifact, LoadedExperimentResult,
+    FeatureSet, FeatureSetWideTable, FeatureSetLongTable,
+    EulerSurfaceLongTable, PersistenceImageLongTable, MPLandscapeLongTable, PointSignedMeasureLongTable,
+    feature_table, euler_surface_table, persistence_image_table, mp_landscape_table, point_signed_measure_table,
+    feature_names, feature_axes, nfeatures, supports, build_cache, cache_stats, transform, transform!, featurize,
+    batch_transform, batch_transform!,
+    mp_landscape_kernel_object, projected_kernel_object, mpp_image_kernel_object,
+    point_signed_measure_kernel_object, rectangle_signed_barcode_kernel_object,
+    matching_distance_metric, mp_landscape_distance_metric, projected_distance_metric,
+    bottleneck_distance_metric, wasserstein_distance_metric, mpp_image_distance_metric,
+    feature_metadata, default_feature_metadata_path, save_metadata_json, load_metadata_json,
+    spec_from_metadata, load_spec_with_resolver, invariant_options_from_metadata,
+    save_features, load_features,
+    save_features_arrow, load_features_arrow, save_features_parquet, load_features_parquet,
+    save_features_npz, load_features_npz, save_features_csv, load_features_csv,
+    nsamples, asrowmajor, ascolmajor,
+    TAMER_EXPERIMENT_SCHEMA_VERSION, run_experiment, load_experiment
 
 # Tables are often the default thing users want to see for resolutions.
 using .DerivedFunctors: betti_table, bass_table, HomSystemCache, clear_hom_system_cache!
@@ -162,14 +186,7 @@ using .ModuleComplexes: ModuleCochainComplex
 
 using .DerivedFunctors.GradedSpaces: degree_range, dim, basis, coordinates, representative
 
-using .Invariants: slice_chain, slice_chain_exact_2d
-
-@inline _resolve_encoding_opts(opts::Union{EncodingOptions,Nothing}) =
-    opts === nothing ? EncodingOptions() : opts
-@inline _resolve_resolution_opts(opts::Union{ResolutionOptions,Nothing}) =
-    opts === nothing ? ResolutionOptions() : opts
-@inline _resolve_invariant_opts(opts::Union{InvariantOptions,Nothing}) =
-    opts === nothing ? InvariantOptions() : opts
+using .Invariants: slice_chain, slice_chain_exact_2d, SliceSpec, collect_slices, save_slices_json, load_slices_json
 
 # -----------------------------------------------------------------------------
 # Stable public exports
@@ -198,6 +215,7 @@ export
        # Narrative workflow entrypoints
        encode, coarsen, resolve, hom, ext, tor, ext_algebra, invariant, invariants,
        slice_chain, slice_chain_exact_2d,
+       SliceSpec, collect_slices, save_slices_json, load_slices_json,
 
        # Accessors (EncodingResult)
        poset, pmodule, classifier, backend, presentation,
@@ -251,9 +269,34 @@ export
        betti_table, bass_table,
 
        # Curated invariants
-       rank_invariant, restricted_hilbert, euler_surface, ecc,
+       rank_invariant, restricted_hilbert, euler_surface,
        slice_barcode, slice_barcodes, matching_distance,
        mp_landscape, mpp_decomposition, mpp_image,
+
+       # Statistics transition: typed featurizers + batch featurization
+       AbstractFeaturizerSpec, PersistenceImageSpec, LandscapeSpec, EulerSurfaceSpec,
+       RankGridSpec, SlicedBarcodeSpec, SignedBarcodeImageSpec, ProjectedDistancesSpec,
+       CompositeSpec, AbstractInvariantCache, ModuleInvariantCache, RestrictedHilbertInvariantCache, EncodingInvariantCache,
+       BatchOptions,
+       ExperimentIOConfig, ExperimentSpec, ExperimentArtifact, ExperimentResult,
+       LoadedExperimentArtifact, LoadedExperimentResult,
+       FeatureSet, FeatureSetWideTable, FeatureSetLongTable,
+       EulerSurfaceLongTable, PersistenceImageLongTable, MPLandscapeLongTable, PointSignedMeasureLongTable,
+       feature_table, euler_surface_table, persistence_image_table, mp_landscape_table, point_signed_measure_table,
+       TAMER_EXPERIMENT_SCHEMA_VERSION, run_experiment, load_experiment,
+       TAMER_FEATURE_SCHEMA_VERSION, feature_names, feature_axes, nfeatures, supports, build_cache, cache_stats,
+       transform, transform!, featurize, batch_transform, batch_transform!,
+       mp_landscape_kernel_object, projected_kernel_object, mpp_image_kernel_object,
+       point_signed_measure_kernel_object, rectangle_signed_barcode_kernel_object,
+       matching_distance_metric, mp_landscape_distance_metric, projected_distance_metric,
+       bottleneck_distance_metric, wasserstein_distance_metric, mpp_image_distance_metric,
+       feature_schema_header, validate_feature_metadata_schema,
+       feature_metadata, default_feature_metadata_path, save_metadata_json, load_metadata_json,
+       spec_from_metadata, load_spec_with_resolver, invariant_options_from_metadata,
+       save_features, load_features,
+       save_features_arrow, load_features_arrow, save_features_parquet, load_features_parquet,
+       save_features_npz, load_features_npz, save_features_csv, load_features_csv,
+       nsamples, asrowmajor, ascolmajor,
 
        # Backend introspection
        has_polyhedra_backend, available_pl_backends, supports_pl_backend, choose_pl_backend

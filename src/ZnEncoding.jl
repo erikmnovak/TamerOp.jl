@@ -3,11 +3,9 @@ module ZnEncoding
 using LinearAlgebra
 using SparseArrays
 using Random
+using Base.Threads
 
 using ..CoreModules: AbstractPLikeEncodingMap, EncodingOptions, AbstractCoeffField, coeff_type, CompiledEncoding
-
-@inline _resolve_encoding_opts(opts::Union{EncodingOptions,Nothing}) =
-    opts === nothing ? EncodingOptions() : opts
 using ..Stats: _wilson_interval
 
 import ..CoreModules: locate, dimension, representatives, axes_from_encoding
@@ -43,11 +41,565 @@ function grid_poset(a::NTuple{N,Int}, b::NTuple{N,Int}) where {N}
     return Q, coords
 end
 
+##############################
+# Packed signature keys
+##############################
+
+"""
+    SigKey{MY,MZ}
+
+Packed key for (y,z)-signature lookup in `ZnEncodingMap`.
+"""
+struct SigKey{MY,MZ}
+    y::NTuple{MY,UInt64}
+    z::NTuple{MZ,UInt64}
+end
+
+@inline function _pack_signature_words(flats::Vector{IndFlat{N}},
+                                       g::Union{AbstractVector{<:Integer},NTuple{N,<:Integer}},
+                                       ::Val{MY}) where {N,MY}
+    m = length(flats)
+    return ntuple(w -> begin
+        word = UInt64(0)
+        base = (w - 1) * 64
+        @inbounds for j in 1:64
+            i = base + j
+            i > m && break
+            if in_flat(flats[i], g)
+                word |= (UInt64(1) << (j - 1))
+            end
+        end
+        word
+    end, MY)
+end
+
+@inline function _pack_signature_words(injectives::Vector{IndInj{N}},
+                                       g::Union{AbstractVector{<:Integer},NTuple{N,<:Integer}},
+                                       ::Val{MZ}) where {N,MZ}
+    r = length(injectives)
+    return ntuple(w -> begin
+        word = UInt64(0)
+        base = (w - 1) * 64
+        @inbounds for j in 1:64
+            i = base + j
+            i > r && break
+            if !in_inj(injectives[i], g)
+                word |= (UInt64(1) << (j - 1))
+            end
+        end
+        word
+    end, MZ)
+end
+
+@inline function _pack_bitvector_words(sig::BitVector, ::Val{MW}) where {MW}
+    len = length(sig)
+    return ntuple(w -> begin
+        word = UInt64(0)
+        base = (w - 1) * 64
+        @inbounds for j in 1:64
+            i = base + j
+            i > len && break
+            if sig[i]
+                word |= (UInt64(1) << (j - 1))
+            end
+        end
+        word
+    end, MW)
+end
+
+@inline function _sigkey_from_bitvectors(y::BitVector, z::BitVector, ::Val{MY}, ::Val{MZ}) where {MY,MZ}
+    SigKey{MY,MZ}(_pack_bitvector_words(y, Val(MY)),
+                  _pack_bitvector_words(z, Val(MZ)))
+end
+
+@inline function _sigkey_at(g::Union{AbstractVector{<:Integer},NTuple{N,<:Integer}},
+                            flats::Vector{IndFlat{N}},
+                            injectives::Vector{IndInj{N}},
+                            ::Val{MY},
+                            ::Val{MZ}) where {N,MY,MZ}
+    return SigKey{MY,MZ}(_pack_signature_words(flats, g, Val(MY)),
+                         _pack_signature_words(injectives, g, Val(MZ)))
+end
+
+@inline function _set_sigword_bit!(words::Vector{UInt64}, idx::Int, value::Bool)
+    w = (idx - 1) >>> 6
+    b = UInt64(1) << ((idx - 1) & 63)
+    pos = w + 1
+    if value
+        words[pos] |= b
+    else
+        words[pos] &= ~b
+    end
+    return nothing
+end
+
+@inline function _sigkey_from_words(y_words::Vector{UInt64},
+                                    z_words::Vector{UInt64},
+                                    ::Val{MY},
+                                    ::Val{MZ}) where {MY,MZ}
+    return SigKey{MY,MZ}(ntuple(i -> y_words[i], Val(MY)),
+                         ntuple(i -> z_words[i], Val(MZ)))
+end
+
+function _bitvector_from_words(words::Vector{UInt64}, len::Int)
+    out = falses(len)
+    @inbounds for idx in 1:len
+        w = (idx - 1) >>> 6
+        b = UInt64(1) << ((idx - 1) & 63)
+        out[idx] = (words[w + 1] & b) != 0
+    end
+    return out
+end
+
+function _build_signature_events(coords::NTuple{N,Vector{Int}},
+                                 flats::Vector{IndFlat{N}},
+                                 injectives::Vector{IndInj{N}}) where {N}
+    flat_events = [ [Int[] for _ in 1:length(coords[i])] for i in 1:N ]
+    inj_events  = [ [Int[] for _ in 1:length(coords[i])] for i in 1:N ]
+
+    @inbounds for (fidx, F) in enumerate(flats)
+        for i in 1:N
+            F.tau.coords[i] && continue
+            ci = coords[i]
+            t = searchsortedfirst(ci, F.b[i])
+            if t <= length(ci) && ci[t] == F.b[i]
+                push!(flat_events[i][t], fidx)
+            end
+        end
+    end
+
+    @inbounds for (jidx, E) in enumerate(injectives)
+        for i in 1:N
+            E.tau.coords[i] && continue
+            ci = coords[i]
+            thr = E.b[i] + 1
+            t = searchsortedfirst(ci, thr)
+            if t <= length(ci) && ci[t] == thr
+                push!(inj_events[i][t], jidx)
+            end
+        end
+    end
+
+    return flat_events, inj_events
+end
+
+@inline function _apply_signature_step!(axis::Int, old_s::Int, new_s::Int,
+                                        flat_events,
+                                        inj_events,
+                                        flat_unsat::Vector{Int},
+                                        inj_viol::Vector{Int},
+                                        y_words::Vector{UInt64},
+                                        z_words::Vector{UInt64})
+    @boundscheck abs(new_s - old_s) == 1 || error("_apply_signature_step!: expected adjacent slab indices")
+    if new_s > old_s
+        # Crossing threshold index `new_s` upward.
+        t = new_s
+        @inbounds for f in flat_events[axis][t]
+            flat_unsat[f] -= 1
+            if flat_unsat[f] == 0
+                _set_sigword_bit!(y_words, f, true)
+            end
+        end
+        @inbounds for j in inj_events[axis][t]
+            inj_viol[j] += 1
+            if inj_viol[j] == 1
+                _set_sigword_bit!(z_words, j, true)
+            end
+        end
+    else
+        # Crossing threshold index `old_s` downward.
+        t = old_s
+        @inbounds for f in flat_events[axis][t]
+            was_active = flat_unsat[f] == 0
+            flat_unsat[f] += 1
+            if was_active
+                _set_sigword_bit!(y_words, f, false)
+            end
+        end
+        @inbounds for j in inj_events[axis][t]
+            inj_viol[j] -= 1
+            if inj_viol[j] == 0
+                _set_sigword_bit!(z_words, j, false)
+            end
+        end
+    end
+    return nothing
+end
+
+function _collect_signatures_incremental(coords::NTuple{N,Vector{Int}},
+                                         flats::Vector{IndFlat{N}},
+                                         injectives::Vector{IndInj{N}},
+                                         max_regions::Int,
+                                         ::Val{MY},
+                                         ::Val{MZ}) where {N,MY,MZ}
+    m = length(flats)
+    r = length(injectives)
+
+    flat_events, inj_events = _build_signature_events(coords, flats, injectives)
+    shape = ntuple(i -> length(coords[i]) + 1, N)
+    strides_vec = Vector{Int}(undef, N)
+    strides_vec[1] = 1
+    @inbounds for i in 2:N
+        strides_vec[i] = strides_vec[i - 1] * shape[i - 1]
+    end
+    strides = ntuple(i -> strides_vec[i], N)
+    total_cells = strides_vec[N] * shape[N]
+    # Avoid pathological memory blow-ups on very large grids; dict fallback remains available.
+    max_lookup_cells = max(1_000_000, 16 * max_regions)
+    cell_to_region = total_cells <= max_lookup_cells ? fill(0, total_cells) : nothing
+
+    digits = zeros(Int, N)
+    dirs = ones(Int, N)
+    gvals = Vector{Int}(undef, N)
+    lin_idx = 1
+    @inbounds for i in 1:N
+        gvals[i] = _slab_rep(coords[i], 0)
+    end
+
+    flat_unsat = zeros(Int, m)
+    @inbounds for fidx in 1:m
+        F = flats[fidx]
+        c = 0
+        for i in 1:N
+            F.tau.coords[i] && continue
+            c += (gvals[i] < F.b[i]) ? 1 : 0
+        end
+        flat_unsat[fidx] = c
+    end
+
+    inj_viol = zeros(Int, r)
+    @inbounds for jidx in 1:r
+        E = injectives[jidx]
+        c = 0
+        for i in 1:N
+            E.tau.coords[i] && continue
+            c += (gvals[i] >= E.b[i] + 1) ? 1 : 0
+        end
+        inj_viol[jidx] = c
+    end
+
+    y_words = zeros(UInt64, MY)
+    z_words = zeros(UInt64, MZ)
+    @inbounds for fidx in 1:m
+        if flat_unsat[fidx] == 0
+            _set_sigword_bit!(y_words, fidx, true)
+        end
+    end
+    @inbounds for jidx in 1:r
+        if inj_viol[jidx] > 0
+            _set_sigword_bit!(z_words, jidx, true)
+        end
+    end
+
+    seen = Dict{SigKey{MY,MZ},Int}()
+    sig_y = BitVector[]
+    sig_z = BitVector[]
+    reps  = Vector{NTuple{N,Int}}()
+
+    function _record_state!()
+        key = _sigkey_from_words(y_words, z_words, Val(MY), Val(MZ))
+        rid = get(seen, key, 0)
+        if rid == 0
+            push!(sig_y, _bitvector_from_words(y_words, m))
+            push!(sig_z, _bitvector_from_words(z_words, r))
+            push!(reps, ntuple(i -> gvals[i], N))
+            rid = length(sig_y)
+            seen[key] = rid
+            if length(sig_y) > max_regions
+                error("encode_poset_from_flanges: exceeded max_regions=$max_regions")
+            end
+        end
+        if cell_to_region !== nothing
+            @inbounds cell_to_region[lin_idx] = rid
+        end
+    end
+
+    _record_state!()
+    while true
+        changed_axis = 0
+        @inbounds for axis in 1:N
+            nxt = digits[axis] + dirs[axis]
+            if 0 <= nxt < shape[axis]
+                old = digits[axis]
+                digits[axis] = nxt
+                _apply_signature_step!(axis, old, nxt, flat_events, inj_events,
+                                       flat_unsat, inj_viol, y_words, z_words)
+                gvals[axis] = _slab_rep(coords[axis], nxt)
+                lin_idx += (nxt - old) * strides[axis]
+                changed_axis = axis
+                if axis > 1
+                    for j in 1:(axis - 1)
+                        dirs[j] = -dirs[j]
+                    end
+                end
+                break
+            end
+        end
+        changed_axis == 0 && break
+        _record_state!()
+    end
+
+    return sig_y, sig_z, reps, seen, shape, strides, cell_to_region
+end
+
+@inline function _insert_sorted_unique!(v::Vector{Int}, x::Int)
+    p = searchsortedfirst(v, x)
+    if p > length(v) || v[p] != x
+        insert!(v, p, x)
+    end
+    return nothing
+end
+
+@inline function _remove_sorted_existing!(v::Vector{Int}, x::Int)
+    p = searchsortedfirst(v, x)
+    if p <= length(v) && v[p] == x
+        deleteat!(v, p)
+    end
+    return nothing
+end
+
+@inline function _assign_vec!(dst::Vector{Int}, src::Vector{Int})
+    resize!(dst, length(src))
+    copyto!(dst, src)
+    return dst
+end
+
+@inline function _sorted_diff!(added::Vector{Int},
+                               removed::Vector{Int},
+                               oldv::Vector{Int},
+                               newv::Vector{Int})
+    empty!(added)
+    empty!(removed)
+    i = 1
+    j = 1
+    nold = length(oldv)
+    nnew = length(newv)
+    @inbounds while i <= nold && j <= nnew
+        a = oldv[i]
+        b = newv[j]
+        if a == b
+            i += 1
+            j += 1
+        elseif a < b
+            push!(removed, a)
+            i += 1
+        else
+            push!(added, b)
+            j += 1
+        end
+    end
+    @inbounds while i <= nold
+        push!(removed, oldv[i])
+        i += 1
+    end
+    @inbounds while j <= nnew
+        push!(added, newv[j])
+        j += 1
+    end
+    return nothing
+end
+
+@inline function _sorted_disjoint(a::Vector{Int}, b::Vector{Int})
+    i = 1
+    j = 1
+    na = length(a)
+    nb = length(b)
+    @inbounds while i <= na && j <= nb
+        ai = a[i]
+        bj = b[j]
+        if ai == bj
+            return false
+        elseif ai < bj
+            i += 1
+        else
+            j += 1
+        end
+    end
+    return true
+end
+
+function _merge_sorted_unique(a::Vector{Int}, b::Vector{Int})
+    out = Vector{Int}(undef, length(a) + length(b))
+    i = 1
+    j = 1
+    k = 0
+    na = length(a)
+    nb = length(b)
+    @inbounds while i <= na && j <= nb
+        ai = a[i]
+        bj = b[j]
+        if ai == bj
+            k += 1
+            out[k] = ai
+            i += 1
+            j += 1
+        elseif ai < bj
+            k += 1
+            out[k] = ai
+            i += 1
+        else
+            k += 1
+            out[k] = bj
+            j += 1
+        end
+    end
+    @inbounds while i <= na
+        k += 1
+        out[k] = a[i]
+        i += 1
+    end
+    @inbounds while j <= nb
+        k += 1
+        out[k] = b[j]
+        j += 1
+    end
+    resize!(out, k)
+    return out
+end
+
+function _build_box_membership_events(flats::Vector{IndFlat{N}},
+                                      injectives::Vector{IndInj{N}},
+                                      a::NTuple{N,Int},
+                                      lens::NTuple{N,Int}) where {N}
+    flat_fwd = [ [Int[] for _ in 1:lens[i]] for i in 1:N ]
+    flat_bwd = [ [Int[] for _ in 1:lens[i]] for i in 1:N ]
+    inj_fwd  = [ [Int[] for _ in 1:lens[i]] for i in 1:N ]
+    inj_bwd  = [ [Int[] for _ in 1:lens[i]] for i in 1:N ]
+
+    @inbounds for (fidx, F) in enumerate(flats)
+        for i in 1:N
+            F.tau.coords[i] && continue
+            # forward: x -> x+1 activates at x+1 == b  => old digit = b-a-1
+            df = F.b[i] - a[i] - 1
+            if 0 <= df < lens[i] - 1
+                push!(flat_fwd[i][df + 1], fidx)
+            end
+            # backward: x -> x-1 deactivates at x == b => old digit = b-a
+            db = F.b[i] - a[i]
+            if 1 <= db <= lens[i] - 1
+                push!(flat_bwd[i][db + 1], fidx)
+            end
+        end
+    end
+
+    @inbounds for (jidx, E) in enumerate(injectives)
+        for i in 1:N
+            E.tau.coords[i] && continue
+            # forward: x -> x+1 violates at x == b      => old digit = b-a
+            df = E.b[i] - a[i]
+            if 0 <= df < lens[i] - 1
+                push!(inj_fwd[i][df + 1], jidx)
+            end
+            # backward: x -> x-1 unviolates at x == b+1 => old digit = b-a+1
+            db = E.b[i] - a[i] + 1
+            if 1 <= db <= lens[i] - 1
+                push!(inj_bwd[i][db + 1], jidx)
+            end
+        end
+    end
+
+    return flat_fwd, flat_bwd, inj_fwd, inj_bwd
+end
+
+mutable struct _BoxBasisEntry{K}
+    id::Int
+    row_words::Vector{UInt64}
+    col_words::Vector{UInt64}
+    rows::Vector{Int}
+    cols::Vector{Int}
+    basis_cols::Vector{Int}
+    coeffs::Union{Nothing,Matrix{K}}
+    B::Matrix{K}
+    dim::Int
+end
+
+"""
+    ZnBoxBasisCache{K}
+
+Reusable basis cache for repeated `pmodule_on_box` calls on the same flange.
+This is a power-user hook; pass via `pmodule_on_box(...; cache=...)`.
+"""
+mutable struct ZnBoxBasisCache{K}
+    flange_key::UInt64
+    basis_cache::Dict{UInt64, Vector{_BoxBasisEntry{K}}}
+    transition_cache::Dict{Tuple{Int,Int}, Matrix{K}}
+    next_entry_id::Int
+    basis_cache_hits::Int
+    basis_cache_misses::Int
+    incremental_refinements::Int
+    full_basis_recomputes::Int
+    transition_cache_hits::Int
+    transition_cache_misses::Int
+    sparse_transition_solves::Int
+    dense_transition_solves::Int
+end
+
+ZnBoxBasisCache{K}() where {K} = ZnBoxBasisCache{K}(0x0,
+                                                    Dict{UInt64, Vector{_BoxBasisEntry{K}}}(),
+                                                    Dict{Tuple{Int,Int}, Matrix{K}}(),
+                                                    1,
+                                                    0, 0, 0, 0, 0, 0, 0, 0)
+
+@inline function _flange_fingerprint(FG::Flange)
+    h = hash(FG.n)
+    @inbounds for F in FG.flats
+        h = hash(_flat_key(F), h)
+    end
+    @inbounds for E in FG.injectives
+        h = hash(_inj_key(E), h)
+    end
+    h = hash(size(FG.phi), h)
+    return UInt64(h)
+end
+
+function compile_zn_box_cache(FG::Flange{K}) where {K}
+    return ZnBoxBasisCache{K}(_flange_fingerprint(FG),
+                              Dict{UInt64, Vector{_BoxBasisEntry{K}}}(),
+                              Dict{Tuple{Int,Int}, Matrix{K}}(),
+                              1,
+                              0, 0, 0, 0, 0, 0, 0, 0)
+end
+
+"""
+    box_cache_stats(cache::ZnBoxBasisCache)
+
+Return a compact summary of `ZnBoxBasisCache` utilization counters and sizes.
+Useful for profiling scripts that call `pmodule_on_box(...; cache=...)` repeatedly.
+"""
+function box_cache_stats(cache::ZnBoxBasisCache)
+    basis_entries = 0
+    @inbounds for bucket in values(cache.basis_cache)
+        basis_entries += length(bucket)
+    end
+    btot = cache.basis_cache_hits + cache.basis_cache_misses
+    ttot = cache.transition_cache_hits + cache.transition_cache_misses
+    return (
+        flange_key = cache.flange_key,
+        basis_buckets = length(cache.basis_cache),
+        basis_entries = basis_entries,
+        transition_entries = length(cache.transition_cache),
+        next_entry_id = cache.next_entry_id,
+        basis_cache_hits = cache.basis_cache_hits,
+        basis_cache_misses = cache.basis_cache_misses,
+        basis_hit_rate = btot == 0 ? 0.0 : cache.basis_cache_hits / btot,
+        incremental_refinements = cache.incremental_refinements,
+        full_basis_recomputes = cache.full_basis_recomputes,
+        transition_cache_hits = cache.transition_cache_hits,
+        transition_cache_misses = cache.transition_cache_misses,
+        transition_hit_rate = ttot == 0 ? 0.0 : cache.transition_cache_hits / ttot,
+        sparse_transition_solves = cache.sparse_transition_solves,
+        dense_transition_solves = cache.dense_transition_solves,
+    )
+end
+
 # Construct the PModule on the grid box induced by a flange presentation:
 # M_g = im(Phi_g : F_g -> E_g), and maps are induced from the E-structure maps (projections).
 #
 # This returns a PModule over the finite grid poset. It is the object you want for Ext/Tor on that layer.
-function pmodule_on_box(FG::Flange{K}; a::NTuple{N,Int}, b::NTuple{N,Int}) where {K,N}
+function pmodule_on_box(FG::Flange{K};
+                        a::NTuple{N,Int},
+                        b::NTuple{N,Int},
+                        cache::Union{Nothing,ZnBoxBasisCache{K}}=nothing) where {K,N}
     Q, coords = grid_poset(a, b)
     ncoords = length(coords)
 
@@ -55,56 +607,329 @@ function pmodule_on_box(FG::Flange{K}; a::NTuple{N,Int}, b::NTuple{N,Int}) where
     c = length(FG.flats)
     Phi = FG.phi
     field = FG.field
+    lens = ntuple(i -> b[i] - a[i] + 1, N)
 
-    # For each vertex, compute:
-    # - active injectives (rows) in E_g
-    # - active flats (cols) in F_g
-    # - B_g = basis matrix for im(Phi_g) inside E_g coordinates
+    # For each vertex, store active injective rows and image basis B_g.
     active_rows = Vector{Vector{Int}}(undef, ncoords)
     B = Vector{Matrix{K}}(undef, ncoords)
     dims = zeros(Int, ncoords)
 
-    @inbounds for i in 1:ncoords
-        g = coords[i]
+    row_words_len = max(1, cld(r, 64))
+    col_words_len = max(1, cld(c, 64))
 
-        rows = Int[]
-        for rr in 1:r
-            if in_inj(FG.injectives[rr], g)
-                push!(rows, rr)
-            end
+    flat_fwd, flat_bwd, inj_fwd, inj_bwd = _build_box_membership_events(
+        FG.flats, FG.injectives, a, lens
+    )
+
+    # Initialize counters at the lower corner g=a.
+    flat_unsat = zeros(Int, c)
+    @inbounds for fidx in 1:c
+        F = FG.flats[fidx]
+        cnt = 0
+        for i in 1:N
+            F.tau.coords[i] && continue
+            cnt += (a[i] < F.b[i]) ? 1 : 0
         end
-        cols = Int[]
-        for cc in 1:c
-            if in_flat(FG.flats[cc], g)
-                push!(cols, cc)
-            end
+        flat_unsat[fidx] = cnt
+    end
+
+    inj_viol = zeros(Int, r)
+    @inbounds for jidx in 1:r
+        E = FG.injectives[jidx]
+        cnt = 0
+        for i in 1:N
+            E.tau.coords[i] && continue
+            cnt += (a[i] > E.b[i]) ? 1 : 0
         end
+        inj_viol[jidx] = cnt
+    end
 
-        active_rows[i] = rows
+    rows_now = Int[]
+    cols_now = Int[]
+    sizehint!(rows_now, r)
+    sizehint!(cols_now, c)
+    row_words = zeros(UInt64, row_words_len)
+    col_words = zeros(UInt64, col_words_len)
 
-        if isempty(rows) || isempty(cols)
-            B[i] = zeros(K, length(rows), 0)
-            dims[i] = 0
-        else
-            Phi_g = Phi[rows, cols]
-            Bg = FieldLinAlg.colspace(field, Phi_g)   # rows x dim(im)
-            B[i] = Bg
-            dims[i] = size(Bg, 2)
+    @inbounds for jidx in 1:r
+        if inj_viol[jidx] == 0
+            push!(rows_now, jidx)
+            _set_sigword_bit!(row_words, jidx, true)
+        end
+    end
+    @inbounds for fidx in 1:c
+        if flat_unsat[fidx] == 0
+            push!(cols_now, fidx)
+            _set_sigword_bit!(col_words, fidx, true)
         end
     end
 
+    # Cache B_g for repeated active-row/active-col patterns and transition solves.
+    basis_cache = Dict{UInt64, Vector{_BoxBasisEntry{K}}}()
+    transition_cache = Dict{Tuple{Int,Int}, Matrix{K}}()
+    next_entry_id_ref = Ref(1)
+    basis_hits_ref = Ref(0)
+    basis_misses_ref = Ref(0)
+    incr_refines_ref = Ref(0)
+    full_recompute_ref = Ref(0)
+    transition_hits_ref = Ref(0)
+    transition_misses_ref = Ref(0)
+    sparse_solves_ref = Ref(0)
+    dense_solves_ref = Ref(0)
+    if cache === nothing
+        basis_cache = Dict{UInt64, Vector{_BoxBasisEntry{K}}}()
+        transition_cache = Dict{Tuple{Int,Int}, Matrix{K}}()
+        next_entry_id_ref[] = 1
+    else
+        fkey = _flange_fingerprint(FG)
+        if cache.flange_key != fkey
+            cache.flange_key = fkey
+            empty!(cache.basis_cache)
+            empty!(cache.transition_cache)
+            cache.next_entry_id = 1
+            cache.basis_cache_hits = 0
+            cache.basis_cache_misses = 0
+            cache.incremental_refinements = 0
+            cache.full_basis_recomputes = 0
+            cache.transition_cache_hits = 0
+            cache.transition_cache_misses = 0
+            cache.sparse_transition_solves = 0
+            cache.dense_transition_solves = 0
+        end
+        basis_cache = cache.basis_cache
+        transition_cache = cache.transition_cache
+        next_entry_id_ref[] = cache.next_entry_id
+    end
+
+    @inline function _find_basis_entry(hashkey::UInt64)
+        bucket = get(basis_cache, hashkey, nothing)
+        bucket === nothing && return nothing
+        @inbounds for entry in bucket
+            if entry.row_words == row_words && entry.col_words == col_words
+                return entry
+            end
+        end
+        return nothing
+    end
+
+    @inline function _store_basis_entry!(hashkey::UInt64,
+                                         Bg::Matrix{K},
+                                         basis_cols::Vector{Int},
+                                         cols_state::Vector{Int},
+                                         coeffs::Union{Nothing,Matrix{K}},
+                                         dim::Int)
+        eid = next_entry_id_ref[]
+        next_entry_id_ref[] = eid + 1
+        entry = _BoxBasisEntry{K}(eid, copy(row_words), copy(col_words), copy(rows_now), cols_state, basis_cols, coeffs, Bg, dim)
+        push!(get!(basis_cache, hashkey, Vector{_BoxBasisEntry{K}}()), entry)
+        return entry
+    end
+
+    @inline function _compute_basis_from_cols(curr_rows::Vector{Int}, curr_cols::Vector{Int})
+        if isempty(curr_rows) || isempty(curr_cols)
+            return zeros(K, length(curr_rows), 0), Int[]
+        end
+        A = @view Phi[curr_rows, curr_cols]
+        _, pivs = FieldLinAlg.rref(field, A; pivots=true)
+        piv = collect(pivs)
+        if isempty(piv)
+            return zeros(K, length(curr_rows), 0), Int[]
+        end
+        basis_cols = curr_cols[piv]
+        Bg = Matrix{K}(A[:, piv])
+        return Bg, basis_cols
+    end
+
+    @inline function _compute_coeffs(curr_rows::Vector{Int},
+                                     cols_state::Vector{Int},
+                                     Bg::Matrix{K})
+        ncols_state = length(cols_state)
+        d = size(Bg, 2)
+        if d == 0 || ncols_state == 0
+            return zeros(K, d, ncols_state)
+        end
+        Aall = @view Phi[curr_rows, cols_state]
+        return FieldLinAlg.solve_fullcolumn(field, Bg, Aall; check_rhs=false)
+    end
+
+    prev_rows = Int[]
+    prev_cols = Int[]
+    had_prev = false
+    prev_entry::Union{Nothing,_BoxBasisEntry{K}} = nothing
+    row_added = Int[]
+    row_removed = Int[]
+    col_added = Int[]
+    col_removed = Int[]
+    candidate_cols = Int[]
+
+    strides = Vector{Int}(undef, N)
+    strides[1] = 1
+    @inbounds for i in 2:N
+        strides[i] = strides[i - 1] * lens[i - 1]
+    end
+    digits = zeros(Int, N)
+    dirs = ones(Int, N)
+    lin_idx = 1
+    basis_entry_ids = zeros(Int, ncoords)
+
+    @inbounds for _ in 1:ncoords
+        h = hash(row_words, hash(col_words))
+        entry = _find_basis_entry(h)
+        if entry === nothing
+            basis_misses_ref[] += 1
+            Bg = Matrix{K}(undef, 0, 0)
+            basis_cols = Int[]
+            used_incremental = false
+
+            if had_prev && prev_entry !== nothing
+                _sorted_diff!(row_added, row_removed, prev_rows, rows_now)
+                _sorted_diff!(col_added, col_removed, prev_cols, cols_now)
+                basis_removed = !_sorted_disjoint(col_removed, prev_entry.basis_cols)
+
+                # Full incremental candidate refinement path when previous basis columns remain present.
+                if !basis_removed
+                    empty!(candidate_cols)
+                    # Start with old basis columns + newly added columns.
+                    @inbounds for c0 in prev_entry.basis_cols
+                        p = searchsortedfirst(col_removed, c0)
+                        if p > length(col_removed) || col_removed[p] != c0
+                            push!(candidate_cols, c0)
+                        end
+                    end
+                    candidate_cols = _merge_sorted_unique(candidate_cols, col_added)
+
+                    # If rows are added, some previously nonbasis columns can become independent.
+                    if !isempty(row_added)
+                        if prev_entry.coeffs === nothing
+                            prev_entry.coeffs = _compute_coeffs(prev_entry.rows, prev_entry.cols, prev_entry.B)
+                        end
+                        coeffs_prev = prev_entry.coeffs::Matrix{K}
+                        prev_cols_state = prev_entry.cols
+                        dprev = size(coeffs_prev, 1)
+                        nbasis = length(prev_entry.basis_cols)
+                        @inbounds for t in eachindex(prev_cols_state)
+                            colid = prev_cols_state[t]
+                            p = searchsortedfirst(col_removed, colid)
+                            if p <= length(col_removed) && col_removed[p] == colid
+                                continue
+                            end
+                            q = searchsortedfirst(candidate_cols, colid)
+                            if q <= length(candidate_cols) && candidate_cols[q] == colid
+                                continue
+                            end
+
+                            violated = false
+                            for rr in row_added
+                                lhs = Phi[rr, colid]
+                                rhs = zero(K)
+                                kmax = min(dprev, nbasis)
+                                for k in 1:kmax
+                                    rhs += coeffs_prev[k, t] * Phi[rr, prev_entry.basis_cols[k]]
+                                end
+                                if lhs != rhs
+                                    violated = true
+                                    break
+                                end
+                            end
+                            if violated
+                                _insert_sorted_unique!(candidate_cols, colid)
+                            end
+                        end
+                    end
+
+                    Bg, basis_cols = _compute_basis_from_cols(rows_now, candidate_cols)
+                    used_incremental = true
+                end
+            end
+
+            if !used_incremental
+                Bg, basis_cols = _compute_basis_from_cols(rows_now, cols_now)
+                full_recompute_ref[] += 1
+            else
+                incr_refines_ref[] += 1
+            end
+            d = size(Bg, 2)
+            entry = _store_basis_entry!(h, Bg, basis_cols, copy(cols_now), nothing, d)
+        else
+            basis_hits_ref[] += 1
+        end
+
+        active_rows[lin_idx] = entry.rows
+        B[lin_idx] = entry.B
+        dims[lin_idx] = entry.dim
+        basis_entry_ids[lin_idx] = entry.id
+
+        if !had_prev
+            had_prev = true
+        end
+        _assign_vec!(prev_rows, rows_now)
+        _assign_vec!(prev_cols, cols_now)
+        prev_entry = entry
+
+        moved = false
+        for axis in 1:N
+            nxt = digits[axis] + dirs[axis]
+            if 0 <= nxt < lens[axis]
+                old = digits[axis]
+                digits[axis] = nxt
+
+                if dirs[axis] == 1
+                    for f in flat_fwd[axis][old + 1]
+                        flat_unsat[f] -= 1
+                        if flat_unsat[f] == 0
+                            _insert_sorted_unique!(cols_now, f)
+                            _set_sigword_bit!(col_words, f, true)
+                        end
+                    end
+                    for j in inj_fwd[axis][old + 1]
+                        inj_viol[j] += 1
+                        if inj_viol[j] == 1
+                            _remove_sorted_existing!(rows_now, j)
+                            _set_sigword_bit!(row_words, j, false)
+                        end
+                    end
+                else
+                    for f in flat_bwd[axis][old + 1]
+                        was_active = flat_unsat[f] == 0
+                        flat_unsat[f] += 1
+                        if was_active
+                            _remove_sorted_existing!(cols_now, f)
+                            _set_sigword_bit!(col_words, f, false)
+                        end
+                    end
+                    for j in inj_bwd[axis][old + 1]
+                        inj_viol[j] -= 1
+                        if inj_viol[j] == 0
+                            _insert_sorted_unique!(rows_now, j)
+                            _set_sigword_bit!(row_words, j, true)
+                        end
+                    end
+                end
+
+                lin_idx += dirs[axis] * strides[axis]
+                moved = true
+                if axis > 1
+                    for j in 1:(axis - 1)
+                        dirs[j] = -dirs[j]
+                    end
+                end
+                break
+            end
+        end
+        moved || break
+    end
+
     # Build edge maps along cover edges in the grid poset using induced maps from E (projection).
-    C = cover_edges(Q)
     edge_maps = Dict{Tuple{Int, Int}, Matrix{K}}()
 
-    # Helper: build projection E_g -> E_h by selecting the common injective summands (rows_h subset rows_g).
-    function projection_matrix(rows_g::Vector{Int}, rows_h::Vector{Int})
-        Pg = length(rows_g)
+    # Gather rows_h from rows_g directly (rows_h subset rows_g), avoiding Pu * B[u].
+    function gather_projection_rows(Bu::Matrix{K}, rows_g::Vector{Int}, rows_h::Vector{Int})
         Ph = length(rows_h)
-        P = zeros(K, Ph, Pg)
-        # rows_* are sorted by construction
+        du = size(Bu, 2)
+        out = Matrix{K}(undef, Ph, du)
+        Pg = length(rows_g)
         j = 1
-        for i in 1:Ph
+        @inbounds for i in 1:Ph
             target = rows_h[i]
             while j <= Pg && rows_g[j] < target
                 j += 1
@@ -112,33 +937,131 @@ function pmodule_on_box(FG::Flange{K}; a::NTuple{N,Int}, b::NTuple{N,Int}) where
             if j > Pg || rows_g[j] != target
                 error("pmodule_on_box: projection mismatch; expected rows_h subset rows_g")
             end
-            P[i, j] = one(K)
-        end
-        return P
-    end
-
-    for u in 1:ncoords
-        for v in 1:ncoords
-            if C[u, v]
-                # u < v is a cover edge in grid poset, so coordwise u <= v.
-                # Injectives are downsets: active_rows[v] subset active_rows[u].
-                rows_u = active_rows[u]
-                rows_v = active_rows[v]
-
-                du = dims[u]
-                dv = dims[v]
-
-                if dv == 0 || du == 0
-                    edge_maps[(u, v)] = zeros(K, dv, du)
-                    continue
-                end
-
-                Pu = projection_matrix(rows_u, rows_v)     # E_u -> E_v
-                Im = Pu * B[u]                             # E_v x du
-                X = FieldLinAlg.solve_fullcolumn(field, B[v], Im)  # dv x du
-                edge_maps[(u, v)] = X
+            for c in 1:du
+                out[i, c] = Bu[j, c]
             end
         end
+        return out
+    end
+
+    @inline function matrix_density(A::Matrix{K}) where {K}
+        total = length(A)
+        total == 0 && return 0.0
+        nz = 0
+        @inbounds for x in A
+            !iszero(x) && (nz += 1)
+        end
+        return nz / total
+    end
+
+    @inline function should_sparse_solve(Bv::Matrix{K}, Im::Matrix{K}) where {K}
+        # Conservative sparse-first gate to avoid conversion overhead on small/dense cases.
+        if size(Bv, 1) * size(Bv, 2) < 4096
+            return false
+        end
+        return (matrix_density(Bv) <= 0.20) && (matrix_density(Im) <= 0.20)
+    end
+
+    edges = collect(cover_edges(Q))
+    ne = length(edges)
+    slot_of_edge = Vector{Int}(undef, ne)
+    slot_keys = Tuple{Int,Int}[]
+    slot_rep_edge = Int[]
+    slot_index = Dict{Tuple{Int,Int},Int}()
+
+    @inbounds for ei in 1:ne
+        u, v = edges[ei]
+        key = (basis_entry_ids[u], basis_entry_ids[v])
+        s = get(slot_index, key, 0)
+        if s == 0
+            s = length(slot_keys) + 1
+            slot_index[key] = s
+            push!(slot_keys, key)
+            push!(slot_rep_edge, ei)
+        end
+        slot_of_edge[ei] = s
+    end
+
+    nslots = length(slot_keys)
+    transitions = Vector{Matrix{K}}(undef, nslots)
+    missing_slots = Int[]
+    sizehint!(missing_slots, nslots)
+
+    @inbounds for s in 1:nslots
+        key = slot_keys[s]
+        X = get(transition_cache, key, nothing)
+        if X === nothing
+            push!(missing_slots, s)
+            transition_misses_ref[] += 1
+        else
+            transitions[s] = X
+            transition_hits_ref[] += 1
+        end
+    end
+
+    function solve_transition_slot(s::Int)
+        ei = slot_rep_edge[s]
+        u, v = edges[ei]
+        du = dims[u]
+        dv = dims[v]
+        if dv == 0 || du == 0
+            return zeros(K, dv, du)
+        end
+
+        rows_u = active_rows[u]
+        rows_v = active_rows[v]
+        Im = gather_projection_rows(B[u], rows_u, rows_v)  # E_v x du
+        Bv = B[v]
+
+        if should_sparse_solve(Bv, Im)
+            sparse_solves_ref[] += 1
+            return FieldLinAlg.solve_fullcolumn(field, sparse(Bv), sparse(Im))
+        end
+        dense_solves_ref[] += 1
+        return FieldLinAlg.solve_fullcolumn(field, Bv, Im)
+    end
+
+    if !isempty(missing_slots)
+        if Threads.nthreads() > 1 && length(missing_slots) >= 32
+            Threads.@threads :static for mi in eachindex(missing_slots)
+                s = missing_slots[mi]
+                transitions[s] = solve_transition_slot(s)
+            end
+        else
+            @inbounds for s in missing_slots
+                transitions[s] = solve_transition_slot(s)
+            end
+        end
+        @inbounds for s in missing_slots
+            transition_cache[slot_keys[s]] = transitions[s]
+        end
+    end
+
+    edge_values = Vector{Matrix{K}}(undef, ne)
+    if Threads.nthreads() > 1 && ne >= 256
+        Threads.@threads :static for ei in 1:ne
+            edge_values[ei] = transitions[slot_of_edge[ei]]
+        end
+    else
+        @inbounds for ei in 1:ne
+            edge_values[ei] = transitions[slot_of_edge[ei]]
+        end
+    end
+
+    @inbounds for ei in 1:ne
+        edge_maps[edges[ei]] = edge_values[ei]
+    end
+
+    if cache !== nothing
+        cache.next_entry_id = next_entry_id_ref[]
+        cache.basis_cache_hits += basis_hits_ref[]
+        cache.basis_cache_misses += basis_misses_ref[]
+        cache.incremental_refinements += incr_refines_ref[]
+        cache.full_basis_recomputes += full_recompute_ref[]
+        cache.transition_cache_hits += transition_hits_ref[]
+        cache.transition_cache_misses += transition_misses_ref[]
+        cache.sparse_transition_solves += sparse_solves_ref[]
+        cache.dense_transition_solves += dense_solves_ref[]
     end
 
     return PModule{K}(Q, Vector{Int}(dims), edge_maps; field=field)
@@ -170,11 +1093,14 @@ Fields
 * `flats`          : the global flat list used to build signatures
 * `injectives`     : the global injective list used to build signatures
 * `sig_to_region`  : dictionary mapping a signature key to its region index
+* `cell_shape`     : slab-cell shape `(length(coords[i]) + 1)_i`
+* `cell_strides`   : mixed-radix strides for slab-cell linear indexing
+* `cell_to_region` : optional direct slab-cell->region lookup table
 
 The method `locate(pi, g)` returns the region index in `1:P.n` for the point
 `g`, or `0` if the signature is not present in the dictionary.
 """
-struct ZnEncodingMap{N} <: AbstractPLikeEncodingMap
+struct ZnEncodingMap{N,MY,MZ} <: AbstractPLikeEncodingMap
     n::Int
     coords::NTuple{N,Vector{Int}}
     sig_y::Vector{BitVector}
@@ -182,7 +1108,10 @@ struct ZnEncodingMap{N} <: AbstractPLikeEncodingMap
     reps::Vector{NTuple{N,Int}}
     flats::Vector{IndFlat{N}}
     injectives::Vector{IndInj{N}}
-    sig_to_region::Dict{Tuple{Tuple,Tuple},Int}
+    sig_to_region::Dict{SigKey{MY,MZ},Int}
+    cell_shape::NTuple{N,Int}
+    cell_strides::NTuple{N,Int}
+    cell_to_region::Union{Nothing,Vector{Int}}
 end
 
 function ZnEncodingMap(n::Int,
@@ -192,10 +1121,70 @@ function ZnEncodingMap(n::Int,
                        reps::Vector{NTuple{N,Int}},
                        flats::Vector{IndFlat{N}},
                        injectives::Vector{IndInj{N}},
-                       sig_to_region::Dict{Tuple{Tuple,Tuple},Int}) where {N}
+                       sig_to_region::Dict{SigKey{MY,MZ},Int}) where {N,MY,MZ}
     n == N || error("ZnEncodingMap: n=$n does not match reps tuple length $N")
-    return ZnEncodingMap{N}(n, coords, sig_y, sig_z, reps, flats, injectives, sig_to_region)
+    shape = ntuple(i -> length(coords[i]) + 1, N)
+    strides_vec = Vector{Int}(undef, N)
+    strides_vec[1] = 1
+    @inbounds for i in 2:N
+        strides_vec[i] = strides_vec[i - 1] * shape[i - 1]
+    end
+    strides = ntuple(i -> strides_vec[i], N)
+    return ZnEncodingMap{N,MY,MZ}(n, coords, sig_y, sig_z, reps, flats, injectives, sig_to_region,
+                                  shape, strides, nothing)
 end
+
+function ZnEncodingMap(n::Int,
+                       coords::NTuple{N,Vector{Int}},
+                       sig_y::Vector{BitVector},
+                       sig_z::Vector{BitVector},
+                       reps::Vector{NTuple{N,Int}},
+                       flats::Vector{IndFlat{N}},
+                       injectives::Vector{IndInj{N}},
+                       sig_to_region::Dict{SigKey{MY,MZ},Int},
+                       cell_shape::NTuple{N,Int},
+                       cell_strides::NTuple{N,Int},
+                       cell_to_region::Union{Nothing,Vector{Int}}) where {N,MY,MZ}
+    n == N || error("ZnEncodingMap: n=$n does not match reps tuple length $N")
+    return ZnEncodingMap{N,MY,MZ}(n, coords, sig_y, sig_z, reps, flats, injectives, sig_to_region,
+                                  cell_shape, cell_strides, cell_to_region)
+end
+
+"""
+    ZnEncodingCache
+
+Advanced cache handle for repeated Zn encoding queries. This is an opt-in
+power-user API; regular workflow users should keep using `cache=:auto` or
+`SessionCache` at the workflow layer.
+"""
+struct ZnEncodingCache{N,MY,MZ,PType}
+    P::PType
+    pi::ZnEncodingMap{N,MY,MZ}
+end
+
+@inline _unwrap_zn_pi(pi::ZnEncodingMap) = pi
+@inline _unwrap_zn_pi(cache::ZnEncodingCache) = cache.pi
+@inline _unwrap_zn_pi(enc::CompiledEncoding{<:ZnEncodingMap}) = enc.pi
+
+compile_zn_cache(P, pi::ZnEncodingMap{N,MY,MZ}) where {N,MY,MZ} = ZnEncodingCache{N,MY,MZ,typeof(P)}(P, pi)
+compile_zn_cache(pi::ZnEncodingMap) = ZnEncodingCache(SignaturePoset(pi.sig_y, pi.sig_z), pi)
+compile_zn_cache(enc::CompiledEncoding{<:ZnEncodingMap}) = ZnEncodingCache(enc.P, enc.pi)
+
+function compile_zn_cache(FGs::Union{AbstractVector{<:Flange}, Tuple{Vararg{Flange}}},
+                          opts::EncodingOptions=EncodingOptions();
+                          poset_kind::Symbol=:signature)
+    P, pi = encode_poset_from_flanges(FGs, opts; poset_kind=poset_kind)
+    return ZnEncodingCache(P, pi)
+end
+
+compile_zn_cache(FG::Flange, opts::EncodingOptions=EncodingOptions(); poset_kind::Symbol=:signature) =
+    compile_zn_cache((FG,), opts; poset_kind=poset_kind)
+
+compile_zn_cache(FG1::Flange, FG2::Flange, opts::EncodingOptions=EncodingOptions(); poset_kind::Symbol=:signature) =
+    compile_zn_cache((FG1, FG2), opts; poset_kind=poset_kind)
+
+compile_zn_cache(FG1::Flange, FG2::Flange, FG3::Flange, opts::EncodingOptions=EncodingOptions(); poset_kind::Symbol=:signature) =
+    compile_zn_cache((FG1, FG2, FG3), opts; poset_kind=poset_kind)
 
 """
     SignaturePoset(sig_y, sig_z)
@@ -344,50 +1333,6 @@ function _critical_coords(flats::Vector{IndFlat{N}}, injectives::Vector{IndInj{N
     return ntuple(i -> coords[i], n)
 end
 
-"Representative lattice point for the product cell indexed by `idx` (0-based slab indices)."
-function _cell_rep(coords::NTuple{N,Vector{Int}}, idx::NTuple{N,Int}) where {N}
-    return ntuple(i -> begin
-        ci = coords[i]
-        if isempty(ci)
-            return 0
-        end
-        if idx[i] == 0
-            return ci[1] - 1
-        elseif idx[i] == length(ci)
-            return ci[end]
-        else
-            return ci[idx[i]]
-        end
-    end, N)
-end
-
-"Compute the (y,z) signature at a lattice point g."
-function _signature_at(g::AbstractVector{<:Integer},
-                       flats::Vector{IndFlat{N}}, injectives::Vector{IndInj{N}}) where {N}
-    y = falses(length(flats))
-    z = falses(length(injectives))
-    @inbounds for i in 1:length(flats)
-        y[i] = in_flat(flats[i], g)
-    end
-    @inbounds for j in 1:length(injectives)
-        z[j] = !in_inj(injectives[j], g)
-    end
-    return y, z
-end
-
-# Tuple overload avoids allocating `collect(g)` when the lattice point is already an NTuple.
-function _signature_at(g::NTuple{N,<:Integer}, flats::Vector{IndFlat{N}}, injectives::Vector{IndInj{N}}) where {N}
-    y = falses(length(flats))
-    z = falses(length(injectives))
-    @inbounds for i in eachindex(flats)
-        y[i] = in_flat(flats[i], g)
-    end
-    @inbounds for j in eachindex(injectives)
-        z[j] = !in_inj(injectives[j], g)
-    end
-    return y, z
-end
-
 "Uptight poset on signatures by componentwise inclusion (then transitively closed)."
 function _uptight_from_signatures(sig_y::Vector{BitVector}, sig_z::Vector{BitVector})
     rN = length(sig_y)
@@ -503,26 +1448,11 @@ function encode_poset_from_flanges(FGs::Union{AbstractVector{<:Flange}, Tuple{Va
 
     coords = _critical_coords(flats_all, injectives_all)
 
-    axes = ntuple(i -> 0:length(coords[i]), n)
-    seen = Dict{Tuple{Tuple,Tuple},Int}()
-    sig_y = BitVector[]
-    sig_z = BitVector[]
-    reps  = Vector{NTuple{n,Int}}()
-
-    for idx in Iterators.product(axes...)
-        g = _cell_rep(coords, idx)
-        y, z = _signature_at(g, flats_all, injectives_all)
-        key = (Tuple(y), Tuple(z))
-        if !haskey(seen, key)
-            push!(sig_y, y)
-            push!(sig_z, z)
-            push!(reps, g)
-            seen[key] = length(sig_y)
-            if length(sig_y) > max_regions
-                error("encode_poset_from_flanges: exceeded max_regions=$max_regions")
-            end
-        end
-    end
+    MY = max(1, cld(length(flats_all), 64))
+    MZ = max(1, cld(length(injectives_all), 64))
+    sig_y, sig_z, reps, sig_to_region, cell_shape, cell_strides, cell_to_region = _collect_signatures_incremental(
+        coords, flats_all, injectives_all, max_regions, Val(MY), Val(MZ)
+    )
 
     if poset_kind == :signature
         P = SignaturePoset(sig_y, sig_z)
@@ -532,20 +1462,16 @@ function encode_poset_from_flanges(FGs::Union{AbstractVector{<:Flange}, Tuple{Va
         error("encode_poset_from_flanges: poset_kind must be :signature or :dense")
     end
 
-    sig_to_region = Dict{Tuple{Tuple,Tuple},Int}()
-    for t in 1:length(sig_y)
-        sig_to_region[(Tuple(sig_y[t]), Tuple(sig_z[t]))] = t
-    end
-
-    pi = ZnEncodingMap(n, coords, sig_y, sig_z, reps, flats_all, injectives_all, sig_to_region)
+    pi = ZnEncodingMap(n, coords, sig_y, sig_z, reps, flats_all, injectives_all, sig_to_region,
+                       cell_shape, cell_strides, cell_to_region)
     return P, pi
 end
 
 # Keyword-friendly overloads (opts may be nothing).
 encode_poset_from_flanges(FGs::Union{AbstractVector{<:Flange}, Tuple{Vararg{Flange}}};
-                          opts::Union{EncodingOptions,Nothing}=nothing,
+                          opts::EncodingOptions=EncodingOptions(),
                           poset_kind::Symbol = :signature) =
-    encode_poset_from_flanges(FGs, _resolve_encoding_opts(opts); poset_kind = poset_kind)
+    encode_poset_from_flanges(FGs, opts; poset_kind = poset_kind)
 
 # Small-arity overloads (avoid "varargs then opts" signatures).
 function encode_poset_from_flanges(FG::Flange, opts::EncodingOptions;
@@ -554,9 +1480,9 @@ function encode_poset_from_flanges(FG::Flange, opts::EncodingOptions;
 end
 
 encode_poset_from_flanges(FG::Flange;
-                          opts::Union{EncodingOptions,Nothing}=nothing,
+                          opts::EncodingOptions=EncodingOptions(),
                           poset_kind::Symbol = :signature) =
-    encode_poset_from_flanges((FG,), _resolve_encoding_opts(opts); poset_kind = poset_kind)
+    encode_poset_from_flanges((FG,), opts; poset_kind = poset_kind)
 
 function encode_poset_from_flanges(FG1::Flange, FG2::Flange, opts::EncodingOptions;
                                    poset_kind::Symbol = :signature)
@@ -564,9 +1490,9 @@ function encode_poset_from_flanges(FG1::Flange, FG2::Flange, opts::EncodingOptio
 end
 
 encode_poset_from_flanges(FG1::Flange, FG2::Flange;
-                          opts::Union{EncodingOptions,Nothing}=nothing,
+                          opts::EncodingOptions=EncodingOptions(),
                           poset_kind::Symbol = :signature) =
-    encode_poset_from_flanges((FG1, FG2), _resolve_encoding_opts(opts); poset_kind = poset_kind)
+    encode_poset_from_flanges((FG1, FG2), opts; poset_kind = poset_kind)
 
 function encode_poset_from_flanges(FG1::Flange, FG2::Flange, FG3::Flange, opts::EncodingOptions;
                                    poset_kind::Symbol = :signature)
@@ -574,9 +1500,9 @@ function encode_poset_from_flanges(FG1::Flange, FG2::Flange, FG3::Flange, opts::
 end
 
 encode_poset_from_flanges(FG1::Flange, FG2::Flange, FG3::Flange;
-                          opts::Union{EncodingOptions,Nothing}=nothing,
+                          opts::EncodingOptions=EncodingOptions(),
                           poset_kind::Symbol = :signature) =
-    encode_poset_from_flanges((FG1, FG2, FG3), _resolve_encoding_opts(opts); poset_kind = poset_kind)
+    encode_poset_from_flanges((FG1, FG2, FG3), opts; poset_kind = poset_kind)
 
 """
     fringe_from_flange(P, pi, FG; strict=true) -> FringeModule{K}
@@ -665,23 +1591,48 @@ Convenience (for slice code that forms real-valued points):
   lattice point and then located.
 
 Return value:
-- An integer in `1:length(pi.reps)` if the signature is present in `pi.sig_to_region`.
+- An integer in `1:length(pi.reps)` if the cell/signature is present.
 - `0` if the signature is not present (interpreted as "unknown/outside" by downstream code).
 
 Implementation note:
 These methods must be base cases. They must not call `locate` again on an integer vector/tuple,
 otherwise it is easy to introduce infinite mutual recursion and a StackOverflowError.
 """
-function locate(pi::ZnEncodingMap, g::AbstractVector{<:Integer})
-    length(g) == pi.n || error("locate: expected a vector of length $(pi.n), got $(length(g))")
-    y, z = _signature_at(g, pi.flats, pi.injectives)
-    return get(pi.sig_to_region, (Tuple(y), Tuple(z)), 0)
+@inline function _cell_linear_index(pi::ZnEncodingMap{N}, g::NTuple{N,Int}) where {N}
+    idx = 1
+    @inbounds for i in 1:N
+        s = searchsortedlast(pi.coords[i], g[i]) # 0-based slab index
+        idx += s * pi.cell_strides[i]
+    end
+    return idx
 end
 
-function locate(pi::ZnEncodingMap, g::NTuple{N,<:Integer}) where {N}
+@inline function _cell_linear_index(pi::ZnEncodingMap, g::AbstractVector{<:Integer})
+    idx = 1
+    @inbounds for i in 1:pi.n
+        s = searchsortedlast(pi.coords[i], Int(g[i])) # 0-based slab index
+        idx += s * pi.cell_strides[i]
+    end
+    return idx
+end
+
+function locate(pi::ZnEncodingMap{N,MY,MZ}, g::AbstractVector{<:Integer}) where {N,MY,MZ}
+    length(g) == pi.n || error("locate: expected a vector of length $(pi.n), got $(length(g))")
+    if pi.cell_to_region !== nothing
+        idx = _cell_linear_index(pi, g)
+        return @inbounds pi.cell_to_region[idx]
+    end
+    return get(pi.sig_to_region, _sigkey_at(g, pi.flats, pi.injectives, Val(MY), Val(MZ)), 0)
+end
+
+function locate(pi::ZnEncodingMap{N,MY,MZ}, g::NTuple{N,<:Integer}) where {N,MY,MZ}
     N == pi.n || error("locate: expected a tuple of length $(pi.n), got $(N)")
-    y, z = _signature_at(g, pi.flats, pi.injectives)
-    return get(pi.sig_to_region, (Tuple(y), Tuple(z)), 0)
+    if pi.cell_to_region !== nothing
+        gi = ntuple(i -> Int(g[i]), N)
+        idx = _cell_linear_index(pi, gi)
+        return @inbounds pi.cell_to_region[idx]
+    end
+    return get(pi.sig_to_region, _sigkey_at(g, pi.flats, pi.injectives, Val(MY), Val(MZ)), 0)
 end
 
 # Convenience only: lets slice-based code pass Float64 points.
@@ -690,6 +1641,90 @@ function locate(pi::ZnEncodingMap, x::AbstractVector{<:AbstractFloat})
     length(x) == pi.n || error("locate: expected a vector of length $(pi.n), got $(length(x))")
     g = ntuple(i -> round(Int, x[i]), pi.n)
     return locate(pi, g)
+end
+
+locate(cache::ZnEncodingCache, g) = locate(cache.pi, g)
+
+@inline function _locate_col(pi::ZnEncodingMap{N,MY,MZ}, X::AbstractMatrix{<:Integer}, col::Int) where {N,MY,MZ}
+    if pi.cell_to_region !== nothing
+        idx = 1
+        @inbounds for i in 1:N
+            s = searchsortedlast(pi.coords[i], Int(X[i, col]))
+            idx += s * pi.cell_strides[i]
+        end
+        return @inbounds pi.cell_to_region[idx]
+    end
+    g = ntuple(i -> Int(@inbounds X[i, col]), N)
+    return get(pi.sig_to_region, _sigkey_at(g, pi.flats, pi.injectives, Val(MY), Val(MZ)), 0)
+end
+
+@inline function _locate_col(pi::ZnEncodingMap{N,MY,MZ}, X::AbstractMatrix{<:AbstractFloat}, col::Int) where {N,MY,MZ}
+    if pi.cell_to_region !== nothing
+        idx = 1
+        @inbounds for i in 1:N
+            s = searchsortedlast(pi.coords[i], round(Int, X[i, col]))
+            idx += s * pi.cell_strides[i]
+        end
+        return @inbounds pi.cell_to_region[idx]
+    end
+    g = ntuple(i -> round(Int, @inbounds X[i, col]), N)
+    return get(pi.sig_to_region, _sigkey_at(g, pi.flats, pi.injectives, Val(MY), Val(MZ)), 0)
+end
+
+"""
+    locate_many!(dest, pi_or_cache, X; threaded=true) -> dest
+
+Batch Zn classifier evaluation. `X` is shaped `(n, npoints)`.
+Accepts `pi::ZnEncodingMap`, `ZnEncodingCache`, or `CompiledEncoding{<:ZnEncodingMap}`.
+"""
+function locate_many!(dest::AbstractVector{<:Integer},
+                      pi_or_cache,
+                      X::AbstractMatrix{<:Integer};
+                      threaded::Bool=true)
+    pi = _unwrap_zn_pi(pi_or_cache)
+    size(X, 1) == pi.n || error("locate_many!: expected X with $(pi.n) rows, got $(size(X, 1))")
+    length(dest) == size(X, 2) || error("locate_many!: destination length mismatch")
+    np = size(X, 2)
+    if threaded && nthreads() > 1 && np >= 1024
+        Threads.@threads :static for j in 1:np
+            @inbounds dest[j] = _locate_col(pi, X, j)
+        end
+    else
+        @inbounds for j in 1:np
+            dest[j] = _locate_col(pi, X, j)
+        end
+    end
+    return dest
+end
+
+function locate_many!(dest::AbstractVector{<:Integer},
+                      pi_or_cache,
+                      X::AbstractMatrix{<:AbstractFloat};
+                      threaded::Bool=true)
+    pi = _unwrap_zn_pi(pi_or_cache)
+    size(X, 1) == pi.n || error("locate_many!: expected X with $(pi.n) rows, got $(size(X, 1))")
+    length(dest) == size(X, 2) || error("locate_many!: destination length mismatch")
+    np = size(X, 2)
+    if threaded && nthreads() > 1 && np >= 1024
+        Threads.@threads :static for j in 1:np
+            @inbounds dest[j] = _locate_col(pi, X, j)
+        end
+    else
+        @inbounds for j in 1:np
+            dest[j] = _locate_col(pi, X, j)
+        end
+    end
+    return dest
+end
+
+function locate_many(pi_or_cache, X::AbstractMatrix{<:Integer}; threaded::Bool=true)
+    out = Vector{Int}(undef, size(X, 2))
+    return locate_many!(out, pi_or_cache, X; threaded=threaded)
+end
+
+function locate_many(pi_or_cache, X::AbstractMatrix{<:AbstractFloat}; threaded::Bool=true)
+    out = Vector{Int}(undef, size(X, 2))
+    return locate_many!(out, pi_or_cache, X; threaded=threaded)
 end
 
 # ---------------------------------------------------------------------------
@@ -1544,6 +2579,48 @@ function region_adjacency(pi::ZnEncodingMap; box, strict::Bool=true)
     a, b = box
     length(a) == pi.n || error("region_adjacency(Zn): box dimension mismatch")
     length(b) == pi.n || error("region_adjacency(Zn): box dimension mismatch")
+    nregions = length(pi.sig_y)
+
+    # Use a packed upper-triangular accumulator when region count is moderate.
+    # This avoids tuple-hash churn in hot adjacency loops.
+    upper_len = div(nregions * (nregions - 1), 2)
+    use_packed = (upper_len > 0) && (upper_len * sizeof(Int) <= 32 * 1024 * 1024)
+    adj_packed = use_packed ? zeros(Int, upper_len) : Int[]
+    adj_dict = use_packed ? Dict{Tuple{Int,Int},Int}() : Dict{Tuple{Int,Int},Int}()
+
+    @inline function _packed_idx(i::Int, j::Int)
+        # i < j, 1-based, packed by columns j=2..n
+        return div((j - 1) * (j - 2), 2) + i
+    end
+
+    @inline function _add_adj!(r::Int, s::Int, w::Int)
+        (w <= 0 || r == 0 || s == 0 || r == s) && return
+        i, j = (r < s ? (r, s) : (s, r))
+        if use_packed
+            adj_packed[_packed_idx(i, j)] += w
+        else
+            adj_dict[(i, j)] = get(adj_dict, (i, j), 0) + w
+        end
+        return
+    end
+
+    function _finalize_adj()
+        if !use_packed
+            return adj_dict
+        end
+        out = Dict{Tuple{Int,Int},Int}()
+        idx = 1
+        @inbounds for j in 2:nregions
+            for i in 1:(j - 1)
+                v = adj_packed[idx]
+                if v != 0
+                    out[(i, j)] = v
+                end
+                idx += 1
+            end
+        end
+        return out
+    end
 
     # helper: count points of slab index s in coords ci within [ai,bi]
     slab_count(ci::AbstractVector{Int}, s::Int, ai::Int, bi::Int) = begin
@@ -1606,18 +2683,16 @@ function region_adjacency(pi::ZnEncodingMap; box, strict::Bool=true)
             reg[s1+1] = r
         end
 
-        adj = Dict{Tuple{Int,Int},Int}()
         for i1 in 1:(L1-1)
             r = reg[i1]
             s = reg[i1+1]
             if r != 0 && s != 0 && r != s
                 if counts[1][i1] > 0 && counts[1][i1+1] > 0
-                    i, j = (r < s ? (r,s) : (s,r))
-                    adj[(i,j)] = get(adj, (i,j), 0) + 1
+                    _add_adj!(r, s, 1)
                 end
             end
         end
-        return adj
+        return _finalize_adj()
     end
 
     if pi.n == 2
@@ -1635,8 +2710,6 @@ function region_adjacency(pi::ZnEncodingMap; box, strict::Bool=true)
             reg[s1+1, s2+1] = r
         end
 
-        adj = Dict{Tuple{Int,Int},Int}()
-
         # scan neighbors along axis 1
         for i1 in 1:(L1-1), i2 in 1:L2
             r = reg[i1, i2]
@@ -1645,8 +2718,7 @@ function region_adjacency(pi::ZnEncodingMap; box, strict::Bool=true)
                 if counts[1][i1] > 0 && counts[1][i1+1] > 0
                     cross = counts[2][i2]
                     if cross > 0
-                        i, j = (r < s ? (r,s) : (s,r))
-                        adj[(i,j)] = get(adj, (i,j), 0) + cross
+                        _add_adj!(r, s, cross)
                     end
                 end
             end
@@ -1660,14 +2732,13 @@ function region_adjacency(pi::ZnEncodingMap; box, strict::Bool=true)
                 if counts[2][i2] > 0 && counts[2][i2+1] > 0
                     cross = counts[1][i1]
                     if cross > 0
-                        i, j = (r < s ? (r,s) : (s,r))
-                        adj[(i,j)] = get(adj, (i,j), 0) + cross
+                        _add_adj!(r, s, cross)
                     end
                 end
             end
         end
 
-        return adj
+        return _finalize_adj()
     end
 
     # generic n >= 3 (still slab-based; not per lattice point)
@@ -1684,7 +2755,6 @@ function region_adjacency(pi::ZnEncodingMap; box, strict::Bool=true)
     end
 
     steps = [CartesianIndex(ntuple(i -> (i==k ? 1 : 0), pi.n)) for k in 1:pi.n]
-    adj = Dict{Tuple{Int,Int},Int}()
 
     for k in 1:pi.n
         step = steps[k]
@@ -1714,13 +2784,12 @@ function region_adjacency(pi::ZnEncodingMap; box, strict::Bool=true)
                 cross *= ct
             end
             if cross > 0
-                i, j = (r < s ? (r,s) : (s,r))
-                adj[(i,j)] = get(adj, (i,j), 0) + cross
+                _add_adj!(r, s, cross)
             end
         end
     end
 
-    return adj
+    return _finalize_adj()
 end
 
 
@@ -1745,9 +2814,9 @@ function encode_from_flange(FG::Flange{K}, opts::EncodingOptions;
 end
 
 encode_from_flange(FG::Flange{K};
-                   opts::Union{EncodingOptions,Nothing}=nothing,
+                   opts::EncodingOptions=EncodingOptions(),
                    poset_kind::Symbol = :signature) where {K} =
-    encode_from_flange(FG, _resolve_encoding_opts(opts); poset_kind = poset_kind)
+    encode_from_flange(FG, opts; poset_kind = poset_kind)
 
 function encode_from_flange(
     P::AbstractPoset,
@@ -1767,11 +2836,11 @@ end
 function encode_from_flange(
     P::AbstractPoset,
     FG::Flange{K};
-    opts::Union{EncodingOptions,Nothing}=nothing,
+    opts::EncodingOptions=EncodingOptions(),
     check_poset::Bool = true,
     poset_kind::Symbol = :signature,
 ) where {K}
-    return encode_from_flange(P, FG, _resolve_encoding_opts(opts);
+    return encode_from_flange(P, FG, opts;
                               check_poset = check_poset, poset_kind = poset_kind)
 end
 
@@ -1808,9 +2877,9 @@ function encode_from_flanges(FGs::Union{AbstractVector{<:Flange{K}}, Tuple{Varar
 end
 
 encode_from_flanges(FGs::Union{AbstractVector{<:Flange{K}}, Tuple{Vararg{Flange{K}}}};
-                    opts::Union{EncodingOptions,Nothing}=nothing,
+                    opts::EncodingOptions=EncodingOptions(),
                     poset_kind::Symbol = :signature) where {K} =
-    encode_from_flanges(FGs, _resolve_encoding_opts(opts); poset_kind = poset_kind)
+    encode_from_flanges(FGs, opts; poset_kind = poset_kind)
 
 """
     encode_from_flanges(P, FGs, opts::EncodingOptions; check_poset=true, poset_kind=:signature) -> (P, Hs, pi)
@@ -1845,11 +2914,11 @@ end
 function encode_from_flanges(
     P::AbstractPoset,
     FGs::Union{AbstractVector{<:Flange{K}}, Tuple{Vararg{Flange{K}}}};
-    opts::Union{EncodingOptions,Nothing}=nothing,
+    opts::EncodingOptions=EncodingOptions(),
     check_poset::Bool = true,
     poset_kind::Symbol = :signature,
 ) where {K}
-    return encode_from_flanges(P, FGs, _resolve_encoding_opts(opts);
+    return encode_from_flanges(P, FGs, opts;
                                check_poset = check_poset, poset_kind = poset_kind)
 end
 
@@ -1860,9 +2929,9 @@ function encode_from_flanges(FG1::Flange{K}, FG2::Flange{K}, opts::EncodingOptio
 end
 
 encode_from_flanges(FG1::Flange{K}, FG2::Flange{K};
-                    opts::Union{EncodingOptions,Nothing}=nothing,
+                    opts::EncodingOptions=EncodingOptions(),
                     poset_kind::Symbol = :signature) where {K} =
-    encode_from_flanges((FG1, FG2), _resolve_encoding_opts(opts); poset_kind = poset_kind)
+    encode_from_flanges((FG1, FG2), opts; poset_kind = poset_kind)
 
 function encode_from_flanges(FG1::Flange{K}, FG2::Flange{K}, FG3::Flange{K}, opts::EncodingOptions;
                              poset_kind::Symbol = :signature) where {K}
@@ -1870,9 +2939,9 @@ function encode_from_flanges(FG1::Flange{K}, FG2::Flange{K}, FG3::Flange{K}, opt
 end
 
 encode_from_flanges(FG1::Flange{K}, FG2::Flange{K}, FG3::Flange{K};
-                    opts::Union{EncodingOptions,Nothing}=nothing,
+                    opts::EncodingOptions=EncodingOptions(),
                     poset_kind::Symbol = :signature) where {K} =
-    encode_from_flanges((FG1, FG2, FG3), _resolve_encoding_opts(opts); poset_kind = poset_kind)
+    encode_from_flanges((FG1, FG2, FG3), opts; poset_kind = poset_kind)
 
 function encode_from_flanges(
     P::AbstractPoset,
@@ -1890,11 +2959,11 @@ function encode_from_flanges(
     P::AbstractPoset,
     FG1::Flange{K},
     FG2::Flange{K};
-    opts::Union{EncodingOptions,Nothing}=nothing,
+    opts::EncodingOptions=EncodingOptions(),
     check_poset::Bool = true,
     poset_kind::Symbol = :signature,
 ) where {K}
-    return encode_from_flanges(P, (FG1, FG2), _resolve_encoding_opts(opts);
+    return encode_from_flanges(P, (FG1, FG2), opts;
                                check_poset = check_poset, poset_kind = poset_kind)
 end
 
@@ -1916,11 +2985,11 @@ function encode_from_flanges(
     FG1::Flange{K},
     FG2::Flange{K},
     FG3::Flange{K};
-    opts::Union{EncodingOptions,Nothing}=nothing,
+    opts::EncodingOptions=EncodingOptions(),
     check_poset::Bool = true,
     poset_kind::Symbol = :signature,
 ) where {K}
-    return encode_from_flanges(P, (FG1, FG2, FG3), _resolve_encoding_opts(opts);
+    return encode_from_flanges(P, (FG1, FG2, FG3), opts;
                                check_poset = check_poset, poset_kind = poset_kind)
 end
 
@@ -1935,9 +3004,24 @@ region_weights(pi::CompiledEncoding{<:ZnEncodingMap}; kwargs...) =
     region_weights(_unwrap_encoding(pi); kwargs...)
 region_adjacency(pi::CompiledEncoding{<:ZnEncodingMap}; kwargs...) =
     region_adjacency(_unwrap_encoding(pi); kwargs...)
+locate_many!(dest::AbstractVector{<:Integer}, pi::CompiledEncoding{<:ZnEncodingMap}, X::AbstractMatrix{<:Integer}; kwargs...) =
+    locate_many!(dest, _unwrap_encoding(pi), X; kwargs...)
+locate_many!(dest::AbstractVector{<:Integer}, pi::CompiledEncoding{<:ZnEncodingMap}, X::AbstractMatrix{<:AbstractFloat}; kwargs...) =
+    locate_many!(dest, _unwrap_encoding(pi), X; kwargs...)
+locate_many(pi::CompiledEncoding{<:ZnEncodingMap}, X::AbstractMatrix{<:Integer}; kwargs...) =
+    locate_many(_unwrap_encoding(pi), X; kwargs...)
+locate_many(pi::CompiledEncoding{<:ZnEncodingMap}, X::AbstractMatrix{<:AbstractFloat}; kwargs...) =
+    locate_many(_unwrap_encoding(pi), X; kwargs...)
 
 
 export ZnEncodingMap,
+       ZnEncodingCache,
+       ZnBoxBasisCache,
+       compile_zn_cache,
+       compile_zn_box_cache,
+       box_cache_stats,
+       locate_many,
+       locate_many!,
        SignaturePoset,
        encode_poset_from_flanges,
        fringe_from_flange,

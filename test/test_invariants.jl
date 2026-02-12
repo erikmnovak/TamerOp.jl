@@ -380,6 +380,33 @@ end
           PM.Invariants._barcode_from_packed(data_explicit.barcodes[1])
     @test isapprox(data_plan.weights[1, 1], data_explicit.weights[1]; atol=1e-12)
 
+    # Typed SliceSpec collection helpers (plan + generator + JSON round-trip).
+    typed_t = PM.collect_slices(plan1; values=:t)
+    @test eltype(typed_t) == PM.SliceSpec{Float64,Vector{Float64}}
+    data_typed = PM.slice_barcodes(M23, typed_t; packed=true, threads=false)
+    @test PM.Invariants._barcode_from_packed(data_typed.barcodes[1]) ==
+          PM.Invariants._barcode_from_packed(data_explicit.barcodes[1])
+    @test isapprox(data_typed.weights[1], data_explicit.weights[1]; atol=1e-12)
+
+    typed_index = PM.collect_slices(plan1; values=:index)
+    @test eltype(typed_index) == PM.SliceSpec{Float64,Nothing}
+    data_typed_idx = PM.slice_barcodes(M23, typed_index; packed=true, threads=false)
+    @test data_typed_idx.barcodes[1] isa PM.Invariants.PackedIndexBarcode
+
+    typed_from_generator = PM.collect_slices((c for c in plan1.chains))
+    @test eltype(typed_from_generator) == PM.SliceSpec{Float64,Nothing}
+    @test length(typed_from_generator) == length(plan1.chains)
+
+    tmpd = mktempdir()
+    slices_path = joinpath(tmpd, "slice_specs.json")
+    PM.save_slices_json(slices_path, typed_t)
+    loaded_slices = PM.load_slices_json(slices_path)
+    @test eltype(loaded_slices) == PM.SliceSpec{Float64,Vector{Float64}}
+    data_loaded = PM.slice_barcodes(M23, loaded_slices; packed=true, threads=false)
+    @test PM.Invariants._barcode_from_packed(data_loaded.barcodes[1]) ==
+          PM.Invariants._barcode_from_packed(data_typed.barcodes[1])
+    @test isapprox(data_loaded.weights[1], data_typed.weights[1]; atol=1e-12)
+
     k_plan = PM.slice_kernel(M23, M3, pi;
                              directions=dirs, offsets=offs,
                              tmin=0.0, tmax=3.0, nsteps=121,
@@ -481,6 +508,13 @@ end
     opts = PM.InvariantOptions()
     @test PM.rank_map(M23, pi, [2], [3], opts) == 1
     @test PM.restricted_hilbert(M23, pi, [2], opts) == 1
+
+    # rank_query generic fallback path for non-Zn encoding maps.
+    pi_thr = ToyPi1DThresholds()
+    @test PM.rank_query(M23, pi_thr, [1], [2], opts) == PM.rank_map(M23, pi_thr, [1], [2], opts)
+    @test PM.rank_query(M23, pi_thr, [1], [2]) == 1
+    @test_throws ErrorException PM.rank_query(M23, pi_thr, [4], [2], opts)
+    @test PM.rank_query(M23, pi_thr, [4], [2], PM.InvariantOptions(strict=false)) == 0
 end
 
 
@@ -905,12 +939,12 @@ end
     # Geometric version: compare to explicit slice using a tiny toy encoding map.
     pi = ToyPi1DIntervals()
     f_geo = PM.slice_features(M23, pi;
+                              opts=PM.InvariantOptions(strict=false),
                               directions=[[1.0]],
                               offsets=[[0.0]],
                               tmin=0.0,
                               tmax=3.0,
                               nsteps=301,
-                              strict=false,
                               drop_unknown=true,
                               dedup=true,
                               featurizer=:landscape,
@@ -920,12 +954,12 @@ end
     @test isapprox(f_geo[5], f_land[5]; atol=1e-12)
 
     sb_geo = PM.slice_barcodes(M23, pi;
+                               opts=PM.InvariantOptions(strict=false),
                                directions=[[1.0]],
                                offsets=[[0.0]],
                                tmin=0.0,
                                tmax=3.0,
                                nsteps=101,
-                               strict=false,
                                drop_unknown=true,
                                dedup=true,
                                threads=false)
@@ -1135,6 +1169,22 @@ end
         @test typeof(cache).parameters[1] == n
 
         cache = PM.Invariants.RankQueryCache(pi)
+
+        # rank_query on ZnEncodingMap should match rank_map and reuse RankQueryCache.
+        rq_opts = PM.InvariantOptions()
+        qx = [-2]
+        qy = [8]
+        rq_xy = PM.rank_query(Menc, pi, qx, qy, rq_opts; rq_cache=cache)
+        @test rq_xy == PM.rank_map(Menc, pi, qx, qy, rq_opts)
+        @test PM.rank_query(Menc, pi, qx, qy; opts=rq_opts, rq_cache=cache) == rq_xy
+
+        a = PM.locate(pi, qx)
+        b = PM.locate(pi, qy)
+        @test PM.rank_query(Menc, pi, a, b; rq_cache=cache) == PM.rank_map(Menc, a, b)
+
+        pi_comp = PM.compile_encoding(Penc, pi)
+        @test PM.rank_query(Menc, pi_comp, qx, qy, rq_opts; rq_cache=cache) == rq_xy
+        @test PM.rank_query(Menc, pi_comp, a, b; rq_cache=cache) == PM.rank_map(Menc, a, b)
 
         sb_enc_1 = PM.rectangle_signed_barcode(Menc, pi;
             axes=axes_user,
@@ -2077,6 +2127,275 @@ end
         img_serial2 = Inv.mpp_image(cache23; resolution=6, N=3, sigma=0.25, threads=false)
         img_thread2 = Inv.mpp_image(cache23; resolution=6, N=3, sigma=0.25, threads=true)
         @test isapprox(img_thread2.img, img_serial2.img; atol=1e-12, rtol=0.0)
+    end
+end
+
+@testset "Exported invariant utility APIs: direct correctness coverage" begin
+    # ------------------------------------------------------------------
+    # Region-label / support utilities
+    # ------------------------------------------------------------------
+    pi1 = ToyPi1DThresholds()
+    opts1 = PM.InvariantOptions(box=([0.0], [3.0]), strict=true)
+
+    vals_rep = PM.region_values(pi1, x -> (x[1] < 2.0 ? :left : :right); arg=:rep)
+    @test vals_rep == [:left, :left, :right]
+
+    pi_idx = ToyBoxes2D((Float64[0.0, 1.0], Float64[0.0, 1.0]), [(0.0, 0.0), (1.0, 0.0), (2.0, 0.0)])
+    vals_idx = PM.region_values(pi_idx, r -> r * r; arg=:index)
+    @test vals_idx == [1, 4, 9]
+
+    vals_both = PM.region_values(pi1, (r, x) -> r + Int(floor(x[1])); arg=:both)
+    @test vals_both == [1, 3, 5]
+
+    w = [2.0, 3.0, 5.0]
+    @test PM.support_measure(Bool[true, false, true], pi1, opts1; weights=w) == 7.0
+    @test PM.vertex_set_measure([1, 3, 3], pi1, opts1; weights=w) == 7.0
+    @test_throws ErrorException PM.vertex_set_measure([4], pi1, opts1; weights=w)
+
+    # ------------------------------------------------------------------
+    # Axis coarsening / restriction helpers
+    # ------------------------------------------------------------------
+    axes2 = ([1, 2, 3, 4, 5], [10, 20, 30, 40, 50])
+    coarse = PM.coarsen_axes(axes2; max_len=3)
+    @test length(coarse[1]) <= 3
+    @test length(coarse[2]) <= 3
+    @test first(coarse[1]) == 1 && last(coarse[1]) == 5
+    @test first(coarse[2]) == 10 && last(coarse[2]) == 50
+
+    axes_restricted = PM.restrict_axes_to_encoding(([0, 2, 3],), pi1)
+    @test axes_restricted == ([0.0, 2.0, 3.0],)
+
+    # Specialized ZnEncodingMap axis restriction semantics.
+    I = FZ.Face(1, Int[])
+    flats = [FZ.IndFlat(I, [1]; id=:F)]
+    injectives = [FZ.IndInj(I, [3]; id=:E)]
+    FG = FZ.Flange{K}(1, flats, injectives, reshape([cf(1)], 1, 1))
+    _, _, zpi = PM.encode_from_flange(FG, PM.EncodingOptions(backend=:zn, max_regions=1000))
+
+    zax_keep = PM.restrict_axes_to_encoding(([0, 2, 4],), zpi; keep_endpoints=true)
+    zax_drop = PM.restrict_axes_to_encoding(([0, 2, 4],), zpi; keep_endpoints=false)
+    @test 0 in zax_keep[1] && 4 in zax_keep[1]
+    @test issubset(Set(zax_drop[1]), Set(zax_keep[1]))
+    @test all(x -> x in PM.axes_from_encoding(zpi)[1], zax_drop[1])
+
+    # ------------------------------------------------------------------
+    # Graph primitives
+    # ------------------------------------------------------------------
+    adj = Dict{Tuple{Int,Int},Float64}((1,2)=>2.0, (2,3)=>1.0)
+    gd = PM.graph_degrees(adj, 4)
+    @test gd.degrees == [1, 2, 1, 0]
+    @test gd.weighted_degrees == [2.0, 3.0, 1.0, 0.0]
+
+    comps = PM.graph_connected_components(adj, 4)
+    comp_sets = Set(Set(c) for c in comps)
+    @test comp_sets == Set([Set([1,2,3]), Set([4])])
+
+    modq = PM.graph_modularity([1, 1, 2, 3], adj; nregions=4)
+    @test isapprox(modq, -1.0/18.0; atol=1e-12)
+    @test PM.graph_modularity([1, 1], Dict{Tuple{Int,Int},Float64}(); nregions=2) == 0.0
+
+    # ------------------------------------------------------------------
+    # Point signed measure helpers
+    # ------------------------------------------------------------------
+    pm = PM.PointSignedMeasure((Float64[0.0, 1.0, 2.0],), [(1,), (2,), (3,)], [1, -5, 2])
+    pm_trunc = PM.truncate_point_signed_measure(pm; max_terms=2, min_abs_weight=2)
+    @test pm_trunc.inds == [(2,), (3,)]
+    @test pm_trunc.wts == [-5, 2]
+
+    pm1 = PM.PointSignedMeasure((Float64[0.0],), [(1,)], [2])
+    pm2 = PM.PointSignedMeasure((Float64[0.0],), [(1,)], [3])
+    @test PM.point_signed_measure_kernel(pm1, pm2; sigma=1.0, kind=:gaussian) == 6.0
+    @test PM.point_signed_measure_kernel(pm1, pm2; sigma=1.0, kind=:laplacian) == 6.0
+
+    # ------------------------------------------------------------------
+    # Euler alias + Bass support summaries
+    # ------------------------------------------------------------------
+    Pch = chain_poset(3)
+    H23 = one_by_one_fringe(Pch, FF.principal_upset(Pch, 2), FF.principal_downset(Pch, 3), cf(1); field=field)
+    M23 = IR.pmodule_from_fringe(H23)
+    opts_axes = PM.InvariantOptions(axes=([1, 2, 3],), axes_policy=:as_given)
+
+    @test PM.euler_characteristic_surface(M23, pi1, opts_axes) == PM.euler_surface(M23, pi1, opts_axes)
+
+    Bdict = Dict((0, 1) => 1, (1, 3) => 2)
+    bs = PM.bass_support_measures(Bdict, pi1, opts1; weights=w)
+    @test bs.support_by_degree == [2.0, 5.0]
+    @test bs.mass_by_degree == [2.0, 10.0]
+    @test bs.support_union == 7.0
+
+    Bmat = [1 0 0; 0 0 2]
+    bs_mat = PM.bass_support_measures(Bmat, pi1, opts1; weights=w)
+    @test bs_mat == bs
+
+    # ------------------------------------------------------------------
+    # Fibered low-level accessors + projected distances
+    # ------------------------------------------------------------------
+    Ups = [PLB.BoxUpset([0.0, -10.0]), PLB.BoxUpset([1.0, -10.0])]
+    Downs = PLB.BoxDownset[]
+    P2, _, pi2 = PLB.encode_fringe_boxes(Ups, Downs, PM.EncodingOptions())
+    r2 = PM.locate(pi2, [0.5, 0.0])
+    r3 = PM.locate(pi2, [2.0, 0.0])
+
+    M2 = IR.pmodule_from_fringe(one_by_one_fringe(P2, FF.principal_upset(P2, r2), FF.principal_downset(P2, r3); field=field))
+    M3 = IR.pmodule_from_fringe(one_by_one_fringe(P2, FF.principal_upset(P2, r3), FF.principal_downset(P2, r3); field=field))
+
+    opts2 = PM.InvariantOptions(box=([-1.0, -1.0], [2.0, 1.0]))
+    arr2 = PM.fibered_arrangement_2d(pi2, opts2; normalize_dirs=:L1, precompute=:cells)
+
+    cid = PM.fibered_cell_id(arr2, (1.0, 1.0), 0.0)
+    @test cid !== nothing
+    cid2 = PM.fibered_cell_id(arr2, (1.0, 1.0), [0.0, 0.0])
+    @test cid2 !== nothing
+
+    ch = PM.fibered_chain(arr2, (1.0, 1.0), 0.0; copy=false)
+    vals = PM.fibered_values(arr2, (1.0, 1.0), 0.0)
+    @test length(vals) == length(ch) + 1
+
+    fbc = PM.fibered_barcode_cache_2d(M2, arr2; precompute=:none)
+    fs = PM.fibered_slice(fbc, (1.0, 1.0), 0.0)
+    @test fs.chain == collect(ch)
+    @test length(fs.values) == length(fs.chain) + 1
+    @test fs.barcode == PM.fibered_barcode(fbc, (1.0, 1.0), 0.0)
+
+    parr = PM.projected_arrangement(pi2; dirs=[(1.0, 0.0), (0.0, 1.0)], threads=false)
+    pc2 = PM.projected_barcode_cache(M2, parr; precompute=true)
+    pc3 = PM.projected_barcode_cache(M3, parr; precompute=true)
+    dvec = PM.projected_distances(pc2, pc3; dist=:bottleneck, threads=false)
+    @test length(dvec) == 2
+    dmean = PM.projected_distance(pc2, pc3; dist=:bottleneck, agg=:mean, threads=false)
+    @test isapprox(dmean, sum(dvec) / length(dvec); atol=1e-12)
+
+    # ------------------------------------------------------------------
+    # Direct exported sliced kernel + MPP decomposition APIs
+    # ------------------------------------------------------------------
+    kself = PM.sliced_wasserstein_kernel(
+        M2, M2, pi2, opts2;
+        n_dirs=8, n_offsets=5, sigma=1.0,
+        normalize_weights=true, normalize_dirs=:L1,
+        threads=false
+    )
+    kcross = PM.sliced_wasserstein_kernel(
+        M2, M3, pi2, opts2;
+        n_dirs=8, n_offsets=5, sigma=1.0,
+        normalize_weights=true, normalize_dirs=:L1,
+        threads=false
+    )
+    kcross_sym = PM.sliced_wasserstein_kernel(
+        M3, M2, pi2, opts2;
+        n_dirs=8, n_offsets=5, sigma=1.0,
+        normalize_weights=true, normalize_dirs=:L1,
+        threads=false
+    )
+    @test isapprox(kself, 1.0; atol=1e-12)
+    @test 0.0 <= kcross <= 1.0
+    @test isapprox(kcross, kcross_sym; atol=1e-12)
+
+    decomp_from_wrapper = Inv.mpp_decomposition(M2, pi2, opts2)
+    arr_mpp = PM.fibered_arrangement_2d(pi2, opts2; include_axes=true)
+    cache_mpp = PM.fibered_barcode_cache_2d(M2, arr_mpp)
+    decomp_from_cache = Inv.mpp_decomposition(cache_mpp)
+    @test length(decomp_from_wrapper.summands) == length(decomp_from_cache.summands)
+    @test length(decomp_from_wrapper.weights) == length(decomp_from_cache.weights)
+    @test isapprox(sum(decomp_from_wrapper.weights), sum(decomp_from_cache.weights); atol=1e-12)
+    @test decomp_from_wrapper.box == decomp_from_cache.box
+
+    # ------------------------------------------------------------------
+    # Feature-map direct API
+    # ------------------------------------------------------------------
+    bar = Dict((0.0, 1.0)=>1, (0.25, 0.75)=>1)
+    pim = PM.persistence_image(bar; xgrid=0.0:0.5:1.0, ygrid=0.0:0.5:1.0, sigma=0.2)
+    @test PM.feature_map(pim; flatten=false) == pim.values
+    @test PM.feature_map(pim; flatten=true) == vec(pim.values)
+
+    # ------------------------------------------------------------------
+    # Type-level API contracts for exported invariant data structures
+    # ------------------------------------------------------------------
+    @testset "Exported invariant type-level contracts" begin
+        # Point signed measure
+        @test pm isa PM.PointSignedMeasure
+        @test length(pm.inds) == length(pm.wts)
+        @test length(pm.axes) == 1
+
+        # Fibered arrangement
+        @test arr2 isa PM.FiberedArrangement2D
+        @test arr2.total_cells >= 0
+        @test length(arr2.dir_reps) == length(arr2.orders) == length(arr2.unique_pos) == length(arr2.noff)
+        @test length(arr2.start) == length(arr2.noff)
+        @test arr2.total_cells == sum(arr2.noff)
+        @test length(arr2.cell_chain_id) == arr2.total_cells
+        @test arr2.n_cell_computed <= arr2.total_cells
+
+        # Fibered slice family
+        fam_types = PM.fibered_slice_family_2d(arr2; direction_weight=:lesnick_l1, store_values=true)
+        @test fam_types isa PM.FiberedSliceFamily2D
+        @test fam_types.arrangement === arr2
+        @test PM.nslices(fam_types) == length(fam_types.dir_idx) == length(fam_types.off_idx) ==
+              length(fam_types.cell_id) == length(fam_types.chain_id) ==
+              length(fam_types.off_mid) == length(fam_types.off0) == length(fam_types.off1) ==
+              length(fam_types.vals_start) == length(fam_types.vals_len)
+        @test fam_types.direction_weight_scheme == :lesnick_l1
+        @test fam_types.store_values
+        for k in 1:PM.nslices(fam_types)
+            cid = fam_types.chain_id[k]
+            @test cid > 0
+            vv = PM.fibered_values(fam_types, k)
+            @test length(vv) == fam_types.vals_len[k]
+            if fam_types.vals_len[k] > 0
+                @test length(vv) == length(arr2.chains[cid]) + 1
+            end
+        end
+
+        # Fibered barcode cache
+        @test fbc isa PM.FiberedBarcodeCache2D
+        @test length(fbc.index_barcodes_packed) == length(arr2.chains)
+        @test fbc.n_barcode_computed >= 0
+        @test fbc.M === M2
+        @test fbc.arrangement === arr2
+
+        # Projected arrangements + caches
+        @test parr isa PM.ProjectedArrangement
+        @test length(parr.projections) == 2
+        for pr in parr.projections
+            @test pr isa PM.ProjectedArrangement1D
+            @test first(pr.chain) == 1
+            @test last(pr.chain) == PM.nvertices(pr.C)
+            @test length(pr.values) == length(pr.chain) + 1
+            @test length(pr.dir) == 2
+        end
+
+        @test pc2 isa PM.ProjectedBarcodeCache
+        @test pc3 isa PM.ProjectedBarcodeCache
+        @test pc2.arrangement === parr
+        @test length(pc2.packed_barcodes) == length(parr.projections)
+        @test pc2.n_computed >= 0
+
+        # Persistence landscape/image
+        pl = PM.persistence_landscape(bar; kmax=3, tgrid=[0.0, 0.5, 1.0])
+        @test pl isa PM.PersistenceLandscape1D
+        @test issorted(pl.tgrid)
+        @test size(pl.values, 1) == 3
+        @test size(pl.values, 2) == length(pl.tgrid)
+        @test all(isfinite, pl.values)
+        @test all(x -> x >= 0.0, pl.values)
+
+        @test pim isa PM.PersistenceImage1D
+        @test size(pim.values, 1) == length(pim.ygrid)
+        @test size(pim.values, 2) == length(pim.xgrid)
+        @test all(isfinite, pim.values)
+        @test all(x -> x >= 0.0, pim.values)
+
+        # MPP decomposition + line specs
+        @test decomp_from_wrapper isa PM.MPPDecomposition
+        @test all(l -> l isa PM.MPPLineSpec, decomp_from_wrapper.lines)
+        @test length(decomp_from_wrapper.summands) == length(decomp_from_wrapper.weights)
+        @test all(w -> w >= 0.0, decomp_from_wrapper.weights)
+        for line in decomp_from_wrapper.lines
+            @test length(line.dir) == 2
+            @test length(line.x0) == 2
+            @test isfinite(line.off)
+            @test isfinite(line.omega)
+            @test 0.0 <= line.omega <= 1.0 + 1e-12
+        end
     end
 end
 end # with_fields

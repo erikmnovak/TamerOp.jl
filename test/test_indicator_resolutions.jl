@@ -59,6 +59,49 @@ using LinearAlgebra
     @test get(ext22, 0, 0) == FF.hom_dimension(S2, S2)
 end
 
+@testset "IndicatorResolutions dense-id assembly parity + budgets" begin
+    # Non-chain shape exercises the active-generator edge assembly logic.
+    P = diamond_poset()
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+
+    U = [FF.principal_upset(P, 2), FF.principal_upset(P, 3)]
+    D = [FF.principal_downset(P, 4)]
+    Phi = spzeros(K, 1, 2)
+    Phi[1, 1] = CM.coerce(field, 1)
+    Phi[1, 2] = CM.coerce(field, 1)
+    H = FF.FringeModule{K}(P, U, D, Phi; field=field)
+    M = IR.pmodule_from_fringe(H)
+
+    F0s, pi0s, _ = IR.projective_cover(M; threads=false)
+    E0s, iotas, _ = IR._injective_hull(M; threads=false)
+
+    if Threads.nthreads() > 1
+        F0t, pi0t, _ = IR.projective_cover(M; threads=true)
+        @test F0t.dims == F0s.dims
+        @test pi0t.comps == pi0s.comps
+        for (u, v) in FF.cover_edges(P)
+            @test F0t.edge_maps[u, v] == F0s.edge_maps[u, v]
+        end
+
+        E0t, iotat, _ = IR._injective_hull(M; threads=true)
+        @test E0t.dims == E0s.dims
+        @test iotat.comps == iotas.comps
+        for (u, v) in FF.cover_edges(P)
+            @test E0t.edge_maps[u, v] == E0s.edge_maps[u, v]
+        end
+    end
+
+    # Allocation guards: warm then measure on fixed fixture.
+    IR.projective_cover(M; threads=false)
+    alloc_proj_cover = @allocated IR.projective_cover(M; threads=false)
+    @test alloc_proj_cover < 25_000_000
+
+    IR._injective_hull(M; threads=false)
+    alloc_inj_hull = @allocated IR._injective_hull(M; threads=false)
+    @test alloc_inj_hull < 25_000_000
+end
+
 @testset "Cover-edge maps are label-consistent on non-chain posets" begin
     # Poset with relations: 1<3<4 and 2<4 (2 incomparable with 3)
     leq = falses(4,4)

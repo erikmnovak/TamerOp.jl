@@ -29,26 +29,10 @@ using ..FiniteFringe: cover_edges, nvertices
 using ..CoreModules: AbstractCoeffField, RealField, eye
 using ..FieldLinAlg
 
-using ..Modules: CoverCache, cover_cache,
-                 CoverEdgeMapStore, _find_sorted_index,
+using ..Modules: CoverCache, _get_cover_cache,
+                 CoverEdgeMapStore,
                  PModule, PMorphism, id_morphism,
                  direct_sum_with_maps
-
-# Public API (exported to PosetModules via `using .AbelianCategories`).
-export kernel_with_inclusion, kernel,
-       image_with_inclusion, image,
-       cokernel_with_projection, cokernel,
-       coimage_with_projection, coimage,
-       quotient_with_projection, quotient,
-       is_zero_morphism, is_monomorphism, is_epimorphism,
-       Submodule, submodule, sub, ambient, inclusion,
-       kernel_submodule, image_submodule,
-       pushout, pullback,
-       ShortExactSequence, short_exact_sequence, is_exact, assert_exact,
-       snake_lemma, SnakeLemmaResult,
-       biproduct, product, coproduct, equalizer, coequalizer,
-       AbstractDiagram, DiscretePairDiagram, ParallelPairDiagram, SpanDiagram, CospanDiagram,
-       limit, colimit
 
 # ------------------------------- helpers -------------------------------------
 
@@ -62,6 +46,10 @@ function _is_zero_matrix(field::AbstractCoeffField, A::AbstractMatrix)
     return all(iszero, A)
 end
 
+const COKERNEL_BATCH_MIN_FANOUT = 3
+const COKERNEL_BATCH_MIN_TOTAL_RHS_COLS = 128
+const _FAST_SOLVE_NO_CHECK = Ref{Bool}(true)
+
 # --------------------------- kernel and upset presentation --------------------------
 
 "Kernel of f with inclusion iota : ker(f) to dom(f), degreewise."
@@ -71,6 +59,9 @@ function kernel_with_inclusion(f::PMorphism{K}; cache::Union{Nothing,CoverCache}
 
     basisK = Vector{Matrix{K}}(undef, n)
     K_dims = zeros(Int, n)
+    cc = (cache === nothing ? _get_cover_cache(M.Q) : cache)
+    succs = cc.succs
+    pred_slot_of_succ = cc.pred_slot_of_succ
     for i in 1:n
         B = FieldLinAlg.nullspace(f.dom.field, f.comps[i])
         basisK[i] = B
@@ -78,10 +69,7 @@ function kernel_with_inclusion(f::PMorphism{K}; cache::Union{Nothing,CoverCache}
     end
 
     # Build the kernel's structure maps directly in store-aligned form.
-    cc = (cache === nothing ? cover_cache(M.Q) : cache)
     preds = cc.preds
-    succs = cc.succs
-
     maps_from_pred = [Vector{Matrix{K}}(undef, length(preds[v])) for v in 1:n]
     maps_to_succ   = [Vector{Matrix{K}}(undef, length(succs[u])) for u in 1:n]
 
@@ -97,7 +85,7 @@ function kernel_with_inclusion(f::PMorphism{K}; cache::Union{Nothing,CoverCache}
             if K_dims[u] == 0 || K_dims[v] == 0
                 X = zeros(K, K_dims[v], K_dims[u])
                 outu[j] = X
-                ip = _find_sorted_index(preds[v], u)
+                ip = pred_slot_of_succ[u][j]
                 maps_from_pred[v][ip] = X
                 continue
             end
@@ -105,10 +93,10 @@ function kernel_with_inclusion(f::PMorphism{K}; cache::Union{Nothing,CoverCache}
             # Induced map K(u) -> K(v): express M(u->v)*basisK[u] in basisK[v].
             T  = maps_u_M[j]
             Im = T * basisK[u]
-            X  = FieldLinAlg.solve_fullcolumn(f.dom.field, basisK[v], Im; check_rhs=false)
+            X = FieldLinAlg.solve_fullcolumn(f.dom.field, basisK[v], Im; check_rhs=false)
 
             outu[j] = X
-            ip = _find_sorted_index(preds[v], u)
+            ip = pred_slot_of_succ[u][j]
             maps_from_pred[v][ip] = X
         end
     end
@@ -138,6 +126,10 @@ function image_with_inclusion(f::PMorphism{K}; cache::Union{Nothing,CoverCache}=
     bases = Vector{Matrix{K}}(undef, n)
     dims  = zeros(Int, n)
 
+    preds  = N.edge_maps.preds
+    succs  = N.edge_maps.succs
+    cc = cache === nothing ? _get_cover_cache(Q) : cache
+    pred_slot_of_succ = cc.pred_slot_of_succ
     for i in 1:n
         B = FieldLinAlg.colspace(f.dom.field, f.comps[i])
         bases[i] = B
@@ -146,8 +138,6 @@ function image_with_inclusion(f::PMorphism{K}; cache::Union{Nothing,CoverCache}=
 
     # Build the image's structure maps directly in store-aligned form.
     storeN = N.edge_maps
-    preds  = storeN.preds
-    succs  = storeN.succs
 
     maps_from_pred = [Vector{Matrix{K}}(undef, length(preds[v])) for v in 1:n]
     maps_to_succ   = [Vector{Matrix{K}}(undef, length(succs[u])) for u in 1:n]
@@ -172,11 +162,11 @@ function image_with_inclusion(f::PMorphism{K}; cache::Union{Nothing,CoverCache}=
                 zeros(K, 0, du)
             else
                 T = Nu[j] * Bu
-                FieldLinAlg.solve_fullcolumn(f.dom.field, Bv, T)
+                FieldLinAlg.solve_fullcolumn(f.dom.field, Bv, T; check_rhs=!_FAST_SOLVE_NO_CHECK[])
             end
 
             outu[j] = Auv
-            ip = _find_sorted_index(preds[v], u)
+            ip = pred_slot_of_succ[u][j]
             maps_from_pred[v][ip] = Auv
         end
     end
@@ -205,30 +195,120 @@ function _cokernel_module(iota::PMorphism{K}; cache::Union{Nothing,CoverCache}=n
         qcomps[i] = transpose(Ni)
     end
 
-    # structure maps of C
-    Cedges = Dict{Tuple{Int,Int}, Matrix{K}}()
-    cc = (cache === nothing ? cover_cache(Q) : cache)
+    cc = (cache === nothing ? _get_cover_cache(Q) : cache)
+    preds = cc.preds
+    succs = cc.succs
+    pred_slot_of_succ = cc.pred_slot_of_succ
+    qtrans = [transpose(qcomps[i]) for i in 1:n]
+
+    maps_from_pred = [Vector{Matrix{K}}(undef, length(preds[v])) for v in 1:n]
+    maps_to_succ   = [Vector{Matrix{K}}(undef, length(succs[u])) for u in 1:n]
 
     @inbounds for u in 1:n
-        su     = cc.succs[u]
+        su     = succs[u]
         maps_u = E.edge_maps.maps_to_succ[u]   # aligned with su
+        outu   = maps_to_succ[u]
+        q_u_t = qtrans[u]
+        du = Cdims[u]
 
+        if du == 0
+            for j in eachindex(su)
+                v = su[j]
+                Auv = zeros(K, Cdims[v], 0)
+                outu[j] = Auv
+                ip = pred_slot_of_succ[u][j]
+                maps_from_pred[v][ip] = Auv
+            end
+            continue
+        end
+
+        # Batch all outgoing edge solves at fixed u into one solve_fullcolumn call.
+        # For edge u->v we need A_uv with:
+        #   q_v * T_uv = A_uv * q_u
+        # equivalently (transpose):
+        #   transpose(q_u) * transpose(A_uv) = transpose(T_uv) * transpose(q_v)
+        # so each RHS block is transpose(T_uv) * qtrans[v].
+        total_cols = 0
+        for v in su
+            total_cols += Cdims[v]
+        end
+
+        if total_cols == 0
+            for j in eachindex(su)
+                v = su[j]
+                Auv = zeros(K, 0, du)
+                outu[j] = Auv
+                ip = pred_slot_of_succ[u][j]
+                maps_from_pred[v][ip] = Auv
+            end
+            continue
+        end
+
+        use_batch = (length(su) >= COKERNEL_BATCH_MIN_FANOUT) &&
+                    (total_cols >= COKERNEL_BATCH_MIN_TOTAL_RHS_COLS)
+        if !use_batch
+            for j in eachindex(su)
+                v = su[j]
+                cv = Cdims[v]
+                Auv = if cv == 0
+                    zeros(K, 0, du)
+                else
+                    rhs = transpose(qcomps[v] * maps_u[j])
+                    X = FieldLinAlg.solve_fullcolumn(field, q_u_t, rhs; check_rhs=!_FAST_SOLVE_NO_CHECK[])
+                    A = Matrix{K}(undef, cv, du)
+                    for a in 1:cv, b in 1:du
+                        @inbounds A[a, b] = X[b, a]
+                    end
+                    A
+                end
+                outu[j] = Auv
+                ip = pred_slot_of_succ[u][j]
+                maps_from_pred[v][ip] = Auv
+            end
+            continue
+        end
+
+        offsets = Vector{Int}(undef, length(su) + 1)
+        offsets[1] = 1
+        for j in eachindex(su)
+            offsets[j + 1] = offsets[j] + Cdims[su[j]]
+        end
+
+        rhs_all = Matrix{K}(undef, size(q_u_t, 1), total_cols)
         for j in eachindex(su)
             v = su[j]
+            cv = Cdims[v]
+            cv == 0 && continue
+            c0 = offsets[j]
+            c1 = offsets[j + 1] - 1
+            block = view(rhs_all, :, c0:c1)
+            mul!(block, transpose(maps_u[j]), qtrans[v])
+        end
 
-            if Cdims[u] > 0 && Cdims[v] > 0
-                T = maps_u[j]  # E_u -> E_v along this cover edge
-
-                # Induced quotient map: enforce q_v * T = A * q_u.
-                X = FieldLinAlg.solve_fullcolumn(field, transpose(qcomps[u]), transpose(qcomps[v] * T))
-                Cedges[(u, v)] = transpose(X)  # dim C_v x dim C_u
+        Xall = FieldLinAlg.solve_fullcolumn(field, q_u_t, rhs_all; check_rhs=!_FAST_SOLVE_NO_CHECK[])
+        for j in eachindex(su)
+            v = su[j]
+            cv = Cdims[v]
+            Auv = if cv == 0
+                zeros(K, 0, du)
             else
-                Cedges[(u, v)] = zeros(K, Cdims[v], Cdims[u])
+                c0 = offsets[j]
+                c1 = offsets[j + 1] - 1
+                Xblk = view(Xall, :, c0:c1)   # du x cv
+                A = Matrix{K}(undef, cv, du)  # cv x du
+                for a in 1:cv, b in 1:du
+                    @inbounds A[a, b] = Xblk[b, a]
+                end
+                A
             end
+            outu[j] = Auv
+            ip = pred_slot_of_succ[u][j]
+            maps_from_pred[v][ip] = Auv
         end
     end
 
-    Cmod = PModule{K}(Q, Cdims, Cedges; field=field)
+    storeC = CoverEdgeMapStore{K,Matrix{K}}(preds, succs, maps_from_pred, maps_to_succ, cc.nedges)
+    Cmod = PModule{K}(Q, Cdims, storeC; field=field)
     q = PMorphism(E, Cmod, qcomps)
     return Cmod, q
 end
@@ -517,14 +597,24 @@ end
 # -----------------------------------------------------------------------------
 
 # Internal: compute a right inverse for a full-row-rank matrix Q (r x m), so Q * rinv = I_r.
-function _right_inverse_full_row(field, Q::Matrix)
+function _right_inverse_full_row(field::AbstractCoeffField, Q::AbstractMatrix{K}) where {K}
     r, m = size(Q)
     if r == 0
-        return zeros(eltype(Q), m, 0)
+        return zeros(K, m, 0)
     end
-    G = Q * transpose(Q)  # r x r, invertible if Q has full row rank
-    invG = FieldLinAlg.solve_fullcolumn(field, G, eye(field, r))
-    return transpose(Q) * invG  # m x r
+    Qm = Q isa Matrix{K} ? Q : Matrix(Q)
+    _, pivs = FieldLinAlg.rref(field, Qm)
+    length(pivs) == r || error("_right_inverse_full_row: expected full row rank, got rank $(length(pivs)) < $r")
+
+    piv = collect(pivs[1:r])
+    Qp = Qm[:, piv]
+    invQp = FieldLinAlg.solve_fullcolumn(field, Qp, eye(field, r))
+
+    R = zeros(K, m, r)
+    @inbounds for i in 1:r
+        R[piv[i], :] = invQp[i, :]
+    end
+    return R
 end
 
 """
@@ -1240,7 +1330,7 @@ function _direct_sum_many_with_maps(mods::AbstractVector{<:PModule{K}}) where {K
     Sdims = [offsets[u][end] for u in 1:n]
 
     # Build cover-edge maps for the direct sum.
-    cc = cover_cache(Q)
+    cc = _get_cover_cache(Q)
 
     aligned = true
     for M in mods
@@ -1253,6 +1343,7 @@ function _direct_sum_many_with_maps(mods::AbstractVector{<:PModule{K}}) where {K
     if aligned
         preds = cc.preds
         succs = cc.succs
+        pred_slot_of_succ = cc.pred_slot_of_succ
 
         maps_from_pred = [Vector{Matrix{K}}(undef, length(preds[v])) for v in 1:n]
         maps_to_succ   = [Vector{Matrix{K}}(undef, length(succs[u])) for u in 1:n]
@@ -1280,7 +1371,7 @@ function _direct_sum_many_with_maps(mods::AbstractVector{<:PModule{K}}) where {K
                 end
 
                 outu[j] = Auv
-                ip = _find_sorted_index(preds[v], u)
+                ip = pred_slot_of_succ[u][j]
                 @inbounds maps_from_pred[v][ip] = Auv
             end
         end

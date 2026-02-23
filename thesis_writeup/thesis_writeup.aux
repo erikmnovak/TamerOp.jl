@@ -27,11 +27,12 @@
 \newlabel{def:poset}{{1}{3}{Poset}{theorem.1}{}}
 \newlabel{def:poset-as-category}{{2}{3}{Poset as a category}{theorem.2}{}}
 \newlabel{def:Q-module}{{3}{3}{Poset module / persistence module}{theorem.3}{}}
+\newlabel{def:morphism-of-Q-modules}{{4}{3}{Morphisms}{theorem.4}{}}
 \citation{Mil20}
-\newlabel{def:morphism-of-Q-modules}{{4}{4}{Morphisms}{theorem.4}{}}
 \newlabel{prop:functor-category-abelian}{{2.1}{4}{Pointwise abelian structure}{section*.4}{}}
 \newlabel{def:upset-downset}{{5}{4}{Upsets and downsets}{theorem.5}{}}
 \newlabel{def:indicator-modules}{{6}{4}{Indicator modules}{theorem.6}{}}
+\newlabel{rmk:yoneda-principal-upset}{{2.1}{4}{Yoneda intuition}{theorem.6}{}}
 \citation{CB15}
 \citation{CDSGO16}
 \citation{ZC05}
@@ -39,7 +40,6 @@
 \citation{CB15}
 \citation{CDSGO16}
 \citation{Les15}
-\newlabel{rmk:yoneda-principal-upset}{{2.1}{5}{Yoneda intuition}{theorem.6}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {2.2}1-parameter persistence}{5}{subsection.2.2}\protected@file@percent }
 \newlabel{sec:background:1d}{{2.2}{5}{1-parameter persistence}{subsection.2.2}{}}
 \newlabel{def:filtration}{{7}{5}{Filtration}{theorem.7}{}}
@@ -48,26 +48,26 @@
 \newlabel{thm:barcode}{{10}{5}{Barcode decomposition, informal statement}{theorem.10}{}}
 \citation{CZ09}
 \citation{Oud15}
+\citation{RIVET}
 \@writefile{toc}{\contentsline {subsection}{\numberline {2.3}Multiparameter persistence and why it is hard}{6}{subsection.2.3}\protected@file@percent }
 \newlabel{sec:background:multi-hard}{{2.3}{6}{Multiparameter persistence and why it is hard}{subsection.2.3}{}}
 \newlabel{def:multi-parameter-module}{{11}{6}{Multiparameter persistence module}{theorem.11}{}}
 \newlabel{rmk:what-replaces-barcodes}{{2.3}{6}{What replaces barcodes?}{section*.10}{}}
 \newlabel{def:rank-invariant}{{12}{6}{Rank invariant}{theorem.12}{}}
 \newlabel{def:hilbert-function}{{13}{6}{Hilbert function / dimension function}{theorem.13}{}}
-\citation{RIVET}
+\newlabel{def:slice}{{14}{6}{Restriction to a chain / slice}{theorem.14}{}}
 \citation{Mil20}
 \citation{EH10}
 \citation{CZ09}
 \citation{Oud15}
-\newlabel{def:slice}{{14}{7}{Restriction to a chain / slice}{theorem.14}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {2.4}Two complementary viewpoints}{7}{subsection.2.4}\protected@file@percent }
 \newlabel{sec:background:viewpoints}{{2.4}{7}{Two complementary viewpoints}{subsection.2.4}{}}
 \newlabel{prop:graded-module-equivalence}{{2.4}{7}{Equivalence with multigraded modules (discrete setting)}{section*.13}{}}
 \citation{RIVET}
 \citation{Mil20}
+\citation{Mil20}
 \@writefile{toc}{\contentsline {subsection}{\numberline {2.5}Survey of partial solutions}{8}{subsection.2.5}\protected@file@percent }
 \newlabel{sec:background:partial-solutions}{{2.5}{8}{Survey of partial solutions}{subsection.2.5}{}}
-\citation{Mil20}
 \citation{RIVET}
 \@writefile{toc}{\contentsline {subsection}{\numberline {2.6}Brief software landscape}{9}{subsection.2.6}\protected@file@percent }
 \newlabel{sec:background:software-landscape}{{2.6}{9}{Brief software landscape}{subsection.2.6}{}}
@@ -98,15 +98,15 @@
 \newlabel{lem:pullback-exact}{{17}{11}{Exactness of pullback}{theorem.17}{}}
 \newlabel{def:subordinate}{{18}{11}{Subordinate encoding {\cite [Def.~4.7]{Mil20}}}{theorem.18}{}}
 \newlabel{ex:indicator-encoding}{{19}{11}{Indicator modules admit trivial finite encodings {\cite [Ex.~4.6]{Mil20}}}{theorem.19}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.3}Definitions of tameness in this framework}{11}{subsection.3.3}\protected@file@percent }
+\newlabel{subsec:def-tameness}{{3.3}{11}{Definitions of tameness in this framework}{subsection.3.3}{}}
+\newlabel{def:tame-module}{{20}{11}{$P$-tame and tame modules}{theorem.20}{}}
 \citation{Mil20}
 \citation{Mil20}
 \citation{Mil20}
 \citation{Mil20}
 \citation{Mil20}
 \citation{Mil20}
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.3}Definitions of tameness in this framework}{12}{subsection.3.3}\protected@file@percent }
-\newlabel{subsec:def-tameness}{{3.3}{12}{Definitions of tameness in this framework}{subsection.3.3}{}}
-\newlabel{def:tame-module}{{20}{12}{$P$-tame and tame modules}{theorem.20}{}}
 \newlabel{rem:other-tameness}{{3.3}{12}{Comparison with other finiteness notions}{Item.13}{}}
 \newlabel{def:tame-morphism}{{21}{12}{Tame morphisms and the tame category {\cite [Def.~4.27, Def.~4.29]{Mil20}}}{theorem.21}{}}
 \newlabel{thm:tame-abelian}{{22}{12}{Tame modules form an abelian category {\cite [Prop.~4.31]{Mil20}}}{theorem.22}{}}
@@ -125,6 +125,7 @@
 \@writefile{toc}{\contentsline {subsection}{\numberline {3.5}Fringe presentations as a computable interface}{14}{subsection.3.5}\protected@file@percent }
 \newlabel{subsec:fringe-presentations}{{3.5}{14}{Fringe presentations as a computable interface}{subsection.3.5}{}}
 \newlabel{def:upset-downset}{{25}{14}{Upsets and downsets}{theorem.25}{}}
+\newlabel{def:indicator-modules}{{26}{14}{Indicator modules for upsets and downsets}{theorem.26}{}}
 \citation{Mil20}
 \citation{Mil20}
 \citation{Mil20}
@@ -132,96 +133,170 @@
 \citation{Mil20}
 \citation{Mil20}
 \citation{CB15}
-\newlabel{def:indicator-modules}{{26}{15}{Indicator modules for upsets and downsets}{theorem.26}{}}
+\citation{Mil20}
 \newlabel{rem:proj-inj-finite-poset}{{3.5}{15}{Projectives and injectives on a finite poset}{theorem.26}{}}
 \newlabel{def:fringe-presentation}{{27}{15}{Fringe presentation {\cite [Def.~3.16]{Mil20}}}{theorem.27}{}}
 \newlabel{rem:fringe-as-presentation}{{3.5}{15}{Relation to classical presentations}{Item.18}{}}
 \newlabel{def:monomial-matrix}{{28}{15}{Monomial matrix {\cite [Def.~3.17]{Mil20}}}{theorem.28}{}}
 \newlabel{lem:monomial-support}{{29}{15}{Support condition for monomial matrices {\cite [Prop.~3.18]{Mil20}}}{theorem.29}{}}
 \newlabel{ex:interval-fringe}{{30}{15}{A single interval in one parameter}{theorem.30}{}}
-\citation{Mil20}
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.6}What tameness buys you: mathematical consequences}{16}{subsection.3.6}\protected@file@percent }
-\newlabel{subsec:tame-math}{{3.6}{16}{What tameness buys you: mathematical consequences}{subsection.3.6}{}}
-\newlabel{thm:syzygy}{{31}{16}{Syzygy theorem {\cite [Thm.~6.12]{Mil20}}}{theorem.31}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.6}What tameness buys you: mathematical consequences}{15}{subsection.3.6}\protected@file@percent }
+\newlabel{subsec:tame-math}{{3.6}{15}{What tameness buys you: mathematical consequences}{subsection.3.6}{}}
+\newlabel{thm:syzygy}{{31}{15}{Syzygy theorem {\cite [Thm.~6.12]{Mil20}}}{theorem.31}{}}
 \newlabel{rem:equivalences-matter}{{3.6}{16}{Why equivalences matter for software}{Item.21}{}}
 \newlabel{lem:reduction-along-encoding}{{32}{16}{Reduction along an encoding}{theorem.32}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {3.7}What tameness buys you: algorithmic consequences}{16}{subsection.3.7}\protected@file@percent }
 \newlabel{subsec:tame-algo}{{3.7}{16}{What tameness buys you: algorithmic consequences}{subsection.3.7}{}}
 \@writefile{toc}{\contentsline {paragraph}{Finite linear algebra.}{16}{section*.27}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Homological algebra in a finite abelian category.}{17}{section*.28}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Homological algebra in a finite abelian category.}{16}{section*.28}\protected@file@percent }
+\citation{Mil20}
 \@writefile{toc}{\contentsline {subsection}{\numberline {3.8}Bridge to implementation}{17}{subsection.3.8}\protected@file@percent }
 \newlabel{subsec:tame-bridge}{{3.8}{17}{Bridge to implementation}{subsection.3.8}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {4}Overview of TAMER-OP}{19}{section.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.1}Design goals stated mathematically}{19}{subsection.4.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.2}The end-to-end pipeline}{19}{subsection.4.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.3}Core mathematical objects in the API}{19}{subsection.4.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.4}Architectural layering}{19}{subsection.4.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.5}Reproducibility and correctness}{19}{subsection.4.5}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {5}The presentation formats}{19}{section.5}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.1}Philosophy: multiple equivalent front-ends}{19}{subsection.5.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.2}Finite fringe presentations}{19}{subsection.5.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.3}$\mathbb  {Z}^n$ presentations}{19}{subsection.5.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.4}$\mathbb  {R}^n$ and piecewise-linear presentations}{19}{subsection.5.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.5}Conversions between formats}{19}{subsection.5.5}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.6}Validation and other sanity checks}{19}{subsection.5.6}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.7}Serialization and I/O}{19}{subsection.5.7}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {6}Finite encoding constructors}{19}{section.6}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.1}The encoding problem}{19}{subsection.6.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.2}Region/signature idea}{19}{subsection.6.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.3}Encoding algorithms by ambient domain}{19}{subsection.6.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.4}Constructing the finite poset structure}{19}{subsection.6.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.5}Point location and evaluation map}{19}{subsection.6.5}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.6}Building a common encoding for multiple modules}{19}{subsection.6.6}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.7}Complexity and failure modes}{19}{subsection.6.7}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.8}Correctness and diagnostics}{19}{subsection.6.8}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {7}Invariants}{19}{section.7}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.1}Meta principle: invariants factor through the encoding}{19}{subsection.7.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.2}Dimension-type invariants}{19}{subsection.7.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.3}Rank-type invariants}{19}{subsection.7.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.4}Mobius inversions and signed measures}{19}{subsection.7.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.5}Slice-based invariants and distances}{19}{subsection.7.5}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.6}Vectorizations and kernels}{19}{subsection.7.6}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.7}Homological invariants derived from resolutions}{19}{subsection.7.7}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.8}Geometry-aware invariants for when $Q = \mathbb  {R}^n$}{19}{subsection.7.8}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.9}Stability and robustness discussion}{19}{subsection.7.9}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.10}Practical API summary}{19}{subsection.7.10}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {8}Homological Algebra and Derived Functors}{19}{section.8}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {8.1}The Abelian Category of $P$-modules}{19}{subsection.8.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {8.2}Projective and Injective Objects}{19}{subsection.8.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {8.3}Resolutions}{19}{subsection.8.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {8.4}Ext and Tor: definitions and computational model}{19}{subsection.8.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {8.5}Multiplicative structures and higher structure}{19}{subsection.8.5}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {8.6}Double complexes and spectral sequences}{19}{subsection.8.6}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {8.7}The ergonomics of derived categories}{19}{subsection.8.7}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {8.8}Relationship to multigraded commutative algebra}{19}{subsection.8.8}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {8.9}What you use all this for in TDA}{19}{subsection.8.9}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {9}Transport and comparison}{19}{section.9}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {9.1}Change of posets as functorial transport}{19}{subsection.9.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {9.2}Comparing modules on different encodings}{19}{subsection.9.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {9.3}Comparison via invariants}{19}{subsection.9.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {9.4}Interoperability with multipers and RIVET}{19}{subsection.9.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {9.5}Case studies}{19}{subsection.9.5}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {10}Statistics}{19}{section.10}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {10.1}Data model for experiments}{19}{subsection.10.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {10.2}Feature extraction recipes}{19}{subsection.10.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {10.3}Basic inferential statistics}{19}{subsection.10.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {10.4}Learning-oriented workflows}{19}{subsection.10.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {10.5}Diagnostic plots}{19}{subsection.10.5}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {10.6}Reproducibility and reporting}{19}{subsection.10.6}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {11}Speed optimizations}{19}{section.11}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {11.1}Where time is spent}{19}{subsection.11.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {11.2}Tradeoffs in exactness versus speed}{19}{subsection.11.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {11.3}Sparsity-aware algorithms}{19}{subsection.11.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {11.4}Caching and memoization strategies}{19}{subsection.11.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {11.5}Parallelism}{19}{subsection.11.5}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {11.6}Geometry backend: controlling combinatorial explosion}{19}{subsection.11.6}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {12}Benchmarks}{19}{section.12}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {12.1}Philosophy and reproducibility}{19}{subsection.12.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {12.2}Microbenchmarks (unit tests)}{19}{subsection.12.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {12.3}End-to-end benchmarks}{19}{subsection.12.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {12.4}Comparisons with multipers and RIVET}{19}{subsection.12.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {12.5}Discussion of results}{19}{subsection.12.5}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {13}Conclusion}{19}{section.13}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {4}Overview of TAMER-OP}{17}{section.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.1}Design goals stated mathematically}{17}{subsection.4.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.2}The end-to-end pipeline}{17}{subsection.4.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.3}Core mathematical objects in the API}{17}{subsection.4.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.4}Architectural layering}{17}{subsection.4.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.5}Reproducibility and correctness}{17}{subsection.4.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {5}The presentation formats}{17}{section.5}\protected@file@percent }
+\newlabel{sec:presentation-formats}{{5}{17}{The presentation formats}{section.5}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.1}Philosophy: multiple equivalent front-ends}{17}{subsection.5.1}\protected@file@percent }
+\newlabel{subsec:formats-philosophy}{{5.1}{17}{Philosophy: multiple equivalent front-ends}{subsection.5.1}{}}
+\citation{Mil20}
+\citation{Mil20}
+\newlabel{def:presentation-object}{{33}{18}{Presentation object in TAMER-OP}{theorem.33}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.2}Finite fringe presentations}{18}{subsection.5.2}\protected@file@percent }
+\newlabel{subsec:finite-fringe-presentations}{{5.2}{18}{Finite fringe presentations}{subsection.5.2}{}}
+\newlabel{def:finite-upset-downset-data}{{34}{18}{Finite-poset upsets/downsets as data}{theorem.34}{}}
+\citation{Mil20}
+\newlabel{def:finite-fringe-data}{{35}{19}{Finite fringe presentation data}{theorem.35}{}}
+\citation{CZ09}
+\citation{Oud15}
+\citation{Mil20}
+\citation{Mil20}
+\citation{Mil20}
+\citation{Mil20}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.3}$\mathbb  {Z}^n$ presentations}{20}{subsection.5.3}\protected@file@percent }
+\newlabel{subsec:Zn-presentations}{{5.3}{20}{$\mathbb {Z}^n$ presentations}{subsection.5.3}{}}
+\newlabel{def:face-subgroup}{{36}{20}{Face subgroup}{theorem.36}{}}
+\newlabel{def:flat-injective-shapes}{{37}{20}{Indecomposable flat and injective shapes}{theorem.37}{}}
+\newlabel{def:flange-presentation}{{38}{20}{Flange presentation over $\mathbb {Z}^n$}{theorem.38}{}}
+\citation{Mil20}
+\citation{KS18}
+\citation{Mil23}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.4}$\mathbb  {R}^n$ and piecewise-linear presentations}{21}{subsection.5.4}\protected@file@percent }
+\newlabel{subsec:Rn-PL-presentations}{{5.4}{21}{$\mathbb {R}^n$ and piecewise-linear presentations}{subsection.5.4}{}}
+\citation{Mil20}
+\newlabel{def:pl-fringe-presentation}{{39}{22}{PL fringe presentation}{theorem.39}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.5}Conversions between formats}{22}{subsection.5.5}\protected@file@percent }
+\newlabel{subsec:format-conversions}{{5.5}{22}{Conversions between formats}{subsection.5.5}{}}
+\citation{Mil20}
+\citation{Mil20}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.6}Validation and other sanity checks}{23}{subsection.5.6}\protected@file@percent }
+\newlabel{subsec:format-validation}{{5.6}{23}{Validation and other sanity checks}{subsection.5.6}{}}
+\citation{Mil20}
+\@writefile{toc}{\contentsline {section}{\numberline {6}Finite encoding constructors}{24}{section.6}\protected@file@percent }
+\newlabel{sec:finite-encoding-constructors}{{6}{24}{Finite encoding constructors}{section.6}{}}
+\citation{Mil20}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.1}The encoding problem}{25}{subsection.6.1}\protected@file@percent }
+\newlabel{subsec:encoding-problem}{{6.1}{25}{The encoding problem}{subsection.6.1}{}}
+\@writefile{toc}{\contentsline {paragraph}{Input data model.}{25}{section*.43}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Desired output.}{25}{section*.44}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{A methodological choice.}{25}{section*.45}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.2}Region/signature idea}{25}{subsection.6.2}\protected@file@percent }
+\newlabel{subsec:signature-idea}{{6.2}{25}{Region/signature idea}{subsection.6.2}{}}
+\newlabel{def:signature-map}{{40}{25}{Signature map associated to a finite fringe interface}{theorem.40}{}}
+\newlabel{lem:signature-monotone}{{41}{25}{Monotonicity of signatures}{theorem.41}{}}
+\citation{Mil20}
+\citation{KS18}
+\citation{Mil23}
+\newlabel{prop:encoding-by-signatures}{{6.2}{26}{Encoding via realized signatures}{theorem.41}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.3}Encoding algorithms by ambient domain}{26}{subsection.6.3}\protected@file@percent }
+\newlabel{subsec:encoding-algorithms-by-domain}{{6.3}{26}{Encoding algorithms by ambient domain}{subsection.6.3}{}}
+\newlabel{subsubsec:encoding-Zn}{{6.3}{26}{(A) Lattice encoding for $Q=\mathbb {Z}^n$}{section*.46}{}}
+\@writefile{toc}{\contentsline {paragraph}{Indicator families and membership tests.}{26}{section*.47}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Critical coordinates and a product cell complex.}{26}{section*.48}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Signature enumeration by incremental scanning.}{27}{section*.49}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Output.}{27}{section*.50}\protected@file@percent }
+\newlabel{subsubsec:encoding-PL-boxes}{{6.3}{27}{(B) Axis-aligned PL encoding for $Q=\mathbb {R}^n$}{section*.51}{}}
+\@writefile{toc}{\contentsline {paragraph}{Region representation.}{27}{section*.52}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Coordinate hyperplane subdivision.}{28}{section*.53}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Representative points and strictness.}{28}{section*.54}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Scanning and output.}{28}{section*.55}\protected@file@percent }
+\newlabel{subsubsec:encoding-PL-polyhedra}{{6.3}{28}{(C) General polyhedral PL encoding}{section*.56}{}}
+\@writefile{toc}{\contentsline {paragraph}{Polyhedral feasibility viewpoint.}{28}{section*.57}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Exact arithmetic for correctness.}{28}{section*.58}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Output and point-location implications.}{28}{section*.59}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.4}Constructing the finite poset structure}{28}{subsection.6.4}\protected@file@percent }
+\newlabel{subsec:constructing-poset}{{6.4}{28}{Constructing the finite poset structure}{subsection.6.4}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.5}Point location and evaluation map}{29}{subsection.6.5}\protected@file@percent }
+\newlabel{subsec:point-location}{{6.5}{29}{Point location and evaluation map}{subsection.6.5}{}}
+\citation{Waa24}
+\@writefile{toc}{\contentsline {paragraph}{Lattice case.}{30}{section*.64}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Axis-aligned PL case.}{30}{section*.65}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.6}Building a common encoding for multiple modules}{30}{subsection.6.6}\protected@file@percent }
+\newlabel{subsec:common-encoding}{{6.6}{30}{Building a common encoding for multiple modules}{subsection.6.6}{}}
+\@writefile{toc}{\contentsline {paragraph}{Common encoding by union of generator data.}{30}{section*.67}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Theoretical context.}{30}{section*.68}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.7}Complexity and failure modes}{31}{subsection.6.7}\protected@file@percent }
+\newlabel{subsec:encoding-complexity}{{6.7}{31}{Complexity and failure modes}{subsection.6.7}{}}
+\@writefile{toc}{\contentsline {paragraph}{Enumerating signatures.}{31}{section*.70}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Building the poset order.}{31}{section*.71}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Memory.}{31}{section*.72}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Interpreting the bounds.}{31}{section*.73}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Feasibility enumeration.}{32}{section*.75}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.8}Correctness and diagnostics}{32}{subsection.6.8}\protected@file@percent }
+\newlabel{subsec:encoding-correctness}{{6.8}{32}{Correctness and diagnostics}{subsection.6.8}{}}
+\newlabel{prop:encoding-correctness}{{6.8}{32}{Correctness criterion for signature encodings}{subsection.6.8}{}}
+\@writefile{toc}{\contentsline {paragraph}{Diagnostics in practice.}{32}{section*.77}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {7}Invariants}{35}{section.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.1}Meta principle: invariants factor through the encoding}{35}{subsection.7.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.2}Dimension-type invariants}{35}{subsection.7.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.3}Rank-type invariants}{35}{subsection.7.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.4}Mobius inversions and signed measures}{35}{subsection.7.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.5}Slice-based invariants and distances}{35}{subsection.7.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.6}Vectorizations and kernels}{35}{subsection.7.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.7}Homological invariants derived from resolutions}{35}{subsection.7.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.8}Geometry-aware invariants for when $Q = \mathbb  {R}^n$}{35}{subsection.7.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.9}Stability and robustness discussion}{35}{subsection.7.9}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.10}Practical API summary}{35}{subsection.7.10}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {8}Homological Algebra and Derived Functors}{35}{section.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.1}The Abelian Category of $P$-modules}{35}{subsection.8.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.2}Projective and Injective Objects}{35}{subsection.8.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.3}Resolutions}{35}{subsection.8.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.4}Ext and Tor: definitions and computational model}{35}{subsection.8.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.5}Multiplicative structures and higher structure}{35}{subsection.8.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.6}Double complexes and spectral sequences}{35}{subsection.8.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.7}The ergonomics of derived categories}{35}{subsection.8.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.8}Relationship to multigraded commutative algebra}{35}{subsection.8.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.9}What you use all this for in TDA}{35}{subsection.8.9}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {9}Transport and comparison}{35}{section.9}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {9.1}Change of posets as functorial transport}{35}{subsection.9.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {9.2}Comparing modules on different encodings}{35}{subsection.9.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {9.3}Comparison via invariants}{35}{subsection.9.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {9.4}Interoperability with multipers and RIVET}{35}{subsection.9.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {9.5}Case studies}{35}{subsection.9.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {10}Statistics}{35}{section.10}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {10.1}Data model for experiments}{35}{subsection.10.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {10.2}Feature extraction recipes}{35}{subsection.10.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {10.3}Basic inferential statistics}{35}{subsection.10.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {10.4}Learning-oriented workflows}{35}{subsection.10.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {10.5}Diagnostic plots}{35}{subsection.10.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {10.6}Reproducibility and reporting}{35}{subsection.10.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {11}Speed optimizations}{35}{section.11}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {11.1}Where time is spent}{35}{subsection.11.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {11.2}Tradeoffs in exactness versus speed}{35}{subsection.11.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {11.3}Sparsity-aware algorithms}{35}{subsection.11.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {11.4}Caching and memoization strategies}{35}{subsection.11.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {11.5}Parallelism}{35}{subsection.11.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {11.6}Geometry backend: controlling combinatorial explosion}{35}{subsection.11.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {12}Benchmarks}{35}{section.12}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {12.1}Philosophy and reproducibility}{35}{subsection.12.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {12.2}Microbenchmarks (unit tests)}{35}{subsection.12.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {12.3}End-to-end benchmarks}{35}{subsection.12.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {12.4}Comparisons with multipers and RIVET}{35}{subsection.12.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {12.5}Discussion of results}{35}{subsection.12.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {13}Conclusion}{35}{section.13}\protected@file@percent }
 \bibcite{Mil20}{Mil20}
 \bibcite{Waa24}{Waa24}
 \bibcite{Mil23}{Mil23}
@@ -242,7 +317,7 @@
 \bibcite{Wei94}{Wei94}
 \bibcite{Eis95}{Eis95}
 \bibcite{MS05}{MS05}
-\newlabel{LastPage}{{}{20}{}{page.20}{}}
-\xdef\lastpage@lastpage{20}
-\xdef\lastpage@lastpageHy{20}
-\gdef \@abspage@last{20}
+\newlabel{LastPage}{{}{36}{}{page.36}{}}
+\xdef\lastpage@lastpage{36}
+\xdef\lastpage@lastpageHy{36}
+\gdef \@abspage@last{36}

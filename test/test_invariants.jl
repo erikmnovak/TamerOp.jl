@@ -15,20 +15,20 @@ function _median_elapsed(f::Function; warmup::Int=1, reps::Int=5)
 end
 
 struct ToyPi <: PM.CoreModules.PLikeEncodingMap end
-PM.dimension(::ToyPi) = 1
-function PM.locate(::ToyPi, x::AbstractVector)
+CM.dimension(::ToyPi) = 1
+function CM.locate(::ToyPi, x::AbstractVector)
     length(x) == 1 || error("ToyPi expects a 1D point")
     return round(Int, float(x[1]))
 end
-function PM.locate(::ToyPi, x::NTuple{1,<:Real})
+function CM.locate(::ToyPi, x::NTuple{1,<:Real})
     return round(Int, float(x[1]))
 end
 
 struct ToyPi1DThresholds <: PM.CoreModules.PLikeEncodingMap end
-PM.dimension(::ToyPi1DThresholds) = 1
-PM.representatives(::ToyPi1DThresholds) = [(0.5,), (1.5,), (2.5,)]
-PM.axes_from_encoding(::ToyPi1DThresholds) = ([0.0, 1.0, 2.0, 3.0],)
-function PM.locate(::ToyPi1DThresholds, x::AbstractVector)
+CM.dimension(::ToyPi1DThresholds) = 1
+CM.representatives(::ToyPi1DThresholds) = [(0.5,), (1.5,), (2.5,)]
+CM.axes_from_encoding(::ToyPi1DThresholds) = ([0.0, 1.0, 2.0, 3.0],)
+function CM.locate(::ToyPi1DThresholds, x::AbstractVector)
     length(x) == 1 || error("ToyPi1DThresholds expects a 1D point")
     t = float(x[1])
     if t < 1.0
@@ -41,7 +41,7 @@ function PM.locate(::ToyPi1DThresholds, x::AbstractVector)
         return 0
     end
 end
-function PM.locate(::ToyPi1DThresholds, x::NTuple{1,<:Real})
+function CM.locate(::ToyPi1DThresholds, x::NTuple{1,<:Real})
     t = float(x[1])
     if t < 1.0
         return 1
@@ -55,10 +55,10 @@ function PM.locate(::ToyPi1DThresholds, x::NTuple{1,<:Real})
 end
 
 struct ToyPi1DIntervals <: PM.CoreModules.PLikeEncodingMap end
-PM.dimension(::ToyPi1DIntervals) = 1
-PM.representatives(::ToyPi1DIntervals) = [(0.5,), (1.5,), (2.5,)]
-PM.axes_from_encoding(::ToyPi1DIntervals) = ([0.0, 1.0, 2.0, 3.0],)
-function PM.locate(::ToyPi1DIntervals, x::AbstractVector)
+CM.dimension(::ToyPi1DIntervals) = 1
+CM.representatives(::ToyPi1DIntervals) = [(0.5,), (1.5,), (2.5,)]
+CM.axes_from_encoding(::ToyPi1DIntervals) = ([0.0, 1.0, 2.0, 3.0],)
+function CM.locate(::ToyPi1DIntervals, x::AbstractVector)
     t = x[1]
     if 0.0 <= t < 1.0
         return 1
@@ -70,7 +70,7 @@ function PM.locate(::ToyPi1DIntervals, x::AbstractVector)
         return 0
     end
 end
-function PM.locate(::ToyPi1DIntervals, x::NTuple{1,<:Real})
+function CM.locate(::ToyPi1DIntervals, x::NTuple{1,<:Real})
     t = x[1]
     if 0.0 <= t < 1.0
         return 1
@@ -84,8 +84,8 @@ function PM.locate(::ToyPi1DIntervals, x::NTuple{1,<:Real})
 end
 
 struct ToyPi2D <: PM.CoreModules.PLikeEncodingMap end
-PM.dimension(::ToyPi2D) = 2
-function PM.locate(::ToyPi2D, x::AbstractVector)
+CM.dimension(::ToyPi2D) = 2
+function CM.locate(::ToyPi2D, x::AbstractVector)
     length(x) == 2 || error("ToyPi2D expects a 2D point")
     eps = 1e-9
     i = floor(Int, float(x[1]) + eps)
@@ -98,10 +98,10 @@ struct ToyBoxes2D <: PM.CoreModules.PLikeEncodingMap
     reps::Vector{NTuple{2,Float64}}
 end
 
-PM.dimension(::ToyBoxes2D) = 2
-PM.representatives(pi::ToyBoxes2D) = pi.reps
-PM.axes_from_encoding(pi::ToyBoxes2D) = pi.coords
-function PM.locate(pi::ToyBoxes2D, x::AbstractVector{<:Real}; strict::Bool=true, closure::Bool=true)
+CM.dimension(::ToyBoxes2D) = 2
+CM.representatives(pi::ToyBoxes2D) = pi.reps
+CM.axes_from_encoding(pi::ToyBoxes2D) = pi.coords
+function CM.locate(pi::ToyBoxes2D, x::AbstractVector{<:Real}; strict::Bool=true, closure::Bool=true)
     x1 = x[1]
     x2 = x[2]
     if (x1 < 0.0) || (x1 > 3.0) || (x2 < 0.0) || (x2 > 3.0)
@@ -114,7 +114,7 @@ function PM.locate(pi::ToyBoxes2D, x::AbstractVector{<:Real}; strict::Bool=true,
         return 3
     end
 end
-function PM.locate(pi::ToyBoxes2D, x::NTuple{2,<:Real}; strict::Bool=true, closure::Bool=true)
+function CM.locate(pi::ToyBoxes2D, x::NTuple{2,<:Real}; strict::Bool=true, closure::Bool=true)
     x1 = x[1]
     x2 = x[2]
     if (x1 < 0.0) || (x1 > 3.0) || (x2 < 0.0) || (x2 > 3.0)
@@ -144,15 +144,15 @@ end
 
 @testset "Finite-encoding invariants: rank and restricted Hilbert" begin
     P = chain_poset(3)
-    MD.clear_cover_cache!(P)
+    MD._clear_cover_cache!(P)
 
     # Interval module supported on {2,3} for the chain 1 < 2 < 3.
     H23 = one_by_one_fringe(P, FF.principal_upset(P, 2), FF.principal_downset(P, 3), cf(1); field=field)
     M23 = IR.pmodule_from_fringe(H23)
 
-    @test PM.rank_map(M23, 2, 3) == 1
-    @test PM.rank_map(M23, 1, 1) == 0
-    @test PM.rank_map(M23, 1, 2) == 0
+    @test Inv.rank_map(M23, 2, 3) == 1
+    @test Inv.rank_map(M23, 1, 1) == 0
+    @test Inv.rank_map(M23, 1, 2) == 0
 
     rinv = PM.rank_invariant(M23)
     @test length(rinv) == 3
@@ -169,10 +169,10 @@ end
     Pd = diamond_poset()
     Hd2 = one_by_one_fringe(Pd, FF.principal_upset(Pd, 2), FF.principal_downset(Pd, 2); field=field)
     Md2 = IR.pmodule_from_fringe(Hd2)
-    @test_throws ErrorException PM.rank_map(Md2, 2, 3)
+    @test_throws ErrorException Inv.rank_map(Md2, 2, 3)
 
     if Threads.nthreads() > 1
-        MD.clear_cover_cache!(P)
+        MD._clear_cover_cache!(P)
         rinv_serial = PM.rank_invariant(M23; threads = false)
         rinv_thread = PM.rank_invariant(M23; threads = true)
         @test rinv_thread == rinv_serial
@@ -197,13 +197,13 @@ end
     @test PM.restricted_hilbert(M23) == [0, 1, 1]
     @test PM.restricted_hilbert(M3) == [0, 0, 1]
 
-    @test PM.hilbert_distance(M23, M3; norm=:L1) == 1
-    @test PM.hilbert_distance(M23, M3; norm=:Linf) == 1
-    @test isapprox(PM.hilbert_distance(M23, M3; norm=:L2), 1.0)
+    @test Inv.hilbert_distance(M23, M3; norm=:L1) == 1
+    @test Inv.hilbert_distance(M23, M3; norm=:Linf) == 1
+    @test isapprox(Inv.hilbert_distance(M23, M3; norm=:L2), 1.0)
 
     w = [2, 3, 5]
-    @test PM.hilbert_distance(M23, M3; norm=:L1, weights=w) == 3
-    @test PM.hilbert_distance(M23, M3; norm=:Linf, weights=w) == 3
+    @test Inv.hilbert_distance(M23, M3; norm=:L1, weights=w) == 3
+    @test Inv.hilbert_distance(M23, M3; norm=:Linf, weights=w) == 3
 end
 
 @testset "Euler characteristic surface and Euler signed-measure" begin
@@ -234,28 +234,28 @@ end
     end
 
     # Mobius inversion in 1D is discrete derivative: weights [0,1,0].
-    pm23   = PM.euler_signed_measure(M23, pi, opts_axes)
+    pm23   = Inv.euler_signed_measure(M23, pi, opts_axes)
     @test length(pm23) == 1
     @test pm23.inds[1] == (2,)
     @test pm23.wts[1]  == 1
 
     # Reconstruction from point measure recovers surface.
-    rec23 = PM.surface_from_point_signed_measure(pm23)
+    rec23 = Inv.surface_from_point_signed_measure(pm23)
     @test rec23 == surf23
 
     # Test raw point_signed_measure on a known surface.
     surf = reshape([0,1,1], 3)
-    pm = PM.point_signed_measure(surf, axes; drop_zeros=true)
+    pm = Inv.point_signed_measure(surf, axes; drop_zeros=true)
     @test length(pm) == 1
     @test pm.inds[1] == (2,)
     @test pm.wts[1] == 1
-    @test PM.surface_from_point_signed_measure(pm) == surf
+    @test Inv.surface_from_point_signed_measure(pm) == surf
 
     # Euler distance between M23 and M3 on this grid.
     surf3 = PM.euler_surface(M3, pi, opts_axes)
     @test surf3 == reshape([0,0,1], 3)
-    @test PM.euler_distance(surf23, surf3; ord=1) == 1
-    @test PM.euler_distance(M23, M3, pi, opts_axes; ord=Inf) == 1.0
+    @test Inv.euler_distance(surf23, surf3; ord=1) == 1
+    @test Inv.euler_distance(M23, M3, pi, opts_axes; ord=Inf) == 1.0
 
     # Euler for a 2-term cochain complex: chi = dim(C^0) - dim(C^1) (tmin=0)
     C = PM.ModuleCochainComplex([M23, M3], [PM.zero_morphism(M23, M3)]; tmin=0)
@@ -263,26 +263,26 @@ end
     # reuse the opts already defined earlier in this testset
     @test surfC == reshape([0,1,0], 3)
 
-    pmC = PM.euler_signed_measure(C, pi, opts_axes)
+    pmC = Inv.euler_signed_measure(C, pi, opts_axes)
     # Mobius derivative of [0,1,0] is [0,1,-1] (drop_zeros keeps 2 points)
     @test length(pmC) == 2
     @test pmC.inds[1] == (2,)
     @test pmC.wts[1]  == 1
     @test pmC.inds[2] == (3,)
     @test pmC.wts[2]  == -1
-    @test PM.surface_from_point_signed_measure(pmC) == surfC
+    @test Inv.surface_from_point_signed_measure(pmC) == surfC
 
     # mma_decomposition integration: generic Euler-only front-end.
-    outM = PM.mma_decomposition(M23, pi, opts_axes; method=:euler)
+    outM = Inv.mma_decomposition(M23, pi, opts_axes; method=:euler)
     @test outM.euler_surface == surf23
-    @test PM.surface_from_point_signed_measure(outM.euler_signed_measure) == surf23
+    @test Inv.surface_from_point_signed_measure(outM.euler_signed_measure) == surf23
 
-    outC = PM.mma_decomposition(C, pi, opts_axes; method=:euler)
+    outC = Inv.mma_decomposition(C, pi, opts_axes; method=:euler)
     @test outC.euler_surface == surfC
-    @test PM.surface_from_point_signed_measure(outC.euler_signed_measure) == surfC
+    @test Inv.surface_from_point_signed_measure(outC.euler_signed_measure) == surfC
 
     # The generic signature only supports method=:euler.
-    @test_throws ArgumentError PM.mma_decomposition(M23, pi, opts_axes; method=:all)
+    @test_throws ArgumentError Inv.mma_decomposition(M23, pi, opts_axes; method=:all)
 end
 
 
@@ -313,20 +313,20 @@ end
 
     b0 = Dict{Tuple{Int,Int},Int}()
 
-    @test PM.bottleneck_distance(b23, b23) == 0.0
-    @test PM.bottleneck_distance(b23, b3) == 1.0
-    @test isapprox(PM.bottleneck_distance(b3, b0), 0.5)
+    @test Inv.bottleneck_distance(b23, b23) == 0.0
+    @test Inv.bottleneck_distance(b23, b3) == 1.0
+    @test isapprox(Inv.bottleneck_distance(b3, b0), 0.5)
 
     # Approx matching distance over a single slice is just the bottleneck distance.
-    @test PM.matching_distance_approx(M23, M3, [chain]) == 1.0
+    @test Inv.matching_distance_approx(M23, M3, [chain]) == 1.0
 
     # Approx matching distance over a single slice is just the bottleneck distance.
-    @test PM.matching_distance_approx(M23, M3, [chain]) == 1.0
+    @test Inv.matching_distance_approx(M23, M3, [chain]) == 1.0
 
     # Restriction to a chain should produce a 1D module with the expected dims.
-    Mc = PM.restrict_to_chain(M23, chain)
+    Mc = Inv.restrict_to_chain(M23, chain)
     @test Mc.dims == [0, 1, 1]
-    @test PM.rank_map(Mc, 2, 3) == 1
+    @test Inv.rank_map(Mc, 2, 3) == 1
 
 end
 
@@ -341,18 +341,18 @@ end
     dirs = [[1.0]]
     offs = [[0.0]]
 
-    cache = PM.SlicePlanCache()
-    plan1 = PM.compile_slice_plan(pi;
+    cache = Inv.SlicePlanCache()
+    plan1 = Inv.compile_slice_plan(pi;
                                   directions=dirs, offsets=offs,
                                   tmin=0.0, tmax=3.0, nsteps=121,
                                   threads=false, cache=cache)
-    plan2 = PM.compile_slice_plan(pi;
+    plan2 = Inv.compile_slice_plan(pi;
                                   directions=dirs, offsets=offs,
                                   tmin=0.0, tmax=3.0, nsteps=121,
                                   threads=false, cache=cache)
     @test plan1 === plan2
 
-    plan_api = PM.compile_slices(pi, PM.InvariantOptions();
+    plan_api = Inv.compile_slices(pi, PM.InvariantOptions();
                                  directions=dirs, offsets=offs,
                                  tmin=0.0, tmax=3.0, nsteps=121,
                                  threads=false, cache=nothing)
@@ -362,7 +362,7 @@ end
     data_plan = PM.slice_barcodes(M23, plan1; packed=true, threads=false)
     @test size(data_plan.barcodes) == (1, 1)
     @test data_plan.barcodes isa PM.Invariants.PackedBarcodeGrid{PM.Invariants.PackedFloatBarcode}
-    data_plan_run = PM.run_invariants(plan1, PM.module_cache(M23), PM.SliceBarcodesTask(; packed=true, threads=false))
+    data_plan_run = Inv.run_invariants(plan1, Inv.module_cache(M23), Inv.SliceBarcodesTask(; packed=true, threads=false))
     @test PM.Invariants._barcode_from_packed(data_plan_run.barcodes[1, 1]) ==
           PM.Invariants._barcode_from_packed(data_plan.barcodes[1, 1])
 
@@ -407,35 +407,35 @@ end
           PM.Invariants._barcode_from_packed(data_typed.barcodes[1])
     @test isapprox(data_loaded.weights[1], data_typed.weights[1]; atol=1e-12)
 
-    k_plan = PM.slice_kernel(M23, M3, pi;
+    k_plan = Inv.slice_kernel(M23, M3, pi;
                              directions=dirs, offsets=offs,
                              tmin=0.0, tmax=3.0, nsteps=121,
                              kind=:bottleneck_gaussian, sigma=1.0,
                              threads=false)
-    k_explicit = PM.slice_kernel(M23, M3, slices;
+    k_explicit = Inv.slice_kernel(M23, M3, slices;
                                  kind=:bottleneck_gaussian, sigma=1.0,
                                  normalize_weights=true,
                                  threads=false)
     @test isapprox(k_plan, k_explicit; atol=1e-12)
 
-    k_run = PM.run_invariants(
+    k_run = Inv.run_invariants(
         plan1,
-        PM.module_cache(M23, M3),
-        PM.SliceKernelTask(; kind=:bottleneck_gaussian, sigma=1.0, threads=false),
+        Inv.module_cache(M23, M3),
+        Inv.SliceKernelTask(; kind=:bottleneck_gaussian, sigma=1.0, threads=false),
     )
     @test isapprox(k_run, k_plan; atol=1e-12)
 
     data_plan_M3 = PM.slice_barcodes(M3, plan1; packed=true, threads=false)
-    d_ref = PM.bottleneck_distance(data_plan.barcodes[1, 1], data_plan_M3.barcodes[1, 1])
-    d_run = PM.run_invariants(
+    d_ref = Inv.bottleneck_distance(data_plan.barcodes[1, 1], data_plan_M3.barcodes[1, 1])
+    d_run = Inv.run_invariants(
         plan1,
-        PM.module_cache(M23, M3),
-        PM.SliceDistanceTask(; dist_fn=PM.bottleneck_distance, dist_kwargs=NamedTuple(), threads=false),
+        Inv.module_cache(M23, M3),
+        Inv.SliceDistanceTask(; dist_fn=Inv.bottleneck_distance, dist_kwargs=NamedTuple(), threads=false),
     )
     @test isapprox(d_run, d_ref; atol=1e-12)
 
     alloc_plan = @allocated begin
-        p = PM.compile_slice_plan(pi;
+        p = Inv.compile_slice_plan(pi;
                                   directions=dirs, offsets=offs,
                                   tmin=0.0, tmax=3.0, nsteps=121,
                                   threads=false, cache=nothing)
@@ -449,15 +449,15 @@ end
     end
     @test t_slice_plan < 0.75
 
-    task_dist = PM.SliceDistanceTask(; dist_fn=PM.bottleneck_distance, dist_kwargs=NamedTuple(), threads=false)
+    task_dist = Inv.SliceDistanceTask(; dist_fn=Inv.bottleneck_distance, dist_kwargs=NamedTuple(), threads=false)
     t_dist_plan = _median_elapsed(; warmup=1, reps=5) do
-        PM.run_invariants(plan1, PM.module_cache(M23, M3), task_dist)
+        Inv.run_invariants(plan1, Inv.module_cache(M23, M3), task_dist)
     end
     @test t_dist_plan < 0.75
 
-    task_kernel = PM.SliceKernelTask(; kind=:bottleneck_gaussian, sigma=1.0, threads=false)
+    task_kernel = Inv.SliceKernelTask(; kind=:bottleneck_gaussian, sigma=1.0, threads=false)
     t_kernel_plan = _median_elapsed(; warmup=1, reps=5) do
-        PM.run_invariants(plan1, PM.module_cache(M23, M3), task_kernel)
+        Inv.run_invariants(plan1, Inv.module_cache(M23, M3), task_kernel)
     end
     @test t_kernel_plan < 0.75
 end
@@ -478,14 +478,14 @@ end
     FG = FZ.Flange{K}(n, flats, injectives, Phi)
 
     enc = PM.EncodingOptions(backend=:zn, max_regions=1000)
-    Penc, Henc, pi = PM.encode_from_flange(FG, enc)
+    Penc, Henc, pi = PosetModules.ZnEncoding.encode_from_flange(FG, enc)
 
     @test PM.nvertices(Penc) == 3
 
     # `ZnEncodingMap`s are defined on the integer lattice Z^n, but generic
     # helpers may represent an integer lattice point as a float (e.g. `2.0`).
     # Such points should be accepted if they are integer-valued.
-    @test PM.locate(pi, [-2.0]) == PM.locate(pi, [-2])
+    @test CM.locate(pi, [-2.0]) == CM.locate(pi, [-2])
 
     opts = PM.InvariantOptions()
     chain, tvals = PM.slice_chain(pi, [-2], [1], opts; kmin=0, kmax=9)
@@ -506,15 +506,15 @@ end
 
     pi = ToyPi()
     opts = PM.InvariantOptions()
-    @test PM.rank_map(M23, pi, [2], [3], opts) == 1
+    @test Inv.rank_map(M23, pi, [2], [3], opts) == 1
     @test PM.restricted_hilbert(M23, pi, [2], opts) == 1
 
     # rank_query generic fallback path for non-Zn encoding maps.
     pi_thr = ToyPi1DThresholds()
-    @test PM.rank_query(M23, pi_thr, [1], [2], opts) == PM.rank_map(M23, pi_thr, [1], [2], opts)
-    @test PM.rank_query(M23, pi_thr, [1], [2]) == 1
-    @test_throws ErrorException PM.rank_query(M23, pi_thr, [4], [2], opts)
-    @test PM.rank_query(M23, pi_thr, [4], [2], PM.InvariantOptions(strict=false)) == 0
+    @test Inv.rank_query(M23, pi_thr, [1], [2], opts) == Inv.rank_map(M23, pi_thr, [1], [2], opts)
+    @test Inv.rank_query(M23, pi_thr, [1], [2]) == 1
+    @test_throws ErrorException Inv.rank_query(M23, pi_thr, [4], [2], opts)
+    @test Inv.rank_query(M23, pi_thr, [4], [2], PM.InvariantOptions(strict=false)) == 0
 end
 
 
@@ -556,12 +556,12 @@ end
     FG = FZ.Flange{K}(n, flats, injectives, Phi)
 
     enc = PM.EncodingOptions(backend=:zn, max_regions=1000)
-    Penc, _Henc, pi = PM.encode_from_flange(FG, enc)
+    Penc, _Henc, pi = PosetModules.ZnEncoding.encode_from_flange(FG, enc)
 
     @test PM.nvertices(Penc) == 3
 
     # Box [b-2, c+2] = [-2, 7].
-    w = PM.region_weights(pi; box=([b[1] - 2], [c[1] + 2]))
+    w = PM.RegionGeometry.region_weights(pi; box=([b[1] - 2], [c[1] + 2]))
     @test w == [2, c[1] - b[1] + 1, 2]
 
         # mma_decomposition integration: PModule + ZnEncodingMap signature.
@@ -569,15 +569,15 @@ end
     # evaluated on the encoding grid (axes_policy=:encoding).
     Menc = IR.pmodule_from_fringe(_Henc)
     opts_enc = PM.InvariantOptions(axes_policy=:encoding)
-    outE = PM.mma_decomposition(Menc, pi, opts_enc; method=:euler)
+    outE = Inv.mma_decomposition(Menc, pi, opts_enc; method=:euler)
 
     surfE = PM.euler_surface(Menc, pi, opts_enc)
     @test outE.euler_surface == surfE
-    @test PM.surface_from_point_signed_measure(outE.euler_signed_measure) == surfE
+    @test Inv.surface_from_point_signed_measure(outE.euler_signed_measure) == surfE
 
     # method=:all combines rectangles + slices + Euler. For slices we must provide
     # directions and offsets; we keep this tiny so the test stays cheap.
-    outAll = PM.mma_decomposition(
+    outAll = Inv.mma_decomposition(
         Menc,
         pi;
         method=:all,
@@ -597,7 +597,7 @@ end
     @test hasproperty(outAll, :slices)
     @test hasproperty(outAll, :euler_surface)
     @test hasproperty(outAll, :euler_signed_measure)
-    @test PM.surface_from_point_signed_measure(outAll.euler_signed_measure) == outAll.euler_surface
+    @test Inv.surface_from_point_signed_measure(outAll.euler_signed_measure) == outAll.euler_surface
     @test hasproperty(outAll.slices, :barcodes)
     @test hasproperty(outAll.slices, :weights)
 
@@ -614,7 +614,7 @@ end
         # 2 and 3 are incomparable in the diamond poset.
         chain_bad = [2, 3]
         @test_throws ErrorException PM.slice_barcode(M, chain_bad)
-        @test_throws ErrorException PM.restrict_to_chain(M, chain_bad)
+        @test_throws ErrorException Inv.restrict_to_chain(M, chain_bad)
     end
 
     @testset "Geometric slicing wrapper for a toy locate" begin
@@ -693,9 +693,9 @@ end
         B = Dict((0.0, 2.0) => 1, (3.0, 3.2) => 1)
         C = Dict((0.0, 2.0) => 1, (3.0, 3.4) => 1)
 
-        dAB = PM.bottleneck_distance(A, B)
-        dBC = PM.bottleneck_distance(B, C)
-        dAC = PM.bottleneck_distance(A, C)
+        dAB = Inv.bottleneck_distance(A, B)
+        dBC = Inv.bottleneck_distance(B, C)
+        dAC = Inv.bottleneck_distance(A, C)
 
         @test isapprox(dAB, 0.1; atol=1e-12)
         @test isapprox(dBC, 0.2; atol=1e-12)
@@ -708,7 +708,7 @@ end
 
 
 @testset "sample_directions_2d helper" begin
-    dirs = PM.sample_directions_2d(max_den=3)
+    dirs = Inv.sample_directions_2d(max_den=3)
     @test !isempty(dirs)
 
     # All directions are 2D, strictly positive, and L1-normalized.
@@ -720,7 +720,7 @@ end
     @test any(d -> isapprox(d[1], 0.5; atol=1e-12) && isapprox(d[2], 0.5; atol=1e-12), dirs)
 
     # Integer directions are useful for Z^2 encodings.
-    dirsZ = PM.sample_directions_2d(max_den=3; normalize=:none)
+    dirsZ = Inv.sample_directions_2d(max_den=3; normalize=:none)
     @test any(d -> d == (1, 1), dirsZ)
 end
 
@@ -738,7 +738,7 @@ end
     # A simple ground-truth barcode and its 1D persistence landscape.
     bar = Dict((1.0, 3.0) => 1)
     tgrid = [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0]
-    pl = PM.persistence_landscape(bar; kmax=3, tgrid=tgrid)
+    pl = Inv.persistence_landscape(bar; kmax=3, tgrid=tgrid)
 
     # lambda_1 is a tent with peak 1 at t=2.
     @test isapprox(pl.values[1, 1], 0.0; atol=1e-12)
@@ -766,25 +766,25 @@ end
     @test isapprox(L23.values[1, 1, 2, 5], 0.0; atol=1e-12)
 
     # Distance and kernel sanity checks.
-    d_same = PM.mp_landscape_distance(L23, L23; p=2)
+    d_same = Inv.mp_landscape_distance(L23, L23; p=2)
     @test isapprox(d_same, 0.0; atol=1e-12)
 
-    d_23_3 = PM.mp_landscape_distance(L23, L3; p=2)
-    d_3_23 = PM.mp_landscape_distance(L3, L23; p=2)
+    d_23_3 = Inv.mp_landscape_distance(L23, L3; p=2)
+    d_3_23 = Inv.mp_landscape_distance(L3, L23; p=2)
     @test d_23_3 >= 0.0
     @test isapprox(d_23_3, d_3_23; atol=1e-12)
     @test d_23_3 > 0.0
 
-    k_same = PM.mp_landscape_kernel(L23, L23; kind=:gaussian, sigma=1.0)
-    k_diff = PM.mp_landscape_kernel(L23, L3; kind=:gaussian, sigma=1.0)
+    k_same = Inv.mp_landscape_kernel(L23, L23; kind=:gaussian, sigma=1.0)
+    k_diff = Inv.mp_landscape_kernel(L23, L3; kind=:gaussian, sigma=1.0)
     @test isapprox(k_same, 1.0; atol=1e-12)
     @test k_diff < 1.0
 
     # Convenience wrappers: construct landscapes internally.
-    d_wrap = PM.mp_landscape_distance(M23, M3, [slice]; p=2, kmax=2, tgrid=tgrid)
+    d_wrap = Inv.mp_landscape_distance(M23, M3, [slice]; p=2, kmax=2, tgrid=tgrid)
     @test isapprox(d_wrap, d_23_3; atol=1e-12)
 
-    k_wrap = PM.mp_landscape_kernel(M23, M3, [slice]; kind=:gaussian, sigma=1.0, p=2, kmax=2, tgrid=tgrid)
+    k_wrap = Inv.mp_landscape_kernel(M23, M3, [slice]; kind=:gaussian, sigma=1.0, p=2, kmax=2, tgrid=tgrid)
     @test isapprox(k_wrap, k_diff; atol=1e-12)
 
     # Geometric slicing wrapper sanity check with a toy locate() on R^1.
@@ -842,14 +842,14 @@ end
     bar = Dict((1.0, 3.0) => 1)
     tgrid = [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0]
 
-    pl = PM.persistence_landscape(bar; kmax=1, tgrid=tgrid)
-    sil = PM.persistence_silhouette(bar; tgrid=tgrid, weighting=:persistence, p=1, normalize=true)
+    pl = Inv.persistence_landscape(bar; kmax=1, tgrid=tgrid)
+    sil = Inv.persistence_silhouette(bar; tgrid=tgrid, weighting=:persistence, p=1, normalize=true)
 
     # For a single interval, silhouette (with normalize=true) equals the tent itself,
     # i.e. the first landscape layer.
     @test maximum(abs.(sil .- pl.values[1, :])) < 1e-12
 
-    img = PM.persistence_image(bar;
+    img = Inv.persistence_image(bar;
                                xgrid=[0.0, 1.0, 2.0, 3.0],
                                ygrid=[0.0, 1.0, 2.0],
                                sigma=0.2,
@@ -861,7 +861,7 @@ end
     @test ix == 2   # birth = 1.0 (xgrid[2])
     @test iy == 3   # pers  = 2.0 (ygrid[3])
 
-    imgN = PM.persistence_image(bar;
+    imgN = Inv.persistence_image(bar;
                                 xgrid=[0.0, 1.0, 2.0, 3.0],
                                 ygrid=[0.0, 1.0, 2.0],
                                 sigma=0.2,
@@ -870,14 +870,14 @@ end
     @test isapprox(maximum(imgN.values), 1.0; atol=1e-12)
 
     bar2 = Dict((0.0, 2.0) => 1, (0.0, 1.0) => 1)
-    H = PM.barcode_entropy(bar2; normalize=false)
+    H = Inv.barcode_entropy(bar2; normalize=false)
     expected = -(2 / 3 * log(2 / 3) + 1 / 3 * log(1 / 3))
     @test isapprox(H, expected; atol=1e-12)
 
-    Hn = PM.barcode_entropy(bar2; normalize=true)
+    Hn = Inv.barcode_entropy(bar2; normalize=true)
     @test isapprox(Hn, H / log(2); atol=1e-12)
 
-    summ = PM.barcode_summary(bar2; normalize_entropy=false)
+    summ = Inv.barcode_summary(bar2; normalize_entropy=false)
     @test summ.n_intervals == 2
     @test isapprox(summ.total_persistence, 3.0; atol=1e-12)
     @test isapprox(summ.max_persistence, 2.0; atol=1e-12)
@@ -897,7 +897,7 @@ end
     Phi[1, 1] = 1
     Phi[2, 2] = 1
 
-    Hsum = FF.FringeModule{K}(P, [U1, U2], [D1, D2], Phi)
+    Hsum = FF.FringeModule{K}(P, [U1, U2], [D1, D2], Phi; field=field)
     Msum = IR.pmodule_from_fringe(Hsum)
 
     slice = (chain=[1, 2, 3], values=[0.0, 1.0, 2.0], weight=1.0)
@@ -913,11 +913,11 @@ end
 
     # slice_features uses normalized persistent entropy by default (entropy_normalize=true),
     # so it should match Hn computed above.
-    ent_norm = PM.slice_features(Msum, [slice]; featurizer=:entropy, aggregate=:mean)
+    ent_norm = Inv.slice_features(Msum, [slice]; featurizer=:entropy, aggregate=:mean)
     @test isapprox(ent_norm, Hn; atol=1e-12)
 
     # Also test the raw (unnormalized) entropy path explicitly.
-    ent_raw = PM.slice_features(Msum, [slice];
+    ent_raw = Inv.slice_features(Msum, [slice];
                                 featurizer=:entropy,
                                 aggregate=:mean,
                                 entropy_normalize=false)
@@ -927,7 +927,7 @@ end
     H23 = FF.one_by_one_fringe(P, U1, D1, cf(1); field=field)
     M23 = IR.pmodule_from_fringe(H23)
 
-    f_land = PM.slice_features(M23, [slice];
+    f_land = Inv.slice_features(M23, [slice];
                                featurizer=:landscape,
                                kmax=2,
                                tgrid=tgrid,
@@ -938,7 +938,7 @@ end
 
     # Geometric version: compare to explicit slice using a tiny toy encoding map.
     pi = ToyPi1DIntervals()
-    f_geo = PM.slice_features(M23, pi;
+    f_geo = Inv.slice_features(M23, pi;
                               opts=PM.InvariantOptions(strict=false),
                               directions=[[1.0]],
                               offsets=[[0.0]],
@@ -966,19 +966,19 @@ end
     @test eltype(sb_geo.barcodes) == Inv.FloatBarcode
 
     # Sliced kernels: identical inputs should give kernel value 1 for gaussian kinds.
-    k_same = PM.slice_kernel(M23, M23, [slice]; kind=:bottleneck_gaussian, sigma=1.0)
+    k_same = Inv.slice_kernel(M23, M23, [slice]; kind=:bottleneck_gaussian, sigma=1.0)
     @test isapprox(k_same, 1.0; atol=1e-12)
 
     # Symmetry and strict inequality for different modules.
     H3 = FF.one_by_one_fringe(P, U2, D2, cf(1); field=field)
     M3 = IR.pmodule_from_fringe(H3)
-    k_diff1 = PM.slice_kernel(M23, M3, [slice]; kind=:bottleneck_gaussian, sigma=1.0)
-    k_diff2 = PM.slice_kernel(M3, M23, [slice]; kind=:bottleneck_gaussian, sigma=1.0)
+    k_diff1 = Inv.slice_kernel(M23, M3, [slice]; kind=:bottleneck_gaussian, sigma=1.0)
+    k_diff2 = Inv.slice_kernel(M3, M23, [slice]; kind=:bottleneck_gaussian, sigma=1.0)
     @test isapprox(k_diff1, k_diff2; atol=1e-12)
     @test k_diff1 < 1.0
 
     # Landscape kernel (gaussian) on identical inputs is also 1.
-    k_land = PM.slice_kernel(M23, M23, [slice];
+    k_land = Inv.slice_kernel(M23, M23, [slice];
                              kind=:landscape_gaussian,
                              sigma=1.0,
                              tgrid=tgrid,
@@ -989,21 +989,21 @@ end
 @testset "Signed rectangles / Mobius inversion" begin
     axes = ([0, 1, 2], [0, 1])
 
-    rects = PM.Rect{2}[
-        PM.Rect{2}((0, 0), (2, 1)),
-        PM.Rect{2}((1, 0), (2, 0)),
-        PM.Rect{2}((0, 1), (1, 1)),
+    rects = Inv.Rect{2}[
+        Inv.Rect{2}((0, 0), (2, 1)),
+        Inv.Rect{2}((1, 0), (2, 0)),
+        Inv.Rect{2}((0, 1), (1, 1)),
     ]
     weights = [2, -1, 3]
-    sb_true = PM.RectSignedBarcode{2,Int}(axes, rects, weights)
+    sb_true = Inv.RectSignedBarcode{2,Int}(axes, rects, weights)
 
     function r_idx(p, q)
         x = (axes[1][p[1]], axes[2][p[2]])
         y = (axes[1][q[1]], axes[2][q[2]])
-        return PM.rank_from_signed_barcode(sb_true, x, y)
+        return Inv.rank_from_signed_barcode(sb_true, x, y)
     end
 
-    sb_est = PM.rectangle_signed_barcode(r_idx, axes)
+    sb_est = Inv.rectangle_signed_barcode(r_idx, axes)
 
     d_true = Dict(zip(sb_true.rects, sb_true.weights))
     d_est = Dict(zip(sb_est.rects, sb_est.weights))
@@ -1016,18 +1016,18 @@ end
             q = Tuple(qCI)
             x = (axes[1][p[1]], axes[2][p[2]])
             y = (axes[1][q[1]], axes[2][q[2]])
-            @test PM.rank_from_signed_barcode(sb_est, x, y) == r_idx(p, q)
+            @test Inv.rank_from_signed_barcode(sb_est, x, y) == r_idx(p, q)
         end
     end
 
-    sb_trunc = PM.truncate_signed_barcode(sb_est; max_terms=1)
+    sb_trunc = Inv.truncate_signed_barcode(sb_est; max_terms=1)
     @test length(sb_trunc) == 1
     @test abs(sb_trunc.weights[1]) == maximum(abs.(sb_est.weights))
 
-    k_lin = PM.rectangle_signed_barcode_kernel(sb_est, sb_est; kind=:linear)
+    k_lin = Inv.rectangle_signed_barcode_kernel(sb_est, sb_est; kind=:linear)
     @test isapprox(k_lin, sum(float(w)^2 for w in sb_est.weights); atol=1e-12)
 
-    img = PM.rectangle_signed_barcode_image(sb_est; sigma=1.0, mode=:center)
+    img = Inv.rectangle_signed_barcode_image(sb_est; sigma=1.0, mode=:center)
     @test size(img) == (length(axes[1]), length(axes[2]))
 end
 
@@ -1035,13 +1035,13 @@ end
     bar1 = Dict((0, 2) => 1)
     bar2 = Dict((0, 3) => 1)
 
-    d12 = PM.wasserstein_distance(bar1, bar2; p=1, q=Inf)
+    d12 = Inv.wasserstein_distance(bar1, bar2; p=1, q=Inf)
     @test isapprox(d12, 1.0; atol=1e-12)
 
-    dempty = PM.wasserstein_distance(Dict{Tuple{Int,Int},Int}(), bar1; p=2, q=Inf)
+    dempty = Inv.wasserstein_distance(Dict{Tuple{Int,Int},Int}(), bar1; p=2, q=Inf)
     @test isapprox(dempty, 1.0; atol=1e-12)
 
-    k = PM.wasserstein_kernel(bar1, bar2; p=1, q=Inf, sigma=1.0, kind=:gaussian)
+    k = Inv.wasserstein_kernel(bar1, bar2; p=1, q=Inf, sigma=1.0, kind=:gaussian)
     @test isapprox(k, exp(-0.5); atol=1e-12)
 end
 
@@ -1065,8 +1065,8 @@ end
         ntuple(k -> axes[k][qI[k]], 2),
     )
 
-    sb_full = PM.rectangle_signed_barcode(r_idx, axes)
-    sb_span = PM.rectangle_signed_barcode(r_idx, axes; max_span=(1, 1))
+    sb_full = Inv.rectangle_signed_barcode(r_idx, axes)
+    sb_span = Inv.rectangle_signed_barcode(r_idx, axes; max_span=(1, 1))
 
     function sb_to_dict(sb)
         d = Dict{Tuple{NTuple{2,Int},NTuple{2,Int}},Int}()
@@ -1092,8 +1092,8 @@ end
     # -------------------------------------------------------------------------
     # 1b) Bulk vs local algorithm parity + rank_idx call counts.
     # -------------------------------------------------------------------------
-    sb_local = PM.rectangle_signed_barcode(r_idx, axes; method=:local)
-    sb_bulk = PM.rectangle_signed_barcode(r_idx, axes; method=:bulk)
+    sb_local = Inv.rectangle_signed_barcode(r_idx, axes; method=:local)
+    sb_bulk = Inv.rectangle_signed_barcode(r_idx, axes; method=:bulk)
 
     @test Dict(zip(sb_local.rects, sb_local.weights)) ==
           Dict(zip(sb_bulk.rects, sb_bulk.weights))
@@ -1104,17 +1104,17 @@ end
 
     c_bulk = Ref(0)
     r_idx_count_bulk(pI, qI) = (c_bulk[] += 1; r_idx(pI, qI))
-    _ = PM.rectangle_signed_barcode(r_idx_count_bulk, axes; method=:bulk)
+    _ = Inv.rectangle_signed_barcode(r_idx_count_bulk, axes; method=:bulk)
     @test c_bulk[] == n_pairs
 
     # Local method should make strictly more rank_idx calls on the same problem.
     c_local = Ref(0)
     r_idx_count_local(pI, qI) = (c_local[] += 1; r_idx(pI, qI))
-    _ = PM.rectangle_signed_barcode(r_idx_count_local, axes; method=:local)
+    _ = Inv.rectangle_signed_barcode(r_idx_count_local, axes; method=:local)
     @test c_local[] > n_pairs
 
     # Fast inverse transform: barcode -> dense rank array matches rank_idx on p <= q.
-    R = PM.rectangle_signed_barcode_rank(sb_bulk)
+    R = Inv.rectangle_signed_barcode_rank(sb_bulk)
     for p1 in 1:dims[1], p2 in 1:dims[2]
         for q1 in p1:dims[1], q2 in p2:dims[2]
             @test R[p1, p2, q1, q2] == r_idx((p1, p2), (q1, q2))
@@ -1139,12 +1139,12 @@ end
         R = PM.QQ
         n = 1
         flats = [
-            PM.IndFlat(PM.face(n, []), [0]),
-            PM.IndFlat(PM.face(n, []), [2]),
+            FZ.IndFlat(PM.face(n, []), [0]),
+            FZ.IndFlat(PM.face(n, []), [2]),
         ]
         injectives = [
-            PM.IndInj(PM.face(n, []), [1]),
-            PM.IndInj(PM.face(n, []), [3]),
+            FZ.IndInj(PM.face(n, []), [1]),
+            FZ.IndInj(PM.face(n, []), [3]),
         ]
         # Phi must be (#injectives x #flats): rows index injectives, cols index flats.
         # Here we just take the 2x2 identity (a convenient "direct sum" style choice).
@@ -1154,14 +1154,14 @@ end
         F = PM.Flange{R}(n, flats, injectives, Phi)
 
         enc = PM.EncodingOptions(backend=:zn, max_regions=100)
-        (Penc, Henc, pi) = PM.encode_from_flange(F, enc)
+        (Penc, Henc, pi) = PosetModules.ZnEncoding.encode_from_flange(F, enc)
         Menc = IR.pmodule_from_fringe(Henc)
 
         axes_user = (collect(-2:6),)
 
         # Regression test: ZnEncodingMap.coords is axis-wise critical coordinates, so
         # axes_from_encoding(pi) must return an N-tuple where N == pi.n.
-        enc_axes = PM.axes_from_encoding(pi)
+        enc_axes = CM.axes_from_encoding(pi)
         @test length(enc_axes) == n
         @test enc_axes[1] == [-1, 0, 2, 4]
 
@@ -1174,24 +1174,24 @@ end
         rq_opts = PM.InvariantOptions()
         qx = [-2]
         qy = [8]
-        rq_xy = PM.rank_query(Menc, pi, qx, qy, rq_opts; rq_cache=cache)
-        @test rq_xy == PM.rank_map(Menc, pi, qx, qy, rq_opts)
-        @test PM.rank_query(Menc, pi, qx, qy; opts=rq_opts, rq_cache=cache) == rq_xy
+        rq_xy = Inv.rank_query(Menc, pi, qx, qy, rq_opts; rq_cache=cache)
+        @test rq_xy == Inv.rank_map(Menc, pi, qx, qy, rq_opts)
+        @test Inv.rank_query(Menc, pi, qx, qy; opts=rq_opts, rq_cache=cache) == rq_xy
 
-        a = PM.locate(pi, qx)
-        b = PM.locate(pi, qy)
-        @test PM.rank_query(Menc, pi, a, b; rq_cache=cache) == PM.rank_map(Menc, a, b)
+        a = CM.locate(pi, qx)
+        b = CM.locate(pi, qy)
+        @test Inv.rank_query(Menc, pi, a, b; rq_cache=cache) == Inv.rank_map(Menc, a, b)
 
-        pi_comp = PM.compile_encoding(Penc, pi)
-        @test PM.rank_query(Menc, pi_comp, qx, qy, rq_opts; rq_cache=cache) == rq_xy
-        @test PM.rank_query(Menc, pi_comp, a, b; rq_cache=cache) == PM.rank_map(Menc, a, b)
+        pi_comp = PM.CoreModules.compile_encoding(Penc, pi)
+        @test Inv.rank_query(Menc, pi_comp, qx, qy, rq_opts; rq_cache=cache) == rq_xy
+        @test Inv.rank_query(Menc, pi_comp, a, b; rq_cache=cache) == Inv.rank_map(Menc, a, b)
 
-        sb_enc_1 = PM.rectangle_signed_barcode(Menc, pi;
+        sb_enc_1 = Inv.rectangle_signed_barcode(Menc, pi;
             axes=axes_user,
             axes_policy=:encoding,
             rq_cache=cache)
 
-        sb_enc_2 = PM.rectangle_signed_barcode(Menc, pi;
+        sb_enc_2 = Inv.rectangle_signed_barcode(Menc, pi;
             axes=axes_user,
             axes_policy=:encoding,
             rq_cache=cache)
@@ -1202,22 +1202,22 @@ end
         @test sb_enc_1.axes == sb_enc_2.axes
 
         # encoding restriction should keep endpoints and only include encoding-axis points in between.
-        enc_axes = PM.axes_from_encoding(pi)[1]
+        enc_axes = CM.axes_from_encoding(pi)[1]
         @test first(sb_enc_1.axes[1]) == first(axes_user[1])
         @test last(sb_enc_1.axes[1]) == last(axes_user[1])
         @test all(v == first(axes_user[1]) || v == last(axes_user[1]) || (v in enc_axes) for v in sb_enc_1.axes[1])
 
         # coarsen policy must reduce axis length to max_axis_len.
-        sb_coarse = PM.rectangle_signed_barcode(Menc, pi;
+        sb_coarse = Inv.rectangle_signed_barcode(Menc, pi;
             axes=axes_user,
             axes_policy=:coarsen,
             max_axis_len=4)
         @test length(sb_coarse.axes[1]) <= 4
 
         # Bulk and local algorithms must agree (modulo ordering and zero pruning).
-        sb_enc_bulk = PM.rectangle_signed_barcode(Menc, pi; axes=axes_user, axes_policy=:encoding,
+        sb_enc_bulk = Inv.rectangle_signed_barcode(Menc, pi; axes=axes_user, axes_policy=:encoding,
                                                   rq_cache=cache, method=:bulk)
-        sb_enc_local = PM.rectangle_signed_barcode(Menc, pi; axes=axes_user, axes_policy=:encoding,
+        sb_enc_local = Inv.rectangle_signed_barcode(Menc, pi; axes=axes_user, axes_policy=:encoding,
                                                    rq_cache=cache, method=:local)
         @test Dict(zip(sb_enc_bulk.rects, sb_enc_bulk.weights)) ==
               Dict(zip(sb_enc_local.rects, sb_enc_local.weights))
@@ -1284,7 +1284,7 @@ end
 
         # Keep this branch lightweight: default witness/box behavior is what we
         # validate here; heavy distance kernels are covered elsewhere.
-        @test PM.dimension(pi2) == 2
+        @test CM.dimension(pi2) == 2
         @test length(M2.dims) == 1
 
         lo2, hi2 = Inv.encoding_box(pi2, opts2; margin=0.0)
@@ -1304,7 +1304,7 @@ end
     @test Inv.matching_wasserstein_distance_approx(M, M, pi, opts) == 0.0
 
     if PLP.HAVE_POLY && (field isa CM.QQField)
-        @test PM.dimension(pi2) == 2
+        @test CM.dimension(pi2) == 2
     end
 
     @testset "Exact 2D matching distance: deterministic and correct on a toy example" begin
@@ -1335,14 +1335,14 @@ end
         @test isapprox(vals[4], 5.5; atol=1e-12)
 
         # Exact distance should be 1.0 on this toy configuration.
-        d1 = PM.matching_distance_exact_2d(M23, M3, pi, opts_exact; weight=:lesnick_l1, normalize_dirs=:L1)
-        d2 = PM.matching_distance_exact_2d(M23, M3, pi, opts_exact; weight=:lesnick_l1, normalize_dirs=:L1)
+        d1 = Inv.matching_distance_exact_2d(M23, M3, pi, opts_exact; weight=:lesnick_l1, normalize_dirs=:L1)
+        d2 = Inv.matching_distance_exact_2d(M23, M3, pi, opts_exact; weight=:lesnick_l1, normalize_dirs=:L1)
         @test d1 == d2  # determinism
         @test isapprox(d1, 1.0; atol=1e-10)
 
         # Agreement with the slice-based evaluator using the exact slice list.
-        fam = PM.matching_distance_exact_slices_2d(pi, opts_exact; normalize_dirs=:L1)
-        d3 = PM.matching_distance_approx(M23, M3, fam.slices)
+        fam = Inv.matching_distance_exact_slices_2d(pi, opts_exact; normalize_dirs=:L1)
+        d3 = Inv.matching_distance_approx(M23, M3, fam.slices)
         @test isapprox(d3, d1; atol=1e-12)
 
         # Toy polyhedral encoding: same three vertical stripes, expressed as HPolys.
@@ -1374,7 +1374,7 @@ end
 
             pi_poly = PM.PLPolyhedra.PLEncodingMap(2, sigy, sigz, [hp1, hp2, hp3], witnesses)
 
-            d_poly = PM.matching_distance_exact_2d(M23, M3, pi_poly, opts_exact; weight=:lesnick_l1, normalize_dirs=:L1)
+            d_poly = Inv.matching_distance_exact_2d(M23, M3, pi_poly, opts_exact; weight=:lesnick_l1, normalize_dirs=:L1)
             @test isapprox(d_poly, 1.0; atol=1e-10)
         end
 
@@ -1488,8 +1488,8 @@ end
             @test isapprox(d_cache, d1; atol=1e-12)
 
             if Threads.nthreads() > 1
-                d_serial = PM.matching_distance_exact_2d(cache23, cache3; threads = false)
-                d_thread = PM.matching_distance_exact_2d(cache23, cache3; threads = true)
+                d_serial = Inv.matching_distance_exact_2d(cache23, cache3; threads = false)
+                d_thread = Inv.matching_distance_exact_2d(cache23, cache3; threads = true)
                 @test d_thread == d_serial
             end
 
@@ -1515,17 +1515,17 @@ end
             end
 
             # Arrangement-exact sliced kernel: compare to the slice-list backend.
-            fam2 = PM.matching_distance_exact_slices_2d(pi, opts_exact; normalize_dirs=:L1)
+            fam2 = Inv.matching_distance_exact_slices_2d(pi, opts_exact; normalize_dirs=:L1)
             slices2 = fam2.slices
-            k_slices = PM.slice_kernel(M23, M3, slices2; kind=:bottleneck_gaussian, sigma=1.0)
+            k_slices = Inv.slice_kernel(M23, M3, slices2; kind=:bottleneck_gaussian, sigma=1.0)
             k_cache  = Inv.slice_kernel(cache23, cache3;
                                         kind=:bottleneck_gaussian, sigma=1.0,
                                         direction_weight=:lesnick_l1, cell_weight=:uniform)
             @test isapprox(k_cache, k_slices; atol=1e-12)
 
             if Threads.nthreads() > 1
-                k_serial = PM.slice_kernel(cache23, cache3; kind = :wasserstein_gaussian, sigma = 1.0, threads = false)
-                k_thread = PM.slice_kernel(cache23, cache3; kind = :wasserstein_gaussian, sigma = 1.0, threads = true)
+                k_serial = Inv.slice_kernel(cache23, cache3; kind = :wasserstein_gaussian, sigma = 1.0, threads = false)
+                k_thread = Inv.slice_kernel(cache23, cache3; kind = :wasserstein_gaussian, sigma = 1.0, threads = true)
                 @test isapprox(k_thread, k_serial; rtol = 1e-12, atol = 1e-12)
             end
         end
@@ -1705,7 +1705,7 @@ _is_ascii(s::AbstractString) = all(c -> Int(c) <= 0x7f, s)
             nested = (x = 1, y = [1.0, 2.0, 3.0, 4.0]),
         )
 
-        s = PM.pretty(nt; name="nt", max_list=3, max_items=20)
+        s = Inv.pretty(nt; name="nt", max_list=3, max_items=20)
 
         @test occursin("nt:", s)
         @test occursin("a = 1", s)
@@ -1727,13 +1727,13 @@ _is_ascii(s::AbstractString) = all(c -> Int(c) <= 0x7f, s)
         @test _is_ascii(s)
 
         # Wrapper prints the same representation via MIME"text/plain".
-        sw = repr("text/plain", PM.PrettyPrinter(nt; name="nt", max_list=3, max_items=20))
+        sw = repr("text/plain", Inv.PrettyPrinter(nt; name="nt", max_list=3, max_items=20))
         @test sw == s
     end
 
     @testset "max_depth limits recursion" begin
         deep = (a = (b = (c = (d = 1,))),)
-        s = PM.pretty(deep; name="deep", max_depth=1)
+        s = Inv.pretty(deep; name="deep", max_depth=1)
         @test occursin("deep:", s)
         @test occursin("a = ...", s)
         @test _is_ascii(s)
@@ -1748,9 +1748,9 @@ _is_ascii(s::AbstractString) = all(c -> Int(c) <= 0x7f, s)
 
         box = ([-2.0], [7.0])
         opts = PM.InvariantOptions(box=box)
-        summ = PM.module_geometry_summary(H, pi, opts; nbins=4)
+        summ = Inv.module_geometry_summary(H, pi, opts; nbins=4)
 
-        s = PM.pretty(summ; name="module_geometry_summary", max_items=50, max_list=4)
+        s = Inv.pretty(summ; name="module_geometry_summary", max_items=50, max_list=4)
 
         @test occursin("module_geometry_summary:", s)
         @test occursin("size_summary", s)
@@ -1775,13 +1775,13 @@ end
     P, Hhat, pi = PLB.encode_fringe_boxes(Ups, Downs, opts_enc)
 
     box = ([-1.0], [3.0])
-    w = PM.region_weights(pi; box=box)
+    w = PM.RegionGeometry.region_weights(pi; box=box)
     opts = PM.InvariantOptions(box=box)
 
     # Identify regions robustly using locate (avoid relying on ordering).
-    rL = PM.locate(pi, [-0.5])
-    rM = PM.locate(pi, [1.0])
-    rR = PM.locate(pi, [2.5])
+    rL = CM.locate(pi, [-0.5])
+    rM = CM.locate(pi, [1.0])
+    rR = CM.locate(pi, [2.5])
 
     @test isapprox(w[rL], 1.0; atol=1e-9)
     @test isapprox(w[rM], 2.0; atol=1e-9)
@@ -1792,15 +1792,15 @@ end
     vals[rM] = 1
     vals[rR] = 1
 
-    m0 = PM.measure_by_value(vals, 0, pi, opts)
-    m1 = PM.measure_by_value(vals, 1, pi, opts)
+    m0 = Inv.measure_by_value(vals, 0, pi, opts)
+    m1 = Inv.measure_by_value(vals, 1, pi, opts)
     @test isapprox(m0, 1.0; atol=1e-9)
     @test isapprox(m1, 3.0; atol=1e-9)
 
     mask = falses(P.n)
     mask[rM] = true
     mask[rR] = true
-    sm = PM.support_measure(mask, pi, opts)
+    sm = Inv.support_measure(mask, pi, opts)
     @test isapprox(sm, 3.0; atol=1e-9)
 
     # Betti support by degree (toy numeric example)
@@ -1809,7 +1809,7 @@ end
     B[1, rR] = 2
     B[2, rM] = 1
 
-    bs = PM.betti_support_measures(B, pi, opts)
+    bs = Inv.betti_support_measures(B, pi, opts)
     @test isapprox(bs.support_total, 1.0 + 2.0 + 2.0; atol=1e-9)
     @test length(bs.support_by_degree) == 2
 
@@ -1819,7 +1819,7 @@ end
         (0, rR) => 2,
         (1, rM) => 1
     )
-    bs2 = PM.betti_support_measures(Bd, pi, opts)
+    bs2 = Inv.betti_support_measures(Bd, pi, opts)
     @test isapprox(bs2.support_total, bs.support_total; atol=1e-9)
 end
 
@@ -2052,8 +2052,8 @@ end
     opts_enc = PM.EncodingOptions()
     P, H, pi = PLB.encode_fringe_boxes(Ups, Downs, opts_enc)
 
-    r2 = PM.locate(pi, [0.5, 0.0])
-    r3 = PM.locate(pi, [2.0, 0.0])
+    r2 = CM.locate(pi, [0.5, 0.0])
+    r3 = CM.locate(pi, [2.0, 0.0])
 
     M23 = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, r2), FF.principal_downset(P, r3); field=field))
     M3  = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, r3), FF.principal_downset(P, r3); field=field))
@@ -2073,12 +2073,12 @@ end
     @test eltype(cache23.index_barcodes_packed) <: Union{Nothing,Inv.PackedIndexBarcode}
 
     # exact distance matches slice-list backend
-    d_slices = PM.matching_distance_exact_2d(M23, M3, pi, opts; weight=:lesnick_l1, normalize_dirs=:L1)
-    d_cache  = PM.matching_distance_exact_2d(cache23, cache3; weight=:lesnick_l1, family=fam, threads=false)
+    d_slices = Inv.matching_distance_exact_2d(M23, M3, pi, opts; weight=:lesnick_l1, normalize_dirs=:L1)
+    d_cache  = Inv.matching_distance_exact_2d(cache23, cache3; weight=:lesnick_l1, family=fam, threads=false)
     @test isapprox(d_cache, d_slices; atol=1e-12)
 
     # thread determinism
-    d_thr = PM.matching_distance_exact_2d(cache23, cache3; weight=:lesnick_l1, family=fam, threads=true)
+    d_thr = Inv.matching_distance_exact_2d(cache23, cache3; weight=:lesnick_l1, family=fam, threads=true)
     @test isapprox(d_thr, d_cache; atol=1e-12)
 
     # Allocation regression for fibered exact matching + slice extraction.
@@ -2086,20 +2086,20 @@ end
     alloc_slice = @allocated Inv.slice_barcodes(cache23; dirs=[[1.0, 1.0]], offsets=[0.0], values=:t, threads=false)
     @test alloc_slice < 2_000_000
 
-    PM.matching_distance_exact_2d(cache23, cache3; weight=:lesnick_l1, family=fam, threads=false)
-    alloc_exact = @allocated PM.matching_distance_exact_2d(cache23, cache3; weight=:lesnick_l1, family=fam, threads=false)
+    Inv.matching_distance_exact_2d(cache23, cache3; weight=:lesnick_l1, family=fam, threads=false)
+    alloc_exact = @allocated Inv.matching_distance_exact_2d(cache23, cache3; weight=:lesnick_l1, family=fam, threads=false)
     @test alloc_exact < 2_500_000
 
     t_exact = _median_elapsed(; warmup=1, reps=5) do
-        PM.matching_distance_exact_2d(cache23, cache3; weight=:lesnick_l1, family=fam, threads=false)
+        Inv.matching_distance_exact_2d(cache23, cache3; weight=:lesnick_l1, family=fam, threads=false)
     end
     @test t_exact < 1.0
 
     # kernel matches slice-list backend (uniform cell weighting)
-    fam2 = PM.matching_distance_exact_slices_2d(pi, opts; normalize_dirs=:L1)
+    fam2 = Inv.matching_distance_exact_slices_2d(pi, opts; normalize_dirs=:L1)
     slices2 = fam2.slices
-    k_slices = PM.slice_kernel(M23, M3, slices2; kind=:bottleneck_gaussian, sigma=1.0, normalize_weights=true)
-    k_cache  = PM.slice_kernel(cache23, cache3; kind=:bottleneck_gaussian, sigma=1.0,
+    k_slices = Inv.slice_kernel(M23, M3, slices2; kind=:bottleneck_gaussian, sigma=1.0, normalize_weights=true)
+    k_cache  = Inv.slice_kernel(cache23, cache3; kind=:bottleneck_gaussian, sigma=1.0,
                                direction_weight=:lesnick_l1, cell_weight=:uniform,
                                family=fam, normalize_weights=true, threads=false)
     @test isapprox(k_cache, k_slices; atol=1e-12)
@@ -2108,19 +2108,19 @@ end
         # Threading parity: rectangle signed barcode (bulk path)
         axes = ([1, 2, 3], [1, 2, 3])
         opts_bulk = PM.InvariantOptions(axes=axes, axes_policy=:as_given)
-        sb_serial = PM.rectangle_signed_barcode(M23, pi, opts_bulk; method=:bulk, threads=false)
-        sb_thread = PM.rectangle_signed_barcode(M23, pi, opts_bulk; method=:bulk, threads=true)
+        sb_serial = Inv.rectangle_signed_barcode(M23, pi, opts_bulk; method=:bulk, threads=false)
+        sb_thread = Inv.rectangle_signed_barcode(M23, pi, opts_bulk; method=:bulk, threads=true)
         @test sb_thread.rects == sb_serial.rects
         @test sb_thread.weights == sb_serial.weights
 
         # Threading parity: rectangle signed barcode rank reconstruction
-        rk_serial = PM.rectangle_signed_barcode_rank(sb_serial; threads=false)
-        rk_thread = PM.rectangle_signed_barcode_rank(sb_serial; threads=true)
+        rk_serial = Inv.rectangle_signed_barcode_rank(sb_serial; threads=false)
+        rk_thread = Inv.rectangle_signed_barcode_rank(sb_serial; threads=true)
         @test rk_thread == rk_serial
 
         # Threading parity: rectangle signed barcode image
-        img_serial = PM.rectangle_signed_barcode_image(sb_serial; threads=false)
-        img_thread = PM.rectangle_signed_barcode_image(sb_serial; threads=true)
+        img_serial = Inv.rectangle_signed_barcode_image(sb_serial; threads=false)
+        img_thread = Inv.rectangle_signed_barcode_image(sb_serial; threads=true)
         @test isapprox(img_thread, img_serial; atol=1e-12, rtol=0.0)
 
         # Threading parity: MPPI image (same cache, same grids)
@@ -2137,32 +2137,32 @@ end
     pi1 = ToyPi1DThresholds()
     opts1 = PM.InvariantOptions(box=([0.0], [3.0]), strict=true)
 
-    vals_rep = PM.region_values(pi1, x -> (x[1] < 2.0 ? :left : :right); arg=:rep)
+    vals_rep = Inv.region_values(pi1, x -> (x[1] < 2.0 ? :left : :right); arg=:rep)
     @test vals_rep == [:left, :left, :right]
 
     pi_idx = ToyBoxes2D((Float64[0.0, 1.0], Float64[0.0, 1.0]), [(0.0, 0.0), (1.0, 0.0), (2.0, 0.0)])
-    vals_idx = PM.region_values(pi_idx, r -> r * r; arg=:index)
+    vals_idx = Inv.region_values(pi_idx, r -> r * r; arg=:index)
     @test vals_idx == [1, 4, 9]
 
-    vals_both = PM.region_values(pi1, (r, x) -> r + Int(floor(x[1])); arg=:both)
+    vals_both = Inv.region_values(pi1, (r, x) -> r + Int(floor(x[1])); arg=:both)
     @test vals_both == [1, 3, 5]
 
     w = [2.0, 3.0, 5.0]
-    @test PM.support_measure(Bool[true, false, true], pi1, opts1; weights=w) == 7.0
-    @test PM.vertex_set_measure([1, 3, 3], pi1, opts1; weights=w) == 7.0
-    @test_throws ErrorException PM.vertex_set_measure([4], pi1, opts1; weights=w)
+    @test Inv.support_measure(Bool[true, false, true], pi1, opts1; weights=w) == 7.0
+    @test Inv.vertex_set_measure([1, 3, 3], pi1, opts1; weights=w) == 7.0
+    @test_throws ErrorException Inv.vertex_set_measure([4], pi1, opts1; weights=w)
 
     # ------------------------------------------------------------------
     # Axis coarsening / restriction helpers
     # ------------------------------------------------------------------
     axes2 = ([1, 2, 3, 4, 5], [10, 20, 30, 40, 50])
-    coarse = PM.coarsen_axes(axes2; max_len=3)
+    coarse = Inv.coarsen_axes(axes2; max_len=3)
     @test length(coarse[1]) <= 3
     @test length(coarse[2]) <= 3
     @test first(coarse[1]) == 1 && last(coarse[1]) == 5
     @test first(coarse[2]) == 10 && last(coarse[2]) == 50
 
-    axes_restricted = PM.restrict_axes_to_encoding(([0, 2, 3],), pi1)
+    axes_restricted = Inv.restrict_axes_to_encoding(([0, 2, 3],), pi1)
     @test axes_restricted == ([0.0, 2.0, 3.0],)
 
     # Specialized ZnEncodingMap axis restriction semantics.
@@ -2170,42 +2170,42 @@ end
     flats = [FZ.IndFlat(I, [1]; id=:F)]
     injectives = [FZ.IndInj(I, [3]; id=:E)]
     FG = FZ.Flange{K}(1, flats, injectives, reshape([cf(1)], 1, 1))
-    _, _, zpi = PM.encode_from_flange(FG, PM.EncodingOptions(backend=:zn, max_regions=1000))
+    _, _, zpi = PosetModules.ZnEncoding.encode_from_flange(FG, PM.EncodingOptions(backend=:zn, max_regions=1000))
 
-    zax_keep = PM.restrict_axes_to_encoding(([0, 2, 4],), zpi; keep_endpoints=true)
-    zax_drop = PM.restrict_axes_to_encoding(([0, 2, 4],), zpi; keep_endpoints=false)
+    zax_keep = Inv.restrict_axes_to_encoding(([0, 2, 4],), zpi; keep_endpoints=true)
+    zax_drop = Inv.restrict_axes_to_encoding(([0, 2, 4],), zpi; keep_endpoints=false)
     @test 0 in zax_keep[1] && 4 in zax_keep[1]
     @test issubset(Set(zax_drop[1]), Set(zax_keep[1]))
-    @test all(x -> x in PM.axes_from_encoding(zpi)[1], zax_drop[1])
+    @test all(x -> x in CM.axes_from_encoding(zpi)[1], zax_drop[1])
 
     # ------------------------------------------------------------------
     # Graph primitives
     # ------------------------------------------------------------------
     adj = Dict{Tuple{Int,Int},Float64}((1,2)=>2.0, (2,3)=>1.0)
-    gd = PM.graph_degrees(adj, 4)
+    gd = Inv.graph_degrees(adj, 4)
     @test gd.degrees == [1, 2, 1, 0]
     @test gd.weighted_degrees == [2.0, 3.0, 1.0, 0.0]
 
-    comps = PM.graph_connected_components(adj, 4)
+    comps = Inv.graph_connected_components(adj, 4)
     comp_sets = Set(Set(c) for c in comps)
     @test comp_sets == Set([Set([1,2,3]), Set([4])])
 
-    modq = PM.graph_modularity([1, 1, 2, 3], adj; nregions=4)
+    modq = Inv.graph_modularity([1, 1, 2, 3], adj; nregions=4)
     @test isapprox(modq, -1.0/18.0; atol=1e-12)
-    @test PM.graph_modularity([1, 1], Dict{Tuple{Int,Int},Float64}(); nregions=2) == 0.0
+    @test Inv.graph_modularity([1, 1], Dict{Tuple{Int,Int},Float64}(); nregions=2) == 0.0
 
     # ------------------------------------------------------------------
     # Point signed measure helpers
     # ------------------------------------------------------------------
-    pm = PM.PointSignedMeasure((Float64[0.0, 1.0, 2.0],), [(1,), (2,), (3,)], [1, -5, 2])
-    pm_trunc = PM.truncate_point_signed_measure(pm; max_terms=2, min_abs_weight=2)
+    pm = Inv.PointSignedMeasure((Float64[0.0, 1.0, 2.0],), [(1,), (2,), (3,)], [1, -5, 2])
+    pm_trunc = Inv.truncate_point_signed_measure(pm; max_terms=2, min_abs_weight=2)
     @test pm_trunc.inds == [(2,), (3,)]
     @test pm_trunc.wts == [-5, 2]
 
-    pm1 = PM.PointSignedMeasure((Float64[0.0],), [(1,)], [2])
-    pm2 = PM.PointSignedMeasure((Float64[0.0],), [(1,)], [3])
-    @test PM.point_signed_measure_kernel(pm1, pm2; sigma=1.0, kind=:gaussian) == 6.0
-    @test PM.point_signed_measure_kernel(pm1, pm2; sigma=1.0, kind=:laplacian) == 6.0
+    pm1 = Inv.PointSignedMeasure((Float64[0.0],), [(1,)], [2])
+    pm2 = Inv.PointSignedMeasure((Float64[0.0],), [(1,)], [3])
+    @test Inv.point_signed_measure_kernel(pm1, pm2; sigma=1.0, kind=:gaussian) == 6.0
+    @test Inv.point_signed_measure_kernel(pm1, pm2; sigma=1.0, kind=:laplacian) == 6.0
 
     # ------------------------------------------------------------------
     # Euler alias + Bass support summaries
@@ -2215,16 +2215,16 @@ end
     M23 = IR.pmodule_from_fringe(H23)
     opts_axes = PM.InvariantOptions(axes=([1, 2, 3],), axes_policy=:as_given)
 
-    @test PM.euler_characteristic_surface(M23, pi1, opts_axes) == PM.euler_surface(M23, pi1, opts_axes)
+    @test Inv.euler_characteristic_surface(M23, pi1, opts_axes) == PM.euler_surface(M23, pi1, opts_axes)
 
     Bdict = Dict((0, 1) => 1, (1, 3) => 2)
-    bs = PM.bass_support_measures(Bdict, pi1, opts1; weights=w)
+    bs = Inv.bass_support_measures(Bdict, pi1, opts1; weights=w)
     @test bs.support_by_degree == [2.0, 5.0]
     @test bs.mass_by_degree == [2.0, 10.0]
     @test bs.support_union == 7.0
 
     Bmat = [1 0 0; 0 0 2]
-    bs_mat = PM.bass_support_measures(Bmat, pi1, opts1; weights=w)
+    bs_mat = Inv.bass_support_measures(Bmat, pi1, opts1; weights=w)
     @test bs_mat == bs
 
     # ------------------------------------------------------------------
@@ -2233,54 +2233,54 @@ end
     Ups = [PLB.BoxUpset([0.0, -10.0]), PLB.BoxUpset([1.0, -10.0])]
     Downs = PLB.BoxDownset[]
     P2, _, pi2 = PLB.encode_fringe_boxes(Ups, Downs, PM.EncodingOptions())
-    r2 = PM.locate(pi2, [0.5, 0.0])
-    r3 = PM.locate(pi2, [2.0, 0.0])
+    r2 = CM.locate(pi2, [0.5, 0.0])
+    r3 = CM.locate(pi2, [2.0, 0.0])
 
     M2 = IR.pmodule_from_fringe(one_by_one_fringe(P2, FF.principal_upset(P2, r2), FF.principal_downset(P2, r3); field=field))
     M3 = IR.pmodule_from_fringe(one_by_one_fringe(P2, FF.principal_upset(P2, r3), FF.principal_downset(P2, r3); field=field))
 
     opts2 = PM.InvariantOptions(box=([-1.0, -1.0], [2.0, 1.0]))
-    arr2 = PM.fibered_arrangement_2d(pi2, opts2; normalize_dirs=:L1, precompute=:cells)
+    arr2 = Inv.fibered_arrangement_2d(pi2, opts2; normalize_dirs=:L1, precompute=:cells)
 
-    cid = PM.fibered_cell_id(arr2, (1.0, 1.0), 0.0)
+    cid = Inv.fibered_cell_id(arr2, (1.0, 1.0), 0.0)
     @test cid !== nothing
-    cid2 = PM.fibered_cell_id(arr2, (1.0, 1.0), [0.0, 0.0])
+    cid2 = Inv.fibered_cell_id(arr2, (1.0, 1.0), [0.0, 0.0])
     @test cid2 !== nothing
 
-    ch = PM.fibered_chain(arr2, (1.0, 1.0), 0.0; copy=false)
-    vals = PM.fibered_values(arr2, (1.0, 1.0), 0.0)
+    ch = Inv.fibered_chain(arr2, (1.0, 1.0), 0.0; copy=false)
+    vals = Inv.fibered_values(arr2, (1.0, 1.0), 0.0)
     @test length(vals) == length(ch) + 1
 
-    fbc = PM.fibered_barcode_cache_2d(M2, arr2; precompute=:none)
-    fs = PM.fibered_slice(fbc, (1.0, 1.0), 0.0)
+    fbc = Inv.fibered_barcode_cache_2d(M2, arr2; precompute=:none)
+    fs = Inv.fibered_slice(fbc, (1.0, 1.0), 0.0)
     @test fs.chain == collect(ch)
     @test length(fs.values) == length(fs.chain) + 1
-    @test fs.barcode == PM.fibered_barcode(fbc, (1.0, 1.0), 0.0)
+    @test fs.barcode == Inv.fibered_barcode(fbc, (1.0, 1.0), 0.0)
 
-    parr = PM.projected_arrangement(pi2; dirs=[(1.0, 0.0), (0.0, 1.0)], threads=false)
-    pc2 = PM.projected_barcode_cache(M2, parr; precompute=true)
-    pc3 = PM.projected_barcode_cache(M3, parr; precompute=true)
-    dvec = PM.projected_distances(pc2, pc3; dist=:bottleneck, threads=false)
+    parr = Inv.projected_arrangement(pi2; dirs=[(1.0, 0.0), (0.0, 1.0)], threads=false)
+    pc2 = Inv.projected_barcode_cache(M2, parr; precompute=true)
+    pc3 = Inv.projected_barcode_cache(M3, parr; precompute=true)
+    dvec = Inv.projected_distances(pc2, pc3; dist=:bottleneck, threads=false)
     @test length(dvec) == 2
-    dmean = PM.projected_distance(pc2, pc3; dist=:bottleneck, agg=:mean, threads=false)
+    dmean = Inv.projected_distance(pc2, pc3; dist=:bottleneck, agg=:mean, threads=false)
     @test isapprox(dmean, sum(dvec) / length(dvec); atol=1e-12)
 
     # ------------------------------------------------------------------
     # Direct exported sliced kernel + MPP decomposition APIs
     # ------------------------------------------------------------------
-    kself = PM.sliced_wasserstein_kernel(
+    kself = Inv.sliced_wasserstein_kernel(
         M2, M2, pi2, opts2;
         n_dirs=8, n_offsets=5, sigma=1.0,
         normalize_weights=true, normalize_dirs=:L1,
         threads=false
     )
-    kcross = PM.sliced_wasserstein_kernel(
+    kcross = Inv.sliced_wasserstein_kernel(
         M2, M3, pi2, opts2;
         n_dirs=8, n_offsets=5, sigma=1.0,
         normalize_weights=true, normalize_dirs=:L1,
         threads=false
     )
-    kcross_sym = PM.sliced_wasserstein_kernel(
+    kcross_sym = Inv.sliced_wasserstein_kernel(
         M3, M2, pi2, opts2;
         n_dirs=8, n_offsets=5, sigma=1.0,
         normalize_weights=true, normalize_dirs=:L1,
@@ -2291,8 +2291,8 @@ end
     @test isapprox(kcross, kcross_sym; atol=1e-12)
 
     decomp_from_wrapper = Inv.mpp_decomposition(M2, pi2, opts2)
-    arr_mpp = PM.fibered_arrangement_2d(pi2, opts2; include_axes=true)
-    cache_mpp = PM.fibered_barcode_cache_2d(M2, arr_mpp)
+    arr_mpp = Inv.fibered_arrangement_2d(pi2, opts2; include_axes=true)
+    cache_mpp = Inv.fibered_barcode_cache_2d(M2, arr_mpp)
     decomp_from_cache = Inv.mpp_decomposition(cache_mpp)
     @test length(decomp_from_wrapper.summands) == length(decomp_from_cache.summands)
     @test length(decomp_from_wrapper.weights) == length(decomp_from_cache.weights)
@@ -2303,21 +2303,21 @@ end
     # Feature-map direct API
     # ------------------------------------------------------------------
     bar = Dict((0.0, 1.0)=>1, (0.25, 0.75)=>1)
-    pim = PM.persistence_image(bar; xgrid=0.0:0.5:1.0, ygrid=0.0:0.5:1.0, sigma=0.2)
-    @test PM.feature_map(pim; flatten=false) == pim.values
-    @test PM.feature_map(pim; flatten=true) == vec(pim.values)
+    pim = Inv.persistence_image(bar; xgrid=0.0:0.5:1.0, ygrid=0.0:0.5:1.0, sigma=0.2)
+    @test Inv.feature_map(pim; flatten=false) == pim.values
+    @test Inv.feature_map(pim; flatten=true) == vec(pim.values)
 
     # ------------------------------------------------------------------
     # Type-level API contracts for exported invariant data structures
     # ------------------------------------------------------------------
     @testset "Exported invariant type-level contracts" begin
         # Point signed measure
-        @test pm isa PM.PointSignedMeasure
+        @test pm isa Inv.PointSignedMeasure
         @test length(pm.inds) == length(pm.wts)
         @test length(pm.axes) == 1
 
         # Fibered arrangement
-        @test arr2 isa PM.FiberedArrangement2D
+        @test arr2 isa Inv.FiberedArrangement2D
         @test arr2.total_cells >= 0
         @test length(arr2.dir_reps) == length(arr2.orders) == length(arr2.unique_pos) == length(arr2.noff)
         @test length(arr2.start) == length(arr2.noff)
@@ -2326,19 +2326,19 @@ end
         @test arr2.n_cell_computed <= arr2.total_cells
 
         # Fibered slice family
-        fam_types = PM.fibered_slice_family_2d(arr2; direction_weight=:lesnick_l1, store_values=true)
-        @test fam_types isa PM.FiberedSliceFamily2D
+        fam_types = Inv.fibered_slice_family_2d(arr2; direction_weight=:lesnick_l1, store_values=true)
+        @test fam_types isa Inv.FiberedSliceFamily2D
         @test fam_types.arrangement === arr2
-        @test PM.nslices(fam_types) == length(fam_types.dir_idx) == length(fam_types.off_idx) ==
+        @test Inv.nslices(fam_types) == length(fam_types.dir_idx) == length(fam_types.off_idx) ==
               length(fam_types.cell_id) == length(fam_types.chain_id) ==
               length(fam_types.off_mid) == length(fam_types.off0) == length(fam_types.off1) ==
               length(fam_types.vals_start) == length(fam_types.vals_len)
         @test fam_types.direction_weight_scheme == :lesnick_l1
         @test fam_types.store_values
-        for k in 1:PM.nslices(fam_types)
+        for k in 1:Inv.nslices(fam_types)
             cid = fam_types.chain_id[k]
             @test cid > 0
-            vv = PM.fibered_values(fam_types, k)
+            vv = Inv.fibered_values(fam_types, k)
             @test length(vv) == fam_types.vals_len[k]
             if fam_types.vals_len[k] > 0
                 @test length(vv) == length(arr2.chains[cid]) + 1
@@ -2346,47 +2346,47 @@ end
         end
 
         # Fibered barcode cache
-        @test fbc isa PM.FiberedBarcodeCache2D
+        @test fbc isa Inv.FiberedBarcodeCache2D
         @test length(fbc.index_barcodes_packed) == length(arr2.chains)
         @test fbc.n_barcode_computed >= 0
         @test fbc.M === M2
         @test fbc.arrangement === arr2
 
         # Projected arrangements + caches
-        @test parr isa PM.ProjectedArrangement
+        @test parr isa Inv.ProjectedArrangement
         @test length(parr.projections) == 2
         for pr in parr.projections
-            @test pr isa PM.ProjectedArrangement1D
+            @test pr isa Inv.ProjectedArrangement1D
             @test first(pr.chain) == 1
             @test last(pr.chain) == PM.nvertices(pr.C)
             @test length(pr.values) == length(pr.chain) + 1
             @test length(pr.dir) == 2
         end
 
-        @test pc2 isa PM.ProjectedBarcodeCache
-        @test pc3 isa PM.ProjectedBarcodeCache
+        @test pc2 isa Inv.ProjectedBarcodeCache
+        @test pc3 isa Inv.ProjectedBarcodeCache
         @test pc2.arrangement === parr
         @test length(pc2.packed_barcodes) == length(parr.projections)
         @test pc2.n_computed >= 0
 
         # Persistence landscape/image
-        pl = PM.persistence_landscape(bar; kmax=3, tgrid=[0.0, 0.5, 1.0])
-        @test pl isa PM.PersistenceLandscape1D
+        pl = Inv.persistence_landscape(bar; kmax=3, tgrid=[0.0, 0.5, 1.0])
+        @test pl isa Inv.PersistenceLandscape1D
         @test issorted(pl.tgrid)
         @test size(pl.values, 1) == 3
         @test size(pl.values, 2) == length(pl.tgrid)
         @test all(isfinite, pl.values)
         @test all(x -> x >= 0.0, pl.values)
 
-        @test pim isa PM.PersistenceImage1D
+        @test pim isa Inv.PersistenceImage1D
         @test size(pim.values, 1) == length(pim.ygrid)
         @test size(pim.values, 2) == length(pim.xgrid)
         @test all(isfinite, pim.values)
         @test all(x -> x >= 0.0, pim.values)
 
         # MPP decomposition + line specs
-        @test decomp_from_wrapper isa PM.MPPDecomposition
-        @test all(l -> l isa PM.MPPLineSpec, decomp_from_wrapper.lines)
+        @test decomp_from_wrapper isa Inv.MPPDecomposition
+        @test all(l -> l isa Inv.MPPLineSpec, decomp_from_wrapper.lines)
         @test length(decomp_from_wrapper.summands) == length(decomp_from_wrapper.weights)
         @test all(w -> w >= 0.0, decomp_from_wrapper.weights)
         for line in decomp_from_wrapper.lines

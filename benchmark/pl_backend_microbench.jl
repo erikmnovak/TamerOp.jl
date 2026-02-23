@@ -223,6 +223,14 @@ function _poly_queries(nq::Int, nregions::Int; seed::Int=Int(0xF011))
     return q
 end
 
+function _clear_poly_auto_cache!(pi)
+    if hasproperty(pi, :cache)
+        c = getproperty(pi, :cache)
+        c isa CM.EncodingCache && CM._clear_encoding_cache!(c)
+    end
+    return nothing
+end
+
 function _pl_fringe_fixture(; nups::Int=4, ndowns::Int=4)
     K = CM.QQ
     Ups = Vector{PLP.PLUpset}(undef, nups)
@@ -305,6 +313,25 @@ function main(; reps::Int=8, nqueries::Int=30_000, splits::Int=10, poly_regions:
 
     _bench("poly region_weights exact", () -> sum(PM.region_weights(poly.pi; box=poly.box, method=:exact)); reps=reps)
     _bench("poly region_adjacency", () -> length(PM.region_adjacency(poly.pi; box=poly.box, strict=false)); reps=reps)
+    _bench("poly exact chain auto cold first", () -> begin
+        _clear_poly_auto_cache!(poly.pi)
+        s = sum(PM.region_weights(poly.pi; box=poly.box, method=:exact, mode=:fast))
+        a = length(PM.region_adjacency(poly.pi; box=poly.box, strict=false, mode=:fast))
+        p = PM.region_perimeter(poly.pi, 1; box=poly.box, strict=false, mode=:fast)
+        s + a + p
+    end; reps=reps)
+    _bench("poly exact chain auto warm", () -> begin
+        s = sum(PM.region_weights(poly.pi; box=poly.box, method=:exact, mode=:fast))
+        a = length(PM.region_adjacency(poly.pi; box=poly.box, strict=false, mode=:fast))
+        p = PM.region_perimeter(poly.pi, 1; box=poly.box, strict=false, mode=:fast)
+        s + a + p
+    end; reps=reps)
+    _bench("poly exact chain auto verified", () -> begin
+        s = sum(PM.region_weights(poly.pi; box=poly.box, method=:exact, mode=:verified))
+        a = length(PM.region_adjacency(poly.pi; box=poly.box, strict=false, mode=:verified))
+        p = PM.region_perimeter(poly.pi, 1; box=poly.box, strict=false, mode=:verified)
+        s + a + p
+    end; reps=reps)
 
     cache = PLP.compile_geometry_cache(poly.pi; box=poly.box, closure=true)
     _bench("poly compile_geometry_cache", () -> PLP.compile_geometry_cache(poly.pi; box=poly.box, closure=true); reps=reps)
@@ -340,6 +367,23 @@ function main(; reps::Int=8, nqueries::Int=30_000, splits::Int=10, poly_regions:
 
     _bench("poly region_weights exact (cache)", () -> sum(PM.region_weights(poly.pi; cache=cache, method=:exact)); reps=reps)
     _bench("poly region_adjacency (cache)", () -> length(PM.region_adjacency(poly.pi; cache=cache, strict=false)); reps=reps)
+    _bench("poly region_boundary_breakdown (cache)", () -> begin
+        bd = PM.region_boundary_measure_breakdown(poly.pi, 1; cache=cache, strict=false, mode=:fast)
+        length(bd)
+    end; reps=reps)
+    _bench("poly region_perimeter (cache)", () -> PM.region_perimeter(poly.pi, 1; cache=cache, strict=false, mode=:fast); reps=reps)
+    _bench("poly region_bbox (cache)", () -> begin
+        bb = PM.region_bbox(poly.pi, 1; cache=cache)
+        bb === nothing ? 0.0 : sum(first(bb)) + sum(last(bb))
+    end; reps=reps)
+    _bench("poly region_weights exact (cache cold)", () -> begin
+        ctmp = PLP.compile_geometry_cache(poly.pi; box=poly.box, closure=true)
+        sum(PM.region_weights(poly.pi; cache=ctmp, method=:exact))
+    end; reps=reps)
+    _bench("poly region_adjacency (cache cold)", () -> begin
+        ctmp = PLP.compile_geometry_cache(poly.pi; box=poly.box, closure=true)
+        length(PM.region_adjacency(poly.pi; cache=ctmp, strict=false, mode=:fast))
+    end; reps=reps)
     _bench("poly region_weights mc", () -> sum(PM.region_weights(poly.pi; box=poly.box, method=:mc, nsamples=8_000, strict=false)); reps=reps)
     _bench("poly region_weights mc (cache)", () -> sum(PM.region_weights(poly.pi; cache=cache, method=:mc, nsamples=8_000, strict=false)); reps=reps)
 

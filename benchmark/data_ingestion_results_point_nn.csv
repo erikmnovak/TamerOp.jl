@@ -1,0 +1,15 @@
+case,family,stage,cache_mode,median_ms,p90_ms,median_alloc_kib
+point_rips_dense_d1,point,graded,auto,26.933584,27.978176,22157.640625
+point_rips_dense_d1,point,graded,session,26.413308,28.512304,22154.765625
+point_rips_knn_sparsify,point,graded,auto,2.322027,5.820899,1394.710938
+point_rips_knn_sparsify,point,graded,session,1.733863,2.404685,1391.804688
+point_rips_greedy_landmarks,point,graded,auto,21.116224,24.364472,22190.4375
+point_rips_greedy_landmarks,point,graded,session,23.289032,24.866893,22187.5
+point_function_rips_d1,point,graded,auto,2.155594,2.473034,1651.921875
+point_function_rips_d1,point,graded,session,2.130804,2.622716,1649.078125
+point_delaunay_lower_star_d2,point,graded,auto,5.862393,6.626588,605.273438
+point_delaunay_lower_star_d2,point,graded,session,6.622356,8.127614,602.367188
+point_core,point,graded,auto,11.691323,14.261796,5294.507812
+point_core,point,graded,session,4.345409,5.38797,5291.570312
+point_rhomboid_d1,point,graded,auto,35.32172,37.1012,23011.796875
+point_rhomboid_d1,point,graded,session,37.364864,38.518981,23008.890625

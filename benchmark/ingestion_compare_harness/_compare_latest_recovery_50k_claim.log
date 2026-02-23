@@ -1,0 +1,4 @@
+Wrote case-level comparison: benchmark/ingestion_compare_harness/comparison_latest_recovery_50k_claim.csv
+Wrote summary comparison: benchmark/ingestion_compare_harness/comparison_summary_latest_recovery_50k_claim.csv
+
+claim_matching     warm_geomean=1.296357 cold_geomean=1.135072 n=3

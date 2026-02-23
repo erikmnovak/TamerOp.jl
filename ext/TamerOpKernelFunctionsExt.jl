@@ -12,7 +12,7 @@ const PM = let pm = nothing
     pm
 end
 
-const WF = PM.Workflow
+const FEA = PM.Featurizers
 const Inv = PM.Invariants
 
 abstract type AbstractTamerKernel <: KernelFunctions.Kernel end
@@ -143,7 +143,7 @@ function KernelFunctions.kernelmatrix_diag(k::AbstractTamerKernel, xs::AbstractV
     return d
 end
 
-WF._set_kernelfunctions_impl!((
+FEA._set_kernelfunctions_impl!((
     mp_landscape = (; kwargs...) -> MPLandscapeKernel(; kwargs...),
     projected = (; kwargs...) -> ProjectedKernel(; kwargs...),
     mpp_image = (; kwargs...) -> MPPImageKernel(; kwargs...),

@@ -12,7 +12,7 @@ const PM = let pm = nothing
     pm
 end
 
-const WF = PM.Workflow
+const FEA = PM.Featurizers
 const Inv = PM.Invariants
 
 abstract type AbstractTamerDistanceMetric <: Distances.PreMetric end
@@ -129,7 +129,7 @@ function Distances.pairwise(m::AbstractTamerDistanceMetric,
     return D
 end
 
-WF._set_distances_impl!((
+FEA._set_distances_impl!((
     matching = (; kwargs...) -> MatchingDistanceMetric(; kwargs...),
     mp_landscape = (; kwargs...) -> MPLandscapeDistanceMetric(; kwargs...),
     projected = (; kwargs...) -> ProjectedDistanceMetric(; kwargs...),

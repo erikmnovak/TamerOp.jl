@@ -1,5 +1,7 @@
 using Test
 
+const FEA = PosetModules.Featurizers
+
 # In include-based test harnesses (no package-extension autoload), manually
 # load optional table/IO extensions when their deps are present.
 if Base.find_package("Tables") !== nothing && !isdefined(Main, :TamerOpTablesExt)
@@ -35,8 +37,8 @@ end
     opts_enc = PM.EncodingOptions(field=field)
     P, H, pi = PLB.encode_fringe_boxes(Ups, Downs, opts_enc)
 
-    r2 = PM.locate(pi, [0.5, 0.0])
-    r3 = PM.locate(pi, [2.0, 0.0])
+    r2 = CM.locate(pi, [0.5, 0.0])
+    r3 = CM.locate(pi, [2.0, 0.0])
 
     M23 = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, r2), FF.principal_downset(P, r3); field=field))
     M3  = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, r3), FF.principal_downset(P, r3); field=field))
@@ -60,8 +62,8 @@ end
     @test lax.k == collect(1:lspec.kmax)
     @test lax.t == lspec.tgrid
     @test lax.aggregate == lspec.aggregate
-    @test PM.supports(lspec, enc23)
-    @test !PM.supports(lspec, M23)
+    @test FEA.supports(lspec, enc23)
+    @test !FEA.supports(lspec, M23)
 
     pispec = PM.PersistenceImageSpec(
         directions=[[1.0, 1.0]],
@@ -121,7 +123,7 @@ end
     @test sbax.x == sbispec.xs
     @test sbax.y == sbispec.ys
     @test sbax.mode == sbispec.mode
-    @test !PM.supports(sbispec, enc23)
+    @test !FEA.supports(sbispec, enc23)
     @test_throws ArgumentError PM.transform(sbispec, enc23; opts=opts_inv, threaded=false)
 
     dspec = PM.ProjectedDistancesSpec(
@@ -155,7 +157,7 @@ end
 
     # Invariant cache protocol: build once, transform many.
     ccache = PM.build_cache(enc23, cspec; opts=opts_inv, threaded=false)
-    @test ccache isa PM.EncodingInvariantCache
+    @test ccache isa FEA.EncodingInvariantCache
     cv_cached = PM.transform(cspec, ccache; threaded=false)
     @test isapprox(cv_cached, cv; atol=1e-12, rtol=0.0)
     cstats = PM.cache_stats(ccache)
@@ -195,7 +197,7 @@ end
     @test isapprox(dv_cached, dv; atol=1e-12, rtol=0.0)
 
     mcache = PM.build_cache(M23; opts=opts_inv, threaded=false)
-    @test mcache isa PM.ModuleInvariantCache
+    @test mcache isa FEA.ModuleInvariantCache
     @test PM.cache_stats(mcache).kind == :module
     rv_cached = PM.transform(rspec, mcache; threaded=false)
     @test isapprox(rv_cached, rv; atol=1e-12, rtol=0.0)
@@ -203,7 +205,7 @@ end
     @test_throws ArgumentError PM.build_cache(enc23, lspec; opts=opts_inv, threaded=false, level=:bad_level)
 
     eh_cache = PM.build_cache(enc23, espec; opts=opts_inv, threaded=false)
-    @test eh_cache isa PM.RestrictedHilbertInvariantCache
+    @test eh_cache isa FEA.RestrictedHilbertInvariantCache
     @test PM.cache_stats(eh_cache).kind == :restricted_hilbert
     ev_cached = PM.transform(espec, eh_cache; threaded=false)
     @test isapprox(ev_cached, ev; atol=1e-12, rtol=0.0)
@@ -220,7 +222,7 @@ end
     F = PM.FlangeZn.face(2, [1, 2])
     flats = [PM.FlangeZn.IndFlat(F, [0, 0]; id=:F)]
     injectives = [PM.FlangeZn.IndInj(F, [0, 0]; id=:E)]
-    FG = PosetModules.Flange{CM.QQ}(2, flats, injectives, reshape([CM.QQ(1)], 1, 1); field=field)
+    FG = FZ.Flange{CM.QQ}(2, flats, injectives, reshape([CM.QQ(1)], 1, 1); field=field)
     enc_zn = PosetModules.encode(FG; backend=:zn)
     sbispec_zn = PM.SignedBarcodeImageSpec(
         xs=collect(-1.0:0.5:1.0),
@@ -228,7 +230,7 @@ end
         sigma=0.35,
         strict=false,
     )
-    @test PM.supports(sbispec_zn, enc_zn)
+    @test FEA.supports(sbispec_zn, enc_zn)
     opts_zn = PM.InvariantOptions(strict=false)
     sbcache = PM.build_cache(enc_zn, sbispec_zn; opts=opts_zn, threaded=false, level=:all)
     @test PM.cache_stats(sbcache).has_rank_query
@@ -240,7 +242,7 @@ end
                       opts=opts_inv,
                       batch=bserial,
                       idfun=s -> string(PM.nvertices(s.P)),
-                      labelfun=s -> PM.rank_map(s.M, r3, r3))
+                      labelfun=s -> Inv.rank_map(s.M, r3, r3))
     @test size(fs.X, 1) == length(samples)
     @test size(fs.X, 2) == PM.nfeatures(lspec)
     @test length(fs.names) == PM.nfeatures(lspec)
@@ -309,14 +311,14 @@ end
     PM.transform!(buff, lspec, enc23; opts=opts_inv, threaded=false)
     @test isapprox(buff, lv; atol=1e-12, rtol=0.0)
 
-    @test PM.asrowmajor(fs) === fs.X
-    @test size(PM.ascolmajor(fs)) == (size(fs.X, 2), size(fs.X, 1))
-    @test PM.feature_table(fs; format=:wide) isa PM.FeatureSetWideTable
-    @test PM.feature_table(fs; format=:long) isa PM.FeatureSetLongTable
-    @test_throws ArgumentError PM.feature_table(fs; format=:bad)
-    @test PM.TAMER_FEATURE_SCHEMA_VERSION == v"0.2.0"
+    @test FEA.asrowmajor(fs) === fs.X
+    @test size(FEA.ascolmajor(fs)) == (size(fs.X, 2), size(fs.X, 1))
+    @test FEA.feature_table(fs; format=:wide) isa FEA.FeatureSetWideTable
+    @test FEA.feature_table(fs; format=:long) isa FEA.FeatureSetLongTable
+    @test_throws ArgumentError FEA.feature_table(fs; format=:bad)
+    @test PM.Serialization.TAMER_FEATURE_SCHEMA_VERSION == v"0.2.0"
 
-    md = PM.feature_metadata(fs; format=:wide)
+    md = FEA.feature_metadata(fs; format=:wide)
     @test md["kind"] == "features"
     @test md["schema_version"] == "0.2.0"
     @test md["n_samples"] == size(fs.X, 1)
@@ -325,21 +327,21 @@ end
     @test md["format"] == "wide"
     @test haskey(md, "feature_axes")
     @test string(md["feature_axes"]["aggregate"]) == string(lspec.aggregate)
-    hdr = PM.feature_schema_header(format=:wide)
+    hdr = PM.Serialization.feature_schema_header(format=:wide)
     @test hdr["kind"] == "features"
     @test hdr["schema_version"] == "0.2.0"
-    @test PM.validate_feature_metadata_schema(md)
+    @test PM.Serialization.validate_feature_metadata_schema(md)
 
-    mpath = PM.default_feature_metadata_path(joinpath(mktempdir(), "features.arrow"))
+    mpath = FEA.default_feature_metadata_path(joinpath(mktempdir(), "features.arrow"))
     @test endswith(mpath, "features.arrow.meta.json")
 
     tmpd = mktempdir()
     meta_path = joinpath(tmpd, "features.meta.json")
-    PM.save_metadata_json(meta_path, md)
-    md2 = PM.load_metadata_json(meta_path; validate_feature_schema=true)
+    FEA.save_metadata_json(meta_path, md)
+    md2 = FEA.load_metadata_json(meta_path; validate_feature_schema=true)
     @test string(md2["schema_version"]) == "0.2.0"
     @test Int(md2["n_features"]) == size(fs.X, 2)
-    md_typed = PM.load_metadata_json(meta_path; validate_feature_schema=true, typed=true)
+    md_typed = FEA.load_metadata_json(meta_path; validate_feature_schema=true, typed=true)
     @test md_typed.spec isa PM.LandscapeSpec
     @test md_typed.opts isa PM.InvariantOptions
     @test md_typed.spec.kmax == lspec.kmax
@@ -349,26 +351,26 @@ end
     @test md_typed.opts.strict == opts_inv.strict
 
     # Explicit typed round-trip from metadata fragments.
-    lspec2 = PM.spec_from_metadata(md["spec"])
+    lspec2 = FEA.spec_from_metadata(md["spec"])
     @test lspec2 isa PM.LandscapeSpec
     @test PM.feature_names(lspec2) == PM.feature_names(lspec)
     @test PM.nfeatures(lspec2) == PM.nfeatures(lspec)
 
-    opts2 = PM.invariant_options_from_metadata(md["opts"])
+    opts2 = FEA.invariant_options_from_metadata(md["opts"])
     @test opts2 isa PM.InvariantOptions
     @test opts2.axes_policy == opts_inv.axes_policy
     @test opts2.max_axis_len == opts_inv.max_axis_len
     @test opts2.strict == opts_inv.strict
 
     # Nested spec round-trip (composite + nested specs).
-    mdc = PM.feature_metadata(PM.FeatureSet(fs.X, fs.names, fs.ids, (spec=cspec, opts=opts_inv)); format=:wide)
-    cspec2 = PM.spec_from_metadata(mdc["spec"])
+    mdc = FEA.feature_metadata(PM.FeatureSet(fs.X, fs.names, fs.ids, (spec=cspec, opts=opts_inv)); format=:wide)
+    cspec2 = FEA.spec_from_metadata(mdc["spec"])
     @test cspec2 isa PM.CompositeSpec
     @test length(cspec2.specs) == length(cspec.specs)
     @test PM.feature_names(cspec2) == PM.feature_names(cspec)
 
-    mdd = PM.feature_metadata(PM.FeatureSet(fs.X, fs.names, fs.ids, (spec=dspec, opts=opts_inv)); format=:wide)
-    dspec2 = PM.spec_from_metadata(mdd["spec"])
+    mdd = FEA.feature_metadata(PM.FeatureSet(fs.X, fs.names, fs.ids, (spec=dspec, opts=opts_inv)); format=:wide)
+    dspec2 = FEA.spec_from_metadata(mdd["spec"])
     @test dspec2 isa PM.ProjectedDistancesSpec
     @test dspec2.reference_names == dspec.reference_names
     @test dspec2.dist == dspec.dist
@@ -376,17 +378,17 @@ end
     @test collect(String.(mdd["spec"]["fields"]["reference_ids"])) == ["M3"]
 
     resolve_ref = id -> id == "M3" ? enc3 : nothing
-    dspec3 = PM.load_spec_with_resolver(mdd["spec"], resolve_ref)
+    dspec3 = FEA.load_spec_with_resolver(mdd["spec"], resolve_ref)
     @test dspec3 isa PM.ProjectedDistancesSpec
     @test length(dspec3.references) == 1
     @test dspec3.references[1] === enc3
     dv3 = PM.transform(dspec3, enc23; opts=opts_inv, threaded=false)
     @test isapprox(dv3, dv; atol=1e-12, rtol=0.0)
-    @test_throws ArgumentError PM.load_spec_with_resolver(mdd["spec"], _ -> nothing; require_all=true)
+    @test_throws ArgumentError FEA.load_spec_with_resolver(mdd["spec"], _ -> nothing; require_all=true)
 
     proj_meta_path = joinpath(tmpd, "projected_features.meta.json")
-    PM.save_metadata_json(proj_meta_path, mdd)
-    proj_typed = PM.load_metadata_json(proj_meta_path;
+    FEA.save_metadata_json(proj_meta_path, mdd)
+    proj_typed = FEA.load_metadata_json(proj_meta_path;
                                        validate_feature_schema=true,
                                        typed=true,
                                        resolve_ref=resolve_ref,
@@ -396,7 +398,7 @@ end
 
     # Internal wide/long reconstruction helpers (no optional deps required).
     cols_wide = (id=["s1", "s2"], f1=[1.0, 2.0], f2=[3.0, 4.0])
-    fs_wide = PM.Workflow._featureset_from_columntable(cols_wide; format=:wide)
+    fs_wide = FEA._featureset_from_columntable(cols_wide; format=:wide)
     @test fs_wide.ids == ["s1", "s2"]
     @test fs_wide.names == [:f1, :f2]
     @test all(fs_wide.X .== [1.0 3.0; 2.0 4.0])
@@ -404,7 +406,7 @@ end
     cols_long = (id=["s1", "s1", "s2", "s2"],
                  feature=[:f1, :f2, :f1, :f2],
                  value=[1.0, 3.0, 2.0, 4.0])
-    fs_long = PM.Workflow._featureset_from_columntable(cols_long; format=:long)
+    fs_long = FEA._featureset_from_columntable(cols_long; format=:long)
     @test fs_long.ids == ["s1", "s2"]
     @test fs_long.names == [:f1, :f2]
     @test all(fs_long.X .== [1.0 3.0; 2.0 4.0])
@@ -422,7 +424,7 @@ end
         @eval using Arrow
         PM.save_features_arrow(arrow_path, fs; format=:wide)
         @test isfile(arrow_path)
-        @test isfile(PM.default_feature_metadata_path(arrow_path))
+        @test isfile(FEA.default_feature_metadata_path(arrow_path))
         fs_arrow = PM.load_features_arrow(arrow_path; format=:wide)
         @test fs_arrow.names == fs.names
         @test fs_arrow.ids == fs.ids
@@ -460,7 +462,7 @@ end
         @eval using Parquet2
         PM.save_features_parquet(parq_path, fs; format=:long)
         @test isfile(parq_path)
-        @test isfile(PM.default_feature_metadata_path(parq_path))
+        @test isfile(FEA.default_feature_metadata_path(parq_path))
         fs_parq = PM.load_features_parquet(parq_path; format=:long)
         @test fs_parq.names == fs.names
         @test fs_parq.ids == fs.ids
@@ -497,15 +499,15 @@ end
         @eval using NPZ
         PM.save_features_npz(npz_path, fs; format=:wide, layout=:samples_by_features)
         @test isfile(npz_path)
-        @test isfile(PM.default_feature_metadata_path(npz_path))
+        @test isfile(FEA.default_feature_metadata_path(npz_path))
         fs_npz = PM.load_features_npz(npz_path)
         @test fs_npz.names == fs.names
         @test fs_npz.ids == fs.ids
         @test size(fs_npz.X) == size(fs.X)
         @test all(fs_npz.X .== fs.X)
-        md_npz = PM.load_metadata_json(PM.default_feature_metadata_path(npz_path); validate_feature_schema=true)
+        md_npz = FEA.load_metadata_json(FEA.default_feature_metadata_path(npz_path); validate_feature_schema=true)
         @test md_npz["kind"] == "features"
-        @test md_npz["schema_version"] == string(PM.TAMER_FEATURE_SCHEMA_VERSION)
+        @test md_npz["schema_version"] == string(PM.Serialization.TAMER_FEATURE_SCHEMA_VERSION)
 
         # Generic interop entrypoints should route to NPZ extension.
         PM.save_features(npz_path, fs; format=:auto, mode=:wide, layout=:samples_by_features, metadata=true)
@@ -515,7 +517,7 @@ end
         @test size(fs_npz2.X) == size(fs.X)
         @test all(fs_npz2.X .== fs.X)
         @test haskey(fs_npz2.meta, :metadata)
-        @test fs_npz2.meta.metadata["schema_version"] == string(PM.TAMER_FEATURE_SCHEMA_VERSION)
+        @test fs_npz2.meta.metadata["schema_version"] == string(PM.Serialization.TAMER_FEATURE_SCHEMA_VERSION)
 
         # Optional transposed storage layout round-trip.
         PM.save_features(npz_path, fs; format=:npz, mode=:wide, layout=:features_by_samples, metadata=true)
@@ -534,7 +536,7 @@ end
         @eval using CSV
         PM.save_features_csv(csv_path, fs; format=:wide, layout=:samples_by_features)
         @test isfile(csv_path)
-        @test isfile(PM.default_feature_metadata_path(csv_path))
+        @test isfile(FEA.default_feature_metadata_path(csv_path))
         fs_csv = PM.load_features_csv(csv_path; format=:wide)
         @test fs_csv.names == fs.names
         @test fs_csv.ids == fs.ids
@@ -623,33 +625,33 @@ end
 
     # Long-form wrappers for optional Tables.jl integration.
     es = PM.euler_surface(M23, pi, opts_inv)
-    est = PM.euler_surface_table(es; id="m23")
-    @test est isa PM.EulerSurfaceLongTable
+    est = FEA.euler_surface_table(es; id="m23")
+    @test est isa FEA.EulerSurfaceLongTable
 
     bar = Dict((0.0, 1.0) => 1, (0.5, 1.5) => 1)
-    PI = PM.persistence_image(bar; xgrid=0.0:0.5:1.5, ygrid=0.0:0.5:1.5)
-    pit = PM.persistence_image_table(PI; id="pi")
-    @test pit isa PM.PersistenceImageLongTable
+    PI = Inv.persistence_image(bar; xgrid=0.0:0.5:1.5, ygrid=0.0:0.5:1.5)
+    pit = FEA.persistence_image_table(PI; id="pi")
+    @test pit isa FEA.PersistenceImageLongTable
 
     L = PM.mp_landscape(M23, [Int[r2, r3]]; kmax=2, tgrid=collect(0.0:0.5:3.0))
-    lt = PM.mp_landscape_table(L; id="land")
-    @test lt isa PM.MPLandscapeLongTable
+    lt = FEA.mp_landscape_table(L; id="land")
+    @test lt isa FEA.MPLandscapeLongTable
 
-    pm = PM.euler_signed_measure(M23, pi, opts_inv)
-    pmt = PM.point_signed_measure_table(pm; id="pm")
-    @test pmt isa PM.PointSignedMeasureLongTable
+    pm = Inv.euler_signed_measure(M23, pi, opts_inv)
+    pmt = FEA.point_signed_measure_table(pm; id="pm")
+    @test pmt isa FEA.PointSignedMeasureLongTable
 
     @testset "KernelFunctions and Distances integration" begin
         if Base.find_package("KernelFunctions") === nothing
-            @test_throws ArgumentError PM.mp_landscape_kernel_object()
-            @test_throws ArgumentError PM.projected_kernel_object()
+            @test_throws ArgumentError FEA.mp_landscape_kernel_object()
+            @test_throws ArgumentError FEA.projected_kernel_object()
         else
             @eval using KernelFunctions
             chain = Int[r2, r3]
             L23_small = PM.mp_landscape(M23, [chain]; kmax=2, tgrid=collect(0.0:0.5:3.0))
             L3_small = PM.mp_landscape(M3, [chain]; kmax=2, tgrid=collect(0.0:0.5:3.0))
 
-            k_land = PM.mp_landscape_kernel_object(kind=:gaussian, sigma=1.0, p=2)
+            k_land = FEA.mp_landscape_kernel_object(kind=:gaussian, sigma=1.0, p=2)
             @test isapprox(KernelFunctions.kappa(k_land, L23_small, L23_small), 1.0; atol=1e-12)
             K_land = KernelFunctions.kernelmatrix(k_land, Any[L23_small, L3_small])
             @test size(K_land) == (2, 2)
@@ -657,31 +659,31 @@ end
             @test K_land[1, 2] <= K_land[1, 1]
             @test length(KernelFunctions.kernelmatrix_diag(k_land, Any[L23_small, L3_small])) == 2
 
-            arr_proj = PM.projected_arrangement(pi; n_dirs=4, normalize=:L1, threads=false)
-            cache23_proj = PM.projected_barcode_cache(M23, arr_proj; precompute=true)
-            cache3_proj = PM.projected_barcode_cache(M3, arr_proj; precompute=true)
-            k_proj = PM.projected_kernel_object(kind=:bottleneck_gaussian, sigma=1.0, threads=false)
+            arr_proj = Inv.projected_arrangement(pi; n_dirs=4, normalize=:L1, threads=false)
+            cache23_proj = Inv.projected_barcode_cache(M23, arr_proj; precompute=true)
+            cache3_proj = Inv.projected_barcode_cache(M3, arr_proj; precompute=true)
+            k_proj = FEA.projected_kernel_object(kind=:bottleneck_gaussian, sigma=1.0, threads=false)
             @test KernelFunctions.kappa(k_proj, cache23_proj, cache23_proj) >= KernelFunctions.kappa(k_proj, cache23_proj, cache3_proj)
 
-            k_pm = PM.point_signed_measure_kernel_object(sigma=1.0)
+            k_pm = FEA.point_signed_measure_kernel_object(sigma=1.0)
             @test isapprox(KernelFunctions.kappa(k_pm, pm, pm),
-                           PM.point_signed_measure_kernel(pm, pm; sigma=1.0);
+                           Inv.point_signed_measure_kernel(pm, pm; sigma=1.0);
                            atol=1e-12)
 
-            sb_zn = PM.rectangle_signed_barcode(enc_zn.M, enc_zn.pi, opts_zn)
-            k_sb = PM.rectangle_signed_barcode_kernel_object(kind=:linear, sigma=1.0)
+            sb_zn = Inv.rectangle_signed_barcode(enc_zn.M, enc_zn.pi, opts_zn)
+            k_sb = FEA.rectangle_signed_barcode_kernel_object(kind=:linear, sigma=1.0)
             @test isapprox(KernelFunctions.kappa(k_sb, sb_zn, sb_zn),
-                           PM.rectangle_signed_barcode_kernel(sb_zn, sb_zn; kind=:linear, sigma=1.0);
+                           Inv.rectangle_signed_barcode_kernel(sb_zn, sb_zn; kind=:linear, sigma=1.0);
                            atol=1e-12)
         end
 
         if Base.find_package("Distances") === nothing
-            @test_throws ArgumentError PM.matching_distance_metric()
-            @test_throws ArgumentError PM.bottleneck_distance_metric()
+            @test_throws ArgumentError FEA.matching_distance_metric()
+            @test_throws ArgumentError FEA.bottleneck_distance_metric()
         else
             @eval using Distances
 
-            m_match = PM.matching_distance_metric(method=:approx, opts=opts_inv)
+            m_match = FEA.matching_distance_metric(method=:approx, opts=opts_inv)
             d_match = Distances.evaluate(m_match, enc23, enc3)
             @test isapprox(d_match, PM.matching_distance(enc23, enc3; method=:approx, opts=opts_inv); atol=1e-12)
             D_match = Distances.pairwise(m_match, Any[enc23, enc3])
@@ -692,20 +694,20 @@ end
             chain = Int[r2, r3]
             L23_small = PM.mp_landscape(M23, [chain]; kmax=2, tgrid=collect(0.0:0.5:3.0))
             L3_small = PM.mp_landscape(M3, [chain]; kmax=2, tgrid=collect(0.0:0.5:3.0))
-            m_land = PM.mp_landscape_distance_metric(p=2)
+            m_land = FEA.mp_landscape_distance_metric(p=2)
             @test isapprox(Distances.evaluate(m_land, L23_small, L23_small), 0.0; atol=1e-12)
             @test Distances.evaluate(m_land, L23_small, L3_small) >= 0.0
 
             bar = Dict((0.0, 1.0) => 1, (0.5, 1.5) => 1)
-            m_bott = PM.bottleneck_distance_metric()
+            m_bott = FEA.bottleneck_distance_metric()
             @test isapprox(Distances.evaluate(m_bott, bar, bar), 0.0; atol=1e-12)
-            m_wass = PM.wasserstein_distance_metric(p=2, q=1)
+            m_wass = FEA.wasserstein_distance_metric(p=2, q=1)
             @test isapprox(Distances.evaluate(m_wass, bar, bar), 0.0; atol=1e-12)
 
-            arr_proj = PM.projected_arrangement(pi; n_dirs=4, normalize=:L1, threads=false)
-            cache23_proj = PM.projected_barcode_cache(M23, arr_proj; precompute=true)
-            cache3_proj = PM.projected_barcode_cache(M3, arr_proj; precompute=true)
-            m_proj = PM.projected_distance_metric(dist=:bottleneck, agg=:mean, threads=false)
+            arr_proj = Inv.projected_arrangement(pi; n_dirs=4, normalize=:L1, threads=false)
+            cache23_proj = Inv.projected_barcode_cache(M23, arr_proj; precompute=true)
+            cache3_proj = Inv.projected_barcode_cache(M3, arr_proj; precompute=true)
+            m_proj = FEA.projected_distance_metric(dist=:bottleneck, agg=:mean, threads=false)
             @test Distances.evaluate(m_proj, cache23_proj, cache23_proj) <= Distances.evaluate(m_proj, cache23_proj, cache3_proj) + 1e-12
             D_proj = Distances.pairwise(m_proj, Any[cache23_proj, cache3_proj])
             @test size(D_proj) == (2, 2)
@@ -714,26 +716,26 @@ end
     end
 
     @testset "Experiment runner" begin
-        io_formats = PM.ExperimentIOConfig(outdir=nothing,
+        io_formats = FEA.ExperimentIOConfig(outdir=nothing,
                                            prefix="exp_formats",
                                            format=:wide,
                                            formats=[:csv_long, :npz, :csv_wide, :npz],
                                            write_metadata=false)
         @test io_formats.formats == [:npz, :csv_wide, :csv_long]
-        io_ctor = PM.ExperimentIOConfig(outdir=nothing,
+        io_ctor = FEA.ExperimentIOConfig(outdir=nothing,
                                         prefix="exp_ctor",
                                         format=:wide,
                                         formats=[:arrow, :parquet, :arrow],
                                         write_metadata=false)
         @test io_ctor.formats == [:arrow, :parquet]
 
-        io_nowrite = PM.ExperimentIOConfig(outdir=nothing,
+        io_nowrite = FEA.ExperimentIOConfig(outdir=nothing,
                                            prefix="exp_nowrite",
                                            format=:wide,
                                            formats=Symbol[],
                                            write_metadata=false,
                                            overwrite=true)
-        exp_nowrite = PM.ExperimentSpec((lspec,);
+        exp_nowrite = FEA.ExperimentSpec((lspec,);
                                         name="exp_nowrite",
                                         opts=opts_inv,
                                         batch=bserial,
@@ -751,13 +753,13 @@ end
         tmp_exp = mktempdir()
         has_arrow = Base.find_package("Arrow") !== nothing
         has_parquet = Base.find_package("Parquet2") !== nothing
-        io_out = PM.ExperimentIOConfig(outdir=tmp_exp,
+        io_out = FEA.ExperimentIOConfig(outdir=tmp_exp,
                                        prefix="exp_out",
                                        format=:wide,
                                        formats=(has_arrow ? [:arrow] : Symbol[]),
                                        write_metadata=true,
                                        overwrite=true)
-        exp_out = PM.ExperimentSpec((lspec, pispec);
+        exp_out = FEA.ExperimentSpec((lspec, pispec);
                                     name="exp_out",
                                     opts=opts_inv,
                                     batch=bserial,
@@ -786,7 +788,7 @@ end
         @test res_out.artifacts[1].features.X == PM.featurize(samples, lspec; opts=opts_inv, batch=bserial, cache=:auto).X
 
         loaded_meta = PM.load_experiment(res_out.manifest_path; load_features=false)
-        @test loaded_meta isa PM.LoadedExperimentResult
+        @test loaded_meta isa FEA.LoadedExperimentResult
         @test length(loaded_meta.artifacts) == 2
         @test loaded_meta.total_elapsed_seconds >= 0.0
         @test all(a -> a.features === nothing, loaded_meta.artifacts)
@@ -805,7 +807,7 @@ end
         end
 
         if has_parquet
-            io_parq = PM.ExperimentIOConfig(outdir=mktempdir(),
+            io_parq = FEA.ExperimentIOConfig(outdir=mktempdir(),
                                             prefix="exp_parq",
                                             format=:long,
                                             formats=[:parquet],
@@ -835,7 +837,7 @@ end
         has_npz && push!(fmts, :npz)
         has_csv && append!(fmts, [:csv_wide, :csv_long])
         if !isempty(fmts)
-            io_multi = PM.ExperimentIOConfig(outdir=mktempdir(),
+            io_multi = FEA.ExperimentIOConfig(outdir=mktempdir(),
                                              prefix="exp_multi",
                                              format=:wide,
                                              formats=fmts,
@@ -855,13 +857,13 @@ end
             end
             @test art.metadata_path !== nothing
             @test isfile(art.metadata_path)
-            md_multi = PM.load_metadata_json(art.metadata_path; validate_feature_schema=false)
+            md_multi = FEA.load_metadata_json(art.metadata_path; validate_feature_schema=false)
             @test String(md_multi["kind"]) == "experiment_feature"
             @test haskey(md_multi, "artifact_formats")
             @test Set(Symbol.(String.(md_multi["artifact_formats"]))) == Set(fmts)
             @test String(md_multi["artifact_layout"]) == "samples_by_features"
 
-            man_multi = PM.load_metadata_json(res_multi.manifest_path; validate_feature_schema=false)
+            man_multi = FEA.load_metadata_json(res_multi.manifest_path; validate_feature_schema=false)
             @test Set(Symbol.(String.(man_multi["artifact_formats"]))) == Set(fmts)
             @test haskey(man_multi["artifacts"][1]["feature_paths"], string(first(fmts)))
 

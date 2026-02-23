@@ -1,0 +1,59 @@
+[meta]
+version = 1
+description = "Non-Rips parity cases (alpha, core_delaunay, cubical)."
+
+[[cases]]
+id = "nonrips_alpha_n200_d2_md2_s11"
+regime = "alpha_function_delaunay"
+dataset = "gaussian_shell"
+n_points = 200
+ambient_dim = 2
+seed = 11
+max_dim = 2
+
+[[cases]]
+id = "nonrips_alpha_n300_d2_md2_s17"
+regime = "alpha_function_delaunay"
+dataset = "gaussian_shell"
+n_points = 300
+ambient_dim = 2
+seed = 17
+max_dim = 2
+
+[[cases]]
+id = "nonrips_core_delaunay_n200_d2_md2_s11"
+regime = "core_delaunay_parity"
+dataset = "gaussian_shell"
+n_points = 200
+ambient_dim = 2
+seed = 11
+max_dim = 2
+
+[[cases]]
+id = "nonrips_core_delaunay_n300_d2_md2_s17"
+regime = "core_delaunay_parity"
+dataset = "gaussian_shell"
+n_points = 300
+ambient_dim = 2
+seed = 17
+max_dim = 2
+
+[[cases]]
+id = "nonrips_cubical_side32_s11"
+regime = "cubical_parity"
+dataset = "image_sine"
+n_points = 1024
+ambient_dim = 2
+seed = 11
+max_dim = 2
+image_side = 32
+
+[[cases]]
+id = "nonrips_cubical_side40_s17"
+regime = "cubical_parity"
+dataset = "image_sine"
+n_points = 1600
+ambient_dim = 2
+seed = 17
+max_dim = 2
+image_side = 40

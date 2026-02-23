@@ -174,7 +174,7 @@ end
     Rop = IR.pmodule_from_fringe(one_by_one_fringe(Pop,
             FF.principal_upset(Pop, 2), FF.principal_downset(Pop, 2); scalar=one(K), field=field))
 
-    LES = PM.TorLongExactSequenceSecond(Rop, i, p, PM.DerivedFunctorOptions(maxdeg=2))
+    LES = DF.TorLongExactSequenceSecond(Rop, i, p, PM.DerivedFunctorOptions(maxdeg=2))
 
     TorRA = DF.Tor(Rop, A, PM.DerivedFunctorOptions(maxdeg=2))
     TorRB = DF.Tor(Rop, B, PM.DerivedFunctorOptions(maxdeg=2))
@@ -191,14 +191,14 @@ end
     # Tor algebra (exercise multiplication)
     T = DF.Tor(Rop, B, PM.DerivedFunctorOptions(model=:second, maxdeg=2))
 
-    Aalg = PM.TorAlgebra(T; mu_chain_gen=PM.DerivedFunctors.trivial_tor_product_generator(T))
+    Aalg = DF.TorAlgebra(T; mu_chain_gen=DF.trivial_tor_product_generator(T))
 
-    M00  = PM.multiplication_matrix(Aalg, 0, 0)
-    M00b = PM.multiplication_matrix(Aalg, 0, 0)
+    M00  = DF.multiplication_matrix(Aalg, 0, 0)
+    M00b = DF.multiplication_matrix(Aalg, 0, 0)
     @test M00 == M00b
 
     if PM.dim(T, 1) > 0
-        M01 = PM.multiplication_matrix(Aalg, 0, 1)
+        M01 = DF.multiplication_matrix(Aalg, 0, 1)
         @test all(M01 .== 0)
     end
 end
@@ -249,7 +249,7 @@ end
     Fid = PM.hyperTor_map_first(IR.id_morphism(Rop), HT, HT; n=1)
     @test Fid == CM.eye(field, d1)
 
-    Gid = PM.hyperTor_map_second(PM.idmap(C), HT, HT; n=1)
+    Gid = PM.hyperTor_map_second(PM.ModuleComplexes.idmap(C), HT, HT; n=1)
     @test Gid == CM.eye(field, d1)
 
     # --- Functoriality in first variable ---
@@ -309,7 +309,7 @@ end
     i = MD.PMorphism(S2, P1, [CM.zeros(field, 1, 0), CM.ones(field, 1, 1)])
     p = MD.PMorphism(P1, S1, [CM.ones(field, 1, 1), CM.zeros(field, 0, 1)])
 
-    les2 = PM.TorLongExactSequenceSecond(S2op, i, p, PM.DerivedFunctorOptions(maxdeg=1))
+    les2 = DF.TorLongExactSequenceSecond(S2op, i, p, PM.DerivedFunctorOptions(maxdeg=1))
 
     # Connecting map delta: Tor_1(S2op, S1) -> Tor_0(S2op, S2)
     # In this toy example it is nonzero (this is the standard non-split SES).
@@ -330,8 +330,8 @@ end
     # The Ext^0 unit should act as identity on Tor_1.
     EA = PM.ExtAlgebra(S1, PM.DerivedFunctorOptions(maxdeg=2))
     Tsec = DF.Tor(S2op, S1, PM.DerivedFunctorOptions(model=:second); res=EA.E.res)
-    u = PM.unit(EA)
-    act = PM.ext_action_on_tor(EA, Tsec, u; s=1)
+    u = DF.unit(EA)
+    act = DF.ext_action_on_tor(EA, Tsec, u; s=1)
 
     @test size(act) == (PM.dim(Tsec, 1), PM.dim(Tsec, 1))
     @test act[1, 1] == c(1)
@@ -352,14 +352,14 @@ end
     T0 = DF.Tor(P2op, S2, PM.DerivedFunctorOptions(maxdeg=0))
     @test PM.dim(T0, 0) == 1
 
-    Alg = PM.TorAlgebra(T0)
-    PM.set_chain_product!(Alg, 0, 0, sparse(CM.ones(field, 1, 1)))
-    M00 = PM.multiplication_matrix(Alg, 0, 0)
+    Alg = DF.TorAlgebra(T0)
+    DF.set_chain_product!(Alg, 0, 0, sparse(CM.ones(field, 1, 1)))
+    M00 = DF.multiplication_matrix(Alg, 0, 0)
     @test size(M00) == (1, 1)
     @test M00[1, 1] == c(1)
 
-    x = PM.element(Alg, 0, [c(1)])
-    y = PM.multiply(Alg, x, x)
+    x = DF.element(Alg, 0, [c(1)])
+    y = DF.multiply(Alg, x, x)
     @test y.deg == 0
     @test y.coords[1] == c(1)
 end

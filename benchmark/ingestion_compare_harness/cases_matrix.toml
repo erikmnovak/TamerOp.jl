@@ -1,0 +1,141 @@
+[meta]
+version = 1
+description = "Expanded apples-to-apples Rips matrix for robust cold/warm comparisons."
+
+# max_dim=1 sweep (large-n sparse radius regime)
+[[cases]]
+id = "matrix_claim_n5000_d2_md1_s11"
+regime = "claim_matching"
+dataset = "gaussian_shell"
+n_points = 5000
+ambient_dim = 2
+seed = 11
+max_dim = 1
+
+[[cases]]
+id = "matrix_claim_n10000_d2_md1_s11"
+regime = "claim_matching"
+dataset = "gaussian_shell"
+n_points = 10000
+ambient_dim = 2
+seed = 11
+max_dim = 1
+
+[[cases]]
+id = "matrix_claim_n20000_d2_md1_s11"
+regime = "claim_matching"
+dataset = "gaussian_shell"
+n_points = 20000
+ambient_dim = 2
+seed = 11
+max_dim = 1
+
+[[cases]]
+id = "matrix_claim_n50000_d2_md1_s11"
+regime = "claim_matching"
+dataset = "gaussian_shell"
+n_points = 50000
+ambient_dim = 2
+seed = 11
+max_dim = 1
+
+[[cases]]
+id = "matrix_claim_n5000_d8_md1_s11"
+regime = "claim_matching"
+dataset = "gaussian_shell"
+n_points = 5000
+ambient_dim = 8
+seed = 11
+max_dim = 1
+
+[[cases]]
+id = "matrix_claim_n10000_d8_md1_s11"
+regime = "claim_matching"
+dataset = "gaussian_shell"
+n_points = 10000
+ambient_dim = 8
+seed = 11
+max_dim = 1
+
+[[cases]]
+id = "matrix_claim_n20000_d8_md1_s11"
+regime = "claim_matching"
+dataset = "gaussian_shell"
+n_points = 20000
+ambient_dim = 8
+seed = 11
+max_dim = 1
+
+[[cases]]
+id = "matrix_claim_n50000_d8_md1_s11"
+regime = "claim_matching"
+dataset = "gaussian_shell"
+n_points = 50000
+ambient_dim = 8
+seed = 11
+max_dim = 1
+
+# landmark-subset parity sweep (max_dim=1)
+[[cases]]
+id = "matrix_landmark_n5000_d2_md1_s11"
+regime = "landmark_parity"
+dataset = "gaussian_shell"
+n_points = 5000
+ambient_dim = 2
+seed = 11
+max_dim = 1
+
+[[cases]]
+id = "matrix_landmark_n20000_d2_md1_s11"
+regime = "landmark_parity"
+dataset = "gaussian_shell"
+n_points = 20000
+ambient_dim = 2
+seed = 11
+max_dim = 1
+
+[[cases]]
+id = "matrix_landmark_n5000_d8_md1_s11"
+regime = "landmark_parity"
+dataset = "gaussian_shell"
+n_points = 5000
+ambient_dim = 8
+seed = 11
+max_dim = 1
+
+[[cases]]
+id = "matrix_landmark_n20000_d8_md1_s11"
+regime = "landmark_parity"
+dataset = "gaussian_shell"
+n_points = 20000
+ambient_dim = 8
+seed = 11
+max_dim = 1
+
+# max_dim=2 sweep (small-n, still apples-to-apples and combinatorially nontrivial)
+[[cases]]
+id = "matrix_parity_n200_d2_md2_s11"
+regime = "normalized_parity"
+dataset = "gaussian_shell"
+n_points = 200
+ambient_dim = 2
+seed = 11
+max_dim = 2
+
+[[cases]]
+id = "matrix_parity_n300_d2_md2_s17"
+regime = "normalized_parity"
+dataset = "gaussian_shell"
+n_points = 300
+ambient_dim = 2
+seed = 17
+max_dim = 2
+
+[[cases]]
+id = "matrix_parity_n200_d8_md2_s11"
+regime = "normalized_parity"
+dataset = "gaussian_shell"
+n_points = 200
+ambient_dim = 8
+seed = 11
+max_dim = 2

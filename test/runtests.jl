@@ -26,26 +26,66 @@ catch
     using .PosetModules
 end
 
-# Tests intentionally target the "broad" surface under PosetModules.Advanced,
-# because most tests exercise internal submodules and non-curated utilities.
-const PM = PosetModules.Advanced
+# Keep API-surface contract checks explicit.
+const PMA = PosetModules.Advanced
 
+# Test-facing namespace:
+# resolve symbols directly from owner modules to avoid coupling correctness tests
+# to APISurface curation decisions.
+struct _TestSurface end
+
+const _TEST_SURFACE_MODULES = (
+    PosetModules,
+    PosetModules.CoreModules,
+    PosetModules.RegionGeometry,
+    PosetModules.FiniteFringe,
+    PosetModules.IndicatorTypes,
+    PosetModules.Encoding,
+    PosetModules.Modules,
+    PosetModules.AbelianCategories,
+    PosetModules.IndicatorResolutions,
+    PosetModules.FlangeZn,
+    PosetModules.ZnEncoding,
+    PosetModules.PLPolyhedra,
+    PosetModules.PLBackend,
+    PosetModules.ChainComplexes,
+    PosetModules.DerivedFunctors,
+    PosetModules.ModuleComplexes,
+    PosetModules.ChangeOfPosets,
+    PosetModules.Serialization,
+    PosetModules.Invariants,
+    PosetModules.Workflow,
+    PosetModules.DataIngestion,
+    PosetModules.Featurizers,
+    PosetModules.Viz2D,
+)
+
+@inline function Base.getproperty(::_TestSurface, s::Symbol)
+    for m in _TEST_SURFACE_MODULES
+        if isdefined(m, s)
+            return getfield(m, s)
+        end
+    end
+    throw(UndefVarError(s))
+end
+
+const PM = _TestSurface()
 
 # Convenient aliases used throughout the test suite.
-const DF  = PM.DerivedFunctors
-const FF  = PM.FiniteFringe
-const EN  = PM.Encoding
+const DF  = PosetModules.DerivedFunctors
+const FF  = PosetModules.FiniteFringe
+const EN  = PosetModules.Encoding
 const HE  = DF.HomExtEngine
-const MD  = PM.Modules
-const IR  = PM.IndicatorResolutions
-const FZ  = PM.FlangeZn
-const SER = PM.Serialization
-const PLP = PM.PLPolyhedra
-const PLB = PM.PLBackend
-const CC  = PM.ChainComplexes
-const QQ  = PM.CoreModules.QQ
-const CM  = PM.CoreModules
-const Inv = PM.Invariants
+const MD  = PosetModules.Modules
+const IR  = PosetModules.IndicatorResolutions
+const FZ  = PosetModules.FlangeZn
+const SER = PosetModules.Serialization
+const PLP = PosetModules.PLPolyhedra
+const PLB = PosetModules.PLBackend
+const CC  = PosetModules.ChainComplexes
+const QQ  = PosetModules.CoreModules.QQ
+const CM  = PosetModules.CoreModules
+const Inv = PosetModules.Invariants
 
 using SparseArrays
 
@@ -56,7 +96,7 @@ using SparseArrays
 # ---------------- Helpers used by multiple test files -------------------------
 
 """
-    chain_poset(n::Integer; check::Bool=false) -> FinitePoset
+    chain_poset(n::Integer; check::Bool=false) -> FF.FinitePoset
 
 Return the chain poset on `n` elements labeled `1:n`, ordered by
 `i <= j` iff `i <= j`.
@@ -68,7 +108,7 @@ Notes
 - Set `check=true` if you want to force validation (useful when debugging).
 - `n == 0` returns the empty poset.
 """
-function chain_poset(n::Integer; check::Bool=false)::FinitePoset
+function chain_poset(n::Integer; check::Bool=false)::FF.FinitePoset
     n < 0 && throw(ArgumentError("chain_poset: n must be >= 0, got $n"))
     nn = Int(n)
 
@@ -166,7 +206,7 @@ end
 "Convenience: 1x1 fringe module with scalar on the unique entry."
 one_by_one_fringe(P::FF.AbstractPoset, U::FF.Upset, D::FF.Downset;
                   scalar=CM.QQ(1), field=CM.QQField()) =
-    FF.one_by_one_fringe(P, U, D; scalar=scalar, field=field)
+    FF.one_by_one_fringe(P, U, D, scalar; field=field)
 
 "Convenience: 1x1 fringe module with a specified scalar (positional)."
 one_by_one_fringe(P::FF.AbstractPoset, U::FF.Upset, D::FF.Downset, scalar;
@@ -233,50 +273,142 @@ with_fields(f::Function, fields) = foreach(f, fields)
     end
 end
 
+# ---------------- Export hygiene ----------------------------------------------
+
+@testset "No submodule export blocks" begin
+    src_dir = normpath(joinpath(@__DIR__, "..", "src"))
+
+    function jl_files_under(dir::AbstractString)
+        files = String[]
+        for (root, _, fs) in walkdir(dir)
+            for f in fs
+                endswith(f, ".jl") || continue
+                push!(files, normpath(joinpath(root, f)))
+            end
+        end
+        sort!(files)
+        return files
+    end
+
+    allowed_exports = Set([normpath(joinpath(src_dir, "PosetModules.jl"))])
+    pat = r"(?m)^\s*export\b"
+
+    for f in jl_files_under(src_dir)
+        f in allowed_exports && continue
+        has_export = occursin(pat, read(f, String))
+        if has_export
+            @info "Unexpected export statement outside PosetModules.jl" file=f
+        end
+        @test !has_export
+    end
+end
+
 # ---------------- Public API smoke test --------------------------------------
 
 @testset "Public API smoke test" begin
     # Finite-poset primitives
-    @test isdefined(PM, :FinitePoset)
-    @test isdefined(PM, :Upset)
-    @test isdefined(PM, :Downset)
-    @test isdefined(PM, :FringeModule)
-    @test isdefined(PM, :principal_upset)
-    @test isdefined(PM, :principal_downset)
-    @test isdefined(PM, :upset_from_generators)
-    @test isdefined(PM, :downset_from_generators)
-    @test isdefined(PM, :one_by_one_fringe)
-    @test isdefined(PM, :cover_edges)
+    @test isdefined(PMA, :FinitePoset)
+    @test isdefined(PMA, :Upset)
+    @test isdefined(PMA, :Downset)
+    @test isdefined(PMA, :FringeModule)
+    @test isdefined(PMA, :principal_upset)
+    @test isdefined(PMA, :principal_downset)
+    @test isdefined(PMA, :upset_from_generators)
+    @test isdefined(PMA, :downset_from_generators)
+    @test isdefined(PMA, :one_by_one_fringe)
+    @test isdefined(PMA, :cover_edges)
 
     # Encoding-map layer
-    @test isdefined(PM, :EncodingMap)
-    @test isdefined(PM, :UptightEncoding)
-    @test isdefined(PM, :build_uptight_encoding_from_fringe)
-    @test isdefined(PM, :pullback_fringe_along_encoding)
-    @test isdefined(PM, :pushforward_fringe_along_encoding)
+    @test isdefined(PMA, :EncodingMap)
+    @test isdefined(PMA, :UptightEncoding)
+    @test isdefined(PMA.Encoding, :build_uptight_encoding_from_fringe)
+    @test isdefined(PMA.Encoding, :pullback_fringe_along_encoding)
+    @test isdefined(PMA.Encoding, :pushforward_fringe_along_encoding)
 
     # JSON IO helpers
-    @test isdefined(PM, :save_flange_json)
-    @test isdefined(PM, :load_flange_json)
-    @test isdefined(PM, :save_encoding_json)
-    @test isdefined(PM, :load_encoding_json)
-    @test isdefined(PM, :save_mpp_decomposition_json)
-    @test isdefined(PM, :load_mpp_decomposition_json)
-    @test isdefined(PM, :save_mpp_image_json)
-    @test isdefined(PM, :load_mpp_image_json)
-    @test isdefined(PM, :save_dataset_json)
-    @test isdefined(PM, :load_dataset_json)
-    @test isdefined(PM, :save_pipeline_json)
-    @test isdefined(PM, :load_pipeline_json)
+    @test isdefined(PMA, :save_flange_json)
+    @test isdefined(PMA, :load_flange_json)
+    @test isdefined(PMA.Serialization, :save_encoding_json)
+    @test isdefined(PMA.Serialization, :load_encoding_json)
+    @test isdefined(PMA.Serialization, :save_mpp_decomposition_json)
+    @test isdefined(PMA.Serialization, :load_mpp_decomposition_json)
+    @test isdefined(PMA.Serialization, :save_mpp_image_json)
+    @test isdefined(PMA.Serialization, :load_mpp_image_json)
+    @test isdefined(PMA, :save_dataset_json)
+    @test isdefined(PMA, :load_dataset_json)
+    @test isdefined(PMA, :save_pipeline_json)
+    @test isdefined(PMA, :load_pipeline_json)
 
     # Data ingestion entrypoints
-    @test isdefined(PM, :encode_from_data)
-    @test isdefined(PM, :ingest)
-    @test isdefined(PM, :fringe_presentation)
+    @test isdefined(PMA, :encode)
+    @test isdefined(PMA, :hom_dimension)
+    @test !isdefined(PMA, :encode_from_data)
+    @test !isdefined(PMA, :ingest)
+    @test isdefined(PMA, :one_criticalify)
+    @test isdefined(PMA, :criticality)
+    @test isdefined(PMA, :normalize_multicritical)
+    @test isdefined(PMA, :fringe_presentation)
+    @test isdefined(PMA, :PipelineOptions)
+    @test isdefined(PMA, :DataIngestion)
+    @test isdefined(PMA.DataIngestion, :AbstractFiltration)
+    @test isdefined(PMA.DataIngestion, :RipsFiltration)
+    @test isdefined(PMA.DataIngestion, :LandmarkRipsFiltration)
+    @test isdefined(PMA.DataIngestion, :GraphLowerStarFiltration)
+    @test isdefined(PMA.DataIngestion, :DelaunayLowerStarFiltration)
+    @test isdefined(PMA.DataIngestion, :FunctionDelaunayFiltration)
+    @test isdefined(PMA.DataIngestion, :CoreFiltration)
+    @test isdefined(PMA.DataIngestion, :RhomboidFiltration)
+    @test isdefined(PMA.DataIngestion, :to_filtration)
+    @test isdefined(PMA.DataIngestion, :estimate_ingestion)
+    @test isdefined(PMA, :IngestionPlan)
+    @test isdefined(PMA, :plan_ingestion)
+    @test isdefined(PMA, :run_ingestion)
+
+    # Indicator-resolution and module hot-path entrypoints.
+    @test isdefined(PMA, :pmodule_from_fringe)
+    @test isdefined(PMA, :projective_cover)
+    @test isdefined(PMA, :injective_hull)
+    @test isdefined(PMA, :upset_resolution)
+    @test isdefined(PMA, :downset_resolution)
+    @test isdefined(PMA, :indicator_resolutions)
+    @test isdefined(PMA, :verify_upset_resolution)
+    @test isdefined(PMA, :verify_downset_resolution)
+    @test isdefined(PMA, :map_leq)
+    @test isdefined(PMA, :map_leq_many)
+    @test isdefined(PMA, :map_leq_many!)
+    @test isdefined(PMA, :direct_sum_with_maps)
+
+    # Core advanced options and deeper change-of-poset hooks.
+    @test isdefined(PMA, :EncodingOptions)
+    @test isdefined(PMA, :ResolutionOptions)
+    @test isdefined(PMA, :InvariantOptions)
+    @test isdefined(PMA, :DerivedFunctorOptions)
+    @test isdefined(PMA, :left_kan_extension)
+    @test isdefined(PMA, :right_kan_extension)
+    @test isdefined(PMA, :derived_pushforward_left)
+    @test isdefined(PMA, :derived_pushforward_right)
 
     # Resolution tables
-    @test isdefined(PM, :betti_table)
-    @test isdefined(PM, :bass_table)
+    @test isdefined(PMA, :betti_table)
+    @test isdefined(PMA, :bass_table)
+end
+
+@testset "API surface contracts" begin
+    root_exports = Set(names(PosetModules; all=false, imported=false))
+    adv_exports = Set(names(PosetModules.Advanced; all=false, imported=false))
+
+    # Root exports are strictly the curated simple surface.
+    for sym in PosetModules.SIMPLE_API
+        @test sym in root_exports
+    end
+    for sym in PosetModules.ADVANCED_ONLY_API
+        @test !(sym in root_exports)
+    end
+
+    # Advanced exports the full curated power-user superset.
+    for sym in PosetModules.ADVANCED_API
+        @test sym in adv_exports
+    end
 end
 
 # ---------------- Run test files ---------------------------------------------

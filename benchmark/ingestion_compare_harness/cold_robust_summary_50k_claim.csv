@@ -1,0 +1,6 @@
+case_id,regime,n_points,ambient_dim,max_dim,tamer_cold_median_ms,multipers_cold_median_ms,cold_slowdown_tamer_over_multipers,n_cases,restarts,robust_cold_geomean_slowdown_tamer_over_multipers,robust_cold_geomean_speedup_tamer_over_multipers,timestamp_utc
+claim_n50000_d2_s11,claim_matching,50000,2,1,5497.168830500001,3426.4966625050874,1.604311742268285,,,,,
+claim_n50000_d2_s17,claim_matching,50000,2,1,5431.8705045,3579.3142199981958,1.5175729680706094,,,,,
+claim_n50000_d8_s11,claim_matching,50000,8,1,7536.873675000001,5284.775683510816,1.4261482655765356,,,,,
+,,,,,,,,,,,,
+,claim_matching,,,,,,,3,2,1.5142619423272012,0.660387725562953,2026-02-23T05:08:08.398196+00:00

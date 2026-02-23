@@ -18,8 +18,6 @@ catch
     false
 end
 
-export HAVE_CAIROMAKIE, draw_flange_regions2D, draw_constant_subdivision2D
-
 # -----------------------------------------------------------------------------
 # Helper for optional dependency behavior
 # -----------------------------------------------------------------------------

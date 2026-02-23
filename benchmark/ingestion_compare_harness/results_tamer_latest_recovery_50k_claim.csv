@@ -1,0 +1,4 @@
+tool,case_id,regime,n_points,ambient_dim,max_dim,cold_ms,cold_alloc_kib,warm_median_ms,warm_p90_ms,warm_alloc_median_kib,simplex_count,edge_count,max_simplex_dim,notes,timestamp_utc
+tamer_op,claim_n50000_d2_s11,claim_matching,50000,2,1,5494.2367619999995,387230.46875,5602.852522499999,6908.1482989999995,372262.65234375,440039,390039,1,nearestneighbors_unavailable_fallback_bruteforce,2026-02-22T05:50:30.823
+tamer_op,claim_n50000_d2_s17,claim_matching,50000,2,1,7173.300222,356441.109375,8190.749874499999,9792.993825,356440.796875,416491,366491,1,nearestneighbors_unavailable_fallback_bruteforce,2026-02-22T05:50:54.404
+tamer_op,claim_n50000_d8_s11,claim_matching,50000,8,1,10452.311776,485039.125,9492.056174500001,10689.671119,485039.03515625,567437,517437,1,nearestneighbors_unavailable_fallback_bruteforce,2026-02-22T05:51:23.965

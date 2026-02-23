@@ -19,7 +19,7 @@ if field isa CM.QQField
 
     # Volume weights in the box [-2, 7] (length 9).
     box = ([-2.0], [7.0])
-    w = PM.region_weights(pi; box=box)
+    w = PM.RegionGeometry.region_weights(pi; box=box)
 
     @test length(w) == P.n
     @test isapprox(sum(w), 9.0; atol=1e-12)
@@ -33,15 +33,15 @@ if field isa CM.QQField
     @test isapprox(w[t_right], 5.0; atol=1e-12)
 
     # Bounding box and diameter for the middle region inside the ambient box.
-    bb_mid = PM.region_bbox(pi, t_mid; box=box)
+    bb_mid = PM.RegionGeometry.region_bbox(pi, t_mid; box=box)
     @test bb_mid !== nothing
     lo, hi = bb_mid
     @test lo == [0.0]
     @test hi == [2.0]
 
-    @test isapprox(PM.region_diameter(pi, t_mid; box=box, metric=:L2),   2.0; atol=1e-12)
-    @test isapprox(PM.region_diameter(pi, t_mid; box=box, metric=:Linf), 2.0; atol=1e-12)
-    @test isapprox(PM.region_diameter(pi, t_mid; box=box, metric=:L1),   2.0; atol=1e-12)
+    @test isapprox(PM.RegionGeometry.region_diameter(pi, t_mid; box=box, metric=:L2),   2.0; atol=1e-12)
+    @test isapprox(PM.RegionGeometry.region_diameter(pi, t_mid; box=box, metric=:Linf), 2.0; atol=1e-12)
+    @test isapprox(PM.RegionGeometry.region_diameter(pi, t_mid; box=box, metric=:L1),   2.0; atol=1e-12)
 
     # 2D example where a region is a UNION of multiple grid cells:
     # one downset D = {x <= 0, y <= 0}. Then z = !contains(D, x) is true outside that quadrant.
@@ -52,7 +52,7 @@ if field isa CM.QQField
     P2, H2, pi2 = PLB.encode_fringe_boxes(Ups2, Downs2, Phi2)
 
     box2 = ([-1.0, -1.0], [1.0, 1.0])
-    w2 = PM.region_weights(pi2; box=box2)
+    w2 = PM.RegionGeometry.region_weights(pi2; box=box2)
     @test length(w2) == P2.n
     @test isapprox(sum(w2), 4.0; atol=1e-12)
 
@@ -62,21 +62,21 @@ if field isa CM.QQField
     @test isapprox(w2[t_in],  1.0; atol=1e-12)
     @test isapprox(w2[t_out], 3.0; atol=1e-12)
 
-    bb_in = PM.region_bbox(pi2, t_in; box=box2)
+    bb_in = PM.RegionGeometry.region_bbox(pi2, t_in; box=box2)
     @test bb_in !== nothing
     lo_in, hi_in = bb_in
     @test lo_in == [-1.0, -1.0]
     @test hi_in == [0.0, 0.0]
-    @test isapprox(PM.region_diameter(pi2, t_in; box=box2, metric=:Linf), 1.0; atol=1e-12)
-    @test isapprox(PM.region_diameter(pi2, t_in; box=box2, metric=:L2),   sqrt(2.0); atol=1e-12)
+    @test isapprox(PM.RegionGeometry.region_diameter(pi2, t_in; box=box2, metric=:Linf), 1.0; atol=1e-12)
+    @test isapprox(PM.RegionGeometry.region_diameter(pi2, t_in; box=box2, metric=:L2),   sqrt(2.0); atol=1e-12)
 
-    bb_out = PM.region_bbox(pi2, t_out; box=box2)
+    bb_out = PM.RegionGeometry.region_bbox(pi2, t_out; box=box2)
     @test bb_out !== nothing
     lo_out, hi_out = bb_out
     @test lo_out == [-1.0, -1.0]
     @test hi_out == [1.0, 1.0]
-    @test isapprox(PM.region_diameter(pi2, t_out; box=box2, metric=:Linf), 2.0; atol=1e-12)
-    @test isapprox(PM.region_diameter(pi2, t_out; box=box2, metric=:L2),   2.0 * sqrt(2.0); atol=1e-12)
+    @test isapprox(PM.RegionGeometry.region_diameter(pi2, t_out; box=box2, metric=:Linf), 2.0; atol=1e-12)
+    @test isapprox(PM.RegionGeometry.region_diameter(pi2, t_out; box=box2, metric=:L2),   2.0 * sqrt(2.0); atol=1e-12)
 end
 
 @testset "PL mode contract is strict" begin
@@ -115,14 +115,14 @@ if field isa CM.QQField
     box = ([0.0], [2.0])
 
     # Default: uniform weights if no box.
-    wunif = PM.region_weights(pi)
+    wunif = PM.RegionGeometry.region_weights(pi)
     @test length(wunif) == 2
     @test wunif == [1.0, 1.0]
 
     # Monte Carlo weights inside [0,2] should be close to [1,1].
     rng = MersenneTwister(12345)
     # Default is :exact (requires Polyhedra). For this test we want Monte Carlo.
-    w = PM.region_weights(pi; box=box, method=:mc, nsamples=20_000, rng=rng, strict=true)
+    w = PM.RegionGeometry.region_weights(pi; box=box, method=:mc, nsamples=20_000, rng=rng, strict=true)
 
     t1 = PLP.locate(pi, [0.5])
     t2 = PLP.locate(pi, [1.5])
@@ -132,15 +132,15 @@ if field isa CM.QQField
     @test isapprox(sum(w), 2.0; atol=0.05)
 
     # Exact bbox by vertex enumeration in 1D.
-    bb1 = PM.region_bbox(pi, t1; box=box)
+    bb1 = PM.RegionGeometry.region_bbox(pi, t1; box=box)
     @test bb1 !== nothing
     lo1, hi1 = bb1
     @test lo1 == [0.0]
     @test hi1 == [1.0]
 
     # Diameter by bbox and by vertices should match in 1D.
-    @test isapprox(PM.region_diameter(pi, t1; box=box, metric=:L2, method=:bbox),     1.0; atol=1e-12)
-    @test isapprox(PM.region_diameter(pi, t1; box=box, metric=:L2, method=:vertices), 1.0; atol=1e-12)
+    @test isapprox(PM.RegionGeometry.region_diameter(pi, t1; box=box, metric=:L2, method=:bbox),     1.0; atol=1e-12)
+    @test isapprox(PM.RegionGeometry.region_diameter(pi, t1; box=box, metric=:L2, method=:vertices), 1.0; atol=1e-12)
 
     # Batch locate API parity (serial/threaded and cache/non-cache).
     Xq = [0.25 0.50 0.75 1.25 1.50 1.75;
@@ -172,6 +172,97 @@ end
 end
 
 if field isa CM.QQField
+@testset "PL normalized performance envelopes (QQ)" begin
+    @inline function _median_elapsed(f::Function; reps::Int=5)
+        ts = Vector{Float64}(undef, reps)
+        for i in 1:reps
+            ts[i] = @elapsed f()
+        end
+        return sort(ts)[cld(reps, 2)]
+    end
+    @inline _ns_per_item(t::Float64, n::Int) = (t * 1.0e9) / max(1, n)
+    strict_ci = get(ENV, "TAMER_STRICT_PERF_CI", "1") == "1"
+
+    # PLBackend locate: compare fast vs verified with normalized ns/query envelopes.
+    Ups = [PLB.BoxUpset([0.0])]
+    Downs = [PLB.BoxDownset([2.0])]
+    Phi = reshape(QQ[1], 1, 1)
+    _, _, pi_axis = PLB.encode_fringe_boxes(Ups, Downs, Phi)
+
+    xs = range(-2.0, 7.0; length=12_000)
+    CM.locate(pi_axis, (0.5,); mode=:fast)      # warmup
+    CM.locate(pi_axis, (0.5,); mode=:verified)  # warmup
+
+    t_fast = _median_elapsed() do
+        s = 0
+        @inbounds for x in xs
+            s += CM.locate(pi_axis, (x,); mode=:fast)
+        end
+        @test s > 0
+    end
+    t_verified = _median_elapsed() do
+        s = 0
+        @inbounds for x in xs
+            s += CM.locate(pi_axis, (x,); mode=:verified)
+        end
+        @test s > 0
+    end
+    fast_ns = _ns_per_item(t_fast, length(xs))
+    verified_ns = _ns_per_item(t_verified, length(xs))
+    if strict_ci
+        @test fast_ns <= 1.15 * verified_ns + 10.0
+    else
+        @test fast_ns <= 1.3 * verified_ns + 20.0
+    end
+
+    if PLP.HAVE_POLY
+        # PLPolyhedra locate_many!: cached should improve per-query cost.
+        A1 = QQ[1 0; 0 1; -1 0; 0 -1]
+        b1 = QQ[1, 1, 0, 0]
+        A2 = QQ[1 0; 0 1; -1 0; 0 -1]
+        b2 = QQ[2, 1, -1, 0]
+        hp1 = PLP.make_hpoly(A1, b1)
+        hp2 = PLP.make_hpoly(A2, b2)
+        pi = PLP.PLEncodingMap(2,
+                               [BitVector(), BitVector()],
+                               [BitVector(), BitVector()],
+                               [hp1, hp2],
+                               [(0.5, 0.5), (1.5, 0.5)])
+        box = (Float64[0, 0], Float64[2, 1])
+        cache = PLP.compile_geometry_cache(pi; box=box, closure=true)
+
+        npts = 8_000
+        X = Matrix{Float64}(undef, 2, npts)
+        @inbounds for j in 1:npts
+            X[1, j] = (j % 2000) / 1000
+            X[2, j] = ((j * 7) % 1000) / 1000
+        end
+        dest_uncached = zeros(Int, npts)
+        dest_cached = zeros(Int, npts)
+
+        PLP.locate_many!(dest_uncached, pi, X; threaded=false, mode=:fast)       # warmup
+        PLP.locate_many!(dest_cached, cache, X; threaded=false, mode=:fast)      # warmup
+
+        t_uncached = _median_elapsed() do
+            PLP.locate_many!(dest_uncached, pi, X; threaded=false, mode=:fast)
+        end
+        t_cached = _median_elapsed() do
+            PLP.locate_many!(dest_cached, cache, X; threaded=false, mode=:fast)
+        end
+
+        @test dest_uncached == dest_cached
+        uncached_ns = _ns_per_item(t_uncached, npts)
+        cached_ns = _ns_per_item(t_cached, npts)
+        if strict_ci
+            @test cached_ns <= 1.08 * uncached_ns + 20.0
+        else
+            @test cached_ns <= 1.2 * uncached_ns + 35.0
+        end
+    end
+end
+end
+
+if field isa CM.QQField
 @testset "PLPolyhedra heavy geometry: perimeter/surface/adjacency/PCA" begin
     if !PLP.HAVE_POLY
         @test true
@@ -189,7 +280,7 @@ if field isa CM.QQField
         pi = PLP.PLEncodingMap(2, sigy, sigz, [hp], [(0.5, 0.5)])
 
         box = (Float64[0.0, 0.0], Float64[1.0, 1.0])
-        perim = PM.region_perimeter(pi, 1; box=box)
+        perim = PM.RegionGeometry.region_perimeter(pi, 1; box=box)
         @test isapprox(perim, 4.0; atol=1e-9)
 
         # 3D: cube [0,1]^3 surface area is 6
@@ -203,7 +294,7 @@ if field isa CM.QQField
         hp3 = PLP.make_hpoly(A3, b3)
         pi3 = PLP.PLEncodingMap(3, [BitVector()], [BitVector()], [hp3], [(0.5, 0.5, 0.5)])
         box3 = (Float64[0,0,0], Float64[1,1,1])
-        sa = PM.region_surface_area(pi3, 1; box=box3)
+        sa = PM.RegionGeometry.region_surface_area(pi3, 1; box=box3)
         @test isapprox(sa, 6.0; atol=1e-9)
 
         # Adjacency: two rectangles sharing a vertical edge of length 1
@@ -220,13 +311,13 @@ if field isa CM.QQField
                                         [hp1, hp2],
                                         [(0.5,0.5), (1.5,0.5)])
         box2 = (Float64[0,0], Float64[2,1])
-        adj = PM.region_adjacency(pi2; box=box2)
+        adj = PM.RegionGeometry.region_adjacency(pi2; box=box2)
         @test haskey(adj, (1,2))
         @test isapprox(adj[(1,2)], 1.0; atol=1e-8)
 
         # --- PCA / principal directions diagnostics ---
         rng = MersenneTwister(1)
-        pca = PM.region_principal_directions(pi, 1; box=box, nsamples=5000, rng=rng, strict=true)
+        pca = PM.RegionGeometry.region_principal_directions(pi, 1; box=box, nsamples=5000, rng=rng, strict=true)
 
         @test :n_accepted in propertynames(pca)
         @test :n_proposed in propertynames(pca)
@@ -240,7 +331,7 @@ if field isa CM.QQField
         @test isapprox(pca.evals[2], 1/12; atol=0.02)
 
         rng2 = MersenneTwister(2)
-        pca_info = PM.region_principal_directions(pi, 1;
+        pca_info = PM.RegionGeometry.region_principal_directions(pi, 1;
             box=box, nsamples=4000, nbatches=4, rng=rng2, strict=true, return_info=true)
 
         @test pca_info.nbatches == 4
@@ -261,25 +352,25 @@ if field isa CM.QQField
         # -------------------------------------------------------------------------
 
         # (1) exact volume mode: unit square in unit box has area 1.
-        w_exact = PM.region_weights(pi; box=box, method=:exact)
+        w_exact = PM.RegionGeometry.region_weights(pi; box=box, method=:exact)
         @test length(w_exact) == 1
         @test isapprox(w_exact[1], 1.0; atol=1e-12, rtol=0.0)
 
         # (2) cache: results should match (and box may be omitted if cache is provided)
         cache1 = PLP.poly_in_box_cache(pi; box=box, closure=true)
 
-        perim_cache = PM.region_perimeter(pi, 1; cache=cache1)
+        perim_cache = PM.RegionGeometry.region_perimeter(pi, 1; cache=cache1)
         @test isapprox(perim_cache, perim; atol=1e-12, rtol=0.0)
 
         # Define the non-cached centroid for comparison.
-        centroid = PM.region_centroid(pi, 1; box=box)
+        centroid = PM.RegionGeometry.region_centroid(pi, 1; box=box)
 
-        c_cache = PM.region_centroid(pi, 1; cache=cache1)
+        c_cache = PM.RegionGeometry.region_centroid(pi, 1; cache=cache1)
         @test isapprox(c_cache[1], centroid[1]; atol=1e-10)
         @test isapprox(c_cache[2], centroid[2]; atol=1e-10)
 
         # (3) boundary-measure breakdown: sum of facet measures should match perimeter.
-        bd = PM.region_boundary_measure_breakdown(pi, 1; cache=cache1)
+        bd = PM.RegionGeometry.region_boundary_measure_breakdown(pi, 1; cache=cache1)
         @test !isempty(bd)
         @test all(e.measure > 0 for e in bd)
         @test isapprox(sum(e.measure for e in bd), perim; atol=1e-8, rtol=0.0)
@@ -298,31 +389,57 @@ if field isa CM.QQField
         box2 = ([0.0, 0.0], [2.0, 1.0])
         cache2 = PLP.poly_in_box_cache(pi2; box=box2, closure=true)
 
-        w2 = PM.region_weights(pi2; cache=cache2, method=:exact)
+        w2 = PM.RegionGeometry.region_weights(pi2; cache=cache2, method=:exact)
         @test length(w2) == 2
         @test isapprox(w2[1], 1.0; atol=1e-12, rtol=0.0)
         @test isapprox(w2[2], 1.0; atol=1e-12, rtol=0.0)
+        @test length(cache2.active_regions) == 2
+        @test count(cache2.exact_weight_ready) == 2
+        w2_b = PM.RegionGeometry.region_weights(pi2; cache=cache2, method=:exact)
+        @test w2_b == w2
+        @test count(cache2.exact_weight_ready) == 2
 
-        bd1 = PM.region_boundary_measure_breakdown(pi2, 1; cache=cache2)
-        p1 = PM.region_perimeter(pi2, 1; cache=cache2)
+        bd1 = PM.RegionGeometry.region_boundary_measure_breakdown(pi2, 1; cache=cache2)
+        bd2 = PM.RegionGeometry.region_boundary_measure_breakdown(pi2, 2; cache=cache2)
+        p1 = PM.RegionGeometry.region_perimeter(pi2, 1; cache=cache2)
         @test isapprox(sum(e.measure for e in bd1), p1; atol=1e-8, rtol=0.0)
+        @test isapprox(sum(e.measure for e in bd2), PM.RegionGeometry.region_perimeter(pi2, 2; cache=cache2); atol=1e-8, rtol=0.0)
         @test any(e.kind == :internal for e in bd1)
         # The only internal neighbor of region 1 in this setup is region 2; its shared edge has length 1.
         mint = sum(e.measure for e in bd1 if e.neighbor == 2)
         @test isapprox(mint, 1.0; atol=1e-8, rtol=0.0)
 
         # Final-product cache reuse (same key => same cached object instance).
-        bd1_b = PM.region_boundary_measure_breakdown(pi2, 1; cache=cache2, strict=true, mode=:fast)
+        bd1_b = PM.RegionGeometry.region_boundary_measure_breakdown(pi2, 1; cache=cache2, strict=true, mode=:fast)
         @test bd1_b === bd1
-        adj_cache_a = PM.region_adjacency(pi2; cache=cache2, strict=true, mode=:fast)
-        adj_cache_b = PM.region_adjacency(pi2; cache=cache2, strict=true, mode=:fast)
+        n_bd_before_adj = length(cache2.boundary_breakdown)
+        adj_cache_a = PM.RegionGeometry.region_adjacency(pi2; cache=cache2, strict=true, mode=:fast)
+        n_bd_after_adj = length(cache2.boundary_breakdown)
+        adj_cache_b = PM.RegionGeometry.region_adjacency(pi2; cache=cache2, strict=true, mode=:fast)
         @test adj_cache_b === adj_cache_a
+        @test n_bd_after_adj >= n_bd_before_adj
+        @test length(cache2.boundary_breakdown) == n_bd_after_adj
+        n_bm_before = length(cache2.boundary_measure)
+        @test PM.RegionGeometry.region_perimeter(pi2, 1; cache=cache2) == p1
+        @test length(cache2.boundary_measure) == n_bm_before
 
         # Auto-cache parity (no explicit cache argument).
-        bd1_auto = PM.region_boundary_measure_breakdown(pi2, 1; box=box2, strict=true, mode=:fast)
+        bd1_auto = PM.RegionGeometry.region_boundary_measure_breakdown(pi2, 1; box=box2, strict=true, mode=:fast)
         @test bd1_auto == bd1
-        adj_auto = PM.region_adjacency(pi2; box=box2, strict=true, mode=:fast)
+        adj_auto = PM.RegionGeometry.region_adjacency(pi2; box=box2, strict=true, mode=:fast)
         @test adj_auto == adj_cache_a
+        # Auto exact geometry cache on bare PLEncodingMap should be retained by (pi, box, closure, mode).
+        key_fast = PLP._canonical_box_key(pi2, box2, true, :fast)
+        @test haskey(pi2.cache.geometry, key_fast)
+        fast_cache = pi2.cache.geometry[key_fast]
+        @test fast_cache isa PLP.PolyInBoxCache
+        @test PM.RegionGeometry.region_weights(pi2; box=box2, method=:exact, mode=:fast) == w2
+        @test pi2.cache.geometry[key_fast] === fast_cache
+        # Mode is part of auto-cache key.
+        _ = PM.RegionGeometry.region_adjacency(pi2; box=box2, strict=true, mode=:verified)
+        key_verified = PLP._canonical_box_key(pi2, box2, true, :verified)
+        @test haskey(pi2.cache.geometry, key_verified)
+        @test pi2.cache.geometry[key_verified] isa PLP.PolyInBoxCache
 
         # Compile-cache alias should behave like poly_in_box_cache and also accelerate
         # Monte Carlo membership probes by reusing precompiled float inequalities.
@@ -331,12 +448,49 @@ if field isa CM.QQField
         @test length(cache_comp.Af) == 2
         @test length(cache_comp.bf_strict) == 2
         @test length(cache_comp.bf_relaxed) == 2
+        @test count(cache_comp.exact_weight_ready) == length(cache_comp.active_regions)
+        @test count(cache_comp.exact_centroid_ready) == length(cache_comp.active_regions)
+        @test all(cache_comp.facets[r] !== nothing for r in cache_comp.active_regions)
+        @test all(cache_comp.points_f[r] !== nothing for r in cache_comp.active_regions)
+
+        # Near-boundary classify path should agree in fast/verified modes.
+        for delta in (-1e-12, -1e-14, 0.0, 1e-14, 1e-12)
+            q = [1.0 + delta, 0.5]
+            @test CM.locate(cache_comp, q; mode=:fast) == CM.locate(cache_comp, q; mode=:verified)
+        end
 
         rng_mc_a = MersenneTwister(77)
         rng_mc_b = MersenneTwister(77)
-        w_mc_uncached = PM.region_weights(pi2; box=box2, method=:mc, nsamples=20_000, rng=rng_mc_a, strict=false)
-        w_mc_cached = PM.region_weights(pi2; cache=cache_comp, method=:mc, nsamples=20_000, rng=rng_mc_b, strict=false)
+        w_mc_uncached = PM.RegionGeometry.region_weights(pi2; box=box2, method=:mc, nsamples=20_000, rng=rng_mc_a, strict=false)
+        w_mc_cached = PM.RegionGeometry.region_weights(pi2; cache=cache_comp, method=:mc, nsamples=20_000, rng=rng_mc_b, strict=false)
         @test w_mc_cached == w_mc_uncached
+
+        # Active-region pruning oracle for exact paths: only one region intersects the box.
+        A1d = reshape(QQ[1, -1], 2, 1)
+        hp_a = PLP.make_hpoly(A1d, QQ[1, 0])      # [0,1]
+        hp_b = PLP.make_hpoly(A1d, QQ[11, -10])   # [10,11]
+        hp_c = PLP.make_hpoly(A1d, QQ[21, -20])   # [20,21]
+        pi_sparse = PLP.PLEncodingMap(
+            1,
+            [BitVector([false, false]), BitVector([true, false]), BitVector([false, true])],
+            [falses(2), falses(2), falses(2)],
+            [hp_a, hp_b, hp_c],
+            [(0.5,), (10.5,), (20.5,)],
+        )
+        box_sparse = (Float64[0.0], Float64[1.0])
+        cache_sparse = PLP.compile_geometry_cache(pi_sparse; box=box_sparse, closure=true)
+        @test cache_sparse.active_regions == [1]
+        @test count(cache_sparse.exact_weight_ready) == 1
+        w_sparse = PM.RegionGeometry.region_weights(pi_sparse; cache=cache_sparse, method=:exact)
+        @test isapprox(w_sparse[1], 1.0; atol=1e-12)
+        @test isapprox(w_sparse[2], 0.0; atol=1e-12)
+        @test isapprox(w_sparse[3], 0.0; atol=1e-12)
+        @test count(cache_sparse.exact_weight_ready) == 1
+        @test PM.RegionGeometry.region_weights(pi_sparse; cache=cache_sparse, method=:exact) == w_sparse
+        @test count(cache_sparse.exact_weight_ready) == 1
+        @test PM.RegionGeometry.region_bbox(pi_sparse, 2; cache=cache_sparse) === nothing
+        @test PM.RegionGeometry.region_bbox(pi_sparse, 3; cache=cache_sparse) === nothing
+        @test PM.RegionGeometry.region_bbox(pi_sparse, 1; cache=cache_sparse) == (Float64[0.0], Float64[1.0])
     end
 end
 end
@@ -356,39 +510,39 @@ if field isa CM.QQField
 
         box = ([-1.0, -1.0], [1.0, 1.0])
 
-        w = PM.region_weights(pi; box=box)
+        w = PM.RegionGeometry.region_weights(pi; box=box)
         @test length(w) == 4
         @test all(abs.(w .- 1.0) .< 1e-12)
 
         r = 1  # lower-left: [-1,0] x [-1,0]
 
-        cb = PM.region_chebyshev_ball(pi, r; box=box)
+        cb = PM.RegionGeometry.region_chebyshev_ball(pi, r; box=box)
         @test isapprox(cb.radius, 0.5; atol=1e-12)
         @test all(isapprox.(cb.center, [-0.5, -0.5]; atol=1e-12))
 
-        @test isapprox(PM.region_inradius(pi, r; box=box), 0.5; atol=1e-12)
+        @test isapprox(PM.RegionGeometry.region_inradius(pi, r; box=box), 0.5; atol=1e-12)
 
-        cr = PM.region_circumradius(pi, r; box=box, center=:chebyshev, metric=:L2, method=:cells)
+        cr = PM.RegionGeometry.region_circumradius(pi, r; box=box, center=:chebyshev, metric=:L2, method=:cells)
         @test isapprox(cr, sqrt(0.5); atol=1e-12)
 
         # Planar isoperimetric quotient of a unit square: 4*pi*A/P^2 = pi/4.
-        iso_planar = PM.region_isoperimetric_ratio(pi, r; box=box, kind=:planar)
+        iso_planar = PM.RegionGeometry.region_isoperimetric_ratio(pi, r; box=box, kind=:planar)
         @test isapprox(iso_planar, Base.MathConstants.pi / 4; atol=1e-10)
 
         # Boundary-to-volume for unit square: perimeter/area = 4.
-        b2v = PM.region_boundary_to_volume_ratio(pi, r; box=box)
+        b2v = PM.RegionGeometry.region_boundary_to_volume_ratio(pi, r; box=box)
         @test isapprox(b2v, 4.0; atol=1e-10)
 
         # Mean width:
         # - cauchy formula (convex planar) gives 4/pi exactly
-        mw_cauchy = PM.region_mean_width(pi, r; box=box, method=:cauchy)
+        mw_cauchy = PM.RegionGeometry.region_mean_width(pi, r; box=box, method=:cauchy)
         @test isapprox(mw_cauchy, 4.0 / Base.MathConstants.pi; atol=1e-10)
 
         # - cell-based estimate should be close (direction sampling only)
-        mw_cells = PM.region_mean_width(pi, r; box=box, method=:cells, ndirs=2000, rng=MersenneTwister(1))
+        mw_cells = PM.RegionGeometry.region_mean_width(pi, r; box=box, method=:cells, ndirs=2000, rng=MersenneTwister(1))
         @test isapprox(mw_cells, 4.0 / Base.MathConstants.pi; atol=0.03)
 
-        mf = PM.region_minkowski_functionals(pi, r; box=box, mean_width_method=:cauchy)
+        mf = PM.RegionGeometry.region_minkowski_functionals(pi, r; box=box, mean_width_method=:cauchy)
         @test isapprox(mf.volume, 1.0; atol=1e-12)
         @test isapprox(mf.boundary_measure, 4.0; atol=1e-12)
         @test isapprox(mf.mean_width, 4.0 / Base.MathConstants.pi; atol=1e-10)
@@ -409,10 +563,10 @@ if field isa CM.QQField
         _, _, pi = PLB.encode_fringe_boxes(Ups, Downs, Phi)
 
         box = ([-2.0], [7.0])
-        weights = PM.region_weights(pi; box=box)
+        weights = PM.RegionGeometry.region_weights(pi; box=box)
         @test isapprox.(weights, [2.0, 2.0, 5.0]; atol=1e-12) |> all
 
-        adj = PM.region_adjacency(pi; box=box)
+        adj = PM.RegionGeometry.region_adjacency(pi; box=box)
         @test length(adj) == 2
         @test isapprox(sum(values(adj)), 2.0; atol=1e-12)
 
@@ -420,15 +574,15 @@ if field isa CM.QQField
         dims = [0, 1, 0]
 
         opts = PM.InvariantOptions(box=box)
-        vols = PM.region_volume_samples_by_dim(dims, pi, opts; weights=weights)
+        vols = Inv.region_volume_samples_by_dim(dims, pi, opts; weights=weights)
         @test sort(vols[0]) == sort([2.0, 5.0])
         @test vols[1] == [2.0]
 
-        b2v = PM.region_boundary_to_volume_samples_by_dim(dims, pi, opts; weights=weights)
+        b2v = Inv.region_boundary_to_volume_samples_by_dim(dims, pi, opts; weights=weights)
         @test sort(b2v[0]) == sort([1.0, 0.4])
         @test b2v[1] == [1.0]
 
-        gs = PM.region_adjacency_graph_stats(dims, pi, opts; adjacency=adj)
+        gs = Inv.region_adjacency_graph_stats(dims, pi, opts; adjacency=adj)
         @test gs.nregions == 3
         @test gs.nedges == 2
         @test isapprox(sum(values(adj)), 2.0; atol=1e-12)
@@ -449,21 +603,21 @@ if field isa CM.QQField
 
     # Intersect with a rectangle [-2,2] x [-0.5,0.5].
     box = ([-2.0, -0.5], [2.0, 0.5])
-    r = PM.locate(pi, [0.0, 0.0])
+    r = CM.locate(pi, [0.0, 0.0])
     @test r != 0
 
-    pd = PM.region_principal_directions(pi, r; box=box)
+    pd = PM.RegionGeometry.region_principal_directions(pi, r; box=box)
     # Variances: (width^2)/12.
     @test isapprox(pd.evals[1], 16.0/12.0; atol=1e-12)
     @test isapprox(pd.evals[2], 1.0/12.0; atol=1e-12)
 
-    ani = PM.region_covariance_anisotropy(pi, r; box=box)
+    ani = PM.RegionGeometry.region_covariance_anisotropy(pi, r; box=box)
     @test isapprox(ani, 16.0; atol=1e-12)
 
-    ecc = PM.region_covariance_eccentricity(pi, r; box=box)
+    ecc = PM.RegionGeometry.region_covariance_eccentricity(pi, r; box=box)
     @test isapprox(ecc, sqrt(15.0/16.0); atol=1e-12)
 
-    scores = PM.region_anisotropy_scores(pi, r; box=box)
+    scores = PM.RegionGeometry.region_anisotropy_scores(pi, r; box=box)
     @test isapprox(scores.ratio, 16.0; atol=1e-12)
     @test isapprox(scores.eccentricity, sqrt(15.0/16.0); atol=1e-12)
 end
@@ -476,19 +630,19 @@ if field isa CM.QQField
     Phi = reshape(K[c(1)], 1, 1)
     P, Hhat, pi = PLB.encode_fringe_boxes(Ups, Downs, Phi)
 
-    wb = PM.window_box(pi)
+    wb = Inv.window_box(pi)
     @test isapprox(wb[1][1], -1.2; atol=1e-12)
     @test isapprox(wb[2][1],  3.2; atol=1e-12)
 
     # Choose dims supported only on the middle region
     dims = zeros(Int, P.n)
-    dims[PM.locate(pi, [1.0])] = 1
+    dims[CM.locate(pi, [1.0])] = 1
 
     opts_auto = PM.InvariantOptions(box=:auto)
     opts_wb   = PM.InvariantOptions(box=wb)
 
-    m_auto = PM.integrated_hilbert_mass(dims, pi, opts_auto)
-    m_exp  = PM.integrated_hilbert_mass(dims, pi, opts_wb)
+    m_auto = Inv.integrated_hilbert_mass(dims, pi, opts_auto)
+    m_exp  = Inv.integrated_hilbert_mass(dims, pi, opts_wb)
     @test isapprox(m_auto, m_exp; atol=1e-12)
 end
 end
@@ -503,18 +657,19 @@ end
     Phi   = reshape(K[c(1)], 1, 1)
     FG = PM.Flange{K}(2, flats, injs, Phi; field=field)
     enc = PM.EncodingOptions(backend=:zn, max_regions=100)
-    P, M, pi = DF.encode_pmodule_from_flange(FG, enc)
+    enc_fg = PM.encode(FG, enc)
+    P, M, pi = enc_fg.P, enc_fg.M, enc_fg.pi
 
     a = [-10,-10]
     b = [ 10, 10]
-    adj = PM.region_adjacency(pi; box=(a,b))
+    adj = PM.RegionGeometry.region_adjacency(pi; box=(a,b))
     @test !isempty(adj)
     @test all(k[1] < k[2] for k in keys(adj))  # canonical ordering
 
     # asymptotic growth: total measure in Z^2 should scale like R^2, interface like R^(2-1)=R
     dims = ones(Int, P.n)
     opts = PM.InvariantOptions(box=:auto, strict=true)
-    A = PM.module_geometry_asymptotics(dims, pi, opts;
+    A = Inv.module_geometry_asymptotics(dims, pi, opts;
         scales=[1,2,4,8],
         include_interface=true
     )
@@ -539,7 +694,7 @@ if field isa CM.QQField
 
     dims = ones(Int, 4)  # 4 quadrants
     opts = PM.InvariantOptions(box=:auto, strict=true)
-    A = PM.module_geometry_asymptotics(dims, pi, opts;
+    A = Inv.module_geometry_asymptotics(dims, pi, opts;
         scales=[1,2,4,8],
         include_interface=true
     )
@@ -568,67 +723,67 @@ if field isa CM.QQField
         opts = PM.InvariantOptions(box=box)
 
         # Identify the three regions by sampling points.
-        t_left  = PM.locate(pi, [-1.0])
-        t_mid   = PM.locate(pi, [ 1.0])
-        t_right = PM.locate(pi, [ 3.0])
+        t_left  = CM.locate(pi, [-1.0])
+        t_mid   = CM.locate(pi, [ 1.0])
+        t_right = CM.locate(pi, [ 3.0])
 
         # Region weights (lengths) inside the window:
         # left: [-2,0] has length 2, mid: [0,2] has length 2, right: [2,7] has length 5.
-        w = PM.region_weights(pi; box=box)
+        w = PM.RegionGeometry.region_weights(pi; box=box)
         @test w[t_left]  == 2.0
         @test w[t_mid]   == 2.0
         @test w[t_right] == 5.0
 
         # region_bbox, widths, centroid
-        bb_mid = PM.region_bbox(pi, t_mid; box=box)
+        bb_mid = PM.RegionGeometry.region_bbox(pi, t_mid; box=box)
         @test bb_mid[1][1] == 0.0
         @test bb_mid[2][1] == 2.0
-        @test PM.region_widths(pi, t_mid; box=box) == [2.0]
-        @test PM.region_centroid(pi, t_mid; box=box) == [1.0]
-        @test PM.region_aspect_ratio(pi, t_mid; box=box) == 1.0
+        @test PM.RegionGeometry.region_widths(pi, t_mid; box=box) == [2.0]
+        @test PM.RegionGeometry.region_centroid(pi, t_mid; box=box) == [1.0]
+        @test PM.RegionGeometry.region_aspect_ratio(pi, t_mid; box=box) == 1.0
 
         # Integrated Hilbert mass:
         # Here dim=1 only on the middle region of length 2, so the integral is 2.
-        mass = PM.integrated_hilbert_mass(H, pi, opts)
+        mass = Inv.integrated_hilbert_mass(H, pi, opts)
         @test mass == 2.0
 
         # Histogram of measure by module dimension.
-        hist = PM.measure_by_dimension(H, pi, opts)
+        hist = Inv.measure_by_dimension(H, pi, opts)
         @test hist[0] == 7.0
         @test hist[1] == 2.0
 
         # Support measure (dim > 0)
-        supp = PM.support_measure(H, pi, opts)
+        supp = Inv.support_measure(H, pi, opts)
         @test supp == 2.0
 
         # Basic weighted stats for dim
-        stats = PM.dim_stats(H, pi, opts)
+        stats = Inv.dim_stats(H, pi, opts)
         @test stats.total_measure == 9.0
         @test stats.integrated_mass == 2.0
         @test abs(stats.mean - (2.0 / 9.0)) < 1e-12
         @test abs(stats.var - (14.0 / 81.0)) < 1e-12
 
         # L^p norms of dim
-        @test PM.dim_norm(H, pi, opts; p=1) == 2.0
-        @test abs(PM.dim_norm(H, pi, opts; p=2) - sqrt(2.0)) < 1e-12
-        @test PM.dim_norm(H, pi, opts; p=Inf) == 1.0
+        @test Inv.dim_norm(H, pi, opts; p=1) == 2.0
+        @test abs(Inv.dim_norm(H, pi, opts; p=2) - sqrt(2.0)) < 1e-12
+        @test Inv.dim_norm(H, pi, opts; p=Inf) == 1.0
 
         # Entropy of region weights: w = [2,2,5] up to permutation.
         p1 = 2.0 / 9.0
         p2 = 2.0 / 9.0
         p3 = 5.0 / 9.0
         expected_entropy = -(p1 * log(p1) + p2 * log(p2) + p3 * log(p3))
-        @test abs(PM.region_weight_entropy(pi, opts) - expected_entropy) < 1e-12
+        @test abs(Inv.region_weight_entropy(pi, opts) - expected_entropy) < 1e-12
 
         # Aspect ratio stats in 1D: all regions have aspect ratio 1.
-        ar = PM.aspect_ratio_stats(pi, opts)
+        ar = Inv.aspect_ratio_stats(pi, opts)
         @test ar.total_measure == 9.0
         @test ar.mean == 1.0
         @test ar.min == 1.0
         @test ar.max == 1.0
 
         # module_size_summary should be consistent.
-        summary = PM.module_size_summary(H, pi, opts)
+        summary = Inv.module_size_summary(H, pi, opts)
         @test summary.total_measure == 9.0
         @test summary.integrated_hilbert_mass == 2.0
         @test summary.support_measure == 2.0
@@ -637,18 +792,18 @@ if field isa CM.QQField
 
         # Adjacency graph: there are exactly two interior boundaries (at 0 and 2),
         # so we expect two edges each with 0-dim measure 1.
-        edges = PM.region_adjacency(pi; box=box)
+        edges = PM.RegionGeometry.region_adjacency(pi; box=box)
         @test length(edges) == 2
         @test edges[(min(t_left, t_mid), max(t_left, t_mid))] == 1.0
         @test edges[(min(t_mid, t_right), max(t_mid, t_right))] == 1.0
 
-        total_iface = PM.interface_measure(pi, opts)
+        total_iface = Inv.interface_measure(pi, opts)
         @test total_iface == 2.0
 
-        by_pair = PM.interface_measure_by_dim_pair(H, pi, opts)
+        by_pair = Inv.interface_measure_by_dim_pair(H, pi, opts)
         @test by_pair[(0, 1)] == 2.0
 
-        changed = PM.interface_measure_dim_changes(H, pi, opts)
+        changed = Inv.interface_measure_dim_changes(H, pi, opts)
         @test changed == 2.0
     end
     @testset "2D box backend: adjacency lengths on a quadrant split" begin
@@ -666,20 +821,20 @@ if field isa CM.QQField
         box = ([-1.0, -1.0], [1.0, 1.0])
 
         # Regions (quadrants)
-        t00 = PM.locate(pi, [-0.5, -0.5])
-        t10 = PM.locate(pi, [ 0.5, -0.5])
-        t01 = PM.locate(pi, [-0.5,  0.5])
-        t11 = PM.locate(pi, [ 0.5,  0.5])
+        t00 = CM.locate(pi, [-0.5, -0.5])
+        t10 = CM.locate(pi, [ 0.5, -0.5])
+        t01 = CM.locate(pi, [-0.5,  0.5])
+        t11 = CM.locate(pi, [ 0.5,  0.5])
 
         # Each quadrant has bbox width [1,1], centroid at its midpoint.
-        @test PM.region_widths(pi, t00; box=box) == [1.0, 1.0]
-        @test PM.region_centroid(pi, t00; box=box) == [-0.5, -0.5]
-        @test PM.region_aspect_ratio(pi, t00; box=box) == 1.0
+        @test PM.RegionGeometry.region_widths(pi, t00; box=box) == [1.0, 1.0]
+        @test PM.RegionGeometry.region_centroid(pi, t00; box=box) == [-0.5, -0.5]
+        @test PM.RegionGeometry.region_aspect_ratio(pi, t00; box=box) == 1.0
 
         # Adjacency edges: four unit-length interfaces inside the box:
         # (left-bottom)-(right-bottom), (left-bottom)-(left-top),
         # (right-bottom)-(right-top), (left-top)-(right-top).
-        edges = PM.region_adjacency(pi; box=box)
+        edges = PM.RegionGeometry.region_adjacency(pi; box=box)
         @test length(edges) == 4
 
         expected_pairs = [(t00, t10), (t00, t01), (t10, t11), (t01, t11)]
@@ -699,7 +854,7 @@ if field isa CM.QQField
         dims = [3, 0, 0]
         weights = [1.0, 0.0, 0.0]
         opts = PM.InvariantOptions()
-        summary = PM.module_size_summary(dims, pi, opts; weights=weights)
+        summary = Inv.module_size_summary(dims, pi, opts; weights=weights)
         @test summary.integrated_hilbert_mass == 3.0
         @test summary.total_measure == 1.0
     end
@@ -717,7 +872,7 @@ if field isa CM.QQField
     opts = PM.InvariantOptions(box=box)
 
     # 1) region_weights with return_info on exact backend
-    info = PM.region_weights(pi; box=box, return_info=true)
+    info = PM.RegionGeometry.region_weights(pi; box=box, return_info=true)
     @test info.method == :exact
     @test length(info.weights) == 3
     @test isapprox(sum(info.weights), 9.0)
@@ -726,30 +881,30 @@ if field isa CM.QQField
 
     # 2) support geometry
     H1 = [0, 1, 0]
-    sm = PM.support_measure_stats(H1, pi, opts; min_dim=1)
+    sm = Inv.support_measure_stats(H1, pi, opts; min_dim=1)
     @test isapprox(sm.estimate, 2.0)
     @test sm.stderr == 0.0
     @test sm.ci[1] == sm.ci[2] == 2.0
 
     H2 = [1, 1, 0]
-    comps = PM.support_components(H2, pi, opts; min_dim=1)
+    comps = Inv.support_components(H2, pi, opts; min_dim=1)
     @test length(comps) == 1
     @test comps[1] == [1, 2]
 
-    diams, overall = PM.support_graph_diameter(H2, pi, opts; min_dim=1)
+    diams, overall = Inv.support_graph_diameter(H2, pi, opts; min_dim=1)
     @test overall == 1
     @test diams[1] == 1
 
     H3 = [1, 0, 1]
-    comps3 = PM.support_components(H3, pi, opts; min_dim=1)
+    comps3 = Inv.support_components(H3, pi, opts; min_dim=1)
     @test length(comps3) == 2
     @test comps3[1] in ([1], [3])
     @test comps3[2] in ([1], [3])
 
-    bb = PM.support_bbox(H3, pi, opts; min_dim=1)
+    bb = Inv.support_bbox(H3, pi, opts; min_dim=1)
     @test isapprox(bb[1][1], -2.0)
     @test isapprox(bb[2][1], 7.0)
-    @test isapprox(PM.support_geometric_diameter(H3, pi, opts; min_dim=1, metric=:Linf), 9.0)
+    @test isapprox(Inv.support_geometric_diameter(H3, pi, opts; min_dim=1, metric=:Linf), 9.0)
 
     # --- PLPolyhedra MC region weights sanity check (2D halfspaces) ---
     A1 = [0//1  -1//1]
@@ -765,7 +920,7 @@ if field isa CM.QQField
     box2 = ([-2.0, -2.0], [2.0, 2.0])
     rng = MersenneTwister(1)
 
-    mcinfo = PM.region_weights(pi2; box=box2, method=:mc, nsamples=20000, rng=rng, return_info=true)
+    mcinfo = PM.RegionGeometry.region_weights(pi2; box=box2, method=:mc, nsamples=20000, rng=rng, return_info=true)
     @test mcinfo.method == :mc
     @test length(mcinfo.weights) == 2
     @test all(mcinfo.stderr .>= 0.0)
@@ -774,7 +929,7 @@ if field isa CM.QQField
 
     # 3) anisotropy stability (ratio should be > 1 for half-box)
     rng2 = MersenneTwister(2)
-    an = PM.region_anisotropy_scores(pi2, 1; box=box2, nsamples=10000, rng=rng2, return_info=true, nbatches=5)
+    an = PM.RegionGeometry.region_anisotropy_scores(pi2, 1; box=box2, nsamples=10000, rng=rng2, return_info=true, nbatches=5)
     @test an.ratio > 1.0
     @test !isnan(an.ratio_stderr)
 
@@ -786,7 +941,8 @@ if field isa CM.QQField
     FG    = PM.Flange{K}(2, flats, injs, Phi; field=field)
 
     enc = PM.EncodingOptions(backend=:zn, max_regions=10)
-    P, M, piZ = DF.encode_pmodule_from_flange(FG, enc)
+    enc_fg = PM.encode(FG, enc)
+    P, M, piZ = enc_fg.P, enc_fg.M, enc_fg.pi
 
     base_box = ([-2, -2], [2, 2])
     scales = [1, 2, 3, 4]
@@ -794,7 +950,7 @@ if field isa CM.QQField
     dims = ones(Int, P.n)
 
     opts = PM.InvariantOptions(box=base_box)
-    asym = PM.module_geometry_asymptotics(dims, piZ, opts;
+    asym = Inv.module_geometry_asymptotics(dims, piZ, opts;
         scales=scales,
         include_interface=false,
         include_ehrhart=true,

@@ -1,0 +1,15 @@
+case,family,stage,cache_mode,median_ms,p90_ms,median_alloc_kib
+point_rips_dense_d1,point,tree,auto,2.236356,2.601486,3675.859375
+point_rips_dense_d1,point,tree,session,2.384502,2.872894,3672.921875
+point_rips_knn_sparsify,point,tree,auto,0.412972,0.712596,664.0
+point_rips_knn_sparsify,point,tree,session,0.389782,0.720247,661.09375
+point_rips_greedy_landmarks,point,tree,auto,2.507924,2.672939,3690.828125
+point_rips_greedy_landmarks,point,tree,session,2.405479,2.617487,3687.921875
+point_function_rips_d1,point,tree,auto,0.573384,1.073292,782.890625
+point_function_rips_d1,point,tree,session,0.553844,0.911402,779.984375
+point_delaunay_lower_star_d2,point,tree,auto,3.803618,4.911571,467.898438
+point_delaunay_lower_star_d2,point,tree,session,3.27002,3.429209,464.992188
+point_core,point,tree,auto,0.988273,1.366381,1119.820312
+point_core,point,tree,session,1.159459,1.425855,1116.914062
+point_rhomboid_d1,point,tree,auto,3.502452,4.24884,3916.757812
+point_rhomboid_d1,point,tree,session,3.550866,3.919693,3913.851562

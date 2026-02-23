@@ -12,9 +12,9 @@ const PM = let pm = nothing
     pm
 end
 
-const WF = PM.Workflow
+const FEA = PM.Featurizers
 
-@inline function _wide_table_from_featureset(fs::WF.FeatureSet;
+@inline function _wide_table_from_featureset(fs::FEA.FeatureSet;
                                              ids_col::Symbol=:id,
                                              include_ids::Bool=true)
     nms = Symbol[]
@@ -30,10 +30,10 @@ const WF = PM.Workflow
     return NamedTuple{Tuple(nms)}(Tuple(vecs))
 end
 
-@inline function _long_table_from_featureset(fs::WF.FeatureSet;
+@inline function _long_table_from_featureset(fs::FEA.FeatureSet;
                                              include_sample_index::Bool=true)
-    ns = WF.nsamples(fs)
-    nf = WF.nfeatures(fs)
+    ns = FEA.nsamples(fs)
+    nf = FEA.nfeatures(fs)
     n = ns * nf
     ids = Vector{String}(undef, n)
     feats = Vector{Symbol}(undef, n)
@@ -82,7 +82,7 @@ end
     return NamedTuple{Tuple(nms)}(Tuple(vecs))
 end
 
-@inline function _reorder_featureset(fs::WF.FeatureSet, ordered_names::Vector{Symbol})
+@inline function _reorder_featureset(fs::FEA.FeatureSet, ordered_names::Vector{Symbol})
     fs.names == ordered_names && return fs
     pos = Dict{Symbol,Int}(nm => i for (i, nm) in enumerate(fs.names))
     perm = Vector{Int}(undef, length(ordered_names))
@@ -92,11 +92,11 @@ end
         perm[i] = pos[nm]
     end
     X = fs.X[:, perm]
-    return WF.FeatureSet(X, ordered_names, fs.ids, fs.meta)
+    return FEA.FeatureSet(X, ordered_names, fs.ids, fs.meta)
 end
 
-function WF.save_features_csv(path::AbstractString,
-                              fs::WF.FeatureSet;
+function FEA.save_features_csv(path::AbstractString,
+                              fs::FEA.FeatureSet;
                               format::Symbol=:wide,
                               layout::Symbol=:samples_by_features,
                               include_metadata::Bool=true,
@@ -116,7 +116,7 @@ function WF.save_features_csv(path::AbstractString,
         XF = permutedims(fs.X)
         feature_ids = String[string(nm) for nm in fs.names]
         sample_names = Symbol["sample_$(i)" for i in eachindex(fs.ids)]
-        WF.FeatureSet(XF, sample_names, feature_ids, fs.meta)
+        FEA.FeatureSet(XF, sample_names, feature_ids, fs.meta)
     end
 
     if mode == :wide
@@ -128,18 +128,18 @@ function WF.save_features_csv(path::AbstractString,
     end
 
     if include_metadata
-        md = WF.feature_metadata(fs; format=mode)
+        md = FEA.feature_metadata(fs; format=mode)
         md["layout"] = String(layout)
         md["csv_ids_col"] = String(ids_col)
         md["csv_include_ids"] = include_ids
         md["csv_include_sample_index"] = include_sample_index
-        mpath = metadata_path === nothing ? WF.default_feature_metadata_path(path) : String(metadata_path)
-        WF.save_metadata_json(mpath, md)
+        mpath = metadata_path === nothing ? FEA.default_feature_metadata_path(path) : String(metadata_path)
+        FEA.save_metadata_json(mpath, md)
     end
     return path
 end
 
-function WF.load_features_csv(path::AbstractString;
+function FEA.load_features_csv(path::AbstractString;
                               format::Symbol=:wide,
                               layout::Union{Nothing,Symbol}=nothing,
                               ids_col::Symbol=:id,
@@ -151,9 +151,9 @@ function WF.load_features_csv(path::AbstractString;
     mode in (:wide, :long) || throw(ArgumentError("load_features_csv: format must be :wide or :long"))
     cols = _csv_columntable(path; kwargs...)
 
-    mpath = metadata_path === nothing ? WF.default_feature_metadata_path(path) : String(metadata_path)
+    mpath = metadata_path === nothing ? FEA.default_feature_metadata_path(path) : String(metadata_path)
     md = if isfile(mpath)
-        WF.load_metadata_json(mpath; validate_feature_schema=validate_feature_schema)
+        FEA.load_metadata_json(mpath; validate_feature_schema=validate_feature_schema)
     elseif require_metadata
         throw(ArgumentError("load_features_csv: metadata sidecar not found at $(mpath)"))
     else
@@ -161,7 +161,7 @@ function WF.load_features_csv(path::AbstractString;
     end
 
     layout0 = if layout === nothing
-        md === nothing ? :samples_by_features : Symbol(String(WF._obj_get(md, "layout", "samples_by_features")))
+        md === nothing ? :samples_by_features : Symbol(String(FEA._obj_get(md, "layout", "samples_by_features")))
     else
         layout
     end
@@ -174,9 +174,9 @@ function WF.load_features_csv(path::AbstractString;
         cols
     end
     meta = md === nothing ? NamedTuple() : (metadata=md,)
-    fs0 = WF._featureset_from_columntable(cols0; format=mode, ids_col=ids_col, meta=meta)
+    fs0 = FEA._featureset_from_columntable(cols0; format=mode, ids_col=ids_col, meta=meta)
 
-    fs1 = if md !== nothing && WF._obj_haskey(md, "feature_names")
+    fs1 = if md !== nothing && FEA._obj_haskey(md, "feature_names")
         ord = Symbol[Symbol(String(s)) for s in md["feature_names"]]
         _reorder_featureset(fs0, ord)
     else
@@ -187,7 +187,7 @@ function WF.load_features_csv(path::AbstractString;
         X = permutedims(fs1.X)
         feature_ids = String[string(nm) for nm in fs1.names]
         names2 = Symbol["sample_$(i)" for i in eachindex(fs1.ids)]
-        return WF.FeatureSet(X, names2, feature_ids, fs1.meta)
+        return FEA.FeatureSet(X, names2, feature_ids, fs1.meta)
     end
     return fs1
 end

@@ -2,6 +2,8 @@ using Test
 using LinearAlgebra
 using SparseArrays
 
+const FL = PosetModules.FieldLinAlg
+
 # Included from test/runtests.jl; uses shared aliases (PM, FF, IR, ...).
 #
 # The fallback helpers below are only for standalone runs; the main test suite
@@ -42,7 +44,7 @@ if !isdefined(@__MODULE__, :one_by_one_fringe)
         K = CM.coeff_type(field)
         phi = spzeros(K, 1, 1)
         phi[1, 1] = CM.coerce(field, 1)
-        return FF.FringeModule{K}(field, P, [U], [D], phi)
+        return FF.FringeModule{K}(P, [U], [D], phi; field=field)
     end
 end
 
@@ -171,11 +173,11 @@ end
     # Unified Ext object, canonical basis chosen from the projective model.
     E = DF.Ext(M, N, PM.DerivedFunctorOptions(maxdeg = 1, model = :unified, canon = :projective))
 
-    @test PM.dim(E, 1) == 4
+    @test DF.dim(E, 1) == 4
 
     # Comparison maps should be inverse isomorphisms.
-    P2I = PM.comparison_isomorphism(E, 1; from = :projective, to = :injective)
-    I2P = PM.comparison_isomorphism(E, 1; from = :injective, to = :projective)
+    P2I = DF.comparison_isomorphism(E, 1; from = :projective, to = :injective)
+    I2P = DF.comparison_isomorphism(E, 1; from = :injective, to = :projective)
 
     I4 = CM.eye(field, 4)
     @test P2I * I2P == I4
@@ -183,8 +185,8 @@ end
 
     # Coherent representative transport: coords (canonical) -> inj cocycle -> coords back.
     e1 = vcat([c(1)], zeros(K, 3))
-    rep_inj = PM.representative(E, 1, e1; model = :injective)
-    coords_back = PM.coordinates(E, 1, rep_inj; model = :injective)
+    rep_inj = DF.representative(E, 1, e1; model = :injective)
+    coords_back = DF.coordinates(E, 1, rep_inj; model = :injective)
     @test coords_back == e1
 end
 
@@ -200,7 +202,7 @@ end
     M = direct_sum([S1, S1])
     N = direct_sum([S2, S2])
 
-    Einj = PM.ExtInjective(M, N, PM.DerivedFunctorOptions(maxdeg = 2))
+    Einj = DF.ExtInjective(M, N, PM.DerivedFunctorOptions(maxdeg = 2))
 
     # Noncommuting endomorphisms of N at vertex 2 (dims there are 2).
     C = [c(1) c(1); c(0) c(1)]
@@ -210,18 +212,18 @@ end
     gD = endo_at_vertex(N, 2, D)
     gDC = compose_morphism(gD, gC)
 
-    GC  = PM.ext_map_second(Einj, Einj, gC;  t = 1)
-    GD  = PM.ext_map_second(Einj, Einj, gD;  t = 1)
-    GDC = PM.ext_map_second(Einj, Einj, gDC; t = 1)
+    GC  = DF.ext_map_second(Einj, Einj, gC;  t = 1)
+    GD  = DF.ext_map_second(Einj, Einj, gD;  t = 1)
+    GDC = DF.ext_map_second(Einj, Einj, gDC; t = 1)
 
     # Functoriality: Ext(M, gD o gC) = Ext(M, gD) o Ext(M, gC).
     @test GDC == GD * GC
 
     # Identity induces identity.
     idN = IR.id_morphism(N)
-    Gid = PM.ext_map_second(Einj, Einj, idN; t = 1)
+    Gid = DF.ext_map_second(Einj, Einj, idN; t = 1)
 
-    d = PM.dim(Einj, 1)
+    d = DF.dim(Einj, 1)
     @test Gid == CM.eye(field, d)
 end
 
@@ -247,11 +249,11 @@ end
     p = MD.PMorphism(I12, S1, p_comps)
 
     df0 = PM.DerivedFunctorOptions(maxdeg=0)
-    les = PM.ExtLongExactSequenceFirst(S2, I12, S1, S2, i, p, df0)
+    les = DF.ExtLongExactSequenceFirst(S2, I12, S1, S2, i, p, df0)
 
     # Connecting map delta: Ext^0(S2,S2) -> Ext^1(S1,S2) should be nonzero (rank 1).
-    @test PM.FieldLinAlg.rank(field, les.delta[1]) == 1
-    @test size(les.delta[1]) == (PM.dim(les.EC, 1), PM.dim(les.EA, 0))
+    @test FL.rank(field, les.delta[1]) == 1
+    @test size(les.delta[1]) == (DF.dim(les.EC, 1), DF.dim(les.EA, 0))
 end
 
 @testset "Injective chain-map lifting (public API)" begin
@@ -267,7 +269,7 @@ end
     g = MD.PMorphism(N, N, [fill(c(2), 1, 1), fill(c(3), 1, 1)])
 
     res = DF.injective_resolution(N, PM.ResolutionOptions(maxlen=2))
-    phis = PM.lift_injective_chainmap(g, res, res; upto=2)
+    phis = DF.lift_injective_chainmap(g, res, res; upto=2)
 
     @test length(phis) == 3
 
@@ -289,7 +291,7 @@ end
     @test phis[1].comps[2] * e == e * phis[1].comps[1]
 
     # Convenience wrapper builds resolutions too.
-    lifted = PM.lift_injective_chainmap(g; maxlen=2)
+    lifted = DF.lift_injective_chainmap(g; maxlen=2)
     @test length(lifted.phis) == 3
     @test lifted.res_dom.N === N
     @test lifted.res_cod.N === N

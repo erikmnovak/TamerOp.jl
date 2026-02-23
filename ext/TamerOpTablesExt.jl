@@ -12,14 +12,14 @@ const PM = let pm = nothing
     pm
 end
 
-const WF = PM.Workflow
+const FEA = PM.Featurizers
 const Inv = PM.Invariants
 
 @inline function _named_cols(names::Vector{Symbol}, cols::Vector)
     return NamedTuple{Tuple(names)}(Tuple(cols))
 end
 
-function _feature_wide_columntable(fs::WF.FeatureSet)
+function _feature_wide_columntable(fs::FEA.FeatureSet)
     ns, nf = size(fs.X)
     names = Vector{Symbol}(undef, nf + 1)
     cols = Vector{Any}(undef, nf + 1)
@@ -32,7 +32,7 @@ function _feature_wide_columntable(fs::WF.FeatureSet)
     return _named_cols(names, cols)
 end
 
-function _feature_long_columntable(fs::WF.FeatureSet)
+function _feature_long_columntable(fs::FEA.FeatureSet)
     ns, nf = size(fs.X)
     n = ns * nf
     sample_index = Vector{Int}(undef, n)
@@ -53,7 +53,7 @@ function _feature_long_columntable(fs::WF.FeatureSet)
     return (sample_index=sample_index, id=id, feature=feat, value=value)
 end
 
-function _euler_surface_long_columntable(t::WF.EulerSurfaceLongTable)
+function _euler_surface_long_columntable(t::FEA.EulerSurfaceLongTable)
     nx = length(t.x)
     ny = length(t.y)
     n = nx * ny
@@ -75,7 +75,7 @@ function _euler_surface_long_columntable(t::WF.EulerSurfaceLongTable)
     return (id=id, x=x, y=y, value=value)
 end
 
-function _persistence_image_long_columntable(t::WF.PersistenceImageLongTable)
+function _persistence_image_long_columntable(t::FEA.PersistenceImageLongTable)
     PI = t.image
     nx = length(PI.xgrid)
     ny = length(PI.ygrid)
@@ -98,7 +98,7 @@ function _persistence_image_long_columntable(t::WF.PersistenceImageLongTable)
     return (id=id, x=x, y=y, value=value)
 end
 
-function _mp_landscape_long_columntable(t::WF.MPLandscapeLongTable{D,O}) where {D,O}
+function _mp_landscape_long_columntable(t::FEA.MPLandscapeLongTable{D,O}) where {D,O}
     L = t.landscape
     nd, no, kmax, nt = size(L.values)
     n = nd * no * kmax * nt
@@ -129,7 +129,7 @@ function _mp_landscape_long_columntable(t::WF.MPLandscapeLongTable{D,O}) where {
             t=tgrid, value=value, weight=weight)
 end
 
-function _point_signed_measure_long_columntable(t::WF.PointSignedMeasureLongTable{N,T,W}) where {N,T,W}
+function _point_signed_measure_long_columntable(t::FEA.PointSignedMeasureLongTable{N,T,W}) where {N,T,W}
     pm = t.measure
     n = length(pm)
     id = fill(t.id, n)
@@ -149,59 +149,59 @@ end
 # FeatureSet tables
 # ---------------------------------------------------------------------------
 
-Tables.istable(::Type{<:WF.FeatureSet}) = true
-Tables.columnaccess(::Type{<:WF.FeatureSet}) = true
-Tables.columns(fs::WF.FeatureSet) = _feature_wide_columntable(fs)
-Tables.schema(fs::WF.FeatureSet) = Tables.schema(Tables.columns(fs))
+Tables.istable(::Type{<:FEA.FeatureSet}) = true
+Tables.columnaccess(::Type{<:FEA.FeatureSet}) = true
+Tables.columns(fs::FEA.FeatureSet) = _feature_wide_columntable(fs)
+Tables.schema(fs::FEA.FeatureSet) = Tables.schema(Tables.columns(fs))
 
-Tables.istable(::Type{<:WF.FeatureSetWideTable}) = true
-Tables.columnaccess(::Type{<:WF.FeatureSetWideTable}) = true
-Tables.columns(t::WF.FeatureSetWideTable) = _feature_wide_columntable(t.fs)
-Tables.schema(t::WF.FeatureSetWideTable) = Tables.schema(Tables.columns(t))
+Tables.istable(::Type{<:FEA.FeatureSetWideTable}) = true
+Tables.columnaccess(::Type{<:FEA.FeatureSetWideTable}) = true
+Tables.columns(t::FEA.FeatureSetWideTable) = _feature_wide_columntable(t.fs)
+Tables.schema(t::FEA.FeatureSetWideTable) = Tables.schema(Tables.columns(t))
 
-Tables.istable(::Type{<:WF.FeatureSetLongTable}) = true
-Tables.columnaccess(::Type{<:WF.FeatureSetLongTable}) = true
-Tables.columns(t::WF.FeatureSetLongTable) = _feature_long_columntable(t.fs)
-Tables.schema(t::WF.FeatureSetLongTable) = Tables.schema(Tables.columns(t))
+Tables.istable(::Type{<:FEA.FeatureSetLongTable}) = true
+Tables.columnaccess(::Type{<:FEA.FeatureSetLongTable}) = true
+Tables.columns(t::FEA.FeatureSetLongTable) = _feature_long_columntable(t.fs)
+Tables.schema(t::FEA.FeatureSetLongTable) = Tables.schema(Tables.columns(t))
 
 # ---------------------------------------------------------------------------
 # Optional long-form invariant tables
 # ---------------------------------------------------------------------------
 
-Tables.istable(::Type{<:WF.EulerSurfaceLongTable}) = true
-Tables.columnaccess(::Type{<:WF.EulerSurfaceLongTable}) = true
-Tables.columns(t::WF.EulerSurfaceLongTable) = _euler_surface_long_columntable(t)
-Tables.schema(t::WF.EulerSurfaceLongTable) = Tables.schema(Tables.columns(t))
+Tables.istable(::Type{<:FEA.EulerSurfaceLongTable}) = true
+Tables.columnaccess(::Type{<:FEA.EulerSurfaceLongTable}) = true
+Tables.columns(t::FEA.EulerSurfaceLongTable) = _euler_surface_long_columntable(t)
+Tables.schema(t::FEA.EulerSurfaceLongTable) = Tables.schema(Tables.columns(t))
 
-Tables.istable(::Type{<:WF.PersistenceImageLongTable}) = true
-Tables.columnaccess(::Type{<:WF.PersistenceImageLongTable}) = true
-Tables.columns(t::WF.PersistenceImageLongTable) = _persistence_image_long_columntable(t)
-Tables.schema(t::WF.PersistenceImageLongTable) = Tables.schema(Tables.columns(t))
+Tables.istable(::Type{<:FEA.PersistenceImageLongTable}) = true
+Tables.columnaccess(::Type{<:FEA.PersistenceImageLongTable}) = true
+Tables.columns(t::FEA.PersistenceImageLongTable) = _persistence_image_long_columntable(t)
+Tables.schema(t::FEA.PersistenceImageLongTable) = Tables.schema(Tables.columns(t))
 
-Tables.istable(::Type{<:WF.MPLandscapeLongTable}) = true
-Tables.columnaccess(::Type{<:WF.MPLandscapeLongTable}) = true
-Tables.columns(t::WF.MPLandscapeLongTable) = _mp_landscape_long_columntable(t)
-Tables.schema(t::WF.MPLandscapeLongTable) = Tables.schema(Tables.columns(t))
+Tables.istable(::Type{<:FEA.MPLandscapeLongTable}) = true
+Tables.columnaccess(::Type{<:FEA.MPLandscapeLongTable}) = true
+Tables.columns(t::FEA.MPLandscapeLongTable) = _mp_landscape_long_columntable(t)
+Tables.schema(t::FEA.MPLandscapeLongTable) = Tables.schema(Tables.columns(t))
 
-Tables.istable(::Type{<:WF.PointSignedMeasureLongTable}) = true
-Tables.columnaccess(::Type{<:WF.PointSignedMeasureLongTable}) = true
-Tables.columns(t::WF.PointSignedMeasureLongTable) = _point_signed_measure_long_columntable(t)
-Tables.schema(t::WF.PointSignedMeasureLongTable) = Tables.schema(Tables.columns(t))
+Tables.istable(::Type{<:FEA.PointSignedMeasureLongTable}) = true
+Tables.columnaccess(::Type{<:FEA.PointSignedMeasureLongTable}) = true
+Tables.columns(t::FEA.PointSignedMeasureLongTable) = _point_signed_measure_long_columntable(t)
+Tables.schema(t::FEA.PointSignedMeasureLongTable) = Tables.schema(Tables.columns(t))
 
 # Direct convenience: table view defaults for core invariant objects.
 Tables.istable(::Type{<:Inv.PersistenceImage1D}) = true
 Tables.columnaccess(::Type{<:Inv.PersistenceImage1D}) = true
-Tables.columns(pi::Inv.PersistenceImage1D) = Tables.columns(WF.persistence_image_table(pi))
+Tables.columns(pi::Inv.PersistenceImage1D) = Tables.columns(FEA.persistence_image_table(pi))
 Tables.schema(pi::Inv.PersistenceImage1D) = Tables.schema(Tables.columns(pi))
 
 Tables.istable(::Type{<:Inv.MPLandscape}) = true
 Tables.columnaccess(::Type{<:Inv.MPLandscape}) = true
-Tables.columns(L::Inv.MPLandscape) = Tables.columns(WF.mp_landscape_table(L))
+Tables.columns(L::Inv.MPLandscape) = Tables.columns(FEA.mp_landscape_table(L))
 Tables.schema(L::Inv.MPLandscape) = Tables.schema(Tables.columns(L))
 
 Tables.istable(::Type{<:Inv.PointSignedMeasure}) = true
 Tables.columnaccess(::Type{<:Inv.PointSignedMeasure}) = true
-Tables.columns(pm::Inv.PointSignedMeasure) = Tables.columns(WF.point_signed_measure_table(pm))
+Tables.columns(pm::Inv.PointSignedMeasure) = Tables.columns(FEA.point_signed_measure_table(pm))
 Tables.schema(pm::Inv.PointSignedMeasure) = Tables.schema(Tables.columns(pm))
 
 end # module

@@ -282,18 +282,18 @@
 	\end{defn}
 	
 	\begin{defn}[Indicator modules]\label{def:indicator-modules}
-		Let $U\subseteq Q$ be an upset.  The \emph{upset indicator module} $\kk[U]$ is the
+		Let $U\subseteq Q$ be an upset.  The \emph{upset indicator module} $\kk\{U\}$ is the
 		$Q$-module defined by
 		\[
-		\kk[U](q) :=
+		\kk\{U\}(q) :=
 		\begin{cases}
 			\kk & q\in U,\\
 			0 & q\notin U,
 		\end{cases}
 		\]
-		and for $q\leq q'$ the structure map $\kk[U](q\leq q')$ is the identity
+		and for $q\leq q'$ the structure map $\kk\{U\}(q\leq q')$ is the identity
 		$\kk\to\kk$ when $q,q'\in U$ and is the unique zero map otherwise.  Likewise, for a
-		downset $D\subseteq Q$, define the \emph{downset indicator module} $\kk[D]$ by the
+		downset $D\subseteq Q$, define the \emph{downset indicator module} $\kk\{D\}$ by the
 		same formula with $D$ in place of $U$.
 	\end{defn}
 	
@@ -864,7 +864,7 @@
 	
 	\begin{example}[Indicator modules admit trivial finite encodings {\cite[Ex.~4.6]{Mil20}}]
 		\label{ex:indicator-encoding}
-		Let $U\subseteq Q$ be an upset (upward-closed set).  Then the indicator module $\kk[U]$
+		Let $U\subseteq Q$ be an upset (upward-closed set).  Then the indicator module $\kk\{U\}$
 		(defined in Subsection~\ref{subsec:fringe-presentations}) admits a finite encoding by the
 		two-element chain $0<1$ via the map $\pi\colon Q\to\{0<1\}$ sending $U$ to $1$ and
 		$Q\setminus U$ to $0$; the corresponding module $H$ has $H(1)=\kk$ and $H(0)=0$.
@@ -978,9 +978,9 @@
 		Let $U\subseteq Q$ be the closed upset above $L$, and let $U^{\circ}$ be its interior.
 		Consider the tame modules
 		\[
-			M=\kk[U]\oplus \kk[U],
+			M=\kk\{U\}\oplus \kk\{U\},
 			\qquad
-			N=\kk[U]/\kk[U^{\circ}],
+			N=\kk\{U\}/\kk[U^{\circ}],
 		\]
 		where $N$ is supported on $L$.
 		Define a surjection $\varphi\colon M\twoheadrightarrow N$ by taking $\varphi$ to be
@@ -1337,39 +1337,1102 @@
 	
 	\subsection{Reproducibility and correctness}
 	
-	\section{The presentation formats}
+	\section{The presentation formats}\label{sec:presentation-formats}
 	
-	\subsection{Philosophy: multiple equivalent front-ends}
+	The aim of our work is to smoothen a computational tension in the
+	mathematics of tame persistence modules.  On the one hand, the natural indexing posets
+	that arise in applications are typically infinite (e.g.\ $\mathbb{Z}^n$ or $\mathbb{R}^n$),
+	and a persistence module is, definitionally, an infinite functor diagram.  On the other hand,
+	any concrete computation must begin from \emph{finite data}.  Miller's syzygy theorem
+	(Theorem~\ref{thm:syzygy}) formalizes the central promise of tameness: a tame module admits
+	multiple \emph{equivalent} finite descriptions (finite encodings, finite fringe presentations,
+	finite indicator resolutions), and one is free to choose whichever description is most
+	computationally convenient for a given task \cite{Mil20}.
 	
-	\subsection{Finite fringe presentations}
+	TAMER-OP turns that promise into a set of concrete data structures and algorithms.  This section describes the
+	finite presentation formats implemented in the codebase and explains how they relate to the
+	underlying theory.  It is useful to separate three conceptual layers:
+	\begin{enumerate}[label=(\roman*)]
+		\item \textbf{Front-end (Input formats).}  These are finite objects that arise naturally
+		from prior constructions and that encode a tame $Q$-module for an infinite or large poset $Q$.
+		\item \textbf{Encodings (compression to a finite poset).}  From a front-end one constructs an
+		order-preserving encoding map $\pi\colon Q\to P$ to a finite poset $P$, and pushes the module down
+		to a $P$-module. 
+		\item \textbf{Finite poset modules (computational core).}  Once the module lives on a finite poset
+		$P$, all downstream computations reduce to finite linear algebra (kernels, images, Ext/Tor, rank queries,
+		M\"obius inversion, slicing, and so on).  This finite core object is the common target of the conversions
+		in this section and the common input to the algorithms in later sections.
+	\end{enumerate}
 	
-	\subsection{$\mathbb{Z}^n$ presentations}
+	The present section concerns (i), with an emphasis on how each front-end is designed to feed (ii)
+	without forcing an early discretization (such as committing to a large bounding box in $\mathbb{Z}^n$
+	or an overly fine grid in $\mathbb{R}^n$).  Although we mention the conversion routines that produce
+	encodings, the encoding algorithms themselves are deferred to Section~\ref{sec:finite-encoding-constructors}.
 	
-	\subsection{$\mathbb{R}^n$ and piecewise-linear presentations}
+	\subsection{Philosophy: multiple equivalent front-ends}\label{subsec:formats-philosophy}
 	
-	\subsection{Conversions between formats}
+	A practical library for multiparameter persistence needs to accept input from several sources.
+	For example:
+	\begin{itemize}
+		\item A user might already have a \emph{finite} poset model (an encoding poset built elsewhere) and wants
+		to compute invariants on it.
+		\item A discrete pipeline (e.g.\ a $\mathbb{Z}^n$ multifiltration) naturally produces multigraded data
+		resembling commutative algebra, where presentations and resolutions are most naturally expressed using
+		specialized building blocks on $\mathbb{Z}^n$.
+		\item A continuous pipeline (e.g.\ a PL or semialgebraic construction over $\mathbb{R}^n$) often yields
+		piecewise-constant behavior on polyhedral regions, and it is unnatural (and numerically risky) to snap this
+		immediately to a grid.
+	\end{itemize}
 	
-	\subsection{Validation and other sanity checks}
+	The unifying observation, following \cite{Mil20}, is that these sources can all be expressed in a common
+	pattern: \emph{indicator modules for upward-closed and downward-closed sets, glued by a matrix}.
+	This motivates the following heuristic definition.
 	
-	\subsection{Serialization and I/O}
+	\begin{defn}[Presentation object in TAMER-OP]\label{def:presentation-object}
+		Fix a poset $Q$.  A \emph{presentation object} for a $Q$-module is a finite package of data that
+		determines a tame $Q$-module functorially, in the sense that:
+		\begin{enumerate}[label=(\roman*)]
+			\item for each parameter value $q\in Q$, one can compute, even if implicitly, the fiber $M(q)$,
+			and for comparable $q\le q'$ one can compute the structure map $M(q\le q')$;
+			\item the module can be encoded by a finite constant subdivision obtained from the same data;
+			\item the representation is stable under the basic operations used in the library
+			(direct sums, restriction to chains, and the finite encoding step).
+		\end{enumerate}
+	\end{defn}
+	
+	This definition is intentionally not a purely mathematical one; it is meant to capture what the code must
+	accomplish.  In practice, a presentation object is something like a \texttt{struct} whose fields are (i) a finite
+	list of ``birth'' shapes (upsets), (ii) a finite list of ``death'' shapes (downsets), and (iii) a scalar
+	matrix specifying how births map into deaths.  The precise meaning of ``shape'' depends on the ambient poset:
+	\begin{itemize}
+		\item for a finite poset $P$, shapes are subsets of the vertex set, represented efficiently as bitmasks;
+		\item for $\mathbb{Z}^n$, shapes are the indecomposable \emph{flats} and \emph{injectives} from Miller's
+		$\mathbb{Z}^n$ theory \cite{Mil20};
+		\item for $\mathbb{R}^n$ in PL settings, shapes are unions of polyhedral upsets/downsets, represented by
+		rational half-space data (or by specialized axis-aligned primitives).
+	\end{itemize}
+	
+	A key design decision, again following Miller's principles, is that TAMER-OP does \emph{not} attempt to compute invariants directly on the infinite posets $\mathbb{Z}^n$ or $\mathbb{R}^n$ from these presentations.  Instead, the role of the presentation is to provide enough structure to build a finite encoding poset $P$ and an encoding map $\pi\colon Q\to P$. Once $P$ is available, the library works with the explicit $P$-modules and standard finite algorithms in the abelian category $\mathbf{Vect}_\kk^P$ (Section~\ref{sec:derived-functors}).
+	
+	\subsection{Finite fringe presentations}\label{subsec:finite-fringe-presentations}
+	
+	The most literal computational realization of Miller's framework is obtained when the indexing poset is
+	already finite.  In that case, a $P$-module is simply a finite diagram of vector spaces and linear maps, and
+	indicator modules for upsets/downsets become finitely supported objects.  This case plays two roles in TAMER-OP:
+	\begin{enumerate}[label=(\roman*)]
+		\item it provides a clean, fully explicit core format for correctness testing and for downstream algebra; and
+		\item it is the \emph{output} format of the encoding step, even when the original module lived on
+		$\mathbb{Z}^n$ or $\mathbb{R}^n$.
+	\end{enumerate}
+	
+	\subsubsection*{Finite posets and bitmask upsets/downsets}
+	
+	In the codebase (see \texttt{FiniteFringe.jl}), a finite poset $P$ is represented by a finite set of vertices
+	$\{1,\dots,N\}$ together with a cached order relation.  Upsets and downsets are represented by bit-vectors of
+	length $N$.
+	
+	\begin{defn}[Finite-poset upsets/downsets as data]\label{def:finite-upset-downset-data}
+		Let $P$ be a finite poset with vertex set $\{1,\dots,N\}$.
+		A \emph{finite upset datum} is a bitmask $U\in\{0,1\}^N$ such that
+		$U(p)=1$ and $p\le q$ imply $U(q)=1$.
+		A \emph{finite downset datum} is a bitmask $D\in\{0,1\}^N$ such that
+		$D(q)=1$ and $p\le q$ imply $D(p)=1$.
+	\end{defn}
+	
+	In addition to explicit bitmasks, the implementation supports closures of arbitrary subsets:
+	given a list of generators, one can compute the smallest upset (resp.\ downset) containing them by repeatedly
+	closing upward (resp.\ downward).  This is useful when constructing projective/injective covers later, because
+	principal upsets $\kk[\uparrow p]$ and principal downsets $\kk[\downarrow p]$ appear repeatedly
+	(cf.\ Remark~\ref{rem:proj-inj-finite-poset}).
+	
+	\subsubsection*{Fringe data and degreewise evaluation}
+	
+	The main presentation format on a finite poset is a finite fringe presentation.
+	
+	\begin{defn}[Finite fringe presentation data]\label{def:finite-fringe-data}
+		Let $P$ be a finite poset and fix a field $\kk$.
+		A \emph{finite fringe presentation datum} consists of:
+		\begin{enumerate}[label=(\roman*)]
+			\item a finite list of upsets $U_1,\dots,U_m\subseteq P$ (birth regions),
+			\item a finite list of downsets $D_1,\dots,D_r\subseteq P$ (death regions),
+			\item a matrix $\Phi\in \kk^{r\times m}$ with the \emph{support condition}
+			$\Phi_{ji}=0$ whenever $U_i\cap D_j=\varnothing$,
+		\end{enumerate}
+		and it defines a $P$-module as the image of the induced map
+		\[
+		\varphi \colon \bigoplus_{i=1}^m \kk[U_i] \longrightarrow \bigoplus_{j=1}^r \kk[D_j]
+		\]
+		whose component maps $\kk[U_i]\to \kk[D_j]$ are multiplication by $\Phi_{ji}$ on
+		$U_i\cap D_j$ and zero elsewhere (compare \cite[Defs.~3.16--3.17]{Mil20}).
+	\end{defn}
+	
+	Degreewise evaluation is particularly direct.  For a vertex $p\in P$, define the active column set
+	$I(p)=\{i : p\in U_i\}$ and active row set $J(p)=\{j : p\in D_j\}$.  Evaluating $\varphi$ at $p$ yields a linear
+	map
+	\[
+	\varphi_p \colon \kk^{I(p)} \longrightarrow \kk^{J(p)}
+	\]
+	whose matrix is the submatrix $\Phi_{J(p),I(p)}$.  The fiber of the module at $p$ is
+	\[
+	M(p)=\im(\varphi_p)
+	\]
+	so
+	\[
+	\dim_\kk M(p)=\mathrm{rank}\big(\Phi_{J(p),I(p)}\big).
+	\]
+	In TAMER-OP, this is implemented directly: membership in each $U_i$ and $D_j$ is a bit-test, so constructing
+	$I(p)$ and $J(p)$ is efficient, and rank computations are performed over exact coefficients (typically $\mathbb{Q}$)
+	to avoid numerical rank instability.
+	
+	\begin{remark}[Why the support condition matters computationally]
+		The support condition $\Phi_{ji}=0$ when $U_i\cap D_j=\varnothing$ is the finite-poset analog of a very
+		practical constraint: it guarantees that evaluation at each $p$ never introduces spurious maps between
+		zero and nonzero stalks.  In the code, constructors enforce this condition and can optionally store $\Phi$
+		as a sparse matrix when the support is sparse.  This matters because, even when $m$ and $r$ are moderate,
+		the dense matrix $\Phi$ can be the dominant memory cost.
+	\end{remark}
+	
+	\subsubsection*{From fringe presentations to explicit $P$-modules}
+	
+	A fringe presentation is already a finite representation, but many downstream algorithms prefer an explicit
+	representation of a $P$-module in terms of:
+	\begin{enumerate}[label=(\roman*)]
+		\item dimensions $\dim M(p)$ at each vertex $p$, and
+		\item linear maps along cover relations in the Hasse diagram, with all other structure maps obtained by
+		composition.
+	\end{enumerate}
+	This explicit format is implemented in the codebase as the \texttt{PModule} type (defined in \texttt{Modules.jl}).
+	The conversion \texttt{pmodule\_from\_fringe} (in \texttt{IndicatorResolutions.jl}) follows the mathematics
+	suggested by Proposition~\ref{prop:functor-category-abelian}: choose bases for each fiber $M(p)$ and then define the
+	map $M(p\le q)$ as the unique linear map making the relevant inclusion squares commute.
+	
+	Algorithmically, the conversion has two conceptual steps:
+	\begin{enumerate}[label=(\roman*)]
+		\item For each vertex $p$, compute a basis for the image $\im(\varphi_p)\subseteq \kk^{J(p)}$.
+		In exact arithmetic this can be done by row-reduction of $\Phi_{J(p),I(p)}$ and extracting a column-space basis.
+		\item For each cover relation $p\prec q$ in $P$, compute the induced linear map
+		$M(p)\to M(q)$ by expressing the image basis vectors at $p$ in the basis at $q$ via the natural inclusions
+		$\kk^{J(p)}\hookrightarrow \kk^{J(q)}$ coming from downset functoriality.
+	\end{enumerate}
+	To keep this step practical, the implementation caches intermediate basis computations and reuses them when multiple
+	edges share endpoints.  This conversion is also the place where exact arithmetic over $\mathbb{Q}$ is most valuable:
+	small numerical errors in rank computations would otherwise lead to inconsistent dimensions and broken functoriality.
+	
+	\subsection{$\mathbb{Z}^n$ presentations}\label{subsec:Zn-presentations}
+	
+	When the indexing poset is $Q=\mathbb{Z}^n$ with coordinatewise order, persistence modules become closely related to
+	multigraded commutative algebra (Section~\ref{sec:background:viewpoints}).  Concretely, $\mathbb{N}^n$-indexed modules
+	are equivalent to multigraded modules over $\kk[x_1,\dots,x_n]$ (Proposition~\ref{prop:graded-module-equivalence}),
+	and even for $\mathbb{Z}^n$-indexing, many of the same structural ideas persist \cite{CZ09,Oud15}.
+	
+	A naive approach to computation on $\mathbb{Z}^n$ would restrict to a large finite box and treat it as a finite poset.
+	This is workable for toy problems but scales poorly, since the number of lattice points grows exponentially in $n$.
+	TAMER-OP therefore uses a presentation format tailored to Miller's $\mathbb{Z}^n$ theory: \emph{flange presentations}
+	built from indecomposable \emph{flats} and \emph{injectives} \cite[\S5]{Mil20}.  The guiding idea is the same as in
+	finite fringe presentations, but the building blocks are chosen so that membership and intersection are simple and so
+	that finite encodings can be constructed without enumerating a huge grid.
+	
+	\subsubsection*{Faces, flats, and injectives}
+	
+	Fix $n\ge 1$ and write $\mathbf{e}_1,\dots,\mathbf{e}_n$ for the standard basis of $\mathbb{Z}^n$.
+	A \emph{face} (in the sense used in the code and in \cite{Mil20}) is a choice of a subset of coordinates along which
+	we allow bi-infinite translation.
+	
+	\begin{defn}[Face subgroup]\label{def:face-subgroup}
+		Let $\tau\subseteq \{1,\dots,n\}$.
+		Define the subgroup
+		\[
+		\mathbb{Z}^\tau := \{v\in \mathbb{Z}^n : v_i=0 \text{ for } i\notin \tau\}.
+		\]
+		Equivalently, $\mathbb{Z}^\tau$ is spanned by $\{\mathbf{e}_i : i\in\tau\}$.
+	\end{defn}
+	
+	\begin{defn}[Indecomposable flat and injective shapes]\label{def:flat-injective-shapes}
+		Fix $\tau\subseteq\{1,\dots,n\}$ and a basepoint $\mathbf{b}\in\mathbb{Z}^n$.
+		Define subsets of $\mathbb{Z}^n$:
+		\[
+		F(\mathbf{b},\tau) := \mathbf{b} + \mathbb{N}^n + \mathbb{Z}^\tau,
+		\qquad
+		E(\mathbf{b},\tau) := \mathbf{b} + \mathbb{Z}^\tau - \mathbb{N}^n.
+		\]
+		Then $F(\mathbf{b},\tau)$ is an upset in $\mathbb{Z}^n$, and $E(\mathbf{b},\tau)$ is a downset.
+		The corresponding indicator modules $\kk[F(\mathbf{b},\tau)]$ and $\kk[E(\mathbf{b},\tau)]$ are the basic
+		indecomposable ``flat'' and ``injective'' building blocks used in flange presentations \cite{Mil20}.
+	\end{defn}
+	
+	In the Julia implementation (\texttt{FlangeZn.jl}), a face $\tau$ is stored as a bitmask, and a flat/injective is stored as the pair $(\mathbf{b},\tau)$ together with an optional identifier.  Membership tests reduce to coordinatewise inequalities after projecting away the $\tau$ directions. This makes evaluation cheap even when $n$ is moderate.
+	
+	\subsubsection*{Flange presentations}
+	
+	\begin{defn}[Flange presentation over $\mathbb{Z}^n$]\label{def:flange-presentation}
+		A \emph{$\mathbb{Z}^n$ flange presentation} (over a field $\kk$) consists of:
+		\begin{enumerate}[label=(\roman*)]
+			\item a finite list of flat indicators $\kk[F_1],\dots,\kk[F_m]$ with $F_i=F(\mathbf{b}_i,\tau_i)$,
+			\item a finite list of injective indicators $\kk[E_1],\dots,\kk[E_r]$ with $E_j=E(\mathbf{c}_j,\sigma_j)$,
+			\item a scalar matrix $\Phi\in \kk^{r\times m}$ (rows indexed by injectives, columns by flats),
+		\end{enumerate}
+		which determines a $\mathbb{Z}^n$-module
+		\[
+		M := \im\!\left(\varphi \colon \bigoplus_{i=1}^m \kk[F_i] \longrightarrow \bigoplus_{j=1}^r \kk[E_j]\right),
+		\]
+		where the component map $\kk[F_i]\to \kk[E_j]$ is multiplication by $\Phi_{ji}$ on $F_i\cap E_j$ and zero otherwise
+		(compare \cite[Rems.~5.5 and 5.11, Def.~5.14]{Mil20}).
+	\end{defn}
+	
+	The degreewise evaluation mirrors the finite-poset case quite closely.  For $\mathbf{g}\in\mathbb{Z}^n$,
+	let $I(\mathbf{g})=\{i : \mathbf{g}\in F_i\}$ and $J(\mathbf{g})=\{j : \mathbf{g}\in E_j\}$.
+	Then evaluation at $\mathbf{g}$ yields a linear map
+	\[
+	\varphi_{\mathbf{g}} \colon \kk^{I(\mathbf{g})} \longrightarrow \kk^{J(\mathbf{g})}
+	\]
+	with matrix $\Phi_{J(\mathbf{g}),I(\mathbf{g})}$, and hence
+	\[
+	\dim_\kk M(\mathbf{g}) = \mathrm{rank}\big(\Phi_{J(\mathbf{g}),I(\mathbf{g})}\big).
+	\]
+	In the code, this is implemented by extracting the active row and column indices via membership tests
+	and then computing the rank of the resulting submatrix.  For correctness, the default coefficient field used
+	throughout the current implementation is $\mathbb{Q}$, with rank computed by exact row reduction.
+	
+	\begin{remark}[Automatic enforcement of the monomial support condition]
+		As with finite fringe presentations, flange presentations should respect a support condition:
+		entries corresponding to empty intersections $F_i\cap E_j=\varnothing$ do not contribute to any degree and are
+		safely forced to zero.  The \texttt{Flange} constructor in \texttt{FlangeZn.jl} enforces this by explicitly
+		zeroing such entries, which prevents subtle bugs where a user accidentally supplies a dense matrix with
+		spurious coefficients.  This is also a mild but useful performance improvement: it increases sparsity in
+		common cases where the intersection pattern is already sparse.
+	\end{remark}
+	
+	\subsubsection*{Why flanges are the preferred $\mathbb{Z}^n$ front-end}
+	
+	Flange presentations are not the only finite representation of tame $\mathbb{Z}^n$-modules, but they have several
+	advantages that justify their role as the primary $\mathbb{Z}^n$ front-end:
+	\begin{itemize}
+		\item \textbf{They are theory-native.}  They are the $\mathbb{Z}^n$ analog of fringe presentations and arise
+		naturally from Miller's development of finitely determined modules \cite{Mil20}.
+		\item \textbf{They avoid bounding boxes.}  One can often build a finite encoding poset using only the finite list
+		of flats and injectives, rather than enumerating a large grid of degrees.  This design goal strongly influences
+		the encoding algorithms in Section~\ref{sec:finite-encoding-constructors}.
+		\item \textbf{They are compatible with commutative algebra tooling.}  In multigraded algebra, flat and injective
+		objects play roles analogous to localizations and injective hulls; they align well with resolution-based invariants.
+	\end{itemize}
+	The cost is that a flange presentation is less immediately geometric than a polyhedral $\mathbb{R}^n$ presentation.
+	TAMER-OP therefore treats flanges as a specialized, highly efficient format for lattice-indexed modules, not as a
+	universal one.
+	
+	\subsection{$\mathbb{R}^n$ and piecewise-linear presentations}\label{subsec:Rn-PL-presentations}
+	
+	Many persistence modules arising from real-parameter filtrations are \emph{piecewise constant} on regions cut out by a finite set of geometric constraints.  In the simplest PL settings, these constraints come from finitely many affine half-spaces and their intersections.  This observation is reflected both in the theory of constructible persistence modules and in sheaf-theoretic approaches \cite{KS18,Mil23}.  In TAMER-OP, the corresponding front-end is a \emph{PL fringe presentation}: a fringe presentation whose upsets and downsets are represented as polyhedral regions in $\mathbb{R}^n$ (or, in a specialized fast path, as unions of axis-aligned boxes).
+	
+	\subsubsection*{Geometric upsets and downsets}
+	
+	Let $Q=\mathbb{R}^n$ with the coordinatewise order.
+	A subset $U\subseteq \mathbb{R}^n$ defines an upset indicator module $\kk[U]$ only when $U$ is upward closed;
+	likewise $D$ must be downward closed.  For computation, we need concrete representations of such sets and efficient
+	membership tests.
+	
+	The codebase supports two PL backends (see \texttt{PLPolyhedra.jl} and \texttt{PLBackend.jl}), reflecting a  tradeoff:
+	\begin{itemize}
+		\item \textbf{General polyhedral backend.}  Upsets and downsets are represented as finite unions of rational
+		convex polyhedra (typically specified by half-space inequalities).  This is flexible and matches the theoretical
+		PL picture but can require heavier polyhedral geometry routines.
+		\item \textbf{Axis-aligned box backend.}  Upsets and downsets are represented as unions of axis-aligned boxes
+		(rectangles in $n=2$).  This case supports very fast region decompositions and is well adapted to many practical
+		filtrations where constraints are coordinate thresholds.
+	\end{itemize}
+	In both backends, the intent is that the sets are \emph{certifiably} upward or downward closed.  For the purposes of
+	this thesis, it suffices to emphasize that each shape supports:
+	\begin{enumerate}[label=(\roman*)]
+		\item membership testing $q\in U_i$ or $q\in D_j$,
+		\item intersection testing (needed to enforce the matrix support condition),
+		\item extraction of a finite set of ``boundary features'' that will generate the constant subdivision used for
+		encoding.
+	\end{enumerate}
+	The encoding algorithms that exploit these features are postponed to Section~\ref{sec:finite-encoding-constructors}.
+	
+	\subsubsection*{PL fringe presentations}
+	
+	With geometric upsets and downsets in hand, the PL fringe presentation is formally identical to the finite fringe
+	presentation, except that $Q=\mathbb{R}^n$ is infinite and the shapes are geometric rather than combinatorial.
+	
+	\begin{defn}[PL fringe presentation]\label{def:pl-fringe-presentation}
+		A \emph{PL fringe presentation} over $Q=\mathbb{R}^n$ consists of:
+		\begin{enumerate}[label=(\roman*)]
+			\item finitely many geometric upsets $U_1,\dots,U_m\subseteq\mathbb{R}^n$,
+			\item finitely many geometric downsets $D_1,\dots,D_r\subseteq\mathbb{R}^n$,
+			\item a matrix $\Phi\in\kk^{r\times m}$ satisfying $\Phi_{ji}=0$ whenever $U_i\cap D_j=\varnothing$,
+		\end{enumerate}
+		and it defines the $\mathbb{R}^n$-module
+		\[
+		M := \im\!\left(\bigoplus_{i=1}^m \kk[U_i] \xrightarrow{\ \Phi\ } \bigoplus_{j=1}^r \kk[D_j]\right).
+		\]
+	\end{defn}
+	
+	As before, the fiber dimension at $q\in\mathbb{R}^n$ is computed by restricting $\Phi$ to active rows and columns and
+	taking a rank.  In practice, however, such pointwise queries are only a diagnostic tool.  The primary use of a PL
+	fringe presentation is as input to a finite encoding step: the shapes $U_i$ and $D_j$ determine a finite subdivision of
+	$\mathbb{R}^n$ into regions on which all membership patterns are constant, and hence on which $M$ is constant.  This
+	recovers the ``finite regions of behavior'' intuition behind tameness \cite{Mil20}.
+	
+	\begin{remark}[Exactness and geometric robustness]
+		The PL setting is where numerical issues most easily corrupt a computation, because region boundaries are defined by equalities and inequalities.  The current implementation therefore emphasizes rational geometry where possible: polyhedral constraints are stored with rational coefficients, and rank computations are performed over $\mathbb{Q}$.  This does not eliminate all geometric subtleties, as degenerate intersections still require care. However, it does avoid potential failures in persistent computations due to incorrect ranks induced by floating-point instability near boundary cases.
+	\end{remark}
+	
+	\subsection{Conversions between formats}\label{subsec:format-conversions}
+	
+	The core promise of this section is that the front-ends described above are not siloed.
+	They are designed so that, after a finite encoding is constructed, they can all be converted to the same finite core
+	format.  The overarching conversion pattern is:
+	
+	\begin{center}
+		\begin{tabular}{c}
+			(front-end presentation on $Q$)\\
+			$\Downarrow$ (construct finite encoding $\pi\colon Q\to P$)\\
+			(fringe presentation on finite $P$)\\
+			$\Downarrow$ (basis extraction + cover-edge maps)\\
+			(explicit $P$-module \texttt{PModule})
+		\end{tabular}
+	\end{center}
+	
+	The theoretical justification is that the encoding poset captures the module up to isomorphism in the tame category
+	(Definition~\ref{def:tame-morphism} and Theorem~\ref{thm:tame-abelian}), and all further invariants computed by TAMER-OP
+	factor through this finite model (Lemma~\ref{lem:reduction-along-encoding}).
+	
+	\subsubsection*{Finite-poset fringe $\to$ explicit $P$-module}
+	
+	This is the simplest conversion and was already outlined in Subsection~\ref{subsec:finite-fringe-presentations}.
+	It is implemented by \texttt{pmodule\_from\_fringe}, which computes image bases at each vertex and induced maps on cover
+	relations.
+	
+	\subsubsection*{$\mathbb{Z}^n$ flange $\to$ finite encoding $\to$ $P$-module}
+	
+	For $\mathbb{Z}^n$ flanges, the key step is constructing an encoding without enumerating a large portion of the lattice.
+	At a conceptual level, the conversion uses the finite family of sets
+	\[
+	\{F_i\}_{i=1}^m \ \cup\ \{\mathbb{Z}^n\setminus E_j\}_{j=1}^r
+	\]
+	to define a \emph{signature} map
+	\[
+	\mathrm{sig}\colon \mathbb{Z}^n \longrightarrow \{0,1\}^{m+r},
+	\qquad
+	\mathrm{sig}(\mathbf{g}) = \big( \mathbf{1}_{\mathbf{g}\in F_1},\dots,\mathbf{1}_{\mathbf{g}\in F_m},
+	\mathbf{1}_{\mathbf{g}\notin E_1},\dots,\mathbf{1}_{\mathbf{g}\notin E_r}\big).
+	\]
+	Points with the same signature lie in the same constant region for the presentation, hence the same fiber of an
+	encoding map.  The nontrivial work is to show that only finitely many signatures occur under suitable finiteness
+	hypotheses and to construct a finite poset $P$ of regions ordered by reachability.  This is precisely the kind of
+	finite constant subdivision that Miller uses to define tame morphisms and encodings \cite{Mil20}.  The algorithmic
+	realization in the codebase is implemented in \texttt{ZnEncoding.jl}.
+	
+	Once $P$ and $\pi$ are constructed, the flange is pushed down to a fringe presentation on $P$ by evaluating each flat
+	and injective region on a representative for each region of $P$, producing explicit upsets and downsets in the finite
+	poset.  The remainder of the pipeline (fringe $\to$ \texttt{PModule}) is then identical to the finite case.
+	
+	\subsubsection*{PL fringe $\to$ finite encoding $\to$ $P$-module}
+	
+	The PL case follows the same signature philosophy, but now using geometric objects.  The constant subdivision is obtained from the finite set of boundaries that define the polyhedral upsets and downsets, yielding finitely many regions when the input is PL or semialgebraic.  The polyhedral backend (\texttt{PLPolyhedra.jl}) and the axis-aligned backend (\texttt{PLBackend.jl}) implement different concrete strategies for producing the same output: a finite poset $P$, an encoding map $\pi\colon \mathbb{R}^n\to P$ (with a point-location routine), and a pushed-down fringe presentation on $P$.
+	
+	\begin{remark}[Why conversions are staged]
+		It is tempting to attempt a direct conversion from an infinite presentation (flange or PL fringe) to an explicit
+		$P$-module by sampling many points and inferring structure maps.  We avoid this on TAMER-OP.  The staged approach (front-end $\to$ encoding $\to$ fringe on $P$ $\to$ explicit $P$-module) mirrors the theory and isolates sources of error. Here, any mismatch can be diagnosed at the level of signatures and regions before committing to linear algebra on the finite poset.
+	\end{remark}
+	
+	\subsection{Validation and other sanity checks}\label{subsec:format-validation}
+	
+	Compact presentations are powerful precisely because they hide large implicit structure. But, that also makes them fragile. A small inconsistency in the input can produce a module that is not functorial, not tame, or simply not the module the user intended.  TAMER-OP therefore incorporates validation at multiple layers.  The checks fall into two categories: \emph{structural} checks that are inexpensive and always enabled in constructors, and \emph{diagnostic} checks that can be toggled because they may be expensive.
+	
+	\subsubsection*{Structural checks}
+	
+	\begin{itemize}
+		\item \textbf{Poset correctness.}  For a finite poset, we check that the stored relation is reflexive and transitive and that it is antisymmetric up to equality of vertices.  Cover relations are derived from the order and are used as the canonical generating set of morphisms.
+		\item \textbf{Upset/downset closure.}  For finite-poset upsets and downsets represented as bitmasks, constructors
+		and closure routines ensure upward-closed and downward-closed properties by construction.
+		\item \textbf{Monomial (support) conditions.}  For each presentation format, nonzero matrix entries are forbidden
+		when the corresponding birth and death shapes do not intersect.  Constructors enforce this condition
+		automatically:
+		in the finite fringe format, a check verifies $\Phi_{ji}=0$ when $U_i\cap D_j=\varnothing$; in the $\mathbb{Z}^n$
+		flange format, the constructor explicitly zeros such entries; and in the PL formats, intersection tests serve the
+		same role.  These checks directly implement the support constraints that make a matrix correspond to an actual
+		natural transformation of indicator modules \cite[Prop.~3.18]{Mil20}.
+	\end{itemize}
+	
+	\subsubsection*{Diagnostic checks (optional)}
+	
+	\begin{itemize}
+		\item \textbf{Spot-check functoriality.}  For presentations that support evaluation, one can sample comparable
+		pairs $q\le q'$ and verify that the induced maps satisfy basic functorial constraints along short chains.
+		\item \textbf{Encoding correctness tests.}  After building an encoding $\pi\colon Q\to P$, we can sample points
+		$q,q'\in Q$ with $\pi(q)=\pi(q')$ and verify that the presentation evaluates to the same fiber data at $q$ and $q'$.
+		This corresponds directly to the mathematical requirement that $M$ be constant on fibers of $\pi$
+		(Remark~\ref{rem:encoding-fibers}).
+		\item \textbf{Rank certification.}  When working over $\mathbb{Q}$, ranks are computed by exact elimination; this
+		can be used to certify that computed fiber dimensions and structure maps are consistent.  In later sections, the
+		same philosophy is used to certify minimality of resolutions on finite posets.
+	\end{itemize}
+	
+	\subsubsection*{Bridge to the encoding algorithms}
+	
+	At this point we have described the finite data structures that represent tame modules before encoding.
+	The next section addresses the algorithmic core of TAMER-OP: given one of these presentation formats, how does one
+	construct a finite encoding poset $P$ and an encoding map $\pi\colon Q\to P$ efficiently and robustly, and how does one
+	push the module down to $P$ so that all subsequent invariants can be computed by finite linear algebra?
+	
+	% ============================================================
+	% Section 6: Finite encoding constructors
+	% ============================================================
 	
 	\section{Finite encoding constructors}
+	\label{sec:finite-encoding-constructors}
+	
+	A recurring theme in Chapters~\ref{sec:background}--\ref{sec:tame-modules} is that ``tameness'' is not merely a finiteness hypothesis but a promise that persistence modules admit \emph{finite combinatorial models}.  In Miller's language, a tame $Q$-module $M$ admits a \emph{finite poset encoding} $\pi\colon Q\to P$ with
+	$P$ finite and $M\cong \pi^*H$ for some $P$-module $H$ (Definition~\ref{def:poset-encoding}), and this is equivalent to the existence of finite fringe-style descriptions (Theorem~\ref{thm:syzygy}) \cite{Mil20}. The purpose of this section is to explain how TAMER-OP \emph{constructs} such a finite encoding from the finite presentations introduced in the previous section.
+	
+	A fringe or flange presentation is a finite collection of geometric regions in parameter space (upsets and downsets, often polyhedral) together with a matrix of coefficients.  The encoding problem asks for a finite poset $P$ of ``regions of constant behavior'' together with a map $\pi\colon Q\to P$ that collapses each constant region to a single element. Once this is achieved, the computational task shifts decisively: all subsequent operations on $M$ (kernels, images, ranks, resolutions, derived functors, and so on) reduce to finite linear algebra on the encoded $P$-module, as in Lemma~\ref{lem:reduction-along-encoding}.
+	
+	Algorithmically, TAMER-OP implements encodings in three ambient regimes:
+	\begin{itemize}
+		\item \textbf{Lattice encodings} for $Q=\mathbb{Z}^n$ (implemented in
+		\texttt{ZnEncoding.jl}), where presentations are built from indicator flats and
+		injectives (Section~\ref{subsec:Zn-presentations}).
+		\item \textbf{Axis-aligned piecewise-linear encodings} for $Q=\mathbb{R}^n$
+		with coordinatewise order and regions described by finite unions of orthants
+		(implemented in \texttt{PLBackend.jl}).
+		\item \textbf{General polyhedral PL encodings} for $Q=\mathbb{R}^n$ where
+		regions are unions of rational polyhedra (implemented in \texttt{PLPolyhedra.jl}),
+		used when axis-aligned structure is insufficient.
+	\end{itemize}
+	All three share a single organizing principle: \emph{compute a finite partition of
+		parameter space on which the relevant indicator data are constant, then collapse
+		cells with the same signature.}
 	
 	\subsection{The encoding problem}
+	\label{subsec:encoding-problem}
+	
+	Fix an ambient poset $Q$ (typically $Q=\mathbb{Z}^n$ or $Q=\mathbb{R}^n$ with
+	coordinatewise order).  The immediate input to an encoding constructor in
+	TAMER-OP is a finite presentation in one of the formats from
+	Section~\ref{sec:presentation-formats}.  For the present section it is convenient
+	to phrase this input uniformly as follows.
+	
+	\paragraph{Input data model.}
+	A finite fringe-style presentation provides:
+	\begin{enumerate}[label=(\roman*)]
+		\item a finite collection of \emph{birth upsets} $U_1,\dots,U_m\subseteq Q$,
+		\item a finite collection of \emph{death downsets} $D_1,\dots,D_r\subseteq Q$,
+		\item a matrix $\Phi\in \kk^{r\times m}$ specifying a map
+		$\varphi\colon \bigoplus_{i=1}^m \kk[U_i]\to \bigoplus_{j=1}^r \kk[D_j]$
+		(Lemmas~\ref{lem:monomial-support} and Definition~\ref{def:monomial-matrix}).
+	\end{enumerate}
+	In the lattice implementation these $U_i$ and $D_j$ are not literally stored as
+	arbitrary subsets; instead they come from structured families (indicator flats and
+	injectives) that admit fast membership tests and finite boundary descriptions
+	(\texttt{IndFlat} and \texttt{IndInj} in \texttt{FlangeZn.jl}).  In the PL
+	implementations the upsets and downsets are represented as finite unions of
+	structured polyhedral sets (orthants in \texttt{PLBackend.jl}, general rational
+	polyhedra in \texttt{PLPolyhedra.jl}).
+	
+	\paragraph{Desired output.}
+	An encoding constructor produces:
+	\begin{enumerate}[label=(\roman*)]
+		\item a finite poset $P$ (the \emph{encoding poset}),
+		\item a poset morphism $\pi\colon Q\to P$ (the \emph{encoding map}),
+		\item a $P$-module $H\colon P\to \mathbf{Vect}_{\kk}$, such that the presented
+		$Q$-module factors as $M\cong \pi^*H$.
+	\end{enumerate}
+	In code, the output is typically packaged as \texttt{(P, H, pi)} or
+	\texttt{(P, Hs, pi)} when encoding several modules at once.
+	Here $H$ is stored as a finite poset module in \texttt{FiniteFringe.jl} (usually a
+	\texttt{FringeModule} on $P$), and $\pi$ is stored as a lightweight object
+	supporting point location queries (for example \texttt{ZnEncodingMap}).
+	
+	\paragraph{A methodological choice.}
+	There is no unique ``best'' encoding in general.  Even when a tame encoding exists,
+	it need not be canonical, and the problem of finding a minimal encoding can be
+	computationally expensive or ill-posed under different equivalence notions.
+	TAMER-OP therefore adopts a \emph{presentation-relative} encoding strategy:
+	it constructs an encoding that is guaranteed to be subordinate to the \emph{specific}
+	finite family of upsets and downsets appearing in the chosen input format.  This
+	choice matches the computational contract of Miller's equivalences:
+	theorem-level existence is supplied by tameness \cite{Mil20}, while the encoding
+	constructor is a deterministic algorithm whose complexity can be analyzed in terms
+	of the size of the given finite presentation.
 	
 	\subsection{Region/signature idea}
+	\label{subsec:signature-idea}
+	
+	The core encoding mechanism used throughout TAMER-OP can be stated abstractly
+	without reference to a particular ambient domain.
+	
+	\begin{defn}[Signature map associated to a finite fringe interface]
+		\label{def:signature-map}
+		Let $Q$ be a poset and suppose we are given upsets $U_1,\dots,U_m\subseteq Q$
+		and downsets $D_1,\dots,D_r\subseteq Q$.
+		Define functions
+		\[
+		\chi_{U_i}(q) :=
+		\begin{cases}
+			1 & q\in U_i,\\
+			0 & q\notin U_i,
+		\end{cases}
+		\qquad
+		\chi_{\overline{D_j}}(q) :=
+		\begin{cases}
+			1 & q\notin D_j,\\
+			0 & q\in D_j,
+		\end{cases}
+		\]
+		and define the \emph{signature} of $q\in Q$ to be the bit vector
+		\[
+		\sigma(q) := \big(\chi_{U_1}(q),\dots,\chi_{U_m}(q)\,;\,
+		\chi_{\overline{D_1}}(q),\dots,\chi_{\overline{D_r}}(q)\big)\in \{0,1\}^{m+r}.
+		\]
+	\end{defn}
+	
+	The reason for encoding downsets via their complements is monotonicity: if $D$ is
+	a downset, then $Q\setminus D$ is an upset, hence order-preserving in the same
+	direction as birth regions.
+	
+	\begin{lemma}[Monotonicity of signatures]
+		\label{lem:signature-monotone}
+		The signature map $\sigma\colon Q\to \{0,1\}^{m+r}$ in
+		Definition~\ref{def:signature-map} is order-preserving when
+		$\{0,1\}^{m+r}$ is ordered coordinatewise.
+	\end{lemma}
+	
+	\begin{proof}
+		If $q\le q'$ in $Q$ and $q\in U_i$ for some upset $U_i$, then $q'\in U_i$ by upward
+		closure, so $\chi_{U_i}(q)\le \chi_{U_i}(q')$.
+		If $q\le q'$ and $q\notin D_j$ for a downset $D_j$, then $q'\notin D_j$ as well,
+		because membership in a downset can only be lost when moving upward.  Equivalently,
+		$Q\setminus D_j$ is an upset.  Hence $\chi_{\overline{D_j}}(q)\le
+		\chi_{\overline{D_j}}(q')$ for all $j$.
+	\end{proof}
+	
+	The following encoding construction follows naturally from the lemma.
+	
+	\begin{proposition}[Encoding via realized signatures]
+		\label{prop:encoding-by-signatures}
+		Let $P:=\mathrm{im}(\sigma)\subseteq \{0,1\}^{m+r}$ with the induced partial order,
+		and let $\pi:=\sigma\colon Q\to P$ (followed by the projection onto the image).
+		Then for each $i$ and $j$, the indicator modules $\kk[U_i]$ and $\kk[D_j]$ factor
+		through $\pi$.  Consequently, any fringe presentation map
+		$\varphi\colon \bigoplus_i \kk[U_i]\to \bigoplus_j \kk[D_j]$ induces a
+		$P$-module presentation whose pullback along $\pi$ recovers the original one.
+	\end{proposition}
+	
+	\begin{proof}[Proof sketch]
+		For each $i$, define an upset $\widehat{U}_i\subseteq P$ by
+		\[
+		\widehat{U}_i:=\{p\in P : \text{the $i$th upset-bit of $p$ equals }1\}.
+		\]
+		Because the $i$th coordinate is monotone in $P$, this is indeed an upset in $P$,
+		and by construction $\pi^{-1}(\widehat{U}_i)=U_i$.
+		Thus $\kk[U_i]\cong \pi^*\kk[\widehat{U}_i]$.
+		Similarly, define a downset $\widehat{D}_j\subseteq P$ by declaring $p\in\widehat{D}_j$
+		if the $(m+j)$th bit of $p$ (the complement-of-downset bit) equals $0$, so that
+		$\pi^{-1}(\widehat{D}_j)=D_j$.
+		The map $\varphi$ is specified stalkwise by the matrix $\Phi$ on intersections
+		$U_i\cap D_j$, and those intersections are preserved under pullback because each
+		$U_i$ and $D_j$ is a union of fibers of $\pi$.
+	\end{proof}
+	
+	Proposition~\ref{prop:encoding-by-signatures} conceptually encompasses encoding as a whole: \emph{once} the set of realized signatures is finite, one has a finite encoding.  The real work is therefore to compute $\mathrm{im}(\sigma)$ efficiently from a structured description of the $U_i$ and $D_j$, and to equip the realized signatures with an implementation-friendly poset structure and a fast point-location map $\pi$.
+	
+	From a geometric standpoint, this signature construction is a concrete incarnation of the ``constant subdivision'' idea in Miller's definition of tame morphisms \cite{Mil20}.  The regions on which all indicator data are constant form a finite stratification of parameter space, analogous in spirit to the stratifications appearing in constructible sheaf approaches \cite{KS18,Mil23}, though TAMER-OP works directly with the combinatorics of indicator regions rather than with microsupport.
 	
 	\subsection{Encoding algorithms by ambient domain}
+	\label{subsec:encoding-algorithms-by-domain}
+	
+	This subsection describes how TAMER-OP computes the realized signatures
+	$\mathrm{im}(\sigma)$ in each supported regime.  The three backends share the same
+	high-level structure but differ in how they represent regions and how they
+	enumerate constant cells.
+	
+	\subsubsection*{(A) Lattice encoding for $Q=\mathbb{Z}^n$}
+	\label{subsubsec:encoding-Zn}
+	
+	The lattice backend is designed for presentations arising from
+	$\mathbb{Z}^n$-indexed modules, where indicator regions are built from algebraic
+	data that are intrinsically discrete.
+	
+	\paragraph{Indicator families and membership tests.}
+	In \texttt{FlangeZn.jl}, the basic structured regions are:
+	\begin{itemize}
+		\item \texttt{IndFlat} objects, which encode certain coordinatewise upsets by
+		inequalities of the form $g_i\ge b_i$ on a specified subset of coordinates; and
+		\item \texttt{IndInj} objects, which encode coordinatewise downsets by inequalities
+		$g_i\le b_i$ on a specified subset of coordinates.
+	\end{itemize}
+	Both admit $O(n)$ membership checks (\texttt{in\_flat} and \texttt{in\_inj}),
+	but the key point is that their \emph{boundaries} occur only at finitely many
+	integer coordinate values extracted from the $b_i$ in the presentation.
+	
+	\paragraph{Critical coordinates and a product cell complex.}
+	The encoding constructor \texttt{encode\_poset\_from\_flanges} in
+	\texttt{ZnEncoding.jl} begins by collecting, for each axis $k=1,\dots,n$, a
+	sorted list of \emph{critical coordinates} at which some membership predicate
+	changes.  Concretely:
+	\begin{itemize}
+		\item for each flat constraint $g_k\ge b_k$, the threshold $b_k$ is critical;
+		\item for each injective constraint $g_k\le b_k$, the complement threshold
+		$b_k+1$ is critical, because in $\mathbb{Z}$ the complement of $g_k\le b_k$
+		is $g_k\ge b_k+1$.
+	\end{itemize}
+	Call these lists $C_k\subset \mathbb{Z}$.  They define a finite product cell
+	structure on $\mathbb{Z}^n$ by decomposing each coordinate axis into slabs between
+	successive critical values.  The resulting \emph{grid of cells} has size
+	\[
+	N_{\mathrm{cell}} = \prod_{k=1}^n (|C_k|+1).
+	\]
+	On each cell, the truth values of all inequalities defining all flats and injectives
+	are constant, hence the signature $\sigma$ is constant.
+	
+	\paragraph{Signature enumeration by incremental scanning.}
+	A direct approach would evaluate all $m+r$ membership predicates on a representative
+	lattice point of each cell, costing $O((m+r)\,n\,N_{\mathrm{cell}})$ in the worst
+	case.  The implementation instead performs a single scan through the grid, updating
+	the signature incrementally as it crosses critical coordinates.  The key mechanism
+	is:
+	\begin{enumerate}[label=(\roman*)]
+		\item precompute, for each axis and each critical coordinate, which flats or injective
+		complements toggle their constraint status when crossing that coordinate; and
+		\item traverse the grid in a snake-like boustrophedon order so that successive cells differ
+		in only one coordinate direction.
+	\end{enumerate}
+	For each cell visited, the scanner updates a small set of counters (how many
+	constraints of each flat are still unsatisfied, and how many constraints of each
+	injective have been violated) and maintains bitvectors encoding the current
+	$(y,z)$ signature.  Each visited cell contributes its signature to a hash table of
+	seen signatures, and the scan optionally records a lookup table
+	\texttt{cell\_to\_region} mapping cell indices to signature-region indices.
+	
+	\paragraph{Output.}
+	The scan returns the list of realized signatures and a map
+	$\pi\colon \mathbb{Z}^n\to P$ implemented as a \texttt{ZnEncodingMap}.  The encoding
+	poset $P$ can be represented either:
+	\begin{itemize}
+		\item implicitly, as a \texttt{SignaturePoset} where $p\le p'$ is tested by subset
+		operations on the stored signature bitvectors; or
+		\item explicitly, as a \texttt{FinitePoset} whose order relation is materialized as a
+		BitMatrix for faster downstream closure operations.
+	\end{itemize}
+	This choice is controlled by \texttt{poset\_kind} in \texttt{EncodingOptions}.
+	
+	\subsubsection*{(B) Axis-aligned PL encoding for $Q=\mathbb{R}^n$}
+	\label{subsubsec:encoding-PL-boxes}
+	
+	The axis-aligned PL backend is the continuous analogue of the lattice backend.
+	Here $Q=\mathbb{R}^n$ with the coordinatewise order, and the input regions are
+	finite unions of \emph{orthants} described by threshold vectors.
+	
+	\paragraph{Region representation.}
+	In \texttt{PLBackend.jl}, an upset is represented as a finite set of ``corners''
+	$\ell^{(1)},\dots,\ell^{(s)}\in \mathbb{R}^n$, encoding the union
+	\[
+	U=\bigcup_{t=1}^s \{x\in \mathbb{R}^n : x\ge \ell^{(t)}\},
+	\]
+	and similarly a downset is represented by finitely many ``upper corners''
+	$u^{(1)},\dots,u^{(t)}$ encoding
+	\[
+	D=\bigcup_{t=1}^T \{x\in \mathbb{R}^n : x\le u^{(t)}\}.
+	\]
+	This matches a geometry that should be common in PL persistence constructions, where births and deaths
+	are controlled by finitely many coordinate thresholds.
+	
+	\paragraph{Coordinate hyperplane subdivision.}
+	The encoding constructor \texttt{encode\_fringe\_boxes} collects, for each axis
+	$k$, all threshold coordinates appearing in any $\ell^{(t)}_k$ or $u^{(t)}_k$.
+	These values define a subdivision of $\mathbb{R}$ into open intervals, and hence
+	a subdivision of $\mathbb{R}^n$ into open axis-aligned boxes (cells).  As in the
+	lattice case, the signature $\sigma$ is constant on each cell.
+	
+	\paragraph{Representative points and strictness.}
+	A subtlety in the continuous setting is boundary handling: if a representative point
+	lies on a threshold hyperplane, membership in a closed upset/downset can be ambiguous
+	relative to the intended open cell.  TAMER-OP resolves this by choosing a point in the
+	\emph{interior} of each cell, implemented via a small offset parameter
+	\texttt{strict\_eps} in \texttt{EncodingOptions}.  This makes the signature assignment
+	robust and deterministic.
+	
+	\paragraph{Scanning and output.}
+	The axis-aligned backend performs a scan through the grid of cells and records
+	realized signatures, using essentially the same boustrophedon mechanism as the lattice
+	backend (implemented in \texttt{\_collect\_cell\_signatures\_scan}).
+	The output is a finite poset $P$ on realized signatures and an encoding map
+	$\pi\colon \mathbb{R}^n\to P$ implemented as a \texttt{BoxEncodingMap}.
+	
+	\subsubsection*{(C) General polyhedral PL encoding}
+	\label{subsubsec:encoding-PL-polyhedra}
+	
+	Axis-aligned encodings are fast and often sufficient, but they do not cover
+	general polyhedral regions (for example, regions defined by non-axis-aligned linear
+	inequalities).  The polyhedral backend in \texttt{PLPolyhedra.jl} supports upsets and
+	downsets given as finite unions of rational polyhedra.
+	
+	\paragraph{Polyhedral feasibility viewpoint.}
+	In principle, one could build a full arrangement of all supporting hyperplanes and
+	enumerate its cells, but this can be expensive.  The implementation instead follows
+	a feasibility-driven approach: it enumerates candidate signatures and checks whether
+	the region defined by that signature is nonempty.
+	
+	Concretely, for each candidate signature $(y,z)\in\{0,1\}^{m+r}$, one forms the set
+	\[
+	R(y,z) :=
+	\Big(\bigcap_{i:y_i=1} U_i\Big)
+	\cap
+	\Big(\bigcap_{i:y_i=0} (Q\setminus U_i)\Big)
+	\cap
+	\Big(\bigcap_{j:z_j=0} D_j\Big)
+	\cap
+	\Big(\bigcap_{j:z_j=1} (Q\setminus D_j)\Big),
+	\]
+	and asks whether $R(y,z)$ is nonempty.  Because the $U_i$ and $D_j$ are unions of
+	polyhedra, each complement is also a union of polyhedra and halfspace-defined pieces,
+	so this feasibility test branches over choices of pieces.  Branches that yield an empty
+	intersection are discarded.
+	
+	\paragraph{Exact arithmetic for correctness.}
+	Feasibility and emptiness checks are performed using rational polyhedral computations
+	(via \texttt{Polyhedra.jl} and \texttt{CDDLib.jl} in the implementation).
+	This is aligned with the ``exactness versus speed'' discussion in
+	Section~\ref{sec:background:conventions}: for encoding construction, correctness of
+	region adjacency and signature assignment is structurally important, so exact arithmetic
+	is often the right default.
+	
+	\paragraph{Output and point-location implications.}
+	The polyhedral backend still outputs a signature poset $P$ (or an explicit finite
+	poset) together with an encoding map $\pi$.  The difference is that $\pi$ now needs a
+	polyhedral point-location routine.  TAMER-OP stores each realized region together with
+	a witness point and uses a two-stage membership test (fast floating-point rejection
+	followed by exact verification near boundaries) to implement $\pi$ efficiently; see
+	Subsection~\ref{subsec:point-location}.
 	
 	\subsection{Constructing the finite poset structure}
+	\label{subsec:constructing-poset}
+	
+	Once a finite set of realized signatures has been computed, TAMER-OP must turn it
+	into a finite poset $P$ and transport the input presentation to a $P$-module.
+	
+	\subsubsection*{Signature poset versus explicit finite poset}
+	
+	Let $\{(y^{(a)},z^{(a)})\}_{a=1}^R$ be the realized signatures, where
+	$y^{(a)}\in\{0,1\}^m$ and $z^{(a)}\in\{0,1\}^r$.  The canonical partial order used in
+	all backends is the coordinatewise order:
+	\[
+	a \le_P b
+	\quad\Longleftrightarrow\quad
+	y^{(a)} \le y^{(b)}\ \text{and}\ z^{(a)} \le z^{(b)}
+	\quad\Longleftrightarrow\quad
+	\mathrm{supp}(y^{(a)})\subseteq \mathrm{supp}(y^{(b)}),\ 
+	\mathrm{supp}(z^{(a)})\subseteq \mathrm{supp}(z^{(b)}).
+	\]
+	This is exactly the order inherited from $\{0,1\}^{m+r}$.
+	
+	In code this is realized in two interchangeable forms:
+	\begin{itemize}
+		\item \textbf{\texttt{SignaturePoset}} (used when \texttt{poset\_kind = :signature}):
+		store the bitvectors and implement $\le_P$ by subset checks on bitvectors.
+		\item \textbf{\texttt{FinitePoset}} (used when \texttt{poset\_kind = :dense}):
+		materialize the full reflexive transitive order relation as an $R\times R$ BitMatrix.
+	\end{itemize}
+	The second form is larger in memory but can accelerate repeated closure computations
+	(upsets, downsets, cover edges), which appear frequently in later invariant
+	computation.
+	
+	\subsubsection*{Transporting indicator data to $P$}
+	
+	The transport step is the computational instantiation of
+	Proposition~\ref{prop:encoding-by-signatures}.  Each birth upset $U_i$ induces an
+	upset $\widehat{U}_i\subseteq P$ by reading off the $i$th birth bit in $y$:
+	\[
+	\widehat{U}_i := \{a\in P : y^{(a)}_i = 1\}.
+	\]
+	Similarly, each death downset $D_j$ induces a downset $\widehat{D}_j\subseteq P$ by
+	\[
+	\widehat{D}_j := \{a\in P : z^{(a)}_j = 0\}.
+	\]
+	(Equivalently, membership in the complement $Q\setminus D_j$ is recorded by $z_j=1$.)
+	
+	These $\widehat{U}_i$ and $\widehat{D}_j$ are stored as bitsets on $P$ in the
+	\texttt{FiniteFringe.FringeModule} representation.
+	
+	\subsubsection*{Transporting the monomial matrix}
+	
+	Given $\Phi\in \kk^{r\times m}$ describing the map
+	$\bigoplus_i \kk[U_i]\to \bigoplus_j \kk[D_j]$, we must produce a matrix
+	$\widehat{\Phi}$ describing
+	$\bigoplus_i \kk[\widehat{U}_i]\to \bigoplus_j \kk[\widehat{D}_j]$.
+	By Lemma~\ref{lem:monomial-support}, the only structural constraint is:
+	\[
+	\widehat{\Phi}_{ji} = 0 \quad\text{whenever}\quad \widehat{U}_i\cap \widehat{D}_j=\varnothing.
+	\]
+	In a signature encoding this intersection test is purely combinatorial: the
+	intersection is nonempty if and only if there exists some region $a\in P$ with
+	$y^{(a)}_i=1$ and $z^{(a)}_j=0$.  TAMER-OP therefore constructs $\widehat{\Phi}$ by
+	retaining the original coefficient $\Phi_{ji}$ when the intersection is nonempty
+	and forcing it to zero otherwise.
+	
+	At a conceptual level, this step is where the encoding ``forgets geometry'' and
+	retains only the finite combinatorics needed for algebraic computation.
 	
 	\subsection{Point location and evaluation map}
+	\label{subsec:point-location}
+	
+	The encoding map $\pi\colon Q\to P$ must be computable on demand, because later
+	pipeline stages repeatedly query fibers $H(\pi(q))$ and structure maps along
+	comparabilities in $P$.  TAMER-OP therefore treats point location as part of the
+	encoding object, not as an afterthought.
+	
+	\subsubsection*{Grid-based point location (lattice and axis-aligned PL)}
+	
+	In the lattice and axis-aligned PL backends, $Q$ is subdivided using coordinate
+	thresholds, so locating a point reduces to finding which slab index it occupies
+	along each axis.
+	
+	\paragraph{Lattice case.}
+	A \texttt{ZnEncodingMap} stores:
+	\begin{itemize}
+		\item the critical coordinate lists $C_k$ for each axis,
+		\item the realized signature dictionary \texttt{sig\_to\_region},
+		\item optionally a lookup table \texttt{cell\_to\_region} when the grid is small
+		enough to store (controlled by \texttt{max\_lookup\_cells}).
+	\end{itemize}
+	Given $g\in \mathbb{Z}^n$, one computes the cell index by $n$ binary searches
+	(\texttt{searchsortedlast}) in the sorted coordinate lists, costing
+	$O\!\left(\sum_{k=1}^n \log |C_k|\right)$ comparisons.
+	If \texttt{cell\_to\_region} is present, region lookup is $O(1)$ afterward.
+	If it is absent, the implementation recomputes the signature key by evaluating the
+	structured flat/injective predicates (still finite and typically small), and then
+	looks up the region in a dictionary.  This makes the time per query essentially
+	either:
+	\[
+	O\!\left(n\log K\right)\quad\text{(with lookup table)},\qquad
+	O\!\left(n(m+r)\right)\quad\text{(recompute signature)},
+	\]
+	where $K=\max_k |C_k|$.
+	
+	\paragraph{Axis-aligned PL case.}
+	A \texttt{BoxEncodingMap} works analogously with real thresholds.  Point location
+	again uses $n$ binary searches in sorted coordinate lists, followed by a cell-to-region
+	lookup.
+	
+	\subsubsection*{Polyhedral point location}
+	
+	In the polyhedral backend, the region fibers are not axis-aligned boxes but rational
+	polyhedra (or finite unions thereof).  A naive point location routine would test
+	membership against every region, which is worst-case $O(R)$ region tests per query,
+	with each region test involving $O(Hn)$ inequality evaluations for $H$ halfspaces.
+	TAMER-OP implements a more structured routine in \texttt{PLPolyhedra.jl}:
+	\begin{itemize}
+		\item each realized region stores a witness point and a floating-point approximation
+		of its inequalities;
+		\item queries are first filtered using cheap floating-point inequality checks that
+		rapidly reject most regions;
+		\item candidates that survive the float filter are verified using exact rational
+		arithmetic near boundaries.
+	\end{itemize}
+	This does not change the worst-case asymptotics but substantially improves expected
+	performance in regimes where regions are moderately separated or when a coarse
+	candidate set can be obtained from coordinate heuristics.
 	
 	\subsection{Building a common encoding for multiple modules}
+	\label{subsec:common-encoding}
+	
+	Most downstream tasks in TAMER-OP are comparative: one wants to compute invariants
+	for a \emph{collection} of modules and then feed those outputs into statistical
+	summaries.  For this it is highly advantageous, and often necessary, that all modules
+	be encoded over a \emph{common} finite poset $P$ so that their invariants are computed
+	on a shared combinatorial domain.
+	
+	\paragraph{Common encoding by union of generator data.}
+	Given finitely many modules $M^{(1)},\dots,M^{(T)}$ presented by upsets/downsets
+	$\{U_i^{(t)}\}$ and $\{D_j^{(t)}\}$, TAMER-OP constructs a common encoding by forming
+	the combined signature map associated to the union of all these regions.  In practice,
+	this means:
+	\begin{enumerate}[label=(\roman*)]
+		\item concatenate the birth and death region lists across all modules,
+		\item run the chosen backend encoding algorithm once on the combined lists to obtain
+		a common signature poset $P$ and map $\pi\colon Q\to P$,
+		\item transport each module's presentation to $P$ by reading off the relevant
+		coordinates of the signature.
+	\end{enumerate}
+	This strategy is implemented by functions such as \texttt{encode\_from\_flanges} in
+	\texttt{ZnEncoding.jl} and \texttt{encode\_from\_PL\_fringes} in \texttt{PLPolyhedra.jl}.
+	The result is a single poset $P$ that is subordinate to every module in the family.
+	
+	\paragraph{Theoretical context.}
+	The existence of a common encoding for a finite family is built into Miller's
+	framework at the level of constant subdivisions, but subtle issues arise if one
+	asks for common encodings that capture \emph{all} homomorphisms (full subcategory
+	versus tame morphisms).  Waas gives sufficient geometric connectivity conditions
+	under which encodable modules form a full abelian subcategory and common encodings
+	capture all morphisms \cite{Waa24}.  TAMER-OP's stance is more pragmatic: for a fixed
+	finite set of modules and a fixed set of operations (the invariants computed later),
+	a common encoding built from the union of the modules' generator regions is the
+	appropriate computational object.
 	
 	\subsection{Complexity and failure modes}
+	\label{subsec:encoding-complexity}
+	
+	Encoding is the stage where combinatorics can blow up.  It is therefore the right
+	place to state explicit complexity bounds and to clarify what kinds of inputs are
+	expected to be tractable.
+	
+	\subsubsection*{Complexity of grid-based encodings}
+	
+	Consider either the lattice or axis-aligned PL backend.
+	Let $n$ be the parameter dimension, let $m$ and $r$ be the number of birth and death
+	regions in the presentation, and let $C_k$ be the critical coordinate set on axis $k$.
+	Define
+	\[
+	K_k := |C_k|,\qquad
+	N_{\mathrm{cell}} := \prod_{k=1}^n (K_k+1),\qquad
+	R := |\mathrm{im}(\sigma)|\le N_{\mathrm{cell}}.
+	\]
+	
+	\paragraph{Enumerating signatures.}
+	In both backends, the encoding algorithm visits each cell once and performs constant
+	work plus updates for constraint events crossing cell boundaries.
+	A clean worst-case bound that is easy to compare across variants is:
+	\[
+	T_{\mathrm{sig}} = O\!\left((m+r)\,n\,N_{\mathrm{cell}}\right),
+	\]
+	which is the cost of evaluating all membership predicates per cell in a naive scheme.
+	The incremental scan improves constants by replacing full reevaluation with sparse
+	updates.  Its asymptotic upper bound can be phrased as
+	\[
+	T_{\mathrm{scan}} = O\!\left(N_{\mathrm{cell}} + E_{\mathrm{flip}}\right),
+	\]
+	where $E_{\mathrm{flip}}$ is the total number of bit flips processed across the scan.
+	In the worst case $E_{\mathrm{flip}} = O(n(m+r)\,N_{\mathrm{cell}})$ because each
+	generator bit can flip at most once per axis per fiber of the other coordinates.
+	Thus both descriptions agree at the big-O level.
+	
+	\paragraph{Building the poset order.}
+	Given $R$ realized signatures, materializing the order relation by pairwise subset
+	tests costs
+	\[
+	T_{\le} = O\!\left(R^2\cdot \frac{m+r}{w}\right),
+	\]
+	where $w$ is the machine word size used by the bitset representation (typically $64$).
+	If one also computes the Hasse cover relation from the full order matrix (as in
+	\texttt{FiniteFringe.\_compute\_cover\_edges\_bitset}), the worst-case bound is
+	\[
+	T_{\mathrm{cover}} = O\!\left(\frac{R^3}{w}\right),
+	\]
+	though in practice this is mitigated by bit-parallel operations and by caching cover
+	edges only when they are actually requested downstream.
+	
+	\paragraph{Memory.}
+	Storing \texttt{cell\_to\_region} requires $O(N_{\mathrm{cell}})$ memory, which is
+	precisely why \texttt{ZnEncodingMap} makes it optional (via \texttt{max\_lookup\_cells}).
+	Storing the signature bitvectors requires $O(R(m+r)/w)$ memory.  Materializing the
+	full order matrix requires $O(R^2/w)$ memory.
+	
+	\paragraph{Interpreting the bounds.}
+	These formulas highlight the central design tradeoff: for fixed parameter dimension $n$,
+	the grid size $N_{\mathrm{cell}}$ is polynomial in the number of critical coordinates
+	per axis.  In the lattice backend, each flat or injective contributes at most one
+	critical coordinate per constrained axis, so a crude but informative bound is
+	$K_k = O(m+r)$, hence
+	\[
+	N_{\mathrm{cell}} = O\!\left((m+r)^n\right)\quad\text{(for fixed $n$)}.
+	\]
+	This is the main sense in which finite encodings make computation feasible in the
+	common $n=2$ or $n=3$ regimes: the potentially infinite parameter domain is compressed
+	to a finite poset whose size grows polynomially in the presentation size when $n$ is
+	small.  The same expression also makes the failure mode explicit: for large $n$,
+	$(m+r)^n$ is prohibitive, and one must use more problem-specific reductions.
+	
+	\subsubsection*{Complexity of the polyhedral feasibility backend}
+	
+	For the polyhedral backend, a different parameterization is appropriate.
+	Let $H$ be the total number of halfspaces needed to describe all polyhedral pieces
+	in all $U_i$ and $D_j$, and let $B$ measure the branching factor induced by unions
+	and complements (formally, the number of piece-selection branches explored).
+	
+	\paragraph{Feasibility enumeration.}
+	The implementation enumerates candidate signatures and branches over polyhedral pieces,
+	performing an emptiness check for each branch.  A coarse upper bound is
+	\[
+	T_{\mathrm{poly}} = O\!\left(2^{m+r}\cdot B \cdot T_{\mathrm{feas}}(n,H)\right),
+	\]
+	where $T_{\mathrm{feas}}(n,H)$ is the cost of a rational polyhedral feasibility or
+	emptiness test in dimension $n$ with $H$ inequalities.  This is exponential in the
+	number of generators $m+r$, and this backend is therefore intended for regimes where
+	$m+r$ is small but each region has non-axis-aligned geometry.  The implementation
+	includes a hard cap \texttt{max\_regions} to prevent runaway enumeration.
+	
+	\subsubsection*{Typical failure modes}
+	
+	The most common failure modes are not subtle.
+	\begin{itemize}
+		\item \textbf{Combinatorial explosion in $N_{\mathrm{cell}}$ or $R$.}
+		This is the dominant risk in grid-based encodings and is intrinsic to the problem.
+		TAMER-OP mitigates it by offering signature-based collapse (often $R\ll N_{\mathrm{cell}}$)
+		and by limiting lookup-table storage.
+		\item \textbf{Exponential branching in polyhedral unions.}
+		This is intrinsic to complement and union handling in the feasibility backend; the
+		mitigation is to use it only when $m+r$ and the number of pieces per region are small,
+		and to cap \texttt{max\_regions}.
+		\item \textbf{Boundary ambiguity in $\mathbb{R}^n$.}
+		The axis-aligned backend avoids this by sampling interior points via \texttt{strict\_eps}.
+		The polyhedral backend avoids it by using exact arithmetic for final membership checks.
+	\end{itemize}
 	
 	\subsection{Correctness and diagnostics}
+	\label{subsec:encoding-correctness}
+	
+	The encoding constructors are designed so that correctness follows from a small number
+	of verifiable invariants: signatures are computed on cells where they are constant, and
+	the poset and transported presentation are defined by those signatures.
+	
+	\begin{proposition}[Correctness criterion for signature encodings]
+		\label{prop:encoding-correctness}
+		Suppose $Q$ is partitioned into subsets (cells) $\{C_\alpha\}$ such that for every $i$
+		and $j$, the predicates $q\in U_i$ and $q\in D_j$ are constant on each $C_\alpha$.
+		Let $P$ be the set of realized signatures on the cells, ordered coordinatewise, and let
+		$\pi\colon Q\to P$ send $q$ to the signature of its cell.
+		Then $\pi$ is an encoding map subordinate to every indicator module $\kk[U_i]$ and
+		$\kk[D_j]$, and any fringe presentation built from these indicators transports to a
+		$P$-presentation whose pullback recovers the original one.
+	\end{proposition}
+	
+	\begin{proof}
+		By hypothesis, each $U_i$ is a union of cells and each $D_j$ is a union of cells.
+		Thus $U_i$ and $D_j$ are unions of fibers of $\pi$, hence they are inverse images of
+		subsets of $P$.  The transported subsets are exactly $\widehat{U}_i$ and
+		$\widehat{D}_j$ from Subsection~\ref{subsec:constructing-poset}, so
+		$\kk[U_i]\cong \pi^*\kk[\widehat{U}_i]$ and similarly for $\kk[D_j]$.
+		The statement for a fringe presentation then follows from functoriality: the stalkwise
+		matrix description of the map is respected on each fiber because all indicator data are
+		constant there.
+	\end{proof}
+	
+	\paragraph{Diagnostics in practice.}
+	TAMER-OP exposes and internally relies on a collection of sanity checks that align with
+	Proposition~\ref{prop:encoding-correctness}:
+	\begin{itemize}
+		\item \textbf{Witness-based verification.}  Each realized signature region is stored
+		with at least one representative (cell representative in grid backends, polyhedral
+		witness point in the feasibility backend).  This makes it straightforward to check that
+		the recorded signature agrees with direct membership evaluation.
+		\item \textbf{Monotonicity checks.}  Because the intended encoding map is order-preserving
+		(Lemma~\ref{lem:signature-monotone}), violations of monotonicity indicate either an
+		implementation bug or a boundary-handling issue in $\mathbb{R}^n$; the \texttt{strict\_eps}
+		and exact arithmetic mechanisms are designed specifically to prevent such issues.
+		\item \textbf{Size and cap reporting.}  Encoding constructors record the numbers
+		$N_{\mathrm{cell}}$ and $R$ (or directly $R$ in the feasibility backend) and compare them
+		against user-specified caps such as \texttt{max\_regions}.  When a cap is hit, the encoding
+		is intentionally aborted rather than silently producing an incomplete poset.
+	\end{itemize}
+	
+	At the thesis level, the main conclusion is that the encoding step is both the
+	mathematically essential and the algorithmically delicate part of the TAMER-OP pipeline.
+	It is where tameness is converted into finite combinatorics, and it is also where the
+	ambient dimension and the geometry of the birth/death regions determine feasibility.
+	The next sections treat invariants and derived constructions under the assumption that
+	this finite core object $(P,H)$ has been successfully constructed.
+	
 	
 	\section{Invariants}
 	

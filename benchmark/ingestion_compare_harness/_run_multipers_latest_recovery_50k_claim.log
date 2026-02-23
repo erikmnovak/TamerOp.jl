@@ -1,0 +1,5 @@
+[KeOps] Warning : CUDA libraries not found or could not be loaded; Switching to CPU only.
+claim_n50000_d2_s11          regime=claim_matching cold_ms=4699.917 warm_med_ms=4862.347 simplices=440039
+claim_n50000_d2_s17          regime=claim_matching cold_ms=5039.180 warm_med_ms=5351.135 simplices=416491
+claim_n50000_d8_s11          regime=claim_matching cold_ms=11893.731 warm_med_ms=7684.718 simplices=567437
+Wrote multipers results: benchmark/ingestion_compare_harness/results_multipers_latest_recovery_50k_claim.csv

@@ -40,24 +40,11 @@ K = CM.coeff_type(field)
         end
     end
 
-    # Each generator upset U_i and each death downset D_j should be unions of fibers.
-    # Hence preimage(image(U)) = U and preimage(image(D)) = D.
-    for U in M.U
-        Uhat = EN.image_upset(pi, U)
-        Uback = EN.preimage_upset(pi, Uhat)
-        @test Uback.mask == U.mask
-    end
-    for D in M.D
-        Dhat = EN.image_downset(pi, D)
-        Dback = EN.preimage_downset(pi, Dhat)
-        @test Dback.mask == D.mask
-    end
-
     # Build the induced module on the encoded poset by pushing U,D forward.
     Hhat = EN.pushforward_fringe_along_encoding(M, pi)
 
-
-    # Pull back and recover the original U,D exactly.
+    # Pull back and recover the original U,D exactly. This exercises the
+    # internal image/preimage transport helpers through public constructors.
     M2 = EN.pullback_fringe_along_encoding(Hhat, pi)
     @test M2.U[1].mask == M.U[1].mask
     @test M2.D[1].mask == M.D[1].mask
@@ -107,7 +94,7 @@ end
 
     # No deaths: we only need the upsets to form Y for uptight signatures.
     phi0 = spzeros(K, 0, 4)
-    M = FF.FringeModule{K}(Q, [U1, U2, U3, U4], FF.Downset[], phi0)
+    M = FF.FringeModule{K}(Q, [U1, U2, U3, U4], FF.Downset[], phi0; field=field)
 
     enc = EN.build_uptight_encoding_from_fringe(M; poset_kind = :dense)
     pi = enc.pi
@@ -155,7 +142,7 @@ end
     U = FF.principal_upset(P, 2)
     D = FF.principal_downset(P, 3)
     Phi = sparse([1], [1], [c(1)], 1, 1)
-    H = FF.FringeModule{K}(P, [U], [D], Phi)
+    H = FF.FringeModule{K}(P, [U], [D], Phi; field=field)
 
     pi0 = DummyEncodingMap(FF.nvertices(P))
 
@@ -167,6 +154,12 @@ end
     )
 
     enc2 = PM.coarsen(enc)
+    enc_no_h = CM.EncodingResult(P, IR.pmodule_from_fringe(H), pi0;
+        H = nothing,
+        backend = :dummy,
+        meta = Dict{Symbol,Any}(),
+    )
+    enc2_no_h = PM.coarsen(enc_no_h)
 
     upt = EN.build_uptight_encoding_from_fringe(H)
     pi = upt.pi
@@ -191,6 +184,9 @@ end
     @test [u.mask for u in enc2.H.U] == [u.mask for u in H2_expected.U]
     @test [d.mask for d in enc2.H.D] == [d.mask for d in H2_expected.D]
     @test enc2.H.phi == H2_expected.phi
+    @test [u.mask for u in enc2_no_h.H.U] == [u.mask for u in H2_expected.U]
+    @test [d.mask for d in enc2_no_h.H.D] == [d.mask for d in H2_expected.D]
+    @test enc2_no_h.H.phi == H2_expected.phi
 end
 
 
@@ -433,7 +429,7 @@ end
     pi = EN.EncodingMap(Q, P, [1,1])
 
     N = MD.PModule{K}(P, [3], Dict{Tuple{Int,Int},SparseMatrixCSC{K,Int}}())
-    pbN = PM.pullback(pi, N)
+    pbN = PM.restriction(pi, N)
 
     @test pbN.Q.n == 2
     @test pbN.dims == [3,3]
@@ -474,7 +470,7 @@ end
     # Identity encoding map should give identity functors (fast paths guarantee exact equality)
     # -------------------------------------------------------------------------
     pid = EN.EncodingMap(Q, Q, [1,2])
-    pb_id = PM.pullback(pid, M)
+    pb_id = PM.restriction(pid, M)
     Lan_id = PM.pushforward_left(pid, M)
     Ran_id = PM.pushforward_right(pid, M)
 
@@ -524,8 +520,8 @@ end
     # Derived functors vanish for collapse with terminal/initial objects
     # -------------------------------------------------------------------------
     if !(field isa CM.RealField)
-        Lmods = PM.Lpushforward_left(pi, M, CM.DerivedFunctorOptions(maxdeg=2))
-        Rmods = PM.Rpushforward_right(pi, M, CM.DerivedFunctorOptions(maxdeg=2))
+        Lmods = PM.derived_pushforward_left(pi, M, CM.DerivedFunctorOptions(maxdeg=2))
+        Rmods = PM.derived_pushforward_right(pi, M, CM.DerivedFunctorOptions(maxdeg=2))
 
         @test Lmods[1].dims == Lan.dims
         @test Lmods[2].dims == [0]
@@ -586,12 +582,12 @@ end
     # Derived functors parity on collapse (uses resolutions internally).
     if !(field isa CM.RealField)
         df = CM.DerivedFunctorOptions(maxdeg=1)
-        Ls = PM.Lpushforward_left(pi, M, df; threads=false)
-        Lt = PM.Lpushforward_left(pi, M, df; threads=true)
+        Ls = PM.derived_pushforward_left(pi, M, df; threads=false)
+        Lt = PM.derived_pushforward_left(pi, M, df; threads=true)
         @test [L.dims for L in Ls] == [L.dims for L in Lt]
 
-        Rs = PM.Rpushforward_right(pi, M, df; threads=false)
-        Rt = PM.Rpushforward_right(pi, M, df; threads=true)
+        Rs = PM.derived_pushforward_right(pi, M, df; threads=false)
+        Rt = PM.derived_pushforward_right(pi, M, df; threads=true)
         @test [R.dims for R in Rs] == [R.dims for R in Rt]
     end
 end
@@ -632,8 +628,8 @@ if field isa CM.QQField
     f6 = compose_morphism(f3, f2)
 
     # Higher derived functors are nontrivial (S^1):
-    Lmods = PM.Lpushforward_left(pi, M, CM.DerivedFunctorOptions(maxdeg=1))
-    Rmods = PM.Rpushforward_right(pi, M, CM.DerivedFunctorOptions(maxdeg=1))
+    Lmods = PM.derived_pushforward_left(pi, M, CM.DerivedFunctorOptions(maxdeg=1))
+    Rmods = PM.derived_pushforward_right(pi, M, CM.DerivedFunctorOptions(maxdeg=1))
 
     @test FZ.dim_at(Lmods[1], 1) == 1   # L_0
     @test FZ.dim_at(Lmods[2], 1) == 1   # L_1
@@ -641,9 +637,9 @@ if field isa CM.QQField
     @test FZ.dim_at(Rmods[2], 1) == 1   # R^1
 
     # Induced derived maps: should act by scalar multiplication in all degrees.
-    Lf2 = PM.Lpushforward_left(pi, f2, CM.DerivedFunctorOptions(maxdeg=1))
-    Lf3 = PM.Lpushforward_left(pi, f3, CM.DerivedFunctorOptions(maxdeg=1))
-    Lf6 = PM.Lpushforward_left(pi, f6, CM.DerivedFunctorOptions(maxdeg=1))
+    Lf2 = PM.derived_pushforward_left(pi, f2, CM.DerivedFunctorOptions(maxdeg=1))
+    Lf3 = PM.derived_pushforward_left(pi, f3, CM.DerivedFunctorOptions(maxdeg=1))
+    Lf6 = PM.derived_pushforward_left(pi, f6, CM.DerivedFunctorOptions(maxdeg=1))
 
     @test Lf2[1].comps[1] == fill(c(1), 1, 1)
     @test Lf2[2].comps[1] == fill(c(1), 1, 1)
@@ -653,9 +649,9 @@ if field isa CM.QQField
     @test Lf6[2].comps[1] == Lf3[2].comps[1] * Lf2[2].comps[1]
 
     # Right-derived maps.
-    Rf2 = PM.Rpushforward_right(pi, f2, CM.DerivedFunctorOptions(maxdeg=1))
-    Rf3 = PM.Rpushforward_right(pi, f3, CM.DerivedFunctorOptions(maxdeg=1))
-    Rf6 = PM.Rpushforward_right(pi, f6, CM.DerivedFunctorOptions(maxdeg=1))
+    Rf2 = PM.derived_pushforward_right(pi, f2, CM.DerivedFunctorOptions(maxdeg=1))
+    Rf3 = PM.derived_pushforward_right(pi, f3, CM.DerivedFunctorOptions(maxdeg=1))
+    Rf6 = PM.derived_pushforward_right(pi, f6, CM.DerivedFunctorOptions(maxdeg=1))
 
     @test Rf2[1].comps[1] == fill(c(1), 1, 1)
     @test Rf2[2].comps[1] == fill(c(1), 1, 1)

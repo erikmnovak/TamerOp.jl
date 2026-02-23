@@ -16,11 +16,16 @@ K = CM.coeff_type(field)
     D2 = FF.principal_downset(P, 2)    # {1,2}
     @test U2.mask == BitVector([false, true,  true])
     @test D2.mask == BitVector([true,  true,  false])
+    @test_throws ErrorException FF.Upset(P, BitVector([true, false]))
+    @test_throws ErrorException FF.Downset(P, BitVector([true, false]))
 
     # 1x1 interval module supported at {2}
     phi = spzeros(K, 1, 1)
     phi[1,1] = c(1)
     M = FF.FringeModule{K}(P, [U2], [D2], phi; field=field)
+    @test_throws UndefKeywordError FF.FringeModule{K}(P, [U2], [D2], phi)
+    @test_throws MethodError FF.FringeModule(P, [U2], [D2], phi; field=field)
+    @test_throws MethodError FF.FringeModule(P, [U2], [D2], phi; store_sparse=true, field=field)
 
     @test FF.fiber_dimension(M, 1) == 0
     @test FF.fiber_dimension(M, 2) == 1
@@ -138,13 +143,32 @@ K = CM.coeff_type(field)
             @test C1 === C2  # cached
             @test P.cache.cover_edges === C1
 
+            # Cover-cache edge-slot maps should be mutually consistent and O(1)-addressable.
+            FF.build_cache!(P; cover=true, updown=false)
+            cc = P.cache.cover
+            @test cc !== nothing
+            @test length(cc.pred_slot_of_succ) == n
+            @test length(cc.succ_slot_of_pred) == n
+            for u in 1:n
+                su = cc.succs[u]
+                ps = cc.pred_slot_of_succ[u]
+                @test length(ps) == length(su)
+                for j in eachindex(su)
+                    v = su[j]
+                    i = ps[j]
+                    @test 1 <= i <= length(cc.preds[v])
+                    @test cc.preds[v][i] == u
+                    @test cc.succ_slot_of_pred[v][i] == j
+                end
+            end
+
             # cached=false should force recomputation (new object) but same result.
             C3 = FF.cover_edges(P; cached=false)
             @test C3 !== C1
             @test BitMatrix(C3) == BitMatrix(C1)
             @test findall(C3) == findall(C1)
 
-            FF.clear_cover_cache!(P)
+            FF._clear_cover_cache!(P)
             @test P.cache.cover_edges === nothing
             C4 = FF.cover_edges(P)
             @test C4 !== C1
@@ -171,9 +195,17 @@ K = CM.coeff_type(field)
         Pdia = diamond_poset()
         Ugen = FF.upset_from_generators(Pdia, [2, 3])
         Dgen = FF.downset_from_generators(Pdia, [2, 3])
+        Ugen_mask = FF.upset_from_generators(Pdia, BitVector([false, true, true, false]))
+        Dgen_mask = FF.downset_from_generators(Pdia, BitVector([false, true, true, false]))
 
         @test Ugen.mask == BitVector([false, true, true, true])  # {2,3,4}
         @test Dgen.mask == BitVector([true, true, true, false])  # {1,2,3}
+        @test Ugen_mask.mask == Ugen.mask
+        @test Dgen_mask.mask == Dgen.mask
+        @test_throws ErrorException FF.upset_from_generators(Pdia, [0, 2])
+        @test_throws ErrorException FF.downset_from_generators(Pdia, [2, 99])
+        @test_throws ErrorException FF.upset_from_generators(Pdia, BitVector([true, false]))
+        @test_throws ErrorException FF.downset_from_generators(Pdia, BitVector([true, false]))
     end
 
     @testset "cover_edges on a non-chain (diamond) poset" begin
@@ -184,7 +216,7 @@ K = CM.coeff_type(field)
     end
 
 
-    @testset "Dense phi branch and dense_to_sparse_K" begin
+    @testset "Dense phi branch and _dense_to_sparse_K" begin
         P3 = chain_poset(3)
         U2 = FF.principal_upset(P3, 2)
         D2 = FF.principal_downset(P3, 2)
@@ -195,7 +227,7 @@ K = CM.coeff_type(field)
         @test FF.fiber_dimension(Mdense, 2) == 1
 
         # Converting dense -> sparse should preserve values.
-        phi_sparse = FF.dense_to_sparse_K(phi_dense)
+        phi_sparse = FF._dense_to_sparse_K(phi_dense)
         @test phi_sparse isa SparseMatrixCSC{K, Int}
         @test Matrix(phi_sparse) == phi_dense
 
@@ -208,32 +240,331 @@ K = CM.coeff_type(field)
         D1 = FF.principal_downset(P3, 1)
         @test_throws AssertionError FF.FringeModule{K}(P3, [U3], [D1], reshape(K[c(1)], 1, 1); field=field)
     end
+
+    @testset "FiniteFringe exported API direct coverage" begin
+        # FiniteFringeOptions direct constructor/field contract.
+        opts = FF.FiniteFringeOptions()
+        @test opts.check === true
+        @test opts.cached === true
+        @test opts.store_sparse === false
+        @test opts.scalar == 1
+        @test opts.poset_kind == :regions
+        opts2 = FF.FiniteFringeOptions(check=false, cached=false, store_sparse=true, scalar=QQ(3), poset_kind=:dense)
+        @test opts2.check === false
+        @test opts2.cached === false
+        @test opts2.store_sparse === true
+        @test opts2.scalar == QQ(3)
+        @test opts2.poset_kind == :dense
+
+        # leq_row / leq_col direct API (FinitePoset specialization).
+        P = chain_poset(4)
+        L = FF.leq_matrix(P)
+        row2 = FF.leq_row(P, 2)
+        col3 = FF.leq_col(P, 3)
+        @test length(row2) == P.n
+        @test length(col3) == P.n
+        @test all(Bool(row2[j]) == L[2, j] for j in 1:P.n)
+        @test all(Bool(col3[i]) == L[i, 3] for i in 1:P.n)
+
+        # leq_row / leq_col on structured posets go through upset/downset APIs.
+        Ps = FF.ProductOfChainsPoset((3, 2))
+        @test FF.leq_row(Ps, 2) == FF.upset_indices(Ps, 2)
+        @test FF.leq_col(Ps, 2) == FF.downset_indices(Ps, 2)
+
+        # poset_equal_opposite direct contract.
+        Pop = FF.FinitePoset(transpose(FF.leq_matrix(P)); check=false)
+        @test FF.poset_equal_opposite(P, Pop)
+        @test !FF.poset_equal_opposite(P, P)
+        P1 = chain_poset(1)
+        @test FF.poset_equal_opposite(P1, P1)
+
+        # FF-level change_field (direct API), including semantic change mod 2.
+        Pone = chain_poset(1)
+        U = FF.principal_upset(Pone, 1)
+        D = FF.principal_downset(Pone, 1)
+        Hqq = one_by_one_fringe(Pone, U, D, QQ(2); field=CM.QQField())
+        Hf2 = FF.change_field(Hqq, CM.F2())
+        @test Hf2.field isa typeof(CM.F2())
+        @test Hf2.P === Hqq.P
+        @test Hf2.U === Hqq.U
+        @test Hf2.D === Hqq.D
+        @test FF.fiber_dimension(Hqq, 1) == 1
+        @test FF.fiber_dimension(Hf2, 1) == 0
+    end
+
+    @testset "FiniteFringe threaded cache/query parity under contention" begin
+        if !(field isa CM.QQField) || Threads.nthreads() <= 1
+            @test true
+        else
+            rng = MersenneTwister(0xCACE)
+            P = chain_poset(96)
+            FF.build_cache!(P; cover=true, updown=true)
+
+            nu, nd = 24, 23
+            U = [FF.principal_upset(P, rand(rng, 1:P.n)) for _ in 1:nu]
+            D = [FF.principal_downset(P, rand(rng, 1:P.n)) for _ in 1:nd]
+            phi = spzeros(K, nd, nu)
+            @inbounds for j in 1:nd, i in 1:nu
+                FF.intersects(U[i], D[j]) || continue
+                rand(rng) < 0.22 || continue
+                v = rand(rng, -2:2)
+                v == 0 && continue
+                phi[j, i] = c(v)
+            end
+            M = FF.FringeModule{K}(P, U, D, phi; field=field)
+
+            # Two-phase warmup: all caches built sequentially, then read-only threaded queries.
+            for q in 1:P.n
+                FF.upset_indices(P, q)
+                FF.downset_indices(P, q)
+                FF.fiber_dimension(M, q)
+            end
+
+            qcount = 4_000
+            queries = [rand(rng, 1:P.n) for _ in 1:qcount]
+            expected = Vector{Int}(undef, qcount)
+            @inbounds for i in 1:qcount
+                q = queries[i]
+                expected[i] = 10_000 * FF.fiber_dimension(M, q) +
+                              100 * length(FF.upset_indices(P, q)) +
+                              length(FF.downset_indices(P, q))
+            end
+
+            nruns = max(8, 4 * Threads.nthreads())
+            got = Vector{Vector{Int}}(undef, nruns)
+            Threads.@threads :static for r in 1:nruns
+                out = Vector{Int}(undef, qcount)
+                @inbounds for i in 1:qcount
+                    q = queries[i]
+                    out[i] = 10_000 * FF.fiber_dimension(M, q) +
+                             100 * length(FF.upset_indices(P, q)) +
+                             length(FF.downset_indices(P, q))
+                end
+                got[r] = out
+            end
+
+            for r in 1:nruns
+                @test got[r] == expected
+            end
+        end
+    end
 end
 
 @testset "build_cache! two-phase warmup" begin
-    old = FF.updown_cache_policy()
-    try
-        FF.set_updown_cache_policy!(mode=:always, finite_threshold=0, generic_threshold=0)
-        P = chain_poset(6)
-        @test P.cache.cover === nothing
-        @test P.cache.upsets === nothing
-        @test P.cache.downsets === nothing
+    P = chain_poset(6)
+    @test P.cache.cover === nothing
+    @test P.cache.upsets === nothing
+    @test P.cache.downsets === nothing
 
-        FF.build_cache!(P; cover=true, updown=true)
-        @test P.cache.cover !== nothing
-        @test P.cache.upsets !== nothing
-        @test P.cache.downsets !== nothing
+    FF.build_cache!(P; cover=true, updown=true)
+    @test P.cache.cover !== nothing
+    @test P.cache.upsets !== nothing
+    @test P.cache.downsets !== nothing
 
-        cc1 = P.cache.cover
-        FF.build_cache!(P; cover=true, updown=true)
-        @test P.cache.cover === cc1
-    finally
-        FF.set_updown_cache_policy!(;
-            mode=old.mode,
-            finite_threshold=old.finite_threshold,
-            generic_threshold=old.generic_threshold,
-        )
+    cc1 = P.cache.cover
+    FF.build_cache!(P; cover=true, updown=true)
+    @test P.cache.cover === cc1
+end
+
+if field isa CM.QQField
+@testset "FiniteFringe normalized performance envelopes (QQ)" begin
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+    c(x) = CM.coerce(field, x)
+    strict_ci = get(ENV, "TAMER_STRICT_PERF_CI", "1") == "1"
+    reps = strict_ci ? 5 : 3
+
+    @inline function _median_elapsed(f::Function; reps::Int=5)
+        ts = Vector{Float64}(undef, reps)
+        for i in 1:reps
+            ts[i] = @elapsed f()
+        end
+        sort!(ts)
+        return ts[cld(reps, 2)]
     end
+    @inline _ns_per_item(t::Float64, n::Int) = (1.0e9 * t) / max(1, n)
+
+    # 1) fiber_dimension query index path vs old scan baseline.
+    P = chain_poset(72)
+    rng = MersenneTwister(0x51F1E)
+    nu, nd = 26, 25
+    U = [FF.principal_upset(P, rand(rng, 1:P.n)) for _ in 1:nu]
+    D = [FF.principal_downset(P, rand(rng, 1:P.n)) for _ in 1:nd]
+    phi = spzeros(K, nd, nu)
+    @inbounds for j in 1:nd, i in 1:nu
+        FF.intersects(U[i], D[j]) || continue
+        rand(rng) < 0.20 || continue
+        v = rand(rng, -2:2)
+        v == 0 && continue
+        phi[j, i] = c(v)
+    end
+    M = FF.FringeModule{K}(P, U, D, phi; field=field)
+    queries = [rand(rng, 1:P.n) for _ in 1:6_000]
+
+    fiber_scan_ref(M::FF.FringeModule{K}, q::Int) where {K} = begin
+        cols = findall(U0 -> U0.mask[q], M.U)
+        rows = findall(D0 -> D0.mask[q], M.D)
+        (isempty(cols) || isempty(rows)) && return 0
+        FF.FieldLinAlg.rank_restricted(M.field, M.phi, rows, cols)
+    end
+    old_vals = Vector{Int}(undef, length(queries))
+    @inbounds for i in eachindex(queries)
+        old_vals[i] = fiber_scan_ref(M, queries[i])
+    end
+    new_vals = [FF.fiber_dimension(M, q) for q in queries]
+    @test new_vals == old_vals
+
+    t_old = _median_elapsed(reps=reps) do
+        s = 0
+        @inbounds for q in queries
+            s += fiber_scan_ref(M, q)
+        end
+        @test s >= 0
+    end
+    t_new = _median_elapsed(reps=reps) do
+        s = 0
+        @inbounds for q in queries
+            s += FF.fiber_dimension(M, q)
+        end
+        @test s >= 0
+    end
+    old_ns = _ns_per_item(t_old, length(queries))
+    new_ns = _ns_per_item(t_new, length(queries))
+    if strict_ci
+        @test new_ns <= 0.95 * old_ns + 120.0
+    else
+        @test new_ns <= 1.15 * old_ns + 250.0
+    end
+
+    # 2) _uptight_regions fast grouping vs tuple-dict baseline.
+    Q = chain_poset(120)
+    Y = Vector{FF.Upset}(undef, 160)
+    @inbounds for i in eachindex(Y)
+        Y[i] = FF.principal_upset(Q, rand(rng, 1:Q.n))
+    end
+    naive_uptight_regions(Q, Y) = begin
+        sigs = Dict{Tuple{Vararg{Bool}}, Vector{Int}}()
+        @inbounds for q in 1:FF.nvertices(Q)
+            key = ntuple(i -> Y[i].mask[q], length(Y))
+            vec = get!(sigs, key) do
+                Int[]
+            end
+            push!(vec, q)
+        end
+        collect(values(sigs))
+    end
+    canon(regs) = sort([sort(copy(r)) for r in regs], by = v -> (length(v), first(v)))
+    regs_old = naive_uptight_regions(Q, Y)
+    regs_new = EN._uptight_regions(Q, Y)
+    @test canon(regs_new) == canon(regs_old)
+
+    t_uptight_old = _median_elapsed(reps=reps) do
+        r = naive_uptight_regions(Q, Y)
+        @test !isempty(r)
+    end
+    t_uptight_new = _median_elapsed(reps=reps) do
+        r = EN._uptight_regions(Q, Y)
+        @test !isempty(r)
+    end
+    old_cell_ns = _ns_per_item(t_uptight_old, Q.n)
+    new_cell_ns = _ns_per_item(t_uptight_new, Q.n)
+    if strict_ci
+        @test new_cell_ns <= 0.95 * old_cell_ns + 150.0
+    else
+        @test new_cell_ns <= 1.2 * old_cell_ns + 300.0
+    end
+
+    # 3) hom_dimension auto route should match best internal mode on sparse fixtures.
+    P_h = chain_poset(36)
+    rng_h = MersenneTwister(0x7A11A)
+    nu_h, nd_h = 20, 19
+    U_h = [FF.principal_upset(P_h, rand(rng_h, 1:P_h.n)) for _ in 1:nu_h]
+    D_h = [FF.principal_downset(P_h, rand(rng_h, 1:P_h.n)) for _ in 1:nd_h]
+
+    phi_hM = spzeros(K, nd_h, nu_h)
+    phi_hN = spzeros(K, nd_h, nu_h)
+    @inbounds for j in 1:nd_h, i in 1:nu_h
+        FF.intersects(U_h[i], D_h[j]) || continue
+        rand(rng_h) < 0.12 || continue
+        v = rand(rng_h, -2:2)
+        v == 0 && continue
+        phi_hM[j, i] = c(v)
+        rand(rng_h) < 0.7 && (phi_hN[j, i] = c(v == 0 ? 1 : v))
+    end
+    M_h = FF.FringeModule{K}(P_h, U_h, D_h, phi_hM; field=field)
+    N_h = FF.FringeModule{K}(P_h, U_h, D_h, phi_hN; field=field)
+
+    h_legacy = FF._hom_dimension_with_path(M_h, N_h, :sparse_path)
+    h_denseidx = FF._hom_dimension_with_path(M_h, N_h, :dense_idx_internal)
+    h_auto = FF.hom_dimension(M_h, N_h)
+    @test h_auto == h_legacy == h_denseidx
+    chosen_h = FF._select_hom_internal_path!(M_h, N_h)
+    @test chosen_h == :sparse_path
+
+    t_h_legacy = _median_elapsed(reps=reps) do
+        FF._hom_dimension_with_path(M_h, N_h, :sparse_path)
+    end
+    t_h_dense = _median_elapsed(reps=reps) do
+        FF._hom_dimension_with_path(M_h, N_h, :dense_idx_internal)
+    end
+    t_h_auto = _median_elapsed(reps=reps) do
+        FF.hom_dimension(M_h, N_h)
+    end
+
+    best_ns = min(_ns_per_item(t_h_legacy, 1), _ns_per_item(t_h_dense, 1))
+    auto_ns = _ns_per_item(t_h_auto, 1)
+    if strict_ci
+        @test auto_ns <= 2.15 * best_ns + 320_000.0
+    else
+        @test auto_ns <= 1.85 * best_ns + 320_000.0
+    end
+
+    # 4) strict dense-path guard: auto should stay close to best internal dense path.
+    P_d = chain_poset(32)
+    rng_d = MersenneTwister(0xD3E511)
+    nu_d, nd_d = 18, 18
+    U_d = [FF.principal_upset(P_d, rand(rng_d, 1:P_d.n)) for _ in 1:nu_d]
+    D_d = [FF.principal_downset(P_d, rand(rng_d, 1:P_d.n)) for _ in 1:nd_d]
+    phi_dM = Matrix{K}(undef, nd_d, nu_d)
+    phi_dN = Matrix{K}(undef, nd_d, nu_d)
+    @inbounds for j in 1:nd_d, i in 1:nu_d
+        if FF.intersects(U_d[i], D_d[j]) && rand(rng_d) < 0.20
+            v = rand(rng_d, -2:2)
+            phi_dM[j, i] = c(v)
+            phi_dN[j, i] = c(v == 0 ? 1 : v)
+        else
+            phi_dM[j, i] = zero(K)
+            phi_dN[j, i] = zero(K)
+        end
+    end
+    M_d = FF.FringeModule{K}(P_d, U_d, D_d, phi_dM; field=field)
+    N_d = FF.FringeModule{K}(P_d, U_d, D_d, phi_dN; field=field)
+
+    h_dense_path = FF._hom_dimension_with_path(M_d, N_d, :dense_path)
+    h_dense_idx = FF._hom_dimension_with_path(M_d, N_d, :dense_idx_internal)
+    h_dense_auto = FF.hom_dimension(M_d, N_d)
+    @test h_dense_auto == h_dense_path == h_dense_idx
+
+    # Warm one-shot selector before timing (we budget steady-state runtime).
+    _ = FF.hom_dimension(M_d, N_d)
+    t_dense_path = _median_elapsed(reps=reps) do
+        FF._hom_dimension_with_path(M_d, N_d, :dense_path)
+    end
+    t_dense_idx = _median_elapsed(reps=reps) do
+        FF._hom_dimension_with_path(M_d, N_d, :dense_idx_internal)
+    end
+    t_dense_auto = _median_elapsed(reps=reps) do
+        FF.hom_dimension(M_d, N_d)
+    end
+
+    best_dense_ns = min(_ns_per_item(t_dense_path, 1), _ns_per_item(t_dense_idx, 1))
+    auto_dense_ns = _ns_per_item(t_dense_auto, 1)
+    if strict_ci
+        @test auto_dense_ns <= 1.25 * best_dense_ns + 120_000.0
+    else
+        @test auto_dense_ns <= 1.40 * best_dense_ns + 200_000.0
+    end
+end
 end
 
 @testset "HomExt pi0_count (Prop 3.10 sanity)" begin
@@ -250,6 +581,41 @@ end
     U2 = FF.principal_upset(Q, 2)
     D2 = FF.principal_downset(Q, 2)
     @test HE.pi0_count(Q, U2, D2) == 1
+end
+
+if field isa CM.QQField
+@testset "Encoding._uptight_regions signature grouping oracle" begin
+    P = chain_poset(48)
+    rng = MersenneTwister(0xC0FFEE)
+
+    normalize_partition(regs) = sort([sort(copy(r)) for r in regs], by = v -> (length(v), first(v)))
+
+    function naive_uptight_regions(Q, Y)
+        m = length(Y)
+        sigs = Dict{Tuple{Vararg{Bool}}, Vector{Int}}()
+        for q in 1:FF.nvertices(Q)
+            key = ntuple(i -> Y[i].mask[q], m)
+            vec = get!(sigs, key) do
+                Int[]
+            end
+            push!(vec, q)
+        end
+        return collect(values(sigs))
+    end
+
+    # Hit all three implementation branches: m<=64, m<=128, and m>128.
+    for m in (32, 96, 160)
+        Y = Vector{FF.Upset}(undef, m)
+        for i in 1:m
+            g = rand(rng, 1:FF.nvertices(P))
+            Y[i] = FF.principal_upset(P, g)
+        end
+
+        fast_regs = EN._uptight_regions(P, Y)
+        ref_regs = naive_uptight_regions(P, Y)
+        @test normalize_partition(fast_regs) == normalize_partition(ref_regs)
+    end
+end
 end
 
 
@@ -392,6 +758,417 @@ end
     end
 end
 
+@testset "hom_dimension sparse-vs-dense assembly oracle parity" begin
+    P = chain_poset(18)
+    rng = MersenneTwister(0x5EED123 + Int(mod(hash(string(K)), 10_000)))
+
+    function random_upset()
+        g = rand(rng, 1:P.n)
+        return FF.principal_upset(P, g)
+    end
+    function random_downset()
+        g = rand(rng, 1:P.n)
+        return FF.principal_downset(P, g)
+    end
+
+    function random_module(nu::Int, nd::Int; density::Float64=0.18)
+        U = [random_upset() for _ in 1:nu]
+        D = [random_downset() for _ in 1:nd]
+        phi = spzeros(K, nd, nu)
+        @inbounds for j in 1:nd, i in 1:nu
+            FF.intersects(U[i], D[j]) || continue
+            rand(rng) < density || continue
+            v = rand(rng, -2:2)
+            v == 0 && continue
+            phi[j, i] = c(v)
+        end
+        return FF.FringeModule{K}(P, U, D, phi; field=field)
+    end
+
+    function hom_dimension_reference_old(M::FF.FringeModule{K}, N::FF.FringeModule{K}) where {K}
+        M.P === N.P || error("Posets must match")
+        P = M.P
+        adj = FF._cover_undirected_adjacency(P)
+
+        nUM = length(M.U); nDM = length(M.D)
+        nUN = length(N.U); nDN = length(N.D)
+
+        Ucomp_id_M    = Vector{Vector{Int}}(undef, nUM)
+        Ucomp_masks_M = Vector{Vector{BitVector}}(undef, nUM)
+        Ucomp_n_M     = Vector{Int}(undef, nUM)
+        for i in 1:nUM
+            comp_id, ncomp, comp_masks, _ = FF._component_data(adj, M.U[i].mask)
+            Ucomp_id_M[i] = comp_id
+            Ucomp_masks_M[i] = comp_masks
+            Ucomp_n_M[i] = ncomp
+        end
+
+        Dcomp_id_N    = Vector{Vector{Int}}(undef, nDN)
+        Dcomp_masks_N = Vector{Vector{BitVector}}(undef, nDN)
+        Dcomp_n_N     = Vector{Int}(undef, nDN)
+        for t in 1:nDN
+            comp_id, ncomp, comp_masks, _ = FF._component_data(adj, N.D[t].mask)
+            Dcomp_id_N[t] = comp_id
+            Dcomp_masks_N[t] = comp_masks
+            Dcomp_n_N[t] = ncomp
+        end
+
+        w_index = Dict{Tuple{Int,Int},Int}()
+        w_rows_u = Vector{Vector{Vector{Int}}}()
+        w_rows_d = Vector{Vector{Vector{Int}}}()
+        W_dim = 0
+
+        for iM in 1:nUM
+            for tN in 1:nDN
+                mask_int = M.U[iM].mask .& N.D[tN].mask
+                if any(mask_int)
+                    _, ncomp_int, _, reps_int = FF._component_data(adj, mask_int)
+                    base = W_dim
+                    W_dim += ncomp_int
+
+                    rows_by_u = [Int[] for _ in 1:Ucomp_n_M[iM]]
+                    rows_by_d = [Int[] for _ in 1:Dcomp_n_N[tN]]
+                    for c in 1:ncomp_int
+                        row = base + c
+                        v = reps_int[c]
+                        cu = Ucomp_id_M[iM][v]
+                        cd = Dcomp_id_N[tN][v]
+                        push!(rows_by_u[cu], row)
+                        push!(rows_by_d[cd], row)
+                    end
+
+                    push!(w_rows_u, rows_by_u)
+                    push!(w_rows_d, rows_by_d)
+                    w_index[(iM, tN)] = length(w_rows_u)
+                end
+            end
+        end
+
+        V1 = Tuple{Int,Int,Int}[]
+        for iM in 1:nUM
+            for jN in 1:nUN
+                for cU in 1:Ucomp_n_M[iM]
+                    if FF.is_subset(Ucomp_masks_M[iM][cU], N.U[jN].mask)
+                        push!(V1, (iM, jN, cU))
+                    end
+                end
+            end
+        end
+        V1_dim = length(V1)
+
+        V2 = Tuple{Int,Int,Int}[]
+        for sM in 1:nDM
+            for tN in 1:nDN
+                for cD in 1:Dcomp_n_N[tN]
+                    if FF.is_subset(Dcomp_masks_N[tN][cD], M.D[sM].mask)
+                        push!(V2, (sM, tN, cD))
+                    end
+                end
+            end
+        end
+        V2_dim = length(V2)
+
+        T = zeros(K, W_dim, V1_dim)
+        for (col, (iM, jN, cU)) in enumerate(V1)
+            for tN in 1:nDN
+                val = N.phi[tN, jN]
+                if val != zero(K)
+                    pid = get(w_index, (iM, tN), 0)
+                    if pid != 0
+                        rows = w_rows_u[pid][cU]
+                        for r in rows
+                            T[r, col] += val
+                        end
+                    end
+                end
+            end
+        end
+
+        S = zeros(K, W_dim, V2_dim)
+        for (col, (sM, tN, cD)) in enumerate(V2)
+            for iM in 1:nUM
+                val = M.phi[sM, iM]
+                if val != zero(K)
+                    pid = get(w_index, (iM, tN), 0)
+                    if pid != 0
+                        rows = w_rows_d[pid][cD]
+                        for r in rows
+                            S[r, col] += val
+                        end
+                    end
+                end
+            end
+        end
+
+        rT = FF.FieldLinAlg.rank(field, T)
+        rS = FF.FieldLinAlg.rank(field, S)
+        rBig = FF.FieldLinAlg.rank(field, hcat(T, -S))
+        dimKer_big = (V1_dim + V2_dim) - rBig
+        dimKer_T = V1_dim - rT
+        dimKer_S = V2_dim - rS
+        return dimKer_big - (dimKer_T + dimKer_S)
+    end
+
+    M = random_module(14, 13; density=0.22)
+    N = random_module(13, 14; density=0.20)
+    M_dense = FF.FringeModule{K}(P, M.U, M.D, Matrix(M.phi); field=field)
+    N_dense = FF.FringeModule{K}(P, N.U, N.D, Matrix(N.phi); field=field)
+
+    @test M.hom_cache[].upset === nothing
+    @test N.hom_cache[].downset === nothing
+
+    ref_sparse = hom_dimension_reference_old(M, N)
+    ref_dense = hom_dimension_reference_old(M_dense, N_dense)
+    @test FF._resolve_hom_dimension_path(M, N) == :sparse_path
+    @test FF._resolve_hom_dimension_path(M_dense, N_dense) == :sparse_path
+    @test ref_sparse == ref_dense
+    @test FF.hom_dimension(M, N) == ref_sparse
+    @test FF._hom_dimension_with_path(M, N, :sparse_path) == ref_sparse
+    @test FF._hom_dimension_with_path(M, N, :dense_path) == ref_sparse
+    @test FF._hom_dimension_with_path(M, N, :dense_idx_internal) == ref_sparse
+    @test FF.hom_dimension(M_dense, N_dense) == ref_dense
+    @test FF._hom_dimension_with_path(M_dense, N_dense, :sparse_path) == ref_dense
+    @test FF._hom_dimension_with_path(M_dense, N_dense, :dense_path) == ref_dense
+    @test FF._hom_dimension_with_path(M_dense, N_dense, :dense_idx_internal) == ref_dense
+    @test FF.hom_dimension(M, N) == FF.hom_dimension(M_dense, N_dense)
+    @test_throws MethodError FF.hom_dimension(M, N; mode=:unsupported)
+    @test_throws MethodError FF.hom_dimension(M, N; mode=:sparse_path)
+    @test_throws MethodError FF.hom_dimension(M, N; mode=:dense_path)
+    @test_throws MethodError FF.hom_dimension(M, N; mode=:dense_idx_internal)
+
+    @test M.hom_cache[].adj !== nothing
+    @test M.hom_cache[].upset !== nothing
+    @test N.hom_cache[].downset !== nothing
+    cache_u = M.hom_cache[].upset
+    cache_d = N.hom_cache[].downset
+    _ = FF.hom_dimension(M, N)
+    @test M.hom_cache[].upset === cache_u
+    @test N.hom_cache[].downset === cache_d
+    key_sparse = FF._hom_pair_key(N, :internal_choice)
+    @test haskey(M.hom_cache[].dense_path_choice, key_sparse)
+    chosen_sparse = M.hom_cache[].dense_path_choice[key_sparse]
+    @test chosen_sparse in (:sparse_path, :dense_idx_internal, :dense_path)
+    fp_sparse = FF._hom_route_fingerprint(M, N, :internal_choice)
+    @test haskey(M.hom_cache[].route_fingerprint_choice, fp_sparse)
+    @test M.hom_cache[].route_fingerprint_choice[fp_sparse] == chosen_sparse
+    @test haskey(M.P.cache.hom_route_choice, fp_sparse)
+    @test M.P.cache.hom_route_choice[fp_sparse] == chosen_sparse
+    _ = FF.hom_dimension(M, N)
+    @test M.hom_cache[].dense_path_choice[key_sparse] == chosen_sparse
+
+    # Dense-storage sparse-effective fixtures should route through the sparse path.
+    FF._clear_hom_route_choice!(M_dense)
+    _ = FF.hom_dimension(M_dense, N_dense)
+    @test M_dense.hom_cache[].route_timing_fallbacks == 0
+    @test FF._resolve_hom_dimension_path(M_dense, N_dense) == :sparse_path
+
+    key_dense = FF._hom_pair_key(N_dense, :internal_choice)
+    @test haskey(M_dense.hom_cache[].dense_path_choice, key_dense)
+    chosen = M_dense.hom_cache[].dense_path_choice[key_dense]
+    @test chosen == :sparse_path
+    fp_dense = FF._hom_route_fingerprint(M_dense, N_dense, :internal_choice)
+    @test haskey(M_dense.hom_cache[].route_fingerprint_choice, fp_dense)
+    @test M_dense.hom_cache[].route_fingerprint_choice[fp_dense] == chosen
+    @test haskey(M_dense.P.cache.hom_route_choice, fp_dense)
+    @test M_dense.P.cache.hom_route_choice[fp_dense] == chosen
+    _ = FF.hom_dimension(M_dense, N_dense)
+    @test M_dense.hom_cache[].dense_path_choice[key_dense] == chosen
+
+    # Shape/density route memo should be reusable across new modules on the same poset.
+    M2 = random_module(14, 13; density=0.22)
+    N2 = random_module(13, 14; density=0.20)
+    h2 = FF.hom_dimension(M2, N2)
+    @test h2 == hom_dimension_reference_old(M2, N2)
+    fp_sparse2 = FF._hom_route_fingerprint(M2, N2, :internal_choice)
+    @test haskey(M2.P.cache.hom_route_choice, fp_sparse2)
+    @test haskey(M2.hom_cache[].route_fingerprint_choice, fp_sparse2)
+
+    M2_dense = FF.FringeModule{K}(P, M2.U, M2.D, Matrix(M2.phi); field=field)
+    N2_dense = FF.FringeModule{K}(P, N2.U, N2.D, Matrix(N2.phi); field=field)
+    h2d = FF.hom_dimension(M2_dense, N2_dense)
+    @test h2d == hom_dimension_reference_old(M2_dense, N2_dense)
+    fp_dense2 = FF._hom_route_fingerprint(M2_dense, N2_dense, :internal_choice)
+    @test haskey(M2_dense.P.cache.hom_route_choice, fp_dense2)
+    @test haskey(M2_dense.hom_cache[].route_fingerprint_choice, fp_dense2)
+
+    # Sparse moderate-work fixtures should prefer sparse path directly.
+    M_mid = random_module(20, 19; density=0.14)
+    N_mid = random_module(20, 19; density=0.13)
+    @test FF._resolve_hom_dimension_path(M_mid, N_mid) == :sparse_path
+
+    # Sparse low-work fixtures should also route without timing fallback.
+    M_small = random_module(8, 8; density=0.18)
+    N_small = random_module(8, 8; density=0.16)
+    @test FF._resolve_hom_dimension_path(M_small, N_small) == :dense_idx_internal
+    @test FF._heuristic_hom_internal_choice(M_small, N_small) == :dense_idx_internal
+    FF._clear_hom_route_choice!(M_small)
+    ref_small = hom_dimension_reference_old(M_small, N_small)
+    @test FF.hom_dimension(M_small, N_small) == ref_small
+    @test M_small.hom_cache[].route_timing_fallbacks == 0
+    key_small = FF._hom_pair_key(N_small, :internal_choice)
+    @test haskey(M_small.hom_cache[].dense_path_choice, key_small)
+    @test M_small.hom_cache[].dense_path_choice[key_small] == :dense_idx_internal
+
+    # Force one-shot timed fallback directly and verify parity.
+    FF._clear_hom_route_choice!(M_small)
+    hc_small = FF._ensure_hom_cache!(M_small)
+    pair_small = FF._hom_pair_key(N_small, :internal_choice)
+    fkey_small = FF._hom_route_fingerprint(M_small, N_small, :internal_choice)
+    path_small = FF._select_hom_internal_path_timed!(M_small, N_small, hc_small, pair_small, fkey_small)
+    @test path_small in (:sparse_path, :dense_path, :dense_idx_internal)
+    @test FF._hom_dimension_with_path(M_small, N_small, path_small) == ref_small
+    @test hc_small.route_timing_fallbacks >= 1
+end
+
+@testset "FringeModule typed-poset and sparse-path contracts" begin
+    P = chain_poset(16)
+    rng = MersenneTwister(0x7A11 + Int(mod(hash(string(K)), 10_000)))
+
+    function random_module(nu::Int, nd::Int; density::Float64=0.16)
+        U = [FF.principal_upset(P, rand(rng, 1:P.n)) for _ in 1:nu]
+        D = [FF.principal_downset(P, rand(rng, 1:P.n)) for _ in 1:nd]
+        phi = spzeros(K, nd, nu)
+        @inbounds for j in 1:nd, i in 1:nu
+            FF.intersects(U[i], D[j]) || continue
+            rand(rng) < density || continue
+            v = rand(rng, -2:2)
+            v == 0 && continue
+            phi[j, i] = c(v)
+        end
+        return FF.FringeModule{K}(P, U, D, phi; field=field)
+    end
+
+    U2 = FF.principal_upset(P, 2)
+    D2 = FF.principal_downset(P, 2)
+    @test U2 isa FF.Upset{typeof(P)}
+    @test D2 isa FF.Downset{typeof(P)}
+
+    M = random_module(12, 11; density=0.14)
+    N = random_module(11, 12; density=0.13)
+    @test M isa FF.FringeModule{K,typeof(P)}
+    @test eltype(M.U) == FF.Upset{typeof(P)}
+    @test eltype(M.D) == FF.Downset{typeof(P)}
+
+    P2 = chain_poset(16)
+    @test_throws ErrorException FF.FringeModule{K}(P2, M.U, M.D, M.phi; field=field)
+
+    FF._clear_hom_route_choice!(M)
+    h_sparse = FF._hom_dimension_with_path(M, N, :sparse_path)
+    sparse_key = FF._hom_pair_key(N, :sparse_plan)
+    @test haskey(M.hom_cache[].sparse_plans, sparse_key)
+    sparse_plan = M.hom_cache[].sparse_plans[sparse_key]
+    @test sparse_plan.W_dim == size(sparse_plan.T, 1)
+    @test sparse_plan.W_dim == size(sparse_plan.S, 1)
+    @test length(sparse_plan.t_tN) == nnz(sparse_plan.T)
+    @test length(sparse_plan.s_sM) == nnz(sparse_plan.S)
+    @test sparse_plan.t_nzptr !== nothing
+    @test sparse_plan.s_nzptr !== nothing
+    @test sparse_plan.t_nzptr_max >= 0
+    @test sparse_plan.s_nzptr_max >= 0
+    @test size(sparse_plan.hcat_buf, 2) == size(sparse_plan.T, 2) + size(sparse_plan.S, 2)
+    @test size(sparse_plan.hcat_buf_rev, 2) == size(sparse_plan.T, 2) + size(sparse_plan.S, 2)
+    if sparse_plan.t_nzptr !== nothing
+        for i in 1:min(8, length(sparse_plan.t_nzptr))
+            p = sparse_plan.t_nzptr[i]
+            @test p >= 1
+            @test p <= length(N.phi.nzval)
+            @test N.phi.nzval[p] == N.phi[sparse_plan.t_tN[i], sparse_plan.t_jN[i]]
+        end
+    end
+    if sparse_plan.s_nzptr !== nothing
+        for i in 1:min(8, length(sparse_plan.s_nzptr))
+            p = sparse_plan.s_nzptr[i]
+            @test p >= 1
+            @test p <= length(M.phi.nzval)
+            @test M.phi.nzval[p] == M.phi[sparse_plan.s_sM[i], sparse_plan.s_iM[i]]
+        end
+    end
+    r_union_ws = FF._rank_hcat_signed_sparse_workspace!(field, sparse_plan.hcat_buf,
+                                                         sparse_plan.T, sparse_plan.S,
+                                                         sparse_plan.nnzT)
+    r_union_ref = FF.FieldLinAlg.rank(field, hcat(sparse_plan.T, sparse_plan.S))
+    @test r_union_ws == r_union_ref
+    r_union_pref, rT_pref = FF._rank_hcat_signed_sparse_workspace_with_prefix_rank!(
+        field, sparse_plan.hcat_buf, sparse_plan.T, sparse_plan.S, sparse_plan.nnzT, size(sparse_plan.T, 2)
+    )
+    @test r_union_pref == r_union_ref
+    if rT_pref >= 0
+        @test rT_pref == FF.FieldLinAlg.rank(field, sparse_plan.T)
+    end
+    r_union_ws_rev = FF._rank_hcat_signed_sparse_workspace!(field, sparse_plan.hcat_buf_rev,
+                                                             sparse_plan.S, sparse_plan.T,
+                                                             sparse_plan.nnzS)
+    @test r_union_ws_rev == r_union_ref
+    r_union_pref_rev, rS_pref = FF._rank_hcat_signed_sparse_workspace_with_prefix_rank!(
+        field, sparse_plan.hcat_buf_rev, sparse_plan.S, sparse_plan.T, sparse_plan.nnzS, size(sparse_plan.S, 2)
+    )
+    @test r_union_pref_rev == r_union_ref
+    if rS_pref >= 0
+        @test rS_pref == FF.FieldLinAlg.rank(field, sparse_plan.S)
+    end
+    if !isempty(sparse_plan.w_data)
+        w0 = sparse_plan.w_data[1]
+        @test length(w0.u_ptr) >= 2
+        @test length(w0.d_ptr) >= 2
+    end
+    h_sparse2 = FF._hom_dimension_with_path(M, N, :sparse_path)
+    @test h_sparse2 == h_sparse
+    @test M.hom_cache[].sparse_plans[sparse_key] === sparse_plan
+    @test isempty(M.hom_cache[].hcat_workspaces)
+
+    h_dense_idx = FF._hom_dimension_with_path(M, N, :dense_idx_internal)
+    @test h_sparse == h_dense_idx
+
+    M2 = random_module(12, 11; density=0.15)
+    N2 = random_module(11, 12; density=0.14)
+    alloc_first = @allocated FF._hom_dimension_with_path(M2, N2, :sparse_path)
+    alloc_second = @allocated FF._hom_dimension_with_path(M2, N2, :sparse_path)
+    @test alloc_second < alloc_first
+end
+
+@testset "fiber_dimension cached query index parity" begin
+    P = chain_poset(24)
+    rng = MersenneTwister(0xA11CE + Int(mod(hash(string(K)), 10_000)))
+
+    function random_module(nu::Int, nd::Int; density::Float64=0.2)
+        U = [FF.principal_upset(P, rand(rng, 1:P.n)) for _ in 1:nu]
+        D = [FF.principal_downset(P, rand(rng, 1:P.n)) for _ in 1:nd]
+        phi = spzeros(K, nd, nu)
+        @inbounds for j in 1:nd, i in 1:nu
+            FF.intersects(U[i], D[j]) || continue
+            rand(rng) < density || continue
+            v = rand(rng, -3:3)
+            v == 0 && continue
+            phi[j, i] = c(v)
+        end
+        return FF.FringeModule{K}(P, U, D, phi; field=field)
+    end
+
+    function fiber_dimension_scan_reference(M::FF.FringeModule{K}, q::Int) where {K}
+        cols = findall(U -> U.mask[q], M.U)
+        rows = findall(D -> D.mask[q], M.D)
+        isempty(cols) || isempty(rows) && return 0
+        return FF.FieldLinAlg.rank_restricted(M.field, M.phi, rows, cols)
+    end
+
+    M = random_module(16, 15; density=0.24)
+    expected = [fiber_dimension_scan_reference(M, q) for q in 1:P.n]
+
+    got = Int[]
+    for q in 1:P.n
+        push!(got, FF.fiber_dimension(M, q))
+    end
+    @test got == expected
+    @test M.fiber_index[] !== nothing
+    @test M.fiber_dims[] !== nothing
+    @test all(v != typemin(Int) for v in M.fiber_dims[])
+
+    for _ in 1:50
+        q = rand(rng, 1:P.n)
+        @test FF.fiber_dimension(M, q) == expected[q]
+    end
+end
+
 @testset "one_by_one_fringe accepts Bool masks" begin
     P = chain_poset(5)
 
@@ -411,35 +1188,28 @@ end
     for q in 1:P.n
         @test FF.fiber_dimension(H_vec, q) == FF.fiber_dimension(H_typed, q)
     end
+
+    # Strict contract: scalar argument is required (typed upset/downset and mask forms).
+    @test_throws MethodError PM.one_by_one_fringe(P, FF.Upset(P, U_mask), FF.Downset(P, D_mask))
+    @test_throws MethodError PM.one_by_one_fringe(P, FF.Upset(P, U_mask), FF.Downset(P, D_mask); scalar=c(1), field=field)
+    @test_throws MethodError PM.one_by_one_fringe(P, U_mask, D_mask)
+    @test_throws MethodError PM.one_by_one_fringe(P, U_mask, D_mask; scalar=c(1), field=field)
 end
 
 end # with_fields
 
-@testset "Up/down cache policy tuning" begin
-    old = FF.updown_cache_policy()
-    try
-        P = chain_poset(5)
-        FF.set_updown_cache_policy!(mode=:always, finite_threshold=0, generic_threshold=0)
-        _ = FF.upset_indices(P, 1)
-        @test P.cache.upsets !== nothing
-        @test P.cache.downsets !== nothing
+@testset "Up/down cache default behavior" begin
+    P = chain_poset(5)
+    _ = FF.upset_indices(P, 1)
+    @test P.cache.upsets !== nothing
+    @test P.cache.downsets !== nothing
 
-        FF.clear_cover_cache!(P)
-        FF.set_updown_cache_policy!(mode=:never, finite_threshold=10_000, generic_threshold=10_000)
-        _ = FF.upset_indices(P, 1)
-        @test P.cache.upsets === nothing
-        @test P.cache.downsets === nothing
+    FF._clear_cover_cache!(P)
+    @test P.cache.upsets === nothing
+    @test P.cache.downsets === nothing
 
-        Pc = FF.ProductOfChainsPoset((4, 4))
-        FF.set_updown_cache_policy!(mode=:auto, finite_threshold=10_000, generic_threshold=10_000)
-        _ = FF.upset_indices(Pc, 1)
-        @test Pc.cache.upsets === nothing
-        @test Pc.cache.downsets === nothing
-    finally
-        FF.set_updown_cache_policy!(;
-            mode=old.mode,
-            finite_threshold=old.finite_threshold,
-            generic_threshold=old.generic_threshold,
-        )
-    end
+    Pc = FF.ProductOfChainsPoset((4, 4))
+    _ = FF.upset_indices(Pc, 1)
+    @test Pc.cache.upsets === nothing
+    @test Pc.cache.downsets === nothing
 end

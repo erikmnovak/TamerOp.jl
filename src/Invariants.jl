@@ -8,7 +8,17 @@ using Statistics: mean
 using ..Stats: _wilson_interval
 using ..Encoding: EncodingMap
 using ..PLPolyhedra
-using ..RegionGeometry
+using ..RegionGeometry: region_weights, region_volume, region_bbox, region_widths,
+                        region_centroid, region_aspect_ratio, region_diameter,
+                        region_adjacency, region_facet_count, region_vertex_count,
+                        region_boundary_measure, region_boundary_measure_breakdown,
+                        region_perimeter, region_surface_area,
+                        region_principal_directions,
+                        region_chebyshev_ball, region_chebyshev_center, region_inradius,
+                        region_circumradius,
+                        region_boundary_to_volume_ratio, region_isoperimetric_ratio,
+                        region_mean_width, region_minkowski_functionals,
+                        region_covariance_anisotropy, region_covariance_eccentricity, region_anisotropy_scores
 
 using ..FieldLinAlg
 import ..FiniteFringe: AbstractPoset, FinitePoset, FringeModule, Upset, Downset, fiber_dimension,
@@ -23,7 +33,7 @@ import ..Serialization: save_mpp_decomposition_json, load_mpp_decomposition_json
                         save_mpp_image_json, load_mpp_image_json
 
 # Invariants are field-generic; some workflows are only exact over QQ.
-import ..Modules: PModule, map_leq, CoverCache, get_cover_cache, _chosen_predecessor
+import ..Modules: PModule, map_leq, CoverCache, _get_cover_cache, _chosen_predecessor
 import ..IndicatorResolutions: pmodule_from_fringe
 
 import ..ZnEncoding: ZnEncodingMap
@@ -59,70 +69,6 @@ end
 @inline _unwrap_compiled(pi) = (pi isa CompiledEncoding ? pi.pi : pi)
 
 
-export rank_map, rank_invariant, rank_invariant_tame,
-       restricted_hilbert, hilbert_distance,
-       slice_chain, restrict_to_chain, slice_barcode,
-       bottleneck_distance, matching_distance_approx,
-       matching_distance_exact_2d, matching_distance_exact_slices_2d,
-       slice_chain_exact_2d,
-       sample_directions_2d, default_directions, default_offsets, 
-       encoding_box, 
-       PersistenceLandscape1D, persistence_landscape, landscape_value,
-       MPLandscape, mp_landscape, mp_landscape_distance, mp_landscape_inner_product, mp_landscape_kernel,
-       PersistenceImage1D, persistence_image, persistence_silhouette,
-       barcode_entropy, barcode_summary, slice_barcode,
-       CompiledSlicePlan, SlicePlanCache, compile_slice_plan, clear_slice_plan_cache!,
-       SliceSpec, collect_slices, save_slices_json, load_slices_json,
-       SliceModuleCache, SliceModulePairCache,
-       SliceBarcodesTask, SliceDistanceTask, SliceKernelTask,
-       module_cache, compile_slices, run_invariants,
-       slice_barcodes, slice_features, slice_kernel,
-       PackedBarcodeGrid,
-       integrated_hilbert_mass, measure_by_dimension, support_measure,
-       measure_by_value, region_values,
-       support_measure, vertex_set_measure,
-       dim_stats, dim_norm, region_weight_entropy, aspect_ratio_stats,
-       module_size_summary, sliced_bottleneck_distance,
-       interface_measure, interface_measure_by_dim_pair, interface_measure_dim_changes,
-       Rect, RectSignedBarcode, axes_from_encoding, rectangle_signed_barcode, rectangle_signed_barcode_rank, rectangles_from_grid, 
-       rank_from_signed_barcode, truncate_signed_barcode, rectangle_signed_barcode_image, 
-       rectangle_signed_barcode_kernel, mma_decomposition,
-       wasserstein_distance, wasserstein_kernel, sliced_wasserstein_distance, sliced_wasserstein_kernel,
-       RankQueryCache, rank_query, coarsen_axis, coarsen_axes, restrict_axes_to_encoding,
-       FiberedArrangement2D, fibered_arrangement_2d,
-       FiberedBarcodeCache2D, fibered_barcode_cache_2d,
-       fibered_cell_id, fibered_chain, fibered_values,
-       fibered_barcode, fibered_barcode_index, fibered_slice,
-       fibered_barcode_cache_stats,
-       region_volume_samples_by_dim, region_volume_histograms_by_dim,
-       region_boundary_to_volume_samples_by_dim, region_boundary_to_volume_histograms_by_dim,
-       graph_degrees, graph_connected_components, graph_modularity,
-       region_adjacency_graph_stats,
-       ProjectedArrangement1D, ProjectedArrangement, ProjectedBarcodeCache,
-       projected_arrangement, projected_barcode_cache, projected_barcodes,
-       projected_distances, projected_distance,
-       projected_kernel,
-       feature_map, feature_vector,
-       module_geometry_summary,
-       betti_support_measures, bass_support_measures,
-       PrettyPrinter, pretty,
-       PointSignedMeasure,
-       point_signed_measure,
-       surface_from_point_signed_measure,
-       truncate_point_signed_measure,
-       point_signed_measure_kernel,
-       euler_characteristic_surface,
-       euler_surface,
-       euler_signed_measure,
-       euler_distance,
-       MPPLineSpec, MPPDecomposition, MPPImage,
-       mpp_decomposition, mpp_image,
-       mpp_image_distance, mpp_image_inner_product, mpp_image_kernel,
-       save_mpp_decomposition_json, load_mpp_decomposition_json,
-       save_mpp_image_json, load_mpp_image_json,
-       matching_distance,
-       FiberedSliceFamily2D, fibered_slice_family_2d
-    
 # -----------------------------------------------------------------------------
 # InvariantOptions helpers (internal)
 # -----------------------------------------------------------------------------
@@ -331,7 +277,7 @@ function rank_map(M::PModule{K}, a::Int, b::Int; cache=nothing, memo=nothing)::I
 
     # Use shared memoization if provided; otherwise fall back to map_leq.
     if memo !== nothing
-        cc = cache === nothing ? get_cover_cache(Q) : cache
+        cc = cache === nothing ? _get_cover_cache(Q) : cache
         A = _map_leq_cached(M, a, b, cc, memo)
         return FieldLinAlg.rank(M.field, A)
     end
@@ -399,7 +345,7 @@ function rank_invariant(
     Q = M.Q
     # Two-phase threading: build caches once, then threaded loops read-only.
     build_cache!(Q; cover=true, updown=true)
-    cc = get_cover_cache(Q)
+    cc = _get_cover_cache(Q)
     n = nvertices(Q)
     use_array_memo = _use_array_memo(n)
 
@@ -1651,7 +1597,7 @@ function rectangle_signed_barcode(M::PModule, pi::ZnEncodingMap, opts::Invariant
     end
 
     build_cache!(M.Q; cover=true, updown=false)
-    cc = get_cover_cache(M.Q)
+    cc = _get_cover_cache(M.Q)
 
     function rank_ab(a::Int, b::Int)
         return _rank_cache_get!(rq_cache, a, b, () -> rank_map(M, a, b; cache=cc))
@@ -4924,7 +4870,7 @@ function restrict_to_chain(M::PModule{K}, chain::AbstractVector{Int})::PModule{K
 
     # Only need cover edges (i,i+1).
     edge_maps = Dict{Tuple{Int,Int}, Matrix{K}}()
-    cc = get_cover_cache(M.Q)
+    cc = _get_cover_cache(M.Q)
     nQ = nvertices(M.Q)
     memo = _use_array_memo(nQ) ? _new_array_memo(K, nQ) : Dict{Tuple{Int,Int}, AbstractMatrix{K}}()
     for i in 1:m-1
@@ -7802,7 +7748,7 @@ function _slice_barcode_packed(
         length(values) == m ? _extend_values(values) : values
     end
 
-    cc = get_cover_cache(M.Q)
+    cc = _get_cover_cache(M.Q)
     nQ = nvertices(M.Q)
     memo = _use_array_memo(nQ) ? _new_array_memo(K, nQ) : Dict{Tuple{Int,Int}, AbstractMatrix{K}}()
     R = zeros(Int, m, m)

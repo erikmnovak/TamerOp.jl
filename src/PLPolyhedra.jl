@@ -18,6 +18,7 @@ using ..FiniteFringe
 import ..FiniteFringe: AbstractPoset, nvertices
 import ..ZnEncoding: SignaturePoset
 using ..CoreModules: QQ, AbstractPLikeEncodingMap, EncodingOptions, CompiledEncoding, EncodingCache, validate_pl_mode
+using ..CoreModules.CoeffFields: QQField
 using ..Stats: _wilson_interval
 using Random
 
@@ -50,6 +51,8 @@ const _CDD_FLOAT = HAVE_POLY ? CDDLib.Library(:float) : nothing
 const STRICT_EPS_QQ = 1//(big(1) << 40)
 const LOCATE_FLOAT_TOL = 1e-12
 const LOCATE_BOUNDARY_TOL = 1e-9
+const LOCATE_GUARD_REL = 64.0 * eps(Float64)
+const LOCATE_GUARD_ABS = 1e-15
 
 # ------------------------------ QQ conversion ---------------------------------
 # Robust conversion to QQ = Rational{BigInt}.
@@ -614,6 +617,7 @@ struct PLEncodingMap <: AbstractPLikeEncodingMap
         (:enabled, :x1_sorted, :perm, :pos, :window),
         Tuple{Bool, Vector{Float64}, Vector{Int}, Vector{Int}, Int}
     }
+    cache::EncodingCache
 end
 
 # --- Core encoding-map interface ------------------------------------------------
@@ -658,7 +662,7 @@ function PLEncodingMap(n::Int,
         bf_strict[t] = Float64.(hp.b)
     end
     pf = _build_locate_prefilter(n, regions, w)
-    return PLEncodingMap(n, sig_y, sig_z, regions, w, Af, bf_strict, pf)
+    return PLEncodingMap(n, sig_y, sig_z, regions, w, Af, bf_strict, pf, EncodingCache())
 end
 
 dimension(pi::PLEncodingMap) = pi.n
@@ -672,21 +676,31 @@ representatives(pi::PLEncodingMap) = pi.witnesses
     m = size(Af, 1)
     n = size(Af, 2)
     length(x) == n || error("_hpoly_float_state: dimension mismatch")
-    min_slack = Inf
+    near_boundary = false
+    fast_outside = false
     @inbounds for i in 1:m
         s = 0.0
+        abs_ax = 0.0
         for j in 1:n
-            s += float(Af[i, j]) * float(x[j])
+            ax = float(Af[i, j]) * float(x[j])
+            s += ax
+            abs_ax += abs(ax)
         end
         slack = float(bf[i]) - s
+        # Stage 1: very cheap float prefilter.
         if slack < -tol
+            fast_outside = true
+        end
+        # Stage 2: guard-band check; only strongly outside rows are rejected.
+        guard = LOCATE_GUARD_ABS + LOCATE_GUARD_REL * (abs(float(bf[i])) + abs_ax + abs(s))
+        if slack < -tol - guard
             return Int8(-1)
         end
-        if slack < min_slack
-            min_slack = slack
+        if slack <= boundary_tol + guard
+            near_boundary = true
         end
     end
-    return min_slack <= boundary_tol ? Int8(0) : Int8(1)
+    return (near_boundary || fast_outside) ? Int8(0) : Int8(1)
 end
 
 @inline function _hpoly_float_state(Af::AbstractMatrix{<:Real},
@@ -697,21 +711,29 @@ end
     m = size(Af, 1)
     n = size(Af, 2)
     N == n || error("_hpoly_float_state: dimension mismatch")
-    min_slack = Inf
+    near_boundary = false
+    fast_outside = false
     @inbounds for i in 1:m
         s = 0.0
+        abs_ax = 0.0
         for j in 1:n
-            s += float(Af[i, j]) * float(x[j])
+            ax = float(Af[i, j]) * float(x[j])
+            s += ax
+            abs_ax += abs(ax)
         end
         slack = float(bf[i]) - s
         if slack < -tol
+            fast_outside = true
+        end
+        guard = LOCATE_GUARD_ABS + LOCATE_GUARD_REL * (abs(float(bf[i])) + abs_ax + abs(s))
+        if slack < -tol - guard
             return Int8(-1)
         end
-        if slack < min_slack
-            min_slack = slack
+        if slack <= boundary_tol + guard
+            near_boundary = true
         end
     end
-    return min_slack <= boundary_tol ? Int8(0) : Int8(1)
+    return (near_boundary || fast_outside) ? Int8(0) : Int8(1)
 end
 
 @inline function _hpoly_float_state_col(Af::AbstractMatrix{<:Real},
@@ -722,21 +744,29 @@ end
     m = size(Af, 1)
     n = size(Af, 2)
     size(X, 1) == n || error("_hpoly_float_state_col: dimension mismatch")
-    min_slack = Inf
+    near_boundary = false
+    fast_outside = false
     @inbounds for i in 1:m
         s = 0.0
+        abs_ax = 0.0
         for j in 1:n
-            s += float(Af[i, j]) * float(X[j, col])
+            ax = float(Af[i, j]) * float(X[j, col])
+            s += ax
+            abs_ax += abs(ax)
         end
         slack = float(bf[i]) - s
         if slack < -tol
+            fast_outside = true
+        end
+        guard = LOCATE_GUARD_ABS + LOCATE_GUARD_REL * (abs(float(bf[i])) + abs_ax + abs(s))
+        if slack < -tol - guard
             return Int8(-1)
         end
-        if slack < min_slack
-            min_slack = slack
+        if slack <= boundary_tol + guard
+            near_boundary = true
         end
     end
-    return min_slack <= boundary_tol ? Int8(0) : Int8(1)
+    return (near_boundary || fast_outside) ? Int8(0) : Int8(1)
 end
 
 @inline function _in_hpoly_col(h::HPoly, X::AbstractMatrix{<:Real}, col::Int)
@@ -1147,6 +1177,8 @@ mutable struct PolyInBoxCache{PolyT,VRepT,HRepT}
     # Per-region AABBs in the cached box.
     aabb_lo::Vector{Vector{Float64}}
     aabb_hi::Vector{Vector{Float64}}
+    active_regions::Vector{Int}
+    active_mask::BitVector
     # 2D spatial bucket index over first two coordinates.
     bucket_enabled::Bool
     bucket_nx::Int
@@ -1158,8 +1190,16 @@ mutable struct PolyInBoxCache{PolyT,VRepT,HRepT}
     bucket_regions::Vector{Vector{Int}}
     # Lazily cached per-region facet metadata (for boundary/adjacency).
     facets::Vector{Union{Nothing,Vector{CachedFacet}}}
+    points_f::Vector{Union{Nothing,Matrix{Float64}}}
     boundary_breakdown::Dict{BoundaryBreakdownCacheKey,Vector{BoundaryBreakdownEntry}}
+    boundary_measure::Dict{BoundaryBreakdownCacheKey,Float64}
     adjacency::Dict{AdjacencyCacheKey,Dict{Tuple{Int,Int},Float64}}
+    # Exact volume cache for repeated region_weights(method=:exact) on the same box.
+    exact_weight::Vector{Float64}
+    exact_weight_ready::BitVector
+    # Exact centroid cache for repeated region_centroid(method=:polyhedra).
+    exact_centroid::Vector{Vector{Float64}}
+    exact_centroid_ready::BitVector
     poly::Vector{Union{Nothing,PolyT}}
     vrep::Vector{Union{Nothing,VRepT}}
     hrep::Vector{Union{Nothing,HRepT}}
@@ -1236,10 +1276,12 @@ function poly_in_box_cache(pi::PLEncodingMap; box, closure::Bool=true)
     vrep[1] = v1
     hrep[1] = h1
 
-    # Eagerly compute region AABBs in the query box and build a 2D bucket index
-    # for fast candidate lookup in repeated membership queries.
+    # Eagerly compute region AABBs and point clouds in the query box, then build a
+    # 2D bucket index for fast candidate lookup in repeated membership queries.
     aabb_lo = [fill(Inf, pi.n) for _ in 1:nregions]
     aabb_hi = [fill(-Inf, pi.n) for _ in 1:nregions]
+    points_f = Vector{Union{Nothing,Matrix{Float64}}}(undef, nregions)
+    fill!(points_f, nothing)
     for r in 1:nregions
         Pr = r == 1 ? p1 : _hpoly_in_box_polyhedron(pi.regions[r], (a_q, b_q); closure=closure)
         Vr = r == 1 ? v1 : Polyhedra.vrep(Pr)
@@ -1251,11 +1293,13 @@ function poly_in_box_cache(pi::PLEncodingMap; box, closure::Bool=true)
         if isempty(pts)
             continue
         end
+        pmat = Matrix{Float64}(undef, length(pts), pi.n)
         lo = aabb_lo[r]
         hi = aabb_hi[r]
-        for p in pts
+        for (row, p) in enumerate(pts)
             x = _point_to_floatvec(p, pi.n)
             @inbounds for j in 1:pi.n
+                pmat[row, j] = x[j]
                 if x[j] < lo[j]
                     lo[j] = x[j]
                 end
@@ -1263,6 +1307,27 @@ function poly_in_box_cache(pi::PLEncodingMap; box, closure::Bool=true)
                     hi[j] = x[j]
                 end
             end
+        end
+        points_f[r] = pmat
+    end
+
+    active_regions = Int[]
+    active_mask = falses(nregions)
+    for r in 1:nregions
+        lo = aabb_lo[r]
+        hi = aabb_hi[r]
+        ok = all(isfinite, lo) && all(isfinite, hi)
+        if ok
+            @inbounds for j in 1:pi.n
+                if hi[j] < lo[j]
+                    ok = false
+                    break
+                end
+            end
+        end
+        if ok
+            push!(active_regions, r)
+            active_mask[r] = true
         end
     end
 
@@ -1274,20 +1339,18 @@ function poly_in_box_cache(pi::PLEncodingMap; box, closure::Bool=true)
     dy = (pi.n >= 2 ? max(b_f[2] - a_f[2], 1.0) : 1.0)
     bucket_enabled = false
     bucket_regions = Vector{Vector{Int}}()
-    if pi.n >= 1 && nregions > 0
-        nx = max(4, min(128, round(Int, sqrt(nregions))))
-        ny = pi.n >= 2 ? max(4, min(128, round(Int, sqrt(nregions)))) : 1
+    if pi.n >= 1 && !isempty(active_regions)
+        nactive = length(active_regions)
+        nx = max(4, min(128, round(Int, sqrt(nactive))))
+        ny = pi.n >= 2 ? max(4, min(128, round(Int, sqrt(nactive)))) : 1
         dx = max((b_f[1] - a_f[1]) / nx, 1e-12)
         dy = pi.n >= 2 ? max((b_f[2] - a_f[2]) / ny, 1e-12) : 1.0
         x0 = a_f[1]
         y0 = (pi.n >= 2 ? a_f[2] : 0.0)
         bucket_regions = [Int[] for _ in 1:(nx * ny)]
-        for r in 1:nregions
+        for r in active_regions
             lo = aabb_lo[r]
             hi = aabb_hi[r]
-            if !all(isfinite, lo) || !all(isfinite, hi)
-                continue
-            end
             ix0 = clamp(Int(floor((lo[1] - x0) / dx)) + 1, 1, nx)
             ix1 = clamp(Int(floor((hi[1] - x0) / dx)) + 1, 1, nx)
             iy0 = 1
@@ -1306,26 +1369,52 @@ function poly_in_box_cache(pi::PLEncodingMap; box, closure::Bool=true)
     facets = Vector{Union{Nothing,Vector{CachedFacet}}}(undef, nregions)
     fill!(facets, nothing)
     boundary_breakdown = Dict{BoundaryBreakdownCacheKey,Vector{BoundaryBreakdownEntry}}()
+    boundary_measure = Dict{BoundaryBreakdownCacheKey,Float64}()
     adjacency = Dict{AdjacencyCacheKey,Dict{Tuple{Int,Int},Float64}}()
+    exact_weight = zeros(Float64, nregions)
+    exact_weight_ready = falses(nregions)
+    exact_centroid = [zeros(Float64, pi.n) for _ in 1:nregions]
+    exact_centroid_ready = falses(nregions)
 
     return PolyInBoxCache{PolyT,VRepT,HRepT}(pi, (a_q, b_q), (a_f, b_f), closure,
                                               Af, bf_strict, bf_relaxed,
-                                              aabb_lo, aabb_hi,
+                                              aabb_lo, aabb_hi, active_regions, active_mask,
                                               bucket_enabled, nx, ny, x0, y0, dx, dy, bucket_regions,
-                                              facets,
-                                              boundary_breakdown, adjacency,
+                                              facets, points_f,
+                                              boundary_breakdown, boundary_measure, adjacency,
+                                              exact_weight, exact_weight_ready,
+                                              exact_centroid, exact_centroid_ready,
                                               poly, vrep, hrep)
 end
 
 """
-    compile_geometry_cache(pi::PLEncodingMap; box, closure=true) -> PolyInBoxCache
+    compile_geometry_cache(pi::PLEncodingMap; box, closure=true,
+                           precompute_exact=true,
+                           precompute_facets=true,
+                           precompute_centroids=true) -> PolyInBoxCache
 
 Build a reusable cache for repeated region-membership and geometry queries on a
-fixed `(pi, box)` pair. This is an alias of `poly_in_box_cache` with identical
-semantics.
+fixed `(pi, box)` pair.
+
+When `precompute_exact=true` (default), exact-geometry artifacts are built once:
+- clipped region polyhedra / V- / H-representations,
+- per-region exact volumes,
+- cached facets for boundary/adjacency queries,
+- cached exact centroids (with bbox midpoint fallback).
 """
-compile_geometry_cache(pi::PLEncodingMap; box, closure::Bool=true) =
-    poly_in_box_cache(pi; box=box, closure=closure)
+function compile_geometry_cache(pi::PLEncodingMap; box, closure::Bool=true,
+                                precompute_exact::Bool=true,
+                                precompute_facets::Bool=true,
+                                precompute_centroids::Bool=true)
+    cache = poly_in_box_cache(pi; box=box, closure=closure)
+    if precompute_exact
+        _precompute_exact_geometry!(cache;
+                                    precompute_facets=precompute_facets,
+                                    precompute_centroids=precompute_centroids,
+                                    precompute_weights=true)
+    end
+    return cache
+end
 
 # Clear cached polyhedra / representations (useful in long-running sessions).
 function Base.empty!(cache::PolyInBoxCache)
@@ -1333,17 +1422,56 @@ function Base.empty!(cache::PolyInBoxCache)
     fill!(cache.vrep, nothing)
     fill!(cache.hrep, nothing)
     fill!(cache.facets, nothing)
+    fill!(cache.points_f, nothing)
     empty!(cache.boundary_breakdown)
+    empty!(cache.boundary_measure)
     empty!(cache.adjacency)
+    fill!(cache.exact_weight, 0.0)
+    fill!(cache.exact_weight_ready, false)
+    @inbounds for c in cache.exact_centroid
+        fill!(c, 0.0)
+    end
+    fill!(cache.exact_centroid_ready, false)
     return cache
 end
 
-@inline function _auto_geometry_cache(pi::PLEncodingMap, cache, box, closure::Bool)
+@inline function _canonical_box_key(pi::PLEncodingMap, box, closure::Bool, mode::Symbol)
+    a_in, b_in = box
+    n = pi.n
+    length(a_in) == n || error("cache mismatch: expected box lower corner length $n")
+    length(b_in) == n || error("cache mismatch: expected box upper corner length $n")
+    a_key = ntuple(i -> _toQQ(a_in[i]), n)
+    b_key = ntuple(i -> _toQQ(b_in[i]), n)
+    return (UInt(objectid(pi)), a_key, b_key, closure, mode)
+end
+
+function _geometry_cache_from_store!(store::EncodingCache, pi::PLEncodingMap, box, closure::Bool, mode::Symbol)
+    key = _canonical_box_key(pi, box, closure, mode)
+
+    Base.lock(store.lock)
+    try
+        cached = get(store.geometry, key, nothing)
+        cached === nothing || return cached
+    finally
+        Base.unlock(store.lock)
+    end
+
+    built = compile_geometry_cache(pi; box=box, closure=closure)
+    Base.lock(store.lock)
+    try
+        return get!(store.geometry, key, built)
+    finally
+        Base.unlock(store.lock)
+    end
+end
+
+@inline function _auto_geometry_cache(pi::PLEncodingMap, cache, box, closure::Bool, mode::Symbol=:fast)
     if cache isa PolyInBoxCache
         return cache
     end
     box === nothing && return cache
-    return compile_geometry_cache(pi; box=box, closure=closure)
+    mode0 = validate_pl_mode(mode)
+    return _geometry_cache_from_store!(pi.cache, pi, box, closure, mode0)
 end
 
 function _check_cache_compatible(cache::PolyInBoxCache, pi::PLEncodingMap,
@@ -1384,6 +1512,103 @@ function _hrep_in_box(cache::PolyInBoxCache{PolyT,VRepT,HRepT}, r::Integer) wher
         cache.hrep[r] = Polyhedra.hrep(_poly_in_box(cache, r))
     end
     return cache.hrep[r]::HRepT
+end
+
+function _points_float_in_box(cache::PolyInBoxCache, r::Integer)
+    (1 <= r <= length(cache.points_f)) || error("_points_float_in_box: region index out of range")
+    pts = cache.points_f[r]
+    pts === nothing || return pts
+
+    vre = _vrep_in_box(cache, r)
+    raw = collect(Polyhedra.points(vre))
+    if isempty(raw)
+        cache.points_f[r] = zeros(Float64, 0, cache.pi.n)
+        return cache.points_f[r]::Matrix{Float64}
+    end
+
+    out = Matrix{Float64}(undef, length(raw), cache.pi.n)
+    @inbounds for i in eachindex(raw)
+        x = _point_to_floatvec(raw[i], cache.pi.n)
+        for j in 1:cache.pi.n
+            out[i, j] = x[j]
+        end
+    end
+    cache.points_f[r] = out
+    return out
+end
+
+@inline function _exact_centroid_from_cache(cache::PolyInBoxCache, r::Int)
+    if cache.exact_centroid_ready[r]
+        return cache.exact_centroid[r]
+    end
+    c = cache.exact_centroid[r]
+    try
+        cm = Polyhedra.center_of_mass(_poly_in_box(cache, r))
+        i = 0
+        for ci in cm
+            i += 1
+            c[i] = float(ci)
+        end
+    catch
+        lo = cache.aabb_lo[r]
+        hi = cache.aabb_hi[r]
+        if !cache.active_mask[r]
+            fill!(c, 0.0)
+        else
+            @inbounds for i in 1:cache.pi.n
+                c[i] = 0.5 * (lo[i] + hi[i])
+            end
+        end
+    end
+    cache.exact_centroid_ready[r] = true
+    return c
+end
+
+function _precompute_exact_geometry!(cache::PolyInBoxCache;
+                                     precompute_facets::Bool=true,
+                                     precompute_centroids::Bool=true,
+                                     precompute_weights::Bool=true,
+                                     facet_tol::Float64=1e-10)
+    active = cache.active_regions
+    isempty(active) && return cache
+
+    if precompute_weights
+        vals = Vector{Float64}(undef, length(active))
+        if Threads.nthreads() > 1 && length(active) >= 8
+            Threads.@threads for i in eachindex(active)
+                vals[i] = Polyhedra.volume(_poly_in_box(cache, active[i]))
+            end
+        else
+            @inbounds for i in eachindex(active)
+                vals[i] = Polyhedra.volume(_poly_in_box(cache, active[i]))
+            end
+        end
+        @inbounds for i in eachindex(active)
+            r = active[i]
+            cache.exact_weight[r] = vals[i]
+            cache.exact_weight_ready[r] = true
+        end
+    end
+
+    if precompute_centroids
+        if Threads.nthreads() > 1 && length(active) >= 8
+            Threads.@threads for i in eachindex(active)
+                _exact_centroid_from_cache(cache, active[i])
+            end
+        else
+            @inbounds for r in active
+                _exact_centroid_from_cache(cache, r)
+            end
+        end
+    end
+
+    if precompute_facets
+        @inbounds for r in active
+            _region_facets(cache, r; tol=facet_tol)
+        end
+    end
+
+    return cache
 end
 
 function _box_from_cache_or_arg(box, cache)
@@ -1532,8 +1757,33 @@ function _region_weights_exact(pi::PLEncodingMap, box; closure::Bool=true, cache
     w = zeros(Float64, nregions)
     if cache isa PolyInBoxCache
         _check_cache_compatible(cache, pi, box, closure)
-        @inbounds for r in 1:nregions
-            w[r] = Polyhedra.volume(_poly_in_box(cache, r))
+        active = cache.active_regions
+        if !isempty(active)
+            missing = Int[]
+            sizehint!(missing, length(active))
+            @inbounds for r in active
+                cache.exact_weight_ready[r] || push!(missing, r)
+            end
+            if !isempty(missing)
+                vals = Vector{Float64}(undef, length(missing))
+                if Threads.nthreads() > 1 && length(missing) >= 8
+                    Threads.@threads for i in eachindex(missing)
+                        vals[i] = Polyhedra.volume(_poly_in_box(cache, missing[i]))
+                    end
+                else
+                    @inbounds for i in eachindex(missing)
+                        vals[i] = Polyhedra.volume(_poly_in_box(cache, missing[i]))
+                    end
+                end
+                @inbounds for i in eachindex(missing)
+                    r = missing[i]
+                    cache.exact_weight[r] = vals[i]
+                    cache.exact_weight_ready[r] = true
+                end
+            end
+            @inbounds for r in active
+                w[r] = cache.exact_weight[r]
+            end
         end
         return w
     end
@@ -1659,8 +1909,9 @@ function region_weights(pi::PLEncodingMap;
     alpha::Real=0.05,
 )
     mode0 = validate_pl_mode(mode)
-    box = _box_from_cache_or_arg(box, cache)
-    cache isa PolyInBoxCache && _check_cache_compatible(cache, pi, box, closure)
+    cache0 = (method == :exact) ? _auto_geometry_cache(pi, cache, box, closure, mode0) : cache
+    box = _box_from_cache_or_arg(box, cache0)
+    cache0 isa PolyInBoxCache && _check_cache_compatible(cache0, pi, box, closure)
     nregions = length(pi.regions)
     if box === nothing
         w = ones(Float64, nregions)
@@ -1690,7 +1941,7 @@ function region_weights(pi::PLEncodingMap;
     end
 
     if method == :exact
-        w = _region_weights_exact(pi, box; closure=closure, cache=cache)
+        w = _region_weights_exact(pi, box; closure=closure, cache=cache0)
         if !return_info
             return w
         end
@@ -1709,7 +1960,7 @@ function region_weights(pi::PLEncodingMap;
             counts=nothing)
     elseif method == :mc
         w, stderr, counts = _region_weights_mc(pi, box; nsamples=nsamples, rng=rng,
-            strict=strict, closure=closure, cache=cache, mode=mode0)
+            strict=strict, closure=closure, cache=cache0, mode=mode0)
         if !return_info
             return w
         end
@@ -1797,19 +2048,39 @@ function region_boundary_measure(pi::PLEncodingMap, r::Integer; box=nothing,
                                  cache=nothing,
                                  mode::Symbol=:fast)::Float64
     HAVE_POLY || error("region_boundary_measure: Polyhedra.jl + CDDLib.jl required")
-    box = _box_from_cache_or_arg(box, cache)
+    mode0 = validate_pl_mode(mode)
+    cache0 = _auto_geometry_cache(pi, cache, box, closure, mode0)
+    box = _box_from_cache_or_arg(box, cache0)
     box === nothing && error("region_boundary_measure: please provide box=(a,b)")
     (1 <= r <= length(pi.regions)) || error("region_boundary_measure: region index out of range")
+    cache0 isa PolyInBoxCache && _check_cache_compatible(cache0, pi, box, closure)
+
+    tol = 1e-10
+    a_f, b_f = if cache0 isa PolyInBoxCache
+        cache0.box_f
+    else
+        a_in, b_in = box
+        n = pi.n
+        Float64[a_in[i] for i in 1:n], Float64[b_in[i] for i in 1:n]
+    end
+    width = maximum(b_f[i] - a_f[i] for i in 1:pi.n)
+    dstep = max(1e-8 * width, 1e-10)
+    key = (Int(r), strict, mode0, dstep, tol)
+    if cache0 isa PolyInBoxCache
+        cached = get(cache0.boundary_measure, key, nothing)
+        cached === nothing || return cached
+    end
 
     # Polyhedra.jl does not implement surface(::CDDLib.Polyhedron).
     # Use our facet-based computation, which already supports caching.
     bd = region_boundary_measure_breakdown(pi, r;
-        box=box, cache=cache, closure=closure, strict=strict, mode=mode)
+        box=box, cache=cache0, closure=closure, strict=strict, mode=mode0, delta=dstep, tol=tol)
 
     s = 0.0
     for f in bd
         s += f.measure
     end
+    cache0 isa PolyInBoxCache && (cache0.boundary_measure[key] = s)
     return s
 end
 
@@ -1841,7 +2112,8 @@ function region_boundary_measure_breakdown(pi::PLEncodingMap, r::Integer;
                                            delta::Union{Nothing,Real}=nothing,
                                            tol::Float64=1e-10)
     HAVE_POLY || error("region_boundary_measure_breakdown: Polyhedra.jl + CDDLib.jl required")
-    cache0 = _auto_geometry_cache(pi, cache, box, closure)
+    mode0 = validate_pl_mode(mode)
+    cache0 = _auto_geometry_cache(pi, cache, box, closure, mode0)
     box = _box_from_cache_or_arg(box, cache0)
     box === nothing && error("region_boundary_measure_breakdown: please provide box=(a,b)")
     (1 <= r <= length(pi.regions)) || error("region_boundary_measure_breakdown: region index out of range")
@@ -1857,21 +2129,33 @@ function region_boundary_measure_breakdown(pi::PLEncodingMap, r::Integer;
         Float64[a_in[i] for i in 1:n], Float64[b_in[i] for i in 1:n]
     end
 
-    mode0 = validate_pl_mode(mode)
-
     width = maximum(b_f[i] - a_f[i] for i in 1:n)
     dstep = delta === nothing ? max(1e-8 * width, 1e-10) : Float64(delta)
 
     if cache0 isa PolyInBoxCache
         key = (Int(r), strict, mode0, dstep, tol)
         cached = get(cache0.boundary_breakdown, key, nothing)
-        cached === nothing || return cached
+        if cached !== nothing
+            if !haskey(cache0.boundary_measure, key)
+                s_cached = 0.0
+                @inbounds for e in cached
+                    s_cached += e.measure
+                end
+                cache0.boundary_measure[key] = s_cached
+            end
+            return cached
+        end
     end
 
     out = BoundaryBreakdownEntry[]
     if cache0 isa PolyInBoxCache
+        key = (Int(r), strict, mode0, dstep, tol)
         facets = _region_facets(cache0, r; tol=tol)
-        isempty(facets) && return out
+        if isempty(facets)
+            cache0.boundary_breakdown[key] = out
+            cache0.boundary_measure[key] = 0.0
+            return out
+        end
         kinds, neigh = _classify_cached_facets(
             pi, cache0, facets, r, a_f, b_f, dstep, mode0;
             strict = strict,
@@ -1891,7 +2175,12 @@ function region_boundary_measure_breakdown(pi::PLEncodingMap, r::Integer;
             neighbor = (kinds[j] == UInt8(2)) ? neigh[j] : nothing
             push!(out, (measure=cf.measure, normal=cf.normal, point=cf.point, kind=kind, neighbor=neighbor))
         end
-        cache0.boundary_breakdown[(Int(r), strict, mode0, dstep, tol)] = out
+        cache0.boundary_breakdown[key] = out
+        s_out = 0.0
+        @inbounds for e in out
+            s_out += e.measure
+        end
+        cache0.boundary_measure[key] = s_out
         return out
     else
         nregions = length(pi.regions)
@@ -1989,12 +2278,13 @@ Centroid (center of mass) of region `r` inside `box=(a,b)`.
 function region_centroid(pi::PLEncodingMap, r::Integer; box=nothing,
                          method::Symbol=:polyhedra, closure::Bool=true,
                          cache=nothing)
-    box = _box_from_cache_or_arg(box, cache)
+    cache0 = method == :polyhedra ? _auto_geometry_cache(pi, cache, box, closure, :fast) : cache
+    box = _box_from_cache_or_arg(box, cache0)
     box === nothing && error("region_centroid: please provide box=(a,b)")
     (1 <= r <= length(pi.regions)) || error("region_centroid: region index out of range")
 
     if method == :bbox
-        bb = region_bbox(pi, r; box=box)
+        bb = region_bbox(pi, r; box=box, cache=cache0, closure=closure)
         bb === nothing && return zeros(Float64, pi.n)
         lo, hi = bb
         return 0.5 .* (lo .+ hi)
@@ -2003,8 +2293,20 @@ function region_centroid(pi::PLEncodingMap, r::Integer; box=nothing,
     end
 
     HAVE_POLY || error("region_centroid(method=:polyhedra): Polyhedra.jl + CDDLib.jl required")
-    cache isa PolyInBoxCache && _check_cache_compatible(cache, pi, box, closure)
-    P = cache isa PolyInBoxCache ? _poly_in_box(cache, r) : _hpoly_in_box_polyhedron(pi.regions[r], box; closure=closure)
+    cache0 isa PolyInBoxCache && _check_cache_compatible(cache0, pi, box, closure)
+    if cache0 isa PolyInBoxCache
+        if !cache0.active_mask[r]
+            return zeros(Float64, pi.n)
+        end
+        c = _exact_centroid_from_cache(cache0, Int(r))
+        out = Vector{Float64}(undef, pi.n)
+        @inbounds for i in 1:pi.n
+            out[i] = c[i]
+        end
+        return out
+    end
+
+    P = _hpoly_in_box_polyhedron(pi.regions[r], box; closure=closure)
 
     try
         c = Polyhedra.center_of_mass(P)
@@ -2604,9 +2906,12 @@ function region_circumradius(pi::PLEncodingMap, r::Integer; box=nothing, center=
 
     # Prefer cached vrep if available.
     pts = nothing
-    if cache !== nothing
-        vrep = _vrep_in_box(cache, r)
-        pts = collect(Polyhedra.points(vrep))
+    use_matrix = false
+    if cache isa PolyInBoxCache
+        _check_cache_compatible(cache, pi, box, closure)
+        cache.active_mask[r] || return 0.0
+        pts = _points_float_in_box(cache, Int(r))
+        use_matrix = true
     else
         hp = pi.regions[r]
         verts = _vertices_of_hpoly_in_box(hp, box; strict=strict, closure=closure,
@@ -2614,32 +2919,63 @@ function region_circumradius(pi::PLEncodingMap, r::Integer; box=nothing, center=
         pts = verts === nothing ? QQ[] : verts
     end
 
-    isempty(pts) && return 0.0
+    if use_matrix
+        size(pts, 1) == 0 && return 0.0
+    else
+        isempty(pts) && return 0.0
+    end
 
     rad = 0.0
     n = pi.n
-    for p in pts
-        if metric === :L2
-            s2 = 0.0
-            for j in 1:n
-                dj = float(p[j]) - c[j]
-                s2 += dj * dj
+    if use_matrix
+        for i in 1:size(pts, 1)
+            if metric === :L2
+                s2 = 0.0
+                for j in 1:n
+                    dj = pts[i, j] - c[j]
+                    s2 += dj * dj
+                end
+                rad = max(rad, sqrt(s2))
+            elseif metric === :Linf
+                dmax = 0.0
+                for j in 1:n
+                    dmax = max(dmax, abs(pts[i, j] - c[j]))
+                end
+                rad = max(rad, dmax)
+            elseif metric === :L1
+                s = 0.0
+                for j in 1:n
+                    s += abs(pts[i, j] - c[j])
+                end
+                rad = max(rad, s)
+            else
+                error("region_circumradius: unknown metric=$metric")
             end
-            rad = max(rad, sqrt(s2))
-        elseif metric === :Linf
-            dmax = 0.0
-            for j in 1:n
-                dmax = max(dmax, abs(float(p[j]) - c[j]))
+        end
+    else
+        for p in pts
+            if metric === :L2
+                s2 = 0.0
+                for j in 1:n
+                    dj = float(p[j]) - c[j]
+                    s2 += dj * dj
+                end
+                rad = max(rad, sqrt(s2))
+            elseif metric === :Linf
+                dmax = 0.0
+                for j in 1:n
+                    dmax = max(dmax, abs(float(p[j]) - c[j]))
+                end
+                rad = max(rad, dmax)
+            elseif metric === :L1
+                s = 0.0
+                for j in 1:n
+                    s += abs(float(p[j]) - c[j])
+                end
+                rad = max(rad, s)
+            else
+                error("region_circumradius: unknown metric=$metric")
             end
-            rad = max(rad, dmax)
-        elseif metric === :L1
-            s = 0.0
-            for j in 1:n
-                s += abs(float(p[j]) - c[j])
-            end
-            rad = max(rad, s)
-        else
-            error("region_circumradius: unknown metric=$metric")
         end
     end
     return rad
@@ -2699,12 +3035,16 @@ function region_mean_width(pi::PLEncodingMap, r::Integer; box=nothing,
     end
 
     HAVE_POLY || error("region_mean_width(method=:vertices) requires Polyhedra")
+    cache0 = _auto_geometry_cache(pi, cache, box, closure, :fast)
 
     # Get vertices of region intersect box.
     pts = nothing
-    if cache !== nothing
-        vrep = _vrep_in_box(cache, r)
-        pts = collect(Polyhedra.points(vrep))
+    use_matrix = false
+    if cache0 isa PolyInBoxCache
+        _check_cache_compatible(cache0, pi, box, closure)
+        cache0.active_mask[r] || return 0.0
+        pts = _points_float_in_box(cache0, Int(r))
+        use_matrix = true
     else
         hp = pi.regions[r]
         verts = _vertices_of_hpoly_in_box(hp, box; strict=strict, closure=closure,
@@ -2712,7 +3052,11 @@ function region_mean_width(pi::PLEncodingMap, r::Integer; box=nothing,
         pts = verts === nothing ? QQ[] : verts
     end
 
-    isempty(pts) && return 0.0
+    if use_matrix
+        size(pts, 1) == 0 && return 0.0
+    else
+        isempty(pts) && return 0.0
+    end
 
     U = directions === nothing ? _random_unit_directions_pl(n, ndirs; rng=rng) : directions
     size(U, 1) == n || error("region_mean_width: directions must have size (n,ndirs)")
@@ -2722,13 +3066,24 @@ function region_mean_width(pi::PLEncodingMap, r::Integer; box=nothing,
         u = view(U, :, j)
         maxv = -Inf
         minv = Inf
-        for p in pts
-            s = 0.0
-            for i in 1:n
-                s += u[i] * float(p[i])
+        if use_matrix
+            for irow in 1:size(pts, 1)
+                s = 0.0
+                for i in 1:n
+                    s += u[i] * pts[irow, i]
+                end
+                maxv = max(maxv, s)
+                minv = min(minv, s)
             end
-            maxv = max(maxv, s)
-            minv = min(minv, s)
+        else
+            for p in pts
+                s = 0.0
+                for i in 1:n
+                    s += u[i] * float(p[i])
+                end
+                maxv = max(maxv, s)
+                minv = min(minv, s)
+            end
         end
         wsum += (maxv - minv)
     end
@@ -3056,7 +3411,8 @@ Uses Polyhedra.jl + CDDLib exact facet enumeration and incidence queries.
 function region_adjacency(pi::PLEncodingMap; box=nothing, strict::Bool=true,
                           closure::Bool=true, cache=nothing, mode::Symbol=:fast)
     HAVE_POLY || error("region_adjacency: Polyhedra.jl + CDDLib.jl required")
-    cache0 = _auto_geometry_cache(pi, cache, box, closure)
+    mode0 = validate_pl_mode(mode)
+    cache0 = _auto_geometry_cache(pi, cache, box, closure, mode0)
     box = _box_from_cache_or_arg(box, cache0)
     box === nothing && error("region_adjacency: please provide box=(a,b)")
     cache0 isa PolyInBoxCache && _check_cache_compatible(cache0, pi, box, closure)
@@ -3066,7 +3422,6 @@ function region_adjacency(pi::PLEncodingMap; box=nothing, strict::Bool=true,
     a = Float64[a_in[i] for i in 1:n]
     b = Float64[b_in[i] for i in 1:n]
 
-    mode0 = validate_pl_mode(mode)
     nregions = length(pi.regions)
     Af, bf = _membership_mats(pi, cache0, !strict)
     tol = 1e-12
@@ -3079,37 +3434,80 @@ function region_adjacency(pi::PLEncodingMap; box=nothing, strict::Bool=true,
     width = maximum(b .- a)
     delta = max(1e-8 * width, 1e-10)
 
+    edges = Dict{Tuple{Int,Int},Float64}()
+
     if cache0 isa PolyInBoxCache
         key = (strict, mode0, delta, tol)
         cached = get(cache0.adjacency, key, nothing)
         cached === nothing || return cached
-    end
 
-    edges = Dict{Tuple{Int,Int},Float64}()
+        active = cache0.active_regions
+        # Phase 1: sequentially populate per-region boundary breakdown cache.
+        for r in active
+            bd_key = (Int(r), strict, mode0, delta, tol)
+            if !haskey(cache0.boundary_breakdown, bd_key)
+                region_boundary_measure_breakdown(
+                    pi, r;
+                    box = box,
+                    cache = cache0,
+                    closure = closure,
+                    strict = strict,
+                    mode = mode0,
+                    delta = delta,
+                    tol = tol,
+                )
+            end
+        end
 
-    for r in 1:nregions
-        if cache0 isa PolyInBoxCache
-            facets = _region_facets(cache0, r; tol=tol)
-            isempty(facets) && continue
-            kinds, neigh = _classify_cached_facets(
-                pi, cache0, facets, r, a, b, delta, mode0;
-                strict = strict,
-                tol = tol,
-                strict_errmsg = "region_adjacency: uncovered point near facet; set strict=false to ignore",
-            )
-            @inbounds for j in eachindex(facets)
-                kinds[j] == UInt8(2) || continue
-                s = neigh[j]
-                if r < s
-                    edges[(r, s)] = get(edges, (r, s), 0.0) + facets[j].measure
+        # Phase 2: threaded read-only reduction into deterministic per-thread shards.
+        nthreads = Threads.nthreads()
+        locals = [Dict{Tuple{Int,Int},Float64}() for _ in 1:nthreads]
+        if nthreads > 1 && length(active) >= 8
+            Threads.@threads for idx in eachindex(active)
+                r = active[idx]
+                bd = get(cache0.boundary_breakdown, (Int(r), strict, mode0, delta, tol), BoundaryBreakdownEntry[])
+                shard = locals[Threads.threadid()]
+                @inbounds for f in bd
+                    if f.kind == :internal
+                        s = f.neighbor
+                        if s !== nothing && r < s
+                            e = (r, s)
+                            shard[e] = get(shard, e, 0.0) + f.measure
+                        end
+                    end
                 end
             end
         else
-            P = _hpoly_in_box_polyhedron(pi.regions[r], box; closure=closure)
-            vre = Polyhedra.vrep(P)
-            hre = Polyhedra.hrep(P)
-            pts = collect(Polyhedra.points(vre))
-            hs = collect(Polyhedra.halfspaces(hre))
+            shard = locals[1]
+            for r in active
+                bd = get(cache0.boundary_breakdown, (Int(r), strict, mode0, delta, tol), BoundaryBreakdownEntry[])
+                @inbounds for f in bd
+                    if f.kind == :internal
+                        s = f.neighbor
+                        if s !== nothing && r < s
+                            e = (r, s)
+                            shard[e] = get(shard, e, 0.0) + f.measure
+                        end
+                    end
+                end
+            end
+        end
+
+        for shard in locals
+            for (e, m) in shard
+                edges[e] = get(edges, e, 0.0) + m
+            end
+        end
+        cache0.adjacency[key] = edges
+        return edges
+    end
+
+    for r in 1:nregions
+        P = _hpoly_in_box_polyhedron(pi.regions[r], box; closure=closure)
+        vre = Polyhedra.vrep(P)
+        hre = Polyhedra.hrep(P)
+        pts = collect(Polyhedra.points(vre))
+        hs = collect(Polyhedra.halfspaces(hre))
 
             seen = Set{Tuple{Vararg{Int}}}()
             for h in hs
@@ -3167,10 +3565,8 @@ function region_adjacency(pi::PLEncodingMap; box=nothing, strict::Bool=true,
                     edges[(r, s)] = get(edges, (r, s), 0.0) + m
                 end
             end
-        end
     end
 
-    cache0 isa PolyInBoxCache && (cache0.adjacency[(strict, mode0, delta, tol)] = edges)
     return edges
 end
 
@@ -3311,6 +3707,9 @@ function region_bbox(
     pi::PLEncodingMap,
     r::Integer;
     box::Union{Nothing,Tuple{AbstractVector{<:Real},AbstractVector{<:Real}}}=nothing,
+    cache=nothing,
+    closure::Bool=true,
+    strict::Bool=true,
     max_combinations::Int=200_000,
     max_vertices::Int=50_000,
     nsamples::Int=20_000,
@@ -3319,7 +3718,10 @@ function region_bbox(
 )
     nregions = length(pi.regions)
     (1 <= r <= nregions) || error("region_bbox: region index out of range")
+    cache0 = _auto_geometry_cache(pi, cache, box, closure, :fast)
+    box = _box_from_cache_or_arg(box, cache0)
     box === nothing && error("region_bbox: box=(a,b) is required for PLEncodingMap (regions may be unbounded)")
+    cache0 isa PolyInBoxCache && _check_cache_compatible(cache0, pi, box, closure)
 
     a_in, b_in = box
     length(a_in) == pi.n || error("region_bbox: box lower corner has wrong dimension")
@@ -3329,6 +3731,19 @@ function region_bbox(
     b = [float(x) for x in b_in]
     for i in 1:pi.n
         a[i] <= b[i] || error("region_bbox: box must satisfy a[i] <= b[i] for all i")
+    end
+
+    if cache0 isa PolyInBoxCache
+        cache0.active_mask[r] || return nothing
+        lo0 = cache0.aabb_lo[r]
+        hi0 = cache0.aabb_hi[r]
+        lo = Vector{Float64}(undef, pi.n)
+        hi = Vector{Float64}(undef, pi.n)
+        @inbounds for i in 1:pi.n
+            lo[i] = lo0[i]
+            hi[i] = hi0[i]
+        end
+        return (lo, hi)
     end
 
     hp = pi.regions[r]
@@ -3392,13 +3807,17 @@ function region_diameter(
     r::Integer;
     metric::Symbol=:L2,
     box=nothing,
+    cache=nothing,
+    closure::Bool=true,
+    strict::Bool=true,
     method::Symbol=:bbox,
     max_combinations::Int=200_000,
     max_vertices::Int=50_000,
     max_vertices_for_diameter::Int=2000
 )
     if method == :bbox
-        bb = region_bbox(pi, r; box=box, max_combinations=max_combinations, max_vertices=max_vertices)
+        bb = region_bbox(pi, r; box=box, cache=cache, closure=closure, strict=strict,
+                         max_combinations=max_combinations, max_vertices=max_vertices)
         bb === nothing && return 0.0
         a, b = bb
         if metric == :Linf
@@ -3430,37 +3849,51 @@ function region_diameter(
         end
     elseif method == :vertices
         box === nothing && error("region_diameter(method=:vertices): box=(a,b) is required")
-        a_in, b_in = box
-        a = [float(x) for x in a_in]
-        b = [float(x) for x in b_in]
-
-        hp = pi.regions[r]
-        verts = _vertices_of_hpoly_in_box(hp, a, b;
-                                          max_combinations=max_combinations,
-                                          max_vertices=max_vertices)
-        # If vertex enumeration is infeasible, fall back to bbox diameter.
-        verts === nothing && return region_diameter(pi, r; metric=metric, box=box, method=:bbox,
-                                                   max_combinations=max_combinations,
-                                                   max_vertices=max_vertices)
-        isempty(verts) && return 0.0
-
-        vt = collect(verts)
-        nv = length(vt)
-        nv > max_vertices_for_diameter && return region_diameter(pi, r; metric=metric, box=box, method=:bbox,
-                                                                 max_combinations=max_combinations,
-                                                                 max_vertices=max_vertices)
-
-        # Convert to a dense Float64 matrix for distance computations.
         n = pi.n
-        X = Matrix{Float64}(undef, nv, n)
-        for i in 1:nv
-            v = vt[i]
-            for j in 1:n
-                X[i, j] = float(v[j])
+        X = nothing
+        if cache isa PolyInBoxCache
+            _check_cache_compatible(cache, pi, box, closure)
+            cache.active_mask[r] || return 0.0
+            X = _points_float_in_box(cache, Int(r))
+            size(X, 1) > max_vertices_for_diameter && return region_diameter(pi, r; metric=metric, box=box, cache=cache,
+                                                                              closure=closure, strict=strict, method=:bbox,
+                                                                              max_combinations=max_combinations,
+                                                                              max_vertices=max_vertices)
+        else
+            a_in, b_in = box
+            a = [float(x) for x in a_in]
+            b = [float(x) for x in b_in]
+
+            hp = pi.regions[r]
+            verts = _vertices_of_hpoly_in_box(hp, a, b;
+                                              max_combinations=max_combinations,
+                                              max_vertices=max_vertices)
+            # If vertex enumeration is infeasible, fall back to bbox diameter.
+            verts === nothing && return region_diameter(pi, r; metric=metric, box=box, cache=cache,
+                                                       closure=closure, strict=strict, method=:bbox,
+                                                       max_combinations=max_combinations,
+                                                       max_vertices=max_vertices)
+            isempty(verts) && return 0.0
+
+            vt = collect(verts)
+            nv = length(vt)
+            nv > max_vertices_for_diameter && return region_diameter(pi, r; metric=metric, box=box, cache=cache,
+                                                                     closure=closure, strict=strict, method=:bbox,
+                                                                     max_combinations=max_combinations,
+                                                                     max_vertices=max_vertices)
+
+            Xloc = Matrix{Float64}(undef, nv, n)
+            for i in 1:nv
+                v = vt[i]
+                for j in 1:n
+                    Xloc[i, j] = float(v[j])
+                end
             end
+            X = Xloc
         end
 
         dmax = 0.0
+        nv = size(X, 1)
         if metric == :L2
             for i in 1:(nv-1)
                 for j in (i+1):nv
@@ -3640,7 +4073,7 @@ function encode_from_PL_fringe(Ups::Vector{PLUpset},
         Uhat = FiniteFringe.Upset[FiniteFringe.upset_closure(P, BitVector([false])) for _ in 1:length(Ups)]
         Dhat = FiniteFringe.Downset[FiniteFringe.downset_closure(P, BitVector([false])) for _ in 1:length(Downs)]
         Phi0 = zeros(QQ, length(Downs), length(Ups))
-        H = FiniteFringe.FringeModule{QQ}(P, Uhat, Dhat, Phi0)
+        H = FiniteFringe.FringeModule{QQ}(P, Uhat, Dhat, Phi0; field=QQField())
         n0 = (length(Ups) > 0 ? Ups[1].U.n : (length(Downs) > 0 ? Downs[1].D.n : 0))
         pi = PLEncodingMap(n0, BitVector[], BitVector[], HPoly[], Tuple[])
         return P, H, pi
@@ -3670,7 +4103,7 @@ function encode_from_PL_fringe(Ups::Vector{PLUpset},
     Uhat, Dhat = _images_on_P(P, sigy, sigz, 1:m, 1:r)
 
     Phi = _monomialize_phi(_toQQ_mat(Phi_in), Uhat, Dhat)
-    H = FiniteFringe.FringeModule{QQ}(P, Uhat, Dhat, Phi)
+    H = FiniteFringe.FringeModule{QQ}(P, Uhat, Dhat, Phi; field=QQField())
 
     pi = PLEncodingMap(n, sigy, sigz, regs, wits)
     return P, H, pi
@@ -3776,7 +4209,7 @@ function encode_from_PL_fringes(Fs::AbstractVector{<:PLFringe}, opts::EncodingOp
                 FiniteFringe.downset_closure(P, BitVector([false])) for _ in 1:length(F.Downs)
             ]
             Phi0 = zeros(QQ, length(F.Downs), length(F.Ups))
-            Hs[k] = FiniteFringe.FringeModule{QQ}(P, Uhat, Dhat, Phi0)
+            Hs[k] = FiniteFringe.FringeModule{QQ}(P, Uhat, Dhat, Phi0; field=QQField())
         end
 
         pi = PLEncodingMap(n, BitVector[], BitVector[], HPoly[], Tuple[])
@@ -3808,7 +4241,7 @@ function encode_from_PL_fringes(Fs::AbstractVector{<:PLFringe}, opts::EncodingOp
     for (k, F) in enumerate(Fs)
         Uhat, Dhat = _images_on_P(P, sigy, sigz, up_ranges[k], dn_ranges[k])
         Phi = _monomialize_phi(_toQQ_mat(F.Phi), Uhat, Dhat)
-        Hs[k] = FiniteFringe.FringeModule{QQ}(P, Uhat, Dhat, Phi)
+        Hs[k] = FiniteFringe.FringeModule{QQ}(P, Uhat, Dhat, Phi; field=QQField())
     end
 
     return P, Hs, pi
@@ -3880,43 +4313,20 @@ encode_from_PL_fringes(F1::PLFringe, F2::PLFringe, F3::PLFringe;
     return nothing
 end
 
-@inline function _canonical_box_key(pi::PLEncodingMap, box, closure::Bool)
-    a_in, b_in = box
-    n = pi.n
-    length(a_in) == n || error("cache mismatch: expected box lower corner length $n")
-    length(b_in) == n || error("cache mismatch: expected box upper corner length $n")
-    a_key = ntuple(i -> _toQQ(a_in[i]), n)
-    b_key = ntuple(i -> _toQQ(b_in[i]), n)
-    return (UInt(objectid(pi)), a_key, b_key, closure)
+@inline function _mode_from_kwargs(kwargs)
+    return validate_pl_mode(get(kwargs, :mode, :fast))
 end
 
-function _compiled_geometry_cache(pi::CompiledEncoding{<:PLEncodingMap}, box, closure::Bool)
+function _compiled_geometry_cache(pi::CompiledEncoding{<:PLEncodingMap}, box, closure::Bool, mode::Symbol)
     box === nothing && return nothing
     ec = _encoding_cache_from_compiled(pi)
-    ec === nothing && return nothing
-    key = _canonical_box_key(pi.pi, box, closure)
-
-    Base.lock(ec.lock)
-    try
-        cached = get(ec.geometry, key, nothing)
-        cached === nothing || return cached
-    finally
-        Base.unlock(ec.lock)
-    end
-
-    built = compile_geometry_cache(pi.pi; box=box, closure=closure)
-    Base.lock(ec.lock)
-    try
-        return get!(ec.geometry, key, built)
-    finally
-        Base.unlock(ec.lock)
-    end
+    return _geometry_cache_from_store!(ec === nothing ? pi.pi.cache : ec, pi.pi, box, closure, mode)
 end
 
 @inline function _forward_with_auto_cache(f, pi::CompiledEncoding{<:PLEncodingMap};
                                           box=nothing, cache=nothing, closure::Bool=true, kwargs...)
     if cache === nothing
-        cache = _compiled_geometry_cache(pi, box, closure)
+        cache = _compiled_geometry_cache(pi, box, closure, _mode_from_kwargs(kwargs))
     end
     return cache === nothing ?
         f(pi.pi; box=box, closure=closure, kwargs...) :
@@ -3925,6 +4335,14 @@ end
 
 region_weights(pi::CompiledEncoding{<:PLEncodingMap}; box=nothing, cache=nothing, closure::Bool=true, kwargs...) =
     _forward_with_auto_cache(region_weights, pi; box=box, cache=cache, closure=closure, kwargs...)
+
+region_bbox(pi::CompiledEncoding{<:PLEncodingMap}, r::Integer; box=nothing, cache=nothing, closure::Bool=true, kwargs...) =
+    _forward_with_auto_cache((p; kws...) -> region_bbox(p, r; kws...), pi;
+                             box=box, cache=cache, closure=closure, kwargs...)
+
+region_diameter(pi::CompiledEncoding{<:PLEncodingMap}, r::Integer; box=nothing, cache=nothing, closure::Bool=true, kwargs...) =
+    _forward_with_auto_cache((p; kws...) -> region_diameter(p, r; kws...), pi;
+                             box=box, cache=cache, closure=closure, kwargs...)
 
 region_boundary_measure(pi::CompiledEncoding{<:PLEncodingMap}, r::Integer; box=nothing, cache=nothing, closure::Bool=true, kwargs...) =
     _forward_with_auto_cache((p; kws...) -> region_boundary_measure(p, r; kws...), pi;
@@ -3956,12 +4374,6 @@ region_mean_width(pi::CompiledEncoding{<:PLEncodingMap}, r::Integer; box=nothing
 
 region_adjacency(pi::CompiledEncoding{<:PLEncodingMap}; box=nothing, cache=nothing, closure::Bool=true, kwargs...) =
     _forward_with_auto_cache(region_adjacency, pi; box=box, cache=cache, closure=closure, kwargs...)
-
-
-export HPoly, PolyUnion, PLUpset, PLDownset, PLFringe, PLEncodingMap, make_hpoly,
-       encode_from_PL_fringe, encode_from_PL_fringes,
-       PolyInBoxCache, poly_in_box_cache, compile_geometry_cache,
-       locate_many, locate_many!
 
 
 end # module

@@ -1,0 +1,8436 @@
+# =============================================================================
+# DataIngestion.jl
+#
+# Data-ingestion and graded-complex builders.
+# This module is a sibling of Workflow and extends `Workflow.encode`.
+# =============================================================================
+
+module DataIngestion
+
+using LinearAlgebra
+using SparseArrays
+using JSON3
+using Dates
+
+using ..CoreModules: QQ, QQField, PrimeField, RealField, AbstractCoeffField, coeff_type, coerce,
+                     EncodingOptions, ResolutionOptions, DerivedFunctorOptions, InvariantOptions,
+                     ResolutionCache, SessionCache, EncodingCache,
+                     _encoding_cache!, _session_resolution_cache, _session_hom_cache, _set_session_hom_cache!,
+                     _session_slice_plan_cache, _set_session_slice_plan_cache!,
+                     EncodingResult, CohomologyDimsResult, ResolutionResult, InvariantResult,
+                     change_field, AbstractPLikeEncodingMap,
+                     CompiledEncoding, compile_encoding,
+                     PointCloud, ImageNd, GraphData, EmbeddedPlanarGraph2D,
+                     GradedComplex, MultiCriticalGradedComplex,
+                     SimplexTreeMulti, simplex_count, max_simplex_dim, simplex_vertices, simplex_grades,
+                     FiltrationSpec, ConstructionBudget, ConstructionOptions, PipelineOptions,
+                     GridEncodingMap,
+                     _resolve_workflow_session_cache, _resolve_workflow_specialized_cache,
+                     _workflow_encoding_cache, _compile_encoding_cached,
+                     _encoding_with_session_cache, _resolution_cache_from_session,
+                     _slot_cache_from_session
+import ..CoreModules: locate, dimension, representatives, axes_from_encoding, _grid_strides, GridEncodingMap,
+                      materialize_module, module_dims
+
+import ..Serialization
+import ..Serialization: TAMER_FEATURE_SCHEMA_VERSION, feature_schema_header, validate_feature_metadata_schema
+
+import ..IndicatorResolutions
+import ..ZnEncoding
+using ..IndicatorResolutions: pmodule_from_fringe
+using ..PLPolyhedra
+using ..PLBackend: BoxUpset, BoxDownset, encode_fringe_boxes
+using ..Encoding: build_uptight_encoding_from_fringe,
+                  pushforward_fringe_along_encoding,
+                  PostcomposedEncodingMap
+using ..Modules: CoverEdgeMapStore, _get_cover_cache,
+                 PModule, PMorphism, cover_edges, dim_at
+using ..FiniteFringe: AbstractPoset, FinitePoset, GridPoset, ProductOfChainsPoset, FringeModule,
+                      Upset, Downset, principal_upset, principal_downset, leq, nvertices,
+                      poset_equal_opposite
+using ..DerivedFunctors
+using ..Invariants
+import ..Modules
+import ..ModuleComplexes
+import ..FieldLinAlg
+using ..ModuleComplexes: ModuleCochainComplex, cohomology_module
+using ..AbelianCategories: kernel_with_inclusion, image_with_inclusion, _cokernel_module, is_zero_morphism
+
+using ..FlangeZn: Face, IndFlat, IndInj, Flange
+import ..Workflow: encode, fringe_presentation, flange_presentation
+
+const _POINTCLOUD_KNN_GRAPH_IMPL = Ref{Any}(nothing)
+const _POINTCLOUD_RADIUS_GRAPH_IMPL = Ref{Any}(nothing)
+const _POINTCLOUD_KNN_DISTANCES_IMPL = Ref{Any}(nothing)
+const _POINTCLOUD_LARGE_N_SPARSE_ONLY = Ref{Int}(5_000)
+const _LAZY_DIFF_THREADS_MIN_VERTICES = Ref{Int}(128)
+const _H0_UNIONFIND_MIN_POS_VERTICES = Ref{Int}(96)
+const _H0_UNIONFIND_MIN_TOTAL_ACTIVE_VERTICES = Ref{Int}(8_000)
+const _H0_UNIONFIND_MIN_TOTAL_ACTIVE_EDGES = Ref{Int}(6_000)
+const _POINTCLOUD_STREAM_DIST_NONSPARSE = Ref{Bool}(true)
+const _POINTCLOUD_DIM2_PACKED_KERNEL = Ref{Bool}(true)
+const _GRAPH_CLIQUE_ENUM_MODE = Ref{Symbol}(:auto) # :auto | :intersection | :combinations
+const _H0_CHAIN_SWEEP_FASTPATH = Ref{Bool}(true)
+const _H1_COKERNEL_FASTPATH = Ref{Bool}(true)
+const _H0_ACTIVE_CHAIN_INCREMENTAL = Ref{Bool}(true)
+const _H0_ACTIVE_CHAIN_INCREMENTAL_MIN_POS_VERTICES = Ref{Int}(32)
+const _H0_ACTIVE_CHAIN_INCREMENTAL_MIN_TOTAL_ACTIVE_VERTICES = Ref{Int}(3_000)
+const _H0_ACTIVE_CHAIN_INCREMENTAL_MIN_TOTAL_ACTIVE_EDGES = Ref{Int}(8_000)
+const _COHOMOLOGY_DEGREE_LOCAL_FASTPATH = Ref{Bool}(true)
+const _COHOMOLOGY_DEGREE_LOCAL_ALL_T = Ref{Bool}(true)
+const _COHOMOLOGY_DIMS_MONOTONE_RANK_FASTPATH = Ref{Bool}(true)
+const _COHOMOLOGY_DIMS_MONOTONE_INCREMENTAL_RANK = Ref{Bool}(true)
+const _COHOMOLOGY_DIMS_MONOTONE_INCREMENTAL_MODE = Ref{Symbol}(:auto) # :auto | :on | :off
+const _COHOMOLOGY_DIMS_MONOTONE_INCREMENTAL_PROBE = Ref{Bool}(true)
+const _COHOMOLOGY_DIMS_MONOTONE_INCREMENTAL_CACHE_ENABLED = Ref{Bool}(true)
+const _COHOMOLOGY_DIMS_MONOTONE_INCREMENTAL_CACHE_MAX = Ref{Int}(96)
+const _COHOMOLOGY_DIMS_MONOTONE_INCREMENTAL_CACHE = Dict{NTuple{5,Int},Bool}()
+const _COHOMOLOGY_DIMS_MONOTONE_INCREMENTAL_CACHE_ORDER = NTuple{5,Int}[]
+const _COHOMOLOGY_DIMS_MONOTONE_INCREMENTAL_CACHE_LOCK = ReentrantLock()
+const _COHOMOLOGY_DEGREE_LOCAL_T1_MIN_POS_VERTICES = Ref{Int}(32)
+const _COHOMOLOGY_DEGREE_LOCAL_T1_MIN_TOTAL_ACTIVE_DIM1 = Ref{Int}(2_500)
+const _COHOMOLOGY_DEGREE_LOCAL_T1_MIN_TOTAL_ACTIVE_DIM2 = Ref{Int}(1_200)
+const _COHOMOLOGY_DIMS_USE_DIRECT_RESTRICTED_RANK = Ref{Bool}(true)
+const _STRUCTURAL_MAP_FAST_KERNELS = Ref{Bool}(true)
+const _ACTIVE_LISTS_CHAIN_FASTPATH = Ref{Bool}(true)
+const _INGESTION_SKIP_LAZY_ON_MODULE_CACHE_HIT = Ref{Bool}(true)
+const _INGESTION_PLAN_NORM_CACHE = Ref{Bool}(true)
+const _SIMPLICIAL_BOUNDARY_SPECIALIZED = Ref{Bool}(true)
+const _ACTIVE_INDEX_TABLE_MAX_ROWS = Ref{Int}(500_000)
+const _GRAPH_PACKED_EDGELIST_BACKEND = Ref{Bool}(true)
+const _ENCODING_RESULT_LAZY_MODULE = Ref{Bool}(true)
+const _GRAPH_BACKEND_WINNER_CACHE_ENABLED = Ref{Bool}(true)
+const _GRAPH_BACKEND_WINNER_CACHE_PROBE = Ref{Bool}(true)
+const _GRAPH_BACKEND_WINNER_CACHE_MAX = Ref{Int}(96)
+const _GRAPH_BACKEND_WINNER_CACHE = Dict{NTuple{4,Int},Bool}()
+const _GRAPH_BACKEND_WINNER_CACHE_ORDER = NTuple{4,Int}[]
+const _GRAPH_BACKEND_WINNER_CACHE_LOCK = ReentrantLock()
+
+struct _StructuralInclusionMap{K} <: AbstractMatrix{K}
+    nrows::Int
+    ncols::Int
+    row_for_col::Vector{Int}
+end
+
+Base.size(A::_StructuralInclusionMap) = (A.nrows, A.ncols)
+
+function Base.convert(::Type{_StructuralInclusionMap{K}}, A::AbstractMatrix{K}) where {K}
+    nrows, ncols = size(A)
+    row_for_col = Vector{Int}(undef, ncols)
+    @inbounds for j in 1:ncols
+        r = 0
+        for i in 1:nrows
+            v = A[i, j]
+            iszero(v) && continue
+            v == one(K) || throw(ArgumentError("convert(_StructuralInclusionMap): non-unit entry at ($i,$j)."))
+            r == 0 || throw(ArgumentError("convert(_StructuralInclusionMap): multiple nonzero entries in column $j."))
+            r = i
+        end
+        row_for_col[j] = r
+    end
+    return _StructuralInclusionMap{K}(nrows, ncols, row_for_col)
+end
+
+@inline function Base.getindex(A::_StructuralInclusionMap{K}, i::Int, j::Int) where {K}
+    @boundscheck checkbounds(A, i, j)
+    @inbounds return A.row_for_col[j] == i ? one(K) : zero(K)
+end
+
+function Base.Matrix(A::_StructuralInclusionMap{K}) where {K}
+    M = zeros(K, A.nrows, A.ncols)
+    @inbounds for j in 1:A.ncols
+        i = A.row_for_col[j]
+        i == 0 && continue
+        M[i, j] = one(K)
+    end
+    return M
+end
+
+function SparseArrays.sparse(A::_StructuralInclusionMap{K}) where {K}
+    I = Int[]
+    J = Int[]
+    V = K[]
+    sizehint!(I, A.ncols)
+    sizehint!(J, A.ncols)
+    sizehint!(V, A.ncols)
+    @inbounds for j in 1:A.ncols
+        i = A.row_for_col[j]
+        i == 0 && continue
+        push!(I, i)
+        push!(J, j)
+        push!(V, one(K))
+    end
+    return sparse(I, J, V, A.nrows, A.ncols)
+end
+
+function Base.:*(A::_StructuralInclusionMap{K}, X::AbstractMatrix{T}) where {K,T}
+    nrows, ncols = size(A)
+    ncols == size(X, 1) || throw(DimensionMismatch("size mismatch in inclusion-map multiplication"))
+    U = promote_type(K, T)
+    Y = zeros(U, nrows, size(X, 2))
+    @inbounds for j in 1:ncols
+        i = A.row_for_col[j]
+        i == 0 && continue
+        @views Y[i, :] .+= X[j, :]
+    end
+    return Y
+end
+
+function Base.:*(A::_StructuralInclusionMap{K}, x::AbstractVector{T}) where {K,T}
+    nrows, ncols = size(A)
+    ncols == length(x) || throw(DimensionMismatch("size mismatch in inclusion-map multiplication"))
+    U = promote_type(K, T)
+    y = zeros(U, nrows)
+    @inbounds for j in 1:ncols
+        i = A.row_for_col[j]
+        i == 0 && continue
+        y[i] += x[j]
+    end
+    return y
+end
+
+function Base.:*(A::_StructuralInclusionMap{K}, B::_StructuralInclusionMap{K}) where {K}
+    size(B, 1) == size(A, 2) || throw(DimensionMismatch("size mismatch in structural inclusion composition"))
+    row_for_col = Vector{Int}(undef, B.ncols)
+    @inbounds for j in 1:B.ncols
+        i = B.row_for_col[j]
+        row_for_col[j] = i == 0 ? 0 : A.row_for_col[i]
+    end
+    return _StructuralInclusionMap{K}(A.nrows, B.ncols, row_for_col)
+end
+
+@inline function _rank_structural_inclusion(A::_StructuralInclusionMap)
+    row_for_col = A.row_for_col
+    rank = 0
+    last = 0
+    monotone = true
+    @inbounds for r in row_for_col
+        if r < last
+            monotone = false
+            break
+        end
+        if r != 0 && r != last
+            rank += 1
+            last = r
+        elseif r != 0
+            last = r
+        end
+    end
+    monotone && return rank
+
+    seen = falses(A.nrows)
+    rank = 0
+    @inbounds for r in row_for_col
+        if r > 0 && !seen[r]
+            seen[r] = true
+            rank += 1
+        end
+    end
+    return rank
+end
+
+function FieldLinAlg.rank(field::AbstractCoeffField,
+                          A::_StructuralInclusionMap;
+                          backend::Symbol=:auto)
+    return _rank_structural_inclusion(A)
+end
+
+function FieldLinAlg.rank_dim(field::AbstractCoeffField,
+                              A::_StructuralInclusionMap;
+                              backend::Symbol=:auto,
+                              kwargs...)
+    return _rank_structural_inclusion(A)
+end
+
+function FieldLinAlg.rank_restricted(field::AbstractCoeffField,
+                                     A::_StructuralInclusionMap,
+                                     rows::AbstractVector{Int},
+                                     cols::AbstractVector{Int};
+                                     backend::Symbol=:auto,
+                                     kwargs...)
+    if !_STRUCTURAL_MAP_FAST_KERNELS[]
+        return FieldLinAlg.rank_restricted(field, Matrix(A), rows, cols; backend=backend, kwargs...)
+    end
+    nrows, ncols = size(A)
+    row_active = falses(nrows)
+    @inbounds for rr in rows
+        r = Int(rr)
+        (1 <= r <= nrows) && (row_active[r] = true)
+    end
+    seen = falses(nrows)
+    rank = 0
+    @inbounds for cc in cols
+        c = Int(cc)
+        (1 <= c <= ncols) || continue
+        r = A.row_for_col[c]
+        if r > 0 && row_active[r] && !seen[r]
+            seen[r] = true
+            rank += 1
+        end
+    end
+    return rank
+end
+
+function FieldLinAlg.colspace(field::AbstractCoeffField,
+                              A::_StructuralInclusionMap{K};
+                              backend::Symbol=:auto) where {K}
+    if !_STRUCTURAL_MAP_FAST_KERNELS[]
+        return FieldLinAlg.colspace(field, Matrix(A); backend=backend)
+    end
+    seen = falses(A.nrows)
+    rows = Int[]
+    sizehint!(rows, min(A.nrows, A.ncols))
+    @inbounds for r in A.row_for_col
+        if r > 0 && !seen[r]
+            seen[r] = true
+            push!(rows, r)
+        end
+    end
+    return _StructuralInclusionMap{K}(A.nrows, length(rows), rows)
+end
+
+function FieldLinAlg.nullspace(field::AbstractCoeffField,
+                               A::_StructuralInclusionMap{K};
+                               backend::Symbol=:auto) where {K}
+    if !_STRUCTURAL_MAP_FAST_KERNELS[]
+        return FieldLinAlg.nullspace(field, Matrix(A); backend=backend)
+    end
+    nrows, ncols = size(A)
+    first_col_for_row = zeros(Int, nrows)
+    I = Int[]
+    J = Int[]
+    V = K[]
+    sizehint!(I, ncols)
+    sizehint!(J, ncols)
+    sizehint!(V, ncols)
+    nb = 0
+    oneK = one(K)
+    neg_oneK = -oneK
+    @inbounds for col in 1:ncols
+        r = A.row_for_col[col]
+        if r == 0
+            nb += 1
+            push!(I, col); push!(J, nb); push!(V, oneK)
+            continue
+        end
+        leader = first_col_for_row[r]
+        if leader == 0
+            first_col_for_row[r] = col
+            continue
+        end
+        nb += 1
+        push!(I, col); push!(J, nb); push!(V, oneK)
+        push!(I, leader); push!(J, nb); push!(V, neg_oneK)
+    end
+    return sparse(I, J, V, ncols, nb)
+end
+
+function FieldLinAlg.solve_fullcolumn(field::AbstractCoeffField,
+                                      B::_StructuralInclusionMap{K},
+                                      Y::AbstractVecOrMat{K};
+                                      check_rhs::Bool=true,
+                                      backend::Symbol=:auto,
+                                      cache::Bool=true,
+                                      factor=nothing) where {K}
+    if !_STRUCTURAL_MAP_FAST_KERNELS[]
+        return FieldLinAlg.solve_fullcolumn(field, Matrix(B), Y;
+                                            check_rhs=check_rhs, backend=backend, cache=cache, factor=factor)
+    end
+    nrows, ncols = size(B)
+    Ymat = Y isa AbstractVector ? reshape(Y, :, 1) : Y
+    size(Ymat, 1) == nrows || throw(DimensionMismatch("B and Y must have same row count"))
+
+    _rank_structural_inclusion(B) == ncols ||
+        error("solve_fullcolumn: structural inclusion does not have full column rank")
+
+    X = _solve_through_structural_inclusion(B, Ymat)
+    if check_rhs
+        BX = B * X
+        BX == Matrix(Ymat) || error("solve_fullcolumn: RHS check failed")
+    end
+    return Y isa AbstractVector ? vec(X) : X
+end
+
+mutable struct _ActiveIndexLookupScratch
+    pos::Vector{Int}
+    stamp::Vector{UInt32}
+    current::UInt32
+end
+
+@inline _ActiveIndexLookupScratch(n::Int) =
+    _ActiveIndexLookupScratch(zeros(Int, n), zeros(UInt32, n), UInt32(0))
+
+@inline function _active_lookup_begin!(scratch::_ActiveIndexLookupScratch)
+    s = scratch.current + UInt32(1)
+    if s == 0
+        fill!(scratch.stamp, UInt32(0))
+        s = UInt32(1)
+    end
+    scratch.current = s
+    return s
+end
+
+@inline function _active_lookup_fill!(scratch::_ActiveIndexLookupScratch, ids::Vector{Int})
+    s = _active_lookup_begin!(scratch)
+    @inbounds for (i, id) in enumerate(ids)
+        scratch.pos[id] = i
+        scratch.stamp[id] = s
+    end
+    return nothing
+end
+
+@inline function _active_lookup_get(scratch::_ActiveIndexLookupScratch, id::Int)
+    @inbounds return (1 <= id <= length(scratch.stamp) && scratch.stamp[id] == scratch.current) ? scratch.pos[id] : 0
+end
+
+function _set_pointcloud_nn_impl!(; knn_graph=nothing, radius_graph=nothing, knn_distances=nothing)
+    knn_graph !== nothing && (_POINTCLOUD_KNN_GRAPH_IMPL[] = knn_graph)
+    radius_graph !== nothing && (_POINTCLOUD_RADIUS_GRAPH_IMPL[] = radius_graph)
+    knn_distances !== nothing && (_POINTCLOUD_KNN_DISTANCES_IMPL[] = knn_distances)
+    return nothing
+end
+
+@inline _have_pointcloud_nn_backend() =
+    _POINTCLOUD_KNN_GRAPH_IMPL[] !== nothing &&
+    _POINTCLOUD_KNN_DISTANCES_IMPL[] !== nothing
+
+@inline function _pointcloud_nn_backend(spec::FiltrationSpec)::Symbol
+    b = Symbol(get(spec.params, :nn_backend, :auto))
+    (b == :auto || b == :bruteforce || b == :nearestneighbors || b == :approx) ||
+        throw(ArgumentError("PointCloud nn_backend must be :auto, :bruteforce, :nearestneighbors, or :approx (got $(b))."))
+    if b == :auto
+        return _have_pointcloud_nn_backend() ? :auto : :bruteforce
+    end
+    if (b == :nearestneighbors || b == :approx) && !_have_pointcloud_nn_backend()
+        throw(ArgumentError("PointCloud nn_backend=$(b) requires NearestNeighbors extension. Install NearestNeighbors.jl and load the extension, or use nn_backend=:bruteforce."))
+    end
+    return b
+end
+
+@inline function _pointcloud_nn_approx_candidates(spec::FiltrationSpec)::Int
+    c = Int(get(spec.params, :nn_approx_candidates, 0))
+    c >= 0 || throw(ArgumentError("PointCloud nn_approx_candidates must be >= 0 (got $(c))."))
+    return c
+end
+
+@inline function _default_landmark_count(n::Int)::Int
+    n <= 2 && return n
+    if n >= 50_000
+        return min(n, 2_048)
+    elseif n >= 10_000
+        return min(n, 1_536)
+    elseif n >= 2_000
+        return min(n, 1_024)
+    end
+    return max(2, min(n, ceil(Int, sqrt(max(n, 1)))))
+end
+
+# Section 2: Typed filtrations (runtime API)
+# -----------------------------------------------------------------------------
+
+abstract type AbstractFiltration end
+
+struct GradedFiltration <: AbstractFiltration end
+
+struct RipsFiltration{P<:NamedTuple} <: AbstractFiltration
+    params::P
+end
+RipsFiltration(; max_dim::Int=1,
+               radius::Union{Nothing,Real}=nothing,
+               knn::Union{Nothing,Int}=nothing,
+               n_landmarks::Union{Nothing,Int}=nothing,
+               nn_backend::Symbol=:auto,
+               nn_approx_candidates::Int=0,
+               construction::ConstructionOptions=ConstructionOptions()) =
+    RipsFiltration((;
+        max_dim,
+        radius = radius === nothing ? nothing : Float64(radius),
+        knn,
+        n_landmarks,
+        nn_backend,
+        nn_approx_candidates,
+        construction,
+    ))
+
+struct RipsDensityFiltration{P<:NamedTuple} <: AbstractFiltration
+    params::P
+end
+RipsDensityFiltration(; max_dim::Int=1,
+                      radius::Union{Nothing,Real}=nothing,
+                      knn::Union{Nothing,Int}=nothing,
+                      n_landmarks::Union{Nothing,Int}=nothing,
+                      nn_backend::Symbol=:auto,
+                      nn_approx_candidates::Int=0,
+                      density_k::Int=2,
+                      construction::ConstructionOptions=ConstructionOptions()) =
+    RipsDensityFiltration((;
+        max_dim,
+        radius = radius === nothing ? nothing : Float64(radius),
+        knn,
+        n_landmarks,
+        nn_backend,
+        nn_approx_candidates,
+        density_k,
+        construction,
+    ))
+
+struct FunctionRipsFiltration{P<:NamedTuple} <: AbstractFiltration
+    params::P
+end
+FunctionRipsFiltration(; max_dim::Int=1,
+                       radius::Union{Nothing,Real}=nothing,
+                       knn::Union{Nothing,Int}=nothing,
+                       n_landmarks::Union{Nothing,Int}=nothing,
+                       nn_backend::Symbol=:auto,
+                       nn_approx_candidates::Int=0,
+                       vertex_values=nothing,
+                       vertex_function=nothing,
+                       simplex_agg::Symbol=:max,
+                       construction::ConstructionOptions=ConstructionOptions()) =
+    FunctionRipsFiltration((;
+        max_dim,
+        radius = radius === nothing ? nothing : Float64(radius),
+        knn,
+        n_landmarks,
+        nn_backend,
+        nn_approx_candidates,
+        vertex_values,
+        vertex_function,
+        simplex_agg,
+        construction,
+    ))
+
+struct LandmarkRipsFiltration{P<:NamedTuple} <: AbstractFiltration
+    params::P
+end
+LandmarkRipsFiltration(; max_dim::Int=1,
+                        landmarks,
+                        construction::ConstructionOptions=ConstructionOptions()) =
+    LandmarkRipsFiltration((; max_dim, landmarks, construction))
+
+struct GraphLowerStarFiltration{P<:NamedTuple} <: AbstractFiltration
+    params::P
+end
+GraphLowerStarFiltration(; vertex_grades=nothing,
+                         vertex_values=nothing,
+                         vertex_function=nothing,
+                         simplex_agg::Symbol=:max,
+                         construction::ConstructionOptions=ConstructionOptions()) =
+    GraphLowerStarFiltration((; vertex_grades, vertex_values, vertex_function, simplex_agg, construction))
+
+struct CliqueLowerStarFiltration{P<:NamedTuple} <: AbstractFiltration
+    params::P
+end
+CliqueLowerStarFiltration(; max_dim::Int=2,
+                          vertex_grades=nothing,
+                          vertex_values=nothing,
+                          vertex_function=nothing,
+                          simplex_agg::Symbol=:max,
+                          construction::ConstructionOptions=ConstructionOptions()) =
+    CliqueLowerStarFiltration((; max_dim, vertex_grades, vertex_values, vertex_function, simplex_agg, construction))
+
+struct EdgeWeightedFiltration{P<:NamedTuple} <: AbstractFiltration
+    params::P
+end
+EdgeWeightedFiltration(; edge_weights,
+                        construction::ConstructionOptions=ConstructionOptions()) =
+    EdgeWeightedFiltration((; edge_weights, construction))
+
+struct GraphCentralityFiltration{P<:NamedTuple} <: AbstractFiltration
+    params::P
+end
+GraphCentralityFiltration(;
+                          centrality::Symbol=:degree,
+                          metric::Symbol=:hop,
+                          lift::Symbol=:lower_star,
+                          max_dim::Int=2,
+                          simplex_agg::Symbol=:max,
+                          edge_weights=nothing,
+                          construction::ConstructionOptions=ConstructionOptions()) =
+    GraphCentralityFiltration((; centrality, metric, lift, max_dim, simplex_agg, edge_weights, construction))
+
+struct GraphGeodesicFiltration{P<:NamedTuple} <: AbstractFiltration
+    params::P
+end
+GraphGeodesicFiltration(;
+                        sources,
+                        metric::Symbol=:hop,
+                        lift::Symbol=:lower_star,
+                        max_dim::Int=2,
+                        simplex_agg::Symbol=:max,
+                        edge_weights=nothing,
+                        construction::ConstructionOptions=ConstructionOptions()) =
+    GraphGeodesicFiltration((; sources, metric, lift, max_dim, simplex_agg, edge_weights, construction))
+
+struct GraphFunctionGeodesicBifiltration{P<:NamedTuple} <: AbstractFiltration
+    params::P
+end
+GraphFunctionGeodesicBifiltration(;
+                                  sources,
+                                  metric::Symbol=:hop,
+                                  vertex_values=nothing,
+                                  vertex_function=nothing,
+                                  lift::Symbol=:lower_star,
+                                  max_dim::Int=2,
+                                  simplex_agg::Symbol=:max,
+                                  edge_weights=nothing,
+                                  construction::ConstructionOptions=ConstructionOptions()) =
+    GraphFunctionGeodesicBifiltration((; sources, metric, vertex_values, vertex_function, lift, max_dim, simplex_agg, edge_weights, construction))
+
+struct GraphWeightThresholdFiltration{P<:NamedTuple} <: AbstractFiltration
+    params::P
+end
+GraphWeightThresholdFiltration(;
+                               edge_weights=nothing,
+                               lift::Symbol=:graph,
+                               max_dim::Int=2,
+                               construction::ConstructionOptions=ConstructionOptions()) =
+    GraphWeightThresholdFiltration((; edge_weights, lift, max_dim, construction))
+
+struct ImageLowerStarFiltration{P<:NamedTuple} <: AbstractFiltration
+    params::P
+end
+ImageLowerStarFiltration(; channels=nothing,
+                          construction::ConstructionOptions=ConstructionOptions()) =
+    ImageLowerStarFiltration((; channels, construction))
+
+struct ImageDistanceBifiltration{P<:NamedTuple} <: AbstractFiltration
+    params::P
+end
+ImageDistanceBifiltration(; mask=nothing, channels=nothing,
+                           construction::ConstructionOptions=ConstructionOptions()) =
+    ImageDistanceBifiltration((; mask, channels, construction))
+
+struct WingVeinBifiltration{P<:NamedTuple} <: AbstractFiltration
+    params::P
+end
+WingVeinBifiltration(; grid=(32, 32), bbox=nothing, orientation=(-1, 1),
+                      construction::ConstructionOptions=ConstructionOptions()) =
+    WingVeinBifiltration((; grid, bbox, orientation, construction))
+
+struct DelaunayLowerStarFiltration{P<:NamedTuple} <: AbstractFiltration
+    params::P
+end
+DelaunayLowerStarFiltration(; max_dim::Int=2,
+                            vertex_values=nothing,
+                            vertex_function=nothing,
+                            simplex_agg::Symbol=:max,
+                            highdim_policy::Symbol=:rips,
+                            construction::ConstructionOptions=ConstructionOptions()) =
+    DelaunayLowerStarFiltration((; max_dim, vertex_values, vertex_function, simplex_agg, highdim_policy, construction))
+
+struct AlphaFiltration{P<:NamedTuple} <: AbstractFiltration
+    params::P
+end
+AlphaFiltration(; max_dim::Int=2,
+                highdim_policy::Symbol=:rips,
+                construction::ConstructionOptions=ConstructionOptions()) =
+    AlphaFiltration((; max_dim, highdim_policy, construction))
+
+struct FunctionDelaunayFiltration{P<:NamedTuple} <: AbstractFiltration
+    params::P
+end
+FunctionDelaunayFiltration(; max_dim::Int=2,
+                           vertex_values=nothing,
+                           vertex_function=nothing,
+                           simplex_agg::Symbol=:max,
+                           highdim_policy::Symbol=:rips,
+                           construction::ConstructionOptions=ConstructionOptions()) =
+    FunctionDelaunayFiltration((; max_dim, vertex_values, vertex_function, simplex_agg, highdim_policy, construction))
+
+struct CoreDelaunayFiltration{P<:NamedTuple} <: AbstractFiltration
+    params::P
+end
+CoreDelaunayFiltration(; max_dim::Int=2,
+                       highdim_policy::Symbol=:rips,
+                       construction::ConstructionOptions=ConstructionOptions()) =
+    CoreDelaunayFiltration((; max_dim, highdim_policy, construction))
+
+struct CoreFiltration{P<:NamedTuple} <: AbstractFiltration
+    params::P
+end
+CoreFiltration(; radius=nothing,
+               knn::Int=8,
+               nn_backend::Symbol=:auto,
+               nn_approx_candidates::Int=0,
+               vertex_values=nothing,
+               vertex_function=nothing,
+               construction::ConstructionOptions=ConstructionOptions()) =
+    CoreFiltration((; radius, knn, nn_backend, nn_approx_candidates, vertex_values, vertex_function, construction))
+
+struct DegreeRipsFiltration{P<:NamedTuple} <: AbstractFiltration
+    params::P
+end
+DegreeRipsFiltration(; max_dim::Int=1,
+                     radius::Union{Nothing,Real}=nothing,
+                     knn::Union{Nothing,Int}=nothing,
+                     n_landmarks::Union{Nothing,Int}=nothing,
+                     nn_backend::Symbol=:auto,
+                     nn_approx_candidates::Int=0,
+                     construction::ConstructionOptions=ConstructionOptions()) =
+    DegreeRipsFiltration((;
+        max_dim,
+        radius = radius === nothing ? nothing : Float64(radius),
+        knn,
+        n_landmarks,
+        nn_backend,
+        nn_approx_candidates,
+        construction,
+    ))
+
+struct CubicalFiltration{P<:NamedTuple} <: AbstractFiltration
+    params::P
+end
+CubicalFiltration(; channels=nothing,
+                  construction::ConstructionOptions=ConstructionOptions()) =
+    CubicalFiltration((; channels, construction))
+
+struct RhomboidFiltration{P<:NamedTuple} <: AbstractFiltration
+    params::P
+end
+RhomboidFiltration(; max_dim::Int=2,
+                   radius=nothing,
+                   knn::Union{Nothing,Int}=nothing,
+                   n_landmarks::Union{Nothing,Int}=nothing,
+                   nn_backend::Symbol=:auto,
+                   nn_approx_candidates::Int=0,
+                   vertex_values=nothing,
+                   vertex_function=nothing,
+                   construction::ConstructionOptions=ConstructionOptions()) =
+    RhomboidFiltration((; max_dim, radius, knn, n_landmarks, nn_backend, nn_approx_candidates, vertex_values, vertex_function, construction))
+
+@inline function _params_with_nonnothing(params::NamedTuple)
+    return (; (k => (k == :construction && v isa ConstructionOptions ? _construction_to_namedtuple(v) : v)
+             for (k, v) in pairs(params) if v !== nothing)...)
+end
+
+const _CONSTRUCTION_LEGACY_KEYS = (
+    :sparse_rips, :approx_rips, :max_edges, :max_degree, :sample_frac, :max_simplices
+)
+
+@inline function _construction_to_namedtuple(c::ConstructionOptions)
+    return (
+        sparsify = c.sparsify,
+        collapse = c.collapse,
+        output_stage = c.output_stage,
+        budget = (
+            max_simplices = c.budget.max_simplices,
+            max_edges = c.budget.max_edges,
+            memory_budget_bytes = c.budget.memory_budget_bytes,
+        ),
+    )
+end
+
+function _construction_from_raw(raw;
+                                default_output_stage::Symbol=:encoding_result)
+    if raw === nothing
+        return ConstructionOptions(; output_stage=default_output_stage)
+    elseif raw isa ConstructionOptions
+        return raw
+    elseif raw isa NamedTuple
+        return ConstructionOptions(;
+            sparsify = Symbol(get(raw, :sparsify, :none)),
+            collapse = Symbol(get(raw, :collapse, :none)),
+            output_stage = Symbol(get(raw, :output_stage, default_output_stage)),
+            budget = get(raw, :budget, (nothing, nothing, nothing)),
+        )
+    elseif raw isa AbstractDict
+        sparsify = Symbol(get(raw, "sparsify", get(raw, :sparsify, :none)))
+        collapse = Symbol(get(raw, "collapse", get(raw, :collapse, :none)))
+        output_stage = Symbol(get(raw, "output_stage", get(raw, :output_stage, default_output_stage)))
+        budget_raw = get(raw, "budget", get(raw, :budget, (nothing, nothing, nothing)))
+        if budget_raw isa AbstractDict
+            budget = (
+                max_simplices = get(budget_raw, "max_simplices", get(budget_raw, :max_simplices, nothing)),
+                max_edges = get(budget_raw, "max_edges", get(budget_raw, :max_edges, nothing)),
+                memory_budget_bytes = get(budget_raw, "memory_budget_bytes", get(budget_raw, :memory_budget_bytes, nothing)),
+            )
+        else
+            budget = budget_raw
+        end
+        return ConstructionOptions(; sparsify=sparsify, collapse=collapse, output_stage=output_stage, budget=budget)
+    end
+    throw(ArgumentError("Invalid construction payload. Expected ConstructionOptions, NamedTuple, AbstractDict, or nothing."))
+end
+
+function _construction_from_params(params::NamedTuple;
+                                   default_output_stage::Symbol=:encoding_result)
+    for k in _CONSTRUCTION_LEGACY_KEYS
+        if haskey(params, k)
+            throw(ArgumentError("FiltrationSpec uses deprecated key `$(k)`. Use `construction=ConstructionOptions(...)` with budget/sparsify settings."))
+        end
+    end
+    raw = haskey(params, :construction) ? params[:construction] : nothing
+    return _construction_from_raw(raw; default_output_stage=default_output_stage)
+end
+
+function _construction_from_filtration(f::AbstractFiltration;
+                                       default_output_stage::Symbol=:encoding_result)
+    if hasproperty(f, :params)
+        p = getproperty(f, :params)
+        if p isa NamedTuple && haskey(p, :construction)
+            return _construction_from_raw(p[:construction]; default_output_stage=default_output_stage)
+        end
+    end
+    return ConstructionOptions(; output_stage=default_output_stage)
+end
+
+function _filtration_spec(::GradedFiltration)
+    return FiltrationSpec(kind=:graded)
+end
+
+function _filtration_spec(f::RipsFiltration)
+    p = _params_with_nonnothing(f.params)
+    return FiltrationSpec(; kind=:rips, p...)
+end
+
+function _filtration_spec(f::RipsDensityFiltration)
+    p = _params_with_nonnothing(f.params)
+    return FiltrationSpec(; kind=:rips_density, p...)
+end
+
+function _filtration_spec(f::FunctionRipsFiltration)
+    p = _params_with_nonnothing(f.params)
+    return FiltrationSpec(; kind=:function_rips, p...)
+end
+
+function _filtration_spec(f::LandmarkRipsFiltration)
+    p = _params_with_nonnothing(f.params)
+    return FiltrationSpec(; kind=:landmark_rips, p...)
+end
+
+function _filtration_spec(f::GraphLowerStarFiltration)
+    p = _params_with_nonnothing(f.params)
+    return FiltrationSpec(; kind=:graph_lower_star, p...)
+end
+
+function _filtration_spec(f::CliqueLowerStarFiltration)
+    p = _params_with_nonnothing(f.params)
+    return FiltrationSpec(; kind=:clique_lower_star, p...)
+end
+
+function _filtration_spec(f::EdgeWeightedFiltration)
+    p = _params_with_nonnothing(f.params)
+    return FiltrationSpec(; kind=:edge_weighted, p...)
+end
+
+function _filtration_spec(f::GraphCentralityFiltration)
+    p = _params_with_nonnothing(f.params)
+    return FiltrationSpec(; kind=:graph_centrality, p...)
+end
+
+function _filtration_spec(f::GraphGeodesicFiltration)
+    p = _params_with_nonnothing(f.params)
+    return FiltrationSpec(; kind=:graph_geodesic, p...)
+end
+
+function _filtration_spec(f::GraphFunctionGeodesicBifiltration)
+    p = _params_with_nonnothing(f.params)
+    return FiltrationSpec(; kind=:graph_function_geodesic_bifiltration, p...)
+end
+
+function _filtration_spec(f::GraphWeightThresholdFiltration)
+    p = _params_with_nonnothing(f.params)
+    return FiltrationSpec(; kind=:graph_weight_threshold, p...)
+end
+
+function _filtration_spec(f::ImageLowerStarFiltration)
+    p = _params_with_nonnothing(f.params)
+    return FiltrationSpec(; kind=:lower_star, p...)
+end
+
+function _filtration_spec(f::ImageDistanceBifiltration)
+    p = _params_with_nonnothing(f.params)
+    return FiltrationSpec(; kind=:image_distance_bifiltration, p...)
+end
+
+function _filtration_spec(f::WingVeinBifiltration)
+    p = _params_with_nonnothing(f.params)
+    return FiltrationSpec(; kind=:wing_vein_bifiltration, p...)
+end
+
+function _filtration_spec(f::CubicalFiltration)
+    p = _params_with_nonnothing(f.params)
+    return FiltrationSpec(; kind=:cubical, p...)
+end
+
+function _filtration_spec(f::DelaunayLowerStarFiltration)
+    p = _params_with_nonnothing(f.params)
+    return FiltrationSpec(; kind=:delaunay_lower_star, p...)
+end
+
+function _filtration_spec(f::AlphaFiltration)
+    p = _params_with_nonnothing(f.params)
+    return FiltrationSpec(; kind=:alpha, p...)
+end
+
+function _filtration_spec(f::FunctionDelaunayFiltration)
+    p = _params_with_nonnothing(f.params)
+    return FiltrationSpec(; kind=:function_delaunay, p...)
+end
+
+function _filtration_spec(f::CoreDelaunayFiltration)
+    p = _params_with_nonnothing(f.params)
+    return FiltrationSpec(; kind=:core_delaunay, p...)
+end
+
+function _filtration_spec(f::CoreFiltration)
+    p = _params_with_nonnothing(f.params)
+    return FiltrationSpec(; kind=:core, p...)
+end
+
+function _filtration_spec(f::DegreeRipsFiltration)
+    p = _params_with_nonnothing(f.params)
+    return FiltrationSpec(; kind=:degree_rips, p...)
+end
+
+function _filtration_spec(f::RhomboidFiltration)
+    p = _params_with_nonnothing(f.params)
+    return FiltrationSpec(; kind=:rhomboid, p...)
+end
+
+function _filtration_spec(f::AbstractFiltration)
+    throw(ArgumentError("No FiltrationSpec conversion for $(typeof(f)). Define `_graded_complex_from_data(data, ::$(typeof(f)); cache=...)` for custom runtime filtrations."))
+end
+
+"""
+    save_pipeline_json(path, data, filtration::AbstractFiltration; degree=nothing, pipeline_opts=nothing)
+
+Serialize a typed filtration by first converting it to canonical `FiltrationSpec`.
+"""
+function Serialization.save_pipeline_json(path::AbstractString, data, filtration::AbstractFiltration; degree=nothing, pipeline_opts=nothing)
+    return Serialization.save_pipeline_json(path, data, _filtration_spec(filtration); degree=degree, pipeline_opts=pipeline_opts)
+end
+
+"""
+    to_filtration(spec::FiltrationSpec) -> AbstractFiltration
+
+Convert serialized `FiltrationSpec` into a typed runtime filtration object.
+"""
+function to_filtration(spec::FiltrationSpec)::AbstractFiltration
+    p = spec.params
+    k = spec.kind
+    construction = _construction_from_params(p)
+    if k === :graded
+        return GradedFiltration()
+    elseif k === :rips
+        return RipsFiltration(;
+            max_dim = get(p, :max_dim, 1),
+            radius = get(p, :radius, nothing),
+            knn = get(p, :knn, nothing),
+            n_landmarks = get(p, :n_landmarks, nothing),
+            nn_backend = Symbol(get(p, :nn_backend, :auto)),
+            nn_approx_candidates = Int(get(p, :nn_approx_candidates, 0)),
+            construction = construction,
+        )
+    elseif k === :rips_density
+        return RipsDensityFiltration(;
+            max_dim = get(p, :max_dim, 1),
+            radius = get(p, :radius, nothing),
+            knn = get(p, :knn, nothing),
+            n_landmarks = get(p, :n_landmarks, nothing),
+            nn_backend = Symbol(get(p, :nn_backend, :auto)),
+            nn_approx_candidates = Int(get(p, :nn_approx_candidates, 0)),
+            density_k = get(p, :density_k, 2),
+            construction = construction,
+        )
+    elseif k === :function_rips
+        return FunctionRipsFiltration(;
+            max_dim = get(p, :max_dim, 1),
+            radius = get(p, :radius, nothing),
+            knn = get(p, :knn, nothing),
+            n_landmarks = get(p, :n_landmarks, nothing),
+            nn_backend = Symbol(get(p, :nn_backend, :auto)),
+            nn_approx_candidates = Int(get(p, :nn_approx_candidates, 0)),
+            vertex_values = get(p, :vertex_values, nothing),
+            vertex_function = get(p, :vertex_function, nothing),
+            simplex_agg = get(p, :simplex_agg, :max),
+            construction = construction,
+        )
+    elseif k === :landmark_rips
+        landmarks = get(p, :landmarks, nothing)
+        landmarks === nothing && error("to_filtration: landmark_rips requires landmarks.")
+        return LandmarkRipsFiltration(; max_dim=get(p, :max_dim, 1), landmarks=landmarks, construction=construction)
+    elseif k === :graph_lower_star
+        return GraphLowerStarFiltration(;
+            vertex_grades = get(p, :vertex_grades, nothing),
+            vertex_values = get(p, :vertex_values, nothing),
+            vertex_function = get(p, :vertex_function, nothing),
+            simplex_agg = get(p, :simplex_agg, :max),
+            construction = construction,
+        )
+    elseif k === :clique_lower_star
+        return CliqueLowerStarFiltration(;
+            max_dim = get(p, :max_dim, 2),
+            vertex_grades = get(p, :vertex_grades, nothing),
+            vertex_values = get(p, :vertex_values, nothing),
+            vertex_function = get(p, :vertex_function, nothing),
+            simplex_agg = get(p, :simplex_agg, :max),
+            construction = construction,
+        )
+    elseif k === :edge_weighted
+        edge_weights = get(p, :edge_weights, nothing)
+        edge_weights === nothing && error("to_filtration: edge_weighted requires edge_weights.")
+        return EdgeWeightedFiltration(; edge_weights=edge_weights, construction=construction)
+    elseif k === :graph_centrality
+        return GraphCentralityFiltration(;
+            centrality = get(p, :centrality, :degree),
+            metric = get(p, :metric, :hop),
+            lift = get(p, :lift, :lower_star),
+            max_dim = get(p, :max_dim, 2),
+            simplex_agg = get(p, :simplex_agg, :max),
+            edge_weights = get(p, :edge_weights, nothing),
+            construction = construction,
+        )
+    elseif k === :graph_geodesic
+        sources = get(p, :sources, nothing)
+        sources === nothing && error("to_filtration: graph_geodesic requires sources.")
+        return GraphGeodesicFiltration(;
+            sources = sources,
+            metric = get(p, :metric, :hop),
+            lift = get(p, :lift, :lower_star),
+            max_dim = get(p, :max_dim, 2),
+            simplex_agg = get(p, :simplex_agg, :max),
+            edge_weights = get(p, :edge_weights, nothing),
+            construction = construction,
+        )
+    elseif k === :graph_function_geodesic_bifiltration
+        sources = get(p, :sources, nothing)
+        sources === nothing && error("to_filtration: graph_function_geodesic_bifiltration requires sources.")
+        return GraphFunctionGeodesicBifiltration(;
+            sources = sources,
+            metric = get(p, :metric, :hop),
+            vertex_values = get(p, :vertex_values, nothing),
+            vertex_function = get(p, :vertex_function, nothing),
+            lift = get(p, :lift, :lower_star),
+            max_dim = get(p, :max_dim, 2),
+            simplex_agg = get(p, :simplex_agg, :max),
+            edge_weights = get(p, :edge_weights, nothing),
+            construction = construction,
+        )
+    elseif k === :graph_weight_threshold
+        return GraphWeightThresholdFiltration(;
+            edge_weights = get(p, :edge_weights, nothing),
+            lift = get(p, :lift, :graph),
+            max_dim = get(p, :max_dim, 2),
+            construction = construction,
+        )
+    elseif k === :lower_star
+        return ImageLowerStarFiltration(; channels=get(p, :channels, nothing), construction=construction)
+    elseif k === :image_distance_bifiltration
+        return ImageDistanceBifiltration(; mask=get(p, :mask, nothing), channels=get(p, :channels, nothing), construction=construction)
+    elseif k === :wing_vein_bifiltration
+        return WingVeinBifiltration(;
+            grid = get(p, :grid, (32, 32)),
+            bbox = get(p, :bbox, nothing),
+            orientation = get(p, :orientation, (-1, 1)),
+            construction = construction,
+        )
+    elseif k === :cubical
+        return CubicalFiltration(;
+            channels = get(p, :channels, nothing),
+            construction = construction,
+        )
+    elseif k === :delaunay_lower_star
+        return DelaunayLowerStarFiltration(;
+            max_dim = get(p, :max_dim, 2),
+            vertex_values = get(p, :vertex_values, nothing),
+            vertex_function = get(p, :vertex_function, nothing),
+            simplex_agg = get(p, :simplex_agg, :max),
+            highdim_policy = get(p, :highdim_policy, :rips),
+            construction = construction,
+        )
+    elseif k === :alpha
+        return AlphaFiltration(;
+            max_dim = get(p, :max_dim, 2),
+            highdim_policy = get(p, :highdim_policy, :rips),
+            construction = construction,
+        )
+    elseif k === :function_delaunay
+        return FunctionDelaunayFiltration(;
+            max_dim = get(p, :max_dim, 2),
+            vertex_values = get(p, :vertex_values, nothing),
+            vertex_function = get(p, :vertex_function, nothing),
+            simplex_agg = get(p, :simplex_agg, :max),
+            highdim_policy = get(p, :highdim_policy, :rips),
+            construction = construction,
+        )
+    elseif k === :core_delaunay
+        return CoreDelaunayFiltration(;
+            max_dim = get(p, :max_dim, 2),
+            highdim_policy = get(p, :highdim_policy, :rips),
+            construction = construction,
+        )
+    elseif k === :core
+        return CoreFiltration(;
+            radius = get(p, :radius, nothing),
+            knn = get(p, :knn, 8),
+            nn_backend = Symbol(get(p, :nn_backend, :auto)),
+            nn_approx_candidates = Int(get(p, :nn_approx_candidates, 0)),
+            vertex_values = get(p, :vertex_values, nothing),
+            vertex_function = get(p, :vertex_function, nothing),
+            construction = construction,
+        )
+    elseif k === :degree_rips
+        return DegreeRipsFiltration(;
+            max_dim = get(p, :max_dim, 1),
+            radius = get(p, :radius, nothing),
+            knn = get(p, :knn, nothing),
+            n_landmarks = get(p, :n_landmarks, nothing),
+            nn_backend = Symbol(get(p, :nn_backend, :auto)),
+            nn_approx_candidates = Int(get(p, :nn_approx_candidates, 0)),
+            construction = construction,
+        )
+    elseif k === :rhomboid
+        return RhomboidFiltration(;
+            max_dim = get(p, :max_dim, 2),
+            radius = get(p, :radius, nothing),
+            knn = get(p, :knn, nothing),
+            n_landmarks = get(p, :n_landmarks, nothing),
+            nn_backend = Symbol(get(p, :nn_backend, :auto)),
+            nn_approx_candidates = Int(get(p, :nn_approx_candidates, 0)),
+            vertex_values = get(p, :vertex_values, nothing),
+            vertex_function = get(p, :vertex_function, nothing),
+            construction = construction,
+        )
+    end
+    error("to_filtration: unsupported kind=$(k).")
+end
+
+@inline function _ingestion_warn!(warnings::Vector{String}, msg::AbstractString, strict::Bool)
+    strict && throw(ArgumentError(msg))
+    push!(warnings, String(msg))
+    return nothing
+end
+
+@inline function _prod_bigint(xs::Tuple)
+    p = big(1)
+    @inbounds for x in xs
+        p *= big(x)
+    end
+    return p
+end
+
+@inline function _sum_bigint(xs::Vector{BigInt})
+    s = big(0)
+    @inbounds for x in xs
+        s += x
+    end
+    return s
+end
+
+function _estimate_axis_sizes_from_spec(spec::FiltrationSpec)
+    axes = get(spec.params, :axes, nothing)
+    axes === nothing && return nothing
+    if axes isa Tuple
+        return ntuple(i -> length(axes[i]), length(axes))
+    elseif axes isa AbstractVector
+        return tuple((length(a) for a in axes)...)
+    end
+    return nothing
+end
+
+function _estimate_axis_sizes_from_grades(grades)
+    isempty(grades) && return nothing
+    N = length(grades[1])
+    seen = [Set{Float64}() for _ in 1:N]
+    for g in grades
+        @inbounds for i in 1:N
+            push!(seen[i], Float64(g[i]))
+        end
+    end
+    return ntuple(i -> length(seen[i]), N)
+end
+
+function _estimate_axis_sizes_from_grades(grades::Vector{<:AbstractVector{<:Tuple}})
+    isempty(grades) && return nothing
+    first_cell = findfirst(!isempty, grades)
+    first_cell === nothing && return nothing
+    N = length(grades[first_cell][1])
+    seen = [Set{Float64}() for _ in 1:N]
+    for cell in grades
+        for g in cell
+            @inbounds for i in 1:N
+                push!(seen[i], Float64(g[i]))
+            end
+        end
+    end
+    return ntuple(i -> length(seen[i]), N)
+end
+
+@inline function _estimate_nnz_from_cell_counts(cell_counts::Vector{BigInt})
+    nnz_est = big(0)
+    # idx = simplex_size = (dimension + 1)
+    for idx in 2:length(cell_counts)
+        nnz_est += cell_counts[idx] * big(idx)
+    end
+    return nnz_est
+end
+
+@inline function _estimate_dense_bytes_from_cell_counts(cell_counts::Vector{BigInt}; elem_bytes::Integer=8)
+    peak = big(0)
+    for idx in 2:length(cell_counts)
+        dense = cell_counts[idx - 1] * cell_counts[idx] * big(elem_bytes)
+        dense > peak && (peak = dense)
+    end
+    return peak
+end
+
+function _estimate_rips_like_cell_counts(n::Int,
+                                         spec::FiltrationSpec;
+                                         exact_pairwise_limit::Int,
+                                         warnings::Vector{String},
+                                         strict::Bool)
+    n < 0 && throw(ArgumentError("estimate_ingestion: invalid point count $n"))
+    max_dim = max(Int(get(spec.params, :max_dim, 1)), 0)
+    construction = _construction_from_params(spec.params)
+    if construction.sparsify == :radius
+        radius = get(spec.params, :radius, nothing)
+        if radius === nothing
+            _ingestion_warn!(warnings, "construction.sparsify=:radius without radius; using complete-graph edge upper bound in estimate.", strict)
+            edges = binomial(big(n), big(2))
+        elseif n > exact_pairwise_limit
+            _ingestion_warn!(warnings, "Point count $n exceeds exact_pairwise_limit=$exact_pairwise_limit; using complete-graph edge upper bound.", strict)
+            edges = binomial(big(n), big(2))
+        else
+            points_ref = get(spec.params, :_points_ref, nothing)
+            points_ref === nothing && throw(ArgumentError("estimate_ingestion internal error: missing point reference for sparse radius estimate."))
+            edges_i = 0
+            r = Float64(radius)
+            for i in 1:n, j in (i + 1):n
+                if _euclidean_distance(points_ref[i], points_ref[j]) <= r
+                    edges_i += 1
+                end
+            end
+            edges = big(edges_i)
+        end
+        return BigInt[big(n), edges]
+    end
+    if construction.sparsify == :knn
+        k = max(Int(get(spec.params, :knn, 8)), 0)
+        max_pairs = binomial(big(n), big(2))
+        edges = min(max_pairs, big(cld(n * k, 2)))
+        return BigInt[big(n), edges]
+    end
+    if construction.sparsify == :greedy_perm
+        n_landmarks = get(spec.params, :n_landmarks, nothing)
+        m = n_landmarks === nothing ? _default_landmark_count(n) : Int(n_landmarks)
+        m = max(1, min(n, m))
+        _ingestion_warn!(warnings, "construction.sparsify=:greedy_perm estimate uses landmark count m=$m.", strict)
+        return BigInt[binomial(big(m), big(k)) for k in 1:(max_dim + 1)]
+    end
+    if construction.sparsify != :none
+        throw(ArgumentError("estimate_ingestion: unsupported construction.sparsify=$(construction.sparsify)."))
+    end
+    return BigInt[binomial(big(n), big(k)) for k in 1:(max_dim + 1)]
+end
+
+@inline function _construction_budget(spec::FiltrationSpec)
+    return _construction_from_params(spec.params).budget
+end
+
+@inline function _construction_max_simplices(spec::FiltrationSpec)
+    return _construction_budget(spec).max_simplices
+end
+
+@inline function _construction_max_edges(spec::FiltrationSpec)
+    return _construction_budget(spec).max_edges
+end
+
+function _construction_merge_for_fallback(spec::FiltrationSpec,
+                                          construction::ConstructionOptions)
+    p = _filter_params(spec.params, Symbol[:construction])
+    return merge(p, (construction=_construction_to_namedtuple(construction),))
+end
+
+function _construction_budget_edge_cap(spec::FiltrationSpec)
+    budget = _construction_budget(spec)
+    return budget.max_edges
+end
+
+function _construction_memory_budget(spec::FiltrationSpec)
+    return _construction_budget(spec).memory_budget_bytes
+end
+
+function _construction_check_memory_budget!(dense_bytes_est::BigInt,
+                                            spec::FiltrationSpec)
+    mb = _construction_memory_budget(spec)
+    if mb !== nothing && dense_bytes_est > big(mb)
+        throw(ArgumentError("Ingestion construction budget exceeded: estimated dense boundary footprint $dense_bytes_est bytes > memory_budget_bytes=$mb."))
+    end
+    return nothing
+end
+
+function _construction_check_max_simplices!(total::Integer, dim_idx::Int, spec::FiltrationSpec)
+    ms = _construction_max_simplices(spec)
+    if ms !== nothing && total > ms
+        throw(ArgumentError("Ingestion construction budget exceeded at simplex dimension $(dim_idx): count=$(total) > max_simplices=$(ms)."))
+    end
+    return nothing
+end
+
+function _construction_check_max_edges!(edge_count::Integer, spec::FiltrationSpec)
+    cap = _construction_max_edges(spec)
+    if cap !== nothing && edge_count > cap
+        throw(ArgumentError("Ingestion construction budget exceeded: edge count=$(edge_count) > max_edges=$(cap)."))
+    end
+    return nothing
+end
+
+@inline function _construction_cap_edges!(edges::Vector, spec::FiltrationSpec)
+    cap = _construction_budget_edge_cap(spec)
+    if cap !== nothing && length(edges) > cap
+        throw(ArgumentError("Ingestion construction budget exceeded: edge count=$(length(edges)) > max_edges=$(cap)."))
+    end
+    return edges
+end
+
+@inline _combination_count(n::Int, k::Int) = binomial(big(n), big(k))
+
+function _construction_precheck_combination_enumeration!(n::Int,
+                                                         k::Int,
+                                                         total_before::BigInt,
+                                                         spec::FiltrationSpec)
+    count = _combination_count(n, k)
+    if count > big(typemax(Int))
+        throw(ArgumentError("Ingestion combinatorial explosion at simplex dimension $(k - 1): C($(n),$(k))=$(count) exceeds representable collection size before enumeration."))
+    end
+    ms = _construction_max_simplices(spec)
+    if ms !== nothing
+        total_after = total_before + count
+        if total_after > big(ms)
+            throw(ArgumentError("Ingestion construction budget would be exceeded before enumeration at simplex dimension $(k - 1): count=$(total_after) > max_simplices=$(ms)."))
+        end
+    end
+    return Int(count)
+end
+
+function _construction_precheck_combination_candidates!(n::Int,
+                                                        k::Int,
+                                                        total_before::BigInt,
+                                                        spec::FiltrationSpec;
+                                                        context::AbstractString="candidate")
+    count = _combination_count(n, k)
+    if count > big(typemax(Int))
+        throw(ArgumentError("Ingestion combinatorial explosion at simplex dimension $(k - 1): C($(n),$(k))=$(count) exceeds representable collection size before $(context) enumeration."))
+    end
+    ms = _construction_max_simplices(spec)
+    if ms !== nothing
+        total_upper = total_before + count
+        if total_upper > big(ms)
+            throw(ArgumentError("Ingestion construction budget upper bound would be exceeded before $(context) enumeration at simplex dimension $(k - 1): upper_bound=$(total_upper) > max_simplices=$(ms)."))
+        end
+    end
+    return Int(count)
+end
+
+function _greedy_perm_indices(points::AbstractVector{<:AbstractVector{<:Real}}, m::Int)
+    n = length(points)
+    n == 0 && return Int[]
+    m = max(1, min(n, m))
+    chosen = Int[1]
+    min_d = fill(Inf, n)
+    for i in 1:n
+        min_d[i] = _euclidean_distance(points[i], points[1])
+    end
+    min_d[1] = 0.0
+    while length(chosen) < m
+        best = 1
+        bestd = -Inf
+        for i in 1:n
+            di = min_d[i]
+            if di > bestd
+                bestd = di
+                best = i
+            end
+        end
+        push!(chosen, best)
+        for i in 1:n
+            d = _euclidean_distance(points[i], points[best])
+            d < min_d[i] && (min_d[i] = d)
+        end
+        min_d[best] = 0.0
+    end
+    return sort(unique(chosen))
+end
+
+function _collapse_acyclic_edges_with_dists(edges::Vector{NTuple{2,Int}},
+                                            dists::Vector{Float64},
+                                            n::Int)
+    parent = collect(1:n)
+    rank = zeros(Int, n)
+    function findp(x)
+        while parent[x] != x
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        end
+        return x
+    end
+    function unite(x, y)
+        rx, ry = findp(x), findp(y)
+        rx == ry && return false
+        if rank[rx] < rank[ry]
+            parent[rx] = ry
+        elseif rank[rx] > rank[ry]
+            parent[ry] = rx
+        else
+            parent[ry] = rx
+            rank[rx] += 1
+        end
+        return true
+    end
+    idx = sortperm(eachindex(edges); by=i -> dists[i])
+    out_edges = NTuple{2,Int}[]
+    out_dists = Float64[]
+    sizehint!(out_edges, length(edges))
+    sizehint!(out_dists, length(edges))
+    for i in idx
+        u, v = edges[i]
+        if unite(u, v)
+            e = edges[i]
+            push!(out_edges, e)
+            push!(out_dists, dists[i])
+        end
+    end
+    return out_edges, out_dists
+end
+
+function _collapse_dominated_edges_points(edges::Vector{NTuple{2,Int}},
+                                          dists::Vector{Float64},
+                                          points::AbstractVector{<:AbstractVector{<:Real}};
+                                          tol::Float64=1e-12)
+    n = length(points)
+    out_edges = NTuple{2,Int}[]
+    out_dists = Float64[]
+    sizehint!(out_edges, length(edges))
+    sizehint!(out_dists, length(edges))
+    for idx in eachindex(edges)
+        u, v = edges[idx]
+        duv = dists[idx]
+        dominated = false
+        for w in 1:n
+            (w == u || w == v) && continue
+            if max(_euclidean_distance(points[u], points[w]),
+                   _euclidean_distance(points[w], points[v])) <= duv + tol
+                dominated = true
+                break
+            end
+        end
+        if !dominated
+            push!(out_edges, e)
+            push!(out_dists, duv)
+        end
+    end
+    return out_edges, out_dists
+end
+
+function _apply_construction_collapse_edge_driven(edges::Vector{NTuple{2,Int}},
+                                                  dists::Vector{Float64},
+                                                  points::AbstractVector{<:AbstractVector{<:Real}},
+                                                  construction::ConstructionOptions)
+    if construction.collapse == :none
+        return edges, dists
+    elseif construction.collapse == :dominated_edges
+        return _collapse_dominated_edges_points(edges, dists, points)
+    elseif construction.collapse == :acyclic
+        return _collapse_acyclic_edges_with_dists(edges, dists, length(points))
+    end
+    throw(ArgumentError("Unsupported construction.collapse=$(construction.collapse)."))
+end
+
+function _point_cloud_sparsify_edge_driven(points::AbstractVector{<:AbstractVector{<:Real}},
+                                           spec::FiltrationSpec,
+                                           construction::ConstructionOptions)
+    n = length(points)
+    n == 0 && return NTuple{2,Int}[], Float64[], Float64[]
+    backend = _pointcloud_nn_backend(spec)
+    approx_candidates = _pointcloud_nn_approx_candidates(spec)
+    if construction.sparsify == :radius
+        radius = get(spec.params, :radius, nothing)
+        radius === nothing && error("construction.sparsify=:radius requires radius.")
+        edges, dists = _point_cloud_radius_graph(points, Float64(radius); backend=backend, approx_candidates=approx_candidates)
+        _construction_cap_edges!(edges, spec)
+        return edges, dists, Float64[]
+    elseif construction.sparsify == :knn
+        k = Int(get(spec.params, :knn, 8))
+        k > 0 || error("construction.sparsify=:knn requires knn > 0.")
+        edges, dists, kdist = _point_cloud_knn_graph(points, k; backend=backend, approx_candidates=approx_candidates)
+        _construction_cap_edges!(edges, spec)
+        return edges, dists, kdist
+    end
+    return NTuple{2,Int}[], Float64[], Float64[]
+end
+
+function _maybe_greedy_perm_reduce(data::PointCloud, spec::FiltrationSpec)
+    construction = _construction_from_params(spec.params)
+    if construction.sparsify != :greedy_perm
+        return data, spec, nothing
+    end
+    points = data.points
+    n = length(points)
+    n_landmarks = get(spec.params, :n_landmarks, nothing)
+    m = n_landmarks === nothing ? _default_landmark_count(n) : Int(n_landmarks)
+    idx = _greedy_perm_indices(points, m)
+    p2 = [points[i] for i in idx]
+    p = _construction_merge_for_fallback(spec, ConstructionOptions(;
+        sparsify=:none,
+        collapse=construction.collapse,
+        output_stage=construction.output_stage,
+        budget=construction.budget,
+    ))
+    if haskey(spec.params, :vertex_values)
+        vals = spec.params[:vertex_values]
+        length(vals) == n || error("vertex_values length mismatch: expected $(n), got $(length(vals)).")
+        p = merge(p, (vertex_values=[vals[i] for i in idx],))
+    end
+    p = _filter_params(p, Symbol[:n_landmarks])
+    return PointCloud(p2), FiltrationSpec(; kind=spec.kind, p...), idx
+end
+
+function _estimate_pointcloud_cell_counts(data::PointCloud,
+                                          spec::FiltrationSpec;
+                                          exact_pairwise_limit::Int,
+                                          warnings::Vector{String},
+                                          strict::Bool)
+    n = length(data.points)
+    kind = spec.kind
+    if kind == :landmark_rips
+        landmarks = get(spec.params, :landmarks, nothing)
+        landmarks === nothing && throw(ArgumentError("estimate_ingestion: landmark_rips requires landmarks."))
+        m = length(landmarks)
+        m == 0 && _ingestion_warn!(warnings, "landmark_rips with empty landmarks.", strict)
+        ps = merge(spec.params, (_points_ref = [data.points[i] for i in landmarks],))
+        return _estimate_rips_like_cell_counts(m, FiltrationSpec(; kind=:rips, ps...);
+                                               exact_pairwise_limit=exact_pairwise_limit,
+                                               warnings=warnings,
+                                               strict=strict)
+    elseif kind == :delaunay_lower_star || kind == :function_delaunay ||
+           kind == :alpha || kind == :core_delaunay
+        d = length(data.points[1])
+        max_dim = min(max(Int(get(spec.params, :max_dim, 2)), 0), 2)
+        if d <= 2
+            counts = BigInt[big(n)]
+            if max_dim >= 1
+                edges = if d == 1
+                    big(max(n - 1, 0))
+                elseif n <= 1
+                    big(0)
+                else
+                    min(big(3 * n - 6), binomial(big(n), big(2)))
+                end
+                push!(counts, edges)
+            end
+            if max_dim >= 2
+                tri = if n < 3
+                    big(0)
+                else
+                    min(big(2 * n - 5), binomial(big(n), big(3)))
+                end
+                push!(counts, tri)
+            end
+            return counts
+        end
+        policy = Symbol(get(spec.params, :highdim_policy, :rips))
+        if policy == :error
+            _ingestion_warn!(warnings, "Delaunay high-dimensional input (dimension=$d) with highdim_policy=:error will fail at ingestion.", strict)
+            return BigInt[big(n)]
+        elseif policy != :rips
+            throw(ArgumentError("estimate_ingestion: unsupported highdim_policy=$(policy) for Delaunay filtrations."))
+        end
+        _ingestion_warn!(warnings, "Delaunay high-dimensional estimate uses Rips fallback policy (:rips).", strict)
+        ps = merge(spec.params, (_points_ref = data.points,))
+        fallback_kind = kind == :alpha ? :rips : (kind == :core_delaunay ? :degree_rips : :function_rips)
+        return _estimate_rips_like_cell_counts(n, FiltrationSpec(; kind=fallback_kind, ps...);
+                                               exact_pairwise_limit=exact_pairwise_limit,
+                                               warnings=warnings,
+                                               strict=strict)
+    elseif kind == :core
+        if haskey(spec.params, :radius) && spec.params[:radius] !== nothing
+            if n > exact_pairwise_limit
+                _ingestion_warn!(warnings, "core(radius=...) estimate used complete-graph edge upper bound (n=$n > exact_pairwise_limit=$exact_pairwise_limit).", strict)
+                edges = binomial(big(n), big(2))
+            else
+                r = Float64(spec.params[:radius])
+                e = 0
+                for i in 1:n, j in (i + 1):n
+                    if _euclidean_distance(data.points[i], data.points[j]) <= r
+                        e += 1
+                    end
+                end
+                edges = big(e)
+            end
+        else
+            k = Int(get(spec.params, :knn, 8))
+            edges = min(binomial(big(n), big(2)), big(cld(n * max(k, 0), 2)))
+        end
+        return BigInt[big(n), edges]
+    elseif kind == :rhomboid || kind == :rips || kind == :rips_density ||
+           kind == :function_rips || kind == :degree_rips
+        ps = merge(spec.params, (_points_ref = data.points,))
+        return _estimate_rips_like_cell_counts(n, FiltrationSpec(; kind=:rips, ps...);
+                                               exact_pairwise_limit=exact_pairwise_limit,
+                                               warnings=warnings,
+                                               strict=strict)
+    end
+    throw(ArgumentError("estimate_ingestion: unsupported point-cloud filtration kind=$(kind)."))
+end
+
+function _estimate_graph_cell_counts(data::GraphData,
+                                     spec::FiltrationSpec;
+                                     warnings::Vector{String},
+                                     strict::Bool)
+    n = data.n
+    m = length(data.edges)
+    kind = spec.kind
+    if kind == :graph_lower_star || kind == :edge_weighted || kind == :core ||
+       kind == :graph_centrality || kind == :graph_geodesic || kind == :graph_function_geodesic_bifiltration
+        lift = Symbol(get(spec.params, :lift, :lower_star))
+        if lift == :clique
+            max_dim = max(Int(get(spec.params, :max_dim, 2)), 1)
+            _ingestion_warn!(warnings, "Graph clique-based estimate is an upper bound (complete-graph assumption).", strict)
+            return BigInt[binomial(big(n), big(k)) for k in 1:(max_dim + 1)]
+        elseif lift != :lower_star
+            throw(ArgumentError("estimate_ingestion: unsupported graph lift=$(lift)."))
+        end
+        return BigInt[big(n), big(m)]
+    elseif kind == :clique_lower_star || kind == :rhomboid ||
+           (kind == :graph_weight_threshold && Symbol(get(spec.params, :lift, :graph)) == :clique)
+        max_dim = max(Int(get(spec.params, :max_dim, 2)), 1)
+        _ingestion_warn!(warnings, "Graph clique-based estimate is an upper bound (complete-graph assumption).", strict)
+        return BigInt[binomial(big(n), big(k)) for k in 1:(max_dim + 1)]
+    elseif kind == :graph_weight_threshold
+        lift = Symbol(get(spec.params, :lift, :graph))
+        lift == :graph || throw(ArgumentError("estimate_ingestion: unsupported graph_weight_threshold lift=$(lift)."))
+        return BigInt[big(n), big(m)]
+    end
+    throw(ArgumentError("estimate_ingestion: unsupported graph filtration kind=$(kind)."))
+end
+
+function _estimate_cubical_cell_counts(dims::NTuple{N,Int}) where {N}
+    counts = fill(big(0), N + 1)
+    for mask in 0:(Int(2^N) - 1)
+        k = count_ones(mask)
+        c = big(1)
+        for i in 1:N
+            c *= big(dims[i] - Int((mask >> (i - 1)) & 1))
+        end
+        counts[k + 1] += c
+    end
+    return counts
+end
+
+function _estimate_image_cell_counts(data::ImageNd,
+                                     spec::FiltrationSpec;
+                                     warnings::Vector{String},
+                                     strict::Bool)
+    kind = spec.kind
+    if kind == :lower_star || kind == :cubical
+        return _estimate_cubical_cell_counts(size(data.data))
+    elseif kind == :image_distance_bifiltration
+        channels = get(spec.params, :channels, nothing)
+        if channels === nothing
+            return _estimate_cubical_cell_counts(size(data.data))
+        end
+        dims = size(channels[1])
+        for ch in channels
+            size(ch) == dims || throw(ArgumentError("estimate_ingestion: all channels must have the same size."))
+        end
+        return _estimate_cubical_cell_counts(dims)
+    end
+    throw(ArgumentError("estimate_ingestion: unsupported image filtration kind=$(kind)."))
+end
+
+function _estimate_embedded_planar_cell_counts(data::EmbeddedPlanarGraph2D,
+                                               spec::FiltrationSpec;
+                                               warnings::Vector{String},
+                                               strict::Bool)
+    kind = spec.kind
+    if kind == :wing_vein_bifiltration
+        grid = get(spec.params, :grid, (32, 32))
+        return _estimate_cubical_cell_counts(Tuple(grid))
+    elseif kind == :image_distance_bifiltration
+        grid = get(spec.params, :grid, nothing)
+        if grid !== nothing
+            return _estimate_cubical_cell_counts(Tuple(grid))
+        end
+        _ingestion_warn!(warnings, "EmbeddedPlanarGraph2D image_distance_bifiltration estimate used graph surrogate counts.", strict)
+        return BigInt[big(length(data.vertices)), big(length(data.edges))]
+    elseif kind == :graph_lower_star || kind == :clique_lower_star || kind == :edge_weighted ||
+           kind == :core || kind == :rhomboid || kind == :graph_centrality ||
+           kind == :graph_geodesic || kind == :graph_function_geodesic_bifiltration ||
+           kind == :graph_weight_threshold
+        gd = GraphData(length(data.vertices), data.edges)
+        return _estimate_graph_cell_counts(gd, spec; warnings=warnings, strict=strict)
+    end
+    throw(ArgumentError("estimate_ingestion: unsupported embedded planar filtration kind=$(kind)."))
+end
+
+function _estimate_cell_counts(data, spec::FiltrationSpec;
+                               exact_pairwise_limit::Int,
+                               warnings::Vector{String},
+                               strict::Bool)
+    if data isa GradedComplex
+        return BigInt[big(length(cells)) for cells in data.cells_by_dim]
+    elseif data isa MultiCriticalGradedComplex
+        return BigInt[big(length(cells)) for cells in data.cells_by_dim]
+    elseif data isa SimplexTreeMulti
+        ns = simplex_count(data)
+        ns == 0 && return BigInt[]
+        maxd = max_simplex_dim(data)
+        counts = fill(big(0), maxd + 1)
+        @inbounds for d in data.simplex_dims
+            counts[d + 1] += 1
+        end
+        return counts
+    elseif data isa PointCloud
+        return _estimate_pointcloud_cell_counts(data, spec;
+                                               exact_pairwise_limit=exact_pairwise_limit,
+                                               warnings=warnings,
+                                               strict=strict)
+    elseif data isa GraphData
+        return _estimate_graph_cell_counts(data, spec; warnings=warnings, strict=strict)
+    elseif data isa ImageNd
+        return _estimate_image_cell_counts(data, spec; warnings=warnings, strict=strict)
+    elseif data isa EmbeddedPlanarGraph2D
+        return _estimate_embedded_planar_cell_counts(data, spec; warnings=warnings, strict=strict)
+    end
+    throw(ArgumentError("estimate_ingestion: unsupported dataset type $(typeof(data))."))
+end
+
+function _estimate_axis_sizes(data, spec::FiltrationSpec; warnings::Vector{String}, strict::Bool)
+    axis_sizes = _estimate_axis_sizes_from_spec(spec)
+    axis_sizes === nothing || return axis_sizes
+    if data isa GradedComplex
+        return _estimate_axis_sizes_from_grades(data.grades)
+    elseif data isa MultiCriticalGradedComplex
+        return _estimate_axis_sizes_from_grades(data.grades)
+    elseif data isa SimplexTreeMulti
+        n = simplex_count(data)
+        n == 0 && return nothing
+        N = length(data.grade_data[1])
+        seen = [Set{Float64}() for _ in 1:N]
+        @inbounds for i in 1:n
+            gi = simplex_grades(data, i)
+            for g in gi
+                for k in 1:N
+                    push!(seen[k], Float64(g[k]))
+                end
+            end
+        end
+        return ntuple(i -> length(seen[i]), N)
+    end
+    _ingestion_warn!(warnings, "axis_sizes unavailable without explicit axes for dataset type $(typeof(data)).", strict)
+    return nothing
+end
+
+"""
+    estimate_ingestion(data, spec; kwargs...) -> NamedTuple
+    estimate_ingestion(data, filtration; kwargs...) -> NamedTuple
+
+Preflight estimate for ingestion complexity and memory risk before running
+`encode(data, filtration_or_spec; ...)`.
+
+Returns:
+- `n_cells_est`: estimated total number of cells.
+- `cell_counts_by_dim`: estimated counts by cell dimension.
+- `axis_sizes`: estimated axis lengths (or `nothing` when unavailable).
+- `poset_size`: estimated number of encoding-poset vertices (or `nothing`).
+- `nnz_est`: estimated boundary nnz.
+- `dense_bytes_est`: estimated peak dense boundary-matrix bytes.
+- `warnings`: warnings emitted by threshold checks.
+"""
+function estimate_ingestion(data,
+                            spec::FiltrationSpec;
+                            poset_threshold::Integer=200_000,
+                            dense_memory_budget_bytes::Integer=2_000_000_000,
+                            dense_elem_bytes::Integer=8,
+                            exact_pairwise_limit::Int=5_000,
+                            strict::Bool=false)
+    warnings = String[]
+    cell_counts = _estimate_cell_counts(data, spec;
+                                       exact_pairwise_limit=exact_pairwise_limit,
+                                       warnings=warnings,
+                                       strict=strict)
+    n_cells_est = _sum_bigint(cell_counts)
+    nnz_est = _estimate_nnz_from_cell_counts(cell_counts)
+    dense_bytes_est = _estimate_dense_bytes_from_cell_counts(cell_counts; elem_bytes=dense_elem_bytes)
+
+    axis_sizes = _estimate_axis_sizes(data, spec; warnings=warnings, strict=strict)
+    poset_size = axis_sizes === nothing ? nothing : _prod_bigint(axis_sizes)
+
+    budget = _construction_budget(spec)
+    max_simplices = budget.max_simplices
+    if max_simplices !== nothing
+        ms = big(max_simplices)
+        for (d, c) in enumerate(cell_counts)
+            if c > ms
+                _ingestion_warn!(warnings, "Estimated simplex count at dimension $(d - 1) is $c > max_simplices=$max_simplices.", strict)
+            end
+        end
+        if n_cells_est > ms
+            _ingestion_warn!(warnings, "Estimated total cells $n_cells_est > max_simplices=$max_simplices.", strict)
+        end
+    end
+    max_edges = budget.max_edges
+    if max_edges !== nothing && length(cell_counts) >= 2
+        edge_est = cell_counts[2]
+        if edge_est > big(max_edges)
+            _ingestion_warn!(warnings, "Estimated edge count $edge_est > max_edges=$max_edges.", strict)
+        end
+    end
+    if poset_size !== nothing && poset_size > big(poset_threshold)
+        _ingestion_warn!(warnings, "Estimated encoding poset size |P|=$poset_size exceeds threshold=$poset_threshold.", strict)
+    end
+    mem_budget = budget.memory_budget_bytes === nothing ? dense_memory_budget_bytes : budget.memory_budget_bytes
+    if mem_budget !== nothing && dense_bytes_est > big(mem_budget)
+        _ingestion_warn!(warnings, "Estimated dense boundary footprint $dense_bytes_est bytes exceeds budget=$mem_budget bytes.", strict)
+    end
+
+    return (
+        n_cells_est = n_cells_est,
+        cell_counts_by_dim = cell_counts,
+        axis_sizes = axis_sizes,
+        poset_size = poset_size,
+        nnz_est = nnz_est,
+        dense_bytes_est = dense_bytes_est,
+        warnings = warnings,
+    )
+end
+
+estimate_ingestion(data, filtration::AbstractFiltration; kwargs...) =
+    estimate_ingestion(data, _filtration_spec(filtration); kwargs...)
+
+@inline function _axes_from_complex_grades(G::GradedComplex, orientation)
+    N = length(G.grades[1])
+    return _axes_from_grades(G.grades, N; orientation=orientation)
+end
+
+@inline function _axes_from_complex_grades(G::MultiCriticalGradedComplex, orientation)
+    first_cell = findfirst(!isempty, G.grades)
+    first_cell === nothing && error("MultiCriticalGradedComplex has no grades.")
+    N = length(G.grades[first_cell][1])
+    return _axes_from_multigrades(G.grades, N; orientation=orientation)
+end
+
+@inline function _tuple_dom_leq(a::NTuple{N,T}, b::NTuple{N,T}) where {N,T}
+    @inbounds for i in 1:N
+        a[i] <= b[i] || return false
+    end
+    return true
+end
+
+function _minimal_tuple_set(vals::Vector{NTuple{N,T}}) where {N,T}
+    isempty(vals) && return vals
+    keep = trues(length(vals))
+    @inbounds for i in eachindex(vals)
+        keep[i] || continue
+        vi = vals[i]
+        for j in eachindex(vals)
+            i == j && continue
+            _tuple_dom_leq(vals[j], vi) || continue
+            if vals[j] != vi
+                keep[i] = false
+                break
+            end
+        end
+    end
+    return vals[keep]
+end
+
+function _maximal_tuple_set(vals::Vector{NTuple{N,T}}) where {N,T}
+    isempty(vals) && return vals
+    keep = trues(length(vals))
+    @inbounds for i in eachindex(vals)
+        keep[i] || continue
+        vi = vals[i]
+        for j in eachindex(vals)
+            i == j && continue
+            _tuple_dom_leq(vi, vals[j]) || continue
+            if vals[j] != vi
+                keep[i] = false
+                break
+            end
+        end
+    end
+    return vals[keep]
+end
+
+"""
+    criticality(G)
+
+Return the per-cell criticality upper bound for a graded complex.
+- `GradedComplex`: always `1`
+- `MultiCriticalGradedComplex`: max number of grades attached to any cell
+"""
+criticality(::GradedComplex) = 1
+criticality(G::MultiCriticalGradedComplex) = maximum(length, G.grades)
+
+"""
+    normalize_multicritical(G::MultiCriticalGradedComplex; keep=:minimal)
+
+Normalize per-cell grade sets by removing redundancy:
+- `keep=:minimal` keeps antichain-minimal grades (default; union semantics)
+- `keep=:maximal` keeps antichain-maximal grades (intersection semantics)
+- `keep=:unique` keeps only duplicates removed
+"""
+function normalize_multicritical(G::MultiCriticalGradedComplex; keep::Symbol=:minimal)
+    keep in (:minimal, :maximal, :unique) ||
+        throw(ArgumentError("normalize_multicritical: keep must be :minimal, :maximal, or :unique."))
+    first_cell = findfirst(!isempty, G.grades)
+    first_cell === nothing && error("normalize_multicritical: complex has no grades.")
+    N = length(G.grades[first_cell][1])
+    T = eltype(G.grades[first_cell][1])
+    out = Vector{Vector{NTuple{N,T}}}(undef, length(G.grades))
+    for i in eachindex(G.grades)
+        gi = unique(G.grades[i])
+        if keep === :minimal
+            gi = _minimal_tuple_set(gi)
+        elseif keep === :maximal
+            gi = _maximal_tuple_set(gi)
+        end
+        out[i] = gi
+    end
+    return MultiCriticalGradedComplex(G.cells_by_dim, G.boundaries, out; cell_dims=G.cell_dims)
+end
+
+normalize_multicritical(G::GradedComplex; kwargs...) = G
+
+# Section 3: GridEncodingMap helpers
+# -----------------------------------------------------------------------------
+
+"""
+    poset_from_axes(axes; orientation=ntuple(_->1, N), kind=:grid) -> AbstractPoset
+
+Build the product-of-chains poset on a grid defined by `axes`.
+`axes` is an N-tuple of sorted coordinate vectors. `orientation[i]` is +1 for
+sublevel-style order (increasing) and -1 for superlevel-style order (decreasing).
+
+Notes
+-----
+- If all `orientation[i] == 1` and `kind=:grid`, a structured `ProductOfChainsPoset`
+  is returned to avoid materializing the transitive closure.
+- Otherwise, we fall back to a dense `FinitePoset`.
+"""
+function poset_from_axes(axes::NTuple{N,Vector{T}};
+                         orientation::NTuple{N,Int}=ntuple(_ -> 1, N),
+                         kind::Symbol = :grid) where {N,T}
+    sizes = ntuple(i -> length(axes[i]), N)
+    total = 1
+    for i in 1:N
+        total *= sizes[i]
+    end
+
+    if kind == :grid
+        if all(o -> o == 1, orientation)
+            return ProductOfChainsPoset(sizes)
+        end
+        kind = :dense
+    end
+    if kind == :dense
+        # Enumerate all multi-indices in mixed radix order.
+        idxs = Vector{NTuple{N,Int}}(undef, total)
+        cur = ones(Int, N)
+        for lin in 1:total
+            idxs[lin] = ntuple(i -> cur[i], N)
+            for i in 1:N
+                cur[i] += 1
+                if cur[i] <= sizes[i]
+                    break
+                else
+                    cur[i] = 1
+                end
+            end
+        end
+
+        leq = falses(total, total)
+        for i in 1:total
+            ai = idxs[i]
+            for j in 1:total
+                bj = idxs[j]
+                ok = true
+                for k in 1:N
+                    if orientation[k] == 1
+                        if ai[k] > bj[k]
+                            ok = false
+                            break
+                        end
+                    else
+                        if ai[k] < bj[k]
+                            ok = false
+                            break
+                        end
+                    end
+                end
+                leq[i, j] = ok
+            end
+        end
+
+        return FinitePoset(leq; check=false)
+    else
+        error("poset_from_axes: kind must be :grid or :dense")
+    end
+end
+
+function GridEncodingMap(P::AbstractPoset, coords::NTuple{N,Vector{T}};
+                         orientation::NTuple{N,Int}=ntuple(_ -> 1, N)) where {N,T}
+    sizes = ntuple(i -> length(coords[i]), N)
+    total = 1
+    for i in 1:N
+        total *= sizes[i]
+    end
+    total == nvertices(P) || error("GridEncodingMap: grid size $(total) does not match nvertices(P)=$(nvertices(P)).")
+    for i in 1:N
+        o = orientation[i]
+        (o == 1 || o == -1) || error("GridEncodingMap: orientation[$i] must be +1 or -1.")
+    end
+    return GridEncodingMap{N,T,typeof(P)}(P, coords, orientation, sizes, _grid_strides(sizes))
+end
+
+dimension(pi::GridEncodingMap{N}) where {N} = N
+axes_from_encoding(pi::GridEncodingMap) = pi.coords
+
+function locate(pi::GridEncodingMap{N,T}, x::AbstractVector{<:Real}) where {N,T}
+    length(x) == N || error("GridEncodingMap.locate: expected vector length $(N), got $(length(x)).")
+    lin = 1
+    for i in 1:N
+        xi = pi.orientation[i] == 1 ? x[i] : -x[i]
+        if xi == 0
+            xi = zero(xi)
+        end
+        idx = searchsortedlast(pi.coords[i], xi)
+        if idx < 1
+            return 0
+        end
+        lin += (idx - 1) * pi.strides[i]
+    end
+    return lin
+end
+
+function locate(pi::GridEncodingMap{N,T}, x::NTuple{N,<:Real}) where {N,T}
+    lin = 1
+    @inbounds for i in 1:N
+        xi = pi.orientation[i] == 1 ? x[i] : -x[i]
+        if xi == 0
+            xi = zero(xi)
+        end
+        idx = searchsortedlast(pi.coords[i], xi)
+        if idx < 1
+            return 0
+        end
+        lin += (idx - 1) * pi.strides[i]
+    end
+    return lin
+end
+
+function representatives(pi::GridEncodingMap{N,T}) where {N,T}
+    # Cartesian product of coordinate axes (grid points).
+    reps = Vector{NTuple{N,T}}(undef, nvertices(pi.P))
+    idxs = ones(Int, N)
+    for lin in 1:nvertices(pi.P)
+        reps[lin] = ntuple(i -> pi.coords[i][idxs[i]], N)
+        # advance mixed radix counter
+        for i in 1:N
+            idxs[i] += 1
+            if idxs[i] <= pi.sizes[i]
+                break
+            else
+                idxs[i] = 1
+            end
+        end
+    end
+    return reps
+end
+# Section 4: Internal helpers (data ingestion pipeline)
+# -----------------------------------------------------------------------------
+
+@inline function _tuple_leq(a::NTuple{N,Int}, b::NTuple{N,Int},
+                            orientation::NTuple{N,Int}) where {N}
+    @inbounds for i in 1:N
+        if orientation[i] == 1
+            if a[i] > b[i]
+                return false
+            end
+        else
+            if a[i] < b[i]
+                return false
+            end
+        end
+    end
+    return true
+end
+
+function _grid_tuples(sizes::NTuple{N,Int}) where {N}
+    total = 1
+    for i in 1:N
+        total *= sizes[i]
+    end
+    out = Vector{NTuple{N,Int}}(undef, total)
+    cur = ones(Int, N)
+    for lin in 1:total
+        out[lin] = ntuple(i -> cur[i], N)
+        for i in 1:N
+            cur[i] += 1
+            if cur[i] <= sizes[i]
+                break
+            else
+                cur[i] = 1
+            end
+        end
+    end
+    return out
+end
+
+function _axes_from_grades(grades::Vector{<:NTuple{N,T}}, n::Int;
+                           orientation::Union{Nothing,NTuple{N,Int}}=nothing) where {N,T}
+    n == N || error("grade length $N does not match n=$n")
+    orient = orientation === nothing ? ntuple(_ -> 1, N) : orientation
+    for i in 1:N
+        (orient[i] == 1 || orient[i] == -1) || error("orientation[$i] must be +1 or -1.")
+    end
+
+    RT = promote_type(T, Int)
+    axes = [RT[] for _ in 1:n]
+    for g in grades
+        length(g) == n || error("grade has length $(length(g)) but expected $n")
+        for i in 1:n
+            val = orient[i] == 1 ? RT(g[i]) : -RT(g[i])
+            push!(axes[i], val)
+        end
+    end
+    for i in 1:n
+        axes[i] = sort!(unique!(axes[i]))
+    end
+    return ntuple(i -> axes[i], n)
+end
+
+function _axes_from_multigrades(grades::Vector{<:AbstractVector{<:NTuple{N,T}}}, n::Int;
+                                orientation::Union{Nothing,NTuple{N,Int}}=nothing) where {N,T}
+    flat = NTuple{N,T}[]
+    sizehint!(flat, sum(length, grades))
+    for gs in grades
+        append!(flat, gs)
+    end
+    return _axes_from_grades(flat, n; orientation=orientation)
+end
+
+function _validate_axes_sorted(axes)
+    for (i, ax) in enumerate(axes)
+        if !issorted(ax)
+            error("encode(data, filtration): axis $i must be sorted ascending.")
+        end
+    end
+    return nothing
+end
+
+function _validate_axes_kind(axes; axis_kind=nothing)
+    # axis_kind may be :zn / :rn to force integer vs real axes.
+    is_int_typed_axis(ax) = all(x -> x isa Integer, ax)
+    is_int_valued_axis(ax) = all(x -> (x isa Integer) || (x isa Real && isinteger(x)), ax)
+
+    if axis_kind === nothing
+        return nothing
+    end
+
+    axis_kind in (:zn, :rn) || error("encode(data, filtration): axis_kind must be :zn or :rn.")
+    if axis_kind == :zn
+        for (i, ax) in enumerate(axes)
+            if !is_int_typed_axis(ax)
+                error("encode(data, filtration): axis $i must be integer-typed for axis_kind=:zn.")
+            end
+        end
+    else
+        for (i, ax) in enumerate(axes)
+            if is_int_typed_axis(ax)
+                error("encode(data, filtration): axis $i is integer-typed but axis_kind=:rn.")
+            end
+        end
+    end
+    return nothing
+end
+
+function _axes_key(axes)
+    return tuple((Tuple(ax) for ax in axes)...)
+end
+
+function _coarsen_axis(ax::Vector{T}, max_len::Int) where {T}
+    n = length(ax)
+    n <= max_len && return ax
+    idxs = round.(Int, range(1, n; length=max_len))
+    return ax[idxs]
+end
+
+function _coarsen_axes(axes::NTuple{N,Vector{T}}, max_len::Int) where {N,T}
+    return ntuple(i -> _coarsen_axis(axes[i], max_len), N)
+end
+
+@inline function _quantize_eps_vec(eps, ::Val{N}) where {N}
+    if eps isa Number
+        return ntuple(_ -> Float64(eps), N)
+    elseif eps isa Tuple
+        length(eps) == N || error("encode(data, filtration): eps length mismatch.")
+        return ntuple(i -> Float64(eps[i]), N)
+    end
+    error("encode(data, filtration): eps must be a number or tuple.")
+end
+
+function _quantize_grades(G::GradedComplex, eps)
+    N = length(G.grades[1])
+    eps_vec = _quantize_eps_vec(eps, Val(N))
+    grades = Vector{NTuple{N,Float64}}(undef, length(G.grades))
+    for i in eachindex(G.grades)
+        g = G.grades[i]
+        grades[i] = ntuple(j -> round(Float64(g[j]) / eps_vec[j]) * eps_vec[j], N)
+    end
+    return GradedComplex(G.cells_by_dim, G.boundaries, grades; cell_dims=G.cell_dims)
+end
+
+function _quantize_grades(G::MultiCriticalGradedComplex, eps)
+    first_cell = findfirst(!isempty, G.grades)
+    first_cell === nothing && error("MultiCriticalGradedComplex has no grades.")
+    N = length(G.grades[first_cell][1])
+    eps_vec = _quantize_eps_vec(eps, Val(N))
+    grades = Vector{Vector{NTuple{N,Float64}}}(undef, length(G.grades))
+    for i in eachindex(G.grades)
+        gi = G.grades[i]
+        out = Vector{NTuple{N,Float64}}(undef, length(gi))
+        for j in eachindex(gi)
+            g = gi[j]
+            out[j] = ntuple(k -> round(Float64(g[k]) / eps_vec[k]) * eps_vec[k], N)
+        end
+        grades[i] = unique(out)
+    end
+    return MultiCriticalGradedComplex(G.cells_by_dim, G.boundaries, grades; cell_dims=G.cell_dims)
+end
+
+function _quantize_simplex_tree(ST::SimplexTreeMulti{N,T}, eps) where {N,T}
+    eps_vec = _quantize_eps_vec(eps, Val(N))
+    out_offsets = Vector{Int}(undef, simplex_count(ST) + 1)
+    out_offsets[1] = 1
+    out_grades = NTuple{N,Float64}[]
+    sizehint!(out_grades, length(ST.grade_data))
+    @inbounds for sid in 1:simplex_count(ST)
+        lo = ST.grade_offsets[sid]
+        hi = ST.grade_offsets[sid + 1] - 1
+        qtmp = Vector{NTuple{N,Float64}}(undef, hi - lo + 1)
+        p = 1
+        for k in lo:hi
+            g = ST.grade_data[k]
+            q = ntuple(i -> round(Float64(g[i]) / eps_vec[i]) * eps_vec[i], N)
+            qtmp[p] = q
+            p += 1
+        end
+        sort!(qtmp)
+        unique!(qtmp)
+        for q in qtmp
+            push!(out_grades, q)
+        end
+        out_offsets[sid + 1] = length(out_grades) + 1
+    end
+    return SimplexTreeMulti(
+        copy(ST.simplex_offsets),
+        copy(ST.simplex_vertices),
+        copy(ST.simplex_dims),
+        copy(ST.dim_offsets),
+        out_offsets,
+        out_grades,
+    )
+end
+
+function _poset_from_axes_cached(axes, orientation;
+                                 cache::Union{Nothing,EncodingCache}=nothing)
+    key = (_axes_key(axes), orientation)
+    if cache === nothing
+        return poset_from_axes(axes; orientation=orientation, kind=:grid)
+    end
+    Base.lock(cache.lock)
+    try
+        P = get(cache.posets, key, nothing)
+        if P === nothing
+            P = poset_from_axes(axes; orientation=orientation, kind=:grid)
+            cache.posets[key] = P
+        end
+        return P
+    finally
+        Base.unlock(cache.lock)
+    end
+end
+
+@inline function _ingestion_poset_fast_key(data,
+                                           filtration::AbstractFiltration,
+                                           orientation,
+                                           axes_policy::Symbol,
+                                           max_axis_len,
+                                           axis_kind,
+                                           eps,
+                                           multicritical::Symbol,
+                                           onecritical_selector::Symbol,
+                                           onecritical_enforce_boundary::Bool)
+    fs_hash = let f = filtration
+        try
+            fs = _filtration_spec(f)
+            UInt(hash((fs.kind, fs.params)))
+        catch
+            UInt(hash((typeof(f), f)))
+        end
+    end
+    return (
+        :ingestion_poset_fast,
+        UInt(objectid(data)),
+        fs_hash,
+        orientation,
+        axes_policy,
+        max_axis_len,
+        axis_kind,
+        eps,
+        multicritical,
+        onecritical_selector,
+        onecritical_enforce_boundary,
+    )
+end
+
+@inline function _get_geometry_cached(cache::Union{Nothing,EncodingCache}, key)
+    cache === nothing && return nothing
+    Base.lock(cache.lock)
+    try
+        return get(cache.geometry, key, nothing)
+    finally
+        Base.unlock(cache.lock)
+    end
+end
+
+@inline function _set_geometry_cached!(cache::Union{Nothing,EncodingCache}, key, value)
+    cache === nothing && return value
+    Base.lock(cache.lock)
+    try
+        cache.geometry[key] = value
+    finally
+        Base.unlock(cache.lock)
+    end
+    return value
+end
+
+@inline function _ingestion_module_fast_key(poset_fast_key, P, degree::Int, field)
+    return (
+        :ingestion_module_fast,
+        poset_fast_key,
+        UInt(objectid(P)),
+        Int(degree),
+        UInt(hash((typeof(field), field))),
+    )
+end
+
+@inline function _ingestion_plan_norm_key(spec::FiltrationSpec,
+                                          stage::Symbol,
+                                          field::AbstractCoeffField)
+    return (
+        :ingestion_plan_norm,
+        UInt(hash((spec.kind, spec.params))),
+        stage,
+        UInt(hash((typeof(field), field))),
+    )
+end
+
+function _poset_vertex_coords(axes::NTuple{N,Vector{T}}) where {N,T}
+    sizes = ntuple(i -> length(axes[i]), N)
+    idxs = _grid_tuples(sizes)
+    coords = Vector{Vector{Int}}(undef, length(idxs))
+    for i in eachindex(idxs)
+        coords[i] = [Int(axes[j][idxs[i][j]]) for j in 1:N]
+    end
+    return coords
+end
+
+function _grades_by_dim(G::GradedComplex)
+    counts = [length(c) for c in G.cells_by_dim]
+    total = sum(counts)
+    length(G.grades) == total ||
+        error("GradedComplex.grades length $(length(G.grades)) does not match total cells $(total).")
+    out = Vector{Vector{typeof(G.grades[1])}}(undef, length(counts))
+    idx = 1
+    for d in 1:length(counts)
+        out[d] = Vector{typeof(G.grades[1])}(undef, counts[d])
+        for j in 1:counts[d]
+            out[d][j] = G.grades[idx]
+            idx += 1
+        end
+    end
+    return out
+end
+
+function _grades_by_dim(G::MultiCriticalGradedComplex)
+    counts = [length(c) for c in G.cells_by_dim]
+    total = sum(counts)
+    length(G.grades) == total ||
+        error("MultiCriticalGradedComplex.grades length $(length(G.grades)) does not match total cells $(total).")
+    Tgrade = typeof(G.grades[1])
+    out = Vector{Vector{Tgrade}}(undef, length(counts))
+    idx = 1
+    for d in 1:length(counts)
+        out[d] = Vector{Tgrade}(undef, counts[d])
+        for j in 1:counts[d]
+            out[d][j] = G.grades[idx]
+            idx += 1
+        end
+    end
+    return out
+end
+
+@inline function _tuple_lex_lt(a::NTuple{N,T}, b::NTuple{N,T}) where {N,T}
+    @inbounds for i in 1:N
+        ai = a[i]
+        bi = b[i]
+        ai < bi && return true
+        ai > bi && return false
+    end
+    return false
+end
+
+function _select_one_critical_grade(grades::AbstractVector{<:NTuple{N,T}},
+                                    selector::Symbol) where {N,T}
+    isempty(grades) && error("one_criticalify: encountered empty per-cell grade set.")
+    best = grades[1]
+    if selector === :first
+        return best
+    elseif selector === :lexmin
+        @inbounds for i in 2:length(grades)
+            gi = grades[i]
+            if _tuple_lex_lt(gi, best)
+                best = gi
+            end
+        end
+        return best
+    elseif selector === :lexmax
+        @inbounds for i in 2:length(grades)
+            gi = grades[i]
+            if _tuple_lex_lt(best, gi)
+                best = gi
+            end
+        end
+        return best
+    end
+    throw(ArgumentError("one_criticalify: unsupported selector=$(selector). Supported: :lexmin, :lexmax, :first"))
+end
+
+@inline function _tuple_componentwise_max(a::NTuple{N,T}, b::NTuple{N,T}) where {N,T}
+    return ntuple(i -> (a[i] >= b[i] ? a[i] : b[i]), N)
+end
+
+"""
+    one_criticalify(G::MultiCriticalGradedComplex;
+                    selector::Symbol=:lexmin,
+                    enforce_boundary::Bool=true) -> GradedComplex
+
+Convert a multi-critical graded complex into a one-critical graded complex by
+selecting one representative birth grade per cell.
+
+Selection policy:
+- `:lexmin` (default): lexicographically smallest grade in each per-cell set.
+- `:lexmax`: lexicographically largest grade.
+- `:first`: first stored grade.
+
+If `enforce_boundary=true`, selected grades are lifted so each higher-dimensional
+cell grade is componentwise at least each of its boundary-face grades.
+"""
+function one_criticalify(G::MultiCriticalGradedComplex;
+                         selector::Symbol=:lexmin,
+                         enforce_boundary::Bool=true)
+    total = length(G.grades)
+    total > 0 || error("one_criticalify: complex has no cells.")
+    N = length(G.grades[1][1])
+    T = eltype(G.grades[1][1])
+    grades = Vector{NTuple{N,T}}(undef, total)
+    @inbounds for i in 1:total
+        grades[i] = _select_one_critical_grade(G.grades[i], selector)
+    end
+
+    if enforce_boundary
+        counts = [length(c) for c in G.cells_by_dim]
+        offsets = Vector{Int}(undef, length(counts) + 1)
+        offsets[1] = 0
+        @inbounds for d in 1:length(counts)
+            offsets[d + 1] = offsets[d] + counts[d]
+        end
+
+        @inbounds for d in 2:length(counts)
+            B = G.boundaries[d - 1]
+            nrows, ncols = size(B)
+            nrows == counts[d - 1] || error("one_criticalify: boundary $(d-1) row count mismatch.")
+            ncols == counts[d] || error("one_criticalify: boundary $(d-1) col count mismatch.")
+            prev_off = offsets[d - 1]
+            cur_off = offsets[d]
+            for j in 1:ncols
+                g = grades[cur_off + j]
+                for p in nzrange(B, j)
+                    i = rowvals(B)[p]
+                    g = _tuple_componentwise_max(g, grades[prev_off + i])
+                end
+                grades[cur_off + j] = g
+            end
+        end
+    end
+
+    return GradedComplex(G.cells_by_dim, G.boundaries, grades; cell_dims=G.cell_dims)
+end
+
+one_criticalify(G::GradedComplex; kwargs...) = G
+
+function _birth_indices(grades::Vector{<:NTuple{N,<:Real}},
+                        axes::NTuple{N,Vector{<:Real}},
+                        orientation::NTuple{N,Int}) where {N}
+    births = Vector{NTuple{N,Int}}(undef, length(grades))
+    for i in eachindex(grades)
+        g = grades[i]
+        length(g) == N || error("grade length $(length(g)) does not match N=$(N)")
+        births[i] = ntuple(k -> begin
+            val = orientation[k] == 1 ? g[k] : -g[k]
+            idx = searchsortedlast(axes[k], val)
+            idx >= 1 || error("grade component $(g[k]) falls below axis minimum for axis $k")
+            idx
+        end, N)
+    end
+    return births
+end
+
+function _birth_indices(grades::Vector{<:AbstractVector{<:NTuple{N,<:Real}}},
+                        axes::NTuple{N,Vector{<:Real}},
+                        orientation::NTuple{N,Int}) where {N}
+    births = Vector{Vector{NTuple{N,Int}}}(undef, length(grades))
+    for i in eachindex(grades)
+        gi = grades[i]
+        isempty(gi) && error("multi-critical grade set at cell $i is empty.")
+        out = Vector{NTuple{N,Int}}(undef, length(gi))
+        for j in eachindex(gi)
+            g = gi[j]
+            out[j] = ntuple(k -> begin
+                val = orientation[k] == 1 ? g[k] : -g[k]
+                idx = searchsortedlast(axes[k], val)
+                idx >= 1 || error("grade component $(g[k]) falls below axis minimum for axis $k")
+                idx
+            end, N)
+        end
+        births[i] = _minimal_tuple_set(unique(out))
+    end
+    return births
+end
+
+@inline function _is_chain_vertex_index_1d(vertex_idxs::Vector{NTuple{1,Int}})
+    @inbounds for i in eachindex(vertex_idxs)
+        vertex_idxs[i][1] == i || return false
+    end
+    return true
+end
+
+function _active_lists_chain_1d(births::Vector{NTuple{1,Int}},
+                                vertex_idxs::Vector{NTuple{1,Int}})
+    n = length(vertex_idxs)
+    buckets = [Int[] for _ in 1:n]
+    @inbounds for c in eachindex(births)
+        b = births[c][1]
+        1 <= b <= n || continue
+        push!(buckets[b], c)
+    end
+    active = Vector{Vector{Int}}(undef, n)
+    current = Int[]
+    sizehint!(current, length(births))
+    @inbounds for i in 1:n
+        bi = buckets[i]
+        if !isempty(bi)
+            merged = Vector{Int}(undef, length(current) + length(bi))
+            a = 1
+            b = 1
+            t = 1
+            while a <= length(current) && b <= length(bi)
+                if current[a] <= bi[b]
+                    merged[t] = current[a]
+                    a += 1
+                else
+                    merged[t] = bi[b]
+                    b += 1
+                end
+                t += 1
+            end
+            while a <= length(current)
+                merged[t] = current[a]
+                a += 1
+                t += 1
+            end
+            while b <= length(bi)
+                merged[t] = bi[b]
+                b += 1
+                t += 1
+            end
+            current = merged
+        end
+        active[i] = copy(current)
+    end
+    return active
+end
+
+function _active_lists(births::Vector{NTuple{N,Int}},
+                       vertex_idxs::Vector{NTuple{N,Int}},
+                       orientation::NTuple{N,Int};
+                       multicritical::Symbol=:union) where {N}
+    multicritical in (:union, :intersection) ||
+        throw(ArgumentError("_active_lists: multicritical must be :union or :intersection."))
+    if _ACTIVE_LISTS_CHAIN_FASTPATH[] &&
+       N == 1 && multicritical === :union &&
+       orientation[1] == 1 &&
+       _is_chain_vertex_index_1d(vertex_idxs)
+        return _active_lists_chain_1d(births, vertex_idxs)
+    end
+    active = Vector{Vector{Int}}(undef, length(vertex_idxs))
+    for i in eachindex(vertex_idxs)
+        lst = Int[]
+        vi = vertex_idxs[i]
+        for c in eachindex(births)
+            if _tuple_leq(births[c], vi, orientation)
+                push!(lst, c)
+            end
+        end
+        active[i] = lst
+    end
+    return active
+end
+
+function _active_lists(births::Vector{<:AbstractVector{NTuple{N,Int}}},
+                       vertex_idxs::Vector{NTuple{N,Int}},
+                       orientation::NTuple{N,Int};
+                       multicritical::Symbol=:union) where {N}
+    multicritical in (:union, :intersection) ||
+        throw(ArgumentError("_active_lists: multicritical must be :union or :intersection."))
+    if _ACTIVE_LISTS_CHAIN_FASTPATH[] &&
+       N == 1 &&
+       orientation[1] == 1 &&
+       _is_chain_vertex_index_1d(vertex_idxs)
+        reduced = Vector{NTuple{1,Int}}(undef, length(births))
+        @inbounds for c in eachindex(births)
+            bc = births[c]
+            isempty(bc) && error("_active_lists: empty multi-critical birth set at cell $c.")
+            if multicritical === :union
+                bmin = typemax(Int)
+                for b in bc
+                    b[1] < bmin && (bmin = b[1])
+                end
+                reduced[c] = (bmin,)
+            else
+                bmax = typemin(Int)
+                for b in bc
+                    b[1] > bmax && (bmax = b[1])
+                end
+                reduced[c] = (bmax,)
+            end
+        end
+        return _active_lists_chain_1d(reduced, vertex_idxs)
+    end
+    active = Vector{Vector{Int}}(undef, length(vertex_idxs))
+    for i in eachindex(vertex_idxs)
+        lst = Int[]
+        vi = vertex_idxs[i]
+        for c in eachindex(births)
+            bc = births[c]
+            keep = multicritical === :intersection
+            @inbounds for b in bc
+                hit = _tuple_leq(b, vi, orientation)
+                if multicritical === :union
+                    if hit
+                        keep = true
+                        break
+                    end
+                else
+                    if !hit
+                        keep = false
+                        break
+                    end
+                end
+            end
+            keep && push!(lst, c)
+        end
+        active[i] = lst
+    end
+    return active
+end
+
+function _pmodule_from_active_lists(P::AbstractPoset,
+                                    active::Vector{Vector{Int}};
+                                    field::AbstractCoeffField=QQField())
+    K = coeff_type(field)
+    dims = [length(lst) for lst in active]
+    cc = _get_cover_cache(P)
+    preds = cc.preds
+    succs = cc.succs
+    pred_slot_of_succ = cc.pred_slot_of_succ
+    n = nvertices(P)
+
+    @inline function _row_for_col(Mu::Vector{Int}, Mv::Vector{Int})
+        out = Vector{Int}(undef, length(Mu))
+        i = 1
+        @inbounds for j in eachindex(Mu)
+            c = Mu[j]
+            while i <= length(Mv) && Mv[i] < c
+                i += 1
+            end
+            out[j] = (i <= length(Mv) && Mv[i] == c) ? i : 0
+        end
+        return out
+    end
+
+    maps_from_pred = [Vector{_StructuralInclusionMap{K}}(undef, length(preds[v])) for v in 1:n]
+    maps_to_succ = [Vector{_StructuralInclusionMap{K}}(undef, length(succs[u])) for u in 1:n]
+    @inbounds for u in 1:n
+        Mu = active[u]
+        su = succs[u]
+        outu = maps_to_succ[u]
+        for j in eachindex(su)
+            v = su[j]
+            row_for_col = _row_for_col(Mu, active[v])
+            A = _StructuralInclusionMap{K}(dims[v], dims[u], row_for_col)
+            outu[j] = A
+            ip = pred_slot_of_succ[u][j]
+            maps_from_pred[v][ip] = A
+        end
+    end
+    store = CoverEdgeMapStore{K,_StructuralInclusionMap{K}}(preds, succs, maps_from_pred, maps_to_succ, cc.nedges)
+    return PModule{K}(P, dims, store; field=field)
+end
+
+function _normalize_cochain_boundaries(grades_by_dim::Vector,
+                                       boundaries_in::Vector{SparseMatrixCSC{Int,Int}})
+    expected = length(grades_by_dim) - 1
+    boundaries = copy(boundaries_in)
+    if length(boundaries) < expected
+        for k in (length(boundaries) + 1):expected
+            rows = length(grades_by_dim[k])
+            cols = length(grades_by_dim[k + 1])
+            push!(boundaries, spzeros(Int, rows, cols))
+        end
+    elseif length(boundaries) > expected
+        error("cochain boundaries length mismatch (expected $(expected)).")
+    end
+    return boundaries
+end
+
+mutable struct LazyModuleCochainComplex
+    tmin::Int
+    tmax::Int
+    P::Any
+    axes::Any
+    orientation::Any
+    field::Any
+    multicritical::Symbol
+    grades_by_dim::Vector
+    boundaries::Vector{SparseMatrixCSC{Int,Int}}
+    boundaries_field::Vector
+    vertex_idxs::Vector
+    births_by_dim::Vector
+    active_by_dim::Vector
+    pos_by_dim::Vector
+    terms::Vector
+    diffs::Vector
+end
+
+function _lazy_cochain_complex_from_grades_and_boundaries(grades_by_dim::Vector{GT},
+                                                          boundaries_in::Vector{SparseMatrixCSC{Int,Int}},
+                                                          P::AbstractPoset,
+                                                          axes::NTuple{N,Vector{T}};
+                                                          orientation::NTuple{N,Int}=ntuple(_ -> 1, N),
+                                                          field::AbstractCoeffField=QQField(),
+                                                          multicritical::Symbol=:union) where {GT,N,T}
+    sizes = ntuple(i -> length(axes[i]), N)
+    vertex_idxs = _grid_tuples(sizes)
+    boundaries = _normalize_cochain_boundaries(grades_by_dim, boundaries_in)
+
+    nd = length(grades_by_dim)
+    nd > 0 || error("cochain requires at least one term.")
+
+    births_by_dim = Vector{Any}(undef, nd)
+    for d in 1:nd
+        births_by_dim[d] = _birth_indices(grades_by_dim[d], axes, orientation)
+    end
+
+    active_by_dim = Vector{Any}(undef, nd)
+    pos_by_dim = Vector{Any}(undef, nd)
+    terms = Vector{Any}(undef, nd)
+    for d in 1:nd
+        active_by_dim[d] = nothing
+        pos_by_dim[d] = nothing
+        terms[d] = nothing
+    end
+    diffs = Vector{Any}(undef, max(0, nd - 1))
+    for k in eachindex(diffs)
+        diffs[k] = nothing
+    end
+    boundaries_field = Vector{Any}(undef, length(boundaries))
+    fill!(boundaries_field, nothing)
+
+    return LazyModuleCochainComplex(
+        0,
+        nd - 1,
+        P,
+        axes,
+        orientation,
+        field,
+        multicritical,
+        grades_by_dim,
+        boundaries,
+        boundaries_field,
+        vertex_idxs,
+        births_by_dim,
+        active_by_dim,
+        pos_by_dim,
+        terms,
+        diffs,
+    )
+end
+
+function _lazy_ensure_active!(L::LazyModuleCochainComplex, idx::Int)
+    active = L.active_by_dim[idx]
+    if active === nothing
+        births = L.births_by_dim[idx]
+        active = _active_lists(births, L.vertex_idxs, L.orientation; multicritical=L.multicritical)
+        L.active_by_dim[idx] = active
+        L.pos_by_dim[idx] = nothing
+    end
+    return active, L.pos_by_dim[idx]
+end
+
+function _boundary_to_field_sparse(B::SparseMatrixCSC{Int,Int},
+                                   field::AbstractCoeffField)
+    K = coeff_type(field)
+    vals = Vector{K}(undef, length(B.nzval))
+    @inbounds for i in eachindex(B.nzval)
+        vals[i] = coerce(field, B.nzval[i])
+    end
+    return SparseMatrixCSC(size(B, 1), size(B, 2), copy(B.colptr), copy(B.rowval), vals)
+end
+
+function _lazy_boundary_field!(L::LazyModuleCochainComplex, k::Int)
+    B = L.boundaries[k]
+    cached = L.boundaries_field[k]
+    if cached !== nothing
+        return cached
+    end
+    Bf = _boundary_to_field_sparse(B, L.field)
+    L.boundaries_field[k] = Bf
+    return Bf
+end
+
+function _lazy_term_idx!(L::LazyModuleCochainComplex, idx::Int)
+    term = L.terms[idx]
+    if term === nothing
+        active, _ = _lazy_ensure_active!(L, idx)
+        term = _pmodule_from_active_lists(L.P, active; field=L.field)
+        L.terms[idx] = term
+    end
+    return term
+end
+
+@inline function _sorted_pos_or_zero(sorted::Vector{Int}, x::Int)
+    i = searchsortedfirst(sorted, x)
+    if i <= length(sorted) && @inbounds(sorted[i] == x)
+        return i
+    end
+    return 0
+end
+
+@inline function _restricted_coboundary_component(B::SparseMatrixCSC{Int,Int},
+                                                  active_rows::Vector{Int},
+                                                  active_cols::Vector{Int},
+                                                  field::AbstractCoeffField)
+    K = coeff_type(field)
+    I = Int[]
+    J = Int[]
+    V = K[]
+
+    colptr = B.colptr
+    nnz_hint = 0
+    @inbounds for c_global in active_cols
+        nnz_hint += colptr[c_global + 1] - colptr[c_global]
+    end
+    sizehint!(I, nnz_hint)
+    sizehint!(J, nnz_hint)
+    sizehint!(V, nnz_hint)
+
+    rows = rowvals(B)
+    vals = nonzeros(B)
+    @inbounds for (c_local, c_global) in enumerate(active_cols)
+        for ptr in colptr[c_global]:(colptr[c_global + 1] - 1)
+            r_local = _sorted_pos_or_zero(active_rows, rows[ptr])
+            if r_local != 0
+                push!(I, c_local)
+                push!(J, r_local)
+                push!(V, coerce(field, vals[ptr]))
+            end
+        end
+    end
+    return sparse(I, J, V, length(active_cols), length(active_rows))
+end
+
+@inline function _restricted_coboundary_component(B::SparseMatrixCSC{Int,Int},
+                                                  active_rows::Vector{Int},
+                                                  active_cols::Vector{Int},
+                                                  field::AbstractCoeffField,
+                                                  scratch::_ActiveIndexLookupScratch)
+    K = coeff_type(field)
+    I = Int[]
+    J = Int[]
+    V = K[]
+
+    _active_lookup_fill!(scratch, active_rows)
+
+    colptr = B.colptr
+    nnz_hint = 0
+    @inbounds for c_global in active_cols
+        nnz_hint += colptr[c_global + 1] - colptr[c_global]
+    end
+    sizehint!(I, nnz_hint)
+    sizehint!(J, nnz_hint)
+    sizehint!(V, nnz_hint)
+
+    rows = rowvals(B)
+    vals = nonzeros(B)
+    @inbounds for (c_local, c_global) in enumerate(active_cols)
+        for ptr in colptr[c_global]:(colptr[c_global + 1] - 1)
+            r_local = _active_lookup_get(scratch, rows[ptr])
+            if r_local != 0
+                push!(I, c_local)
+                push!(J, r_local)
+                push!(V, coerce(field, vals[ptr]))
+            end
+        end
+    end
+    return sparse(I, J, V, length(active_cols), length(active_rows))
+end
+
+function _lazy_diff_components(L::LazyModuleCochainComplex,
+                               k::Int;
+                               threaded::Bool=true)
+    K = coeff_type(L.field)
+    active_k = L.active_by_dim[k]
+    active_k1 = L.active_by_dim[k + 1]
+    B = L.boundaries[k]
+    nP = nvertices(L.P)
+    comps = Vector{SparseMatrixCSC{K,Int}}(undef, nP)
+
+    use_lookup = size(B, 1) <= _ACTIVE_INDEX_TABLE_MAX_ROWS[]
+    threaded_ok = threaded &&
+                  Threads.nthreads() > 1 &&
+                  nP >= _LAZY_DIFF_THREADS_MIN_VERTICES[]
+    if threaded_ok
+        scratch = use_lookup ? [_ActiveIndexLookupScratch(size(B, 1)) for _ in 1:Threads.nthreads()] : nothing
+        Threads.@threads :static for i in 1:nP
+            Lk = active_k[i]
+            Lk1 = active_k1[i]
+            if use_lookup
+                comps[i] = _restricted_coboundary_component(B, Lk, Lk1, L.field, scratch[Threads.threadid()])
+            else
+                comps[i] = _restricted_coboundary_component(B, Lk, Lk1, L.field)
+            end
+        end
+    else
+        scratch = use_lookup ? _ActiveIndexLookupScratch(size(B, 1)) : nothing
+        @inbounds for i in 1:nP
+            Lk = active_k[i]
+            Lk1 = active_k1[i]
+            if use_lookup
+                comps[i] = _restricted_coboundary_component(B, Lk, Lk1, L.field, scratch)
+            else
+                comps[i] = _restricted_coboundary_component(B, Lk, Lk1, L.field)
+            end
+        end
+    end
+    return comps
+end
+
+function _lazy_diff_idx!(L::LazyModuleCochainComplex, k::Int)
+    d = L.diffs[k]
+    if d === nothing
+        K = coeff_type(L.field)
+        dom = _lazy_term_idx!(L, k)
+        cod = _lazy_term_idx!(L, k + 1)
+        if nnz(L.boundaries[k]) == 0
+            d = Modules.zero_morphism(dom, cod)
+        else
+            comps = _lazy_diff_components(L, k; threaded=true)
+            d = PMorphism{K}(dom, cod, comps)
+        end
+        L.diffs[k] = d
+    end
+    return d
+end
+
+function _lazy_term(L::LazyModuleCochainComplex, t::Int)
+    if t < L.tmin || t > L.tmax
+        return Modules.zero_pmodule(L.P; field=L.field)
+    end
+    idx = t - L.tmin + 1
+    return _lazy_term_idx!(L, idx)
+end
+
+function _lazy_diff(L::LazyModuleCochainComplex, t::Int)
+    if t < L.tmin || t >= L.tmax
+        return Modules.zero_morphism(_lazy_term(L, t), _lazy_term(L, t + 1))
+    end
+    idx = t - L.tmin + 1
+    return _lazy_diff_idx!(L, idx)
+end
+
+mutable struct _LazyEncodedModule
+    lazy::LazyModuleCochainComplex
+    degree::Int
+    cached_module::Any
+    dims::Any
+end
+
+@inline function _lazy_encoded_module_from_lazy(lazy::LazyModuleCochainComplex, degree::Int)
+    return _LazyEncodedModule(lazy, degree, nothing, nothing)
+end
+
+function _materialize_lazy_module!(M::_LazyEncodedModule)
+    if M.cached_module === nothing
+        M.cached_module = _cohomology_module_from_lazy(M.lazy, M.degree)
+    end
+    return M.cached_module
+end
+
+function _lazy_encoded_module_dims!(M::_LazyEncodedModule)
+    if M.dims === nothing
+        M.dims = _cohomology_dims_from_lazy(M.lazy, M.degree)
+    end
+    return M.dims
+end
+
+materialize_module(M::_LazyEncodedModule) = _materialize_lazy_module!(M)
+module_dims(M::_LazyEncodedModule) = _lazy_encoded_module_dims!(M)
+
+@inline function _uf_find!(parent::Vector{Int}, x::Int)
+    @inbounds while parent[x] != x
+        parent[x] = parent[parent[x]]
+        x = parent[x]
+    end
+    return x
+end
+
+@inline function _uf_union!(parent::Vector{Int}, sz::Vector{Int}, a::Int, b::Int)
+    ra = _uf_find!(parent, a)
+    rb = _uf_find!(parent, b)
+    ra == rb && return ra
+    @inbounds if sz[ra] < sz[rb]
+        ra, rb = rb, ra
+    end
+    parent[rb] = ra
+    sz[ra] += sz[rb]
+    return ra
+end
+
+@inline function _uf_union_with_min!(parent::Vector{Int},
+                                     sz::Vector{Int},
+                                     root_min::Vector{Int},
+                                     a::Int,
+                                     b::Int)
+    ra = _uf_find!(parent, a)
+    rb = _uf_find!(parent, b)
+    ra == rb && return ra
+    @inbounds if sz[ra] < sz[rb]
+        ra, rb = rb, ra
+    end
+    parent[rb] = ra
+    sz[ra] += sz[rb]
+    if root_min[rb] < root_min[ra]
+        root_min[ra] = root_min[rb]
+    end
+    return ra
+end
+
+@inline function _sum_nested_lengths(xs::Vector{Vector{Int}})
+    s = 0
+    @inbounds for x in xs
+        s += length(x)
+    end
+    return s
+end
+
+@inline function _use_h0_unionfind_fastpath(nP::Int,
+                                            total_active_vertices::Int,
+                                            total_active_edges::Int)
+    nP >= _H0_UNIONFIND_MIN_POS_VERTICES[] || return false
+    return (total_active_vertices >= _H0_UNIONFIND_MIN_TOTAL_ACTIVE_VERTICES[]) ||
+           (total_active_edges >= _H0_UNIONFIND_MIN_TOTAL_ACTIVE_EDGES[])
+end
+
+@inline function _use_h0_active_chain_incremental(nP::Int,
+                                                  total_active_vertices::Int,
+                                                  total_active_edges::Int)
+    nP >= _H0_ACTIVE_CHAIN_INCREMENTAL_MIN_POS_VERTICES[] || return false
+    return (total_active_vertices >= _H0_ACTIVE_CHAIN_INCREMENTAL_MIN_TOTAL_ACTIVE_VERTICES[]) ||
+           (total_active_edges >= _H0_ACTIVE_CHAIN_INCREMENTAL_MIN_TOTAL_ACTIVE_EDGES[])
+end
+
+@inline function _use_degree_local_t1_fastpath(L::LazyModuleCochainComplex)
+    _COHOMOLOGY_DEGREE_LOCAL_ALL_T[] || return false
+    nP = nvertices(L.P)
+    nP >= _COHOMOLOGY_DEGREE_LOCAL_T1_MIN_POS_VERTICES[] || return false
+
+    idx1 = 1 - L.tmin + 1
+    (1 <= idx1 <= length(L.active_by_dim)) || return false
+    active1, _ = _lazy_ensure_active!(L, idx1)
+    total_active1 = _sum_nested_lengths(active1)
+    total_active1 >= _COHOMOLOGY_DEGREE_LOCAL_T1_MIN_TOTAL_ACTIVE_DIM1[] || return false
+
+    idx2 = idx1 + 1
+    idx2 > length(L.active_by_dim) && return true
+    active2, _ = _lazy_ensure_active!(L, idx2)
+    total_active2 = _sum_nested_lengths(active2)
+    return total_active2 >= _COHOMOLOGY_DEGREE_LOCAL_T1_MIN_TOTAL_ACTIVE_DIM2[]
+end
+
+@inline function _use_degree_local_module_fastpath(L::LazyModuleCochainComplex, t::Int)
+    _COHOMOLOGY_DEGREE_LOCAL_FASTPATH[] || return false
+    t >= 2 && return true
+    t == 1 || return false
+    _COHOMOLOGY_DEGREE_LOCAL_ALL_T[] && return true
+    return _use_degree_local_t1_fastpath(L)
+end
+
+function _births_from_prefix_active_sets(active::Vector{Vector{Int}}, nitems::Int)
+    nitems >= 0 || return nothing
+    births = zeros(Int, nitems)
+    prev = Int[]
+    @inbounds for p in eachindex(active)
+        cur = active[p]
+        last = 0
+        for id in cur
+            (1 <= id <= nitems) || return nothing
+            id > last || return nothing
+            last = id
+            births[id] == 0 && (births[id] = p)
+        end
+        # Prefix active sets must be monotone on chain sweeps: prev subseteq cur.
+        i = 1
+        j = 1
+        while i <= length(prev) && j <= length(cur)
+            a = prev[i]
+            b = cur[j]
+            if a == b
+                i += 1
+                j += 1
+            elseif a > b
+                j += 1
+            else
+                return nothing
+            end
+        end
+        i <= length(prev) && return nothing
+        prev = cur
+    end
+    @inbounds for b in births
+        b == 0 && return nothing
+    end
+    return births
+end
+
+function _edge_endpoints_from_boundary(B::SparseMatrixCSC{Int,Int})
+    ne = size(B, 2)
+    colptr = B.colptr
+    rows = rowvals(B)
+    endpoints = Vector{NTuple{2,Int}}(undef, ne)
+    @inbounds for e in 1:ne
+        lo = colptr[e]
+        hi = colptr[e + 1] - 1
+        if (hi - lo + 1) != 2
+            return nothing
+        end
+        a = rows[lo]
+        b = rows[lo + 1]
+        if a == b
+            return nothing
+        end
+        endpoints[e] = a < b ? (a, b) : (b, a)
+    end
+    return endpoints
+end
+
+@inline function _reconcile_component_basis(raw_component_reps::Vector{Int})
+    order = sortperm(raw_component_reps)
+    canon_of_raw = Vector{Int}(undef, length(raw_component_reps))
+    canon_reps = Vector{Int}(undef, length(raw_component_reps))
+    @inbounds for (canon, raw) in enumerate(order)
+        canon_of_raw[raw] = canon
+        canon_reps[canon] = raw_component_reps[raw]
+    end
+    return canon_of_raw, canon_reps
+end
+
+function _h0_components_unionfind_vertex(verts::Vector{Int},
+                                         active_edges::Vector{Int},
+                                         edge_endpoints::Vector{NTuple{2,Int}};
+                                         lookup::Union{Nothing,_ActiveIndexLookupScratch}=nothing)
+    nv = length(verts)
+    if nv == 0
+        return Int[], Int[]
+    end
+
+    lookup !== nothing && _active_lookup_fill!(lookup, verts)
+
+    parent = collect(1:nv)
+    sz = ones(Int, nv)
+    @inbounds for e in active_edges
+        (e < 1 || e > length(edge_endpoints)) && continue
+        a, b = edge_endpoints[e]
+        ia = lookup === nothing ? _sorted_pos_or_zero(verts, a) : _active_lookup_get(lookup, a)
+        ib = lookup === nothing ? _sorted_pos_or_zero(verts, b) : _active_lookup_get(lookup, b)
+        if ia != 0 && ib != 0 && ia != ib
+            _uf_union!(parent, sz, ia, ib)
+        end
+    end
+
+    root_to_raw = zeros(Int, nv)
+    raw_reps = Int[]
+    local_raw = Vector{Int}(undef, nv)
+    @inbounds for j in 1:nv
+        r = _uf_find!(parent, j)
+        raw = root_to_raw[r]
+        if raw == 0
+            raw = length(raw_reps) + 1
+            root_to_raw[r] = raw
+            push!(raw_reps, verts[j])
+        elseif verts[j] < raw_reps[raw]
+            raw_reps[raw] = verts[j]
+        end
+        local_raw[j] = raw
+    end
+
+    canon_of_raw, canon_reps = _reconcile_component_basis(raw_reps)
+    local_comp = Vector{Int}(undef, nv)
+    @inbounds for j in 1:nv
+        local_comp[j] = canon_of_raw[local_raw[j]]
+    end
+    return local_comp, canon_reps
+end
+
+function _cohomology_module_h0_unionfind_from_lazy(
+    L::LazyModuleCochainComplex,
+    active0::Vector{Vector{Int}},
+    active1::Vector{Vector{Int}},
+)
+    nP = nvertices(L.P)
+    K = coeff_type(L.field)
+    nd = length(L.grades_by_dim)
+    edge_endpoints = if nd >= 2
+        _edge_endpoints_from_boundary(L.boundaries[1])
+    else
+        NTuple{2,Int}[]
+    end
+    edge_endpoints === nothing && return nothing
+
+    if _H0_ACTIVE_CHAIN_INCREMENTAL[] &&
+       nP >= _H0_ACTIVE_CHAIN_INCREMENTAL_MIN_POS_VERTICES[] &&
+       _is_chain_cover_cache(_get_cover_cache(L.P), nP)
+        total_active_vertices = _sum_nested_lengths(active0)
+        total_active_edges = _sum_nested_lengths(active1)
+        if (total_active_vertices >= _H0_ACTIVE_CHAIN_INCREMENTAL_MIN_TOTAL_ACTIVE_VERTICES[] ||
+            total_active_edges >= _H0_ACTIVE_CHAIN_INCREMENTAL_MIN_TOTAL_ACTIVE_EDGES[]) &&
+           _use_h0_active_chain_incremental(nP, total_active_vertices, total_active_edges)
+            n0 = length(L.grades_by_dim[1])
+            ne = nd >= 2 ? length(L.grades_by_dim[2]) : 0
+            vb = _births_from_prefix_active_sets(active0, n0)
+            eb = _births_from_prefix_active_sets(active1, ne)
+            if vb !== nothing && eb !== nothing
+                Mchain = _h0_module_chain_sweep(L.P, vb, eb, edge_endpoints; field=L.field)
+                Mchain !== nothing && return Mchain
+            end
+        end
+    end
+
+    dims = Vector{Int}(undef, nP)
+    comp_of_local = Vector{Vector{Int}}(undef, nP)
+    comp_reps = Vector{Vector{Int}}(undef, nP)
+
+    n0_global = isempty(L.boundaries) ? 0 : size(L.boundaries[1], 1)
+    use_lookup = n0_global > 0 && n0_global <= _ACTIVE_INDEX_TABLE_MAX_ROWS[]
+    threaded_ok = Threads.nthreads() > 1 && nP >= _LAZY_DIFF_THREADS_MIN_VERTICES[]
+    if threaded_ok
+        lookup = use_lookup ? [_ActiveIndexLookupScratch(n0_global) for _ in 1:Threads.nthreads()] : nothing
+        Threads.@threads :static for i in 1:nP
+            lk = use_lookup ? lookup[Threads.threadid()] : nothing
+            loc, reps = _h0_components_unionfind_vertex(active0[i], active1[i], edge_endpoints; lookup=lk)
+            comp_of_local[i] = loc
+            comp_reps[i] = reps
+            dims[i] = length(reps)
+        end
+    else
+        lookup = use_lookup ? _ActiveIndexLookupScratch(n0_global) : nothing
+        @inbounds for i in 1:nP
+            loc, reps = _h0_components_unionfind_vertex(active0[i], active1[i], edge_endpoints; lookup=lookup)
+            comp_of_local[i] = loc
+            comp_reps[i] = reps
+            dims[i] = length(reps)
+        end
+    end
+
+    cc = _get_cover_cache(L.P)
+    preds = cc.preds
+    succs = cc.succs
+    pred_slot_of_succ = cc.pred_slot_of_succ
+    maps_from_pred = [Vector{_StructuralInclusionMap{K}}(undef, length(preds[v])) for v in 1:nP]
+    maps_to_succ = [Vector{_StructuralInclusionMap{K}}(undef, length(succs[u])) for u in 1:nP]
+    lookup = use_lookup ? _ActiveIndexLookupScratch(n0_global) : nothing
+    @inbounds for u in 1:nP
+        su = succs[u]
+        outu = maps_to_succ[u]
+        reps_u = comp_reps[u]
+        cu = length(reps_u)
+        for j in eachindex(su)
+            v = su[j]
+            cv = dims[v]
+            comps_v = comp_of_local[v]
+            row_for_col = Vector{Int}(undef, cu)
+            if lookup === nothing
+                for comp_u in 1:cu
+                    g = reps_u[comp_u]
+                    lv = _sorted_pos_or_zero(active0[v], g)
+                    row_for_col[comp_u] = lv == 0 ? 0 : comps_v[lv]
+                end
+            else
+                _active_lookup_fill!(lookup, active0[v])
+                for comp_u in 1:cu
+                    g = reps_u[comp_u]
+                    lv = _active_lookup_get(lookup, g)
+                    row_for_col[comp_u] = lv == 0 ? 0 : comps_v[lv]
+                end
+            end
+            A = _StructuralInclusionMap{K}(cv, cu, row_for_col)
+            outu[j] = A
+            ip = pred_slot_of_succ[u][j]
+            maps_from_pred[v][ip] = A
+        end
+    end
+    store = CoverEdgeMapStore{K,_StructuralInclusionMap{K}}(preds, succs, maps_from_pred, maps_to_succ, cc.nedges)
+    return PModule{K}(L.P, dims, store; field=L.field)
+end
+
+function _cohomology_dims_h0_unionfind_from_lazy(
+    L::LazyModuleCochainComplex,
+    active0::Vector{Vector{Int}},
+    active1::Vector{Vector{Int}},
+)
+    nP = nvertices(L.P)
+    nd = length(L.grades_by_dim)
+    edge_endpoints = if nd >= 2
+        _edge_endpoints_from_boundary(L.boundaries[1])
+    else
+        NTuple{2,Int}[]
+    end
+    edge_endpoints === nothing && return nothing
+
+    dims = Vector{Int}(undef, nP)
+    n0_global = isempty(L.boundaries) ? 0 : size(L.boundaries[1], 1)
+    use_lookup = n0_global > 0 && n0_global <= _ACTIVE_INDEX_TABLE_MAX_ROWS[]
+    threaded_ok = Threads.nthreads() > 1 && nP >= _LAZY_DIFF_THREADS_MIN_VERTICES[]
+    if threaded_ok
+        lookup = use_lookup ? [_ActiveIndexLookupScratch(n0_global) for _ in 1:Threads.nthreads()] : nothing
+        Threads.@threads :static for i in 1:nP
+            lk = use_lookup ? lookup[Threads.threadid()] : nothing
+            _, reps = _h0_components_unionfind_vertex(active0[i], active1[i], edge_endpoints; lookup=lk)
+            dims[i] = length(reps)
+        end
+    else
+        lookup = use_lookup ? _ActiveIndexLookupScratch(n0_global) : nothing
+        @inbounds for i in 1:nP
+            _, reps = _h0_components_unionfind_vertex(active0[i], active1[i], edge_endpoints; lookup=lookup)
+            dims[i] = length(reps)
+        end
+    end
+    return dims
+end
+
+@inline function _is_chain_cover_cache(cc, nP::Int)
+    succs = cc.succs
+    preds = cc.preds
+    length(succs) == nP || return false
+    length(preds) == nP || return false
+    @inbounds for u in 1:nP
+        su = succs[u]
+        pu = preds[u]
+        if u == 1
+            length(pu) == 0 || return false
+        else
+            length(pu) == 1 || return false
+            pu[1] == (u - 1) || return false
+        end
+        if u == nP
+            length(su) == 0 || return false
+        else
+            length(su) == 1 || return false
+            su[1] == (u + 1) || return false
+        end
+    end
+    return true
+end
+
+function _h0_module_chain_sweep(P::AbstractPoset,
+                                vertex_births::Vector{Int},
+                                edge_births::Vector{Int},
+                                edge_endpoints::Vector{NTuple{2,Int}};
+                                field::AbstractCoeffField=QQField())
+    nP = nvertices(P)
+    nv = length(vertex_births)
+    length(edge_births) == length(edge_endpoints) || return nothing
+
+    cc = _get_cover_cache(P)
+    _is_chain_cover_cache(cc, nP) || return nothing
+
+    # Birth indices are 1-based indices into the axis/chain vertices.
+    @inbounds for b in vertex_births
+        (1 <= b <= nP) || return nothing
+    end
+    @inbounds for b in edge_births
+        (1 <= b <= nP) || return nothing
+    end
+
+    verts_at_birth = [Int[] for _ in 1:nP]
+    edges_at_birth = [Int[] for _ in 1:nP]
+    @inbounds for v in 1:nv
+        push!(verts_at_birth[vertex_births[v]], v)
+    end
+    @inbounds for e in eachindex(edge_endpoints)
+        push!(edges_at_birth[edge_births[e]], e)
+    end
+
+    parent = collect(1:nv)
+    sz = ones(Int, nv)
+    root_min = collect(1:nv)
+    active = falses(nv)
+    root_candidates = Int[]
+    sizehint!(root_candidates, nv)
+    root_stamp = zeros(Int, nv)
+    stamp = 0
+
+    dims = Vector{Int}(undef, nP)
+    reps_by_vertex = Vector{Vector{Int}}(undef, nP)
+    chain_row_for_col = Vector{Vector{Int}}(undef, max(0, nP - 1))
+    lookup = nv <= _ACTIVE_INDEX_TABLE_MAX_ROWS[] ? _ActiveIndexLookupScratch(nv) : nothing
+
+    prev_reps = Int[]
+    @inbounds for p in 1:nP
+        for v in verts_at_birth[p]
+            active[v] = true
+            parent[v] = v
+            sz[v] = 1
+            root_min[v] = v
+            push!(root_candidates, v)
+        end
+        for e in edges_at_birth[p]
+            a, b = edge_endpoints[e]
+            # Edge-only fast path assumes edge births are not before endpoint births.
+            # Fall back when this invariant does not hold.
+            if !(active[a] && active[b])
+                return nothing
+            end
+            a == b && continue
+            _uf_union_with_min!(parent, sz, root_min, a, b)
+        end
+
+        stamp += 1
+        roots = Int[]
+        for c in root_candidates
+            active[c] || continue
+            r = _uf_find!(parent, c)
+            if root_stamp[r] != stamp
+                root_stamp[r] = stamp
+                push!(roots, r)
+            end
+        end
+
+        reps = Vector{Int}(undef, length(roots))
+        for i in eachindex(roots)
+            reps[i] = root_min[_uf_find!(parent, roots[i])]
+        end
+        sort!(reps)
+        unique!(reps)
+        reps_by_vertex[p] = reps
+        dims[p] = length(reps)
+
+        if p > 1
+            row_for_col = Vector{Int}(undef, length(prev_reps))
+            if lookup === nothing
+                for j in eachindex(prev_reps)
+                    g = prev_reps[j]
+                    rg = _uf_find!(parent, g)
+                    gg = root_min[rg]
+                    row_for_col[j] = _sorted_pos_or_zero(reps, gg)
+                end
+            else
+                _active_lookup_fill!(lookup, reps)
+                for j in eachindex(prev_reps)
+                    g = prev_reps[j]
+                    rg = _uf_find!(parent, g)
+                    gg = root_min[rg]
+                    row_for_col[j] = _active_lookup_get(lookup, gg)
+                end
+            end
+            chain_row_for_col[p - 1] = row_for_col
+        end
+        prev_reps = reps
+    end
+
+    K = coeff_type(field)
+    preds = cc.preds
+    succs = cc.succs
+    pred_slot_of_succ = cc.pred_slot_of_succ
+    maps_from_pred = [Vector{_StructuralInclusionMap{K}}(undef, length(preds[v])) for v in 1:nP]
+    maps_to_succ = [Vector{_StructuralInclusionMap{K}}(undef, length(succs[u])) for u in 1:nP]
+    @inbounds for u in 1:nP
+        su = succs[u]
+        outu = maps_to_succ[u]
+        for j in eachindex(su)
+            v = su[j]
+            v == u + 1 || return nothing
+            row_for_col = chain_row_for_col[u]
+            A = _StructuralInclusionMap{K}(dims[v], dims[u], row_for_col)
+            outu[j] = A
+            ip = pred_slot_of_succ[u][j]
+            maps_from_pred[v][ip] = A
+        end
+    end
+    store = CoverEdgeMapStore{K,_StructuralInclusionMap{K}}(preds, succs, maps_from_pred, maps_to_succ, cc.nedges)
+    return PModule{K}(P, dims, store; field=field)
+end
+
+function _simplex_tree_dim01_h0_payload(ST::SimplexTreeMulti{1,T}) where {T}
+    _simplex_tree_is_onecritical(ST) || return nothing
+    nd = length(ST.dim_offsets) - 1
+    nd >= 1 || return nothing
+    nd <= 2 || return nothing
+
+    vlo = ST.dim_offsets[1]
+    vhi = ST.dim_offsets[2] - 1
+    nv = max(0, vhi - vlo + 1)
+    vertex_labels = Vector{Int}(undef, nv)
+    vertex_grades = Vector{NTuple{1,T}}(undef, nv)
+    @inbounds for sid in vlo:vhi
+        i = sid - vlo + 1
+        lo = ST.simplex_offsets[sid]
+        hi = ST.simplex_offsets[sid + 1] - 1
+        (hi - lo + 1) == 1 || return nothing
+        vertex_labels[i] = ST.simplex_vertices[lo]
+        vertex_grades[i] = ST.grade_data[ST.grade_offsets[sid]]
+    end
+    isempty(vertex_labels) && return (vertex_grades, NTuple{2,Int}[], NTuple{1,T}[])
+
+    max_label = maximum(vertex_labels)
+    max_label > 0 || return nothing
+    label_to_local = zeros(Int, max_label)
+    @inbounds for i in eachindex(vertex_labels)
+        lbl = vertex_labels[i]
+        (1 <= lbl <= max_label) || return nothing
+        label_to_local[lbl] == 0 || return nothing
+        label_to_local[lbl] = i
+    end
+
+    if nd == 1
+        return (vertex_grades, NTuple{2,Int}[], NTuple{1,T}[])
+    end
+
+    elo = ST.dim_offsets[2]
+    ehi = ST.dim_offsets[3] - 1
+    ne = max(0, ehi - elo + 1)
+    edge_endpoints = Vector{NTuple{2,Int}}(undef, ne)
+    edge_grades = Vector{NTuple{1,T}}(undef, ne)
+    @inbounds for sid in elo:ehi
+        i = sid - elo + 1
+        lo = ST.simplex_offsets[sid]
+        hi = ST.simplex_offsets[sid + 1] - 1
+        (hi - lo + 1) == 2 || return nothing
+        la = ST.simplex_vertices[lo]
+        lb = ST.simplex_vertices[lo + 1]
+        (1 <= la <= max_label && 1 <= lb <= max_label) || return nothing
+        a = label_to_local[la]
+        b = label_to_local[lb]
+        (a > 0 && b > 0 && a != b) || return nothing
+        edge_endpoints[i] = a < b ? (a, b) : (b, a)
+        edge_grades[i] = ST.grade_data[ST.grade_offsets[sid]]
+    end
+    return (vertex_grades, edge_endpoints, edge_grades)
+end
+
+function _cohomology_module_h0_chain_sweep_from_simplex_tree(ST::SimplexTreeMulti{1,T},
+                                                             P::AbstractPoset,
+                                                             axes::NTuple{1,Vector{A}};
+                                                             orientation::NTuple{1,Int}=(1,),
+                                                             field::AbstractCoeffField=QQField()) where {T,A}
+    payload = _simplex_tree_dim01_h0_payload(ST)
+    payload === nothing && return nothing
+    vertex_grades, edge_endpoints, edge_grades = payload
+    vertex_births = _birth_indices(vertex_grades, axes, orientation)
+    edge_births = _birth_indices(edge_grades, axes, orientation)
+    vertex_births_1 = [b[1] for b in vertex_births]
+    edge_births_1 = [b[1] for b in edge_births]
+    return _h0_module_chain_sweep(P, vertex_births_1, edge_births_1, edge_endpoints; field=field)
+end
+
+function _h0_coboundary_components_from_lazy(L::LazyModuleCochainComplex)
+    nP = nvertices(L.P)
+    K = coeff_type(L.field)
+    active0, _ = _lazy_ensure_active!(L, 1)
+    nd = length(L.grades_by_dim)
+
+    if nd >= 2
+        _lazy_ensure_active!(L, 2)
+        comps = _lazy_diff_components(L, 1; threaded=true)
+        return comps
+    end
+
+    comps = Vector{SparseMatrixCSC{K,Int}}(undef, nP)
+    @inbounds for i in 1:nP
+        comps[i] = spzeros(K, 0, length(active0[i]))
+    end
+    return comps
+end
+
+function _kernel_module_from_vertex_maps(M::PModule{K},
+                                         comps::Vector{MatT}) where {K,MatT<:AbstractMatrix{K}}
+    n = nvertices(M.Q)
+    basisK = Vector{Matrix{K}}(undef, n)
+    K_dims = zeros(Int, n)
+    cc = _get_cover_cache(M.Q)
+    succs = cc.succs
+    pred_slot_of_succ = cc.pred_slot_of_succ
+    @inbounds for i in 1:n
+        B = FieldLinAlg.nullspace(M.field, comps[i])
+        basisK[i] = B
+        K_dims[i] = size(B, 2)
+    end
+
+    preds = cc.preds
+    maps_from_pred = [Vector{Matrix{K}}(undef, length(preds[v])) for v in 1:n]
+    maps_to_succ = [Vector{Matrix{K}}(undef, length(succs[u])) for u in 1:n]
+    @inbounds for u in 1:n
+        su = succs[u]
+        maps_u_M = M.edge_maps.maps_to_succ[u]
+        outu = maps_to_succ[u]
+        for j in eachindex(su)
+            v = su[j]
+            X = if K_dims[u] == 0 || K_dims[v] == 0
+                zeros(K, K_dims[v], K_dims[u])
+            else
+                Im = maps_u_M[j] * basisK[u]
+                FieldLinAlg.solve_fullcolumn(M.field, basisK[v], Im; check_rhs=false)
+            end
+            outu[j] = X
+            ip = pred_slot_of_succ[u][j]
+            maps_from_pred[v][ip] = X
+        end
+    end
+    storeK = CoverEdgeMapStore{K,Matrix{K}}(preds, succs, maps_from_pred, maps_to_succ, cc.nedges)
+    return PModule{K}(M.Q, K_dims, storeK; field=M.field)
+end
+
+function _cohomology_module_h0_lowdim_from_lazy(L::LazyModuleCochainComplex)
+    dom0 = _lazy_term_idx!(L, 1)
+    comps = _h0_coboundary_components_from_lazy(L)
+    return _kernel_module_from_vertex_maps(dom0, comps)
+end
+
+function _cohomology_module_h1_cokernel_from_lazy(L::LazyModuleCochainComplex)
+    M1 = _lazy_term(L, 1)
+    d0 = _lazy_diff(L, 0)
+    B, iB = image_with_inclusion(d0)
+    H, _ = _cokernel_module(iB)
+    return H
+end
+
+function _identity_structural_morphism(M::PModule{K}) where {K}
+    n = nvertices(M.Q)
+    comps = Vector{_StructuralInclusionMap{K}}(undef, n)
+    @inbounds for i in 1:n
+        d = M.dims[i]
+        row_for_col = collect(1:d)
+        comps[i] = _StructuralInclusionMap{K}(d, d, row_for_col)
+    end
+    return PMorphism{K}(M, M, comps)
+end
+
+@inline function _solve_through_structural_inclusion(A::_StructuralInclusionMap{K},
+                                                     Y::AbstractMatrix{K}) where {K}
+    nr, nc = size(A)
+    size(Y, 1) == nr || throw(DimensionMismatch("size mismatch in structural-inclusion solve"))
+    X = zeros(K, nc, size(Y, 2))
+    @inbounds for j in 1:nc
+        i = A.row_for_col[j]
+        i == 0 && continue
+        @views X[j, :] .= Y[i, :]
+    end
+    return X
+end
+
+function _cohomology_module_degree_local_from_lazy(L::LazyModuleCochainComplex, t::Int)
+    K = coeff_type(L.field)
+    M = _lazy_term(L, t)
+    d0 = _lazy_diff(L, t - 1)
+    d1 = _lazy_diff(L, t)
+
+    Z, iZ = if is_zero_morphism(d1)
+        M, _identity_structural_morphism(M)
+    else
+        kernel_with_inclusion(d1)
+    end
+
+    if is_zero_morphism(d0)
+        return Z
+    end
+
+    B, iB = image_with_inclusion(d0)
+    if all(==(0), B.dims)
+        return Z
+    end
+
+    n = nvertices(M.Q)
+    jcomps = Vector{Matrix{K}}(undef, n)
+    field = M.field
+    @inbounds for u in 1:n
+        bd = B.dims[u]
+        zd = Z.dims[u]
+        if bd == 0
+            jcomps[u] = zeros(K, zd, 0)
+        elseif zd == 0
+            jcomps[u] = zeros(K, 0, bd)
+        else
+            A = iZ.comps[u]
+            Y = iB.comps[u]
+            jcomps[u] = if A isa _StructuralInclusionMap{K}
+                _solve_through_structural_inclusion(A, Y)
+            else
+                FieldLinAlg.solve_fullcolumn(field, A, Y; check_rhs=false)
+            end
+        end
+    end
+    j = PMorphism{K}(B, Z, jcomps)
+    H, _ = _cokernel_module(j)
+    return H
+end
+
+function _cohomology_module_from_lazy_generic(L::LazyModuleCochainComplex, t::Int)
+    K = coeff_type(L.field)
+    terms = Vector{PModule{K}}(undef, 3)
+    terms[1] = _lazy_term(L, t - 1)
+    terms[2] = _lazy_term(L, t)
+    terms[3] = _lazy_term(L, t + 1)
+    diffs = Vector{PMorphism{K}}(undef, 2)
+    diffs[1] = _lazy_diff(L, t - 1)
+    diffs[2] = _lazy_diff(L, t)
+    C_local = ModuleCochainComplex(terms, diffs; tmin=t - 1, check=false)
+    return cohomology_module(C_local, t)
+end
+
+function _boundary_rows_in_field(B::SparseMatrixCSC{Int,Int},
+                                 field::AbstractCoeffField)
+    K = coeff_type(field)
+    m = size(B, 1)
+    row_cols = [Int[] for _ in 1:m]
+    row_vals = [K[] for _ in 1:m]
+    @inbounds for col in 1:size(B, 2)
+        for ptr in B.colptr[col]:(B.colptr[col + 1] - 1)
+            r = B.rowval[ptr]
+            push!(row_cols[r], col)
+            push!(row_vals[r], coerce(field, B.nzval[ptr]))
+        end
+    end
+    return row_cols, row_vals
+end
+
+@inline function _rref_push_restricted_row!(R,
+                                            row_cols::Vector{Int},
+                                            row_vals,
+                                            colpos::Vector{Int},
+                                            scratch_idx::Vector{Int},
+                                            scratch_val)
+    empty!(scratch_idx)
+    empty!(scratch_val)
+    @inbounds for t in eachindex(row_cols)
+        lp = colpos[row_cols[t]]
+        lp == 0 && continue
+        v = row_vals[t]
+        if !isempty(scratch_idx) && scratch_idx[end] == lp
+            nv = scratch_val[end] + v
+            if iszero(nv)
+                pop!(scratch_idx)
+                pop!(scratch_val)
+            else
+                scratch_val[end] = nv
+            end
+        elseif !iszero(v)
+            push!(scratch_idx, lp)
+            push!(scratch_val, v)
+        end
+    end
+    isempty(scratch_idx) && return false
+    K = eltype(scratch_val)
+    return FieldLinAlg._sparse_rref_push_homogeneous!(
+        R,
+        FieldLinAlg.SparseRow{K}(copy(scratch_idx), copy(scratch_val)),
+    )
+end
+
+@inline _monotone_inc_bucket_value(n::Int) = n <= 1 ? 1 : (1 << floor(Int, log2(Float64(n))))
+
+@inline function _monotone_inc_field_code(field::AbstractCoeffField)
+    field isa QQField && return 1
+    field isa PrimeField && field.p == 2 && return 2
+    field isa PrimeField && field.p == 3 && return 3
+    field isa PrimeField && field.p > 3 && return 4
+    field isa RealField && return 5
+    return 0
+end
+
+@inline function _monotone_inc_cache_key(nP::Int, m::Int, n::Int, field::AbstractCoeffField)
+    ratio = Float64(min(m, n)) / Float64(max(1, max(m, n)))
+    ratio_bucket = clamp(floor(Int, ratio * 20.0), 0, 20)
+    return (_monotone_inc_bucket_value(nP),
+            _monotone_inc_bucket_value(m),
+            _monotone_inc_bucket_value(n),
+            ratio_bucket,
+            _monotone_inc_field_code(field))
+end
+
+@inline function _monotone_inc_mode()
+    mode = _COHOMOLOGY_DIMS_MONOTONE_INCREMENTAL_MODE[]
+    (mode == :auto || mode == :on || mode == :off) ||
+        throw(ArgumentError("monotone incremental rank mode must be :auto, :on, or :off (got $(mode))."))
+    return mode
+end
+
+function _monotone_inc_cache_lookup(key::NTuple{5,Int})
+    lock(_COHOMOLOGY_DIMS_MONOTONE_INCREMENTAL_CACHE_LOCK) do
+        return get(_COHOMOLOGY_DIMS_MONOTONE_INCREMENTAL_CACHE, key, nothing)
+    end
+end
+
+function _monotone_inc_cache_store!(key::NTuple{5,Int}, prefer_incremental::Bool)
+    lock(_COHOMOLOGY_DIMS_MONOTONE_INCREMENTAL_CACHE_LOCK) do
+        if !haskey(_COHOMOLOGY_DIMS_MONOTONE_INCREMENTAL_CACHE, key)
+            push!(_COHOMOLOGY_DIMS_MONOTONE_INCREMENTAL_CACHE_ORDER, key)
+        end
+        _COHOMOLOGY_DIMS_MONOTONE_INCREMENTAL_CACHE[key] = prefer_incremental
+        max_entries = max(1, _COHOMOLOGY_DIMS_MONOTONE_INCREMENTAL_CACHE_MAX[])
+        while length(_COHOMOLOGY_DIMS_MONOTONE_INCREMENTAL_CACHE_ORDER) > max_entries
+            old = popfirst!(_COHOMOLOGY_DIMS_MONOTONE_INCREMENTAL_CACHE_ORDER)
+            delete!(_COHOMOLOGY_DIMS_MONOTONE_INCREMENTAL_CACHE, old)
+        end
+    end
+    return prefer_incremental
+end
+
+function _rank_dims_from_lazy_diff_monotone_chain_incremental(L::LazyModuleCochainComplex,
+                                                              k::Int,
+                                                              row_births::Vector{Int},
+                                                              col_births::Vector{Int};
+                                                              nlimit::Int=nvertices(L.P))
+    B = L.boundaries[k]
+    nP_full = nvertices(L.P)
+    nP = min(max(0, nlimit), nP_full)
+    nP == 0 && return Int[]
+    m = size(B, 1)
+    n = size(B, 2)
+    (length(row_births) == m && length(col_births) == n) || return nothing
+    (nP_full >= 128 && (m * n) >= 50_000) || return nothing
+
+    K = coeff_type(L.field)
+    K <: AbstractFloat && return nothing
+
+    rows_by_birth = [Int[] for _ in 1:nP]
+    cols_by_birth = [Int[] for _ in 1:nP]
+    @inbounds for r in 1:m
+        b = row_births[r]
+        if !(1 <= b <= nP_full)
+            return nothing
+        elseif b <= nP
+            push!(rows_by_birth[b], r)
+        end
+    end
+    @inbounds for c in 1:n
+        b = col_births[c]
+        if !(1 <= b <= nP_full)
+            return nothing
+        elseif b <= nP
+            push!(cols_by_birth[b], c)
+        end
+    end
+
+    row_cols, row_vals = _boundary_rows_in_field(B, L.field)
+    ranks = zeros(Int, nP)
+    active_rows = Int[]
+    active_cols = Int[]
+    sizehint!(active_rows, m)
+    sizehint!(active_cols, n)
+    colpos = zeros(Int, n)
+    touched_cols = Int[]
+    sizehint!(touched_cols, n)
+    scratch_idx = Int[]
+    scratch_val = K[]
+    tracker = nothing
+
+    try
+        @inbounds for p in 1:nP
+            new_rows = rows_by_birth[p]
+            new_cols = cols_by_birth[p]
+            isempty(new_rows) || append!(active_rows, new_rows)
+            cols_changed = !isempty(new_cols)
+            if cols_changed
+                append!(active_cols, new_cols)
+                for c in touched_cols
+                    colpos[c] = 0
+                end
+                empty!(touched_cols)
+                for (j, c) in enumerate(active_cols)
+                    colpos[c] = j
+                    push!(touched_cols, c)
+                end
+                tracker = FieldLinAlg._SparseRREF{K}(length(active_cols))
+                for r in active_rows
+                    _rref_push_restricted_row!(tracker, row_cols[r], row_vals[r], colpos, scratch_idx, scratch_val)
+                end
+            elseif tracker !== nothing && !isempty(new_rows)
+                for r in new_rows
+                    _rref_push_restricted_row!(tracker, row_cols[r], row_vals[r], colpos, scratch_idx, scratch_val)
+                end
+            elseif tracker === nothing && !isempty(active_cols)
+                for (j, c) in enumerate(active_cols)
+                    colpos[c] = j
+                    push!(touched_cols, c)
+                end
+                tracker = FieldLinAlg._SparseRREF{K}(length(active_cols))
+                for r in active_rows
+                    _rref_push_restricted_row!(tracker, row_cols[r], row_vals[r], colpos, scratch_idx, scratch_val)
+                end
+            end
+            ranks[p] = tracker === nothing ? 0 : FieldLinAlg._rref_rank(tracker)
+        end
+    catch
+        return nothing
+    end
+    return ranks
+end
+
+function _rank_dims_from_lazy_diff_monotone_chain_baseline(L::LazyModuleCochainComplex,
+                                                            k::Int,
+                                                            row_births::Vector{Int},
+                                                            col_births::Vector{Int};
+                                                            nlimit::Int=nvertices(L.P))
+    B = L.boundaries[k]
+    nP_full = nvertices(L.P)
+    nP = min(max(0, nlimit), nP_full)
+    nP == 0 && return Int[]
+    active_rows = L.active_by_dim[k]
+    active_cols = L.active_by_dim[k + 1]
+    Bf = _COHOMOLOGY_DIMS_USE_DIRECT_RESTRICTED_RANK[] ? _lazy_boundary_field!(L, k) : nothing
+
+    rows_added = zeros(Int, nP)
+    cols_added = zeros(Int, nP)
+    @inbounds for b in row_births
+        if !(1 <= b <= nP_full)
+            return nothing
+        elseif b <= nP
+            rows_added[b] += 1
+        end
+    end
+    @inbounds for b in col_births
+        if !(1 <= b <= nP_full)
+            return nothing
+        elseif b <= nP
+            cols_added[b] += 1
+        end
+    end
+
+    ranks = Vector{Int}(undef, nP)
+    prev_rank = 0
+    prev_rows = 0
+    prev_cols = 0
+    use_lookup = size(B, 1) <= _ACTIVE_INDEX_TABLE_MAX_ROWS[]
+    lookup = use_lookup ? _ActiveIndexLookupScratch(size(B, 1)) : nothing
+
+    @inbounds for p in 1:nP
+        rows = length(active_rows[p])
+        cols = length(active_cols[p])
+
+        if rows == 0 || cols == 0
+            ranks[p] = 0
+            prev_rank = 0
+            prev_rows = rows
+            prev_cols = cols
+            continue
+        end
+
+        if p > 1 && rows_added[p] == 0 && cols_added[p] == 0
+            ranks[p] = prev_rank
+            prev_rows = rows
+            prev_cols = cols
+            continue
+        end
+
+        curr_min = min(rows, cols)
+        prev_min = min(prev_rows, prev_cols)
+        if p > 1 && prev_rank == prev_min && curr_min == prev_rank
+            ranks[p] = prev_rank
+            prev_rows = rows
+            prev_cols = cols
+            continue
+        end
+
+        r = if _COHOMOLOGY_DIMS_USE_DIRECT_RESTRICTED_RANK[] && Bf !== nothing
+            FieldLinAlg.rank_restricted(L.field, Bf, active_rows[p], active_cols[p]; check=false)
+        else
+            comp = if use_lookup
+                _restricted_coboundary_component(B, active_rows[p], active_cols[p], L.field, lookup)
+            else
+                _restricted_coboundary_component(B, active_rows[p], active_cols[p], L.field)
+            end
+            FieldLinAlg.rank_dim(L.field, comp)
+        end
+        ranks[p] = r
+        prev_rank = r
+        prev_rows = rows
+        prev_cols = cols
+    end
+    return ranks
+end
+
+function _should_use_monotone_incremental_rank(L::LazyModuleCochainComplex,
+                                               k::Int,
+                                               row_births::Vector{Int},
+                                               col_births::Vector{Int})
+    _COHOMOLOGY_DIMS_MONOTONE_INCREMENTAL_RANK[] || return false
+    mode = _monotone_inc_mode()
+    mode == :off && return false
+    mode == :on && return true
+
+    B = L.boundaries[k]
+    nP = nvertices(L.P)
+    m = size(B, 1)
+    n = size(B, 2)
+    K = coeff_type(L.field)
+    K <: AbstractFloat && return false
+
+    heuristic = nP >= 384 && m >= 384 && n >= 384 && (m * n) >= 250_000
+    key = _monotone_inc_cache_key(nP, m, n, L.field)
+    if _COHOMOLOGY_DIMS_MONOTONE_INCREMENTAL_CACHE_ENABLED[]
+        cached = _monotone_inc_cache_lookup(key)
+        cached === nothing || return cached
+    end
+
+    if !heuristic || !_COHOMOLOGY_DIMS_MONOTONE_INCREMENTAL_PROBE[]
+        return _COHOMOLOGY_DIMS_MONOTONE_INCREMENTAL_CACHE_ENABLED[] ?
+               _monotone_inc_cache_store!(key, heuristic) : heuristic
+    end
+
+    nprobe = min(nP, 96)
+    inc_ok = false
+    tinc = @elapsed begin
+        r = _rank_dims_from_lazy_diff_monotone_chain_incremental(L, k, row_births, col_births; nlimit=nprobe)
+        inc_ok = (r !== nothing)
+    end
+    tbase = @elapsed begin
+        _rank_dims_from_lazy_diff_monotone_chain_baseline(L, k, row_births, col_births; nlimit=nprobe)
+    end
+    prefer = inc_ok && (tinc <= 0.92 * tbase)
+    return _COHOMOLOGY_DIMS_MONOTONE_INCREMENTAL_CACHE_ENABLED[] ?
+           _monotone_inc_cache_store!(key, prefer) : prefer
+end
+
+function _rank_dims_from_lazy_diff_monotone_chain(L::LazyModuleCochainComplex, k::Int)
+    nP = nvertices(L.P)
+    _is_chain_cover_cache(_get_cover_cache(L.P), nP) || return nothing
+
+    active_rows = L.active_by_dim[k]
+    active_cols = L.active_by_dim[k + 1]
+    B = L.boundaries[k]
+    row_births = _births_from_prefix_active_sets(active_rows, size(B, 1))
+    col_births = _births_from_prefix_active_sets(active_cols, size(B, 2))
+    (row_births === nothing || col_births === nothing) && return nothing
+
+    if _should_use_monotone_incremental_rank(L, k, row_births, col_births)
+        ranks_inc = _rank_dims_from_lazy_diff_monotone_chain_incremental(L, k, row_births, col_births; nlimit=nP)
+        ranks_inc === nothing || return ranks_inc
+    end
+    return _rank_dims_from_lazy_diff_monotone_chain_baseline(L, k, row_births, col_births; nlimit=nP)
+end
+
+function _rank_dims_from_lazy_diff_direct(L::LazyModuleCochainComplex, k::Int)
+    B = _lazy_boundary_field!(L, k)
+    B isa SparseMatrixCSC || return nothing
+    active_rows = L.active_by_dim[k]
+    active_cols = L.active_by_dim[k + 1]
+    nP = nvertices(L.P)
+    ranks = zeros(Int, nP)
+    @inbounds for i in 1:nP
+        rows = active_rows[i]
+        cols = active_cols[i]
+        if isempty(rows) || isempty(cols)
+            ranks[i] = 0
+        else
+            ranks[i] = FieldLinAlg.rank_restricted(L.field, B, rows, cols; check=false)
+        end
+    end
+    return ranks
+end
+
+function _cohomology_dims_from_lazy(L::LazyModuleCochainComplex, t::Int)
+    nP = nvertices(L.P)
+    if t < L.tmin || t > L.tmax
+        return zeros(Int, nP)
+    end
+    if t == 0 && L.tmin == 0
+        active0, _ = _lazy_ensure_active!(L, 1)
+        active1 = if length(L.grades_by_dim) >= 2
+            _lazy_ensure_active!(L, 2)[1]
+        else
+            [Int[] for _ in 1:nP]
+        end
+        # For dims-only H0 we can always try union-find first; this avoids
+        # expensive per-vertex rank work on common d=1 ingestion paths.
+        duf = _cohomology_dims_h0_unionfind_from_lazy(L, active0, active1)
+        duf !== nothing && return duf
+    end
+    idx = t - L.tmin + 1
+    active_t, _ = _lazy_ensure_active!(L, idx)
+    dims = Vector{Int}(undef, nP)
+    @inbounds for i in 1:nP
+        dims[i] = length(active_t[i])
+    end
+
+    rank_dt = zeros(Int, nP)
+    if t < L.tmax
+        _lazy_ensure_active!(L, idx + 1)
+        ranks_fast = _COHOMOLOGY_DIMS_MONOTONE_RANK_FASTPATH[] ?
+            _rank_dims_from_lazy_diff_monotone_chain(L, idx) : nothing
+        if ranks_fast === nothing
+            ranks_direct = _COHOMOLOGY_DIMS_USE_DIRECT_RESTRICTED_RANK[] ?
+                _rank_dims_from_lazy_diff_direct(L, idx) : nothing
+            if ranks_direct === nothing
+                comps_t = _lazy_diff_components(L, idx; threaded=true)
+                @inbounds for i in 1:nP
+                    rank_dt[i] = FieldLinAlg.rank_dim(L.field, comps_t[i])
+                end
+            else
+                rank_dt .= ranks_direct
+            end
+        else
+            rank_dt .= ranks_fast
+        end
+    end
+
+    rank_dprev = zeros(Int, nP)
+    if t > L.tmin
+        _lazy_ensure_active!(L, idx - 1)
+        ranks_fast = _COHOMOLOGY_DIMS_MONOTONE_RANK_FASTPATH[] ?
+            _rank_dims_from_lazy_diff_monotone_chain(L, idx - 1) : nothing
+        if ranks_fast === nothing
+            ranks_direct = _COHOMOLOGY_DIMS_USE_DIRECT_RESTRICTED_RANK[] ?
+                _rank_dims_from_lazy_diff_direct(L, idx - 1) : nothing
+            if ranks_direct === nothing
+                comps_prev = _lazy_diff_components(L, idx - 1; threaded=true)
+                @inbounds for i in 1:nP
+                    rank_dprev[i] = FieldLinAlg.rank_dim(L.field, comps_prev[i])
+                end
+            else
+                rank_dprev .= ranks_direct
+            end
+        else
+            rank_dprev .= ranks_fast
+        end
+    end
+
+    out = Vector{Int}(undef, nP)
+    @inbounds for i in 1:nP
+        out[i] = dims[i] - rank_dt[i] - rank_dprev[i]
+    end
+    return out
+end
+
+function _cohomology_module_from_lazy(L::LazyModuleCochainComplex, t::Int)
+    if t == 0 && L.tmin == 0
+        active0, _ = _lazy_ensure_active!(L, 1)
+        nP = nvertices(L.P)
+        active1 = if length(L.grades_by_dim) >= 2
+            _lazy_ensure_active!(L, 2)[1]
+        else
+            [Int[] for _ in 1:nP]
+        end
+        total_active_vertices = _sum_nested_lengths(active0)
+        total_active_edges = _sum_nested_lengths(active1)
+        if _use_h0_unionfind_fastpath(nP, total_active_vertices, total_active_edges)
+            Muf = _cohomology_module_h0_unionfind_from_lazy(L, active0, active1)
+            if Muf !== nothing
+                return Muf
+            end
+        end
+        return _cohomology_module_h0_lowdim_from_lazy(L)
+    end
+    if t == 1 && _H1_COKERNEL_FASTPATH[] && L.tmin == 0 && L.tmax <= 1
+        try
+            return _cohomology_module_h1_cokernel_from_lazy(L)
+        catch
+            # Some sparse-restricted module maps can violate strict image solver
+            # checks on this shortcut path; fall back to the canonical generic
+            # cohomology route in that case.
+        end
+    end
+    if _use_degree_local_module_fastpath(L, t)
+        try
+            return _cohomology_module_degree_local_from_lazy(L, t)
+        catch
+            # Keep the generic path as the canonical fallback for unusual
+            # complexes where the degree-local shortcut assumptions do not hold.
+        end
+    end
+    return _cohomology_module_from_lazy_generic(L, t)
+end
+
+function _materialize_cochain(L::LazyModuleCochainComplex; check::Bool=true)
+    nd = length(L.terms)
+    K = coeff_type(L.field)
+    terms = Vector{PModule{K}}(undef, nd)
+    for i in 1:nd
+        terms[i] = _lazy_term_idx!(L, i)
+    end
+    diffs = Vector{PMorphism{K}}(undef, max(0, nd - 1))
+    for k in eachindex(diffs)
+        diffs[k] = _lazy_diff_idx!(L, k)
+    end
+    return ModuleCochainComplex(terms, diffs; tmin=L.tmin, check=check)
+end
+
+function _cochain_complex_from_grades_and_boundaries(grades_by_dim::Vector,
+                                                     boundaries_in::Vector{SparseMatrixCSC{Int,Int}},
+                                                     P::AbstractPoset,
+                                                     axes::NTuple{N,Vector{T}};
+                                                     orientation::NTuple{N,Int}=ntuple(_ -> 1, N),
+                                                     field::AbstractCoeffField=QQField(),
+                                                     multicritical::Symbol=:union) where {N,T}
+    sizes = ntuple(i -> length(axes[i]), N)
+    vertex_idxs = _grid_tuples(sizes)
+
+    active_by_dim = Vector{Vector{Vector{Int}}}(undef, length(grades_by_dim))
+    for d in 1:length(grades_by_dim)
+        births_d = _birth_indices(grades_by_dim[d], axes, orientation)
+        active_by_dim[d] = _active_lists(births_d, vertex_idxs, orientation; multicritical=multicritical)
+    end
+
+    K = coeff_type(field)
+    terms = Vector{PModule{K}}(undef, length(grades_by_dim))
+    for d in 1:length(grades_by_dim)
+        terms[d] = _pmodule_from_active_lists(P, active_by_dim[d]; field=field)
+    end
+
+    diffs = PMorphism{K}[]
+    boundaries = _normalize_cochain_boundaries(grades_by_dim, boundaries_in)
+
+    for k in 1:length(boundaries)
+        B = boundaries[k]  # boundary C_{k+1} -> C_k
+        comps = Vector{SparseMatrixCSC{K,Int}}(undef, nvertices(P))
+        for i in 1:nvertices(P)
+            Lk = active_by_dim[k][i]
+            Lk1 = active_by_dim[k + 1][i]
+            comps[i] = _restricted_coboundary_component(B, Lk, Lk1, field)
+        end
+        push!(diffs, PMorphism{K}(terms[k], terms[k + 1], comps))
+    end
+
+    return ModuleCochainComplex(terms, diffs; tmin=0, check=true)
+end
+
+function cochain_complex_from_graded_complex(G::Union{GradedComplex,MultiCriticalGradedComplex},
+                                             P::AbstractPoset,
+                                             axes::NTuple{N,Vector{T}};
+                                             orientation::NTuple{N,Int}=ntuple(_ -> 1, N),
+                                             field::AbstractCoeffField=QQField(),
+                                             multicritical::Symbol=:union,
+                                             onecritical_selector::Symbol=:lexmin,
+                                             onecritical_enforce_boundary::Bool=true) where {N,T}
+    Guse = if G isa MultiCriticalGradedComplex && multicritical === :one_critical
+        one_criticalify(G; selector=onecritical_selector, enforce_boundary=onecritical_enforce_boundary)
+    else
+        G
+    end
+    if Guse isa MultiCriticalGradedComplex
+        multicritical in (:union, :intersection, :one_critical) ||
+            throw(ArgumentError("cochain_complex_from_graded_complex: multicritical must be :union, :intersection, or :one_critical"))
+    end
+    mc_mode = multicritical === :one_critical ? :union : multicritical
+    grades_by_dim = _grades_by_dim(Guse)
+    return _cochain_complex_from_grades_and_boundaries(
+        grades_by_dim,
+        Guse.boundaries,
+        P,
+        axes;
+        orientation=orientation,
+        field=field,
+        multicritical=mc_mode,
+    )
+end
+
+function _lazy_cochain_complex_from_graded_complex(G::Union{GradedComplex,MultiCriticalGradedComplex},
+                                                   P::AbstractPoset,
+                                                   axes::NTuple{N,Vector{T}};
+                                                   orientation::NTuple{N,Int}=ntuple(_ -> 1, N),
+                                                   field::AbstractCoeffField=QQField(),
+                                                   multicritical::Symbol=:union,
+                                                   onecritical_selector::Symbol=:lexmin,
+                                                   onecritical_enforce_boundary::Bool=true) where {N,T}
+    Guse = if G isa MultiCriticalGradedComplex && multicritical === :one_critical
+        one_criticalify(G; selector=onecritical_selector, enforce_boundary=onecritical_enforce_boundary)
+    else
+        G
+    end
+    if Guse isa MultiCriticalGradedComplex
+        multicritical in (:union, :intersection, :one_critical) ||
+            throw(ArgumentError("_lazy_cochain_complex_from_graded_complex: multicritical must be :union, :intersection, or :one_critical"))
+    end
+    mc_mode = multicritical === :one_critical ? :union : multicritical
+    grades_by_dim = _grades_by_dim(Guse)
+    return _lazy_cochain_complex_from_grades_and_boundaries(
+        grades_by_dim,
+        Guse.boundaries,
+        P,
+        axes;
+        orientation=orientation,
+        field=field,
+        multicritical=mc_mode,
+    )
+end
+
+function _simplex_tree_grades_by_dim(ST::SimplexTreeMulti{N,T}) where {N,T}
+    nd = length(ST.dim_offsets) - 1
+    if _simplex_tree_is_onecritical(ST)
+        out = Vector{Vector{NTuple{N,T}}}(undef, nd)
+        for d in 1:nd
+            lo = ST.dim_offsets[d]
+            hi = ST.dim_offsets[d + 1] - 1
+            g = Vector{NTuple{N,T}}(undef, max(0, hi - lo + 1))
+            p = 1
+            for sid in lo:hi
+                g[p] = ST.grade_data[ST.grade_offsets[sid]]
+                p += 1
+            end
+            out[d] = g
+        end
+        return out
+    end
+    out = Vector{Vector{Vector{NTuple{N,T}}}}(undef, nd)
+    for d in 1:nd
+        lo = ST.dim_offsets[d]
+        hi = ST.dim_offsets[d + 1] - 1
+        g = Vector{Vector{NTuple{N,T}}}(undef, max(0, hi - lo + 1))
+        p = 1
+        for sid in lo:hi
+            s = ST.grade_offsets[sid]
+            e = ST.grade_offsets[sid + 1] - 1
+            g[p] = unique(Vector{NTuple{N,T}}(ST.grade_data[s:e]))
+            p += 1
+        end
+        out[d] = g
+    end
+    return out
+end
+
+function _simplex_tree_boundaries(ST::SimplexTreeMulti)
+    nd = length(ST.dim_offsets) - 1
+    nd <= 1 && return SparseMatrixCSC{Int,Int}[]
+    simplices_by_dim = Vector{Vector{Vector{Int}}}(undef, nd)
+    for d in 1:nd
+        simplices_by_dim[d] = _simplex_tree_dim_simplices(ST, d)
+    end
+    boundaries = Vector{SparseMatrixCSC{Int,Int}}(undef, nd - 1)
+    for d in 1:(nd - 1)
+        boundaries[d] = _simplicial_boundary(simplices_by_dim[d + 1], simplices_by_dim[d])
+    end
+    return boundaries
+end
+
+function _one_critical_grades_by_dim(grades_by_dim::Vector{Vector{Vector{NTuple{N,T}}}},
+                                     boundaries::Vector{SparseMatrixCSC{Int,Int}};
+                                     selector::Symbol=:lexmin,
+                                     enforce_boundary::Bool=true) where {N,T}
+    nd = length(grades_by_dim)
+    out = Vector{Vector{NTuple{N,T}}}(undef, nd)
+    @inbounds for d in 1:nd
+        gd = grades_by_dim[d]
+        od = Vector{NTuple{N,T}}(undef, length(gd))
+        for i in eachindex(gd)
+            od[i] = _select_one_critical_grade(gd[i], selector)
+        end
+        out[d] = od
+    end
+    if enforce_boundary
+        @inbounds for d in 2:nd
+            B = boundaries[d - 1]
+            nrows, ncols = size(B)
+            nrows == length(out[d - 1]) || error("one_criticalify(simplex-tree): boundary $(d-1) row count mismatch.")
+            ncols == length(out[d]) || error("one_criticalify(simplex-tree): boundary $(d-1) col count mismatch.")
+            for j in 1:ncols
+                g = out[d][j]
+                for p in nzrange(B, j)
+                    i = rowvals(B)[p]
+                    g = _tuple_componentwise_max(g, out[d - 1][i])
+                end
+                out[d][j] = g
+            end
+        end
+    end
+    return out
+end
+
+function cochain_complex_from_simplex_tree(ST::SimplexTreeMulti{N,T},
+                                           P::AbstractPoset,
+                                           axes::NTuple{N,Vector{A}};
+                                           orientation::NTuple{N,Int}=ntuple(_ -> 1, N),
+                                           field::AbstractCoeffField=QQField(),
+                                           multicritical::Symbol=:union,
+                                           onecritical_selector::Symbol=:lexmin,
+                                           onecritical_enforce_boundary::Bool=true) where {N,T,A}
+    if !_simplex_tree_is_onecritical(ST)
+        multicritical in (:union, :intersection, :one_critical) ||
+            throw(ArgumentError("cochain_complex_from_simplex_tree: multicritical must be :union, :intersection, or :one_critical"))
+    end
+    boundaries = _simplex_tree_boundaries(ST)
+    if multicritical === :one_critical
+        grades_by_dim = if _simplex_tree_is_onecritical(ST)
+            _simplex_tree_grades_by_dim(ST)
+        else
+            _one_critical_grades_by_dim(
+                _simplex_tree_grades_by_dim(ST),
+                boundaries;
+                selector=onecritical_selector,
+                enforce_boundary=onecritical_enforce_boundary,
+            )
+        end
+        return _cochain_complex_from_grades_and_boundaries(
+            grades_by_dim,
+            boundaries,
+            P,
+            axes;
+            orientation=orientation,
+            field=field,
+            multicritical=:union,
+        )
+    end
+    grades_by_dim = _simplex_tree_grades_by_dim(ST)
+    return _cochain_complex_from_grades_and_boundaries(
+        grades_by_dim,
+        boundaries,
+        P,
+        axes;
+        orientation=orientation,
+        field=field,
+        multicritical=multicritical,
+    )
+end
+
+function _lazy_cochain_complex_from_simplex_tree(ST::SimplexTreeMulti{N,T},
+                                                 P::AbstractPoset,
+                                                 axes::NTuple{N,Vector{A}};
+                                                 orientation::NTuple{N,Int}=ntuple(_ -> 1, N),
+                                                 field::AbstractCoeffField=QQField(),
+                                                 multicritical::Symbol=:union,
+                                                 onecritical_selector::Symbol=:lexmin,
+                                                 onecritical_enforce_boundary::Bool=true) where {N,T,A}
+    if !_simplex_tree_is_onecritical(ST)
+        multicritical in (:union, :intersection, :one_critical) ||
+            throw(ArgumentError("_lazy_cochain_complex_from_simplex_tree: multicritical must be :union, :intersection, or :one_critical"))
+    end
+    boundaries = _simplex_tree_boundaries(ST)
+    if multicritical === :one_critical
+        grades_by_dim = if _simplex_tree_is_onecritical(ST)
+            _simplex_tree_grades_by_dim(ST)
+        else
+            _one_critical_grades_by_dim(
+                _simplex_tree_grades_by_dim(ST),
+                boundaries;
+                selector=onecritical_selector,
+                enforce_boundary=onecritical_enforce_boundary,
+            )
+        end
+        return _lazy_cochain_complex_from_grades_and_boundaries(
+            grades_by_dim,
+            boundaries,
+            P,
+            axes;
+            orientation=orientation,
+            field=field,
+            multicritical=:union,
+        )
+    end
+    grades_by_dim = _simplex_tree_grades_by_dim(ST)
+    return _lazy_cochain_complex_from_grades_and_boundaries(
+        grades_by_dim,
+        boundaries,
+        P,
+        axes;
+        orientation=orientation,
+        field=field,
+        multicritical=multicritical,
+    )
+end
+
+function _simplicial_boundary_hash(simplices::Vector{Vector{Int}}, faces::Vector{Vector{Int}})
+    K = isempty(simplices) ? (isempty(faces) ? 0 : length(faces[1]) + 1) : length(simplices[1])
+    K == 0 && return spzeros(Int, length(faces), length(simplices))
+    face_index = Dict{Tuple{Vararg{Int}},Int}()
+    for (i, f) in enumerate(faces)
+        face_index[Tuple(f)] = i
+    end
+    I = Int[]
+    J = Int[]
+    V = Int[]
+    sizehint!(I, K * length(simplices))
+    sizehint!(J, K * length(simplices))
+    sizehint!(V, K * length(simplices))
+    for (j, s) in enumerate(simplices)
+        for i in 1:K
+            f = [s[t] for t in 1:K if t != i]
+            row = face_index[Tuple(f)]
+            push!(I, row)
+            push!(J, j)
+            push!(V, isodd(i) ? 1 : -1)
+        end
+    end
+    return sparse(I, J, V, length(faces), length(simplices))
+end
+
+function _simplicial_boundary(simplices::Vector{Vector{Int}}, faces::Vector{Vector{Int}})
+    if !_SIMPLICIAL_BOUNDARY_SPECIALIZED[]
+        return _simplicial_boundary_hash(simplices, faces)
+    end
+
+    isempty(simplices) && return spzeros(Int, length(faces), 0)
+    K = length(simplices[1])
+    K == 0 && return spzeros(Int, length(faces), length(simplices))
+
+    if K == 2
+        # 1-simplices -> 0-simplices: rows are direct vertex indices.
+        I = Int[]
+        J = Int[]
+        V = Int[]
+        sizehint!(I, 2 * length(simplices))
+        sizehint!(J, 2 * length(simplices))
+        sizehint!(V, 2 * length(simplices))
+        @inbounds for (j, s) in enumerate(simplices)
+            u, v = s[1], s[2]
+            push!(I, v); push!(J, j); push!(V, 1)
+            push!(I, u); push!(J, j); push!(V, -1)
+        end
+        return sparse(I, J, V, length(faces), length(simplices))
+    elseif K == 3
+        # 2-simplices -> 1-simplices: map edge keys to row by sorted-key binary search.
+        nf = length(faces)
+        face_keys = Vector{UInt64}(undef, nf)
+        @inbounds for i in 1:nf
+            f = faces[i]
+            a, b = f[1], f[2]
+            a > b && ((a, b) = (b, a))
+            face_keys[i] = _pack_edge_key(a, b)
+        end
+        perm = sortperm(face_keys)
+        sorted_keys = face_keys[perm]
+
+        @inline function row_for_edge(a::Int, b::Int)
+            a > b && ((a, b) = (b, a))
+            key = _pack_edge_key(a, b)
+            idx = searchsortedfirst(sorted_keys, key)
+            (idx <= nf && sorted_keys[idx] == key) ||
+                error("_simplicial_boundary: missing edge face for key=($(a),$(b)).")
+            return perm[idx]
+        end
+
+        I = Int[]
+        J = Int[]
+        V = Int[]
+        sizehint!(I, 3 * length(simplices))
+        sizehint!(J, 3 * length(simplices))
+        sizehint!(V, 3 * length(simplices))
+        @inbounds for (j, s) in enumerate(simplices)
+            a, b, c = s[1], s[2], s[3]
+            push!(I, row_for_edge(b, c)); push!(J, j); push!(V, 1)
+            push!(I, row_for_edge(a, c)); push!(J, j); push!(V, -1)
+            push!(I, row_for_edge(a, b)); push!(J, j); push!(V, 1)
+        end
+        return sparse(I, J, V, length(faces), length(simplices))
+    end
+
+    return _simplicial_boundary_hash(simplices, faces)
+end
+
+function _simplex_tree_grade_sets(simplices::Vector{Vector{Vector{Int}}},
+                                  grades::Vector{<:NTuple{N,T}}) where {N,T}
+    total = sum(length, simplices)
+    length(grades) == total ||
+        error("simplex-tree grades length mismatch: expected $(total), got $(length(grades)).")
+    out = Vector{Vector{NTuple{N,T}}}(undef, total)
+    idx = 1
+    for d in eachindex(simplices)
+        for _ in eachindex(simplices[d])
+            out[idx] = NTuple{N,T}[grades[idx]]
+            idx += 1
+        end
+    end
+    return out
+end
+
+function _simplex_tree_grade_sets(simplices::Vector{Vector{Vector{Int}}},
+                                  grades::Vector{<:AbstractVector{<:NTuple{N,T}}}) where {N,T}
+    total = sum(length, simplices)
+    length(grades) == total ||
+        error("simplex-tree grade-set length mismatch: expected $(total), got $(length(grades)).")
+    out = Vector{Vector{NTuple{N,T}}}(undef, total)
+    @inbounds for i in 1:total
+        gi = grades[i]
+        isempty(gi) && error("simplex-tree: simplex $i has empty grade set.")
+        out[i] = unique(Vector{NTuple{N,T}}(gi))
+    end
+    return out
+end
+
+function _simplex_tree_multi_from_simplices(simplices::Vector{Vector{Vector{Int}}},
+                                            grades::Vector)
+    isempty(simplices) && error("simplex-tree: simplices cannot be empty.")
+    total = sum(length, simplices)
+    total > 0 || error("simplex-tree: simplices cannot be empty.")
+    grade_sets = _simplex_tree_grade_sets(simplices, grades)
+    N = length(grade_sets[1][1])
+    T = eltype(grade_sets[1][1])
+
+    simplex_offsets = Int[1]
+    simplex_vertices_flat = Int[]
+    simplex_dims = Int[]
+    dim_offsets = Int[1]
+
+    grade_offsets = Int[1]
+    grade_data = NTuple{N,T}[]
+    sizehint!(simplex_dims, total)
+    sizehint!(grade_offsets, total + 1)
+    sizehint!(simplex_offsets, total + 1)
+
+    gidx = 1
+    for d in eachindex(simplices)
+        dim = d - 1
+        for s in simplices[d]
+            ss = sort!(unique(Int[x for x in s]))
+            expected = dim + 1
+            length(ss) == expected ||
+                error("simplex-tree: simplex at dim=$dim must have $(expected) vertices (got $(length(ss))).")
+            append!(simplex_vertices_flat, ss)
+            push!(simplex_offsets, length(simplex_vertices_flat) + 1)
+            push!(simplex_dims, dim)
+
+            gs = grade_sets[gidx]
+            for g in gs
+                length(g) == N || error("simplex-tree: grade arity mismatch at simplex $gidx.")
+                push!(grade_data, ntuple(i -> T(g[i]), N))
+            end
+            push!(grade_offsets, length(grade_data) + 1)
+            gidx += 1
+        end
+        push!(dim_offsets, length(simplex_dims) + 1)
+    end
+
+    return SimplexTreeMulti(simplex_offsets, simplex_vertices_flat, simplex_dims,
+                            dim_offsets, grade_offsets, grade_data)
+end
+
+function _simplices_from_complex(G::Union{GradedComplex,MultiCriticalGradedComplex})
+    nd = length(G.cells_by_dim)
+    nd > 0 || error("simplex-tree: complex has no dimensions.")
+    counts = [length(c) for c in G.cells_by_dim]
+    simplices = Vector{Vector{Vector{Int}}}(undef, nd)
+    simplices[1] = [[i] for i in 1:counts[1]]
+    for d in 2:nd
+        B = G.boundaries[d - 1]
+        size(B, 1) == counts[d - 1] || error("simplex-tree: boundary row size mismatch at dim $(d - 1).")
+        size(B, 2) == counts[d] || error("simplex-tree: boundary col size mismatch at dim $(d - 1).")
+        curr = Vector{Vector{Int}}(undef, counts[d])
+        prev = simplices[d - 1]
+        @inbounds for j in 1:counts[d]
+            lo = B.colptr[j]
+            hi = B.colptr[j + 1] - 1
+            nfaces = hi - lo + 1
+            expected_faces = d
+            nfaces == expected_faces ||
+                error("simplex-tree: non-simplicial boundary at dim $(d - 1), cell $j (expected $expected_faces faces, got $nfaces).")
+            verts = Int[]
+            for p in lo:hi
+                row = B.rowval[p]
+                append!(verts, prev[row])
+            end
+            sort!(verts)
+            unique!(verts)
+            expected_verts = d
+            length(verts) == expected_verts ||
+                error("simplex-tree: non-simplicial support at dim $(d - 1), cell $j (expected $expected_verts vertices, got $(length(verts))).")
+            curr[j] = verts
+        end
+        simplices[d] = curr
+    end
+    return simplices
+end
+
+function _simplex_tree_multi_from_complex(G::GradedComplex)
+    return _simplex_tree_multi_from_simplices(_simplices_from_complex(G), G.grades)
+end
+
+function _simplex_tree_multi_from_complex(G::MultiCriticalGradedComplex)
+    return _simplex_tree_multi_from_simplices(_simplices_from_complex(G), G.grades)
+end
+
+function _simplex_tree_dim_simplices(ST::SimplexTreeMulti, dim_slot::Int)
+    lo = ST.dim_offsets[dim_slot]
+    hi = ST.dim_offsets[dim_slot + 1] - 1
+    out = Vector{Vector{Int}}(undef, max(0, hi - lo + 1))
+    p = 1
+    for sid in lo:hi
+        out[p] = Vector{Int}(simplex_vertices(ST, sid))
+        p += 1
+    end
+    return out
+end
+
+@inline function _simplex_tree_is_onecritical(ST::SimplexTreeMulti)
+    @inbounds for i in 1:simplex_count(ST)
+        (ST.grade_offsets[i + 1] - ST.grade_offsets[i]) == 1 || return false
+    end
+    return true
+end
+
+function _graded_complex_from_simplex_tree(ST::SimplexTreeMulti{N,T}) where {N,T}
+    nd = length(ST.dim_offsets) - 1
+    simplices = Vector{Vector{Vector{Int}}}(undef, nd)
+    for d in 1:nd
+        simplices[d] = _simplex_tree_dim_simplices(ST, d)
+    end
+    boundaries = SparseMatrixCSC{Int,Int}[]
+    for d in 2:nd
+        push!(boundaries, _simplicial_boundary(simplices[d], simplices[d - 1]))
+    end
+    cells = [collect(1:length(simplices[d])) for d in 1:nd]
+    if _simplex_tree_is_onecritical(ST)
+        grades = Vector{NTuple{N,T}}(undef, simplex_count(ST))
+        @inbounds for i in 1:simplex_count(ST)
+            grades[i] = ST.grade_data[ST.grade_offsets[i]]
+        end
+        return GradedComplex(cells, boundaries, grades)
+    end
+    grades = Vector{Vector{NTuple{N,T}}}(undef, simplex_count(ST))
+    @inbounds for i in 1:simplex_count(ST)
+        lo = ST.grade_offsets[i]
+        hi = ST.grade_offsets[i + 1] - 1
+        grades[i] = unique(Vector{NTuple{N,T}}(ST.grade_data[lo:hi]))
+    end
+    return MultiCriticalGradedComplex(cells, boundaries, grades)
+end
+
+function _axes_from_simplex_tree(ST::SimplexTreeMulti{N,T};
+                                 orientation::NTuple{N,Int}=ntuple(_ -> 1, N)) where {N,T}
+    if _simplex_tree_is_onecritical(ST)
+        grades = Vector{NTuple{N,T}}(undef, simplex_count(ST))
+        @inbounds for i in 1:simplex_count(ST)
+            grades[i] = ST.grade_data[ST.grade_offsets[i]]
+        end
+        return _axes_from_grades(grades, N; orientation=orientation)
+    end
+    grades = Vector{Vector{NTuple{N,T}}}(undef, simplex_count(ST))
+    @inbounds for i in 1:simplex_count(ST)
+        lo = ST.grade_offsets[i]
+        hi = ST.grade_offsets[i + 1] - 1
+        grades[i] = Vector{NTuple{N,T}}(ST.grade_data[lo:hi])
+    end
+    return _axes_from_multigrades(grades, N; orientation=orientation)
+end
+
+function _materialize_simplicial_output(simplices::Vector{Vector{Vector{Int}}},
+                                        grades::Vector{<:NTuple{N,T}},
+                                        spec::FiltrationSpec;
+                                        return_simplex_tree::Bool=false) where {N,T}
+    orientation = get(spec.params, :orientation, ntuple(_ -> 1, N))
+    if return_simplex_tree
+        ST = _simplex_tree_multi_from_simplices(simplices, grades)
+        axes = get(spec.params, :axes, _axes_from_simplex_tree(ST; orientation=orientation))
+        return ST, axes, orientation
+    end
+    boundaries = SparseMatrixCSC{Int,Int}[]
+    for k in 2:length(simplices)
+        push!(boundaries, _simplicial_boundary(simplices[k], simplices[k - 1]))
+    end
+    cells = [collect(1:length(simplices[k])) for k in 1:length(simplices)]
+    G = GradedComplex(cells, boundaries, grades)
+    axes = get(spec.params, :axes, _axes_from_grades(grades, N; orientation=orientation))
+    return G, axes, orientation
+end
+
+function _materialize_simplicial_output(simplices::Vector{Vector{Vector{Int}}},
+                                        grades::Vector{<:AbstractVector{<:NTuple{N,T}}},
+                                        spec::FiltrationSpec;
+                                        return_simplex_tree::Bool=false) where {N,T}
+    orientation = get(spec.params, :orientation, ntuple(_ -> 1, N))
+    if return_simplex_tree
+        ST = _simplex_tree_multi_from_simplices(simplices, grades)
+        axes = get(spec.params, :axes, _axes_from_simplex_tree(ST; orientation=orientation))
+        return ST, axes, orientation
+    end
+    boundaries = SparseMatrixCSC{Int,Int}[]
+    for k in 2:length(simplices)
+        push!(boundaries, _simplicial_boundary(simplices[k], simplices[k - 1]))
+    end
+    cells = [collect(1:length(simplices[k])) for k in 1:length(simplices)]
+    G = MultiCriticalGradedComplex(cells, boundaries, grades)
+    axes = get(spec.params, :axes, _axes_from_multigrades(grades, N; orientation=orientation))
+    return G, axes, orientation
+end
+
+function _combinations(n::Int, k::Int)
+    if k == 0
+        return [Int[]]
+    end
+    out = Vector{Vector{Int}}()
+    function rec(start::Int, acc::Vector{Int})
+        if length(acc) == k
+            push!(out, copy(acc))
+            return
+        end
+        for i in start:(n - (k - length(acc)) + 1)
+            push!(acc, i)
+            rec(i + 1, acc)
+            pop!(acc)
+        end
+    end
+    rec(1, Int[])
+    return out
+end
+
+function _filter_params(params::NamedTuple, drop::Vector{Symbol})
+    return (; (k => v for (k, v) in pairs(params) if !(k in drop))...)
+end
+
+@inline function _euclidean_distance(p::AbstractVector{<:Real}, q::AbstractVector{<:Real})
+    length(p) == length(q) || error("PointCloud: point dimension mismatch.")
+    s = 0.0
+    @inbounds for i in 1:length(p)
+        d = Float64(p[i]) - Float64(q[i])
+        s += d * d
+    end
+    return sqrt(s)
+end
+
+@inline function _ordered_pair(i::Int, j::Int)
+    return i < j ? (i, j) : (j, i)
+end
+
+@inline function _pack_edge_key(u::Int, v::Int)::UInt64
+    return (UInt64(u) << 32) | UInt64(v)
+end
+
+@inline function _unpack_edge_key(key::UInt64)
+    return Int(key >>> 32), Int(key & 0x00000000ffffffff)
+end
+
+function _finalize_edge_pairs(edge_keys::AbstractVector{UInt64},
+                              edge_dists::AbstractVector{Float64},
+                              edge_count::Int)
+    edge_count <= 0 && return NTuple{2,Int}[], Float64[]
+    order = sortperm(view(edge_keys, 1:edge_count))
+
+    unique_count = 0
+    prev_key = UInt64(0)
+    first = true
+    @inbounds for idx in order
+        key = edge_keys[idx]
+        if first || key != prev_key
+            unique_count += 1
+            prev_key = key
+            first = false
+        end
+    end
+
+    edges = Vector{NTuple{2,Int}}(undef, unique_count)
+    dists = Vector{Float64}(undef, unique_count)
+    out = 0
+    prev_key = UInt64(0)
+    best_dist = 0.0
+    first = true
+    @inbounds for idx in order
+        key = edge_keys[idx]
+        d = edge_dists[idx]
+        if first
+            prev_key = key
+            best_dist = d
+            first = false
+            continue
+        end
+        if key == prev_key
+            d < best_dist && (best_dist = d)
+            continue
+        end
+        out += 1
+        u, v = _unpack_edge_key(prev_key)
+        edges[out] = (u, v)
+        dists[out] = best_dist
+        prev_key = key
+        best_dist = d
+    end
+    out += 1
+    u, v = _unpack_edge_key(prev_key)
+    edges[out] = (u, v)
+    dists[out] = best_dist
+    return edges, dists
+end
+
+@inline function _insert_neighbor_sorted!(idxs::Vector{Int}, dists::Vector{Float64}, j::Int, d::Float64)
+    k = length(idxs)
+    if d >= dists[k]
+        return nothing
+    end
+    pos = k
+    @inbounds while pos > 1 && d < dists[pos - 1]
+        dists[pos] = dists[pos - 1]
+        idxs[pos] = idxs[pos - 1]
+        pos -= 1
+    end
+    dists[pos] = d
+    idxs[pos] = j
+    return nothing
+end
+
+function _knn_graph_bruteforce(points::AbstractVector{<:AbstractVector{<:Real}}, k::Int)
+    n = length(points)
+    n > 0 || return Vector{Vector{Int}}(), Float64[], Float64[]
+    k <= n - 1 || error("kNN k=$(k) exceeds number of neighbors.")
+    k_eff = min(k, n - 1)
+    k_eff > 0 || error("kNN k=$(k) exceeds number of neighbors.")
+    edge_keys = Vector{UInt64}(undef, n * k_eff)
+    edge_vals = Vector{Float64}(undef, n * k_eff)
+    edge_count = 0
+    kdist = Vector{Float64}(undef, n)
+    idxs = fill(0, k_eff)
+    dtmp = fill(Inf, k_eff)
+    for i in 1:n
+        fill!(idxs, 0)
+        fill!(dtmp, Inf)
+        for j in 1:n
+            i == j && continue
+            _insert_neighbor_sorted!(idxs, dtmp, j, _euclidean_distance(points[i], points[j]))
+        end
+        kdist[i] = dtmp[k_eff]
+        for t in 1:k_eff
+            j = idxs[t]
+            j == 0 && continue
+            u, v = _ordered_pair(i, j)
+            edge_count += 1
+            edge_keys[edge_count] = _pack_edge_key(u, v)
+            edge_vals[edge_count] = dtmp[t]
+        end
+    end
+    edges, edists = _finalize_edge_pairs(edge_keys, edge_vals, edge_count)
+    return edges, edists, kdist
+end
+
+function _radius_graph_bruteforce(points::AbstractVector{<:AbstractVector{<:Real}}, r::Float64)
+    n = length(points)
+    edges = NTuple{2,Int}[]
+    dists = Float64[]
+    sizehint!(edges, min(max(0, 4 * n), 200_000))
+    sizehint!(dists, min(max(0, 4 * n), 200_000))
+    for i in 1:n
+        for j in (i + 1):n
+            d = _euclidean_distance(points[i], points[j])
+            if d <= r
+                push!(edges, (i, j))
+                push!(dists, d)
+            end
+        end
+    end
+    return edges, dists
+end
+
+function _point_cloud_knn_graph(points::AbstractVector{<:AbstractVector{<:Real}},
+                                k::Int;
+                                backend::Symbol=:auto,
+                                approx_candidates::Int=0)
+    n = length(points)
+    n > 0 || return NTuple{2,Int}[], Float64[], Float64[]
+    k <= n - 1 || error("kNN k=$(k) exceeds number of neighbors.")
+    if backend != :bruteforce
+        impl = _POINTCLOUD_KNN_GRAPH_IMPL[]
+        if impl !== nothing
+            out = impl(points, k; backend=backend, approx_candidates=approx_candidates)
+            out === nothing || return out
+        elseif backend == :nearestneighbors || backend == :approx
+            throw(ArgumentError("PointCloud nn_backend=$(backend) requires NearestNeighbors extension."))
+        end
+    end
+    return _knn_graph_bruteforce(points, k)
+end
+
+function _point_cloud_radius_graph(points::AbstractVector{<:AbstractVector{<:Real}},
+                                   r::Float64;
+                                   backend::Symbol=:auto,
+                                   approx_candidates::Int=0)
+    if backend != :bruteforce
+        impl = _POINTCLOUD_RADIUS_GRAPH_IMPL[]
+        if impl !== nothing
+            out = impl(points, r; backend=backend, approx_candidates=approx_candidates)
+            out === nothing || return out
+        elseif backend == :nearestneighbors || backend == :approx
+            throw(ArgumentError("PointCloud nn_backend=$(backend) requires NearestNeighbors extension."))
+        end
+    end
+    return _radius_graph_bruteforce(points, r)
+end
+
+@inline function _edge_vectors_from_tuples(edges::Vector{NTuple{2,Int}})
+    out = Vector{Vector{Int}}(undef, length(edges))
+    @inbounds for i in eachindex(edges)
+        u, v = edges[i]
+        out[i] = [u, v]
+    end
+    return out
+end
+
+@inline function _edge_boundary_matrix(n::Int, edges::Vector{NTuple{2,Int}})
+    m = length(edges)
+    m == 0 && return spzeros(Int, n, 0)
+    I = Vector{Int}(undef, 2m)
+    J = Vector{Int}(undef, 2m)
+    V = Vector{Int}(undef, 2m)
+    t = 1
+    @inbounds for j in 1:m
+        u, v = edges[j]
+        I[t] = v
+        J[t] = j
+        V[t] = 1
+        t += 1
+        I[t] = u
+        J[t] = j
+        V[t] = -1
+        t += 1
+    end
+    return sparse(I, J, V, n, m)
+end
+
+function _triangle_boundary_matrix_from_edges(n::Int,
+                                              edges::Vector{NTuple{2,Int}},
+                                              triangles::Vector{NTuple{3,Int}})
+    ne = length(edges)
+    nt = length(triangles)
+    nt == 0 && return spzeros(Int, ne, 0)
+
+    pair_count_big = _combination_count(n, 2)
+    pair_count_big > big(typemax(Int)) &&
+        throw(ArgumentError("triangle boundary edge index overflow for n=$(n)."))
+    pair_count = Int(pair_count_big)
+    edge_rows = zeros(Int, pair_count)
+    @inbounds for (row, (u, v)) in enumerate(edges)
+        edge_rows[_packed_pair_index(n, u, v)] = row
+    end
+
+    I = Vector{Int}(undef, 3 * nt)
+    J = Vector{Int}(undef, 3 * nt)
+    V = Vector{Int}(undef, 3 * nt)
+    t = 1
+    @inbounds for col in 1:nt
+        a, b, c = triangles[col]
+        row_bc = edge_rows[_packed_pair_index(n, b, c)]
+        row_ac = edge_rows[_packed_pair_index(n, a, c)]
+        row_ab = edge_rows[_packed_pair_index(n, a, b)]
+        row_bc == 0 && error("triangle boundary: missing edge ($(b),$(c)) at triangle ($(a),$(b),$(c)).")
+        row_ac == 0 && error("triangle boundary: missing edge ($(a),$(c)) at triangle ($(a),$(b),$(c)).")
+        row_ab == 0 && error("triangle boundary: missing edge ($(a),$(b)) at triangle ($(a),$(b),$(c)).")
+
+        I[t] = row_bc
+        J[t] = col
+        V[t] = 1
+        t += 1
+        I[t] = row_ac
+        J[t] = col
+        V[t] = -1
+        t += 1
+        I[t] = row_ab
+        J[t] = col
+        V[t] = 1
+        t += 1
+    end
+    return sparse(I, J, V, ne, nt)
+end
+
+function _simplex_tree_multi_from_dim2_packed(n::Int,
+                                              edges::Vector{NTuple{2,Int}},
+                                              triangles::Vector{NTuple{3,Int}},
+                                              grades::Vector{<:NTuple{N,T}}) where {N,T}
+    ne = length(edges)
+    nt = length(triangles)
+    ns = n + ne + nt
+    length(grades) == ns ||
+        error("simplex-tree dim2 packed: grades length mismatch, expected $(ns), got $(length(grades)).")
+
+    simplex_offsets = Vector{Int}(undef, ns + 1)
+    simplex_vertices = Vector{Int}(undef, n + 2 * ne + 3 * nt)
+    simplex_dims = Vector{Int}(undef, ns)
+    grade_offsets = collect(1:(ns + 1))
+    grade_data = Vector{NTuple{N,T}}(undef, ns)
+    dim_offsets = Int[1, n + 1, n + ne + 1, ns + 1]
+
+    vidx = 1
+    sidx = 1
+    @inbounds for v in 1:n
+        simplex_offsets[sidx] = vidx
+        simplex_vertices[vidx] = v
+        vidx += 1
+        simplex_dims[sidx] = 0
+        grade_data[sidx] = grades[sidx]
+        sidx += 1
+    end
+    @inbounds for (u, v) in edges
+        simplex_offsets[sidx] = vidx
+        simplex_vertices[vidx] = u
+        simplex_vertices[vidx + 1] = v
+        vidx += 2
+        simplex_dims[sidx] = 1
+        grade_data[sidx] = grades[sidx]
+        sidx += 1
+    end
+    @inbounds for (a, b, c) in triangles
+        simplex_offsets[sidx] = vidx
+        simplex_vertices[vidx] = a
+        simplex_vertices[vidx + 1] = b
+        simplex_vertices[vidx + 2] = c
+        vidx += 3
+        simplex_dims[sidx] = 2
+        grade_data[sidx] = grades[sidx]
+        sidx += 1
+    end
+    simplex_offsets[ns + 1] = vidx
+
+    return SimplexTreeMulti(simplex_offsets, simplex_vertices, simplex_dims,
+                            dim_offsets, grade_offsets, grade_data)
+end
+
+function _materialize_point_cloud_dim012(n::Int,
+                                         edges::Vector{NTuple{2,Int}},
+                                         triangles::Vector{NTuple{3,Int}},
+                                         grades::Vector{<:NTuple{N,Float64}},
+                                         spec::FiltrationSpec;
+                                         return_simplex_tree::Bool=false) where {N}
+    orientation = get(spec.params, :orientation, ntuple(_ -> 1, N))
+    if return_simplex_tree
+        ST = _simplex_tree_multi_from_dim2_packed(n, edges, triangles, grades)
+        axes = get(spec.params, :axes, _axes_from_simplex_tree(ST; orientation=orientation))
+        return ST, axes, orientation
+    end
+
+    ne = length(edges)
+    nt = length(triangles)
+    b1 = _edge_boundary_matrix(n, edges)
+    b2 = _triangle_boundary_matrix_from_edges(n, edges, triangles)
+    cells = [collect(1:n), collect(1:ne), collect(1:nt)]
+    G = GradedComplex(cells, SparseMatrixCSC{Int,Int}[b1, b2], grades)
+    axes = get(spec.params, :axes, _axes_from_grades(grades, N; orientation=orientation))
+    return G, axes, orientation
+end
+
+function _complete_point_cloud_edges_with_dist(points::AbstractVector{<:AbstractVector{<:Real}})
+    n = length(points)
+    n <= 1 && return NTuple{2,Int}[], Float64[]
+    edge_count_big = _combination_count(n, 2)
+    edge_count_big > big(typemax(Int)) &&
+        throw(ArgumentError("Ingestion combinatorial explosion: edge count C($(n),2)=$(edge_count_big) exceeds representable collection size."))
+    edge_count = Int(edge_count_big)
+    edges = Vector{NTuple{2,Int}}(undef, edge_count)
+    dists = Vector{Float64}(undef, edge_count)
+    t = 1
+    @inbounds for i in 1:(n - 1)
+        pi = points[i]
+        for j in (i + 1):n
+            edges[t] = (i, j)
+            dists[t] = _euclidean_distance(pi, points[j])
+            t += 1
+        end
+    end
+    return edges, dists
+end
+
+@inline function _packed_pair_index(n::Int, i::Int, j::Int)
+    i == j && throw(ArgumentError("_packed_pair_index expects distinct indices."))
+    if i > j
+        i, j = j, i
+    end
+    # 1-based packed upper-triangular index (excluding diagonal).
+    return div((i - 1) * (2 * n - i), 2) + (j - i)
+end
+
+function _point_cloud_pairwise_packed(points::AbstractVector{<:AbstractVector{<:Real}})
+    n = length(points)
+    n <= 1 && return Float64[]
+    pair_count_big = _combination_count(n, 2)
+    pair_count_big > big(typemax(Int)) &&
+        throw(ArgumentError("Ingestion combinatorial explosion: pair count C($(n),2)=$(pair_count_big) exceeds representable collection size."))
+    pair_count = Int(pair_count_big)
+    packed = Vector{Float64}(undef, pair_count)
+    t = 1
+    @inbounds for i in 1:(n - 1)
+        pi = points[i]
+        for j in (i + 1):n
+            packed[t] = _euclidean_distance(pi, points[j])
+            t += 1
+        end
+    end
+    return packed
+end
+
+@inline function _packed_pair_distance(packed::Vector{Float64}, n::Int, i::Int, j::Int)
+    i == j && return 0.0
+    @inbounds return packed[_packed_pair_index(n, i, j)]
+end
+
+@inline function _simplex_max_pair_distance_points(points::AbstractVector{<:AbstractVector{<:Real}},
+                                                   s::Vector{Int})
+    m = length(s)
+    m <= 1 && return 0.0
+    maxd = 0.0
+    @inbounds for i in 1:(m - 1)
+        pi = points[s[i]]
+        for j in (i + 1):m
+            d = _euclidean_distance(pi, points[s[j]])
+            d > maxd && (maxd = d)
+        end
+    end
+    return maxd
+end
+
+function _point_cloud_knn_distances(points::AbstractVector{<:AbstractVector{<:Real}},
+                                    k::Int;
+                                    backend::Symbol=:auto,
+                                    approx_candidates::Int=0)
+    n = length(points)
+    n > 1 || error("kNN k=$(k) exceeds number of neighbors.")
+    k <= n - 1 || error("kNN k=$(k) exceeds number of neighbors.")
+    k_eff = min(k, n - 1)
+    k_eff > 0 || error("kNN k=$(k) exceeds number of neighbors.")
+    if backend != :bruteforce
+        impl = _POINTCLOUD_KNN_DISTANCES_IMPL[]
+        if impl !== nothing
+            out = impl(points, k_eff; backend=backend, approx_candidates=approx_candidates)
+            out === nothing || return out
+        elseif backend == :nearestneighbors || backend == :approx
+            throw(ArgumentError("PointCloud nn_backend=$(backend) requires NearestNeighbors extension."))
+        end
+    end
+    _, _, kdist = _knn_graph_bruteforce(points, k_eff)
+    return kdist
+end
+
+function _knn_distances(points::AbstractVector{<:AbstractVector{<:Real}},
+                        k::Int;
+                        backend::Symbol=:auto,
+                        approx_candidates::Int=0)
+    return _point_cloud_knn_distances(points, k; backend=backend, approx_candidates=approx_candidates)
+end
+
+@inline function _simplex_aggregate(vals::AbstractVector{<:Real}, agg::Symbol)
+    if agg === :max
+        return maximum(vals)
+    elseif agg === :min
+        return minimum(vals)
+    elseif agg === :sum
+        return sum(vals)
+    elseif agg === :mean
+        return sum(vals) / length(vals)
+    end
+    throw(ArgumentError("Unsupported simplex_agg=$(agg). Supported: :max, :min, :sum, :mean"))
+end
+
+@inline function _aggregate_pair(a::Float64, b::Float64, agg::Symbol)
+    if agg === :max
+        return max(a, b)
+    elseif agg === :min
+        return min(a, b)
+    elseif agg === :sum
+        return a + b
+    elseif agg === :mean
+        return (a + b) / 2
+    end
+    throw(ArgumentError("Unsupported simplex_agg=$(agg). Supported: :max, :min, :sum, :mean"))
+end
+
+@inline function _aggregate_triple(a::Float64, b::Float64, c::Float64, agg::Symbol)
+    if agg === :max
+        return max(a, max(b, c))
+    elseif agg === :min
+        return min(a, min(b, c))
+    elseif agg === :sum
+        return a + b + c
+    elseif agg === :mean
+        return (a + b + c) / 3
+    end
+    throw(ArgumentError("Unsupported simplex_agg=$(agg). Supported: :max, :min, :sum, :mean"))
+end
+
+@inline function _aggregate_indexed(vals::AbstractVector{<:Real},
+                                    idxs::AbstractVector{Int},
+                                    agg::Symbol)
+    isempty(idxs) && throw(ArgumentError("simplex_aggregate received empty index set"))
+    if agg === :max
+        acc = Float64(vals[idxs[1]])
+        @inbounds for t in 2:length(idxs)
+            v = Float64(vals[idxs[t]])
+            v > acc && (acc = v)
+        end
+        return acc
+    elseif agg === :min
+        acc = Float64(vals[idxs[1]])
+        @inbounds for t in 2:length(idxs)
+            v = Float64(vals[idxs[t]])
+            v < acc && (acc = v)
+        end
+        return acc
+    elseif agg === :sum || agg === :mean
+        acc = 0.0
+        @inbounds for t in eachindex(idxs)
+            acc += Float64(vals[idxs[t]])
+        end
+        return agg === :mean ? acc / length(idxs) : acc
+    end
+    throw(ArgumentError("Unsupported simplex_agg=$(agg). Supported: :max, :min, :sum, :mean"))
+end
+
+function _simplex_aggregate(vals::AbstractVector{<:Tuple}, agg::Symbol)
+    isempty(vals) && throw(ArgumentError("simplex_aggregate received empty tuple list"))
+    N = length(vals[1])
+    out = Vector{Float64}(undef, N)
+    for i in 1:N
+        coords = Float64[v[i] for v in vals]
+        out[i] = _simplex_aggregate(coords, agg)
+    end
+    return ntuple(i -> out[i], N)
+end
+
+function _simplex_aggregate(vals::AbstractVector{<:AbstractVector{<:Real}}, agg::Symbol)
+    isempty(vals) && throw(ArgumentError("simplex_aggregate received empty vector list"))
+    N = length(vals[1])
+    out = Vector{Float64}(undef, N)
+    for i in 1:N
+        coords = Float64[v[i] for v in vals]
+        out[i] = _simplex_aggregate(coords, agg)
+    end
+    return ntuple(i -> out[i], N)
+end
+
+function _point_vertex_values(points::AbstractVector{<:AbstractVector{<:Real}},
+                              spec::FiltrationSpec)
+    n = length(points)
+    if haskey(spec.params, :vertex_values)
+        vals = spec.params[:vertex_values]
+        length(vals) == n || error("vertex_values length mismatch: expected $(n), got $(length(vals)).")
+        return Float64[Float64(v) for v in vals]
+    end
+    if haskey(spec.params, :vertex_function)
+        f = spec.params[:vertex_function]
+        return Float64[Float64(f(points[i], i)) for i in 1:n]
+    end
+    error("function-Rips requires vertex_values or vertex_function.")
+end
+
+function _point_vertex_values_or_default(points::AbstractVector{<:AbstractVector{<:Real}},
+                                         spec::FiltrationSpec;
+                                         default::Float64=0.0)
+    if haskey(spec.params, :vertex_values) || haskey(spec.params, :vertex_function)
+        return _point_vertex_values(points, spec)
+    end
+    return fill(default, length(points))
+end
+
+@inline function _orient2d(a::AbstractVector{<:Real}, b::AbstractVector{<:Real}, c::AbstractVector{<:Real})
+    return (Float64(b[1]) - Float64(a[1])) * (Float64(c[2]) - Float64(a[2])) -
+           (Float64(b[2]) - Float64(a[2])) * (Float64(c[1]) - Float64(a[1]))
+end
+
+function _circumcircle_2d(a::AbstractVector{<:Real},
+                          b::AbstractVector{<:Real},
+                          c::AbstractVector{<:Real}; atol::Float64=1e-12)
+    ax, ay = Float64(a[1]), Float64(a[2])
+    bx, by = Float64(b[1]), Float64(b[2])
+    cx, cy = Float64(c[1]), Float64(c[2])
+    d = 2.0 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by))
+    abs(d) <= atol && return nothing
+    aa = ax * ax + ay * ay
+    bb = bx * bx + by * by
+    cc = cx * cx + cy * cy
+    ux = (aa * (by - cy) + bb * (cy - ay) + cc * (ay - by)) / d
+    uy = (aa * (cx - bx) + bb * (ax - cx) + cc * (bx - ax)) / d
+    r2 = (ux - ax)^2 + (uy - ay)^2
+    return (ux, uy, r2)
+end
+
+function _delaunay_simplices_1d(points::AbstractVector{<:AbstractVector{<:Real}})
+    n = length(points)
+    order = sortperm(1:n; by=i -> (Float64(points[i][1]), i))
+    edges = Vector{Vector{Int}}()
+    edge_radius = Dict{Tuple{Int,Int},Float64}()
+    for t in 1:(n - 1)
+        i = order[t]
+        j = order[t + 1]
+        push!(edges, [i, j])
+        edge_radius[(min(i, j), max(i, j))] = _euclidean_distance(points[i], points[j]) / 2
+    end
+    return edges, Vector{Vector{Int}}(), edge_radius, Dict{NTuple{3,Int},Float64}()
+end
+
+function _delaunay_simplices_2d(points::AbstractVector{<:AbstractVector{<:Real}})
+    n = length(points)
+    triangles = Vector{Vector{Int}}()
+    tri_radius = Dict{NTuple{3,Int},Float64}()
+    edge_set = Set{Tuple{Int,Int}}()
+    edge_radius = Dict{Tuple{Int,Int},Float64}()
+    tol = 1e-10
+
+    for i in 1:n, j in (i + 1):n, k in (j + 1):n
+        cc = _circumcircle_2d(points[i], points[j], points[k]; atol=tol)
+        cc === nothing && continue
+        ux, uy, r2 = cc
+        empty_ball = true
+        for t in 1:n
+            (t == i || t == j || t == k) && continue
+            px = Float64(points[t][1])
+            py = Float64(points[t][2])
+            d2 = (px - ux)^2 + (py - uy)^2
+            if d2 < r2 - tol
+                empty_ball = false
+                break
+            end
+        end
+        empty_ball || continue
+        tri = [i, j, k]
+        push!(triangles, tri)
+        tri_radius[(i, j, k)] = sqrt(r2)
+        for (u, v) in ((i, j), (i, k), (j, k))
+            a, b = min(u, v), max(u, v)
+            push!(edge_set, (a, b))
+            if !haskey(edge_radius, (a, b))
+                edge_radius[(a, b)] = _euclidean_distance(points[a], points[b]) / 2
+            end
+        end
+    end
+
+    # Ensure convex-hull edges are included.
+    for i in 1:n, j in (i + 1):n
+        if (i, j) in edge_set
+            continue
+        end
+        pos = false
+        neg = false
+        for t in 1:n
+            (t == i || t == j) && continue
+            o = _orient2d(points[i], points[j], points[t])
+            if o > tol
+                pos = true
+            elseif o < -tol
+                neg = true
+            end
+            (pos && neg) && break
+        end
+        if !(pos && neg)
+            push!(edge_set, (i, j))
+            edge_radius[(i, j)] = _euclidean_distance(points[i], points[j]) / 2
+        end
+    end
+
+    edges = [[e[1], e[2]] for e in collect(edge_set)]
+    sort!(edges; by=e -> (e[1], e[2]))
+    return edges, triangles, edge_radius, tri_radius
+end
+
+function _delaunay_simplices(points::AbstractVector{<:AbstractVector{<:Real}}; max_dim::Int=2)
+    n = length(points)
+    n == 0 && error("PointCloud has no points.")
+    d = length(points[1])
+    if d == 1
+        edges, triangles, edge_radius, tri_radius = _delaunay_simplices_1d(points)
+    elseif d == 2
+        edges, triangles, edge_radius, tri_radius = _delaunay_simplices_2d(points)
+    else
+        error("Delaunay filtrations currently support only 1D/2D point clouds (got dimension $d).")
+    end
+
+    simplices = Vector{Vector{Vector{Int}}}()
+    push!(simplices, [[i] for i in 1:n])
+    if max_dim >= 1
+        push!(simplices, edges)
+    end
+    if max_dim >= 2
+        push!(simplices, triangles)
+    end
+    return simplices, edge_radius, tri_radius
+end
+
+function _core_numbers(n::Int, edges::AbstractVector{<:Tuple{Int,Int}})
+    adj = [Int[] for _ in 1:n]
+    for (u, v) in edges
+        push!(adj[u], v)
+        push!(adj[v], u)
+    end
+    deg = [length(adj[v]) for v in 1:n]
+    alive = trues(n)
+    core = zeros(Int, n)
+    remaining = n
+    k = 0
+    while remaining > 0
+        peeled = false
+        for v in 1:n
+            if alive[v] && deg[v] <= k
+                alive[v] = false
+                core[v] = k
+                remaining -= 1
+                peeled = true
+                for w in adj[v]
+                    alive[w] && (deg[w] -= 1)
+                end
+            end
+        end
+        peeled || (k += 1)
+    end
+    return core
+end
+
+function _core_edges_from_point_cloud(points::AbstractVector{<:AbstractVector{<:Real}},
+                                      spec::FiltrationSpec)
+    n = length(points)
+    n <= 1 && return NTuple{2,Int}[]
+    backend = _pointcloud_nn_backend(spec)
+    approx_candidates = _pointcloud_nn_approx_candidates(spec)
+    if haskey(spec.params, :radius)
+        r = Float64(spec.params[:radius])
+        edges, _ = _point_cloud_radius_graph(points, r; backend=backend, approx_candidates=approx_candidates)
+        return edges
+    end
+    k = Int(get(spec.params, :knn, 8))
+    k = max(1, min(k, n - 1))
+    edges, _, _ = _point_cloud_knn_graph(points, k; backend=backend, approx_candidates=approx_candidates)
+    return edges
+end
+
+function _point_graph_scalar_values(points::AbstractVector{<:AbstractVector{<:Real}}, spec::FiltrationSpec)
+    if haskey(spec.params, :vertex_values) || haskey(spec.params, :vertex_function)
+        return _point_vertex_values(points, spec)
+    end
+    return fill(0.0, length(points))
+end
+
+function _graph_vertex_scalar_values(data::GraphData, spec::FiltrationSpec; required::Bool=false)
+    if required
+        vals = _graph_vertex_values(data, spec)
+    else
+        if haskey(spec.params, :vertex_grades) || haskey(spec.params, :vertex_values) || haskey(spec.params, :vertex_function)
+            vals = _graph_vertex_values(data, spec)
+        else
+            return fill(0.0, data.n)
+        end
+    end
+    out = Vector{Float64}(undef, length(vals))
+    for i in eachindex(vals)
+        vi = vals[i]
+        if vi isa Tuple
+            length(vi) == 1 || error("Expected scalar vertex values for this filtration.")
+            out[i] = Float64(vi[1])
+        else
+            out[i] = Float64(vi)
+        end
+    end
+    return out
+end
+
+function _graph_vertex_values(data::GraphData, spec::FiltrationSpec)
+    _as_float_tuple(x) = x isa Number ? (Float64(x),) :
+                         x isa Tuple ? ntuple(i -> Float64(x[i]), length(x)) :
+                         x isa AbstractVector ? ntuple(i -> Float64(x[i]), length(x)) :
+                         throw(ArgumentError("vertex values/function outputs must be numbers, tuples, or vectors."))
+    n = data.n
+    if haskey(spec.params, :vertex_grades)
+        vg = spec.params[:vertex_grades]
+        length(vg) == n || error("vertex_grades length mismatch.")
+        return [_as_float_tuple(v) for v in vg]
+    end
+    if haskey(spec.params, :vertex_values)
+        vv = spec.params[:vertex_values]
+        length(vv) == n || error("vertex_values length mismatch.")
+        return [_as_float_tuple(v) for v in vv]
+    end
+    if haskey(spec.params, :vertex_function)
+        f = spec.params[:vertex_function]
+        vals = Vector{Tuple}(undef, n)
+        for i in 1:n
+            arg = data.coords === nothing ? i : data.coords[i]
+            vals[i] = _as_float_tuple(f(arg, i))
+        end
+        return vals
+    end
+    error("graph filtration requires vertex_grades, vertex_values, or vertex_function.")
+end
+
+@inline function _graph_metric(spec::FiltrationSpec)
+    metric = Symbol(get(spec.params, :metric, :hop))
+    (metric == :hop || metric == :weighted) ||
+        throw(ArgumentError("graph filtration metric must be :hop or :weighted."))
+    return metric
+end
+
+@inline function _graph_lift(spec::FiltrationSpec; default::Symbol=:lower_star)
+    lift = Symbol(get(spec.params, :lift, default))
+    return lift
+end
+
+function _graph_edge_weights(data::GraphData, spec::FiltrationSpec; required::Bool=false)
+    if haskey(spec.params, :edge_weights)
+        ew = spec.params[:edge_weights]
+        length(ew) == length(data.edges) || error("edge_weights length mismatch.")
+        return Float64[Float64(w) for w in ew]
+    end
+    if data.weights !== nothing
+        length(data.weights) == length(data.edges) || error("GraphData weights length mismatch.")
+        return Float64[Float64(w) for w in data.weights]
+    end
+    required && error("graph filtration requires edge_weights (or GraphData.weights) for metric=:weighted.")
+    return fill(1.0, length(data.edges))
+end
+
+function _graph_adj_unweighted(n::Int, edges::Vector{Tuple{Int,Int}})
+    adj = [Int[] for _ in 1:n]
+    for (u, v) in edges
+        push!(adj[u], v)
+        push!(adj[v], u)
+    end
+    return adj
+end
+
+function _graph_adj_weighted(n::Int, edges::Vector{Tuple{Int,Int}}, weights::Vector{Float64})
+    length(weights) == length(edges) || error("edge_weights length mismatch.")
+    adj = [Vector{Tuple{Int,Float64}}() for _ in 1:n]
+    for idx in eachindex(edges)
+        u, v = edges[idx]
+        w = weights[idx]
+        w < 0 && error("weighted graph metric requires nonnegative edge weights.")
+        push!(adj[u], (v, w))
+        push!(adj[v], (u, w))
+    end
+    return adj
+end
+
+function _single_source_hop_dist(adj::Vector{Vector{Int}}, s::Int)
+    n = length(adj)
+    dist = fill(Inf, n)
+    q = Int[s]
+    head = 1
+    dist[s] = 0.0
+    while head <= length(q)
+        v = q[head]
+        head += 1
+        dv = dist[v]
+        for w in adj[v]
+            if !isfinite(dist[w])
+                dist[w] = dv + 1.0
+                push!(q, w)
+            end
+        end
+    end
+    return dist
+end
+
+function _multi_source_hop_dist(adj::Vector{Vector{Int}}, sources::Vector{Int})
+    n = length(adj)
+    dist = fill(Inf, n)
+    q = Int[]
+    for s in sources
+        if !isfinite(dist[s])
+            dist[s] = 0.0
+            push!(q, s)
+        end
+    end
+    head = 1
+    while head <= length(q)
+        v = q[head]
+        head += 1
+        dv = dist[v]
+        for w in adj[v]
+            if !isfinite(dist[w])
+                dist[w] = dv + 1.0
+                push!(q, w)
+            end
+        end
+    end
+    return dist
+end
+
+function _single_source_weighted_dist(adj::Vector{Vector{Tuple{Int,Float64}}}, s::Int)
+    n = length(adj)
+    dist = fill(Inf, n)
+    used = falses(n)
+    dist[s] = 0.0
+    for _ in 1:n
+        v = 0
+        best = Inf
+        @inbounds for i in 1:n
+            if !used[i] && dist[i] < best
+                best = dist[i]
+                v = i
+            end
+        end
+        v == 0 && break
+        used[v] = true
+        dv = dist[v]
+        @inbounds for (w, wt) in adj[v]
+            nd = dv + wt
+            nd < dist[w] && (dist[w] = nd)
+        end
+    end
+    return dist
+end
+
+function _multi_source_weighted_dist(adj::Vector{Vector{Tuple{Int,Float64}}}, sources::Vector{Int})
+    n = length(adj)
+    dist = fill(Inf, n)
+    used = falses(n)
+    for s in sources
+        dist[s] = 0.0
+    end
+    for _ in 1:n
+        v = 0
+        best = Inf
+        @inbounds for i in 1:n
+            if !used[i] && dist[i] < best
+                best = dist[i]
+                v = i
+            end
+        end
+        v == 0 && break
+        used[v] = true
+        dv = dist[v]
+        @inbounds for (w, wt) in adj[v]
+            nd = dv + wt
+            nd < dist[w] && (dist[w] = nd)
+        end
+    end
+    return dist
+end
+
+function _replace_inf_with_large!(vals::Vector{Float64})
+    maxf = 0.0
+    for x in vals
+        if isfinite(x) && x > maxf
+            maxf = x
+        end
+    end
+    repl = maxf + 1.0
+    for i in eachindex(vals)
+        isfinite(vals[i]) || (vals[i] = repl)
+    end
+    return vals
+end
+
+function _graph_closeness_centrality_hop(adj::Vector{Vector{Int}})
+    n = length(adj)
+    out = zeros(Float64, n)
+    for s in 1:n
+        d = _single_source_hop_dist(adj, s)
+        reach = 0
+        sdist = 0.0
+        for i in 1:n
+            if i != s && isfinite(d[i])
+                reach += 1
+                sdist += d[i]
+            end
+        end
+        out[s] = (reach > 0 && sdist > 0.0) ? (reach / sdist) : 0.0
+    end
+    return out
+end
+
+function _graph_closeness_centrality_weighted(adj::Vector{Vector{Tuple{Int,Float64}}})
+    n = length(adj)
+    out = zeros(Float64, n)
+    for s in 1:n
+        d = _single_source_weighted_dist(adj, s)
+        reach = 0
+        sdist = 0.0
+        for i in 1:n
+            if i != s && isfinite(d[i])
+                reach += 1
+                sdist += d[i]
+            end
+        end
+        out[s] = (reach > 0 && sdist > 0.0) ? (reach / sdist) : 0.0
+    end
+    return out
+end
+
+function _graph_betweenness_centrality_hop(adj::Vector{Vector{Int}})
+    n = length(adj)
+    bc = zeros(Float64, n)
+    for s in 1:n
+        S = Int[]
+        P = [Int[] for _ in 1:n]
+        sigma = zeros(Float64, n)
+        sigma[s] = 1.0
+        dist = fill(-1, n)
+        dist[s] = 0
+        Q = Int[s]
+        head = 1
+        while head <= length(Q)
+            v = Q[head]
+            head += 1
+            push!(S, v)
+            for w in adj[v]
+                if dist[w] < 0
+                    push!(Q, w)
+                    dist[w] = dist[v] + 1
+                end
+                if dist[w] == dist[v] + 1
+                    sigma[w] += sigma[v]
+                    push!(P[w], v)
+                end
+            end
+        end
+        delta = zeros(Float64, n)
+        while !isempty(S)
+            w = pop!(S)
+            for v in P[w]
+                sigma[w] > 0 && (delta[v] += (sigma[v] / sigma[w]) * (1.0 + delta[w]))
+            end
+            w != s && (bc[w] += delta[w])
+        end
+    end
+    return bc ./ 2.0
+end
+
+function _graph_betweenness_centrality_weighted(adj::Vector{Vector{Tuple{Int,Float64}}})
+    n = length(adj)
+    bc = zeros(Float64, n)
+    eps = 1e-12
+    for s in 1:n
+        P = [Int[] for _ in 1:n]
+        sigma = zeros(Float64, n)
+        sigma[s] = 1.0
+        dist = fill(Inf, n)
+        dist[s] = 0.0
+        used = falses(n)
+        S = Int[]
+        for _ in 1:n
+            v = 0
+            best = Inf
+            for i in 1:n
+                if !used[i] && dist[i] < best
+                    best = dist[i]
+                    v = i
+                end
+            end
+            v == 0 && break
+            used[v] = true
+            push!(S, v)
+            dv = dist[v]
+            for (w, wt) in adj[v]
+                nd = dv + wt
+                if nd < dist[w] - eps
+                    dist[w] = nd
+                    sigma[w] = sigma[v]
+                    empty!(P[w])
+                    push!(P[w], v)
+                elseif abs(nd - dist[w]) <= eps
+                    sigma[w] += sigma[v]
+                    push!(P[w], v)
+                end
+            end
+        end
+        delta = zeros(Float64, n)
+        while !isempty(S)
+            w = pop!(S)
+            for v in P[w]
+                sigma[w] > 0 && (delta[v] += (sigma[v] / sigma[w]) * (1.0 + delta[w]))
+            end
+            w != s && (bc[w] += delta[w])
+        end
+    end
+    return bc ./ 2.0
+end
+
+function _graph_pagerank(data::GraphData, weights::Vector{Float64}; weighted::Bool,
+                         damping::Float64=0.85, maxiter::Int=200, tol::Float64=1e-10)
+    n = data.n
+    adj = [Int[] for _ in 1:n]
+    wadj = [Float64[] for _ in 1:n]
+    for idx in eachindex(data.edges)
+        u, v = data.edges[idx]
+        w = weighted ? weights[idx] : 1.0
+        push!(adj[u], v); push!(wadj[u], w)
+        push!(adj[v], u); push!(wadj[v], w)
+    end
+    outw = zeros(Float64, n)
+    for i in 1:n
+        outw[i] = sum(wadj[i])
+    end
+    pr = fill(1.0 / n, n)
+    for _ in 1:maxiter
+        new = fill((1.0 - damping) / n, n)
+        dangling = 0.0
+        for i in 1:n
+            if outw[i] <= 0.0
+                dangling += pr[i]
+                continue
+            end
+            pi = damping * pr[i] / outw[i]
+            for t in eachindex(adj[i])
+                new[adj[i][t]] += pi * wadj[i][t]
+            end
+        end
+        if dangling > 0.0
+            c = damping * dangling / n
+            for i in 1:n
+                new[i] += c
+            end
+        end
+        if maximum(abs.(new .- pr)) <= tol
+            return new
+        end
+        pr = new
+    end
+    return pr
+end
+
+function _graph_eigenvector_centrality(data::GraphData, weights::Vector{Float64}; weighted::Bool,
+                                       maxiter::Int=500, tol::Float64=1e-10)
+    n = data.n
+    x = fill(1.0 / sqrt(n), n)
+    for _ in 1:maxiter
+        y = zeros(Float64, n)
+        for idx in eachindex(data.edges)
+            u, v = data.edges[idx]
+            w = weighted ? weights[idx] : 1.0
+            y[u] += w * x[v]
+            y[v] += w * x[u]
+        end
+        ny = norm(y)
+        ny > 0 || return zeros(Float64, n)
+        y ./= ny
+        if norm(y .- x) <= tol
+            return abs.(y)
+        end
+        x = y
+    end
+    return abs.(x)
+end
+
+function _graph_centrality_values(data::GraphData, spec::FiltrationSpec)
+    cent = Symbol(get(spec.params, :centrality, :degree))
+    metric = _graph_metric(spec)
+    weighted = metric == :weighted
+    weights = _graph_edge_weights(data, spec; required=weighted)
+    n = data.n
+    if cent == :degree
+        vals = zeros(Float64, n)
+        for idx in eachindex(data.edges)
+            u, v = data.edges[idx]
+            w = weighted ? weights[idx] : 1.0
+            vals[u] += w
+            vals[v] += w
+        end
+        return vals
+    elseif cent == :closeness
+        if weighted
+            return _graph_closeness_centrality_weighted(_graph_adj_weighted(n, data.edges, weights))
+        end
+        return _graph_closeness_centrality_hop(_graph_adj_unweighted(n, data.edges))
+    elseif cent == :betweenness
+        if weighted
+            return _graph_betweenness_centrality_weighted(_graph_adj_weighted(n, data.edges, weights))
+        end
+        return _graph_betweenness_centrality_hop(_graph_adj_unweighted(n, data.edges))
+    elseif cent == :pagerank
+        return _graph_pagerank(data, weights; weighted=weighted)
+    elseif cent == :eigenvector
+        return _graph_eigenvector_centrality(data, weights; weighted=weighted)
+    end
+    throw(ArgumentError("Unsupported centrality=$(cent). Supported: :degree, :closeness, :betweenness, :pagerank, :eigenvector"))
+end
+
+function _graph_sources(spec::FiltrationSpec, n::Int)
+    haskey(spec.params, :sources) || error("graph_geodesic filtration requires sources.")
+    raw = spec.params[:sources]
+    src = Int[raw...]
+    isempty(src) && error("graph geodesic filtration requires at least one source.")
+    for s in src
+        (1 <= s <= n) || error("graph source index out of bounds: $(s) not in 1:$(n)")
+    end
+    return unique(src)
+end
+
+function _graph_geodesic_values(data::GraphData, spec::FiltrationSpec)
+    metric = _graph_metric(spec)
+    n = data.n
+    src = _graph_sources(spec, n)
+    if metric == :hop
+        d = _multi_source_hop_dist(_graph_adj_unweighted(n, data.edges), src)
+    else
+        w = _graph_edge_weights(data, spec; required=true)
+        d = _multi_source_weighted_dist(_graph_adj_weighted(n, data.edges, w), src)
+    end
+    return _replace_inf_with_large!(d)
+end
+
+function _graph_adjacency_lists_sorted(n::Int, edges::AbstractVector{<:Tuple{Int,Int}})
+    adj = [Int[] for _ in 1:n]
+    @inbounds for (u, v) in edges
+        push!(adj[u], v)
+        push!(adj[v], u)
+    end
+    @inbounds for i in 1:n
+        sort!(adj[i])
+    end
+    return adj
+end
+
+function _clear_graph_backend_winner_cache!()
+    lock(_GRAPH_BACKEND_WINNER_CACHE_LOCK) do
+        empty!(_GRAPH_BACKEND_WINNER_CACHE)
+        empty!(_GRAPH_BACKEND_WINNER_CACHE_ORDER)
+    end
+    return nothing
+end
+
+function _graph_backend_winner_cache_size()
+    lock(_GRAPH_BACKEND_WINNER_CACHE_LOCK) do
+        return length(_GRAPH_BACKEND_WINNER_CACHE)
+    end
+end
+
+struct _PackedEdgeList
+    n::Int
+    edges::Vector{NTuple{2,Int}}
+    offsets::Vector{Int}
+    nbrs::Vector{Int}
+end
+
+function _pack_edge_list(n::Int, edges::AbstractVector{<:Tuple{Int,Int}})
+    n >= 0 || throw(ArgumentError("_pack_edge_list: n must be nonnegative"))
+    pedges = Vector{NTuple{2,Int}}(undef, length(edges))
+    counts = zeros(Int, n)
+    @inbounds for i in eachindex(edges)
+        u0, v0 = edges[i]
+        u = Int(u0)
+        v = Int(v0)
+        (1 <= u <= n && 1 <= v <= n && u != v) ||
+            throw(ArgumentError("_pack_edge_list: invalid edge ($u,$v) for n=$n"))
+        if v < u
+            u, v = v, u
+        end
+        pedges[i] = (u, v)
+        counts[u] += 1
+        counts[v] += 1
+    end
+    offsets = Vector{Int}(undef, n + 1)
+    offsets[1] = 1
+    @inbounds for i in 1:n
+        offsets[i + 1] = offsets[i] + counts[i]
+    end
+    nbrs = Vector{Int}(undef, max(0, offsets[end] - 1))
+    cursor = copy(offsets)
+    @inbounds for (u, v) in pedges
+        iu = cursor[u]
+        nbrs[iu] = v
+        cursor[u] = iu + 1
+        iv = cursor[v]
+        nbrs[iv] = u
+        cursor[v] = iv + 1
+    end
+    @inbounds for i in 1:n
+        lo = offsets[i]
+        hi = offsets[i + 1] - 1
+        lo <= hi && sort!(@view nbrs[lo:hi])
+    end
+    return _PackedEdgeList(n, pedges, offsets, nbrs)
+end
+
+@inline function _graph_neighbor_scan_checksum(adj_lists::Vector{Vector{Int}})
+    s = 0
+    @inbounds for nbrs in adj_lists
+        for v in nbrs
+            s += v
+        end
+    end
+    return s
+end
+
+@inline function _graph_neighbor_scan_checksum(packed::_PackedEdgeList)
+    s = 0
+    @inbounds for i in 1:packed.n
+        lo = packed.offsets[i]
+        hi = packed.offsets[i + 1] - 1
+        for ptr in lo:hi
+            s += packed.nbrs[ptr]
+        end
+    end
+    return s
+end
+
+@inline function _graph_backend_bucket_value(x::Int)
+    x <= 64 && return 64
+    x <= 128 && return 128
+    x <= 256 && return 256
+    x <= 512 && return 512
+    x <= 1024 && return 1024
+    x <= 2048 && return 2048
+    return 4096
+end
+
+@inline function _graph_backend_bucket_key(n::Int, m::Int, k::Int)
+    max_edges = div(n * (n - 1), 2)
+    density = max_edges > 0 ? (Float64(m) / Float64(max_edges)) : 0.0
+    density_bucket = clamp(floor(Int, density * 20.0), 0, 20)
+    return (_graph_backend_bucket_value(n), _graph_backend_bucket_value(m), Int(k), density_bucket)
+end
+
+function _graph_backend_cache_lookup(key::NTuple{4,Int})
+    lock(_GRAPH_BACKEND_WINNER_CACHE_LOCK) do
+        return get(_GRAPH_BACKEND_WINNER_CACHE, key, nothing)
+    end
+end
+
+function _graph_backend_cache_store!(key::NTuple{4,Int}, prefer_packed::Bool)
+    lock(_GRAPH_BACKEND_WINNER_CACHE_LOCK) do
+        if !haskey(_GRAPH_BACKEND_WINNER_CACHE, key)
+            push!(_GRAPH_BACKEND_WINNER_CACHE_ORDER, key)
+        end
+        _GRAPH_BACKEND_WINNER_CACHE[key] = prefer_packed
+        max_entries = max(1, _GRAPH_BACKEND_WINNER_CACHE_MAX[])
+        while length(_GRAPH_BACKEND_WINNER_CACHE_ORDER) > max_entries
+            old = popfirst!(_GRAPH_BACKEND_WINNER_CACHE_ORDER)
+            delete!(_GRAPH_BACKEND_WINNER_CACHE, old)
+        end
+    end
+    return prefer_packed
+end
+
+@inline function _graph_backend_probe_eligible(n::Int, m::Int, k::Int)
+    _GRAPH_BACKEND_WINNER_CACHE_PROBE[] || return false
+    n >= 96 || return false
+    m >= 192 || return false
+    k >= 3 || return false
+    return true
+end
+
+function _graph_backend_probe_prefers_packed(edges::AbstractVector{<:Tuple{Int,Int}},
+                                             n::Int)
+    sample_n = min(n, 192)
+    sample_edges = Tuple{Int,Int}[]
+    sizehint!(sample_edges, min(length(edges), 4096))
+    @inbounds for (u, v) in edges
+        if u <= sample_n && v <= sample_n
+            push!(sample_edges, (u, v))
+            length(sample_edges) >= 4096 && break
+        end
+    end
+
+    # Too little local structure to profile meaningfully; keep packed preferred.
+    length(sample_edges) >= 128 || return true
+
+    t_adj = @elapsed begin
+        adj = _graph_adjacency_lists_sorted(sample_n, sample_edges)
+        _graph_neighbor_scan_checksum(adj)
+    end
+    t_packed = @elapsed begin
+        packed = _pack_edge_list(sample_n, sample_edges)
+        _graph_neighbor_scan_checksum(packed)
+    end
+    return t_packed <= (1.03 * t_adj)
+end
+
+function _enumerate_cliques_k_intersection(adj_lists::Vector{Vector{Int}},
+                                           k::Int,
+                                           spec::FiltrationSpec,
+                                           total_before::BigInt)
+    n = length(adj_lists)
+    k == 1 && return [[i] for i in 1:n]
+    out = Vector{Vector{Int}}()
+    clique = Vector{Int}(undef, k)
+    max_simp = _construction_max_simplices(spec)
+    marks = zeros(UInt32, n)
+    stamp = UInt32(0)
+    cands = [Int[] for _ in 1:k]
+    resize!(cands[1], n)
+    @inbounds for i in 1:n
+        cands[1][i] = i
+    end
+
+    function rec(depth::Int, cand::Vector{Int})
+        need = k - depth + 1
+        length(cand) < need && return
+        max_idx = length(cand) - need + 1
+        @inbounds for idx in 1:max_idx
+            v = cand[idx]
+            clique[depth] = v
+            if depth == k
+                if max_simp !== nothing && total_before + big(length(out) + 1) > big(max_simp)
+                    throw(ArgumentError("Ingestion construction budget exceeded during clique enumeration at simplex dimension $(k - 1): count=$(total_before + big(length(out) + 1)) > max_simplices=$(max_simp)."))
+                end
+                push!(out, clique[1:k])
+            else
+                stamp += UInt32(1)
+                if stamp == UInt32(0)
+                    fill!(marks, UInt32(0))
+                    stamp = UInt32(1)
+                end
+                @inbounds for w in adj_lists[v]
+                    marks[w] = stamp
+                end
+                next = cands[depth + 1]
+                empty!(next)
+                sizehint!(next, max(0, length(cand) - idx))
+                @inbounds for t in (idx + 1):length(cand)
+                    u = cand[t]
+                    marks[u] == stamp && push!(next, u)
+                end
+                rec(depth + 1, next)
+            end
+        end
+    end
+
+    rec(1, cands[1])
+    return out
+end
+
+function _enumerate_cliques_k_intersection(packed::_PackedEdgeList,
+                                           k::Int,
+                                           spec::FiltrationSpec,
+                                           total_before::BigInt)
+    n = packed.n
+    k == 1 && return [[i] for i in 1:n]
+    out = Vector{Vector{Int}}()
+    clique = Vector{Int}(undef, k)
+    max_simp = _construction_max_simplices(spec)
+    marks = zeros(UInt32, n)
+    stamp = UInt32(0)
+    cands = [Int[] for _ in 1:k]
+    resize!(cands[1], n)
+    @inbounds for i in 1:n
+        cands[1][i] = i
+    end
+
+    function rec(depth::Int, cand::Vector{Int})
+        need = k - depth + 1
+        length(cand) < need && return
+        max_idx = length(cand) - need + 1
+        @inbounds for idx in 1:max_idx
+            v = cand[idx]
+            clique[depth] = v
+            if depth == k
+                if max_simp !== nothing && total_before + big(length(out) + 1) > big(max_simp)
+                    throw(ArgumentError("Ingestion construction budget exceeded during clique enumeration at simplex dimension $(k - 1): count=$(total_before + big(length(out) + 1)) > max_simplices=$(max_simp)."))
+                end
+                push!(out, clique[1:k])
+            else
+                stamp += UInt32(1)
+                if stamp == UInt32(0)
+                    fill!(marks, UInt32(0))
+                    stamp = UInt32(1)
+                end
+                lo = packed.offsets[v]
+                hi = packed.offsets[v + 1] - 1
+                for ptr in lo:hi
+                    marks[packed.nbrs[ptr]] = stamp
+                end
+                next = cands[depth + 1]
+                empty!(next)
+                sizehint!(next, max(0, length(cand) - idx))
+                @inbounds for t in (idx + 1):length(cand)
+                    u = cand[t]
+                    marks[u] == stamp && push!(next, u)
+                end
+                rec(depth + 1, next)
+            end
+        end
+    end
+
+    rec(1, cands[1])
+    return out
+end
+
+function _enumerate_cliques_k_combinations(adj::BitMatrix,
+                                           n::Int,
+                                           k::Int,
+                                           spec::FiltrationSpec,
+                                           total_before::BigInt;
+                                           context::AbstractString="clique")
+    _construction_precheck_combination_candidates!(n, k, total_before, spec; context=context)
+    out = Vector{Vector{Int}}()
+    max_simp = _construction_max_simplices(spec)
+    for comb in _combinations(n, k)
+        ok = true
+        @inbounds for i in 1:k
+            for j in (i + 1):k
+                if !adj[comb[i], comb[j]]
+                    ok = false
+                    break
+                end
+            end
+            !ok && break
+        end
+        if ok
+            if max_simp !== nothing && total_before + big(length(out) + 1) > big(max_simp)
+                throw(ArgumentError("Ingestion construction budget exceeded during $(context) enumeration at simplex dimension $(k - 1): count=$(total_before + big(length(out) + 1)) > max_simplices=$(max_simp)."))
+            end
+            push!(out, comb)
+        end
+    end
+    return out
+end
+
+@inline function _graph_clique_enum_mode()
+    mode = _GRAPH_CLIQUE_ENUM_MODE[]
+    (mode == :auto || mode == :intersection || mode == :combinations) ||
+        throw(ArgumentError("Graph clique enumeration mode must be :auto, :intersection, or :combinations (got $(mode))."))
+    return mode
+end
+
+@inline function _use_packed_edge_list_backend(n::Int, m::Int, _k::Int)
+    _GRAPH_PACKED_EDGELIST_BACKEND[] || return false
+    n <= 0 && return false
+    m <= 0 && return false
+    max_edges = div(n * (n - 1), 2)
+    density = max_edges > 0 ? (Float64(m) / Float64(max_edges)) : 0.0
+    # Conservative gate: keep packed backend off on sparse mid/large graphs
+    # where pack-build overhead can dominate intersection traversal.
+    if n <= 224
+        return m >= 256
+    end
+    if m >= 4_000
+        return true
+    end
+    return density >= 0.08
+end
+
+function _select_packed_edge_list_backend(edges::AbstractVector{<:Tuple{Int,Int}},
+                                          n::Int,
+                                          k::Int)
+    _GRAPH_PACKED_EDGELIST_BACKEND[] || return false
+    m = length(edges)
+    heuristic = _use_packed_edge_list_backend(n, m, k)
+    _GRAPH_BACKEND_WINNER_CACHE_ENABLED[] || return heuristic
+
+    key = _graph_backend_bucket_key(n, m, k)
+    cached = _graph_backend_cache_lookup(key)
+    cached === nothing || return cached
+
+    prefer_packed = heuristic
+    if heuristic && _graph_backend_probe_eligible(n, m, k)
+        prefer_packed = _graph_backend_probe_prefers_packed(edges, n)
+    end
+    return _graph_backend_cache_store!(key, prefer_packed)
+end
+
+@inline function _graph_clique_auto_prefers_combinations(n::Int,
+                                                         m::Int,
+                                                         k::Int,
+                                                         spec::FiltrationSpec,
+                                                         total_before::BigInt)
+    if k <= 3 && n <= 64
+        max_edges = max(1, div(n * (n - 1), 2))
+        # Sparse small graphs usually benefit from intersection pruning.
+        (10 * m) < (3 * max_edges) && return false
+    end
+
+    cand = _combination_count(n, k)
+    ms = _construction_max_simplices(spec)
+    if ms !== nothing && total_before + cand > big(ms)
+        # Keep intersection path available when combination upper-bound checks
+        # would fail but actual clique count could still satisfy the budget.
+        return false
+    end
+    cand <= big(2_500) && return true
+
+    if k <= 3 && n <= 64 && cand <= big(40_000)
+        # For small dense graphs, a branch-light combinations scan can win.
+        # Sparse graphs benefit from intersection pruning.
+        return true
+    end
+    return false
+end
+
+function _enumerate_cliques_k(edges::AbstractVector{<:Tuple{Int,Int}},
+                              n::Int,
+                              k::Int,
+                              spec::FiltrationSpec,
+                              total_before::BigInt;
+                              context::AbstractString="clique")
+    sims, _, _ = _enumerate_cliques_k_cached(
+        edges, n, k, spec, total_before;
+        context=context,
+        packed=nothing,
+        adj_lists=nothing,
+    )
+    return sims
+end
+
+function _enumerate_cliques_k_cached(edges::AbstractVector{<:Tuple{Int,Int}},
+                                     n::Int,
+                                     k::Int,
+                                     spec::FiltrationSpec,
+                                     total_before::BigInt;
+                                     context::AbstractString="clique",
+                                     packed::Union{Nothing,_PackedEdgeList}=nothing,
+                                     adj_lists::Union{Nothing,Vector{Vector{Int}}}=nothing)
+    mode = _graph_clique_enum_mode()
+    use_intersection = if mode == :intersection
+        true
+    elseif mode == :combinations
+        false
+    else
+        !_graph_clique_auto_prefers_combinations(n, length(edges), k, spec, total_before)
+    end
+    if use_intersection
+        if _select_packed_edge_list_backend(edges, n, k)
+            packed2 = packed === nothing ? _pack_edge_list(n, edges) : packed
+            sims = _enumerate_cliques_k_intersection(packed2, k, spec, total_before)
+            return sims, packed2, adj_lists
+        end
+        adj2 = adj_lists === nothing ? _graph_adjacency_lists_sorted(n, edges) : adj_lists
+        sims = _enumerate_cliques_k_intersection(adj2, k, spec, total_before)
+        return sims, packed, adj2
+    end
+    adj = falses(n, n)
+    @inbounds for (u, v) in edges
+        adj[u, v] = true
+        adj[v, u] = true
+    end
+    sims = _enumerate_cliques_k_combinations(adj, n, k, spec, total_before; context=context)
+    return sims, packed, adj_lists
+end
+
+function _graph_lifted_complex(data::GraphData,
+                               spec::FiltrationSpec,
+                               vertex_grades::Vector{<:Tuple};
+                               return_simplex_tree::Bool=false)
+    n = data.n
+    edges = data.edges
+    length(vertex_grades) == n || error("vertex grade length mismatch.")
+    N = length(vertex_grades[1])
+    grades = Vector{NTuple{N,Float64}}(undef, n)
+    for i in 1:n
+        gi = vertex_grades[i]
+        length(gi) == N || error("vertex grade arity mismatch.")
+        grades[i] = ntuple(j -> Float64(gi[j]), N)
+    end
+    construction = _construction_from_params(spec.params)
+    agg = Symbol(get(spec.params, :simplex_agg, :max))
+    lift = _graph_lift(spec; default=:lower_star)
+    if lift == :lower_star
+        construction.collapse == :none || error("construction.collapse=$(construction.collapse) is unsupported for graph lower-star ingestion.")
+        construction.sparsify == :none || error("construction.sparsify=$(construction.sparsify) is unsupported for graph lower-star ingestion.")
+        _construction_check_max_edges!(length(edges), spec)
+        simplices0 = [[i] for i in 1:n]
+        simplices1 = [[u, v] for (u, v) in edges]
+        for (u, v) in edges
+            gg = _simplex_aggregate([vertex_grades[u], vertex_grades[v]], agg)
+            push!(grades, ntuple(i -> Float64(gg[i]), N))
+        end
+        _construction_check_max_simplices!(big(n) + big(length(edges)), 1, spec)
+        simplices = [simplices0, simplices1]
+        return _materialize_simplicial_output(simplices, grades, spec; return_simplex_tree=return_simplex_tree)
+    elseif lift == :clique
+        construction.collapse == :none || error("construction.collapse=$(construction.collapse) is unsupported for graph clique ingestion.")
+        construction.sparsify == :none || error("construction.sparsify=$(construction.sparsify) is unsupported for graph clique ingestion.")
+        max_dim = max(Int(get(spec.params, :max_dim, 2)), 1)
+        _construction_check_max_edges!(length(edges), spec)
+        simplices = Vector{Vector{Vector{Int}}}(undef, max_dim + 1)
+        simplices[1] = [[i] for i in 1:n]
+        packed = nothing
+        adj_lists = nothing
+        total = big(n)
+        for k in 2:max_dim+1
+            sims, packed, adj_lists = _enumerate_cliques_k_cached(
+                edges, n, k, spec, total;
+                context="clique",
+                packed=packed,
+                adj_lists=adj_lists,
+            )
+            simplices[k] = sims
+            total += length(sims)
+            _construction_check_max_simplices!(total, k - 1, spec)
+        end
+        for k in 2:max_dim+1
+            for s in simplices[k]
+                gg = _simplex_aggregate([vertex_grades[v] for v in s], agg)
+                push!(grades, ntuple(i -> Float64(gg[i]), N))
+            end
+        end
+        return _materialize_simplicial_output(simplices, grades, spec; return_simplex_tree=return_simplex_tree)
+    end
+    throw(ArgumentError("Unsupported graph lift=$(lift). Supported: :lower_star, :clique"))
+end
+
+function _graph_weight_threshold_complex(data::GraphData, spec::FiltrationSpec;
+                                         return_simplex_tree::Bool=false)
+    n = data.n
+    edges = data.edges
+    weights = _graph_edge_weights(data, spec; required=true)
+    construction = _construction_from_params(spec.params)
+    lift = _graph_lift(spec; default=:graph)
+    if lift == :graph
+        construction.collapse == :none || error("construction.collapse=$(construction.collapse) is unsupported for graph weight-threshold ingestion.")
+        construction.sparsify == :none || error("construction.sparsify=$(construction.sparsify) is unsupported for graph weight-threshold ingestion.")
+        _construction_check_max_edges!(length(edges), spec)
+        grades = NTuple{1,Float64}[]
+        for _ in 1:n
+            push!(grades, (0.0,))
+        end
+        simplices0 = [[i] for i in 1:n]
+        simplices1 = [[u, v] for (u, v) in edges]
+        for w in weights
+            push!(grades, (Float64(w),))
+        end
+        _construction_check_max_simplices!(big(n) + big(length(edges)), 1, spec)
+        simplices = [simplices0, simplices1]
+        return _materialize_simplicial_output(simplices, grades, spec; return_simplex_tree=return_simplex_tree)
+    elseif lift == :clique
+        construction.collapse == :none || error("construction.collapse=$(construction.collapse) is unsupported for graph weight-threshold clique ingestion.")
+        construction.sparsify == :none || error("construction.sparsify=$(construction.sparsify) is unsupported for graph weight-threshold clique ingestion.")
+        max_dim = max(Int(get(spec.params, :max_dim, 2)), 1)
+        _construction_check_max_edges!(length(edges), spec)
+        ew = fill(Inf, n, n)
+        for idx in eachindex(edges)
+            u, v = edges[idx]
+            w = Float64(weights[idx])
+            ew[u, v] = w
+            ew[v, u] = w
+        end
+        simplices = Vector{Vector{Vector{Int}}}(undef, max_dim + 1)
+        simplices[1] = [[i] for i in 1:n]
+        grades = NTuple{1,Float64}[(0.0,) for _ in 1:n]
+        packed = nothing
+        adj_lists = nothing
+        total = big(n)
+        for k in 2:max_dim+1
+            sims, packed, adj_lists = _enumerate_cliques_k_cached(
+                edges, n, k, spec, total;
+                context="graph weight-threshold clique",
+                packed=packed,
+                adj_lists=adj_lists,
+            )
+            for comb in sims
+                maxw = 0.0
+                for i in 1:k
+                    for j in (i+1):k
+                        maxw = max(maxw, ew[comb[i], comb[j]])
+                    end
+                end
+                push!(grades, (maxw,))
+            end
+            simplices[k] = sims
+            total += length(sims)
+            _construction_check_max_simplices!(total, k - 1, spec)
+        end
+        return _materialize_simplicial_output(simplices, grades, spec; return_simplex_tree=return_simplex_tree)
+    end
+    throw(ArgumentError("Unsupported graph_weight_threshold lift=$(lift). Supported: :graph, :clique"))
+end
+
+@inline function _delaunay_highdim_policy(spec::FiltrationSpec)
+    policy = Symbol(get(spec.params, :highdim_policy, :rips))
+    (policy === :rips || policy === :error) ||
+        throw(ArgumentError("Unsupported Delaunay highdim_policy=$(policy). Expected :rips or :error."))
+    return policy
+end
+
+function _graded_complex_from_point_cloud_delaunay_highdim_fallback(data::PointCloud,
+                                                                    spec::FiltrationSpec;
+                                                                    function_style::Bool=false,
+                                                                    return_simplex_tree::Bool=false)
+    d = length(data.points[1])
+    policy = _delaunay_highdim_policy(spec)
+    if policy === :error
+        error("Delaunay filtrations currently support only 1D/2D point clouds (got dimension $d). Set highdim_policy=:rips to enable higher-dimensional fallback.")
+    end
+
+    fallback_params = _filter_params(spec.params, [:highdim_policy])
+    fallback_spec = FiltrationSpec(; kind=:function_rips, fallback_params...)
+    if function_style
+        return _graded_complex_from_point_cloud(data, fallback_spec; return_simplex_tree=return_simplex_tree)
+    end
+
+    # Lower-star fallback keeps 1-parameter output by projecting function-Rips grades.
+    G2, _, _ = _graded_complex_from_point_cloud(data, fallback_spec; return_simplex_tree=false)
+    grades = Vector{NTuple{1,Float64}}(undef, length(G2.grades))
+    @inbounds for i in eachindex(G2.grades)
+        grades[i] = (Float64(G2.grades[i][2]),)
+    end
+    G1 = GradedComplex(G2.cells_by_dim, G2.boundaries, grades)
+    orientation = get(spec.params, :orientation, (1,))
+    axes = get(spec.params, :axes, _axes_from_grades(grades, 1; orientation=orientation))
+    if return_simplex_tree
+        return _materialize_simplicial_output(_simplices_from_complex(G1), G1.grades, spec; return_simplex_tree=true)
+    end
+    return G1, axes, orientation
+end
+
+function _graded_complex_from_point_cloud_delaunay(data::PointCloud,
+                                                   spec::FiltrationSpec;
+                                                   function_style::Bool=false,
+                                                   return_simplex_tree::Bool=false)
+    points = data.points
+    d = length(points[1])
+    if d > 2
+        return _graded_complex_from_point_cloud_delaunay_highdim_fallback(
+            data, spec;
+            function_style=function_style,
+            return_simplex_tree=return_simplex_tree,
+        )
+    end
+
+    max_dim = Int(get(spec.params, :max_dim, 2))
+    max_dim = min(max_dim, 2)
+    simplices, edge_radius, tri_radius = _delaunay_simplices(points; max_dim=max_dim)
+    vals = _point_vertex_values(points, spec)
+    agg = get(spec.params, :simplex_agg, :max)
+    grades = if function_style
+        Vector{NTuple{2,Float64}}()
+    else
+        Vector{NTuple{1,Float64}}()
+    end
+
+    # Vertices
+    for s in simplices[1]
+        v = s[1]
+        if function_style
+            push!(grades, (0.0, vals[v]))
+        else
+            push!(grades, (vals[v],))
+        end
+    end
+    # Edges
+    if length(simplices) >= 2
+        for s in simplices[2]
+            i, j = s[1], s[2]
+            a, b = min(i, j), max(i, j)
+            r = get(edge_radius, (a, b), _euclidean_distance(points[a], points[b]) / 2)
+            f = _aggregate_pair(Float64(vals[i]), Float64(vals[j]), agg)
+            if function_style
+                push!(grades, (r, f))
+            else
+                push!(grades, (f,))
+            end
+        end
+    end
+    # Triangles
+    if length(simplices) >= 3
+        for s in simplices[3]
+            i, j, k = s[1], s[2], s[3]
+            key = (i, j, k)
+            r = get(tri_radius, key, 0.0)
+            f = _aggregate_triple(Float64(vals[i]), Float64(vals[j]), Float64(vals[k]), agg)
+            if function_style
+                push!(grades, (r, f))
+            else
+                push!(grades, (f,))
+            end
+        end
+    end
+
+    return _materialize_simplicial_output(simplices, grades, spec; return_simplex_tree=return_simplex_tree)
+end
+
+function _graded_complex_from_point_cloud_alpha(data::PointCloud,
+                                                spec::FiltrationSpec;
+                                                return_simplex_tree::Bool=false)
+    points = data.points
+    d = length(points[1])
+    if d > 2
+        policy = _delaunay_highdim_policy(spec)
+        if policy === :error
+            error("Alpha filtrations currently support only 1D/2D point clouds (got dimension $d). Set highdim_policy=:rips to enable higher-dimensional fallback.")
+        end
+        fallback_params = _filter_params(spec.params, [:highdim_policy])
+        fallback_spec = FiltrationSpec(; kind=:rips, fallback_params...)
+        return _graded_complex_from_point_cloud(data, fallback_spec; return_simplex_tree=return_simplex_tree)
+    end
+
+    max_dim = min(Int(get(spec.params, :max_dim, 2)), 2)
+    simplices, edge_radius, tri_radius = _delaunay_simplices(points; max_dim=max_dim)
+    grades = NTuple{1,Float64}[]
+
+    for _ in simplices[1]
+        push!(grades, (0.0,))
+    end
+    if length(simplices) >= 2
+        for s in simplices[2]
+            i, j = s[1], s[2]
+            a, b = min(i, j), max(i, j)
+            r = get(edge_radius, (a, b), _euclidean_distance(points[a], points[b]) / 2)
+            push!(grades, (r,))
+        end
+    end
+    if length(simplices) >= 3
+        for s in simplices[3]
+            i, j, k = s[1], s[2], s[3]
+            r = get(tri_radius, (i, j, k), 0.0)
+            push!(grades, (r,))
+        end
+    end
+
+    return _materialize_simplicial_output(simplices, grades, spec; return_simplex_tree=return_simplex_tree)
+end
+
+@inline function _vertex_degree_scores(n::Int, edges)
+    deg = zeros(Int, n)
+    @inbounds for e in edges
+        u, v = e[1], e[2]
+        deg[u] += 1
+        deg[v] += 1
+    end
+    return deg
+end
+
+function _graded_complex_from_point_cloud_core_delaunay(data::PointCloud,
+                                                        spec::FiltrationSpec;
+                                                        return_simplex_tree::Bool=false)
+    points = data.points
+    n = length(points)
+    d = length(points[1])
+    if d > 2
+        policy = _delaunay_highdim_policy(spec)
+        if policy === :error
+            error("Core-Delaunay filtrations currently support only 1D/2D point clouds (got dimension $d). Set highdim_policy=:rips to enable higher-dimensional fallback.")
+        end
+        fallback_params = _filter_params(spec.params, [:highdim_policy])
+        fallback_spec = FiltrationSpec(; kind=:degree_rips, fallback_params...)
+        return _graded_complex_from_point_cloud(data, fallback_spec; return_simplex_tree=return_simplex_tree)
+    end
+
+    max_dim = min(Int(get(spec.params, :max_dim, 2)), 2)
+    simplices, edge_radius, tri_radius = _delaunay_simplices(points; max_dim=max_dim)
+    edge_cells = (length(simplices) >= 2) ? simplices[2] : Vector{Vector{Int}}()
+    core = _core_numbers(n, NTuple{2,Int}[(e[1], e[2]) for e in edge_cells])
+    grades = NTuple{2,Float64}[]
+
+    for i in 1:n
+        push!(grades, (0.0, Float64(core[i])))
+    end
+    if length(simplices) >= 2
+        for s in simplices[2]
+            i, j = s[1], s[2]
+            a, b = min(i, j), max(i, j)
+            r = get(edge_radius, (a, b), _euclidean_distance(points[a], points[b]) / 2)
+            push!(grades, (r, Float64(max(core[i], core[j]))))
+        end
+    end
+    if length(simplices) >= 3
+        for s in simplices[3]
+            i, j, k = s[1], s[2], s[3]
+            r = get(tri_radius, (i, j, k), 0.0)
+            push!(grades, (r, Float64(max(core[i], max(core[j], core[k])))))
+        end
+    end
+
+    return _materialize_simplicial_output(simplices, grades, spec; return_simplex_tree=return_simplex_tree)
+end
+
+function _graded_complex_from_point_cloud_core(data::PointCloud,
+                                               spec::FiltrationSpec;
+                                               return_simplex_tree::Bool=false)
+    points = data.points
+    n = length(points)
+    edges = _core_edges_from_point_cloud(points, spec)
+    core = _core_numbers(n, edges)
+    vals = _point_graph_scalar_values(points, spec)
+    grades = Vector{NTuple{2,Float64}}()
+    for i in 1:n
+        push!(grades, (vals[i], Float64(core[i])))
+    end
+    simplices0 = [[i] for i in 1:n]
+    simplices1 = [[u, v] for (u, v) in edges]
+    for (u, v) in edges
+        push!(grades, (max(vals[u], vals[v]), Float64(min(core[u], core[v]))))
+    end
+    simplices = [simplices0, simplices1]
+    return _materialize_simplicial_output(simplices, grades, spec; return_simplex_tree=return_simplex_tree)
+end
+
+function _rips_like_simplices_for_point_cloud(data::PointCloud,
+                                              spec::FiltrationSpec)
+    construction = _construction_from_params(spec.params)
+    n = length(data.points)
+    max_dim = Int(get(spec.params, :max_dim, 2))
+    simplices = Vector{Vector{Vector{Int}}}(undef, max_dim + 1)
+    simplices[1] = [[i] for i in 1:n]
+    if construction.sparsify != :none
+        edges, edge_dists, _ = _point_cloud_sparsify_edge_driven(data.points, spec, construction)
+        edges, _ = _apply_construction_collapse_edge_driven(edges, edge_dists, data.points, construction)
+        simplices = [simplices[1], _edge_vectors_from_tuples(edges)]
+        return simplices
+    end
+    if max_dim >= 1
+        edge_count = binomial(big(n), big(2))
+        _construction_check_max_edges!(edge_count, spec)
+    end
+    total = big(n)
+    for k in 2:max_dim+1
+        count_k = _construction_precheck_combination_enumeration!(n, k, total, spec)
+        simplices[k] = _combinations(n, k)
+        total += count_k
+    end
+    return simplices
+end
+
+function _graded_complex_from_point_cloud_rhomboid(data::PointCloud,
+                                                   spec::FiltrationSpec;
+                                                   return_simplex_tree::Bool=false)
+    points = data.points
+    simplices = _rips_like_simplices_for_point_cloud(data, spec)
+    vals = _point_vertex_values(points, spec)
+    grades = Vector{NTuple{2,Float64}}()
+    for s in simplices[1]
+        v = vals[s[1]]
+        push!(grades, (v, v))
+    end
+    for k in 2:length(simplices)
+        for s in simplices[k]
+            vmin = Float64(vals[s[1]])
+            vmax = vmin
+            @inbounds for t in 2:length(s)
+                v = Float64(vals[s[t]])
+                v < vmin && (vmin = v)
+                v > vmax && (vmax = v)
+            end
+            push!(grades, (vmin, vmax))
+        end
+    end
+    return _materialize_simplicial_output(simplices, grades, spec; return_simplex_tree=return_simplex_tree)
+end
+
+function _materialize_point_cloud_dim01(n::Int,
+                                        include_edge_dim::Bool,
+                                        edges::Vector{NTuple{2,Int}},
+                                        grades::Vector{<:NTuple{N,Float64}},
+                                        spec::FiltrationSpec;
+                                        return_simplex_tree::Bool=false) where {N}
+    orientation = get(spec.params, :orientation, ntuple(_ -> 1, N))
+    if return_simplex_tree
+        simplices = Vector{Vector{Vector{Int}}}(undef, include_edge_dim ? 2 : 1)
+        simplices[1] = [[i] for i in 1:n]
+        if include_edge_dim
+            simplices[2] = _edge_vectors_from_tuples(edges)
+        end
+        ST = _simplex_tree_multi_from_simplices(simplices, grades)
+        axes = get(spec.params, :axes, _axes_from_simplex_tree(ST; orientation=orientation))
+        return ST, axes, orientation
+    end
+
+    if include_edge_dim
+        cells = [collect(1:n), collect(1:length(edges))]
+        boundaries = SparseMatrixCSC{Int,Int}[_edge_boundary_matrix(n, edges)]
+    else
+        cells = [collect(1:n)]
+        boundaries = SparseMatrixCSC{Int,Int}[]
+    end
+    G = GradedComplex(cells, boundaries, grades)
+    axes = get(spec.params, :axes, _axes_from_grades(grades, N; orientation=orientation))
+    return G, axes, orientation
+end
+
+function _graded_complex_from_point_cloud_lowdim(data::PointCloud,
+                                                 spec::FiltrationSpec;
+                                                 return_simplex_tree::Bool=false)
+    points = data.points
+    n = length(points)
+    kind = spec.kind
+    construction = _construction_from_params(spec.params)
+    max_dim = Int(get(spec.params, :max_dim, 1))
+    include_edge_dim = (max_dim >= 1) || (construction.sparsify != :none)
+
+    edges = NTuple{2,Int}[]
+    edge_dists = Float64[]
+    kdist = Float64[]
+
+    if include_edge_dim
+        if construction.sparsify != :none
+            edges, edge_dists, kdist = _point_cloud_sparsify_edge_driven(points, spec, construction)
+            edges, edge_dists = _apply_construction_collapse_edge_driven(edges, edge_dists, points, construction)
+        else
+            radius = haskey(spec.params, :radius) ? Float64(spec.params[:radius]) : Inf
+            edges_all, dists_all = _complete_point_cloud_edges_with_dist(points)
+            if isfinite(radius)
+                edges = NTuple{2,Int}[]
+                edge_dists = Float64[]
+                sizehint!(edges, length(edges_all))
+                sizehint!(edge_dists, length(dists_all))
+                @inbounds for idx in eachindex(edges_all)
+                    d = dists_all[idx]
+                    d <= radius || continue
+                    push!(edges, edges_all[idx])
+                    push!(edge_dists, d)
+                end
+                _construction_check_max_edges!(length(edges), spec)
+            else
+                _construction_check_max_edges!(length(edges_all), spec)
+                edges = edges_all
+                edge_dists = dists_all
+            end
+        end
+        total = big(n) + big(length(edges))
+        _construction_check_max_simplices!(total, 1, spec)
+        _construction_check_memory_budget!(_estimate_dense_bytes_from_cell_counts(BigInt[n, length(edges)]), spec)
+    else
+        _construction_check_max_simplices!(big(n), 0, spec)
+        _construction_check_memory_budget!(_estimate_dense_bytes_from_cell_counts(BigInt[n]), spec)
+    end
+
+    if kind == :rips
+        grades = Vector{NTuple{1,Float64}}(undef, n + (include_edge_dim ? length(edges) : 0))
+        t = 1
+        @inbounds for _ in 1:n
+            grades[t] = (0.0,)
+            t += 1
+        end
+        if include_edge_dim
+            @inbounds for d in edge_dists
+                grades[t] = (d,)
+                t += 1
+            end
+        end
+        return _materialize_point_cloud_dim01(n, include_edge_dim, edges, grades, spec; return_simplex_tree=return_simplex_tree)
+    elseif kind == :rips_density
+        density_k = Int(get(spec.params, :density_k, 2))
+        density_k > 0 || error("density_k must be > 0.")
+        nn_backend = _pointcloud_nn_backend(spec)
+        approx_candidates = _pointcloud_nn_approx_candidates(spec)
+        dens = if construction.sparsify == :knn && density_k == Int(get(spec.params, :knn, 8)) && length(kdist) == n
+            kdist
+        else
+            _point_cloud_knn_distances(points, density_k; backend=nn_backend, approx_candidates=approx_candidates)
+        end
+        grades = Vector{NTuple{2,Float64}}(undef, n + (include_edge_dim ? length(edges) : 0))
+        t = 1
+        @inbounds for i in 1:n
+            grades[t] = (0.0, dens[i])
+            t += 1
+        end
+        if include_edge_dim
+            @inbounds for idx in eachindex(edges)
+                u, v = edges[idx]
+                grades[t] = (edge_dists[idx], max(dens[u], dens[v]))
+                t += 1
+            end
+        end
+        return _materialize_point_cloud_dim01(n, include_edge_dim, edges, grades, spec; return_simplex_tree=return_simplex_tree)
+    elseif kind == :function_rips
+        vvals = _point_vertex_values(points, spec)
+        agg = Symbol(get(spec.params, :simplex_agg, :max))
+        grades = Vector{NTuple{2,Float64}}(undef, n + (include_edge_dim ? length(edges) : 0))
+        t = 1
+        @inbounds for i in 1:n
+            grades[t] = (0.0, vvals[i])
+            t += 1
+        end
+        if include_edge_dim
+            @inbounds for idx in eachindex(edges)
+                u, v = edges[idx]
+                grades[t] = (edge_dists[idx], _aggregate_pair(vvals[u], vvals[v], agg))
+                t += 1
+            end
+        end
+        return _materialize_point_cloud_dim01(n, include_edge_dim, edges, grades, spec; return_simplex_tree=return_simplex_tree)
+    elseif kind == :rhomboid
+        vals = _point_vertex_values(points, spec)
+        grades = Vector{NTuple{2,Float64}}(undef, n + (include_edge_dim ? length(edges) : 0))
+        t = 1
+        @inbounds for i in 1:n
+            v = Float64(vals[i])
+            grades[t] = (v, v)
+            t += 1
+        end
+        if include_edge_dim
+            @inbounds for idx in eachindex(edges)
+                u, v = edges[idx]
+                vu = Float64(vals[u])
+                vv = Float64(vals[v])
+                grades[t] = (min(vu, vv), max(vu, vv))
+                t += 1
+            end
+        end
+        return _materialize_point_cloud_dim01(n, include_edge_dim, edges, grades, spec; return_simplex_tree=return_simplex_tree)
+    elseif kind == :degree_rips
+        deg = _vertex_degree_scores(n, edges)
+        grades = Vector{NTuple{2,Float64}}(undef, n + (include_edge_dim ? length(edges) : 0))
+        t = 1
+        @inbounds for i in 1:n
+            grades[t] = (0.0, Float64(deg[i]))
+            t += 1
+        end
+        if include_edge_dim
+            @inbounds for idx in eachindex(edges)
+                u, v = edges[idx]
+                grades[t] = (edge_dists[idx], Float64(max(deg[u], deg[v])))
+                t += 1
+            end
+        end
+        return _materialize_point_cloud_dim01(n, include_edge_dim, edges, grades, spec; return_simplex_tree=return_simplex_tree)
+    end
+    error("Unsupported low-dimensional point cloud filtration kind: $(kind).")
+end
+
+function _graded_complex_from_point_cloud_dim2_packed(data::PointCloud,
+                                                      spec::FiltrationSpec;
+                                                      return_simplex_tree::Bool=false)
+    points = data.points
+    n = length(points)
+    kind = spec.kind
+    max_dim = Int(get(spec.params, :max_dim, 2))
+    max_dim == 2 || error("dim2 packed point-cloud kernel requires max_dim=2 (got $(max_dim)).")
+
+    radius = if haskey(spec.params, :radius)
+        Float64(spec.params[:radius])
+    else
+        Inf
+    end
+
+    dist_packed = _point_cloud_pairwise_packed(points)
+    pair_count = length(dist_packed)
+
+    edges = NTuple{2,Int}[]
+    edge_dists = Float64[]
+    edge_mask = falses(pair_count)
+    sizehint!(edges, pair_count)
+    sizehint!(edge_dists, pair_count)
+    adj_hi = [Int[] for _ in 1:n]
+
+    packed_idx = 1
+    @inbounds for i in 1:(n - 1)
+        for j in (i + 1):n
+            d = dist_packed[packed_idx]
+            if d <= radius
+                push!(edges, (i, j))
+                push!(edge_dists, d)
+                edge_mask[packed_idx] = true
+                push!(adj_hi[i], j)
+            end
+            packed_idx += 1
+        end
+    end
+
+    _construction_check_max_edges!(length(edges), spec)
+
+    triangles = NTuple{3,Int}[]
+    tri_diams = Float64[]
+    sizehint!(triangles, max(length(edges), n))
+    sizehint!(tri_diams, max(length(edges), n))
+    @inbounds for i in 1:(n - 2)
+        nbrs = adj_hi[i]
+        ln = length(nbrs)
+        ln < 2 && continue
+        for aidx in 1:(ln - 1)
+            j = nbrs[aidx]
+            dij = _packed_pair_distance(dist_packed, n, i, j)
+            for bidx in (aidx + 1):ln
+                k = nbrs[bidx]
+                jk_idx = _packed_pair_index(n, j, k)
+                edge_mask[jk_idx] || continue
+                dik = _packed_pair_distance(dist_packed, n, i, k)
+                djk = dist_packed[jk_idx]
+                push!(triangles, (i, j, k))
+                push!(tri_diams, max(dij, max(dik, djk)))
+            end
+        end
+    end
+
+    total = big(n) + big(length(edges)) + big(length(triangles))
+    _construction_check_max_simplices!(total, 2, spec)
+    _construction_check_memory_budget!(
+        _estimate_dense_bytes_from_cell_counts(BigInt[n, length(edges), length(triangles)]),
+        spec,
+    )
+
+    if kind == :rips
+        grades = Vector{NTuple{1,Float64}}(undef, n + length(edges) + length(triangles))
+        t = 1
+        @inbounds for _ in 1:n
+            grades[t] = (0.0,)
+            t += 1
+        end
+        @inbounds for d in edge_dists
+            grades[t] = (d,)
+            t += 1
+        end
+        @inbounds for d in tri_diams
+            grades[t] = (d,)
+            t += 1
+        end
+        return _materialize_point_cloud_dim012(
+            n, edges, triangles, grades, spec; return_simplex_tree=return_simplex_tree
+        )
+    elseif kind == :rips_density
+        density_k = Int(get(spec.params, :density_k, 2))
+        density_k > 0 || error("density_k must be > 0.")
+        nn_backend = _pointcloud_nn_backend(spec)
+        approx_candidates = _pointcloud_nn_approx_candidates(spec)
+        dens = _point_cloud_knn_distances(points, density_k; backend=nn_backend, approx_candidates=approx_candidates)
+        grades = Vector{NTuple{2,Float64}}(undef, n + length(edges) + length(triangles))
+        t = 1
+        @inbounds for i in 1:n
+            grades[t] = (0.0, dens[i])
+            t += 1
+        end
+        @inbounds for idx in eachindex(edges)
+            u, v = edges[idx]
+            grades[t] = (edge_dists[idx], max(dens[u], dens[v]))
+            t += 1
+        end
+        @inbounds for idx in eachindex(triangles)
+            a, b, c = triangles[idx]
+            grades[t] = (tri_diams[idx], max(dens[a], max(dens[b], dens[c])))
+            t += 1
+        end
+        return _materialize_point_cloud_dim012(
+            n, edges, triangles, grades, spec; return_simplex_tree=return_simplex_tree
+        )
+    elseif kind == :function_rips
+        vvals = _point_vertex_values(points, spec)
+        agg = Symbol(get(spec.params, :simplex_agg, :max))
+        grades = Vector{NTuple{2,Float64}}(undef, n + length(edges) + length(triangles))
+        t = 1
+        @inbounds for i in 1:n
+            grades[t] = (0.0, vvals[i])
+            t += 1
+        end
+        @inbounds for idx in eachindex(edges)
+            u, v = edges[idx]
+            grades[t] = (edge_dists[idx], _aggregate_pair(vvals[u], vvals[v], agg))
+            t += 1
+        end
+        @inbounds for idx in eachindex(triangles)
+            a, b, c = triangles[idx]
+            grades[t] = (tri_diams[idx], _aggregate_triple(vvals[a], vvals[b], vvals[c], agg))
+            t += 1
+        end
+        return _materialize_point_cloud_dim012(
+            n, edges, triangles, grades, spec; return_simplex_tree=return_simplex_tree
+        )
+    elseif kind == :degree_rips
+        deg = _vertex_degree_scores(n, edges)
+        grades = Vector{NTuple{2,Float64}}(undef, n + length(edges) + length(triangles))
+        t = 1
+        @inbounds for i in 1:n
+            grades[t] = (0.0, Float64(deg[i]))
+            t += 1
+        end
+        @inbounds for idx in eachindex(edges)
+            u, v = edges[idx]
+            grades[t] = (edge_dists[idx], Float64(max(deg[u], deg[v])))
+            t += 1
+        end
+        @inbounds for idx in eachindex(triangles)
+            a, b, c = triangles[idx]
+            grades[t] = (tri_diams[idx], Float64(max(deg[a], max(deg[b], deg[c]))))
+            t += 1
+        end
+        return _materialize_point_cloud_dim012(
+            n, edges, triangles, grades, spec; return_simplex_tree=return_simplex_tree
+        )
+    end
+
+    error("Unsupported dim2 packed point-cloud filtration kind: $(kind).")
+end
+
+function _graded_complex_from_point_cloud(data::PointCloud, spec::FiltrationSpec;
+                                          return_simplex_tree::Bool=false)
+    data2, spec2, _ = _maybe_greedy_perm_reduce(data, spec)
+    data = data2
+    spec = spec2
+
+    construction = _construction_from_params(spec.params)
+    max_dim = get(spec.params, :max_dim, 1)
+    kind = spec.kind
+    points = data.points
+    n = length(points)
+    if n == 0
+        error("PointCloud has no points.")
+    end
+
+    if kind == :delaunay_lower_star
+        return _graded_complex_from_point_cloud_delaunay(data, spec; function_style=false, return_simplex_tree=return_simplex_tree)
+    elseif kind == :alpha
+        return _graded_complex_from_point_cloud_alpha(data, spec; return_simplex_tree=return_simplex_tree)
+    elseif kind == :function_delaunay
+        return _graded_complex_from_point_cloud_delaunay(data, spec; function_style=true, return_simplex_tree=return_simplex_tree)
+    elseif kind == :core_delaunay
+        return _graded_complex_from_point_cloud_core_delaunay(data, spec; return_simplex_tree=return_simplex_tree)
+    end
+
+    if kind == :landmark_rips
+        landmarks = get(spec.params, :landmarks, nothing)
+        landmarks === nothing && error("landmark_rips requires landmarks.")
+        length(landmarks) > 0 || error("landmark_rips: landmarks cannot be empty.")
+        pts = [points[i] for i in landmarks]
+        params2 = _filter_params(spec.params, [:landmarks])
+        params2 = merge(params2, (max_dim = max_dim,))
+        return _graded_complex_from_point_cloud(
+            PointCloud(pts),
+            FiltrationSpec(; kind=:rips, params2...);
+            return_simplex_tree=return_simplex_tree,
+        )
+    end
+
+    if construction.sparsify != :none && max_dim > 1
+        error("construction.sparsify=$(construction.sparsify) currently supports max_dim <= 1.")
+    end
+    if construction.collapse != :none && max_dim > 1
+        error("construction.collapse=$(construction.collapse) currently supports max_dim <= 1.")
+    end
+
+    # For large point clouds, require explicit sparse construction for Rips-like ingestion.
+    if construction.sparsify == :none &&
+       (kind == :rips || kind == :rips_density || kind == :function_rips || kind == :degree_rips) &&
+       max_dim >= 1 &&
+       n >= _POINTCLOUD_LARGE_N_SPARSE_ONLY[]
+        throw(ArgumentError("PointCloud with n=$(n) requires sparse construction for this filtration. Use ConstructionOptions(sparsify=:knn|:radius|:greedy_perm) and set a budget."))
+    end
+
+    if max_dim <= 1 && (kind == :rips || kind == :rips_density || kind == :function_rips || kind == :rhomboid || kind == :degree_rips)
+        return _graded_complex_from_point_cloud_lowdim(data, spec; return_simplex_tree=return_simplex_tree)
+    end
+
+    if construction.sparsify != :none &&
+       (kind == :rips || kind == :rips_density || kind == :function_rips || kind == :degree_rips)
+        simplices = Vector{Vector{Vector{Int}}}(undef, 2)
+        simplices[1] = [[i] for i in 1:n]
+        edges, edge_dists, kdist = _point_cloud_sparsify_edge_driven(points, spec, construction)
+        edges, edge_dists = _apply_construction_collapse_edge_driven(edges, edge_dists, points, construction)
+        simplices[2] = edges
+        total = big(n + length(edges))
+        _construction_check_max_simplices!(total, 1, spec)
+        _construction_check_memory_budget!(_estimate_dense_bytes_from_cell_counts(BigInt[length(s) for s in simplices]), spec)
+
+        if kind == :rips
+            grades = Vector{NTuple{1,Float64}}(undef, n + length(edges))
+            t = 1
+            for _ in 1:n
+                grades[t] = (0.0,)
+                t += 1
+            end
+            for d in edge_dists
+                grades[t] = (d,)
+                t += 1
+            end
+        elseif kind == :rips_density
+            density_k = Int(get(spec.params, :density_k, 2))
+            density_k > 0 || error("density_k must be > 0.")
+            nn_backend = _pointcloud_nn_backend(spec)
+            approx_candidates = _pointcloud_nn_approx_candidates(spec)
+            dens = if construction.sparsify == :knn && density_k == Int(get(spec.params, :knn, 8)) && length(kdist) == n
+                kdist
+            else
+                _point_cloud_knn_distances(points, density_k; backend=nn_backend, approx_candidates=approx_candidates)
+            end
+            grades = Vector{NTuple{2,Float64}}(undef, n + length(edges))
+            t = 1
+            for i in 1:n
+                grades[t] = (0.0, dens[i])
+                t += 1
+            end
+            for idx in eachindex(edges)
+                e = edges[idx]
+                grades[t] = (edge_dists[idx], max(dens[e[1]], dens[e[2]]))
+                t += 1
+            end
+        elseif kind == :function_rips
+            vvals = _point_vertex_values(points, spec)
+            agg = get(spec.params, :simplex_agg, :max)
+            grades = Vector{NTuple{2,Float64}}(undef, n + length(edges))
+            t = 1
+            for i in 1:n
+                grades[t] = (0.0, vvals[i])
+                t += 1
+            end
+            for idx in eachindex(edges)
+                e = edges[idx]
+                uv = if agg == :max
+                    max(vvals[e[1]], vvals[e[2]])
+                elseif agg == :min
+                    min(vvals[e[1]], vvals[e[2]])
+                elseif agg == :sum
+                    vvals[e[1]] + vvals[e[2]]
+                elseif agg == :mean
+                    (vvals[e[1]] + vvals[e[2]]) / 2
+                else
+                    throw(ArgumentError("Unsupported simplex_agg=$(agg). Supported: :max, :min, :sum, :mean"))
+                end
+                grades[t] = (edge_dists[idx], uv)
+                t += 1
+            end
+        else
+            deg = _vertex_degree_scores(n, edges)
+            grades = Vector{NTuple{2,Float64}}(undef, n + length(edges))
+            t = 1
+            for i in 1:n
+                grades[t] = (0.0, Float64(deg[i]))
+                t += 1
+            end
+            for idx in eachindex(edges)
+                e = edges[idx]
+                grades[t] = (edge_dists[idx], Float64(max(deg[e[1]], deg[e[2]])))
+                t += 1
+            end
+        end
+
+        return _materialize_simplicial_output(simplices, grades, spec; return_simplex_tree=return_simplex_tree)
+    end
+
+    if _POINTCLOUD_DIM2_PACKED_KERNEL[] &&
+       max_dim == 2 &&
+       construction.sparsify == :none &&
+       construction.collapse == :none &&
+       (kind == :rips || kind == :rips_density || kind == :function_rips || kind == :degree_rips)
+        return _graded_complex_from_point_cloud_dim2_packed(
+            data,
+            spec;
+            return_simplex_tree=return_simplex_tree,
+        )
+    end
+
+    if kind == :core
+        return _graded_complex_from_point_cloud_core(data, spec; return_simplex_tree=return_simplex_tree)
+    elseif kind == :rhomboid
+        return _graded_complex_from_point_cloud_rhomboid(data, spec; return_simplex_tree=return_simplex_tree)
+    end
+
+    # Dense non-sparse Rips-like path: avoid n x n dense distance matrices.
+    # Streaming mode computes simplex diameters directly from point coordinates.
+    # A packed upper-triangular fallback remains available for benchmarking.
+    use_stream = _POINTCLOUD_STREAM_DIST_NONSPARSE[]
+    dist_packed = use_stream ? Float64[] : _point_cloud_pairwise_packed(points)
+
+    # simplices by dimension (dense non-sparse path only)
+    simplices = Vector{Vector{Vector{Int}}}(undef, max_dim + 1)
+    simplices[1] = [[i] for i in 1:n]
+    total = big(length(simplices[1]))
+    if max_dim >= 1
+        edge_count = binomial(big(n), big(2))
+        if edge_count > big(typemax(Int))
+            throw(ArgumentError("Ingestion construction budget check overflow for edge count=$(edge_count)."))
+        end
+        _construction_check_max_edges!(Int(edge_count), spec)
+    end
+    for k in 2:max_dim+1
+        count_k = _construction_precheck_combination_enumeration!(n, k, total, spec)
+        sims = _combinations(n, k)
+        simplices[k] = sims
+        total += count_k
+    end
+
+    _construction_check_memory_budget!(_estimate_dense_bytes_from_cell_counts(BigInt[length(s) for s in simplices]), spec)
+
+    if kind == :rips
+        grades = Vector{NTuple{1,Float64}}()
+        for s in simplices[1]
+            push!(grades, (0.0,))
+        end
+        for k in 2:max_dim+1
+            for s in simplices[k]
+                maxd = use_stream ? _simplex_max_pair_distance_points(points, s) : begin
+                    md = 0.0
+                    for i in 1:length(s)
+                        for j in (i+1):length(s)
+                            d = _packed_pair_distance(dist_packed, n, s[i], s[j])
+                            d > md && (md = d)
+                        end
+                    end
+                    md
+                end
+                push!(grades, (maxd,))
+            end
+        end
+    elseif kind == :rips_density
+        knn_k = get(spec.params, :density_k, 2)
+        nn_backend = _pointcloud_nn_backend(spec)
+        approx_candidates = _pointcloud_nn_approx_candidates(spec)
+        dens = _knn_distances(points, knn_k; backend=nn_backend, approx_candidates=approx_candidates)
+        grades = Vector{NTuple{2,Float64}}()
+        for s in simplices[1]
+            v = s[1]
+            push!(grades, (0.0, dens[v]))
+        end
+        for k in 2:max_dim+1
+            for s in simplices[k]
+                maxd = use_stream ? _simplex_max_pair_distance_points(points, s) : 0.0
+                maxden = 0.0
+                for i in 1:length(s)
+                    vi = s[i]
+                    if dens[vi] > maxden
+                        maxden = dens[vi]
+                    end
+                    if !use_stream
+                        for j in (i+1):length(s)
+                            d = _packed_pair_distance(dist_packed, n, s[i], s[j])
+                            if d > maxd
+                                maxd = d
+                            end
+                        end
+                    end
+                end
+                push!(grades, (maxd, maxden))
+            end
+        end
+    elseif kind == :function_rips
+        vvals = _point_vertex_values(points, spec)
+        agg = get(spec.params, :simplex_agg, :max)
+        grades = Vector{NTuple{2,Float64}}()
+        for s in simplices[1]
+            v = s[1]
+            push!(grades, (0.0, vvals[v]))
+        end
+        for k in 2:max_dim+1
+            for s in simplices[k]
+                maxd = use_stream ? _simplex_max_pair_distance_points(points, s) : begin
+                    md = 0.0
+                    for i in 1:length(s)
+                        for j in (i+1):length(s)
+                            d = _packed_pair_distance(dist_packed, n, s[i], s[j])
+                            if d > md
+                                md = d
+                            end
+                        end
+                    end
+                    md
+                end
+                push!(grades, (maxd, _aggregate_indexed(vvals, s, agg)))
+            end
+        end
+    elseif kind == :degree_rips
+        deg = (length(simplices) >= 2) ? _vertex_degree_scores(n, simplices[2]) : zeros(Int, n)
+        grades = Vector{NTuple{2,Float64}}()
+        for s in simplices[1]
+            v = s[1]
+            push!(grades, (0.0, Float64(deg[v])))
+        end
+        for k in 2:max_dim+1
+            for s in simplices[k]
+                maxd = use_stream ? _simplex_max_pair_distance_points(points, s) : begin
+                    md = 0.0
+                    for i in 1:length(s)
+                        for j in (i+1):length(s)
+                            d = _packed_pair_distance(dist_packed, n, s[i], s[j])
+                            if d > md
+                                md = d
+                            end
+                        end
+                    end
+                    md
+                end
+                maxdeg = 0
+                @inbounds for v in s
+                    dv = deg[v]
+                    dv > maxdeg && (maxdeg = dv)
+                end
+                push!(grades, (maxd, Float64(maxdeg)))
+            end
+        end
+    else
+        error("Unsupported point cloud filtration kind: $(kind).")
+    end
+
+    return _materialize_simplicial_output(simplices, grades, spec; return_simplex_tree=return_simplex_tree)
+end
+
+function _graded_complex_from_graph(data::GraphData, spec::FiltrationSpec;
+                                    return_simplex_tree::Bool=false)
+    kind = spec.kind
+    n = data.n
+    edges = data.edges
+    if kind == :graph_lower_star || kind == :clique_lower_star
+        vertex_grades = _graph_vertex_values(data, spec)
+        if kind == :graph_lower_star
+            params = _filter_params(spec.params, Symbol[:max_dim, :lift])
+            return _graph_lifted_complex(
+                data,
+                FiltrationSpec(; kind=kind, lift=:lower_star, params...),
+                vertex_grades;
+                return_simplex_tree=return_simplex_tree,
+            )
+        end
+        params = _filter_params(spec.params, Symbol[:lift])
+        return _graph_lifted_complex(
+            data,
+            FiltrationSpec(; kind=kind, lift=:clique, params...),
+            vertex_grades;
+            return_simplex_tree=return_simplex_tree,
+        )
+    elseif kind == :graph_centrality
+        vals = _graph_centrality_values(data, spec)
+        return _graph_lifted_complex(data, spec, [(v,) for v in vals]; return_simplex_tree=return_simplex_tree)
+    elseif kind == :graph_geodesic
+        vals = _graph_geodesic_values(data, spec)
+        return _graph_lifted_complex(data, spec, [(v,) for v in vals]; return_simplex_tree=return_simplex_tree)
+    elseif kind == :graph_function_geodesic_bifiltration
+        geo = _graph_geodesic_values(data, spec)
+        usr = _graph_vertex_scalar_values(data, spec; required=true)
+        length(usr) == n || error("vertex function values length mismatch.")
+        pairs = NTuple{2,Float64}[(geo[i], usr[i]) for i in 1:n]
+        return _graph_lifted_complex(data, spec, pairs; return_simplex_tree=return_simplex_tree)
+    elseif kind == :graph_weight_threshold
+        return _graph_weight_threshold_complex(data, spec; return_simplex_tree=return_simplex_tree)
+    elseif kind == :core
+        vals = _graph_vertex_scalar_values(data, spec; required=false)
+        core = _core_numbers(n, edges)
+        grades = NTuple{2,Float64}[]
+        for i in 1:n
+            push!(grades, (vals[i], Float64(core[i])))
+        end
+        simplices0 = [[i] for i in 1:n]
+        simplices1 = [[u, v] for (u, v) in edges]
+        for (u, v) in edges
+            push!(grades, (max(vals[u], vals[v]), Float64(min(core[u], core[v]))))
+        end
+        simplices = [simplices0, simplices1]
+        return _materialize_simplicial_output(simplices, grades, spec; return_simplex_tree=return_simplex_tree)
+    elseif kind == :rhomboid
+        vals = _graph_vertex_scalar_values(data, spec; required=true)
+        construction = _construction_from_params(spec.params)
+        construction.collapse == :none || error("construction.collapse=$(construction.collapse) is unsupported for graph rhomboid ingestion.")
+        construction.sparsify == :none || error("construction.sparsify=$(construction.sparsify) is unsupported for graph rhomboid ingestion.")
+        max_dim = Int(get(spec.params, :max_dim, 2))
+        _construction_check_max_edges!(length(edges), spec)
+        simplices = Vector{Vector{Vector{Int}}}(undef, max_dim + 1)
+        simplices[1] = [[i] for i in 1:n]
+        packed = nothing
+        adj_lists = nothing
+        total = big(n)
+        for k in 2:max_dim+1
+            sims, packed, adj_lists = _enumerate_cliques_k_cached(
+                edges, n, k, spec, total;
+                context="graph rhomboid",
+                packed=packed,
+                adj_lists=adj_lists,
+            )
+            simplices[k] = sims
+            total += length(sims)
+            _construction_check_max_simplices!(total, k - 1, spec)
+        end
+        grades = NTuple{2,Float64}[]
+        for s in simplices[1]
+            v = vals[s[1]]
+            push!(grades, (v, v))
+        end
+        for k in 2:max_dim+1
+            for s in simplices[k]
+                vv = Float64[vals[v] for v in s]
+                push!(grades, (minimum(vv), maximum(vv)))
+            end
+        end
+        return _materialize_simplicial_output(simplices, grades, spec; return_simplex_tree=return_simplex_tree)
+    elseif kind == :edge_weighted
+        weights = get(spec.params, :edge_weights, nothing)
+        weights === nothing && error("edge_weighted requires edge_weights.")
+        length(weights) == length(edges) || error("edge_weights length mismatch.")
+        grades = Vector{NTuple{1,Float64}}()
+        for _ in 1:n
+            push!(grades, (0.0,))
+        end
+        for w in weights
+            push!(grades, (Float64(w),))
+        end
+        simplices0 = [ [i] for i in 1:n ]
+        simplices1 = [ [u, v] for (u, v) in edges ]
+        simplices = [simplices0, simplices1]
+        return _materialize_simplicial_output(simplices, grades, spec; return_simplex_tree=return_simplex_tree)
+    else
+        error("Unsupported graph filtration kind: $(kind).")
+    end
+end
+
+function _distance_transform(mask::AbstractArray{Bool})
+    dims = size(mask)
+    N = length(dims)
+    coords = CartesianIndices(mask)
+    true_pts = [c for c in coords if mask[c]]
+    out = zeros(Float64, dims)
+    for c in coords
+        if mask[c]
+            out[c] = 0.0
+            continue
+        end
+        best = Inf
+        for t in true_pts
+            s = 0.0
+            for i in 1:N
+                d = (c[i] - t[i])
+                s += d * d
+            end
+            if s < best
+                best = s
+            end
+        end
+        out[c] = sqrt(best)
+    end
+    return out
+end
+
+function _cubical_structure(dims::NTuple{N,Int};
+                            cache::Union{Nothing,EncodingCache}=nothing) where {N}
+    key = Tuple(dims)
+    if cache !== nothing
+        Base.lock(cache.lock)
+        try
+            cached = get(cache.cubical, key, nothing)
+            cached === nothing || return cached
+        finally
+            Base.unlock(cache.lock)
+        end
+    end
+    cells_by_dim = Vector{Vector{Tuple{NTuple{N,Int},NTuple{N,Int}}}}(undef, N + 1)
+    cell_index = Vector{Dict{Tuple{NTuple{N,Int},NTuple{N,Int}},Int}}(undef, N + 1)
+    for k in 0:N
+        cells_by_dim[k+1] = Tuple{NTuple{N,Int},NTuple{N,Int}}[]
+        cell_index[k+1] = Dict{Tuple{NTuple{N,Int},NTuple{N,Int}},Int}()
+    end
+
+    for mask_vec in _combinations(N, 0)
+        mask = ntuple(i -> 0, N)
+        for coords in CartesianIndices(Tuple(dims))
+            origin = ntuple(i -> coords[i], N)
+            key2 = (origin, mask)
+            push!(cells_by_dim[1], key2)
+        end
+    end
+    for k in 1:N
+        for mask_idxs in _combinations(N, k)
+            mask = ntuple(i -> (i in mask_idxs ? 1 : 0), N)
+            ranges = Vector{UnitRange{Int}}(undef, N)
+            for i in 1:N
+                ranges[i] = 1:(dims[i] - mask[i])
+            end
+            for coords in CartesianIndices(Tuple(ranges))
+                origin = ntuple(i -> coords[i], N)
+                key2 = (origin, mask)
+                push!(cells_by_dim[k+1], key2)
+            end
+        end
+    end
+
+    for k in 0:N
+        for (i, key2) in enumerate(cells_by_dim[k+1])
+            cell_index[k+1][key2] = i
+        end
+    end
+
+    boundaries = SparseMatrixCSC{Int,Int}[]
+    for k in 1:N
+        I = Int[]
+        J = Int[]
+        V = Int[]
+        for (j, (origin, mask)) in enumerate(cells_by_dim[k+1])
+            axes = [i for i in 1:N if mask[i] == 1]
+            for (pos, axis) in enumerate(axes)
+                mask_face = ntuple(i -> (i == axis ? 0 : mask[i]), N)
+                origin_low = origin
+                origin_high = ntuple(i -> (i == axis ? origin[i] + 1 : origin[i]), N)
+                low_key = (origin_low, mask_face)
+                high_key = (origin_high, mask_face)
+                row_low = cell_index[k][low_key]
+                row_high = cell_index[k][high_key]
+                sign_low = isodd(pos) ? 1 : -1
+                sign_high = -sign_low
+                push!(I, row_low); push!(J, j); push!(V, sign_low)
+                push!(I, row_high); push!(J, j); push!(V, sign_high)
+            end
+        end
+        push!(boundaries, sparse(I, J, V, length(cells_by_dim[k]), length(cells_by_dim[k+1])))
+    end
+
+    cached = (cells_by_dim=cells_by_dim, cell_index=cell_index, boundaries=boundaries)
+    if cache !== nothing
+        Base.lock(cache.lock)
+        try
+            return get!(cache.cubical, key, cached)
+        finally
+            Base.unlock(cache.lock)
+        end
+    end
+    return cached
+end
+
+function _graded_complex_from_image_channels(channels::Vector{<:AbstractArray},
+                                             spec::FiltrationSpec;
+                                             cache::Union{Nothing,EncodingCache}=nothing)
+    img = channels[1]
+    dims = size(img)
+    for c in channels
+        size(c) == dims || error("All channels must have the same size.")
+    end
+    N = length(dims)
+    C = length(channels)
+
+    cached = _cubical_structure(dims; cache=cache)
+    cells_by_dim = cached.cells_by_dim
+    cell_index = cached.cell_index
+
+    grades = Vector{NTuple{C,Float64}}()
+    for k in 0:N
+        for (origin, mask) in cells_by_dim[k+1]
+            maxv = fill(-Inf, C)
+            ranges = Vector{UnitRange{Int}}(undef, N)
+            for i in 1:N
+                ranges[i] = origin[i]:(origin[i] + mask[i])
+            end
+            for coords in CartesianIndices(Tuple(ranges))
+                for ch in 1:C
+                    v = Float64(channels[ch][coords])
+                    if v > maxv[ch]
+                        maxv[ch] = v
+                    end
+                end
+            end
+            push!(grades, ntuple(i -> maxv[i], C))
+        end
+    end
+
+    cells = [collect(1:length(cells_by_dim[k+1])) for k in 0:N]
+    G = GradedComplex(cells, cached.boundaries, grades)
+    orientation = get(spec.params, :orientation, ntuple(_ -> 1, C))
+    axes = get(spec.params, :axes, _axes_from_grades(grades, C; orientation=orientation))
+    return G, axes, orientation
+end
+
+function _graded_complex_from_image(data::ImageNd, spec::FiltrationSpec;
+                                    cache::Union{Nothing,EncodingCache}=nothing)
+    if haskey(spec.params, :channels)
+        chans = spec.params[:channels]
+        return _graded_complex_from_image_channels(chans, spec; cache=cache)
+    elseif spec.kind == :image_distance_bifiltration
+        mask = get(spec.params, :mask, nothing)
+        mask === nothing && error("image_distance_bifiltration requires mask.")
+        dist = _distance_transform(mask)
+        chans = [data.data, dist]
+        return _graded_complex_from_image_channels(chans, spec; cache=cache)
+    else
+        return _graded_complex_from_image_channels([data.data], spec; cache=cache)
+    end
+end
+
+function _graded_complex_from_data(data, spec::FiltrationSpec;
+                                   cache::Union{Nothing,EncodingCache}=nothing)
+    if data isa GradedComplex
+        N = length(data.grades[1])
+        orientation = get(spec.params, :orientation, ntuple(_ -> 1, N))
+        axes = get(spec.params, :axes, _axes_from_grades(data.grades, N; orientation=orientation))
+        return data, axes, orientation
+    elseif data isa SimplexTreeMulti
+        N = length(data.grade_data[1])
+        orientation = get(spec.params, :orientation, ntuple(_ -> 1, N))
+        axes = get(spec.params, :axes, _axes_from_simplex_tree(data; orientation=orientation))
+        return _graded_complex_from_simplex_tree(data), axes, orientation
+    elseif data isa MultiCriticalGradedComplex
+        first_cell = findfirst(!isempty, data.grades)
+        first_cell === nothing && error("MultiCriticalGradedComplex has no grades.")
+        N = length(data.grades[first_cell][1])
+        orientation = get(spec.params, :orientation, ntuple(_ -> 1, N))
+        axes = get(spec.params, :axes, _axes_from_multigrades(data.grades, N; orientation=orientation))
+        return data, axes, orientation
+    elseif data isa PointCloud
+        return _graded_complex_from_point_cloud(data, spec)
+    elseif data isa ImageNd
+        return _graded_complex_from_image(data, spec; cache=cache)
+    elseif data isa GraphData
+        return _graded_complex_from_graph(data, spec)
+    elseif data isa EmbeddedPlanarGraph2D
+        if spec.kind == :wing_vein_bifiltration
+            grid = get(spec.params, :grid, (32, 32))
+            bbox = get(spec.params, :bbox, data.bbox)
+            bbox === nothing && error("wing_vein_bifiltration requires bbox.")
+            xmin, xmax, ymin, ymax = bbox
+            nx, ny = grid
+            xs = range(xmin, xmax; length=nx)
+            ys = range(ymin, ymax; length=ny)
+            distV = zeros(Float64, nx, ny)
+            distE = zeros(Float64, nx, ny)
+            verts = data.vertices
+            segments = Vector{Tuple{Vector{Float64},Vector{Float64}}}()
+            if data.polylines === nothing
+                for (u, v) in data.edges
+                    push!(segments, (verts[u], verts[v]))
+                end
+            else
+                for poly in data.polylines
+                    for i in 1:(length(poly)-1)
+                        push!(segments, (poly[i], poly[i+1]))
+                    end
+                end
+            end
+            for i in 1:nx, j in 1:ny
+                x = xs[i]; y = ys[j]
+                dv = Inf
+                for v in verts
+                    d = hypot(x - v[1], y - v[2])
+                    if d < dv
+                        dv = d
+                    end
+                end
+                distV[i, j] = dv
+                de = Inf
+                for (a, b) in segments
+                    ax, ay = a[1], a[2]
+                    bx, by = b[1], b[2]
+                    vx = bx - ax
+                    vy = by - ay
+                    wx = x - ax
+                    wy = y - ay
+                    t = (vx*wx + vy*wy) / (vx*vx + vy*vy)
+                    if t < 0
+                        px, py = ax, ay
+                    elseif t > 1
+                        px, py = bx, by
+                    else
+                        px, py = ax + t*vx, ay + t*vy
+                    end
+                    d = hypot(x - px, y - py)
+                    if d < de
+                        de = d
+                    end
+                end
+                distE[i, j] = de
+            end
+            chans = [-distV, distE]
+            img = ImageNd(chans[1])
+            spec2 = FiltrationSpec(; kind=:image_distance_bifiltration, channels=chans,
+                                    orientation=get(spec.params, :orientation, (-1, 1)))
+            return _graded_complex_from_image(img, spec2; cache=cache)
+        else
+            # Treat as a graph with externally supplied vertex grades
+            gspec = FiltrationSpec(; kind=spec.kind, spec.params...)
+            gdata = GraphData(length(data.vertices), data.edges;
+                              coords=data.vertices, weights=nothing, T=eltype(data.vertices[1]))
+            return _graded_complex_from_graph(gdata, gspec)
+        end
+    else
+        error("Unsupported dataset type for encode(data, filtration).")
+    end
+end
+
+function _graded_complex_from_data(data, filtration::AbstractFiltration;
+                                   cache::Union{Nothing,EncodingCache}=nothing)
+    spec = _filtration_spec(filtration)
+    return _graded_complex_from_data(data, spec; cache=cache)
+end
+
+function _simplex_tree_from_data(data, spec::FiltrationSpec;
+                                 cache::Union{Nothing,EncodingCache}=nothing)
+    if data isa SimplexTreeMulti
+        N = length(data.grade_data[1])
+        orientation = get(spec.params, :orientation, ntuple(_ -> 1, N))
+        axes = get(spec.params, :axes, _axes_from_simplex_tree(data; orientation=orientation))
+        return data, axes, orientation
+    end
+    if data isa PointCloud
+        return _graded_complex_from_point_cloud(data, spec; return_simplex_tree=true)
+    elseif data isa GraphData
+        return _graded_complex_from_graph(data, spec; return_simplex_tree=true)
+    elseif data isa EmbeddedPlanarGraph2D && spec.kind != :wing_vein_bifiltration
+        gspec = FiltrationSpec(; kind=spec.kind, spec.params...)
+        gdata = GraphData(length(data.vertices), data.edges;
+                          coords=data.vertices, weights=nothing, T=eltype(data.vertices[1]))
+        return _graded_complex_from_graph(gdata, gspec; return_simplex_tree=true)
+    end
+
+    G, axes, orientation = _graded_complex_from_data(data, spec; cache=cache)
+    ST = try
+        _simplex_tree_multi_from_complex(G)
+    catch err
+        throw(ArgumentError("SimplexTreeMulti output_stage is unavailable for this ingestion (non-simplicial complex): $(sprint(showerror, err))"))
+    end
+    return ST, axes, orientation
+end
+
+function _simplex_tree_from_data(data, filtration::AbstractFiltration;
+                                 cache::Union{Nothing,EncodingCache}=nothing)
+    spec = _filtration_spec(filtration)
+    return _simplex_tree_from_data(data, spec; cache=cache)
+end
+
+@inline function _resolve_ingestion_stage(stage::Symbol, construction::ConstructionOptions)::Symbol
+    s = stage === :auto ? construction.output_stage : stage
+    if s == :simplex_tree || s == :graded_complex || s == :cochain ||
+       s == :module || s == :fringe || s == :flange || s == :encoding_result ||
+       s == :cohomology_dims
+        return s
+    end
+    error("encode(data, filtration): stage must be :auto, :simplex_tree, :graded_complex, :cochain, :module, :fringe, :flange, :cohomology_dims, or :encoding_result.")
+end
+
+@inline function _pipeline_options_from_spec(spec::FiltrationSpec)::PipelineOptions
+    p = spec.params
+    return PipelineOptions(;
+        orientation = get(p, :orientation, nothing),
+        axes_policy = Symbol(get(p, :axes_policy, :encoding)),
+        axis_kind = get(p, :axis_kind, nothing),
+        eps = get(p, :eps, nothing),
+        poset_kind = Symbol(get(p, :poset_kind, :signature)),
+        field = get(p, :field, nothing),
+        max_axis_len = get(p, :max_axis_len, nothing),
+    )
+end
+
+@inline function _pipeline_options_from_filtration(filtration::AbstractFiltration)::PipelineOptions
+    try
+        return _pipeline_options_from_spec(_filtration_spec(filtration))
+    catch err
+        msg = sprint(showerror, err)
+        if err isa ArgumentError && occursin("No FiltrationSpec conversion for", msg)
+            return PipelineOptions()
+        end
+        rethrow()
+    end
+end
+
+@inline function _spec_with_plan_options(spec::FiltrationSpec,
+                                         construction::ConstructionOptions,
+                                         pipeline::PipelineOptions)::FiltrationSpec
+    p = spec.params
+    p2 = (; p...,
+          construction = construction,
+          orientation = pipeline.orientation,
+          axes_policy = pipeline.axes_policy,
+          axis_kind = pipeline.axis_kind,
+          eps = pipeline.eps,
+          poset_kind = pipeline.poset_kind,
+          field = pipeline.field,
+          max_axis_len = pipeline.max_axis_len)
+    return FiltrationSpec(spec.kind, p2)
+end
+
+@inline function _ingestion_route_hint(data)::Symbol
+    if data isa SimplexTreeMulti
+        return :simplex_tree_input
+    elseif data isa PointCloud || data isa GraphData || data isa EmbeddedPlanarGraph2D
+        return :simplex_tree_first
+    end
+    return :graded_complex_only
+end
+
+"""
+    IngestionPlan
+
+Normalized advanced ingestion plan used by `run_ingestion(plan; ...)` and
+`encode(plan; degree=...)`.
+"""
+struct IngestionPlan{D,F,S}
+    data::D
+    filtration::F
+    spec::S
+    construction::ConstructionOptions
+    pipeline::PipelineOptions
+    stage::Symbol
+    field::AbstractCoeffField
+    cache::Union{Nothing,SessionCache}
+    preflight::Union{Nothing,NamedTuple}
+    route_hint::Symbol
+    multicritical::Symbol
+    onecritical_selector::Symbol
+    onecritical_enforce_boundary::Bool
+end
+
+"""
+    plan_ingestion(data, filtration; stage=:auto, field=QQField(), cache=:auto,
+                   construction=nothing, pipeline=nothing,
+                   preflight=false, strict_preflight=false)
+        -> IngestionPlan
+
+Build a normalized ingestion plan for advanced workflows.
+
+Set `preflight=true` to populate `plan.preflight` via `estimate_ingestion(...)`.
+Set `strict_preflight=true` to make preflight warnings throw.
+"""
+function plan_ingestion(data, filtration::AbstractFiltration;
+                        stage::Symbol=:auto,
+                        field::AbstractCoeffField=QQField(),
+                        cache=:auto,
+                        construction::Union{Nothing,ConstructionOptions}=nothing,
+                        pipeline::Union{Nothing,PipelineOptions}=nothing,
+                        preflight::Bool=false,
+                        strict_preflight::Bool=false)
+    base_construction = _construction_from_filtration(filtration)
+    construction_final = construction === nothing ? base_construction : construction
+    pipeline_final = pipeline === nothing ? _pipeline_options_from_filtration(filtration) : pipeline
+    session_cache = _resolve_workflow_session_cache(cache)
+    stage_final = _resolve_ingestion_stage(stage, construction_final)
+    enc_cache = _workflow_encoding_cache(session_cache)
+
+    spec = nothing
+    filtration_final = filtration
+    preflight_report = nothing
+    multicritical = :union
+    onecritical_selector = :lexmin
+    onecritical_enforce_boundary = true
+
+    try
+        spec0 = _filtration_spec(filtration)
+        spec = _spec_with_plan_options(spec0, construction_final, pipeline_final)
+        if _INGESTION_PLAN_NORM_CACHE[] && session_cache !== nothing
+            norm_key = _ingestion_plan_norm_key(spec, stage_final, field)
+            cached = _get_geometry_cached(enc_cache, norm_key)
+            if cached isa NamedTuple &&
+               hasproperty(cached, :filtration) &&
+               hasproperty(cached, :multicritical) &&
+               hasproperty(cached, :onecritical_selector) &&
+               hasproperty(cached, :onecritical_enforce_boundary)
+                filtration_final = getproperty(cached, :filtration)
+                multicritical = getproperty(cached, :multicritical)
+                onecritical_selector = getproperty(cached, :onecritical_selector)
+                onecritical_enforce_boundary = getproperty(cached, :onecritical_enforce_boundary)
+            else
+                filtration_final = to_filtration(spec)
+                multicritical = Symbol(get(spec.params, :multicritical, :union))
+                onecritical_selector = Symbol(get(spec.params, :onecritical_selector, :lexmin))
+                onecritical_enforce_boundary = Bool(get(spec.params, :onecritical_enforce_boundary, true))
+                _set_geometry_cached!(enc_cache, norm_key, (
+                    filtration=filtration_final,
+                    multicritical=multicritical,
+                    onecritical_selector=onecritical_selector,
+                    onecritical_enforce_boundary=onecritical_enforce_boundary,
+                ))
+            end
+        else
+            filtration_final = to_filtration(spec)
+            multicritical = Symbol(get(spec.params, :multicritical, :union))
+            onecritical_selector = Symbol(get(spec.params, :onecritical_selector, :lexmin))
+            onecritical_enforce_boundary = Bool(get(spec.params, :onecritical_enforce_boundary, true))
+        end
+        if preflight || strict_preflight
+            preflight_report = estimate_ingestion(data, spec; strict=strict_preflight)
+        end
+    catch err
+        msg = sprint(showerror, err)
+        (err isa ArgumentError && occursin("No FiltrationSpec conversion for", msg)) || rethrow()
+        if construction !== nothing || pipeline !== nothing
+            throw(ArgumentError("plan_ingestion: construction/pipeline overrides require a filtration that round-trips through FiltrationSpec."))
+        end
+    end
+
+    return IngestionPlan(
+        data,
+        filtration_final,
+        spec,
+        construction_final,
+        pipeline_final,
+        stage_final,
+        field,
+        session_cache,
+        preflight_report,
+        _ingestion_route_hint(data),
+        multicritical,
+        onecritical_selector,
+        onecritical_enforce_boundary,
+    )
+end
+
+function plan_ingestion(data, spec::FiltrationSpec;
+                        stage::Symbol=:auto,
+                        field::AbstractCoeffField=QQField(),
+                        cache=:auto,
+                        construction::Union{Nothing,ConstructionOptions}=nothing,
+                        pipeline::Union{Nothing,PipelineOptions}=nothing,
+                        preflight::Bool=false,
+                        strict_preflight::Bool=false)
+    base_construction = _construction_from_params(spec.params)
+    construction_final = construction === nothing ? base_construction : construction
+    base_pipeline = _pipeline_options_from_spec(spec)
+    pipeline_final = pipeline === nothing ? base_pipeline : pipeline
+    spec_final = _spec_with_plan_options(spec, construction_final, pipeline_final)
+    session_cache = _resolve_workflow_session_cache(cache)
+    stage_final = _resolve_ingestion_stage(stage, construction_final)
+    enc_cache = _workflow_encoding_cache(session_cache)
+
+    filtration = nothing
+    multicritical = :union
+    onecritical_selector = :lexmin
+    onecritical_enforce_boundary = true
+    if _INGESTION_PLAN_NORM_CACHE[] && session_cache !== nothing
+        norm_key = _ingestion_plan_norm_key(spec_final, stage_final, field)
+        cached = _get_geometry_cached(enc_cache, norm_key)
+        if cached isa NamedTuple &&
+           hasproperty(cached, :filtration) &&
+           hasproperty(cached, :multicritical) &&
+           hasproperty(cached, :onecritical_selector) &&
+           hasproperty(cached, :onecritical_enforce_boundary)
+            filtration = getproperty(cached, :filtration)
+            multicritical = getproperty(cached, :multicritical)
+            onecritical_selector = getproperty(cached, :onecritical_selector)
+            onecritical_enforce_boundary = getproperty(cached, :onecritical_enforce_boundary)
+        end
+        if filtration === nothing
+            filtration = to_filtration(spec_final)
+            multicritical = Symbol(get(spec_final.params, :multicritical, :union))
+            onecritical_selector = Symbol(get(spec_final.params, :onecritical_selector, :lexmin))
+            onecritical_enforce_boundary = Bool(get(spec_final.params, :onecritical_enforce_boundary, true))
+            _set_geometry_cached!(enc_cache, norm_key, (
+                filtration=filtration,
+                multicritical=multicritical,
+                onecritical_selector=onecritical_selector,
+                onecritical_enforce_boundary=onecritical_enforce_boundary,
+            ))
+        end
+    else
+        filtration = to_filtration(spec_final)
+        multicritical = Symbol(get(spec_final.params, :multicritical, :union))
+        onecritical_selector = Symbol(get(spec_final.params, :onecritical_selector, :lexmin))
+        onecritical_enforce_boundary = Bool(get(spec_final.params, :onecritical_enforce_boundary, true))
+    end
+
+    preflight_report = if preflight || strict_preflight
+        estimate_ingestion(data, spec_final; strict=strict_preflight)
+    else
+        nothing
+    end
+
+    return IngestionPlan(
+        data,
+        filtration,
+        spec_final,
+        construction_final,
+        pipeline_final,
+        stage_final,
+        field,
+        session_cache,
+        preflight_report,
+        _ingestion_route_hint(data),
+        multicritical,
+        onecritical_selector,
+        onecritical_enforce_boundary,
+    )
+end
+
+@inline function _build_ingestion_lazy_cochain(
+    ST,
+    G,
+    P,
+    axes_final,
+    orientation_final,
+    field,
+    multicritical::Symbol,
+    onecritical_selector::Symbol,
+    onecritical_enforce_boundary::Bool,
+)
+    if ST !== nothing
+        return _lazy_cochain_complex_from_simplex_tree(
+            ST, P, axes_final;
+            orientation=orientation_final,
+            field=field,
+            multicritical=multicritical,
+            onecritical_selector=onecritical_selector,
+            onecritical_enforce_boundary=onecritical_enforce_boundary,
+        )
+    end
+    return _lazy_cochain_complex_from_graded_complex(
+        G, P, axes_final;
+        orientation=orientation_final,
+        field=field,
+        multicritical=multicritical,
+        onecritical_selector=onecritical_selector,
+        onecritical_enforce_boundary=onecritical_enforce_boundary,
+    )
+end
+
+function _run_ingestion_plan(plan::IngestionPlan;
+                             degree::Int=0,
+                             stage::Symbol=:auto)
+    data = plan.data
+    filtration = plan.filtration
+    construction = plan.construction
+    pipeline = plan.pipeline
+    field = plan.field
+    session_cache = plan.cache
+    multicritical = plan.multicritical
+    onecritical_selector = plan.onecritical_selector
+    onecritical_enforce_boundary = plan.onecritical_enforce_boundary
+    stage = _resolve_ingestion_stage(stage, construction)
+
+    axes_override = if plan.spec isa FiltrationSpec
+        get(plan.spec.params, :axes, nothing)
+    else
+        nothing
+    end
+    orientation = pipeline.orientation
+    eps = pipeline.eps
+    axes_policy = pipeline.axes_policy
+    max_axis_len = pipeline.max_axis_len
+    axis_kind = pipeline.axis_kind
+
+    enc_cache = _workflow_encoding_cache(session_cache)
+
+    if stage == :simplex_tree
+        ST, _, _ = _simplex_tree_from_data(data, filtration; cache=enc_cache)
+        return ST
+    end
+
+    ST = nothing
+    axes0 = nothing
+    orientation0 = nothing
+    can_try_tree_compute = stage != :graded_complex &&
+                           (data isa SimplexTreeMulti ||
+                            data isa PointCloud ||
+                            data isa GraphData ||
+                            data isa EmbeddedPlanarGraph2D)
+    if can_try_tree_compute
+        try
+            ST, axes0, orientation0 = _simplex_tree_from_data(data, filtration; cache=enc_cache)
+        catch err
+            msg = sprint(showerror, err)
+            if err isa ArgumentError && (
+                occursin("SimplexTreeMulti output_stage is unavailable", msg) ||
+                occursin("No FiltrationSpec conversion for", msg)
+            )
+                ST = nothing
+            else
+                rethrow()
+            end
+        end
+    end
+
+    G = nothing
+    if ST === nothing
+        G, axes0, orientation0 = _graded_complex_from_data(data, filtration; cache=enc_cache)
+    end
+
+    if stage == :graded_complex
+        if G === nothing
+            G = _graded_complex_from_simplex_tree(ST)
+        end
+        return G
+    end
+    orientation_final = orientation === nothing ? orientation0 : orientation
+    axes_final = if axes_override === nothing
+        if orientation === nothing
+            axes0
+        elseif ST !== nothing
+            _axes_from_simplex_tree(ST; orientation=orientation_final)
+        else
+            _axes_from_complex_grades(G, orientation_final)
+        end
+    else
+        axes_override
+    end
+
+    if eps !== nothing
+        if ST !== nothing
+            ST = _quantize_simplex_tree(ST, eps)
+            axes_final = _axes_from_simplex_tree(ST; orientation=orientation_final)
+        else
+            G = _quantize_grades(G, eps)
+            axes_final = _axes_from_complex_grades(G, orientation_final)
+        end
+    end
+
+    if axes_policy == :as_given
+        axes_override === nothing && error("encode(data, filtration): axes_policy=:as_given requires explicit axes.")
+        axes_final = axes_override
+    elseif axes_policy == :coarsen
+        max_axis_len === nothing && error("encode(data, filtration): axes_policy=:coarsen requires max_axis_len.")
+        axes_final = _coarsen_axes(axes_final, Int(max_axis_len))
+    elseif axes_policy != :encoding
+        error("encode(data, filtration): unknown axes_policy $(axes_policy).")
+    end
+
+    _validate_axes_sorted(axes_final)
+    _validate_axes_kind(axes_final; axis_kind=axis_kind)
+    needs_flange = (stage == :flange)
+    if needs_flange && axis_kind != :zn
+        error("encode(data, filtration; stage=:flange): axis_kind must be :zn (integer axes).")
+    end
+
+    poset_fast_key = _ingestion_poset_fast_key(
+        data,
+        filtration,
+        orientation_final,
+        axes_policy,
+        max_axis_len,
+        axis_kind,
+        eps,
+        multicritical,
+        onecritical_selector,
+        onecritical_enforce_boundary,
+    )
+    P = session_cache === nothing ? nothing : _get_geometry_cached(enc_cache, poset_fast_key)
+    if !(P isa AbstractPoset)
+        P = _poset_from_axes_cached(axes_final, orientation_final; cache=enc_cache)
+        session_cache === nothing || _set_geometry_cached!(enc_cache, poset_fast_key, P)
+    end
+    module_fast_key = session_cache === nothing ? nothing :
+        _ingestion_module_fast_key(poset_fast_key, P, degree, field)
+    cached_module = module_fast_key === nothing ? nothing : _get_geometry_cached(enc_cache, module_fast_key)
+    cached_module_hit = cached_module isa NamedTuple && hasproperty(cached_module, :M)
+
+    pi = GridEncodingMap(P, axes_final; orientation=orientation_final)
+    # Keep ingestion encode() results self-contained: per-result encoding cache.
+    # Session-level cache reuse for ingestion happens at the poset/data level above.
+    pi2 = compile_encoding(P, pi; meta=(encoding_cache=EncodingCache(),))
+
+    lazyC = nothing
+    if stage == :cochain || stage == :cohomology_dims || !(_INGESTION_SKIP_LAZY_ON_MODULE_CACHE_HIT[] && cached_module_hit)
+        lazyC = _build_ingestion_lazy_cochain(
+            ST, G, P, axes_final, orientation_final, field,
+            multicritical, onecritical_selector, onecritical_enforce_boundary,
+        )
+    end
+    if stage == :cochain
+        lazyC === nothing && (lazyC = _build_ingestion_lazy_cochain(
+            ST, G, P, axes_final, orientation_final, field,
+            multicritical, onecritical_selector, onecritical_enforce_boundary,
+        ))
+        return _materialize_cochain(lazyC; check=true)
+    end
+    if stage == :cohomology_dims
+        lazyC === nothing && (lazyC = _build_ingestion_lazy_cochain(
+            ST, G, P, axes_final, orientation_final, field,
+            multicritical, onecritical_selector, onecritical_enforce_boundary,
+        ))
+        dims = _cohomology_dims_from_lazy(lazyC, degree)
+        return CohomologyDimsResult(P, dims, pi2; degree=degree, field=field)
+    end
+    use_lazy_encoding_module = stage == :encoding_result &&
+                               _ENCODING_RESULT_LAZY_MODULE[] &&
+                               !cached_module_hit
+    M = if use_lazy_encoding_module
+        lazyC === nothing && (lazyC = _build_ingestion_lazy_cochain(
+            ST, G, P, axes_final, orientation_final, field,
+            multicritical, onecritical_selector, onecritical_enforce_boundary,
+        ))
+        _lazy_encoded_module_from_lazy(lazyC, degree)
+    elseif cached_module_hit
+        getproperty(cached_module, :M)
+    else
+        M_fast = nothing
+        if _H0_CHAIN_SWEEP_FASTPATH[] &&
+           degree == 0 &&
+           ST isa SimplexTreeMulti{1} &&
+           max_simplex_dim(ST) <= 1 &&
+           multicritical == :union
+            M_fast = _cohomology_module_h0_chain_sweep_from_simplex_tree(
+                ST, P, axes_final;
+                orientation=orientation_final,
+                field=field,
+            )
+        end
+        Mc = if M_fast === nothing
+            lazyC === nothing && (lazyC = _build_ingestion_lazy_cochain(
+                ST, G, P, axes_final, orientation_final, field,
+                multicritical, onecritical_selector, onecritical_enforce_boundary,
+            ))
+            _cohomology_module_from_lazy(lazyC, degree)
+        else
+            M_fast
+        end
+        module_fast_key === nothing || _set_geometry_cached!(enc_cache, module_fast_key, (M=Mc, H=nothing))
+        Mc
+    end
+    H_cached = if cached_module isa NamedTuple && hasproperty(cached_module, :H)
+        getproperty(cached_module, :H)
+    else
+        nothing
+    end
+    if stage == :module
+        return M
+    end
+    if stage == :fringe
+        H = H_cached === nothing ? fringe_presentation(M) : H_cached
+        if H_cached === nothing && module_fast_key !== nothing
+            _set_geometry_cached!(enc_cache, module_fast_key, (M=M, H=H))
+        end
+        return H
+    end
+    if stage == :flange
+        return flange_presentation(M, pi)
+    end
+    res = EncodingResult(P, M, pi2; H=H_cached, presentation=(data=data, filtration=filtration),
+                         opts=EncodingOptions(; backend=:data, field=field), backend=:data, meta=(;))
+    return res
+end
+
+"""
+    run_ingestion(plan; stage=:auto, degree=0) -> Any
+
+Run a prepared ingestion plan at a selected output stage.
+"""
+run_ingestion(plan::IngestionPlan; stage::Symbol=:auto, degree::Int=0) =
+    _run_ingestion_plan(plan; stage=stage, degree=degree)
+
+"""
+    encode(plan::IngestionPlan; degree=0) -> EncodingResult
+
+Canonical "final stage" execution for prepared plans.
+"""
+encode(plan::IngestionPlan; degree::Int=0) =
+    _run_ingestion_plan(plan; degree=degree, stage=:encoding_result)
+
+"""
+    encode(data, filtration; degree=0, stage=:auto, field=QQField(), cache=:auto,
+           construction=nothing, pipeline=nothing,
+           preflight=false, strict_preflight=false) -> Any
+
+Canonical data-ingestion entrypoint.
+
+`stage` controls the returned object:
+- `:simplex_tree`, `:graded_complex`, `:cochain`, `:module`, `:fringe`,
+  `:flange`, `:cohomology_dims`, or `:encoding_result`.
+- `:auto` uses `construction.output_stage` from the typed filtration/spec.
+
+`stage=:cohomology_dims` returns `CohomologyDimsResult(P, dims, pi; degree, field)`
+and skips module-map materialization; this is intended for dim/rank-only
+invariant workflows.
+
+`stage=:encoding_result` avoids eager fringe materialization on the hot path.
+When `_ENCODING_RESULT_LAZY_MODULE[]` is enabled, `enc.M` is a lazy module
+wrapper and the concrete `PModule` is materialized only when needed by
+downstream workflows.
+
+Preflight behavior:
+- `preflight=false` (default) skips `estimate_ingestion(...)` on the hot path.
+- `preflight=true` computes estimates and stores them in `IngestionPlan.preflight`.
+- `strict_preflight=true` runs preflight in strict mode and throws on budget violations.
+"""
+function encode(data, filtration::AbstractFiltration;
+                degree::Int=0,
+                stage::Symbol=:auto,
+                field::AbstractCoeffField=QQField(),
+                cache=:auto,
+                construction::Union{Nothing,ConstructionOptions}=nothing,
+                pipeline::Union{Nothing,PipelineOptions}=nothing,
+                preflight::Bool=false,
+                strict_preflight::Bool=false)
+    plan = plan_ingestion(data, filtration;
+                          stage=stage,
+                          field=field,
+                          cache=cache,
+                          construction=construction,
+                          pipeline=pipeline,
+                          preflight=preflight,
+                          strict_preflight=strict_preflight)
+    return run_ingestion(plan; stage=plan.stage, degree=degree)
+end
+
+function encode(data, spec::FiltrationSpec;
+                degree::Int=0,
+                stage::Symbol=:auto,
+                field::AbstractCoeffField=QQField(),
+                cache=:auto,
+                construction::Union{Nothing,ConstructionOptions}=nothing,
+                pipeline::Union{Nothing,PipelineOptions}=nothing,
+                preflight::Bool=false,
+                strict_preflight::Bool=false)
+    plan = plan_ingestion(data, spec;
+                          stage=stage,
+                          field=field,
+                          cache=cache,
+                          construction=construction,
+                          pipeline=pipeline,
+                          preflight=preflight,
+                          strict_preflight=strict_preflight)
+    return run_ingestion(plan; stage=plan.stage, degree=degree)
+end
+
+end # module DataIngestion

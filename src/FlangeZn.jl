@@ -6,16 +6,6 @@ using ..CoreModules.CoeffFields: zeros
 import ..FieldLinAlg
 import ..CoreModules: change_field
 
-export Face, face,
-       IndFlat, IndInj,
-       Flange,
-       change_field,
-       canonical_matrix,
-       active_flats, active_injectives,
-       degree_matrix, dim_at,
-       bounding_box,
-       cross_validate, flange_to_axis
-
 # ---------------------------------------------------------------------------
 # Face
 # ---------------------------------------------------------------------------
@@ -212,23 +202,29 @@ Return the indices of flats whose underlying sets contain the lattice point `g`.
 
 This is used to form the local (fiberwise) matrix at `g` by selecting columns.
 """
-function active_flats(flats::Vector{IndFlat{N}}, g::Vector{Int}) where {N}
-    active = Int[]
-    for (j, F) in enumerate(flats)
-        if in_flat(F, g)
+@inline function _fill_active_flats!(active::Vector{Int},
+                                     flats::Vector{IndFlat{N}},
+                                     g::Union{Vector{Int},NTuple{N,Int}}) where {N}
+    empty!(active)
+    @inbounds for j in eachindex(flats)
+        if in_flat(flats[j], g)
             push!(active, j)
         end
     end
     return active
 end
 
+function active_flats(flats::Vector{IndFlat{N}}, g::Vector{Int}) where {N}
+    active = Int[]
+    sizehint!(active, length(flats))
+    _fill_active_flats!(active, flats, g)
+    return active
+end
+
 function active_flats(flats::Vector{IndFlat{N}}, g::NTuple{N,Int}) where {N}
     active = Int[]
-    for (j, F) in enumerate(flats)
-        if in_flat(F, g)
-            push!(active, j)
-        end
-    end
+    sizehint!(active, length(flats))
+    _fill_active_flats!(active, flats, g)
     return active
 end
 
@@ -239,23 +235,29 @@ Return the indices of injectives whose underlying sets contain the lattice point
 
 This is used to form the local (fiberwise) matrix at `g` by selecting rows.
 """
-function active_injectives(injectives::Vector{IndInj{N}}, g::Vector{Int}) where {N}
-    active = Int[]
-    for (i, E) in enumerate(injectives)
-        if in_inj(E, g)
+@inline function _fill_active_injectives!(active::Vector{Int},
+                                          injectives::Vector{IndInj{N}},
+                                          g::Union{Vector{Int},NTuple{N,Int}}) where {N}
+    empty!(active)
+    @inbounds for i in eachindex(injectives)
+        if in_inj(injectives[i], g)
             push!(active, i)
         end
     end
     return active
 end
 
+function active_injectives(injectives::Vector{IndInj{N}}, g::Vector{Int}) where {N}
+    active = Int[]
+    sizehint!(active, length(injectives))
+    _fill_active_injectives!(active, injectives, g)
+    return active
+end
+
 function active_injectives(injectives::Vector{IndInj{N}}, g::NTuple{N,Int}) where {N}
     active = Int[]
-    for (i, E) in enumerate(injectives)
-        if in_inj(E, g)
-            push!(active, i)
-        end
-    end
+    sizehint!(active, length(injectives))
+    _fill_active_injectives!(active, injectives, g)
     return active
 end
 
@@ -412,17 +414,9 @@ struct Flange{K, F<:AbstractCoeffField, N}
             )
         end
 
-        # Enforce the monomial condition: if a flat and injective cannot intersect,
-        # the corresponding matrix entry must be zero.
-        @inbounds for i in 1:length(injectives)
-            E = injectives[i]
-            for j in 1:length(flats)
-                Fflat = flats[j]
-                if !intersects(Fflat, E)
-                    Phi[i, j] = zero(K)
-                end
-            end
-        end
+        # Enforce the monomial condition with a compiled SoA geometry view.
+        kernel = _compile_flange_kernel(n, flats, injectives)
+        _enforce_monomial_condition!(Phi, kernel)
 
         return new{K,F,N}(field, n, flats, injectives, Phi)
     end
@@ -461,11 +455,526 @@ function change_field(FG::Flange{K,F,N}, field::AbstractCoeffField) where {K,F,N
 end
 
 
+# ---------------------------------------------------------------------------
+# Compiled SoA kernel + dim cache
+# ---------------------------------------------------------------------------
+
+struct FlangeCompiledKernel{N}
+    n::Int
+    ncoord_words::Int
+    nflat::Int
+    ninj::Int
+    flat_b::Matrix{Int}
+    inj_b::Matrix{Int}
+    flat_free_words::Matrix{UInt64}
+    inj_free_words::Matrix{UInt64}
+    coord_word::Vector{Int}
+    coord_mask::Vector{UInt64}
+end
+
+struct _FlangeDimCacheEntry
+    row_words::Vector{UInt64}
+    col_words::Vector{UInt64}
+    value::Int
+end
+
+mutable struct FlangeDimCache{K,F<:AbstractCoeffField,N}
+    field::F
+    flats_ref::Vector{IndFlat{N}}
+    injectives_ref::Vector{IndInj{N}}
+    phi_ref::Matrix{K}
+    kernel::FlangeCompiledKernel{N}
+    rows::Vector{Int}
+    cols::Vector{Int}
+    row_words::Vector{UInt64}
+    col_words::Vector{UInt64}
+    table::Dict{UInt64, Vector{_FlangeDimCacheEntry}}
+    max_entries::Int
+    nentries::Int
+    hits::Int
+    misses::Int
+end
+
+@inline _bit_word(i::Int) = ((i - 1) >>> 6) + 1
+@inline _bit_mask(i::Int) = UInt64(1) << ((i - 1) & 63)
+
+function _compile_flange_kernel(n::Int,
+                                flats::Vector{IndFlat{N}},
+                                injectives::Vector{IndInj{N}}) where {N}
+    n == N || error("_compile_flange_kernel: n=$n does not match generator dimension $N")
+    nflat = length(flats)
+    ninj = length(injectives)
+    ncoord_words = cld(N, 64)
+
+    flat_b = Matrix{Int}(undef, N, nflat)
+    inj_b = Matrix{Int}(undef, N, ninj)
+    flat_free_words = Matrix{UInt64}(undef, ncoord_words, nflat)
+    inj_free_words = Matrix{UInt64}(undef, ncoord_words, ninj)
+    fill!(flat_free_words, zero(UInt64))
+    fill!(inj_free_words, zero(UInt64))
+
+    coord_word = Vector{Int}(undef, N)
+    coord_mask = Vector{UInt64}(undef, N)
+    @inbounds for d in 1:N
+        coord_word[d] = _bit_word(d)
+        coord_mask[d] = _bit_mask(d)
+    end
+
+    @inbounds for j in 1:nflat
+        Fj = flats[j]
+        for d in 1:N
+            flat_b[d, j] = Fj.b[d]
+            if Fj.tau.coords[d]
+                flat_free_words[coord_word[d], j] |= coord_mask[d]
+            end
+        end
+    end
+
+    @inbounds for i in 1:ninj
+        Ei = injectives[i]
+        for d in 1:N
+            inj_b[d, i] = Ei.b[d]
+            if Ei.tau.coords[d]
+                inj_free_words[coord_word[d], i] |= coord_mask[d]
+            end
+        end
+    end
+
+    return FlangeCompiledKernel{N}(n, ncoord_words, nflat, ninj,
+                                   flat_b, inj_b, flat_free_words, inj_free_words,
+                                   coord_word, coord_mask)
+end
+
+_compile_flange_kernel(FG::Flange{K,F,N}) where {K,F,N} =
+    _compile_flange_kernel(FG.n, FG.flats, FG.injectives)
+
+@inline function _kernel_generators_intersect(k::FlangeCompiledKernel{N},
+                                              flat_idx::Int,
+                                              inj_idx::Int)::Bool where {N}
+    @inbounds for d in 1:N
+        wd = k.coord_word[d]
+        bm = k.coord_mask[d]
+        flat_free = (k.flat_free_words[wd, flat_idx] & bm) != 0
+        inj_free = (k.inj_free_words[wd, inj_idx] & bm) != 0
+        if !flat_free && !inj_free && (k.flat_b[d, flat_idx] > k.inj_b[d, inj_idx])
+            return false
+        end
+    end
+    return true
+end
+
+function _enforce_monomial_condition!(Phi::Matrix{K},
+                                      k::FlangeCompiledKernel) where {K}
+    @inbounds for i in 1:k.ninj
+        for j in 1:k.nflat
+            _kernel_generators_intersect(k, j, i) || (Phi[i, j] = zero(K))
+        end
+    end
+    return Phi
+end
+
+function FlangeDimCache(FG::Flange{K,F,N}; max_entries::Int=0) where {K,F<:AbstractCoeffField,N}
+    max_entries >= 0 || error("FlangeDimCache: max_entries must be >= 0")
+    kernel = _compile_flange_kernel(FG)
+    rows = Int[]
+    cols = Int[]
+    sizehint!(rows, kernel.ninj)
+    sizehint!(cols, kernel.nflat)
+    row_words = Vector{UInt64}(undef, cld(kernel.ninj, 64))
+    col_words = Vector{UInt64}(undef, cld(kernel.nflat, 64))
+    fill!(row_words, zero(UInt64))
+    fill!(col_words, zero(UInt64))
+    return FlangeDimCache{K,F,N}(FG.field, FG.flats, FG.injectives, FG.phi, kernel,
+                                 rows, cols, row_words, col_words,
+                                 Dict{UInt64, Vector{_FlangeDimCacheEntry}}(),
+                                 max_entries, 0, 0, 0)
+end
+
+function Base.empty!(cache::FlangeDimCache)
+    empty!(cache.table)
+    cache.nentries = 0
+    cache.hits = 0
+    cache.misses = 0
+    return cache
+end
+
+@inline function _check_cache_compat(cache::FlangeDimCache{K,F,N},
+                                     FG::Flange{K,F,N}) where {K,F,N}
+    (cache.flats_ref === FG.flats &&
+     cache.injectives_ref === FG.injectives &&
+     cache.phi_ref === FG.phi) || error("FlangeDimCache: cache is not compatible with this Flange")
+    return nothing
+end
+
+@inline function _contains_flat_kernel(k::FlangeCompiledKernel{N},
+                                       j::Int,
+                                       g::NTuple{N,<:Integer})::Bool where {N}
+    @inbounds for d in 1:N
+        wd = k.coord_word[d]
+        bm = k.coord_mask[d]
+        ((k.flat_free_words[wd, j] & bm) != 0) && continue
+        g[d] >= k.flat_b[d, j] || return false
+    end
+    return true
+end
+
+@inline function _contains_inj_kernel(k::FlangeCompiledKernel{N},
+                                      i::Int,
+                                      g::NTuple{N,<:Integer})::Bool where {N}
+    @inbounds for d in 1:N
+        wd = k.coord_word[d]
+        bm = k.coord_mask[d]
+        ((k.inj_free_words[wd, i] & bm) != 0) && continue
+        g[d] <= k.inj_b[d, i] || return false
+    end
+    return true
+end
+
+@inline function _contains_flat_kernel(k::FlangeCompiledKernel{N},
+                                       j::Int,
+                                       g::AbstractVector{<:Integer})::Bool where {N}
+    length(g) == N || error("_contains_flat_kernel: point dimension does not match face dimension")
+    @inbounds for d in 1:N
+        wd = k.coord_word[d]
+        bm = k.coord_mask[d]
+        ((k.flat_free_words[wd, j] & bm) != 0) && continue
+        g[d] >= k.flat_b[d, j] || return false
+    end
+    return true
+end
+
+@inline function _contains_inj_kernel(k::FlangeCompiledKernel{N},
+                                      i::Int,
+                                      g::AbstractVector{<:Integer})::Bool where {N}
+    length(g) == N || error("_contains_inj_kernel: point dimension does not match face dimension")
+    @inbounds for d in 1:N
+        wd = k.coord_word[d]
+        bm = k.coord_mask[d]
+        ((k.inj_free_words[wd, i] & bm) != 0) && continue
+        g[d] <= k.inj_b[d, i] || return false
+    end
+    return true
+end
+
+@inline function _mark_active!(words::Vector{UInt64}, idx::Int)
+    wd = _bit_word(idx)
+    bm = _bit_mask(idx)
+    @inbounds words[wd] |= bm
+    return nothing
+end
+
+@inline function _fill_active_injectives_kernel!(active::Vector{Int},
+                                                 words::Vector{UInt64},
+                                                 k::FlangeCompiledKernel{N},
+                                                 g::NTuple{N,<:Integer}) where {N}
+    empty!(active)
+    fill!(words, zero(UInt64))
+    @inbounds for i in 1:k.ninj
+        if _contains_inj_kernel(k, i, g)
+            push!(active, i)
+            _mark_active!(words, i)
+        end
+    end
+    return active
+end
+
+@inline function _fill_active_flats_kernel!(active::Vector{Int},
+                                            words::Vector{UInt64},
+                                            k::FlangeCompiledKernel{N},
+                                            g::NTuple{N,<:Integer}) where {N}
+    empty!(active)
+    fill!(words, zero(UInt64))
+    @inbounds for j in 1:k.nflat
+        if _contains_flat_kernel(k, j, g)
+            push!(active, j)
+            _mark_active!(words, j)
+        end
+    end
+    return active
+end
+
+@inline function _fill_active_injectives_kernel!(active::Vector{Int},
+                                                 words::Vector{UInt64},
+                                                 k::FlangeCompiledKernel{N},
+                                                 g::AbstractVector{<:Integer}) where {N}
+    empty!(active)
+    fill!(words, zero(UInt64))
+    @inbounds for i in 1:k.ninj
+        if _contains_inj_kernel(k, i, g)
+            push!(active, i)
+            _mark_active!(words, i)
+        end
+    end
+    return active
+end
+
+@inline function _fill_active_flats_kernel!(active::Vector{Int},
+                                            words::Vector{UInt64},
+                                            k::FlangeCompiledKernel{N},
+                                            g::AbstractVector{<:Integer}) where {N}
+    empty!(active)
+    fill!(words, zero(UInt64))
+    @inbounds for j in 1:k.nflat
+        if _contains_flat_kernel(k, j, g)
+            push!(active, j)
+            _mark_active!(words, j)
+        end
+    end
+    return active
+end
+
+@inline function _same_words(a::Vector{UInt64}, b::Vector{UInt64})::Bool
+    length(a) == length(b) || return false
+    @inbounds for i in eachindex(a, b)
+        a[i] == b[i] || return false
+    end
+    return true
+end
+
+@inline function _active_words_hash(row_words::Vector{UInt64},
+                                    col_words::Vector{UInt64})::UInt64
+    h = UInt64(0x243f6a8885a308d3)
+    @inbounds for w in row_words
+        h = hash(w, h)
+    end
+    h = hash(UInt64(0x9e3779b97f4a7c15), h)
+    @inbounds for w in col_words
+        h = hash(w, h)
+    end
+    return h
+end
+
+@inline function _lookup_rank(cache::FlangeDimCache,
+                              key::UInt64,
+                              row_words::Vector{UInt64},
+                              col_words::Vector{UInt64})::Int
+    bucket = get(cache.table, key, nothing)
+    bucket === nothing && return -1
+    @inbounds for ent in bucket
+        if _same_words(ent.row_words, row_words) && _same_words(ent.col_words, col_words)
+            cache.hits += 1
+            return ent.value
+        end
+    end
+    return -1
+end
+
+@inline function _store_rank!(cache::FlangeDimCache,
+                              key::UInt64,
+                              row_words::Vector{UInt64},
+                              col_words::Vector{UInt64},
+                              value::Int)::Int
+    cache.max_entries == 0 || cache.nentries < cache.max_entries || return value
+    bucket = get!(cache.table, key, _FlangeDimCacheEntry[])
+    push!(bucket, _FlangeDimCacheEntry(copy(row_words), copy(col_words), value))
+    cache.nentries += 1
+    return value
+end
+
+@inline function _dim_at_cached!(cache::FlangeDimCache{K,F,N},
+                                 FG::Flange{K,F,N},
+                                 g::Union{AbstractVector{<:Integer},NTuple{N,<:Integer}})::Int where {K,F,N}
+    _check_cache_compat(cache, FG)
+    k = cache.kernel
+    _fill_active_injectives_kernel!(cache.rows, cache.row_words, k, g)
+    _fill_active_flats_kernel!(cache.cols, cache.col_words, k, g)
+
+    nr = length(cache.rows)
+    nc = length(cache.cols)
+    if nr == 0 || nc == 0
+        return 0
+    end
+
+    key = _active_words_hash(cache.row_words, cache.col_words)
+    cached = _lookup_rank(cache, key, cache.row_words, cache.col_words)
+    cached >= 0 && return cached
+
+    cache.misses += 1
+    rk = FieldLinAlg.rank_restricted(FG.field, FG.phi, cache.rows, cache.cols)
+    return _store_rank!(cache, key, cache.row_words, cache.col_words, rk)
+end
+
+@inline function _set_active_bit!(words::Vector{UInt64}, idx::Int)::Int
+    wd = _bit_word(idx)
+    bm = _bit_mask(idx)
+    @inbounds old = words[wd]
+    @inbounds words[wd] = old | bm
+    return (old & bm) == 0 ? 1 : 0
+end
+
+@inline function _clear_active_bit!(words::Vector{UInt64}, idx::Int)::Int
+    wd = _bit_word(idx)
+    bm = _bit_mask(idx)
+    @inbounds old = words[wd]
+    @inbounds words[wd] = old & ~bm
+    return (old & bm) == 0 ? 0 : 1
+end
+
+@inline function _any_active(words::Vector{UInt64})::Bool
+    @inbounds for w in words
+        w == 0 || return true
+    end
+    return false
+end
+
+@inline function _decode_active_words!(out::Vector{Int},
+                                       words::Vector{UInt64},
+                                       nmax::Int)
+    empty!(out)
+    @inbounds for wd in eachindex(words)
+        w = words[wd]
+        while w != 0
+            tz = trailing_zeros(w)
+            idx = ((wd - 1) << 6) + tz + 1
+            idx <= nmax && push!(out, idx)
+            w &= w - 1
+        end
+    end
+    return out
+end
+
+@inline function _dim_from_active_words!(cache::FlangeDimCache{K,F,N},
+                                         FG::Flange{K,F,N},
+                                         row_words::Vector{UInt64},
+                                         col_words::Vector{UInt64},
+                                         row_count::Int,
+                                         col_count::Int)::Int where {K,F,N}
+    if row_count == 0 || col_count == 0 || !_any_active(row_words) || !_any_active(col_words)
+        return 0
+    end
+    key = _active_words_hash(row_words, col_words)
+    cached = _lookup_rank(cache, key, row_words, col_words)
+    cached >= 0 && return cached
+
+    cache.misses += 1
+    _decode_active_words!(cache.rows, row_words, cache.kernel.ninj)
+    _decode_active_words!(cache.cols, col_words, cache.kernel.nflat)
+    rk = FieldLinAlg.rank_restricted(FG.field, FG.phi, cache.rows, cache.cols)
+    return _store_rank!(cache, key, row_words, col_words, rk)
+end
+
+@inline function _line_pass_flat_other(k::FlangeCompiledKernel{N},
+                                       j::Int,
+                                       rest::NTuple{M,Int})::Bool where {N,M}
+    @inbounds for d in 2:N
+        wd = k.coord_word[d]
+        bm = k.coord_mask[d]
+        if ((k.flat_free_words[wd, j] & bm) == 0) && (rest[d - 1] < k.flat_b[d, j])
+            return false
+        end
+    end
+    return true
+end
+
+@inline function _line_pass_inj_other(k::FlangeCompiledKernel{N},
+                                      i::Int,
+                                      rest::NTuple{M,Int})::Bool where {N,M}
+    @inbounds for d in 2:N
+        wd = k.coord_word[d]
+        bm = k.coord_mask[d]
+        if ((k.inj_free_words[wd, i] & bm) == 0) && (rest[d - 1] > k.inj_b[d, i])
+            return false
+        end
+    end
+    return true
+end
+
+struct _BoxSweepScratch
+    row_words::Vector{UInt64}
+    col_words::Vector{UInt64}
+    col_add_pos::Vector{Int}
+    col_add_idx::Vector{Int}
+    row_rem_pos::Vector{Int}
+    row_rem_idx::Vector{Int}
+    col_perm::Vector{Int}
+    row_perm::Vector{Int}
+    line_uids::Vector{Int}
+end
+
+function _box_sweep_scratch(k::FlangeCompiledKernel, xlen::Int)
+    row_words = Vector{UInt64}(undef, cld(k.ninj, 64))
+    col_words = Vector{UInt64}(undef, cld(k.nflat, 64))
+    col_add_pos = Int[]; col_add_idx = Int[]
+    row_rem_pos = Int[]; row_rem_idx = Int[]
+    col_perm = Int[]; row_perm = Int[]
+    line_uids = Vector{Int}(undef, xlen)
+    sizehint!(col_add_pos, k.nflat); sizehint!(col_add_idx, k.nflat)
+    sizehint!(row_rem_pos, k.ninj); sizehint!(row_rem_idx, k.ninj)
+    sizehint!(col_perm, k.nflat); sizehint!(row_perm, k.ninj)
+    return _BoxSweepScratch(row_words, col_words,
+                            col_add_pos, col_add_idx,
+                            row_rem_pos, row_rem_idx,
+                            col_perm, row_perm,
+                            line_uids)
+end
+
+@inline function _box_strides(axes::NTuple{N,UnitRange{Int}}) where {N}
+    s = Vector{Int}(undef, N)
+    s[1] = 1
+    @inbounds for d in 2:N
+        s[d] = s[d - 1] * length(axes[d - 1])
+    end
+    return s
+end
+
+@inline function _box_linear_index(p::NTuple{N,<:Integer},
+                                   axes::NTuple{N,UnitRange{Int}},
+                                   strides::Vector{Int}) where {N}
+    idx = 1
+    @inbounds for d in 1:N
+        idx += (Int(p[d]) - first(axes[d])) * strides[d]
+    end
+    return idx
+end
+
+function _build_uid_lookup(unique_index::Dict{T,Int},
+                           axes::NTuple{N,UnitRange{Int}},
+                           strides::Vector{Int}) where {N,T<:NTuple{N,<:Integer}}
+    total = prod(length(r) for r in axes)
+    uid_lookup = Base.zeros(Int, total)
+    for (p, uid) in unique_index
+        li = _box_linear_index(p, axes, strides)
+        @inbounds uid_lookup[li] = uid
+    end
+    return uid_lookup
+end
+
+@inline function _box_base_index(rest::NTuple{M,Int},
+                                 axes::NTuple{N,UnitRange{Int}},
+                                 strides::Vector{Int}) where {M,N}
+    base = 1
+    @inbounds for d in 2:N
+        base += (rest[d - 1] - first(axes[d])) * strides[d]
+    end
+    return base
+end
+
 # Convenience wrappers accepting a flange directly.
 active_flats(FG::Flange, g::Vector{Int}) = active_flats(FG.flats, g)
 active_flats(FG::Flange, g::NTuple{N,Int}) where {N} = active_flats(FG.flats, g)
 active_injectives(FG::Flange, g::Vector{Int}) = active_injectives(FG.injectives, g)
 active_injectives(FG::Flange, g::NTuple{N,Int}) where {N} = active_injectives(FG.injectives, g)
+
+const _DEGREE_SCRATCH_LOCK = ReentrantLock()
+const _DEGREE_ROWS_SCRATCH = Vector{Vector{Int}}()
+const _DEGREE_COLS_SCRATCH = Vector{Vector{Int}}()
+
+@inline function _thread_degree_scratch(nrows_hint::Int, ncols_hint::Int)
+    tid = Base.Threads.threadid()
+    if tid > length(_DEGREE_ROWS_SCRATCH)
+        lock(_DEGREE_SCRATCH_LOCK) do
+            while length(_DEGREE_ROWS_SCRATCH) < tid
+                push!(_DEGREE_ROWS_SCRATCH, Int[])
+                push!(_DEGREE_COLS_SCRATCH, Int[])
+            end
+        end
+    end
+    rows = @inbounds _DEGREE_ROWS_SCRATCH[tid]
+    cols = @inbounds _DEGREE_COLS_SCRATCH[tid]
+    sizehint!(rows, nrows_hint)
+    sizehint!(cols, ncols_hint)
+    return rows, cols
+end
 
 """
     degree_matrix(FG, g)
@@ -476,52 +985,510 @@ Return `(Phi_g, rows, cols)` where:
 * `cols` are the active flat indices at `g`
 * `Phi_g = FG.phi[rows, cols]`
 """
+function degree_matrix!(rows::Vector{Int}, cols::Vector{Int},
+                        FG::Flange{K}, g::Vector{Int}) where {K}
+    _fill_active_injectives!(rows, FG.injectives, g)
+    _fill_active_flats!(cols, FG.flats, g)
+    return (view(FG.phi, rows, cols), rows, cols)
+end
+
+function degree_matrix!(rows::Vector{Int}, cols::Vector{Int},
+                        FG::Flange{K}, g::NTuple{N,Int}) where {K,N}
+    _fill_active_injectives!(rows, FG.injectives, g)
+    _fill_active_flats!(cols, FG.flats, g)
+    return (view(FG.phi, rows, cols), rows, cols)
+end
+
+"""
+    degree_matrix!(rows, cols, FG, g)
+
+Fill caller-owned `rows` and `cols` buffers with active injective/flat indices and
+return `(view(FG.phi, rows, cols), rows, cols)`.
+
+This is the non-allocating variant for repeated-query workloads.
+"""
+degree_matrix!(rows::Vector{Int}, cols::Vector{Int},
+               FG::Flange, g) = throw(MethodError(degree_matrix!, (rows, cols, FG, g)))
+
+"""
+    degree_matrix!(FG, g)
+
+Thread-local scratch variant of `degree_matrix!` (non-allocating, ephemeral
+`rows`/`cols` buffers). Use this in tight loops when results are consumed
+immediately.
+"""
+function degree_matrix!(FG::Flange{K}, g::Vector{Int}) where {K}
+    rows, cols = _thread_degree_scratch(length(FG.injectives), length(FG.flats))
+    return degree_matrix!(rows, cols, FG, g)
+end
+
+function degree_matrix!(FG::Flange{K}, g::NTuple{N,Int}) where {K,N}
+    rows, cols = _thread_degree_scratch(length(FG.injectives), length(FG.flats))
+    return degree_matrix!(rows, cols, FG, g)
+end
+
 function degree_matrix(FG::Flange{K}, g::Vector{Int}) where {K}
-    rows = active_injectives(FG, g)
-    cols = active_flats(FG, g)
-
-    # Convention: if either side is empty at g, treat the local matrix as empty.
-    if isempty(rows) || isempty(cols)
-        return (zeros(FG.field, 0, 0), Int[], Int[])
-    end
-
-    return (FG.phi[rows, cols], rows, cols)
+    rows = Vector{Int}()
+    cols = Vector{Int}()
+    sizehint!(rows, length(FG.injectives))
+    sizehint!(cols, length(FG.flats))
+    return degree_matrix!(rows, cols, FG, g)
 end
 
 function degree_matrix(FG::Flange{K}, g::NTuple{N,Int}) where {K,N}
-    rows = active_injectives(FG, g)
-    cols = active_flats(FG, g)
+    rows = Vector{Int}()
+    cols = Vector{Int}()
+    sizehint!(rows, length(FG.injectives))
+    sizehint!(cols, length(FG.flats))
+    return degree_matrix!(rows, cols, FG, g)
+end
 
-    if isempty(rows) || isempty(cols)
-        return (zeros(FG.field, 0, 0), Int[], Int[])
+@inline function _dim_at_auto(FG::Flange, g::Union{Vector{Int},NTuple})
+    _, rows, cols = degree_matrix!(FG, g)
+    nr = length(rows)
+    nc = length(cols)
+    if nr == 0 || nc == 0
+        return 0
     end
 
-    return (FG.phi[rows, cols], rows, cols)
+    # QQ has a small-workload crossover where explicit tiny submatrices are faster.
+    if FG.field isa QQField &&
+       nr * nc <= FieldLinAlg.zn_qq_dimat_submatrix_work_threshold()
+        return FieldLinAlg.rank(FG.field, FG.phi[rows, cols])
+    end
+
+    return FieldLinAlg.rank_restricted(FG.field, FG.phi, rows, cols)
+end
+
+@inline function _dim_at_rankfun!(FG::Flange,
+                                  g::Union{Vector{Int},NTuple},
+                                  rankfun::Function,
+                                  rows::Vector{Int},
+                                  cols::Vector{Int})
+    A, rows_now, cols_now = degree_matrix!(rows, cols, FG, g)
+    if isempty(rows_now) || isempty(cols_now)
+        return 0
+    end
+    return rankfun(A)
 end
 
 """
-    dim_at(FG, g; rankfun=rank)
+    dim_at(FG, g; rankfun=nothing, cache=nothing)
 
 Fiberwise dimension of a flange at `g`.
 
-By convention this is the rank of the local submatrix `Phi_g`.
+The default path computes rank via a restricted linear algebra kernel to avoid
+materializing the local submatrix `FG.phi[rows, cols]`.
+
+If `cache::FlangeDimCache` is supplied (and `rankfun === nothing`), we use a
+packed active-set cache keyed by row/column activity masks.
 """
-function dim_at(FG::Flange{K}, g::Vector{Int};
-                rankfun = A -> FieldLinAlg.rank(FG.field, A)) where {K}
-    Phi_g, _, _ = degree_matrix(FG, g)
-    if isempty(Phi_g)
-        return 0
+function dim_at(FG::Flange{K}, g::Vector{Int}; rankfun=nothing, cache::Union{Nothing,FlangeDimCache}=nothing) where {K}
+    if rankfun === nothing
+        return cache === nothing ? _dim_at_auto(FG, g) : _dim_at_cached!(cache, FG, g)
     end
+    if cache !== nothing
+        rows = cache.rows
+        cols = cache.cols
+        return _dim_at_rankfun!(FG, g, rankfun, rows, cols)
+    end
+    Phi_g, _, _ = degree_matrix(FG, g)
+    isempty(Phi_g) && return 0
     return rankfun(Phi_g)
 end
 
-function dim_at(FG::Flange{K}, g::NTuple{N,Int};
-                rankfun = A -> FieldLinAlg.rank(FG.field, A)) where {K,N}
-    Phi_g, _, _ = degree_matrix(FG, g)
-    if isempty(Phi_g)
-        return 0
+function dim_at(FG::Flange{K}, g::NTuple{N,Int}; rankfun=nothing, cache::Union{Nothing,FlangeDimCache}=nothing) where {K,N}
+    if rankfun === nothing
+        return cache === nothing ? _dim_at_auto(FG, g) : _dim_at_cached!(cache, FG, g)
     end
+    if cache !== nothing
+        rows = cache.rows
+        cols = cache.cols
+        return _dim_at_rankfun!(FG, g, rankfun, rows, cols)
+    end
+    Phi_g, _, _ = degree_matrix(FG, g)
+    isempty(Phi_g) && return 0
     return rankfun(Phi_g)
+end
+
+@inline _lex_sortable_points(points::AbstractVector) = eltype(points) <: NTuple
+@inline _tuple_int_points(::AbstractVector{T}) where {N,T<:NTuple{N,<:Integer}} = true
+@inline _tuple_int_points(::AbstractVector) = false
+
+@inline _point_key(p::NTuple) = p
+@inline _point_key(p::AbstractVector{<:Integer}) = Tuple(p)
+@inline _point_key(p) = p
+
+function _dedup_points(points::AbstractVector{T}) where {N,T<:NTuple{N,<:Integer}}
+    uniq = Vector{T}()
+    sizehint!(uniq, length(points))
+    inv = Vector{Int}(undef, length(points))
+    idx = Dict{T,Int}()
+    @inbounds for i in eachindex(points)
+        p = points[i]
+        j = get(idx, p, 0)
+        if j == 0
+            j = length(uniq) + 1
+            idx[p] = j
+            push!(uniq, p)
+        end
+        inv[i] = j
+    end
+    return uniq, inv, idx
+end
+
+function _dedup_points(points::AbstractVector)
+    uniq = Any[]
+    sizehint!(uniq, length(points))
+    inv = Vector{Int}(undef, length(points))
+    idx = Dict{Any,Int}()
+    @inbounds for i in eachindex(points)
+        p = points[i]
+        k = _point_key(p)
+        j = get(idx, k, 0)
+        if j == 0
+            j = length(uniq) + 1
+            idx[k] = j
+            push!(uniq, p)
+        end
+        inv[i] = j
+    end
+    return uniq, inv, idx
+end
+
+@inline function _full_box_axes(points::AbstractVector{T},
+                                unique_index::Dict{T,Int}) where {N,T<:NTuple{N,<:Integer}}
+    isempty(points) && return nothing
+    p0 = points[1]
+    mins = collect(p0)
+    maxs = collect(p0)
+    @inbounds for i in 2:length(points)
+        p = points[i]
+        for d in 1:N
+            pd = Int(p[d])
+            pd < mins[d] && (mins[d] = pd)
+            pd > maxs[d] && (maxs[d] = pd)
+        end
+    end
+    expected = 1
+    @inbounds for d in 1:N
+        len = maxs[d] - mins[d] + 1
+        len > 0 || return nothing
+        expected = Base.checked_mul(expected, len)
+        expected <= length(points) || return nothing
+    end
+    expected == length(points) || return nothing
+
+    axes = ntuple(d -> mins[d]:maxs[d], N)
+    for tup in Iterators.product(axes...)
+        p = ntuple(d -> tup[d], N)
+        haskey(unique_index, p) || return nothing
+    end
+    return axes
+end
+
+@inline function _evaluate_unique_serial!(vals::AbstractVector{Int},
+                                          FG::Flange,
+                                          unique_points::AbstractVector,
+                                          order,
+                                          cache::Union{Nothing,FlangeDimCache})
+    cache0 = cache === nothing ? FlangeDimCache(FG) : cache
+    @inbounds for oi in order
+        vals[oi] = _dim_at_cached!(cache0, FG, unique_points[oi])
+    end
+    return vals
+end
+
+function _evaluate_unique_threaded!(vals::AbstractVector{Int},
+                                    FG::Flange,
+                                    unique_points::AbstractVector,
+                                    order)
+    nt = Threads.maxthreadid()
+    caches = Vector{Any}(undef, nt)
+    fill!(caches, nothing)
+    Threads.@threads for k in eachindex(order)
+        oi = order[k]
+        tid = Threads.threadid()
+        c = caches[tid]
+        if c === nothing
+            c = FlangeDimCache(FG)
+            caches[tid] = c
+        end
+        @inbounds vals[oi] = _dim_at_cached!(c, FG, unique_points[oi])
+    end
+    return vals
+end
+
+function _evaluate_unique_points!(vals::AbstractVector{Int},
+                                  FG::Flange,
+                                  unique_points::AbstractVector,
+                                  order;
+                                  cache::Union{Nothing,FlangeDimCache}=nothing,
+                                  threaded::Bool=false)
+    if threaded && Threads.nthreads() > 1 && length(order) >= 1024
+        return _evaluate_unique_threaded!(vals, FG, unique_points, order)
+    end
+    return _evaluate_unique_serial!(vals, FG, unique_points, order, cache)
+end
+
+@inline function _line_build_point(::Val{N}, x::Int, rest::NTuple{M,Int}) where {N,M}
+    return ntuple(d -> d == 1 ? x : rest[d - 1], N)
+end
+
+function _eval_unique_box_line_sweep!(vals::Vector{Int},
+                                      FG::Flange{K,F,N},
+                                      cache::FlangeDimCache{K,F,N},
+                                      scratch::_BoxSweepScratch,
+                                      uid_lookup::Vector{Int},
+                                      line_base::Int,
+                                      axes::NTuple{N,UnitRange{Int}},
+                                      rest::NTuple{M,Int}) where {K,F,N,M}
+    k = cache.kernel
+    xaxis = axes[1]
+    xmin = first(xaxis)
+    xmax = last(xaxis)
+    xlen = length(xaxis)
+
+    row_words = scratch.row_words
+    col_words = scratch.col_words
+    fill!(row_words, zero(UInt64))
+    fill!(col_words, zero(UInt64))
+    row_count = 0
+    col_count = 0
+
+    col_add_pos = scratch.col_add_pos
+    col_add_idx = scratch.col_add_idx
+    row_rem_pos = scratch.row_rem_pos
+    row_rem_idx = scratch.row_rem_idx
+    empty!(col_add_pos); empty!(col_add_idx)
+    empty!(row_rem_pos); empty!(row_rem_idx)
+
+    @inbounds for j in 1:k.nflat
+        _line_pass_flat_other(k, j, rest) || continue
+        free1 = (k.flat_free_words[k.coord_word[1], j] & k.coord_mask[1]) != 0
+        bj = k.flat_b[1, j]
+        if free1 || bj <= xmin
+            col_count += _set_active_bit!(col_words, j)
+        elseif bj <= xmax
+            push!(col_add_pos, bj - xmin + 1)
+            push!(col_add_idx, j)
+        end
+    end
+
+    @inbounds for i in 1:k.ninj
+        _line_pass_inj_other(k, i, rest) || continue
+        free1 = (k.inj_free_words[k.coord_word[1], i] & k.coord_mask[1]) != 0
+        bi = k.inj_b[1, i]
+        if free1 || bi >= xmax
+            row_count += _set_active_bit!(row_words, i)
+        elseif bi >= xmin
+            row_count += _set_active_bit!(row_words, i)
+            rem = bi - xmin + 2
+            if rem <= xlen
+                push!(row_rem_pos, rem)
+                push!(row_rem_idx, i)
+            end
+        end
+    end
+
+    col_perm = scratch.col_perm
+    row_perm = scratch.row_perm
+    resize!(col_perm, length(col_add_pos))
+    @inbounds for i in eachindex(col_perm)
+        col_perm[i] = i
+    end
+    sort!(col_perm; by=i -> @inbounds col_add_pos[i])
+    resize!(row_perm, length(row_rem_pos))
+    @inbounds for i in eachindex(row_perm)
+        row_perm[i] = i
+    end
+    sort!(row_perm; by=i -> @inbounds row_rem_pos[i])
+    pcol = 1
+    prow = 1
+
+    line_uids = scratch.line_uids
+    @inbounds for xi in 1:xlen
+        line_uids[xi] = uid_lookup[line_base + xi - 1]
+    end
+
+    xi = 1
+    @inbounds while xi <= xlen
+        while pcol <= length(col_perm) && col_add_pos[col_perm[pcol]] == xi
+            col_count += _set_active_bit!(col_words, col_add_idx[col_perm[pcol]])
+            pcol += 1
+        end
+        while prow <= length(row_perm) && row_rem_pos[row_perm[prow]] == xi
+            row_count -= _clear_active_bit!(row_words, row_rem_idx[row_perm[prow]])
+            prow += 1
+        end
+
+        next_col = pcol <= length(col_perm) ? col_add_pos[col_perm[pcol]] : (xlen + 1)
+        next_row = prow <= length(row_perm) ? row_rem_pos[row_perm[prow]] : (xlen + 1)
+        xstop = min(next_col, next_row) - 1
+        xstop < xi && (xstop = xi)
+
+        v = _dim_from_active_words!(cache, FG, row_words, col_words, row_count, col_count)
+        for xj in xi:xstop
+            vals[line_uids[xj]] = v
+        end
+        xi = xstop + 1
+    end
+    return nothing
+end
+
+function _eval_unique_box_sweep!(vals::Vector{Int},
+                                 FG::Flange{K,F,N},
+                                 unique_points::Vector{T},
+                                 unique_index::Dict{T,Int},
+                                 axes::NTuple{N,UnitRange{Int}};
+                                 cache::Union{Nothing,FlangeDimCache{K,F,N}}=nothing,
+                                 threaded::Bool=false) where {K,F,N,T<:NTuple{N,<:Integer}}
+    cache0 = cache === nothing ? FlangeDimCache(FG) : cache
+    _check_cache_compat(cache0, FG)
+    fill!(vals, 0)
+    strides = _box_strides(axes)
+    uid_lookup = _build_uid_lookup(unique_index, axes, strides)
+    xlen = length(axes[1])
+    rest_ranges = ntuple(d -> axes[d + 1], N - 1)
+
+    if threaded && Threads.nthreads() > 1
+        rest_lines = collect(Iterators.product(rest_ranges...))
+        if length(rest_lines) >= 2 * Threads.nthreads()
+            nt = Threads.maxthreadid()
+            caches = Vector{Any}(undef, nt)
+            scratches = Vector{Any}(undef, nt)
+            fill!(caches, nothing)
+            fill!(scratches, nothing)
+            Threads.@threads for li in eachindex(rest_lines)
+                tid = Threads.threadid()
+                c = caches[tid]
+                if c === nothing
+                    c = FlangeDimCache(FG)
+                    caches[tid] = c
+                end
+                s = scratches[tid]
+                if s === nothing
+                    s = _box_sweep_scratch(c.kernel, xlen)
+                    scratches[tid] = s
+                end
+                rest = rest_lines[li]
+                line_base = _box_base_index(rest, axes, strides)
+                _eval_unique_box_line_sweep!(vals, FG, c, s, uid_lookup, line_base, axes, rest)
+            end
+            return vals
+        end
+    end
+
+    scratch0 = _box_sweep_scratch(cache0.kernel, xlen)
+    for rest in Iterators.product(rest_ranges...)
+        line_base = _box_base_index(rest, axes, strides)
+        _eval_unique_box_line_sweep!(vals, FG, cache0, scratch0, uid_lookup, line_base, axes, rest)
+    end
+    return vals
+end
+
+"""
+    dim_at_many!(out, FG, points; cache=nothing, sort_points=true,
+                 dedup=true, threaded=false, sweep=:auto)
+
+Compute `dim_at(FG, p)` for each point in `points` and write into `out`.
+
+When `sort_points=true` and `points` is an `AbstractVector` of tuples, points are
+processed in lexicographic order to increase active-set cache reuse.
+
+`dedup=true` deduplicates query points before evaluation and scatters results back.
+
+`threaded=true` evaluates unique points in parallel using per-thread `FlangeDimCache`.
+
+`sweep=:auto|:none|:box` controls a line-sweep kernel for full box/grid tuple queries:
+- `:auto` tries it opportunistically.
+- `:none` disables it.
+- `:box` requires full-box structure and throws if unavailable.
+"""
+function dim_at_many!(out::AbstractVector{Int},
+                      FG::Flange,
+                      points::AbstractVector;
+                      cache::Union{Nothing,FlangeDimCache}=nothing,
+                      sort_points::Bool=true,
+                      dedup::Bool=true,
+                      threaded::Bool=false,
+                      sweep::Symbol=:auto)
+    length(out) == length(points) || error("dim_at_many!: output length must match number of points")
+    sweep in (:auto, :none, :box) || error("dim_at_many!: sweep must be :auto, :none, or :box")
+    isempty(points) && return out
+
+    unique_points = points
+    scatter = Int[]
+    unique_index = nothing
+    if dedup
+        unique_points, scatter, unique_index = _dedup_points(points)
+    end
+    nuniq = length(unique_points)
+    nuniq == 0 && return out
+
+    vals_unique = dedup ? Vector{Int}(undef, nuniq) : out
+    did_sweep = false
+
+    if sweep != :none &&
+       dedup &&
+       unique_index isa Dict &&
+       _tuple_int_points(unique_points)
+        axes = _full_box_axes(unique_points, unique_index)
+        if axes !== nothing
+            xlen = length(axes[1])
+            # Auto mode: only use sweep when x-axis is long enough to amortize setup.
+            use_sweep = sweep == :box || (xlen >= 96 && length(unique_points) >= 2048)
+            if use_sweep
+                _eval_unique_box_sweep!(vals_unique, FG, unique_points, unique_index, axes;
+                                        cache=cache, threaded=threaded)
+                did_sweep = true
+            end
+        elseif sweep == :box
+            error("dim_at_many!: sweep=:box requires tuple points that form a full axis-aligned integer box")
+        end
+    elseif sweep == :box
+        error("dim_at_many!: sweep=:box requires tuple points")
+    end
+
+    if !did_sweep
+        order = if sort_points && _lex_sortable_points(unique_points)
+            sortperm(eachindex(unique_points); by=i -> @inbounds(unique_points[i]))
+        else
+            collect(eachindex(unique_points))
+        end
+        cache_eval = threaded ? nothing : cache
+        _evaluate_unique_points!(vals_unique, FG, unique_points, order;
+                                 cache=cache_eval, threaded=threaded)
+    end
+
+    if dedup
+        @inbounds for i in eachindex(points)
+            out[i] = vals_unique[scatter[i]]
+        end
+    end
+    return out
+end
+
+"""
+    dim_at_many(FG, points; cache=nothing, sort_points=true,
+                dedup=true, threaded=false, sweep=:auto)
+
+Vector-returning convenience wrapper for `dim_at_many!`.
+"""
+function dim_at_many(FG::Flange,
+                     points::AbstractVector;
+                     cache::Union{Nothing,FlangeDimCache}=nothing,
+                     sort_points::Bool=true,
+                     dedup::Bool=true,
+                     threaded::Bool=false,
+                     sweep::Symbol=:auto)
+    out = Vector{Int}(undef, length(points))
+    return dim_at_many!(out, FG, points;
+                        cache=cache,
+                        sort_points=sort_points,
+                        dedup=dedup,
+                        threaded=threaded,
+                        sweep=sweep)
 end
 
 # ---------------------------------------------------------------------------
@@ -596,9 +1563,18 @@ end
 # Minimization
 # ---------------------------------------------------------------------------
 
+struct _UnderlyingKey{N}
+    face_mask::NTuple{N,Bool}
+    b::NTuple{N,Int}
+end
+
+@inline function _face_mask_tuple(tau::Face, ::Val{N}) where {N}
+    return ntuple(i -> @inbounds(tau.coords[i]), N)
+end
+
 # Helper: a hashable key for grouping flats/injectives by their underlying set.
-@inline _underlying_key(F::IndFlat) = (Tuple(F.tau.coords), F.b)
-@inline _underlying_key(E::IndInj) = (Tuple(E.tau.coords), E.b)
+@inline _underlying_key(F::IndFlat{N}) where {N} = _UnderlyingKey{N}(_face_mask_tuple(F.tau, Val(N)), F.b)
+@inline _underlying_key(E::IndInj{N}) where {N} = _UnderlyingKey{N}(_face_mask_tuple(E.tau, Val(N)), E.b)
 
 # Helper: test whether a vector is the zero vector.
 @inline function _is_zero_vec(v)
@@ -668,13 +1644,13 @@ The same logic applies to injectives (rows).
 
 This is primarily a performance optimization (smaller encodings).
 """
-function minimize(FG::Flange{K}; rankfun = rank) where {K}
+function minimize(FG::Flange{K,FT,N}; rankfun = rank) where {K,FT,N}
     flats = FG.flats
     injectives = FG.injectives
     Phi = FG.phi
 
     # --- Reduce columns (flats) ---
-    col_groups = Dict{Tuple{Any, Any}, Vector{Int}}()
+    col_groups = Dict{_UnderlyingKey{N}, Vector{Int}}()
     for (j, F) in enumerate(flats)
         key = _underlying_key(F)
         push!(get!(col_groups, key, Int[]), j)
@@ -700,7 +1676,7 @@ function minimize(FG::Flange{K}; rankfun = rank) where {K}
     Phi2 = Phi[:, keep_cols]
 
     # --- Reduce rows (injectives) ---
-    row_groups = Dict{Tuple{Any, Any}, Vector{Int}}()
+    row_groups = Dict{_UnderlyingKey{N}, Vector{Int}}()
     for (i, E) in enumerate(injectives)
         key = _underlying_key(E)
         push!(get!(row_groups, key, Int[]), i)
@@ -854,23 +1830,39 @@ function cross_validate(fr::Flange; margin=1,
 
     # Flange evaluation (use provided rank function).
     dims_Z = Dict{Tuple{Vararg{Int}}, Int}()
+    rows_buf = Int[]
+    cols_buf = Int[]
+    sizehint!(rows_buf, length(fr.injectives))
+    sizehint!(cols_buf, length(fr.flats))
     for t in Iterators.product(ranges...)
-        dims_Z[t] = dim_at(fr, t; rankfun=rankfun)
+        dims_Z[t] = _dim_at_rankfun!(fr, t, rankfun, rows_buf, cols_buf)
     end
 
     # Axis-aligned proxy (compare apples-to-apples with the flange)
     afr = flange_to_axis(fr)
     dims_PL = Dict{Tuple{Vararg{Int}}, Int}()
+    idxr = Int[]
+    idxc = Int[]
+    sizehint!(idxr, length(afr.deaths))
+    sizehint!(idxc, length(afr.births))
     for t in Iterators.product(ranges...)
-        rows = [ _contains(d, t) for d in afr.deaths ]
-        cols = [ _contains(u, t) for u in afr.births ]
-        idxr = findall(identity, rows)
-        idxc = findall(identity, cols)
+        empty!(idxr)
+        empty!(idxc)
+        @inbounds for i in eachindex(afr.deaths)
+            if _contains(afr.deaths[i], t)
+                push!(idxr, i)
+            end
+        end
+        @inbounds for j in eachindex(afr.births)
+            if _contains(afr.births[j], t)
+                push!(idxc, j)
+            end
+        end
         if isempty(idxr) || isempty(idxc)
             dims_PL[t] = 0
         else
             # Rank exactly with the same provided rank function.
-            Phi_x = afr.Phi[idxr, idxc]
+            Phi_x = @view afr.Phi[idxr, idxc]
             dims_PL[t] = rankfun(Phi_x)
         end
     end

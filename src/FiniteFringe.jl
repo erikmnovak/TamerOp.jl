@@ -105,37 +105,12 @@ abstract type AbstractPoset end
 const UPDOWN_CACHE_MODE = Ref(:auto)  # :auto | :always | :never
 const UPDOWN_CACHE_THRESHOLD_FINITE = Ref(500_000)
 const UPDOWN_CACHE_THRESHOLD_GENERIC = Ref(200_000)
+const CHAIN_PARENT_DENSE_MIN_ENTRIES = Ref(4_096)
+const CHAIN_PARENT_DENSE_MAX_ENTRIES_PER_THREAD = Ref(1_000_000)
+const CHAIN_PARENT_DENSE_MAX_TOTAL_ENTRIES = Ref(8_000_000)
 
 @inline _updown_cache_skip_auto(::AbstractPoset) = false
 @inline _updown_cache_threshold(::AbstractPoset) = UPDOWN_CACHE_THRESHOLD_GENERIC[]
-
-"""
-    set_updown_cache_policy!(; mode=:auto, finite_threshold=500_000, generic_threshold=200_000)
-
-Tune lazy upset/downset cache construction:
-- `mode=:auto`: cache only when below thresholds.
-- `mode=:always`: always build cached upset/downset lists.
-- `mode=:never`: never build cached upset/downset lists.
-"""
-function set_updown_cache_policy!(;
-                                  mode::Symbol=UPDOWN_CACHE_MODE[],
-                                  finite_threshold::Integer=UPDOWN_CACHE_THRESHOLD_FINITE[],
-                                  generic_threshold::Integer=UPDOWN_CACHE_THRESHOLD_GENERIC[])
-    mode in (:auto, :always, :never) ||
-        error("set_updown_cache_policy!: mode must be :auto, :always, or :never (got $(repr(mode))).")
-    finite_threshold >= 0 || error("set_updown_cache_policy!: finite_threshold must be >= 0.")
-    generic_threshold >= 0 || error("set_updown_cache_policy!: generic_threshold must be >= 0.")
-    UPDOWN_CACHE_MODE[] = mode
-    UPDOWN_CACHE_THRESHOLD_FINITE[] = Int(finite_threshold)
-    UPDOWN_CACHE_THRESHOLD_GENERIC[] = Int(generic_threshold)
-    return nothing
-end
-
-updown_cache_policy() = (
-    mode = UPDOWN_CACHE_MODE[],
-    finite_threshold = UPDOWN_CACHE_THRESHOLD_FINITE[],
-    generic_threshold = UPDOWN_CACHE_THRESHOLD_GENERIC[],
-)
 
 @inline function _should_cache_updown(P::AbstractPoset, n::Int)
     mode = UPDOWN_CACHE_MODE[]
@@ -195,13 +170,13 @@ function _ensure_updown_cache!(P::AbstractPoset)
     end
 end
 
-function cached_upset_indices(P::AbstractPoset, i::Int)
+function _cached_upset_indices(P::AbstractPoset, i::Int)
     cache = _ensure_updown_cache!(P)
     cache === nothing && return nothing
     return cache[1][i]
 end
 
-function cached_downset_indices(P::AbstractPoset, i::Int)
+function _cached_downset_indices(P::AbstractPoset, i::Int)
     cache = _ensure_updown_cache!(P)
     cache === nothing && return nothing
     return cache[2][i]
@@ -239,6 +214,12 @@ Base.BitMatrix(C::CoverEdges) = C.mat
 Base.Matrix(C::CoverEdges) = Matrix(C.mat)
 Base.findall(C::CoverEdges) = C.edges
 
+mutable struct _ChainParentDenseMemo
+    seen::BitVector
+    vals::Vector{Int}
+    n::Int
+end
+
 """
     CoverCache(Q)
 
@@ -248,18 +229,24 @@ This cache is stored lazily on each poset object (via `PosetCache`).
 Thread-safety:
 
 - `succs`, `preds`, and `C` are read-only once constructed.
-- `chain_parent` is a *vector of dicts*, one dict per Julia thread, so the hot-path
-  memo writes are thread-local and do not require locks.
+- `chain_parent` / `chain_parent_dense` are per-thread hot-path memos for witness
+  predecessor lookups. Writes are thread-local and do not require locks.
 """
 struct CoverCache
     Q::AbstractPoset
     C::Union{BitMatrix,Nothing}
     succs::Vector{Vector{Int}}
     preds::Vector{Vector{Int}}
+    # For each cover edge slot (u, succs[u][j]), gives the slot index i such that
+    # preds[succs[u][j]][i] == u.
+    pred_slot_of_succ::Vector{Vector{Int}}
+    # Dual map: for each (preds[v][i], v), gives j with succs[preds[v][i]][j] == v.
+    succ_slot_of_pred::Vector{Vector{Int}}
 
-    # For each thread, chain_parent[tid][pairkey(a,d)] = chosen predecessor b in preds[d]
-    # with a <= b (used to speed up witness chains in kernel/image constructions).
+    # Sparse fallback memo: chain_parent[tid][pairkey(a,d)] = chosen predecessor b.
     chain_parent::Vector{Dict{UInt64, Int}}
+    # Dense memo for finite posets when n^2 is moderate; optional for memory control.
+    chain_parent_dense::Union{Nothing,Vector{_ChainParentDenseMemo}}
 
     # Number of cover edges in Q (used to size edge-indexed stores).
     nedges::Int
@@ -271,10 +258,12 @@ mutable struct PosetCache
     lock::Base.ReentrantLock
     upsets::Union{Nothing,Vector{Vector{Int}}}
     downsets::Union{Nothing,Vector{Vector{Int}}}
-    PosetCache() = new(nothing, nothing, Base.ReentrantLock(), nothing, nothing)
+    hom_route_choice::Dict{UInt64,Symbol}
+    PosetCache() = new(nothing, nothing, Base.ReentrantLock(), nothing, nothing, Dict{UInt64,Symbol}())
 end
 
-function get_cover_cache(Q::AbstractPoset)
+# Internal lazy accessor for per-poset cover cache.
+function _get_cover_cache(Q::AbstractPoset)
     if hasproperty(Q, :cache)
         pc = getproperty(Q, :cache)
         if pc isa PosetCache
@@ -291,31 +280,27 @@ function get_cover_cache(Q::AbstractPoset)
             return pc.cover
         end
     end
-    error("get_cover_cache: poset type $(typeof(Q)) does not support caching")
+    error("_get_cover_cache: poset type $(typeof(Q)) does not support caching")
 end
-
-warm_cache!(Q::AbstractPoset) = (get_cover_cache(Q); Q)
-
-cover_cache(Q::AbstractPoset) = get_cover_cache(Q)
 
 """
     build_cache!(Q; cover=true, updown=true)
 
-Sequential cache build step for a poset. Use this before entering threaded
+Canonical public cache-build entrypoint for a poset. Use this before entering threaded
 read-only loops to avoid lock contention and duplicate lazy-initialization work.
 """
 function build_cache!(Q::AbstractPoset; cover::Bool=true, updown::Bool=true)
-    cover && get_cover_cache(Q)
+    cover && _get_cover_cache(Q)
     updown && _ensure_updown_cache!(Q)
     return Q
 end
 
 """
-    clear_cover_cache!(Q)
+    _clear_cover_cache!(Q)
 
 Clear the cached cover data stored on a poset object.
 """
-function clear_cover_cache!(Q::AbstractPoset)
+function _clear_cover_cache!(Q::AbstractPoset)
     if hasproperty(Q, :cache)
         pc = getproperty(Q, :cache)
         if pc isa PosetCache
@@ -325,13 +310,14 @@ function clear_cover_cache!(Q::AbstractPoset)
                 pc.cover = nothing
                 pc.upsets = nothing
                 pc.downsets = nothing
+                empty!(pc.hom_route_choice)
             finally
                 Base.unlock(pc.lock)
             end
             return nothing
         end
     end
-    error("clear_cover_cache!: poset type $(typeof(Q)) does not support caching")
+    error("_clear_cover_cache!: poset type $(typeof(Q)) does not support caching")
 end
 
 # Packs two Int32-ish values into a UInt64 for faster Dict keys.
@@ -374,16 +360,78 @@ function _build_cover_cache(Q::AbstractPoset)
         sort!(preds[u])
     end
 
+    nt = max(1, Base.Threads.maxthreadid())
     chain_parent = [Dict{UInt64, Int}() for _ in 1:max(1, Base.Threads.maxthreadid())]
+    chain_parent_dense = nothing
+    dense_entries = n * n
+    use_dense_parent = (Q isa FinitePoset) &&
+                       (dense_entries >= CHAIN_PARENT_DENSE_MIN_ENTRIES[]) &&
+                       (dense_entries <= CHAIN_PARENT_DENSE_MAX_ENTRIES_PER_THREAD[]) &&
+                       (dense_entries * nt <= CHAIN_PARENT_DENSE_MAX_TOTAL_ENTRIES[])
+    if use_dense_parent
+        chain_parent_dense = [
+            _ChainParentDenseMemo(falses(dense_entries), zeros(Int, dense_entries), n)
+            for _ in 1:nt
+        ]
+    end
 
-    return CoverCache(Q, C, succs, preds, chain_parent, nedges)
+    pred_slot_of_succ = [Vector{Int}(undef, outdeg[u]) for u in 1:n]
+    succ_slot_of_pred = [Vector{Int}(undef, indeg[v]) for v in 1:n]
+    @inbounds for u in 1:n
+        su = succs[u]
+        ps = pred_slot_of_succ[u]
+        for j in eachindex(su)
+            v = su[j]
+            i = searchsortedfirst(preds[v], u)
+            (i <= length(preds[v]) && preds[v][i] == u) ||
+                error("_build_cover_cache: internal edge-slot mismatch for ($u,$v)")
+            ps[j] = i
+            succ_slot_of_pred[v][i] = j
+        end
+    end
+
+    return CoverCache(Q, C, succs, preds, pred_slot_of_succ, succ_slot_of_pred,
+                      chain_parent, chain_parent_dense, nedges)
 end
 
 @inline function _chain_parent_dict(cc::CoverCache)::Dict{UInt64, Int}
     return cc.chain_parent[min(length(cc.chain_parent), max(1, Base.Threads.threadid()))]
 end
 
+@inline function _chain_parent_dense(cc::CoverCache)
+    dense = cc.chain_parent_dense
+    dense === nothing && return nothing
+    return dense[min(length(dense), max(1, Base.Threads.threadid()))]
+end
+
+function _clear_chain_parent_cache!(cc::CoverCache)
+    for d in cc.chain_parent
+        empty!(d)
+    end
+    if cc.chain_parent_dense !== nothing
+        for m in cc.chain_parent_dense
+            fill!(m.seen, false)
+        end
+    end
+    return nothing
+end
+
 function _chosen_predecessor(cc::CoverCache, a::Int, d::Int)
+    dense = _chain_parent_dense(cc)
+    if dense !== nothing
+        idx = (a - 1) * dense.n + d
+        @inbounds if dense.seen[idx]
+            return dense.vals[idx]
+        end
+        b = findfirst(x -> x != a && leq(cc.Q, a, x), cc.preds[d])
+        b = (b === nothing) ? a : cc.preds[d][b]
+        @inbounds begin
+            dense.vals[idx] = b
+            dense.seen[idx] = true
+        end
+        return b
+    end
+
     k = _pairkey(a, d)
     chain_parent = _chain_parent_dict(cc)
     b = get(chain_parent, k, 0)
@@ -428,38 +476,20 @@ end
 """
     upset_indices(P, i)
     downset_indices(P, i)
-    upset_iter(P, i)
-    downset_iter(P, i)
 
 Return an iterable of indices in the principal upset/downset of `i`.
 Fallback implementations scan the whole poset.
 """
 function upset_indices(P::AbstractPoset, i::Int)
-    cached = cached_upset_indices(P, i)
+    cached = _cached_upset_indices(P, i)
     cached === nothing || return IndicesView(cached)
     return PosetLeqIter(P, i, true)
 end
 
 function downset_indices(P::AbstractPoset, i::Int)
-    cached = cached_downset_indices(P, i)
+    cached = _cached_downset_indices(P, i)
     cached === nothing || return IndicesView(cached)
     return PosetLeqIter(P, i, false)
-end
-
-"""
-    upset_iter(P, i)
-    downset_iter(P, i)
-
-Iterate over indices in the principal upset/downset of `i`.
-This avoids allocating a fresh vector on each call; when cached vectors exist,
-those are returned directly (as iterables).
-"""
-function upset_iter(P::AbstractPoset, i::Int)
-    return upset_indices(P, i)
-end
-
-function downset_iter(P::AbstractPoset, i::Int)
-    return downset_indices(P, i)
 end
 
 """
@@ -548,14 +578,14 @@ leq_matrix(P::FinitePoset) = P._leq
 @inline _updown_cache_threshold(::FinitePoset) = UPDOWN_CACHE_THRESHOLD_FINITE[]
 
 function upset_indices(P::FinitePoset, i::Int)
-    cached = cached_upset_indices(P, i)
+    cached = _cached_upset_indices(P, i)
     cached === nothing || return IndicesView(cached)
     row = @view P._leq[i, :]
     return BitRowIter(row)
 end
 
 function downset_indices(P::FinitePoset, i::Int)
-    cached = cached_downset_indices(P, i)
+    cached = _cached_downset_indices(P, i)
     cached === nothing || return IndicesView(cached)
     col = @view P._leq[:, i]
     return BitRowIter(col)
@@ -627,14 +657,14 @@ end
 end
 
 function upset_indices(P::ProductOfChainsPoset{N}, i::Int) where {N}
-    cached = cached_upset_indices(P, i)
+    cached = _cached_upset_indices(P, i)
     cached === nothing || return IndicesView(cached)
     ranges = ntuple(k -> _coord_at(i, P.sizes[k], P.strides[k]):P.sizes[k], N)
     return ProductIndexIter(CartesianIndices(ranges), P.strides)
 end
 
 function downset_indices(P::ProductOfChainsPoset{N}, i::Int) where {N}
-    cached = cached_downset_indices(P, i)
+    cached = _cached_downset_indices(P, i)
     cached === nothing || return IndicesView(cached)
     ranges = ntuple(k -> 1:_coord_at(i, P.sizes[k], P.strides[k]), N)
     return ProductIndexIter(CartesianIndices(ranges), P.strides)
@@ -1038,27 +1068,129 @@ function cover_edges(P::ProductPoset;
     end
 end
 
-struct Upset
-    P::AbstractPoset
+struct Upset{P<:AbstractPoset}
+    P::P
     mask::BitVector
+    function Upset(Pobj::PT, mask::BitVector) where {PT<:AbstractPoset}
+        nvertices(Pobj) == length(mask) ||
+            error("Upset: mask length $(length(mask)) must equal nvertices(P)=$(nvertices(Pobj)).")
+        new{PT}(Pobj, mask)
+    end
 end
-struct Downset
-    P::AbstractPoset
+struct Downset{P<:AbstractPoset}
+    P::P
     mask::BitVector
+    function Downset(Pobj::PT, mask::BitVector) where {PT<:AbstractPoset}
+        nvertices(Pobj) == length(mask) ||
+            error("Downset: mask length $(length(mask)) must equal nvertices(P)=$(nvertices(Pobj)).")
+        new{PT}(Pobj, mask)
+    end
 end
 
 struct _WPairData
-    rows_by_ucomp::Vector{Vector{Int}}   # for each component of U_M[i], rows supported in that component
-    rows_by_dcomp::Vector{Vector{Int}}   # for each component of D_N[t], rows supported in that component
+    # Packed row lists by source-upset component.
+    u_ptr::Vector{Int}
+    u_rows::Vector{Int}
+    # Packed row lists by target-downset component.
+    d_ptr::Vector{Int}
+    d_rows::Vector{Int}
 end
+
+struct _FringeComponentDecomp
+    comp_id::Vector{Vector{Int}}
+    comp_masks::Vector{Vector{BitVector}}
+    comp_n::Vector{Int}
+end
+
+mutable struct _FringeDenseIdxPlan{K}
+    W_dim::Int
+    V1_dim::Int
+    V2_dim::Int
+    t_rows::Vector{Int}
+    t_cols::Vector{Int}
+    t_tN::Vector{Int}
+    t_jN::Vector{Int}
+    s_rows::Vector{Int}
+    s_cols::Vector{Int}
+    s_sM::Vector{Int}
+    s_iM::Vector{Int}
+    Tbuf::Matrix{K}
+    Sbuf::Matrix{K}
+    bigbuf::Matrix{K}
+end
+
+mutable struct _FringeDensePathPlan{K}
+    W_dim::Int
+    V1::Vector{NTuple{3,Int}}
+    V2::Vector{NTuple{3,Int}}
+    w_index::Matrix{Int}
+    w_data::Vector{_WPairData}
+    nUM::Int
+    nDN::Int
+    Tbuf::Matrix{K}
+    Sbuf::Matrix{K}
+    bigbuf::Matrix{K}
+end
+
+mutable struct _FringeSparsePlan{K}
+    W_dim::Int
+    V1::Vector{NTuple{3,Int}}
+    V2::Vector{NTuple{3,Int}}
+    w_index::Matrix{Int}
+    w_data::Vector{_WPairData}
+    nUM::Int
+    nDN::Int
+    T::SparseMatrixCSC{K,Int}
+    S::SparseMatrixCSC{K,Int}
+    t_tN::Vector{Int}
+    t_jN::Vector{Int}
+    s_sM::Vector{Int}
+    s_iM::Vector{Int}
+    t_nzptr::Union{Nothing,Vector{Int}}
+    s_nzptr::Union{Nothing,Vector{Int}}
+    t_nzptr_max::Int
+    s_nzptr_max::Int
+    hcat_buf::SparseMatrixCSC{K,Int}
+    hcat_buf_rev::SparseMatrixCSC{K,Int}
+    nnzT::Int
+    nnzS::Int
+end
+
+mutable struct _FringeHomCache{K}
+    adj::Union{Nothing,Vector{Vector{Int}}}
+    upset::Union{Nothing,_FringeComponentDecomp}
+    downset::Union{Nothing,_FringeComponentDecomp}
+    dense_idx_plans::Dict{UInt64,_FringeDenseIdxPlan{K}}
+    dense_path_plans::Dict{UInt64,_FringeDensePathPlan{K}}
+    sparse_plans::Dict{UInt64,_FringeSparsePlan{K}}
+    hcat_workspaces::Dict{UInt64,Matrix{K}}
+    dense_path_choice::Dict{UInt64,Symbol}
+    route_fingerprint_choice::Dict{UInt64,Symbol}
+    route_timing_fallbacks::Int
+    _FringeHomCache{K}() where {K} = new(nothing, nothing, nothing,
+                                         Dict{UInt64,_FringeDenseIdxPlan{K}}(),
+                                         Dict{UInt64,_FringeDensePathPlan{K}}(),
+                                         Dict{UInt64,_FringeSparsePlan{K}}(),
+                                         Dict{UInt64,Matrix{K}}(),
+                                         Dict{UInt64,Symbol}(),
+                                         Dict{UInt64,Symbol}(),
+                                         0)
+end
+
+struct _FiberQueryIndex
+    cols_by_q::Vector{Vector{Int}}
+    rows_by_q::Vector{Vector{Int}}
+end
+
+const FIBER_DIM_CACHE_BUILD_AFTER = Ref(2)
 
 
 Base.length(U::Upset) = length(U.mask)
 Base.length(D::Downset) = length(D.mask)
-Base.eltype(::Type{Upset}) = Int
-Base.eltype(::Type{Downset}) = Int
-Base.IteratorSize(::Type{Upset}) = Base.HasLength()
-Base.IteratorSize(::Type{Downset}) = Base.HasLength()
+Base.eltype(::Type{<:Upset}) = Int
+Base.eltype(::Type{<:Downset}) = Int
+Base.IteratorSize(::Type{<:Upset}) = Base.HasLength()
+Base.IteratorSize(::Type{<:Downset}) = Base.HasLength()
 
 # Iterate over vertices contained in an upset/downset.
 function Base.iterate(U::Upset, state::Int=1)
@@ -1150,10 +1282,41 @@ function downset_closure(P::AbstractPoset, S::BitVector)
     Downset(P, D)
 end
 
-upset_from_generators(P::AbstractPoset, gens::Vector{Int}) =
-    upset_closure(P, BitVector([i in gens for i in 1:nvertices(P)]))
-downset_from_generators(P::AbstractPoset, gens::Vector{Int}) =
-    downset_closure(P, BitVector([i in gens for i in 1:nvertices(P)]))
+function upset_from_generators(P::AbstractPoset, gens::AbstractVector{<:Integer})
+    n = nvertices(P)
+    mask = falses(n)
+    @inbounds for g in gens
+        gi = Int(g)
+        (1 <= gi <= n) || error("upset_from_generators: generator index $gi out of bounds for poset with $n vertices.")
+        mask[gi] = true
+    end
+    return upset_closure(P, mask)
+end
+
+function downset_from_generators(P::AbstractPoset, gens::AbstractVector{<:Integer})
+    n = nvertices(P)
+    mask = falses(n)
+    @inbounds for g in gens
+        gi = Int(g)
+        (1 <= gi <= n) || error("downset_from_generators: generator index $gi out of bounds for poset with $n vertices.")
+        mask[gi] = true
+    end
+    return downset_closure(P, mask)
+end
+
+function upset_from_generators(P::AbstractPoset, gens_mask::AbstractVector{Bool})
+    n = nvertices(P)
+    length(gens_mask) == n ||
+        error("upset_from_generators: mask length $(length(gens_mask)) must equal nvertices(P)=$n.")
+    return upset_closure(P, BitVector(gens_mask))
+end
+
+function downset_from_generators(P::AbstractPoset, gens_mask::AbstractVector{Bool})
+    n = nvertices(P)
+    length(gens_mask) == n ||
+        error("downset_from_generators: mask length $(length(gens_mask)) must equal nvertices(P)=$n.")
+    return downset_closure(P, BitVector(gens_mask))
+end
 
 # Principal upset \uparrow p and principal downset \downarrow p (representables/corepresentables).
 function principal_upset(P::AbstractPoset, p::Int)
@@ -1220,22 +1383,30 @@ hash(D::Downset, h::UInt) = hash(D.P, hash(D.mask, h))
 # Fringe presentations (Defs. 3.16 - 3.17)
 # =========================================
 
-struct FringeModule{K, F<:AbstractCoeffField, MAT<:AbstractMatrix{K}}
+struct FringeModule{K, P<:AbstractPoset, F<:AbstractCoeffField, MAT<:AbstractMatrix{K}}
     field::F
-    P::AbstractPoset
-    U::Vector{Upset}                  # birth upsets (columns)
-    D::Vector{Downset}                # death downsets (rows)
+    P::P
+    U::Vector{Upset{P}}               # birth upsets (columns)
+    D::Vector{Downset{P}}             # death downsets (rows)
     phi::MAT                          # size |D| x |U|
+    fiber_index::Base.RefValue{Union{Nothing,_FiberQueryIndex}}
+    fiber_queries::Base.RefValue{Int}
+    fiber_dims::Base.RefValue{Union{Nothing,Vector{Int}}}
+    hom_cache::Base.RefValue{_FringeHomCache{K}}
 
-    function FringeModule{K,F,MAT}(field::F,
-                                   P::AbstractPoset,
-                                   U::Vector{Upset},
-                                   D::Vector{Downset},
-                                   phi::MAT) where {K, F<:AbstractCoeffField, MAT<:AbstractMatrix{K}}
+    function FringeModule{K,P,F,MAT}(field::F,
+                                     Pobj::P,
+                                     U::Vector{Upset{P}},
+                                     D::Vector{Downset{P}},
+                                     phi::MAT) where {K, P<:AbstractPoset, F<:AbstractCoeffField, MAT<:AbstractMatrix{K}}
         @assert size(phi,1) == length(D) && size(phi,2) == length(U)
         coeff_type(field) == K || error("FringeModule: coeff_type(field) != K")
 
-        M = new{K,F,MAT}(field, P, U, D, phi)
+        M = new{K,P,F,MAT}(field, Pobj, U, D, phi,
+                         Ref{Union{Nothing,_FiberQueryIndex}}(nothing),
+                         Ref{Int}(0),
+                         Ref{Union{Nothing,Vector{Int}}}(nothing),
+                         Ref(_FringeHomCache{K}()))
         _check_monomial_condition(M)
         return M
     end
@@ -1273,33 +1444,43 @@ Return a FringeModule obtained by coercing `phi` into `field`.
 function change_field(H::FringeModule{K}, field::AbstractCoeffField) where {K}
     K2 = coeff_type(field)
     Phi = _coerce_matrix(field, H.phi)
-    return FringeModule{K2, typeof(field), typeof(Phi)}(field, H.P, H.U, H.D, Phi)
+    return FringeModule{K2, typeof(H.P), typeof(field), typeof(Phi)}(field, H.P, H.U, H.D, Phi)
 end
 
-# Allow calls like FringeModule{K}(P, U, D, phi) by inferring MAT from phi.
-function FringeModule{K}(P::AbstractPoset,
-                         U::Vector{Upset},
-                         D::Vector{Downset},
+# Canonical public constructor: infer matrix storage from `phi`, require explicit `field`.
+@inline function _coerce_upsets(P::PT, Uin::AbstractVector{<:Upset}) where {PT<:AbstractPoset}
+    U = Vector{Upset{PT}}(undef, length(Uin))
+    @inbounds for i in eachindex(Uin)
+        Ui = Uin[i]
+        Ui.P === P || error("FringeModule: all upsets must belong to the same poset object P.")
+        U[i] = Ui::Upset{PT}
+    end
+    return U
+end
+
+@inline function _coerce_downsets(P::PT, Din::AbstractVector{<:Downset}) where {PT<:AbstractPoset}
+    D = Vector{Downset{PT}}(undef, length(Din))
+    @inbounds for i in eachindex(Din)
+        Di = Din[i]
+        Di.P === P || error("FringeModule: all downsets must belong to the same poset object P.")
+        D[i] = Di::Downset{PT}
+    end
+    return D
+end
+
+function FringeModule{K}(P::PT,
+                         Uin::AbstractVector{<:Upset},
+                         Din::AbstractVector{<:Downset},
                          phi::AbstractMatrix{K};
-                         field::AbstractCoeffField=field_from_eltype(K)) where {K}
+                         field::AbstractCoeffField) where {K,PT<:AbstractPoset}
     F = typeof(field)
-    return FringeModule{K, F, typeof(phi)}(field, P, U, D, phi)
-end
-
-# Convenience constructor (default dense; set store_sparse=true to store CSC).
-function FringeModule(P::AbstractPoset,
-                      U::Vector{Upset},
-                      D::Vector{Downset},
-                      phi::AbstractMatrix{K};
-                      store_sparse::Bool=false,
-                      field::AbstractCoeffField=field_from_eltype(K)) where {K}
-    phimat = store_sparse ? SparseArrays.sparse(phi) : Matrix{K}(phi)
-    F = typeof(field)
-    return FringeModule{K, F, typeof(phimat)}(field, P, U, D, phimat)
+    U = _coerce_upsets(P, Uin)
+    D = _coerce_downsets(P, Din)
+    return FringeModule{K, PT, F, typeof(phi)}(field, P, U, D, phi)
 end
 
 """
-    one_by_one_fringe(P, U, D[, scalar]) -> FringeModule
+    one_by_one_fringe(P, U, D, scalar; field=QQField()) -> FringeModule
 
 Convenience constructor for a 1x1 fringe presentation:
 
@@ -1311,9 +1492,8 @@ This is handy for tests, examples, and quickly building interval-like modules
 on a finite poset without writing out the matrix by hand.
 
 Notes:
-- The 3-argument form defaults to `scalar = one(coeff_type(field))` with `field = QQField()`.
-- The 4-argument form is fully generic in the scalar type `K`.
-- A keyword form `; scalar=..., field=...` is also provided for ergonomics.
+- The scalar is required; pass `one(coeff_type(field))` explicitly when desired.
+- This method is fully generic in the scalar type `K`.
 - In addition to `U::Upset` / `D::Downset`, you may also pass membership masks
   `U_mask::AbstractVector{Bool}` and `D_mask::AbstractVector{Bool}`.
 """
@@ -1323,19 +1503,6 @@ function one_by_one_fringe(P::AbstractPoset, U::Upset, D::Downset, scalar::K;
     phi = spzeros(typeof(s), 1, 1)
     phi[1, 1] = s
     return FringeModule{typeof(s)}(P, [U], [D], phi; field=field)
-end
-
-# Default scalar (by field).
-one_by_one_fringe(P::AbstractPoset, U::Upset, D::Downset) =
-    one_by_one_fringe(P, U, D; field=QQField())
-
-# Keyword-friendly wrapper.
-one_by_one_fringe(P::AbstractPoset, U::Upset, D::Downset;
-                  scalar=nothing,
-                  field::AbstractCoeffField=QQField()) =
-begin
-    scalar === nothing && (scalar = one(coeff_type(field)))
-    one_by_one_fringe(P, U, D, coerce(field, scalar); field=field)
 end
 
 # ------------------ mask-based convenience overloads ------------------
@@ -1356,21 +1523,6 @@ function one_by_one_fringe(P::FinitePoset,
     Um = _coerce_bool_mask(P, U_mask, "Upset")
     Dm = _coerce_bool_mask(P, D_mask, "Downset")
     return one_by_one_fringe(P, Upset(P, Um), Downset(P, Dm), coerce(field, scalar); field=field)
-end
-
-one_by_one_fringe(P::FinitePoset,
-                  U_mask::AbstractVector{Bool},
-                  D_mask::AbstractVector{Bool}) =
-    one_by_one_fringe(P, U_mask, D_mask; field=QQField())
-
-one_by_one_fringe(P::FinitePoset,
-                  U_mask::AbstractVector{Bool},
-                  D_mask::AbstractVector{Bool};
-                  scalar=nothing,
-                  field::AbstractCoeffField=QQField()) =
-begin
-    scalar === nothing && (scalar = one(coeff_type(field)))
-    one_by_one_fringe(P, U_mask, D_mask, coerce(field, scalar); field=field)
 end
 
 
@@ -1410,11 +1562,81 @@ end
 
 Compute dim_k M_q as rank of phi_q : F_q \to E_q (degreewise image).
 """
+function _build_fiber_query_index(M::FringeModule)
+    n = nvertices(M.P)
+    cols_by_q = [Int[] for _ in 1:n]
+    rows_by_q = [Int[] for _ in 1:n]
+
+    @inbounds for (i, U) in enumerate(M.U)
+        q = findnext(U.mask, 1)
+        while q !== nothing
+            push!(cols_by_q[q], i)
+            q = findnext(U.mask, q + 1)
+        end
+    end
+
+    @inbounds for (j, D) in enumerate(M.D)
+        q = findnext(D.mask, 1)
+        while q !== nothing
+            push!(rows_by_q[q], j)
+            q = findnext(D.mask, q + 1)
+        end
+    end
+
+    return _FiberQueryIndex(cols_by_q, rows_by_q)
+end
+
+@inline function _ensure_fiber_query_index!(M::FringeModule)
+    idx = M.fiber_index[]
+    idx !== nothing && return idx
+    idx = _build_fiber_query_index(M)
+    M.fiber_index[] = idx
+    return idx
+end
+
+@inline function _ensure_fiber_dim_cache!(M::FringeModule)
+    dims = M.fiber_dims[]
+    if dims === nothing
+        dims = fill(typemin(Int), nvertices(M.P))
+        M.fiber_dims[] = dims
+    end
+    return dims
+end
+
 function fiber_dimension(M::FringeModule{K}, q::Int) where {K}
-    cols = findall(U -> U.mask[q], M.U)
-    rows = findall(D -> D.mask[q], M.D)
-    if isempty(cols) || isempty(rows); return 0; end
-    return FieldLinAlg.rank_restricted(M.field, M.phi, rows, cols)
+    dims = _ensure_fiber_dim_cache!(M)
+    cached = dims[q]
+    cached != typemin(Int) && return cached
+
+    idx = M.fiber_index[]
+    if idx === nothing
+        M.fiber_queries[] += 1
+        if M.fiber_queries[] >= FIBER_DIM_CACHE_BUILD_AFTER[]
+            idx = _ensure_fiber_query_index!(M)
+        end
+    end
+
+    if idx === nothing
+        cols = findall(U -> U.mask[q], M.U)
+        rows = findall(D -> D.mask[q], M.D)
+        if isempty(cols) || isempty(rows)
+            dims[q] = 0
+            return 0
+        end
+        d = FieldLinAlg.rank_restricted(M.field, M.phi, rows, cols)
+        dims[q] = d
+        return d
+    end
+
+    cols = idx.cols_by_q[q]
+    rows = idx.rows_by_q[q]
+    if isempty(cols) || isempty(rows)
+        dims[q] = 0
+        return 0
+    end
+    d = FieldLinAlg.rank_restricted(M.field, M.phi, rows, cols)
+    dims[q] = d
+    return d
 end
 
 # ------------------ Hom for fringe modules via commuting squares ------------------
@@ -1427,6 +1649,353 @@ end
 # W  = Hom(F_M, E_N)  basis = components of U_M[i] cap D_N[t]
 #
 # Then Hom(M,N) = ker(d0) / (ker(T) + ker(S)) with d0 = [T  -S].
+
+const HOM_DIM_SPARSE_BUILD_MIN_ENTRIES = Ref(20_000)
+const HOM_DIM_SPARSE_DENSITY_THRESHOLD = Ref(0.30)
+const HOM_DIM_INTERNAL_TINY_WORK_THRESHOLD = Ref(350)
+const HOM_DIM_INTERNAL_SPARSE_DENSITY_THRESHOLD = Ref(0.24)
+const HOM_DIM_INTERNAL_SPARSE_WORK_THRESHOLD = Ref(80_000)
+const HOM_DIM_INTERNAL_DENSE_WORK_THRESHOLD = Ref(8_000)
+const HOM_DIM_INTERNAL_WORK_AMBIGUITY_BAND = Ref(500)
+const HOM_DIM_INTERNAL_DENSITY_AMBIGUITY_BAND = Ref(0.020)
+const HOM_DIM_DENSE_DENSITY_FULL_SCAN_ENTRIES = Ref(32_768)
+const HOM_DIM_DENSE_DENSITY_SAMPLE_SIZE = Ref(4_096)
+const _HOM_DENSITY_CACHE_LOCK = Base.ReentrantLock()
+const _HOM_DENSITY_CACHE = Base.WeakKeyDict{Any,Float64}()
+
+@inline function _matrix_density(A::SparseMatrixCSC)
+    m, n = size(A)
+    den = m * n
+    den == 0 && return 0.0
+    return nnz(A) / den
+end
+
+@inline function _estimate_dense_matrix_density(A::AbstractMatrix)
+    den = length(A)
+    den == 0 && return 0.0
+    if den <= HOM_DIM_DENSE_DENSITY_FULL_SCAN_ENTRIES[]
+        nz = 0
+        @inbounds for v in A
+            !iszero(v) && (nz += 1)
+        end
+        return nz / den
+    end
+
+    sample_n = min(den, HOM_DIM_DENSE_DENSITY_SAMPLE_SIZE[])
+    step = max(1, fld(den, sample_n))
+    nz = 0
+    seen = 0
+    idx = 0
+    @inbounds for v in A
+        idx += 1
+        ((idx - 1) % step == 0) || continue
+        !iszero(v) && (nz += 1)
+        seen += 1
+        seen >= sample_n && break
+    end
+    seen == 0 && return 0.0
+    return nz / seen
+end
+
+function _matrix_density(A::AbstractMatrix)
+    den = length(A)
+    den == 0 && return 0.0
+
+    Base.lock(_HOM_DENSITY_CACHE_LOCK)
+    try
+        d = get(_HOM_DENSITY_CACHE, A, NaN)
+        !isnan(d) && return d
+    finally
+        Base.unlock(_HOM_DENSITY_CACHE_LOCK)
+    end
+
+    d = _estimate_dense_matrix_density(A)
+    Base.lock(_HOM_DENSITY_CACHE_LOCK)
+    try
+        _HOM_DENSITY_CACHE[A] = d
+    finally
+        Base.unlock(_HOM_DENSITY_CACHE_LOCK)
+    end
+    return d
+end
+
+@inline function _hom_work_estimate(M::FringeModule, N::FringeModule)
+    return length(M.U) * length(N.D) +
+           length(M.U) * length(N.U) +
+           length(M.D) * length(N.D)
+end
+
+@inline function _heuristic_hom_internal_choice(M::FringeModule,
+                                                N::FringeModule)
+    dmin = min(_matrix_density(M.phi), _matrix_density(N.phi))
+    dmax = max(_matrix_density(M.phi), _matrix_density(N.phi))
+    work = _hom_work_estimate(M, N)
+    tiny_work = HOM_DIM_INTERNAL_TINY_WORK_THRESHOLD[]
+    sparse_dens = HOM_DIM_INTERNAL_SPARSE_DENSITY_THRESHOLD[]
+    sparse_work = HOM_DIM_INTERNAL_SPARSE_WORK_THRESHOLD[]
+    dense_work = HOM_DIM_INTERNAL_DENSE_WORK_THRESHOLD[]
+    work_band = HOM_DIM_INTERNAL_WORK_AMBIGUITY_BAND[]
+    dens_band = HOM_DIM_INTERNAL_DENSITY_AMBIGUITY_BAND[]
+
+    work <= tiny_work && return :dense_idx_internal
+
+    if dmin <= sparse_dens - dens_band && work <= sparse_work + work_band
+        return :sparse_path
+    end
+
+    if dmin >= sparse_dens + dens_band
+        if work <= dense_work - work_band
+            return :dense_idx_internal
+        elseif work >= dense_work + work_band
+            return :dense_path
+        end
+        return nothing
+    end
+
+    if work <= tiny_work + work_band
+        return :dense_idx_internal
+    elseif work >= dense_work + work_band
+        return :dense_path
+    elseif dmax <= sparse_dens && work <= sparse_work + work_band
+        return :sparse_path
+    end
+    return nothing
+end
+
+@inline function _resolve_hom_dimension_path(M::FringeModule,
+                                             N::FringeModule)
+    choice = _heuristic_hom_internal_choice(M, N)
+    return choice === nothing ? :auto_internal : choice
+end
+
+@inline function _heuristic_dense_internal_choice(M::FringeModule,
+                                                  N::FringeModule)
+    choice = _heuristic_hom_internal_choice(M, N)
+    choice === :sparse_path && return :dense_idx_internal
+    return choice
+end
+
+@inline function _heuristic_sparse_internal_choice(M::FringeModule,
+                                                   N::FringeModule)
+    choice = _heuristic_hom_internal_choice(M, N)
+    choice === :dense_path && return nothing
+    return choice
+end
+
+@inline _hom_density_bin(d::Float64) = clamp(Int(floor(d * 16.0)), 0, 16)
+@inline _hom_work_bin(w::Int) = w <= 0 ? 0 : (floor(Int, log2(float(w))) + 1)
+
+@inline function _hom_route_fingerprint(M::FringeModule,
+                                        N::FringeModule,
+                                        route::Symbol)
+    dM = _matrix_density(M.phi)
+    dN = _matrix_density(N.phi)
+    work = _hom_work_estimate(M, N)
+    return UInt64(hash((route,
+                        length(M.U), length(M.D), length(N.U), length(N.D),
+                        _hom_density_bin(dM), _hom_density_bin(dN),
+                        _hom_work_bin(work),
+                        M.phi isa SparseMatrixCSC, N.phi isa SparseMatrixCSC,
+                        typeof(M.field), typeof(M.phi), typeof(N.phi)), UInt(0)))
+end
+
+function _hcat_signed_sparse(T::SparseMatrixCSC{K,Int},
+                             S::SparseMatrixCSC{K,Int}) where {K}
+    mT, nT = size(T)
+    mS, nS = size(S)
+    mT == mS || error("_hcat_signed_sparse: row mismatch $mT vs $mS")
+
+    nnzT = nnz(T)
+    nnzS = nnz(S)
+    colptr = Vector{Int}(undef, nT + nS + 1)
+    rowval = Vector{Int}(undef, nnzT + nnzS)
+    nzval = Vector{K}(undef, nnzT + nnzS)
+
+    p = 1
+    colptr[1] = 1
+    @inbounds for j in 1:nT
+        firstptr = T.colptr[j]
+        lastptr = T.colptr[j + 1] - 1
+        if firstptr <= lastptr
+            len = lastptr - firstptr + 1
+            copyto!(rowval, p, T.rowval, firstptr, len)
+            copyto!(nzval, p, T.nzval, firstptr, len)
+            p += len
+        end
+        colptr[j + 1] = p
+    end
+    @inbounds for j in 1:nS
+        firstptr = S.colptr[j]
+        lastptr = S.colptr[j + 1] - 1
+        if firstptr <= lastptr
+            len = lastptr - firstptr + 1
+            copyto!(rowval, p, S.rowval, firstptr, len)
+            for t in 0:(len - 1)
+                nzval[p + t] = -S.nzval[firstptr + t]
+            end
+            p += len
+        end
+        colptr[nT + j + 1] = p
+    end
+    return SparseMatrixCSC(mT, nT + nS, colptr, rowval, nzval)
+end
+
+@inline function _rank_hcat_signed(field::AbstractCoeffField,
+                                   T::SparseMatrixCSC,
+                                   S::SparseMatrixCSC)
+    return FieldLinAlg.rank(field, _hcat_signed_sparse(T, S))
+end
+
+@inline function _rank_hcat_signed(field::AbstractCoeffField,
+                                   T::AbstractMatrix,
+                                   S::AbstractMatrix)
+    return FieldLinAlg.rank(field, hcat(T, -S))
+end
+
+@inline function _rank_hcat_signed_workspace!(field::AbstractCoeffField,
+                                              out::AbstractMatrix{K},
+                                              T::AbstractMatrix{K},
+                                              S::AbstractMatrix{K}) where {K}
+    m, nT = size(T)
+    mS, nS = size(S)
+    m == mS || error("_rank_hcat_signed_workspace!: row mismatch $m vs $mS")
+    size(out, 1) == m && size(out, 2) == nT + nS ||
+        error("_rank_hcat_signed_workspace!: workspace has wrong size")
+
+    @inbounds for j in 1:nT
+        for i in 1:m
+            out[i, j] = T[i, j]
+        end
+    end
+    @inbounds for j in 1:nS
+        jj = nT + j
+        for i in 1:m
+            out[i, jj] = -S[i, j]
+        end
+    end
+    return FieldLinAlg.rank(field, out)
+end
+
+function _build_sparse_hcat_workspace(T::SparseMatrixCSC{K,Int},
+                                      S::SparseMatrixCSC{K,Int}) where {K}
+    mT, nT = size(T)
+    mS, nS = size(S)
+    mT == mS || error("_build_sparse_hcat_workspace: row mismatch $mT vs $mS")
+
+    nnzT = nnz(T)
+    nnzS = nnz(S)
+    colptr = Vector{Int}(undef, nT + nS + 1)
+    rowval = Vector{Int}(undef, nnzT + nnzS)
+    nzval = Vector{K}(undef, nnzT + nnzS)
+
+    p = 1
+    colptr[1] = 1
+    @inbounds for j in 1:nT
+        firstptr = T.colptr[j]
+        lastptr = T.colptr[j + 1] - 1
+        len = lastptr - firstptr + 1
+        if len > 0
+            copyto!(rowval, p, T.rowval, firstptr, len)
+            p += len
+        end
+        colptr[j + 1] = p
+    end
+    @inbounds for j in 1:nS
+        firstptr = S.colptr[j]
+        lastptr = S.colptr[j + 1] - 1
+        len = lastptr - firstptr + 1
+        if len > 0
+            copyto!(rowval, p, S.rowval, firstptr, len)
+            p += len
+        end
+        colptr[nT + j + 1] = p
+    end
+    return SparseMatrixCSC(mT, nT + nS, colptr, rowval, nzval), nnzT
+end
+
+@inline function _rank_hcat_signed_sparse_workspace!(field::AbstractCoeffField,
+                                                     out::SparseMatrixCSC{K,Int},
+                                                     T::SparseMatrixCSC{K,Int},
+                                                     S::SparseMatrixCSC{K,Int},
+                                                     nnzT::Int) where {K}
+    nnzT == nnz(T) || error("_rank_hcat_signed_sparse_workspace!: nnzT mismatch")
+    nnzS = nnz(S)
+    nz = out.nzval
+    @inbounds begin
+        copyto!(nz, 1, T.nzval, 1, nnzT)
+        for i in 1:nnzS
+            nz[nnzT + i] = -S.nzval[i]
+        end
+    end
+    return FieldLinAlg.rank(field, out)
+end
+
+@inline function _rank_hcat_signed_sparse_workspace_with_prefix_rank!(
+    field::AbstractCoeffField,
+    out::SparseMatrixCSC{K,Int},
+    L::SparseMatrixCSC{K,Int},
+    R::SparseMatrixCSC{K,Int},
+    nnzL::Int,
+    left_cols::Int,
+) where {K}
+    nnzL == nnz(L) || error("_rank_hcat_signed_sparse_workspace_with_prefix_rank!: nnzL mismatch")
+    nnzR = nnz(R)
+    nz = out.nzval
+    @inbounds begin
+        copyto!(nz, 1, L.nzval, 1, nnzL)
+        for i in 1:nnzR
+            nz[nnzL + i] = -R.nzval[i]
+        end
+    end
+
+    m, n = size(out)
+    if m == 0 || n == 0
+        return 0, 0
+    end
+    red = FieldLinAlg._SparseRREF{K}(n)
+    rows = FieldLinAlg._sparse_rows(out)
+    maxrank = min(m, n)
+    rleft = 0
+    @inbounds for i in 1:m
+        if FieldLinAlg._sparse_rref_push_homogeneous!(red, rows[i])
+            red.pivot_cols[end] <= left_cols && (rleft += 1)
+            length(red.pivot_cols) == maxrank && break
+        end
+    end
+    return length(red.pivot_cols), rleft
+end
+
+@inline function _sparse_col_row_ptr(A::SparseMatrixCSC{K,Int},
+                                     row::Int,
+                                     col::Int) where {K}
+    lo = A.colptr[col]
+    hi = A.colptr[col + 1] - 1
+    while lo <= hi
+        mid = (lo + hi) >>> 1
+        rv = A.rowval[mid]
+        if rv < row
+            lo = mid + 1
+        elseif rv > row
+            hi = mid - 1
+        else
+            return mid
+        end
+    end
+    return 0
+end
+
+@inline function _hom_intersection_dim(field::AbstractCoeffField,
+                                       T::AbstractMatrix,
+                                       S::AbstractMatrix,
+                                       rT::Int,
+                                       rS::Int)
+    (rT == 0 || rS == 0) && return 0
+    BT = FieldLinAlg.colspace(field, T)
+    BS = FieldLinAlg.colspace(field, S)
+    (size(BT, 2) == 0 || size(BS, 2) == 0) && return 0
+    rUnion = FieldLinAlg.rank(field, hcat(BT, BS))
+    return rT + rS - rUnion
+end
 
 "Undirected adjacency of the Hasse cover graph."
 function _cover_undirected_adjacency(P::FinitePoset)
@@ -1474,6 +2043,115 @@ function _component_data(adj::Vector{Vector{Int}}, mask::BitVector)
     return comp, cid, comp_masks, reps
 end
 
+@inline function _ensure_hom_cache!(M::FringeModule{K}) where {K}
+    hc = M.hom_cache[]
+    if hc.adj === nothing
+        hc.adj = _cover_undirected_adjacency(M.P)
+    end
+    return hc::_FringeHomCache{K}
+end
+
+@inline function _poset_cache_or_nothing(P)
+    if hasproperty(P, :cache)
+        pc = getproperty(P, :cache)
+        return pc isa PosetCache ? pc : nothing
+    end
+    return nothing
+end
+
+@inline function _hom_route_choice_get(P, fkey::UInt64)
+    pc = _poset_cache_or_nothing(P)
+    pc === nothing && return nothing
+    Base.lock(pc.lock)
+    try
+        return get(pc.hom_route_choice, fkey, nothing)
+    finally
+        Base.unlock(pc.lock)
+    end
+end
+
+@inline function _hom_route_choice_set!(P, fkey::UInt64, choice::Symbol)
+    pc = _poset_cache_or_nothing(P)
+    pc === nothing && return nothing
+    Base.lock(pc.lock)
+    try
+        pc.hom_route_choice[fkey] = choice
+    finally
+        Base.unlock(pc.lock)
+    end
+    return nothing
+end
+
+@inline _hom_pair_key(N::FringeModule, tag::Symbol) =
+    UInt64(hash((objectid(N), objectid(N.phi), tag), UInt(0)))
+
+@inline function _ensure_hcat_workspace!(M::FringeModule{K},
+                                         N::FringeModule{K},
+                                         m::Int,
+                                         n::Int;
+                                         tag::Symbol) where {K}
+    hc = _ensure_hom_cache!(M)
+    key = _hom_pair_key(N, tag)
+    buf = get(hc.hcat_workspaces, key, nothing)
+    if buf === nothing || size(buf, 1) != m || size(buf, 2) != n
+        buf = Matrix{K}(undef, m, n)
+        hc.hcat_workspaces[key] = buf
+    end
+    return buf::Matrix{K}
+end
+
+function _build_component_decomp(adj::Vector{Vector{Int}},
+                                 sets::AbstractVector)
+    nsets = length(sets)
+    comp_id = Vector{Vector{Int}}(undef, nsets)
+    comp_masks = Vector{Vector{BitVector}}(undef, nsets)
+    comp_n = Vector{Int}(undef, nsets)
+    @inbounds for i in 1:nsets
+        cid, ncomp, masks, _ = _component_data(adj, sets[i].mask)
+        comp_id[i] = cid
+        comp_masks[i] = masks
+        comp_n[i] = ncomp
+    end
+    return _FringeComponentDecomp(comp_id, comp_masks, comp_n)
+end
+
+@inline function _ensure_upset_component_decomp!(M::FringeModule)
+    hc = _ensure_hom_cache!(M)
+    if hc.upset === nothing
+        hc.upset = _build_component_decomp(hc.adj::Vector{Vector{Int}}, M.U)
+    end
+    return hc.upset::_FringeComponentDecomp
+end
+
+@inline function _ensure_downset_component_decomp!(M::FringeModule)
+    hc = _ensure_hom_cache!(M)
+    if hc.downset === nothing
+        hc.downset = _build_component_decomp(hc.adj::Vector{Vector{Int}}, M.D)
+    end
+    return hc.downset::_FringeComponentDecomp
+end
+
+function _component_subset_targets(comp_masks::Vector{Vector{BitVector}},
+                                   target_masks::Vector{BitVector})
+    out = Vector{Vector{Vector{Int}}}(undef, length(comp_masks))
+    @inbounds for i in eachindex(comp_masks)
+        cmasks = comp_masks[i]
+        targets_i = Vector{Vector{Int}}(undef, length(cmasks))
+        for c in eachindex(cmasks)
+            mask = cmasks[c]
+            js = Int[]
+            for j in eachindex(target_masks)
+                if is_subset(mask, target_masks[j])
+                    push!(js, j)
+                end
+            end
+            targets_i[c] = js
+        end
+        out[i] = targets_i
+    end
+    return out
+end
+
 # Count connected components in mask_a intersect mask_b without materializing the intersection mask.
 function _component_reps_intersection!(
     reps::Vector{Int},
@@ -1510,160 +2188,701 @@ function _component_reps_intersection!(
     return ncomp
 end
 
-"Dimension of Hom(M,N) over a field K using the commuting-square presentation."
-function hom_dimension(M::FringeModule{K}, N::FringeModule{K}) where {K}
-    @assert M.P === N.P "Posets must match"
-    P = M.P
-
-    # Precompute undirected cover adjacency once.
-    adj = _cover_undirected_adjacency(P)
-
-    nUM = length(M.U); nDM = length(M.D)
-    nUN = length(N.U); nDN = length(N.D)
-
-    # Component decompositions for all upsets in M and downsets in N.
-    Ucomp_id_M    = Vector{Vector{Int}}(undef, nUM)
-    Ucomp_masks_M = Vector{Vector{BitVector}}(undef, nUM)
-    Ucomp_n_M     = Vector{Int}(undef, nUM)
-    for i in 1:nUM
-        comp_id, ncomp, comp_masks, _ = _component_data(adj, M.U[i].mask)
-        Ucomp_id_M[i] = comp_id
-        Ucomp_masks_M[i] = comp_masks
-        Ucomp_n_M[i] = ncomp
+@inline function _pack_row_buckets(rows_by_comp::Vector{Vector{Int}})
+    ncomp = length(rows_by_comp)
+    ptr = Vector{Int}(undef, ncomp + 1)
+    ptr[1] = 1
+    total = 0
+    @inbounds for c in 1:ncomp
+        total += length(rows_by_comp[c])
+        ptr[c + 1] = total + 1
     end
-
-    Dcomp_id_N    = Vector{Vector{Int}}(undef, nDN)
-    Dcomp_masks_N = Vector{Vector{BitVector}}(undef, nDN)
-    Dcomp_n_N     = Vector{Int}(undef, nDN)
-    for t in 1:nDN
-        comp_id, ncomp, comp_masks, _ = _component_data(adj, N.D[t].mask)
-        Dcomp_id_N[t] = comp_id
-        Dcomp_masks_N[t] = comp_masks
-        Dcomp_n_N[t] = ncomp
+    rows = Vector{Int}(undef, total)
+    p = 1
+    @inbounds for c in 1:ncomp
+        rc = rows_by_comp[c]
+        len = length(rc)
+        if len > 0
+            copyto!(rows, p, rc, 1, len)
+            p += len
+        end
     end
+    return ptr, rows
+end
 
-    # Build W = oplus_{i,t} Hom(k[U_M[i]], k[D_N[t]]) with basis indexed by components of U_i cap D_t.
-    w_index = zeros(Int, nUM, nDN)   # (iM,tN) -> index into w_data
-    w_data  = _WPairData[]
+@inline function _wpair_u_bounds(w::_WPairData, cU::Int)
+    return w.u_ptr[cU], w.u_ptr[cU + 1] - 1
+end
+
+@inline function _wpair_d_bounds(w::_WPairData, cD::Int)
+    return w.d_ptr[cD], w.d_ptr[cD + 1] - 1
+end
+
+function _build_wpair_layout(adj::Vector{Vector{Int}},
+                             Usets::AbstractVector,
+                             Dsets::AbstractVector,
+                             Ucomp_id::Vector{Vector{Int}},
+                             Ucomp_n::Vector{Int},
+                             Dcomp_id::Vector{Vector{Int}},
+                             Dcomp_n::Vector{Int},
+                             nverts::Int)
+    nU = length(Usets)
+    nD = length(Dsets)
+    w_index = zeros(Int, nU, nD)
+    w_data = _WPairData[]
     W_dim = 0
-    marks = zeros(Int, P.n)
+    marks = zeros(Int, nverts)
     queue = Int[]
     reps_int = Int[]
     mark = 1
 
-    for iM in 1:nUM
-        for tN in 1:nDN
+    for iU in 1:nU
+        for jD in 1:nD
             mark += 1
             if mark == typemax(Int)
                 fill!(marks, 0)
                 mark = 1
             end
             ncomp_int = _component_reps_intersection!(
-                reps_int, adj, M.U[iM].mask, N.D[tN].mask, marks, mark, queue
+                reps_int, adj, Usets[iU].mask, Dsets[jD].mask, marks, mark, queue
             )
             if ncomp_int > 0
                 base = W_dim
                 W_dim += ncomp_int
 
-                rows_by_u = [Int[] for _ in 1:Ucomp_n_M[iM]]
-                rows_by_d = [Int[] for _ in 1:Dcomp_n_N[tN]]
-                for c in 1:ncomp_int
+                rows_by_u = [Int[] for _ in 1:Ucomp_n[iU]]
+                rows_by_d = [Int[] for _ in 1:Dcomp_n[jD]]
+                @inbounds for c in 1:ncomp_int
                     row = base + c
                     v = reps_int[c]
-                    cu = Ucomp_id_M[iM][v]
-                    cd = Dcomp_id_N[tN][v]
+                    cu = Ucomp_id[iU][v]
+                    cd = Dcomp_id[jD][v]
                     push!(rows_by_u[cu], row)
                     push!(rows_by_d[cd], row)
                 end
-
-                push!(w_data, _WPairData(rows_by_u, rows_by_d))
-                w_index[iM, tN] = length(w_data)
+                u_ptr, u_rows = _pack_row_buckets(rows_by_u)
+                d_ptr, d_rows = _pack_row_buckets(rows_by_d)
+                push!(w_data, _WPairData(u_ptr, u_rows, d_ptr, d_rows))
+                w_index[iU, jD] = length(w_data)
             end
         end
     end
 
-    # V1 basis: components of U_M[i] contained in U_N[j].
-    V1 = Tuple{Int,Int,Int}[]  # (iM, jN, compU)
+    return w_index, w_data, W_dim
+end
+
+function _build_dense_idx_hom_plan(M::FringeModule{K},
+                                   N::FringeModule{K}) where {K}
+    @assert M.P === N.P "Posets must match"
+    adj = (_ensure_hom_cache!(M).adj)::Vector{Vector{Int}}
+
+    nUM = length(M.U); nDM = length(M.D)
+    nUN = length(N.U); nDN = length(N.D)
+
+    Udec_M = _ensure_upset_component_decomp!(M)
+    Ddec_N = _ensure_downset_component_decomp!(N)
+    Ucomp_id_M = Udec_M.comp_id
+    Ucomp_masks_M = Udec_M.comp_masks
+    Ucomp_n_M = Udec_M.comp_n
+    Dcomp_id_N = Ddec_N.comp_id
+    Dcomp_masks_N = Ddec_N.comp_masks
+    Dcomp_n_N = Ddec_N.comp_n
+
+    w_index, w_data, W_dim = _build_wpair_layout(
+        adj, M.U, N.D, Ucomp_id_M, Ucomp_n_M, Dcomp_id_N, Dcomp_n_N, M.P.n
+    )
+
+    U_targets = _component_subset_targets(Ucomp_masks_M, [N.U[j].mask for j in 1:nUN])
+    D_targets = _component_subset_targets(Dcomp_masks_N, [M.D[s].mask for s in 1:nDM])
+
+    V1 = Tuple{Int,Int,Int}[]
     for iM in 1:nUM
-        for jN in 1:nUN
-            for cU in 1:Ucomp_n_M[iM]
-                if is_subset(Ucomp_masks_M[iM][cU], N.U[jN].mask)
-                    push!(V1, (iM, jN, cU))
-                end
+        targets_i = U_targets[iM]
+        for cU in 1:Ucomp_n_M[iM]
+            for jN in targets_i[cU]
+                push!(V1, (iM, jN, cU))
             end
         end
     end
     V1_dim = length(V1)
 
-    # V2 basis: components of D_N[t] contained in D_M[s].
-    V2 = Tuple{Int,Int,Int}[]  # (sM, tN, compD)
-    for sM in 1:nDM
-        for tN in 1:nDN
-            for cD in 1:Dcomp_n_N[tN]
-                if is_subset(Dcomp_masks_N[tN][cD], M.D[sM].mask)
-                    push!(V2, (sM, tN, cD))
-                end
+    V2 = Tuple{Int,Int,Int}[]
+    for tN in 1:nDN
+        targets_t = D_targets[tN]
+        for cD in 1:Dcomp_n_N[tN]
+            for sM in targets_t[cD]
+                push!(V2, (sM, tN, cD))
             end
         end
     end
     V2_dim = length(V2)
 
-    # Build T and S as dense matrices (exact arithmetic, small sizes expected).
-    T = zeros(K, W_dim, V1_dim)
-    for (col, (iM, jN, cU)) in enumerate(V1)
+    t_rows = Int[]
+    t_cols = Int[]
+    t_tN = Int[]
+    t_jN = Int[]
+    sizehint!(t_rows, max(16, W_dim * 4))
+    sizehint!(t_cols, max(16, W_dim * 4))
+    sizehint!(t_tN, max(16, W_dim * 4))
+    sizehint!(t_jN, max(16, W_dim * 4))
+
+    @inbounds for (col, (iM, jN, cU)) in enumerate(V1)
         for tN in 1:nDN
-            val = N.phi[tN, jN]
-            if val != zero(K)
-                pid = w_index[iM, tN]
-                if pid != 0
-                    rows = w_data[pid].rows_by_ucomp[cU]
-                    for r in rows
-                        T[r, col] += val
-                    end
-                end
+            pid = w_index[iM, tN]
+            pid == 0 && continue
+            w = w_data[pid]
+            lo, hi = _wpair_u_bounds(w, cU)
+            lo > hi && continue
+            for k in lo:hi
+                push!(t_rows, w.u_rows[k])
+                push!(t_cols, col)
+                push!(t_tN, tN)
+                push!(t_jN, jN)
             end
         end
     end
 
-    S = zeros(K, W_dim, V2_dim)
-    for (col, (sM, tN, cD)) in enumerate(V2)
+    s_rows = Int[]
+    s_cols = Int[]
+    s_sM = Int[]
+    s_iM = Int[]
+    sizehint!(s_rows, max(16, W_dim * 4))
+    sizehint!(s_cols, max(16, W_dim * 4))
+    sizehint!(s_sM, max(16, W_dim * 4))
+    sizehint!(s_iM, max(16, W_dim * 4))
+
+    @inbounds for (col, (sM, tN, cD)) in enumerate(V2)
         for iM in 1:nUM
-            val = M.phi[sM, iM]
-            if val != zero(K)
-                pid = w_index[iM, tN]
-                if pid != 0
-                    rows = w_data[pid].rows_by_dcomp[cD]
-                    for r in rows
-                        S[r, col] += val
-                    end
-                end
+            pid = w_index[iM, tN]
+            pid == 0 && continue
+            w = w_data[pid]
+            lo, hi = _wpair_d_bounds(w, cD)
+            lo > hi && continue
+            for k in lo:hi
+                push!(s_rows, w.d_rows[k])
+                push!(s_cols, col)
+                push!(s_sM, sM)
+                push!(s_iM, iM)
             end
         end
     end
 
-    big = hcat(T, -S)
+    Tbuf = zeros(K, W_dim, V1_dim)
+    Sbuf = zeros(K, W_dim, V2_dim)
+    bigbuf = Matrix{K}(undef, W_dim, V1_dim + V2_dim)
+    return _FringeDenseIdxPlan{K}(W_dim, V1_dim, V2_dim,
+                                  t_rows, t_cols, t_tN, t_jN,
+                                  s_rows, s_cols, s_sM, s_iM,
+                                  Tbuf, Sbuf, bigbuf)
+end
 
-    rT   = FieldLinAlg.rank(M.field, T)
-    rS   = FieldLinAlg.rank(M.field, S)
-    rBig = FieldLinAlg.rank(M.field, big)
+@inline function _ensure_dense_idx_hom_plan!(M::FringeModule{K},
+                                             N::FringeModule{K}) where {K}
+    hc = _ensure_hom_cache!(M)
+    key = _hom_pair_key(N, :dense_idx_plan)
+    plan = get(hc.dense_idx_plans, key, nothing)
+    if plan === nothing
+        plan = _build_dense_idx_hom_plan(M, N)
+        hc.dense_idx_plans[key] = plan
+    end
+    return plan::_FringeDenseIdxPlan{K}
+end
 
-    dimKer_big = (V1_dim + V2_dim) - rBig
-    dimKer_T   = V1_dim - rT
-    dimKer_S   = V2_dim - rS
+function _build_dense_path_hom_plan(M::FringeModule{K},
+                                    N::FringeModule{K}) where {K}
+    @assert M.P === N.P "Posets must match"
+    adj = (_ensure_hom_cache!(M).adj)::Vector{Vector{Int}}
+
+    nUM = length(M.U)
+    nDM = length(M.D)
+    nUN = length(N.U)
+    nDN = length(N.D)
+
+    Udec_M = _ensure_upset_component_decomp!(M)
+    Ddec_N = _ensure_downset_component_decomp!(N)
+    Ucomp_id_M = Udec_M.comp_id
+    Ucomp_masks_M = Udec_M.comp_masks
+    Ucomp_n_M = Udec_M.comp_n
+    Dcomp_id_N = Ddec_N.comp_id
+    Dcomp_masks_N = Ddec_N.comp_masks
+    Dcomp_n_N = Ddec_N.comp_n
+
+    w_index, w_data, W_dim = _build_wpair_layout(
+        adj, M.U, N.D, Ucomp_id_M, Ucomp_n_M, Dcomp_id_N, Dcomp_n_N, M.P.n
+    )
+
+    U_targets = _component_subset_targets(Ucomp_masks_M, [N.U[j].mask for j in 1:nUN])
+    D_targets = _component_subset_targets(Dcomp_masks_N, [M.D[s].mask for s in 1:nDM])
+
+    V1 = NTuple{3,Int}[]
+    for iM in 1:nUM
+        targets_i = U_targets[iM]
+        for cU in 1:Ucomp_n_M[iM]
+            for jN in targets_i[cU]
+                push!(V1, (iM, jN, cU))
+            end
+        end
+    end
+
+    V2 = NTuple{3,Int}[]
+    for tN in 1:nDN
+        targets_t = D_targets[tN]
+        for cD in 1:Dcomp_n_N[tN]
+            for sM in targets_t[cD]
+                push!(V2, (sM, tN, cD))
+            end
+        end
+    end
+
+    V1_dim = length(V1)
+    V2_dim = length(V2)
+    Tbuf = zeros(K, W_dim, V1_dim)
+    Sbuf = zeros(K, W_dim, V2_dim)
+    bigbuf = Matrix{K}(undef, W_dim, V1_dim + V2_dim)
+    return _FringeDensePathPlan{K}(W_dim, V1, V2, w_index, w_data,
+                                   nUM, nDN, Tbuf, Sbuf, bigbuf)
+end
+
+@inline function _ensure_dense_path_hom_plan!(M::FringeModule{K},
+                                              N::FringeModule{K}) where {K}
+    hc = _ensure_hom_cache!(M)
+    key = _hom_pair_key(N, :dense_path_plan)
+    plan = get(hc.dense_path_plans, key, nothing)
+    if plan === nothing
+        plan = _build_dense_path_hom_plan(M, N)
+        hc.dense_path_plans[key] = plan
+    end
+    return plan::_FringeDensePathPlan{K}
+end
+
+function _hom_dimension_dense_idx_path(M::FringeModule{K},
+                                         N::FringeModule{K}) where {K}
+    plan = _ensure_dense_idx_hom_plan!(M, N)
+    T = plan.Tbuf
+    S = plan.Sbuf
+    z = zero(K)
+    fill!(T, z)
+    fill!(S, z)
+
+    Nphi = N.phi
+    Mphi = M.phi
+    @inbounds for i in eachindex(plan.t_rows)
+        v = Nphi[plan.t_tN[i], plan.t_jN[i]]
+        v == z && continue
+        T[plan.t_rows[i], plan.t_cols[i]] += v
+    end
+    @inbounds for i in eachindex(plan.s_rows)
+        v = Mphi[plan.s_sM[i], plan.s_iM[i]]
+        v == z && continue
+        S[plan.s_rows[i], plan.s_cols[i]] += v
+    end
+
+    rT = FieldLinAlg.rank(M.field, T)
+    rS = FieldLinAlg.rank(M.field, S)
+    rBig = _rank_hcat_signed_workspace!(M.field, plan.bigbuf, T, S)
+    dimKer_big = (plan.V1_dim + plan.V2_dim) - rBig
+    dimKer_T = plan.V1_dim - rT
+    dimKer_S = plan.V2_dim - rS
     return dimKer_big - (dimKer_T + dimKer_S)
+end
+
+function _hom_dimension_dense_path(M::FringeModule{K}, N::FringeModule{K}) where {K}
+    plan = _ensure_dense_path_hom_plan!(M, N)
+    T = plan.Tbuf
+    S = plan.Sbuf
+    z = zero(K)
+    fill!(T, z)
+    fill!(S, z)
+
+    Nphi = N.phi
+    Mphi = M.phi
+    V1 = plan.V1
+    V2 = plan.V2
+    w_index = plan.w_index
+    w_data = plan.w_data
+    nDN = plan.nDN
+    nUM = plan.nUM
+
+    @inbounds for col in eachindex(V1)
+        (iM, jN, cU) = V1[col]
+        for tN in 1:nDN
+            val = Nphi[tN, jN]
+            val == z && continue
+            pid = w_index[iM, tN]
+            pid == 0 && continue
+            w = w_data[pid]
+            lo, hi = _wpair_u_bounds(w, cU)
+            for k in lo:hi
+                T[w.u_rows[k], col] += val
+            end
+        end
+    end
+
+    @inbounds for col in eachindex(V2)
+        (sM, tN, cD) = V2[col]
+        for iM in 1:nUM
+            val = Mphi[sM, iM]
+            val == z && continue
+            pid = w_index[iM, tN]
+            pid == 0 && continue
+            w = w_data[pid]
+            lo, hi = _wpair_d_bounds(w, cD)
+            for k in lo:hi
+                S[w.d_rows[k], col] += val
+            end
+        end
+    end
+
+    rT = FieldLinAlg.rank(M.field, T)
+    rS = FieldLinAlg.rank(M.field, S)
+    rBig = _rank_hcat_signed_workspace!(M.field, plan.bigbuf, T, S)
+    V1_dim = length(V1)
+    V2_dim = length(V2)
+    dimKer_big = (V1_dim + V2_dim) - rBig
+    dimKer_T = V1_dim - rT
+    dimKer_S = V2_dim - rS
+    return dimKer_big - (dimKer_T + dimKer_S)
+end
+
+function _build_sparse_hom_plan(M::FringeModule{K},
+                                N::FringeModule{K}) where {K}
+    @assert M.P === N.P "Posets must match"
+    adj = (_ensure_hom_cache!(M).adj)::Vector{Vector{Int}}
+
+    nUM = length(M.U); nDM = length(M.D)
+    nUN = length(N.U); nDN = length(N.D)
+
+    Udec_M = _ensure_upset_component_decomp!(M)
+    Ddec_N = _ensure_downset_component_decomp!(N)
+    Ucomp_id_M = Udec_M.comp_id
+    Ucomp_masks_M = Udec_M.comp_masks
+    Ucomp_n_M = Udec_M.comp_n
+    Dcomp_id_N = Ddec_N.comp_id
+    Dcomp_masks_N = Ddec_N.comp_masks
+    Dcomp_n_N = Ddec_N.comp_n
+
+    w_index, w_data, W_dim = _build_wpair_layout(
+        adj, M.U, N.D, Ucomp_id_M, Ucomp_n_M, Dcomp_id_N, Dcomp_n_N, M.P.n
+    )
+
+    U_targets = _component_subset_targets(Ucomp_masks_M, [N.U[j].mask for j in 1:nUN])
+    D_targets = _component_subset_targets(Dcomp_masks_N, [M.D[s].mask for s in 1:nDM])
+
+    V1 = NTuple{3,Int}[]
+    for iM in 1:nUM
+        targets_i = U_targets[iM]
+        for cU in 1:Ucomp_n_M[iM]
+            for jN in targets_i[cU]
+                push!(V1, (iM, jN, cU))
+            end
+        end
+    end
+
+    V2 = NTuple{3,Int}[]
+    for tN in 1:nDN
+        targets_t = D_targets[tN]
+        for cD in 1:Dcomp_n_N[tN]
+            for sM in targets_t[cD]
+                push!(V2, (sM, tN, cD))
+            end
+        end
+    end
+
+    z = zero(K)
+    Nphi = N.phi
+    t_colptr = Vector{Int}(undef, length(V1) + 1)
+    t_rowval = Int[]
+    t_tN = Int[]
+    t_jN = Int[]
+    t_colptr[1] = 1
+    @inbounds for col in eachindex(V1)
+        (iM, jN, cU) = V1[col]
+        for tN in 1:nDN
+            Nphi[tN, jN] == z && continue
+            pid = w_index[iM, tN]
+            pid == 0 && continue
+            w = w_data[pid]
+            lo, hi = _wpair_u_bounds(w, cU)
+            for k in lo:hi
+                push!(t_rowval, w.u_rows[k])
+                push!(t_tN, tN)
+                push!(t_jN, jN)
+            end
+        end
+        t_colptr[col + 1] = length(t_rowval) + 1
+    end
+    t_nzval = Vector{K}(undef, length(t_rowval))
+    @inbounds for i in eachindex(t_nzval)
+        t_nzval[i] = Nphi[t_tN[i], t_jN[i]]
+    end
+    t_nzptr = if Nphi isa SparseMatrixCSC{K,Int}
+        ptrs = Vector{Int}(undef, length(t_tN))
+        @inbounds for i in eachindex(t_tN)
+            p = _sparse_col_row_ptr(Nphi, t_tN[i], t_jN[i])
+            p == 0 && error("_build_sparse_hom_plan: internal sparse pointer miss for T entry.")
+            ptrs[i] = p
+        end
+        ptrs
+    else
+        nothing
+    end
+    t_nzptr_max = t_nzptr === nothing ? 0 : maximum(t_nzptr)
+    T = SparseMatrixCSC(W_dim, length(V1), t_colptr, t_rowval, t_nzval)
+
+    Mphi = M.phi
+    s_colptr = Vector{Int}(undef, length(V2) + 1)
+    s_rowval = Int[]
+    s_sM = Int[]
+    s_iM = Int[]
+    s_colptr[1] = 1
+    @inbounds for col in eachindex(V2)
+        (sM, tN, cD) = V2[col]
+        for iM in 1:nUM
+            Mphi[sM, iM] == z && continue
+            pid = w_index[iM, tN]
+            pid == 0 && continue
+            w = w_data[pid]
+            lo, hi = _wpair_d_bounds(w, cD)
+            for k in lo:hi
+                push!(s_rowval, w.d_rows[k])
+                push!(s_sM, sM)
+                push!(s_iM, iM)
+            end
+        end
+        s_colptr[col + 1] = length(s_rowval) + 1
+    end
+    s_nzval = Vector{K}(undef, length(s_rowval))
+    @inbounds for i in eachindex(s_nzval)
+        s_nzval[i] = Mphi[s_sM[i], s_iM[i]]
+    end
+    s_nzptr = if Mphi isa SparseMatrixCSC{K,Int}
+        ptrs = Vector{Int}(undef, length(s_sM))
+        @inbounds for i in eachindex(s_sM)
+            p = _sparse_col_row_ptr(Mphi, s_sM[i], s_iM[i])
+            p == 0 && error("_build_sparse_hom_plan: internal sparse pointer miss for S entry.")
+            ptrs[i] = p
+        end
+        ptrs
+    else
+        nothing
+    end
+    s_nzptr_max = s_nzptr === nothing ? 0 : maximum(s_nzptr)
+    S = SparseMatrixCSC(W_dim, length(V2), s_colptr, s_rowval, s_nzval)
+
+    hcat_buf, nnzT = _build_sparse_hcat_workspace(T, S)
+    hcat_buf_rev, nnzS = _build_sparse_hcat_workspace(S, T)
+    return _FringeSparsePlan{K}(W_dim, V1, V2, w_index, w_data, nUM, nDN,
+                                T, S, t_tN, t_jN, s_sM, s_iM,
+                                t_nzptr, s_nzptr,
+                                t_nzptr_max, s_nzptr_max,
+                                hcat_buf, hcat_buf_rev,
+                                nnzT, nnzS)
+end
+
+@inline function _ensure_sparse_hom_plan!(M::FringeModule{K},
+                                          N::FringeModule{K}) where {K}
+    hc = _ensure_hom_cache!(M)
+    key = _hom_pair_key(N, :sparse_plan)
+    plan = get(hc.sparse_plans, key, nothing)
+    if plan === nothing
+        plan = _build_sparse_hom_plan(M, N)
+        hc.sparse_plans[key] = plan
+    end
+    return plan::_FringeSparsePlan{K}
+end
+
+function _hom_dimension_sparse_path(M::FringeModule{K}, N::FringeModule{K}) where {K}
+    plan = _ensure_sparse_hom_plan!(M, N)
+    T = plan.T
+    S = plan.S
+    z = zero(K)
+    Nphi = N.phi
+    Mphi = M.phi
+
+    t_nzptr = plan.t_nzptr
+    if t_nzptr !== nothing && Nphi isa SparseMatrixCSC{K,Int} &&
+       plan.t_nzptr_max <= length(Nphi.nzval)
+        @inbounds for i in eachindex(T.nzval)
+            v = Nphi.nzval[t_nzptr[i]]
+            T.nzval[i] = v == z ? z : v
+        end
+    else
+        @inbounds for i in eachindex(T.nzval)
+            v = Nphi[plan.t_tN[i], plan.t_jN[i]]
+            T.nzval[i] = v == z ? z : v
+        end
+    end
+
+    s_nzptr = plan.s_nzptr
+    if s_nzptr !== nothing && Mphi isa SparseMatrixCSC{K,Int} &&
+       plan.s_nzptr_max <= length(Mphi.nzval)
+        @inbounds for i in eachindex(S.nzval)
+            v = Mphi.nzval[s_nzptr[i]]
+            S.nzval[i] = v == z ? z : v
+        end
+    else
+        @inbounds for i in eachindex(S.nzval)
+            v = Mphi[plan.s_sM[i], plan.s_iM[i]]
+            S.nzval[i] = v == z ? z : v
+        end
+    end
+
+    nT = size(T, 2)
+    nS = size(S, 2)
+    if nS <= nT
+        rS = FieldLinAlg.rank(M.field, S)
+        rUnion, rT = _rank_hcat_signed_sparse_workspace_with_prefix_rank!(
+            M.field, plan.hcat_buf, T, S, plan.nnzT, nT
+        )
+        return rT + rS - rUnion
+    else
+        rT = FieldLinAlg.rank(M.field, T)
+        rUnion, rS = _rank_hcat_signed_sparse_workspace_with_prefix_rank!(
+            M.field, plan.hcat_buf_rev, S, T, plan.nnzS, nS
+        )
+        return rT + rS - rUnion
+    end
+end
+
+@inline function _hom_dimension_with_path(M::FringeModule{K},
+                                          N::FringeModule{K},
+                                          path::Symbol) where {K}
+    path === :sparse_path && return _hom_dimension_sparse_path(M, N)
+    path === :dense_path && return _hom_dimension_dense_path(M, N)
+    path === :dense_idx_internal && return _hom_dimension_dense_idx_path(M, N)
+    error("_hom_dimension_with_path: unknown path $(repr(path)).")
+end
+
+@inline function _store_hom_route_choice!(hc::_FringeHomCache,
+                                          P,
+                                          pair_key::UInt64,
+                                          fkey::UInt64,
+                                          choice::Symbol)
+    hc.dense_path_choice[pair_key] = choice
+    hc.route_fingerprint_choice[fkey] = choice
+    _hom_route_choice_set!(P, fkey, choice)
+    return choice
+end
+
+function _select_hom_internal_path_timed!(M::FringeModule{K},
+                                          N::FringeModule{K},
+                                          hc::_FringeHomCache{K},
+                                          pair_key::UInt64,
+                                          fkey::UInt64) where {K}
+    hc.route_timing_fallbacks += 1
+
+    t0 = time_ns()
+    v_sparse = _hom_dimension_sparse_path(M, N)
+    t_sparse = time_ns() - t0
+
+    t0 = time_ns()
+    v_dense = _hom_dimension_dense_path(M, N)
+    t_dense = time_ns() - t0
+
+    t0 = time_ns()
+    v_denseidx = _hom_dimension_dense_idx_path(M, N)
+    t_denseidx = time_ns() - t0
+
+    (v_sparse == v_dense && v_dense == v_denseidx) ||
+        error("hom_dimension path mismatch during one-shot internal selection.")
+
+    choice = :dense_idx_internal
+    best = t_denseidx
+    if t_sparse < best
+        choice = :sparse_path
+        best = t_sparse
+    end
+    if t_dense < best
+        choice = :dense_path
+    end
+    return _store_hom_route_choice!(hc, M.P, pair_key, fkey, choice)
+end
+
+function _select_hom_internal_path!(M::FringeModule{K},
+                                    N::FringeModule{K}) where {K}
+    hc = _ensure_hom_cache!(M)
+    pair_key = _hom_pair_key(N, :internal_choice)
+    choice = get(hc.dense_path_choice, pair_key, nothing)
+    choice !== nothing && return choice::Symbol
+
+    fkey = _hom_route_fingerprint(M, N, :internal_choice)
+    choice = _hom_route_choice_get(M.P, fkey)
+    if choice !== nothing
+        hc.dense_path_choice[pair_key] = choice
+        hc.route_fingerprint_choice[fkey] = choice
+        return choice::Symbol
+    end
+    choice = get(hc.route_fingerprint_choice, fkey, nothing)
+    if choice !== nothing
+        hc.dense_path_choice[pair_key] = choice
+        return choice::Symbol
+    end
+
+    choice = _heuristic_hom_internal_choice(M, N)
+    if choice !== nothing
+        return _store_hom_route_choice!(hc, M.P, pair_key, fkey, choice)
+    end
+
+    return _select_hom_internal_path_timed!(M, N, hc, pair_key, fkey)
+end
+
+_select_dense_internal_path_timed!(M::FringeModule{K},
+                                   N::FringeModule{K},
+                                   hc::_FringeHomCache{K},
+                                   pair_key::UInt64,
+                                   fkey::UInt64) where {K} =
+    _select_hom_internal_path_timed!(M, N, hc, pair_key, fkey)
+
+_select_sparse_internal_path_timed!(M::FringeModule{K},
+                                    N::FringeModule{K},
+                                    hc::_FringeHomCache{K},
+                                    pair_key::UInt64,
+                                    fkey::UInt64) where {K} =
+    _select_hom_internal_path_timed!(M, N, hc, pair_key, fkey)
+
+_select_dense_internal_path!(M::FringeModule{K},
+                             N::FringeModule{K}) where {K} =
+    _select_hom_internal_path!(M, N)
+
+_select_sparse_internal_path!(M::FringeModule{K},
+                              N::FringeModule{K}) where {K} =
+    _select_hom_internal_path!(M, N)
+
+function _clear_hom_route_choice!(M::FringeModule{K}) where {K}
+    hc = _ensure_hom_cache!(M)
+    empty!(hc.dense_path_choice)
+    empty!(hc.route_fingerprint_choice)
+    hc.route_timing_fallbacks = 0
+    pc = _poset_cache_or_nothing(M.P)
+    if pc !== nothing
+        Base.lock(pc.lock)
+        try
+            empty!(pc.hom_route_choice)
+        finally
+            Base.unlock(pc.lock)
+        end
+    end
+    return nothing
+end
+
+"Dimension of Hom(M,N) over a field K using the production auto route selector."
+function hom_dimension(M::FringeModule{K}, N::FringeModule{K}) where {K}
+    @assert M.P === N.P "Posets must match"
+    path = _select_hom_internal_path!(M, N)
+    return _hom_dimension_with_path(M, N, path)
 end
 
 
 # ---------- utility: dense\tosparse over K ----------
 
 """
-    dense_to_sparse_K(A)
+    _dense_to_sparse_K(A)
 
 Convert a dense matrix `A` to a sparse matrix with the same element type.
 
-For an explicit target coefficient type `K`, call `dense_to_sparse_K(A, K)`.
+For an explicit target coefficient type `K`, call `_dense_to_sparse_K(A, K)`.
 """
-function dense_to_sparse_K(A::AbstractMatrix{T}, ::Type{K}) where {T,K}
+function _dense_to_sparse_K(A::AbstractMatrix{T}, ::Type{K}) where {T,K}
     m,n = size(A)
     S = spzeros(K, m, n)
     for j in 1:n, i in 1:m
@@ -1673,19 +2892,7 @@ function dense_to_sparse_K(A::AbstractMatrix{T}, ::Type{K}) where {T,K}
     S
 end
 
-dense_to_sparse_K(A::AbstractMatrix{T}) where {T} = dense_to_sparse_K(A, T)
-
-export FiniteFringeOptions,
-       AbstractPoset, FinitePoset, ProductOfChainsPoset, GridPoset, ProductPoset,
-       RegionsPoset,
-       set_updown_cache_policy!, updown_cache_policy,
-       build_cache!,
-       nvertices, leq, leq_matrix, upset_indices, downset_indices, upset_iter, downset_iter, leq_row, leq_col,
-       poset_equal, poset_equal_opposite,
-       CoverEdges, Upset, Downset, principal_upset, principal_downset,
-       upset_from_generators, downset_from_generators, upset_closure, downset_closure, cover_edges,
-       FringeModule, one_by_one_fringe, fiber_dimension, hom_dimension, dense_to_sparse_K,
-       change_field
+_dense_to_sparse_K(A::AbstractMatrix{T}) where {T} = _dense_to_sparse_K(A, T)
 
 end # module
 
@@ -1708,7 +2915,7 @@ module IndicatorTypes
 
 using SparseArrays
 using ..FiniteFringe: FinitePoset, Upset, Downset, FringeModule  # P, labeling sets
-using ..CoreModules: coeff_type
+using ..CoreModules: AbstractCoeffField, coeff_type
 
 """
     UpsetPresentation{K}
@@ -1723,12 +2930,12 @@ Fields:
 """
 struct UpsetPresentation{K}
     P::FinitePoset
-    U0::Vector{Upset}
-    U1::Vector{Upset}
+    U0::Vector{<:Upset}
+    U1::Vector{<:Upset}
     delta::SparseMatrixCSC{K,Int}
     H::Union{Nothing, FringeModule{K}}
 
-    function UpsetPresentation{K}(P, U0, U1, delta, H; field = nothing) where {K}
+    function UpsetPresentation{K}(P, U0, U1, delta, H) where {K}
         deltaK = SparseMatrixCSC{K,Int}(delta)
         return new{K}(P, U0, U1, deltaK, H)
     end
@@ -1747,12 +2954,12 @@ Fields:
 """
 struct DownsetCopresentation{K}
     P::FinitePoset
-    D0::Vector{Downset}
-    D1::Vector{Downset}
+    D0::Vector{<:Downset}
+    D1::Vector{<:Downset}
     rho::SparseMatrixCSC{K,Int}
     H::Union{Nothing, FringeModule{K}}
 
-    function DownsetCopresentation{K}(P, D0, D1, rho, H; field = nothing) where {K}
+    function DownsetCopresentation{K}(P, D0, D1, rho, H) where {K}
         rhoK = SparseMatrixCSC{K,Int}(rho)
         return new{K}(P, D0, D1, rhoK, H)
     end
@@ -1760,37 +2967,50 @@ end
 
 function UpsetPresentation(
     P::FinitePoset,
-    U0::Vector{Upset},
-    U1::Vector{Upset},
+    U0::Vector{<:Upset},
+    U1::Vector{<:Upset},
     delta::SparseMatrixCSC,
     H;
-    field = nothing,
+    field::AbstractCoeffField,
 )
-    if field === nothing
-        return IndicatorTypes.UpsetPresentation{eltype(delta)}(P, U0, U1, delta, H)
-    end
     K = coeff_type(field)
     deltaK = SparseMatrixCSC{K,Int}(delta)
     return IndicatorTypes.UpsetPresentation{K}(P, U0, U1, deltaK, H)
 end
 
+function UpsetPresentation(
+    P::FinitePoset,
+    U0::Vector{<:Upset},
+    U1::Vector{<:Upset},
+    delta::SparseMatrixCSC{K,Int},
+    H,
+) where {K}
+    return IndicatorTypes.UpsetPresentation{K}(P, U0, U1, delta, H)
+end
+
 function DownsetCopresentation(
     P::FinitePoset,
-    D0::Vector{Downset},
-    D1::Vector{Downset},
+    D0::Vector{<:Downset},
+    D1::Vector{<:Downset},
     rho::SparseMatrixCSC,
     H;
-    field = nothing,
+    field::AbstractCoeffField,
 )
-    if field === nothing
-        return IndicatorTypes.DownsetCopresentation{eltype(rho)}(P, D0, D1, rho, H)
-    end
     K = coeff_type(field)
     rhoK = SparseMatrixCSC{K,Int}(rho)
     return IndicatorTypes.DownsetCopresentation{K}(P, D0, D1, rhoK, H)
 end
 
-export UpsetPresentation, DownsetCopresentation
+function DownsetCopresentation(
+    P::FinitePoset,
+    D0::Vector{<:Downset},
+    D1::Vector{<:Downset},
+    rho::SparseMatrixCSC{K,Int},
+    H,
+) where {K}
+    return IndicatorTypes.DownsetCopresentation{K}(P, D0, D1, rho, H)
+end
+
 end # module IndicatorTypes
 
 
@@ -1802,8 +3022,8 @@ module Encoding
 # =============================================================================
 
 using SparseArrays
-using ..FiniteFringe
-import ..FiniteFringe: nvertices, leq
+import ..FiniteFringe
+import ..FiniteFringe: AbstractPoset, FringeModule, RegionsPoset, nvertices, leq
 
 # This submodule defines methods on CoreModules.AbstractPLikeEncodingMap and
 # calls CoreModules.locate/dimension/etc., so we must import the sibling module
@@ -1923,7 +3143,10 @@ function _uptight_regions(Q::FiniteFringe.AbstractPoset, Y::Vector{FiniteFringe.
                     key |= (UInt64(1) << (i - 1))
                 end
             end
-            push!(get!(sigs, key, Int[]), q)
+            vec = get!(sigs, key) do
+                Int[]
+            end
+            push!(vec, q)
         end
         return collect(values(sigs))
     elseif m <= 128
@@ -1942,17 +3165,73 @@ function _uptight_regions(Q::FiniteFringe.AbstractPoset, Y::Vector{FiniteFringe.
                 end
             end
             key = (lo, hi)
-            push!(get!(sigs, key, Int[]), q)
+            vec = get!(sigs, key) do
+                Int[]
+            end
+            push!(vec, q)
         end
         return collect(values(sigs))
     else
-        # Fallback for very large Y: keep content-hashable tuple signatures.
-        sigs = Dict{Tuple{Vararg{Bool}}, Vector{Int}}()
-        @inbounds for q in 1:nvertices(Q)
-            key = ntuple(i -> Y[i].mask[q], m)
-            push!(get!(sigs, key, Int[]), q)
+        # Large-Y fast path:
+        # use packed UInt64 signatures with a hash-chain table to avoid
+        # constructing Tuple{Vararg{Bool}} keys per vertex.
+        n = nvertices(Q)
+        nchunks = cld(m, 64)
+        scratch = zeros(UInt64, nchunks)
+
+        heads = Dict{UInt, Int}()                # hash => head class index
+        next_samehash = Int[]                    # linked list next pointers
+        signatures = Vector{Vector{UInt64}}()    # one packed signature per class
+        classes = Vector{Vector{Int}}()          # class members
+
+        sizehint!(next_samehash, max(1, min(n, 4096)))
+        sizehint!(signatures, max(1, min(n, 4096)))
+        sizehint!(classes, max(1, min(n, 4096)))
+
+        @inbounds for q in 1:n
+            fill!(scratch, 0x0)
+            for i in 1:m
+                if Y[i].mask[q]
+                    c = ((i - 1) >>> 6) + 1
+                    bit = (i - 1) & 0x3f
+                    scratch[c] |= UInt64(1) << bit
+                end
+            end
+
+            h = UInt(0x9e3779b97f4a7c15)
+            for c in 1:nchunks
+                h = hash(scratch[c], h)
+            end
+
+            idx = get(heads, h, 0)
+            found = 0
+            while idx != 0
+                sig = signatures[idx]
+                same = true
+                for c in 1:nchunks
+                    if sig[c] != scratch[c]
+                        same = false
+                        break
+                    end
+                end
+                if same
+                    found = idx
+                    break
+                end
+                idx = next_samehash[idx]
+            end
+
+            if found == 0
+                push!(signatures, copy(scratch))
+                push!(classes, Int[q])
+                prev_head = get(heads, h, 0)
+                push!(next_samehash, prev_head)
+                heads[h] = length(classes)
+            else
+                push!(classes[found], q)
+            end
         end
-        return collect(values(sigs))
+        return classes
     end
 end
 
@@ -2002,7 +3281,7 @@ end
 # -------------------------- Image / preimage helpers -------------------------
 
 "Image of a Q-upset under `pi` as a P-upset (Def. 4.12 / Remark 4.13)."
-function image_upset(pi::EncodingMap, U::FiniteFringe.Upset)
+function _image_upset(pi::EncodingMap, U::FiniteFringe.Upset)
     maskP = falses(nvertices(pi.P))
     for q in 1:nvertices(pi.Q)
         if U.mask[q]; maskP[pi.pi_of_q[q]] = true; end
@@ -2011,7 +3290,7 @@ function image_upset(pi::EncodingMap, U::FiniteFringe.Upset)
 end
 
 "Image of a Q-downset under `pi` as a P-downset."
-function image_downset(pi::EncodingMap, D::FiniteFringe.Downset)
+function _image_downset(pi::EncodingMap, D::FiniteFringe.Downset)
     maskP = falses(nvertices(pi.P))
     for q in 1:nvertices(pi.Q)
         if D.mask[q]; maskP[pi.pi_of_q[q]] = true; end
@@ -2020,7 +3299,7 @@ function image_downset(pi::EncodingMap, D::FiniteFringe.Downset)
 end
 
 "Preimage of a P-upset under `pi` as a Q-upset."
-function preimage_upset(pi::EncodingMap, Uhat::FiniteFringe.Upset)
+function _preimage_upset(pi::EncodingMap, Uhat::FiniteFringe.Upset)
     maskQ = falses(nvertices(pi.Q))
     for q in 1:nvertices(pi.Q)
         if Uhat.mask[pi.pi_of_q[q]]; maskQ[q] = true; end
@@ -2029,7 +3308,7 @@ function preimage_upset(pi::EncodingMap, Uhat::FiniteFringe.Upset)
 end
 
 "Preimage of a P-downset under `pi` as a Q-downset."
-function preimage_downset(pi::EncodingMap, Dhat::FiniteFringe.Downset)
+function _preimage_downset(pi::EncodingMap, Dhat::FiniteFringe.Downset)
     maskQ = falses(nvertices(pi.Q))
     for q in 1:nvertices(pi.Q)
         if Dhat.mask[pi.pi_of_q[q]]; maskQ[q] = true; end
@@ -2070,9 +3349,9 @@ by replacing row labels `D_hat_j` with `pi^{-1}(D_hat_j)` and column labels `U_h
 The scalar matrix is unchanged.
 """
 function pullback_fringe_along_encoding(Hhat::FiniteFringe.FringeModule, pi::EncodingMap)
-    UQ = [preimage_upset(pi, Uhat) for Uhat in Hhat.U]
-    DQ = [preimage_downset(pi, Dhat) for Dhat in Hhat.D]
-    FiniteFringe.FringeModule{eltype(Hhat.phi)}(pi.Q, UQ, DQ, Hhat.phi)
+    UQ = [_preimage_upset(pi, Uhat) for Uhat in Hhat.U]
+    DQ = [_preimage_downset(pi, Dhat) for Dhat in Hhat.D]
+    FiniteFringe.FringeModule{eltype(Hhat.phi)}(pi.Q, UQ, DQ, Hhat.phi; field=Hhat.field)
 end
 
 """
@@ -2080,20 +3359,15 @@ end
 
 Push a fringe presentation forward along a finite encoding map `pi : Q -> P`.
 
-This sends each upset generator `U_i` of `H` to `image_upset(pi, U_i)` and each
-downset generator `D_j` to `image_downset(pi, D_j)`, while keeping the scalar matrix
+This sends each upset generator `U_i` of `H` to its image under `pi` and each
+downset generator `D_j` to its image under `pi`, while keeping the scalar matrix
 `phi` unchanged.
 """
 function pushforward_fringe_along_encoding(H::FiniteFringe.FringeModule, pi::EncodingMap)
-    Uhat = [image_upset(pi, U) for U in H.U]
-    Dhat = [image_downset(pi, D) for D in H.D]
-    FiniteFringe.FringeModule{eltype(H.phi)}(pi.P, Uhat, Dhat, H.phi)
+    Uhat = [_image_upset(pi, U) for U in H.U]
+    Dhat = [_image_downset(pi, D) for D in H.D]
+    FiniteFringe.FringeModule{eltype(H.phi)}(pi.P, Uhat, Dhat, H.phi; field=H.field)
 end
 
-
-export EncodingMap, UptightEncoding,
-       build_uptight_encoding_from_fringe, pullback_fringe_along_encoding,
-       image_upset, image_downset, preimage_upset, preimage_downset,
-       pullback_fringe_along_encoding, pushforward_fringe_along_encoding       
 
 end # module

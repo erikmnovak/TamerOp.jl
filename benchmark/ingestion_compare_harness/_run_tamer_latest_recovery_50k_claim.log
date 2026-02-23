@@ -1,0 +1,5 @@
+NearestNeighbors package loaded: true
+claim_n50000_d2_s11          regime=claim_matching cold_ms=5494.237 warm_med_ms=5602.853 simplices=440039
+claim_n50000_d2_s17          regime=claim_matching cold_ms=7173.3 warm_med_ms=8190.75 simplices=416491
+claim_n50000_d8_s11          regime=claim_matching cold_ms=10452.312 warm_med_ms=9492.056 simplices=567437
+Wrote tamer results: benchmark/ingestion_compare_harness/results_tamer_latest_recovery_50k_claim.csv

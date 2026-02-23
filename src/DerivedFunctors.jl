@@ -235,8 +235,6 @@ shared function objects.
 """
 module GradedSpaces
 
-    export degree_range, dim, basis, representative, coordinates, cycles, boundaries
-
     """
         degree_range(space) -> UnitRange{Int}
 
@@ -976,7 +974,6 @@ module HomExtEngine
         return ncomp
     end
 
-    export build_hom_tot_complex, ext_dims_via_resolutions, pi0_count, build_hom_bicomplex_data
 end # module HomExtEngine
 
 
@@ -996,16 +993,16 @@ module Resolutions
     using SparseArrays
     import Base.Threads
 
-    using ...CoreModules: AbstractCoeffField, RealField, ResolutionCache, ResolutionKey2, resolution_key2,
+    using ...CoreModules: AbstractCoeffField, RealField, ResolutionCache, ResolutionKey2, _resolution_key2,
                           ResolutionOptions, field_from_eltype, coeff_type
     using ...Modules: PModule, PMorphism
     using ...FiniteFringe: AbstractPoset, FinitePoset, FringeModule, Upset, cover_edges, is_subset,
                            leq, nvertices, poset_equal, upset_indices, downset_indices
     using ...AbelianCategories: kernel_with_inclusion
-    using ...IndicatorResolutions
+    using ...IndicatorResolutions: projective_cover, pmodule_from_fringe
     using  ...IndicatorResolutions: _injective_hull, _cokernel_module
     using ...FiniteFringe: AbstractPoset
-    using ...FieldLinAlg: SparseRREFAugmented, SparseRow, _sparse_rref_push_augmented!
+    using ...FieldLinAlg: _SparseRREFAugmented, SparseRow, _sparse_rref_push_augmented!
 
 
     import ..Utils
@@ -1304,7 +1301,9 @@ module Resolutions
 
     # Extract coefficient matrix for a morphism between sums of principal upsets.
     # Domain and codomain are direct sums of principal upsets indexed by base vertex lists.
-    function _coeff_matrix_upsets(dom_bases::Vector{Upset}, cod_bases::Vector{Upset}, ::Type{K}) where {K}
+    function _coeff_matrix_upsets(dom_bases::AbstractVector{<:Upset},
+                                  cod_bases::AbstractVector{<:Upset},
+                                  ::Type{K}) where {K}
         n_dom = length(dom_bases)
         n_cod = length(cod_bases)
 
@@ -1382,7 +1381,7 @@ module Resolutions
     function projective_resolution(M::PModule{K}, res::ResolutionOptions;
                                    threads::Bool = (Threads.nthreads() > 1),
                                    cache::Union{Nothing,ResolutionCache}=nothing) where {K}
-        key = resolution_key2(M, res.maxlen)
+        key = _resolution_key2(M, res.maxlen)
         R = cache === nothing ? nothing : _cache_projective_get(cache, key, ProjectiveResolution{K})
         if R === nothing
             R = _projective_resolution_impl(M, res.maxlen; threads=threads)
@@ -1398,7 +1397,7 @@ module Resolutions
     function projective_resolution(M::FringeModule{K}, res::ResolutionOptions;
                                    threads::Bool = (Threads.nthreads() > 1),
                                    cache::Union{Nothing,ResolutionCache}=nothing) where {K}
-        key = resolution_key2(M, res.maxlen)
+        key = _resolution_key2(M, res.maxlen)
         R = cache === nothing ? nothing : _cache_projective_get(cache, key, ProjectiveResolution{K})
         if R !== nothing
             if res.minimal && res.check
@@ -1763,7 +1762,7 @@ module Resolutions
     function injective_resolution(N::FringeModule{K}, res::ResolutionOptions;
                                   threads::Bool = (Threads.nthreads() > 1),
                                   cache::Union{Nothing,ResolutionCache}=nothing) where {K}
-        key = resolution_key2(N, res.maxlen)
+        key = _resolution_key2(N, res.maxlen)
         R = cache === nothing ? nothing : _cache_injective_get(cache, key, InjectiveResolution{K})
         if R !== nothing
             if res.minimal && res.check
@@ -1780,7 +1779,7 @@ module Resolutions
     function injective_resolution(N::PModule{K}, res::ResolutionOptions;
                                   threads::Bool = (Threads.nthreads() > 1),
                                   cache::Union{Nothing,ResolutionCache}=nothing) where {K}
-        key = resolution_key2(N, res.maxlen)
+        key = _resolution_key2(N, res.maxlen)
         R = cache === nothing ? nothing : _cache_injective_get(cache, key, InjectiveResolution{K})
         if R === nothing
             R = _injective_resolution_impl(N, res.maxlen; threads=threads)
@@ -2061,7 +2060,7 @@ module Resolutions
 
     This is implemented as a streaming sparse augmented elimination:
     each scalar equation is assembled as a sparse row in the unknown coefficients and pushed into
-    `FieldLinAlg.SparseRREFAugmented`. A deterministic particular solution is returned (free variables set to 0).
+    `FieldLinAlg._SparseRREFAugmented`. A deterministic particular solution is returned (free variables set to 0).
 
     If the system is inconsistent, this throws an error (as that indicates a bug or incompatible truncation).
     """
@@ -2096,7 +2095,7 @@ module Resolutions
         # Unknowns are the downset-hom coefficients C[r,c] (subject to cod_bases[r] <= dom_bases[c]).
         var_idx, nunk = _downset_hom_varidx(Q, dom_bases, cod_bases)
 
-        R = SparseRREFAugmented{K}(nunk, 1)
+        R = _SparseRREFAugmented{K}(nunk, 1)
         row = SparseRow{K}()
         rhs = Vector{K}(undef, 1)
 
@@ -2315,14 +2314,14 @@ module ExtTorSpaces
                           ResolutionOptions, DerivedFunctorOptions, field_from_eltype
     import ...CoreModules: _append_scaled_triplets!
     import ...FieldLinAlg
-    import ...FieldLinAlg: SparseRREF, SparseRow,
-              SparseRowAccumulator, reset_sparse_row_accumulator!,
-              push_sparse_row_entry!, materialize_sparse_row!,
+    import ...FieldLinAlg: _SparseRREF, SparseRow,
+              _SparseRowAccumulator, _reset_sparse_row_accumulator!,
+              _push_sparse_row_entry!, _materialize_sparse_row!,
               _sparse_rref_push_homogeneous!,
               _nullspace_from_pivots
 
     using ...IndicatorTypes: UpsetPresentation, DownsetCopresentation
-    using ...Modules: PModule, PMorphism, map_leq, cover_cache
+    using ...Modules: PModule, PMorphism, map_leq, map_leq_many
     using ...FiniteFringe: AbstractPoset, FinitePoset, FringeModule, fiber_dimension, Upset, Downset,
                            leq, leq_matrix, poset_equal, poset_equal_opposite, nvertices
     using ...AbelianCategories: kernel_with_inclusion
@@ -2435,9 +2434,9 @@ module ExtTorSpaces
         dN = N.dims
 
         # RREF basis of the row space of the constraint system, streamed row-by-row.
-        R = SparseRREF{K}(nvars)
+        R = _SparseRREF{K}(nvars)
         row = SparseRow{K}()
-        acc = SparseRowAccumulator{K}(nvars)
+        acc = _SparseRowAccumulator{K}(nvars)
         fullrank = false
 
         storeM = M.edge_maps
@@ -2469,14 +2468,14 @@ module ExtTorSpaces
                 Muv = Mu[j]
 
                 for ii in 1:dNv, jj in 1:du
-                    reset_sparse_row_accumulator!(acc)
+                    _reset_sparse_row_accumulator!(acc)
 
                     # Nuv * F_u
                     for k in 1:dNu
                         c = Nuv[ii, k]
                         if !iszero(c)
                             col = offs[u] + k + (jj - 1) * dNu
-                            push_sparse_row_entry!(acc, col, c)
+                            _push_sparse_row_entry!(acc, col, c)
                         end
                     end
 
@@ -2485,11 +2484,11 @@ module ExtTorSpaces
                         c = Muv[l, jj]
                         if !iszero(c)
                             col = offs[v] + ii + (l - 1) * dNv
-                            push_sparse_row_entry!(acc, col, -c)
+                            _push_sparse_row_entry!(acc, col, -c)
                         end
                     end
 
-                    materialize_sparse_row!(row, acc)
+                    _materialize_sparse_row!(row, acc)
                     isempty(row.idx) && continue
                     _sparse_rref_push_homogeneous!(R, row)
 
@@ -2570,8 +2569,6 @@ module ExtTorSpaces
 
         return ext_dims_via_resolutions(F, dF, E, dE)
     end
-
-    export hom_ext_first_page, ext_dimensions_via_indicator_resolutions
 
     # ----------------------------
     # Ext via projective resolution: explicit cochains, cycles, boundaries, basis
@@ -2674,6 +2671,11 @@ module ExtTorSpaces
         Jtrip = Int[]
         Vtrip = K[]
         nnz_delta = length(Vv)
+        pairs = Vector{Tuple{Int,Int}}(undef, nnz_delta)
+        @inbounds for k in 1:nnz_delta
+            pairs[k] = (cod_gens[Ii[k]], dom_gens[Jj[k]])
+        end
+        map_blocks = map_leq_many(N, pairs)
         do_threads = Threads.nthreads() > 1 && nnz_delta >= 64
 
         if do_threads
@@ -2695,10 +2697,7 @@ module ExtTorSpaces
                     c = Vv[k]
                     iszero(c) && continue
 
-                    vj = cod_gens[j]
-                    ui = dom_gens[i]
-
-                    A = map_leq(N, vj, ui)  # N_vj -> N_ui
+                    A = map_blocks[k]  # N_vj -> N_ui
 
                     # Insert into block (rows for ui) x (cols for vj)
                     _append_scaled_triplets!(Ii_loc, Jj_loc, Vv_loc, A,
@@ -2725,10 +2724,7 @@ module ExtTorSpaces
                 c = Vv[k]
                 iszero(c) && continue
 
-                vj = cod_gens[j]
-                ui = dom_gens[i]
-
-                A = map_leq(N, vj, ui)  # N_vj -> N_ui
+                A = map_blocks[k]  # N_vj -> N_ui
 
                 # Insert into block (rows for ui) x (cols for vj)
                 _append_scaled_triplets!(Itrip, Jtrip, Vtrip, A,
@@ -3743,6 +3739,11 @@ module ExtTorSpaces
 
                 B = spzeros(K, dims[s], dims[s + 1])
                 I, J, V = findnz(delta)
+                pairs = Vector{Tuple{Int,Int}}(undef, length(V))
+                @inbounds for k in eachindex(V)
+                    pairs[k] = (dom_bases[J[k]], cod_bases[I[k]])
+                end
+                map_blocks = map_leq_many(L, pairs)
                 for k in 1:length(V)
                     j = I[k]
                     i = J[k]
@@ -3752,7 +3753,7 @@ module ExtTorSpaces
 
                     # Nonzero delta entry implies v <=op u in Pop, i.e. u <= v in P,
                     # so L has a structure map L_u -> L_v.
-                    Muv = map_leq(L, u, v)
+                    Muv = map_blocks[k]
 
                     rows = (offs[s][j] + 1):offs[s][j + 1]
                     cols = (offs[s + 1][i] + 1):offs[s + 1][i + 1]
@@ -3768,6 +3769,11 @@ module ExtTorSpaces
 
                 B = spzeros(K, dims[s], dims[s + 1])
                 I, J, V = findnz(delta)
+                pairs = Vector{Tuple{Int,Int}}(undef, length(V))
+                @inbounds for k in eachindex(V)
+                    pairs[k] = (dom_bases[J[k]], cod_bases[I[k]])
+                end
+                map_blocks = map_leq_many(L, pairs)
                 for k in 1:length(V)
                     j = I[k]
                     i = J[k]
@@ -3777,7 +3783,7 @@ module ExtTorSpaces
 
                     # Nonzero delta entry implies v <=op u in Pop, i.e. u <= v in P,
                     # so L has a structure map L_u -> L_v.
-                    Muv = map_leq(L, u, v)
+                    Muv = map_blocks[k]
 
                     rows = (offs[s][j] + 1):offs[s][j + 1]
                     cols = (offs[s + 1][i] + 1):offs[s + 1][i + 1]
@@ -3843,6 +3849,11 @@ module ExtTorSpaces
 
                 B = spzeros(K, dims[s], dims[s + 1])
                 I, J, V = findnz(delta)
+                pairs = Vector{Tuple{Int,Int}}(undef, length(V))
+                @inbounds for k in eachindex(V)
+                    pairs[k] = (dom_bases[J[k]], cod_bases[I[k]])
+                end
+                map_blocks = map_leq_many(Rop, pairs)
                 for k in 1:length(V)
                     j = I[k]
                     i = J[k]
@@ -3852,7 +3863,7 @@ module ExtTorSpaces
 
                     # Nonzero delta entry implies v <= u in P, hence u <=op v in Pop,
                     # so Rop has a structure map Rop_u -> Rop_v.
-                    Muv = map_leq(Rop, u, v)
+                    Muv = map_blocks[k]
 
                     rows = (offs[s][j] + 1):offs[s][j + 1]
                     cols = (offs[s + 1][i] + 1):offs[s + 1][i + 1]
@@ -3868,6 +3879,11 @@ module ExtTorSpaces
 
                 B = spzeros(K, dims[s], dims[s + 1])
                 I, J, V = findnz(delta)
+                pairs = Vector{Tuple{Int,Int}}(undef, length(V))
+                @inbounds for k in eachindex(V)
+                    pairs[k] = (dom_bases[J[k]], cod_bases[I[k]])
+                end
+                map_blocks = map_leq_many(Rop, pairs)
                 for k in 1:length(V)
                     j = I[k]
                     i = J[k]
@@ -3877,7 +3893,7 @@ module ExtTorSpaces
 
                     # Nonzero delta entry implies v <= u in P, hence u <=op v in Pop,
                     # so Rop has a structure map Rop_u -> Rop_v.
-                    Muv = map_leq(Rop, u, v)
+                    Muv = map_blocks[k]
 
                     rows = (offs[s][j] + 1):offs[s][j + 1]
                     cols = (offs[s + 1][i] + 1):offs[s + 1][i + 1]
@@ -4143,10 +4159,10 @@ module Functoriality
     import ...CoreModules: _append_scaled_triplets!
     using ...FieldLinAlg
 
-    using ...Modules: PModule, PMorphism, map_leq
+    using ...Modules: PModule, PMorphism, map_leq, map_leq_many
     import ...FiniteFringe: nvertices, leq, poset_equal
     using ...ChainComplexes
-    using ...AbelianCategories
+    using ...AbelianCategories: ShortExactSequence
 
     import ..Utils
     import ..Utils: compose
@@ -4204,30 +4220,42 @@ module Functoriality
         # Fast path: sparse coeff -> iterate only nonzero blocks.
         if issparse(coeff)
             Icoeff, Jcoeff, Vcoeff = findnz(coeff)  # rows, cols, vals
+            pairs = Vector{Tuple{Int,Int}}(undef, length(Vcoeff))
+            @inbounds for k in eachindex(Vcoeff)
+                pairs[k] = (cod_gens[Icoeff[k]], dom_gens[Jcoeff[k]])
+            end
+            map_blocks = map_leq_many(N, pairs)
             @inbounds for k in eachindex(Vcoeff)
                 j = Icoeff[k]   # cod index
                 i = Jcoeff[k]   # dom index
                 c = Vcoeff[k]
                 iszero(c) && continue
 
-                ui = dom_gens[i]
-                vj = cod_gens[j]
-
-                A = map_leq(N, vj, ui)
+                A = map_blocks[k]
                 _append_scaled_triplets!(I, J, V, A, dom_offsets[i], cod_offsets[j]; scale=c)
             end
         else
             # Dense coeff -> scan directly (avoid sparse(coeff) + findnz intermediates).
+            dom_idx = Int[]
+            cod_idx = Int[]
+            vals = K[]
+            pairs = Tuple{Int,Int}[]
             @inbounds for i in 1:length(dom_gens)
-                ui = dom_gens[i]
                 for j in 1:length(cod_gens)
                     c = coeff[j, i]
                     iszero(c) && continue
 
-                    vj = cod_gens[j]
-                    A  = map_leq(N, vj, ui)
-                    _append_scaled_triplets!(I, J, V, A, dom_offsets[i], cod_offsets[j]; scale=c)
+                    push!(dom_idx, i)
+                    push!(cod_idx, j)
+                    push!(vals, c)
+                    push!(pairs, (cod_gens[j], dom_gens[i]))
                 end
+            end
+            map_blocks = map_leq_many(N, pairs)
+            @inbounds for k in eachindex(vals)
+                i = dom_idx[k]
+                j = cod_idx[k]
+                _append_scaled_triplets!(I, J, V, map_blocks[k], dom_offsets[i], cod_offsets[j]; scale=vals[k])
             end
         end
 
@@ -5101,30 +5129,42 @@ module Functoriality
 
         if issparse(coeff)
             Icoeff, Jcoeff, Vcoeff = findnz(coeff)  # rows, cols, vals
+            pairs = Vector{Tuple{Int,Int}}(undef, length(Vcoeff))
+            @inbounds for k in eachindex(Vcoeff)
+                pairs[k] = (dom_bases[Jcoeff[k]], cod_bases[Icoeff[k]])
+            end
+            map_blocks = map_leq_many(M, pairs)
             @inbounds for k in eachindex(Vcoeff)
                 j = Icoeff[k]   # cod index
                 i = Jcoeff[k]   # dom index
                 c = Vcoeff[k]
                 iszero(c) && continue
 
-                u = dom_bases[i]
-                v = cod_bases[j]
-
-                Muv = map_leq(M, u, v)
+                Muv = map_blocks[k]
                 _append_scaled_triplets!(I, J, V, Muv, cod_offsets[j], dom_offsets[i]; scale=c)
             end
         else
             # Dense coeff: scan directly (no sparse(coeff) + findnz).
+            dom_idx = Int[]
+            cod_idx = Int[]
+            vals = K[]
+            pairs = Tuple{Int,Int}[]
             @inbounds for i in 1:length(dom_bases)
-                u = dom_bases[i]
                 for j in 1:length(cod_bases)
                     c = coeff[j, i]
                     iszero(c) && continue
 
-                    v = cod_bases[j]
-                    Muv = map_leq(M, u, v)
-                    _append_scaled_triplets!(I, J, V, Muv, cod_offsets[j], dom_offsets[i]; scale=c)
+                    push!(dom_idx, i)
+                    push!(cod_idx, j)
+                    push!(vals, c)
+                    push!(pairs, (dom_bases[i], cod_bases[j]))
                 end
+            end
+            map_blocks = map_leq_many(M, pairs)
+            @inbounds for k in eachindex(vals)
+                i = dom_idx[k]
+                j = cod_idx[k]
+                _append_scaled_triplets!(I, J, V, map_blocks[k], cod_offsets[j], dom_offsets[i]; scale=vals[k])
             end
         end
 
@@ -5655,7 +5695,7 @@ module Algebras
     using SparseArrays
 
     using ...CoreModules: AbstractCoeffField, RealField, DerivedFunctorOptions, field_from_eltype, coerce, coeff_type
-    using ...Modules: PModule, PMorphism, map_leq
+    using ...Modules: PModule, PMorphism, map_leq, map_leq_many
     using ...ChainComplexes
     using ...FiniteFringe: FinitePoset, FringeModule, cover_edges, nvertices, leq, poset_equal
     using ...IndicatorResolutions: pmodule_from_fringe
@@ -5766,6 +5806,27 @@ module Algebras
         # If Fp is sparse, iterate only over nonzeros in each column.
         if issparse(Fp)
             Fps = sparse(Fp)  # ensure SparseMatrixCSC so colptr/rowval/nzval exist
+            pairs = Tuple{Int,Int}[]
+            ptr_slots = Int[]
+            sizehint!(pairs, length(Fps.nzval))
+            sizehint!(ptr_slots, length(Fps.nzval))
+            for i in 1:length(dom_bases)
+                u = dom_bases[i]
+                for ptr in Fps.colptr[i]:(Fps.colptr[i + 1] - 1)
+                    c = Fps.nzval[ptr]
+                    iszero(c) && continue
+                    j = Fps.rowval[ptr]
+                    v = mid_bases[j]
+                    leq(resL.M.Q, v, u) || continue
+                    push!(pairs, (v, u))
+                    push!(ptr_slots, ptr)
+                end
+            end
+            map_blocks = map_leq_many(N, pairs)
+            map_idx_by_ptr = zeros(Int, length(Fps.nzval))
+            @inbounds for idx in eachindex(ptr_slots)
+                map_idx_by_ptr[ptr_slots[idx]] = idx
+            end
 
             for i in 1:length(dom_bases)
                 u = dom_bases[i]
@@ -5784,12 +5845,12 @@ module Algebras
                         continue
                     end
 
-                    v = mid_bases[j]
-                    if !leq(resL.M.Q, v, u)
+                    map_idx = map_idx_by_ptr[ptr]
+                    if map_idx == 0
                         continue
                     end
 
-                    A = map_leq(N, v, u)           # N_v -> N_u
+                    A = map_blocks[map_idx]        # N_v -> N_u
                     _accum_scaled_matvec!(block, A, beta_parts[j], c, tmp)
                 end
 
@@ -5800,22 +5861,35 @@ module Algebras
         end
 
         # Dense fallback: original behavior.
+        pairs = Tuple{Int,Int}[]
+        sizehint!(pairs, length(dom_bases) * length(mid_bases))
+        map_idx = zeros(Int, length(mid_bases), length(dom_bases))
+        for i in 1:length(dom_bases)
+            u = dom_bases[i]
+            for j in 1:length(mid_bases)
+                c = Fp[j, i]
+                iszero(c) && continue
+                v = mid_bases[j]
+                leq(resL.M.Q, v, u) || continue
+                push!(pairs, (v, u))
+                map_idx[j, i] = length(pairs)
+            end
+        end
+        map_blocks = map_leq_many(N, pairs)
+
         for i in 1:length(dom_bases)
             u = dom_bases[i]
             block = zeros(K, N.dims[u])
             tmp = similar(block)
 
             for j in 1:length(mid_bases)
-                c = Fp[j, i]
-                if iszero(c)
-                    continue
-                end
-                v = mid_bases[j]
-                if !leq(resL.M.Q, v, u)
+                idx = map_idx[j, i]
+                if idx == 0
                     continue
                 end
 
-                A = map_leq(N, v, u)
+                c = Fp[j, i]
+                A = map_blocks[idx]
                 _accum_scaled_matvec!(block, A, beta_parts[j], c, tmp)
             end
 
@@ -6583,7 +6657,7 @@ module SpectralSequences
     using ...CoreModules: AbstractCoeffField, RealField, ResolutionOptions, field_from_eltype
     import ...CoreModules: _append_scaled_triplets!
 
-    using ...Modules: PModule, map_leq
+    using ...Modules: PModule, map_leq, map_leq_many
     using ...ChainComplexes
     import ...IndicatorResolutions
     using ...IndicatorResolutions: upset_resolution, downset_resolution
@@ -6856,6 +6930,10 @@ module SpectralSequences
                 gens_cod = resR.gens[a]     # generators of P_{a-1}
 
                 I, J, V = findnz(dP)
+                pairs = Vector{Tuple{Int,Int}}(undef, length(V))
+                @inbounds for k in eachindex(V)
+                    pairs[k] = (gens_dom[J[k]], gens_cod[I[k]])
+                end
 
                 B = bmin + (ib - 1)
                 b = -B
@@ -6863,6 +6941,7 @@ module SpectralSequences
 
                 offs_dom = _tensor_offsets(gens_dom, Qb)
                 offs_cod = _tensor_offsets(gens_cod, Qb)
+                map_blocks = map_leq_many(Qb, pairs)
 
                 It = Int[]
                 Jt = Int[]
@@ -6872,9 +6951,7 @@ module SpectralSequences
                     j = I[k]
                     i = J[k]
                     c = V[k]
-                    u = gens_dom[i]
-                    v = gens_cod[j]
-                    Muv = map_leq(Qb, u, v)
+                    Muv = map_blocks[k]
                     _append_scaled_triplets!(It, Jt, Vt, Muv, offs_cod[j], offs_dom[i]; scale=c)
                 end
 
@@ -6890,6 +6967,10 @@ module SpectralSequences
                 gens_cod = resR.gens[a]     # generators of P_{a-1}
 
                 I, J, V = findnz(dP)
+                pairs = Vector{Tuple{Int,Int}}(undef, length(V))
+                @inbounds for k in eachindex(V)
+                    pairs[k] = (gens_dom[J[k]], gens_cod[I[k]])
+                end
 
                 for ib in 1:nb
                     B = bmin + (ib - 1)
@@ -6898,6 +6979,7 @@ module SpectralSequences
 
                     offs_dom = _tensor_offsets(gens_dom, Qb)
                     offs_cod = _tensor_offsets(gens_cod, Qb)
+                    map_blocks = map_leq_many(Qb, pairs)
 
                     It = Int[]
                     Jt = Int[]
@@ -6907,9 +6989,7 @@ module SpectralSequences
                         j = I[k]
                         i = J[k]
                         c = V[k]
-                        u = gens_dom[i]
-                        v = gens_cod[j]
-                        Muv = map_leq(Qb, u, v)
+                        Muv = map_blocks[k]
                         _append_scaled_triplets!(It, Jt, Vt, Muv, offs_cod[j], offs_dom[i]; scale=c)
                     end
 
@@ -7105,10 +7185,11 @@ module Backends
     using ...Modules: PModule, PMorphism
     using ...ChainComplexes
     using ...IndicatorResolutions: pmodule_from_fringe
-    using ...PLPolyhedra
+    import ...PLPolyhedra
+    using ...PLPolyhedra: PLFringe
 
     using ...ZnEncoding
-    using ...FlangeZn
+    using ...FlangeZn: Flange
 
     import ..Utils: compose
     import ..Resolutions: projective_resolution, injective_resolution
@@ -7166,58 +7247,6 @@ module Backends
     end
 
     """
-        encode_pmodule_from_flange(FG::Flange{K}, enc::EncodingOptions) -> (P, M, pi)
-
-    Encode a single Z^n flange presentation to a finite encoding poset `P` using the
-    region-based encoder in `ZnEncoding`, then convert the resulting fringe module to
-    a finite-poset module `M::PModule{K}`.
-
-    `enc` is required. The usual choices are:
-    - `enc.backend = :zn` (or `:auto`)
-    - `enc.max_regions` (default: 200_000)
-
-    Returns a NamedTuple with fields `P`, `M`, `pi`.
-
-    You may destructure:
-
-        P, M, pi = encode_pmodule_from_flange(FG, enc)
-    """
-    function encode_pmodule_from_flange(FG::Flange{K}, enc::EncodingOptions) where {K}
-        P, H, pi = ZnEncoding.encode_from_flange(FG, enc)
-        M = pmodule_from_fringe(H)
-        return (P=P, M=M, pi=pi)
-    end
-
-    """
-        encode_pmodules_from_flanges(FGs, enc::EncodingOptions) -> (P, Ms, pi)
-
-    Common-encode several Z^n flange presentations to a single finite encoding poset `P`,
-    convert each to a finite-poset module, and return them as `Ms`.
-
-    `enc` is required. You may pass a vector/tuple of flanges, or use small-arity overloads:
-
-        P, Ms, pi = encode_pmodules_from_flanges([FG1, FG2], enc)
-        P, Ms, pi = encode_pmodules_from_flanges(FG1, FG2, enc)
-    """
-    function encode_pmodules_from_flanges(FGs::AbstractVector{<:Flange{K}}, enc::EncodingOptions) where {K}
-        P, Hs, pi = ZnEncoding.encode_from_flanges(FGs, enc)
-        Ms = [pmodule_from_fringe(H) for H in Hs]
-        return (P=P, Ms=Ms, pi=pi)
-    end
-
-    function encode_pmodules_from_flanges(FGs::Tuple{Vararg{Flange{K}}}, enc::EncodingOptions) where {K}
-        return encode_pmodules_from_flanges(collect(FGs), enc)
-    end
-
-    function encode_pmodules_from_flanges(FG1::Flange{K}, FG2::Flange{K}, enc::EncodingOptions) where {K}
-        return encode_pmodules_from_flanges(Flange{K}[FG1, FG2], enc)
-    end
-
-    function encode_pmodules_from_flanges(FG1::Flange{K}, FG2::Flange{K}, FG3::Flange{K}, enc::EncodingOptions) where {K}
-        return encode_pmodules_from_flanges(Flange{K}[FG1, FG2, FG3], enc)
-    end
-
-    """
         projective_resolution_Zn(FG::Flange{K}, enc::EncodingOptions, res::ResolutionOptions; return_encoding=false)
 
     Compute a projective resolution of the Z^n module presented by FG by:
@@ -7234,7 +7263,8 @@ module Backends
                                     res::ResolutionOptions;
                                     return_encoding::Bool=false,
                                     threads::Bool = (Threads.nthreads() > 1)) where {K}
-        P, M, pi = encode_pmodule_from_flange(FG, enc)
+        P, H, pi = ZnEncoding.encode_from_flange(FG, enc)
+        M = pmodule_from_fringe(H)
         R = projective_resolution(M, res; threads=threads)
         return return_encoding ? (res=R, P=P, pi=pi) : R
     end
@@ -7255,7 +7285,8 @@ module Backends
                                     res::ResolutionOptions;
                                     return_encoding::Bool=false,
                                     threads::Bool = (Threads.nthreads() > 1)) where {K}
-        P, M, pi = encode_pmodule_from_flange(FG, enc)
+        P, H, pi = ZnEncoding.encode_from_flange(FG, enc)
+        M = pmodule_from_fringe(H)
         R = injective_resolution(M, res; threads=threads)
         return return_encoding ? (res=R, P=P, pi=pi) : R
     end
@@ -7295,54 +7326,6 @@ module Backends
     end
 
     """
-        encode_pmodule_from_PL_fringe(F::PLFringe, enc::EncodingOptions) -> (P, M, pi)
-
-    Encode a single PL fringe presentation to a finite encoding poset `P` using `PLPolyhedra`,
-    then convert the resulting fringe module to a finite-poset module `M::PModule{K}`.
-
-    `enc` is required (`enc.backend = :pl` or `:auto`). The fields `enc.max_regions` and
-    `enc.strict_eps` control feasibility enumeration.
-
-    You may destructure:
-
-        P, M, pi = encode_pmodule_from_PL_fringe(F, enc)
-    """
-    function encode_pmodule_from_PL_fringe(F::PLFringe, enc::EncodingOptions)
-        P, H, pi = PLPolyhedra.encode_from_PL_fringe(F, enc)
-        M = pmodule_from_fringe(H)
-        return (P=P, M=M, pi=pi)
-    end
-
-    """
-        encode_pmodules_from_PL_fringes(Fs, enc::EncodingOptions) -> (P, Ms, pi)
-
-    Common-encode several PL fringe presentations to a single finite encoding poset `P`,
-    convert each to a finite-poset module, and return them as `Ms`.
-
-    `enc` is required. You may pass a vector/tuple of fringes, or use small-arity overloads:
-
-        P, Ms, pi = encode_pmodules_from_PL_fringes([F1, F2], enc)
-        P, Ms, pi = encode_pmodules_from_PL_fringes(F1, F2, enc)
-    """
-    function encode_pmodules_from_PL_fringes(Fs::AbstractVector{<:PLFringe}, enc::EncodingOptions)
-        P, Hs, pi = PLPolyhedra.encode_from_PL_fringes(Fs, enc)
-        Ms = [pmodule_from_fringe(H) for H in Hs]
-        return (P=P, Ms=Ms, pi=pi)
-    end
-
-    function encode_pmodules_from_PL_fringes(Fs::Tuple{Vararg{PLFringe}}, enc::EncodingOptions)
-        return encode_pmodules_from_PL_fringes(collect(Fs), enc)
-    end
-
-    function encode_pmodules_from_PL_fringes(F1::PLFringe, F2::PLFringe, enc::EncodingOptions)
-        return encode_pmodules_from_PL_fringes(PLFringe[F1, F2], enc)
-    end
-
-    function encode_pmodules_from_PL_fringes(F1::PLFringe, F2::PLFringe, F3::PLFringe, enc::EncodingOptions)
-        return encode_pmodules_from_PL_fringes(PLFringe[F1, F2, F3], enc)
-    end
-
-    """
         projective_resolution_Rn(F, enc, res; return_encoding=false)
 
     Compute a projective resolution of the module over R^n presented by F by:
@@ -7359,7 +7342,8 @@ module Backends
                                     res::ResolutionOptions;
                                     return_encoding::Bool=false,
                                     threads::Bool = (Threads.nthreads() > 1))
-        P, M, pi = encode_pmodule_from_PL_fringe(F, enc)
+        P, H, pi = PLPolyhedra.encode_from_PL_fringe(F, enc)
+        M = pmodule_from_fringe(H)
         R = projective_resolution(M, res; threads=threads)
         return return_encoding ? (res=R, P=P, pi=pi) : R
     end
@@ -7380,7 +7364,8 @@ module Backends
                                     res::ResolutionOptions;
                                     return_encoding::Bool=false,
                                     threads::Bool = (Threads.nthreads() > 1))
-        P, M, pi = encode_pmodule_from_PL_fringe(F, enc)
+        P, H, pi = PLPolyhedra.encode_from_PL_fringe(F, enc)
+        M = pmodule_from_fringe(H)
         R = injective_resolution(M, res; threads=threads)
         return return_encoding ? (res=R, P=P, pi=pi) : R
     end
@@ -7476,9 +7461,10 @@ module Backends
             return ExtDoubleComplex(FG1, FG2; method=:box, a=a, b=b, maxlen=maxlen)
         elseif method == :regions
             _require_encoding_backend(enc, :zn, "ExtDoubleComplex(Zn)")
-            enc_out = encode_pmodules_from_flanges(FG1, FG2, enc)
-            Ms = enc_out.Ms
-            return ExtDoubleComplex(Ms[1], Ms[2]; maxlen=maxlen)
+            _, Hs, _ = ZnEncoding.encode_from_flanges(FG1, FG2, enc)
+            M1 = pmodule_from_fringe(Hs[1])
+            M2 = pmodule_from_fringe(Hs[2])
+            return ExtDoubleComplex(M1, M2; maxlen=maxlen)
         else
             error("ExtDoubleComplex: unknown method=$(method); expected :box or :regions")
         end
@@ -7549,9 +7535,10 @@ module Backends
     function ExtDoubleComplex(PL1::PLFringe, PL2::PLFringe, enc::EncodingOptions;
                               maxlen::Union{Nothing,Int} = nothing)
         _require_encoding_backend(enc, :pl, "ExtDoubleComplex(Rn)")
-        enc_out = encode_pmodules_from_PL_fringes(PL1, PL2, enc)
-        Ms = enc_out.Ms
-        return ExtDoubleComplex(Ms[1], Ms[2]; maxlen=maxlen)
+        _, Hs, _ = PLPolyhedra.encode_from_PL_fringes(PL1, PL2, enc)
+        M1 = pmodule_from_fringe(Hs[1])
+        M2 = pmodule_from_fringe(Hs[2])
+        return ExtDoubleComplex(M1, M2; maxlen=maxlen)
     end
 
     function ExtDoubleComplex(PL1::PLFringe, PL2::PLFringe;
@@ -7649,8 +7636,6 @@ import .SpectralSequences:
 import .Backends:
     ExtZn, ExtRn,
     pmodule_on_box,
-    encode_pmodule_from_flange, encode_pmodules_from_flanges,
-    encode_pmodule_from_PL_fringe, encode_pmodules_from_PL_fringes,
     projective_resolution_Zn, injective_resolution_Zn,
     projective_resolution_Rn, injective_resolution_Rn
 
@@ -7794,16 +7779,6 @@ TorLongExactSequenceFirst(L, i, p; opts::DerivedFunctorOptions=DerivedFunctorOpt
     TorLongExactSequenceFirst(L, i, p, opts)
 TorLongExactSequenceFirst(L, ses; opts::DerivedFunctorOptions=DerivedFunctorOptions()) =
     TorLongExactSequenceFirst(L, ses, opts)
-
-encode_pmodule_from_flange(FG; enc::EncodingOptions=EncodingOptions()) =
-    encode_pmodule_from_flange(FG, enc)
-encode_pmodules_from_flanges(FGs; enc::EncodingOptions=EncodingOptions()) =
-    encode_pmodules_from_flanges(FGs, enc)
-
-encode_pmodule_from_PL_fringe(F; enc::EncodingOptions=EncodingOptions()) =
-    encode_pmodule_from_PL_fringe(F, enc)
-encode_pmodules_from_PL_fringes(Fs; enc::EncodingOptions=EncodingOptions()) =
-    encode_pmodules_from_PL_fringes(Fs, enc)
 
 projective_resolution_Zn(FG; enc::EncodingOptions=EncodingOptions(), res::ResolutionOptions=ResolutionOptions(), return_encoding::Bool=false,
                          threads::Bool = (Threads.nthreads() > 1)) =

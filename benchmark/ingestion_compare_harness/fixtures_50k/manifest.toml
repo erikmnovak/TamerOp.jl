@@ -1,0 +1,103 @@
+[meta]
+version = 1
+cases_file = "benchmark/ingestion_compare_harness/cases.toml"
+scale = 1.0
+
+[[cases]]
+id = "claim_n50000_d2_s11"
+regime = "claim_matching"
+dataset = "gaussian_shell"
+path = "claim_n50000_d2_s11.csv"
+n_points = 50000
+ambient_dim = 2
+seed = 11
+max_dim = 1
+claim_policy = "radius_k"
+claim_k = 16
+claim_radius = 0.0117889611819
+
+[[cases]]
+id = "claim_n50000_d2_s17"
+regime = "claim_matching"
+dataset = "gaussian_shell"
+path = "claim_n50000_d2_s17.csv"
+n_points = 50000
+ambient_dim = 2
+seed = 17
+max_dim = 1
+claim_policy = "radius_k"
+claim_k = 16
+claim_radius = 0.0114530131595
+
+[[cases]]
+id = "claim_n50000_d8_s11"
+regime = "claim_matching"
+dataset = "gaussian_shell"
+path = "claim_n50000_d8_s11.csv"
+n_points = 50000
+ambient_dim = 8
+seed = 11
+max_dim = 1
+claim_policy = "radius_k"
+claim_k = 16
+claim_radius = 0.276871438665
+
+[[cases]]
+id = "parity_n5000_d2_s11"
+regime = "normalized_parity"
+dataset = "gaussian_shell"
+path = "parity_n5000_d2_s11.csv"
+n_points = 5000
+ambient_dim = 2
+seed = 11
+max_dim = 1
+
+[[cases]]
+id = "parity_n5000_d2_s17"
+regime = "normalized_parity"
+dataset = "gaussian_shell"
+path = "parity_n5000_d2_s17.csv"
+n_points = 5000
+ambient_dim = 2
+seed = 17
+max_dim = 1
+
+[[cases]]
+id = "parity_n10000_d2_s11"
+regime = "normalized_parity"
+dataset = "gaussian_shell"
+path = "parity_n10000_d2_s11.csv"
+n_points = 10000
+ambient_dim = 2
+seed = 11
+max_dim = 1
+
+[[cases]]
+id = "parity_n20000_d2_s11"
+regime = "normalized_parity"
+dataset = "gaussian_shell"
+path = "parity_n20000_d2_s11.csv"
+n_points = 20000
+ambient_dim = 2
+seed = 11
+max_dim = 1
+
+[[cases]]
+id = "parity_n5000_d8_s11"
+regime = "normalized_parity"
+dataset = "gaussian_shell"
+path = "parity_n5000_d8_s11.csv"
+n_points = 5000
+ambient_dim = 8
+seed = 11
+max_dim = 1
+
+[[cases]]
+id = "parity_n10000_d8_s11"
+regime = "normalized_parity"
+dataset = "gaussian_shell"
+path = "parity_n10000_d8_s11.csv"
+n_points = 10000
+ambient_dim = 8
+seed = 11
+max_dim = 1

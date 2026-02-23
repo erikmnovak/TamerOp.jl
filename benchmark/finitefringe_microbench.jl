@@ -10,7 +10,11 @@
 # What this compares
 # - For each kernel, this script runs:
 #   - a naive/baseline implementation (local copy of the previous algorithmic shape),
-#   - the current optimized library implementation.
+#   - the current optimized library implementation (including `hom_dimension`
+#     path variants `:sparse_path`, `:dense_path`, `:dense_idx_internal`, and production `:auto`).
+# - It also includes a targeted cold-start route-selection block comparing:
+#   - heuristic-first `:auto` route selection,
+#   - timing-only baseline route selection (`_hom_dimension_auto_timing_baseline`).
 #
 # Bench methodology
 # - Deterministic synthetic fixtures.
@@ -21,6 +25,9 @@
 # Usage
 #   julia --project=. benchmark/finitefringe_microbench.jl
 #   julia --project=. benchmark/finitefringe_microbench.jl --reps=9 --n=180 --y=96 --nu=24 --nd=24
+#   julia --project=. benchmark/finitefringe_microbench.jl --reps=9 --n=180 --y_cases=32,96,160
+#   julia --project=. benchmark/finitefringe_microbench.jl --hom_dense_case=true
+#   julia --project=. benchmark/finitefringe_microbench.jl --fiber_queries=2000
 #
 
 using Random
@@ -37,12 +44,41 @@ const PM = PosetModules.Advanced
 const FF = PM.FiniteFringe
 const EN = PM.Encoding
 const CM = PM.CoreModules
-const FL = PM.FieldLinAlg
+const FL = PosetModules.FieldLinAlg
 
 function _parse_int_arg(args, key::String, default::Int)
     for a in args
         startswith(a, key * "=") || continue
         return max(1, parse(Int, split(a, "=", limit=2)[2]))
+    end
+    return default
+end
+
+function _parse_int_list_arg(args, key::String, default::Vector{Int})
+    for a in args
+        startswith(a, key * "=") || continue
+        raw = split(a, "=", limit=2)[2]
+        items = split(raw, ",")
+        vals = Int[]
+        for it in items
+            s = strip(it)
+            isempty(s) && continue
+            push!(vals, max(1, parse(Int, s)))
+        end
+        return isempty(vals) ? default : vals
+    end
+    return default
+end
+
+function _parse_bool_arg(args, key::String, default::Bool)
+    for a in args
+        startswith(a, key * "=") || continue
+        raw = lowercase(strip(split(a, "=", limit=2)[2]))
+        if raw in ("1", "true", "yes", "on")
+            return true
+        elseif raw in ("0", "false", "no", "off")
+            return false
+        end
     end
     return default
 end
@@ -98,7 +134,10 @@ function _uptight_regions_old(Q::FF.AbstractPoset, Y::Vector{FF.Upset})
     sigs = Dict{Tuple{Vararg{Bool}}, Vector{Int}}()
     @inbounds for q in 1:PM.nvertices(Q)
         key = ntuple(i -> Y[i].mask[q], length(Y))
-        push!(get!(sigs, key, Int[]), q)
+        vec = get!(sigs, key) do
+            Int[]
+        end
+        push!(vec, q)
     end
     return collect(values(sigs))
 end
@@ -145,6 +184,36 @@ function _random_fringe_module(P::FF.AbstractPoset, field::CM.AbstractCoeffField
     end
 
     return FF.FringeModule{K}(P, U, D, phi; field=field)
+end
+
+function _clear_hom_route_memo!(M::FF.FringeModule)
+    FF._clear_hom_route_choice!(M)
+    return nothing
+end
+
+function _fiber_dimension_old(M::FF.FringeModule{K}, q::Int) where {K}
+    cols = findall(U -> U.mask[q], M.U)
+    rows = findall(D -> D.mask[q], M.D)
+    if isempty(cols) || isempty(rows)
+        return 0
+    end
+    return FL.rank_restricted(M.field, M.phi, rows, cols)
+end
+
+function _fiber_dimension_batch_old(M::FF.FringeModule, queries::Vector{Int})
+    acc = 0
+    @inbounds for q in queries
+        acc += _fiber_dimension_old(M, q)
+    end
+    return acc
+end
+
+function _fiber_dimension_batch_new(M::FF.FringeModule, queries::Vector{Int})
+    acc = 0
+    @inbounds for q in queries
+        acc += FF.fiber_dimension(M, q)
+    end
+    return acc
 end
 
 function _hom_dimension_old(M::FF.FringeModule{K}, N::FF.FringeModule{K}) where {K}
@@ -276,39 +345,179 @@ function main(args=ARGS)
     reps = _parse_int_arg(args, "--reps", 7)
     n = _parse_int_arg(args, "--n", 180)
     ny = _parse_int_arg(args, "--y", 96)
+    y_cases = _parse_int_list_arg(args, "--y_cases", Int[32, 96, 160])
     nu = _parse_int_arg(args, "--nu", 24)
     nd = _parse_int_arg(args, "--nd", 24)
+    fiber_queries = _parse_int_arg(args, "--fiber_queries", max(800, 8n))
+    hom_dense_case = _parse_bool_arg(args, "--hom_dense_case", false)
 
     println("FiniteFringe microbench")
-    println("reps=$(reps), poset_n=$(n), y=$(ny), nu=$(nu), nd=$(nd)\n")
+    println("reps=$(reps), poset_n=$(n), y=$(ny), y_cases=$(y_cases), nu=$(nu), nd=$(nd), fiber_queries=$(fiber_queries), hom_dense_case=$(hom_dense_case)\n")
 
     P = _random_poset(n; p=0.03, seed=Int(0x7010))
-    Y = _fixture_uptight(P, ny; seed=Int(0x7011))
-
-    # Parity checks for region partition.
-    r_old = _canon_regions(_uptight_regions_old(P, Y))
-    r_new = _canon_regions(EN._uptight_regions(P, Y))
-    r_old == r_new || error("_uptight_regions parity failed")
-
     println("== Uptight region partition ==")
-    b_old_up = _bench("uptight old (tuple keys)", () -> _uptight_regions_old(P, Y); reps=reps)
-    b_new_up = _bench("uptight new (bit-packed)", () -> EN._uptight_regions(P, Y); reps=reps)
-    println("speedup(new/old): ", round(b_old_up.ms / b_new_up.ms, digits=2), "x")
+    for (k, yk) in enumerate(y_cases)
+        Yk = _fixture_uptight(P, yk; seed=Int(0x7011 + k))
+
+        # Parity checks for each Y regime.
+        r_old = _canon_regions(_uptight_regions_old(P, Yk))
+        r_new = _canon_regions(EN._uptight_regions(P, Yk))
+        r_old == r_new || error("_uptight_regions parity failed for y=$(yk)")
+
+        regime = yk <= 64 ? "small <=64" : (yk <= 128 ? "medium <=128" : "large >128")
+        println("  -- y=$(yk) ($regime)")
+        b_old_up = _bench("uptight old (tuple keys)", () -> _uptight_regions_old(P, Yk); reps=reps)
+        b_new_up = _bench("uptight new (packed)", () -> EN._uptight_regions(P, Yk); reps=reps)
+        println("  speedup(new/old): ", round(b_old_up.ms / b_new_up.ms, digits=2), "x")
+    end
     println()
 
     field = CM.QQField()
+    K = CM.coeff_type(field)
+    Mf = _random_fringe_module(P, field; nu=max(nu, 28), nd=max(nd, 28), density=0.16, seed=Int(0x7019))
+    rng = MersenneTwister(0x7031)
+    fiber_qs = rand(rng, 1:PM.nvertices(P), fiber_queries)
+    sum_old_fiber = _fiber_dimension_batch_old(Mf, fiber_qs)
+    sum_new_fiber = _fiber_dimension_batch_new(Mf, fiber_qs)
+    sum_old_fiber == sum_new_fiber || error("fiber_dimension parity failed: old=$(sum_old_fiber), new=$(sum_new_fiber)")
+
+    println("== Fiber dimension repeated query ==")
+    b_old_f = _bench("fiber old (scan/findall)", () -> _fiber_dimension_batch_old(Mf, fiber_qs); reps=reps)
+    b_new_f_cold = _bench("fiber new cold (build+memo)", () -> begin
+        Mc = FF.FringeModule{K}(P, Mf.U, Mf.D, Mf.phi; field=field)
+        _fiber_dimension_batch_new(Mc, fiber_qs)
+    end; reps=reps)
+    b_new_f = _bench("fiber new warm (cached)", () -> _fiber_dimension_batch_new(Mf, fiber_qs); reps=reps)
+    println("speedup(new/old) cold: ", round(b_old_f.ms / b_new_f_cold.ms, digits=2), "x")
+    println("speedup(new/old) warm: ", round(b_old_f.ms / b_new_f.ms, digits=2), "x")
+    println()
+
     M = _random_fringe_module(P, field; nu=nu, nd=nd, density=0.15, seed=Int(0x7021))
     N = _random_fringe_module(P, field; nu=nu, nd=nd, density=0.15, seed=Int(0x7022))
 
     # Parity checks for hom dimension.
     h_old = _hom_dimension_old(M, N)
-    h_new = FF.hom_dimension(M, N)
-    h_old == h_new || error("hom_dimension parity failed: old=$(h_old), new=$(h_new)")
+    h_sparse_path = FF._hom_dimension_with_path(M, N, :sparse_path)
+    h_dense_path = FF._hom_dimension_with_path(M, N, :dense_path)
+    h_denseidx = FF._hom_dimension_with_path(M, N, :dense_idx_internal)
+    h_auto = FF.hom_dimension(M, N)
+    h_old == h_sparse_path == h_dense_path == h_denseidx == h_auto ||
+        error("hom_dimension parity failed: old=$(h_old), sparse_path=$(h_sparse_path), dense_path=$(h_dense_path), dense_idx=$(h_denseidx), auto=$(h_auto)")
 
     println("== Hom dimension assembly ==")
     b_old_h = _bench("hom_dimension old (dict+mask)", () -> _hom_dimension_old(M, N); reps=reps)
-    b_new_h = _bench("hom_dimension new (dense idx)", () -> FF.hom_dimension(M, N); reps=reps)
-    println("speedup(new/old): ", round(b_old_h.ms / b_new_h.ms, digits=2), "x")
+    b_sparse_h = _bench("hom_dimension path=:sparse_path", () -> FF._hom_dimension_with_path(M, N, :sparse_path); reps=reps)
+    b_dense_path_h = _bench("hom_dimension path=:dense_path", () -> FF._hom_dimension_with_path(M, N, :dense_path); reps=reps)
+    b_dense_h = _bench("hom_dimension path=:dense_idx_internal", () -> FF._hom_dimension_with_path(M, N, :dense_idx_internal); reps=reps)
+    b_auto_h = _bench("hom_dimension auto", () -> FF.hom_dimension(M, N); reps=reps)
+    b_auto_cold_first_h = _bench("hom_dimension auto cold first", () -> begin
+        _clear_hom_route_memo!(M)
+        Mc = FF.FringeModule{K}(P, M.U, M.D, M.phi; field=field)
+        Nc = FF.FringeModule{K}(P, N.U, N.D, N.phi; field=field)
+        FF.hom_dimension(Mc, Nc)
+    end; reps=reps)
+    b_auto_cold_h = _bench("hom_dimension auto cold memo", () -> begin
+        Mc = FF.FringeModule{K}(P, M.U, M.D, M.phi; field=field)
+        Nc = FF.FringeModule{K}(P, N.U, N.D, N.phi; field=field)
+        FF.hom_dimension(Mc, Nc)
+    end; reps=reps)
+    has_timing_baseline = isdefined(FF, :_hom_dimension_auto_timing_baseline)
+    b_auto_cold_timing_h = if has_timing_baseline
+        _bench("hom_dimension auto cold timing-baseline", () -> begin
+            _clear_hom_route_memo!(M)
+            Mc = FF.FringeModule{K}(P, M.U, M.D, M.phi; field=field)
+            Nc = FF.FringeModule{K}(P, N.U, N.D, N.phi; field=field)
+            getfield(FF, :_hom_dimension_auto_timing_baseline)(Mc, Nc)
+        end; reps=reps)
+    else
+        nothing
+    end
+    println("speedup(sparse_path/old): ", round(b_old_h.ms / b_sparse_h.ms, digits=2), "x")
+    println("speedup(dense_path/old): ", round(b_old_h.ms / b_dense_path_h.ms, digits=2), "x")
+    println("speedup(dense_idx/old): ", round(b_old_h.ms / b_dense_h.ms, digits=2), "x")
+    println("speedup(auto/old): ", round(b_old_h.ms / b_auto_h.ms, digits=2), "x")
+    println("warmup gain(auto cold-first/auto warm): ", round(b_auto_cold_first_h.ms / b_auto_h.ms, digits=2), "x")
+    println("warmup gain(auto cold-memo/auto warm): ", round(b_auto_cold_h.ms / b_auto_h.ms, digits=2), "x")
+    if b_auto_cold_timing_h === nothing
+        println("cold gain(heuristic/timing-baseline): n/a (timing-baseline helper unavailable)")
+    else
+        println("cold gain(heuristic/timing-baseline): ", round(b_auto_cold_timing_h.ms / b_auto_cold_first_h.ms, digits=2), "x")
+    end
+    _clear_hom_route_memo!(M)
+    _ = FF.hom_dimension(M, N)
+    selected_sparse = FF._select_hom_internal_path!(M, N)
+    best_h_ms = min(b_sparse_h.ms, b_dense_path_h.ms, b_dense_h.ms)
+    auto_delta_pct = 100.0 * (b_auto_h.ms / best_h_ms - 1.0)
+    println("auto selected path: ", selected_sparse, " | auto vs best path delta: ",
+            round(auto_delta_pct, digits=2), "%")
+
+    if hom_dense_case
+        M_dense = FF.FringeModule{K}(P, M.U, M.D, Matrix(M.phi); field=field)
+        N_dense = FF.FringeModule{K}(P, N.U, N.D, Matrix(N.phi); field=field)
+        h_old_dense = _hom_dimension_old(M_dense, N_dense)
+        h_sparse_path_dense = FF._hom_dimension_with_path(M_dense, N_dense, :sparse_path)
+        h_dense_path_dense = FF._hom_dimension_with_path(M_dense, N_dense, :dense_path)
+        h_denseidx_dense = FF._hom_dimension_with_path(M_dense, N_dense, :dense_idx_internal)
+        h_auto_dense = FF.hom_dimension(M_dense, N_dense)
+        h_old_dense == h_sparse_path_dense == h_dense_path_dense == h_denseidx_dense == h_auto_dense ||
+            error("hom_dimension dense parity failed: old=$(h_old_dense), sparse_path=$(h_sparse_path_dense), dense_path=$(h_dense_path_dense), dense_idx=$(h_denseidx_dense), auto=$(h_auto_dense)")
+
+        println()
+        println("== Hom dimension assembly (dense phi storage) ==")
+        b_old_hd = _bench("hom_dimension old dense", () -> _hom_dimension_old(M_dense, N_dense); reps=reps)
+        b_sparse_hd = _bench("hom_dimension sparse_path dense", () -> FF._hom_dimension_with_path(M_dense, N_dense, :sparse_path); reps=reps)
+        b_dense_path_hd = _bench("hom_dimension dense_path dense", () -> FF._hom_dimension_with_path(M_dense, N_dense, :dense_path); reps=reps)
+        b_dense_hd = _bench("hom_dimension dense_idx dense", () -> FF._hom_dimension_with_path(M_dense, N_dense, :dense_idx_internal); reps=reps)
+        b_auto_hd = _bench("hom_dimension auto dense", () -> FF.hom_dimension(M_dense, N_dense); reps=reps)
+        b_auto_cold_first_hd = _bench("hom_dimension auto dense cold first", () -> begin
+            _clear_hom_route_memo!(M_dense)
+            Mcd = FF.FringeModule{K}(P, M_dense.U, M_dense.D, M_dense.phi; field=field)
+            Ncd = FF.FringeModule{K}(P, N_dense.U, N_dense.D, N_dense.phi; field=field)
+            FF.hom_dimension(Mcd, Ncd)
+        end; reps=reps)
+        b_auto_cold_hd = _bench("hom_dimension auto dense cold memo", () -> begin
+            Mcd = FF.FringeModule{K}(P, M_dense.U, M_dense.D, M_dense.phi; field=field)
+            Ncd = FF.FringeModule{K}(P, N_dense.U, N_dense.D, N_dense.phi; field=field)
+            FF.hom_dimension(Mcd, Ncd)
+        end; reps=reps)
+        b_auto_cold_timing_hd = if has_timing_baseline
+            _bench("hom_dimension auto dense cold timing-baseline", () -> begin
+                _clear_hom_route_memo!(M_dense)
+                Mcd = FF.FringeModule{K}(P, M_dense.U, M_dense.D, M_dense.phi; field=field)
+                Ncd = FF.FringeModule{K}(P, N_dense.U, N_dense.D, N_dense.phi; field=field)
+                getfield(FF, :_hom_dimension_auto_timing_baseline)(Mcd, Ncd)
+            end; reps=reps)
+        else
+            nothing
+        end
+        println("speedup(sparse_path/old): ", round(b_old_hd.ms / b_sparse_hd.ms, digits=2), "x")
+        println("speedup(dense_path/old): ", round(b_old_hd.ms / b_dense_path_hd.ms, digits=2), "x")
+        println("speedup(dense_idx/old): ", round(b_old_hd.ms / b_dense_hd.ms, digits=2), "x")
+        println("speedup(auto/old): ", round(b_old_hd.ms / b_auto_hd.ms, digits=2), "x")
+        println("warmup gain(auto dense cold-first/auto warm): ", round(b_auto_cold_first_hd.ms / b_auto_hd.ms, digits=2), "x")
+        println("warmup gain(auto dense cold-memo/auto warm): ", round(b_auto_cold_hd.ms / b_auto_hd.ms, digits=2), "x")
+        if b_auto_cold_timing_hd === nothing
+            println("cold gain dense(heuristic/timing-baseline): n/a (timing-baseline helper unavailable)")
+        else
+            println("cold gain dense(heuristic/timing-baseline): ", round(b_auto_cold_timing_hd.ms / b_auto_cold_first_hd.ms, digits=2), "x")
+        end
+        _clear_hom_route_memo!(M_dense)
+        _ = FF.hom_dimension(M_dense, N_dense)
+        selected_dense = FF._select_hom_internal_path!(M_dense, N_dense)
+        d_dense_min = min(FF._matrix_density(M_dense.phi), FF._matrix_density(N_dense.phi))
+        println("effective dense-storage density dmin=", round(d_dense_min, digits=4))
+        best_hd_ms = min(b_sparse_hd.ms, b_dense_path_hd.ms, b_dense_hd.ms)
+        auto_dense_delta_pct = 100.0 * (b_auto_hd.ms / best_hd_ms - 1.0)
+        println("auto selected path (dense fixture): ", selected_dense,
+                " | auto vs best path delta: ", round(auto_dense_delta_pct, digits=2), "%")
+
+        println()
+        println("== Dense-storage sparse-effective routing probe ==")
+        b_probe_auto = _bench("probe auto dense", () -> FF.hom_dimension(M_dense, N_dense); reps=reps)
+        b_probe_sparse = _bench("probe forced sparse dense", () -> FF._hom_dimension_with_path(M_dense, N_dense, :sparse_path); reps=reps)
+        probe_gain = b_probe_auto.ms / b_probe_sparse.ms
+        println("probe gain(forced sparse / auto): ", round(probe_gain, digits=2), "x")
+    end
 end
 
 main()

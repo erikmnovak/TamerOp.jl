@@ -13,7 +13,7 @@ const PM = let pm = nothing
     pm
 end
 
-const WF = PM.Workflow
+const FEA = PM.Featurizers
 
 @inline function _json_bytes(x)
     return Vector{UInt8}(codeunits(JSON3.write(x; allow_inf=true)))
@@ -37,8 +37,8 @@ end
     throw(ArgumentError("save_features_npz: NPZ export requires numeric matrix eltype, got $(T)"))
 end
 
-function WF.save_features_npz(path::AbstractString,
-                              fs::WF.FeatureSet;
+function FEA.save_features_npz(path::AbstractString,
+                              fs::FEA.FeatureSet;
                               x_key::AbstractString="X",
                               names_key::AbstractString="names",
                               ids_key::AbstractString="ids",
@@ -55,7 +55,7 @@ function WF.save_features_npz(path::AbstractString,
     names_json = [String(nm) for nm in fs.names]
     ids_json = [String(id) for id in fs.ids]
 
-    md = include_metadata ? WF.feature_metadata(fs; format=format) : WF.feature_schema_header(format=format)
+    md = include_metadata ? FEA.feature_metadata(fs; format=format) : FEA.feature_schema_header(format=format)
     md["layout"] = String(layout)
     md_json = JSON3.write(md; allow_inf=true)
 
@@ -68,13 +68,13 @@ function WF.save_features_npz(path::AbstractString,
     NPZ.npzwrite(path, payload)
 
     if include_metadata
-        mpath = metadata_path === nothing ? WF.default_feature_metadata_path(path) : String(metadata_path)
-        WF.save_metadata_json(mpath, md)
+        mpath = metadata_path === nothing ? FEA.default_feature_metadata_path(path) : String(metadata_path)
+        FEA.save_metadata_json(mpath, md)
     end
     return path
 end
 
-function WF.load_features_npz(path::AbstractString;
+function FEA.load_features_npz(path::AbstractString;
                               x_key::AbstractString="X",
                               names_key::AbstractString="names",
                               ids_key::AbstractString="ids",
@@ -113,19 +113,19 @@ function WF.load_features_npz(path::AbstractString;
     catch err
         throw(ArgumentError("load_features_npz: failed to decode metadata JSON payload ($(err))"))
     end
-    validate_feature_schema && WF.validate_feature_metadata_schema(md)
+    validate_feature_schema && FEA.validate_feature_metadata_schema(md)
 
     # Optional sidecar support for parity with Arrow/Parquet paths.
-    mpath = metadata_path === nothing ? WF.default_feature_metadata_path(path) : String(metadata_path)
+    mpath = metadata_path === nothing ? FEA.default_feature_metadata_path(path) : String(metadata_path)
     if isfile(mpath)
-        md = WF.load_metadata_json(mpath; validate_feature_schema=validate_feature_schema)
+        md = FEA.load_metadata_json(mpath; validate_feature_schema=validate_feature_schema)
     elseif require_metadata
         throw(ArgumentError("load_features_npz: metadata sidecar not found at $(mpath)"))
     end
 
     layout0 = layout
     if layout0 === nothing
-        layout_raw = WF._obj_get(md, "layout", "samples_by_features")
+        layout_raw = FEA._obj_get(md, "layout", "samples_by_features")
         layout0 = Symbol(String(layout_raw))
     end
     layout0 in (:samples_by_features, :features_by_samples) ||
@@ -138,7 +138,7 @@ function WF.load_features_npz(path::AbstractString;
         throw(DimensionMismatch("load_features_npz: X feature dimension $(size(X,2)) does not match names length $(length(names))"))
 
     meta = (metadata=md, format=format)
-    return WF.FeatureSet(X, Symbol.(names), ids, meta)
+    return FEA.FeatureSet(X, Symbol.(names), ids, meta)
 end
 
 end # module

@@ -80,17 +80,6 @@ import ..DerivedFunctors.GradedSpaces:
 
 import Base.Threads
 
-
-export ModuleCochainComplex, ModuleCochainMap, ModuleCochainHomotopy, 
-       ModuleDistinguishedTriangle, mapping_cone, mapping_cone_triangle,
-       cohomology_module, cohomology_module_data, induced_map_on_cohomology_modules,
-       is_quasi_isomorphism, RHomComplex, RHom, HyperExtSpace, hyperExt,
-       DerivedTensorComplex, DerivedTensor, HyperTorSpace, hyperTor,
-       rhom_map_first, rhom_map_second,
-       hyperExt_map_first, hyperExt_map_second,
-       derived_tensor_map_first, derived_tensor_map_second,
-       hyperTor_map_first, hyperTor_map_second
-
 const IR = IndicatorResolutions
 const FF = FiniteFringe
 
@@ -735,7 +724,7 @@ function cohomology_module_data(C::ModuleCochainComplex{K}, t::Int) where {K}
         elseif Z.dims[u] == 0
             jcomps[u] = zeros(K, 0, B.dims[u])
         else
-            jcomps[u] = FieldLinAlg.solve_fullcolumn(field, iZ.comps[u], iB.comps[u])
+            jcomps[u] = FieldLinAlg.solve_fullcolumn(field, iZ.comps[u], iB.comps[u]; check_rhs=false)
         end
     end
     j = PMorphism{K}(B,Z,jcomps)

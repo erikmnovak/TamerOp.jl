@@ -7,37 +7,61 @@ using SparseArrays
 using Random
 using TOML
 using Dates
+using Statistics
 
 using ..CoreModules: AbstractCoeffField, QQField, PrimeField, RealField, FpElem,
                      BackendMatrix, coeff_type, eye, QQ,
-                     unwrap_backend_matrix, backend_kind, backend_payload,
-                     set_backend_payload!
-
-export rref, rank, nullspace, colspace, solve_fullcolumn, rank_dim, rank_restricted,
-       nullspace_restricted, solve_fullcolumn_restricted,
-       rankQQ, rankQQ_dim, nullityQQ_dim, nullspaceQQ, colspaceQQ, rrefQQ,
-       solve_fullcolumnQQ, FullColumnFactor, factor_fullcolumnQQ,
-       clear_fullcolumn_cache!, rank_modp_sparse, rank_modp_dense, rankQQ_restricted,
-       matrix_backend_trait, conversion_counters, reset_conversion_counters!,
-       linalg_thresholds_path, current_linalg_fingerprint, current_linalg_thresholds,
-       save_linalg_thresholds!, load_linalg_thresholds!, autotune_linalg_thresholds!,
-       have_nemo, SparseRowAccumulator, reset_sparse_row_accumulator!,
-       push_sparse_row_entry!, materialize_sparse_row!
+                     _unwrap_backend_matrix, _backend_kind, _backend_payload,
+                     _set_backend_payload!
 
 # -----------------------------------------------------------------------------
 # Backend selection + Nemo hooks
 # -----------------------------------------------------------------------------
 
 const _NEMO_ENABLED = Ref(true)
-have_nemo() = _NEMO_ENABLED[]
+_have_nemo() = _NEMO_ENABLED[]
 
 const NEMO_THRESHOLD = Ref(50_000)     # heuristic: use Nemo if m*n >= threshold
+const QQ_NEMO_RANK_THRESHOLD_SQUARE = Ref(50_000)
+const QQ_NEMO_RANK_THRESHOLD_TALL = Ref(50_000)
+const QQ_NEMO_RANK_THRESHOLD_WIDE = Ref(50_000)
+const QQ_NEMO_NULLSPACE_THRESHOLD_SQUARE = Ref(50_000)
+const QQ_NEMO_NULLSPACE_THRESHOLD_TALL = Ref(50_000)
+const QQ_NEMO_NULLSPACE_THRESHOLD_WIDE = Ref(50_000)
+const QQ_NEMO_SOLVE_THRESHOLD_SQUARE = Ref(50_000)
+const QQ_NEMO_SOLVE_THRESHOLD_TALL = Ref(50_000)
+const QQ_NEMO_SOLVE_THRESHOLD_WIDE = Ref(50_000)
+const QQ_NEMO_SPARSE_SOLVE_THRESHOLD_SQUARE_LOW = Ref(10_000)
+const QQ_NEMO_SPARSE_SOLVE_THRESHOLD_SQUARE_MID = Ref(3_000)
+const QQ_NEMO_SPARSE_SOLVE_THRESHOLD_SQUARE_HIGH = Ref(1_200)
+const QQ_NEMO_SPARSE_SOLVE_THRESHOLD_TALL_LOW = Ref(10_000)
+const QQ_NEMO_SPARSE_SOLVE_THRESHOLD_TALL_MID = Ref(3_000)
+const QQ_NEMO_SPARSE_SOLVE_THRESHOLD_TALL_HIGH = Ref(1_200)
+const QQ_NEMO_SPARSE_SOLVE_THRESHOLD_WIDE_LOW = Ref(10_000)
+const QQ_NEMO_SPARSE_SOLVE_THRESHOLD_WIDE_MID = Ref(3_000)
+const QQ_NEMO_SPARSE_SOLVE_THRESHOLD_WIDE_HIGH = Ref(1_200)
+const QQ_NEMO_SPARSE_SOLVE_POLICY_SQUARE_LOW = Ref(1)   # 1 => use nnz >= threshold, -1 => use nnz <= threshold
+const QQ_NEMO_SPARSE_SOLVE_POLICY_SQUARE_MID = Ref(1)
+const QQ_NEMO_SPARSE_SOLVE_POLICY_SQUARE_HIGH = Ref(1)
+const QQ_NEMO_SPARSE_SOLVE_POLICY_TALL_LOW = Ref(1)
+const QQ_NEMO_SPARSE_SOLVE_POLICY_TALL_MID = Ref(1)
+const QQ_NEMO_SPARSE_SOLVE_POLICY_TALL_HIGH = Ref(1)
+const QQ_NEMO_SPARSE_SOLVE_POLICY_WIDE_LOW = Ref(1)
+const QQ_NEMO_SPARSE_SOLVE_POLICY_WIDE_MID = Ref(1)
+const QQ_NEMO_SPARSE_SOLVE_POLICY_WIDE_HIGH = Ref(1)
+const QQ_MODULAR_NULLSPACE_THRESHOLD_SQUARE = Ref(120_000)
+const QQ_MODULAR_NULLSPACE_THRESHOLD_TALL = Ref(120_000)
+const QQ_MODULAR_NULLSPACE_THRESHOLD_WIDE = Ref(120_000)
+const QQ_MODULAR_SOLVE_THRESHOLD_SQUARE = Ref(120_000)
+const QQ_MODULAR_SOLVE_THRESHOLD_TALL = Ref(120_000)
+const QQ_MODULAR_SOLVE_THRESHOLD_WIDE = Ref(120_000)
 const FP_NEMO_RANK_THRESHOLD = Ref(40_000)
 const FP_NEMO_NULLSPACE_THRESHOLD = Ref(60_000)
 const FP_NEMO_SOLVE_THRESHOLD = Ref(60_000)
 const FLOAT_NULLSPACE_SVD_THRESHOLD = Ref(180_000)
 const FLOAT_SPARSE_SVDS_MIN_DIM = Ref(1_024)
 const FLOAT_SPARSE_SVDS_MIN_NNZ = Ref(120_000)
+const ZN_QQ_DIMAT_SUBMATRIX_WORK_THRESHOLD = Ref(48)
 const MODULAR_NULLSPACE_THRESHOLD = Ref(120_000)
 const MODULAR_SOLVE_THRESHOLD = Ref(120_000)
 const MODULAR_MIN_PRIMES = Ref(2)
@@ -50,6 +74,12 @@ const TINY_LINALG_MAX_DIM = Ref(4)
 const LINALG_THRESHOLD_SCHEMA_VERSION = 1
 const _LINALG_THRESHOLDS_INITIALIZED = Ref(false)
 
+@inline zn_qq_dimat_submatrix_work_threshold() = Int(ZN_QQ_DIMAT_SUBMATRIX_WORK_THRESHOLD[])
+@inline function _set_zn_qq_dimat_submatrix_work_threshold!(x::Integer)
+    ZN_QQ_DIMAT_SUBMATRIX_WORK_THRESHOLD[] = max(1, Int(x))
+    return nothing
+end
+
 abstract type MatrixBackendTrait end
 struct JuliaMatrixBackend <: MatrixBackendTrait end
 struct NemoMatrixBackend <: MatrixBackendTrait end
@@ -58,9 +88,9 @@ const _JULIA_BACKEND_TRAIT = JuliaMatrixBackend()
 const _NEMO_BACKEND_TRAIT = NemoMatrixBackend()
 const _SVDS_IMPL = Ref{Any}(nothing)
 
-@inline function matrix_backend_trait(field::AbstractCoeffField, A;
+@inline function _matrix_backend_trait(field::AbstractCoeffField, A;
                                       op::Symbol=:rank, backend::Symbol=:auto)
-    be = choose_linalg_backend(field, A; op=op, backend=backend)
+    be = _choose_linalg_backend(field, A; op=op, backend=backend)
     return be == :nemo ? _NEMO_BACKEND_TRAIT : _JULIA_BACKEND_TRAIT
 end
 
@@ -73,7 +103,7 @@ const _FP_FROM_NEMO_CONVERSIONS = Base.Threads.Atomic{Int}(0)
 
 @inline _bump_counter!(x::Base.Threads.Atomic{Int}) = Base.Threads.atomic_add!(x, 1)
 
-function reset_conversion_counters!()
+function _reset_conversion_counters!()
     _QQ_TO_NEMO_CONVERSIONS[] = 0
     _QQ_TO_NEMO_CACHE_HITS[] = 0
     _QQ_FROM_NEMO_CONVERSIONS[] = 0
@@ -83,7 +113,7 @@ function reset_conversion_counters!()
     return nothing
 end
 
-function conversion_counters()
+function _conversion_counters()
     return (
         qq_to_nemo=_QQ_TO_NEMO_CONVERSIONS[],
         qq_to_nemo_cache_hits=_QQ_TO_NEMO_CACHE_HITS[],
@@ -122,6 +152,100 @@ end
 @inline _is_tiny_dim(x::Int) = x <= TINY_LINALG_MAX_DIM[]
 @inline _is_tiny_matrix_dims(m::Int, n::Int) = _is_tiny_dim(m) && _is_tiny_dim(n)
 @inline _is_tiny_matrix(A::AbstractMatrix) = _is_tiny_matrix_dims(size(A, 1), size(A, 2))
+@inline function _qq_shape_bucket(m::Int, n::Int)::Symbol
+    # Bucket by aspect ratio to keep backend routing stable across square/tall/wide regimes.
+    if m * 5 >= n * 4 && n * 5 >= m * 4
+        return :square
+    elseif m > n
+        return :tall
+    else
+        return :wide
+    end
+end
+
+@inline function _qq_nemo_threshold(op::Symbol, shape::Symbol)::Int
+    if op == :rank
+        return shape == :square ? QQ_NEMO_RANK_THRESHOLD_SQUARE[] :
+               shape == :tall ? QQ_NEMO_RANK_THRESHOLD_TALL[] :
+               QQ_NEMO_RANK_THRESHOLD_WIDE[]
+    elseif op == :nullspace
+        return shape == :square ? QQ_NEMO_NULLSPACE_THRESHOLD_SQUARE[] :
+               shape == :tall ? QQ_NEMO_NULLSPACE_THRESHOLD_TALL[] :
+               QQ_NEMO_NULLSPACE_THRESHOLD_WIDE[]
+    elseif op == :solve
+        return shape == :square ? QQ_NEMO_SOLVE_THRESHOLD_SQUARE[] :
+               shape == :tall ? QQ_NEMO_SOLVE_THRESHOLD_TALL[] :
+               QQ_NEMO_SOLVE_THRESHOLD_WIDE[]
+    end
+    return NEMO_THRESHOLD[]
+end
+
+@inline function _qq_modular_threshold(op::Symbol, shape::Symbol)::Int
+    if op == :nullspace
+        return shape == :square ? QQ_MODULAR_NULLSPACE_THRESHOLD_SQUARE[] :
+               shape == :tall ? QQ_MODULAR_NULLSPACE_THRESHOLD_TALL[] :
+               QQ_MODULAR_NULLSPACE_THRESHOLD_WIDE[]
+    elseif op == :solve
+        return shape == :square ? QQ_MODULAR_SOLVE_THRESHOLD_SQUARE[] :
+               shape == :tall ? QQ_MODULAR_SOLVE_THRESHOLD_TALL[] :
+               QQ_MODULAR_SOLVE_THRESHOLD_WIDE[]
+    end
+    return max(MODULAR_SOLVE_THRESHOLD[], MODULAR_NULLSPACE_THRESHOLD[])
+end
+
+@inline function _qq_sparse_density_bucket(dens::Float64)::Symbol
+    if dens <= 0.08
+        return :low
+    elseif dens <= 0.28
+        return :mid
+    end
+    return :high
+end
+
+@inline _qq_sparse_density_bucket(A) = _qq_sparse_density_bucket((size(A, 1) * size(A, 2)) == 0 ? 0.0 : (_sparse_nnz(A) / (size(A, 1) * size(A, 2))))
+
+@inline function _qq_sparse_solve_fill(A)::Float64
+    m, n = size(A)
+    nnzA = _sparse_nnz(A)
+    if m > n
+        free_slots = (m - n) * n
+        free_slots <= 0 && return 1.0
+        return clamp((nnzA - n) / free_slots, 0.0, 1.0)
+    end
+    work = m * n
+    work == 0 && return 0.0
+    return clamp(nnzA / work, 0.0, 1.0)
+end
+
+@inline function _qq_sparse_solve_threshold(shape::Symbol, bucket::Symbol)::Int
+    if shape == :square
+        return bucket == :low ? QQ_NEMO_SPARSE_SOLVE_THRESHOLD_SQUARE_LOW[] :
+               bucket == :mid ? QQ_NEMO_SPARSE_SOLVE_THRESHOLD_SQUARE_MID[] :
+               QQ_NEMO_SPARSE_SOLVE_THRESHOLD_SQUARE_HIGH[]
+    elseif shape == :tall
+        return bucket == :low ? QQ_NEMO_SPARSE_SOLVE_THRESHOLD_TALL_LOW[] :
+               bucket == :mid ? QQ_NEMO_SPARSE_SOLVE_THRESHOLD_TALL_MID[] :
+               QQ_NEMO_SPARSE_SOLVE_THRESHOLD_TALL_HIGH[]
+    end
+    return bucket == :low ? QQ_NEMO_SPARSE_SOLVE_THRESHOLD_WIDE_LOW[] :
+           bucket == :mid ? QQ_NEMO_SPARSE_SOLVE_THRESHOLD_WIDE_MID[] :
+           QQ_NEMO_SPARSE_SOLVE_THRESHOLD_WIDE_HIGH[]
+end
+
+@inline function _qq_sparse_solve_use_ge(shape::Symbol, bucket::Symbol)::Bool
+    if shape == :square
+        return (bucket == :low ? QQ_NEMO_SPARSE_SOLVE_POLICY_SQUARE_LOW[] :
+                bucket == :mid ? QQ_NEMO_SPARSE_SOLVE_POLICY_SQUARE_MID[] :
+                QQ_NEMO_SPARSE_SOLVE_POLICY_SQUARE_HIGH[]) > 0
+    elseif shape == :tall
+        return (bucket == :low ? QQ_NEMO_SPARSE_SOLVE_POLICY_TALL_LOW[] :
+                bucket == :mid ? QQ_NEMO_SPARSE_SOLVE_POLICY_TALL_MID[] :
+                QQ_NEMO_SPARSE_SOLVE_POLICY_TALL_HIGH[]) > 0
+    end
+    return (bucket == :low ? QQ_NEMO_SPARSE_SOLVE_POLICY_WIDE_LOW[] :
+            bucket == :mid ? QQ_NEMO_SPARSE_SOLVE_POLICY_WIDE_MID[] :
+            QQ_NEMO_SPARSE_SOLVE_POLICY_WIDE_HIGH[]) > 0
+end
 @inline function _is_tiny_solve(B, Y)
     rhs = Y isa AbstractVector ? 1 : size(Y, 2)
     return _is_tiny_matrix_dims(size(B, 1), size(B, 2)) && _is_tiny_dim(rhs)
@@ -192,11 +316,11 @@ end
 
 @inline _linalg_repo_root() = normpath(joinpath(@__DIR__, ".."))
 
-function linalg_thresholds_path(; root::AbstractString=_linalg_repo_root())
+function _linalg_thresholds_path(; root::AbstractString=_linalg_repo_root())
     return joinpath(root, "linalg_thresholds.toml")
 end
 
-function current_linalg_fingerprint()
+function _current_linalg_fingerprint()
     return Dict(
         "schema_version" => LINALG_THRESHOLD_SCHEMA_VERSION,
         "cpu_name" => String(Sys.CPU_NAME),
@@ -208,9 +332,42 @@ function current_linalg_fingerprint()
     )
 end
 
-function current_linalg_thresholds()
+function _current_linalg_thresholds()
     return Dict(
         "nemo_threshold" => Int(NEMO_THRESHOLD[]),
+        "qq_nemo_rank_threshold_square" => Int(QQ_NEMO_RANK_THRESHOLD_SQUARE[]),
+        "qq_nemo_rank_threshold_tall" => Int(QQ_NEMO_RANK_THRESHOLD_TALL[]),
+        "qq_nemo_rank_threshold_wide" => Int(QQ_NEMO_RANK_THRESHOLD_WIDE[]),
+        "qq_nemo_nullspace_threshold_square" => Int(QQ_NEMO_NULLSPACE_THRESHOLD_SQUARE[]),
+        "qq_nemo_nullspace_threshold_tall" => Int(QQ_NEMO_NULLSPACE_THRESHOLD_TALL[]),
+        "qq_nemo_nullspace_threshold_wide" => Int(QQ_NEMO_NULLSPACE_THRESHOLD_WIDE[]),
+        "qq_nemo_solve_threshold_square" => Int(QQ_NEMO_SOLVE_THRESHOLD_SQUARE[]),
+        "qq_nemo_solve_threshold_tall" => Int(QQ_NEMO_SOLVE_THRESHOLD_TALL[]),
+        "qq_nemo_solve_threshold_wide" => Int(QQ_NEMO_SOLVE_THRESHOLD_WIDE[]),
+        "qq_nemo_sparse_solve_threshold_square_low" => Int(QQ_NEMO_SPARSE_SOLVE_THRESHOLD_SQUARE_LOW[]),
+        "qq_nemo_sparse_solve_threshold_square_mid" => Int(QQ_NEMO_SPARSE_SOLVE_THRESHOLD_SQUARE_MID[]),
+        "qq_nemo_sparse_solve_threshold_square_high" => Int(QQ_NEMO_SPARSE_SOLVE_THRESHOLD_SQUARE_HIGH[]),
+        "qq_nemo_sparse_solve_threshold_tall_low" => Int(QQ_NEMO_SPARSE_SOLVE_THRESHOLD_TALL_LOW[]),
+        "qq_nemo_sparse_solve_threshold_tall_mid" => Int(QQ_NEMO_SPARSE_SOLVE_THRESHOLD_TALL_MID[]),
+        "qq_nemo_sparse_solve_threshold_tall_high" => Int(QQ_NEMO_SPARSE_SOLVE_THRESHOLD_TALL_HIGH[]),
+        "qq_nemo_sparse_solve_threshold_wide_low" => Int(QQ_NEMO_SPARSE_SOLVE_THRESHOLD_WIDE_LOW[]),
+        "qq_nemo_sparse_solve_threshold_wide_mid" => Int(QQ_NEMO_SPARSE_SOLVE_THRESHOLD_WIDE_MID[]),
+        "qq_nemo_sparse_solve_threshold_wide_high" => Int(QQ_NEMO_SPARSE_SOLVE_THRESHOLD_WIDE_HIGH[]),
+        "qq_nemo_sparse_solve_policy_square_low" => Int(QQ_NEMO_SPARSE_SOLVE_POLICY_SQUARE_LOW[]),
+        "qq_nemo_sparse_solve_policy_square_mid" => Int(QQ_NEMO_SPARSE_SOLVE_POLICY_SQUARE_MID[]),
+        "qq_nemo_sparse_solve_policy_square_high" => Int(QQ_NEMO_SPARSE_SOLVE_POLICY_SQUARE_HIGH[]),
+        "qq_nemo_sparse_solve_policy_tall_low" => Int(QQ_NEMO_SPARSE_SOLVE_POLICY_TALL_LOW[]),
+        "qq_nemo_sparse_solve_policy_tall_mid" => Int(QQ_NEMO_SPARSE_SOLVE_POLICY_TALL_MID[]),
+        "qq_nemo_sparse_solve_policy_tall_high" => Int(QQ_NEMO_SPARSE_SOLVE_POLICY_TALL_HIGH[]),
+        "qq_nemo_sparse_solve_policy_wide_low" => Int(QQ_NEMO_SPARSE_SOLVE_POLICY_WIDE_LOW[]),
+        "qq_nemo_sparse_solve_policy_wide_mid" => Int(QQ_NEMO_SPARSE_SOLVE_POLICY_WIDE_MID[]),
+        "qq_nemo_sparse_solve_policy_wide_high" => Int(QQ_NEMO_SPARSE_SOLVE_POLICY_WIDE_HIGH[]),
+        "qq_modular_nullspace_threshold_square" => Int(QQ_MODULAR_NULLSPACE_THRESHOLD_SQUARE[]),
+        "qq_modular_nullspace_threshold_tall" => Int(QQ_MODULAR_NULLSPACE_THRESHOLD_TALL[]),
+        "qq_modular_nullspace_threshold_wide" => Int(QQ_MODULAR_NULLSPACE_THRESHOLD_WIDE[]),
+        "qq_modular_solve_threshold_square" => Int(QQ_MODULAR_SOLVE_THRESHOLD_SQUARE[]),
+        "qq_modular_solve_threshold_tall" => Int(QQ_MODULAR_SOLVE_THRESHOLD_TALL[]),
+        "qq_modular_solve_threshold_wide" => Int(QQ_MODULAR_SOLVE_THRESHOLD_WIDE[]),
         "fp_nemo_rank_threshold" => Int(FP_NEMO_RANK_THRESHOLD[]),
         "fp_nemo_nullspace_threshold" => Int(FP_NEMO_NULLSPACE_THRESHOLD[]),
         "fp_nemo_solve_threshold" => Int(FP_NEMO_SOLVE_THRESHOLD[]),
@@ -222,12 +379,54 @@ function current_linalg_thresholds()
         "float_nullspace_svd_threshold" => Int(FLOAT_NULLSPACE_SVD_THRESHOLD[]),
         "float_sparse_svds_min_dim" => Int(FLOAT_SPARSE_SVDS_MIN_DIM[]),
         "float_sparse_svds_min_nnz" => Int(FLOAT_SPARSE_SVDS_MIN_NNZ[]),
+        "zn_qq_dimat_submatrix_work_threshold" => Int(ZN_QQ_DIMAT_SUBMATRIX_WORK_THRESHOLD[]),
     )
 end
 
 function _apply_linalg_thresholds!(vals)::Bool
     try
-        NEMO_THRESHOLD[] = Int(get(vals, "nemo_threshold", NEMO_THRESHOLD[]))
+        qq_nemo_fallback = Int(get(vals, "nemo_threshold", NEMO_THRESHOLD[]))
+        NEMO_THRESHOLD[] = qq_nemo_fallback
+        QQ_NEMO_RANK_THRESHOLD_SQUARE[] = Int(get(vals, "qq_nemo_rank_threshold_square", qq_nemo_fallback))
+        QQ_NEMO_RANK_THRESHOLD_TALL[] = Int(get(vals, "qq_nemo_rank_threshold_tall", qq_nemo_fallback))
+        QQ_NEMO_RANK_THRESHOLD_WIDE[] = Int(get(vals, "qq_nemo_rank_threshold_wide", qq_nemo_fallback))
+        QQ_NEMO_NULLSPACE_THRESHOLD_SQUARE[] = Int(get(vals, "qq_nemo_nullspace_threshold_square", qq_nemo_fallback))
+        QQ_NEMO_NULLSPACE_THRESHOLD_TALL[] = Int(get(vals, "qq_nemo_nullspace_threshold_tall", qq_nemo_fallback))
+        QQ_NEMO_NULLSPACE_THRESHOLD_WIDE[] = Int(get(vals, "qq_nemo_nullspace_threshold_wide", qq_nemo_fallback))
+        QQ_NEMO_SOLVE_THRESHOLD_SQUARE[] = Int(get(vals, "qq_nemo_solve_threshold_square", qq_nemo_fallback))
+        QQ_NEMO_SOLVE_THRESHOLD_TALL[] = Int(get(vals, "qq_nemo_solve_threshold_tall", qq_nemo_fallback))
+        QQ_NEMO_SOLVE_THRESHOLD_WIDE[] = Int(get(vals, "qq_nemo_solve_threshold_wide", qq_nemo_fallback))
+        qq_sparse_solve_square_fallback = QQ_NEMO_SOLVE_THRESHOLD_SQUARE[]
+        qq_sparse_solve_tall_fallback = QQ_NEMO_SOLVE_THRESHOLD_TALL[]
+        qq_sparse_solve_wide_fallback = QQ_NEMO_SOLVE_THRESHOLD_WIDE[]
+        QQ_NEMO_SPARSE_SOLVE_THRESHOLD_SQUARE_LOW[] = Int(get(vals, "qq_nemo_sparse_solve_threshold_square_low", qq_sparse_solve_square_fallback))
+        QQ_NEMO_SPARSE_SOLVE_THRESHOLD_SQUARE_MID[] = Int(get(vals, "qq_nemo_sparse_solve_threshold_square_mid", qq_sparse_solve_square_fallback))
+        QQ_NEMO_SPARSE_SOLVE_THRESHOLD_SQUARE_HIGH[] = Int(get(vals, "qq_nemo_sparse_solve_threshold_square_high", qq_sparse_solve_square_fallback))
+        QQ_NEMO_SPARSE_SOLVE_THRESHOLD_TALL_LOW[] = Int(get(vals, "qq_nemo_sparse_solve_threshold_tall_low", qq_sparse_solve_tall_fallback))
+        QQ_NEMO_SPARSE_SOLVE_THRESHOLD_TALL_MID[] = Int(get(vals, "qq_nemo_sparse_solve_threshold_tall_mid", qq_sparse_solve_tall_fallback))
+        QQ_NEMO_SPARSE_SOLVE_THRESHOLD_TALL_HIGH[] = Int(get(vals, "qq_nemo_sparse_solve_threshold_tall_high", qq_sparse_solve_tall_fallback))
+        QQ_NEMO_SPARSE_SOLVE_THRESHOLD_WIDE_LOW[] = Int(get(vals, "qq_nemo_sparse_solve_threshold_wide_low", qq_sparse_solve_wide_fallback))
+        QQ_NEMO_SPARSE_SOLVE_THRESHOLD_WIDE_MID[] = Int(get(vals, "qq_nemo_sparse_solve_threshold_wide_mid", qq_sparse_solve_wide_fallback))
+        QQ_NEMO_SPARSE_SOLVE_THRESHOLD_WIDE_HIGH[] = Int(get(vals, "qq_nemo_sparse_solve_threshold_wide_high", qq_sparse_solve_wide_fallback))
+        QQ_NEMO_SPARSE_SOLVE_POLICY_SQUARE_LOW[] = Int(get(vals, "qq_nemo_sparse_solve_policy_square_low", QQ_NEMO_SPARSE_SOLVE_POLICY_SQUARE_LOW[]))
+        QQ_NEMO_SPARSE_SOLVE_POLICY_SQUARE_MID[] = Int(get(vals, "qq_nemo_sparse_solve_policy_square_mid", QQ_NEMO_SPARSE_SOLVE_POLICY_SQUARE_MID[]))
+        QQ_NEMO_SPARSE_SOLVE_POLICY_SQUARE_HIGH[] = Int(get(vals, "qq_nemo_sparse_solve_policy_square_high", QQ_NEMO_SPARSE_SOLVE_POLICY_SQUARE_HIGH[]))
+        QQ_NEMO_SPARSE_SOLVE_POLICY_TALL_LOW[] = Int(get(vals, "qq_nemo_sparse_solve_policy_tall_low", QQ_NEMO_SPARSE_SOLVE_POLICY_TALL_LOW[]))
+        QQ_NEMO_SPARSE_SOLVE_POLICY_TALL_MID[] = Int(get(vals, "qq_nemo_sparse_solve_policy_tall_mid", QQ_NEMO_SPARSE_SOLVE_POLICY_TALL_MID[]))
+        QQ_NEMO_SPARSE_SOLVE_POLICY_TALL_HIGH[] = Int(get(vals, "qq_nemo_sparse_solve_policy_tall_high", QQ_NEMO_SPARSE_SOLVE_POLICY_TALL_HIGH[]))
+        QQ_NEMO_SPARSE_SOLVE_POLICY_WIDE_LOW[] = Int(get(vals, "qq_nemo_sparse_solve_policy_wide_low", QQ_NEMO_SPARSE_SOLVE_POLICY_WIDE_LOW[]))
+        QQ_NEMO_SPARSE_SOLVE_POLICY_WIDE_MID[] = Int(get(vals, "qq_nemo_sparse_solve_policy_wide_mid", QQ_NEMO_SPARSE_SOLVE_POLICY_WIDE_MID[]))
+        QQ_NEMO_SPARSE_SOLVE_POLICY_WIDE_HIGH[] = Int(get(vals, "qq_nemo_sparse_solve_policy_wide_high", QQ_NEMO_SPARSE_SOLVE_POLICY_WIDE_HIGH[]))
+
+        qq_mod_ns_fallback = Int(get(vals, "modular_nullspace_threshold", MODULAR_NULLSPACE_THRESHOLD[]))
+        qq_mod_solve_fallback = Int(get(vals, "modular_solve_threshold", MODULAR_SOLVE_THRESHOLD[]))
+        QQ_MODULAR_NULLSPACE_THRESHOLD_SQUARE[] = Int(get(vals, "qq_modular_nullspace_threshold_square", qq_mod_ns_fallback))
+        QQ_MODULAR_NULLSPACE_THRESHOLD_TALL[] = Int(get(vals, "qq_modular_nullspace_threshold_tall", qq_mod_ns_fallback))
+        QQ_MODULAR_NULLSPACE_THRESHOLD_WIDE[] = Int(get(vals, "qq_modular_nullspace_threshold_wide", qq_mod_ns_fallback))
+        QQ_MODULAR_SOLVE_THRESHOLD_SQUARE[] = Int(get(vals, "qq_modular_solve_threshold_square", qq_mod_solve_fallback))
+        QQ_MODULAR_SOLVE_THRESHOLD_TALL[] = Int(get(vals, "qq_modular_solve_threshold_tall", qq_mod_solve_fallback))
+        QQ_MODULAR_SOLVE_THRESHOLD_WIDE[] = Int(get(vals, "qq_modular_solve_threshold_wide", qq_mod_solve_fallback))
+
         FP_NEMO_RANK_THRESHOLD[] = Int(get(vals, "fp_nemo_rank_threshold", FP_NEMO_RANK_THRESHOLD[]))
         FP_NEMO_NULLSPACE_THRESHOLD[] = Int(get(vals, "fp_nemo_nullspace_threshold", FP_NEMO_NULLSPACE_THRESHOLD[]))
         FP_NEMO_SOLVE_THRESHOLD[] = Int(get(vals, "fp_nemo_solve_threshold", FP_NEMO_SOLVE_THRESHOLD[]))
@@ -239,23 +438,59 @@ function _apply_linalg_thresholds!(vals)::Bool
         FLOAT_NULLSPACE_SVD_THRESHOLD[] = Int(get(vals, "float_nullspace_svd_threshold", FLOAT_NULLSPACE_SVD_THRESHOLD[]))
         FLOAT_SPARSE_SVDS_MIN_DIM[] = Int(get(vals, "float_sparse_svds_min_dim", FLOAT_SPARSE_SVDS_MIN_DIM[]))
         FLOAT_SPARSE_SVDS_MIN_NNZ[] = Int(get(vals, "float_sparse_svds_min_nnz", FLOAT_SPARSE_SVDS_MIN_NNZ[]))
+        _set_zn_qq_dimat_submatrix_work_threshold!(
+            Int(get(vals, "zn_qq_dimat_submatrix_work_threshold",
+                    ZN_QQ_DIMAT_SUBMATRIX_WORK_THRESHOLD[])))
         MODULAR_MIN_PRIMES[] = max(1, MODULAR_MIN_PRIMES[])
         MODULAR_MAX_PRIMES[] = max(MODULAR_MIN_PRIMES[], MODULAR_MAX_PRIMES[])
         RANKQQ_DIM_SMALL_THRESHOLD[] = max(1, RANKQQ_DIM_SMALL_THRESHOLD[])
+        QQ_NEMO_RANK_THRESHOLD_SQUARE[] = max(1, QQ_NEMO_RANK_THRESHOLD_SQUARE[])
+        QQ_NEMO_RANK_THRESHOLD_TALL[] = max(1, QQ_NEMO_RANK_THRESHOLD_TALL[])
+        QQ_NEMO_RANK_THRESHOLD_WIDE[] = max(1, QQ_NEMO_RANK_THRESHOLD_WIDE[])
+        QQ_NEMO_NULLSPACE_THRESHOLD_SQUARE[] = max(1, QQ_NEMO_NULLSPACE_THRESHOLD_SQUARE[])
+        QQ_NEMO_NULLSPACE_THRESHOLD_TALL[] = max(1, QQ_NEMO_NULLSPACE_THRESHOLD_TALL[])
+        QQ_NEMO_NULLSPACE_THRESHOLD_WIDE[] = max(1, QQ_NEMO_NULLSPACE_THRESHOLD_WIDE[])
+        QQ_NEMO_SOLVE_THRESHOLD_SQUARE[] = max(1, QQ_NEMO_SOLVE_THRESHOLD_SQUARE[])
+        QQ_NEMO_SOLVE_THRESHOLD_TALL[] = max(1, QQ_NEMO_SOLVE_THRESHOLD_TALL[])
+        QQ_NEMO_SOLVE_THRESHOLD_WIDE[] = max(1, QQ_NEMO_SOLVE_THRESHOLD_WIDE[])
+        QQ_NEMO_SPARSE_SOLVE_THRESHOLD_SQUARE_LOW[] = max(1, QQ_NEMO_SPARSE_SOLVE_THRESHOLD_SQUARE_LOW[])
+        QQ_NEMO_SPARSE_SOLVE_THRESHOLD_SQUARE_MID[] = max(1, QQ_NEMO_SPARSE_SOLVE_THRESHOLD_SQUARE_MID[])
+        QQ_NEMO_SPARSE_SOLVE_THRESHOLD_SQUARE_HIGH[] = max(1, QQ_NEMO_SPARSE_SOLVE_THRESHOLD_SQUARE_HIGH[])
+        QQ_NEMO_SPARSE_SOLVE_THRESHOLD_TALL_LOW[] = max(1, QQ_NEMO_SPARSE_SOLVE_THRESHOLD_TALL_LOW[])
+        QQ_NEMO_SPARSE_SOLVE_THRESHOLD_TALL_MID[] = max(1, QQ_NEMO_SPARSE_SOLVE_THRESHOLD_TALL_MID[])
+        QQ_NEMO_SPARSE_SOLVE_THRESHOLD_TALL_HIGH[] = max(1, QQ_NEMO_SPARSE_SOLVE_THRESHOLD_TALL_HIGH[])
+        QQ_NEMO_SPARSE_SOLVE_THRESHOLD_WIDE_LOW[] = max(1, QQ_NEMO_SPARSE_SOLVE_THRESHOLD_WIDE_LOW[])
+        QQ_NEMO_SPARSE_SOLVE_THRESHOLD_WIDE_MID[] = max(1, QQ_NEMO_SPARSE_SOLVE_THRESHOLD_WIDE_MID[])
+        QQ_NEMO_SPARSE_SOLVE_THRESHOLD_WIDE_HIGH[] = max(1, QQ_NEMO_SPARSE_SOLVE_THRESHOLD_WIDE_HIGH[])
+        QQ_NEMO_SPARSE_SOLVE_POLICY_SQUARE_LOW[] = QQ_NEMO_SPARSE_SOLVE_POLICY_SQUARE_LOW[] >= 0 ? 1 : -1
+        QQ_NEMO_SPARSE_SOLVE_POLICY_SQUARE_MID[] = QQ_NEMO_SPARSE_SOLVE_POLICY_SQUARE_MID[] >= 0 ? 1 : -1
+        QQ_NEMO_SPARSE_SOLVE_POLICY_SQUARE_HIGH[] = QQ_NEMO_SPARSE_SOLVE_POLICY_SQUARE_HIGH[] >= 0 ? 1 : -1
+        QQ_NEMO_SPARSE_SOLVE_POLICY_TALL_LOW[] = QQ_NEMO_SPARSE_SOLVE_POLICY_TALL_LOW[] >= 0 ? 1 : -1
+        QQ_NEMO_SPARSE_SOLVE_POLICY_TALL_MID[] = QQ_NEMO_SPARSE_SOLVE_POLICY_TALL_MID[] >= 0 ? 1 : -1
+        QQ_NEMO_SPARSE_SOLVE_POLICY_TALL_HIGH[] = QQ_NEMO_SPARSE_SOLVE_POLICY_TALL_HIGH[] >= 0 ? 1 : -1
+        QQ_NEMO_SPARSE_SOLVE_POLICY_WIDE_LOW[] = QQ_NEMO_SPARSE_SOLVE_POLICY_WIDE_LOW[] >= 0 ? 1 : -1
+        QQ_NEMO_SPARSE_SOLVE_POLICY_WIDE_MID[] = QQ_NEMO_SPARSE_SOLVE_POLICY_WIDE_MID[] >= 0 ? 1 : -1
+        QQ_NEMO_SPARSE_SOLVE_POLICY_WIDE_HIGH[] = QQ_NEMO_SPARSE_SOLVE_POLICY_WIDE_HIGH[] >= 0 ? 1 : -1
+        QQ_MODULAR_NULLSPACE_THRESHOLD_SQUARE[] = max(1, QQ_MODULAR_NULLSPACE_THRESHOLD_SQUARE[])
+        QQ_MODULAR_NULLSPACE_THRESHOLD_TALL[] = max(1, QQ_MODULAR_NULLSPACE_THRESHOLD_TALL[])
+        QQ_MODULAR_NULLSPACE_THRESHOLD_WIDE[] = max(1, QQ_MODULAR_NULLSPACE_THRESHOLD_WIDE[])
+        QQ_MODULAR_SOLVE_THRESHOLD_SQUARE[] = max(1, QQ_MODULAR_SOLVE_THRESHOLD_SQUARE[])
+        QQ_MODULAR_SOLVE_THRESHOLD_TALL[] = max(1, QQ_MODULAR_SOLVE_THRESHOLD_TALL[])
+        QQ_MODULAR_SOLVE_THRESHOLD_WIDE[] = max(1, QQ_MODULAR_SOLVE_THRESHOLD_WIDE[])
     catch
         return false
     end
     return true
 end
 
-function save_linalg_thresholds!(; path::AbstractString=linalg_thresholds_path())
+function _save_linalg_thresholds!(; path::AbstractString=_linalg_thresholds_path())
     doc = Dict(
         "meta" => Dict(
             "created_utc" => Dates.format(Dates.now(Dates.UTC), dateformat"yyyy-mm-ddTHH:MM:SSZ"),
             "schema_version" => LINALG_THRESHOLD_SCHEMA_VERSION,
         ),
-        "fingerprint" => current_linalg_fingerprint(),
-        "thresholds" => current_linalg_thresholds(),
+        "fingerprint" => _current_linalg_fingerprint(),
+        "thresholds" => _current_linalg_thresholds(),
     )
     mkpath(dirname(path))
     open(path, "w") do io
@@ -276,7 +511,7 @@ function _fingerprints_match(a, b)::Bool
     return true
 end
 
-function load_linalg_thresholds!(; path::AbstractString=linalg_thresholds_path(), warn_on_mismatch::Bool=true)::Bool
+function _load_linalg_thresholds!(; path::AbstractString=_linalg_thresholds_path(), warn_on_mismatch::Bool=true)::Bool
     if !isfile(path)
         return false
     end
@@ -289,7 +524,7 @@ function load_linalg_thresholds!(; path::AbstractString=linalg_thresholds_path()
     haskey(doc, "fingerprint") || return false
     haskey(doc, "thresholds") || return false
 
-    current_fp = current_linalg_fingerprint()
+    current_fp = _current_linalg_fingerprint()
     stored_fp = doc["fingerprint"]
     if !_fingerprints_match(stored_fp, current_fp)
         if warn_on_mismatch
@@ -319,13 +554,72 @@ function _bench_elapsed(f; reps::Int=2)
     return tbest
 end
 
-@inline _autotune_nemo_shapes() = ((96, 96), (128, 128), (160, 160), (192, 192), (128, 400))
-@inline _autotune_fp_rank_sizes() = (64, 96, 128)
-@inline _autotune_fp_nullspace_sizes() = (32, 48, 64)
-@inline _autotune_fp_solve_sizes() = (48, 64, 80)
-@inline _autotune_float_dense_sizes() = (96, 128, 160)
+function _bench_elapsed_median(f; reps::Int=3)
+    reps <= 1 && return _bench_elapsed(f; reps=1)
+    f() # warmup
+    ts = Vector{Float64}(undef, reps)
+    for i in 1:reps
+        GC.gc()
+        ts[i] = @elapsed f()
+    end
+    sort!(ts)
+    return ts[cld(reps, 2)]
+end
+
+@inline _autotune_nemo_shapes(profile::Symbol=:full) =
+    profile == :startup ?
+    ((96, 96), (128, 128), (96, 192), (192, 96), (128, 320), (320, 128)) :
+    ((96, 96), (128, 128), (160, 160), (192, 192),
+     (96, 192), (192, 96), (128, 320), (320, 128), (128, 400), (400, 128))
+
+@inline _autotune_fp_rank_shapes(profile::Symbol=:full) =
+    profile == :startup ?
+    ((64, 64), (96, 96), (64, 128), (128, 64)) :
+    ((64, 64), (96, 96), (128, 128), (64, 128), (128, 64), (96, 192), (192, 96))
+
+@inline _autotune_fp_nullspace_shapes(profile::Symbol=:full) =
+    profile == :startup ?
+    ((32, 32), (48, 48), (32, 64), (64, 32)) :
+    ((32, 32), (48, 48), (64, 64), (32, 64), (64, 32), (48, 96), (96, 48))
+
+@inline _autotune_fp_solve_shapes(profile::Symbol=:full) =
+    profile == :startup ?
+    ((72, 48), (96, 64), (120, 80), (96, 48), (144, 72)) :
+    ((72, 48), (96, 64), (120, 80), (144, 96), (96, 48), (144, 72), (192, 96))
+
+@inline _autotune_float_dense_shapes(profile::Symbol=:full) =
+    profile == :startup ?
+    ((96, 96), (128, 128), (96, 192), (192, 96)) :
+    ((96, 96), (128, 128), (160, 160), (96, 192), (192, 96), (128, 256), (256, 128))
+
+@inline _autotune_modular_nullspace_shapes(profile::Symbol=:full) =
+    profile == :startup ?
+    ((56, 56), (64, 96), (96, 64), (72, 72)) :
+    ((56, 56), (72, 72), (88, 88), (104, 104), (64, 96), (96, 64), (80, 120), (120, 80))
+
+@inline _autotune_modular_solve_shapes(profile::Symbol=:full) =
+    profile == :startup ?
+    ((60, 40), (84, 56), (108, 72), (128, 88)) :
+    ((60, 40), (84, 56), (108, 72), (132, 88), (96, 48), (128, 64), (160, 80))
+
+@inline _autotune_rankqq_dim_shapes(profile::Symbol=:full) =
+    profile == :startup ?
+    ((64, 64), (96, 96), (64, 128), (128, 64)) :
+    ((64, 64), (96, 96), (128, 128), (160, 160), (64, 128), (128, 64), (96, 192), (192, 96))
+
 @inline _autotune_float_sparse_dims() = (512, 1024)
 @inline _autotune_float_sparse_densities() = (0.004, 0.01)
+@inline _autotune_zn_dimat_probe_ncuts(profile::Symbol=:full) =
+    profile == :startup ? (2, 4, 6) : (2, 4, 6, 8)
+@inline _autotune_zn_dimat_threshold_candidates(profile::Symbol=:full) =
+    profile == :startup ? (24, 32, 48, 64, 96) : (16, 24, 32, 48, 64, 96, 128, 192)
+@inline _autotune_zn_dimat_queries_per_probe(profile::Symbol=:full) =
+    profile == :startup ? 800 : 1_500
+@inline _autotune_zn_dimat_reps(profile::Symbol=:full) = profile == :startup ? 1 : 2
+@inline function _autotune_zn_dimat_steps(profile::Symbol)
+    return 2 * length(_autotune_zn_dimat_probe_ncuts(profile)) *
+           length(_autotune_zn_dimat_threshold_candidates(profile))
+end
 
 @inline _noop_progress_step(::AbstractString) = nothing
 
@@ -365,28 +659,32 @@ function _autotune_progress_finish!(st::_AutotuneProgress)
     return nothing
 end
 
-function _autotune_modular_steps()
+function _autotune_modular_steps(profile::Symbol)
     nmax = max(0, min(length(DEFAULT_MODULAR_PRIMES), 8) - 1) # 2:min(...)
     nmin = min(4, max(1, MODULAR_MAX_PRIMES[]))
+    n_ns = length(_autotune_modular_nullspace_shapes(profile))
+    n_solve = length(_autotune_modular_solve_shapes(profile))
+    n_rank = length(_autotune_rankqq_dim_shapes(profile))
     # rank-prime sweep + min-prime sweep + nullspace crossover + solve crossover + rank crossover
-    return 3 * nmax + 2 * nmin + 4 + 4 + 4
+    return 3 * nmax + 2 * nmin + n_ns + n_solve + n_rank
 end
 
 function _autotune_total_steps(profile::Symbol)
     steps = 0
-    if have_nemo()
-        steps += length(_autotune_nemo_shapes())
-        steps += length(_autotune_fp_rank_sizes()) +
-                 length(_autotune_fp_nullspace_sizes()) +
-                 length(_autotune_fp_solve_sizes())
+    if _have_nemo()
+        steps += length(_autotune_fp_rank_shapes(profile)) +
+                 length(_autotune_fp_nullspace_shapes(profile)) +
+                 length(_autotune_fp_solve_shapes(profile))
     end
-    steps += length(_autotune_float_dense_sizes())
+    steps += length(_autotune_float_dense_shapes(profile))
     if _have_svds_backend()
         steps += length(_autotune_float_sparse_dims()) * length(_autotune_float_sparse_densities())
     end
     if profile == :full
-        steps += _autotune_modular_steps()
+        steps += _autotune_modular_steps(profile)
+        steps += _autotune_zn_dimat_steps(profile)
     end
+    steps += _autotune_qq_routing_steps(profile)
     return max(steps, 1)
 end
 
@@ -424,6 +722,51 @@ function _qq_dense_fullcolumn_rand(m::Int, n::Int; rng=Random.default_rng())
     return B
 end
 
+@inline function _qq_nonzero_rand(rng::Random.AbstractRNG)
+    v = rand(rng, -3:3)
+    while v == 0
+        v = rand(rng, -3:3)
+    end
+    return QQ(v)
+end
+
+function _qq_sparse_rand(m::Int, n::Int, density::Float64; rng=Random.default_rng())
+    dens = clamp(density, 1e-6, 1.0)
+    nnz_target = max(1, round(Int, m * n * dens))
+    I = Vector{Int}(undef, nnz_target)
+    J = Vector{Int}(undef, nnz_target)
+    V = Vector{QQ}(undef, nnz_target)
+    @inbounds for t in 1:nnz_target
+        I[t] = rand(rng, 1:m)
+        J[t] = rand(rng, 1:n)
+        V[t] = _qq_nonzero_rand(rng)
+    end
+    return sparse(I, J, V, m, n)
+end
+
+function _qq_sparse_fullcolumn_rand(m::Int, n::Int, density::Float64; rng=Random.default_rng())
+    m >= n || error("_qq_sparse_fullcolumn_rand: requires m >= n")
+    dens = clamp(density, 1e-6, 1.0)
+    I = Int[]
+    J = Int[]
+    V = QQ[]
+    sizehint!(I, n + round(Int, (m - n) * n * dens))
+    sizehint!(J, n + round(Int, (m - n) * n * dens))
+    sizehint!(V, n + round(Int, (m - n) * n * dens))
+    @inbounds for i in 1:n
+        push!(I, i)
+        push!(J, i)
+        push!(V, QQ(1))
+    end
+    @inbounds for i in (n + 1):m, j in 1:n
+        rand(rng) < dens || continue
+        push!(I, i)
+        push!(J, j)
+        push!(V, _qq_nonzero_rand(rng))
+    end
+    return sparse(I, J, V, m, n)
+end
+
 function _float_sparse_singular_rand(n::Int, density::Float64; rng=Random.default_rng())
     A = sprand(rng, Float64, n, n, density)
     if n >= 2
@@ -438,102 +781,874 @@ function _float_sparse_singular_rand(n::Int, density::Float64; rng=Random.defaul
     return A
 end
 
-function _pick_crossover_threshold(works::Vector{Int}, tj::Vector{Float64}, tf::Vector{Float64}, default::Int)
-    @inbounds for i in eachindex(works)
-        if tf[i] < 0.9 * tj[i]
-            return works[i]
+function _pick_crossover_threshold(works::Vector{Int}, tj::Vector{Float64}, tf::Vector{Float64}, default::Int;
+                                   speedup_ratio::Float64=0.9)
+    ord = sortperm(works)
+    @inbounds for oi in ord
+        if tf[oi] < speedup_ratio * tj[oi]
+            return works[oi]
         end
     end
     return default
 end
 
-function _autotune_nemo_threshold!(progress_step::Function=_noop_progress_step)
-    if !have_nemo()
-        return
+@inline function _find_crossover_pos(works::Vector{Int}, tj::Vector{Float64}, tf::Vector{Float64};
+                                     speedup_ratio::Float64=0.9)
+    ord = sortperm(works)
+    @inbounds for (pos, oi) in enumerate(ord)
+        if tf[oi] < speedup_ratio * tj[oi]
+            return pos, ord
+        end
     end
-    rng = Random.MersenneTwister(0x4e454d4f)
-    shapes = _autotune_nemo_shapes()
-    works = Int[]
-    tj = Float64[]
-    tn = Float64[]
-    F = QQField()
-    for (k, (m, n)) in enumerate(shapes)
-        A = _qq_dense_rand(m, n; rng=rng)
-        push!(works, m * n)
-        push!(tj, _bench_elapsed(() -> rank(F, A; backend=:julia_exact); reps=1))
-        push!(tn, _bench_elapsed(() -> rank(F, A; backend=:nemo); reps=1))
-        progress_step("qq-nemo threshold probe $(k)/$(length(shapes))")
-    end
-    NEMO_THRESHOLD[] = _pick_crossover_threshold(works, tj, tn, NEMO_THRESHOLD[])
+    return nothing, ord
 end
 
-function _autotune_fp_thresholds!(progress_step::Function=_noop_progress_step)
-    if !have_nemo()
+function _refine_crossover_boundary!(works::Vector{Int},
+                                     tj::Vector{Float64},
+                                     tf::Vector{Float64},
+                                     bench_pair::Function;
+                                     speedup_ratio::Float64=0.9,
+                                     extra_reps::Int=4,
+                                     window::Int=1)
+    pos, ord = _find_crossover_pos(works, tj, tf; speedup_ratio=speedup_ratio)
+    pos === nothing && return nothing
+    lo = max(1, pos - window)
+    hi = min(length(ord), pos + window)
+    @inbounds for q in lo:hi
+        i = ord[q]
+        tj_i, tf_i = bench_pair(i, extra_reps)
+        tj[i] = tj_i
+        tf[i] = tf_i
+    end
+    return nothing
+end
+
+@inline _threshold_regret(pred::Float64, best::Float64, margin::Float64) =
+    max(0.0, pred / max(best, eps(Float64)) - (1.0 + margin))
+
+function _smooth_by_work(works::Vector{Int}, vals::Vector{Float64}; radius::Int=1)
+    n = length(works)
+    ord = sortperm(works)
+    out = similar(vals)
+    @inbounds for p in 1:n
+        lo = max(1, p - radius)
+        hi = min(n, p + radius)
+        localv = Vector{Float64}(undef, hi - lo + 1)
+        t = 1
+        for q in lo:hi
+            localv[t] = vals[ord[q]]
+            t += 1
+        end
+        out[ord[p]] = median(localv)
+    end
+    return out
+end
+
+function _nearest_indices(works::Vector{Int}, target::Int, k::Int)
+    n = length(works)
+    n == 0 && return Int[]
+    ord = sortperm(abs.(works .- target))
+    return ord[1:min(k, n)]
+end
+
+function _fit_single_threshold(works::Vector{Int}, t_exact::Vector{Float64}, t_other::Vector{Float64};
+                               margin::Float64=0.15)
+    cands = sort(unique(vcat(works, maximum(works) + 1)))
+    best_thr = cands[end]
+    best_loss = Inf
+    best_mismatch = typemax(Int)
+    @inline label(i) = (t_other[i] <= (1.0 - margin) * t_exact[i]) ? :other : :exact
+    @inbounds for thr in cands
+        loss = 0.0
+        mismatch = 0
+        for i in eachindex(works)
+            pred_label = works[i] >= thr ? :other : :exact
+            mismatch += pred_label == label(i) ? 0 : 1
+            pred = pred_label == :other ? t_other[i] : t_exact[i]
+            best = min(t_exact[i], t_other[i])
+            loss += _threshold_regret(pred, best, margin)
+        end
+        if mismatch < best_mismatch || (mismatch == best_mismatch && loss < best_loss - 1e-12)
+            best_loss = loss
+            best_mismatch = mismatch
+            best_thr = thr
+        end
+    end
+    return best_thr, best_loss, best_mismatch
+end
+
+function _fit_double_threshold(works::Vector{Int},
+                               t_exact::Vector{Float64},
+                               t_mod::Vector{Float64},
+                               t_nemo::Vector{Float64};
+                               margin::Float64=0.15)
+    cands = sort(unique(vcat(works, maximum(works) + 1)))
+    best_mod = cands[end]
+    best_nemo = cands[end]
+    best_loss = Inf
+    best_mismatch = typemax(Int)
+    @inline function label(i)
+        if t_nemo[i] <= (1.0 - margin) * min(t_exact[i], t_mod[i])
+            return :nemo
+        elseif t_mod[i] <= (1.0 - margin) * t_exact[i]
+            return :modular
+        else
+            return :exact
+        end
+    end
+    @inbounds for thr_mod in cands
+        for thr_nemo in cands
+            thr_nemo < thr_mod && continue
+            loss = 0.0
+            mismatch = 0
+            for i in eachindex(works)
+                pred_label = works[i] >= thr_nemo ? :nemo : (works[i] >= thr_mod ? :modular : :exact)
+                mismatch += pred_label == label(i) ? 0 : 1
+                pred = pred_label == :nemo ? t_nemo[i] : (pred_label == :modular ? t_mod[i] : t_exact[i])
+                best = min(t_exact[i], min(t_mod[i], t_nemo[i]))
+                loss += _threshold_regret(pred, best, margin)
+            end
+            if mismatch < best_mismatch || (mismatch == best_mismatch && loss < best_loss - 1e-12)
+                best_loss = loss
+                best_mismatch = mismatch
+                best_mod = thr_mod
+                best_nemo = thr_nemo
+            end
+        end
+    end
+    return best_mod, best_nemo, best_loss, best_mismatch
+end
+
+function _eval_single_threshold(works::Vector{Int}, t_exact::Vector{Float64}, t_other::Vector{Float64},
+                                thr::Int; margin::Float64=0.15)
+    loss = 0.0
+    mismatch = 0
+    @inline label(i) = (t_other[i] <= (1.0 - margin) * t_exact[i]) ? :other : :exact
+    @inbounds for i in eachindex(works)
+        pred_label = works[i] >= thr ? :other : :exact
+        mismatch += pred_label == label(i) ? 0 : 1
+        pred = pred_label == :other ? t_other[i] : t_exact[i]
+        best = min(t_exact[i], t_other[i])
+        loss += _threshold_regret(pred, best, margin)
+    end
+    return loss, mismatch
+end
+
+function _fit_single_threshold_le(works::Vector{Int}, t_exact::Vector{Float64}, t_other::Vector{Float64};
+                                  margin::Float64=0.15)
+    cands = sort(unique(vcat(works, minimum(works) - 1)))
+    best_thr = cands[1]
+    best_loss = Inf
+    best_mismatch = typemax(Int)
+    @inline label(i) = (t_other[i] <= (1.0 - margin) * t_exact[i]) ? :other : :exact
+    @inbounds for thr in cands
+        loss = 0.0
+        mismatch = 0
+        for i in eachindex(works)
+            pred_label = works[i] <= thr ? :other : :exact
+            mismatch += pred_label == label(i) ? 0 : 1
+            pred = pred_label == :other ? t_other[i] : t_exact[i]
+            best = min(t_exact[i], t_other[i])
+            loss += _threshold_regret(pred, best, margin)
+        end
+        if mismatch < best_mismatch || (mismatch == best_mismatch && loss < best_loss - 1e-12)
+            best_loss = loss
+            best_mismatch = mismatch
+            best_thr = thr
+        end
+    end
+    return best_thr, best_loss, best_mismatch
+end
+
+function _eval_single_threshold_le(works::Vector{Int}, t_exact::Vector{Float64}, t_other::Vector{Float64},
+                                   thr::Int; margin::Float64=0.15)
+    loss = 0.0
+    mismatch = 0
+    @inline label(i) = (t_other[i] <= (1.0 - margin) * t_exact[i]) ? :other : :exact
+    @inbounds for i in eachindex(works)
+        pred_label = works[i] <= thr ? :other : :exact
+        mismatch += pred_label == label(i) ? 0 : 1
+        pred = pred_label == :other ? t_other[i] : t_exact[i]
+        best = min(t_exact[i], t_other[i])
+        loss += _threshold_regret(pred, best, margin)
+    end
+    return loss, mismatch
+end
+
+function _eval_double_threshold(works::Vector{Int}, t_exact::Vector{Float64}, t_mod::Vector{Float64}, t_nemo::Vector{Float64},
+                                thr_mod::Int, thr_nemo::Int; margin::Float64=0.15)
+    loss = 0.0
+    mismatch = 0
+    @inline function label(i)
+        if t_nemo[i] <= (1.0 - margin) * min(t_exact[i], t_mod[i])
+            return :nemo
+        elseif t_mod[i] <= (1.0 - margin) * t_exact[i]
+            return :modular
+        else
+            return :exact
+        end
+    end
+    @inbounds for i in eachindex(works)
+        pred_label = works[i] >= thr_nemo ? :nemo : (works[i] >= thr_mod ? :modular : :exact)
+        mismatch += pred_label == label(i) ? 0 : 1
+        pred = pred_label == :nemo ? t_nemo[i] : (pred_label == :modular ? t_mod[i] : t_exact[i])
+        best = min(t_exact[i], min(t_mod[i], t_nemo[i]))
+        loss += _threshold_regret(pred, best, margin)
+    end
+    return loss, mismatch
+end
+
+@inline function _accept_threshold_update(new_loss::Float64, new_mismatch::Int,
+                                          old_loss::Float64, old_mismatch::Int)
+    if !isfinite(old_loss)
+        return isfinite(new_loss)
+    end
+    if new_loss <= old_loss * 0.99
+        return true
+    end
+    if new_loss <= old_loss * 1.01 && new_mismatch < old_mismatch
+        return true
+    end
+    return false
+end
+
+function _qq_probe_shapes(op::Symbol, shape::Symbol, profile::Symbol, holdout::Bool)
+    if op == :rank
+        if shape == :square
+            return holdout ?
+                (profile == :startup ? ((28, 28), (40, 40), (72, 72), (104, 104)) :
+                                       ((24, 24), (36, 36), (56, 56), (72, 72), (88, 88), (104, 104), (120, 120))) :
+                (profile == :startup ? ((24, 24), (40, 40), (64, 64), (96, 96), (128, 128)) :
+                                       ((20, 20), (28, 28), (48, 48), (64, 64), (80, 80), (96, 96), (112, 112), (128, 128)))
+        elseif shape == :tall
+            return holdout ?
+                (profile == :startup ? ((40, 20), (72, 36), (112, 56), (152, 76)) :
+                                       ((36, 18), (52, 26), (104, 52), (120, 60), (136, 68), (152, 76), (176, 88))) :
+                (profile == :startup ? ((32, 16), (64, 32), (96, 48), (128, 64), (160, 80)) :
+                                       ((28, 14), (44, 22), (88, 44), (112, 56), (128, 64), (144, 72), (160, 80), (192, 96)))
+        else
+            return holdout ?
+                (profile == :startup ? ((20, 40), (36, 72), (56, 112), (76, 152)) :
+                                       ((18, 36), (26, 52), (52, 104), (60, 120), (68, 136), (76, 152), (88, 176))) :
+                (profile == :startup ? ((16, 32), (32, 64), (48, 96), (64, 128), (80, 160)) :
+                                       ((14, 28), (22, 44), (44, 88), (56, 112), (64, 128), (72, 144), (80, 160), (96, 192)))
+        end
+    elseif op == :nullspace
+        if shape == :square
+            return holdout ?
+                (profile == :startup ? ((24, 24), (40, 40), (56, 56), (88, 88)) :
+                                       ((20, 20), (32, 32), (48, 48), (64, 64), (80, 80), (96, 96), (112, 112))) :
+                (profile == :startup ? ((20, 20), (32, 32), (48, 48), (72, 72), (96, 96)) :
+                                       ((16, 16), (24, 24), (40, 40), (56, 56), (72, 72), (88, 88), (104, 104)))
+        elseif shape == :tall
+            return holdout ?
+                (profile == :startup ? ((48, 24), (72, 36), (112, 56), (144, 72)) :
+                                       ((40, 20), (56, 28), (96, 48), (112, 56), (128, 64), (144, 72), (160, 80))) :
+                (profile == :startup ? ((40, 20), (64, 32), (96, 48), (128, 64), (160, 80)) :
+                                       ((32, 16), (48, 24), (80, 40), (96, 48), (112, 56), (128, 64), (144, 72)))
+        else
+            return holdout ?
+                (profile == :startup ? ((24, 48), (36, 72), (56, 112), (72, 144)) :
+                                       ((20, 40), (28, 56), (48, 96), (56, 112), (64, 128), (72, 144), (80, 160))) :
+                (profile == :startup ? ((20, 40), (32, 64), (48, 96), (64, 128), (80, 160)) :
+                                       ((16, 32), (24, 48), (40, 80), (48, 96), (56, 112), (64, 128), (72, 144)))
+        end
+    elseif op == :solve
+        if shape == :square
+            return holdout ?
+                (profile == :startup ? ((32, 32), (48, 48), (64, 64), (88, 88)) :
+                                       ((28, 28), (40, 40), (56, 56), (72, 72), (88, 88), (104, 104), (120, 120))) :
+                (profile == :startup ? ((24, 24), (40, 40), (56, 56), (80, 80), (104, 104)) :
+                                       ((20, 20), (32, 32), (48, 48), (64, 64), (80, 80), (96, 96), (112, 112)))
+        elseif shape == :tall
+            return holdout ?
+                (profile == :startup ? ((42, 28), (72, 48), (96, 64), (132, 88)) :
+                                       ((36, 24), (54, 36), (84, 56), (108, 72), (132, 88), (156, 104), (180, 120))) :
+                (profile == :startup ? ((36, 24), (60, 40), (84, 56), (108, 72), (132, 88)) :
+                                       ((30, 20), (48, 32), (72, 48), (96, 64), (120, 80), (144, 96), (168, 112)))
+        else
+            # Full-column solve naturally uses m>=n; use square probes for wide bucket fallback.
+            return _qq_probe_shapes(op, :square, profile, holdout)
+        end
+    end
+    return Tuple{Int,Int}[]
+end
+
+@inline _qq_sparse_probe_densities(profile::Symbol) =
+    profile == :startup ? (0.2,) : (0.2, 0.05)
+
+function _qq_case(op::Symbol, m::Int, n::Int, rng::Random.AbstractRNG;
+                  sparse::Bool=false, density::Float64=0.2)
+    if op == :rank
+        return sparse ? _qq_sparse_rand(m, n, density; rng=rng) : _qq_dense_rand(m, n; rng=rng)
+    elseif op == :nullspace
+        A = sparse ? _qq_sparse_rand(m, n, density; rng=rng) : _qq_dense_rand(m, n; rng=rng)
+        min(m, n) >= 2 && (A[:, end] = A[:, 1])
+        return A
+    elseif op == :solve
+        m >= n || error("solve probe requires m >= n")
+        B = sparse ? _qq_sparse_fullcolumn_rand(m, n, density; rng=rng) : _qq_dense_fullcolumn_rand(m, n; rng=rng)
+        X = _qq_dense_rand(n, 2; rng=rng)
+        return (B, B * X)
+    end
+    error("unsupported QQ probe op: $(op)")
+end
+
+function _bench_qq_probe(op::Symbol, probe, backend::Symbol; reps::Int=1)
+    F = QQField()
+    try
+        if op == :rank
+            A = probe::AbstractMatrix{QQ}
+            exact_backend = _is_sparse_like(A) ? :julia_sparse : :julia_exact
+            if backend == :julia_exact
+                return _bench_elapsed(() -> rank(F, A; backend=exact_backend); reps=reps)
+            elseif backend == :nemo
+                _have_nemo() || return Inf
+                return _bench_elapsed(() -> rank(F, A; backend=:nemo); reps=reps)
+            elseif backend == :modular
+                return Inf
+            end
+        elseif op == :nullspace
+            A = probe::AbstractMatrix{QQ}
+            exact_backend = _is_sparse_like(A) ? :julia_sparse : :julia_exact
+            if backend == :julia_exact
+                return _bench_elapsed(() -> nullspace(F, A; backend=exact_backend); reps=reps)
+            elseif backend == :nemo
+                _have_nemo() || return Inf
+                return _bench_elapsed(() -> nullspace(F, A; backend=:nemo); reps=reps)
+            elseif backend == :modular
+                _is_sparse_like(A) && return Inf
+                return _bench_elapsed(() -> nullspace(F, A; backend=:modular); reps=reps)
+            end
+        elseif op == :solve
+            B, Y = probe::Tuple{AbstractMatrix{QQ},Matrix{QQ}}
+            exact_backend = _is_sparse_like(B) ? :julia_sparse : :julia_exact
+            if backend == :julia_exact
+                return _bench_elapsed(() -> solve_fullcolumn(F, B, Y; backend=exact_backend, check_rhs=false, cache=true); reps=reps)
+            elseif backend == :nemo
+                _have_nemo() || return Inf
+                return _bench_elapsed(() -> solve_fullcolumn(F, B, Y; backend=:nemo, check_rhs=false, cache=true); reps=reps)
+            elseif backend == :modular
+                _is_sparse_like(B) && return Inf
+                return _bench_elapsed(() -> solve_fullcolumn(F, B, Y; backend=:modular, check_rhs=false, cache=true); reps=reps)
+            end
+        end
+    catch
+        return Inf
+    end
+    return Inf
+end
+
+function _set_qq_threshold!(op::Symbol, shape::Symbol, backend::Symbol, value::Int)
+    v = max(1, Int(value))
+    if backend == :nemo && op == :rank
+        if shape == :square
+            QQ_NEMO_RANK_THRESHOLD_SQUARE[] = v
+        elseif shape == :tall
+            QQ_NEMO_RANK_THRESHOLD_TALL[] = v
+        else
+            QQ_NEMO_RANK_THRESHOLD_WIDE[] = v
+        end
+    elseif backend == :nemo && op == :nullspace
+        if shape == :square
+            QQ_NEMO_NULLSPACE_THRESHOLD_SQUARE[] = v
+        elseif shape == :tall
+            QQ_NEMO_NULLSPACE_THRESHOLD_TALL[] = v
+        else
+            QQ_NEMO_NULLSPACE_THRESHOLD_WIDE[] = v
+        end
+    elseif backend == :nemo && op == :solve
+        if shape == :square
+            QQ_NEMO_SOLVE_THRESHOLD_SQUARE[] = v
+        elseif shape == :tall
+            QQ_NEMO_SOLVE_THRESHOLD_TALL[] = v
+        else
+            QQ_NEMO_SOLVE_THRESHOLD_WIDE[] = v
+        end
+    elseif backend == :modular && op == :nullspace
+        if shape == :square
+            QQ_MODULAR_NULLSPACE_THRESHOLD_SQUARE[] = v
+        elseif shape == :tall
+            QQ_MODULAR_NULLSPACE_THRESHOLD_TALL[] = v
+        else
+            QQ_MODULAR_NULLSPACE_THRESHOLD_WIDE[] = v
+        end
+    elseif backend == :modular && op == :solve
+        if shape == :square
+            QQ_MODULAR_SOLVE_THRESHOLD_SQUARE[] = v
+        elseif shape == :tall
+            QQ_MODULAR_SOLVE_THRESHOLD_TALL[] = v
+        else
+            QQ_MODULAR_SOLVE_THRESHOLD_WIDE[] = v
+        end
+    end
+    return nothing
+end
+
+@inline function _get_qq_threshold(op::Symbol, shape::Symbol, backend::Symbol)
+    return backend == :nemo ? _qq_nemo_threshold(op, shape) : _qq_modular_threshold(op, shape)
+end
+
+function _qq_probe_cases(op::Symbol, shape::Symbol, profile::Symbol, holdout::Bool)
+    shapes = collect(_qq_probe_shapes(op, shape, profile, holdout))
+    if holdout && profile == :startup && length(shapes) > 2
+        shapes = [shapes[1], shapes[end]]
+    end
+    cases = NamedTuple{(:m, :n, :sparse, :density),Tuple{Int, Int, Bool, Float64}}[]
+    dens_train = _qq_sparse_probe_densities(profile)
+    dens_hold = (dens_train[1],)
+    sparse_dens = holdout ? dens_hold : dens_train
+    sparse_work_min = profile == :startup ? 900 : 600
+    for (m, n) in shapes
+        push!(cases, (m=m, n=n, sparse=false, density=1.0))
+        if op == :rank && m * n >= sparse_work_min
+            for dens in sparse_dens
+                push!(cases, (m=m, n=n, sparse=true, density=dens))
+            end
+        end
+    end
+    return cases
+end
+
+function _autotune_qq_shape_thresholds!(op::Symbol, shape::Symbol, profile::Symbol, rng::Random.AbstractRNG,
+                                        progress_step::Function=_noop_progress_step)
+    train_cases = _qq_probe_cases(op, shape, profile, false)
+    hold_cases = _qq_probe_cases(op, shape, profile, true)
+    isempty(train_cases) && return
+
+    ntrain = length(train_cases)
+    train_work = Vector{Int}(undef, ntrain)
+    train_probe = Vector{Any}(undef, ntrain)
+    t_exact = Vector{Float64}(undef, ntrain)
+    t_mod = fill(Inf, ntrain)
+    t_nemo = fill(Inf, ntrain)
+    for (i, case) in enumerate(train_cases)
+        m = case.m
+        n = case.n
+        probe = _qq_case(op, m, n, rng; sparse=case.sparse, density=case.density)
+        train_probe[i] = probe
+        train_work[i] = m * n
+        t_exact[i] = _bench_qq_probe(op, probe, :julia_exact; reps=1)
+        if op != :rank
+            t_mod[i] = _bench_qq_probe(op, probe, :modular; reps=1)
+        end
+        t_nemo[i] = _bench_qq_probe(op, probe, :nemo; reps=1)
+        progress_step("qq-$(op)-$(shape) train $(i)/$(ntrain)")
+    end
+
+    s_exact = _smooth_by_work(train_work, t_exact)
+    s_mod = _smooth_by_work(train_work, t_mod)
+    s_nemo = _smooth_by_work(train_work, t_nemo)
+    margin = 0.15
+    nnear = profile == :full ? 4 : 2
+    reps_ref = profile == :full ? 4 : 2
+    if op == :rank
+        thr_nemo, _, _ = _fit_single_threshold(train_work, s_exact, s_nemo; margin=margin)
+        for idx in _nearest_indices(train_work, thr_nemo, nnear)
+            p = train_probe[idx]
+            t_exact[idx] = _bench_qq_probe(op, p, :julia_exact; reps=reps_ref)
+            t_nemo[idx] = _bench_qq_probe(op, p, :nemo; reps=reps_ref)
+        end
+        s_exact = _smooth_by_work(train_work, t_exact)
+        s_nemo = _smooth_by_work(train_work, t_nemo)
+        thr_nemo, _, _ = _fit_single_threshold(train_work, s_exact, s_nemo; margin=margin)
+
+        # Holdout guard: keep incumbent if new threshold is worse.
+        nh = length(hold_cases)
+        h_work = Vector{Int}(undef, nh)
+        h_e = Vector{Float64}(undef, nh)
+        h_n = Vector{Float64}(undef, nh)
+        for (i, case) in enumerate(hold_cases)
+            m = case.m
+            n = case.n
+            p = _qq_case(op, m, n, rng; sparse=case.sparse, density=case.density)
+            h_work[i] = m * n
+            h_e[i] = _bench_qq_probe(op, p, :julia_exact; reps=1)
+            h_n[i] = _bench_qq_probe(op, p, :nemo; reps=1)
+            progress_step("qq-$(op)-$(shape) holdout $(i)/$(nh)")
+        end
+        old_thr = _get_qq_threshold(op, shape, :nemo)
+        old_loss, old_mismatch = _eval_single_threshold(h_work, h_e, h_n, old_thr; margin=margin)
+        new_loss, new_mismatch = _eval_single_threshold(h_work, h_e, h_n, thr_nemo; margin=margin)
+        accept = _accept_threshold_update(new_loss, new_mismatch, old_loss, old_mismatch) ||
+                 (new_mismatch == old_mismatch && new_loss <= old_loss * 1.01 && thr_nemo < old_thr)
+        _set_qq_threshold!(op, shape, :nemo, accept ? thr_nemo : old_thr)
+    else
+        thr_mod, thr_nemo, _, _ = _fit_double_threshold(train_work, s_exact, s_mod, s_nemo; margin=margin)
+        for idx in union(_nearest_indices(train_work, thr_mod, nnear), _nearest_indices(train_work, thr_nemo, nnear))
+            p = train_probe[idx]
+            t_exact[idx] = _bench_qq_probe(op, p, :julia_exact; reps=reps_ref)
+            t_mod[idx] = _bench_qq_probe(op, p, :modular; reps=reps_ref)
+            t_nemo[idx] = _bench_qq_probe(op, p, :nemo; reps=reps_ref)
+        end
+        s_exact = _smooth_by_work(train_work, t_exact)
+        s_mod = _smooth_by_work(train_work, t_mod)
+        s_nemo = _smooth_by_work(train_work, t_nemo)
+        thr_mod, thr_nemo, _, _ = _fit_double_threshold(train_work, s_exact, s_mod, s_nemo; margin=margin)
+
+        nh = length(hold_cases)
+        h_work = Vector{Int}(undef, nh)
+        h_e = Vector{Float64}(undef, nh)
+        h_m = Vector{Float64}(undef, nh)
+        h_n = Vector{Float64}(undef, nh)
+        for (i, case) in enumerate(hold_cases)
+            m = case.m
+            n = case.n
+            p = _qq_case(op, m, n, rng; sparse=case.sparse, density=case.density)
+            h_work[i] = m * n
+            h_e[i] = _bench_qq_probe(op, p, :julia_exact; reps=1)
+            h_m[i] = _bench_qq_probe(op, p, :modular; reps=1)
+            h_n[i] = _bench_qq_probe(op, p, :nemo; reps=1)
+            progress_step("qq-$(op)-$(shape) holdout $(i)/$(nh)")
+        end
+        old_mod = _get_qq_threshold(op, shape, :modular)
+        old_nemo = _get_qq_threshold(op, shape, :nemo)
+        old_loss, old_mismatch = _eval_double_threshold(h_work, h_e, h_m, h_n, old_mod, old_nemo; margin=margin)
+        new_loss, new_mismatch = _eval_double_threshold(h_work, h_e, h_m, h_n, thr_mod, thr_nemo; margin=margin)
+        accept = _accept_threshold_update(new_loss, new_mismatch, old_loss, old_mismatch) ||
+                 (new_mismatch == old_mismatch && new_loss <= old_loss * 1.01 &&
+                  thr_mod <= old_mod && thr_nemo <= old_nemo &&
+                  (thr_mod < old_mod || thr_nemo < old_nemo))
+        if accept
+            _set_qq_threshold!(op, shape, :modular, thr_mod)
+            _set_qq_threshold!(op, shape, :nemo, thr_nemo)
+        else
+            _set_qq_threshold!(op, shape, :modular, old_mod)
+            _set_qq_threshold!(op, shape, :nemo, old_nemo)
+        end
+    end
+    return nothing
+end
+
+@inline function _set_qq_sparse_solve_threshold!(shape::Symbol, bucket::Symbol, value::Int)
+    v = max(1, Int(value))
+    if shape == :square
+        if bucket == :low
+            QQ_NEMO_SPARSE_SOLVE_THRESHOLD_SQUARE_LOW[] = v
+        elseif bucket == :mid
+            QQ_NEMO_SPARSE_SOLVE_THRESHOLD_SQUARE_MID[] = v
+        else
+            QQ_NEMO_SPARSE_SOLVE_THRESHOLD_SQUARE_HIGH[] = v
+        end
+    elseif shape == :tall
+        if bucket == :low
+            QQ_NEMO_SPARSE_SOLVE_THRESHOLD_TALL_LOW[] = v
+        elseif bucket == :mid
+            QQ_NEMO_SPARSE_SOLVE_THRESHOLD_TALL_MID[] = v
+        else
+            QQ_NEMO_SPARSE_SOLVE_THRESHOLD_TALL_HIGH[] = v
+        end
+    else
+        if bucket == :low
+            QQ_NEMO_SPARSE_SOLVE_THRESHOLD_WIDE_LOW[] = v
+        elseif bucket == :mid
+            QQ_NEMO_SPARSE_SOLVE_THRESHOLD_WIDE_MID[] = v
+        else
+            QQ_NEMO_SPARSE_SOLVE_THRESHOLD_WIDE_HIGH[] = v
+        end
+    end
+    return nothing
+end
+
+@inline _get_qq_sparse_solve_threshold(shape::Symbol, bucket::Symbol) = _qq_sparse_solve_threshold(shape, bucket)
+
+@inline function _set_qq_sparse_solve_policy!(shape::Symbol, bucket::Symbol, use_ge::Bool)
+    v = use_ge ? 1 : -1
+    if shape == :square
+        if bucket == :low
+            QQ_NEMO_SPARSE_SOLVE_POLICY_SQUARE_LOW[] = v
+        elseif bucket == :mid
+            QQ_NEMO_SPARSE_SOLVE_POLICY_SQUARE_MID[] = v
+        else
+            QQ_NEMO_SPARSE_SOLVE_POLICY_SQUARE_HIGH[] = v
+        end
+    elseif shape == :tall
+        if bucket == :low
+            QQ_NEMO_SPARSE_SOLVE_POLICY_TALL_LOW[] = v
+        elseif bucket == :mid
+            QQ_NEMO_SPARSE_SOLVE_POLICY_TALL_MID[] = v
+        else
+            QQ_NEMO_SPARSE_SOLVE_POLICY_TALL_HIGH[] = v
+        end
+    else
+        if bucket == :low
+            QQ_NEMO_SPARSE_SOLVE_POLICY_WIDE_LOW[] = v
+        elseif bucket == :mid
+            QQ_NEMO_SPARSE_SOLVE_POLICY_WIDE_MID[] = v
+        else
+            QQ_NEMO_SPARSE_SOLVE_POLICY_WIDE_HIGH[] = v
+        end
+    end
+    return nothing
+end
+
+@inline _get_qq_sparse_solve_policy(shape::Symbol, bucket::Symbol) = _qq_sparse_solve_use_ge(shape, bucket)
+
+@inline function _qq_sparse_solve_shapes(shape::Symbol, profile::Symbol, holdout::Bool)
+    if shape == :square
+        return holdout ?
+            (profile == :startup ? ((48, 48), (72, 72), (88, 88)) :
+                                   ((40, 40), (56, 56), (72, 72), (88, 88), (104, 104))) :
+            (profile == :startup ? ((40, 40), (56, 56), (64, 64), (80, 80)) :
+                                   ((32, 32), (48, 48), (64, 64), (80, 80), (96, 96)))
+    elseif shape == :tall
+        return holdout ?
+            (profile == :startup ? ((72, 48), (90, 60), (96, 72), (132, 88)) :
+                                   ((60, 40), (84, 56), (96, 72), (108, 72), (132, 88), (156, 104))) :
+            (profile == :startup ? ((60, 40), (84, 56), (96, 72), (108, 72), (120, 80)) :
+                                   ((48, 32), (72, 48), (96, 64), (108, 72), (120, 80), (144, 96)))
+    end
+    # Full-column solve is naturally square/tall; wide fallback mirrors square.
+    return _qq_sparse_solve_shapes(:square, profile, holdout)
+end
+
+@inline function _qq_sparse_solve_probe_cases(shape::Symbol, bucket::Symbol, profile::Symbol, holdout::Bool)
+    dens = bucket == :low ? 0.05 : (bucket == :mid ? 0.2 : 0.45)
+    shapes = collect(_qq_sparse_solve_shapes(shape, profile, holdout))
+    return [(m=s[1], n=s[2], density=dens) for s in shapes]
+end
+
+function _autotune_qq_sparse_solve_thresholds!(shape::Symbol, bucket::Symbol, profile::Symbol,
+                                               rng::Random.AbstractRNG, progress_step::Function=_noop_progress_step)
+    train_cases = _qq_sparse_solve_probe_cases(shape, bucket, profile, false)
+    hold_cases = _qq_sparse_solve_probe_cases(shape, bucket, profile, true)
+    isempty(train_cases) && return
+
+    ntrain = length(train_cases)
+    train_nnz = Vector{Int}(undef, ntrain)
+    train_probe = Vector{Any}(undef, ntrain)
+    t_exact = Vector{Float64}(undef, ntrain)
+    t_nemo = Vector{Float64}(undef, ntrain)
+    for (i, case) in enumerate(train_cases)
+        B = _qq_sparse_fullcolumn_rand(case.m, case.n, case.density; rng=rng)
+        X = _qq_dense_rand(case.n, 4; rng=rng)
+        Y = B * X
+        probe = (B, Y)
+        train_probe[i] = probe
+        train_nnz[i] = _sparse_nnz(B)
+        t_exact[i] = _bench_qq_probe(:solve, probe, :julia_exact; reps=1)
+        t_nemo[i] = _bench_qq_probe(:solve, probe, :nemo; reps=1)
+        progress_step("qq-solve-sparse-$(shape)-$(bucket) train $(i)/$(ntrain)")
+    end
+
+    s_exact = _smooth_by_work(train_nnz, t_exact)
+    s_nemo = _smooth_by_work(train_nnz, t_nemo)
+    margin = 0.05
+    nnear = profile == :full ? 4 : 2
+    reps_ref = profile == :full ? 4 : 2
+    thr_ge, _, _ = _fit_single_threshold(train_nnz, s_exact, s_nemo; margin=margin)
+    thr_le, _, _ = _fit_single_threshold_le(train_nnz, s_exact, s_nemo; margin=margin)
+    for idx in union(_nearest_indices(train_nnz, thr_ge, nnear), _nearest_indices(train_nnz, thr_le, nnear))
+        p = train_probe[idx]
+        t_exact[idx] = _bench_qq_probe(:solve, p, :julia_exact; reps=reps_ref)
+        t_nemo[idx] = _bench_qq_probe(:solve, p, :nemo; reps=reps_ref)
+    end
+    s_exact = _smooth_by_work(train_nnz, t_exact)
+    s_nemo = _smooth_by_work(train_nnz, t_nemo)
+    thr_ge, _, _ = _fit_single_threshold(train_nnz, s_exact, s_nemo; margin=margin)
+    thr_le, _, _ = _fit_single_threshold_le(train_nnz, s_exact, s_nemo; margin=margin)
+
+    nh = length(hold_cases)
+    h_nnz = Vector{Int}(undef, nh)
+    h_e = Vector{Float64}(undef, nh)
+    h_n = Vector{Float64}(undef, nh)
+    for (i, case) in enumerate(hold_cases)
+        B = _qq_sparse_fullcolumn_rand(case.m, case.n, case.density; rng=rng)
+        X = _qq_dense_rand(case.n, 4; rng=rng)
+        Y = B * X
+        probe = (B, Y)
+        h_nnz[i] = _sparse_nnz(B)
+        h_e[i] = _bench_qq_probe(:solve, probe, :julia_exact; reps=1)
+        h_n[i] = _bench_qq_probe(:solve, probe, :nemo; reps=1)
+        progress_step("qq-solve-sparse-$(shape)-$(bucket) holdout $(i)/$(nh)")
+    end
+
+    ge_loss, ge_mismatch = _eval_single_threshold(h_nnz, h_e, h_n, thr_ge; margin=margin)
+    le_loss, le_mismatch = _eval_single_threshold_le(h_nnz, h_e, h_n, thr_le; margin=margin)
+    cand_use_ge = ge_loss < le_loss - 1e-9 || (abs(ge_loss - le_loss) <= 1e-9 && ge_mismatch <= le_mismatch)
+    cand_thr = cand_use_ge ? thr_ge : thr_le
+    cand_loss = cand_use_ge ? ge_loss : le_loss
+    cand_mismatch = cand_use_ge ? ge_mismatch : le_mismatch
+
+    old_thr = _get_qq_sparse_solve_threshold(shape, bucket)
+    old_use_ge = _get_qq_sparse_solve_policy(shape, bucket)
+    if old_use_ge
+        old_loss, old_mismatch = _eval_single_threshold(h_nnz, h_e, h_n, old_thr; margin=margin)
+        accept = _accept_threshold_update(cand_loss, cand_mismatch, old_loss, old_mismatch) ||
+                 (cand_mismatch == old_mismatch && cand_loss <= old_loss * 1.01 &&
+                  ((cand_use_ge && cand_thr < old_thr) || (!cand_use_ge)))
+        if accept
+            _set_qq_sparse_solve_threshold!(shape, bucket, cand_thr)
+            _set_qq_sparse_solve_policy!(shape, bucket, cand_use_ge)
+        end
+    else
+        old_loss, old_mismatch = _eval_single_threshold_le(h_nnz, h_e, h_n, old_thr; margin=margin)
+        accept = _accept_threshold_update(cand_loss, cand_mismatch, old_loss, old_mismatch) ||
+                 (cand_mismatch == old_mismatch && cand_loss <= old_loss * 1.01 &&
+                  ((!cand_use_ge && cand_thr > old_thr) || cand_use_ge))
+        if accept
+            _set_qq_sparse_solve_threshold!(shape, bucket, cand_thr)
+            _set_qq_sparse_solve_policy!(shape, bucket, cand_use_ge)
+        end
+    end
+    return nothing
+end
+
+function _autotune_qq_sparse_solve_steps(profile::Symbol)
+    steps = 0
+    for shape in (:square, :tall), bucket in (:low, :mid, :high)
+        steps += length(_qq_sparse_solve_probe_cases(shape, bucket, profile, false))
+        steps += length(_qq_sparse_solve_probe_cases(shape, bucket, profile, true))
+    end
+    return steps
+end
+
+function _autotune_qq_routing_thresholds!(profile::Symbol=:full, progress_step::Function=_noop_progress_step)
+    rng = Random.MersenneTwister(0x51515151)
+    for shape in (:square, :tall, :wide)
+        _autotune_qq_shape_thresholds!(:rank, shape, profile, rng, progress_step)
+    end
+    for shape in (:square, :tall, :wide)
+        _autotune_qq_shape_thresholds!(:nullspace, shape, profile, rng, progress_step)
+    end
+    for shape in (:square, :tall, :wide)
+        _autotune_qq_shape_thresholds!(:solve, shape, profile, rng, progress_step)
+    end
+    for shape in (:square, :tall), bucket in (:low, :mid, :high)
+        _autotune_qq_sparse_solve_thresholds!(shape, bucket, profile, rng, progress_step)
+    end
+    # Mirror wide thresholds to square defaults for compatibility in rare wide-solve calls.
+    for bucket in (:low, :mid, :high)
+        _set_qq_sparse_solve_threshold!(:wide, bucket, _get_qq_sparse_solve_threshold(:square, bucket))
+        _set_qq_sparse_solve_policy!(:wide, bucket, _get_qq_sparse_solve_policy(:square, bucket))
+    end
+
+    # Keep legacy scalar thresholds synchronized for compatibility/reporting.
+    NEMO_THRESHOLD[] = Int(round(median(Float64[
+        QQ_NEMO_RANK_THRESHOLD_SQUARE[],
+        QQ_NEMO_RANK_THRESHOLD_TALL[],
+        QQ_NEMO_RANK_THRESHOLD_WIDE[],
+    ])))
+    MODULAR_NULLSPACE_THRESHOLD[] = Int(round(median(Float64[
+        QQ_MODULAR_NULLSPACE_THRESHOLD_SQUARE[],
+        QQ_MODULAR_NULLSPACE_THRESHOLD_TALL[],
+        QQ_MODULAR_NULLSPACE_THRESHOLD_WIDE[],
+    ])))
+    MODULAR_SOLVE_THRESHOLD[] = Int(round(median(Float64[
+        QQ_MODULAR_SOLVE_THRESHOLD_SQUARE[],
+        QQ_MODULAR_SOLVE_THRESHOLD_TALL[],
+        QQ_MODULAR_SOLVE_THRESHOLD_WIDE[],
+    ])))
+    return nothing
+end
+
+function _autotune_qq_routing_steps(profile::Symbol)
+    steps = 0
+    for op in (:rank, :nullspace, :solve), shape in (:square, :tall, :wide)
+        steps += length(_qq_probe_cases(op, shape, profile, false))
+        steps += length(_qq_probe_cases(op, shape, profile, true))
+    end
+    steps += _autotune_qq_sparse_solve_steps(profile)
+    return steps
+end
+
+function _autotune_fp_thresholds!(profile::Symbol=:full, progress_step::Function=_noop_progress_step)
+    if !_have_nemo()
         return
     end
     F = PrimeField(5)
     rng = Random.MersenneTwister(0x54414d4552)
-    sizes_rank = _autotune_fp_rank_sizes()
-    sizes_ns = _autotune_fp_nullspace_sizes()
-    sizes_solve = _autotune_fp_solve_sizes()
+    rank_shapes = _autotune_fp_rank_shapes(profile)
+    ns_shapes = _autotune_fp_nullspace_shapes(profile)
+    solve_shapes = _autotune_fp_solve_shapes(profile)
 
     wr = Int[]
     trj = Float64[]
     trn = Float64[]
-    for (k, n) in enumerate(sizes_rank)
-        A = _fp_dense_rand(F, n, n; rng=rng)
-        push!(wr, n * n)
+    rank_cases = Matrix{FpElem{5}}[]
+    for (k, (m, n)) in enumerate(rank_shapes)
+        A = _fp_dense_rand(F, m, n; rng=rng)
+        push!(rank_cases, A)
+        push!(wr, m * n)
         push!(trj, _bench_elapsed(() -> _rank_fp(A); reps=2))
         push!(trn, _bench_elapsed(() -> _nemo_rank(F, A); reps=2))
-        progress_step("fp-rank threshold probe $(k)/$(length(sizes_rank))")
+        progress_step("fp-rank threshold probe $(k)/$(length(rank_shapes))")
     end
+    _refine_crossover_boundary!(wr, trj, trn,
+        (i, reps) -> (_bench_elapsed(() -> _rank_fp(rank_cases[i]); reps=reps),
+                      _bench_elapsed(() -> _nemo_rank(F, rank_cases[i]); reps=reps));
+        extra_reps=(profile == :full ? 4 : 3),
+        window=(profile == :full ? 2 : 1))
     FP_NEMO_RANK_THRESHOLD[] = _pick_crossover_threshold(wr, trj, trn, FP_NEMO_RANK_THRESHOLD[])
 
     wn = Int[]
     tnj = Float64[]
     tnn = Float64[]
-    for (k, n) in enumerate(sizes_ns)
-        A = _fp_dense_rand(F, n, n; rng=rng)
-        push!(wn, n * n)
+    ns_cases = Matrix{FpElem{5}}[]
+    for (k, (m, n)) in enumerate(ns_shapes)
+        A = _fp_dense_rand(F, m, n; rng=rng)
+        push!(ns_cases, A)
+        push!(wn, m * n)
         push!(tnj, _bench_elapsed(() -> _nullspace_fp(A); reps=1))
         push!(tnn, _bench_elapsed(() -> _nemo_nullspace(F, A); reps=1))
-        progress_step("fp-nullspace threshold probe $(k)/$(length(sizes_ns))")
+        progress_step("fp-nullspace threshold probe $(k)/$(length(ns_shapes))")
     end
+    _refine_crossover_boundary!(wn, tnj, tnn,
+        (i, reps) -> (_bench_elapsed(() -> _nullspace_fp(ns_cases[i]); reps=reps),
+                      _bench_elapsed(() -> _nemo_nullspace(F, ns_cases[i]); reps=reps));
+        extra_reps=(profile == :full ? 3 : 2),
+        window=(profile == :full ? 2 : 1))
     FP_NEMO_NULLSPACE_THRESHOLD[] = _pick_crossover_threshold(wn, tnj, tnn, FP_NEMO_NULLSPACE_THRESHOLD[])
 
     ws = Int[]
     tsj = Float64[]
     tsn = Float64[]
-    for (k, n) in enumerate(sizes_solve)
-        m = n + max(8, div(n, 2))
+    solve_cases = Tuple{Matrix{FpElem{5}},Matrix{FpElem{5}}}[]
+    for (k, (m, n)) in enumerate(solve_shapes)
         B = _fp_dense_rand(F, m, n; rng=rng)
         for i in 1:n
             B[i, i] = FpElem{5}(1)
         end
         X = _fp_dense_rand(F, n, 2; rng=rng)
         Y = B * X
+        push!(solve_cases, (B, Y))
         push!(ws, m * n)
         push!(tsj, _bench_elapsed(() -> _solve_fullcolumn_fp(B, Y; check_rhs=false); reps=1))
         push!(tsn, _bench_elapsed(() -> _solve_fullcolumn_nemo_fp(F, B, Y; check_rhs=false, cache=false); reps=1))
-        progress_step("fp-solve threshold probe $(k)/$(length(sizes_solve))")
+        progress_step("fp-solve threshold probe $(k)/$(length(solve_shapes))")
     end
+    _refine_crossover_boundary!(ws, tsj, tsn,
+        (i, reps) -> begin
+            B, Y = solve_cases[i]
+            return (_bench_elapsed(() -> _solve_fullcolumn_fp(B, Y; check_rhs=false); reps=reps),
+                    _bench_elapsed(() -> _solve_fullcolumn_nemo_fp(F, B, Y; check_rhs=false, cache=false); reps=reps))
+        end;
+        extra_reps=(profile == :full ? 3 : 2),
+        window=(profile == :full ? 2 : 1))
     FP_NEMO_SOLVE_THRESHOLD[] = _pick_crossover_threshold(ws, tsj, tsn, FP_NEMO_SOLVE_THRESHOLD[])
 end
 
-function _autotune_float_thresholds!(progress_step::Function=_noop_progress_step)
+function _autotune_float_thresholds!(profile::Symbol=:full, progress_step::Function=_noop_progress_step)
     F = RealField(Float64; rtol=1e-10, atol=1e-12)
     rng = Random.MersenneTwister(0x464c4f4154)
-    sizes = _autotune_float_dense_sizes()
+    shapes = _autotune_float_dense_shapes(profile)
     works = Int[]
     tqr = Float64[]
     tsvd = Float64[]
-    for (k, n) in enumerate(sizes)
-        A = rand(rng, Float64, n, n)
-        push!(works, n * n)
+    cases = Matrix{Float64}[]
+    for (k, (m, n)) in enumerate(shapes)
+        A = rand(rng, Float64, m, n)
+        push!(cases, A)
+        push!(works, m * n)
         push!(tqr, _bench_elapsed(() -> _nullspace_float_qr_dense(F, A); reps=1))
         push!(tsvd, _bench_elapsed(() -> _nullspace_float_svd(F, A); reps=1))
-        progress_step("float-dense nullspace threshold probe $(k)/$(length(sizes))")
+        progress_step("float-dense nullspace threshold probe $(k)/$(length(shapes))")
     end
+    _refine_crossover_boundary!(works, tqr, tsvd,
+        (i, reps) -> (_bench_elapsed(() -> _nullspace_float_qr_dense(F, cases[i]); reps=reps),
+                      _bench_elapsed(() -> _nullspace_float_svd(F, cases[i]); reps=reps));
+        extra_reps=(profile == :full ? 4 : 3),
+        window=(profile == :full ? 2 : 1))
     FLOAT_NULLSPACE_SVD_THRESHOLD[] = _pick_crossover_threshold(works, tqr, tsvd, FLOAT_NULLSPACE_SVD_THRESHOLD[])
 end
 
@@ -571,12 +1686,12 @@ function _autotune_float_sparse_svds_thresholds!(progress_step::Function=_noop_p
     FLOAT_SPARSE_SVDS_MIN_NNZ[] = minimum(winning_nnz)
 end
 
-function _autotune_modular_thresholds!(progress_step::Function=_noop_progress_step)
+function _autotune_modular_thresholds!(profile::Symbol=:full, progress_step::Function=_noop_progress_step)
     rng = Random.MersenneTwister(0x4d4f44554c) # "MODUL"
 
-    # Tune modular prime budget for rankQQ_dim using exact-rank parity.
+    # Tune modular prime budget for _rankQQ_dim using exact-rank parity.
     rank_mats = [_qq_dense_rand(n, n; rng=rng) for n in (80, 112, 144)]
-    rank_exact = [rankQQ(A) for A in rank_mats]
+    rank_exact = [_rankQQ(A) for A in rank_mats]
     max_candidates = 2:min(length(DEFAULT_MODULAR_PRIMES), 8)
     best_max = MODULAR_MAX_PRIMES[]
     best_t = Inf
@@ -584,11 +1699,11 @@ function _autotune_modular_thresholds!(progress_step::Function=_noop_progress_st
         ok = true
         ttot = 0.0
         for (k, (A, rex)) in enumerate(zip(rank_mats, rank_exact))
-            rr = rankQQ_dim(A; backend=:modular,
+            rr = _rankQQ_dim(A; backend=:modular,
                             max_primes=maxp,
                             primes=DEFAULT_MODULAR_PRIMES,
                             small_threshold=1)
-            ttot += _bench_elapsed(() -> rankQQ_dim(A; backend=:modular,
+            ttot += _bench_elapsed(() -> _rankQQ_dim(A; backend=:modular,
                                                     max_primes=maxp,
                                                     primes=DEFAULT_MODULAR_PRIMES,
                                                     small_threshold=1); reps=1)
@@ -649,110 +1764,310 @@ function _autotune_modular_thresholds!(progress_step::Function=_noop_progress_st
     wn = Int[]
     tne = Float64[]
     tnm = Float64[]
-    for (k, n) in enumerate((56, 72, 88, 104))
-        A = _qq_dense_singular_rand(n; rng=rng)
-        push!(wn, n * n)
-        push!(tne, _bench_elapsed(() -> nullspaceQQ(A); reps=1))
+    ns_shapes = _autotune_modular_nullspace_shapes(profile)
+    ns_cases = Matrix{QQ}[]
+    for (k, (m, n)) in enumerate(ns_shapes)
+        A = _qq_dense_rand(m, n; rng=rng)
+        min(m, n) >= 2 && (A[:, end] = A[:, 1])
+        push!(ns_cases, A)
+        push!(wn, m * n)
+        push!(tne, _bench_elapsed(() -> _nullspaceQQ(A); reps=1))
         push!(tnm, _bench_elapsed(() -> begin
             N = _nullspace_modularQQ(A;
                                      primes=DEFAULT_MODULAR_PRIMES,
                                      min_primes=MODULAR_MIN_PRIMES[],
-                                     max_primes=MODULAR_MAX_PRIMES[])
-            N === nothing ? nullspaceQQ(A) : N
+                max_primes=MODULAR_MAX_PRIMES[])
+            N === nothing ? _nullspaceQQ(A) : N
         end; reps=1))
-        progress_step("modular-nullspace crossover probe $(k)/4")
+        progress_step("modular-nullspace crossover probe $(k)/$(length(ns_shapes))")
     end
+    _refine_crossover_boundary!(wn, tne, tnm,
+        (i, reps) -> begin
+            A = ns_cases[i]
+            return (_bench_elapsed(() -> _nullspaceQQ(A); reps=reps),
+                    _bench_elapsed(() -> begin
+                        N = _nullspace_modularQQ(A;
+                                                 primes=DEFAULT_MODULAR_PRIMES,
+                                                 min_primes=MODULAR_MIN_PRIMES[],
+                                                 max_primes=MODULAR_MAX_PRIMES[])
+                        N === nothing ? _nullspaceQQ(A) : N
+                    end; reps=reps))
+        end;
+        extra_reps=4,
+        window=2)
     MODULAR_NULLSPACE_THRESHOLD[] = _pick_crossover_threshold(wn, tne, tnm, MODULAR_NULLSPACE_THRESHOLD[])
 
     ws = Int[]
     tse = Float64[]
     tsm = Float64[]
-    for (k, n) in enumerate((40, 56, 72, 88))
-        m = n + max(8, div(n, 2))
+    solve_shapes = _autotune_modular_solve_shapes(profile)
+    solve_cases = Tuple{Matrix{QQ},Matrix{QQ}}[]
+    for (k, (m, n)) in enumerate(solve_shapes)
         B = _qq_dense_fullcolumn_rand(m, n; rng=rng)
-        X = _qq_dense_rand(n, 2; rng=rng)
+        X = _qq_dense_rand(size(B, 2), 2; rng=rng)
         Y = B * X
+        push!(solve_cases, (B, Y))
         push!(ws, m * n)
-        push!(tse, _bench_elapsed(() -> solve_fullcolumnQQ(B, Y; check_rhs=false); reps=1))
+        push!(tse, _bench_elapsed(() -> _solve_fullcolumnQQ(B, Y; check_rhs=false); reps=1))
         push!(tsm, _bench_elapsed(() -> begin
             Xh = _solve_fullcolumn_modularQQ(B, Y;
                                              primes=DEFAULT_MODULAR_PRIMES,
                                              min_primes=MODULAR_MIN_PRIMES[],
                                              max_primes=MODULAR_MAX_PRIMES[],
                                              check_rhs=false)
-            Xh === nothing ? solve_fullcolumnQQ(B, Y; check_rhs=false) : Xh
+            Xh === nothing ? _solve_fullcolumnQQ(B, Y; check_rhs=false) : Xh
         end; reps=1))
-        progress_step("modular-solve crossover probe $(k)/4")
+        progress_step("modular-solve crossover probe $(k)/$(length(solve_shapes))")
     end
+    _refine_crossover_boundary!(ws, tse, tsm,
+        (i, reps) -> begin
+            B, Y = solve_cases[i]
+            return (_bench_elapsed(() -> _solve_fullcolumnQQ(B, Y; check_rhs=false); reps=reps),
+                    _bench_elapsed(() -> begin
+                        Xh = _solve_fullcolumn_modularQQ(B, Y;
+                                                         primes=DEFAULT_MODULAR_PRIMES,
+                                                         min_primes=MODULAR_MIN_PRIMES[],
+                                                         max_primes=MODULAR_MAX_PRIMES[],
+                                                         check_rhs=false)
+                        Xh === nothing ? _solve_fullcolumnQQ(B, Y; check_rhs=false) : Xh
+                    end; reps=reps))
+        end;
+        extra_reps=4,
+        window=2)
     MODULAR_SOLVE_THRESHOLD[] = _pick_crossover_threshold(ws, tse, tsm, MODULAR_SOLVE_THRESHOLD[])
 
-    # Tune rankQQ_dim exact/modular crossover.
+    # Tune _rankQQ_dim exact/modular crossover.
     wr = Int[]
     tre = Float64[]
     trm = Float64[]
-    for (k, n) in enumerate((64, 96, 128, 160))
-        A = _qq_dense_rand(n, n; rng=rng)
-        push!(wr, n * n)
-        push!(tre, _bench_elapsed(() -> rankQQ(A); reps=1))
-        push!(trm, _bench_elapsed(() -> rankQQ_dim(A; backend=:modular,
+    rank_shapes = _autotune_rankqq_dim_shapes(profile)
+    rank_cases = Matrix{QQ}[]
+    for (k, (m, n)) in enumerate(rank_shapes)
+        A = _qq_dense_rand(m, n; rng=rng)
+        push!(rank_cases, A)
+        push!(wr, m * n)
+        push!(tre, _bench_elapsed(() -> _rankQQ(A); reps=1))
+        push!(trm, _bench_elapsed(() -> _rankQQ_dim(A; backend=:modular,
                                                    max_primes=MODULAR_MAX_PRIMES[],
                                                    primes=DEFAULT_MODULAR_PRIMES,
                                                    small_threshold=1); reps=1))
-        progress_step("rankQQ_dim crossover probe $(k)/4")
+        progress_step("_rankQQ_dim crossover probe $(k)/$(length(rank_shapes))")
     end
+    _refine_crossover_boundary!(wr, tre, trm,
+        (i, reps) -> begin
+            A = rank_cases[i]
+            return (_bench_elapsed(() -> _rankQQ(A); reps=reps),
+                    _bench_elapsed(() -> _rankQQ_dim(A; backend=:modular,
+                                                    max_primes=MODULAR_MAX_PRIMES[],
+                                                    primes=DEFAULT_MODULAR_PRIMES,
+                                                    small_threshold=1); reps=reps))
+        end;
+        extra_reps=4,
+        window=2)
     RANKQQ_DIM_SMALL_THRESHOLD[] = _pick_crossover_threshold(wr, tre, trm, RANKQQ_DIM_SMALL_THRESHOLD[])
 end
 
-function autotune_linalg_thresholds!(; path::AbstractString=linalg_thresholds_path(),
+function _zn_rand_phi(cm, field, nrows::Int, ncols::Int, rng::Random.AbstractRNG)
+    K = cm.coeff_type(field)
+    Phi = Matrix{K}(undef, nrows, ncols)
+    @inbounds for i in 1:nrows, j in 1:ncols
+        Phi[i, j] = cm.coerce(field, rand(rng, -2:2))
+    end
+    return Phi
+end
+
+function _zn_dimat_fixture_friendly(fz, cm, field; ncuts::Int, rng::Random.AbstractRNG)
+    n = 2
+    tau = fz.face(n, [false, true])
+    thresholds = collect(-ncuts:ncuts)
+    FlatT = typeof(fz.IndFlat(tau, (0, 0); id=:F0))
+    InjT = typeof(fz.IndInj(tau, (1, 0); id=:E0))
+    flats = Vector{FlatT}(undef, length(thresholds))
+    injectives = Vector{InjT}(undef, length(thresholds))
+    @inbounds for (i, t) in enumerate(thresholds)
+        flats[i] = fz.IndFlat(tau, (t, 0); id=Symbol(:F, i))
+        injectives[i] = fz.IndInj(tau, (t + 1, 0); id=Symbol(:E, i))
+    end
+    Phi = _zn_rand_phi(cm, field, length(injectives), length(flats), rng)
+    FG = fz.Flange{cm.coeff_type(field)}(n, flats, injectives, Phi; field=field)
+    return FG, (-2 * ncuts, -2 * ncuts), (2 * ncuts, 2 * ncuts)
+end
+
+function _zn_dimat_fixture_adversarial(fz, cm, field; ncuts::Int, rng::Random.AbstractRNG)
+    n = 2
+    m = 2 * ncuts + 4
+    tau = fz.face(n, [false, false])
+    FlatT = typeof(fz.IndFlat(tau, (0, 0); id=:F0))
+    InjT = typeof(fz.IndInj(tau, (0, 0); id=:E0))
+    flats = Vector{FlatT}(undef, m)
+    injectives = Vector{InjT}(undef, m)
+    lo = -2 * ncuts
+    hi = 2 * ncuts
+    @inbounds for i in 1:m
+        flats[i] = fz.IndFlat(tau, (rand(rng, lo:hi), rand(rng, lo:hi)); id=Symbol(:F, i))
+        injectives[i] = fz.IndInj(tau, (rand(rng, lo:hi), rand(rng, lo:hi)); id=Symbol(:E, i))
+    end
+    Phi = _zn_rand_phi(cm, field, m, m, rng)
+    FG = fz.Flange{cm.coeff_type(field)}(n, flats, injectives, Phi; field=field)
+    return FG, (lo, lo), (hi, hi)
+end
+
+function _zn_sample_box_points(a::NTuple{N,Int}, b::NTuple{N,Int}, nqueries::Int,
+                               rng::Random.AbstractRNG) where {N}
+    out = Vector{NTuple{N,Int}}(undef, nqueries)
+    @inbounds for i in 1:nqueries
+        out[i] = ntuple(k -> rand(rng, a[k]:b[k]), N)
+    end
+    return out
+end
+
+function _autotune_zn_dimat_threshold!(profile::Symbol=:full, progress_step::Function=_noop_progress_step)
+    pm = parentmodule(@__MODULE__)
+    if !isdefined(pm, :FlangeZn) || !isdefined(pm, :CoreModules)
+        return nothing
+    end
+    fz = getfield(pm, :FlangeZn)
+    cm = getfield(pm, :CoreModules)
+    field = cm.QQField()
+    nqueries = _autotune_zn_dimat_queries_per_probe(profile)
+    reps = _autotune_zn_dimat_reps(profile)
+    ncutses = _autotune_zn_dimat_probe_ncuts(profile)
+    candidates = _autotune_zn_dimat_threshold_candidates(profile)
+    rng = Random.MersenneTwister(0x5a4e44494d4154) # "ZNDIMAT"
+
+    probes = Tuple{Any,Vector{NTuple{2,Int}},String}[]
+    for ncuts in ncutses
+        FGf, af, bf = _zn_dimat_fixture_friendly(fz, cm, field; ncuts=ncuts, rng=rng)
+        Qf = _zn_sample_box_points(af, bf, nqueries, rng)
+        push!(probes, (FGf, Qf, "friendly ncuts=$(ncuts)"))
+
+        FGa, aa, ba = _zn_dimat_fixture_adversarial(fz, cm, field; ncuts=ncuts, rng=rng)
+        Qa = _zn_sample_box_points(aa, ba, nqueries, rng)
+        push!(probes, (FGa, Qa, "adversarial ncuts=$(ncuts)"))
+    end
+
+    # Warm up compilation for both dim_at branches on one representative probe.
+    if !isempty(probes)
+        FG0, Q0, _ = probes[1]
+        for i in 1:min(length(Q0), 64)
+            fz.dim_at(FG0, Q0[i])
+        end
+    end
+
+    best_thr = Int(ZN_QQ_DIMAT_SUBMATRIX_WORK_THRESHOLD[])
+    best_time = Inf
+    old_thr = best_thr
+    cand_times = Dict{Int,Float64}()
+    for thr in candidates
+        _set_zn_qq_dimat_submatrix_work_threshold!(thr)
+        ttot = 0.0
+        for (FG, Q, label) in probes
+            ttot += _bench_elapsed_median(() -> begin
+                s = 0
+                @inbounds for g in Q
+                    s += fz.dim_at(FG, g)
+                end
+                s
+            end; reps=reps)
+            progress_step("zn-dim_at threshold=$(thr) $(label)")
+        end
+        cand_times[thr] = ttot
+        if ttot < best_time
+            best_time = ttot
+            best_thr = thr
+        end
+    end
+
+    # Keep incumbent unless the candidate win is material to avoid noise-driven jumps.
+    old_time = get(cand_times, old_thr, Inf)
+    if best_thr != old_thr && !(best_time <= 0.95 * old_time)
+        best_thr = old_thr
+    end
+
+    _set_zn_qq_dimat_submatrix_work_threshold!(best_thr)
+    return nothing
+end
+
+function autotune_linalg_thresholds!(; path::AbstractString=_linalg_thresholds_path(),
                                      save::Bool=true,
                                      quiet::Bool=false,
                                      profile::Symbol=:full)
     profile in (:full, :startup) || error("autotune_linalg_thresholds!: profile must be :full or :startup.")
     progress = _autotune_progress_init(_autotune_total_steps(profile); enabled=!quiet)
     step = label -> _autotune_progress_step!(progress, label)
-    old = current_linalg_thresholds()
+    old = _current_linalg_thresholds()
     try
-        _autotune_nemo_threshold!(step)
-        profile == :full && _autotune_modular_thresholds!(step)
-        _autotune_fp_thresholds!(step)
-        _autotune_float_thresholds!(step)
+        profile == :full && _autotune_modular_thresholds!(profile, step)
+        _autotune_fp_thresholds!(profile, step)
+        _autotune_float_thresholds!(profile, step)
         _autotune_float_sparse_svds_thresholds!(step)
+        _autotune_qq_routing_thresholds!(profile, step)
+        profile == :full && _autotune_zn_dimat_threshold!(profile, step)
     catch err
         _apply_linalg_thresholds!(old)
         rethrow(err)
     end
     _autotune_progress_finish!(progress)
     if save
-        save_linalg_thresholds!(; path=path)
+        _save_linalg_thresholds!(; path=path)
     end
-    quiet || @info "FieldLinAlg: autotuned thresholds." path profile thresholds=current_linalg_thresholds()
-    return current_linalg_thresholds()
+    quiet || @info "FieldLinAlg: autotuned thresholds." path profile thresholds=_current_linalg_thresholds()
+    return _current_linalg_thresholds()
 end
 
-function choose_linalg_backend(field::AbstractCoeffField, A; op::Symbol=:rank, backend::Symbol=:auto)
+function _choose_linalg_backend(field::AbstractCoeffField, A; op::Symbol=:rank, backend::Symbol=:auto)
     backend != :auto && return backend
     if field isa QQField
-        if A isa SparseMatrixCSC
-            return :julia_sparse
-        end
         m, n = size(A)
-        if op == :nullspace
-            if have_nemo() && m * n >= NEMO_THRESHOLD[]
+        shape = _qq_shape_bucket(m, n)
+        work = m * n
+        if _is_sparse_like(A)
+            dens = work == 0 ? 0.0 : (_sparse_nnz(A) / work)
+            dens_bucket = _qq_sparse_density_bucket(_qq_sparse_solve_fill(A))
+            if op == :nullspace
+                if dens < 0.10
+                    return :julia_sparse
+                end
+                if _have_nemo() && work >= _qq_nemo_threshold(:nullspace, shape)
+                    return :nemo
+                end
+                return :julia_sparse
+            end
+            if op == :solve
+                solve_thr = _qq_sparse_solve_threshold(shape, dens_bucket)
+                use_ge = _qq_sparse_solve_use_ge(shape, dens_bucket)
+                nnzA = _sparse_nnz(A)
+                choose_nemo = use_ge ? (nnzA >= solve_thr) : (nnzA <= solve_thr)
+                if _have_nemo() && choose_nemo
+                    return :nemo
+                end
+                return :julia_sparse
+            end
+            if dens < 0.10 && work <= 2_000
+                return :julia_sparse
+            end
+            if _have_nemo() && work >= _qq_nemo_threshold(:rank, shape)
                 return :nemo
             end
-            if m * n >= MODULAR_NULLSPACE_THRESHOLD[]
+            return :julia_sparse
+        end
+        if op == :nullspace
+            if _have_nemo() && work >= _qq_nemo_threshold(:nullspace, shape)
+                return :nemo
+            end
+            if work >= _qq_modular_threshold(:nullspace, shape)
                 return :modular
             end
         end
         if op == :solve
-            if have_nemo() && m * n >= NEMO_THRESHOLD[]
+            if _have_nemo() && work >= _qq_nemo_threshold(:solve, shape)
                 return :nemo
             end
-            if m * n >= MODULAR_SOLVE_THRESHOLD[]
+            if work >= _qq_modular_threshold(:solve, shape)
                 return :modular
             end
         end
-        if have_nemo() && m * n >= NEMO_THRESHOLD[]
+        if _have_nemo() && work >= _qq_nemo_threshold(:rank, shape)
             return :nemo
         end
         return :julia_exact
@@ -767,7 +2082,7 @@ function choose_linalg_backend(field::AbstractCoeffField, A; op::Symbol=:rank, b
         if _is_sparse_like(A)
             return :fp_sparse
         end
-        if have_nemo() && _nemo_dense_compatible(A)
+        if _have_nemo() && _nemo_dense_compatible(A)
             work = size(A, 1) * size(A, 2)
             if op == :rank && work >= FP_NEMO_RANK_THRESHOLD[]
                 return :nemo
@@ -805,16 +2120,16 @@ function _to_fmpq_mat(A::AbstractMatrix{QQ})
 end
 
 function _to_fmpq_mat(A::BackendMatrix{QQ})
-    if backend_kind(A) != :nemo
-        return _to_fmpq_mat(unwrap_backend_matrix(A))
+    if _backend_kind(A) != :nemo
+        return _to_fmpq_mat(_unwrap_backend_matrix(A))
     end
-    payload = backend_payload(A)
+    payload = _backend_payload(A)
     if payload !== nothing
         _bump_counter!(_QQ_TO_NEMO_CACHE_HITS)
         return payload
     end
-    M = _to_fmpq_mat(unwrap_backend_matrix(A))
-    set_backend_payload!(A, M)
+    M = _to_fmpq_mat(_unwrap_backend_matrix(A))
+    _set_backend_payload!(A, M)
     return M
 end
 
@@ -839,10 +2154,10 @@ function _to_nemo_fp_mat(A::AbstractMatrix{FpElem{p}}) where {p}
 end
 
 function _to_nemo_fp_mat(A::BackendMatrix{FpElem{p}}) where {p}
-    if backend_kind(A) != :nemo
-        return _to_nemo_fp_mat(unwrap_backend_matrix(A))
+    if _backend_kind(A) != :nemo
+        return _to_nemo_fp_mat(_unwrap_backend_matrix(A))
     end
-    payload = backend_payload(A)
+    payload = _backend_payload(A)
     if payload isa Pair
         pp = first(payload)
         if pp == p
@@ -850,8 +2165,8 @@ function _to_nemo_fp_mat(A::BackendMatrix{FpElem{p}}) where {p}
             return last(payload)
         end
     end
-    M = _to_nemo_fp_mat(unwrap_backend_matrix(A))
-    set_backend_payload!(A, p => M)
+    M = _to_nemo_fp_mat(_unwrap_backend_matrix(A))
+    _set_backend_payload!(A, p => M)
     return M
 end
 
@@ -1005,7 +2320,7 @@ end
 
 const _F2_FULLCOLUMN_FACTOR_CACHE = WeakKeyDict{Any,Any}()
 
-function clear_f2_fullcolumn_cache!()
+function _clear_f2_fullcolumn_cache!()
     empty!(_F2_FULLCOLUMN_FACTOR_CACHE)
     return nothing
 end
@@ -1043,7 +2358,6 @@ const _F3_MUL = UInt8[
 ]
 const _F3_INV = UInt8[0, 1, 2]  # inv(0) unused; inv(1)=1, inv(2)=2
 
-@inline _f3_add(a::UInt8, b::UInt8) = _F3_ADD[a + 1, b + 1]
 @inline _f3_sub(a::UInt8, b::UInt8) = _F3_SUB[a + 1, b + 1]
 @inline _f3_mul(a::UInt8, b::UInt8) = _F3_MUL[a + 1, b + 1]
 @inline _f3_inv(a::UInt8) = _F3_INV[a + 1]
@@ -1056,7 +2370,7 @@ end
 
 const _F3_FULLCOLUMN_FACTOR_CACHE = WeakKeyDict{Any,Any}()
 
-function clear_f3_fullcolumn_cache!()
+function _clear_f3_fullcolumn_cache!()
     empty!(_F3_FULLCOLUMN_FACTOR_CACHE)
     return nothing
 end
@@ -1140,7 +2454,7 @@ end
 
 function _rref_f3(A::SparseMatrixCSC{FpElem{3},Int}; pivots::Bool=true)
     m, n = size(A)
-    R = SparseRREF{FpElem{3}}(n)
+    R = _SparseRREF{FpElem{3}}(n)
     rows = _sparse_rows(A)
     for i in 1:m
         _sparse_rref_push_homogeneous!(R, rows[i])
@@ -1205,7 +2519,7 @@ end
 
 function _nullspace_f3(A::SparseMatrixCSC{FpElem{3},Int})
     m, n = size(A)
-    R = SparseRREF{FpElem{3}}(n)
+    R = _SparseRREF{FpElem{3}}(n)
     rows = _sparse_rows(A)
     for i in 1:m
         _sparse_rref_push_homogeneous!(R, rows[i])
@@ -1351,7 +2665,7 @@ end
 
 function _pivot_cols_f3(A::SparseMatrixCSC{FpElem{3},Int})
     m, n = size(A)
-    R = SparseRREF{FpElem{3}}(n)
+    R = _SparseRREF{FpElem{3}}(n)
     rows = _sparse_rows(A)
     for i in 1:m
         _sparse_rref_push_homogeneous!(R, rows[i])
@@ -1614,11 +2928,6 @@ const FLOAT_SPARSE_FACTOR_CACHE_MAX = Ref(128)
     )
 end
 
-function clear_float_sparse_factor_cache!()
-    empty!(_FLOAT_SPARSE_FACTOR_CACHE)
-    return nothing
-end
-
 function _solve_fullcolumn_float(F::RealField, B::SparseMatrixCSC, Y;
                                  check_rhs::Bool=true, cache::Bool=true, factor=nothing)
     Ymat = Y isa AbstractVector ? reshape(Y, :, 1) : Matrix(Y)
@@ -1701,7 +3010,7 @@ function _rank_fp(A::SparseMatrixCSC{FpElem{p},Int}) where {p}
         return 0
     end
     rows = _sparse_rows(A)
-    R = SparseRREF{FpElem{p}}(n)
+    R = _SparseRREF{FpElem{p}}(n)
     maxrank = min(m, n)
     @inbounds for i in 1:m
         _sparse_rref_push_homogeneous!(R, rows[i])
@@ -1749,7 +3058,7 @@ end
 function _nullspace_fp(A::SparseMatrixCSC{FpElem{p},Int}) where {p}
     m, n = size(A)
     rows = _sparse_rows(A)
-    R = SparseRREF{FpElem{p}}(n)
+    R = _SparseRREF{FpElem{p}}(n)
     maxrank = min(m, n)
     @inbounds for i in 1:m
         _sparse_rref_push_homogeneous!(R, rows[i])
@@ -1763,7 +3072,7 @@ end
 function _nullspace_fp_from_transposed_parent(A::SparseMatrixCSC{FpElem{p},Int}) where {p}
     # For transpose(A), rows are exactly the original sparse columns of A.
     m, n = size(A)
-    R = SparseRREF{FpElem{p}}(m)
+    R = _SparseRREF{FpElem{p}}(m)
     maxrank = min(n, m)
     for col in 1:n
         rng = A.colptr[col]:(A.colptr[col + 1] - 1)
@@ -1837,7 +3146,7 @@ function _solve_fullcolumn_fp(B::SparseMatrixCSC{FpElem{p},Int},
     size(Ymat, 1) == m || throw(DimensionMismatch("B and Y must have same row count"))
 
     rhs = size(Ymat, 2)
-    RA = SparseRREFAugmented{FpElem{p}}(n, rhs)
+    RA = _SparseRREFAugmented{FpElem{p}}(n, rhs)
     rows = _sparse_rows(B)
 
     @inbounds for i in 1:m
@@ -1928,34 +3237,6 @@ function _f2_row_xor!(a::Vector{UInt64}, b::Vector{UInt64})
     @inbounds for k in eachindex(a)
         a[k] = xor(a[k], b[k])
     end
-end
-
-function _f2_pack_rows(mat::AbstractMatrix{FpElem{2}})
-    m, n = size(mat)
-    nb = _f2_blocks(n)
-    rows = [fill(UInt64(0), nb) for _ in 1:m]
-    @inbounds for i in 1:m
-        row = rows[i]
-        for j in 1:n
-            if mat[i, j].val != 0
-                _f2_setbit!(row, j)
-            end
-        end
-    end
-    return rows, n
-end
-
-function _f2_unpack_rows(rows::Vector{Vector{UInt64}}, m::Int, n::Int)
-    A = Matrix{FpElem{2}}(undef, m, n)
-    z = FpElem{2}(0)
-    o = FpElem{2}(1)
-    @inbounds for i in 1:m
-        row = rows[i]
-        for j in 1:n
-            A[i, j] = (_f2_getbit(row, j) == 1) ? o : z
-        end
-    end
-    return A
 end
 
 function _f2_inverse_packed(B::AbstractMatrix{FpElem{2}})
@@ -2382,7 +3663,7 @@ Base.isempty(r::SparseRow) = isempty(r.idx)
 Base.length(r::SparseRow) = length(r.idx)
 Base.copy(r::SparseRow{K}) where {K} = SparseRow{K}(copy(r.idx), copy(r.val))
 
-mutable struct SparseRowAccumulator{K}
+mutable struct _SparseRowAccumulator{K}
     marks::Vector{UInt32}
     pos::Vector{Int}
     cols::Vector{Int}
@@ -2390,11 +3671,11 @@ mutable struct SparseRowAccumulator{K}
     tag::UInt32
 end
 
-function SparseRowAccumulator{K}(nvars::Int) where {K}
-    return SparseRowAccumulator{K}(zeros(UInt32, nvars), zeros(Int, nvars), Int[], K[], UInt32(1))
+function _SparseRowAccumulator{K}(nvars::Int) where {K}
+    return _SparseRowAccumulator{K}(zeros(UInt32, nvars), zeros(Int, nvars), Int[], K[], UInt32(1))
 end
 
-function reset_sparse_row_accumulator!(acc::SparseRowAccumulator)
+function _reset_sparse_row_accumulator!(acc::_SparseRowAccumulator)
     empty!(acc.cols)
     empty!(acc.vals)
     tag = acc.tag + UInt32(1)
@@ -2406,7 +3687,7 @@ function reset_sparse_row_accumulator!(acc::SparseRowAccumulator)
     return acc
 end
 
-@inline function push_sparse_row_entry!(acc::SparseRowAccumulator{K}, col::Int, v::K) where {K}
+@inline function _push_sparse_row_entry!(acc::_SparseRowAccumulator{K}, col::Int, v::K) where {K}
     iszero(v) && return acc
     @inbounds if acc.marks[col] != acc.tag
         acc.marks[col] = acc.tag
@@ -2438,7 +3719,7 @@ function _sort_parallel_insertion!(cols::Vector{Int}, vals)
     end
 end
 
-function materialize_sparse_row!(row::SparseRow{K}, acc::SparseRowAccumulator{K}) where {K}
+function _materialize_sparse_row!(row::SparseRow{K}, acc::_SparseRowAccumulator{K}) where {K}
     cols = acc.cols
     vals = acc.vals
     _sort_parallel_insertion!(cols, vals)
@@ -2460,44 +3741,6 @@ function materialize_sparse_row!(row::SparseRow{K}, acc::SparseRowAccumulator{K}
     resize!(row.idx, w)
     resize!(row.val, w)
     return row
-end
-
-function normalize_sparse_row!(cols::Vector{Int}, vals::Vector{K}) where {K}
-    @assert length(cols) == length(vals)
-    n = length(cols)
-    n <= 1 && return
-    @inbounds for i in 2:n
-        c = cols[i]
-        v = vals[i]
-        j = i - 1
-        while j >= 1 && cols[j] > c
-            cols[j + 1] = cols[j]
-            vals[j + 1] = vals[j]
-            j -= 1
-        end
-        cols[j + 1] = c
-        vals[j + 1] = v
-    end
-
-    w = 0
-    i = 1
-    @inbounds while i <= n
-        c = cols[i]
-        s = vals[i]
-        i += 1
-        while i <= n && cols[i] == c
-            s += vals[i]
-            i += 1
-        end
-        if !iszero(s)
-            w += 1
-            cols[w] = c
-            vals[w] = s
-        end
-    end
-    resize!(cols, w)
-    resize!(vals, w)
-    return
 end
 
 @inline function _row_coeff(row::SparseRow{K}, j::Int) where {K}
@@ -2621,7 +3864,7 @@ function _row_axpy_modp!(
     return tmp_idx, tmp_val
 end
 
-mutable struct SparseRREF{K}
+mutable struct _SparseRREF{K}
     nvars::Int
     pivot_pos::Vector{Int}
     pivot_cols::Vector{Int}
@@ -2632,8 +3875,8 @@ mutable struct SparseRREF{K}
     tmp_val::Vector{K}
 end
 
-function SparseRREF{K}(nvars::Int) where {K}
-    return SparseRREF{K}(
+function _SparseRREF{K}(nvars::Int) where {K}
+    return _SparseRREF{K}(
         nvars,
         zeros(Int, nvars),
         Int[],
@@ -2645,9 +3888,9 @@ function SparseRREF{K}(nvars::Int) where {K}
     )
 end
 
-@inline _rref_rank(R::SparseRREF) = length(R.pivot_cols)
+@inline _rref_rank(R::_SparseRREF) = length(R.pivot_cols)
 
-function _sparse_rref_push_homogeneous!(R::SparseRREF{K}, row::SparseRow{K})::Bool where {K}
+function _sparse_rref_push_homogeneous!(R::_SparseRREF{K}, row::SparseRow{K})::Bool where {K}
     isempty(row) && return false
 
     empty!(R.scratch_cols)
@@ -2695,18 +3938,18 @@ function _sparse_rref_push_homogeneous!(R::SparseRREF{K}, row::SparseRow{K})::Bo
     return true
 end
 
-mutable struct SparseRREFAugmented{K}
-    rref::SparseRREF{K}
+mutable struct _SparseRREFAugmented{K}
+    rref::_SparseRREF{K}
     nrhs::Int
     pivot_rhs::Vector{Vector{K}}
 end
 
-function SparseRREFAugmented{K}(nvars::Int, nrhs::Int) where {K}
-    return SparseRREFAugmented{K}(SparseRREF{K}(nvars), nrhs, Vector{Vector{K}}())
+function _SparseRREFAugmented{K}(nvars::Int, nrhs::Int) where {K}
+    return _SparseRREFAugmented{K}(_SparseRREF{K}(nvars), nrhs, Vector{Vector{K}}())
 end
 
 function _sparse_rref_push_augmented!(
-    R::SparseRREFAugmented{K},
+    R::_SparseRREFAugmented{K},
     row::SparseRow{K},
     rhs::Vector{K},
 )::Symbol where {K}
@@ -2776,7 +4019,7 @@ function _sparse_rref_push_augmented!(
     return :pivot
 end
 
-function _nullspace_from_pivots(R::SparseRREF{K}, nvars::Int) where {K}
+function _nullspace_from_pivots(R::_SparseRREF{K}, nvars::Int) where {K}
     @assert nvars == R.nvars
 
     free_cols = Int[]
@@ -2853,7 +4096,7 @@ end
 # -----------------------------------------------------------------------------
 
 # Exact linear algebra over QQ (pure Julia). Nemo acceleration is selected via
-# choose_linalg_backend and dispatched through _nemo_* methods in this module.
+# _choose_linalg_backend and dispatched through _nemo_* methods in this module.
 # Keep this hook for optional backend matrix wrappers.
 @inline _to_backend_matrix(A) = A
 
@@ -2903,22 +4146,22 @@ function _rref_backend(A::AbstractMatrix{QQ}; pivots::Bool=true)
 end
 
 """
-    rrefQQ(A::AbstractMatrix{QQ}; pivots::Bool=true)
+    _rrefQQ(A::AbstractMatrix{QQ}; pivots::Bool=true)
 
 Return the row-reduced echelon form of `A`. If `pivots=true`, also return the
 pivot column indices as a tuple.
 """
-function rrefQQ(A::AbstractMatrix{QQ}; pivots::Bool=true)
+function _rrefQQ(A::AbstractMatrix{QQ}; pivots::Bool=true)
     return _rref_backend(_to_backend_matrix(A); pivots=pivots)
 end
 
-_rank_backend(A::AbstractMatrix{QQ}) = length(last(rrefQQ(A; pivots=true)))
+_rank_backend(A::AbstractMatrix{QQ}) = length(last(_rrefQQ(A; pivots=true)))
 
-rankQQ(A::AbstractMatrix{QQ}) = _rank_backend(_to_backend_matrix(A))
-rankQQ(A::AbstractMatrix{Float64}) = rankQQ(Matrix{QQ}(A))
+_rankQQ(A::AbstractMatrix{QQ}) = _rank_backend(_to_backend_matrix(A))
+_rankQQ(A::AbstractMatrix{Float64}) = _rankQQ(Matrix{QQ}(A))
 
 function _nullspace_backend(A::AbstractMatrix{QQ})
-    R, pivs = rrefQQ(A; pivots=true)
+    R, pivs = _rrefQQ(A; pivots=true)
     m, n = size(R)
 
     # pivs is increasing; compute free cols without allocating a Set.
@@ -2945,10 +4188,10 @@ function _nullspace_backend(A::AbstractMatrix{QQ})
     return B
 end
 
-nullspaceQQ(A::AbstractMatrix{QQ}) = _nullspace_backend(_to_backend_matrix(A))
+_nullspaceQQ(A::AbstractMatrix{QQ}) = _nullspace_backend(_to_backend_matrix(A))
 
-function colspaceQQ(A::AbstractMatrix{QQ})
-    cols = collect(pivot_columnsQQ(A))
+function _colspaceQQ(A::AbstractMatrix{QQ})
+    cols = collect(_pivot_columnsQQ(A))
     return A[:, cols]
 end
 
@@ -3000,20 +4243,20 @@ const _NEMO_FULLCOLUMN_FACTOR_CACHE_FP = WeakKeyDict{Any,Any}()
 # Pivot-column detection for QQ matrices (dense or sparse)
 # ---------------------------------------------------------------
 
-# Dense pivot columns via rrefQQ
-function pivot_columnsQQ(A::AbstractMatrix{QQ})
-    _, pivs = rrefQQ(A)
+# Dense pivot columns via _rrefQQ
+function _pivot_columnsQQ(A::AbstractMatrix{QQ})
+    _, pivs = _rrefQQ(A)
     return pivs
 end
 
 # Sparse pivot columns via sparse RREF streaming
 # Sparse pivot columns via sparse RREF streaming
-function pivot_columnsQQ(A::SparseMatrixCSC{QQ,Int})
+function _pivot_columnsQQ(A::SparseMatrixCSC{QQ,Int})
     m, n = size(A)
     if m == 0 || n == 0
         return Int[]
     end
-    R = SparseRREF{QQ}(n)
+    R = _SparseRREF{QQ}(n)
     rows = _sparse_rows(A)
     maxrank = min(m, n)
     for i in 1:m
@@ -3027,23 +4270,23 @@ end
 
 
 # Avoid densification for transpose/adjoint sparse wrappers
-pivot_columnsQQ(A::Transpose{QQ,<:SparseMatrixCSC{QQ,Int}}) = pivot_columnsQQ(sparse(A))
-pivot_columnsQQ(A::Adjoint{QQ,<:SparseMatrixCSC{QQ,Int}})  = pivot_columnsQQ(sparse(A))
+_pivot_columnsQQ(A::Transpose{QQ,<:SparseMatrixCSC{QQ,Int}}) = _pivot_columnsQQ(sparse(A))
+_pivot_columnsQQ(A::Adjoint{QQ,<:SparseMatrixCSC{QQ,Int}})  = _pivot_columnsQQ(sparse(A))
 
 """
-    factor_fullcolumnQQ(B::AbstractMatrix{<:QQ}) -> FullColumnFactor{QQ}
+    _factor_fullcolumnQQ(B::AbstractMatrix{<:QQ}) -> FullColumnFactor{QQ}
 
 Build reusable factorization data for solving `B * X = Y` when B has full column rank.
 
-Most users should call `solve_fullcolumnQQ(B,Y)`; caching is automatic for mutable matrices.
+Most users should call `_solve_fullcolumnQQ(B,Y)`; caching is automatic for mutable matrices.
 """
-function factor_fullcolumnQQ(B::AbstractMatrix{<:QQ})::FullColumnFactor{QQ}
+function _factor_fullcolumnQQ(B::AbstractMatrix{<:QQ})::FullColumnFactor{QQ}
     m, n = size(B)
     n == 0 && return FullColumnFactor{QQ}(Int[], Matrix{QQ}(I, 0, 0))
 
-    rows = collect(pivot_columnsQQ(transpose(B)))
+    rows = collect(_pivot_columnsQQ(transpose(B)))
     if length(rows) != n
-        error("solve_fullcolumnQQ: expected full column rank, got rank $(length(rows)) < $n")
+        error("_solve_fullcolumnQQ: expected full column rank, got rank $(length(rows)) < $n")
     end
 
     Bsub = Matrix{QQ}(B[rows, :])
@@ -3068,7 +4311,7 @@ function _solve_fullcolumn_rrefQQ(B::AbstractMatrix{<:QQ}, Y::AbstractVecOrMat{<
     end
 
     By = hcat(Matrix{QQ}(B), Matrix{QQ}(Ymat))
-    R, pivs = rrefQQ(By)
+    R, pivs = _rrefQQ(By)
 
     for j in 1:n
         (j in pivs) || error("expected full column rank; missing pivot in column $j")
@@ -3121,14 +4364,14 @@ function _solve_fullcolumn_factorQQ(B::AbstractMatrix{<:QQ}, fac::FullColumnFact
 end
 
 """
-    solve_fullcolumnQQ(B, Y; cache=true, factor=nothing, check_rhs=true)
+    _solve_fullcolumnQQ(B, Y; cache=true, factor=nothing, check_rhs=true)
 
 Solve `B*X = Y` over QQ under the assumption that B has full column rank.
 
 If cache=true, a reusable factor is used; for mutable B (e.g. Matrix) it is cached
 so repeated solves do not redo elimination.
 """
-function solve_fullcolumnQQ(B::AbstractMatrix{<:QQ}, Y::AbstractVecOrMat{<:QQ};
+function _solve_fullcolumnQQ(B::AbstractMatrix{<:QQ}, Y::AbstractVecOrMat{<:QQ};
                             cache::Bool=true,
                             factor::Union{Nothing,FullColumnFactor{QQ}}=nothing,
                             check_rhs::Bool=true)
@@ -3137,10 +4380,10 @@ function solve_fullcolumnQQ(B::AbstractMatrix{<:QQ}, Y::AbstractVecOrMat{<:QQ};
         if fac === nothing
             if _can_weak_cache_key(B)
                 fac = get!(_FULLCOLUMN_FACTOR_CACHE, B) do
-                    factor_fullcolumnQQ(B)
+                    _factor_fullcolumnQQ(B)
                 end
             else
-                fac = factor_fullcolumnQQ(B)
+                fac = _factor_fullcolumnQQ(B)
             end
         end
         return _solve_fullcolumn_factorQQ(B, fac, Y; check_rhs=check_rhs)
@@ -3150,11 +4393,11 @@ function solve_fullcolumnQQ(B::AbstractMatrix{<:QQ}, Y::AbstractVecOrMat{<:QQ};
 end
 
 """
-    clear_fullcolumn_cache!()
+    _clear_fullcolumn_cache!()
 
 Drop cached FullColumnFactor objects (useful in long sessions).
 """
-function clear_fullcolumn_cache!()
+function _clear_fullcolumn_cache!()
     empty!(_FULLCOLUMN_FACTOR_CACHE)
     empty!(_NEMO_FULLCOLUMN_FACTOR_CACHE_QQ)
     empty!(_NEMO_FULLCOLUMN_FACTOR_CACHE_FP)
@@ -3302,7 +4545,7 @@ end
 # cache-unfriendly.  The code below replaces that representation with:
 #
 #   * SparseRow{K}: sorted (col, val) vectors for each row.
-#   * SparseRREF{K}: a streaming RREF builder using merge-based sparse axpy.
+#   * _SparseRREF{K}: a streaming RREF builder using merge-based sparse axpy.
 #
 # This layer is internal but sits on several hot paths (Hom computations,
 # derived-functor lifting, and sparse linear solves).  Keeping it allocation-
@@ -3311,13 +4554,13 @@ end
 
 
 
-function rankQQ(A::SparseMatrixCSC{QQ,Int})
+function _rankQQ(A::SparseMatrixCSC{QQ,Int})
     m, n = size(A)
     if m == 0 || n == 0
         return 0
     end
 
-    R = SparseRREF{QQ}(n)
+    R = _SparseRREF{QQ}(n)
     rows = _sparse_rows(A)
 
     maxrank = min(m, n)
@@ -3443,9 +4686,9 @@ function _solve_fullcolumn_modp(B::AbstractMatrix{QQ}, Y::AbstractVecOrMat{QQ}, 
     return want_vec ? vec(X) : X
 end
 
-function nullspaceQQ(A::SparseMatrixCSC{QQ,Int})
+function _nullspaceQQ(A::SparseMatrixCSC{QQ,Int})
     m, n = size(A)
-    R = SparseRREF{QQ}(n)
+    R = _SparseRREF{QQ}(n)
     rows = _sparse_rows(A)
     for i in 1:m
         _sparse_rref_push_homogeneous!(R, rows[i])
@@ -3454,12 +4697,12 @@ function nullspaceQQ(A::SparseMatrixCSC{QQ,Int})
 end
 
 # Avoid densification for transpose/adjoint sparse wrappers
-nullspaceQQ(A::Transpose{QQ,<:SparseMatrixCSC{QQ,Int}}) = nullspaceQQ(sparse(A))
-nullspaceQQ(A::Adjoint{QQ,<:SparseMatrixCSC{QQ,Int}})  = nullspaceQQ(sparse(A))
-rankQQ(A::Transpose{QQ,<:SparseMatrixCSC{QQ,Int}}) = rankQQ(sparse(A))
-rankQQ(A::Adjoint{QQ,<:SparseMatrixCSC{QQ,Int}})  = rankQQ(sparse(A))
+_nullspaceQQ(A::Transpose{QQ,<:SparseMatrixCSC{QQ,Int}}) = _nullspaceQQ(sparse(A))
+_nullspaceQQ(A::Adjoint{QQ,<:SparseMatrixCSC{QQ,Int}})  = _nullspaceQQ(sparse(A))
+_rankQQ(A::Transpose{QQ,<:SparseMatrixCSC{QQ,Int}}) = _rankQQ(sparse(A))
+_rankQQ(A::Adjoint{QQ,<:SparseMatrixCSC{QQ,Int}})  = _rankQQ(sparse(A))
 
-function rankQQ_restricted(
+function _rankQQ_restricted(
     A::SparseMatrixCSC{QQ,Int},
     rows::AbstractVector{Int},
     cols::AbstractVector{Int};
@@ -3504,7 +4747,7 @@ function rankQQ_restricted(
         end
     end
 
-    R = SparseRREF{QQ}(nc)
+    R = _SparseRREF{QQ}(nc)
     maxrank = min(nr, nc)
     for i in 1:nr
         _sparse_rref_push_homogeneous!(R, SparseRow{QQ}(row_idx[i], row_val[i]))
@@ -3557,7 +4800,7 @@ function _rank_restricted_sparse_generic(
         end
     end
 
-    R = SparseRREF{K}(nc)
+    R = _SparseRREF{K}(nc)
     maxrank = min(nr, nc)
     for i in 1:nr
         _sparse_rref_push_homogeneous!(R, SparseRow{K}(row_idx[i], row_val[i]))
@@ -3638,13 +4881,13 @@ end
 
 
 """
-    rank_modp_sparse(A::SparseMatrixCSC{QQ}, p::Int) -> Int
+    _rank_modp_sparse(A::SparseMatrixCSC{QQ}, p::Int) -> Int
 
 Compute the rank of a sparse QQ-matrix after reducing coefficients modulo `p`.
 
 This is intended as a *fast certificate/diagnostic* tool:
-- For matrices with integer coefficients, rank_modp_sparse(A,p) <= rankQQ(A).
-- If rank_modp_sparse(A,p) == ncols(A), then A has full column rank over QQ.
+- For matrices with integer coefficients, _rank_modp_sparse(A,p) <= _rankQQ(A).
+- If _rank_modp_sparse(A,p) == ncols(A), then A has full column rank over QQ.
 
 Notes
 - Choose `p` as a reasonably large prime (e.g. around 1e6) to reduce the chance
@@ -3652,7 +4895,7 @@ Notes
 - If any denominator in A is divisible by p, reduction is undefined and this
   function throws DomainError.
 """
-function rank_modp_sparse(A::SparseMatrixCSC{QQ,Int}, p::Int)::Int
+function _rank_modp_sparse(A::SparseMatrixCSC{QQ,Int}, p::Int)::Int
     m, n = size(A)
     if m == 0 || n == 0
         return 0
@@ -3773,12 +5016,12 @@ const DEFAULT_MODULAR_PRIMES = Int[
 ]
 
 """
-    rank_modp_dense(A::AbstractMatrix{QQ}, p::Int) -> Int
+    _rank_modp_dense(A::AbstractMatrix{QQ}, p::Int) -> Int
 
 Rank over F_p for dense matrices by Gaussian elimination.
-Used by rankQQ_dim for fast dimension computations.
+Used by _rankQQ_dim for fast dimension computations.
 """
-function rank_modp_dense(A::AbstractMatrix{QQ}, p::Int)::Int
+function _rank_modp_dense(A::AbstractMatrix{QQ}, p::Int)::Int
     m, n = size(A)
     (m == 0 || n == 0) && return 0
 
@@ -3842,10 +5085,10 @@ function rank_modp_dense(A::AbstractMatrix{QQ}, p::Int)::Int
     return r
 end
 
-rank_modp(A::AbstractMatrix{QQ}, p::Int) = rank_modp_dense(A, p)
-rank_modp(A::SparseMatrixCSC{QQ,Int}, p::Int) = rank_modp_sparse(A, p)
-rank_modp(A::Transpose{QQ,<:SparseMatrixCSC{QQ,Int}}, p::Int) = rank_modp_sparse(sparse(A), p)
-rank_modp(A::Adjoint{QQ,<:SparseMatrixCSC{QQ,Int}}, p::Int)  = rank_modp_sparse(sparse(A), p)
+_rank_modp(A::AbstractMatrix{QQ}, p::Int) = _rank_modp_dense(A, p)
+_rank_modp(A::SparseMatrixCSC{QQ,Int}, p::Int) = _rank_modp_sparse(A, p)
+_rank_modp(A::Transpose{QQ,<:SparseMatrixCSC{QQ,Int}}, p::Int) = _rank_modp_sparse(sparse(A), p)
+_rank_modp(A::Adjoint{QQ,<:SparseMatrixCSC{QQ,Int}}, p::Int)  = _rank_modp_sparse(sparse(A), p)
 
 # ---------------------------------------------------------------
 # Modular nullspace / solve with rational reconstruction (QQ only)
@@ -4023,15 +5266,15 @@ function _solve_fullcolumn_modularQQ(B::AbstractMatrix{QQ}, Y::AbstractVecOrMat{
 end
 
 """
-    rankQQ_dim(A; backend=:auto, max_primes=4, primes=DEFAULT_MODULAR_PRIMES,
+    _rankQQ_dim(A; backend=:auto, max_primes=4, primes=DEFAULT_MODULAR_PRIMES,
                  small_threshold=RANKQQ_DIM_SMALL_THRESHOLD[]) -> Int
 
 Fast rank intended for dimension-only queries:
-- backend=:exact  uses exact rankQQ
+- backend=:exact  uses exact _rankQQ
 - backend=:modular uses ranks mod several primes
 - backend=:auto uses exact for small matrices, modular otherwise
 """
-function rankQQ_dim(A::AbstractMatrix{QQ};
+function _rankQQ_dim(A::AbstractMatrix{QQ};
                     backend::Symbol=:auto,
                     max_primes::Int=4,
                     primes::Vector{Int}=DEFAULT_MODULAR_PRIMES,
@@ -4039,21 +5282,21 @@ function rankQQ_dim(A::AbstractMatrix{QQ};
     m, n = size(A)
     (m == 0 || n == 0) && return 0
 
-    backend == :exact && return rankQQ(A)
+    backend == :exact && return _rankQQ(A)
 
     if backend == :auto
-        (m*n <= small_threshold) && return rankQQ(A)
+        (m*n <= small_threshold) && return _rankQQ(A)
         backend = :modular
     end
 
-    backend != :modular && error("rankQQ_dim: unsupported backend $(backend)")
+    backend != :modular && error("_rankQQ_dim: unsupported backend $(backend)")
 
     r = 0
     used = 0
     for p in primes
         used += 1
         try
-            r = max(r, rank_modp(A, p))
+            r = max(r, _rank_modp(A, p))
         catch
             continue
         end
@@ -4062,8 +5305,6 @@ function rankQQ_dim(A::AbstractMatrix{QQ};
     end
     return r
 end
-
-nullityQQ_dim(A::AbstractMatrix{QQ}; kwargs...) = size(A,2) - rankQQ_dim(A; kwargs...)
 
 function _rank_tiny_exact(A::AbstractMatrix{K}) where {K}
     m, n = size(A)
@@ -4305,11 +5546,11 @@ end
 
 function rref(field::AbstractCoeffField, A; pivots::Bool=true, backend::Symbol=:auto)
     if field isa QQField
-        trait = matrix_backend_trait(field, A; op=:rref, backend=backend)
+        trait = _matrix_backend_trait(field, A; op=:rref, backend=backend)
         if trait isa NemoMatrixBackend
             return _nemo_rref_qq_mat(_nemo_matrix(trait, field, A); pivots=pivots)
         end
-        return rrefQQ(A; pivots=pivots)
+        return _rrefQQ(A; pivots=pivots)
     end
     if field isa PrimeField && field.p == 2
         return _rref_f2(A; pivots=pivots)
@@ -4318,14 +5559,14 @@ function rref(field::AbstractCoeffField, A; pivots::Bool=true, backend::Symbol=:
         return _rref_f3(A; pivots=pivots)
     end
     if field isa PrimeField && field.p > 3
-        trait = matrix_backend_trait(field, A; op=:rref, backend=backend)
+        trait = _matrix_backend_trait(field, A; op=:rref, backend=backend)
         if trait isa NemoMatrixBackend
             return _nemo_rref_fp_mat(field, _nemo_matrix(trait, field, A); pivots=pivots)
         end
         return _rref_fp(A; pivots=pivots)
     end
     if field isa RealField
-        _ = choose_linalg_backend(field, A; op=:rref, backend=backend)
+        _ = _choose_linalg_backend(field, A; op=:rref, backend=backend)
         return _rref_float(field, A; pivots=pivots)
     end
     error("FieldLinAlg.rref: unsupported field $(typeof(field))")
@@ -4336,11 +5577,11 @@ function rank(field::AbstractCoeffField, A; backend::Symbol=:auto)
         return _rank_tiny(field, A)
     end
     if field isa QQField
-        trait = matrix_backend_trait(field, A; op=:rank, backend=backend)
+        trait = _matrix_backend_trait(field, A; op=:rank, backend=backend)
         if trait isa NemoMatrixBackend
             return _nemo_rank_qq_mat(_nemo_matrix(trait, field, A))
         end
-        return rankQQ(A)
+        return _rankQQ(A)
     end
     if field isa PrimeField && field.p == 2
         return _rank_f2(A)
@@ -4349,14 +5590,14 @@ function rank(field::AbstractCoeffField, A; backend::Symbol=:auto)
         return _rank_f3(A)
     end
     if field isa PrimeField && field.p > 3
-        trait = matrix_backend_trait(field, A; op=:rank, backend=backend)
+        trait = _matrix_backend_trait(field, A; op=:rank, backend=backend)
         if trait isa NemoMatrixBackend
             return _nemo_rank_fp_mat(field, _nemo_matrix(trait, field, A))
         end
         return _rank_fp(A)
     end
     if field isa RealField
-        be = choose_linalg_backend(field, A; op=:rank, backend=backend)
+        be = _choose_linalg_backend(field, A; op=:rank, backend=backend)
         if be == :float_dense_svd
             return _rank_float_svd(field, A)
         end
@@ -4367,18 +5608,18 @@ end
 
 function nullspace(field::AbstractCoeffField, A; backend::Symbol=:auto)
     if field isa QQField
-        trait = matrix_backend_trait(field, A; op=:nullspace, backend=backend)
+        trait = _matrix_backend_trait(field, A; op=:nullspace, backend=backend)
         if trait isa NemoMatrixBackend
             return _nemo_nullspace_qq_mat(_nemo_matrix(trait, field, A))
         end
-        be = choose_linalg_backend(field, A; op=:nullspace, backend=backend)
+        be = _choose_linalg_backend(field, A; op=:nullspace, backend=backend)
         if be == :modular
             if !(A isa SparseMatrixCSC)
                 N = _nullspace_modularQQ(A)
                 N === nothing || return N
             end
         end
-        return nullspaceQQ(A)
+        return _nullspaceQQ(A)
     end
     if field isa PrimeField && field.p == 2
         return _nullspace_f2(A)
@@ -4387,14 +5628,14 @@ function nullspace(field::AbstractCoeffField, A; backend::Symbol=:auto)
         return _nullspace_f3(A)
     end
     if field isa PrimeField && field.p > 3
-        trait = matrix_backend_trait(field, A; op=:nullspace, backend=backend)
+        trait = _matrix_backend_trait(field, A; op=:nullspace, backend=backend)
         if trait isa NemoMatrixBackend
             return _nemo_nullspace_fp_mat(field, _nemo_matrix(trait, field, A))
         end
         return _nullspace_fp(A)
     end
     if field isa RealField
-        be = choose_linalg_backend(field, A; op=:nullspace, backend=backend)
+        be = _choose_linalg_backend(field, A; op=:nullspace, backend=backend)
         if be == :float_dense_svd
             return _nullspace_float_svd(field, A)
         end
@@ -4409,12 +5650,12 @@ end
 
 function colspace(field::AbstractCoeffField, A; backend::Symbol=:auto)
     if field isa QQField
-        trait = matrix_backend_trait(field, A; op=:colspace, backend=backend)
+        trait = _matrix_backend_trait(field, A; op=:colspace, backend=backend)
         if trait isa NemoMatrixBackend
             pivs = _nemo_pivots_mat(_nemo_matrix(trait, field, A))
             return A[:, collect(pivs)]
         end
-        return colspaceQQ(A)
+        return _colspaceQQ(A)
     end
     if field isa PrimeField && field.p == 2
         pivs = _pivot_cols_f2(A)
@@ -4425,7 +5666,7 @@ function colspace(field::AbstractCoeffField, A; backend::Symbol=:auto)
         return A[:, collect(pivs)]
     end
     if field isa PrimeField && field.p > 3
-        trait = matrix_backend_trait(field, A; op=:colspace, backend=backend)
+        trait = _matrix_backend_trait(field, A; op=:colspace, backend=backend)
         if trait isa NemoMatrixBackend
             pivs = _nemo_pivots_mat(_nemo_matrix(trait, field, A))
             return A[:, collect(pivs)]
@@ -4434,7 +5675,7 @@ function colspace(field::AbstractCoeffField, A; backend::Symbol=:auto)
         return A[:, collect(pivs)]
     end
     if field isa RealField
-        _ = choose_linalg_backend(field, A; op=:colspace, backend=backend)
+        _ = _choose_linalg_backend(field, A; op=:colspace, backend=backend)
         return _colspace_float(field, A)
     end
     error("FieldLinAlg.colspace: unsupported field $(typeof(field))")
@@ -4447,7 +5688,7 @@ function solve_fullcolumn(field::AbstractCoeffField, B, Y;
         return _solve_fullcolumn_tiny(field, B, Y; check_rhs=check_rhs)
     end
     if field isa QQField
-        be = choose_linalg_backend(field, B; op=:solve, backend=backend)
+        be = _choose_linalg_backend(field, B; op=:solve, backend=backend)
         if be == :nemo
             return _solve_fullcolumn_nemoQQ(B, Y; check_rhs=check_rhs, cache=cache, factor=factor)
         end
@@ -4457,7 +5698,7 @@ function solve_fullcolumn(field::AbstractCoeffField, B, Y;
                 X === nothing || return X
             end
         end
-        return solve_fullcolumnQQ(B, Y; check_rhs=check_rhs)
+        return _solve_fullcolumnQQ(B, Y; check_rhs=check_rhs)
     end
     if field isa PrimeField && field.p == 2
         return _solve_fullcolumn_f2(B, Y; check_rhs=check_rhs, cache=cache, factor=factor)
@@ -4466,14 +5707,14 @@ function solve_fullcolumn(field::AbstractCoeffField, B, Y;
         return _solve_fullcolumn_f3(B, Y; check_rhs=check_rhs, cache=cache, factor=factor)
     end
     if field isa PrimeField && field.p > 3
-        be = choose_linalg_backend(field, B; op=:solve, backend=backend)
+        be = _choose_linalg_backend(field, B; op=:solve, backend=backend)
         if be == :nemo
             return _solve_fullcolumn_nemo_fp(field, B, Y; check_rhs=check_rhs, cache=cache, factor=factor)
         end
         return _solve_fullcolumn_fp(B, Y; check_rhs=check_rhs)
     end
     if field isa RealField
-        be = choose_linalg_backend(field, B; op=:solve, backend=backend)
+        be = _choose_linalg_backend(field, B; op=:solve, backend=backend)
         if be == :float_sparse_qr
             Bs = B isa SparseMatrixCSC ? B : sparse(B)
             return _solve_fullcolumn_float(field, Bs, Y; check_rhs=check_rhs, cache=cache, factor=factor)
@@ -4485,7 +5726,7 @@ end
 
 function rank_dim(field::AbstractCoeffField, A; backend::Symbol=:auto, kwargs...)
     if field isa QQField
-        return rankQQ_dim(A; backend=backend, kwargs...)
+        return _rankQQ_dim(A; backend=backend, kwargs...)
     end
     if field isa PrimeField && field.p == 2
         return _rank_f2(A)
@@ -4494,14 +5735,14 @@ function rank_dim(field::AbstractCoeffField, A; backend::Symbol=:auto, kwargs...
         return _rank_f3(A)
     end
     if field isa PrimeField && field.p > 3
-        be = choose_linalg_backend(field, A; op=:rank, backend=backend)
+        be = _choose_linalg_backend(field, A; op=:rank, backend=backend)
         if be == :nemo
             return _nemo_rank(field, A)
         end
         return _rank_fp(A)
     end
     if field isa RealField
-        be = choose_linalg_backend(field, A; op=:rank, backend=backend)
+        be = _choose_linalg_backend(field, A; op=:rank, backend=backend)
         if be == :float_dense_svd
             return _rank_float_svd(field, A)
         end
@@ -4521,7 +5762,7 @@ function rank_restricted(field::AbstractCoeffField, A::SparseMatrixCSC,
         return rank(field, S; backend=backend)
     end
     if field isa QQField
-        return rankQQ_restricted(A, rows, cols; kwargs...)
+        return _rankQQ_restricted(A, rows, cols; kwargs...)
     end
     if field isa PrimeField && field.p == 2
         return _rank_restricted_f2(A, rows, cols; kwargs...)
@@ -4644,8 +5885,8 @@ end
 
 function __init__()
     _LINALG_THRESHOLDS_INITIALIZED[] && return
-    path = linalg_thresholds_path()
-    loaded = load_linalg_thresholds!(; path=path, warn_on_mismatch=true)
+    path = _linalg_thresholds_path()
+    loaded = _load_linalg_thresholds!(; path=path, warn_on_mismatch=true)
     if !loaded && !isfile(path)
         try
             autotune_linalg_thresholds!(; path=path, save=true, quiet=true, profile=:startup)

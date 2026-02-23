@@ -17,10 +17,10 @@ module IndicatorResolutions
 using SparseArrays, LinearAlgebra
 using ..FiniteFringe
 using ..IndicatorTypes: UpsetPresentation, DownsetCopresentation
-using ..CoreModules: AbstractCoeffField, RealField, ResolutionCache, ResolutionKey3, resolution_key3, coeff_type, eye, field_from_eltype
+using ..CoreModules: AbstractCoeffField, RealField, ResolutionCache, ResolutionKey3, _resolution_key3, coeff_type, eye, field_from_eltype
 using ..FieldLinAlg
 
-using ..Modules: CoverCache, cover_cache, clear_cover_cache!, get_cover_cache,
+using ..Modules: CoverCache, _get_cover_cache, _clear_cover_cache!,
                  CoverEdgeMapStore, _find_sorted_index,
                  PModule, PMorphism, dim_at,
                  zero_pmodule, zero_morphism, map_leq, id_morphism
@@ -29,7 +29,10 @@ import ..Modules: id_morphism
 import ..AbelianCategories
 using ..AbelianCategories: kernel_with_inclusion, _cokernel_module
 
-import ..FiniteFringe: AbstractPoset, FinitePoset, Upset, Downset, principal_upset, principal_downset, cover_edges, nvertices
+import ..FiniteFringe: AbstractPoset, FinitePoset, Upset, Downset,
+                       principal_upset, principal_downset,
+                       cover_edges, nvertices, leq,
+                       upset_indices, downset_indices
 import ..FiniteFringe: build_cache!
 import Base.Threads
 
@@ -136,13 +139,6 @@ function _map_leq_cached_indicator(
     Xmat = Xraw isa Matrix{K} ? Xraw : Matrix{K}(Xraw)
     return _indicator_memo_set!(memo, n, u, v, Xmat)
 end
-
-# =============================================================================
-# Public exports
-export pmodule_from_fringe, projective_cover, injective_hull,
-       upset_resolution, downset_resolution,
-       indicator_resolutions,
-       verify_upset_resolution, verify_downset_resolution
 
 id_morphism(H::FiniteFringe.FringeModule{K}) where {K} =
     id_morphism(pmodule_from_fringe(H))
@@ -319,7 +315,7 @@ function projective_cover(M::PModule{K};
     field = M.field
     Q = M.Q; n = nvertices(Q)
     build_cache!(Q; cover=true, updown=true)
-    cc = cache === nothing ? cover_cache(Q) : cache
+    cc = cache === nothing ? _get_cover_cache(Q) : cache
     map_memo = _indicator_new_array_memo(K, n)
     memos = threads && Threads.nthreads() > 1 ?
         [_indicator_new_array_memo(K, n)
@@ -511,7 +507,7 @@ end
 # Columns of the returned matrix span soc(M)_u subseteq M_u.
 function _socle_basis(M::PModule{K}, u::Int; cache::Union{Nothing,CoverCache}=nothing) where {K}
     field = M.field
-    cc = (cache === nothing ? cover_cache(M.Q) : cache)
+    cc = (cache === nothing ? _get_cover_cache(M.Q) : cache)
     su = cc.succs[u]
     du = M.dims[u]
 
@@ -567,7 +563,7 @@ function _injective_hull(M::PModule{K};
     field = M.field
     Q = M.Q; n = nvertices(Q)
     build_cache!(Q; cover=true, updown=true)
-    cc = cache === nothing ? cover_cache(Q) : cache
+    cc = cache === nothing ? _get_cover_cache(Q) : cache
     map_memo = _indicator_new_array_memo(K, n)
     memos = threads && Threads.nthreads() > 1 ?
         [_indicator_new_array_memo(K, n)
@@ -708,6 +704,19 @@ function _injective_hull(M::PModule{K};
 end
 
 """
+    injective_hull(M::PModule{K}; cache=nothing, threads=(Threads.nthreads() > 1))
+
+Build the one-step injective hull `M -> E` and return `(E, iota, gens_at_E)`.
+"""
+function injective_hull(
+    M::PModule{K};
+    cache::Union{Nothing,CoverCache}=nothing,
+    threads::Bool=(Threads.nthreads() > 1),
+) where {K}
+    return _injective_hull(M; cache=cache, threads=threads)
+end
+
+"""
     upset_presentation_one_step(Hfringe::FringeModule)
 Compute the one-step upset presentation (Def. 6.4.1):
     F1 --d1--> F0 --pi0-->> M,
@@ -715,7 +724,7 @@ and return the lightweight wrapper `UpsetPresentation{K}(P, U0, U1, delta, H)`.
 """
 function upset_presentation_one_step(H::FiniteFringe.FringeModule{K}) where {K}
     M = pmodule_from_fringe(H)          # internal PModule over K
-    cc = get_cover_cache(M.Q)
+    cc = _get_cover_cache(M.Q)
     # First step: projective cover of M
     F0, pi0, gens_at_F0 = projective_cover(M; cache=cc)
     # Kernel K1 with inclusion i1 : K1 \into F0
@@ -805,7 +814,7 @@ end
 "Outgoing coimage at u to immediate successors; basis for the span of maps M_u to oplus_{u<v} M_v."
 function _outgoing_span_basis(M::PModule{K}, u::Int; cache::Union{Nothing,CoverCache}=nothing) where {K}
     field = M.field
-    cc = (cache === nothing ? cover_cache(M.Q) : cache)
+    cc = (cache === nothing ? _get_cover_cache(M.Q) : cache)
     su = cc.succs[u]
     du = M.dims[u]
 
@@ -864,7 +873,7 @@ function downset_copresentation_one_step(H::FiniteFringe.FringeModule{K}) where 
     # Convert fringe to internal PModule over K
     M = pmodule_from_fringe(H)
     Q = M.Q; n = nvertices(Q)
-    cc = get_cover_cache(Q)
+    cc = _get_cover_cache(Q)
 
     # (1) Injective hull of M: E0 with inclusion iota0
     E0, iota0, gens_at_E0 = _injective_hull(M; cache=cc)
@@ -1548,7 +1557,7 @@ function indicator_resolutions(HM::FiniteFringe.FringeModule{K},
                                cache::Union{Nothing,ResolutionCache}=nothing) where {K}
     if cache !== nothing
         maxkey = maxlen === nothing ? -1 : Int(maxlen)
-        key = resolution_key3(HM, HN, maxkey)
+        key = _resolution_key3(HM, HN, maxkey)
         cache_val_type = Tuple{
             Vector{UpsetPresentation{K}},
             Vector{SparseMatrixCSC{K,Int}},

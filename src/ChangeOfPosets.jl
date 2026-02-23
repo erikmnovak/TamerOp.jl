@@ -30,7 +30,7 @@ using ..FieldLinAlg
 end
 
 import ..IndicatorResolutions
-using ..Modules: PModule, PMorphism, map_leq, get_cover_cache
+using ..Modules: PModule, PMorphism, map_leq, map_leq_many, _get_cover_cache
 import ..AbelianCategories: pullback
 
 using ..DerivedFunctors: projective_resolution, injective_resolution,
@@ -42,15 +42,6 @@ using ..DerivedFunctors.Functoriality: lift_chainmap
 import ..ModuleComplexes
 using ..ModuleComplexes: ModuleCochainComplex, ModuleCochainMap,
                          cohomology_module, induced_map_on_cohomology_modules
-
-export restriction,
-       pushforward_left, pushforward_right,
-       left_kan_extension, right_kan_extension,
-       Lpushforward_left, Rpushforward_right,
-       derived_pushforward_left, derived_pushforward_right,
-       pushforward_left_complex, pushforward_right_complex,
-       product_poset,
-       encode_pmodules_to_common_poset
 
 # -----------------------------------------------------------------------------
 # Utilities: compatibility, monotonicity, terminal/initial detection
@@ -157,7 +148,7 @@ end
 #     (which would allocate tons of identity matrices). We reuse identity matrices
 #     and reuse the original cover-edge maps by reference.
 #
-# This is meant as a convenience layer (similar UX to encode_pmodules_from_flanges / PL_fringes):
+# This is meant as a convenience layer for common-poset workflows:
 #     P, Ms, pi1, pi2 = encode_pmodules_to_common_poset(M1, M2)
 #     H = Hom(Ms[1], Ms[2])
 
@@ -579,11 +570,22 @@ end
     edge_maps_out = Dict{Tuple{Int,Int}, AbstractMatrix{K}}()
     sizehint!(edge_maps_out, length(C))
 
+    edge_keys = Tuple{Int,Int}[]
+    pairs = Tuple{Int,Int}[]
+    sizehint!(edge_keys, length(C))
+    sizehint!(pairs, length(C))
+
     @inbounds for (u, v) in C
         iu = pi.pi_of_q[u]
         iv = pi.pi_of_q[v]
+        push!(edge_keys, (u, v))
         # If pi is monotone, iu <= iv in P and map_leq is defined.
-        edge_maps_out[(u, v)] = map_leq(M, iu, iv)
+        push!(pairs, (iu, iv))
+    end
+
+    maps = map_leq_many(M, pairs)
+    @inbounds for i in eachindex(edge_keys)
+        edge_maps_out[edge_keys[i]] = maps[i]
     end
 
     return PModule{K}(Q, dims_out, edge_maps_out; field=M.field)
@@ -723,7 +725,7 @@ function _left_kan_data(pi::EncodingMap, M::PModule{K};
     maps_to_succ = store.maps_to_succ
 
     # Build once; reused many times in the terminal-object fast path.
-    cacheQ = get_cover_cache(Q)
+    cacheQ = _get_cover_cache(Q)
 
     idxs = _index_sets_left(pi)
 
@@ -759,23 +761,34 @@ function _left_kan_data(pi::EncodingMap, M::PModule{K};
                 Wp[oq + j, j] = one(K)
             end
 
-            # L: send each summand M(q) to M(qmax) via map_leq(q -> qmax)
+            nonmax = Int[]
+            pairs = Tuple{Int,Int}[]
             for q in ip
                 dq = d[q]
                 dq == 0 && continue
-                oq = offp[q]
                 if q == qmax
+                    oq = offp[q]
                     for j in 1:Vp
                         Lp[j, oq + j] = one(K)
                     end
                 else
-                    A = map_leq(M, q, qmax; cache=cacheQ)
-                    @inbounds for i in 1:Vp
-                        for j in 1:dq
-                            v = A[i,j]
-                            if v != 0
-                                Lp[i, oq + j] = v
-                            end
+                    push!(nonmax, q)
+                    push!(pairs, (q, qmax))
+                end
+            end
+
+            # L: send each summand M(q) to M(qmax) via map_leq(q -> qmax)
+            maps = map_leq_many(M, pairs; cache=cacheQ)
+            @inbounds for idx in eachindex(nonmax)
+                q = nonmax[idx]
+                dq = d[q]
+                oq = offp[q]
+                A = maps[idx]
+                for i in 1:Vp
+                    for j in 1:dq
+                        v = A[i, j]
+                        if v != 0
+                            Lp[i, oq + j] = v
                         end
                     end
                 end
@@ -1096,7 +1109,7 @@ function _right_kan_data(pi::EncodingMap, M::PModule{K};
     maps_to_succ = store.maps_to_succ
 
     # Build once; reused many times in the terminal-object fast path.
-    cacheQ = get_cover_cache(Q)
+    cacheQ = _get_cover_cache(Q)
 
     idxs = _index_sets_right(pi)
 
@@ -1126,6 +1139,8 @@ function _right_kan_data(pi::EncodingMap, M::PModule{K};
             Kp = zeros(K, Sp, Vp)
             Lp = zeros(K, Vp, Sp)
 
+            nonmin = Int[]
+            pairs = Tuple{Int,Int}[]
             # K: cone embedding M(qmin) -> oplus_{q in jp} M(q), q component is map(qmin->q).
             for q in jp
                 dq = d[q]
@@ -1136,13 +1151,22 @@ function _right_kan_data(pi::EncodingMap, M::PModule{K};
                         Kp[oq + j, j] = one(K)
                     end
                 else
-                    A = map_leq(M, qmin, q; cache=cacheQ)
-                    @inbounds for i in 1:dq
-                        for j in 1:Vp
-                            v = A[i,j]
-                            if v != 0
-                                Kp[oq + i, j] = v
-                            end
+                    push!(nonmin, q)
+                    push!(pairs, (qmin, q))
+                end
+            end
+
+            maps = map_leq_many(M, pairs; cache=cacheQ)
+            @inbounds for idx in eachindex(nonmin)
+                q = nonmin[idx]
+                dq = d[q]
+                oq = offp[q]
+                A = maps[idx]
+                for i in 1:dq
+                    for j in 1:Vp
+                        v = A[i, j]
+                        if v != 0
+                            Kp[oq + i, j] = v
                         end
                     end
                 end

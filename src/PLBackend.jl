@@ -24,6 +24,7 @@ using ..FiniteFringe
 import ..FiniteFringe: AbstractPoset, nvertices
 import ..ZnEncoding: SignaturePoset
 using ..CoreModules: QQ, AbstractPLikeEncodingMap, EncodingOptions, CompiledEncoding, validate_pl_mode
+using ..CoreModules.CoeffFields: QQField
 using Random
 using LinearAlgebra
 
@@ -32,8 +33,6 @@ import ..RegionGeometry: region_weights, region_bbox, region_diameter, region_ad
                          region_boundary_measure, region_boundary_measure_breakdown,
                          region_centroid, region_principal_directions,
                          region_chebyshev_ball, region_circumradius, region_mean_width
-
-export BoxUpset, BoxDownset, PLEncodingMapBoxes, encode_fringe_boxes
 
 # ------------------------------- Shapes ---------------------------------------
 
@@ -2059,7 +2058,7 @@ function encode_fringe_boxes(Ups::Vector{BoxUpset},
     end
     Uhat, Dhat = _images_on_P(P, sig_y, sig_z)
     Phi = _monomialize_phi(Phi_in, Uhat, Dhat)
-    H = FiniteFringe.FringeModule{QQ}(P, Uhat, Dhat, Phi)
+    H = FiniteFringe.FringeModule{QQ}(P, Uhat, Dhat, Phi; field=QQField())
 
     pi = PLEncodingMapBoxes{n,MY,MZ}(n,
                                   coords,

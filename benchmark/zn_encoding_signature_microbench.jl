@@ -8,6 +8,10 @@
 #   2) cover-edge iteration (`for (u,v) in cover_edges(Q)`) vs dense scan baseline (`if C[u,v]`).
 #   3) `pmodule_on_box` incremental membership + basis cache, compared to a naive
 #      per-cell full-scan baseline.
+#   4) Flange `dim_at` default auto path (size-aware), compared to the old
+#      always-submatrix materialization path.
+#   5) Flange `degree_matrix!` buffer-reuse paths, compared to allocating
+#      `degree_matrix` calls.
 #
 # Scope
 # - Uses a deterministic synthetic Z^n flange fixture.
@@ -19,6 +23,7 @@
 #   julia --project=. benchmark/zn_encoding_signature_microbench.jl --reps=12 --nqueries=30000 --grid=18
 #   julia --project=. benchmark/zn_encoding_signature_microbench.jl --pmodule=1 --pmodule_reps=4
 #   julia --project=. benchmark/zn_encoding_signature_microbench.jl --pmodule_all_fields=1
+#   julia --project=. benchmark/zn_encoding_signature_microbench.jl --flange_degree_matrix=1 --flange_degree_matrix_reps=6
 
 using Random
 
@@ -225,6 +230,121 @@ function _run_pmodule_bench(; reps::Int=4, ncuts::Int=8, all_fields::Bool=false)
     end
 end
 
+@inline function _dim_at_submatrix_old(FG::FZ.Flange{K}, g::NTuple{N,Int}) where {K,N}
+    rows = FZ.active_injectives(FG.injectives, g)
+    cols = FZ.active_flats(FG.flats, g)
+    if isempty(rows) || isempty(cols)
+        return 0
+    end
+    return PM.FieldLinAlg.rank(FG.field, FG.phi[rows, cols])
+end
+
+function _sample_box_points(a::NTuple{N,Int}, b::NTuple{N,Int}, nqueries::Int, rng::AbstractRNG) where {N}
+    out = Vector{NTuple{N,Int}}(undef, nqueries)
+    @inbounds for i in 1:nqueries
+        out[i] = ntuple(k -> rand(rng, a[k]:b[k]), N)
+    end
+    return out
+end
+
+function _run_flange_dimat_bench(; reps::Int=8, nqueries::Int=20_000, ncuts::Int=10)
+    println("\nFlange dim_at benchmark (auto path vs always-submatrix baseline)")
+    println("reps=$(reps), nqueries=$(nqueries), ncuts=$(ncuts)\n")
+    cases = [("friendly", _flange_fixture_cache_friendly), ("adversarial", _flange_fixture_adversarial)]
+    for (fname, field) in [("qq", CM.QQField()), ("f2", CM.F2())]
+        println("field=$(fname)")
+        for (cname, mk) in cases
+            FG, a, b = mk(field; ncuts=ncuts)
+            rng = Random.MersenneTwister(hash((fname, cname, nqueries)))
+            queries = _sample_box_points(a, b, nqueries, rng)
+
+            # parity check before timing
+            @inbounds for g in queries
+                FZ.dim_at(FG, g) == _dim_at_submatrix_old(FG, g) ||
+                    error("dim_at parity failed for field=$(fname), case=$(cname)")
+            end
+
+            bnew = _bench("dim_at auto ($cname)", () -> begin
+                s = 0
+                @inbounds for g in queries
+                    s += FZ.dim_at(FG, g)
+                end
+                s
+            end; reps=reps)
+
+            bold = _bench("dim_at submatrix old ($cname)", () -> begin
+                s = 0
+                @inbounds for g in queries
+                    s += _dim_at_submatrix_old(FG, g)
+                end
+                s
+            end; reps=reps)
+
+            println("  speedup old/auto: ", round(bold.ms / bnew.ms, digits=3), "x")
+            println("  alloc ratio old/auto: ", round(bold.kib / max(1e-9, bnew.kib), digits=3), "x")
+        end
+        println()
+    end
+end
+
+function _run_flange_degree_matrix_bench(; reps::Int=8, nqueries::Int=20_000, ncuts::Int=10)
+    println("\nFlange degree_matrix benchmark (allocating vs reuse)")
+    println("reps=$(reps), nqueries=$(nqueries), ncuts=$(ncuts)\n")
+    cases = [("friendly", _flange_fixture_cache_friendly), ("adversarial", _flange_fixture_adversarial)]
+    for (fname, field) in [("qq", CM.QQField()), ("f2", CM.F2())]
+        println("field=$(fname)")
+        for (cname, mk) in cases
+            FG, a, b = mk(field; ncuts=ncuts)
+            rng = Random.MersenneTwister(hash((fname, cname, nqueries, :degree_matrix)))
+            queries = _sample_box_points(a, b, nqueries, rng)
+
+            @inbounds for g in queries
+                A_alloc, rows_alloc, cols_alloc = FZ.degree_matrix(FG, g)
+                A_reuse, rows_reuse, cols_reuse = FZ.degree_matrix!(Int[], Int[], FG, g)
+                Matrix(A_alloc) == Matrix(A_reuse) ||
+                    error("degree_matrix parity failed for field=$(fname), case=$(cname)")
+                rows_alloc == rows_reuse || error("rows parity failed for field=$(fname), case=$(cname)")
+                cols_alloc == cols_reuse || error("cols parity failed for field=$(fname), case=$(cname)")
+            end
+
+            b_alloc = _bench("degree_matrix alloc ($cname)", () -> begin
+                s = 0
+                @inbounds for g in queries
+                    A, rows, cols = FZ.degree_matrix(FG, g)
+                    s += size(A, 1) + size(A, 2) + length(rows) + length(cols)
+                end
+                s
+            end; reps=reps)
+
+            rows_buf = Int[]
+            cols_buf = Int[]
+            b_reuse = _bench("degree_matrix! caller buffers ($cname)", () -> begin
+                s = 0
+                @inbounds for g in queries
+                    A, rows, cols = FZ.degree_matrix!(rows_buf, cols_buf, FG, g)
+                    s += size(A, 1) + size(A, 2) + length(rows) + length(cols)
+                end
+                s
+            end; reps=reps)
+
+            b_scratch = _bench("degree_matrix! thread scratch ($cname)", () -> begin
+                s = 0
+                @inbounds for g in queries
+                    A, rows, cols = FZ.degree_matrix!(FG, g)
+                    s += size(A, 1) + size(A, 2) + length(rows) + length(cols)
+                end
+                s
+            end; reps=reps)
+
+            println("  speedup alloc/reuse: ", round(b_alloc.ms / b_reuse.ms, digits=3), "x")
+            println("  speedup alloc/scratch: ", round(b_alloc.ms / b_scratch.ms, digits=3), "x")
+            println("  alloc ratio alloc/reuse: ", round(b_alloc.kib / max(1e-9, b_reuse.kib), digits=3), "x")
+            println("  alloc ratio alloc/scratch: ", round(b_alloc.kib / max(1e-9, b_scratch.kib), digits=3), "x")
+        end
+        println()
+    end
+end
+
 function _random_face(n::Int, rng::AbstractRNG)
     mask = falses(n)
     @inbounds for i in 1:n
@@ -318,6 +438,9 @@ function _edge_iterator_count(Q)
 end
 
 function main(; reps::Int=10, nqueries::Int=20_000, grid::Int=18,
+              flange_dimat::Bool=true, flange_dimat_reps::Int=8, flange_dimat_ncuts::Int=10,
+              flange_degree_matrix::Bool=true, flange_degree_matrix_reps::Int=8,
+              flange_degree_matrix_ncuts::Int=10,
               pmodule::Bool=true, pmodule_reps::Int=4, pmodule_ncuts::Int=8,
               pmodule_all_fields::Bool=false)
     fx = _fixture(; reps_box=grid)
@@ -375,6 +498,15 @@ function main(; reps::Int=10, nqueries::Int=20_000, grid::Int=18,
     println("build tuple / packed:  ", round(b4.ms / b3.ms, digits=3), "x")
     println("dense scan / iterator: ", round(b6.ms / b5.ms, digits=3), "x")
 
+    if flange_dimat
+        _run_flange_dimat_bench(; reps=flange_dimat_reps, nqueries=nqueries, ncuts=flange_dimat_ncuts)
+    end
+
+    if flange_degree_matrix
+        _run_flange_degree_matrix_bench(; reps=flange_degree_matrix_reps, nqueries=nqueries,
+                                        ncuts=flange_degree_matrix_ncuts)
+    end
+
     if pmodule
         _run_pmodule_bench(; reps=pmodule_reps, ncuts=pmodule_ncuts, all_fields=pmodule_all_fields)
     end
@@ -384,11 +516,22 @@ if abspath(PROGRAM_FILE) == @__FILE__
     reps = _parse_arg(ARGS, "--reps", 10)
     nqueries = _parse_arg(ARGS, "--nqueries", 20_000)
     grid = _parse_arg(ARGS, "--grid", 18)
+    flange_dimat = _parse_bool(ARGS, "--flange_dimat", true)
+    flange_dimat_reps = _parse_arg(ARGS, "--flange_dimat_reps", 8)
+    flange_dimat_ncuts = _parse_arg(ARGS, "--flange_dimat_ncuts", 10)
+    flange_degree_matrix = _parse_bool(ARGS, "--flange_degree_matrix", true)
+    flange_degree_matrix_reps = _parse_arg(ARGS, "--flange_degree_matrix_reps", 8)
+    flange_degree_matrix_ncuts = _parse_arg(ARGS, "--flange_degree_matrix_ncuts", 10)
     pmodule = _parse_bool(ARGS, "--pmodule", true)
     pmodule_reps = _parse_arg(ARGS, "--pmodule_reps", 4)
     pmodule_ncuts = _parse_arg(ARGS, "--pmodule_ncuts", 8)
     pmodule_all_fields = _parse_bool(ARGS, "--pmodule_all_fields", false)
     main(; reps=reps, nqueries=nqueries, grid=grid,
+         flange_dimat=flange_dimat, flange_dimat_reps=flange_dimat_reps,
+         flange_dimat_ncuts=flange_dimat_ncuts,
+         flange_degree_matrix=flange_degree_matrix,
+         flange_degree_matrix_reps=flange_degree_matrix_reps,
+         flange_degree_matrix_ncuts=flange_degree_matrix_ncuts,
          pmodule=pmodule, pmodule_reps=pmodule_reps,
          pmodule_ncuts=pmodule_ncuts, pmodule_all_fields=pmodule_all_fields)
 end

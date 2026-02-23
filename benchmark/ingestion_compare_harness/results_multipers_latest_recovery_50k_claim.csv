@@ -1,0 +1,4 @@
+tool,case_id,regime,n_points,ambient_dim,max_dim,cold_ms,cold_alloc_kib,warm_median_ms,warm_p90_ms,warm_alloc_median_kib,simplex_count,edge_count,max_simplex_dim,notes,timestamp_utc
+multipers,claim_n50000_d2_s11,claim_matching,50000,2,1,4699.916507001035,,4862.346943496959,5095.236538996687,,440039,,1,"kwargs={'builder': 'gudhi_rips_radius', 'radius': 0.0117889611819, 'max_dim': 1}",2026-02-22T05:51:42.562496+00:00
+multipers,claim_n50000_d2_s17,claim_matching,50000,2,1,5039.179991988931,,5351.134917495074,5709.031887003221,,416491,,1,"kwargs={'builder': 'gudhi_rips_radius', 'radius': 0.0114530131595, 'max_dim': 1}",2026-02-22T05:51:58.442706+00:00
+multipers,claim_n50000_d8_s11,claim_matching,50000,8,1,11893.730705982307,,7684.718126503867,8319.121312990319,,567437,,1,"kwargs={'builder': 'gudhi_rips_radius', 'radius': 0.276871438665, 'max_dim': 1}",2026-02-22T05:52:25.862076+00:00

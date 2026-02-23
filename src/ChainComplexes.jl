@@ -5,7 +5,7 @@ using SparseArrays
 import Base.Threads
 
 using ..CoreModules: AbstractCoeffField, RealField, coeff_type, field_from_eltype
-using ..FieldLinAlg: SparseRow, SparseRREFAugmented, _sparse_rref_push_augmented!
+using ..FieldLinAlg: SparseRow, _SparseRREFAugmented, _sparse_rref_push_augmented!
 using ..FieldLinAlg
 
 # ----------------------------
@@ -111,7 +111,7 @@ Return `nothing` if the system is inconsistent.
 Performance notes:
 - Does not materialize `A` as dense.
 - Iterates rows of `A` via `transpose(A)` (so rows become CSC columns) and streams the resulting
-  sparse equations into a sparse RREF builder (`FieldLinAlg.SparseRREFAugmented`).
+  sparse equations into a sparse RREF builder (`FieldLinAlg._SparseRREFAugmented`).
 """
 function solve_particular(A::SparseMatrixCSC{K,Int}, B::AbstractMatrix{K}) where {K}
     field = _field_of(B)
@@ -129,7 +129,7 @@ function solve_particular(A::SparseMatrixCSC{K,Int}, B::AbstractMatrix{K}) where
     rowval = At.rowval
     nzval = At.nzval
 
-    R = SparseRREFAugmented{K}(n, nrhs)
+    R = _SparseRREFAugmented{K}(n, nrhs)
     row = SparseRow{K}()
     rhs = Vector{K}(undef, nrhs)
 

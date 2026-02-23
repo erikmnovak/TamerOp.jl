@@ -38,11 +38,11 @@ K = CM.coeff_type(field)
     @test !Cprod[idxp(1, 1), idxp(2, 2)]
 end
 
-@testset "upset_iter/downset_iter parity" begin
+@testset "upset_indices/downset_indices contract" begin
     P = chain_poset(5)
     for i in 1:FF.nvertices(P)
-        @test collect(FF.upset_iter(P, i)) == collect(FF.upset_indices(P, i))
-        @test collect(FF.downset_iter(P, i)) == collect(FF.downset_indices(P, i))
+        @test collect(FF.upset_indices(P, i)) == collect(i:FF.nvertices(P))
+        @test collect(FF.downset_indices(P, i)) == collect(1:i)
     end
 end
 
@@ -144,6 +144,57 @@ end
     @test C[1, 2]
     @test C[2, 3]
     @test !C[1, 3]
+end
+
+@testset "SignaturePoset upset/downset and branching covers" begin
+    sig_y = BitVector[
+        BitVector([false, false]),
+        BitVector([true,  false]),
+        BitVector([false, true]),
+        BitVector([true,  true]),
+    ]
+    sig_z = [BitVector([false]) for _ in 1:4]
+    P = PM.ZnEncoding.SignaturePoset(sig_y, sig_z)
+
+    @test collect(FF.upset_indices(P, 1)) == [1, 2, 3, 4]
+    @test collect(FF.upset_indices(P, 2)) == [2, 4]
+    @test collect(FF.upset_indices(P, 3)) == [3, 4]
+    @test collect(FF.upset_indices(P, 4)) == [4]
+
+    @test collect(FF.downset_indices(P, 1)) == [1]
+    @test collect(FF.downset_indices(P, 2)) == [1, 2]
+    @test collect(FF.downset_indices(P, 3)) == [1, 3]
+    @test collect(FF.downset_indices(P, 4)) == [1, 2, 3, 4]
+
+    C = FF.cover_edges(P)
+    @test Set(C.edges) == Set([(1, 2), (1, 3), (2, 4), (3, 4)])
+    @test C === FF.cover_edges(P)
+end
+
+@testset "Dense uptight construction skips redundant closure" begin
+    sig_y = BitVector[
+        BitVector([false, false, false]),
+        BitVector([true,  false, false]),
+        BitVector([true,  true,  false]),
+        BitVector([true,  true,  true]),
+    ]
+    sig_z = [BitVector([false]) for _ in 1:4]
+
+    function old_uptight(sig_y, sig_z)
+        n = length(sig_y)
+        L = falses(n, n)
+        for i in 1:n, j in 1:n
+            L[i, j] = PM.ZnEncoding._sig_subset(sig_y[i], sig_y[j]) &&
+                      PM.ZnEncoding._sig_subset(sig_z[i], sig_z[j])
+        end
+        for k in 1:n, i in 1:n, j in 1:n
+            L[i, j] = L[i, j] || (L[i, k] && L[k, j])
+        end
+        return L
+    end
+
+    Pdense = PM.ZnEncoding._uptight_from_signatures(sig_y, sig_z)
+    @test FF.leq_matrix(Pdense) == old_uptight(sig_y, sig_z)
 end
 
 @testset "encode_from_flanges supports poset_kind=:signature" begin

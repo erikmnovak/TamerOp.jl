@@ -96,6 +96,300 @@ with_fields(FIELDS_FULL) do field
         return [pairs[order[i]] for i in 1:nsample]
     end
 
+    function _images_on_P_closure_baseline(P::FF.AbstractPoset,
+                                           sig_y::AbstractVector{<:AbstractVector{Bool}},
+                                           sig_z::AbstractVector{<:AbstractVector{Bool}},
+                                           flat_idxs::AbstractVector{<:Integer},
+                                           inj_idxs::AbstractVector{<:Integer})
+        m = length(flat_idxs)
+        r = length(inj_idxs)
+        n = FF.nvertices(P)
+        Uhat = Vector{FF.Upset}(undef, m)
+        Dhat = Vector{FF.Downset}(undef, r)
+
+        @inbounds for (loc, i0) in enumerate(flat_idxs)
+            i = Int(i0)
+            mask = falses(n)
+            for t in 1:n
+                mask[t] = sig_y[t][i]
+            end
+            Uhat[loc] = FF.upset_closure(P, mask)
+        end
+        @inbounds for (loc, j0) in enumerate(inj_idxs)
+            j = Int(j0)
+            mask = falses(n)
+            for t in 1:n
+                mask[t] = !sig_z[t][j]
+            end
+            Dhat[loc] = FF.downset_closure(P, mask)
+        end
+        return Uhat, Dhat
+    end
+
+    function _module_equal_on_covers(M1, M2, field)
+        @test M1.Q === M2.Q
+        @test M1.dims == M2.dims
+        for (u, v) in FF.cover_edges(M1.Q)
+            A = M1.edge_maps[u, v]
+            B = M2.edge_maps[u, v]
+            if field isa CM.RealField
+                @test isapprox(A, B; rtol=1e-8, atol=1e-10)
+            else
+                @test A == B
+            end
+        end
+    end
+
+    @testset "ZnEncoding _images_on_P matches closure baseline" begin
+        tau = FZ.face(2, [false, false])
+        flats = [
+            FZ.IndFlat(tau, [0, 0]; id=:F1),
+            FZ.IndFlat(tau, [1, 0]; id=:F2),
+            FZ.IndFlat(tau, [0, 1]; id=:F3),
+        ]
+        injectives = [
+            FZ.IndInj(tau, [1, 1]; id=:E1),
+            FZ.IndInj(tau, [2, 0]; id=:E2),
+        ]
+        phi = Matrix{K}(I, length(injectives), length(flats))
+        FG = FZ.Flange{K}(2, flats, injectives, phi; field=field)
+        opts = PM.EncodingOptions(backend=:zn, max_regions=512)
+        P, pi = ZE.encode_poset_from_flanges(FG, opts; poset_kind=:signature)
+
+        flat_index, inj_index = ZE._generator_index_dicts(pi.flats, pi.injectives)
+        flat_idxs = [flat_index[ZE._flat_key(F)] for F in FG.flats]
+        inj_idxs = [inj_index[ZE._inj_key(E)] for E in FG.injectives]
+
+        Unew, Dnew = ZE._images_on_P(P, pi.sig_y, pi.sig_z, flat_idxs, inj_idxs)
+        Uold, Dold = _images_on_P_closure_baseline(P, pi.sig_y, pi.sig_z, flat_idxs, inj_idxs)
+
+        @test length(Unew) == length(Uold)
+        @test length(Dnew) == length(Dold)
+        @test [U.mask for U in Unew] == [U.mask for U in Uold]
+        @test [D.mask for D in Dnew] == [D.mask for D in Dold]
+
+        for U in Unew
+            @test U.mask == FF.upset_closure(P, copy(U.mask)).mask
+        end
+        for D in Dnew
+            @test D.mask == FF.downset_closure(P, copy(D.mask)).mask
+        end
+    end
+
+    @testset "ZnEncoding strict pushforward cache is built and reused" begin
+        tau = FZ.face(2, [false, false])
+        flats = [
+            FZ.IndFlat(tau, [0, 0]; id=:F1),
+            FZ.IndFlat(tau, [1, 0]; id=:F2),
+        ]
+        injectives = [
+            FZ.IndInj(tau, [1, 1]; id=:E1),
+            FZ.IndInj(tau, [2, 0]; id=:E2),
+        ]
+        phi = reshape([c(1), c(0), c(0), c(1)], 2, 2)
+        FG = FZ.Flange{K}(2, flats, injectives, phi; field=field)
+        opts = PM.EncodingOptions(backend=:zn, max_regions=512)
+        P, pi = ZE.encode_poset_from_flanges(FG, opts; poset_kind=:signature)
+
+        @test pi.pushforward_cache.flat_index === nothing
+        @test pi.pushforward_cache.inj_index === nothing
+        @test pi.pushforward_cache.flat_masks === nothing
+        @test pi.pushforward_cache.inj_masks === nothing
+        @test isempty(pi.pushforward_cache.plan_by_flange)
+
+        H1 = ZE._pushforward_flange_to_fringe(P, pi, FG; strict=true)
+        @test pi.pushforward_cache.flat_index !== nothing
+        @test pi.pushforward_cache.inj_index !== nothing
+        @test pi.pushforward_cache.flat_masks !== nothing
+        @test pi.pushforward_cache.inj_masks !== nothing
+        fkey = ZE._flange_fingerprint(FG)
+        @test haskey(pi.pushforward_cache.plan_by_flange, fkey)
+        fi_ref = pi.pushforward_cache.flat_index
+        ji_ref = pi.pushforward_cache.inj_index
+        fm_ref = pi.pushforward_cache.flat_masks
+        im_ref = pi.pushforward_cache.inj_masks
+        plan_ref = pi.pushforward_cache.plan_by_flange[fkey]
+        @test H1.phi == ZE._monomialize_phi(FG.phi, H1.U, H1.D)
+        @test H1.phi == ZE._monomialize_phi_with_zero_pairs(FG.phi, plan_ref.zero_pairs)
+
+        H2 = ZE._pushforward_flange_to_fringe(P, pi, FG; strict=true)
+        @test pi.pushforward_cache.flat_index === fi_ref
+        @test pi.pushforward_cache.inj_index === ji_ref
+        @test pi.pushforward_cache.flat_masks === fm_ref
+        @test pi.pushforward_cache.inj_masks === im_ref
+        @test pi.pushforward_cache.plan_by_flange[fkey] === plan_ref
+        @test length(H1.U) == length(H2.U)
+        @test length(H1.D) == length(H2.D)
+        @test H1.phi == H2.phi
+    end
+
+    @testset "ZnEncoding direct strict plan -> PModule matches fringe path" begin
+        tau = FZ.face(2, [false, false])
+        flats = [
+            FZ.IndFlat(tau, [0, 0]; id=:F1),
+            FZ.IndFlat(tau, [1, 0]; id=:F2),
+            FZ.IndFlat(tau, [0, 1]; id=:F3),
+        ]
+        injectives = [
+            FZ.IndInj(tau, [1, 1]; id=:E1),
+            FZ.IndInj(tau, [2, 0]; id=:E2),
+        ]
+        phi = reshape([c(1), c(0), c(1), c(0), c(1), c(0)], 2, 3)
+        FG = FZ.Flange{K}(2, flats, injectives, phi; field=field)
+        opts = PM.EncodingOptions(backend=:zn, max_regions=512, field=field)
+        P, pi = ZE.encode_poset_from_flanges(FG, opts; poset_kind=:signature)
+
+        plan, flat_masks, inj_masks = ZE._strict_pushforward_plan_and_masks(pi, FG)
+        M_direct = ZE._pmodule_from_pushforward_plan(P, FG, plan, flat_masks, inj_masks)
+        H = ZE._strict_pushforward_fringe_from_plan(P, FG, plan, flat_masks, inj_masks)
+        M_via_fringe = IR.pmodule_from_fringe(H)
+        _module_equal_on_covers(M_direct, M_via_fringe, field)
+    end
+
+    @testset "ZnEncoding signatures are packed with Bool-vector views" begin
+        tau = FZ.face(2, [false, false])
+        flats = [
+            FZ.IndFlat(tau, [0, 0]; id=:F1),
+            FZ.IndFlat(tau, [1, 0]; id=:F2),
+            FZ.IndFlat(tau, [0, 1]; id=:F3),
+        ]
+        injectives = [
+            FZ.IndInj(tau, [1, 1]; id=:E1),
+            FZ.IndInj(tau, [2, 0]; id=:E2),
+        ]
+        phi = reshape([c(1), c(0), c(0), c(1), c(1), c(0)], 2, 3)
+        FG = FZ.Flange{K}(2, flats, injectives, phi; field=field)
+        opts = PM.EncodingOptions(backend=:zn, max_regions=512)
+        _, pi = ZE.encode_poset_from_flanges(FG, opts; poset_kind=:signature)
+
+        @test pi.sig_y isa ZE.PackedSignatureRows
+        @test pi.sig_z isa ZE.PackedSignatureRows
+        @test pi.sig_y.bitlen == length(pi.flats)
+        @test pi.sig_z.bitlen == length(pi.injectives)
+
+        rid = 1
+        yrow = collect(Bool, pi.sig_y[rid])
+        zrow = collect(Bool, pi.sig_z[rid])
+        yexp = [FZ.in_flat(pi.flats[i], pi.reps[rid]) for i in 1:length(pi.flats)]
+        zexp = [!FZ.in_inj(pi.injectives[j], pi.reps[rid]) for j in 1:length(pi.injectives)]
+        @test yrow == yexp
+        @test zrow == zexp
+    end
+
+    @testset "Workflow SessionCache reuses Zn pushforward plans across encodes" begin
+        tau = FZ.face(2, [false, false])
+        flats = [
+            FZ.IndFlat(tau, [0, 0]; id=:F1),
+            FZ.IndFlat(tau, [1, 0]; id=:F2),
+        ]
+        injectives = [
+            FZ.IndInj(tau, [1, 1]; id=:E1),
+            FZ.IndInj(tau, [2, 0]; id=:E2),
+        ]
+        phi = reshape([c(1), c(0), c(0), c(1)], 2, 2)
+        FG = FZ.Flange{K}(2, flats, injectives, phi; field=field)
+        opts = PM.EncodingOptions(backend=:zn, max_regions=512, field=field)
+        sc = CM.SessionCache()
+
+        enc1 = PM.encode(FG, opts; cache=sc)
+        enc2 = PM.encode(FG, opts; cache=sc)
+        pi1 = enc1.pi.pi
+        pi2 = enc2.pi.pi
+
+        fkey = ZE._flange_fingerprint(FG)
+        ekey = pi1.encoding_fingerprint
+        plan1 = pi1.pushforward_cache.plan_by_flange[fkey]
+        plan2 = pi2.pushforward_cache.plan_by_flange[fkey]
+
+        @test haskey(sc.zn_pushforward_plan, (ekey, fkey))
+        @test sc.zn_pushforward_plan[(ekey, fkey)] === plan1
+        @test plan2 === plan1
+        @test length(sc.zn_pushforward_plan) == 1
+    end
+
+    @testset "Workflow SessionCache reuses Zn encoding artifacts and pushed fringes" begin
+        tau = FZ.face(2, [false, false])
+        flats = [
+            FZ.IndFlat(tau, [0, 0]; id=:F1),
+            FZ.IndFlat(tau, [1, 0]; id=:F2),
+        ]
+        injectives = [
+            FZ.IndInj(tau, [1, 1]; id=:E1),
+            FZ.IndInj(tau, [2, 0]; id=:E2),
+        ]
+        phi = reshape([c(1), c(0), c(0), c(1)], 2, 2)
+        FG = FZ.Flange{K}(2, flats, injectives, phi; field=field)
+        opts = PM.EncodingOptions(backend=:zn, max_regions=512, field=field)
+        sc = CM.SessionCache()
+
+        enc1 = PM.encode(FG, opts; cache=sc)
+        enc2 = PM.encode(FG, opts; cache=sc)
+
+        @test enc1.P === enc2.P
+        @test enc1.pi.pi === enc2.pi.pi
+        @test enc1.H === enc2.H
+        @test enc1.M === enc2.M
+        @test length(sc.zn_encoding_artifacts) == 1
+        @test length(sc.zn_pushforward_fringe) == 1
+        @test length(sc.zn_pushforward_module) == 1
+    end
+
+    @testset "ZnEncoding session cache reuses encode_poset_from_flanges artifacts" begin
+        tau = FZ.face(2, [false, false])
+        flats = [
+            FZ.IndFlat(tau, [0, 0]; id=:F1),
+            FZ.IndFlat(tau, [1, 0]; id=:F2),
+        ]
+        injectives = [
+            FZ.IndInj(tau, [1, 1]; id=:E1),
+            FZ.IndInj(tau, [2, 0]; id=:E2),
+        ]
+        phi = reshape([c(1), c(0), c(0), c(1)], 2, 2)
+        FG = FZ.Flange{K}(2, flats, injectives, phi; field=field)
+        opts = PM.EncodingOptions(backend=:zn, max_regions=512, field=field)
+        sc = CM.SessionCache()
+
+        P1, pi1 = ZE.encode_poset_from_flanges((FG,), opts;
+                                               poset_kind=:signature,
+                                               session_cache=sc)
+        P2, pi2 = ZE.encode_poset_from_flanges((FG,), opts;
+                                               poset_kind=:signature,
+                                               session_cache=sc)
+        @test P1 === P2
+        @test pi1 === pi2
+        @test length(sc.zn_encoding_artifacts) == 1
+    end
+
+    @testset "Workflow SessionCache reuses pushed fringes per flange in common encode" begin
+        tau = FZ.face(1, [])
+        FG1 = FZ.Flange{K}(1,
+                           [FZ.IndFlat(tau, [0]; id=:F1)],
+                           [FZ.IndInj(tau, [5]; id=:E1)],
+                           reshape([c(1)], 1, 1);
+                           field=field)
+        FG2 = FZ.Flange{K}(1,
+                           [FZ.IndFlat(tau, [2]; id=:F2)],
+                           [FZ.IndInj(tau, [7]; id=:E2)],
+                           reshape([c(1)], 1, 1);
+                           field=field)
+        opts = PM.EncodingOptions(backend=:zn, max_regions=512, field=field)
+        sc = CM.SessionCache()
+
+        out1 = PM.encode((FG1, FG2), opts; cache=sc)
+        out2 = PM.encode((FG1, FG2), opts; cache=sc)
+
+        @test out1[1].P === out2[1].P
+        @test out1[1].P === out1[2].P
+        @test out1[1].P === out2[2].P
+        @test out1[1].H === out2[1].H
+        @test out1[2].H === out2[2].H
+        @test out1[1].M === out2[1].M
+        @test out1[2].M === out2[2].M
+        @test length(sc.zn_encoding_artifacts) == 1
+        @test length(sc.zn_pushforward_fringe) == 2
+        @test length(sc.zn_pushforward_module) == 2
+    end
+
 
     @testset "Zn wrappers: common encoding matches explicit encoding route" begin
     # Two 1D flanges representing interval modules [0,5] and [2,7].
@@ -113,9 +407,9 @@ with_fields(FIELDS_FULL) do field
     df = PM.DerivedFunctorOptions(maxdeg=2)
     res = PM.ResolutionOptions(maxlen=3)
 
-    enc_out = DF.encode_pmodules_from_flanges(FG1, FG2, enc)
-    P = enc_out.P
-    Ms = enc_out.Ms
+    enc_out = PM.encode((FG1, FG2), enc)
+    P = enc_out[1].P
+    Ms = [enc_out[1].M, enc_out[2].M]
 
     @test length(Ms) == 2
     @test Ms[1].Q === P
@@ -127,7 +421,7 @@ with_fields(FIELDS_FULL) do field
     @test [PM.dim(E_explicit, t) for t in 0:2] == [PM.dim(E_wrap, t) for t in 0:2]
 
     # Resolution wrappers: compare against "encode + resolution" directly.
-    enc1 = DF.encode_pmodule_from_flange(FG1, enc)
+    enc1 = PM.encode(FG1, enc)
     res_wrap = DF.projective_resolution_Zn(FG1, enc, res; return_encoding=true)
     @test FF.poset_equal(res_wrap.P, enc1.P)
     @test DF.betti_table(res_wrap.res) == DF.betti_table(DF.projective_resolution(enc1.M, res))
@@ -149,7 +443,8 @@ with_fields(FIELDS_FULL) do field
     enc = PM.EncodingOptions(backend=:zn, max_regions=50_000)
     res = PM.ResolutionOptions(maxlen=3, check=true)
 
-    P, M, pi = DF.encode_pmodule_from_flange(FG, enc)
+    enc_fg = PM.encode(FG, enc)
+    P, M, pi = enc_fg.P, enc_fg.M, enc_fg.pi
 
     # Compare injective resolutions (wrapper vs explicit encode-then-resolve)
     resI = DF.injective_resolution(M, res)
@@ -201,26 +496,155 @@ with_fields(FIELDS_FULL) do field
 
     # dim is 1 on [b,c], 0 otherwise
     for g in (b-2):(cmax+2)
+        d_fast = FZ.dim_at(FG, (g,))
         d = FZ.dim_at(FG, [g]; rankfun=A -> PosetModules.FieldLinAlg.rank(field, A))
         expected = (b <= g <= cmax) ? 1 : 0
+        @test d_fast == expected
         @test d == expected
+        @test d_fast == d
     end
+
+    @test (@inferred FZ.dim_at(FG, (b,))) isa Int
 
     # intersects should detect empty intersection when b > c
     F_bad = FZ.IndFlat(tau0, [5]; id=:Fbad)
     E_bad = FZ.IndInj(tau0, [2]; id=:Ebad)
     @test FZ.intersects(F_bad, E_bad) == false
+    FG_bad = FZ.Flange{K}(n, [F_bad], [E_bad], reshape(K[c(1)], 1, 1))
+    @test FG_bad.phi[1, 1] == zero(K)
 
     # Minimize should merge proportional duplicate columns without changing dim_at
     F2 = FZ.IndFlat(tau0, [b]; id=:F2)
     Phi2 = reshape(K[c(1), c(2)], 1, 2)    # second column is 2x the first
     FG2 = FZ.Flange{K}(n, [F1, F2], [E1], Phi2)
     FG2m = FZ.minimize(FG2)
+    @test (@inferred FZ.minimize(FG2)) isa FZ.Flange
 
     for g in (b-1):(cmax+1)
+        d0 = FZ.dim_at(FG2, (g,))
         d1 = FZ.dim_at(FG2, [g];  rankfun=A -> PosetModules.FieldLinAlg.rank(field, A))
         d2 = FZ.dim_at(FG2m, [g]; rankfun=A -> PosetModules.FieldLinAlg.rank(field, A))
+        @test d0 == d1
         @test d1 == d2
+    end
+
+    @testset "degree_matrix! parity and buffer reuse" begin
+    n = 2
+    tau_x = mk_face(n, [false, true])
+    tau_y = mk_face(n, [true, false])
+    flats = [
+        FZ.IndFlat(tau_x, [0, 0]; id=:Fx0),
+        FZ.IndFlat(tau_x, [2, 0]; id=:Fx2),
+        FZ.IndFlat(tau_y, [0, 1]; id=:Fy1),
+    ]
+    injectives = [
+        FZ.IndInj(tau_x, [4, 0]; id=:Ex4),
+        FZ.IndInj(tau_x, [3, 0]; id=:Ex3),
+        FZ.IndInj(tau_y, [0, 3]; id=:Ey3),
+    ]
+    Phi = reshape([c(1), c(2), c(0),
+                   c(0), c(1), c(1),
+                   c(1), c(0), c(2)], 3, 3)
+    H = FZ.Flange{K}(n, flats, injectives, Phi)
+
+    g1 = (1, 1)
+    g2 = (3, 2)
+
+    # degree_matrix! with caller-owned buffers matches allocating degree_matrix.
+    rows_buf = Int[]
+    cols_buf = Int[]
+    A1, r1, c1 = FZ.degree_matrix!(rows_buf, cols_buf, H, g1)
+    A1_alloc, r1_alloc, c1_alloc = FZ.degree_matrix(H, g1)
+    @test r1 === rows_buf
+    @test c1 === cols_buf
+    @test r1 == r1_alloc
+    @test c1 == c1_alloc
+    @test Matrix(A1) == Matrix(A1_alloc)
+    @test r1_alloc !== rows_buf
+    @test c1_alloc !== cols_buf
+
+    # A second call reuses the same buffers and refreshes contents.
+    A2, r2, c2 = FZ.degree_matrix!(rows_buf, cols_buf, H, g2)
+    A2_alloc, r2_alloc, c2_alloc = FZ.degree_matrix(H, g2)
+    @test r2 === rows_buf
+    @test c2 === cols_buf
+    @test r2 == r2_alloc
+    @test c2 == c2_alloc
+    @test Matrix(A2) == Matrix(A2_alloc)
+
+    # Scratch variant reuses per-thread buffers and stays parity-correct.
+    A3, r3, c3 = FZ.degree_matrix!(H, g1)
+    A3_alloc, r3_alloc, c3_alloc = FZ.degree_matrix(H, g1)
+    @test r3 == r3_alloc
+    @test c3 == c3_alloc
+    @test Matrix(A3) == Matrix(A3_alloc)
+
+    A4, r4, c4 = FZ.degree_matrix!(H, g2)
+    A4_alloc, r4_alloc, c4_alloc = FZ.degree_matrix(H, g2)
+    @test r4 == r4_alloc
+    @test c4 == c4_alloc
+    @test Matrix(A4) == Matrix(A4_alloc)
+    @test r4 === r3
+    @test c4 === c3
+    end
+
+    @testset "FlangeDimCache + dim_at_many parity" begin
+    n = 2
+    tau_x = mk_face(n, [false, true])
+    tau_y = mk_face(n, [true, false])
+    flats = [
+        FZ.IndFlat(tau_x, [0, 0]; id=:Fx0),
+        FZ.IndFlat(tau_x, [2, 0]; id=:Fx2),
+        FZ.IndFlat(tau_y, [0, 1]; id=:Fy1),
+    ]
+    injectives = [
+        FZ.IndInj(tau_x, [4, 0]; id=:Ex4),
+        FZ.IndInj(tau_x, [3, 0]; id=:Ex3),
+        FZ.IndInj(tau_y, [0, 3]; id=:Ey3),
+    ]
+    Phi = reshape([c(1), c(2), c(0),
+                   c(0), c(1), c(1),
+                   c(1), c(0), c(2)], 3, 3)
+    H = FZ.Flange{K}(n, flats, injectives, Phi)
+
+    points = [(0, 0), (1, 1), (2, 1), (1, 1), (3, 2), (0, 0), (3, 2), (2, 1)]
+    d_ref = [FZ.dim_at(H, p) for p in points]
+
+    cache = FZ.FlangeDimCache(H)
+    d_cached = [FZ.dim_at(H, p; cache=cache) for p in points]
+    @test d_cached == d_ref
+    @test cache.hits > 0
+    @test cache.misses > 0
+
+    out_unsorted = Vector{Int}(undef, length(points))
+    out_sorted = Vector{Int}(undef, length(points))
+    FZ.dim_at_many!(out_unsorted, H, points; cache=FZ.FlangeDimCache(H), sort_points=false)
+    FZ.dim_at_many!(out_sorted, H, points; cache=FZ.FlangeDimCache(H), sort_points=true)
+    @test out_unsorted == d_ref
+    @test out_sorted == d_ref
+    @test FZ.dim_at_many(H, points; cache=FZ.FlangeDimCache(H), sort_points=true) == d_ref
+
+    points_vec = [[p[1], p[2]] for p in points]
+    @test FZ.dim_at_many(H, points_vec; cache=FZ.FlangeDimCache(H), sort_points=true) == d_ref
+    @test FZ.dim_at_many(H, points; dedup=false, sort_points=false, sweep=:none) == d_ref
+    @test FZ.dim_at_many(H, points; dedup=true, sort_points=false, sweep=:none) == d_ref
+    @test_throws ErrorException FZ.dim_at_many(H, points; sweep=:box)
+
+    box_points = [(x, y) for y in 0:2 for x in 0:3]
+    d_box_ref = [FZ.dim_at(H, p) for p in box_points]
+    @test FZ.dim_at_many(H, box_points; sweep=:box, dedup=true, sort_points=false) == d_box_ref
+
+    box_dup = vcat(box_points, box_points[3:6], box_points[1:2])
+    d_box_dup_ref = [FZ.dim_at(H, p) for p in box_dup]
+    @test FZ.dim_at_many(H, box_dup; sweep=:box, dedup=true, sort_points=false) == d_box_dup_ref
+
+    if Threads.nthreads() > 1
+        @test FZ.dim_at_many(H, points; threaded=true, dedup=true, sweep=:none) == d_ref
+        @test FZ.dim_at_many(H, box_dup; threaded=true, dedup=true, sweep=:box) == d_box_dup_ref
+    end
+
+    H_other = FZ.Flange{K}(n, flats, injectives, Phi .+ c(1))
+    @test_throws ErrorException FZ.dim_at(H_other, points[1]; cache=cache)
     end
 
         if field isa CM.QQField
@@ -245,11 +669,11 @@ with_fields(FIELDS_FULL) do field
         @test cols == [1]
         @test Phi_sub == reshape(K[2], 1, 1)
 
-        # Outside the intersection, there should be no active flats or injectives.
+        # Outside the intersection, injectives can be inactive while flats remain active.
         Phi_sub2, rows2, cols2 = FZ.degree_matrix(H, [10])
         @test rows2 == Int[]
-        @test cols2 == Int[]
-        @test size(Phi_sub2) == (0, 0)
+        @test cols2 == [1]
+        @test size(Phi_sub2) == (0, 1)
 
         # bounding_box in 1D with margin 1:
         #   flats force a >= (b_flat - margin) = 0
@@ -288,7 +712,7 @@ with_fields(FIELDS_FULL) do field
         @testset "ZnEncoding: region encoding without enumerating a box" begin
         # FG, b, cmax are in scope here because this testset is nested.
         enc = PM.EncodingOptions(backend=:zn, max_regions=1000)
-        P, Henc, pi = PM.encode_from_flange(FG, enc)
+        P, Henc, pi = PM.ZnEncoding.encode_from_flange(FG, enc)
 
         # The encoding poset should be a 3-chain:
         #   left of b  <  between  <  right of cmax.
@@ -301,27 +725,27 @@ with_fields(FIELDS_FULL) do field
         @test pi.coords[1] == [b, cmax+1]
 
         # Spot-check the encoded fiber dimensions via locate.
-        @test FF.fiber_dimension(Henc, PM.locate(pi, [b-5])) == 0
-        @test FF.fiber_dimension(Henc, PM.locate(pi, [b])) == 1
-        @test FF.fiber_dimension(Henc, PM.locate(pi, [cmax])) == 1
-        @test FF.fiber_dimension(Henc, PM.locate(pi, [cmax+1])) == 0
+        @test FF.fiber_dimension(Henc, CM.locate(pi, [b-5])) == 0
+        @test FF.fiber_dimension(Henc, CM.locate(pi, [b])) == 1
+        @test FF.fiber_dimension(Henc, CM.locate(pi, [cmax])) == 1
+        @test FF.fiber_dimension(Henc, CM.locate(pi, [cmax+1])) == 0
         end
 
     @testset "ZnEncoding: direct flange -> fringe (Remark 6.14 bridge)" begin
         # Build the encoding only, then push FG down to a fringe presentation.
         enc = PM.EncodingOptions(backend=:zn, max_regions=1000)
-        P, pi = PM.encode_poset_from_flanges(FG, enc)
-        H = PM.fringe_from_flange(P, pi, FG)   # strict=true by default
+        P, pi = PM.ZnEncoding.encode_poset_from_flanges(FG, enc)
+        H = ZE._pushforward_flange_to_fringe(P, pi, FG)   # strict=true by default
 
         # Compare with the convenience wrapper.
-        P2, H2, pi2 = PM.encode_from_flange(FG, enc)
+        P2, H2, pi2 = PM.ZnEncoding.encode_from_flange(FG, enc)
         @test PM.nvertices(P) == PM.nvertices(P2)
         @test Set(FF.cover_edges(P)) == Set(FF.cover_edges(P2))
 
         # Fiber dimensions should match on all sampled degrees.
         for g in (b-5):(cmax+5)
-            t  = PM.locate(pi,  [g])
-            t2 = PM.locate(pi2, [g])
+            t  = CM.locate(pi,  [g])
+            t2 = CM.locate(pi2, [g])
             @test t == t2
             if t != 0
                 @test FF.fiber_dimension(H,  t)  == FF.fiber_dimension(H2, t2)
@@ -333,7 +757,7 @@ with_fields(FIELDS_FULL) do field
         E = FZ.IndInj(mk_face(length([cmax]), [false]), [cmax]; id=:E)
         FG_extra = FZ.Flange{K}(1, [FZ.IndFlat(mk_face(length([b]), [false]), [b]; id=:F), F_extra], [E], K[1 1])
 
-        @test_throws ErrorException PM.fringe_from_flange(P, pi, FG_extra)
+        @test_throws ErrorException ZE._pushforward_flange_to_fringe(P, pi, FG_extra)
     end
     end
 
@@ -359,29 +783,30 @@ end
     FG = FZ.Flange{K}(2, flats, inj, Phi)
 
     enc = PM.EncodingOptions(backend=:zn, max_regions=100)
-    P, M, pi = DF.encode_pmodule_from_flange(FG, enc)
+    enc_fg = PM.encode(FG, enc)
+    P, M, pi = enc_fg.P, enc_fg.M, enc_fg.pi
 
     # Expected: only 3 regions along coordinate 1 (below, inside, above), and 1 slab along coord 2.
     @test PM.nvertices(P) == 3
 
     # pi should ignore coordinate 2
     for g1 in -3:4
-        u = PM.locate(pi, [g1, -10])
-        v = PM.locate(pi, [g1,  10])
+        u = CM.locate(pi, [g1, -10])
+        v = CM.locate(pi, [g1,  10])
         @test u == v
     end
 
     # Monotonicity: g <= h implies pi(g) <= pi(h)
     for g1 in -3:3, h1 in g1:4
-        ug = PM.locate(pi, [g1, 0])
-        uh = PM.locate(pi, [h1, 0])
+        ug = CM.locate(pi, [g1, 0])
+        uh = CM.locate(pi, [h1, 0])
         @test FF.leq(P, ug, uh)
     end
 
     # Dimension consistency on a representative grid of lattice points
     for g1 in -3:4, g2 in (-2, 0, 7)
         g = [g1, g2]
-        @test FZ.dim_at(FG, g) == M.dims[PM.locate(pi, g)]
+        @test FZ.dim_at(FG, g) == M.dims[CM.locate(pi, g)]
     end
 end
 
@@ -399,15 +824,17 @@ end
     )
 
     enc = PM.EncodingOptions(backend=:zn, max_regions=200)
-    P, Ms, pi = DF.encode_pmodules_from_flanges(FG1, FG2, enc)
-    M1, M2 = Ms
+    encs = PM.encode((FG1, FG2), enc)
+    P = encs[1].P
+    pi = encs[1].pi
+    M1, M2 = encs[1].M, encs[2].M
 
     # Critical coordinates along g1 are {0,1,2,3} giving <= 5 slabs => P.n <= 5.
     @test PM.nvertices(P) <= 5
 
     for g1 in -1:4, g2 in (-5, 0, 5)
         g = [g1, g2]
-        u = PM.locate(pi, g)
+        u = CM.locate(pi, g)
         @test u != 0
         @test FZ.dim_at(FG1, g) == M1.dims[u]
         @test FZ.dim_at(FG2, g) == M2.dims[u]
@@ -422,9 +849,11 @@ end
     )
 
     enc = PM.EncodingOptions(backend=:zn, max_regions=200)
-    P, M, pi = DF.encode_pmodule_from_flange(FG, enc)
+    enc_fg = PM.encode(FG, enc)
+    P, M, pi_comp = enc_fg.P, enc_fg.M, enc_fg.pi
+    pi = pi_comp.pi
     zcache = ZE.compile_zn_cache(P, pi)
-    cenc = CM.compile_encoding(P, pi)
+    cenc = pi_comp
 
     Xint = Int[
         -2 -1 0 1 2 3
@@ -436,7 +865,7 @@ end
     d2 = ZE.locate_many(zcache, Xint; threaded=true)
     d3 = ZE.locate_many(cenc, Xint; threaded=true)
     @test d1 == d2 == d3
-    @test d1 == [PM.locate(pi, Xint[:, j]) for j in 1:size(Xint, 2)]
+    @test d1 == [CM.locate(pi, Xint[:, j]) for j in 1:size(Xint, 2)]
     @test pi.cell_to_region !== nothing
 
     # Fast locate path should not depend on signature dictionary lookups when the
@@ -449,7 +878,7 @@ end
     # Float batched locate parity (round-to-nearest lattice point).
     Xflt = Float64.(Xint) .+ 0.24
     d4 = ZE.locate_many(pi, Xflt; threaded=true)
-    @test d4 == [PM.locate(pi, Xflt[:, j]) for j in 1:size(Xflt, 2)]
+    @test d4 == [CM.locate(pi, Xflt[:, j]) for j in 1:size(Xflt, 2)]
 
     # In-place API with destination buffer.
     d5 = fill(-1, size(Xint, 2))
@@ -502,7 +931,7 @@ end
     @test lensx * lensy == length(Mxy.dims)
     for x in (1, div(lensx, 2), lensx)
         d0 = Mxy.dims[x]
-        d1 = Mxy.dims[x + (lensy ÷ 2) * lensx]
+        d1 = Mxy.dims[x + div(lensy, 2) * lensx]
         d2 = Mxy.dims[x + (lensy - 1) * lensx]
         @test d0 == d1 == d2
     end
@@ -538,6 +967,156 @@ end
     @test bcache.full_basis_recomputes + bcache.incremental_refinements >= bcache.basis_cache_misses
 end
 
+@testset "ZnEncoding normalized perf guards (QQ)" begin
+    if !(field isa CM.QQField)
+        @test true
+    else
+        @inline function _median_elapsed(f::Function; reps::Int=5)
+            ts = Vector{Float64}(undef, reps)
+            for i in 1:reps
+                ts[i] = @elapsed f()
+            end
+            return sort(ts)[cld(reps, 2)]
+        end
+        @inline _ns_per_item(t::Float64, n::Int) = (t * 1.0e9) / max(1, n)
+        strict_ci = get(ENV, "TAMER_STRICT_PERF_CI", "1") == "1"
+
+        # --- dim_at kernel guard: auto path should keep allocations and throughput
+        # at least on par with explicit submatrix materialization baseline.
+        m = 40
+        flats_perf = [mk_flat([i - 12, 0], [false, true]; id=Symbol(:PF, i)) for i in 1:m]
+        injs_perf  = [mk_inj([i + 18, 0], [false, true]; id=Symbol(:PE, i)) for i in 1:m]
+        Phi_perf = Matrix{K}(I, m, m)
+        FG_perf = FZ.Flange{K}(2, flats_perf, injs_perf, Phi_perf)
+        q_perf = [(x, y) for x in -16:70 for y in -6:6]
+
+        @inline function _dim_at_submatrix_old(g::NTuple{2,Int})
+            rows = FZ.active_injectives(FG_perf.injectives, g)
+            cols = FZ.active_flats(FG_perf.flats, g)
+            if isempty(rows) || isempty(cols)
+                return 0
+            end
+            return PosetModules.FieldLinAlg.rank(field, FG_perf.phi[rows, cols])
+        end
+
+        # Warmup compile/runtime paths.
+        let s = 0
+            @inbounds for g in q_perf
+                s += FZ.dim_at(FG_perf, g)
+                s += _dim_at_submatrix_old(g)
+            end
+            @test s >= 0
+        end
+
+        alloc_auto = @allocated begin
+            s = 0
+            @inbounds for g in q_perf
+                s += FZ.dim_at(FG_perf, g)
+            end
+            s
+        end
+        alloc_old = @allocated begin
+            s = 0
+            @inbounds for g in q_perf
+                s += _dim_at_submatrix_old(g)
+            end
+            s
+        end
+
+        t_auto = _median_elapsed(reps=5) do
+            s = 0
+            @inbounds for g in q_perf
+                s += FZ.dim_at(FG_perf, g)
+            end
+            @test s >= 0
+        end
+        t_old = _median_elapsed(reps=5) do
+            s = 0
+            @inbounds for g in q_perf
+                s += _dim_at_submatrix_old(g)
+            end
+            @test s >= 0
+        end
+
+        ns_auto = _ns_per_item(t_auto, length(q_perf))
+        ns_old = _ns_per_item(t_old, length(q_perf))
+        if strict_ci
+            @test ns_auto <= 1.90 * ns_old + 500.0
+            @test alloc_auto <= 0.95 * alloc_old + 16_384
+        else
+            @test ns_auto <= 2.10 * ns_old + 700.0
+            @test alloc_auto <= 1.05 * alloc_old + 32_768
+        end
+
+        # Buffer-reuse degree_matrix! should be effectively allocation-free post warmup.
+        rows_buf = Int[]
+        cols_buf = Int[]
+        FZ.degree_matrix!(rows_buf, cols_buf, FG_perf, q_perf[1])
+        alloc_alloc = @allocated begin
+            s = 0
+            @inbounds for g in q_perf
+                A, rows, cols = FZ.degree_matrix(FG_perf, g)
+                s += size(A, 1) + size(A, 2) + length(rows) + length(cols)
+            end
+            s
+        end
+        alloc_reuse = @allocated begin
+            s = 0
+            @inbounds for g in q_perf
+                A, rows, cols = FZ.degree_matrix!(rows_buf, cols_buf, FG_perf, g)
+                s += size(A, 1) + size(A, 2) + length(rows) + length(cols)
+            end
+            s
+        end
+        if strict_ci
+            @test alloc_reuse <= 0.35 * alloc_alloc + 4_096
+        else
+            @test alloc_reuse <= 0.55 * alloc_alloc + 8_192
+        end
+
+        # --- Box-encoding kernel guard: cache reuse should not regress vs uncached.
+        FG_box = FZ.Flange{K}(2,
+            [mk_flat([0, 0], [false, true]), mk_flat([20, 0], [false, true]), mk_flat([40, 0], [false, true])],
+            [mk_inj([15, 0], [false, true]), mk_inj([35, 0], [false, true]), mk_inj([55, 0], [false, true])],
+            Matrix{K}(I, 3, 3)
+        )
+        a_box = (-8, -12)
+        b_box = (24, 12)
+        bcache_perf = ZE.compile_zn_box_cache(FG_box)
+        # Warmup
+        M_uncached = ZE.pmodule_on_box(FG_box; a=a_box, b=b_box, cache=nothing)
+        M_cached = ZE.pmodule_on_box(FG_box; a=a_box, b=b_box, cache=bcache_perf)
+        @test M_cached.dims == M_uncached.dims
+        ncells = length(M_cached.dims)
+        iters = 8
+
+        t_uncached = _median_elapsed(reps=4) do
+            s = 0
+            for _ in 1:iters
+                M = ZE.pmodule_on_box(FG_box; a=a_box, b=b_box, cache=nothing)
+                s += sum(M.dims)
+            end
+            @test s >= 0
+        end
+        t_cached = _median_elapsed(reps=4) do
+            s = 0
+            for _ in 1:iters
+                M = ZE.pmodule_on_box(FG_box; a=a_box, b=b_box, cache=bcache_perf)
+                s += sum(M.dims)
+            end
+            @test s >= 0
+        end
+        ns_uncached = _ns_per_item(t_uncached, iters * ncells)
+        ns_cached = _ns_per_item(t_cached, iters * ncells)
+
+        if strict_ci
+            @test ns_cached <= 1.50 * ns_uncached + 220.0
+        else
+            @test ns_cached <= 1.75 * ns_uncached + 320.0
+        end
+    end
+end
+
 @testset "ZnEncoding edge-map matrix oracle fixtures" begin
     # 1D hand-computable oracle with two overlapping intervals:
     # I1=[0,2], I2=[1,3], Phi=I2.
@@ -568,7 +1147,7 @@ end
     end
 
     # Composition oracle: map 1->4 should be zero (rank 0).
-    @test PM.rank_map(M, 1, 4) == 0
+    @test Inv.rank_map(M, 1, 4) == 0
 end
 
 @testset "ZnEncoding randomized differential vs naive reference (medium grids)" begin
@@ -590,7 +1169,7 @@ end
         end
 
         for (u, v) in _sample_comparable_pairs(M_fast.Q; rng=rng, nsample=nsample)
-            @test PM.rank_map(M_fast, u, v) == PM.rank_map(M_ref, u, v)
+            @test Inv.rank_map(M_fast, u, v) == Inv.rank_map(M_ref, u, v)
         end
     end
 
@@ -736,7 +1315,7 @@ if field isa CM.QQField
     @test lensx * lensy == length(Mxy.dims)
     for x in (1, div(lensx, 2), lensx)
         d0 = Mxy.dims[x]                            # y = 1
-        d1 = Mxy.dims[x + (lensy ÷ 2) * lensx]     # y ~ middle
+        d1 = Mxy.dims[x + div(lensy, 2) * lensx]   # y ~ middle
         d2 = Mxy.dims[x + (lensy - 1) * lensx]     # y = last
         @test d0 == d1 == d2
     end
@@ -756,7 +1335,7 @@ if field isa CM.QQField
 end
 end
 
-@testset "ZnEncoding 2D: strict fringe_from_flange rejects missing generators" begin
+@testset "ZnEncoding 2D: strict _pushforward_flange_to_fringe rejects missing generators" begin
     FG1 = FZ.Flange{K}(2,
         [mk_flat([0,0],[false,true])],
         [mk_inj([1,0],[false,true])],
@@ -771,10 +1350,10 @@ end
     enc = PM.EncodingOptions(backend=:zn, max_regions=200)
     P, pi = ZE.encode_poset_from_flanges(FG1, enc)
 
-    @test_throws ErrorException ZE.fringe_from_flange(P, pi, FG2; strict=true)
+    @test_throws ErrorException ZE._pushforward_flange_to_fringe(P, pi, FG2; strict=true)
 
     # Non-strict mode should still push forward, dropping unmatched generators safely.
-    H2 = ZE.fringe_from_flange(P, pi, FG2; strict=false)
+    H2 = ZE._pushforward_flange_to_fringe(P, pi, FG2; strict=false)
     M2 = IR.pmodule_from_fringe(H2)
 
     # Sanity: the pushed module is defined on P
@@ -791,25 +1370,26 @@ end
     FG    = FZ.Flange{K}(2, flats, injs, Phi)
 
     enc = PM.EncodingOptions(backend=:zn, max_regions=100)
-    P, Henc, pi = DF.encode_pmodule_from_flange(FG, enc)
+    enc_fg = PM.encode(FG, enc)
+    P, Henc, pi = enc_fg.P, enc_fg.M, enc_fg.pi
 
     a = [-2, -3]
     b = [ 3,  4]
     len2 = b[2] - a[2] + 1  # length in free coordinate
 
     # Determine region indices by locating representative points.
-    rid_left  = PM.locate(pi, [-1, 0])  # x1 < 0
-    rid_mid   = PM.locate(pi, [ 0, 0])  # 0 <= x1 <= 1
-    rid_right = PM.locate(pi, [ 2, 0])  # x1 > 1
+    rid_left  = CM.locate(pi, [-1, 0])  # x1 < 0
+    rid_mid   = CM.locate(pi, [ 0, 0])  # 0 <= x1 <= 1
+    rid_right = CM.locate(pi, [ 2, 0])  # x1 > 1
 
     expected = zeros(Int, length(pi.sig_y))
     expected[rid_left]  = 2 * len2  # x1 = -2,-1
     expected[rid_mid]   = 2 * len2  # x1 = 0,1
     expected[rid_right] = 2 * len2  # x1 = 2,3
 
-    w_cells   = PM.region_weights(pi; box=(a, b), method=:cells)
-    w_points  = PM.region_weights(pi; box=(a, b), method=:points)
-    w_auto    = PM.region_weights(pi; box=(a, b), method=:auto)
+    w_cells   = PM.RegionGeometry.region_weights(pi; box=(a, b), method=:cells)
+    w_points  = PM.RegionGeometry.region_weights(pi; box=(a, b), method=:points)
+    w_auto    = PM.RegionGeometry.region_weights(pi; box=(a, b), method=:auto)
 
     @test w_cells == expected
     @test w_points == expected
@@ -823,15 +1403,16 @@ end
     FG    = FZ.Flange{K}(2, flats, injs, Phi)
 
     enc = PM.EncodingOptions(backend=:zn, max_regions=100)
-    P, Henc, pi = DF.encode_pmodule_from_flange(FG, enc)
+    enc_fg = PM.encode(FG, enc)
+    P, Henc, pi = enc_fg.P, enc_fg.M, enc_fg.pi
 
     a = [-50, -500]
     b = [ 49,  499]
     len2 = b[2] - a[2] + 1  # 1000
 
-    rid_left  = PM.locate(pi, [-1, 0])
-    rid_mid   = PM.locate(pi, [ 0, 0])
-    rid_right = PM.locate(pi, [ 2, 0])
+    rid_left  = CM.locate(pi, [-1, 0])
+    rid_mid   = CM.locate(pi, [ 0, 0])
+    rid_right = CM.locate(pi, [ 2, 0])
 
     expected = zeros(Int, length(pi.sig_y))
     expected[rid_left]  = 50 * len2
@@ -840,7 +1421,7 @@ end
 
     # Monte Carlo estimate
     rng = MersenneTwister(0)
-    info = PM.region_weights(pi; box=(a, b), method=:sample, nsamples=20_000, rng=rng, return_info=true)
+    info = PM.RegionGeometry.region_weights(pi; box=(a, b), method=:sample, nsamples=20_000, rng=rng, return_info=true)
 
     @test info.method == :sample
     @test eltype(info.weights) == Float64
@@ -865,13 +1446,14 @@ end
     FG    = FZ.Flange{K}(2, flats, injs, Phi)
 
     enc = PM.EncodingOptions(backend=:zn, max_regions=100)
-    P, Henc, pi = DF.encode_pmodule_from_flange(FG, enc)
+    enc_fg = PM.encode(FG, enc)
+    P, Henc, pi = enc_fg.P, enc_fg.M, enc_fg.pi
 
     a = [-50, -500]
     b = [ 49,  499]
 
     rng = MersenneTwister(1)
-    info = PM.region_weights(pi; box=(a, b), method=:auto, max_cells=0, max_points=0,
+    info = PM.RegionGeometry.region_weights(pi; box=(a, b), method=:auto, max_cells=0, max_points=0,
                              nsamples=1_000, rng=rng, return_info=true)
 
     @test info.method == :sample
@@ -885,22 +1467,23 @@ end
     FG    = FZ.Flange{K}(2, flats, injs, Phi)
 
     enc = PM.EncodingOptions(backend=:zn, max_regions=100)
-    P, Henc, pi = DF.encode_pmodule_from_flange(FG, enc)
+    enc_fg = PM.encode(FG, enc)
+    P, Henc, pi = enc_fg.P, enc_fg.M, enc_fg.pi
 
     # Choose an interval length > typemax(Int) while endpoints still fit in Int64.
     a = [-9_000_000_000_000_000_000, 0]
     b = [ 9_000_000_000_000_000_000, 0]
 
-    rid_left  = PM.locate(pi, [-1, 0])
-    rid_mid   = PM.locate(pi, [ 0, 0])
-    rid_right = PM.locate(pi, [ 2, 0])
+    rid_left  = CM.locate(pi, [-1, 0])
+    rid_mid   = CM.locate(pi, [ 0, 0])
+    rid_right = CM.locate(pi, [ 2, 0])
 
     expected = zeros(BigInt, length(pi.sig_y))
     expected[rid_left]  = BigInt(-1) - BigInt(a[1]) + 1                 # a1..-1
     expected[rid_mid]   = BigInt(2)                                     # 0..1
     expected[rid_right] = BigInt(b[1]) - BigInt(2) + 1                  # 2..b1
 
-    w = PM.region_weights(pi; box=(a, b), method=:cells, count_type=:auto)
+    w = PM.RegionGeometry.region_weights(pi; box=(a, b), method=:cells, count_type=:auto)
     @test eltype(w) == BigInt
     @test w == expected
     @test sum(w) == (BigInt(b[1]) - BigInt(a[1]) + 1) * (BigInt(b[2]) - BigInt(a[2]) + 1)
@@ -921,7 +1504,7 @@ end
         FG = FZ.Flange{K}(n, flats, injectives, Phi)
 
         enc = PM.EncodingOptions(backend=:zn, max_regions=1000)
-        Penc, Henc, pi = PM.encode_from_flange(FG, enc)
+        Penc, Henc, pi = PM.ZnEncoding.encode_from_flange(FG, enc)
         rpcache = CM.EncodingCache()
 
         Q = PM.Invariants.region_poset(pi; poset_kind = :signature, cache=rpcache)
@@ -936,11 +1519,11 @@ end
         @test FF.leq_matrix(Q) == FF.leq_matrix(Qdense)
 
         # Projected arrangement should work without requiring pi.P.
-        arr = PM.projected_arrangement(pi; dirs=[[1.0]])
+        arr = Inv.projected_arrangement(pi; dirs=[[1.0]])
         @test FF.poset_equal(arr.Q, Penc)
 
         # And should accept a provided Q for maximum speed.
-        arr2 = PM.projected_arrangement(pi; dirs=[[1.0]], Q=Penc)
+        arr2 = Inv.projected_arrangement(pi; dirs=[[1.0]], Q=Penc)
         @test FF.poset_equal(arr2.Q, Penc)
     end
 
@@ -970,6 +1553,12 @@ end
 
             enc = PM.EncodingOptions(backend=:pl, max_regions=10_000)
             Ppl, Hpl, pipl = PLP.encode_from_PL_fringes(F1, F2, enc; poset_kind = :signature)
+            out_tuple = PM.encode((F1, F2); enc=enc)
+            out_vec = PM.encode(PLP.PLFringe[F1, F2]; enc=enc)
+            @test length(out_tuple) == 2
+            @test length(out_vec) == 2
+            @test_throws MethodError PM.encode(F1, F2; enc=enc)
+            @test_throws MethodError PM.encode(F1, F2, F1; enc=enc)
             @test Ppl isa PM.ZnEncoding.SignaturePoset
             rpcache = CM.EncodingCache()
 
@@ -983,10 +1572,10 @@ end
             Qpl_dense = PM.Invariants.region_poset(pipl; poset_kind = :dense, cache=rpcache)
             @test FF.leq_matrix(Qpl) == FF.leq_matrix(Qpl_dense)
 
-            arr = PM.projected_arrangement(pipl; dirs=[[1.0]])
+            arr = Inv.projected_arrangement(pipl; dirs=[[1.0]])
             @test FF.poset_equal(arr.Q, Ppl)
 
-            arr2 = PM.projected_arrangement(pipl; dirs=[[1.0]], Q=Ppl)
+            arr2 = Inv.projected_arrangement(pipl; dirs=[[1.0]], Q=Ppl)
             @test FF.poset_equal(arr2.Q, Ppl)
         end
     end
@@ -1020,14 +1609,14 @@ end
             Qbx_dense = PM.Invariants.region_poset(pibx; poset_kind = :dense, cache=rpcache)
             @test FF.leq_matrix(Qbx) == FF.leq_matrix(Qbx_dense)
 
-            arr = PM.projected_arrangement(pibx; dirs=[[1.0]])
+            arr = Inv.projected_arrangement(pibx; dirs=[[1.0]])
             @test FF.poset_equal(arr.Q, Pbx)
 
-            arr2 = PM.projected_arrangement(pibx; dirs=[[1.0]], Q=Pbx)
+            arr2 = Inv.projected_arrangement(pibx; dirs=[[1.0]], Q=Pbx)
             @test FF.poset_equal(arr2.Q, Pbx)
 
             Mbx = IR.pmodule_from_fringe(Hbx)
-            @test PM.rank_map(Mbx, 1, 1) >= 0
+            @test Inv.rank_map(Mbx, 1, 1) >= 0
         end
     end
 end

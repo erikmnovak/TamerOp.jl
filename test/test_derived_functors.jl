@@ -4,6 +4,8 @@ using LinearAlgebra
 using InteractiveUtils
 import Base.Threads
 
+const FL = PosetModules.FieldLinAlg
+
 # This file assumes the helper constructors defined in runtests.jl:
 # - chain_poset(n)
 # - diamond_poset()
@@ -147,7 +149,7 @@ end
         E_serial = DF.Ext(resM, N; threads=false)
         E_thread = DF.Ext(resM, N; threads=true)
         @test E_thread.complex.d == E_serial.complex.d
-        @test [PM.dim(E_thread, t) for t in 0:2] == [PM.dim(E_serial, t) for t in 0:2]
+        @test [DF.dim(E_thread, t) for t in 0:2] == [DF.dim(E_serial, t) for t in 0:2]
 
         Pop = FF.FinitePoset(transpose(FF.leq_matrix(P)); check=false)
         RopH = one_by_one_fringe(Pop, FF.principal_upset(Pop, 2), FF.principal_downset(Pop, 2); scalar=one(K), field=field)
@@ -159,7 +161,7 @@ end
         T_serial = DF.ExtTorSpaces._Tor_resolve_first(Rop, L; maxdeg=2, threads=false, res=resR)
         T_thread = DF.ExtTorSpaces._Tor_resolve_first(Rop, L; maxdeg=2, threads=true, res=resR)
         @test T_thread.bd == T_serial.bd
-        @test [PM.dim(T_thread, s) for s in 0:2] == [PM.dim(T_serial, s) for s in 0:2]
+        @test [DF.dim(T_thread, s) for s in 0:2] == [DF.dim(T_serial, s) for s in 0:2]
     end
 end
 
@@ -194,6 +196,32 @@ end
     E1 = PM.ext(enc, encN; maxdeg=2, model=:projective, cache=sc)
     E2 = PM.ext(enc, encN; maxdeg=2, model=:projective, cache=sc)
     @test E1.res === E2.res
+    H1 = PM.hom(enc, encN; cache=sc)
+    H2 = PM.hom(enc, encN; cache=sc)
+    @test DF.dim(H1) == DF.dim(H2)
+    d_fast_h = PM.hom_dimension(enc, encN; cache=sc)
+    @test d_fast_h == DF.dim(H1)
+    Epm1 = PM.ext(enc.M, encN.M; maxdeg=2, model=:projective, cache=sc)
+    Epm2 = PM.ext(enc.M, encN.M; maxdeg=2, model=:projective, cache=sc)
+    @test Epm1.res === Epm2.res
+    Hpm1 = PM.hom(enc.M, encN.M; cache=sc)
+    Hpm2 = PM.hom(enc.M, encN.M; cache=sc)
+    @test DF.dim(Hpm1) == DF.dim(Hpm2)
+    @test_throws MethodError PM.hom(enc, encN.M; cache=sc)
+    @test_throws MethodError PM.hom(enc.M, encN; cache=sc)
+    @test_throws MethodError PM.ext(enc, encN.M; maxdeg=2, model=:projective, cache=sc)
+
+    C0 = PM.ModuleCochainComplex([enc.M], PM.PMorphism[]; tmin=0, check=true)
+    RH1 = PM.rhom(C0, encN.M; cache=sc)
+    RH2 = PM.rhom(C0, encN.M; cache=sc)
+    @test RH1.tmin == RH2.tmin
+    @test RH1.tmax == RH2.tmax
+    @test length(RH1.d) == length(RH2.d)
+    HX1 = PM.hyperext(C0, encN.M; maxdeg=2, cache=sc)
+    HX2 = PM.hyperext(C0, encN.M; maxdeg=2, cache=sc)
+    @test DF.dim(HX1, 0) == DF.dim(HX2, 0)
+    @test_throws MethodError PM.rhom(C0, encN; cache=sc)
+    @test_throws MethodError PM.hyperext(C0, encN; maxdeg=2, cache=sc)
 
     Pop = FF.FinitePoset(transpose(FF.leq_matrix(P)); check=false)
     Uop = FF.principal_upset(Pop, 2)
@@ -201,6 +229,7 @@ end
     Hop = one_by_one_fringe(Pop, Uop, Dop; scalar=CM.coerce(S1.field, 1), field=S1.field)
     Rop = IR.pmodule_from_fringe(Hop)
     encRop = CM.EncodingResult(Pop, Rop, nothing; H=Hop, opts=CM.EncodingOptions(field=Hop.field), backend=:test)
+    @test_throws ErrorException PM.hom_dimension(enc, encRop; cache=sc)
 
     T1 = PM.tor(encRop, enc; maxdeg=2, model=:first, cache=sc)
     T2 = PM.tor(encRop, enc; maxdeg=2, model=:first, cache=sc)
@@ -209,8 +238,27 @@ end
     T3 = PM.tor(encRop, enc; maxdeg=2, model=:second, cache=sc)
     T4 = PM.tor(encRop, enc; maxdeg=2, model=:second, cache=sc)
     @test T3.resL === T4.resL
+    Tpm1 = PM.tor(encRop.M, enc.M; maxdeg=2, model=:first, cache=sc)
+    Tpm2 = PM.tor(encRop.M, enc.M; maxdeg=2, model=:first, cache=sc)
+    @test Tpm1.resRop === Tpm2.resRop
+    @test_throws MethodError PM.tor(encRop, enc.M; maxdeg=2, model=:first, cache=sc)
+    @test_throws MethodError PM.tor(encRop.M, enc; maxdeg=2, model=:first, cache=sc)
 
-    CM.clear_resolution_cache!(cache)
+    # hom_dimension should cache computed fringes when enc.H is absent.
+    enc_noH = CM.EncodingResult(P, M, nothing; H=nothing, opts=CM.EncodingOptions(field=S1.field), backend=:test)
+    encN_noH = CM.EncodingResult(P, N, nothing; H=nothing, opts=CM.EncodingOptions(field=S2.field), backend=:test)
+    ec = CM._workflow_encoding_cache(sc)
+    g0 = length(ec.geometry)
+    d1 = PM.hom_dimension(enc_noH, encN_noH; cache=sc)
+    g1 = length(ec.geometry)
+    d2 = PM.hom_dimension(enc_noH, encN_noH; cache=sc)
+    g2 = length(ec.geometry)
+    @test d1 == d2
+    @test d1 == DF.dim(PM.hom(enc_noH, encN_noH; cache=sc))
+    @test g1 >= g0 + 2
+    @test g2 == g1
+
+    CM._clear_resolution_cache!(cache)
     RP3 = DF.projective_resolution(S1, opts; cache=cache)
     @test RP3 !== RP1
 
@@ -228,16 +276,18 @@ end
 
     # Module cache keys include field identity: changing field should route to a
     # different module cache bucket.
-    mc1 = CM.module_cache!(sc, enc.M)
-    mc2 = CM.module_cache!(sc, enc.M)
+    mc1 = CM._module_cache!(sc, enc.M)
+    mc2 = CM._module_cache!(sc, enc.M)
     @test mc1 === mc2
     enc_f2 = CM.change_field(enc, CM.F2())
-    mc3 = CM.module_cache!(sc, enc_f2.M)
+    mc3 = CM._module_cache!(sc, enc_f2.M)
     @test mc3 !== mc1
 
-    CM.clear_session_cache!(sc)
+    CM._clear_session_cache!(sc)
     WRS3 = PM.resolve(enc; kind=:projective, opts=opts, cache=sc)
     @test WRS3.res !== WRS1.res
+    @test_throws ErrorException PM.resolve(enc; kind=:proj, opts=opts, cache=sc)
+    @test_throws ErrorException PM.resolve(enc; kind=:inj, opts=opts, cache=sc)
 end
 
 @testset "HomSystemCache type stability" begin
@@ -385,16 +435,16 @@ end
 
         # Projective resolution should be minimal (and certified minimal by the checker).
         resP = DF.projective_resolution(S1, PM.ResolutionOptions(maxlen=4))
-        repP = PM.minimality_report(resP)
+        repP = DF.minimality_report(resP)
         @test repP.cover_ok
         @test repP.minimal
         @test isempty(repP.diagonal_violations)
-        @test PM.is_minimal(resP)
-        PM.assert_minimal(resP)
+        @test DF.is_minimal(resP)
+        DF.assert_minimal(resP)
 
         # Passing ResolutionOptions(minimal=true, check=true) should succeed and return a minimal resolution.
         resPmin = DF.projective_resolution(S1, PM.ResolutionOptions(maxlen=4, minimal=true, check=true))
-        @test PM.is_minimal(resPmin)
+        @test DF.is_minimal(resPmin)
 
         # Corrupt the resolution by inserting a diagonal coefficient in d^1 (degree 1 -> 0),
         # which should violate minimality (a generator mapping to itself at the same vertex).
@@ -411,25 +461,25 @@ end
             extra[1, 1] = c(1)   # explicit diagonal coefficient
             d_mat_bad[1] = hcat(D, extra)
 
-            res_bad = PM.ProjectiveResolution(resP.M, resP.Pmods, gens_bad, resP.d_mor, d_mat_bad, resP.aug)
-            rep_bad = PM.minimality_report(res_bad; check_cover=true)
+            res_bad = DF.ProjectiveResolution(resP.M, resP.Pmods, gens_bad, resP.d_mor, d_mat_bad, resP.aug)
+            rep_bad = DF.minimality_report(res_bad; check_cover=true)
             @test !rep_bad.minimal
             @test !isempty(rep_bad.diagonal_violations)
-            @test !PM.is_minimal(res_bad)
-            @test_throws ErrorException PM.assert_minimal(res_bad)
+            @test !DF.is_minimal(res_bad)
+            @test_throws ErrorException DF.assert_minimal(res_bad)
         end
 
         # Injective resolution: also expected to be minimal for these constructions.
         resI = DF.injective_resolution(S1, PM.ResolutionOptions(maxlen=4))
-        repI = PM.minimality_report(resI)
+        repI = DF.minimality_report(resI)
         @test repI.hull_ok
         @test repI.minimal
         @test isempty(repI.diagonal_violations)
-        @test PM.is_minimal(resI)
-        PM.assert_minimal(resI)
+        @test DF.is_minimal(resI)
+        DF.assert_minimal(resI)
 
         resImin = DF.injective_resolution(S1, PM.ResolutionOptions(maxlen=4, minimal=true, check=true))
-        @test PM.is_minimal(resImin)
+        @test DF.is_minimal(resImin)
     end
 end
 
@@ -494,16 +544,16 @@ end
         E14 = DF.Ext(S1, S4, PM.DerivedFunctorOptions(maxdeg=2))
         if _is_real_field(field)
             # Numerical Ext over reals can introduce duplicated classes in this setup.
-            @test PM.dim(E14, 2) >= 1
+            @test DF.dim(E14, 2) >= 1
             return
         end
-        @test PM.dim(E14, 2) == 1
+        @test DF.dim(E14, 2) == 1
 
         # Via the chain 1 -> 2 -> 4
         E24 = DF.Ext(S2, S4, PM.DerivedFunctorOptions(maxdeg=1))
         E12 = DF.Ext(S1, S2, PM.DerivedFunctorOptions(maxdeg=2))  # needs tmax >= 2 because p+q = 2
-        @test PM.dim(E24, 1) == 1
-        @test PM.dim(E12, 1) == 1
+        @test DF.dim(E24, 1) == 1
+        @test DF.dim(E12, 1) == 1
 
         beta = [c(1)]
         alpha = [c(1)]
@@ -544,9 +594,9 @@ end
         # Target space: Ext^3(S0, S123) should be 1-dimensional for B3.
         E03 = DF.Ext(S0, S123, PM.DerivedFunctorOptions(maxdeg=3))
         if _is_real_field(field)
-            @test PM.dim(E03, 3) >= 1
+            @test DF.dim(E03, 3) >= 1
         else
-            @test PM.dim(E03, 3) == 1
+            @test DF.dim(E03, 3) == 1
         end
 
         # Degree-1 generators on the cover chain:
@@ -556,27 +606,27 @@ end
         E01 = DF.Ext(S0,  S1,   PM.DerivedFunctorOptions(maxdeg=3))
 
         if _is_real_field(field)
-            @test PM.dim(E23, 1) >= 1
-            @test PM.dim(E12, 1) >= 1
-            @test PM.dim(E01, 1) >= 1
+            @test DF.dim(E23, 1) >= 1
+            @test DF.dim(E12, 1) >= 1
+            @test DF.dim(E01, 1) >= 1
         else
-            @test PM.dim(E23, 1) == 1
-            @test PM.dim(E12, 1) == 1
-            @test PM.dim(E01, 1) == 1
+            @test DF.dim(E23, 1) == 1
+            @test DF.dim(E12, 1) == 1
+            @test DF.dim(E01, 1) == 1
         end
 
         # Intermediate targets in degree 2 (also 1-dimensional for this choice).
         E13 = DF.Ext(S1,  S123, PM.DerivedFunctorOptions(maxdeg=3))
         E02 = DF.Ext(S0,  S12, PM.DerivedFunctorOptions(maxdeg=3))
         if _is_real_field(field)
-            @test PM.dim(E13, 2) >= 1
-            @test PM.dim(E02, 2) >= 1
+            @test DF.dim(E13, 2) >= 1
+            @test DF.dim(E02, 2) >= 1
             # Numerical lift solves in this chain can be inconsistent under tolerance;
             # keep a coarse sanity check for RealField and skip strict associativity.
             return
         else
-            @test PM.dim(E13, 2) == 1
-            @test PM.dim(E02, 2) == 1
+            @test DF.dim(E13, 2) == 1
+            @test DF.dim(E02, 2) == 1
         end
 
         # Left bracketing: (e23 * e12) * e01
@@ -623,7 +673,7 @@ end
         EMB = DF.Ext(resM, B)
         EMC = DF.Ext(resM, C)
 
-        delta2 = PM.connecting_hom(EMA, EMB, EMC, i, p; t=2)
+        delta2 = DF.connecting_hom(EMA, EMB, EMC, i, p; t=2)
         if _is_real_field(field)
             @test norm(Matrix(delta2)) <= _field_tol(field)
         else
@@ -644,7 +694,7 @@ end
         EB = PM.ExtInjective(B1, resN)
         EC = PM.ExtInjective(C1, resN)
 
-        delta1 = PM.connecting_hom_first(EA, EB, EC, i1, p1; t=1)
+        delta1 = DF.connecting_hom_first(EA, EB, EC, i1, p1; t=1)
         if _is_real_field(field)
             @test norm(Matrix(delta1)) <= _field_tol(field)
         else
@@ -681,19 +731,19 @@ end
         EMA = DF.Ext(resM, S2)
         EMB = DF.Ext(resM, I12)
         EMC = DF.Ext(resM, S1)
-        delta0 = PM.connecting_hom(EMA, EMB, EMC, i, p; t=0)
+        delta0 = DF.connecting_hom(EMA, EMB, EMC, i, p; t=0)
 
         # The packaged long exact sequence should expose the same delta^0.
         les = PM.ExtLongExactSequenceSecond(S1, S2, I12, S1, i, p, PM.DerivedFunctorOptions(maxdeg=0))
         if _is_real_field(field)
-            r0 = PM.FieldLinAlg.rank(field, delta0)
-            r1 = PM.FieldLinAlg.rank(field, les.delta[1])
+            r0 = FL.rank(field, delta0)
+            r1 = FL.rank(field, les.delta[1])
             @test r0 == r1
             @test 0 <= r0 <= 1
             @test norm(Matrix(les.delta[1]) - Matrix(delta0)) <= _field_tol(field)
         else
-            @test PM.FieldLinAlg.rank(field, delta0) == 1
-            @test PM.FieldLinAlg.rank(field, les.delta[1]) == 1
+            @test FL.rank(field, delta0) == 1
+            @test FL.rank(field, les.delta[1]) == 1
             @test Matrix(les.delta[1]) == Matrix(delta0)
         end
     end
@@ -727,20 +777,20 @@ end
 
         # Sanity: dimensions agree with the underlying Ext space.
         for t in 0:E.tmax
-            @test PM.dim(A, t) == PM.dim(E, t)
+            @test DF.dim(A, t) == DF.dim(E, t)
         end
         _is_real_field(field) && return
 
         # The unit should act as both-sided identity on every homogeneous degree <= tmax.
         oneA = one(A)
         for t in 0:E.tmax
-            dt = PM.dim(A, t)
+            dt = DF.dim(A, t)
             if dt == 0
                 continue
             end
 
             # Deterministic "generic" element: (1,2,3,...,dt).
-            x = PM.element(A, t, [c(i) for i in 1:dt])
+            x = DF.element(A, t, [c(i) for i in 1:dt])
 
             @test (oneA * x).coords == x.coords
             @test (x * oneA).coords == x.coords
@@ -748,10 +798,10 @@ end
 
         # Cache behavior: after one multiplication in (p,q), the multiplication matrix should exist,
         # and repeated multiplication should not grow the cache.
-        if E.tmax >= 2 && PM.dim(A, 1) > 0
-            d1 = PM.dim(A, 1)
-            x = PM.element(A, 1, [c(i) for i in 1:d1])
-            y = PM.element(A, 1, [c(d1 - i + 1) for i in 1:d1])
+        if E.tmax >= 2 && DF.dim(A, 1) > 0
+            d1 = DF.dim(A, 1)
+            x = DF.element(A, 1, [c(i) for i in 1:d1])
+            y = DF.element(A, 1, [c(d1 - i + 1) for i in 1:d1])
 
             prod1 = x * y
             @test haskey(A.mult_cache, (1, 1))
@@ -771,14 +821,14 @@ end
         #
         # On the diamond, Ext^3 is expected to vanish for many modules; we therefore test an
         # associativity instance that stays inside degrees <= 2 by including a degree-0 factor.
-        if E.tmax >= 2 && PM.dim(A, 1) > 0
-            d1 = PM.dim(A, 1)
+        if E.tmax >= 2 && DF.dim(A, 1) > 0
+            d1 = DF.dim(A, 1)
 
             # First basis direction e_1
-            a = PM.element(A, 1, [one(K); zeros(K, d1 - 1)])
+            a = DF.element(A, 1, [one(K); zeros(K, d1 - 1)])
 
             # Last basis direction e_{d1}
-            b = PM.element(A, 1, [zeros(K, d1 - 1); one(K)])
+            b = DF.element(A, 1, [zeros(K, d1 - 1); one(K)])
 
             c0 = oneA
 

@@ -1335,16 +1335,4 @@ function region_anisotropy_scores(pi, r::Integer;
         pca=pd)
 end
 
-export region_weights, region_volume, region_bbox, region_widths,
-       region_centroid, region_aspect_ratio, region_diameter,
-       region_adjacency, region_facet_count, region_vertex_count,
-       region_boundary_measure, region_boundary_measure_breakdown,
-       region_perimeter, region_surface_area,
-       region_principal_directions,
-       region_chebyshev_ball, region_chebyshev_center, region_inradius,
-       region_circumradius,
-       region_boundary_to_volume_ratio, region_isoperimetric_ratio,
-       region_mean_width, region_minkowski_functionals,
-       region_covariance_anisotropy, region_covariance_eccentricity, region_anisotropy_scores
-
 end # module

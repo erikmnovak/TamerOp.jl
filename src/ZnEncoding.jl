@@ -5,16 +5,21 @@ using SparseArrays
 using Random
 using Base.Threads
 
-using ..CoreModules: AbstractPLikeEncodingMap, EncodingOptions, AbstractCoeffField, coeff_type, CompiledEncoding
+using ..CoreModules: AbstractPLikeEncodingMap, EncodingOptions, AbstractCoeffField, coeff_type, CompiledEncoding,
+                     SessionCache, _field_cache_key,
+                     _session_get_zn_encoding_artifact, _session_set_zn_encoding_artifact!,
+                     _session_get_zn_pushforward_plan, _session_set_zn_pushforward_plan!,
+                     _session_get_zn_pushforward_fringe, _session_set_zn_pushforward_fringe!
 using ..Stats: _wilson_interval
 
 import ..CoreModules: locate, dimension, representatives, axes_from_encoding
 import ..RegionGeometry: region_weights, region_adjacency
 import ..FieldLinAlg
-using ..FiniteFringe: AbstractPoset, FinitePoset, ProductOfChainsPoset, cover_edges, Upset, Downset,
-                       upset_closure, downset_closure, intersects, FringeModule,
+import ..FiniteFringe
+using ..FiniteFringe: AbstractPoset, FinitePoset, ProductOfChainsPoset, Upset, Downset,
+                       upset_closure, downset_closure, intersects, FringeModule, CoverEdges,
                        poset_equal
-import ..FiniteFringe: nvertices, leq, upset_indices, downset_indices
+import ..FiniteFringe: nvertices, leq, upset_indices, downset_indices, leq_row, leq_col, cover_edges
 using ..Modules: PModule, PosetCache
 using ..FlangeZn: Flange, IndFlat, IndInj, in_flat, in_inj
 
@@ -42,8 +47,139 @@ function grid_poset(a::NTuple{N,Int}, b::NTuple{N,Int}) where {N}
 end
 
 ##############################
-# Packed signature keys
+# Packed signature storage/keys
 ##############################
+
+struct PackedSignatureRow{NW} <: AbstractVector{Bool}
+    words::Matrix{UInt64}
+    col::Int
+    bitlen::Int
+end
+
+"""
+    PackedSignatureRows{NW}
+
+Packed signature table with `NW` UInt64 words per region-signature row.
+`bitlen` tracks the logical number of bits (generators) in each row.
+"""
+struct PackedSignatureRows{NW} <: AbstractVector{PackedSignatureRow{NW}}
+    words::Matrix{UInt64}
+    bitlen::Int
+    function PackedSignatureRows{NW}(words::Matrix{UInt64}, bitlen::Int) where {NW}
+        size(words, 1) == NW || error("PackedSignatureRows: expected $(NW) words per row, got $(size(words, 1))")
+        bitlen >= 0 || error("PackedSignatureRows: bitlen must be nonnegative")
+        bitlen <= 64 * NW || error("PackedSignatureRows: bitlen=$(bitlen) exceeds word capacity $(64 * NW)")
+        new{NW}(words, bitlen)
+    end
+end
+
+Base.IndexStyle(::Type{<:PackedSignatureRows}) = IndexLinear()
+Base.IndexStyle(::Type{<:PackedSignatureRow}) = IndexLinear()
+Base.size(S::PackedSignatureRows) = (size(S.words, 2),)
+Base.length(S::PackedSignatureRows) = size(S.words, 2)
+Base.eltype(::Type{PackedSignatureRows{NW}}) where {NW} = PackedSignatureRow{NW}
+Base.eltype(::Type{PackedSignatureRow{NW}}) where {NW} = Bool
+
+@inline function Base.getindex(S::PackedSignatureRows{NW}, i::Int) where {NW}
+    @boundscheck checkbounds(S, i)
+    return PackedSignatureRow{NW}(S.words, i, S.bitlen)
+end
+
+Base.size(r::PackedSignatureRow) = (r.bitlen,)
+Base.length(r::PackedSignatureRow) = r.bitlen
+
+@inline function Base.getindex(r::PackedSignatureRow, i::Int)::Bool
+    @boundscheck checkbounds(r, i)
+    w = ((i - 1) >>> 6) + 1
+    bit = UInt64(1) << ((i - 1) & 63)
+    return (r.words[w, r.col] & bit) != 0
+end
+
+@inline function Base.iterate(r::PackedSignatureRow, state::Int=1)
+    state > r.bitlen && return nothing
+    return (r[state], state + 1)
+end
+
+@inline _word_lastmask(bitlen::Int) = begin
+    rem = bitlen & 63
+    rem == 0 ? typemax(UInt64) : (UInt64(1) << rem) - 1
+end
+
+@inline function _sig_subset_words(words_a::Matrix{UInt64},
+                                   idx_a::Int,
+                                   words_b::Matrix{UInt64},
+                                   idx_b::Int,
+                                   lastmask::UInt64)::Bool
+    nw = size(words_a, 1)
+    @inbounds for w in 1:nw
+        diff = words_a[w, idx_a] & ~words_b[w, idx_b]
+        if w == nw
+            diff &= lastmask
+        end
+        diff == 0 || return false
+    end
+    return true
+end
+
+@inline function _sig_popcount_words(words::Matrix{UInt64}, idx::Int, lastmask::UInt64)::Int
+    nw = size(words, 1)
+    c = 0
+    @inbounds for w in 1:nw
+        word = words[w, idx]
+        if w == nw
+            word &= lastmask
+        end
+        c += count_ones(word)
+    end
+    return c
+end
+
+function _word_matrix_from_cols(cols::Vector{NTuple{NW,UInt64}}, ::Val{NW}) where {NW}
+    n = length(cols)
+    out = Matrix{UInt64}(undef, NW, n)
+    @inbounds for j in 1:n
+        col = cols[j]
+        for w in 1:NW
+            out[w, j] = col[w]
+        end
+    end
+    return out
+end
+
+@inline function _words_from_signature_row(row::AbstractVector{Bool}, ::Val{MW}) where {MW}
+    len = length(row)
+    return ntuple(w -> begin
+        word = UInt64(0)
+        base = (w - 1) * 64
+        @inbounds for j in 1:64
+            i = base + j
+            i > len && break
+            if row[i]
+                word |= (UInt64(1) << (j - 1))
+            end
+        end
+        word
+    end, MW)
+end
+
+function _pack_signature_rows(rows::PackedSignatureRows{MW},
+                              bitlen::Int,
+                              ::Val{MW}) where {MW}
+    rows.bitlen == bitlen || error("_pack_signature_rows: row bit length mismatch")
+    return rows
+end
+
+function _pack_signature_rows(rows::AbstractVector{<:AbstractVector{Bool}},
+                              bitlen::Int,
+                              ::Val{MW}) where {MW}
+    packed = Vector{NTuple{MW,UInt64}}(undef, length(rows))
+    @inbounds for i in eachindex(rows)
+        row = rows[i]
+        length(row) == bitlen || error("_pack_signature_rows: signature row $(i) has wrong length")
+        packed[i] = _words_from_signature_row(row, Val(MW))
+    end
+    return PackedSignatureRows{MW}(_word_matrix_from_cols(packed, Val(MW)), bitlen)
+end
 
 """
     SigKey{MY,MZ}
@@ -91,7 +227,7 @@ end
     end, MZ)
 end
 
-@inline function _pack_bitvector_words(sig::BitVector, ::Val{MW}) where {MW}
+@inline function _pack_bitvector_words(sig::AbstractVector{Bool}, ::Val{MW}) where {MW}
     len = length(sig)
     return ntuple(w -> begin
         word = UInt64(0)
@@ -107,7 +243,10 @@ end
     end, MW)
 end
 
-@inline function _sigkey_from_bitvectors(y::BitVector, z::BitVector, ::Val{MY}, ::Val{MZ}) where {MY,MZ}
+@inline function _sigkey_from_bitvectors(y::AbstractVector{Bool},
+                                         z::AbstractVector{Bool},
+                                         ::Val{MY},
+                                         ::Val{MZ}) where {MY,MZ}
     SigKey{MY,MZ}(_pack_bitvector_words(y, Val(MY)),
                   _pack_bitvector_words(z, Val(MZ)))
 end
@@ -139,16 +278,6 @@ end
                                     ::Val{MZ}) where {MY,MZ}
     return SigKey{MY,MZ}(ntuple(i -> y_words[i], Val(MY)),
                          ntuple(i -> z_words[i], Val(MZ)))
-end
-
-function _bitvector_from_words(words::Vector{UInt64}, len::Int)
-    out = falses(len)
-    @inbounds for idx in 1:len
-        w = (idx - 1) >>> 6
-        b = UInt64(1) << ((idx - 1) & 63)
-        out[idx] = (words[w + 1] & b) != 0
-    end
-    return out
 end
 
 function _build_signature_events(coords::NTuple{N,Vector{Int}},
@@ -292,20 +421,20 @@ function _collect_signatures_incremental(coords::NTuple{N,Vector{Int}},
     end
 
     seen = Dict{SigKey{MY,MZ},Int}()
-    sig_y = BitVector[]
-    sig_z = BitVector[]
+    sig_y_cols = Vector{NTuple{MY,UInt64}}()
+    sig_z_cols = Vector{NTuple{MZ,UInt64}}()
     reps  = Vector{NTuple{N,Int}}()
 
     function _record_state!()
         key = _sigkey_from_words(y_words, z_words, Val(MY), Val(MZ))
         rid = get(seen, key, 0)
         if rid == 0
-            push!(sig_y, _bitvector_from_words(y_words, m))
-            push!(sig_z, _bitvector_from_words(z_words, r))
+            push!(sig_y_cols, ntuple(i -> y_words[i], Val(MY)))
+            push!(sig_z_cols, ntuple(i -> z_words[i], Val(MZ)))
             push!(reps, ntuple(i -> gvals[i], N))
-            rid = length(sig_y)
+            rid = length(sig_y_cols)
             seen[key] = rid
-            if length(sig_y) > max_regions
+            if length(sig_y_cols) > max_regions
                 error("encode_poset_from_flanges: exceeded max_regions=$max_regions")
             end
         end
@@ -339,6 +468,8 @@ function _collect_signatures_incremental(coords::NTuple{N,Vector{Int}},
         _record_state!()
     end
 
+    sig_y = PackedSignatureRows{MY}(_word_matrix_from_cols(sig_y_cols, Val(MY)), m)
+    sig_z = PackedSignatureRows{MZ}(_word_matrix_from_cols(sig_z_cols, Val(MZ)), r)
     return sig_y, sig_z, reps, seen, shape, strides, cell_to_region
 end
 
@@ -550,6 +681,60 @@ ZnBoxBasisCache{K}() where {K} = ZnBoxBasisCache{K}(0x0,
     end
     h = hash(size(FG.phi), h)
     return UInt64(h)
+end
+
+@inline function _flange_presentation_fingerprint(FG::Flange)
+    h = hash(_flange_fingerprint(FG))
+    # Include coefficient data so cached pushforwards remain correct when
+    # generator sets are equal but presentation matrices differ.
+    @inbounds for x in FG.phi
+        h = hash(x, h)
+    end
+    return UInt64(h)
+end
+
+@inline function _hash_sorted_u64(vals::Vector{UInt64}, seed::UInt)
+    sort!(vals)
+    h = seed
+    @inbounds for v in vals
+        h = hash(v, h)
+    end
+    return UInt64(h)
+end
+
+const _GENERATOR_KEY = Tuple{Tuple,Tuple}
+
+@inline function _generator_keyset_fingerprint(n::Int,
+                                               flat_keys::AbstractVector{<:_GENERATOR_KEY},
+                                               inj_keys::AbstractVector{<:_GENERATOR_KEY})
+    flat_hashes = Vector{UInt64}(undef, length(flat_keys))
+    inj_hashes = Vector{UInt64}(undef, length(inj_keys))
+    @inbounds for i in eachindex(flat_keys)
+        flat_hashes[i] = UInt64(hash(flat_keys[i]))
+    end
+    @inbounds for i in eachindex(inj_keys)
+        inj_hashes[i] = UInt64(hash(inj_keys[i]))
+    end
+    h = hash(n)
+    h = hash(length(flat_hashes), h)
+    h = _hash_sorted_u64(flat_hashes, h)
+    h = hash(length(inj_hashes), h)
+    h = _hash_sorted_u64(inj_hashes, h)
+    return UInt64(h)
+end
+
+@inline function _encoding_fingerprint(n::Int,
+                                       flats::AbstractVector{<:IndFlat},
+                                       injectives::AbstractVector{<:IndInj})
+    flat_keys = Vector{_GENERATOR_KEY}(undef, length(flats))
+    inj_keys = Vector{_GENERATOR_KEY}(undef, length(injectives))
+    @inbounds for i in eachindex(flats)
+        flat_keys[i] = _flat_key(flats[i])
+    end
+    @inbounds for i in eachindex(injectives)
+        inj_keys[i] = _inj_key(injectives[i])
+    end
+    return _generator_keyset_fingerprint(n, flat_keys, inj_keys)
 end
 
 function compile_zn_box_cache(FG::Flange{K}) where {K}
@@ -1072,6 +1257,23 @@ end
 # ...
 # =============================================================================
 
+struct ZnPushforwardPlan
+    flat_idxs::Vector{Int}
+    inj_idxs::Vector{Int}
+    zero_pairs::Vector{Tuple{Int,Int}}
+end
+
+mutable struct ZnPushforwardCache
+    lock::Base.ReentrantLock
+    flat_index::Union{Nothing,Dict{_GENERATOR_KEY,Int}}
+    inj_index::Union{Nothing,Dict{_GENERATOR_KEY,Int}}
+    flat_masks::Union{Nothing,Vector{BitVector}}
+    inj_masks::Union{Nothing,Vector{BitVector}}
+    plan_by_flange::Dict{UInt64,ZnPushforwardPlan}
+    ZnPushforwardCache() = new(Base.ReentrantLock(), nothing, nothing, nothing, nothing,
+                               Dict{UInt64,ZnPushforwardPlan}())
+end
+
 """
     ZnEncodingMap
 
@@ -1087,8 +1289,8 @@ The target poset `P` is the uptight poset on (y,z)-signatures, where
 Fields
 * `n`              : ambient dimension
 * `coords[i]`      : sorted unique critical integers along axis i
-* `sig_y[t]`       : y-signature of region t (BitVector, one per flat)
-* `sig_z[t]`       : z-signature of region t (BitVector, one per injective)
+* `sig_y[t]`       : y-signature view for region t (Bool vector, one per flat)
+* `sig_z[t]`       : z-signature view for region t (Bool vector, one per injective)
 * `reps[t]`        : representative lattice point for region t (as an `NTuple`)
 * `flats`          : the global flat list used to build signatures
 * `injectives`     : the global injective list used to build signatures
@@ -1103,26 +1305,34 @@ The method `locate(pi, g)` returns the region index in `1:P.n` for the point
 struct ZnEncodingMap{N,MY,MZ} <: AbstractPLikeEncodingMap
     n::Int
     coords::NTuple{N,Vector{Int}}
-    sig_y::Vector{BitVector}
-    sig_z::Vector{BitVector}
+    sig_y::PackedSignatureRows{MY}
+    sig_z::PackedSignatureRows{MZ}
     reps::Vector{NTuple{N,Int}}
     flats::Vector{IndFlat{N}}
     injectives::Vector{IndInj{N}}
+    encoding_fingerprint::UInt64
     sig_to_region::Dict{SigKey{MY,MZ},Int}
     cell_shape::NTuple{N,Int}
     cell_strides::NTuple{N,Int}
     cell_to_region::Union{Nothing,Vector{Int}}
+    pushforward_cache::ZnPushforwardCache
 end
 
 function ZnEncodingMap(n::Int,
                        coords::NTuple{N,Vector{Int}},
-                       sig_y::Vector{BitVector},
-                       sig_z::Vector{BitVector},
+                       sig_y::Union{PackedSignatureRows{MY},AbstractVector{<:AbstractVector{Bool}}},
+                       sig_z::Union{PackedSignatureRows{MZ},AbstractVector{<:AbstractVector{Bool}}},
                        reps::Vector{NTuple{N,Int}},
                        flats::Vector{IndFlat{N}},
                        injectives::Vector{IndInj{N}},
                        sig_to_region::Dict{SigKey{MY,MZ},Int}) where {N,MY,MZ}
     n == N || error("ZnEncodingMap: n=$n does not match reps tuple length $N")
+    nregions = length(reps)
+    packed_y = _pack_signature_rows(sig_y, length(flats), Val(MY))
+    packed_z = _pack_signature_rows(sig_z, length(injectives), Val(MZ))
+    length(packed_y) == nregions || error("ZnEncodingMap: sig_y region count mismatch")
+    length(packed_z) == nregions || error("ZnEncodingMap: sig_z region count mismatch")
+    enc_key = _encoding_fingerprint(n, flats, injectives)
     shape = ntuple(i -> length(coords[i]) + 1, N)
     strides_vec = Vector{Int}(undef, N)
     strides_vec[1] = 1
@@ -1130,14 +1340,14 @@ function ZnEncodingMap(n::Int,
         strides_vec[i] = strides_vec[i - 1] * shape[i - 1]
     end
     strides = ntuple(i -> strides_vec[i], N)
-    return ZnEncodingMap{N,MY,MZ}(n, coords, sig_y, sig_z, reps, flats, injectives, sig_to_region,
-                                  shape, strides, nothing)
+    return ZnEncodingMap{N,MY,MZ}(n, coords, packed_y, packed_z, reps, flats, injectives, enc_key, sig_to_region,
+                                  shape, strides, nothing, ZnPushforwardCache())
 end
 
 function ZnEncodingMap(n::Int,
                        coords::NTuple{N,Vector{Int}},
-                       sig_y::Vector{BitVector},
-                       sig_z::Vector{BitVector},
+                       sig_y::Union{PackedSignatureRows{MY},AbstractVector{<:AbstractVector{Bool}}},
+                       sig_z::Union{PackedSignatureRows{MZ},AbstractVector{<:AbstractVector{Bool}}},
                        reps::Vector{NTuple{N,Int}},
                        flats::Vector{IndFlat{N}},
                        injectives::Vector{IndInj{N}},
@@ -1146,8 +1356,14 @@ function ZnEncodingMap(n::Int,
                        cell_strides::NTuple{N,Int},
                        cell_to_region::Union{Nothing,Vector{Int}}) where {N,MY,MZ}
     n == N || error("ZnEncodingMap: n=$n does not match reps tuple length $N")
-    return ZnEncodingMap{N,MY,MZ}(n, coords, sig_y, sig_z, reps, flats, injectives, sig_to_region,
-                                  cell_shape, cell_strides, cell_to_region)
+    nregions = length(reps)
+    packed_y = _pack_signature_rows(sig_y, length(flats), Val(MY))
+    packed_z = _pack_signature_rows(sig_z, length(injectives), Val(MZ))
+    length(packed_y) == nregions || error("ZnEncodingMap: sig_y region count mismatch")
+    length(packed_z) == nregions || error("ZnEncodingMap: sig_z region count mismatch")
+    enc_key = _encoding_fingerprint(n, flats, injectives)
+    return ZnEncodingMap{N,MY,MZ}(n, coords, packed_y, packed_z, reps, flats, injectives, enc_key, sig_to_region,
+                                  cell_shape, cell_strides, cell_to_region, ZnPushforwardCache())
 end
 
 """
@@ -1192,16 +1408,35 @@ compile_zn_cache(FG1::Flange, FG2::Flange, FG3::Flange, opts::EncodingOptions=En
 Structured poset on region signatures with order defined by componentwise inclusion:
 `i <= j` iff `sig_y[i] <= sig_y[j]` and `sig_z[i] <= sig_z[j]`.
 """
-struct SignaturePoset <: AbstractPoset
-    sig_y::Vector{BitVector}
-    sig_z::Vector{BitVector}
+struct SignaturePoset{MY,MZ} <: AbstractPoset
+    sig_y::PackedSignatureRows{MY}
+    sig_z::PackedSignatureRows{MZ}
     n::Int
+    y_lastmask::UInt64
+    z_lastmask::UInt64
     cache::PosetCache
 end
 
-function SignaturePoset(sig_y::Vector{BitVector}, sig_z::Vector{BitVector})
+function SignaturePoset(sig_y::PackedSignatureRows{MY},
+                        sig_z::PackedSignatureRows{MZ}) where {MY,MZ}
     length(sig_y) == length(sig_z) || error("SignaturePoset: sig_y and sig_z length mismatch")
-    return SignaturePoset(sig_y, sig_z, length(sig_y), PosetCache())
+    return SignaturePoset{MY,MZ}(sig_y, sig_z, length(sig_y),
+                                 _word_lastmask(sig_y.bitlen),
+                                 _word_lastmask(sig_z.bitlen),
+                                 PosetCache())
+end
+
+function SignaturePoset(sig_y::AbstractVector{<:AbstractVector{Bool}},
+                        sig_z::AbstractVector{<:AbstractVector{Bool}})
+    length(sig_y) == length(sig_z) || error("SignaturePoset: sig_y and sig_z length mismatch")
+    n = length(sig_y)
+    m = n == 0 ? 0 : length(sig_y[1])
+    r = n == 0 ? 0 : length(sig_z[1])
+    my = cld(max(m, 1), 64)
+    mz = cld(max(r, 1), 64)
+    py = _pack_signature_rows(sig_y, m, Val(my))
+    pz = _pack_signature_rows(sig_z, r, Val(mz))
+    return SignaturePoset(py, pz)
 end
 
 @inline function _sig_subset(a::BitVector, b::BitVector)::Bool
@@ -1223,9 +1458,161 @@ end
     return true
 end
 
+@inline function _sig_popcount(sig::BitVector)::Int
+    chunks = sig.chunks
+    nchunks = length(chunks)
+    nchunks == 0 && return 0
+    r = length(sig) & 63
+    lastmask = (r == 0) ? typemax(UInt64) : (UInt64(1) << r) - 1
+    c = 0
+    @inbounds for w in 1:nchunks
+        word = chunks[w]
+        if w == nchunks
+            word &= lastmask
+        end
+        c += count_ones(word)
+    end
+    return c
+end
+
 nvertices(P::SignaturePoset) = P.n
 leq(P::SignaturePoset, i::Int, j::Int) =
-    _sig_subset(P.sig_y[i], P.sig_y[j]) && _sig_subset(P.sig_z[i], P.sig_z[j])
+    _sig_subset_words(P.sig_y.words, i, P.sig_y.words, j, P.y_lastmask) &&
+    _sig_subset_words(P.sig_z.words, i, P.sig_z.words, j, P.z_lastmask)
+
+function upset_indices(P::SignaturePoset, i::Int)
+    cached = FiniteFringe._cached_upset_indices(P, i)
+    cached === nothing || return cached
+    return _SignatureLeqIter(P, i, true)
+end
+
+function downset_indices(P::SignaturePoset, i::Int)
+    cached = FiniteFringe._cached_downset_indices(P, i)
+    cached === nothing || return cached
+    return _SignatureLeqIter(P, i, false)
+end
+
+leq_row(P::SignaturePoset, i::Int) = upset_indices(P, i)
+leq_col(P::SignaturePoset, j::Int) = downset_indices(P, j)
+
+@inline function _sig_leq_pair(P::SignaturePoset, i::Int, j::Int)::Bool
+    return _sig_subset_words(P.sig_y.words, i, P.sig_y.words, j, P.y_lastmask) &&
+           _sig_subset_words(P.sig_z.words, i, P.sig_z.words, j, P.z_lastmask)
+end
+
+struct _SignatureLeqIter
+    P::SignaturePoset
+    i::Int
+    upset::Bool
+end
+
+Base.IteratorSize(::Type{_SignatureLeqIter}) = Base.HasLength()
+Base.eltype(::Type{_SignatureLeqIter}) = Int
+
+function Base.length(it::_SignatureLeqIter)
+    n = it.P.n
+    i = it.i
+    cnt = 0
+    if it.upset
+        @inbounds for j in 1:n
+            cnt += (_sig_subset_words(it.P.sig_y.words, i, it.P.sig_y.words, j, it.P.y_lastmask) &&
+                    _sig_subset_words(it.P.sig_z.words, i, it.P.sig_z.words, j, it.P.z_lastmask)) ? 1 : 0
+        end
+    else
+        @inbounds for j in 1:n
+            cnt += (_sig_subset_words(it.P.sig_y.words, j, it.P.sig_y.words, i, it.P.y_lastmask) &&
+                    _sig_subset_words(it.P.sig_z.words, j, it.P.sig_z.words, i, it.P.z_lastmask)) ? 1 : 0
+        end
+    end
+    return cnt
+end
+
+function Base.iterate(it::_SignatureLeqIter, state::Int=1)
+    P = it.P
+    i = it.i
+    n = P.n
+    if it.upset
+        @inbounds for j in state:n
+            if _sig_subset_words(P.sig_y.words, i, P.sig_y.words, j, P.y_lastmask) &&
+               _sig_subset_words(P.sig_z.words, i, P.sig_z.words, j, P.z_lastmask)
+                return j, j + 1
+            end
+        end
+    else
+        @inbounds for j in state:n
+            if _sig_subset_words(P.sig_y.words, j, P.sig_y.words, i, P.y_lastmask) &&
+               _sig_subset_words(P.sig_z.words, j, P.sig_z.words, i, P.z_lastmask)
+                return j, j + 1
+            end
+        end
+    end
+    return nothing
+end
+
+function _signature_cover_edges_uncached(P::SignaturePoset)
+    n = nvertices(P)
+    mat = falses(n, n)
+    edges = Tuple{Int,Int}[]
+    n == 0 && return CoverEdges(mat, edges)
+
+    ranks = Vector{Int}(undef, n)
+    maxrank = 0
+    @inbounds for i in 1:n
+        r = _sig_popcount_words(P.sig_y.words, i, P.y_lastmask) +
+            _sig_popcount_words(P.sig_z.words, i, P.z_lastmask)
+        ranks[i] = r
+        r > maxrank && (maxrank = r)
+    end
+
+    buckets = [Int[] for _ in 0:maxrank]
+    @inbounds for i in 1:n
+        push!(buckets[ranks[i] + 1], i)
+    end
+
+    mins = Int[]
+    @inbounds for i in 1:n
+        empty!(mins)
+        ri = ranks[i]
+        for r in (ri + 1):maxrank
+            for j in buckets[r + 1]
+                _sig_leq_pair(P, i, j) || continue
+                dominated = false
+                for k in mins
+                    if _sig_leq_pair(P, k, j)
+                        dominated = true
+                        break
+                    end
+                end
+                dominated && continue
+                push!(mins, j)
+                push!(edges, (i, j))
+                mat[i, j] = true
+            end
+        end
+    end
+
+    return CoverEdges(mat, edges)
+end
+
+function cover_edges(P::SignaturePoset; cached::Bool=true)
+    if !cached
+        return _signature_cover_edges_uncached(P)
+    end
+    C = P.cache.cover_edges
+    C === nothing || return C
+
+    Base.lock(P.cache.lock)
+    try
+        C = P.cache.cover_edges
+        if C === nothing
+            C = _signature_cover_edges_uncached(P)
+            P.cache.cover_edges = C
+        end
+        return C
+    finally
+        Base.unlock(P.cache.lock)
+    end
+end
 
 # --- Core encoding-map interface ------------------------------------------------
 
@@ -1284,7 +1671,7 @@ The keys ignore label `id` on purpose: the encoding depends only on the underlyi
 """
 function _generator_index_dicts(flats::Vector{IndFlat{N}},
                                 injectives::Vector{IndInj{N}}) where {N}
-    flat_index = Dict{Tuple{Tuple,Tuple}, Int}()
+    flat_index = Dict{_GENERATOR_KEY, Int}()
     for (i, F) in enumerate(flats)
         key = _flat_key(F)
         if !haskey(flat_index, key)
@@ -1292,7 +1679,7 @@ function _generator_index_dicts(flats::Vector{IndFlat{N}},
         end
     end
 
-    inj_index = Dict{Tuple{Tuple,Tuple}, Int}()
+    inj_index = Dict{_GENERATOR_KEY, Int}()
     for (j, E) in enumerate(injectives)
         key = _inj_key(E)
         if !haskey(inj_index, key)
@@ -1301,6 +1688,295 @@ function _generator_index_dicts(flats::Vector{IndFlat{N}},
     end
 
     return flat_index, inj_index
+end
+
+function _build_pushforward_masks(sig_y::PackedSignatureRows,
+                                  sig_z::PackedSignatureRows,
+                                  nflat::Int,
+                                  ninj::Int)
+    n = length(sig_y)
+    flat_masks = Vector{BitVector}(undef, nflat)
+    @inbounds for i in 1:nflat
+        mask = falses(n)
+        wy = ((i - 1) >>> 6) + 1
+        by = UInt64(1) << ((i - 1) & 63)
+        for t in 1:n
+            mask[t] = (sig_y.words[wy, t] & by) != 0
+        end
+        flat_masks[i] = mask
+    end
+
+    inj_masks = Vector{BitVector}(undef, ninj)
+    @inbounds for j in 1:ninj
+        mask = falses(n)
+        wz = ((j - 1) >>> 6) + 1
+        bz = UInt64(1) << ((j - 1) & 63)
+        for t in 1:n
+            mask[t] = (sig_z.words[wz, t] & bz) == 0
+        end
+        inj_masks[j] = mask
+    end
+    return flat_masks, inj_masks
+end
+
+function _ensure_pushforward_cache!(pi::ZnEncodingMap)
+    cache = pi.pushforward_cache
+    flat_index = cache.flat_index
+    inj_index = cache.inj_index
+    flat_masks = cache.flat_masks
+    inj_masks = cache.inj_masks
+    if flat_index !== nothing && inj_index !== nothing && flat_masks !== nothing && inj_masks !== nothing
+        return cache
+    end
+
+    Base.lock(cache.lock)
+    try
+        if cache.flat_index === nothing || cache.inj_index === nothing
+            fi, ji = _generator_index_dicts(pi.flats, pi.injectives)
+            cache.flat_index = fi
+            cache.inj_index = ji
+        end
+        if cache.flat_masks === nothing || cache.inj_masks === nothing
+            fm, im = _build_pushforward_masks(pi.sig_y, pi.sig_z, pi.sig_y.bitlen, pi.sig_z.bitlen)
+            cache.flat_masks = fm
+            cache.inj_masks = im
+        end
+        return cache
+    finally
+        Base.unlock(cache.lock)
+    end
+end
+
+@inline function _zero_pairs_from_indices(flat_masks::Vector{BitVector},
+                                          inj_masks::Vector{BitVector},
+                                          flat_idxs::Vector{Int},
+                                          inj_idxs::Vector{Int})
+    zero_pairs = Tuple{Int,Int}[]
+    @inbounds for jloc in 1:length(inj_idxs)
+        dj = inj_masks[inj_idxs[jloc]]
+        for iloc in 1:length(flat_idxs)
+            if !intersects(flat_masks[flat_idxs[iloc]], dj)
+                push!(zero_pairs, (jloc, iloc))
+            end
+        end
+    end
+    return zero_pairs
+end
+
+function _get_or_build_pushforward_plan!(pi::ZnEncodingMap, FG::Flange;
+                                         session_cache::Union{Nothing,SessionCache}=nothing)
+    cache = _ensure_pushforward_cache!(pi)
+    fkey = _flange_fingerprint(FG)
+    plan = get(cache.plan_by_flange, fkey, nothing)
+    plan === nothing || return plan
+
+    if session_cache !== nothing
+        shared = _session_get_zn_pushforward_plan(session_cache, pi.encoding_fingerprint, fkey)
+        if shared !== nothing
+            shared_plan = shared::ZnPushforwardPlan
+            Base.lock(cache.lock)
+            try
+                get!(cache.plan_by_flange, fkey, shared_plan)
+            finally
+                Base.unlock(cache.lock)
+            end
+            return shared_plan
+        end
+    end
+
+    built_plan = nothing
+    Base.lock(cache.lock)
+    try
+        plan = get(cache.plan_by_flange, fkey, nothing)
+        if plan !== nothing
+            built_plan = plan
+        else
+            flat_index = cache.flat_index::Dict{_GENERATOR_KEY,Int}
+            inj_index = cache.inj_index::Dict{_GENERATOR_KEY,Int}
+            flat_masks = cache.flat_masks::Vector{BitVector}
+            inj_masks = cache.inj_masks::Vector{BitVector}
+
+            flat_idxs = Vector{Int}(undef, length(FG.flats))
+            @inbounds for i in 1:length(FG.flats)
+                key = _flat_key(FG.flats[i])
+                idx = get(flat_index, key, 0)
+                idx == 0 && error("_pushforward_flange_to_fringe(strict=true): flat label $(FG.flats[i]) not present in encoding generators")
+                flat_idxs[i] = idx
+            end
+
+            inj_idxs = Vector{Int}(undef, length(FG.injectives))
+            @inbounds for j in 1:length(FG.injectives)
+                key = _inj_key(FG.injectives[j])
+                idx = get(inj_index, key, 0)
+                idx == 0 && error("_pushforward_flange_to_fringe(strict=true): injective label $(FG.injectives[j]) not present in encoding generators")
+                inj_idxs[j] = idx
+            end
+
+            zero_pairs = _zero_pairs_from_indices(flat_masks, inj_masks, flat_idxs, inj_idxs)
+            built_plan = ZnPushforwardPlan(flat_idxs, inj_idxs, zero_pairs)
+            cache.plan_by_flange[fkey] = built_plan
+        end
+    finally
+        Base.unlock(cache.lock)
+    end
+
+    plan = built_plan::ZnPushforwardPlan
+    if session_cache !== nothing
+        _session_set_zn_pushforward_plan!(session_cache, pi.encoding_fingerprint, fkey, plan)
+    end
+    return plan
+end
+
+@inline function _images_on_P_from_masks(P::AbstractPoset,
+                                         flat_masks::Vector{BitVector},
+                                         inj_masks::Vector{BitVector},
+                                         flat_idxs::AbstractVector{<:Integer},
+                                         inj_idxs::AbstractVector{<:Integer})
+    m = length(flat_idxs)
+    r = length(inj_idxs)
+    Uhat = Vector{Upset}(undef, m)
+    Dhat = Vector{Downset}(undef, r)
+    @inbounds for loc in 1:m
+        Uhat[loc] = Upset(P, flat_masks[Int(flat_idxs[loc])])
+    end
+    @inbounds for loc in 1:r
+        Dhat[loc] = Downset(P, inj_masks[Int(inj_idxs[loc])])
+    end
+    return Uhat, Dhat
+end
+
+@inline function _strict_pushforward_plan_and_masks(pi::ZnEncodingMap,
+                                                    FG::Flange;
+                                                    session_cache::Union{Nothing,SessionCache}=nothing)
+    plan = _get_or_build_pushforward_plan!(pi, FG; session_cache=session_cache)
+    cache = _ensure_pushforward_cache!(pi)
+    flat_masks = cache.flat_masks::Vector{BitVector}
+    inj_masks = cache.inj_masks::Vector{BitVector}
+    return plan, flat_masks, inj_masks
+end
+
+@inline function _strict_pushforward_fringe_from_plan(P::AbstractPoset,
+                                                      FG::Flange{K},
+                                                      plan::ZnPushforwardPlan,
+                                                      flat_masks::Vector{BitVector},
+                                                      inj_masks::Vector{BitVector}) where {K}
+    Uhat, Dhat = _images_on_P_from_masks(P, flat_masks, inj_masks, plan.flat_idxs, plan.inj_idxs)
+    Phi = _monomialize_phi_with_zero_pairs(FG.phi, plan.zero_pairs)
+    return FringeModule{K}(P, Uhat, Dhat, Phi; field=FG.field)
+end
+
+@inline function _gather_rows_subset(rows_u::Vector{Int},
+                                     rows_v::Vector{Int},
+                                     Bu::AbstractMatrix{K},
+                                     field::AbstractCoeffField) where {K}
+    du = size(Bu, 2)
+    out = Matrix{K}(undef, length(rows_v), du)
+    fill!(out, zero(K))
+    iu = 1
+    iv = 1
+    nu = length(rows_u)
+    nv = length(rows_v)
+    @inbounds while iu <= nu && iv <= nv
+        ru = rows_u[iu]
+        rv = rows_v[iv]
+        if ru == rv
+            for c in 1:du
+                out[iv, c] = Bu[iu, c]
+            end
+            iu += 1
+            iv += 1
+        elseif ru < rv
+            iu += 1
+        else
+            iv += 1
+        end
+    end
+    return out
+end
+
+function _rowcol_activity_from_plan(flat_masks::Vector{BitVector},
+                                    inj_masks::Vector{BitVector},
+                                    plan::ZnPushforwardPlan,
+                                    n::Int)
+    cols_at = [Int[] for _ in 1:n]
+    rows_at = [Int[] for _ in 1:n]
+
+    @inbounds for (iloc, fidx) in enumerate(plan.flat_idxs)
+        mask = flat_masks[fidx]
+        t = findnext(mask, 1)
+        while t !== nothing
+            push!(cols_at[t], iloc)
+            t = findnext(mask, t + 1)
+        end
+    end
+
+    @inbounds for (jloc, didx) in enumerate(plan.inj_idxs)
+        mask = inj_masks[didx]
+        t = findnext(mask, 1)
+        while t !== nothing
+            push!(rows_at[t], jloc)
+            t = findnext(mask, t + 1)
+        end
+    end
+    return cols_at, rows_at
+end
+
+"""
+    _pmodule_from_pushforward_plan(P, FG, plan, flat_masks, inj_masks)
+
+Construct the strict pushed-forward `PModule` directly from cached pushforward plan
+and generator membership masks, without materializing an intermediate FringeModule.
+"""
+function _pmodule_from_pushforward_plan(P::AbstractPoset,
+                                        FG::Flange{K},
+                                        plan::ZnPushforwardPlan,
+                                        flat_masks::Vector{BitVector},
+                                        inj_masks::Vector{BitVector}) where {K}
+    field = FG.field
+    n = nvertices(P)
+    cols_at, rows_at = _rowcol_activity_from_plan(flat_masks, inj_masks, plan, n)
+
+    B = Vector{Matrix{K}}(undef, n)
+    dims = zeros(Int, n)
+    @inbounds for q in 1:n
+        cols = cols_at[q]
+        rows = rows_at[q]
+        if isempty(cols) || isempty(rows)
+            B[q] = Matrix{K}(undef, length(rows), 0)
+            dims[q] = 0
+            continue
+        end
+        phi_q = @view FG.phi[rows, cols]
+        Bq = FieldLinAlg.colspace(field, phi_q)
+        B[q] = Bq
+        dims[q] = size(Bq, 2)
+    end
+
+    edge_maps = Dict{Tuple{Int,Int},Matrix{K}}()
+    C = cover_edges(P)
+    @inbounds for (u, v) in C
+        du = dims[u]
+        dv = dims[v]
+        if du == 0 || dv == 0
+            Z = Matrix{K}(undef, dv, du)
+            fill!(Z, zero(K))
+            edge_maps[(u, v)] = Z
+            continue
+        end
+        Im = _gather_rows_subset(rows_at[u], rows_at[v], B[u], field)
+        X = FieldLinAlg.solve_fullcolumn(field, B[v], Im)
+        edge_maps[(u, v)] = X
+    end
+    return PModule{K}(P, dims, edge_maps; field=field)
+end
+
+@inline function _monomialize_phi_with_zero_pairs(phi::AbstractMatrix{K},
+                                                   zero_pairs::Vector{Tuple{Int,Int}}) where {K}
+    Phi = Matrix{K}(phi)
+    @inbounds for (j, i) in zero_pairs
+        Phi[j, i] = zero(K)
+    end
+    return Phi
 end
 
 
@@ -1333,48 +2009,63 @@ function _critical_coords(flats::Vector{IndFlat{N}}, injectives::Vector{IndInj{N
     return ntuple(i -> coords[i], n)
 end
 
-"Uptight poset on signatures by componentwise inclusion (then transitively closed)."
-function _uptight_from_signatures(sig_y::Vector{BitVector}, sig_z::Vector{BitVector})
+"Uptight poset on signatures by componentwise inclusion."
+function _uptight_from_signatures(sig_y::PackedSignatureRows, sig_z::PackedSignatureRows)
     rN = length(sig_y)
     leq = falses(rN, rN)
-    for i in 1:rN
-        leq[i,i] = true
+    ymask = _word_lastmask(sig_y.bitlen)
+    zmask = _word_lastmask(sig_z.bitlen)
+    @inbounds for i in 1:rN
+        leq[i, i] = true
     end
-    for i in 1:rN, j in 1:rN
-        leq[i,j] = _sig_subset(sig_y[i], sig_y[j]) && _sig_subset(sig_z[i], sig_z[j])
-    end
-    # Transitive closure (harmless even though inclusion is already transitive).
-    for k in 1:rN, i in 1:rN, j in 1:rN
-        leq[i,j] = leq[i,j] || (leq[i,k] && leq[k,j])
+    @inbounds for i in 1:rN, j in 1:rN
+        leq[i, j] = _sig_subset_words(sig_y.words, i, sig_y.words, j, ymask) &&
+                    _sig_subset_words(sig_z.words, i, sig_z.words, j, zmask)
     end
     return FinitePoset(leq; check=false)
 end
 
+function _uptight_from_signatures(sig_y::AbstractVector{<:AbstractVector{Bool}},
+                                  sig_z::AbstractVector{<:AbstractVector{Bool}})
+    rN = length(sig_y)
+    rN == length(sig_z) || error("_uptight_from_signatures: length mismatch")
+    m = rN == 0 ? 0 : length(sig_y[1])
+    r = rN == 0 ? 0 : length(sig_z[1])
+    my = cld(max(m, 1), 64)
+    mz = cld(max(r, 1), 64)
+    py = _pack_signature_rows(sig_y, m, Val(my))
+    pz = _pack_signature_rows(sig_z, r, Val(mz))
+    return _uptight_from_signatures(py, pz)
+end
+
 "Images of the chosen generator upsets/downsets on the encoded poset P."
 function _images_on_P(P::AbstractPoset,
-                      sig_y::Vector{BitVector}, sig_z::Vector{BitVector},
+                      sig_y::PackedSignatureRows,
+                      sig_z::PackedSignatureRows,
                       flat_idxs::AbstractVector{<:Integer},
                       inj_idxs::AbstractVector{<:Integer})
-    m = length(flat_idxs)
-    r = length(inj_idxs)
-    Uhat = Vector{Upset}(undef, m)
-    Dhat = Vector{Downset}(undef, r)
+    nflat = sig_y.bitlen
+    ninj = sig_z.bitlen
+    flat_masks, inj_masks = _build_pushforward_masks(sig_y, sig_z, nflat, ninj)
+    return _images_on_P_from_masks(P, flat_masks, inj_masks, flat_idxs, inj_idxs)
+end
 
-    for (loc, i0) in enumerate(flat_idxs)
-        i = Int(i0)
-        mask = BitVector([sig_y[t][i] == 1 for t in 1:nvertices(P)])
-        Uhat[loc] = upset_closure(P, mask)
-    end
-    for (loc, j0) in enumerate(inj_idxs)
-        j = Int(j0)
-        mask = BitVector([sig_z[t][j] == 0 for t in 1:nvertices(P)])
-        Dhat[loc] = downset_closure(P, mask)
-    end
-    return Uhat, Dhat
+function _images_on_P(P::AbstractPoset,
+                      sig_y::AbstractVector{<:AbstractVector{Bool}},
+                      sig_z::AbstractVector{<:AbstractVector{Bool}},
+                      flat_idxs::AbstractVector{<:Integer},
+                      inj_idxs::AbstractVector{<:Integer})
+    n = length(sig_y)
+    n == length(sig_z) || error("_images_on_P: signature length mismatch")
+    nflat = n == 0 ? 0 : length(sig_y[1])
+    ninj = n == 0 ? 0 : length(sig_z[1])
+    py = _pack_signature_rows(sig_y, nflat, Val(cld(max(nflat, 1), 64)))
+    pz = _pack_signature_rows(sig_z, ninj, Val(cld(max(ninj, 1), 64)))
+    return _images_on_P(P, py, pz, flat_idxs, inj_idxs)
 end
 
 "Zero out entries that are forced to be 0 by disjointness of labels (monomiality)."
-function _monomialize_phi(phi::AbstractMatrix{K}, Uhat::Vector{Upset}, Dhat::Vector{Downset}) where {K}
+function _monomialize_phi(phi::AbstractMatrix{K}, Uhat::AbstractVector{<:Upset}, Dhat::AbstractVector{<:Downset}) where {K}
     Phi = Matrix{K}(phi)
     for j in 1:length(Dhat), i in 1:length(Uhat)
         if !intersects(Uhat[i], Dhat[j])
@@ -1382,6 +2073,40 @@ function _monomialize_phi(phi::AbstractMatrix{K}, Uhat::Vector{Upset}, Dhat::Vec
         end
     end
     return Phi
+end
+
+function _collect_encoding_generators(FGs::Union{AbstractVector{<:Flange}, Tuple{Vararg{Flange}}})
+    length(FGs) > 0 || error("_collect_encoding_generators: need at least one flange")
+    n = FGs[1].n
+    @inbounds for FG in FGs
+        FG.n == n || error("_collect_encoding_generators: dimension mismatch")
+    end
+
+    flats_all = IndFlat{n}[]
+    injectives_all = IndInj{n}[]
+    flat_seen = Dict{_GENERATOR_KEY, Int}()
+    inj_seen  = Dict{_GENERATOR_KEY, Int}()
+
+    @inbounds for FG in FGs
+        for F in FG.flats
+            key = _flat_key(F)
+            if !haskey(flat_seen, key)
+                push!(flats_all, F)
+                flat_seen[key] = length(flats_all)
+            end
+        end
+        for E in FG.injectives
+            key = _inj_key(E)
+            if !haskey(inj_seen, key)
+                push!(injectives_all, E)
+                inj_seen[key] = length(injectives_all)
+            end
+        end
+    end
+
+    flat_keys = collect(keys(flat_seen))
+    inj_keys = collect(keys(inj_seen))
+    return n, flats_all, injectives_all, flat_keys, inj_keys
 end
 
 # ----------------------------- Public API --------------------------------------
@@ -1405,44 +2130,25 @@ This is the "finite encoding poset" step: extract critical coordinates, form the
 product decomposition into finitely many slabs, sample one representative per cell,
 and quotient by equal (y,z)-signatures.
 
-Use `fringe_from_flange(P, pi, FG)` to push a flange presentation down to a finite
+Use `_pushforward_flange_to_fringe(P, pi, FG)` to push a flange presentation down to a finite
 fringe presentation on `P` without rebuilding the encoding.
 """
 function encode_poset_from_flanges(FGs::Union{AbstractVector{<:Flange}, Tuple{Vararg{Flange}}},
                                    opts::EncodingOptions;
-                                   poset_kind::Symbol = :signature)
+                                   poset_kind::Symbol = :signature,
+                                   session_cache::Union{Nothing,SessionCache}=nothing)
     if opts.backend != :auto && opts.backend != :zn
         error("encode_poset_from_flanges: EncodingOptions.backend must be :auto or :zn")
     end
     max_regions = opts.max_regions === nothing ? 200_000 : Int(opts.max_regions)
+    n, flats_all, injectives_all, flat_keys, inj_keys = _collect_encoding_generators(FGs)
+    encoding_fp = _generator_keyset_fingerprint(n, flat_keys, inj_keys)
 
-    length(FGs) > 0 || error("encode_poset_from_flanges: need at least one flange")
-
-    n = FGs[1].n
-    for FG in FGs
-        FG.n == n || error("encode_poset_from_flanges: dimension mismatch")
-    end
-
-    # Deduplicate generators up to underlying set equality.
-    flats_all = IndFlat{n}[]
-    injectives_all = IndInj{n}[]
-    flat_seen = Dict{Tuple{Tuple,Tuple}, Int}()
-    inj_seen  = Dict{Tuple{Tuple,Tuple}, Int}()
-
-    for FG in FGs
-        for F in FG.flats
-            key = _flat_key(F)
-            if !haskey(flat_seen, key)
-                push!(flats_all, F)
-                flat_seen[key] = length(flats_all)
-            end
-        end
-        for E in FG.injectives
-            key = _inj_key(E)
-            if !haskey(inj_seen, key)
-                push!(injectives_all, E)
-                inj_seen[key] = length(injectives_all)
-            end
+    if session_cache !== nothing
+        cached = _session_get_zn_encoding_artifact(session_cache, encoding_fp, poset_kind, max_regions)
+        if cached !== nothing
+            art = cached::NamedTuple
+            return art.P, art.pi
         end
     end
 
@@ -1464,14 +2170,18 @@ function encode_poset_from_flanges(FGs::Union{AbstractVector{<:Flange}, Tuple{Va
 
     pi = ZnEncodingMap(n, coords, sig_y, sig_z, reps, flats_all, injectives_all, sig_to_region,
                        cell_shape, cell_strides, cell_to_region)
+    if session_cache !== nothing
+        _session_set_zn_encoding_artifact!(session_cache, encoding_fp, poset_kind, max_regions, (P=P, pi=pi))
+    end
     return P, pi
 end
 
 # Keyword-friendly overloads (opts may be nothing).
 encode_poset_from_flanges(FGs::Union{AbstractVector{<:Flange}, Tuple{Vararg{Flange}}};
                           opts::EncodingOptions=EncodingOptions(),
-                          poset_kind::Symbol = :signature) =
-    encode_poset_from_flanges(FGs, opts; poset_kind = poset_kind)
+                          poset_kind::Symbol = :signature,
+                          session_cache::Union{Nothing,SessionCache}=nothing) =
+    encode_poset_from_flanges(FGs, opts; poset_kind = poset_kind, session_cache=session_cache)
 
 # Small-arity overloads (avoid "varargs then opts" signatures).
 function encode_poset_from_flanges(FG::Flange, opts::EncodingOptions;
@@ -1505,7 +2215,7 @@ encode_poset_from_flanges(FG1::Flange, FG2::Flange, FG3::Flange;
     encode_poset_from_flanges((FG1, FG2, FG3), opts; poset_kind = poset_kind)
 
 """
-    fringe_from_flange(P, pi, FG; strict=true) -> FringeModule{K}
+    _pushforward_flange_to_fringe(P, pi, FG; strict=true) -> FringeModule{K}
 
 Convert a Z^n flange presentation `FG` into a fringe presentation on the finite
 encoding poset `P` determined by `pi`.
@@ -1528,34 +2238,32 @@ Safety contract:
 - If `strict=false`, membership is tested only on region representatives `pi.reps[t]`.
   This is only correct if each label of `FG` is constant on each region of `pi`.
 """
-function fringe_from_flange(P::AbstractPoset, pi::ZnEncodingMap, FG::Flange{K};
-                            strict::Bool=true) where {K}
-    FG.n == pi.n || error("fringe_from_flange: dimension mismatch (FG.n != pi.n)")
-    nvertices(P) == length(pi.sig_y) || error("fringe_from_flange: P incompatible with pi (nvertices(P) != length(pi.sig_y))")
-    length(pi.sig_y) == length(pi.sig_z) || error("fringe_from_flange: malformed pi (sig_y and sig_z lengths differ)")
+function _pushforward_flange_to_fringe(P::AbstractPoset, pi::ZnEncodingMap, FG::Flange{K};
+                                       strict::Bool=true,
+                                       session_cache::Union{Nothing,SessionCache}=nothing,
+                                       poset_kind::Symbol=:signature) where {K}
+    FG.n == pi.n || error("_pushforward_flange_to_fringe: dimension mismatch (FG.n != pi.n)")
+    nvertices(P) == length(pi.sig_y) || error("_pushforward_flange_to_fringe: P incompatible with pi (nvertices(P) != length(pi.sig_y))")
+    length(pi.sig_y) == length(pi.sig_z) || error("_pushforward_flange_to_fringe: malformed pi (sig_y and sig_z lengths differ)")
 
     if strict
-        flat_index, inj_index = _generator_index_dicts(pi.flats, pi.injectives)
-
-        flat_idxs = Vector{Int}(undef, length(FG.flats))
-        for i in 1:length(FG.flats)
-            key = _flat_key(FG.flats[i])
-            idx = get(flat_index, key, 0)
-            idx == 0 && error("fringe_from_flange(strict=true): flat label $(FG.flats[i]) not present in encoding generators")
-            flat_idxs[i] = idx
+        flange_fp = UInt64(0)
+        field_key = UInt(0)
+        if session_cache !== nothing
+            flange_fp = _flange_presentation_fingerprint(FG)
+            field_key = _field_cache_key(FG.field)
+            cached = _session_get_zn_pushforward_fringe(session_cache, pi.encoding_fingerprint, poset_kind, flange_fp, field_key)
+            if cached !== nothing
+                return cached::FringeModule{K}
+            end
         end
 
-        inj_idxs = Vector{Int}(undef, length(FG.injectives))
-        for j in 1:length(FG.injectives)
-            key = _inj_key(FG.injectives[j])
-            idx = get(inj_index, key, 0)
-            idx == 0 && error("fringe_from_flange(strict=true): injective label $(FG.injectives[j]) not present in encoding generators")
-            inj_idxs[j] = idx
+        plan, flat_masks, inj_masks = _strict_pushforward_plan_and_masks(pi, FG; session_cache=session_cache)
+        H = _strict_pushforward_fringe_from_plan(P, FG, plan, flat_masks, inj_masks)
+        if session_cache !== nothing
+            _session_set_zn_pushforward_fringe!(session_cache, pi.encoding_fingerprint, poset_kind, flange_fp, field_key, H)
         end
-
-        Uhat, Dhat = _images_on_P(P, pi.sig_y, pi.sig_z, flat_idxs, inj_idxs)
-        Phi = _monomialize_phi(FG.phi, Uhat, Dhat)
-        return FringeModule{K}(P, Uhat, Dhat, Phi)
+        return H
     else
         # Fallback: decide membership by evaluating on region representatives.
         m = length(FG.flats)
@@ -1573,7 +2281,7 @@ function fringe_from_flange(P::AbstractPoset, pi::ZnEncodingMap, FG::Flange{K};
         end
 
         Phi = _monomialize_phi(FG.phi, Uhat, Dhat)
-        return FringeModule{K}(P, Uhat, Dhat, Phi)
+        return FringeModule{K}(P, Uhat, Dhat, Phi; field=FG.field)
     end
 end
 
@@ -2871,7 +3579,7 @@ function encode_from_flanges(FGs::Union{AbstractVector{<:Flange{K}}, Tuple{Varar
 
     Hs = Vector{FringeModule{K}}(undef, length(FGs))
     for k in 1:length(FGs)
-        Hs[k] = fringe_from_flange(P, pi, FGs[k]; strict=true)
+        Hs[k] = _pushforward_flange_to_fringe(P, pi, FGs[k]; strict=true)
     end
     return P, Hs, pi
 end
@@ -2906,7 +3614,7 @@ function encode_from_flanges(
 
     Hs = Vector{FringeModule{K}}(undef, length(FGs))
     for k in 1:length(FGs)
-        Hs[k] = fringe_from_flange(P, pi, FGs[k]; strict=true)
+        Hs[k] = _pushforward_flange_to_fringe(P, pi, FGs[k]; strict=true)
     end
     return P, Hs, pi
 end
@@ -3013,19 +3721,5 @@ locate_many(pi::CompiledEncoding{<:ZnEncodingMap}, X::AbstractMatrix{<:Integer};
 locate_many(pi::CompiledEncoding{<:ZnEncodingMap}, X::AbstractMatrix{<:AbstractFloat}; kwargs...) =
     locate_many(_unwrap_encoding(pi), X; kwargs...)
 
-
-export ZnEncodingMap,
-       ZnEncodingCache,
-       ZnBoxBasisCache,
-       compile_zn_cache,
-       compile_zn_box_cache,
-       box_cache_stats,
-       locate_many,
-       locate_many!,
-       SignaturePoset,
-       encode_poset_from_flanges,
-       fringe_from_flange,
-       encode_from_flange,
-       encode_from_flanges
 
 end

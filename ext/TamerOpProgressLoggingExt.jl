@@ -14,7 +14,7 @@ const PM = let pm = nothing
     pm
 end
 
-const WF = PM.Workflow
+const FEA = PM.Featurizers
 
 mutable struct _ProgressState
     total::Int
@@ -56,6 +56,6 @@ function _finish!(state::_ProgressState)
     return nothing
 end
 
-WF._set_progress_impl!((init=_init, step!=_step!, finish!=_finish!))
+FEA._set_progress_impl!((init=_init, step!=_step!, finish!=_finish!))
 
 end # module

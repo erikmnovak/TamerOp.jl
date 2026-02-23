@@ -171,7 +171,7 @@ using TOML
         X = f2mat([1 0; 0 1; 1 1])
         Y = B * X
 
-        FL.clear_f2_fullcolumn_cache!()
+        FL._clear_f2_fullcolumn_cache!()
         x1 = FL.solve_fullcolumn(F2, B, Y; cache=true)
         @test x1 == X
         @test haskey(FL._F2_FULLCOLUMN_FACTOR_CACHE, B)
@@ -293,7 +293,7 @@ using TOML
         D = FF.principal_downset(P, 1)
         phiH = spzeros(K, 1, 1)
         phiH[1, 1] = c(1)
-        H = FF.FringeModule{K}(P, [U], [D], phiH)
+        H = FF.FringeModule{K}(P, [U], [D], phiH; field=FQ)
         H2 = CM.change_field(H, F2)
         @test H2.field == F2
         @test eltype(H2.phi) == CM.FpElem{2}
@@ -336,24 +336,24 @@ using TOML
         @test inv2.value == 7
     end
 
-    @testset "SparseRowAccumulator correctness" begin
+    @testset "_SparseRowAccumulator correctness" begin
         K = QQ
-        acc = FL.SparseRowAccumulator{K}(12)
+        acc = FL._SparseRowAccumulator{K}(12)
         row = FL.SparseRow{K}()
 
-        FL.reset_sparse_row_accumulator!(acc)
-        FL.push_sparse_row_entry!(acc, 4, QQ(2))
-        FL.push_sparse_row_entry!(acc, 2, QQ(3))
-        FL.push_sparse_row_entry!(acc, 4, QQ(-2)) # cancellation
-        FL.push_sparse_row_entry!(acc, 7, QQ(5))
-        FL.push_sparse_row_entry!(acc, 2, QQ(1))
-        FL.materialize_sparse_row!(row, acc)
+        FL._reset_sparse_row_accumulator!(acc)
+        FL._push_sparse_row_entry!(acc, 4, QQ(2))
+        FL._push_sparse_row_entry!(acc, 2, QQ(3))
+        FL._push_sparse_row_entry!(acc, 4, QQ(-2)) # cancellation
+        FL._push_sparse_row_entry!(acc, 7, QQ(5))
+        FL._push_sparse_row_entry!(acc, 2, QQ(1))
+        FL._materialize_sparse_row!(row, acc)
         @test row.idx == [2, 7]
         @test row.val == QQ[4, 5]
 
-        FL.reset_sparse_row_accumulator!(acc)
-        FL.push_sparse_row_entry!(acc, 1, QQ(1))
-        FL.materialize_sparse_row!(row, acc)
+        FL._reset_sparse_row_accumulator!(acc)
+        FL._push_sparse_row_entry!(acc, 1, QQ(1))
+        FL._materialize_sparse_row!(row, acc)
         @test row.idx == [1]
         @test row.val == QQ[1]
     end
@@ -474,7 +474,7 @@ using TOML
         X = F3Elem.([1 0; 2 1; 1 2])
         Y = B * X
 
-        FL.clear_f3_fullcolumn_cache!()
+        FL._clear_f3_fullcolumn_cache!()
         x1 = FL.solve_fullcolumn(F3, B, Y; cache=true)
         @test x1 == X
         @test haskey(FL._F3_FULLCOLUMN_FACTOR_CACHE, B)
@@ -488,9 +488,9 @@ using TOML
     end
 
     @testset "QQ vs F2 vs F3 cache parity (basic behavior)" begin
-        FL.clear_fullcolumn_cache!()
-        FL.clear_f2_fullcolumn_cache!()
-        FL.clear_f3_fullcolumn_cache!()
+        FL._clear_fullcolumn_cache!()
+        FL._clear_f2_fullcolumn_cache!()
+        FL._clear_f3_fullcolumn_cache!()
         @test isempty(FL._FULLCOLUMN_FACTOR_CACHE)
         @test isempty(FL._F2_FULLCOLUMN_FACTOR_CACHE)
         @test isempty(FL._F3_FULLCOLUMN_FACTOR_CACHE)
@@ -772,11 +772,11 @@ using TOML
         # Rank test
         A = QQ[QQ(1) QQ(2);
                QQ(2) QQ(4)]
-        @test FL.rankQQ(A) == 1
+        @test FL._rankQQ(A) == 1
         @test FL.rank(CM.QQField(), A) == 1
 
         # Nullspace test: A * v = 0
-        N = FL.nullspaceQQ(A)
+        N = FL._nullspaceQQ(A)
         @test size(N, 1) == 2
         @test size(N, 2) == 1
         v = N[:, 1]
@@ -788,27 +788,27 @@ using TOML
                QQ(1) QQ(1)]
         x_true = QQ[QQ(1), QQ(2)]
         y = B * x_true
-        x = FL.solve_fullcolumnQQ(B, y)
+        x = FL._solve_fullcolumnQQ(B, y)
         @test B * x == y
         @test FL.solve_fullcolumn(CM.QQField(), B, y) == x
 
         # Multiple right-hand sides
         Y = hcat(y, QQ(2) .* y)
-        X = FL.solve_fullcolumnQQ(B, Y)
+        X = FL._solve_fullcolumnQQ(B, Y)
         @test B * X == Y
 
-        @testset "rrefQQ / colspaceQQ / solve_fullcolumnQQ edge cases" begin
+        @testset "_rrefQQ / _colspaceQQ / _solve_fullcolumnQQ edge cases" begin
             A = QQ[1 2 3;
                    2 4 6;
                    1 1 1]
-            R, piv = FL.rrefQQ(A)
+            R, piv = FL._rrefQQ(A)
 
             @test piv == (1, 2)
             @test R == QQ[1 0 -1;
                           0 1  2;
                           0 0  0]
 
-            C = FL.colspaceQQ(A)
+            C = FL._colspaceQQ(A)
             @test size(C) == (3, 2)
             @test C == A[:, collect(piv)]
 
@@ -816,7 +816,7 @@ using TOML
                    2 4;
                    3 6]
             b = QQ[1, 2, 3]
-            @test_throws ErrorException FL.solve_fullcolumnQQ(B, b)
+            @test_throws ErrorException FL._solve_fullcolumnQQ(B, b)
         end
     end
 
@@ -824,15 +824,15 @@ using TOML
         A = sparse(QQ[1 0 2;
                       0 1 3;
                       0 0 0])
-        Cd = FL.colspaceQQ(Matrix{QQ}(A))
-        Cs = FL.colspaceQQ(A)
+        Cd = FL._colspaceQQ(Matrix{QQ}(A))
+        Cs = FL._colspaceQQ(A)
 
-        @test FL.rankQQ(Cd) == FL.rankQQ(Cs)
-        @test FL.rankQQ(Cs) == FL.rankQQ(A)
+        @test FL._rankQQ(Cd) == FL._rankQQ(Cs)
+        @test FL._rankQQ(Cs) == FL._rankQQ(A)
 
-        B = FL.colspaceQQ(A)
+        B = FL._colspaceQQ(A)
         for j in 1:size(Cs,2)
-            x = FL.solve_fullcolumnQQ(B, Cs[:,j])
+            x = FL._solve_fullcolumnQQ(B, Cs[:,j])
             @test B*x == Cs[:,j]
         end
     end
@@ -843,17 +843,17 @@ using TOML
                1 1]
         y = B * QQ[2, 3]
 
-        FL.clear_fullcolumn_cache!()
-        x1 = FL.solve_fullcolumnQQ(B, y; cache=true)
+        FL._clear_fullcolumn_cache!()
+        x1 = FL._solve_fullcolumnQQ(B, y; cache=true)
         @test B*x1 == y
         @test haskey(FL._FULLCOLUMN_FACTOR_CACHE, B)
-        x2 = FL.solve_fullcolumnQQ(B, y; cache=true)
+        x2 = FL._solve_fullcolumnQQ(B, y; cache=true)
         @test x2 == x1
         bady = QQ[1,0,0]
-        @test_throws ErrorException FL.solve_fullcolumnQQ(B, bady; cache=true)
+        @test_throws ErrorException FL._solve_fullcolumnQQ(B, bady; cache=true)
 
         # Nemo factor/cache path
-        FL.clear_fullcolumn_cache!()
+        FL._clear_fullcolumn_cache!()
         xn = FL.solve_fullcolumn(CM.QQField(), B, y; backend=:nemo, cache=true)
         @test B * xn == y
         @test haskey(FL._NEMO_FULLCOLUMN_FACTOR_CACHE_QQ, B)
@@ -862,23 +862,23 @@ using TOML
     end
 
     @testset "Nemo conversion counters" begin
-        FL.reset_conversion_counters!()
+        FL._reset_conversion_counters!()
         A = CM.BackendMatrix(QQ[1 2; 3 4]; backend=:nemo)
         r1 = FL.rank(CM.QQField(), A; backend=:nemo)
         @test r1 == 2
-        c1 = FL.conversion_counters()
+        c1 = FL._conversion_counters()
         @test c1.qq_to_nemo >= 1
 
         r2 = FL.rank(CM.QQField(), A; backend=:nemo)
         @test r2 == r1
-        c2 = FL.conversion_counters()
+        c2 = FL._conversion_counters()
         @test c2.qq_to_nemo_cache_hits >= c1.qq_to_nemo_cache_hits
     end
 
     @testset "QQ vs F2 cache parity (basic behavior)" begin
-        @test isdefined(FL, :clear_f2_fullcolumn_cache!)
-        FL.clear_fullcolumn_cache!()
-        FL.clear_f2_fullcolumn_cache!()
+        @test isdefined(FL, :_clear_f2_fullcolumn_cache!)
+        FL._clear_fullcolumn_cache!()
+        FL._clear_f2_fullcolumn_cache!()
         @test isempty(FL._FULLCOLUMN_FACTOR_CACHE)
         @test isempty(FL._F2_FULLCOLUMN_FACTOR_CACHE)
     end
@@ -887,9 +887,9 @@ using TOML
         A = QQ[1 2 3;
                2 4 6;
                1 0 1]
-        @test FL.rankQQ(A) == 2
-        @test FL.rankQQ_dim(A; backend=:auto) == 2
-        @test FL.rankQQ_dim(A; backend=:modular) == 2
+        @test FL._rankQQ(A) == 2
+        @test FL._rankQQ_dim(A; backend=:auto) == 2
+        @test FL._rankQQ_dim(A; backend=:modular) == 2
         @test FL.rank_dim(CM.QQField(), A; backend=:auto) == 2
     end
 
@@ -918,12 +918,12 @@ using TOML
                    QQ[1, 2, -1, 3],
                    3, 4)
 
-        Ns = FL.nullspaceQQ(A)
-        Nd = FL.nullspaceQQ(Matrix(A))
+        Ns = FL._nullspaceQQ(A)
+        Nd = FL._nullspaceQQ(Matrix(A))
         @test size(Ns, 1) == 4
         @test size(Ns, 2) == size(Nd, 2)
         @test A * Ns == zeros(QQ, size(A, 1), size(Ns, 2))
-        @test FL.rankQQ(Ns) == size(Ns, 2)
+        @test FL._rankQQ(Ns) == size(Ns, 2)
 
         rng = MersenneTwister(123456)
         m, n = 30, 40
@@ -937,14 +937,14 @@ using TOML
         for _ in 1:25
             rows = sort!(unique(rand(rng, 1:m, rand(rng, 1:15))))
             cols = sort!(unique(rand(rng, 1:n, rand(rng, 1:18))))
-            r1 = FL.rankQQ_restricted(A2, rows, cols)
-            r2 = FL.rankQQ(A2[rows, cols])
+            r1 = FL._rankQQ_restricted(A2, rows, cols)
+            r2 = FL._rankQQ(A2[rows, cols])
             @test r1 == r2
         end
 
-        @test FL.rankQQ_restricted(A2, Int[], collect(1:n)) == 0
-        @test FL.rankQQ_restricted(A2, collect(1:m), Int[]) == 0
-        @test FL.rankQQ_restricted(A2, 1:m, 1:n) == FL.rankQQ(A2)
+        @test FL._rankQQ_restricted(A2, Int[], collect(1:n)) == 0
+        @test FL._rankQQ_restricted(A2, collect(1:m), Int[]) == 0
+        @test FL._rankQQ_restricted(A2, 1:m, 1:n) == FL._rankQQ(A2)
     end
 
     @testset "QQ rank_restricted dense" begin
@@ -954,15 +954,15 @@ using TOML
                1 0 1 1]
         rows = [1, 3, 4]
         cols = [2, 3, 4]
-        r1 = FL.rankQQ_restricted(sparse(A), rows, cols)
-        r2 = FL.rankQQ(A[rows, cols])
+        r1 = FL._rankQQ_restricted(sparse(A), rows, cols)
+        r2 = FL._rankQQ(A[rows, cols])
         @test r1 == r2
     end
 
     @testset "QQ rref pivots on rectangular matrices" begin
         A = QQ[1 2 3 4;
                0 1 1 0]
-        R, pivs = FL.rrefQQ(A)
+        R, pivs = FL._rrefQQ(A)
         @test pivs == (1, 2)
         @test R == QQ[1 0 1 4;
                       0 1 1 0]
@@ -971,7 +971,7 @@ using TOML
                0 1;
                1 1;
                0 0]
-        Rb, pivs_b = FL.rrefQQ(B)
+        Rb, pivs_b = FL._rrefQQ(B)
         @test pivs_b == (1, 2)
         @test Rb == QQ[1 0;
                        0 1;
@@ -981,14 +981,14 @@ using TOML
 
     @testset "QQ nullspace edge cases" begin
         A = Matrix{QQ}(I, 3, 3)
-        N = FL.nullspaceQQ(A)
+        N = FL._nullspaceQQ(A)
         @test size(N, 2) == 0
 
         Z = zeros(QQ, 2, 4)
-        Nz = FL.nullspaceQQ(Z)
+        Nz = FL._nullspaceQQ(Z)
         @test size(Nz) == (4, 4)
         @test Z * Nz == zeros(QQ, 2, 4)
-        @test FL.rankQQ(Nz) == 4
+        @test FL._rankQQ(Nz) == 4
     end
     end
 
@@ -1124,9 +1124,9 @@ using TOML
 
         @testset "backend selection prefers :fp_sparse for sparse" begin
             A = sparse(fpmat([1 0 2; 0 1 3; 2 3 1]))
-            @test FL.choose_linalg_backend(F5, A; op=:rank) == :fp_sparse
-            @test FL.choose_linalg_backend(F5, transpose(A); op=:nullspace) == :fp_sparse
-            @test FL.choose_linalg_backend(F5, adjoint(A); op=:solve) == :fp_sparse
+            @test FL._choose_linalg_backend(F5, A; op=:rank) == :fp_sparse
+            @test FL._choose_linalg_backend(F5, transpose(A); op=:nullspace) == :fp_sparse
+            @test FL._choose_linalg_backend(F5, adjoint(A); op=:solve) == :fp_sparse
         end
 
         @testset "Nemo backend parity (p=5)" begin
@@ -1290,7 +1290,7 @@ using TOML
         @test size(Cs, 1) == size(As, 1)
         @test FL.rank(F, Cs) == rs
 
-        @test FL.choose_linalg_backend(F, As; op=:rank) == :float_sparse_qr
+        @test FL._choose_linalg_backend(F, As; op=:rank) == :float_sparse_qr
     end
 
     @testset "Real engine algorithmic oracles" begin
@@ -1579,18 +1579,32 @@ using TOML
     end
 
     @testset "linalg threshold persistence + fingerprint gating" begin
-        old = FL.current_linalg_thresholds()
+        old = FL._current_linalg_thresholds()
         path = joinpath(mktempdir(), "linalg_thresholds.toml")
 
-        FL.save_linalg_thresholds!(; path=path)
+        FL._save_linalg_thresholds!(; path=path)
         FL.FP_NEMO_RANK_THRESHOLD[] = old["fp_nemo_rank_threshold"] + 111
-        @test FL.load_linalg_thresholds!(; path=path, warn_on_mismatch=false)
+        @test FL._load_linalg_thresholds!(; path=path, warn_on_mismatch=false)
         @test FL.FP_NEMO_RANK_THRESHOLD[] == old["fp_nemo_rank_threshold"]
         @test haskey(old, "modular_nullspace_threshold")
         @test haskey(old, "modular_solve_threshold")
         @test haskey(old, "modular_min_primes")
         @test haskey(old, "modular_max_primes")
         @test haskey(old, "rankqq_dim_small_threshold")
+        @test haskey(old, "qq_nemo_rank_threshold_square")
+        @test haskey(old, "qq_nemo_nullspace_threshold_tall")
+        @test haskey(old, "qq_nemo_solve_threshold_wide")
+        @test haskey(old, "qq_nemo_sparse_solve_threshold_square_low")
+        @test haskey(old, "qq_nemo_sparse_solve_threshold_tall_mid")
+        @test haskey(old, "qq_nemo_sparse_solve_threshold_wide_high")
+        @test haskey(old, "qq_nemo_sparse_solve_policy_square_low")
+        @test haskey(old, "qq_nemo_sparse_solve_policy_tall_mid")
+        @test haskey(old, "qq_nemo_sparse_solve_policy_wide_high")
+        @test haskey(old, "qq_modular_nullspace_threshold_square")
+        @test haskey(old, "qq_modular_solve_threshold_tall")
+        @test haskey(old, "zn_qq_dimat_submatrix_work_threshold")
+        @test old["zn_qq_dimat_submatrix_work_threshold"] == FL.zn_qq_dimat_submatrix_work_threshold()
+        @test old["zn_qq_dimat_submatrix_work_threshold"] >= 1
 
         doc = TOML.parsefile(path)
         doc["fingerprint"]["cpu_name"] = string(doc["fingerprint"]["cpu_name"], "_mismatch")
@@ -1599,21 +1613,157 @@ using TOML
         end
 
         FL.FP_NEMO_RANK_THRESHOLD[] = old["fp_nemo_rank_threshold"] + 222
-        @test !FL.load_linalg_thresholds!(; path=path, warn_on_mismatch=false)
+        @test !FL._load_linalg_thresholds!(; path=path, warn_on_mismatch=false)
         @test FL.FP_NEMO_RANK_THRESHOLD[] == old["fp_nemo_rank_threshold"] + 222
 
-        FL.NEMO_THRESHOLD[] = old["nemo_threshold"]
-        FL.FP_NEMO_RANK_THRESHOLD[] = old["fp_nemo_rank_threshold"]
-        FL.FP_NEMO_NULLSPACE_THRESHOLD[] = old["fp_nemo_nullspace_threshold"]
-        FL.FP_NEMO_SOLVE_THRESHOLD[] = old["fp_nemo_solve_threshold"]
-        FL.MODULAR_NULLSPACE_THRESHOLD[] = old["modular_nullspace_threshold"]
-        FL.MODULAR_SOLVE_THRESHOLD[] = old["modular_solve_threshold"]
-        FL.MODULAR_MIN_PRIMES[] = old["modular_min_primes"]
-        FL.MODULAR_MAX_PRIMES[] = old["modular_max_primes"]
-        FL.RANKQQ_DIM_SMALL_THRESHOLD[] = old["rankqq_dim_small_threshold"]
-        FL.FLOAT_NULLSPACE_SVD_THRESHOLD[] = old["float_nullspace_svd_threshold"]
-        FL.FLOAT_SPARSE_SVDS_MIN_DIM[] = old["float_sparse_svds_min_dim"]
-        FL.FLOAT_SPARSE_SVDS_MIN_NNZ[] = old["float_sparse_svds_min_nnz"]
+        @test FL._apply_linalg_thresholds!(old)
+    end
+
+    @testset "QQ backend routing uses op+shape thresholds" begin
+        F = CM.QQField()
+        old = FL._current_linalg_thresholds()
+        try
+            @test FL._apply_linalg_thresholds!(merge(
+                old,
+                Dict(
+                    "qq_nemo_rank_threshold_square" => 10_000,
+                    "qq_nemo_rank_threshold_tall" => 10_000,
+                    "qq_nemo_rank_threshold_wide" => 10_000,
+                    "qq_nemo_nullspace_threshold_square" => 10_000,
+                    "qq_nemo_nullspace_threshold_tall" => 10_000,
+                    "qq_nemo_nullspace_threshold_wide" => 10_000,
+                    "qq_modular_nullspace_threshold_square" => 10_000,
+                    "qq_modular_nullspace_threshold_tall" => 10_000,
+                    "qq_modular_nullspace_threshold_wide" => 10_000,
+                    "qq_nemo_solve_threshold_square" => 10_000,
+                    "qq_nemo_solve_threshold_tall" => 10_000,
+                    "qq_nemo_solve_threshold_wide" => 10_000,
+                    "qq_nemo_sparse_solve_threshold_square_low" => 10_000,
+                    "qq_nemo_sparse_solve_threshold_square_mid" => 10_000,
+                    "qq_nemo_sparse_solve_threshold_square_high" => 10_000,
+                    "qq_nemo_sparse_solve_threshold_tall_low" => 10_000,
+                    "qq_nemo_sparse_solve_threshold_tall_mid" => 10_000,
+                    "qq_nemo_sparse_solve_threshold_tall_high" => 10_000,
+                    "qq_nemo_sparse_solve_threshold_wide_low" => 10_000,
+                    "qq_nemo_sparse_solve_threshold_wide_mid" => 10_000,
+                    "qq_nemo_sparse_solve_threshold_wide_high" => 10_000,
+                    "qq_nemo_sparse_solve_policy_square_low" => 1,
+                    "qq_nemo_sparse_solve_policy_square_mid" => 1,
+                    "qq_nemo_sparse_solve_policy_square_high" => 1,
+                    "qq_nemo_sparse_solve_policy_tall_low" => 1,
+                    "qq_nemo_sparse_solve_policy_tall_mid" => 1,
+                    "qq_nemo_sparse_solve_policy_tall_high" => 1,
+                    "qq_nemo_sparse_solve_policy_wide_low" => 1,
+                    "qq_nemo_sparse_solve_policy_wide_mid" => 1,
+                    "qq_nemo_sparse_solve_policy_wide_high" => 1,
+                    "qq_modular_solve_threshold_square" => 10_000,
+                    "qq_modular_solve_threshold_tall" => 10_000,
+                    "qq_modular_solve_threshold_wide" => 10_000,
+                )
+            ))
+            A_small = fill(QQ(1), 20, 20)    # work=400 (square)
+            A_tall = fill(QQ(1), 120, 40)    # work=4800 (tall)
+            A_wide = fill(QQ(1), 40, 120)    # work=4800 (wide)
+            As_tall = sparse(A_tall)
+            As_wide = sparse(A_wide)
+            @test FL._choose_linalg_backend(F, A_small; op=:rank) == :julia_exact
+            @test FL._choose_linalg_backend(F, A_tall; op=:rank) == :julia_exact
+            @test FL._choose_linalg_backend(F, A_wide; op=:rank) == :julia_exact
+            @test FL._choose_linalg_backend(F, As_tall; op=:rank) == :julia_sparse
+            @test FL._choose_linalg_backend(F, As_wide; op=:nullspace) == :julia_sparse
+            @test FL._choose_linalg_backend(F, As_tall; op=:solve) == :julia_sparse
+
+            @test FL._apply_linalg_thresholds!(merge(
+                old,
+                Dict(
+                    "qq_nemo_rank_threshold_square" => 100,
+                    "qq_nemo_rank_threshold_tall" => 100,
+                    "qq_nemo_rank_threshold_wide" => 100,
+                    "qq_nemo_nullspace_threshold_square" => 100,
+                    "qq_nemo_nullspace_threshold_tall" => 100,
+                    "qq_nemo_nullspace_threshold_wide" => 100,
+                    "qq_nemo_solve_threshold_square" => 100,
+                    "qq_nemo_solve_threshold_tall" => 100,
+                    "qq_nemo_solve_threshold_wide" => 100,
+                    "qq_nemo_sparse_solve_threshold_square_low" => 1,
+                    "qq_nemo_sparse_solve_threshold_square_mid" => 1,
+                    "qq_nemo_sparse_solve_threshold_square_high" => 1,
+                    "qq_nemo_sparse_solve_threshold_tall_low" => 1,
+                    "qq_nemo_sparse_solve_threshold_tall_mid" => 1,
+                    "qq_nemo_sparse_solve_threshold_tall_high" => 1,
+                    "qq_nemo_sparse_solve_threshold_wide_low" => 1,
+                    "qq_nemo_sparse_solve_threshold_wide_mid" => 1,
+                    "qq_nemo_sparse_solve_threshold_wide_high" => 1,
+                    "qq_nemo_sparse_solve_policy_square_low" => 1,
+                    "qq_nemo_sparse_solve_policy_square_mid" => 1,
+                    "qq_nemo_sparse_solve_policy_square_high" => 1,
+                    "qq_nemo_sparse_solve_policy_tall_low" => 1,
+                    "qq_nemo_sparse_solve_policy_tall_mid" => 1,
+                    "qq_nemo_sparse_solve_policy_tall_high" => 1,
+                    "qq_nemo_sparse_solve_policy_wide_low" => 1,
+                    "qq_nemo_sparse_solve_policy_wide_mid" => 1,
+                    "qq_nemo_sparse_solve_policy_wide_high" => 1,
+                )
+            ))
+            if FL._have_nemo()
+                @test FL._choose_linalg_backend(F, A_small; op=:rank) == :nemo
+                @test FL._choose_linalg_backend(F, A_tall; op=:rank) == :nemo
+                @test FL._choose_linalg_backend(F, A_wide; op=:rank) == :nemo
+                @test FL._choose_linalg_backend(F, As_tall; op=:rank) == :nemo
+                @test FL._choose_linalg_backend(F, As_wide; op=:nullspace) == :nemo
+                @test FL._choose_linalg_backend(F, As_tall; op=:solve) == :nemo
+            end
+        finally
+            @test FL._apply_linalg_thresholds!(old)
+        end
+    end
+
+    @testset "QQ sparse solve routing uses density-bucket thresholds" begin
+        F = CM.QQField()
+        old = FL._current_linalg_thresholds()
+        try
+            B = sparse(fill(QQ(0), 90, 60))
+            for i in 1:60
+                B[i, i] = QQ(1)
+            end
+            # Moderate density pushes into :mid bucket on tall shape.
+            for i in 61:90, j in 1:60
+                if (i + 2j) % 5 == 0
+                    B[i, j] = QQ(1)
+                end
+            end
+            @test FL._apply_linalg_thresholds!(merge(
+                old,
+                Dict(
+                    "qq_nemo_sparse_solve_threshold_tall_low" => 10_000,
+                    "qq_nemo_sparse_solve_threshold_tall_mid" => 10_000,
+                    "qq_nemo_sparse_solve_threshold_tall_high" => 10_000,
+                    "qq_nemo_sparse_solve_policy_tall_low" => 1,
+                    "qq_nemo_sparse_solve_policy_tall_mid" => 1,
+                    "qq_nemo_sparse_solve_policy_tall_high" => 1,
+                )
+            ))
+            @test FL._choose_linalg_backend(F, B; op=:solve) == :julia_sparse
+
+            @test FL._apply_linalg_thresholds!(merge(
+                old,
+                Dict(
+                    "qq_nemo_sparse_solve_threshold_tall_low" => 1,
+                    "qq_nemo_sparse_solve_threshold_tall_mid" => 1,
+                    "qq_nemo_sparse_solve_threshold_tall_high" => 1,
+                    "qq_nemo_sparse_solve_policy_tall_low" => 1,
+                    "qq_nemo_sparse_solve_policy_tall_mid" => 1,
+                    "qq_nemo_sparse_solve_policy_tall_high" => 1,
+                )
+            ))
+            if FL._have_nemo()
+                @test FL._choose_linalg_backend(F, B; op=:solve) == :nemo
+            else
+                @test FL._choose_linalg_backend(F, B; op=:solve) == :julia_sparse
+            end
+        finally
+            @test FL._apply_linalg_thresholds!(old)
+        end
     end
 
     @testset "Tiny <=4x4 fast-path parity" begin

@@ -35,7 +35,6 @@ module Serialization
 
 using JSON3
 using SparseArrays
-using Random
 
 import ..CoreModules
 using ..CoreModules: QQ, AbstractCoeffField, QQField, RealField, PrimeField,
@@ -45,33 +44,16 @@ import ..FiniteFringe: AbstractPoset, FinitePoset, ProductOfChainsPoset, GridPos
                        FringeModule, nvertices, leq_matrix
 import ..ZnEncoding: SignaturePoset
 using ..FiniteFringe
-using ..Modules: PModule, clear_cover_cache!
+using ..Modules: PModule, _clear_cover_cache!
 using ..CoreModules: PointCloud, ImageNd, GraphData, EmbeddedPlanarGraph2D, GradedComplex,
-                     FiltrationSpec, GridEncodingMap
+                     MultiCriticalGradedComplex, SimplexTreeMulti,
+                     FiltrationSpec, ConstructionBudget, ConstructionOptions,
+                     PipelineOptions, GridEncodingMap
 import ..ZnEncoding
 import ..PLBackend
 
-export save_flange_json, load_flange_json,
-       save_encoding_json, load_encoding_json,
-       parse_flange_json, flange_from_m2,
-       save_mpp_decomposition_json, load_mpp_decomposition_json,
-       save_mpp_image_json, load_mpp_image_json,
-       TAMER_FEATURE_SCHEMA_VERSION,
-       feature_schema_header, validate_feature_metadata_schema,
-       save_dataset_json, load_dataset_json,
-       save_pipeline_json, load_pipeline_json,
-       load_gudhi_json, load_ripserer_json, load_eirene_json,
-       load_gudhi_txt, load_ripserer_txt, load_eirene_txt,
-       load_ripser_point_cloud, load_ripser_distance,
-       load_ripser_lower_distance, load_ripser_upper_distance,
-       load_ripser_sparse_triplet, load_ripser_binary_lower_distance,
-       load_dipha_distance_matrix,
-       load_boundary_complex_json, load_reduced_complex_json,
-       load_pmodule_json,
-       load_ripser_lower_distance_streaming
-
 # Schema versions for JSON formats
-const PIPELINE_SCHEMA_VERSION = 1
+const PIPELINE_SCHEMA_VERSION = 2
 const ENCODING_SCHEMA_VERSION = 3
 const TAMER_FEATURE_SCHEMA_VERSION = v"0.2.0"
 
@@ -268,6 +250,31 @@ function _obj_from_dataset(data)
                     "boundaries" => bnds,
                     "grades" => [collect(g) for g in data.grades],
                     "cell_dims" => collect(data.cell_dims))
+    elseif data isa MultiCriticalGradedComplex
+        bnds = Any[]
+        for B in data.boundaries
+            Ii, Jj, Vv = findnz(B)
+            push!(bnds, Dict(
+                "m" => size(B, 1),
+                "n" => size(B, 2),
+                "I" => collect(Ii),
+                "J" => collect(Jj),
+                "V" => collect(Vv),
+            ))
+        end
+        return Dict("kind" => "MultiCriticalGradedComplex",
+                    "cells_by_dim" => [collect(c) for c in data.cells_by_dim],
+                    "boundaries" => bnds,
+                    "grades" => [[collect(g) for g in gs] for gs in data.grades],
+                    "cell_dims" => collect(data.cell_dims))
+    elseif data isa SimplexTreeMulti
+        return Dict("kind" => "SimplexTreeMulti",
+                    "simplex_offsets" => collect(data.simplex_offsets),
+                    "simplex_vertices" => collect(data.simplex_vertices),
+                    "simplex_dims" => collect(data.simplex_dims),
+                    "dim_offsets" => collect(data.dim_offsets),
+                    "grade_offsets" => collect(data.grade_offsets),
+                    "grade_data" => [collect(g) for g in data.grade_data])
     else
         error("Unsupported dataset type for serialization.")
     end
@@ -312,13 +319,74 @@ function _dataset_from_obj(obj)
         grades = [Vector{Float64}(g) for g in obj["grades"]]
         cell_dims = Vector{Int}(obj["cell_dims"])
         return GradedComplex(cells, boundaries, grades; cell_dims=cell_dims)
+    elseif kind == "MultiCriticalGradedComplex"
+        cells = [Vector{Int}(c) for c in obj["cells_by_dim"]]
+        boundaries = SparseMatrixCSC{Int,Int}[]
+        for b in obj["boundaries"]
+            m = Int(b["m"]); n = Int(b["n"])
+            I = Vector{Int}(b["I"])
+            J = Vector{Int}(b["J"])
+            V = Vector{Int}(b["V"])
+            push!(boundaries, sparse(I, J, V, m, n))
+        end
+        grades = [[Vector{Float64}(g) for g in gs] for gs in obj["grades"]]
+        cell_dims = Vector{Int}(obj["cell_dims"])
+        return MultiCriticalGradedComplex(cells, boundaries, grades; cell_dims=cell_dims)
+    elseif kind == "SimplexTreeMulti"
+        simplex_offsets = Vector{Int}(obj["simplex_offsets"])
+        simplex_vertices = Vector{Int}(obj["simplex_vertices"])
+        simplex_dims = Vector{Int}(obj["simplex_dims"])
+        dim_offsets = Vector{Int}(obj["dim_offsets"])
+        grade_offsets = Vector{Int}(obj["grade_offsets"])
+        raw_grades = obj["grade_data"]
+        isempty(raw_grades) && error("SimplexTreeMulti JSON payload has empty grade_data.")
+        N = length(raw_grades[1])
+        grade_data = Vector{NTuple{N,Float64}}(undef, length(raw_grades))
+        for i in eachindex(raw_grades)
+            g = raw_grades[i]
+            length(g) == N || error("SimplexTreeMulti JSON grade arity mismatch at index $i.")
+            grade_data[i] = ntuple(k -> Float64(g[k]), N)
+        end
+        return SimplexTreeMulti(simplex_offsets, simplex_vertices, simplex_dims,
+                                dim_offsets, grade_offsets, grade_data)
     else
         error("Unknown dataset kind: $kind")
     end
 end
 
+@inline function _construction_budget_obj(b::ConstructionBudget)
+    return Dict(
+        "max_simplices" => b.max_simplices,
+        "max_edges" => b.max_edges,
+        "memory_budget_bytes" => b.memory_budget_bytes,
+    )
+end
+
+@inline function _construction_options_obj(c::ConstructionOptions)
+    return Dict(
+        "sparsify" => String(c.sparsify),
+        "collapse" => String(c.collapse),
+        "output_stage" => String(c.output_stage),
+        "budget" => _construction_budget_obj(c.budget),
+    )
+end
+
 function _spec_obj(spec::FiltrationSpec)
-    return Dict("kind" => String(spec.kind), "params" => Dict(pairs(spec.params)))
+    params = Dict{String,Any}()
+    for (k, v) in pairs(spec.params)
+        if k == :construction
+            if v isa ConstructionOptions
+                params["construction"] = _construction_options_obj(v)
+            elseif v isa ConstructionBudget
+                params["construction"] = Dict("budget" => _construction_budget_obj(v))
+            else
+                params["construction"] = v
+            end
+        else
+            params[String(k)] = v
+        end
+    end
+    return Dict("kind" => String(spec.kind), "params" => params)
 end
 
 function _spec_from_obj(obj)
@@ -328,10 +396,71 @@ function _spec_from_obj(obj)
     return FiltrationSpec(; kind=kind, params...)
 end
 
+function _pipeline_options_from_spec(spec::FiltrationSpec)
+    p = spec.params
+    return PipelineOptions(;
+        orientation = get(p, :orientation, nothing),
+        axes_policy = Symbol(get(p, :axes_policy, :encoding)),
+        axis_kind = get(p, :axis_kind, nothing),
+        eps = get(p, :eps, nothing),
+        poset_kind = Symbol(get(p, :poset_kind, :signature)),
+        field = get(p, :field, nothing),
+        max_axis_len = get(p, :max_axis_len, nothing),
+    )
+end
+
+function _pipeline_options_from_any(spec::FiltrationSpec, x)
+    if x === nothing
+        return _pipeline_options_from_spec(spec)
+    elseif x isa PipelineOptions
+        return x
+    elseif x isa NamedTuple
+        return PipelineOptions(; x...)
+    elseif x isa AbstractDict
+        vals = (; (Symbol(k) => x[k] for k in keys(x))...)
+        return PipelineOptions(; vals...)
+    end
+    throw(ArgumentError("pipeline_opts must be nothing, PipelineOptions, NamedTuple, or AbstractDict."))
+end
+
+function _pipeline_options_obj(opts::PipelineOptions)
+    return Dict(
+        "orientation" => opts.orientation,
+        "axes_policy" => String(opts.axes_policy),
+        "axis_kind" => opts.axis_kind,
+        "eps" => opts.eps,
+        "poset_kind" => String(opts.poset_kind),
+        "field" => opts.field,
+        "max_axis_len" => opts.max_axis_len,
+    )
+end
+
+function _pipeline_options_from_obj(obj)::PipelineOptions
+    orient_raw = get(obj, "orientation", nothing)
+    orientation = if orient_raw isa AbstractVector
+        ntuple(i -> Int(orient_raw[i]), length(orient_raw))
+    else
+        orient_raw
+    end
+    axis_kind_raw = get(obj, "axis_kind", nothing)
+    axis_kind = axis_kind_raw isa AbstractString ? Symbol(axis_kind_raw) : axis_kind_raw
+    field_raw = get(obj, "field", nothing)
+    field = field_raw isa AbstractString ? Symbol(field_raw) : field_raw
+    return PipelineOptions(;
+        orientation = orientation,
+        axes_policy = Symbol(get(obj, "axes_policy", "encoding")),
+        axis_kind = axis_kind,
+        eps = get(obj, "eps", nothing),
+        poset_kind = Symbol(get(obj, "poset_kind", "signature")),
+        field = field,
+        max_axis_len = get(obj, "max_axis_len", nothing),
+    )
+end
+
 """
     save_dataset_json(path, data)
 
-Serialize a dataset (PointCloud, ImageNd, GraphData, EmbeddedPlanarGraph2D, GradedComplex).
+Serialize a dataset (PointCloud, ImageNd, GraphData, EmbeddedPlanarGraph2D, GradedComplex, MultiCriticalGradedComplex, SimplexTreeMulti).
 """
 function save_dataset_json(path::AbstractString, data)
     return _json_write(path, _obj_from_dataset(data))
@@ -348,35 +477,37 @@ function load_dataset_json(path::AbstractString)
 end
 
 """
-    save_pipeline_json(path, data, spec; degree=nothing, opts=nothing)
+    save_pipeline_json(path, data, spec; degree=nothing, pipeline_opts=nothing)
 
-Serialize a dataset + filtration spec (and optional options) in a single JSON.
+Serialize a dataset + filtration spec and structured `PipelineOptions` in one JSON.
 """
-function save_pipeline_json(path::AbstractString, data, spec::FiltrationSpec; degree=nothing, opts=nothing)
+function save_pipeline_json(path::AbstractString, data, spec::FiltrationSpec; degree=nothing, pipeline_opts=nothing)
+    popts = _pipeline_options_from_any(spec, pipeline_opts)
     obj = Dict(
         "schema_version" => PIPELINE_SCHEMA_VERSION,
         "dataset" => _obj_from_dataset(data),
         "spec" => _spec_obj(spec),
         "degree" => degree,
-        "opts" => opts,
+        "pipeline_options" => _pipeline_options_obj(popts),
     )
     return _json_write(path, obj)
 end
 
 """
-    load_pipeline_json(path) -> (data, spec, degree, opts)
+    load_pipeline_json(path) -> (data, spec, degree, pipeline_opts)
 
 Inverse of `save_pipeline_json`.
 """
 function load_pipeline_json(path::AbstractString)
     obj = _json_read(path)
-    version = haskey(obj, "schema_version") ? Int(obj["schema_version"]) : 1
-    version <= PIPELINE_SCHEMA_VERSION || error("Unsupported pipeline JSON schema_version: $(version)")
+    version = haskey(obj, "schema_version") ? Int(obj["schema_version"]) : 0
+    version == PIPELINE_SCHEMA_VERSION || error("Unsupported pipeline JSON schema_version: $(version). Expected $(PIPELINE_SCHEMA_VERSION).")
     data = _dataset_from_obj(obj["dataset"])
     spec = _spec_from_obj(obj["spec"])
     degree = haskey(obj, "degree") ? obj["degree"] : nothing
-    opts = haskey(obj, "opts") ? obj["opts"] : nothing
-    return data, spec, degree, opts
+    haskey(obj, "pipeline_options") || error("pipeline_options field is required in pipeline JSON.")
+    pipeline_opts = _pipeline_options_from_obj(obj["pipeline_options"])
+    return data, spec, degree, pipeline_opts
 end
 
 # =============================================================================
@@ -476,6 +607,238 @@ function load_eirene_json(path::AbstractString)
     return _graded_complex_from_simplex_list(simplices, grades)
 end
 
+function _read_structured_lines(path::AbstractString)
+    out = String[]
+    open(path, "r") do io
+        for raw in eachline(io)
+            line = strip(raw)
+            isempty(line) && continue
+            startswith(line, "#") && continue
+            startswith(line, "//") && continue
+            push!(out, line)
+        end
+    end
+    return out
+end
+
+function _take_rivet_flags(lines::Vector{String})
+    flags = Dict{String,String}()
+    i = 1
+    while i <= length(lines) && startswith(lines[i], "--")
+        parts = split(lines[i], r"\\s+"; limit=2)
+        key = lowercase(replace(parts[1], "--" => ""))
+        val = length(parts) == 2 ? strip(parts[2]) : "true"
+        flags[key] = val
+        i += 1
+    end
+    return flags, lines[i:end]
+end
+
+function _minimal_bigrades(grades::Vector{NTuple{2,Float64}})
+    u = unique(grades)
+    keep = trues(length(u))
+    for i in eachindex(u)
+        ai = u[i]
+        for j in eachindex(u)
+            i == j && continue
+            aj = u[j]
+            if aj[1] <= ai[1] && aj[2] <= ai[2] && (aj != ai)
+                keep[i] = false
+                break
+            end
+        end
+    end
+    out = u[keep]
+    sort!(out)
+    return out
+end
+
+function _parse_rivet_simplex_grade_line(line::AbstractString)
+    parts = split(line, ';'; limit=2)
+    length(parts) == 2 || error("RIVET bifiltration line must contain ';': $(line)")
+    simplex = Int[parse(Int, t) for t in split(strip(parts[1]))]
+    isempty(simplex) && error("RIVET bifiltration simplex cannot be empty.")
+    sort!(unique!(simplex))
+
+    gtoks = split(replace(strip(parts[2]), "," => " "))
+    isempty(gtoks) && error("RIVET bifiltration line has no grades: $(line)")
+    iseven(length(gtoks)) || error("RIVET bifiltration grade list must have even length: $(line)")
+    grades = NTuple{2,Float64}[]
+    for i in 1:2:length(gtoks)
+        push!(grades, (parse(Float64, gtoks[i]), parse(Float64, gtoks[i+1])))
+    end
+    return simplex, _minimal_bigrades(grades)
+end
+
+function _normalize_simplex_indices!(simplices::Vector{Vector{Int}})
+    minv = minimum(minimum(s) for s in simplices)
+    if minv == 0
+        for s in simplices
+            for i in eachindex(s)
+                s[i] += 1
+            end
+        end
+    elseif minv < 1
+        error("RIVET simplices must be 0-based or 1-based integer indices.")
+    end
+    return simplices
+end
+
+function _graded_complex_from_simplex_list_multicritical(simplices::Vector{Vector{Int}},
+                                                         gradesets::Vector{Vector{NTuple{2,Float64}}})
+    length(simplices) == length(gradesets) || error("simplices and grade sets length mismatch.")
+    max_dim = maximum(length.(simplices)) - 1
+    by_dim = [Vector{Vector{Int}}() for _ in 0:max_dim]
+    g_by_dim = [Vector{Vector{NTuple{2,Float64}}}() for _ in 0:max_dim]
+    for (s, gs) in zip(simplices, gradesets)
+        d = length(s) - 1
+        push!(by_dim[d+1], s)
+        push!(g_by_dim[d+1], gs)
+    end
+    boundaries = SparseMatrixCSC{Int,Int}[]
+    for d in 2:length(by_dim)
+        push!(boundaries, _simplicial_boundary_from_lists(by_dim[d], by_dim[d-1]))
+    end
+    cells = [collect(1:length(by_dim[d])) for d in 1:length(by_dim)]
+    flat_multi = Vector{Vector{NTuple{2,Float64}}}()
+    for d in 1:length(g_by_dim)
+        append!(flat_multi, g_by_dim[d])
+    end
+    if all(length(gs) == 1 for gs in flat_multi)
+        flat = [gs[1] for gs in flat_multi]
+        return GradedComplex(cells, boundaries, flat)
+    end
+    return MultiCriticalGradedComplex(cells, boundaries, flat_multi)
+end
+
+"""
+    load_rivet_bifiltration(path) -> Union{GradedComplex, MultiCriticalGradedComplex}
+
+Parse a RIVET bifiltration text file. Supports:
+- modern `--datatype bifiltration` files with lines `simplex ; x y [x y ...]`
+- legacy header-based files beginning with `bifiltration`.
+"""
+function load_rivet_bifiltration(path::AbstractString)
+    raw = _read_structured_lines(path)
+    isempty(raw) && error("RIVET bifiltration: empty file.")
+    flags, lines = _take_rivet_flags(raw)
+    if haskey(flags, "datatype")
+        lowercase(flags["datatype"]) == "bifiltration" ||
+            error("RIVET loader expected --datatype bifiltration, got $(flags["datatype"]).")
+    end
+    isempty(lines) && error("RIVET bifiltration: no payload lines.")
+
+    payload = lines
+    if lowercase(lines[1]) == "bifiltration"
+        length(lines) >= 5 || error("RIVET legacy bifiltration header is incomplete.")
+        lowercase(lines[2]) == "s" || error("RIVET legacy bifiltration: only simplicial ('s') format is supported.")
+        ns = parse(Int, strip(lines[4]))
+        payload = lines[5:end]
+        length(payload) == ns || error("RIVET legacy bifiltration: expected $(ns) simplex lines, found $(length(payload)).")
+    end
+
+    simplices = Vector{Vector{Int}}(undef, length(payload))
+    gradesets = Vector{Vector{NTuple{2,Float64}}}(undef, length(payload))
+    for i in eachindex(payload)
+        s, gs = _parse_rivet_simplex_grade_line(payload[i])
+        simplices[i] = s
+        gradesets[i] = gs
+    end
+    _normalize_simplex_indices!(simplices)
+    return _graded_complex_from_simplex_list_multicritical(simplices, gradesets)
+end
+
+function _parse_rivet_firep_column(line::AbstractString)
+    parts = split(line, ';'; limit=2)
+    length(parts) == 2 || error("RIVET FIRep column line must contain ';': $(line)")
+    gtok = split(strip(parts[1]))
+    length(gtok) == 2 || error("RIVET FIRep column grade must have exactly two coordinates: $(line)")
+    grade = (parse(Float64, gtok[1]), parse(Float64, gtok[2]))
+    rhs = strip(parts[2])
+    idxs = isempty(rhs) ? Int[] : Int[parse(Int, t) for t in split(rhs)]
+    return grade, idxs
+end
+
+"""
+    load_rivet_firep(path) -> GradedComplex
+
+Parse a RIVET FIRep text file (`--datatype firep` or raw FIRep payload).
+Builds a graded complex with dimensions 0,1,2 from the FIRep matrices.
+"""
+function load_rivet_firep(path::AbstractString)
+    raw = _read_structured_lines(path)
+    isempty(raw) && error("RIVET FIRep: empty file.")
+    flags, lines = _take_rivet_flags(raw)
+    if haskey(flags, "datatype")
+        lowercase(flags["datatype"]) == "firep" ||
+            error("RIVET loader expected --datatype firep, got $(flags["datatype"]).")
+    end
+    isempty(lines) && error("RIVET FIRep: missing payload.")
+
+    hdr = split(lines[1])
+    length(hdr) == 3 || error("RIVET FIRep header must be: t s r")
+    t = parse(Int, hdr[1])  # C2 generators
+    s = parse(Int, hdr[2])  # C1 generators
+    r = parse(Int, hdr[3])  # C0 generators
+    t >= 0 && s >= 0 && r >= 0 || error("RIVET FIRep counts must be nonnegative.")
+    length(lines) == 1 + t + s || error("RIVET FIRep: expected $(1+t+s) payload lines, found $(length(lines)).")
+
+    c2_grades = Vector{NTuple{2,Float64}}(undef, t)
+    I2 = Int[]; J2 = Int[]
+    for j in 1:t
+        g, rows = _parse_rivet_firep_column(lines[1 + j])
+        c2_grades[j] = g
+        for i in rows
+            push!(I2, i)
+            push!(J2, j)
+        end
+    end
+    if !isempty(I2)
+        minimum(I2) == 0 && (I2 .= I2 .+ 1)
+        minimum(I2) >= 1 || error("RIVET FIRep: invalid C2->C1 row index.")
+        maximum(I2) <= s || error("RIVET FIRep: C2->C1 row index out of range.")
+    end
+
+    c1_grades = Vector{NTuple{2,Float64}}(undef, s)
+    I1 = Int[]; J1 = Int[]
+    for j in 1:s
+        g, rows = _parse_rivet_firep_column(lines[1 + t + j])
+        c1_grades[j] = g
+        for i in rows
+            push!(I1, i)
+            push!(J1, j)
+        end
+    end
+    if !isempty(I1)
+        minimum(I1) == 0 && (I1 .= I1 .+ 1)
+        minimum(I1) >= 1 || error("RIVET FIRep: invalid C1->C0 row index.")
+        maximum(I1) <= r || error("RIVET FIRep: C1->C0 row index out of range.")
+    end
+
+    B1 = sparse(I1, J1, ones(Int, length(I1)), r, s)  # C1 -> C0
+    B2 = sparse(I2, J2, ones(Int, length(I2)), s, t)  # C2 -> C1
+
+    c0_grades = Vector{NTuple{2,Float64}}(undef, r)
+    incident = [Int[] for _ in 1:r]
+    Ii, Jj, _ = findnz(B1)
+    @inbounds for k in eachindex(Ii)
+        push!(incident[Ii[k]], Jj[k])
+    end
+    for i in 1:r
+        if isempty(incident[i])
+            c0_grades[i] = (0.0, 0.0)
+        else
+            xs = Float64[c1_grades[j][1] for j in incident[i]]
+            ys = Float64[c1_grades[j][2] for j in incident[i]]
+            c0_grades[i] = (minimum(xs), minimum(ys))
+        end
+    end
+
+    cells = [collect(1:r), collect(1:s), collect(1:t)]
+    grades = vcat(c0_grades, c1_grades, c2_grades)
+    return GradedComplex(cells, [B1, B2], grades)
+end
+
 """
     load_gudhi_txt(path) -> GradedComplex
     load_ripserer_txt(path) -> GradedComplex
@@ -563,13 +926,13 @@ function _parse_poset_from_obj(poset_obj)
             end
         end
         P = FinitePoset(leq)
-        clear_cover_cache!(P)
+        _clear_cover_cache!(P)
         return P
     elseif kind == "ProductOfChainsPoset"
         haskey(poset_obj, "sizes") || error("ProductOfChainsPoset missing required key 'sizes'.")
         sizes = Vector{Int}(poset_obj["sizes"])
         P = ProductOfChainsPoset(sizes)
-        clear_cover_cache!(P)
+        _clear_cover_cache!(P)
         return P
     elseif kind == "GridPoset"
         haskey(poset_obj, "coords") || error("GridPoset missing required key 'coords'.")
@@ -577,7 +940,7 @@ function _parse_poset_from_obj(poset_obj)
         coords_any isa AbstractVector || error("GridPoset.coords must be a list-of-lists.")
         coords = ntuple(i -> Vector{Float64}(coords_any[i]), length(coords_any))
         P = GridPoset(coords)
-        clear_cover_cache!(P)
+        _clear_cover_cache!(P)
         return P
     elseif kind == "ProductPoset"
         haskey(poset_obj, "left") || error("ProductPoset missing required key 'left'.")
@@ -585,7 +948,7 @@ function _parse_poset_from_obj(poset_obj)
         P1 = _parse_poset_from_obj(poset_obj["left"])
         P2 = _parse_poset_from_obj(poset_obj["right"])
         P = ProductPoset(P1, P2)
-        clear_cover_cache!(P)
+        _clear_cover_cache!(P)
         return P
     elseif kind == "SignaturePoset"
         haskey(poset_obj, "sig_y") || error("SignaturePoset missing required key 'sig_y'.")
@@ -607,7 +970,7 @@ function _parse_poset_from_obj(poset_obj)
             sig_z[i] = BitVector(Bool[x for x in row])
         end
         P = SignaturePoset(sig_y, sig_z)
-        clear_cover_cache!(P)
+        _clear_cover_cache!(P)
         return P
     else
         error("Unsupported poset kind: $(kind)")
@@ -968,69 +1331,158 @@ function _combinations(n::Int, k::Int)
     return out
 end
 
+@inline function _dm_budget_check_max_simplices!(total::Integer, budget::ConstructionBudget)
+    ms = budget.max_simplices
+    if ms !== nothing && total > ms
+        error("distance matrix Rips: exceeded max_simplices=$(ms).")
+    end
+    return nothing
+end
+
+@inline function _dm_budget_check_max_edges!(edge_count, budget::ConstructionBudget)
+    cap = budget.max_edges
+    if cap !== nothing && big(edge_count) > big(cap)
+        error("distance matrix Rips: exceeded max_edges=$(cap).")
+    end
+    return nothing
+end
+
+function _dm_edges_radius(dist::AbstractMatrix{<:Real}, radius::Float64)
+    n = size(dist, 1)
+    edges = Vector{Vector{Int}}()
+    for i in 1:n, j in i+1:n
+        if Float64(dist[i, j]) <= radius
+            push!(edges, [i, j])
+        end
+    end
+    return edges
+end
+
+function _dm_edges_knn(dist::AbstractMatrix{<:Real}, k::Int)
+    n = size(dist, 1)
+    0 < k < n || error("construction.sparsify=:knn requires 0 < knn < n.")
+    e = Set{Tuple{Int,Int}}()
+    for i in 1:n
+        neigh = [(Float64(dist[i, j]), j) for j in 1:n if j != i]
+        sort!(neigh, by=x -> x[1])
+        tmax = min(k, length(neigh))
+        for t in 1:tmax
+            j = neigh[t][2]
+            a, b = min(i, j), max(i, j)
+            push!(e, (a, b))
+        end
+    end
+    edges = [[ab[1], ab[2]] for ab in e]
+    sort!(edges; by=s -> (s[1], s[2]))
+    return edges
+end
+
+function _dm_edges_collapse_dominated(edges::Vector{Vector{Int}},
+                                      dist::AbstractMatrix{<:Real};
+                                      tol::Float64=1e-12)
+    n = size(dist, 1)
+    out = Vector{Vector{Int}}()
+    for e in edges
+        u, v = e[1], e[2]
+        duv = Float64(dist[u, v])
+        dominated = false
+        for w in 1:n
+            (w == u || w == v) && continue
+            if max(Float64(dist[u, w]), Float64(dist[w, v])) <= duv + tol
+                dominated = true
+                break
+            end
+        end
+        dominated || push!(out, e)
+    end
+    return out
+end
+
+function _dm_edges_collapse_acyclic(edges::Vector{Vector{Int}},
+                                    dist::AbstractMatrix{<:Real})
+    n = size(dist, 1)
+    parent = collect(1:n)
+    rank = zeros(Int, n)
+    function findp(x)
+        while parent[x] != x
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        end
+        return x
+    end
+    function unite(x, y)
+        rx, ry = findp(x), findp(y)
+        rx == ry && return false
+        if rank[rx] < rank[ry]
+            parent[rx] = ry
+        elseif rank[rx] > rank[ry]
+            parent[ry] = rx
+        else
+            parent[ry] = rx
+            rank[rx] += 1
+        end
+        return true
+    end
+    idx = sortperm(1:length(edges); by=i -> Float64(dist[edges[i][1], edges[i][2]]))
+    out = Vector{Vector{Int}}()
+    for i in idx
+        e = edges[i]
+        unite(e[1], e[2]) && push!(out, e)
+    end
+    return out
+end
+
+function _dm_apply_collapse(edges::Vector{Vector{Int}},
+                            dist::AbstractMatrix{<:Real},
+                            collapse::Symbol)
+    if collapse == :none
+        return edges
+    elseif collapse == :dominated_edges
+        return _dm_edges_collapse_dominated(edges, dist)
+    elseif collapse == :acyclic
+        return _dm_edges_collapse_acyclic(edges, dist)
+    end
+    error("construction.collapse must be :none, :dominated_edges, or :acyclic.")
+end
+
 function _graded_complex_from_distance_matrix(dist::AbstractMatrix{<:Real};
                                               max_dim::Int=1,
-                                              radius=nothing,
-                                              max_simplices=nothing,
-                                              sparse_rips::Bool=false,
-                                              approx_rips::Bool=false,
-                                              max_edges=nothing,
-                                              max_degree=nothing,
-                                              sample_frac=nothing)
+                                              radius::Union{Nothing,Real}=nothing,
+                                              knn::Union{Nothing,Int}=nothing,
+                                              construction::ConstructionOptions=ConstructionOptions())
     size(dist, 1) == size(dist, 2) || error("distance matrix must be square.")
+    max_dim >= 0 || error("max_dim must be >= 0.")
     n = size(dist, 1)
     n > 0 || error("distance matrix has size 0.")
+
+    sparsify = construction.sparsify
+    collapse = construction.collapse
+    budget = construction.budget
+
+    if sparsify == :greedy_perm
+        error("construction.sparsify=:greedy_perm is not supported for distance-matrix ingestion.")
+    end
+    if sparsify != :none && max_dim > 1
+        error("construction.sparsify=$(sparsify) currently supports max_dim <= 1 for distance-matrix ingestion.")
+    end
+    if collapse != :none && sparsify == :none
+        error("construction.collapse requires construction.sparsify != :none for distance-matrix ingestion.")
+    end
+    if radius !== nothing && sparsify != :radius
+        error("radius is only valid when construction.sparsify=:radius.")
+    end
+    if knn !== nothing && sparsify != :knn
+        error("knn is only valid when construction.sparsify=:knn.")
+    end
 
     simplices = Vector{Vector{Vector{Int}}}(undef, max_dim + 1)
     simplices[1] = [ [i] for i in 1:n ]
     total = length(simplices[1])
 
-    if sparse_rips
-        radius === nothing && error("sparse_rips requires radius.")
-        sims = Vector{Vector{Int}}()
-        for i in 1:n, j in i+1:n
-            if dist[i, j] <= radius
-                push!(sims, [i, j])
-            end
+    if sparsify == :none
+        if max_dim >= 1
+            _dm_budget_check_max_edges!(binomial(big(n), big(2)), budget)
         end
-        simplices = [simplices[1], sims]
-        max_dim = 1
-        total += length(sims)
-        if max_simplices !== nothing && total > max_simplices
-            error("distance matrix Rips: exceeded max_simplices=$(max_simplices).")
-        end
-    elseif approx_rips
-        radius === nothing && error("approx_rips requires radius.")
-        sims = Vector{Vector{Int}}()
-        deg = zeros(Int, n)
-        for i in 1:n
-            for j in i+1:n
-                if dist[i, j] <= radius
-                    if max_degree !== nothing && (deg[i] >= max_degree || deg[j] >= max_degree)
-                        continue
-                    end
-                    if sample_frac !== nothing && rand() > sample_frac
-                        continue
-                    end
-                    push!(sims, [i, j])
-                    deg[i] += 1
-                    deg[j] += 1
-                    if max_edges !== nothing && length(sims) >= max_edges
-                        break
-                    end
-                end
-            end
-            if max_edges !== nothing && length(sims) >= max_edges
-                break
-            end
-        end
-        simplices = [simplices[1], sims]
-        max_dim = 1
-        total += length(sims)
-        if max_simplices !== nothing && total > max_simplices
-            error("distance matrix Rips: exceeded max_simplices=$(max_simplices).")
-        end
-    else
         for k in 2:max_dim+1
             sims = Vector{Vector{Int}}()
             for comb in _combinations(n, k)
@@ -1038,10 +1490,24 @@ function _graded_complex_from_distance_matrix(dist::AbstractMatrix{<:Real};
             end
             simplices[k] = sims
             total += length(sims)
-            if max_simplices !== nothing && total > max_simplices
-                error("distance matrix Rips: exceeded max_simplices=$(max_simplices).")
-            end
+            _dm_budget_check_max_simplices!(total, budget)
         end
+    else
+        edges = if sparsify == :radius
+            radius === nothing && error("construction.sparsify=:radius requires radius.")
+            _dm_edges_radius(dist, Float64(radius))
+        elseif sparsify == :knn
+            knn === nothing && error("construction.sparsify=:knn requires knn.")
+            _dm_edges_knn(dist, Int(knn))
+        else
+            error("construction.sparsify must be :none, :radius, or :knn for distance-matrix ingestion.")
+        end
+        edges = _dm_apply_collapse(edges, dist, collapse)
+        _dm_budget_check_max_edges!(length(edges), budget)
+        simplices = [simplices[1], edges]
+        max_dim = 1
+        total += length(edges)
+        _dm_budget_check_max_simplices!(total, budget)
     end
 
     grades = Vector{Vector{Float64}}()
@@ -1084,51 +1550,83 @@ function load_ripser_point_cloud(path::AbstractString)
 end
 
 """
-    load_ripser_distance(path; max_dim=1, kwargs...) -> GradedComplex
+    load_ripser_distance(path; max_dim=1, radius=nothing, knn=nothing,
+                         construction=ConstructionOptions()) -> GradedComplex
 
 Parse a full distance matrix (square) and build a 1-parameter Rips graded complex.
 """
-function load_ripser_distance(path::AbstractString; max_dim::Int=1, kwargs...)
+function load_ripser_distance(path::AbstractString;
+                              max_dim::Int=1,
+                              radius::Union{Nothing,Real}=nothing,
+                              knn::Union{Nothing,Int}=nothing,
+                              construction::ConstructionOptions=ConstructionOptions())
     rows = _read_numeric_rows(path)
     dist = _matrix_from_rows(rows)
-    return _graded_complex_from_distance_matrix(dist; max_dim=max_dim, kwargs...)
+    return _graded_complex_from_distance_matrix(dist;
+                                                max_dim=max_dim,
+                                                radius=radius,
+                                                knn=knn,
+                                                construction=construction)
 end
 
 """
-    load_ripser_lower_distance(path; max_dim=1, kwargs...) -> GradedComplex
+    load_ripser_lower_distance(path; max_dim=1, radius=nothing, knn=nothing,
+                               construction=ConstructionOptions()) -> GradedComplex
 
 Parse a lower-triangular distance matrix (row-wise or flat list) and build a Rips complex.
 """
-function load_ripser_lower_distance(path::AbstractString; max_dim::Int=1, kwargs...)
+function load_ripser_lower_distance(path::AbstractString;
+                                    max_dim::Int=1,
+                                    radius::Union{Nothing,Real}=nothing,
+                                    knn::Union{Nothing,Int}=nothing,
+                                    construction::ConstructionOptions=ConstructionOptions())
     rows = _read_numeric_rows(path)
     dist = _triangular_from_rows(rows; upper=false)
     if dist === nothing
         dist = _triangular_from_vals(reduce(vcat, rows); upper=false)
     end
-    return _graded_complex_from_distance_matrix(dist; max_dim=max_dim, kwargs...)
+    return _graded_complex_from_distance_matrix(dist;
+                                                max_dim=max_dim,
+                                                radius=radius,
+                                                knn=knn,
+                                                construction=construction)
 end
 
 """
-    load_ripser_upper_distance(path; max_dim=1, kwargs...) -> GradedComplex
+    load_ripser_upper_distance(path; max_dim=1, radius=nothing, knn=nothing,
+                               construction=ConstructionOptions()) -> GradedComplex
 
 Parse an upper-triangular distance matrix (row-wise or flat list) and build a Rips complex.
 """
-function load_ripser_upper_distance(path::AbstractString; max_dim::Int=1, kwargs...)
+function load_ripser_upper_distance(path::AbstractString;
+                                    max_dim::Int=1,
+                                    radius::Union{Nothing,Real}=nothing,
+                                    knn::Union{Nothing,Int}=nothing,
+                                    construction::ConstructionOptions=ConstructionOptions())
     rows = _read_numeric_rows(path)
     dist = _triangular_from_rows(rows; upper=true)
     if dist === nothing
         dist = _triangular_from_vals(reduce(vcat, rows); upper=true)
     end
-    return _graded_complex_from_distance_matrix(dist; max_dim=max_dim, kwargs...)
+    return _graded_complex_from_distance_matrix(dist;
+                                                max_dim=max_dim,
+                                                radius=radius,
+                                                knn=knn,
+                                                construction=construction)
 end
 
 """
-    load_ripser_sparse_triplet(path; max_dim=1, kwargs...) -> GradedComplex
+    load_ripser_sparse_triplet(path; max_dim=1, radius=nothing, knn=nothing,
+                               construction=ConstructionOptions()) -> GradedComplex
 
 Parse a sparse triplet format: each nonzero entry as "i j d".
 Indices can be 0-based or 1-based.
 """
-function load_ripser_sparse_triplet(path::AbstractString; max_dim::Int=1, kwargs...)
+function load_ripser_sparse_triplet(path::AbstractString;
+                                    max_dim::Int=1,
+                                    radius::Union{Nothing,Real}=nothing,
+                                    knn::Union{Nothing,Int}=nothing,
+                                    construction::ConstructionOptions=ConstructionOptions())
     rows = _read_numeric_rows(path)
     isempty(rows) && error("sparse triplet file is empty.")
     for row in rows
@@ -1156,15 +1654,24 @@ function load_ripser_sparse_triplet(path::AbstractString; max_dim::Int=1, kwargs
             dist[j, i] = d
         end
     end
-    return _graded_complex_from_distance_matrix(dist; max_dim=max_dim, kwargs...)
+    return _graded_complex_from_distance_matrix(dist;
+                                                max_dim=max_dim,
+                                                radius=radius,
+                                                knn=knn,
+                                                construction=construction)
 end
 
 """
-    load_ripser_binary_lower_distance(path; max_dim=1, kwargs...) -> GradedComplex
+    load_ripser_binary_lower_distance(path; max_dim=1, radius=nothing, knn=nothing,
+                                      construction=ConstructionOptions()) -> GradedComplex
 
 Parse Ripser's binary lower-triangular distance matrix (Float64 values).
 """
-function load_ripser_binary_lower_distance(path::AbstractString; max_dim::Int=1, kwargs...)
+function load_ripser_binary_lower_distance(path::AbstractString;
+                                           max_dim::Int=1,
+                                           radius::Union{Nothing,Real}=nothing,
+                                           knn::Union{Nothing,Int}=nothing,
+                                           construction::ConstructionOptions=ConstructionOptions())
     vals = Float64[]
     open(path, "r") do io
         while !eof(io)
@@ -1172,15 +1679,24 @@ function load_ripser_binary_lower_distance(path::AbstractString; max_dim::Int=1,
         end
     end
     dist = _triangular_from_vals(vals; upper=false)
-    return _graded_complex_from_distance_matrix(dist; max_dim=max_dim, kwargs...)
+    return _graded_complex_from_distance_matrix(dist;
+                                                max_dim=max_dim,
+                                                radius=radius,
+                                                knn=knn,
+                                                construction=construction)
 end
 
 """
-    load_dipha_distance_matrix(path; max_dim=1, kwargs...) -> GradedComplex
+    load_dipha_distance_matrix(path; max_dim=1, radius=nothing, knn=nothing,
+                               construction=ConstructionOptions()) -> GradedComplex
 
 Parse a DIPHA binary distance matrix and build a Rips graded complex.
 """
-function load_dipha_distance_matrix(path::AbstractString; max_dim::Int=1, kwargs...)
+function load_dipha_distance_matrix(path::AbstractString;
+                                    max_dim::Int=1,
+                                    radius::Union{Nothing,Real}=nothing,
+                                    knn::Union{Nothing,Int}=nothing,
+                                    construction::ConstructionOptions=ConstructionOptions())
     open(path, "r") do io
         eof(io) && error("DIPHA distance matrix: empty file.")
         magic = read(io, Int64)
@@ -1196,17 +1712,22 @@ function load_dipha_distance_matrix(path::AbstractString; max_dim::Int=1, kwargs
             dist[i, j] = vals[idx]
             idx += 1
         end
-        return _graded_complex_from_distance_matrix(dist; max_dim=max_dim, kwargs...)
+        return _graded_complex_from_distance_matrix(dist;
+                                                    max_dim=max_dim,
+                                                    radius=radius,
+                                                    knn=knn,
+                                                    construction=construction)
     end
 end
 
 """
-    load_ripser_lower_distance_streaming(path; radius, max_dim=1, kwargs...) -> GradedComplex
+    load_ripser_lower_distance_streaming(path; radius, max_dim=1) -> GradedComplex
 
 Streaming reader for lower-triangular distance matrices (text). Builds a 1-skeleton
 Rips complex without loading the full matrix.
 """
-function load_ripser_lower_distance_streaming(path::AbstractString; radius, max_dim::Int=1, kwargs...)
+function load_ripser_lower_distance_streaming(path::AbstractString; radius, max_dim::Int=1)
+    max_dim == 1 || error("streaming lower distance currently supports max_dim=1 only.")
     radius === nothing && error("streaming lower distance requires radius.")
     edges = Vector{Vector{Int}}()
     grades = Vector{Vector{Float64}}()

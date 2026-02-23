@@ -1,0 +1,138 @@
+[meta]
+version = 1
+cases_file = "benchmark/ingestion_compare_harness/cases_matrix.toml"
+scale = 1.0
+
+[[cases]]
+id = "matrix_claim_n5000_d2_md1_s11"
+regime = "claim_matching"
+dataset = "gaussian_shell"
+path = "matrix_claim_n5000_d2_md1_s11.csv"
+n_points = 5000
+ambient_dim = 2
+seed = 11
+max_dim = 1
+claim_policy = "radius_k"
+claim_k = 16
+claim_radius = 0.0370186638783
+
+[[cases]]
+id = "matrix_claim_n10000_d2_md1_s11"
+regime = "claim_matching"
+dataset = "gaussian_shell"
+path = "matrix_claim_n10000_d2_md1_s11.csv"
+n_points = 10000
+ambient_dim = 2
+seed = 11
+max_dim = 1
+claim_policy = "radius_k"
+claim_k = 16
+claim_radius = 0.0252526966237
+
+[[cases]]
+id = "matrix_claim_n20000_d2_md1_s11"
+regime = "claim_matching"
+dataset = "gaussian_shell"
+path = "matrix_claim_n20000_d2_md1_s11.csv"
+n_points = 20000
+ambient_dim = 2
+seed = 11
+max_dim = 1
+claim_policy = "radius_k"
+claim_k = 16
+claim_radius = 0.0180156728116
+
+[[cases]]
+id = "matrix_claim_n50000_d2_md1_s11"
+regime = "claim_matching"
+dataset = "gaussian_shell"
+path = "matrix_claim_n50000_d2_md1_s11.csv"
+n_points = 50000
+ambient_dim = 2
+seed = 11
+max_dim = 1
+claim_policy = "radius_k"
+claim_k = 16
+claim_radius = 0.0117889611819
+
+[[cases]]
+id = "matrix_claim_n5000_d8_md1_s11"
+regime = "claim_matching"
+dataset = "gaussian_shell"
+path = "matrix_claim_n5000_d8_md1_s11.csv"
+n_points = 5000
+ambient_dim = 8
+seed = 11
+max_dim = 1
+claim_policy = "radius_k"
+claim_k = 16
+claim_radius = 0.384231177443
+
+[[cases]]
+id = "matrix_claim_n10000_d8_md1_s11"
+regime = "claim_matching"
+dataset = "gaussian_shell"
+path = "matrix_claim_n10000_d8_md1_s11.csv"
+n_points = 10000
+ambient_dim = 8
+seed = 11
+max_dim = 1
+claim_policy = "radius_k"
+claim_k = 16
+claim_radius = 0.350402977019
+
+[[cases]]
+id = "matrix_claim_n20000_d8_md1_s11"
+regime = "claim_matching"
+dataset = "gaussian_shell"
+path = "matrix_claim_n20000_d8_md1_s11.csv"
+n_points = 20000
+ambient_dim = 8
+seed = 11
+max_dim = 1
+claim_policy = "radius_k"
+claim_k = 16
+claim_radius = 0.309751128521
+
+[[cases]]
+id = "matrix_claim_n50000_d8_md1_s11"
+regime = "claim_matching"
+dataset = "gaussian_shell"
+path = "matrix_claim_n50000_d8_md1_s11.csv"
+n_points = 50000
+ambient_dim = 8
+seed = 11
+max_dim = 1
+claim_policy = "radius_k"
+claim_k = 16
+claim_radius = 0.276871438665
+
+[[cases]]
+id = "matrix_parity_n200_d2_md2_s11"
+regime = "normalized_parity"
+dataset = "gaussian_shell"
+path = "matrix_parity_n200_d2_md2_s11.csv"
+n_points = 200
+ambient_dim = 2
+seed = 11
+max_dim = 2
+
+[[cases]]
+id = "matrix_parity_n300_d2_md2_s17"
+regime = "normalized_parity"
+dataset = "gaussian_shell"
+path = "matrix_parity_n300_d2_md2_s17.csv"
+n_points = 300
+ambient_dim = 2
+seed = 17
+max_dim = 2
+
+[[cases]]
+id = "matrix_parity_n200_d8_md2_s11"
+regime = "normalized_parity"
+dataset = "gaussian_shell"
+path = "matrix_parity_n200_d8_md2_s11.csv"
+n_points = 200
+ambient_dim = 8
+seed = 11
+max_dim = 2

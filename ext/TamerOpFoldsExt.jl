@@ -12,7 +12,7 @@ const PM = let pm = nothing
     pm
 end
 
-const WF = PM.Workflow
+const FEA = PM.Featurizers
 
 function _foreach_indexed(n::Int, f; chunk_size::Int=0, deterministic::Bool=true)
     n <= 1 && return nothing
@@ -28,6 +28,6 @@ function _foreach_indexed(n::Int, f; chunk_size::Int=0, deterministic::Bool=true
     return nothing
 end
 
-WF._set_batch_impl!((foreach_indexed=_foreach_indexed,))
+FEA._set_batch_impl!((foreach_indexed=_foreach_indexed,))
 
 end # module

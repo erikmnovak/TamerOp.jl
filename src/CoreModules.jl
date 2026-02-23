@@ -12,7 +12,6 @@ using LinearAlgebra, SparseArrays
 # ----- canonical field of scalars used everywhere --------------------------------
 "Exact rationals used throughout (Rational{BigInt})."
 const QQ = Rational{BigInt}
-export QQ
 
 
 # ----- coefficient field layer ---------------------------------------------------
@@ -21,9 +20,6 @@ using LinearAlgebra
 using Random
 using ..CoreModules: QQ
 
-export AbstractCoeffField, QQField, RealField, PrimeField
-export F2, F3, Fp, coeff_type, coerce
-export FpElem, field_from_eltype, zeros, ones, eye, rand
 
 "Abstract supertype for coefficient fields."
 abstract type AbstractCoeffField end
@@ -205,9 +201,6 @@ end # module CoeffFields
 using .CoeffFields: AbstractCoeffField, QQField, RealField, PrimeField,
     F2, F3, Fp, coeff_type, coerce, FpElem, field_from_eltype,
     eye, zeros, ones, rand
-export AbstractCoeffField, QQField, RealField, PrimeField,
-    F2, F3, Fp, coeff_type, coerce, FpElem, field_from_eltype,
-    eye, zeros, ones, rand
 
 """
     BackendMatrix{K}
@@ -251,20 +244,14 @@ Base.:*(A::BackendMatrix{K}, B::AbstractMatrix{K}) where {K} = A.data * B
 Base.:*(A::AbstractMatrix{K}, B::BackendMatrix{K}) where {K} = A * B.data
 Base.:*(A::BackendMatrix{K}, B::BackendMatrix{K}) where {K} = A.data * B.data
 
-@inline unwrap_backend_matrix(A::BackendMatrix) = A.data
-@inline backend_kind(A::BackendMatrix) = A.backend
-@inline backend_payload(A::BackendMatrix) = A.payload
-@inline function set_backend_payload!(A::BackendMatrix, payload)
+@inline _unwrap_backend_matrix(A::BackendMatrix) = A.data
+@inline _backend_kind(A::BackendMatrix) = A.backend
+@inline _backend_payload(A::BackendMatrix) = A.payload
+@inline function _set_backend_payload!(A::BackendMatrix, payload)
     A.payload = payload
     return A
 end
-@inline function clear_backend_payload!(A::BackendMatrix)
-    A.payload = nothing
-    return A
-end
 
-export BackendMatrix, unwrap_backend_matrix, backend_kind, backend_payload,
-       set_backend_payload!, clear_backend_payload!
 
 """
     change_field(x, field)
@@ -272,23 +259,7 @@ export BackendMatrix, unwrap_backend_matrix, backend_kind, backend_payload,
 Coerce a structure into the specified coefficient field.
 """
 function change_field end
-export change_field
 
-
-"""
-    encode_from_data(data, spec; kwargs...)
-
-High-level ingestion entrypoint. This should turn a dataset + filtration
-spec into a finite-encoded fringe module plus encoding map.
-"""
-function encode_from_data end
-
-"""
-    ingest(data, spec; kwargs...)
-
-Alias for `encode_from_data` to support narrative workflows.
-"""
-function ingest end
 
 """
     _append_scaled_triplets!(I, J, V, A, row_off, col_off; scale=one(eltype(A)))
@@ -431,7 +402,6 @@ function string_to_rational(s::AbstractString)::QQ
     length(t) == 2 || error("bad QQ string: $s")
     parse(BigInt, t[1]) // parse(BigInt, t[2])
 end
-export rational_to_string, string_to_rational
 
 # ----- common abstract supertype for "encoding map" objects --------------------
 """
@@ -459,7 +429,6 @@ abstract type AbstractPLikeEncodingMap end
 "Convenience alias used in type signatures in higher-level code."
 const PLikeEncodingMap = AbstractPLikeEncodingMap
 
-export AbstractPLikeEncodingMap, PLikeEncodingMap
 
 # -----------------------------------------------------------------------------
 # Lightweight ingestion types (shared across Workflow + Serialization)
@@ -605,6 +574,146 @@ function GradedComplex(cells_by_dim::Vector{Vector{Int}},
 end
 
 """
+    MultiCriticalGradedComplex(cells_by_dim, boundaries, grades; cell_dims=nothing)
+
+Graded cell complex where each cell can carry multiple minimal grades.
+`grades[i]` is a non-empty vector of `NTuple{N,T}` grades for cell `i`.
+"""
+struct MultiCriticalGradedComplex{N,T}
+    cells_by_dim::Vector{Vector{Int}}
+    boundaries::Vector{SparseMatrixCSC{Int,Int}}
+    grades::Vector{Vector{NTuple{N,T}}}
+    cell_dims::Vector{Int}
+end
+
+function MultiCriticalGradedComplex(cells_by_dim::Vector{Vector{Int}},
+                                    boundaries::Vector{SparseMatrixCSC{Int,Int}},
+                                    grades::Vector{<:AbstractVector{<:Tuple}};
+                                    cell_dims::Union{Nothing,Vector{Int}}=nothing)
+    total = sum(length.(cells_by_dim))
+    length(grades) == total || error("MultiCriticalGradedComplex: grades length mismatch.")
+    cell_dims = cell_dims === nothing ? _cell_dims_from_cells(cells_by_dim) : cell_dims
+    length(cell_dims) == total || error("MultiCriticalGradedComplex: cell_dims length mismatch.")
+
+    # Find first non-empty grade set to infer (N,T)
+    first_cell = findfirst(!isempty, grades)
+    first_cell === nothing && error("MultiCriticalGradedComplex: each cell must have at least one grade.")
+    first_grade = grades[first_cell][1]
+    N = length(first_grade)
+    T = eltype(first_grade)
+
+    ng = Vector{Vector{NTuple{N,T}}}(undef, length(grades))
+    for i in eachindex(grades)
+        gi = grades[i]
+        isempty(gi) && error("MultiCriticalGradedComplex: cell $i has empty grade set.")
+        out = Vector{NTuple{N,T}}(undef, length(gi))
+        for j in eachindex(gi)
+            g = gi[j]
+            length(g) == N || error("MultiCriticalGradedComplex: grade length mismatch at cell $i.")
+            out[j] = ntuple(k -> T(g[k]), N)
+        end
+        ng[i] = unique(out)
+    end
+    return MultiCriticalGradedComplex{N,T}(cells_by_dim, boundaries, ng, cell_dims)
+end
+
+function MultiCriticalGradedComplex(cells_by_dim::Vector{Vector{Int}},
+                                    boundaries::Vector{SparseMatrixCSC{Int,Int}},
+                                    grades::Vector{<:AbstractVector{<:AbstractVector{T}}};
+                                    cell_dims::Union{Nothing,Vector{Int}}=nothing) where {T}
+    total = sum(length.(cells_by_dim))
+    length(grades) == total || error("MultiCriticalGradedComplex: grades length mismatch.")
+    cell_dims = cell_dims === nothing ? _cell_dims_from_cells(cells_by_dim) : cell_dims
+    length(cell_dims) == total || error("MultiCriticalGradedComplex: cell_dims length mismatch.")
+
+    first_cell = findfirst(!isempty, grades)
+    first_cell === nothing && error("MultiCriticalGradedComplex: each cell must have at least one grade.")
+    N = length(grades[first_cell][1])
+    ng = Vector{Vector{NTuple{N,T}}}(undef, length(grades))
+    for i in eachindex(grades)
+        gi = grades[i]
+        isempty(gi) && error("MultiCriticalGradedComplex: cell $i has empty grade set.")
+        out = Vector{NTuple{N,T}}(undef, length(gi))
+        for j in eachindex(gi)
+            g = gi[j]
+            length(g) == N || error("MultiCriticalGradedComplex: grade length mismatch at cell $i.")
+            out[j] = ntuple(k -> T(g[k]), N)
+        end
+        ng[i] = unique(out)
+    end
+    return MultiCriticalGradedComplex{N,T}(cells_by_dim, boundaries, ng, cell_dims)
+end
+
+"""
+    SimplexTreeMulti(simplex_offsets, simplex_vertices, simplex_dims,
+                     dim_offsets, grade_offsets, grade_data)
+
+Compact simplicial multifiltration container with packed storage.
+
+- `simplex_offsets` / `simplex_vertices` encode simplex vertex lists in CSR form.
+- `simplex_dims[i]` is the dimension of simplex `i`.
+- `dim_offsets[d+1]:(dim_offsets[d+2]-1)` selects simplices of dimension `d`.
+- `grade_offsets` / `grade_data` encode minimal grade sets per simplex.
+"""
+struct SimplexTreeMulti{N,T}
+    simplex_offsets::Vector{Int}
+    simplex_vertices::Vector{Int}
+    simplex_dims::Vector{Int}
+    dim_offsets::Vector{Int}
+    grade_offsets::Vector{Int}
+    grade_data::Vector{NTuple{N,T}}
+end
+
+function SimplexTreeMulti(simplex_offsets::Vector{Int},
+                          simplex_vertices::Vector{Int},
+                          simplex_dims::Vector{Int},
+                          dim_offsets::Vector{Int},
+                          grade_offsets::Vector{Int},
+                          grade_data::Vector{NTuple{N,T}}) where {N,T}
+    ns = length(simplex_dims)
+    length(simplex_offsets) == ns + 1 ||
+        error("SimplexTreeMulti: simplex_offsets must have length nsimplices+1.")
+    length(grade_offsets) == ns + 1 ||
+        error("SimplexTreeMulti: grade_offsets must have length nsimplices+1.")
+    !isempty(dim_offsets) || error("SimplexTreeMulti: dim_offsets cannot be empty.")
+    first(simplex_offsets) == 1 || error("SimplexTreeMulti: simplex_offsets must start at 1.")
+    first(grade_offsets) == 1 || error("SimplexTreeMulti: grade_offsets must start at 1.")
+    last(simplex_offsets) == length(simplex_vertices) + 1 ||
+        error("SimplexTreeMulti: simplex_offsets terminator mismatch.")
+    last(grade_offsets) == length(grade_data) + 1 ||
+        error("SimplexTreeMulti: grade_offsets terminator mismatch.")
+    last(dim_offsets) == ns + 1 ||
+        error("SimplexTreeMulti: dim_offsets terminator mismatch.")
+    for i in 1:ns
+        simplex_offsets[i] <= simplex_offsets[i + 1] ||
+            error("SimplexTreeMulti: simplex_offsets must be nondecreasing.")
+        grade_offsets[i] < grade_offsets[i + 1] ||
+            error("SimplexTreeMulti: each simplex must have at least one grade.")
+    end
+    return SimplexTreeMulti{N,T}(simplex_offsets, simplex_vertices, simplex_dims,
+                                 dim_offsets, grade_offsets, grade_data)
+end
+
+@inline simplex_count(ST::SimplexTreeMulti) = length(ST.simplex_dims)
+@inline max_simplex_dim(ST::SimplexTreeMulti) = isempty(ST.simplex_dims) ? -1 : maximum(ST.simplex_dims)
+
+@inline function simplex_vertices(ST::SimplexTreeMulti, i::Integer)
+    ii = Int(i)
+    1 <= ii <= simplex_count(ST) || throw(BoundsError(ST.simplex_dims, ii))
+    lo = ST.simplex_offsets[ii]
+    hi = ST.simplex_offsets[ii + 1] - 1
+    return @view ST.simplex_vertices[lo:hi]
+end
+
+@inline function simplex_grades(ST::SimplexTreeMulti, i::Integer)
+    ii = Int(i)
+    1 <= ii <= simplex_count(ST) || throw(BoundsError(ST.simplex_dims, ii))
+    lo = ST.grade_offsets[ii]
+    hi = ST.grade_offsets[ii + 1] - 1
+    return @view ST.grade_data[lo:hi]
+end
+
+"""
     FiltrationSpec(; kind, params...)
 
 Lightweight filtration specification container. Stores a `kind` symbol and a
@@ -616,6 +725,89 @@ struct FiltrationSpec
 end
 
 FiltrationSpec(; kind::Symbol, params...) = FiltrationSpec(kind, NamedTuple(params))
+
+"""
+    ConstructionBudget(; max_simplices=nothing, max_edges=nothing, memory_budget_bytes=nothing)
+
+Budget controls for data-ingestion construction.
+"""
+struct ConstructionBudget
+    max_simplices::Union{Nothing,Int}
+    max_edges::Union{Nothing,Int}
+    memory_budget_bytes::Union{Nothing,Int}
+end
+
+ConstructionBudget(; max_simplices::Union{Nothing,Integer}=nothing,
+                   max_edges::Union{Nothing,Integer}=nothing,
+                   memory_budget_bytes::Union{Nothing,Integer}=nothing) =
+    ConstructionBudget(max_simplices === nothing ? nothing : Int(max_simplices),
+                       max_edges === nothing ? nothing : Int(max_edges),
+                       memory_budget_bytes === nothing ? nothing : Int(memory_budget_bytes))
+
+"""
+    ConstructionOptions(; sparsify=:none, collapse=:none, output_stage=:encoding_result,
+                         budget=(nothing, nothing, nothing))
+
+Canonical construction controls for data ingestion.
+"""
+struct ConstructionOptions
+    sparsify::Symbol
+    collapse::Symbol
+    output_stage::Symbol
+    budget::ConstructionBudget
+end
+
+function ConstructionOptions(; sparsify::Symbol=:none,
+                             collapse::Symbol=:none,
+                             output_stage::Symbol=:encoding_result,
+                             budget=(nothing, nothing, nothing))
+    sp = sparsify
+    co = collapse
+    os = output_stage
+    (sp == :none || sp == :radius || sp == :knn || sp == :greedy_perm) ||
+        error("ConstructionOptions: sparsify must be :none, :radius, :knn, or :greedy_perm.")
+    (co == :none || co == :dominated_edges || co == :acyclic) ||
+        error("ConstructionOptions: collapse must be :none, :dominated_edges, or :acyclic.")
+    (os == :simplex_tree || os == :graded_complex || os == :cochain || os == :module || os == :fringe || os == :flange || os == :encoding_result) ||
+        error("ConstructionOptions: output_stage must be :simplex_tree, :graded_complex, :cochain, :module, :fringe, :flange, or :encoding_result.")
+    b = if budget isa ConstructionBudget
+        budget
+    elseif budget isa Tuple
+        length(budget) == 3 || error("ConstructionOptions: budget tuple must be (max_simplices, max_edges, memory_budget_bytes).")
+        ConstructionBudget(; max_simplices=budget[1], max_edges=budget[2], memory_budget_bytes=budget[3])
+    elseif budget isa NamedTuple
+        ConstructionBudget(; budget...)
+    else
+        error("ConstructionOptions: budget must be ConstructionBudget, 3-tuple, or NamedTuple.")
+    end
+    return ConstructionOptions(sp, co, os, b)
+end
+
+"""
+    PipelineOptions(; orientation=nothing, axes_policy=:encoding, axis_kind=nothing,
+                     eps=nothing, poset_kind=:signature, field=nothing, max_axis_len=nothing)
+
+Structured pipeline controls that materially affect data-ingestion encodings and
+their reproducibility in serialized pipeline artifacts.
+"""
+struct PipelineOptions{OrientationT,AxisKindT,EpsT,FieldT}
+    orientation::OrientationT
+    axes_policy::Symbol
+    axis_kind::AxisKindT
+    eps::EpsT
+    poset_kind::Symbol
+    field::FieldT
+    max_axis_len::Union{Nothing,Int}
+end
+
+PipelineOptions(; orientation=nothing,
+                axes_policy::Symbol=:encoding,
+                axis_kind=nothing,
+                eps=nothing,
+                poset_kind::Symbol=:signature,
+                field=nothing,
+                max_axis_len::Union{Nothing,Int}=nothing) =
+    PipelineOptions(orientation, axes_policy, axis_kind, eps, poset_kind, field, max_axis_len)
 
 """
     GridEncodingMap(P, coords; orientation=ntuple(_->1, N))
@@ -639,21 +831,6 @@ function _grid_strides(sizes::NTuple{N,Int}) where {N}
     return ntuple(i -> strides[i], N)
 end
 
-"""
-    grid_index(idxs, sizes) -> Int
-
-Convert an N-tuple of 1-based indices into a linear index using mixed radix
-ordering with the first axis varying fastest.
-"""
-function grid_index(idxs::NTuple{N,Int}, sizes::NTuple{N,Int}) where {N}
-    strides = _grid_strides(sizes)
-    lin = 1
-    for i in 1:N
-        lin += (idxs[i] - 1) * strides[i]
-    end
-    return lin
-end
-
 function GridEncodingMap(P, coords::NTuple{N,Vector{T}};
                          orientation::NTuple{N,Int}=ntuple(_ -> 1, N)) where {N,T}
     sizes = ntuple(i -> length(coords[i]), N)
@@ -664,8 +841,6 @@ function GridEncodingMap(P, coords::NTuple{N,Vector{T}};
     return GridEncodingMap{N,T,typeof(P)}(P, coords, orientation, sizes, _grid_strides(sizes))
 end
 
-export PointCloud, ImageNd, GraphData, EmbeddedPlanarGraph2D, GradedComplex,
-       FiltrationSpec, GridEncodingMap, grid_index
 
 # -----------------------------------------------------------------------------
 # Compiled encoding wrappers (primary type for repeated queries)
@@ -684,8 +859,6 @@ struct CompiledEncoding{PiType,PType,AxesType,RepsType,MetaType} <: AbstractPLik
     reps::RepsType
     meta::MetaType
 end
-
-@inline encoding_map(enc::CompiledEncoding) = enc.pi
 
 function compile_encoding(P, pi; axes=nothing, reps=nothing, meta=NamedTuple())
     axes_val = axes
@@ -712,7 +885,6 @@ function Base.propertynames(enc::CompiledEncoding, private::Bool=false)
     return (fieldnames(typeof(enc))..., propertynames(enc.pi, private)...)
 end
 
-export CompiledEncoding, compile_encoding, encoding_map
 
 
 # ----- shared API hooks ----------------------------------------------------------
@@ -808,7 +980,6 @@ function axes_from_encoding(enc::CompiledEncoding)
     enc.axes === nothing ? axes_from_encoding(enc.pi) : enc.axes
 end
 
-export locate, dimension, representatives, axes_from_encoding
 
 # =============================================================================
 # Option structs (public API)
@@ -990,8 +1161,8 @@ struct ResolutionKey3
     maxlen::Int
 end
 
-@inline resolution_key2(a, maxlen::Integer) = ResolutionKey2(UInt(objectid(a)), Int(maxlen))
-@inline resolution_key3(a, b, maxlen::Integer) = ResolutionKey3(UInt(objectid(a)), UInt(objectid(b)), Int(maxlen))
+@inline _resolution_key2(a, maxlen::Integer) = ResolutionKey2(UInt(objectid(a)), Int(maxlen))
+@inline _resolution_key3(a, b, maxlen::Integer) = ResolutionKey3(UInt(objectid(a)), UInt(objectid(b)), Int(maxlen))
 
 mutable struct ResolutionCache
     lock::Base.ReentrantLock
@@ -1017,7 +1188,7 @@ function ResolutionCache()
     )
 end
 
-function clear_resolution_cache!(cache::ResolutionCache)
+function _clear_resolution_cache!(cache::ResolutionCache)
     Base.lock(cache.lock)
     empty!(cache.projective)
     empty!(cache.injective)
@@ -1059,7 +1230,7 @@ EncodingCache() = EncodingCache(Base.ReentrantLock(),
                                 Dict{Tuple{UInt,UInt,Symbol},Any}(),
                                 Dict{Any,Any}())
 
-function clear_encoding_cache!(cache::EncodingCache)
+function _clear_encoding_cache!(cache::EncodingCache)
     Base.lock(cache.lock)
     try
         empty!(cache.posets)
@@ -1087,8 +1258,8 @@ end
 ModuleCache(module_id::UInt, field_key::UInt) =
     ModuleCache(module_id, field_key, ResolutionCache(), Dict{Symbol,Any}())
 
-function clear_module_cache!(cache::ModuleCache)
-    clear_resolution_cache!(cache.resolution)
+function _clear_module_cache!(cache::ModuleCache)
+    _clear_resolution_cache!(cache.resolution)
     empty!(cache.payload)
     return nothing
 end
@@ -1101,7 +1272,11 @@ Cross-query cache root with explicit lifetime controlled by the caller.
 Hierarchy:
 - SessionCache (long-lived, workflow-level)
   - EncodingCache buckets keyed by poset identity
-  - ModuleCache buckets keyed by `(objectid(module), field_cache_key(module.field))`
+  - ModuleCache buckets keyed by `(objectid(module), _field_cache_key(module.field))`
+  - Zn encoding artifacts `(P, pi)` keyed by `(encoding_fingerprint, poset_kind, max_regions)`
+  - Zn pushforward plans keyed by `(encoding_fingerprint, flange_fingerprint)`
+  - Zn pushed fringes keyed by `(encoding_fingerprint, poset_kind, flange_fingerprint, field_key)`
+  - Zn pushed modules keyed by `(encoding_fingerprint, poset_kind, flange_fingerprint, field_key)`
 """
 mutable struct SessionCache
     lock::Base.ReentrantLock
@@ -1110,6 +1285,10 @@ mutable struct SessionCache
     resolution::ResolutionCache
     hom_system::Any
     slice_plan::Any
+    zn_encoding_artifacts::Dict{Tuple{UInt64,Symbol,Int},Any}
+    zn_pushforward_plan::Dict{Tuple{UInt64,UInt64},Any}
+    zn_pushforward_fringe::Dict{Tuple{UInt64,Symbol,UInt64,UInt},Any}
+    zn_pushforward_module::Dict{Tuple{UInt64,Symbol,UInt64,UInt},Any}
     product_dense::IdDict{Any,Any}
     product_obj::IdDict{Any,Any}
 end
@@ -1120,17 +1299,21 @@ SessionCache() = SessionCache(Base.ReentrantLock(),
                               ResolutionCache(),
                               nothing,
                               nothing,
+                              Dict{Tuple{UInt64,Symbol,Int},Any}(),
+                              Dict{Tuple{UInt64,UInt64},Any}(),
+                              Dict{Tuple{UInt64,Symbol,UInt64,UInt},Any}(),
+                              Dict{Tuple{UInt64,Symbol,UInt64,UInt},Any}(),
                               IdDict{Any,Any}(),
                               IdDict{Any,Any}())
 
-@inline field_cache_key(field)::UInt = UInt(hash((typeof(field), field)))
-@inline poset_cache_key(P)::UInt = UInt(objectid(P))
-@inline function module_cache_key(M)
-    fid = hasproperty(M, :field) ? field_cache_key(getproperty(M, :field)) : UInt(0)
+@inline _field_cache_key(field)::UInt = UInt(hash((typeof(field), field)))
+@inline _poset_cache_key(P)::UInt = UInt(objectid(P))
+@inline function _module_cache_key(M)
+    fid = hasproperty(M, :field) ? _field_cache_key(getproperty(M, :field)) : UInt(0)
     return (UInt(objectid(M)), fid)
 end
 
-function encoding_cache!(session::SessionCache, key::UInt)
+function _encoding_cache!(session::SessionCache, key::UInt)
     Base.lock(session.lock)
     try
         return get!(session.encoding, key) do
@@ -1141,9 +1324,9 @@ function encoding_cache!(session::SessionCache, key::UInt)
     end
 end
 
-encoding_cache!(session::SessionCache, P) = encoding_cache!(session, poset_cache_key(P))
+_encoding_cache!(session::SessionCache, P) = _encoding_cache!(session, _poset_cache_key(P))
 
-function module_cache!(session::SessionCache, key::Tuple{UInt,UInt})
+function _module_cache!(session::SessionCache, key::Tuple{UInt,UInt})
     Base.lock(session.lock)
     try
         return get!(session.modules, key) do
@@ -1154,65 +1337,256 @@ function module_cache!(session::SessionCache, key::Tuple{UInt,UInt})
     end
 end
 
-module_cache!(session::SessionCache, M) = module_cache!(session, module_cache_key(M))
+_module_cache!(session::SessionCache, M) = _module_cache!(session, _module_cache_key(M))
 
-function invalidate_encoding_cache!(session::SessionCache, key::UInt)
+function _invalidate_encoding_cache!(session::SessionCache, key::UInt)
     Base.lock(session.lock)
     try
         cache = pop!(session.encoding, key, nothing)
-        cache === nothing || clear_encoding_cache!(cache)
+        cache === nothing || _clear_encoding_cache!(cache)
     finally
         Base.unlock(session.lock)
     end
     return nothing
 end
 
-invalidate_encoding_cache!(session::SessionCache, P) =
-    invalidate_encoding_cache!(session, poset_cache_key(P))
+_invalidate_encoding_cache!(session::SessionCache, P) =
+    _invalidate_encoding_cache!(session, _poset_cache_key(P))
 
-function invalidate_module_cache!(session::SessionCache, key::Tuple{UInt,UInt})
+function _invalidate_module_cache!(session::SessionCache, key::Tuple{UInt,UInt})
     Base.lock(session.lock)
     try
         cache = pop!(session.modules, key, nothing)
-        cache === nothing || clear_module_cache!(cache)
+        cache === nothing || _clear_module_cache!(cache)
     finally
         Base.unlock(session.lock)
     end
     return nothing
 end
 
-invalidate_module_cache!(session::SessionCache, M) =
-    invalidate_module_cache!(session, module_cache_key(M))
+_invalidate_module_cache!(session::SessionCache, M) =
+    _invalidate_module_cache!(session, _module_cache_key(M))
 
-@inline session_resolution_cache(session::SessionCache) = session.resolution
-@inline session_resolution_cache(session::SessionCache, M) = module_cache!(session, M).resolution
+@inline _session_resolution_cache(session::SessionCache) = session.resolution
+@inline _session_resolution_cache(session::SessionCache, M) = _module_cache!(session, M).resolution
 
-@inline session_hom_cache(session::SessionCache) = session.hom_system
-@inline function set_session_hom_cache!(session::SessionCache, cache)
+@inline _session_hom_cache(session::SessionCache) = session.hom_system
+@inline function _set_session_hom_cache!(session::SessionCache, cache)
     session.hom_system = cache
     return cache
 end
 
-@inline session_slice_plan_cache(session::SessionCache) = session.slice_plan
-@inline function set_session_slice_plan_cache!(session::SessionCache, cache)
+@inline _session_slice_plan_cache(session::SessionCache) = session.slice_plan
+@inline function _set_session_slice_plan_cache!(session::SessionCache, cache)
     session.slice_plan = cache
     return cache
 end
 
-function clear_session_cache!(session::SessionCache)
+@inline function _session_get_zn_pushforward_plan(session::SessionCache,
+                                                  encoding_fp::UInt64,
+                                                  flange_fp::UInt64)
+    key = (encoding_fp, flange_fp)
+    Base.lock(session.lock)
+    try
+        return get(session.zn_pushforward_plan, key, nothing)
+    finally
+        Base.unlock(session.lock)
+    end
+end
+
+@inline function _session_get_zn_encoding_artifact(session::SessionCache,
+                                                   encoding_fp::UInt64,
+                                                   poset_kind::Symbol,
+                                                   max_regions::Int)
+    key = (encoding_fp, poset_kind, max_regions)
+    Base.lock(session.lock)
+    try
+        return get(session.zn_encoding_artifacts, key, nothing)
+    finally
+        Base.unlock(session.lock)
+    end
+end
+
+@inline function _session_set_zn_encoding_artifact!(session::SessionCache,
+                                                    encoding_fp::UInt64,
+                                                    poset_kind::Symbol,
+                                                    max_regions::Int,
+                                                    artifact)
+    key = (encoding_fp, poset_kind, max_regions)
+    Base.lock(session.lock)
+    try
+        session.zn_encoding_artifacts[key] = artifact
+    finally
+        Base.unlock(session.lock)
+    end
+    return artifact
+end
+
+@inline function _session_set_zn_pushforward_plan!(session::SessionCache,
+                                                   encoding_fp::UInt64,
+                                                   flange_fp::UInt64,
+                                                   plan)
+    key = (encoding_fp, flange_fp)
+    Base.lock(session.lock)
+    try
+        session.zn_pushforward_plan[key] = plan
+    finally
+        Base.unlock(session.lock)
+    end
+    return plan
+end
+
+@inline function _session_get_zn_pushforward_fringe(session::SessionCache,
+                                                    encoding_fp::UInt64,
+                                                    poset_kind::Symbol,
+                                                    flange_fp::UInt64,
+                                                    field_key::UInt)
+    key = (encoding_fp, poset_kind, flange_fp, field_key)
+    Base.lock(session.lock)
+    try
+        return get(session.zn_pushforward_fringe, key, nothing)
+    finally
+        Base.unlock(session.lock)
+    end
+end
+
+@inline function _session_set_zn_pushforward_fringe!(session::SessionCache,
+                                                     encoding_fp::UInt64,
+                                                     poset_kind::Symbol,
+                                                     flange_fp::UInt64,
+                                                     field_key::UInt,
+                                                     fringe)
+    key = (encoding_fp, poset_kind, flange_fp, field_key)
+    Base.lock(session.lock)
+    try
+        session.zn_pushforward_fringe[key] = fringe
+    finally
+        Base.unlock(session.lock)
+    end
+    return fringe
+end
+
+@inline function _session_get_zn_pushforward_module(session::SessionCache,
+                                                    encoding_fp::UInt64,
+                                                    poset_kind::Symbol,
+                                                    flange_fp::UInt64,
+                                                    field_key::UInt)
+    key = (encoding_fp, poset_kind, flange_fp, field_key)
+    Base.lock(session.lock)
+    try
+        return get(session.zn_pushforward_module, key, nothing)
+    finally
+        Base.unlock(session.lock)
+    end
+end
+
+@inline function _session_set_zn_pushforward_module!(session::SessionCache,
+                                                     encoding_fp::UInt64,
+                                                     poset_kind::Symbol,
+                                                     flange_fp::UInt64,
+                                                     field_key::UInt,
+                                                     mod)
+    key = (encoding_fp, poset_kind, flange_fp, field_key)
+    Base.lock(session.lock)
+    try
+        session.zn_pushforward_module[key] = mod
+    finally
+        Base.unlock(session.lock)
+    end
+    return mod
+end
+
+const _WORKFLOW_ENCODING_CACHE_KEY = typemax(UInt)
+
+@inline function _resolve_workflow_session_cache(cache)
+    if cache === :auto
+        return SessionCache()
+    elseif cache === nothing
+        return nothing
+    elseif cache isa SessionCache
+        return cache
+    end
+    throw(ArgumentError("cache must be :auto, nothing, or SessionCache"))
+end
+
+@inline function _resolve_workflow_specialized_cache(cache, ::Type{T}) where {T}
+    # Public workflow contract stays simple: only :auto|nothing|SessionCache.
+    # Specialized caches are derived from the resolved SessionCache internally.
+    return nothing, _resolve_workflow_session_cache(cache)
+end
+
+@inline function _workflow_encoding_cache(session_cache::Union{Nothing,SessionCache})
+    session_cache === nothing && return nothing
+    return _encoding_cache!(session_cache, _WORKFLOW_ENCODING_CACHE_KEY)
+end
+
+@inline function _compile_encoding_cached(P, pi, session_cache::Union{Nothing,SessionCache})
+    if session_cache === nothing
+        # Keep a per-encoding cache even without a SessionCache so repeated
+        # geometry/invariant queries on one EncodingResult can reuse artifacts.
+        ec = EncodingCache()
+        return compile_encoding(P, pi; meta=(encoding_cache=ec,))
+    end
+    ec = _encoding_cache!(session_cache, P)
+    return compile_encoding(P, pi; meta=(encoding_cache=ec))
+end
+
+@inline function _encoding_with_session_cache(enc,
+                                              session_cache::Union{Nothing,SessionCache})
+    session_cache === nothing && return enc
+    raw_pi = enc.pi isa CompiledEncoding ? enc.pi.pi : enc.pi
+    pi2 = _compile_encoding_cached(enc.P, raw_pi, session_cache)
+    return EncodingResult(enc.P, enc.M, pi2;
+                          H=enc.H,
+                          presentation=enc.presentation,
+                          opts=enc.opts,
+                          backend=enc.backend,
+                          meta=enc.meta)
+end
+
+@inline function _resolution_cache_from_session(cache::Union{Nothing,ResolutionCache},
+                                                session_cache::Union{Nothing,SessionCache},
+                                                M=nothing)
+    cache !== nothing && return cache
+    session_cache === nothing && return nothing
+    return M === nothing ? _session_resolution_cache(session_cache) :
+                           _session_resolution_cache(session_cache, M)
+end
+
+@inline function _slot_cache_from_session(cache,
+                                          session_cache::Union{Nothing,SessionCache},
+                                          getter::Function,
+                                          setter::Function,
+                                          expected::Type,
+                                          ctor)
+    cache !== nothing && return cache
+    session_cache === nothing && return nothing
+    slot = getter(session_cache)
+    if !(slot isa expected)
+        slot = ctor()
+        setter(session_cache, slot)
+    end
+    return slot
+end
+
+function _clear_session_cache!(session::SessionCache)
     Base.lock(session.lock)
     try
         for c in values(session.encoding)
-            clear_encoding_cache!(c)
+            _clear_encoding_cache!(c)
         end
         for c in values(session.modules)
-            clear_module_cache!(c)
+            _clear_module_cache!(c)
         end
         empty!(session.encoding)
         empty!(session.modules)
-        clear_resolution_cache!(session.resolution)
+        _clear_resolution_cache!(session.resolution)
         session.hom_system = nothing
         session.slice_plan = nothing
+        empty!(session.zn_encoding_artifacts)
+        empty!(session.zn_pushforward_plan)
+        empty!(session.zn_pushforward_fringe)
+        empty!(session.zn_pushforward_module)
         empty!(session.product_dense)
         empty!(session.product_obj)
     finally
@@ -1261,7 +1635,44 @@ EncodingResult(P, M, pi;
                meta=NamedTuple()) =
     EncodingResult(P, M, pi, H, presentation, opts, backend, meta)
 
+"""
+    CohomologyDimsResult(P, dims, pi; degree=0, field=QQField(), meta=NamedTuple())
+
+Workflow object for dims-only cohomology output on an encoding poset.
+
+Fields
+------
+- P : finite encoding poset
+- dims : dimensions of `H^degree` at encoding vertices
+- pi : classifier map from original domain to P
+- degree : cohomological degree
+- field : coefficient field used for computation
+- meta : arbitrary metadata (NamedTuple recommended)
+"""
+struct CohomologyDimsResult{PType,DType,PiType,FType,MetaType}
+    P::PType
+    dims::DType
+    pi::PiType
+    degree::Int
+    field::FType
+    meta::MetaType
+end
+
+CohomologyDimsResult(P, dims, pi;
+                     degree::Int=0,
+                     field::AbstractCoeffField=QQField(),
+                     meta=NamedTuple()) =
+    CohomologyDimsResult(P, dims, pi, degree, field, meta)
+
+# Module materialization hook used by workflow objects.
+# Default is identity; subsystem modules can extend this for lazy wrappers.
+materialize_module(M) = M
+module_dims(M) = M.dims
+
 compile_encoding(enc::EncodingResult; kwargs...) =
+    enc.pi isa CompiledEncoding ? enc.pi : compile_encoding(enc.P, enc.pi; kwargs...)
+
+compile_encoding(enc::CohomologyDimsResult; kwargs...) =
     enc.pi isa CompiledEncoding ? enc.pi : compile_encoding(enc.P, enc.pi; kwargs...)
 
 Base.length(::EncodingResult) = 3
@@ -1272,6 +1683,27 @@ function Base.iterate(enc::EncodingResult, state::Int=1)
     state == 2 && return (enc.M, 3)
     state == 3 && return (enc.pi, 4)
     return nothing
+end
+
+Base.length(::CohomologyDimsResult) = 3
+Base.IteratorSize(::Type{<:CohomologyDimsResult}) = Base.HasLength()
+
+function Base.iterate(enc::CohomologyDimsResult, state::Int=1)
+    state == 1 && return (enc.P, 2)
+    state == 2 && return (enc.dims, 3)
+    state == 3 && return (enc.pi, 4)
+    return nothing
+end
+
+@inline function _encoding_with_session_cache(enc::CohomologyDimsResult,
+                                              session_cache::Union{Nothing,SessionCache})
+    session_cache === nothing && return enc
+    raw_pi = enc.pi isa CompiledEncoding ? enc.pi.pi : enc.pi
+    pi2 = _compile_encoding_cached(enc.P, raw_pi, session_cache)
+    return CohomologyDimsResult(enc.P, enc.dims, pi2;
+                                degree=enc.degree,
+                                field=enc.field,
+                                meta=enc.meta)
 end
 
 """
@@ -1294,7 +1726,21 @@ function change_field(enc::EncodingResult, field::AbstractCoeffField)
                           meta=enc.meta)
 end
 
+"""
+    change_field(enc, field)
+
+Return a CohomologyDimsResult with updated field metadata.
+Stored dimension vectors are field-independent.
+"""
+function change_field(enc::CohomologyDimsResult, field::AbstractCoeffField)
+    return CohomologyDimsResult(enc.P, copy(enc.dims), enc.pi;
+                                degree=enc.degree,
+                                field=field,
+                                meta=enc.meta)
+end
+
 unwrap(enc::EncodingResult) = (enc.P, enc.M, enc.pi)
+unwrap(enc::CohomologyDimsResult) = (enc.P, enc.dims, enc.pi)
 
 """
     ResolutionResult(res; enc=nothing, betti=nothing, minimality=nothing,
@@ -1372,18 +1818,6 @@ function change_field(inv::InvariantResult, field::AbstractCoeffField)
     return InvariantResult(enc2, inv.which, inv.value; opts=inv.opts, meta=inv.meta)
 end
 
-
-export EncodingOptions, ResolutionOptions, InvariantOptions, DerivedFunctorOptions
-export FiniteFringeOptions, ModuleOptions
-export ResolutionCache, clear_resolution_cache!
-export EncodingCache, ModuleCache, SessionCache
-export clear_encoding_cache!, clear_module_cache!, clear_session_cache!
-export field_cache_key, poset_cache_key, module_cache_key
-export encoding_cache!, module_cache!
-export invalidate_encoding_cache!, invalidate_module_cache!
-export session_resolution_cache, session_hom_cache, set_session_hom_cache!
-export session_slice_plan_cache, set_session_slice_plan_cache!
-export EncodingResult, ResolutionResult, InvariantResult, unwrap
 
 end # module
 

@@ -120,8 +120,8 @@ for art in res.artifacts
 
     # If no extension-backed format was written, still emit manual CSV for usability.
     if isempty(art.feature_paths)
-        fallback = save_feature_bundle(outdir, String(art.key) * "__manual", art.features)
-        println("  manual fallback wide CSV: ", fallback.manual_wide)
+        fallback = save_feature_bundle(outdir, String(art.key), art.features)
+        println("  CSV wide: ", fallback.csv_wide)
     end
 end
 

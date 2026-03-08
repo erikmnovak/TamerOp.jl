@@ -101,8 +101,8 @@ println("Saved pipeline JSON: ", pipeline_path)
 
 # Save features with extension-backed paths when available, plus manual CSV fallback.
 paths = save_feature_bundle(outdir, "repro_features", fs_ref)
-println("Manual wide CSV: ", paths.manual_wide)
-println("Manual long CSV: ", paths.manual_long)
+println("CSV wide: ", paths.csv_wide)
+println("CSV long: ", paths.csv_long)
 println("Native optional outputs: ", paths.native)
 
 stage("4) Reload artifacts and rerun")

@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-Robust cold-start benchmark driver for tamer-op vs multipers.
+Robust single-shot benchmark driver for tamer-op vs multipers.
 
 Method:
 - Run each case in a fresh process (both tools), with reps=1.
-- Repeat this process-level cold run several times.
-- Aggregate with median cold_ms per tool per case.
-- Report a single robust cold slowdown as geometric mean of per-case medians:
+- Each runner reports `cold_ms` as warm-uncached single-shot
+  (untimed prewarm + one timed uncached call).
+- Repeat several times and aggregate medians.
+- Report robust slowdown as geometric mean of per-case medians:
     geomean_case( median_cold_tamer / median_cold_multipers )
 """
 

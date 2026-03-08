@@ -2,19 +2,28 @@
 
 This directory is an ordered, didactic onboarding suite for `PosetModules`.
 
-Each script is a runnable Julia file and includes:
+Each example includes:
 - a theme header,
 - explicit pipeline stages,
 - deterministic seeds,
 - guardrails for combinatorial blowup,
 - concrete output artifacts under `examples/_outputs/<example_name>/`.
 
+Notebook variants are available for the first four onboarding examples:
+- `00_quickstart_module_to_features.ipynb`
+- `01_graded_complex_by_hand.ipynb`
+- `02_point_cloud_bifiltration_rips_density.ipynb`
+- `03_image_bifiltration_distance_intensity.ipynb`
+
+Custom-filtration starter template:
+- `99_custom_trigrade_filtration.ipynb` (register a user-defined `P=3` filtration family)
+
 ## Run order
 
-1. `00_quickstart_module_to_features.jl`
-2. `01_graded_complex_by_hand.jl`
-3. `02_point_cloud_bifiltration_rips_density.jl`
-4. `03_image_bifiltration_distance_intensity.jl`
+1. `00_quickstart_module_to_features.ipynb`
+2. `01_graded_complex_by_hand.jl` (or `01_graded_complex_by_hand.ipynb`)
+3. `02_point_cloud_bifiltration_rips_density.jl` (or `02_point_cloud_bifiltration_rips_density.ipynb`)
+4. `03_image_bifiltration_distance_intensity.jl` (or `03_image_bifiltration_distance_intensity.ipynb`)
 5. `04_graph_bifiltration_lowerstar_clique.jl`
 6. `05_fibered_slices_landscapes_and_distances.jl`
 7. `06_batch_experiment_spec_and_exports.jl`
@@ -26,14 +35,20 @@ Each script is a runnable Julia file and includes:
 From repo root:
 
 ```bash
-julia --project examples/00_quickstart_module_to_features.jl
+jupyter lab examples/00_quickstart_module_to_features.ipynb
 ```
+
+To run the notebook variants, open:
+- `examples/00_quickstart_module_to_features.ipynb`
+- `examples/01_graded_complex_by_hand.ipynb`
+- `examples/02_point_cloud_bifiltration_rips_density.ipynb`
+- `examples/03_image_bifiltration_distance_intensity.ipynb`
+- `examples/99_custom_trigrade_filtration.ipynb`
 
 or run all in order:
 
 ```bash
 for f in \
-  examples/00_quickstart_module_to_features.jl \
   examples/01_graded_complex_by_hand.jl \
   examples/02_point_cloud_bifiltration_rips_density.jl \
   examples/03_image_bifiltration_distance_intensity.jl \
@@ -49,8 +64,9 @@ done
 
 ## Notes
 
-- Optional feature IO outputs (Arrow/Parquet/NPZ/CSV) depend on loaded extensions.
-  Every example also writes manual CSV fallbacks so outputs are always inspectable.
+- Feature exports use the canonical `save_features(...)` API.
+- CSV output (wide + long) is written for all examples; optional Arrow/Parquet/NPZ
+  outputs depend on loaded extensions.
 - Data-ingestion API is canonical:
   - use `encode(data, filtration_or_spec; ...)`
   - use `stage=...` to request intermediate objects
@@ -60,3 +76,57 @@ done
   - `cache=:auto` for per-call automatic caching
   - `cache=SessionCache()` for explicit cross-call reuse
 - PL mode uses strict canonical values only: `:fast` / `:verified`.
+
+## Simple Serialization
+
+For onboarding and reproducible runs, use these as the canonical encoding I/O calls:
+
+```julia
+using PosetModules
+
+enc = encode(data, spec; degree=0)
+
+# Default save profile is :compact (small file, includes pi, omits dense leq for structured posets).
+save_encoding_json("encoding.json", enc)
+
+# Quick metadata probe without full object reconstruction.
+meta = inspect_json("encoding.json")
+
+# Default load now returns EncodingResult for simple users.
+enc2 = load_encoding_json("encoding.json")
+
+# If you only need fringe data:
+H = load_encoding_json("encoding.json"; output=:fringe)
+
+# If file is trusted and you want fastest load path:
+H_fast = load_encoding_json("encoding.json"; output=:fringe, validation=:trusted)
+
+# Explicit profile presets when needed:
+save_encoding_json("encoding_portable.json", enc; profile=:portable)  # include dense leq
+save_encoding_json("encoding_debug.json", enc; profile=:debug)        # pretty JSON + dense leq
+```
+
+## File Ingestion Quickstart
+
+For files on disk, use the canonical `load_data` + `encode(path, ...)` path:
+
+```julia
+using PosetModules
+
+spec = FiltrationSpec(kind=:rips, max_dim=1)
+
+# 1) Inspect first (recommended for CSV/TSV/TXT).
+info = inspect_data_file("points.csv")
+
+# 2) Parse file into typed ingestion data.
+file_opts = DataFileOptions(; header=true, cols=(:x, :y))
+data = load_data("points.csv"; kind=:point_cloud, opts=file_opts)
+
+# 3) Encode directly from path (one-liner).
+enc = encode("points.csv", spec; kind=:point_cloud, file_opts=file_opts, degree=0)
+```
+
+Notes:
+- For table files (`.csv`, `.tsv`, `.txt`), pass `kind=...` explicitly.
+- For dataset JSON created with `save_dataset_json`, `kind=:auto` works.
+- Graph tables can use edge columns via `DataFileOptions(; u_col=:u, v_col=:v, weight_col=:w)`.

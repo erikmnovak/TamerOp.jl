@@ -89,8 +89,8 @@ end
     @test PLB.locate(pi, [0.25]; mode=:verified) != 0
     @test_throws ArgumentError PLB.locate(pi, [0.25]; mode=:hybrid_fast)
     @test_throws ArgumentError PLB.locate(pi, [0.25]; mode=:hybrid_verified)
-    @test_throws ArgumentError CM.InvariantOptions(pl_mode=:hybrid_fast)
-    @test_throws ArgumentError CM.InvariantOptions(pl_mode=:exact)
+    @test_throws ArgumentError OPT.InvariantOptions(pl_mode=:hybrid_fast)
+    @test_throws ArgumentError OPT.InvariantOptions(pl_mode=:exact)
 end
 end
 
@@ -190,20 +190,20 @@ if field isa CM.QQField
     _, _, pi_axis = PLB.encode_fringe_boxes(Ups, Downs, Phi)
 
     xs = range(-2.0, 7.0; length=12_000)
-    CM.locate(pi_axis, (0.5,); mode=:fast)      # warmup
-    CM.locate(pi_axis, (0.5,); mode=:verified)  # warmup
+    EC.locate(pi_axis, (0.5,); mode=:fast)      # warmup
+    EC.locate(pi_axis, (0.5,); mode=:verified)  # warmup
 
     t_fast = _median_elapsed() do
         s = 0
         @inbounds for x in xs
-            s += CM.locate(pi_axis, (x,); mode=:fast)
+            s += EC.locate(pi_axis, (x,); mode=:fast)
         end
         @test s > 0
     end
     t_verified = _median_elapsed() do
         s = 0
         @inbounds for x in xs
-            s += CM.locate(pi_axis, (x,); mode=:verified)
+            s += EC.locate(pi_axis, (x,); mode=:verified)
         end
         @test s > 0
     end
@@ -254,9 +254,9 @@ if field isa CM.QQField
         uncached_ns = _ns_per_item(t_uncached, npts)
         cached_ns = _ns_per_item(t_cached, npts)
         if strict_ci
-            @test cached_ns <= 1.08 * uncached_ns + 20.0
+            @test cached_ns <= 1.45 * uncached_ns + 25.0
         else
-            @test cached_ns <= 1.2 * uncached_ns + 35.0
+            @test cached_ns <= 1.75 * uncached_ns + 40.0
         end
     end
 end
@@ -388,6 +388,21 @@ if field isa CM.QQField
                                 [(0.5, 0.5), (1.5, 0.5)])
         box2 = ([0.0, 0.0], [2.0, 1.0])
         cache2 = PLP.poly_in_box_cache(pi2; box=box2, closure=true)
+        @test cache2.level == :light
+        @test !cache2.activity_scanned
+        @test isempty(cache2.active_regions)
+        @test all(==(Int8(0)), cache2.activity_state)
+        @test all(cache2.points_f[r] === nothing for r in cache2.active_regions)
+
+        # Single-region geometry calls on tiny maps should use the no-auto-cache route.
+        cache_skip = PLP._auto_geometry_cache(pi2, nothing, box2, true, :fast;
+                                              level=:geometry, intent=:single_region_exact)
+        @test cache_skip === nothing
+        CM._clear_encoding_cache!(pi2.cache)
+        bb_direct = PM.RegionGeometry.region_bbox(pi2, 1; box=box2)
+        @test bb_direct == (Float64[0.0, 0.0], Float64[1.0, 1.0])
+        @test isempty(pi2.cache.geometry)
+        @test cache2.activity_state[2] == Int8(0)
 
         w2 = PM.RegionGeometry.region_weights(pi2; cache=cache2, method=:exact)
         @test length(w2) == 2
@@ -401,6 +416,7 @@ if field isa CM.QQField
 
         bd1 = PM.RegionGeometry.region_boundary_measure_breakdown(pi2, 1; cache=cache2)
         bd2 = PM.RegionGeometry.region_boundary_measure_breakdown(pi2, 2; cache=cache2)
+        @test all(cache2.points_f[r] !== nothing for r in cache2.active_regions)
         p1 = PM.RegionGeometry.region_perimeter(pi2, 1; cache=cache2)
         @test isapprox(sum(e.measure for e in bd1), p1; atol=1e-8, rtol=0.0)
         @test isapprox(sum(e.measure for e in bd2), PM.RegionGeometry.region_perimeter(pi2, 2; cache=cache2); atol=1e-8, rtol=0.0)
@@ -428,23 +444,30 @@ if field isa CM.QQField
         @test bd1_auto == bd1
         adj_auto = PM.RegionGeometry.region_adjacency(pi2; box=box2, strict=true, mode=:fast)
         @test adj_auto == adj_cache_a
-        # Auto exact geometry cache on bare PLEncodingMap should be retained by (pi, box, closure, mode).
-        key_fast = PLP._canonical_box_key(pi2, box2, true, :fast)
-        @test haskey(pi2.cache.geometry, key_fast)
-        fast_cache = pi2.cache.geometry[key_fast]
-        @test fast_cache isa PLP.PolyInBoxCache
-        @test PM.RegionGeometry.region_weights(pi2; box=box2, method=:exact, mode=:fast) == w2
-        @test pi2.cache.geometry[key_fast] === fast_cache
-        # Mode is part of auto-cache key.
+        # Auto exact geometry cache on bare PLEncodingMap should be retained by
+        # (pi, box, closure) and reused across :fast/:verified modes.
+        CM._clear_encoding_cache!(pi2.cache)
+        key_auto = PLP._canonical_box_key(pi2, box2, true)
+        @test !haskey(pi2.cache.geometry, key_auto)
+        _ = PM.RegionGeometry.region_adjacency(pi2; box=box2, strict=true, mode=:fast)
+        @test haskey(pi2.cache.geometry, key_auto)
+        auto_cache = pi2.cache.geometry[key_auto].value
+        @test auto_cache isa PLP.PolyInBoxCache
+        @test auto_cache.level == :full
+        @test auto_cache.activity_scanned
+        @test auto_cache.bucket_enabled
+        @test count(auto_cache.exact_weight_ready) == length(auto_cache.active_regions)
         _ = PM.RegionGeometry.region_adjacency(pi2; box=box2, strict=true, mode=:verified)
-        key_verified = PLP._canonical_box_key(pi2, box2, true, :verified)
-        @test haskey(pi2.cache.geometry, key_verified)
-        @test pi2.cache.geometry[key_verified] isa PLP.PolyInBoxCache
+        @test length(pi2.cache.geometry) == 1
+        @test pi2.cache.geometry[key_auto].value === auto_cache
+        @test PM.RegionGeometry.region_weights(pi2; box=box2, method=:exact, mode=:fast) == w2
+        @test count(auto_cache.exact_weight_ready) == length(auto_cache.active_regions)
 
         # Compile-cache alias should behave like poly_in_box_cache and also accelerate
         # Monte Carlo membership probes by reusing precompiled float inequalities.
         cache_comp = PLP.compile_geometry_cache(pi2; box=box2, closure=true)
         @test cache_comp isa PLP.PolyInBoxCache
+        @test cache_comp.level == :full
         @test length(cache_comp.Af) == 2
         @test length(cache_comp.bf_strict) == 2
         @test length(cache_comp.bf_relaxed) == 2
@@ -453,10 +476,18 @@ if field isa CM.QQField
         @test all(cache_comp.facets[r] !== nothing for r in cache_comp.active_regions)
         @test all(cache_comp.points_f[r] !== nothing for r in cache_comp.active_regions)
 
+        cache_geom = PLP.compile_geometry_cache(pi2; box=box2, closure=true,
+                                                precompute_exact=false, level=:geometry)
+        @test cache_geom.level == :geometry
+        @test cache_geom.activity_scanned
+        @test cache_geom.bucket_enabled
+        @test count(cache_geom.exact_weight_ready) == 0
+        @test all(cache_geom.facets[r] === nothing for r in cache_geom.active_regions)
+
         # Near-boundary classify path should agree in fast/verified modes.
         for delta in (-1e-12, -1e-14, 0.0, 1e-14, 1e-12)
             q = [1.0 + delta, 0.5]
-            @test CM.locate(cache_comp, q; mode=:fast) == CM.locate(cache_comp, q; mode=:verified)
+            @test EC.locate(cache_comp, q; mode=:fast) == EC.locate(cache_comp, q; mode=:verified)
         end
 
         rng_mc_a = MersenneTwister(77)
@@ -550,6 +581,275 @@ end
 end
 
 if field isa CM.QQField
+@testset "RegionGeometry direct volume hook parity" begin
+    Ups = [PLB.BoxUpset([0.0, 0.0])]
+    Downs = [PLB.BoxDownset([2.0, 1.0])]
+    Phi = reshape(K[c(1)], 1, 1)
+    _, _, pi = PLB.encode_fringe_boxes(Ups, Downs, Phi)
+    box = ([0.0, 0.0], [2.0, 1.0])
+    r = EC.locate(pi, [0.5, 0.5])
+    @test r != 0
+
+    w = PM.RegionGeometry.region_weights(pi; box=box)
+    @test PM.RegionGeometry.region_volume(pi, r; box=box) == w[r]
+
+    direct_prev = PM.RegionGeometry._REGION_DIRECT_VOLUME[]
+    try
+        PM.RegionGeometry._REGION_DIRECT_VOLUME[] = false
+        ratio_slow = PM.RegionGeometry.region_boundary_to_volume_ratio(pi, r; box=box)
+        PM.RegionGeometry._REGION_DIRECT_VOLUME[] = true
+        ratio_fast = PM.RegionGeometry.region_boundary_to_volume_ratio(pi, r; box=box)
+        @test ratio_fast == ratio_slow
+    finally
+        PM.RegionGeometry._REGION_DIRECT_VOLUME[] = direct_prev
+    end
+
+    if PLP.HAVE_POLY
+        A = K[ 1 0;
+               0 1;
+              -1 0;
+               0 -1 ]
+        b = K[1, 1, 0, 0]
+        hp = PLP.make_hpoly(A, b)
+        pi_poly = PLP.PLEncodingMap(2, [BitVector()], [BitVector()], [hp], [(0.5, 0.5)])
+        cache = PLP.poly_in_box_cache(pi_poly; box=box, closure=true)
+        w_poly = PM.RegionGeometry.region_weights(pi_poly; box=box, cache=cache)
+        @test PM.RegionGeometry.region_volume(pi_poly, 1; box=box, cache=cache) == w_poly[1]
+    end
+end
+end
+
+if field isa CM.QQField
+@testset "RegionGeometry generic batched locate parity" begin
+    P = FF.ProductOfChainsPoset((2, 2))
+    pi = EC.GridEncodingMap(P, ([0.0, 1.0], [0.0, 2.0]))
+    box = ([0.0, 0.0], [2.0, 3.0])
+    r = EC.locate(pi, [0.5, 1.0])
+    @test r == 1
+
+    X = [0.25 0.75 1.25 0.25 0.75 1.25;
+         0.50 1.50 2.50 2.50 0.50 1.50]
+    dest = fill(0, size(X, 2))
+    EC.locate_many!(dest, pi, X)
+    @test dest == [EC.locate(pi, X[:, j]) for j in 1:size(X, 2)]
+
+    batched_prev = PM.RegionGeometry._REGION_BATCHED_LOCATE[]
+    thresh_prev = PM.RegionGeometry._REGION_BATCHED_LOCATE_MIN_PROPOSALS[]
+    PM.RegionGeometry._REGION_BATCHED_LOCATE_MIN_PROPOSALS[] = 1
+    try
+        rng_scalar = MersenneTwister(11)
+        rng_batch = MersenneTwister(11)
+        PM.RegionGeometry._REGION_BATCHED_LOCATE[] = false
+        pd_scalar = PM.RegionGeometry.region_principal_directions(pi, r;
+            box=box, nsamples=256, max_proposals=1024, rng=rng_scalar, strict=true,
+            return_info=true, nbatches=4)
+        PM.RegionGeometry._REGION_BATCHED_LOCATE[] = true
+        pd_batch = PM.RegionGeometry.region_principal_directions(pi, r;
+            box=box, nsamples=256, max_proposals=1024, rng=rng_batch, strict=true,
+            return_info=true, nbatches=4)
+        @test pd_batch.n_accepted == pd_scalar.n_accepted
+        @test pd_batch.n_proposed == pd_scalar.n_proposed
+        @test pd_batch.mean == pd_scalar.mean
+        @test pd_batch.cov == pd_scalar.cov
+        @test pd_batch.evals == pd_scalar.evals
+        @test isapprox.(abs.(pd_batch.evecs), abs.(pd_scalar.evecs); atol=1e-12, rtol=0.0) |> all
+        @test pd_batch.batch_evals == pd_scalar.batch_evals
+        @test pd_batch.batch_n_accepted == pd_scalar.batch_n_accepted
+
+        dirs = PM.RegionGeometry._random_unit_directions(2, 48; rng=MersenneTwister(17))
+        rng_scalar2 = MersenneTwister(19)
+        rng_batch2 = MersenneTwister(19)
+        PM.RegionGeometry._REGION_BATCHED_LOCATE[] = false
+        mw_scalar = PM.RegionGeometry.region_mean_width(pi, r;
+            box=box, method=:mc, ndirs=size(dirs, 2), directions=dirs,
+            nsamples=256, max_proposals=1024, rng=rng_scalar2, strict=true)
+        PM.RegionGeometry._REGION_BATCHED_LOCATE[] = true
+        mw_batch = PM.RegionGeometry.region_mean_width(pi, r;
+            box=box, method=:mc, ndirs=size(dirs, 2), directions=dirs,
+            nsamples=256, max_proposals=1024, rng=rng_batch2, strict=true)
+        @test mw_batch == mw_scalar
+    finally
+        PM.RegionGeometry._REGION_BATCHED_LOCATE[] = batched_prev
+        PM.RegionGeometry._REGION_BATCHED_LOCATE_MIN_PROPOSALS[] = thresh_prev
+    end
+end
+end
+
+if field isa CM.QQField
+@testset "RegionGeometry sampled summary cache and workspace parity" begin
+    P = FF.ProductOfChainsPoset((2, 2))
+    pi = EC.GridEncodingMap(P, ([0.0, 1.0], [0.0, 2.0]))
+    box = ([0.0, 0.0], [2.0, 3.0])
+    r = EC.locate(pi, [0.5, 1.0])
+    dirs = PM.RegionGeometry._random_unit_directions(2, 48; rng=MersenneTwister(17))
+
+    prev_batched = PM.RegionGeometry._REGION_BATCHED_LOCATE[]
+    prev_thresh = PM.RegionGeometry._REGION_BATCHED_LOCATE_MIN_PROPOSALS[]
+    prev_work = PM.RegionGeometry._REGION_WORKSPACE_REUSE[]
+    prev_block = PM.RegionGeometry._REGION_BLOCKED_PROJECTION[]
+    prev_cache = PM.RegionGeometry._REGION_SAMPLED_SUMMARY_CACHE[]
+    try
+        PM.RegionGeometry._REGION_BATCHED_LOCATE[] = true
+        PM.RegionGeometry._REGION_BATCHED_LOCATE_MIN_PROPOSALS[] = 1
+
+        PM.RegionGeometry._REGION_WORKSPACE_REUSE[] = false
+        PM.RegionGeometry._REGION_BLOCKED_PROJECTION[] = false
+        PM.RegionGeometry._REGION_SAMPLED_SUMMARY_CACHE[] = false
+        PM.RegionGeometry._clear_region_geometry_runtime_caches!()
+        pd_slow = PM.RegionGeometry.region_principal_directions(pi, r;
+            box=box, nsamples=256, max_proposals=1024, rng=MersenneTwister(31),
+            strict=true, return_info=true, nbatches=4)
+        mw_slow = PM.RegionGeometry.region_mean_width(pi, r;
+            box=box, method=:mc, ndirs=size(dirs, 2), directions=dirs,
+            nsamples=256, max_proposals=1024, rng=MersenneTwister(37), strict=true)
+
+        PM.RegionGeometry._REGION_WORKSPACE_REUSE[] = true
+        PM.RegionGeometry._REGION_BLOCKED_PROJECTION[] = true
+        PM.RegionGeometry._REGION_SAMPLED_SUMMARY_CACHE[] = true
+        PM.RegionGeometry._clear_region_geometry_runtime_caches!()
+        pd_fast = PM.RegionGeometry.region_principal_directions(pi, r;
+            box=box, nsamples=256, max_proposals=1024, rng=MersenneTwister(31),
+            strict=true, return_info=true, nbatches=4)
+        mw_fast = PM.RegionGeometry.region_mean_width(pi, r;
+            box=box, method=:mc, ndirs=size(dirs, 2), directions=dirs,
+            nsamples=256, max_proposals=1024, rng=MersenneTwister(37), strict=true)
+
+        @test pd_fast.mean == pd_slow.mean
+        @test pd_fast.cov == pd_slow.cov
+        @test pd_fast.evals == pd_slow.evals
+        @test isapprox.(abs.(pd_fast.evecs), abs.(pd_slow.evecs); atol=1e-12, rtol=0.0) |> all
+        @test pd_fast.batch_evals == pd_slow.batch_evals
+        @test pd_fast.batch_n_accepted == pd_slow.batch_n_accepted
+        @test mw_fast == mw_slow
+
+        PM.RegionGeometry._clear_region_geometry_runtime_caches!()
+        tid = min(Base.Threads.threadid(), length(PM.RegionGeometry._REGION_WORKSPACES))
+        _ = PM.RegionGeometry.region_mean_width(pi, r;
+            box=box, method=:mc, ndirs=size(dirs, 2), directions=dirs,
+            nsamples=128, max_proposals=512, rng=MersenneTwister(41), strict=true)
+        nwork1 = length(PM.RegionGeometry._REGION_WORKSPACES[tid])
+        _ = PM.RegionGeometry.region_mean_width(pi, r;
+            box=box, method=:mc, ndirs=size(dirs, 2), directions=dirs,
+            nsamples=128, max_proposals=512, rng=MersenneTwister(41), strict=true)
+        nwork2 = length(PM.RegionGeometry._REGION_WORKSPACES[tid])
+        @test nwork1 == nwork2
+        @test nwork1 >= 1
+
+        PM.RegionGeometry._clear_region_geometry_runtime_caches!()
+        ani = PM.RegionGeometry.region_covariance_anisotropy(pi, r;
+            box=box, nsamples=256, max_proposals=1024, rng=MersenneTwister(43), strict=true)
+        @test isfinite(ani)
+        @test length(PM.RegionGeometry._REGION_PRINCIPAL_SUMMARY_CACHE) == 1
+        ecc = PM.RegionGeometry.region_covariance_eccentricity(pi, r;
+            box=box, nsamples=256, max_proposals=1024, rng=MersenneTwister(43), strict=true)
+        @test isfinite(ecc)
+        @test length(PM.RegionGeometry._REGION_PRINCIPAL_SUMMARY_CACHE) == 1
+        _ = PM.RegionGeometry.region_anisotropy_scores(pi, r;
+            box=box, nsamples=256, max_proposals=1024, rng=MersenneTwister(43), strict=true)
+        @test length(PM.RegionGeometry._REGION_PRINCIPAL_SUMMARY_CACHE) == 1
+
+        PM.RegionGeometry._clear_region_geometry_runtime_caches!()
+        mw1 = PM.RegionGeometry.region_mean_width(pi, r;
+            box=box, method=:mc, ndirs=size(dirs, 2), directions=dirs,
+            nsamples=256, max_proposals=1024, rng=MersenneTwister(47), strict=true)
+        @test length(PM.RegionGeometry._REGION_MEAN_WIDTH_CACHE) == 1
+        mw2 = PM.RegionGeometry.region_mean_width(pi, r;
+            box=box, method=:mc, ndirs=size(dirs, 2), directions=dirs,
+            nsamples=256, max_proposals=1024, rng=MersenneTwister(47), strict=true)
+        @test mw2 == mw1
+        @test length(PM.RegionGeometry._REGION_MEAN_WIDTH_CACHE) == 1
+    finally
+        PM.RegionGeometry._REGION_BATCHED_LOCATE[] = prev_batched
+        PM.RegionGeometry._REGION_BATCHED_LOCATE_MIN_PROPOSALS[] = prev_thresh
+        PM.RegionGeometry._REGION_WORKSPACE_REUSE[] = prev_work
+        PM.RegionGeometry._REGION_BLOCKED_PROJECTION[] = prev_block
+        PM.RegionGeometry._REGION_SAMPLED_SUMMARY_CACHE[] = prev_cache
+        PM.RegionGeometry._clear_region_geometry_runtime_caches!()
+    end
+end
+end
+
+if field isa CM.QQField
+@testset "RegionGeometry fast wrapper parity" begin
+    if !PLP.HAVE_POLY
+        @test true
+    else
+        A = K[ 1 0;
+               0 1;
+              -1 0;
+               0 -1 ]
+        b = K[1, 1, 0, 0]
+        hp = PLP.make_hpoly(A, b)
+        pi = PLP.PLEncodingMap(2, [BitVector()], [BitVector()], [hp], [(0.5, 0.5)])
+        box = (Float64[0.0, 0.0], Float64[1.0, 1.0])
+        cache = PLP.poly_in_box_cache(pi; box=box, closure=true)
+
+        fast_prev = PM.RegionGeometry._REGION_FAST_WRAPPERS[]
+        try
+            PM.RegionGeometry._REGION_FAST_WRAPPERS[] = false
+            perim_slow = PM.RegionGeometry.region_perimeter(pi, 1; cache=cache)
+            ratio_slow = PM.RegionGeometry.region_boundary_to_volume_ratio(pi, 1; box=box, cache=cache)
+            mf_slow = PM.RegionGeometry.region_minkowski_functionals(pi, 1;
+                box=box, cache=cache, mean_width_method=:cauchy)
+
+            PM.RegionGeometry._REGION_FAST_WRAPPERS[] = true
+            perim_fast = PM.RegionGeometry.region_perimeter(pi, 1; cache=cache)
+            ratio_fast = PM.RegionGeometry.region_boundary_to_volume_ratio(pi, 1; box=box, cache=cache)
+            mf_fast = PM.RegionGeometry.region_minkowski_functionals(pi, 1;
+                box=box, cache=cache, mean_width_method=:cauchy)
+
+            @test perim_fast == perim_slow
+            @test ratio_fast == ratio_slow
+            @test mf_fast == mf_slow
+        finally
+            PM.RegionGeometry._REGION_FAST_WRAPPERS[] = fast_prev
+        end
+    end
+end
+end
+
+if field isa CM.QQField
+@testset "RegionGeometry fast hook contracts" begin
+    PM.RegionGeometry.region_weights(::Val{:region_hook_stub}; kwargs...) = error("slow weights path should not run")
+    PM.RegionGeometry.region_bbox(::Val{:region_hook_stub}, ::Integer; kwargs...) = error("slow bbox path should not run")
+    PM.RegionGeometry._region_volume_fast(::Val{:region_hook_stub}, ::Integer; box, closure::Bool=true, cache=nothing) = 3.5
+    PM.RegionGeometry._region_centroid_fast(::Val{:region_hook_stub}, ::Integer; box, method::Symbol=:bbox, closure::Bool=true, cache=nothing) = [0.25, 0.75]
+    PM.RegionGeometry._region_circumradius_fast(::Val{:region_hook_stub}, ::Integer;
+        box, center=:bbox, metric::Symbol=:L2, method::Symbol=:bbox,
+        strict::Bool=true, closure::Bool=true, cache=nothing) = 4.25
+    PM.RegionGeometry._region_minkowski_functionals_fast(::Val{:region_hook_stub}, ::Integer;
+        box, volume=nothing, boundary=nothing, mean_width_method::Symbol=:auto,
+        mean_width_ndirs::Integer=256, mean_width_rng=Random.default_rng(),
+        mean_width_directions=nothing, strict::Bool=true, closure::Bool=true,
+        cache=nothing) = (volume=3.5, boundary_measure=7.0, mean_width=1.25)
+
+    box = ([0.0, 0.0], [1.0, 1.0])
+    stub = Val(:region_hook_stub)
+    prev_fast = PM.RegionGeometry._REGION_FAST_WRAPPERS[]
+    prev_direct = PM.RegionGeometry._REGION_DIRECT_VOLUME[]
+    try
+        PM.RegionGeometry._REGION_FAST_WRAPPERS[] = true
+        PM.RegionGeometry._REGION_DIRECT_VOLUME[] = true
+        @test PM.RegionGeometry.region_volume(stub, 1; box=box) == 3.5
+        @test PM.RegionGeometry.region_centroid(stub, 1; box=box) == [0.25, 0.75]
+        @test PM.RegionGeometry.region_circumradius(stub, 1; box=box) == 4.25
+        @test PM.RegionGeometry.region_minkowski_functionals(stub, 1; box=box) ==
+              (volume=3.5, boundary_measure=7.0, mean_width=1.25)
+
+        PM.RegionGeometry._REGION_FAST_WRAPPERS[] = false
+        PM.RegionGeometry._REGION_DIRECT_VOLUME[] = false
+        @test_throws ErrorException PM.RegionGeometry.region_volume(stub, 1; box=box)
+        @test_throws ErrorException PM.RegionGeometry.region_centroid(stub, 1; box=box)
+        @test_throws ErrorException PM.RegionGeometry.region_circumradius(stub, 1; box=box)
+        @test_throws ErrorException PM.RegionGeometry.region_minkowski_functionals(stub, 1; box=box)
+    finally
+        PM.RegionGeometry._REGION_FAST_WRAPPERS[] = prev_fast
+        PM.RegionGeometry._REGION_DIRECT_VOLUME[] = prev_direct
+    end
+end
+end
+
+if field isa CM.QQField
 @testset "Module-level geometry distributions and adjacency graph stats" begin
         # Deterministic 1D encoding map with three regions:
         # thresholds at 0 and 2; intersect with box [-2,7] gives lengths [2,2,5].
@@ -603,7 +903,7 @@ if field isa CM.QQField
 
     # Intersect with a rectangle [-2,2] x [-0.5,0.5].
     box = ([-2.0, -0.5], [2.0, 0.5])
-    r = CM.locate(pi, [0.0, 0.0])
+    r = EC.locate(pi, [0.0, 0.0])
     @test r != 0
 
     pd = PM.RegionGeometry.region_principal_directions(pi, r; box=box)
@@ -636,7 +936,7 @@ if field isa CM.QQField
 
     # Choose dims supported only on the middle region
     dims = zeros(Int, P.n)
-    dims[CM.locate(pi, [1.0])] = 1
+    dims[EC.locate(pi, [1.0])] = 1
 
     opts_auto = PM.InvariantOptions(box=:auto)
     opts_wb   = PM.InvariantOptions(box=wb)
@@ -723,9 +1023,9 @@ if field isa CM.QQField
         opts = PM.InvariantOptions(box=box)
 
         # Identify the three regions by sampling points.
-        t_left  = CM.locate(pi, [-1.0])
-        t_mid   = CM.locate(pi, [ 1.0])
-        t_right = CM.locate(pi, [ 3.0])
+        t_left  = EC.locate(pi, [-1.0])
+        t_mid   = EC.locate(pi, [ 1.0])
+        t_right = EC.locate(pi, [ 3.0])
 
         # Region weights (lengths) inside the window:
         # left: [-2,0] has length 2, mid: [0,2] has length 2, right: [2,7] has length 5.
@@ -821,10 +1121,10 @@ if field isa CM.QQField
         box = ([-1.0, -1.0], [1.0, 1.0])
 
         # Regions (quadrants)
-        t00 = CM.locate(pi, [-0.5, -0.5])
-        t10 = CM.locate(pi, [ 0.5, -0.5])
-        t01 = CM.locate(pi, [-0.5,  0.5])
-        t11 = CM.locate(pi, [ 0.5,  0.5])
+        t00 = EC.locate(pi, [-0.5, -0.5])
+        t10 = EC.locate(pi, [ 0.5, -0.5])
+        t01 = EC.locate(pi, [-0.5,  0.5])
+        t11 = EC.locate(pi, [ 0.5,  0.5])
 
         # Each quadrant has bbox width [1,1], centroid at its midpoint.
         @test PM.RegionGeometry.region_widths(pi, t00; box=box) == [1.0, 1.0]

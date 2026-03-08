@@ -15,6 +15,10 @@ end
 
 const PM = PosetModules.Advanced
 const CM = PM.CoreModules
+const OPT = PM.Options
+const DT = PM.DataTypes
+const EC = PM.EncodingCore
+const RES = PM.Results
 const FF = PM.FiniteFringe
 const FZ = PM.FlangeZn
 const ZE = PM.ZnEncoding
@@ -82,7 +86,7 @@ function _fixture(; n::Int=3, nflats::Int=16, ninj::Int=16, seed::UInt=0x5a4e5f5
     phi = _rand_phi(field, ninj, nflats, rng)
     FG = FZ.Flange{K}(n, flats, injectives, phi; field=field)
 
-    opts = CM.EncodingOptions(backend=:zn, max_regions=400_000)
+    opts = OPT.EncodingOptions(backend=:zn, max_regions=400_000)
     P, pi = ZE.encode_poset_from_flanges(FG, opts; poset_kind=:signature)
 
     flat_index, inj_index = ZE._generator_index_dicts(pi.flats, pi.injectives)
@@ -248,7 +252,7 @@ function _repeat_workflow_encode(FG::FZ.Flange, reps::Int; use_session::Bool, wa
 end
 
 function _repeat_plan_build_fresh_maps(FG::FZ.Flange,
-                                       opts::CM.EncodingOptions,
+                                       opts::OPT.EncodingOptions,
                                        reps::Int;
                                        use_session::Bool)
     cache = use_session ? CM.SessionCache() : nothing
@@ -313,7 +317,7 @@ function main(; reps::Int=8, nflats::Int=16, ninj::Int=16)
     println("  speedup baseline/new: ", round(pm_old.ms / max(1e-9, pm_new.ms), digits=3), "x")
     println("  alloc ratio baseline/new: ", round(pm_old.kib / max(1e-9, pm_new.kib), digits=3), "x\n")
 
-    opts = CM.EncodingOptions(backend=:zn, max_regions=400_000)
+    opts = OPT.EncodingOptions(backend=:zn, max_regions=400_000)
     s_new = _bench("session encode+plan reuse", () -> _repeat_plan_build_fresh_maps(fx.FG, opts, 6; use_session=true); reps=reps)
     s_old = _bench("no session encode+plan reuse", () -> _repeat_plan_build_fresh_maps(fx.FG, opts, 6; use_session=false); reps=reps)
     println("  speedup baseline/new: ", round(s_old.ms / max(1e-9, s_new.ms), digits=3), "x")

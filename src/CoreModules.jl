@@ -403,743 +403,6 @@ function string_to_rational(s::AbstractString)::QQ
     parse(BigInt, t[1]) // parse(BigInt, t[2])
 end
 
-# ----- common abstract supertype for "encoding map" objects --------------------
-"""
-    AbstractPLikeEncodingMap
-
-Abstract supertype for "encoding map" objects `pi` used throughout the finite-encoding
-and PL backends.
-
-This is a dispatch hook only: it imposes no required fields. Concrete encoding maps
-should subtype this and implement at least:
-
-  - `locate(pi, x)`
-
-Optionally they may implement geometric hooks (see RegionGeometry) such as:
-
-  - `region_weights(pi; box=...)`
-  - `region_bbox(pi, r; box=...)`
-  - `region_boundary_measure(pi, r; box=...)`, etc.
-
-The name "PLike" is informal: it refers to encodings that behave like a
-piecewise-constant classifier on a stratification of parameter space.
-"""
-abstract type AbstractPLikeEncodingMap end
-
-"Convenience alias used in type signatures in higher-level code."
-const PLikeEncodingMap = AbstractPLikeEncodingMap
-
-
-# -----------------------------------------------------------------------------
-# Lightweight ingestion types (shared across Workflow + Serialization)
-# -----------------------------------------------------------------------------
-
-"""
-    PointCloud(points)
-
-Minimal point cloud container. `points` is an n-by-d matrix (rows are points),
-or a vector of coordinate vectors.
-"""
-struct PointCloud{T}
-    points::Vector{Vector{T}}
-end
-
-function PointCloud(points::AbstractMatrix{T}) where {T}
-    pts = [Vector{T}(points[i, :]) for i in 1:size(points, 1)]
-    return PointCloud{T}(pts)
-end
-
-PointCloud(points::AbstractVector{<:AbstractVector{T}}) where {T} =
-    PointCloud{T}([Vector{T}(p) for p in points])
-
-"""
-    ImageNd(data)
-
-Minimal N-dim image/scalar field container. `data` is an N-dim array.
-"""
-struct ImageNd{T,N}
-    data::Array{T,N}
-end
-
-ImageNd(data::Array{T,N}) where {T,N} = ImageNd{T,N}(data)
-
-"""
-    GraphData(n, edges; coords=nothing, weights=nothing)
-
-Minimal graph container. `edges` is a vector of (u,v) pairs (1-based).
-Optional `coords` can store embeddings, and `weights` can store edge weights.
-"""
-struct GraphData{T}
-    n::Int
-    edges::Vector{Tuple{Int,Int}}
-    coords::Union{Nothing, Vector{Vector{T}}}
-    weights::Union{Nothing, Vector{T}}
-end
-
-function GraphData(n::Integer, edges::AbstractVector{<:Tuple{Int,Int}};
-                   coords::Union{Nothing, AbstractVector{<:AbstractVector}}=nothing,
-                   weights::Union{Nothing, AbstractVector}=nothing,
-                   T::Type=Float64)
-    coords_vec = coords === nothing ? nothing : [Vector{T}(c) for c in coords]
-    weights_vec = weights === nothing ? nothing : Vector{T}(weights)
-    return GraphData{T}(Int(n), Vector{Tuple{Int,Int}}(edges), coords_vec, weights_vec)
-end
-
-"""
-    EmbeddedPlanarGraph2D(vertices, edges; polylines=nothing, bbox=nothing)
-
-Embedded planar graph container for 2D applications (e.g. wing veins).
-`vertices` is a vector of 2D coordinate vectors, `edges` are vertex index pairs.
-`polylines` can store per-edge piecewise-linear geometry.
-"""
-struct EmbeddedPlanarGraph2D{T}
-    vertices::Vector{Vector{T}}
-    edges::Vector{Tuple{Int,Int}}
-    polylines::Union{Nothing, Vector{Vector{Vector{T}}}}
-    bbox::Union{Nothing, NTuple{4,T}}
-end
-
-function EmbeddedPlanarGraph2D(vertices::AbstractVector{<:AbstractVector{T}},
-                               edges::AbstractVector{<:Tuple{Int,Int}};
-                               polylines::Union{Nothing, AbstractVector}=nothing,
-                               bbox::Union{Nothing, NTuple{4,T}}=nothing) where {T}
-    verts = [Vector{T}(v) for v in vertices]
-    polys = polylines === nothing ? nothing : [ [Vector{T}(p) for p in poly] for poly in polylines ]
-    return EmbeddedPlanarGraph2D{T}(verts, Vector{Tuple{Int,Int}}(edges), polys, bbox)
-end
-
-"""
-    GradedComplex(cells_by_dim, boundaries, grades; cell_dims=nothing)
-
-Generic graded cell complex container ("escape hatch").
-"""
-struct GradedComplex{N,T}
-    cells_by_dim::Vector{Vector{Int}}
-    boundaries::Vector{SparseMatrixCSC{Int,Int}}
-    grades::Vector{NTuple{N,T}}
-    cell_dims::Vector{Int}
-end
-
-function _cell_dims_from_cells(cells_by_dim::Vector{Vector{Int}})
-    out = Int[]
-    for (d, cells) in enumerate(cells_by_dim)
-        for _ in cells
-            push!(out, d - 1)
-        end
-    end
-    return out
-end
-
-function GradedComplex(cells_by_dim::Vector{Vector{Int}},
-                       boundaries::Vector{SparseMatrixCSC{Int,Int}},
-                       grades::Vector{<:AbstractVector{T}};
-                       cell_dims::Union{Nothing,Vector{Int}}=nothing) where {T}
-    total = sum(length.(cells_by_dim))
-    if cell_dims === nothing
-        if length(grades) == total
-            cell_dims = _cell_dims_from_cells(cells_by_dim)
-        else
-            cell_dims = fill(0, length(grades))
-        end
-    end
-    N = length(grades[1])
-    ng = Vector{NTuple{N,T}}(undef, length(grades))
-    for i in eachindex(grades)
-        length(grades[i]) == N || error("GradedComplex: grade $i has wrong length.")
-        ng[i] = ntuple(j -> T(grades[i][j]), N)
-    end
-    return GradedComplex{N,T}(cells_by_dim, boundaries, ng, cell_dims)
-end
-
-function GradedComplex(cells_by_dim::Vector{Vector{Int}},
-                       boundaries::Vector{SparseMatrixCSC{Int,Int}},
-                       grades::Vector{<:Tuple};
-                       cell_dims::Union{Nothing,Vector{Int}}=nothing)
-    total = sum(length.(cells_by_dim))
-    if cell_dims === nothing
-        if length(grades) == total
-            cell_dims = _cell_dims_from_cells(cells_by_dim)
-        else
-            cell_dims = fill(0, length(grades))
-        end
-    end
-    N = length(grades[1])
-    T = eltype(grades[1])
-    ng = Vector{NTuple{N,T}}(undef, length(grades))
-    for i in eachindex(grades)
-        length(grades[i]) == N || error("GradedComplex: grade $i has wrong length.")
-        ng[i] = ntuple(j -> T(grades[i][j]), N)
-    end
-    return GradedComplex{N,T}(cells_by_dim, boundaries, ng, cell_dims)
-end
-
-"""
-    MultiCriticalGradedComplex(cells_by_dim, boundaries, grades; cell_dims=nothing)
-
-Graded cell complex where each cell can carry multiple minimal grades.
-`grades[i]` is a non-empty vector of `NTuple{N,T}` grades for cell `i`.
-"""
-struct MultiCriticalGradedComplex{N,T}
-    cells_by_dim::Vector{Vector{Int}}
-    boundaries::Vector{SparseMatrixCSC{Int,Int}}
-    grades::Vector{Vector{NTuple{N,T}}}
-    cell_dims::Vector{Int}
-end
-
-function MultiCriticalGradedComplex(cells_by_dim::Vector{Vector{Int}},
-                                    boundaries::Vector{SparseMatrixCSC{Int,Int}},
-                                    grades::Vector{<:AbstractVector{<:Tuple}};
-                                    cell_dims::Union{Nothing,Vector{Int}}=nothing)
-    total = sum(length.(cells_by_dim))
-    length(grades) == total || error("MultiCriticalGradedComplex: grades length mismatch.")
-    cell_dims = cell_dims === nothing ? _cell_dims_from_cells(cells_by_dim) : cell_dims
-    length(cell_dims) == total || error("MultiCriticalGradedComplex: cell_dims length mismatch.")
-
-    # Find first non-empty grade set to infer (N,T)
-    first_cell = findfirst(!isempty, grades)
-    first_cell === nothing && error("MultiCriticalGradedComplex: each cell must have at least one grade.")
-    first_grade = grades[first_cell][1]
-    N = length(first_grade)
-    T = eltype(first_grade)
-
-    ng = Vector{Vector{NTuple{N,T}}}(undef, length(grades))
-    for i in eachindex(grades)
-        gi = grades[i]
-        isempty(gi) && error("MultiCriticalGradedComplex: cell $i has empty grade set.")
-        out = Vector{NTuple{N,T}}(undef, length(gi))
-        for j in eachindex(gi)
-            g = gi[j]
-            length(g) == N || error("MultiCriticalGradedComplex: grade length mismatch at cell $i.")
-            out[j] = ntuple(k -> T(g[k]), N)
-        end
-        ng[i] = unique(out)
-    end
-    return MultiCriticalGradedComplex{N,T}(cells_by_dim, boundaries, ng, cell_dims)
-end
-
-function MultiCriticalGradedComplex(cells_by_dim::Vector{Vector{Int}},
-                                    boundaries::Vector{SparseMatrixCSC{Int,Int}},
-                                    grades::Vector{<:AbstractVector{<:AbstractVector{T}}};
-                                    cell_dims::Union{Nothing,Vector{Int}}=nothing) where {T}
-    total = sum(length.(cells_by_dim))
-    length(grades) == total || error("MultiCriticalGradedComplex: grades length mismatch.")
-    cell_dims = cell_dims === nothing ? _cell_dims_from_cells(cells_by_dim) : cell_dims
-    length(cell_dims) == total || error("MultiCriticalGradedComplex: cell_dims length mismatch.")
-
-    first_cell = findfirst(!isempty, grades)
-    first_cell === nothing && error("MultiCriticalGradedComplex: each cell must have at least one grade.")
-    N = length(grades[first_cell][1])
-    ng = Vector{Vector{NTuple{N,T}}}(undef, length(grades))
-    for i in eachindex(grades)
-        gi = grades[i]
-        isempty(gi) && error("MultiCriticalGradedComplex: cell $i has empty grade set.")
-        out = Vector{NTuple{N,T}}(undef, length(gi))
-        for j in eachindex(gi)
-            g = gi[j]
-            length(g) == N || error("MultiCriticalGradedComplex: grade length mismatch at cell $i.")
-            out[j] = ntuple(k -> T(g[k]), N)
-        end
-        ng[i] = unique(out)
-    end
-    return MultiCriticalGradedComplex{N,T}(cells_by_dim, boundaries, ng, cell_dims)
-end
-
-"""
-    SimplexTreeMulti(simplex_offsets, simplex_vertices, simplex_dims,
-                     dim_offsets, grade_offsets, grade_data)
-
-Compact simplicial multifiltration container with packed storage.
-
-- `simplex_offsets` / `simplex_vertices` encode simplex vertex lists in CSR form.
-- `simplex_dims[i]` is the dimension of simplex `i`.
-- `dim_offsets[d+1]:(dim_offsets[d+2]-1)` selects simplices of dimension `d`.
-- `grade_offsets` / `grade_data` encode minimal grade sets per simplex.
-"""
-struct SimplexTreeMulti{N,T}
-    simplex_offsets::Vector{Int}
-    simplex_vertices::Vector{Int}
-    simplex_dims::Vector{Int}
-    dim_offsets::Vector{Int}
-    grade_offsets::Vector{Int}
-    grade_data::Vector{NTuple{N,T}}
-end
-
-function SimplexTreeMulti(simplex_offsets::Vector{Int},
-                          simplex_vertices::Vector{Int},
-                          simplex_dims::Vector{Int},
-                          dim_offsets::Vector{Int},
-                          grade_offsets::Vector{Int},
-                          grade_data::Vector{NTuple{N,T}}) where {N,T}
-    ns = length(simplex_dims)
-    length(simplex_offsets) == ns + 1 ||
-        error("SimplexTreeMulti: simplex_offsets must have length nsimplices+1.")
-    length(grade_offsets) == ns + 1 ||
-        error("SimplexTreeMulti: grade_offsets must have length nsimplices+1.")
-    !isempty(dim_offsets) || error("SimplexTreeMulti: dim_offsets cannot be empty.")
-    first(simplex_offsets) == 1 || error("SimplexTreeMulti: simplex_offsets must start at 1.")
-    first(grade_offsets) == 1 || error("SimplexTreeMulti: grade_offsets must start at 1.")
-    last(simplex_offsets) == length(simplex_vertices) + 1 ||
-        error("SimplexTreeMulti: simplex_offsets terminator mismatch.")
-    last(grade_offsets) == length(grade_data) + 1 ||
-        error("SimplexTreeMulti: grade_offsets terminator mismatch.")
-    last(dim_offsets) == ns + 1 ||
-        error("SimplexTreeMulti: dim_offsets terminator mismatch.")
-    for i in 1:ns
-        simplex_offsets[i] <= simplex_offsets[i + 1] ||
-            error("SimplexTreeMulti: simplex_offsets must be nondecreasing.")
-        grade_offsets[i] < grade_offsets[i + 1] ||
-            error("SimplexTreeMulti: each simplex must have at least one grade.")
-    end
-    return SimplexTreeMulti{N,T}(simplex_offsets, simplex_vertices, simplex_dims,
-                                 dim_offsets, grade_offsets, grade_data)
-end
-
-@inline simplex_count(ST::SimplexTreeMulti) = length(ST.simplex_dims)
-@inline max_simplex_dim(ST::SimplexTreeMulti) = isempty(ST.simplex_dims) ? -1 : maximum(ST.simplex_dims)
-
-@inline function simplex_vertices(ST::SimplexTreeMulti, i::Integer)
-    ii = Int(i)
-    1 <= ii <= simplex_count(ST) || throw(BoundsError(ST.simplex_dims, ii))
-    lo = ST.simplex_offsets[ii]
-    hi = ST.simplex_offsets[ii + 1] - 1
-    return @view ST.simplex_vertices[lo:hi]
-end
-
-@inline function simplex_grades(ST::SimplexTreeMulti, i::Integer)
-    ii = Int(i)
-    1 <= ii <= simplex_count(ST) || throw(BoundsError(ST.simplex_dims, ii))
-    lo = ST.grade_offsets[ii]
-    hi = ST.grade_offsets[ii + 1] - 1
-    return @view ST.grade_data[lo:hi]
-end
-
-"""
-    FiltrationSpec(; kind, params...)
-
-Lightweight filtration specification container. Stores a `kind` symbol and a
-`params` named tuple.
-"""
-struct FiltrationSpec
-    kind::Symbol
-    params::NamedTuple
-end
-
-FiltrationSpec(; kind::Symbol, params...) = FiltrationSpec(kind, NamedTuple(params))
-
-"""
-    ConstructionBudget(; max_simplices=nothing, max_edges=nothing, memory_budget_bytes=nothing)
-
-Budget controls for data-ingestion construction.
-"""
-struct ConstructionBudget
-    max_simplices::Union{Nothing,Int}
-    max_edges::Union{Nothing,Int}
-    memory_budget_bytes::Union{Nothing,Int}
-end
-
-ConstructionBudget(; max_simplices::Union{Nothing,Integer}=nothing,
-                   max_edges::Union{Nothing,Integer}=nothing,
-                   memory_budget_bytes::Union{Nothing,Integer}=nothing) =
-    ConstructionBudget(max_simplices === nothing ? nothing : Int(max_simplices),
-                       max_edges === nothing ? nothing : Int(max_edges),
-                       memory_budget_bytes === nothing ? nothing : Int(memory_budget_bytes))
-
-"""
-    ConstructionOptions(; sparsify=:none, collapse=:none, output_stage=:encoding_result,
-                         budget=(nothing, nothing, nothing))
-
-Canonical construction controls for data ingestion.
-"""
-struct ConstructionOptions
-    sparsify::Symbol
-    collapse::Symbol
-    output_stage::Symbol
-    budget::ConstructionBudget
-end
-
-function ConstructionOptions(; sparsify::Symbol=:none,
-                             collapse::Symbol=:none,
-                             output_stage::Symbol=:encoding_result,
-                             budget=(nothing, nothing, nothing))
-    sp = sparsify
-    co = collapse
-    os = output_stage
-    (sp == :none || sp == :radius || sp == :knn || sp == :greedy_perm) ||
-        error("ConstructionOptions: sparsify must be :none, :radius, :knn, or :greedy_perm.")
-    (co == :none || co == :dominated_edges || co == :acyclic) ||
-        error("ConstructionOptions: collapse must be :none, :dominated_edges, or :acyclic.")
-    (os == :simplex_tree || os == :graded_complex || os == :cochain || os == :module || os == :fringe || os == :flange || os == :encoding_result) ||
-        error("ConstructionOptions: output_stage must be :simplex_tree, :graded_complex, :cochain, :module, :fringe, :flange, or :encoding_result.")
-    b = if budget isa ConstructionBudget
-        budget
-    elseif budget isa Tuple
-        length(budget) == 3 || error("ConstructionOptions: budget tuple must be (max_simplices, max_edges, memory_budget_bytes).")
-        ConstructionBudget(; max_simplices=budget[1], max_edges=budget[2], memory_budget_bytes=budget[3])
-    elseif budget isa NamedTuple
-        ConstructionBudget(; budget...)
-    else
-        error("ConstructionOptions: budget must be ConstructionBudget, 3-tuple, or NamedTuple.")
-    end
-    return ConstructionOptions(sp, co, os, b)
-end
-
-"""
-    PipelineOptions(; orientation=nothing, axes_policy=:encoding, axis_kind=nothing,
-                     eps=nothing, poset_kind=:signature, field=nothing, max_axis_len=nothing)
-
-Structured pipeline controls that materially affect data-ingestion encodings and
-their reproducibility in serialized pipeline artifacts.
-"""
-struct PipelineOptions{OrientationT,AxisKindT,EpsT,FieldT}
-    orientation::OrientationT
-    axes_policy::Symbol
-    axis_kind::AxisKindT
-    eps::EpsT
-    poset_kind::Symbol
-    field::FieldT
-    max_axis_len::Union{Nothing,Int}
-end
-
-PipelineOptions(; orientation=nothing,
-                axes_policy::Symbol=:encoding,
-                axis_kind=nothing,
-                eps=nothing,
-                poset_kind::Symbol=:signature,
-                field=nothing,
-                max_axis_len::Union{Nothing,Int}=nothing) =
-    PipelineOptions(orientation, axes_policy, axis_kind, eps, poset_kind, field, max_axis_len)
-
-"""
-    GridEncodingMap(P, coords; orientation=ntuple(_->1, N))
-
-Axis-aligned grid encoding map for a product-of-chains poset.
-"""
-struct GridEncodingMap{N,T,P} <: AbstractPLikeEncodingMap
-    P::P
-    coords::NTuple{N,Vector{T}}
-    orientation::NTuple{N,Int}
-    sizes::NTuple{N,Int}
-    strides::NTuple{N,Int}
-end
-
-function _grid_strides(sizes::NTuple{N,Int}) where {N}
-    strides = Vector{Int}(undef, N)
-    strides[1] = 1
-    for i in 2:N
-        strides[i] = strides[i-1] * sizes[i-1]
-    end
-    return ntuple(i -> strides[i], N)
-end
-
-function GridEncodingMap(P, coords::NTuple{N,Vector{T}};
-                         orientation::NTuple{N,Int}=ntuple(_ -> 1, N)) where {N,T}
-    sizes = ntuple(i -> length(coords[i]), N)
-    for i in 1:N
-        o = orientation[i]
-        (o == 1 || o == -1) || error("GridEncodingMap: orientation[$i] must be +1 or -1.")
-    end
-    return GridEncodingMap{N,T,typeof(P)}(P, coords, orientation, sizes, _grid_strides(sizes))
-end
-
-
-# -----------------------------------------------------------------------------
-# Compiled encoding wrappers (primary type for repeated queries)
-# -----------------------------------------------------------------------------
-
-"""
-    CompiledEncoding(P, pi; axes=nothing, reps=nothing, meta=NamedTuple())
-
-Primary wrapper for encoding maps. Stores the finite encoding poset `P` and
-cached encoding metadata used by hot query paths.
-"""
-struct CompiledEncoding{PiType,PType,AxesType,RepsType,MetaType} <: AbstractPLikeEncodingMap
-    P::PType
-    pi::PiType
-    axes::AxesType
-    reps::RepsType
-    meta::MetaType
-end
-
-function compile_encoding(P, pi; axes=nothing, reps=nothing, meta=NamedTuple())
-    axes_val = axes
-    reps_val = reps
-    if axes_val === nothing && hasmethod(axes_from_encoding, (typeof(pi),))
-        axes_val = axes_from_encoding(pi)
-    end
-    if reps_val === nothing && hasmethod(representatives, (typeof(pi),))
-        reps_val = representatives(pi)
-    end
-    return CompiledEncoding(P, pi, axes_val, reps_val, meta)
-end
-
-compile_encoding(::Any, ::Nothing; kwargs...) = nothing
-
-function Base.getproperty(enc::CompiledEncoding, name::Symbol)
-    if name === :P || name === :pi || name === :axes || name === :reps || name === :meta
-        return getfield(enc, name)
-    end
-    return getproperty(getfield(enc, :pi), name)
-end
-
-function Base.propertynames(enc::CompiledEncoding, private::Bool=false)
-    return (fieldnames(typeof(enc))..., propertynames(enc.pi, private)...)
-end
-
-
-
-# ----- shared API hooks ----------------------------------------------------------
-
-# ----- shared API hooks ----------------------------------------------------------
-
-"""
-    locate(pi, x::AbstractVector) -> Int
-    locate(pi, x::NTuple{N,<:Real}) -> Int
-
-Generic classifier hook for finite encodings.
-
-Many parts of this codebase build a finite encoding poset `P` for some
-parameter space `Q` (for example `Q = R^n` or `Q = Z^n`). The corresponding
-classifier `pi : Q -> P` is represented in code by an "encoding map" object.
-
-Required interface:
-- Implement `locate(pi, x::AbstractVector)` for your encoding map type.
-  The input vector `x` must have length `dimension(pi)`.
-
-Optional (performance) interface:
-- You may also implement `locate(pi, x::NTuple{N,<:Real})` for fast,
-  allocation-free tuple dispatch. If you do not, a generic fallback method
-  is provided which converts the tuple to a vector.
-
-Return value convention:
-- return an integer in 1:P.n identifying the region in the target finite poset, or
-- return 0 when `x` does not lie in the encoded domain.
-
-This convention matches the existing PL encoders.
-"""
-function locate end
-
-# Default tuple fallback (for convenience). Backends that care about allocation-free
-# tuple dispatch should implement a specialized tuple method.
-function locate(pi::AbstractPLikeEncodingMap, x::NTuple{N,<:Real}) where {N}
-    return locate(pi, collect(x))
-end
-
-function locate(pi::AbstractPLikeEncodingMap, x::NTuple{N,<:Real}; kwargs...) where {N}
-    return locate(pi, collect(x); kwargs...)
-end
-
-locate(enc::CompiledEncoding, x) = locate(enc.pi, x)
-locate(enc::CompiledEncoding, x::NTuple{N,<:Real}) where {N} = locate(enc.pi, x)
-locate(enc::CompiledEncoding, x::AbstractVector) = locate(enc.pi, x)
-locate(enc::CompiledEncoding, x; kwargs...) = locate(enc.pi, x; kwargs...)
-locate(enc::CompiledEncoding, x::NTuple{N,<:Real}; kwargs...) where {N} = locate(enc.pi, x; kwargs...)
-locate(enc::CompiledEncoding, x::AbstractVector; kwargs...) = locate(enc.pi, x; kwargs...)
-
-"""
-    dimension(pi) -> Int
-
-Ambient dimension of the parameter space for an encoding map.
-
-This should match the expected length of the coordinate vector accepted by
-`locate(pi, x::AbstractVector)`.
-"""
-function dimension end
-
-dimension(enc::CompiledEncoding) = dimension(enc.pi)
-
-"""
-    representatives(pi)
-
-Return a finite collection of representative points for the regions of `pi`.
-
-This is used for utilities that need a cheap summary of the encoding's extent in
-parameter space (for example to infer a bounding box). A representative point
-must be indexable and have length `dimension(pi)`.
-"""
-function representatives end
-
-function representatives(enc::CompiledEncoding)
-    enc.reps === nothing ? representatives(enc.pi) : enc.reps
-end
-
-"""
-    axes_from_encoding(pi)
-
-Return a tuple of coordinate axes derived from the encoding itself.
-
-Each axis is a sorted vector of coordinates (typically breakpoints / critical
-values). Many invariant computations evaluate on an axis-aligned grid; this
-function provides a reasonable default grid derived from the encoding.
-
-Backends without a natural grid may omit this method and require callers to pass
-explicit `axes`.
-"""
-function axes_from_encoding end
-
-function axes_from_encoding(enc::CompiledEncoding)
-    enc.axes === nothing ? axes_from_encoding(enc.pi) : enc.axes
-end
-
-
-# =============================================================================
-# Option structs (public API)
-
-"""
-    EncodingOptions(; backend=:auto, max_regions=nothing, strict_eps=nothing,
-                    poset_kind=:signature, field=QQField())
-
-Options controlling finite encodings. Used by:
-* `ZnEncoding.encode_from_flange(s)` and related helpers (backend=:zn)
-* `PLPolyhedra.encode_from_PL_fringe(s)` (backend=:pl)
-* `PLBackend.encode_fringe_boxes` (backend=:pl_backend, optional)
-
-Fields:
-* `backend`: Symbol, one of `:auto`, `:zn`, `:pl`, `:pl_backend`.
-* `max_regions`: Integer cap for region enumeration (backend-dependent defaults).
-* `strict_eps`: QQ tolerance used by PL polyhedra backend (default backend constant).
-* `poset_kind`: `:signature` (structured, default) or `:dense` (materialized `FinitePoset`).
-* `field`: coefficient field used for module data (encoding itself may still use QQ).
-"""
-struct EncodingOptions
-    backend::Symbol
-    max_regions::Union{Nothing, Int}
-    strict_eps::Any
-    poset_kind::Symbol
-    field::AbstractCoeffField
-end
-EncodingOptions(; backend::Symbol=:auto,
-                max_regions=nothing,
-                strict_eps=nothing,
-                poset_kind::Symbol=:signature,
-                field::AbstractCoeffField=QQField()) =
-    EncodingOptions(backend,
-                    max_regions === nothing ? nothing : Int(max_regions),
-                    strict_eps,
-                    poset_kind,
-                    field)
-
-"""
-    ResolutionOptions(; maxlen=3, minimal=false, check=true)
-
-Options controlling (co)resolutions.
-
-Fields:
-* `maxlen`: length of resolution
-* `minimal`: if true, request minimal resolution when available
-* `check`: whether to verify minimality conditions
-"""
-struct ResolutionOptions
-    maxlen::Int
-    minimal::Bool
-    check::Bool
-end
-ResolutionOptions(; maxlen::Int=3, minimal::Bool=false, check::Bool=true) =
-    ResolutionOptions(maxlen, minimal, check)
-
-@inline function validate_pl_mode(mode::Symbol)::Symbol
-    if mode === :fast
-        return :fast
-    elseif mode === :verified
-        return :verified
-    end
-    throw(ArgumentError("pl_mode must be exactly :fast or :verified (got $(mode))"))
-end
-
-"""
-    InvariantOptions(; axes=nothing, axes_policy=:encoding, max_axis_len=256,
-                     box=nothing, threads=nothing, strict=nothing, pl_mode=:fast)
-
-Options controlling invariant computations (Euler surface, MMA decomposition,
-signed barcode, distances, etc). `pl_mode` controls PL geometry location policy:
-`:fast` (default) or `:verified`.
-"""
-struct InvariantOptions
-    axes::Any
-    axes_policy::Symbol
-    max_axis_len::Int
-    box::Any
-    threads::Union{Nothing,Bool}
-    strict::Union{Nothing,Bool}
-    pl_mode::Symbol
-end
-InvariantOptions(; axes=nothing,
-                 axes_policy::Symbol=:encoding,
-                 max_axis_len::Int=256,
-                 box=nothing,
-                 threads=nothing,
-                 strict=nothing,
-                 pl_mode::Symbol=:fast) =
-    InvariantOptions(axes, axes_policy, max_axis_len, box, threads, strict, validate_pl_mode(pl_mode))
-
-# Preserve positional construction sites while defaulting to :fast mode.
-InvariantOptions(axes, axes_policy::Symbol, max_axis_len::Int, box, threads, strict) =
-    InvariantOptions(axes, axes_policy, max_axis_len, box, threads, strict, :fast)
-
-"""
-    DerivedFunctorOptions(; maxdeg=3, model=:auto, canon=:auto)
-
-Options controlling derived functor computations (Ext, Tor, etc).
-
-Fields
-------
-- maxdeg: compute degrees 0..maxdeg (inclusive).
-- model: selects the computational model. Its meaning depends on the derived functor:
-
-  * Ext(M, N, df):
-      :projective  - compute using a projective resolution of M.
-      :injective   - compute using an injective resolution of N.
-      :unified     - compute a model-independent ExtSpace containing both models and explicit
-                     comparison isomorphisms.
-      :auto        - alias for :projective.
-
-  * Tor(Rop, L, df):
-      :first   - resolve Rop (a P^op-module) and tensor with L.
-      :second  - resolve L and tensor with Rop.
-      :auto    - alias for :first.
-
-- canon: only used when model == :unified for Ext. Chooses the canonical coordinate basis in the
-  unified ExtSpace:
-    :projective or :injective (or :auto as alias for :projective).
-"""
-struct DerivedFunctorOptions
-    maxdeg::Int
-    model::Symbol
-    canon::Symbol
-end
-DerivedFunctorOptions(; maxdeg::Int=3, model::Symbol=:auto, canon::Symbol=:auto) =
-    DerivedFunctorOptions(maxdeg, model, canon)
-
-"""
-    FiniteFringeOptions(; check=true, cached=true, store_sparse=false, scalar=1, poset_kind=:regions)
-
-Options for FiniteFringe convenience entrypoints.
-"""
-struct FiniteFringeOptions
-    check::Bool
-    cached::Bool
-    store_sparse::Bool
-    scalar::Any
-    poset_kind::Symbol
-end
-FiniteFringeOptions(; check::Bool=true,
-                    cached::Bool=true,
-                    store_sparse::Bool=false,
-                    scalar=1,
-                    poset_kind::Symbol=:regions) =
-    FiniteFringeOptions(check, cached, store_sparse, scalar, poset_kind)
-
-"""
-    ModuleOptions(; check_sizes=true, cache=nothing)
-
-Options for Modules convenience entrypoints.
-"""
-struct ModuleOptions
-    check_sizes::Bool
-    cache::Any
-end
-ModuleOptions(; check_sizes::Bool=true, cache=nothing) =
-    ModuleOptions(check_sizes, cache)
-
 """
     ResolutionCache()
 
@@ -1164,27 +427,109 @@ end
 @inline _resolution_key2(a, maxlen::Integer) = ResolutionKey2(UInt(objectid(a)), Int(maxlen))
 @inline _resolution_key3(a, b, maxlen::Integer) = ResolutionKey3(UInt(objectid(a)), UInt(objectid(b)), Int(maxlen))
 
+abstract type AbstractCachePayload end
+
+struct ProjectiveResolutionPayload{R} <: AbstractCachePayload
+    value::R
+end
+
+struct InjectiveResolutionPayload{R} <: AbstractCachePayload
+    value::R
+end
+
+struct IndicatorResolutionPayload{R} <: AbstractCachePayload
+    value::R
+end
+
+struct PosetCachePayload{P} <: AbstractCachePayload
+    value::P
+end
+
+struct CubicalCachePayload{C} <: AbstractCachePayload
+    value::C
+end
+
+struct RegionPosetCachePayload{P} <: AbstractCachePayload
+    value::P
+end
+
+struct GeometryCachePayload{G} <: AbstractCachePayload
+    value::G
+end
+
+struct ModulePayload{P} <: AbstractCachePayload
+    value::P
+end
+
+struct ZnEncodingArtifact{P,Pi} <: AbstractCachePayload
+    P::P
+    pi::Pi
+end
+
+struct ZnPushforwardFringeArtifact{H} <: AbstractCachePayload
+    H::H
+end
+
+struct ZnPushforwardModuleArtifact{H,M} <: AbstractCachePayload
+    H::H
+    M::M
+end
+
+struct ProductPosetCacheEntry{K1,K2,P,Pi1,Pi2} <: AbstractCachePayload
+    key1::K1
+    key2::K2
+    P::P
+    pi1::Pi1
+    pi2::Pi2
+end
+
 mutable struct ResolutionCache
     lock::Base.ReentrantLock
-    projective::Dict{ResolutionKey2,Any}
-    injective::Dict{ResolutionKey2,Any}
-    indicator::Dict{ResolutionKey3,Any}
+    projective::Dict{ResolutionKey2,ProjectiveResolutionPayload}
+    injective::Dict{ResolutionKey2,InjectiveResolutionPayload}
+    indicator::Dict{ResolutionKey3,IndicatorResolutionPayload}
+    projective_promotion_type::Union{Nothing,DataType}
+    projective_promotion_hits::Int
+    injective_promotion_type::Union{Nothing,DataType}
+    injective_promotion_hits::Int
+    projective_primary_type::Union{Nothing,DataType}
+    projective_primary::Any
+    injective_primary_type::Union{Nothing,DataType}
+    injective_primary::Any
+    indicator_primary_type::Union{Nothing,DataType}
+    indicator_primary::Any
     # Thread-sharded memo stores for lock-free fast-path lookups/inserts.
-    projective_shards::Vector{Dict{ResolutionKey2,Any}}
-    injective_shards::Vector{Dict{ResolutionKey2,Any}}
-    indicator_shards::Vector{Dict{ResolutionKey3,Any}}
+    projective_shards::Vector{Dict{ResolutionKey2,ProjectiveResolutionPayload}}
+    injective_shards::Vector{Dict{ResolutionKey2,InjectiveResolutionPayload}}
+    indicator_shards::Vector{Dict{ResolutionKey3,IndicatorResolutionPayload}}
+    projective_primary_shards::Vector{Any}
+    injective_primary_shards::Vector{Any}
+    indicator_primary_shards::Vector{Any}
 end
 
 function ResolutionCache()
     nshards = max(1, Base.Threads.maxthreadid())
     return ResolutionCache(
         Base.ReentrantLock(),
-        Dict{ResolutionKey2,Any}(),
-        Dict{ResolutionKey2,Any}(),
-        Dict{ResolutionKey3,Any}(),
-        [Dict{ResolutionKey2,Any}() for _ in 1:nshards],
-        [Dict{ResolutionKey2,Any}() for _ in 1:nshards],
-        [Dict{ResolutionKey3,Any}() for _ in 1:nshards],
+        Dict{ResolutionKey2,ProjectiveResolutionPayload}(),
+        Dict{ResolutionKey2,InjectiveResolutionPayload}(),
+        Dict{ResolutionKey3,IndicatorResolutionPayload}(),
+        nothing,
+        0,
+        nothing,
+        0,
+        nothing,
+        nothing,
+        nothing,
+        nothing,
+        nothing,
+        nothing,
+        [Dict{ResolutionKey2,ProjectiveResolutionPayload}() for _ in 1:nshards],
+        [Dict{ResolutionKey2,InjectiveResolutionPayload}() for _ in 1:nshards],
+        [Dict{ResolutionKey3,IndicatorResolutionPayload}() for _ in 1:nshards],
+        fill(nothing, nshards),
+        fill(nothing, nshards),
+        fill(nothing, nshards),
     )
 end
 
@@ -1193,6 +538,22 @@ function _clear_resolution_cache!(cache::ResolutionCache)
     empty!(cache.projective)
     empty!(cache.injective)
     empty!(cache.indicator)
+    cache.projective_promotion_type = nothing
+    cache.projective_promotion_hits = 0
+    cache.injective_promotion_type = nothing
+    cache.injective_promotion_hits = 0
+    if cache.projective_primary_type === nothing
+        cache.projective_primary = nothing
+    else
+        empty!(cache.projective_primary)
+    end
+    if cache.injective_primary_type === nothing
+        cache.injective_primary = nothing
+    else
+        empty!(cache.injective_primary)
+    end
+    cache.indicator_primary_type = nothing
+    cache.indicator_primary = nothing
     for d in cache.projective_shards
         empty!(d)
     end
@@ -1202,9 +563,38 @@ function _clear_resolution_cache!(cache::ResolutionCache)
     for d in cache.indicator_shards
         empty!(d)
     end
+    for i in eachindex(cache.projective_primary_shards)
+        shard = cache.projective_primary_shards[i]
+        shard === nothing || empty!(shard)
+    end
+    for i in eachindex(cache.injective_primary_shards)
+        shard = cache.injective_primary_shards[i]
+        shard === nothing || empty!(shard)
+    end
+    fill!(cache.indicator_primary_shards, nothing)
     Base.unlock(cache.lock)
     return nothing
 end
+
+const _ENCODING_POSET_KEY = Tuple{Tuple,Tuple{Vararg{Int}}}
+const _ENCODING_CUBICAL_KEY = Tuple{Vararg{Int}}
+const _ENCODING_GEOMETRY_KEY = Tuple
+
+struct _SessionProductKey
+    a::UInt
+    b::UInt
+end
+
+@inline _SessionProductKey(a, b) = _SessionProductKey(UInt(objectid(a)), UInt(objectid(b)))
+
+const _SESSION_PRODUCT_KEY = _SessionProductKey
+const _SESSION_ZN_ENCODING_KEY = Tuple{UInt64,Symbol,Int}
+const _SESSION_ZN_PLAN_KEY = Tuple{UInt64,UInt64}
+const _SESSION_ZN_PUSH_KEY = Tuple{UInt64,Symbol,UInt64,UInt}
+const _SESSION_ZN_PLAN_VALUE = NamedTuple{
+    (:flat_idxs,:inj_idxs,:zero_pairs),
+    Tuple{Vector{Int},Vector{Int},Vector{Tuple{Int,Int}}},
+}
 
 """
     EncodingCache()
@@ -1218,17 +608,17 @@ Intended contents:
 """
 mutable struct EncodingCache
     lock::Base.ReentrantLock
-    posets::Dict{Any,Any}
-    cubical::Dict{Any,Any}
-    region_posets::Dict{Tuple{UInt,UInt,Symbol},Any}
-    geometry::Dict{Any,Any}
+    posets::Dict{_ENCODING_POSET_KEY,PosetCachePayload}
+    cubical::Dict{_ENCODING_CUBICAL_KEY,CubicalCachePayload}
+    region_posets::Dict{Tuple{UInt,UInt,Symbol},RegionPosetCachePayload}
+    geometry::Dict{_ENCODING_GEOMETRY_KEY,GeometryCachePayload}
 end
 
 EncodingCache() = EncodingCache(Base.ReentrantLock(),
-                                Dict{Any,Any}(),
-                                Dict{Any,Any}(),
-                                Dict{Tuple{UInt,UInt,Symbol},Any}(),
-                                Dict{Any,Any}())
+                                Dict{_ENCODING_POSET_KEY,PosetCachePayload}(),
+                                Dict{_ENCODING_CUBICAL_KEY,CubicalCachePayload}(),
+                                Dict{Tuple{UInt,UInt,Symbol},RegionPosetCachePayload}(),
+                                Dict{_ENCODING_GEOMETRY_KEY,GeometryCachePayload}())
 
 function _clear_encoding_cache!(cache::EncodingCache)
     Base.lock(cache.lock)
@@ -1252,17 +642,20 @@ mutable struct ModuleCache
     module_id::UInt
     field_key::UInt
     resolution::ResolutionCache
-    payload::Dict{Symbol,Any}
+    payload::Dict{Symbol,ModulePayload}
 end
 
 ModuleCache(module_id::UInt, field_key::UInt) =
-    ModuleCache(module_id, field_key, ResolutionCache(), Dict{Symbol,Any}())
+    ModuleCache(module_id, field_key, ResolutionCache(), Dict{Symbol,ModulePayload}())
 
 function _clear_module_cache!(cache::ModuleCache)
     _clear_resolution_cache!(cache.resolution)
     empty!(cache.payload)
     return nothing
 end
+
+abstract type AbstractHomSystemCache end
+abstract type AbstractSlicePlanCache end
 
 """
     SessionCache()
@@ -1279,73 +672,165 @@ Hierarchy:
   - Zn pushed modules keyed by `(encoding_fingerprint, poset_kind, flange_fingerprint, field_key)`
 """
 mutable struct SessionCache
-    lock::Base.ReentrantLock
-    encoding::Dict{UInt,EncodingCache}
-    modules::Dict{Tuple{UInt,UInt},ModuleCache}
+    encoding_locks::Vector{Base.ReentrantLock}
+    encoding::Vector{Dict{UInt,EncodingCache}}
+    module_locks::Vector{Base.ReentrantLock}
+    modules::Vector{Dict{Tuple{UInt,UInt},ModuleCache}}
+    module_field_keys::Vector{IdDict{Any,UInt}}
     resolution::ResolutionCache
-    hom_system::Any
-    slice_plan::Any
-    zn_encoding_artifacts::Dict{Tuple{UInt64,Symbol,Int},Any}
-    zn_pushforward_plan::Dict{Tuple{UInt64,UInt64},Any}
-    zn_pushforward_fringe::Dict{Tuple{UInt64,Symbol,UInt64,UInt},Any}
-    zn_pushforward_module::Dict{Tuple{UInt64,Symbol,UInt64,UInt},Any}
-    product_dense::IdDict{Any,Any}
-    product_obj::IdDict{Any,Any}
+    hom_system::Union{Nothing,AbstractHomSystemCache}
+    slice_plan::Union{Nothing,AbstractSlicePlanCache}
+    zn_encoding_locks::Vector{Base.ReentrantLock}
+    zn_plan_locks::Vector{Base.ReentrantLock}
+    zn_fringe_locks::Vector{Base.ReentrantLock}
+    zn_module_locks::Vector{Base.ReentrantLock}
+    zn_encoding_artifacts::Vector{Dict{_SESSION_ZN_ENCODING_KEY,ZnEncodingArtifact{Any,Any}}}
+    zn_pushforward_plan::Vector{Dict{_SESSION_ZN_PLAN_KEY,_SESSION_ZN_PLAN_VALUE}}
+    zn_pushforward_fringe::Vector{Dict{_SESSION_ZN_PUSH_KEY,ZnPushforwardFringeArtifact{Any}}}
+    zn_pushforward_module::Vector{Dict{_SESSION_ZN_PUSH_KEY,ZnPushforwardModuleArtifact{Any,Any}}}
+    product_dense::Dict{_SESSION_PRODUCT_KEY,ProductPosetCacheEntry{Any,Any,Any,Any,Any}}
+    product_obj::Dict{_SESSION_PRODUCT_KEY,ProductPosetCacheEntry{Any,Any,Any,Any,Any}}
 end
 
-SessionCache() = SessionCache(Base.ReentrantLock(),
-                              Dict{UInt,EncodingCache}(),
-                              Dict{Tuple{UInt,UInt},ModuleCache}(),
+const _SESSION_CACHE_SHARDS = 16
+const _SESSION_ZN_CACHE_SHARDS = 16
+
+@inline _session_cache_nshards() = Threads.nthreads() == 1 ? 1 : _SESSION_CACHE_SHARDS
+@inline _session_zn_cache_nshards() = Threads.nthreads() == 1 ? 1 : _SESSION_ZN_CACHE_SHARDS
+
+function SessionCache()
+    ncore_shards = _session_cache_nshards()
+    nzn_shards = _session_zn_cache_nshards()
+    return SessionCache([Base.ReentrantLock() for _ in 1:ncore_shards],
+                              [Dict{UInt,EncodingCache}() for _ in 1:ncore_shards],
+                              [Base.ReentrantLock() for _ in 1:ncore_shards],
+                              [Dict{Tuple{UInt,UInt},ModuleCache}() for _ in 1:ncore_shards],
+                              [IdDict{Any,UInt}() for _ in 1:ncore_shards],
                               ResolutionCache(),
                               nothing,
                               nothing,
-                              Dict{Tuple{UInt64,Symbol,Int},Any}(),
-                              Dict{Tuple{UInt64,UInt64},Any}(),
-                              Dict{Tuple{UInt64,Symbol,UInt64,UInt},Any}(),
-                              Dict{Tuple{UInt64,Symbol,UInt64,UInt},Any}(),
-                              IdDict{Any,Any}(),
-                              IdDict{Any,Any}())
+                              [Base.ReentrantLock() for _ in 1:nzn_shards],
+                              [Base.ReentrantLock() for _ in 1:nzn_shards],
+                              [Base.ReentrantLock() for _ in 1:nzn_shards],
+                              [Base.ReentrantLock() for _ in 1:nzn_shards],
+                              [Dict{_SESSION_ZN_ENCODING_KEY,ZnEncodingArtifact{Any,Any}}() for _ in 1:nzn_shards],
+                              [Dict{_SESSION_ZN_PLAN_KEY,_SESSION_ZN_PLAN_VALUE}() for _ in 1:nzn_shards],
+                              [Dict{_SESSION_ZN_PUSH_KEY,ZnPushforwardFringeArtifact{Any}}() for _ in 1:nzn_shards],
+                              [Dict{_SESSION_ZN_PUSH_KEY,ZnPushforwardModuleArtifact{Any,Any}}() for _ in 1:nzn_shards],
+                              Dict{_SESSION_PRODUCT_KEY,ProductPosetCacheEntry{Any,Any,Any,Any,Any}}(),
+                              Dict{_SESSION_PRODUCT_KEY,ProductPosetCacheEntry{Any,Any,Any,Any,Any}}())
+end
 
-@inline _field_cache_key(field)::UInt = UInt(hash((typeof(field), field)))
+const _FIELD_CACHE_SEED = UInt(0x9E37_79B9_7F4A_7C15)
+
+@inline _field_cache_key(::QQField)::UInt = UInt(0x514F_514F_514F_514F)
+@inline _field_cache_key(F::PrimeField)::UInt =
+    xor(UInt(0x4650_5F00_0000_0001), UInt(F.p))
+@inline _field_cache_key(F::RealField{T}) where {T<:AbstractFloat} =
+    UInt(hash((T, F.rtol, F.atol), _FIELD_CACHE_SEED))
+@inline _field_cache_key(field::AbstractCoeffField)::UInt =
+    UInt(hash(field, _FIELD_CACHE_SEED))
+
 @inline _poset_cache_key(P)::UInt = UInt(objectid(P))
 @inline function _module_cache_key(M)
     fid = hasproperty(M, :field) ? _field_cache_key(getproperty(M, :field)) : UInt(0)
     return (UInt(objectid(M)), fid)
 end
 
-function _encoding_cache!(session::SessionCache, key::UInt)
-    Base.lock(session.lock)
+@inline _session_shard_index(key::UInt, nshards::Int) = Int((key % UInt(nshards)) + 1)
+@inline _session_shard_index(key::Tuple{UInt,UInt}, nshards::Int) = Int((key[1] % UInt(nshards)) + 1)
+@inline _session_shard_index(key::Tuple{UInt64,UInt64}, nshards::Int) = Int((key[1] % UInt64(nshards)) + 1)
+@inline _session_shard_index(key::Tuple{UInt64,Symbol,Int}, nshards::Int) = Int((key[1] % UInt64(nshards)) + 1)
+@inline _session_shard_index(key::Tuple{UInt64,Symbol,UInt64,UInt}, nshards::Int) = Int((key[1] % UInt64(nshards)) + 1)
+
+function _module_cache_key(session::SessionCache, M)
+    mid = UInt(objectid(M))
+    hasproperty(M, :field) || return (mid, UInt(0))
+    nshards = length(session.module_field_keys)
+    idx = _session_shard_index(mid, nshards)
+    keys = session.module_field_keys[idx]
+    if Threads.nthreads() == 1
+        if haskey(keys, M)
+            return (mid, keys[M])
+        end
+        fid = _field_cache_key(getproperty(M, :field))
+        keys[M] = fid
+        return (mid, fid)
+    end
+    lock = session.module_locks[idx]
+    Base.lock(lock)
     try
-        return get!(session.encoding, key) do
+        if haskey(keys, M)
+            return (mid, keys[M])
+        end
+        fid = _field_cache_key(getproperty(M, :field))
+        keys[M] = fid
+        return (mid, fid)
+    finally
+        Base.unlock(lock)
+    end
+end
+
+function _encoding_cache!(session::SessionCache, key::UInt)
+    nshards = length(session.encoding)
+    idx = _session_shard_index(key, nshards)
+    shard = session.encoding[idx]
+    if Threads.nthreads() == 1
+        return get!(shard, key) do
+            EncodingCache()
+        end
+    end
+    lock = session.encoding_locks[idx]
+    Base.lock(lock)
+    try
+        return get!(shard, key) do
             EncodingCache()
         end
     finally
-        Base.unlock(session.lock)
+        Base.unlock(lock)
     end
 end
 
 _encoding_cache!(session::SessionCache, P) = _encoding_cache!(session, _poset_cache_key(P))
 
 function _module_cache!(session::SessionCache, key::Tuple{UInt,UInt})
-    Base.lock(session.lock)
+    nshards = length(session.modules)
+    idx = _session_shard_index(key, nshards)
+    shard = session.modules[idx]
+    if Threads.nthreads() == 1
+        return get!(shard, key) do
+            ModuleCache(key[1], key[2])
+        end
+    end
+    lock = session.module_locks[idx]
+    Base.lock(lock)
     try
-        return get!(session.modules, key) do
+        return get!(shard, key) do
             ModuleCache(key[1], key[2])
         end
     finally
-        Base.unlock(session.lock)
+        Base.unlock(lock)
     end
 end
 
-_module_cache!(session::SessionCache, M) = _module_cache!(session, _module_cache_key(M))
+_module_cache!(session::SessionCache, M) = _module_cache!(session, _module_cache_key(session, M))
 
 function _invalidate_encoding_cache!(session::SessionCache, key::UInt)
-    Base.lock(session.lock)
+    nshards = length(session.encoding)
+    idx = _session_shard_index(key, nshards)
+    shard = session.encoding[idx]
+    if Threads.nthreads() == 1
+        cache = pop!(shard, key, nothing)
+        cache === nothing || _clear_encoding_cache!(cache)
+        return nothing
+    end
+    lock = session.encoding_locks[idx]
+    Base.lock(lock)
     try
-        cache = pop!(session.encoding, key, nothing)
+        cache = pop!(shard, key, nothing)
         cache === nothing || _clear_encoding_cache!(cache)
     finally
-        Base.unlock(session.lock)
+        Base.unlock(lock)
     end
     return nothing
 end
@@ -1354,43 +839,101 @@ _invalidate_encoding_cache!(session::SessionCache, P) =
     _invalidate_encoding_cache!(session, _poset_cache_key(P))
 
 function _invalidate_module_cache!(session::SessionCache, key::Tuple{UInt,UInt})
-    Base.lock(session.lock)
+    nshards = length(session.modules)
+    idx = _session_shard_index(key, nshards)
+    shard = session.modules[idx]
+    if Threads.nthreads() == 1
+        cache = pop!(shard, key, nothing)
+        cache === nothing || _clear_module_cache!(cache)
+        return nothing
+    end
+    lock = session.module_locks[idx]
+    Base.lock(lock)
     try
-        cache = pop!(session.modules, key, nothing)
+        cache = pop!(shard, key, nothing)
         cache === nothing || _clear_module_cache!(cache)
     finally
-        Base.unlock(session.lock)
+        Base.unlock(lock)
     end
     return nothing
 end
 
 _invalidate_module_cache!(session::SessionCache, M) =
-    _invalidate_module_cache!(session, _module_cache_key(M))
+    _invalidate_module_cache!(session, _module_cache_key(session, M))
+
+function _session_encoding_values(session::SessionCache)
+    out = EncodingCache[]
+    for i in eachindex(session.encoding)
+        if Threads.nthreads() == 1
+            append!(out, values(session.encoding[i]))
+        else
+            Base.lock(session.encoding_locks[i])
+            try
+                append!(out, values(session.encoding[i]))
+            finally
+                Base.unlock(session.encoding_locks[i])
+            end
+        end
+    end
+    return out
+end
+
+function _session_module_values(session::SessionCache)
+    out = ModuleCache[]
+    for i in eachindex(session.modules)
+        if Threads.nthreads() == 1
+            append!(out, values(session.modules[i]))
+        else
+            Base.lock(session.module_locks[i])
+            try
+                append!(out, values(session.modules[i]))
+            finally
+                Base.unlock(session.module_locks[i])
+            end
+        end
+    end
+    return out
+end
+
+@inline _session_encoding_bucket_count(session::SessionCache) = sum(length, session.encoding)
+@inline _session_module_bucket_count(session::SessionCache) = sum(length, session.modules)
 
 @inline _session_resolution_cache(session::SessionCache) = session.resolution
 @inline _session_resolution_cache(session::SessionCache, M) = _module_cache!(session, M).resolution
 
 @inline _session_hom_cache(session::SessionCache) = session.hom_system
-@inline function _set_session_hom_cache!(session::SessionCache, cache)
+@inline function _set_session_hom_cache!(session::SessionCache, cache::AbstractHomSystemCache)
     session.hom_system = cache
     return cache
 end
 
 @inline _session_slice_plan_cache(session::SessionCache) = session.slice_plan
-@inline function _set_session_slice_plan_cache!(session::SessionCache, cache)
+@inline function _set_session_slice_plan_cache!(session::SessionCache, cache::AbstractSlicePlanCache)
     session.slice_plan = cache
     return cache
 end
+
+@inline _session_zn_encoding_artifact_count(session::SessionCache) = sum(length, session.zn_encoding_artifacts)
+@inline _session_zn_pushforward_plan_count(session::SessionCache) = sum(length, session.zn_pushforward_plan)
+@inline _session_zn_pushforward_fringe_count(session::SessionCache) = sum(length, session.zn_pushforward_fringe)
+@inline _session_zn_pushforward_module_count(session::SessionCache) = sum(length, session.zn_pushforward_module)
 
 @inline function _session_get_zn_pushforward_plan(session::SessionCache,
                                                   encoding_fp::UInt64,
                                                   flange_fp::UInt64)
     key = (encoding_fp, flange_fp)
-    Base.lock(session.lock)
+    nshards = length(session.zn_pushforward_plan)
+    idx = _session_shard_index(key, nshards)
+    shard = session.zn_pushforward_plan[idx]
+    if Threads.nthreads() == 1
+        return get(shard, key, nothing)
+    end
+    lock = session.zn_plan_locks[idx]
+    Base.lock(lock)
     try
-        return get(session.zn_pushforward_plan, key, nothing)
+        return get(shard, key, nothing)
     finally
-        Base.unlock(session.lock)
+        Base.unlock(lock)
     end
 end
 
@@ -1399,11 +942,22 @@ end
                                                    poset_kind::Symbol,
                                                    max_regions::Int)
     key = (encoding_fp, poset_kind, max_regions)
-    Base.lock(session.lock)
+    nshards = length(session.zn_encoding_artifacts)
+    idx = _session_shard_index(key, nshards)
+    shard = session.zn_encoding_artifacts[idx]
+    if Threads.nthreads() == 1
+        entry = get(shard, key, nothing)
+        entry === nothing && return nothing
+        return (P=entry.P, pi=entry.pi)
+    end
+    lock = session.zn_encoding_locks[idx]
+    Base.lock(lock)
     try
-        return get(session.zn_encoding_artifacts, key, nothing)
+        entry = get(shard, key, nothing)
+        entry === nothing && return nothing
+        return (P=entry.P, pi=entry.pi)
     finally
-        Base.unlock(session.lock)
+        Base.unlock(lock)
     end
 end
 
@@ -1413,13 +967,24 @@ end
                                                     max_regions::Int,
                                                     artifact)
     key = (encoding_fp, poset_kind, max_regions)
-    Base.lock(session.lock)
-    try
-        session.zn_encoding_artifacts[key] = artifact
-    finally
-        Base.unlock(session.lock)
+    nshards = length(session.zn_encoding_artifacts)
+    idx = _session_shard_index(key, nshards)
+    shard = session.zn_encoding_artifacts[idx]
+    payload = artifact isa NamedTuple{(:P,:pi)} ?
+        ZnEncodingArtifact{Any,Any}(artifact.P, artifact.pi) :
+        ZnEncodingArtifact{Any,Any}(getproperty(artifact, :P), getproperty(artifact, :pi))
+    if Threads.nthreads() == 1
+        shard[key] = payload
+    else
+        lock = session.zn_encoding_locks[idx]
+        Base.lock(lock)
+        try
+            shard[key] = payload
+        finally
+            Base.unlock(lock)
+        end
     end
-    return artifact
+    return (P=payload.P, pi=payload.pi)
 end
 
 @inline function _session_set_zn_pushforward_plan!(session::SessionCache,
@@ -1427,13 +992,29 @@ end
                                                    flange_fp::UInt64,
                                                    plan)
     key = (encoding_fp, flange_fp)
-    Base.lock(session.lock)
-    try
-        session.zn_pushforward_plan[key] = plan
-    finally
-        Base.unlock(session.lock)
+    nshards = length(session.zn_pushforward_plan)
+    idx = _session_shard_index(key, nshards)
+    shard = session.zn_pushforward_plan[idx]
+    flat_idxs = getproperty(plan, :flat_idxs)
+    inj_idxs = getproperty(plan, :inj_idxs)
+    zero_pairs = getproperty(plan, :zero_pairs)
+    payload = (
+        flat_idxs = flat_idxs isa Vector{Int} ? flat_idxs : Vector{Int}(flat_idxs),
+        inj_idxs = inj_idxs isa Vector{Int} ? inj_idxs : Vector{Int}(inj_idxs),
+        zero_pairs = zero_pairs isa Vector{Tuple{Int,Int}} ? zero_pairs : Vector{Tuple{Int,Int}}(zero_pairs),
+    )
+    if Threads.nthreads() == 1
+        shard[key] = payload
+    else
+        lock = session.zn_plan_locks[idx]
+        Base.lock(lock)
+        try
+            shard[key] = payload
+        finally
+            Base.unlock(lock)
+        end
     end
-    return plan
+    return payload
 end
 
 @inline function _session_get_zn_pushforward_fringe(session::SessionCache,
@@ -1442,11 +1023,20 @@ end
                                                     flange_fp::UInt64,
                                                     field_key::UInt)
     key = (encoding_fp, poset_kind, flange_fp, field_key)
-    Base.lock(session.lock)
+    nshards = length(session.zn_pushforward_fringe)
+    idx = _session_shard_index(key, nshards)
+    shard = session.zn_pushforward_fringe[idx]
+    if Threads.nthreads() == 1
+        entry = get(shard, key, nothing)
+        return entry === nothing ? nothing : entry.H
+    end
+    lock = session.zn_fringe_locks[idx]
+    Base.lock(lock)
     try
-        return get(session.zn_pushforward_fringe, key, nothing)
+        entry = get(shard, key, nothing)
+        return entry === nothing ? nothing : entry.H
     finally
-        Base.unlock(session.lock)
+        Base.unlock(lock)
     end
 end
 
@@ -1457,11 +1047,20 @@ end
                                                      field_key::UInt,
                                                      fringe)
     key = (encoding_fp, poset_kind, flange_fp, field_key)
-    Base.lock(session.lock)
-    try
-        session.zn_pushforward_fringe[key] = fringe
-    finally
-        Base.unlock(session.lock)
+    nshards = length(session.zn_pushforward_fringe)
+    idx = _session_shard_index(key, nshards)
+    shard = session.zn_pushforward_fringe[idx]
+    payload = ZnPushforwardFringeArtifact{Any}(fringe)
+    if Threads.nthreads() == 1
+        shard[key] = payload
+    else
+        lock = session.zn_fringe_locks[idx]
+        Base.lock(lock)
+        try
+            shard[key] = payload
+        finally
+            Base.unlock(lock)
+        end
     end
     return fringe
 end
@@ -1472,11 +1071,20 @@ end
                                                     flange_fp::UInt64,
                                                     field_key::UInt)
     key = (encoding_fp, poset_kind, flange_fp, field_key)
-    Base.lock(session.lock)
+    nshards = length(session.zn_pushforward_module)
+    idx = _session_shard_index(key, nshards)
+    shard = session.zn_pushforward_module[idx]
+    if Threads.nthreads() == 1
+        entry = get(shard, key, nothing)
+        return entry === nothing ? nothing : (H=entry.H, M=entry.M)
+    end
+    lock = session.zn_module_locks[idx]
+    Base.lock(lock)
     try
-        return get(session.zn_pushforward_module, key, nothing)
+        entry = get(shard, key, nothing)
+        return entry === nothing ? nothing : (H=entry.H, M=entry.M)
     finally
-        Base.unlock(session.lock)
+        Base.unlock(lock)
     end
 end
 
@@ -1487,13 +1095,24 @@ end
                                                      field_key::UInt,
                                                      mod)
     key = (encoding_fp, poset_kind, flange_fp, field_key)
-    Base.lock(session.lock)
-    try
-        session.zn_pushforward_module[key] = mod
-    finally
-        Base.unlock(session.lock)
+    nshards = length(session.zn_pushforward_module)
+    idx = _session_shard_index(key, nshards)
+    shard = session.zn_pushforward_module[idx]
+    payload = mod isa NamedTuple{(:H,:M)} ?
+        ZnPushforwardModuleArtifact{Any,Any}(mod.H, mod.M) :
+        ZnPushforwardModuleArtifact{Any,Any}(getproperty(mod, :H), getproperty(mod, :M))
+    if Threads.nthreads() == 1
+        shard[key] = payload
+    else
+        lock = session.zn_module_locks[idx]
+        Base.lock(lock)
+        try
+            shard[key] = payload
+        finally
+            Base.unlock(lock)
+        end
     end
-    return mod
+    return (H=payload.H, M=payload.M)
 end
 
 const _WORKFLOW_ENCODING_CACHE_KEY = typemax(UInt)
@@ -1518,30 +1137,6 @@ end
 @inline function _workflow_encoding_cache(session_cache::Union{Nothing,SessionCache})
     session_cache === nothing && return nothing
     return _encoding_cache!(session_cache, _WORKFLOW_ENCODING_CACHE_KEY)
-end
-
-@inline function _compile_encoding_cached(P, pi, session_cache::Union{Nothing,SessionCache})
-    if session_cache === nothing
-        # Keep a per-encoding cache even without a SessionCache so repeated
-        # geometry/invariant queries on one EncodingResult can reuse artifacts.
-        ec = EncodingCache()
-        return compile_encoding(P, pi; meta=(encoding_cache=ec,))
-    end
-    ec = _encoding_cache!(session_cache, P)
-    return compile_encoding(P, pi; meta=(encoding_cache=ec))
-end
-
-@inline function _encoding_with_session_cache(enc,
-                                              session_cache::Union{Nothing,SessionCache})
-    session_cache === nothing && return enc
-    raw_pi = enc.pi isa CompiledEncoding ? enc.pi.pi : enc.pi
-    pi2 = _compile_encoding_cached(enc.P, raw_pi, session_cache)
-    return EncodingResult(enc.P, enc.M, pi2;
-                          H=enc.H,
-                          presentation=enc.presentation,
-                          opts=enc.opts,
-                          backend=enc.backend,
-                          meta=enc.meta)
 end
 
 @inline function _resolution_cache_from_session(cache::Union{Nothing,ResolutionCache},
@@ -1570,353 +1165,67 @@ end
 end
 
 function _clear_session_cache!(session::SessionCache)
-    Base.lock(session.lock)
-    try
-        for c in values(session.encoding)
-            _clear_encoding_cache!(c)
+    for i in eachindex(session.encoding)
+        Base.lock(session.encoding_locks[i])
+        try
+            for c in values(session.encoding[i])
+                _clear_encoding_cache!(c)
+            end
+            empty!(session.encoding[i])
+        finally
+            Base.unlock(session.encoding_locks[i])
         end
-        for c in values(session.modules)
-            _clear_module_cache!(c)
+    end
+    for i in eachindex(session.modules)
+        Base.lock(session.module_locks[i])
+        try
+            for c in values(session.modules[i])
+                _clear_module_cache!(c)
+            end
+            empty!(session.modules[i])
+            empty!(session.module_field_keys[i])
+        finally
+            Base.unlock(session.module_locks[i])
         end
-        empty!(session.encoding)
-        empty!(session.modules)
-        _clear_resolution_cache!(session.resolution)
-        session.hom_system = nothing
-        session.slice_plan = nothing
-        empty!(session.zn_encoding_artifacts)
-        empty!(session.zn_pushforward_plan)
-        empty!(session.zn_pushforward_fringe)
-        empty!(session.zn_pushforward_module)
-        empty!(session.product_dense)
-        empty!(session.product_obj)
-    finally
-        Base.unlock(session.lock)
+    end
+    _clear_resolution_cache!(session.resolution)
+    session.hom_system = nothing
+    session.slice_plan = nothing
+    empty!(session.product_dense)
+    empty!(session.product_obj)
+    for i in eachindex(session.zn_encoding_artifacts)
+        Base.lock(session.zn_encoding_locks[i])
+        try
+            empty!(session.zn_encoding_artifacts[i])
+        finally
+            Base.unlock(session.zn_encoding_locks[i])
+        end
+    end
+    for i in eachindex(session.zn_pushforward_plan)
+        Base.lock(session.zn_plan_locks[i])
+        try
+            empty!(session.zn_pushforward_plan[i])
+        finally
+            Base.unlock(session.zn_plan_locks[i])
+        end
+    end
+    for i in eachindex(session.zn_pushforward_fringe)
+        Base.lock(session.zn_fringe_locks[i])
+        try
+            empty!(session.zn_pushforward_fringe[i])
+        finally
+            Base.unlock(session.zn_fringe_locks[i])
+        end
+    end
+    for i in eachindex(session.zn_pushforward_module)
+        Base.lock(session.zn_module_locks[i])
+        try
+            empty!(session.zn_pushforward_module[i])
+        finally
+            Base.unlock(session.zn_module_locks[i])
+        end
     end
     return nothing
 end
 
-
-# -----------------------------------------------------------------------------
-# Workflow / pipeline result objects
-
-"""
-    EncodingResult(P, M, pi; H=nothing, presentation=nothing,
-                  opts=EncodingOptions(), backend=opts.backend, meta=NamedTuple())
-
-Small workflow object representing the output of a user-facing `encode(...)`.
-
-Fields
-------
-- P : finite encoding poset
-- M : PModule on P
-- pi: classifier map from the original domain to P
-- H : optional FringeModule pushed down to P (kept to avoid recomputation)
-- presentation : optional original presentation object (Flange / PLFringe / ...)
-- opts : EncodingOptions used for the encoding
-- backend : backend actually used (Symbol)
-- meta : arbitrary metadata (NamedTuple recommended)
-"""
-struct EncodingResult{PType,MType,PiType,HType,PresType,MetaType}
-    P::PType
-    M::MType
-    pi::PiType
-    H::HType
-    presentation::PresType
-    opts::EncodingOptions
-    backend::Symbol
-    meta::MetaType
-end
-
-EncodingResult(P, M, pi;
-               H=nothing,
-               presentation=nothing,
-               opts::EncodingOptions=EncodingOptions(),
-               backend::Symbol=opts.backend,
-               meta=NamedTuple()) =
-    EncodingResult(P, M, pi, H, presentation, opts, backend, meta)
-
-"""
-    CohomologyDimsResult(P, dims, pi; degree=0, field=QQField(), meta=NamedTuple())
-
-Workflow object for dims-only cohomology output on an encoding poset.
-
-Fields
-------
-- P : finite encoding poset
-- dims : dimensions of `H^degree` at encoding vertices
-- pi : classifier map from original domain to P
-- degree : cohomological degree
-- field : coefficient field used for computation
-- meta : arbitrary metadata (NamedTuple recommended)
-"""
-struct CohomologyDimsResult{PType,DType,PiType,FType,MetaType}
-    P::PType
-    dims::DType
-    pi::PiType
-    degree::Int
-    field::FType
-    meta::MetaType
-end
-
-CohomologyDimsResult(P, dims, pi;
-                     degree::Int=0,
-                     field::AbstractCoeffField=QQField(),
-                     meta=NamedTuple()) =
-    CohomologyDimsResult(P, dims, pi, degree, field, meta)
-
-# Module materialization hook used by workflow objects.
-# Default is identity; subsystem modules can extend this for lazy wrappers.
-materialize_module(M) = M
-module_dims(M) = M.dims
-
-compile_encoding(enc::EncodingResult; kwargs...) =
-    enc.pi isa CompiledEncoding ? enc.pi : compile_encoding(enc.P, enc.pi; kwargs...)
-
-compile_encoding(enc::CohomologyDimsResult; kwargs...) =
-    enc.pi isa CompiledEncoding ? enc.pi : compile_encoding(enc.P, enc.pi; kwargs...)
-
-Base.length(::EncodingResult) = 3
-Base.IteratorSize(::Type{<:EncodingResult}) = Base.HasLength()
-
-function Base.iterate(enc::EncodingResult, state::Int=1)
-    state == 1 && return (enc.P, 2)
-    state == 2 && return (enc.M, 3)
-    state == 3 && return (enc.pi, 4)
-    return nothing
-end
-
-Base.length(::CohomologyDimsResult) = 3
-Base.IteratorSize(::Type{<:CohomologyDimsResult}) = Base.HasLength()
-
-function Base.iterate(enc::CohomologyDimsResult, state::Int=1)
-    state == 1 && return (enc.P, 2)
-    state == 2 && return (enc.dims, 3)
-    state == 3 && return (enc.pi, 4)
-    return nothing
-end
-
-@inline function _encoding_with_session_cache(enc::CohomologyDimsResult,
-                                              session_cache::Union{Nothing,SessionCache})
-    session_cache === nothing && return enc
-    raw_pi = enc.pi isa CompiledEncoding ? enc.pi.pi : enc.pi
-    pi2 = _compile_encoding_cached(enc.P, raw_pi, session_cache)
-    return CohomologyDimsResult(enc.P, enc.dims, pi2;
-                                degree=enc.degree,
-                                field=enc.field,
-                                meta=enc.meta)
-end
-
-"""
-    change_field(enc, field)
-
-Return an EncodingResult obtained by coercing stored modules into `field`.
-"""
-function change_field(enc::EncodingResult, field::AbstractCoeffField)
-    M2 = change_field(enc.M, field)
-    H2 = enc.H === nothing ? nothing : change_field(enc.H, field)
-    pres2 = enc.presentation
-    if pres2 !== nothing && hasmethod(change_field, (typeof(pres2), AbstractCoeffField))
-        pres2 = change_field(pres2, field)
-    end
-    return EncodingResult(enc.P, M2, enc.pi;
-                          H=H2,
-                          presentation=pres2,
-                          opts=enc.opts,
-                          backend=enc.backend,
-                          meta=enc.meta)
-end
-
-"""
-    change_field(enc, field)
-
-Return a CohomologyDimsResult with updated field metadata.
-Stored dimension vectors are field-independent.
-"""
-function change_field(enc::CohomologyDimsResult, field::AbstractCoeffField)
-    return CohomologyDimsResult(enc.P, copy(enc.dims), enc.pi;
-                                degree=enc.degree,
-                                field=field,
-                                meta=enc.meta)
-end
-
-unwrap(enc::EncodingResult) = (enc.P, enc.M, enc.pi)
-unwrap(enc::CohomologyDimsResult) = (enc.P, enc.dims, enc.pi)
-
-"""
-    ResolutionResult(res; enc=nothing, betti=nothing, minimality=nothing,
-                     opts=ResolutionOptions(), meta=NamedTuple())
-
-Workflow object storing a resolution computation (projective or injective) plus provenance.
-"""
-struct ResolutionResult{ResType,EncType,BettiType,MinType,MetaType}
-    res::ResType
-    enc::EncType
-    betti::BettiType
-    minimality::MinType
-    opts::ResolutionOptions
-    meta::MetaType
-end
-
-ResolutionResult(res;
-                 enc=nothing,
-                 betti=nothing,
-                 minimality=nothing,
-                 opts::ResolutionOptions=ResolutionOptions(),
-                 meta=NamedTuple()) =
-    ResolutionResult(res, enc, betti, minimality, opts, meta)
-
-unwrap(res::ResolutionResult) = res.res
-
-"""
-    InvariantResult(enc, which, value; opts=InvariantOptions(), meta=NamedTuple())
-
-Workflow object storing a computed invariant plus provenance.
-"""
-struct InvariantResult{EncType,WhichType,ValType,MetaType}
-    enc::EncType
-    which::WhichType
-    value::ValType
-    opts::InvariantOptions
-    meta::MetaType
-end
-
-InvariantResult(enc, which, value;
-                opts::InvariantOptions=InvariantOptions(),
-                meta=NamedTuple()) =
-    InvariantResult(enc, which, value, opts, meta)
-
-unwrap(inv::InvariantResult) = inv.value
-
-"""
-    change_field(res, field)
-
-Return a ResolutionResult with its stored resolution/encoding coerced into `field`
-when possible.
-"""
-function change_field(res::ResolutionResult, field::AbstractCoeffField)
-    enc2 = res.enc === nothing ? nothing : change_field(res.enc, field)
-    res2 = res.res
-    if res2 !== nothing && hasmethod(change_field, (typeof(res2), AbstractCoeffField))
-        res2 = change_field(res2, field)
-    end
-    return ResolutionResult(res2;
-                            enc=enc2,
-                            betti=res.betti,
-                            minimality=res.minimality,
-                            opts=res.opts,
-                            meta=res.meta)
-end
-
-"""
-    change_field(inv, field)
-
-Return an InvariantResult with its stored encoding coerced into `field`
-when possible.
-"""
-function change_field(inv::InvariantResult, field::AbstractCoeffField)
-    enc2 = change_field(inv.enc, field)
-    return InvariantResult(enc2, inv.which, inv.value; opts=inv.opts, meta=inv.meta)
-end
-
-
-end # module
-
-# =============================================================================
-# Stats
-#
-# Merged from the former src/Stats.jl to reduce file count.
-#
-# Important: this remains a sibling module `PosetModules.Stats` (not nested under
-# CoreModules) so that internal code can continue to write:
-#     using ..Stats: _wilson_interval
-# without any refactor churn.
-# =============================================================================
-module Stats
-
-# -----------------------------------------------------------------------------
-# Small statistics helpers (no external dependencies)
-# -----------------------------------------------------------------------------
-#
-# We avoid pulling in StatsFuns/Distributions to keep the dependency footprint
-# minimal while still supporting confidence intervals and z-scores.
-
-# Approximate inverse CDF for a standard normal distribution.
-# Based on Peter John Acklam's rational approximation (public domain).
-# Ref: http://home.online.no/~pjacklam/notes/invnorm/
-function _normal_quantile(p::Real)
-    if p <= 0
-        return -Inf
-    elseif p >= 1
-        return Inf
-    end
-
-    # Coefficients in rational approximations.
-    a = (-3.969683028665376e+01,
-          2.209460984245205e+02,
-         -2.759285104469687e+02,
-          1.383577518672690e+02,
-         -3.066479806614716e+01,
-          2.506628277459239e+00)
-
-    b = (-5.447609879822406e+01,
-          1.615858368580409e+02,
-         -1.556989798598866e+02,
-          6.680131188771972e+01,
-         -1.328068155288572e+01)
-
-    c = (-7.784894002430293e-03,
-         -3.223964580411365e-01,
-         -2.400758277161838e+00,
-         -2.549732539343734e+00,
-          4.374664141464968e+00,
-          2.938163982698783e+00)
-
-    d = ( 7.784695709041462e-03,
-          3.224671290700398e-01,
-          2.445134137142996e+00,
-          3.754408661907416e+00)
-
-    # Define break-points.
-    plow  = 0.02425
-    phigh = 1 - plow
-
-    if p < plow
-        # Rational approximation for lower region.
-        q = sqrt(-2*log(p))
-        return (((((c[1]*q + c[2])*q + c[3])*q + c[4])*q + c[5])*q + c[6]) /
-               ((((d[1]*q + d[2])*q + d[3])*q + d[4])*q + 1)
-    elseif p > phigh
-        # Rational approximation for upper region.
-        q = sqrt(-2*log(1 - p))
-        return -(((((c[1]*q + c[2])*q + c[3])*q + c[4])*q + c[5])*q + c[6]) /
-                ((((d[1]*q + d[2])*q + d[3])*q + d[4])*q + 1)
-    else
-        # Rational approximation for central region.
-        q = p - 0.5
-        r = q*q
-        return (((((a[1]*r + a[2])*r + a[3])*r + a[4])*r + a[5])*r + a[6])*q /
-               (((((b[1]*r + b[2])*r + b[3])*r + b[4])*r + b[5])*r + 1)
-    end
-end
-
-# Wilson score interval for a binomial proportion.
-@inline function _wilson_interval(x::Integer, n::Integer; alpha::Real=0.05)
-    if n <= 0
-        return (0.0, 1.0)
-    end
-    if x < 0 || x > n
-        throw(ArgumentError("x must satisfy 0 <= x <= n"))
-    end
-
-    z = _normal_quantile(1 - float(alpha)/2)
-    phat = x / n
-    denom = 1 + z^2 / n
-    center = (phat + z^2/(2n)) / denom
-    half = (z/denom) * sqrt((phat*(1 - phat) + z^2/(4n)) / n)
-
-    lo = max(0.0, center - half)
-    hi = min(1.0, center + half)
-    return (lo, hi)
-end
-
-end # module Stats
+end # module CoreModules

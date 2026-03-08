@@ -14,21 +14,21 @@ function _median_elapsed(f::Function; warmup::Int=1, reps::Int=5)
     return ts[cld(reps, 2)]
 end
 
-struct ToyPi <: PM.CoreModules.PLikeEncodingMap end
-CM.dimension(::ToyPi) = 1
-function CM.locate(::ToyPi, x::AbstractVector)
+struct ToyPi <: PM.EncodingCore.PLikeEncodingMap end
+EC.dimension(::ToyPi) = 1
+function EC.locate(::ToyPi, x::AbstractVector)
     length(x) == 1 || error("ToyPi expects a 1D point")
     return round(Int, float(x[1]))
 end
-function CM.locate(::ToyPi, x::NTuple{1,<:Real})
+function EC.locate(::ToyPi, x::NTuple{1,<:Real})
     return round(Int, float(x[1]))
 end
 
-struct ToyPi1DThresholds <: PM.CoreModules.PLikeEncodingMap end
-CM.dimension(::ToyPi1DThresholds) = 1
-CM.representatives(::ToyPi1DThresholds) = [(0.5,), (1.5,), (2.5,)]
-CM.axes_from_encoding(::ToyPi1DThresholds) = ([0.0, 1.0, 2.0, 3.0],)
-function CM.locate(::ToyPi1DThresholds, x::AbstractVector)
+struct ToyPi1DThresholds <: PM.EncodingCore.PLikeEncodingMap end
+EC.dimension(::ToyPi1DThresholds) = 1
+EC.representatives(::ToyPi1DThresholds) = [(0.5,), (1.5,), (2.5,)]
+EC.axes_from_encoding(::ToyPi1DThresholds) = ([0.0, 1.0, 2.0, 3.0],)
+function EC.locate(::ToyPi1DThresholds, x::AbstractVector)
     length(x) == 1 || error("ToyPi1DThresholds expects a 1D point")
     t = float(x[1])
     if t < 1.0
@@ -41,7 +41,7 @@ function CM.locate(::ToyPi1DThresholds, x::AbstractVector)
         return 0
     end
 end
-function CM.locate(::ToyPi1DThresholds, x::NTuple{1,<:Real})
+function EC.locate(::ToyPi1DThresholds, x::NTuple{1,<:Real})
     t = float(x[1])
     if t < 1.0
         return 1
@@ -54,11 +54,11 @@ function CM.locate(::ToyPi1DThresholds, x::NTuple{1,<:Real})
     end
 end
 
-struct ToyPi1DIntervals <: PM.CoreModules.PLikeEncodingMap end
-CM.dimension(::ToyPi1DIntervals) = 1
-CM.representatives(::ToyPi1DIntervals) = [(0.5,), (1.5,), (2.5,)]
-CM.axes_from_encoding(::ToyPi1DIntervals) = ([0.0, 1.0, 2.0, 3.0],)
-function CM.locate(::ToyPi1DIntervals, x::AbstractVector)
+struct ToyPi1DIntervals <: PM.EncodingCore.PLikeEncodingMap end
+EC.dimension(::ToyPi1DIntervals) = 1
+EC.representatives(::ToyPi1DIntervals) = [(0.5,), (1.5,), (2.5,)]
+EC.axes_from_encoding(::ToyPi1DIntervals) = ([0.0, 1.0, 2.0, 3.0],)
+function EC.locate(::ToyPi1DIntervals, x::AbstractVector)
     t = x[1]
     if 0.0 <= t < 1.0
         return 1
@@ -70,7 +70,7 @@ function CM.locate(::ToyPi1DIntervals, x::AbstractVector)
         return 0
     end
 end
-function CM.locate(::ToyPi1DIntervals, x::NTuple{1,<:Real})
+function EC.locate(::ToyPi1DIntervals, x::NTuple{1,<:Real})
     t = x[1]
     if 0.0 <= t < 1.0
         return 1
@@ -83,9 +83,9 @@ function CM.locate(::ToyPi1DIntervals, x::NTuple{1,<:Real})
     end
 end
 
-struct ToyPi2D <: PM.CoreModules.PLikeEncodingMap end
-CM.dimension(::ToyPi2D) = 2
-function CM.locate(::ToyPi2D, x::AbstractVector)
+struct ToyPi2D <: PM.EncodingCore.PLikeEncodingMap end
+EC.dimension(::ToyPi2D) = 2
+function EC.locate(::ToyPi2D, x::AbstractVector)
     length(x) == 2 || error("ToyPi2D expects a 2D point")
     eps = 1e-9
     i = floor(Int, float(x[1]) + eps)
@@ -93,15 +93,15 @@ function CM.locate(::ToyPi2D, x::AbstractVector)
     return 1 + i + 10 * j
 end
 
-struct ToyBoxes2D <: PM.CoreModules.PLikeEncodingMap
+struct ToyBoxes2D <: PM.EncodingCore.PLikeEncodingMap
     coords::NTuple{2,Vector{Float64}}
     reps::Vector{NTuple{2,Float64}}
 end
 
-CM.dimension(::ToyBoxes2D) = 2
-CM.representatives(pi::ToyBoxes2D) = pi.reps
-CM.axes_from_encoding(pi::ToyBoxes2D) = pi.coords
-function CM.locate(pi::ToyBoxes2D, x::AbstractVector{<:Real}; strict::Bool=true, closure::Bool=true)
+EC.dimension(::ToyBoxes2D) = 2
+EC.representatives(pi::ToyBoxes2D) = pi.reps
+EC.axes_from_encoding(pi::ToyBoxes2D) = pi.coords
+function EC.locate(pi::ToyBoxes2D, x::AbstractVector{<:Real}; strict::Bool=true, closure::Bool=true)
     x1 = x[1]
     x2 = x[2]
     if (x1 < 0.0) || (x1 > 3.0) || (x2 < 0.0) || (x2 > 3.0)
@@ -114,7 +114,7 @@ function CM.locate(pi::ToyBoxes2D, x::AbstractVector{<:Real}; strict::Bool=true,
         return 3
     end
 end
-function CM.locate(pi::ToyBoxes2D, x::NTuple{2,<:Real}; strict::Bool=true, closure::Bool=true)
+function EC.locate(pi::ToyBoxes2D, x::NTuple{2,<:Real}; strict::Bool=true, closure::Bool=true)
     x1 = x[1]
     x2 = x[2]
     if (x1 < 0.0) || (x1 > 3.0) || (x2 < 0.0) || (x2 > 3.0)
@@ -133,12 +133,12 @@ K = CM.coeff_type(field)
 @inline cf(x) = CM.coerce(field, x)
 
 @testset "PLikeEncodingMap dispatch hook" begin
-    @test PM.ZnEncoding.ZnEncodingMap <: PM.CoreModules.PLikeEncodingMap
-    @test PM.PLPolyhedra.PLEncodingMap    <: PM.CoreModules.PLikeEncodingMap
+    @test PM.ZnEncoding.ZnEncodingMap <: PM.EncodingCore.PLikeEncodingMap
+    @test PM.PLPolyhedra.PLEncodingMap    <: PM.EncodingCore.PLikeEncodingMap
 
     # PLBackend is optional at load time; only test if present.
     if isdefined(PosetModules, :PLBackend)
-        @test PosetModules.PLBackend.PLEncodingMapBoxes <: PM.CoreModules.PLikeEncodingMap
+        @test PosetModules.PLBackend.PLEncodingMapBoxes <: PM.EncodingCore.PLikeEncodingMap
     end
 end
 
@@ -485,7 +485,7 @@ end
     # `ZnEncodingMap`s are defined on the integer lattice Z^n, but generic
     # helpers may represent an integer lattice point as a float (e.g. `2.0`).
     # Such points should be accepted if they are integer-valued.
-    @test CM.locate(pi, [-2.0]) == CM.locate(pi, [-2])
+    @test EC.locate(pi, [-2.0]) == EC.locate(pi, [-2])
 
     opts = PM.InvariantOptions()
     chain, tvals = PM.slice_chain(pi, [-2], [1], opts; kmin=0, kmax=9)
@@ -1161,7 +1161,7 @@ end
 
         # Regression test: ZnEncodingMap.coords is axis-wise critical coordinates, so
         # axes_from_encoding(pi) must return an N-tuple where N == pi.n.
-        enc_axes = CM.axes_from_encoding(pi)
+        enc_axes = EC.axes_from_encoding(pi)
         @test length(enc_axes) == n
         @test enc_axes[1] == [-1, 0, 2, 4]
 
@@ -1178,11 +1178,11 @@ end
         @test rq_xy == Inv.rank_map(Menc, pi, qx, qy, rq_opts)
         @test Inv.rank_query(Menc, pi, qx, qy; opts=rq_opts, rq_cache=cache) == rq_xy
 
-        a = CM.locate(pi, qx)
-        b = CM.locate(pi, qy)
+        a = EC.locate(pi, qx)
+        b = EC.locate(pi, qy)
         @test Inv.rank_query(Menc, pi, a, b; rq_cache=cache) == Inv.rank_map(Menc, a, b)
 
-        pi_comp = PM.CoreModules.compile_encoding(Penc, pi)
+        pi_comp = PM.EncodingCore.compile_encoding(Penc, pi)
         @test Inv.rank_query(Menc, pi_comp, qx, qy, rq_opts; rq_cache=cache) == rq_xy
         @test Inv.rank_query(Menc, pi_comp, a, b; rq_cache=cache) == Inv.rank_map(Menc, a, b)
 
@@ -1202,7 +1202,7 @@ end
         @test sb_enc_1.axes == sb_enc_2.axes
 
         # encoding restriction should keep endpoints and only include encoding-axis points in between.
-        enc_axes = CM.axes_from_encoding(pi)[1]
+        enc_axes = EC.axes_from_encoding(pi)[1]
         @test first(sb_enc_1.axes[1]) == first(axes_user[1])
         @test last(sb_enc_1.axes[1]) == last(axes_user[1])
         @test all(v == first(axes_user[1]) || v == last(axes_user[1]) || (v in enc_axes) for v in sb_enc_1.axes[1])
@@ -1284,7 +1284,7 @@ end
 
         # Keep this branch lightweight: default witness/box behavior is what we
         # validate here; heavy distance kernels are covered elsewhere.
-        @test CM.dimension(pi2) == 2
+        @test EC.dimension(pi2) == 2
         @test length(M2.dims) == 1
 
         lo2, hi2 = Inv.encoding_box(pi2, opts2; margin=0.0)
@@ -1304,7 +1304,7 @@ end
     @test Inv.matching_wasserstein_distance_approx(M, M, pi, opts) == 0.0
 
     if PLP.HAVE_POLY && (field isa CM.QQField)
-        @test CM.dimension(pi2) == 2
+        @test EC.dimension(pi2) == 2
     end
 
     @testset "Exact 2D matching distance: deterministic and correct on a toy example" begin
@@ -1779,9 +1779,9 @@ end
     opts = PM.InvariantOptions(box=box)
 
     # Identify regions robustly using locate (avoid relying on ordering).
-    rL = CM.locate(pi, [-0.5])
-    rM = CM.locate(pi, [1.0])
-    rR = CM.locate(pi, [2.5])
+    rL = EC.locate(pi, [-0.5])
+    rM = EC.locate(pi, [1.0])
+    rR = EC.locate(pi, [2.5])
 
     @test isapprox(w[rL], 1.0; atol=1e-9)
     @test isapprox(w[rM], 2.0; atol=1e-9)
@@ -2052,8 +2052,8 @@ end
     opts_enc = PM.EncodingOptions()
     P, H, pi = PLB.encode_fringe_boxes(Ups, Downs, opts_enc)
 
-    r2 = CM.locate(pi, [0.5, 0.0])
-    r3 = CM.locate(pi, [2.0, 0.0])
+    r2 = EC.locate(pi, [0.5, 0.0])
+    r3 = EC.locate(pi, [2.0, 0.0])
 
     M23 = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, r2), FF.principal_downset(P, r3); field=field))
     M3  = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, r3), FF.principal_downset(P, r3); field=field))
@@ -2176,7 +2176,7 @@ end
     zax_drop = Inv.restrict_axes_to_encoding(([0, 2, 4],), zpi; keep_endpoints=false)
     @test 0 in zax_keep[1] && 4 in zax_keep[1]
     @test issubset(Set(zax_drop[1]), Set(zax_keep[1]))
-    @test all(x -> x in CM.axes_from_encoding(zpi)[1], zax_drop[1])
+    @test all(x -> x in EC.axes_from_encoding(zpi)[1], zax_drop[1])
 
     # ------------------------------------------------------------------
     # Graph primitives
@@ -2233,8 +2233,8 @@ end
     Ups = [PLB.BoxUpset([0.0, -10.0]), PLB.BoxUpset([1.0, -10.0])]
     Downs = PLB.BoxDownset[]
     P2, _, pi2 = PLB.encode_fringe_boxes(Ups, Downs, PM.EncodingOptions())
-    r2 = CM.locate(pi2, [0.5, 0.0])
-    r3 = CM.locate(pi2, [2.0, 0.0])
+    r2 = EC.locate(pi2, [0.5, 0.0])
+    r3 = EC.locate(pi2, [2.0, 0.0])
 
     M2 = IR.pmodule_from_fringe(one_by_one_fringe(P2, FF.principal_upset(P2, r2), FF.principal_downset(P2, r3); field=field))
     M3 = IR.pmodule_from_fringe(one_by_one_fringe(P2, FF.principal_upset(P2, r3), FF.principal_downset(P2, r3); field=field))

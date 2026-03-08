@@ -52,6 +52,7 @@
 #   julia --project=. benchmark/data_ingestion_microbench.jl --cache_hit_skip_lazy_probe=1 --include_synthetic=0 --include_external=0
 #   julia --project=. benchmark/data_ingestion_microbench.jl --plan_norm_cache_probe=1 --include_synthetic=0 --include_external=0
 #   julia --project=. benchmark/data_ingestion_microbench.jl --boundary_kernel_probe=1 --include_synthetic=0 --include_external=0
+#   julia --project=. benchmark/data_ingestion_microbench.jl --pointcloud_lowdim_radius_stream_probe=1 --include_synthetic=0 --include_external=0
 #   julia --project=. benchmark/data_ingestion_microbench.jl --monotone_rank_probe=1 --include_synthetic=0 --include_external=0
 #   julia --project=. benchmark/data_ingestion_microbench.jl --monotone_incremental_probe=1 --include_synthetic=0 --include_external=0
 #   julia --project=. benchmark/data_ingestion_microbench.jl --degree_local_all_t_probe=1 --include_synthetic=0 --include_external=0
@@ -60,6 +61,11 @@
 #   julia --project=. benchmark/data_ingestion_microbench.jl --packed_edgelist_probe=1 --include_synthetic=0 --include_external=0
 #   julia --project=. benchmark/data_ingestion_microbench.jl --structural_kernel_probe=1 --include_synthetic=0 --include_external=0
 #   julia --project=. benchmark/data_ingestion_microbench.jl --active_list_chain_probe=1 --include_synthetic=0 --include_external=0
+#   julia --project=. benchmark/data_ingestion_microbench.jl --delaunay_cache_probe=1 --include_synthetic=0 --include_external=0
+#   julia --project=. benchmark/data_ingestion_microbench.jl --delaunay_simplextree_fusion_probe=1 --include_synthetic=0 --include_external=0
+#   julia --project=. benchmark/data_ingestion_microbench.jl --core_numbers_probe=1 --include_synthetic=0 --include_external=0
+#   julia --project=. benchmark/data_ingestion_microbench.jl --landmark_radius_probe=1 --include_synthetic=0 --include_external=0
+#   julia --project=. benchmark/data_ingestion_microbench.jl --cubical_2d_probe=1 --include_synthetic=0 --include_external=0
 
 using Dates
 using DelimitedFiles
@@ -570,6 +576,16 @@ function _synthetic_cases(; point_n::Int, graph_n::Int, clique_n::Int, image_sid
         PosetModules.FiltrationSpec(kind=:rhomboid, max_dim=1, vertex_values=pvals),
         0,
     ))
+    rhomboid2_n = min(point_n, 52)
+    point_rhomboid2 = PosetModules.PointCloud(point_data.points[1:rhomboid2_n])
+    pvals_r2 = pvals[1:rhomboid2_n]
+    push!(cases, IngestionBenchCase(
+        "point_rhomboid_d2",
+        :point,
+        point_rhomboid2,
+        PosetModules.FiltrationSpec(kind=:rhomboid, max_dim=2, vertex_values=pvals_r2),
+        0,
+    ))
     point_tree_data = PosetModules.encode(
         point_data,
         PosetModules.FiltrationSpec(
@@ -693,6 +709,13 @@ function _synthetic_cases(; point_n::Int, graph_n::Int, clique_n::Int, image_sid
         :graph,
         graph_data,
         PosetModules.FiltrationSpec(kind=:edge_weighted, edge_weights=graph_data.weights),
+        0,
+    ))
+    push!(cases, IngestionBenchCase(
+        "graph_core",
+        :graph,
+        graph_data,
+        PosetModules.FiltrationSpec(kind=:core, vertex_values=gvals),
         0,
     ))
 
@@ -1365,6 +1388,58 @@ function _run_pointcloud_dense_stream_probe(; reps::Int, quick::Bool)
     )
 end
 
+function _run_pointcloud_lowdim_radius_stream_probe(; reps::Int, quick::Bool)
+    n = quick ? 900 : 2000
+    radius = quick ? 1.5 : 2.0
+    density_k = 16
+    budget = (max_simplices=6_000_000, max_edges=6_000_000, memory_budget_bytes=8_000_000_000)
+
+    function _run_dim_probe(d::Int)
+        rng = MersenneTwister(Int(0xD4A4F + 31 * d))
+        pts = [randn(rng, d) for _ in 1:n]
+        data = PosetModules.PointCloud(pts)
+        spec = PosetModules.FiltrationSpec(
+            kind=:rips_density,
+            max_dim=1,
+            radius=radius,
+            density_k=density_k,
+            nn_backend=:auto,
+            construction=PosetModules.ConstructionOptions(;
+                sparsify=:none,
+                output_stage=:simplex_tree,
+                budget=budget,
+            ),
+        )
+        old_stream = DI._POINTCLOUD_LOWDIM_RADIUS_STREAMING[]
+        streamed = dense = nothing
+        try
+            DI._POINTCLOUD_LOWDIM_RADIUS_STREAMING[] = true
+            streamed = _bench("  lowdim radius stream on  (d=$(d))",
+                              () -> PosetModules.encode(data, spec; degree=0, cache=:auto, stage=:simplex_tree);
+                              reps=reps)
+            DI._POINTCLOUD_LOWDIM_RADIUS_STREAMING[] = false
+            dense = _bench("  lowdim radius stream off (d=$(d))",
+                           () -> PosetModules.encode(data, spec; degree=0, cache=:auto, stage=:simplex_tree);
+                           reps=reps)
+        finally
+            DI._POINTCLOUD_LOWDIM_RADIUS_STREAMING[] = old_stream
+        end
+        println("  stream_on/stream_off time ratio (d=$(d))=", round(streamed.med_ms / max(dense.med_ms, 1e-12), digits=3), "x")
+        println("  stream_on/stream_off alloc ratio (d=$(d))=", round(streamed.med_kib / max(dense.med_kib, 1e-12), digits=3), "x")
+        return (
+            (case="pointcloud_lowdim_radius_stream_probe_d$(d)", family="point", stage="simplex_tree", cache_mode="stream_on",
+             med_ms=streamed.med_ms, p90_ms=streamed.p90_ms, med_kib=streamed.med_kib),
+            (case="pointcloud_lowdim_radius_stream_probe_d$(d)", family="point", stage="simplex_tree", cache_mode="stream_off_densefilter",
+             med_ms=dense.med_ms, p90_ms=dense.p90_ms, med_kib=dense.med_kib),
+        )
+    end
+
+    println("\n[probe] point-cloud lowdim finite-radius streaming  n=$(n), radius=$(radius), k=$(density_k)")
+    out2 = _run_dim_probe(2)
+    out8 = _run_dim_probe(8)
+    return (out2..., out8...)
+end
+
 function _run_pointcloud_dim2_kernel_probe(; reps::Int, quick::Bool)
     n = quick ? 72 : 120
     data = _point_cloud_fixture(n; seed=Int(0xD4A4C))
@@ -1405,6 +1480,365 @@ function _run_pointcloud_dim2_kernel_probe(; reps::Int, quick::Bool)
          med_ms=packed_on.med_ms, p90_ms=packed_on.p90_ms, med_kib=packed_on.med_kib),
         (case="pointcloud_dim2_kernel_probe_rips_d2", family="point", stage="simplex_tree", cache_mode="packed_off",
          med_ms=packed_off.med_ms, p90_ms=packed_off.p90_ms, med_kib=packed_off.med_kib),
+    )
+end
+
+function _run_delaunay_cache_probe(; reps::Int, quick::Bool)
+    n = quick ? 320 : 960
+    data = _point_cloud_fixture(n; seed=Int(0xD4B0))
+    spec = PosetModules.FiltrationSpec(
+        kind=:alpha,
+        max_dim=2,
+        delaunay_backend=:auto,
+        construction=PosetModules.ConstructionOptions(;
+            output_stage=:simplex_tree,
+            budget=(max_simplices=4_000_000, max_edges=4_000_000, memory_budget_bytes=8_000_000_000),
+        ),
+    )
+    println("\n[probe] Delaunay packed cache behavior (alpha, n=$(n))")
+    old_cache = DI._POINTCLOUD_DELAUNAY_CACHE_ENABLED[]
+    miss = hit = uncached = nothing
+    try
+        DI._POINTCLOUD_DELAUNAY_CACHE_ENABLED[] = true
+        DI._clear_pointcloud_delaunay_cache!()
+        miss = _bench("  packed Delaunay cache miss",
+                      () -> begin
+                          DI._clear_pointcloud_delaunay_cache!()
+                          DI._packed_delaunay_simplices(data.points, spec; max_dim=2)
+                          nothing
+                      end;
+                      reps=reps)
+
+        DI._clear_pointcloud_delaunay_cache!()
+        DI._packed_delaunay_simplices(data.points, spec; max_dim=2)
+        hit = _bench("  packed Delaunay cache hit",
+                     () -> begin
+                         DI._packed_delaunay_simplices(data.points, spec; max_dim=2)
+                         nothing
+                     end;
+                     reps=reps)
+
+        DI._POINTCLOUD_DELAUNAY_CACHE_ENABLED[] = false
+        uncached = _bench("  packed Delaunay cache disabled",
+                          () -> begin
+                              DI._packed_delaunay_simplices(data.points, spec; max_dim=2)
+                              nothing
+                          end;
+                          reps=reps)
+    finally
+        DI._POINTCLOUD_DELAUNAY_CACHE_ENABLED[] = old_cache
+        DI._clear_pointcloud_delaunay_cache!()
+    end
+    println("  hit/miss time ratio=", round(hit.med_ms / max(miss.med_ms, 1e-12), digits=4), "x")
+    println("  hit/uncached time ratio=", round(hit.med_ms / max(uncached.med_ms, 1e-12), digits=4), "x")
+    return (
+        (case="delaunay_cache_probe_alpha_d2", family="point", stage="simplex_tree", cache_mode="cache_miss",
+         med_ms=miss.med_ms, p90_ms=miss.p90_ms, med_kib=miss.med_kib),
+        (case="delaunay_cache_probe_alpha_d2", family="point", stage="simplex_tree", cache_mode="cache_hit",
+         med_ms=hit.med_ms, p90_ms=hit.p90_ms, med_kib=hit.med_kib),
+        (case="delaunay_cache_probe_alpha_d2", family="point", stage="simplex_tree", cache_mode="cache_disabled",
+         med_ms=uncached.med_ms, p90_ms=uncached.p90_ms, med_kib=uncached.med_kib),
+    )
+end
+
+function _run_delaunay_simplextree_fusion_probe(; reps::Int, quick::Bool)
+    n = quick ? 1200 : 3200
+    data = _point_cloud_fixture(n; seed=Int(0xD4B2))
+    pts = data.points
+    vvals = [p[1] + 2p[2] for p in pts]
+    aspec = PosetModules.FiltrationSpec(
+        kind=:alpha,
+        max_dim=2,
+        delaunay_backend=:auto,
+        construction=PosetModules.ConstructionOptions(;
+            output_stage=:simplex_tree,
+            budget=(max_simplices=4_000_000, max_edges=4_000_000, memory_budget_bytes=8_000_000_000),
+        ),
+    )
+    dspec = PosetModules.FiltrationSpec(
+        kind=:delaunay_lower_star,
+        max_dim=2,
+        delaunay_backend=:auto,
+        vertex_values=vvals,
+        simplex_agg=:max,
+        construction=PosetModules.ConstructionOptions(;
+            output_stage=:simplex_tree,
+            budget=(max_simplices=4_000_000, max_edges=4_000_000, memory_budget_bytes=8_000_000_000),
+        ),
+    )
+
+    old_alpha = () -> begin
+        packed = DI._packed_delaunay_simplices(pts, aspec; max_dim=2)
+        ne = length(packed.edges)
+        nt = length(packed.triangles)
+        grades = Vector{NTuple{1,Float64}}(undef, n + ne + nt)
+        t = 1
+        @inbounds for _ in 1:n
+            grades[t] = (0.0,)
+            t += 1
+        end
+        @inbounds for idx in 1:ne
+            grades[t] = (packed.edge_radius[idx],)
+            t += 1
+        end
+        @inbounds for idx in 1:nt
+            grades[t] = (packed.tri_radius[idx],)
+            t += 1
+        end
+        DI._materialize_point_cloud_dim012(n, packed.edges, packed.triangles, grades, aspec; return_simplex_tree=true)
+    end
+    new_alpha = () -> PosetModules.encode(data, aspec; degree=0, stage=:simplex_tree)
+
+    old_delaunay = () -> begin
+        packed = DI._packed_delaunay_simplices(pts, dspec; max_dim=2)
+        ne = length(packed.edges)
+        nt = length(packed.triangles)
+        grades = Vector{NTuple{1,Float64}}(undef, n + ne + nt)
+        t = 1
+        @inbounds for v in 1:n
+            grades[t] = (vvals[v],)
+            t += 1
+        end
+        @inbounds for idx in 1:ne
+            i, j = packed.edges[idx]
+            grades[t] = (DI._aggregate_pair(vvals[i], vvals[j], :max),)
+            t += 1
+        end
+        @inbounds for idx in 1:nt
+            i, j, k = packed.triangles[idx]
+            grades[t] = (DI._aggregate_triple(vvals[i], vvals[j], vvals[k], :max),)
+            t += 1
+        end
+        DI._materialize_point_cloud_dim012(n, packed.edges, packed.triangles, grades, dspec; return_simplex_tree=true)
+    end
+    new_delaunay = () -> PosetModules.encode(data, dspec; degree=0, stage=:simplex_tree)
+
+    println("\n[probe] Delaunay simplex-tree fused path (n=$(n))")
+    alpha_old = _bench("  alpha simplex_tree old-emulated", old_alpha; reps=reps)
+    alpha_new = _bench("  alpha simplex_tree fused", new_alpha; reps=reps)
+    println("  alpha fused/old ratio=", round(alpha_new.med_ms / max(alpha_old.med_ms, 1e-12), digits=3), "x")
+    del_old = _bench("  delaunay simplex_tree old-emulated", old_delaunay; reps=reps)
+    del_new = _bench("  delaunay simplex_tree fused", new_delaunay; reps=reps)
+    println("  delaunay fused/old ratio=", round(del_new.med_ms / max(del_old.med_ms, 1e-12), digits=3), "x")
+    return (
+        (case="delaunay_simplextree_fusion_probe_alpha", family="point", stage="simplex_tree", cache_mode="old_emulated",
+         med_ms=alpha_old.med_ms, p90_ms=alpha_old.p90_ms, med_kib=alpha_old.med_kib),
+        (case="delaunay_simplextree_fusion_probe_alpha", family="point", stage="simplex_tree", cache_mode="fused",
+         med_ms=alpha_new.med_ms, p90_ms=alpha_new.p90_ms, med_kib=alpha_new.med_kib),
+        (case="delaunay_simplextree_fusion_probe_delaunay", family="point", stage="simplex_tree", cache_mode="old_emulated",
+         med_ms=del_old.med_ms, p90_ms=del_old.p90_ms, med_kib=del_old.med_kib),
+        (case="delaunay_simplextree_fusion_probe_delaunay", family="point", stage="simplex_tree", cache_mode="fused",
+         med_ms=del_new.med_ms, p90_ms=del_new.p90_ms, med_kib=del_new.med_kib),
+    )
+end
+
+function _run_core_numbers_probe(; reps::Int, quick::Bool)
+    function _core_numbers_naive(n::Int, edges::Vector{NTuple{2,Int}})
+        adj = [Int[] for _ in 1:n]
+        for (u, v) in edges
+            u == v && continue
+            push!(adj[u], v)
+            push!(adj[v], u)
+        end
+        deg = [length(adj[v]) for v in 1:n]
+        alive = trues(n)
+        core = zeros(Int, n)
+        remaining = n
+        k = 0
+        while remaining > 0
+            peeled = false
+            for v in 1:n
+                if alive[v] && deg[v] <= k
+                    alive[v] = false
+                    core[v] = k
+                    remaining -= 1
+                    peeled = true
+                    for w in adj[v]
+                        alive[w] && (deg[w] -= 1)
+                    end
+                end
+            end
+            peeled || (k += 1)
+        end
+        return core
+    end
+
+    n = quick ? 6000 : 12000
+    m_extra = quick ? 20_000 : 60_000
+    rng = MersenneTwister(Int(0xD4B3))
+    edges = NTuple{2,Int}[]
+    seen = Set{NTuple{2,Int}}()
+    sizehint!(edges, n + m_extra)
+    sizehint!(seen, n + m_extra)
+    for i in 1:(n - 1)
+        e = (i, i + 1)
+        push!(edges, e)
+        push!(seen, e)
+    end
+    while length(edges) < (n - 1 + m_extra)
+        u = rand(rng, 1:n)
+        v = rand(rng, 1:n)
+        u == v && continue
+        a, b = min(u, v), max(u, v)
+        e = (a, b)
+        e in seen && continue
+        push!(seen, e)
+        push!(edges, e)
+    end
+
+    println("\n[probe] core-number kernel (n=$(n), m=$(length(edges)))")
+    naive = _bench("  core_numbers naive",
+                   () -> _core_numbers_naive(n, edges);
+                   reps=reps)
+    linear = _bench("  core_numbers linear",
+                    () -> DI._core_numbers(n, edges);
+                    reps=reps)
+    println("  linear/naive time ratio=", round(linear.med_ms / max(naive.med_ms, 1e-12), digits=3), "x")
+    return (
+        (case="core_numbers_probe", family="graph", stage="graded_complex", cache_mode="naive",
+         med_ms=naive.med_ms, p90_ms=naive.p90_ms, med_kib=naive.med_kib),
+        (case="core_numbers_probe", family="graph", stage="graded_complex", cache_mode="linear",
+         med_ms=linear.med_ms, p90_ms=linear.p90_ms, med_kib=linear.med_kib),
+    )
+end
+
+function _run_landmark_radius_probe(; reps::Int, quick::Bool)
+    n = quick ? 10_000 : 50_000
+    m = quick ? 160 : 224
+    radius = quick ? 0.24 : 0.24
+    data = _point_cloud_fixture(n; seed=Int(0xD4B5))
+    rng = MersenneTwister(Int(0xD4B6))
+    landmarks = sort!(randperm(rng, n)[1:m])
+
+    spec_auto = PosetModules.FiltrationSpec(
+        kind=:landmark_rips,
+        max_dim=1,
+        landmarks=landmarks,
+        radius=radius,
+        construction=PosetModules.ConstructionOptions(;
+            output_stage=:simplex_tree,
+        ),
+    )
+    spec_explicit = PosetModules.FiltrationSpec(
+        kind=:landmark_rips,
+        max_dim=1,
+        landmarks=landmarks,
+        radius=radius,
+        construction=PosetModules.ConstructionOptions(;
+            sparsify=:radius,
+            output_stage=:simplex_tree,
+        ),
+    )
+
+    # Contract parity: default landmark+radius normalization should match explicit sparse radius.
+    st_auto = PosetModules.encode(data, spec_auto; degree=0, stage=:simplex_tree)
+    st_explicit = PosetModules.encode(data, spec_explicit; degree=0, stage=:simplex_tree)
+    DI.simplex_count(st_auto) == DI.simplex_count(st_explicit) ||
+        error("landmark_radius_probe parity mismatch: normalized vs explicit sparse radius simplex counts differ.")
+
+    println("\n[probe] landmark+radii normalization + subgraph cache (n=$(n), m=$(m), radius=$(radius))")
+    auto = _bench("  landmark auto-normalized",
+                  () -> PosetModules.encode(data, spec_auto; degree=0, stage=:simplex_tree, cache=:auto);
+                  reps=reps)
+    explicit = _bench("  landmark explicit sparse radius",
+                      () -> PosetModules.encode(data, spec_explicit; degree=0, stage=:simplex_tree, cache=:auto);
+                      reps=reps)
+    println("  auto/explicit time ratio=", round(auto.med_ms / max(explicit.med_ms, 1e-12), digits=3), "x")
+
+    sc = CM.SessionCache()
+    miss = _bench("  landmark subgraph cache miss",
+                  () -> begin
+                      CM._clear_session_cache!(sc)
+                      PosetModules.encode(data, spec_auto; degree=0, stage=:simplex_tree, cache=sc)
+                      nothing
+                  end;
+                  reps=reps)
+    PosetModules.encode(data, spec_auto; degree=0, stage=:simplex_tree, cache=sc)
+    hit = _bench("  landmark subgraph cache hit",
+                 () -> begin
+                     PosetModules.encode(data, spec_auto; degree=0, stage=:simplex_tree, cache=sc)
+                     nothing
+                 end;
+                 reps=reps)
+    println("  cache hit/miss time ratio=", round(hit.med_ms / max(miss.med_ms, 1e-12), digits=3), "x")
+
+    return (
+        (case="landmark_radius_probe", family="point", stage="simplex_tree", cache_mode="auto_normalized",
+         med_ms=auto.med_ms, p90_ms=auto.p90_ms, med_kib=auto.med_kib),
+        (case="landmark_radius_probe", family="point", stage="simplex_tree", cache_mode="explicit_sparse_radius",
+         med_ms=explicit.med_ms, p90_ms=explicit.p90_ms, med_kib=explicit.med_kib),
+        (case="landmark_radius_probe", family="point", stage="simplex_tree", cache_mode="session_cache_miss",
+         med_ms=miss.med_ms, p90_ms=miss.p90_ms, med_kib=miss.med_kib),
+        (case="landmark_radius_probe", family="point", stage="simplex_tree", cache_mode="session_cache_hit",
+         med_ms=hit.med_ms, p90_ms=hit.p90_ms, med_kib=hit.med_kib),
+    )
+end
+
+function _run_cubical_2d_probe(; reps::Int, quick::Bool)
+    side = quick ? 80 : 128
+    data, mask = _image_fixture(side; seed=Int(0xD4C1))
+    spec_cub = PosetModules.FiltrationSpec(
+        kind=:cubical,
+        construction=PosetModules.ConstructionOptions(; output_stage=:graded_complex),
+    )
+    spec_bi = PosetModules.FiltrationSpec(
+        kind=:image_distance_bifiltration,
+        mask=mask,
+        construction=PosetModules.ConstructionOptions(; output_stage=:graded_complex),
+    )
+
+    old_fast = DI._CUBICAL_2D_FASTPATH[]
+    fast_cub = slow_cub = fast_bi = slow_bi = nothing
+    try
+        DI._CUBICAL_2D_FASTPATH[] = false
+        G_cub_slow = PosetModules.encode(data, spec_cub; degree=0, stage=:graded_complex, cache=:auto)
+        G_bi_slow = PosetModules.encode(data, spec_bi; degree=0, stage=:graded_complex, cache=:auto)
+
+        DI._CUBICAL_2D_FASTPATH[] = true
+        G_cub_fast = PosetModules.encode(data, spec_cub; degree=0, stage=:graded_complex, cache=:auto)
+        G_bi_fast = PosetModules.encode(data, spec_bi; degree=0, stage=:graded_complex, cache=:auto)
+
+        (G_cub_fast.cells_by_dim == G_cub_slow.cells_by_dim &&
+         G_cub_fast.boundaries == G_cub_slow.boundaries &&
+         G_cub_fast.grades == G_cub_slow.grades) ||
+            error("cubical_2d_probe parity mismatch: cubical fast path output differs from generic.")
+        (G_bi_fast.cells_by_dim == G_bi_slow.cells_by_dim &&
+         G_bi_fast.boundaries == G_bi_slow.boundaries &&
+         G_bi_fast.grades == G_bi_slow.grades) ||
+            error("cubical_2d_probe parity mismatch: image_distance fast path output differs from generic.")
+
+        DI._CUBICAL_2D_FASTPATH[] = true
+        fast_cub = _bench("  cubical 2D fast path on",
+                          () -> PosetModules.encode(data, spec_cub; degree=0, stage=:graded_complex, cache=:auto);
+                          reps=reps)
+        fast_bi = _bench("  image_distance 2D fast path on",
+                         () -> PosetModules.encode(data, spec_bi; degree=0, stage=:graded_complex, cache=:auto);
+                         reps=reps)
+
+        DI._CUBICAL_2D_FASTPATH[] = false
+        slow_cub = _bench("  cubical 2D fast path off (generic)",
+                          () -> PosetModules.encode(data, spec_cub; degree=0, stage=:graded_complex, cache=:auto);
+                          reps=reps)
+        slow_bi = _bench("  image_distance 2D fast path off (generic)",
+                         () -> PosetModules.encode(data, spec_bi; degree=0, stage=:graded_complex, cache=:auto);
+                         reps=reps)
+    finally
+        DI._CUBICAL_2D_FASTPATH[] = old_fast
+    end
+
+    println("\n[probe] cubical/image 2D fast path (side=$(side))")
+    println("  cubical on/off time ratio=", round(fast_cub.med_ms / max(slow_cub.med_ms, 1e-12), digits=3), "x")
+    println("  image_distance on/off time ratio=", round(fast_bi.med_ms / max(slow_bi.med_ms, 1e-12), digits=3), "x")
+
+    return (
+        (case="cubical_2d_probe", family="image", stage="graded_complex", cache_mode="fast_on_cubical",
+         med_ms=fast_cub.med_ms, p90_ms=fast_cub.p90_ms, med_kib=fast_cub.med_kib),
+        (case="cubical_2d_probe", family="image", stage="graded_complex", cache_mode="fast_off_cubical",
+         med_ms=slow_cub.med_ms, p90_ms=slow_cub.p90_ms, med_kib=slow_cub.med_kib),
+        (case="cubical_2d_probe", family="image", stage="graded_complex", cache_mode="fast_on_image_distance",
+         med_ms=fast_bi.med_ms, p90_ms=fast_bi.p90_ms, med_kib=fast_bi.med_kib),
+        (case="cubical_2d_probe", family="image", stage="graded_complex", cache_mode="fast_off_image_distance",
+         med_ms=slow_bi.med_ms, p90_ms=slow_bi.p90_ms, med_kib=slow_bi.med_kib),
     )
 end
 
@@ -2555,11 +2989,17 @@ function main(; reps::Int=6,
               packed_edgelist_probe::Bool=false,
               structural_kernel_probe::Bool=false,
               active_list_chain_probe::Bool=false,
+              delaunay_cache_probe::Bool=false,
+              delaunay_simplextree_fusion_probe::Bool=false,
+              core_numbers_probe::Bool=false,
+              landmark_radius_probe::Bool=false,
+              cubical_2d_probe::Bool=false,
               dims_only_probe::Bool=false,
               solve_loop_probe::Bool=false,
               cache_hit_skip_lazy_probe::Bool=false,
               plan_norm_cache_probe::Bool=false,
-              boundary_kernel_probe::Bool=false)
+              boundary_kernel_probe::Bool=false,
+              pointcloud_lowdim_radius_stream_probe::Bool=false)
     stage_list = if stages == :both
         [:graded_complex, :encoding_result]
     elseif stages == :graded
@@ -2623,10 +3063,16 @@ function main(; reps::Int=6,
         !encoding_result_lazy_probe &&
         !structural_map_probe && !packed_edgelist_probe &&
         !structural_kernel_probe && !active_list_chain_probe &&
+        !delaunay_cache_probe &&
+        !delaunay_simplextree_fusion_probe &&
+        !core_numbers_probe &&
+        !landmark_radius_probe &&
+        !cubical_2d_probe &&
         !dims_only_probe &&
         !solve_loop_probe &&
         !cache_hit_skip_lazy_probe && !plan_norm_cache_probe &&
         !boundary_kernel_probe &&
+        !pointcloud_lowdim_radius_stream_probe &&
         error("No benchmark cases selected. family=$(family), include_synthetic=$(include_synthetic), include_external=$(include_external).")
 
     println("Data ingestion micro-benchmark")
@@ -2727,6 +3173,21 @@ function main(; reps::Int=6,
     if active_list_chain_probe
         append!(results, _run_active_list_chain_probe(; reps=reps, quick=quick))
     end
+    if delaunay_cache_probe
+        append!(results, _run_delaunay_cache_probe(; reps=reps, quick=quick))
+    end
+    if delaunay_simplextree_fusion_probe
+        append!(results, _run_delaunay_simplextree_fusion_probe(; reps=reps, quick=quick))
+    end
+    if core_numbers_probe
+        append!(results, _run_core_numbers_probe(; reps=reps, quick=quick))
+    end
+    if landmark_radius_probe
+        append!(results, _run_landmark_radius_probe(; reps=reps, quick=quick))
+    end
+    if cubical_2d_probe
+        append!(results, _run_cubical_2d_probe(; reps=reps, quick=quick))
+    end
     if dims_only_probe
         append!(results, _run_dims_only_probe(; reps=reps, quick=quick))
     end
@@ -2741,6 +3202,9 @@ function main(; reps::Int=6,
     end
     if boundary_kernel_probe
         append!(results, _run_boundary_kernel_probe(; reps=reps, quick=quick))
+    end
+    if pointcloud_lowdim_radius_stream_probe
+        append!(results, _run_pointcloud_lowdim_radius_stream_probe(; reps=reps, quick=quick))
     end
 
     println("\nSummary (slowest median times):")
@@ -2801,11 +3265,17 @@ let
     packed_edgelist_probe = _parse_bool(args, "--packed_edgelist_probe", false)
     structural_kernel_probe = _parse_bool(args, "--structural_kernel_probe", false)
     active_list_chain_probe = _parse_bool(args, "--active_list_chain_probe", false)
+    delaunay_cache_probe = _parse_bool(args, "--delaunay_cache_probe", false)
+    delaunay_simplextree_fusion_probe = _parse_bool(args, "--delaunay_simplextree_fusion_probe", false)
+    core_numbers_probe = _parse_bool(args, "--core_numbers_probe", false)
+    landmark_radius_probe = _parse_bool(args, "--landmark_radius_probe", false)
+    cubical_2d_probe = _parse_bool(args, "--cubical_2d_probe", false)
     dims_only_probe = _parse_bool(args, "--dims_only_probe", false)
     solve_loop_probe = _parse_bool(args, "--solve_loop_probe", false)
     cache_hit_skip_lazy_probe = _parse_bool(args, "--cache_hit_skip_lazy_probe", false)
     plan_norm_cache_probe = _parse_bool(args, "--plan_norm_cache_probe", false)
     boundary_kernel_probe = _parse_bool(args, "--boundary_kernel_probe", false)
+    pointcloud_lowdim_radius_stream_probe = _parse_bool(args, "--pointcloud_lowdim_radius_stream_probe", false)
 
     println("[profile] ", profile, " (reps=", reps, ", quick=", quick,
             ", include_synthetic=", include_synthetic, ", include_external=", include_external,
@@ -2845,9 +3315,15 @@ let
          packed_edgelist_probe=packed_edgelist_probe,
          structural_kernel_probe=structural_kernel_probe,
          active_list_chain_probe=active_list_chain_probe,
+         delaunay_cache_probe=delaunay_cache_probe,
+         delaunay_simplextree_fusion_probe=delaunay_simplextree_fusion_probe,
+         core_numbers_probe=core_numbers_probe,
+         landmark_radius_probe=landmark_radius_probe,
+         cubical_2d_probe=cubical_2d_probe,
          dims_only_probe=dims_only_probe,
          solve_loop_probe=solve_loop_probe,
          cache_hit_skip_lazy_probe=cache_hit_skip_lazy_probe,
          plan_norm_cache_probe=plan_norm_cache_probe,
-         boundary_kernel_probe=boundary_kernel_probe)
+         boundary_kernel_probe=boundary_kernel_probe,
+         pointcloud_lowdim_radius_stream_probe=pointcloud_lowdim_radius_stream_probe)
 end

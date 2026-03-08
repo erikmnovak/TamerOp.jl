@@ -137,7 +137,7 @@ function _spec_for_case(case::AbstractDict{String,<:Any}; prefer_nn::Bool=true)
                 radius=parity_radius,
                 construction=PosetModules.ConstructionOptions(
                     ;
-                    sparsify=:none,
+                    sparsify=:radius,
                     collapse=:none,
                     output_stage=:simplex_tree,
                 ),
@@ -162,7 +162,7 @@ function _spec_for_case(case::AbstractDict{String,<:Any}; prefer_nn::Bool=true)
             radius=degree_radius,
             construction=PosetModules.ConstructionOptions(
                 ;
-                sparsify=:none,
+                sparsify=:radius,
                 collapse=:none,
                 output_stage=:simplex_tree,
             ),
@@ -178,7 +178,7 @@ function _spec_for_case(case::AbstractDict{String,<:Any}; prefer_nn::Bool=true)
             density_k=codensity_k,
             construction=PosetModules.ConstructionOptions(
                 ;
-                sparsify=:none,
+                sparsify=:radius,
                 collapse=:none,
                 output_stage=:simplex_tree,
             ),
@@ -194,7 +194,7 @@ function _spec_for_case(case::AbstractDict{String,<:Any}; prefer_nn::Bool=true)
             simplex_agg=:max,
             construction=PosetModules.ConstructionOptions(
                 ;
-                sparsify=:none,
+                sparsify=:radius,
                 collapse=:none,
                 output_stage=:simplex_tree,
             ),
@@ -257,8 +257,14 @@ function _spec_for_case(case::AbstractDict{String,<:Any}; prefer_nn::Bool=true)
     end
 end
 
+@inline function _run_encode_uncached(data, spec)
+    # Harness policy: measure algorithmic runtime, excluding startup/JIT and
+    # excluding cross-call session caching.
+    return PosetModules.encode(data, spec; degree=0, cache=nothing)
+end
+
 function _timed_encode(data, spec)
-    m = @timed st = PosetModules.encode(data, spec; degree=0, cache=:auto)
+    m = @timed st = _run_encode_uncached(data, spec)
     return st, 1000.0 * m.time, m.bytes / 1024.0
 end
 
@@ -379,11 +385,15 @@ function main()
         cold_ms = NaN
         cold_alloc = NaN
         try
+            _run_encode_uncached(data, spec)  # untimed prewarm
+            _memory_relief!()
             cold_st, cold_ms, cold_alloc = _timed_encode(data, spec)
         catch err
             if regime == "claim_matching"
                 notes = "nearestneighbors_unavailable_fallback_bruteforce"
                 spec = _spec_for_case(c; prefer_nn=false)
+                _run_encode_uncached(data, spec)  # untimed prewarm
+                _memory_relief!()
                 cold_st, cold_ms, cold_alloc = _timed_encode(data, spec)
             else
                 rethrow(err)
@@ -405,6 +415,8 @@ function main()
         simplex_count = _simplex_count(cold_st)
         edge_count = _edge_count(cold_st)
         max_simplex_dim = _max_simplex_dim(cold_st)
+        notes = isempty(notes) ? "cold_mode=warm_uncached;cache=none" :
+                string(notes, ";cold_mode=warm_uncached;cache=none")
 
         println(
             rpad(case_id, 28),

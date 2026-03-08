@@ -13,26 +13,34 @@ using JSON3
 using Dates
 
 using ..CoreModules: QQ, QQField, AbstractCoeffField, coeff_type, coerce,
-                     EncodingOptions, ResolutionOptions, DerivedFunctorOptions, InvariantOptions,
                      ResolutionCache, SessionCache, EncodingCache,
                      _encoding_cache!, _session_resolution_cache, _session_hom_cache, _set_session_hom_cache!,
                      _session_slice_plan_cache, _set_session_slice_plan_cache!,
-                     EncodingResult, ResolutionResult, InvariantResult,
-                     change_field, AbstractPLikeEncodingMap,
-                     CompiledEncoding, compile_encoding,
-                     PointCloud, ImageNd, GraphData, EmbeddedPlanarGraph2D,
-                     GradedComplex, MultiCriticalGradedComplex,
-                     SimplexTreeMulti, simplex_count, max_simplex_dim, simplex_vertices, simplex_grades,
-                     FiltrationSpec, ConstructionBudget, ConstructionOptions, PipelineOptions,
-                     GridEncodingMap,
                      _resolve_workflow_session_cache, _resolve_workflow_specialized_cache,
-                     _workflow_encoding_cache, _compile_encoding_cached,
-                     _encoding_with_session_cache, _resolution_cache_from_session,
-                     _slot_cache_from_session, materialize_module
-import ..CoreModules: locate, dimension, representatives, axes_from_encoding, _grid_strides
+                     _workflow_encoding_cache,
+                     _resolution_cache_from_session,
+                     _slot_cache_from_session,
+                     _session_encoding_values, _session_module_values,
+                     _session_encoding_bucket_count, _session_module_bucket_count,
+                     _session_zn_encoding_artifact_count, _session_zn_pushforward_plan_count,
+                     _session_zn_pushforward_fringe_count, _session_zn_pushforward_module_count
+using ..Options: EncodingOptions, ResolutionOptions, DerivedFunctorOptions, InvariantOptions,
+                 FiltrationSpec, ConstructionBudget, ConstructionOptions, PipelineOptions
+using ..DataTypes: PointCloud, ImageNd, GraphData, EmbeddedPlanarGraph2D,
+                   GradedComplex, MultiCriticalGradedComplex,
+                   SimplexTreeMulti, simplex_count, max_simplex_dim, simplex_vertices, simplex_grades
+using ..EncodingCore: AbstractPLikeEncodingMap, CompiledEncoding, compile_encoding, GridEncodingMap,
+                      _compile_encoding_cached
+using ..Results: EncodingResult, ResolutionResult, InvariantResult,
+                 _encoding_with_session_cache, materialize_module
+import ..EncodingCore: locate, dimension, representatives, axes_from_encoding, _grid_strides
 
 import ..Serialization
-import ..Serialization: TAMER_FEATURE_SCHEMA_VERSION, feature_schema_header, validate_feature_metadata_schema
+import ..Serialization: TAMER_FEATURE_SCHEMA_VERSION,
+                        feature_schema_header,
+                        validate_feature_metadata_schema,
+                        _write_feature_csv_wide,
+                        _write_feature_csv_long
 
 import ..IndicatorResolutions
 import ..ZnEncoding
@@ -124,6 +132,35 @@ struct RestrictedHilbertInvariantCache{K,F<:AbstractCoeffField,MatT<:AbstractMat
 end
 
 """
+    ResolutionInvariantCache
+
+Cache wrapper for featurizers that consume a fixed projective or injective
+resolution.
+"""
+struct ResolutionInvariantCache{ResT} <: AbstractInvariantCache
+    res::ResT
+    threads::Bool
+    level::Symbol
+    kind::Symbol
+end
+
+"""
+    ResolutionMeasureInvariantCache
+
+Cache wrapper for resolution-based featurizers that also need an encoding map
+`pi` (for region weights / support measures).
+"""
+struct ResolutionMeasureInvariantCache{ResT,PiT,W} <: AbstractInvariantCache
+    res::ResT
+    pi::PiT
+    opts::InvariantOptions
+    threads::Bool
+    level::Symbol
+    kind::Symbol
+    weights::W
+end
+
+"""
     EncodingInvariantCache
 
 Cache wrapper for featurizers that require both `(M, pi)`.
@@ -142,13 +179,42 @@ mutable struct EncodingInvariantCache{K,F<:AbstractCoeffField,MatT<:AbstractMatr
     projected_module::Dict{UInt,Invariants.ProjectedBarcodeCache{K}}
     projected_refs::Dict{Tuple{UInt,UInt},Invariants.ProjectedBarcodeCache}
     fibered::Dict{UInt,Invariants.FiberedBarcodeCache2D{K}}
+    mpp_decompositions::Dict{UInt,Invariants.MPPDecomposition}
     rank_query::Union{Nothing,Invariants.RankQueryCache}
+end
+
+"""
+    PointMeasureInvariantCache
+
+Direct cache wrapper for sparse signed point measures.
+"""
+struct PointMeasureInvariantCache{PmT} <: AbstractInvariantCache
+    pm::PmT
+    opts::InvariantOptions
+    threads::Bool
+    level::Symbol
+end
+
+"""
+    SignedBarcodeInvariantCache
+
+Direct cache wrapper for sparse rectangle signed barcodes.
+"""
+struct SignedBarcodeInvariantCache{SbT} <: AbstractInvariantCache
+    sb::SbT
+    opts::InvariantOptions
+    threads::Bool
+    level::Symbol
 end
 
 const _InvariantCacheHandle = Union{
     ModuleInvariantCache,
     RestrictedHilbertInvariantCache,
+    ResolutionInvariantCache,
+    ResolutionMeasureInvariantCache,
     EncodingInvariantCache,
+    PointMeasureInvariantCache,
+    SignedBarcodeInvariantCache,
 }
 
 """
@@ -205,6 +271,29 @@ struct PersistenceImageSpec <: AbstractFeaturizerSpec
 end
 
 """
+    MPLandscapeSpec
+
+Typed spec for flattening a sampled multiparameter persistence landscape.
+"""
+struct MPLandscapeSpec <: AbstractFeaturizerSpec
+    directions::Vector{Vector{Float64}}
+    offsets::Vector{Vector{Float64}}
+    offset_weights::Union{Nothing,Vector{Float64},Matrix{Float64}}
+    kmax::Int
+    tgrid::Vector{Float64}
+    normalize_weights::Bool
+    tmin::Union{Nothing,Float64}
+    tmax::Union{Nothing,Float64}
+    nsteps::Int
+    strict::Bool
+    drop_unknown::Bool
+    dedup::Bool
+    normalize_dirs::Symbol
+    direction_weight::Symbol
+    threads::Union{Nothing,Bool}
+end
+
+"""
     EulerSurfaceSpec
 
 Typed spec for Euler characteristic surface vectorization.
@@ -225,6 +314,49 @@ Typed spec for flattening rank invariant on an n x n grid of region pairs.
 struct RankGridSpec <: AbstractFeaturizerSpec
     nvertices::Int
     store_zeros::Bool
+    threads::Union{Nothing,Bool}
+end
+
+"""
+    RestrictedHilbertSpec
+
+Typed spec for flattening the restricted Hilbert function to a fixed-length
+feature vector indexed by poset vertex.
+"""
+struct RestrictedHilbertSpec <: AbstractFeaturizerSpec
+    nvertices::Int
+end
+
+"""
+    BarcodeTopKSpec
+
+Canonical raw-barcode featurizer for slice/fibered families.
+
+Policy:
+- per slice, sort intervals by persistence descending, then birth ascending, then death ascending,
+- keep the top `k`,
+- encode `[count, present_1, birth_1, persistence_1, ..., present_k, birth_k, persistence_k]`,
+- missing slots are padded with zeros,
+- `source` selects only the barcode backend (`:slice` or `:fibered`); feature semantics stay the same.
+"""
+struct BarcodeTopKSpec <: AbstractFeaturizerSpec
+    directions::Vector{Vector{Float64}}
+    offsets::Vector{Vector{Float64}}
+    offset_weights::Union{Nothing,Vector{Float64},Matrix{Float64}}
+    k::Int
+    aggregate::Symbol
+    source::Symbol
+    infinite_policy::Symbol
+    window::Union{Nothing,Tuple{Float64,Float64}}
+    normalize_weights::Bool
+    tmin::Union{Nothing,Float64}
+    tmax::Union{Nothing,Float64}
+    nsteps::Int
+    strict::Bool
+    drop_unknown::Bool
+    dedup::Bool
+    normalize_dirs::Symbol
+    direction_weight::Symbol
     threads::Union{Nothing,Bool}
 end
 
@@ -257,6 +389,38 @@ struct SlicedBarcodeSpec{S<:Tuple} <: AbstractFeaturizerSpec
 end
 
 """
+    BarcodeSummarySpec
+
+Canonical fixed-field barcode-summary featurizer for slice/fibered families.
+
+Policy:
+- default summary fields are `(:count, :sum_persistence, :mean_persistence, :max_persistence, :entropy)`,
+- aggregation across many barcodes uses the same `:mean` / `:sum` / `:stack` contract as slice featurizers,
+- `source` switches only the barcode backend (`:slice` or `:fibered`).
+"""
+struct BarcodeSummarySpec{S<:Tuple} <: AbstractFeaturizerSpec
+    directions::Vector{Vector{Float64}}
+    offsets::Vector{Vector{Float64}}
+    offset_weights::Union{Nothing,Vector{Float64},Matrix{Float64}}
+    fields::S
+    normalize_entropy::Bool
+    aggregate::Symbol
+    source::Symbol
+    infinite_policy::Symbol
+    window::Union{Nothing,Tuple{Float64,Float64}}
+    normalize_weights::Bool
+    tmin::Union{Nothing,Float64}
+    tmax::Union{Nothing,Float64}
+    nsteps::Int
+    strict::Bool
+    drop_unknown::Bool
+    dedup::Bool
+    normalize_dirs::Symbol
+    direction_weight::Symbol
+    threads::Union{Nothing,Bool}
+end
+
+"""
     SignedBarcodeImageSpec
 
 Typed spec for rectangle signed-barcode image vectorization.
@@ -271,6 +435,78 @@ struct SignedBarcodeImageSpec{A<:Union{Nothing,NTuple}} <: AbstractFeaturizerSpe
     axes_policy::Symbol
     max_axis_len::Int
     strict::Union{Nothing,Bool}
+    threads::Union{Nothing,Bool}
+end
+
+"""
+    PointSignedMeasureSpec
+
+Canonical sparse featurizer for a `PointSignedMeasure`.
+
+Policy:
+- sort support points by `abs(weight)` descending, then lexicographic support index,
+- keep the top `k`,
+- encode `[count, present_1, weight_1, x_1^(1), ..., x_n^(1), ..., present_k, weight_k, ...]`,
+- missing slots are padded with zeros,
+- `coords` chooses whether slot coordinates use axis values (`:values`) or grid indices (`:indices`).
+"""
+struct PointSignedMeasureSpec <: AbstractFeaturizerSpec
+    ndims::Int
+    k::Int
+    coords::Symbol
+end
+
+"""
+    EulerSignedMeasureSpec
+
+Canonical sparse featurizer for the Euler signed measure of an encoded sample.
+
+Policy:
+- compute `euler_signed_measure` on the chosen grid,
+- then apply the same sparse top-k contract as `PointSignedMeasureSpec`,
+- ordering is by `abs(weight)` descending, then lexicographic support index,
+- slots encode `(present, weight, coordinates...)` and pad with zeros.
+"""
+struct EulerSignedMeasureSpec{A<:Union{Nothing,NTuple}} <: AbstractFeaturizerSpec
+    ndims::Int
+    k::Int
+    coords::Symbol
+    axes::A
+    axes_policy::Symbol
+    max_axis_len::Int
+    strict::Union{Nothing,Bool}
+    drop_zeros::Bool
+    max_terms::Int
+    min_abs_weight::Float64
+    threads::Union{Nothing,Bool}
+end
+
+"""
+    RectangleSignedBarcodeTopKSpec
+
+Sparse top-k featurizer for rectangle signed barcodes.
+
+Policy:
+- sort rectangles by `abs(weight)` descending, then lexicographic `(lo, hi)`,
+- keep the top `k`,
+- encode `[count, present_1, weight_1, lo_1^(1), ..., hi_n^(1), ..., present_k, ...]`,
+- missing slots are padded with zeros,
+- `coords` chooses axis values (`:values`) or grid indices (`:indices`) for rectangle corners.
+"""
+struct RectangleSignedBarcodeTopKSpec{A<:Union{Nothing,NTuple},S<:Union{Nothing,Int,Tuple}} <: AbstractFeaturizerSpec
+    ndims::Int
+    k::Int
+    coords::Symbol
+    axes::A
+    axes_policy::Symbol
+    max_axis_len::Int
+    strict::Union{Nothing,Bool}
+    drop_zeros::Bool
+    tol::Int
+    max_span::S
+    keep_endpoints::Bool
+    method::Symbol
+    bulk_max_elems::Int
     threads::Union{Nothing,Bool}
 end
 
@@ -292,6 +528,127 @@ struct ProjectedDistancesSpec{R<:AbstractVector,D<:Union{Nothing,Vector{Vector{F
     enforce_monotone::Symbol
     precompute::Bool
     threads::Union{Nothing,Bool}
+end
+
+"""
+    MatchingDistanceBankSpec
+
+Reference-bank featurizer using multiparameter matching distance.
+
+Each feature is the matching distance from the sample to one reference module
+in a common encoding family. This keeps matching-distance use inside the same
+batch featurizer surface as the other bank-based specs.
+"""
+struct MatchingDistanceBankSpec{R<:AbstractVector,D<:Union{Nothing,Vector{Vector{Float64}}},O<:Union{Nothing,Vector{Vector{Float64}}}} <: AbstractFeaturizerSpec
+    references::R
+    reference_names::Vector{Symbol}
+    method::Symbol
+    directions::D
+    offsets::O
+    n_dirs::Int
+    n_offsets::Int
+    max_den::Int
+    include_axes::Bool
+    normalize_dirs::Symbol
+    weight::Symbol
+    threads::Union{Nothing,Bool}
+end
+
+"""
+    MPPImageSpec
+
+Typed spec for flattening a 2D multiparameter persistence image.
+"""
+struct MPPImageSpec <: AbstractFeaturizerSpec
+    resolution::Int
+    xgrid::Union{Nothing,Vector{Float64}}
+    ygrid::Union{Nothing,Vector{Float64}}
+    sigma::Float64
+    N::Int
+    delta::Union{Symbol,Float64}
+    q::Float64
+    tie_break::Symbol
+    cutoff_radius::Union{Nothing,Float64}
+    cutoff_tol::Union{Nothing,Float64}
+    segment_prune::Bool
+    threads::Union{Nothing,Bool}
+end
+
+"""
+    MPPDecompositionHistogramSpec
+
+Stable histogram featurizer for a raw `MPPDecomposition`.
+
+Policy:
+- histogram segments by orientation and segment-length scale,
+- normalize segment lengths by the decomposition-box diagonal before binning,
+- `weight=:count` counts segments,
+- `weight=:mass` distributes each summand weight equally across its segments so total mass is preserved,
+- append global scalars `(total_mass, n_summands, n_segments, max_scale, entropy)`.
+"""
+struct MPPDecompositionHistogramSpec <: AbstractFeaturizerSpec
+    orientation_bins::Int
+    scale_bins::Int
+    scale_range::Union{Nothing,Tuple{Float64,Float64}}
+    weight::Symbol
+    normalize::Symbol
+    N::Int
+    delta::Union{Symbol,Float64}
+    q::Float64
+    tie_break::Symbol
+    threads::Union{Nothing,Bool}
+end
+
+"""
+    BettiTableSpec
+
+Typed spec for flattening a projective Betti table to a fixed-size feature
+vector.
+"""
+struct BettiTableSpec <: AbstractFeaturizerSpec
+    nvertices::Int
+    pad_to::Int
+    resolution_maxlen::Int
+    minimal::Bool
+    check::Bool
+end
+
+"""
+    BassTableSpec
+
+Typed spec for flattening an injective Bass table to a fixed-size feature
+vector.
+"""
+struct BassTableSpec <: AbstractFeaturizerSpec
+    nvertices::Int
+    pad_to::Int
+    resolution_maxlen::Int
+    minimal::Bool
+    check::Bool
+end
+
+"""
+    BettiSupportMeasuresSpec
+
+Typed spec for flattening support/mass summaries of multigraded Betti numbers.
+"""
+struct BettiSupportMeasuresSpec <: AbstractFeaturizerSpec
+    pad_to::Int
+    resolution_maxlen::Int
+    minimal::Bool
+    check::Bool
+end
+
+"""
+    BassSupportMeasuresSpec
+
+Typed spec for flattening support/mass summaries of multigraded Bass numbers.
+"""
+struct BassSupportMeasuresSpec <: AbstractFeaturizerSpec
+    pad_to::Int
+    resolution_maxlen::Int
+    minimal::Bool
+    check::Bool
 end
 
 """
@@ -610,6 +967,29 @@ function _spec_jsonable(spec::ProjectedDistancesSpec)
     )
 end
 
+function _spec_jsonable(spec::MatchingDistanceBankSpec)
+    ref_ids = String[string(nm) for nm in spec.reference_names]
+    return Dict(
+        "type" => "MatchingDistanceBankSpec",
+        "module" => string(parentmodule(typeof(spec))),
+        "fields" => Dict(
+            "reference_ids" => ref_ids,
+            "references" => [_reference_stub_json(r) for r in spec.references],
+            "reference_names" => [String(nm) for nm in spec.reference_names],
+            "method" => String(spec.method),
+            "directions" => spec.directions === nothing ? nothing : _jsonable(spec.directions),
+            "offsets" => spec.offsets === nothing ? nothing : _jsonable(spec.offsets),
+            "n_dirs" => spec.n_dirs,
+            "n_offsets" => spec.n_offsets,
+            "max_den" => spec.max_den,
+            "include_axes" => spec.include_axes,
+            "normalize_dirs" => String(spec.normalize_dirs),
+            "weight" => String(spec.weight),
+            "threads" => spec.threads,
+        ),
+    )
+end
+
 function _spec_jsonable(spec::CompositeSpec)
     return Dict(
         "type" => "CompositeSpec",
@@ -695,8 +1075,22 @@ end
 @inline _as_symbol(x) = Symbol(String(x))
 @inline _as_bool_or_nothing(x) = x === nothing ? nothing : Bool(x)
 @inline _as_float_or_nothing(x) = x === nothing ? nothing : Float64(x)
+@inline _as_int_or_nothing(x) = x === nothing ? nothing : Int(x)
+@inline function _tuple2_float_or_nothing(x)
+    x === nothing && return nothing
+    length(x) == 2 || throw(ArgumentError("expected a 2-tuple/2-vector numeric payload"))
+    return (Float64(x[1]), Float64(x[2]))
+end
+@inline function _int_tuple_or_scalar_or_nothing(x)
+    x === nothing && return nothing
+    if x isa AbstractVector || x isa Tuple
+        return Tuple(Int(v) for v in x)
+    end
+    return Int(x)
+end
 
 @inline _float_vec(v) = Float64[Float64(x) for x in v]
+@inline _int_vec(v) = Int[Int(x) for x in v]
 @inline _vecvec_float(vv) = [Float64[Float64(x) for x in v] for v in vv]
 
 function _axes_from_json(x)
@@ -819,6 +1213,24 @@ function spec_from_metadata(meta_or_spec;
             direction_weight=_as_symbol(fields["direction_weight"]),
             threads=_as_bool_or_nothing(_obj_get(fields, "threads", nothing)),
         )
+    elseif Tname == "MPLandscapeSpec"
+        return MPLandscapeSpec(
+            directions=_vecvec_float(fields["directions"]),
+            offsets=_vecvec_float(fields["offsets"]),
+            offset_weights=_offset_weights_from_json(_obj_get(fields, "offset_weights", nothing)),
+            kmax=Int(fields["kmax"]),
+            tgrid=_float_vec(fields["tgrid"]),
+            normalize_weights=Bool(fields["normalize_weights"]),
+            tmin=_as_float_or_nothing(_obj_get(fields, "tmin", nothing)),
+            tmax=_as_float_or_nothing(_obj_get(fields, "tmax", nothing)),
+            nsteps=Int(fields["nsteps"]),
+            strict=Bool(fields["strict"]),
+            drop_unknown=Bool(fields["drop_unknown"]),
+            dedup=Bool(fields["dedup"]),
+            normalize_dirs=_as_symbol(fields["normalize_dirs"]),
+            direction_weight=_as_symbol(fields["direction_weight"]),
+            threads=_as_bool_or_nothing(_obj_get(fields, "threads", nothing)),
+        )
     elseif Tname == "EulerSurfaceSpec"
         return EulerSurfaceSpec(
             axes=_axes_from_json(_obj_get(fields, "axes", nothing)),
@@ -831,6 +1243,31 @@ function spec_from_metadata(meta_or_spec;
         return RankGridSpec(
             nvertices=Int(fields["nvertices"]),
             store_zeros=Bool(fields["store_zeros"]),
+            threads=_as_bool_or_nothing(_obj_get(fields, "threads", nothing)),
+        )
+    elseif Tname == "RestrictedHilbertSpec"
+        return RestrictedHilbertSpec(
+            nvertices=Int(fields["nvertices"]),
+        )
+    elseif Tname == "BarcodeTopKSpec"
+        return BarcodeTopKSpec(
+            directions=_vecvec_float(fields["directions"]),
+            offsets=_vecvec_float(fields["offsets"]),
+            offset_weights=_offset_weights_from_json(_obj_get(fields, "offset_weights", nothing)),
+            k=Int(fields["k"]),
+            aggregate=_as_symbol(fields["aggregate"]),
+            source=_as_symbol(fields["source"]),
+            infinite_policy=_as_symbol(fields["infinite_policy"]),
+            window=_tuple2_float_or_nothing(_obj_get(fields, "window", nothing)),
+            normalize_weights=Bool(fields["normalize_weights"]),
+            tmin=_as_float_or_nothing(_obj_get(fields, "tmin", nothing)),
+            tmax=_as_float_or_nothing(_obj_get(fields, "tmax", nothing)),
+            nsteps=Int(fields["nsteps"]),
+            strict=Bool(fields["strict"]),
+            drop_unknown=Bool(fields["drop_unknown"]),
+            dedup=Bool(fields["dedup"]),
+            normalize_dirs=_as_symbol(fields["normalize_dirs"]),
+            direction_weight=_as_symbol(fields["direction_weight"]),
             threads=_as_bool_or_nothing(_obj_get(fields, "threads", nothing)),
         )
     elseif Tname == "SlicedBarcodeSpec"
@@ -857,6 +1294,28 @@ function spec_from_metadata(meta_or_spec;
             direction_weight=_as_symbol(fields["direction_weight"]),
             threads=_as_bool_or_nothing(_obj_get(fields, "threads", nothing)),
         )
+    elseif Tname == "BarcodeSummarySpec"
+        return BarcodeSummarySpec(
+            directions=_vecvec_float(fields["directions"]),
+            offsets=_vecvec_float(fields["offsets"]),
+            offset_weights=_offset_weights_from_json(_obj_get(fields, "offset_weights", nothing)),
+            fields=Tuple(_as_symbol(v) for v in fields["fields"]),
+            normalize_entropy=Bool(fields["normalize_entropy"]),
+            aggregate=_as_symbol(fields["aggregate"]),
+            source=_as_symbol(fields["source"]),
+            infinite_policy=_as_symbol(fields["infinite_policy"]),
+            window=_tuple2_float_or_nothing(_obj_get(fields, "window", nothing)),
+            normalize_weights=Bool(fields["normalize_weights"]),
+            tmin=_as_float_or_nothing(_obj_get(fields, "tmin", nothing)),
+            tmax=_as_float_or_nothing(_obj_get(fields, "tmax", nothing)),
+            nsteps=Int(fields["nsteps"]),
+            strict=Bool(fields["strict"]),
+            drop_unknown=Bool(fields["drop_unknown"]),
+            dedup=Bool(fields["dedup"]),
+            normalize_dirs=_as_symbol(fields["normalize_dirs"]),
+            direction_weight=_as_symbol(fields["direction_weight"]),
+            threads=_as_bool_or_nothing(_obj_get(fields, "threads", nothing)),
+        )
     elseif Tname == "SignedBarcodeImageSpec"
         return SignedBarcodeImageSpec(
             xs=_float_vec(fields["xs"]),
@@ -868,6 +1327,45 @@ function spec_from_metadata(meta_or_spec;
             axes_policy=_as_symbol(fields["axes_policy"]),
             max_axis_len=Int(fields["max_axis_len"]),
             strict=_as_bool_or_nothing(_obj_get(fields, "strict", nothing)),
+            threads=_as_bool_or_nothing(_obj_get(fields, "threads", nothing)),
+        )
+    elseif Tname == "PointSignedMeasureSpec"
+        return PointSignedMeasureSpec(
+            ndims=Int(fields["ndims"]),
+            k=Int(fields["k"]),
+            coords=_as_symbol(fields["coords"]),
+        )
+    elseif Tname == "EulerSignedMeasureSpec"
+        return EulerSignedMeasureSpec(
+            ndims=Int(fields["ndims"]),
+            k=Int(fields["k"]),
+            coords=_as_symbol(fields["coords"]),
+            axes=_axes_from_json(_obj_get(fields, "axes", nothing)),
+            axes_policy=_as_symbol(fields["axes_policy"]),
+            max_axis_len=Int(fields["max_axis_len"]),
+            strict=_as_bool_or_nothing(_obj_get(fields, "strict", nothing)),
+            drop_zeros=Bool(fields["drop_zeros"]),
+            max_terms=Int(fields["max_terms"]),
+            min_abs_weight=Float64(fields["min_abs_weight"]),
+            threads=_as_bool_or_nothing(_obj_get(fields, "threads", nothing)),
+        )
+    elseif Tname == "RectangleSignedBarcodeTopKSpec"
+        return RectangleSignedBarcodeTopKSpec(
+            ndims=Int(fields["ndims"]),
+            k=Int(fields["k"]),
+            coords=_as_symbol(fields["coords"]),
+            axes=let ax = _obj_get(fields, "axes", nothing)
+                ax === nothing ? nothing : ntuple(i -> _int_vec(ax[i]), length(ax))
+            end,
+            axes_policy=_as_symbol(fields["axes_policy"]),
+            max_axis_len=Int(fields["max_axis_len"]),
+            strict=_as_bool_or_nothing(_obj_get(fields, "strict", nothing)),
+            drop_zeros=Bool(fields["drop_zeros"]),
+            tol=Int(fields["tol"]),
+            max_span=_int_tuple_or_scalar_or_nothing(_obj_get(fields, "max_span", nothing)),
+            keep_endpoints=Bool(fields["keep_endpoints"]),
+            method=_as_symbol(fields["method"]),
+            bulk_max_elems=Int(fields["bulk_max_elems"]),
             threads=_as_bool_or_nothing(_obj_get(fields, "threads", nothing)),
         )
     elseif Tname == "ProjectedDistancesSpec"
@@ -908,6 +1406,120 @@ function spec_from_metadata(meta_or_spec;
             enforce_monotone=_as_symbol(fields["enforce_monotone"]),
             precompute=Bool(fields["precompute"]),
             threads=_as_bool_or_nothing(_obj_get(fields, "threads", nothing)),
+        )
+    elseif Tname == "MatchingDistanceBankSpec"
+        refs_raw = _obj_get(fields, "references", Any[])
+        names = Symbol[_as_symbol(nm) for nm in fields["reference_names"]]
+        ref_ids = String[string(x) for x in _obj_get(fields, "reference_ids", String[string(nm) for nm in names])]
+        refs = if resolve_ref === nothing
+            Any[_to_plain(r) for r in refs_raw]
+        else
+            out = Vector{Any}(undef, length(ref_ids))
+            @inbounds for i in eachindex(ref_ids)
+                resolved = resolve_ref(ref_ids[i])
+                if resolved === nothing
+                    require_resolved_refs &&
+                        throw(ArgumentError("spec_from_metadata: unresolved matching-distance reference id $(ref_ids[i])"))
+                    if i <= length(refs_raw)
+                        out[i] = _to_plain(refs_raw[i])
+                    else
+                        out[i] = Dict("kind" => "missing_reference", "id" => ref_ids[i])
+                    end
+                else
+                    out[i] = resolved
+                end
+            end
+            out
+        end
+        dirs = _obj_get(fields, "directions", nothing)
+        offs = _obj_get(fields, "offsets", nothing)
+        return MatchingDistanceBankSpec(
+            refs;
+            reference_names=names,
+            method=_as_symbol(fields["method"]),
+            directions=dirs === nothing ? nothing : _vecvec_float(dirs),
+            offsets=offs === nothing ? nothing : _vecvec_float(offs),
+            n_dirs=Int(fields["n_dirs"]),
+            n_offsets=Int(fields["n_offsets"]),
+            max_den=Int(fields["max_den"]),
+            include_axes=Bool(fields["include_axes"]),
+            normalize_dirs=_as_symbol(fields["normalize_dirs"]),
+            weight=_as_symbol(fields["weight"]),
+            threads=_as_bool_or_nothing(_obj_get(fields, "threads", nothing)),
+        )
+    elseif Tname == "MPPImageSpec"
+        delta_raw = _obj_get(fields, "delta", :auto)
+        delta_val = if delta_raw isa AbstractString
+            Symbol(String(delta_raw))
+        elseif delta_raw isa Symbol
+            delta_raw
+        else
+            Float64(delta_raw)
+        end
+        return MPPImageSpec(
+            resolution=Int(fields["resolution"]),
+            xgrid=_obj_get(fields, "xgrid", nothing) === nothing ? nothing : _float_vec(fields["xgrid"]),
+            ygrid=_obj_get(fields, "ygrid", nothing) === nothing ? nothing : _float_vec(fields["ygrid"]),
+            sigma=Float64(fields["sigma"]),
+            N=Int(fields["N"]),
+            delta=delta_val,
+            q=Float64(fields["q"]),
+            tie_break=_as_symbol(fields["tie_break"]),
+            cutoff_radius=_as_float_or_nothing(_obj_get(fields, "cutoff_radius", nothing)),
+            cutoff_tol=_as_float_or_nothing(_obj_get(fields, "cutoff_tol", nothing)),
+            segment_prune=Bool(fields["segment_prune"]),
+            threads=_as_bool_or_nothing(_obj_get(fields, "threads", nothing)),
+        )
+    elseif Tname == "MPPDecompositionHistogramSpec"
+        delta_raw = _obj_get(fields, "delta", :auto)
+        delta_val = if delta_raw isa AbstractString
+            Symbol(String(delta_raw))
+        elseif delta_raw isa Symbol
+            delta_raw
+        else
+            Float64(delta_raw)
+        end
+        return MPPDecompositionHistogramSpec(
+            orientation_bins=Int(fields["orientation_bins"]),
+            scale_bins=Int(fields["scale_bins"]),
+            scale_range=_tuple2_float_or_nothing(_obj_get(fields, "scale_range", nothing)),
+            weight=_as_symbol(fields["weight"]),
+            normalize=_as_symbol(fields["normalize"]),
+            N=Int(fields["N"]),
+            delta=delta_val,
+            q=Float64(fields["q"]),
+            tie_break=_as_symbol(fields["tie_break"]),
+            threads=_as_bool_or_nothing(_obj_get(fields, "threads", nothing)),
+        )
+    elseif Tname == "BettiTableSpec"
+        return BettiTableSpec(
+            nvertices=Int(fields["nvertices"]),
+            pad_to=Int(fields["pad_to"]),
+            resolution_maxlen=Int(fields["resolution_maxlen"]),
+            minimal=Bool(fields["minimal"]),
+            check=Bool(fields["check"]),
+        )
+    elseif Tname == "BassTableSpec"
+        return BassTableSpec(
+            nvertices=Int(fields["nvertices"]),
+            pad_to=Int(fields["pad_to"]),
+            resolution_maxlen=Int(fields["resolution_maxlen"]),
+            minimal=Bool(fields["minimal"]),
+            check=Bool(fields["check"]),
+        )
+    elseif Tname == "BettiSupportMeasuresSpec"
+        return BettiSupportMeasuresSpec(
+            pad_to=Int(fields["pad_to"]),
+            resolution_maxlen=Int(fields["resolution_maxlen"]),
+            minimal=Bool(fields["minimal"]),
+            check=Bool(fields["check"]),
+        )
+    elseif Tname == "BassSupportMeasuresSpec"
+        return BassSupportMeasuresSpec(
+            pad_to=Int(fields["pad_to"]),
+            resolution_maxlen=Int(fields["resolution_maxlen"]),
+            minimal=Bool(fields["minimal"]),
+            check=Bool(fields["check"]),
         )
     elseif Tname == "CompositeSpec"
         specs_raw = _obj_get(fields, "specs", Any[])
@@ -1123,7 +1735,55 @@ function load_features_npz(path; kwargs...)
 end
 
 function save_features_csv(path, fs; kwargs...)
-    throw(ArgumentError("save_features_csv requires CSV.jl extension (load CSV and ensure TamerOpCSVExt is available)."))
+    mode = get(kwargs, :format, :wide)
+    layout = get(kwargs, :layout, :samples_by_features)
+    include_metadata = get(kwargs, :include_metadata, true)
+    metadata_path = get(kwargs, :metadata_path, nothing)
+    ids_col = get(kwargs, :ids_col, :id)
+    include_ids = get(kwargs, :include_ids, true)
+    include_sample_index = get(kwargs, :include_sample_index, true)
+
+    layout in (:samples_by_features, :features_by_samples) ||
+        throw(ArgumentError("save_features_csv: layout must be :samples_by_features or :features_by_samples"))
+    mode in (:wide, :long) ||
+        throw(ArgumentError("save_features_csv: format must be :wide or :long"))
+
+    # If extra CSV.jl-specific kwargs are provided, require the CSV extension path.
+    allowed = Set([
+        :format, :layout, :include_metadata, :metadata_path, :ids_col, :include_ids, :include_sample_index,
+    ])
+    extra = Symbol[]
+    for (k, _) in kwargs
+        kk = Symbol(k)
+        kk in allowed || push!(extra, kk)
+    end
+    isempty(extra) || throw(ArgumentError("save_features_csv fallback does not support CSV-specific kwargs ($(join(string.(extra), ", "))). Load CSV.jl to enable extension-backed writer."))
+
+    fs_out = if layout == :samples_by_features
+        fs
+    else
+        XF = permutedims(fs.X)
+        feature_ids = String[string(nm) for nm in fs.names]
+        sample_names = Symbol["sample_$(i)" for i in eachindex(fs.ids)]
+        FeatureSet(XF, sample_names, feature_ids, fs.meta)
+    end
+
+    if mode == :wide
+        _write_feature_csv_wide(path, fs_out.X, fs_out.names, fs_out.ids; ids_col=ids_col, include_ids=include_ids)
+    else
+        _write_feature_csv_long(path, fs_out.X, fs_out.names, fs_out.ids; include_sample_index=include_sample_index)
+    end
+
+    if include_metadata
+        md = feature_metadata(fs; format=mode)
+        md["layout"] = String(layout)
+        md["csv_ids_col"] = String(ids_col)
+        md["csv_include_ids"] = include_ids
+        md["csv_include_sample_index"] = include_sample_index
+        mpath = metadata_path === nothing ? default_feature_metadata_path(path) : String(metadata_path)
+        save_metadata_json(mpath, md)
+    end
+    return path
 end
 
 function load_features_csv(path; kwargs...)
@@ -1421,6 +2081,40 @@ function PersistenceImageSpec(; directions,
     )
 end
 
+function MPLandscapeSpec(; directions,
+                          offsets,
+                          offset_weights=nothing,
+                          kmax::Int=5,
+                          tgrid,
+                          normalize_weights::Bool=true,
+                          tmin=nothing,
+                          tmax=nothing,
+                          nsteps::Int=401,
+                          strict::Bool=true,
+                          drop_unknown::Bool=true,
+                          dedup::Bool=true,
+                          normalize_dirs::Symbol=:none,
+                          direction_weight::Symbol=:none,
+                          threads=nothing)
+    return MPLandscapeSpec(
+        _to_vecvec_float(directions),
+        _to_vecvec_float(offsets),
+        _to_offset_weights(offset_weights),
+        kmax,
+        Float64[float(x) for x in tgrid],
+        normalize_weights,
+        tmin === nothing ? nothing : float(tmin),
+        tmax === nothing ? nothing : float(tmax),
+        nsteps,
+        strict,
+        drop_unknown,
+        dedup,
+        normalize_dirs,
+        direction_weight,
+        threads === nothing ? nothing : Bool(threads),
+    )
+end
+
 function EulerSurfaceSpec(; axes=nothing,
                            axes_policy::Symbol=:encoding,
                            max_axis_len::Int=256,
@@ -1435,6 +2129,56 @@ end
 
 RankGridSpec(; nvertices::Int, store_zeros::Bool=true, threads=nothing) =
     RankGridSpec(nvertices, store_zeros, threads === nothing ? nothing : Bool(threads))
+
+function BarcodeTopKSpec(; directions,
+                           offsets,
+                           offset_weights=nothing,
+                           k::Int=5,
+                           aggregate::Symbol=:stack,
+                           source::Symbol=:slice,
+                           infinite_policy::Symbol=:clip_to_window,
+                           window=nothing,
+                           normalize_weights::Bool=true,
+                           tmin=nothing,
+                           tmax=nothing,
+                           nsteps::Int=401,
+                           strict::Bool=true,
+                           drop_unknown::Bool=true,
+                           dedup::Bool=true,
+                           normalize_dirs::Symbol=:none,
+                           direction_weight::Symbol=:none,
+                           threads=nothing)
+    k >= 0 || throw(ArgumentError("BarcodeTopKSpec.k must be >= 0"))
+    aggregate in (:mean, :sum, :stack) ||
+        throw(ArgumentError("BarcodeTopKSpec.aggregate must be :mean, :sum, or :stack"))
+    source in (:slice, :fibered) ||
+        throw(ArgumentError("BarcodeTopKSpec.source must be :slice or :fibered"))
+    infinite_policy in (:clip_to_window, :error) ||
+        throw(ArgumentError("BarcodeTopKSpec.infinite_policy must be :clip_to_window or :error"))
+    window2 = window === nothing ? nothing : (float(window[1]), float(window[2]))
+    window2 === nothing || window2[1] <= window2[2] ||
+        throw(ArgumentError("BarcodeTopKSpec.window must satisfy lo <= hi"))
+    return BarcodeTopKSpec(
+        _to_vecvec_float(directions),
+        _to_vecvec_float(offsets),
+        _to_offset_weights(offset_weights),
+        k,
+        aggregate,
+        source,
+        infinite_policy,
+        window2,
+        normalize_weights,
+        tmin === nothing ? nothing : float(tmin),
+        tmax === nothing ? nothing : float(tmax),
+        nsteps,
+        strict,
+        drop_unknown,
+        dedup,
+        normalize_dirs,
+        direction_weight,
+        threads === nothing ? nothing : Bool(threads),
+    )
+end
 
 function SlicedBarcodeSpec(; directions,
                             offsets,
@@ -1480,6 +2224,63 @@ function SlicedBarcodeSpec(; directions,
     )
 end
 
+const _DEFAULT_CANONICAL_BARCODE_SUMMARY_FIELDS =
+    (:count, :sum_persistence, :mean_persistence, :max_persistence, :entropy)
+
+function BarcodeSummarySpec(; directions,
+                              offsets,
+                              offset_weights=nothing,
+                              fields::Tuple=_DEFAULT_CANONICAL_BARCODE_SUMMARY_FIELDS,
+                              normalize_entropy::Bool=true,
+                              aggregate::Symbol=:stack,
+                              source::Symbol=:slice,
+                              infinite_policy::Symbol=:clip_to_window,
+                              window=nothing,
+                              normalize_weights::Bool=true,
+                              tmin=nothing,
+                              tmax=nothing,
+                              nsteps::Int=401,
+                              strict::Bool=true,
+                              drop_unknown::Bool=true,
+                              dedup::Bool=true,
+                              normalize_dirs::Symbol=:none,
+                              direction_weight::Symbol=:none,
+                              threads=nothing)
+    aggregate in (:mean, :sum, :stack) ||
+        throw(ArgumentError("BarcodeSummarySpec.aggregate must be :mean, :sum, or :stack"))
+    source in (:slice, :fibered) ||
+        throw(ArgumentError("BarcodeSummarySpec.source must be :slice or :fibered"))
+    infinite_policy in (:clip_to_window, :error) ||
+        throw(ArgumentError("BarcodeSummarySpec.infinite_policy must be :clip_to_window or :error"))
+    allowed = Set((:count, :sum_persistence, :mean_persistence, :max_persistence, :entropy))
+    all(f -> Symbol(f) in allowed, fields) ||
+        throw(ArgumentError("BarcodeSummarySpec.fields must be chosen from $(collect(allowed))"))
+    window2 = window === nothing ? nothing : (float(window[1]), float(window[2]))
+    window2 === nothing || window2[1] <= window2[2] ||
+        throw(ArgumentError("BarcodeSummarySpec.window must satisfy lo <= hi"))
+    return BarcodeSummarySpec(
+        _to_vecvec_float(directions),
+        _to_vecvec_float(offsets),
+        _to_offset_weights(offset_weights),
+        Tuple(Symbol(f) for f in fields),
+        normalize_entropy,
+        aggregate,
+        source,
+        infinite_policy,
+        window2,
+        normalize_weights,
+        tmin === nothing ? nothing : float(tmin),
+        tmax === nothing ? nothing : float(tmax),
+        nsteps,
+        strict,
+        drop_unknown,
+        dedup,
+        normalize_dirs,
+        direction_weight,
+        threads === nothing ? nothing : Bool(threads),
+    )
+end
+
 function SignedBarcodeImageSpec(; xs,
                                  ys,
                                  sigma::Real=1.0,
@@ -1505,6 +2306,100 @@ function SignedBarcodeImageSpec(; xs,
         max_axis_len,
         strict2,
         threads2,
+    )
+end
+
+function PointSignedMeasureSpec(; ndims::Int,
+                                 k::Int=16,
+                                 coords::Symbol=:values)
+    ndims > 0 || throw(ArgumentError("PointSignedMeasureSpec.ndims must be > 0"))
+    k >= 0 || throw(ArgumentError("PointSignedMeasureSpec.k must be >= 0"))
+    coords in (:values, :indices) ||
+        throw(ArgumentError("PointSignedMeasureSpec.coords must be :values or :indices"))
+    return PointSignedMeasureSpec(ndims, k, coords)
+end
+
+function EulerSignedMeasureSpec(; ndims::Int,
+                                 k::Int=16,
+                                 coords::Symbol=:values,
+                                 axes=nothing,
+                                 axes_policy::Symbol=:encoding,
+                                 max_axis_len::Int=256,
+                                 strict=nothing,
+                                 drop_zeros::Bool=true,
+                                 max_terms::Int=0,
+                                 min_abs_weight::Real=0,
+                                 threads=nothing)
+    ndims > 0 || throw(ArgumentError("EulerSignedMeasureSpec.ndims must be > 0"))
+    k >= 0 || throw(ArgumentError("EulerSignedMeasureSpec.k must be >= 0"))
+    max_terms >= 0 || throw(ArgumentError("EulerSignedMeasureSpec.max_terms must be >= 0"))
+    coords in (:values, :indices) ||
+        throw(ArgumentError("EulerSignedMeasureSpec.coords must be :values or :indices"))
+    axes2 = axes === nothing ? nothing :
+        ntuple(i -> Float64[float(x) for x in axes[i]], length(axes))
+    strict2 = strict === nothing ? nothing : Bool(strict)
+    return EulerSignedMeasureSpec{typeof(axes2)}(
+        ndims,
+        k,
+        coords,
+        axes2,
+        axes_policy,
+        max_axis_len,
+        strict2,
+        drop_zeros,
+        max_terms,
+        float(min_abs_weight),
+        threads === nothing ? nothing : Bool(threads),
+    )
+end
+
+function RectangleSignedBarcodeTopKSpec(; ndims::Int,
+                                         k::Int=16,
+                                         coords::Symbol=:values,
+                                         axes=nothing,
+                                         axes_policy::Symbol=:encoding,
+                                         max_axis_len::Int=256,
+                                         strict=nothing,
+                                         drop_zeros::Bool=true,
+                                         tol::Int=0,
+                                         max_span=nothing,
+                                         keep_endpoints::Bool=true,
+                                         method::Symbol=:auto,
+                                         bulk_max_elems::Int=20_000_000,
+                                         threads=nothing)
+    ndims > 0 || throw(ArgumentError("RectangleSignedBarcodeTopKSpec.ndims must be > 0"))
+    k >= 0 || throw(ArgumentError("RectangleSignedBarcodeTopKSpec.k must be >= 0"))
+    coords in (:values, :indices) ||
+        throw(ArgumentError("RectangleSignedBarcodeTopKSpec.coords must be :values or :indices"))
+    method in (:auto, :bulk, :local) ||
+        throw(ArgumentError("RectangleSignedBarcodeTopKSpec.method must be :auto, :bulk, or :local"))
+    tol >= 0 || throw(ArgumentError("RectangleSignedBarcodeTopKSpec.tol must be >= 0"))
+    bulk_max_elems > 0 || throw(ArgumentError("RectangleSignedBarcodeTopKSpec.bulk_max_elems must be > 0"))
+    axes2 = axes === nothing ? nothing :
+        ntuple(i -> Int[Int(x) for x in axes[i]], length(axes))
+    strict2 = strict === nothing ? nothing : Bool(strict)
+    max_span2 = if max_span === nothing
+        nothing
+    elseif max_span isa Tuple
+        Tuple(Int(x) for x in max_span)
+    else
+        Int(max_span)
+    end
+    return RectangleSignedBarcodeTopKSpec{typeof(axes2),typeof(max_span2)}(
+        ndims,
+        k,
+        coords,
+        axes2,
+        axes_policy,
+        max_axis_len,
+        strict2,
+        drop_zeros,
+        tol,
+        max_span2,
+        keep_endpoints,
+        method,
+        bulk_max_elems,
+        threads === nothing ? nothing : Bool(threads),
     )
 end
 
@@ -1542,6 +2437,163 @@ function ProjectedDistancesSpec(references;
         precompute,
         threads === nothing ? nothing : Bool(threads),
     )
+end
+
+function MatchingDistanceBankSpec(references;
+                                  reference_names=nothing,
+                                  method::Symbol=:auto,
+                                  directions=nothing,
+                                  offsets=nothing,
+                                  n_dirs::Int=100,
+                                  n_offsets::Int=50,
+                                  max_den::Int=8,
+                                  include_axes::Bool=false,
+                                  normalize_dirs::Symbol=:L1,
+                                  weight::Symbol=:lesnick_l1,
+                                  threads=nothing)
+    method in (:auto, :approx, :exact_2d) ||
+        throw(ArgumentError("MatchingDistanceBankSpec.method must be :auto, :approx, or :exact_2d"))
+    n_dirs > 0 || throw(ArgumentError("MatchingDistanceBankSpec.n_dirs must be > 0"))
+    n_offsets > 0 || throw(ArgumentError("MatchingDistanceBankSpec.n_offsets must be > 0"))
+    max_den > 0 || throw(ArgumentError("MatchingDistanceBankSpec.max_den must be > 0"))
+    refs = collect(references)
+    names = if reference_names === nothing
+        [Symbol("ref_$(i)") for i in 1:length(refs)]
+    else
+        Symbol[Symbol(x) for x in reference_names]
+    end
+    length(names) == length(refs) || throw(ArgumentError("reference_names length must match references length"))
+    dirs2 = directions === nothing ? nothing : _to_vecvec_float(directions)
+    offs2 = offsets === nothing ? nothing : _to_vecvec_float(offsets)
+    return MatchingDistanceBankSpec{typeof(refs),typeof(dirs2),typeof(offs2)}(
+        refs,
+        names,
+        method,
+        dirs2,
+        offs2,
+        n_dirs,
+        n_offsets,
+        max_den,
+        include_axes,
+        normalize_dirs,
+        weight,
+        threads === nothing ? nothing : Bool(threads),
+    )
+end
+
+function MPPImageSpec(; resolution::Int=32,
+                       xgrid=nothing,
+                       ygrid=nothing,
+                       sigma::Real=0.05,
+                       N::Int=16,
+                       delta::Union{Real,Symbol}=:auto,
+                       q::Real=1.0,
+                       tie_break::Symbol=:center,
+                       cutoff_radius=nothing,
+                       cutoff_tol=nothing,
+                       segment_prune::Bool=true,
+                       threads=nothing)
+    resolution > 1 || throw(ArgumentError("MPPImageSpec.resolution must be >= 2"))
+    xgrid2 = xgrid === nothing ? nothing : Float64[float(x) for x in xgrid]
+    ygrid2 = ygrid === nothing ? nothing : Float64[float(y) for y in ygrid]
+    xgrid2 === nothing || length(xgrid2) > 1 || throw(ArgumentError("MPPImageSpec.xgrid must have length >= 2"))
+    ygrid2 === nothing || length(ygrid2) > 1 || throw(ArgumentError("MPPImageSpec.ygrid must have length >= 2"))
+    delta2 = delta isa Symbol ? delta : float(delta)
+    cutoff_radius2 = cutoff_radius === nothing ? nothing : float(cutoff_radius)
+    cutoff_tol2 = cutoff_tol === nothing ? nothing : float(cutoff_tol)
+    return MPPImageSpec(
+        resolution,
+        xgrid2,
+        ygrid2,
+        float(sigma),
+        N,
+        delta2,
+        float(q),
+        tie_break,
+        cutoff_radius2,
+        cutoff_tol2,
+        segment_prune,
+        threads === nothing ? nothing : Bool(threads),
+    )
+end
+
+function MPPDecompositionHistogramSpec(; orientation_bins::Int=12,
+                                         scale_bins::Int=12,
+                                         scale_range=nothing,
+                                         weight::Symbol=:mass,
+                                         normalize::Symbol=:l1,
+                                         N::Int=16,
+                                         delta::Union{Real,Symbol}=:auto,
+                                         q::Real=1.0,
+                                         tie_break::Symbol=:center,
+                                         threads=nothing)
+    orientation_bins > 0 || throw(ArgumentError("MPPDecompositionHistogramSpec.orientation_bins must be > 0"))
+    scale_bins > 0 || throw(ArgumentError("MPPDecompositionHistogramSpec.scale_bins must be > 0"))
+    weight in (:count, :mass) ||
+        throw(ArgumentError("MPPDecompositionHistogramSpec.weight must be :count or :mass"))
+    normalize in (:none, :l1, :l2, :max) ||
+        throw(ArgumentError("MPPDecompositionHistogramSpec.normalize must be :none, :l1, :l2, or :max"))
+    scale_range2 = scale_range === nothing ? nothing : (float(scale_range[1]), float(scale_range[2]))
+    scale_range2 === nothing || scale_range2[1] <= scale_range2[2] ||
+        throw(ArgumentError("MPPDecompositionHistogramSpec.scale_range must satisfy lo <= hi"))
+    delta2 = delta isa Symbol ? delta : float(delta)
+    return MPPDecompositionHistogramSpec(
+        orientation_bins,
+        scale_bins,
+        scale_range2,
+        weight,
+        normalize,
+        N,
+        delta2,
+        float(q),
+        tie_break,
+        threads === nothing ? nothing : Bool(threads),
+    )
+end
+
+BettiTableSpec(; nvertices::Int,
+                 pad_to::Int,
+                 resolution_maxlen::Int=pad_to,
+                 minimal::Bool=false,
+                 check::Bool=true) = begin
+    nvertices >= 0 || throw(ArgumentError("BettiTableSpec.nvertices must be >= 0"))
+    pad_to >= 0 || throw(ArgumentError("BettiTableSpec.pad_to must be >= 0"))
+    resolution_maxlen >= 0 || throw(ArgumentError("BettiTableSpec.resolution_maxlen must be >= 0"))
+    BettiTableSpec(nvertices, pad_to, resolution_maxlen, minimal, check)
+end
+
+BassTableSpec(; nvertices::Int,
+                pad_to::Int,
+                resolution_maxlen::Int=pad_to,
+                minimal::Bool=false,
+                check::Bool=true) = begin
+    nvertices >= 0 || throw(ArgumentError("BassTableSpec.nvertices must be >= 0"))
+    pad_to >= 0 || throw(ArgumentError("BassTableSpec.pad_to must be >= 0"))
+    resolution_maxlen >= 0 || throw(ArgumentError("BassTableSpec.resolution_maxlen must be >= 0"))
+    BassTableSpec(nvertices, pad_to, resolution_maxlen, minimal, check)
+end
+
+RestrictedHilbertSpec(; nvertices::Int) = begin
+    nvertices >= 0 || throw(ArgumentError("RestrictedHilbertSpec.nvertices must be >= 0"))
+    RestrictedHilbertSpec(nvertices)
+end
+
+BettiSupportMeasuresSpec(; pad_to::Int,
+                           resolution_maxlen::Int=pad_to,
+                           minimal::Bool=false,
+                           check::Bool=true) = begin
+    pad_to >= 0 || throw(ArgumentError("BettiSupportMeasuresSpec.pad_to must be >= 0"))
+    resolution_maxlen >= 0 || throw(ArgumentError("BettiSupportMeasuresSpec.resolution_maxlen must be >= 0"))
+    BettiSupportMeasuresSpec(pad_to, resolution_maxlen, minimal, check)
+end
+
+BassSupportMeasuresSpec(; pad_to::Int,
+                          resolution_maxlen::Int=pad_to,
+                          minimal::Bool=false,
+                          check::Bool=true) = begin
+    pad_to >= 0 || throw(ArgumentError("BassSupportMeasuresSpec.pad_to must be >= 0"))
+    resolution_maxlen >= 0 || throw(ArgumentError("BassSupportMeasuresSpec.resolution_maxlen must be >= 0"))
+    BassSupportMeasuresSpec(pad_to, resolution_maxlen, minimal, check)
 end
 
 CompositeSpec(specs::Tuple; namespacing::Bool=true) = CompositeSpec{typeof(specs)}(specs, namespacing)
@@ -1608,6 +2660,32 @@ feature_names(spec::PersistenceImageSpec) =
 
 nfeatures(spec::PersistenceImageSpec) = length(feature_names(spec))
 
+function feature_axes(spec::MPLandscapeSpec)
+    return (
+        direction=collect(1:length(spec.directions)),
+        offset=collect(1:length(spec.offsets)),
+        k=collect(1:spec.kmax),
+        t=copy(spec.tgrid),
+        directions=_copy_vecvec(spec.directions),
+        offsets=_copy_vecvec(spec.offsets),
+    )
+end
+
+function feature_names(spec::MPLandscapeSpec)
+    nd = length(spec.directions)
+    no = length(spec.offsets)
+    nt = length(spec.tgrid)
+    out = Vector{Symbol}(undef, nd * no * spec.kmax * nt)
+    idx = 1
+    for it in 1:nt, k in 1:spec.kmax, j in 1:no, i in 1:nd
+        out[idx] = Symbol("mp_landscape__d$(i)_o$(j)_k$(k)_t$(it)")
+        idx += 1
+    end
+    return out
+end
+
+nfeatures(spec::MPLandscapeSpec) = length(feature_names(spec))
+
 function feature_axes(spec::EulerSurfaceSpec)
     spec.axes === nothing && return (axes_policy=spec.axes_policy, axes=nothing)
     return (_axis_namedtuple(spec.axes)..., axes_policy=spec.axes_policy)
@@ -1626,6 +2704,54 @@ feature_axes(spec::RankGridSpec) =
 
 feature_names(spec::RankGridSpec) = [Symbol("rank__a$(a)_b$(b)") for a in 1:spec.nvertices for b in 1:spec.nvertices]
 nfeatures(spec::RankGridSpec) = length(feature_names(spec))
+
+feature_axes(spec::RestrictedHilbertSpec) = (vertex=collect(1:spec.nvertices),)
+
+feature_names(spec::RestrictedHilbertSpec) =
+    [Symbol("restricted_hilbert__p$(p)") for p in 1:spec.nvertices]
+
+nfeatures(spec::RestrictedHilbertSpec) = length(feature_names(spec))
+
+@inline function _barcode_topk_field_labels(k::Int)
+    out = Symbol[:count]
+    for i in 1:k
+        push!(out, Symbol("present_$(i)"))
+        push!(out, Symbol("birth_$(i)"))
+        push!(out, Symbol("persistence_$(i)"))
+    end
+    return out
+end
+
+function feature_axes(spec::BarcodeTopKSpec)
+    fields = _barcode_topk_field_labels(spec.k)
+    if spec.aggregate == :stack
+        return (direction=collect(1:length(spec.directions)),
+                offset=collect(1:length(spec.offsets)),
+                field=fields,
+                source=spec.source)
+    end
+    return (aggregate=spec.aggregate,
+            field=fields,
+            source=spec.source,
+            directions=_copy_vecvec(spec.directions),
+            offsets=_copy_vecvec(spec.offsets))
+end
+
+function feature_names(spec::BarcodeTopKSpec)
+    base = _barcode_topk_field_labels(spec.k)
+    if spec.aggregate == :stack
+        out = Vector{Symbol}(undef, length(spec.directions) * length(spec.offsets) * length(base))
+        idx = 1
+        for i in 1:length(spec.directions), j in 1:length(spec.offsets), fld in base
+            out[idx] = Symbol("barcode_topk__d$(i)_o$(j)__" * String(fld))
+            idx += 1
+        end
+        return out
+    end
+    return [Symbol("barcode_topk__" * String(fld)) for fld in base]
+end
+
+nfeatures(spec::BarcodeTopKSpec) = length(feature_names(spec))
 
 @inline function _sliced_stat_axis(spec::SlicedBarcodeSpec)
     if spec.featurizer == :summary
@@ -1663,6 +2789,105 @@ end
 
 nfeatures(spec::SlicedBarcodeSpec) = length(feature_names(spec))
 
+function feature_axes(spec::BarcodeSummarySpec)
+    if spec.aggregate == :stack
+        return (direction=collect(1:length(spec.directions)),
+                offset=collect(1:length(spec.offsets)),
+                field=collect(spec.fields),
+                source=spec.source)
+    end
+    return (aggregate=spec.aggregate,
+            field=collect(spec.fields),
+            source=spec.source,
+            directions=_copy_vecvec(spec.directions),
+            offsets=_copy_vecvec(spec.offsets))
+end
+
+function feature_names(spec::BarcodeSummarySpec)
+    base = [Symbol("barcode_summary__" * String(fld)) for fld in spec.fields]
+    if spec.aggregate == :stack
+        out = Vector{Symbol}(undef, length(spec.directions) * length(spec.offsets) * length(base))
+        idx = 1
+        for i in 1:length(spec.directions), j in 1:length(spec.offsets), fld in base
+            out[idx] = Symbol(String(fld) * "__d$(i)_o$(j)")
+            idx += 1
+        end
+        return out
+    end
+    return base
+end
+
+nfeatures(spec::BarcodeSummarySpec) = length(feature_names(spec))
+
+@inline function _point_measure_slot_fields(ndims::Int)
+    out = Symbol[]
+    for i in 1:ndims
+        push!(out, Symbol("coord_$(i)"))
+    end
+    return out
+end
+
+function feature_axes(spec::PointSignedMeasureSpec)
+    return (term=collect(1:spec.k), field=(:present, :weight, _point_measure_slot_fields(spec.ndims)...), coords=spec.coords)
+end
+
+function feature_names(spec::PointSignedMeasureSpec)
+    out = Symbol[:point_signed_measure__count]
+    for t in 1:spec.k
+        push!(out, Symbol("point_signed_measure__term$(t)__present"))
+        push!(out, Symbol("point_signed_measure__term$(t)__weight"))
+        for i in 1:spec.ndims
+            push!(out, Symbol("point_signed_measure__term$(t)__coord$(i)"))
+        end
+    end
+    return out
+end
+
+nfeatures(spec::PointSignedMeasureSpec) = length(feature_names(spec))
+
+function feature_axes(spec::EulerSignedMeasureSpec)
+    out = (term=collect(1:spec.k), field=(:present, :weight, _point_measure_slot_fields(spec.ndims)...), coords=spec.coords)
+    spec.axes === nothing && return (out..., axes_policy=spec.axes_policy, max_axis_len=spec.max_axis_len)
+    return (out..., _axis_namedtuple(spec.axes, "axis")..., axes_policy=spec.axes_policy, max_axis_len=spec.max_axis_len)
+end
+
+function feature_names(spec::EulerSignedMeasureSpec)
+    out = Symbol[:euler_signed_measure__count]
+    for t in 1:spec.k
+        push!(out, Symbol("euler_signed_measure__term$(t)__present"))
+        push!(out, Symbol("euler_signed_measure__term$(t)__weight"))
+        for i in 1:spec.ndims
+            push!(out, Symbol("euler_signed_measure__term$(t)__coord$(i)"))
+        end
+    end
+    return out
+end
+
+nfeatures(spec::EulerSignedMeasureSpec) = length(feature_names(spec))
+
+function feature_axes(spec::RectangleSignedBarcodeTopKSpec)
+    out = (term=collect(1:spec.k), field=(:present, :weight, :lo, :hi), coords=spec.coords, ndims=spec.ndims)
+    spec.axes === nothing && return (out..., axes_policy=spec.axes_policy, max_axis_len=spec.max_axis_len)
+    return (out..., _axis_namedtuple(spec.axes, "axis")..., axes_policy=spec.axes_policy, max_axis_len=spec.max_axis_len)
+end
+
+function feature_names(spec::RectangleSignedBarcodeTopKSpec)
+    out = Symbol[:rectangle_signed_barcode__count]
+    for t in 1:spec.k
+        push!(out, Symbol("rectangle_signed_barcode__term$(t)__present"))
+        push!(out, Symbol("rectangle_signed_barcode__term$(t)__weight"))
+        for i in 1:spec.ndims
+            push!(out, Symbol("rectangle_signed_barcode__term$(t)__lo$(i)"))
+        end
+        for i in 1:spec.ndims
+            push!(out, Symbol("rectangle_signed_barcode__term$(t)__hi$(i)"))
+        end
+    end
+    return out
+end
+
+nfeatures(spec::RectangleSignedBarcodeTopKSpec) = length(feature_names(spec))
+
 function feature_axes(spec::SignedBarcodeImageSpec)
     out = (x=copy(spec.xs), y=copy(spec.ys), mode=spec.mode, method=spec.method)
     spec.axes === nothing && return out
@@ -1684,6 +2909,124 @@ end
 
 feature_names(spec::ProjectedDistancesSpec) = copy(spec.reference_names)
 nfeatures(spec::ProjectedDistancesSpec) = length(spec.reference_names)
+
+function feature_axes(spec::MatchingDistanceBankSpec)
+    out = (reference=copy(spec.reference_names), method=spec.method, normalize_dirs=spec.normalize_dirs, weight=spec.weight)
+    if spec.directions === nothing
+        return (out..., n_dirs=spec.n_dirs, n_offsets=spec.n_offsets, max_den=spec.max_den, include_axes=spec.include_axes)
+    end
+    return (out..., directions=_copy_vecvec(spec.directions), offsets=spec.offsets === nothing ? nothing : _copy_vecvec(spec.offsets))
+end
+
+feature_names(spec::MatchingDistanceBankSpec) = copy(spec.reference_names)
+nfeatures(spec::MatchingDistanceBankSpec) = length(spec.reference_names)
+
+@inline _grid_feature_length(grid::Union{Nothing,Vector{Float64}}, resolution::Int) =
+    grid === nothing ? resolution : length(grid)
+
+function feature_axes(spec::MPPImageSpec)
+    xax = spec.xgrid === nothing ? collect(1:spec.resolution) : copy(spec.xgrid)
+    yax = spec.ygrid === nothing ? collect(1:spec.resolution) : copy(spec.ygrid)
+    return (
+        x=xax,
+        y=yax,
+        sigma=spec.sigma,
+        resolution=spec.resolution,
+        N=spec.N,
+        delta=spec.delta,
+        q=spec.q,
+        tie_break=spec.tie_break,
+    )
+end
+
+function feature_names(spec::MPPImageSpec)
+    nx = _grid_feature_length(spec.xgrid, spec.resolution)
+    ny = _grid_feature_length(spec.ygrid, spec.resolution)
+    return [Symbol("mpp_image__x$(ix)_y$(iy)") for ix in 1:nx for iy in 1:ny]
+end
+
+nfeatures(spec::MPPImageSpec) = length(feature_names(spec))
+
+function feature_axes(spec::MPPDecompositionHistogramSpec)
+    return (
+        orientation_bin=collect(1:spec.orientation_bins),
+        scale_bin=collect(1:spec.scale_bins),
+        weight=spec.weight,
+        normalize=spec.normalize,
+        scale_range=spec.scale_range,
+        scale_normalization=:box_diagonal,
+        scalars=(:total_mass, :n_summands, :n_segments, :max_scale, :entropy),
+        N=spec.N,
+        delta=spec.delta,
+        q=spec.q,
+        tie_break=spec.tie_break,
+    )
+end
+
+function feature_names(spec::MPPDecompositionHistogramSpec)
+    out = Vector{Symbol}(undef, spec.orientation_bins * spec.scale_bins + 5)
+    idx = 1
+    for si in 1:spec.scale_bins, oi in 1:spec.orientation_bins
+        out[idx] = Symbol("mpp_decomposition_hist__theta$(oi)_scale$(si)")
+        idx += 1
+    end
+    out[idx] = :mpp_decomposition_hist__total_mass
+    out[idx + 1] = :mpp_decomposition_hist__n_summands
+    out[idx + 2] = :mpp_decomposition_hist__n_segments
+    out[idx + 3] = :mpp_decomposition_hist__max_scale
+    out[idx + 4] = :mpp_decomposition_hist__entropy
+    return out
+end
+
+nfeatures(spec::MPPDecompositionHistogramSpec) = length(feature_names(spec))
+
+feature_axes(spec::BettiTableSpec) =
+    (degree=collect(0:spec.pad_to), vertex=collect(1:spec.nvertices), resolution_maxlen=spec.resolution_maxlen)
+
+feature_names(spec::BettiTableSpec) =
+    [Symbol("betti__a$(a)_p$(p)") for a in 0:spec.pad_to for p in 1:spec.nvertices]
+
+nfeatures(spec::BettiTableSpec) = length(feature_names(spec))
+
+feature_axes(spec::BassTableSpec) =
+    (degree=collect(0:spec.pad_to), vertex=collect(1:spec.nvertices), resolution_maxlen=spec.resolution_maxlen)
+
+feature_names(spec::BassTableSpec) =
+    [Symbol("bass__b$(b)_p$(p)") for b in 0:spec.pad_to for p in 1:spec.nvertices]
+
+nfeatures(spec::BassTableSpec) = length(feature_names(spec))
+
+feature_axes(spec::BettiSupportMeasuresSpec) =
+    (degree=collect(0:spec.pad_to),
+     quantity=(:support, :mass),
+     summary=(:support_union, :support_total, :mass_total),
+     resolution_maxlen=spec.resolution_maxlen)
+
+function feature_names(spec::BettiSupportMeasuresSpec)
+    out = Symbol[]
+    append!(out, Symbol("betti_support__support_a$(a)") for a in 0:spec.pad_to)
+    append!(out, Symbol("betti_support__mass_a$(a)") for a in 0:spec.pad_to)
+    append!(out, (:betti_support__support_union, :betti_support__support_total, :betti_support__mass_total))
+    return out
+end
+
+nfeatures(spec::BettiSupportMeasuresSpec) = length(feature_names(spec))
+
+feature_axes(spec::BassSupportMeasuresSpec) =
+    (degree=collect(0:spec.pad_to),
+     quantity=(:support, :mass),
+     summary=(:support_union, :support_total, :mass_total),
+     resolution_maxlen=spec.resolution_maxlen)
+
+function feature_names(spec::BassSupportMeasuresSpec)
+    out = Symbol[]
+    append!(out, Symbol("bass_support__support_b$(b)") for b in 0:spec.pad_to)
+    append!(out, Symbol("bass_support__mass_b$(b)") for b in 0:spec.pad_to)
+    append!(out, (:bass_support__support_union, :bass_support__support_total, :bass_support__mass_total))
+    return out
+end
+
+nfeatures(spec::BassSupportMeasuresSpec) = length(feature_names(spec))
 
 function feature_axes(spec::CompositeSpec)
     comps = Vector{Any}(undef, length(spec.specs))
@@ -1746,6 +3089,90 @@ end
     throw(ArgumentError("sample must provide both module and encoding map (EncodingResult or (M,pi))"))
 end
 
+@inline _supports_projective_resolution(obj) =
+    (obj isa ResolutionResult && obj.res isa DerivedFunctors.ProjectiveResolution) ||
+    (obj isa DerivedFunctors.ProjectiveResolution)
+
+@inline _supports_injective_resolution(obj) =
+    (obj isa ResolutionResult && obj.res isa DerivedFunctors.InjectiveResolution) ||
+    (obj isa DerivedFunctors.InjectiveResolution)
+
+@inline function _sample_projective_resolution(obj)
+    if obj isa ResolutionResult
+        obj.res isa DerivedFunctors.ProjectiveResolution ||
+            throw(ArgumentError("sample ResolutionResult does not store a projective resolution"))
+        return obj.res
+    elseif obj isa DerivedFunctors.ProjectiveResolution
+        return obj
+    end
+    throw(ArgumentError("sample must provide a projective resolution or ResolutionResult"))
+end
+
+@inline function _sample_injective_resolution(obj)
+    if obj isa ResolutionResult
+        obj.res isa DerivedFunctors.InjectiveResolution ||
+            throw(ArgumentError("sample ResolutionResult does not store an injective resolution"))
+        return obj.res
+    elseif obj isa DerivedFunctors.InjectiveResolution
+        return obj
+    end
+    throw(ArgumentError("sample must provide an injective resolution or ResolutionResult"))
+end
+
+@inline _supports_projective_resolution_pi(obj) =
+    (obj isa ResolutionResult &&
+     obj.res isa DerivedFunctors.ProjectiveResolution &&
+     obj.enc !== nothing &&
+     hasproperty(obj.enc, :pi)) ||
+    (obj isa Tuple && length(obj) >= 2 && obj[1] isa DerivedFunctors.ProjectiveResolution) ||
+    (obj isa NamedTuple && hasproperty(obj, :res) && hasproperty(obj, :pi) &&
+     getproperty(obj, :res) isa DerivedFunctors.ProjectiveResolution)
+
+@inline _supports_injective_resolution_pi(obj) =
+    (obj isa ResolutionResult &&
+     obj.res isa DerivedFunctors.InjectiveResolution &&
+     obj.enc !== nothing &&
+     hasproperty(obj.enc, :pi)) ||
+    (obj isa Tuple && length(obj) >= 2 && obj[1] isa DerivedFunctors.InjectiveResolution) ||
+    (obj isa NamedTuple && hasproperty(obj, :res) && hasproperty(obj, :pi) &&
+     getproperty(obj, :res) isa DerivedFunctors.InjectiveResolution)
+
+@inline function _sample_projective_resolution_pi(obj)
+    if obj isa ResolutionResult
+        obj.res isa DerivedFunctors.ProjectiveResolution ||
+            throw(ArgumentError("sample ResolutionResult does not store a projective resolution"))
+        obj.enc !== nothing && hasproperty(obj.enc, :pi) ||
+            throw(ArgumentError("sample ResolutionResult must carry provenance with a pi field"))
+        return obj.res, getproperty(obj.enc, :pi)
+    elseif obj isa Tuple && length(obj) >= 2 && obj[1] isa DerivedFunctors.ProjectiveResolution
+        return obj[1], obj[2]
+    elseif obj isa NamedTuple && hasproperty(obj, :res) && hasproperty(obj, :pi)
+        res = getproperty(obj, :res)
+        res isa DerivedFunctors.ProjectiveResolution ||
+            throw(ArgumentError("sample NamedTuple field :res must be a projective resolution"))
+        return res, getproperty(obj, :pi)
+    end
+    throw(ArgumentError("sample must provide a projective resolution together with pi"))
+end
+
+@inline function _sample_injective_resolution_pi(obj)
+    if obj isa ResolutionResult
+        obj.res isa DerivedFunctors.InjectiveResolution ||
+            throw(ArgumentError("sample ResolutionResult does not store an injective resolution"))
+        obj.enc !== nothing && hasproperty(obj.enc, :pi) ||
+            throw(ArgumentError("sample ResolutionResult must carry provenance with a pi field"))
+        return obj.res, getproperty(obj.enc, :pi)
+    elseif obj isa Tuple && length(obj) >= 2 && obj[1] isa DerivedFunctors.InjectiveResolution
+        return obj[1], obj[2]
+    elseif obj isa NamedTuple && hasproperty(obj, :res) && hasproperty(obj, :pi)
+        res = getproperty(obj, :res)
+        res isa DerivedFunctors.InjectiveResolution ||
+            throw(ArgumentError("sample NamedTuple field :res must be an injective resolution"))
+        return res, getproperty(obj, :pi)
+    end
+    throw(ArgumentError("sample must provide an injective resolution together with pi"))
+end
+
 @inline _supports_module(obj) = (obj isa EncodingResult) || (obj isa PModule) ||
     (obj isa Tuple && length(obj) >= 1 && obj[1] isa PModule) ||
     (obj isa NamedTuple && hasproperty(obj, :M) && getproperty(obj, :M) isa PModule)
@@ -1761,9 +3188,36 @@ Return whether a featurizer spec supports a sample without throwing.
 """
 supports(::LandscapeSpec, obj) = _supports_module_pi(obj)
 supports(::PersistenceImageSpec, obj) = _supports_module_pi(obj)
+supports(::MPLandscapeSpec, obj) = _supports_module_pi(obj)
 supports(::EulerSurfaceSpec, obj) = _supports_module_pi(obj)
 supports(::RankGridSpec, obj) = _supports_module(obj)
+supports(::RestrictedHilbertSpec, obj) = _supports_module(obj)
+supports(spec::PointSignedMeasureSpec, obj) =
+    obj isa Invariants.PointSignedMeasure && length(obj.axes) == spec.ndims
+supports(spec::EulerSignedMeasureSpec, obj) =
+    _supports_module_pi(obj) && begin
+        _, pi = _sample_module_pi(obj)
+        pi0 = _unwrap_cache_pi(pi)
+        !hasproperty(pi0, :n) || Int(getproperty(pi0, :n)) == spec.ndims
+    end
+supports(spec::BarcodeTopKSpec, obj) =
+    spec.source == :fibered ? (_supports_module_pi(obj) && _supports_fibered_cache(last(_sample_module_pi(obj)))) :
+                              _supports_module_pi(obj)
 supports(::SlicedBarcodeSpec, obj) = _supports_module_pi(obj)
+supports(spec::BarcodeSummarySpec, obj) =
+    spec.source == :fibered ? (_supports_module_pi(obj) && _supports_fibered_cache(last(_sample_module_pi(obj)))) :
+                              _supports_module_pi(obj)
+supports(spec::RectangleSignedBarcodeTopKSpec, obj) =
+    (obj isa Invariants.RectSignedBarcode && length(obj.axes) == spec.ndims) ||
+    (_supports_module_pi(obj) && begin
+        _, pi = _sample_module_pi(obj)
+        pi0 = _unwrap_cache_pi(pi)
+        pi0 isa ZnEncoding.ZnEncodingMap && pi0.n == spec.ndims
+    end)
+supports(::BettiTableSpec, obj) = _supports_projective_resolution(obj) || _supports_module(obj)
+supports(::BassTableSpec, obj) = _supports_injective_resolution(obj) || _supports_module(obj)
+supports(::BettiSupportMeasuresSpec, obj) = _supports_projective_resolution_pi(obj) || _supports_module_pi(obj)
+supports(::BassSupportMeasuresSpec, obj) = _supports_injective_resolution_pi(obj) || _supports_module_pi(obj)
 
 function supports(::SignedBarcodeImageSpec, obj)
     _supports_module_pi(obj) || return false
@@ -1780,7 +3234,72 @@ function supports(spec::ProjectedDistancesSpec, obj)
     return true
 end
 
+function supports(spec::MatchingDistanceBankSpec, obj)
+    _supports_module_pi(obj) || return false
+    if spec.method == :exact_2d
+        _, pi = _sample_module_pi(obj)
+        _supports_fibered_cache(pi) || return false
+    end
+    @inbounds for r in spec.references
+        _supports_module_pi(r) || return false
+        if spec.method == :exact_2d
+            _, pi = _sample_module_pi(r)
+            _supports_fibered_cache(pi) || return false
+        end
+    end
+    return true
+end
+
+function supports(::MPPImageSpec, obj)
+    _supports_module_pi(obj) || return false
+    _, pi = _sample_module_pi(obj)
+    return _supports_fibered_cache(pi)
+end
+
+function supports(::MPPDecompositionHistogramSpec, obj)
+    _supports_module_pi(obj) || return false
+    _, pi = _sample_module_pi(obj)
+    return _supports_fibered_cache(pi)
+end
+
+@inline _is_projective_resolution_spec(spec) =
+    spec isa Union{BettiTableSpec,BettiSupportMeasuresSpec}
+
+@inline _is_injective_resolution_spec(spec) =
+    spec isa Union{BassTableSpec,BassSupportMeasuresSpec}
+
+@inline _is_resolution_spec(spec) =
+    _is_projective_resolution_spec(spec) || _is_injective_resolution_spec(spec)
+
+@inline _needs_resolution_pi(spec) =
+    spec isa Union{BettiSupportMeasuresSpec,BassSupportMeasuresSpec}
+
+@inline function _composite_resolution_family(spec::CompositeSpec)
+    has_proj = any(_is_projective_resolution_spec, spec.specs)
+    has_inj = any(_is_injective_resolution_spec, spec.specs)
+    if has_proj && has_inj
+        return :mixed
+    elseif has_proj
+        return :projective
+    elseif has_inj
+        return :injective
+    end
+    return :none
+end
+
+@inline function _composite_pure_resolution_family(spec::CompositeSpec)
+    fam = _composite_resolution_family(spec)
+    fam == :mixed && return :mixed
+    fam == :none && return :none
+    all(_is_resolution_spec, spec.specs) || return :none
+    return fam
+end
+
 function supports(spec::CompositeSpec, obj)
+    fam = _composite_resolution_family(spec)
+    if fam == :mixed
+        return false
+    end
     @inbounds for s in spec.specs
         supports(s, obj) || return false
     end
@@ -1789,7 +3308,11 @@ end
 
 @inline _cache_sample(cache::ModuleInvariantCache) = cache.M
 @inline _cache_sample(cache::RestrictedHilbertInvariantCache) = (cache.M, cache.pi)
+@inline _cache_sample(cache::ResolutionInvariantCache) = cache.res
+@inline _cache_sample(cache::ResolutionMeasureInvariantCache) = (cache.res, cache.pi)
 @inline _cache_sample(cache::EncodingInvariantCache) = (cache.M, cache.pi)
+@inline _cache_sample(cache::PointMeasureInvariantCache) = cache.pm
+@inline _cache_sample(cache::SignedBarcodeInvariantCache) = cache.sb
 
 @inline function _default_invariant_opts(opts::InvariantOptions)
     return opts.axes === nothing &&
@@ -1804,6 +3327,11 @@ end
 @inline _cache_opts(cache::AbstractInvariantCache, opts::InvariantOptions) =
     (_default_invariant_opts(opts) ? cache.opts : opts)
 @inline _cache_opts(cache::AbstractInvariantCache, ::Nothing) = cache.opts
+@inline _cache_opts(cache::ResolutionInvariantCache, opts::InvariantOptions) = opts
+@inline _cache_opts(cache::ResolutionInvariantCache, ::Nothing) = InvariantOptions()
+@inline _cache_opts(cache::ResolutionMeasureInvariantCache, opts::InvariantOptions) =
+    (_default_invariant_opts(opts) ? cache.opts : opts)
+@inline _cache_opts(cache::ResolutionMeasureInvariantCache, ::Nothing) = cache.opts
 
 @inline function _cache_threaded(cache::AbstractInvariantCache, threaded::Bool)
     return cache.threads ? threaded : false
@@ -1828,15 +3356,47 @@ end
     level == :auto || return level
     if spec isa ProjectedDistancesSpec
         return :projected
+    elseif spec isa MPPImageSpec
+        return :fibered
     elseif spec isa SignedBarcodeImageSpec
         return :all
-    elseif spec isa Union{LandscapeSpec,PersistenceImageSpec,SlicedBarcodeSpec}
+    elseif spec isa Union{LandscapeSpec,PersistenceImageSpec,MPLandscapeSpec,SlicedBarcodeSpec}
         # Keep semantics stable by default; fibered path is opt-in via level=:fibered/:all.
         return :slice
     elseif spec isa CompositeSpec
         return :all
     end
     return :none
+end
+
+@inline function _effective_cache_level(level::Symbol,
+                                        spec::Union{BarcodeTopKSpec,BarcodeSummarySpec},
+                                        pi=nothing)
+    if spec.source == :fibered
+        return level == :all ? :all : :fibered
+    end
+    return level == :none ? :none : :slice
+end
+
+@inline function _effective_cache_level(level::Symbol,
+                                        ::MPPDecompositionHistogramSpec,
+                                        pi=nothing)
+    return level == :auto ? :fibered : level
+end
+
+@inline function _effective_cache_level(level::Symbol,
+                                        spec::MatchingDistanceBankSpec,
+                                        pi=nothing)
+    if level == :auto
+        return spec.method == :exact_2d ? :fibered : :slice
+    end
+    return level
+end
+
+@inline function _effective_cache_level(level::Symbol,
+                                        ::RectangleSignedBarcodeTopKSpec,
+                                        pi=nothing)
+    return level == :auto ? :all : level
 end
 
 function build_cache(M::PModule{K,F,MatT};
@@ -1873,6 +3433,7 @@ function build_cache(M::PModule{K,F,MatT}, pi;
         Dict{UInt,Invariants.ProjectedBarcodeCache{K}}(),
         Dict{Tuple{UInt,UInt},Invariants.ProjectedBarcodeCache}(),
         Dict{UInt,Invariants.FiberedBarcodeCache2D{K}}(),
+        Dict{UInt,Invariants.MPPDecomposition}(),
         nothing,
     )
 end
@@ -1916,6 +3477,153 @@ build_cache(M::PModule, pi, opts::InvariantOptions; kwargs...) =
 build_cache(obj, opts::InvariantOptions; kwargs...) =
     build_cache(obj; opts=opts, kwargs...)
 
+@inline _resolution_options(spec::Union{BettiTableSpec,BettiSupportMeasuresSpec}) =
+    ResolutionOptions(maxlen=spec.resolution_maxlen, minimal=spec.minimal, check=spec.check)
+
+@inline _resolution_options(spec::Union{BassTableSpec,BassSupportMeasuresSpec}) =
+    ResolutionOptions(maxlen=spec.resolution_maxlen, minimal=spec.minimal, check=spec.check)
+
+function _build_resolution_cache(obj,
+                                 spec::BettiTableSpec;
+                                 level::Symbol=:auto,
+                                 threaded::Bool=true,
+                                 cache=:auto)
+    _validate_cache_level(level)
+    res = if _supports_projective_resolution(obj)
+        _sample_projective_resolution(obj)
+    else
+        M = _sample_module(obj)
+        session_cache = _resolve_workflow_session_cache(cache)
+        rcache = _resolution_cache_from_session(nothing, session_cache, M)
+        DerivedFunctors.projective_resolution(M, _resolution_options(spec); cache=rcache)
+    end
+    return ResolutionInvariantCache{typeof(res)}(res, threaded, level, :projective)
+end
+
+function _build_resolution_cache(obj,
+                                 spec::BassTableSpec;
+                                 level::Symbol=:auto,
+                                 threaded::Bool=true,
+                                 cache=:auto)
+    _validate_cache_level(level)
+    res = if _supports_injective_resolution(obj)
+        _sample_injective_resolution(obj)
+    else
+        M = _sample_module(obj)
+        session_cache = _resolve_workflow_session_cache(cache)
+        rcache = _resolution_cache_from_session(nothing, session_cache, M)
+        DerivedFunctors.injective_resolution(M, _resolution_options(spec); cache=rcache)
+    end
+    return ResolutionInvariantCache{typeof(res)}(res, threaded, level, :injective)
+end
+
+function _build_resolution_cache(obj,
+                                 spec::CompositeSpec;
+                                 level::Symbol=:auto,
+                                 threaded::Bool=true,
+                                 cache=:auto)
+    fam = _composite_pure_resolution_family(spec)
+    if fam == :projective
+        maxlen = maximum(s.resolution_maxlen for s in spec.specs)
+        minimal = any(s.minimal for s in spec.specs)
+        check = any(s.check for s in spec.specs)
+        nverts = maximum(s.nvertices for s in spec.specs)
+        agg = BettiTableSpec(nverts, 0, maxlen, minimal, check)
+        return _build_resolution_cache(obj, agg; level=level, threaded=threaded, cache=cache)
+    elseif fam == :injective
+        maxlen = maximum(s.resolution_maxlen for s in spec.specs)
+        minimal = any(s.minimal for s in spec.specs)
+        check = any(s.check for s in spec.specs)
+        nverts = maximum(s.nvertices for s in spec.specs)
+        agg = BassTableSpec(nverts, 0, maxlen, minimal, check)
+        return _build_resolution_cache(obj, agg; level=level, threaded=threaded, cache=cache)
+    end
+    throw(ArgumentError("resolution cache requires a homogeneous BettiTableSpec or BassTableSpec composite"))
+end
+
+@inline function _support_measure_weights(pi, opts0::InvariantOptions)
+    opts0.box === nothing &&
+        throw(ArgumentError("support-measure featurizers require opts.box (or opts.box=:auto)"))
+    pi0 = _unwrap_cache_pi(pi)
+    if opts0.strict === nothing
+        return Invariants.region_weights(pi0; box=opts0.box)
+    end
+    return Invariants.region_weights(pi0; box=opts0.box, strict=opts0.strict)
+end
+
+function _build_resolution_measure_cache(obj,
+                                         spec::BettiSupportMeasuresSpec;
+                                         opts::InvariantOptions=InvariantOptions(),
+                                         level::Symbol=:auto,
+                                         threaded::Bool=true,
+                                         cache=:auto)
+    _validate_cache_level(level)
+    opts0 = opts
+    if _supports_projective_resolution_pi(obj)
+        res, pi = _sample_projective_resolution_pi(obj)
+        weights = _support_measure_weights(pi, opts0)
+        return ResolutionMeasureInvariantCache{typeof(res),typeof(pi),typeof(weights)}(
+            res, pi, opts0, threaded, level, :projective, weights
+        )
+    end
+    M, pi = _sample_module_pi(obj)
+    session_cache = _resolve_workflow_session_cache(cache)
+    rcache = _resolution_cache_from_session(nothing, session_cache, M)
+    res = DerivedFunctors.projective_resolution(M, _resolution_options(spec); cache=rcache)
+    weights = _support_measure_weights(pi, opts0)
+    return ResolutionMeasureInvariantCache{typeof(res),typeof(pi),typeof(weights)}(
+        res, pi, opts0, threaded, level, :projective, weights
+    )
+end
+
+function _build_resolution_measure_cache(obj,
+                                         spec::BassSupportMeasuresSpec;
+                                         opts::InvariantOptions=InvariantOptions(),
+                                         level::Symbol=:auto,
+                                         threaded::Bool=true,
+                                         cache=:auto)
+    _validate_cache_level(level)
+    opts0 = opts
+    if _supports_injective_resolution_pi(obj)
+        res, pi = _sample_injective_resolution_pi(obj)
+        weights = _support_measure_weights(pi, opts0)
+        return ResolutionMeasureInvariantCache{typeof(res),typeof(pi),typeof(weights)}(
+            res, pi, opts0, threaded, level, :injective, weights
+        )
+    end
+    M, pi = _sample_module_pi(obj)
+    session_cache = _resolve_workflow_session_cache(cache)
+    rcache = _resolution_cache_from_session(nothing, session_cache, M)
+    res = DerivedFunctors.injective_resolution(M, _resolution_options(spec); cache=rcache)
+    weights = _support_measure_weights(pi, opts0)
+    return ResolutionMeasureInvariantCache{typeof(res),typeof(pi),typeof(weights)}(
+        res, pi, opts0, threaded, level, :injective, weights
+    )
+end
+
+function _build_resolution_measure_cache(obj,
+                                         spec::CompositeSpec;
+                                         opts::InvariantOptions=InvariantOptions(),
+                                         level::Symbol=:auto,
+                                         threaded::Bool=true,
+                                         cache=:auto)
+    fam = _composite_pure_resolution_family(spec)
+    fam == :projective || fam == :injective ||
+        throw(ArgumentError("resolution-measure cache requires a homogeneous projective or injective composite"))
+    if fam == :projective
+        maxlen = maximum(s.resolution_maxlen for s in spec.specs)
+        minimal = any(s.minimal for s in spec.specs)
+        check = any(s.check for s in spec.specs)
+        agg = BettiSupportMeasuresSpec(0, maxlen, minimal, check)
+        return _build_resolution_measure_cache(obj, agg; opts=opts, level=level, threaded=threaded, cache=cache)
+    end
+    maxlen = maximum(s.resolution_maxlen for s in spec.specs)
+    minimal = any(s.minimal for s in spec.specs)
+    check = any(s.check for s in spec.specs)
+    agg = BassSupportMeasuresSpec(0, maxlen, minimal, check)
+    return _build_resolution_measure_cache(obj, agg; opts=opts, level=level, threaded=threaded, cache=cache)
+end
+
 function build_cache(M::PModule{K,F,MatT},
                      spec::AbstractFeaturizerSpec;
                      opts::InvariantOptions=InvariantOptions(),
@@ -1923,12 +3631,17 @@ function build_cache(M::PModule{K,F,MatT},
                      threaded::Bool=true,
                      cache=:auto) where {K,F<:AbstractCoeffField,MatT<:AbstractMatrix{K}}
     supports(spec, M) || throw(ArgumentError("build_cache: sample is unsupported for $(typeof(spec))"))
+    if spec isa BettiTableSpec || spec isa BassTableSpec
+        return _build_resolution_cache(M, spec; level=level, threaded=threaded, cache=cache)
+    end
     c = build_cache(M; opts=opts, level=level, threaded=threaded)
     _prime_cache!(c, spec; opts=opts, threaded=threaded)
     return c
 end
 
-@inline function _slice_compile_kwargs(spec::LandscapeSpec, opts0::InvariantOptions, threads0::Bool)
+@inline function _slice_compile_kwargs(spec::Union{LandscapeSpec,MPLandscapeSpec,BarcodeTopKSpec,BarcodeSummarySpec},
+                                       opts0::InvariantOptions,
+                                       threads0::Bool)
     return (
         directions=spec.directions,
         offsets=spec.offsets,
@@ -1979,7 +3692,7 @@ end
     )
 end
 
-@inline function _slice_compile_opts(spec::Union{LandscapeSpec,PersistenceImageSpec,SlicedBarcodeSpec},
+@inline function _slice_compile_opts(spec::Union{LandscapeSpec,PersistenceImageSpec,MPLandscapeSpec,SlicedBarcodeSpec,BarcodeTopKSpec,BarcodeSummarySpec},
                                      opts0::InvariantOptions)
     strict0 = opts0.strict === nothing ? spec.strict : opts0.strict
     box0 = opts0.box
@@ -1998,7 +3711,7 @@ end
 end
 
 function _slice_plan_for!(cache::EncodingInvariantCache,
-                          spec::Union{LandscapeSpec,PersistenceImageSpec,SlicedBarcodeSpec},
+                          spec::Union{LandscapeSpec,PersistenceImageSpec,MPLandscapeSpec,SlicedBarcodeSpec,BarcodeTopKSpec,BarcodeSummarySpec},
                           opts0::InvariantOptions,
                           threads0::Bool)
     opts_compile = _slice_compile_opts(spec, opts0)
@@ -2011,7 +3724,7 @@ function _slice_plan_for!(cache::EncodingInvariantCache,
 end
 
 function _fibered_cache_for!(cache::EncodingInvariantCache,
-                             spec::Union{LandscapeSpec,PersistenceImageSpec,SlicedBarcodeSpec},
+                             spec::Union{LandscapeSpec,PersistenceImageSpec,SlicedBarcodeSpec,BarcodeTopKSpec,BarcodeSummarySpec},
                              opts0::InvariantOptions,
                              threads0::Bool,
                              level::Symbol)
@@ -2025,11 +3738,102 @@ function _fibered_cache_for!(cache::EncodingInvariantCache,
             cache.M,
             pi0,
             opts0;
+            include_axes=true,
             precompute=precompute,
             normalize_dirs=spec.normalize_dirs,
             threads=threads0,
         )
     end
+end
+
+function _fibered_cache_for!(cache::EncodingInvariantCache,
+                             spec::MPPImageSpec,
+                             opts0::InvariantOptions,
+                             threads0::Bool,
+                             level::Symbol)
+    pi0 = _unwrap_cache_pi(cache.pi)
+    _supports_fibered_cache(pi0) ||
+        throw(ArgumentError("fibered cache requested for non-2D/non-PL encoding"))
+    precompute = level == :all ? :full : :none
+    key = UInt(hash((:mpp_image, opts0.box, opts0.strict, precompute)))
+    return get!(cache.fibered, key) do
+        Invariants.fibered_barcode_cache_2d(
+            cache.M,
+            pi0,
+            opts0;
+            include_axes=true,
+            precompute=precompute,
+            threads=threads0,
+        )
+    end
+end
+
+function _fibered_cache_for!(cache::EncodingInvariantCache,
+                             spec::MPPDecompositionHistogramSpec,
+                             opts0::InvariantOptions,
+                             threads0::Bool,
+                             level::Symbol)
+    pi0 = _unwrap_cache_pi(cache.pi)
+    _supports_fibered_cache(pi0) ||
+        throw(ArgumentError("fibered cache requested for non-2D/non-PL encoding"))
+    precompute = level == :all ? :full : :none
+    key = UInt(hash((:mpp_hist, opts0.box, opts0.strict, precompute)))
+    return get!(cache.fibered, key) do
+        Invariants.fibered_barcode_cache_2d(
+            cache.M,
+            pi0,
+            opts0;
+            include_axes=true,
+            precompute=precompute,
+            threads=threads0,
+        )
+    end
+end
+
+@inline function _mpp_decomposition_key(spec::MPPImageSpec, opts0::InvariantOptions)
+    return UInt(hash((opts0.box, opts0.strict, spec.N, spec.delta, spec.q, spec.tie_break)))
+end
+
+@inline function _mpp_decomposition_key(spec::MPPDecompositionHistogramSpec, opts0::InvariantOptions)
+    return UInt(hash((opts0.box, opts0.strict, spec.N, spec.delta, spec.q, spec.tie_break)))
+end
+
+function _mpp_decomposition_for!(cache::EncodingInvariantCache,
+                                 spec::MPPImageSpec,
+                                 opts0::InvariantOptions,
+                                 threads0::Bool,
+                                 level::Symbol)
+    fcache = _fibered_cache_for!(cache, spec, opts0, threads0, level)
+    key = _mpp_decomposition_key(spec, opts0)
+    decomp = get!(cache.mpp_decompositions, key) do
+        Invariants.mpp_decomposition(
+            fcache;
+            N=spec.N,
+            delta=spec.delta,
+            q=spec.q,
+            tie_break=spec.tie_break,
+        )
+    end
+    return fcache, decomp
+end
+
+function _mpp_decomposition_for!(cache::EncodingInvariantCache,
+                                 spec::MPPDecompositionHistogramSpec,
+                                 opts0::InvariantOptions,
+                                 threads0::Bool,
+                                 level::Symbol)
+    fcache = _fibered_cache_for!(cache, spec, opts0, threads0, level)
+    key = _mpp_decomposition_key(spec, opts0)
+    decomp = get!(cache.mpp_decompositions, key) do
+        Invariants.mpp_decomposition(
+            fcache;
+            N=spec.N,
+            delta=spec.delta,
+            q=spec.q,
+            tie_break=spec.tie_break,
+        )
+    end
+    return fcache, decomp
 end
 
 @inline function _rank_query_cache_for!(cache::EncodingInvariantCache)
@@ -2097,15 +3901,32 @@ end
 end
 
 function _prime_cache!(cache::EncodingInvariantCache,
-                       spec::Union{LandscapeSpec,PersistenceImageSpec,SlicedBarcodeSpec};
+                       spec::Union{LandscapeSpec,PersistenceImageSpec,MPLandscapeSpec,SlicedBarcodeSpec};
                        opts::InvariantOptions=InvariantOptions(),
                        threaded::Bool=true)
     opts0 = _cache_opts(cache, opts)
     threads0 = _resolve_spec_threads(spec.threads, opts0, _cache_threaded(cache, threaded))
     lvl = _effective_cache_level(cache.level, spec, cache.pi)
-    if lvl == :fibered || lvl == :all
+    if spec isa MPLandscapeSpec
+        _slice_plan_for!(cache, spec, opts0, threads0)
+    elseif lvl == :fibered || lvl == :all
         _fibered_cache_for!(cache, spec, opts0, threads0, lvl)
     else
+        _slice_plan_for!(cache, spec, opts0, threads0)
+    end
+    return cache
+end
+
+function _prime_cache!(cache::EncodingInvariantCache,
+                       spec::Union{BarcodeTopKSpec,BarcodeSummarySpec};
+                       opts::InvariantOptions=InvariantOptions(),
+                       threaded::Bool=true)
+    opts0 = _cache_opts(cache, opts)
+    threads0 = _resolve_spec_threads(spec.threads, opts0, _cache_threaded(cache, threaded))
+    lvl = _effective_cache_level(cache.level, spec, cache.pi)
+    if spec.source == :fibered
+        _fibered_cache_for!(cache, spec, opts0, threads0, lvl)
+    elseif lvl != :none
         _slice_plan_for!(cache, spec, opts0, threads0)
     end
     return cache
@@ -2138,6 +3959,46 @@ function _prime_cache!(cache::EncodingInvariantCache,
     return cache
 end
 
+function _prime_cache!(cache::EncodingInvariantCache,
+                       spec::RectangleSignedBarcodeTopKSpec;
+                       opts::InvariantOptions=InvariantOptions(),
+                       threaded::Bool=true)
+    opts0 = _cache_opts(cache, opts)
+    threads0 = _resolve_spec_threads(spec.threads, opts0, _cache_threaded(cache, threaded))
+    _ = threads0
+    lvl = _effective_cache_level(cache.level, spec, cache.pi)
+    if lvl == :all
+        _rank_query_cache_for!(cache)
+    end
+    return cache
+end
+
+function _prime_cache!(cache::EncodingInvariantCache,
+                       spec::MPPImageSpec;
+                       opts::InvariantOptions=InvariantOptions(),
+                       threaded::Bool=true)
+    opts0 = _cache_opts(cache, opts)
+    threads0 = _resolve_spec_threads(spec.threads, opts0, _cache_threaded(cache, threaded))
+    lvl = _effective_cache_level(cache.level, spec, cache.pi)
+    if lvl == :fibered || lvl == :all
+        _fibered_cache_for!(cache, spec, opts0, threads0, lvl)
+    end
+    return cache
+end
+
+function _prime_cache!(cache::EncodingInvariantCache,
+                       spec::MPPDecompositionHistogramSpec;
+                       opts::InvariantOptions=InvariantOptions(),
+                       threaded::Bool=true)
+    opts0 = _cache_opts(cache, opts)
+    threads0 = _resolve_spec_threads(spec.threads, opts0, _cache_threaded(cache, threaded))
+    lvl = _effective_cache_level(cache.level, spec, cache.pi)
+    if lvl == :fibered || lvl == :all
+        _mpp_decomposition_for!(cache, spec, opts0, threads0, lvl)
+    end
+    return cache
+end
+
 function _prime_cache!(cache::AbstractInvariantCache,
                        spec::CompositeSpec;
                        opts::InvariantOptions=InvariantOptions(),
@@ -2152,13 +4013,38 @@ function build_cache(obj,
                      spec::AbstractFeaturizerSpec;
                      opts::InvariantOptions=InvariantOptions(),
                      level::Symbol=:auto,
-                     threaded::Bool=true)
+                     threaded::Bool=true,
+                     cache=:auto)
     supports(spec, obj) || throw(ArgumentError("build_cache: sample is unsupported for $(typeof(spec))"))
-    if spec isa RankGridSpec
+    if spec isa PointSignedMeasureSpec
+        obj isa Invariants.PointSignedMeasure ||
+            throw(ArgumentError("PointSignedMeasureSpec requires a PointSignedMeasure sample"))
+        return PointMeasureInvariantCache{typeof(obj)}(obj, opts, threaded, level)
+    elseif spec isa RectangleSignedBarcodeTopKSpec && obj isa Invariants.RectSignedBarcode
+        return SignedBarcodeInvariantCache{typeof(obj)}(obj, opts, threaded, level)
+    elseif spec isa RankGridSpec
         return build_cache(_sample_module(obj);
             opts=opts,
             level=level,
             threaded=threaded)
+    elseif spec isa CompositeSpec
+        fam = _composite_pure_resolution_family(spec)
+        if fam == :projective || fam == :injective
+            if any(_needs_resolution_pi, spec.specs)
+                return _build_resolution_measure_cache(obj, spec; opts=opts, level=level, threaded=threaded, cache=cache)
+            end
+            return _build_resolution_cache(obj, spec; level=level, threaded=threaded, cache=cache)
+        end
+    elseif spec isa BettiTableSpec || spec isa BassTableSpec
+        return _build_resolution_cache(obj, spec; level=level, threaded=threaded, cache=cache)
+    elseif spec isa BettiSupportMeasuresSpec || spec isa BassSupportMeasuresSpec
+        return _build_resolution_measure_cache(obj, spec; opts=opts, level=level, threaded=threaded, cache=cache)
+    elseif spec isa RestrictedHilbertSpec
+        if _supports_module_pi(obj)
+            M, pi = _sample_module_pi(obj)
+            return build_restricted_hilbert_cache(M, pi; opts=opts, level=level, threaded=threaded)
+        end
+        return build_cache(_sample_module(obj); opts=opts, level=level, threaded=threaded)
     elseif spec isa EulerSurfaceSpec
         M, pi = _sample_module_pi(obj)
         return build_restricted_hilbert_cache(M, pi;
@@ -2166,9 +4052,9 @@ function build_cache(obj,
             level=level,
             threaded=threaded)
     end
-    cache = build_cache(obj; opts=opts, level=level, threaded=threaded)
-    _prime_cache!(cache, spec; opts=opts, threaded=threaded)
-    return cache
+    cache_obj = build_cache(obj; opts=opts, level=level, threaded=threaded, cache=cache)
+    _prime_cache!(cache_obj, spec; opts=opts, threaded=threaded)
+    return cache_obj
 end
 
 function cache_stats(cache::ModuleInvariantCache)
@@ -2177,6 +4063,18 @@ end
 
 function cache_stats(cache::RestrictedHilbertInvariantCache)
     return (kind=:restricted_hilbert, threads=cache.threads, level=cache.level, n=length(cache.hilbert))
+end
+
+function cache_stats(cache::ResolutionInvariantCache)
+    return (kind=:resolution, threads=cache.threads, level=cache.level, resolution_kind=cache.kind)
+end
+
+function cache_stats(cache::ResolutionMeasureInvariantCache)
+    return (kind=:resolution_measure,
+            threads=cache.threads,
+            level=cache.level,
+            resolution_kind=cache.kind,
+            n_weights=length(cache.weights))
 end
 
 function cache_stats(cache::EncodingInvariantCache)
@@ -2189,8 +4087,17 @@ function cache_stats(cache::EncodingInvariantCache)
         n_projected_module=length(cache.projected_module),
         n_projected_refs=length(cache.projected_refs),
         n_fibered=length(cache.fibered),
+        n_mpp_decompositions=length(cache.mpp_decompositions),
         has_rank_query=(cache.rank_query !== nothing),
     )
+end
+
+function cache_stats(cache::PointMeasureInvariantCache)
+    return (kind=:point_measure, threads=cache.threads, level=cache.level, n=length(cache.pm))
+end
+
+function cache_stats(cache::SignedBarcodeInvariantCache)
+    return (kind=:signed_barcode, threads=cache.threads, level=cache.level, n=length(cache.sb))
 end
 
 function transform(spec::AbstractFeaturizerSpec,
@@ -2367,6 +4274,318 @@ function _slice_features_from_packed_grid(
         end
     end
     return Invariants._aggregate_feature_vectors(feats, W; aggregate=aggregate, unwrap_scalar=true)
+end
+
+@inline function _barcode_working_window(pb::Invariants.PackedBarcode,
+                                         window::Union{Nothing,Tuple{Float64,Float64}})
+    window !== nothing && return window
+    lo = Inf
+    hi = -Inf
+    seen = false
+    @inbounds for p in pb.pairs
+        b = Float64(p.b)
+        d = Float64(p.d)
+        if isfinite(b)
+            lo = min(lo, b)
+            hi = max(hi, b)
+            seen = true
+        end
+        if isfinite(d)
+            lo = min(lo, d)
+            hi = max(hi, d)
+            seen = true
+        end
+    end
+    seen || return nothing
+    return (lo, hi)
+end
+
+function _barcode_grid_window(bars::Invariants.PackedBarcodeGrid,
+                              window::Union{Nothing,Tuple{Float64,Float64}})
+    window !== nothing && return window
+    lo = Inf
+    hi = -Inf
+    seen = false
+    @inbounds for pb in bars.flat
+        w = _barcode_working_window(pb, nothing)
+        w === nothing && continue
+        lo = min(lo, w[1])
+        hi = max(hi, w[2])
+        seen = true
+    end
+    return seen ? (lo, hi) : nothing
+end
+
+@inline function _clip_barcode_endpoint(x::Float64,
+                                        lo::Float64,
+                                        hi::Float64,
+                                        policy::Symbol)
+    isfinite(x) && return x
+    policy == :clip_to_window || throw(ArgumentError("barcode featurizer requires a finite working window when intervals are unbounded"))
+    return x > 0 ? hi : lo
+end
+
+function _canonical_barcode_entries(pb::Invariants.PackedBarcode,
+                                    window::Union{Nothing,Tuple{Float64,Float64}},
+                                    infinite_policy::Symbol)
+    work = _barcode_working_window(pb, window)
+    if infinite_policy == :clip_to_window && work === nothing
+        throw(ArgumentError("barcode featurizer requires a finite working window to clip unbounded intervals"))
+    end
+    lo = work === nothing ? 0.0 : work[1]
+    hi = work === nothing ? 0.0 : work[2]
+    entries = Vector{NTuple{4,Float64}}()
+    count = 0
+    total_persistence = 0.0
+    max_persistence = 0.0
+    weighted_log = 0.0
+    weight_total = 0.0
+
+    # Canonical policy: clip or reject unbounded endpoints first, then rank
+    # intervals by persistence desc / birth asc / death asc on the normalized
+    # finite representatives.
+    @inbounds for idx in eachindex(pb.pairs)
+        mult = pb.mults[idx]
+        mult <= 0 && continue
+        p = pb.pairs[idx]
+        b = Float64(p.b)
+        d = Float64(p.d)
+        if !isfinite(b) || !isfinite(d)
+            if infinite_policy == :error
+                throw(ArgumentError("barcode featurizer encountered an unbounded interval; use infinite_policy=:clip_to_window with a finite working window"))
+            end
+            b = _clip_barcode_endpoint(b, lo, hi, infinite_policy)
+            d = _clip_barcode_endpoint(d, lo, hi, infinite_policy)
+        end
+        d > b || continue
+        pers = d - b
+        count += mult
+        total_persistence += mult * pers
+        max_persistence = max(max_persistence, pers)
+        if pers > 0.0
+            w = mult * pers
+            weight_total += w
+            weighted_log += w * log(pers)
+        end
+        push!(entries, (pers, b, d, Float64(mult)))
+    end
+    sort!(entries; by=x -> (-x[1], x[2], x[3]))
+    entropy = 0.0
+    if weight_total > 0.0
+        entropy = log(weight_total) - weighted_log / weight_total
+        if count > 1
+            entropy /= log(Float64(count))
+        end
+    end
+    return entries, count, total_persistence, max_persistence, entropy
+end
+
+function _barcode_topk_vector(pb::Invariants.PackedBarcode,
+                              spec::BarcodeTopKSpec,
+                              window::Union{Nothing,Tuple{Float64,Float64}}=spec.window)
+    entries, count, _, _, _ = _canonical_barcode_entries(pb, window, spec.infinite_policy)
+    out = zeros(Float64, 1 + 3 * spec.k)
+    out[1] = Float64(count)
+    idx = 2
+    remaining = spec.k
+    for (pers, birth, _, multf) in entries
+        remaining == 0 && break
+        copies = min(Int(multf), remaining)
+        @inbounds for _ in 1:copies
+            out[idx] = 1.0
+            out[idx + 1] = birth
+            out[idx + 2] = pers
+            idx += 3
+        end
+        remaining -= copies
+    end
+    return out
+end
+
+function _barcode_summary_vector(pb::Invariants.PackedBarcode,
+                                 spec::BarcodeSummarySpec,
+                                 window::Union{Nothing,Tuple{Float64,Float64}}=spec.window)
+    _, count, total_persistence, max_persistence, entropy =
+        _canonical_barcode_entries(pb, window, spec.infinite_policy)
+    mean_persistence = count == 0 ? 0.0 : total_persistence / Float64(count)
+    values = (
+        count=Float64(count),
+        sum_persistence=total_persistence,
+        mean_persistence=mean_persistence,
+        max_persistence=max_persistence,
+        entropy=spec.normalize_entropy ? entropy : entropy * (count > 1 ? log(Float64(count)) : 1.0),
+    )
+    out = Vector{Float64}(undef, length(spec.fields))
+    @inbounds for i in eachindex(spec.fields)
+        out[i] = getproperty(values, spec.fields[i])
+    end
+    return out
+end
+
+function _aggregate_barcode_feature_grid(
+    bars::Invariants.PackedBarcodeGrid,
+    W::AbstractMatrix{Float64},
+    builder::F;
+    aggregate::Symbol,
+    threads::Bool,
+) where {F<:Function}
+    nd, no = size(bars)
+    feats = Matrix{Vector{Float64}}(undef, nd, no)
+    if threads && Threads.nthreads() > 1
+        Threads.@threads for idx in 1:(nd * no)
+            i = div(idx - 1, no) + 1
+            j = (idx - 1) % no + 1
+            feats[i, j] = builder(bars[i, j])
+        end
+    else
+        @inbounds for i in 1:nd, j in 1:no
+            feats[i, j] = builder(bars[i, j])
+        end
+    end
+    d = length(feats[1, 1])
+    if aggregate == :stack
+        out = Vector{Float64}(undef, nd * no * d)
+        idx = 1
+        @inbounds for i in 1:nd, j in 1:no
+            v = feats[i, j]
+            for k in 1:d
+                out[idx] = v[k]
+                idx += 1
+            end
+        end
+        return out
+    elseif aggregate == :sum || aggregate == :mean
+        acc = zeros(Float64, d)
+        sumw = sum(W)
+        @inbounds for i in 1:nd, j in 1:no
+            w = W[i, j]
+            w == 0.0 && continue
+            v = feats[i, j]
+            for k in 1:d
+                acc[k] += w * v[k]
+            end
+        end
+        if aggregate == :mean
+            sumw > 0.0 || error("barcode featurizer: total weight is zero")
+            acc ./= sumw
+        end
+        return acc
+    end
+    throw(ArgumentError("barcode featurizer aggregate must be :mean, :sum, or :stack"))
+end
+
+@inline function _slice_backend(spec::Union{BarcodeTopKSpec,BarcodeSummarySpec}, lvl::Symbol)
+    _ = lvl
+    return spec.source
+end
+
+@inline function _slice_backend(spec::AbstractFeaturizerSpec, lvl::Symbol)
+    return (lvl == :fibered || lvl == :all) ? :fibered : :slice
+end
+
+function _barcode_grid_for_spec(
+    cache::EncodingInvariantCache,
+    spec::Union{BarcodeTopKSpec,BarcodeSummarySpec},
+    opts0::InvariantOptions,
+    threads0::Bool,
+)
+    lvl = _effective_cache_level(cache.level, spec, cache.pi)
+    if _slice_backend(spec, lvl) == :fibered
+        fcache = _fibered_cache_for!(cache, spec, opts0, threads0, lvl)
+        data = Invariants.slice_barcodes(
+            fcache;
+            dirs=spec.directions,
+            offsets=spec.offsets,
+            values=:t,
+            packed=true,
+            direction_weight=spec.direction_weight,
+            offset_weights=spec.offset_weights,
+            normalize_weights=spec.normalize_weights,
+            threads=threads0,
+        )
+        return data.barcodes, data.weights
+    end
+    spcache = lvl == :none ? nothing : cache.slice_plan_cache
+    if spcache !== nothing
+        _slice_plan_for!(cache, spec, opts0, threads0)
+    end
+    opts_compile = _slice_compile_opts(spec, opts0)
+    kws = _slice_compile_kwargs(spec, opts0, threads0)
+    plan = Invariants.compile_slices(cache.pi, opts_compile; cache=spcache, kws...)
+    task = Invariants.SliceBarcodesTask(; packed=true, threads=threads0)
+    data = Invariants.run_invariants(plan, cache.M, task)
+    return data.barcodes, data.weights
+end
+
+function _mpp_histogram_vector_from_decomp(spec::MPPDecompositionHistogramSpec,
+                                           decomp::Invariants.MPPDecomposition)
+    hist = zeros(Float64, spec.orientation_bins, spec.scale_bins)
+    total_mass = 0.0
+    total_segments = 0
+    max_scale = 0.0
+    lo_box, hi_box = decomp.box
+    diag = 0.0
+    @inbounds for i in eachindex(lo_box, hi_box)
+        diag += (Float64(hi_box[i]) - Float64(lo_box[i]))^2
+    end
+    diag = diag > 0.0 ? sqrt(diag) : 1.0
+    scale_lo, scale_hi = spec.scale_range === nothing ? (0.0, 1.0) : spec.scale_range
+    scale_hi > scale_lo || throw(ArgumentError("MPPDecompositionHistogramSpec.scale_range must satisfy lo < hi"))
+    positive_weights = Float64[]
+
+    # Canonical policy: histogram segments in orientation/normalized-scale space,
+    # then append global mass/size scalars from the same decomposition.
+    @inbounds for si in eachindex(decomp.summands)
+        segs = decomp.summands[si]
+        mass = si <= length(decomp.weights) ? max(Float64(decomp.weights[si]), 0.0) : 0.0
+        total_mass += mass
+        mass > 0.0 && push!(positive_weights, mass)
+        isempty(segs) && continue
+        per_seg = spec.weight == :mass ? (mass / length(segs)) : 1.0
+        for seg in segs
+            p, q, _ = seg
+            dx = Float64(q[1]) - Float64(p[1])
+            dy = Float64(q[2]) - Float64(p[2])
+            len = hypot(dx, dy)
+            len > 0.0 || continue
+            normlen = len / diag
+            max_scale = max(max_scale, normlen)
+            theta = atan(dy, dx)
+            theta < 0.0 && (theta += π)
+            theta >= π && (theta -= π)
+            oi = clamp(fld(Int(floor(theta / π * spec.orientation_bins)), 1) + 1, 1, spec.orientation_bins)
+            sfrac = clamp((normlen - scale_lo) / (scale_hi - scale_lo), 0.0, 1.0)
+            si_bin = clamp(fld(Int(floor(sfrac * spec.scale_bins)), 1) + 1, 1, spec.scale_bins)
+            hist[oi, si_bin] += per_seg
+            total_segments += 1
+        end
+    end
+
+    flat = _float_vector(hist)
+    if spec.normalize == :l1
+        s = sum(flat)
+        s > 0.0 && (flat ./= s)
+    elseif spec.normalize == :l2
+        s = sqrt(sum(abs2, flat))
+        s > 0.0 && (flat ./= s)
+    elseif spec.normalize == :max
+        s = maximum(abs, flat)
+        s > 0.0 && (flat ./= s)
+    end
+
+    entropy = 0.0
+    if !isempty(positive_weights)
+        ws = sum(positive_weights)
+        if ws > 0.0
+            @inbounds for w in positive_weights
+                p = w / ws
+                entropy -= p * log(p)
+            end
+            length(positive_weights) > 1 && (entropy /= log(Float64(length(positive_weights))))
+        end
+    end
+    append!(flat, (total_mass, Float64(length(decomp.summands)), Float64(total_segments), max_scale, entropy))
+    return flat
 end
 
 function transform(spec::LandscapeSpec,
@@ -2568,6 +4787,40 @@ function transform(spec::SlicedBarcodeSpec,
     return _float_vector(vals)
 end
 
+function transform(spec::BarcodeTopKSpec,
+                   cache::EncodingInvariantCache;
+                   opts::InvariantOptions=InvariantOptions(),
+                   threaded::Bool=true)
+    opts0 = _cache_opts(cache, opts)
+    threads0 = _resolve_spec_threads(spec.threads, opts0, _cache_threaded(cache, threaded))
+    bars, W = _barcode_grid_for_spec(cache, spec, opts0, threads0)
+    window0 = _barcode_grid_window(bars, spec.window)
+    return _aggregate_barcode_feature_grid(
+        bars,
+        W,
+        pb -> _barcode_topk_vector(pb, spec, window0);
+        aggregate=spec.aggregate,
+        threads=threads0,
+    )
+end
+
+function transform(spec::BarcodeSummarySpec,
+                   cache::EncodingInvariantCache;
+                   opts::InvariantOptions=InvariantOptions(),
+                   threaded::Bool=true)
+    opts0 = _cache_opts(cache, opts)
+    threads0 = _resolve_spec_threads(spec.threads, opts0, _cache_threaded(cache, threaded))
+    bars, W = _barcode_grid_for_spec(cache, spec, opts0, threads0)
+    window0 = _barcode_grid_window(bars, spec.window)
+    return _aggregate_barcode_feature_grid(
+        bars,
+        W,
+        pb -> _barcode_summary_vector(pb, spec, window0);
+        aggregate=spec.aggregate,
+        threads=threads0,
+    )
+end
+
 function transform(spec::ProjectedDistancesSpec,
                    cache::EncodingInvariantCache;
                    opts::InvariantOptions=InvariantOptions(),
@@ -2587,6 +4840,63 @@ function transform(spec::ProjectedDistancesSpec,
     return out
 end
 
+function transform(spec::MatchingDistanceBankSpec,
+                   cache::EncodingInvariantCache;
+                   opts::InvariantOptions=InvariantOptions(),
+                   threaded::Bool=true)
+    opts0 = _cache_opts(cache, opts)
+    threads0 = _resolve_spec_threads(spec.threads, opts0, _cache_threaded(cache, threaded))
+    sample_pi = _unwrap_cache_pi(cache.pi)
+    out = Vector{Float64}(undef, length(spec.references))
+    cache_slice = _slice_plan_cache_from_session(cache.slice_plan_cache, cache.session_cache)
+    @inbounds for i in eachindex(spec.references)
+        Mref_raw, piref = _sample_module_pi(spec.references[i])
+        piref0 = _unwrap_cache_pi(piref)
+        sample_pi === piref0 || throw(ArgumentError("MatchingDistanceBankSpec requires all references to share the sample encoding map"))
+        Mref = materialize_module(Mref_raw)
+        cache.M.Q === Mref.Q || throw(ArgumentError("MatchingDistanceBankSpec requires all references to share the sample poset"))
+        if spec.method == :exact_2d
+            out[i] = Invariants.matching_distance_exact_2d(
+                cache.M,
+                Mref,
+                sample_pi,
+                opts0;
+                weight=spec.weight,
+                normalize_dirs=spec.normalize_dirs,
+                include_axes=spec.include_axes,
+            )
+        else
+            md_kwargs = if spec.directions === nothing && spec.offsets === nothing
+                (;
+                    n_dirs=spec.n_dirs,
+                    n_offsets=spec.n_offsets,
+                    max_den=spec.max_den,
+                    include_axes=spec.include_axes,
+                    normalize_dirs=spec.normalize_dirs,
+                    weight=spec.weight,
+                    cache=cache_slice,
+                )
+            else
+                (;
+                    directions=spec.directions,
+                    offsets=spec.offsets,
+                    include_axes=spec.include_axes,
+                    normalize_dirs=spec.normalize_dirs,
+                    weight=spec.weight,
+                    cache=cache_slice,
+                )
+            end
+            out[i] = Invariants.matching_distance_approx(cache.M, Mref, sample_pi, opts0; md_kwargs...)
+        end
+    end
+    return out
+end
+
+function transform(spec::MatchingDistanceBankSpec, obj; opts::InvariantOptions=InvariantOptions(), threaded::Bool=true)
+    cache = build_cache(obj, spec; opts=opts, threaded=threaded)
+    return transform(spec, cache; opts=opts, threaded=threaded)
+end
+
 @inline function _eulersurface_vector(obj, pi, spec::EulerSurfaceSpec, opts0::InvariantOptions, threads0::Bool)
     axes0 = spec.axes === nothing ? opts0.axes : spec.axes
     strict0 = spec.strict === nothing ? opts0.strict : spec.strict
@@ -2603,6 +4913,107 @@ end
     return _float_vector(surf)
 end
 
+function transform(spec::PointSignedMeasureSpec,
+                   cache::PointMeasureInvariantCache;
+                   opts::InvariantOptions=InvariantOptions(),
+                   threaded::Bool=true)
+    _ = opts
+    _ = threaded
+    return _point_measure_topk_vector(cache.pm, spec.ndims, spec.k, spec.coords)
+end
+
+function transform(spec::PointSignedMeasureSpec, obj; opts::InvariantOptions=InvariantOptions(), threaded::Bool=true)
+    cache = build_cache(obj, spec; opts=opts, threaded=threaded)
+    return transform(spec, cache; opts=opts, threaded=threaded)
+end
+
+function transform(spec::EulerSignedMeasureSpec,
+                   cache::EncodingInvariantCache;
+                   opts::InvariantOptions=InvariantOptions(),
+                   threaded::Bool=true)
+    opts0 = _cache_opts(cache, opts)
+    threads0 = _resolve_spec_threads(spec.threads, opts0, _cache_threaded(cache, threaded))
+    pi0 = _unwrap_cache_pi(cache.pi)
+    hasproperty(pi0, :n) && Int(getproperty(pi0, :n)) == spec.ndims ||
+        throw(ArgumentError("EulerSignedMeasureSpec.ndims=$(spec.ndims) does not match encoding dimension"))
+    opts2 = InvariantOptions(
+        axes=spec.axes === nothing ? opts0.axes : spec.axes,
+        axes_policy=spec.axes_policy,
+        max_axis_len=spec.max_axis_len,
+        box=opts0.box,
+        threads=threads0,
+        strict=spec.strict === nothing ? opts0.strict : spec.strict,
+        pl_mode=opts0.pl_mode,
+    )
+    max_terms0 = spec.max_terms > 0 ? max(spec.max_terms, spec.k) : 0
+    pm = Invariants.euler_signed_measure(
+        cache.M,
+        pi0,
+        opts2;
+        drop_zeros=spec.drop_zeros,
+        max_terms=max_terms0,
+        min_abs_weight=spec.min_abs_weight,
+    )
+    return _point_measure_topk_vector(pm, spec.ndims, spec.k, spec.coords)
+end
+
+function transform(spec::EulerSignedMeasureSpec, obj; opts::InvariantOptions=InvariantOptions(), threaded::Bool=true)
+    cache = build_cache(obj, spec; opts=opts, threaded=threaded)
+    return transform(spec, cache; opts=opts, threaded=threaded)
+end
+
+function transform(spec::RectangleSignedBarcodeTopKSpec,
+                   cache::SignedBarcodeInvariantCache;
+                   opts::InvariantOptions=InvariantOptions(),
+                   threaded::Bool=true)
+    _ = opts
+    _ = threaded
+    return _rect_signed_barcode_topk_vector(cache.sb, spec.ndims, spec.k, spec.coords)
+end
+
+function transform(spec::RectangleSignedBarcodeTopKSpec,
+                   cache::EncodingInvariantCache;
+                   opts::InvariantOptions=InvariantOptions(),
+                   threaded::Bool=true)
+    opts0 = _cache_opts(cache, opts)
+    threads0 = _resolve_spec_threads(spec.threads, opts0, _cache_threaded(cache, threaded))
+    pi0 = _unwrap_cache_pi(cache.pi)
+    pi0 isa ZnEncoding.ZnEncodingMap ||
+        throw(ArgumentError("RectangleSignedBarcodeTopKSpec requires a ZnEncodingMap-compatible encoding"))
+    pi0.n == spec.ndims ||
+        throw(ArgumentError("RectangleSignedBarcodeTopKSpec.ndims=$(spec.ndims) does not match encoding dimension $(pi0.n)"))
+    opts2 = InvariantOptions(
+        axes=spec.axes === nothing ? opts0.axes : spec.axes,
+        axes_policy=spec.axes_policy,
+        max_axis_len=spec.max_axis_len,
+        box=opts0.box,
+        threads=threads0,
+        strict=spec.strict === nothing ? opts0.strict : spec.strict,
+        pl_mode=opts0.pl_mode,
+    )
+    lvl = _effective_cache_level(cache.level, spec, cache.pi)
+    rq_cache = lvl == :all ? _rank_query_cache_for!(cache) : nothing
+    sb = Invariants.rectangle_signed_barcode(
+        cache.M,
+        pi0,
+        opts2;
+        drop_zeros=spec.drop_zeros,
+        tol=spec.tol,
+        max_span=spec.max_span,
+        rq_cache=rq_cache,
+        keep_endpoints=spec.keep_endpoints,
+        method=spec.method,
+        bulk_max_elems=spec.bulk_max_elems,
+        threads=threads0,
+    )
+    return _rect_signed_barcode_topk_vector(sb, spec.ndims, spec.k, spec.coords)
+end
+
+function transform(spec::RectangleSignedBarcodeTopKSpec, obj; opts::InvariantOptions=InvariantOptions(), threaded::Bool=true)
+    cache = build_cache(obj, spec; opts=opts, threaded=threaded)
+    return transform(spec, cache; opts=opts, threaded=threaded)
+end
+
 @inline function _rankgrid_vector(M::PModule, spec::RankGridSpec, opts0::InvariantOptions)
     nP = nvertices(M.Q)
     spec.nvertices == nP || throw(ArgumentError("RankGridSpec.nvertices=$(spec.nvertices) does not match module poset size $nP"))
@@ -2612,6 +5023,414 @@ end
         out[(a - 1) * spec.nvertices + b] = Float64(get(tbl, (a, b), 0))
     end
     return out
+end
+
+@inline function _restricted_hilbert_vector(h::AbstractVector{<:Integer}, spec::RestrictedHilbertSpec)
+    spec.nvertices == length(h) ||
+        throw(ArgumentError("RestrictedHilbertSpec.nvertices=$(spec.nvertices) does not match restricted_hilbert length $(length(h))"))
+    out = Vector{Float64}(undef, spec.nvertices)
+    @inbounds for i in eachindex(h)
+        out[i] = Float64(h[i])
+    end
+    return out
+end
+
+@inline function _mplandscape_vector(L::Invariants.MPLandscape)
+    nd, no, kk, nt = size(L.values)
+    out = Vector{Float64}(undef, nd * no * kk * nt)
+    idx = 1
+    @inbounds for it in 1:nt, k in 1:kk, j in 1:no, i in 1:nd
+        out[idx] = L.values[i, j, k, it]
+        idx += 1
+    end
+    return out
+end
+
+@inline function _mpp_image_vector(img::Invariants.MPPImage)
+    nx = length(img.xgrid)
+    ny = length(img.ygrid)
+    out = Vector{Float64}(undef, nx * ny)
+    idx = 1
+    @inbounds for ix in 1:nx, iy in 1:ny
+        out[idx] = img.img[iy, ix]
+        idx += 1
+    end
+    return out
+end
+
+@inline function _betti_table_vector(res::DerivedFunctors.ProjectiveResolution, spec::BettiTableSpec)
+    nP = nvertices(res.M.Q)
+    spec.nvertices == nP ||
+        throw(ArgumentError("BettiTableSpec.nvertices=$(spec.nvertices) does not match module poset size $nP"))
+    tbl = DerivedFunctors.betti_table(res; pad_to=spec.pad_to)
+    out = Vector{Float64}(undef, (spec.pad_to + 1) * spec.nvertices)
+    idx = 1
+    @inbounds for a in 0:spec.pad_to, p in 1:spec.nvertices
+        out[idx] = Float64(tbl[a + 1, p])
+        idx += 1
+    end
+    return out
+end
+
+@inline function _bass_table_vector(res::DerivedFunctors.InjectiveResolution, spec::BassTableSpec)
+    nP = nvertices(res.N.Q)
+    spec.nvertices == nP ||
+        throw(ArgumentError("BassTableSpec.nvertices=$(spec.nvertices) does not match module poset size $nP"))
+    tbl = DerivedFunctors.bass_table(res; pad_to=spec.pad_to)
+    out = Vector{Float64}(undef, (spec.pad_to + 1) * spec.nvertices)
+    idx = 1
+    @inbounds for b in 0:spec.pad_to, p in 1:spec.nvertices
+        out[idx] = Float64(tbl[b + 1, p])
+        idx += 1
+    end
+    return out
+end
+
+@inline function _support_measures_vector(meas, pad_to::Int)
+    support_by = meas.support_by_degree
+    mass_by = meas.mass_by_degree
+    out = Vector{Float64}(undef, 2 * (pad_to + 1) + 3)
+    idx = 1
+    @inbounds for a in 0:pad_to
+        out[idx] = a + 1 <= length(support_by) ? Float64(support_by[a + 1]) : 0.0
+        idx += 1
+    end
+    @inbounds for a in 0:pad_to
+        out[idx] = a + 1 <= length(mass_by) ? Float64(mass_by[a + 1]) : 0.0
+        idx += 1
+    end
+    out[idx] = Float64(meas.support_union)
+    out[idx + 1] = Float64(meas.support_total)
+   out[idx + 2] = Float64(meas.mass_total)
+    return out
+end
+
+@inline function _point_measure_coord(pm::Invariants.PointSignedMeasure{N},
+                                      ind::NTuple{N,Int},
+                                      coords::Symbol,
+                                      d::Int) where {N}
+    return coords == :values ? Float64(pm.axes[d][ind[d]]) : Float64(ind[d])
+end
+
+function _point_measure_topk_vector(pm::Invariants.PointSignedMeasure{N},
+                                    ndims::Int,
+                                    k::Int,
+                                    coords::Symbol) where {N}
+    ndims == N || throw(ArgumentError("signed-point-measure feature ndim mismatch: spec ndims=$(ndims), measure ndims=$(N)"))
+    keep = collect(eachindex(pm.wts))
+    sort!(keep; by=i -> (-abs(pm.wts[i]), pm.inds[i]))
+    out = zeros(Float64, 1 + k * (2 + N))
+    out[1] = Float64(length(pm))
+    idx = 2
+    @inbounds for slot in 1:min(k, length(keep))
+        i = keep[slot]
+        out[idx] = 1.0
+        out[idx + 1] = Float64(pm.wts[i])
+        idx += 2
+        ind = pm.inds[i]
+        for d in 1:N
+            out[idx] = _point_measure_coord(pm, ind, coords, d)
+            idx += 1
+        end
+    end
+    return out
+end
+
+@inline function _rect_signed_barcode_coord(sb::Invariants.RectSignedBarcode{N},
+                                            rect::Invariants.Rect{N},
+                                            coords::Symbol,
+                                            d::Int,
+                                            side::Symbol) where {N}
+    idx = side === :lo ? rect.lo[d] : rect.hi[d]
+    return coords == :values ? Float64(sb.axes[d][idx]) : Float64(idx)
+end
+
+function _rect_signed_barcode_topk_vector(sb::Invariants.RectSignedBarcode{N},
+                                          ndims::Int,
+                                          k::Int,
+                                          coords::Symbol) where {N}
+    ndims == N || throw(ArgumentError("rectangle-signed-barcode feature ndim mismatch: spec ndims=$(ndims), barcode ndims=$(N)"))
+    keep = collect(eachindex(sb.weights))
+    sort!(keep; by=i -> (-abs(sb.weights[i]), sb.rects[i].lo, sb.rects[i].hi))
+    out = zeros(Float64, 1 + k * (2 + 2 * N))
+    out[1] = Float64(length(sb))
+    idx = 2
+    @inbounds for slot in 1:min(k, length(keep))
+        i = keep[slot]
+        rect = sb.rects[i]
+        out[idx] = 1.0
+        out[idx + 1] = Float64(sb.weights[i])
+        idx += 2
+        for d in 1:N
+            out[idx] = _rect_signed_barcode_coord(sb, rect, coords, d, :lo)
+            idx += 1
+        end
+        for d in 1:N
+            out[idx] = _rect_signed_barcode_coord(sb, rect, coords, d, :hi)
+            idx += 1
+        end
+    end
+    return out
+end
+
+@inline function _betti_support_vector(res::DerivedFunctors.ProjectiveResolution,
+                                       pi,
+                                       spec::BettiSupportMeasuresSpec,
+                                       opts0::InvariantOptions;
+                                       weights=nothing)
+    tbl = DerivedFunctors.betti_table(res; pad_to=spec.pad_to)
+    meas = Invariants.betti_support_measures(tbl, _unwrap_cache_pi(pi), opts0; weights=weights)
+    return _support_measures_vector(meas, spec.pad_to)
+end
+
+@inline function _bass_support_vector(res::DerivedFunctors.InjectiveResolution,
+                                      pi,
+                                      spec::BassSupportMeasuresSpec,
+                                      opts0::InvariantOptions;
+                                      weights=nothing)
+    tbl = DerivedFunctors.bass_table(res; pad_to=spec.pad_to)
+    meas = Invariants.bass_support_measures(tbl, _unwrap_cache_pi(pi), opts0; weights=weights)
+    return _support_measures_vector(meas, spec.pad_to)
+end
+
+@inline function _projective_resolution_for_cache(cache::EncodingInvariantCache,
+                                                  spec::Union{BettiTableSpec,BettiSupportMeasuresSpec})
+    rcache = _resolution_cache_from_session(nothing, cache.session_cache, cache.M)
+    return DerivedFunctors.projective_resolution(cache.M, _resolution_options(spec); cache=rcache)
+end
+
+@inline function _injective_resolution_for_cache(cache::EncodingInvariantCache,
+                                                 spec::Union{BassTableSpec,BassSupportMeasuresSpec})
+    rcache = _resolution_cache_from_session(nothing, cache.session_cache, cache.M)
+    return DerivedFunctors.injective_resolution(cache.M, _resolution_options(spec); cache=rcache)
+end
+
+@inline function _mplandscape_vector_from_plan(M::PModule,
+                                               spec::MPLandscapeSpec,
+                                               plan::Invariants.CompiledSlicePlan,
+                                               threads0::Bool)
+    L = Invariants.mp_landscape(
+        M,
+        plan;
+        kmax=spec.kmax,
+        tgrid=spec.tgrid,
+        normalize_weights=spec.normalize_weights,
+        threads=threads0,
+    )
+    return _mplandscape_vector(L)
+end
+
+@inline function _mpp_image_vector_from_decomp(spec::MPPImageSpec,
+                                               decomp::Invariants.MPPDecomposition,
+                                               threads0::Bool)
+    img = Invariants.mpp_image(
+        decomp;
+        resolution=spec.resolution,
+        xgrid=spec.xgrid,
+        ygrid=spec.ygrid,
+        sigma=spec.sigma,
+        cutoff_radius=spec.cutoff_radius,
+        cutoff_tol=spec.cutoff_tol,
+        segment_prune=spec.segment_prune,
+        threads=threads0,
+    )
+    return _mpp_image_vector(img)
+end
+
+function transform(spec::MPLandscapeSpec,
+                   cache::EncodingInvariantCache;
+                   opts::InvariantOptions=InvariantOptions(),
+                   threaded::Bool=true)
+    opts0 = _cache_opts(cache, opts)
+    threads0 = _resolve_spec_threads(spec.threads, opts0, _cache_threaded(cache, threaded))
+    plan = _slice_plan_for!(cache, spec, opts0, threads0)
+    return _mplandscape_vector_from_plan(cache.M, spec, plan, threads0)
+end
+
+function transform(spec::MPLandscapeSpec, obj; opts::InvariantOptions=InvariantOptions(), threaded::Bool=true)
+    cache = build_cache(obj, spec; opts=opts, threaded=threaded)
+    return transform(spec, cache; opts=opts, threaded=threaded)
+end
+
+function transform(spec::MPPImageSpec,
+                   cache::EncodingInvariantCache;
+                   opts::InvariantOptions=InvariantOptions(),
+                   threaded::Bool=true)
+    opts0 = _cache_opts(cache, opts)
+    threads0 = _resolve_spec_threads(spec.threads, opts0, _cache_threaded(cache, threaded))
+    lvl = _effective_cache_level(cache.level, spec, cache.pi)
+    img = if lvl == :fibered || lvl == :all
+        _, decomp = _mpp_decomposition_for!(cache, spec, opts0, threads0, lvl)
+        _mpp_image_vector_from_decomp(spec, decomp, threads0)
+    else
+        _mpp_image_vector(Invariants.mpp_image(
+            cache.M,
+            _unwrap_cache_pi(cache.pi),
+            opts0;
+            resolution=spec.resolution,
+            xgrid=spec.xgrid,
+            ygrid=spec.ygrid,
+            sigma=spec.sigma,
+            N=spec.N,
+            delta=spec.delta,
+            q=spec.q,
+            tie_break=spec.tie_break,
+            cutoff_radius=spec.cutoff_radius,
+            cutoff_tol=spec.cutoff_tol,
+            segment_prune=spec.segment_prune,
+            threads=threads0,
+        ))
+    end
+    return img
+end
+
+function transform(spec::MPPImageSpec, obj; opts::InvariantOptions=InvariantOptions(), threaded::Bool=true)
+    cache = build_cache(obj, spec; opts=opts, threaded=threaded)
+    return transform(spec, cache; opts=opts, threaded=threaded)
+end
+
+function transform(spec::MPPDecompositionHistogramSpec,
+                   cache::EncodingInvariantCache;
+                   opts::InvariantOptions=InvariantOptions(),
+                   threaded::Bool=true)
+    opts0 = _cache_opts(cache, opts)
+    threads0 = _resolve_spec_threads(spec.threads, opts0, _cache_threaded(cache, threaded))
+    lvl = _effective_cache_level(cache.level, spec, cache.pi)
+    _, decomp = _mpp_decomposition_for!(cache, spec, opts0, threads0, lvl)
+    return _mpp_histogram_vector_from_decomp(spec, decomp)
+end
+
+function transform(spec::MPPDecompositionHistogramSpec, obj; opts::InvariantOptions=InvariantOptions(), threaded::Bool=true)
+    cache = build_cache(obj, spec; opts=opts, threaded=threaded)
+    return transform(spec, cache; opts=opts, threaded=threaded)
+end
+
+function transform(spec::BettiTableSpec,
+                   cache::ResolutionInvariantCache;
+                   opts::InvariantOptions=InvariantOptions(),
+                   threaded::Bool=true)
+    _ = opts
+    _ = threaded
+    cache.kind == :projective ||
+        throw(ArgumentError("BettiTableSpec requires a projective resolution cache"))
+    return _betti_table_vector(cache.res, spec)
+end
+
+function transform(spec::BettiTableSpec,
+                   cache::ResolutionMeasureInvariantCache;
+                   opts::InvariantOptions=InvariantOptions(),
+                   threaded::Bool=true)
+    _ = opts
+    _ = threaded
+    cache.kind == :projective ||
+        throw(ArgumentError("BettiTableSpec requires a projective resolution cache"))
+    return _betti_table_vector(cache.res, spec)
+end
+
+function transform(spec::BettiTableSpec,
+                   cache::EncodingInvariantCache;
+                   opts::InvariantOptions=InvariantOptions(),
+                   threaded::Bool=true)
+    _ = threaded
+    res = _projective_resolution_for_cache(cache, spec)
+    return _betti_table_vector(res, spec)
+end
+
+function transform(spec::BettiTableSpec, obj; opts::InvariantOptions=InvariantOptions(), threaded::Bool=true)
+    cache = build_cache(obj, spec; opts=opts, threaded=threaded)
+    return transform(spec, cache; opts=opts, threaded=threaded)
+end
+
+function transform(spec::BassTableSpec,
+                   cache::ResolutionInvariantCache;
+                   opts::InvariantOptions=InvariantOptions(),
+                   threaded::Bool=true)
+    _ = opts
+    _ = threaded
+    cache.kind == :injective ||
+        throw(ArgumentError("BassTableSpec requires an injective resolution cache"))
+    return _bass_table_vector(cache.res, spec)
+end
+
+function transform(spec::BassTableSpec,
+                   cache::ResolutionMeasureInvariantCache;
+                   opts::InvariantOptions=InvariantOptions(),
+                   threaded::Bool=true)
+    _ = opts
+    _ = threaded
+    cache.kind == :injective ||
+        throw(ArgumentError("BassTableSpec requires an injective resolution cache"))
+    return _bass_table_vector(cache.res, spec)
+end
+
+function transform(spec::BassTableSpec,
+                   cache::EncodingInvariantCache;
+                   opts::InvariantOptions=InvariantOptions(),
+                   threaded::Bool=true)
+    _ = threaded
+    res = _injective_resolution_for_cache(cache, spec)
+    return _bass_table_vector(res, spec)
+end
+
+function transform(spec::BassTableSpec, obj; opts::InvariantOptions=InvariantOptions(), threaded::Bool=true)
+    cache = build_cache(obj, spec; opts=opts, threaded=threaded)
+    return transform(spec, cache; opts=opts, threaded=threaded)
+end
+
+function transform(spec::BettiSupportMeasuresSpec,
+                   cache::ResolutionMeasureInvariantCache;
+                   opts::InvariantOptions=InvariantOptions(),
+                   threaded::Bool=true)
+    _ = threaded
+    opts0 = _cache_opts(cache, opts)
+    cache.kind == :projective ||
+        throw(ArgumentError("BettiSupportMeasuresSpec requires a projective resolution cache"))
+    weights = (opts0 == cache.opts ? cache.weights : _support_measure_weights(cache.pi, opts0))
+    return _betti_support_vector(cache.res, cache.pi, spec, opts0; weights=weights)
+end
+
+function transform(spec::BettiSupportMeasuresSpec,
+                   cache::EncodingInvariantCache;
+                   opts::InvariantOptions=InvariantOptions(),
+                   threaded::Bool=true)
+    _ = threaded
+    opts0 = _cache_opts(cache, opts)
+    res = _projective_resolution_for_cache(cache, spec)
+    weights = _support_measure_weights(cache.pi, opts0)
+    return _betti_support_vector(res, cache.pi, spec, opts0; weights=weights)
+end
+
+function transform(spec::BettiSupportMeasuresSpec, obj; opts::InvariantOptions=InvariantOptions(), threaded::Bool=true)
+    cache = build_cache(obj, spec; opts=opts, threaded=threaded)
+    return transform(spec, cache; opts=opts, threaded=threaded)
+end
+
+function transform(spec::BassSupportMeasuresSpec,
+                   cache::ResolutionMeasureInvariantCache;
+                   opts::InvariantOptions=InvariantOptions(),
+                   threaded::Bool=true)
+    _ = threaded
+    opts0 = _cache_opts(cache, opts)
+    cache.kind == :injective ||
+        throw(ArgumentError("BassSupportMeasuresSpec requires an injective resolution cache"))
+    weights = (opts0 == cache.opts ? cache.weights : _support_measure_weights(cache.pi, opts0))
+    return _bass_support_vector(cache.res, cache.pi, spec, opts0; weights=weights)
+end
+
+function transform(spec::BassSupportMeasuresSpec,
+                   cache::EncodingInvariantCache;
+                   opts::InvariantOptions=InvariantOptions(),
+                   threaded::Bool=true)
+    _ = threaded
+    opts0 = _cache_opts(cache, opts)
+    res = _injective_resolution_for_cache(cache, spec)
+    weights = _support_measure_weights(cache.pi, opts0)
+    return _bass_support_vector(res, cache.pi, spec, opts0; weights=weights)
+end
+
+function transform(spec::BassSupportMeasuresSpec, obj; opts::InvariantOptions=InvariantOptions(), threaded::Bool=true)
+    cache = build_cache(obj, spec; opts=opts, threaded=threaded)
+    return transform(spec, cache; opts=opts, threaded=threaded)
 end
 
 function transform(spec::EulerSurfaceSpec,
@@ -2637,6 +5456,38 @@ function transform(spec::EulerSurfaceSpec,
                    opts::InvariantOptions=InvariantOptions(),
                    threaded::Bool=true)
     return transform(spec, _cache_sample(cache); opts=opts, threaded=_cache_threaded(cache, threaded))
+end
+
+function transform(spec::RestrictedHilbertSpec,
+                   cache::RestrictedHilbertInvariantCache;
+                   opts::InvariantOptions=InvariantOptions(),
+                   threaded::Bool=true)
+    _ = opts
+    _ = threaded
+    return _restricted_hilbert_vector(cache.hilbert, spec)
+end
+
+function transform(spec::RestrictedHilbertSpec,
+                   cache::EncodingInvariantCache;
+                   opts::InvariantOptions=InvariantOptions(),
+                   threaded::Bool=true)
+    _ = opts
+    _ = threaded
+    return _restricted_hilbert_vector(Invariants.restricted_hilbert(cache.M), spec)
+end
+
+function transform(spec::RestrictedHilbertSpec,
+                   cache::ModuleInvariantCache;
+                   opts::InvariantOptions=InvariantOptions(),
+                   threaded::Bool=true)
+    _ = opts
+    _ = threaded
+    return _restricted_hilbert_vector(Invariants.restricted_hilbert(cache.M), spec)
+end
+
+function transform(spec::RestrictedHilbertSpec, obj; opts::InvariantOptions=InvariantOptions(), threaded::Bool=true)
+    cache = build_cache(obj, spec; opts=opts, threaded=threaded)
+    return transform(spec, cache; opts=opts, threaded=threaded)
 end
 
 function transform(spec::RankGridSpec,
@@ -2713,6 +5564,16 @@ function transform(spec::SlicedBarcodeSpec, obj; opts::InvariantOptions=Invarian
     return transform(spec, cache; opts=opts, threaded=threaded)
 end
 
+function transform(spec::BarcodeTopKSpec, obj; opts::InvariantOptions=InvariantOptions(), threaded::Bool=true)
+    cache = build_cache(obj, spec; opts=opts, threaded=threaded)
+    return transform(spec, cache; opts=opts, threaded=threaded)
+end
+
+function transform(spec::BarcodeSummarySpec, obj; opts::InvariantOptions=InvariantOptions(), threaded::Bool=true)
+    cache = build_cache(obj, spec; opts=opts, threaded=threaded)
+    return transform(spec, cache; opts=opts, threaded=threaded)
+end
+
 function transform(spec::SignedBarcodeImageSpec, obj; opts::InvariantOptions=InvariantOptions(), threaded::Bool=true)
     cache = build_cache(obj, spec; opts=opts, threaded=threaded)
     return transform(spec, cache; opts=opts, threaded=threaded)
@@ -2723,16 +5584,18 @@ function transform(spec::ProjectedDistancesSpec, obj; opts::InvariantOptions=Inv
     return transform(spec, cache; opts=opts, threaded=threaded)
 end
 
-@inline _is_slice_family_spec(spec) = spec isa Union{LandscapeSpec,PersistenceImageSpec,SlicedBarcodeSpec}
+@inline _is_slice_family_spec(spec) =
+    spec isa Union{LandscapeSpec,PersistenceImageSpec,SlicedBarcodeSpec,BarcodeTopKSpec,BarcodeSummarySpec}
+@inline _is_mplandscape_family_spec(spec) = spec isa MPLandscapeSpec
 
 function _slice_group_data_for_spec(
     cache::EncodingInvariantCache,
-    spec::Union{LandscapeSpec,PersistenceImageSpec,SlicedBarcodeSpec},
+    spec::Union{LandscapeSpec,PersistenceImageSpec,SlicedBarcodeSpec,BarcodeTopKSpec,BarcodeSummarySpec},
     opts0::InvariantOptions,
     threads0::Bool,
 )
     lvl = _effective_cache_level(cache.level, spec, cache.pi)
-    if lvl == :fibered || lvl == :all
+    if _slice_backend(spec, lvl) == :fibered
         fcache = _fibered_cache_for!(cache, spec, opts0, threads0, lvl)
         data = Invariants.slice_barcodes(
             fcache;
@@ -2815,6 +5678,38 @@ function _composite_slice_vector(
     ))
 end
 
+function _composite_slice_vector(
+    spec::BarcodeTopKSpec,
+    bars::Invariants.PackedBarcodeGrid,
+    W::AbstractMatrix{Float64},
+    threads0::Bool,
+)
+    window0 = _barcode_grid_window(bars, spec.window)
+    return _aggregate_barcode_feature_grid(
+        bars,
+        W,
+        pb -> _barcode_topk_vector(pb, spec, window0);
+        aggregate=spec.aggregate,
+        threads=threads0,
+    )
+end
+
+function _composite_slice_vector(
+    spec::BarcodeSummarySpec,
+    bars::Invariants.PackedBarcodeGrid,
+    W::AbstractMatrix{Float64},
+    threads0::Bool,
+)
+    window0 = _barcode_grid_window(bars, spec.window)
+    return _aggregate_barcode_feature_grid(
+        bars,
+        W,
+        pb -> _barcode_summary_vector(pb, spec, window0);
+        aggregate=spec.aggregate,
+        threads=threads0,
+    )
+end
+
 function _fill_composite_slice_parts!(
     parts::Vector{Vector{Float64}},
     filled::BitVector,
@@ -2835,13 +5730,59 @@ function _fill_composite_slice_parts!(
     end
 
     for idxs in values(groups)
-        first_spec = spec.specs[first(idxs)]::Union{LandscapeSpec,PersistenceImageSpec,SlicedBarcodeSpec}
+        first_spec = spec.specs[first(idxs)]::Union{LandscapeSpec,PersistenceImageSpec,SlicedBarcodeSpec,BarcodeTopKSpec,BarcodeSummarySpec}
         threads_g = _resolve_spec_threads(getproperty(first_spec, :threads), opts0, threaded0)
         bars, W = _slice_group_data_for_spec(cache, first_spec, opts0, threads_g)
         for idx in idxs
             sub = spec.specs[idx]
             parts[idx] = _composite_slice_vector(sub, bars, W, threads_g)
             filled[idx] = true
+        end
+    end
+    return nothing
+end
+
+@inline function _mplandscape_feature_key(spec::MPLandscapeSpec)
+    return UInt(hash((spec.kmax, spec.tgrid, spec.normalize_weights)))
+end
+
+function _fill_composite_mplandscape_parts!(
+    parts::Vector{Vector{Float64}},
+    filled::BitVector,
+    spec::CompositeSpec,
+    cache::EncodingInvariantCache,
+    opts0::InvariantOptions,
+    threaded0::Bool,
+)
+    groups = Dict{UInt,Vector{Int}}()
+    for i in eachindex(spec.specs)
+        sub = spec.specs[i]
+        _is_mplandscape_family_spec(sub) || continue
+        threads_i = _resolve_spec_threads(sub.threads, opts0, threaded0)
+        key = UInt(hash((_slice_compile_kwargs(sub, opts0, threads_i), _effective_cache_level(cache.level, sub, cache.pi), threads_i)))
+        push!(get!(groups, key) do
+            Int[]
+        end, i)
+    end
+
+    for idxs in values(groups)
+        first_spec = spec.specs[first(idxs)]::MPLandscapeSpec
+        threads_g = _resolve_spec_threads(first_spec.threads, opts0, threaded0)
+        plan = _slice_plan_for!(cache, first_spec, opts0, threads_g)
+        feature_groups = Dict{UInt,Vector{Int}}()
+        for idx in idxs
+            sub = spec.specs[idx]::MPLandscapeSpec
+            push!(get!(feature_groups, _mplandscape_feature_key(sub)) do
+                Int[]
+            end, idx)
+        end
+        for fidxs in values(feature_groups)
+            sub = spec.specs[first(fidxs)]::MPLandscapeSpec
+            vals = _mplandscape_vector_from_plan(cache.M, sub, plan, threads_g)
+            for idx in fidxs
+                parts[idx] = vals
+                filled[idx] = true
+            end
         end
     end
     return nothing
@@ -2891,6 +5832,99 @@ function _fill_composite_projected_parts!(
 end
 
 @inline _is_signed_barcode_family_spec(spec) = spec isa SignedBarcodeImageSpec
+
+@inline _is_mpp_image_family_spec(spec) = spec isa MPPImageSpec
+@inline _is_mpp_hist_family_spec(spec) = spec isa MPPDecompositionHistogramSpec
+
+@inline function _mpp_image_feature_key(spec::MPPImageSpec)
+    return UInt(hash((spec.resolution, spec.xgrid, spec.ygrid, spec.sigma, spec.cutoff_radius, spec.cutoff_tol, spec.segment_prune)))
+end
+
+function _fill_composite_mpp_image_parts!(
+    parts::Vector{Vector{Float64}},
+    filled::BitVector,
+    spec::CompositeSpec,
+    cache::EncodingInvariantCache,
+    opts0::InvariantOptions,
+    threaded0::Bool,
+)
+    groups = Dict{UInt,Vector{Int}}()
+    for i in eachindex(spec.specs)
+        sub = spec.specs[i]
+        _is_mpp_image_family_spec(sub) || continue
+        threads_i = _resolve_spec_threads(sub.threads, opts0, threaded0)
+        key = UInt(hash((_mpp_decomposition_key(sub, opts0), _effective_cache_level(cache.level, sub, cache.pi), threads_i)))
+        push!(get!(groups, key) do
+            Int[]
+        end, i)
+    end
+
+    for idxs in values(groups)
+        first_spec = spec.specs[first(idxs)]::MPPImageSpec
+        threads_g = _resolve_spec_threads(first_spec.threads, opts0, threaded0)
+        lvl = _effective_cache_level(cache.level, first_spec, cache.pi)
+        _, decomp = _mpp_decomposition_for!(cache, first_spec, opts0, threads_g, lvl)
+        feature_groups = Dict{UInt,Vector{Int}}()
+        for idx in idxs
+            sub = spec.specs[idx]::MPPImageSpec
+            push!(get!(feature_groups, _mpp_image_feature_key(sub)) do
+                Int[]
+            end, idx)
+        end
+        for fidxs in values(feature_groups)
+            sub = spec.specs[first(fidxs)]::MPPImageSpec
+            vals = _mpp_image_vector_from_decomp(sub, decomp, threads_g)
+            for idx in fidxs
+                parts[idx] = vals
+                filled[idx] = true
+            end
+        end
+    end
+    return nothing
+end
+
+function _fill_composite_mpp_hist_parts!(
+    parts::Vector{Vector{Float64}},
+    filled::BitVector,
+    spec::CompositeSpec,
+    cache::EncodingInvariantCache,
+    opts0::InvariantOptions,
+    threaded0::Bool,
+)
+    groups = Dict{UInt,Vector{Int}}()
+    for i in eachindex(spec.specs)
+        sub = spec.specs[i]
+        _is_mpp_hist_family_spec(sub) || continue
+        threads_i = _resolve_spec_threads(sub.threads, opts0, threaded0)
+        key = UInt(hash((_mpp_decomposition_key(sub, opts0), _effective_cache_level(cache.level, sub, cache.pi), threads_i)))
+        push!(get!(groups, key) do
+            Int[]
+        end, i)
+    end
+
+    for idxs in values(groups)
+        first_spec = spec.specs[first(idxs)]::MPPDecompositionHistogramSpec
+        threads_g = _resolve_spec_threads(first_spec.threads, opts0, threaded0)
+        lvl = _effective_cache_level(cache.level, first_spec, cache.pi)
+        _, decomp = _mpp_decomposition_for!(cache, first_spec, opts0, threads_g, lvl)
+        feature_groups = Dict{UInt,Vector{Int}}()
+        for idx in idxs
+            sub = spec.specs[idx]::MPPDecompositionHistogramSpec
+            push!(get!(feature_groups, UInt(hash((sub.orientation_bins, sub.scale_bins, sub.scale_range, sub.weight, sub.normalize)))) do
+                Int[]
+            end, idx)
+        end
+        for fidxs in values(feature_groups)
+            sub = spec.specs[first(fidxs)]::MPPDecompositionHistogramSpec
+            vals = _mpp_histogram_vector_from_decomp(sub, decomp)
+            for idx in fidxs
+                parts[idx] = vals
+                filled[idx] = true
+            end
+        end
+    end
+    return nothing
+end
 
 function _signed_barcode_for_spec(
     cache::EncodingInvariantCache,
@@ -3043,6 +6077,7 @@ function _fill_composite_rank_parts!(
     cache::AbstractInvariantCache,
     opts0::InvariantOptions,
 )
+    any(_is_rank_family_spec, spec.specs) || return nothing
     M = _sample_module(_cache_sample(cache))
     groups = Dict{UInt,Vector{Int}}()
     for i in eachindex(spec.specs)
@@ -3082,7 +6117,10 @@ function transform(spec::CompositeSpec,
 
     if cache isa EncodingInvariantCache
         _fill_composite_slice_parts!(parts, filled, spec, cache, opts0, threaded0)
+        _fill_composite_mplandscape_parts!(parts, filled, spec, cache, opts0, threaded0)
         _fill_composite_projected_parts!(parts, filled, spec, cache, opts0, threaded0)
+        _fill_composite_mpp_image_parts!(parts, filled, spec, cache, opts0, threaded0)
+        _fill_composite_mpp_hist_parts!(parts, filled, spec, cache, opts0, threaded0)
         _fill_composite_signed_barcode_parts!(parts, filled, spec, cache, opts0, threaded0)
         _fill_composite_euler_parts!(parts, filled, spec, cache, opts0, threaded0)
     elseif cache isa RestrictedHilbertInvariantCache
@@ -3420,7 +6458,8 @@ function _compile_featurize(samples::AbstractVector,
         sidx = sample_indices[slot]
         cache = build_cache(samples[sidx], spec;
                             opts=opts0,
-                            threaded=batch_opts.threaded)
+                            threaded=batch_opts.threaded,
+                            cache=session_cache)
         caches[slot] = cache
         if sidx == first_supported
             first_slot = slot
@@ -3616,8 +6655,8 @@ end
 end
 
 function _session_cache_stats(session::SessionCache)
-    n_encoding = length(session.encoding)
-    n_modules = length(session.modules)
+    n_encoding = _session_encoding_bucket_count(session)
+    n_modules = _session_module_bucket_count(session)
     enc_posets = 0
     enc_cubical = 0
     enc_region_posets = 0
@@ -3625,12 +6664,12 @@ function _session_cache_stats(session::SessionCache)
     mod_resolution_projective = 0
     mod_resolution_injective = 0
     mod_resolution_indicator = 0
-    for ec in values(session.encoding)
+    for ec in _session_encoding_values(session)
         enc_posets += length(ec.posets)
         enc_cubical += length(ec.cubical)
         enc_region_posets += length(ec.region_posets)
     end
-    for mc in values(session.modules)
+    for mc in _session_module_values(session)
         mod_payload += length(mc.payload)
         mod_resolution_projective += length(mc.resolution.projective)
         mod_resolution_injective += length(mc.resolution.injective)
@@ -3646,6 +6685,10 @@ function _session_cache_stats(session::SessionCache)
         "module_resolution_projective" => mod_resolution_projective,
         "module_resolution_injective" => mod_resolution_injective,
         "module_resolution_indicator" => mod_resolution_indicator,
+        "zn_encoding_artifacts" => _session_zn_encoding_artifact_count(session),
+        "zn_pushforward_plans" => _session_zn_pushforward_plan_count(session),
+        "zn_pushforward_fringes" => _session_zn_pushforward_fringe_count(session),
+        "zn_pushforward_modules" => _session_zn_pushforward_module_count(session),
         "session_resolution" => _resolution_cache_stats(session.resolution),
         "has_hom_system_cache" => session.hom_system !== nothing,
         "has_slice_plan_cache" => session.slice_plan !== nothing,

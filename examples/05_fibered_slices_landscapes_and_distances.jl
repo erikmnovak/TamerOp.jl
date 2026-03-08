@@ -120,8 +120,8 @@ println("Cache stats (single-sample cache object): ", PM.cache_stats(cache_obj))
 stage("5) Save outputs")
 
 paths = save_feature_bundle(outdir, "fibered_landscape_projected", fs)
-println("Manual wide CSV: ", paths.manual_wide)
-println("Manual long CSV: ", paths.manual_long)
+println("CSV wide: ", paths.csv_wide)
+println("CSV long: ", paths.csv_long)
 println("Native optional outputs: ", paths.native)
 
 println("\nDone. Output directory: ", outdir)

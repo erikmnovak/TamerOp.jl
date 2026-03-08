@@ -5,7 +5,7 @@
 #
 # Design goals:
 # - Keep examples deterministic and reproducible.
-# - Keep outputs lightweight and inspectable without optional dependencies.
+# - Use canonical library IO paths (save_features/save_dataset_json/save_pipeline_json).
 # - Make each script runnable as a plain Julia file.
 # =============================================================================
 
@@ -56,69 +56,21 @@ function example_outdir(name::AbstractString)
     return out
 end
 
-@inline _csv_escape(x) = begin
-    s = string(x)
-    if occursin(',', s) || occursin('"', s)
-        s = replace(s, '"' => "\"\"")
-        return "\"" * s * "\""
-    end
-    return s
-end
-
-"Write a wide feature table without requiring CSV.jl extension."
-function write_feature_csv_wide(path::AbstractString, fs::PM.FeatureSet)
-    nfeat = size(fs.X, 2)
-    names = length(fs.names) == nfeat ? String.(fs.names) : ["f$(j)" for j in 1:nfeat]
-    open(path, "w") do io
-        hdr = ["id"; names]
-        println(io, join(_csv_escape.(hdr), ","))
-        for i in 1:size(fs.X, 1)
-            row = Vector{String}(undef, nfeat + 1)
-            row[1] = fs.ids[i]
-            for j in 1:nfeat
-                row[j + 1] = string(fs.X[i, j])
-            end
-            println(io, join(_csv_escape.(row), ","))
-        end
-    end
-    return path
-end
-
-"Write a long feature table without requiring CSV.jl extension."
-function write_feature_csv_long(path::AbstractString, fs::PM.FeatureSet)
-    nfeat = size(fs.X, 2)
-    names = length(fs.names) == nfeat ? String.(fs.names) : ["f$(j)" for j in 1:nfeat]
-    open(path, "w") do io
-        println(io, "id,sample_index,feature,value")
-        for i in 1:size(fs.X, 1)
-            sid = fs.ids[i]
-            for j in 1:nfeat
-                vals = (sid, i, names[j], fs.X[i, j])
-                println(io, join(_csv_escape.(vals), ","))
-            end
-        end
-    end
-    return path
-end
-
-"Try native save_features(...) first, then always provide manual CSV fallback."
+"Save canonical feature artifacts (CSV wide/long) plus optional NPZ."
 function save_feature_bundle(outdir::AbstractString,
                              stem::AbstractString,
                              fs::PM.FeatureSet)
     mkpath(outdir)
 
-    wide_manual = write_feature_csv_wide(joinpath(outdir, stem * "__wide_manual.csv"), fs)
-    long_manual = write_feature_csv_long(joinpath(outdir, stem * "__long_manual.csv"), fs)
+    csv_wide = joinpath(outdir, stem * "__wide.csv")
+    csv_long = joinpath(outdir, stem * "__long.csv")
+    PM.save_features(csv_wide, fs; format=:csv, mode=:wide, metadata=true)
+    PM.save_features(csv_long, fs; format=:csv, mode=:long, metadata=true)
 
     native_paths = Dict{Symbol,String}()
 
-    # Optional CSV extension path.
-    try
-        p = joinpath(outdir, stem * "__wide.csv")
-        PM.save_features(p, fs; format=:csv, mode=:wide, metadata=true)
-        native_paths[:csv_wide] = p
-    catch
-    end
+    native_paths[:csv_wide] = csv_wide
+    native_paths[:csv_long] = csv_long
 
     # Optional NPZ extension path.
     try
@@ -128,7 +80,7 @@ function save_feature_bundle(outdir::AbstractString,
     catch
     end
 
-    return (manual_wide=wide_manual, manual_long=long_manual, native=native_paths)
+    return (csv_wide=csv_wide, csv_long=csv_long, native=native_paths)
 end
 
 "Check deterministic feature reproducibility and return max absolute deviation."

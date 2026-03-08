@@ -49,6 +49,16 @@ Guidance for coding agents working in `tamer-op`.
 - Do not include `DataIngestion.jl`/`Featurizers.jl` from `Workflow.jl`; load them from `PosetModules.jl`.
 - Keep shared workflow cache/session helper plumbing in `CoreModules` (not duplicated across Workflow/DataIngestion/Featurizers).
 - Keep APISurface contracts authoritative; bind root/advanced symbols from `APISurface.jl` lists rather than ad-hoc `using`/`export` accretion.
+- Split by ownership/cohesion, not by line count alone:
+  - if a file is one coherent subsystem that is just too large, keep one owner module in `src/<Owner>.jl` and move private implementation fragments into `src/<owner_snake_case>/`,
+  - if a file mixes unrelated concepts, split those concepts into sibling owner modules instead of hiding them behind one catch-all owner.
+- Prefer semantically honest owners over convenience buckets:
+  - `FieldLinAlg` should remain the owner module for field-aware linear algebra, with private fragments under `src/field_linalg/`,
+  - `CoreModules` should contain only true low-level shared runtime, not unrelated data/options/results/stats concepts.
+- When using the owner-module + private-folder pattern:
+  - keep the top-level owner file thin (module docstring, imports, ordered `include`s, public ownership),
+  - keep private fragments non-exporting and scoped to that owner only.
+- Do not create sibling public modules merely to reduce file size when the code still belongs to one coherent owner.
 
 ## Performance policy
 - Prioritize hot paths in:
@@ -64,8 +74,15 @@ Guidance for coding agents working in `tamer-op`.
 - Prefer sparse-native operations; avoid densification unless explicitly justified.
 - Use two-phase threaded design: sequential compile/build cache, threaded read-only compute.
 - Threaded loops should write by deterministic index, not shared mutable dictionaries.
+- In threaded kernels, avoid relying on `threadid()`-indexed mutable vectors for `push!` accumulation; prefer per-work-item shards plus deterministic reduction.
 - Do not keep complexity that does not benchmark as a win; revert or simplify if gains are noise/negative.
 - Treat cold and warm behavior separately; optimize both and report both.
+- For new batched/vectorized kernels, keep a correctness-equivalent scalar fallback and gate activation by problem size/shape.
+- Prefer conservative heuristic gates first; then tune thresholds with benchmark evidence (do not force fast paths globally).
+- Keep fast-path switches inspectable with internal (non-exported) knobs so A/B checks are possible without invasive code edits.
+- Validate performance across both cache and non-cache call paths; avoid optimizing one while regressing the other.
+- Validate serial and threaded regimes separately; a threaded win can hide a serial regression (and vice versa).
+- Wire performance gains through canonical high-level entrypoints so simple users benefit without changing call patterns.
 
 ## Field and backend expectations
 - Ground field support includes `QQ`, `F2`, `F3`, `Fp(p)`, and `RealField`.
@@ -79,6 +96,15 @@ Guidance for coding agents working in `tamer-op`.
   - `:verified`
 - Validate via `validate_pl_mode` in `CoreModules`.
 - Do not reintroduce alias symbols (`:hybrid_fast`, `:hybrid_verified`, `:hybrid`, `:exact`) for mode selection.
+
+## PL geometry cache contract
+- Keep cache levels explicit and strict:
+  - `:light` (locate/prefilter only),
+  - `:geometry` (exact region geometry on-demand),
+  - `:full` (precomputed heavy geometry/facets/adjacency support).
+- Auto-cache paths should default to `:light` and promote by call intent; avoid eager full-cache work for one-off exact queries.
+- Keep a one-off no-cache exact route for small/single-region queries when global cache build cost dominates.
+- Ensure compiled/forwarded entrypoints preserve the same cache-level/intent behavior as direct owner-module calls.
 
 ## Data ingestion policy
 - Primary ingestion implementation lives in `src/DataIngestion.jl`; featurizer API lives in `src/Featurizers.jl`.
@@ -96,6 +122,17 @@ Guidance for coding agents working in `tamer-op`.
 - Maintain preflight guardrails (`estimate_ingestion`) and early combinatorial checks before enumeration.
 - Preserve multipers/RIVET comparison harness under `benchmark/ingestion_compare_harness/` and keep regimes apples-to-apples.
 
+## Serialization policy
+- Keep internal JSON save paths performance-first by default:
+  - default to compact writes (`pretty=false`),
+  - keep pretty-printing as an explicit opt-in only.
+- For structured posets, avoid dense relation emission by default:
+  - use `include_leq=:auto`,
+  - require explicit `include_leq=true` when dense `leq` materialization is actually needed.
+- Keep strict load validation as the default contract; when needed, expose explicit trusted fast paths (e.g. `validate_masks=false`) for internally produced artifacts only.
+- For large homogeneous datasets (point clouds, graphs, etc.), prefer columnar schemas + typed decoding on hot load paths; keep compatibility loaders for prior schemas.
+- In external/adaptor parsers, avoid per-entry warning spam in hot loops; aggregate repeated warnings to one warning per file/payload when possible.
+
 ## Testing policy
 - Do **not** run the full suite unless explicitly requested by the user.
 - Run focused tests for touched modules first (targeted harnesses are fine).
@@ -111,6 +148,15 @@ Guidance for coding agents working in `tamer-op`.
   - For floating-point/RealField paths, use explicit tolerance-based oracle checks.
 - Add negative-contract tests for new API contracts (`@test_throws` on invalid modes/options/shapes).
 - Keep optional-dependency tests extension-aware and deterministic (skip only when package is missing).
+- For heuristic-gated fast paths, add explicit parity tests that force both gate states (`off` vs `on`) and compare outputs.
+- For geometry/invariant outputs with non-semantic ordering differences, canonicalize before comparison (stable sort + explicit rounding/tolerances).
+- Include both tiny and moderate-size oracle tests when adding gates, so the gate boundary itself is validated.
+- For threaded cache/build/read kernels, include `nthreads()>1` stress/parity tests that can catch write-contention/concurrency violations.
+- Keep tests resilient to API-surface curation: correctness tests should call owner modules directly, not rely on curated binding layers.
+- Keep shared test aliases centralized in `test/runtests.jl` when possible, and avoid shadowing those aliases with local variables inside test blocks.
+- For serialization/schema changes, add both:
+  - strict-contract tests (default path),
+  - compatibility/fast-path tests (legacy loader path and trusted fast path parity where applicable).
 - For module-level kernel changes (`Modules.jl`), include all of:
   - negative API-contract tests (`@test_throws` for invalid indices/comparability/shape conflicts),
   - `ModuleOptions` behavior parity tests,
@@ -132,11 +178,43 @@ Guidance for coding agents working in `tamer-op`.
   - subsystem microbench deltas,
   - workflow-level impact (`encode(...)` path) when applicable.
 - Keep external comparisons (e.g. multipers) regime-matched; explicitly label directional vs apples-to-apples results.
+- Benchmark scripts should resolve symbols from owner modules (e.g. `CoreModules`, `RegionGeometry`) rather than curated API bindings.
+- Prefer built-in A/B probes in the same benchmark script (toggle-based before/after) for deterministic local comparisons.
+- Report allocations alongside runtime; GC/allocation regressions are first-class performance regressions.
+- For serialization benchmarks, report file-size deltas alongside runtime/allocations; schema and pretty/compact choices are performance features.
+- State timing policy explicitly in benchmark outputs (strict-cold vs warm-uncached vs warm-cached) and do not mix them silently.
+- Before performance runs, ensure no stale heavy Julia jobs are competing for CPU/RAM; process contention can masquerade as regressions or crashes.
+- For large architectural refactors, validate the owner module directly first (parse/smoke load/focused benchmark) before trusting root-module timings from a noisy environment.
+- For noisy kernels, run at least two independent benchmark passes and keep both raw outputs before calling wins/regressions.
+- Prefer benchmark harnesses with sectional switches (e.g. run only encoding or only dataset blocks) so long runs remain operable in constrained/dev environments.
+
+### Benchmark run checklist (operational)
+1. Ensure a clean benchmark environment:
+   - stop stale heavy Julia processes,
+   - avoid background benchmark/test runs,
+   - note machine/thread settings used.
+2. Declare timing policy up front:
+   - strict-cold, warm-uncached, or warm-cached,
+   - use the same policy for all compared variants/tools.
+3. Run the baseline first and persist raw outputs (CSV/text) with clear filenames.
+4. Run the candidate with identical inputs/flags, then compute explicit deltas:
+   - median runtime ratio,
+   - allocation/GC delta.
+5. Validate correctness parity after performance changes:
+   - targeted oracle/parity tests,
+   - gate off/on parity when heuristic gates are involved.
+6. Check both cache and non-cache paths, and serial vs threaded paths when relevant.
+7. Record conclusions with caveats:
+   - where wins occur,
+   - where regressions/noise remain,
+   - next tuning target (if any).
 
 ## Code hygiene
 - Keep `src/PosetModules.jl` as an API map (avoid dumping implementation helpers there).
 - Place logic in the most specific module that owns it.
 - Internal-only functions must always use a leading underscore and remain non-exported.
+- Internal performance tuning controls (feature flags, thresholds, gates) should remain non-exported and documented near the owning kernel.
+- When splitting an owner module across private include files, give the owner file a module docstring and give each fragment a short header comment/docstring stating what that file owns and its scope.
 - Keep comments concise and technical; avoid stale docs.
 - Keep `PosetModules.jl` comments synchronized with real structure (no stale references like `PublicAPI.jl`/`AdvancedAPI.jl` when those files do not exist).
 - If a constant/config appears dead, remove it or wire it fully.

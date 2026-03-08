@@ -317,20 +317,20 @@ using TOML
         @test f2.comps[2][1, 1] == CM.FpElem{2}(0)
 
         # --- EncodingResult ---
-        enc = CM.EncodingResult(P, M, nothing; H=H, presentation=FG)
+        enc = RES.EncodingResult(P, M, nothing; H=H, presentation=FG)
         enc2 = CM.change_field(enc, F2)
         @test enc2.M.field == F2
         @test enc2.H.field == F2
         @test enc2.presentation.field == F2
 
         # --- ResolutionResult ---
-        res = CM.ResolutionResult(M; enc=enc)
+        res = RES.ResolutionResult(M; enc=enc)
         res2 = CM.change_field(res, F2)
         @test res2.enc.M.field == F2
         @test res2.res.field == F2
 
         # --- InvariantResult ---
-        inv = CM.InvariantResult(enc, :dummy, 7)
+        inv = RES.InvariantResult(enc, :dummy, 7)
         inv2 = CM.change_field(inv, F2)
         @test inv2.enc.M.field == F2
         @test inv2.value == 7
@@ -592,6 +592,15 @@ using TOML
     end
 
     @testset "rank_restricted API parity (dense + sparse)" begin
+        function _selection_words(idxs::Vector{Int}, nmax::Int)
+            words = zeros(UInt64, cld(nmax, 64))
+            for idx in idxs
+                wd = ((idx - 1) >>> 6) + 1
+                words[wd] |= UInt64(1) << ((idx - 1) & 63)
+            end
+            return words
+        end
+
         with_fields(FIELDS_FULL) do field
             @testset "restricted rank over $(field)" begin
                 Aint = [
@@ -606,15 +615,29 @@ using TOML
                 As = sparse(A)
                 rows = [1, 3, 4, 6]
                 cols = [1, 2, 5, 7]
+                row_words = _selection_words(rows, size(A, 1))
+                col_words = _selection_words(cols, size(A, 2))
 
                 rd = FL.rank_restricted(field, A, rows, cols)
                 rd_ref = FL.rank(field, A[rows, cols])
                 @test rd == rd_ref
 
+                rd_words = FL.rank_restricted_words(field, A, row_words, col_words, length(rows), length(cols);
+                                                   nrows=size(A, 1), ncols=size(A, 2))
+                @test rd_words == rd_ref
+
                 rs = FL.rank_restricted(field, As, rows, cols)
                 rs_ref = FL.rank(field, Matrix(As)[rows, cols])
                 @test rs == rs_ref
 
+                rs_words = FL.rank_restricted_words(field, As, row_words, col_words, length(rows), length(cols);
+                                                   nrows=size(A, 1), ncols=size(A, 2))
+                @test rs_words == rs_ref
+
+                @test FL.rank_restricted_words(field, A, row_words, zeros(UInt64, length(col_words)), length(rows), 0;
+                                               nrows=size(A, 1), ncols=size(A, 2)) == 0
+                @test FL.rank_restricted_words(field, A, zeros(UInt64, length(row_words)), col_words, 0, length(cols);
+                                               nrows=size(A, 1), ncols=size(A, 2)) == 0
                 @test FL.rank_restricted(field, A, Int[], cols) == 0
                 @test FL.rank_restricted(field, A, rows, Int[]) == 0
                 @test FL.rank_restricted(field, As, Int[], cols) == 0
@@ -1763,6 +1786,109 @@ using TOML
             end
         finally
             @test FL._apply_linalg_thresholds!(old)
+        end
+    end
+
+    @testset "QQ sparse rank routing prefers julia on very sparse matrices" begin
+        F = CM.QQField()
+        old = FL._current_linalg_thresholds()
+        try
+            @test FL._apply_linalg_thresholds!(merge(
+                old,
+                Dict(
+                    "qq_nemo_rank_threshold_square" => 100,
+                    "qq_nemo_rank_threshold_tall" => 100,
+                    "qq_nemo_rank_threshold_wide" => 100,
+                )
+            ))
+            A = spzeros(QQ, 400, 300)
+            for j in 1:300
+                A[mod1(3j, 400), j] = QQ(1)
+                j <= 100 && (A[mod1(5j + 7, 400), j] = QQ(2))
+            end
+            @test FL._choose_linalg_backend(F, A; op=:rank) == :julia_sparse
+            @test FL.rank(F, A) == FL.rank(F, A; backend=:julia_sparse)
+        finally
+            @test FL._apply_linalg_thresholds!(old)
+        end
+    end
+
+    @testset "QQ sparse colspace routing chooses the right backend by nnz regime" begin
+        F = CM.QQField()
+        A = spzeros(QQ, 1200, 220)
+        for j in 1:220
+            A[mod1(3j + 11, 1200), j] = QQ(1)
+            A[mod1(7j + 19, 1200), j] = QQ(2)
+        end
+        @test FL._choose_linalg_backend(F, A; op=:colspace) == :julia_sparse
+        Cauto = FL.colspace(F, A)
+        Cj = FL.colspace(F, A; backend=:julia_sparse)
+        @test FL.rank(F, Cauto) == FL.rank(F, Cj)
+
+        Am = spzeros(QQ, 1200, 220)
+        @inbounds for j in 1:220
+            for t in 0:23
+                Am[mod1(3j + 17t + 11, 1200), j] = QQ(1 + ((j + t) % 3))
+            end
+        end
+        expected = FL._have_nemo() ? :nemo : :julia_sparse
+        @test FL._choose_linalg_backend(F, Am; op=:colspace) == expected
+        Cmod = FL.colspace(F, Am)
+        @test FL.rank(F, Cmod) == FL.rank(F, FL.colspace(F, Am; backend=:julia_sparse))
+        FL._have_nemo() && @test Cmod == FL.colspace(F, Am; backend=:nemo)
+    end
+
+    @testset "QQ sparse nullspace routing keeps Nemo on moderate-nnz sparse inputs" begin
+        F = CM.QQField()
+        old = FL._current_linalg_thresholds()
+        try
+            @test FL._apply_linalg_thresholds!(merge(
+                old,
+                Dict(
+                    "qq_nemo_nullspace_threshold_square" => 100,
+                    "qq_nemo_nullspace_threshold_tall" => 100,
+                    "qq_nemo_nullspace_threshold_wide" => 100,
+                )
+            ))
+            A = spzeros(QQ, 800, 120)
+            @inbounds for j in 1:120
+                for t in 0:71
+                    A[mod1(j + 11t, 800), j] = QQ(1 + ((j + t) % 3))
+                end
+            end
+            expected = FL._have_nemo() ? :nemo : :julia_sparse
+            @test FL._choose_linalg_backend(F, A; op=:nullspace) == expected
+        finally
+            @test FL._apply_linalg_thresholds!(old)
+        end
+    end
+
+    @testset "QQ sparse solve honors provided factor backend under auto routing" begin
+        F = CM.QQField()
+        Bsmall = spzeros(QQ, 800, 120)
+        @inbounds for j in 1:120
+            Bsmall[2j - 1, j] = QQ(1)
+            Bsmall[mod1(5j + 7, 800), j] = QQ(2)
+            j <= 80 && (Bsmall[mod1(7j + 13, 800), j] = QQ(3))
+        end
+        @test FL._choose_linalg_backend(F, Bsmall; op=:solve) == :julia_sparse
+
+        B = FL._qq_sparse_fullcolumn_rand(500, 100, 0.05; rng=MersenneTwister(0x5EED))
+        Xtrue = reshape(QQ[mod1(i + j, 5) for i in 1:100, j in 1:3], 100, 3)
+        Y = B * Xtrue
+        expected_auto = FL._have_nemo() ? :nemo : :julia_sparse
+        @test FL._choose_linalg_backend(F, B; op=:solve) == expected_auto
+
+        jfac = FL._factor_fullcolumnQQ(B)
+        @test FL._choose_solve_backend(F, B; factor=jfac) == :julia_sparse
+        Xj = FL.solve_fullcolumn(F, B, Y; backend=:auto, cache=false, factor=jfac, check_rhs=true)
+        @test Xj == Xtrue
+
+        if FL._have_nemo()
+            nfac = FL._factor_fullcolumn_nemoQQ(B)
+            @test FL._choose_solve_backend(F, B; factor=nfac) == :nemo
+            Xn = FL.solve_fullcolumn(F, B, Y; backend=:auto, cache=false, factor=nfac, check_rhs=true)
+            @test Xn == Xtrue
         end
     end
 

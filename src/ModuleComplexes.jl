@@ -36,14 +36,15 @@ using LinearAlgebra
 using SparseArrays
 import Base.Threads
 
-using ..CoreModules: ResolutionOptions, _append_scaled_triplets!
+using ..CoreModules: _append_scaled_triplets!
+using ..Options: ResolutionOptions
 using ..FieldLinAlg
 using ..FiniteFringe
 using ..FiniteFringe: AbstractPoset, FinitePoset, cover_edges, nvertices, upset_indices
 using ..Modules: PModule, PMorphism, id_morphism,
                  zero_pmodule, zero_morphism,
                  direct_sum, direct_sum_with_maps,
-                 map_leq
+                 map_leq, map_leq_many
 
 import ..IndicatorResolutions
 import ..AbelianCategories
@@ -1585,21 +1586,36 @@ function DerivedTensorComplex(
             gens_am1 = resR.gens[a]        # degree (a-1) generators
             dP = resR.d_mat[a]             # matrix from gens_a -> gens_am1 (rows = gens_am1, cols = gens_a)
             offs_cod = _offs_for_gens(Mp, gens_am1)
+            cacheMp = FiniteFringe._get_cover_cache(Mp.Q)
 
             Itrip = Int[]
             Jtrip = Int[]
             Vtrip = K[]
+            pairs = Tuple{Int,Int}[]
+            pair_i = Int[]
+            pair_j = Int[]
+            pair_c = K[]
             for (i, u) in enumerate(gens_a)
                 for (j, v) in enumerate(gens_am1)
                     c = dP[j, i]
                     c == 0 && continue
-                    Muv = map_leq(Mp, u, v)
+                    push!(pairs, (u, v))
+                    push!(pair_i, i)
+                    push!(pair_j, j)
+                    push!(pair_c, c)
+                end
+            end
+
+            if !isempty(pairs)
+                maps = map_leq_many(Mp, pairs; cache=cacheMp)
+                @inbounds for idx in eachindex(pairs)
+                    Muv = maps[idx]
                     _append_scaled_triplets!(
                         Itrip, Jtrip, Vtrip,
                         Muv,
-                        offs_cod[j],
-                        offs_dom[i];
-                        scale = c,
+                        offs_cod[pair_j[idx]],
+                        offs_dom[pair_i[idx]];
+                        scale = pair_c[idx],
                     )
                 end
             end

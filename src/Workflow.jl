@@ -34,27 +34,27 @@ using Dates
 # Keep this file self-contained: import the handful of names it mentions
 # in type annotations or uses unqualified.
 using ..CoreModules: QQ, QQField, AbstractCoeffField, coeff_type, coerce,
-                    EncodingOptions, ResolutionOptions, DerivedFunctorOptions, InvariantOptions,
                     ResolutionCache, SessionCache, EncodingCache,
                     _encoding_cache!, _session_resolution_cache, _session_hom_cache, _set_session_hom_cache!,
                     _session_slice_plan_cache, _set_session_slice_plan_cache!,
-                    EncodingResult, CohomologyDimsResult, ResolutionResult, InvariantResult,
-                    change_field, AbstractPLikeEncodingMap,
-                    CompiledEncoding, compile_encoding,
-                    PointCloud, ImageNd, GraphData, EmbeddedPlanarGraph2D,
-                    GradedComplex, MultiCriticalGradedComplex,
-                    SimplexTreeMulti, simplex_count, max_simplex_dim, simplex_vertices, simplex_grades,
-                    FiltrationSpec, ConstructionBudget, ConstructionOptions, PipelineOptions,
-                    GridEncodingMap,
                     _field_cache_key,
                     _resolve_workflow_session_cache, _resolve_workflow_specialized_cache,
-                    _workflow_encoding_cache, _compile_encoding_cached,
+                    _workflow_encoding_cache,
                     _session_get_zn_pushforward_fringe, _session_set_zn_pushforward_fringe!,
                     _session_get_zn_pushforward_module, _session_set_zn_pushforward_module!,
-                    _encoding_with_session_cache, _resolution_cache_from_session,
-                    _slot_cache_from_session, materialize_module, module_dims
-import ..CoreModules: locate, dimension, representatives, axes_from_encoding, _grid_strides,
-                     GridEncodingMap
+                    _resolution_cache_from_session, _slot_cache_from_session,
+                    GeometryCachePayload
+using ..Options: EncodingOptions, ResolutionOptions, DerivedFunctorOptions, InvariantOptions,
+                 ConstructionBudget, ConstructionOptions, PipelineOptions
+using ..DataTypes: PointCloud, ImageNd, GraphData, EmbeddedPlanarGraph2D,
+                   GradedComplex, MultiCriticalGradedComplex,
+                   SimplexTreeMulti, simplex_count, max_simplex_dim, simplex_vertices, simplex_grades
+using ..EncodingCore: AbstractPLikeEncodingMap, CompiledEncoding, compile_encoding, GridEncodingMap,
+                      _compile_encoding_cached
+using ..Results: EncodingResult, CohomologyDimsResult, ResolutionResult, InvariantResult,
+                 _encoding_with_session_cache, materialize_module, module_dims
+import ..EncodingCore: locate, dimension, representatives, axes_from_encoding, _grid_strides,
+                      GridEncodingMap
 import ..Serialization
 import ..Serialization: TAMER_FEATURE_SCHEMA_VERSION, feature_schema_header, validate_feature_metadata_schema
 
@@ -62,6 +62,7 @@ import ..IndicatorResolutions
 import ..ZnEncoding
 import ..FiniteFringe
 using ..IndicatorResolutions: pmodule_from_fringe
+import ..IndicatorResolutions: fringe_presentation
 using ..PLPolyhedra
 using ..PLBackend: BoxUpset, BoxDownset, encode_fringe_boxes
 using ..Encoding: build_uptight_encoding_from_fringe,
@@ -454,68 +455,6 @@ encode_from_fringe(F::PLPolyhedra.PLFringe;
 # -----------------------------------------------------------------------------
 # Presentation conversions (module <-> fringe/flange)
 # -----------------------------------------------------------------------------
-
-"""
-    fringe_presentation(M::PModule{K}) -> FringeModule{K}
-
-Construct a canonical fringe presentation whose image recovers `M`.
-"""
-function fringe_presentation(M::PModule{K}) where {K}
-    P = M.Q
-    field = M.field
-    F0, pi0, gens_at_F0 = IndicatorResolutions.projective_cover(M)
-    E0, iota0, gens_at_E0 = IndicatorResolutions._injective_hull(M)
-
-    # Map F0 -> E0 whose image is M.
-    comps = Vector{Matrix{K}}(undef, nvertices(P))
-    for i in 1:nvertices(P)
-        comps[i] = iota0.comps[i] * pi0.comps[i]
-    end
-    f = PMorphism{K}(F0, E0, comps)
-
-    U = IndicatorResolutions._principal_upsets_from_gens(P, gens_at_F0)
-    D = IndicatorResolutions._principal_downsets_from_gens(P, gens_at_E0)
-
-    L0 = IndicatorResolutions._local_index_list_up(P, gens_at_F0)
-    L1 = IndicatorResolutions._local_index_list_down(P, gens_at_E0)
-
-    globalU = Tuple{Int,Int}[]
-    for p in 1:nvertices(P)
-        append!(globalU, gens_at_F0[p])
-    end
-    globalD = Tuple{Int,Int}[]
-    for u in 1:nvertices(P)
-        append!(globalD, gens_at_E0[u])
-    end
-
-    function local_pos(L, g::Tuple{Int,Int}, i::Int)
-        for (j, gg) in enumerate(L[i])
-            if gg == g
-                return j
-            end
-        end
-        return 0
-    end
-
-    phi = spzeros(K, length(D), length(U))
-    for (lambda, (plambda, jlambda)) in enumerate(globalU)
-        for (theta, (ptheta, jtheta)) in enumerate(globalD)
-            if leq(P, plambda, ptheta)
-                i = plambda
-                col = local_pos(L0, (plambda, jlambda), i)
-                row = local_pos(L1, (ptheta, jtheta), i)
-                if col > 0 && row > 0
-                    val = f.comps[i][row, col]
-                    if val != 0
-                        phi[theta, lambda] = val
-                    end
-                end
-            end
-        end
-    end
-
-    return FringeModule{K}(P, U, D, phi; field=M.field)
-end
 
 """
     flange_presentation(M::PModule{K}, pi::GridEncodingMap) -> Flange{K}
@@ -1029,7 +968,8 @@ assert_minimal(res::DerivedFunctors.Resolutions.InjectiveResolution{K};
     cache === nothing && return nothing
     Base.lock(cache.lock)
     try
-        return get(cache.geometry, key, nothing)
+        entry = get(cache.geometry, key, nothing)
+        return entry === nothing ? nothing : entry.value
     finally
         Base.unlock(cache.lock)
     end
@@ -1039,7 +979,7 @@ end
     cache === nothing && return value
     Base.lock(cache.lock)
     try
-        cache.geometry[key] = value
+        cache.geometry[key] = GeometryCachePayload(value)
     finally
         Base.unlock(cache.lock)
     end

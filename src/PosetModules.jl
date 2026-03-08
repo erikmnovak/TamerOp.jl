@@ -10,15 +10,21 @@ module PosetModules
 #   3) Define the opt-in broad surface for power users (PosetModules.Advanced).
 #
 # Notes:
-# - CoreModules.jl now also defines the small sibling module PosetModules.Stats.
-#   This reduces file count while preserving the module path PosetModules.Stats.
+# - `CoreModules.jl` is reserved for low-level runtime helpers and caches.
+# - Higher-level option/data/result/encoding-map contracts live in sibling
+#   modules (`Options`, `DataTypes`, `EncodingCore`, `Results`, `Stats`).
 # - Workflow.jl defines orchestration wrappers (encode/coarsen/resolve/ext/tor/...).
-# - DataIngestion.jl and Featurizers.jl are standalone sibling modules (not nested
-#   in Workflow) and are loaded before APISurface binding.
+# - DataFileIO.jl, DataIngestion.jl, and Featurizers.jl are standalone sibling
+#   modules (not nested in Workflow) and are loaded before APISurface binding.
 # =============================================================================
 
-# 1) Core helpers, interface hooks, options/results, plus small stats helpers.
-include("CoreModules.jl")   # defines PosetModules.CoreModules and PosetModules.Stats
+# 1) Low-level runtime, shared contracts, and light public data/result wrappers.
+include("CoreModules.jl")
+include("Stats.jl")
+include("Options.jl")
+include("DataTypes.jl")
+include("EncodingCore.jl")
+include("Results.jl")
 include("RegionGeometry.jl")
 
 # 2) Linear algebra engines (field-generic)
@@ -62,16 +68,57 @@ include("Invariants.jl")
 # 12) High-level workflow orchestration wrappers
 include("Workflow.jl")
 
-# 13) Data ingestion subsystem (standalone sibling module)
+# 13) File-oriented ingestion adapters (standalone sibling module)
+include("DataFileIO.jl")
+
+# 14) Data ingestion subsystem (standalone sibling module)
 include("DataIngestion.jl")
 
-# 14) Featurization/experiment subsystem (standalone sibling module)
+# 15) Featurization/experiment subsystem (standalone sibling module)
 include("Featurizers.jl")
 
-# 15) Curated API surface contracts (simple + advanced)
+# 16) Curated API surface contracts (simple + advanced)
 include("APISurface.jl")
 
-# 16) 2D visualization helpers
+# -----------------------------------------------------------------------------
+# Source-include optional extension loader
+#
+# In script/include mode (`include("src/PosetModules.jl")`) Julia package
+# extensions are not auto-activated. Load selected extension modules explicitly
+# when their dependency package is available.
+# -----------------------------------------------------------------------------
+
+@inline function _try_load_source_extension!(dep::Symbol, extmod::Symbol, extfile::String)
+    isdefined(@__MODULE__, extmod) && return true
+    try
+        Base.require(Main, dep)
+    catch
+        return false
+    end
+    isdefined(@__MODULE__, extmod) && return true
+    path = normpath(joinpath(@__DIR__, "..", "ext", extfile))
+    isfile(path) || return false
+    try
+        include(path)
+        return true
+    catch
+        return false
+    end
+end
+
+const _SOURCE_EXT_NEARESTNEIGHBORS = _try_load_source_extension!(
+    :NearestNeighbors,
+    :TamerOpNearestNeighborsExt,
+    "TamerOpNearestNeighborsExt.jl",
+)
+
+const _SOURCE_EXT_DELAUNAY = _try_load_source_extension!(
+    :DelaunayTriangulation,
+    :TamerOpDelaunayTriangulationExt,
+    "TamerOpDelaunayTriangulationExt.jl",
+)
+
+# 17) 2D visualization helpers
 include("Viz2D.jl")
 
 # =============================================================================
@@ -141,6 +188,10 @@ import .._bind_api_list!, .._bind_api_bindings!, .._assert_api_list_defined!
 
 import ..CoreModules
 import ..Stats
+import ..Options
+import ..DataTypes
+import ..EncodingCore
+import ..Results
 import ..RegionGeometry
 import ..FiniteFringe
 import ..IndicatorTypes
@@ -168,15 +219,17 @@ import ..ModuleComplexes
 import ..ChangeOfPosets
 import ..Invariants
 import ..Workflow
+import ..DataFileIO
 import ..DataIngestion
 import ..Featurizers
 
-export CoreModules, Stats, RegionGeometry, FiniteFringe, IndicatorTypes, Encoding,
+export CoreModules, Stats, Options, DataTypes, EncodingCore, Results,
+       RegionGeometry, FiniteFringe, IndicatorTypes, Encoding,
        Modules, AbelianCategories, IndicatorResolutions, FlangeZn, Serialization, Viz2D,
        PLPolyhedra, PLBackend, ChainComplexes, ZnEncoding, DerivedFunctors,
        Resolutions, ExtTorSpaces, Functoriality, Algebras, SpectralSequences, Backends,
        HomExtEngine, Utils,
-       ModuleComplexes, ChangeOfPosets, Invariants, Workflow, DataIngestion, Featurizers
+       ModuleComplexes, ChangeOfPosets, Invariants, Workflow, DataFileIO, DataIngestion, Featurizers
 
 # -----------------------------------------------------------------------------
 # Static curated API binding (no dynamic lifting).

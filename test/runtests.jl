@@ -37,6 +37,11 @@ struct _TestSurface end
 const _TEST_SURFACE_MODULES = (
     PosetModules,
     PosetModules.CoreModules,
+    PosetModules.Stats,
+    PosetModules.Options,
+    PosetModules.DataTypes,
+    PosetModules.EncodingCore,
+    PosetModules.Results,
     PosetModules.RegionGeometry,
     PosetModules.FiniteFringe,
     PosetModules.IndicatorTypes,
@@ -53,6 +58,7 @@ const _TEST_SURFACE_MODULES = (
     PosetModules.ModuleComplexes,
     PosetModules.ChangeOfPosets,
     PosetModules.Serialization,
+    PosetModules.DataFileIO,
     PosetModules.Invariants,
     PosetModules.Workflow,
     PosetModules.DataIngestion,
@@ -83,6 +89,10 @@ const SER = PosetModules.Serialization
 const PLP = PosetModules.PLPolyhedra
 const PLB = PosetModules.PLBackend
 const CC  = PosetModules.ChainComplexes
+const OPT = PosetModules.Options
+const DT  = PosetModules.DataTypes
+const EC  = PosetModules.EncodingCore
+const RES = PosetModules.Results
 const QQ  = PosetModules.CoreModules.QQ
 const CM  = PosetModules.CoreModules
 const Inv = PosetModules.Invariants
@@ -326,8 +336,16 @@ end
     @test isdefined(PMA.Encoding, :pushforward_fringe_along_encoding)
 
     # JSON IO helpers
+    @test isdefined(PMA, :parse_finite_fringe_json)
+    @test isdefined(PMA, :finite_fringe_from_m2)
     @test isdefined(PMA, :save_flange_json)
     @test isdefined(PMA, :load_flange_json)
+    @test isdefined(PMA, :parse_flange_json)
+    @test isdefined(PMA, :save_pl_fringe_json)
+    @test isdefined(PMA, :load_pl_fringe_json)
+    @test isdefined(PMA, :parse_pl_fringe_json)
+    @test isdefined(PMA.Serialization, :parse_finite_fringe_json)
+    @test isdefined(PMA.Serialization, :finite_fringe_from_m2)
     @test isdefined(PMA.Serialization, :save_encoding_json)
     @test isdefined(PMA.Serialization, :load_encoding_json)
     @test isdefined(PMA.Serialization, :save_mpp_decomposition_json)
@@ -349,7 +367,11 @@ end
     @test isdefined(PMA, :normalize_multicritical)
     @test isdefined(PMA, :fringe_presentation)
     @test isdefined(PMA, :PipelineOptions)
+    @test isdefined(PMA, :DataFileOptions)
+    @test isdefined(PMA, :load_data)
+    @test isdefined(PMA, :inspect_data_file)
     @test isdefined(PMA, :DataIngestion)
+    @test isdefined(PMA, :DataFileIO)
     @test isdefined(PMA.DataIngestion, :AbstractFiltration)
     @test isdefined(PMA.DataIngestion, :RipsFiltration)
     @test isdefined(PMA.DataIngestion, :LandmarkRipsFiltration)

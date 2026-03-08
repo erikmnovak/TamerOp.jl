@@ -2,6 +2,10 @@ using Test
 
 # Included from test/runtests.jl; uses shared aliases (PM, FF, ...).
 
+struct DummyEncodingMapForTupleContract <: EC.AbstractPLikeEncodingMap end
+EC.dimension(::DummyEncodingMapForTupleContract) = 1
+EC.locate(::DummyEncodingMapForTupleContract, x::AbstractVector{<:Real}) = (length(x) == 1 && x[1] >= 0 ? 1 : 0)
+
 with_fields(FIELDS_FULL) do field
 K = CM.coeff_type(field)
 @inline c(x) = CM.coerce(field, x)
@@ -171,6 +175,33 @@ end
     @test C === FF.cover_edges(P)
 end
 
+@testset "SignaturePoset up/down iterators match leq scans" begin
+    sig_y = BitVector[
+        BitVector([false, false, false]),
+        BitVector([true,  false, false]),
+        BitVector([false, true,  false]),
+        BitVector([true,  true,  false]),
+        BitVector([false, false, true]),
+        BitVector([true,  false, true]),
+        BitVector([false, true,  true]),
+        BitVector([true,  true,  true]),
+    ]
+    sig_z = [BitVector([false, false]) for _ in eachindex(sig_y)]
+    P = PM.ZnEncoding.SignaturePoset(sig_y, sig_z)
+
+    n = FF.nvertices(P)
+    for i in 1:n
+        up_ref = [j for j in 1:n if FF.leq(P, i, j)]
+        down_ref = [j for j in 1:n if FF.leq(P, j, i)]
+        @test collect(FF.upset_indices(P, i)) == up_ref
+        @test collect(FF.downset_indices(P, i)) == down_ref
+    end
+
+    # SignaturePoset avoids automatic dense up/down cache materialization.
+    @test P.cache.upsets === nothing
+    @test P.cache.downsets === nothing
+end
+
 @testset "Dense uptight construction skips redundant closure" begin
     sig_y = BitVector[
         BitVector([false, false, false]),
@@ -202,7 +233,7 @@ end
     flat = FZ.IndFlat(tau, [0])
     inj = FZ.IndInj(tau, [0])
     FG = FZ.Flange{K}(1, [flat], [inj], reshape([c(1)], 1, 1); field=field)
-    opts = CM.EncodingOptions(backend = :zn, max_regions = 16)
+    opts = OPT.EncodingOptions(backend = :zn, max_regions = 16)
 
     P, Hs, pi = PM.ZnEncoding.encode_from_flanges([FG], opts; poset_kind = :signature)
     @test P isa PM.ZnEncoding.SignaturePoset
@@ -241,5 +272,74 @@ end
     @test prod1.P === prod2.P
     _ = FF.cover_edges(prod1.P)
     @test prod1.P.cache.cover_edges !== nothing
+end
+
+@testset "Strict tuple locate contract and compile_encoding hooks" begin
+    pi = DummyEncodingMapForTupleContract()
+    @test EC.locate(pi, [1.0]) == 1
+    @test_throws ArgumentError EC.locate(pi, (1.0,))
+
+    P = chain_poset(1)
+    enc = EC.compile_encoding(P, pi)
+    @test enc.axes === nothing
+    @test enc.reps === nothing
+end
+
+@testset "Option structs are concretely typed" begin
+    enc_opts = OPT.EncodingOptions()
+    inv_opts = OPT.InvariantOptions()
+    ff_opts = OPT.FiniteFringeOptions()
+    mod_opts = OPT.ModuleOptions()
+
+    @test fieldtype(typeof(enc_opts), :strict_eps) !== Any
+    @test fieldtype(typeof(inv_opts), :axes) !== Any
+    @test fieldtype(typeof(inv_opts), :box) !== Any
+    @test fieldtype(typeof(ff_opts), :scalar) !== Any
+    @test fieldtype(typeof(mod_opts), :cache) !== Any
+end
+
+@testset "SessionCache uses sharded encoding/module stores" begin
+    sc = CM.SessionCache()
+    P = chain_poset(2)
+    ec = CM._encoding_cache!(sc, P)
+    mc = CM._module_cache!(sc, PM.zero_pmodule(P; field=field))
+    @test ec isa CM.EncodingCache
+    @test mc isa CM.ModuleCache
+    @test CM._session_encoding_bucket_count(sc) >= 1
+    @test CM._session_module_bucket_count(sc) >= 1
+    @test length(sc.zn_pushforward_plan) >= 1
+    if Threads.nthreads() == 1
+        @test length(sc.zn_pushforward_plan) == 1
+    end
+end
+
+@testset "Cache payload maps use typed wrappers" begin
+    @test fieldtype(CM.EncodingCache, :posets) == Dict{Tuple{Tuple,Tuple{Vararg{Int}}},CM.PosetCachePayload}
+    @test fieldtype(CM.EncodingCache, :cubical) == Dict{Tuple{Vararg{Int}},CM.CubicalCachePayload}
+    @test fieldtype(CM.EncodingCache, :geometry) == Dict{Tuple,CM.GeometryCachePayload}
+    @test fieldtype(CM.ModuleCache, :payload) == Dict{Symbol,CM.ModulePayload}
+    @test fieldtype(CM.ResolutionCache, :projective) == Dict{CM.ResolutionKey2,CM.ProjectiveResolutionPayload}
+    @test fieldtype(CM.ResolutionCache, :injective) == Dict{CM.ResolutionKey2,CM.InjectiveResolutionPayload}
+    @test fieldtype(CM.ResolutionCache, :indicator) == Dict{CM.ResolutionKey3,CM.IndicatorResolutionPayload}
+    @test PM.DerivedFunctors.HomSystemCache <: CM.AbstractHomSystemCache
+    @test PM.Invariants.SlicePlanCache <: CM.AbstractSlicePlanCache
+    @test fieldtype(CM.SessionCache, :hom_system) == Union{Nothing,CM.AbstractHomSystemCache}
+    @test fieldtype(CM.SessionCache, :slice_plan) == Union{Nothing,CM.AbstractSlicePlanCache}
+    @test fieldtype(CM.SessionCache, :zn_pushforward_fringe) ==
+          Vector{Dict{Tuple{UInt64,Symbol,UInt64,UInt},CM.ZnPushforwardFringeArtifact{Any}}}
+    @test fieldtype(CM.SessionCache, :product_dense) ==
+          Dict{CM._SessionProductKey,CM.ProductPosetCacheEntry{Any,Any,Any,Any,Any}}
+    @test fieldtype(CM.SessionCache, :product_obj) ==
+          Dict{CM._SessionProductKey,CM.ProductPosetCacheEntry{Any,Any,Any,Any,Any}}
+
+    sc = CM.SessionCache()
+    P = chain_poset(2)
+    H = FF.one_by_one_fringe(P, FF.principal_upset(P, 1), FF.principal_downset(P, 1), c(1); field=field)
+    fid = CM._field_cache_key(field)
+    efp = UInt64(0x11)
+    ffp = UInt64(0x22)
+    CM._session_set_zn_pushforward_fringe!(sc, efp, :signature, ffp, fid, H)
+    @test CM._session_get_zn_pushforward_fringe(sc, efp, :signature, ffp, fid) === H
+    @test CM._session_zn_pushforward_fringe_count(sc) == 1
 end
 end # with_fields

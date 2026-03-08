@@ -23,16 +23,21 @@ module PLBackend
 using ..FiniteFringe
 import ..FiniteFringe: AbstractPoset, nvertices
 import ..ZnEncoding: SignaturePoset
-using ..CoreModules: QQ, AbstractPLikeEncodingMap, EncodingOptions, CompiledEncoding, validate_pl_mode
+using ..CoreModules: QQ
+using ..Options: EncodingOptions, validate_pl_mode
+using ..EncodingCore: AbstractPLikeEncodingMap, CompiledEncoding
 using ..CoreModules.CoeffFields: QQField
 using Random
 using LinearAlgebra
 
-import ..CoreModules: locate, dimension, representatives, axes_from_encoding
-import ..RegionGeometry: region_weights, region_bbox, region_diameter, region_adjacency,
+import ..EncodingCore: locate, locate_many!, locate_many, dimension, representatives, axes_from_encoding
+import ..RegionGeometry: region_weights, region_volume, region_bbox, region_diameter, region_adjacency,
                          region_boundary_measure, region_boundary_measure_breakdown,
                          region_centroid, region_principal_directions,
-                         region_chebyshev_ball, region_circumradius, region_mean_width
+                         region_chebyshev_ball, region_circumradius, region_mean_width,
+                         _region_bbox_fast, _region_centroid_fast,
+                         _region_volume_fast, _region_boundary_measure_fast,
+                         _region_circumradius_fast, _region_minkowski_functionals_fast
 
 # ------------------------------- Shapes ---------------------------------------
 
@@ -501,7 +506,7 @@ function locate(pi::PLEncodingMapBoxes{N,MY,MZ}, x::AbstractVector{<:Real}; mode
 end
 
 # Allocation-free tuple dispatch for point location.
-# Without this, CoreModules.locate(::AbstractPLikeEncodingMap, ::NTuple) falls back
+# Without this, EncodingCore.locate(::AbstractPLikeEncodingMap, ::NTuple) falls back
 # to collect(x), which allocates (and breaks the @allocated == 0 tests).
 function locate(pi::PLEncodingMapBoxes{N,MY,MZ}, x::NTuple{N,T}; mode::Symbol=:fast) where {N,MY,MZ,T<:Real}
     _ = validate_pl_mode(mode)
@@ -678,6 +683,87 @@ function region_weights(pi::PLEncodingMapBoxes;
         total_volume=total_vol,
         nsamples=0,
         counts=nothing)
+end
+
+function region_volume(pi::PLEncodingMapBoxes, r::Integer;
+    box=nothing,
+    strict::Bool=true,
+    mode::Symbol=:fast,
+    closure::Bool=true,
+    cache=nothing)
+    _ = (closure, cache)
+    _ = validate_pl_mode(mode)
+    nregions = length(pi.sig_y)
+    (1 <= r <= nregions) || error("region_volume: region index out of range")
+
+    if box === nothing
+        return 1.0
+    end
+
+    a_in, b_in = box
+    length(a_in) == pi.n || error("region_volume: box lower corner has wrong dimension")
+    length(b_in) == pi.n || error("region_volume: box upper corner has wrong dimension")
+
+    a = Vector{Float64}(undef, pi.n)
+    b = Vector{Float64}(undef, pi.n)
+    @inbounds for i in 1:pi.n
+        a[i] = float(a_in[i])
+        b[i] = float(b_in[i])
+        a[i] <= b[i] || error("region_volume: box must satisfy a[i] <= b[i] for all i")
+    end
+
+    isempty(pi.cell_to_region) && error("region_volume: missing cell_to_region table; construct via encode_fringe_boxes")
+
+    volume = 0.0
+    slo = Vector{Int}(undef, pi.n)
+    shi = Vector{Int}(undef, pi.n)
+    shape_sub = Vector{Int}(undef, pi.n)
+    @inbounds for i in 1:pi.n
+        ci = pi.coords[i]
+        lo = searchsortedlast(ci, a[i])
+        hi = searchsortedlast(ci, b[i])
+        if lo < 0
+            lo = 0
+        elseif lo > length(ci)
+            lo = length(ci)
+        end
+        if hi < 0
+            hi = 0
+        elseif hi > length(ci)
+            hi = length(ci)
+        end
+        slo[i] = lo
+        shi[i] = hi
+        shape_sub[i] = hi - lo + 1
+    end
+
+    @inbounds for I in CartesianIndices(Tuple(shape_sub))
+        lin = 1
+        vol = 1.0
+        for i in 1:pi.n
+            s = slo[i] + (I[i] - 1)
+            lb, ub = _slab_interval_axis(s, pi.coords[i])
+            lo = max(a[i], lb)
+            hi = min(b[i], ub)
+            len = hi - lo
+            if len <= 0.0
+                vol = 0.0
+                break
+            end
+            vol *= len
+            lin += s * pi.cell_strides[i]
+        end
+        vol == 0.0 && continue
+
+        t = pi.cell_to_region[lin]
+        if t == 0
+            strict && error("region_volume: encountered a cell with unknown region")
+            continue
+        end
+        t == r || continue
+        volume += vol
+    end
+    return volume
 end
 
 
@@ -2129,6 +2215,8 @@ encode_fringe_boxes(Ups::Vector{BoxUpset},
 
 region_weights(pi::CompiledEncoding{<:PLEncodingMapBoxes}; kwargs...) =
     region_weights(_unwrap_encoding(pi); kwargs...)
+region_volume(pi::CompiledEncoding{<:PLEncodingMapBoxes}, r; kwargs...) =
+    region_volume(_unwrap_encoding(pi), r; kwargs...)
 region_bbox(pi::CompiledEncoding{<:PLEncodingMapBoxes}, r; kwargs...) =
     region_bbox(_unwrap_encoding(pi), r; kwargs...)
 region_diameter(pi::CompiledEncoding{<:PLEncodingMapBoxes}, r; kwargs...) =
@@ -2149,5 +2237,93 @@ region_circumradius(pi::CompiledEncoding{<:PLEncodingMapBoxes}, r; kwargs...) =
     region_circumradius(_unwrap_encoding(pi), r; kwargs...)
 region_mean_width(pi::CompiledEncoding{<:PLEncodingMapBoxes}, r; kwargs...) =
     region_mean_width(_unwrap_encoding(pi), r; kwargs...)
+
+function _region_bbox_fast(pi::PLEncodingMapBoxes, r::Integer;
+    box, strict::Bool=true, closure::Bool=true, cache=nothing)
+    _ = (closure, cache)
+    return region_bbox(pi, r; box=box, strict=strict)
+end
+
+_region_bbox_fast(pi::CompiledEncoding{<:PLEncodingMapBoxes}, r::Integer;
+    box, strict::Bool=true, closure::Bool=true, cache=nothing) =
+    _region_bbox_fast(_unwrap_encoding(pi), r; box=box, strict=strict, closure=closure, cache=cache)
+
+function _region_centroid_fast(pi::PLEncodingMapBoxes, r::Integer;
+    box, method::Symbol=:bbox, closure::Bool=true, cache=nothing)
+    _ = (closure, cache)
+    method === :bbox || return nothing
+    bb = region_bbox(pi, r; box=box, strict=true)
+    bb === nothing && return nothing
+    lo, hi = bb
+    return 0.5 .* (lo .+ hi)
+end
+
+_region_centroid_fast(pi::CompiledEncoding{<:PLEncodingMapBoxes}, r::Integer;
+    box, method::Symbol=:bbox, closure::Bool=true, cache=nothing) =
+    _region_centroid_fast(_unwrap_encoding(pi), r; box=box, method=method, closure=closure, cache=cache)
+
+function _region_volume_fast(pi::PLEncodingMapBoxes, r::Integer; box, closure::Bool=true, cache=nothing)
+    _ = cache
+    return region_volume(pi, r; box=box, strict=true, closure=closure)
+end
+
+_region_volume_fast(pi::CompiledEncoding{<:PLEncodingMapBoxes}, r::Integer; box, closure::Bool=true, cache=nothing) =
+    _region_volume_fast(_unwrap_encoding(pi), r; box=box, closure=closure, cache=cache)
+
+function _region_boundary_measure_fast(pi::PLEncodingMapBoxes, r::Integer;
+    box, strict::Bool=true, closure::Bool=true, cache=nothing)
+    _ = (closure, cache)
+    return region_boundary_measure(pi, r; box=box, strict=strict)
+end
+
+function _region_boundary_measure_fast(pi::CompiledEncoding{<:PLEncodingMapBoxes}, r::Integer;
+    box, strict::Bool=true, closure::Bool=true, cache=nothing)
+    _ = (closure, cache)
+    return region_boundary_measure(pi, r; box=box, strict=strict)
+end
+
+function _region_circumradius_fast(pi::PLEncodingMapBoxes, r::Integer;
+    box, center=:bbox, metric::Symbol=:L2, method::Symbol=:bbox,
+    strict::Bool=true, closure::Bool=true, cache=nothing)
+    _ = (closure, cache)
+    return method === :bbox ? region_circumradius(pi, r;
+        box=box, center=center, metric=metric, method=:cells, strict=strict) : nothing
+end
+
+_region_circumradius_fast(pi::CompiledEncoding{<:PLEncodingMapBoxes}, r::Integer;
+    box, center=:bbox, metric::Symbol=:L2, method::Symbol=:bbox,
+    strict::Bool=true, closure::Bool=true, cache=nothing) =
+    _region_circumradius_fast(_unwrap_encoding(pi), r;
+        box=box, center=center, metric=metric, method=method,
+        strict=strict, closure=closure, cache=cache)
+
+function _region_minkowski_functionals_fast(pi::PLEncodingMapBoxes, r::Integer;
+    box, volume=nothing, boundary=nothing, mean_width_method::Symbol=:auto,
+    mean_width_ndirs::Integer=256, mean_width_rng=Random.default_rng(),
+    mean_width_directions=nothing, strict::Bool=true, closure::Bool=true,
+    cache=nothing)
+    _ = (closure, cache)
+    V = volume === nothing ? region_volume(pi, r; box=box, strict=strict) : float(volume)
+    S = boundary === nothing ? region_boundary_measure(pi, r; box=box, strict=strict) : float(boundary)
+    mw = if (mean_width_method === :auto || mean_width_method === :cauchy) && length(box[1]) == 2
+        S / pi
+    else
+        region_mean_width(pi, r; box=box, method=mean_width_method,
+            ndirs=mean_width_ndirs, rng=mean_width_rng,
+            directions=mean_width_directions, strict=strict)
+    end
+    return (volume=V, boundary_measure=S, mean_width=float(mw))
+end
+
+_region_minkowski_functionals_fast(pi::CompiledEncoding{<:PLEncodingMapBoxes}, r::Integer;
+    box, volume=nothing, boundary=nothing, mean_width_method::Symbol=:auto,
+    mean_width_ndirs::Integer=256, mean_width_rng=Random.default_rng(),
+    mean_width_directions=nothing, strict::Bool=true, closure::Bool=true,
+    cache=nothing) =
+    _region_minkowski_functionals_fast(_unwrap_encoding(pi), r;
+        box=box, volume=volume, boundary=boundary,
+        mean_width_method=mean_width_method, mean_width_ndirs=mean_width_ndirs,
+        mean_width_rng=mean_width_rng, mean_width_directions=mean_width_directions,
+        strict=strict, closure=closure, cache=cache)
 
 end # module PLBackend

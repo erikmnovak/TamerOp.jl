@@ -103,8 +103,8 @@ println("First 5 feature names: ", PM.feature_names(spec)[1:5])
 stage("5) Save outputs")
 
 paths = save_feature_bundle(outdir, "image_distance_bifiltration", fs)
-println("Manual wide CSV: ", paths.manual_wide)
-println("Manual long CSV: ", paths.manual_long)
+println("CSV wide: ", paths.csv_wide)
+println("CSV long: ", paths.csv_long)
 println("Native optional outputs: ", paths.native)
 
 println("\nDone. Output directory: ", outdir)

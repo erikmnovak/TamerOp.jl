@@ -124,6 +124,75 @@ function _knn_graph(points, k::Int; backend::Symbol=:auto, approx_candidates::In
     return edges, dists, kdist
 end
 
+function _knn_graph_edges(points, k::Int; backend::Symbol=:auto, approx_candidates::Int=0)
+    n = length(points)
+    n > 0 || return NTuple{2,Int}[]
+    k_eff = min(k, n - 1)
+    k_eff > 0 || throw(ArgumentError("kNN k=$(k) exceeds number of neighbors."))
+
+    if backend == :bruteforce
+        return nothing
+    end
+
+    X = _points_to_matrix(points)
+    d = size(X, 1)
+    use_approx = backend == :approx || (backend == :auto && d > 20 && n > 1500)
+    edge_keys = Vector{UInt64}(undef, n * k_eff)
+    edge_count = 0
+    idxbuf = fill(0, k_eff)
+    distbuf = fill(Inf, k_eff)
+
+    if use_approx
+        cand = approx_candidates > 0 ? approx_candidates : max(4 * k_eff, k_eff + 8)
+        cand = max(k_eff + 1, min(n, cand))
+        Y = _projected_matrix(X; outdim=min(16, d))
+        tree = _build_exact_tree(Y)
+        @inbounds for i in 1:n
+            fill!(idxbuf, 0)
+            fill!(distbuf, Inf)
+            neigh, _ = knn(tree, view(Y, :, i), cand, true)
+            for j in neigh
+                j == i && continue
+                DI._insert_neighbor_sorted!(idxbuf, distbuf, j, DI._euclidean_distance(points[i], points[j]))
+            end
+            if idxbuf[k_eff] == 0
+                for j in 1:n
+                    i == j && continue
+                    DI._insert_neighbor_sorted!(idxbuf, distbuf, j, DI._euclidean_distance(points[i], points[j]))
+                end
+            end
+            for t in 1:k_eff
+                j = idxbuf[t]
+                j == 0 && continue
+                u, v = DI._ordered_pair(i, j)
+                edge_count += 1
+                edge_keys[edge_count] = DI._pack_edge_key(u, v)
+            end
+        end
+    else
+        nn = min(n, k_eff + 1)
+        tree = _build_exact_tree(X)
+        @inbounds for i in 1:n
+            fill!(idxbuf, 0)
+            fill!(distbuf, Inf)
+            neigh, _ = knn(tree, view(X, :, i), nn, true)
+            for j in neigh
+                j == i && continue
+                DI._insert_neighbor_sorted!(idxbuf, distbuf, j, DI._euclidean_distance(points[i], points[j]))
+            end
+            for t in 1:k_eff
+                j = idxbuf[t]
+                j == 0 && continue
+                u, v = DI._ordered_pair(i, j)
+                edge_count += 1
+                edge_keys[edge_count] = DI._pack_edge_key(u, v)
+            end
+        end
+    end
+
+    return DI._finalize_edge_pairs_edges_only(edge_keys, edge_count)
+end
+
 function _radius_graph(points, r::Float64; backend::Symbol=:auto, approx_candidates::Int=0)
     if backend == :bruteforce || backend == :approx
         return nothing
@@ -150,6 +219,27 @@ function _radius_graph(points, r::Float64; backend::Symbol=:auto, approx_candida
     return DI._finalize_edge_pairs(edge_keys, edge_vals, length(edge_keys))
 end
 
+function _radius_graph_edges(points, r::Float64; backend::Symbol=:auto, approx_candidates::Int=0)
+    if backend == :bruteforce || backend == :approx
+        return nothing
+    end
+    n = length(points)
+    n > 0 || return NTuple{2,Int}[]
+    X = _points_to_matrix(points)
+    tree = _build_exact_tree(X)
+    edge_keys = UInt64[]
+    sizehint!(edge_keys, min(max(0, 6 * n), 250_000))
+    @inbounds for i in 1:n
+        neigh = inrange(tree, view(X, :, i), r, false)
+        for j in neigh
+            j <= i && continue
+            DI._euclidean_distance(points[i], points[j]) <= r || continue
+            push!(edge_keys, DI._pack_edge_key(i, j))
+        end
+    end
+    return DI._finalize_edge_pairs_edges_only(edge_keys, length(edge_keys))
+end
+
 function _knn_distances(points, k::Int; backend::Symbol=:auto, approx_candidates::Int=0)
     out = _knn_graph(points, k; backend=backend, approx_candidates=approx_candidates)
     out === nothing && return nothing
@@ -160,6 +250,8 @@ DI._set_pointcloud_nn_impl!(;
     knn_graph=_knn_graph,
     radius_graph=_radius_graph,
     knn_distances=_knn_distances,
+    knn_graph_edges=_knn_graph_edges,
+    radius_graph_edges=_radius_graph_edges,
 )
 
 end # module

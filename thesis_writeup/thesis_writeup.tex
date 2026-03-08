@@ -1607,8 +1607,7 @@
 	Flange presentations are not the only finite representation of tame $\mathbb{Z}^n$-modules, but they have several
 	advantages that justify their role as the primary $\mathbb{Z}^n$ front-end:
 	\begin{itemize}
-		\item \textbf{They are theory-native.}  They are the $\mathbb{Z}^n$ analog of fringe presentations and arise
-		naturally from Miller's development of finitely determined modules \cite{Mil20}.
+		\item \textbf{They are native to the theory.}  They are the $\mathbb{Z}^n$ analog of fringe presentations and arise naturally from Miller's development of finitely determined modules \cite{Mil20}.
 		\item \textbf{They avoid bounding boxes.}  One can often build a finite encoding poset using only the finite list
 		of flats and injectives, rather than enumerating a large grid of degrees.  This design goal strongly influences
 		the encoding algorithms in Section~\ref{sec:finite-encoding-constructors}.
@@ -1736,7 +1735,7 @@
 		$P$-module by sampling many points and inferring structure maps.  We avoid this on TAMER-OP.  The staged approach (front-end $\to$ encoding $\to$ fringe on $P$ $\to$ explicit $P$-module) mirrors the theory and isolates sources of error. Here, any mismatch can be diagnosed at the level of signatures and regions before committing to linear algebra on the finite poset.
 	\end{remark}
 	
-	\subsection{Validation and other sanity checks}\label{subsec:format-validation}
+	\subsection{Validation}\label{subsec:format-validation}
 	
 	Compact presentations are powerful precisely because they hide large implicit structure. But, that also makes them fragile. A small inconsistency in the input can produce a module that is not functorial, not tame, or simply not the module the user intended.  TAMER-OP therefore incorporates validation at multiple layers.  The checks fall into two categories: \emph{structural} checks that are inexpensive and always enabled in constructors, and \emph{diagnostic} checks that can be toggled because they may be expensive.
 	

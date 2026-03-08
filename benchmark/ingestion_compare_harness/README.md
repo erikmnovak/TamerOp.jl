@@ -61,7 +61,10 @@ Primary regimes:
   - tamer-op: `kind=:cubical`, `output_stage=:graded_complex` (cubical cells).
   - multipers: `filtrations.Cubical(image[...,None])`.
 
-Outputs include cold and warm timing summaries and per-case slowdown factors.
+Outputs include:
+- `cold_ms`: **warm-uncached single-shot** time (one untimed prewarm call, then one timed uncached call).
+- `warm_*`: repeated uncached timings (median/p90).
+This isolates algorithmic runtime and avoids startup/JIT process costs in the reported `cold_ms`.
 
 ## Files
 
@@ -141,10 +144,9 @@ Profiles:
 
 Both runners accept explicit `--reps` to override the profile default.
 
-## Robust Cold-Start Number (single metric)
+## Robust Single-Shot Number (single metric)
 
-For a single robust cold-start metric (less sensitive to case order/JIT effects),
-run fresh-process repeats per case and aggregate medians:
+For a single robust algorithmic single-shot metric, run fresh-process repeats per case and aggregate medians:
 
 ```bash
 python benchmark/ingestion_compare_harness/cold_robust.py \

@@ -143,22 +143,28 @@ K = CM.coeff_type(field)
             @test C1 === C2  # cached
             @test P.cache.cover_edges === C1
 
-            # Cover-cache edge-slot maps should be mutually consistent and O(1)-addressable.
+            # Packed cover-cache adjacency and slot maps should be mutually consistent.
             FF.build_cache!(P; cover=true, updown=false)
             cc = P.cache.cover
             @test cc !== nothing
-            @test length(cc.pred_slot_of_succ) == n
-            @test length(cc.succ_slot_of_pred) == n
+            @test length(cc.succ_ptr) == n + 1
+            @test length(cc.pred_ptr) == n + 1
+            @test length(cc.succ_idx) == cc.nedges
+            @test length(cc.pred_idx) == cc.nedges
+            @test length(cc.succ_pred_slot) == cc.nedges
+            @test length(cc.pred_succ_slot) == cc.nedges
             for u in 1:n
-                su = cc.succs[u]
-                ps = cc.pred_slot_of_succ[u]
+                su = FF._succs(cc, u)
+                ps = FF._pred_slots_of_succ(cc, u)
                 @test length(ps) == length(su)
                 for j in eachindex(su)
                     v = su[j]
                     i = ps[j]
-                    @test 1 <= i <= length(cc.preds[v])
-                    @test cc.preds[v][i] == u
-                    @test cc.succ_slot_of_pred[v][i] == j
+                    pv = FF._preds(cc, v)
+                    sv = FF._succ_slots_of_pred(cc, v)
+                    @test 1 <= i <= length(pv)
+                    @test pv[i] == u
+                    @test sv[i] == j
                 end
             end
 
@@ -944,17 +950,16 @@ end
     _ = FF.hom_dimension(M, N)
     @test M.hom_cache[].upset === cache_u
     @test N.hom_cache[].downset === cache_d
-    key_sparse = FF._hom_pair_key(N, :internal_choice)
-    @test haskey(M.hom_cache[].dense_path_choice, key_sparse)
-    chosen_sparse = M.hom_cache[].dense_path_choice[key_sparse]
+    entry_sparse = FF._lookup_pair_cache(M.hom_cache[], N)
+    @test entry_sparse !== nothing
+    chosen_sparse = entry_sparse.route_choice
     @test chosen_sparse in (:sparse_path, :dense_idx_internal, :dense_path)
     fp_sparse = FF._hom_route_fingerprint(M, N, :internal_choice)
-    @test haskey(M.hom_cache[].route_fingerprint_choice, fp_sparse)
-    @test M.hom_cache[].route_fingerprint_choice[fp_sparse] == chosen_sparse
+    @test FF._route_fingerprint_choice_get(M.hom_cache[], fp_sparse) == chosen_sparse
     @test haskey(M.P.cache.hom_route_choice, fp_sparse)
     @test M.P.cache.hom_route_choice[fp_sparse] == chosen_sparse
     _ = FF.hom_dimension(M, N)
-    @test M.hom_cache[].dense_path_choice[key_sparse] == chosen_sparse
+    @test FF._lookup_pair_cache(M.hom_cache[], N).route_choice == chosen_sparse
 
     # Dense-storage sparse-effective fixtures should route through the sparse path.
     FF._clear_hom_route_choice!(M_dense)
@@ -962,17 +967,16 @@ end
     @test M_dense.hom_cache[].route_timing_fallbacks == 0
     @test FF._resolve_hom_dimension_path(M_dense, N_dense) == :sparse_path
 
-    key_dense = FF._hom_pair_key(N_dense, :internal_choice)
-    @test haskey(M_dense.hom_cache[].dense_path_choice, key_dense)
-    chosen = M_dense.hom_cache[].dense_path_choice[key_dense]
+    entry_dense = FF._lookup_pair_cache(M_dense.hom_cache[], N_dense)
+    @test entry_dense !== nothing
+    chosen = entry_dense.route_choice
     @test chosen == :sparse_path
     fp_dense = FF._hom_route_fingerprint(M_dense, N_dense, :internal_choice)
-    @test haskey(M_dense.hom_cache[].route_fingerprint_choice, fp_dense)
-    @test M_dense.hom_cache[].route_fingerprint_choice[fp_dense] == chosen
+    @test FF._route_fingerprint_choice_get(M_dense.hom_cache[], fp_dense) == chosen
     @test haskey(M_dense.P.cache.hom_route_choice, fp_dense)
     @test M_dense.P.cache.hom_route_choice[fp_dense] == chosen
     _ = FF.hom_dimension(M_dense, N_dense)
-    @test M_dense.hom_cache[].dense_path_choice[key_dense] == chosen
+    @test FF._lookup_pair_cache(M_dense.hom_cache[], N_dense).route_choice == chosen
 
     # Shape/density route memo should be reusable across new modules on the same poset.
     M2 = random_module(14, 13; density=0.22)
@@ -981,7 +985,7 @@ end
     @test h2 == hom_dimension_reference_old(M2, N2)
     fp_sparse2 = FF._hom_route_fingerprint(M2, N2, :internal_choice)
     @test haskey(M2.P.cache.hom_route_choice, fp_sparse2)
-    @test haskey(M2.hom_cache[].route_fingerprint_choice, fp_sparse2)
+    @test FF._route_fingerprint_choice_get(M2.hom_cache[], fp_sparse2) !== nothing
 
     M2_dense = FF.FringeModule{K}(P, M2.U, M2.D, Matrix(M2.phi); field=field)
     N2_dense = FF.FringeModule{K}(P, N2.U, N2.D, Matrix(N2.phi); field=field)
@@ -989,7 +993,7 @@ end
     @test h2d == hom_dimension_reference_old(M2_dense, N2_dense)
     fp_dense2 = FF._hom_route_fingerprint(M2_dense, N2_dense, :internal_choice)
     @test haskey(M2_dense.P.cache.hom_route_choice, fp_dense2)
-    @test haskey(M2_dense.hom_cache[].route_fingerprint_choice, fp_dense2)
+    @test FF._route_fingerprint_choice_get(M2_dense.hom_cache[], fp_dense2) !== nothing
 
     # Sparse moderate-work fixtures should prefer sparse path directly.
     M_mid = random_module(20, 19; density=0.14)
@@ -1005,16 +1009,14 @@ end
     ref_small = hom_dimension_reference_old(M_small, N_small)
     @test FF.hom_dimension(M_small, N_small) == ref_small
     @test M_small.hom_cache[].route_timing_fallbacks == 0
-    key_small = FF._hom_pair_key(N_small, :internal_choice)
-    @test haskey(M_small.hom_cache[].dense_path_choice, key_small)
-    @test M_small.hom_cache[].dense_path_choice[key_small] == :dense_idx_internal
+    @test FF._lookup_pair_cache(M_small.hom_cache[], N_small).route_choice == :dense_idx_internal
 
     # Force one-shot timed fallback directly and verify parity.
     FF._clear_hom_route_choice!(M_small)
     hc_small = FF._ensure_hom_cache!(M_small)
-    pair_small = FF._hom_pair_key(N_small, :internal_choice)
+    entry_small = FF._ensure_pair_cache!(hc_small, N_small)
     fkey_small = FF._hom_route_fingerprint(M_small, N_small, :internal_choice)
-    path_small = FF._select_hom_internal_path_timed!(M_small, N_small, hc_small, pair_small, fkey_small)
+    path_small = FF._select_hom_internal_path_timed!(M_small, N_small, hc_small, entry_small, fkey_small)
     @test path_small in (:sparse_path, :dense_path, :dense_idx_internal)
     @test FF._hom_dimension_with_path(M_small, N_small, path_small) == ref_small
     @test hc_small.route_timing_fallbacks >= 1
@@ -1054,9 +1056,9 @@ end
 
     FF._clear_hom_route_choice!(M)
     h_sparse = FF._hom_dimension_with_path(M, N, :sparse_path)
-    sparse_key = FF._hom_pair_key(N, :sparse_plan)
-    @test haskey(M.hom_cache[].sparse_plans, sparse_key)
-    sparse_plan = M.hom_cache[].sparse_plans[sparse_key]
+    sparse_entry = FF._lookup_pair_cache(M.hom_cache[], N)
+    @test sparse_entry !== nothing
+    sparse_plan = sparse_entry.sparse_plan
     @test sparse_plan.W_dim == size(sparse_plan.T, 1)
     @test sparse_plan.W_dim == size(sparse_plan.S, 1)
     @test length(sparse_plan.t_tN) == nnz(sparse_plan.T)
@@ -1113,8 +1115,7 @@ end
     end
     h_sparse2 = FF._hom_dimension_with_path(M, N, :sparse_path)
     @test h_sparse2 == h_sparse
-    @test M.hom_cache[].sparse_plans[sparse_key] === sparse_plan
-    @test isempty(M.hom_cache[].hcat_workspaces)
+    @test FF._lookup_pair_cache(M.hom_cache[], N).sparse_plan === sparse_plan
 
     h_dense_idx = FF._hom_dimension_with_path(M, N, :dense_idx_internal)
     @test h_sparse == h_dense_idx
@@ -1152,6 +1153,8 @@ end
     end
 
     M = random_module(16, 15; density=0.24)
+    @test M.fiber_index[] !== nothing
+    @test M.fiber_dims[] === nothing
     expected = [fiber_dimension_scan_reference(M, q) for q in 1:P.n]
 
     got = Int[]

@@ -328,6 +328,11 @@ def main() -> None:
         notes = ""
         chosen = {}
         try:
+            # Harness policy: algorithmic runtime baseline.
+            # Prewarm once untimed to remove first-hit/import/JIT effects.
+            _build_multipers_simplextree(mmp, mp, gd, mf, data, c)
+            if trim_between_reps:
+                _memory_relief()
             st_cold, cold_ms = _timed_call(lambda: _build_multipers_simplextree(mmp, mp, gd, mf, data, c))
             st, chosen = st_cold
 
@@ -347,7 +352,7 @@ def main() -> None:
         warm_alloc_kib = ""
         simplex_count = _simplex_count(st)
         max_simplex_dim = int(c["max_dim"])
-        notes = f"kwargs={chosen}"
+        notes = f"kwargs={chosen};cold_mode=warm_uncached"
 
         print(
             f"{case_id:28s} regime={regime} cold_ms={cold_ms:.3f} warm_med_ms={statistics.median(warm_times):.3f} simplices={simplex_count}"

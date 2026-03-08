@@ -128,8 +128,8 @@ println("feature matrix shape: ", size(fs.X))
 # -----------------------------------------------------------------------------
 
 paths = save_feature_bundle(outdir, "graded_hand", fs)
-println("Manual wide CSV: ", paths.manual_wide)
-println("Manual long CSV: ", paths.manual_long)
+println("CSV wide: ", paths.csv_wide)
+println("CSV long: ", paths.csv_long)
 println("Native optional outputs: ", paths.native)
 
 g_path = joinpath(outdir, "graded_complex.json")

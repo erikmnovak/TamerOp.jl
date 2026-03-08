@@ -12,6 +12,7 @@ const FL = PosetModules.FieldLinAlg
     K = CM.coeff_type(field)
     M = one_by_one_fringe(P, FF.principal_upset(P, 2), FF.principal_downset(P, 2); scalar=one(K), field=field)
     PMM = IR.pmodule_from_fringe(M)
+    @test PMM.edge_maps isa MD.CoverEdgeMapStore{K,Matrix{K}}
     for q in 1:P.n
         @test PMM.dims[q] == FF.fiber_dimension(M, q)
     end
@@ -61,6 +62,196 @@ const FL = PosetModules.FieldLinAlg
     @test get(ext22, 0, 0) == FF.hom_dimension(S2, S2)
 end
 
+@testset "IndicatorResolutions cached birth plans + typed workspace" begin
+    P = diamond_poset()
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+
+    IR._clear_indicator_prefix_caches!()
+    up1 = IR._upset_birth_block_plan(P)
+    down1 = IR._downset_birth_block_plan(P)
+    @test up1 === IR._upset_birth_block_plan(P)
+    @test down1 === IR._downset_birth_block_plan(P)
+
+    ws = IR._new_resolution_workspace(K, FF.nvertices(P))
+    EntryT = PosetModules.AbelianCategories._VertexIncrementalCacheEntry{K}
+    @test eltype(ws.kernel_vertex_cache) === EntryT
+    @test eltype(ws.cokernel_vertex_cache) === EntryT
+
+    IR._clear_indicator_prefix_caches!()
+    @test IR._upset_birth_block_plan(P) !== up1
+    @test IR._downset_birth_block_plan(P) !== down1
+end
+
+@testset "IndicatorResolutions basis helper parity to dense oracle" begin
+    P = diamond_poset()
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+
+    U = [FF.principal_upset(P, 2), FF.principal_upset(P, 3)]
+    D = [FF.principal_downset(P, 4)]
+    Phi = spzeros(K, 1, 2)
+    Phi[1, 1] = CM.coerce(field, 1)
+    Phi[1, 2] = CM.coerce(field, 1)
+    H = FF.FringeModule{K}(P, U, D, Phi; field=field)
+    M = IR.pmodule_from_fringe(H)
+
+    FF.build_cache!(P; cover=true, updown=true)
+    cc = MD._get_cover_cache(P)
+
+    same_colspace(A, B) = (size(A, 2) == size(B, 2) &&
+                           FL.rank(field, hcat(A, B)) == size(A, 2))
+    same_rowspace(A, B) = (size(A, 1) == size(B, 1) &&
+                           FL.rank(field, hcat(transpose(A), transpose(B))) == size(A, 1))
+
+    for v in 1:FF.nvertices(P)
+        Bv = IR._incoming_image_basis(M, v; cache=cc)
+        pv = FF._preds(cc, v)
+        Bref = if isempty(pv) || M.dims[v] == 0
+            zeros(K, M.dims[v], 0)
+        else
+            FL.colspace(field, hcat([M.edge_maps[u, v] for u in pv]...))
+        end
+        @test same_colspace(Bv, Bref)
+    end
+
+    for u in 1:FF.nvertices(P)
+        Su = IR._outgoing_span_basis(M, u; cache=cc)
+        su = FF._succs(cc, u)
+        Sref = if isempty(su) || M.dims[u] == 0
+            zeros(K, 0, M.dims[u])
+        else
+            stacked = vcat([M.edge_maps[u, v] for v in su]...)
+            transpose(FL.colspace(field, transpose(stacked)))
+        end
+        @test same_rowspace(Su, Sref)
+
+        Zu = IR._socle_basis(M, u; cache=cc)
+        Zref = if isempty(su) || M.dims[u] == 0
+            CM.eye(field, M.dims[u])
+        else
+            stacked = vcat([M.edge_maps[u, v] for v in su]...)
+            FL.nullspace(field, stacked)
+        end
+        @test same_colspace(Zu, Zref)
+    end
+end
+
+@testset "IndicatorResolutions gate parity" begin
+    P = diamond_poset()
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+
+    U = [FF.principal_upset(P, 2), FF.principal_upset(P, 3)]
+    D = [FF.principal_downset(P, 4)]
+    Phi = spzeros(K, 1, 2)
+    Phi[1, 1] = CM.coerce(field, 1)
+    Phi[1, 2] = CM.coerce(field, 1)
+    H = FF.FringeModule{K}(P, U, D, Phi; field=field)
+
+    old_store_edges = IR.INDICATOR_PMODULE_DIRECT_STORE_MIN_EDGES[]
+    old_store_work = IR.INDICATOR_PMODULE_DIRECT_STORE_MIN_WORK[]
+    old_inc = IR.INDICATOR_INCREMENTAL_LINALG[]
+    old_inc_maps = IR.INDICATOR_INCREMENTAL_LINALG_MIN_MAPS[]
+    old_inc_entries = IR.INDICATOR_INCREMENTAL_LINALG_MIN_ENTRIES[]
+
+    try
+        IR.INDICATOR_PMODULE_DIRECT_STORE_MIN_EDGES[] = typemax(Int)
+        IR.INDICATOR_PMODULE_DIRECT_STORE_MIN_WORK[] = typemax(Int)
+        M_dict = IR.pmodule_from_fringe(H)
+
+        IR.INDICATOR_PMODULE_DIRECT_STORE_MIN_EDGES[] = 0
+        IR.INDICATOR_PMODULE_DIRECT_STORE_MIN_WORK[] = 0
+        M_store = IR.pmodule_from_fringe(H)
+
+        @test M_dict.dims == M_store.dims
+        @test M_dict.edge_maps == M_store.edge_maps
+
+        FF.build_cache!(P; cover=true, updown=true)
+        cc = MD._get_cover_cache(P)
+
+        IR.INDICATOR_INCREMENTAL_LINALG[] = false
+        dense_in = [IR._incoming_image_basis(M_store, v; cache=cc) for v in 1:FF.nvertices(P)]
+        dense_out = [IR._outgoing_span_basis(M_store, u; cache=cc) for u in 1:FF.nvertices(P)]
+        dense_soc = [IR._socle_basis(M_store, u; cache=cc) for u in 1:FF.nvertices(P)]
+
+        IR.INDICATOR_INCREMENTAL_LINALG[] = true
+        IR.INDICATOR_INCREMENTAL_LINALG_MIN_MAPS[] = 1
+        IR.INDICATOR_INCREMENTAL_LINALG_MIN_ENTRIES[] = 0
+        inc_in = [IR._incoming_image_basis(M_store, v; cache=cc) for v in 1:FF.nvertices(P)]
+        inc_out = [IR._outgoing_span_basis(M_store, u; cache=cc) for u in 1:FF.nvertices(P)]
+        inc_soc = [IR._socle_basis(M_store, u; cache=cc) for u in 1:FF.nvertices(P)]
+
+        same_colspace(A, B) = (size(A, 2) == size(B, 2) &&
+                               FL.rank(field, hcat(A, B)) == size(A, 2))
+        same_rowspace(A, B) = (size(A, 1) == size(B, 1) &&
+                               FL.rank(field, hcat(transpose(A), transpose(B))) == size(A, 1))
+
+        for i in eachindex(dense_in)
+            @test same_colspace(dense_in[i], inc_in[i])
+            @test same_rowspace(dense_out[i], inc_out[i])
+            @test same_colspace(dense_soc[i], inc_soc[i])
+        end
+    finally
+        IR.INDICATOR_PMODULE_DIRECT_STORE_MIN_EDGES[] = old_store_edges
+        IR.INDICATOR_PMODULE_DIRECT_STORE_MIN_WORK[] = old_store_work
+        IR.INDICATOR_INCREMENTAL_LINALG[] = old_inc
+        IR.INDICATOR_INCREMENTAL_LINALG_MIN_MAPS[] = old_inc_maps
+        IR.INDICATOR_INCREMENTAL_LINALG_MIN_ENTRIES[] = old_inc_entries
+    end
+end
+
+@testset "IndicatorResolutions vertex incremental cache parity" begin
+    P = diamond_poset()
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+
+    U = [FF.principal_upset(P, 2), FF.principal_upset(P, 3)]
+    D = [FF.principal_downset(P, 4)]
+    Phi = spzeros(K, 1, 2)
+    Phi[1, 1] = CM.coerce(field, 1)
+    Phi[1, 2] = CM.coerce(field, 1)
+    H = FF.FringeModule{K}(P, U, D, Phi; field=field)
+    M = IR.pmodule_from_fringe(H)
+    cc = MD._get_cover_cache(P)
+
+    old_enabled = IR.INDICATOR_INCREMENTAL_VERTEX_CACHE[]
+    old_min_vertices = IR.INDICATOR_INCREMENTAL_VERTEX_CACHE_MIN_VERTICES[]
+    old_min_total_dims = IR.INDICATOR_INCREMENTAL_VERTEX_CACHE_MIN_TOTAL_DIMS[]
+
+    try
+        IR.INDICATOR_INCREMENTAL_VERTEX_CACHE[] = false
+        F_off, dF_off = IR.upset_resolution(M; maxlen=2, cache=cc, threads=false)
+        E_off, dE_off = IR.downset_resolution(M; maxlen=2, cache=cc, threads=false)
+
+        IR.INDICATOR_INCREMENTAL_VERTEX_CACHE[] = true
+        IR.INDICATOR_INCREMENTAL_VERTEX_CACHE_MIN_VERTICES[] = 0
+        IR.INDICATOR_INCREMENTAL_VERTEX_CACHE_MIN_TOTAL_DIMS[] = 0
+        F_on, dF_on = IR.upset_resolution(M; maxlen=2, cache=cc, threads=false)
+        E_on, dE_on = IR.downset_resolution(M; maxlen=2, cache=cc, threads=false)
+
+        @test length(F_off) == length(F_on)
+        @test dF_off == dF_on
+        for i in eachindex(F_off)
+            @test F_off[i].U0 == F_on[i].U0
+            @test F_off[i].U1 == F_on[i].U1
+            @test F_off[i].delta == F_on[i].delta
+        end
+
+        @test length(E_off) == length(E_on)
+        @test dE_off == dE_on
+        for i in eachindex(E_off)
+            @test E_off[i].D0 == E_on[i].D0
+            @test E_off[i].D1 == E_on[i].D1
+            @test E_off[i].rho == E_on[i].rho
+        end
+    finally
+        IR.INDICATOR_INCREMENTAL_VERTEX_CACHE[] = old_enabled
+        IR.INDICATOR_INCREMENTAL_VERTEX_CACHE_MIN_VERTICES[] = old_min_vertices
+        IR.INDICATOR_INCREMENTAL_VERTEX_CACHE_MIN_TOTAL_DIMS[] = old_min_total_dims
+    end
+end
+
 @testset "IndicatorResolutions dense-id assembly parity + budgets" begin
     # Non-chain shape exercises the active-generator edge assembly logic.
     P = diamond_poset()
@@ -77,6 +268,11 @@ end
 
     F0s, pi0s, _ = IR.projective_cover(M; threads=false)
     E0s, iotas, _ = IR._injective_hull(M; threads=false)
+
+    for (u, v) in FF.cover_edges(P)
+        @test F0s.edge_maps[u, v] isa SparseMatrixCSC
+        @test E0s.edge_maps[u, v] isa SparseMatrixCSC
+    end
 
     if Threads.nthreads() > 1
         F0t, pi0t, _ = IR.projective_cover(M; threads=true)
@@ -102,6 +298,428 @@ end
     IR._injective_hull(M; threads=false)
     alloc_inj_hull = @allocated IR._injective_hull(M; threads=false)
     @test alloc_inj_hull < 25_000_000
+end
+
+@testset "IndicatorResolutions explicit workspace/cache parity" begin
+    P = diamond_poset()
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+
+    U = [FF.principal_upset(P, 2), FF.principal_upset(P, 3)]
+    D = [FF.principal_downset(P, 4)]
+    Phi = spzeros(K, 1, 2)
+    Phi[1, 1] = CM.coerce(field, 1)
+    Phi[1, 2] = CM.coerce(field, 1)
+    H = FF.FringeModule{K}(P, U, D, Phi; field=field)
+    M = IR.pmodule_from_fringe(H)
+
+    FF.build_cache!(P; cover=true, updown=true)
+    cc = MD._get_cover_cache(P)
+    memo = IR._indicator_new_array_memo(K, FF.nvertices(P))
+    ws = IR._new_resolution_workspace(K, FF.nvertices(P))
+
+    F_ref, dF_ref = IR.upset_resolution(M; maxlen=3, threads=false)
+    E_ref, dE_ref = IR.downset_resolution(M; maxlen=3, threads=false)
+
+    F_opt, dF_opt = IR.upset_resolution(
+        M;
+        maxlen=3,
+        cache=cc,
+        map_memo=memo,
+        workspace=ws,
+        threads=false,
+    )
+    E_opt, dE_opt = IR.downset_resolution(
+        M;
+        maxlen=3,
+        cache=cc,
+        map_memo=memo,
+        workspace=ws,
+        threads=false,
+    )
+
+    @test length(F_opt) == length(F_ref)
+    @test dF_opt == dF_ref
+    @test length(E_opt) == length(E_ref)
+    @test dE_opt == dE_ref
+end
+
+@testset "IndicatorResolutions fringe wrapper parity" begin
+    P = diamond_poset()
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+
+    U = [FF.principal_upset(P, 2), FF.principal_upset(P, 3)]
+    D = [FF.principal_downset(P, 4)]
+    Phi = spzeros(K, 1, 2)
+    Phi[1, 1] = CM.coerce(field, 1)
+    Phi[1, 2] = CM.coerce(field, 1)
+    H = FF.FringeModule{K}(P, U, D, Phi; field=field)
+    M = IR.pmodule_from_fringe(H)
+
+    F_ref, dF_ref = IR.upset_resolution(M; maxlen=3, threads=false)
+    E_ref, dE_ref = IR.downset_resolution(M; maxlen=3, threads=false)
+    F, dF, E, dE = IR.indicator_resolutions(H, H; maxlen=3, threads=false)
+
+    @test length(F) == length(F_ref)
+    @test dF == dF_ref
+    @test length(E) == length(E_ref)
+    @test dE == dE_ref
+end
+
+@testset "IndicatorResolutions cache miss lifecycle parity" begin
+    P = diamond_poset()
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+
+    U = [FF.principal_upset(P, 2), FF.principal_upset(P, 3)]
+    D = [FF.principal_downset(P, 4)]
+    Phi = spzeros(K, 1, 2)
+    Phi[1, 1] = CM.coerce(field, 1)
+    Phi[1, 2] = CM.coerce(field, 1)
+    H = FF.FringeModule{K}(P, U, D, Phi; field=field)
+
+    rc_fresh = CM.ResolutionCache()
+    F_fresh, dF_fresh, E_fresh, dE_fresh = IR.indicator_resolutions(H, H; maxlen=3, threads=false, cache=rc_fresh)
+
+    rc_clear = CM.ResolutionCache()
+    CM._clear_resolution_cache!(rc_clear)
+    F_clear, dF_clear, E_clear, dE_clear = IR.indicator_resolutions(H, H; maxlen=3, threads=false, cache=rc_clear)
+
+    @test length(F_fresh) == length(F_clear)
+    @test dF_fresh == dF_clear
+    @test length(E_fresh) == length(E_clear)
+    @test dE_fresh == dE_clear
+end
+
+@testset "IndicatorResolutions adaptive cache admission policy" begin
+    P = diamond_poset()
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+
+    U = [FF.principal_upset(P, 2), FF.principal_upset(P, 3)]
+    D = [FF.principal_downset(P, 4)]
+    Phi = spzeros(K, 1, 2)
+    Phi[1, 1] = CM.coerce(field, 1)
+    Phi[1, 2] = CM.coerce(field, 1)
+    H = FF.FringeModule{K}(P, U, D, Phi; field=field)
+
+    payload = IR.indicator_resolutions(H, H; maxlen=3, threads=false)
+    key = CM._resolution_key3(H, H, 3)
+    cache_val_type = Tuple{
+        Vector{PosetModules.IndicatorTypes.UpsetPresentation{K}},
+        Vector{SparseMatrixCSC{K,Int}},
+        Vector{PosetModules.IndicatorTypes.DownsetCopresentation{K}},
+        Vector{SparseMatrixCSC{K,Int}},
+    }
+
+    rc = CM.ResolutionCache()
+    stored = IR._resolution_cache_indicator_store!(rc, key, payload)
+    @test stored === payload
+    @test IR._resolution_cache_indicator_get(rc, key, cache_val_type) === payload
+    @test rc.indicator_primary_type === typeof(payload)
+
+    other_key = CM._resolution_key3(H, H, 4)
+    @test IR._resolution_cache_indicator_store!(rc, other_key, 17) == 17
+    @test IR._resolution_cache_indicator_get(rc, other_key, Int) == 17
+end
+
+@testset "IndicatorResolutions threaded resolution parity" begin
+    Threads.nthreads() > 1 || begin
+        @test true
+        return
+    end
+
+    P = diamond_poset()
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+
+    U = [FF.principal_upset(P, 2), FF.principal_upset(P, 3)]
+    D = [FF.principal_downset(P, 4)]
+    Phi = spzeros(K, 1, 2)
+    Phi[1, 1] = CM.coerce(field, 1)
+    Phi[1, 2] = CM.coerce(field, 1)
+    H = FF.FringeModule{K}(P, U, D, Phi; field=field)
+    M = IR.pmodule_from_fringe(H)
+
+    FF.build_cache!(P; cover=true, updown=true)
+    cc = MD._get_cover_cache(P)
+    memo = IR._indicator_new_array_memo(K, FF.nvertices(P))
+    ws = IR._new_resolution_workspace(K, FF.nvertices(P))
+
+    F_ref, dF_ref = IR.upset_resolution(M; maxlen=3, threads=false)
+    E_ref, dE_ref = IR.downset_resolution(M; maxlen=3, threads=false)
+
+    F_thr, dF_thr = IR.upset_resolution(
+        M;
+        maxlen=3,
+        cache=cc,
+        map_memo=memo,
+        workspace=ws,
+        threads=true,
+    )
+    E_thr, dE_thr = IR.downset_resolution(
+        M;
+        maxlen=3,
+        cache=cc,
+        map_memo=memo,
+        workspace=ws,
+        threads=true,
+    )
+
+    @test length(F_thr) == length(F_ref)
+    @test dF_thr == dF_ref
+    @test length(E_thr) == length(E_ref)
+    @test dE_thr == dE_ref
+end
+
+@testset "IndicatorResolutions batched map_leq cache helper parity" begin
+    P = chain_poset(4)
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+
+    U = [FF.principal_upset(P, 1), FF.principal_upset(P, 2)]
+    D = [FF.principal_downset(P, 3), FF.principal_downset(P, 4)]
+    Phi = spzeros(K, 2, 2)
+    Phi[1, 1] = CM.coerce(field, 1)
+    Phi[2, 2] = CM.coerce(field, 1)
+    H = FF.FringeModule{K}(P, U, D, Phi; field=field)
+    M = IR.pmodule_from_fringe(H)
+
+    FF.build_cache!(P; cover=true, updown=true)
+    cc = MD._get_cover_cache(P)
+    memo = IR._indicator_new_array_memo(K, FF.nvertices(P))
+
+    pairs = Tuple{Int,Int}[(1, 2), (1, 4), (2, 4), (1, 4)]
+    mats = IR._map_leq_cached_many_indicator(M, pairs, cc, memo)
+    for i in eachindex(pairs)
+        u, v = pairs[i]
+        @test mats[i] == MD.map_leq(M, u, v; cache=cc)
+        @test IR._indicator_memo_get(memo, FF.nvertices(P), u, v) !== nothing
+    end
+end
+
+@testset "IndicatorResolutions map_leq_fill_memo threshold paths parity" begin
+    P = chain_poset(4)
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+
+    U = [FF.principal_upset(P, 1), FF.principal_upset(P, 2)]
+    D = [FF.principal_downset(P, 3), FF.principal_downset(P, 4)]
+    Phi = spzeros(K, 2, 2)
+    Phi[1, 1] = CM.coerce(field, 1)
+    Phi[2, 2] = CM.coerce(field, 1)
+    H = FF.FringeModule{K}(P, U, D, Phi; field=field)
+    M = IR.pmodule_from_fringe(H)
+
+    FF.build_cache!(P; cover=true, updown=true)
+    cc = MD._get_cover_cache(P)
+    n = FF.nvertices(P)
+    memo = IR._indicator_new_array_memo(K, n)
+    ws = IR._new_resolution_workspace(K, n)
+
+    small_pairs = Tuple{Int,Int}[(1, 2), (1, 4)]
+    IR._map_leq_fill_memo_indicator!(M, small_pairs, cc, memo, ws)
+    for (u, v) in small_pairs
+        @test IR._indicator_memo_get(memo, n, u, v) == MD.map_leq(M, u, v; cache=cc)
+    end
+
+    fill!(memo, nothing)
+    large_pairs = Tuple{Int,Int}[(1, 2), (1, 3), (1, 4), (2, 3), (2, 4)]
+    IR._map_leq_fill_memo_indicator!(M, large_pairs, cc, memo, ws)
+    for (u, v) in large_pairs
+        @test IR._indicator_memo_get(memo, n, u, v) == MD.map_leq(M, u, v; cache=cc)
+    end
+end
+
+@testset "AbelianCategories structural selector kernel/cokernel path" begin
+    P = chain_poset(2)
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+    I2 = Matrix{K}(I, 2, 2)
+
+    edge_dom = Dict{Tuple{Int,Int}, Matrix{K}}((1, 2) => I2)
+    edge_cod = Dict{Tuple{Int,Int}, Matrix{K}}((1, 2) => I2)
+    Dom = MD.PModule{K}(P, [2, 2], edge_dom; field=field)
+    Cod = MD.PModule{K}(P, [2, 2], edge_cod; field=field)
+
+    S = zeros(K, 2, 2)
+    S[1, 1] = one(K)
+    f = MD.PMorphism{K}(Dom, Cod, [S, S])
+
+    AB = PosetModules.AbelianCategories
+    @test AB._is_partial_permutation(field, S)
+
+    Kmod, iota = AB.kernel_with_inclusion(f)
+    Cmod, q = AB._cokernel_module(f)
+
+    @test Kmod.dims == [1, 1]
+    @test Cmod.dims == [1, 1]
+    expected_i = zeros(K, 2, 1)
+    expected_i[2, 1] = one(K)
+    expected_q = zeros(K, 1, 2)
+    expected_q[1, 2] = one(K)
+    @test iota.comps[1] == expected_i
+    @test iota.comps[2] == expected_i
+    @test q.comps[1] == expected_q
+    @test q.comps[2] == expected_q
+
+    # Projection+selector composite case: repeated row usage.
+    T = zeros(K, 2, 2)
+    T[1, 1] = one(K)
+    T[1, 2] = one(K)
+    g = MD.PMorphism{K}(Dom, Cod, [T, T])
+    K2, i2 = AB.kernel_with_inclusion(g)
+    C2, q2 = AB._cokernel_module(g)
+    @test K2.dims == [1, 1]
+    @test C2.dims == [1, 1]
+    @test size(i2.comps[1]) == (2, 1)
+    @test size(q2.comps[1]) == (1, 2)
+    @test g.comps[1] * i2.comps[1] == zeros(K, 2, 1)
+end
+
+@testset "AbelianCategories incremental kernel/cokernel cache parity" begin
+    P = chain_poset(2)
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+
+    I2 = Matrix{K}(I, 2, 2)
+    I3 = Matrix{K}(I, 3, 3)
+
+    dom1 = MD.PModule{K}(P, [2, 2], Dict{Tuple{Int,Int}, Matrix{K}}((1, 2) => I2); field=field)
+    cod1 = MD.PModule{K}(P, [2, 2], Dict{Tuple{Int,Int}, Matrix{K}}((1, 2) => I2); field=field)
+    S = zeros(K, 2, 2)
+    S[1, 1] = one(K)
+    f1 = MD.PMorphism{K}(dom1, cod1, [S, S])
+
+    dom2 = MD.PModule{K}(P, [3, 3], Dict{Tuple{Int,Int}, Matrix{K}}((1, 2) => I3); field=field)
+    cod2 = MD.PModule{K}(P, [3, 3], Dict{Tuple{Int,Int}, Matrix{K}}((1, 2) => I3); field=field)
+    S3 = zeros(K, 3, 3)
+    S3[1:2, 1:2] .= S
+    f2 = MD.PMorphism{K}(dom2, cod2, [S3, S3])
+
+    AB = PosetModules.AbelianCategories
+    kcache = Any[]
+    AB.kernel_with_inclusion(f1; incremental_cache=kcache)
+    K_inc, i_inc = AB.kernel_with_inclusion(f2; incremental_cache=kcache)
+    K_ref, i_ref = AB.kernel_with_inclusion(f2)
+    @test K_inc.dims == K_ref.dims
+    @test i_inc.comps == i_ref.comps
+
+    m1 = MD.PModule{K}(P, [2, 2], Dict{Tuple{Int,Int}, Matrix{K}}((1, 2) => I2); field=field)
+    e1 = MD.PModule{K}(P, [2, 2], Dict{Tuple{Int,Int}, Matrix{K}}((1, 2) => I2); field=field)
+    iota1 = MD.PMorphism{K}(m1, e1, [S, S])
+
+    m2 = MD.PModule{K}(P, [3, 3], Dict{Tuple{Int,Int}, Matrix{K}}((1, 2) => I3); field=field)
+    e2 = MD.PModule{K}(P, [3, 3], Dict{Tuple{Int,Int}, Matrix{K}}((1, 2) => I3); field=field)
+    iota2 = MD.PMorphism{K}(m2, e2, [S3, S3])
+
+    ccache = Any[]
+    AB._cokernel_module(iota1; incremental_cache=ccache)
+    C_inc, q_inc = AB._cokernel_module(iota2; incremental_cache=ccache)
+    C_ref, q_ref = AB._cokernel_module(iota2)
+    @test C_inc.dims == C_ref.dims
+    @test q_inc.comps == q_ref.comps
+end
+
+@testset "IndicatorResolutions map batch plan reuse in workspace" begin
+    P = diamond_poset()
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+
+    U = [FF.principal_upset(P, 2), FF.principal_upset(P, 3)]
+    D = [FF.principal_downset(P, 4)]
+    Phi = spzeros(K, 1, 2)
+    Phi[1, 1] = CM.coerce(field, 1)
+    Phi[1, 2] = CM.coerce(field, 1)
+    H = FF.FringeModule{K}(P, U, D, Phi; field=field)
+    M = IR.pmodule_from_fringe(H)
+
+    ws = IR._new_resolution_workspace(K, FF.nvertices(P))
+    memo = IR._indicator_new_array_memo(K, FF.nvertices(P))
+    old_thresh = IR.INDICATOR_MAP_BATCH_THRESHOLD[]
+    try
+        IR.INDICATOR_MAP_BATCH_THRESHOLD[] = 1
+        IR.projective_cover(M; map_memo=memo, workspace=ws, threads=false)
+        n1 = length(ws.map_batch_cache)
+        IR.projective_cover(M; map_memo=memo, workspace=ws, threads=false)
+        n2 = length(ws.map_batch_cache)
+        IR.injective_hull(M; map_memo=memo, workspace=ws, threads=false)
+        n3 = length(ws.map_batch_cache)
+        @test n1 > 0
+        @test n2 == n1
+        @test n3 >= n2
+    finally
+        IR.INDICATOR_MAP_BATCH_THRESHOLD[] = old_thresh
+    end
+end
+
+@testset "IndicatorResolutions incremental linalg gate parity" begin
+    P = diamond_poset()
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+
+    U = [FF.principal_upset(P, 2), FF.principal_upset(P, 3)]
+    D = [FF.principal_downset(P, 4)]
+    Phi = spzeros(K, 1, 2)
+    Phi[1, 1] = CM.coerce(field, 1)
+    Phi[1, 2] = CM.coerce(field, 1)
+    H = FF.FringeModule{K}(P, U, D, Phi; field=field)
+    M = IR.pmodule_from_fringe(H)
+
+    old = IR.INDICATOR_INCREMENTAL_LINALG[]
+    try
+        IR.INDICATOR_INCREMENTAL_LINALG[] = false
+        F_off, dF_off = IR.upset_resolution(M; maxlen=2, threads=false)
+        E_off, dE_off = IR.downset_resolution(M; maxlen=2, threads=false)
+
+        IR.INDICATOR_INCREMENTAL_LINALG[] = true
+        F_on, dF_on = IR.upset_resolution(M; maxlen=2, threads=false)
+        E_on, dE_on = IR.downset_resolution(M; maxlen=2, threads=false)
+
+        @test length(F_off) == length(F_on)
+        @test dF_off == dF_on
+        @test length(E_off) == length(E_on)
+        @test dE_off == dE_on
+    finally
+        IR.INDICATOR_INCREMENTAL_LINALG[] = old
+    end
+end
+
+@testset "IndicatorResolutions prefix cache extends maxlen incrementally" begin
+    P = diamond_poset()
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+
+    U = [FF.principal_upset(P, 2), FF.principal_upset(P, 3)]
+    D = [FF.principal_downset(P, 4)]
+    Phi = spzeros(K, 1, 2)
+    Phi[1, 1] = CM.coerce(field, 1)
+    Phi[1, 2] = CM.coerce(field, 1)
+    H = FF.FringeModule{K}(P, U, D, Phi; field=field)
+    M = IR.pmodule_from_fringe(H)
+
+    IR._clear_indicator_prefix_caches!()
+    F1, dF1 = IR.upset_resolution(M; maxlen=1, threads=false)
+    E1, dE1 = IR.downset_resolution(M; maxlen=1, threads=false)
+    @test length(dF1) <= 1
+    @test length(dE1) <= 1
+    @test IR._upset_prefix_steps(M) == length(dF1)
+    @test IR._downset_prefix_steps(M) == length(dE1)
+
+    F2, dF2 = IR.upset_resolution(M; maxlen=2, threads=false)
+    E2, dE2 = IR.downset_resolution(M; maxlen=2, threads=false)
+    @test length(F2) >= length(F1)
+    @test length(E2) >= length(E1)
+    @test length(dF2) >= length(dF1)
+    @test length(dE2) >= length(dE1)
+    @test IR._upset_prefix_steps(M) == length(dF2)
+    @test IR._downset_prefix_steps(M) == length(dE2)
+end
+
+@testset "IndicatorResolutions thread gate tiny-case policy" begin
+    @test IR._indicator_use_threads(true, 8, 32, 128) == false
+    @test IR._indicator_use_threads(false, 10_000, 10_000, 10^8) == false
 end
 
 @testset "Cover-edge maps are label-consistent on non-chain posets" begin
@@ -468,13 +1086,13 @@ end
     @test cc1 === cc2
 
     @test cc1.Q === P
-    @test length(cc1.preds) == P.n
-    @test length(cc1.succs) == P.n
+    @test length(cc1.pred_ptr) == P.n + 1
+    @test length(cc1.succ_ptr) == P.n + 1
 
     # On a chain, each vertex i>1 has exactly one cover predecessor i-1.
-    @test isempty(cc1.preds[1])
+    @test isempty(FF._preds(cc1, 1))
     for i in 2:P.n
-        @test cc1.preds[i] == [i - 1]
+        @test collect(FF._preds(cc1, i)) == [i - 1]
     end
 end
 
@@ -542,12 +1160,43 @@ end
     @test length(cc.chain_parent) >= 1
     n_after_first = sum(length.(cc.chain_parent))
     m_after_first = sum(length.(M.map_compose))
-    @test m_after_first > m_before
+    @test m_after_first == m_before
 
     A14b = MD.map_leq(M, 1, 4; cache=cc)
     @test A14b == A14
     @test sum(length.(cc.chain_parent)) == n_after_first
-    @test sum(length.(M.map_compose)) == m_after_first
+    @test sum(length.(M.map_compose)) > m_after_first
+end
+
+@testset "map_leq long-chain cold path preserves multiplication order" begin
+    P = chain_poset(5)
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+    c(x) = CM.coerce(field, x)
+    cc = MD._get_cover_cache(P)
+    FF._clear_chain_parent_cache!(cc)
+
+    dims = fill(2, 5)
+    edge = Dict{Tuple{Int,Int}, Matrix{K}}(
+        (1, 2) => K[c(1) c(1); c(0) c(1)],
+        (2, 3) => K[c(2) c(0); c(1) c(1)],
+        (3, 4) => K[c(1) c(0); c(3) c(1)],
+        (4, 5) => K[c(1) c(2); c(0) c(1)],
+    )
+    M = MD.PModule{K}(P, dims, edge; field=field)
+    MD._clear_map_leq_memo!(M)
+
+    A15 = MD.map_leq(M, 1, 5; cache=cc)
+    @test A15 == K[c(16) c(18); c(7) c(8)]
+    @test sum(length.(cc.chain_parent)) > 0
+    @test sum(length.(M.map_compose)) == 0
+    slot_hits = M.map_pred_slot_dense === nothing ? sum(length, M.map_pred_slot) :
+        sum(d -> count(identity, d.seen), M.map_pred_slot_dense)
+    @test slot_hits > 0
+
+    A15b = MD.map_leq(M, 1, 5; cache=cc)
+    @test A15b == A15
+    @test sum(length.(M.map_compose)) > 0
 end
 
 @testset "map_leq tiny fast paths bypass compose memo" begin
@@ -660,6 +1309,10 @@ end
     @test A1 == K[c(66) c(0); c(0) c(195)]
     @test A2 == K[c(455) c(0); c(0) c(1309)]
     @test A1 != A2
+    @test sum(length.(M1.map_compose)) == 0
+    @test sum(length.(M2.map_compose)) == 0
+    @test MD.map_leq(M1, 1, 4; cache=cc) == A1
+    @test MD.map_leq(M2, 1, 4; cache=cc) == A2
     @test sum(length.(M1.map_compose)) >= 1
     @test sum(length.(M2.map_compose)) >= 1
 end
@@ -719,15 +1372,331 @@ end
 
         pairs = Tuple{Int,Int}[(1, 1), (1, 3), (2, 5), (1, 7), (3, 7), (4, 7)]
         b1 = MD.map_leq_many(M, pairs; cache=cc)
+        @test sum(length.(M.map_compose)) == 0
         b2 = MD.map_leq_many(M, pairs; cache=cc)
         @test b1 == b2
         @test any(!isempty(d) for d in M.map_many_plan)
+        @test sum(length.(M.map_compose)) > 0
 
-        # Mutate the pair vector in place; the signature check should force a rebuild.
-        pairs[1] = (2, 2)
+        # Mutate an interior pair in place (first/last unchanged); signature check must rebuild.
+        pairs[3] = (2, 4)
         b3 = MD.map_leq_many(M, pairs; cache=cc)
-        @test b3[1] == MD.map_leq(M, 2, 2; cache=cc)
+        @test b3[3] == MD.map_leq(M, 2, 4; cache=cc)
         @test all(b3[i] == MD.map_leq(M, pairs[i][1], pairs[i][2]; cache=cc) for i in eachindex(pairs))
+    finally
+        MD.MAP_LEQ_MANY_PLAN_MIN_LEN[] = old_min
+    end
+end
+
+@testset "map_leq_many one-off long batch avoids plan cache and preserves parity" begin
+    P = FF.ProductOfChainsPoset((16, 16))
+    field = CM.F3()
+    K = CM.coeff_type(field)
+    c(x) = CM.coerce(field, x)
+
+    dims = fill(2, FF.nvertices(P))
+    edge = Dict{Tuple{Int,Int}, Matrix{K}}()
+    for (u, v) in FF.cover_edges(P)
+        edge[(u, v)] = K[c(1) c(1); c(0) c(1)]
+    end
+    M = MD.PModule{K}(P, dims, edge; field=field)
+    cc = MD._get_cover_cache(P)
+    pairs = Tuple{Int,Int}[
+        (1, 256), (2, 256), (17, 256), (18, 256),
+        (1, 255), (2, 255), (16, 256), (1, 240),
+    ]
+
+    old_plan_min = MD.MAP_LEQ_MANY_PLAN_MIN_LEN[]
+    old_oneoff_min = MD.MAP_LEQ_MANY_ONEOFF_LONG_MIN_LEN[]
+    old_oneoff_long = MD.MAP_LEQ_MANY_ONEOFF_LONG_MIN_LONG[]
+    try
+        MD.MAP_LEQ_MANY_PLAN_MIN_LEN[] = 1
+        MD.MAP_LEQ_MANY_ONEOFF_LONG_MIN_LEN[] = 1
+        MD.MAP_LEQ_MANY_ONEOFF_LONG_MIN_LONG[] = 1
+
+        MD._clear_map_leq_memo!(M)
+        MD._clear_map_leq_many_plan_cache!(M)
+        FF._clear_chain_parent_cache!(cc)
+
+        @test MD._map_leq_many_raw_route_kind(M, pairs, cc) == :oneoff_long
+        batch = MD.map_leq_many(M, pairs; cache=cc)
+        @test all(isempty(d) for d in M.map_many_plan)
+        @test sum(length.(M.map_compose)) == 0
+        @test M.map_compose_dense === nothing || all(!any(m.seen) for m in M.map_compose_dense)
+        @test all(batch[i] == MD.map_leq(M, pairs[i][1], pairs[i][2]; cache=cc) for i in eachindex(pairs))
+    finally
+        MD.MAP_LEQ_MANY_PLAN_MIN_LEN[] = old_plan_min
+        MD.MAP_LEQ_MANY_ONEOFF_LONG_MIN_LEN[] = old_oneoff_min
+        MD.MAP_LEQ_MANY_ONEOFF_LONG_MIN_LONG[] = old_oneoff_long
+    end
+end
+
+@testset "map_leq_many raw route falls back on low-overlap long sweep" begin
+    P = FF.ProductOfChainsPoset((12, 12))
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+    c(x) = CM.coerce(field, x)
+
+    dims = fill(2, FF.nvertices(P))
+    edge = Dict{Tuple{Int,Int}, Matrix{K}}()
+    for (u, v) in FF.cover_edges(P)
+        edge[(u, v)] = K[c(1) c(1); c(0) c(1)]
+    end
+    M = MD.PModule{K}(P, dims, edge; field=field)
+    cc = MD._get_cover_cache(P)
+
+    function long_hops(u, v)
+        d = v
+        hops = 0
+        while d != u
+            d = FF._chosen_predecessor(cc, u, d)
+            hops += 1
+        end
+        return hops
+    end
+
+    pairs = Tuple{Int,Int}[]
+    rng = MersenneTwister(0xB2B2)
+    while length(pairs) < 64
+        u = rand(rng, 1:FF.nvertices(P))
+        v = rand(rng, 1:FF.nvertices(P))
+        u == v && continue
+        FF.leq(P, u, v) || continue
+        long_hops(u, v) >= 3 || continue
+        push!(pairs, (u, v))
+    end
+
+    old_plan_min = MD.MAP_LEQ_MANY_PLAN_MIN_LEN[]
+    old_oneoff_min = MD.MAP_LEQ_MANY_ONEOFF_LONG_MIN_LEN[]
+    old_oneoff_long = MD.MAP_LEQ_MANY_ONEOFF_LONG_MIN_LONG[]
+    old_oneoff_overlap = MD.MAP_LEQ_MANY_ONEOFF_MIN_OVERLAP_QQ[]
+    old_oneoff_target = MD.MAP_LEQ_MANY_ONEOFF_MIN_TARGET_REPEAT_QQ[]
+    old_scalar_overlap = MD.MAP_LEQ_MANY_LONG_SCALAR_MAX_OVERLAP_QQ[]
+    old_scalar_target = MD.MAP_LEQ_MANY_LONG_SCALAR_MAX_TARGET_REPEAT_QQ[]
+    old_scalar_hops = MD.MAP_LEQ_MANY_LONG_MIN_AVG_HOPS_QQ[]
+    try
+        MD.MAP_LEQ_MANY_PLAN_MIN_LEN[] = typemax(Int)
+        MD.MAP_LEQ_MANY_ONEOFF_LONG_MIN_LEN[] = 1
+        MD.MAP_LEQ_MANY_ONEOFF_LONG_MIN_LONG[] = 1
+        MD.MAP_LEQ_MANY_ONEOFF_MIN_OVERLAP_QQ[] = 1.0
+        MD.MAP_LEQ_MANY_ONEOFF_MIN_TARGET_REPEAT_QQ[] = 1.0
+        MD.MAP_LEQ_MANY_LONG_SCALAR_MAX_OVERLAP_QQ[] = 1.0
+        MD.MAP_LEQ_MANY_LONG_SCALAR_MAX_TARGET_REPEAT_QQ[] = 1.0
+        MD.MAP_LEQ_MANY_LONG_MIN_AVG_HOPS_QQ[] = 0.0
+        FF._clear_chain_parent_cache!(cc)
+        MD._clear_map_leq_memo!(M)
+        MD._clear_map_leq_many_plan_cache!(M)
+        @test MD._map_leq_many_raw_route_kind(M, pairs, cc) == :scalar_fallback
+        batch = MD.map_leq_many(M, pairs; cache=cc)
+        @test all(isempty(d) for d in M.map_many_plan)
+        @test sum(length.(M.map_compose)) == 0
+        @test all(batch[i] == MD.map_leq(M, pairs[i][1], pairs[i][2]; cache=cc) for i in eachindex(pairs))
+    finally
+        MD.MAP_LEQ_MANY_PLAN_MIN_LEN[] = old_plan_min
+        MD.MAP_LEQ_MANY_ONEOFF_LONG_MIN_LEN[] = old_oneoff_min
+        MD.MAP_LEQ_MANY_ONEOFF_LONG_MIN_LONG[] = old_oneoff_long
+        MD.MAP_LEQ_MANY_ONEOFF_MIN_OVERLAP_QQ[] = old_oneoff_overlap
+        MD.MAP_LEQ_MANY_ONEOFF_MIN_TARGET_REPEAT_QQ[] = old_oneoff_target
+        MD.MAP_LEQ_MANY_LONG_SCALAR_MAX_OVERLAP_QQ[] = old_scalar_overlap
+        MD.MAP_LEQ_MANY_LONG_SCALAR_MAX_TARGET_REPEAT_QQ[] = old_scalar_target
+        MD.MAP_LEQ_MANY_LONG_MIN_AVG_HOPS_QQ[] = old_scalar_hops
+    end
+end
+
+@testset "map_leq_many raw route uses plan build on overlap-heavy long sweep" begin
+    P = FF.ProductOfChainsPoset((12, 12))
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+    c(x) = CM.coerce(field, x)
+
+    dims = fill(2, FF.nvertices(P))
+    edge = Dict{Tuple{Int,Int}, Matrix{K}}()
+    for (u, v) in FF.cover_edges(P)
+        edge[(u, v)] = K[c(1) c(1); c(0) c(1)]
+    end
+    M = MD.PModule{K}(P, dims, edge; field=field)
+    cc = MD._get_cover_cache(P)
+
+    pairs = Tuple{Int,Int}[]
+    rng = MersenneTwister(0xB3B3)
+    target = FF.nvertices(P)
+    while length(pairs) < 128
+        u = rand(rng, 1:(target - 1))
+        FF.leq(P, u, target) || continue
+        push!(pairs, (u, target))
+    end
+
+    old_plan_min = MD.MAP_LEQ_MANY_PLAN_MIN_LEN[]
+    old_oneoff_min = MD.MAP_LEQ_MANY_ONEOFF_LONG_MIN_LEN[]
+    old_oneoff_long = MD.MAP_LEQ_MANY_ONEOFF_LONG_MIN_LONG[]
+    old_oneoff_overlap = MD.MAP_LEQ_MANY_ONEOFF_MIN_OVERLAP_QQ[]
+    old_oneoff_target = MD.MAP_LEQ_MANY_ONEOFF_MIN_TARGET_REPEAT_QQ[]
+    try
+        MD.MAP_LEQ_MANY_PLAN_MIN_LEN[] = 1
+        MD.MAP_LEQ_MANY_ONEOFF_LONG_MIN_LEN[] = 1
+        MD.MAP_LEQ_MANY_ONEOFF_LONG_MIN_LONG[] = 1
+        MD.MAP_LEQ_MANY_ONEOFF_MIN_OVERLAP_QQ[] = 1.0
+        MD.MAP_LEQ_MANY_ONEOFF_MIN_TARGET_REPEAT_QQ[] = 1.0
+        FF._clear_chain_parent_cache!(cc)
+        MD._clear_map_leq_memo!(M)
+        MD._clear_map_leq_many_plan_cache!(M)
+        @test MD._map_leq_many_raw_route_kind(M, pairs, cc) == :plan_build
+        batch = MD.map_leq_many(M, pairs; cache=cc)
+        @test any(!isempty(d) for d in M.map_many_plan)
+        @test all(batch[i] == MD.map_leq(M, pairs[i][1], pairs[i][2]; cache=cc) for i in eachindex(pairs))
+    finally
+        MD.MAP_LEQ_MANY_PLAN_MIN_LEN[] = old_plan_min
+        MD.MAP_LEQ_MANY_ONEOFF_LONG_MIN_LEN[] = old_oneoff_min
+        MD.MAP_LEQ_MANY_ONEOFF_LONG_MIN_LONG[] = old_oneoff_long
+        MD.MAP_LEQ_MANY_ONEOFF_MIN_OVERLAP_QQ[] = old_oneoff_overlap
+        MD.MAP_LEQ_MANY_ONEOFF_MIN_TARGET_REPEAT_QQ[] = old_oneoff_target
+    end
+end
+
+@testset "map_leq_many scalar long batch reuses preallocated outputs" begin
+    P = FF.ProductOfChainsPoset((12, 12))
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+    c(x) = CM.coerce(field, x)
+
+    dims = fill(2, FF.nvertices(P))
+    edge = Dict{Tuple{Int,Int}, Matrix{K}}()
+    for (u, v) in FF.cover_edges(P)
+        edge[(u, v)] = K[c(1) c(1); c(0) c(1)]
+    end
+    M = MD.PModule{K}(P, dims, edge; field=field)
+    cc = MD._get_cover_cache(P)
+
+    function long_hops(u, v)
+        d = v
+        hops = 0
+        while d != u
+            d = FF._chosen_predecessor(cc, u, d)
+            hops += 1
+        end
+        return hops
+    end
+
+    pairs = Tuple{Int,Int}[]
+    seen = Set{Tuple{Int,Int}}()
+    rng = MersenneTwister(0xB4B4)
+    while length(pairs) < 64
+        u = rand(rng, 1:FF.nvertices(P))
+        v = rand(rng, 1:FF.nvertices(P))
+        u == v && continue
+        FF.leq(P, u, v) || continue
+        long_hops(u, v) >= 3 || continue
+        pair = (u, v)
+        pair in seen && continue
+        push!(seen, pair)
+        push!(pairs, pair)
+    end
+
+    old_plan_min = MD.MAP_LEQ_MANY_PLAN_MIN_LEN[]
+    old_oneoff_min = MD.MAP_LEQ_MANY_ONEOFF_LONG_MIN_LEN[]
+    old_oneoff_long = MD.MAP_LEQ_MANY_ONEOFF_LONG_MIN_LONG[]
+    old_oneoff_overlap = MD.MAP_LEQ_MANY_ONEOFF_MIN_OVERLAP_QQ[]
+    old_oneoff_target = MD.MAP_LEQ_MANY_ONEOFF_MIN_TARGET_REPEAT_QQ[]
+    old_scalar_overlap = MD.MAP_LEQ_MANY_LONG_SCALAR_MAX_OVERLAP_QQ[]
+    old_scalar_target = MD.MAP_LEQ_MANY_LONG_SCALAR_MAX_TARGET_REPEAT_QQ[]
+    try
+        MD.MAP_LEQ_MANY_PLAN_MIN_LEN[] = typemax(Int)
+        MD.MAP_LEQ_MANY_ONEOFF_LONG_MIN_LEN[] = 1
+        MD.MAP_LEQ_MANY_ONEOFF_LONG_MIN_LONG[] = 1
+        MD.MAP_LEQ_MANY_ONEOFF_MIN_OVERLAP_QQ[] = 1.0
+        MD.MAP_LEQ_MANY_ONEOFF_MIN_TARGET_REPEAT_QQ[] = 1.0
+        MD.MAP_LEQ_MANY_LONG_SCALAR_MAX_OVERLAP_QQ[] = 1.0
+        MD.MAP_LEQ_MANY_LONG_SCALAR_MAX_TARGET_REPEAT_QQ[] = 1.0
+        FF._clear_chain_parent_cache!(cc)
+        MD._clear_map_leq_memo!(M)
+        MD._clear_map_leq_many_plan_cache!(M)
+        arena = MD._map_leq_many_plan_arena(M)
+        stats = MD._fill_map_leq_many_plan_arena!(arena, M, pairs, P, cc)
+        @test MD._prefer_map_leq_many_scalar_long(stats, M.field)
+
+        out = Vector{Matrix{K}}(undef, length(pairs))
+        @test MD._map_leq_many_scalar_long_batch!(out, M, arena, stats)
+        ids = map(objectid, out)
+        @test sum(length.(M.map_compose)) == 0
+
+        FF._clear_chain_parent_cache!(cc)
+        MD._clear_map_leq_memo!(M)
+        @test MD._map_leq_many_scalar_long_batch!(out, M, arena, stats)
+        @test map(objectid, out) == ids
+        @test sum(length.(M.map_compose)) == 0
+        @test all(out[i] == MD.map_leq(M, pairs[i][1], pairs[i][2]; cache=cc) for i in eachindex(pairs))
+    finally
+        MD.MAP_LEQ_MANY_PLAN_MIN_LEN[] = old_plan_min
+        MD.MAP_LEQ_MANY_ONEOFF_LONG_MIN_LEN[] = old_oneoff_min
+        MD.MAP_LEQ_MANY_ONEOFF_LONG_MIN_LONG[] = old_oneoff_long
+        MD.MAP_LEQ_MANY_ONEOFF_MIN_OVERLAP_QQ[] = old_oneoff_overlap
+        MD.MAP_LEQ_MANY_ONEOFF_MIN_TARGET_REPEAT_QQ[] = old_oneoff_target
+        MD.MAP_LEQ_MANY_LONG_SCALAR_MAX_OVERLAP_QQ[] = old_scalar_overlap
+        MD.MAP_LEQ_MANY_LONG_SCALAR_MAX_TARGET_REPEAT_QQ[] = old_scalar_target
+    end
+end
+
+@testset "map_leq_many prepared batch parity + source-mutation isolation" begin
+    P = chain_poset(7)
+    field = CM.F3()
+    K = CM.coeff_type(field)
+    c(x) = CM.coerce(field, x)
+
+    dims = fill(2, 7)
+    edge = Dict{Tuple{Int,Int}, Matrix{K}}()
+    @inbounds for u in 1:6
+        edge[(u, u + 1)] = K[c(1) c(2); c(0) c(1)]
+    end
+    M = MD.PModule{K}(P, dims, edge; field=field)
+    cc = MD._get_cover_cache(P)
+    old_min = MD.MAP_LEQ_MANY_PLAN_MIN_LEN[]
+    try
+        MD.MAP_LEQ_MANY_PLAN_MIN_LEN[] = 1
+        pairs = Tuple{Int,Int}[(1, 1), (1, 3), (2, 5), (1, 7), (3, 7), (4, 7)]
+        batch = MD.prepare_map_leq_batch(pairs)
+
+        b_vec = MD.map_leq_many(M, pairs; cache=cc)
+        b_batch = MD.map_leq_many(M, batch; cache=cc)
+        @test b_batch == b_vec
+
+        # Source vector can mutate; prepared batch stays stable because it owns a copy.
+        pairs[2] = (1, 4)
+        b_batch_after = MD.map_leq_many(M, batch; cache=cc)
+        b_vec_after = MD.map_leq_many(M, pairs; cache=cc)
+        @test b_batch_after == b_batch
+        @test b_vec_after[2] == MD.map_leq(M, 1, 4; cache=cc)
+        @test b_batch_after[2] == MD.map_leq(M, 1, 3; cache=cc)
+        @test any(!isempty(d) for d in M.map_many_batch_plan)
+        @test any(x -> x !== nothing, M.map_many_batch_last)
+
+        entry = only(filter(x -> x !== nothing, M.map_many_batch_last))
+        plan = (entry::MD._MapLeqManyBatchPlanEntry).plan
+        @test !isempty(plan.suffix_u)
+        @test length(plan.query_suffix) == length(batch.pairs)
+        dense_before = cc.chain_parent_dense === nothing ? 0 :
+            sum(d -> count(identity, d.seen), cc.chain_parent_dense)
+        dict_before = sum(length, cc.chain_parent)
+        FF._clear_chain_parent_cache!(cc)
+        dense_cleared = cc.chain_parent_dense === nothing ? 0 :
+            sum(d -> count(identity, d.seen), cc.chain_parent_dense)
+        @test dense_cleared == 0
+        @test sum(length, cc.chain_parent) == 0
+        b_batch_again = MD.map_leq_many(M, batch; cache=cc)
+        dense_after = cc.chain_parent_dense === nothing ? 0 :
+            sum(d -> count(identity, d.seen), cc.chain_parent_dense)
+        dict_after = sum(length, cc.chain_parent)
+        @test b_batch_again == b_batch
+        @test dense_before >= 0
+        @test dict_before >= 0
+        @test dense_after == 0
+        @test dict_after == 0
+
+        MD._clear_map_leq_many_plan_cache!(M)
+        @test all(x -> x === nothing, M.map_many_batch_last)
+
+        out = Vector{Matrix{K}}(undef, length(b_batch))
+        MD.map_leq_many!(out, M, batch; cache=cc)
+        @test out == b_batch
     finally
         MD.MAP_LEQ_MANY_PLAN_MIN_LEN[] = old_min
     end
@@ -756,7 +1725,7 @@ end
     @test_throws ErrorException MD.map_leq(
         M, 1, 4;
         cache=cc,
-        opts=CM.ModuleOptions(cache=cc),
+        opts=OPT.ModuleOptions(cache=cc),
     )
 
     # map_leq_many! contracts
@@ -769,8 +1738,14 @@ end
         M,
         Tuple{Int,Int}[(1, 4)];
         cache=cc,
-        opts=CM.ModuleOptions(cache=cc),
+        opts=OPT.ModuleOptions(cache=cc),
     )
+
+    batch_ok = MD.prepare_map_leq_batch(Tuple{Int,Int}[(1, 1), (1, 2)])
+    @test_throws ErrorException MD.map_leq_many!(Vector{Matrix{K}}(undef, 1), M, batch_ok; cache=cc)
+
+    batch_bad = MD.prepare_map_leq_batch(Tuple{Int,Int}[(2, 3)])
+    @test_throws ErrorException MD.map_leq_many(M, batch_bad; cache=cc)
 end
 
 @testset "ModuleOptions contracts (cache + check_sizes)" begin
@@ -789,12 +1764,12 @@ end
 
     # opts.cache should be equivalent to cache keyword.
     A_kw = MD.map_leq(M, 1, 3; cache=cc)
-    A_opt = MD.map_leq(M, 1, 3; opts=CM.ModuleOptions(cache=cc))
+    A_opt = MD.map_leq(M, 1, 3; opts=OPT.ModuleOptions(cache=cc))
     @test A_kw == A_opt
 
     pairs = Tuple{Int,Int}[(1, 2), (1, 3), (2, 3)]
     B_kw = MD.map_leq_many(M, pairs; cache=cc)
-    B_opt = MD.map_leq_many(M, pairs; opts=CM.ModuleOptions(cache=cc))
+    B_opt = MD.map_leq_many(M, pairs; opts=OPT.ModuleOptions(cache=cc))
     @test B_kw == B_opt
 
     # check_sizes contract in constructor.
@@ -803,7 +1778,7 @@ end
         (2, 3) => reshape([c(1)], 1, 1),
     )
     @test_throws ErrorException MD.PModule{K}(P, dims, bad_edge; field=field)
-    M_bad = MD.PModule{K}(P, dims, bad_edge; field=field, opts=CM.ModuleOptions(check_sizes=false))
+    M_bad = MD.PModule{K}(P, dims, bad_edge; field=field, opts=OPT.ModuleOptions(check_sizes=false))
     @test M_bad.dims == dims
 
     # Passing both explicit keyword and non-default opts is rejected.
@@ -811,7 +1786,7 @@ end
         P, dims, edge;
         field=field,
         check_sizes=false,
-        opts=CM.ModuleOptions(check_sizes=false),
+        opts=OPT.ModuleOptions(check_sizes=false),
     )
 end
 
@@ -905,6 +1880,39 @@ end
     @test batch[1] === A22
 end
 
+@testset "map_leq dense compose memo table (finite-poset path)" begin
+    P = chain_poset(6)
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+    c(x) = CM.coerce(field, x)
+    dims = fill(2, 6)
+    edge = Dict{Tuple{Int,Int}, Matrix{K}}()
+    @inbounds for u in 1:5
+        edge[(u, u + 1)] = K[c(u + 1) c(0); c(0) c(u + 1)]
+    end
+
+    old_min = MD.MAP_LEQ_DENSE_MEMO_MIN_ENTRIES[]
+    old_max = MD.MAP_LEQ_DENSE_MEMO_MAX_ENTRIES_PER_THREAD[]
+    try
+        MD.MAP_LEQ_DENSE_MEMO_MIN_ENTRIES[] = 1
+        MD.MAP_LEQ_DENSE_MEMO_MAX_ENTRIES_PER_THREAD[] = 10_000
+        M = MD.PModule{K}(P, dims, edge; field=field)
+        cc = MD._get_cover_cache(P)
+
+        @test M.map_compose_dense !== nothing
+        A = MD.map_leq(M, 1, 6; cache=cc)
+        @test A == K[c(720) c(0); c(0) c(720)]
+        @test sum(length.(M.map_compose)) == 0
+        @test any(any(d.seen) for d in M.map_compose_dense)
+
+        MD._clear_map_leq_memo!(M)
+        @test all(!any(d.seen) for d in M.map_compose_dense)
+    finally
+        MD.MAP_LEQ_DENSE_MEMO_MIN_ENTRIES[] = old_min
+        MD.MAP_LEQ_DENSE_MEMO_MAX_ENTRIES_PER_THREAD[] = old_max
+    end
+end
+
 @testset "direct_sum route policy picks dense for high-density sparse inputs" begin
     P = chain_poset(2)
     field = CM.RealField(Float64; rtol=1e-10, atol=1e-12)
@@ -952,6 +1960,200 @@ end
         @test Shigh.edge_maps[1, 2] isa Matrix{K}
     finally
         MD.DIRECT_SUM_SPARSE_MIN_TOTAL_ENTRIES[] = old_min
+    end
+end
+
+@testset "direct_sum field-aware route + cached edge stats" begin
+    P = chain_poset(2)
+
+    function denseish_sparse(field::CM.AbstractCoeffField, shift::Int)
+        K = CM.coeff_type(field)
+        ii = Int[]
+        jj = Int[]
+        vv = K[]
+        @inbounds for j in 1:40, i in 1:40
+            ((i + 2j + shift) % 5 == 0) && continue
+            push!(ii, i)
+            push!(jj, j)
+            push!(vv, CM.coerce(field, ((i + j + shift) % 7) + 1))
+        end
+        return sparse(ii, jj, vv, 40, 40)
+    end
+
+    cases = (
+        (CM.QQField(), true),
+        (CM.F3(), false),
+        (CM.RealField(Float64; rtol=1e-10, atol=1e-12), false),
+    )
+
+    old_min = MD.DIRECT_SUM_SPARSE_MIN_TOTAL_ENTRIES[]
+    try
+        MD.DIRECT_SUM_SPARSE_MIN_TOTAL_ENTRIES[] = 1
+        for (field, expect_sparse) in cases
+            K = CM.coeff_type(field)
+            A = MD.PModule{K}(P, [40, 40], Dict((1, 2) => denseish_sparse(field, 0)); field=field)
+            B = MD.PModule{K}(P, [40, 40], Dict((1, 2) => denseish_sparse(field, 2)); field=field)
+            S = MD.direct_sum(A, B)
+
+            @test A.direct_sum_stats.n_edges == 1
+            @test A.direct_sum_stats.total_entries == 1600
+            @test A.direct_sum_stats.total_nnz == nnz(A.edge_maps[1, 2])
+
+            if expect_sparse
+                @test S.edge_maps[1, 2] isa SparseMatrixCSC{K,Int}
+            else
+                @test S.edge_maps[1, 2] isa Matrix{K}
+            end
+        end
+    finally
+        MD.DIRECT_SUM_SPARSE_MIN_TOTAL_ENTRIES[] = old_min
+    end
+end
+
+@testset "direct_sum route uses small-edge field gate" begin
+    P = chain_poset(2)
+
+    function low_sparse_edge(field::CM.AbstractCoeffField, shift::Int)
+        K = CM.coeff_type(field)
+        vals = K[CM.coerce(field, 1), CM.coerce(field, 2), CM.coerce(field, 3)]
+        rows = Int[1, 3, 6]
+        cols = Int[1 + (shift % 2), 4, 6]
+        return sparse(rows, cols, vals, 6, 6)
+    end
+
+    cases = (
+        (CM.QQField(), true),
+        (CM.F3(), false),
+        (CM.RealField(Float64; rtol=1e-10, atol=1e-12), false),
+    )
+
+    old_min = MD.DIRECT_SUM_SPARSE_MIN_TOTAL_ENTRIES[]
+    try
+        MD.DIRECT_SUM_SPARSE_MIN_TOTAL_ENTRIES[] = 1
+        for (field, expect_sparse) in cases
+            K = CM.coeff_type(field)
+            A = MD.PModule{K}(P, [6, 6], Dict((1, 2) => low_sparse_edge(field, 0)); field=field)
+            B = MD.PModule{K}(P, [6, 6], Dict((1, 2) => low_sparse_edge(field, 1)); field=field)
+
+            @test MD._direct_sum_sparse_preferred(A, B) == expect_sparse
+
+            S = MD.direct_sum(A, B)
+            if expect_sparse
+                @test S.edge_maps[1, 2] isa SparseMatrixCSC{K,Int}
+            else
+                @test S.edge_maps[1, 2] isa Matrix{K}
+            end
+        end
+    finally
+        MD.DIRECT_SUM_SPARSE_MIN_TOTAL_ENTRIES[] = old_min
+    end
+end
+
+@testset "map_leq short-chain last-pair micro-cache promotes repeats" begin
+    P = chain_poset(3)
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+    c(x) = CM.coerce(field, x)
+
+    dims = [2, 2, 2]
+    edge = Dict{Tuple{Int,Int}, Matrix{K}}(
+        (1, 2) => K[c(2) c(1); c(0) c(3)],
+        (2, 3) => K[c(5) c(0); c(1) c(4)],
+    )
+    M = MD.PModule{K}(P, dims, edge; field=field)
+    cc = MD._get_cover_cache(P)
+
+    MD._clear_map_leq_memo!(M)
+    A13_1 = MD.map_leq(M, 1, 3; cache=cc)
+    @test sum(length.(M.map_compose)) == 0
+
+    A13_2 = MD.map_leq(M, 1, 3; cache=cc)
+    @test A13_2 == A13_1
+    @test sum(length.(M.map_compose)) >= 1
+
+    slot = min(length(M.map_last_pair.us), max(1, Base.Threads.threadid()))
+    @test M.map_last_pair.seen[slot]
+    @test M.map_last_pair.us[slot] == 1
+    @test M.map_last_pair.vs[slot] == 3
+    @test M.map_last_pair.promoted[slot]
+end
+
+@testset "map_leq cold short-chain fast path avoids chain-parent cache churn" begin
+    P = chain_poset(3)
+    field = CM.F3()
+    K = CM.coeff_type(field)
+    c(x) = CM.coerce(field, x)
+
+    dims = [2, 2, 2]
+    edge = Dict{Tuple{Int,Int}, Matrix{K}}(
+        (1, 2) => K[c(1) c(2); c(0) c(1)],
+        (2, 3) => K[c(2) c(1); c(1) c(0)],
+    )
+    M = MD.PModule{K}(P, dims, edge; field=field)
+    cc = MD._get_cover_cache(P)
+
+    FF._clear_chain_parent_cache!(cc)
+    MD._clear_map_leq_memo!(M)
+
+    dense_before = cc.chain_parent_dense === nothing ? 0 :
+        sum(d -> count(identity, d.seen), cc.chain_parent_dense)
+    dict_before = sum(length, cc.chain_parent)
+    @test dense_before == 0
+    @test dict_before == 0
+
+    A13 = MD.map_leq(M, 1, 3; cache=cc)
+    @test A13 == edge[(2, 3)] * edge[(1, 2)]
+
+    dense_after = cc.chain_parent_dense === nothing ? 0 :
+        sum(d -> count(identity, d.seen), cc.chain_parent_dense)
+    dict_after = sum(length, cc.chain_parent)
+    @test dense_after == 0
+    @test dict_after == 0
+end
+
+@testset "map_leq_many plan arena does not alias cached plan payload" begin
+    P = chain_poset(6)
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+    oneK = CM.coerce(field, 1)
+
+    dims = ones(Int, 6)
+    edge = Dict{Tuple{Int,Int}, Matrix{K}}()
+    @inbounds for u in 1:5
+        edge[(u, u + 1)] = reshape(K[oneK], 1, 1)
+    end
+    M = MD.PModule{K}(P, dims, edge; field=field)
+    cc = MD._get_cover_cache(P)
+
+    pairs1 = Tuple{Int,Int}[(1, 6), (1, 5), (2, 6), (3, 6)]
+    pairs2 = Tuple{Int,Int}[(1, 4), (2, 5), (3, 5), (4, 6)]
+
+    old_min = MD.MAP_LEQ_MANY_PLAN_MIN_LEN[]
+    old_max = MD.MAP_LEQ_MANY_PLAN_MAX_PER_THREAD[]
+    try
+        MD.MAP_LEQ_MANY_PLAN_MIN_LEN[] = 1
+        MD.MAP_LEQ_MANY_PLAN_MAX_PER_THREAD[] = 1024
+        MD._clear_map_leq_many_plan_cache!(M)
+
+        MD.map_leq_many(M, pairs1; cache=cc)
+        slot = min(length(M.map_many_plan), max(1, Base.Threads.threadid()))
+        dict = M.map_many_plan[slot]
+        key1 = MD._map_leq_many_plan_key(pairs1)
+        @test haskey(dict, key1)
+        plan1 = dict[key1]
+        us_copy = copy(plan1.us)
+        chain_copy = copy(plan1.chain_data)
+
+        MD.map_leq_many(M, pairs2; cache=cc)
+        @test plan1.us == us_copy
+        @test plan1.chain_data == chain_copy
+
+        arena = M.map_many_plan_arena[slot]
+        @test !(arena.us === plan1.us)
+        @test !(arena.chain_data === plan1.chain_data)
+    finally
+        MD.MAP_LEQ_MANY_PLAN_MIN_LEN[] = old_min
+        MD.MAP_LEQ_MANY_PLAN_MAX_PER_THREAD[] = old_max
     end
 end
 
@@ -1322,7 +2524,7 @@ end
         push!(seed_pairs, (u, v))
     end
     pairs = vcat(seed_pairs, seed_pairs, seed_pairs, seed_pairs, seed_pairs)
-    preds = cc.preds
+    preds = [collect(FF._preds(cc, v)) for v in 1:12]
 
     # warmup
     MD.map_leq_many(M, pairs; cache=cc)

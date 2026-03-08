@@ -42,9 +42,8 @@ catch
     using .PosetModules
 end
 
-const PM = PosetModules.Advanced
-const CM = PM.CoreModules
-const FL = PM.FieldLinAlg
+const CM = PosetModules.CoreModules
+const FL = PosetModules.FieldLinAlg
 
 @inline function _parse_int_arg(args, key::String, default::Int)
     for a in args
@@ -396,8 +395,8 @@ function main(args=ARGS)
 
     println("FieldLinAlg backend microbench")
     println("profile=$(profile), reps=$(reps), fields=$(fields_str), ops=$(ops_str), naive=$(run_naive)")
-    println("fingerprint=", FL.current_linalg_fingerprint())
-    println("thresholds=", FL.current_linalg_thresholds())
+    println("fingerprint=", FL._current_linalg_fingerprint())
+    println("thresholds=", FL._current_linalg_thresholds())
     println()
 
     rng = Random.MersenneTwister(seed)

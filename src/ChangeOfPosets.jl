@@ -18,7 +18,8 @@ import ..FiniteFringe
 using ..FiniteFringe: AbstractPoset, FinitePoset, ProductPoset, cover_edges, leq, leq_matrix, nvertices, poset_equal,
                       downset_indices, upset_indices
 using ..Encoding: EncodingMap
-using ..CoreModules: AbstractCoeffField, RealField, ResolutionOptions, DerivedFunctorOptions, SessionCache
+using ..CoreModules: AbstractCoeffField, RealField, SessionCache, ProductPosetCacheEntry, _SessionProductKey
+using ..Options: ResolutionOptions, DerivedFunctorOptions
 using ..FieldLinAlg
 
 @inline function _eye(::Type{K}, n::Int) where {K}
@@ -30,7 +31,7 @@ using ..FieldLinAlg
 end
 
 import ..IndicatorResolutions
-using ..Modules: PModule, PMorphism, map_leq, map_leq_many, _get_cover_cache
+using ..Modules: PModule, PMorphism, map_leq, map_leq_many, _prepare_map_leq_batch_owned, _get_cover_cache
 import ..AbelianCategories: pullback
 
 using ..DerivedFunctors: projective_resolution, injective_resolution,
@@ -233,13 +234,14 @@ function product_poset(
 )
     dense_cache = _product_dense_cache(session_cache)
     cache_enabled = use_cache && !check && cache_cover_edges && dense_cache !== nothing
+    L1 = leq_matrix(P1)
+    L2 = leq_matrix(P2)
     # Fast cache path (only for the common "production" settings).
     if cache_enabled
-        inner = get!(dense_cache, leq_matrix(P1)) do
-            IdDict{Any,Any}()
-        end
-        if haskey(inner, leq_matrix(P2))
-            return inner[leq_matrix(P2)]
+        cache_key = _SessionProductKey(L1, L2)
+        entry = get(dense_cache, cache_key, nothing)
+        if entry !== nothing
+            return (P=entry.P, pi1=entry.pi1, pi2=entry.pi2)
         end
     end
 
@@ -252,11 +254,11 @@ function product_poset(
 
     @views @inbounds for i1 in 1:n1
         rr = ((i1 - 1) * n2 + 1):(i1 * n2)
-        row1 = leq_matrix(P1)[i1, :]
+        row1 = L1[i1, :]
         i2 = findnext(row1, 1)
         while i2 !== nothing
             cc = ((i2 - 1) * n2 + 1):(i2 * n2)
-            copyto!(L[rr, cc], leq_matrix(P2))
+            copyto!(L[rr, cc], L2)
             i2 = findnext(row1, i2 + 1)
         end
     end
@@ -281,10 +283,8 @@ function product_poset(
     out = (P = P, pi1 = pi1, pi2 = pi2)
 
     if cache_enabled
-        inner = get!(dense_cache, leq_matrix(P1)) do
-            IdDict{Any,Any}()
-        end
-        inner[leq_matrix(P2)] = out
+        cache_key = _SessionProductKey(L1, L2)
+        dense_cache[cache_key] = ProductPosetCacheEntry{Any,Any,Any,Any,Any}(L1, L2, out.P, out.pi1, out.pi2)
     end
 
     return out
@@ -301,11 +301,10 @@ function product_poset(
     obj_cache = _product_obj_cache(session_cache)
     cache_enabled = use_cache && obj_cache !== nothing
     if cache_enabled
-        inner = get!(obj_cache, P1) do
-            IdDict{Any,Any}()
-        end
-        if haskey(inner, P2)
-            return inner[P2]
+        cache_key = _SessionProductKey(P1, P2)
+        entry = get(obj_cache, cache_key, nothing)
+        if entry !== nothing
+            return (P=entry.P, pi1=entry.pi1, pi2=entry.pi2)
         end
     end
 
@@ -328,10 +327,8 @@ function product_poset(
 
     out = (P = P, pi1 = pi1, pi2 = pi2)
     if cache_enabled
-        inner = get!(obj_cache, P1) do
-            IdDict{Any,Any}()
-        end
-        inner[P2] = out
+        cache_key = _SessionProductKey(P1, P2)
+        obj_cache[cache_key] = ProductPosetCacheEntry{Any,Any,Any,Any,Any}(P1, P2, out.P, out.pi1, out.pi2)
     end
 
     return out
@@ -552,11 +549,25 @@ end
 
 # Pullback / restriction of modules along a monotone map
 
+@inline function _pullback_pair_data(pi::EncodingMap, C)
+    edge_keys = Vector{Tuple{Int,Int}}(undef, length(C))
+    pairs = Vector{Tuple{Int,Int}}(undef, length(C))
+    @inbounds for i in eachindex(C)
+        u, v = C[i]
+        iu = pi.pi_of_q[u]
+        iv = pi.pi_of_q[v]
+        edge_keys[i] = (u, v)
+        pairs[i] = (iu, iv)
+    end
+    return edge_keys, _prepare_map_leq_batch_owned(pairs)
+end
+
 # Internal helper: compute pullback module along pi without re-checking monotonicity.
 @inline function _pullback_module_no_check(
     pi::EncodingMap,
     M::PModule{K},
     C,
+    prepared=nothing,
 ) where {K}
     Q = pi.Q
     P = pi.P
@@ -570,22 +581,28 @@ end
     edge_maps_out = Dict{Tuple{Int,Int}, AbstractMatrix{K}}()
     sizehint!(edge_maps_out, length(C))
 
-    edge_keys = Tuple{Int,Int}[]
-    pairs = Tuple{Int,Int}[]
-    sizehint!(edge_keys, length(C))
-    sizehint!(pairs, length(C))
-
-    @inbounds for (u, v) in C
-        iu = pi.pi_of_q[u]
-        iv = pi.pi_of_q[v]
-        push!(edge_keys, (u, v))
-        # If pi is monotone, iu <= iv in P and map_leq is defined.
-        push!(pairs, (iu, iv))
-    end
-
-    maps = map_leq_many(M, pairs)
-    @inbounds for i in eachindex(edge_keys)
-        edge_maps_out[edge_keys[i]] = maps[i]
+    if prepared === nothing
+        edge_keys = Tuple{Int,Int}[]
+        pairs = Tuple{Int,Int}[]
+        sizehint!(edge_keys, length(C))
+        sizehint!(pairs, length(C))
+        @inbounds for (u, v) in C
+            iu = pi.pi_of_q[u]
+            iv = pi.pi_of_q[v]
+            push!(edge_keys, (u, v))
+            # If pi is monotone, iu <= iv in P and map_leq is defined.
+            push!(pairs, (iu, iv))
+        end
+        maps = map_leq_many(M, pairs)
+        @inbounds for i in eachindex(edge_keys)
+            edge_maps_out[edge_keys[i]] = maps[i]
+        end
+    else
+        edge_keys, pair_batch = prepared
+        maps = map_leq_many(M, pair_batch)
+        @inbounds for i in eachindex(edge_keys)
+            edge_maps_out[edge_keys[i]] = maps[i]
+        end
     end
 
     return PModule{K}(Q, dims_out, edge_maps_out; field=M.field)
@@ -608,10 +625,11 @@ function pullback(
 ) where {K}
     check && _check_monotone(pi)
     C = cover_edges(pi.Q)
+    prepared = _pullback_pair_data(pi, C)
 
     # Pull back domain and codomain modules.
-    dom_pb = _pullback_module_no_check(pi, f.dom, C)
-    cod_pb = _pullback_module_no_check(pi, f.cod, C)
+    dom_pb = _pullback_module_no_check(pi, f.dom, C, prepared)
+    cod_pb = _pullback_module_no_check(pi, f.cod, C, prepared)
 
     # Pull back components pointwise along pi: (f_pb)_q = f_{pi(q)}.
     comps_pb = Vector{Matrix{K}}(undef, nvertices(pi.Q))

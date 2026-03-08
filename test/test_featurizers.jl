@@ -37,16 +37,179 @@ end
     opts_enc = PM.EncodingOptions(field=field)
     P, H, pi = PLB.encode_fringe_boxes(Ups, Downs, opts_enc)
 
-    r2 = CM.locate(pi, [0.5, 0.0])
-    r3 = CM.locate(pi, [2.0, 0.0])
+    r2 = EC.locate(pi, [0.5, 0.0])
+    r3 = EC.locate(pi, [2.0, 0.0])
 
-    M23 = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, r2), FF.principal_downset(P, r3); field=field))
-    M3  = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, r3), FF.principal_downset(P, r3); field=field))
+    M23 = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, r2), FF.principal_downset(P, r3), 1; field=field))
+    M3  = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, r3), FF.principal_downset(P, r3), 1; field=field))
 
     enc23 = PM.EncodingResult(P, M23, pi)
     enc3 = PM.EncodingResult(P, M3, pi)
     samples = [enc23, enc3]
     opts_inv = PM.InvariantOptions(box=([-1.0, -1.0], [2.0, 1.0]), strict=false)
+
+    function manual_barcode_window(bar, window)
+        window !== nothing && return (Float64(window[1]), Float64(window[2]))
+        lo = Inf
+        hi = -Inf
+        seen = false
+        for ((b0, d0), mult) in bar
+            mult <= 0 && continue
+            b = Float64(b0)
+            d = Float64(d0)
+            if isfinite(b)
+                lo = min(lo, b)
+                hi = max(hi, b)
+                seen = true
+            end
+            if isfinite(d)
+                lo = min(lo, d)
+                hi = max(hi, d)
+                seen = true
+            end
+        end
+        return seen ? (lo, hi) : nothing
+    end
+
+    function clipped_barcode(bar; window=nothing, infinite_policy=:clip_to_window)
+        work = manual_barcode_window(bar, window)
+        if infinite_policy == :clip_to_window && work === nothing
+            throw(ArgumentError("test oracle needs a finite window for unbounded intervals"))
+        end
+        lo = work === nothing ? 0.0 : work[1]
+        hi = work === nothing ? 0.0 : work[2]
+        out = Dict{Tuple{Float64,Float64},Int}()
+        for ((b0, d0), mult) in bar
+            mult <= 0 && continue
+            b = Float64(b0)
+            d = Float64(d0)
+            if !isfinite(b) || !isfinite(d)
+                infinite_policy == :error && throw(ArgumentError("test oracle hit unbounded interval"))
+                b = isfinite(b) ? b : (b > 0 ? hi : lo)
+                d = isfinite(d) ? d : (d > 0 ? hi : lo)
+            end
+            d > b || continue
+            out[(b, d)] = get(out, (b, d), 0) + mult
+        end
+        return out
+    end
+
+    function manual_topk_vector(bar, k; window=nothing, infinite_policy=:clip_to_window)
+        bc = clipped_barcode(bar; window=window, infinite_policy=infinite_policy)
+        entries = collect(bc)
+        sort!(entries; by=x -> (-(x[1][2] - x[1][1]), x[1][1], x[1][2]))
+        out = zeros(Float64, 1 + 3 * k)
+        out[1] = Float64(sum(values(bc)))
+        idx = 2
+        remaining = k
+        for ((b, d), mult) in entries
+            remaining == 0 && break
+            copies = min(mult, remaining)
+            for _ in 1:copies
+                out[idx] = 1.0
+                out[idx + 1] = b
+                out[idx + 2] = d - b
+                idx += 3
+            end
+            remaining -= copies
+        end
+        return out
+    end
+
+    function manual_topk_vector_packed(pb, k; window=nothing, infinite_policy=:clip_to_window)
+        work = window
+        if work === nothing
+            lo = Inf
+            hi = -Inf
+            seen = false
+            for p in pb.pairs
+                b = Float64(p.b)
+                d = Float64(p.d)
+                if isfinite(b)
+                    lo = min(lo, b)
+                    hi = max(hi, b)
+                    seen = true
+                end
+                if isfinite(d)
+                    lo = min(lo, d)
+                    hi = max(hi, d)
+                    seen = true
+                end
+            end
+            work = seen ? (lo, hi) : nothing
+        end
+        if infinite_policy == :clip_to_window && work === nothing
+            throw(ArgumentError("test oracle needs a finite window for unbounded packed intervals"))
+        end
+        lo = work === nothing ? 0.0 : work[1]
+        hi = work === nothing ? 0.0 : work[2]
+        entries = Tuple{Float64,Float64,Float64,Int}[]
+        count = 0
+        for idx in eachindex(pb.pairs)
+            mult = pb.mults[idx]
+            mult <= 0 && continue
+            p = pb.pairs[idx]
+            b = Float64(p.b)
+            d = Float64(p.d)
+            if !isfinite(b) || !isfinite(d)
+                infinite_policy == :error && throw(ArgumentError("test oracle hit unbounded packed interval"))
+                b = isfinite(b) ? b : (b > 0 ? hi : lo)
+                d = isfinite(d) ? d : (d > 0 ? hi : lo)
+            end
+            d > b || continue
+            push!(entries, (d - b, b, d, mult))
+            count += mult
+        end
+        sort!(entries; by=x -> (-x[1], x[2], x[3]))
+        out = zeros(Float64, 1 + 3 * k)
+        out[1] = Float64(count)
+        idx = 2
+        remaining = k
+        for (pers, birth, _, mult) in entries
+            remaining == 0 && break
+            copies = min(mult, remaining)
+            for _ in 1:copies
+                out[idx] = 1.0
+                out[idx + 1] = birth
+                out[idx + 2] = pers
+                idx += 3
+            end
+            remaining -= copies
+        end
+        return out
+    end
+
+    function manual_summary_vector(bar, fields; window=nothing, infinite_policy=:clip_to_window, normalize_entropy=true)
+        bc = clipped_barcode(bar; window=window, infinite_policy=infinite_policy)
+        nt = Inv.barcode_summary(bc; normalize_entropy=normalize_entropy)
+        lookup = Dict(
+            :count => Float64(nt.n_intervals),
+            :sum_persistence => Float64(nt.total_persistence),
+            :mean_persistence => Float64(nt.mean_persistence),
+            :max_persistence => Float64(nt.max_persistence),
+            :entropy => Float64(nt.entropy),
+        )
+        return Float64[lookup[f] for f in fields]
+    end
+
+    function aggregate_barcode_oracle(barcodes, weights, builder, aggregate)
+        nd, no = size(barcodes)
+        feats = [builder(barcodes[i, j]) for i in 1:nd, j in 1:no]
+        if aggregate == :stack
+            out = Float64[]
+            for i in 1:nd, j in 1:no
+                append!(out, feats[i, j])
+            end
+            return out
+        end
+        out = zeros(Float64, length(feats[1, 1]))
+        sumw = sum(weights)
+        for i in 1:nd, j in 1:no
+            out .+= weights[i, j] .* feats[i, j]
+        end
+        aggregate == :mean && (out ./= sumw)
+        return out
+    end
 
     lspec = PM.LandscapeSpec(
         directions=[[1.0, 1.0]],
@@ -79,6 +242,52 @@ end
     @test piax.x == pispec.xgrid
     @test piax.y == pispec.ygrid
 
+    mlspec = PM.MPLandscapeSpec(
+        directions=[[1.0, 1.0]],
+        offsets=[[0.0, 0.0]],
+        tgrid=collect(0.0:0.5:3.0),
+        kmax=2,
+        strict=false,
+        direction_weight=:uniform,
+    )
+    mlv = PM.transform(mlspec, enc23; opts=opts_inv, threaded=false)
+    @test length(mlv) == PM.nfeatures(mlspec)
+    mlax = PM.feature_axes(mlspec)
+    @test mlax.k == collect(1:mlspec.kmax)
+    @test mlax.t == mlspec.tgrid
+    mlopts = OPT.InvariantOptions(
+        axes=opts_inv.axes,
+        axes_policy=opts_inv.axes_policy,
+        max_axis_len=opts_inv.max_axis_len,
+        box=opts_inv.box,
+        threads=opts_inv.threads,
+        strict=opts_inv.strict,
+        pl_mode=opts_inv.pl_mode,
+    )
+    mlplan = Inv.compile_slices(
+        enc23.pi,
+        mlopts;
+        directions=mlspec.directions,
+        offsets=mlspec.offsets,
+        offset_weights=mlspec.offset_weights,
+        normalize_weights=mlspec.normalize_weights,
+        tmin=mlspec.tmin,
+        tmax=mlspec.tmax,
+        nsteps=mlspec.nsteps,
+        drop_unknown=mlspec.drop_unknown,
+        dedup=mlspec.dedup,
+        normalize_dirs=mlspec.normalize_dirs,
+        direction_weight=mlspec.direction_weight,
+        threads=false,
+    )
+    mlobj = Inv.mp_landscape(M23, mlplan; kmax=mlspec.kmax, tgrid=mlspec.tgrid, normalize_weights=mlspec.normalize_weights, threads=false)
+    ml_expected = Float64[mlobj.values[i, j, k, t]
+                          for t in 1:size(mlobj.values, 4)
+                          for k in 1:size(mlobj.values, 3)
+                          for j in 1:size(mlobj.values, 2)
+                          for i in 1:size(mlobj.values, 1)]
+    @test isapprox(mlv, ml_expected; atol=1e-12, rtol=0.0)
+
     espec = PM.EulerSurfaceSpec(
         axes=([-1.0, 0.0, 1.0, 2.0], [-1.0, 0.0, 1.0]),
         axes_policy=:as_given,
@@ -98,6 +307,14 @@ end
     @test length(rax.a) == PM.nvertices(P)
     @test length(rax.b) == PM.nvertices(P)
 
+    rhspec = PM.RestrictedHilbertSpec(nvertices=PM.nvertices(P))
+    @test FEA.supports(rhspec, enc23)
+    rhv = PM.transform(rhspec, enc23; opts=opts_inv, threaded=false)
+    @test length(rhv) == PM.nfeatures(rhspec)
+    @test rhv == Float64.(Inv.restricted_hilbert(M23))
+    rhax = PM.feature_axes(rhspec)
+    @test rhax.vertex == collect(1:PM.nvertices(P))
+
     sspec = PM.SlicedBarcodeSpec(
         directions=[[1.0, 1.0]],
         offsets=[[0.0, 0.0]],
@@ -109,6 +326,201 @@ end
     sax = PM.feature_axes(sspec)
     @test sax.aggregate == sspec.aggregate
     @test sax.stat == Symbol.(sspec.summary_fields)
+
+    topkspec = PM.BarcodeTopKSpec(
+        directions=[[1.0, 1.0], [1.0, 0.0]],
+        offsets=[[0.0, 0.0], [0.5, 0.0]],
+        k=2,
+        aggregate=:stack,
+        source=:slice,
+        strict=false,
+    )
+    @test FEA.supports(topkspec, enc23)
+    topkv = PM.transform(topkspec, enc23; opts=opts_inv, threaded=false)
+    topk_data = Inv.slice_barcodes(
+        M23,
+        enc23.pi;
+        opts=opts_inv,
+        directions=topkspec.directions,
+        offsets=topkspec.offsets,
+        normalize_dirs=topkspec.normalize_dirs,
+        direction_weight=topkspec.direction_weight,
+        offset_weights=topkspec.offset_weights,
+        normalize_weights=topkspec.normalize_weights,
+        drop_unknown=topkspec.drop_unknown,
+        tmin=topkspec.tmin,
+        tmax=topkspec.tmax,
+        nsteps=topkspec.nsteps,
+        packed=false,
+        threads=false,
+    )
+    topk_expected = aggregate_barcode_oracle(
+        topk_data.barcodes,
+        topk_data.weights,
+        bc -> manual_topk_vector(bc, topkspec.k; window=topkspec.window, infinite_policy=topkspec.infinite_policy),
+        topkspec.aggregate,
+    )
+    @test topkv == topk_expected
+    @test length(topkv) == PM.nfeatures(topkspec)
+    @test PM.feature_axes(topkspec).source == :slice
+
+    topkspec_fibered = PM.BarcodeTopKSpec(
+        directions=topkspec.directions,
+        offsets=topkspec.offsets,
+        k=topkspec.k,
+        aggregate=:stack,
+        source=:fibered,
+        window=(-0.5, 2.0),
+        strict=false,
+    )
+    @test FEA.supports(topkspec_fibered, enc23)
+    topkv_fibered = PM.transform(topkspec_fibered, enc23; opts=opts_inv, threaded=false)
+    fcache = Inv.fibered_barcode_cache_2d(
+        M23,
+        enc23.pi,
+        opts_inv;
+        include_axes=true,
+        normalize_dirs=topkspec_fibered.normalize_dirs,
+        threads=false,
+    )
+    topk_fibered_data = Inv.slice_barcodes(
+        fcache;
+        dirs=topkspec_fibered.directions,
+        offsets=topkspec_fibered.offsets,
+        values=:t,
+        packed=true,
+        direction_weight=topkspec_fibered.direction_weight,
+        offset_weights=topkspec_fibered.offset_weights,
+        normalize_weights=topkspec_fibered.normalize_weights,
+        threads=false,
+    )
+    topk_expected_fibered = aggregate_barcode_oracle(
+        topk_fibered_data.barcodes,
+        topk_fibered_data.weights,
+        bc -> manual_topk_vector_packed(bc, topkspec_fibered.k; window=topkspec_fibered.window, infinite_policy=topkspec_fibered.infinite_policy),
+        topkspec_fibered.aggregate,
+    )
+    @test topkv_fibered == topk_expected_fibered
+
+    bsumspec = PM.BarcodeSummarySpec(
+        directions=topkspec.directions,
+        offsets=topkspec.offsets,
+        aggregate=:mean,
+        source=:slice,
+        strict=false,
+    )
+    @test FEA.supports(bsumspec, enc23)
+    bsumv = PM.transform(bsumspec, enc23; opts=opts_inv, threaded=false)
+    bsum_expected = aggregate_barcode_oracle(
+        topk_data.barcodes,
+        topk_data.weights,
+        bc -> manual_summary_vector(
+            bc,
+            bsumspec.fields;
+            window=bsumspec.window,
+            infinite_policy=bsumspec.infinite_policy,
+            normalize_entropy=bsumspec.normalize_entropy,
+        ),
+        bsumspec.aggregate,
+    )
+    @test isapprox(bsumv, bsum_expected; atol=1e-12, rtol=0.0)
+    @test PM.feature_axes(bsumspec).field == collect(bsumspec.fields)
+
+    pmspec = PM.PointSignedMeasureSpec(ndims=2, k=2, coords=:values)
+    pm_direct = Inv.PointSignedMeasure(
+        (Float64[0.0, 1.0], Float64[10.0, 20.0]),
+        [(2, 1), (1, 2), (2, 2)],
+        [3.0, -5.0, 1.0],
+    )
+    @test FEA.supports(pmspec, pm_direct)
+    pmv = PM.transform(pmspec, pm_direct; threaded=false)
+    @test pmv == [3.0, 1.0, -5.0, 0.0, 20.0, 1.0, 3.0, 1.0, 10.0]
+    pmcache = PM.build_cache(pm_direct, pmspec; threaded=false)
+    @test PM.cache_stats(pmcache).kind == :point_measure
+    @test PM.transform(pmspec, pmcache; threaded=false) == pmv
+
+    eulerspec = PM.EulerSignedMeasureSpec(ndims=2, k=4, coords=:values, strict=false)
+    @test FEA.supports(eulerspec, enc23)
+    eulerv = PM.transform(eulerspec, enc23; opts=opts_inv, threaded=false)
+    eopts = OPT.InvariantOptions(
+        axes=eulerspec.axes === nothing ? opts_inv.axes : eulerspec.axes,
+        axes_policy=eulerspec.axes_policy,
+        max_axis_len=eulerspec.max_axis_len,
+        box=opts_inv.box,
+        threads=false,
+        strict=eulerspec.strict === nothing ? opts_inv.strict : eulerspec.strict,
+        pl_mode=opts_inv.pl_mode,
+    )
+    epm = Inv.euler_signed_measure(M23, enc23.pi, eopts;
+                                   drop_zeros=eulerspec.drop_zeros,
+                                   max_terms=eulerspec.max_terms > 0 ? max(eulerspec.max_terms, eulerspec.k) : 0,
+                                   min_abs_weight=eulerspec.min_abs_weight)
+    euler_expected = FEA._point_measure_topk_vector(epm, eulerspec.ndims, eulerspec.k, eulerspec.coords)
+    @test eulerv == euler_expected
+    @test length(eulerv) == PM.nfeatures(eulerspec)
+
+    mpphistspec = PM.MPPDecompositionHistogramSpec(
+        orientation_bins=4,
+        scale_bins=3,
+        scale_range=(0.0, 1.0),
+        weight=:mass,
+        normalize=:l1,
+        N=8,
+        q=1.0,
+    )
+    @test FEA.supports(mpphistspec, enc23)
+    mpphistv = PM.transform(mpphistspec, enc23; opts=opts_inv, threaded=false)
+    @test length(mpphistv) == PM.nfeatures(mpphistspec)
+    @test isapprox(sum(mpphistv[1:(mpphistspec.orientation_bins * mpphistspec.scale_bins)]), 1.0; atol=1e-12, rtol=0.0)
+    @test all(isfinite, mpphistv)
+
+    synthetic_decomp = Inv.MPPDecomposition(
+        Inv.MPPLineSpec[],
+        [
+            [([0.0, 0.0], [1.0, 0.0], 1.0), ([0.0, 0.0], [0.0, 1.0], 1.0)],
+            [([0.0, 0.0], [1.0, 1.0], 1.0)],
+        ],
+        [2.0, 1.0],
+        ([0.0, 0.0], [1.0, 1.0]),
+    )
+    synthetic_hist = PM.MPPDecompositionHistogramSpec(
+        orientation_bins=4,
+        scale_bins=3,
+        scale_range=(0.0, 1.0),
+        weight=:mass,
+        normalize=:l1,
+    )
+    synthetic_hist_v = FEA._mpp_histogram_vector_from_decomp(synthetic_hist, synthetic_decomp)
+    @test synthetic_hist_v[1:8] == zeros(8)
+    @test isapprox(synthetic_hist_v[9:12], [1/3, 1/3, 1/3, 0.0]; atol=1e-12, rtol=0.0)
+    @test isapprox(synthetic_hist_v[13], 3.0; atol=1e-12, rtol=0.0)
+    @test synthetic_hist_v[14] == 2.0
+    @test synthetic_hist_v[15] == 3.0
+    @test isapprox(synthetic_hist_v[16], 1.0; atol=1e-12, rtol=0.0)
+    @test isapprox(synthetic_hist_v[17], 0.9182958340544894; atol=1e-12, rtol=0.0)
+
+    mpphistspec2 = PM.MPPDecompositionHistogramSpec(
+        orientation_bins=6,
+        scale_bins=2,
+        scale_range=(0.0, 1.0),
+        weight=:count,
+        normalize=:none,
+        N=mpphistspec.N,
+        q=mpphistspec.q,
+    )
+    mpphist_pair = PM.CompositeSpec((mpphistspec, mpphistspec2), namespacing=true)
+    mpphist_cache = PM.build_cache(enc23, mpphist_pair; opts=opts_inv, threaded=false, level=:fibered)
+    mpphist_pair_v = PM.transform(mpphist_pair, mpphist_cache; opts=opts_inv, threaded=false)
+    @test isapprox(
+        mpphist_pair_v,
+        vcat(
+            PM.transform(mpphistspec, enc23; opts=opts_inv, threaded=false),
+            PM.transform(mpphistspec2, enc23; opts=opts_inv, threaded=false),
+        );
+        atol=1e-12,
+        rtol=0.0,
+    )
+    @test PM.cache_stats(mpphist_cache).n_mpp_decompositions == 1
 
     sbispec = PM.SignedBarcodeImageSpec(
         xs=collect(0.0:0.5:2.0),
@@ -139,6 +551,140 @@ end
     dax = PM.feature_axes(dspec)
     @test dax.reference == dspec.reference_names
     @test dax.dist == dspec.dist
+
+    mppspec = PM.MPPImageSpec(
+        resolution=6,
+        sigma=0.15,
+        N=8,
+        q=1.0,
+        segment_prune=true,
+    )
+    @test FEA.supports(mppspec, enc23)
+    mppv = PM.transform(mppspec, enc23; opts=opts_inv, threaded=false)
+    @test length(mppv) == PM.nfeatures(mppspec)
+    mppax = PM.feature_axes(mppspec)
+    @test length(mppax.x) == mppspec.resolution
+    @test length(mppax.y) == mppspec.resolution
+    mppobj = PM.mpp_image(
+        enc23;
+        opts=opts_inv,
+        resolution=mppspec.resolution,
+        sigma=mppspec.sigma,
+        N=mppspec.N,
+        delta=mppspec.delta,
+        q=mppspec.q,
+        tie_break=mppspec.tie_break,
+        cutoff_radius=mppspec.cutoff_radius,
+        cutoff_tol=mppspec.cutoff_tol,
+        segment_prune=mppspec.segment_prune,
+        threads=false,
+    )
+    mpp_expected = Float64[mppobj.img[iy, ix]
+                           for ix in 1:length(mppobj.xgrid)
+                           for iy in 1:length(mppobj.ygrid)]
+    @test isapprox(mppv, mpp_expected; atol=1e-12, rtol=0.0)
+
+    mlspec2 = PM.MPLandscapeSpec(
+        directions=[[1.0, 1.0]],
+        offsets=[[0.0, 0.0]],
+        tgrid=collect(0.0:0.5:3.0),
+        kmax=1,
+        strict=false,
+        direction_weight=:uniform,
+    )
+    mlv2 = PM.transform(mlspec2, enc23; opts=opts_inv, threaded=false)
+    mlpair = PM.CompositeSpec((mlspec, mlspec2), namespacing=true)
+    mlpair_cache = PM.build_cache(enc23, mlpair; opts=opts_inv, threaded=false)
+    mlpair_v = PM.transform(mlpair, mlpair_cache; opts=opts_inv, threaded=false)
+    @test isapprox(mlpair_v, vcat(mlv, mlv2); atol=1e-12, rtol=0.0)
+    @test PM.cache_stats(mlpair_cache).n_slice_plans == 1
+
+    mppspec2 = PM.MPPImageSpec(
+        resolution=5,
+        sigma=0.2,
+        N=mppspec.N,
+        q=mppspec.q,
+        tie_break=mppspec.tie_break,
+        segment_prune=false,
+    )
+    mppv2 = PM.transform(mppspec2, enc23; opts=opts_inv, threaded=false)
+    mpppair = PM.CompositeSpec((mppspec, mppspec2), namespacing=true)
+    mpppair_cache = PM.build_cache(enc23, mpppair; opts=opts_inv, threaded=false, level=:fibered)
+    mpppair_v = PM.transform(mpppair, mpppair_cache; opts=opts_inv, threaded=false)
+    @test isapprox(mpppair_v, vcat(mppv, mppv2); atol=1e-12, rtol=0.0)
+    @test PM.cache_stats(mpppair_cache).n_mpp_decompositions == 1
+
+    bettispec = PM.BettiTableSpec(nvertices=PM.nvertices(P), pad_to=2, resolution_maxlen=2)
+    @test FEA.supports(bettispec, enc23)
+    betti_v = PM.transform(bettispec, enc23; threaded=false)
+    @test length(betti_v) == PM.nfeatures(bettispec)
+    betti_res = PM.resolve(enc23; kind=:projective, opts=OPT.ResolutionOptions(maxlen=2), cache=:auto)
+    betti_tbl = DF.betti_table(betti_res.res; pad_to=bettispec.pad_to)
+    betti_expected = Float64[betti_tbl[a + 1, p] for a in 0:bettispec.pad_to for p in 1:bettispec.nvertices]
+    @test betti_v == betti_expected
+    @test PM.transform(bettispec, betti_res; threaded=false) == betti_expected
+
+    bassspec = PM.BassTableSpec(nvertices=PM.nvertices(P), pad_to=2, resolution_maxlen=2)
+    @test FEA.supports(bassspec, enc23)
+    bass_v = PM.transform(bassspec, enc23; threaded=false)
+    @test length(bass_v) == PM.nfeatures(bassspec)
+    bass_res = PM.resolve(enc23; kind=:injective, opts=OPT.ResolutionOptions(maxlen=2), cache=:auto)
+    bass_tbl = DF.bass_table(bass_res.res; pad_to=bassspec.pad_to)
+    bass_expected = Float64[bass_tbl[b + 1, p] for b in 0:bassspec.pad_to for p in 1:bassspec.nvertices]
+    @test bass_v == bass_expected
+    @test PM.transform(bassspec, bass_res; threaded=false) == bass_expected
+    @test_throws ArgumentError PM.transform(bettispec, bass_res; threaded=false)
+    @test_throws ArgumentError PM.transform(bassspec, betti_res; threaded=false)
+
+    betti_support_spec = PM.BettiSupportMeasuresSpec(pad_to=2, resolution_maxlen=2)
+    @test FEA.supports(betti_support_spec, enc23)
+    betti_support_v = PM.transform(betti_support_spec, enc23; opts=opts_inv, threaded=false)
+    betti_support_nt = Inv.betti_support_measures(betti_tbl, enc23.pi, opts_inv)
+    betti_support_expected = Float64[
+        betti_support_nt.support_by_degree[a + 1] for a in 0:betti_support_spec.pad_to
+    ]
+    append!(betti_support_expected, Float64[
+        betti_support_nt.mass_by_degree[a + 1] for a in 0:betti_support_spec.pad_to
+    ])
+    append!(betti_support_expected, Float64[
+        betti_support_nt.support_union,
+        betti_support_nt.support_total,
+        betti_support_nt.mass_total,
+    ])
+    @test betti_support_v == betti_support_expected
+    @test PM.transform(betti_support_spec, betti_res; opts=opts_inv, threaded=false) == betti_support_expected
+
+    bass_support_spec = PM.BassSupportMeasuresSpec(pad_to=2, resolution_maxlen=2)
+    @test FEA.supports(bass_support_spec, enc23)
+    bass_support_v = PM.transform(bass_support_spec, enc23; opts=opts_inv, threaded=false)
+    bass_support_nt = Inv.bass_support_measures(bass_tbl, enc23.pi, opts_inv)
+    bass_support_expected = Float64[
+        bass_support_nt.support_by_degree[b + 1] for b in 0:bass_support_spec.pad_to
+    ]
+    append!(bass_support_expected, Float64[
+        bass_support_nt.mass_by_degree[b + 1] for b in 0:bass_support_spec.pad_to
+    ])
+    append!(bass_support_expected, Float64[
+        bass_support_nt.support_union,
+        bass_support_nt.support_total,
+        bass_support_nt.mass_total,
+    ])
+    @test bass_support_v == bass_support_expected
+    @test PM.transform(bass_support_spec, bass_res; opts=opts_inv, threaded=false) == bass_support_expected
+    @test_throws ArgumentError PM.transform(betti_support_spec, bass_res; opts=opts_inv, threaded=false)
+    @test_throws ArgumentError PM.transform(bass_support_spec, betti_res; opts=opts_inv, threaded=false)
+
+    betti_pair = PM.CompositeSpec((bettispec, bettispec), namespacing=true)
+    @test FEA.supports(betti_pair, betti_res)
+    @test PM.transform(betti_pair, betti_res; threaded=false) == vcat(betti_expected, betti_expected)
+    @test !FEA.supports(PM.CompositeSpec((bettispec, bassspec), namespacing=true), enc23)
+
+    proj_pair = PM.CompositeSpec((bettispec, betti_support_spec), namespacing=true)
+    @test FEA.supports(proj_pair, enc23)
+    proj_pair_cache = PM.build_cache(enc23, proj_pair; opts=opts_inv, threaded=false)
+    @test proj_pair_cache isa FEA.ResolutionMeasureInvariantCache
+    @test PM.transform(proj_pair, proj_pair_cache; opts=opts_inv, threaded=false) ==
+          vcat(betti_expected, betti_support_expected)
 
     cspec = PM.CompositeSpec((lspec, pispec), namespacing=true)
     cv = PM.transform(cspec, enc23; opts=opts_inv, threaded=false)
@@ -192,9 +738,33 @@ end
     lv_cached = PM.transform(lspec, lcache; threaded=false)
     @test isapprox(lv_cached, lv; atol=1e-12, rtol=0.0)
 
+    rhcache = PM.build_cache(enc23, rhspec; opts=opts_inv, threaded=false)
+    @test rhcache isa FEA.RestrictedHilbertInvariantCache
+    @test PM.transform(rhspec, rhcache; threaded=false) == rhv
+
     dcache = PM.build_cache(enc23, dspec; opts=opts_inv, threaded=false)
     dv_cached = PM.transform(dspec, dcache; threaded=false)
     @test isapprox(dv_cached, dv; atol=1e-12, rtol=0.0)
+
+    mlcache = PM.build_cache(enc23, mlspec; opts=opts_inv, threaded=false)
+    mlv_cached = PM.transform(mlspec, mlcache; threaded=false)
+    @test isapprox(mlv_cached, mlv; atol=1e-12, rtol=0.0)
+
+    mppcache = PM.build_cache(enc23, mppspec; opts=opts_inv, threaded=false, level=:fibered)
+    @test PM.cache_stats(mppcache).n_fibered >= 1
+    mppv_cached = PM.transform(mppspec, mppcache; threaded=false)
+    @test isapprox(mppv_cached, mppv; atol=1e-12, rtol=0.0)
+    @test PM.cache_stats(mppcache).n_mpp_decompositions == 1
+
+    betti_cache = PM.build_cache(enc23, bettispec; threaded=false)
+    @test PM.cache_stats(betti_cache).kind == :resolution
+    @test PM.cache_stats(betti_cache).resolution_kind == :projective
+    @test PM.transform(bettispec, betti_cache; threaded=false) == betti_expected
+
+    bass_cache = PM.build_cache(enc23, bassspec; threaded=false)
+    @test PM.cache_stats(bass_cache).kind == :resolution
+    @test PM.cache_stats(bass_cache).resolution_kind == :injective
+    @test PM.transform(bassspec, bass_cache; threaded=false) == bass_expected
 
     mcache = PM.build_cache(M23; opts=opts_inv, threaded=false)
     @test mcache isa FEA.ModuleInvariantCache
@@ -236,6 +806,31 @@ end
     @test PM.cache_stats(sbcache).has_rank_query
     sbvals = PM.transform(sbispec_zn, sbcache; opts=opts_zn, threaded=false)
     @test length(sbvals) == PM.nfeatures(sbispec_zn)
+
+    rectspec = PM.RectangleSignedBarcodeTopKSpec(ndims=2, k=2, coords=:indices, strict=false)
+    @test FEA.supports(rectspec, enc_zn)
+    rectv = PM.transform(rectspec, enc_zn; opts=opts_zn, threaded=false)
+    sb_zn = Inv.rectangle_signed_barcode(enc_zn.M, enc_zn.pi, opts_zn; threads=false)
+    rect_expected = FEA._rect_signed_barcode_topk_vector(sb_zn, rectspec.ndims, rectspec.k, rectspec.coords)
+    @test rectv == rect_expected
+    rectcache = PM.build_cache(enc_zn, rectspec; opts=opts_zn, threaded=false, level=:all)
+    @test PM.cache_stats(rectcache).has_rank_query
+    @test PM.transform(rectspec, rectcache; opts=opts_zn, threaded=false) == rect_expected
+
+    sb_direct = Inv.RectSignedBarcode(
+        (Int[0, 1, 2], Int[0, 1, 2]),
+        [Inv.Rect{2}((1, 1), (2, 2)), Inv.Rect{2}((2, 1), (2, 2))],
+        Int[3, -1],
+    )
+    rectspec_direct = PM.RectangleSignedBarcodeTopKSpec(ndims=2, k=2, coords=:values)
+    @test PM.transform(rectspec_direct, sb_direct; threaded=false) ==
+          [2.0, 1.0, 3.0, 0.0, 0.0, 1.0, 1.0, 1.0, -1.0, 1.0, 0.0, 1.0, 1.0]
+
+    mdspec = PM.MatchingDistanceBankSpec([enc3]; reference_names=[:M3], method=:approx, n_dirs=8, n_offsets=4)
+    @test FEA.supports(mdspec, enc23)
+    mdv = PM.transform(mdspec, enc23; opts=opts_inv, threaded=false)
+    @test length(mdv) == PM.nfeatures(mdspec)
+    @test isapprox(mdv[1], PM.matching_distance(enc23, enc3; method=:approx, opts=opts_inv, n_dirs=8, n_offsets=4); atol=1e-12, rtol=0.0)
 
     bserial = PM.BatchOptions(threaded=false, backend=:serial, deterministic=true)
     fs = PM.featurize(samples, lspec;
@@ -386,6 +981,81 @@ end
     @test isapprox(dv3, dv; atol=1e-12, rtol=0.0)
     @test_throws ArgumentError FEA.load_spec_with_resolver(mdd["spec"], _ -> nothing; require_all=true)
 
+    mdm = FEA.feature_metadata(PM.FeatureSet(zeros(Float64, 1, PM.nfeatures(mdspec)),
+                                            PM.feature_names(mdspec),
+                                            ["sample"],
+                                            (spec=mdspec, opts=opts_inv)); format=:wide)
+    mdspec2 = FEA.load_spec_with_resolver(mdm["spec"], resolve_ref)
+    @test mdspec2 isa PM.MatchingDistanceBankSpec
+    @test mdspec2.references[1] === enc3
+    @test mdspec2.reference_names == mdspec.reference_names
+
+    pmm = FEA.feature_metadata(PM.FeatureSet(zeros(Float64, 1, PM.nfeatures(pmspec)),
+                                            PM.feature_names(pmspec),
+                                            ["sample"],
+                                            (spec=pmspec, opts=opts_inv)); format=:wide)
+    pmspec2 = FEA.spec_from_metadata(pmm["spec"])
+    @test pmspec2 isa PM.PointSignedMeasureSpec
+    @test PM.feature_names(pmspec2) == PM.feature_names(pmspec)
+
+    em = FEA.feature_metadata(PM.FeatureSet(zeros(Float64, 1, PM.nfeatures(eulerspec)),
+                                           PM.feature_names(eulerspec),
+                                           ["sample"],
+                                           (spec=eulerspec, opts=opts_inv)); format=:wide)
+    eulerspec2 = FEA.spec_from_metadata(em["spec"])
+    @test eulerspec2 isa PM.EulerSignedMeasureSpec
+    @test PM.feature_names(eulerspec2) == PM.feature_names(eulerspec)
+
+    rm = FEA.feature_metadata(PM.FeatureSet(zeros(Float64, 1, PM.nfeatures(rectspec)),
+                                           PM.feature_names(rectspec),
+                                           ["sample"],
+                                           (spec=rectspec, opts=opts_zn)); format=:wide)
+    rectspec2 = FEA.spec_from_metadata(rm["spec"])
+    @test rectspec2 isa PM.RectangleSignedBarcodeTopKSpec
+    @test PM.feature_names(rectspec2) == PM.feature_names(rectspec)
+
+    extended_spec = PM.CompositeSpec((
+        rhspec,
+        topkspec,
+        bsumspec,
+        pmspec,
+        eulerspec,
+        rectspec,
+        mdspec,
+        mlspec,
+        mppspec,
+        mpphistspec,
+        bettispec,
+        bassspec,
+        betti_support_spec,
+        bass_support_spec,
+    ), namespacing=true)
+    mdx = FEA.feature_metadata(
+        PM.FeatureSet(zeros(Float64, 1, PM.nfeatures(extended_spec)),
+                      PM.feature_names(extended_spec),
+                      ["sample"],
+                      (spec=extended_spec, opts=opts_inv));
+        format=:wide,
+    )
+    extended_spec2 = FEA.spec_from_metadata(mdx["spec"])
+    @test extended_spec2 isa PM.CompositeSpec
+    @test length(extended_spec2.specs) == 14
+    @test extended_spec2.specs[1] isa PM.RestrictedHilbertSpec
+    @test extended_spec2.specs[2] isa PM.BarcodeTopKSpec
+    @test extended_spec2.specs[3] isa PM.BarcodeSummarySpec
+    @test extended_spec2.specs[4] isa PM.PointSignedMeasureSpec
+    @test extended_spec2.specs[5] isa PM.EulerSignedMeasureSpec
+    @test extended_spec2.specs[6] isa PM.RectangleSignedBarcodeTopKSpec
+    @test extended_spec2.specs[7] isa PM.MatchingDistanceBankSpec
+    @test extended_spec2.specs[8] isa PM.MPLandscapeSpec
+    @test extended_spec2.specs[9] isa PM.MPPImageSpec
+    @test extended_spec2.specs[10] isa PM.MPPDecompositionHistogramSpec
+    @test extended_spec2.specs[11] isa PM.BettiTableSpec
+    @test extended_spec2.specs[12] isa PM.BassTableSpec
+    @test extended_spec2.specs[13] isa PM.BettiSupportMeasuresSpec
+    @test extended_spec2.specs[14] isa PM.BassSupportMeasuresSpec
+    @test PM.feature_names(extended_spec2) == PM.feature_names(extended_spec)
+
     proj_meta_path = joinpath(tmpd, "projected_features.meta.json")
     FEA.save_metadata_json(proj_meta_path, mdd)
     proj_typed = FEA.load_metadata_json(proj_meta_path;
@@ -487,7 +1157,8 @@ end
         @test_throws ArgumentError PM.load_features(parq_path; format=:parquet, layout=:features_by_samples)
     end
 
-    # NPZ / CSV IO dispatch points are extension-backed and currently optional.
+    # NPZ is extension-backed; CSV save has a built-in fallback, while CSV load
+    # still requires the CSV extension.
     npz_path = joinpath(tmpd, "features.npz")
     csv_path = joinpath(tmpd, "features.csv")
     if Base.find_package("NPZ") === nothing
@@ -528,9 +1199,13 @@ end
         @test all(fs_npz3.X .== fs.X)
     end
     if Base.find_package("CSV") === nothing
-        @test_throws ArgumentError PM.save_features_csv(csv_path, fs)
+        PM.save_features_csv(csv_path, fs)
+        @test isfile(csv_path)
+        @test isfile(FEA.default_feature_metadata_path(csv_path))
         @test_throws ArgumentError PM.load_features_csv(csv_path)
-        @test_throws ArgumentError PM.save_features(csv_path, fs; format=:csv)
+        PM.save_features(csv_path, fs; format=:csv)
+        @test isfile(csv_path)
+        @test isfile(FEA.default_feature_metadata_path(csv_path))
         @test_throws ArgumentError PM.load_features(csv_path; format=:csv)
     else
         @eval using CSV

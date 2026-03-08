@@ -2,21 +2,22 @@ using Test
 using SparseArrays
 using LinearAlgebra
 using Random
+using JSON3
 
 # Included from test/runtests.jl.
 # Uses shared aliases defined there (PM, FF, EN, IR, DF, MD, QQ, ...).
 
 # A minimal ambient encoding map for workflow coarsen tests.
-struct DummyEncodingMap <: CM.AbstractPLikeEncodingMap
+struct DummyEncodingMap <: EC.AbstractPLikeEncodingMap
     n::Int
 end
-CM.locate(pi::DummyEncodingMap, x::NTuple{1,Int}) =
+EC.locate(pi::DummyEncodingMap, x::NTuple{1,Int}) =
     (1 <= x[1] <= pi.n ? x[1] : 0)
-CM.locate(pi::DummyEncodingMap, x::AbstractVector{<:Integer}) =
+EC.locate(pi::DummyEncodingMap, x::AbstractVector{<:Integer}) =
     (length(x) >= 1 && 1 <= x[1] <= pi.n ? Int(x[1]) : 0)
-CM.dimension(::DummyEncodingMap) = 1
-CM.axes_from_encoding(pi::DummyEncodingMap) = (collect(1:pi.n),)
-CM.representatives(pi::DummyEncodingMap) = [(i,) for i in 1:pi.n]
+EC.dimension(::DummyEncodingMap) = 1
+EC.axes_from_encoding(pi::DummyEncodingMap) = (collect(1:pi.n),)
+EC.representatives(pi::DummyEncodingMap) = [(i,) for i in 1:pi.n]
 
 with_fields(FIELDS_FULL) do field
 K = CM.coeff_type(field)
@@ -147,14 +148,14 @@ end
     pi0 = DummyEncodingMap(FF.nvertices(P))
 
     # Construct an EncodingResult manually.
-    enc = CM.EncodingResult(P, IR.pmodule_from_fringe(H), pi0;
+    enc = RES.EncodingResult(P, IR.pmodule_from_fringe(H), pi0;
         H = H,
         backend = :dummy,
         meta = Dict{Symbol,Any}(),
     )
 
     enc2 = PM.coarsen(enc)
-    enc_no_h = CM.EncodingResult(P, IR.pmodule_from_fringe(H), pi0;
+    enc_no_h = RES.EncodingResult(P, IR.pmodule_from_fringe(H), pi0;
         H = nothing,
         backend = :dummy,
         meta = Dict{Symbol,Any}(),
@@ -169,14 +170,14 @@ end
 
     # Classifier should be postcomposition: (q,) <-> pi(q).
     for q in 1:FF.nvertices(P)
-        @test CM.locate(enc2.pi, (q,)) == pi.pi_of_q[q]
+        @test EC.locate(enc2.pi, (q,)) == pi.pi_of_q[q]
     end
 
     # Representatives are forwarded to the coarse regions (and cached).
-    reps2 = CM.representatives(enc2.pi)
+    reps2 = EC.representatives(enc2.pi)
     @test length(reps2) == FF.nvertices(enc2.P)
     for p in 1:FF.nvertices(enc2.P)
-        @test CM.locate(enc2.pi, reps2[p]) == p
+        @test EC.locate(enc2.pi, reps2[p]) == p
     end
 
     # Fringe module was pushed forward along the coarsening map.
@@ -234,6 +235,96 @@ end
         end
     end
 
+    # PL fringe round-trip
+    Aup = reshape(QQ[-1], 1, 1)
+    bup = QQ[0]
+    hup = PLP.HPoly(1, Aup, bup, nothing, falses(1), PLP.STRICT_EPS_QQ)
+    Upl = PLP.PLUpset(PLP.PolyUnion(1, [hup]))
+
+    Adown = reshape(QQ[1], 1, 1)
+    bdown = QQ[2]
+    hdown = PLP.HPoly(1, Adown, bdown, nothing, falses(1), PLP.STRICT_EPS_QQ)
+    Dpl = PLP.PLDownset(PLP.PolyUnion(1, [hdown]))
+
+    Fpl = PLP.PLFringe(1, [Upl], [Dpl], reshape(QQ[1], 1, 1))
+
+    mktempdir() do dir
+        path = joinpath(dir, "pl_fringe.json")
+        SER.save_pl_fringe_json(path, Fpl)
+        meta = SER.inspect_json(path)
+        @test meta.kind == "PLFringe"
+        @test meta.n == 1
+        @test meta.n_upsets == 1
+        @test meta.n_downsets == 1
+        @test meta.has_phi == true
+
+        Fpl2 = SER.load_pl_fringe_json(path)
+        @test Fpl2.n == 1
+        @test length(Fpl2.Ups) == 1
+        @test length(Fpl2.Downs) == 1
+        @test Fpl2.Phi == Fpl.Phi
+        @test Fpl2.Ups[1].U.parts[1].A == Aup
+        @test Fpl2.Ups[1].U.parts[1].b == bup
+        @test Fpl2.Downs[1].D.parts[1].A == Adown
+        @test Fpl2.Downs[1].D.parts[1].b == bdown
+    end
+
+    # External PL fringe parser (wild schema with upsets/downsets aliases).
+    pl_json = """
+    {
+      "n": 1,
+      "upsets": [ { "A": [["-1/1"]], "b": ["0/1"] } ],
+      "downsets": [ { "parts": [ { "A": [["1/1"]], "b": ["2/1"], "strict_mask": [1] } ] } ],
+      "phi": [ ["1/1"] ]
+    }
+    """
+    Fpl3 = SER.parse_pl_fringe_json(pl_json)
+    @test Fpl3.n == 1
+    @test length(Fpl3.Ups) == 1
+    @test length(Fpl3.Downs) == 1
+    @test Fpl3.Phi == reshape(QQ[1], 1, 1)
+    @test Fpl3.Downs[1].D.parts[1].strict_mask == BitVector([true])
+
+    # External finite fringe parser.
+    finite_json = """
+    {
+      "n": 3,
+      "leq": [
+        [true, true, true],
+        [false, true, true],
+        [false, false, true]
+      ],
+      "upsets": [[2, 3]],
+      "downsets": [[true, true, false]],
+      "phi": [["2/1"]]
+    }
+    """
+    Hext = SER.parse_finite_fringe_json(finite_json)
+    @test Hext.P isa FF.FinitePoset
+    @test Hext.U[1].mask == BitVector([false, true, true])
+    @test Hext.D[1].mask == BitVector([true, true, false])
+    @test Hext.phi[1, 1] == c(2)
+    @test FF.fiber_dimension(Hext, 1) == 0
+    @test FF.fiber_dimension(Hext, 2) == 1
+    @test FF.fiber_dimension(Hext, 3) == 0
+
+    # Validation mode symmetry with load_encoding_json.
+    invalid_masks_json = """
+    {
+      "n": 2,
+      "leq": [
+        [true, true],
+        [false, true]
+      ],
+      "U": [[true, false]],
+      "D": [[true, true]],
+      "phi": [[1]]
+    }
+    """
+    @test_throws ErrorException SER.parse_finite_fringe_json(invalid_masks_json; validation=:strict)
+    Htrusted = SER.parse_finite_fringe_json(invalid_masks_json; validation=:trusted)
+    @test Htrusted.U[1].mask == BitVector([true, false])
+
     # Finite encoding fringe round-trip
     P = chain_poset(3)
     M = one_by_one_fringe(P, FF.principal_upset(P, 2), FF.principal_downset(P, 2))
@@ -241,7 +332,13 @@ end
     mktempdir() do dir
         path = joinpath(dir, "encoding.json")
         SER.save_encoding_json(path, M)
-        M_loaded = SER.load_encoding_json(path)
+        obj = JSON3.read(read(path, String))
+        @test Int(obj["schema_version"]) == SER.ENCODING_SCHEMA_VERSION
+        @test obj["poset"]["leq"]["kind"] == "packed_words_v1"
+        @test obj["U"]["kind"] == "packed_words_v1"
+        @test obj["D"]["kind"] == "packed_words_v1"
+        @test obj["phi"]["kind"] == "qq_chunks_v1"
+        M_loaded = SER.load_encoding_json(path; output=:fringe)
 
         @test M_loaded.P.n == M.P.n
         @test FF.poset_equal(M_loaded.P, M.P)
@@ -259,12 +356,14 @@ end
     mktempdir() do dir
         path = joinpath(dir, "encoding_f2.json")
         SER.save_encoding_json(path, M2)
-        M2_loaded = SER.load_encoding_json(path)
+        obj = JSON3.read(read(path, String))
+        @test obj["phi"]["kind"] == "fp_flat_v1"
+        M2_loaded = SER.load_encoding_json(path; output=:fringe)
         @test M2_loaded.field == field2
         @test eltype(M2_loaded.phi) == K2
         @test M2_loaded.phi[1, 1] == CM.coerce(field2, 1)
 
-        M2_asQQ = SER.load_encoding_json(path; field=CM.QQField())
+        M2_asQQ = SER.load_encoding_json(path; output=:fringe, field=CM.QQField())
         if field isa CM.QQField
             @test eltype(M2_asQQ.phi) == QQ
             @test M2_asQQ.phi[1, 1] == CM.coerce(CM.QQField(), 1)
@@ -329,6 +428,18 @@ if field isa CM.QQField
     H3 = SER.parse_flange_json(json3)
     @test Matrix(H3.phi) == reshape(K[0], 1, 1)
     @test FZ.dim_at(H3, [0]) == 0
+
+    json4 = """
+    {
+      "n": 1,
+      "coeff_field": { "kind": "real", "T": "Float64" },
+      "flats": [ { "id": "F1", "b": [0], "tau": [false] },
+                 { "id": "F2", "b": [0], "tau": [false] } ],
+      "injectives": [ { "id": "E1", "b": [0], "tau": [false] } ],
+      "phi": [ [ 0.5, 1.5 ] ]
+    }
+    """
+    @test_logs (:warn, r"phi has 2 non-integer numeric entries") SER.parse_flange_json(json4)
 end
 end
 
@@ -337,24 +448,33 @@ if field isa CM.QQField
     json = """
     {
       "kind": "FiniteEncodingFringe",
+      "schema_version": 1,
       "poset": {
+        "kind": "FinitePoset",
         "n": 3,
-        "leq": [
-          [true,  true,  true],
-          [false, true,  true],
-          [false, false, true]
-        ]
+        "leq": {"kind":"packed_words_v1","nrows":3,"ncols":3,"words_per_row":1,"words":[7,6,4]}
       },
-      "U": [[false, true,  true]],
-      "D": [[true,  true,  false]],
-      "phi": [["-2/3"]]
+      "U": {"kind":"packed_words_v1","nrows":1,"ncols":3,"words_per_row":1,"words":[6]},
+      "D": {"kind":"packed_words_v1","nrows":1,"ncols":3,"words_per_row":1,"words":[3]},
+      "coeff_field": {"kind":"qq"},
+      "phi": {
+        "kind":"qq_chunks_v1",
+        "m":1,
+        "k":1,
+        "base":1000000000,
+        "num_sign":[-1],
+        "num_ptr":[1,2],
+        "num_chunks":[2],
+        "den_ptr":[1,2],
+        "den_chunks":[3]
+      }
     }
     """
     path, io = mktemp()
     write(io, json)
     close(io)
 
-    M = SER.load_encoding_json(path)
+    M = SER.load_encoding_json(path; output=:fringe)
     @test M.P.n == 3
     @test FF.leq_matrix(M.P) == BitMatrix([1 1 1; 0 1 1; 0 0 1])
     @test length(M.U) == 1
@@ -364,20 +484,157 @@ if field isa CM.QQField
     @test Matrix(M.phi) == reshape(K[c(-2//3)], 1, 1)
 end
 
-@testset "Serialization.load_encoding_json rejects legacy schema" begin
+@testset "Serialization.load_encoding_json trusted mask fast path (schema v1)" begin
+    json = """
+    {
+      "kind": "FiniteEncodingFringe",
+      "schema_version": 1,
+      "poset": {
+        "kind": "FinitePoset",
+        "n": 3,
+        "leq": {"kind":"packed_words_v1","nrows":3,"ncols":3,"words_per_row":1,"words":[7,6,4]}
+      },
+      "U": {"kind":"packed_words_v1","nrows":1,"ncols":3,"words_per_row":1,"words":[5]},
+      "D": {"kind":"packed_words_v1","nrows":1,"ncols":3,"words_per_row":1,"words":[2]},
+      "coeff_field": {"kind":"qq"},
+      "phi": {
+        "kind":"qq_chunks_v1",
+        "m":1,
+        "k":1,
+        "base":1000000000,
+        "num_sign":[0],
+        "num_ptr":[1,2],
+        "num_chunks":[0],
+        "den_ptr":[1,2],
+        "den_chunks":[1]
+      }
+    }
+    """
+    path, io = mktemp()
+    write(io, json)
+    close(io)
+
+    err = nothing
+    try
+        SER.load_encoding_json(path; output=:fringe)
+    catch e
+        err = e
+    end
+    @test err isa ErrorException
+    @test occursin("validation=:trusted", sprint(showerror, err))
+    H = SER.load_encoding_json(path; output=:fringe, validation=:trusted)
+    @test H.U[1].mask == BitVector([true, false, true])
+    @test H.D[1].mask == BitVector([false, true, false])
+end
+
+@testset "Serialization.load_encoding_json rejects non-v1 schema" begin
     json_old = """
     {
-      "P": {"n": 3, "leq": [[1,1,1],[0,1,1],[0,0,1]]},
-      "U": [[0,1,1]],
-      "D": [[1,1,0]],
-      "phi": [["-2/3"]]
+      "kind": "FiniteEncodingFringe",
+      "schema_version": 3,
+      "poset": {
+        "kind": "FinitePoset",
+        "n": 3,
+        "leq": {"kind":"packed_words_v1","nrows":3,"ncols":3,"words_per_row":1,"words":[7,6,4]}
+      },
+      "U": {"kind":"packed_words_v1","nrows":1,"ncols":3,"words_per_row":1,"words":[6]},
+      "D": {"kind":"packed_words_v1","nrows":1,"ncols":3,"words_per_row":1,"words":[3]},
+      "coeff_field": {"kind":"qq"},
+      "phi": {
+        "kind":"qq_chunks_v1",
+        "m":1,
+        "k":1,
+        "base":1000000000,
+        "num_sign":[-1],
+        "num_ptr":[1,2],
+        "num_chunks":[2],
+        "den_ptr":[1,2],
+        "den_chunks":[3]
+      }
     }
     """
     path, io = mktemp()
     write(io, json_old)
     close(io)
 
-    @test_throws ErrorException SER.load_encoding_json(path)
+    @test_throws ErrorException SER.load_encoding_json(path; output=:fringe)
+end
+
+@testset "Serialization.load_encoding_json output modes + inspect" begin
+    coords = (Float64[0.0, 1.0],)
+    P = FF.GridPoset(coords)
+    U = FF.principal_upset(P, 2)
+    D = FF.principal_downset(P, 1)
+    H = one_by_one_fringe(P, U, D)
+    pi = EC.GridEncodingMap(P, coords)
+    M = IR.pmodule_from_fringe(H)
+    enc = RES.EncodingResult(P, M, pi; H=H, backend=:zn)
+
+    mktemp() do path, io
+        close(io)
+        SER.save_encoding_json(path, enc)
+        info = SER.inspect_json(path)
+        @test info.kind == "FiniteEncodingFringe"
+        @test info.nvertices == 2
+        @test info.has_pi
+
+        H2 = SER.load_encoding_json(path; output=:fringe)
+        @test H2 isa FF.FringeModule
+
+        H3, pi3 = SER.load_encoding_json(path; output=:fringe_with_pi)
+        @test H3 isa FF.FringeModule
+        @test pi3 isa EC.GridEncodingMap
+
+        enc_default = SER.load_encoding_json(path)
+        @test enc_default isa RES.EncodingResult
+
+        enc2 = SER.load_encoding_json(path; output=:encoding_result)
+        @test enc2 isa RES.EncodingResult
+        @test FF.nvertices(enc2.P) == 2
+        @test enc2.M isa MD.PModule
+
+        SER.save_encoding_json(path, enc; include_pi=false)
+        err = nothing
+        try
+            SER.load_encoding_json(path)
+        catch e
+            err = e
+        end
+        @test err isa ErrorException
+        @test occursin("include_pi=true", sprint(showerror, err))
+    end
+end
+
+@testset "Serialization.save_encoding_json profile presets" begin
+    coords = (Float64[0.0, 1.0],)
+    P = FF.GridPoset(coords)
+    U = FF.principal_upset(P, 2)
+    D = FF.principal_downset(P, 2)
+    H = one_by_one_fringe(P, U, D)
+    M = IR.pmodule_from_fringe(H)
+    pi = EC.GridEncodingMap(P, coords)
+    enc = RES.EncodingResult(P, M, pi; H=H, backend=:zn)
+
+    mktemp() do path, io
+        close(io)
+        SER.save_encoding_json(path, enc; profile=:compact)
+        obj = JSON3.read(read(path, String))
+        @test haskey(obj, "pi")
+        @test !haskey(obj["poset"], "leq")
+
+        SER.save_encoding_json(path, enc; profile=:portable)
+        obj = JSON3.read(read(path, String))
+        @test haskey(obj["poset"], "leq")
+
+        SER.save_encoding_json(path, enc; profile=:debug)
+        raw = read(path, String)
+        @test occursin("\n", raw)
+        @test occursin("  \"kind\"", raw)
+
+        SER.save_encoding_json(path, enc; profile=:portable, include_pi=false)
+        obj = JSON3.read(read(path, String))
+        @test !haskey(obj, "pi")
+    end
 end
 end
 
@@ -434,6 +691,14 @@ end
     @test pbN.Q.n == 2
     @test pbN.dims == [3,3]
     @test Matrix(pbN.edge_maps[1, 2]) == Matrix{K}(I, 3, 3)
+
+    # Pullback on morphisms should reuse the same pointwise component at each q in Q.
+    fN = MD.PMorphism(N, N, [K[c(2) c(0) c(0); c(0) c(3) c(0); c(0) c(0) c(5)]])
+    pbfN = PM.restriction(pi, fN)
+    @test pbfN.dom.dims == pbN.dims
+    @test pbfN.cod.dims == pbN.dims
+    @test Matrix(pbfN.comps[1]) == Matrix(fN.comps[1])
+    @test Matrix(pbfN.comps[2]) == Matrix(fN.comps[1])
 
     # -------------------------------------------------------------------------
     # Left/right Kan extension collapse chain2 -> point (terminal/initial fast path)
@@ -520,8 +785,8 @@ end
     # Derived functors vanish for collapse with terminal/initial objects
     # -------------------------------------------------------------------------
     if !(field isa CM.RealField)
-        Lmods = PM.derived_pushforward_left(pi, M, CM.DerivedFunctorOptions(maxdeg=2))
-        Rmods = PM.derived_pushforward_right(pi, M, CM.DerivedFunctorOptions(maxdeg=2))
+        Lmods = PM.derived_pushforward_left(pi, M, OPT.DerivedFunctorOptions(maxdeg=2))
+        Rmods = PM.derived_pushforward_right(pi, M, OPT.DerivedFunctorOptions(maxdeg=2))
 
         @test Lmods[1].dims == Lan.dims
         @test Lmods[2].dims == [0]
@@ -581,7 +846,7 @@ end
 
     # Derived functors parity on collapse (uses resolutions internally).
     if !(field isa CM.RealField)
-        df = CM.DerivedFunctorOptions(maxdeg=1)
+        df = OPT.DerivedFunctorOptions(maxdeg=1)
         Ls = PM.derived_pushforward_left(pi, M, df; threads=false)
         Lt = PM.derived_pushforward_left(pi, M, df; threads=true)
         @test [L.dims for L in Ls] == [L.dims for L in Lt]
@@ -628,8 +893,8 @@ if field isa CM.QQField
     f6 = compose_morphism(f3, f2)
 
     # Higher derived functors are nontrivial (S^1):
-    Lmods = PM.derived_pushforward_left(pi, M, CM.DerivedFunctorOptions(maxdeg=1))
-    Rmods = PM.derived_pushforward_right(pi, M, CM.DerivedFunctorOptions(maxdeg=1))
+    Lmods = PM.derived_pushforward_left(pi, M, OPT.DerivedFunctorOptions(maxdeg=1))
+    Rmods = PM.derived_pushforward_right(pi, M, OPT.DerivedFunctorOptions(maxdeg=1))
 
     @test FZ.dim_at(Lmods[1], 1) == 1   # L_0
     @test FZ.dim_at(Lmods[2], 1) == 1   # L_1
@@ -637,9 +902,9 @@ if field isa CM.QQField
     @test FZ.dim_at(Rmods[2], 1) == 1   # R^1
 
     # Induced derived maps: should act by scalar multiplication in all degrees.
-    Lf2 = PM.derived_pushforward_left(pi, f2, CM.DerivedFunctorOptions(maxdeg=1))
-    Lf3 = PM.derived_pushforward_left(pi, f3, CM.DerivedFunctorOptions(maxdeg=1))
-    Lf6 = PM.derived_pushforward_left(pi, f6, CM.DerivedFunctorOptions(maxdeg=1))
+    Lf2 = PM.derived_pushforward_left(pi, f2, OPT.DerivedFunctorOptions(maxdeg=1))
+    Lf3 = PM.derived_pushforward_left(pi, f3, OPT.DerivedFunctorOptions(maxdeg=1))
+    Lf6 = PM.derived_pushforward_left(pi, f6, OPT.DerivedFunctorOptions(maxdeg=1))
 
     @test Lf2[1].comps[1] == fill(c(1), 1, 1)
     @test Lf2[2].comps[1] == fill(c(1), 1, 1)
@@ -649,9 +914,9 @@ if field isa CM.QQField
     @test Lf6[2].comps[1] == Lf3[2].comps[1] * Lf2[2].comps[1]
 
     # Right-derived maps.
-    Rf2 = PM.derived_pushforward_right(pi, f2, CM.DerivedFunctorOptions(maxdeg=1))
-    Rf3 = PM.derived_pushforward_right(pi, f3, CM.DerivedFunctorOptions(maxdeg=1))
-    Rf6 = PM.derived_pushforward_right(pi, f6, CM.DerivedFunctorOptions(maxdeg=1))
+    Rf2 = PM.derived_pushforward_right(pi, f2, OPT.DerivedFunctorOptions(maxdeg=1))
+    Rf3 = PM.derived_pushforward_right(pi, f3, OPT.DerivedFunctorOptions(maxdeg=1))
+    Rf6 = PM.derived_pushforward_right(pi, f6, OPT.DerivedFunctorOptions(maxdeg=1))
 
     @test Rf2[1].comps[1] == fill(c(1), 1, 1)
     @test Rf2[2].comps[1] == fill(c(1), 1, 1)

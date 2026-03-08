@@ -1,7 +1,8 @@
 module DerivedFunctors
 
 using ..CoreModules: AbstractCoeffField, RealField, coeff_type, field_from_eltype, coerce,
-                     EncodingOptions, ResolutionOptions, DerivedFunctorOptions
+                     AbstractHomSystemCache
+using ..Options: EncodingOptions, ResolutionOptions, DerivedFunctorOptions
 using ..FieldLinAlg
 using ..Modules: PModule, PMorphism
 using SparseArrays: sparse, SparseMatrixCSC
@@ -29,7 +30,7 @@ struct _HomKey3
     c::UInt
 end
 
-mutable struct HomSystemCache{HV,PV,QV}
+mutable struct HomSystemCache{HV,PV,QV} <: AbstractHomSystemCache
     hom::Vector{Dict{_HomKey2,HV}}
     precompose::Vector{Dict{_HomKey3,PV}}
     postcompose::Vector{Dict{_HomKey3,QV}}
@@ -152,7 +153,7 @@ module Utils
     # Sibling modules under PosetModules (two levels up from this nested module).
     using ...CoreModules: AbstractCoeffField, RealField, field_from_eltype
     using ...FieldLinAlg
-    using ...Modules: PModule, PMorphism
+    using ...Modules: PModule, PMorphism, _get_cover_cache
 
     # ----------------------------
     # Basic utilities: morphism composition (local, explicit, reliable)
@@ -994,13 +995,16 @@ module Resolutions
     import Base.Threads
 
     using ...CoreModules: AbstractCoeffField, RealField, ResolutionCache, ResolutionKey2, _resolution_key2,
-                          ResolutionOptions, field_from_eltype, coeff_type
-    using ...Modules: PModule, PMorphism
+                          field_from_eltype, coeff_type,
+                          ProjectiveResolutionPayload, InjectiveResolutionPayload
+    using ...Options: ResolutionOptions
+    using ...Modules: PModule, PMorphism, _get_cover_cache
     using ...FiniteFringe: AbstractPoset, FinitePoset, FringeModule, Upset, cover_edges, is_subset,
                            leq, nvertices, poset_equal, upset_indices, downset_indices
     using ...AbelianCategories: kernel_with_inclusion
     using ...IndicatorResolutions: projective_cover, pmodule_from_fringe
-    using  ...IndicatorResolutions: _injective_hull, _cokernel_module
+    using  ...IndicatorResolutions: _injective_hull, _cokernel_module,
+                                    _indicator_new_array_memo, _new_resolution_workspace
     using ...FiniteFringe: AbstractPoset
     using ...FieldLinAlg: _SparseRREFAugmented, SparseRow, _sparse_rref_push_augmented!
 
@@ -1018,76 +1022,429 @@ module Resolutions
         return poset_equal(Q1, Q2)
     end
 
+    @inline function _reset_indicator_memo!(memo::AbstractVector)
+        fill!(memo, nothing)
+        return memo
+    end
+
+    # Internal A/B knobs for cache-only microbenchmarks. Keep enabled in normal runs.
+    const PROJECTIVE_PRIMARY_CACHE_ENABLED = Ref(true)
+    const INJECTIVE_PRIMARY_CACHE_ENABLED = Ref(true)
+
     @inline _resolution_cache_shard_index(dicts) =
         min(length(dicts), max(1, Threads.threadid()))
 
+    @inline function _projective_primary_dict(cache::ResolutionCache, ::Type{R}) where {R}
+        PROJECTIVE_PRIMARY_CACHE_ENABLED[] || return nothing
+        cache.projective_primary_type === R || return nothing
+        primary = cache.projective_primary
+        primary === nothing && return nothing
+        isempty(primary) && return nothing
+        return primary::Dict{ResolutionKey2,R}
+    end
+
+    @inline function _projective_primary_shard(cache::ResolutionCache, ::Type{R}) where {R}
+        PROJECTIVE_PRIMARY_CACHE_ENABLED[] || return nothing
+        cache.projective_primary_type === R || return nothing
+        shard = cache.projective_primary_shards[_resolution_cache_shard_index(cache.projective_primary_shards)]
+        shard === nothing && return nothing
+        return shard::Dict{ResolutionKey2,R}
+    end
+
+    @inline function _reset_projective_promotion_state!(cache::ResolutionCache)
+        cache.projective_promotion_type = nothing
+        cache.projective_promotion_hits = 0
+        return nothing
+    end
+
+    @inline function _note_projective_fallback_hit_locked!(cache::ResolutionCache, ::Type{R}) where {R}
+        PROJECTIVE_PRIMARY_CACHE_ENABLED[] || return false
+        if cache.projective_primary_type !== nothing &&
+           cache.projective_primary !== nothing &&
+           !isempty(cache.projective_primary) &&
+           cache.projective_primary_type !== R
+            return false
+        end
+        if cache.projective_promotion_type === R
+            cache.projective_promotion_hits += 1
+        else
+            cache.projective_promotion_type = R
+            cache.projective_promotion_hits = 1
+        end
+        return cache.projective_promotion_hits >= 2
+    end
+
+    @inline function _promote_projective_primary_locked!(cache::ResolutionCache, ::Type{R}) where {R}
+        PROJECTIVE_PRIMARY_CACHE_ENABLED[] || return nothing
+        if cache.projective_primary_type === R
+            primary = cache.projective_primary
+            primary === nothing && return nothing
+            _reset_projective_promotion_state!(cache)
+            return primary::Dict{ResolutionKey2,R}
+        end
+        isempty(cache.projective) && return nothing
+        if cache.projective_primary_type !== nothing && !isempty(cache.projective_primary)
+            return nothing
+        end
+        primary = Dict{ResolutionKey2,R}()
+        for (k, payload) in cache.projective
+            v = payload.value
+            if !(v isa R)
+                _reset_projective_promotion_state!(cache)
+                return nothing
+            end
+            primary[k] = v
+        end
+        cache.projective_primary_type = R
+        cache.projective_primary = primary
+        fill!(cache.projective_primary_shards, nothing)
+        empty!(cache.projective)
+        for shard in cache.projective_shards
+            empty!(shard)
+        end
+        _reset_projective_promotion_state!(cache)
+        return primary
+    end
+
+    @inline function _ensure_projective_primary_shard_locked!(cache::ResolutionCache, ::Type{R}) where {R}
+        length(cache.projective_primary_shards) == 1 && return nothing
+        idx = _resolution_cache_shard_index(cache.projective_primary_shards)
+        shard = cache.projective_primary_shards[idx]
+        if shard === nothing
+            shard = Dict{ResolutionKey2,R}()
+            cache.projective_primary_shards[idx] = shard
+        end
+        return shard::Dict{ResolutionKey2,R}
+    end
+
     @inline function _cache_projective_get(cache::ResolutionCache, key::ResolutionKey2, ::Type{R}) where {R}
+        primary = _projective_primary_dict(cache, R)
+        if primary !== nothing
+            if length(cache.projective_primary_shards) == 1
+                return get(primary, key, nothing)
+            end
+            shard = _projective_primary_shard(cache, R)
+            shard === nothing || begin
+                v = get(shard, key, nothing)
+                v === nothing || return v
+            end
+            Base.lock(cache.lock)
+            try
+                v = get(primary, key, nothing)
+                if v !== nothing
+                    shard === nothing || (shard[key] = v)
+                end
+                return v
+            finally
+                Base.unlock(cache.lock)
+            end
+        end
+
+        if length(cache.projective_shards) == 1
+            Base.lock(cache.lock)
+            try
+                v = get(cache.projective, key, nothing)
+                v === nothing && return nothing
+                if _note_projective_fallback_hit_locked!(cache, R)
+                    primary = _promote_projective_primary_locked!(cache, R)
+                    if primary !== nothing
+                        return get(primary, key, nothing)
+                    end
+                end
+                return v.value::R
+            finally
+                Base.unlock(cache.lock)
+            end
+        end
         shard = cache.projective_shards[_resolution_cache_shard_index(cache.projective_shards)]
         v = get(shard, key, nothing)
-        v === nothing || return (v::R)
+        if v !== nothing && !PROJECTIVE_PRIMARY_CACHE_ENABLED[]
+            return (v.value::R)
+        end
         Base.lock(cache.lock)
         try
-            v = get(cache.projective, key, nothing)
+            v === nothing && (v = get(cache.projective, key, nothing))
+            if v !== nothing && _note_projective_fallback_hit_locked!(cache, R)
+                primary = _promote_projective_primary_locked!(cache, R)
+                if primary !== nothing
+                    vv = get(primary, key, nothing)
+                    if vv !== nothing
+                        shard_primary = _projective_primary_shard(cache, R)
+                        shard_primary === nothing || (shard_primary[key] = vv)
+                    end
+                    return vv
+                end
+            end
         finally
             Base.unlock(cache.lock)
         end
         v === nothing || begin
-            vv = v::R
-            shard[key] = vv
+            vv = v.value::R
+            shard[key] = v
             return vv
         end
         return nothing
     end
 
     @inline function _cache_projective_store!(cache::ResolutionCache, key::ResolutionKey2, val::R) where {R}
+        primary = _projective_primary_dict(cache, R)
+        if primary !== nothing
+            if length(cache.projective_primary_shards) == 1
+                extant = get(primary, key, nothing)
+                extant === nothing || return extant
+                primary[key] = val
+                return val
+            end
+            shard = _projective_primary_shard(cache, R)
+            shard === nothing || begin
+                extant = get(shard, key, nothing)
+                extant === nothing || return extant
+            end
+            Base.lock(cache.lock)
+            try
+                extant = get(primary, key, nothing)
+                extant === nothing || return extant
+                primary[key] = val
+                if shard === nothing
+                    shard = _ensure_projective_primary_shard_locked!(cache, R)
+                end
+                shard === nothing || (shard[key] = val)
+                return val
+            finally
+                Base.unlock(cache.lock)
+            end
+        end
+
+        if length(cache.projective_shards) == 1
+            extant = get(cache.projective, key, nothing)
+            extant === nothing || return (extant.value::R)
+            payload = ProjectiveResolutionPayload(val)
+            _reset_projective_promotion_state!(cache)
+            cache.projective[key] = payload
+            return val
+        end
         shard = cache.projective_shards[_resolution_cache_shard_index(cache.projective_shards)]
         existing = get(shard, key, nothing)
-        existing === nothing || return (existing::R)
-        shard[key] = val
+        existing === nothing || return (existing.value::R)
+        payload = ProjectiveResolutionPayload(val)
+        _reset_projective_promotion_state!(cache)
+        shard[key] = payload
         Base.lock(cache.lock)
         out = get(cache.projective, key, nothing)
         if out === nothing
-            cache.projective[key] = val
-            out = val
+            cache.projective[key] = payload
+            out = payload
         end
         Base.unlock(cache.lock)
-        outR = out::R
-        shard[key] = outR
+        outR = out.value::R
+        shard[key] = out
         return outR
     end
 
+    @inline function _injective_primary_dict(cache::ResolutionCache, ::Type{R}) where {R}
+        INJECTIVE_PRIMARY_CACHE_ENABLED[] || return nothing
+        cache.injective_primary_type === R || return nothing
+        primary = cache.injective_primary
+        primary === nothing && return nothing
+        isempty(primary) && return nothing
+        return primary::Dict{ResolutionKey2,R}
+    end
+
+    @inline function _injective_primary_shard(cache::ResolutionCache, ::Type{R}) where {R}
+        INJECTIVE_PRIMARY_CACHE_ENABLED[] || return nothing
+        cache.injective_primary_type === R || return nothing
+        shard = cache.injective_primary_shards[_resolution_cache_shard_index(cache.injective_primary_shards)]
+        shard === nothing && return nothing
+        return shard::Dict{ResolutionKey2,R}
+    end
+
+    @inline function _reset_injective_promotion_state!(cache::ResolutionCache)
+        cache.injective_promotion_type = nothing
+        cache.injective_promotion_hits = 0
+        return nothing
+    end
+
+    @inline function _note_injective_fallback_hit_locked!(cache::ResolutionCache, ::Type{R}) where {R}
+        INJECTIVE_PRIMARY_CACHE_ENABLED[] || return false
+        if cache.injective_primary_type !== nothing &&
+           cache.injective_primary !== nothing &&
+           !isempty(cache.injective_primary) &&
+           cache.injective_primary_type !== R
+            return false
+        end
+        if cache.injective_promotion_type === R
+            cache.injective_promotion_hits += 1
+        else
+            cache.injective_promotion_type = R
+            cache.injective_promotion_hits = 1
+        end
+        return cache.injective_promotion_hits >= 2
+    end
+
+    @inline function _promote_injective_primary_locked!(cache::ResolutionCache, ::Type{R}) where {R}
+        INJECTIVE_PRIMARY_CACHE_ENABLED[] || return nothing
+        if cache.injective_primary_type === R
+            primary = cache.injective_primary
+            primary === nothing && return nothing
+            _reset_injective_promotion_state!(cache)
+            return primary::Dict{ResolutionKey2,R}
+        end
+        isempty(cache.injective) && return nothing
+        if cache.injective_primary_type !== nothing && !isempty(cache.injective_primary)
+            return nothing
+        end
+        primary = Dict{ResolutionKey2,R}()
+        for (k, payload) in cache.injective
+            v = payload.value
+            if !(v isa R)
+                _reset_injective_promotion_state!(cache)
+                return nothing
+            end
+            primary[k] = v
+        end
+        cache.injective_primary_type = R
+        cache.injective_primary = primary
+        fill!(cache.injective_primary_shards, nothing)
+        empty!(cache.injective)
+        for shard in cache.injective_shards
+            empty!(shard)
+        end
+        _reset_injective_promotion_state!(cache)
+        return primary
+    end
+
+    @inline function _ensure_injective_primary_shard_locked!(cache::ResolutionCache, ::Type{R}) where {R}
+        length(cache.injective_primary_shards) == 1 && return nothing
+        idx = _resolution_cache_shard_index(cache.injective_primary_shards)
+        shard = cache.injective_primary_shards[idx]
+        if shard === nothing
+            shard = Dict{ResolutionKey2,R}()
+            cache.injective_primary_shards[idx] = shard
+        end
+        return shard::Dict{ResolutionKey2,R}
+    end
+
     @inline function _cache_injective_get(cache::ResolutionCache, key::ResolutionKey2, ::Type{R}) where {R}
+        primary = _injective_primary_dict(cache, R)
+        if primary !== nothing
+            if length(cache.injective_primary_shards) == 1
+                return get(primary, key, nothing)
+            end
+            shard = _injective_primary_shard(cache, R)
+            shard === nothing || begin
+                v = get(shard, key, nothing)
+                v === nothing || return v
+            end
+            Base.lock(cache.lock)
+            try
+                v = get(primary, key, nothing)
+                if v !== nothing
+                    shard === nothing || (shard[key] = v)
+                end
+                return v
+            finally
+                Base.unlock(cache.lock)
+            end
+        end
+
+        if length(cache.injective_shards) == 1
+            Base.lock(cache.lock)
+            try
+                v = get(cache.injective, key, nothing)
+                v === nothing && return nothing
+                if _note_injective_fallback_hit_locked!(cache, R)
+                    primary = _promote_injective_primary_locked!(cache, R)
+                    if primary !== nothing
+                        return get(primary, key, nothing)
+                    end
+                end
+                return v.value::R
+            finally
+                Base.unlock(cache.lock)
+            end
+        end
         shard = cache.injective_shards[_resolution_cache_shard_index(cache.injective_shards)]
         v = get(shard, key, nothing)
-        v === nothing || return (v::R)
+        if v !== nothing && !INJECTIVE_PRIMARY_CACHE_ENABLED[]
+            return (v.value::R)
+        end
         Base.lock(cache.lock)
         try
-            v = get(cache.injective, key, nothing)
+            v === nothing && (v = get(cache.injective, key, nothing))
+            if v !== nothing && _note_injective_fallback_hit_locked!(cache, R)
+                primary = _promote_injective_primary_locked!(cache, R)
+                if primary !== nothing
+                    vv = get(primary, key, nothing)
+                    if vv !== nothing
+                        shard_primary = _injective_primary_shard(cache, R)
+                        shard_primary === nothing || (shard_primary[key] = vv)
+                    end
+                    return vv
+                end
+            end
         finally
             Base.unlock(cache.lock)
         end
         v === nothing || begin
-            vv = v::R
-            shard[key] = vv
+            vv = v.value::R
+            shard[key] = v
             return vv
         end
         return nothing
     end
 
     @inline function _cache_injective_store!(cache::ResolutionCache, key::ResolutionKey2, val::R) where {R}
+        primary = _injective_primary_dict(cache, R)
+        if primary !== nothing
+            if length(cache.injective_primary_shards) == 1
+                extant = get(primary, key, nothing)
+                extant === nothing || return extant
+                primary[key] = val
+                return val
+            end
+            shard = _injective_primary_shard(cache, R)
+            shard === nothing || begin
+                extant = get(shard, key, nothing)
+                extant === nothing || return extant
+            end
+            Base.lock(cache.lock)
+            try
+                extant = get(primary, key, nothing)
+                extant === nothing || return extant
+                primary[key] = val
+                if shard === nothing
+                    shard = _ensure_injective_primary_shard_locked!(cache, R)
+                end
+                shard === nothing || (shard[key] = val)
+                return val
+            finally
+                Base.unlock(cache.lock)
+            end
+        end
+
+        if length(cache.injective_shards) == 1
+            extant = get(cache.injective, key, nothing)
+            extant === nothing || return (extant.value::R)
+            payload = InjectiveResolutionPayload(val)
+            _reset_injective_promotion_state!(cache)
+            cache.injective[key] = payload
+            return val
+        end
         shard = cache.injective_shards[_resolution_cache_shard_index(cache.injective_shards)]
         existing = get(shard, key, nothing)
-        existing === nothing || return (existing::R)
-        shard[key] = val
+        existing === nothing || return (existing.value::R)
+        payload = InjectiveResolutionPayload(val)
+        _reset_injective_promotion_state!(cache)
+        shard[key] = payload
         Base.lock(cache.lock)
         out = get(cache.injective, key, nothing)
         if out === nothing
-            cache.injective[key] = val
-            out = val
+            cache.injective[key] = payload
+            out = payload
         end
         Base.unlock(cache.lock)
-        outR = out::R
-        shard[key] = outR
+        outR = out.value::R
+        shard[key] = out
         return outR
     end
 
@@ -1332,17 +1689,34 @@ module Resolutions
     function _projective_resolution_impl(M::PModule{K}, maxlen::Int;
                                          threads::Bool = (Threads.nthreads() > 1)) where {K}
         maxlen >= 0 || error("_projective_resolution_impl: maxlen must be >= 0")
+        n = nvertices(M.Q)
+        cc = _get_cover_cache(M.Q)
+        map_memo = _indicator_new_array_memo(K, n)
+        ws = _new_resolution_workspace(K, n)
+        kernel_cache = Vector{Any}(undef, n)
+        fill!(kernel_cache, nothing)
         # Step 0
-        P0, pi0, gens0 = projective_cover(M; threads=threads)
+        P0, pi0, gens0 = projective_cover(
+            M;
+            cache=cc,
+            map_memo=map_memo,
+            workspace=ws,
+            threads=threads,
+        )
         bases0 = _flatten_gens_at(gens0)
 
-        Pmods = [P0]
+        Pmods = PModule{K}[]
+        push!(Pmods, P0)
         gens = Vector{Int}[bases0]
         d_mor = PMorphism{K}[]
         d_mat = SparseMatrixCSC{K, Int}[]
 
         # kernel K1 -> P0
-        Kmod, iota = kernel_with_inclusion(pi0)
+        Kmod, iota = kernel_with_inclusion(
+            pi0;
+            cache=cc,
+            incremental_cache=kernel_cache,
+        )
 
         prevBases = bases0
         prevK = Kmod
@@ -1354,7 +1728,14 @@ module Resolutions
                 break
             end
 
-            Pn, pin, gensn = projective_cover(prevK; threads=threads)
+            _reset_indicator_memo!(map_memo)
+            Pn, pin, gensn = projective_cover(
+                prevK;
+                cache=cc,
+                map_memo=map_memo,
+                workspace=ws,
+                threads=threads,
+            )
             basesn = _flatten_gens_at(gensn)
 
             # differential d_step = prevIota circ pin : Pn -> previous P
@@ -1365,7 +1746,11 @@ module Resolutions
             push!(d_mat, _coeff_matrix_upsets(M.Q, basesn, prevBases, d))
 
             # next kernel
-            Kn, iotan = kernel_with_inclusion(pin)
+            Kn, iotan = kernel_with_inclusion(
+                pin;
+                cache=cc,
+                incremental_cache=kernel_cache,
+            )
 
             prevBases = basesn
             prevK = Kn
@@ -1730,25 +2115,53 @@ module Resolutions
     function _injective_resolution_impl(N::PModule{K}, maxlen::Int;
                                         threads::Bool = (Threads.nthreads() > 1)) where {K}
         maxlen >= 0 || error("_injective_resolution_impl: maxlen must be >= 0")
+        n = nvertices(N.Q)
+        cc = _get_cover_cache(N.Q)
+        map_memo = _indicator_new_array_memo(K, n)
+        ws = _new_resolution_workspace(K, n)
+        cokernel_cache = Vector{Any}(undef, n)
+        fill!(cokernel_cache, nothing)
 
-        E0, iota0, gens0 = _injective_hull(N; threads=threads)
-        Emods = [E0]
+        E0, iota0, gens0 = _injective_hull(
+            N;
+            cache=cc,
+            map_memo=map_memo,
+            workspace=ws,
+            threads=threads,
+        )
+        Emods = PModule{K}[]
+        push!(Emods, E0)
         gens  = [_flatten_gens_at(gens0)]
         d_mor = PMorphism{K}[]
 
-        C0, pi0 = _cokernel_module(iota0)
+        C0, pi0 = _cokernel_module(
+            iota0;
+            cache=cc,
+            incremental_cache=cokernel_cache,
+        )
         prevC  = C0
         prevPi = pi0
 
         for step in 1:maxlen
-            En, iotan, gensn = _injective_hull(prevC; threads=threads)
+            _reset_indicator_memo!(map_memo)
+            En, iotan, gensn = _injective_hull(
+                prevC;
+                cache=cc,
+                map_memo=map_memo,
+                workspace=ws,
+                threads=threads,
+            )
             push!(Emods, En)
             push!(gens, _flatten_gens_at(gensn))
 
             dn = compose(iotan, prevPi)   # E^{step-1} -> E^{step}
             push!(d_mor, dn)
 
-            Cn, pin = _cokernel_module(iotan)
+            Cn, pin = _cokernel_module(
+                iotan;
+                cache=cc,
+                incremental_cache=cokernel_cache,
+            )
             prevC  = Cn
             prevPi = pin
         end
@@ -2310,8 +2723,8 @@ module ExtTorSpaces
     using LinearAlgebra: rank, I
     using SparseArrays
 
-    using ...CoreModules: AbstractCoeffField, RealField, ResolutionCache,
-                          ResolutionOptions, DerivedFunctorOptions, field_from_eltype
+    using ...CoreModules: AbstractCoeffField, RealField, ResolutionCache, field_from_eltype
+    using ...Options: ResolutionOptions, DerivedFunctorOptions
     import ...CoreModules: _append_scaled_triplets!
     import ...FieldLinAlg
     import ...FieldLinAlg: _SparseRREF, SparseRow,
@@ -2321,7 +2734,7 @@ module ExtTorSpaces
               _nullspace_from_pivots
 
     using ...IndicatorTypes: UpsetPresentation, DownsetCopresentation
-    using ...Modules: PModule, PMorphism, map_leq, map_leq_many
+    using ...Modules: PModule, PMorphism, map_leq, map_leq_many, map_leq_many!, _prepare_map_leq_batch_owned
     using ...FiniteFringe: AbstractPoset, FinitePoset, FringeModule, fiber_dimension, Upset, Downset,
                            leq, leq_matrix, poset_equal, poset_equal_opposite, nvertices
     using ...AbelianCategories: kernel_with_inclusion
@@ -2675,7 +3088,9 @@ module ExtTorSpaces
         @inbounds for k in 1:nnz_delta
             pairs[k] = (cod_gens[Ii[k]], dom_gens[Jj[k]])
         end
-        map_blocks = map_leq_many(N, pairs)
+        pair_batch = _prepare_map_leq_batch_owned(pairs)
+        map_blocks = Vector{AbstractMatrix{K}}(undef, length(pairs))
+        map_leq_many!(map_blocks, N, pair_batch)
         do_threads = Threads.nthreads() > 1 && nnz_delta >= 64
 
         if do_threads
@@ -3743,7 +4158,9 @@ module ExtTorSpaces
                 @inbounds for k in eachindex(V)
                     pairs[k] = (dom_bases[J[k]], cod_bases[I[k]])
                 end
-                map_blocks = map_leq_many(L, pairs)
+                pair_batch = _prepare_map_leq_batch_owned(pairs)
+                map_blocks = Vector{AbstractMatrix{K}}(undef, length(pairs))
+                map_leq_many!(map_blocks, L, pair_batch)
                 for k in 1:length(V)
                     j = I[k]
                     i = J[k]
@@ -3773,7 +4190,9 @@ module ExtTorSpaces
                 @inbounds for k in eachindex(V)
                     pairs[k] = (dom_bases[J[k]], cod_bases[I[k]])
                 end
-                map_blocks = map_leq_many(L, pairs)
+                pair_batch = _prepare_map_leq_batch_owned(pairs)
+                map_blocks = Vector{AbstractMatrix{K}}(undef, length(pairs))
+                map_leq_many!(map_blocks, L, pair_batch)
                 for k in 1:length(V)
                     j = I[k]
                     i = J[k]
@@ -3853,7 +4272,9 @@ module ExtTorSpaces
                 @inbounds for k in eachindex(V)
                     pairs[k] = (dom_bases[J[k]], cod_bases[I[k]])
                 end
-                map_blocks = map_leq_many(Rop, pairs)
+                pair_batch = _prepare_map_leq_batch_owned(pairs)
+                map_blocks = Vector{AbstractMatrix{K}}(undef, length(pairs))
+                map_leq_many!(map_blocks, Rop, pair_batch)
                 for k in 1:length(V)
                     j = I[k]
                     i = J[k]
@@ -3883,7 +4304,9 @@ module ExtTorSpaces
                 @inbounds for k in eachindex(V)
                     pairs[k] = (dom_bases[J[k]], cod_bases[I[k]])
                 end
-                map_blocks = map_leq_many(Rop, pairs)
+                pair_batch = _prepare_map_leq_batch_owned(pairs)
+                map_blocks = Vector{AbstractMatrix{K}}(undef, length(pairs))
+                map_leq_many!(map_blocks, Rop, pair_batch)
                 for k in 1:length(V)
                     j = I[k]
                     i = J[k]
@@ -4155,11 +4578,12 @@ module Functoriality
     using LinearAlgebra
     using SparseArrays
 
-    using ...CoreModules: AbstractCoeffField, RealField, ResolutionOptions, DerivedFunctorOptions, field_from_eltype
+    using ...CoreModules: AbstractCoeffField, RealField, field_from_eltype
+    using ...Options: ResolutionOptions, DerivedFunctorOptions
     import ...CoreModules: _append_scaled_triplets!
     using ...FieldLinAlg
 
-    using ...Modules: PModule, PMorphism, map_leq, map_leq_many
+    using ...Modules: PModule, PMorphism, map_leq, map_leq_many, map_leq_many!, _prepare_map_leq_batch_owned
     import ...FiniteFringe: nvertices, leq, poset_equal
     using ...ChainComplexes
     using ...AbelianCategories: ShortExactSequence
@@ -4224,7 +4648,9 @@ module Functoriality
             @inbounds for k in eachindex(Vcoeff)
                 pairs[k] = (cod_gens[Icoeff[k]], dom_gens[Jcoeff[k]])
             end
-            map_blocks = map_leq_many(N, pairs)
+            pair_batch = _prepare_map_leq_batch_owned(pairs)
+            map_blocks = Vector{AbstractMatrix{K}}(undef, length(pairs))
+            map_leq_many!(map_blocks, N, pair_batch)
             @inbounds for k in eachindex(Vcoeff)
                 j = Icoeff[k]   # cod index
                 i = Jcoeff[k]   # dom index
@@ -4251,7 +4677,9 @@ module Functoriality
                     push!(pairs, (cod_gens[j], dom_gens[i]))
                 end
             end
-            map_blocks = map_leq_many(N, pairs)
+            pair_batch = _prepare_map_leq_batch_owned(pairs)
+            map_blocks = Vector{AbstractMatrix{K}}(undef, length(pairs))
+            map_leq_many!(map_blocks, N, pair_batch)
             @inbounds for k in eachindex(vals)
                 i = dom_idx[k]
                 j = cod_idx[k]
@@ -5133,7 +5561,9 @@ module Functoriality
             @inbounds for k in eachindex(Vcoeff)
                 pairs[k] = (dom_bases[Jcoeff[k]], cod_bases[Icoeff[k]])
             end
-            map_blocks = map_leq_many(M, pairs)
+            pair_batch = _prepare_map_leq_batch_owned(pairs)
+            map_blocks = Vector{AbstractMatrix{K}}(undef, length(pairs))
+            map_leq_many!(map_blocks, M, pair_batch)
             @inbounds for k in eachindex(Vcoeff)
                 j = Icoeff[k]   # cod index
                 i = Jcoeff[k]   # dom index
@@ -5160,7 +5590,9 @@ module Functoriality
                     push!(pairs, (dom_bases[i], cod_bases[j]))
                 end
             end
-            map_blocks = map_leq_many(M, pairs)
+            pair_batch = _prepare_map_leq_batch_owned(pairs)
+            map_blocks = Vector{AbstractMatrix{K}}(undef, length(pairs))
+            map_leq_many!(map_blocks, M, pair_batch)
             @inbounds for k in eachindex(vals)
                 i = dom_idx[k]
                 j = cod_idx[k]
@@ -5694,8 +6126,9 @@ module Algebras
     using LinearAlgebra
     using SparseArrays
 
-    using ...CoreModules: AbstractCoeffField, RealField, DerivedFunctorOptions, field_from_eltype, coerce, coeff_type
-    using ...Modules: PModule, PMorphism, map_leq, map_leq_many
+    using ...CoreModules: AbstractCoeffField, RealField, field_from_eltype, coerce, coeff_type
+    using ...Options: DerivedFunctorOptions
+    using ...Modules: PModule, PMorphism, map_leq, map_leq_many, map_leq_many!, _prepare_map_leq_batch_owned
     using ...ChainComplexes
     using ...FiniteFringe: FinitePoset, FringeModule, cover_edges, nvertices, leq, poset_equal
     using ...IndicatorResolutions: pmodule_from_fringe
@@ -5822,7 +6255,9 @@ module Algebras
                     push!(ptr_slots, ptr)
                 end
             end
-            map_blocks = map_leq_many(N, pairs)
+            pair_batch = _prepare_map_leq_batch_owned(pairs)
+            map_blocks = Vector{AbstractMatrix{K}}(undef, length(pairs))
+            map_leq_many!(map_blocks, N, pair_batch)
             map_idx_by_ptr = zeros(Int, length(Fps.nzval))
             @inbounds for idx in eachindex(ptr_slots)
                 map_idx_by_ptr[ptr_slots[idx]] = idx
@@ -5875,7 +6310,9 @@ module Algebras
                 map_idx[j, i] = length(pairs)
             end
         end
-        map_blocks = map_leq_many(N, pairs)
+        pair_batch = _prepare_map_leq_batch_owned(pairs)
+        map_blocks = Vector{AbstractMatrix{K}}(undef, length(pairs))
+        map_leq_many!(map_blocks, N, pair_batch)
 
         for i in 1:length(dom_bases)
             u = dom_bases[i]
@@ -6654,10 +7091,11 @@ module SpectralSequences
     using LinearAlgebra
     using SparseArrays
 
-    using ...CoreModules: AbstractCoeffField, RealField, ResolutionOptions, field_from_eltype
+    using ...CoreModules: AbstractCoeffField, RealField, field_from_eltype
+    using ...Options: ResolutionOptions
     import ...CoreModules: _append_scaled_triplets!
 
-    using ...Modules: PModule, map_leq, map_leq_many
+    using ...Modules: PModule, map_leq, map_leq_many, map_leq_many!, _prepare_map_leq_batch_owned
     using ...ChainComplexes
     import ...IndicatorResolutions
     using ...IndicatorResolutions: upset_resolution, downset_resolution
@@ -6934,6 +7372,8 @@ module SpectralSequences
                 @inbounds for k in eachindex(V)
                     pairs[k] = (gens_dom[J[k]], gens_cod[I[k]])
                 end
+                pair_batch = _prepare_map_leq_batch_owned(pairs)
+                map_blocks = Vector{AbstractMatrix{K}}(undef, length(pairs))
 
                 B = bmin + (ib - 1)
                 b = -B
@@ -6941,7 +7381,7 @@ module SpectralSequences
 
                 offs_dom = _tensor_offsets(gens_dom, Qb)
                 offs_cod = _tensor_offsets(gens_cod, Qb)
-                map_blocks = map_leq_many(Qb, pairs)
+                map_leq_many!(map_blocks, Qb, pair_batch)
 
                 It = Int[]
                 Jt = Int[]
@@ -6971,6 +7411,8 @@ module SpectralSequences
                 @inbounds for k in eachindex(V)
                     pairs[k] = (gens_dom[J[k]], gens_cod[I[k]])
                 end
+                pair_batch = _prepare_map_leq_batch_owned(pairs)
+                map_blocks = Vector{AbstractMatrix{K}}(undef, length(pairs))
 
                 for ib in 1:nb
                     B = bmin + (ib - 1)
@@ -6979,7 +7421,7 @@ module SpectralSequences
 
                     offs_dom = _tensor_offsets(gens_dom, Qb)
                     offs_cod = _tensor_offsets(gens_cod, Qb)
-                    map_blocks = map_leq_many(Qb, pairs)
+                    map_leq_many!(map_blocks, Qb, pair_batch)
 
                     It = Int[]
                     Jt = Int[]
@@ -7181,7 +7623,8 @@ module Backends
     using LinearAlgebra
     using SparseArrays
 
-    using ...CoreModules: AbstractCoeffField, RealField, EncodingOptions, ResolutionOptions, DerivedFunctorOptions, field_from_eltype
+    using ...CoreModules: AbstractCoeffField, RealField, field_from_eltype
+    using ...Options: EncodingOptions, ResolutionOptions, DerivedFunctorOptions
     using ...Modules: PModule, PMorphism
     using ...ChainComplexes
     using ...IndicatorResolutions: pmodule_from_fringe
@@ -7378,7 +7821,7 @@ module Backends
     #   In particular, these wrappers do NOT accept ad hoc keywords like
     #   max_regions or strict_eps, and they do not construct EncodingOptions
     #   internally. This keeps the "single source of truth" for defaults in
-    #   CoreModules.EncodingOptions and enables options/threading/provenance
+    #   Options.EncodingOptions and enables options/threading/provenance
     #   at the workflow layer.
     # -------------------------------------------------------------------------
 

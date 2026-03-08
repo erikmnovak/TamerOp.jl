@@ -37,14 +37,18 @@ using Random
 using SparseArrays
 using LinearAlgebra
 
-try
-    using PosetModules
-catch
-    include(joinpath(@__DIR__, "..", "src", "PosetModules.jl"))
-    using .PosetModules
+module _AbelianBenchEnv
+include(joinpath(@__DIR__, "..", "src", "CoreModules.jl"))
+include(joinpath(@__DIR__, "..", "src", "Options.jl"))
+include(joinpath(@__DIR__, "..", "src", "EncodingCore.jl"))
+include(joinpath(@__DIR__, "..", "src", "RegionGeometry.jl"))
+include(joinpath(@__DIR__, "..", "src", "FieldLinAlg.jl"))
+include(joinpath(@__DIR__, "..", "src", "FiniteFringe.jl"))
+include(joinpath(@__DIR__, "..", "src", "Modules.jl"))
+include(joinpath(@__DIR__, "..", "src", "AbelianCategories.jl"))
 end
 
-const PM = PosetModules.Advanced
+const PM = _AbelianBenchEnv
 const AC = PM.AbelianCategories
 const MD = PM.Modules
 const FF = PM.FiniteFringe
@@ -182,7 +186,7 @@ function _kernel_with_inclusion_old(f::MD.PMorphism{K}; cache::Union{Nothing,MD.
         K_dims[i] = size(B, 2)
     end
 
-    cc = (cache === nothing ? MD.cover_cache(M.Q) : cache)
+    cc = (cache === nothing ? MD._get_cover_cache(M.Q) : cache)
     preds = cc.preds
     succs = cc.succs
 
@@ -281,7 +285,7 @@ function _cokernel_module_old(iota::MD.PMorphism{K}; cache::Union{Nothing,MD.Cov
     end
 
     Cedges = Dict{Tuple{Int,Int}, Matrix{K}}()
-    cc = (cache === nothing ? MD.cover_cache(Q) : cache)
+    cc = (cache === nothing ? MD._get_cover_cache(Q) : cache)
     @inbounds for u in 1:n
         su = cc.succs[u]
         maps_u = E.edge_maps.maps_to_succ[u]
@@ -300,6 +304,100 @@ function _cokernel_module_old(iota::MD.PMorphism{K}; cache::Union{Nothing,MD.Cov
     Cmod = MD.PModule{K}(Q, Cdims, Cedges; field=field)
     q = MD.PMorphism(E, Cmod, qcomps)
     return Cmod, q
+end
+
+function _pushout_old(f::MD.PMorphism{K}, g::MD.PMorphism{K};
+                      cache::Union{Nothing,MD.CoverCache}=nothing) where {K}
+    A = f.dom
+    B = f.cod
+    C = g.cod
+    S = MD.direct_sum(B, C)
+    Q = S.Q
+    phi_comps = Vector{Matrix{K}}(undef, FF.nvertices(Q))
+    @inbounds for u in 1:FF.nvertices(Q)
+        fu = f.comps[u]
+        gu = g.comps[u]
+        b = size(fu, 1)
+        c = size(gu, 1)
+        a = size(fu, 2)
+        M = Matrix{K}(undef, b + c, a)
+        if b > 0
+            copyto!(view(M, 1:b, :), fu)
+        end
+        if c > 0
+            @inbounds for i in 1:c, j in 1:a
+                M[b + i, j] = -gu[i, j]
+            end
+        end
+        phi_comps[u] = M
+    end
+    phi = MD.PMorphism{K}(A, S, phi_comps)
+    P, q = _cokernel_module_old(phi; cache=cache)
+    inB_comps = Vector{Matrix{K}}(undef, FF.nvertices(Q))
+    inC_comps = Vector{Matrix{K}}(undef, FF.nvertices(Q))
+    @inbounds for u in 1:FF.nvertices(Q)
+        qu = q.comps[u]
+        b = B.dims[u]
+        c = C.dims[u]
+        inB_comps[u] = copy(view(qu, :, 1:b))
+        inC_comps[u] = copy(view(qu, :, (b + 1):(b + c)))
+    end
+    inB = MD.PMorphism{K}(B, P, inB_comps)
+    inC = MD.PMorphism{K}(C, P, inC_comps)
+    return P, inB, inC, q, phi
+end
+
+function _pullback_old(f::MD.PMorphism{K}, g::MD.PMorphism{K};
+                       cache::Union{Nothing,MD.CoverCache}=nothing) where {K}
+    B = f.dom
+    C = g.dom
+    D = f.cod
+    S = MD.direct_sum(B, C)
+    Q = S.Q
+    psi_comps = Vector{Matrix{K}}(undef, FF.nvertices(Q))
+    @inbounds for u in 1:FF.nvertices(Q)
+        fu = f.comps[u]
+        gu = g.comps[u]
+        d = size(fu, 1)
+        b = size(fu, 2)
+        c = size(gu, 2)
+        M = Matrix{K}(undef, d, b + c)
+        if b > 0
+            copyto!(view(M, :, 1:b), fu)
+        end
+        if c > 0
+            @inbounds for i in 1:d, j in 1:c
+                M[i, b + j] = -gu[i, j]
+            end
+        end
+        psi_comps[u] = M
+    end
+    psi = MD.PMorphism{K}(S, D, psi_comps)
+    P, iota = _kernel_with_inclusion_old(psi; cache=cache)
+    prB_comps = Vector{Matrix{K}}(undef, FF.nvertices(Q))
+    prC_comps = Vector{Matrix{K}}(undef, FF.nvertices(Q))
+    @inbounds for u in 1:FF.nvertices(Q)
+        iu = iota.comps[u]
+        b = B.dims[u]
+        c = C.dims[u]
+        prB_comps[u] = copy(view(iu, 1:b, :))
+        prC_comps[u] = copy(view(iu, (b + 1):(b + c), :))
+    end
+    prB = MD.PMorphism{K}(P, B, prB_comps)
+    prC = MD.PMorphism{K}(P, C, prC_comps)
+    return P, prB, prC, iota, psi
+end
+
+function _equalizer_old(f::MD.PMorphism{K}, g::MD.PMorphism{K};
+                        cache::Union{Nothing,MD.CoverCache}=nothing) where {K}
+    h = AC._difference_morphism(f, g)
+    return _kernel_with_inclusion_old(h; cache=cache)
+end
+
+function _coequalizer_old(f::MD.PMorphism{K}, g::MD.PMorphism{K};
+                          cache::Union{Nothing,MD.CoverCache}=nothing) where {K}
+    h = AC._difference_morphism(f, g)
+    return _cokernel_module_old(h; cache=cache)
 end
 
 function _morphism_equal(field::CM.AbstractCoeffField, a::MD.PMorphism, b::MD.PMorphism)
@@ -345,7 +443,7 @@ function main(args=ARGS)
     field = CM.QQField()
     P = _chain_poset(n)
     A, B, f = _build_morphism_fixture(P, field; rank_part=r, ker_part=k, coker_part=c, seed=Int(0xA110))
-    cc = MD.cover_cache(P)
+    cc = MD._get_cover_cache(P)
 
     println("AbelianCategories microbench")
     println("reps=$(reps), n=$(n), rank=$(r), ker=$(k), coker=$(c), field=QQ\n")
@@ -382,12 +480,123 @@ function main(args=ARGS)
     b_new_c = _bench("cokernel new (slot-aligned path)", () -> AC._cokernel_module(f; cache=cc); reps=reps)
     println("speedup(new/old): ", round(b_old_c.ms / b_new_c.ms, digits=2), "x")
 
+    println()
+    println("== Pushout / pullback ==")
+    z = MD.zero_morphism(f.dom, f.cod)
+    Ppo_new, inB_new, inC_new, qpo_new, phi_new = AC.pushout(f, z; cache=cc)
+    Ppo_old, inB_old, inC_old, qpo_old, phi_old = _pushout_old(f, z; cache=cc)
+    _pmodule_equal(field, Ppo_new, Ppo_old) || error("pushout parity failed")
+    _morphism_equal(field, inB_new, inB_old) || error("pushout inB parity failed")
+    _morphism_equal(field, inC_new, inC_old) || error("pushout inC parity failed")
+    _morphism_equal(field, qpo_new, qpo_old) || error("pushout q parity failed")
+    _morphism_equal(field, phi_new, phi_old) || error("pushout phi parity failed")
+    b_old_po = _bench("pushout old (generic block path)", () -> _pushout_old(f, z; cache=cc); reps=reps)
+    b_new_po = _bench("pushout new (block-aware path)", () -> AC.pushout(f, z; cache=cc); reps=reps)
+    println("speedup(new/old): ", round(b_old_po.ms / b_new_po.ms, digits=2), "x")
+
+    PB_new, prB_new, prC_new, iota_new, psi_new = AC.pullback(f, z; cache=cc)
+    PB_old, prB_old, prC_old, iota_old, psi_old = _pullback_old(f, z; cache=cc)
+    _pmodule_equal(field, PB_new, PB_old) || error("pullback parity failed")
+    _morphism_equal(field, prB_new, prB_old) || error("pullback prB parity failed")
+    _morphism_equal(field, prC_new, prC_old) || error("pullback prC parity failed")
+    _morphism_equal(field, iota_new, iota_old) || error("pullback iota parity failed")
+    _morphism_equal(field, psi_new, psi_old) || error("pullback psi parity failed")
+    b_old_pb = _bench("pullback old (generic block path)", () -> _pullback_old(f, z; cache=cc); reps=reps)
+    b_new_pb = _bench("pullback new (block-aware path)", () -> AC.pullback(f, z; cache=cc); reps=reps)
+    println("speedup(new/old): ", round(b_old_pb.ms / b_new_pb.ms, digits=2), "x")
+
+    println()
+    println("== Equalizer / coequalizer (self-map) ==")
+    E_new, e_new = AC.equalizer(f, f; cache=cc)
+    E_old, e_old = _equalizer_old(f, f; cache=cc)
+    _pmodule_equal(field, E_new, E_old) || error("equalizer parity failed")
+    _morphism_equal(field, e_new, e_old) || error("equalizer inclusion parity failed")
+    b_old_eq = _bench("equalizer old (difference + kernel)", () -> _equalizer_old(f, f; cache=cc); reps=reps)
+    b_new_eq = _bench("equalizer new (self-map fast path)", () -> AC.equalizer(f, f; cache=cc); reps=reps)
+    println("speedup(new/old): ", round(b_old_eq.ms / b_new_eq.ms, digits=2), "x")
+
+    Q_new, q_new = AC.coequalizer(f, f; cache=cc)
+    Q_old, q_old = _coequalizer_old(f, f; cache=cc)
+    _pmodule_equal(field, Q_new, Q_old) || error("coequalizer parity failed")
+    _morphism_equal(field, q_new, q_old) || error("coequalizer projection parity failed")
+    b_old_coeq = _bench("coequalizer old (difference + cokernel)", () -> _coequalizer_old(f, f; cache=cc); reps=reps)
+    b_new_coeq = _bench("coequalizer new (self-map fast path)", () -> AC.coequalizer(f, f; cache=cc); reps=reps)
+    println("speedup(new/old): ", round(b_old_coeq.ms / b_new_coeq.ms, digits=2), "x")
+
+    println()
+    println("== Pushout / pullback (self-map) ==")
+    Ppo_self_new, inB_self_new, inC_self_new, qpo_self_new, phi_self_new = AC.pushout(f, f; cache=cc)
+    Cok_self = AC.cokernel(f; cache=cc)
+    Ppo_self_new.dims == (f.cod.dims .+ Cok_self.dims) || error("self pushout dims failed")
+    for u in eachindex(f.comps)
+        lhs = inB_self_new.comps[u] * f.comps[u]
+        rhs = inC_self_new.comps[u] * f.comps[u]
+        zero_block = zeros(eltype(f.comps[u]), size(qpo_self_new.comps[u], 1), size(phi_self_new.comps[u], 2))
+        if field isa CM.RealField
+            isapprox(lhs, rhs; rtol=field.rtol, atol=field.atol) || error("self pushout relation failed")
+            isapprox(qpo_self_new.comps[u] * phi_self_new.comps[u], zero_block; rtol=field.rtol, atol=field.atol) || error("self pushout quotient failed")
+        else
+            lhs == rhs || error("self pushout relation failed")
+            qpo_self_new.comps[u] * phi_self_new.comps[u] == zero_block || error("self pushout quotient failed")
+        end
+    end
+    b_old_po_self = _bench("pushout old (same map)", () -> _pushout_old(f, f; cache=cc); reps=reps)
+    b_new_po_self = _bench("pushout new (same-map fast path)", () -> AC.pushout(f, f; cache=cc); reps=reps)
+    println("speedup(new/old): ", round(b_old_po_self.ms / b_new_po_self.ms, digits=2), "x")
+
+    PB_self_new, prB_self_new, prC_self_new, iota_self_new, psi_self_new = AC.pullback(f, f; cache=cc)
+    Ker_self = AC.kernel(f; cache=cc)
+    PB_self_new.dims == (f.dom.dims .+ Ker_self.dims) || error("self pullback dims failed")
+    for u in eachindex(f.comps)
+        lhs = f.comps[u] * prB_self_new.comps[u]
+        rhs = f.comps[u] * prC_self_new.comps[u]
+        zero_block = zeros(eltype(f.comps[u]), size(psi_self_new.comps[u], 1), size(iota_self_new.comps[u], 2))
+        if field isa CM.RealField
+            isapprox(lhs, rhs; rtol=field.rtol, atol=field.atol) || error("self pullback relation failed")
+            isapprox(psi_self_new.comps[u] * iota_self_new.comps[u], zero_block; rtol=field.rtol, atol=field.atol) || error("self pullback kernel failed")
+        else
+            lhs == rhs || error("self pullback relation failed")
+            psi_self_new.comps[u] * iota_self_new.comps[u] == zero_block || error("self pullback kernel failed")
+        end
+    end
+    b_old_pb_self = _bench("pullback old (same map)", () -> _pullback_old(f, f; cache=cc); reps=reps)
+    b_new_pb_self = _bench("pullback new (same-map fast path)", () -> AC.pullback(f, f; cache=cc); reps=reps)
+    println("speedup(new/old): ", round(b_old_pb_self.ms / b_new_pb_self.ms, digits=2), "x")
+
+    println()
+    println("== Cache-routed composites ==")
+    b_coim_cache = _bench("coimage_with_projection (cache)", () -> AC.coimage_with_projection(f; cache=cc); reps=reps)
+    b_coim_auto = _bench("coimage_with_projection (auto)", () -> AC.coimage_with_projection(f); reps=reps)
+    println("cache/auto ratio: ", round(b_coim_cache.ms / b_coim_auto.ms, digits=2), "x")
+
+    P1 = _chain_poset(1)
+    cc1 = MD._get_cover_cache(P1)
+    K1 = CM.coeff_type(field)
+    empty_edges = Dict{Tuple{Int,Int}, Matrix{K1}}()
+    A1 = MD.PModule{K1}(P1, [1], empty_edges; field=field)
+    B1 = MD.PModule{K1}(P1, [2], empty_edges; field=field)
+    C1 = MD.PModule{K1}(P1, [1], empty_edges; field=field)
+    i1 = MD.PMorphism(A1, B1, [reshape(K1[CM.coerce(field, 1), CM.coerce(field, 0)], 2, 1)])
+    p1 = MD.PMorphism(B1, C1, [reshape(K1[CM.coerce(field, 0), CM.coerce(field, 1)], 1, 2)])
+
+    function _ses_check_cached()
+        ses = AC.ShortExactSequence(i1, p1; check=false)
+        AC.is_exact(ses; cache=cc1)
+    end
+    function _ses_check_auto()
+        ses = AC.ShortExactSequence(i1, p1; check=false)
+        AC.is_exact(ses)
+    end
+    b_ses_cache = _bench("short_exact_sequence check (cache)", _ses_check_cached; reps=reps)
+    b_ses_auto = _bench("short_exact_sequence check (auto)", _ses_check_auto; reps=reps)
+    println("cache/auto ratio: ", round(b_ses_cache.ms / b_ses_auto.ms, digits=2), "x")
+
     if n_small > 0
         println()
         println("== Cokernel small-case overhead check ==")
         Ps = _chain_poset(n_small)
         _, _, fs = _build_morphism_fixture(Ps, field; rank_part=r, ker_part=k, coker_part=c, seed=Int(0xA111))
-        ccs = MD.cover_cache(Ps)
+        ccs = MD._get_cover_cache(Ps)
         # Warm/parity
         Cs_new, qs_new = AC._cokernel_module(fs; cache=ccs)
         Cs_old, qs_old = _cokernel_module_old(fs; cache=ccs)
@@ -410,7 +619,7 @@ function main(args=ARGS)
                                                ker_part=k,
                                                coker_part=c,
                                                seed=seed)
-            ccf = MD.cover_cache(Pf)
+            ccf = MD._get_cover_cache(Pf)
             Cf_new, qf_new = AC._cokernel_module(ff; cache=ccf)
             Cf_old, qf_old = _cokernel_module_old(ff; cache=ccf)
             _pmodule_equal(field, Cf_new, Cf_old) || error("fanout cokernel parity failed ($label)")

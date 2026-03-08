@@ -30,6 +30,10 @@ Random.seed!(20260217)
 outdir = example_outdir("90_advanced_ext")
 
 CM = PM.CoreModules
+OPT = PM.Options
+DT = PM.DataTypes
+EC = PM.EncodingCore
+RES = PM.Results
 FF = PM.FiniteFringe
 IR = PM.IndicatorResolutions
 
@@ -54,7 +58,7 @@ S1 = FF.one_by_one_fringe(
 )
 
 M = IR.pmodule_from_fringe(S1)
-enc = CM.EncodingResult(P, M, nothing; H=S1, opts=CM.EncodingOptions(field=S1.field), backend=:example)
+enc = RES.EncodingResult(P, M, nothing; H=S1, opts=OPT.EncodingOptions(field=S1.field), backend=:example)
 println("Encoded poset vertices: ", enc.P.n)
 
 stage("2) Resolve (projective + injective)")

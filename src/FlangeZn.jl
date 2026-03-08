@@ -468,6 +468,22 @@ struct FlangeCompiledKernel{N}
     inj_b::Matrix{Int}
     flat_free_words::Matrix{UInt64}
     inj_free_words::Matrix{UInt64}
+    flat_offsets::Vector{Int}
+    flat_dims::Vector{Int}
+    flat_bounds::Vector{Int}
+    inj_offsets::Vector{Int}
+    inj_dims::Vector{Int}
+    inj_bounds::Vector{Int}
+    flat_free_offsets::Vector{Int}
+    flat_free_idx::Vector{Int}
+    flat_event_offsets::Vector{Int}
+    flat_event_pos::Vector{Int}
+    flat_event_idx::Vector{Int}
+    inj_free_offsets::Vector{Int}
+    inj_free_idx::Vector{Int}
+    inj_event_offsets::Vector{Int}
+    inj_event_pos::Vector{Int}
+    inj_event_idx::Vector{Int}
     coord_word::Vector{Int}
     coord_mask::Vector{UInt64}
 end
@@ -497,6 +513,13 @@ end
 
 @inline _bit_word(i::Int) = ((i - 1) >>> 6) + 1
 @inline _bit_mask(i::Int) = UInt64(1) << ((i - 1) & 63)
+@inline function _same_words(a::Vector{UInt64}, b::Vector{UInt64})::Bool
+    length(a) == length(b) || return false
+    @inbounds for i in eachindex(a, b)
+        a[i] == b[i] || return false
+    end
+    return true
+end
 
 function _compile_flange_kernel(n::Int,
                                 flats::Vector{IndFlat{N}},
@@ -510,8 +533,22 @@ function _compile_flange_kernel(n::Int,
     inj_b = Matrix{Int}(undef, N, ninj)
     flat_free_words = Matrix{UInt64}(undef, ncoord_words, nflat)
     inj_free_words = Matrix{UInt64}(undef, ncoord_words, ninj)
+    flat_offsets = Vector{Int}(undef, nflat + 1)
+    flat_dims = Int[]
+    flat_bounds = Int[]
+    inj_offsets = Vector{Int}(undef, ninj + 1)
+    inj_dims = Int[]
+    inj_bounds = Int[]
+    flat_free_lists = [Int[] for _ in 1:N]
+    flat_event_lists = [Tuple{Int,Int}[] for _ in 1:N]
+    inj_free_lists = [Int[] for _ in 1:N]
+    inj_event_lists = [Tuple{Int,Int}[] for _ in 1:N]
     fill!(flat_free_words, zero(UInt64))
     fill!(inj_free_words, zero(UInt64))
+    sizehint!(flat_dims, N * nflat)
+    sizehint!(flat_bounds, N * nflat)
+    sizehint!(inj_dims, N * ninj)
+    sizehint!(inj_bounds, N * ninj)
 
     coord_word = Vector{Int}(undef, N)
     coord_mask = Vector{UInt64}(undef, N)
@@ -522,26 +559,81 @@ function _compile_flange_kernel(n::Int,
 
     @inbounds for j in 1:nflat
         Fj = flats[j]
+        flat_offsets[j] = length(flat_dims) + 1
         for d in 1:N
             flat_b[d, j] = Fj.b[d]
             if Fj.tau.coords[d]
                 flat_free_words[coord_word[d], j] |= coord_mask[d]
+                push!(flat_free_lists[d], j)
+            else
+                push!(flat_dims, d)
+                push!(flat_bounds, Fj.b[d])
+                push!(flat_event_lists[d], (Fj.b[d], j))
             end
         end
     end
+    flat_offsets[nflat + 1] = length(flat_dims) + 1
 
     @inbounds for i in 1:ninj
         Ei = injectives[i]
+        inj_offsets[i] = length(inj_dims) + 1
         for d in 1:N
             inj_b[d, i] = Ei.b[d]
             if Ei.tau.coords[d]
                 inj_free_words[coord_word[d], i] |= coord_mask[d]
+                push!(inj_free_lists[d], i)
+            else
+                push!(inj_dims, d)
+                push!(inj_bounds, Ei.b[d])
+                push!(inj_event_lists[d], (Ei.b[d], i))
             end
         end
     end
+    inj_offsets[ninj + 1] = length(inj_dims) + 1
+
+    flat_free_offsets = Vector{Int}(undef, N + 1)
+    flat_free_idx = Int[]
+    flat_event_offsets = Vector{Int}(undef, N + 1)
+    flat_event_pos = Int[]
+    flat_event_idx = Int[]
+    inj_free_offsets = Vector{Int}(undef, N + 1)
+    inj_free_idx = Int[]
+    inj_event_offsets = Vector{Int}(undef, N + 1)
+    inj_event_pos = Int[]
+    inj_event_idx = Int[]
+
+    for d in 1:N
+        flat_free_offsets[d] = length(flat_free_idx) + 1
+        append!(flat_free_idx, flat_free_lists[d])
+        flat_event_offsets[d] = length(flat_event_idx) + 1
+        sort!(flat_event_lists[d]; by=first)
+        for (pos, idx) in flat_event_lists[d]
+            push!(flat_event_pos, pos)
+            push!(flat_event_idx, idx)
+        end
+
+        inj_free_offsets[d] = length(inj_free_idx) + 1
+        append!(inj_free_idx, inj_free_lists[d])
+        inj_event_offsets[d] = length(inj_event_idx) + 1
+        sort!(inj_event_lists[d]; by=first)
+        for (pos, idx) in inj_event_lists[d]
+            push!(inj_event_pos, pos)
+            push!(inj_event_idx, idx)
+        end
+    end
+    flat_free_offsets[N + 1] = length(flat_free_idx) + 1
+    flat_event_offsets[N + 1] = length(flat_event_idx) + 1
+    inj_free_offsets[N + 1] = length(inj_free_idx) + 1
+    inj_event_offsets[N + 1] = length(inj_event_idx) + 1
 
     return FlangeCompiledKernel{N}(n, ncoord_words, nflat, ninj,
                                    flat_b, inj_b, flat_free_words, inj_free_words,
+                                   flat_offsets, flat_dims, flat_bounds,
+                                   inj_offsets, inj_dims, inj_bounds,
+                                   flat_free_offsets, flat_free_idx,
+                                   flat_event_offsets, flat_event_pos, flat_event_idx,
+                                   inj_free_offsets, inj_free_idx,
+                                   inj_event_offsets, inj_event_pos, inj_event_idx,
                                    coord_word, coord_mask)
 end
 
@@ -609,11 +701,9 @@ end
 @inline function _contains_flat_kernel(k::FlangeCompiledKernel{N},
                                        j::Int,
                                        g::NTuple{N,<:Integer})::Bool where {N}
-    @inbounds for d in 1:N
-        wd = k.coord_word[d]
-        bm = k.coord_mask[d]
-        ((k.flat_free_words[wd, j] & bm) != 0) && continue
-        g[d] >= k.flat_b[d, j] || return false
+    @inbounds for ptr in k.flat_offsets[j]:(k.flat_offsets[j + 1] - 1)
+        d = k.flat_dims[ptr]
+        g[d] >= k.flat_bounds[ptr] || return false
     end
     return true
 end
@@ -621,11 +711,9 @@ end
 @inline function _contains_inj_kernel(k::FlangeCompiledKernel{N},
                                       i::Int,
                                       g::NTuple{N,<:Integer})::Bool where {N}
-    @inbounds for d in 1:N
-        wd = k.coord_word[d]
-        bm = k.coord_mask[d]
-        ((k.inj_free_words[wd, i] & bm) != 0) && continue
-        g[d] <= k.inj_b[d, i] || return false
+    @inbounds for ptr in k.inj_offsets[i]:(k.inj_offsets[i + 1] - 1)
+        d = k.inj_dims[ptr]
+        g[d] <= k.inj_bounds[ptr] || return false
     end
     return true
 end
@@ -634,11 +722,9 @@ end
                                        j::Int,
                                        g::AbstractVector{<:Integer})::Bool where {N}
     length(g) == N || error("_contains_flat_kernel: point dimension does not match face dimension")
-    @inbounds for d in 1:N
-        wd = k.coord_word[d]
-        bm = k.coord_mask[d]
-        ((k.flat_free_words[wd, j] & bm) != 0) && continue
-        g[d] >= k.flat_b[d, j] || return false
+    @inbounds for ptr in k.flat_offsets[j]:(k.flat_offsets[j + 1] - 1)
+        d = k.flat_dims[ptr]
+        g[d] >= k.flat_bounds[ptr] || return false
     end
     return true
 end
@@ -647,11 +733,9 @@ end
                                       i::Int,
                                       g::AbstractVector{<:Integer})::Bool where {N}
     length(g) == N || error("_contains_inj_kernel: point dimension does not match face dimension")
-    @inbounds for d in 1:N
-        wd = k.coord_word[d]
-        bm = k.coord_mask[d]
-        ((k.inj_free_words[wd, i] & bm) != 0) && continue
-        g[d] <= k.inj_b[d, i] || return false
+    @inbounds for ptr in k.inj_offsets[i]:(k.inj_offsets[i + 1] - 1)
+        d = k.inj_dims[ptr]
+        g[d] <= k.inj_bounds[ptr] || return false
     end
     return true
 end
@@ -661,6 +745,34 @@ end
     bm = _bit_mask(idx)
     @inbounds words[wd] |= bm
     return nothing
+end
+
+@inline function _fill_active_injectives_words_kernel!(words::Vector{UInt64},
+                                                       k::FlangeCompiledKernel{N},
+                                                       g::Union{AbstractVector{<:Integer},NTuple{N,<:Integer}})::Int where {N}
+    fill!(words, zero(UInt64))
+    count = 0
+    @inbounds for i in 1:k.ninj
+        if _contains_inj_kernel(k, i, g)
+            _mark_active!(words, i)
+            count += 1
+        end
+    end
+    return count
+end
+
+@inline function _fill_active_flats_words_kernel!(words::Vector{UInt64},
+                                                  k::FlangeCompiledKernel{N},
+                                                  g::Union{AbstractVector{<:Integer},NTuple{N,<:Integer}})::Int where {N}
+    fill!(words, zero(UInt64))
+    count = 0
+    @inbounds for j in 1:k.nflat
+        if _contains_flat_kernel(k, j, g)
+            _mark_active!(words, j)
+            count += 1
+        end
+    end
+    return count
 end
 
 @inline function _fill_active_injectives_kernel!(active::Vector{Int},
@@ -723,14 +835,6 @@ end
     return active
 end
 
-@inline function _same_words(a::Vector{UInt64}, b::Vector{UInt64})::Bool
-    length(a) == length(b) || return false
-    @inbounds for i in eachindex(a, b)
-        a[i] == b[i] || return false
-    end
-    return true
-end
-
 @inline function _active_words_hash(row_words::Vector{UInt64},
                                     col_words::Vector{UInt64})::UInt64
     h = UInt64(0x243f6a8885a308d3)
@@ -776,11 +880,8 @@ end
                                  g::Union{AbstractVector{<:Integer},NTuple{N,<:Integer}})::Int where {K,F,N}
     _check_cache_compat(cache, FG)
     k = cache.kernel
-    _fill_active_injectives_kernel!(cache.rows, cache.row_words, k, g)
-    _fill_active_flats_kernel!(cache.cols, cache.col_words, k, g)
-
-    nr = length(cache.rows)
-    nc = length(cache.cols)
+    nr = _fill_active_injectives_words_kernel!(cache.row_words, k, g)
+    nc = _fill_active_flats_words_kernel!(cache.col_words, k, g)
     if nr == 0 || nc == 0
         return 0
     end
@@ -790,7 +891,11 @@ end
     cached >= 0 && return cached
 
     cache.misses += 1
-    rk = FieldLinAlg.rank_restricted(FG.field, FG.phi, cache.rows, cache.cols)
+    rk = FieldLinAlg.rank_restricted_words(FG.field, FG.phi,
+                                           cache.row_words, cache.col_words,
+                                           nr, nc;
+                                           nrows=cache.kernel.ninj,
+                                           ncols=cache.kernel.nflat)
     return _store_rank!(cache, key, cache.row_words, cache.col_words, rk)
 end
 
@@ -847,19 +952,21 @@ end
     cached >= 0 && return cached
 
     cache.misses += 1
-    _decode_active_words!(cache.rows, row_words, cache.kernel.ninj)
-    _decode_active_words!(cache.cols, col_words, cache.kernel.nflat)
-    rk = FieldLinAlg.rank_restricted(FG.field, FG.phi, cache.rows, cache.cols)
+    rk = FieldLinAlg.rank_restricted_words(FG.field, FG.phi,
+                                           row_words, col_words,
+                                           row_count, col_count;
+                                           nrows=cache.kernel.ninj,
+                                           ncols=cache.kernel.nflat)
     return _store_rank!(cache, key, row_words, col_words, rk)
 end
 
 @inline function _line_pass_flat_other(k::FlangeCompiledKernel{N},
                                        j::Int,
                                        rest::NTuple{M,Int})::Bool where {N,M}
-    @inbounds for d in 2:N
-        wd = k.coord_word[d]
-        bm = k.coord_mask[d]
-        if ((k.flat_free_words[wd, j] & bm) == 0) && (rest[d - 1] < k.flat_b[d, j])
+    @inbounds for ptr in k.flat_offsets[j]:(k.flat_offsets[j + 1] - 1)
+        d = k.flat_dims[ptr]
+        d == 1 && continue
+        if rest[d - 1] < k.flat_bounds[ptr]
             return false
         end
     end
@@ -869,10 +976,10 @@ end
 @inline function _line_pass_inj_other(k::FlangeCompiledKernel{N},
                                       i::Int,
                                       rest::NTuple{M,Int})::Bool where {N,M}
-    @inbounds for d in 2:N
-        wd = k.coord_word[d]
-        bm = k.coord_mask[d]
-        if ((k.inj_free_words[wd, i] & bm) == 0) && (rest[d - 1] > k.inj_b[d, i])
+    @inbounds for ptr in k.inj_offsets[i]:(k.inj_offsets[i + 1] - 1)
+        d = k.inj_dims[ptr]
+        d == 1 && continue
+        if rest[d - 1] > k.inj_bounds[ptr]
             return false
         end
     end
@@ -947,6 +1054,66 @@ end
         base += (rest[d - 1] - first(axes[d])) * strides[d]
     end
     return base
+end
+
+@inline function _prepare_line_sweep_events!(scratch::_BoxSweepScratch,
+                                             k::FlangeCompiledKernel{N},
+                                             rest::NTuple{M,Int},
+                                             xmin::Int,
+                                             xmax::Int) where {N,M}
+    row_words = scratch.row_words
+    col_words = scratch.col_words
+    fill!(row_words, zero(UInt64))
+    fill!(col_words, zero(UInt64))
+    row_count = 0
+    col_count = 0
+
+    col_add_pos = scratch.col_add_pos
+    col_add_idx = scratch.col_add_idx
+    row_rem_pos = scratch.row_rem_pos
+    row_rem_idx = scratch.row_rem_idx
+    empty!(col_add_pos); empty!(col_add_idx)
+    empty!(row_rem_pos); empty!(row_rem_idx)
+
+    @inbounds for ptr in k.flat_free_offsets[1]:(k.flat_free_offsets[2] - 1)
+        j = k.flat_free_idx[ptr]
+        _line_pass_flat_other(k, j, rest) || continue
+        col_count += _set_active_bit!(col_words, j)
+    end
+
+    @inbounds for ptr in k.flat_event_offsets[1]:(k.flat_event_offsets[2] - 1)
+        pos = k.flat_event_pos[ptr]
+        j = k.flat_event_idx[ptr]
+        _line_pass_flat_other(k, j, rest) || continue
+        if pos <= xmin
+            col_count += _set_active_bit!(col_words, j)
+        elseif pos <= xmax
+            push!(col_add_pos, pos - xmin + 1)
+            push!(col_add_idx, j)
+        end
+    end
+
+    @inbounds for ptr in k.inj_free_offsets[1]:(k.inj_free_offsets[2] - 1)
+        i = k.inj_free_idx[ptr]
+        _line_pass_inj_other(k, i, rest) || continue
+        row_count += _set_active_bit!(row_words, i)
+    end
+
+    @inbounds for ptr in k.inj_event_offsets[1]:(k.inj_event_offsets[2] - 1)
+        bi = k.inj_event_pos[ptr]
+        i = k.inj_event_idx[ptr]
+        _line_pass_inj_other(k, i, rest) || continue
+        if bi >= xmin
+            row_count += _set_active_bit!(row_words, i)
+            rem = bi - xmin + 2
+            if rem <= (xmax - xmin + 1)
+                push!(row_rem_pos, rem)
+                push!(row_rem_idx, i)
+            end
+        end
+    end
+
+    return row_count, col_count
 end
 
 # Convenience wrappers accepting a flange directly.
@@ -1235,101 +1402,48 @@ end
     return ntuple(d -> d == 1 ? x : rest[d - 1], N)
 end
 
-function _eval_unique_box_line_sweep!(vals::Vector{Int},
-                                      FG::Flange{K,F,N},
-                                      cache::FlangeDimCache{K,F,N},
-                                      scratch::_BoxSweepScratch,
-                                      uid_lookup::Vector{Int},
-                                      line_base::Int,
-                                      axes::NTuple{N,UnitRange{Int}},
-                                      rest::NTuple{M,Int}) where {K,F,N,M}
+function _eval_unique_line_sweep!(vals::Vector{Int},
+                                  FG::Flange{K,F,N},
+                                  cache::FlangeDimCache{K,F,N},
+                                  scratch::_BoxSweepScratch,
+                                  line_uids::AbstractVector{Int},
+                                  xmin::Int,
+                                  xmax::Int,
+                                  rest::NTuple{M,Int}) where {K,F,N,M}
     k = cache.kernel
-    xaxis = axes[1]
-    xmin = first(xaxis)
-    xmax = last(xaxis)
-    xlen = length(xaxis)
+    xlen = length(line_uids)
 
+    row_count, col_count = _prepare_line_sweep_events!(scratch, k, rest, xmin, xmax)
     row_words = scratch.row_words
     col_words = scratch.col_words
-    fill!(row_words, zero(UInt64))
-    fill!(col_words, zero(UInt64))
-    row_count = 0
-    col_count = 0
-
     col_add_pos = scratch.col_add_pos
     col_add_idx = scratch.col_add_idx
     row_rem_pos = scratch.row_rem_pos
     row_rem_idx = scratch.row_rem_idx
-    empty!(col_add_pos); empty!(col_add_idx)
-    empty!(row_rem_pos); empty!(row_rem_idx)
-
-    @inbounds for j in 1:k.nflat
-        _line_pass_flat_other(k, j, rest) || continue
-        free1 = (k.flat_free_words[k.coord_word[1], j] & k.coord_mask[1]) != 0
-        bj = k.flat_b[1, j]
-        if free1 || bj <= xmin
-            col_count += _set_active_bit!(col_words, j)
-        elseif bj <= xmax
-            push!(col_add_pos, bj - xmin + 1)
-            push!(col_add_idx, j)
-        end
-    end
-
-    @inbounds for i in 1:k.ninj
-        _line_pass_inj_other(k, i, rest) || continue
-        free1 = (k.inj_free_words[k.coord_word[1], i] & k.coord_mask[1]) != 0
-        bi = k.inj_b[1, i]
-        if free1 || bi >= xmax
-            row_count += _set_active_bit!(row_words, i)
-        elseif bi >= xmin
-            row_count += _set_active_bit!(row_words, i)
-            rem = bi - xmin + 2
-            if rem <= xlen
-                push!(row_rem_pos, rem)
-                push!(row_rem_idx, i)
-            end
-        end
-    end
-
-    col_perm = scratch.col_perm
-    row_perm = scratch.row_perm
-    resize!(col_perm, length(col_add_pos))
-    @inbounds for i in eachindex(col_perm)
-        col_perm[i] = i
-    end
-    sort!(col_perm; by=i -> @inbounds col_add_pos[i])
-    resize!(row_perm, length(row_rem_pos))
-    @inbounds for i in eachindex(row_perm)
-        row_perm[i] = i
-    end
-    sort!(row_perm; by=i -> @inbounds row_rem_pos[i])
     pcol = 1
     prow = 1
 
-    line_uids = scratch.line_uids
-    @inbounds for xi in 1:xlen
-        line_uids[xi] = uid_lookup[line_base + xi - 1]
-    end
-
     xi = 1
     @inbounds while xi <= xlen
-        while pcol <= length(col_perm) && col_add_pos[col_perm[pcol]] == xi
-            col_count += _set_active_bit!(col_words, col_add_idx[col_perm[pcol]])
+        while pcol <= length(col_add_pos) && col_add_pos[pcol] == xi
+            col_count += _set_active_bit!(col_words, col_add_idx[pcol])
             pcol += 1
         end
-        while prow <= length(row_perm) && row_rem_pos[row_perm[prow]] == xi
-            row_count -= _clear_active_bit!(row_words, row_rem_idx[row_perm[prow]])
+        while prow <= length(row_rem_pos) && row_rem_pos[prow] == xi
+            row_count -= _clear_active_bit!(row_words, row_rem_idx[prow])
             prow += 1
         end
 
-        next_col = pcol <= length(col_perm) ? col_add_pos[col_perm[pcol]] : (xlen + 1)
-        next_row = prow <= length(row_perm) ? row_rem_pos[row_perm[prow]] : (xlen + 1)
+        next_col = pcol <= length(col_add_pos) ? col_add_pos[pcol] : (xlen + 1)
+        next_row = prow <= length(row_rem_pos) ? row_rem_pos[prow] : (xlen + 1)
         xstop = min(next_col, next_row) - 1
         xstop < xi && (xstop = xi)
 
         v = _dim_from_active_words!(cache, FG, row_words, col_words, row_count, col_count)
         for xj in xi:xstop
-            vals[line_uids[xj]] = v
+            uid = line_uids[xj]
+            uid == 0 && continue
+            vals[uid] = v
         end
         xi = xstop + 1
     end
@@ -1373,7 +1487,10 @@ function _eval_unique_box_sweep!(vals::Vector{Int},
                 end
                 rest = rest_lines[li]
                 line_base = _box_base_index(rest, axes, strides)
-                _eval_unique_box_line_sweep!(vals, FG, c, s, uid_lookup, line_base, axes, rest)
+                @inbounds for xi in 1:xlen
+                    s.line_uids[xi] = uid_lookup[line_base + xi - 1]
+                end
+                _eval_unique_line_sweep!(vals, FG, c, s, s.line_uids, first(axes[1]), last(axes[1]), rest)
             end
             return vals
         end
@@ -1382,7 +1499,84 @@ function _eval_unique_box_sweep!(vals::Vector{Int},
     scratch0 = _box_sweep_scratch(cache0.kernel, xlen)
     for rest in Iterators.product(rest_ranges...)
         line_base = _box_base_index(rest, axes, strides)
-        _eval_unique_box_line_sweep!(vals, FG, cache0, scratch0, uid_lookup, line_base, axes, rest)
+        @inbounds for xi in 1:xlen
+            scratch0.line_uids[xi] = uid_lookup[line_base + xi - 1]
+        end
+        _eval_unique_line_sweep!(vals, FG, cache0, scratch0, scratch0.line_uids, first(axes[1]), last(axes[1]), rest)
+    end
+    return vals
+end
+
+function _dense_slab_groups(unique_points::Vector{T}) where {N,T<:NTuple{N,<:Integer}}
+    groups = Dict{Any, Vector{Tuple{Int,Int}}}()
+    @inbounds for (uid, p) in enumerate(unique_points)
+        rest = N == 1 ? () : ntuple(d -> Int(p[d + 1]), N - 1)
+        bucket = get!(groups, rest, Tuple{Int,Int}[])
+        push!(bucket, (Int(p[1]), uid))
+    end
+
+    slabs = NamedTuple[]
+    total_points = 0
+    for (rest, pairs) in groups
+        sort!(pairs; by=first)
+        xmin = first(first(pairs))
+        xmax = first(last(pairs))
+        xlen = xmax - xmin + 1
+        npts = length(pairs)
+        dense_enough = npts >= 24 && 5 * npts >= 4 * xlen
+        dense_enough || return nothing
+        line_uids = Base.zeros(Int, xlen)
+        @inbounds for (x, uid) in pairs
+            line_uids[x - xmin + 1] = uid
+        end
+        push!(slabs, (; rest, xmin, xmax, line_uids))
+        total_points += npts
+    end
+    total_points == length(unique_points) || return nothing
+    return slabs
+end
+
+function _eval_unique_slab_sweep!(vals::Vector{Int},
+                                  FG::Flange{K,F,N},
+                                  slabs::Vector;
+                                  cache::Union{Nothing,FlangeDimCache{K,F,N}}=nothing,
+                                  threaded::Bool=false) where {K,F,N}
+    cache0 = cache === nothing ? FlangeDimCache(FG) : cache
+    _check_cache_compat(cache0, FG)
+    fill!(vals, 0)
+
+    if threaded && Threads.nthreads() > 1 && length(slabs) >= 2 * Threads.nthreads()
+        nt = Threads.maxthreadid()
+        caches = Vector{Any}(undef, nt)
+        scratches = Vector{Any}(undef, nt)
+        fill!(caches, nothing)
+        fill!(scratches, nothing)
+        Threads.@threads for li in eachindex(slabs)
+            tid = Threads.threadid()
+            c = caches[tid]
+            if c === nothing
+                c = FlangeDimCache(FG)
+                caches[tid] = c
+            end
+            slab = slabs[li]
+            s = scratches[tid]
+            if s === nothing || length(s.line_uids) < length(slab.line_uids)
+                s = _box_sweep_scratch(c.kernel, length(slab.line_uids))
+                scratches[tid] = s
+            end
+            @views s.line_uids[1:length(slab.line_uids)] .= slab.line_uids
+            _eval_unique_line_sweep!(vals, FG, c, s, @view(s.line_uids[1:length(slab.line_uids)]),
+                                     slab.xmin, slab.xmax, slab.rest)
+        end
+        return vals
+    end
+
+    max_xlen = maximum(length(slab.line_uids) for slab in slabs)
+    scratch0 = _box_sweep_scratch(cache0.kernel, max_xlen)
+    for slab in slabs
+        @views scratch0.line_uids[1:length(slab.line_uids)] .= slab.line_uids
+        _eval_unique_line_sweep!(vals, FG, cache0, scratch0, @view(scratch0.line_uids[1:length(slab.line_uids)]),
+                                 slab.xmin, slab.xmax, slab.rest)
     end
     return vals
 end
@@ -1445,6 +1639,13 @@ function dim_at_many!(out::AbstractVector{Int},
             end
         elseif sweep == :box
             error("dim_at_many!: sweep=:box requires tuple points that form a full axis-aligned integer box")
+        else
+            slabs = _dense_slab_groups(unique_points)
+            if slabs !== nothing && length(unique_points) >= 1024
+                _eval_unique_slab_sweep!(vals_unique, FG, slabs;
+                                         cache=cache, threaded=threaded)
+                did_sweep = true
+            end
         end
     elseif sweep == :box
         error("dim_at_many!: sweep=:box requires tuple points")
@@ -1736,7 +1937,7 @@ end
 function canonical_matrix(FG::Flange{K}) where {K}
     m = length(FG.injectives)
     n = length(FG.flats)
-    A = zeros(K, m, n)
+    A = Base.zeros(K, m, n)
 
     for (i, E) in enumerate(FG.injectives)
         for (j, F) in enumerate(FG.flats)

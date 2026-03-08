@@ -171,28 +171,51 @@ end
     cache = CM.ResolutionCache()
 
     RP1 = DF.projective_resolution(S1, opts; cache=cache)
+    @test cache.projective_primary_type === nothing
     RP2 = DF.projective_resolution(S1, opts; cache=cache)
     @test RP1 === RP2
+    @test cache.projective_primary_type === nothing
+    RP3 = DF.projective_resolution(S1, opts; cache=cache)
+    @test RP3 === RP1
+    @test cache.projective_primary_type === typeof(RP1)
+    other_pkey = CM._resolution_key2(S2, 7)
+    @test DF.Resolutions._cache_projective_store!(cache, other_pkey, 17) == 17
+    @test DF.Resolutions._cache_projective_get(cache, other_pkey, Int) == 17
 
     RI1 = DF.injective_resolution(S1, opts; cache=cache)
+    @test cache.injective_primary_type === nothing
     RI2 = DF.injective_resolution(S1, opts; cache=cache)
     @test RI1 === RI2
+    @test cache.injective_primary_type === nothing
+    RI3 = DF.injective_resolution(S1, opts; cache=cache)
+    @test RI3 === RI1
+    @test cache.injective_primary_type === typeof(RI1)
+    other_ikey = CM._resolution_key2(S2, 9)
+    @test DF.Resolutions._cache_injective_store!(cache, other_ikey, 23) == 23
+    @test DF.Resolutions._cache_injective_get(cache, other_ikey, Int) == 23
 
     T1 = IR.indicator_resolutions(S1, S2; maxlen=2, cache=cache)
     T2 = IR.indicator_resolutions(S1, S2; maxlen=2, cache=cache)
     @test T1 === T2
 
+    CM._clear_resolution_cache!(cache)
+    @test cache.projective_primary_type === typeof(RP1)
+    @test isempty(cache.projective_primary)
+    @test cache.injective_primary_type === typeof(RI1)
+    @test isempty(cache.injective_primary)
+    @test cache.indicator_primary_type === nothing
+
     sc = CM.SessionCache()
 
     M = IR.pmodule_from_fringe(S1)
-    enc = CM.EncodingResult(P, M, nothing; H=S1, opts=CM.EncodingOptions(field=S1.field), backend=:test)
+    enc = RES.EncodingResult(P, M, nothing; H=S1, opts=OPT.EncodingOptions(field=S1.field), backend=:test)
     WR1 = PM.resolve(enc; kind=:projective, opts=opts, cache=sc)
     WR2 = PM.resolve(enc; kind=:projective, opts=opts, cache=sc)
     @test WR1.res === WR2.res
 
     # Workflow-level ext/tor should reuse cached resolutions automatically.
     N = IR.pmodule_from_fringe(S2)
-    encN = CM.EncodingResult(P, N, nothing; H=S2, opts=CM.EncodingOptions(field=S2.field), backend=:test)
+    encN = RES.EncodingResult(P, N, nothing; H=S2, opts=OPT.EncodingOptions(field=S2.field), backend=:test)
     E1 = PM.ext(enc, encN; maxdeg=2, model=:projective, cache=sc)
     E2 = PM.ext(enc, encN; maxdeg=2, model=:projective, cache=sc)
     @test E1.res === E2.res
@@ -228,7 +251,7 @@ end
     Dop = FF.principal_downset(Pop, 2)
     Hop = one_by_one_fringe(Pop, Uop, Dop; scalar=CM.coerce(S1.field, 1), field=S1.field)
     Rop = IR.pmodule_from_fringe(Hop)
-    encRop = CM.EncodingResult(Pop, Rop, nothing; H=Hop, opts=CM.EncodingOptions(field=Hop.field), backend=:test)
+    encRop = RES.EncodingResult(Pop, Rop, nothing; H=Hop, opts=OPT.EncodingOptions(field=Hop.field), backend=:test)
     @test_throws ErrorException PM.hom_dimension(enc, encRop; cache=sc)
 
     T1 = PM.tor(encRop, enc; maxdeg=2, model=:first, cache=sc)
@@ -245,8 +268,8 @@ end
     @test_throws MethodError PM.tor(encRop.M, enc; maxdeg=2, model=:first, cache=sc)
 
     # hom_dimension should cache computed fringes when enc.H is absent.
-    enc_noH = CM.EncodingResult(P, M, nothing; H=nothing, opts=CM.EncodingOptions(field=S1.field), backend=:test)
-    encN_noH = CM.EncodingResult(P, N, nothing; H=nothing, opts=CM.EncodingOptions(field=S2.field), backend=:test)
+    enc_noH = RES.EncodingResult(P, M, nothing; H=nothing, opts=OPT.EncodingOptions(field=S1.field), backend=:test)
+    encN_noH = RES.EncodingResult(P, N, nothing; H=nothing, opts=OPT.EncodingOptions(field=S2.field), backend=:test)
     ec = CM._workflow_encoding_cache(sc)
     g0 = length(ec.geometry)
     d1 = PM.hom_dimension(enc_noH, encN_noH; cache=sc)

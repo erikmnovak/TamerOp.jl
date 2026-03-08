@@ -2,8 +2,10 @@ module Invariants
 
 using LinearAlgebra
 using JSON3
-using ..CoreModules: PLikeEncodingMap, CompiledEncoding, locate, axes_from_encoding, dimension, representatives,
-                     InvariantOptions, EncodingCache, AbstractCoeffField
+using ..CoreModules: EncodingCache, AbstractCoeffField, RegionPosetCachePayload,
+                     AbstractSlicePlanCache
+using ..Options: InvariantOptions
+using ..EncodingCore: PLikeEncodingMap, CompiledEncoding, locate, axes_from_encoding, dimension, representatives
 using Statistics: mean
 using ..Stats: _wilson_interval
 using ..Encoding: EncodingMap
@@ -22,7 +24,8 @@ using ..RegionGeometry: region_weights, region_volume, region_bbox, region_width
 
 using ..FieldLinAlg
 import ..FiniteFringe: AbstractPoset, FinitePoset, FringeModule, Upset, Downset, fiber_dimension,
-                       leq, leq_matrix, upset_indices, downset_indices, leq_col, nvertices, build_cache!
+                       leq, leq_matrix, upset_indices, downset_indices, leq_col, nvertices, build_cache!,
+                       _preds
 import ..ZnEncoding
 import ..IndicatorTypes: UpsetPresentation, DownsetCopresentation
 import ..ModuleComplexes: ModuleCochainComplex
@@ -221,7 +224,7 @@ function _map_leq_cached(
         end
     else
         # Fallback: scan preds[v] to check if (u,v) is a cover edge.
-        pv = cc.preds[v]
+        pv = _preds(cc, v)
         @inbounds for k in 1:length(pv)
             if pv[k] == u
                 X = M.edge_maps[u, v]
@@ -12836,7 +12839,7 @@ struct SlicePlanCacheKey
     kwargs_hash::UInt
 end
 
-mutable struct SlicePlanCache
+mutable struct SlicePlanCache <: AbstractSlicePlanCache
     lock::ReentrantLock
     plans::Dict{SlicePlanCacheKey,CompiledSlicePlan}
 end
@@ -15538,6 +15541,7 @@ end
 @inline function _encoding_cache_from_pi(pi)::Union{Nothing,EncodingCache}
     pi isa CompiledEncoding || return nothing
     meta = pi.meta
+    meta isa EncodingCache && return meta
     if meta isa NamedTuple && hasproperty(meta, :encoding_cache)
         ec = getproperty(meta, :encoding_cache)
         return ec isa EncodingCache ? ec : nothing
@@ -15631,8 +15635,8 @@ function region_poset(pi::PLikeEncodingMap;
         key = (UInt(objectid(sig_y)), UInt(objectid(sig_z)), poset_kind)
         Base.lock(cache_eff.lock)
         try
-            Pcached = get(cache_eff.region_posets, key, nothing)
-            Pcached === nothing || return Pcached
+            entry = get(cache_eff.region_posets, key, nothing)
+            entry === nothing || return entry.value
         finally
             Base.unlock(cache_eff.lock)
         end
@@ -15652,7 +15656,7 @@ function region_poset(pi::PLikeEncodingMap;
         key = (UInt(objectid(sig_y)), UInt(objectid(sig_z)), poset_kind)
         Base.lock(cache_eff.lock)
         try
-            cache_eff.region_posets[key] = Pnew
+            cache_eff.region_posets[key] = RegionPosetCachePayload(Pnew)
         finally
             Base.unlock(cache_eff.lock)
         end

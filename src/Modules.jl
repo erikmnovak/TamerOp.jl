@@ -1,23 +1,62 @@
 module Modules
 
 using SparseArrays, LinearAlgebra
-using ..CoreModules: QQ, ModuleOptions, AbstractCoeffField, QQField, PrimeField, RealField,
+using ..CoreModules: QQ, AbstractCoeffField, QQField, PrimeField, RealField,
     BackendMatrix, coeff_type, field_from_eltype, eye, coerce
+using ..Options: ModuleOptions
 import ..CoreModules: change_field
 import ..FiniteFringe
 import ..FiniteFringe: AbstractPoset, FinitePoset, cover_edges, leq, nvertices,
-       CoverCache, PosetCache, _get_cover_cache,
-       _clear_cover_cache!, _pairkey, _chosen_predecessor
+       CoverCache, PosetCache, _get_cover_cache, _succs, _preds,
+       _pred_slots_of_succ, _succ_slots_of_pred,
+       _clear_cover_cache!, _pairkey, _chosen_predecessor, _chosen_predecessor_slow,
+       _chain_parent_dense, _chain_parent_dict
 import ..FieldLinAlg
 import Base.Threads
 
 const MAP_LEQ_MEMO_MAX_PER_THREAD = Ref(200_000)
+const MAP_LEQ_DENSE_MEMO_MIN_ENTRIES = Ref(4_096)
+const MAP_LEQ_DENSE_MEMO_MAX_ENTRIES_PER_THREAD = Ref(500_000)
+const MAP_LEQ_SLOT_DENSE_MIN_ENTRIES = Ref(4_096)
+const MAP_LEQ_SLOT_DENSE_MAX_ENTRIES_PER_THREAD = Ref(1_000_000)
 const MAP_LEQ_MANY_PLAN_MIN_LEN = Ref(128)
 const MAP_LEQ_MANY_PLAN_MAX_PER_THREAD = Ref(128)
+const MAP_LEQ_MANY_ONEOFF_LONG_MIN_LEN = Ref(128)
+const MAP_LEQ_MANY_ONEOFF_LONG_MIN_LONG = Ref(64)
+const MAP_LEQ_MANY_ONEOFF_MIN_OVERLAP_QQ = Ref(0.28)
+const MAP_LEQ_MANY_ONEOFF_MIN_OVERLAP_PRIME = Ref(0.26)
+const MAP_LEQ_MANY_ONEOFF_MIN_OVERLAP_REAL = Ref(0.30)
+const MAP_LEQ_MANY_ONEOFF_MIN_TARGET_REPEAT_QQ = Ref(0.45)
+const MAP_LEQ_MANY_ONEOFF_MIN_TARGET_REPEAT_PRIME = Ref(0.30)
+const MAP_LEQ_MANY_ONEOFF_MIN_TARGET_REPEAT_REAL = Ref(0.34)
+const MAP_LEQ_MANY_LONG_SCALAR_MAX_OVERLAP_QQ = Ref(0.15)
+const MAP_LEQ_MANY_LONG_SCALAR_MAX_OVERLAP_PRIME = Ref(0.10)
+const MAP_LEQ_MANY_LONG_SCALAR_MAX_OVERLAP_REAL = Ref(0.12)
+const MAP_LEQ_MANY_LONG_SCALAR_MAX_TARGET_REPEAT_QQ = Ref(0.35)
+const MAP_LEQ_MANY_LONG_SCALAR_MAX_TARGET_REPEAT_PRIME = Ref(0.14)
+const MAP_LEQ_MANY_LONG_SCALAR_MAX_TARGET_REPEAT_REAL = Ref(0.16)
+const MAP_LEQ_MANY_LONG_MIN_AVG_HOPS_QQ = Ref(4.0)
+const MAP_LEQ_MANY_LONG_MIN_AVG_HOPS_PRIME = Ref(4.5)
+const MAP_LEQ_MANY_LONG_MIN_AVG_HOPS_REAL = Ref(5.0)
+const MAP_LEQ_MANY_PLAN_MIN_SCORE_QQ = Ref(0.18)
+const MAP_LEQ_MANY_PLAN_MIN_SCORE_PRIME = Ref(0.20)
+const MAP_LEQ_MANY_PLAN_MIN_SCORE_REAL = Ref(0.22)
 const DIRECT_SUM_SPARSE_MIN_TOTAL_ENTRIES = Ref(16_384)
+const DIRECT_SUM_SPARSE_MIN_AVG_EDGE_ENTRIES_QQ = Ref(128.0)
+const DIRECT_SUM_SPARSE_MIN_AVG_EDGE_ENTRIES_PRIME = Ref(256.0)
+const DIRECT_SUM_SPARSE_MIN_AVG_EDGE_ENTRIES_REAL = Ref(256.0)
 const DIRECT_SUM_SPARSE_MAX_DENSITY = Ref(0.55)
 const DIRECT_SUM_SPARSE_MAX_DENSITY_PRIME = Ref(0.28)
 const DIRECT_SUM_SPARSE_MAX_DENSITY_REAL = Ref(0.20)
+const DIRECT_SUM_COST_DENSE_WEIGHT_QQ = Ref(1.25)
+const DIRECT_SUM_COST_DENSE_WEIGHT_PRIME = Ref(1.00)
+const DIRECT_SUM_COST_DENSE_WEIGHT_REAL = Ref(0.90)
+const DIRECT_SUM_COST_SPARSE_NNZ_WEIGHT_QQ = Ref(0.92)
+const DIRECT_SUM_COST_SPARSE_NNZ_WEIGHT_PRIME = Ref(1.10)
+const DIRECT_SUM_COST_SPARSE_NNZ_WEIGHT_REAL = Ref(1.18)
+const DIRECT_SUM_COST_SPARSE_EDGE_OVERHEAD_QQ = Ref(2.0)
+const DIRECT_SUM_COST_SPARSE_EDGE_OVERHEAD_PRIME = Ref(4.0)
+const DIRECT_SUM_COST_SPARSE_EDGE_OVERHEAD_REAL = Ref(5.0)
 
 """
     CoverEdgeMapStore{K,MatT}
@@ -108,10 +147,27 @@ function Base.iterate(store::CoverEdgeMapStore, state::Tuple{Int,Int})
 end
 
 # ----- helper: binary search in sorted Int vectors -----
-@inline function _find_sorted_index(xs::Vector{Int}, x::Int)::Int
+@inline function _find_sorted_index(xs::AbstractVector{Int}, x::Int)::Int
     i = searchsortedfirst(xs, x)
     if i <= length(xs) && @inbounds xs[i] == x
         return i
+    end
+    return 0
+end
+
+@inline function _find_sorted_index_range(xs::AbstractVector{Int}, lo::Int, hi::Int, x::Int)::Int
+    l = lo
+    h = hi
+    while l <= h
+        m = (l + h) >>> 1
+        y = @inbounds xs[m]
+        if y < x
+            l = m + 1
+        elseif y > x
+            h = m - 1
+        else
+            return m - lo + 1
+        end
     end
     return 0
 end
@@ -177,9 +233,9 @@ function CoverEdgeMapStore{K,MatT}(
 ) where {K,MatT<:AbstractMatrix{K}}
 
     cc = cache === nothing ? _get_cover_cache(Q) : cache
-    preds = cc.preds
-    succs = cc.succs
     n = nvertices(Q)
+    preds = [_preds(cc, v) for v in 1:n]
+    succs = [_succs(cc, u) for u in 1:n]
 
     # Incoming storage (indexed by v, then by sorted preds[v]).
     maps_from_pred = [Vector{MatT}(undef, length(preds[v])) for v in 1:n]
@@ -211,7 +267,7 @@ function CoverEdgeMapStore{K,MatT}(
     @inbounds for u in 1:n
         su = succs[u]
         mu = maps_to_succ[u]
-        slot = cc.pred_slot_of_succ[u]
+        slot = _pred_slots_of_succ(cc, u)
         for j in eachindex(su)
             v = su[j]
             i = slot[j]
@@ -234,12 +290,14 @@ function CoverEdgeMapStore{K,MatT}(
     # If the caller already has a store, return it (after optional validation).
     if check_sizes
         cc = cache === nothing ? _get_cover_cache(Q) : cache
-        if edge_maps.preds != cc.preds || edge_maps.succs != cc.succs
+        if length(edge_maps.preds) != nvertices(Q) || length(edge_maps.succs) != nvertices(Q) ||
+           any(edge_maps.preds[v] != _preds(cc, v) for v in 1:nvertices(Q)) ||
+           any(edge_maps.succs[u] != _succs(cc, u) for u in 1:nvertices(Q))
             error("edge_maps store does not match the cover graph of Q")
         end
 
-        preds = cc.preds
         n = nvertices(Q)
+        preds = [_preds(cc, v) for v in 1:n]
         if length(edge_maps.maps_from_pred) != n
             error("edge_maps store has wrong size (expected $n vertices)")
         end
@@ -267,20 +325,120 @@ end
 # ------------------------------ tiny internal model ------------------------------
 
 mutable struct MapLeqScratch{K}
-    chain::Vector{Int}
     tmp1::Matrix{K}
     tmp2::Matrix{K}
+    chain::Vector{Int}
+    slots::Vector{Int}
 end
 
-struct _MapLeqManyPlan
+const _MAP_LEQ_BATCH_ID_COUNTER = Threads.Atomic{UInt}(UInt(1))
+
+@inline function _next_map_leq_batch_id()::UInt64
+    return UInt64(Threads.atomic_add!(_MAP_LEQ_BATCH_ID_COUNTER, UInt(1)))
+end
+
+"""
+    MapLeqQueryBatch
+
+Prepared query batch for repeated `map_leq_many` calls.
+
+Construct via `prepare_map_leq_batch(pairs)`. The constructor copies `pairs`,
+so later mutation of the original vector cannot invalidate the prepared batch.
+"""
+struct MapLeqQueryBatch
+    id::UInt64
+    pairs::Vector{Tuple{Int,Int}}
+end
+
+mutable struct _MapLeqManyPlan
     npairs::Int
+    pairs_hash::UInt
     first_pair::Tuple{Int,Int}
     last_pair::Tuple{Int,Int}
+    has_repeats::Bool
+    warmed::Bool
     kinds::Vector{UInt8}          # 0: u==v, 1: cover edge, 2: two-hop, 3: long chain
     us::Vector{Int}
     vs::Vector{Int}
     mids::Vector{Int}             # only used for two-hop entries
-    chains::Vector{Vector{Int}}   # only populated for kind==3
+    chain_ptr::Vector{Int}        # start offsets in chain_data (1-based), length npairs+1
+    chain_data::Vector{Int}       # packed chain vertex indices
+    chain_slots::Vector{Int}      # packed predecessor slots aligned with chain_data; chain_slots[sidx] == 0
+    query_suffix::Vector{Int}     # query -> suffix program id for long-chain entries
+    suffix_u::Vector{Int}         # suffix source
+    suffix_v::Vector{Int}         # suffix target
+    suffix_child::Vector{Int}     # child suffix id (0 => direct cover tail)
+    suffix_child_node::Vector{Int}# node after suffix source on chosen cover chain
+    suffix_head_slot::Vector{Int} # slot of edge suffix_u -> suffix_child_node
+    suffix_tail_slot::Vector{Int} # slot of direct cover tail suffix_child_node -> suffix_v when suffix_child == 0
+end
+
+mutable struct _MapLeqManyPlanArena
+    kinds::Vector{UInt8}
+    us::Vector{Int}
+    vs::Vector{Int}
+    mids::Vector{Int}
+    chain_ptr::Vector{Int}
+    chain_data::Vector{Int}
+    chain_slots::Vector{Int}
+    query_suffix::Vector{Int}
+    suffix_u::Vector{Int}
+    suffix_v::Vector{Int}
+    suffix_child::Vector{Int}
+    suffix_child_node::Vector{Int}
+    suffix_head_slot::Vector{Int}
+    suffix_tail_slot::Vector{Int}
+    suffix_id_dense::Vector{Int}
+    suffix_id_touched::Vector{Int}
+    target_seen::BitVector
+    tmp_chain::Vector{Int}
+    tmp_slots::Vector{Int}
+end
+
+struct _MapComposeDenseMemo{MatT}
+    seen::BitVector
+    vals::Vector{MatT}
+    n::Int
+end
+
+struct _MapPredSlotDenseMemo
+    seen::BitVector
+    vals::Vector{Int}
+    n::Int
+end
+
+struct _DirectSumEdgeStats
+    n_edges::Int
+    total_entries::Int64
+    total_nnz::Int64
+    sum_dom_dims::Int64
+    sum_cod_dims::Int64
+end
+
+mutable struct _MapLeqLastPairCache{MatT}
+    seen::BitVector
+    us::Vector{Int}
+    vs::Vector{Int}
+    promoted::BitVector
+    vals::Vector{MatT}
+end
+
+struct _MapLeqManyBatchPlanEntry
+    batch::MapLeqQueryBatch
+    plan::_MapLeqManyPlan
+end
+
+struct _MapLeqManyBatchStats
+    npairs::Int
+    pairs_hash::UInt
+    first_pair::Tuple{Int,Int}
+    last_pair::Tuple{Int,Int}
+    has_repeats::Bool
+    nlong::Int
+    total_long_hops::Int
+    total_suffix_visits::Int
+    nsuffix::Int
+    ntargets::Int
 end
 
 """
@@ -299,10 +457,18 @@ struct PModule{K,F<:AbstractCoeffField,MatT<:AbstractMatrix{K},QT<:AbstractPoset
     Q::QT
     dims::Vector{Int}
     edge_maps::CoverEdgeMapStore{K,MatT}
+    direct_sum_stats::_DirectSumEdgeStats
     map_compose::Vector{Dict{UInt64, MatT}}
+    map_compose_dense::Union{Nothing,Vector{_MapComposeDenseMemo{MatT}}}
+    map_pred_slot::Vector{Dict{UInt64, Int}}
+    map_pred_slot_dense::Union{Nothing,Vector{_MapPredSlotDenseMemo}}
     map_many_plan::Vector{Dict{UInt64,_MapLeqManyPlan}}
+    map_many_batch_plan::Vector{Dict{UInt64,_MapLeqManyBatchPlanEntry}}
+    map_many_batch_last::Vector{Union{Nothing,_MapLeqManyBatchPlanEntry}}
+    map_many_plan_arena::Vector{_MapLeqManyPlanArena}
     map_scratch::Vector{MapLeqScratch{K}}
     identity_compose::Vector{Dict{Int, MatT}}
+    map_last_pair::_MapLeqLastPairCache{MatT}
 end
 
 # choose a storage matrix type from a user-provided mapping
@@ -346,19 +512,110 @@ end
     return [Dict{UInt64, MatT}() for _ in 1:nt]
 end
 
+@inline function _new_map_leq_dense_memo(::Type{MatT}, n::Int) where {MatT}
+    dense_entries = n * n
+    use_dense = dense_entries >= MAP_LEQ_DENSE_MEMO_MIN_ENTRIES[] &&
+                dense_entries <= MAP_LEQ_DENSE_MEMO_MAX_ENTRIES_PER_THREAD[]
+    use_dense || return nothing
+    nt = max(1, Threads.maxthreadid())
+    return [_MapComposeDenseMemo{MatT}(falses(dense_entries), Vector{MatT}(undef, dense_entries), n)
+            for _ in 1:nt]
+end
+
 @inline function _new_map_leq_many_plan_cache()
     nt = max(1, Threads.maxthreadid())
     return [Dict{UInt64,_MapLeqManyPlan}() for _ in 1:nt]
 end
 
+@inline function _new_map_pred_slot_memo()
+    nt = max(1, Threads.maxthreadid())
+    return [Dict{UInt64, Int}() for _ in 1:nt]
+end
+
+@inline function _new_map_pred_slot_dense_memo(n::Int)
+    dense_entries = n * n
+    use_dense = dense_entries >= MAP_LEQ_SLOT_DENSE_MIN_ENTRIES[] &&
+                dense_entries <= MAP_LEQ_SLOT_DENSE_MAX_ENTRIES_PER_THREAD[]
+    use_dense || return nothing
+    nt = max(1, Threads.maxthreadid())
+    return [_MapPredSlotDenseMemo(falses(dense_entries), zeros(Int, dense_entries), n)
+            for _ in 1:nt]
+end
+
+@inline function _new_map_leq_many_batch_plan_cache()
+    nt = max(1, Threads.maxthreadid())
+    return [Dict{UInt64,_MapLeqManyBatchPlanEntry}() for _ in 1:nt]
+end
+
+@inline function _new_map_leq_many_batch_last_cache()
+    nt = max(1, Threads.maxthreadid())
+    v = Vector{Union{Nothing,_MapLeqManyBatchPlanEntry}}(undef, nt)
+    fill!(v, nothing)
+    return v
+end
+
+@inline function _new_map_leq_many_plan_arena()
+    nt = max(1, Threads.maxthreadid())
+    return [_MapLeqManyPlanArena(UInt8[], Int[], Int[], Int[], Int[], Int[], Int[],
+                                 Int[], Int[], Int[], Int[], Int[], Int[], Int[],
+                                 Int[], Int[], falses(0), Int[], Int[]) for _ in 1:nt]
+end
+
 @inline function _new_map_leq_scratch(::Type{K}) where {K}
     nt = max(1, Threads.maxthreadid())
-    return [MapLeqScratch{K}(Int[], Matrix{K}(undef, 0, 0), Matrix{K}(undef, 0, 0)) for _ in 1:nt]
+    return [MapLeqScratch{K}(Matrix{K}(undef, 0, 0), Matrix{K}(undef, 0, 0), Int[], Int[])
+            for _ in 1:nt]
 end
 
 @inline function _new_identity_compose(::Type{MatT}) where {MatT}
     nt = max(1, Threads.maxthreadid())
     return [Dict{Int, MatT}() for _ in 1:nt]
+end
+
+@inline function _new_map_leq_last_pair_cache(::Type{K}, ::Type{MatT}) where {K,MatT}
+    nt = max(1, Threads.maxthreadid())
+    seen = falses(nt)
+    promoted = falses(nt)
+    us = zeros(Int, nt)
+    vs = zeros(Int, nt)
+    vals = Vector{MatT}(undef, nt)
+    empty_map = _zero_edge_map(MatT, K, 0, 0)
+    @inbounds for i in 1:nt
+        vals[i] = empty_map
+    end
+    return _MapLeqLastPairCache{MatT}(seen, us, vs, promoted, vals)
+end
+
+@inline function _edge_nnz_count(::Type{MatT}, A::AbstractMatrix{K}) where {K,MatT}
+    if MatT <: SparseMatrixCSC
+        return Int64(nnz(A))
+    end
+    return Int64(size(A, 1)) * Int64(size(A, 2))
+end
+
+function _build_direct_sum_edge_stats(dims::Vector{Int}, store::CoverEdgeMapStore{K,MatT}) where {K,MatT}
+    total_entries = Int64(0)
+    total_nnz = Int64(0)
+    sum_dom = Int64(0)
+    sum_cod = Int64(0)
+    n_edges = 0
+    succs = store.succs
+    maps_to_succ = store.maps_to_succ
+    @inbounds for u in eachindex(succs)
+        du = Int64(dims[u])
+        su = succs[u]
+        mu = maps_to_succ[u]
+        for j in eachindex(su)
+            v = su[j]
+            dv = Int64(dims[v])
+            total_entries += dv * du
+            total_nnz += _edge_nnz_count(MatT, mu[j])
+            sum_dom += du
+            sum_cod += dv
+            n_edges += 1
+        end
+    end
+    return _DirectSumEdgeStats(n_edges, total_entries, total_nnz, sum_dom, sum_cod)
 end
 
 """
@@ -378,12 +635,20 @@ function PModule{K}(Q::AbstractPoset, dims::Vector{Int}, edge_maps;
     coeff_type(field) == K || error("PModule: coeff_type(field) != K")
     MatT = _pmodule_mat_type(K, edge_maps, field)
     store = CoverEdgeMapStore{K,MatT}(Q, dims, edge_maps; check_sizes=check_sizes)
+    ds_stats = _build_direct_sum_edge_stats(dims, store)
     QT = typeof(Q)
-    return PModule{K, typeof(field), MatT, QT}(field, Q, dims, store,
+    return PModule{K, typeof(field), MatT, QT}(field, Q, dims, store, ds_stats,
                                                _new_map_leq_memo(MatT),
+                                               _new_map_leq_dense_memo(MatT, nvertices(Q)),
+                                               _new_map_pred_slot_memo(),
+                                               _new_map_pred_slot_dense_memo(nvertices(Q)),
                                                _new_map_leq_many_plan_cache(),
+                                               _new_map_leq_many_batch_plan_cache(),
+                                               _new_map_leq_many_batch_last_cache(),
+                                               _new_map_leq_many_plan_arena(),
                                                _new_map_leq_scratch(K),
-                                               _new_identity_compose(MatT))
+                                               _new_identity_compose(MatT),
+                                               _new_map_leq_last_pair_cache(K, MatT))
 end
 
 # rebase existing store to this poset (important for ChangeOfPosets)
@@ -404,23 +669,41 @@ function PModule{K}(Q::AbstractPoset, dims::Vector{Int}, store::CoverEdgeMapStor
         end
         return PModule{K}(Q, dims, dense_edge; check_sizes=check_sizes, field=field)
     end
-    if store.preds === cc.preds && store.succs === cc.succs
+    if length(store.preds) == nvertices(Q) && length(store.succs) == nvertices(Q) &&
+       all(store.preds[v] == _preds(cc, v) for v in 1:nvertices(Q)) &&
+       all(store.succs[u] == _succs(cc, u) for u in 1:nvertices(Q))
         coeff_type(field) == K || error("PModule: coeff_type(field) != K")
+        ds_stats = _build_direct_sum_edge_stats(dims, store)
         QT = typeof(Q)
-        return PModule{K, typeof(field), MatT, QT}(field, Q, dims, store,
+        return PModule{K, typeof(field), MatT, QT}(field, Q, dims, store, ds_stats,
                                                    _new_map_leq_memo(MatT),
+                                                   _new_map_leq_dense_memo(MatT, nvertices(Q)),
+                                                   _new_map_pred_slot_memo(),
+                                                   _new_map_pred_slot_dense_memo(nvertices(Q)),
                                                    _new_map_leq_many_plan_cache(),
+                                                   _new_map_leq_many_batch_plan_cache(),
+                                                   _new_map_leq_many_batch_last_cache(),
+                                                   _new_map_leq_many_plan_arena(),
                                                    _new_map_leq_scratch(K),
-                                                   _new_identity_compose(MatT))
+                                                   _new_identity_compose(MatT),
+                                                   _new_map_leq_last_pair_cache(K, MatT))
     end
     new_store = CoverEdgeMapStore{K,MatT}(Q, dims, store; cache=cc, check_sizes=check_sizes)
     coeff_type(field) == K || error("PModule: coeff_type(field) != K")
+    ds_stats = _build_direct_sum_edge_stats(dims, new_store)
     QT = typeof(Q)
-    return PModule{K, typeof(field), MatT, QT}(field, Q, dims, new_store,
+    return PModule{K, typeof(field), MatT, QT}(field, Q, dims, new_store, ds_stats,
                                                _new_map_leq_memo(MatT),
+                                               _new_map_leq_dense_memo(MatT, nvertices(Q)),
+                                               _new_map_pred_slot_memo(),
+                                               _new_map_pred_slot_dense_memo(nvertices(Q)),
                                                _new_map_leq_many_plan_cache(),
+                                               _new_map_leq_many_batch_plan_cache(),
+                                               _new_map_leq_many_batch_last_cache(),
+                                               _new_map_leq_many_plan_arena(),
                                                _new_map_leq_scratch(K),
-                                               _new_identity_compose(MatT))
+                                               _new_identity_compose(MatT),
+                                               _new_map_leq_last_pair_cache(K, MatT))
 end
 
 # infer coefficient type from first map
@@ -601,8 +884,32 @@ end
     return M.map_compose[_thread_slot(length(M.map_compose))]
 end
 
+@inline function _map_leq_memo_dense(M::PModule{K,F,MatT}) where {K,F,MatT}
+    d = M.map_compose_dense
+    d === nothing && return nothing
+    return d[_thread_slot(length(d))]
+end
+
 @inline function _map_leq_many_plan_dict(M::PModule)
     return M.map_many_plan[_thread_slot(length(M.map_many_plan))]
+end
+
+@inline function _map_leq_pred_slot_dict(M::PModule)
+    return M.map_pred_slot[_thread_slot(length(M.map_pred_slot))]
+end
+
+@inline function _map_leq_pred_slot_dense(M::PModule)
+    d = M.map_pred_slot_dense
+    d === nothing && return nothing
+    return d[_thread_slot(length(d))]
+end
+
+@inline function _map_leq_many_batch_plan_dict(M::PModule)
+    return M.map_many_batch_plan[_thread_slot(length(M.map_many_batch_plan))]
+end
+
+@inline function _map_leq_many_plan_arena(M::PModule)
+    return M.map_many_plan_arena[_thread_slot(length(M.map_many_plan_arena))]
 end
 
 @inline function _map_leq_scratch(M::PModule{K}) where {K}
@@ -614,6 +921,15 @@ end
 end
 
 @inline function _map_leq_memo_get(M::PModule{K,F,MatT}, u::Int, v::Int) where {K,F,MatT}
+    dense = _map_leq_memo_dense(M)
+    if dense !== nothing
+        @inbounds idx = (u - 1) * dense.n + v
+        if dense.seen[idx]
+            return dense.vals[idx]
+        end
+        return nothing
+    end
+
     memo = _map_leq_memo_dict(M)
     A = get(memo, _map_leq_key(u, v), nothing)
     A === nothing && return nothing
@@ -621,12 +937,70 @@ end
 end
 
 @inline function _map_leq_memo_set!(M::PModule{K,F,MatT}, u::Int, v::Int, A) where {K,F,MatT}
+    dense = _map_leq_memo_dense(M)
+    if dense !== nothing
+        @inbounds idx = (u - 1) * dense.n + v
+        Atyped = A isa MatT ? A : convert(MatT, A)
+        dense.vals[idx] = Atyped
+        dense.seen[idx] = true
+        return Atyped
+    end
+
     memo = _map_leq_memo_dict(M)
     if length(memo) >= MAP_LEQ_MEMO_MAX_PER_THREAD[]
         empty!(memo)
     end
     Atyped = A isa MatT ? A : convert(MatT, A)
     memo[_map_leq_key(u, v)] = Atyped
+    return Atyped
+end
+
+@inline function _map_leq_pred_slot_get(M::PModule, u::Int, v::Int)::Int
+    dense = _map_leq_pred_slot_dense(M)
+    if dense !== nothing
+        @inbounds idx = (u - 1) * dense.n + v
+        return dense.seen[idx] ? dense.vals[idx] : 0
+    end
+    return get(_map_leq_pred_slot_dict(M), _map_leq_key(u, v), 0)
+end
+
+@inline function _map_leq_pred_slot_set!(M::PModule, u::Int, v::Int, slot::Int)::Int
+    dense = _map_leq_pred_slot_dense(M)
+    if dense !== nothing
+        @inbounds idx = (u - 1) * dense.n + v
+        dense.vals[idx] = slot
+        dense.seen[idx] = true
+        return slot
+    end
+    _map_leq_pred_slot_dict(M)[_map_leq_key(u, v)] = slot
+    return slot
+end
+
+@inline function _map_leq_last_pair_get(M::PModule{K,F,MatT}, u::Int, v::Int) where {K,F,MatT}
+    c = M.map_last_pair
+    slot = _thread_slot(length(c.us))
+    @inbounds if c.seen[slot] && c.us[slot] == u && c.vs[slot] == v
+        A = c.vals[slot]
+        if !c.promoted[slot]
+            _map_leq_memo_set!(M, u, v, A)
+            c.promoted[slot] = true
+        end
+        return A
+    end
+    return nothing
+end
+
+@inline function _map_leq_last_pair_set!(M::PModule{K,F,MatT}, u::Int, v::Int, A) where {K,F,MatT}
+    c = M.map_last_pair
+    slot = _thread_slot(length(c.us))
+    Atyped = A isa MatT ? A : convert(MatT, A)
+    @inbounds begin
+        c.seen[slot] = true
+        c.us[slot] = u
+        c.vs[slot] = v
+        c.promoted[slot] = false
+        c.vals[slot] = Atyped
+    end
     return Atyped
 end
 
@@ -643,87 +1017,303 @@ end
     return A::MatT
 end
 
+function _clear_map_leq_memo!(M::PModule)
+    for d in M.map_compose
+        empty!(d)
+    end
+    if M.map_compose_dense !== nothing
+        for d in M.map_compose_dense
+            fill!(d.seen, false)
+        end
+    end
+    for d in M.map_pred_slot
+        empty!(d)
+    end
+    if M.map_pred_slot_dense !== nothing
+        for d in M.map_pred_slot_dense
+            fill!(d.seen, false)
+        end
+    end
+    fill!(M.map_last_pair.seen, false)
+    fill!(M.map_last_pair.promoted, false)
+    return nothing
+end
+
+function _clear_map_leq_many_plan_cache!(M::PModule)
+    for d in M.map_many_plan
+        empty!(d)
+    end
+    for d in M.map_many_batch_plan
+        empty!(d)
+    end
+    fill!(M.map_many_batch_last, nothing)
+    return nothing
+end
+
 @inline _map_leq_many_plan_key(pairs) = UInt(objectid(pairs))
+@inline _map_leq_many_plan_key(batch::MapLeqQueryBatch) = UInt(batch.id)
+
+@inline function _pairs_signature(pairs::AbstractVector{<:Tuple{Int,Int}})
+    h = UInt(0x9e3779b97f4a7c15)
+    @inbounds for i in eachindex(pairs)
+        u, v = pairs[i]
+        h = hash(v, hash(u, h))
+    end
+    return h
+end
 
 @inline function _is_cover_pair(cc::CoverCache, u::Int, v::Int)::Bool
     if cc.C !== nothing
         @inbounds return cc.C[u, v]
     end
-    return _find_sorted_index(cc.succs[u], v) != 0
+    return _find_sorted_index(_succs(cc, u), v) != 0
 end
 
 @inline function _plan_signature_matches(plan::_MapLeqManyPlan, pairs)::Bool
     length(pairs) == plan.npairs || return false
     isempty(pairs) && return true
     @inbounds return pairs[firstindex(pairs)] == plan.first_pair &&
-                     pairs[lastindex(pairs)] == plan.last_pair
+                     pairs[lastindex(pairs)] == plan.last_pair &&
+                     _pairs_signature(pairs) == plan.pairs_hash
 end
 
-function _build_map_leq_many_plan(pairs::AbstractVector{<:Tuple{Int,Int}},
-                                  Q::AbstractPoset,
-                                  cc::CoverCache):: _MapLeqManyPlan
+@inline function _reset_suffix_id_dense!(arena::_MapLeqManyPlanArena)
+    dense = arena.suffix_id_dense
+    touched = arena.suffix_id_touched
+    @inbounds for idx in touched
+        dense[idx] = 0
+    end
+    empty!(touched)
+    return dense
+end
+
+@inline function _ensure_suffix_id_dense!(arena::_MapLeqManyPlanArena, n::Int)
+    dense = arena.suffix_id_dense
+    needed = n * n
+    if length(dense) != needed
+        resize!(dense, needed)
+        fill!(dense, 0)
+        empty!(arena.suffix_id_touched)
+    else
+        _reset_suffix_id_dense!(arena)
+    end
+    return dense
+end
+
+function _build_map_leq_many_suffix_program!(arena::_MapLeqManyPlanArena,
+                                             pairs::AbstractVector{<:Tuple{Int,Int}},
+                                             n::Int)
+    query_suffix = arena.query_suffix
+    suffix_u = arena.suffix_u
+    suffix_v = arena.suffix_v
+    suffix_child = arena.suffix_child
+    suffix_child_node = arena.suffix_child_node
+    suffix_head_slot = arena.suffix_head_slot
+    suffix_tail_slot = arena.suffix_tail_slot
+    chain_ptr = arena.chain_ptr
+    chain_data = arena.chain_data
+    chain_slots = arena.chain_slots
+    kinds = arena.kinds
+    dense = _ensure_suffix_id_dense!(arena, n)
+    touched = arena.suffix_id_touched
+    target_seen = arena.target_seen
+
+    resize!(query_suffix, length(pairs))
+    fill!(query_suffix, 0)
+    empty!(suffix_u)
+    empty!(suffix_v)
+    empty!(suffix_child)
+    empty!(suffix_child_node)
+    empty!(suffix_head_slot)
+    empty!(suffix_tail_slot)
+    resize!(target_seen, n)
+    fill!(target_seen, false)
+
+    total_long_hops = 0
+    total_suffix_visits = 0
+    ntargets = 0
+
+    @inbounds for i in eachindex(pairs)
+        kinds[i] == 0x03 || continue
+        sidx = chain_ptr[i]
+        eidx = chain_ptr[i + 1] - 1
+        hops = eidx - sidx
+        hops >= 3 || continue
+        total_long_hops += hops
+        total_suffix_visits += hops - 1
+
+        v = chain_data[eidx]
+        if !target_seen[v]
+            target_seen[v] = true
+            ntargets += 1
+        end
+
+        child_id = 0
+        child_node = chain_data[eidx - 1]
+        child_tail_slot = chain_slots[eidx]
+        @inbounds for k in (eidx - 2):-1:sidx
+            u = chain_data[k]
+            idx = (u - 1) * n + v
+            sid = dense[idx]
+            if sid == 0
+                sid = length(suffix_u) + 1
+                dense[idx] = sid
+                push!(touched, idx)
+                push!(suffix_u, u)
+                push!(suffix_v, v)
+                push!(suffix_child, child_id)
+                push!(suffix_child_node, child_node)
+                push!(suffix_head_slot, chain_slots[k + 1])
+                push!(suffix_tail_slot, child_id == 0 ? child_tail_slot : 0)
+            end
+            child_id = sid
+            child_node = u
+            child_tail_slot = 0
+        end
+        query_suffix[i] = child_id
+    end
+
+    return total_long_hops, total_suffix_visits, length(suffix_u), ntargets
+end
+
+function _fill_map_leq_many_plan_arena!(arena::_MapLeqManyPlanArena,
+                                        M::PModule,
+                                        pairs::AbstractVector{<:Tuple{Int,Int}},
+                                        Q::AbstractPoset,
+                                        cc::CoverCache)
     m = length(pairs)
-    kinds = Vector{UInt8}(undef, m)
-    us = Vector{Int}(undef, m)
-    vs = Vector{Int}(undef, m)
-    mids = zeros(Int, m)
-    chains = [Int[] for _ in 1:m]
+    kinds = arena.kinds
+    us = arena.us
+    vs = arena.vs
+    mids = arena.mids
+    chain_ptr = arena.chain_ptr
+    chain_data = arena.chain_data
+    chain_slots = arena.chain_slots
+    tmp_chain = arena.tmp_chain
+    tmp_slots = arena.tmp_slots
+
+    resize!(kinds, m)
+    resize!(us, m)
+    resize!(vs, m)
+    resize!(mids, m)
+    fill!(mids, 0)
+    resize!(chain_ptr, m + 1)
+    chain_ptr[1] = 1
+    empty!(chain_data)
+    empty!(chain_slots)
+    sizehint!(chain_data, max(16, 3m))
+    sizehint!(chain_slots, max(16, 3m))
     n = nvertices(Q)
-    tmp_chain = Int[]
+    empty!(tmp_chain)
+    empty!(tmp_slots)
+    h = UInt(0x9e3779b97f4a7c15)
+    seen_pairs = Dict{UInt64,Nothing}()
+    sizehint!(seen_pairs, m)
+    has_repeats = false
+    nlong = 0
 
     @inbounds for i in eachindex(pairs)
         u, v = pairs[i]
+        h = hash(v, hash(u, h))
+        pk = _map_leq_key(u, v)
+        if !has_repeats
+            if haskey(seen_pairs, pk)
+                has_repeats = true
+            else
+                seen_pairs[pk] = nothing
+            end
+        end
         (1 <= u <= n && 1 <= v <= n) || error("map_leq_many!: indices out of range at i=$i (u=$u, v=$v)")
         us[i] = u
         vs[i] = v
 
         if u == v
             kinds[i] = 0x00
+            chain_ptr[i + 1] = chain_ptr[i]
             continue
         end
         leq(Q, u, v) || error("map_leq_many!: need u <= v at i=$i (u=$u, v=$v)")
 
         if _is_cover_pair(cc, u, v)
             kinds[i] = 0x01
+            chain_ptr[i + 1] = chain_ptr[i]
             continue
         end
 
         p = _chosen_predecessor(cc, u, v)
         if p == u
             kinds[i] = 0x01
+            chain_ptr[i + 1] = chain_ptr[i]
             continue
         end
 
-        p2 = _chosen_predecessor(cc, u, p)
-        if p2 == u
+        if _is_cover_pair(cc, u, p)
             kinds[i] = 0x02
             mids[i] = p
+            chain_ptr[i + 1] = chain_ptr[i]
             continue
         end
 
         kinds[i] = 0x03
-        _build_cover_chain!(tmp_chain, u, v, cc)
-        chains[i] = copy(tmp_chain)
+        nlong += 1
+        _build_cover_chain_with_slots!(tmp_chain, tmp_slots, M, u, v, cc)
+        append!(chain_data, tmp_chain)
+        push!(chain_slots, 0)
+        append!(chain_slots, tmp_slots)
+        chain_ptr[i + 1] = length(chain_data) + 1
     end
 
     first_pair = m == 0 ? (0, 0) : pairs[firstindex(pairs)]
     last_pair = m == 0 ? (0, 0) : pairs[lastindex(pairs)]
-    return _MapLeqManyPlan(m, first_pair, last_pair, kinds, us, vs, mids, chains)
+    total_long_hops, total_suffix_visits, nsuffix, ntargets =
+        _build_map_leq_many_suffix_program!(arena, pairs, n)
+    return _MapLeqManyBatchStats(m, h, first_pair, last_pair, has_repeats, nlong,
+                                 total_long_hops, total_suffix_visits, nsuffix, ntargets)
+end
+
+@inline function _copy_map_leq_many_plan(arena::_MapLeqManyPlanArena,
+                                         stats::_MapLeqManyBatchStats)
+    return _MapLeqManyPlan(stats.npairs, stats.pairs_hash, stats.first_pair, stats.last_pair, stats.has_repeats, false,
+                           copy(arena.kinds), copy(arena.us), copy(arena.vs), copy(arena.mids),
+                           copy(arena.chain_ptr), copy(arena.chain_data), copy(arena.chain_slots),
+                           copy(arena.query_suffix), copy(arena.suffix_u), copy(arena.suffix_v),
+                           copy(arena.suffix_child), copy(arena.suffix_child_node),
+                           copy(arena.suffix_head_slot), copy(arena.suffix_tail_slot))
+end
+
+function _build_map_leq_many_plan(M::PModule,
+                                  pairs::AbstractVector{<:Tuple{Int,Int}},
+                                  Q::AbstractPoset,
+                                  cc::CoverCache,
+                                  arena::_MapLeqManyPlanArena):: _MapLeqManyPlan
+    stats = _fill_map_leq_many_plan_arena!(arena, M, pairs, Q, cc)
+    return _copy_map_leq_many_plan(arena, stats)
+end
+
+function _lookup_map_leq_many_plan(M::PModule,
+                                   pairs::AbstractVector{<:Tuple{Int,Int}})
+    length(pairs) >= MAP_LEQ_MANY_PLAN_MIN_LEN[] || return nothing
+    cache = _map_leq_many_plan_dict(M)
+    k = _map_leq_many_plan_key(pairs)
+    plan = get(cache, k, nothing)
+    if plan !== nothing && _plan_signature_matches(plan, pairs)
+        plan.warmed = true
+        return plan
+    end
+    return nothing
 end
 
 function _get_or_build_map_leq_many_plan!(M::PModule,
                                           pairs::AbstractVector{<:Tuple{Int,Int}},
                                           Q::AbstractPoset,
                                           cc::CoverCache)
+    plan = _lookup_map_leq_many_plan(M, pairs)
+    plan === nothing || return plan
     length(pairs) >= MAP_LEQ_MANY_PLAN_MIN_LEN[] || return nothing
     cache = _map_leq_many_plan_dict(M)
     k = _map_leq_many_plan_key(pairs)
-    plan = get(cache, k, nothing)
-    if plan !== nothing && _plan_signature_matches(plan, pairs)
-        return plan
-    end
-
-    new_plan = _build_map_leq_many_plan(pairs, Q, cc)
+    arena = _map_leq_many_plan_arena(M)
+    new_plan = _build_map_leq_many_plan(M, pairs, Q, cc, arena)
     if length(cache) >= MAP_LEQ_MANY_PLAN_MAX_PER_THREAD[]
         empty!(cache)
     end
@@ -731,11 +1321,281 @@ function _get_or_build_map_leq_many_plan!(M::PModule,
     return new_plan
 end
 
-function _map_leq_many_with_plan!(dest::AbstractVector,
-                                  M::PModule{K,F,MatT},
-                                  pairs::AbstractVector{<:Tuple{Int,Int}},
-                                  plan::_MapLeqManyPlan) where {K,F,MatT}
-    _plan_signature_matches(plan, pairs) || return false
+function _get_or_build_map_leq_many_plan!(M::PModule,
+                                          batch::MapLeqQueryBatch,
+                                          Q::AbstractPoset,
+                                          cc::CoverCache)
+    pairs = batch.pairs
+    length(pairs) >= MAP_LEQ_MANY_PLAN_MIN_LEN[] || return nothing
+    slot = _thread_slot(length(M.map_many_batch_last))
+    last = M.map_many_batch_last[slot]
+    if last !== nothing
+        e = last::_MapLeqManyBatchPlanEntry
+        if e.batch === batch
+            e.plan.warmed = true
+            return e.plan
+        end
+    end
+
+    cache = _map_leq_many_batch_plan_dict(M)
+    k = _map_leq_many_plan_key(batch)
+    entry = get(cache, k, nothing)
+    if entry !== nothing
+        e = entry::_MapLeqManyBatchPlanEntry
+        if e.batch === batch
+            e.plan.warmed = true
+            M.map_many_batch_last[slot] = e
+            return e.plan
+        end
+    end
+
+    arena = _map_leq_many_plan_arena(M)
+    new_plan = _build_map_leq_many_plan(M, pairs, Q, cc, arena)
+    if length(cache) >= MAP_LEQ_MANY_PLAN_MAX_PER_THREAD[]
+        empty!(cache)
+    end
+    entry_new = _MapLeqManyBatchPlanEntry(batch, new_plan)
+    cache[k] = entry_new
+    M.map_many_batch_last[slot] = entry_new
+    return new_plan
+end
+
+function _cache_map_leq_many_plan_from_arena!(M::PModule,
+                                              pairs::AbstractVector{<:Tuple{Int,Int}},
+                                              stats::_MapLeqManyBatchStats,
+                                              arena::_MapLeqManyPlanArena)
+    stats.npairs >= MAP_LEQ_MANY_PLAN_MIN_LEN[] || return nothing
+    cache = _map_leq_many_plan_dict(M)
+    k = _map_leq_many_plan_key(pairs)
+    new_plan = _copy_map_leq_many_plan(arena, stats)
+    if length(cache) >= MAP_LEQ_MANY_PLAN_MAX_PER_THREAD[]
+        empty!(cache)
+    end
+    cache[k] = new_plan
+    return new_plan
+end
+
+@inline function _map_leq_many_overlap_ratio(stats::_MapLeqManyBatchStats)
+    stats.total_suffix_visits == 0 && return 0.0
+    return 1.0 - stats.nsuffix / stats.total_suffix_visits
+end
+
+@inline function _map_leq_many_target_repeat_ratio(stats::_MapLeqManyBatchStats)
+    stats.nlong == 0 && return 0.0
+    return 1.0 - stats.ntargets / stats.nlong
+end
+
+@inline function _map_leq_many_avg_hops(stats::_MapLeqManyBatchStats)
+    stats.nlong == 0 && return 0.0
+    return stats.total_long_hops / stats.nlong
+end
+
+@inline function _map_leq_many_oneoff_overlap_threshold(field::AbstractCoeffField)
+    if field isa QQField
+        return MAP_LEQ_MANY_ONEOFF_MIN_OVERLAP_QQ[]
+    elseif field isa PrimeField
+        return MAP_LEQ_MANY_ONEOFF_MIN_OVERLAP_PRIME[]
+    else
+        return MAP_LEQ_MANY_ONEOFF_MIN_OVERLAP_REAL[]
+    end
+end
+
+@inline function _map_leq_many_oneoff_target_repeat_threshold(field::AbstractCoeffField)
+    if field isa QQField
+        return MAP_LEQ_MANY_ONEOFF_MIN_TARGET_REPEAT_QQ[]
+    elseif field isa PrimeField
+        return MAP_LEQ_MANY_ONEOFF_MIN_TARGET_REPEAT_PRIME[]
+    else
+        return MAP_LEQ_MANY_ONEOFF_MIN_TARGET_REPEAT_REAL[]
+    end
+end
+
+@inline function _map_leq_many_scalar_overlap_threshold(field::AbstractCoeffField)
+    if field isa QQField
+        return MAP_LEQ_MANY_LONG_SCALAR_MAX_OVERLAP_QQ[]
+    elseif field isa PrimeField
+        return MAP_LEQ_MANY_LONG_SCALAR_MAX_OVERLAP_PRIME[]
+    else
+        return MAP_LEQ_MANY_LONG_SCALAR_MAX_OVERLAP_REAL[]
+    end
+end
+
+@inline function _map_leq_many_scalar_target_repeat_threshold(field::AbstractCoeffField)
+    if field isa QQField
+        return MAP_LEQ_MANY_LONG_SCALAR_MAX_TARGET_REPEAT_QQ[]
+    elseif field isa PrimeField
+        return MAP_LEQ_MANY_LONG_SCALAR_MAX_TARGET_REPEAT_PRIME[]
+    else
+        return MAP_LEQ_MANY_LONG_SCALAR_MAX_TARGET_REPEAT_REAL[]
+    end
+end
+
+@inline function _map_leq_many_min_avg_hops(field::AbstractCoeffField)
+    if field isa QQField
+        return MAP_LEQ_MANY_LONG_MIN_AVG_HOPS_QQ[]
+    elseif field isa PrimeField
+        return MAP_LEQ_MANY_LONG_MIN_AVG_HOPS_PRIME[]
+    else
+        return MAP_LEQ_MANY_LONG_MIN_AVG_HOPS_REAL[]
+    end
+end
+
+@inline function _map_leq_many_plan_score_threshold(field::AbstractCoeffField)
+    if field isa QQField
+        return MAP_LEQ_MANY_PLAN_MIN_SCORE_QQ[]
+    elseif field isa PrimeField
+        return MAP_LEQ_MANY_PLAN_MIN_SCORE_PRIME[]
+    else
+        return MAP_LEQ_MANY_PLAN_MIN_SCORE_REAL[]
+    end
+end
+
+@inline function _map_leq_many_plan_score(stats::_MapLeqManyBatchStats)::Float64
+    stats.npairs == 0 && return 0.0
+    long_frac = stats.nlong / stats.npairs
+    overlap = _map_leq_many_overlap_ratio(stats)
+    target_repeat = _map_leq_many_target_repeat_ratio(stats)
+    hop_term = clamp((_map_leq_many_avg_hops(stats) - 3.0) / 4.0, 0.0, 1.0)
+    return 0.55 * overlap + 0.30 * target_repeat + 0.10 * hop_term + 0.05 * long_frac
+end
+
+@inline function _prefer_map_leq_many_plan_build(stats::_MapLeqManyBatchStats,
+                                                 field::AbstractCoeffField)::Bool
+    stats.npairs >= MAP_LEQ_MANY_PLAN_MIN_LEN[] || return false
+    stats.has_repeats && return true
+    stats.nlong == 0 && return true
+    4 * stats.nlong < 3 * stats.npairs && return true
+    2 * stats.nlong >= stats.npairs || return false
+    _map_leq_many_avg_hops(stats) >= _map_leq_many_min_avg_hops(field) || return false
+    return _map_leq_many_plan_score(stats) >= _map_leq_many_plan_score_threshold(field)
+end
+
+@inline function _use_map_leq_many_oneoff_long(stats::_MapLeqManyBatchStats,
+                                               field::AbstractCoeffField)::Bool
+    stats.has_repeats && return false
+    stats.npairs >= MAP_LEQ_MANY_ONEOFF_LONG_MIN_LEN[] || return false
+    stats.nlong >= MAP_LEQ_MANY_ONEOFF_LONG_MIN_LONG[] || return false
+    2 * stats.nlong >= stats.npairs || return false
+    avg_hops = _map_leq_many_avg_hops(stats)
+    avg_hops >= _map_leq_many_min_avg_hops(field) || return false
+    overlap = _map_leq_many_overlap_ratio(stats)
+    target_repeat = _map_leq_many_target_repeat_ratio(stats)
+    return overlap >= _map_leq_many_oneoff_overlap_threshold(field) ||
+           target_repeat >= _map_leq_many_oneoff_target_repeat_threshold(field)
+end
+
+@inline function _prefer_map_leq_many_scalar_long(stats::_MapLeqManyBatchStats,
+                                                  field::AbstractCoeffField)::Bool
+    stats.has_repeats && return false
+    stats.npairs >= MAP_LEQ_MANY_ONEOFF_LONG_MIN_LEN[] || return false
+    stats.nlong >= MAP_LEQ_MANY_ONEOFF_LONG_MIN_LONG[] || return false
+    2 * stats.nlong >= stats.npairs || return false
+    avg_hops = _map_leq_many_avg_hops(stats)
+    avg_hops >= _map_leq_many_min_avg_hops(field) || return false
+    overlap = _map_leq_many_overlap_ratio(stats)
+    target_repeat = _map_leq_many_target_repeat_ratio(stats)
+    return overlap <= _map_leq_many_scalar_overlap_threshold(field) &&
+           target_repeat <= _map_leq_many_scalar_target_repeat_threshold(field)
+end
+
+@inline function _new_suffix_vals(::Type{MatT}, n::Int) where {MatT}
+    return Vector{MatT}(undef, n)
+end
+
+@inline function _execute_suffix_program_dense!(suffix_vals::Vector{MatT},
+                                                M::PModule{K,F,Matrix{K}},
+                                                suffix_u::AbstractVector{Int},
+                                                suffix_v::AbstractVector{Int},
+                                                suffix_child::AbstractVector{Int},
+                                                suffix_child_node::AbstractVector{Int},
+                                                suffix_head_slot::AbstractVector{Int},
+                                                suffix_tail_slot::AbstractVector{Int};
+                                                store_results::Bool) where {K,F,MatT}
+    store = M.edge_maps
+    @inbounds for sid in eachindex(suffix_u)
+        u = suffix_u[sid]
+        v = suffix_v[sid]
+        memoA = _map_leq_memo_get(M, u, v)
+        if memoA !== nothing
+            suffix_vals[sid] = memoA
+            continue
+        end
+
+        child = suffix_child[sid]
+        child_node = suffix_child_node[sid]
+        tail = child == 0 ? store.maps_from_pred[v][suffix_tail_slot[sid]] : suffix_vals[child]
+        head = store.maps_from_pred[child_node][suffix_head_slot[sid]]
+
+        A = if M.dims[u] == 1 && M.dims[v] == 1
+            out = Matrix{K}(undef, 1, 1)
+            out[1, 1] = tail[1, 1] * head[1, 1]
+            _as_mattype(MatT, out)
+        else
+            out = Matrix{K}(undef, size(tail, 1), size(head, 2))
+            mul!(out, tail, head)
+            _as_mattype(MatT, out)
+        end
+        suffix_vals[sid] = store_results ? _map_leq_memo_set!(M, u, v, A) : A
+    end
+    return suffix_vals
+end
+
+@inline function _execute_suffix_program_generic!(suffix_vals::Vector{MatT},
+                                                  M::PModule{K,F,MatT},
+                                                  suffix_u::AbstractVector{Int},
+                                                  suffix_v::AbstractVector{Int},
+                                                  suffix_child::AbstractVector{Int},
+                                                  suffix_child_node::AbstractVector{Int},
+                                                  suffix_head_slot::AbstractVector{Int},
+                                                  suffix_tail_slot::AbstractVector{Int};
+                                                  store_results::Bool) where {K,F,MatT}
+    store = M.edge_maps
+    @inbounds for sid in eachindex(suffix_u)
+        u = suffix_u[sid]
+        v = suffix_v[sid]
+        memoA = _map_leq_memo_get(M, u, v)
+        if memoA !== nothing
+            suffix_vals[sid] = memoA
+            continue
+        end
+
+        child = suffix_child[sid]
+        child_node = suffix_child_node[sid]
+        tail = child == 0 ? store.maps_from_pred[v][suffix_tail_slot[sid]] : suffix_vals[child]
+        head = store.maps_from_pred[child_node][suffix_head_slot[sid]]
+
+        A = if M.dims[u] == 1 && M.dims[v] == 1
+            out = Matrix{K}(undef, 1, 1)
+            out[1, 1] = tail[1, 1] * head[1, 1]
+            _as_mattype(MatT, out)
+        else
+            _as_mattype(MatT, FieldLinAlg._matmul(tail, head))
+        end
+        suffix_vals[sid] = store_results ? _map_leq_memo_set!(M, u, v, A) : A
+    end
+    return suffix_vals
+end
+
+function _map_leq_many_with_plan_unchecked!(dest::AbstractVector,
+                                            M::PModule{K,F,MatT},
+                                            pairs::AbstractVector{<:Tuple{Int,Int}},
+                                            plan::_MapLeqManyPlan) where {K,F,MatT}
+    length(pairs) == plan.npairs || return false
+    store_results = plan.has_repeats || plan.warmed
+    suffix_vals = isempty(plan.suffix_u) ? nothing : _new_suffix_vals(MatT, length(plan.suffix_u))
+    if suffix_vals !== nothing
+        if MatT <: Matrix{K}
+            _execute_suffix_program_dense!(suffix_vals, M, plan.suffix_u, plan.suffix_v,
+                                           plan.suffix_child, plan.suffix_child_node,
+                                           plan.suffix_head_slot, plan.suffix_tail_slot;
+                                           store_results=store_results)
+        else
+            _execute_suffix_program_generic!(suffix_vals, M, plan.suffix_u, plan.suffix_v,
+                                             plan.suffix_child, plan.suffix_child_node,
+                                             plan.suffix_head_slot, plan.suffix_tail_slot;
+                                             store_results=store_results)
+        end
+    end
 
     @inbounds for i in eachindex(pairs)
         kind = plan.kinds[i]
@@ -748,20 +1608,14 @@ function _map_leq_many_with_plan!(dest::AbstractVector,
         elseif kind == 0x01
             dest[i] = M.edge_maps[u, v]
             continue
+        elseif kind == 0x03
+            dest[i] = suffix_vals[plan.query_suffix[i]]
+            continue
         end
 
         if M.dims[u] == 1 && M.dims[v] == 1
-            coeff = one(K)
-            if kind == 0x02
-                p = plan.mids[i]
-                coeff *= M.edge_maps[p, v][1, 1]
-                coeff *= M.edge_maps[u, p][1, 1]
-            else
-                chain = plan.chains[i]
-                @inbounds for t in 1:(length(chain) - 1)
-                    coeff *= M.edge_maps[chain[t], chain[t + 1]][1, 1]
-                end
-            end
+            p = plan.mids[i]
+            coeff = M.edge_maps[p, v][1, 1] * M.edge_maps[u, p][1, 1]
             A = Matrix{K}(undef, 1, 1)
             A[1, 1] = coeff
             dest[i] = _as_mattype(MatT, A)
@@ -774,25 +1628,129 @@ function _map_leq_many_with_plan!(dest::AbstractVector,
             continue
         end
 
-        A = if kind == 0x02
-            p = plan.mids[i]
-            if MatT <: Matrix{K}
+        p = plan.mids[i]
+        A = if MatT <: Matrix{K}
+            s = _map_leq_scratch(M)
+            E2 = M.edge_maps[p, v]
+            E1 = M.edge_maps[u, p]
+            out = _scratch_mat!(s, true, size(E2, 1), size(E1, 2))
+            mul!(out, E2, E1)
+            _as_mattype(MatT, copy(out))
+        else
+            _as_mattype(MatT, FieldLinAlg._matmul(M.edge_maps[p, v], M.edge_maps[u, p]))
+        end
+
+        dest[i] = store_results ? _map_leq_memo_set!(M, u, v, A) : A
+    end
+    return true
+end
+
+function _map_leq_many_with_plan!(dest::AbstractVector,
+                                  M::PModule{K,F,MatT},
+                                  pairs::AbstractVector{<:Tuple{Int,Int}},
+                                  plan::_MapLeqManyPlan) where {K,F,MatT}
+    _plan_signature_matches(plan, pairs) || return false
+    return _map_leq_many_with_plan_unchecked!(dest, M, pairs, plan)
+end
+function _map_leq_many_oneoff_long_batch!(dest::AbstractVector,
+                                          M::PModule{K,F,MatT},
+                                          arena::_MapLeqManyPlanArena,
+                                          stats::_MapLeqManyBatchStats) where {K,F,MatT}
+    _use_map_leq_many_oneoff_long(stats, M.field) || return false
+    suffix_vals = isempty(arena.suffix_u) ? nothing : _new_suffix_vals(MatT, length(arena.suffix_u))
+    if suffix_vals !== nothing
+        if MatT <: Matrix{K}
+            _execute_suffix_program_dense!(suffix_vals, M, arena.suffix_u, arena.suffix_v,
+                                           arena.suffix_child, arena.suffix_child_node,
+                                           arena.suffix_head_slot, arena.suffix_tail_slot;
+                                           store_results=false)
+        else
+            _execute_suffix_program_generic!(suffix_vals, M, arena.suffix_u, arena.suffix_v,
+                                             arena.suffix_child, arena.suffix_child_node,
+                                             arena.suffix_head_slot, arena.suffix_tail_slot;
+                                             store_results=false)
+        end
+    end
+
+    @inbounds for i in 1:stats.npairs
+        kind = arena.kinds[i]
+        u = arena.us[i]
+        v = arena.vs[i]
+
+        if kind == 0x00
+            dest[i] = _identity_map(M, v)
+        elseif kind == 0x01
+            dest[i] = M.edge_maps[u, v]
+        elseif kind == 0x03
+            dest[i] = suffix_vals[arena.query_suffix[i]]
+        elseif M.dims[u] == 1 && M.dims[v] == 1
+            p = arena.mids[i]
+            A = Matrix{K}(undef, 1, 1)
+            A[1, 1] = M.edge_maps[p, v][1, 1] * M.edge_maps[u, p][1, 1]
+            dest[i] = _as_mattype(MatT, A)
+        elseif MatT <: Matrix{K}
+            s = _map_leq_scratch(M)
+            p = arena.mids[i]
+            E2 = M.edge_maps[p, v]
+            E1 = M.edge_maps[u, p]
+            out = _scratch_mat!(s, true, size(E2, 1), size(E1, 2))
+            mul!(out, E2, E1)
+            dest[i] = _as_mattype(MatT, copy(out))
+        else
+            p = arena.mids[i]
+            dest[i] = _as_mattype(MatT, FieldLinAlg._matmul(M.edge_maps[p, v], M.edge_maps[u, p]))
+        end
+    end
+    return true
+end
+
+function _map_leq_many_scalar_long_batch!(dest::AbstractVector,
+                                          M::PModule{K,F,MatT},
+                                          arena::_MapLeqManyPlanArena,
+                                          stats::_MapLeqManyBatchStats) where {K,F,MatT}
+    _prefer_map_leq_many_scalar_long(stats, M.field) || return false
+    chain_ptr = arena.chain_ptr
+    chain_data = arena.chain_data
+    chain_slots = arena.chain_slots
+    @inbounds for i in 1:stats.npairs
+        kind = arena.kinds[i]
+        u = arena.us[i]
+        v = arena.vs[i]
+        if kind == 0x00
+            dest[i] = _identity_map(M, v)
+        elseif kind == 0x01
+            dest[i] = M.edge_maps[u, v]
+        elseif kind == 0x02
+            p = arena.mids[i]
+            if M.dims[u] == 1 && M.dims[v] == 1
+                if MatT <: Matrix{K}
+                    out = _ensure_dense_dest_matrix!(dest, i, K, 1, 1)
+                    out[1, 1] = M.edge_maps[p, v][1, 1] * M.edge_maps[u, p][1, 1]
+                else
+                    A = Matrix{K}(undef, 1, 1)
+                    A[1, 1] = M.edge_maps[p, v][1, 1] * M.edge_maps[u, p][1, 1]
+                    dest[i] = _as_mattype(MatT, A)
+                end
+            elseif MatT <: Matrix{K}
                 s = _map_leq_scratch(M)
                 E2 = M.edge_maps[p, v]
                 E1 = M.edge_maps[u, p]
-                out = _scratch_mat!(s, true, size(E2, 1), size(E1, 2))
+                out = _ensure_dense_dest_matrix!(dest, i, K, size(E2, 1), size(E1, 2))
                 mul!(out, E2, E1)
-                copy(out)
             else
-                FieldLinAlg._matmul(M.edge_maps[p, v], M.edge_maps[u, p])
+                dest[i] = _as_mattype(MatT, FieldLinAlg._matmul(M.edge_maps[p, v], M.edge_maps[u, p]))
             end
         else
-            chain = plan.chains[i]
-            s = _map_leq_scratch(M)
-            MatT <: Matrix{K} ? _compose_chain_dense!(M, chain, s) : _compose_chain_generic(M, chain)
+            sidx = chain_ptr[i]
+            eidx = chain_ptr[i + 1] - 1
+            if MatT <: Matrix{K}
+                s = _map_leq_scratch(M)
+                out = _ensure_dense_dest_matrix!(dest, i, K, M.dims[v], M.dims[u])
+                _compose_chain_dense_packed_slots_into!(out, M, chain_data, chain_slots, sidx, eidx, s)
+            else
+                dest[i] = _as_mattype(MatT, _compose_chain_generic_packed_slots(M, chain_data, chain_slots, sidx, eidx))
+            end
         end
-
-        dest[i] = _map_leq_memo_set!(M, u, v, A)
     end
     return true
 end
@@ -844,20 +1802,71 @@ end
     return DIRECT_SUM_SPARSE_MAX_DENSITY[]
 end
 
+@inline function _direct_sum_sparse_min_avg_edge_entries(field::AbstractCoeffField)
+    if field isa RealField
+        return DIRECT_SUM_SPARSE_MIN_AVG_EDGE_ENTRIES_REAL[]
+    elseif field isa PrimeField
+        return DIRECT_SUM_SPARSE_MIN_AVG_EDGE_ENTRIES_PRIME[]
+    end
+    return DIRECT_SUM_SPARSE_MIN_AVG_EDGE_ENTRIES_QQ[]
+end
+
+@inline function _direct_sum_dense_weight(field::AbstractCoeffField)
+    if field isa RealField
+        return DIRECT_SUM_COST_DENSE_WEIGHT_REAL[]
+    elseif field isa PrimeField
+        return DIRECT_SUM_COST_DENSE_WEIGHT_PRIME[]
+    end
+    return DIRECT_SUM_COST_DENSE_WEIGHT_QQ[]
+end
+
+@inline function _direct_sum_sparse_nnz_weight(field::AbstractCoeffField)
+    if field isa RealField
+        return DIRECT_SUM_COST_SPARSE_NNZ_WEIGHT_REAL[]
+    elseif field isa PrimeField
+        return DIRECT_SUM_COST_SPARSE_NNZ_WEIGHT_PRIME[]
+    end
+    return DIRECT_SUM_COST_SPARSE_NNZ_WEIGHT_QQ[]
+end
+
+@inline function _direct_sum_sparse_edge_overhead(field::AbstractCoeffField)
+    if field isa RealField
+        return DIRECT_SUM_COST_SPARSE_EDGE_OVERHEAD_REAL[]
+    elseif field isa PrimeField
+        return DIRECT_SUM_COST_SPARSE_EDGE_OVERHEAD_PRIME[]
+    end
+    return DIRECT_SUM_COST_SPARSE_EDGE_OVERHEAD_QQ[]
+end
+
+@inline function _direct_sum_estimated_entries(sa::_DirectSumEdgeStats, sb::_DirectSumEdgeStats)
+    n_edges = max(1, min(sa.n_edges, sb.n_edges))
+    cross_est = (Float64(sa.sum_cod_dims) * Float64(sb.sum_dom_dims) +
+                 Float64(sb.sum_cod_dims) * Float64(sa.sum_dom_dims)) / Float64(n_edges)
+    return Float64(sa.total_entries + sb.total_entries) + cross_est
+end
+
 function _direct_sum_sparse_preferred(A::PModule{K,FA,MatA},
                                       B::PModule{K,FB,MatB}) where {K,FA,FB,MatA,MatB}
     # Sparse output only pays off reliably when both inputs are already sparse.
     (_is_sparse_map_type(MatA) && _is_sparse_map_type(MatB)) || return false
-    total_entries = 0
-    total_nnz = 0
-    for ((u, v), Au) in A.edge_maps
-        Bu = B.edge_maps[u, v]
-        total_entries += (A.dims[v] + B.dims[v]) * (A.dims[u] + B.dims[u])
-        total_nnz += nnz(Au) + nnz(Bu)
-    end
-    total_entries == 0 && return false
+    sa = A.direct_sum_stats
+    sb = B.direct_sum_stats
+    sa.n_edges == sb.n_edges || return false
+
+    total_entries = _direct_sum_estimated_entries(sa, sb)
+    total_entries == 0.0 && return false
     total_entries < DIRECT_SUM_SPARSE_MIN_TOTAL_ENTRIES[] && return false
-    return total_nnz <= _direct_sum_sparse_density_cap(A.field) * total_entries
+    avg_entries = total_entries / Float64(sa.n_edges)
+    avg_entries >= _direct_sum_sparse_min_avg_edge_entries(A.field) || return false
+
+    total_nnz = Float64(sa.total_nnz + sb.total_nnz)
+    density_est = total_nnz / total_entries
+    density_est <= _direct_sum_sparse_density_cap(A.field) || return false
+
+    dense_cost = _direct_sum_dense_weight(A.field) * total_entries
+    sparse_cost = _direct_sum_sparse_nnz_weight(A.field) * total_nnz +
+                  _direct_sum_sparse_edge_overhead(A.field) * Float64(sa.n_edges)
+    return sparse_cost <= dense_cost
 end
 
 @inline function _direct_sum_mat_type(::Type{K},
@@ -973,18 +1982,20 @@ function direct_sum(A::PModule{K,FA,MatA}, B::PModule{K,FB,MatB}) where {K,FA,FB
     # Fast path: traverse cover edges via store-aligned succ lists and grab maps
     # by index (no tuple allocation, no search).
     cc = _get_cover_cache(Q)
-    if (A.edge_maps.succs == cc.succs && A.edge_maps.preds == cc.preds &&
-        B.edge_maps.succs == cc.succs && B.edge_maps.preds == cc.preds)
+    if (all(A.edge_maps.succs[u] == _succs(cc, u) for u in 1:n) &&
+        all(A.edge_maps.preds[v] == _preds(cc, v) for v in 1:n) &&
+        all(B.edge_maps.succs[u] == _succs(cc, u) for u in 1:n) &&
+        all(B.edge_maps.preds[v] == _preds(cc, v) for v in 1:n))
 
-        preds = cc.preds
-        succs = cc.succs
+        preds = [_preds(cc, v) for v in 1:n]
+        succs = [_succs(cc, u) for u in 1:n]
 
         maps_from_pred = [Vector{OutMatT}(undef, length(preds[v])) for v in 1:n]
         maps_to_succ   = [Vector{OutMatT}(undef, length(succs[u])) for u in 1:n]
 
         @inbounds for u in 1:n
             su = succs[u]
-            pred_slots = cc.pred_slot_of_succ[u]
+            pred_slots = _pred_slots_of_succ(cc, u)
             Au = A.edge_maps.maps_to_succ[u]
             Bu = B.edge_maps.maps_to_succ[u]
             outu = maps_to_succ[u]
@@ -1098,15 +2109,99 @@ end
     return chain
 end
 
-@inline function _compose_chain_dense!(M::PModule{K}, chain::Vector{Int}, s::MapLeqScratch{K}) where {K}
-    m = length(chain)
-    first_map = M.edge_maps[chain[1], chain[2]]
+@inline function _build_cover_chain_with_slots!(chain::Vector{Int},
+                                                slots::Vector{Int},
+                                                M::PModule,
+                                                u::Int, v::Int,
+                                                cc::CoverCache)
+    empty!(chain)
+    empty!(slots)
+    push!(chain, v)
+    d = v
+    while d != u
+        p, slot = _chosen_predecessor_with_slot(M, cc, u, d)
+        push!(chain, p)
+        push!(slots, slot)
+        d = p
+    end
+    reverse!(chain)
+    reverse!(slots)
+    return chain, slots
+end
+
+@inline function _chosen_predecessor_with_slot(M::PModule, cc::CoverCache, a::Int, d::Int)::Tuple{Int,Int}
+    lo = cc.pred_ptr[d]
+    hi = cc.pred_ptr[d + 1] - 1
+    slot = _map_leq_pred_slot_get(M, a, d)
+    if slot != 0
+        @inbounds return cc.pred_idx[lo + slot - 1], slot
+    end
+
+    dense = _chain_parent_dense(cc)
+    if dense !== nothing
+        idx = (a - 1) * dense.n + d
+        @inbounds if dense.seen[idx]
+            p = dense.vals[idx]
+            slot = _find_sorted_index_range(cc.pred_idx, lo, hi, p)
+            slot == 0 || _map_leq_pred_slot_set!(M, a, d, slot)
+            return p, slot
+        end
+        slot_a = 0
+        @inbounds for k in lo:hi
+            b = cc.pred_idx[k]
+            slot = k - lo + 1
+            if b == a
+                slot_a = slot
+            elseif leq(cc.Q, a, b)
+                dense.vals[idx] = b
+                dense.seen[idx] = true
+                _map_leq_pred_slot_set!(M, a, d, slot)
+                return b, slot
+            end
+        end
+        dense.vals[idx] = a
+        dense.seen[idx] = true
+        slot_a == 0 || _map_leq_pred_slot_set!(M, a, d, slot_a)
+        return a, slot_a
+    end
+
+    cache = _chain_parent_dict(cc)
+    key = _pairkey(a, d)
+    p = get(cache, key, 0)
+    if p != 0
+        slot = _find_sorted_index_range(cc.pred_idx, lo, hi, p)
+        slot == 0 || _map_leq_pred_slot_set!(M, a, d, slot)
+        return p, slot
+    end
+
+    slot_a = 0
+    @inbounds for k in lo:hi
+        b = cc.pred_idx[k]
+        slot = k - lo + 1
+        if b == a
+            slot_a = slot
+        elseif leq(cc.Q, a, b)
+            cache[key] = b
+            _map_leq_pred_slot_set!(M, a, d, slot)
+            return b, slot
+        end
+    end
+    cache[key] = a
+    slot_a == 0 || _map_leq_pred_slot_set!(M, a, d, slot_a)
+    return a, slot_a
+end
+
+@inline function _compose_chain_dense_packed!(M::PModule{K},
+                                              chain_data::Vector{Int},
+                                              sidx::Int, eidx::Int,
+                                              s::MapLeqScratch{K}) where {K}
+    first_map = M.edge_maps[chain_data[sidx], chain_data[sidx + 1]]
     acc = _scratch_mat!(s, true, size(first_map, 1), size(first_map, 2))
     copyto!(acc, first_map)
     acc_is_tmp1 = true
 
-    @inbounds for i in 2:(m - 1)
-        E = M.edge_maps[chain[i], chain[i + 1]]
+    @inbounds for k in (sidx + 1):(eidx - 1)
+        E = M.edge_maps[chain_data[k], chain_data[k + 1]]
         out = _scratch_mat!(s, !acc_is_tmp1, size(E, 1), size(acc, 2))
         mul!(out, E, acc)
         acc = out
@@ -1115,12 +2210,163 @@ end
     return copy(acc)
 end
 
-@inline function _compose_chain_generic(M::PModule, chain::Vector{Int})
-    m = length(chain)
-    A = M.edge_maps[chain[1], chain[2]]
-    @inbounds for i in 2:(m - 1)
-        E = M.edge_maps[chain[i], chain[i + 1]]
+@inline function _compose_chain_dense_packed_slots!(M::PModule{K},
+                                                    chain_data::Vector{Int},
+                                                    chain_slots::Vector{Int},
+                                                    sidx::Int, eidx::Int,
+                                                    s::MapLeqScratch{K}) where {K}
+    store = M.edge_maps
+    first_map = store.maps_from_pred[chain_data[sidx + 1]][chain_slots[sidx + 1]]
+    acc = _scratch_mat!(s, true, size(first_map, 1), size(first_map, 2))
+    copyto!(acc, first_map)
+    acc_is_tmp1 = true
+
+    @inbounds for k in (sidx + 2):eidx
+        E = store.maps_from_pred[chain_data[k]][chain_slots[k]]
+        out = _scratch_mat!(s, !acc_is_tmp1, size(E, 1), size(acc, 2))
+        mul!(out, E, acc)
+        acc = out
+        acc_is_tmp1 = !acc_is_tmp1
+    end
+    return copy(acc)
+end
+
+@inline function _compose_chain_dense_packed_slots_into!(out::Matrix{K},
+                                                         M::PModule{K},
+                                                         chain_data::Vector{Int},
+                                                         chain_slots::Vector{Int},
+                                                         sidx::Int, eidx::Int,
+                                                         s::MapLeqScratch{K}) where {K}
+    store = M.edge_maps
+    first_map = store.maps_from_pred[chain_data[sidx + 1]][chain_slots[sidx + 1]]
+    if sidx + 1 == eidx
+        copyto!(out, first_map)
+        return out
+    end
+
+    acc = _scratch_mat!(s, true, size(first_map, 1), size(first_map, 2))
+    copyto!(acc, first_map)
+    acc_is_tmp1 = true
+
+    @inbounds for k in (sidx + 2):(eidx - 1)
+        E = store.maps_from_pred[chain_data[k]][chain_slots[k]]
+        tmp = _scratch_mat!(s, !acc_is_tmp1, size(E, 1), size(acc, 2))
+        mul!(tmp, E, acc)
+        acc = tmp
+        acc_is_tmp1 = !acc_is_tmp1
+    end
+
+    last_edge = store.maps_from_pred[chain_data[eidx]][chain_slots[eidx]]
+    mul!(out, last_edge, acc)
+    return out
+end
+
+@inline function _compose_chain_generic_packed(M::PModule,
+                                               chain_data::Vector{Int},
+                                               sidx::Int, eidx::Int)
+    A = M.edge_maps[chain_data[sidx], chain_data[sidx + 1]]
+    @inbounds for k in (sidx + 1):(eidx - 1)
+        E = M.edge_maps[chain_data[k], chain_data[k + 1]]
         A = FieldLinAlg._matmul(E, A)
+    end
+    return A
+end
+
+@inline function _compose_chain_generic_packed_slots(M::PModule,
+                                                     chain_data::Vector{Int},
+                                                     chain_slots::Vector{Int},
+                                                     sidx::Int, eidx::Int)
+    store = M.edge_maps
+    A = store.maps_from_pred[chain_data[sidx + 1]][chain_slots[sidx + 1]]
+    @inbounds for k in (sidx + 2):eidx
+        E = store.maps_from_pred[chain_data[k]][chain_slots[k]]
+        A = FieldLinAlg._matmul(E, A)
+    end
+    return A
+end
+
+@inline function _ensure_dense_dest_matrix!(dest::AbstractVector, i::Int,
+                                            ::Type{K}, m::Int, n::Int)::Matrix{K} where {K}
+    if Base.isassigned(dest, i)
+        A = dest[i]
+        if A isa Matrix{K} && size(A, 1) == m && size(A, 2) == n
+            return A
+        end
+    end
+    A = Matrix{K}(undef, m, n)
+    dest[i] = A
+    return A
+end
+
+@inline function _mul_tiny_dense!(out::Matrix{K},
+                                  A::AbstractMatrix{K},
+                                  B::AbstractMatrix{K}) where {K}
+    fill!(out, zero(K))
+    m, k = size(A)
+    _, n = size(B)
+    @inbounds for j in 1:n
+        for t in 1:k
+            bt = B[t, j]
+            iszero(bt) && continue
+            for i in 1:m
+                out[i, j] += A[i, t] * bt
+            end
+        end
+    end
+    return out
+end
+
+@inline function _mul_dense_maybe_tiny!(out::Matrix{K},
+                                        A::AbstractMatrix{K},
+                                        B::AbstractMatrix{K}) where {K}
+    if FieldLinAlg._is_tiny_mul(A, B)
+        return _mul_tiny_dense!(out, A, B)
+    end
+    mul!(out, A, B)
+    return out
+end
+
+@inline function _compose_chain_dense_backward!(M::PModule{K},
+                                                u::Int, v::Int,
+                                                cc::CoverCache,
+                                                s::MapLeqScratch{K}) where {K}
+    store = M.edge_maps
+    d = v
+    p, slot = _chosen_predecessor_with_slot(M, cc, u, d)
+    slot == 0 && error("missing cover-edge map for ($p,$d)")
+    first_map = store.maps_from_pred[d][slot]
+    acc = _scratch_mat!(s, true, size(first_map, 1), size(first_map, 2))
+    copyto!(acc, first_map)
+    acc_is_tmp1 = true
+
+    while p != u
+        d = p
+        p, slot = _chosen_predecessor_with_slot(M, cc, u, d)
+        slot == 0 && error("missing cover-edge map for ($p,$d)")
+        E = store.maps_from_pred[d][slot]
+        out = _scratch_mat!(s, !acc_is_tmp1, size(acc, 1), size(E, 2))
+        mul!(out, acc, E)
+        acc = out
+        acc_is_tmp1 = !acc_is_tmp1
+    end
+    return copy(acc)
+end
+
+@inline function _compose_chain_generic_backward(M::PModule,
+                                                 u::Int, v::Int,
+                                                 cc::CoverCache)
+    store = M.edge_maps
+    d = v
+    p, slot = _chosen_predecessor_with_slot(M, cc, u, d)
+    slot == 0 && error("missing cover-edge map for ($p,$d)")
+    A = store.maps_from_pred[d][slot]
+
+    while p != u
+        d = p
+        p, slot = _chosen_predecessor_with_slot(M, cc, u, d)
+        slot == 0 && error("missing cover-edge map for ($p,$d)")
+        E = store.maps_from_pred[d][slot]
+        A = FieldLinAlg._matmul(A, E)
     end
     return A
 end
@@ -1129,21 +2375,42 @@ end
 
 @inline function _map_leq_short_chain_no_memo(M::PModule{K,F,MatT}, u::Int, v::Int, cc::CoverCache) where {K,F,MatT}
     # Try a no-memo fast path when the chosen chain has length <= 2 edges.
-    p = _chosen_predecessor(cc, u, v)
-    if p == u
-        return M.edge_maps[u, v]
+    # We intentionally avoid touching the cover-cache predecessor memo here,
+    # since this path targets cold one-off queries.
+    lo_v = cc.pred_ptr[v]
+    hi_v = cc.pred_ptr[v + 1] - 1
+    p = 0
+    p_slot = 0
+    @inbounds for idx in lo_v:hi_v
+        b = cc.pred_idx[idx]
+        if b != u && leq(M.Q, u, b)
+            p = b
+            p_slot = idx - lo_v + 1
+            break
+        end
     end
-    p2 = _chosen_predecessor(cc, u, p)
-    p2 == u || return nothing
+    p == 0 && return M.edge_maps[u, v]
+
+    lo_p = cc.pred_ptr[p]
+    hi_p = cc.pred_ptr[p + 1] - 1
+    up_slot = 0
+    @inbounds for idx in lo_p:hi_p
+        b = cc.pred_idx[idx]
+        if b == u
+            up_slot = idx - lo_p + 1
+        elseif leq(M.Q, u, b)
+            return nothing
+        end
+    end
+    up_slot == 0 && return nothing
+
+    E2 = M.edge_maps.maps_from_pred[v][p_slot]
+    E1 = M.edge_maps.maps_from_pred[p][up_slot]
     if MatT <: Matrix{K}
-        s = _map_leq_scratch(M)
-        E2 = M.edge_maps[p, v]
-        E1 = M.edge_maps[u, p]
-        out = _scratch_mat!(s, true, size(E2, 1), size(E1, 2))
-        mul!(out, E2, E1)
-        A = copy(out)
+        A = Matrix{K}(undef, size(E2, 1), size(E1, 2))
+        mul!(A, E2, E1)
     else
-        A = FieldLinAlg._matmul(M.edge_maps[p, v], M.edge_maps[u, p])
+        A = FieldLinAlg._matmul(E2, E1)
     end
     return _as_mattype(MatT, A)
 end
@@ -1154,7 +2421,7 @@ end
     d = v
     coeff = one(K)
     while d != u
-        p = _chosen_predecessor(cc, u, d)
+        p = _chosen_predecessor_slow(cc, u, d)
         (M.dims[p] == 1 && M.dims[d] == 1) || return nothing
         coeff *= M.edge_maps[p, d][1, 1]
         d = p
@@ -1173,6 +2440,8 @@ end
     if cc.C === nothing && haskey(M.edge_maps, u, v)
         return M.edge_maps[u, v]
     end
+    lastA = _map_leq_last_pair_get(M, u, v)
+    lastA === nothing || return lastA
     memoA = _map_leq_memo_get(M, u, v)
     memoA === nothing || return memoA
 
@@ -1180,14 +2449,21 @@ end
     # - scalar-chain composition for 1x1 fibers
     # - short chosen chains (<=2 edges)
     Afast = _map_leq_scalar_chain_no_memo(M, u, v, cc)
-    Afast === nothing || return Afast
+    Afast === nothing || return _map_leq_last_pair_set!(M, u, v, Afast)
     Afast = _map_leq_short_chain_no_memo(M, u, v, cc)
-    Afast === nothing || return Afast
+    Afast === nothing || return _map_leq_last_pair_set!(M, u, v, Afast)
 
+    seen_before = _map_leq_pred_slot_get(M, u, v) != 0
     s = _map_leq_scratch(M)
-    chain = _build_cover_chain!(s.chain, u, v, cc)
-    A = MatT <: Matrix{K} ? _compose_chain_dense!(M, chain, s) : _compose_chain_generic(M, chain)
-    return _map_leq_memo_set!(M, u, v, A)
+    A = MatT <: Matrix{K} ?
+        _compose_chain_dense_backward!(M, u, v, cc, s) :
+        _compose_chain_generic_backward(M, u, v, cc)
+    if seen_before
+        Atyped = _map_leq_memo_set!(M, u, v, A)
+        _map_leq_last_pair_set!(M, u, v, Atyped)
+        return Atyped
+    end
+    return _map_leq_last_pair_set!(M, u, v, A)
 end
 
 """
@@ -1229,11 +2505,72 @@ function map_leq(M::PModule{K}, u::Int, v::Int;
     return _map_leq_cover_chain(M, u, v, cc)
 end
 
+function _map_leq_many_raw_route_kind(M::PModule,
+                                      pairs::AbstractVector{<:Tuple{Int,Int}},
+                                      cc::CoverCache)
+    plan = _lookup_map_leq_many_plan(M, pairs)
+    plan === nothing || return :plan_cached
+    Q = M.Q
+    arena = _map_leq_many_plan_arena(M)
+    stats = _fill_map_leq_many_plan_arena!(arena, M, pairs, Q, cc)
+    if _use_map_leq_many_oneoff_long(stats, M.field)
+        return :oneoff_long
+    elseif _prefer_map_leq_many_scalar_long(stats, M.field)
+        return :scalar_fallback
+    elseif _prefer_map_leq_many_plan_build(stats, M.field)
+        return :plan_build
+    end
+    return :scalar_fallback
+end
+
+@inline function _map_leq_many_fallback!(dest::AbstractVector,
+                                         M::PModule{K},
+                                         pairs::AbstractVector{<:Tuple{Int,Int}},
+                                         Q::AbstractPoset,
+                                         n::Int,
+                                         cc::CoverCache) where {K}
+    @inbounds for i in eachindex(pairs)
+        u, v = pairs[i]
+        (1 <= u <= n && 1 <= v <= n) || error("map_leq_many!: indices out of range at i=$i (u=$u, v=$v)")
+        if u == v
+            dest[i] = _identity_map(M, v)
+        else
+            leq(Q, u, v) || error("map_leq_many!: need u <= v at i=$i (u=$u, v=$v)")
+            dest[i] = _map_leq_cover_chain(M, u, v, cc)
+        end
+    end
+    return dest
+end
+
+"""
+    prepare_map_leq_batch(pairs) -> MapLeqQueryBatch
+
+Prepare a reusable query batch for repeated `map_leq_many` calls.
+
+The input pairs are copied on construction. Use this for hot repeated workloads
+to avoid per-call mutable-vector signature checks.
+"""
+function prepare_map_leq_batch(pairs::AbstractVector{<:Tuple{Int,Int}})
+    copied = Vector{Tuple{Int,Int}}(undef, length(pairs))
+    @inbounds for i in eachindex(pairs)
+        copied[i] = pairs[i]
+    end
+    return _prepare_map_leq_batch_owned(copied)
+end
+
+@inline function _prepare_map_leq_batch_owned(pairs::Vector{Tuple{Int,Int}})
+    return MapLeqQueryBatch(_next_map_leq_batch_id(), pairs)
+end
+
 """
     map_leq_many!(dest, M, pairs; cache=nothing, opts=ModuleOptions())
 
 Batch form of `map_leq` for comparable pairs `(u,v)`.
 Writes one map per pair into `dest` and returns `dest`.
+
+For large one-off batches, this may use an internal batch-local long-chain
+executor that avoids per-query scalar `map_leq` calls and avoids cached-plan
+copies. For repeated hot batches, prefer `prepare_map_leq_batch`.
 """
 function map_leq_many!(dest::AbstractVector,
                        M::PModule{K,F,MatT},
@@ -1250,21 +2587,53 @@ function map_leq_many!(dest::AbstractVector,
     Q = M.Q
     n = nvertices(Q)
     cc = cache === nothing ? _get_cover_cache(Q) : cache
-    plan = _get_or_build_map_leq_many_plan!(M, pairs, Q, cc)
+    plan = _lookup_map_leq_many_plan(M, pairs)
     if plan !== nothing && _map_leq_many_with_plan!(dest, M, pairs, plan)
         return dest
     end
-    @inbounds for i in eachindex(pairs)
-        u, v = pairs[i]
-        (1 <= u <= n && 1 <= v <= n) || error("map_leq_many!: indices out of range at i=$i (u=$u, v=$v)")
-        if u == v
-            dest[i] = _identity_map(M, v)
-        else
-            leq(Q, u, v) || error("map_leq_many!: need u <= v at i=$i (u=$u, v=$v)")
-            dest[i] = _map_leq_cover_chain(M, u, v, cc)
-        end
+    arena = _map_leq_many_plan_arena(M)
+    stats = _fill_map_leq_many_plan_arena!(arena, M, pairs, Q, cc)
+    if _map_leq_many_oneoff_long_batch!(dest, M, arena, stats)
+        return dest
     end
-    return dest
+    if _map_leq_many_scalar_long_batch!(dest, M, arena, stats)
+        return dest
+    end
+    plan = _prefer_map_leq_many_plan_build(stats, M.field) ?
+        _cache_map_leq_many_plan_from_arena!(M, pairs, stats, arena) : nothing
+    if plan !== nothing && _map_leq_many_with_plan!(dest, M, pairs, plan)
+        return dest
+    end
+    return _map_leq_many_fallback!(dest, M, pairs, Q, n, cc)
+end
+
+"""
+    map_leq_many!(dest, M, batch::MapLeqQueryBatch; cache=nothing, opts=ModuleOptions())
+
+Batch form of `map_leq` using a prepared query batch from
+`prepare_map_leq_batch`.
+"""
+function map_leq_many!(dest::AbstractVector,
+                       M::PModule{K,F,MatT},
+                       batch::MapLeqQueryBatch;
+                       cache::Union{Nothing,CoverCache}=nothing,
+                       opts::ModuleOptions=ModuleOptions()) where {K,F,MatT}
+    if opts != ModuleOptions()
+        cache === nothing || error("map_leq_many!: pass either cache or opts, not both.")
+        cache = opts.cache
+    end
+    pairs = batch.pairs
+    length(dest) == length(pairs) ||
+        error("map_leq_many!: destination length $(length(dest)) does not match pair count $(length(pairs)).")
+
+    Q = M.Q
+    n = nvertices(Q)
+    cc = cache === nothing ? _get_cover_cache(Q) : cache
+    plan = _get_or_build_map_leq_many_plan!(M, batch, Q, cc)
+    if plan !== nothing && _map_leq_many_with_plan_unchecked!(dest, M, pairs, plan)
+        return dest
+    end
+    return _map_leq_many_fallback!(dest, M, pairs, Q, n, cc)
 end
 
 """
@@ -1278,6 +2647,19 @@ function map_leq_many(M::PModule{K,F,MatT},
                       opts::ModuleOptions=ModuleOptions()) where {K,F,MatT}
     out = Vector{MatT}(undef, length(pairs))
     return map_leq_many!(out, M, pairs; cache=cache, opts=opts)
+end
+
+"""
+    map_leq_many(M, batch::MapLeqQueryBatch; cache=nothing, opts=ModuleOptions()) -> Vector
+
+Allocate and return a vector of maps using a prepared query batch.
+"""
+function map_leq_many(M::PModule{K,F,MatT},
+                      batch::MapLeqQueryBatch;
+                      cache::Union{Nothing,CoverCache}=nothing,
+                      opts::ModuleOptions=ModuleOptions()) where {K,F,MatT}
+    out = Vector{MatT}(undef, length(batch.pairs))
+    return map_leq_many!(out, M, batch; cache=cache, opts=opts)
 end
 
 end

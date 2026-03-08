@@ -42,19 +42,24 @@ using ..CoreModules: QQ, AbstractCoeffField, QQField, RealField, PrimeField,
 import ..FlangeZn: Face, IndFlat, IndInj, Flange, canonical_matrix
 import ..FiniteFringe: AbstractPoset, FinitePoset, ProductOfChainsPoset, GridPoset, ProductPoset,
                        FringeModule, nvertices, leq_matrix
-import ..ZnEncoding: SignaturePoset
+import ..ZnEncoding: SignaturePoset, PackedSignatureRows
 using ..FiniteFringe
 using ..Modules: PModule, _clear_cover_cache!
-using ..CoreModules: PointCloud, ImageNd, GraphData, EmbeddedPlanarGraph2D, GradedComplex,
-                     MultiCriticalGradedComplex, SimplexTreeMulti,
-                     FiltrationSpec, ConstructionBudget, ConstructionOptions,
-                     PipelineOptions, GridEncodingMap
+using ..DataTypes: PointCloud, ImageNd, GraphData, EmbeddedPlanarGraph2D, GradedComplex,
+                   MultiCriticalGradedComplex, SimplexTreeMulti
+using ..Options: FiltrationSpec, ConstructionBudget, ConstructionOptions, PipelineOptions, EncodingOptions
+using ..EncodingCore: GridEncodingMap, CompiledEncoding
+using ..Results: EncodingResult
+import ..Results: materialize_module
 import ..ZnEncoding
+import ..PLPolyhedra
 import ..PLBackend
+import ..IndicatorResolutions: pmodule_from_fringe, fringe_presentation
 
 # Schema versions for JSON formats
 const PIPELINE_SCHEMA_VERSION = 2
-const ENCODING_SCHEMA_VERSION = 3
+const ENCODING_SCHEMA_VERSION = 1
+const PLFRINGE_SCHEMA_VERSION = 1
 const TAMER_FEATURE_SCHEMA_VERSION = v"0.2.0"
 
 # =============================================================================
@@ -159,14 +164,478 @@ function _scalar_from_json(field::AbstractCoeffField, val)
     error("Unsupported coefficient field for scalar parsing: $(typeof(field))")
 end
 
-@inline function _json_write(path::AbstractString, obj)
+@inline function _json_write(path::AbstractString, obj; pretty::Bool=true, indent::Int=2)
     open(path, "w") do io
-        JSON3.write(io, obj; allow_inf=true, indent=2)
+        if pretty && indent > 0
+            ac = JSON3.AlignmentContext(:Left, UInt8(clamp(indent, 0, 255)), UInt8(0), UInt8(0))
+            JSON3.pretty(io, obj, ac; allow_inf=true)
+        else
+            JSON3.write(io, obj; allow_inf=true)
+        end
     end
     return path
 end
 
 @inline _json_read(path::AbstractString) = open(JSON3.read, path)
+
+@inline function _resolve_validation_mode(validation::Symbol)::Bool
+    validation === :strict && return true
+    validation === :trusted && return false
+    error("validation must be :strict or :trusted. Use :strict for external/untrusted files and :trusted for PosetModules-produced files you trust.")
+end
+
+@inline function _resolve_encoding_output_mode(output::Symbol)::Symbol
+    output === :fringe && return :fringe
+    output === :fringe_with_pi && return :fringe_with_pi
+    output === :encoding_result && return :encoding_result
+    error("output must be one of :fringe, :fringe_with_pi, :encoding_result.")
+end
+
+@inline function _resolve_encoding_save_profile(profile::Symbol)
+    profile === :compact && return (include_pi=true, include_leq=:auto, pretty=false)
+    profile === :portable && return (include_pi=true, include_leq=true, pretty=false)
+    profile === :debug && return (include_pi=true, include_leq=true, pretty=true)
+    error("profile must be :compact, :portable, or :debug.")
+end
+
+"""
+    inspect_json(path) -> NamedTuple
+
+Quick metadata probe for PosetModules-owned JSON artifacts.
+Returns a compact summary without reconstructing full domain objects.
+"""
+function inspect_json(path::AbstractString)
+    obj = _json_read(path)
+    kind = haskey(obj, "kind") ? String(obj["kind"]) : "unknown"
+    schema_version = haskey(obj, "schema_version") ? Int(obj["schema_version"]) : nothing
+
+    if kind == "FiniteEncodingFringe"
+        poset = obj["poset"]
+        coeff = obj["coeff_field"]
+        return (
+            kind = kind,
+            schema_version = schema_version,
+            field = haskey(coeff, "kind") ? String(coeff["kind"]) : "unknown",
+            poset_kind = haskey(poset, "kind") ? String(poset["kind"]) : "unknown",
+            nvertices = haskey(poset, "n") ? Int(poset["n"]) : missing,
+            n_upsets = haskey(obj, "U") && haskey(obj["U"], "nrows") ? Int(obj["U"]["nrows"]) : missing,
+            n_downsets = haskey(obj, "D") && haskey(obj["D"], "nrows") ? Int(obj["D"]["nrows"]) : missing,
+            has_pi = haskey(obj, "pi"),
+        )
+    elseif kind == "FlangeZn"
+        return (
+            kind = kind,
+            schema_version = schema_version,
+            n = haskey(obj, "n") ? Int(obj["n"]) : missing,
+            n_flats = haskey(obj, "flats") ? length(obj["flats"]) : missing,
+            n_injectives = haskey(obj, "injectives") ? length(obj["injectives"]) : missing,
+            has_phi = haskey(obj, "phi"),
+        )
+    elseif kind == "PLFringe"
+        return (
+            kind = kind,
+            schema_version = schema_version,
+            n = haskey(obj, "n") ? Int(obj["n"]) : missing,
+            n_upsets = haskey(obj, "ups") ? length(obj["ups"]) : missing,
+            n_downsets = haskey(obj, "downs") ? length(obj["downs"]) : missing,
+            has_phi = haskey(obj, "phi"),
+        )
+    elseif kind == "PointCloud" || kind == "GraphData" || kind == "ImageNd" ||
+           kind == "EmbeddedPlanarGraph2D" || kind == "GradedComplex" ||
+           kind == "MultiCriticalGradedComplex" || kind == "SimplexTreeMulti"
+        return (kind = kind, schema_version = schema_version)
+    elseif haskey(obj, "dataset") && haskey(obj, "spec")
+        dataset = obj["dataset"]
+        return (
+            kind = "PipelineJSON",
+            schema_version = schema_version,
+            dataset_kind = haskey(dataset, "kind") ? String(dataset["kind"]) : "unknown",
+            has_pipeline_options = haskey(obj, "pipeline_options"),
+            has_degree = haskey(obj, "degree"),
+        )
+    else
+        return (kind = kind, schema_version = schema_version)
+    end
+end
+
+Base.@kwdef mutable struct _PointCloudColumnarJSON
+    kind::String = ""
+    n::Int = 0
+    d::Int = 0
+    points_flat::Vector{Float64} = Float64[]
+end
+JSON3.StructTypes.StructType(::Type{_PointCloudColumnarJSON}) = JSON3.StructTypes.Mutable()
+
+Base.@kwdef mutable struct _GraphDataColumnarJSON
+    kind::String = ""
+    n::Int = 0
+    edges_u::Vector{Int} = Int[]
+    edges_v::Vector{Int} = Int[]
+    coords_dim::Union{Nothing,Int} = nothing
+    coords_flat::Union{Nothing,Vector{Float64}} = nothing
+    weights::Union{Nothing,Vector{Float64}} = nothing
+end
+JSON3.StructTypes.StructType(::Type{_GraphDataColumnarJSON}) = JSON3.StructTypes.Mutable()
+
+@inline function _pointcloud_from_flat(n::Int, d::Int, flat::Vector{Float64})
+    length(flat) == n * d || error("PointCloud points_flat length mismatch.")
+    pts = Vector{Vector{Float64}}(undef, n)
+    t = 1
+    @inbounds for i in 1:n
+        row = Vector{Float64}(undef, d)
+        for j in 1:d
+            row[j] = flat[t]
+            t += 1
+        end
+        pts[i] = row
+    end
+    return PointCloud(pts)
+end
+
+@inline function _coords_from_flat(n::Int, d::Int, flat::Vector{Float64})
+    d >= 0 || error("GraphData coords_dim must be nonnegative.")
+    if d == 0
+        return [Float64[] for _ in 1:n]
+    end
+    length(flat) == n * d || error("GraphData coords_flat length mismatch.")
+    out = Vector{Vector{Float64}}(undef, n)
+    t = 1
+    @inbounds for i in 1:n
+        row = Vector{Float64}(undef, d)
+        for j in 1:d
+            row[j] = flat[t]
+            t += 1
+        end
+        out[i] = row
+    end
+    return out
+end
+
+@inline function _graph_from_columns(n::Int,
+                                     edges_u::Vector{Int},
+                                     edges_v::Vector{Int};
+                                     coords_dim::Union{Nothing,Int}=nothing,
+                                     coords_flat::Union{Nothing,Vector{Float64}}=nothing,
+                                     weights::Union{Nothing,Vector{Float64}}=nothing)
+    length(edges_u) == length(edges_v) || error("GraphData edge column lengths mismatch.")
+    edges = Vector{Tuple{Int,Int}}(undef, length(edges_u))
+    @inbounds for i in eachindex(edges_u)
+        edges[i] = (edges_u[i], edges_v[i])
+    end
+    coords = if coords_dim === nothing || coords_flat === nothing
+        nothing
+    else
+        _coords_from_flat(n, coords_dim, coords_flat)
+    end
+    return GraphData(n, edges; coords=coords, weights=weights, T=Float64)
+end
+
+@inline function _resolve_include_leq(P::AbstractPoset, include_leq::Union{Bool,Symbol})
+    if include_leq === :auto
+        return P isa FinitePoset
+    end
+    include_leq isa Bool || error("include_leq must be Bool or :auto.")
+    return include_leq
+end
+
+# Typed encoding JSON schema (v1) for fast load paths.
+abstract type _CoeffFieldJSON end
+abstract type _PosetJSON end
+abstract type _MaskJSON end
+abstract type _PhiJSON end
+abstract type _PiJSON end
+
+Base.@kwdef mutable struct _QQFieldJSON <: _CoeffFieldJSON
+    kind::String = "qq"
+end
+
+Base.@kwdef mutable struct _RealFieldJSON <: _CoeffFieldJSON
+    kind::String = "real"
+    T::String = "Float64"
+    rtol::Union{Nothing,Float64} = nothing
+    atol::Union{Nothing,Float64} = nothing
+end
+
+Base.@kwdef mutable struct _FpFieldJSON <: _CoeffFieldJSON
+    kind::String = "fp"
+    p::Int = 2
+end
+
+Base.@kwdef mutable struct _MaskPackedWordsJSON <: _MaskJSON
+    kind::String = "packed_words_v1"
+    nrows::Int = 0
+    ncols::Int = 0
+    words_per_row::Int = 0
+    words::Vector{UInt64} = UInt64[]
+end
+
+Base.@kwdef mutable struct _FinitePosetJSON <: _PosetJSON
+    kind::String = "FinitePoset"
+    n::Int = 0
+    leq::_MaskPackedWordsJSON = _MaskPackedWordsJSON()
+end
+
+Base.@kwdef mutable struct _ProductOfChainsPosetJSON <: _PosetJSON
+    kind::String = "ProductOfChainsPoset"
+    n::Int = 0
+    sizes::Vector{Int} = Int[]
+    leq::Union{Nothing,_MaskPackedWordsJSON} = nothing
+end
+
+Base.@kwdef mutable struct _GridPosetJSON <: _PosetJSON
+    kind::String = "GridPoset"
+    n::Int = 0
+    coords::Vector{Vector{Float64}} = Vector{Vector{Float64}}()
+    leq::Union{Nothing,_MaskPackedWordsJSON} = nothing
+end
+
+Base.@kwdef mutable struct _ProductPosetJSON <: _PosetJSON
+    kind::String = "ProductPoset"
+    n::Int = 0
+    left::Union{Nothing,_PosetJSON} = nothing
+    right::Union{Nothing,_PosetJSON} = nothing
+    leq::Union{Nothing,_MaskPackedWordsJSON} = nothing
+end
+
+Base.@kwdef mutable struct _SignaturePosetJSON <: _PosetJSON
+    kind::String = "SignaturePoset"
+    n::Int = 0
+    sig_y::_MaskPackedWordsJSON = _MaskPackedWordsJSON()
+    sig_z::_MaskPackedWordsJSON = _MaskPackedWordsJSON()
+    leq::Union{Nothing,_MaskPackedWordsJSON} = nothing
+end
+
+Base.@kwdef mutable struct _PhiQQChunksJSON <: _PhiJSON
+    kind::String = "qq_chunks_v1"
+    m::Int = 0
+    k::Int = 0
+    base::Int = 1_000_000_000
+    num_sign::Vector{Int8} = Int8[]
+    num_ptr::Vector{Int} = Int[]
+    num_chunks::Vector{UInt32} = UInt32[]
+    den_ptr::Vector{Int} = Int[]
+    den_chunks::Vector{UInt32} = UInt32[]
+end
+
+Base.@kwdef mutable struct _PhiFpFlatJSON <: _PhiJSON
+    kind::String = "fp_flat_v1"
+    m::Int = 0
+    k::Int = 0
+    data::Vector{Int} = Int[]
+end
+
+Base.@kwdef mutable struct _PhiRealFlatJSON <: _PhiJSON
+    kind::String = "real_flat_v1"
+    m::Int = 0
+    k::Int = 0
+    data::Vector{Float64} = Float64[]
+end
+
+Base.@kwdef mutable struct _FaceGeneratorJSON
+    b::Vector{Int} = Int[]
+    tau::Vector{Int} = Int[]
+end
+
+Base.@kwdef mutable struct _GridEncodingMapJSON <: _PiJSON
+    kind::String = "GridEncodingMap"
+    coords::Vector{Vector{Float64}} = Vector{Vector{Float64}}()
+    orientation::Vector{Int} = Int[]
+end
+
+Base.@kwdef mutable struct _ZnEncodingMapJSON <: _PiJSON
+    kind::String = "ZnEncodingMap"
+    n::Int = 0
+    coords::Vector{Vector{Int}} = Vector{Vector{Int}}()
+    sig_y::_MaskPackedWordsJSON = _MaskPackedWordsJSON()
+    sig_z::_MaskPackedWordsJSON = _MaskPackedWordsJSON()
+    reps::Vector{Vector{Int}} = Vector{Vector{Int}}()
+    flats::Vector{_FaceGeneratorJSON} = _FaceGeneratorJSON[]
+    injectives::Vector{_FaceGeneratorJSON} = _FaceGeneratorJSON[]
+    cell_shape::Union{Nothing,Vector{Int}} = nothing
+    cell_strides::Union{Nothing,Vector{Int}} = nothing
+    cell_to_region::Union{Nothing,Vector{Int}} = nothing
+end
+
+Base.@kwdef mutable struct _PLEncodingMapBoxesJSON <: _PiJSON
+    kind::String = "PLEncodingMapBoxes"
+    n::Int = 0
+    coords::Vector{Vector{Float64}} = Vector{Vector{Float64}}()
+    sig_y::_MaskPackedWordsJSON = _MaskPackedWordsJSON()
+    sig_z::_MaskPackedWordsJSON = _MaskPackedWordsJSON()
+    reps::Vector{Vector{Float64}} = Vector{Vector{Float64}}()
+    Ups::Vector{Vector{Float64}} = Vector{Vector{Float64}}()
+    Downs::Vector{Vector{Float64}} = Vector{Vector{Float64}}()
+    cell_shape::Vector{Int} = Int[]
+    cell_strides::Vector{Int} = Int[]
+    cell_to_region::Vector{Int} = Int[]
+    coord_flags::Vector{Vector{UInt8}} = Vector{Vector{UInt8}}()
+    axis_is_uniform::Vector{Bool} = Bool[]
+    axis_step::Vector{Float64} = Float64[]
+    axis_min::Vector{Float64} = Float64[]
+end
+
+Base.@kwdef mutable struct _FiniteEncodingFringeJSONV1
+    kind::String = ""
+    schema_version::Int = 0
+    poset::_PosetJSON = _FinitePosetJSON()
+    U::_MaskJSON = _MaskPackedWordsJSON()
+    D::_MaskJSON = _MaskPackedWordsJSON()
+    coeff_field::_CoeffFieldJSON = _QQFieldJSON()
+    phi::_PhiJSON = _PhiQQChunksJSON()
+    pi::Union{Nothing,_PiJSON} = nothing
+end
+
+JSON3.StructTypes.StructType(::Type{_CoeffFieldJSON}) = JSON3.StructTypes.AbstractType()
+JSON3.StructTypes.subtypekey(::Type{_CoeffFieldJSON}) = :kind
+JSON3.StructTypes.subtypes(::Type{_CoeffFieldJSON}) = (
+    qq = _QQFieldJSON,
+    real = _RealFieldJSON,
+    fp = _FpFieldJSON,
+)
+JSON3.StructTypes.StructType(::Type{_QQFieldJSON}) = JSON3.StructTypes.Mutable()
+JSON3.StructTypes.StructType(::Type{_RealFieldJSON}) = JSON3.StructTypes.Mutable()
+JSON3.StructTypes.StructType(::Type{_FpFieldJSON}) = JSON3.StructTypes.Mutable()
+
+JSON3.StructTypes.StructType(::Type{_PosetJSON}) = JSON3.StructTypes.AbstractType()
+JSON3.StructTypes.subtypekey(::Type{_PosetJSON}) = :kind
+JSON3.StructTypes.subtypes(::Type{_PosetJSON}) = (
+    FinitePoset = _FinitePosetJSON,
+    ProductOfChainsPoset = _ProductOfChainsPosetJSON,
+    GridPoset = _GridPosetJSON,
+    ProductPoset = _ProductPosetJSON,
+    SignaturePoset = _SignaturePosetJSON,
+)
+JSON3.StructTypes.StructType(::Type{_FinitePosetJSON}) = JSON3.StructTypes.Mutable()
+JSON3.StructTypes.StructType(::Type{_ProductOfChainsPosetJSON}) = JSON3.StructTypes.Mutable()
+JSON3.StructTypes.StructType(::Type{_GridPosetJSON}) = JSON3.StructTypes.Mutable()
+JSON3.StructTypes.StructType(::Type{_ProductPosetJSON}) = JSON3.StructTypes.Mutable()
+JSON3.StructTypes.StructType(::Type{_SignaturePosetJSON}) = JSON3.StructTypes.Mutable()
+
+JSON3.StructTypes.StructType(::Type{_MaskJSON}) = JSON3.StructTypes.AbstractType()
+JSON3.StructTypes.subtypekey(::Type{_MaskJSON}) = :kind
+JSON3.StructTypes.subtypes(::Type{_MaskJSON}) = (
+    packed_words_v1 = _MaskPackedWordsJSON,
+)
+JSON3.StructTypes.StructType(::Type{_MaskPackedWordsJSON}) = JSON3.StructTypes.Mutable()
+
+JSON3.StructTypes.StructType(::Type{_PhiJSON}) = JSON3.StructTypes.AbstractType()
+JSON3.StructTypes.subtypekey(::Type{_PhiJSON}) = :kind
+JSON3.StructTypes.subtypes(::Type{_PhiJSON}) = (
+    qq_chunks_v1 = _PhiQQChunksJSON,
+    fp_flat_v1 = _PhiFpFlatJSON,
+    real_flat_v1 = _PhiRealFlatJSON,
+)
+JSON3.StructTypes.StructType(::Type{_PhiQQChunksJSON}) = JSON3.StructTypes.Mutable()
+JSON3.StructTypes.StructType(::Type{_PhiFpFlatJSON}) = JSON3.StructTypes.Mutable()
+JSON3.StructTypes.StructType(::Type{_PhiRealFlatJSON}) = JSON3.StructTypes.Mutable()
+
+JSON3.StructTypes.StructType(::Type{_PiJSON}) = JSON3.StructTypes.AbstractType()
+JSON3.StructTypes.subtypekey(::Type{_PiJSON}) = :kind
+JSON3.StructTypes.subtypes(::Type{_PiJSON}) = (
+    GridEncodingMap = _GridEncodingMapJSON,
+    ZnEncodingMap = _ZnEncodingMapJSON,
+    PLEncodingMapBoxes = _PLEncodingMapBoxesJSON,
+)
+JSON3.StructTypes.StructType(::Type{_FaceGeneratorJSON}) = JSON3.StructTypes.Mutable()
+JSON3.StructTypes.StructType(::Type{_GridEncodingMapJSON}) = JSON3.StructTypes.Mutable()
+JSON3.StructTypes.StructType(::Type{_ZnEncodingMapJSON}) = JSON3.StructTypes.Mutable()
+JSON3.StructTypes.StructType(::Type{_PLEncodingMapBoxesJSON}) = JSON3.StructTypes.Mutable()
+JSON3.StructTypes.StructType(::Type{_FiniteEncodingFringeJSONV1}) = JSON3.StructTypes.Mutable()
+
+@inline _field_from_typed(obj::_QQFieldJSON) = QQField()
+@inline function _field_from_typed(obj::_RealFieldJSON)
+    Tname = obj.T
+    T = Tname == "Float64" ? Float64 :
+        Tname == "Float32" ? Float32 :
+        error("Unsupported real field type in JSON: $(Tname)")
+    rtol = obj.rtol === nothing ? sqrt(eps(T)) : T(obj.rtol)
+    atol = obj.atol === nothing ? zero(T) : T(obj.atol)
+    return RealField(T; rtol=rtol, atol=atol)
+end
+@inline _field_from_typed(obj::_FpFieldJSON) = PrimeField(obj.p)
+
+@inline function _mask_lastword(ncols::Int)::UInt64
+    rem = ncols & 63
+    return rem == 0 ? typemax(UInt64) : (UInt64(1) << rem) - 1
+end
+
+@inline function _csv_escape(x)
+    s = string(x)
+    if occursin(',', s) || occursin('"', s)
+        s = replace(s, '"' => "\"\"")
+        return "\"" * s * "\""
+    end
+    return s
+end
+
+"""
+    _write_feature_csv_wide(path, X, names, ids; ids_col=:id, include_ids=true)
+
+Internal CSV fallback writer for wide feature tables.
+Rows are samples and columns are features.
+"""
+function _write_feature_csv_wide(path::AbstractString,
+                                 X::AbstractMatrix,
+                                 names::AbstractVector,
+                                 ids::AbstractVector{<:AbstractString};
+                                 ids_col::Symbol=:id,
+                                 include_ids::Bool=true)
+    nfeat = size(X, 2)
+    length(names) == nfeat || throw(ArgumentError("_write_feature_csv_wide: feature-name count mismatch"))
+    length(ids) == size(X, 1) || throw(ArgumentError("_write_feature_csv_wide: id count mismatch"))
+    open(path, "w") do io
+        hdr = include_ids ? Any[ids_col; names] : Any[names...]
+        println(io, join(_csv_escape.(hdr), ","))
+        @inbounds for i in 1:size(X, 1)
+            row = Vector{Any}(undef, nfeat + (include_ids ? 1 : 0))
+            t = 1
+            if include_ids
+                row[t] = ids[i]
+                t += 1
+            end
+            for j in 1:nfeat
+                row[t] = X[i, j]
+                t += 1
+            end
+            println(io, join(_csv_escape.(row), ","))
+        end
+    end
+    return path
+end
+
+"""
+    _write_feature_csv_long(path, X, names, ids; include_sample_index=true)
+
+Internal CSV fallback writer for long feature tables.
+"""
+function _write_feature_csv_long(path::AbstractString,
+                                 X::AbstractMatrix,
+                                 names::AbstractVector,
+                                 ids::AbstractVector{<:AbstractString};
+                                 include_sample_index::Bool=true)
+    nfeat = size(X, 2)
+    length(names) == nfeat || throw(ArgumentError("_write_feature_csv_long: feature-name count mismatch"))
+    length(ids) == size(X, 1) || throw(ArgumentError("_write_feature_csv_long: id count mismatch"))
+    open(path, "w") do io
+        if include_sample_index
+            println(io, "id,feature,value,sample_index")
+        else
+            println(io, "id,feature,value")
+        end
+        @inbounds for i in 1:size(X, 1)
+            idi = ids[i]
+            for j in 1:nfeat
+                if include_sample_index
+                    vals = (idi, names[j], X[i, j], i)
+                else
+                    vals = (idi, names[j], X[i, j])
+                end
+                println(io, join(_csv_escape.(vals), ","))
+            end
+        end
+    end
+    return path
+end
 
 # =============================================================================
 # A) Internal formats (owned/stable)
@@ -194,7 +663,7 @@ Notes
 * `tau` is stored as a list of 1-based coordinate indices where the face is true.
 * Scalars are encoded according to the coefficient field descriptor.
 """
-function save_flange_json(path::AbstractString, FG::Flange)
+function save_flange_json(path::AbstractString, FG::Flange; pretty::Bool=false)
     n = FG.n
     flats = [Dict("b" => collect(F.b), "tau" => findall(identity, F.tau.coords)) for F in FG.flats]
     injectives = [Dict("b" => collect(E.b), "tau" => findall(identity, E.tau.coords)) for E in FG.injectives]
@@ -206,7 +675,7 @@ function save_flange_json(path::AbstractString, FG::Flange)
                "injectives" => injectives,
                "coeff_field" => _field_to_obj(FG.field),
                "phi" => phi)
-    return _json_write(path, obj)
+    return _json_write(path, obj; pretty=pretty)
 end
 
 # -----------------------------------------------------------------------------
@@ -215,17 +684,70 @@ end
 
 function _obj_from_dataset(data)
     if data isa PointCloud
+        pts = data.points
+        npts = length(pts)
+        d = npts == 0 ? 0 : length(pts[1])
+        for i in 2:npts
+            length(pts[i]) == d || error("PointCloud serialization expects uniform point dimension.")
+        end
+        T = npts == 0 ? Float64 : eltype(pts[1])
+        flat = Vector{T}(undef, npts * d)
+        t = 1
+        @inbounds for i in 1:npts
+            pi = pts[i]
+            for j in 1:d
+                flat[t] = pi[j]
+                t += 1
+            end
+        end
         return Dict("kind" => "PointCloud",
-                    "points" => [collect(p) for p in data.points])
+                    "layout" => "columnar_v1",
+                    "n" => npts,
+                    "d" => d,
+                    "points_flat" => flat)
     elseif data isa ImageNd
         return Dict("kind" => "ImageNd",
                     "size" => collect(size(data.data)),
                     "data" => collect(vec(data.data)))
     elseif data isa GraphData
+        nedges = length(data.edges)
+        edges_u = Vector{Int}(undef, nedges)
+        edges_v = Vector{Int}(undef, nedges)
+        @inbounds for eidx in 1:nedges
+            u, v = data.edges[eidx]
+            edges_u[eidx] = u
+            edges_v[eidx] = v
+        end
+        coords_dim = nothing
+        coords_flat = nothing
+        if data.coords !== nothing
+            coords = data.coords
+            ncoords = length(coords)
+            ncoords == data.n || error("GraphData coords length must equal n for columnar serialization.")
+            d = ncoords == 0 ? 0 : length(coords[1])
+            for i in 2:ncoords
+                length(coords[i]) == d || error("GraphData coords must all have the same dimension.")
+            end
+            Tcoord = ncoords == 0 ? Float64 : eltype(coords[1])
+            buf = Vector{Tcoord}(undef, ncoords * d)
+            t = 1
+            @inbounds for i in 1:ncoords
+                ci = coords[i]
+                for j in 1:d
+                    buf[t] = ci[j]
+                    t += 1
+                end
+            end
+            coords_dim = d
+            coords_flat = buf
+        end
         return Dict("kind" => "GraphData",
+                    "layout" => "columnar_v1",
                     "n" => data.n,
-                    "edges" => [collect(e) for e in data.edges],
-                    "coords" => data.coords === nothing ? nothing : [collect(c) for c in data.coords],
+                    "edges_u" => edges_u,
+                    "edges_v" => edges_v,
+                    "coords_dim" => coords_dim,
+                    "coords_flat" => coords_flat,
                     "weights" => data.weights === nothing ? nothing : collect(data.weights))
     elseif data isa EmbeddedPlanarGraph2D
         return Dict("kind" => "EmbeddedPlanarGraph2D",
@@ -283,6 +805,12 @@ end
 function _dataset_from_obj(obj)
     kind = String(obj["kind"])
     if kind == "PointCloud"
+        if haskey(obj, "points_flat")
+            n = Int(obj["n"])
+            d = Int(obj["d"])
+            return _pointcloud_from_flat(n, d, Vector{Float64}(obj["points_flat"]))
+        end
+        # Legacy compatibility schema.
         pts = [Vector{Float64}(p) for p in obj["points"]]
         return PointCloud(pts)
     elseif kind == "ImageNd"
@@ -292,9 +820,21 @@ function _dataset_from_obj(obj)
         return ImageNd(data)
     elseif kind == "GraphData"
         n = Int(obj["n"])
+        weights = obj["weights"] === nothing ? nothing : Vector{Float64}(obj["weights"])
+        if haskey(obj, "edges_u")
+            coords_dim = haskey(obj, "coords_dim") && obj["coords_dim"] !== nothing ? Int(obj["coords_dim"]) : nothing
+            coords_flat = haskey(obj, "coords_flat") && obj["coords_flat"] !== nothing ?
+                Vector{Float64}(obj["coords_flat"]) : nothing
+            return _graph_from_columns(n,
+                                       Vector{Int}(obj["edges_u"]),
+                                       Vector{Int}(obj["edges_v"]);
+                                       coords_dim=coords_dim,
+                                       coords_flat=coords_flat,
+                                       weights=weights)
+        end
+        # Legacy compatibility schema.
         edges = [ (Int(e[1]), Int(e[2])) for e in obj["edges"] ]
         coords = obj["coords"] === nothing ? nothing : [Vector{Float64}(c) for c in obj["coords"]]
-        weights = obj["weights"] === nothing ? nothing : Vector{Float64}(obj["weights"])
         return GraphData(n, edges; coords=coords, weights=weights, T=Float64)
     elseif kind == "EmbeddedPlanarGraph2D"
         verts = [Vector{Float64}(v) for v in obj["vertices"]]
@@ -462,8 +1002,8 @@ end
 
 Serialize a dataset (PointCloud, ImageNd, GraphData, EmbeddedPlanarGraph2D, GradedComplex, MultiCriticalGradedComplex, SimplexTreeMulti).
 """
-function save_dataset_json(path::AbstractString, data)
-    return _json_write(path, _obj_from_dataset(data))
+function save_dataset_json(path::AbstractString, data; pretty::Bool=false)
+    return _json_write(path, _obj_from_dataset(data); pretty=pretty)
 end
 
 """
@@ -472,8 +1012,20 @@ end
 Load a dataset serialized by `save_dataset_json`.
 """
 function load_dataset_json(path::AbstractString)
-    obj = _json_read(path)
-    return _dataset_from_obj(obj)
+    raw = read(path, String)
+    kind_hdr = JSON3.read(raw, NamedTuple{(:kind,),Tuple{String}})
+    kind = kind_hdr.kind
+    if kind == "PointCloud" && occursin("\"points_flat\"", raw)
+        obj = JSON3.read(raw, _PointCloudColumnarJSON)
+        return _pointcloud_from_flat(obj.n, obj.d, obj.points_flat)
+    elseif kind == "GraphData" && occursin("\"edges_u\"", raw) && occursin("\"edges_v\"", raw)
+        obj = JSON3.read(raw, _GraphDataColumnarJSON)
+        return _graph_from_columns(obj.n, obj.edges_u, obj.edges_v;
+                                   coords_dim=obj.coords_dim,
+                                   coords_flat=obj.coords_flat,
+                                   weights=obj.weights)
+    end
+    return _dataset_from_obj(JSON3.read(raw))
 end
 
 """
@@ -481,7 +1033,9 @@ end
 
 Serialize a dataset + filtration spec and structured `PipelineOptions` in one JSON.
 """
-function save_pipeline_json(path::AbstractString, data, spec::FiltrationSpec; degree=nothing, pipeline_opts=nothing)
+function save_pipeline_json(path::AbstractString, data, spec::FiltrationSpec;
+                            degree=nothing, pipeline_opts=nothing,
+                            pretty::Bool=false)
     popts = _pipeline_options_from_any(spec, pipeline_opts)
     obj = Dict(
         "schema_version" => PIPELINE_SCHEMA_VERSION,
@@ -490,7 +1044,7 @@ function save_pipeline_json(path::AbstractString, data, spec::FiltrationSpec; de
         "degree" => degree,
         "pipeline_options" => _pipeline_options_obj(popts),
     )
-    return _json_write(path, obj)
+    return _json_write(path, obj; pretty=pretty)
 end
 
 """
@@ -905,6 +1459,483 @@ load_eirene_txt(path::AbstractString) = _load_simplex_filtration_txt(path)
 # B2) Interop adapters: boundary/reduced complexes and direct PModules
 # -----------------------------------------------------------------------------
 
+@inline _packed_signature_rows_type(nw::Int) = Core.apply_type(PackedSignatureRows, nw)
+
+@inline function _pack_words_obj_from_matrix(words::Matrix{UInt64}, bitlen::Int)
+    nw, nrows = size(words)
+    ncols = bitlen
+    flat = Vector{UInt64}(undef, nrows * nw)
+    @inbounds for i in 1:nrows
+        base = (i - 1) * nw
+        for w in 1:nw
+            flat[base + w] = words[w, i]
+        end
+        if ncols > 0
+            flat[base + nw] &= _mask_lastword(ncols)
+        end
+    end
+    return _MaskPackedWordsJSON(kind="packed_words_v1",
+                                nrows=nrows,
+                                ncols=ncols,
+                                words_per_row=nw,
+                                words=flat)
+end
+
+@inline function _pack_signature_rows_obj(rows::PackedSignatureRows)
+    return _pack_words_obj_from_matrix(rows.words, rows.bitlen)
+end
+
+@inline function _pack_bitmatrix_obj(L::BitMatrix)
+    return _pack_words_obj_from_matrix(_pack_bitmatrix_words(L), size(L, 2))
+end
+
+function _pack_bitmatrix_words(L::BitMatrix)
+    nrows, ncols = size(L)
+    nw = max(1, cld(max(ncols, 1), 64))
+    words = zeros(UInt64, nw, nrows)
+    @inbounds for i in 1:nrows
+        for j in 1:ncols
+            if L[i, j]
+                w = ((j - 1) >>> 6) + 1
+                words[w, i] |= (UInt64(1) << ((j - 1) & 63))
+            end
+        end
+        if ncols > 0
+            words[nw, i] &= _mask_lastword(ncols)
+        end
+    end
+    return words
+end
+
+function _unpack_words_matrix(mask_obj::_MaskPackedWordsJSON, name::String;
+                              nrows_expected::Union{Nothing,Int}=nothing,
+                              ncols_expected::Union{Nothing,Int}=nothing)
+    nrows = mask_obj.nrows
+    ncols = mask_obj.ncols
+    nw = mask_obj.words_per_row
+    nrows_expected === nothing || (nrows == nrows_expected || error("$(name).nrows must equal $(nrows_expected)."))
+    ncols_expected === nothing || (ncols == ncols_expected || error("$(name).ncols must equal $(ncols_expected)."))
+    nw == max(1, cld(max(ncols, 1), 64)) || error("$(name).words_per_row is inconsistent with ncols.")
+    flat = mask_obj.words
+    length(flat) == nrows * nw || error("$(name).words length mismatch.")
+    words = Matrix{UInt64}(undef, nw, nrows)
+    @inbounds for i in 1:nrows
+        base = (i - 1) * nw
+        for w in 1:nw
+            words[w, i] = flat[base + w]
+        end
+        if ncols > 0
+            words[nw, i] &= _mask_lastword(ncols)
+        end
+    end
+    return words, nrows, ncols
+end
+
+function _parse_signature_rows_packed(mask_obj::_MaskPackedWordsJSON, row_name::String)
+    words, _, bitlen = _unpack_words_matrix(mask_obj, row_name)
+    return _packed_signature_rows_type(size(words, 1))(words, bitlen)
+end
+
+function _parse_signature_rows_packed(rows_any, row_name::String)
+    rows_any isa AbstractVector || error("$(row_name) must be a list-of-lists.")
+    nrows = length(rows_any)
+    bitlen = if nrows == 0
+        0
+    else
+        first_row = rows_any[1]
+        first_row isa AbstractVector || error("$(row_name) row 1 must be a list.")
+        length(first_row)
+    end
+    nw = max(1, cld(max(bitlen, 1), 64))
+    words = zeros(UInt64, nw, nrows)
+    @inbounds for i in 1:nrows
+        row = rows_any[i]
+        row isa AbstractVector || error("$(row_name) row $(i) must be a list.")
+        length(row) == bitlen || error("$(row_name) row $(i) length mismatch; expected $(bitlen).")
+        for j in 1:bitlen
+            x = row[j]
+            x isa Bool || error("$(row_name) entries must be Bool (row $(i), col $(j)).")
+            if x
+                w = ((j - 1) >>> 6) + 1
+                words[w, i] |= (UInt64(1) << ((j - 1) & 63))
+            end
+        end
+    end
+    return _packed_signature_rows_type(nw)(words, bitlen)
+end
+
+function _decode_bitmatrix(mask_obj::_MaskPackedWordsJSON, name::String,
+                           nrows_expected::Int, ncols_expected::Int)
+    words, nrows, ncols = _unpack_words_matrix(mask_obj, name;
+                                               nrows_expected=nrows_expected,
+                                               ncols_expected=ncols_expected)
+    L = falses(nrows, ncols)
+    @inbounds for i in 1:nrows
+        for j in 1:ncols
+            w = ((j - 1) >>> 6) + 1
+            bit = UInt64(1) << ((j - 1) & 63)
+            L[i, j] = (words[w, i] & bit) != 0
+        end
+    end
+    return L
+end
+
+@inline function _is_packed_words_obj(obj)::Bool
+    return !(obj isa AbstractVector) && haskey(obj, "kind") && String(obj["kind"]) == "packed_words_v1"
+end
+
+function _parse_poset_from_typed(poset_obj::_FinitePosetJSON)
+    n = poset_obj.n
+    leq = _decode_bitmatrix(poset_obj.leq, "FinitePoset.leq", n, n)
+    P = FinitePoset(leq)
+    _clear_cover_cache!(P)
+    return P
+end
+
+function _parse_poset_from_typed(poset_obj::_ProductOfChainsPosetJSON)
+    P = ProductOfChainsPoset(poset_obj.sizes)
+    poset_obj.n == nvertices(P) || error("ProductOfChainsPoset.n mismatch.")
+    _clear_cover_cache!(P)
+    return P
+end
+
+function _parse_poset_from_typed(poset_obj::_GridPosetJSON)
+    coords_any = poset_obj.coords
+    coords = ntuple(i -> Vector{Float64}(coords_any[i]), length(coords_any))
+    P = GridPoset(coords)
+    poset_obj.n == nvertices(P) || error("GridPoset.n mismatch.")
+    _clear_cover_cache!(P)
+    return P
+end
+
+function _parse_poset_from_typed(poset_obj::_ProductPosetJSON)
+    poset_obj.left === nothing && error("ProductPoset missing required key 'left'.")
+    poset_obj.right === nothing && error("ProductPoset missing required key 'right'.")
+    P1 = _parse_poset_from_typed(poset_obj.left)
+    P2 = _parse_poset_from_typed(poset_obj.right)
+    P = ProductPoset(P1, P2)
+    poset_obj.n == nvertices(P) || error("ProductPoset.n mismatch.")
+    _clear_cover_cache!(P)
+    return P
+end
+
+function _parse_poset_from_typed(poset_obj::_SignaturePosetJSON)
+    sig_y = _parse_signature_rows_packed(poset_obj.sig_y, "SignaturePoset.sig_y")
+    sig_z = _parse_signature_rows_packed(poset_obj.sig_z, "SignaturePoset.sig_z")
+    P = SignaturePoset(sig_y, sig_z)
+    poset_obj.n == nvertices(P) || error("SignaturePoset.n mismatch.")
+    _clear_cover_cache!(P)
+    return P
+end
+
+function _parse_poset_from_typed(poset_obj::_PosetJSON)
+    error("Unsupported typed poset payload: $(typeof(poset_obj))")
+end
+
+@inline function _pack_masks_obj(masks::AbstractVector{<:BitVector})
+    nrows = length(masks)
+    ncols = nrows == 0 ? 0 : length(masks[1])
+    nw = max(1, cld(max(ncols, 1), 64))
+    words = zeros(UInt64, nrows * nw)
+    @inbounds for i in 1:nrows
+        mask = masks[i]
+        length(mask) == ncols || error("mask row length mismatch at row $(i).")
+        base = (i - 1) * nw
+        chunks = mask.chunks
+        nchunks = length(chunks)
+        for w in 1:min(nchunks, nw)
+            words[base + w] = chunks[w]
+        end
+        if ncols > 0
+            words[base + nw] &= _mask_lastword(ncols)
+        end
+    end
+    return _MaskPackedWordsJSON(kind="packed_words_v1",
+                                nrows=nrows,
+                                ncols=ncols,
+                                words_per_row=nw,
+                                words=words)
+end
+
+function _decode_masks(mask_obj::_MaskPackedWordsJSON, name::String, ncols_expected::Int)
+    words, nrows, ncols = _unpack_words_matrix(mask_obj, name; ncols_expected=ncols_expected)
+    nw = size(words, 1)
+    masks = Vector{BitVector}(undef, nrows)
+    if ncols == 0
+        @inbounds for i in 1:nrows
+            masks[i] = BitVector(undef, 0)
+        end
+        return masks
+    end
+    lastmask = _mask_lastword(ncols)
+    nchunks = cld(ncols, 64)
+    @inbounds for i in 1:nrows
+        mask = falses(ncols)
+        for w in 1:nchunks
+            mask.chunks[w] = words[w, i]
+        end
+        mask.chunks[nchunks] &= lastmask
+        masks[i] = mask
+    end
+    return masks
+end
+
+@inline function _build_upsets(P::AbstractPoset,
+                               masks::Vector{BitVector},
+                               validate_masks::Bool)
+    U = Vector{FiniteFringe.Upset}(undef, length(masks))
+    @inbounds for t in eachindex(masks)
+        mask = masks[t]
+        if validate_masks
+            Uc = FiniteFringe.upset_closure(P, mask)
+            Uc.mask == mask || error("U[$(t)] is not an upset under strict validation. If this file was produced by PosetModules and you trust it, load with validation=:trusted.")
+            U[t] = Uc
+        else
+            U[t] = FiniteFringe.Upset(P, mask)
+        end
+    end
+    return U
+end
+
+@inline function _build_downsets(P::AbstractPoset,
+                                 masks::Vector{BitVector},
+                                 validate_masks::Bool)
+    D = Vector{FiniteFringe.Downset}(undef, length(masks))
+    @inbounds for t in eachindex(masks)
+        mask = masks[t]
+        if validate_masks
+            Dc = FiniteFringe.downset_closure(P, mask)
+            Dc.mask == mask || error("D[$(t)] is not a downset under strict validation. If this file was produced by PosetModules and you trust it, load with validation=:trusted.")
+            D[t] = Dc
+        else
+            D[t] = FiniteFringe.Downset(P, mask)
+        end
+    end
+    return D
+end
+
+@inline function _phi_dims(phi::_PhiJSON)
+    return phi.m, phi.k
+end
+
+const _QQ_CHUNK_BASE = 1_000_000_000
+const _QQ_CHUNK_BASE_BIG = BigInt(_QQ_CHUNK_BASE)
+
+@inline function _bigint_to_chunks!(chunks::Vector{UInt32}, ptr::Vector{Int}, x::BigInt)
+    y = abs(x)
+    if y == 0
+        push!(chunks, UInt32(0))
+        push!(ptr, length(chunks) + 1)
+        return
+    end
+    while y != 0
+        y, r = divrem(y, _QQ_CHUNK_BASE)
+        push!(chunks, UInt32(r))
+    end
+    push!(ptr, length(chunks) + 1)
+end
+
+@inline function _chunks_to_bigint(chunks::Vector{UInt32}, ptr::Vector{Int}, idx::Int, name::String)
+    a = ptr[idx]
+    b = ptr[idx + 1] - 1
+    (a >= 1 && b >= a && b <= length(chunks)) || error("$(name) chunk pointer out of range at index $(idx).")
+    x = BigInt(0)
+    @inbounds for t in b:-1:a
+        x *= _QQ_CHUNK_BASE_BIG
+        x += Int(chunks[t])
+    end
+    return x
+end
+
+function _phi_obj(H::FringeModule)
+    m, k = size(H.phi)
+    if H.field isa QQField
+        len = m * k
+        num_sign = Vector{Int8}(undef, len)
+        num_ptr = Int[1]
+        den_ptr = Int[1]
+        num_chunks = UInt32[]
+        den_chunks = UInt32[]
+        sizehint!(num_ptr, len + 1)
+        sizehint!(den_ptr, len + 1)
+        @inbounds for idx in 1:len
+            q = QQ(H.phi[idx])
+            num = numerator(q)
+            den = denominator(q)
+            num_sign[idx] = num > 0 ? Int8(1) : (num < 0 ? Int8(-1) : Int8(0))
+            _bigint_to_chunks!(num_chunks, num_ptr, num)
+            _bigint_to_chunks!(den_chunks, den_ptr, den)
+        end
+        return _PhiQQChunksJSON(kind="qq_chunks_v1",
+                                m=m,
+                                k=k,
+                                base=_QQ_CHUNK_BASE,
+                                num_sign=num_sign,
+                                num_ptr=num_ptr,
+                                num_chunks=num_chunks,
+                                den_ptr=den_ptr,
+                                den_chunks=den_chunks)
+    elseif H.field isa PrimeField
+        data = Vector{Int}(undef, m * k)
+        @inbounds for idx in 1:(m * k)
+            data[idx] = Int(coerce(H.field, H.phi[idx]).val)
+        end
+        return _PhiFpFlatJSON(kind="fp_flat_v1", m=m, k=k, data=data)
+    elseif H.field isa RealField
+        data = Vector{Float64}(undef, m * k)
+        @inbounds for idx in 1:(m * k)
+            data[idx] = Float64(H.phi[idx])
+        end
+        return _PhiRealFlatJSON(kind="real_flat_v1", m=m, k=k, data=data)
+    end
+    error("Unsupported coefficient field for phi serialization: $(typeof(H.field))")
+end
+
+function _decode_phi(phi_obj::_PhiQQChunksJSON,
+                     saved_field::QQField,
+                     target_field::QQField,
+                     m_expected::Int,
+                     k_expected::Int)
+    m, k = _phi_dims(phi_obj)
+    (m == m_expected && k == k_expected) || error("phi dimensions mismatch (expected $(m_expected)x$(k_expected), got $(m)x$(k)).")
+    phi_obj.base == _QQ_CHUNK_BASE || error("qq_chunks_v1.base must be $(_QQ_CHUNK_BASE).")
+    len = m * k
+    length(phi_obj.num_sign) == len || error("qq_chunks_v1.num_sign length mismatch.")
+    length(phi_obj.num_ptr) == len + 1 || error("qq_chunks_v1.num_ptr length mismatch.")
+    length(phi_obj.den_ptr) == len + 1 || error("qq_chunks_v1.den_ptr length mismatch.")
+    phi_obj.num_ptr[1] == 1 || error("qq_chunks_v1.num_ptr must start at 1.")
+    phi_obj.den_ptr[1] == 1 || error("qq_chunks_v1.den_ptr must start at 1.")
+    phi_obj.num_ptr[end] == length(phi_obj.num_chunks) + 1 || error("qq_chunks_v1.num_ptr terminator mismatch.")
+    phi_obj.den_ptr[end] == length(phi_obj.den_chunks) + 1 || error("qq_chunks_v1.den_ptr terminator mismatch.")
+    K = coeff_type(target_field)
+    Phi = Matrix{K}(undef, m, k)
+    @inbounds for idx in 1:len
+        s = phi_obj.num_sign[idx]
+        (s == -1 || s == 0 || s == 1) || error("qq_chunks_v1.num_sign must be in {-1,0,1}.")
+        num = _chunks_to_bigint(phi_obj.num_chunks, phi_obj.num_ptr, idx, "qq_chunks_v1.num")
+        den = _chunks_to_bigint(phi_obj.den_chunks, phi_obj.den_ptr, idx, "qq_chunks_v1.den")
+        den == 0 && error("qq_chunks_v1.den must be nonzero.")
+        if s < 0
+            num = -num
+        elseif s == 0
+            num = BigInt(0)
+        end
+        Phi[idx] = QQ(num // den)
+    end
+    return Phi
+end
+
+function _decode_phi(phi_obj::_PhiQQChunksJSON,
+                     saved_field::QQField,
+                     target_field::AbstractCoeffField,
+                     m_expected::Int,
+                     k_expected::Int)
+    m, k = _phi_dims(phi_obj)
+    (m == m_expected && k == k_expected) || error("phi dimensions mismatch (expected $(m_expected)x$(k_expected), got $(m)x$(k)).")
+    phi_obj.base == _QQ_CHUNK_BASE || error("qq_chunks_v1.base must be $(_QQ_CHUNK_BASE).")
+    len = m * k
+    length(phi_obj.num_sign) == len || error("qq_chunks_v1.num_sign length mismatch.")
+    length(phi_obj.num_ptr) == len + 1 || error("qq_chunks_v1.num_ptr length mismatch.")
+    length(phi_obj.den_ptr) == len + 1 || error("qq_chunks_v1.den_ptr length mismatch.")
+    phi_obj.num_ptr[1] == 1 || error("qq_chunks_v1.num_ptr must start at 1.")
+    phi_obj.den_ptr[1] == 1 || error("qq_chunks_v1.den_ptr must start at 1.")
+    phi_obj.num_ptr[end] == length(phi_obj.num_chunks) + 1 || error("qq_chunks_v1.num_ptr terminator mismatch.")
+    phi_obj.den_ptr[end] == length(phi_obj.den_chunks) + 1 || error("qq_chunks_v1.den_ptr terminator mismatch.")
+    K = coeff_type(target_field)
+    Phi = Matrix{K}(undef, m, k)
+    @inbounds for idx in 1:len
+        s = phi_obj.num_sign[idx]
+        (s == -1 || s == 0 || s == 1) || error("qq_chunks_v1.num_sign must be in {-1,0,1}.")
+        num = _chunks_to_bigint(phi_obj.num_chunks, phi_obj.num_ptr, idx, "qq_chunks_v1.num")
+        den = _chunks_to_bigint(phi_obj.den_chunks, phi_obj.den_ptr, idx, "qq_chunks_v1.den")
+        den == 0 && error("qq_chunks_v1.den must be nonzero.")
+        if s < 0
+            num = -num
+        elseif s == 0
+            num = BigInt(0)
+        end
+        Phi[idx] = coerce(target_field, QQ(num // den))
+    end
+    return Phi
+end
+
+function _decode_phi(phi_obj::_PhiFpFlatJSON,
+                     saved_field::PrimeField,
+                     target_field::PrimeField,
+                     m_expected::Int,
+                     k_expected::Int)
+    m, k = _phi_dims(phi_obj)
+    (m == m_expected && k == k_expected) || error("phi dimensions mismatch (expected $(m_expected)x$(k_expected), got $(m)x$(k)).")
+    len = m * k
+    length(phi_obj.data) == len || error("fp_flat_v1.data length mismatch.")
+    K = coeff_type(target_field)
+    Phi = Matrix{K}(undef, m, k)
+    @inbounds for idx in 1:len
+        Phi[idx] = coerce(target_field, phi_obj.data[idx])
+    end
+    return Phi
+end
+
+function _decode_phi(phi_obj::_PhiFpFlatJSON,
+                     saved_field::PrimeField,
+                     target_field::AbstractCoeffField,
+                     m_expected::Int,
+                     k_expected::Int)
+    m, k = _phi_dims(phi_obj)
+    (m == m_expected && k == k_expected) || error("phi dimensions mismatch (expected $(m_expected)x$(k_expected), got $(m)x$(k)).")
+    len = m * k
+    length(phi_obj.data) == len || error("fp_flat_v1.data length mismatch.")
+    K = coeff_type(target_field)
+    Phi = Matrix{K}(undef, m, k)
+    @inbounds for idx in 1:len
+        v = coerce(saved_field, phi_obj.data[idx])
+        Phi[idx] = coerce(target_field, v)
+    end
+    return Phi
+end
+
+function _decode_phi(phi_obj::_PhiRealFlatJSON,
+                     saved_field::RealField,
+                     target_field::RealField,
+                     m_expected::Int,
+                     k_expected::Int)
+    m, k = _phi_dims(phi_obj)
+    (m == m_expected && k == k_expected) || error("phi dimensions mismatch (expected $(m_expected)x$(k_expected), got $(m)x$(k)).")
+    len = m * k
+    length(phi_obj.data) == len || error("real_flat_v1.data length mismatch.")
+    K = coeff_type(target_field)
+    Phi = Matrix{K}(undef, m, k)
+    @inbounds for idx in 1:len
+        Phi[idx] = K(phi_obj.data[idx])
+    end
+    return Phi
+end
+
+function _decode_phi(phi_obj::_PhiRealFlatJSON,
+                     saved_field::RealField,
+                     target_field::AbstractCoeffField,
+                     m_expected::Int,
+                     k_expected::Int)
+    m, k = _phi_dims(phi_obj)
+    (m == m_expected && k == k_expected) || error("phi dimensions mismatch (expected $(m_expected)x$(k_expected), got $(m)x$(k)).")
+    len = m * k
+    length(phi_obj.data) == len || error("real_flat_v1.data length mismatch.")
+    K = coeff_type(target_field)
+    Phi = Matrix{K}(undef, m, k)
+    @inbounds for idx in 1:len
+        Phi[idx] = coerce(target_field, phi_obj.data[idx])
+    end
+    return Phi
+end
+
+function _decode_phi(phi_obj::_PhiJSON,
+                     saved_field::AbstractCoeffField,
+                     target_field::AbstractCoeffField,
+                     m_expected::Int,
+                     k_expected::Int)
+    error("Unsupported phi payload/field combination: $(typeof(phi_obj)) with saved_field=$(typeof(saved_field))")
+end
+
 function _parse_poset_from_obj(poset_obj)
     kind = haskey(poset_obj, "kind") ? String(poset_obj["kind"]) : "FinitePoset"
     if kind == "FinitePoset"
@@ -912,18 +1943,28 @@ function _parse_poset_from_obj(poset_obj)
         haskey(poset_obj, "leq") || error("poset missing required key 'leq'.")
         n = Int(poset_obj["n"])
         leq_any = poset_obj["leq"]
-        leq_any isa AbstractVector || error("poset.leq must be a list-of-lists.")
-        length(leq_any) == n || error("poset.leq must have n=$(n) rows")
-        leq = falses(n, n)
-        for i in 1:n
-            row = leq_any[i]
-            row isa AbstractVector || error("poset.leq row $(i) must be a list.")
-            length(row) == n || error("poset.leq row length mismatch (row $(i); expected n=$(n)).")
-            for j in 1:n
-                x = row[j]
-                x isa Bool || error("poset.leq entries must be Bool (row $(i), col $(j)).")
-                leq[i, j] = x
+        leq = if _is_packed_words_obj(leq_any)
+            packed = _MaskPackedWordsJSON(kind=String(leq_any["kind"]),
+                                          nrows=Int(leq_any["nrows"]),
+                                          ncols=Int(leq_any["ncols"]),
+                                          words_per_row=Int(leq_any["words_per_row"]),
+                                          words=Vector{UInt64}(leq_any["words"]))
+            _decode_bitmatrix(packed, "FinitePoset.leq", n, n)
+        else
+            leq_any isa AbstractVector || error("poset.leq must be a list-of-lists.")
+            length(leq_any) == n || error("poset.leq must have n=$(n) rows")
+            L = falses(n, n)
+            for i in 1:n
+                row = leq_any[i]
+                row isa AbstractVector || error("poset.leq row $(i) must be a list.")
+                length(row) == n || error("poset.leq row length mismatch (row $(i); expected n=$(n)).")
+                for j in 1:n
+                    x = row[j]
+                    x isa Bool || error("poset.leq entries must be Bool (row $(i), col $(j)).")
+                    L[i, j] = x
+                end
             end
+            L
         end
         P = FinitePoset(leq)
         _clear_cover_cache!(P)
@@ -955,19 +1996,27 @@ function _parse_poset_from_obj(poset_obj)
         haskey(poset_obj, "sig_z") || error("SignaturePoset missing required key 'sig_z'.")
         sig_y_any = poset_obj["sig_y"]
         sig_z_any = poset_obj["sig_z"]
-        sig_y_any isa AbstractVector || error("SignaturePoset.sig_y must be a list-of-lists.")
-        sig_z_any isa AbstractVector || error("SignaturePoset.sig_z must be a list-of-lists.")
-        sig_y = Vector{BitVector}(undef, length(sig_y_any))
-        sig_z = Vector{BitVector}(undef, length(sig_z_any))
-        for i in 1:length(sig_y_any)
-            row = sig_y_any[i]
-            row isa AbstractVector || error("SignaturePoset.sig_y row $(i) must be a list.")
-            sig_y[i] = BitVector(Bool[x for x in row])
+        sig_y = if _is_packed_words_obj(sig_y_any)
+            _parse_signature_rows_packed(
+                _MaskPackedWordsJSON(kind=String(sig_y_any["kind"]),
+                                     nrows=Int(sig_y_any["nrows"]),
+                                     ncols=Int(sig_y_any["ncols"]),
+                                     words_per_row=Int(sig_y_any["words_per_row"]),
+                                     words=Vector{UInt64}(sig_y_any["words"])),
+                "SignaturePoset.sig_y")
+        else
+            _parse_signature_rows_packed(sig_y_any, "SignaturePoset.sig_y")
         end
-        for i in 1:length(sig_z_any)
-            row = sig_z_any[i]
-            row isa AbstractVector || error("SignaturePoset.sig_z row $(i) must be a list.")
-            sig_z[i] = BitVector(Bool[x for x in row])
+        sig_z = if _is_packed_words_obj(sig_z_any)
+            _parse_signature_rows_packed(
+                _MaskPackedWordsJSON(kind=String(sig_z_any["kind"]),
+                                     nrows=Int(sig_z_any["nrows"]),
+                                     ncols=Int(sig_z_any["ncols"]),
+                                     words_per_row=Int(sig_z_any["words_per_row"]),
+                                     words=Vector{UInt64}(sig_z_any["words"])),
+                "SignaturePoset.sig_z")
+        else
+            _parse_signature_rows_packed(sig_z_any, "SignaturePoset.sig_z")
         end
         P = SignaturePoset(sig_y, sig_z)
         _clear_cover_cache!(P)
@@ -977,58 +2026,57 @@ function _parse_poset_from_obj(poset_obj)
     end
 end
 
-function _poset_obj(P::AbstractPoset; include_leq::Bool=true)
+function _poset_obj(P::AbstractPoset; include_leq::Union{Bool,Symbol}=:auto)
+    include_leq_resolved = _resolve_include_leq(P, include_leq)
     if P isa FinitePoset
-        include_leq || error("Cannot omit leq for FinitePoset serialization.")
+        include_leq_resolved || error("Cannot omit leq for FinitePoset serialization.")
         L = leq_matrix(P)
-        leq = [[L[i, j] for j in 1:size(L, 2)] for i in 1:size(L, 1)]
         return Dict("kind" => "FinitePoset",
                     "n" => nvertices(P),
-                    "leq" => leq)
+                    "leq" => _pack_bitmatrix_obj(L))
     elseif P isa ProductOfChainsPoset
         obj = Dict("kind" => "ProductOfChainsPoset",
                    "n" => nvertices(P),
                    "sizes" => collect(P.sizes))
-        if include_leq
+        if include_leq_resolved
             L = leq_matrix(P)
-            obj["leq"] = [[L[i, j] for j in 1:size(L, 2)] for i in 1:size(L, 1)]
+            obj["leq"] = _pack_bitmatrix_obj(L)
         end
         return obj
     elseif P isa GridPoset
         obj = Dict("kind" => "GridPoset",
                    "n" => nvertices(P),
                    "coords" => [collect(c) for c in P.coords])
-        if include_leq
+        if include_leq_resolved
             L = leq_matrix(P)
-            obj["leq"] = [[L[i, j] for j in 1:size(L, 2)] for i in 1:size(L, 1)]
+            obj["leq"] = _pack_bitmatrix_obj(L)
         end
         return obj
     elseif P isa ProductPoset
         obj = Dict("kind" => "ProductPoset",
                    "n" => nvertices(P),
-                   "left" => _poset_obj(P.P1; include_leq=include_leq),
-                   "right" => _poset_obj(P.P2; include_leq=include_leq))
-        if include_leq
+                   "left" => _poset_obj(P.P1; include_leq=(include_leq === :auto ? :auto : include_leq_resolved)),
+                   "right" => _poset_obj(P.P2; include_leq=(include_leq === :auto ? :auto : include_leq_resolved)))
+        if include_leq_resolved
             L = leq_matrix(P)
-            obj["leq"] = [[L[i, j] for j in 1:size(L, 2)] for i in 1:size(L, 1)]
+            obj["leq"] = _pack_bitmatrix_obj(L)
         end
         return obj
     elseif P isa SignaturePoset
         obj = Dict("kind" => "SignaturePoset",
                    "n" => nvertices(P),
-                   "sig_y" => [collect(row) for row in P.sig_y],
-                   "sig_z" => [collect(row) for row in P.sig_z])
-        if include_leq
+                   "sig_y" => _pack_signature_rows_obj(P.sig_y),
+                   "sig_z" => _pack_signature_rows_obj(P.sig_z))
+        if include_leq_resolved
             L = leq_matrix(P)
-            obj["leq"] = [[L[i, j] for j in 1:size(L, 2)] for i in 1:size(L, 1)]
+            obj["leq"] = _pack_bitmatrix_obj(L)
         end
         return obj
     else
         L = leq_matrix(P)
-        leq = [[L[i, j] for j in 1:size(L, 2)] for i in 1:size(L, 1)]
         return Dict("kind" => "FinitePoset",
                     "n" => nvertices(P),
-                    "leq" => leq)
+                    "leq" => _pack_bitmatrix_obj(L))
     end
 end
 
@@ -1817,125 +2865,361 @@ function load_flange_json(path::AbstractString; field::Union{Nothing,AbstractCoe
 end
 
 # -----------------------------------------------------------------------------
-# A2) Finite encodings (FiniteFringe.FinitePoset + FringeModule)
+# A1b) PL fringe (R^n)  (PLPolyhedra.PLFringe)
 # -----------------------------------------------------------------------------
 
-# Save a finite poset and its fringe module (U, D, phi) to JSON.
-# We store:
-#   - leq: a dense Bool matrix
-#   - each Upset/Downset as a Bool mask (BitVector serialized as Bool list)
-#   - phi: exact rationals encoded as "num/den" strings
+@inline _qq_json(x::QQ) = _scalar_to_json(QQField(), x)
+@inline _qq_parse(x) = _scalar_from_json(QQField(), x)
+
+function _qq_vector_to_obj(v::AbstractVector{QQ})
+    out = Vector{Any}(undef, length(v))
+    @inbounds for i in eachindex(v)
+        out[i] = _qq_json(v[i])
+    end
+    return out
+end
+
+function _qq_matrix_to_obj(A::AbstractMatrix{QQ})
+    m, n = size(A)
+    rows = Vector{Any}(undef, m)
+    @inbounds for i in 1:m
+        row = Vector{Any}(undef, n)
+        for j in 1:n
+            row[j] = _qq_json(A[i, j])
+        end
+        rows[i] = row
+    end
+    return rows
+end
+
+function _parse_qq_vector(v_any, label::String)
+    v_any isa AbstractVector || error("$(label) must be a vector.")
+    out = Vector{QQ}(undef, length(v_any))
+    @inbounds for i in eachindex(v_any)
+        out[i] = _qq_parse(v_any[i])
+    end
+    return out
+end
+
+function _parse_qq_matrix(A_any, label::String)
+    A_any isa AbstractVector || error("$(label) must be a matrix encoded as row vectors.")
+    m = length(A_any)
+    if m == 0
+        return Matrix{QQ}(undef, 0, 0)
+    end
+    row1 = A_any[1]
+    row1 isa AbstractVector || error("$(label)[1] must be a vector.")
+    n = length(row1)
+    A = Matrix{QQ}(undef, m, n)
+    @inbounds for i in 1:m
+        row = A_any[i]
+        row isa AbstractVector || error("$(label)[$i] must be a vector.")
+        length(row) == n || error("$(label) row-length mismatch at row $(i).")
+        for j in 1:n
+            A[i, j] = _qq_parse(row[j])
+        end
+    end
+    return A
+end
+
+function _strict_mask_from_json(mask_any, nrows::Int, label::String)
+    if mask_any === nothing
+        return falses(nrows)
+    elseif mask_any isa AbstractVector{Bool}
+        length(mask_any) == nrows || error("$(label) length mismatch.")
+        return BitVector(mask_any)
+    elseif mask_any isa AbstractVector
+        bits = falses(nrows)
+        for t in mask_any
+            idx = Int(t)
+            1 <= idx <= nrows || error("$(label) index $(idx) out of range 1:$(nrows).")
+            bits[idx] = true
+        end
+        return bits
+    end
+    error("$(label) must be Bool vector or index list.")
+end
+
+function _pl_hpoly_to_obj(h::PLPolyhedra.HPoly)
+    return Dict(
+        "A" => _qq_matrix_to_obj(h.A),
+        "b" => _qq_vector_to_obj(h.b),
+        "strict_mask" => collect(h.strict_mask),
+        "strict_eps" => _qq_json(h.strict_eps),
+    )
+end
+
+function _pl_union_to_obj(U::PLPolyhedra.PolyUnion)
+    return Dict(
+        "n" => U.n,
+        "parts" => [_pl_hpoly_to_obj(p) for p in U.parts],
+    )
+end
+
+function _parse_pl_hpoly_obj(part_obj, n::Int, label::String)
+    haskey(part_obj, "A") || error("$(label) missing A.")
+    haskey(part_obj, "b") || error("$(label) missing b.")
+    A = _parse_qq_matrix(part_obj["A"], "$(label).A")
+    b = _parse_qq_vector(part_obj["b"], "$(label).b")
+    size(A, 1) == length(b) || error("$(label): size(A,1) must match length(b).")
+    size(A, 2) == n || error("$(label): A has wrong ambient dimension $(size(A,2)); expected $(n).")
+    strict_mask = _strict_mask_from_json(get(part_obj, "strict_mask", nothing), size(A, 1), "$(label).strict_mask")
+    strict_eps = haskey(part_obj, "strict_eps") ? _qq_parse(part_obj["strict_eps"]) : PLPolyhedra.STRICT_EPS_QQ
+    return PLPolyhedra.HPoly(n, A, b, nothing, strict_mask, strict_eps)
+end
+
+function _parse_pl_union_obj(union_obj, n::Int, label::String)
+    parts_any = if haskey(union_obj, "parts")
+        union_obj["parts"]
+    else
+        Any[union_obj]
+    end
+    parts_any isa AbstractVector || error("$(label).parts must be a vector.")
+    parts = Vector{PLPolyhedra.HPoly}(undef, length(parts_any))
+    @inbounds for i in eachindex(parts_any)
+        parts[i] = _parse_pl_hpoly_obj(parts_any[i], n, "$(label).parts[$(i)]")
+    end
+    return PLPolyhedra.PolyUnion(n, parts)
+end
+
+function _parse_pl_generators(obj, key::String, n::Int, which::Symbol)
+    haskey(obj, key) || error("PLFringe JSON missing '$(key)'.")
+    gens_any = obj[key]
+    gens_any isa AbstractVector || error("PLFringe $(key) must be a vector.")
+    if which === :up
+        out = Vector{PLPolyhedra.PLUpset}(undef, length(gens_any))
+        @inbounds for i in eachindex(gens_any)
+            U = _parse_pl_union_obj(gens_any[i], n, "$(key)[$(i)]")
+            out[i] = PLPolyhedra.PLUpset(U)
+        end
+        return out
+    end
+    out = Vector{PLPolyhedra.PLDownset}(undef, length(gens_any))
+    @inbounds for i in eachindex(gens_any)
+        D = _parse_pl_union_obj(gens_any[i], n, "$(key)[$(i)]")
+        out[i] = PLPolyhedra.PLDownset(D)
+    end
+    return out
+end
+
+function _parse_pl_phi(obj, n_down::Int, n_up::Int)
+    if !haskey(obj, "phi")
+        n_down == 0 || n_up == 0 || error("PLFringe JSON missing 'phi'.")
+        return zeros(QQ, n_down, n_up)
+    end
+    Phi = _parse_qq_matrix(obj["phi"], "phi")
+    size(Phi, 1) == n_down || error("PLFringe phi has wrong number of rows $(size(Phi,1)); expected $(n_down).")
+    size(Phi, 2) == n_up || error("PLFringe phi has wrong number of cols $(size(Phi,2)); expected $(n_up).")
+    return Phi
+end
+
+function _parse_pl_fringe_obj(obj; strict_schema::Bool)
+    if strict_schema
+        haskey(obj, "kind") && String(obj["kind"]) == "PLFringe" ||
+            error("load_pl_fringe_json: expected kind=\"PLFringe\".")
+        version = haskey(obj, "schema_version") ? Int(obj["schema_version"]) : 0
+        version == PLFRINGE_SCHEMA_VERSION ||
+            error("Unsupported PLFringe JSON schema_version: $(version). Expected $(PLFRINGE_SCHEMA_VERSION).")
+    end
+    n = Int(obj["n"])
+    n >= 0 || error("PLFringe n must be >= 0.")
+    ups_key = if haskey(obj, "ups")
+        "ups"
+    elseif !strict_schema && haskey(obj, "upsets")
+        "upsets"
+    else
+        "ups"
+    end
+    downs_key = if haskey(obj, "downs")
+        "downs"
+    elseif !strict_schema && haskey(obj, "downsets")
+        "downsets"
+    else
+        "downs"
+    end
+    Ups = _parse_pl_generators(obj, ups_key, n, :up)
+    Downs = _parse_pl_generators(obj, downs_key, n, :down)
+    Phi = _parse_pl_phi(obj, length(Downs), length(Ups))
+    return PLPolyhedra.PLFringe(n, Ups, Downs, Phi)
+end
+
+"""
+    save_pl_fringe_json(path, F::PLPolyhedra.PLFringe; pretty=false)
+
+Stable PosetModules-owned PL fringe schema for `PLPolyhedra.PLFringe`.
+"""
+function save_pl_fringe_json(path::AbstractString, F::PLPolyhedra.PLFringe; pretty::Bool=false)
+    ups = [_pl_union_to_obj(U.U) for U in F.Ups]
+    downs = [_pl_union_to_obj(D.D) for D in F.Downs]
+    phi = _qq_matrix_to_obj(F.Phi)
+    obj = Dict(
+        "kind" => "PLFringe",
+        "schema_version" => PLFRINGE_SCHEMA_VERSION,
+        "n" => F.n,
+        "coeff_field" => _field_to_obj(QQField()),
+        "ups" => ups,
+        "downs" => downs,
+        "phi" => phi,
+    )
+    return _json_write(path, obj; pretty=pretty)
+end
+
+"""
+    load_pl_fringe_json(path) -> PLPolyhedra.PLFringe
+
+Inverse of `save_pl_fringe_json`.
+"""
+function load_pl_fringe_json(path::AbstractString)
+    obj = _json_read(path)
+    return _parse_pl_fringe_obj(obj; strict_schema=true)
+end
+
+# -----------------------------------------------------------------------------
+# A2) Finite encodings (FiniteFringe + typed v1 schema)
+# -----------------------------------------------------------------------------
+
 @inline function _pi_to_obj(pi)
-    if pi isa CoreModules.CompiledEncoding
+    if pi isa CompiledEncoding
         pi = pi.pi
     end
     if pi isa GridEncodingMap
-        return Dict(
-            "kind" => "GridEncodingMap",
-            "coords" => [collect(ax) for ax in pi.coords],
-            "orientation" => collect(pi.orientation),
-        )
+        return _GridEncodingMapJSON(kind="GridEncodingMap",
+                                    coords=[collect(ax) for ax in pi.coords],
+                                    orientation=collect(pi.orientation))
     elseif pi isa ZnEncoding.ZnEncodingMap
-        return Dict(
-            "kind" => "ZnEncodingMap",
-            "n" => pi.n,
-            "coords" => [collect(ax) for ax in pi.coords],
-            "sig_y" => [collect(Bool, s) for s in pi.sig_y],
-            "sig_z" => [collect(Bool, s) for s in pi.sig_z],
-            "reps" => [collect(r) for r in pi.reps],
-            "flats" => [Dict("b" => collect(f.b), "tau" => findall(identity, f.tau.coords)) for f in pi.flats],
-            "injectives" => [Dict("b" => collect(e.b), "tau" => findall(identity, e.tau.coords)) for e in pi.injectives],
+        return _ZnEncodingMapJSON(
+            kind="ZnEncodingMap",
+            n=pi.n,
+            coords=[collect(ax) for ax in pi.coords],
+            sig_y=_pack_signature_rows_obj(pi.sig_y),
+            sig_z=_pack_signature_rows_obj(pi.sig_z),
+            reps=[collect(r) for r in pi.reps],
+            flats=[_FaceGeneratorJSON(collect(f.b), findall(identity, f.tau.coords)) for f in pi.flats],
+            injectives=[_FaceGeneratorJSON(collect(e.b), findall(identity, e.tau.coords)) for e in pi.injectives],
+            cell_shape=collect(pi.cell_shape),
+            cell_strides=collect(pi.cell_strides),
+            cell_to_region=pi.cell_to_region === nothing ? nothing : collect(pi.cell_to_region),
         )
     elseif pi isa PLBackend.PLEncodingMapBoxes
-        return Dict(
-            "kind" => "PLEncodingMapBoxes",
-            "n" => pi.n,
-            "coords" => [collect(ax) for ax in pi.coords],
-            "sig_y" => [collect(Bool, s) for s in pi.sig_y],
-            "sig_z" => [collect(Bool, s) for s in pi.sig_z],
-            "reps" => [collect(r) for r in pi.reps],
-            "Ups" => [collect(u.ell) for u in pi.Ups],
-            "Downs" => [collect(d.u) for d in pi.Downs],
-            "cell_shape" => collect(pi.cell_shape),
-            "cell_strides" => collect(pi.cell_strides),
-            "cell_to_region" => collect(pi.cell_to_region),
-            "coord_flags" => [collect(f) for f in pi.coord_flags],
-            "axis_is_uniform" => collect(pi.axis_is_uniform),
-            "axis_step" => collect(pi.axis_step),
-            "axis_min" => collect(pi.axis_min),
+        return _PLEncodingMapBoxesJSON(
+            kind="PLEncodingMapBoxes",
+            n=pi.n,
+            coords=[collect(ax) for ax in pi.coords],
+            sig_y=_pack_masks_obj(pi.sig_y),
+            sig_z=_pack_masks_obj(pi.sig_z),
+            reps=[collect(r) for r in pi.reps],
+            Ups=[collect(u.ell) for u in pi.Ups],
+            Downs=[collect(d.u) for d in pi.Downs],
+            cell_shape=collect(pi.cell_shape),
+            cell_strides=collect(pi.cell_strides),
+            cell_to_region=collect(pi.cell_to_region),
+            coord_flags=[collect(f) for f in pi.coord_flags],
+            axis_is_uniform=collect(pi.axis_is_uniform),
+            axis_step=collect(pi.axis_step),
+            axis_min=collect(pi.axis_min),
         )
     end
     error("Unsupported encoding map type for JSON serialization.")
 end
 
-function _pi_from_obj(P::AbstractPoset, obj)
-    kind = String(obj["kind"])
-    if kind == "GridEncodingMap"
-        coords = tuple((Vector{Float64}(ax) for ax in obj["coords"])...)
-        orientation = tuple((Int(o) for o in obj["orientation"])...)
-        return GridEncodingMap(P, coords; orientation=orientation)
-    elseif kind == "ZnEncodingMap"
-        n = Int(obj["n"])
-        coords = ntuple(i -> Vector{Int}(obj["coords"][i]), n)
-        sig_y = [BitVector(s) for s in obj["sig_y"]]
-        sig_z = [BitVector(s) for s in obj["sig_z"]]
-        reps = [ntuple(i -> Int(r[i]), n) for r in obj["reps"]]
-        mkface(idxs) = begin
-            m = falses(n)
-            for t in idxs
-                m[Int(t)] = true
-            end
-            Face(n, m)
-        end
-        flats = [IndFlat(mkface(Vector{Int}(f["tau"])), Vector{Int}(f["b"]); id=:F)
-                 for f in obj["flats"]]
-        injectives = [IndInj(mkface(Vector{Int}(e["tau"])), Vector{Int}(e["b"]); id=:E)
-                      for e in obj["injectives"]]
-        MY = max(1, cld(length(flats), 64))
-        MZ = max(1, cld(length(injectives), 64))
-        sig_to_region = Dict{ZnEncoding.SigKey{MY,MZ},Int}()
-        for t in 1:length(sig_y)
-            sig_to_region[ZnEncoding._sigkey_from_bitvectors(sig_y[t], sig_z[t], Val(MY), Val(MZ))] = t
-        end
-        return ZnEncoding.ZnEncodingMap(n, coords, sig_y, sig_z, reps, flats, injectives, sig_to_region)
-    elseif kind == "PLEncodingMapBoxes"
-        n = Int(obj["n"])
-        coords = ntuple(i -> Vector{Float64}(obj["coords"][i]), n)
-        sig_y = [BitVector(s) for s in obj["sig_y"]]
-        sig_z = [BitVector(s) for s in obj["sig_z"]]
-        reps = [ntuple(i -> Float64(r[i]), n) for r in obj["reps"]]
-        Ups = [PLBackend.BoxUpset(Vector{Float64}(u)) for u in obj["Ups"]]
-        Downs = [PLBackend.BoxDownset(Vector{Float64}(d)) for d in obj["Downs"]]
-        cell_shape = Vector{Int}(obj["cell_shape"])
-        cell_strides = Vector{Int}(obj["cell_strides"])
-        cell_to_region = Vector{Int}(obj["cell_to_region"])
-        coord_flags = [Vector{UInt8}(f) for f in obj["coord_flags"]]
-        axis_is_uniform = BitVector(obj["axis_is_uniform"])
-        axis_step = Vector{Float64}(obj["axis_step"])
-        axis_min = Vector{Float64}(obj["axis_min"])
-        MY = cld(length(Ups), 64)
-        MZ = cld(length(Downs), 64)
-        sig_to_region = Dict{PLBackend.SigKey{MY,MZ},Int}()
-        for t in 1:length(sig_y)
-            ywords = PLBackend._pack_bitvector_words(sig_y[t], Val(MY))
-            zwords = PLBackend._pack_bitvector_words(sig_z[t], Val(MZ))
-            sig_to_region[PLBackend.SigKey{MY,MZ}(ywords, zwords)] = t
-        end
-        return PLBackend.PLEncodingMapBoxes{n,MY,MZ}(n, coords, sig_y, sig_z, reps, Ups, Downs,
-                                                  sig_to_region, cell_shape, cell_strides, cell_to_region,
-                                                  coord_flags, axis_is_uniform, axis_step, axis_min)
-    end
-    error("Unsupported encoding map kind: $(kind)")
+@inline function _zn_sigkey(sig_y::PackedSignatureRows{MY},
+                            sig_z::PackedSignatureRows{MZ},
+                            t::Int) where {MY,MZ}
+    ywords = ntuple(i -> sig_y.words[i, t], Val(MY))
+    zwords = ntuple(i -> sig_z.words[i, t], Val(MZ))
+    return ZnEncoding.SigKey{MY,MZ}(ywords, zwords)
 end
 
-function _encoding_obj(H::FringeModule{K}; pi=nothing, include_leq::Bool=true) where {K}
+function _pi_from_typed(P::AbstractPoset, obj::_GridEncodingMapJSON)
+    n = length(obj.coords)
+    coords = ntuple(i -> Vector{Float64}(obj.coords[i]), n)
+    length(obj.orientation) == n || error("GridEncodingMap.orientation length mismatch.")
+    orientation = ntuple(i -> Int(obj.orientation[i]), n)
+    return GridEncodingMap(P, coords; orientation=orientation)
+end
+
+function _pi_from_typed(::AbstractPoset, obj::_ZnEncodingMapJSON)
+    n = obj.n
+    length(obj.coords) == n || error("ZnEncodingMap.coords length mismatch.")
+    coords = ntuple(i -> Vector{Int}(obj.coords[i]), n)
+    reps = [ntuple(i -> Int(r[i]), n) for r in obj.reps]
+    mkface(idxs) = begin
+        m = falses(n)
+        for t in idxs
+            m[Int(t)] = true
+        end
+        Face(n, m)
+    end
+    flats = [IndFlat(mkface(f.tau), Vector{Int}(f.b); id=:F) for f in obj.flats]
+    injectives = [IndInj(mkface(e.tau), Vector{Int}(e.b); id=:E) for e in obj.injectives]
+    sig_y = _parse_signature_rows_packed(obj.sig_y, "ZnEncodingMap.sig_y")
+    sig_z = _parse_signature_rows_packed(obj.sig_z, "ZnEncodingMap.sig_z")
+    length(sig_y) == length(reps) || error("ZnEncodingMap.sig_y region count mismatch.")
+    length(sig_z) == length(reps) || error("ZnEncodingMap.sig_z region count mismatch.")
+    sig_y.bitlen == length(flats) || error("ZnEncodingMap.sig_y bit length mismatch with flats.")
+    sig_z.bitlen == length(injectives) || error("ZnEncodingMap.sig_z bit length mismatch with injectives.")
+    MY = size(sig_y.words, 1)
+    MZ = size(sig_z.words, 1)
+    sig_to_region = Dict{ZnEncoding.SigKey{MY,MZ},Int}()
+    @inbounds for t in 1:length(sig_y)
+        sig_to_region[_zn_sigkey(sig_y, sig_z, t)] = t
+    end
+    if obj.cell_shape === nothing || obj.cell_strides === nothing
+        return ZnEncoding.ZnEncodingMap(n, coords, sig_y, sig_z, reps, flats, injectives, sig_to_region)
+    end
+    cell_shape = Vector{Int}(obj.cell_shape)
+    cell_strides = Vector{Int}(obj.cell_strides)
+    length(cell_shape) == n || error("ZnEncodingMap.cell_shape length mismatch.")
+    length(cell_strides) == n || error("ZnEncodingMap.cell_strides length mismatch.")
+    cell_to_region = obj.cell_to_region === nothing ? nothing : Vector{Int}(obj.cell_to_region)
+    return ZnEncoding.ZnEncodingMap(n, coords, sig_y, sig_z, reps, flats, injectives, sig_to_region,
+                                    ntuple(i -> cell_shape[i], n),
+                                    ntuple(i -> cell_strides[i], n),
+                                    cell_to_region)
+end
+
+function _pi_from_typed(::AbstractPoset, obj::_PLEncodingMapBoxesJSON)
+    n = obj.n
+    length(obj.coords) == n || error("PLEncodingMapBoxes.coords length mismatch.")
+    coords = ntuple(i -> Vector{Float64}(obj.coords[i]), n)
+    reps = [ntuple(i -> Float64(r[i]), n) for r in obj.reps]
+    Ups = [PLBackend.BoxUpset(Vector{Float64}(u)) for u in obj.Ups]
+    Downs = [PLBackend.BoxDownset(Vector{Float64}(d)) for d in obj.Downs]
+    sig_y = _decode_masks(obj.sig_y, "PLEncodingMapBoxes.sig_y", length(Ups))
+    sig_z = _decode_masks(obj.sig_z, "PLEncodingMapBoxes.sig_z", length(Downs))
+    length(sig_y) == length(reps) || error("PLEncodingMapBoxes.sig_y region count mismatch.")
+    length(sig_z) == length(reps) || error("PLEncodingMapBoxes.sig_z region count mismatch.")
+    MY = max(1, cld(max(length(Ups), 1), 64))
+    MZ = max(1, cld(max(length(Downs), 1), 64))
+    sig_to_region = Dict{PLBackend.SigKey{MY,MZ},Int}()
+    @inbounds for t in eachindex(sig_y)
+        ywords = PLBackend._pack_bitvector_words(sig_y[t], Val(MY))
+        zwords = PLBackend._pack_bitvector_words(sig_z[t], Val(MZ))
+        sig_to_region[PLBackend.SigKey{MY,MZ}(ywords, zwords)] = t
+    end
+    return PLBackend.PLEncodingMapBoxes{n,MY,MZ}(
+        n, coords, sig_y, sig_z, reps, Ups, Downs, sig_to_region,
+        Vector{Int}(obj.cell_shape),
+        Vector{Int}(obj.cell_strides),
+        Vector{Int}(obj.cell_to_region),
+        [Vector{UInt8}(f) for f in obj.coord_flags],
+        BitVector(obj.axis_is_uniform),
+        Vector{Float64}(obj.axis_step),
+        Vector{Float64}(obj.axis_min))
+end
+
+function _pi_from_typed(::AbstractPoset, obj::_PiJSON)
+    error("Unsupported encoding map kind: $(typeof(obj))")
+end
+
+function _encoding_obj(H::FringeModule{K};
+                       pi=nothing,
+                       include_leq::Union{Bool,Symbol}=:auto) where {K}
     P = H.P
 
-    U_masks = [collect(Bool, U.mask) for U in H.U]
-    D_masks = [collect(Bool, D.mask) for D in H.D]
-
-    m, n = size(H.phi)
-    phi = [[_scalar_to_json(H.field, H.phi[i, j]) for j in 1:n] for i in 1:m]
+    U_masks = _pack_masks_obj([U.mask for U in H.U])
+    D_masks = _pack_masks_obj([D.mask for D in H.D])
+    phi = _phi_obj(H)
 
     obj = Dict(
         "kind" => "FiniteEncodingFringe",
@@ -1952,105 +3236,327 @@ function _encoding_obj(H::FringeModule{K}; pi=nothing, include_leq::Bool=true) w
     return obj
 end
 
-function save_encoding_json(path::AbstractString, H::FringeModule{K}; include_leq::Bool=true) where {K}
-    return _json_write(path, _encoding_obj(H; include_leq=include_leq))
+function save_encoding_json(path::AbstractString, H::FringeModule{K};
+                            profile::Symbol=:compact,
+                            include_leq::Union{Nothing,Bool,Symbol}=nothing,
+                            pretty::Union{Nothing,Bool}=nothing) where {K}
+    defaults = _resolve_encoding_save_profile(profile)
+    include_leq_resolved = include_leq === nothing ? defaults.include_leq : include_leq
+    pretty_resolved = pretty === nothing ? defaults.pretty : pretty
+    return _json_write(path, _encoding_obj(H; include_leq=include_leq_resolved); pretty=pretty_resolved)
 end
 
 function save_encoding_json(path::AbstractString, P::AbstractPoset, H::FringeModule{K}, pi;
-                            include_leq::Bool=true) where {K}
+                            profile::Symbol=:compact,
+                            include_leq::Union{Nothing,Bool,Symbol}=nothing,
+                            pretty::Union{Nothing,Bool}=nothing) where {K}
+    defaults = _resolve_encoding_save_profile(profile)
+    include_leq_resolved = include_leq === nothing ? defaults.include_leq : include_leq
+    pretty_resolved = pretty === nothing ? defaults.pretty : pretty
     P === H.P || error("save_encoding_json: P does not match H.P.")
-    return _json_write(path, _encoding_obj(H; pi=pi, include_leq=include_leq))
+    return _json_write(path, _encoding_obj(H; pi=pi, include_leq=include_leq_resolved); pretty=pretty_resolved)
+end
+
+"""
+    save_encoding_json(path, enc::EncodingResult; profile=:compact, include_pi=nothing, include_leq=nothing, pretty=nothing)
+
+Convenience serialization entrypoint for workflow users.
+"""
+function save_encoding_json(path::AbstractString, enc::EncodingResult;
+                            profile::Symbol=:compact,
+                            include_pi::Union{Nothing,Bool}=nothing,
+                            include_leq::Union{Nothing,Bool,Symbol}=nothing,
+                            pretty::Union{Nothing,Bool}=nothing)
+    defaults = _resolve_encoding_save_profile(profile)
+    include_pi_resolved = include_pi === nothing ? defaults.include_pi : include_pi
+    include_leq_resolved = include_leq === nothing ? defaults.include_leq : include_leq
+    pretty_resolved = pretty === nothing ? defaults.pretty : pretty
+    H = enc.H
+    H === nothing && (H = fringe_presentation(materialize_module(enc.M)))
+    H isa FringeModule || error("save_encoding_json: EncodingResult.H must be a FringeModule.")
+    if include_pi_resolved
+        return save_encoding_json(path, enc.P, H, enc.pi; include_leq=include_leq_resolved, pretty=pretty_resolved)
+    end
+    return save_encoding_json(path, H; include_leq=include_leq_resolved, pretty=pretty_resolved)
 end
 
 # Load the schema emitted by save_encoding_json.
 #
 # This loader is intentionally strict: it expects the schema emitted by
 # save_encoding_json (missing required keys => error).
-function load_encoding_json(path::AbstractString;
-                            return_pi::Bool=false,
-                            field::Union{Nothing,AbstractCoeffField}=nothing)
-    obj = _json_read(path)
+function _load_encoding_json_v1(raw::AbstractString;
+                                output::Symbol=:encoding_result,
+                                field::Union{Nothing,AbstractCoeffField}=nothing,
+                                validation::Symbol=:strict)
+    outmode = _resolve_encoding_output_mode(output)
+    validate_masks = _resolve_validation_mode(validation)
+    obj = JSON3.read(raw, _FiniteEncodingFringeJSONV1)
+    obj.kind == "FiniteEncodingFringe" || error("Unsupported encoding JSON kind: $(obj.kind)")
+    obj.schema_version == ENCODING_SCHEMA_VERSION ||
+        error("Unsupported encoding JSON schema_version: $(obj.schema_version)")
 
-    haskey(obj, "kind") || error("Encoding JSON missing required key 'kind'.")
-    kind = String(obj["kind"])
-    kind == "FiniteEncodingFringe" || error("Unsupported encoding JSON kind: $(kind)")
-    version = haskey(obj, "schema_version") ? Int(obj["schema_version"]) : 1
-    version <= ENCODING_SCHEMA_VERSION || error("Unsupported encoding JSON schema_version: $(version)")
+    P = _parse_poset_from_typed(obj.poset)
+    n = nvertices(P)
+    Umasks = _decode_masks(obj.U, "U", n)
+    Dmasks = _decode_masks(obj.D, "D", n)
+    U = _build_upsets(P, Umasks, validate_masks)
+    D = _build_downsets(P, Dmasks, validate_masks)
 
-    haskey(obj, "poset") || error("Encoding JSON missing required key 'poset'.")
-    poset_obj = obj["poset"]
-    P = _parse_poset_from_obj(poset_obj)
-
-    function parse_mask(entry, name::String)
-        n = nvertices(P)
-        entry isa AbstractVector || error("$(name) entries must be Bool masks (length n=$(n)).")
-        length(entry) == n || error("$(name) mask must have length n=$(n)")
-        mask = BitVector(undef, n)
-        for i in 1:n
-            x = entry[i]
-            x isa Bool || error("$(name) mask entries must be Bool (at index $(i)).")
-            mask[i] = x
-        end
-        return mask
-    end
-
-    haskey(obj, "U") || error("Encoding JSON missing required key 'U'.")
-    haskey(obj, "D") || error("Encoding JSON missing required key 'D'.")
-
-    U_any = obj["U"]
-    D_any = obj["D"]
-    U_any isa AbstractVector || error("'U' must be a list of Bool masks.")
-    D_any isa AbstractVector || error("'D' must be a list of Bool masks.")
-
-    U = Vector{FiniteFringe.Upset}(undef, length(U_any))
-    for t in 1:length(U_any)
-        mask = parse_mask(U_any[t], "U")
-        Uc = FiniteFringe.upset_closure(P, mask)
-        Uc.mask == mask || error("U entry $(t) is not an upset mask")
-        U[t] = Uc
-    end
-
-    D = Vector{FiniteFringe.Downset}(undef, length(D_any))
-    for t in 1:length(D_any)
-        mask = parse_mask(D_any[t], "D")
-        Dc = FiniteFringe.downset_closure(P, mask)
-        Dc.mask == mask || error("D entry $(t) is not a downset mask")
-        D[t] = Dc
-    end
-
-    saved_field = haskey(obj, "coeff_field") ? _field_from_obj(obj["coeff_field"]) : QQField()
+    saved_field = _field_from_typed(obj.coeff_field)
     target_field = field === nothing ? saved_field : field
     K = coeff_type(target_field)
-
     m = length(D)
     k = length(U)
-
-    haskey(obj, "phi") || error("Encoding JSON missing required key 'phi'.")
-    phi_any = obj["phi"]
-    phi_any isa AbstractVector || error("'phi' must be a list-of-lists (size m x k).")
-    length(phi_any) == m || error("phi must have m=$(m) rows")
-
-    Phi = zeros(K, m, k)
-    for i in 1:m
-        row = phi_any[i]
-        row isa AbstractVector || error("phi row $(i) must be a list (length k=$(k)).")
-        length(row) == k || error("phi row length mismatch (row $(i); expected k=$(k))")
-        for j in 1:k
-            val = _scalar_from_json(saved_field, row[j])
-            Phi[i, j] = target_field === saved_field ? val : coerce(target_field, val)
-        end
-    end
+    Phi = _decode_phi(obj.phi, saved_field, target_field, m, k)
 
     H = FiniteFringe.FringeModule{K}(P, U, D, Phi; field=target_field)
-    if return_pi && haskey(obj, "pi")
-        return H, _pi_from_obj(P, obj["pi"])
+    if outmode === :fringe
+        return H
+    elseif outmode === :fringe_with_pi
+        obj.pi === nothing && error("load_encoding_json: output=:fringe_with_pi requires a stored pi payload. Re-save with save_encoding_json(...; include_pi=true) or load with output=:fringe.")
+        return H, _pi_from_typed(P, obj.pi)
+    elseif outmode === :encoding_result
+        obj.pi === nothing && error("load_encoding_json: output=:encoding_result requires a stored pi payload. Re-save with save_encoding_json(...; include_pi=true) or load with output=:fringe.")
+        pi = _pi_from_typed(P, obj.pi)
+        M = pmodule_from_fringe(H)
+        return EncodingResult(P, M, pi;
+                              H=H,
+                              presentation=nothing,
+                              opts=EncodingOptions(),
+                              backend=:serialization,
+                              meta=(; source=:load_encoding_json, schema_version=obj.schema_version))
     end
-    return H
+    error("unreachable output mode: $(outmode)")
+end
+
+"""
+    load_encoding_json(path; output=:encoding_result, field=nothing, validation=:strict)
+
+Load an encoding artifact written by `save_encoding_json`.
+
+Keywords
+--------
+- `output=:fringe | :fringe_with_pi | :encoding_result`
+- `field`: optional coefficient-field override
+- `validation=:strict | :trusted`
+"""
+function load_encoding_json(path::AbstractString;
+                            output::Symbol=:encoding_result,
+                            field::Union{Nothing,AbstractCoeffField}=nothing,
+                            validation::Symbol=:strict)
+    raw = read(path, String)
+    return _load_encoding_json_v1(raw; output=output, field=field, validation=validation)
 end
 
 # =============================================================================
 # B) External adapters (CAS ingestion)
 # =============================================================================
+
+@inline function _external_get_any(obj, keys::Tuple{Vararg{String}})
+    for k in keys
+        if haskey(obj, k)
+            return obj[k]
+        end
+    end
+    return nothing
+end
+
+function _external_parse_mask_rows(mask_any, name::String, ncols::Int)
+    if mask_any isa AbstractDict
+        if _is_packed_words_obj(mask_any)
+            packed = _MaskPackedWordsJSON(kind=String(mask_any["kind"]),
+                                          nrows=Int(mask_any["nrows"]),
+                                          ncols=Int(mask_any["ncols"]),
+                                          words_per_row=Int(mask_any["words_per_row"]),
+                                          words=Vector{UInt64}(mask_any["words"]))
+            return _decode_masks(packed, name, ncols)
+        end
+        rows_any = _external_get_any(mask_any, ("rows", "masks", "data"))
+        rows_any === nothing && error("$(name): unsupported mask object; expected packed_words_v1 or rows/masks/data.")
+        return _external_parse_mask_rows(rows_any, name, ncols)
+    end
+
+    mask_any isa AbstractVector || error("$(name) must be a vector of masks.")
+    rows = Vector{BitVector}(undef, length(mask_any))
+    @inbounds for i in eachindex(mask_any)
+        row_any = mask_any[i]
+        row_any isa AbstractVector || error("$(name)[$(i)] must be a vector.")
+        if length(row_any) == ncols && all(x -> x isa Bool, row_any)
+            rows[i] = BitVector(Bool[x for x in row_any])
+        else
+            mask = falses(ncols)
+            for t in row_any
+                idx = Int(t)
+                1 <= idx <= ncols || error("$(name)[$(i)] contains out-of-range index $(idx) for ncols=$(ncols).")
+                mask[idx] = true
+            end
+            rows[i] = mask
+        end
+    end
+    return rows
+end
+
+function _external_parse_field(obj, field_override::Union{Nothing,AbstractCoeffField})
+    saved_field = if haskey(obj, "coeff_field")
+        _field_from_obj(obj["coeff_field"])
+    elseif haskey(obj, "field")
+        f = obj["field"]
+        if f isa AbstractDict
+            _field_from_obj(f)
+        elseif f isa AbstractString
+            sf = lowercase(String(f))
+            if sf == "qq"
+                QQField()
+            elseif sf == "f2"
+                PrimeField(2)
+            elseif sf == "f3"
+                PrimeField(3)
+            else
+                QQField()
+            end
+        else
+            QQField()
+        end
+    else
+        QQField()
+    end
+    target_field = field_override === nothing ? saved_field : field_override
+    return saved_field, target_field
+end
+
+function _external_parse_phi(phi_any,
+                             saved_field::AbstractCoeffField,
+                             target_field::AbstractCoeffField,
+                             m_expected::Int,
+                             k_expected::Int)
+    if phi_any isa AbstractDict && haskey(phi_any, "kind")
+        kind = String(phi_any["kind"])
+        if kind == "qq_chunks_v1"
+            phi_obj = _PhiQQChunksJSON(kind=kind,
+                                       m=Int(phi_any["m"]),
+                                       k=Int(phi_any["k"]),
+                                       base=Int(phi_any["base"]),
+                                       num_sign=Vector{Int8}(Int8.(phi_any["num_sign"])),
+                                       num_ptr=Vector{Int}(phi_any["num_ptr"]),
+                                       num_chunks=Vector{UInt32}(UInt32.(phi_any["num_chunks"])),
+                                       den_ptr=Vector{Int}(phi_any["den_ptr"]),
+                                       den_chunks=Vector{UInt32}(UInt32.(phi_any["den_chunks"])))
+            return _decode_phi(phi_obj, saved_field, target_field, m_expected, k_expected)
+        elseif kind == "fp_flat_v1"
+            phi_obj = _PhiFpFlatJSON(kind=kind,
+                                     m=Int(phi_any["m"]),
+                                     k=Int(phi_any["k"]),
+                                     p=Int(phi_any["p"]),
+                                     data=Vector{Int}(phi_any["data"]))
+            return _decode_phi(phi_obj, saved_field, target_field, m_expected, k_expected)
+        elseif kind == "real_flat_v1"
+            phi_obj = _PhiRealFlatJSON(kind=kind,
+                                       m=Int(phi_any["m"]),
+                                       k=Int(phi_any["k"]),
+                                       T=String(phi_any["T"]),
+                                       data=Vector{Float64}(phi_any["data"]))
+            return _decode_phi(phi_obj, saved_field, target_field, m_expected, k_expected)
+        end
+        error("Unsupported external phi kind: $(kind)")
+    end
+
+    phi_any isa AbstractVector || error("phi must be a matrix encoded as row vectors.")
+    length(phi_any) == m_expected || error("phi row count mismatch (expected $(m_expected), got $(length(phi_any))).")
+    K = coeff_type(target_field)
+    Phi = Matrix{K}(undef, m_expected, k_expected)
+    @inbounds for i in 1:m_expected
+        row = phi_any[i]
+        row isa AbstractVector || error("phi[$(i)] must be a row vector.")
+        length(row) == k_expected || error("phi column count mismatch at row $(i) (expected $(k_expected), got $(length(row))).")
+        for j in 1:k_expected
+            s = _scalar_from_json(saved_field, row[j])
+            Phi[i, j] = coerce(target_field, s)
+        end
+    end
+    return Phi
+end
+
+"""
+    parse_finite_fringe_json(json_src; field=nothing, validation=:strict) -> FringeModule
+
+Best-effort parser for external finite-fringe JSON.
+
+Supported top-level forms:
+- canonical encoding form with `poset`, `U`/`D`, `phi`
+- external aliases with `poset`, `upsets`/`downsets`, `phi`
+- minimal dense-poset form with top-level `n`, `leq`, plus masks and `phi`
+"""
+function parse_finite_fringe_json(json_src;
+                                  field::Union{Nothing,AbstractCoeffField}=nothing,
+                                  validation::Symbol=:strict)
+    obj = JSON3.read(json_src)
+    validate_masks = _resolve_validation_mode(validation)
+
+    poset_any = _external_get_any(obj, ("poset",))
+    if poset_any === nothing
+        haskey(obj, "n") || error("parse_finite_fringe_json: missing poset (expected `poset` or top-level `n`+`leq`).")
+        haskey(obj, "leq") || error("parse_finite_fringe_json: missing top-level `leq` for dense-poset fallback.")
+        poset_any = Dict("kind" => "FinitePoset", "n" => obj["n"], "leq" => obj["leq"])
+    end
+    P = _parse_poset_from_obj(poset_any)
+    n = nvertices(P)
+
+    U_any = _external_get_any(obj, ("U", "upsets", "ups"))
+    D_any = _external_get_any(obj, ("D", "downsets", "downs"))
+    U_any === nothing && error("parse_finite_fringe_json: missing upset masks (`U` or `upsets`).")
+    D_any === nothing && error("parse_finite_fringe_json: missing downset masks (`D` or `downsets`).")
+
+    Umasks = _external_parse_mask_rows(U_any, "U", n)
+    Dmasks = _external_parse_mask_rows(D_any, "D", n)
+    U = _build_upsets(P, Umasks, validate_masks)
+    D = _build_downsets(P, Dmasks, validate_masks)
+
+    haskey(obj, "phi") || error("parse_finite_fringe_json: missing `phi` matrix.")
+    saved_field, target_field = _external_parse_field(obj, field)
+    Phi = _external_parse_phi(obj["phi"], saved_field, target_field, length(D), length(U))
+    K = coeff_type(target_field)
+    return FiniteFringe.FringeModule{K}(P, U, D, Phi; field=target_field)
+end
+
+"""
+    parse_pl_fringe_json(json_src) -> PLPolyhedra.PLFringe
+
+Best-effort parser for external PL fringe JSON.
+
+Accepted top-level keys:
+- `n` (required)
+- `ups` or `upsets` (required): vector of upset generators
+- `downs` or `downsets` (required): vector of downset generators
+- `phi` (required unless one axis is empty)
+
+Each generator can be encoded either as:
+- `{ "parts": [ { "A": [...], "b": [...], ... }, ... ] }`, or
+- a single-part shorthand `{ "A": [...], "b": [...], ... }`.
+"""
+function parse_pl_fringe_json(json_src)
+    obj = JSON3.read(json_src)
+    return _parse_pl_fringe_obj(obj; strict_schema=false)
+end
+
+"""
+    finite_fringe_from_m2(cmd::Cmd; jsonpath=nothing, field=nothing, validation=:strict)
+        -> FringeModule
+
+Run a CAS command that prints (or writes) finite-fringe JSON accepted by
+`parse_finite_fringe_json`, then parse it.
+"""
+function finite_fringe_from_m2(cmd::Cmd; jsonpath::Union{Nothing,String}=nothing,
+                               field::Union{Nothing,AbstractCoeffField}=nothing,
+                               validation::Symbol=:strict)
+    if jsonpath === nothing
+        io = read(cmd, String)
+        return parse_finite_fringe_json(io; field=field, validation=validation)
+    end
+    run(cmd)
+    open(jsonpath, "r") do io
+        return parse_finite_fringe_json(io; field=field, validation=validation)
+    end
+end
 
 """
 JSON schema expected from an external CAS (Macaulay2, Singular, ...):
@@ -2121,6 +3627,7 @@ function parse_flange_json(json_src; field::Union{Nothing,AbstractCoeffField}=no
         m = length(injectives)
         ncol = length(flats)
         M = zeros(K, m, ncol)
+        nonintegral_numeric_entries = 0
         @assert length(A) == m "phi: wrong number of rows"
         for i in 1:m
             row = A[i]
@@ -2132,13 +3639,16 @@ function parse_flange_json(json_src; field::Union{Nothing,AbstractCoeffField}=no
                 elseif val isa Integer
                     M[i, j] = _scalar_from_json(saved_field, val)
                 else
-                    @warn "phi entry is a non-integer numeric; prefer exact strings \"num/den\" for exactness"
+                    nonintegral_numeric_entries += 1
                     M[i, j] = _scalar_from_json(saved_field, val)
                 end
                 if target_field !== saved_field
                     M[i, j] = coerce(target_field, M[i, j])
                 end
             end
+        end
+        if nonintegral_numeric_entries > 0
+            @warn "phi has $(nonintegral_numeric_entries) non-integer numeric entries; prefer exact strings \"num/den\" for exactness"
         end
         M
     else

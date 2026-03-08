@@ -13,27 +13,28 @@ using JSON3
 using Dates
 
 using ..CoreModules: QQ, QQField, PrimeField, RealField, AbstractCoeffField, coeff_type, coerce,
-                     EncodingOptions, ResolutionOptions, DerivedFunctorOptions, InvariantOptions,
                      ResolutionCache, SessionCache, EncodingCache,
                      _encoding_cache!, _session_resolution_cache, _session_hom_cache, _set_session_hom_cache!,
                      _session_slice_plan_cache, _set_session_slice_plan_cache!,
-                     EncodingResult, CohomologyDimsResult, ResolutionResult, InvariantResult,
-                     change_field, AbstractPLikeEncodingMap,
-                     CompiledEncoding, compile_encoding,
-                     PointCloud, ImageNd, GraphData, EmbeddedPlanarGraph2D,
-                     GradedComplex, MultiCriticalGradedComplex,
-                     SimplexTreeMulti, simplex_count, max_simplex_dim, simplex_vertices, simplex_grades,
-                     FiltrationSpec, ConstructionBudget, ConstructionOptions, PipelineOptions,
-                     GridEncodingMap,
                      _resolve_workflow_session_cache, _resolve_workflow_specialized_cache,
-                     _workflow_encoding_cache, _compile_encoding_cached,
-                     _encoding_with_session_cache, _resolution_cache_from_session,
-                     _slot_cache_from_session
-import ..CoreModules: locate, dimension, representatives, axes_from_encoding, _grid_strides, GridEncodingMap,
-                      materialize_module, module_dims
+                     _workflow_encoding_cache,
+                     _resolution_cache_from_session, _slot_cache_from_session,
+                     PosetCachePayload, CubicalCachePayload, GeometryCachePayload
+using ..Options: EncodingOptions, ResolutionOptions, DerivedFunctorOptions, InvariantOptions,
+                 FiltrationSpec, ConstructionBudget, ConstructionOptions, PipelineOptions, DataFileOptions
+using ..DataTypes: PointCloud, ImageNd, GraphData, EmbeddedPlanarGraph2D,
+                   GradedComplex, MultiCriticalGradedComplex,
+                   SimplexTreeMulti, simplex_count, max_simplex_dim, simplex_vertices, simplex_grades
+using ..EncodingCore: AbstractPLikeEncodingMap, CompiledEncoding, compile_encoding, GridEncodingMap,
+                      _compile_encoding_cached
+using ..Results: EncodingResult, CohomologyDimsResult, ResolutionResult, InvariantResult,
+                 _encoding_with_session_cache
+import ..Results: materialize_module, module_dims
+import ..EncodingCore: locate, dimension, representatives, axes_from_encoding, _grid_strides, GridEncodingMap
 
 import ..Serialization
 import ..Serialization: TAMER_FEATURE_SCHEMA_VERSION, feature_schema_header, validate_feature_metadata_schema
+import ..DataFileIO
 
 import ..IndicatorResolutions
 import ..ZnEncoding
@@ -47,7 +48,7 @@ using ..Modules: CoverEdgeMapStore, _get_cover_cache,
                  PModule, PMorphism, cover_edges, dim_at
 using ..FiniteFringe: AbstractPoset, FinitePoset, GridPoset, ProductOfChainsPoset, FringeModule,
                       Upset, Downset, principal_upset, principal_downset, leq, nvertices,
-                      poset_equal_opposite
+                      poset_equal_opposite, _succs, _preds, _pred_slots_of_succ
 using ..DerivedFunctors
 using ..Invariants
 import ..Modules
@@ -62,12 +63,16 @@ import ..Workflow: encode, fringe_presentation, flange_presentation
 const _POINTCLOUD_KNN_GRAPH_IMPL = Ref{Any}(nothing)
 const _POINTCLOUD_RADIUS_GRAPH_IMPL = Ref{Any}(nothing)
 const _POINTCLOUD_KNN_DISTANCES_IMPL = Ref{Any}(nothing)
+const _POINTCLOUD_KNN_GRAPH_EDGES_IMPL = Ref{Any}(nothing)
+const _POINTCLOUD_RADIUS_GRAPH_EDGES_IMPL = Ref{Any}(nothing)
+const _POINTCLOUD_DELAUNAY_2D_IMPL = Ref{Any}(nothing)
 const _POINTCLOUD_LARGE_N_SPARSE_ONLY = Ref{Int}(5_000)
 const _LAZY_DIFF_THREADS_MIN_VERTICES = Ref{Int}(128)
 const _H0_UNIONFIND_MIN_POS_VERTICES = Ref{Int}(96)
 const _H0_UNIONFIND_MIN_TOTAL_ACTIVE_VERTICES = Ref{Int}(8_000)
 const _H0_UNIONFIND_MIN_TOTAL_ACTIVE_EDGES = Ref{Int}(6_000)
 const _POINTCLOUD_STREAM_DIST_NONSPARSE = Ref{Bool}(true)
+const _POINTCLOUD_LOWDIM_RADIUS_STREAMING = Ref{Bool}(true)
 const _POINTCLOUD_DIM2_PACKED_KERNEL = Ref{Bool}(true)
 const _GRAPH_CLIQUE_ENUM_MODE = Ref{Symbol}(:auto) # :auto | :intersection | :combinations
 const _H0_CHAIN_SWEEP_FASTPATH = Ref{Bool}(true)
@@ -105,6 +110,31 @@ const _GRAPH_BACKEND_WINNER_CACHE_MAX = Ref{Int}(96)
 const _GRAPH_BACKEND_WINNER_CACHE = Dict{NTuple{4,Int},Bool}()
 const _GRAPH_BACKEND_WINNER_CACHE_ORDER = NTuple{4,Int}[]
 const _GRAPH_BACKEND_WINNER_CACHE_LOCK = ReentrantLock()
+const _POINTCLOUD_BACKEND_RESOLVE_CACHE_ENABLED = Ref{Bool}(true)
+const _POINTCLOUD_BACKEND_RESOLVE_CACHE_MAX = Ref{Int}(96)
+const _POINTCLOUD_BACKEND_RESOLVE_CACHE = Dict{NTuple{3,Int},Symbol}()
+const _POINTCLOUD_BACKEND_RESOLVE_CACHE_ORDER = NTuple{3,Int}[]
+const _POINTCLOUD_BACKEND_RESOLVE_CACHE_LOCK = ReentrantLock()
+const _POINTCLOUD_DELAUNAY_CACHE_ENABLED = Ref{Bool}(true)
+const _POINTCLOUD_DELAUNAY_CACHE_MAX = Ref{Int}(48)
+const _POINTCLOUD_DELAUNAY_CACHE = Dict{NTuple{4,UInt64},Any}()
+const _POINTCLOUD_DELAUNAY_CACHE_ORDER = NTuple{4,UInt64}[]
+const _POINTCLOUD_DELAUNAY_CACHE_LOCK = ReentrantLock()
+const _POINTCLOUD_DELAUNAY_AUTOLOAD_ATTEMPTED = Ref{Bool}(false)
+const _CUBICAL_2D_FASTPATH = Ref{Bool}(true)
+
+struct _PackedDelaunay2D
+    edges::Vector{NTuple{2,Int}}
+    edge_radius::Vector{Float64}
+    triangles::Vector{NTuple{3,Int}}
+    tri_radius::Vector{Float64}
+end
+
+mutable struct _PackedDelaunay2DCacheEntry
+    packed::_PackedDelaunay2D
+    edge_boundary::Union{Nothing,SparseMatrixCSC{Int,Int}}
+    tri_boundary::Union{Nothing,SparseMatrixCSC{Int,Int}}
+end
 
 struct _StructuralInclusionMap{K} <: AbstractMatrix{K}
     nrows::Int
@@ -383,16 +413,67 @@ end
     @inbounds return (1 <= id <= length(scratch.stamp) && scratch.stamp[id] == scratch.current) ? scratch.pos[id] : 0
 end
 
-function _set_pointcloud_nn_impl!(; knn_graph=nothing, radius_graph=nothing, knn_distances=nothing)
+function _set_pointcloud_nn_impl!(; knn_graph=nothing, radius_graph=nothing, knn_distances=nothing,
+                                  knn_graph_edges=nothing, radius_graph_edges=nothing)
     knn_graph !== nothing && (_POINTCLOUD_KNN_GRAPH_IMPL[] = knn_graph)
     radius_graph !== nothing && (_POINTCLOUD_RADIUS_GRAPH_IMPL[] = radius_graph)
     knn_distances !== nothing && (_POINTCLOUD_KNN_DISTANCES_IMPL[] = knn_distances)
+    knn_graph_edges !== nothing && (_POINTCLOUD_KNN_GRAPH_EDGES_IMPL[] = knn_graph_edges)
+    radius_graph_edges !== nothing && (_POINTCLOUD_RADIUS_GRAPH_EDGES_IMPL[] = radius_graph_edges)
+    Base.lock(_POINTCLOUD_BACKEND_RESOLVE_CACHE_LOCK)
+    empty!(_POINTCLOUD_BACKEND_RESOLVE_CACHE)
+    empty!(_POINTCLOUD_BACKEND_RESOLVE_CACHE_ORDER)
+    Base.unlock(_POINTCLOUD_BACKEND_RESOLVE_CACHE_LOCK)
+    return nothing
+end
+
+function _clear_pointcloud_delaunay_cache!()
+    lock(_POINTCLOUD_DELAUNAY_CACHE_LOCK) do
+        empty!(_POINTCLOUD_DELAUNAY_CACHE)
+        empty!(_POINTCLOUD_DELAUNAY_CACHE_ORDER)
+    end
+    return nothing
+end
+
+function _set_pointcloud_delaunay_2d_impl!(impl=nothing)
+    _POINTCLOUD_DELAUNAY_2D_IMPL[] = impl
+    _POINTCLOUD_DELAUNAY_AUTOLOAD_ATTEMPTED[] = false
+    _clear_pointcloud_delaunay_cache!()
     return nothing
 end
 
 @inline _have_pointcloud_nn_backend() =
     _POINTCLOUD_KNN_GRAPH_IMPL[] !== nothing &&
     _POINTCLOUD_KNN_DISTANCES_IMPL[] !== nothing
+
+@inline _have_pointcloud_delaunay_backend() =
+    _POINTCLOUD_DELAUNAY_2D_IMPL[] !== nothing
+
+@inline function _try_activate_pointcloud_delaunay_backend!()
+    _have_pointcloud_delaunay_backend() && return true
+    _POINTCLOUD_DELAUNAY_AUTOLOAD_ATTEMPTED[] && return false
+    _POINTCLOUD_DELAUNAY_AUTOLOAD_ATTEMPTED[] = true
+    try
+        Core.eval(@__MODULE__, :(import DelaunayTriangulation))
+    catch
+        # Optional dependency may be unavailable in this environment.
+    end
+    if !_have_pointcloud_delaunay_backend()
+        try
+            pm = parentmodule(@__MODULE__)
+            if isdefined(pm, :_try_load_source_extension!)
+                getfield(pm, :_try_load_source_extension!)(
+                    :DelaunayTriangulation,
+                    :TamerOpDelaunayTriangulationExt,
+                    "TamerOpDelaunayTriangulationExt.jl",
+                )
+            end
+        catch
+            # Source-mode extension loader is best-effort only.
+        end
+    end
+    return _have_pointcloud_delaunay_backend()
+end
 
 @inline function _pointcloud_nn_backend(spec::FiltrationSpec)::Symbol
     b = Symbol(get(spec.params, :nn_backend, :auto))
@@ -404,6 +485,59 @@ end
     if (b == :nearestneighbors || b == :approx) && !_have_pointcloud_nn_backend()
         throw(ArgumentError("PointCloud nn_backend=$(b) requires NearestNeighbors extension. Install NearestNeighbors.jl and load the extension, or use nn_backend=:bruteforce."))
     end
+    return b
+end
+
+@inline function _pointcloud_delaunay_backend(spec::FiltrationSpec)::Symbol
+    b = Symbol(get(spec.params, :delaunay_backend, :auto))
+    (b == :auto || b == :naive || b == :fast) ||
+        throw(ArgumentError("PointCloud delaunay_backend must be :auto, :naive, or :fast (got $(b))."))
+    if b == :auto
+        _have_pointcloud_delaunay_backend() || _try_activate_pointcloud_delaunay_backend!()
+        return _have_pointcloud_delaunay_backend() ? :fast : :naive
+    end
+    if b == :fast && !_have_pointcloud_delaunay_backend() && !_try_activate_pointcloud_delaunay_backend!()
+        throw(ArgumentError("PointCloud delaunay_backend=:fast requires DelaunayTriangulation extension. Install DelaunayTriangulation.jl and load the extension, or use delaunay_backend=:naive."))
+    end
+    return b
+end
+
+@inline function _pointcloud_bucket_value(n::Int)
+    n <= 0 && return 0
+    return min(16, max(0, floor(Int, log2(Float64(n)))))
+end
+
+@inline function _resolve_pointcloud_auto_backend(n::Int, d::Int, op_code::Int)::Symbol
+    _have_pointcloud_nn_backend() || return :bruteforce
+    if op_code == 1 && d > 20 && n > 1500
+        return :approx
+    end
+    return :nearestneighbors
+end
+
+@inline function _resolve_pointcloud_runtime_backend(backend::Symbol, n::Int, d::Int, op_code::Int)::Symbol
+    backend == :auto || return backend
+    if !_POINTCLOUD_BACKEND_RESOLVE_CACHE_ENABLED[]
+        return _resolve_pointcloud_auto_backend(n, d, op_code)
+    end
+    key = (_pointcloud_bucket_value(n), _pointcloud_bucket_value(d), op_code)
+    if haskey(_POINTCLOUD_BACKEND_RESOLVE_CACHE, key)
+        return _POINTCLOUD_BACKEND_RESOLVE_CACHE[key]
+    end
+    b = _resolve_pointcloud_auto_backend(n, d, op_code)
+    Base.lock(_POINTCLOUD_BACKEND_RESOLVE_CACHE_LOCK)
+    if haskey(_POINTCLOUD_BACKEND_RESOLVE_CACHE, key)
+        b = _POINTCLOUD_BACKEND_RESOLVE_CACHE[key]
+    else
+        _POINTCLOUD_BACKEND_RESOLVE_CACHE[key] = b
+        push!(_POINTCLOUD_BACKEND_RESOLVE_CACHE_ORDER, key)
+        max_keep = _POINTCLOUD_BACKEND_RESOLVE_CACHE_MAX[]
+        if max_keep > 0 && length(_POINTCLOUD_BACKEND_RESOLVE_CACHE_ORDER) > max_keep
+            old = popfirst!(_POINTCLOUD_BACKEND_RESOLVE_CACHE_ORDER)
+            delete!(_POINTCLOUD_BACKEND_RESOLVE_CACHE, old)
+        end
+    end
+    Base.unlock(_POINTCLOUD_BACKEND_RESOLVE_CACHE_LOCK)
     return b
 end
 
@@ -429,6 +563,326 @@ end
 # -----------------------------------------------------------------------------
 
 abstract type AbstractFiltration end
+
+const _BUILTIN_FILTRATION_KINDS = (
+    :graded,
+    :rips,
+    :rips_density,
+    :function_rips,
+    :landmark_rips,
+    :graph_lower_star,
+    :clique_lower_star,
+    :edge_weighted,
+    :graph_centrality,
+    :graph_geodesic,
+    :graph_function_geodesic_bifiltration,
+    :graph_weight_threshold,
+    :lower_star,
+    :image_distance_bifiltration,
+    :wing_vein_bifiltration,
+    :cubical,
+    :delaunay_lower_star,
+    :alpha,
+    :function_delaunay,
+    :core_delaunay,
+    :core,
+    :degree_rips,
+    :rhomboid,
+)
+
+const _CUSTOM_FILTRATION_REGISTRY = Dict{Symbol,NamedTuple}()
+const _CUSTOM_FILTRATION_REGISTRY_LOCK = ReentrantLock()
+
+@inline function _filtration_registry_get(kind::Symbol)
+    Base.lock(_CUSTOM_FILTRATION_REGISTRY_LOCK)
+    try
+        return get(_CUSTOM_FILTRATION_REGISTRY, kind, nothing)
+    finally
+        Base.unlock(_CUSTOM_FILTRATION_REGISTRY_LOCK)
+    end
+end
+
+@inline function _filtration_registry_set!(kind::Symbol, entry::NamedTuple)
+    Base.lock(_CUSTOM_FILTRATION_REGISTRY_LOCK)
+    try
+        _CUSTOM_FILTRATION_REGISTRY[kind] = entry
+    finally
+        Base.unlock(_CUSTOM_FILTRATION_REGISTRY_LOCK)
+    end
+    return entry
+end
+
+@inline function _normalize_schema_required(raw)
+    if raw === nothing
+        return ()
+    elseif raw isa Symbol
+        return (raw,)
+    elseif raw isa Tuple || raw isa AbstractVector
+        out = Symbol[]
+        for x in raw
+            x isa Symbol || throw(ArgumentError("filtration schema `required` must contain symbols."))
+            push!(out, x)
+        end
+        return Tuple(out)
+    end
+    throw(ArgumentError("filtration schema `required` must be Symbol or tuple/vector of Symbol."))
+end
+
+@inline function _normalize_schema_namedtuple(raw, name::AbstractString)
+    if raw === nothing
+        return NamedTuple()
+    elseif raw isa NamedTuple
+        return raw
+    elseif raw isa AbstractDict
+        ks = Symbol[]
+        vs = Any[]
+        for (k, v) in pairs(raw)
+            push!(ks, Symbol(k))
+            push!(vs, v)
+        end
+        return NamedTuple{Tuple(ks)}(Tuple(vs))
+    end
+    throw(ArgumentError("filtration schema `$name` must be NamedTuple or AbstractDict."))
+end
+
+@inline function _normalize_filtration_schema(schema)
+    if schema === nothing
+        return (
+            required = (),
+            defaults = NamedTuple(),
+            types = NamedTuple(),
+            checks = NamedTuple(),
+        )
+    end
+    schema isa NamedTuple || throw(ArgumentError("filtration schema must be a NamedTuple."))
+    return (
+        required = _normalize_schema_required(get(schema, :required, ())),
+        defaults = _normalize_schema_namedtuple(get(schema, :defaults, NamedTuple()), "defaults"),
+        types = _normalize_schema_namedtuple(get(schema, :types, NamedTuple()), "types"),
+        checks = _normalize_schema_namedtuple(get(schema, :checks, NamedTuple()), "checks"),
+    )
+end
+
+@inline function _schema_type_matches(v, T)
+    if T isa Tuple
+        for Ti in T
+            v isa Ti && return true
+        end
+        return false
+    end
+    return v isa T
+end
+
+function _schema_check_message(check_spec, key::Symbol, kind::Symbol)
+    if check_spec isa Tuple && length(check_spec) >= 2 && check_spec[2] isa AbstractString
+        return String(check_spec[2])
+    end
+    return "Filtration kind=:$kind parameter `$key` failed domain check."
+end
+
+function _run_schema_check(check_spec, value, params::NamedTuple)
+    if check_spec isa Function
+        return check_spec(value)
+    elseif check_spec isa Tuple && !isempty(check_spec) && check_spec[1] isa Function
+        pred = check_spec[1]
+        if hasmethod(pred, Tuple{typeof(value), NamedTuple})
+            return pred(value, params)
+        end
+        return pred(value)
+    end
+    throw(ArgumentError("filtration schema checks entries must be Function or (Function, message)."))
+end
+
+function _normalize_filtration_params(kind::Symbol,
+                                      params::NamedTuple,
+                                      schema::NamedTuple;
+                                      context::AbstractString="filtration")
+    merged = merge(schema.defaults, params)
+    for key in schema.required
+        haskey(merged, key) || throw(ArgumentError("$context kind=:$kind requires parameter `$key`."))
+    end
+    for (key, T) in pairs(schema.types)
+        haskey(merged, key) || continue
+        v = merged[key]
+        _schema_type_matches(v, T) && continue
+        throw(ArgumentError("$context kind=:$kind parameter `$key` has type $(typeof(v)); expected $(T)."))
+    end
+    for (key, check_spec) in pairs(schema.checks)
+        haskey(merged, key) || continue
+        ok = _run_schema_check(check_spec, merged[key], merged)
+        ok === true || throw(ArgumentError(_schema_check_message(check_spec, key, kind)))
+    end
+    return merged
+end
+
+@inline function _filtration_entry_arity(entry::NamedTuple, f::AbstractFiltration, data)
+    a = entry.arity
+    if a isa Function
+        if hasmethod(a, Tuple{typeof(f), typeof(data)})
+            return a(f, data)
+        end
+        return a(f)
+    end
+    return a
+end
+
+"""
+    filtration_kind(::Type{T}) where {T<:AbstractFiltration} -> Symbol
+
+Public contract for filtration-family identity.
+Custom filtration families should define this for their filtration type.
+"""
+function filtration_kind(::Type{T}) where {T<:AbstractFiltration}
+    throw(ArgumentError("No filtration kind contract for $(T). Define `filtration_kind(::Type{$(T)})::Symbol`."))
+end
+
+"""
+    filtration_arity(filtration, data=nothing) -> Int | :variable
+
+Public contract for persistence-parameter count.
+"""
+function filtration_arity(filtration::AbstractFiltration, data=nothing)
+    kind = filtration_kind(typeof(filtration))
+    entry = _filtration_registry_get(kind)
+    if entry !== nothing
+        return _filtration_entry_arity(entry, filtration, data)
+    end
+    if kind === :rips || kind === :landmark_rips || kind === :edge_weighted ||
+       kind === :graph_centrality || kind === :graph_geodesic ||
+       kind === :graph_weight_threshold || kind === :delaunay_lower_star ||
+       kind === :alpha
+        return 1
+    elseif kind === :rips_density || kind === :function_rips ||
+           kind === :degree_rips || kind === :rhomboid || kind === :core ||
+           kind === :function_delaunay || kind === :core_delaunay ||
+           kind === :graph_function_geodesic_bifiltration ||
+           kind === :image_distance_bifiltration || kind === :wing_vein_bifiltration
+        return 2
+    elseif kind === :graph_lower_star || kind === :clique_lower_star ||
+           kind === :lower_star || kind === :cubical || kind === :graded
+        return :variable
+    end
+    return :variable
+end
+
+"""
+    filtration_parameters(filtration::AbstractFiltration) -> NamedTuple
+
+Public hook for converting typed filtrations to `FiltrationSpec` params.
+"""
+function filtration_parameters(filtration::AbstractFiltration)
+    if hasproperty(filtration, :params)
+        p = getproperty(filtration, :params)
+        p isa NamedTuple || throw(ArgumentError("filtration `params` must be a NamedTuple."))
+        return _params_with_nonnothing(p)
+    end
+    return NamedTuple()
+end
+
+"""
+    register_filtration_family!(; kind, ctor, builder, arity=:variable, schema=nothing)
+
+Register a custom filtration family so that:
+- `to_filtration(FiltrationSpec(kind=kind, ...))` works,
+- `encode(data, FiltrationSpec(kind=kind, ...))` works,
+- custom schema/default validation is enforced.
+"""
+function register_filtration_family!(;
+                                     kind::Symbol,
+                                     ctor::Function,
+                                     builder::Function,
+                                     arity::Union{Int,Symbol,Function}=:variable,
+                                     schema=nothing)
+    kind in _BUILTIN_FILTRATION_KINDS &&
+        throw(ArgumentError("Cannot register custom filtration for built-in kind=:$kind."))
+    if arity isa Int
+        arity > 0 || throw(ArgumentError("filtration arity must be positive (got $arity)."))
+    elseif arity isa Symbol
+        arity === :variable || throw(ArgumentError("filtration arity symbol must be :variable (got $arity)."))
+    elseif !(arity isa Function)
+        throw(ArgumentError("filtration arity must be Int, :variable, or Function."))
+    end
+    sch = _normalize_filtration_schema(schema)
+    entry = (kind=kind, ctor=ctor, builder=builder, arity=arity, schema=sch)
+    _filtration_registry_set!(kind, entry)
+    return kind
+end
+
+"""
+    available_filtrations() -> Vector{Symbol}
+
+Return all built-in and registered custom filtration kinds.
+"""
+function available_filtrations()
+    Base.lock(_CUSTOM_FILTRATION_REGISTRY_LOCK)
+    custom = try
+        collect(keys(_CUSTOM_FILTRATION_REGISTRY))
+    finally
+        Base.unlock(_CUSTOM_FILTRATION_REGISTRY_LOCK)
+    end
+    return sort!(unique!(vcat(collect(_BUILTIN_FILTRATION_KINDS), custom)))
+end
+
+"""
+    filtration_signature(kind::Symbol) -> NamedTuple
+
+Introspection for filtration family contracts.
+"""
+function filtration_signature(kind::Symbol)
+    _builtin_arity(k::Symbol) = begin
+        if k === :rips || k === :landmark_rips || k === :edge_weighted ||
+           k === :graph_centrality || k === :graph_geodesic ||
+           k === :graph_weight_threshold || k === :delaunay_lower_star ||
+           k === :alpha
+            return 1
+        elseif k === :rips_density || k === :function_rips ||
+               k === :degree_rips || k === :rhomboid || k === :core ||
+               k === :function_delaunay || k === :core_delaunay ||
+               k === :graph_function_geodesic_bifiltration ||
+               k === :image_distance_bifiltration || k === :wing_vein_bifiltration
+            return 2
+        end
+        return :variable
+    end
+    if kind in _BUILTIN_FILTRATION_KINDS
+        return (
+            kind = kind,
+            registered = false,
+            arity = _builtin_arity(kind),
+            required = (),
+            defaults = NamedTuple(),
+            types = NamedTuple(),
+            checks = NamedTuple(),
+        )
+    end
+    entry = _filtration_registry_get(kind)
+    entry === nothing && throw(ArgumentError("No filtration family registered for kind=:$kind."))
+    schema = entry.schema
+    return (
+        kind = kind,
+        registered = true,
+        arity = entry.arity,
+        required = schema.required,
+        defaults = schema.defaults,
+        types = schema.types,
+        checks = schema.checks,
+    )
+end
+
+"""
+    filtration_parameters(kind::Symbol) -> NamedTuple
+
+Introspection helper for registered parameter schema.
+"""
+function filtration_parameters(kind::Symbol)
+    sig = filtration_signature(kind)
+    return (
+        required = sig.required,
+        defaults = sig.defaults,
+        types = sig.types,
+        checks = sig.checks,
+    )
+end
 
 struct GradedFiltration <: AbstractFiltration end
 
@@ -505,8 +959,20 @@ struct LandmarkRipsFiltration{P<:NamedTuple} <: AbstractFiltration
 end
 LandmarkRipsFiltration(; max_dim::Int=1,
                         landmarks,
+                        radius::Union{Nothing,Real}=nothing,
+                        knn::Union{Nothing,Int}=nothing,
+                        nn_backend::Symbol=:auto,
+                        nn_approx_candidates::Int=0,
                         construction::ConstructionOptions=ConstructionOptions()) =
-    LandmarkRipsFiltration((; max_dim, landmarks, construction))
+    LandmarkRipsFiltration((;
+        max_dim,
+        landmarks,
+        radius = radius === nothing ? nothing : Float64(radius),
+        knn,
+        nn_backend,
+        nn_approx_candidates,
+        construction,
+    ))
 
 struct GraphLowerStarFiltration{P<:NamedTuple} <: AbstractFiltration
     params::P
@@ -615,17 +1081,19 @@ DelaunayLowerStarFiltration(; max_dim::Int=2,
                             vertex_values=nothing,
                             vertex_function=nothing,
                             simplex_agg::Symbol=:max,
+                            delaunay_backend::Symbol=:auto,
                             highdim_policy::Symbol=:rips,
                             construction::ConstructionOptions=ConstructionOptions()) =
-    DelaunayLowerStarFiltration((; max_dim, vertex_values, vertex_function, simplex_agg, highdim_policy, construction))
+    DelaunayLowerStarFiltration((; max_dim, vertex_values, vertex_function, simplex_agg, delaunay_backend, highdim_policy, construction))
 
 struct AlphaFiltration{P<:NamedTuple} <: AbstractFiltration
     params::P
 end
 AlphaFiltration(; max_dim::Int=2,
+                delaunay_backend::Symbol=:auto,
                 highdim_policy::Symbol=:rips,
                 construction::ConstructionOptions=ConstructionOptions()) =
-    AlphaFiltration((; max_dim, highdim_policy, construction))
+    AlphaFiltration((; max_dim, delaunay_backend, highdim_policy, construction))
 
 struct FunctionDelaunayFiltration{P<:NamedTuple} <: AbstractFiltration
     params::P
@@ -634,17 +1102,19 @@ FunctionDelaunayFiltration(; max_dim::Int=2,
                            vertex_values=nothing,
                            vertex_function=nothing,
                            simplex_agg::Symbol=:max,
+                           delaunay_backend::Symbol=:auto,
                            highdim_policy::Symbol=:rips,
                            construction::ConstructionOptions=ConstructionOptions()) =
-    FunctionDelaunayFiltration((; max_dim, vertex_values, vertex_function, simplex_agg, highdim_policy, construction))
+    FunctionDelaunayFiltration((; max_dim, vertex_values, vertex_function, simplex_agg, delaunay_backend, highdim_policy, construction))
 
 struct CoreDelaunayFiltration{P<:NamedTuple} <: AbstractFiltration
     params::P
 end
 CoreDelaunayFiltration(; max_dim::Int=2,
+                       delaunay_backend::Symbol=:auto,
                        highdim_policy::Symbol=:rips,
                        construction::ConstructionOptions=ConstructionOptions()) =
-    CoreDelaunayFiltration((; max_dim, highdim_policy, construction))
+    CoreDelaunayFiltration((; max_dim, delaunay_backend, highdim_policy, construction))
 
 struct CoreFiltration{P<:NamedTuple} <: AbstractFiltration
     params::P
@@ -698,6 +1168,30 @@ RhomboidFiltration(; max_dim::Int=2,
                    vertex_function=nothing,
                    construction::ConstructionOptions=ConstructionOptions()) =
     RhomboidFiltration((; max_dim, radius, knn, n_landmarks, nn_backend, nn_approx_candidates, vertex_values, vertex_function, construction))
+
+filtration_kind(::Type{<:GradedFiltration}) = :graded
+filtration_kind(::Type{<:RipsFiltration}) = :rips
+filtration_kind(::Type{<:RipsDensityFiltration}) = :rips_density
+filtration_kind(::Type{<:FunctionRipsFiltration}) = :function_rips
+filtration_kind(::Type{<:LandmarkRipsFiltration}) = :landmark_rips
+filtration_kind(::Type{<:GraphLowerStarFiltration}) = :graph_lower_star
+filtration_kind(::Type{<:CliqueLowerStarFiltration}) = :clique_lower_star
+filtration_kind(::Type{<:EdgeWeightedFiltration}) = :edge_weighted
+filtration_kind(::Type{<:GraphCentralityFiltration}) = :graph_centrality
+filtration_kind(::Type{<:GraphGeodesicFiltration}) = :graph_geodesic
+filtration_kind(::Type{<:GraphFunctionGeodesicBifiltration}) = :graph_function_geodesic_bifiltration
+filtration_kind(::Type{<:GraphWeightThresholdFiltration}) = :graph_weight_threshold
+filtration_kind(::Type{<:ImageLowerStarFiltration}) = :lower_star
+filtration_kind(::Type{<:ImageDistanceBifiltration}) = :image_distance_bifiltration
+filtration_kind(::Type{<:WingVeinBifiltration}) = :wing_vein_bifiltration
+filtration_kind(::Type{<:DelaunayLowerStarFiltration}) = :delaunay_lower_star
+filtration_kind(::Type{<:AlphaFiltration}) = :alpha
+filtration_kind(::Type{<:FunctionDelaunayFiltration}) = :function_delaunay
+filtration_kind(::Type{<:CoreDelaunayFiltration}) = :core_delaunay
+filtration_kind(::Type{<:CoreFiltration}) = :core
+filtration_kind(::Type{<:DegreeRipsFiltration}) = :degree_rips
+filtration_kind(::Type{<:CubicalFiltration}) = :cubical
+filtration_kind(::Type{<:RhomboidFiltration}) = :rhomboid
 
 @inline function _params_with_nonnothing(params::NamedTuple)
     return (; (k => (k == :construction && v isa ConstructionOptions ? _construction_to_namedtuple(v) : v)
@@ -890,7 +1384,13 @@ function _filtration_spec(f::RhomboidFiltration)
 end
 
 function _filtration_spec(f::AbstractFiltration)
-    throw(ArgumentError("No FiltrationSpec conversion for $(typeof(f)). Define `_graded_complex_from_data(data, ::$(typeof(f)); cache=...)` for custom runtime filtrations."))
+    kind = filtration_kind(typeof(f))
+    params = filtration_parameters(f)
+    entry = _filtration_registry_get(kind)
+    params2 = entry === nothing ? params :
+              _normalize_filtration_params(kind, params, entry.schema;
+                                           context="_filtration_spec")
+    return FiltrationSpec(; kind=kind, params2...)
 end
 
 """
@@ -950,7 +1450,15 @@ function to_filtration(spec::FiltrationSpec)::AbstractFiltration
     elseif k === :landmark_rips
         landmarks = get(p, :landmarks, nothing)
         landmarks === nothing && error("to_filtration: landmark_rips requires landmarks.")
-        return LandmarkRipsFiltration(; max_dim=get(p, :max_dim, 1), landmarks=landmarks, construction=construction)
+        return LandmarkRipsFiltration(;
+            max_dim = get(p, :max_dim, 1),
+            landmarks = landmarks,
+            radius = get(p, :radius, nothing),
+            knn = get(p, :knn, nothing),
+            nn_backend = Symbol(get(p, :nn_backend, :auto)),
+            nn_approx_candidates = Int(get(p, :nn_approx_candidates, 0)),
+            construction = construction,
+        )
     elseif k === :graph_lower_star
         return GraphLowerStarFiltration(;
             vertex_grades = get(p, :vertex_grades, nothing),
@@ -1037,12 +1545,14 @@ function to_filtration(spec::FiltrationSpec)::AbstractFiltration
             vertex_values = get(p, :vertex_values, nothing),
             vertex_function = get(p, :vertex_function, nothing),
             simplex_agg = get(p, :simplex_agg, :max),
+            delaunay_backend = Symbol(get(p, :delaunay_backend, :auto)),
             highdim_policy = get(p, :highdim_policy, :rips),
             construction = construction,
         )
     elseif k === :alpha
         return AlphaFiltration(;
             max_dim = get(p, :max_dim, 2),
+            delaunay_backend = Symbol(get(p, :delaunay_backend, :auto)),
             highdim_policy = get(p, :highdim_policy, :rips),
             construction = construction,
         )
@@ -1052,12 +1562,14 @@ function to_filtration(spec::FiltrationSpec)::AbstractFiltration
             vertex_values = get(p, :vertex_values, nothing),
             vertex_function = get(p, :vertex_function, nothing),
             simplex_agg = get(p, :simplex_agg, :max),
+            delaunay_backend = Symbol(get(p, :delaunay_backend, :auto)),
             highdim_policy = get(p, :highdim_policy, :rips),
             construction = construction,
         )
     elseif k === :core_delaunay
         return CoreDelaunayFiltration(;
             max_dim = get(p, :max_dim, 2),
+            delaunay_backend = Symbol(get(p, :delaunay_backend, :auto)),
             highdim_policy = get(p, :highdim_policy, :rips),
             construction = construction,
         )
@@ -1093,6 +1605,29 @@ function to_filtration(spec::FiltrationSpec)::AbstractFiltration
             vertex_function = get(p, :vertex_function, nothing),
             construction = construction,
         )
+    end
+    entry = _filtration_registry_get(k)
+    if entry !== nothing
+        params2 = _normalize_filtration_params(k, p, entry.schema; context="to_filtration")
+        spec2 = FiltrationSpec(; kind=k, params2...)
+        filtration = if hasmethod(entry.ctor, Tuple{FiltrationSpec})
+            entry.ctor(spec2)
+        elseif hasmethod(entry.ctor, Tuple{NamedTuple})
+            entry.ctor(params2)
+        else
+            try
+                entry.ctor(spec2)
+            catch err1
+                try
+                    entry.ctor(params2)
+                catch err2
+                    throw(ArgumentError("to_filtration kind=:$k: ctor must accept FiltrationSpec or NamedTuple.\nSpec call error: $(sprint(showerror, err1))\nParams call error: $(sprint(showerror, err2))"))
+                end
+            end
+        end
+        filtration isa AbstractFiltration ||
+            throw(ArgumentError("to_filtration kind=:$k: ctor must return AbstractFiltration, got $(typeof(filtration))."))
+        return filtration
     end
     error("to_filtration: unsupported kind=$(k).")
 end
@@ -1985,61 +2520,6 @@ function GridEncodingMap(P::AbstractPoset, coords::NTuple{N,Vector{T}};
     end
     return GridEncodingMap{N,T,typeof(P)}(P, coords, orientation, sizes, _grid_strides(sizes))
 end
-
-dimension(pi::GridEncodingMap{N}) where {N} = N
-axes_from_encoding(pi::GridEncodingMap) = pi.coords
-
-function locate(pi::GridEncodingMap{N,T}, x::AbstractVector{<:Real}) where {N,T}
-    length(x) == N || error("GridEncodingMap.locate: expected vector length $(N), got $(length(x)).")
-    lin = 1
-    for i in 1:N
-        xi = pi.orientation[i] == 1 ? x[i] : -x[i]
-        if xi == 0
-            xi = zero(xi)
-        end
-        idx = searchsortedlast(pi.coords[i], xi)
-        if idx < 1
-            return 0
-        end
-        lin += (idx - 1) * pi.strides[i]
-    end
-    return lin
-end
-
-function locate(pi::GridEncodingMap{N,T}, x::NTuple{N,<:Real}) where {N,T}
-    lin = 1
-    @inbounds for i in 1:N
-        xi = pi.orientation[i] == 1 ? x[i] : -x[i]
-        if xi == 0
-            xi = zero(xi)
-        end
-        idx = searchsortedlast(pi.coords[i], xi)
-        if idx < 1
-            return 0
-        end
-        lin += (idx - 1) * pi.strides[i]
-    end
-    return lin
-end
-
-function representatives(pi::GridEncodingMap{N,T}) where {N,T}
-    # Cartesian product of coordinate axes (grid points).
-    reps = Vector{NTuple{N,T}}(undef, nvertices(pi.P))
-    idxs = ones(Int, N)
-    for lin in 1:nvertices(pi.P)
-        reps[lin] = ntuple(i -> pi.coords[i][idxs[i]], N)
-        # advance mixed radix counter
-        for i in 1:N
-            idxs[i] += 1
-            if idxs[i] <= pi.sizes[i]
-                break
-            else
-                idxs[i] = 1
-            end
-        end
-    end
-    return reps
-end
 # Section 4: Internal helpers (data ingestion pipeline)
 # -----------------------------------------------------------------------------
 
@@ -2244,12 +2724,13 @@ function _poset_from_axes_cached(axes, orientation;
     end
     Base.lock(cache.lock)
     try
-        P = get(cache.posets, key, nothing)
-        if P === nothing
+        entry = get(cache.posets, key, nothing)
+        if entry === nothing
             P = poset_from_axes(axes; orientation=orientation, kind=:grid)
-            cache.posets[key] = P
+            cache.posets[key] = PosetCachePayload(P)
+            return P
         end
-        return P
+        return entry.value
     finally
         Base.unlock(cache.lock)
     end
@@ -2292,7 +2773,8 @@ end
     cache === nothing && return nothing
     Base.lock(cache.lock)
     try
-        return get(cache.geometry, key, nothing)
+        entry = get(cache.geometry, key, nothing)
+        return entry === nothing ? nothing : entry.value
     finally
         Base.unlock(cache.lock)
     end
@@ -2302,7 +2784,7 @@ end
     cache === nothing && return value
     Base.lock(cache.lock)
     try
-        cache.geometry[key] = value
+        cache.geometry[key] = GeometryCachePayload(value)
     finally
         Base.unlock(cache.lock)
     end
@@ -2656,10 +3138,10 @@ function _pmodule_from_active_lists(P::AbstractPoset,
     K = coeff_type(field)
     dims = [length(lst) for lst in active]
     cc = _get_cover_cache(P)
-    preds = cc.preds
-    succs = cc.succs
-    pred_slot_of_succ = cc.pred_slot_of_succ
     n = nvertices(P)
+    preds = [_preds(cc, v) for v in 1:n]
+    succs = [_succs(cc, u) for u in 1:n]
+    pred_slot_of_succ = u -> _pred_slots_of_succ(cc, u)
 
     @inline function _row_for_col(Mu::Vector{Int}, Mv::Vector{Int})
         out = Vector{Int}(undef, length(Mu))
@@ -2685,7 +3167,7 @@ function _pmodule_from_active_lists(P::AbstractPoset,
             row_for_col = _row_for_col(Mu, active[v])
             A = _StructuralInclusionMap{K}(dims[v], dims[u], row_for_col)
             outu[j] = A
-            ip = pred_slot_of_succ[u][j]
+            ip = pred_slot_of_succ(u)[j]
             maps_from_pred[v][ip] = A
         end
     end
@@ -3268,9 +3750,9 @@ function _cohomology_module_h0_unionfind_from_lazy(
     end
 
     cc = _get_cover_cache(L.P)
-    preds = cc.preds
-    succs = cc.succs
-    pred_slot_of_succ = cc.pred_slot_of_succ
+    preds = [_preds(cc, v) for v in 1:nP]
+    succs = [_succs(cc, u) for u in 1:nP]
+    pred_slot_of_succ = u -> _pred_slots_of_succ(cc, u)
     maps_from_pred = [Vector{_StructuralInclusionMap{K}}(undef, length(preds[v])) for v in 1:nP]
     maps_to_succ = [Vector{_StructuralInclusionMap{K}}(undef, length(succs[u])) for u in 1:nP]
     lookup = use_lookup ? _ActiveIndexLookupScratch(n0_global) : nothing
@@ -3300,7 +3782,7 @@ function _cohomology_module_h0_unionfind_from_lazy(
             end
             A = _StructuralInclusionMap{K}(cv, cu, row_for_col)
             outu[j] = A
-            ip = pred_slot_of_succ[u][j]
+            ip = pred_slot_of_succ(u)[j]
             maps_from_pred[v][ip] = A
         end
     end
@@ -3344,8 +3826,8 @@ function _cohomology_dims_h0_unionfind_from_lazy(
 end
 
 @inline function _is_chain_cover_cache(cc, nP::Int)
-    succs = cc.succs
-    preds = cc.preds
+    succs = [_succs(cc, u) for u in 1:nP]
+    preds = [_preds(cc, v) for v in 1:nP]
     length(succs) == nP || return false
     length(preds) == nP || return false
     @inbounds for u in 1:nP
@@ -3474,9 +3956,9 @@ function _h0_module_chain_sweep(P::AbstractPoset,
     end
 
     K = coeff_type(field)
-    preds = cc.preds
-    succs = cc.succs
-    pred_slot_of_succ = cc.pred_slot_of_succ
+    preds = [_preds(cc, v) for v in 1:nP]
+    succs = [_succs(cc, u) for u in 1:nP]
+    pred_slot_of_succ = u -> _pred_slots_of_succ(cc, u)
     maps_from_pred = [Vector{_StructuralInclusionMap{K}}(undef, length(preds[v])) for v in 1:nP]
     maps_to_succ = [Vector{_StructuralInclusionMap{K}}(undef, length(succs[u])) for u in 1:nP]
     @inbounds for u in 1:nP
@@ -3488,7 +3970,7 @@ function _h0_module_chain_sweep(P::AbstractPoset,
             row_for_col = chain_row_for_col[u]
             A = _StructuralInclusionMap{K}(dims[v], dims[u], row_for_col)
             outu[j] = A
-            ip = pred_slot_of_succ[u][j]
+            ip = pred_slot_of_succ(u)[j]
             maps_from_pred[v][ip] = A
         end
     end
@@ -3593,15 +4075,15 @@ function _kernel_module_from_vertex_maps(M::PModule{K},
     basisK = Vector{Matrix{K}}(undef, n)
     K_dims = zeros(Int, n)
     cc = _get_cover_cache(M.Q)
-    succs = cc.succs
-    pred_slot_of_succ = cc.pred_slot_of_succ
+    succs = [_succs(cc, u) for u in 1:n]
+    pred_slot_of_succ = u -> _pred_slots_of_succ(cc, u)
     @inbounds for i in 1:n
         B = FieldLinAlg.nullspace(M.field, comps[i])
         basisK[i] = B
         K_dims[i] = size(B, 2)
     end
 
-    preds = cc.preds
+    preds = [_preds(cc, v) for v in 1:n]
     maps_from_pred = [Vector{Matrix{K}}(undef, length(preds[v])) for v in 1:n]
     maps_to_succ = [Vector{Matrix{K}}(undef, length(succs[u])) for u in 1:n]
     @inbounds for u in 1:n
@@ -3617,7 +4099,7 @@ function _kernel_module_from_vertex_maps(M::PModule{K},
                 FieldLinAlg.solve_fullcolumn(M.field, basisK[v], Im; check_rhs=false)
             end
             outu[j] = X
-            ip = pred_slot_of_succ[u][j]
+            ip = pred_slot_of_succ(u)[j]
             maps_from_pred[v][ip] = X
         end
     end
@@ -4881,6 +5363,44 @@ function _finalize_edge_pairs(edge_keys::AbstractVector{UInt64},
     return edges, dists
 end
 
+function _finalize_edge_pairs_edges_only(edge_keys::AbstractVector{UInt64},
+                                         edge_count::Int)
+    edge_count <= 0 && return NTuple{2,Int}[]
+    order = sortperm(view(edge_keys, 1:edge_count))
+
+    unique_count = 0
+    prev_key = UInt64(0)
+    first = true
+    @inbounds for idx in order
+        key = edge_keys[idx]
+        if first || key != prev_key
+            unique_count += 1
+            prev_key = key
+            first = false
+        end
+    end
+
+    edges = Vector{NTuple{2,Int}}(undef, unique_count)
+    out = 0
+    prev_key = UInt64(0)
+    first = true
+    @inbounds for idx in order
+        key = edge_keys[idx]
+        if first
+            prev_key = key
+            first = false
+            continue
+        end
+        key == prev_key && continue
+        out += 1
+        edges[out] = _unpack_edge_key(prev_key)
+        prev_key = key
+    end
+    out += 1
+    edges[out] = _unpack_edge_key(prev_key)
+    return edges
+end
+
 @inline function _insert_neighbor_sorted!(idxs::Vector{Int}, dists::Vector{Float64}, j::Int, d::Float64)
     k = length(idxs)
     if d >= dists[k]
@@ -4930,6 +5450,34 @@ function _knn_graph_bruteforce(points::AbstractVector{<:AbstractVector{<:Real}},
     return edges, edists, kdist
 end
 
+function _knn_graph_bruteforce_edges_only(points::AbstractVector{<:AbstractVector{<:Real}}, k::Int)
+    n = length(points)
+    n > 0 || return NTuple{2,Int}[]
+    k <= n - 1 || error("kNN k=$(k) exceeds number of neighbors.")
+    k_eff = min(k, n - 1)
+    k_eff > 0 || error("kNN k=$(k) exceeds number of neighbors.")
+    edge_keys = Vector{UInt64}(undef, n * k_eff)
+    edge_count = 0
+    idxs = fill(0, k_eff)
+    dtmp = fill(Inf, k_eff)
+    for i in 1:n
+        fill!(idxs, 0)
+        fill!(dtmp, Inf)
+        for j in 1:n
+            i == j && continue
+            _insert_neighbor_sorted!(idxs, dtmp, j, _euclidean_distance(points[i], points[j]))
+        end
+        for t in 1:k_eff
+            j = idxs[t]
+            j == 0 && continue
+            u, v = _ordered_pair(i, j)
+            edge_count += 1
+            edge_keys[edge_count] = _pack_edge_key(u, v)
+        end
+    end
+    return _finalize_edge_pairs_edges_only(edge_keys, edge_count)
+end
+
 function _radius_graph_bruteforce(points::AbstractVector{<:AbstractVector{<:Real}}, r::Float64)
     n = length(points)
     edges = NTuple{2,Int}[]
@@ -4948,6 +5496,19 @@ function _radius_graph_bruteforce(points::AbstractVector{<:AbstractVector{<:Real
     return edges, dists
 end
 
+function _radius_graph_bruteforce_edges_only(points::AbstractVector{<:AbstractVector{<:Real}}, r::Float64)
+    n = length(points)
+    edges = NTuple{2,Int}[]
+    sizehint!(edges, min(max(0, 4 * n), 200_000))
+    for i in 1:n
+        for j in (i + 1):n
+            _euclidean_distance(points[i], points[j]) <= r || continue
+            push!(edges, (i, j))
+        end
+    end
+    return edges
+end
+
 function _point_cloud_knn_graph(points::AbstractVector{<:AbstractVector{<:Real}},
                                 k::Int;
                                 backend::Symbol=:auto,
@@ -4955,32 +5516,91 @@ function _point_cloud_knn_graph(points::AbstractVector{<:AbstractVector{<:Real}}
     n = length(points)
     n > 0 || return NTuple{2,Int}[], Float64[], Float64[]
     k <= n - 1 || error("kNN k=$(k) exceeds number of neighbors.")
-    if backend != :bruteforce
+    d = length(points[1])
+    backend0 = _resolve_pointcloud_runtime_backend(backend, n, d, 1)
+    if backend0 != :bruteforce
         impl = _POINTCLOUD_KNN_GRAPH_IMPL[]
         if impl !== nothing
-            out = impl(points, k; backend=backend, approx_candidates=approx_candidates)
+            out = impl(points, k; backend=backend0, approx_candidates=approx_candidates)
             out === nothing || return out
-        elseif backend == :nearestneighbors || backend == :approx
-            throw(ArgumentError("PointCloud nn_backend=$(backend) requires NearestNeighbors extension."))
+        elseif backend0 == :nearestneighbors || backend0 == :approx
+            throw(ArgumentError("PointCloud nn_backend=$(backend0) requires NearestNeighbors extension."))
         end
     end
     return _knn_graph_bruteforce(points, k)
+end
+
+function _point_cloud_knn_edges(points::AbstractVector{<:AbstractVector{<:Real}},
+                                k::Int;
+                                backend::Symbol=:auto,
+                                approx_candidates::Int=0)
+    n = length(points)
+    n > 0 || return NTuple{2,Int}[]
+    k <= n - 1 || error("kNN k=$(k) exceeds number of neighbors.")
+    d = length(points[1])
+    backend0 = _resolve_pointcloud_runtime_backend(backend, n, d, 1)
+    if backend0 != :bruteforce
+        impl = _POINTCLOUD_KNN_GRAPH_EDGES_IMPL[]
+        if impl !== nothing
+            out = impl(points, k; backend=backend0, approx_candidates=approx_candidates)
+            out === nothing || return out
+        end
+        impl_full = _POINTCLOUD_KNN_GRAPH_IMPL[]
+        if impl_full !== nothing
+            out_full = impl_full(points, k; backend=backend0, approx_candidates=approx_candidates)
+            out_full === nothing || return out_full[1]
+        elseif backend0 == :nearestneighbors || backend0 == :approx
+            throw(ArgumentError("PointCloud nn_backend=$(backend0) requires NearestNeighbors extension."))
+        end
+    end
+    return _knn_graph_bruteforce_edges_only(points, k)
 end
 
 function _point_cloud_radius_graph(points::AbstractVector{<:AbstractVector{<:Real}},
                                    r::Float64;
                                    backend::Symbol=:auto,
                                    approx_candidates::Int=0)
-    if backend != :bruteforce
+    n = length(points)
+    if n == 0
+        return NTuple{2,Int}[], Float64[]
+    end
+    d = length(points[1])
+    backend0 = _resolve_pointcloud_runtime_backend(backend, n, d, 2)
+    if backend0 != :bruteforce
         impl = _POINTCLOUD_RADIUS_GRAPH_IMPL[]
         if impl !== nothing
-            out = impl(points, r; backend=backend, approx_candidates=approx_candidates)
+            out = impl(points, r; backend=backend0, approx_candidates=approx_candidates)
             out === nothing || return out
-        elseif backend == :nearestneighbors || backend == :approx
-            throw(ArgumentError("PointCloud nn_backend=$(backend) requires NearestNeighbors extension."))
+        elseif backend0 == :nearestneighbors || backend0 == :approx
+            throw(ArgumentError("PointCloud nn_backend=$(backend0) requires NearestNeighbors extension."))
         end
     end
     return _radius_graph_bruteforce(points, r)
+end
+
+function _point_cloud_radius_edges(points::AbstractVector{<:AbstractVector{<:Real}},
+                                   r::Float64;
+                                   backend::Symbol=:auto,
+                                   approx_candidates::Int=0)
+    n = length(points)
+    n == 0 && return NTuple{2,Int}[]
+    d = length(points[1])
+    backend0 = _resolve_pointcloud_runtime_backend(backend, n, d, 2)
+    if backend0 != :bruteforce
+        impl = _POINTCLOUD_RADIUS_GRAPH_EDGES_IMPL[]
+        if impl !== nothing
+            out = impl(points, r; backend=backend0, approx_candidates=approx_candidates)
+            out === nothing || return out
+        end
+        impl_full = _POINTCLOUD_RADIUS_GRAPH_IMPL[]
+        if impl_full !== nothing
+            out_full = impl_full(points, r; backend=backend0, approx_candidates=approx_candidates)
+            out_full === nothing || return out_full[1]
+        elseif backend0 == :nearestneighbors || backend0 == :approx
+            throw(ArgumentError("PointCloud nn_backend=$(backend0) requires NearestNeighbors extension."))
+        end
+    end
+    return _radius_graph_bruteforce_edges_only(points, r)
 end
 
 @inline function _edge_vectors_from_tuples(edges::Vector{NTuple{2,Int}})
@@ -5058,22 +5678,26 @@ function _triangle_boundary_matrix_from_edges(n::Int,
     return sparse(I, J, V, ne, nt)
 end
 
-function _simplex_tree_multi_from_dim2_packed(n::Int,
-                                              edges::Vector{NTuple{2,Int}},
-                                              triangles::Vector{NTuple{3,Int}},
-                                              grades::Vector{<:NTuple{N,T}}) where {N,T}
-    ne = length(edges)
-    nt = length(triangles)
+function _simplex_tree_multi_from_packed(n::Int,
+                                         edges::Vector{NTuple{2,Int}},
+                                         triangles::Vector{NTuple{3,Int}},
+                                         grades::Vector{<:NTuple{N,T}};
+                                         max_dim::Int=2) where {N,T}
+    max_dim = clamp(max_dim, 0, 2)
+    ne = max_dim >= 1 ? length(edges) : 0
+    nt = max_dim >= 2 ? length(triangles) : 0
     ns = n + ne + nt
     length(grades) == ns ||
-        error("simplex-tree dim2 packed: grades length mismatch, expected $(ns), got $(length(grades)).")
+        error("simplex-tree packed: grades length mismatch, expected $(ns), got $(length(grades)).")
 
     simplex_offsets = Vector{Int}(undef, ns + 1)
     simplex_vertices = Vector{Int}(undef, n + 2 * ne + 3 * nt)
     simplex_dims = Vector{Int}(undef, ns)
     grade_offsets = collect(1:(ns + 1))
     grade_data = Vector{NTuple{N,T}}(undef, ns)
-    dim_offsets = Int[1, n + 1, n + ne + 1, ns + 1]
+    dim_offsets = max_dim == 0 ? Int[1, ns + 1] :
+                  (max_dim == 1 ? Int[1, n + 1, ns + 1] :
+                                  Int[1, n + 1, n + ne + 1, ns + 1])
 
     vidx = 1
     sidx = 1
@@ -5085,29 +5709,195 @@ function _simplex_tree_multi_from_dim2_packed(n::Int,
         grade_data[sidx] = grades[sidx]
         sidx += 1
     end
-    @inbounds for (u, v) in edges
-        simplex_offsets[sidx] = vidx
-        simplex_vertices[vidx] = u
-        simplex_vertices[vidx + 1] = v
-        vidx += 2
-        simplex_dims[sidx] = 1
-        grade_data[sidx] = grades[sidx]
-        sidx += 1
+    if max_dim >= 1
+        @inbounds for j in 1:ne
+            u, v = edges[j]
+            simplex_offsets[sidx] = vidx
+            simplex_vertices[vidx] = u
+            simplex_vertices[vidx + 1] = v
+            vidx += 2
+            simplex_dims[sidx] = 1
+            grade_data[sidx] = grades[sidx]
+            sidx += 1
+        end
     end
-    @inbounds for (a, b, c) in triangles
-        simplex_offsets[sidx] = vidx
-        simplex_vertices[vidx] = a
-        simplex_vertices[vidx + 1] = b
-        simplex_vertices[vidx + 2] = c
-        vidx += 3
-        simplex_dims[sidx] = 2
-        grade_data[sidx] = grades[sidx]
-        sidx += 1
+    if max_dim >= 2
+        @inbounds for j in 1:nt
+            a, b, c = triangles[j]
+            simplex_offsets[sidx] = vidx
+            simplex_vertices[vidx] = a
+            simplex_vertices[vidx + 1] = b
+            simplex_vertices[vidx + 2] = c
+            vidx += 3
+            simplex_dims[sidx] = 2
+            grade_data[sidx] = grades[sidx]
+            sidx += 1
+        end
     end
     simplex_offsets[ns + 1] = vidx
 
     return SimplexTreeMulti(simplex_offsets, simplex_vertices, simplex_dims,
                             dim_offsets, grade_offsets, grade_data)
+end
+
+function _simplex_tree_multi_from_packed(n::Int,
+                                         edges::Vector{NTuple{2,Int}},
+                                         triangles::Vector{NTuple{3,Int}},
+                                         ::Type{NTuple{N,T}},
+                                         vertex_grade!::Fv,
+                                         edge_grade!::Fe,
+                                         tri_grade!::Ft;
+                                         max_dim::Int=2) where {N,T,Fv,Fe,Ft}
+    max_dim = clamp(max_dim, 0, 2)
+    ne = max_dim >= 1 ? length(edges) : 0
+    nt = max_dim >= 2 ? length(triangles) : 0
+    ns = n + ne + nt
+
+    simplex_offsets = Vector{Int}(undef, ns + 1)
+    simplex_vertices = Vector{Int}(undef, n + 2 * ne + 3 * nt)
+    simplex_dims = Vector{Int}(undef, ns)
+    grade_offsets = collect(1:(ns + 1))
+    grade_data = Vector{NTuple{N,T}}(undef, ns)
+    dim_offsets = max_dim == 0 ? Int[1, ns + 1] :
+                  (max_dim == 1 ? Int[1, n + 1, ns + 1] :
+                                  Int[1, n + 1, n + ne + 1, ns + 1])
+
+    vidx = 1
+    sidx = 1
+    @inbounds for v in 1:n
+        simplex_offsets[sidx] = vidx
+        simplex_vertices[vidx] = v
+        vidx += 1
+        simplex_dims[sidx] = 0
+        grade_data[sidx] = vertex_grade!(v)
+        sidx += 1
+    end
+    if max_dim >= 1
+        @inbounds for j in 1:ne
+            u, v = edges[j]
+            simplex_offsets[sidx] = vidx
+            simplex_vertices[vidx] = u
+            simplex_vertices[vidx + 1] = v
+            vidx += 2
+            simplex_dims[sidx] = 1
+            grade_data[sidx] = edge_grade!(j, u, v)
+            sidx += 1
+        end
+    end
+    if max_dim >= 2
+        @inbounds for j in 1:nt
+            a, b, c = triangles[j]
+            simplex_offsets[sidx] = vidx
+            simplex_vertices[vidx] = a
+            simplex_vertices[vidx + 1] = b
+            simplex_vertices[vidx + 2] = c
+            vidx += 3
+            simplex_dims[sidx] = 2
+            grade_data[sidx] = tri_grade!(j, a, b, c)
+            sidx += 1
+        end
+    end
+    simplex_offsets[ns + 1] = vidx
+
+    return SimplexTreeMulti(simplex_offsets, simplex_vertices, simplex_dims,
+                            dim_offsets, grade_offsets, grade_data)
+end
+
+function _materialize_point_cloud_packed_simplex_tree(n::Int,
+                                                      max_dim::Int,
+                                                      edges::Vector{NTuple{2,Int}},
+                                                      triangles::Vector{NTuple{3,Int}},
+                                                      spec::FiltrationSpec,
+                                                      ::Type{NTuple{N,T}},
+                                                      vertex_grade!::Fv,
+                                                      edge_grade!::Fe,
+                                                      tri_grade!::Ft) where {N,T,Fv,Fe,Ft}
+    max_dim = clamp(max_dim, 0, 2)
+    orientation = get(spec.params, :orientation, ntuple(_ -> 1, N))
+    ST = _simplex_tree_multi_from_packed(
+        n, edges, triangles, NTuple{N,T}, vertex_grade!, edge_grade!, tri_grade!; max_dim=max_dim
+    )
+    axes = get(spec.params, :axes, _axes_from_simplex_tree(ST; orientation=orientation))
+    return ST, axes, orientation
+end
+
+@inline function _simplex_tree_multi_from_dim2_packed(n::Int,
+                                                      edges::Vector{NTuple{2,Int}},
+                                                      triangles::Vector{NTuple{3,Int}},
+                                                      grades::Vector{<:NTuple{N,T}}) where {N,T}
+    return _simplex_tree_multi_from_packed(n, edges, triangles, grades; max_dim=2)
+end
+
+function _materialize_point_cloud_packed(n::Int,
+                                         max_dim::Int,
+                                         edges::Vector{NTuple{2,Int}},
+                                         triangles::Vector{NTuple{3,Int}},
+                                         grades::Vector{<:NTuple{N,Float64}},
+                                         spec::FiltrationSpec;
+                                         return_simplex_tree::Bool=false) where {N}
+    max_dim = clamp(max_dim, 0, 2)
+    ne = max_dim >= 1 ? length(edges) : 0
+    nt = max_dim >= 2 ? length(triangles) : 0
+    expected = n + ne + nt
+    length(grades) == expected ||
+        error("materialize_point_cloud_packed: grades length mismatch, expected $(expected), got $(length(grades)).")
+
+    orientation = get(spec.params, :orientation, ntuple(_ -> 1, N))
+    if return_simplex_tree
+        ST = _simplex_tree_multi_from_packed(n, edges, triangles, grades; max_dim=max_dim)
+        axes = get(spec.params, :axes, _axes_from_simplex_tree(ST; orientation=orientation))
+        return ST, axes, orientation
+    end
+
+    if max_dim == 0
+        cells = [collect(1:n)]
+        boundaries = SparseMatrixCSC{Int,Int}[]
+    elseif max_dim == 1
+        cells = [collect(1:n), collect(1:ne)]
+        boundaries = SparseMatrixCSC{Int,Int}[_edge_boundary_matrix(n, edges)]
+    else
+        b1 = _edge_boundary_matrix(n, edges)
+        b2 = _triangle_boundary_matrix_from_edges(n, edges, triangles)
+        cells = [collect(1:n), collect(1:ne), collect(1:nt)]
+        boundaries = SparseMatrixCSC{Int,Int}[b1, b2]
+    end
+
+    G = GradedComplex(cells, boundaries, grades)
+    axes = get(spec.params, :axes, _axes_from_grades(grades, N; orientation=orientation))
+    return G, axes, orientation
+end
+
+function _materialize_point_cloud_packed_with_cached_boundaries(n::Int,
+                                                                max_dim::Int,
+                                                                entry::_PackedDelaunay2DCacheEntry,
+                                                                grades::Vector{<:NTuple{N,Float64}},
+                                                                spec::FiltrationSpec) where {N}
+    max_dim = clamp(max_dim, 0, 2)
+    packed = entry.packed
+    ne = max_dim >= 1 ? length(packed.edges) : 0
+    nt = max_dim >= 2 ? length(packed.triangles) : 0
+    expected = n + ne + nt
+    length(grades) == expected ||
+        error("materialize_point_cloud_packed_with_cached_boundaries: grades length mismatch, expected $(expected), got $(length(grades)).")
+
+    orientation = get(spec.params, :orientation, ntuple(_ -> 1, N))
+    if max_dim == 0
+        cells = [collect(1:n)]
+        boundaries = SparseMatrixCSC{Int,Int}[]
+    elseif max_dim == 1
+        b1 = entry.edge_boundary === nothing ? _edge_boundary_matrix(n, packed.edges) : entry.edge_boundary
+        cells = [collect(1:n), collect(1:ne)]
+        boundaries = SparseMatrixCSC{Int,Int}[b1]
+    else
+        b1 = entry.edge_boundary === nothing ? _edge_boundary_matrix(n, packed.edges) : entry.edge_boundary
+        b2 = entry.tri_boundary === nothing ? _triangle_boundary_matrix_from_edges(n, packed.edges, packed.triangles) : entry.tri_boundary
+        cells = [collect(1:n), collect(1:ne), collect(1:nt)]
+        boundaries = SparseMatrixCSC{Int,Int}[b1, b2]
+    end
+
+    G = GradedComplex(cells, boundaries, grades)
+    axes = get(spec.params, :axes, _axes_from_grades(grades, N; orientation=orientation))
+    return G, axes, orientation
 end
 
 function _materialize_point_cloud_dim012(n::Int,
@@ -5116,21 +5906,9 @@ function _materialize_point_cloud_dim012(n::Int,
                                          grades::Vector{<:NTuple{N,Float64}},
                                          spec::FiltrationSpec;
                                          return_simplex_tree::Bool=false) where {N}
-    orientation = get(spec.params, :orientation, ntuple(_ -> 1, N))
-    if return_simplex_tree
-        ST = _simplex_tree_multi_from_dim2_packed(n, edges, triangles, grades)
-        axes = get(spec.params, :axes, _axes_from_simplex_tree(ST; orientation=orientation))
-        return ST, axes, orientation
-    end
-
-    ne = length(edges)
-    nt = length(triangles)
-    b1 = _edge_boundary_matrix(n, edges)
-    b2 = _triangle_boundary_matrix_from_edges(n, edges, triangles)
-    cells = [collect(1:n), collect(1:ne), collect(1:nt)]
-    G = GradedComplex(cells, SparseMatrixCSC{Int,Int}[b1, b2], grades)
-    axes = get(spec.params, :axes, _axes_from_grades(grades, N; orientation=orientation))
-    return G, axes, orientation
+    return _materialize_point_cloud_packed(
+        n, 2, edges, triangles, grades, spec; return_simplex_tree=return_simplex_tree
+    )
 end
 
 function _complete_point_cloud_edges_with_dist(points::AbstractVector{<:AbstractVector{<:Real}})
@@ -5152,6 +5930,126 @@ function _complete_point_cloud_edges_with_dist(points::AbstractVector{<:Abstract
         end
     end
     return edges, dists
+end
+
+function _complete_point_cloud_edges(n::Int)
+    n <= 1 && return NTuple{2,Int}[]
+    edge_count_big = _combination_count(n, 2)
+    edge_count_big > big(typemax(Int)) &&
+        throw(ArgumentError("Ingestion combinatorial explosion: edge count C($(n),2)=$(edge_count_big) exceeds representable collection size."))
+    edge_count = Int(edge_count_big)
+    edges = Vector{NTuple{2,Int}}(undef, edge_count)
+    t = 1
+    @inbounds for i in 1:(n - 1)
+        for j in (i + 1):n
+            edges[t] = (i, j)
+            t += 1
+        end
+    end
+    return edges
+end
+
+function _point_cloud_edges_within_radius(points::AbstractVector{<:AbstractVector{<:Real}},
+                                          radius::Float64)
+    n = length(points)
+    n <= 1 && return NTuple{2,Int}[], Float64[]
+    isfinite(radius) || return _complete_point_cloud_edges_with_dist(points)
+    edges = NTuple{2,Int}[]
+    dists = Float64[]
+    sizehint!(edges, min(max(0, 4 * n), 200_000))
+    sizehint!(dists, min(max(0, 4 * n), 200_000))
+    @inbounds for i in 1:(n - 1)
+        pi = points[i]
+        for j in (i + 1):n
+            d = _euclidean_distance(pi, points[j])
+            d <= radius || continue
+            push!(edges, (i, j))
+            push!(dists, d)
+        end
+    end
+    return edges, dists
+end
+
+function _point_cloud_edges_within_radius_edges_only(points::AbstractVector{<:AbstractVector{<:Real}},
+                                                     radius::Float64)
+    n = length(points)
+    n <= 1 && return NTuple{2,Int}[]
+    isfinite(radius) || return _complete_point_cloud_edges(n)
+    edges = NTuple{2,Int}[]
+    sizehint!(edges, min(max(0, 4 * n), 200_000))
+    @inbounds for i in 1:(n - 1)
+        pi = points[i]
+        for j in (i + 1):n
+            _euclidean_distance(pi, points[j]) <= radius || continue
+            push!(edges, (i, j))
+        end
+    end
+    return edges
+end
+
+function _point_cloud_edges_within_radius_indexed(points::AbstractVector{<:AbstractVector{<:Real}},
+                                                  idxs::AbstractVector{Int},
+                                                  radius::Float64)
+    m = length(idxs)
+    m <= 1 && return NTuple{2,Int}[], Float64[]
+    edges = NTuple{2,Int}[]
+    dists = Float64[]
+    sizehint!(edges, min(max(0, 4 * m), 200_000))
+    sizehint!(dists, min(max(0, 4 * m), 200_000))
+    @inbounds for ai in 1:(m - 1)
+        pi = points[idxs[ai]]
+        for aj in (ai + 1):m
+            d = _euclidean_distance(pi, points[idxs[aj]])
+            d <= radius || continue
+            push!(edges, (ai, aj))
+            push!(dists, d)
+        end
+    end
+    return edges, dists
+end
+
+@inline function _landmark_radius_cache_key(points::AbstractVector{<:AbstractVector{<:Real}},
+                                            landmark_hash::UInt,
+                                            backend::Symbol,
+                                            dim_bucket::Int,
+                                            radius::Float64,
+                                            approx_candidates::Int)
+    return (
+        :landmark_radius_subgraph,
+        UInt(objectid(points)),
+        landmark_hash,
+        backend,
+        dim_bucket,
+        UInt(hash(radius)),
+        Int(approx_candidates),
+    )
+end
+
+function _landmark_radius_subgraph_cached(points::AbstractVector{<:AbstractVector{<:Real}},
+                                          landmarks::AbstractVector{Int},
+                                          radius::Float64,
+                                          spec::FiltrationSpec;
+                                          cache::Union{Nothing,EncodingCache}=nothing)
+    m = length(landmarks)
+    m == 0 && return (edges=NTuple{2,Int}[], dists=Float64[])
+    d = length(points[landmarks[1]])
+    backend_key = _pointcloud_nn_backend(spec)
+    approx_candidates = _pointcloud_nn_approx_candidates(spec)
+    lhash = UInt(hash(landmarks))
+    key = _landmark_radius_cache_key(
+        points,
+        lhash,
+        backend_key,
+        _pointcloud_bucket_value(d),
+        radius,
+        approx_candidates,
+    )
+    cached = _get_geometry_cached(cache, key)
+    if cached isa NamedTuple && hasproperty(cached, :edges) && hasproperty(cached, :dists)
+        return cached
+    end
+    edges, dists = _point_cloud_edges_within_radius_indexed(points, landmarks, radius)
+    return _set_geometry_cached!(cache, key, (edges=edges, dists=dists))
 end
 
 @inline function _packed_pair_index(n::Int, i::Int, j::Int)
@@ -5211,13 +6109,15 @@ function _point_cloud_knn_distances(points::AbstractVector{<:AbstractVector{<:Re
     k <= n - 1 || error("kNN k=$(k) exceeds number of neighbors.")
     k_eff = min(k, n - 1)
     k_eff > 0 || error("kNN k=$(k) exceeds number of neighbors.")
-    if backend != :bruteforce
+    d = length(points[1])
+    backend0 = _resolve_pointcloud_runtime_backend(backend, n, d, 1)
+    if backend0 != :bruteforce
         impl = _POINTCLOUD_KNN_DISTANCES_IMPL[]
         if impl !== nothing
-            out = impl(points, k_eff; backend=backend, approx_candidates=approx_candidates)
+            out = impl(points, k_eff; backend=backend0, approx_candidates=approx_candidates)
             out === nothing || return out
-        elseif backend == :nearestneighbors || backend == :approx
-            throw(ArgumentError("PointCloud nn_backend=$(backend) requires NearestNeighbors extension."))
+        elseif backend0 == :nearestneighbors || backend0 == :approx
+            throw(ArgumentError("PointCloud nn_backend=$(backend0) requires NearestNeighbors extension."))
         end
     end
     _, _, kdist = _knn_graph_bruteforce(points, k_eff)
@@ -5266,6 +6166,84 @@ end
         return a + b + c
     elseif agg === :mean
         return (a + b + c) / 3
+    end
+    throw(ArgumentError("Unsupported simplex_agg=$(agg). Supported: :max, :min, :sum, :mean"))
+end
+
+@inline function _aggregate_tuple_pair(vals::AbstractVector{<:NTuple{N,Float64}},
+                                       u::Int, v::Int,
+                                       agg::Symbol) where {N}
+    a = vals[u]
+    b = vals[v]
+    if agg === :max
+        return ntuple(i -> max(a[i], b[i]), N)
+    elseif agg === :min
+        return ntuple(i -> min(a[i], b[i]), N)
+    elseif agg === :sum
+        return ntuple(i -> a[i] + b[i], N)
+    elseif agg === :mean
+        return ntuple(i -> (a[i] + b[i]) / 2.0, N)
+    end
+    throw(ArgumentError("Unsupported simplex_agg=$(agg). Supported: :max, :min, :sum, :mean"))
+end
+
+@inline function _aggregate_tuple_triple(vals::AbstractVector{<:NTuple{N,Float64}},
+                                         aidx::Int, bidx::Int, cidx::Int,
+                                         agg::Symbol) where {N}
+    a = vals[aidx]
+    b = vals[bidx]
+    c = vals[cidx]
+    if agg === :max
+        return ntuple(i -> max(a[i], max(b[i], c[i])), N)
+    elseif agg === :min
+        return ntuple(i -> min(a[i], min(b[i], c[i])), N)
+    elseif agg === :sum
+        return ntuple(i -> a[i] + b[i] + c[i], N)
+    elseif agg === :mean
+        return ntuple(i -> (a[i] + b[i] + c[i]) / 3.0, N)
+    end
+    throw(ArgumentError("Unsupported simplex_agg=$(agg). Supported: :max, :min, :sum, :mean"))
+end
+
+@inline function _aggregate_tuple_indexed(vals::AbstractVector{<:NTuple{N,Float64}},
+                                          idxs::AbstractVector{Int},
+                                          agg::Symbol) where {N}
+    isempty(idxs) && throw(ArgumentError("simplex_aggregate received empty index set"))
+    if agg === :max
+        return ntuple(i -> begin
+            acc = vals[idxs[1]][i]
+            @inbounds for t in 2:length(idxs)
+                v = vals[idxs[t]][i]
+                v > acc && (acc = v)
+            end
+            acc
+        end, N)
+    elseif agg === :min
+        return ntuple(i -> begin
+            acc = vals[idxs[1]][i]
+            @inbounds for t in 2:length(idxs)
+                v = vals[idxs[t]][i]
+                v < acc && (acc = v)
+            end
+            acc
+        end, N)
+    elseif agg === :sum
+        return ntuple(i -> begin
+            acc = 0.0
+            @inbounds for t in eachindex(idxs)
+                acc += vals[idxs[t]][i]
+            end
+            acc
+        end, N)
+    elseif agg === :mean
+        invn = 1.0 / length(idxs)
+        return ntuple(i -> begin
+            acc = 0.0
+            @inbounds for t in eachindex(idxs)
+                acc += vals[idxs[t]][i]
+            end
+            acc * invn
+        end, N)
     end
     throw(ArgumentError("Unsupported simplex_agg=$(agg). Supported: :max, :min, :sum, :mean"))
 end
@@ -5366,61 +6344,87 @@ function _circumcircle_2d(a::AbstractVector{<:Real},
     return (ux, uy, r2)
 end
 
-function _delaunay_simplices_1d(points::AbstractVector{<:AbstractVector{<:Real}})
-    n = length(points)
-    order = sortperm(1:n; by=i -> (Float64(points[i][1]), i))
-    edges = Vector{Vector{Int}}()
-    edge_radius = Dict{Tuple{Int,Int},Float64}()
-    for t in 1:(n - 1)
-        i = order[t]
-        j = order[t + 1]
-        push!(edges, [i, j])
-        edge_radius[(min(i, j), max(i, j))] = _euclidean_distance(points[i], points[j]) / 2
-    end
-    return edges, Vector{Vector{Int}}(), edge_radius, Dict{NTuple{3,Int},Float64}()
+@inline function _sort_triplet(i::Int, j::Int, k::Int)::NTuple{3,Int}
+    a = min(i, min(j, k))
+    c = max(i, max(j, k))
+    b = i + j + k - a - c
+    return (a, b, c)
 end
 
-function _delaunay_simplices_2d(points::AbstractVector{<:AbstractVector{<:Real}})
+function _packed_delaunay_simplices_1d(points::AbstractVector{<:AbstractVector{<:Real}}; max_dim::Int=2)
     n = length(points)
-    triangles = Vector{Vector{Int}}()
-    tri_radius = Dict{NTuple{3,Int},Float64}()
-    edge_set = Set{Tuple{Int,Int}}()
-    edge_radius = Dict{Tuple{Int,Int},Float64}()
+    order = sortperm(1:n; by=i -> (Float64(points[i][1]), i))
+    nedges = max(0, n - 1)
+    edges = Vector{NTuple{2,Int}}(undef, nedges)
+    edge_radius = Vector{Float64}(undef, nedges)
+    @inbounds for t in 1:nedges
+        i = order[t]
+        j = order[t + 1]
+        a, b = min(i, j), max(i, j)
+        edges[t] = (a, b)
+        edge_radius[t] = _euclidean_distance(points[a], points[b]) / 2
+    end
+    triangles = NTuple{3,Int}[]
+    tri_radius = Float64[]
+    return _PackedDelaunay2D(edges, edge_radius, triangles, tri_radius)
+end
+
+@inline function _push_delaunay_edge!(edges::Vector{NTuple{2,Int}},
+                                      edge_radius::Vector{Float64},
+                                      edge_seen::BitMatrix,
+                                      points::AbstractVector{<:AbstractVector{<:Real}},
+                                      u::Int, v::Int)
+    a, b = min(u, v), max(u, v)
+    @inbounds if edge_seen[a, b]
+        return nothing
+    end
+    @inbounds edge_seen[a, b] = true
+    push!(edges, (a, b))
+    push!(edge_radius, _euclidean_distance(points[a], points[b]) / 2)
+    return nothing
+end
+
+function _packed_delaunay_simplices_2d_naive(points::AbstractVector{<:AbstractVector{<:Real}}; max_dim::Int=2)
+    n = length(points)
+    edges = NTuple{2,Int}[]
+    edge_radius = Float64[]
+    triangles = NTuple{3,Int}[]
+    tri_radius = Float64[]
+    sizehint!(edges, max(0, 3n))
+    sizehint!(edge_radius, max(0, 3n))
+    max_dim >= 2 && sizehint!(triangles, max(0, 2n))
+    max_dim >= 2 && sizehint!(tri_radius, max(0, 2n))
+    edge_seen = falses(n, n)
     tol = 1e-10
 
-    for i in 1:n, j in (i + 1):n, k in (j + 1):n
-        cc = _circumcircle_2d(points[i], points[j], points[k]; atol=tol)
-        cc === nothing && continue
-        ux, uy, r2 = cc
-        empty_ball = true
-        for t in 1:n
-            (t == i || t == j || t == k) && continue
-            px = Float64(points[t][1])
-            py = Float64(points[t][2])
-            d2 = (px - ux)^2 + (py - uy)^2
-            if d2 < r2 - tol
-                empty_ball = false
-                break
+    if max_dim >= 2
+        @inbounds for i in 1:n, j in (i + 1):n, k in (j + 1):n
+            cc = _circumcircle_2d(points[i], points[j], points[k]; atol=tol)
+            cc === nothing && continue
+            ux, uy, r2 = cc
+            empty_ball = true
+            for t in 1:n
+                (t == i || t == j || t == k) && continue
+                px = Float64(points[t][1])
+                py = Float64(points[t][2])
+                d2 = (px - ux)^2 + (py - uy)^2
+                if d2 < r2 - tol
+                    empty_ball = false
+                    break
+                end
             end
-        end
-        empty_ball || continue
-        tri = [i, j, k]
-        push!(triangles, tri)
-        tri_radius[(i, j, k)] = sqrt(r2)
-        for (u, v) in ((i, j), (i, k), (j, k))
-            a, b = min(u, v), max(u, v)
-            push!(edge_set, (a, b))
-            if !haskey(edge_radius, (a, b))
-                edge_radius[(a, b)] = _euclidean_distance(points[a], points[b]) / 2
-            end
+            empty_ball || continue
+            push!(triangles, (i, j, k))
+            push!(tri_radius, sqrt(r2))
+            _push_delaunay_edge!(edges, edge_radius, edge_seen, points, i, j)
+            _push_delaunay_edge!(edges, edge_radius, edge_seen, points, i, k)
+            _push_delaunay_edge!(edges, edge_radius, edge_seen, points, j, k)
         end
     end
 
     # Ensure convex-hull edges are included.
-    for i in 1:n, j in (i + 1):n
-        if (i, j) in edge_set
-            continue
-        end
+    @inbounds for i in 1:n, j in (i + 1):n
+        edge_seen[i, j] && continue
         pos = false
         neg = false
         for t in 1:n
@@ -5434,64 +6438,191 @@ function _delaunay_simplices_2d(points::AbstractVector{<:AbstractVector{<:Real}}
             (pos && neg) && break
         end
         if !(pos && neg)
-            push!(edge_set, (i, j))
-            edge_radius[(i, j)] = _euclidean_distance(points[i], points[j]) / 2
+            _push_delaunay_edge!(edges, edge_radius, edge_seen, points, i, j)
         end
     end
 
-    edges = [[e[1], e[2]] for e in collect(edge_set)]
-    sort!(edges; by=e -> (e[1], e[2]))
-    return edges, triangles, edge_radius, tri_radius
+    if !isempty(edges)
+        perm = sortperm(edges; by=e -> (e[1], e[2]))
+        edges = edges[perm]
+        edge_radius = edge_radius[perm]
+    end
+    if !isempty(triangles)
+        perm_t = sortperm(triangles; by=t -> (t[1], t[2], t[3]))
+        triangles = triangles[perm_t]
+        tri_radius = tri_radius[perm_t]
+    end
+    return _PackedDelaunay2D(edges, edge_radius, triangles, tri_radius)
 end
 
-function _delaunay_simplices(points::AbstractVector{<:AbstractVector{<:Real}}; max_dim::Int=2)
+@inline function _delaunay_cache_key(points::AbstractVector{<:AbstractVector{<:Real}},
+                                     max_dim::Int,
+                                     backend::Symbol)
+    return (UInt64(objectid(points)), UInt64(length(points)), UInt64(max_dim), UInt64(hash(backend)))
+end
+
+@inline function _as_packed_delaunay_entry(out::Any)
+    if out isa _PackedDelaunay2DCacheEntry
+        return out
+    elseif out isa _PackedDelaunay2D
+        return _PackedDelaunay2DCacheEntry(out, nothing, nothing)
+    else
+        return nothing
+    end
+end
+
+function _cached_packed_delaunay_entry_2d(points::AbstractVector{<:AbstractVector{<:Real}},
+                                          max_dim::Int,
+                                          backend::Symbol)
+    if !_POINTCLOUD_DELAUNAY_CACHE_ENABLED[]
+        packed = _packed_delaunay_simplices_2d(points; max_dim=max_dim, backend=backend)
+        return _PackedDelaunay2DCacheEntry(packed, nothing, nothing)
+    end
+    key = _delaunay_cache_key(points, max_dim, backend)
+    cached = lock(_POINTCLOUD_DELAUNAY_CACHE_LOCK) do
+        get(_POINTCLOUD_DELAUNAY_CACHE, key, nothing)
+    end
+    entry = _as_packed_delaunay_entry(cached)
+    if entry !== nothing
+        if cached !== entry
+            lock(_POINTCLOUD_DELAUNAY_CACHE_LOCK) do
+                _POINTCLOUD_DELAUNAY_CACHE[key] = entry
+            end
+        end
+        return entry
+    end
+
+    packed = _packed_delaunay_simplices_2d(points; max_dim=max_dim, backend=backend)
+    entry = _PackedDelaunay2DCacheEntry(packed, nothing, nothing)
+    return lock(_POINTCLOUD_DELAUNAY_CACHE_LOCK) do
+        existing = get(_POINTCLOUD_DELAUNAY_CACHE, key, nothing)
+        existing_entry = _as_packed_delaunay_entry(existing)
+        if existing_entry !== nothing
+            if existing !== existing_entry
+                _POINTCLOUD_DELAUNAY_CACHE[key] = existing_entry
+            end
+            return existing_entry
+        end
+        _POINTCLOUD_DELAUNAY_CACHE[key] = entry
+        push!(_POINTCLOUD_DELAUNAY_CACHE_ORDER, key)
+        max_keep = max(1, _POINTCLOUD_DELAUNAY_CACHE_MAX[])
+        while length(_POINTCLOUD_DELAUNAY_CACHE_ORDER) > max_keep
+            old = popfirst!(_POINTCLOUD_DELAUNAY_CACHE_ORDER)
+            delete!(_POINTCLOUD_DELAUNAY_CACHE, old)
+        end
+        return entry
+    end
+end
+
+function _ensure_packed_delaunay_boundaries!(entry::_PackedDelaunay2DCacheEntry,
+                                             n::Int,
+                                             max_dim::Int)
+    if max_dim >= 1 && entry.edge_boundary === nothing
+        entry.edge_boundary = _edge_boundary_matrix(n, entry.packed.edges)
+    end
+    if max_dim >= 2 && entry.tri_boundary === nothing
+        entry.tri_boundary = _triangle_boundary_matrix_from_edges(n, entry.packed.edges, entry.packed.triangles)
+    end
+    return entry
+end
+
+function _packed_delaunay_simplices_2d(points::AbstractVector{<:AbstractVector{<:Real}};
+                                       max_dim::Int=2,
+                                       backend::Symbol=:auto)
+    if backend != :naive && _have_pointcloud_delaunay_backend()
+        impl = _POINTCLOUD_DELAUNAY_2D_IMPL[]
+        out = impl === nothing ? nothing : impl(points; max_dim=max_dim)
+        if out !== nothing
+            return out
+        end
+    end
+    return _packed_delaunay_simplices_2d_naive(points; max_dim=max_dim)
+end
+
+function _packed_delaunay_entry(points::AbstractVector{<:AbstractVector{<:Real}},
+                                spec::FiltrationSpec;
+                                max_dim::Int=2)
     n = length(points)
     n == 0 && error("PointCloud has no points.")
     d = length(points[1])
     if d == 1
-        edges, triangles, edge_radius, tri_radius = _delaunay_simplices_1d(points)
+        packed = _packed_delaunay_simplices_1d(points; max_dim=max_dim)
+        return _PackedDelaunay2DCacheEntry(packed, nothing, nothing)
     elseif d == 2
-        edges, triangles, edge_radius, tri_radius = _delaunay_simplices_2d(points)
+        backend = _pointcloud_delaunay_backend(spec)
+        return _cached_packed_delaunay_entry_2d(points, max_dim, backend)
     else
         error("Delaunay filtrations currently support only 1D/2D point clouds (got dimension $d).")
     end
+end
 
-    simplices = Vector{Vector{Vector{Int}}}()
-    push!(simplices, [[i] for i in 1:n])
-    if max_dim >= 1
-        push!(simplices, edges)
-    end
-    if max_dim >= 2
-        push!(simplices, triangles)
-    end
-    return simplices, edge_radius, tri_radius
+@inline function _packed_delaunay_simplices(points::AbstractVector{<:AbstractVector{<:Real}},
+                                            spec::FiltrationSpec;
+                                            max_dim::Int=2)
+    return _packed_delaunay_entry(points, spec; max_dim=max_dim).packed
 end
 
 function _core_numbers(n::Int, edges::AbstractVector{<:Tuple{Int,Int}})
+    n <= 0 && return Int[]
+
     adj = [Int[] for _ in 1:n]
-    for (u, v) in edges
+    deg = zeros(Int, n)
+    @inbounds for (u, v) in edges
+        u == v && continue
         push!(adj[u], v)
         push!(adj[v], u)
+        deg[u] += 1
+        deg[v] += 1
     end
-    deg = [length(adj[v]) for v in 1:n]
-    alive = trues(n)
-    core = zeros(Int, n)
-    remaining = n
-    k = 0
-    while remaining > 0
-        peeled = false
-        for v in 1:n
-            if alive[v] && deg[v] <= k
-                alive[v] = false
-                core[v] = k
-                remaining -= 1
-                peeled = true
-                for w in adj[v]
-                    alive[w] && (deg[w] -= 1)
-                end
+    isempty(deg) && return deg
+    maxdeg = maximum(deg)
+    maxdeg == 0 && return deg
+
+    # Batagelj-Zaversnik linear-time k-core decomposition.
+    bin = zeros(Int, maxdeg + 1) # bin[d+1] stores bucket start for degree d.
+    @inbounds for v in 1:n
+        bin[deg[v] + 1] += 1
+    end
+    start = 1
+    @inbounds for d in 0:maxdeg
+        c = bin[d + 1]
+        bin[d + 1] = start
+        start += c
+    end
+
+    pos = Vector{Int}(undef, n)
+    vert = Vector{Int}(undef, n)
+    @inbounds for v in 1:n
+        d = deg[v]
+        p = bin[d + 1]
+        pos[v] = p
+        vert[p] = v
+        bin[d + 1] = p + 1
+    end
+    @inbounds for d in maxdeg:-1:1
+        bin[d + 1] = bin[d]
+    end
+    bin[1] = 1
+
+    core = copy(deg)
+    @inbounds for i in 1:n
+        v = vert[i]
+        dv = core[v]
+        for u in adj[v]
+            du = core[u]
+            du > dv || continue
+            pu = pos[u]
+            pw = bin[du + 1]
+            w = vert[pw]
+            if u != w
+                vert[pu] = w
+                pos[w] = pu
+                vert[pw] = u
+                pos[u] = pw
             end
+            bin[du + 1] += 1
+            core[u] = du - 1
         end
-        peeled || (k += 1)
     end
     return core
 end
@@ -5504,12 +6635,12 @@ function _core_edges_from_point_cloud(points::AbstractVector{<:AbstractVector{<:
     approx_candidates = _pointcloud_nn_approx_candidates(spec)
     if haskey(spec.params, :radius)
         r = Float64(spec.params[:radius])
-        edges, _ = _point_cloud_radius_graph(points, r; backend=backend, approx_candidates=approx_candidates)
+        edges = _point_cloud_radius_edges(points, r; backend=backend, approx_candidates=approx_candidates)
         return edges
     end
     k = Int(get(spec.params, :knn, 8))
     k = max(1, min(k, n - 1))
-    edges, _, _ = _point_cloud_knn_graph(points, k; backend=backend, approx_candidates=approx_candidates)
+    edges = _point_cloud_knn_edges(points, k; backend=backend, approx_candidates=approx_candidates)
     return edges
 end
 
@@ -5595,6 +6726,31 @@ function _graph_edge_weights(data::GraphData, spec::FiltrationSpec; required::Bo
     end
     required && error("graph filtration requires edge_weights (or GraphData.weights) for metric=:weighted.")
     return fill(1.0, length(data.edges))
+end
+
+@inline function _graph_edge_pair_key(u::Int, v::Int)
+    a = u
+    b = v
+    if b < a
+        a, b = b, a
+    end
+    return (UInt64(a) << 32) | UInt64(b)
+end
+
+function _graph_edge_weight_lookup_table(edges::AbstractVector{<:Tuple{Int,Int}},
+                                         weights::AbstractVector{<:Real})
+    length(weights) == length(edges) || error("edge_weights length mismatch.")
+    tbl = Dict{UInt64,Float64}()
+    sizehint!(tbl, length(edges))
+    @inbounds for idx in eachindex(edges)
+        u, v = edges[idx]
+        tbl[_graph_edge_pair_key(u, v)] = Float64(weights[idx])
+    end
+    return tbl
+end
+
+@inline function _graph_edge_weight_lookup(tbl::Dict{UInt64,Float64}, u::Int, v::Int)
+    return get(tbl, _graph_edge_pair_key(u, v), Inf)
 end
 
 function _graph_adj_unweighted(n::Int, edges::Vector{Tuple{Int,Int}})
@@ -6255,6 +7411,102 @@ function _enumerate_cliques_k_intersection(packed::_PackedEdgeList,
     return out
 end
 
+function _enumerate_triangles_intersection(adj_lists::Vector{Vector{Int}},
+                                           spec::FiltrationSpec,
+                                           total_before::BigInt)
+    n = length(adj_lists)
+    out = NTuple{3,Int}[]
+    max_simp = _construction_max_simplices(spec)
+    marks = zeros(UInt32, n)
+    stamp = UInt32(0)
+
+    @inbounds for a in 1:(n - 2)
+        stamp += UInt32(1)
+        if stamp == UInt32(0)
+            fill!(marks, UInt32(0))
+            stamp = UInt32(1)
+        end
+        for w in adj_lists[a]
+            w > a && (marks[w] = stamp)
+        end
+        for b in adj_lists[a]
+            b > a || continue
+            for c in adj_lists[b]
+                c > b || continue
+                marks[c] == stamp || continue
+                if max_simp !== nothing && total_before + big(length(out) + 1) > big(max_simp)
+                    throw(ArgumentError("Ingestion construction budget exceeded during clique triangle enumeration at simplex dimension 2: count=$(total_before + big(length(out) + 1)) > max_simplices=$(max_simp)."))
+                end
+                push!(out, (a, b, c))
+            end
+        end
+    end
+    return out
+end
+
+function _enumerate_triangles_intersection(packed::_PackedEdgeList,
+                                           spec::FiltrationSpec,
+                                           total_before::BigInt)
+    n = packed.n
+    out = NTuple{3,Int}[]
+    max_simp = _construction_max_simplices(spec)
+    marks = zeros(UInt32, n)
+    stamp = UInt32(0)
+
+    @inbounds for a in 1:(n - 2)
+        stamp += UInt32(1)
+        if stamp == UInt32(0)
+            fill!(marks, UInt32(0))
+            stamp = UInt32(1)
+        end
+        lo_a = packed.offsets[a]
+        hi_a = packed.offsets[a + 1] - 1
+        for ptr in lo_a:hi_a
+            w = packed.nbrs[ptr]
+            w > a && (marks[w] = stamp)
+        end
+        for ptr_b in lo_a:hi_a
+            b = packed.nbrs[ptr_b]
+            b > a || continue
+            lo_b = packed.offsets[b]
+            hi_b = packed.offsets[b + 1] - 1
+            for ptr_c in lo_b:hi_b
+                c = packed.nbrs[ptr_c]
+                c > b || continue
+                marks[c] == stamp || continue
+                if max_simp !== nothing && total_before + big(length(out) + 1) > big(max_simp)
+                    throw(ArgumentError("Ingestion construction budget exceeded during clique triangle enumeration at simplex dimension 2: count=$(total_before + big(length(out) + 1)) > max_simplices=$(max_simp)."))
+                end
+                push!(out, (a, b, c))
+            end
+        end
+    end
+    return out
+end
+
+function _enumerate_triangles_combinations(adj::BitMatrix,
+                                           n::Int,
+                                           spec::FiltrationSpec,
+                                           total_before::BigInt;
+                                           context::AbstractString="clique")
+    _construction_precheck_combination_candidates!(n, 3, total_before, spec; context=context)
+    out = NTuple{3,Int}[]
+    max_simp = _construction_max_simplices(spec)
+    @inbounds for a in 1:(n - 2)
+        for b in (a + 1):(n - 1)
+            adj[a, b] || continue
+            for c in (b + 1):n
+                (adj[a, c] && adj[b, c]) || continue
+                if max_simp !== nothing && total_before + big(length(out) + 1) > big(max_simp)
+                    throw(ArgumentError("Ingestion construction budget exceeded during $(context) enumeration at simplex dimension 2: count=$(total_before + big(length(out) + 1)) > max_simplices=$(max_simp)."))
+                end
+                push!(out, (a, b, c))
+            end
+        end
+    end
+    return out
+end
+
 function _enumerate_cliques_k_combinations(adj::BitMatrix,
                                            n::Int,
                                            k::Int,
@@ -6406,6 +7658,40 @@ function _enumerate_cliques_k_cached(edges::AbstractVector{<:Tuple{Int,Int}},
     return sims, packed, adj_lists
 end
 
+function _enumerate_triangles_cached(edges::AbstractVector{<:Tuple{Int,Int}},
+                                     n::Int,
+                                     spec::FiltrationSpec,
+                                     total_before::BigInt;
+                                     context::AbstractString="clique",
+                                     packed::Union{Nothing,_PackedEdgeList}=nothing,
+                                     adj_lists::Union{Nothing,Vector{Vector{Int}}}=nothing)
+    mode = _graph_clique_enum_mode()
+    use_intersection = if mode == :intersection
+        true
+    elseif mode == :combinations
+        false
+    else
+        !_graph_clique_auto_prefers_combinations(n, length(edges), 3, spec, total_before)
+    end
+    if use_intersection
+        if _select_packed_edge_list_backend(edges, n, 3)
+            packed2 = packed === nothing ? _pack_edge_list(n, edges) : packed
+            tris = _enumerate_triangles_intersection(packed2, spec, total_before)
+            return tris, packed2, adj_lists
+        end
+        adj2 = adj_lists === nothing ? _graph_adjacency_lists_sorted(n, edges) : adj_lists
+        tris = _enumerate_triangles_intersection(adj2, spec, total_before)
+        return tris, packed, adj2
+    end
+    adj = falses(n, n)
+    @inbounds for (u, v) in edges
+        adj[u, v] = true
+        adj[v, u] = true
+    end
+    tris = _enumerate_triangles_combinations(adj, n, spec, total_before; context=context)
+    return tris, packed, adj_lists
+end
+
 function _graph_lifted_complex(data::GraphData,
                                spec::FiltrationSpec,
                                vertex_grades::Vector{<:Tuple};
@@ -6427,20 +7713,79 @@ function _graph_lifted_complex(data::GraphData,
         construction.collapse == :none || error("construction.collapse=$(construction.collapse) is unsupported for graph lower-star ingestion.")
         construction.sparsify == :none || error("construction.sparsify=$(construction.sparsify) is unsupported for graph lower-star ingestion.")
         _construction_check_max_edges!(length(edges), spec)
-        simplices0 = [[i] for i in 1:n]
-        simplices1 = [[u, v] for (u, v) in edges]
-        for (u, v) in edges
-            gg = _simplex_aggregate([vertex_grades[u], vertex_grades[v]], agg)
-            push!(grades, ntuple(i -> Float64(gg[i]), N))
+        ne = length(edges)
+        total = big(n) + big(ne)
+        _construction_check_max_simplices!(total, 1, spec)
+        packed_edges = Vector{NTuple{2,Int}}(undef, ne)
+        @inbounds for idx in eachindex(edges)
+            u, v = edges[idx]
+            packed_edges[idx] = (u, v)
         end
-        _construction_check_max_simplices!(big(n) + big(length(edges)), 1, spec)
-        simplices = [simplices0, simplices1]
-        return _materialize_simplicial_output(simplices, grades, spec; return_simplex_tree=return_simplex_tree)
+        out_grades = Vector{NTuple{N,Float64}}(undef, n + ne)
+        @inbounds for i in 1:n
+            out_grades[i] = grades[i]
+        end
+        t = n + 1
+        @inbounds for idx in eachindex(packed_edges)
+            u, v = packed_edges[idx]
+            out_grades[t] = _aggregate_tuple_pair(grades, u, v, agg)
+            t += 1
+        end
+        return _materialize_point_cloud_dim01(
+            n, true, packed_edges, out_grades, spec; return_simplex_tree=return_simplex_tree
+        )
     elseif lift == :clique
         construction.collapse == :none || error("construction.collapse=$(construction.collapse) is unsupported for graph clique ingestion.")
         construction.sparsify == :none || error("construction.sparsify=$(construction.sparsify) is unsupported for graph clique ingestion.")
         max_dim = max(Int(get(spec.params, :max_dim, 2)), 1)
         _construction_check_max_edges!(length(edges), spec)
+        if max_dim <= 2
+            packed_edges = Vector{NTuple{2,Int}}(undef, length(edges))
+            @inbounds for idx in eachindex(edges)
+                u, v = edges[idx]
+                packed_edges[idx] = (u, v)
+            end
+
+            total = big(n) + big(length(packed_edges))
+            _construction_check_max_simplices!(total, 1, spec)
+            triangles = NTuple{3,Int}[]
+            if max_dim >= 2
+                triangles, _, _ = _enumerate_triangles_cached(
+                    edges, n, spec, total;
+                    context="clique triangles",
+                    packed=nothing,
+                    adj_lists=nothing,
+                )
+                total += length(triangles)
+                _construction_check_max_simplices!(total, 2, spec)
+            end
+
+            nt = length(triangles)
+            out_grades = Vector{NTuple{N,Float64}}(undef, n + length(packed_edges) + nt)
+            @inbounds for i in 1:n
+                out_grades[i] = grades[i]
+            end
+            t = n + 1
+            @inbounds for idx in eachindex(packed_edges)
+                u, v = packed_edges[idx]
+                out_grades[t] = _aggregate_tuple_pair(grades, u, v, agg)
+                t += 1
+            end
+            if max_dim >= 2
+                @inbounds for idx in eachindex(triangles)
+                    a, b, c = triangles[idx]
+                    out_grades[t] = _aggregate_tuple_triple(grades, a, b, c, agg)
+                    t += 1
+                end
+                return _materialize_point_cloud_dim012(
+                    n, packed_edges, triangles, out_grades, spec; return_simplex_tree=return_simplex_tree
+                )
+            end
+            return _materialize_point_cloud_dim01(
+                n, true, packed_edges, out_grades, spec; return_simplex_tree=return_simplex_tree
+            )
+        end
+
         simplices = Vector{Vector{Vector{Int}}}(undef, max_dim + 1)
         simplices[1] = [[i] for i in 1:n]
         packed = nothing
@@ -6459,8 +7804,13 @@ function _graph_lifted_complex(data::GraphData,
         end
         for k in 2:max_dim+1
             for s in simplices[k]
-                gg = _simplex_aggregate([vertex_grades[v] for v in s], agg)
-                push!(grades, ntuple(i -> Float64(gg[i]), N))
+                if length(s) == 2
+                    push!(grades, _aggregate_tuple_pair(grades, s[1], s[2], agg))
+                elseif length(s) == 3
+                    push!(grades, _aggregate_tuple_triple(grades, s[1], s[2], s[3], agg))
+                else
+                    push!(grades, _aggregate_tuple_indexed(grades, s, agg))
+                end
             end
         end
         return _materialize_simplicial_output(simplices, grades, spec; return_simplex_tree=return_simplex_tree)
@@ -6479,30 +7829,30 @@ function _graph_weight_threshold_complex(data::GraphData, spec::FiltrationSpec;
         construction.collapse == :none || error("construction.collapse=$(construction.collapse) is unsupported for graph weight-threshold ingestion.")
         construction.sparsify == :none || error("construction.sparsify=$(construction.sparsify) is unsupported for graph weight-threshold ingestion.")
         _construction_check_max_edges!(length(edges), spec)
-        grades = NTuple{1,Float64}[]
-        for _ in 1:n
-            push!(grades, (0.0,))
+        ne = length(edges)
+        total = big(n) + big(ne)
+        _construction_check_max_simplices!(total, 1, spec)
+        packed_edges = Vector{NTuple{2,Int}}(undef, ne)
+        @inbounds for idx in eachindex(edges)
+            u, v = edges[idx]
+            packed_edges[idx] = (u, v)
         end
-        simplices0 = [[i] for i in 1:n]
-        simplices1 = [[u, v] for (u, v) in edges]
-        for w in weights
-            push!(grades, (Float64(w),))
+        grades = Vector{NTuple{1,Float64}}(undef, n + ne)
+        @inbounds for i in 1:n
+            grades[i] = (0.0,)
         end
-        _construction_check_max_simplices!(big(n) + big(length(edges)), 1, spec)
-        simplices = [simplices0, simplices1]
-        return _materialize_simplicial_output(simplices, grades, spec; return_simplex_tree=return_simplex_tree)
+        @inbounds for idx in 1:ne
+            grades[n + idx] = (Float64(weights[idx]),)
+        end
+        return _materialize_point_cloud_dim01(
+            n, true, packed_edges, grades, spec; return_simplex_tree=return_simplex_tree
+        )
     elseif lift == :clique
         construction.collapse == :none || error("construction.collapse=$(construction.collapse) is unsupported for graph weight-threshold clique ingestion.")
         construction.sparsify == :none || error("construction.sparsify=$(construction.sparsify) is unsupported for graph weight-threshold clique ingestion.")
         max_dim = max(Int(get(spec.params, :max_dim, 2)), 1)
         _construction_check_max_edges!(length(edges), spec)
-        ew = fill(Inf, n, n)
-        for idx in eachindex(edges)
-            u, v = edges[idx]
-            w = Float64(weights[idx])
-            ew[u, v] = w
-            ew[v, u] = w
-        end
+        weight_tbl = _graph_edge_weight_lookup_table(edges, weights)
         simplices = Vector{Vector{Vector{Int}}}(undef, max_dim + 1)
         simplices[1] = [[i] for i in 1:n]
         grades = NTuple{1,Float64}[(0.0,) for _ in 1:n]
@@ -6517,11 +7867,22 @@ function _graph_weight_threshold_complex(data::GraphData, spec::FiltrationSpec;
                 adj_lists=adj_lists,
             )
             for comb in sims
-                maxw = 0.0
-                for i in 1:k
-                    for j in (i+1):k
-                        maxw = max(maxw, ew[comb[i], comb[j]])
+                maxw = if k == 2
+                    _graph_edge_weight_lookup(weight_tbl, comb[1], comb[2])
+                elseif k == 3
+                    w12 = _graph_edge_weight_lookup(weight_tbl, comb[1], comb[2])
+                    w13 = _graph_edge_weight_lookup(weight_tbl, comb[1], comb[3])
+                    w23 = _graph_edge_weight_lookup(weight_tbl, comb[2], comb[3])
+                    max(w12, max(w13, w23))
+                else
+                    wmax = 0.0
+                    @inbounds for i in 1:k
+                        ci = comb[i]
+                        for j in (i + 1):k
+                            wmax = max(wmax, _graph_edge_weight_lookup(weight_tbl, ci, comb[j]))
+                        end
                     end
+                    wmax
                 end
                 push!(grades, (maxw,))
             end
@@ -6551,7 +7912,7 @@ function _graded_complex_from_point_cloud_delaunay_highdim_fallback(data::PointC
         error("Delaunay filtrations currently support only 1D/2D point clouds (got dimension $d). Set highdim_policy=:rips to enable higher-dimensional fallback.")
     end
 
-    fallback_params = _filter_params(spec.params, [:highdim_policy])
+    fallback_params = _filter_params(spec.params, [:highdim_policy, :delaunay_backend])
     fallback_spec = FiltrationSpec(; kind=:function_rips, fallback_params...)
     if function_style
         return _graded_complex_from_point_cloud(data, fallback_spec; return_simplex_tree=return_simplex_tree)
@@ -6588,54 +7949,85 @@ function _graded_complex_from_point_cloud_delaunay(data::PointCloud,
 
     max_dim = Int(get(spec.params, :max_dim, 2))
     max_dim = min(max_dim, 2)
-    simplices, edge_radius, tri_radius = _delaunay_simplices(points; max_dim=max_dim)
+    entry = _packed_delaunay_entry(points, spec; max_dim=max_dim)
+    packed = entry.packed
     vals = _point_vertex_values(points, spec)
     agg = get(spec.params, :simplex_agg, :max)
-    grades = if function_style
-        Vector{NTuple{2,Float64}}()
-    else
-        Vector{NTuple{1,Float64}}()
+    n = length(points)
+    ne = max_dim >= 1 ? length(packed.edges) : 0
+    nt = max_dim >= 2 ? length(packed.triangles) : 0
+    if return_simplex_tree
+        if function_style
+            return _materialize_point_cloud_packed_simplex_tree(
+                n, max_dim, packed.edges, packed.triangles, spec, NTuple{2,Float64},
+                v -> (0.0, vals[v]),
+                (idx, i, j) -> (packed.edge_radius[idx], _aggregate_pair(Float64(vals[i]), Float64(vals[j]), agg)),
+                (idx, i, j, k) -> (packed.tri_radius[idx], _aggregate_triple(Float64(vals[i]), Float64(vals[j]), Float64(vals[k]), agg)),
+            )
+        end
+        return _materialize_point_cloud_packed_simplex_tree(
+            n, max_dim, packed.edges, packed.triangles, spec, NTuple{1,Float64},
+            v -> (vals[v],),
+            (_idx, i, j) -> (_aggregate_pair(Float64(vals[i]), Float64(vals[j]), agg),),
+            (_idx, i, j, k) -> (_aggregate_triple(Float64(vals[i]), Float64(vals[j]), Float64(vals[k]), agg),),
+        )
     end
 
+    grades = if function_style
+        Vector{NTuple{2,Float64}}(undef, n + ne + nt)
+    else
+        Vector{NTuple{1,Float64}}(undef, n + ne + nt)
+    end
+
+    t = 1
     # Vertices
-    for s in simplices[1]
-        v = s[1]
+    @inbounds for v in 1:n
         if function_style
-            push!(grades, (0.0, vals[v]))
+            grades[t] = (0.0, vals[v])
         else
-            push!(grades, (vals[v],))
+            grades[t] = (vals[v],)
         end
+        t += 1
     end
     # Edges
-    if length(simplices) >= 2
-        for s in simplices[2]
-            i, j = s[1], s[2]
-            a, b = min(i, j), max(i, j)
-            r = get(edge_radius, (a, b), _euclidean_distance(points[a], points[b]) / 2)
+    if max_dim >= 1
+        @inbounds for idx in 1:ne
+            i, j = packed.edges[idx]
+            r = packed.edge_radius[idx]
             f = _aggregate_pair(Float64(vals[i]), Float64(vals[j]), agg)
             if function_style
-                push!(grades, (r, f))
+                grades[t] = (r, f)
             else
-                push!(grades, (f,))
+                grades[t] = (f,)
             end
+            t += 1
         end
     end
     # Triangles
-    if length(simplices) >= 3
-        for s in simplices[3]
-            i, j, k = s[1], s[2], s[3]
-            key = (i, j, k)
-            r = get(tri_radius, key, 0.0)
+    if max_dim >= 2
+        @inbounds for idx in 1:nt
+            i, j, k = packed.triangles[idx]
+            r = packed.tri_radius[idx]
             f = _aggregate_triple(Float64(vals[i]), Float64(vals[j]), Float64(vals[k]), agg)
             if function_style
-                push!(grades, (r, f))
+                grades[t] = (r, f)
             else
-                push!(grades, (f,))
+                grades[t] = (f,)
             end
+            t += 1
         end
     end
 
-    return _materialize_simplicial_output(simplices, grades, spec; return_simplex_tree=return_simplex_tree)
+    if max_dim >= 1
+        if d == 2 && _POINTCLOUD_DELAUNAY_CACHE_ENABLED[]
+            lock(_POINTCLOUD_DELAUNAY_CACHE_LOCK) do
+                _ensure_packed_delaunay_boundaries!(entry, n, max_dim)
+            end
+        else
+            _ensure_packed_delaunay_boundaries!(entry, n, max_dim)
+        end
+    end
+    return _materialize_point_cloud_packed_with_cached_boundaries(n, max_dim, entry, grades, spec)
 end
 
 function _graded_complex_from_point_cloud_alpha(data::PointCloud,
@@ -6648,35 +8040,56 @@ function _graded_complex_from_point_cloud_alpha(data::PointCloud,
         if policy === :error
             error("Alpha filtrations currently support only 1D/2D point clouds (got dimension $d). Set highdim_policy=:rips to enable higher-dimensional fallback.")
         end
-        fallback_params = _filter_params(spec.params, [:highdim_policy])
+        fallback_params = _filter_params(spec.params, [:highdim_policy, :delaunay_backend])
         fallback_spec = FiltrationSpec(; kind=:rips, fallback_params...)
         return _graded_complex_from_point_cloud(data, fallback_spec; return_simplex_tree=return_simplex_tree)
     end
 
     max_dim = min(Int(get(spec.params, :max_dim, 2)), 2)
-    simplices, edge_radius, tri_radius = _delaunay_simplices(points; max_dim=max_dim)
-    grades = NTuple{1,Float64}[]
-
-    for _ in simplices[1]
-        push!(grades, (0.0,))
-    end
-    if length(simplices) >= 2
-        for s in simplices[2]
-            i, j = s[1], s[2]
-            a, b = min(i, j), max(i, j)
-            r = get(edge_radius, (a, b), _euclidean_distance(points[a], points[b]) / 2)
-            push!(grades, (r,))
-        end
-    end
-    if length(simplices) >= 3
-        for s in simplices[3]
-            i, j, k = s[1], s[2], s[3]
-            r = get(tri_radius, (i, j, k), 0.0)
-            push!(grades, (r,))
-        end
+    entry = _packed_delaunay_entry(points, spec; max_dim=max_dim)
+    packed = entry.packed
+    n = length(points)
+    ne = max_dim >= 1 ? length(packed.edges) : 0
+    nt = max_dim >= 2 ? length(packed.triangles) : 0
+    if return_simplex_tree
+        return _materialize_point_cloud_packed_simplex_tree(
+            n, max_dim, packed.edges, packed.triangles, spec, NTuple{1,Float64},
+            _v -> (0.0,),
+            (idx, _i, _j) -> (packed.edge_radius[idx],),
+            (idx, _i, _j, _k) -> (packed.tri_radius[idx],),
+        )
     end
 
-    return _materialize_simplicial_output(simplices, grades, spec; return_simplex_tree=return_simplex_tree)
+    grades = Vector{NTuple{1,Float64}}(undef, n + ne + nt)
+
+    t = 1
+    @inbounds for _ in 1:n
+        grades[t] = (0.0,)
+        t += 1
+    end
+    if max_dim >= 1
+        @inbounds for idx in 1:ne
+            grades[t] = (packed.edge_radius[idx],)
+            t += 1
+        end
+    end
+    if max_dim >= 2
+        @inbounds for idx in 1:nt
+            grades[t] = (packed.tri_radius[idx],)
+            t += 1
+        end
+    end
+
+    if max_dim >= 1
+        if d == 2 && _POINTCLOUD_DELAUNAY_CACHE_ENABLED[]
+            lock(_POINTCLOUD_DELAUNAY_CACHE_LOCK) do
+                _ensure_packed_delaunay_boundaries!(entry, n, max_dim)
+            end
+        else
+            _ensure_packed_delaunay_boundaries!(entry, n, max_dim)
+        end
+    end
+    return _materialize_point_cloud_packed_with_cached_boundaries(n, max_dim, entry, grades, spec)
 end
 
 @inline function _vertex_degree_scores(n::Int, edges)
@@ -6700,37 +8113,60 @@ function _graded_complex_from_point_cloud_core_delaunay(data::PointCloud,
         if policy === :error
             error("Core-Delaunay filtrations currently support only 1D/2D point clouds (got dimension $d). Set highdim_policy=:rips to enable higher-dimensional fallback.")
         end
-        fallback_params = _filter_params(spec.params, [:highdim_policy])
+        fallback_params = _filter_params(spec.params, [:highdim_policy, :delaunay_backend])
         fallback_spec = FiltrationSpec(; kind=:degree_rips, fallback_params...)
         return _graded_complex_from_point_cloud(data, fallback_spec; return_simplex_tree=return_simplex_tree)
     end
 
     max_dim = min(Int(get(spec.params, :max_dim, 2)), 2)
-    simplices, edge_radius, tri_radius = _delaunay_simplices(points; max_dim=max_dim)
-    edge_cells = (length(simplices) >= 2) ? simplices[2] : Vector{Vector{Int}}()
-    core = _core_numbers(n, NTuple{2,Int}[(e[1], e[2]) for e in edge_cells])
-    grades = NTuple{2,Float64}[]
-
-    for i in 1:n
-        push!(grades, (0.0, Float64(core[i])))
-    end
-    if length(simplices) >= 2
-        for s in simplices[2]
-            i, j = s[1], s[2]
-            a, b = min(i, j), max(i, j)
-            r = get(edge_radius, (a, b), _euclidean_distance(points[a], points[b]) / 2)
-            push!(grades, (r, Float64(max(core[i], core[j]))))
-        end
-    end
-    if length(simplices) >= 3
-        for s in simplices[3]
-            i, j, k = s[1], s[2], s[3]
-            r = get(tri_radius, (i, j, k), 0.0)
-            push!(grades, (r, Float64(max(core[i], max(core[j], core[k])))))
-        end
+    entry = _packed_delaunay_entry(points, spec; max_dim=max_dim)
+    packed = entry.packed
+    core = _core_numbers(n, packed.edges)
+    ne = max_dim >= 1 ? length(packed.edges) : 0
+    nt = max_dim >= 2 ? length(packed.triangles) : 0
+    if return_simplex_tree
+        return _materialize_point_cloud_packed_simplex_tree(
+            n, max_dim, packed.edges, packed.triangles, spec, NTuple{2,Float64},
+            i -> (0.0, Float64(core[i])),
+            (idx, i, j) -> (packed.edge_radius[idx], Float64(max(core[i], core[j]))),
+            (idx, i, j, k) -> (packed.tri_radius[idx], Float64(max(core[i], max(core[j], core[k])))),
+        )
     end
 
-    return _materialize_simplicial_output(simplices, grades, spec; return_simplex_tree=return_simplex_tree)
+    grades = Vector{NTuple{2,Float64}}(undef, n + ne + nt)
+
+    t = 1
+    @inbounds for i in 1:n
+        grades[t] = (0.0, Float64(core[i]))
+        t += 1
+    end
+    if max_dim >= 1
+        @inbounds for idx in 1:ne
+            i, j = packed.edges[idx]
+            r = packed.edge_radius[idx]
+            grades[t] = (r, Float64(max(core[i], core[j])))
+            t += 1
+        end
+    end
+    if max_dim >= 2
+        @inbounds for idx in 1:nt
+            i, j, k = packed.triangles[idx]
+            r = packed.tri_radius[idx]
+            grades[t] = (r, Float64(max(core[i], max(core[j], core[k]))))
+            t += 1
+        end
+    end
+
+    if max_dim >= 1
+        if d == 2 && _POINTCLOUD_DELAUNAY_CACHE_ENABLED[]
+            lock(_POINTCLOUD_DELAUNAY_CACHE_LOCK) do
+                _ensure_packed_delaunay_boundaries!(entry, n, max_dim)
+            end
+        else
+            _ensure_packed_delaunay_boundaries!(entry, n, max_dim)
+        end
+    end
+    return _materialize_point_cloud_packed_with_cached_boundaries(n, max_dim, entry, grades, spec)
 end
 
 function _graded_complex_from_point_cloud_core(data::PointCloud,
@@ -6741,17 +8177,21 @@ function _graded_complex_from_point_cloud_core(data::PointCloud,
     edges = _core_edges_from_point_cloud(points, spec)
     core = _core_numbers(n, edges)
     vals = _point_graph_scalar_values(points, spec)
-    grades = Vector{NTuple{2,Float64}}()
-    for i in 1:n
-        push!(grades, (vals[i], Float64(core[i])))
+    m = length(edges)
+    grades = Vector{NTuple{2,Float64}}(undef, n + m)
+    t = 1
+    @inbounds for i in 1:n
+        grades[t] = (vals[i], Float64(core[i]))
+        t += 1
     end
-    simplices0 = [[i] for i in 1:n]
-    simplices1 = [[u, v] for (u, v) in edges]
-    for (u, v) in edges
-        push!(grades, (max(vals[u], vals[v]), Float64(min(core[u], core[v]))))
+    @inbounds for idx in 1:m
+        u, v = edges[idx]
+        grades[t] = (max(vals[u], vals[v]), Float64(min(core[u], core[v])))
+        t += 1
     end
-    simplices = [simplices0, simplices1]
-    return _materialize_simplicial_output(simplices, grades, spec; return_simplex_tree=return_simplex_tree)
+    return _materialize_point_cloud_dim01(
+        n, true, edges, grades, spec; return_simplex_tree=return_simplex_tree
+    )
 end
 
 function _rips_like_simplices_for_point_cloud(data::PointCloud,
@@ -6780,29 +8220,102 @@ function _rips_like_simplices_for_point_cloud(data::PointCloud,
     return simplices
 end
 
+@inline function _next_combination!(comb::Vector{Int}, n::Int, k::Int)
+    i = k
+    @inbounds while i >= 1 && comb[i] == n - k + i
+        i -= 1
+    end
+    i == 0 && return false
+    @inbounds begin
+        comb[i] += 1
+        for j in (i + 1):k
+            comb[j] = comb[j - 1] + 1
+        end
+    end
+    return true
+end
+
+function _rhomboid_fill_dim_simplices_and_grades!(simplices_k::Vector{Vector{Int}},
+                                                  grades::Vector{NTuple{2,Float64}},
+                                                  vals::Vector{Float64},
+                                                  k::Int)
+    n = length(vals)
+    isempty(simplices_k) && return nothing
+    comb = collect(1:k)
+    out = 1
+    while true
+        s = Vector{Int}(undef, k)
+        vmin = vals[comb[1]]
+        vmax = vmin
+        @inbounds for t in 1:k
+            c = comb[t]
+            s[t] = c
+            v = vals[c]
+            v < vmin && (vmin = v)
+            v > vmax && (vmax = v)
+        end
+        simplices_k[out] = s
+        push!(grades, (vmin, vmax))
+        out += 1
+        _next_combination!(comb, n, k) || break
+    end
+    return nothing
+end
+
 function _graded_complex_from_point_cloud_rhomboid(data::PointCloud,
                                                    spec::FiltrationSpec;
                                                    return_simplex_tree::Bool=false)
     points = data.points
-    simplices = _rips_like_simplices_for_point_cloud(data, spec)
+    construction = _construction_from_params(spec.params)
+    max_dim = Int(get(spec.params, :max_dim, 2))
     vals = _point_vertex_values(points, spec)
+
+    if max_dim <= 1 || construction.sparsify != :none || construction.collapse != :none
+        simplices = _rips_like_simplices_for_point_cloud(data, spec)
+        grades = Vector{NTuple{2,Float64}}()
+        sizehint!(grades, sum(length.(simplices)))
+        for s in simplices[1]
+            v = vals[s[1]]
+            push!(grades, (v, v))
+        end
+        for k in 2:length(simplices)
+            for s in simplices[k]
+                vmin = Float64(vals[s[1]])
+                vmax = vmin
+                @inbounds for t in 2:length(s)
+                    v = Float64(vals[s[t]])
+                    v < vmin && (vmin = v)
+                    v > vmax && (vmax = v)
+                end
+                push!(grades, (vmin, vmax))
+            end
+        end
+        return _materialize_simplicial_output(simplices, grades, spec; return_simplex_tree=return_simplex_tree)
+    end
+
+    n = length(points)
+    simplices = Vector{Vector{Vector{Int}}}(undef, max_dim + 1)
+    simplices[1] = [[i] for i in 1:n]
     grades = Vector{NTuple{2,Float64}}()
-    for s in simplices[1]
-        v = vals[s[1]]
+    sizehint!(grades, n)
+    @inbounds for i in 1:n
+        v = vals[i]
         push!(grades, (v, v))
     end
-    for k in 2:length(simplices)
-        for s in simplices[k]
-            vmin = Float64(vals[s[1]])
-            vmax = vmin
-            @inbounds for t in 2:length(s)
-                v = Float64(vals[s[t]])
-                v < vmin && (vmin = v)
-                v > vmax && (vmax = v)
-            end
-            push!(grades, (vmin, vmax))
-        end
+
+    total = big(n)
+    for k in 2:max_dim+1
+        count_k = _construction_precheck_combination_enumeration!(n, k, total, spec)
+        simplices_k = Vector{Vector{Int}}(undef, count_k)
+        sizehint!(grades, length(grades) + count_k)
+        _rhomboid_fill_dim_simplices_and_grades!(simplices_k, grades, vals, k)
+        simplices[k] = simplices_k
+        total += count_k
     end
+    _construction_check_memory_budget!(
+        _estimate_dense_bytes_from_cell_counts(BigInt[length(s) for s in simplices]),
+        spec,
+    )
     return _materialize_simplicial_output(simplices, grades, spec; return_simplex_tree=return_simplex_tree)
 end
 
@@ -6812,28 +8325,10 @@ function _materialize_point_cloud_dim01(n::Int,
                                         grades::Vector{<:NTuple{N,Float64}},
                                         spec::FiltrationSpec;
                                         return_simplex_tree::Bool=false) where {N}
-    orientation = get(spec.params, :orientation, ntuple(_ -> 1, N))
-    if return_simplex_tree
-        simplices = Vector{Vector{Vector{Int}}}(undef, include_edge_dim ? 2 : 1)
-        simplices[1] = [[i] for i in 1:n]
-        if include_edge_dim
-            simplices[2] = _edge_vectors_from_tuples(edges)
-        end
-        ST = _simplex_tree_multi_from_simplices(simplices, grades)
-        axes = get(spec.params, :axes, _axes_from_simplex_tree(ST; orientation=orientation))
-        return ST, axes, orientation
-    end
-
-    if include_edge_dim
-        cells = [collect(1:n), collect(1:length(edges))]
-        boundaries = SparseMatrixCSC{Int,Int}[_edge_boundary_matrix(n, edges)]
-    else
-        cells = [collect(1:n)]
-        boundaries = SparseMatrixCSC{Int,Int}[]
-    end
-    G = GradedComplex(cells, boundaries, grades)
-    axes = get(spec.params, :axes, _axes_from_grades(grades, N; orientation=orientation))
-    return G, axes, orientation
+    max_dim = include_edge_dim ? 1 : 0
+    return _materialize_point_cloud_packed(
+        n, max_dim, edges, NTuple{3,Int}[], grades, spec; return_simplex_tree=return_simplex_tree
+    )
 end
 
 function _graded_complex_from_point_cloud_lowdim(data::PointCloud,
@@ -6845,6 +8340,7 @@ function _graded_complex_from_point_cloud_lowdim(data::PointCloud,
     construction = _construction_from_params(spec.params)
     max_dim = Int(get(spec.params, :max_dim, 1))
     include_edge_dim = (max_dim >= 1) || (construction.sparsify != :none)
+    rhomboid_edge_only = (kind == :rhomboid)
 
     edges = NTuple{2,Int}[]
     edge_dists = Float64[]
@@ -6856,23 +8352,39 @@ function _graded_complex_from_point_cloud_lowdim(data::PointCloud,
             edges, edge_dists = _apply_construction_collapse_edge_driven(edges, edge_dists, points, construction)
         else
             radius = haskey(spec.params, :radius) ? Float64(spec.params[:radius]) : Inf
-            edges_all, dists_all = _complete_point_cloud_edges_with_dist(points)
-            if isfinite(radius)
-                edges = NTuple{2,Int}[]
-                edge_dists = Float64[]
-                sizehint!(edges, length(edges_all))
-                sizehint!(edge_dists, length(dists_all))
-                @inbounds for idx in eachindex(edges_all)
-                    d = dists_all[idx]
-                    d <= radius || continue
-                    push!(edges, edges_all[idx])
-                    push!(edge_dists, d)
+            if rhomboid_edge_only
+                if isfinite(radius)
+                    edges = _point_cloud_edges_within_radius_edges_only(points, radius)
+                    _construction_check_max_edges!(length(edges), spec)
+                else
+                    edge_count = _combination_count(n, 2)
+                    _construction_check_max_edges!(edge_count, spec)
+                    edges = _complete_point_cloud_edges(n)
                 end
-                _construction_check_max_edges!(length(edges), spec)
             else
-                _construction_check_max_edges!(length(edges_all), spec)
-                edges = edges_all
-                edge_dists = dists_all
+                if isfinite(radius) && _POINTCLOUD_LOWDIM_RADIUS_STREAMING[]
+                    edges, edge_dists = _point_cloud_edges_within_radius(points, radius)
+                    _construction_check_max_edges!(length(edges), spec)
+                else
+                    edges_all, dists_all = _complete_point_cloud_edges_with_dist(points)
+                    if isfinite(radius)
+                        edges = NTuple{2,Int}[]
+                        edge_dists = Float64[]
+                        sizehint!(edges, min(length(edges_all), max(0, 4 * n)))
+                        sizehint!(edge_dists, min(length(dists_all), max(0, 4 * n)))
+                        @inbounds for idx in eachindex(edges_all)
+                            d = dists_all[idx]
+                            d <= radius || continue
+                            push!(edges, edges_all[idx])
+                            push!(edge_dists, d)
+                        end
+                        _construction_check_max_edges!(length(edges), spec)
+                    else
+                        _construction_check_max_edges!(length(edges_all), spec)
+                        edges = edges_all
+                        edge_dists = dists_all
+                    end
+                end
             end
         end
         total = big(n) + big(length(edges))
@@ -7140,7 +8652,8 @@ function _graded_complex_from_point_cloud_dim2_packed(data::PointCloud,
 end
 
 function _graded_complex_from_point_cloud(data::PointCloud, spec::FiltrationSpec;
-                                          return_simplex_tree::Bool=false)
+                                          return_simplex_tree::Bool=false,
+                                          cache::Union{Nothing,EncodingCache}=nothing)
     data2, spec2, _ = _maybe_greedy_perm_reduce(data, spec)
     data = data2
     spec = spec2
@@ -7168,13 +8681,62 @@ function _graded_complex_from_point_cloud(data::PointCloud, spec::FiltrationSpec
         landmarks = get(spec.params, :landmarks, nothing)
         landmarks === nothing && error("landmark_rips requires landmarks.")
         length(landmarks) > 0 || error("landmark_rips: landmarks cannot be empty.")
+        construction_lm = if construction.sparsify == :none && get(spec.params, :radius, nothing) !== nothing
+            ConstructionOptions(;
+                sparsify = :radius,
+                collapse = construction.collapse,
+                output_stage = construction.output_stage,
+                budget = construction.budget,
+            )
+        else
+            construction
+        end
+        radius = get(spec.params, :radius, nothing)
+        include_edge_dim = (max_dim >= 1) || (construction_lm.sparsify != :none)
+        if include_edge_dim &&
+           radius !== nothing &&
+           construction_lm.sparsify == :radius &&
+           construction_lm.collapse == :none &&
+           max_dim <= 1
+            m = length(landmarks)
+            r = Float64(radius)
+            packed = _landmark_radius_subgraph_cached(points, landmarks, r, spec; cache=cache)
+            edges = packed.edges
+            edge_dists = packed.dists
+            _construction_check_max_edges!(length(edges), spec)
+            total = big(m) + big(length(edges))
+            _construction_check_max_simplices!(total, include_edge_dim ? 1 : 0, spec)
+            _construction_check_memory_budget!(_estimate_dense_bytes_from_cell_counts(BigInt[m, include_edge_dim ? length(edges) : 0]), spec)
+            grades = Vector{NTuple{1,Float64}}(undef, m + (include_edge_dim ? length(edges) : 0))
+            t = 1
+            @inbounds for _ in 1:m
+                grades[t] = (0.0,)
+                t += 1
+            end
+            if include_edge_dim
+                @inbounds for d in edge_dists
+                    grades[t] = (d,)
+                    t += 1
+                end
+            end
+            spec_lm = if construction_lm === construction
+                spec
+            else
+                p_lm = _filter_params(spec.params, [:construction])
+                FiltrationSpec(; kind=spec.kind, p_lm..., construction=construction_lm)
+            end
+            return _materialize_point_cloud_dim01(
+                m, include_edge_dim, edges, grades, spec_lm; return_simplex_tree=return_simplex_tree
+            )
+        end
         pts = [points[i] for i in landmarks]
         params2 = _filter_params(spec.params, [:landmarks])
-        params2 = merge(params2, (max_dim = max_dim,))
+        params2 = merge(params2, (max_dim = max_dim, construction = construction_lm))
         return _graded_complex_from_point_cloud(
             PointCloud(pts),
             FiltrationSpec(; kind=:rips, params2...);
             return_simplex_tree=return_simplex_tree,
+            cache=cache,
         )
     end
 
@@ -7479,17 +9041,26 @@ function _graded_complex_from_graph(data::GraphData, spec::FiltrationSpec;
     elseif kind == :core
         vals = _graph_vertex_scalar_values(data, spec; required=false)
         core = _core_numbers(n, edges)
-        grades = NTuple{2,Float64}[]
-        for i in 1:n
-            push!(grades, (vals[i], Float64(core[i])))
+        packed_edges = Vector{NTuple{2,Int}}(undef, length(edges))
+        @inbounds for idx in eachindex(edges)
+            u, v = edges[idx]
+            packed_edges[idx] = (u, v)
         end
-        simplices0 = [[i] for i in 1:n]
-        simplices1 = [[u, v] for (u, v) in edges]
-        for (u, v) in edges
-            push!(grades, (max(vals[u], vals[v]), Float64(min(core[u], core[v]))))
+        m = length(packed_edges)
+        grades = Vector{NTuple{2,Float64}}(undef, n + m)
+        t = 1
+        @inbounds for i in 1:n
+            grades[t] = (vals[i], Float64(core[i]))
+            t += 1
         end
-        simplices = [simplices0, simplices1]
-        return _materialize_simplicial_output(simplices, grades, spec; return_simplex_tree=return_simplex_tree)
+        @inbounds for idx in 1:m
+            u, v = packed_edges[idx]
+            grades[t] = (max(vals[u], vals[v]), Float64(min(core[u], core[v])))
+            t += 1
+        end
+        return _materialize_point_cloud_dim01(
+            n, true, packed_edges, grades, spec; return_simplex_tree=return_simplex_tree
+        )
     elseif kind == :rhomboid
         vals = _graph_vertex_scalar_values(data, spec; required=true)
         construction = _construction_from_params(spec.params)
@@ -7545,7 +9116,7 @@ function _graded_complex_from_graph(data::GraphData, spec::FiltrationSpec;
     end
 end
 
-function _distance_transform(mask::AbstractArray{Bool})
+function _distance_transform_bruteforce(mask::AbstractArray{Bool})
     dims = size(mask)
     N = length(dims)
     coords = CartesianIndices(mask)
@@ -7572,88 +9143,445 @@ function _distance_transform(mask::AbstractArray{Bool})
     return out
 end
 
+@inline function _edt_1d_squared!(out::Vector{Float64},
+                                  f::Vector{Float64},
+                                  v::Vector{Int},
+                                  z::Vector{Float64})
+    n = length(f)
+    n == 0 && return out
+    first_finite = 0
+    @inbounds for i in 1:n
+        if isfinite(f[i])
+            first_finite = i
+            break
+        end
+    end
+    if first_finite == 0
+        fill!(out, Inf)
+        return out
+    end
+
+    k = 1
+    v[1] = first_finite
+    z[1] = -Inf
+    z[2] = Inf
+
+    @inbounds for q in (first_finite + 1):n
+        fq = f[q]
+        isfinite(fq) || continue
+        q0 = q - 1
+        while true
+            p = v[k]
+            p0 = p - 1
+            s = ((fq + q0 * q0) - (f[p] + p0 * p0)) / (2.0 * (q - p))
+            if s > z[k]
+                k += 1
+                v[k] = q
+                z[k] = s
+                z[k + 1] = Inf
+                break
+            end
+            k == 1 && break
+            k -= 1
+        end
+        if k == 1
+            p = v[1]
+            p0 = p - 1
+            s = ((fq + q0 * q0) - (f[p] + p0 * p0)) / (2.0 * (q - p))
+            if s <= z[1]
+                v[1] = q
+                z[1] = -Inf
+                z[2] = Inf
+            end
+        end
+    end
+
+    kk = 1
+    @inbounds for q in 1:n
+        q0 = q - 1
+        while z[kk + 1] < q0
+            kk += 1
+        end
+        dq = q - v[kk]
+        out[q] = dq * dq + f[v[kk]]
+    end
+    return out
+end
+
+function _distance_transform_2d(mask::AbstractMatrix{Bool})
+    nx, ny = size(mask)
+    (nx == 0 || ny == 0) && return zeros(Float64, size(mask))
+    any(mask) || return fill(Inf, size(mask))
+    all(mask) && return zeros(Float64, size(mask))
+
+    tmp = Matrix{Float64}(undef, nx, ny)
+    out = Matrix{Float64}(undef, nx, ny)
+
+    row_f = Vector{Float64}(undef, nx)
+    row_out = Vector{Float64}(undef, nx)
+    row_v = Vector{Int}(undef, nx)
+    row_z = Vector{Float64}(undef, nx + 1)
+
+    @inbounds for j in 1:ny
+        for i in 1:nx
+            row_f[i] = mask[i, j] ? 0.0 : Inf
+        end
+        _edt_1d_squared!(row_out, row_f, row_v, row_z)
+        for i in 1:nx
+            tmp[i, j] = row_out[i]
+        end
+    end
+
+    col_f = Vector{Float64}(undef, ny)
+    col_out = Vector{Float64}(undef, ny)
+    col_v = Vector{Int}(undef, ny)
+    col_z = Vector{Float64}(undef, ny + 1)
+    @inbounds for i in 1:nx
+        for j in 1:ny
+            col_f[j] = tmp[i, j]
+        end
+        _edt_1d_squared!(col_out, col_f, col_v, col_z)
+        for j in 1:ny
+            out[i, j] = sqrt(col_out[j])
+        end
+    end
+
+    return out
+end
+
+function _distance_transform(mask::AbstractArray{Bool})
+    ndims(mask) == 2 && return _distance_transform_2d(mask)
+    return _distance_transform_bruteforce(mask)
+end
+
+@inline function _distance_transform_cache_key(mask::AbstractArray{Bool})
+    return (
+        :image_distance_transform,
+        UInt(objectid(mask)),
+        Tuple(size(mask)),
+        UInt(hash(mask)),
+        eltype(mask),
+    )
+end
+
+function _distance_transform_cached(mask::AbstractArray{Bool};
+                                   cache::Union{Nothing,EncodingCache}=nothing)
+    cache === nothing && return _distance_transform(mask)
+    key = _distance_transform_cache_key(mask)
+    cached = _get_geometry_cached(cache, key)
+    if cached isa AbstractArray{<:Real} && size(cached) == size(mask)
+        return cached
+    end
+    dist = _distance_transform(mask)
+    return _set_geometry_cached!(cache, key, dist)
+end
+
+function _cubical_structure_2d(dims::NTuple{2,Int})
+    nx, ny = dims
+    TCell = Tuple{NTuple{2,Int},NTuple{2,Int}}
+    mask0 = (0, 0)
+    mask10 = (1, 0)
+    mask01 = (0, 1)
+    mask11 = (1, 1)
+
+    nv = nx * ny
+    neh = max(nx - 1, 0) * ny
+    nev = nx * max(ny - 1, 0)
+    ne = neh + nev
+    nf = max(nx - 1, 0) * max(ny - 1, 0)
+
+    @inline vid(i::Int, j::Int) = i + (j - 1) * nx
+    @inline hid(i::Int, j::Int) = i + (j - 1) * (nx - 1)
+    @inline vidx(i::Int, j::Int) = neh + i + (j - 1) * nx
+    @inline fid(i::Int, j::Int) = i + (j - 1) * (nx - 1)
+
+    cells0 = Vector{TCell}(undef, nv)
+    t = 1
+    @inbounds for j in 1:ny
+        for i in 1:nx
+            cells0[t] = ((i, j), mask0)
+            t += 1
+        end
+    end
+
+    cells1 = Vector{TCell}(undef, ne)
+    t = 1
+    @inbounds for j in 1:ny
+        for i in 1:(nx - 1)
+            cells1[t] = ((i, j), mask10)
+            t += 1
+        end
+    end
+    @inbounds for j in 1:(ny - 1)
+        for i in 1:nx
+            cells1[t] = ((i, j), mask01)
+            t += 1
+        end
+    end
+
+    cells2 = Vector{TCell}(undef, nf)
+    t = 1
+    @inbounds for j in 1:(ny - 1)
+        for i in 1:(nx - 1)
+            cells2[t] = ((i, j), mask11)
+            t += 1
+        end
+    end
+
+    I1 = Vector{Int}(undef, 2 * ne)
+    J1 = Vector{Int}(undef, 2 * ne)
+    V1 = Vector{Int}(undef, 2 * ne)
+    t = 1
+    @inbounds for j in 1:ny
+        for i in 1:(nx - 1)
+            col = hid(i, j)
+            I1[t] = vid(i, j); J1[t] = col; V1[t] = 1; t += 1
+            I1[t] = vid(i + 1, j); J1[t] = col; V1[t] = -1; t += 1
+        end
+    end
+    @inbounds for j in 1:(ny - 1)
+        for i in 1:nx
+            col = vidx(i, j)
+            I1[t] = vid(i, j); J1[t] = col; V1[t] = 1; t += 1
+            I1[t] = vid(i, j + 1); J1[t] = col; V1[t] = -1; t += 1
+        end
+    end
+    b1 = sparse(I1, J1, V1, nv, ne)
+
+    I2 = Vector{Int}(undef, 4 * nf)
+    J2 = Vector{Int}(undef, 4 * nf)
+    V2 = Vector{Int}(undef, 4 * nf)
+    t = 1
+    @inbounds for j in 1:(ny - 1)
+        for i in 1:(nx - 1)
+            col = fid(i, j)
+            # axis 1 faces: low/high vertical edges.
+            I2[t] = vidx(i, j); J2[t] = col; V2[t] = 1; t += 1
+            I2[t] = vidx(i + 1, j); J2[t] = col; V2[t] = -1; t += 1
+            # axis 2 faces: low/high horizontal edges.
+            I2[t] = hid(i, j); J2[t] = col; V2[t] = -1; t += 1
+            I2[t] = hid(i, j + 1); J2[t] = col; V2[t] = 1; t += 1
+        end
+    end
+    b2 = sparse(I2, J2, V2, ne, nf)
+
+    cells_by_dim = Vector{Vector{TCell}}(undef, 3)
+    cells_by_dim[1] = cells0
+    cells_by_dim[2] = cells1
+    cells_by_dim[3] = cells2
+    boundaries = SparseMatrixCSC{Int,Int}[b1, b2]
+    return (cells_by_dim=cells_by_dim, cell_index=nothing, boundaries=boundaries)
+end
+
 function _cubical_structure(dims::NTuple{N,Int};
                             cache::Union{Nothing,EncodingCache}=nothing) where {N}
     key = Tuple(dims)
     if cache !== nothing
         Base.lock(cache.lock)
         try
-            cached = get(cache.cubical, key, nothing)
-            cached === nothing || return cached
+            entry = get(cache.cubical, key, nothing)
+            entry === nothing || return entry.value
         finally
             Base.unlock(cache.lock)
         end
     end
-    cells_by_dim = Vector{Vector{Tuple{NTuple{N,Int},NTuple{N,Int}}}}(undef, N + 1)
-    cell_index = Vector{Dict{Tuple{NTuple{N,Int},NTuple{N,Int}},Int}}(undef, N + 1)
-    for k in 0:N
-        cells_by_dim[k+1] = Tuple{NTuple{N,Int},NTuple{N,Int}}[]
-        cell_index[k+1] = Dict{Tuple{NTuple{N,Int},NTuple{N,Int}},Int}()
-    end
 
-    for mask_vec in _combinations(N, 0)
-        mask = ntuple(i -> 0, N)
-        for coords in CartesianIndices(Tuple(dims))
-            origin = ntuple(i -> coords[i], N)
-            key2 = (origin, mask)
-            push!(cells_by_dim[1], key2)
+    cached = if N == 2 && _CUBICAL_2D_FASTPATH[]
+        _cubical_structure_2d((dims[1], dims[2]))
+    else
+        cells_by_dim = Vector{Vector{Tuple{NTuple{N,Int},NTuple{N,Int}}}}(undef, N + 1)
+        cell_index = Vector{Dict{Tuple{NTuple{N,Int},NTuple{N,Int}},Int}}(undef, N + 1)
+        for k in 0:N
+            cells_by_dim[k+1] = Tuple{NTuple{N,Int},NTuple{N,Int}}[]
+            cell_index[k+1] = Dict{Tuple{NTuple{N,Int},NTuple{N,Int}},Int}()
         end
-    end
-    for k in 1:N
-        for mask_idxs in _combinations(N, k)
-            mask = ntuple(i -> (i in mask_idxs ? 1 : 0), N)
-            ranges = Vector{UnitRange{Int}}(undef, N)
-            for i in 1:N
-                ranges[i] = 1:(dims[i] - mask[i])
-            end
-            for coords in CartesianIndices(Tuple(ranges))
+
+        for _ in _combinations(N, 0)
+            mask = ntuple(i -> 0, N)
+            for coords in CartesianIndices(Tuple(dims))
                 origin = ntuple(i -> coords[i], N)
                 key2 = (origin, mask)
-                push!(cells_by_dim[k+1], key2)
+                push!(cells_by_dim[1], key2)
             end
         end
-    end
-
-    for k in 0:N
-        for (i, key2) in enumerate(cells_by_dim[k+1])
-            cell_index[k+1][key2] = i
-        end
-    end
-
-    boundaries = SparseMatrixCSC{Int,Int}[]
-    for k in 1:N
-        I = Int[]
-        J = Int[]
-        V = Int[]
-        for (j, (origin, mask)) in enumerate(cells_by_dim[k+1])
-            axes = [i for i in 1:N if mask[i] == 1]
-            for (pos, axis) in enumerate(axes)
-                mask_face = ntuple(i -> (i == axis ? 0 : mask[i]), N)
-                origin_low = origin
-                origin_high = ntuple(i -> (i == axis ? origin[i] + 1 : origin[i]), N)
-                low_key = (origin_low, mask_face)
-                high_key = (origin_high, mask_face)
-                row_low = cell_index[k][low_key]
-                row_high = cell_index[k][high_key]
-                sign_low = isodd(pos) ? 1 : -1
-                sign_high = -sign_low
-                push!(I, row_low); push!(J, j); push!(V, sign_low)
-                push!(I, row_high); push!(J, j); push!(V, sign_high)
+        for k in 1:N
+            for mask_idxs in _combinations(N, k)
+                mask = ntuple(i -> (i in mask_idxs ? 1 : 0), N)
+                ranges = Vector{UnitRange{Int}}(undef, N)
+                for i in 1:N
+                    ranges[i] = 1:(dims[i] - mask[i])
+                end
+                for coords in CartesianIndices(Tuple(ranges))
+                    origin = ntuple(i -> coords[i], N)
+                    key2 = (origin, mask)
+                    push!(cells_by_dim[k+1], key2)
+                end
             end
         end
-        push!(boundaries, sparse(I, J, V, length(cells_by_dim[k]), length(cells_by_dim[k+1])))
+
+        for k in 0:N
+            for (i, key2) in enumerate(cells_by_dim[k+1])
+                cell_index[k+1][key2] = i
+            end
+        end
+
+        boundaries = SparseMatrixCSC{Int,Int}[]
+        for k in 1:N
+            I = Int[]
+            J = Int[]
+            V = Int[]
+            for (j, (origin, mask)) in enumerate(cells_by_dim[k+1])
+                axes = [i for i in 1:N if mask[i] == 1]
+                for (pos, axis) in enumerate(axes)
+                    mask_face = ntuple(i -> (i == axis ? 0 : mask[i]), N)
+                    origin_low = origin
+                    origin_high = ntuple(i -> (i == axis ? origin[i] + 1 : origin[i]), N)
+                    low_key = (origin_low, mask_face)
+                    high_key = (origin_high, mask_face)
+                    row_low = cell_index[k][low_key]
+                    row_high = cell_index[k][high_key]
+                    sign_low = isodd(pos) ? 1 : -1
+                    sign_high = -sign_low
+                    push!(I, row_low); push!(J, j); push!(V, sign_low)
+                    push!(I, row_high); push!(J, j); push!(V, sign_high)
+                end
+            end
+            push!(boundaries, sparse(I, J, V, length(cells_by_dim[k]), length(cells_by_dim[k+1])))
+        end
+        (cells_by_dim=cells_by_dim, cell_index=cell_index, boundaries=boundaries)
     end
 
-    cached = (cells_by_dim=cells_by_dim, cell_index=cell_index, boundaries=boundaries)
     if cache !== nothing
         Base.lock(cache.lock)
         try
-            return get!(cache.cubical, key, cached)
+            entry = get(cache.cubical, key, nothing)
+            if entry === nothing
+                cache.cubical[key] = CubicalCachePayload(cached)
+                return cached
+            end
+            return entry.value
         finally
             Base.unlock(cache.lock)
         end
     end
     return cached
+end
+
+function _cubical_grades_2d(channels::Vector{<:AbstractArray})
+    img = channels[1]
+    nx, ny = size(img)
+    C = length(channels)
+    neh = max(nx - 1, 0) * ny
+    nev = nx * max(ny - 1, 0)
+    nf = max(nx - 1, 0) * max(ny - 1, 0)
+    total = nx * ny + neh + nev + nf
+    grades = Vector{NTuple{C,Float64}}(undef, total)
+    t = 1
+
+    @inbounds for j in 1:ny
+        for i in 1:nx
+            grades[t] = ntuple(ch -> Float64(channels[ch][i, j]), C)
+            t += 1
+        end
+    end
+    @inbounds for j in 1:ny
+        for i in 1:(nx - 1)
+            grades[t] = ntuple(ch -> begin
+                a = Float64(channels[ch][i, j])
+                b = Float64(channels[ch][i + 1, j])
+                a >= b ? a : b
+            end, C)
+            t += 1
+        end
+    end
+    @inbounds for j in 1:(ny - 1)
+        for i in 1:nx
+            grades[t] = ntuple(ch -> begin
+                a = Float64(channels[ch][i, j])
+                b = Float64(channels[ch][i, j + 1])
+                a >= b ? a : b
+            end, C)
+            t += 1
+        end
+    end
+    @inbounds for j in 1:(ny - 1)
+        for i in 1:(nx - 1)
+            grades[t] = ntuple(ch -> begin
+                a = Float64(channels[ch][i, j])
+                b = Float64(channels[ch][i + 1, j])
+                c = Float64(channels[ch][i, j + 1])
+                d = Float64(channels[ch][i + 1, j + 1])
+                m1 = a >= b ? a : b
+                m2 = c >= d ? c : d
+                m1 >= m2 ? m1 : m2
+            end, C)
+            t += 1
+        end
+    end
+    return grades
+end
+
+function _cubical_grades_2d_image_distance(img::AbstractArray,
+                                           dist::AbstractArray)
+    size(img) == size(dist) || error("image and distance channels must have the same size.")
+    nx, ny = size(img)
+    neh = max(nx - 1, 0) * ny
+    nev = nx * max(ny - 1, 0)
+    nf = max(nx - 1, 0) * max(ny - 1, 0)
+    total = nx * ny + neh + nev + nf
+    grades = Vector{NTuple{2,Float64}}(undef, total)
+    t = 1
+
+    @inbounds for j in 1:ny
+        for i in 1:nx
+            grades[t] = (Float64(img[i, j]), Float64(dist[i, j]))
+            t += 1
+        end
+    end
+    @inbounds for j in 1:ny
+        for i in 1:(nx - 1)
+            v1a = Float64(img[i, j])
+            v1b = Float64(img[i + 1, j])
+            v2a = Float64(dist[i, j])
+            v2b = Float64(dist[i + 1, j])
+            grades[t] = (
+                v1a >= v1b ? v1a : v1b,
+                v2a >= v2b ? v2a : v2b,
+            )
+            t += 1
+        end
+    end
+    @inbounds for j in 1:(ny - 1)
+        for i in 1:nx
+            v1a = Float64(img[i, j])
+            v1b = Float64(img[i, j + 1])
+            v2a = Float64(dist[i, j])
+            v2b = Float64(dist[i, j + 1])
+            grades[t] = (
+                v1a >= v1b ? v1a : v1b,
+                v2a >= v2b ? v2a : v2b,
+            )
+            t += 1
+        end
+    end
+    @inbounds for j in 1:(ny - 1)
+        for i in 1:(nx - 1)
+            a1 = Float64(img[i, j]); b1 = Float64(img[i + 1, j])
+            c1 = Float64(img[i, j + 1]); d1 = Float64(img[i + 1, j + 1])
+            a2 = Float64(dist[i, j]); b2 = Float64(dist[i + 1, j])
+            c2 = Float64(dist[i, j + 1]); d2 = Float64(dist[i + 1, j + 1])
+            m11 = a1 >= b1 ? a1 : b1
+            m12 = c1 >= d1 ? c1 : d1
+            m21 = a2 >= b2 ? a2 : b2
+            m22 = c2 >= d2 ? c2 : d2
+            grades[t] = (
+                m11 >= m12 ? m11 : m12,
+                m21 >= m22 ? m21 : m22,
+            )
+            t += 1
+        end
+    end
+    return grades
 end
 
 function _graded_complex_from_image_channels(channels::Vector{<:AbstractArray},
@@ -7669,26 +9597,33 @@ function _graded_complex_from_image_channels(channels::Vector{<:AbstractArray},
 
     cached = _cubical_structure(dims; cache=cache)
     cells_by_dim = cached.cells_by_dim
-    cell_index = cached.cell_index
-
-    grades = Vector{NTuple{C,Float64}}()
-    for k in 0:N
-        for (origin, mask) in cells_by_dim[k+1]
-            maxv = fill(-Inf, C)
-            ranges = Vector{UnitRange{Int}}(undef, N)
-            for i in 1:N
-                ranges[i] = origin[i]:(origin[i] + mask[i])
-            end
-            for coords in CartesianIndices(Tuple(ranges))
-                for ch in 1:C
-                    v = Float64(channels[ch][coords])
-                    if v > maxv[ch]
-                        maxv[ch] = v
+    grades = if N == 2 && _CUBICAL_2D_FASTPATH[]
+        if C == 2 && spec.kind == :image_distance_bifiltration
+            _cubical_grades_2d_image_distance(channels[1], channels[2])
+        else
+            _cubical_grades_2d(channels)
+        end
+    else
+        out = Vector{NTuple{C,Float64}}()
+        for k in 0:N
+            for (origin, mask) in cells_by_dim[k+1]
+                maxv = fill(-Inf, C)
+                ranges = Vector{UnitRange{Int}}(undef, N)
+                for i in 1:N
+                    ranges[i] = origin[i]:(origin[i] + mask[i])
+                end
+                for coords in CartesianIndices(Tuple(ranges))
+                    for ch in 1:C
+                        v = Float64(channels[ch][coords])
+                        if v > maxv[ch]
+                            maxv[ch] = v
+                        end
                     end
                 end
+                push!(out, ntuple(i -> maxv[i], C))
             end
-            push!(grades, ntuple(i -> maxv[i], C))
         end
+        out
     end
 
     cells = [collect(1:length(cells_by_dim[k+1])) for k in 0:N]
@@ -7706,7 +9641,7 @@ function _graded_complex_from_image(data::ImageNd, spec::FiltrationSpec;
     elseif spec.kind == :image_distance_bifiltration
         mask = get(spec.params, :mask, nothing)
         mask === nothing && error("image_distance_bifiltration requires mask.")
-        dist = _distance_transform(mask)
+        dist = _distance_transform_cached(mask; cache=cache)
         chans = [data.data, dist]
         return _graded_complex_from_image_channels(chans, spec; cache=cache)
     else
@@ -7734,7 +9669,7 @@ function _graded_complex_from_data(data, spec::FiltrationSpec;
         axes = get(spec.params, :axes, _axes_from_multigrades(data.grades, N; orientation=orientation))
         return data, axes, orientation
     elseif data isa PointCloud
-        return _graded_complex_from_point_cloud(data, spec)
+        return _graded_complex_from_point_cloud(data, spec; cache=cache)
     elseif data isa ImageNd
         return _graded_complex_from_image(data, spec; cache=cache)
     elseif data isa GraphData
@@ -7813,10 +9748,47 @@ function _graded_complex_from_data(data, spec::FiltrationSpec;
     end
 end
 
+"""
+    build_graded_complex(data, filtration; cache=nothing) -> (G, axes, orientation)
+
+Public filtration-builder contract used by ingestion workflows.
+Custom filtration families can either:
+- overload this for their filtration type, or
+- register a builder via `register_filtration_family!`.
+"""
+function build_graded_complex(data, filtration::AbstractFiltration;
+                              cache::Union{Nothing,EncodingCache}=nothing)
+    spec = try
+        _filtration_spec(filtration)
+    catch err
+        if !(err isa ArgumentError)
+            rethrow()
+        end
+        nothing
+    end
+    if spec !== nothing
+        entry = _filtration_registry_get(spec.kind)
+        if entry !== nothing && !(spec.kind in _BUILTIN_FILTRATION_KINDS)
+            out = entry.builder(data, filtration; cache=cache)
+            out isa Tuple && length(out) == 3 ||
+                throw(ArgumentError("build_graded_complex kind=:$(spec.kind) must return (G, axes, orientation)."))
+            return out
+        end
+        return _graded_complex_from_data(data, spec; cache=cache)
+    end
+    kind = filtration_kind(typeof(filtration))
+    entry = _filtration_registry_get(kind)
+    entry === nothing &&
+        throw(ArgumentError("No graded-complex builder for filtration kind=:$kind. Define `build_graded_complex(data, ::$(typeof(filtration)); cache=...)` or register kind=:$kind via register_filtration_family!."))
+    out = entry.builder(data, filtration; cache=cache)
+    out isa Tuple && length(out) == 3 ||
+        throw(ArgumentError("build_graded_complex kind=:$kind must return (G, axes, orientation)."))
+    return out
+end
+
 function _graded_complex_from_data(data, filtration::AbstractFiltration;
                                    cache::Union{Nothing,EncodingCache}=nothing)
-    spec = _filtration_spec(filtration)
-    return _graded_complex_from_data(data, spec; cache=cache)
+    return build_graded_complex(data, filtration; cache=cache)
 end
 
 function _simplex_tree_from_data(data, spec::FiltrationSpec;
@@ -7828,7 +9800,7 @@ function _simplex_tree_from_data(data, spec::FiltrationSpec;
         return data, axes, orientation
     end
     if data isa PointCloud
-        return _graded_complex_from_point_cloud(data, spec; return_simplex_tree=true)
+        return _graded_complex_from_point_cloud(data, spec; return_simplex_tree=true, cache=cache)
     elseif data isa GraphData
         return _graded_complex_from_graph(data, spec; return_simplex_tree=true)
     elseif data isa EmbeddedPlanarGraph2D && spec.kind != :wing_vein_bifiltration
@@ -8105,6 +10077,99 @@ function plan_ingestion(data, spec::FiltrationSpec;
     )
 end
 
+@inline function _ingestion_datafile_cache_key(path::AbstractString,
+                                               kind::Symbol,
+                                               format::Symbol,
+                                               opts::DataFileOptions,
+                                               load_kwargs::NamedTuple)
+    st = stat(path)
+    return (
+        :ingestion_datafile,
+        abspath(path),
+        Int(st.size),
+        Float64(st.mtime),
+        kind,
+        format,
+        UInt(hash(opts)),
+        UInt(hash(load_kwargs)),
+    )
+end
+
+@inline function _load_ingestion_datafile(path::AbstractString,
+                                          kind::Symbol,
+                                          format::Symbol,
+                                          opts::DataFileOptions,
+                                          load_kwargs::NamedTuple,
+                                          cache)
+    session_cache = _resolve_workflow_session_cache(cache)
+    if session_cache === nothing
+        return DataFileIO.load_data(path; kind=kind, format=format, opts=opts, load_kwargs...)
+    end
+    enc_cache = _workflow_encoding_cache(session_cache)
+    key = _ingestion_datafile_cache_key(path, kind, format, opts, load_kwargs)
+    cached = _get_geometry_cached(enc_cache, key)
+    if cached !== nothing
+        return cached
+    end
+    data = DataFileIO.load_data(path; kind=kind, format=format, opts=opts, load_kwargs...)
+    return _set_geometry_cached!(enc_cache, key, data)
+end
+
+"""
+    plan_ingestion(path::AbstractString, filtration_or_spec; kind=:auto, format=:auto,
+                   file_opts=DataFileOptions(), load_kwargs=NamedTuple(), ...)
+
+File-based planner overload. Loads typed data via `DataFileIO.load_data` and
+delegates to the canonical typed `plan_ingestion(data, ...)` path.
+"""
+function plan_ingestion(path::AbstractString, filtration::AbstractFiltration;
+                        kind::Symbol=:auto,
+                        format::Symbol=:auto,
+                        file_opts::DataFileOptions=DataFileOptions(),
+                        load_kwargs::NamedTuple=NamedTuple(),
+                        stage::Symbol=:auto,
+                        field::AbstractCoeffField=QQField(),
+                        cache=:auto,
+                        construction::Union{Nothing,ConstructionOptions}=nothing,
+                        pipeline::Union{Nothing,PipelineOptions}=nothing,
+                        preflight::Bool=false,
+                        strict_preflight::Bool=false)
+    data = _load_ingestion_datafile(path, kind, format, file_opts, load_kwargs, cache)
+    session_cache = _resolve_workflow_session_cache(cache)
+    return plan_ingestion(data, filtration;
+                          stage=stage,
+                          field=field,
+                          cache=session_cache,
+                          construction=construction,
+                          pipeline=pipeline,
+                          preflight=preflight,
+                          strict_preflight=strict_preflight)
+end
+
+function plan_ingestion(path::AbstractString, spec::FiltrationSpec;
+                        kind::Symbol=:auto,
+                        format::Symbol=:auto,
+                        file_opts::DataFileOptions=DataFileOptions(),
+                        load_kwargs::NamedTuple=NamedTuple(),
+                        stage::Symbol=:auto,
+                        field::AbstractCoeffField=QQField(),
+                        cache=:auto,
+                        construction::Union{Nothing,ConstructionOptions}=nothing,
+                        pipeline::Union{Nothing,PipelineOptions}=nothing,
+                        preflight::Bool=false,
+                        strict_preflight::Bool=false)
+    data = _load_ingestion_datafile(path, kind, format, file_opts, load_kwargs, cache)
+    session_cache = _resolve_workflow_session_cache(cache)
+    return plan_ingestion(data, spec;
+                          stage=stage,
+                          field=field,
+                          cache=session_cache,
+                          construction=construction,
+                          pipeline=pipeline,
+                          preflight=preflight,
+                          strict_preflight=strict_preflight)
+end
+
 @inline function _build_ingestion_lazy_cochain(
     ST,
     G,
@@ -8171,7 +10236,21 @@ function _run_ingestion_plan(plan::IngestionPlan;
     ST = nothing
     axes0 = nothing
     orientation0 = nothing
+    tree_route_ok = true
+    if filtration isa AbstractFiltration
+        spec_try = try
+            _filtration_spec(filtration)
+        catch
+            nothing
+        end
+        if spec_try isa FiltrationSpec
+            tree_route_ok = spec_try.kind in _BUILTIN_FILTRATION_KINDS
+        else
+            tree_route_ok = false
+        end
+    end
     can_try_tree_compute = stage != :graded_complex &&
+                           tree_route_ok &&
                            (data isa SimplexTreeMulti ||
                             data isa PointCloud ||
                             data isa GraphData ||
@@ -8423,6 +10502,69 @@ function encode(data, spec::FiltrationSpec;
                 preflight::Bool=false,
                 strict_preflight::Bool=false)
     plan = plan_ingestion(data, spec;
+                          stage=stage,
+                          field=field,
+                          cache=cache,
+                          construction=construction,
+                          pipeline=pipeline,
+                          preflight=preflight,
+                          strict_preflight=strict_preflight)
+    return run_ingestion(plan; stage=plan.stage, degree=degree)
+end
+
+"""
+    encode(path::AbstractString, filtration_or_spec; kind=:auto, format=:auto,
+           file_opts=DataFileOptions(), load_kwargs=NamedTuple(), ...)
+
+File-based one-liner ingestion entrypoint. Loads typed data with
+`DataFileIO.load_data` and then runs the canonical ingestion pipeline.
+"""
+function encode(path::AbstractString, filtration::AbstractFiltration;
+                kind::Symbol=:auto,
+                format::Symbol=:auto,
+                file_opts::DataFileOptions=DataFileOptions(),
+                load_kwargs::NamedTuple=NamedTuple(),
+                degree::Int=0,
+                stage::Symbol=:auto,
+                field::AbstractCoeffField=QQField(),
+                cache=:auto,
+                construction::Union{Nothing,ConstructionOptions}=nothing,
+                pipeline::Union{Nothing,PipelineOptions}=nothing,
+                preflight::Bool=false,
+                strict_preflight::Bool=false)
+    plan = plan_ingestion(path, filtration;
+                          kind=kind,
+                          format=format,
+                          file_opts=file_opts,
+                          load_kwargs=load_kwargs,
+                          stage=stage,
+                          field=field,
+                          cache=cache,
+                          construction=construction,
+                          pipeline=pipeline,
+                          preflight=preflight,
+                          strict_preflight=strict_preflight)
+    return run_ingestion(plan; stage=plan.stage, degree=degree)
+end
+
+function encode(path::AbstractString, spec::FiltrationSpec;
+                kind::Symbol=:auto,
+                format::Symbol=:auto,
+                file_opts::DataFileOptions=DataFileOptions(),
+                load_kwargs::NamedTuple=NamedTuple(),
+                degree::Int=0,
+                stage::Symbol=:auto,
+                field::AbstractCoeffField=QQField(),
+                cache=:auto,
+                construction::Union{Nothing,ConstructionOptions}=nothing,
+                pipeline::Union{Nothing,PipelineOptions}=nothing,
+                preflight::Bool=false,
+                strict_preflight::Bool=false)
+    plan = plan_ingestion(path, spec;
+                          kind=kind,
+                          format=format,
+                          file_opts=file_opts,
+                          load_kwargs=load_kwargs,
                           stage=stage,
                           field=field,
                           cache=cache,

@@ -11,14 +11,21 @@ const SIMPLE_API = (
     :QQ,
     :PointCloud, :ImageNd, :GraphData, :EmbeddedPlanarGraph2D,
     :GradedComplex, :MultiCriticalGradedComplex,
-    :FiltrationSpec, :ConstructionBudget, :ConstructionOptions, :PipelineOptions,
+    :FiltrationSpec, :ConstructionBudget, :ConstructionOptions, :PipelineOptions, :DataFileOptions,
+    :filtration_kind, :filtration_arity, :build_graded_complex,
+    :register_filtration_family!, :available_filtrations, :filtration_signature, :filtration_parameters,
     :encode, :coarsen, :resolve, :hom_dimension, :hom, :ext, :tor, :rhom, :derived_tensor, :hyperext, :hypertor, :ext_algebra, :invariant, :invariants,
     :rank_invariant, :restricted_hilbert, :euler_surface,
     :slice_barcode, :slice_barcodes, :matching_distance,
     :mp_landscape, :mpp_decomposition, :mpp_image,
     :AbstractFeaturizerSpec,
-    :PersistenceImageSpec, :LandscapeSpec, :EulerSurfaceSpec, :RankGridSpec,
-    :SlicedBarcodeSpec, :SignedBarcodeImageSpec, :ProjectedDistancesSpec, :CompositeSpec,
+    :PersistenceImageSpec, :LandscapeSpec, :MPLandscapeSpec, :EulerSurfaceSpec, :RankGridSpec,
+    :RestrictedHilbertSpec,
+    :BarcodeTopKSpec, :SlicedBarcodeSpec, :BarcodeSummarySpec,
+    :PointSignedMeasureSpec, :EulerSignedMeasureSpec, :RectangleSignedBarcodeTopKSpec,
+    :SignedBarcodeImageSpec, :ProjectedDistancesSpec, :MatchingDistanceBankSpec,
+    :MPPImageSpec, :MPPDecompositionHistogramSpec,
+    :BettiTableSpec, :BassTableSpec, :BettiSupportMeasuresSpec, :BassSupportMeasuresSpec, :CompositeSpec,
     :FeatureSet, :BatchOptions, :run_experiment, :load_experiment,
     :feature_names, :feature_axes, :nfeatures,
     :build_cache, :cache_stats,
@@ -28,8 +35,11 @@ const SIMPLE_API = (
     :save_features_arrow, :load_features_arrow,
     :save_features_parquet, :load_features_parquet,
     :save_features_npz, :load_features_npz,
+    :load_data, :inspect_data_file,
     :save_dataset_json, :load_dataset_json,
     :save_pipeline_json, :load_pipeline_json,
+    :save_encoding_json, :load_encoding_json,
+    :inspect_json,
     :SessionCache,
     :EncodingResult, :CohomologyDimsResult, :ResolutionResult, :InvariantResult, :unwrap,
     :change_field,
@@ -39,12 +49,18 @@ const SIMPLE_API = (
 const SIMPLE_API_BINDINGS = (
     (:CoreModules, (
         :QQ,
+        :SessionCache,
+        :change_field,
+    )),
+    (:DataTypes, (
         :PointCloud, :ImageNd, :GraphData, :EmbeddedPlanarGraph2D,
         :GradedComplex, :MultiCriticalGradedComplex,
-        :FiltrationSpec, :ConstructionBudget, :ConstructionOptions, :PipelineOptions,
-        :SessionCache,
+    )),
+    (:Options, (
+        :FiltrationSpec, :ConstructionBudget, :ConstructionOptions, :PipelineOptions, :DataFileOptions,
+    )),
+    (:Results, (
         :EncodingResult, :CohomologyDimsResult, :ResolutionResult, :InvariantResult, :unwrap,
-        :change_field,
     )),
     (:Workflow, (
         :encode, :coarsen, :resolve, :hom_dimension, :hom, :ext, :tor, :rhom, :derived_tensor, :hyperext, :hypertor, :ext_algebra, :invariant, :invariants,
@@ -53,13 +69,23 @@ const SIMPLE_API_BINDINGS = (
         :mp_landscape, :mpp_decomposition, :mpp_image,
     )),
     (:DataIngestion, (
+        :filtration_kind, :filtration_arity, :build_graded_complex,
+        :register_filtration_family!, :available_filtrations, :filtration_signature, :filtration_parameters,
         :one_criticalify, :criticality, :normalize_multicritical,
+    )),
+    (:DataFileIO, (
+        :load_data, :inspect_data_file,
     )),
     (:Featurizers, (
         :matching_distance,
         :AbstractFeaturizerSpec,
-        :PersistenceImageSpec, :LandscapeSpec, :EulerSurfaceSpec, :RankGridSpec,
-        :SlicedBarcodeSpec, :SignedBarcodeImageSpec, :ProjectedDistancesSpec, :CompositeSpec,
+        :PersistenceImageSpec, :LandscapeSpec, :MPLandscapeSpec, :EulerSurfaceSpec, :RankGridSpec,
+        :RestrictedHilbertSpec,
+        :BarcodeTopKSpec, :SlicedBarcodeSpec, :BarcodeSummarySpec,
+        :PointSignedMeasureSpec, :EulerSignedMeasureSpec, :RectangleSignedBarcodeTopKSpec,
+        :SignedBarcodeImageSpec, :ProjectedDistancesSpec, :MatchingDistanceBankSpec,
+        :MPPImageSpec, :MPPDecompositionHistogramSpec,
+        :BettiTableSpec, :BassTableSpec, :BettiSupportMeasuresSpec, :BassSupportMeasuresSpec, :CompositeSpec,
         :FeatureSet, :BatchOptions, :run_experiment, :load_experiment,
         :feature_names, :feature_axes, :nfeatures,
         :build_cache, :cache_stats,
@@ -73,6 +99,8 @@ const SIMPLE_API_BINDINGS = (
     (:Serialization, (
         :save_dataset_json, :load_dataset_json,
         :save_pipeline_json, :load_pipeline_json,
+        :save_encoding_json, :load_encoding_json,
+        :inspect_json,
     )),
 )
 
@@ -110,11 +138,13 @@ const ADVANCED_ONLY_API = (
     :yoneda_product,
     :slice_chain, :slice_chain_exact_2d, :SliceSpec, :collect_slices, :save_slices_json, :load_slices_json,
     :direct_sum, :direct_sum_with_maps, :zero_pmodule, :zero_morphism,
+    :MapLeqQueryBatch, :prepare_map_leq_batch,
     :map_leq, :map_leq_many, :map_leq_many!,
     :kernel, :cokernel, :image,
     :kernel_with_inclusion, :image_with_inclusion,
     :cokernel_with_projection, :coimage_with_projection,
-    :submodule, :image_submodule, :quotient, :coimage,
+    :submodule, :kernel_submodule, :image_submodule,
+    :quotient, :quotient_with_projection, :coimage,
     :is_zero_morphism,
     :pushout, :pullback,
     :ShortExactSequence, :short_exact_sequence, :is_exact, :snake_lemma,
@@ -125,7 +155,9 @@ const ADVANCED_ONLY_API = (
     :left_kan_extension, :right_kan_extension, :derived_pushforward_left, :derived_pushforward_right,
     :projective_resolution, :injective_resolution,
     :Hom, :Ext, :Tor, :ExtAlgebra,
-    :save_flange_json, :load_flange_json,
+    :parse_finite_fringe_json, :finite_fringe_from_m2,
+    :save_flange_json, :load_flange_json, :parse_flange_json,
+    :save_pl_fringe_json, :load_pl_fringe_json, :parse_pl_fringe_json,
     :IngestionPlan, :plan_ingestion, :run_ingestion,
 )
 
@@ -133,9 +165,10 @@ const ADVANCED_ONLY_API_BINDINGS = (
     (:Modules, (
         :PModule, :PMorphism, :ModuleOptions,
         :direct_sum, :direct_sum_with_maps, :zero_pmodule, :zero_morphism,
+        :MapLeqQueryBatch, :prepare_map_leq_batch,
         :map_leq, :map_leq_many, :map_leq_many!,
     )),
-    (:CoreModules, (
+    (:Options, (
         :EncodingOptions, :ResolutionOptions, :InvariantOptions, :DerivedFunctorOptions,
     )),
     (:ModuleComplexes, (
@@ -199,7 +232,8 @@ const ADVANCED_ONLY_API_BINDINGS = (
         :kernel, :cokernel, :image,
         :kernel_with_inclusion, :image_with_inclusion,
         :cokernel_with_projection, :coimage_with_projection,
-        :submodule, :image_submodule, :quotient, :coimage,
+        :submodule, :kernel_submodule, :image_submodule,
+        :quotient, :quotient_with_projection, :coimage,
         :is_zero_morphism,
         :pushout, :pullback,
         :ShortExactSequence, :short_exact_sequence, :is_exact, :snake_lemma,
@@ -212,7 +246,9 @@ const ADVANCED_ONLY_API_BINDINGS = (
         :left_kan_extension, :right_kan_extension, :derived_pushforward_left, :derived_pushforward_right,
     )),
     (:Serialization, (
-        :save_flange_json, :load_flange_json,
+        :parse_finite_fringe_json, :finite_fringe_from_m2,
+        :save_flange_json, :load_flange_json, :parse_flange_json,
+        :save_pl_fringe_json, :load_pl_fringe_json, :parse_pl_fringe_json,
     )),
 )
 

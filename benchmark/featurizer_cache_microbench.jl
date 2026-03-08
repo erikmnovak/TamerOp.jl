@@ -12,6 +12,8 @@
 # - Uses a small deterministic in-repo fixture:
 #   - two modules (`enc23`, `enc3`) on one encoding map
 #   - one `CompositeSpec` (landscape + persistence image)
+#   - one `CompositeSpec` of two `MPLandscapeSpec`s sharing a slice plan
+#   - one `CompositeSpec` of two `MPPImageSpec`s sharing a decomposition
 #   - one `ProjectedDistancesSpec` against a reference bank
 # - Reports mean wall-time and mean allocation from repeated runs.
 # - Not a full-library benchmark; this isolates cache protocol effectiveness.
@@ -31,28 +33,32 @@ end
 
 const PM = PosetModules.Advanced
 const CM = PM.CoreModules
+const OPT = PM.Options
+const DT = PM.DataTypes
+const EC = PM.EncodingCore
+const RES = PM.Results
 const FF = PM.FiniteFringe
 const IR = PM.IndicatorResolutions
 const PLB = PM.PLBackend
 
 function _fixture()
     field = CM.QQField()
-    opts_enc = PM.EncodingOptions(field=field)
+    opts_enc = OPT.EncodingOptions(field=field)
     Ups = [PLB.BoxUpset([0.0, -10.0]), PLB.BoxUpset([1.0, -10.0])]
     Downs = PLB.BoxDownset[]
     P, _, pi = PLB.encode_fringe_boxes(Ups, Downs, opts_enc)
 
-    r2 = PM.locate(pi, [0.5, 0.0])
-    r3 = PM.locate(pi, [2.0, 0.0])
+    r2 = EC.locate(pi, [0.5, 0.0])
+    r3 = EC.locate(pi, [2.0, 0.0])
 
-    H23 = FF.one_by_one_fringe(P, FF.principal_upset(P, r2), FF.principal_downset(P, r3); field=field)
-    H3 = FF.one_by_one_fringe(P, FF.principal_upset(P, r3), FF.principal_downset(P, r3); field=field)
+    H23 = FF.one_by_one_fringe(P, FF.principal_upset(P, r2), FF.principal_downset(P, r3), CM.QQ(1); field=field)
+    H3 = FF.one_by_one_fringe(P, FF.principal_upset(P, r3), FF.principal_downset(P, r3), CM.QQ(1); field=field)
     M23 = IR.pmodule_from_fringe(H23)
     M3 = IR.pmodule_from_fringe(H3)
 
-    enc23 = PM.EncodingResult(P, M23, pi)
-    enc3 = PM.EncodingResult(P, M3, pi)
-    opts_inv = PM.InvariantOptions(box=([-1.0, -1.0], [2.0, 1.0]), strict=false)
+    enc23 = RES.EncodingResult(P, M23, pi)
+    enc3 = RES.EncodingResult(P, M3, pi)
+    opts_inv = OPT.InvariantOptions(box=([-1.0, -1.0], [2.0, 1.0]), strict=false)
 
     lspec = PM.LandscapeSpec(
         directions=[[1.0, 1.0]],
@@ -70,6 +76,41 @@ function _fixture()
         strict=false,
     )
     cspec = PM.CompositeSpec((lspec, pispec), namespacing=true)
+
+    mlspec = PM.MPLandscapeSpec(
+        directions=[[1.0, 1.0]],
+        offsets=[[0.0, 0.0]],
+        tgrid=collect(0.0:0.5:3.0),
+        kmax=2,
+        strict=false,
+        direction_weight=:uniform,
+    )
+    mlspec2 = PM.MPLandscapeSpec(
+        directions=[[1.0, 1.0]],
+        offsets=[[0.0, 0.0]],
+        tgrid=collect(0.0:0.5:3.0),
+        kmax=1,
+        strict=false,
+        direction_weight=:uniform,
+    )
+    mlpair = PM.CompositeSpec((mlspec, mlspec2), namespacing=true)
+
+    mppspec = PM.MPPImageSpec(
+        resolution=6,
+        sigma=0.15,
+        N=8,
+        q=1.0,
+        segment_prune=true,
+    )
+    mppspec2 = PM.MPPImageSpec(
+        resolution=5,
+        sigma=0.2,
+        N=8,
+        q=1.0,
+        segment_prune=false,
+    )
+    mpppair = PM.CompositeSpec((mppspec, mppspec2), namespacing=true)
+
     dspec = PM.ProjectedDistancesSpec(
         [enc3];
         reference_names=[:M3],
@@ -78,7 +119,19 @@ function _fixture()
         precompute=true,
     )
 
-    return (enc23=enc23, enc3=enc3, opts_inv=opts_inv, lspec=lspec, pispec=pispec, cspec=cspec, dspec=dspec)
+    return (
+        enc23=enc23,
+        enc3=enc3,
+        opts_inv=opts_inv,
+        lspec=lspec,
+        pispec=pispec,
+        cspec=cspec,
+        mlspec=mlspec,
+        mlpair=mlpair,
+        mppspec=mppspec,
+        mpppair=mpppair,
+        dspec=dspec,
+    )
 end
 
 function _bench(name::AbstractString, f::Function; reps::Int=15)
@@ -106,6 +159,14 @@ function main(; reps::Int=15)
     comp_cache = PM.build_cache(fx.enc23, fx.cspec; opts=fx.opts_inv, threaded=false)
     cached_comp = () -> PM.transform(fx.cspec, comp_cache; opts=fx.opts_inv, threaded=false)
 
+    raw_mlpair = () -> PM.transform(fx.mlpair, fx.enc23; opts=fx.opts_inv, threaded=false)
+    mlpair_cache = PM.build_cache(fx.enc23, fx.mlpair; opts=fx.opts_inv, threaded=false)
+    cached_mlpair = () -> PM.transform(fx.mlpair, mlpair_cache; opts=fx.opts_inv, threaded=false)
+
+    raw_mpppair = () -> PM.transform(fx.mpppair, fx.enc23; opts=fx.opts_inv, threaded=false)
+    mpppair_cache = PM.build_cache(fx.enc23, fx.mpppair; opts=fx.opts_inv, threaded=false, level=:fibered)
+    cached_mpppair = () -> PM.transform(fx.mpppair, mpppair_cache; opts=fx.opts_inv, threaded=false)
+
     raw_proj = () -> PM.transform(fx.dspec, fx.enc23; opts=fx.opts_inv, threaded=false)
     proj_cache = PM.build_cache(fx.enc23, fx.dspec; opts=fx.opts_inv, threaded=false)
     cached_proj = () -> PM.transform(fx.dspec, proj_cache; opts=fx.opts_inv, threaded=false)
@@ -119,6 +180,10 @@ function main(; reps::Int=15)
 
     r1 = _bench("transform CompositeSpec (raw)", raw_comp; reps=reps)
     c1 = _bench("transform CompositeSpec (cache)", cached_comp; reps=reps)
+    rml = _bench("transform MPL composite (raw)", raw_mlpair; reps=reps)
+    cml = _bench("transform MPL composite (cache)", cached_mlpair; reps=reps)
+    rmpp = _bench("transform MPP composite (raw)", raw_mpppair; reps=reps)
+    cmpp = _bench("transform MPP composite (cache)", cached_mpppair; reps=reps)
     r2 = _bench("transform ProjectedDistancesSpec (raw)", raw_proj; reps=reps)
     c2 = _bench("transform ProjectedDistancesSpec (cache)", cached_proj; reps=reps)
     r3 = _bench("featurize batch (cache=nothing)", raw_feat; reps=max(5, reps ÷ 2))
@@ -126,6 +191,8 @@ function main(; reps::Int=15)
 
     println("\nRelative speedups (raw/cache):")
     println("CompositeSpec transform:        ", round(r1.mean_ms / c1.mean_ms, digits=3), "x")
+    println("MPL composite transform:        ", round(rml.mean_ms / cml.mean_ms, digits=3), "x")
+    println("MPP composite transform:        ", round(rmpp.mean_ms / cmpp.mean_ms, digits=3), "x")
     println("ProjectedDistances transform:   ", round(r2.mean_ms / c2.mean_ms, digits=3), "x")
     println("Batch featurize:                ", round(r3.mean_ms / c3.mean_ms, digits=3), "x")
 end

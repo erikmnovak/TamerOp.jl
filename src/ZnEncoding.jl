@@ -5,14 +5,15 @@ using SparseArrays
 using Random
 using Base.Threads
 
-using ..CoreModules: AbstractPLikeEncodingMap, EncodingOptions, AbstractCoeffField, coeff_type, CompiledEncoding,
-                     SessionCache, _field_cache_key,
+using ..CoreModules: AbstractCoeffField, coeff_type, SessionCache, _field_cache_key,
                      _session_get_zn_encoding_artifact, _session_set_zn_encoding_artifact!,
                      _session_get_zn_pushforward_plan, _session_set_zn_pushforward_plan!,
                      _session_get_zn_pushforward_fringe, _session_set_zn_pushforward_fringe!
+using ..Options: EncodingOptions
+using ..EncodingCore: AbstractPLikeEncodingMap, CompiledEncoding
 using ..Stats: _wilson_interval
 
-import ..CoreModules: locate, dimension, representatives, axes_from_encoding
+import ..EncodingCore: locate, locate_many!, locate_many, dimension, representatives, axes_from_encoding
 import ..RegionGeometry: region_weights, region_adjacency
 import ..FieldLinAlg
 import ..FiniteFringe
@@ -1480,16 +1481,57 @@ leq(P::SignaturePoset, i::Int, j::Int) =
     _sig_subset_words(P.sig_y.words, i, P.sig_y.words, j, P.y_lastmask) &&
     _sig_subset_words(P.sig_z.words, i, P.sig_z.words, j, P.z_lastmask)
 
-function upset_indices(P::SignaturePoset, i::Int)
-    cached = FiniteFringe._cached_upset_indices(P, i)
-    cached === nothing || return cached
-    return _SignatureLeqIter(P, i, true)
+# SignaturePoset should avoid generic n^2 up/down cache materialization.
+FiniteFringe._updown_cache_skip_auto(::SignaturePoset) = true
+
+@inline function _sig_row_words(words::Matrix{UInt64}, idx::Int, ::Val{NW}) where {NW}
+    return ntuple(w -> @inbounds(words[w, idx]), NW)
 end
 
-function downset_indices(P::SignaturePoset, i::Int)
+@inline function _sig_row_subset_col_words(row::NTuple{NW,UInt64},
+                                           words::Matrix{UInt64},
+                                           idx::Int,
+                                           lastmask::UInt64)::Bool where {NW}
+    @inbounds for w in 1:NW
+        diff = row[w] & ~words[w, idx]
+        if w == NW
+            diff &= lastmask
+        end
+        diff == 0 || return false
+    end
+    return true
+end
+
+@inline function _sig_col_subset_row_words(words::Matrix{UInt64},
+                                           idx::Int,
+                                           row::NTuple{NW,UInt64},
+                                           lastmask::UInt64)::Bool where {NW}
+    @inbounds for w in 1:NW
+        diff = words[w, idx] & ~row[w]
+        if w == NW
+            diff &= lastmask
+        end
+        diff == 0 || return false
+    end
+    return true
+end
+
+function upset_indices(P::SignaturePoset{MY,MZ}, i::Int) where {MY,MZ}
+    cached = FiniteFringe._cached_upset_indices(P, i)
+    cached === nothing || return FiniteFringe.IndicesView(cached)
+    yrow = _sig_row_words(P.sig_y.words, i, Val(MY))
+    zrow = _sig_row_words(P.sig_z.words, i, Val(MZ))
+    return _SignatureLeqIter{MY,MZ}(P.sig_y.words, P.sig_z.words, yrow, zrow,
+                                    P.y_lastmask, P.z_lastmask, P.n, true)
+end
+
+function downset_indices(P::SignaturePoset{MY,MZ}, i::Int) where {MY,MZ}
     cached = FiniteFringe._cached_downset_indices(P, i)
-    cached === nothing || return cached
-    return _SignatureLeqIter(P, i, false)
+    cached === nothing || return FiniteFringe.IndicesView(cached)
+    yrow = _sig_row_words(P.sig_y.words, i, Val(MY))
+    zrow = _sig_row_words(P.sig_z.words, i, Val(MZ))
+    return _SignatureLeqIter{MY,MZ}(P.sig_y.words, P.sig_z.words, yrow, zrow,
+                                    P.y_lastmask, P.z_lastmask, P.n, false)
 end
 
 leq_row(P::SignaturePoset, i::Int) = upset_indices(P, i)
@@ -1500,48 +1542,50 @@ leq_col(P::SignaturePoset, j::Int) = downset_indices(P, j)
            _sig_subset_words(P.sig_z.words, i, P.sig_z.words, j, P.z_lastmask)
 end
 
-struct _SignatureLeqIter
-    P::SignaturePoset
-    i::Int
+struct _SignatureLeqIter{MY,MZ}
+    y_words::Matrix{UInt64}
+    z_words::Matrix{UInt64}
+    y_row::NTuple{MY,UInt64}
+    z_row::NTuple{MZ,UInt64}
+    y_lastmask::UInt64
+    z_lastmask::UInt64
+    n::Int
     upset::Bool
 end
 
-Base.IteratorSize(::Type{_SignatureLeqIter}) = Base.HasLength()
-Base.eltype(::Type{_SignatureLeqIter}) = Int
+Base.IteratorSize(::Type{<:_SignatureLeqIter}) = Base.HasLength()
+Base.eltype(::Type{<:_SignatureLeqIter}) = Int
 
-function Base.length(it::_SignatureLeqIter)
-    n = it.P.n
-    i = it.i
+function Base.length(it::_SignatureLeqIter{MY,MZ}) where {MY,MZ}
+    n = it.n
     cnt = 0
     if it.upset
         @inbounds for j in 1:n
-            cnt += (_sig_subset_words(it.P.sig_y.words, i, it.P.sig_y.words, j, it.P.y_lastmask) &&
-                    _sig_subset_words(it.P.sig_z.words, i, it.P.sig_z.words, j, it.P.z_lastmask)) ? 1 : 0
+            cnt += (_sig_row_subset_col_words(it.y_row, it.y_words, j, it.y_lastmask) &&
+                    _sig_row_subset_col_words(it.z_row, it.z_words, j, it.z_lastmask)) ? 1 : 0
         end
     else
         @inbounds for j in 1:n
-            cnt += (_sig_subset_words(it.P.sig_y.words, j, it.P.sig_y.words, i, it.P.y_lastmask) &&
-                    _sig_subset_words(it.P.sig_z.words, j, it.P.sig_z.words, i, it.P.z_lastmask)) ? 1 : 0
+            cnt += (_sig_col_subset_row_words(it.y_words, j, it.y_row, it.y_lastmask) &&
+                    _sig_col_subset_row_words(it.z_words, j, it.z_row, it.z_lastmask)) ? 1 : 0
         end
     end
     return cnt
 end
 
-function Base.iterate(it::_SignatureLeqIter, state::Int=1)
-    P = it.P
-    i = it.i
-    n = P.n
+function Base.iterate(it::_SignatureLeqIter{MY,MZ}, state::Int=1) where {MY,MZ}
+    n = it.n
     if it.upset
         @inbounds for j in state:n
-            if _sig_subset_words(P.sig_y.words, i, P.sig_y.words, j, P.y_lastmask) &&
-               _sig_subset_words(P.sig_z.words, i, P.sig_z.words, j, P.z_lastmask)
+            if _sig_row_subset_col_words(it.y_row, it.y_words, j, it.y_lastmask) &&
+               _sig_row_subset_col_words(it.z_row, it.z_words, j, it.z_lastmask)
                 return j, j + 1
             end
         end
     else
         @inbounds for j in state:n
-            if _sig_subset_words(P.sig_y.words, j, P.sig_y.words, i, P.y_lastmask) &&
-               _sig_subset_words(P.sig_z.words, j, P.sig_z.words, i, P.z_lastmask)
+            if _sig_col_subset_row_words(it.y_words, j, it.y_row, it.y_lastmask) &&
+               _sig_col_subset_row_words(it.z_words, j, it.z_row, it.z_lastmask)
                 return j, j + 1
             end
         end
@@ -1773,7 +1817,8 @@ function _get_or_build_pushforward_plan!(pi::ZnEncodingMap, FG::Flange;
     if session_cache !== nothing
         shared = _session_get_zn_pushforward_plan(session_cache, pi.encoding_fingerprint, fkey)
         if shared !== nothing
-            shared_plan = shared::ZnPushforwardPlan
+            shared_plan = shared isa ZnPushforwardPlan ? shared::ZnPushforwardPlan :
+                ZnPushforwardPlan(shared.flat_idxs, shared.inj_idxs, shared.zero_pairs)
             Base.lock(cache.lock)
             try
                 get!(cache.plan_by_flange, fkey, shared_plan)
@@ -2348,6 +2393,12 @@ end
 function locate(pi::ZnEncodingMap, x::AbstractVector{<:AbstractFloat})
     length(x) == pi.n || error("locate: expected a vector of length $(pi.n), got $(length(x))")
     g = ntuple(i -> round(Int, x[i]), pi.n)
+    return locate(pi, g)
+end
+
+@inline function locate(pi::ZnEncodingMap{N}, x::NTuple{N,<:AbstractFloat}) where {N}
+    N == pi.n || error("locate: expected a tuple of length $(pi.n), got $(N)")
+    g = ntuple(i -> round(Int, x[i]), N)
     return locate(pi, g)
 end
 

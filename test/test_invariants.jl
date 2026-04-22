@@ -2231,6 +2231,65 @@ end
 
 end
 
+@testset "EncodingResult exact slice barcodes stay filtration-level" begin
+    _point_cloud(mat::Matrix{Float64}) =
+        TO.PointCloud([Vector{Float64}(view(mat, i, :)) for i in 1:size(mat, 1)])
+
+    pts_rips = Float64[
+        0.0;
+        1.0;
+        2.0;
+    ]
+    spec_rips = TO.FiltrationSpec(
+        kind=:rips,
+        max_dim=1,
+        radius=2.0,
+        construction=TO.ConstructionOptions(
+            sparsify=:radius,
+            collapse=:none,
+            output_stage=:encoding_result,
+        ),
+    )
+    enc_rips = TO.encode(_point_cloud(reshape(pts_rips, :, 1)), spec_rips; degree=0)
+    bars_rips = TO.slice_barcodes(
+        enc_rips;
+        directions=[[1.0]],
+        offsets=[[0.0]],
+        normalize_weights=false,
+        threads=false,
+        packed=false,
+    )
+    @test getfield(enc_rips.M, :cached_module) === nothing
+    @test bars_rips.barcodes[1, 1] == Dict((0.0, 1.0) => 2, (0.0, Inf) => 1)
+
+    pts_lowerstar = Float64[
+        1.0  0.0;
+        1.0  0.1;
+    ]
+    spec_lowerstar = TO.FiltrationSpec(
+        kind=:rips_lowerstar,
+        max_dim=1,
+        radius=0.2,
+        coord=1,
+        construction=TO.ConstructionOptions(
+            sparsify=:radius,
+            collapse=:none,
+            output_stage=:encoding_result,
+        ),
+    )
+    enc_lowerstar = TO.encode(_point_cloud(pts_lowerstar), spec_lowerstar; degree=0)
+    bars_lowerstar = TO.slice_barcodes(
+        enc_lowerstar;
+        directions=[[1.0, 1.0]],
+        offsets=[[0.0, 0.0]],
+        normalize_weights=false,
+        threads=false,
+        packed=false,
+    )
+    @test getfield(enc_lowerstar.M, :cached_module) === nothing
+    @test bars_lowerstar.barcodes[1, 1] == Dict((1.0, 1.0) => 1, (1.0, Inf) => 1)
+end
+
 @testset "Defaults that unblock usability (matching distance and sliced Wasserstein)" begin
 
     # -------------------------
@@ -2339,6 +2398,29 @@ end
         @test isapprox(vals[2], 2.5; atol=1e-12)
         @test isapprox(vals[3], 4.5; atol=1e-12)
         @test isapprox(vals[4], 5.5; atol=1e-12)
+
+        grid_pts_trim = ((1, 1), (2, 1), (1, 2), (2, 2))
+        grid_leq_trim = falses(4, 4)
+        for i in eachindex(grid_pts_trim), j in eachindex(grid_pts_trim)
+            grid_leq_trim[i, j] = grid_pts_trim[i][1] <= grid_pts_trim[j][1] &&
+                                  grid_pts_trim[i][2] <= grid_pts_trim[j][2]
+        end
+        Pgrid_trim = FF.FinitePoset(grid_leq_trim)
+        pi_grid_trim = EC.GridEncodingMap(Pgrid_trim, ([0.0, 1.0], [0.0, 2.0]))
+        opts_trim = TO.InvariantOptions(box=([-1.0, -1.0], [3.0, 3.0]), strict=false)
+        chain_trim, vals_trim = TO.slice_chain_exact_2d(
+            pi_grid_trim,
+            [1.0, 1.0],
+            0.0,
+            opts_trim;
+            normalize_dirs=:none,
+        )
+        @test chain_trim == [1, 2, 4]
+        @test length(vals_trim) == 4
+        @test isapprox(vals_trim[1], 0.0; atol=1e-12)
+        @test isapprox(vals_trim[2], 1.0; atol=1e-12)
+        @test isapprox(vals_trim[3], 2.0; atol=1e-12)
+        @test isapprox(vals_trim[4], 3.0; atol=1e-12)
 
         # Exact distance should be 1.0 on this toy configuration.
         d1 = Inv.matching_distance_exact_2d(M23, M3, pi, opts_exact; weight=:lesnick_l1, normalize_dirs=:L1)

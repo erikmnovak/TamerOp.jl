@@ -1,5 +1,6 @@
 [profile] desktop (reps=4, trim_between_reps=true, trim_between_cases=true)
 NearestNeighbors package loaded: true
 Invariants: all
-inv_rips_n1000_d2_s11            inv=euler_signed_measure cold_ms=24.679 warm_med_ms=20.972 terms=37898
+inv_rips_n1000_d2_s11            inv=euler_signed_measure cold_ms=57.495 warm_med_ms=66.102 terms=37898
+inv_rips_n1000_d2_s11            inv=slice_barcodes cold_ms=105.366 warm_med_ms=120.384 terms=14754
 Wrote tamer invariant results: benchmark/ingestion_compare_harness/_run_invariant_supervisor_rips_scale5/cases/tamer/inv_rips_n1000_d2_s11.csv

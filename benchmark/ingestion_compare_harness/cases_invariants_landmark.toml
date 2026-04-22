@@ -3,7 +3,7 @@ version = 1
 description = "End-to-end invariant comparison cases for landmark Euler parity."
 
 [invariant_eligibility]
-landmark_parity = ["euler_signed_measure"]
+landmark_parity = ["euler_signed_measure", "slice_barcodes", "mp_landscape"]
 
 [[cases]]
 id = "inv_landmark_n5000_d2_md1_s11"

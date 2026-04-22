@@ -5,6 +5,7 @@ using JSON3
 
 const IR = TamerOp.IndicatorResolutions
 const DI = TamerOp.DataIngestion
+const IC = TamerOp.InvariantCore
 const DFI = TamerOp.DataFileIO
 const SER = TamerOp.Serialization
 const FF = TamerOp.FiniteFringe
@@ -2877,6 +2878,436 @@ end
         e_lazy = TamerOp.euler_surface(enc_lazy; opts=e_opts)
         e_eager = TamerOp.euler_surface(enc_eager; opts=e_opts)
         @test e_lazy == e_eager
+    finally
+        DI._ENCODING_RESULT_LAZY_MODULE[] = old_lazy
+    end
+end
+
+@testset "Data pipeline: encoding_result lazy module defers representative materialization" begin
+    data = TamerOp.PointCloud([
+        [0.0, 0.0],
+        [0.8, 0.2],
+        [1.6, 0.6],
+        [2.2, 0.4],
+    ])
+    spec = TamerOp.FiltrationSpec(
+        kind=:rips_lowerstar,
+        max_dim=1,
+        radius=2.5,
+        coord=1,
+        construction=OPT.ConstructionOptions(; output_stage=:encoding_result),
+    )
+    old_lazy = DI._ENCODING_RESULT_LAZY_MODULE[]
+    try
+        DI._ENCODING_RESULT_LAZY_MODULE[] = true
+        enc = TamerOp.encode(data, spec; degree=0, stage=:encoding_result, cache=:auto)
+        @test enc.M isa DI._LazyEncodedModule
+        @test TO.encoding_map(enc).reps === nothing
+        @test EC.encoding_summary(TO.encoding_map(enc)).has_representatives
+        @test TO.encoding_map(enc).reps === nothing
+
+        enc_cached = RES._encoding_with_session_cache(enc, CM.SessionCache())
+        @test TO.encoding_map(enc_cached).reps === nothing
+        @test EC.encoding_summary(TO.encoding_map(enc_cached)).has_representatives
+        @test TO.encoding_map(enc_cached).reps === nothing
+
+        reps = TO.encoding_representatives(enc)
+        @test length(reps) == prod(length.(EC.axes_from_encoding(enc.pi)))
+        @test TO.encoding_map(enc).reps === nothing
+    finally
+        DI._ENCODING_RESULT_LAZY_MODULE[] = old_lazy
+    end
+end
+
+@testset "Data pipeline: rectangle_signed_barcode uses lazy H0 direct path" begin
+    data = TamerOp.PointCloud([
+        [0.0, 0.0],
+        [0.8, 0.2],
+        [1.6, 0.6],
+        [2.2, 0.4],
+    ])
+    spec = TamerOp.FiltrationSpec(
+        kind=:rips_lowerstar,
+        max_dim=1,
+        radius=2.5,
+        coord=1,
+        construction=OPT.ConstructionOptions(; output_stage=:encoding_result),
+    )
+    old_lazy = DI._ENCODING_RESULT_LAZY_MODULE[]
+    try
+        DI._ENCODING_RESULT_LAZY_MODULE[] = true
+        enc_lazy = TamerOp.encode(data, spec; degree=0, stage=:encoding_result, cache=:auto)
+        @test enc_lazy.M isa DI._LazyEncodedModule
+        rect_opts = OPT.InvariantOptions(; threads=false)
+        @test IC._supports_exact_rectangle_signed_barcode(enc_lazy; opts=rect_opts)
+
+        sb_lazy = TamerOp.rectangle_signed_barcode(enc_lazy; opts=rect_opts, cache=CM.SessionCache(), threads=false)
+        @test enc_lazy.M.cached_module === nothing
+
+        DI._ENCODING_RESULT_LAZY_MODULE[] = false
+        enc_eager = TamerOp.encode(data, spec; degree=0, stage=:encoding_result, cache=:auto)
+        sb_eager = TamerOp.rectangle_signed_barcode(enc_eager; opts=rect_opts, cache=CM.SessionCache(), threads=false)
+
+        @test Dict(zip(sb_lazy.rects, sb_lazy.weights)) ==
+              Dict(zip(sb_eager.rects, sb_eager.weights))
+        @test TamerOp.SignedMeasures.rectangle_signed_barcode_rank(sb_lazy; zero_noncomparable=true, threads=false) ==
+              TamerOp.SignedMeasures.rectangle_signed_barcode_rank(sb_eager; zero_noncomparable=true, threads=false)
+    finally
+        DI._ENCODING_RESULT_LAZY_MODULE[] = old_lazy
+    end
+end
+
+@testset "Data pipeline: exact lazy H0 rank table bypasses rectangle decomposition" begin
+    function _serialize_rank_table(axes, table)
+        nd = length(axes)
+        dims = ntuple(i -> length(axes[i]), nd)
+        io = IOBuffer()
+        first = true
+        for pCI in CartesianIndices(dims)
+            p = pCI.I
+            q_ranges = ntuple(k -> p[k]:dims[k], nd)
+            for qCI in CartesianIndices(q_ranges)
+                q = qCI.I
+                val = @inbounds table[pCI, qCI]
+                iszero(val) && continue
+                first || write(io, ';')
+                first = false
+                print(io,
+                      join((repr(Float64(axes[k][p[k]])) for k in 1:nd), "|"),
+                      "||",
+                      join((repr(Float64(axes[k][q[k]])) for k in 1:nd), "|"),
+                      "=>",
+                      val)
+            end
+        end
+        return String(take!(io))
+    end
+
+    data = TamerOp.PointCloud([
+        [0.0, 0.0],
+        [0.8, 0.2],
+        [1.6, 0.6],
+        [2.2, 0.4],
+    ])
+    spec = TamerOp.FiltrationSpec(
+        kind=:rips_lowerstar,
+        max_dim=1,
+        radius=2.5,
+        coord=1,
+        construction=OPT.ConstructionOptions(; output_stage=:encoding_result),
+    )
+    old_lazy = DI._ENCODING_RESULT_LAZY_MODULE[]
+    try
+        DI._ENCODING_RESULT_LAZY_MODULE[] = true
+        enc_lazy = TamerOp.encode(data, spec; degree=0, stage=:encoding_result, cache=:auto)
+        rank_opts = OPT.InvariantOptions(; threads=false)
+        @test IC._supports_exact_rank_query_table(enc_lazy; opts=rank_opts)
+        @test IC._supports_exact_rank_signed_measure(enc_lazy; opts=rank_opts)
+
+        direct = IC._exact_rank_query_table(enc_lazy; opts=rank_opts, threads=false)
+        @test direct !== nothing
+        @test getproperty(direct, :direct_rank_table)
+        @test enc_lazy.M.cached_module === nothing
+
+        direct_measure = IC._exact_rank_signed_measure(enc_lazy; opts=rank_opts, threads=false)
+        @test direct_measure !== nothing
+        @test getproperty(direct_measure, :direct_rank_measure)
+        @test enc_lazy.M.cached_module === nothing
+
+        sb_lazy = TamerOp.rectangle_signed_barcode(enc_lazy; opts=rank_opts, cache=CM.SessionCache(), threads=false)
+        pi0 = TamerOp.encoding_map(enc_lazy)
+        raw_pi = pi0 isa EC.CompiledEncoding ? TamerOp.encoding_map(pi0) : pi0
+        birth_axes, _ = SM._rectangle_signed_barcode_grid_semantic_axes(raw_pi, rank_opts; keep_endpoints=true)
+        rank_table = SM.rectangle_signed_barcode_rank(sb_lazy; zero_noncomparable=true, threads=false)
+
+        @test getproperty(direct, :rank_query_axes) == birth_axes
+        @test getproperty(direct, :rank_table_canonical) == _serialize_rank_table(birth_axes, rank_table)
+        sem_birth, sem_death = SM._rectangle_signed_barcode_grid_semantic_axes(raw_pi, rank_opts; keep_endpoints=true)
+        direct_terms = Dict(
+            (
+                direct_measure.axes[1][idx[1]],
+                direct_measure.axes[2][idx[2]],
+                direct_measure.axes[3][idx[3]],
+                direct_measure.axes[4][idx[4]],
+            ) => wt for (idx, wt) in zip(direct_measure.inds, direct_measure.wts)
+        )
+        sb_terms = Dict(
+            (
+                sem_birth[1][rect.lo[1]],
+                sem_birth[2][rect.lo[2]],
+                sem_death[1][rect.hi[1]],
+                sem_death[2][rect.hi[2]],
+            ) => wt for (rect, wt) in zip(sb_lazy.rects, sb_lazy.weights)
+        )
+        @test direct_terms == sb_terms
+    finally
+        DI._ENCODING_RESULT_LAZY_MODULE[] = old_lazy
+    end
+end
+
+@testset "Data pipeline: exact lazy H0 rank measure covers alpha" begin
+    data = TamerOp.PointCloud([
+        [0.0, 0.0],
+        [0.9, 0.1],
+        [0.2, 1.0],
+        [1.1, 0.9],
+        [0.55, 0.45],
+    ])
+    spec = TamerOp.FiltrationSpec(
+        kind=:alpha,
+        max_dim=2,
+        construction=OPT.ConstructionOptions(; output_stage=:encoding_result),
+    )
+    old_lazy = DI._ENCODING_RESULT_LAZY_MODULE[]
+    try
+        DI._ENCODING_RESULT_LAZY_MODULE[] = true
+        enc_lazy = TamerOp.encode(data, spec; degree=0, stage=:encoding_result, cache=:auto)
+        rank_opts = OPT.InvariantOptions(; threads=false)
+        @test IC._supports_exact_rank_signed_measure(enc_lazy; opts=rank_opts, threads=false)
+
+        direct_measure = IC._exact_rank_signed_measure(enc_lazy; opts=rank_opts, threads=false)
+        @test direct_measure !== nothing
+        @test getproperty(direct_measure, :direct_rank_measure)
+        @test enc_lazy.M.cached_module === nothing
+
+        sb_lazy = TamerOp.rectangle_signed_barcode(enc_lazy; opts=rank_opts, cache=CM.SessionCache(), threads=false)
+        pi0 = TamerOp.encoding_map(enc_lazy)
+        raw_pi = pi0 isa EC.CompiledEncoding ? TamerOp.encoding_map(pi0) : pi0
+        sem_birth, sem_death = SM._rectangle_signed_barcode_grid_semantic_axes(raw_pi, rank_opts; keep_endpoints=true)
+        direct_terms = Dict(
+            (
+                direct_measure.axes[1][idx[1]],
+                direct_measure.axes[2][idx[2]],
+            ) => wt for (idx, wt) in zip(direct_measure.inds, direct_measure.wts)
+        )
+        sb_terms = Dict(
+            (
+                sem_birth[1][rect.lo[1]],
+                sem_death[1][rect.hi[1]],
+            ) => wt for (rect, wt) in zip(sb_lazy.rects, sb_lazy.weights)
+        )
+        @test direct_terms == sb_terms
+    finally
+        DI._ENCODING_RESULT_LAZY_MODULE[] = old_lazy
+    end
+end
+
+@testset "Data pipeline: exact lazy H0 restricted Hilbert backend" begin
+    alpha_data = TamerOp.PointCloud([
+        [0.0, 0.0],
+        [0.9, 0.1],
+        [0.2, 1.0],
+        [1.1, 0.9],
+        [0.55, 0.45],
+    ])
+    alpha_spec = TamerOp.FiltrationSpec(
+        kind=:alpha,
+        max_dim=2,
+        construction=OPT.ConstructionOptions(; output_stage=:encoding_result),
+    )
+    rips_data = TamerOp.PointCloud([
+        [0.0, 0.0],
+        [0.8, 0.2],
+        [1.6, 0.6],
+        [2.2, 0.4],
+    ])
+    rips_spec = TamerOp.FiltrationSpec(
+        kind=:rips_lowerstar,
+        max_dim=1,
+        radius=2.5,
+        coord=1,
+        construction=OPT.ConstructionOptions(; output_stage=:encoding_result),
+    )
+    inv_opts = OPT.InvariantOptions(; threads=false)
+    old_lazy = DI._ENCODING_RESULT_LAZY_MODULE[]
+    try
+        DI._ENCODING_RESULT_LAZY_MODULE[] = true
+        enc_alpha = TamerOp.encode(alpha_data, alpha_spec; degree=0, stage=:encoding_result, cache=:auto)
+        enc_rips = TamerOp.encode(rips_data, rips_spec; degree=0, stage=:encoding_result, cache=:auto)
+
+        @test IC._supports_exact_restricted_hilbert(enc_alpha; opts=inv_opts, threads=false)
+        @test IC._supports_exact_restricted_hilbert(enc_rips; opts=inv_opts, threads=false)
+
+        alpha_direct = IC._exact_restricted_hilbert(enc_alpha; opts=inv_opts, threads=false)
+        rips_direct = IC._exact_restricted_hilbert(enc_rips; opts=inv_opts, threads=false)
+        @test alpha_direct !== nothing
+        @test rips_direct !== nothing
+        @test enc_alpha.M.cached_module === nothing
+        @test enc_rips.M.cached_module === nothing
+        @test enc_alpha.M.dims !== nothing
+        @test enc_rips.M.dims !== nothing
+
+        DI._ENCODING_RESULT_LAZY_MODULE[] = false
+        enc_alpha_eager = TamerOp.encode(alpha_data, alpha_spec; degree=0, stage=:encoding_result, cache=:auto)
+        enc_rips_eager = TamerOp.encode(rips_data, rips_spec; degree=0, stage=:encoding_result, cache=:auto)
+
+        @test alpha_direct == TamerOp.restricted_hilbert(enc_alpha_eager; opts=inv_opts, cache=CM.SessionCache())
+        @test rips_direct == TamerOp.restricted_hilbert(enc_rips_eager; opts=inv_opts, cache=CM.SessionCache())
+    finally
+        DI._ENCODING_RESULT_LAZY_MODULE[] = old_lazy
+    end
+end
+
+@testset "Data pipeline: Workflow wrappers preserve lazy exact paths" begin
+    function _pm_terms(pm)
+        return Dict(
+            ntuple(i -> pm.axes[i][idx[i]], length(pm.axes)) => wt
+            for (idx, wt) in zip(pm.inds, pm.wts)
+        )
+    end
+
+    function _same_mp_landscape(a, b)
+        return a.kmax == b.kmax &&
+               a.tgrid == b.tgrid &&
+               a.values == b.values &&
+               a.weights == b.weights &&
+               a.directions == b.directions &&
+               a.offsets == b.offsets
+    end
+
+    data = TamerOp.PointCloud([
+        [0.0, 0.0],
+        [0.8, 0.2],
+        [1.6, 0.6],
+        [2.2, 0.4],
+    ])
+    spec = TamerOp.FiltrationSpec(
+        kind=:rips_lowerstar,
+        max_dim=1,
+        radius=2.5,
+        coord=1,
+        construction=OPT.ConstructionOptions(; output_stage=:encoding_result),
+    )
+    dirs = [[1.0, 0.0], [1.0, 1.0]]
+    offs = [[0.0, 0.0], [0.5, 0.0]]
+    tg = collect(range(-0.5, 3.0; length=17))
+    inv_opts = OPT.InvariantOptions(; threads=false)
+    old_lazy = DI._ENCODING_RESULT_LAZY_MODULE[]
+    try
+        DI._ENCODING_RESULT_LAZY_MODULE[] = true
+        enc_lazy = TamerOp.encode(data, spec; degree=0, stage=:encoding_result, cache=:auto)
+        @test enc_lazy.M isa DI._LazyEncodedModule
+
+        hilbert_lazy = TamerOp.restricted_hilbert(enc_lazy; opts=inv_opts, cache=CM.SessionCache())
+        @test enc_lazy.M.cached_module === nothing
+
+        euler_lazy = TamerOp.euler_signed_measure(enc_lazy; opts=inv_opts, cache=CM.SessionCache())
+        @test enc_lazy.M.cached_module === nothing
+
+        rank_lazy = TamerOp.rank_signed_measure(enc_lazy; opts=inv_opts, cache=CM.SessionCache(), threads=false)
+        @test enc_lazy.M.cached_module === nothing
+
+        slices_lazy = TamerOp.slice_barcodes(
+            enc_lazy;
+            opts=inv_opts,
+            cache=CM.SessionCache(),
+            directions=dirs,
+            offsets=offs,
+            normalize_dirs=:none,
+            direction_weight=:uniform,
+            normalize_weights=true,
+            drop_unknown=true,
+            dedup=true,
+            threads=false,
+        )
+        @test enc_lazy.M.cached_module === nothing
+
+        mp_lazy = TamerOp.mp_landscape(
+            enc_lazy;
+            opts=inv_opts,
+            cache=CM.SessionCache(),
+            directions=dirs,
+            offsets=offs,
+            tgrid=tg,
+            direction_weight=:uniform,
+            normalize_weights=true,
+            threads=false,
+        )
+        @test enc_lazy.M.cached_module === nothing
+
+        inv_euler = TamerOp.invariant(enc_lazy; which=:euler_signed_measure, opts=inv_opts, cache=CM.SessionCache())
+        @test enc_lazy.M.cached_module === nothing
+        @test _pm_terms(TamerOp.invariant_value(inv_euler)) == _pm_terms(euler_lazy)
+
+        inv_hilbert = TamerOp.invariant(enc_lazy; which=:restricted_hilbert, opts=inv_opts, cache=CM.SessionCache())
+        @test enc_lazy.M.cached_module === nothing
+        @test TamerOp.invariant_value(inv_hilbert) == hilbert_lazy
+
+        inv_rank = TamerOp.invariant(enc_lazy; which=:rank_signed_measure, opts=inv_opts, cache=CM.SessionCache(), threads=false)
+        @test enc_lazy.M.cached_module === nothing
+        @test _pm_terms(TamerOp.invariant_value(inv_rank)) == _pm_terms(rank_lazy)
+
+        inv_slices = TamerOp.invariant(
+            enc_lazy;
+            which=:slice_barcodes,
+            opts=inv_opts,
+            cache=CM.SessionCache(),
+            directions=dirs,
+            offsets=offs,
+            normalize_dirs=:none,
+            direction_weight=:uniform,
+            normalize_weights=true,
+            drop_unknown=true,
+            dedup=true,
+            threads=false,
+        )
+        @test enc_lazy.M.cached_module === nothing
+        @test TamerOp.invariant_value(inv_slices).barcodes == slices_lazy.barcodes
+
+        inv_mp = TamerOp.invariant(
+            enc_lazy;
+            which=:mp_landscape,
+            opts=inv_opts,
+            cache=CM.SessionCache(),
+            directions=dirs,
+            offsets=offs,
+            tgrid=tg,
+            direction_weight=:uniform,
+            normalize_weights=true,
+            threads=false,
+        )
+        @test enc_lazy.M.cached_module === nothing
+        @test _same_mp_landscape(TamerOp.invariant_value(inv_mp), mp_lazy)
+
+        DI._ENCODING_RESULT_LAZY_MODULE[] = false
+        enc_eager = TamerOp.encode(data, spec; degree=0, stage=:encoding_result, cache=:auto)
+
+        hilbert_eager = TamerOp.restricted_hilbert(enc_eager; opts=inv_opts, cache=CM.SessionCache())
+        euler_eager = TamerOp.euler_signed_measure(enc_eager; opts=inv_opts, cache=CM.SessionCache())
+        rank_eager = TamerOp.rank_signed_measure(enc_eager; opts=inv_opts, cache=CM.SessionCache(), threads=false)
+        slices_eager = TamerOp.slice_barcodes(
+            enc_eager;
+            opts=inv_opts,
+            cache=CM.SessionCache(),
+            directions=dirs,
+            offsets=offs,
+            normalize_dirs=:none,
+            direction_weight=:uniform,
+            normalize_weights=true,
+            drop_unknown=true,
+            dedup=true,
+            threads=false,
+        )
+        mp_eager = TamerOp.mp_landscape(
+            enc_eager;
+            opts=inv_opts,
+            cache=CM.SessionCache(),
+            directions=dirs,
+            offsets=offs,
+            tgrid=tg,
+            direction_weight=:uniform,
+            normalize_weights=true,
+            threads=false,
+        )
+
+        @test hilbert_lazy == hilbert_eager
+        @test _pm_terms(euler_lazy) == _pm_terms(euler_eager)
+        @test _pm_terms(rank_lazy) == _pm_terms(rank_eager)
+        @test slices_lazy.barcodes == slices_eager.barcodes
+        @test slices_lazy.weights == slices_eager.weights
+        @test slices_lazy.dirs == slices_eager.dirs
+        @test slices_lazy.offs == slices_eager.offs
+        @test _same_mp_landscape(mp_lazy, mp_eager)
     finally
         DI._ENCODING_RESULT_LAZY_MODULE[] = old_lazy
     end

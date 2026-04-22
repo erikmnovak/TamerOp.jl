@@ -63,6 +63,7 @@ function check_encoded_complex_result end
 function check_resolution_result end
 function check_invariant_result end
 function _materialize_complex end
+function _include_reps_when_rewrapping end
 
 """
     ResultValidationSummary
@@ -511,7 +512,12 @@ end
                                               session_cache::Union{Nothing,SessionCache})
     session_cache === nothing && return enc
     raw_pi = enc.pi isa CompiledEncoding ? enc.pi.pi : enc.pi
-    pi2 = _compile_encoding_cached(enc.P, raw_pi, session_cache)
+    pi2 = _compile_encoding_cached(
+        enc.P,
+        raw_pi,
+        session_cache;
+        include_reps=_include_reps_when_rewrapping(enc),
+    )
     return EncodingResult(enc.P, enc.M, pi2;
                           H=enc.H,
                           presentation=enc.presentation,
@@ -953,5 +959,7 @@ function change_field(inv::InvariantResult, field::AbstractCoeffField)
     enc2 = change_field(inv.enc, field)
     return InvariantResult(enc2, inv.which, inv.value; opts=inv.opts, meta=inv.meta)
 end
+
+@inline _include_reps_when_rewrapping(::EncodingResult) = true
 
 end # module Results

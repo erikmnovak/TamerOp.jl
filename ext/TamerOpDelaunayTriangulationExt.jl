@@ -90,6 +90,7 @@ function _packed_delaunay_2d(points; max_dim::Int=2)
     return DI._PackedDelaunay2D(edges, edge_radius, triangles, tri_radius)
 end
 
-DI._set_pointcloud_delaunay_2d_impl!(_packed_delaunay_2d)
+DI._set_pointcloud_delaunay_2d_impl!((points; max_dim::Int=2) ->
+    _packed_delaunay_2d(points; max_dim=max_dim))
 
 end # module

@@ -317,12 +317,13 @@ function available_visuals(res::DataIngestion.PointCodensityResult)
 end
 
 @inline function _point_layer_from_matrix(A::AbstractMatrix{<:Real}; color=:dodgerblue, alpha::Float64=1.0,
-                                          markersize::Float64=8.0, colormap::Symbol=:viridis)
+                                          markersize::Float64=8.0, colormap::Symbol=:viridis,
+                                          markerspace::Symbol=:pixel)
     pts = NTuple{2,Float64}[(float(A[i, 1]), float(A[i, 2])) for i in 1:size(A, 1)]
     if color isa AbstractVector
-        return PointLayer(pts, Float64[float(v) for v in color], alpha, markersize, colormap)
+        return PointLayer(pts, Float64[float(v) for v in color], alpha, markersize, colormap, markerspace)
     end
-    return PointLayer(pts, color, alpha, markersize, colormap)
+    return PointLayer(pts, color, alpha, markersize, colormap, markerspace)
 end
 
 @inline function _codensity_snapshot_cutoffs(vals::AbstractVector{<:Real}, levels)
@@ -348,7 +349,8 @@ function _codensity_snapshot_panel_spec(coords::AbstractMatrix{<:Real},
     retained_vals = Float64.(vals[keep])
     layers = AbstractVisualizationLayer[
         _point_layer_from_matrix(coords; color=:gray88, alpha=0.95, markersize=5.0),
-        _point_layer_from_matrix(retained; color=retained_vals, alpha=0.18, markersize=340.0 * radius64, colormap=:viridis),
+        _point_layer_from_matrix(retained; color=retained_vals, alpha=0.18,
+                                 markersize=2.0 * radius64, colormap=:viridis, markerspace=:data),
         _point_layer_from_matrix(retained; color=retained_vals, alpha=0.95, markersize=8.0, colormap=:viridis),
     ]
     return VisualizationSpec(:codensity_radius_snapshot;
@@ -381,7 +383,7 @@ function _visual_spec(res::DataIngestion.PointCodensityResult, kind::Symbol;
         end
         return VisualizationSpec(:codensity_radius_snapshots;
                                  title="Codensity/radius snapshots",
-                                 subtitle="rows filter by codensity cutoff; columns increase proxy radius",
+                                 subtitle="rows filter by codensity cutoff; columns increase radius",
                                  panels=panels,
                                  metadata=(;
                                      object=:point_codensity_result,

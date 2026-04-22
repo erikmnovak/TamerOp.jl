@@ -1,0 +1,4 @@
+regime,invariant_kind,degree,n_cases,warm_geomean_slowdown_tamer_over_multipers,cold_geomean_slowdown_tamer_over_multipers
+rips_codensity_parity,mp_landscape,0,2,0.362330,0.372381
+rips_lowerstar_parity,mp_landscape,0,2,0.195512,0.181992
+rips_parity,mp_landscape,0,2,0.200017,0.207052

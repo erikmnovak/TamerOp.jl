@@ -1,0 +1,6 @@
+regime,invariant_kind,degree,n_cases,warm_geomean_slowdown_tamer_over_multipers,cold_geomean_slowdown_tamer_over_multipers
+alpha_parity,euler_signed_measure,0,1,0.032078,0.034638
+cubical_parity,euler_signed_measure,0,1,0.026400,0.026965
+cubical_parity,slice_barcodes,0,1,0.105247,0.104790
+landmark_parity,euler_signed_measure,0,2,0.169974,0.173313
+landmark_parity,slice_barcodes,0,2,0.142966,0.195581

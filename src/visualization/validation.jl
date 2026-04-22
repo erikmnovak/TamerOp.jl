@@ -23,8 +23,10 @@ function check_visual_spec(spec::VisualizationSpec; throw::Bool=false)
 
     for (idx, layer) in enumerate(spec.layers)
         if layer isa HeatmapLayer
-            (size(layer.values, 2) == length(layer.x) && size(layer.values, 1) == length(layer.y)) ||
-                push!(issues, "HeatmapLayer $idx values shape must match x/y lengths.")
+            xok = size(layer.values, 2) == length(layer.x) || size(layer.values, 2) + 1 == length(layer.x)
+            yok = size(layer.values, 1) == length(layer.y) || size(layer.values, 1) + 1 == length(layer.y)
+            (xok && yok) ||
+                push!(issues, "HeatmapLayer $idx values shape must match x/y lengths or cell-edge lengths.")
         elseif layer isa RectLayer
             for rect in layer.rects
                 rect[1] <= rect[3] || push!(issues, "RectLayer $idx has xlo > xhi.")
@@ -39,6 +41,8 @@ function check_visual_spec(spec::VisualizationSpec; throw::Bool=false)
         elseif layer isa PointLayer
             layer.color isa AbstractVector && length(layer.color) != length(layer.points) &&
                 push!(issues, "PointLayer $idx color_values length must match the number of points.")
+            layer.markerspace in (:pixel, :data) ||
+                push!(issues, "PointLayer $idx markerspace must be :pixel or :data.")
         elseif layer isa Point3Layer
             isempty(layer.points) || all(length(p) == 3 for p in layer.points) ||
                 push!(issues, "Point3Layer $idx points must be 3-vectors.")

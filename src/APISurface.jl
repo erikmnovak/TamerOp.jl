@@ -28,7 +28,7 @@ const SIMPLE_API = (
     :point_codensity, :PointCodensityResult, :codensity_values, :codensity_mass, :neighbor_count,
     :encode, :coarsen, :common_refinement, :restriction, :pushforward_left, :pushforward_right, :derived_pushforward_left, :derived_pushforward_right,
     :resolve, :betti_table, :bass_table, :hom_dimension, :hom, :ext, :tor, :rhom, :derived_tensor, :hyperext, :hypertor, :ext_algebra, :invariant, :invariants,
-    :rank_invariant, :restricted_hilbert, :point_signed_measure, :euler_surface, :euler_signed_measure,
+    :rank_invariant, :rank_signed_measure, :restricted_hilbert, :point_signed_measure, :euler_surface, :euler_signed_measure,
     :rectangle_signed_barcode, :rectangle_signed_barcode_image,
     :slice_barcode, :slice_barcodes, :matching_distance, :matching_distance_exact_2d,
     :mp_landscape, :mpp_decomposition, :mpp_image,
@@ -101,7 +101,7 @@ const SIMPLE_API_BINDINGS = (
     (:Workflow, (
         :encode, :coarsen, :common_refinement, :restriction, :pushforward_left, :pushforward_right, :derived_pushforward_left, :derived_pushforward_right,
         :resolve, :betti_table, :bass_table, :hom_dimension, :hom, :ext, :tor, :rhom, :derived_tensor, :hyperext, :hypertor, :ext_algebra, :invariant, :invariants,
-        :rank_invariant, :restricted_hilbert, :point_signed_measure, :euler_surface, :euler_signed_measure,
+        :rank_invariant, :rank_signed_measure, :restricted_hilbert, :point_signed_measure, :euler_surface, :euler_signed_measure,
         :rectangle_signed_barcode, :rectangle_signed_barcode_image,
         :slice_barcode, :slice_barcodes, :matching_distance_exact_2d,
         :mp_landscape, :mpp_decomposition, :mpp_image,

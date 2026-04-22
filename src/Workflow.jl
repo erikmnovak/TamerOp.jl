@@ -205,8 +205,12 @@ using ..FiniteFringe: AbstractPoset, FinitePoset, GridPoset, ProductOfChainsPose
                      poset_equal_opposite
 using ..DerivedFunctors
 using ..Invariants
+import ..InvariantCore: _exact_slice_barcodes, _exact_euler_signed_measure,
+                        _exact_restricted_hilbert,
+                        _exact_rectangle_signed_barcode, _exact_rank_signed_measure
 using ..SignedMeasures
 using ..SliceInvariants: CompiledSlicePlan, SlicePlanCache
+import ..MultiparameterImages: _mp_landscape_slice_request, _mp_landscape_from_slice_barcodes
 import ..Fibered2D
 import ..ChangeOfPosets
 import ..Modules
@@ -2238,6 +2242,27 @@ end
     error("invariant: unknown invariant symbol $(which). Expected a function in Invariants or SignedMeasures.")
 end
 
+@inline function _workflow_invariant_value(enc::EncodingResult,
+                                           which::Symbol,
+                                           opts::InvariantOptions,
+                                           session_cache,
+                                           kwargs...)
+    if which === :euler_signed_measure
+        return true, euler_signed_measure(enc; opts=opts, cache=session_cache, kwargs...)
+    elseif which === :point_signed_measure
+        return true, point_signed_measure(enc; opts=opts, cache=session_cache, kwargs...)
+    elseif which === :restricted_hilbert
+        return true, restricted_hilbert(enc; opts=opts, cache=session_cache, kwargs...)
+    elseif which === :rank_signed_measure
+        return true, rank_signed_measure(enc; opts=opts, cache=session_cache, kwargs...)
+    elseif which === :slice_barcodes
+        return true, slice_barcodes(enc; opts=opts, cache=session_cache, kwargs...)
+    elseif which === :mp_landscape
+        return true, mp_landscape(enc; opts=opts, cache=session_cache, kwargs...)
+    end
+    return false, nothing
+end
+
 
 """
     invariant(enc::EncodingResult; which=:rank_invariant, opts=InvariantOptions(), kwargs...) -> InvariantResult
@@ -2282,6 +2307,10 @@ function invariant(enc::EncodingResult;
     opts = opts
     session_cache = _resolve_workflow_session_cache(cache)
     enc2 = _encoding_with_session_cache(enc, session_cache)
+    if which isa Symbol
+        handled, val = _workflow_invariant_value(enc2, which, opts, session_cache, kwargs...)
+        handled && return InvariantResult(enc2, which, val; opts=opts, meta=NamedTuple())
+    end
     f = which isa Symbol ? _resolve_invariant_function(which) : which
     val = _call_invariant(f, enc2, opts; kwargs...)
     return InvariantResult(enc2, which, val; opts=opts, meta=NamedTuple())
@@ -2417,13 +2446,16 @@ restricted_hilbert(M::PModule{K}) where {K} = Invariants.restricted_hilbert(M)
 
 @doc raw"""
     restricted_hilbert(M::PModule; opts=InvariantOptions(), kwargs...)
-    restricted_hilbert(enc::EncodingResult; opts=InvariantOptions(), kwargs...)
+    restricted_hilbert(enc::EncodingResult; opts=InvariantOptions(), cache=:auto, kwargs...)
     restricted_hilbert(enc::CohomologyDimsResult; opts=InvariantOptions(), kwargs...)
 
 Workflow convenience wrapper returning the bare restricted-Hilbert value.
 
-- `EncodingResult` and `CohomologyDimsResult` inputs use the workflow cache
-  contract and then unwrap the value from `InvariantResult`.
+- On lazy ingestion-backed `EncodingResult`s in supported `H0` regimes, this
+  uses the owner-native exact backend instead of first building cohomology
+  dimensions through the generic lazy-module path.
+- `CohomologyDimsResult` inputs unwrap the value through the cheap dims-first
+  workflow route.
 - Use `invariant(...; which=:restricted_hilbert)` when you want a typed wrapper
   with provenance instead of just the value.
 """ restricted_hilbert
@@ -2456,6 +2488,56 @@ function point_signed_measure(enc::EncodedComplexResult;
     return euler_signed_measure(enc; opts=opts, cache=cache, kwargs...)
 end
 
+@inline _rank_signed_measure_from_exact_payload(exact) =
+    SignedMeasures.PointSignedMeasure(exact.axes, exact.inds, exact.wts)
+
+function _rank_signed_measure_from_rectangle_signed_barcode(sb::SignedMeasures.RectSignedBarcode{N},
+                                                            pi,
+                                                            opts::InvariantOptions;
+                                                            keep_endpoints::Bool=true) where {N}
+    raw_pi = pi isa CompiledEncoding ? pi.pi : pi
+    raw_pi isa GridEncodingMap{N} ||
+        throw(ArgumentError("rank_signed_measure: fallback path requires a GridEncodingMap encoding."))
+    birth_axes, death_axes = SignedMeasures._rectangle_signed_barcode_grid_semantic_axes(
+        raw_pi,
+        opts;
+        keep_endpoints=keep_endpoints,
+    )
+    axis_pos = ntuple(i -> Dict{Int,Int}(sb.axes[i][j] => j for j in eachindex(sb.axes[i])), N)
+    inds = map(sb.rects) do rect
+        ntuple(k -> k <= N ? axis_pos[k][rect.lo[k]] : axis_pos[k - N][rect.hi[k - N]], 2 * N)
+    end
+    return SignedMeasures.PointSignedMeasure((birth_axes..., death_axes...), inds, copy(sb.weights))
+end
+
+@doc raw"""
+    rank_signed_measure(enc::EncodingResult; opts=InvariantOptions(), cache=:auto, kwargs...)
+
+Workflow convenience wrapper returning the bare rank signed measure.
+
+- On lazy ingestion-backed `EncodingResult`s, this uses the owner-native exact
+  sparse rank backend when available.
+- Otherwise it falls back to the generic rank rectangle decomposition and
+  converts that result into the canonical `PointSignedMeasure` representation.
+""" rank_signed_measure
+function rank_signed_measure(enc::EncodingResult;
+                             opts::InvariantOptions=InvariantOptions(),
+                             cache=:auto,
+                             kwargs...)
+    session_cache = _resolve_workflow_session_cache(cache)
+    enc2 = _encoding_with_session_cache(enc, session_cache)
+    exact = _exact_rank_signed_measure(enc2; opts=opts, kwargs...)
+    exact === nothing || return _rank_signed_measure_from_exact_payload(exact)
+    kwargs_nt = NamedTuple(kwargs)
+    sb = rectangle_signed_barcode(enc2; opts=opts, cache=session_cache, kwargs...)
+    return _rank_signed_measure_from_rectangle_signed_barcode(
+        sb,
+        enc2.pi,
+        opts;
+        keep_endpoints=get(kwargs_nt, :keep_endpoints, true),
+    )
+end
+
 @doc raw"""
     euler_signed_measure(enc::EncodingResult; opts=InvariantOptions(), cache=:auto, kwargs...)
     euler_signed_measure(enc::EncodedComplexResult; opts=InvariantOptions(), cache=:auto, kwargs...)
@@ -2475,6 +2557,8 @@ function euler_signed_measure(enc::EncodingResult;
                               kwargs...)
     session_cache = _resolve_workflow_session_cache(cache)
     enc2 = _encoding_with_session_cache(enc, session_cache)
+    exact = _exact_euler_signed_measure(enc2; opts=opts, kwargs...)
+    exact === nothing || return exact
     return SignedMeasures.euler_signed_measure(pmodule(enc2), enc2.pi, opts;
                                                cache=session_cache,
                                                kwargs...)
@@ -2500,6 +2584,8 @@ This supports Zn-style finite encodings and finite axis-grid encodings such as
 `GridEncodingMap`. For grid encodings with noninteger semantic coordinates, the
 returned barcode lives on the selected encoding-index grid; use
 `encoding_axes(enc)` to map rectangle endpoints back to semantic coordinates.
+Lazy ingestion-backed H0 grid encodings use a direct filtration-aware path when
+that contract is available.
 """ rectangle_signed_barcode
 function rectangle_signed_barcode(enc::EncodingResult;
                                   opts::InvariantOptions=InvariantOptions(),
@@ -2507,6 +2593,8 @@ function rectangle_signed_barcode(enc::EncodingResult;
                                   kwargs...)
     session_cache = _resolve_workflow_session_cache(cache)
     enc2 = _encoding_with_session_cache(enc, session_cache)
+    exact = _exact_rectangle_signed_barcode(enc2; opts=opts, kwargs...)
+    exact === nothing || return exact
     return SignedMeasures.rectangle_signed_barcode(pmodule(enc2), enc2.pi, opts;
                                                    cache=session_cache,
                                                    kwargs...)
@@ -2622,8 +2710,16 @@ end
 rank_invariant(enc::EncodingResult; opts::InvariantOptions=InvariantOptions(), kwargs...) =
     invariant(enc; which=:rank_invariant, opts=opts, kwargs...).value
 
-restricted_hilbert(enc::EncodingResult; opts::InvariantOptions=InvariantOptions(), kwargs...) =
-    invariant(enc; which=:restricted_hilbert, opts=opts, kwargs...).value
+function restricted_hilbert(enc::EncodingResult;
+                            opts::InvariantOptions=InvariantOptions(),
+                            cache=:auto,
+                            kwargs...)
+    session_cache = _resolve_workflow_session_cache(cache)
+    enc2 = _encoding_with_session_cache(enc, session_cache)
+    exact = _exact_restricted_hilbert(enc2; opts=opts, kwargs...)
+    exact === nothing || return exact
+    return _call_invariant(Invariants.restricted_hilbert, enc2, opts; kwargs...)
+end
 
 restricted_hilbert(enc::CohomologyDimsResult; opts::InvariantOptions=InvariantOptions(), kwargs...) =
     invariant(enc; which=:restricted_hilbert, opts=opts, kwargs...).value
@@ -2637,8 +2733,18 @@ euler_surface(enc::EncodedComplexResult; opts::InvariantOptions=InvariantOptions
 euler_surface(enc::CohomologyDimsResult; opts::InvariantOptions=InvariantOptions(), kwargs...) =
     invariant(enc; which=:euler_surface, opts=opts, kwargs...).value
 
-slice_barcode(enc::EncodingResult; opts::InvariantOptions=InvariantOptions(), kwargs...) =
-    invariant(enc; which=:slice_barcode, opts=opts, kwargs...).value
+function slice_barcode(enc::EncodingResult; opts::InvariantOptions=InvariantOptions(), kwargs...)
+    kwargs_nt = NamedTuple(kwargs)
+    directions = get(kwargs_nt, :directions, nothing)
+    offsets = get(kwargs_nt, :offsets, nothing)
+    if directions !== nothing && offsets !== nothing &&
+       directions isa AbstractVector && offsets isa AbstractVector &&
+       length(directions) == 1 && length(offsets) == 1
+        res = slice_barcodes(enc; opts=opts, kwargs...)
+        return res.barcodes[1, 1]
+    end
+    return invariant(enc; which=:slice_barcode, opts=opts, kwargs...).value
+end
 
 """
     slice_barcodes(enc::EncodingResult; opts=InvariantOptions(), cache=:auto, kwargs...)
@@ -2654,13 +2760,23 @@ Query/options contract
 - pass finite-box and strictness choices via `opts::InvariantOptions`,
 - keep ad hoc thread overrides in `kwargs...`,
 - do not pass `session_cache=...` here.
+
+Encoding-first exact path
+- On lazy ingestion-backed `EncodingResult`s, `degree=0` slice barcodes may be
+  computed directly from the encoded filtration events instead of first
+  materializing a `PModule`.
+- This exact line-persistence route preserves zero-length bars when the query
+  is given by explicit `directions` and basepoint `offsets`.
 """
 function slice_barcodes(enc::EncodingResult;
                         opts::InvariantOptions=InvariantOptions(),
                         cache=:auto,
                         kwargs...)
     session_cache = _resolve_workflow_session_cache(cache)
-    return slice_barcodes(pmodule(enc), enc.pi, opts;
+    enc2 = _encoding_with_session_cache(enc, session_cache)
+    exact = _exact_slice_barcodes(enc2; opts=opts, kwargs...)
+    exact === nothing || return exact
+    return slice_barcodes(pmodule(enc2), enc2.pi, opts;
                           cache=session_cache,
                           kwargs...)
 end
@@ -2684,10 +2800,31 @@ function mp_landscape(enc::EncodingResult;
                       cache=:auto,
                       kwargs...)
     session_cache = _resolve_workflow_session_cache(cache)
-    return mp_landscape(pmodule(enc), enc.pi;
-                        opts=opts,
-                        cache=session_cache,
-                        kwargs...)
+    enc2 = _encoding_with_session_cache(enc, session_cache)
+    req = _mp_landscape_slice_request(enc2.pi, opts; kwargs...)
+    bars = slice_barcodes(
+        enc2;
+        opts=req.opts_chain,
+        cache=session_cache,
+        directions=req.directions,
+        offsets=req.offsets,
+        normalize_dirs=:none,
+        direction_weight=req.direction_weight,
+        offset_weights=nothing,
+        normalize_weights=req.normalize_weights,
+        drop_unknown=req.drop_unknown,
+        dedup=req.dedup,
+        threads=req.threads,
+        ts=req.ts,
+        req.forward...,
+    )
+    return _mp_landscape_from_slice_barcodes(
+        bars;
+        kmax=req.kmax,
+        tgrid=req.tgrid,
+        normalize_weights=false,
+        threads=req.threads,
+    )
 end
 mp_landscape(M::PModule{K}, slices::AbstractVector; kwargs...) where {K} =
     Invariants.mp_landscape(M, slices; kwargs...)

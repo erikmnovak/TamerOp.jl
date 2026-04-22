@@ -1,0 +1,82 @@
+Encoding Step in TAMER-OP
+Speaker script for a 12 minute presentation
+
+Slide 1. Title.
+
+Today I want to explain the encoding step in TAMER-OP. This is the central computational move in the whole system. The broad message is that we do not try to do serious algebra directly on a huge ambient parameter space. Instead, we replace the original object by a finite encoded one. Once that finite encoded module exists, all later algebra, invariants, and downstream workflows become possible in one common internal language.
+
+Slide 2. The computational question.
+
+The starting point is a persistence object on some large indexing poset Q. That could be Z^n, R^n, a finite poset that someone has already chosen, or something implicit that comes from filtered data. What we want to produce is finite data of the form M isomorphic to pi pullback H, where pi goes from Q to a finite poset P, and H is a module on P.
+
+This is the categorical statement of finite encoding. But from the implementation side, we need more than existence. The output has to be reusable. It has to support repeated point location in the ambient parameter space. It has to support later algebra on finite-poset modules. It has to support comparison of several modules. That is why the workflow returns an EncodingResult rather than just a finite poset and a matrix.
+
+Slide 3. Four front-end input types.
+
+The next slide shows the four main front-end input types. First, there is the finite fringe case. Here the module is already presented on a finite poset. Second, there is the flange case over Z^n, where the input is given by flats, injectives, and a coefficient matrix. Third, there are PL box and PL fringe presentations over R^n. Those are the real-parameter geometric front ends. And fourth, there is raw input: point clouds, graphs, images, graded complexes, and simplex trees.
+
+The important point is that TAMER-OP allows these front ends to remain heterogeneous where that makes sense. We do not force the user to start in one universal presentation language. But after encoding, all four inputs are turned into the same kind of object: a finite poset, a finite module on that poset, and a classifier map.
+
+Slide 4. The universal idea.
+
+This is the common core behind all the backends. Suppose the module is presented by indicator generators and relations. At each parameter value q, we record which generators are active and which relations are active. That gives us a signature, written here as sigma of q equals the pair y of q and z of q. If two points have the same signature, then they have the same local presentation matrix. So they belong to the same constant region of the module.
+
+The algorithmic consequence is that we do not need to distinguish points one by one. We only need to distinguish realized signatures. So every backend follows the same pattern: first induce critical cells or grades, then label them by signatures, then merge equal signatures, and finally order the resulting regions to form the finite poset P. The classifier pi sends a point to its realized signature class.
+
+Slide 5. Encoding a flange over Z^n.
+
+Now let me specialize this to the flange case. A flange is built from flats, injectives, and a matrix Phi. The key observation is that membership in a flat or injective can only change when one crosses one of finitely many coordinate thresholds. So the first step is to collect those thresholds on each axis.
+
+Once that is done, Z^n is cut into slab cells. Any two lattice points in the same slab cell have the same membership in every flat and every injective, so they have the same signature. The encoder evaluates slab representatives, builds the realized signatures, and merges equal ones into a finite signature poset.
+
+Then the original flange presentation is pushed down to that finite poset. In implementation terms, this is efficient because the signatures are bit-packed, slab traversal is reusable, and several flanges can be common-encoded at once. So the Z^n backend is discrete, combinatorial, and fast.
+
+Slide 6. Encoding PL box presentations.
+
+The PL box case is the real-parameter analogue of the flange case, but with a more geometric cell decomposition. Because the generators are axis-aligned boxes, one again extracts all lower and upper coordinate thresholds. Those thresholds induce a rectangular cell grid in R^n.
+
+The important implementation trick here is traversal order. The encoder walks those cells in odometer order. When the traversal crosses a threshold, only a small number of membership bits can change. So the signature is updated incrementally rather than recomputed from scratch at every cell. That gives a fast route to the realized signatures and a direct cell-to-region lookup table.
+
+This is why the box backend is substantially cheaper than the general PL backend. It avoids generic polyhedral feasibility, and point location later can use mixed-radix indexing on the grid.
+
+Slide 7. Encoding general PL fringes.
+
+The general PL fringe case is where the geometry becomes richer. Here the upsets and downsets are unions of arbitrary convex polyhedra, not just axis-aligned boxes. So the ambient parameter space is no longer cut by coordinate hyperplanes alone. A naive full arrangement construction would be far too expensive and would also remember much more geometry than the module itself actually uses.
+
+So the backend is signature-first rather than arrangement-first. Each convex piece is stored by exact halfspaces over Q. If a signature says we must be inside a union, the algorithm chooses one convex piece. If a signature says we must be outside a union, the algorithm chooses a facet inequality to violate. Then it solves exact feasibility only for those branches.
+
+If a candidate branch is feasible, it yields a realized signature and usually a witness point. Those witness points and region descriptions are then compiled into later point-location data. In addition, the backend builds floating-point surrogates of the exact halfspace data, which are used only as fast filters for later point queries. So exact arithmetic is used to construct the encoding, but later repeated location queries can be much faster.
+
+Slide 8. From raw data to an encoded module.
+
+Now let me turn to the raw-data route. This is important because many users do not start with a presentation by indicators. They start with a point cloud, a graph, or an image.
+
+The raw input first passes through a filtration specification. That filtration produces either a graded complex or a packed simplicial object such as SimplexTreeMulti. The simplex tree route is useful because it stores the simplicial and grade data compactly and avoids materializing everything eagerly.
+
+From there, the ingestion layer extracts finite axes from the occurring grades, builds the finite grid poset, forms the corresponding cochain or cohomology object, and packages the result as a finite encoding. The key point is that data-derived modules and presentation-derived modules meet at the same endpoint.
+
+Slide 9. What the classifier stores.
+
+The next slide explains why the classifier is not just a formal map from Q to P. It stores region representatives, axes, cell lookup tables, realized signatures, finite-poset structure, and backend metadata. If the backend was geometric, it also stores region geometry such as bounding boxes, weights, and adjacency information.
+
+This matters because many later operations ask where a point lies in parameter space, or what region geometry it sees. So the classifier is really part of the computational state of the encoded object.
+
+Slide 10. Takeaways.
+
+Let me close with the main takeaways.
+
+First, TAMER-OP accepts four genuinely different front ends: finite fringes, flanges, PL presentations, and raw filtered data.
+
+Second, encoding turns all of them into one common internal object: a finite poset, a finite module on that poset, and a compiled classifier map.
+
+Third, the universal mechanism is signature-based. We identify constant regions by activity patterns, realize only the signatures that actually occur, and then push the module down.
+
+Fourth, the implementation adapts to the geometry. The flange case uses slab cells in Z^n. The box case uses rectangular traversal with sparse signature updates. The general PL case uses exact feasibility on candidate signatures. The raw-data case goes through graded complexes or simplex trees and then cohomology on a finite grid.
+
+Finally, once the encoding exists, the rest of the library can forget where the object came from. All later algebra and invariants work from the same finite encoded module.
+
+Slide 11. References.
+
+If someone wants to follow up after the talk, these are the main references behind the mathematical and computational viewpoint: Miller for finite encoding and tameness, Lesnick for the multiparameter module framework, Lesnick and Wright for slice-based visualization, Kerber, Lesnick, and Oudot for exact matching distance in two parameters, and Carriere and Blumberg for multiparameter persistence images.
+
+Thank you.

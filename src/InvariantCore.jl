@@ -11,6 +11,8 @@ Ownership map:
 - `shared_types.jl` owns [`SliceSpec`](@ref) and compiled-encoding unwrapping.
 - `options_helpers.jl` owns invariant-option normalization and keyword
   projection helpers.
+- `exact_backends.jl` owns the shared internal hook surface used by owner-local
+  exact invariant backends.
 - `packed_barcodes.jl` owns packed barcode and packed barcode-grid storage used
   by slice and fibered pipelines.
 - `rank_api.jl` owns the shared [`rank_map`](@ref) entrypoints reused by
@@ -50,6 +52,7 @@ import ..ChainComplexes: describe
 
 include("invariant_core/shared_types.jl")
 include("invariant_core/options_helpers.jl")
+include("invariant_core/exact_backends.jl")
 include("invariant_core/packed_barcodes.jl")
 include("invariant_core/rank_api.jl")
 include("invariant_core/rank_cache.jl")

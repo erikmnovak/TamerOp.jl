@@ -10,6 +10,7 @@ Outputs:
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import math
 from pathlib import Path
 from typing import Any
@@ -97,6 +98,17 @@ def _slice_query_for_case(case: dict[str, Any], points: np.ndarray) -> tuple[lis
         directions = [[1.0]]
         offsets = [[0.0], [0.25 * radius], [0.5 * radius]]
         return directions, offsets
+    if regime == "landmark_parity":
+        radius = float(case["landmark_radius"])
+        directions = [[1.0]]
+        offsets = [[0.0], [0.25 * radius], [0.5 * radius]]
+        return directions, offsets
+    if regime == "rips_codensity_parity":
+        radius = float(case["codensity_radius"])
+        # Shared continuous slice family on the (radius, codensity) plane.
+        directions = [[1.0, 0.0], [1.0, 0.5], [1.0, 1.0]]
+        offsets = [[0.0, 0.0], [0.25 * radius, 0.0], [0.5 * radius, 0.0]]
+        return directions, offsets
     if regime == "rips_lowerstar_parity":
         radius = float(case["lowerstar_radius"])
         coord1 = np.asarray(points[:, 0], dtype=np.float64)
@@ -104,7 +116,111 @@ def _slice_query_for_case(case: dict[str, Any], points: np.ndarray) -> tuple[lis
         directions = [[1.0, 0.0], [1.0, 0.5], [1.0, 1.0]]
         offsets = [[0.0, ylo], [0.25 * radius, ylo], [0.5 * radius, ylo]]
         return directions, offsets
+    if regime == "cubical_parity":
+        vals = np.asarray(points, dtype=np.float64).reshape(-1)
+        lo = float(np.min(vals))
+        hi = float(np.max(vals))
+        span = max(hi - lo, 1e-9)
+        directions = [[1.0]]
+        offsets = [[lo], [lo + 0.25 * span], [lo + 0.5 * span]]
+        return directions, offsets
     return None
+
+
+def _mp_landscape_query_for_case(case: dict[str, Any], points: np.ndarray) -> tuple[int, list[float]] | None:
+    regime = str(case["regime"])
+    kmax = 3
+    nt = 64
+    if regime == "rips_parity":
+        radius = float(case["parity_radius"])
+        return kmax, np.linspace(0.0, radius, nt, dtype=np.float64).tolist()
+    if regime == "landmark_parity":
+        radius = float(case["landmark_radius"])
+        return kmax, np.linspace(0.0, radius, nt, dtype=np.float64).tolist()
+    if regime == "rips_codensity_parity":
+        radius = float(case["codensity_radius"])
+        return kmax, np.linspace(0.0, 2.0 * radius, nt, dtype=np.float64).tolist()
+    if regime == "rips_lowerstar_parity":
+        radius = float(case["lowerstar_radius"])
+        coord1 = np.asarray(points[:, 0], dtype=np.float64)
+        span = max(float(np.max(coord1) - np.min(coord1)), 1e-9)
+        tmax = max(radius, 2.0 * span)
+        return kmax, np.linspace(0.0, tmax, nt, dtype=np.float64).tolist()
+    if regime == "cubical_parity":
+        vals = np.asarray(points, dtype=np.float64).reshape(-1)
+        lo = float(np.min(vals))
+        hi = float(np.max(vals))
+        if not math.isfinite(lo) or not math.isfinite(hi):
+            return None
+        if hi <= lo:
+            hi = lo + 1.0
+        return kmax, np.linspace(lo, hi, nt, dtype=np.float64).tolist()
+    return None
+
+
+_RUN_MULTIPERS_HELPERS = None
+
+
+def _load_run_multipers_helpers():
+    global _RUN_MULTIPERS_HELPERS
+    if _RUN_MULTIPERS_HELPERS is not None:
+        return _RUN_MULTIPERS_HELPERS
+    path = Path(__file__).with_name("run_multipers_invariants.py")
+    spec = importlib.util.spec_from_file_location("_generate_fixtures_run_multipers_helpers", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Unable to load multipers harness helpers from {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    _RUN_MULTIPERS_HELPERS = module
+    return module
+
+
+def _hilbert_query_axes_for_case(case: dict[str, Any], points: np.ndarray) -> list[list[float]] | None:
+    helpers = _load_run_multipers_helpers()
+    mmp, mp, gd, mf = helpers._try_import_multipers()
+    filtered_complex, _ = helpers._build_multipers_filtered_complex(mmp, mp, gd, mf, points, case)
+    target = helpers._signed_measure_target_complex(filtered_complex, mp, "restricted_hilbert")
+    raw_axes = helpers._native_rank_query_axes(target, mp)
+    ndim = len(raw_axes)
+    empty_locs = np.empty((0, ndim), dtype=np.float64)
+    empty_weights = np.empty((0,), dtype=np.int64)
+    canonical_axes, _ = helpers._normalize_hilbert_measure_contract(raw_axes, (empty_locs, empty_weights))
+    stabilized_axes = _stabilize_hilbert_query_axes(canonical_axes)
+    return [np.asarray(axis, dtype=np.float64).tolist() for axis in stabilized_axes]
+
+
+def _stabilize_hilbert_query_axes(
+    canonical_axes: tuple[np.ndarray, ...],
+    *,
+    cluster_tol: float = 5e-11,
+) -> tuple[np.ndarray, ...]:
+    if len(canonical_axes) != 1:
+        return canonical_axes
+    axis = np.asarray(canonical_axes[0], dtype=np.float64)
+    if axis.size <= 1:
+        return (axis,)
+    clusters: list[tuple[int, int]] = []
+    start = 0
+    for idx in range(1, axis.size):
+        if float(axis[idx] - axis[idx - 1]) > cluster_tol:
+            clusters.append((start, idx - 1))
+            start = idx
+    clusters.append((start, axis.size - 1))
+    stabilized: list[float] = [float(axis[0])]
+    for cluster_idx in range(len(clusters) - 1):
+        _, end = clusters[cluster_idx]
+        next_start, _ = clusters[cluster_idx + 1]
+        lo = float(axis[end])
+        hi = float(axis[next_start])
+        if hi <= lo:
+            stabilized.append(lo)
+        else:
+            stabilized.append(0.5 * (lo + hi))
+    stabilized.append(float(axis[clusters[-1][1]]))
+    out = np.asarray(stabilized, dtype=np.float64)
+    keep = np.ones(out.size, dtype=bool)
+    keep[1:] = np.diff(out) > 0.0
+    return (out[keep],)
 
 
 def _manifest_toml(
@@ -179,6 +295,12 @@ def _manifest_toml(
             out.append(f'slice_directions = {_format_float_mat(c["slice_directions"])}')
         if "slice_offsets" in c:
             out.append(f'slice_offsets = {_format_float_mat(c["slice_offsets"])}')
+        if "mp_kmax" in c:
+            out.append(f'mp_kmax = {int(c["mp_kmax"])}')
+        if "mp_tgrid" in c:
+            out.append(f'mp_tgrid = {_format_float_vec(c["mp_tgrid"])}')
+        if "hilbert_query_axes" in c:
+            out.append(f'hilbert_query_axes = {_format_float_mat(c["hilbert_query_axes"])}')
         if "image_side" in c:
             out.append(f'image_side = {int(c["image_side"])}')
         out.append("")
@@ -306,6 +428,14 @@ def main() -> None:
             directions, offsets = slice_query
             manifest_cases[-1]["slice_directions"] = directions
             manifest_cases[-1]["slice_offsets"] = offsets
+            mp_query = _mp_landscape_query_for_case(manifest_cases[-1], x)
+            if mp_query is not None:
+                mp_kmax, mp_tgrid = mp_query
+                manifest_cases[-1]["mp_kmax"] = mp_kmax
+                manifest_cases[-1]["mp_tgrid"] = mp_tgrid
+        approved = invariant_eligibility.get(regime, [])
+        if "restricted_hilbert" in approved:
+            manifest_cases[-1]["hilbert_query_axes"] = _hilbert_query_axes_for_case(manifest_cases[-1], x)
 
     manifest = _manifest_toml(
         {

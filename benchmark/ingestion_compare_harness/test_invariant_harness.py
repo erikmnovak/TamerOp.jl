@@ -27,6 +27,7 @@ def _load_module(path: Path, name: str):
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Unable to import module from {path}")
     module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -59,6 +60,129 @@ class MultipersExtractionSmoke(unittest.TestCase):
     def test_empty_return_shape(self) -> None:
         terms = self.mod._canonical_measure_terms([])
         self.assertEqual(terms, [])
+
+    def test_rank_contract_squeezes_alpha_dummy_axis(self) -> None:
+        axes = (
+            np.array([0.0, 1.0, 2.0], dtype=np.float64),
+            np.array([-np.inf], dtype=np.float64),
+        )
+        res = [
+            (
+                np.array(
+                    [
+                        [0.0, -np.inf, 1.0, np.inf],
+                        [1.0, -np.inf, 2.0, np.inf],
+                    ],
+                    dtype=np.float64,
+                ),
+                np.array([1, 2], dtype=np.int64),
+            )
+        ]
+        norm_axes, norm_measure = self.mod._normalize_rank_measure_contract(axes, res)
+        self.assertEqual(len(norm_axes), 1)
+        self.assertEqual(norm_axes[0].tolist(), [0.0, 1.0, 2.0])
+        self.assertEqual(norm_measure[0].tolist(), [[0.0, 1.0], [1.0, 2.0]])
+        self.assertEqual(norm_measure[1].tolist(), [1, 2])
+        self.assertEqual(
+            self.mod._serialize_measure_terms(self.mod._canonical_measure_terms(norm_measure)),
+            "0|1=>1;1|2=>2",
+        )
+
+    def test_cubical_rank_workaround_gate_is_narrow(self) -> None:
+        self.assertTrue(
+            self.mod._needs_hard_exit_rank_workaround("cubical_parity", "rank_signed_measure")
+        )
+        self.assertTrue(
+            self.mod._needs_hard_exit_rank_workaround("cubical_parity", "rank_invariant")
+        )
+        self.assertFalse(
+            self.mod._needs_hard_exit_rank_workaround("cubical_parity", "euler_signed_measure")
+        )
+        self.assertFalse(
+            self.mod._needs_hard_exit_rank_workaround("rips_parity", "rank_signed_measure")
+        )
+
+    def test_rank_invariant_terms_use_strict_death_semantics(self) -> None:
+        axes = (
+            np.array([0.0, 1.0, 2.0], dtype=np.float64),
+            np.array([-np.inf], dtype=np.float64),
+        )
+        res = [
+            (
+                np.array(
+                    [
+                        [0.0, -np.inf, 1.0, np.inf],
+                        [1.0, -np.inf, 2.0, np.inf],
+                    ],
+                    dtype=np.float64,
+                ),
+                np.array([1, 2], dtype=np.int64),
+            )
+        ]
+        terms = self.mod._sparse_rank_terms_from_measure(axes, res)
+        self.assertEqual(terms, [((0.0, 0.0), "1"), ((1.0, 1.0), "2")])
+
+
+class GenerateFixturesSmoke(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.mod = _load_module(HARNESS_DIR / "generate_fixtures.py", "generate_fixtures_test")
+
+    def test_codensity_slice_query_is_emitted(self) -> None:
+        points = np.random.default_rng(7).normal(size=(16, 2))
+        case = {
+            "regime": "rips_codensity_parity",
+            "codensity_radius": 1.6,
+        }
+        directions, offsets = self.mod._slice_query_for_case(case, points)
+        self.assertEqual(directions, [[1.0, 0.0], [1.0, 0.5], [1.0, 1.0]])
+        self.assertEqual(offsets, [[0.0, 0.0], [0.4, 0.0], [0.8, 0.0]])
+
+    def test_lowerstar_mp_landscape_query_is_emitted(self) -> None:
+        points = np.asarray(
+            [
+                [0.0, 0.0],
+                [0.5, 0.1],
+                [1.0, -0.2],
+                [1.5, 0.3],
+            ],
+            dtype=np.float64,
+        )
+        case = {
+            "regime": "rips_lowerstar_parity",
+            "lowerstar_radius": 1.2,
+        }
+        kmax, tgrid = self.mod._mp_landscape_query_for_case(case, points)
+        self.assertEqual(kmax, 3)
+        self.assertEqual(len(tgrid), 64)
+        self.assertAlmostEqual(tgrid[0], 0.0)
+        self.assertAlmostEqual(tgrid[-1], max(1.2, 2.0 * 1.5))
+
+    def test_codensity_mp_landscape_query_is_emitted(self) -> None:
+        points = np.random.default_rng(9).normal(size=(12, 2))
+        case = {
+            "regime": "rips_codensity_parity",
+            "codensity_radius": 1.6,
+        }
+        kmax, tgrid = self.mod._mp_landscape_query_for_case(case, points)
+        self.assertEqual(kmax, 3)
+        self.assertEqual(len(tgrid), 64)
+        self.assertAlmostEqual(tgrid[0], 0.0)
+        self.assertAlmostEqual(tgrid[-1], 3.2)
+
+    @unittest.skipUnless(importlib.util.find_spec("multipers") is not None, "multipers not installed")
+    def test_alpha_hilbert_query_axes_use_canonical_1d_contract(self) -> None:
+        points = np.random.default_rng(11).normal(size=(24, 2))
+        case = {
+            "regime": "alpha_parity",
+            "max_dim": 2,
+        }
+        axes = self.mod._hilbert_query_axes_for_case(case, points)
+        self.assertEqual(len(axes), 1)
+        self.assertGreater(len(axes[0]), 0)
+        self.assertEqual(float(axes[0][0]), 0.0)
+        self.assertTrue(np.all(np.diff(np.asarray(axes[0], dtype=np.float64)) > 0.0))
+        self.assertTrue(np.all(np.isfinite(np.asarray(axes[0], dtype=np.float64))))
 
 
 @unittest.skipUnless(importlib.util.find_spec("multipers") is not None, "multipers not installed")
@@ -119,6 +243,26 @@ class MultipersInvariantRouteSmoke(unittest.TestCase):
         self.assertGreater(abs_mass, 0.0)
         self.assertIn("dir=", canonical)
 
+    def test_rips_parity_mp_landscape_route_returns_tensor(self) -> None:
+        points = np.random.default_rng(6).normal(size=(12, 2))
+        case = {
+            "regime": "rips_parity",
+            "max_dim": 1,
+            "parity_radius": 1.25,
+            "slice_directions": [[1.0]],
+            "slice_offsets": [[0.0], [0.2]],
+            "mp_kmax": 3,
+            "mp_tgrid": [0.0, 0.25, 0.5, 0.75, 1.0],
+        }
+        res, _ = self.mod._run_invariant_uncached(
+            self.mmp, self.mp, self.gd, self.mf, points, case, "mp_landscape", 0
+        )
+        self.assertEqual(tuple(res["values"].shape), (1, 2, 3, 5))
+        term_count, abs_mass, canonical = self.mod._mp_landscape_output_contract(res)
+        self.assertEqual(term_count, 30)
+        self.assertGreaterEqual(abs_mass, 0.0)
+        self.assertIn("kmax=3@@tgrid=", canonical)
+
     def test_landmark_route_uses_manifest_subset(self) -> None:
         points = np.random.default_rng(2).normal(size=(12, 2))
         case = {
@@ -165,8 +309,67 @@ class MultipersInvariantRouteSmoke(unittest.TestCase):
                 self.mmp, self.mp, self.gd, self.mf, points, case, "euler_signed_measure", 0
             )
 
+    def test_alpha_restricted_hilbert_uses_manifest_query_axes_contract(self) -> None:
+        gen = _load_module(HARNESS_DIR / "generate_fixtures.py", "generate_fixtures_alpha_hilbert_test")
+        points = np.random.default_rng(12).normal(size=(18, 2))
+        case = {
+            "regime": "alpha_parity",
+            "max_dim": 2,
+        }
+        case["hilbert_query_axes"] = gen._hilbert_query_axes_for_case(case, points)
+        res, meta = self.mod._run_invariant_uncached(
+            self.mmp, self.mp, self.gd, self.mf, points, case, "restricted_hilbert", 0
+        )
+        self.assertIn("hilbert_query_axes", meta)
+        self.assertTrue(np.array_equal(meta["hilbert_query_axes"][0], np.asarray(case["hilbert_query_axes"][0], dtype=np.float64)))
+        self.assertIn("hilbert_measure_axes", meta)
+        axes, _ = self.mod._normalize_hilbert_measure_contract(meta["hilbert_measure_axes"], res)
+        self.assertEqual(len(axes), 1)
+
+    def test_sparse_hilbert_terms_from_raw_measure_are_pointwise(self) -> None:
+        axes = (np.asarray([0.0, 2.7, 5.9, 9.1], dtype=np.float64),)
+        raw_measure = (
+            np.asarray([[0.0], [5.48], [6.33]], dtype=np.float64),
+            np.asarray([7500, -1, -1], dtype=np.int64),
+        )
+        terms = self.mod._sparse_hilbert_terms_from_measure(axes, raw_measure)
+        self.assertEqual(
+            terms,
+            [
+                ((0.0,), "7500"),
+                ((2.7,), "7500"),
+                ((5.9,), "7499"),
+                ((9.1,), "7498"),
+            ],
+        )
+
 
 class CompareInvariantSmoke(unittest.TestCase):
+    def test_rank_invariant_compare_accepts_matching_payloads(self) -> None:
+        mod = _load_module(HARNESS_DIR / "compare_invariants.py", "compare_invariants_rank_inv_test")
+        payload = "0|1=>1;1|2=>3"
+        status, reason = mod._compare_rank_invariant(payload, payload)
+        self.assertEqual(status, "matched")
+        self.assertEqual(reason, "matched_rank_invariant")
+
+    def test_restricted_hilbert_compare_accepts_matching_payloads(self) -> None:
+        mod = _load_module(HARNESS_DIR / "compare_invariants.py", "compare_invariants_hilbert_test")
+        payload = "0|0=>1;1|0=>2"
+        status, reason = mod._compare_restricted_hilbert(payload, payload)
+        self.assertEqual(status, "matched")
+        self.assertEqual(reason, "matched_restricted_hilbert")
+
+    def test_mp_landscape_compare_accepts_matching_payloads(self) -> None:
+        mod = _load_module(HARNESS_DIR / "compare_invariants.py", "compare_invariants_test")
+        payload = (
+            "kmax=2@@tgrid=0|1|2###"
+            "dir=1@@off=0@@w=1@@vals=0|1|0;;0|0|0###"
+            "dir=1@@off=0.5@@w=1@@vals=0|0.5|0;;0|0|0"
+        )
+        status, reason = mod._compare_mp_landscape(payload, payload)
+        self.assertEqual(status, "matched")
+        self.assertEqual(reason, "matched_mp_landscape")
+
     def test_only_matched_rows_contribute_to_summary(self) -> None:
         cols = [
             "tool",
@@ -462,10 +665,7 @@ class CompareInvariantSmoke(unittest.TestCase):
             "notes": "",
             "timestamp_utc": "2026-03-23T00:00:00+00:00",
         }
-        tamer_rank = "0|0|0|1=>1"
-        multipers_rank = "0|0|inf|inf=>7"
-        rank_axes = "0|1;;0|1"
-        rank_table = "0|0||0|0=>1;0|0||1|1=>1;1|1||1|1=>2"
+        rank_measure = "0|0|0|1=>1"
 
         with tempfile.TemporaryDirectory() as td:
             td_path = Path(td)
@@ -488,9 +688,9 @@ class CompareInvariantSmoke(unittest.TestCase):
                         "warm_median_ms": "5.0",
                         "output_term_count": "12",
                         "output_abs_mass": "12.0",
-                        "output_measure_canonical": tamer_rank,
-                        "output_rank_query_axes_canonical": rank_axes,
-                        "output_rank_table_canonical": rank_table,
+                        "output_measure_canonical": rank_measure,
+                        "output_rank_query_axes_canonical": "",
+                        "output_rank_table_canonical": "",
                     }
                 ],
                 cols,
@@ -508,9 +708,9 @@ class CompareInvariantSmoke(unittest.TestCase):
                         "warm_median_ms": "2.5",
                         "output_term_count": "8",
                         "output_abs_mass": "8.0",
-                        "output_measure_canonical": multipers_rank,
-                        "output_rank_query_axes_canonical": rank_axes,
-                        "output_rank_table_canonical": rank_table,
+                        "output_measure_canonical": rank_measure,
+                        "output_rank_query_axes_canonical": "",
+                        "output_rank_table_canonical": "",
                     }
                 ],
                 cols,
@@ -540,7 +740,7 @@ class CompareInvariantSmoke(unittest.TestCase):
 
             self.assertEqual(len(comparison_rows), 1)
             self.assertEqual(comparison_rows[0]["parity_status"], "matched")
-            self.assertEqual(comparison_rows[0]["parity_reason"], "matched_rank_table_shared_grid")
+            self.assertEqual(comparison_rows[0]["parity_reason"], "matched_rank_signed_measure")
 
     def test_slice_barcodes_compare_matches_identical_records(self) -> None:
         cols = [

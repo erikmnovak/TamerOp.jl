@@ -80,8 +80,14 @@ def _parse_requested_invariants(raw: str) -> list[str] | None:
         item = part.strip().lower().replace("-", "_")
         if item in ("rank", "rank_signed_measure"):
             out.append("rank_signed_measure")
+        elif item == "rank_invariant":
+            out.append("rank_invariant")
+        elif item in ("restricted_hilbert", "hilbert"):
+            out.append("restricted_hilbert")
         elif item in ("slice", "slice_barcodes"):
             out.append("slice_barcodes")
+        elif item in ("landscape", "mp_landscape"):
+            out.append("mp_landscape")
         elif item in ("euler", "euler_signed_measure"):
             out.append("euler_signed_measure")
         else:

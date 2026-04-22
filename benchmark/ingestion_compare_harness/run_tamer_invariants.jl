@@ -32,6 +32,7 @@ end
 
 const DI = TamerOp.DataIngestion
 const EC = TamerOp.EncodingCore
+const IC = TamerOp.InvariantCore
 const SM = TamerOp.SignedMeasures
 const SI = TamerOp.SliceInvariants
 const Opt = TamerOp.Options
@@ -227,8 +228,14 @@ end
         token = replace(lowercase(strip(part)), '-' => '_')
         if token == "rank" || token == "rank_signed_measure"
             push!(out, :rank_signed_measure)
+        elseif token == "rank_invariant"
+            push!(out, :rank_invariant)
+        elseif token == "restricted_hilbert" || token == "hilbert"
+            push!(out, :restricted_hilbert)
         elseif token == "slice" || token == "slice_barcodes"
             push!(out, :slice_barcodes)
+        elseif token == "landscape" || token == "mp_landscape"
+            push!(out, :mp_landscape)
         elseif token == "euler" || token == "euler_signed_measure"
             push!(out, :euler_signed_measure)
         else
@@ -251,8 +258,14 @@ function _approved_invariants_for_regime(raw::Dict, regime::AbstractString)
         token = replace(lowercase(strip(String(v))), '-' => '_')
         if token == "rank" || token == "rank_signed_measure"
             push!(out, :rank_signed_measure)
+        elseif token == "rank_invariant"
+            push!(out, :rank_invariant)
+        elseif token == "restricted_hilbert" || token == "hilbert"
+            push!(out, :restricted_hilbert)
         elseif token == "slice" || token == "slice_barcodes"
             push!(out, :slice_barcodes)
+        elseif token == "landscape" || token == "mp_landscape"
+            push!(out, :mp_landscape)
         elseif token == "euler" || token == "euler_signed_measure"
             push!(out, :euler_signed_measure)
         else
@@ -294,6 +307,14 @@ function _slice_query_from_case(case::AbstractDict{String,<:Any})
     dirs = [Float64[Float64(v) for v in dir] for dir in dirs_raw]
     offs = [Float64[Float64(v) for v in off] for off in offs_raw]
     return dirs, offs
+end
+
+function _mp_landscape_query_from_case(case::AbstractDict{String,<:Any})
+    haskey(case, "mp_kmax") || error("mp_landscape requires manifest mp_kmax")
+    haskey(case, "mp_tgrid") || error("mp_landscape requires manifest mp_tgrid")
+    kmax = Int(case["mp_kmax"])
+    tgrid = Float64[Float64(v) for v in case["mp_tgrid"]]
+    return kmax, tgrid
 end
 
 function _canonical_measure_terms_raw(raw_coords::Vector{Vector{Float64}}, raw_wts)
@@ -375,6 +396,186 @@ end
 
 @inline _abs_mass_terms(terms) = sum(Float64(abs(wt)) for (_, wt) in terms)
 
+function _benchmark_representatives(enc)
+    reps = TamerOp.encoding_representatives(enc)
+    reps === nothing && error("Benchmark function serialization requires encoding representatives.")
+    return reps
+end
+
+function _hilbert_query_axes_from_case(case::AbstractDict{String,<:Any})
+    haskey(case, "hilbert_query_axes") || return nothing
+    raw_axes = case["hilbert_query_axes"]
+    axes = Vector{Vector{Float64}}()
+    for axis_any in raw_axes
+        push!(axes, Float64[Float64(x) for x in axis_any])
+    end
+    isempty(axes) && error("hilbert_query_axes must be nonempty.")
+    return axes
+end
+
+function _sparse_value_terms(reps, vals)
+    length(reps) == length(vals) || error("Representative/value length mismatch: $(length(reps)) != $(length(vals))")
+    raw_coords = Vector{Vector{Float64}}()
+    raw_wts = Any[]
+    for i in eachindex(vals)
+        val = vals[i]
+        iszero(val) && continue
+        rep = reps[i]
+        push!(raw_coords, Float64[Float64(x) for x in rep])
+        push!(raw_wts, val)
+    end
+    return _canonical_measure_terms_raw(raw_coords, raw_wts)
+end
+
+function _locate_query_axis_index(axis::AbstractVector{<:Real},
+                                  q::Real;
+                                  tol::Float64=1e-11)
+    qf = Float64(q)
+    qf < Float64(axis[1]) - tol &&
+        error("Hilbert query coordinate $(qf) lies below the encoding-axis support.")
+    qf > Float64(axis[end]) + tol &&
+        error("Hilbert query coordinate $(qf) lies above the encoding-axis support.")
+    return max(1, searchsortedlast(axis, qf))
+end
+
+function _sparse_value_terms_on_query_axes(enc, vals, query_axes::Vector{Vector{Float64}})
+    compiled = EC.compile_encoding(enc)
+    pi = TamerOp.encoding_map(compiled)
+    pi isa EC.GridEncodingMap || error("Shared Hilbert query-grid serialization requires a GridEncodingMap.")
+    enc_axes = EC.encoding_axes(compiled)
+    enc_axes === nothing && error("Shared Hilbert query-grid serialization requires encoding axes.")
+    length(query_axes) == length(enc_axes) || error("Hilbert query axis dimension mismatch.")
+    raw_coords = Vector{Vector{Float64}}()
+    raw_wts = Any[]
+    axis_ranges = Tuple(Base.OneTo(length(axis)) for axis in query_axes)
+    for query_idx in Iterators.product(axis_ranges...)
+        point = Float64[Float64(query_axes[d][query_idx[d]]) for d in eachindex(query_axes)]
+        region = 1
+        for d in eachindex(query_axes)
+            pos = _locate_query_axis_index(enc_axes[d], point[d])
+            region += (pos - 1) * pi.strides[d]
+        end
+        (1 <= region <= length(vals)) || error("Hilbert query locate returned out-of-range index $(region).")
+        val = vals[region]
+        iszero(val) && continue
+        push!(raw_coords, point)
+        push!(raw_wts, val)
+    end
+    return _canonical_measure_terms_raw(raw_coords, raw_wts)
+end
+
+function _sparse_hilbert_measure_terms_from_rank_measure(rank_pm)
+    axes = getproperty(rank_pm, :axes)
+    inds = getproperty(rank_pm, :inds)
+    wts = getproperty(rank_pm, :wts)
+    N2 = length(axes)
+    iseven(N2) || error("Restricted-Hilbert sparse contract requires even-dimensional rank measure axes.")
+    N = N2 ÷ 2
+    birth_axes = ntuple(d -> Vector{Float64}(axes[d]), N)
+    raw_coords = Vector{Vector{Float64}}()
+    raw_wts = Int[]
+    if N == 1
+        n = length(birth_axes[1])
+        @inbounds for i in eachindex(wts)
+            b, d = inds[i]
+            (1 <= b <= n && 1 <= d <= n) || error("Rank measure index out of range for 1D restricted-Hilbert contraction.")
+            d < b && continue
+            wt = Int(wts[i])
+            push!(raw_coords, Float64[birth_axes[1][b]])
+            push!(raw_wts, wt)
+            if d < n
+                push!(raw_coords, Float64[birth_axes[1][d + 1]])
+                push!(raw_wts, -wt)
+            end
+        end
+    elseif N == 2
+        m1 = length(birth_axes[1])
+        m2 = length(birth_axes[2])
+        @inbounds for i in eachindex(wts)
+            b1, b2, d1, d2 = inds[i]
+            (1 <= b1 <= m1 && 1 <= d1 <= m1 && 1 <= b2 <= m2 && 1 <= d2 <= m2) ||
+                error("Rank measure index out of range for 2D restricted-Hilbert contraction.")
+            (d1 < b1 || d2 < b2) && continue
+            wt = Int(wts[i])
+            push!(raw_coords, Float64[birth_axes[1][b1], birth_axes[2][b2]])
+            push!(raw_wts, wt)
+            if d1 < m1
+                push!(raw_coords, Float64[birth_axes[1][d1 + 1], birth_axes[2][b2]])
+                push!(raw_wts, -wt)
+            end
+            if d2 < m2
+                push!(raw_coords, Float64[birth_axes[1][b1], birth_axes[2][d2 + 1]])
+                push!(raw_wts, -wt)
+            end
+            if d1 < m1 && d2 < m2
+                push!(raw_coords, Float64[birth_axes[1][d1 + 1], birth_axes[2][d2 + 1]])
+                push!(raw_wts, wt)
+            end
+        end
+    else
+        error("Restricted-Hilbert sparse contract is only implemented for 1D and 2D rank measures.")
+    end
+    return _canonical_measure_terms_raw(raw_coords, raw_wts)
+end
+
+function _sparse_hilbert_measure_terms_from_values(enc, vals)
+    compiled = EC.compile_encoding(enc)
+    pi = TamerOp.encoding_map(compiled)
+    pi isa EC.GridEncodingMap || return _sparse_value_terms(_benchmark_representatives(enc), vals)
+    axes = EC.encoding_axes(compiled)
+    axes === nothing && return _sparse_value_terms(_benchmark_representatives(enc), vals)
+    lengths = map(length, axes)
+    total_len = prod(lengths)
+    length(vals) == total_len || error("Restricted-Hilbert values length does not match encoding grid.")
+    raw_coords = Vector{Vector{Float64}}()
+    raw_wts = Int[]
+    if length(axes) == 1
+        arr = reshape(vals, lengths[1])
+        prev = 0
+        @inbounds for i in eachindex(arr)
+            cur = Int(arr[i])
+            delta = cur - prev
+            if !iszero(delta)
+                push!(raw_coords, Float64[Float64(axes[1][i])])
+                push!(raw_wts, delta)
+            end
+            prev = cur
+        end
+    elseif length(axes) == 2
+        arr = reshape(vals, lengths[1], lengths[2])
+        @inbounds for j in 1:lengths[2], i in 1:lengths[1]
+            cur = Int(arr[i, j])
+            left = i > 1 ? Int(arr[i - 1, j]) : 0
+            down = j > 1 ? Int(arr[i, j - 1]) : 0
+            corner = (i > 1 && j > 1) ? Int(arr[i - 1, j - 1]) : 0
+            delta = cur - left - down + corner
+            if !iszero(delta)
+                push!(raw_coords, Float64[Float64(axes[1][i]), Float64(axes[2][j])])
+                push!(raw_wts, delta)
+            end
+        end
+    else
+        return _sparse_value_terms(_benchmark_representatives(enc), vals)
+    end
+    return _canonical_measure_terms_raw(raw_coords, raw_wts)
+end
+
+function _sparse_rank_invariant_terms(rank_inv, reps)
+    raw_coords = Vector{Vector{Float64}}()
+    raw_wts = Int[]
+    for ((a, b), val) in pairs(rank_inv)
+        iszero(val) && continue
+        (1 <= a <= length(reps) && 1 <= b <= length(reps)) || error("RankInvariantResult contains out-of-range index ($a, $b)")
+        rep_a = reps[a]
+        rep_b = reps[b]
+        coords = Float64[Float64(x) for x in rep_a]
+        append!(coords, Float64[Float64(x) for x in rep_b])
+        push!(raw_coords, coords)
+        push!(raw_wts, Int(val))
+    end
+    return _canonical_measure_terms_raw(raw_coords, raw_wts)
+end
+
 @inline function _slice_tail_value(tvals::AbstractVector{<:Real})
     m = length(tvals)
     m >= 1 || error("_slice_tail_value requires nonempty tvals")
@@ -418,6 +619,52 @@ end
     return "dir=" * _coord_key_tuple(dir) * "@@off=" * _coord_key_tuple(off) * "@@bars=" * _serialize_barcode_terms(terms)
 end
 
+function _positive_barcode_points(bar)
+    pts = Tuple{Float64,Float64}[]
+    for (interval, mult) in pairs(bar)
+        b = Float64(interval[1])
+        d = Float64(interval[2])
+        b < d || continue
+        for _ in 1:Int(mult)
+            push!(pts, (b, d))
+        end
+    end
+    return pts
+end
+
+function _serialize_landscape_values(vals::AbstractMatrix{<:Real})
+    rows = String[]
+    for k in axes(vals, 1)
+        push!(rows, join((_coord_token(Float64(vals[k, j])) for j in axes(vals, 2)), "|"))
+    end
+    return join(rows, ";;")
+end
+
+function _serialize_mp_landscape_record(dir, off, weight, vals)
+    return "dir=" * _coord_key_tuple(dir) *
+           "@@off=" * _coord_key_tuple(off) *
+           "@@w=" * _coord_token(Float64(weight)) *
+           "@@vals=" * _serialize_landscape_values(vals)
+end
+
+function _mp_landscape_output_contract(res)
+    kmax = Int(res.kmax)
+    tgrid = Float64[Float64(x) for x in res.tgrid]
+    values = res.values
+    weights = res.weights
+    dirs = res.directions
+    offs = res.offsets
+    records = String[]
+    abs_mass = 0.0
+    for i in axes(values, 1), j in axes(values, 2)
+        vals = @view values[i, j, :, :]
+        abs_mass += sum(abs, vals)
+        push!(records, _serialize_mp_landscape_record(dirs[i], offs[j], weights[i, j], vals))
+    end
+    payload = "kmax=" * string(kmax) * "@@tgrid=" * _coord_key_tuple(tgrid) * "###" * join(records, "###")
+    return length(values), abs_mass, payload
+end
+
 function _slice_output_contract(out)
     payload = hasproperty(out, :slice_result) ? getproperty(out, :slice_result) : out
     enc = hasproperty(out, :encoding_result) ? getproperty(out, :encoding_result) : nothing
@@ -447,162 +694,62 @@ function _slice_output_contract(out)
     return term_count, abs_mass, join(records, "###")
 end
 
-@inline function _slice_exact_line_endpoints_grid1d(
-    case::AbstractDict{String,<:Any},
-    axis::AbstractVector{<:Real},
-    x0::Float64,
-    dir::Float64,
-)
-    dir > 0.0 || error("slice_barcodes exact 1D path currently requires positive direction.")
-    m = length(axis)
-    m >= 1 || error("slice_barcodes exact 1D path requires a nonempty axis.")
-    regime = String(case["regime"])
-    lower0 = regime == "rips_parity" ? 0.0 : Float64(first(axis))
-    vals = Vector{Float64}(undef, m + 1)
-    vals[1] = (lower0 - x0) / dir
-    @inbounds for i in 2:m
-        vals[i] = (Float64(axis[i]) - x0) / dir
-    end
-    vals[end] = Inf
-    return vals
-end
-
-@inline function _serialize_rank_axes(axes)
-    return join((_coord_key_tuple(axis) for axis in axes), ";;")
-end
-
-function _serialize_rank_table(axes, table)
-    nd = length(axes)
-    dims = ntuple(i -> length(axes[i]), nd)
-    entries = String[]
-    for pCI in CartesianIndices(dims)
-        p = pCI.I
-        q_ranges = ntuple(k -> p[k]:dims[k], nd)
-        for qCI in CartesianIndices(q_ranges)
-            q = qCI.I
-            val = @inbounds table[pCI, qCI]
-            iszero(val) && continue
-            pcoords = ntuple(k -> Float64(axes[k][p[k]]), nd)
-            qcoords = ntuple(k -> Float64(axes[k][q[k]]), nd)
-            push!(entries, _coord_key_tuple(pcoords) * "||" * _coord_key_tuple(qcoords) * "=>" * _weight_token(val))
-        end
-    end
-    return join(entries, ";")
-end
-
-function _rank_output_contract(out)
-    if hasproperty(out, :rank_query_axes) && hasproperty(out, :rank_table_canonical)
-        axes = getproperty(out, :rank_query_axes)
-        table = getproperty(out, :rank_table_canonical)
-        return _serialize_rank_axes(axes), String(table)
-    end
-    if hasproperty(out, :axes) && hasproperty(out, :rects) && hasproperty(out, :weights)
-        axes = getproperty(out, :axes)
-        table = SM.rectangle_signed_barcode_rank(out; zero_noncomparable=true, threads=false)
-        return _serialize_rank_axes(axes), _serialize_rank_table(axes, table)
-    end
-    return "", ""
-end
-
 @inline function _run_rank_signed_measure_uncached(data, spec, degree::Int)
     session_cache = TamerOp.SessionCache()
     enc = DI.encode(data, spec; degree=degree, stage=:encoding_result, cache=session_cache)
+    direct = IC._exact_rank_signed_measure(
+        enc;
+        opts=Opt.InvariantOptions(),
+        threads=true,
+    )
+    direct === nothing || return direct
     sb = TamerOp.rectangle_signed_barcode(enc; opts=Opt.InvariantOptions(), cache=session_cache)
     pi0 = TamerOp.encoding_map(enc)
     raw_pi = pi0 isa EC.CompiledEncoding ? TamerOp.encoding_map(pi0) : pi0
     if raw_pi isa EC.GridEncodingMap
         birth_axes, death_axes = SM._rectangle_signed_barcode_grid_semantic_axes(raw_pi, Opt.InvariantOptions(); keep_endpoints=true)
-        rank_table = SM.rectangle_signed_barcode_rank(sb; zero_noncomparable=true, threads=false)
         return (
             ; barcode=sb,
               semantic_axes_birth=birth_axes,
               semantic_axes_death=death_axes,
-              rank_query_axes=birth_axes,
-              rank_table_canonical=_serialize_rank_table(birth_axes, rank_table),
         )
     end
     return sb
 end
 
-function _run_slice_barcodes_exact_grid1d(enc, case)
-    directions, offsets = _slice_query_from_case(case)
-    pi0 = TamerOp.encoding_map(enc)
-    raw_pi = pi0 isa EC.CompiledEncoding ? TamerOp.encoding_map(pi0) : pi0
-    raw_pi isa EC.GridEncodingMap{1} || error("exact 1D slice path requires GridEncodingMap{1}")
-    axis = raw_pi.coords[1]
-    chain = collect(1:length(axis))
-    M = TamerOp.Workflow.pmodule(enc)
-    nd = length(directions)
-    no = length(offsets)
-    bars = Matrix{Dict{Tuple{Float64,Float64},Int}}(undef, nd, no)
-    for i in 1:nd
-        dir = directions[i]
-        length(dir) == 1 || error("exact 1D slice path expects 1D directions.")
-        d = Float64(dir[1])
-        for j in 1:no
-            off = offsets[j]
-            length(off) == 1 || error("exact 1D slice path expects 1D offsets.")
-            x0 = Float64(off[1])
-            vals = _slice_exact_line_endpoints_grid1d(case, axis, x0, d)
-            bars[i, j] = SI.slice_barcode(M, chain; values=vals, check_chain=false)
-        end
-    end
-    weights = ones(Float64, nd, no)
-    return SI.SliceBarcodesResult(bars, weights, directions, offsets)
+@inline function _run_rank_invariant_uncached(data, spec, degree::Int)
+    session_cache = TamerOp.SessionCache()
+    enc = DI.encode(data, spec; degree=degree, stage=:encoding_result, cache=session_cache)
+    res = TamerOp.rank_invariant(enc; opts=Opt.InvariantOptions(), cache=session_cache)
+    return (; rank_result=res, encoding_result=enc)
 end
 
-function _run_slice_barcodes_exact_grid2d(enc, case)
-    directions, offsets = _slice_query_from_case(case)
-    pi0 = TamerOp.encoding_map(enc)
-    raw_pi = pi0 isa EC.CompiledEncoding ? TamerOp.encoding_map(pi0) : pi0
-    raw_pi isa EC.GridEncodingMap{2} || error("exact 2D slice path requires GridEncodingMap{2}")
-    M = TamerOp.Workflow.pmodule(enc)
-    nd = length(directions)
-    no = length(offsets)
-    bars = Matrix{Dict{Tuple{Float64,Float64},Int}}(undef, nd, no)
-    for i in 1:nd
-        dir = Float64[Float64(v) for v in directions[i]]
-        length(dir) == 2 || error("exact 2D slice path expects 2D directions.")
-        n1 = -dir[2]
-        n2 = dir[1]
-        for j in 1:no
-            off_entry = offsets[j]
-            off = if length(off_entry) == 1
-                Float64(off_entry[1])
-            elseif length(off_entry) == 2
-                x0 = Float64[Float64(v) for v in off_entry]
-                n1 * x0[1] + n2 * x0[2]
-            else
-                error("exact 2D slice path expects scalar offsets or 2D basepoints.")
-            end
-            chain, vals = TamerOp.Fibered2D.slice_chain_exact_2d(
-                raw_pi,
-                dir,
-                off,
-                Opt.InvariantOptions(box=:auto);
-                normalize_dirs=:none,
-            )
-            bars[i, j] = isempty(chain) ? Dict{Tuple{Float64,Float64},Int}() :
-                SI.slice_barcode(M, chain; values=vals, check_chain=false)
-        end
-    end
-    weights = ones(Float64, nd, no)
-    return SI.SliceBarcodesResult(bars, weights, directions, offsets)
+@inline function _run_restricted_hilbert_uncached(data, spec, degree::Int)
+    session_cache = TamerOp.SessionCache()
+    enc = DI.encode(data, spec; degree=degree, stage=:encoding_result, cache=session_cache)
+    direct = IC._exact_rank_signed_measure(
+        enc;
+        opts=Opt.InvariantOptions(),
+        threads=true,
+    )
+    direct === nothing || return (; rank_measure=direct, encoding_result=enc, direct_hilbert_measure=true)
+    vals = TamerOp.restricted_hilbert(enc; opts=Opt.InvariantOptions(), cache=session_cache)
+    return (; hilbert_values=vals, encoding_result=enc)
 end
 
 @inline function _run_slice_barcodes_uncached(data, spec, case, degree::Int)
     session_cache = TamerOp.SessionCache()
     enc = DI.encode(data, spec; degree=degree, stage=:encoding_result, cache=session_cache)
-    pi0 = TamerOp.encoding_map(enc)
-    raw_pi = pi0 isa EC.CompiledEncoding ? TamerOp.encoding_map(pi0) : pi0
-    if raw_pi isa EC.GridEncodingMap{1}
-        res = _run_slice_barcodes_exact_grid1d(enc, case)
-        return (; slice_result=res, encoding_result=enc, exact_line_persistence=true)
-    elseif raw_pi isa EC.GridEncodingMap{2}
-        res = _run_slice_barcodes_exact_grid2d(enc, case)
-        return (; slice_result=res, encoding_result=enc, exact_line_persistence=true)
-    end
     directions, offsets = _slice_query_from_case(case)
+    exact_line = IC._supports_exact_slice_barcodes(
+        enc;
+        opts=Opt.InvariantOptions(),
+        directions=directions,
+        offsets=offsets,
+        normalize_dirs=:none,
+        values=nothing,
+        packed=false,
+    )
     res = TamerOp.slice_barcodes(
         enc;
         opts=Opt.InvariantOptions(),
@@ -613,7 +760,41 @@ end
         threads=false,
         packed=false,
     )
-    return (; slice_result=res, encoding_result=enc, exact_line_persistence=false)
+    return (; slice_result=res, encoding_result=enc, exact_line_persistence=exact_line)
+end
+
+function _run_mp_landscape_uncached(data, spec, case, degree::Int)
+    session_cache = TamerOp.SessionCache()
+    enc = DI.encode(data, spec; degree=degree, stage=:encoding_result, cache=session_cache)
+    directions, offsets = _slice_query_from_case(case)
+    kmax, tgrid = _mp_landscape_query_from_case(case)
+    bars = TamerOp.slice_barcodes(
+        enc;
+        opts=Opt.InvariantOptions(),
+        cache=session_cache,
+        directions=directions,
+        offsets=offsets,
+        normalize_weights=false,
+        threads=false,
+        packed=false,
+    )
+    payload = hasproperty(bars, :bars) ? getproperty(bars, :bars) : SI.slice_barcodes(bars)
+    vals = zeros(Float64, length(directions), length(offsets), kmax, length(tgrid))
+    for i in 1:length(directions), j in 1:length(offsets)
+        pts = _positive_barcode_points(payload[i, j])
+        pl = SI.persistence_landscape(pts; kmax=kmax, tgrid=tgrid)
+        vals[i, j, :, :] .= SI.landscape_values(pl)
+    end
+    weights = hasproperty(bars, :weights) ? Float64.(getproperty(bars, :weights)) : ones(Float64, length(directions), length(offsets))
+    return (
+        ;
+        kmax=kmax,
+        tgrid=tgrid,
+        values=vals,
+        weights=weights,
+        directions=directions,
+        offsets=offsets,
+    )
 end
 
 @inline function _run_euler_signed_measure_uncached(data, spec, degree::Int)
@@ -624,9 +805,15 @@ end
 
 @inline function _invariant_stage_note(invariant_kind::Symbol)
     if invariant_kind === :rank_signed_measure
-        return "cold_mode=warm_uncached;cache=per_call_session;stage=encoding_result_to_rectangle_signed_barcode"
+        return "cold_mode=warm_uncached;cache=per_call_session;stage=encoding_result_to_rank_signed_measure"
+    elseif invariant_kind === :rank_invariant
+        return "cold_mode=warm_uncached;cache=per_call_session;stage=encoding_result_to_rank_invariant"
+    elseif invariant_kind === :restricted_hilbert
+        return "cold_mode=warm_uncached;cache=per_call_session;stage=encoding_result_to_restricted_hilbert_measure_contract"
     elseif invariant_kind === :slice_barcodes
         return "cold_mode=warm_uncached;cache=per_call_session;stage=encoding_result_to_slice_barcodes"
+    elseif invariant_kind === :mp_landscape
+        return "cold_mode=warm_uncached;cache=per_call_session;stage=encoding_result_to_slice_barcodes_to_mp_landscape"
     elseif invariant_kind === :euler_signed_measure
         return "cold_mode=warm_uncached;cache=per_call_session;stage=encoded_complex_to_signed_measure"
     end
@@ -636,8 +823,14 @@ end
 @inline function _run_invariant_uncached(data, spec, invariant_kind::Symbol, degree::Int)
     if invariant_kind === :rank_signed_measure
         return _run_rank_signed_measure_uncached(data, spec, degree)
+    elseif invariant_kind === :rank_invariant
+        return _run_rank_invariant_uncached(data, spec, degree)
+    elseif invariant_kind === :restricted_hilbert
+        return _run_restricted_hilbert_uncached(data, spec, degree)
     elseif invariant_kind === :slice_barcodes
         error("_run_invariant_uncached(slice_barcodes): case-specific query metadata required")
+    elseif invariant_kind === :mp_landscape
+        error("_run_invariant_uncached(mp_landscape): case-specific query metadata required")
     elseif invariant_kind === :euler_signed_measure
         return _run_euler_signed_measure_uncached(data, spec, degree)
     end
@@ -645,9 +838,13 @@ end
 end
 
 function _timed_invariant(data, spec, case, invariant_kind::Symbol, degree::Int)
-    runner = invariant_kind === :slice_barcodes ?
-        () -> _run_slice_barcodes_uncached(data, spec, case, degree) :
+    runner = if invariant_kind === :slice_barcodes
+        () -> _run_slice_barcodes_uncached(data, spec, case, degree)
+    elseif invariant_kind === :mp_landscape
+        () -> _run_mp_landscape_uncached(data, spec, case, degree)
+    else
         () -> _run_invariant_uncached(data, spec, invariant_kind, degree)
+    end
     m = @timed out = runner()
     return out, 1000.0 * m.time, m.bytes / 1024.0
 end
@@ -730,6 +927,8 @@ function main()
             try
                 if invariant_kind === :slice_barcodes
                     _run_slice_barcodes_uncached(data, spec, c, degree)
+                elseif invariant_kind === :mp_landscape
+                    _run_mp_landscape_uncached(data, spec, c, degree)
                 else
                     _run_invariant_uncached(data, spec, invariant_kind, degree)
                 end
@@ -742,6 +941,8 @@ function main()
                     try
                         if invariant_kind === :slice_barcodes
                             _run_slice_barcodes_uncached(data, spec, c, degree)
+                        elseif invariant_kind === :mp_landscape
+                            _run_mp_landscape_uncached(data, spec, c, degree)
                         else
                             _run_invariant_uncached(data, spec, invariant_kind, degree)
                         end
@@ -771,14 +972,39 @@ function main()
             warm_alloc_median = median(warm_allocs)
             if invariant_kind === :slice_barcodes
                 output_term_count, output_abs_mass, output_measure_canonical = _slice_output_contract(cold_out)
+            elseif invariant_kind === :mp_landscape
+                output_term_count, output_abs_mass, output_measure_canonical = _mp_landscape_output_contract(cold_out)
+            elseif invariant_kind === :rank_invariant
+                region_reps = _benchmark_representatives(getproperty(cold_out, :encoding_result))
+                output_terms = _sparse_rank_invariant_terms(getproperty(cold_out, :rank_result), region_reps)
+                output_term_count = length(output_terms)
+                output_abs_mass = _abs_mass_terms(output_terms)
+                output_measure_canonical = _serialize_measure_terms(output_terms)
+            elseif invariant_kind === :restricted_hilbert
+                if hasproperty(cold_out, :rank_measure)
+                    output_terms = _sparse_hilbert_measure_terms_from_rank_measure(getproperty(cold_out, :rank_measure))
+                    notes = isempty(notes) ? "sparse_hilbert_measure" : string(notes, ";sparse_hilbert_measure")
+                else
+                    output_terms = _sparse_hilbert_measure_terms_from_values(
+                        getproperty(cold_out, :encoding_result),
+                        getproperty(cold_out, :hilbert_values),
+                    )
+                    notes = isempty(notes) ? "sparse_hilbert_measure_fallback" : string(notes, ";sparse_hilbert_measure_fallback")
+                end
+                output_term_count = length(output_terms)
+                output_abs_mass = _abs_mass_terms(output_terms)
+                output_measure_canonical = _serialize_measure_terms(output_terms)
             else
                 output_terms = _canonical_measure_terms(cold_out)
                 output_term_count = length(output_terms)
                 output_abs_mass = _abs_mass_terms(output_terms)
                 output_measure_canonical = _serialize_measure_terms(output_terms)
+                if invariant_kind === :rank_signed_measure && hasproperty(cold_out, :direct_rank_measure)
+                    notes = isempty(notes) ? "direct_rank_measure" : string(notes, ";direct_rank_measure")
+                end
             end
-            output_rank_query_axes_canonical, output_rank_table_canonical = invariant_kind === :rank_signed_measure ?
-                _rank_output_contract(cold_out) : ("", "")
+            output_rank_query_axes_canonical = ""
+            output_rank_table_canonical = ""
 
             println(
                 rpad(case_id, 32),

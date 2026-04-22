@@ -79,7 +79,7 @@ function __register_visual_makie_backend!(TO, MakieMod, backend::Symbol; allow_s
         colorbars = NamedTuple[]
         for layer in Viz.visual_layers(spec)
             if layer isa Viz.HeatmapLayer
-                hm = MakieMod.heatmap!(ax, layer.x, layer.y, layer.values;
+                hm = MakieMod.heatmap!(ax, layer.x, layer.y, permutedims(layer.values);
                                        colormap=layer.colormap,
                                        alpha=layer.alpha)
                 layer.show_colorbar && push!(colorbars, (; plot=hm, label=layer.colorbar_label))
@@ -116,8 +116,10 @@ function __register_visual_makie_backend!(TO, MakieMod, backend::Symbol; allow_s
                 isempty(layer.points) || begin
                     scatter_color = layer.color isa AbstractVector ? layer.color : (layer.color, layer.alpha)
                     kwargs = layer.color isa AbstractVector ?
-                             (; color=layer.color, colormap=layer.colormap, alpha=layer.alpha, markersize=layer.markersize) :
-                             (; color=(layer.color, layer.alpha), markersize=layer.markersize)
+                             (; color=layer.color, colormap=layer.colormap, alpha=layer.alpha,
+                                markersize=layer.markersize, markerspace=layer.markerspace) :
+                             (; color=(layer.color, layer.alpha), markersize=layer.markersize,
+                                markerspace=layer.markerspace)
                     MakieMod.scatter!(ax,
                                       [p[1] for p in layer.points],
                                       [p[2] for p in layer.points];

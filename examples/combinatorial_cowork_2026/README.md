@@ -34,6 +34,9 @@ Buffer / Q&A: 5 minutes.
 - `05_noisy_annulus_rips_codensity_h1_2persistence.ipynb`
   - optional point-cloud follow-up
   - noisy annulus with interior noise, codensity/radius snapshot panel, and a degree-1 support-plane picture for a `RipsCodensityFiltration`
+- `06_featurization_and_repeated_computation.ipynb`
+  - optional statistics/featurization follow-up
+  - common-encoded synthetic family, composite feature specs, repeated `featurize(...)`, in-place `batch_transform!(...)`, and experiment-style artifact export
 
 ## Optional appendix
 

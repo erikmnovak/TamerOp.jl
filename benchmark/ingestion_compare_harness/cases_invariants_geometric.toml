@@ -1,0 +1,45 @@
+[meta]
+version = 1
+description = "End-to-end invariant comparison cases for the benchmarkable non-Rips geometric families."
+
+[invariant_eligibility]
+alpha_parity = ["euler_signed_measure", "restricted_hilbert", "rank_signed_measure"]
+landmark_parity = ["euler_signed_measure", "slice_barcodes", "mp_landscape"]
+cubical_parity = ["euler_signed_measure", "slice_barcodes", "mp_landscape"]
+
+[[cases]]
+id = "inv_alpha_n1500_d2_md2_s11"
+regime = "alpha_parity"
+dataset = "gaussian_shell"
+n_points = 1500
+ambient_dim = 2
+seed = 11
+max_dim = 2
+
+[[cases]]
+id = "inv_landmark_n5000_d2_md1_s11"
+regime = "landmark_parity"
+dataset = "gaussian_shell"
+n_points = 5000
+ambient_dim = 2
+seed = 11
+max_dim = 1
+
+[[cases]]
+id = "inv_landmark_n5000_d8_md1_s11"
+regime = "landmark_parity"
+dataset = "gaussian_shell"
+n_points = 5000
+ambient_dim = 8
+seed = 11
+max_dim = 1
+
+[[cases]]
+id = "inv_cubical_side80_s11"
+regime = "cubical_parity"
+dataset = "image_sine"
+n_points = 6400
+ambient_dim = 2
+seed = 11
+max_dim = 2
+image_side = 80

@@ -3,15 +3,15 @@ version = 1
 description = "End-to-end invariant comparison cases for tamer-op vs multipers."
 
 [invariant_eligibility]
-rips_parity = ["euler_signed_measure"]
+rips_parity = ["euler_signed_measure", "slice_barcodes", "mp_landscape"]
 degree_rips_parity = []
-rips_codensity_parity = ["euler_signed_measure"]
-rips_lowerstar_parity = ["euler_signed_measure"]
-landmark_parity = ["euler_signed_measure"]
+rips_codensity_parity = ["euler_signed_measure", "restricted_hilbert", "rank_signed_measure", "slice_barcodes", "mp_landscape"]
+rips_lowerstar_parity = ["euler_signed_measure", "restricted_hilbert", "rank_signed_measure", "slice_barcodes", "mp_landscape"]
+landmark_parity = ["euler_signed_measure", "slice_barcodes", "mp_landscape"]
 delaunay_lowerstar_parity = []
-alpha_parity = ["euler_signed_measure"]
+alpha_parity = ["euler_signed_measure", "restricted_hilbert", "rank_signed_measure"]
 core_delaunay_parity = []
-cubical_parity = ["euler_signed_measure"]
+cubical_parity = ["euler_signed_measure", "slice_barcodes", "mp_landscape"]
 
 [[cases]]
 id = "inv_rips_n1000_d2_s11"

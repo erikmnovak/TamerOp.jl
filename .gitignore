@@ -1,0 +1,41 @@
+# OS/editor
+.DS_Store
+*.swp
+*.swo
+*~
+
+# Python cache
+**/__pycache__/
+*.pyc
+*.pyo
+
+# Jupyter
+.ipynb_checkpoints/
+**/.ipynb_checkpoints/
+
+# Example outputs
+examples/_outputs/
+
+# Benchmark temp outputs
+benchmark/_tmp_*
+benchmark/ingestion_compare_harness/_tmp_*
+benchmark/ingestion_compare_harness/_runstate*/
+benchmark/ingestion_compare_harness/__pycache__/
+
+# LaTeX build products
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.nav
+*.out
+*.run.xml
+*.snm
+*.synctex.gz
+*.toc
+
+# Optional local env files
+.env

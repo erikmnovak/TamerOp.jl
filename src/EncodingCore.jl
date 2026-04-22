@@ -125,13 +125,12 @@ end
 
 function _encoding_describe(pi::AbstractPLikeEncodingMap)
     axes = encoding_axes(pi)
-    reps = encoding_representatives(pi)
     return (;
         kind=:encoding_map,
         map_type=typeof(pi),
         parameter_dim=dimension(pi),
         has_axes=axes !== nothing,
-        has_representatives=reps !== nothing,
+        has_representatives=_supports_representatives(pi),
     )
 end
 
@@ -543,9 +542,20 @@ function representatives end
 @inline _reps_or_nothing(::Any) = nothing
 @inline _reps_or_nothing(pi::AbstractPLikeEncodingMap) = representatives(pi)
 
+const _REPRESENTATIVES_FALLBACK_METHOD = which(representatives, Tuple{AbstractPLikeEncodingMap})
+
+@inline _supports_representatives(::Any) = false
+
+@inline function _supports_representatives(pi::AbstractPLikeEncodingMap)
+    return which(representatives, Tuple{typeof(pi)}) !== _REPRESENTATIVES_FALLBACK_METHOD
+end
+
 function representatives(enc::CompiledEncoding)
     enc.reps === nothing ? representatives(enc.pi) : enc.reps
 end
+
+@inline _supports_representatives(enc::CompiledEncoding) =
+    enc.reps !== nothing || _supports_representatives(enc.pi)
 
 """
     axes_from_encoding(pi)
@@ -687,7 +697,7 @@ function _encoding_describe(enc::CompiledEncoding)
         map_type=typeof(enc.pi),
         parameter_dim=dimension(enc),
         has_axes=encoding_axes(enc) !== nothing,
-        has_representatives=encoding_representatives(enc) !== nothing,
+        has_representatives=_supports_representatives(enc),
         meta_type=typeof(enc.meta),
     )
 end
@@ -902,7 +912,7 @@ function check_compiled_encoding(enc::CompiledEncoding; throw::Bool=false)
                                   map_type=typeof(enc.pi),
                                   parameter_dim=dim,
                                   has_axes=enc.axes !== nothing,
-                                  has_representatives=enc.reps !== nothing,
+                                  has_representatives=_supports_representatives(enc),
                                   issues=issues)
 end
 

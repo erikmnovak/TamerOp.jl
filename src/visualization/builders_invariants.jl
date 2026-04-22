@@ -186,6 +186,18 @@ end
 _hilbert_heatmap_spec(enc::CompiledEncoding, dims::AbstractVector{<:Integer}; kwargs...) =
     _hilbert_heatmap_spec(encoding_map(enc), dims; kwargs...)
 
+function _grid_value_matrix_2d(pi::GridEncodingMap{2}, values::AbstractVector{<:Real})
+    nx, ny = pi.sizes
+    length(values) == nx * ny ||
+        throw(ArgumentError("grid value matrix expects one value per grid cell."))
+    mat = Matrix{Float64}(undef, ny, nx)
+    @inbounds for j in 1:ny, i in 1:nx
+        idx = 1 + (i - 1) * pi.strides[1] + (j - 1) * pi.strides[2]
+        mat[j, i] = float(values[idx])
+    end
+    return Float64.(pi.coords[1]), Float64.(pi.coords[2]), mat
+end
+
 @inline function _cohomology_support_legend()
     return _default_legend(visible=true,
                            title="support",
@@ -296,17 +308,20 @@ _cohomology_support_spec(enc::CompiledEncoding, dims::AbstractVector{<:Integer};
     _cohomology_support_spec(encoding_map(enc), dims; kwargs...)
 
 function _cohomology_support_plane_spec(pi::GridEncodingMap{2}, dims::AbstractVector{<:Integer}; degree::Int)
-    rects, _, axes = _grid_rectangles_2d(pi)
-    length(rects) == length(dims) || throw(ArgumentError("cohomology_support_plane expects one dimension value per grid region."))
+    _, _, axes = _grid_rectangles_2d(pi)
     values = Int.(dims)
     supported = values .> 0
+    _, _, plane_vals = _grid_value_matrix_2d(pi, values)
+    plane_vals .= ifelse.(plane_vals .> 0.0, plane_vals, NaN)
+    xedges = _expanded_axis(pi.coords[1])
+    yedges = _expanded_axis(pi.coords[2])
     layers = AbstractVisualizationLayer[
-        RectLayer(rects, :gray90, :gray90, 0.98, 0.2),
+        RectLayer([(xedges[1], yedges[1], xedges[end], yedges[end])], :gray90, :gray90, 0.98, 0.2),
+        HeatmapLayer(xedges, yedges, plane_vals, :viridis, 0.92, "dim"),
     ]
-    any(supported) && push!(layers, RectLayer(rects[supported], :chartreuse3, :chartreuse3, 0.92, 0.2))
     return VisualizationSpec(:cohomology_support_plane;
-                             title="H^$(degree) support plane",
-                             subtitle="cohomology support on the bifiltration parameter plane",
+                             title="H^$(degree) dimension plane",
+                             subtitle="cohomology dimensions on the bifiltration parameter plane",
                              layers=layers,
                              axes=_axes_with_auto_aspect(axes),
                              metadata=(; object=:cohomology_dims,
@@ -315,8 +330,8 @@ function _cohomology_support_plane_spec(pi::GridEncodingMap{2}, dims::AbstractVe
                                         support_count=count(supported),
                                         max_dim=isempty(values) ? 0 : maximum(values),
                                         figure_size=(820, 520),
-                                        legend_position=:right),
-                             legend=_cohomology_support_legend(),
+                                        legend_position=:none),
+                             legend=_default_legend(visible=false),
                              interaction=_default_interaction(hover=true, labels=false))
 end
 
@@ -325,13 +340,17 @@ function _cohomology_support_plane_spec(pi::PLEncodingMapBoxes, dims::AbstractVe
     region_ids = parse.(Int, labels)
     values = Int[dims[r] for r in region_ids]
     supported = values .> 0
+    nz_values = values[supported]
+    _, cmap = _integer_value_palette(isempty(nz_values) ? [0] : nz_values)
     layers = AbstractVisualizationLayer[]
-    for (rects_r, keep) in zip(region_rects, supported)
-        push!(layers, RectLayer(rects_r, keep ? :chartreuse3 : :gray90, keep ? :chartreuse3 : :gray90, keep ? 0.90 : 0.98, 0.2))
+    for (rects_r, v) in zip(region_rects, values)
+        color = v > 0 ? cmap[v] : :gray90
+        alpha = v > 0 ? 0.90 : 0.98
+        push!(layers, RectLayer(rects_r, color, color, alpha, 0.2))
     end
     return VisualizationSpec(:cohomology_support_plane;
-                             title="H^$(degree) support plane",
-                             subtitle="cohomology support on the bifiltration parameter plane",
+                             title="H^$(degree) dimension plane",
+                             subtitle="cohomology dimensions on the bifiltration parameter plane",
                              layers=layers,
                              axes=_axes_with_auto_aspect(axes),
                              metadata=(; object=:cohomology_dims,
@@ -341,7 +360,7 @@ function _cohomology_support_plane_spec(pi::PLEncodingMapBoxes, dims::AbstractVe
                                         max_dim=isempty(values) ? 0 : maximum(values),
                                         figure_size=(880, 520),
                                         legend_position=:right),
-                             legend=_cohomology_support_legend(),
+                             legend=_integer_value_legend(nz_values; title="dim"),
                              interaction=_default_interaction(hover=true, labels=false))
 end
 
@@ -350,13 +369,17 @@ function _cohomology_support_plane_spec(pi::ZnEncodingMap, dims::AbstractVector{
     length(rects) == length(dims) || throw(ArgumentError("cohomology_support_plane expects one dimension value per Zn region."))
     values = Int.(dims)
     supported = values .> 0
-    layers = AbstractVisualizationLayer[
-        RectLayer(rects, :gray90, :gray90, 0.98, 0.2),
-    ]
-    any(supported) && push!(layers, RectLayer(rects[supported], :chartreuse3, :chartreuse3, 0.92, 0.2))
+    nz_values = values[supported]
+    _, cmap = _integer_value_palette(isempty(nz_values) ? [0] : nz_values)
+    layers = AbstractVisualizationLayer[]
+    for (rect, v) in zip(rects, values)
+        color = v > 0 ? cmap[v] : :gray90
+        alpha = v > 0 ? 0.92 : 0.98
+        push!(layers, RectLayer([rect], color, color, alpha, 0.2))
+    end
     return VisualizationSpec(:cohomology_support_plane;
-                             title="H^$(degree) support plane",
-                             subtitle="cohomology support on the bifiltration parameter plane",
+                             title="H^$(degree) dimension plane",
+                             subtitle="cohomology dimensions on the bifiltration parameter plane",
                              layers=layers,
                              axes=_axes_with_auto_aspect(axes),
                              metadata=(; object=:cohomology_dims,
@@ -366,7 +389,7 @@ function _cohomology_support_plane_spec(pi::ZnEncodingMap, dims::AbstractVector{
                                         max_dim=isempty(values) ? 0 : maximum(values),
                                         figure_size=(820, 520),
                                         legend_position=:right),
-                             legend=_cohomology_support_legend(),
+                             legend=_integer_value_legend(nz_values; title="dim"),
                              interaction=_default_interaction(hover=true, labels=false))
 end
 
@@ -499,9 +522,7 @@ function _visual_spec(result::RankInvariantResult, kind::Symbol; kwargs...)
                                  title="Rank invariant heatmap",
                                  subtitle="rank values on comparable poset pairs",
                                  layers=AbstractVisualizationLayer[
-                                     # Makie heatmaps interpret the first matrix axis along x,
-                                     # so transpose to keep x=b, y=a consistent with the tile view.
-                                     HeatmapLayer(Float64[1:n;], Float64[1:n;], permutedims(vals), :viridis, 1.0, "rank"),
+                                     HeatmapLayer(Float64[1:n;], Float64[1:n;], vals, :viridis, 1.0, "rank"),
                                  ],
                                  axes=_default_axes_2d(xlabel="target region b", ylabel="source region a",
                                                        xlimits=(0.5, float(n) + 0.5),

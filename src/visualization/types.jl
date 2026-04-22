@@ -59,19 +59,34 @@ struct PointLayer <: AbstractVisualizationLayer
     alpha::Float64
     markersize::Float64
     colormap::Symbol
+    markerspace::Symbol
 end
 
 PointLayer(points::Vector{NTuple{2,Float64}},
            color::Symbol,
            alpha::Float64,
            markersize::Float64) =
-    PointLayer(points, color, alpha, markersize, :viridis)
+    PointLayer(points, color, alpha, markersize, :viridis, :pixel)
 
 PointLayer(points::Vector{NTuple{2,Float64}},
            color::Vector{Float64},
            alpha::Float64,
            markersize::Float64) =
-    PointLayer(points, color, alpha, markersize, :viridis)
+    PointLayer(points, color, alpha, markersize, :viridis, :pixel)
+
+PointLayer(points::Vector{NTuple{2,Float64}},
+           color::Symbol,
+           alpha::Float64,
+           markersize::Float64,
+           colormap::Symbol) =
+    PointLayer(points, color, alpha, markersize, colormap, :pixel)
+
+PointLayer(points::Vector{NTuple{2,Float64}},
+           color::Vector{Float64},
+           alpha::Float64,
+           markersize::Float64,
+           colormap::Symbol) =
+    PointLayer(points, color, alpha, markersize, colormap, :pixel)
 
 struct Point3Layer <: AbstractVisualizationLayer
     points::Vector{NTuple{3,Float64}}

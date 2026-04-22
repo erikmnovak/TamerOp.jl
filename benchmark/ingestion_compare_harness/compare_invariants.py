@@ -131,6 +131,43 @@ def _parse_slice_barcode_records(raw: str) -> list[tuple[tuple[float, ...], tupl
     return out
 
 
+def _parse_mp_landscape_payload(
+    raw: str,
+) -> tuple[int, tuple[float, ...], list[tuple[tuple[float, ...], tuple[float, ...], float, list[tuple[float, ...]]]]]:
+    s = raw.strip()
+    if s == "":
+        return 0, (), []
+    chunks = [chunk for chunk in s.split("###") if chunk != ""]
+    if not chunks:
+        return 0, (), []
+    header = chunks[0].split("@@")
+    if len(header) != 2 or not header[0].startswith("kmax=") or not header[1].startswith("tgrid="):
+        raise ValueError("Malformed mp_landscape header")
+    kmax = int(header[0][5:])
+    tgrid = _parse_coord_tuple(header[1][6:])
+    records: list[tuple[tuple[float, ...], tuple[float, ...], float, list[tuple[float, ...]]]] = []
+    for idx, chunk in enumerate(chunks[1:], start=1):
+        parts = chunk.split("@@")
+        if (
+            len(parts) != 4
+            or not parts[0].startswith("dir=")
+            or not parts[1].startswith("off=")
+            or not parts[2].startswith("w=")
+            or not parts[3].startswith("vals=")
+        ):
+            raise ValueError(f"Malformed mp_landscape record at index {idx}")
+        direction = _parse_coord_tuple(parts[0][4:])
+        offset = _parse_coord_tuple(parts[1][4:])
+        weight = float(parts[2][2:])
+        vals_raw = parts[3][5:]
+        rows = [] if vals_raw == "" else [
+            tuple(float(piece) for piece in row.split("|") if piece != "")
+            for row in vals_raw.split(";;")
+        ]
+        records.append((direction, offset, weight, rows))
+    return kmax, tgrid, records
+
+
 def _merge_measure_terms(terms: list[MeasureTerm]) -> list[MeasureTerm]:
     acc: dict[tuple[float, ...], Fraction] = defaultdict(Fraction)
     for term in terms:
@@ -142,145 +179,6 @@ def _merge_measure_terms(terms: list[MeasureTerm]) -> list[MeasureTerm]:
             continue
         out.append(MeasureTerm(coords=coords, weight=weight))
     return out
-
-
-def _parse_rank_axes(raw: str) -> list[tuple[float, ...]]:
-    s = raw.strip()
-    if s == "":
-        return []
-    axes: list[tuple[float, ...]] = []
-    for axis_raw in s.split(";;"):
-        pieces = [piece for piece in axis_raw.split("|") if piece != ""]
-        axes.append(tuple(float(piece) for piece in pieces))
-    return axes
-
-
-def _parse_rank_table(raw: str) -> dict[tuple[tuple[float, ...], tuple[float, ...]], Fraction]:
-    s = raw.strip()
-    if s == "":
-        return {}
-    out: dict[tuple[tuple[float, ...], tuple[float, ...]], Fraction] = defaultdict(Fraction)
-    for chunk in s.split(";"):
-        if chunk == "":
-            continue
-        coords_raw, weight_raw = chunk.rsplit("=>", 1)
-        p_raw, q_raw = coords_raw.split("||", 1)
-        p = tuple(float(piece) for piece in p_raw.split("|") if piece != "")
-        q = tuple(float(piece) for piece in q_raw.split("|") if piece != "")
-        out[(p, q)] += _weight_fraction(weight_raw)
-    return {key: weight for key, weight in out.items() if weight != 0}
-
-
-def _intersect_rank_axis(
-    t_axis: tuple[float, ...],
-    m_axis: tuple[float, ...],
-    tol: float,
-) -> list[tuple[float, float]]:
-    i = 0
-    j = 0
-    out: list[tuple[float, float]] = []
-    while i < len(t_axis) and j < len(m_axis):
-        tv = t_axis[i]
-        mv = m_axis[j]
-        if abs(tv - mv) <= tol or (math.isinf(tv) and math.isinf(mv) and tv == mv):
-            out.append((tv, mv))
-            i += 1
-            j += 1
-        elif tv < mv - tol:
-            i += 1
-        else:
-            j += 1
-    return out
-
-
-def _shared_rank_query_axes(
-    t_axes: list[tuple[float, ...]],
-    m_axes: list[tuple[float, ...]],
-    tol: float,
-) -> tuple[list[list[tuple[float, float]]], str | None]:
-    if not t_axes or not m_axes:
-        return [], "rank_query_axes_missing"
-    if len(t_axes) != len(m_axes):
-        return [], f"rank_query_dim_mismatch:{len(t_axes)}!={len(m_axes)}"
-
-    shared: list[list[tuple[float, float]]] = []
-    for dim, (t_axis, m_axis) in enumerate(zip(t_axes, m_axes, strict=True), start=1):
-        axis_shared = _intersect_rank_axis(t_axis, m_axis, tol)
-        if not axis_shared:
-            return [], f"rank_query_axis_intersection_empty@dim={dim}"
-        shared.append(axis_shared)
-    return shared, None
-
-
-def _compare_rank_tables(
-    t_axes_raw: str,
-    t_table_raw: str,
-    m_axes_raw: str,
-    m_table_raw: str,
-    tol: float = 1e-8,
-) -> tuple[str, str]:
-    t_axes = _parse_rank_axes(t_axes_raw)
-    m_axes = _parse_rank_axes(m_axes_raw)
-    shared_axes, err = _shared_rank_query_axes(t_axes, m_axes, tol)
-    if err is not None:
-        return "mismatched", err
-
-    t_table = _parse_rank_table(t_table_raw)
-    m_table = _parse_rank_table(m_table_raw)
-    ndim = len(shared_axes)
-
-    def _first_mismatch() -> tuple[tuple[float, ...], tuple[float, ...], tuple[float, ...], tuple[float, ...], Fraction, Fraction] | None:
-        def _walk(
-            depth: int,
-            p_t: list[float],
-            p_m: list[float],
-            q_t: list[float],
-            q_m: list[float],
-        ) -> tuple[tuple[float, ...], tuple[float, ...], tuple[float, ...], tuple[float, ...], Fraction, Fraction] | None:
-            if depth == ndim:
-                pt = tuple(p_t)
-                pm = tuple(p_m)
-                qt = tuple(q_t)
-                qm = tuple(q_m)
-                tv = t_table.get((pt, qt), Fraction(0, 1))
-                mv = m_table.get((pm, qm), Fraction(0, 1))
-                if tv != mv:
-                    return pt, qt, pm, qm, tv, mv
-                return None
-
-            axis_shared = shared_axes[depth]
-            for p_idx, (p_tv, p_mv) in enumerate(axis_shared):
-                p_t.append(p_tv)
-                p_m.append(p_mv)
-                for q_tv, q_mv in axis_shared[p_idx:]:
-                    q_t.append(q_tv)
-                    q_m.append(q_mv)
-                    mismatch = _walk(depth + 1, p_t, p_m, q_t, q_m)
-                    q_t.pop()
-                    q_m.pop()
-                    if mismatch is not None:
-                        return mismatch
-                p_t.pop()
-                p_m.pop()
-            return None
-
-        return _walk(0, [], [], [], [])
-
-    mismatch = _first_mismatch()
-    if mismatch is None:
-        return "matched", "matched_rank_table_shared_grid"
-
-    pt, qt, pm, qm, tv, mv = mismatch
-    pt_tok = "|".join(repr(float(x)) for x in pt)
-    qt_tok = "|".join(repr(float(x)) for x in qt)
-    pm_tok = "|".join(repr(float(x)) for x in pm)
-    qm_tok = "|".join(repr(float(x)) for x in qm)
-    return (
-        "mismatched",
-        "rank_table_mismatch@"
-        f"tamer_p={pt_tok};tamer_q={qt_tok};multipers_p={pm_tok};multipers_q={qm_tok};"
-        f"tamer={_weight_token(tv)};multipers={_weight_token(mv)}",
-    )
 
 
 def _normalize_trailing_neg_inf_dims(
@@ -342,6 +240,27 @@ def _compare_measure_terms(tamer_raw: str, multipers_raw: str, tol: float = 1e-8
     return "matched", "matched"
 
 
+def _compare_rank_signed_measure(tamer_raw: str, multipers_raw: str, tol: float = 1e-8) -> tuple[str, str]:
+    status, reason = _compare_measure_terms(tamer_raw, multipers_raw, tol)
+    if status == "matched":
+        return status, "matched_rank_signed_measure"
+    return status, reason
+
+
+def _compare_rank_invariant(tamer_raw: str, multipers_raw: str, tol: float = 1e-8) -> tuple[str, str]:
+    status, reason = _compare_measure_terms(tamer_raw, multipers_raw, tol)
+    if status == "matched":
+        return status, "matched_rank_invariant"
+    return status, reason
+
+
+def _compare_restricted_hilbert(tamer_raw: str, multipers_raw: str, tol: float = 1e-8) -> tuple[str, str]:
+    status, reason = _compare_measure_terms(tamer_raw, multipers_raw, tol)
+    if status == "matched":
+        return status, "matched_restricted_hilbert"
+    return status, reason
+
+
 def _compare_slice_barcodes(tamer_raw: str, multipers_raw: str, tol: float = 1e-8) -> tuple[str, str]:
     t_records = _parse_slice_barcode_records(tamer_raw)
     m_records = _parse_slice_barcode_records(multipers_raw)
@@ -370,6 +289,40 @@ def _compare_slice_barcodes(tamer_raw: str, multipers_raw: str, tol: float = 1e-
     return "matched", "matched_slice_barcodes"
 
 
+def _compare_mp_landscape(tamer_raw: str, multipers_raw: str, tol: float = 1e-8) -> tuple[str, str]:
+    tk, ttg, trecs = _parse_mp_landscape_payload(tamer_raw)
+    mk, mtg, mrecs = _parse_mp_landscape_payload(multipers_raw)
+    if tk != mk:
+        return "mismatched", f"mp_landscape_kmax_diff:{tk}!={mk}"
+    if len(ttg) != len(mtg):
+        return "mismatched", f"mp_landscape_tgrid_len_diff:{len(ttg)}!={len(mtg)}"
+    if any(abs(a - b) > tol for a, b in zip(ttg, mtg, strict=True)):
+        return "mismatched", "mp_landscape_tgrid_mismatch"
+    if len(trecs) != len(mrecs):
+        return "mismatched", f"mp_landscape_slice_count_diff:{len(trecs)}!={len(mrecs)}"
+    for idx, (tr, mr) in enumerate(zip(trecs, mrecs, strict=True), start=1):
+        tdir, toff, tw, tvals = tr
+        mdir, moff, mw, mvals = mr
+        if len(tdir) != len(mdir):
+            return "mismatched", f"mp_landscape_direction_dim_diff@{idx}:{len(tdir)}!={len(mdir)}"
+        if len(toff) != len(moff):
+            return "mismatched", f"mp_landscape_offset_dim_diff@{idx}:{len(toff)}!={len(moff)}"
+        if any(abs(a - b) > tol for a, b in zip(tdir, mdir, strict=True)):
+            return "mismatched", f"mp_landscape_direction_mismatch@{idx}"
+        if any(abs(a - b) > tol for a, b in zip(toff, moff, strict=True)):
+            return "mismatched", f"mp_landscape_offset_mismatch@{idx}"
+        if abs(tw - mw) > tol:
+            return "mismatched", f"mp_landscape_weight_mismatch@{idx}"
+        if len(tvals) != len(mvals):
+            return "mismatched", f"mp_landscape_layer_count_diff@slice={idx}:{len(tvals)}!={len(mvals)}"
+        for k, (trow, mrow) in enumerate(zip(tvals, mvals, strict=True), start=1):
+            if len(trow) != len(mrow):
+                return "mismatched", f"mp_landscape_grid_count_diff@slice={idx};layer={k}:{len(trow)}!={len(mrow)}"
+            if any(abs(a - b) > tol for a, b in zip(trow, mrow, strict=True)):
+                return "mismatched", f"mp_landscape_value_mismatch@slice={idx};layer={k}"
+    return "matched", "matched_mp_landscape"
+
+
 def _compare_outputs(
     invariant_kind: str,
     tamer_row: dict[str, Any],
@@ -377,11 +330,27 @@ def _compare_outputs(
     tol: float = 1e-8,
 ) -> tuple[str, str]:
     if invariant_kind == "rank_signed_measure":
-        return _compare_rank_tables(
-            tamer_row.get("output_rank_query_axes_canonical", ""),
-            tamer_row.get("output_rank_table_canonical", ""),
-            multipers_row.get("output_rank_query_axes_canonical", ""),
-            multipers_row.get("output_rank_table_canonical", ""),
+        return _compare_rank_signed_measure(
+            tamer_row.get("output_measure_canonical", ""),
+            multipers_row.get("output_measure_canonical", ""),
+            tol,
+        )
+    if invariant_kind == "rank_invariant":
+        return _compare_rank_invariant(
+            tamer_row.get("output_measure_canonical", ""),
+            multipers_row.get("output_measure_canonical", ""),
+            tol,
+        )
+    if invariant_kind == "restricted_hilbert":
+        return _compare_restricted_hilbert(
+            tamer_row.get("output_measure_canonical", ""),
+            multipers_row.get("output_measure_canonical", ""),
+            tol,
+        )
+    if invariant_kind == "mp_landscape":
+        return _compare_mp_landscape(
+            tamer_row.get("output_measure_canonical", ""),
+            multipers_row.get("output_measure_canonical", ""),
             tol,
         )
     if invariant_kind == "slice_barcodes":

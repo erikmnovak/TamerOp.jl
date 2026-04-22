@@ -28,6 +28,7 @@ Workshop tutorial suite:
 - `combinatorial_cowork_2026/03_change_of_posets_and_common_refinement.ipynb`
 - `combinatorial_cowork_2026/04_invariants_and_visual_payoff.ipynb`
 - `combinatorial_cowork_2026/05_noisy_annulus_rips_codensity_h1_2persistence.ipynb`
+- `combinatorial_cowork_2026/06_featurization_and_repeated_computation.ipynb`
 - `combinatorial_cowork_2026/90_speaker_appendix_exact_queries_and_extra_derived.ipynb`
 
 Custom-filtration starter template:

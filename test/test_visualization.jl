@@ -23,6 +23,7 @@ using SparseArrays
     grid_pi = EC.GridEncodingMap(Pgrid, ([0.0, 1.0], [0.0, 1.0]))
     compiled_grid = EC.compile_encoding(Pgrid, grid_pi)
     enc_result = RES.EncodingResult(Pgrid, nothing, compiled_grid)
+    cdr_grid = RES.CohomologyDimsResult(Pgrid, [0, 1, 0, 1], compiled_grid; degree=1)
     Pbox, _, box_pi = PLB.encode_fringe_boxes(
         [PLB.BoxUpset([0.0, -10.0]), PLB.BoxUpset([1.0, -10.0])],
         PLB.BoxDownset[],
@@ -350,6 +351,20 @@ using SparseArrays
     @test count(layer -> layer isa TOA.RectLayer, spec_cdr_support_plane.layers) == 3
     @test count(layer -> layer isa TOA.TextLayer, spec_cdr_support_plane.layers) == 0
 
+    spec_cdr_support_plane_grid = TOA.visual_spec(cdr_grid; kind=:cohomology_support_plane)
+    @test TOA.visual_kind(spec_cdr_support_plane_grid) == :cohomology_support_plane
+    @test spec_cdr_support_plane_grid.axes.aspect == :auto
+    @test !spec_cdr_support_plane_grid.legend.visible
+    @test count(layer -> layer isa TOA.RectLayer, spec_cdr_support_plane_grid.layers) == 1
+    @test count(layer -> layer isa TOA.HeatmapLayer, spec_cdr_support_plane_grid.layers) == 1
+    heat_layer = only(layer for layer in spec_cdr_support_plane_grid.layers if layer isa TOA.HeatmapLayer)
+    @test size(heat_layer.values) == (2, 2)
+    @test length(heat_layer.x) == 3
+    @test length(heat_layer.y) == 3
+    @test heat_layer.show_colorbar
+    @test count(isfinite, heat_layer.values) == 2
+    @test maximum(skipmissing(vec(replace(heat_layer.values, NaN => missing)))) == 1.0
+
     spec_cdr_support = TOA.visual_spec(cdr_box; kind=:cohomology_support)
     @test TOA.visual_kind(spec_cdr_support) == :cohomology_support
     @test TOA.visual_metadata(spec_cdr_support).degree == 1
@@ -546,8 +561,13 @@ using SparseArrays
     @test spec_cod_snap.metadata.panel_columns == 2
     @test spec_cod_snap.metadata.dtm_mass == 0.5
     @test spec_cod_snap.metadata.neighbor_count == 3
+    @test spec_cod_snap.subtitle == "rows filter by codensity cutoff; columns increase radius"
     @test all(occursin("c <=", panel.title) for panel in spec_cod_snap.panels)
     @test all(occursin("retained points", panel.subtitle) for panel in spec_cod_snap.panels)
+    @test all(length(panel.layers) == 3 for panel in spec_cod_snap.panels)
+    @test all(panel.layers[2] isa TOA.PointLayer for panel in spec_cod_snap.panels)
+    @test all(panel.layers[2].markerspace == :data for panel in spec_cod_snap.panels)
+    @test all(panel.layers[2].markersize ≈ 2.0 * panel.metadata.radius for panel in spec_cod_snap.panels)
     @test TOA.check_visual_spec(spec_cod_snap).valid
 
     spec_pc3 = TOA.visual_spec(pc3; kind=:points_3d)

@@ -206,6 +206,13 @@ function _chain_values_from_boundaries(labels::Vector{Int}, boundaries::Vector{F
     if isempty(labels)
         return Int[], Float64[]
     end
+    if !strict
+        first_kept = findfirst(!iszero, labels)
+        first_kept === nothing && return Int[], Float64[]
+        last_kept = findlast(!iszero, labels)
+        labels = @view labels[first_kept:last_kept]
+        boundaries = @view boundaries[first_kept:(last_kept + 1)]
+    end
     chain = Int[]
     values = Float64[]
     sizehint!(chain, length(labels))

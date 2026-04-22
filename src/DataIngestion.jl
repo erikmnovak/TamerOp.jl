@@ -34,6 +34,7 @@ using ..EncodingCore: AbstractPLikeEncodingMap, CompiledEncoding, compile_encodi
 using ..Results: EncodingResult, EncodedComplexResult, CohomologyDimsResult, ResolutionResult, InvariantResult,
                  _encoding_with_session_cache
 import ..Results: materialize_module, module_dims, _materialize_complex
+import ..Results: _include_reps_when_rewrapping
 import ..EncodingCore: locate, dimension, representatives, axes_from_encoding, _grid_strides, GridEncodingMap
 
 import ..Serialization
@@ -56,8 +57,17 @@ using ..FiniteFringe: AbstractPoset, FinitePoset, GridPoset, ProductOfChainsPose
                       poset_equal_opposite, _succs, _preds, _pred_slots_of_succ
 using ..DerivedFunctors
 using ..Invariants
+import ..SignedMeasures
 using ..SignedMeasures: PointSignedMeasure, truncate_point_signed_measure
+import ..SliceInvariants
+using ..SliceInvariants: SliceBarcodesResult
 import ..SignedMeasures: euler_characteristic_surface, euler_surface, euler_signed_measure
+import ..InvariantCore: _supports_exact_slice_barcodes, _exact_slice_barcodes,
+                        _supports_exact_euler_signed_measure, _exact_euler_signed_measure,
+                        _supports_exact_restricted_hilbert, _exact_restricted_hilbert,
+                        _supports_exact_rectangle_signed_barcode, _exact_rectangle_signed_barcode,
+                        _supports_exact_rank_signed_measure, _exact_rank_signed_measure,
+                        _supports_exact_rank_query_table, _exact_rank_query_table
 import ..Modules
 import ..ModuleComplexes
 import ..FieldLinAlg
@@ -105,6 +115,7 @@ const _COHOMOLOGY_DEGREE_LOCAL_T1_MIN_POS_VERTICES = Ref{Int}(32)
 const _COHOMOLOGY_DEGREE_LOCAL_T1_MIN_TOTAL_ACTIVE_DIM1 = Ref{Int}(2_500)
 const _COHOMOLOGY_DEGREE_LOCAL_T1_MIN_TOTAL_ACTIVE_DIM2 = Ref{Int}(1_200)
 const _COHOMOLOGY_DIMS_USE_DIRECT_RESTRICTED_RANK = Ref{Bool}(true)
+const _EXACT_RECTANGLE_QCACHE_MAX = Ref{Int}(128)
 const _STRUCTURAL_MAP_FAST_KERNELS = Ref{Bool}(true)
 const _ACTIVE_LISTS_CHAIN_FASTPATH = Ref{Bool}(true)
 const _INGESTION_SKIP_LAZY_ON_MODULE_CACHE_HIT = Ref{Bool}(true)
@@ -4946,6 +4957,290 @@ function _h0_module_chain_sweep(P::AbstractPoset,
     return PModule{K}(P, dims, store; field=field)
 end
 
+@inline function _line_time_from_grade(grade::NTuple{N,<:Real},
+                                       x0::AbstractVector{<:Real},
+                                       dir::AbstractVector{<:Real};
+                                       atol::Float64=1e-12) where {N}
+    length(x0) == N || return Inf
+    length(dir) == N || return Inf
+    t = -Inf
+    has_positive = false
+    @inbounds for k in 1:N
+        dk = Float64(dir[k])
+        gk = Float64(grade[k])
+        xk = Float64(x0[k])
+        if dk > atol
+            has_positive = true
+            tk = (gk - xk) / dk
+            tk > t && (t = tk)
+        elseif dk < -atol
+            return Inf
+        else
+            gk <= xk + atol || return Inf
+        end
+    end
+    return has_positive ? t : Inf
+end
+
+@inline function _line_time_from_grade(grade::AbstractVector{<:NTuple{N,<:Real}},
+                                       x0::AbstractVector{<:Real},
+                                       dir::AbstractVector{<:Real};
+                                       atol::Float64=1e-12) where {N}
+    isempty(grade) && return Inf
+    t = Inf
+    @inbounds for g in grade
+        tg = _line_time_from_grade(g, x0, dir; atol=atol)
+        tg < t && (t = tg)
+    end
+    return t
+end
+
+@inline function _normalize_line_direction(dir, nd::Int; atol::Float64=1e-12)
+    vals = if dir isa AbstractVector || dir isa Tuple
+        length(dir) == nd || return nothing
+        Float64[Float64(v) for v in dir]
+    else
+        return nothing
+    end
+    has_positive = false
+    @inbounds for i in eachindex(vals)
+        if vals[i] > atol
+            has_positive = true
+        elseif vals[i] < -atol
+            return nothing
+        else
+            vals[i] = 0.0
+        end
+    end
+    return has_positive ? vals : nothing
+end
+
+@inline function _normalize_line_basepoint(x0, nd::Int)
+    if nd == 1 && x0 isa Real
+        return Float64[Float64(x0)]
+    elseif x0 isa AbstractVector || x0 isa Tuple
+        length(x0) == nd || return nothing
+        return Float64[Float64(v) for v in x0]
+    end
+    return nothing
+end
+
+@inline function _barcode_add_interval!(bc::Dict{Tuple{Float64,Float64},Int},
+                                        birth::Float64,
+                                        death::Float64)
+    key = (birth, death)
+    bc[key] = get(bc, key, 0) + 1
+    return bc
+end
+
+@inline function _h0_survivor_root(birth_time::Vector{Float64},
+                                   root_min::Vector{Int},
+                                   ra::Int,
+                                   rb::Int;
+                                   atol::Float64=1e-12)
+    ta = birth_time[ra]
+    tb = birth_time[rb]
+    if ta < tb - atol
+        return ra, rb
+    elseif tb < ta - atol
+        return rb, ra
+    elseif root_min[ra] <= root_min[rb]
+        return ra, rb
+    else
+        return rb, ra
+    end
+end
+
+function _h0_line_barcode(vertex_times::Vector{Float64},
+                          edge_endpoints::Vector{NTuple{2,Int}},
+                          edge_times::Vector{Float64})
+    length(edge_endpoints) == length(edge_times) || return nothing
+    nv = length(vertex_times)
+    ne = length(edge_times)
+    parent = collect(1:nv)
+    sz = ones(Int, nv)
+    root_min = collect(1:nv)
+    birth_time = fill(Inf, nv)
+    active = falses(nv)
+    barcode = Dict{Tuple{Float64,Float64},Int}()
+
+    vperm = sortperm(vertex_times)
+    eperm = sortperm(edge_times)
+    vptr = 1
+    eptr = 1
+    atol = 1e-12
+
+    while true
+        tv = vptr <= nv ? vertex_times[vperm[vptr]] : Inf
+        te = eptr <= ne ? edge_times[eperm[eptr]] : Inf
+        t = min(tv, te)
+        isfinite(t) || break
+
+        while vptr <= nv
+            idx = vperm[vptr]
+            tv = vertex_times[idx]
+            abs(tv - t) <= atol || break
+            active[idx] = true
+            parent[idx] = idx
+            sz[idx] = 1
+            root_min[idx] = idx
+            birth_time[idx] = tv
+            vptr += 1
+        end
+
+        while eptr <= ne
+            idx = eperm[eptr]
+            te = edge_times[idx]
+            abs(te - t) <= atol || break
+            a, b = edge_endpoints[idx]
+            if !(1 <= a <= nv && 1 <= b <= nv)
+                return nothing
+            end
+            if active[a] && active[b]
+                ra = _uf_find!(parent, a)
+                rb = _uf_find!(parent, b)
+                if ra != rb
+                    survive, die = _h0_survivor_root(birth_time, root_min, ra, rb; atol=atol)
+                    _barcode_add_interval!(barcode, birth_time[die], t)
+                    parent[die] = survive
+                    sz[survive] += sz[die]
+                    if root_min[die] < root_min[survive]
+                        root_min[survive] = root_min[die]
+                    end
+                end
+            else
+                return nothing
+            end
+            eptr += 1
+        end
+    end
+
+    seen = falses(nv)
+    @inbounds for v in 1:nv
+        active[v] || continue
+        r = _uf_find!(parent, v)
+        seen[r] && continue
+        seen[r] = true
+        _barcode_add_interval!(barcode, birth_time[r], Inf)
+    end
+    return barcode
+end
+
+function _lazy_h0_line_barcode(L::LazyModuleCochainComplex,
+                               x0::AbstractVector{<:Real},
+                               dir::AbstractVector{<:Real})
+    length(L.grades_by_dim) >= 1 || return Dict{Tuple{Float64,Float64},Int}()
+    grades0 = L.grades_by_dim[1]
+    grades0 isa Vector || return nothing
+    vertex_times = Float64[_line_time_from_grade(g, x0, dir) for g in grades0]
+
+    edge_endpoints = if length(L.boundaries) >= 1
+        _edge_endpoints_from_boundary(L.boundaries[1])
+    else
+        NTuple{2,Int}[]
+    end
+    edge_endpoints === nothing && return nothing
+
+    if length(L.grades_by_dim) >= 2
+        grades1 = L.grades_by_dim[2]
+        grades1 isa Vector || return nothing
+        edge_times = Float64[_line_time_from_grade(g, x0, dir) for g in grades1]
+    else
+        edge_times = Float64[]
+    end
+    return _h0_line_barcode(vertex_times, edge_endpoints, edge_times)
+end
+
+@inline _grid_birth_leq(a::NTuple{N,Int}, b::NTuple{N,Int}) where {N} =
+    all(i -> a[i] <= b[i], 1:N)
+
+function _lazy_h0_rectangle_payload(L::LazyModuleCochainComplex,
+                                    ::Val{N}) where {N}
+    length(L.births_by_dim) >= 1 || return nothing
+    vertex_births = L.births_by_dim[1]
+    vertex_births isa Vector{NTuple{N,Int}} || return nothing
+
+    edge_endpoints = if length(L.boundaries) >= 1
+        _edge_endpoints_from_boundary(L.boundaries[1])
+    else
+        NTuple{2,Int}[]
+    end
+    edge_endpoints === nothing && return nothing
+
+    edge_births = if length(L.births_by_dim) >= 2
+        births1 = L.births_by_dim[2]
+        births1 isa Vector{NTuple{N,Int}} || return nothing
+        births1
+    else
+        NTuple{N,Int}[]
+    end
+    length(edge_births) == length(edge_endpoints) || return nothing
+
+    @inbounds for e in eachindex(edge_endpoints)
+        a, b = edge_endpoints[e]
+        (1 <= a <= length(vertex_births) && 1 <= b <= length(vertex_births)) || return nothing
+        _grid_birth_leq(vertex_births[a], edge_births[e]) || return nothing
+        _grid_birth_leq(vertex_births[b], edge_births[e]) || return nothing
+    end
+    return vertex_births, edge_endpoints, edge_births
+end
+
+function _lazy_h0_component_roots_at_query(vertex_births::Vector{NTuple{N,Int}},
+                                           edge_endpoints::Vector{NTuple{2,Int}},
+                                           edge_births::Vector{NTuple{N,Int}},
+                                           q::NTuple{N,Int}) where {N}
+    nv = length(vertex_births)
+    roots = zeros(Int, nv)
+    nv == 0 && return roots
+
+    active = falses(nv)
+    parent = collect(1:nv)
+    sz = ones(Int, nv)
+
+    @inbounds for v in 1:nv
+        active[v] = _grid_birth_leq(vertex_births[v], q)
+    end
+    @inbounds for e in eachindex(edge_endpoints)
+        _grid_birth_leq(edge_births[e], q) || continue
+        a, b = edge_endpoints[e]
+        (active[a] && active[b]) || return nothing
+        a == b && continue
+        _uf_union!(parent, sz, a, b)
+    end
+    @inbounds for v in 1:nv
+        active[v] || continue
+        roots[v] = _uf_find!(parent, v)
+    end
+    return roots
+end
+
+function _lazy_h0_rank_from_component_roots(vertex_births::Vector{NTuple{N,Int}},
+                                            roots::Vector{Int},
+                                            p::NTuple{N,Int},
+                                            stamps::Vector{Int},
+                                            stamp_ref::Base.RefValue{Int}) where {N}
+    stamp = stamp_ref[] + 1
+    if stamp == typemax(Int)
+        fill!(stamps, 0)
+        stamp = 1
+    end
+    stamp_ref[] = stamp
+
+    count = 0
+    @inbounds for v in eachindex(vertex_births)
+        _grid_birth_leq(vertex_births[v], p) || continue
+        root = roots[v]
+        root == 0 && continue
+        if stamps[root] != stamp
+            stamps[root] = stamp
+            count += 1
+        end
+    end
+    return count
+end
+
+include("data_ingestion/exact_h0_backends.jl")
+
 function _simplex_tree_dim01_h0_payload(ST::SimplexTreeMulti{1,T}) where {T}
     _simplex_tree_is_onecritical(ST) || return nothing
     nd = length(ST.dim_offsets) - 1
@@ -5771,6 +6066,8 @@ function euler_signed_measure(L::LazyModuleCochainComplex,
         min_abs_weight=min_abs_weight,
         cache=cache)
 end
+
+include("data_ingestion/exact_euler_backends.jl")
 
 function _cochain_complex_from_grades_and_boundaries(grades_by_dim::Vector,
                                                      boundaries_in::Vector{SparseMatrixCSC{Int,Int}},
@@ -8207,7 +8504,10 @@ function _packed_delaunay_simplices_2d(points::AbstractVector{<:AbstractVector{<
                                        backend::Symbol=:auto)
     if backend != :naive && _have_pointcloud_delaunay_backend()
         impl = _POINTCLOUD_DELAUNAY_2D_IMPL[]
-        out = impl === nothing ? nothing : impl(points; max_dim=max_dim)
+        # Optional-extension callbacks may be registered in a younger world than
+        # long-lived ingestion call sites. Dispatch through invokelatest so the
+        # alpha/Delaunay path remains callable under Julia 1.12 world-age rules.
+        out = impl === nothing ? nothing : Base.invokelatest(impl, points; max_dim=max_dim)
         if out !== nothing
             return out
         end
@@ -12867,7 +13167,9 @@ function _run_ingestion_plan(plan::IngestionPlan;
     pi = GridEncodingMap(P, axes_final; orientation=orientation_final)
     # Keep ingestion encode() results self-contained: per-result encoding cache.
     # Session-level cache reuse for ingestion happens at the poset/data level above.
-    pi2 = stage == :encoded_complex ?
+    # Lazy encoding-result and encoded-complex paths defer full-grid representatives
+    # until explicitly requested via `encoding_representatives(...)`.
+    pi2 = (stage == :encoded_complex || stage == :encoding_result) ?
         _compile_encoding_without_reps(P, pi, (encoding_cache=EncodingCache(),)) :
         compile_encoding(P, pi; meta=(encoding_cache=EncodingCache(),))
 
@@ -13153,5 +13455,7 @@ function encode(path::AbstractString, spec::FiltrationSpec;
                           strict_preflight=strict_preflight)
     return run_ingestion(plan; stage=plan.stage, degree=degree)
 end
+
+@inline _include_reps_when_rewrapping(::EncodingResult{PType,<:_LazyEncodedModule}) where {PType} = false
 
 end # module DataIngestion

@@ -16,6 +16,7 @@ Private fragments loaded here:
 - `src/invariants/algebraic_support.jl`: pretty printing, Betti/Bass support,
   region-value stratifications
 - `src/invariants/support_geometry.jl`: support-geometry queries
+- `src/invariants/exact_backends.jl`: invariant-owner exact backend extensions
 - `src/invariants/wrappers.jl`: opts-default public wrappers
 """
 
@@ -47,6 +48,10 @@ using ..RegionGeometry: region_weights, region_volume, region_bbox, region_width
 using ..FieldLinAlg
 using ..InvariantCore: SliceSpec, RankQueryCache,
                        _unwrap_compiled,
+                       _supports_exact_slice_barcodes, _exact_slice_barcodes,
+                       _supports_exact_rectangle_signed_barcode, _exact_rectangle_signed_barcode,
+                       _supports_exact_rank_signed_measure, _exact_rank_signed_measure,
+                       _supports_exact_rank_query_table, _exact_rank_query_table,
                        _default_strict, _default_threads, _drop_keys,
                        orthant_directions, _selection_kwargs_from_opts, _axes_kwargs_from_opts,
                        _eye,
@@ -139,6 +144,7 @@ include("invariants/module_stats.jl")
 include("invariants/geometry_stats.jl")
 include("invariants/algebraic_support.jl")
 include("invariants/support_geometry.jl")
+include("invariants/exact_backends.jl")
 include("invariants/wrappers.jl")
 
 end # module

@@ -9,8 +9,13 @@ import argparse
 import csv
 import datetime as dt
 import gc
+import itertools
 import math
+import os
 import statistics
+import subprocess
+import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -242,8 +247,14 @@ def _parse_invariants(raw: str) -> list[str]:
         token = part.strip().lower().replace("-", "_")
         if token in ("rank", "rank_signed_measure"):
             out.append("rank_signed_measure")
+        elif token == "rank_invariant":
+            out.append("rank_invariant")
+        elif token in ("restricted_hilbert", "hilbert"):
+            out.append("restricted_hilbert")
         elif token in ("slice", "slice_barcodes"):
             out.append("slice_barcodes")
+        elif token in ("landscape", "mp_landscape"):
+            out.append("mp_landscape")
         elif token in ("euler", "euler_signed_measure"):
             out.append("euler_signed_measure")
         else:
@@ -269,8 +280,14 @@ def _approved_invariants_for_regime(manifest: dict[str, Any], regime: str) -> li
         token = str(v).strip().lower().replace("-", "_")
         if token in ("rank", "rank_signed_measure"):
             out.append("rank_signed_measure")
+        elif token == "rank_invariant":
+            out.append("rank_invariant")
+        elif token in ("restricted_hilbert", "hilbert"):
+            out.append("restricted_hilbert")
         elif token in ("slice", "slice_barcodes"):
             out.append("slice_barcodes")
+        elif token in ("landscape", "mp_landscape"):
+            out.append("mp_landscape")
         elif token in ("euler", "euler_signed_measure"):
             out.append("euler_signed_measure")
         else:
@@ -307,42 +324,219 @@ def _coord_key_tuple(coords: tuple[float, ...] | list[float] | np.ndarray) -> st
     return "|".join(_coord_token(float(x)) for x in coords)
 
 
-def _serialize_rank_axes(axes: tuple[np.ndarray, ...] | list[np.ndarray]) -> str:
-    return ";;".join(_coord_key_tuple(axis) for axis in axes)
+def _needs_hard_exit_rank_workaround(regime: str, invariant_kind: str) -> bool:
+    return regime == "cubical_parity" and invariant_kind in ("rank_signed_measure", "rank_invariant")
 
 
-def _serialize_rank_table_from_measure(mp, axes: tuple[np.ndarray, ...] | list[np.ndarray], res) -> str:
-    measure = _extract_measure_payload(res)
-    ndim = len(axes)
-    dims = tuple(len(axis) for axis in axes)
-    entries: list[str] = []
+def _normalize_hilbert_measure_contract(
+    axes: tuple[np.ndarray, ...] | list[np.ndarray],
+    res,
+) -> tuple[tuple[np.ndarray, ...], tuple[np.ndarray, np.ndarray]]:
+    raw_axes = tuple(np.asarray(axis, dtype=np.float64) for axis in axes)
+    locs, weights = _extract_measure_payload(res)
+    locs_arr = np.asarray(locs, dtype=np.float64)
+    weights_arr = np.asarray(weights)
+    ndim = len(raw_axes)
+    if weights_arr.size == 0:
+        if locs_arr.ndim == 1:
+            locs_arr = locs_arr.reshape(0, ndim)
+        elif locs_arr.ndim != 2:
+            locs_arr = np.reshape(locs_arr, (0, ndim))
+    elif locs_arr.ndim == 1:
+        locs_arr = locs_arr.reshape(1, -1) if weights_arr.size == 1 else locs_arr.reshape(-1, 1)
+    elif locs_arr.ndim != 2:
+        locs_arr = np.reshape(locs_arr, (weights_arr.size, -1))
+    if ndim == 0:
+        return raw_axes, (locs_arr, weights_arr)
+    if locs_arr.ndim != 2 or (locs_arr.shape[1] not in (0, ndim)):
+        raise RuntimeError(
+            f"Hilbert signed measure must encode {ndim} coordinates, got shape={locs_arr.shape}."
+        )
+    if locs_arr.shape[0] != weights_arr.size:
+        raise RuntimeError(
+            f"Signed-measure location/weight shape mismatch: locs={locs_arr.shape}, weights={weights_arr.shape}"
+        )
+    if locs_arr.shape[1] == 0:
+        return raw_axes, (locs_arr.reshape(0, ndim), weights_arr)
 
-    def _walk(depth: int, p_idx: list[int], q_idx: list[int]) -> None:
-        if depth == ndim:
-            p = np.asarray([float(axes[k][p_idx[k]]) for k in range(ndim)], dtype=np.float64)
-            q = np.asarray([float(axes[k][q_idx[k]]) for k in range(ndim)], dtype=np.float64)
-            val = mp.point_measure.estimate_rank_from_rank_sm(measure, p, q)
-            if int(val) == 0:
-                return
-            entries.append(
-                _coord_key_tuple(tuple(p.tolist()))
-                + "||"
-                + _coord_key_tuple(tuple(q.tolist()))
-                + "=>"
-                + _weight_token(val)
+    keep_dims: list[int] = []
+    for dim, axis in enumerate(raw_axes):
+        drop_dummy = axis.size == 1 and np.isneginf(axis[0]) and (
+            weights_arr.size == 0 or np.all(locs_arr[:, dim] == axis[0])
+        )
+        if not drop_dummy:
+            keep_dims.append(dim)
+    if len(keep_dims) == ndim or not keep_dims:
+        return raw_axes, (locs_arr, weights_arr)
+
+    norm_axes = tuple(raw_axes[dim] for dim in keep_dims)
+    norm_locs = locs_arr[:, keep_dims]
+    return norm_axes, (norm_locs, weights_arr)
+
+
+def _integrate_measure_on_axes(
+    mp,
+    axes: tuple[np.ndarray, ...],
+    res,
+) -> np.ndarray:
+    locs, weights = _extract_measure_payload(res)
+    return np.asarray(
+        mp.point_measure.integrate_measure(
+            locs,
+            weights,
+            filtration_grid=axes,
+            return_grid=False,
+        ),
+        dtype=np.float64,
+    )
+
+
+def _sparse_hilbert_terms_from_measure(
+    axes: tuple[np.ndarray, ...] | list[np.ndarray],
+    res,
+) -> list[tuple[tuple[float, ...], str]] | None:
+    hilbert_axes, hilbert_measure = _normalize_hilbert_measure_contract(axes, res)
+    if len(hilbert_axes) != 1:
+        return None
+    locs, weights = hilbert_measure
+    locs_arr = np.asarray(locs, dtype=np.float64)
+    weights_arr = np.asarray(weights)
+    if weights_arr.size == 0:
+        return []
+    if locs_arr.ndim != 2 or locs_arr.shape[1] != 1:
+        raise RuntimeError(f"Hilbert signed measure must be 1D after normalization, got shape={locs_arr.shape}.")
+    xs = locs_arr[:, 0]
+    out: list[tuple[tuple[float, ...], str]] = []
+    for q in np.asarray(hilbert_axes[0], dtype=np.float64).tolist():
+        idx = xs <= float(q)
+        if not np.any(idx):
+            continue
+        val = weights_arr[idx].sum()
+        if isinstance(val, np.generic):
+            val = val.item()
+        if val == 0:
+            continue
+        out.append(((float(q),), _weight_token(val)))
+    return out
+
+
+def _sparse_function_terms_from_values(
+    axes: tuple[np.ndarray, ...] | list[np.ndarray],
+    values: np.ndarray,
+) -> list[tuple[tuple[float, ...], str]]:
+    axes0 = tuple(np.asarray(axis, dtype=np.float64) for axis in axes)
+    arr = np.asarray(values)
+    if len(axes0) == 0:
+        return []
+    expected_shape = tuple(axis.size for axis in axes0)
+    if arr.shape != expected_shape:
+        raise RuntimeError(f"Function table shape mismatch: values={arr.shape}, expected={expected_shape}")
+    nz = np.argwhere(arr != 0)
+    out: list[tuple[tuple[float, ...], str]] = []
+    for idx in nz.tolist():
+        coords = tuple(float(axes0[dim][i]) for dim, i in enumerate(idx))
+        out.append((coords, _weight_token(arr[tuple(idx)].item())))
+    out.sort(key=lambda item: item[0])
+    return out
+
+
+def _normalize_rank_measure_contract(
+    axes: tuple[np.ndarray, ...] | list[np.ndarray],
+    res,
+) -> tuple[tuple[np.ndarray, ...], tuple[np.ndarray, np.ndarray]]:
+    raw_axes = tuple(np.asarray(axis, dtype=np.float64) for axis in axes)
+    locs, weights = _extract_measure_payload(res)
+    locs_arr = np.asarray(locs, dtype=np.float64)
+    weights_arr = np.asarray(weights)
+    if weights_arr.size == 0:
+        if locs_arr.ndim == 1:
+            locs_arr = locs_arr.reshape(0, len(raw_axes) * 2)
+        elif locs_arr.ndim != 2:
+            locs_arr = np.reshape(locs_arr, (0, len(raw_axes) * 2))
+    elif locs_arr.ndim == 1:
+        locs_arr = locs_arr.reshape(1, -1) if weights_arr.size == 1 else locs_arr.reshape(-1, 1)
+    elif locs_arr.ndim != 2:
+        locs_arr = np.reshape(locs_arr, (weights_arr.size, -1))
+    ndim = len(raw_axes)
+    if ndim == 0:
+        return raw_axes, (locs_arr, weights_arr)
+    if locs_arr.ndim != 2 or (locs_arr.shape[1] not in (0, 2 * ndim)):
+        raise RuntimeError(
+            f"Rank signed measure must encode {ndim} birth/death coordinates, got shape={locs_arr.shape}."
+        )
+    if locs_arr.shape[0] != weights_arr.size:
+        raise RuntimeError(
+            f"Signed-measure location/weight shape mismatch: locs={locs_arr.shape}, weights={weights_arr.shape}"
+        )
+    if locs_arr.shape[1] == 0:
+        return raw_axes, (locs_arr.reshape(0, 2 * ndim), weights_arr)
+
+    births = locs_arr[:, :ndim]
+    deaths = locs_arr[:, ndim:]
+    keep_dims: list[int] = []
+    for dim, axis in enumerate(raw_axes):
+        drop_dummy = (
+            axis.size == 1
+            and np.isneginf(axis[0])
+            and (
+                weights_arr.size == 0
+                or (
+                    np.all(births[:, dim] == axis[0])
+                    and np.all(np.isposinf(deaths[:, dim]))
+                )
             )
-            return
+        )
+        if not drop_dummy:
+            keep_dims.append(dim)
+    if len(keep_dims) == ndim or not keep_dims:
+        return raw_axes, (locs_arr, weights_arr)
 
-        for pi in range(dims[depth]):
-            p_idx.append(pi)
-            for qi in range(pi, dims[depth]):
-                q_idx.append(qi)
-                _walk(depth + 1, p_idx, q_idx)
-                q_idx.pop()
-            p_idx.pop()
+    norm_axes = tuple(raw_axes[dim] for dim in keep_dims)
+    norm_locs = np.concatenate([births[:, keep_dims], deaths[:, keep_dims]], axis=1)
+    return norm_axes, (norm_locs, weights_arr)
 
-    _walk(0, [], [])
-    return ";".join(entries)
+
+def _sparse_rank_terms_from_measure(
+    axes: tuple[np.ndarray, ...] | list[np.ndarray],
+    res,
+) -> list[tuple[tuple[float, ...], str]]:
+    rank_axes, rank_measure = _normalize_rank_measure_contract(axes, res)
+    ndim = len(rank_axes)
+    if ndim == 0:
+        return []
+    locs, weights = rank_measure
+    if weights.size == 0:
+        return []
+    locs_arr = np.asarray(locs, dtype=np.float64)
+    weights_arr = np.asarray(weights)
+    births = locs_arr[:, :ndim]
+    deaths = locs_arr[:, ndim:]
+    grid_points = [
+        np.asarray(point, dtype=np.float64)
+        for point in itertools.product(*(axis.tolist() for axis in rank_axes))
+    ]
+    out: list[tuple[tuple[float, ...], str]] = []
+    for birth_point in grid_points:
+        birth_ok = np.all(births <= birth_point[None, :], axis=1)
+        if not np.any(birth_ok):
+            continue
+        for death_point in grid_points:
+            if np.any(birth_point > death_point):
+                continue
+            idx = birth_ok & np.all(deaths > death_point[None, :], axis=1)
+            if not np.any(idx):
+                continue
+            val = weights_arr[idx].sum()
+            if isinstance(val, np.generic):
+                val = val.item()
+            if val == 0:
+                continue
+            coords = tuple(float(x) for x in birth_point.tolist()) + tuple(
+                float(x) for x in death_point.tolist()
+            )
+            out.append((coords, _weight_token(val)))
+    out.sort(key=lambda item: item[0])
+    return out
 
 
 def _slice_query_from_case(case: dict[str, Any]) -> tuple[list[np.ndarray], list[np.ndarray]]:
@@ -353,6 +547,18 @@ def _slice_query_from_case(case: dict[str, Any]) -> tuple[list[np.ndarray], list
     if not directions or not offsets:
         raise RuntimeError("slice_barcodes requires nonempty slice_directions and slice_offsets.")
     return directions, offsets
+
+
+def _mp_landscape_query_from_case(case: dict[str, Any]) -> tuple[int, np.ndarray]:
+    if "mp_kmax" not in case or "mp_tgrid" not in case:
+        raise RuntimeError("mp_landscape requires mp_kmax and mp_tgrid in the manifest.")
+    kmax = int(case["mp_kmax"])
+    tgrid = np.asarray(case["mp_tgrid"], dtype=np.float64)
+    if kmax <= 0:
+        raise RuntimeError("mp_landscape requires mp_kmax > 0.")
+    if tgrid.ndim != 1 or tgrid.size < 2:
+        raise RuntimeError("mp_landscape requires a 1D mp_tgrid with at least two entries.")
+    return kmax, tgrid
 
 
 def _canonical_barcode_terms(intervals: np.ndarray) -> list[tuple[tuple[float, float], int]]:
@@ -401,6 +607,67 @@ def _slice_output_contract(res: dict[str, Any]) -> tuple[int, float, str]:
                 + _serialize_barcode_terms(terms)
             )
     return term_count, abs_mass, "###".join(records)
+
+
+def _landscape_values_from_intervals(intervals: np.ndarray, tgrid: np.ndarray, kmax: int) -> np.ndarray:
+    arr = np.asarray(intervals, dtype=np.float64)
+    if arr.size == 0:
+        return np.zeros((kmax, tgrid.size), dtype=np.float64)
+    arr = arr.reshape(-1, 2)
+    arr = arr[arr[:, 0] < arr[:, 1]]
+    if arr.size == 0:
+        return np.zeros((kmax, tgrid.size), dtype=np.float64)
+
+    births = arr[:, 0][:, None]
+    deaths = arr[:, 1][:, None]
+    tg = np.asarray(tgrid, dtype=np.float64)[None, :]
+    tents = np.minimum(tg - births, deaths - tg)
+    tents[tents < 0.0] = 0.0
+
+    if tents.shape[0] <= kmax:
+        top = np.sort(tents, axis=0)[::-1]
+        out = np.zeros((kmax, tgrid.size), dtype=np.float64)
+        out[: top.shape[0], :] = top
+        return out
+
+    idx = np.argpartition(tents, -kmax, axis=0)[-kmax:, :]
+    top = np.take_along_axis(tents, idx, axis=0)
+    top.sort(axis=0)
+    return top[::-1, :]
+
+
+def _serialize_landscape_values(vals: np.ndarray) -> str:
+    rows: list[str] = []
+    arr = np.asarray(vals, dtype=np.float64)
+    for k in range(arr.shape[0]):
+        rows.append("|".join(_coord_token(float(x)) for x in arr[k, :].tolist()))
+    return ";;".join(rows)
+
+
+def _mp_landscape_output_contract(res: dict[str, Any]) -> tuple[int, float, str]:
+    kmax = int(res["kmax"])
+    tgrid = np.asarray(res["tgrid"], dtype=np.float64)
+    values = np.asarray(res["values"], dtype=np.float64)
+    weights = np.asarray(res["weights"], dtype=np.float64)
+    directions = res["directions"]
+    offsets = res["offsets"]
+    records: list[str] = []
+    abs_mass = float(np.sum(np.abs(values)))
+    for i, direction in enumerate(directions):
+        for j, offset in enumerate(offsets):
+            vals = values[i, j, :, :]
+            records.append(
+                "dir="
+                + _coord_key_tuple(tuple(direction.tolist()))
+                + "@@off="
+                + _coord_key_tuple(tuple(offset.tolist()))
+                + "@@w="
+                + _coord_token(float(weights[i, j]))
+                + "@@vals="
+                + _serialize_landscape_values(vals)
+            )
+    payload = "kmax=" + str(kmax) + "@@tgrid=" + _coord_key_tuple(tuple(tgrid.tolist())) + "###" + "###".join(records)
+    return int(values.size), abs_mass, payload
 
 
 def _extract_measure_payload(res):
@@ -476,6 +743,51 @@ def _native_rank_query_axes(filtered_complex, mp) -> tuple[np.ndarray, ...]:
     return tuple(np.asarray(axis, dtype=np.float64) for axis in grid)
 
 
+def _signed_measure_target_complex(filtered_complex, mp, invariant_kind: str):
+    if invariant_kind not in ("rank_invariant", "restricted_hilbert"):
+        return filtered_complex
+    if hasattr(filtered_complex, "persistence_on_line"):
+        return filtered_complex
+    return mp.Slicer(filtered_complex)
+
+
+def _hilbert_query_axes_from_case(case: dict[str, Any]) -> tuple[np.ndarray, ...] | None:
+    raw_axes = case.get("hilbert_query_axes")
+    if raw_axes is None:
+        return None
+    if not isinstance(raw_axes, list) or not raw_axes:
+        raise RuntimeError("hilbert_query_axes must be a nonempty array of coordinate arrays.")
+    return tuple(np.asarray(axis, dtype=np.float64) for axis in raw_axes)
+
+
+def _expand_hilbert_query_axes_for_target(
+    canonical_axes: tuple[np.ndarray, ...],
+    target,
+    mp,
+) -> tuple[np.ndarray, ...]:
+    native_axes = _native_rank_query_axes(target, mp)
+    if len(canonical_axes) == len(native_axes):
+        return canonical_axes
+    expanded: list[np.ndarray] = []
+    canon_idx = 0
+    for native_axis in native_axes:
+        is_dummy = native_axis.size == 1 and np.isneginf(native_axis[0])
+        if is_dummy:
+            expanded.append(np.asarray(native_axis, dtype=np.float64))
+            continue
+        if canon_idx >= len(canonical_axes):
+            raise RuntimeError(
+                f"hilbert_query_axes dimension mismatch: canonical={len(canonical_axes)} native={len(native_axes)}"
+            )
+        expanded.append(np.asarray(canonical_axes[canon_idx], dtype=np.float64))
+        canon_idx += 1
+    if canon_idx != len(canonical_axes):
+        raise RuntimeError(
+            f"Unused hilbert_query_axes dimensions: canonical={len(canonical_axes)} native={len(native_axes)}"
+        )
+    return tuple(expanded)
+
+
 def _run_invariant_uncached(mmp, mp, gd, mf, data: np.ndarray, case: dict[str, Any], invariant_kind: str, degree: int):
     filtered_complex, meta = _build_multipers_filtered_complex(mmp, mp, gd, mf, data, case)
     if (
@@ -498,6 +810,33 @@ def _run_invariant_uncached(mmp, mp, gd, mf, data: np.ndarray, case: dict[str, A
             grid=rank_query_axes,
         )
         meta = {**meta, "rank_query_axes": rank_query_axes}
+    elif invariant_kind == "rank_invariant":
+        target = _signed_measure_target_complex(filtered_complex, mp, invariant_kind)
+        rank_query_axes = _native_rank_query_axes(target, mp)
+        res = mp.signed_measure(
+            target,
+            degree=degree,
+            invariant="rank",
+            plot=False,
+            verbose=False,
+            grid=rank_query_axes,
+        )
+        meta = {**meta, "rank_query_axes": rank_query_axes}
+    elif invariant_kind == "restricted_hilbert":
+        target = _signed_measure_target_complex(filtered_complex, mp, invariant_kind)
+        canonical_hilbert_axes = _hilbert_query_axes_from_case(case)
+        hilbert_measure_axes = _native_rank_query_axes(target, mp)
+        res = mp.signed_measure(
+            target,
+            degree=degree,
+            invariant="hilbert",
+            plot=False,
+            verbose=False,
+            grid=hilbert_measure_axes,
+        )
+        meta = {**meta, "hilbert_measure_axes": hilbert_measure_axes}
+        if canonical_hilbert_axes is not None:
+            meta["hilbert_query_axes"] = canonical_hilbert_axes
     elif invariant_kind == "slice_barcodes":
         directions, offsets = _slice_query_from_case(case)
         slicer = mp.Slicer(filtered_complex)
@@ -517,6 +856,31 @@ def _run_invariant_uncached(mmp, mp, gd, mf, data: np.ndarray, case: dict[str, A
                 row.append(arr)
             barcodes.append(row)
         res = {"directions": directions, "offsets": offsets, "barcodes": barcodes}
+    elif invariant_kind == "mp_landscape":
+        directions, offsets = _slice_query_from_case(case)
+        kmax, tgrid = _mp_landscape_query_from_case(case)
+        slicer = mp.Slicer(filtered_complex)
+        values = np.zeros((len(directions), len(offsets), kmax, tgrid.size), dtype=np.float64)
+        for i, direction in enumerate(directions):
+            for j, offset in enumerate(offsets):
+                raw_bars = slicer.persistence_on_line(offset, direction=direction, full=False)
+                if degree < len(raw_bars):
+                    arr = np.asarray(raw_bars[degree], dtype=np.float64)
+                else:
+                    arr = np.empty((0, 2), dtype=np.float64)
+                if arr.size == 0:
+                    arr = np.empty((0, 2), dtype=np.float64)
+                else:
+                    arr = arr.reshape(-1, 2)
+                values[i, j, :, :] = _landscape_values_from_intervals(arr, tgrid, kmax)
+        res = {
+            "directions": directions,
+            "offsets": offsets,
+            "weights": np.ones((len(directions), len(offsets)), dtype=np.float64),
+            "kmax": kmax,
+            "tgrid": tgrid,
+            "values": values,
+        }
     elif invariant_kind == "euler_signed_measure":
         res = mp.signed_measure(
             filtered_complex,
@@ -572,6 +936,85 @@ def _write_rows(path: Path, rows: list[dict[str, Any]]) -> None:
             w.writerow(row)
 
 
+def _run_rank_workaround_once(args, case_id: str, regime: str) -> dict[str, Any]:
+    with tempfile.TemporaryDirectory(prefix="multipers_rank_workaround_") as tmpdir:
+        out_path = Path(tmpdir) / "rows.csv"
+        cmd = [
+            args.python if getattr(args, "python", None) else sys.executable,
+            str(Path(__file__).resolve()),
+            "--manifest",
+            str(args.manifest),
+            "--out",
+            str(out_path),
+            "--profile",
+            str(args.profile),
+            "--regime",
+            regime,
+            "--case",
+            case_id,
+            "--invariants",
+            "rank_signed_measure",
+            "--degree",
+            str(args.degree),
+            "--_hard_exit_after_write",
+            "--reps",
+            "1",
+        ]
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            cwd=Path(__file__).resolve().parents[2],
+        )
+        if proc.stdout:
+            print(proc.stdout, end="")
+        if proc.stderr:
+            print(proc.stderr, end="", file=sys.stderr)
+        if proc.returncode != 0:
+            raise RuntimeError(f"cubical rank workaround subprocess failed with exit code {proc.returncode}")
+        if not out_path.exists():
+            raise RuntimeError("cubical rank workaround subprocess produced no CSV output")
+        with out_path.open("r", encoding="utf-8", newline="") as f:
+            rows = list(csv.DictReader(f))
+        if len(rows) != 1:
+            raise RuntimeError(f"cubical rank workaround subprocess produced {len(rows)} rows, expected 1")
+        return rows[0]
+
+
+def _run_rank_workaround_subprocess(args, case_id: str, regime: str) -> list[dict[str, Any]]:
+    defaults = _profile_defaults(args.profile)
+    reps = defaults["reps"] if args.reps is None else args.reps
+    cold_row = _run_rank_workaround_once(args, case_id, regime)
+    warm_rows = [_run_rank_workaround_once(args, case_id, regime) for _ in range(reps)]
+
+    stable_fields = [
+        "tool",
+        "case_id",
+        "regime",
+        "invariant_kind",
+        "degree",
+        "n_points",
+        "ambient_dim",
+        "max_dim",
+        "output_term_count",
+        "output_abs_mass",
+        "output_measure_canonical",
+        "output_rank_query_axes_canonical",
+        "output_rank_table_canonical",
+    ]
+    for row in warm_rows:
+        for key in stable_fields:
+            if row[key] != cold_row[key]:
+                raise RuntimeError(f"cubical rank workaround subprocess mismatch on {key}: {row[key]!r} != {cold_row[key]!r}")
+
+    warm_times = [float(row["cold_ms"]) for row in warm_rows]
+    out_row = dict(cold_row)
+    out_row["warm_median_ms"] = format(statistics.median(warm_times), ".17g")
+    out_row["warm_p90_ms"] = format(_p90(warm_times), ".17g")
+    out_row["timestamp_utc"] = dt.datetime.now(dt.timezone.utc).isoformat()
+    return [out_row]
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description="Run end-to-end invariant benchmark for multipers.")
     p.add_argument("--manifest", type=Path, default=Path(__file__).with_name("fixtures_invariants") / "manifest.toml")
@@ -582,6 +1025,7 @@ def main() -> None:
     p.add_argument("--case", default="")
     p.add_argument("--invariants", default="all")
     p.add_argument("--degree", type=int, default=0)
+    p.add_argument("--_hard_exit_after_write", action="store_true", help=argparse.SUPPRESS)
     args = p.parse_args()
 
     defaults = _profile_defaults(args.profile)
@@ -597,6 +1041,7 @@ def main() -> None:
     manifest = _load_manifest(args.manifest)
     cases = manifest["cases"]
     rows: list[dict[str, Any]] = []
+    allow_memory_relief = not args._hard_exit_after_write
 
     for case in cases:
         case_id = str(case["id"])
@@ -619,44 +1064,92 @@ def main() -> None:
         data = _load_case_data(case, fixture)
 
         for invariant_kind in selected_invariants:
+            if _needs_hard_exit_rank_workaround(regime, invariant_kind) and not args._hard_exit_after_write:
+                rows.extend(_run_rank_workaround_subprocess(args, case_id, regime))
+                continue
             if invariant_kind == "slice_barcodes":
                 notes = "cold_mode=warm_uncached;cache=none;stage=filtered_complex_to_slice_barcodes"
+            elif invariant_kind == "mp_landscape":
+                notes = "cold_mode=warm_uncached;cache=none;stage=filtered_complex_to_slice_barcodes_to_mp_landscape"
+            elif invariant_kind == "rank_invariant":
+                notes = "cold_mode=warm_uncached;cache=none;stage=filtered_complex_to_rank_invariant"
+            elif invariant_kind == "restricted_hilbert":
+                notes = "cold_mode=warm_uncached;cache=none;stage=filtered_complex_to_restricted_hilbert_measure_contract"
             else:
                 notes = "cold_mode=warm_uncached;cache=none;stage=filtered_complex_to_signed_measure"
-            try:
-                _run_invariant_uncached(mmp, mp, gd, mf, data, case, invariant_kind, args.degree)
-            except Exception as exc:
-                print(f"[skip] {case_id} {invariant_kind}: {exc}")
-                continue
+            if args._hard_exit_after_write:
+                notes = notes + ";rank_workaround=hard_exit_subprocess"
+            if args._hard_exit_after_write:
+                try:
+                    (cold_res, meta), cold_ms = _timed_call(
+                        lambda: _run_invariant_uncached(mmp, mp, gd, mf, data, case, invariant_kind, args.degree)
+                    )
+                except Exception as exc:
+                    print(f"[skip] {case_id} {invariant_kind}: {exc}")
+                    continue
+            else:
+                try:
+                    _run_invariant_uncached(mmp, mp, gd, mf, data, case, invariant_kind, args.degree)
+                except Exception as exc:
+                    print(f"[skip] {case_id} {invariant_kind}: {exc}")
+                    continue
 
-            _memory_relief()
-            (cold_res, meta), cold_ms = _timed_call(
-                lambda: _run_invariant_uncached(mmp, mp, gd, mf, data, case, invariant_kind, args.degree)
-            )
+                if allow_memory_relief:
+                    _memory_relief()
+                (cold_res, meta), cold_ms = _timed_call(
+                    lambda: _run_invariant_uncached(mmp, mp, gd, mf, data, case, invariant_kind, args.degree)
+                )
             notes = notes + f";builder={meta.get('builder', 'unknown')}"
             if invariant_kind == "slice_barcodes":
                 output_term_count, output_abs_mass, output_measure_canonical = _slice_output_contract(cold_res)
                 output_rank_query_axes_canonical = ""
                 output_rank_table_canonical = ""
+            elif invariant_kind == "mp_landscape":
+                output_term_count, output_abs_mass, output_measure_canonical = _mp_landscape_output_contract(cold_res)
+                output_rank_query_axes_canonical = ""
+                output_rank_table_canonical = ""
+            elif invariant_kind == "rank_invariant":
+                terms = _sparse_rank_terms_from_measure(meta["rank_query_axes"], cold_res)
+                output_term_count = len(terms)
+                output_abs_mass = sum(abs(float(weight)) for _, weight in terms)
+                output_measure_canonical = _serialize_measure_terms(terms)
+                output_rank_query_axes_canonical = ""
+                output_rank_table_canonical = ""
+            elif invariant_kind == "restricted_hilbert":
+                hilbert_axes, hilbert_measure = _normalize_hilbert_measure_contract(
+                    meta["hilbert_measure_axes"], cold_res
+                )
+                _ = hilbert_axes
+                terms = _canonical_measure_terms(hilbert_measure)
+                output_term_count = len(terms)
+                output_abs_mass = sum(abs(float(weight)) for _, weight in terms)
+                output_measure_canonical = _serialize_measure_terms(terms)
+                output_rank_query_axes_canonical = ""
+                output_rank_table_canonical = ""
             else:
-                output_term_count, output_abs_mass = _extract_measure_stats(cold_res)
-                output_measure_canonical = _serialize_measure_terms(_canonical_measure_terms(cold_res))
                 if invariant_kind == "rank_signed_measure":
-                    rank_query_axes = meta["rank_query_axes"]
-                    output_rank_query_axes_canonical = _serialize_rank_axes(rank_query_axes)
-                    output_rank_table_canonical = _serialize_rank_table_from_measure(mp, rank_query_axes, cold_res)
+                    _, rank_measure = _normalize_rank_measure_contract(meta["rank_query_axes"], cold_res)
+                    output_term_count, output_abs_mass = _extract_measure_stats(rank_measure)
+                    output_measure_canonical = _serialize_measure_terms(_canonical_measure_terms(rank_measure))
+                    output_rank_query_axes_canonical = ""
+                    output_rank_table_canonical = ""
                 else:
+                    output_term_count, output_abs_mass = _extract_measure_stats(cold_res)
+                    output_measure_canonical = _serialize_measure_terms(_canonical_measure_terms(cold_res))
                     output_rank_query_axes_canonical = ""
                     output_rank_table_canonical = ""
 
             warm_times: list[float] = []
-            for _ in range(reps):
-                _, tms = _timed_call(
-                    lambda: _run_invariant_uncached(mmp, mp, gd, mf, data, case, invariant_kind, args.degree)
-                )
-                warm_times.append(tms)
-                if defaults["trim_between_reps"]:
-                    _memory_relief()
+            if args._hard_exit_after_write:
+                warm_times.append(cold_ms)
+            else:
+                for _ in range(reps):
+                    _, tms = _timed_call(
+                        lambda: _run_invariant_uncached(mmp, mp, gd, mf, data, case, invariant_kind, args.degree)
+                    )
+                    warm_times.append(tms)
+                    if defaults["trim_between_reps"] and allow_memory_relief:
+                        _memory_relief()
 
             warm_median_ms = statistics.median(warm_times)
             warm_p90_ms = _p90(warm_times)
@@ -691,13 +1184,17 @@ def main() -> None:
                 }
             )
 
-            if defaults["trim_between_cases"]:
+            if defaults["trim_between_cases"] and allow_memory_relief:
                 _memory_relief()
 
     if not rows:
         raise RuntimeError("No invariant benchmark rows were produced.")
     _write_rows(args.out, rows)
     print(f"Wrote multipers invariant results: {args.out}")
+    if args._hard_exit_after_write:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(0)
 
 
 if __name__ == "__main__":

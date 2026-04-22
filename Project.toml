@@ -1,6 +1,7 @@
 name = "TamerOp"
 uuid = "40830518-3340-46e0-bdcb-56edef4036ff"
 version = "0.1.0"
+authors = ["Erik Novak"]
 
 [deps]
 Arpack = "7d9fca2a-8960-54d3-9f78-7d1dccf2cb97"

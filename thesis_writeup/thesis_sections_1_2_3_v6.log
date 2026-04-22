@@ -1,4 +1,4 @@
-This is pdfTeX, Version 3.141592653-2.6-1.40.22 (TeX Live 2022/dev/Debian) (preloaded format=pdflatex 2026.1.30)  17 MAR 2026 20:41
+This is pdfTeX, Version 3.141592653-2.6-1.40.22 (TeX Live 2022/dev/Debian) (preloaded format=pdflatex 2026.1.30)  26 MAR 2026 07:53
 entering extended mode
  restricted \write18 enabled.
  %&-line parsing enabled.
@@ -1002,63 +1002,67 @@ Package hyperref Warning: Token not allowed in a PDF string (Unicode):
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
 (hyperref)                removing `math shift' on input line 543.
 
-[12] [13] [14] [15]
-Overfull \hbox (43.12132pt too wide) in paragraph at lines 744--745
+[12] [13] [14]
+Overfull \hbox (43.12132pt too wide) in paragraph at lines 741--742
  [][] 
  []
 
 
-Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `math shift' on input line 763.
+LaTeX Warning: `h' float specifier changed to `ht'.
 
-
-Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `superscript' on input line 763.
-
+[15]
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `math shift' on input line 763.
+(hyperref)                removing `math shift' on input line 760.
+
+
+Package hyperref Warning: Token not allowed in a PDF string (Unicode):
+(hyperref)                removing `superscript' on input line 760.
+
+
+Package hyperref Warning: Token not allowed in a PDF string (Unicode):
+(hyperref)                removing `math shift' on input line 760.
 
 [16] [17]
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `math shift' on input line 834.
+(hyperref)                removing `math shift' on input line 831.
 
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `superscript' on input line 834.
+(hyperref)                removing `superscript' on input line 831.
 
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `math shift' on input line 834.
+(hyperref)                removing `math shift' on input line 831.
 
-[18] [19] [20] [21] [22] [23] [24]
-Underfull \hbox (badness 5548) in paragraph at lines 1015--1019
+[18] [19] [20] [21] [22]
+Underfull \hbox (badness 5548) in paragraph at lines 983--987
 []\T1/lmr/m/n/10.95 (+20) W. Crawley-Boevey.  \T1/lmr/m/it/10.95 (+20) De-com-p
 o-si-tion of point-wise finite-dimensional per-sis-
  []
 
 
-Underfull \hbox (badness 2653) in paragraph at lines 1015--1019
+Underfull \hbox (badness 2653) in paragraph at lines 983--987
 \T1/lmr/m/it/10.95 (+20) tence mod-ules\T1/lmr/m/n/10.95 (+20) .  \T1/lmr/m/it/
 10.95 (+20) Jour-nal of Al-ge-bra and Its Ap-pli-ca-tions\T1/lmr/m/n/10.95 (+20
 ) , 14(5):1550066, 2015.
  []
 
-[25] (./thesis_sections_1_2_3_v6.aux)
+[23] (./thesis_sections_1_2_3_v6.aux)
 
 LaTeX Font Warning: Some font shapes were not available, defaults substituted.
 
 Package rerunfilecheck Info: File `thesis_sections_1_2_3_v6.out' has not change
 d.
-(rerunfilecheck)             Checksum: 676BC96F51E703D94AD68F5764FB49D7;7402.
+(rerunfilecheck)             Checksum: 9BD3BF98F4799522439F804DE24AFCB0;6785.
  ) 
 Here is how much of TeX's memory you used:
- 26139 strings out of 478287
- 482391 string characters out of 5849289
- 801104 words of memory out of 5000000
- 43401 multiletter control sequences out of 15000+600000
- 610554 words of font info for 265 fonts, out of 8000000 for 9000
+ 26130 strings out of 478287
+ 482269 string characters out of 5849289
+ 800103 words of memory out of 5000000
+ 43396 multiletter control sequences out of 15000+600000
+ 609912 words of font info for 263 fonts, out of 8000000 for 9000
  1141 hyphenation exceptions out of 8191
  100i,17n,104p,1201b,912s stack positions out of 5000i,500n,10000p,200000b,80000s
 {/usr/share/texmf/fonts/enc/dvips/lm/lm-mathit.enc}{/usr/share/texmf/fonts/en
@@ -1077,12 +1081,11 @@ mf/fonts/type1/public/lm/lmr17.pfb></usr/share/texmf/fonts/type1/public/lm/lmr8
 /type1/public/lm/lmss8.pfb></usr/share/texmf/fonts/type1/public/lm/lmsy10.pfb><
 /usr/share/texmf/fonts/type1/public/lm/lmsy6.pfb></usr/share/texmf/fonts/type1/
 public/lm/lmsy8.pfb></usr/share/texmf/fonts/type1/public/lm/lmtt10.pfb></usr/sh
-are/texlive/texmf-dist/fonts/type1/public/amsfonts/symbols/msam10.pfb></usr/sha
-re/texlive/texmf-dist/fonts/type1/public/amsfonts/symbols/msbm10.pfb>
-Output written on thesis_sections_1_2_3_v6.pdf (25 pages, 445599 bytes).
+are/texlive/texmf-dist/fonts/type1/public/amsfonts/symbols/msbm10.pfb>
+Output written on thesis_sections_1_2_3_v6.pdf (23 pages, 428896 bytes).
 PDF statistics:
- 550 PDF objects out of 1000 (max. 8388607)
- 473 compressed objects within 5 object streams
- 134 named destinations out of 1000 (max. 500000)
- 82157 words of extra memory for PDF output out of 89155 (max. 10000000)
+ 530 PDF objects out of 1000 (max. 8388607)
+ 457 compressed objects within 5 object streams
+ 131 named destinations out of 1000 (max. 500000)
+ 81125 words of extra memory for PDF output out of 89155 (max. 10000000)
 

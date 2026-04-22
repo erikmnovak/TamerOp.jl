@@ -11,6 +11,7 @@ This file is speaker-only. It is not part of the participant-facing notebook flo
 - `04_invariants_and_visual_payoff.ipynb`: 10 min
 - buffer / Q&A: 5 min
 - optional notebook `05_noisy_annulus_rips_codensity_h1_2persistence.ipynb`: only as a point-cloud follow-up
+- optional notebook `06_featurization_and_repeated_computation.ipynb`: use when the room wants a dataset/feature-pipeline angle
 
 Keep the hour centered on notebooks `02` and `03`. Those carry the algebraic payoff for this audience.
 
@@ -35,6 +36,7 @@ If the room machine is slow or compilation drags:
 - do notebooks `02` and `03` in full
 - in notebook `04`, show only the first invariant block and one image/landscape block
 - skip notebook `05` unless the audience explicitly wants a point-cloud / multipers-style detour
+- use notebook `06` only if the audience asks how this becomes a repeatable statistics or ML-style workflow
 - skip notebook `90` entirely unless Q&A asks for it
 
 ## Notebook-by-notebook notes
@@ -141,6 +143,22 @@ If time is tight:
 - show the raw colored point cloud and the final `H^1` support plane
 - skip the full codensity/radius snapshot panel discussion
 
+### `06_featurization_and_repeated_computation.ipynb`
+
+Goal:
+- show that the same encoded family can feed a repeatable feature pipeline, not just one-off algebraic queries
+
+Live emphasis:
+- one common encoding for the whole sample family
+- one composite feature spec
+- one `FeatureSet`
+- then the repeated cached pass and the experiment rerun speedup
+
+If time is tight:
+- skip the class-mean preview cell
+- go straight from the first `FeatureSet` cell to the repeated-run timing cell
+- only mention the exported CSV/manifest paths rather than opening them
+
 ### `90_speaker_appendix_exact_queries_and_extra_derived.ipynb`
 
 Use only if:
@@ -157,7 +175,8 @@ Do not open this during the main hour unless you are ahead of schedule.
 4. notebook `03` carefully
 5. notebook `04` as payoff
 6. notebook `05` only for a point-cloud / multipers-style extension
-7. notebook `90` only in Q&A
+7. notebook `06` only for a featurization / repeated-computation extension
+8. notebook `90` only in Q&A
 
 ## Environment reminders
 

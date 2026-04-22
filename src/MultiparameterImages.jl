@@ -60,7 +60,8 @@ import ..Serialization: save_mpp_decomposition_json, load_mpp_decomposition_json
 import ..Modules: PModule, map_leq, CoverCache, _get_cover_cache
 import ..IndicatorResolutions: pmodule_from_fringe
 import ..ZnEncoding: ZnEncodingMap
-import ..SliceInvariants: collect_slices, CompiledSlicePlan, slice_barcode, _slice_barcode_packed,
+import ..SliceInvariants: collect_slices, CompiledSlicePlan, SliceBarcodesResult, slice_barcode, slice_barcodes,
+                          _slice_barcode_packed,
                           _slice_barcode_packed_with_workspace, _extended_values_view,
                           _persistence_landscape_values!,
                           _clean_tgrid, _plan_idx, compile_slices, default_offsets, uniform2d,
@@ -2189,6 +2190,140 @@ function mp_landscape(
     return mp_landscape(M, [chain]; kwargs...)
 end
 
+function _mp_landscape_slice_request(
+    pi,
+    opts::InvariantOptions;
+    directions = nothing,
+    offsets = nothing,
+    kmax::Integer = 10,
+    tgrid = nothing,
+    tmin = nothing,
+    tmax = nothing,
+    n_t::Integer = 100,
+    direction_weight::Symbol = :uniform,
+    normalize_weights::Bool = true,
+    drop_unknown::Bool = true,
+    dedup::Bool = true,
+    ts = nothing,
+    kwargs...,
+)
+    kwargs_nt = NamedTuple(kwargs)
+    if haskey(kwargs_nt, :box) || haskey(kwargs_nt, :strict) || haskey(kwargs_nt, :threads) ||
+        haskey(kwargs_nt, :axes) || haskey(kwargs_nt, :axes_policy) || haskey(kwargs_nt, :max_axis_len)
+        throw(ArgumentError("mp_landscape: do not pass options fields as keywords; use opts::InvariantOptions"))
+    end
+    if haskey(kwargs_nt, :kmin) || haskey(kwargs_nt, :kmax_param)
+        throw(ArgumentError("mp_landscape: use ts=... for discrete parameter samples instead of kmin/kmax_param"))
+    end
+
+    strict0 = opts.strict === nothing ? true : opts.strict
+    box_kw = opts.box === nothing ? (pi isa PLikeEncodingMap ? :auto : nothing) : opts.box
+    opts_chain = InvariantOptions(
+        axes = opts.axes,
+        axes_policy = opts.axes_policy,
+        max_axis_len = opts.max_axis_len,
+        box = box_kw,
+        threads = opts.threads,
+        strict = strict0,
+        pl_mode = opts.pl_mode,
+    )
+
+    forward = _drop_keys(kwargs_nt, (:ts,))
+
+    d = dimension(pi)
+    dirs_in = directions === nothing ? orthant_directions(d) : orthant_directions(d, directions)
+
+    if tmin === nothing || tmax === nothing || offsets === nothing
+        lo, hi = encoding_box(pi, opts_chain)
+        tmin === nothing && (tmin = -minimum(abs.(vcat(lo, hi))))
+        tmax === nothing && (tmax = maximum(abs.(vcat(lo, hi))))
+        offsets === nothing && (offsets = default_offsets(pi, opts_chain))
+    end
+
+    tg = tgrid === nothing ? collect(LinRange(tmin, tmax, n_t)) : collect(tgrid)
+    direction_weight_spec = if direction_weight == :uniform
+        :uniform
+    elseif direction_weight == :uniform2d
+        uniform2d
+    else
+        error("mp_landscape: unknown direction_weight mode $(direction_weight)")
+    end
+    threads0 = opts.threads === nothing ? (Threads.nthreads() > 1) : opts.threads
+    ts_arg = ts === nothing ? tg : ts
+
+    return (
+        ;
+        opts_chain,
+        directions = dirs_in,
+        offsets,
+        kmax = Int(kmax),
+        tgrid = tg,
+        direction_weight = direction_weight_spec,
+        normalize_weights,
+        drop_unknown,
+        dedup,
+        ts = ts_arg,
+        threads = threads0,
+        forward,
+    )
+end
+
+function _mp_landscape_from_slice_barcodes(
+    result::SliceBarcodesResult;
+    kmax::Integer = 10,
+    tgrid,
+    normalize_weights::Bool = false,
+    threads::Bool = (Threads.nthreads() > 1),
+)::MPLandscape
+    kk = Int(kmax)
+    kk > 0 || throw(ArgumentError("mp_landscape: kmax must be positive"))
+    tg = _clean_tgrid(tgrid)
+    nt = length(tg)
+    W = Matrix{Float64}(slice_weights(result))
+    nd, no = size(W)
+    bars = slice_barcodes(result)
+    size(bars) == (nd, no) ||
+        throw(ArgumentError("mp_landscape: slice barcode grid shape must match slice weight shape"))
+
+    vals = zeros(Float64, nd, no, kk, nt)
+    if threads && Threads.nthreads() > 1 && (nd * no) > 1
+        point_scratch_by_thread = [Tuple{Float64,Float64}[] for _ in 1:Threads.nthreads()]
+        tent_scratch_by_thread = [Float64[] for _ in 1:Threads.nthreads()]
+        Threads.@threads for idx in 1:(nd * no)
+            i = div(idx - 1, no) + 1
+            j = mod(idx - 1, no) + 1
+            tid = Threads.threadid()
+            _persistence_landscape_values!(
+                @view(vals[i, j, :, :]),
+                bars[i, j],
+                tg;
+                points_scratch=point_scratch_by_thread[tid],
+                tent_scratch=tent_scratch_by_thread[tid],
+            )
+        end
+    else
+        points_scratch = Tuple{Float64,Float64}[]
+        tent_scratch = Float64[]
+        @inbounds for i in 1:nd, j in 1:no
+            _persistence_landscape_values!(
+                @view(vals[i, j, :, :]),
+                bars[i, j],
+                tg;
+                points_scratch=points_scratch,
+                tent_scratch=tent_scratch,
+            )
+        end
+    end
+
+    if normalize_weights
+        s = sum(W)
+        s > 0 || error("mp_landscape: total slice weight is zero")
+        W ./= s
+    end
+
+    return MPLandscape(kk, tg, vals, W, copy(slice_directions(result)), copy(slice_offsets(result)))
+end
+
 function mp_landscape(
     M::PModule{K},
     pi,
@@ -2208,90 +2343,47 @@ function mp_landscape(
     ts = nothing,
     kwargs...,
 )::MPLandscape where {K}
-    kwargs_nt = NamedTuple(kwargs)
-    if haskey(kwargs_nt, :box) || haskey(kwargs_nt, :strict) || haskey(kwargs_nt, :threads) ||
-        haskey(kwargs_nt, :axes) || haskey(kwargs_nt, :axes_policy) || haskey(kwargs_nt, :max_axis_len)
-        throw(ArgumentError("mp_landscape: do not pass options fields as keywords; use opts::InvariantOptions"))
-    end
-    if haskey(kwargs_nt, :kmin) || haskey(kwargs_nt, :kmax_param)
-        throw(ArgumentError("mp_landscape: use ts=... for discrete parameter samples instead of kmin/kmax_param"))
-    end
-
-    strict0 = opts.strict === nothing ? true : opts.strict
-    if opts.box === nothing
-        box_kw = pi isa PLikeEncodingMap ? :auto : nothing
-    else
-        box_kw = opts.box
-    end
-
-    opts_chain = InvariantOptions(
-        axes = opts.axes,
-        axes_policy = opts.axes_policy,
-        max_axis_len = opts.max_axis_len,
-        box = box_kw,
-        threads = opts.threads,
-        strict = strict0,
-        pl_mode = opts.pl_mode,
+    req = _mp_landscape_slice_request(
+        pi,
+        opts;
+        directions=directions,
+        offsets=offsets,
+        kmax=kmax,
+        tgrid=tgrid,
+        tmin=tmin,
+        tmax=tmax,
+        n_t=n_t,
+        direction_weight=direction_weight,
+        normalize_weights=normalize_weights,
+        drop_unknown=drop_unknown,
+        dedup=dedup,
+        ts=ts,
+        kwargs...,
     )
-
-    forward = _drop_keys(kwargs_nt, (:ts,))
-
-    d = dimension(pi)
-    if directions === nothing
-        directions = orthant_directions(d)
-    end
-    dirs_in = orthant_directions(d, directions)
-
-    if tmin === nothing || tmax === nothing || offsets === nothing
-        lo, hi = encoding_box(pi, opts_chain)
-        if tmin === nothing
-            tmin = -minimum(abs.(vcat(lo, hi)))
-        end
-        if tmax === nothing
-            tmax = maximum(abs.(vcat(lo, hi)))
-        end
-        if offsets === nothing
-            offsets = default_offsets(pi, opts_chain)
-        end
-    end
-
-    tg = tgrid === nothing ? collect(LinRange(tmin, tmax, n_t)) : collect(tgrid)
-
-    direction_weight_spec = if direction_weight == :uniform
-        :uniform
-    elseif direction_weight == :uniform2d
-        uniform2d
-    else
-        error("mp_landscape: unknown direction_weight mode $(direction_weight)")
-    end
-
-    ts_arg = ts === nothing ? tg : ts
-
-    threads0 = opts.threads === nothing ? (Threads.nthreads() > 1) : opts.threads
     plan = compile_slices(
         pi,
-        opts_chain;
-        directions = dirs_in,
-        offsets = offsets,
+        req.opts_chain;
+        directions = req.directions,
+        offsets = req.offsets,
         normalize_dirs = :none,
-        direction_weight = direction_weight_spec,
+        direction_weight = req.direction_weight,
         offset_weights = nothing,
-        normalize_weights = normalize_weights,
-        drop_unknown = drop_unknown,
-        dedup = dedup,
-        threads = threads0,
+        normalize_weights = req.normalize_weights,
+        drop_unknown = req.drop_unknown,
+        dedup = req.dedup,
+        threads = req.threads,
         cache = cache,
-        ts = ts_arg,
-        forward...,
+        ts = req.ts,
+        req.forward...,
     )
 
     return mp_landscape(
         M,
         plan;
-        kmax = kmax,
-        tgrid = tg,
+        kmax = req.kmax,
+        tgrid = req.tgrid,
         normalize_weights = false,
-        threads = threads0,
+        threads = req.threads,
     )
 end
 

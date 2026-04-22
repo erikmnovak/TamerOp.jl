@@ -22,8 +22,7 @@
 \contentsline {subsection}{\numberline {6.3}The finite-poset case}{16}{subsection.6.3}%
 \contentsline {subsection}{\numberline {6.4}Encoding flange presentations over $\mathbb {Z}^n$}{16}{subsection.6.4}%
 \contentsline {subsection}{\numberline {6.5}Encoding PL and box presentations over $\mathbb {R}^n$}{18}{subsection.6.5}%
-\contentsline {subsection}{\numberline {6.6}Geometry attached to an encoding map}{22}{subsection.6.6}%
-\contentsline {subsection}{\numberline {6.7}From filtered data to finite encodings}{22}{subsection.6.7}%
-\contentsline {subsection}{\numberline {6.8}Common encodings, compiled evaluation, and reusable results}{23}{subsection.6.8}%
-\contentsline {subsection}{\numberline {6.9}Complexity, diagnostics, and the role of the encoding chapter}{24}{subsection.6.9}%
-\contentsline {section}{\numberline {7}Bibliography notes}{24}{section.7}%
+\contentsline {subsection}{\numberline {6.6}Geometry attached to an encoding map}{21}{subsection.6.6}%
+\contentsline {subsection}{\numberline {6.7}From filtered data to finite encodings}{21}{subsection.6.7}%
+\contentsline {subsection}{\numberline {6.8}Common encodings}{22}{subsection.6.8}%
+\contentsline {section}{\numberline {7}Bibliography notes}{22}{section.7}%

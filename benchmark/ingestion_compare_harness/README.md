@@ -77,14 +77,53 @@ Current invariant coverage:
   - tamer-op: build the canonical `:encoded_complex` workflow object, then evaluate `euler_signed_measure(encoded_complex_result)`
   - multipers: build filtered complex then `signed_measure(..., invariant="euler")`
 - `slice_barcodes`
-  - experimental harness only
   - tamer-op: build the canonical `:encoding_result` workflow object, then evaluate `slice_barcodes(encoding_result; directions=..., offsets=...)`
   - multipers: build filtered complex, then run `Slicer(...).persistence_on_line(...)` on the shared manifest slice family
-  - not benchmark-approved yet; current raw-line contract is not parity-clean
+  - benchmark-approved for:
+    - `rips_parity`
+    - `rips_codensity_parity`
+    - `rips_lowerstar_parity`
+    - `landmark_parity`
+    - `cubical_parity`
+    - `landmark_parity`
+    - `cubical_parity`
+- `mp_landscape`
+  - tamer-op: build the canonical `:encoding_result` workflow object, evaluate the shared slice family, then sample a common multiparameter landscape grid
+  - multipers: build the filtered complex, run line persistence on the same manifest slice family, then sample the same landscape grid
+  - benchmark-approved for:
+    - `rips_parity`
+    - `rips_codensity_parity`
+    - `rips_lowerstar_parity`
+- `restricted_hilbert`
+  - tamer-op: build the canonical `:cohomology_dims` workflow object, then serialize the sparse nonzero restricted Hilbert values on the encoding representatives
+  - multipers: build the filtered complex, compute the Hilbert signed measure, integrate it on the native exact grid, then serialize the sparse nonzero Hilbert values by semantic coordinates
+  - benchmark-approved for:
+    - `alpha_parity`
+    - `rips_codensity_parity`
+    - `rips_lowerstar_parity`
+  - not approved for:
+    - `rips_parity`
+      - local `multipers` Hilbert path reports `Not implemented for 1<2 parameters.`
+    - `landmark_parity`
+      - same local `multipers` 1-parameter Hilbert limitation as `rips_parity`
+    - `cubical_parity`
+      - same local `multipers` 1-parameter Hilbert limitation as `rips_parity`
 - `rank_signed_measure`
-  - still available as an explicit opt-in
-  - not part of the first reportable matrix, because the current tamer-op raw-data
-    route is not yet stable enough for parity-grade comparison there
+  - benchmark-approved for:
+    - `alpha_parity`
+    - `rips_codensity_parity`
+    - `rips_lowerstar_parity`
+  - not approved for:
+    - `rips_parity`
+      - local `multipers` rank path skips 1-parameter modules
+    - `landmark_parity`
+      - local `multipers` rank path skips 1-parameter modules
+    - `cubical_parity`
+      - local `multipers` rank path crashed on the probe
+- `rank_invariant`
+  - harness support exists, but it is not benchmark-approved yet
+  - current blocker:
+    - local `multipers` `rank_invariant` probes segfaulted on both `alpha_parity` and `rips_codensity_parity`, even at tiny probe scale
 
 First reportable benchmark contract:
 

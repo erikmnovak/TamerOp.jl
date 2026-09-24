@@ -117,6 +117,55 @@ end
     @test_throws ArgumentError VIZ.visual_spec(fam; kind=:fibered_distance_diagnostic)
 end
 
+@testset "A79 rank heatmap coordinates and missing cells" begin
+    VIZ = TamerOp.Visualization
+    P = chain_poset(3)
+    # k² --diag(1,0)--> k² --[0 1]--> k has two rank-one cover maps
+    # but zero composite. Rows are source a; columns are target b.
+    expected = [2.0 1.0 0.0; NaN 2.0 1.0; NaN NaN 1.0]
+    rank_spec = nothing
+    for field in FIELDS_FULL
+        K = CM.coeff_type(field)
+        M = MD.PModule{K}(P, [2, 2, 1],
+            Dict((1, 2) => K[1 0; 0 0], (2, 3) => K[0 1]); field=field)
+        for store_zeros in (false, true)
+            result = Inv.rank_invariant(M, OPT.InvariantOptions(threads=false); store_zeros=store_zeros)
+            @test haskey(result, (1, 3)) == store_zeros
+            @test Inv.value_at(result, 1, 3) == 0
+            rank_spec = VIZ.visual_spec(result; kind=:rank_heatmap)
+            layer = only(rank_spec.layers)
+            @test layer isa VIZ.HeatmapLayer
+            @test layer.x == layer.y == [1.0, 2.0, 3.0]
+            @test rank_spec.axes.xlabel == "target region b"
+            @test rank_spec.axes.ylabel == "source region a"
+            @test isequal(layer.values, expected)
+            @test VIZ.check_visual_spec(rank_spec).valid
+        end
+    end
+
+    # A non-square layer also distinguishes the backend's x/y layout from the
+    # specification's row/column layout; square data alone can hide a transpose.
+    rectangular = VIZ.VisualizationSpec(:coordinate_oracle;
+        layers=VIZ.AbstractVisualizationLayer[
+            VIZ.HeatmapLayer([-2.0, 0.0, 5.0], [1.0, 4.0],
+                             [1.0 2.0 3.0; 4.0 5.0 6.0], :viridis, 1.0, "value")])
+    @test VIZ.check_visual_spec(rectangular).valid
+    if Base.find_package("CairoMakie") === nothing
+        @test_skip false # Renderer coordinates require the optional CairoMakie backend.
+    else
+        @eval import CairoMakie
+        for (spec, backend_values) in ((rank_spec, [2.0 NaN NaN; 1.0 2.0 NaN; 0.0 1.0 1.0]),
+                                       (rectangular, [1.0 4.0; 2.0 5.0; 3.0 6.0]))
+            fig = VIZ.render(spec; backend=:cairomakie)
+            ax = only(block for block in fig.content if block isa CairoMakie.Axis)
+            heatmap = only(plot for plot in ax.scene.plots if plot isa CairoMakie.Heatmap)
+            # Makie indexes values by x first, y second. Check its actual plotted
+            # data, including the invisible incomparable pairs of the rank plot.
+            @test isequal(heatmap[3][], backend_values)
+        end
+    end
+end
+
 @testset "Visualization engine v1" begin
     TOA = TamerOp.Advanced
     VIZ = TamerOp.Visualization
@@ -438,9 +487,9 @@ end
     @test size(spec_rank_heat.layers[1].values, 1) == FF.nvertices(Pbox)
     @test all(begin
                   if FF.leq(Pbox, a, b)
-                      isapprox(spec_rank_heat.layers[1].values[b, a], float(TOA.value_at(rank_raw, a, b)); atol=1e-12)
+                      isapprox(spec_rank_heat.layers[1].values[a, b], float(TOA.value_at(rank_raw, a, b)); atol=1e-12)
                   else
-                      isnan(spec_rank_heat.layers[1].values[b, a])
+                      isnan(spec_rank_heat.layers[1].values[a, b])
                   end
               end for a in 1:FF.nvertices(Pbox), b in 1:FF.nvertices(Pbox))
     @test TOA.visual_metadata(spec_rank_heat).figure_size == (720, 620)

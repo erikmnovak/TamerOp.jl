@@ -1,0 +1,93 @@
+name: Release verification
+
+on:
+  push:
+    branches: ['release/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  full-suite:
+    name: ${{ matrix.platform.name }} / ${{ matrix.group }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - {name: linux-minimum, os: ubuntu-latest, julia: '1.12.0', threads: '1'}
+          - {name: linux-current, os: ubuntu-latest, julia: '1.12', threads: '1'}
+          - {name: linux-threaded, os: ubuntu-latest, julia: '1.12', threads: '4,1'}
+          - {name: macos-current, os: macos-latest, julia: '1.12', threads: '1'}
+          - {name: windows-current, os: windows-latest, julia: '1.12', threads: '1'}
+        group: [core, encoding, geometry, resolutions, derived, invariants, interfaces]
+    runs-on: ${{ matrix.platform.os }}
+    timeout-minutes: 360
+    defaults:
+      run:
+        shell: bash
+    env:
+      JULIA_NUM_THREADS: ${{ matrix.platform.threads }}
+      OPENBLAS_NUM_THREADS: '1'
+      JULIA_PKG_PRECOMPILE_AUTO: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.platform.julia }}
+      - uses: julia-actions/cache@v2
+      - name: Resolve external test environment
+        run: |
+          mkdir -p "$RUNNER_TEMP/tamerop-setup"
+          git rev-parse HEAD > "$RUNNER_TEMP/tamerop-setup/commit.txt"
+          git rev-parse 'HEAD^{tree}' > "$RUNNER_TEMP/tamerop-setup/tree.txt"
+          julia --startup-file=no test/release_environment.jl "$RUNNER_TEMP/tamerop-environment" core 2>&1 | tee "$RUNNER_TEMP/tamerop-setup/setup.log"
+      - name: Full owner suites, all five fields
+        run: julia --startup-file=no --project="$RUNNER_TEMP/tamerop-environment" test/release.jl --group=${{ matrix.group }} --output="$RUNNER_TEMP/tamerop-evidence"
+      - name: Preserve results, versions, commands and raw failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.platform.name }}-${{ matrix.group }}
+          path: |
+            ${{ runner.temp }}/tamerop-evidence/
+            ${{ runner.temp }}/tamerop-setup/
+            ${{ runner.temp }}/tamerop-environment/*.toml
+          if-no-files-found: error
+
+  extensions:
+    name: linux-current / all extensions / ${{ matrix.group }}
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [geometry, interfaces]
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      JULIA_NUM_THREADS: '4,1'
+      OPENBLAS_NUM_THREADS: '1'
+      JULIA_PKG_PRECOMPILE_AUTO: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1.12'
+      - uses: julia-actions/cache@v2
+      - name: Resolve every declared optional dependency
+        run: |
+          mkdir -p "$RUNNER_TEMP/tamerop-setup"
+          git rev-parse HEAD > "$RUNNER_TEMP/tamerop-setup/commit.txt"
+          git rev-parse 'HEAD^{tree}' > "$RUNNER_TEMP/tamerop-setup/tree.txt"
+          julia --startup-file=no test/release_environment.jl "$RUNNER_TEMP/tamerop-environment" extensions 2>&1 | tee "$RUNNER_TEMP/tamerop-setup/setup.log"
+      - name: Require all extensions and verify their owner suites
+        run: julia --startup-file=no --project="$RUNNER_TEMP/tamerop-environment" test/release.jl --group=${{ matrix.group }} --extensions=all --output="$RUNNER_TEMP/tamerop-evidence"
+      - name: Preserve extension evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-all-extensions-${{ matrix.group }}
+          path: |
+            ${{ runner.temp }}/tamerop-evidence/
+            ${{ runner.temp }}/tamerop-setup/
+            ${{ runner.temp }}/tamerop-environment/*.toml
+          if-no-files-found: error

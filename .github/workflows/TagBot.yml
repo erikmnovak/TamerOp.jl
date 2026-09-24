@@ -5,11 +5,10 @@ on:
     types:
       - created
   workflow_dispatch:
-    inputs:
-      lookback:
-        description: "[DEPRECATED] No longer has any effect"
-        default: "3"
 
+# TagBot follows registration in General; running it does not register a package.
+# Use repository default permissions as recommended by upstream TagBot.
+# Configuration and release verification: docs/releasing.md.
 jobs:
   TagBot:
     if: github.event_name == 'workflow_dispatch' || github.actor == 'JuliaTagBot'
@@ -19,6 +18,6 @@ jobs:
       - uses: JuliaRegistries/TagBot@v1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          # If you later want TagBot-created tags to trigger other workflows
-          # (for example docs builds), add a write-enabled deploy key secret:
+          # Enable only after configuring a write-enabled deploy key, e.g. when
+          # tags need to trigger a documentation workflow. See docs/releasing.md.
           # ssh: ${{ secrets.DOCUMENTER_KEY }}

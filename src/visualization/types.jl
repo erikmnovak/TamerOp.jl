@@ -12,6 +12,14 @@ function visual_summary end
 
 abstract type AbstractVisualizationLayer end
 
+"""
+    HeatmapLayer(x, y, values, colormap, alpha, colorbar_label[, show_colorbar])
+
+A heatmap whose matrix rows follow `y` and columns follow `x`: `values[j, i]`
+is the value at `(x[i], y[j])`. Each coordinate vector can contain cell centers
+or one more entry giving cell edges. `NaN` values denote missing cells.
+Rendering backends translate this layout to their native matrix convention.
+"""
 struct HeatmapLayer <: AbstractVisualizationLayer
     x::Vector{Float64}
     y::Vector{Float64}

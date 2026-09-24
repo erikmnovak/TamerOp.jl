@@ -131,3 +131,44 @@ fields with multiple worker threads:
 ```sh
 julia --project=. --threads=4 test/runtests.jl --file=test_encoding.jl --prefix='A16 Kan maps respect module-owned caches on equal posets' --fields=QQ,F2,F3,F5,Real64
 ```
+
+## Release candidate verification
+
+`Release.yml` runs every maintained owner suite against one Git commit on Linux
+with Julia 1.12.0 and the current 1.12 patch, Linux with four worker threads and
+one interactive thread, and current Julia 1.12 on macOS and Windows. Seven groups
+partition the complete owner list; the runner rejects missing or duplicated
+owners. Each owner runs in a fresh Julia process to bound compiler memory and
+avoid state leaking from one owner into another. All shared QQ/F2/F3/F5/Real64
+loops and the long randomized tests execute. Individual mathematical fixtures
+retain their explicit field, backend and random-seed choices.
+
+Separate Linux jobs require all declared extensions and run their complete
+geometry and interface owner suites, including native optional geometry backends. This is a declared test matrix, not a claim that every
+combination of optional packages, backends and dependency versions has been
+tested. Linear-algebra owner tests explicitly exercise supported backend routes;
+other owners retain their automatic or fixture-specific backend selection.
+
+The workflow runs on `release/**` branches or by manual dispatch. Each group
+uploads its source commit/tree, resolved Project/Manifest, Julia/platform/thread
+settings, initial seed, threshold-profile hash, commands, per-owner exit codes
+and raw logs, including assertion totals and skipped tests. A passing release
+requires every group and the separate installed-package workflow to pass on the
+same candidate. A later source change requires revalidating affected checks and
+a final unchanged candidate; a configured workflow alone is not evidence.
+
+To reproduce a complete core run locally, use a clean candidate checkout and
+fresh directories **outside** that checkout:
+
+```sh
+julia --startup-file=no test/release_environment.jl /tmp/tamerop-release-env core
+JULIA_NUM_THREADS=1 julia --startup-file=no --project=/tmp/tamerop-release-env test/release.jl --group=all --output=/tmp/tamerop-release-results
+```
+
+Use a new environment with `extensions` instead of `core`, then add
+`--extensions=all --group=interfaces` to require all optional adapters. Existing
+package downloads can be reused; the resolved environment is always recorded.
+The [release guide](releasing.md) covers the distinct `Pkg.add` installation
+check, registration and tagging. The release suite does not need the ignored
+local tutorials or audit drivers; their absent tutorial checks remain explicit
+skips, while self-contained public mathematical checks still run.

@@ -1,0 +1,55 @@
+name: Installed package
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    env:
+      JULIA_NUM_THREADS: '1'
+      JULIA_NUM_PRECOMPILE_TASKS: '1'
+      OPENBLAS_NUM_THREADS: '1'
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # On pull requests install the published head commit, not the synthetic
+          # merge commit, which may not be addressable through the package URL.
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1.12'
+      - name: Install the exact candidate outside the checkout
+        env:
+          CANDIDATE_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+        run: |
+          revision=$(git rev-parse HEAD)
+          tree=$(git rev-parse 'HEAD^{tree}')
+          julia --startup-file=no test/installation/run.jl \
+            --repo="https://github.com/${CANDIDATE_REPOSITORY}.git" \
+            --rev="$revision" --tree="$tree" \
+            --output="$RUNNER_TEMP/tamerop-installation"
+      - name: Preserve installation logs, environments, and figures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: installed-package-${{ runner.os }}
+          path: |
+            ${{ runner.temp }}/tamerop-installation/*.toml
+            ${{ runner.temp }}/tamerop-installation/*.log
+            ${{ runner.temp }}/tamerop-installation/figures/
+          if-no-files-found: warn

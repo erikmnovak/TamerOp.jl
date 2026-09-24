@@ -10,6 +10,11 @@ elseif _TEST_CONFIG.list
     foreach(println, _TEST_CONFIG.files)
 else
     include("prelude.jl")
+    if haskey(ENV, "TAMEROP_TEST_SEED")
+        seed = parse(UInt, ENV["TAMEROP_TEST_SEED"])
+        Random.seed!(seed)
+        println("Initial RNG seed: ", seed, "; individual oracle seeds remain explicit")
+    end
     BLAS.set_num_threads(1)
     println("TamerOp source: ", pathof(TamerOp))
     println("Julia ", VERSION, "; threads=", Threads.nthreads(:default), ",",

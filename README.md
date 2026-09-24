@@ -26,6 +26,7 @@ committed and pushed.
 - [Troubleshooting](#troubleshooting)
 - [Advanced users and performance settings](#advanced-users-and-performance-settings)
 - [Mathematical scope and provenance](#mathematical-scope-and-provenance)
+- [Releases and citation](#releases-and-citation)
 - [Developing TamerOp](#developing-tamerop)
 
 ## Install TamerOp
@@ -493,6 +494,34 @@ keeps inclusion maps compatible with cellular boundaries.
 See the [function-Delaunay paper](https://arxiv.org/abs/2310.15902),
 [core bifiltration paper](https://arxiv.org/abs/2405.01214), and
 [multicover paper](https://arxiv.org/abs/2103.07823).
+
+## Releases and citation
+
+[The changelog](CHANGELOG.md) describes the planned 0.1.0 release and its scope.
+An unreleased candidate is not a registered release: continue using the GitHub
+installation instructions until this README announces otherwise. The
+[maintainer release guide](docs/releasing.md) explains the checks and General
+registration needed to enable `Pkg.add("TamerOp")`.
+
+If TamerOp contributes to your research, cite **Erik Novak, TamerOp.jl:
+Computing with persistence modules and finite posets**, with the
+[repository URL](https://github.com/erikmnovak/TamerOp.jl), and record the version
+or Git commit used. [CITATION.cff](CITATION.cff) contains the software citation
+metadata. GitHub can use this file to provide a **Cite this repository** button
+with APA and BibTeX formats; see [GitHub's citation guide](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-citation-files).
+No release date or DOI is claimed for the candidate.
+
+To see the package installed in your current Julia analysis environment:
+
+```julia
+import Pkg
+Pkg.status("TamerOp")
+```
+
+Keep that environment's `Project.toml` and `Manifest.toml` with your analysis.
+The manifest records the source revision for a GitHub installation as well as
+dependency versions. A citation credits the software; those environment files
+help someone reproduce the computation.
 
 ## Developing TamerOp
 

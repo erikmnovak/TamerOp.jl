@@ -4063,7 +4063,9 @@ end
 
         # Fibered barcode cache
         @test fbc isa Inv.FiberedBarcodeCache2D
-        @test length(fbc.index_barcodes_packed) == length(arr2.chains)
+        # Other consumers can register chains without populating this lazy cache.
+        @test length(fbc.index_barcodes_packed) <= length(arr2.chains)
+        @test count(!isnothing, fbc.index_barcodes_packed) == fbc.n_barcode_computed
         @test fbc.n_barcode_computed >= 0
         @test fbc.M === M2
         @test fbc.arrangement === arr2
@@ -4275,10 +4277,24 @@ end
         @test !Inv.check_fibered_arrangement_2d(arr_bad; throw=false).valid
         @test_throws ArgumentError Inv.check_fibered_arrangement_2d(arr_bad; throw=true)
 
+        # Missing trailing slots are valid lazy state. Only storage beyond the
+        # registered chains is malformed; adding one slot need not reach there.
+        cache_partial = deepcopy(fbc)
+        while !isempty(cache_partial.index_barcodes_packed) &&
+              isnothing(last(cache_partial.index_barcodes_packed))
+            pop!(cache_partial.index_barcodes_packed)
+        end
+        @test Inv.check_fibered_barcode_cache_2d(cache_partial; throw=false).valid
         cache_bad = deepcopy(fbc)
-        push!(cache_bad.index_barcodes_packed, nothing)
+        append!(cache_bad.index_barcodes_packed,
+                fill(nothing, length(cache_bad.arrangement.chains) + 1 -
+                              length(cache_bad.index_barcodes_packed)))
         @test !Inv.check_fibered_barcode_cache_2d(cache_bad; throw=false).valid
         @test_throws ArgumentError Inv.check_fibered_barcode_cache_2d(cache_bad; throw=true)
+        cache_bad_count = deepcopy(fbc)
+        cache_bad_count.n_barcode_computed += 1
+        @test !Inv.check_fibered_barcode_cache_2d(cache_bad_count; throw=false).valid
+        @test_throws ArgumentError Inv.check_fibered_barcode_cache_2d(cache_bad_count; throw=true)
 
         fam_bad = deepcopy(fam)
         pop!(fam_bad.off1)

@@ -21,7 +21,7 @@ using ..EncodingCore: AbstractPLikeEncodingMap, CompiledEncoding
 import ..DataTypes: ambient_dim
 import ..FlangeZn: coefficient_matrix
 using ..CoreModules.CoeffFields: QQField
-using ..CoreModules: coeff_type
+using ..CoreModules: coeff_type, coerce
 using ..Stats: _wilson_interval
 using Random
 
@@ -67,11 +67,12 @@ function _toQQ(u)::QQ
     elseif u isa Rational
         return BigInt(numerator(u)) // BigInt(denominator(u))
     elseif u isa AbstractFloat
-        # rationalize expects an INTEGER type and returns Rational{T}.
-        return rationalize(BigInt, u)
+        # Preserve the represented binary value. Tolerance-based rationalization
+        # can move prevfloat/nextfloat queries onto the opposite boundary.
+        return QQ(u)
     else
         # Fallback for other Reals (e.g. IrrationalConstants, etc.)
-        return rationalize(BigInt, float(u))
+        return QQ(float(u))
     end
 end
 
@@ -98,8 +99,11 @@ end
 """
 HPoly
 
-A single convex polyhedron in H-representation:
-    { x in R^n : A*x <= b }.
+A single convex polyhedral cell with rational H-representation. Weak rows mean
+`A[i,:]*x <= b[i]`; rows marked in `strict_mask` mean
+`A[i,:]*x < b[i] + strict_eps`. The latter storage convention also represents
+cells generated with an explicit feasibility margin. Default exact encoding
+uses zero stored margin. Geometric closure queries restore the original bounds.
 
 We store A,b explicitly (QQ) to avoid relying on Polyhedra internals for
 membership tests and facet extraction.
@@ -171,7 +175,7 @@ end
     PLFringe(Ups, Downs, Phi_in; check=true) -> PLFringe
 
 Constructor that validates ambient dimension consistency and coerces coefficients
-to `QQ` exactly (floating inputs are rationalized via `_toQQ`).
+to `QQ` exactly (floating inputs retain their represented binary value).
 
 The `check` flag controls whether we assert the shapes are PL-typed.
 """
@@ -231,7 +235,7 @@ function poly_cache_summary end
     encode_from_PL_fringe(F::PLFringe, opts::EncodingOptions; poset_kind=:signature) -> (P, H, pi)
 
 Encode a single `PLFringe` presentation over R^n to a finite encoding poset `P`,
-returning the pushed-down `FiniteFringe.FringeModule{QQ}` and the classifier
+returning the pushed-down `FiniteFringe.FringeModule` over `opts.field` and the classifier
 `pi : R^n -> P` (as `PLEncodingMap`).
 
 Mathematical meaning:
@@ -252,7 +256,7 @@ Best practice:
 - `opts.backend` must be `:auto` or `:pl`.
 - `opts.max_regions` caps region enumeration (default: 10_000).
 - `opts.strict_eps` controls strict inequality handling in feasibility checks
-  (default: `STRICT_EPS_QQ`).
+  (default: exact rational strict feasibility; a positive value opts into a fixed margin).
 """
 function encode_from_PL_fringe(F::PLFringe, opts::EncodingOptions; poset_kind::Symbol = opts.poset_kind)
     return encode_from_PL_fringe(F.Ups, F.Downs, F.Phi, opts; poset_kind = poset_kind)
@@ -323,7 +327,12 @@ end
 
 # ---------------------------- Membership checks -------------------------------
 
-"Exact membership using stored A*x <= b in QQ."
+# Stored strict rows use an inward feasibility shift. Point membership uses
+# the original open halfspace, independently of the feasibility margin.
+@inline _hpoly_row_contains(h::HPoly, i::Int, value) = h.strict_mask[i] ?
+    value < h.b[i] + h.strict_eps : value <= h.b[i]
+
+"Exact membership in the original closed/open halfspaces over QQ."
 function _in_hpoly(h::HPoly, x::AbstractVector)
     length(x) == h.n || error("dimension mismatch in _in_hpoly")
     xqq = _toQQ_vec(x)
@@ -333,7 +342,7 @@ function _in_hpoly(h::HPoly, x::AbstractVector)
         @inbounds for j in 1:h.n
             s += h.A[i,j] * xqq[j]
         end
-        if s > h.b[i]
+        if !_hpoly_row_contains(h, i, s)
             return false
         end
     end
@@ -348,7 +357,7 @@ function _in_hpoly(h::HPoly, x::NTuple{N,<:Real}) where {N}
         @inbounds for j in 1:h.n
             s += h.A[i,j] * _toQQ(x[j])
         end
-        if s > h.b[i]
+        if !_hpoly_row_contains(h, i, s)
             return false
         end
     end
@@ -364,7 +373,7 @@ function _in_hpoly_open(h::HPoly, x::AbstractVector)
         @inbounds for j in 1:h.n
             s += h.A[i, j] * xqq[j]
         end
-        if s >= h.b[i]
+        if s >= h.b[i] + (h.strict_mask[i] ? h.strict_eps : zero(QQ))
             return false
         end
     end
@@ -426,16 +435,38 @@ function _facets_of(hp::HPoly)::Vector{Tuple{Vector{QQ},QQ}}
 end
 
 
+# Rational strict feasibility with a capped common slack. The cap forces every
+# recession/lineality direction to have zero slack coordinate, so a positive
+# slack exists exactly when some rational point generator has positive slack.
+function _strict_feasibility_witness(A::Matrix{QQ}, b::Vector{QQ}, strict_mask::BitVector)
+    m, n = size(A)
+    lifted_A = zeros(QQ, m + 2, n + 1)
+    lifted_A[1:m, 1:n] .= A
+    lifted_A[1:m, n+1] .= strict_mask
+    lifted_A[m+1, n+1] = one(QQ)
+    lifted_A[m+2, n+1] = -one(QQ)
+    lifted_b = vcat(b, QQ[1, 0])
+    return _with_cdd_execution() do
+        lifted = Polyhedra.polyhedron(Polyhedra.hrep(lifted_A, lifted_b), _CDD)
+        Polyhedra.isempty(lifted) && return nothing
+        for point in Polyhedra.points(Polyhedra.vrep(lifted))
+            point[n+1] > 0 && return QQ[point[j] for j in 1:n]
+        end
+        return nothing
+    end
+end
+
 # Build intersection of in_parts plus "outside" constraints represented as:
-#   a'*x >= b0  (to emulate strict violation we use b0 + STRICT_EPS_QQ)
+#   a'*x > b0 (exact by default; an explicit margin opts into approximation)
 #
 # Returns a triple (hp, witness, is_empty):
 # - hp::Union{HPoly,Nothing}
-# - witness::Union{Vector{Float64},Nothing}
+# - witness: a certified point, using rational coordinates when Float64 cannot preserve membership
 # - is_empty::Bool
 function _internal_build_poly(in_parts::Vector{HPoly},
                               out_halfspaces::Vector{Tuple{Vector{T},T}};
-                              strict_eps::QQ=STRICT_EPS_QQ) where {T<:Real}
+                              strict_eps::QQ=STRICT_EPS_QQ,
+                              exact_feasibility::Bool=true) where {T<:Real}
 
 
     # Determine ambient dimension.
@@ -446,7 +477,6 @@ function _internal_build_poly(in_parts::Vector{HPoly},
     else
         0
     end
-    n == 0 && return (nothing, nothing, true)
 
     # Count total constraints.
     m_in = 0
@@ -485,175 +515,144 @@ function _internal_build_poly(in_parts::Vector{HPoly},
     strict_mask = BitVector(vcat(fill(false, m_in), fill(true, m_out)))
 
     return _with_cdd_execution() do
-        hrep = Polyhedra.hrep(A, b)
-        P = Polyhedra.polyhedron(hrep, _CDD)
-
-        if Polyhedra.isempty(P)
-            return (nothing, nothing, true)
-        end
-
-        # Best-effort witness; iteration must finish inside the CDD boundary.
+        original_b = copy(b)
+        original_b[strict_mask] .+= strict_eps
         witness = nothing
-        try
-            V = Polyhedra.vrep(P)
-            firstpt = iterate(Polyhedra.points(V))
-            if firstpt !== nothing
-                witness = Vector{Float64}(firstpt[1])
+        if exact_feasibility
+            witness = _strict_feasibility_witness(A, original_b, strict_mask)
+            witness === nothing && return (nothing, nothing, true)
+        else
+            strict_eps > 0 || throw(ArgumentError("Explicit strict_eps must be positive; omit it for exact strict feasibility."))
+            shifted = Polyhedra.polyhedron(Polyhedra.hrep(A, b), _CDD)
+            Polyhedra.isempty(shifted) && return (nothing, nothing, true)
+            for point in Polyhedra.points(Polyhedra.vrep(shifted))
+                witness = QQ[point[j] for j in 1:n]
+                break
             end
-        catch
-            witness = nothing
+            witness === nothing && error("Feasible polyhedral cell has no point generator.")
         end
-
-        return (HPoly(n, A, b, P, strict_mask, strict_eps), witness, false)
+        # The closure is the original unshifted polyhedron: convex-combining
+        # any closed point with the strict witness approaches that closed point
+        # through the strict cell. Retain the existing shifted-b storage format.
+        closure_poly = n == 0 ? nothing :
+            Polyhedra.polyhedron(Polyhedra.hrep(A, original_b), _CDD)
+        hp = HPoly(n, A, exact_feasibility ? original_b : b, closure_poly,
+                   strict_mask, exact_feasibility ? zero(QQ) : strict_eps)
+        approximate = Float64.(witness)
+        witness = all(isfinite, approximate) && _in_hpoly(hp, approximate) ? approximate : witness
+        return (hp, witness, false)
     end
 end
 
 # ------------------------- Region enumeration (Y-signatures) ------------------
 
-function enumerate_feasible_regions(Ups::Vector{PLUpset}, Downs::Vector{PLDownset};
-                                    max_regions::Int=10_000,
-                                    strict_eps::QQ=STRICT_EPS_QQ)
-
-
-    m = length(Ups)
-    r = length(Downs)
-    n = (m > 0 ? Ups[1].U.n : (r > 0 ? Downs[1].D.n : 0))
-
-    results = Vector{Tuple{BitVector,BitVector,HPoly,Tuple}}()
-
-    # Helper: all ways to force OUTSIDE a union of HPolys:
-    # pick one facet inequality to violate for each part.
-    function outside_choices(union::PolyUnion)
-        if isempty(union.parts)
-            return [Tuple{Vector{QQ},QQ}[]]  # outside(empty) = whole space, no constraints
-        end
-        facet_lists = Vector{Vector{Tuple{Vector{QQ},QQ}}}(undef, length(union.parts))
-        for i in 1:length(union.parts)
-            facet_lists[i] = _facets_of(union.parts[i])
-            if isempty(facet_lists[i])
-                return Vector{Vector{Tuple{Vector{QQ},QQ}}}() # cannot be outside full space part
-            end
-        end
-        out = Vector{Vector{Tuple{Vector{QQ},QQ}}}()
-        function rec(i::Int, acc::Vector{Tuple{Vector{QQ},QQ}})
-            if i > length(facet_lists)
-                push!(out, copy(acc))
-                return
-            end
-            for f in facet_lists[i]
-                push!(acc, f)
-                rec(i+1, acc)
-                pop!(acc)
-            end
-        end
-        rec(1, Tuple{Vector{QQ},QQ}[])
-        return out
-    end
-
-    # Iterate over all signatures y in {0,1}^m and z in {0,1}^r.
-    total = 1 << (m + r)
-    for mask in 0:(total-1)
-        y = falses(m)
-        z = falses(r)
-        for i in 1:m
-            y[i] = ((mask >> (i-1)) & 1) == 1
-        end
-        for j in 1:r
-            z[j] = ((mask >> (m + j - 1)) & 1) == 1
-        end
-
-        # Build "inside" disjunction choices (pick one part for each inside union constraint).
-        in_choices = Vector{Vector{HPoly}}()
-        push!(in_choices, HPoly[])
-
-        # For Upsets: y[i] == 1 means inside U_i; y[i] == 0 means outside U_i.
-        out_choices = Vector{Vector{Tuple{Vector{QQ},QQ}}}()
-        push!(out_choices, Tuple{Vector{QQ},QQ}[])
-
-        # Upset constraints
-        feasible = true
-        for i in 1:m
-            if y[i]
-                # inside union: choose one part
-                parts = Ups[i].U.parts
-                if isempty(parts)
-                    feasible = false
-                    break
-                end
-                new_in = Vector{Vector{HPoly}}()
-                for base in in_choices, part in parts
-                    push!(new_in, vcat(base, [part]))
-                end
-                in_choices = new_in
-            else
-                # outside union
-                choices = outside_choices(Ups[i].U)
-                if isempty(choices)
-                    feasible = false
-                    break
-                end
-                out_choices = [vcat(base, ch) for base in out_choices, ch in choices]
-            end
-        end
-        feasible || continue
-
-        # Downset constraints: z[j] == 0 means inside D_j; z[j] == 1 means outside D_j.
-        for j in 1:r
-            if !z[j]
-                parts = Downs[j].D.parts
-                if isempty(parts)
-                    feasible = false
-                    break
-                end
-                new_in = Vector{Vector{HPoly}}()
-                for base in in_choices, part in parts
-                    push!(new_in, vcat(base, [part]))
-                end
-                in_choices = new_in
-            else
-                choices = outside_choices(Downs[j].D)
-                if isempty(choices)
-                    feasible = false
-                    break
-                end
-                out_choices = [vcat(base, ch) for base in out_choices, ch in choices]
-            end
-        end
-        feasible || continue
-
-        # Test feasibility for each branch.
-        for iparts in in_choices
-            for out_hs in out_choices
-                hp, wit, isemp = _internal_build_poly(iparts, out_hs; strict_eps=strict_eps)
-                if !isemp
-                    push!(results, (BitVector(y), BitVector(z), hp, wit === nothing ? () : Tuple(wit)))
-                    if length(results) >= max_regions
+# Resolve each original union into conjunctions of canonical monotone facets.
+# Single-facet original generators already supply their facet bit; only missing
+# facet bits are appended to the original signature prefix.
+function _monotone_facet_refinement(generators, n::Int, up::Bool)
+    facets = HPoly[]
+    keys = Dict{Tuple{Tuple,QQ},Int}()
+    unions = Vector{Vector{Vector{Int}}}(undef, length(generators))
+    for (g, generator) in enumerate(generators)
+        parts = Vector{Int}[]
+        for hp in polyhedra(generator)
+            hp.n == n || throw(DimensionMismatch("PL generator dimensions must agree."))
+            any(hp.strict_mask) && throw(ArgumentError("PL encoding currently requires closed generator pieces; strict input pieces are unsupported."))
+            refs = Int[]
+            empty_part = false
+            for i in axes(hp.A, 1)
+                a = collect(view(hp.A, i, :))
+                b0 = hp.b[i]
+                pivot = findfirst(!iszero, a)
+                if pivot === nothing
+                    if b0 < 0
+                        empty_part = true
                         break
                     end
+                    continue
                 end
+                all(x -> up ? x <= 0 : x >= 0, a) ||
+                    throw(ArgumentError("PL upset pieces require nonpositive facet normals, and downset pieces require nonnegative facet normals."))
+                scale = abs(a[pivot])
+                a ./= scale
+                b0 /= scale
+                key = (Tuple(a), b0)
+                index = get(keys, key, 0)
+                if index == 0
+                    push!(facets, make_hpoly(reshape(a, 1, n), QQ[b0]))
+                    index = length(facets)
+                    keys[key] = index
+                end
+                push!(refs, index)
             end
-            if length(results) >= max_regions
-                break
-            end
+            empty_part || push!(parts, unique!(refs))
         end
+        unions[g] = parts
+    end
+    represented = Set{Int}()
+    for parts in unions
+        length(parts) == 1 && length(parts[1]) == 1 && push!(represented, parts[1][1])
+    end
+    auxiliary = [i for i in eachindex(facets) if !(i in represented)]
+    return facets, unions, auxiliary
+end
 
-        if length(results) >= max_regions
-            @warn "enumerate_feasible_regions: reached max_regions cap; stopping early."
-            break
+function enumerate_feasible_regions(Ups::Vector{PLUpset}, Downs::Vector{PLDownset};
+                                    max_regions::Int=10_000,
+                                    strict_eps::QQ=STRICT_EPS_QQ,
+                                    exact_feasibility::Bool=true)
+    max_regions > 0 || throw(ArgumentError("max_regions must be positive."))
+    exact_feasibility || strict_eps > 0 ||
+        throw(ArgumentError("Explicit strict_eps must be positive; omit it for exact strict feasibility."))
+    n = !isempty(Ups) ? first(Ups).U.n : (!isempty(Downs) ? first(Downs).D.n : 0)
+    up_facets, up_unions, extra_up = _monotone_facet_refinement(Ups, n, true)
+    down_facets, down_unions, extra_down = _monotone_facet_refinement(Downs, n, false)
+    m, r = length(up_facets), length(down_facets)
+    facets = vcat(up_facets, down_facets)
+    y, z = falses(m), falses(r)
+    inside = HPoly[]
+    outside = Tuple{Vector{QQ},QQ}[]
+    results = Tuple{BitVector,BitVector,HPoly,Tuple}[]
+
+    function visit(index, hp, witness)
+        if index > length(facets)
+            length(results) < max_regions ||
+                throw(ArgumentError("PL encoding exceeds max_regions=$max_regions; increase the budget. No partial encoding is returned."))
+            original_y = BitVector([any(part -> all(i -> y[i], part), parts) for parts in up_unions])
+            original_z = BitVector([!any(part -> all(i -> !z[i], part), parts) for parts in down_unions])
+            sig_y = BitVector(vcat(original_y, y[extra_up]))
+            sig_z = BitVector(vcat(original_z, z[extra_down]))
+            push!(results, (sig_y, sig_z, hp, Tuple(witness)))
+            return
+        end
+        facet = facets[index]
+        # Explore monotone bit=false first. Each partial assignment is checked
+        # before descending, so infeasible branches never expand exponentially.
+        for bit in (false, true)
+            is_up = index <= m
+            is_inside = is_up ? bit : !bit
+            is_up ? (y[index] = bit) : (z[index-m] = bit)
+            if is_inside
+                push!(inside, facet)
+            else
+                push!(outside, (collect(view(facet.A, 1, :)), facet.b[1]))
+            end
+            next_hp, next_witness, empty = _internal_build_poly(inside, outside;
+                strict_eps=strict_eps, exact_feasibility=exact_feasibility)
+            empty || visit(index + 1, next_hp, next_witness)
+            is_inside ? pop!(inside) : pop!(outside)
         end
     end
-
-    # Collapse equivalent (y,z) signatures. Use tuple-of-bools keys (content-hashable).
-    seen = Dict{Tuple{Tuple,Tuple},Int}()
-    collapsed = Vector{Tuple{BitVector,BitVector,HPoly,Tuple}}()
-    for rec in results
-        key = (Tuple(rec[1]), Tuple(rec[2]))
-        if !haskey(seen, key)
-            seen[key] = 1
-            push!(collapsed, rec)
-        end
+    if isempty(facets)
+        # Includes empty/full generators and the zero-dimensional ambient point.
+        neutral = HPoly(n, zeros(QQ, 1, n), QQ[0], nothing, falses(1), strict_eps)
+        hp, witness, empty = _internal_build_poly([neutral], outside;
+            strict_eps=strict_eps, exact_feasibility=exact_feasibility)
+        empty || visit(1, hp, witness)
+    else
+        visit(1, nothing, nothing)
     end
-    return collapsed
+    return results
 end
 
 # --------------------------- Encoding (P, H_hat, pi) --------------------------
@@ -748,9 +747,12 @@ end
 
 function _region_bbox_from_poly(hp::HPoly, n::Int)
 
-    hp.poly === nothing && return nothing
     pts = try
-        _with_cdd_execution(() -> collect(Polyhedra.points(Polyhedra.vrep(hp.poly))))
+        _with_cdd_execution() do
+            poly = any(hp.strict_mask) || hp.poly === nothing ?
+                Polyhedra.polyhedron(Polyhedra.hrep(hp.A, _relaxed_b(hp)), _CDD) : hp.poly
+            collect(Polyhedra.points(Polyhedra.vrep(poly)))
+        end
     catch
         return nothing
     end
@@ -1603,7 +1605,7 @@ function PLEncodingMap(n::Int,
     @inbounds for t in 1:nr
         hp = regions[t]
         Af[t] = Float64.(hp.A)
-        bf_strict[t] = Float64.(hp.b)
+        bf_strict[t] = Float64.(_relaxed_b(hp))
         bf_relaxed[t] = Float64.(_relaxed_b(hp))
     end
     pf = _build_locate_prefilter(n, regions, w)
@@ -1830,7 +1832,7 @@ end
         for j in 1:h.n
             s += h.A[i, j] * _toQQ(X[j, col])
         end
-        if s > h.b[i]
+        if !_hpoly_row_contains(h, i, s)
             return false
         end
     end
@@ -1899,7 +1901,7 @@ end
         for j in 1:h.n
             s += h.A[i, j] * qcol[j]
         end
-        if s > h.b[i]
+        if !_hpoly_row_contains(h, i, s)
             return false
         end
     end
@@ -1910,7 +1912,7 @@ end
     length(scratch.qcol) == h.n || error("_in_hpoly_qcol_cached: dimension mismatch")
     m = size(h.A, 1)
     @inbounds for i in 1:m
-        if _row_dot_qcol_cached!(scratch, h.A, i) > h.b[i]
+        if !_hpoly_row_contains(h, i, _row_dot_qcol_cached!(scratch, h.A, i))
             return false
         end
     end
@@ -2131,7 +2133,7 @@ end
     safe_idx = 0
     qscratch = _LOCATE_COL_QQ_CACHE[] ? _locate_qcol_scratch!(size(X, 1)) : nothing
     qready = false
-    cands = cache isa PolyInBoxCache ? _bucket_candidates_col(cache, X, col) : nothing
+    cands = cache === nothing ? nothing : _bucket_candidates_col(cache, X, col)
     if cands !== nothing && !isempty(cands)
         @inbounds for idx in cands
             st = _hpoly_float_state_col(pi.Af[idx], pi.bf_strict[idx], X, col; tol=tol, boundary_tol=boundary_tol)
@@ -2414,6 +2416,37 @@ function locate(cache, x::NTuple{N,<:Real};
                           tol=tol, boundary_tol=boundary_tol)
 end
 
+# Specialize the batch once on the captured lookup type. Keeping a
+# Nothing/snapshot union inside the hot loop otherwise repeats boxed dispatch.
+function _locate_columns!(dest, pi::PLEncodingMap, X, npts::Int, lookup,
+                          do_thread::Bool, verify_safe::Bool, use_multiproj::Bool,
+                          tol::Float64, boundary_tol::Float64)
+    if do_thread
+        Threads.@threads for j in 1:npts
+            dest[j] = _locate_hybrid_col(
+                pi, X, j;
+                cache=lookup,
+                verify_safe=verify_safe,
+                use_multiproj=use_multiproj,
+                tol=tol,
+                boundary_tol=boundary_tol,
+            )
+        end
+    else
+        @inbounds for j in 1:npts
+            dest[j] = _locate_hybrid_col(
+                pi, X, j;
+                cache=lookup,
+                verify_safe=verify_safe,
+                use_multiproj=use_multiproj,
+                tol=tol,
+                boundary_tol=boundary_tol,
+            )
+        end
+    end
+    return dest
+end
+
 """
     locate_many!(dest, pi_or_cache, X; threaded=true, mode=:fast,
                  tol=LOCATE_FLOAT_TOL, boundary_tol=LOCATE_BOUNDARY_TOL)
@@ -2469,30 +2502,9 @@ function _locate_many_pl!(dest::AbstractVector{<:Integer}, pi_or_cache, X::Abstr
     )
         return dest
     end
-    if do_thread
-        Threads.@threads for j in 1:npts
-            dest[j] = _locate_hybrid_col(
-                pi, X, j;
-                cache=cache,
-                verify_safe=verify_safe,
-                use_multiproj=use_multiproj,
-                tol=tol,
-                boundary_tol=boundary_tol,
-            )
-        end
-    else
-        @inbounds for j in 1:npts
-            dest[j] = _locate_hybrid_col(
-                pi, X, j;
-                cache=cache,
-                verify_safe=verify_safe,
-                use_multiproj=use_multiproj,
-                tol=tol,
-                boundary_tol=boundary_tol,
-            )
-        end
-    end
-    return dest
+    lookup = cache === nothing ? nothing : _locate_bucket_snapshot(cache)
+    return _locate_columns!(dest, pi, X, npts, lookup, do_thread,
+                            verify_safe, use_multiproj, tol, boundary_tol)
 end
 
 function locate_many!(dest::AbstractVector{<:Integer}, pi_or_cache, X::AbstractMatrix{<:Real};
@@ -2501,6 +2513,20 @@ function locate_many!(dest::AbstractVector{<:Integer}, pi_or_cache, X::AbstractM
                       tol::Float64=LOCATE_FLOAT_TOL,
                       boundary_tol::Float64=LOCATE_BOUNDARY_TOL)
     return _locate_many_pl!(dest, pi_or_cache, X;
+                            threaded=threaded,
+                            mode=mode,
+                            tol=tol,
+                            boundary_tol=boundary_tol)
+end
+
+function locate_many!(dest::AbstractVector{<:Integer},
+                      pi::PLEncodingMap,
+                      X::AbstractMatrix{<:Real};
+                      threaded::Bool=true,
+                      mode::Symbol=:fast,
+                      tol::Float64=LOCATE_FLOAT_TOL,
+                      boundary_tol::Float64=LOCATE_BOUNDARY_TOL)
+    return _locate_many_pl!(dest, pi, X;
                             threaded=threaded,
                             mode=mode,
                             tol=tol,
@@ -2565,30 +2591,9 @@ end
     )
         return dest
     end
-    if do_thread
-        Threads.@threads for j in 1:npts
-            dest[j] = _locate_hybrid_col(
-                pi, X, j;
-                cache=cache,
-                verify_safe=verify_safe,
-                use_multiproj=use_multiproj,
-                tol=tol,
-                boundary_tol=boundary_tol,
-            )
-        end
-    else
-        @inbounds for j in 1:npts
-            dest[j] = _locate_hybrid_col(
-                pi, X, j;
-                cache=cache,
-                verify_safe=verify_safe,
-                use_multiproj=use_multiproj,
-                tol=tol,
-                boundary_tol=boundary_tol,
-            )
-        end
-    end
-    return dest
+    lookup = cache === nothing ? nothing : _locate_bucket_snapshot(cache)
+    return _locate_columns!(dest, pi, X, npts, lookup, do_thread,
+                            verify_safe, use_multiproj, tol, boundary_tol)
 end
 
 # ------------------------- Region geometry / sizes ----------------------------
@@ -3766,6 +3771,20 @@ function locate_many!(dest::AbstractVector{<:Integer},
                          tol=tol,
                          boundary_tol=boundary_tol)
     return dest
+end
+
+function locate_many!(dest::AbstractVector{<:Integer},
+                      cache::PolyInBoxCache,
+                      X::AbstractMatrix{<:Real};
+                      threaded::Bool=true,
+                      mode::Symbol=:fast,
+                      tol::Float64=LOCATE_FLOAT_TOL,
+                      boundary_tol::Float64=LOCATE_BOUNDARY_TOL)
+    return _locate_many_pl!(dest, cache, X;
+                            threaded=threaded,
+                            mode=mode,
+                            tol=tol,
+                            boundary_tol=boundary_tol)
 end
 
 function locate_many!(dest::AbstractVector{<:Integer},
@@ -4948,22 +4967,51 @@ _region_geometry_summary_fast(pi::CompiledEncoding{<:PLEncodingMap}, r::Integer;
     return cache.bucket_regions[(iy - 1) * cache.bucket_nx + ix]
 end
 
-@inline function _bucket_candidates_col(cache::PolyInBoxCache, X::AbstractMatrix{<:Real}, col::Int)
-    if !_bucket_index_enabled(cache) || size(X, 1) < 1
-        return nothing
+# Bucket geometry is published and replaced under cache.lock. A batch captures
+# immutable index metadata once, retaining the old packed arrays if a later
+# cache promotion replaces them, instead of taking a lock for every point.
+struct _LocateBucketSnapshot
+    n::Int
+    box_f::Tuple{Vector{Float64},Vector{Float64}}
+    nx::Int
+    ny::Int
+    x0::Float64
+    y0::Float64
+    dx::Float64
+    dy::Float64
+    regions::_PackedBuckets
+end
+
+function _locate_bucket_snapshot(cache::PolyInBoxCache)
+    Base.lock(cache.lock)
+    try
+        cache.bucket_enabled || return nothing
+        return _LocateBucketSnapshot(cache.pi.n, cache.box_f,
+            cache.bucket_nx, cache.bucket_ny, cache.bucket_x0, cache.bucket_y0,
+            cache.bucket_dx, cache.bucket_dy, cache.bucket_regions)
+    finally
+        Base.unlock(cache.lock)
     end
+end
+
+@inline _bucket_candidates_col(cache::PolyInBoxCache, X::AbstractMatrix{<:Real}, col::Int) =
+    _bucket_candidates_col(_locate_bucket_snapshot(cache), X, col)
+@inline _bucket_candidates_col(::Nothing, X::AbstractMatrix{<:Real}, col::Int) = nothing
+
+@inline function _bucket_candidates_col(index::_LocateBucketSnapshot, X::AbstractMatrix{<:Real}, col::Int)
+    size(X, 1) < 1 && return nothing
     x1 = float(X[1, col])
-    x1 < cache.box_f[1][1] && return nothing
-    x1 > cache.box_f[2][1] && return nothing
-    ix = clamp(Int(floor((x1 - cache.bucket_x0) / cache.bucket_dx)) + 1, 1, cache.bucket_nx)
+    x1 < index.box_f[1][1] && return nothing
+    x1 > index.box_f[2][1] && return nothing
+    ix = clamp(Int(floor((x1 - index.x0) / index.dx)) + 1, 1, index.nx)
     iy = 1
-    if cache.pi.n >= 2
+    if index.n >= 2
         x2 = float(X[2, col])
-        x2 < cache.box_f[1][2] && return nothing
-        x2 > cache.box_f[2][2] && return nothing
-        iy = clamp(Int(floor((x2 - cache.bucket_y0) / cache.bucket_dy)) + 1, 1, cache.bucket_ny)
+        x2 < index.box_f[1][2] && return nothing
+        x2 > index.box_f[2][2] && return nothing
+        iy = clamp(Int(floor((x2 - index.y0) / index.dy)) + 1, 1, index.ny)
     end
-    return cache.bucket_regions[(iy - 1) * cache.bucket_nx + ix]
+    return index.regions[(iy - 1) * index.nx + ix]
 end
 
 function _region_facets(cache::PolyInBoxCache, r::Integer; tol::Float64=1e-12)
@@ -5194,24 +5242,9 @@ function _region_weights_exact(pi::PLEncodingMap, box; closure::Bool=true, cache
         return w
     end
 
-    (ell, u) = box
-    n = length(ell)
-    ellq = QQ.(ell)
-    uq = QQ.(u)
-    Aupper = Matrix{QQ}(I, n, n)
-    Alower = -Matrix{QQ}(I, n, n)
-    bupper = uq
-    blower = -ellq
-
     @inbounds for r in 1:nregions
-        A = pi.regions[r].A
-        b = closure ? _relaxed_b(pi.regions[r]) : pi.regions[r].b
-        Aall = vcat(A, Aupper, Alower)
-        ball = vcat(b, bupper, blower)
-        w[r] = _with_cdd_execution() do
-            p = Polyhedra.polyhedron(Polyhedra.hrep(Aall, ball), _CDD)
-            Polyhedra.volume(p)
-        end
+        poly = _hpoly_in_box_polyhedron(pi.regions[r], box; closure=closure)
+        w[r] = _with_cdd_execution(() -> Polyhedra.isempty(poly) ? 0.0 : float(Polyhedra.volume(poly)))
     end
     return w
 end
@@ -5450,7 +5483,7 @@ function _hpoly_in_box_polyhedron(hp::HPoly, box; closure::Bool=true)
     any(!isfinite, b) && error("_hpoly_in_box_polyhedron: box upper bounds must be finite")
     any(a .> b) && error("_hpoly_in_box_polyhedron: expected a[i] <= b[i]")
 
-    bvec = closure ? _relaxed_b(hp) : hp.b
+    bvec = _relaxed_b(hp)
 
     m = size(hp.A, 1)
     Aall = Matrix{QQ}(undef, m + 2 * n, n)
@@ -5478,6 +5511,13 @@ function _hpoly_in_box_polyhedron(hp::HPoly, box; closure::Bool=true)
         ball[row] = -_toQQ(a_in[j])
     end
 
+    if !closure && any(hp.strict_mask)
+        strict_mask = BitVector(vcat(hp.strict_mask, falses(2 * n)))
+        if _strict_feasibility_witness(Aall, ball, strict_mask) === nothing
+            return _with_cdd_execution(() -> Polyhedra.polyhedron(
+                Polyhedra.hrep(zeros(QQ, 1, n), QQ[-1]), _CDD))
+        end
+    end
     hre = Polyhedra.hrep(Aall, ball)
     return _with_cdd_execution(() -> Polyhedra.polyhedron(hre, _CDD))
 end
@@ -5944,7 +5984,7 @@ function region_principal_directions(pi::PLEncodingMap, r::Integer;
     # Region H-polytope data; use Float64 inequalities for the hot membership loop.
     hp = pi.regions[r]
     Af = Float64.(hp.A)
-    bf = strict ? Float64.(hp.b) : Float64.(_relaxed_b(hp))
+    bf = Float64.(_relaxed_b(hp))
     tol = 1e-12
 
     # Welford accumulators for mean/cov.
@@ -6193,6 +6233,12 @@ function region_chebyshev_ball(pi::PLEncodingMap, r::Integer; box=nothing,
     a_box, b_box = box
     n = pi.n
 
+    if !closure && any(pi.regions[r].strict_mask)
+        poly = _hpoly_in_box_polyhedron(pi.regions[r], box; closure=false)
+        _with_cdd_execution(() -> Polyhedra.isempty(poly)) &&
+            throw(ArgumentError("The strict region has empty intersection with the requested box."))
+    end
+
     # Choose a default method.
     if method === :auto
         method = :polyhedra
@@ -6200,7 +6246,7 @@ function region_chebyshev_ball(pi::PLEncodingMap, r::Integer; box=nothing,
 
     if method === :polyhedra
         hp = pi.regions[r]
-        bvec = closure ? _relaxed_b(hp) : hp.b
+        bvec = _relaxed_b(hp)
 
         # We add box constraints and r>=0.
         m = size(hp.A, 1)
@@ -6347,7 +6393,7 @@ function region_chebyshev_ball(pi::PLEncodingMap, r::Integer; box=nothing,
     end
 
     hp = pi.regions[r]
-    bvec = closure ? _relaxed_b(hp) : hp.b
+    bvec = _relaxed_b(hp)
 
     # Try to find a point in region intersect box. Start from rep clamped to box.
     c = copy(pi.reps[r])
@@ -6455,7 +6501,7 @@ function region_circumradius(pi::PLEncodingMap, r::Integer; box=nothing, center=
         use_matrix = true
     else
         hp = pi.regions[r]
-        verts = _vertices_of_hpoly_in_box(hp, box; strict=strict, closure=closure,
+        verts = _vertices_of_hpoly_in_box(hp, box[1], box[2]; closure=closure,
             max_combinations=max_combinations, max_vertices=max_vertices)
         pts = verts === nothing ? QQ[] : verts
     end
@@ -6591,7 +6637,7 @@ function region_mean_width(pi::PLEncodingMap, r::Integer; box=nothing,
         use_matrix = true
     else
         hp = pi.regions[r]
-        verts = _vertices_of_hpoly_in_box(hp, box; strict=strict, closure=closure,
+        verts = _vertices_of_hpoly_in_box(hp, box[1], box[2]; closure=closure,
             max_combinations=max_combinations, max_vertices=max_vertices)
         pts = verts === nothing ? QQ[] : verts
     end
@@ -7340,8 +7386,9 @@ end
 # If the number of combinations is too large, return nothing.
 function _vertices_of_hpoly_in_box(
     hp::HPoly,
-    a::Vector{Float64},
-    b::Vector{Float64};
+    a::AbstractVector{<:Real},
+    b::AbstractVector{<:Real};
+    closure::Bool=true,
     max_combinations::Int=200_000,
     max_vertices::Int=50_000
 )
@@ -7363,7 +7410,7 @@ function _vertices_of_hpoly_in_box(
 
     if m > 0
         Aall[1:m, :] .= hp.A
-        ball[1:m]    .= hp.b
+        ball[1:m]    .= _relaxed_b(hp)
     end
 
     row = m + 1
@@ -7385,6 +7432,10 @@ function _vertices_of_hpoly_in_box(
     end
 
     verts = Set{Tuple{Vararg{QQ}}}()
+    if !closure && any(hp.strict_mask)
+        strict_mask = BitVector(vcat(hp.strict_mask, falses(2 * n)))
+        _strict_feasibility_witness(Aall, ball, strict_mask) === nothing && return verts
+    end
     comb = Vector{Int}(undef, n)
 
     # Recursive combinations iterator that supports early termination.
@@ -7476,8 +7527,7 @@ function region_bbox(
     length(a_in) == pi.n || error("region_bbox: box lower corner has wrong dimension")
     length(b_in) == pi.n || error("region_bbox: box upper corner has wrong dimension")
 
-    a = [float(x) for x in a_in]
-    b = [float(x) for x in b_in]
+    a, b = a_in, b_in
     for i in 1:pi.n
         a[i] <= b[i] || error("region_bbox: box must satisfy a[i] <= b[i] for all i")
     end
@@ -7496,8 +7546,7 @@ function region_bbox(
     end
 
     hp = pi.regions[r]
-
-    verts = _vertices_of_hpoly_in_box(hp, a, b;
+    verts = _vertices_of_hpoly_in_box(hp, a, b; closure=closure,
                                       max_combinations=max_combinations,
                                       max_vertices=max_vertices)
     if verts !== nothing
@@ -7516,8 +7565,13 @@ function region_bbox(
     end
 
     # Fallback: Monte Carlo bbox estimate inside the ambient box.
+    if !closure && any(hp.strict_mask)
+        poly = _hpoly_in_box_polyhedron(hp, box; closure=false)
+        _with_cdd_execution(() -> Polyhedra.isempty(poly)) && return nothing
+    end
+    a, b = Float64.(a), Float64.(b)
     Af = Float64.(hp.A)
-    bf = Float64.(hp.b)
+    bf = Float64.(_relaxed_b(hp))
 
     lo = fill(Inf, pi.n)
     hi = fill(-Inf, pi.n)
@@ -7610,11 +7664,10 @@ function region_diameter(
                                                                               max_vertices=max_vertices)
         else
             a_in, b_in = box
-            a = [float(x) for x in a_in]
-            b = [float(x) for x in b_in]
+            a, b = a_in, b_in
 
             hp = pi.regions[r]
-            verts = _vertices_of_hpoly_in_box(hp, a, b;
+            verts = _vertices_of_hpoly_in_box(hp, a, b; closure=closure,
                                               max_combinations=max_combinations,
                                               max_vertices=max_vertices)
             # If vertex enumeration is infeasible, fall back to bbox diameter.
@@ -7720,8 +7773,7 @@ function region_vertex_count(
     length(a_in) == pi.n || error("region_vertex_count: box lower corner has wrong dimension")
     length(b_in) == pi.n || error("region_vertex_count: box upper corner has wrong dimension")
 
-    a = [float(a_in[i]) for i in 1:pi.n]
-    b = [float(b_in[i]) for i in 1:pi.n]
+    a, b = a_in, b_in
 
     verts = _vertices_of_hpoly_in_box(
         pi.regions[Int(r)],
@@ -7776,14 +7828,15 @@ function _images_on_P(P::AbstractPoset,
     return Uhat, Dhat
 end
 
-function _monomialize_phi(phi::AbstractMatrix{QQ}, Uhat, Dhat)
+function _monomialize_phi(phi::AbstractMatrix, Uhat, Dhat, field)
     m = length(Dhat)
     n = length(Uhat)
-    Phi = copy(phi)
+    size(phi) == (m, n) || throw(DimensionMismatch("Phi must have one row per downset and one column per upset."))
+    K = coeff_type(field)
+    Phi = Matrix{K}(undef, m, n)
     for j in 1:m, i in 1:n
-        if !FiniteFringe.intersects(Uhat[i], Dhat[j])
-            Phi[j,i] = zero(QQ)
-        end
+        Phi[j, i] = FiniteFringe.intersects(Uhat[i], Dhat[j]) ?
+                    coerce(field, phi[j, i]) : zero(K)
     end
     return Phi
 end
@@ -7799,7 +7852,7 @@ This low-level overload is used by `encode_from_PL_fringe(::PLFringe, ::Encoding
 `opts` is required.
 - `opts.backend` must be `:auto` or `:pl`.
 - `opts.max_regions` caps region enumeration (default: 10_000).
-- `opts.strict_eps` controls strict inequality handling in feasibility checks (default: STRICT_EPS_QQ).
+- `opts.strict_eps` controls strict inequality handling in feasibility checks (default: exact rational; a positive value opts into a fixed margin).
 - `opts.field` selects the output coefficient field; geometry remains rational.
 - `poset_kind` defaults to `opts.poset_kind`, with an explicit keyword taking precedence.
 """
@@ -7815,17 +7868,18 @@ function encode_from_PL_fringe(Ups::Vector{PLUpset},
     strict_eps = opts.strict_eps === nothing ? STRICT_EPS_QQ : _toQQ(opts.strict_eps)
 
     _assert_PL_inputs(Ups, Downs)
+    size(Phi_in) == (length(Downs), length(Ups)) ||
+        throw(DimensionMismatch("Phi must have one row per downset and one column per upset."))
 
-
-    feasible = enumerate_feasible_regions(Ups, Downs; max_regions=max_regions, strict_eps=strict_eps)
+    feasible = enumerate_feasible_regions(Ups, Downs; max_regions=max_regions, strict_eps=strict_eps,
+                                          exact_feasibility=opts.strict_eps === nothing)
 
     if isempty(feasible)
         P = FiniteFringe.FinitePoset(reshape(Bool[true], 1, 1))
         Uhat = FiniteFringe.Upset[FiniteFringe.upset_closure(P, BitVector([false])) for _ in 1:length(Ups)]
         Dhat = FiniteFringe.Downset[FiniteFringe.downset_closure(P, BitVector([false])) for _ in 1:length(Downs)]
-        Phi0 = zeros(QQ, length(Downs), length(Ups))
-        H = FiniteFringe.FringeModule{QQ}(P, Uhat, Dhat, Phi0; field=QQField())
-        H = opts.field == QQField() ? H : FiniteFringe.change_field(H, opts.field)
+        Phi0 = zeros(coeff_type(opts.field), length(Downs), length(Ups))
+        H = FiniteFringe.FringeModule{coeff_type(opts.field)}(P, Uhat, Dhat, Phi0; field=opts.field)
         n0 = (length(Ups) > 0 ? Ups[1].U.n : (length(Downs) > 0 ? Downs[1].D.n : 0))
         pi = PLEncodingMap(n0, BitVector[], BitVector[], HPoly[], Tuple[])
         return P, H, pi
@@ -7854,9 +7908,8 @@ function encode_from_PL_fringe(Ups::Vector{PLUpset},
     r = length(Downs)
     Uhat, Dhat = _images_on_P(P, sigy, sigz, 1:m, 1:r)
 
-    Phi = _monomialize_phi(_toQQ_mat(Phi_in), Uhat, Dhat)
-    H = FiniteFringe.FringeModule{QQ}(P, Uhat, Dhat, Phi; field=QQField())
-    H = opts.field == QQField() ? H : FiniteFringe.change_field(H, opts.field)
+    Phi = _monomialize_phi(Phi_in, Uhat, Dhat, opts.field)
+    H = FiniteFringe.FringeModule{coeff_type(opts.field)}(P, Uhat, Dhat, Phi; field=opts.field)
 
     pi = PLEncodingMap(n, sigy, sigz, regs, wits)
     return P, H, pi
@@ -7896,7 +7949,7 @@ This is the PL/R^n analog of `ZnEncoding.encode_from_flanges` for Z^n:
 `opts` is required.
 - `opts.backend` must be `:auto` or `:pl`.
 - `opts.max_regions` caps region enumeration (default: 10_000).
-- `opts.strict_eps` controls strict inequality handling (default: STRICT_EPS_QQ).
+- `opts.strict_eps` controls strict inequality handling (default: exact rational; a positive value opts into a fixed margin).
 - `poset_kind`: defaults to `opts.poset_kind`, either `:signature` (structured) or `:dense` (materialized `FinitePoset`).
 - `opts.field` selects the output coefficient field; geometry remains rational.
 
@@ -7949,7 +8002,8 @@ function encode_from_PL_fringes(Fs::AbstractVector{<:PLFringe}, opts::EncodingOp
 
     feasible = enumerate_feasible_regions(Ups_all, Downs_all;
                                           max_regions=max_regions,
-                                          strict_eps=strict_eps)
+                                          strict_eps=strict_eps,
+                                          exact_feasibility=opts.strict_eps === nothing)
 
     if isempty(feasible)
         P = FiniteFringe.FinitePoset(reshape(Bool[true], 1, 1))
@@ -7995,9 +8049,8 @@ function encode_from_PL_fringes(Fs::AbstractVector{<:PLFringe}, opts::EncodingOp
     Hs = Vector{FiniteFringe.FringeModule{coeff_type(opts.field)}}(undef, length(Fs))
     for (k, F) in enumerate(Fs)
         Uhat, Dhat = _images_on_P(P, sigy, sigz, up_ranges[k], dn_ranges[k])
-        Phi = _monomialize_phi(_toQQ_mat(F.Phi), Uhat, Dhat)
-        H = FiniteFringe.FringeModule{QQ}(P, Uhat, Dhat, Phi; field=QQField())
-        Hs[k] = opts.field == QQField() ? H : FiniteFringe.change_field(H, opts.field)
+        Phi = _monomialize_phi(F.Phi, Uhat, Dhat, opts.field)
+        Hs[k] = FiniteFringe.FringeModule{coeff_type(opts.field)}(P, Uhat, Dhat, Phi; field=opts.field)
     end
 
     return P, Hs, pi

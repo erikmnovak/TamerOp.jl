@@ -30,7 +30,6 @@ if !@isdefined(OPT)
     const OPT = TamerOp.Options
 end
 
-const FL = TamerOp.FieldLinAlg
 
 # This file assumes the helper constructors defined in runtests.jl:
 # - chain_poset(n)

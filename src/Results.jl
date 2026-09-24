@@ -120,10 +120,59 @@ end
 @inline _try_complex_term_count(x) = try length(getproperty(x, :terms)) catch; nothing end
 @inline _try_complex_degree_range(x) = try getproperty(x, :tmin):getproperty(x, :tmax) catch; nothing end
 @inline _materialize_complex(C) = C
-@inline _try_encoding_check(pi) = try
-    pi isa CompiledEncoding ? check_compiled_encoding(pi) : check_encoding_map(pi)
-catch
-    nothing
+# Owner hooks expose stored base data without constructing a module or complex.
+_result_poset_length(::Any) = nothing
+_result_posets_equal(P, Q) = P === Q
+_result_payload_poset(::Any) = nothing
+
+function _check_result_base!(issues, P, Q, label)
+    Q === nothing && return push!(issues, "$label has no inspectable finite base poset.")
+    _result_posets_equal(P, Q) || push!(issues, "$label base poset disagrees with the result poset.")
+    return nothing
+end
+
+function _check_result_dimensions!(issues, P, dims, label)
+    if !(dims isa AbstractVector)
+        push!(issues, "$label must be a vector of nonnegative integer dimensions.")
+        return nothing
+    end
+    n = _result_poset_length(P)
+    n === nothing || length(dims) == n ||
+        push!(issues, "$label must contain one dimension per poset vertex.")
+    all(d -> d isa Integer && d >= 0, dims) ||
+        push!(issues, "$label must contain nonnegative integer dimensions.")
+    return nothing
+end
+
+function _check_result_encoding!(issues, P, pi)
+    # A finite-poset-only result need not claim an ambient classifier.
+    pi === nothing && return nothing
+    validator = pi isa CompiledEncoding ? check_compiled_encoding : check_encoding_map
+    if !applicable(validator, pi)
+        push!(issues, "encoding map type $(typeof(pi)) has no supported validator.")
+        return nothing
+    end
+    try
+        report = validator(pi)
+        report.valid || append!(issues, String.(report.issues))
+    catch err
+        err isa InterruptException && rethrow()
+        push!(issues, "encoding map validation failed: $(sprint(showerror, err))")
+    end
+    classifier = pi
+    while classifier isa CompiledEncoding
+        _check_result_base!(issues, P, classifier.P, "compiled encoding")
+        classifier = classifier.pi
+    end
+    if applicable(encoding_poset, classifier)
+        try
+            _check_result_base!(issues, P, encoding_poset(classifier), "encoding map")
+        catch err
+            err isa InterruptException && rethrow()
+            push!(issues, "encoding map base inspection failed: $(sprint(showerror, err))")
+        end
+    end
+    return nothing
 end
 
 """
@@ -204,7 +253,7 @@ Workflow-facing wrapper for encoded-complex outputs.
 
 `EncodedComplexResult` stores:
 - the finite encoding poset `P`,
-- the encoded cochain-complex payload `C`,
+- the encoded cochain complex payload `C`,
 - the encoding map `pi`,
 - the ground field used for the encoded complex,
 - lightweight metadata/provenance.
@@ -623,19 +672,23 @@ unwrap(res::ModuleTranslationResult) = translated_module(res)
 
 Validate a hand-built [`EncodingResult`](@ref).
 
-This checks the stored encoding map, module-dimension accessibility, and basic
-workflow-result consistency. Use it when constructing result objects manually
+This checks the stored encoding map, agreement of finite base posets, and
+stored module dimensions. Missing lazy dimensions are left uncomputed. A
+`nothing` encoding map is permitted for finite-poset-only results; unsupported
+map types and validation failures are reported as issues. Use it when constructing result objects manually
 for tests, examples, or advanced workflows. Wrap the returned report with
 [`result_validation_summary`](@ref) when you want a readable notebook or REPL
 summary.
 """
 function check_encoding_result(enc::EncodingResult; throw::Bool=false)
     issues = String[]
-    enc.P === nothing && push!(issues, "encoding poset must not be nothing.")
-    enc.backend isa Symbol || push!(issues, "backend must be a Symbol.")
-    hasproperty(enc.M, :dims) || push!(issues, "encoded module must support dimension inspection.")
-    report = _try_encoding_check(enc.pi)
-    report === nothing || report.valid || append!(issues, String.(report.issues))
+    _result_poset_length(enc.P) === nothing && push!(issues, "encoding poset must be a supported finite poset.")
+    _check_result_base!(issues, enc.P, _result_payload_poset(enc.M), "encoded module")
+    dims = _try_module_dims(enc.M)
+    if dims !== nothing || _module_materialized(enc.M)
+        _check_result_dimensions!(issues, enc.P, dims, "module dimensions")
+    end
+    _check_result_encoding!(issues, enc.P, enc.pi)
     valid = isempty(issues)
     throw && !valid && _throw_invalid_result(:encoding_result, issues)
     return _result_report(:encoding_result, valid;
@@ -647,19 +700,19 @@ end
 """
     check_cohomology_dims_result(enc; throw=false) -> NamedTuple
 
-Validate a hand-built [`CohomologyDimsResult`](@ref).
+Validate a hand-built [`CohomologyDimsResult`](@ref). Dimensions must be a
+vector of nonnegative integers with one entry per finite-poset vertex. The
+classifier, when present, must agree with that poset.
 
 Wrap the returned report with [`result_validation_summary`](@ref) when you want
 a readable notebook or REPL summary.
 """
 function check_cohomology_dims_result(enc::CohomologyDimsResult; throw::Bool=false)
     issues = String[]
-    enc.P === nothing && push!(issues, "encoding poset must not be nothing.")
-    enc.degree isa Int || push!(issues, "degree must be an Int.")
+    _result_poset_length(enc.P) === nothing && push!(issues, "encoding poset must be a supported finite poset.")
     enc.field isa AbstractCoeffField || push!(issues, "field must be an AbstractCoeffField.")
-    _try_length(enc.dims) === nothing && push!(issues, "dims payload should expose a length for inspection.")
-    report = _try_encoding_check(enc.pi)
-    report === nothing || report.valid || append!(issues, String.(report.issues))
+    _check_result_dimensions!(issues, enc.P, enc.dims, "cohomology dimensions")
+    _check_result_encoding!(issues, enc.P, enc.pi)
     valid = isempty(issues)
     throw && !valid && _throw_invalid_result(:cohomology_dims_result, issues)
     return _result_report(:cohomology_dims_result, valid;
@@ -671,19 +724,31 @@ end
 """
     check_encoded_complex_result(enc; throw=false) -> NamedTuple
 
-Validate a hand-built [`EncodedComplexResult`](@ref).
+Validate a hand-built [`EncodedComplexResult`](@ref). Check finite bases and
+coefficient fields of stored terms, leaving absent lazy terms and differentials
+uncomputed. This wrapper check does not prove differential or naturality
+identities; use the complex owner's validator for a materialized complex.
 
 Wrap the returned report with [`result_validation_summary`](@ref) when you want
 a readable notebook or REPL summary.
 """
 function check_encoded_complex_result(enc::EncodedComplexResult; throw::Bool=false)
     issues = String[]
-    enc.P === nothing && push!(issues, "encoding poset must not be nothing.")
-    enc.C === nothing && push!(issues, "encoded complex must not be nothing.")
+    _result_poset_length(enc.P) === nothing && push!(issues, "encoding poset must be a supported finite poset.")
+    _check_result_base!(issues, enc.P, _result_payload_poset(enc.C), "encoded complex")
     enc.field isa AbstractCoeffField || push!(issues, "field must be an AbstractCoeffField.")
-    _try_complex_term_count(enc.C) === nothing && push!(issues, "encoded complex should expose term storage for inspection.")
-    report = _try_encoding_check(enc.pi)
-    report === nothing || report.valid || append!(issues, String.(report.issues))
+    isequal(_provenance_field(enc.C), enc.field) || push!(issues, "complex coefficient field disagrees with the result field.")
+    if _try_complex_term_count(enc.C) === nothing
+        push!(issues, "encoded complex should expose term storage for inspection.")
+    else
+        for term in enc.C.terms
+            term === nothing && continue
+            _check_result_base!(issues, enc.P, _result_payload_poset(term), "complex term")
+            isequal(_provenance_field(term), enc.field) || push!(issues, "complex term coefficient field disagrees with the result field.")
+            _check_result_dimensions!(issues, enc.P, _try_module_dims(term), "complex term dimensions")
+        end
+    end
+    _check_result_encoding!(issues, enc.P, enc.pi)
     valid = isempty(issues)
     throw && !valid && _throw_invalid_result(:encoded_complex_result, issues)
     return _result_report(:encoded_complex_result, valid;

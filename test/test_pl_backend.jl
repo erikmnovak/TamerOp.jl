@@ -2,6 +2,236 @@ using Test
 
 # Included from test/runtests.jl; uses shared aliases (TO, PLP, PLB, FF, QQ, ...).
 
+@testset "A79 cached PL batches retain a consistent bucket snapshot" begin
+    # Independent closed-rectangle oracle. Their shared face has two valid
+    # labels; cache use must retain the bare-map choice on that face.
+    A = QQ[1 0; 0 1; -1 0; 0 -1]
+    polys = [PLP.make_hpoly(A, QQ[1, 1, 0, 0]),
+             PLP.make_hpoly(A, QQ[2, 1, -1, 0])]
+    pi = PLP.PLEncodingMap(2, [BitVector(), BitVector()],
+        [BitVector(), BitVector()], polys, [(0.5, 0.5), (1.5, 0.5)])
+    points = [(-0.25, 0.5), (0.0, 0.5), (0.0, 0.0), (0.0, 1.0),
+              (0.25, 0.5), (0.5, 0.0), (0.5, 1.0),
+              (prevfloat(1.0), 0.5), (1.0, 0.5), (1.0, 0.0), (1.0, 1.0),
+              (nextfloat(1.0), 0.5), (1.5, 0.5), (1.5, 0.0), (1.5, 1.0),
+              (2.0, 0.5), (2.0, 0.0), (2.0, 1.0), (2.25, 0.5),
+              (0.5, -0.25), (0.5, 1.25), (1.5, -0.25), (1.5, 1.25)]
+    X = [p[i] for i in 1:2, p in points]
+    allowed = map(points) do (x, y)
+        !(0 <= y <= 1 && 0 <= x <= 2) ? (0,) :
+            x == 1 ? (1, 2) : x < 1 ? (1,) : (2,)
+    end
+    check_oracle(labels) = begin
+        @test length(labels) == length(allowed)
+        @test all(labels[j] in allowed[j] for j in eachindex(allowed))
+    end
+    cache = PLP.poly_in_box_cache(pi; box=([0.0, 0.0], [2.0, 1.0]), level=:light)
+    PLP._build_bucket_index!(cache)
+    retained = PLP._locate_bucket_snapshot(cache)
+    @test retained !== nothing
+    stored_ptr, stored_idx = copy(retained.regions.ptr), copy(retained.regions.idx)
+
+    # Exercise the threaded scalar-loop branch on a small fixture, restoring
+    # the normal scheduler thresholds even if a check fails.
+    old_queries = PLP._LOCATE_THREAD_MIN_QUERIES[]
+    old_work = PLP._LOCATE_THREAD_MIN_WORK[]
+    try
+        PLP._LOCATE_THREAD_MIN_QUERIES[] = 1
+        PLP._LOCATE_THREAD_MIN_WORK[] = 1
+        for stage in (:built, :cleared, :rebuilt)
+            if stage === :cleared
+                empty!(cache)
+                @test PLP._locate_bucket_snapshot(cache) === nothing
+            elseif stage === :rebuilt
+                PLP._build_bucket_index!(cache)
+                current = PLP._locate_bucket_snapshot(cache)
+                @test current !== nothing
+                @test current.regions.ptr !== retained.regions.ptr
+            end
+            @test retained.regions.ptr == stored_ptr
+            @test retained.regions.idx == stored_idx
+            @test !PLP._should_use_grouped_locate(pi, cache, size(X, 2))
+            if Threads.nthreads() > 1
+                @test PLP._should_thread_locate_many(pi, cache, size(X, 2); grouped=false)
+            end
+            for mode in (:fast, :verified), threaded in (false, true), queries in (X, QQ.(X))
+                bare = PLP.locate_many(pi, queries; mode=mode, threaded=threaded)
+                check_oracle(bare)
+                @test bare == [PLP.locate(pi, collect(point); mode=mode) for point in points]
+                dest = fill(-1, size(queries, 2))
+                @test PLP.locate_many!(dest, cache, queries; mode=mode, threaded=threaded) === dest
+                check_oracle(dest)
+                @test dest == bare
+                old_labels = [PLP._locate_hybrid_col(pi, queries, j;
+                    cache=retained, verify_safe=(mode === :verified)) for j in axes(queries, 2)]
+                check_oracle(old_labels)
+                @test old_labels == bare
+            end
+            # The prefix path also captures one snapshot and must leave the
+            # destination tail untouched, including when no index is present.
+            for mode in (:fast, :verified), threaded in (false, true)
+                dest = fill(-19, size(X, 2) + 2)
+                @test PLP._locate_many_prefix!(dest, cache, X, size(X, 2);
+                    mode=mode, threaded=threaded) === dest
+                @test dest[1:size(X, 2)] == PLP.locate_many(pi, X; mode=mode, threaded=threaded)
+                @test dest[end-1:end] == [-19, -19]
+            end
+        end
+    finally
+        PLP._LOCATE_THREAD_MIN_QUERIES[] = old_queries
+        PLP._LOCATE_THREAD_MIN_WORK[] = old_work
+    end
+end
+
+@testset "A79 polyhedral unions retain their full support and maps" begin
+    # These two supports have areas 3 and 2, independently of any encoder:
+    # an L-shaped union of rectangles, and two separated unit squares.
+    up(v) = PLP.make_hpoly(-Matrix{QQ}(I, 2, 2), -QQ.(v))
+    down(v) = PLP.make_hpoly(Matrix{QQ}(I, 2, 2), QQ.(v))
+    cases = (([[0, 0]], [[2, 1], [1, 2]], 3.0,
+              (x, y) -> 0 <= x <= 2 && 0 <= y <= 2 && (x <= 1 || y <= 1)),
+             ([[0, 2], [2, 0]], [[1, 3], [3, 1]], 2.0,
+              (x, y) -> (0 <= x <= 1 && 2 <= y <= 3) || (2 <= x <= 3 && 0 <= y <= 1)))
+    points = [(x, y) for x in QQ[-1, 0, 1//2, 1, 3//2, 2, 5//2, 3, 4]
+                     for y in QQ[-1, 0, 1//2, 1, 3//2, 2, 5//2, 3, 4]]
+    for (births, deaths, area, support) in cases
+        U = PLP.PLUpset(PLP.PolyUnion(2, up.(births)))
+        D = PLP.PLDownset(PLP.PolyUnion(2, down.(deaths)))
+        enc = TO.encode(PLP.PLFringe([U], [D], ones(Int, 1, 1)),
+                        OPT.EncodingOptions(backend=:pl))
+        M, pi = RES.encoding_module(enc), RES.encoding_map(enc)
+        raw = EC.encoding_map(pi)
+        for mode in (:fast, :verified)
+            labels = [EC.locate(pi, collect(point); mode=mode) for point in points]
+            @test all(>(0), labels)
+            for (i, point) in enumerate(points)
+                @test M.dims[labels[i]] == Int(support(point...))
+            end
+            for (i, x) in enumerate(points), (j, y) in enumerate(points)
+                all(x .<= y) || continue
+                a, b = labels[i], labels[j]
+                @test FF.leq(M.Q, a, b)
+                expected = support(x...) && support(y...) ? ones(QQ, 1, 1) : zeros(QQ, M.dims[b], M.dims[a])
+                @test MD.map_leq(M, a, b) == expected
+            end
+        end
+        box = (QQ[-1, -1], QQ[4, 4])
+        for closure in (false, true)
+            cache = PLP.poly_in_box_cache(raw; box=box, closure=closure, level=:geometry)
+            for geometry_cache in (nothing, cache)
+                weights = PLP.region_weights(raw; box=box, closure=closure, cache=geometry_cache)
+                @test isapprox(sum(weights), 25.0; atol=1e-12, rtol=1e-12)
+                @test isapprox(dot(M.dims, weights), area; atol=1e-12, rtol=1e-12)
+            end
+        end
+        @test_throws ArgumentError TO.encode(PLP.PLFringe([U], [D], ones(Int, 1, 1)),
+            OPT.EncodingOptions(backend=:pl, max_regions=1))
+    end
+end
+
+@testset "A79 exact strict feasibility and geometric closure" begin
+    # Tiny oblique cells exercise general PL feasibility, not an orthant-only
+    # coordinate-gap heuristic. Their witnesses and classifications are exact.
+    delta = big(1) // big(2)^200
+    for origin in (QQ(0), QQ(1))
+        U = PLP.PLUpset(PLP.poly_union(PLP.make_hpoly(QQ[-1 -1], QQ[-origin-delta])))
+        D = PLP.PLDownset(PLP.poly_union(PLP.make_hpoly(QQ[1 1], QQ[origin])))
+        enc = TO.encode(PLP.PLFringe([U], [D], zeros(Int, 1, 1)), OPT.EncodingOptions(backend=:pl))
+        pi = EC.encoding_map(RES.encoding_map(enc))
+        @test PLP.nregions(pi) == 3
+        for mode in (:fast, :verified)
+            labels = [PLP.locate(pi, QQ[s, 0]; mode=mode) for s in
+                      (origin-delta, origin, origin+delta/2, origin+delta, origin+2delta)]
+            @test all(>(0), labels)
+            @test labels[1] == labels[2]
+            @test labels[4] == labels[5]
+            @test length(unique(labels)) == 3
+            for r in eachindex(pi.regions)
+                @test PLP.locate(pi, collect(PLP.region_witness(pi, r)); mode=mode) == r
+            end
+        end
+        # At zero, Float64 can represent this width, so area is independently
+        # delta^2. Geometry must not substitute the feasibility storage shift.
+        if iszero(origin)
+            r = PLP.locate(pi, QQ[delta/2, 0]; mode=:verified)
+            box = (QQ[0, -delta], QQ[delta, delta])
+            for closure in (false, true)
+                @test isapprox(PLP.region_volume(pi, r; box=box, closure=closure),
+                               Float64(delta^2); atol=0, rtol=1e-12)
+            end
+        end
+    end
+
+    # An explicitly requested fixed margin may remove tiny strata; zero and
+    # negative margins must not masquerade as exact strict feasibility.
+    U = PLP.PLUpset(PLP.poly_union(PLP.make_hpoly(QQ[-1;;], QQ[-delta])))
+    D = PLP.PLDownset(PLP.poly_union(PLP.make_hpoly(QQ[1;;], QQ[0])))
+    F = PLP.PLFringe([U], [D], zeros(Int, 1, 1))
+    approximate = TO.encode(F, OPT.EncodingOptions(backend=:pl, strict_eps=1//100))
+    @test RES.provenance(approximate).approximation.feasibility == :fixed_margin
+    @test EC.locate(RES.encoding_map(approximate), QQ[delta/2]; mode=:verified) == 0
+    for eps in (0, -1//100)
+        @test_throws ArgumentError TO.encode(F, OPT.EncodingOptions(backend=:pl, strict_eps=eps))
+    end
+
+    # The stored legacy-margin convention still means x > 1, not x >= 1+eps.
+    eps = QQ(1//100)
+    hp = PLP.HPoly(1, QQ[-1;;], QQ[-1-eps], nothing, trues(1), eps)
+    pi = PLP.PLEncodingMap(1, [BitVector()], [BitVector()], [hp], [(2.0,)])
+    for mode in (:fast, :verified)
+        @test PLP.locate(pi, QQ[1+eps/2]; mode=mode) == 1
+        @test PLP.locate(pi, QQ[1]; mode=mode) == 0
+    end
+    for closure in (false, true)
+        @test PLP.region_volume(pi, 1; box=(QQ[1], QQ[2]), closure=closure) == 1.0
+        @test PLP.region_bbox(pi, 1; box=(QQ[1], QQ[2]), closure=closure) == ([1.0], [2.0])
+        touching = (QQ[0], QQ[1])
+        for cache in (nothing, PLP.poly_in_box_cache(pi; box=touching, closure=closure, level=:geometry))
+            expected = closure ? ([1.0], [1.0]) : nothing
+            @test PLP.region_bbox(pi, 1; box=touching, closure=closure, cache=cache) == expected
+        end
+    end
+
+    # The exact vertex helper must accept rational windows on all public
+    # geometry paths, including a window with no Float64 interior point.
+    rectangle = PLP.make_hpoly(QQ[1 0; 0 1; -1 0; 0 -1], QQ[2, 1, 0, 0])
+    rectangle_pi = PLP.PLEncodingMap(2, [BitVector()], [BitVector()], [rectangle], [(1.0, 0.5)])
+    rational_box = (QQ[0, 0], QQ[2, 1])
+    @test PLP.region_vertex_count(rectangle_pi, 1; box=rational_box) == 4
+    @test PLP.region_diameter(rectangle_pi, 1; box=rational_box, method=:vertices) == sqrt(5.0)
+    @test isapprox(PLP.region_circumradius(rectangle_pi, 1; box=rational_box, method=:vertices),
+                   sqrt(1.25); atol=1e-14, rtol=1e-14)
+    @test PLP.region_mean_width(rectangle_pi, 1; box=rational_box, method=:vertices,
+        directions=Matrix{Float64}(I, 2, 2)) == 1.5
+    clipped = (QQ[1, 0], QQ[1+delta, 1])
+    @test PLP.region_vertex_count(rectangle_pi, 1; box=clipped) == 4
+
+    invalid_U = PLP.PLUpset(PLP.poly_union(PLP.make_hpoly(QQ[1;;], QQ[1])))
+    @test_throws ArgumentError PLP.encode_from_PL_fringe([invalid_U], PLP.PLDownset[],
+        zeros(QQ, 0, 1), OPT.EncodingOptions(backend=:pl))
+    open_U = PLP.PLUpset(PLP.poly_union(hp))
+    @test_throws ArgumentError PLP.encode_from_PL_fringe([open_U], PLP.PLDownset[],
+        zeros(QQ, 0, 1), OPT.EncodingOptions(backend=:pl))
+
+    # Degenerate ambient dimensions, affine lineality, and impossible strict
+    # inequalities have independent feasibility answers.
+    for (A, b, strict, feasible) in (
+        (zeros(QQ, 0, 2), QQ[], falses(0), true),
+        (QQ[1 0; -1 0], QQ[2, -2], falses(2), true),
+        (QQ[1 0; -1 0; 0 -1], QQ[0, 0, 0], BitVector([false, false, true]), true),
+        (reshape(QQ[-1, 1], 2, 1), QQ[0, 0], BitVector([false, true]), false),
+        (zeros(QQ, 1, 2), QQ[0], trues(1), false),
+        (zeros(QQ, 1, 2), QQ[delta], trues(1), true),
+        (zeros(QQ, 0, 0), QQ[], falses(0), true),
+        (zeros(QQ, 1, 0), QQ[-1], falses(1), false))
+        w = PLP._strict_feasibility_witness(A, b, strict)
+        @test (w !== nothing) == feasible
+        if w !== nothing
+            @test all(i -> strict[i] ? dot(A[i, :], w) < b[i] : dot(A[i, :], w) <= b[i], eachindex(b))
+        end
+    end
+end
+
 with_fields(FIELDS_FULL) do field
     K = CM.coeff_type(field)
     @inline c(x) = CM.coerce(field, x)
@@ -1395,6 +1625,53 @@ end
 end
 
     end # field isa CM.QQField
+
+@testset "A79 box queries preserve exact boundary sides" begin
+    delta = big(1) // big(2)^54
+    for deaths in ([2.0], [2.0, 4.0])
+        Ups = [PLB.BoxUpset([1.0])]
+        Downs = [PLB.BoxDownset([d]) for d in deaths]
+        _, H, pi = PLB.encode_fringe_boxes(Ups, Downs, ones(K, length(Downs), 1),
+            OPT.EncodingOptions(backend=:pl_backend, field=field))
+        splits = [1.0; deaths]
+        probes = [QQ(t) + offset for t in splits for offset in (-delta, zero(delta), delta)]
+        # Membership is derived directly from the closed orthant inequalities.
+        # Region z bits record the complement of downset membership.
+        expected = [(y=Bool[x >= 1], z=Bool[x > d for d in deaths]) for x in probes]
+        labels = Int[]
+        for mode in (:fast, :verified), (i, x) in enumerate(probes)
+            rid = PLB.locate(pi, [x]; mode=mode)
+            @test rid > 0
+            @test PLB.region_signature(pi, rid) == expected[i]
+            @test PLB.locate(pi, (x,); mode=mode) == rid
+            @test FF.fiber_dimension(H, rid) == (1 <= x <= maximum(deaths) ? 1 : 0)
+            mode == :fast && push!(labels, rid)
+        end
+        for queries in (reshape(probes, 1, :), reshape(BigFloat.(probes), 1, :)),
+            mode in (:fast, :verified), threaded in (false, true)
+            dest = zeros(Int, length(probes))
+            @test PLB.locate_many!(dest, pi, queries; mode=mode, threaded=threaded) === dest
+            @test dest == labels
+        end
+    end
+    # Avoidable loss of ordinary Float64 representatives at large scales.
+    lo = 2.0^54
+    _, _, large_pi = PLB.encode_fringe_boxes([PLB.BoxUpset([lo])],
+        [PLB.BoxDownset([lo + 16])], ones(K, 1, 1), OPT.EncodingOptions(field=field))
+    for rid in 1:PLB.nregions(large_pi)
+        @test PLB.locate(large_pi, PLB.region_representative(large_pi, rid)) == rid
+    end
+    midpoint = PLB._cell_rep_axis([1.0e308, 1.2e308], 1)
+    @test isfinite(midpoint)
+    @test 1.0e308 < midpoint < 1.2e308
+    # Floating-point arithmetic can round a uniform-grid index upward even
+    # when the original value is strictly below a split. Check adjacent floats.
+    coords = collect(range(0.1, 0.9; length=9))
+    for x in [f(t) for t in coords for f in (prevfloat, identity, nextfloat)]
+        @test PLB._slab_index(coords, x, true, first(coords), coords[2]-coords[1]) ==
+              searchsortedlast(coords, x)
+    end
+end
 
     if !(field isa CM.QQField)
 @testset "PL non-QQ field parity ($(field))" begin

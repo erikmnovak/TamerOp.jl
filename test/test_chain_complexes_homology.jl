@@ -4,7 +4,6 @@ using LinearAlgebra
 import Base.Threads
 
 # Included from test/runtests.jl; uses shared aliases (TO, FF, IR, DF, MD, QQ, ...).
-const FL = TamerOp.FieldLinAlg
 const MCM = TamerOp.ModuleComplexes
 
 with_fields(FIELDS_FULL) do field
@@ -157,7 +156,13 @@ end
     # boundary class should map to 0 in H0
     b = H0_int.B[:, 1]
     c0 = CC.homology_coordinates(H0_int, b)
-    @test c0 == zeros(Kc, H0_int.dimH, 1)
+    zero_class = zeros(Kc, H0_int.dimH, 1)
+    if field isa CM.RealField
+        # QR/SVD quotient coordinates can retain roundoff on an exact boundary.
+        @test isapprox(c0, zero_class; rtol=field.rtol, atol=field.atol)
+    else
+        @test c0 == zero_class
+    end
 
     # ----------------
     # Filled triangle: C2=k, C1=k^3, C0=k^3
@@ -1656,14 +1661,14 @@ function _ab_pushout_old(f::MD.PMorphism{K}, g::MD.PMorphism{K};
         fu = f.comps[u]
         gu = g.comps[u]
         b = size(fu, 1)
-        c = size(gu, 1)
+        dimC = size(gu, 1)
         a = size(fu, 2)
-        M = Matrix{K}(undef, b + c, a)
+        M = Matrix{K}(undef, b + dimC, a)
         if b > 0
             copyto!(view(M, 1:b, :), fu)
         end
-        if c > 0
-            @inbounds for i in 1:c, j in 1:a
+        if dimC > 0
+            @inbounds for i in 1:dimC, j in 1:a
                 M[b + i, j] = -gu[i, j]
             end
         end
@@ -1676,9 +1681,9 @@ function _ab_pushout_old(f::MD.PMorphism{K}, g::MD.PMorphism{K};
     @inbounds for u in 1:FF.nvertices(Q)
         qu = q.comps[u]
         b = B.dims[u]
-        c = C.dims[u]
+        dimC = C.dims[u]
         inB_comps[u] = copy(view(qu, :, 1:b))
-        inC_comps[u] = copy(view(qu, :, (b + 1):(b + c)))
+        inC_comps[u] = copy(view(qu, :, (b + 1):(b + dimC)))
     end
     inB = MD.PMorphism{K}(B, P, inB_comps)
     inC = MD.PMorphism{K}(C, P, inC_comps)
@@ -1698,13 +1703,13 @@ function _ab_pullback_old(f::MD.PMorphism{K}, g::MD.PMorphism{K};
         gu = g.comps[u]
         d = size(fu, 1)
         b = size(fu, 2)
-        c = size(gu, 2)
-        M = Matrix{K}(undef, d, b + c)
+        dimC = size(gu, 2)
+        M = Matrix{K}(undef, d, b + dimC)
         if b > 0
             copyto!(view(M, :, 1:b), fu)
         end
-        if c > 0
-            @inbounds for i in 1:d, j in 1:c
+        if dimC > 0
+            @inbounds for i in 1:d, j in 1:dimC
                 M[i, b + j] = -gu[i, j]
             end
         end
@@ -1717,9 +1722,9 @@ function _ab_pullback_old(f::MD.PMorphism{K}, g::MD.PMorphism{K};
     @inbounds for u in 1:FF.nvertices(Q)
         iu = iota.comps[u]
         b = B.dims[u]
-        c = C.dims[u]
+        dimC = C.dims[u]
         prB_comps[u] = copy(view(iu, 1:b, :))
-        prC_comps[u] = copy(view(iu, (b + 1):(b + c), :))
+        prC_comps[u] = copy(view(iu, (b + 1):(b + dimC), :))
     end
     prB = MD.PMorphism{K}(P, B, prB_comps)
     prC = MD.PMorphism{K}(P, C, prC_comps)
@@ -2405,45 +2410,44 @@ _is_ascii(s::AbstractString) = all(c -> Int(c) <= 0x7f, s)
     p = MD.PMorphism(B, C, [reshape(Kc[0, 1], 1, 2)])
 
     # --- PModule show ---
+    field_label = field isa CM.QQField ? "QQ" : field isa CM.RealField ? "Real" : "F$(field.p)"
     sA0 = sprint(show, A)
     @test occursin("PModule", sA0)
-    @test occursin("nverts=1", sA0)
-    @test occursin("dims=", sA0)
+    @test occursin("vertices=1", sA0)
+    @test occursin("total_dim=1", sA0)
     @test _is_ascii(sA0)
 
     sA1 = sprint(show, MIME("text/plain"), A)
     @test occursin("PModule", sA1)
-    if field isa CM.QQField
-        @test occursin("scalars = QQ", sA1) || occursin("scalars = Rational{BigInt}", sA1)
-    else
-        @test occursin("scalars = ", sA1)
-    end
-    @test occursin("nverts = 1", sA1)
-    @test occursin("dims =", sA1)
+    @test occursin("field: $field_label", sA1)
+    @test occursin("vertices: 1", sA1)
+    @test occursin("total dimension: 1", sA1)
     @test _is_ascii(sA1)
 
     # --- PMorphism show ---
     si0 = sprint(show, i)
     @test occursin("PMorphism", si0)
-    @test occursin("nverts=1", si0)
-    @test occursin("dom_sum=1", si0)
-    @test occursin("cod_sum=2", si0)
+    @test occursin("field=$field_label", si0)
+    @test occursin("vertices=1", si0)
+    @test occursin("nonzero_components=1", si0)
     @test _is_ascii(si0)
 
     si1 = sprint(show, MIME("text/plain"), i)
     @test occursin("PMorphism", si1)
-    @test occursin("endomorphism = false", si1)
-    @test occursin("dom dims", si1)
-    @test occursin("cod dims", si1)
+    @test occursin("nonzero components: 1", si1)
+    @test occursin("domain total dimension: 1", si1)
+    @test occursin("codomain total dimension: 2", si1)
     @test _is_ascii(si1)
 
-    # Truncation sanity check under IOContext(:limit=>true).
+    # Compact summaries retain the counts under IOContext(:limit=>true).
     Pbig = chain_poset(20)
     dims_big = collect(1:20)
     Mbig = MD.PModule{Kc}(Pbig, dims_big, Dict{Tuple{Int,Int}, Matrix{Kc}}())
 
     sbig = sprint(show, Mbig; context=:limit=>true)
-    @test occursin("...", sbig)
+    @test occursin("vertices=20", sbig)
+    @test occursin("total_dim=210", sbig)
+    @test occursin("edge_count=19", sbig)
     @test _is_ascii(sbig)
 
     # --- Submodule show ---

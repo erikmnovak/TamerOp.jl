@@ -2473,7 +2473,8 @@ end
 
 """
     rectangle_signed_barcode(rank_idx, axes; drop_zeros=true, tol=0, max_span=nothing,
-                             method=:auto, bulk_max_elems=20_000_000)
+                             method=:auto, bulk_max_elems=20_000_000,
+                             threads=(Threads.nthreads() > 1))
 
 Compute the rectangle signed barcode (a signed decomposition into axis-aligned
 rectangles) induced by a rank function on a finite grid.
@@ -2481,6 +2482,11 @@ rectangles) induced by a rank function on a finite grid.
 The rank function is provided as `rank_idx(p,q)`, where `p` and `q` are
 N-tuples of *indices* into the coordinate axes, and should be interpreted as
 a rank invariant on comparable pairs `p <= q` (coordinatewise).
+
+The bulk algorithm may evaluate `rank_idx` concurrently when `threads=true`.
+Callbacks must be safe for concurrent calls: avoid unsynchronized mutation of
+shared state, or use `threads=false` for serial evaluation. The returned barcode
+is independent of this execution choice.
 
 Algorithm choices:
 

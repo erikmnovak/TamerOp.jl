@@ -288,6 +288,15 @@ Base.:(==)(a::RealField{T}, b::RealField{T}) where {T<:AbstractFloat} =
     (a.rtol == b.rtol) && (a.atol == b.atol)
 Base.:(==)(a::PrimeField, b::PrimeField) = a.p == b.p
 
+# Field identity uses tolerance values, including separately allocated BigFloats.
+# Equality already identifies signed zero; hash and isequal must agree with it.
+@inline _real_tolerance_key(x::T) where {T<:AbstractFloat} = iszero(x) ? zero(T) : x
+Base.isequal(a::RealField{T}, b::RealField{S}) where {T,S} =
+    T === S && isequal(_real_tolerance_key(a.rtol), _real_tolerance_key(b.rtol)) &&
+    isequal(_real_tolerance_key(a.atol), _real_tolerance_key(b.atol))
+Base.hash(F::RealField{T}, seed::UInt) where {T} =
+    hash((RealField, T, _real_tolerance_key(F.rtol), _real_tolerance_key(F.atol)), seed)
+
 F2() = PrimeField(2)
 F3() = PrimeField(3)
 """
@@ -320,17 +329,30 @@ integer residue in `0:p-1`. The type parameter `p` must be an `Int` prime.
 Prefer `K = coeff_type(Fp(p)); K(x)` when the modulus has another integer type.
 Integer inputs may have arbitrary size; conversion from another characteristic
 is rejected. Arithmetic is exact throughout the supported modulus range.
+
+These scalars are `Number`s, not ordered `Real` or `Integer` values. Use
+`coerce(target_field, x)` for explicit representative-based coefficient changes.
+
+Integer arithmetic and `==` use modular coercion: `FpElem{3}(1) == 4` is true.
+Dictionary/set equality (`isequal`) is stricter: keys must have the same
+characteristic and residue. Ordinary numeric keys and different characteristics
+remain distinct. Coerce insertion and lookup keys explicitly when modular
+identification is wanted, for example `dictionary[coerce(Fp(3), 4)]`. Typed
+finite-field dictionaries and sets reject uncoerced integer insertions.
 """
-struct FpElem{p} <: Integer
+struct FpElem{p} <: Number
     val::Int
     @inline function FpElem{p}(x::Integer) where {p}
         _prime_field(Val(p))
-        x isa FpElem{p} && return x
-        x isa FpElem && throw(ArgumentError("cannot convert $(typeof(x)) into FpElem{$p}"))
         new{p}(Int(mod(x, p)))
     end
 end
 
+FpElem{p}(x::FpElem{p}) where {p} = x
+FpElem{p}(x::FpElem) where {p} =
+    throw(ArgumentError("cannot convert $(typeof(x)) into FpElem{$p}"))
+
+Fp(p::FpElem) = PrimeField(p)
 PrimeField(p::FpElem) =
     throw(ArgumentError("prime field modulus must be an integer characteristic, not a finite-field element"))
 
@@ -339,13 +361,17 @@ Base.zero(::Type{FpElem{p}}) where {p} = FpElem{p}(0)
 Base.one(::Type{FpElem{p}}) where {p} = FpElem{p}(1)
 Base.iszero(x::FpElem{p}) where {p} = x.val == 0
 Base.conj(x::FpElem{p}) where {p} = x
-Base.hash(x::FpElem{p}, h::UInt) where {p} = hash(x.val, h)
+# Modular comparison with integers is not an equivalence across numeric
+# domains (in F3, both 1 and 4 compare equal to the same residue). Hash keys
+# therefore retain their coefficient field.
+Base.hash(x::FpElem{p}, h::UInt) where {p} = hash((FpElem, p, x.val), h)
+Base.isequal(a::FpElem{p}, b::FpElem{q}) where {p,q} = p == q && a.val == b.val
+Base.isequal(::FpElem, ::Number) = false
+Base.isequal(::Number, ::FpElem) = false
 
 Base.convert(::Type{FpElem{p}}, x::Integer) where {p} = FpElem{p}(x)
 Base.convert(::Type{FpElem{p}}, x::FpElem{p}) where {p} = x
 Base.promote_rule(::Type{FpElem{p}}, ::Type{<:Integer}) where {p} = FpElem{p}
-# Base otherwise promotes any Integer paired with BigInt to BigInt.
-Base.promote_rule(::Type{BigInt}, ::Type{FpElem{p}}) where {p} = FpElem{p}
 function Base.promote_rule(::Type{FpElem{p}}, ::Type{FpElem{q}}) where {p,q}
     p == q || throw(ArgumentError("cannot promote elements of characteristics $p and $q"))
     return FpElem{p}
@@ -399,9 +425,6 @@ function _fp_power(a::FpElem{p}, exponent::Integer) where {p}
 end
 
 Base.:^(a::FpElem, exponent::Integer) = _fp_power(a, exponent)
-# Resolve Base's Integer/BigInt and Integer/Bool specializations explicitly.
-Base.:^(a::FpElem, exponent::BigInt) = _fp_power(a, exponent)
-Base.:^(a::FpElem, exponent::Bool) = exponent ? a : one(a)
 Base.:^(a::FpElem, exponent::FpElem) =
     throw(ArgumentError("a finite-field exponent must be an ordinary integer"))
 # Base's generic negative-literal rewrite negates the exponent; bypass it so
@@ -435,6 +458,7 @@ coerce(::QQField, x::QQ) = x
 coerce(::QQField, x::FpElem{p}) where {p} = QQ(x.val)
 
 coerce(::RealField{T}, x::Integer) where {T<:AbstractFloat} = T(x)
+coerce(::RealField{T}, x::FpElem) where {T<:AbstractFloat} = T(x.val)
 coerce(::RealField{T}, x::Rational) where {T<:AbstractFloat} =
     T(numerator(x)) / T(denominator(x))
 coerce(::RealField{T}, x::AbstractFloat) where {T<:AbstractFloat} = T(x)
@@ -546,12 +570,12 @@ BackendMatrix(A::AbstractMatrix{K}; backend::Symbol=:nemo, payload::Any=nothing)
 Base.size(A::BackendMatrix) = size(A.data)
 Base.axes(A::BackendMatrix) = axes(A.data)
 Base.IndexStyle(::Type{<:BackendMatrix}) = IndexCartesian()
-Base.getindex(A::BackendMatrix, i::Int, j::Int) = @inbounds A.data[i, j]
-function Base.setindex!(A::BackendMatrix, v, i::Int, j::Int)
-    @inbounds A.data[i, j] = v
+Base.@propagate_inbounds Base.getindex(A::BackendMatrix, i::Int, j::Int) = A.data[i, j]
+Base.@propagate_inbounds function Base.setindex!(A::BackendMatrix, v, i::Int, j::Int)
+    A.data[i, j] = v
     # Keep cached backend payload coherent with dense storage.
     A.payload = nothing
-    return v
+    return A
 end
 Base.parent(A::BackendMatrix) = A.data
 Base.Matrix(A::BackendMatrix{K}) where {K} = copy(A.data)
@@ -1199,7 +1223,7 @@ const _FIELD_CACHE_SEED = UInt(0x9E37_79B9_7F4A_7C15)
 @inline _field_cache_key(F::PrimeField)::UInt =
     xor(UInt(0x4650_5F00_0000_0001), UInt(F.p))
 @inline _field_cache_key(F::RealField{T}) where {T<:AbstractFloat} =
-    UInt(hash((T, F.rtol, F.atol), _FIELD_CACHE_SEED))
+    UInt(hash(F, _FIELD_CACHE_SEED))
 @inline _field_cache_key(field::AbstractCoeffField)::UInt =
     UInt(hash(field, _FIELD_CACHE_SEED))
 

@@ -72,10 +72,22 @@ using SparseArrays, LinearAlgebra
 using ..CoreModules: _TaskLocalCache, _task_local!, _task_local_context, _clear_task_local!, QQ, QQField, AbstractCoeffField, coeff_type, field_from_eltype, coerce
 import ..CoreModules: change_field
 import ..FieldLinAlg
+import ..Results: _result_poset_length, _result_posets_equal
 
 # Private implementation files. FiniteFringe remains the owner module; these
 # fragments separate posets, fringe-module/fiber code, and Hom kernels for readability.
 include("finite_fringe/posets.jl")
+_result_poset_length(P::AbstractPoset) = nvertices(P)
+function _result_posets_equal(P::AbstractPoset, Q::AbstractPoset)
+    P === Q && return true
+    n = nvertices(P)
+    n == nvertices(Q) || return false
+    # Validate label-preserving order equality without constructing dense order matrices.
+    for j in 1:n, i in 1:n
+        leq(P, i, j) == leq(Q, i, j) || return false
+    end
+    return true
+end
 include("finite_fringe/sets_and_types.jl")
 include("finite_fringe/fringe_module_and_fiber.jl")
 include("finite_fringe/hom.jl")

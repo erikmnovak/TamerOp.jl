@@ -43,6 +43,23 @@ K = CM.coeff_type(field)
     end
 end
 
+@testset "A79 upset and downset collection cardinality" begin
+    # Include empty, singleton, full and multiword masks on a chain, whose
+    # upward/downward closed supports have hand-computable vertex labels.
+    for (n, cardinality) in ((0, 0), (3, 0), (3, 1), (3, 3), (70, 1), (70, 35), (70, 70))
+        P = chain_poset(n)
+        U = FF.Upset(P, BitVector(i > n - cardinality for i in 1:n))
+        D = FF.Downset(P, BitVector(i <= cardinality for i in 1:n))
+        for (indicator, expected) in ((U, collect((n - cardinality + 1):n)),
+                                      (D, collect(1:cardinality)))
+            @test length(indicator) == cardinality
+            @test collect(indicator) == expected
+            @test FF.support(indicator) == expected
+            @test isempty(indicator) == (cardinality == 0)
+        end
+    end
+end
+
 @testset "FiniteFringe basics" begin
     P = chain_poset(3)
 

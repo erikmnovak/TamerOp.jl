@@ -3,7 +3,36 @@ using Test
 using Test
 using LinearAlgebra
 
-const FL = TamerOp.FieldLinAlg
+
+@testset "A79 public injective generator views respect multiplicities" begin
+    with_fields(FIELDS_FULL) do field
+        K = CM.coeff_type(field)
+        P = chain_poset(3)
+        M = MD.PModule{K}(P, [1, 0, 2],
+            Dict{Tuple{Int,Int},Matrix{K}}(
+                (1, 2) => zeros(K, 0, 1),
+                (2, 3) => zeros(K, 2, 0)); field=field)
+        hull = IR.injective_hull(M; threads=false)
+        generators = IR.resolution_generators(hull)
+        expected = [[(1, 1)], Tuple{Int,Int}[], [(3, 1), (3, 2)]]
+        @test IR.materialize_generators(hull) == expected
+        @test length(generators) == length(expected)
+        @test_throws BoundsError generators[0]
+        @test_throws BoundsError generators[length(generators) + 1]
+        for (block, labels) in zip(generators, expected)
+            @test length(block) == length(labels)
+            @test collect(block) == labels
+            @test eltype(block) == Tuple{Int,Int}
+            for i in eachindex(labels)
+                @test block[i] == labels[i]
+            end
+            # Empty socle blocks must not invent a first generator either.
+            for i in (-1, 0, length(block) + 1)
+                @test_throws BoundsError block[i]
+            end
+        end
+    end
+end
 
 @testset "A58 projective generators preserve the incoming-image prefix" begin
     with_fields(FIELDS_FULL) do field

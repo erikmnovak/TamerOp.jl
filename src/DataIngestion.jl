@@ -38,7 +38,7 @@ using ..EncodingCore: AbstractPLikeEncodingMap, CompiledEncoding, compile_encodi
 using ..Results: EncodingResult, EncodedComplexResult, CohomologyDimsResult, ResolutionResult, InvariantResult,
                  _encoding_with_session_cache
 import ..Results: materialize_module, module_dims, _materialize_complex, _provenance_field,
-                  _module_materialized, _complex_materialized, _show_stored_dimensions
+                  _module_materialized, _complex_materialized, _show_stored_dimensions, _result_payload_poset
 import ..EncodingCore: locate, dimension, representatives, axes_from_encoding, _grid_strides, GridEncodingMap
 
 using ..SimplicialReduction: _collapse_dominated_edges, _flag_simplices, _flag_grades

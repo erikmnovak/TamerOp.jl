@@ -100,12 +100,12 @@ Base.getindex(x::_InvariantValidationWrapper, key::Symbol) = getproperty(x, key)
 
 Base.length(result::RankInvariantResult) = length(result.data)
 Base.iterate(result::RankInvariantResult, state...) = iterate(result.data, state...)
-Base.getindex(result::RankInvariantResult, key::Tuple{Int,Int}) = result.data[key]
-Base.haskey(result::RankInvariantResult, key::Tuple{Int,Int}) = haskey(result.data, key)
+Base.getindex(result::RankInvariantResult, key) = result.data[key]
+Base.haskey(result::RankInvariantResult, key) = haskey(result.data, key)
 Base.keys(result::RankInvariantResult) = keys(result.data)
 Base.values(result::RankInvariantResult) = values(result.data)
 Base.pairs(result::RankInvariantResult) = pairs(result.data)
-Base.get(result::RankInvariantResult, key::Tuple{Int,Int}, default) = get(result.data, key, default)
+Base.get(result::RankInvariantResult, key, default) = get(result.data, key, default)
 Base.eltype(::Type{<:RankInvariantResult}) = Pair{Tuple{Int,Int},Int}
 Base.copy(result::RankInvariantResult) = copy(result.data)
 

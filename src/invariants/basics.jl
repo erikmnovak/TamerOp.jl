@@ -22,7 +22,8 @@ end
 
 
 """
-    rank_invariant(M::PModule{K}; store_zeros=false, threads=(Threads.nthreads() > 1)) -> RankInvariantResult
+    rank_invariant(M::PModule{K}; opts=InvariantOptions(), store_zeros=false) -> RankInvariantResult
+    rank_invariant(M::PModule{K}, opts::InvariantOptions; store_zeros=false) -> RankInvariantResult
 
 Compute the rank invariant of a module `M`, returning a typed
 `RankInvariantResult` that remains dictionary-like.
@@ -34,9 +35,11 @@ Keyword arguments:
 
 - `store_zeros`: if `true`, include all comparable pairs `(a, b)` including rank 0.
   If `false`, store only positive ranks (sparser and usually faster).
-- `threads`: if `true` and Julia has more than one thread, parallelize over the
-  outer vertex index `a`. This is safe: `CoverCache` is thread-safe and each
-  work chunk owns its map memo and writes disjoint integer output entries.
+- `opts.threads`: when `true` and Julia has more than one thread, parallelize
+  over the outer vertex index `a`. Set `opts=InvariantOptions(threads=false)`
+  for serial execution; the default follows Julia's available thread count.
+  `CoverCache` is thread-safe and each work chunk owns its map memo and writes
+  disjoint integer output entries.
 """
 function rank_invariant(
     M::PModule{K},

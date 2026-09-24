@@ -344,7 +344,12 @@ end
 Return true iff PLBackend can encode this box presentation under the given options.
 This checks:
 - axis-aligned boxes with finite coordinates,
-- region count does not exceed opts.max_regions if set.
+- no coordinate is both a birth and a death threshold on the same axis,
+- the full-dimensional cell count does not exceed opts.max_regions if set.
+
+Coincident birth/death thresholds can support lower-dimensional modules. The
+canonical `:auto` route uses `:pl` for those inputs so closed boundary classes
+are retained.
 """
 function supports_pl_backend(Ups::Vector{BoxUpset}, Downs::Vector{BoxDownset};
                              opts::EncodingOptions=EncodingOptions())::Bool
@@ -361,6 +366,15 @@ function supports_pl_backend(Ups::Vector{BoxUpset}, Downs::Vector{BoxDownset};
         for b in D.u
             isfinite(b) || return false
         end
+    end
+
+    isempty(Ups) && isempty(Downs) && return false
+    n = _infer_box_dim(Ups, Downs)
+    all(U -> length(U.ell) == n, Ups) || return false
+    all(D -> length(D.u) == n, Downs) || return false
+    for axis in 1:n
+        births = Set(U.ell[axis] for U in Ups)
+        any(D -> D.u[axis] in births, Downs) && return false
     end
 
     # If max_regions is set, do a cheap upper bound check on the grid size.
@@ -382,19 +396,14 @@ function supports_pl_backend(Ups::Vector{BoxUpset}, Downs::Vector{BoxDownset};
         for i in 1:n
             coords[i] = sort!(unique!(coords[i]))
         end
-        # number of cells in the induced grid:
-        # product over dimensions of (k_i - 1).
+        # Include both unbounded slabs; check the budget before multiplication.
         cells = 1
         for i in 1:n
-            ki = length(coords[i])
-            if ki < 2
-                return false
-            end
-            cells *= (ki - 1)
-            if cells > max_regions
-                return false
-            end
+            width = length(coords[i]) + 1
+            cells <= div(max_regions, width) || return false
+            cells *= width
         end
+        cells <= max_regions || return false
     end
 
     return true
@@ -419,6 +428,38 @@ end
 # -----------------------------------------------------------------------------
 # Conversions between PLFringe and box generators for PLBackend
 
+function _box_orthant_bounds(shape, n::Int, lower::Bool)
+    parts = PLPolyhedra.polyhedra(shape)
+    length(parts) == 1 || throw(ArgumentError("Box conversion requires one convex orthant per generator."))
+    hp = only(parts)
+    hp.n == n || throw(ArgumentError("PL fringe generator has inconsistent dimension."))
+    any(hp.strict_mask) && throw(ArgumentError("Box conversion requires closed generator boundaries."))
+    bounds = Vector{QQ}(undef, n)
+    seen = falses(n)
+    for row in axes(hp.A, 1)
+        nonzero = findall(!iszero, view(hp.A, row, :))
+        if isempty(nonzero)
+            hp.b[row] >= 0 || throw(ArgumentError("An empty generator is not a principal orthant."))
+            continue
+        end
+        length(nonzero) == 1 || throw(ArgumentError("Box conversion requires axis-aligned inequalities."))
+        axis = only(nonzero)
+        coefficient = hp.A[row, axis]
+        (lower ? coefficient < 0 : coefficient > 0) ||
+            throw(ArgumentError("Generator inequality has the wrong direction for its orthant."))
+        bound = hp.b[row] / coefficient
+        if !seen[axis] || (lower ? bound > bounds[axis] : bound < bounds[axis])
+            bounds[axis] = bound
+            seen[axis] = true
+        end
+    end
+    all(seen) || throw(ArgumentError("Box conversion requires a finite bound on every axis."))
+    result = Float64.(bounds)
+    all(isfinite, result) && all(i -> QQ(result[i]) == bounds[i], eachindex(bounds)) ||
+        throw(ArgumentError("Box conversion would round an exact generator boundary; use backend=:pl."))
+    return result
+end
+
 """
     boxes_from_pl_fringe(F::PLPolyhedra.PLFringe) -> (Ups::Vector{BoxUpset}, Downs::Vector{BoxDownset})
 
@@ -427,64 +468,29 @@ Convert an axis-aligned PLFringe (as used by PLPolyhedra) into box generators fo
 Throws if the fringe contains non-axis-aligned generators or is otherwise incompatible.
 """
 function boxes_from_pl_fringe(F::PLPolyhedra.PLFringe)
-    Ups = Vector{BoxUpset}(undef, length(F.Ups))
-    for i in eachindex(F.Ups)
-        U = F.Ups[i]
-        if length(U.A) != 2 * F.n
-            error("PLFringe upset is not axis-aligned (A has wrong size).")
-        end
-        lo = Vector{QQ}(undef, F.n)
-        hi = Vector{QQ}(undef, F.n)
-        for j in 1:F.n
-            lo[j] = U.b[j]
-            hi[j] = U.b[F.n + j]
-        end
-        Ups[i] = BoxUpset(lo, hi)
-    end
-
-    Downs = Vector{BoxDownset}(undef, length(F.Downs))
-    for i in eachindex(F.Downs)
-        D = F.Downs[i]
-        if length(D.A) != 2 * F.n
-            error("PLFringe downset is not axis-aligned (A has wrong size).")
-        end
-        lo = Vector{QQ}(undef, F.n)
-        hi = Vector{QQ}(undef, F.n)
-        for j in 1:F.n
-            lo[j] = D.b[j]
-            hi[j] = D.b[F.n + j]
-        end
-        Downs[i] = BoxDownset(lo, hi)
-    end
-
+    Ups = BoxUpset[BoxUpset(_box_orthant_bounds(U, F.n, true)) for U in F.Ups]
+    Downs = BoxDownset[BoxDownset(_box_orthant_bounds(D, F.n, false)) for D in F.Downs]
     return Ups, Downs
 end
 
-"""
-    pl_fringe_from_boxes(Ups::Vector{BoxUpset}, Downs::Vector{BoxDownset}) -> PLPolyhedra.PLFringe
-
-Convert a box presentation into a PLFringe (axis-aligned) for use with PLPolyhedra.
-"""
-function pl_fringe_from_boxes(Ups::Vector{BoxUpset}, Downs::Vector{BoxDownset})
+# Convert only the geometry; coefficient matrices retain their selected field.
+function _pl_generators_from_boxes(Ups::Vector{BoxUpset}, Downs::Vector{BoxDownset})
     n = _infer_box_dim(Ups, Downs)
-
     PUps = Vector{PLPolyhedra.PLUpset}(undef, length(Ups))
     for i in eachindex(Ups)
-        ell = Ups[i].ell
+        length(Ups[i].ell) == n || throw(DimensionMismatch("Box upset has inconsistent dimension."))
         A = -Matrix{QQ}(I, n, n)
-        b = -ell
-        PUps[i] = PLPolyhedra.PLUpset(A, b)
+        b = -QQ.(Ups[i].ell)
+        PUps[i] = PLPolyhedra.PLUpset(PLPolyhedra.PolyUnion(n, [PLPolyhedra.make_hpoly(A, b)]))
     end
-
     PDowns = Vector{PLPolyhedra.PLDownset}(undef, length(Downs))
     for i in eachindex(Downs)
-        u = Downs[i].u
+        length(Downs[i].u) == n || throw(DimensionMismatch("Box downset has inconsistent dimension."))
         A = Matrix{QQ}(I, n, n)
-        b = u
-        PDowns[i] = PLPolyhedra.PLDownset(A, b)
+        b = QQ.(Downs[i].u)
+        PDowns[i] = PLPolyhedra.PLDownset(PLPolyhedra.PolyUnion(n, [PLPolyhedra.make_hpoly(A, b)]))
     end
-
-    return PLPolyhedra.PLFringe(n, PUps, PDowns)
+    return PUps, PDowns
 end
 
 # -----------------------------------------------------------------------------
@@ -505,7 +511,7 @@ function choose_pl_backend(Ups::Vector{BoxUpset}, Downs::Vector{BoxDownset};
     opts = opts
     b = _normalize_pl_backend(opts.backend)
     if b == :pl_backend
-        supports_pl_backend(Ups, Downs; opts=opts) || error("PLBackend requested, but this input is not supported by PLBackend.")
+        supports_pl_backend(Ups, Downs; opts=opts) || error("PLBackend requested, but this input is not supported. Use backend=:pl for coincident birth/death boundaries, or backend=:auto to select a suitable encoder.")
         return :pl_backend
     elseif b == :pl
         return :pl
@@ -550,14 +556,12 @@ function encode_from_fringe(Ups::Vector{BoxUpset}, Downs::Vector{BoxDownset}, Ph
                             opts::EncodingOptions=EncodingOptions())
     opts = opts
     b = choose_pl_backend(Ups, Downs; opts=opts)
-    Phi_QQ = Matrix{QQ}(Phi)
     if b == :pl_backend
-        P, H, pi = encode_fringe_boxes(Ups, Downs, Phi_QQ, opts; poset_kind=opts.poset_kind)
+        P, H, pi = encode_fringe_boxes(Ups, Downs, Phi, opts; poset_kind=opts.poset_kind)
     else
-        F = pl_fringe_from_boxes(Ups, Downs)
-        P, H, pi = PLPolyhedra.encode_from_PL_fringe(F, opts; poset_kind=opts.poset_kind)
+        PUps, PDowns = _pl_generators_from_boxes(Ups, Downs)
+        P, H, pi = PLPolyhedra.encode_from_PL_fringe(PUps, PDowns, Phi, opts; poset_kind=opts.poset_kind)
     end
-    H = (opts.field == QQField()) ? H : change_field(H, opts.field)
     return P, H, pi
 end
 
@@ -566,12 +570,11 @@ function encode_from_fringe(F::PLPolyhedra.PLFringe, opts::EncodingOptions=Encod
     b = choose_pl_backend(F; opts=opts)
     if b == :pl_backend
         Ups, Downs = boxes_from_pl_fringe(F)
-        Phi = reshape(ones(QQ, length(Downs) * length(Ups)), length(Downs), length(Ups))
-        P, H, pi = encode_fringe_boxes(Ups, Downs, Phi, opts; poset_kind=opts.poset_kind)
+        P, H, pi = encode_fringe_boxes(Ups, Downs, PLPolyhedra.coefficient_matrix(F), opts;
+                                      poset_kind=opts.poset_kind)
     else
         P, H, pi = PLPolyhedra.encode_from_PL_fringe(F, opts; poset_kind=opts.poset_kind)
     end
-    H = (opts.field == QQField()) ? H : change_field(H, opts.field)
     return P, H, pi
 end
 
@@ -2305,16 +2308,12 @@ hypertor(Rop::EncodingResult, enc::EncodedComplexResult; maxlen::Int=3, kwargs..
 
 
 
-@inline _is_invariant_call_method_miss(err, f) =
-    err isa MethodError && (err.f === f || err.f === Core.kwcall)
-
 @inline function _try_invariant_call(f, args...; kwargs...)
-    try
-        return true, f(args...; kwargs...)
-    catch err
-        _is_invariant_call_method_miss(err, f) || rethrow()
-        return false, nothing
-    end
+    # Inspect the callable's outer signature before invoking it. A MethodError
+    # from inside an applicable invariant is a user computation failure, not a
+    # request to try another signature and possibly produce a different value.
+    hasmethod(f, Tuple{map(typeof, args)...}, keys(kwargs)) || return false, nothing
+    return true, f(args...; kwargs...)
 end
 
 function _call_invariant(f, enc::EncodingResult, opts::InvariantOptions; kwargs...)
@@ -2428,6 +2427,10 @@ Compute one invariant from the invariant-family owners and wrap it in an
 `which` may be:
 - a Symbol naming a function in `Invariants` (e.g. `:rank_invariant`)
 - a callable itself
+
+Callable signatures are tried from dimension data through full objects. Once
+a signature accepts the supplied arguments and keyword names, exceptions from
+that computation propagate unchanged; they do not trigger another signature.
 
 Cache contract
 - `cache=:auto` is the canonical one-shot path,

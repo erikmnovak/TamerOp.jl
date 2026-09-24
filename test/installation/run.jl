@@ -48,11 +48,25 @@ function main(args)
     for name in ("common.jl", "install.jl", "verify.jl", "run.jl")
         cp(joinpath(@__DIR__, name), joinpath(harness, name))
     end
+    revision = options["--rev"]
+    tree = readchomp(`git -C $checkout rev-parse $(revision * "^{tree}")`)
+    tree == options["--tree"] || error("Supplied tree does not belong to the pinned commit")
+    entries = Dict{String,String}[]
+    for entry in split(read(`git -C $checkout ls-tree -r -z --full-tree $revision`, String), '\0'; keepempty=false)
+        metadata, path = split(entry, '\t'; limit=2)
+        mode, kind, blob = split(metadata)
+        kind == "blob" && mode in ("100644", "100755", "120000") ||
+            error("Unsupported candidate Git entry: $path ($kind, $mode)")
+        push!(entries, Dict("path" => path, "mode" => mode, "blob" => blob))
+    end
+    inventory_path = joinpath(output, "candidate_files.toml")
+    open(io -> TOML.print(io, Dict("tree" => tree, "files" => entries); sorted=true),
+         inventory_path, "w")
     config = Dict(
         "repository" => isdir(options["--repo"]) ? realpath(options["--repo"]) : options["--repo"],
         "revision" => options["--rev"],
         "tree" => options["--tree"], "checkout" => checkout, "output" => output,
-        "environment" => environment, "primary_depot" => depot,
+        "environment" => environment, "primary_depot" => depot, "inventory" => inventory_path,
         "cache_depots" => caches, "fresh_primary_depot" => true,
         "cache_policy" => isempty(caches) ? "no reused depots" : "explicit fallback depots",
         "offline_requested" => get(ENV, "JULIA_PKG_OFFLINE", "false"),
@@ -77,11 +91,22 @@ function main(args)
             println("Starting ", label, " in a fresh Julia process")
             flush(stdout)
             cmd = `$(Base.julia_cmd()) --startup-file=no --history-file=no --project=$environment $(joinpath(harness, script * ".jl")) $config_path $phase`
-            open(joinpath(output, label * ".log"), "w") do log
-                run(pipeline(setenv(Cmd(cmd; dir=work), process_env); stdout=log, stderr=log))
+            log_path = joinpath(output, label * ".log")
+            process = open(log_path, "w") do log
+                # A raw ProcessFailedException can print inherited environment
+                # values. Preserve diagnostics without exposing that environment.
+                child = ignorestatus(setenv(Cmd(cmd; dir=work), process_env))
+                run(pipeline(child; stdout=log, stderr=log))
             end
-            cp(joinpath(environment, "Project.toml"), joinpath(output, "$(label)_Project.toml"))
-            cp(joinpath(environment, "Manifest.toml"), joinpath(output, "$(label)_Manifest.toml"))
+            # Keep even partial resolver state when a later stage fails.
+            for name in ("Project.toml", "Manifest.toml")
+                path = joinpath(environment, name)
+                isfile(path) && cp(path, joinpath(output, "$(label)_$name"))
+            end
+            if !success(process)
+                println(stderr, join(last(readlines(log_path), 80), '\n'))
+                error("Installation phase $label failed (exit $(process.exitcode), signal $(process.termsignal)); see $log_path")
+            end
             push!(config["completed_phases"], label)
             save()
             println("Passed ", label)

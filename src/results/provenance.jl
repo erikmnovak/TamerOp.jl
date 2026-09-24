@@ -41,7 +41,10 @@ function _presentation_encoding_meta(opts::EncodingOptions, backend::Symbol; joi
         discretization=(kind=:finite_encoding, filtration_values=:not_resampled),
         approximation=(construction=:none_requested,
             geometry=backend === :zn ? :integer_coordinates : :backend_numerical_contract,
-            strict_eps=opts.strict_eps),
+            strict_eps=opts.strict_eps,
+            effective_strict_eps=backend === :pl ? opts.strict_eps : nothing,
+            feasibility=backend === :pl ?
+                (opts.strict_eps === nothing ? :exact_rational : :fixed_margin) : :not_applicable),
         backend=(requested=opts.backend, effective=backend)),)
 end
 

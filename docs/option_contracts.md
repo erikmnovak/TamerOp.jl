@@ -20,8 +20,12 @@ Changing characteristic can change ranks and homology; it is not an invariance
 claim. Rational coefficients whose denominators vanish in the target field are
 rejected by the existing field conversion contract.
 
-`strict_eps` belongs to general PL geometry. Zn and axis-aligned box encoders
-reject a nondefault value instead of accepting an ineffective setting. Derived
+`strict_eps` belongs to general PL geometry. The default `nothing` certifies
+strict feasibility over the rationals, including arbitrarily narrow cells. An
+explicit positive value selects a fixed feasibility margin and can omit cells;
+point membership still uses the original strict boundaries. Result provenance
+records `feasibility=:exact_rational` or `:fixed_margin`. Zn and axis-aligned box
+encoders reject a nondefault value instead of accepting an ineffective setting. Derived
 Zn box computations honor their encoding field and region budget, and reject
 controls that do not apply to that construction.
 

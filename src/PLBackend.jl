@@ -28,7 +28,7 @@ import ..ZnEncoding: SignaturePoset, nregions, critical_coordinates,
                      has_direct_lookup, region_poset, poset_kind
 import ..DataTypes: ambient_dim
 import ..FlangeZn: generator_counts
-using ..CoreModules: QQ
+using ..CoreModules: QQ, coeff_type, coerce
 using ..Options: EncodingOptions, validate_pl_mode
 using ..EncodingCore: AbstractPLikeEncodingMap, CompiledEncoding
 using ..CoreModules.CoeffFields: QQField
@@ -366,8 +366,9 @@ For fast point location, we precompute:
 
 The `cell_to_region` table is exact for interior points. For points lying exactly
 on split coordinates, `locate` applies a cheap correction based on whether the
-split came from an upset lower bound (>=) or a downset upper bound (<=), and
-falls back to signature lookup only in truly ambiguous "both" cases.
+split came from an upset lower bound (>=) or a downset upper bound (<=).
+The constructor rejects shared birth/death thresholds: their additional boundary
+strata require the general polyhedral encoder selected by `backend=:auto`.
 """
 struct PLEncodingMapBoxes{N,MY,MZ} <: AbstractPLikeEncodingMap
     n::Int
@@ -536,8 +537,11 @@ used by the box backend locator.
 Return all stored region representatives, or the representative for region `r`,
 of a box backend encoding object.
 
-Use these as the cheap/default region-level accessors before asking for heavier
-bounded geometry such as exact region boxes or adjacency.
+These stored Float64 samples are useful for display and ordinary inspection.
+They are approximate: a cell between adjacent Float64 splits has no Float64
+interior witness, so a stored sample can round onto a boundary. Use
+[`region_signature`](@ref) to inspect the exact membership pattern and `locate`
+on the original query coordinates when boundary membership matters.
 """
 @inline region_representatives(pi::PLEncodingMapBoxes) = pi.reps
 @inline region_representatives(enc::CompiledEncoding{<:PLEncodingMapBoxes}) = region_representatives(enc.pi)
@@ -592,27 +596,26 @@ wrappers.
                              is_uniform::Bool, x0::Float64, step::Float64)
     k = length(ci)
     k == 0 && return 0
-    x = Float64(xi)
-
-    if is_uniform
-        if x < ci[1]
-            return 0
-        elseif x >= ci[end]
-            return k
-        else
-            j = Int(floor((x - x0) / step)) + 1
-            # clamp to [0,k]
-            if j < 0
-                return 0
-            elseif j > k
-                return k
-            else
-                return j
-            end
-        end
-    else
-        return searchsortedlast(ci, x)
+    # Mixed comparisons preserve rational/BigFloat queries on either side of a
+    # split even when converting the query to Float64 would land on that split.
+    if !is_uniform || !(xi isa Union{Float16,Float32,Float64})
+        return searchsortedlast(ci, xi)
     end
+    x = Float64(xi) # lossless for these three floating-point types
+    x < ci[1] && return 0
+    x >= ci[end] && return k
+    estimate = (x - x0) / step
+    isfinite(estimate) || return searchsortedlast(ci, x)
+    j = min(k, floor(Int, clamp(estimate, 0.0, Float64(k))) + 1)
+    # Uniform-grid arithmetic is only an index estimate: cancellation or
+    # rounding near a split must not change the classified region.
+    @inbounds while j > 0 && x < ci[j]
+        j -= 1
+    end
+    @inbounds while j < k && x >= ci[j + 1]
+        j += 1
+    end
+    return j
 end
 
 @inline function _cell_index_and_ambiguous(pi::PLEncodingMapBoxes, x)
@@ -722,7 +725,7 @@ end
 function locate_many!(
     dest::AbstractVector{<:Integer},
     pi::PLEncodingMapBoxes{N,MY,MZ},
-    X::AbstractMatrix{<:AbstractFloat};
+    X::AbstractMatrix{<:Real};
     mode::Symbol = :fast,
     threaded::Bool = false,
 ) where {N,MY,MZ}
@@ -752,19 +755,6 @@ function locate_many!(
         dest[j] = ambiguous ? get(pi.sig_to_region, _sigkey(pi, view(X, :, j)), 0) : pi.cell_to_region[lin]
     end
     return dest
-end
-
-function locate_many!(
-    dest::AbstractVector{<:Integer},
-    pi::PLEncodingMapBoxes{N,MY,MZ},
-    X::AbstractMatrix{<:Real};
-    kwargs...,
-) where {N,MY,MZ}
-    Xf = Matrix{Float64}(undef, size(X, 1), size(X, 2))
-    @inbounds for j in axes(X, 2), i in axes(X, 1)
-        Xf[i, j] = float(X[i, j])
-    end
-    return locate_many!(dest, pi, Xf; kwargs...)
 end
 
 # ------------------------- Region geometry / sizes ----------------------------
@@ -1117,34 +1107,26 @@ end
 @inline function _cell_rep_axis(s::Vector{Float64}, cj::Int)::Float64
     isempty(s) && return 0.0
     if cj == 0
-        return s[1] - 1.0
+        x = s[1] - 1.0
+        return x < s[1] ? x : prevfloat(s[1])
     elseif cj == length(s)
-        return s[end] + 1.0
+        x = s[end] + 1.0
+        return x > s[end] ? x : nextfloat(s[end])
     else
-        return (s[cj] + s[cj + 1]) / 2.0
+        a, b = s[cj], s[cj + 1]
+        x = (a + b) / 2.0
+        isfinite(x) || (x = a / 2.0 + b / 2.0)
+        a < x < b && return x
+        neighbor = nextfloat(a)
+        # Adjacent floating-point splits have no Float64 interior witness.
+        # Stored representatives are approximate; classification uses signatures.
+        return neighbor < b ? neighbor : x
     end
 end
 
-# Representative point for a cell (for signature evaluation).
-# `idx0` is 0-based cell indices: each idx0[j] in 0:length(coords[j]).
+# Stored Float64 sample of a cell; idx0 contains zero-based slab indices.
 function _cell_rep_axis(coords::NTuple{N,Vector{Float64}}, idx0::NTuple{N,Int}) where {N}
-    x = Vector{Float64}(undef, N)
-    @inbounds for j in 1:N
-        s = coords[j]
-        if isempty(s)
-            x[j] = 0.0
-        else
-            cj = idx0[j]
-            if cj == 0
-                x[j] = s[1] - 1.0
-            elseif cj == length(s)
-                x[j] = s[end] + 1.0
-            else
-                x[j] = (s[cj] + s[cj + 1]) / 2.0
-            end
-        end
-    end
-    return x
+    return [_cell_rep_axis(coords[j], idx0[j]) for j in 1:N]
 end
 
 # Collect all region-cells (axis-aligned boxes) inside a given finite `box`.
@@ -2143,19 +2125,17 @@ function _images_on_P(P::AbstractPoset,
 end
 
 # Enforce the monomial condition on Phi for the pushed-forward generators.
-function _monomialize_phi(Phi_in::AbstractMatrix{QQ}, Uhat, Dhat)
+function _monomialize_phi(Phi_in::AbstractMatrix, Uhat, Dhat, field)
     r = length(Dhat)
     m = length(Uhat)
     size(Phi_in, 1) == r || error("Phi has wrong number of rows")
     size(Phi_in, 2) == m || error("Phi has wrong number of columns")
 
-    Phi = Matrix{QQ}(Phi_in)
-    @inbounds for j in 1:r
-        for i in 1:m
-            if !FiniteFringe.intersects(Uhat[i], Dhat[j])
-                Phi[j, i] = zero(QQ)
-            end
-        end
+    K = coeff_type(field)
+    Phi = Matrix{K}(undef, r, m)
+    @inbounds for j in 1:r, i in 1:m
+        Phi[j, i] = FiniteFringe.intersects(Uhat[i], Dhat[j]) ?
+                    coerce(field, Phi_in[j, i]) : zero(K)
     end
     return Phi
 end
@@ -2168,7 +2148,7 @@ Encode a box-generated fringe module on `R^n` into a finite poset model.
 Inputs
 - `Ups::Vector{BoxUpset}`: birth upsets (axis-aligned lower-orthants).
 - `Downs::Vector{BoxDownset}`: death downsets (axis-aligned upper-orthants).
-- `Phi::AbstractMatrix{QQ}`: an `r x m` matrix (where `m=length(Ups)`, `r=length(Downs)`).
+- `Phi::AbstractMatrix`: an `r x m` matrix (where `m=length(Ups)`, `r=length(Downs)`).
 - `opts::EncodingOptions`: required.
   - `opts.backend` must be `:auto` or `:pl_backend` (synonyms `:plbackend`, `:boxes` are accepted).
   - `opts.max_regions` caps the number of grid cells in the axis grid (default: 200_000).
@@ -2176,16 +2156,20 @@ Inputs
 
 Returns
 - `P`: the finite encoding poset
-- `H`: a `FiniteFringe.FringeModule{QQ}` on `P`
+- `H`: a `FiniteFringe.FringeModule` over `opts.field` on `P`
 - `pi`: a `PLEncodingMapBoxes` classifier map
 
 `opts.field` selects the output coefficient field. `poset_kind` defaults to
 `opts.poset_kind`; an explicit keyword overrides it. A non-`nothing`
 `opts.strict_eps` is rejected because this backend uses closed boxes.
+A coordinate shared by a birth and death threshold on the same axis is rejected:
+its lower-dimensional boundary classes need the general polyhedral encoder.
+Use the high-level `encode` workflow with `backend=:auto` or `:pl` for those
+inputs; `:auto` preserves them by selecting `:pl`.
 """
 function encode_fringe_boxes(Ups::Vector{BoxUpset},
                              Downs::Vector{BoxDownset},
-                             Phi_in::AbstractMatrix{QQ},
+                             Phi_in::AbstractMatrix,
                              opts::EncodingOptions=EncodingOptions();
                              poset_kind::Symbol = opts.poset_kind)
     if opts.backend != :auto && opts.backend != :pl_backend &&
@@ -2212,11 +2196,16 @@ function encode_fringe_boxes(Ups::Vector{BoxUpset},
 
     cell_shape = _cell_shape(coords)
     cell_strides = _cell_strides(cell_shape)
-    n_cells = prod(cell_shape)
-
+    n_cells = 1
+    for width in cell_shape
+        n_cells <= div(max_regions, width) || error("Too many grid cells (>$max_regions); increase opts.max_regions or reduce splits")
+        n_cells *= width
+    end
     n_cells <= max_regions || error("Too many grid cells (>$max_regions); increase opts.max_regions or reduce splits")
 
     coord_flags = _coord_flags(coords, Ups, Downs)
+    any(flags -> any(==(0x03), flags), coord_flags) &&
+        throw(ArgumentError("encode_fringe_boxes cannot represent shared birth/death boundaries. Use the encode workflow with backend=:auto or :pl to preserve lower-dimensional classes."))
     axis_is_uniform, axis_step, axis_min = _axis_meta(coords)
 
     # Deduplicate cells by packed (y,z) signature.
@@ -2372,9 +2361,8 @@ function encode_fringe_boxes(Ups::Vector{BoxUpset},
         error("encode_fringe_boxes: poset_kind must be :signature or :dense")
     end
     Uhat, Dhat = _images_on_P(P, sig_y, sig_z)
-    Phi = _monomialize_phi(Phi_in, Uhat, Dhat)
-    H = FiniteFringe.FringeModule{QQ}(P, Uhat, Dhat, Phi; field=QQField())
-    H = opts.field == QQField() ? H : FiniteFringe.change_field(H, opts.field)
+    Phi = _monomialize_phi(Phi_in, Uhat, Dhat, opts.field)
+    H = FiniteFringe.FringeModule{coeff_type(opts.field)}(P, Uhat, Dhat, Phi; field=opts.field)
 
     pi = PLEncodingMapBoxes{n,MY,MZ}(n,
                                   coords,
@@ -2406,7 +2394,7 @@ end
 # Convenience overload: accept Phi as a length (r*m) vector.
 function encode_fringe_boxes(Ups::Vector{BoxUpset},
                              Downs::Vector{BoxDownset},
-                             Phi_vec::AbstractVector{QQ},
+                             Phi_vec::AbstractVector,
                              opts::EncodingOptions=EncodingOptions();
                              poset_kind::Symbol = opts.poset_kind)
     m = length(Ups)

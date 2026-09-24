@@ -19,6 +19,32 @@ EC.dimension(::DummyEncodingMap) = 1
 EC.axes_from_encoding(pi::DummyEncodingMap) = (collect(1:pi.n),)
 EC.representatives(pi::DummyEncodingMap) = [(i,) for i in 1:pi.n]
 
+@testset "A79 postcomposition preserves exact PL witnesses" begin
+    # The middle cell (1, 1 + delta] contains no Float64 point. Its rational
+    # witness must survive even though the first cell has a Float64 witness.
+    delta = big(1) // big(2)^54
+    downs = [PLP.PLDownset(PLP.poly_union(PLP.make_hpoly(reshape(QQ[1], 1, 1), QQ[b])))
+             for b in (QQ(1), QQ(1) + delta)]
+    P, _, ambient = PLP.encode_from_PL_fringe(PLP.PLUpset[], downs,
+        zeros(QQ, 2, 0), OPT.EncodingOptions(backend=:pl, field=CM.QQField()))
+    original = EC.representatives(ambient)
+    @test length(original) == 3
+    @test first(original)[1] isa Float64
+    @test any(point -> point[1] isa QQ, original)
+    @test [EC.locate(ambient, point; mode=:verified) for point in original] == collect(1:3)
+
+    identity_map = EN.EncodingMap(P, P, collect(1:FF.nvertices(P)))
+    composed = EN.PostcomposedEncodingMap(ambient, identity_map)
+    retained = EC.representatives(composed)
+    @test retained == original
+    @test typeof.(retained) == typeof.(original)
+    @test EC.representatives(composed) === retained
+    for mode in (:fast, :verified), (label, point) in enumerate(retained)
+        @test EC.locate(composed, point; mode=mode) == label
+        @test EC.locate(composed, collect(point); mode=mode) == label
+    end
+end
+
 with_fields(FIELDS_FULL) do field
 K = CM.coeff_type(field)
 @inline c(x) = CM.coerce(field, x)

@@ -338,8 +338,10 @@ Options controlling finite encodings.
 
 - `backend` chooses the encoding engine (`:auto` is the canonical user default),
 - `max_regions` caps region explosion in region-based encoders,
-- `strict_eps` controls strict inequalities in the polyhedral backend;
-  integer and box encoders reject a non-`nothing` value,
+- `strict_eps=nothing` uses exact rational strict-feasibility checks in the
+  polyhedral backend. A positive explicit margin selects approximate feasibility
+  and can omit narrow cells; it does not move point-membership boundaries.
+  Integer and box encoders reject a non-`nothing` value,
 - `poset_kind` chooses whether the output poset stays structured or is
   materialized densely,
 - `field` chooses the coefficient field for fringe/module outputs. Explicit

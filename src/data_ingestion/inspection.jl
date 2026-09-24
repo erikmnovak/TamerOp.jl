@@ -1,5 +1,8 @@
 # Passive inspection of lazy ingestion storage. Never populates caches.
 
+_result_payload_poset(M::_LazyEncodedModule) = M.lazy.P
+_result_payload_poset(L::LazyModuleCochainComplex) = L.P
+
 _module_materialized(M::_LazyEncodedModule) = M.cached_module !== nothing
 _complex_materialized(L::LazyModuleCochainComplex) =
     all(!isnothing, L.terms) && all(!isnothing, L.diffs)

@@ -63,12 +63,18 @@ The [Installed package workflow](../.github/workflows/Installation.yml)
 separately installs the published commit with
 `Pkg.add(url=..., rev=...)`, outside the checkout, and checks core computation
 and actual CairoMakie figure exports on its configured platforms. Its report
-records the installed tree and dependency environment. This covers a different
-path from running tests in a developer checkout.
+records the pinned Git tree, installed source and dependency environment. The
+harness compares every installed file's raw bytes, path and symlink kind with
+an inventory from that commit, and checks again after computation and export.
+On POSIX systems it also checks executable bits; Windows filesystem permissions
+do not represent those Git modes. The recorded `filesystem_tree` is diagnostic
+and can therefore differ on Windows even when the source verification passes.
+This covers a different path from running tests in a developer checkout.
 
-To reproduce that check from this repository, run the following in a terminal.
-Replace `COMMIT` and `TREE` with the full 40-character identifiers above, and
-`OUTPUT` with a new absolute directory for this run's evidence:
+To reproduce that check, use a checkout of the same candidate with Git available
+in your terminal's `PATH`. Replace `COMMIT` and `TREE` with the full 40-character
+identifiers above, and `OUTPUT` with a new absolute directory for this run's
+evidence:
 
 ```sh
 julia --startup-file=no test/installation/run.jl --repo=https://github.com/erikmnovak/TamerOp.jl.git --rev=COMMIT --tree=TREE --output=OUTPUT
@@ -85,9 +91,11 @@ with the release evidence. These checks need no local examples or audit files.
 The repository owner needs to complete account settings which are not supplied
 by committing files:
 
-- Enable the [Registrator GitHub App](https://github.com/apps/juliateam-registrator/installations/new)
-  for `erikmnovak/TamerOp.jl`. Without installation, a registration comment does
-  not activate the service. The commenter must be a repository collaborator.
+- Confirm that the [Registrator GitHub App](https://github.com/apps/juliateam-registrator/installations/new)
+  is enabled for `erikmnovak/TamerOp.jl`. Enabling the app does not request
+  registration; that is the separate step below, after validation. Without app
+  installation, a registration comment does not activate the service. The
+  commenter must be a repository collaborator.
   See [Registrator's setup](https://github.com/JuliaRegistries/Registrator.jl#via-the-github-app).
 - Enable Actions and check that the repository's default workflow permissions
   allow TagBot to create releases. The maintained

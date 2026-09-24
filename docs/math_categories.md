@@ -36,6 +36,46 @@ interpretation. Completeness alone is insufficient for arbitrary upset and
 downset indicators. The native finite-module constructor builds the principal
 indicator resolutions required for its advertised interpretation.
 
+## Geometric encoding and boundary classes
+
+The default `backend=:auto` preserves closed boundary classes when selecting an
+encoder. The fast axis-aligned `:pl_backend` stores full-dimensional grid cells;
+it currently cannot represent an additional signature supported only on a shared
+birth/death threshold. For example, the presentation with one birth at `0`, one
+death at `0`, and coefficient `1` is a nonzero point module. Such inputs use the
+general `:pl` encoder automatically, including intersections of boundary faces
+in higher dimensions. Explicit `:pl_backend` requests and direct
+`PLBackend.encode_fringe_boxes` calls reject shared thresholds with an error.
+
+The general `:pl` encoder tests strict feasibility over rational coordinates by
+default, without a fixed numerical margin. A common slack variable, bounded
+between zero and one, certifies every strict inequality simultaneously. This
+preserves arbitrarily narrow rational strata, including sloped cells and
+boundary-only modules. Floating-point inputs retain their represented binary value during exact
+membership tests; decimal-looking values are not silently snapped to simple
+rationals. Witnesses remain rational when conversion to `Float64` would move
+them outside their cell. An explicitly positive `strict_eps` opts
+into a fixed feasibility margin and can omit narrower strata.
+
+Unions of closed monotone polyhedra are refined by their constituent facet
+signatures. Each resulting cell is convex; original generator membership is
+retained as the signature prefix. This prevents disconnected or nonconvex
+pieces with the same original signature from being silently discarded. Input
+pieces must have nonpositive normals for upsets and nonnegative normals for
+downsets. Strict input generator pieces are currently rejected. Region budgets
+are enforced with an error, without returning a partial encoding.
+
+Conversion of rational polyhedral generators to the fast box backend also
+requires closed principal orthants whose endpoints are exactly representable
+as `Float64`. General unions, strict faces, missing axis bounds, and endpoints
+that would be rounded remain on `:pl`. This geometry choice does not change the
+coefficient field requested in `EncodingOptions(field=...)`, and all supported
+routes retain the supplied coefficient matrix. The selected backend remains
+visible as `encoding_result.backend`. `provenance(encoding_result).approximation`
+records the feasibility method (`:exact_rational`, `:fixed_margin`, or
+`:not_applicable`), requested `strict_eps`, and effective margin; the default
+exact method has no margin. The stored options retain the original request.
+
 ## Resolution independence and encoding independence
 
 Projective/injective resolution independence is a theorem **inside one abelian

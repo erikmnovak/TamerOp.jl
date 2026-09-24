@@ -107,6 +107,27 @@ import ..EncodingCore
 
 # ----------------------------- Data structures -------------------------------
 
+struct _EncodingFiberPlan
+    ptr::Vector{Int}
+    data::Vector{Int}
+end
+
+struct _EncodingLabelCache{QPoset<:AbstractPoset,PPoset<:AbstractPoset}
+    image_upsets::IdDict{FiniteFringe.Upset{QPoset},FiniteFringe.Upset{PPoset}}
+    image_downsets::IdDict{FiniteFringe.Downset{QPoset},FiniteFringe.Downset{PPoset}}
+    preimage_upsets::IdDict{FiniteFringe.Upset{PPoset},FiniteFringe.Upset{QPoset}}
+    preimage_downsets::IdDict{FiniteFringe.Downset{PPoset},FiniteFringe.Downset{QPoset}}
+end
+
+@inline function _EncodingLabelCache(::Type{QPoset}, ::Type{PPoset}) where {QPoset<:AbstractPoset,PPoset<:AbstractPoset}
+    return _EncodingLabelCache{QPoset,PPoset}(
+        IdDict{FiniteFringe.Upset{QPoset},FiniteFringe.Upset{PPoset}}(),
+        IdDict{FiniteFringe.Downset{QPoset},FiniteFringe.Downset{PPoset}}(),
+        IdDict{FiniteFringe.Upset{PPoset},FiniteFringe.Upset{QPoset}}(),
+        IdDict{FiniteFringe.Downset{PPoset},FiniteFringe.Downset{QPoset}}(),
+    )
+end
+
 """
     EncodingMap
     EncodingMap(Q, P, pi_of_q) -> EncodingMap
@@ -182,27 +203,6 @@ julia> TamerOp.Encoding.check_encoding_map(pi).valid
 true
 ```
 """
-struct _EncodingFiberPlan
-    ptr::Vector{Int}
-    data::Vector{Int}
-end
-
-struct _EncodingLabelCache{QPoset<:AbstractPoset,PPoset<:AbstractPoset}
-    image_upsets::IdDict{FiniteFringe.Upset{QPoset},FiniteFringe.Upset{PPoset}}
-    image_downsets::IdDict{FiniteFringe.Downset{QPoset},FiniteFringe.Downset{PPoset}}
-    preimage_upsets::IdDict{FiniteFringe.Upset{PPoset},FiniteFringe.Upset{QPoset}}
-    preimage_downsets::IdDict{FiniteFringe.Downset{PPoset},FiniteFringe.Downset{QPoset}}
-end
-
-@inline function _EncodingLabelCache(::Type{QPoset}, ::Type{PPoset}) where {QPoset<:AbstractPoset,PPoset<:AbstractPoset}
-    return _EncodingLabelCache{QPoset,PPoset}(
-        IdDict{FiniteFringe.Upset{QPoset},FiniteFringe.Upset{PPoset}}(),
-        IdDict{FiniteFringe.Downset{QPoset},FiniteFringe.Downset{PPoset}}(),
-        IdDict{FiniteFringe.Upset{PPoset},FiniteFringe.Upset{QPoset}}(),
-        IdDict{FiniteFringe.Downset{PPoset},FiniteFringe.Downset{QPoset}}(),
-    )
-end
-
 struct EncodingMap{QPoset<:AbstractPoset,PPoset<:AbstractPoset}
     Q::QPoset
     P::PPoset
@@ -281,7 +281,7 @@ end
     UptightEncoding
     UptightEncoding(pi, Y) -> UptightEncoding
 
-Finite encoding together with the constant-upset family used to build it.
+Uptight encoding: a finite encoding together with its defining constant-upset family.
 
 # Mathematical meaning
 
@@ -430,8 +430,11 @@ end
 @inline function _postcomposed_rep_type(pi0::EncodingCore.AbstractPLikeEncodingMap)
     reps0 = EncodingCore.representatives(pi0)
     isempty(reps0) && return Tuple{}
-    r1 = reps0[1]
-    return r1 isa Tuple ? typeof(r1) : typeof(Tuple(r1))
+    # A PL classifier can mix ordinary Float64 witnesses with exact rational
+    # witnesses for cells containing no Float64 point. The collection's element
+    # type preserves both; selecting the first witness's type can round later ones.
+    R = eltype(reps0)
+    return R <: Tuple ? R : Tuple
 end
 
 @inline function PostcomposedEncodingMap(pi0::EncodingCore.AbstractPLikeEncodingMap, pi::EncodingMap)
@@ -591,7 +594,7 @@ function check_encoding_map(pi::EncodingMap; throw::Bool=false)
               image_size=_encoding_image_size(pi),
               issues=issues)
     if throw && !report.valid
-        throw(ArgumentError("check_encoding_map: invalid finite encoding map: " * join(report.issues, "; ")))
+        Base.throw(ArgumentError("check_encoding_map: invalid finite encoding map: " * join(report.issues, "; ")))
     end
     return report
 end
@@ -668,7 +671,7 @@ function check_uptight_encoding(enc::UptightEncoding; throw::Bool=false)
               nconstant_upsets=length(Y),
               issues=issues)
     if throw && !report.valid
-        throw(ArgumentError("check_uptight_encoding: invalid uptight encoding: " * join(report.issues, "; ")))
+        Base.throw(ArgumentError("check_uptight_encoding: invalid uptight encoding: " * join(report.issues, "; ")))
     end
     return report
 end
@@ -713,7 +716,7 @@ function check_postcomposed_encoding(pi::PostcomposedEncodingMap; throw::Bool=fa
               representatives_cached=cached !== nothing,
               issues=issues)
     if throw && !report.valid
-        throw(ArgumentError("check_postcomposed_encoding: invalid postcomposed encoding: " * join(report.issues, "; ")))
+        Base.throw(ArgumentError("check_postcomposed_encoding: invalid postcomposed encoding: " * join(report.issues, "; ")))
     end
     return report
 end
@@ -1124,7 +1127,7 @@ Prop. 4.11 (used in the proof of Thm. 6.12): pull back a monomial matrix for a m
 by replacing row labels `D_hat_j` with `pi^{-1}(D_hat_j)` and column labels `U_hat_i` with `pi^{-1}(U_hat_i)`.
 The scalar matrix is unchanged.
 
-This acts on finite `FiniteFringe` upset/downset labels, not on generic
+This acts on finite-fringe upset/downset labels from `FiniteFringe`, not on generic
 `EncodingCore` compiled encodings. The returned object is a
 `FiniteFringe.FringeModule` on the source poset `Q`, with all upset/downset
 labels returned as closed finite-fringe objects. Label translations are cached
@@ -1167,7 +1170,7 @@ This sends each upset generator `U_i` of `H` to its image under `pi` and each
 downset generator `D_j` to its image under `pi`, while keeping the scalar matrix
 `phi` unchanged.
 
-This acts on finite `FiniteFringe` upset/downset labels, not on generic
+This acts on finite-fringe upset/downset labels from `FiniteFringe`, not on generic
 compiled ambient encodings. The returned object is a `FiniteFringe.FringeModule`
 on the target poset `P`; image labels are returned as closed finite-fringe
 upsets/downsets and are cached by identity through the finite encoding's

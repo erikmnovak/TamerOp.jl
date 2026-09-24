@@ -796,7 +796,7 @@ function check_region_geometry(pi; box=nothing, throw::Bool=false)
         issues = issues,
     )
     if throw && !valid
-        throw(ArgumentError("check_region_geometry: backend $(_region_backend_type(pi)) does not expose any supported region-geometry query. " *
+        Base.throw(ArgumentError("check_region_geometry: backend $(_region_backend_type(pi)) does not expose any supported region-geometry query. " *
             (isempty(issues) ? "" : join(issues, " "))))
     end
     return report
@@ -930,7 +930,7 @@ function check_region_query(pi, r::Integer; box=nothing, query::Symbol=:summary,
         issues = issues,
     )
     if throw && !report.valid
-        throw(ArgumentError("check_region_query: " * join(issues, " ")))
+        Base.throw(ArgumentError("check_region_query: " * join(issues, " ")))
     end
     return report
 end

@@ -3,6 +3,66 @@ using Random
 using JSON3
 import Base.Threads
 
+@testset "A79 rank invariant dictionary key contract" begin
+    P = chain_poset(2)
+    M = MD.PModule{QQ}(P, [1, 1],
+        Dict{Tuple{Int,Int},Matrix{QQ}}((1, 2) => ones(QQ, 1, 1));
+        field=CM.QQField())
+    result = TamerOp.rank_invariant(M)
+    reference = Dict(result)
+    @test reference[(1, 2)] == 1
+    for key in ((1, 2), (Int32(1), Int32(2)), (big(1), big(2)), (1.0, 2.0))
+        @test haskey(result, key) == haskey(reference, key)
+        @test result[key] == reference[key]
+        @test get(result, key, :missing) == get(reference, key, :missing)
+    end
+    for key in ((2, 1), (Int32(2), Int32(1)), :absent, "absent", (1,))
+        @test !haskey(result, key)
+        @test get(result, key, :missing) === :missing
+        @test_throws KeyError result[key]
+    end
+end
+
+@testset "A79 packed barcode grid indexing" begin
+    B = IC.PackedFloatBarcode
+    flat = [B([IC.EndpointPair(Float64(i), Float64(i + 1))], [1]) for i in 1:4]
+    grid = IC.PackedBarcodeGrid{B}(copy(flat), 2, 2)
+    expected = reshape(copy(flat), 2, 2)
+    @test size(grid) == size(expected)
+    @test axes(grid) == axes(expected)
+    @test collect(grid) == expected
+    for index in CartesianIndices(expected)
+        @test grid[index] === expected[index]
+    end
+    replacement = B([IC.EndpointPair(8.0, 9.0)], [2])
+    @test setindex!(grid, replacement, 1, 2) === grid
+    expected[1, 2] = replacement
+    @test collect(grid) == expected
+    for (i, j) in ((3, 1), (0, 2), (-1, 2), (1, 3), (1, 0), (3, 0))
+        before = copy(grid.flat)
+        @test_throws BoundsError grid[i, j]
+        @test_throws BoundsError setindex!(grid, replacement, i, j)
+        @test grid.flat == before
+    end
+    @test_throws BoundsError grid[CartesianIndex(3, 1)]
+    @test_throws BoundsError grid[0]
+    @test_throws BoundsError grid[5]
+    for dimensions in ((0, 0), (0, 2), (2, 0))
+        empty_grid = IC.PackedBarcodeGrid{B}(B[], dimensions...)
+        @test size(empty_grid) == dimensions
+        @test isempty(empty_grid)
+        @test_throws BoundsError empty_grid[1, 1]
+        @test_throws BoundsError setindex!(empty_grid, replacement, 1, 1)
+    end
+    for dimensions in ((-1, -4), (-1, 0), (0, -1))
+        @test_throws ArgumentError IC.PackedBarcodeGrid{B}(B[], dimensions...)
+        @test_throws ArgumentError IC.PackedBarcodeGrid{B}(undef, dimensions...)
+    end
+    @test_throws DimensionMismatch IC.PackedBarcodeGrid{B}(copy(flat), 1, 3)
+    @test_throws OverflowError IC.PackedBarcodeGrid{B}(B[], typemax(Int), 2)
+    @test_throws OverflowError IC.PackedBarcodeGrid{B}(undef, typemax(Int), 2)
+end
+
 @testset "A12 rank and signed-measure passive inspection" begin
     # Region-index functions use the four grid regions, without asking for
     # representative points (compiled wrappers leave those unpopulated).
@@ -307,16 +367,18 @@ end
     Md2 = IR.pmodule_from_fringe(Hd2)
     @test_throws ErrorException Inv.rank_map(Md2, 2, 3)
 
-    if Threads.nthreads() > 1
-        MD._clear_cover_cache!(P)
-        rinv_serial = TO.rank_invariant(M23; threads = false)
-        rinv_thread = TO.rank_invariant(M23; threads = true)
-        @test rinv_thread == rinv_serial
+    # Thread selection belongs to InvariantOptions. Exercise this public
+    # contract even on a single-threaded Julia process.
+    MD._clear_cover_cache!(P)
+    serial_opts = TO.InvariantOptions(threads=false)
+    thread_opts = TO.InvariantOptions(threads=true)
+    rinv_serial = TO.rank_invariant(M23; opts=serial_opts)
+    rinv_thread = TO.rank_invariant(M23; opts=thread_opts)
+    @test rinv_thread == rinv_serial == rinv
 
-        rinv_all_serial = TO.rank_invariant(M23; store_zeros = true, threads = false)
-        rinv_all_thread = TO.rank_invariant(M23; store_zeros = true, threads = true)
-        @test rinv_all_thread == rinv_all_serial
-    end
+    rinv_all_serial = TO.rank_invariant(M23; store_zeros=true, opts=serial_opts)
+    rinv_all_thread = TO.rank_invariant(M23; store_zeros=true, opts=thread_opts)
+    @test rinv_all_thread == rinv_all_serial == rinv_all
     
 end
 
@@ -1884,10 +1946,26 @@ end
     dims = map(length, axes)
     n_pairs = prod(div(d * (d + 1), 2) for d in dims)
 
-    c_bulk = Ref(0)
-    r_idx_count_bulk(pI, qI) = (c_bulk[] += 1; r_idx(pI, qI))
-    _ = SM.rectangle_signed_barcode(r_idx_count_bulk, axes; method=:bulk)
-    @test c_bulk[] == n_pairs
+    # Bulk callbacks may run concurrently. Count each pair atomically so
+    # missing and duplicated evaluations cannot cancel in a total-only check.
+    c_bulk = Threads.Atomic{Int}(0)
+    visits_bulk = [Threads.Atomic{Int}(0) for p1 in 1:dims[1], p2 in 1:dims[2],
+                   q1 in 1:dims[1], q2 in 1:dims[2]]
+    function r_idx_count_bulk(pI, qI)
+        Threads.atomic_add!(c_bulk, 1)
+        Threads.atomic_add!(visits_bulk[pI..., qI...], 1)
+        return r_idx(pI, qI)
+    end
+    for use_threads in (false, true)
+        c_bulk[] = 0
+        foreach(v -> (v[] = 0), visits_bulk)
+        counted = SM.rectangle_signed_barcode(r_idx_count_bulk, axes;
+            method=:bulk, threads=use_threads)
+        @test c_bulk[] == n_pairs
+        @test all(visits_bulk[I][] == Int(I[1] <= I[3] && I[2] <= I[4])
+                  for I in CartesianIndices(visits_bulk))
+        @test sb_to_dict(counted) == sb_to_dict(sb_true)
+    end
 
     # Auto should use the bulk path when the grid is moderate and not highly skewed.
     axes_auto = (collect(0:3), collect(0:3))
@@ -1907,12 +1985,26 @@ end
     @test Dict(zip(sb_auto.rects, sb_auto.weights)) ==
           Dict(zip(sb_auto_bulk.rects, sb_auto_bulk.weights))
 
-    c_auto = Ref(0)
-    r_idx_count_auto(pI, qI) = (c_auto[] += 1; r_idx_auto(pI, qI))
+    c_auto = Threads.Atomic{Int}(0)
     dims_auto = map(length, axes_auto)
+    visits_auto = [Threads.Atomic{Int}(0) for p1 in 1:dims_auto[1], p2 in 1:dims_auto[2],
+                   q1 in 1:dims_auto[1], q2 in 1:dims_auto[2]]
+    function r_idx_count_auto(pI, qI)
+        Threads.atomic_add!(c_auto, 1)
+        Threads.atomic_add!(visits_auto[pI..., qI...], 1)
+        return r_idx_auto(pI, qI)
+    end
     n_pairs_auto = prod(div(d * (d + 1), 2) for d in dims_auto)
-    _ = SM.rectangle_signed_barcode(r_idx_count_auto, axes_auto; method=:auto)
-    @test c_auto[] == n_pairs_auto
+    for use_threads in (false, true)
+        c_auto[] = 0
+        foreach(v -> (v[] = 0), visits_auto)
+        counted = SM.rectangle_signed_barcode(r_idx_count_auto, axes_auto;
+            method=:auto, threads=use_threads)
+        @test c_auto[] == n_pairs_auto
+        @test all(visits_auto[I][] == Int(I[1] <= I[3] && I[2] <= I[4])
+                  for I in CartesianIndices(visits_auto))
+        @test sb_to_dict(counted) == sb_to_dict(sb_true_auto)
+    end
     @test SM._choose_rectangle_signed_barcode_method(:auto, map(collect, axes_auto);
                                                      max_span=nothing,
                                                      bulk_max_elems=10_000) == :bulk

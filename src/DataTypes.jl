@@ -108,7 +108,10 @@ end
 Base.IndexStyle(::Type{<:PolylineRowsView}) = IndexLinear()
 Base.size(v::PolylineRowsView) = (max(0, v.hi - v.lo + 1),)
 Base.axes(v::PolylineRowsView) = (Base.OneTo(max(0, v.hi - v.lo + 1)),)
-@inline Base.getindex(v::PolylineRowsView, i::Int) = @view v.mat[v.lo + i - 1, :]
+@inline function Base.getindex(v::PolylineRowsView, i::Int)
+    @boundscheck checkbounds(v, i)
+    return @view v.mat[v.lo + i - 1, :]
+end
 @inline function Base.iterate(v::PolylineRowsView, state::Int=1)
     state > max(0, v.hi - v.lo + 1) && return nothing
     return (@view(v.mat[v.lo + state - 1, :]), state + 1)

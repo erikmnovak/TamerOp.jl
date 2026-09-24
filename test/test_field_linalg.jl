@@ -3,6 +3,176 @@ using LinearAlgebra
 using SparseArrays
 using TOML
 
+# External real-number libraries commonly specialize mixed Integer equality.
+# A finite-field Number must remain disjoint from those ordered scalar methods.
+struct A79ExternalRealKey <: Real
+    value::Int
+end
+Base.isequal(x::A79ExternalRealKey, y::Integer) = isequal(x.value, y)
+Base.isequal(x::Integer, y::A79ExternalRealKey) = isequal(x, y.value)
+Base.hash(x::A79ExternalRealKey, seed::UInt) = hash(x.value, seed)
+
+@testset "A79 prime-field keys respect coefficient domains" begin
+    for p in (2, 3, 5), value in (0, 1, p - 1)
+        F = CM.Fp(p)
+        K = CM.coeff_type(F)
+        @test K <: Number
+        @test !(K <: Real)
+        @test !(K <: Integer)
+        x, equivalent = K(value), K(value + p)
+        @test K(x) === x
+        @test convert(K, x) === x
+        @test x == value + p
+        @test value + p == x
+        @test x + p == x
+        @test isequal(x, equivalent)
+        for seed in (UInt(0), UInt(17))
+            @test hash(x, seed) == hash(equivalent, seed)
+        end
+        typed = Dict{K,Symbol}(x => :first)
+        typed[equivalent] = :same_residue
+        @test length(typed) == 1
+        @test typed[CM.coerce(F, value + p)] == :same_residue
+        @test !haskey(typed, value)
+        @test_throws TypeError setindex!(typed, :ordinary, value)
+        typed_set = Set{K}((x, equivalent))
+        @test length(typed_set) == 1
+        @test equivalent in typed_set
+        @test !(value in typed_set)
+        @test_throws TypeError push!(typed_set, value)
+        ordinary = (value, value + p, big(value), big(value + p), Int128(value),
+                    UInt(value), Float64(value), Float32(value), BigFloat(value),
+                    value // 1, big(value) // big(1), complex(value, 0),
+                    complex(Float64(value), 0.0), TamerOp.ExactReals.AlgebraicReal(value), A79ExternalRealKey(value), true, false, 0.0, -0.0, NaN, Inf)
+        for other in ordinary
+            @test !isequal(x, other)
+            @test !isequal(other, x)
+            for keys in ((x, other), (other, x))
+                dictionary = Dict{Any,Symbol}()
+                for key in keys
+                    dictionary[key] = key isa CM.FpElem ? :field : :ordinary
+                end
+                @test length(dictionary) == 2
+                @test dictionary[x] == :field
+                @test dictionary[other] == :ordinary
+                @test dictionary[CM.coerce(F, value + p)] == :field
+                @test length(Set{Any}(keys)) == 2
+            end
+            @test !haskey(Dict{Any,Symbol}(x => :field), other)
+            @test !haskey(Dict{Any,Symbol}(other => :ordinary), x)
+        end
+        for q in (2, 3, 5)
+            q == p && continue
+            other = CM.coeff_type(CM.Fp(q))(value)
+            @test !isequal(x, other)
+            @test !isequal(other, x)
+            for keys in ((x, other), (other, x))
+                dictionary = Dict{Any,Int}(keys[1] => 1, keys[2] => 2)
+                @test length(dictionary) == 2
+                @test dictionary[keys[1]] == 1
+                @test dictionary[keys[2]] == 2
+                @test length(Set{Any}(keys)) == 2
+            end
+        end
+    end
+    ambiguities = Test.detect_ambiguities(CM.CoeffFields, TamerOp.ExactReals, Base; recursive=false)
+    @test isempty(filter(pair -> any(method -> method.name === :isequal, pair), ambiguities))
+end
+
+@testset "A79 finite-field Number matrix interoperability" begin
+    for p in (2, 3, 5)
+        field = CM.Fp(p)
+        K = CM.coeff_type(field)
+        A = K[1 1; 1 0]
+        B = K[1 0; 1 1]
+        expected = K[2 1; 1 0]
+        @test A * B == expected
+        @test sparse(A) * B == expected
+        @test sparse(A) * sparse(B) == sparse(expected)
+        @test adjoint(A) == transpose(A)
+        @test dot(A[:, 1], B[:, 1]) == K(2)
+        @test sum(A) == K(3)
+        @test isfinite(K(1))
+        @test CM.coerce(CM.QQField(), K(p - 1)) == (p - 1) // big(1)
+        @test CM.coerce(CM.RealField(Float64), K(p - 1)) == Float64(p - 1)
+        @test CM.coerce(CM.RealField(BigFloat), K(p - 1)) == BigFloat(p - 1)
+        P = chain_poset(2)
+        H = FF.one_by_one_fringe(P, FF.principal_upset(P, 1),
+            FF.principal_downset(P, 2), K(p - 1); field=field)
+        mktempdir() do directory
+            path = joinpath(directory, "finite_field.json")
+            SER.save_encoding_json(path, H)
+            restored = SER.load_encoding_json(path; output=:fringe)
+            @test restored.field == field
+            @test FF.fringe_coefficients(restored) == reshape(K[p - 1], 1, 1)
+            @test FF.fiber_dimension(restored, 1) == 1
+            @test FF.fiber_dimension(restored, 2) == 1
+        end
+    end
+end
+
+@testset "A79 real-field key identity follows tolerance values" begin
+    for T in (Float64, BigFloat)
+        make_field(rtol, atol) = CM.RealField(T; rtol=T(rtol), atol=T(atol))
+        equal_pairs = (
+            (make_field(0.1, 0.01), make_field(0.1, 0.01)),
+            (make_field(0.0, -0.0), make_field(-0.0, 0.0)),
+            (make_field(NaN, 0.0), make_field(NaN, -0.0)),
+        )
+        for (a, b) in equal_pairs
+            @test isequal(a, a)
+            @test isequal(a, b)
+            @test isequal(b, a)
+            if !isnan(a.rtol)
+                @test a == b
+            end
+            for seed in (UInt(0), UInt(17))
+                @test hash(a, seed) == hash(b, seed)
+            end
+            @test CM._field_cache_key(a) == CM._field_cache_key(b)
+            for (first, second) in ((a, b), (b, a))
+                dictionary = Dict{Any,Symbol}(first => :first)
+                @test dictionary[second] == :first
+                dictionary[second] = :replacement
+                @test length(dictionary) == 1
+                @test dictionary[first] == :replacement
+                @test length(Set{Any}((first, second))) == 1
+            end
+        end
+        a = make_field(0.1, 0.01)
+        for b in (make_field(0.2, 0.01), make_field(0.1, 0.02))
+            @test a != b
+            @test !isequal(a, b)
+            @test !isequal(b, a)
+            @test length(Set{Any}((a, b))) == 2
+        end
+    end
+    a = CM.RealField(Float64; rtol=0.0, atol=0.0)
+    b = CM.RealField(BigFloat; rtol=BigFloat(0), atol=BigFloat(0))
+    @test a != b
+    @test !isequal(a, b)
+    @test !isequal(b, a)
+    @test length(Set{Any}((a, b))) == 2
+end
+
+@testset "A79 backend matrices check public indexing" begin
+    matrix = CM.BackendMatrix([11 13; 12 14])
+    @test matrix[2, 1] == 12
+    @test matrix[3] == 13
+    @test setindex!(matrix, 23, 1, 2) === matrix
+    @test matrix[1, 2] == 23
+    for (i, j) in ((3, 1), (0, 2), (-1, 2), (1, 3), (1, 0))
+        before = copy(matrix.data)
+        @test_throws BoundsError matrix[i, j]
+        @test_throws BoundsError setindex!(matrix, 99, i, j)
+        @test matrix.data == before
+    end
+    @test_throws BoundsError matrix[CartesianIndex(3, 1)]
+    empty_matrix = CM.BackendMatrix(zeros(Int, 0, 2))
+    @test_throws BoundsError empty_matrix[1, 1]
+    @test_throws BoundsError setindex!(empty_matrix, 99, 1, 1)
+end
+
 @testset "A15 read-only linalg initialization and explicit profiles" begin
     FL = TamerOp.FieldLinAlg
     previous = FL._current_linalg_thresholds()

@@ -991,7 +991,10 @@ Base.IndexStyle(::Type{_InjectiveGeneratorVertexView}) = IndexLinear()
 Base.size(view::_InjectiveGeneratorVertexView) = (view.multiplicity,)
 Base.length(view::_InjectiveGeneratorVertexView) = view.multiplicity
 Base.eltype(::Type{_InjectiveGeneratorVertexView}) = Tuple{Int,Int}
-@inline Base.getindex(view::_InjectiveGeneratorVertexView, i::Int) = (view.socle_vertex, i)
+@inline function Base.getindex(view::_InjectiveGeneratorVertexView, i::Int)
+    @boundscheck checkbounds(view, i)
+    return (view.socle_vertex, i)
+end
 @inline function Base.iterate(view::_InjectiveGeneratorVertexView, state::Int=1)
     state > view.multiplicity && return nothing
     return ((view.socle_vertex, state), state + 1)

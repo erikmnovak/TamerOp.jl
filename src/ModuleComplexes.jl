@@ -52,7 +52,7 @@ using ..Modules: PModule, PMorphism, id_morphism,
 import ..IndicatorResolutions
 import ..AbelianCategories
 import ..ChainComplexes
-import ..Results: provenance
+import ..Results: provenance, _result_payload_poset, _provenance_field
 using ..AbelianCategories: kernel_with_inclusion, image_with_inclusion, _cokernel_module
 
 
@@ -655,6 +655,8 @@ function ModuleCochainComplex(
 end
 
 poset(C::ModuleCochainComplex) = C.terms[1].Q
+_result_payload_poset(C::ModuleCochainComplex) = isempty(C.terms) ? nothing : first(C.terms).Q
+_provenance_field(C::ModuleCochainComplex) = isempty(C.terms) ? nothing : first(C.terms).field
 
 """
     change_field(C::ModuleCochainComplex, field)

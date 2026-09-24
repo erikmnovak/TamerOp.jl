@@ -2,7 +2,6 @@ using Test
 using LinearAlgebra
 using SparseArrays
 
-const FL = TamerOp.FieldLinAlg
 
 # Included from test/runtests.jl; uses shared aliases (TO, FF, IR, ...).
 #

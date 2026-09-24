@@ -4,7 +4,6 @@ using Random
 using JSON3
 
 const IR = TamerOp.IndicatorResolutions
-const DI = TamerOp.DataIngestion
 const IC = TamerOp.InvariantCore
 const DFI = TamerOp.DataFileIO
 const SER = TamerOp.Serialization
@@ -14,8 +13,34 @@ const PLB = TamerOp.PLBackend
 const MC = TamerOp.ModuleComplexes
 const MD = TamerOp.Modules
 const Inv = TamerOp.Invariants
-const FL = TamerOp.FieldLinAlg
 const AC = TamerOp.AbelianCategories
+
+@testset "A79 public polyline views respect their own bounds" begin
+    expected = Vector{Vector{Float64}}[
+        [[0.0, 0.0], [0.25, 0.0]],
+        Vector{Float64}[],
+        [[0.75, 1.0], [1.0, 1.0]],
+    ]
+    graph = TamerOp.EmbeddedPlanarGraph2D([0.0 0.0; 1.0 1.0],
+        [(1, 2), (1, 2), (1, 2)]; polylines=expected)
+    lines = graph.polylines
+    @test length(lines) == length(expected)
+    @test_throws BoundsError lines[0]
+    @test_throws BoundsError lines[length(lines) + 1]
+    for (line, points) in zip(lines, expected)
+        @test length(line) == length(points)
+        @test collect(line) == points
+        @test all(point -> point isa eltype(line), line)
+        for i in eachindex(points)
+            @test line[i] == points[i]
+        end
+        # Invalid local indices must not reveal rows from neighboring lines,
+        # even when the translated row exists in the shared backing matrix.
+        for i in (-1, 0, length(line) + 1)
+            @test_throws BoundsError line[i]
+        end
+    end
+end
 
 if !isdefined(@__MODULE__, :TestTriGradeFiltration)
 struct TestTriGradeFiltration{P<:NamedTuple} <: DI.AbstractFiltration
@@ -888,6 +913,14 @@ end
         @test_throws ArgumentError DFI.check_table_columns(g_path; kind=:graph, format=:tsv,
                                                            opts=TamerOp.DataFileOptions(; header=true, u_col=:src, v_col=:dst),
                                                            throw=true)
+
+        # A serialized dataset is not a delimited table. Both validator modes
+        # must explain the format mismatch, rather than attempting to call Bool.
+        col_format_bad = DFI.check_table_columns(json_path; kind=:point_cloud)
+        @test !DFI.ok(col_format_bad)
+        @test occursin("not a delimited table format", only(DFI.issues(col_format_bad)))
+        @test_throws r"not a delimited table format" DFI.check_table_columns(json_path;
+            kind=:point_cloud, throw=true)
 
         dist_bad = DFI.check_table_columns(nonsquare_path; kind=:distance_matrix, format=:csv)
         @test !dist_bad.ok
@@ -6993,6 +7026,10 @@ end
             @test !DI.describe(obj).materialized
             @test DI.describe(obj).module_dims === nothing
         end
+        @test RES.check_encoding_result(enc).valid
+        @test RES.check_encoding_result(enc; throw=true).valid
+        bad_base = RES.EncodingResult(chain_poset(1), lazy, enc.pi)
+        @test !RES.check_encoding_result(bad_base).valid
         @test occursin("not computed", sprint(show, MIME"text/plain"(), enc))
         @test !RES.result_summary(enc).materialized
         @test RES.encoding_poset(enc) === enc.P
@@ -7048,6 +7085,13 @@ end
         complex = DI.encode(graded, spec; field=field, stage=:encoded_complex)
         L = RES.encoding_complex(complex)
         before_complex = cache_state(L)
+        @test RES.check_encoded_complex_result(complex).valid
+        @test RES.check_encoded_complex_result(complex; throw=true).valid
+        bad_complex = RES.EncodedComplexResult(chain_poset(1), L, complex.pi; field=field)
+        @test !RES.check_encoded_complex_result(bad_complex).valid
+        other_field = field isa CM.QQField ? CM.F3() : CM.QQField()
+        bad_field = RES.EncodedComplexResult(complex.P, L, complex.pi; field=other_field)
+        @test !RES.check_encoded_complex_result(bad_field).valid
         @test !RES.result_summary(complex).materialized
         @test DI.describe(L).cell_counts == (3,3,1)
         @test DI.describe(L).degree_range == -2:0

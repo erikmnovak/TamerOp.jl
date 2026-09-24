@@ -43,6 +43,11 @@ const PackedFloatBarcode = PackedBarcode{Float64}
 @inline _empty_packed_index_barcode() = PackedIndexBarcode(EndpointPair{Int}[], Int[])
 @inline _empty_packed_float_barcode() = PackedFloatBarcode(EndpointPair{Float64}[], Int[])
 
+@inline function _packed_grid_length(nd::Int, no::Int)
+    nd >= 0 && no >= 0 || throw(ArgumentError("PackedBarcodeGrid: dimensions must be nonnegative"))
+    return Base.checked_mul(nd, no)
+end
+
 """
     PackedBarcodeGrid{B<:PackedBarcode}
 
@@ -57,22 +62,26 @@ struct PackedBarcodeGrid{B<:PackedBarcode} <: AbstractMatrix{B}
     nd::Int
     no::Int
     function PackedBarcodeGrid{B}(flat::Vector{B}, nd::Int, no::Int) where {B<:PackedBarcode}
-        length(flat) == nd * no || error("PackedBarcodeGrid: flat length mismatch")
+        length(flat) == _packed_grid_length(nd, no) || throw(DimensionMismatch("PackedBarcodeGrid: flat length mismatch"))
         return new{B}(flat, nd, no)
     end
 end
 
 @inline PackedBarcodeGrid{B}(::UndefInitializer, nd::Int, no::Int) where {B<:PackedBarcode} =
-    PackedBarcodeGrid{B}(Vector{B}(undef, nd * no), nd, no)
+    PackedBarcodeGrid{B}(Vector{B}(undef, _packed_grid_length(nd, no)), nd, no)
 
 @inline Base.size(g::PackedBarcodeGrid) = (g.nd, g.no)
 @inline Base.length(g::PackedBarcodeGrid) = length(g.flat)
 @inline Base.axes(g::PackedBarcodeGrid) = (Base.OneTo(g.nd), Base.OneTo(g.no))
 @inline Base.IndexStyle(::Type{<:PackedBarcodeGrid}) = IndexLinear()
-@inline Base.getindex(g::PackedBarcodeGrid{B}, i::Int, j::Int) where {B<:PackedBarcode} = g.flat[(j - 1) * g.nd + i]
+@inline function Base.getindex(g::PackedBarcodeGrid{B}, i::Int, j::Int) where {B<:PackedBarcode}
+    @boundscheck checkbounds(g, i, j)
+    @inbounds return g.flat[(j - 1) * g.nd + i]
+end
 @inline Base.getindex(g::PackedBarcodeGrid{B}, k::Int) where {B<:PackedBarcode} = g.flat[k]
 @inline function Base.setindex!(g::PackedBarcodeGrid{B}, v::B, i::Int, j::Int) where {B<:PackedBarcode}
-    g.flat[(j - 1) * g.nd + i] = v
+    @boundscheck checkbounds(g, i, j)
+    @inbounds g.flat[(j - 1) * g.nd + i] = v
     return g
 end
 @inline function Base.setindex!(g::PackedBarcodeGrid{B}, v::B, k::Int) where {B<:PackedBarcode}

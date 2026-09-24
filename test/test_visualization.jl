@@ -120,7 +120,7 @@ end
 @testset "A79 rank heatmap coordinates and missing cells" begin
     VIZ = TamerOp.Visualization
     P = chain_poset(3)
-    # k² --diag(1,0)--> k² --[0 1]--> k has two rank-one cover maps
+    # k^2 --diag(1,0)--> k^2 --[0 1]--> k has two rank-one cover maps
     # but zero composite. Rows are source a; columns are target b.
     expected = [2.0 1.0 0.0; NaN 2.0 1.0; NaN NaN 1.0]
     rank_spec = nothing

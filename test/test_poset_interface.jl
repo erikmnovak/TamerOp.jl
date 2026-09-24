@@ -23,6 +23,18 @@ end
 EC.locate(::A12DeferredMetadataMap, x::AbstractVector{<:Real}) =
     x[1] < 0 ? 0 : (x[1] < 1 ? 1 : 2)
 
+struct A79BrokenBaseEncoding <: EC.AbstractPLikeEncodingMap end
+EC.dimension(::A79BrokenBaseEncoding) = 1
+EC.encoding_poset(::A79BrokenBaseEncoding) = throw(ArgumentError("broken classifier target"))
+
+# A scalar order interface is sufficient; result validation must not require a dense matrix.
+struct A79ScalarOrderPoset <: FF.AbstractPoset
+    n::Int
+end
+FF.nvertices(P::A79ScalarOrderPoset) = P.n
+FF.leq(::A79ScalarOrderPoset, i::Int, j::Int) = i <= j
+FF.leq_matrix(::A79ScalarOrderPoset) = error("dense order materialization is unsupported")
+
 with_fields(FIELDS_FULL) do field
 K = CM.coeff_type(field)
 @inline c(x) = CM.coerce(field, x)
@@ -96,12 +108,12 @@ end
     coords = (collect(1:2), collect(1:2))
     P = FF.GridPoset(coords)
     s = [1.0, 3.0, 2.0, 4.0]
-    t = TO.Invariants._monotone_upper_closure(P, s)
+    t = TO.Fibered2D._monotone_upper_closure(P, s)
     @test t == [1.0, 3.0, 2.0, 4.0]
 
     # Non-monotone input should be corrected to the minimal isotone majorant.
     s2 = [1.0, 0.0, 2.0, 3.0]
-    t2 = TO.Invariants._monotone_upper_closure(P, s2)
+    t2 = TO.Fibered2D._monotone_upper_closure(P, s2)
     @test t2 == [1.0, 1.0, 2.0, 3.0]
 end
 
@@ -541,6 +553,23 @@ end
     @test !bad_report.valid
     @test occursin("source poset", join(bad_report.issues, "; "))
     @test_throws ArgumentError EN.check_uptight_encoding(bad_enc; throw=true)
+    @test EN.check_uptight_encoding(enc; throw=true).valid
+
+    # Each invalid-report surface must raise its documented ArgumentError,
+    # including the two validators whose `throw` keyword shares the same name.
+    for labels in ([1], [1, 3])
+        bad_pi = EN.EncodingMap(Q, P, [1, 2])
+        # Simulate edited mutable storage after the constructor's own checks.
+        empty!(bad_pi.pi_of_q)
+        append!(bad_pi.pi_of_q, labels)
+        @test !EN.check_encoding_map(bad_pi).valid
+        @test_throws ArgumentError EN.check_encoding_map(bad_pi; throw=true)
+        bad_post = EN.PostcomposedEncodingMap(pi0, bad_pi)
+        @test !EN.check_postcomposed_encoding(bad_post).valid
+        @test_throws ArgumentError EN.check_postcomposed_encoding(bad_post; throw=true)
+    end
+    @test EN.check_encoding_map(pi; throw=true).valid
+    @test EN.check_postcomposed_encoding(post; throw=true).valid
 end
 
 @testset "Option structs are concretely typed" begin
@@ -757,7 +786,7 @@ end
 @testset "Results UX surface" begin
     P = chain_poset(2)
     edge_maps = Dict((1, 2) => sparse([1], [1], [c(1)], 1, 1))
-    M = MD.PModule(P, [1, 1], edge_maps)
+    M = MD.PModule(P, [1, 1], edge_maps; field=field)
     pi = EC.GridEncodingMap(P, ([0.0, 1.0],))
 
     enc = RES.EncodingResult(P, M, pi; backend=:test)
@@ -842,6 +871,38 @@ end
     @test !RES.check_encoded_complex_result(bad_enc_complex).valid
     @test_throws ArgumentError RES.check_encoded_complex_result(bad_enc_complex; throw=true)
 
+    # The wrapper, module, and classifier must identify the same labelled poset.
+    Q = chain_poset(3)
+    unrelated_order = FF.FinitePoset(BitMatrix(Matrix{Bool}(I, 2, 2)); check=true)
+    for wrong in (Q, unrelated_order)
+        @test !RES.check_encoding_result(RES.EncodingResult(wrong, M, pi)).valid
+        @test !RES.check_encoded_complex_result(RES.EncodedComplexResult(wrong, C, pi; field=field)).valid
+        @test !RES.check_cohomology_dims_result(RES.CohomologyDimsResult(wrong, zeros(Int, FF.nvertices(wrong)), pi; field=field)).valid
+    end
+    @test RES.check_encoding_result(RES.EncodingResult(chain_poset(2), M, pi)).valid
+    @test RES.check_encoding_result(RES.EncodingResult(A79ScalarOrderPoset(2), M, pi)).valid
+    @test RES.check_encoding_result(RES.EncodingResult(P, M, nothing)).valid
+    @test RES.check_cohomology_dims_result(RES.CohomologyDimsResult(P, [1, 0], nothing; field=field)).valid
+    @test RES.check_encoded_complex_result(RES.EncodedComplexResult(P, C, nothing; field=field)).valid
+    mismatched_classifier = EC.compile_encoding(Q, pi)
+    @test !RES.check_encoding_result(RES.EncodingResult(P, M, mismatched_classifier)).valid
+    for dims in ([-1, 0], [1], [0.5, 1.0], reshape([1, 0], 1, 2), nothing)
+        malformed = RES.CohomologyDimsResult(P, dims, pi; field=field)
+        @test !RES.check_cohomology_dims_result(malformed).valid
+        @test_throws ArgumentError RES.check_cohomology_dims_result(malformed; throw=true)
+    end
+    other_field = field isa CM.QQField ? CM.F3() : CM.QQField()
+    bad_field = RES.EncodedComplexResult(P, C, pi; field=other_field)
+    @test !RES.check_encoded_complex_result(bad_field).valid
+    @test_throws ArgumentError RES.check_encoded_complex_result(bad_field; throw=true)
+    for classifier in (:unsupported, EC.compile_encoding(P, :unsupported), A79BrokenBaseEncoding())
+        invalid_map = RES.EncodingResult(P, M, classifier)
+        report = RES.check_encoding_result(invalid_map)
+        @test !report.valid
+        @test any(occursin("encoding map", issue) for issue in report.issues)
+        @test_throws ArgumentError RES.check_encoding_result(invalid_map; throw=true)
+    end
+
     bad_inv = RES.InvariantResult(:bad_source, nothing, nothing)
     @test !RES.check_invariant_result(bad_inv).valid
     @test_throws ArgumentError RES.check_invariant_result(bad_inv; throw=true)
@@ -853,6 +914,48 @@ end
     @test occursin("display-oriented", lowercase(string(@doc RES.result_validation_summary)))
     @test occursin("owner-local summary alias", lowercase(string(@doc RES.result_summary)))
     @test occursin("result_summary", string(@doc RES.ResolutionResult))
+end
+
+@testset "A79 custom invariant failures preserve the original exception" begin
+    P = chain_poset(2)
+    M = MD.PModule(P, [1, 1], Dict((1, 2) => ones(K, 1, 1)); field=field)
+    pi = EC.GridEncodingMap(P, ([0.0, 1.0],))
+    dims_result = RES.CohomologyDimsResult(P, [1, 1], pi; field=field)
+    module_result = RES.EncodingResult(P, M, pi)
+    C = TO.ModuleCochainComplex([M], MD.PMorphism{K}[]; tmin=0, check=true)
+    complex_result = RES.EncodedComplexResult(P, C, pi; field=field)
+    positional_only(x) = x
+    failure = Ref{Any}(nothing)
+    calls = Ref(0)
+    broken(data, classifier; opts=nothing) = begin
+        calls[] += 1
+        opts === nothing && return 42
+        try
+            positional_only(1; unsupported=true)
+        catch err
+            failure[] = err
+            rethrow()
+        end
+    end
+    for result in (dims_result, module_result, complex_result)
+        calls[] = 0
+        caught = try
+            TamerOp.invariant(result; which=broken, cache=nothing)
+            nothing
+        catch err
+            err
+        end
+        @test caught isa MethodError
+        @test caught === failure[]
+        @test calls[] == 1
+    end
+    # Missing outer signatures still fall through to the supported form.
+    simple(dims::AbstractVector) = sum(dims)
+    @test TamerOp.invariant_value(TamerOp.invariant(dims_result; which=simple)) == 2
+    with_keywords(dims::AbstractVector; scale=1) = scale * sum(dims)
+    @test TamerOp.invariant_value(TamerOp.invariant(dims_result; which=with_keywords, scale=3)) == 6
+    with_options(dims::AbstractVector, classifier; opts) = sum(dims)
+    @test TamerOp.invariant_value(TamerOp.invariant(dims_result; which=with_options)) == 2
 end
 
 @testset "Workflow UX surface" begin
@@ -874,8 +977,8 @@ end
 
     enc_syn_direct = TO.encode(FF.birth_upsets(box_syn),
                                FF.death_downsets(box_syn),
-                               FZ.coefficient_matrix(box_syn);
-                               field=field,
+                               FZ.coefficient_matrix(box_syn),
+                               OPT.EncodingOptions(field=field);
                                cache=sc)
     @test FF.nvertices(TO.encoding_poset(enc_syn)) == FF.nvertices(TO.encoding_poset(enc_syn_direct))
 
@@ -1104,41 +1207,41 @@ end
     @test_throws ErrorException TamerOp.matching_distance_exact_2d(encP, encQ; opts=opts_exact, cache=sc)
     @test_throws ErrorException TamerOp.matching_distance_exact_2d(enc, enc; cache=sc)
 
-    workflow_doc = string(@doc TO.Workflow)
-    encode_doc = string(@doc TO.encode)
-    coarsen_doc = string(@doc TO.coarsen)
+    workflow_doc = string(@doc TamerOp.Workflow)
+    encode_doc = string(@doc TamerOp.Workflow.encode)
+    coarsen_doc = string(@doc TamerOp.Workflow.coarsen)
     commonref_doc = string(@doc TamerOp.common_refinement)
     restriction_doc = string(@doc TamerOp.restriction)
     pushleft_doc = string(@doc TamerOp.pushforward_left)
     pushright_doc = string(@doc TamerOp.pushforward_right)
     dpushleft_doc = string(@doc TamerOp.derived_pushforward_left)
     dpushright_doc = string(@doc TamerOp.derived_pushforward_right)
-    resolve_doc = string(@doc TO.resolve)
+    resolve_doc = string(@doc TamerOp.Workflow.resolve)
     betti_doc = string(@doc TamerOp.betti_table)
     bass_doc = string(@doc TamerOp.bass_table)
-    invariant_doc = string(@doc TO.invariant)
-    homdim_doc = string(@doc TO.hom_dimension)
-    hom_doc = string(@doc TO.hom)
-    ext_doc = string(@doc TO.ext)
-    tor_doc = string(@doc TO.tor)
-    rhom_doc = string(@doc TO.rhom)
-    hyperext_doc = string(@doc TO.hyperext)
-    hypertor_doc = string(@doc TO.hypertor)
-    extalg_doc = string(@doc TO.ext_algebra)
-    invariants_doc = string(@doc TO.invariants)
-    rankinv_doc = string(@doc TO.rank_invariant)
-    hilbert_doc = string(@doc TO.restricted_hilbert)
+    invariant_doc = string(@doc TamerOp.Workflow.invariant)
+    homdim_doc = string(@doc TamerOp.Workflow.hom_dimension)
+    hom_doc = string(@doc TamerOp.Workflow.hom)
+    ext_doc = string(@doc TamerOp.Workflow.ext)
+    tor_doc = string(@doc TamerOp.Workflow.tor)
+    rhom_doc = string(@doc TamerOp.Workflow.rhom)
+    hyperext_doc = string(@doc TamerOp.Workflow.hyperext)
+    hypertor_doc = string(@doc TamerOp.Workflow.hypertor)
+    extalg_doc = string(@doc TamerOp.Workflow.ext_algebra)
+    invariants_doc = string(@doc TamerOp.Workflow.invariants)
+    rankinv_doc = string(@doc TamerOp.Workflow.rank_invariant)
+    hilbert_doc = string(@doc TamerOp.Workflow.restricted_hilbert)
     pointsigned_doc = string(@doc TamerOp.point_signed_measure)
-    euler_doc = string(@doc TO.euler_surface)
+    euler_doc = string(@doc TamerOp.Workflow.euler_surface)
     eulersigned_doc = string(@doc TamerOp.euler_signed_measure)
     rectbarcode_doc = string(@doc TamerOp.rectangle_signed_barcode)
     rectimage_doc = string(@doc TamerOp.rectangle_signed_barcode_image)
-    slicebar_doc = string(@doc TO.slice_barcode)
-    slice_doc = string(@doc TO.slice_barcodes)
+    slicebar_doc = string(@doc TamerOp.Workflow.slice_barcode)
+    slice_doc = string(@doc TamerOp.Workflow.slice_barcodes)
     exact2d_doc = string(@doc TamerOp.matching_distance_exact_2d)
-    landscape_doc = string(@doc TO.mp_landscape)
-    mppdec_doc = string(@doc TO.mpp_decomposition)
-    mppimg_doc = string(@doc TO.mpp_image)
+    landscape_doc = string(@doc TamerOp.Workflow.mp_landscape)
+    mppdec_doc = string(@doc TamerOp.Workflow.mpp_decomposition)
+    mppimg_doc = string(@doc TamerOp.Workflow.mpp_image)
     translation_result_doc = string(@doc TamerOp.ModuleTranslationResult)
 
     @test occursin("Workflow output policy", workflow_doc)
@@ -1229,7 +1332,7 @@ end
 end
 
 @testset "Cache payload maps use typed wrappers" begin
-    @test fieldtype(CM.EncodingCache, :posets) == Dict{Tuple{Tuple,Tuple{Vararg{Int}}},CM.PosetCachePayload}
+    @test fieldtype(CM.EncodingCache, :posets) == Dict{Tuple{Tuple,Tuple{Vararg{Int}},Symbol},CM.PosetCachePayload}
     @test fieldtype(CM.EncodingCache, :cubical) == Dict{Tuple{Vararg{Int}},CM.CubicalCachePayload}
     @test fieldtype(CM.EncodingCache, :geometry) == Dict{Tuple,CM.GeometryCachePayload}
     @test fieldtype(CM.ModuleCache, :payload) == Dict{Symbol,CM.ModulePayload}
@@ -1348,6 +1451,235 @@ end
 end
 
 end # with_fields
+
+# Keep the independent encoding oracles in bounded compiler units.
+with_fields(FIELDS_FULL) do field
+    K = CM.coeff_type(field)
+    @inline c(x) = CM.coerce(field, x)
+    @testset "A79 PL coefficient fields and backend maps" begin
+    WF = TamerOp.Workflow
+    births = [0, 1]
+    deaths = [2, 3]
+    Ups = [PLB.BoxUpset([x]) for x in births]
+    Downs = [PLB.BoxDownset([x]) for x in deaths]
+    PUps = [PLP.PLUpset(PLP.poly_union(PLP.make_hpoly(reshape(QQ[-1], 1, 1), QQ[-x]))) for x in births]
+    PDowns = [PLP.PLDownset(PLP.poly_union(PLP.make_hpoly(reshape(QQ[1], 1, 1), QQ[x]))) for x in deaths]
+    points = [-1, 0, 1, 2, 3, 4]
+
+    # Independent rank formula for matrices with at most two rows and columns.
+    # For x <= y, the structure-map rank is rank(Phi[deaths >= y, births <= x]).
+    function small_rank(A)
+        isempty(A) && return 0
+        all(iszero, A) && return 0
+        min(size(A)...) == 1 && return 1
+        return iszero(A[1, 1] * A[2, 2] - A[1, 2] * A[2, 1]) ? 1 : 2
+    end
+    for (case, raw) in enumerate(([1 1; 1 -2], [1 0; 0 2], zeros(Int, 2, 2)))
+        Phi = K[c(x) for x in raw]
+        # The first determinant is -3, so its overlap rank drops only in F3.
+        center_rank = case == 1 ? (field == CM.F3() ? 1 : 2) :
+                      case == 2 ? (field == CM.F2() ? 1 : 2) : 0
+        @test small_rank(Phi) == center_rank
+        F = PLP.PLFringe(PUps, PDowns, raw)
+        B = SD.SyntheticBoxFringe(field, Ups, Downs, Phi)
+        for backend in (:pl_backend, :pl)
+            options = OPT.EncodingOptions(backend=backend, field=field)
+            encodings = (TamerOp.encode(Ups, Downs, Phi, options),
+                         TamerOp.encode(Ups, Downs, vec(Phi), options),
+                         TamerOp.encode(B, options),
+                         TamerOp.encode(F, options))
+            for enc in encodings
+                M = RES.encoding_module(enc)
+                pi = RES.encoding_map(enc)
+                @test M.field == field
+                @test eltype(FF.fringe_coefficients(enc.H)) == K
+                @test FF.fringe_coefficients(enc.H) == Phi
+                labels = [EC.locate(pi, [x]) for x in points]
+                @test all(>(0), labels)
+                for (i, x) in enumerate(points), (j, y) in enumerate(points)
+                    x <= y || continue
+                    rows = findall(d -> y <= d, deaths)
+                    columns = findall(b -> b <= x, births)
+                    expected = small_rank(Phi[rows, columns])
+                    actual = MD.map_leq(M, labels[i], labels[j])
+                    actual_rank = field isa CM.RealField ? count(>(1e-10), svdvals(actual)) : small_rank(actual)
+                    @test actual_rank == expected
+                end
+                # Also check the actual maps compose, including intervals where
+                # a class dies between the two surviving generators.
+                for (i, j, k) in ((2, 3, 5), (2, 4, 6), (3, 4, 5))
+                    composite = MD.map_leq(M, labels[j], labels[k]) * MD.map_leq(M, labels[i], labels[j])
+                    direct = MD.map_leq(M, labels[i], labels[k])
+                    if field isa CM.RealField
+                        @test isapprox(composite, direct; atol=1e-12, rtol=1e-10)
+                    else
+                        @test composite == direct
+                    end
+                end
+            end
+        end
+    end
+
+
+    end
+end
+
+with_fields(FIELDS_FULL) do field
+    K = CM.coeff_type(field)
+    @inline c(x) = CM.coerce(field, x)
+    @testset "A79 PL closed boundary modules and maps" begin
+    WF = TamerOp.Workflow
+    # A closed point module lives entirely on shared birth/death boundaries.
+    # Both the direct box input and rational PL input must retain its fiber/maps.
+    for dimension in (1, 2)
+        point_U = [PLB.BoxUpset(zeros(dimension))]
+        point_D = [PLB.BoxDownset(zeros(dimension))]
+        point_PU = [PLP.PLUpset(PLP.poly_union(PLP.make_hpoly(-Matrix{QQ}(I, dimension, dimension), zeros(QQ, dimension))))]
+        point_PD = [PLP.PLDownset(PLP.poly_union(PLP.make_hpoly(Matrix{QQ}(I, dimension, dimension), zeros(QQ, dimension))))]
+        point_F = PLP.PLFringe(point_PU, point_PD, ones(Int, 1, 1))
+        @test !WF.supports_pl_backend(point_U, point_D)
+        @test WF.choose_pl_backend(point_F) == :pl
+        @test_throws ArgumentError PLB.encode_fringe_boxes(point_U, point_D, ones(K, 1, 1), OPT.EncodingOptions(field=field))
+        @test_throws ErrorException TamerOp.encode(point_U, point_D, ones(K, 1, 1), OPT.EncodingOptions(backend=:pl_backend, field=field))
+        for enc in (TamerOp.encode(point_U, point_D, ones(K, 1, 1), OPT.EncodingOptions(field=field)),
+                    TamerOp.encode(point_F, OPT.EncodingOptions(field=field)))
+            @test enc.backend == :pl
+            M = RES.encoding_module(enc)
+            pi = RES.encoding_map(enc)
+            labels = [EC.locate(pi, fill(x, dimension)) for x in (-1, 0, 1)]
+            @test all(>(0), labels)
+            @test M.dims[labels] == [0, 1, 0]
+            @test MD.map_leq(M, labels[2], labels[2]) == ones(K, 1, 1)
+            @test MD.map_leq(M, labels[1], labels[2]) == zeros(K, 1, 0)
+            @test MD.map_leq(M, labels[2], labels[3]) == zeros(K, 0, 1)
+            @test MD.map_leq(M, labels[2], labels[3]) * MD.map_leq(M, labels[1], labels[2]) ==
+                  MD.map_leq(M, labels[1], labels[3])
+        end
+    end
+    # A boundary segment must also retain a nonzero map along its face.
+    segment_U = [PLB.BoxUpset([0, 0])]
+    segment_D = [PLB.BoxDownset([0, 1])]
+    segment_PU = [PLP.PLUpset(PLP.poly_union(PLP.make_hpoly(-Matrix{QQ}(I, 2, 2), QQ[0, 0])))]
+    segment_PD = [PLP.PLDownset(PLP.poly_union(PLP.make_hpoly(Matrix{QQ}(I, 2, 2), QQ[0, 1])))]
+    segment_F = PLP.PLFringe(segment_PU, segment_PD, ones(Int, 1, 1))
+    @test !WF.supports_pl_backend(segment_U, segment_D)
+    for enc in (TamerOp.encode(segment_U, segment_D, ones(K, 1, 1), OPT.EncodingOptions(field=field)),
+                TamerOp.encode(segment_F, OPT.EncodingOptions(field=field)))
+        @test enc.backend == :pl
+        M = RES.encoding_module(enc)
+        pi = RES.encoding_map(enc)
+        labels = [EC.locate(pi, x) for x in ([-1, 0], [0, 0], [0, 1], [1, 1], [0, -1], [0, 2])]
+        @test all(>(0), labels)
+        @test M.dims[labels] == [0, 1, 1, 0, 0, 0]
+        @test MD.map_leq(M, labels[2], labels[3]) == ones(K, 1, 1)
+        @test MD.map_leq(M, labels[1], labels[2]) == zeros(K, 1, 0)
+        @test MD.map_leq(M, labels[3], labels[4]) == zeros(K, 0, 1)
+        @test MD.map_leq(M, labels[2], labels[3]) * MD.map_leq(M, labels[1], labels[2]) ==
+              MD.map_leq(M, labels[1], labels[3])
+    end
+
+    end
+end
+
+with_fields(FIELDS_FULL) do field
+    K = CM.coeff_type(field)
+    @inline c(x) = CM.coerce(field, x)
+    @testset "A79 PL exact narrow-gap modules and maps" begin
+    WF = TamerOp.Workflow
+    # Distinct point modules separated by a tiny exact gap must not disappear
+    # under a fixed feasibility margin. The map between the two fibers is zero.
+    delta = big(1) // big(2)^54
+    tiny_U = [PLB.BoxUpset([x]) for x in (0, delta)]
+    tiny_D = [PLB.BoxDownset([x]) for x in (0, delta)]
+    tiny_PU = [PLP.PLUpset(PLP.poly_union(PLP.make_hpoly(reshape(QQ[-2], 1, 1), QQ[-2x]))) for x in (0, delta)]
+    tiny_PD = [PLP.PLDownset(PLP.poly_union(PLP.make_hpoly(reshape(QQ[3], 1, 1), QQ[3x]))) for x in (0, delta)]
+    tiny_F = PLP.PLFringe(tiny_PU, tiny_PD, Matrix{Int}(I, 2, 2))
+    for backend in (:auto, :pl), enc in (
+        TamerOp.encode(tiny_U, tiny_D, Matrix{K}(I, 2, 2), OPT.EncodingOptions(backend=backend, field=field)),
+        TamerOp.encode(tiny_F, OPT.EncodingOptions(backend=backend, field=field)))
+        @test enc.backend == :pl
+        @test enc.opts.strict_eps === nothing
+        @test RES.provenance(enc).approximation.strict_eps === nothing
+        @test RES.provenance(enc).approximation.effective_strict_eps === nothing
+        @test RES.provenance(enc).approximation.feasibility == :exact_rational
+        M = RES.encoding_module(enc)
+        pi = RES.encoding_map(enc)
+        for mode in (:fast, :verified)
+            labels = [EC.locate(pi, [x]; mode=mode) for x in (-delta, 0, delta/2, delta, 2delta)]
+            @test all(>(0), labels)
+            @test M.dims[labels] == [0, 1, 0, 1, 0]
+            @test MD.map_leq(M, labels[2], labels[4]) == zeros(K, 1, 1)
+            @test MD.map_leq(M, labels[3], labels[4]) * MD.map_leq(M, labels[2], labels[3]) ==
+                  MD.map_leq(M, labels[2], labels[4])
+        end
+    end
+
+    end
+end
+
+with_fields(FIELDS_FULL) do field
+    K = CM.coeff_type(field)
+    @inline c(x) = CM.coerce(field, x)
+    @testset "A79 PL lossless backend conversion contracts" begin
+    WF = TamerOp.Workflow
+    births = [0, 1]
+    deaths = [2, 3]
+    Ups = [PLB.BoxUpset([x]) for x in births]
+    Downs = [PLB.BoxDownset([x]) for x in deaths]
+    PUps = [PLP.PLUpset(PLP.poly_union(PLP.make_hpoly(reshape(QQ[-1], 1, 1), QQ[-x]))) for x in births]
+    PDowns = [PLP.PLDownset(PLP.poly_union(PLP.make_hpoly(reshape(QQ[1], 1, 1), QQ[x]))) for x in deaths]
+    points = [-1, 0, 1, 2, 3, 4]
+
+    @test_throws ErrorException TamerOp.encode(Ups, Downs, ones(K, 1, 2), OPT.EncodingOptions(backend=:pl_backend, field=field))
+    @test_throws DimensionMismatch TamerOp.encode(Ups, Downs, ones(K, 1, 2), OPT.EncodingOptions(backend=:pl, field=field))
+    @test_throws DimensionMismatch WF._pl_generators_from_boxes([PLB.BoxUpset([0, 0])], Downs)
+
+    @test WF.supports_pl_backend([PLB.BoxUpset([0])], PLB.BoxDownset[];
+                                 opts=OPT.EncodingOptions(max_regions=2))
+    @test !WF.supports_pl_backend(Ups, Downs; opts=OPT.EncodingOptions(max_regions=4))
+    @test WF.supports_pl_backend(Ups, Downs; opts=OPT.EncodingOptions(max_regions=5))
+
+    # The fast box classifier may only replace exact PL geometry losslessly.
+    F = PLP.PLFringe(PUps, PDowns, [1 0; 0 1])
+    @test WF.choose_pl_backend(F) == :pl_backend
+    rounded = PLP.PLUpset(PLP.poly_union(PLP.make_hpoly(reshape(QQ[-1], 1, 1), QQ[-1//10])))
+    rounded_F = PLP.PLFringe([rounded], PDowns[1:1], ones(Int, 1, 1))
+    @test WF.choose_pl_backend(rounded_F) == :pl
+    @test_throws ArgumentError WF.boxes_from_pl_fringe(rounded_F)
+    union_U = PLP.PLUpset(PLP.PolyUnion(1, [only(PLP.polyhedra(PUps[1])), only(PLP.polyhedra(PUps[2]))]))
+    union_F = PLP.PLFringe([union_U], PDowns[1:1], ones(Int, 1, 1))
+    @test WF.choose_pl_backend(union_F) == :pl
+    @test_throws ArgumentError WF.boxes_from_pl_fringe(union_F)
+    hp = only(PLP.polyhedra(PUps[1]))
+    strict_hp = PLP.HPoly(hp.n, hp.A, hp.b, hp.poly, trues(length(hp.b)), hp.strict_eps)
+    strict_F = PLP.PLFringe([PLP.PLUpset(PLP.poly_union(strict_hp))], PDowns[1:1], ones(Int, 1, 1))
+    @test WF.choose_pl_backend(strict_F) == :pl
+    @test_throws ArgumentError WF.boxes_from_pl_fringe(strict_F)
+    sloped = PLP.PLUpset(PLP.poly_union(PLP.make_hpoly(reshape(QQ[-1, -1], 1, 2), QQ[0])))
+    sloped_F = PLP.PLFringe([sloped], PLP.PLDownset[], zeros(Int, 0, 1))
+    @test WF.choose_pl_backend(sloped_F) == :pl
+    @test_throws ArgumentError WF.boxes_from_pl_fringe(sloped_F)
+    partial = PLP.PLUpset(PLP.poly_union(PLP.make_hpoly(reshape(QQ[-1, 0], 1, 2), QQ[0])))
+    partial_F = PLP.PLFringe([partial], PLP.PLDownset[], zeros(Int, 0, 1))
+    @test WF.choose_pl_backend(partial_F) == :pl
+    @test_throws ArgumentError WF.boxes_from_pl_fringe(partial_F)
+
+    # Extract the strongest bound when rows are scaled, reordered or redundant.
+    scaled_U = PLP.PLUpset(PLP.poly_union(PLP.make_hpoly(QQ[0 -2; -3 0; -1 0], QQ[-4, -3, 0])))
+    scaled_D = PLP.PLDownset(PLP.poly_union(PLP.make_hpoly(QQ[0 4; 2 0; 0 1], QQ[20, 6, 7])))
+    scaled_F = PLP.PLFringe([scaled_U], [scaled_D], ones(Int, 1, 1))
+    scaled_boxes_U, scaled_boxes_D = WF.boxes_from_pl_fringe(scaled_F)
+    @test only(scaled_boxes_U).ell == [1.0, 2.0]
+    @test only(scaled_boxes_D).u == [3.0, 5.0]
+    @test WF.choose_pl_backend(scaled_F) == :pl_backend
+    float_U, float_D = WF._pl_generators_from_boxes([PLB.BoxUpset([0.1])], [PLB.BoxDownset([0.3])])
+    @test only(PLP.polyhedra(only(float_U))).b == [-QQ(0.1)]
+    @test only(PLP.polyhedra(only(float_D))).b == [QQ(0.3)]
+    point_hp = PLP.HPoly(0, zeros(QQ, 0, 0), QQ[], nothing, falses(0), QQ(0))
+    @test WF._box_orthant_bounds(point_hp, 0, true) == Float64[]
+    end
+end
+
 
 @testset "A64: exact algebraic coordinate arithmetic and ordering" begin
     AR = TamerOp.ExactReals.AlgebraicReal

@@ -41,6 +41,22 @@ requirements are in [the maintainer guide](docs/releasing.md).
 - Maintained package-mode tests and installed-package verification, release
   instructions, and [software citation metadata](CITATION.cff).
 
+### Correctness checks before registration
+
+- Iteration cardinality and checked indexing for finite upsets/downsets, packed
+  barcodes, backend matrices, polyline views and injective-generator views.
+- Field-aware dictionary and set keys. Finite-field scalars are `Number`s;
+  modular integer arithmetic remains available, while key identity retains the
+  characteristic. Coerce dictionary keys explicitly into the coefficient field.
+- Encoding/result validators check stored dimensions, coefficient fields and
+  base-poset agreement without forcing lazy computations. Exceptions raised
+  inside custom invariant callbacks retain their original meaning.
+- Polyhedral encodings retain coefficients, closed boundary classes and every
+  piece of a nonconvex support. General PL strict feasibility is rational by
+  default, with explicit fixed-margin approximation available as an option.
+- Installed-source verification compares authenticated Git file contents on
+  Linux, macOS and Windows; Windows filesystem modes are treated separately.
+
 ### Release scope
 
 Julia compatibility starts at 1.12. A completed test run certifies only its

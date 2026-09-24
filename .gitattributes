@@ -1,0 +1,4 @@
+# Keep installed Julia/source text byte-identical to Git on every platform.
+* text=auto eol=lf
+*.pdf binary
+*.bin binary

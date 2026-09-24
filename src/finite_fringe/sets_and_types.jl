@@ -40,7 +40,8 @@ in the ambient poset, then `q in U`.
 - Prefer `principal_upset`, `upset_closure`, or `upset_from_generators` over
   hand-building masks unless you already know the mask is closed.
 - Use `support(U)` and `contains(U, q)` in user code instead of reaching into
-  `U.mask` directly.
+  `U.mask` directly. `length(U)` counts contained vertices, and iteration yields
+  those vertex labels; use `nvertices(P)` for the ambient poset size.
 """
 struct Upset{P<:AbstractPoset}
     P::P
@@ -92,7 +93,8 @@ in the ambient poset, then `p in D`.
 - Prefer `principal_downset`, `downset_closure`, or `downset_from_generators`
   over hand-building masks unless you already know the mask is closed.
 - Use `support(D)` and `contains(D, q)` in user code instead of reaching into
-  `D.mask` directly.
+  `D.mask` directly. `length(D)` counts contained vertices, and iteration yields
+  those vertex labels; use `nvertices(P)` for the ambient poset size.
 """
 struct Downset{P<:AbstractPoset}
     P::P
@@ -307,8 +309,8 @@ const HOM_PAIR_CACHE_MAX_ENTRIES = Ref(8)
 end
 
 
-Base.length(U::Upset) = length(U.mask)
-Base.length(D::Downset) = length(D.mask)
+Base.length(U::Upset) = count(U.mask)
+Base.length(D::Downset) = count(D.mask)
 Base.eltype(::Type{<:Upset}) = Int
 Base.eltype(::Type{<:Downset}) = Int
 Base.IteratorSize(::Type{<:Upset}) = Base.HasLength()

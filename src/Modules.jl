@@ -12,6 +12,7 @@ import ..FiniteFringe: AbstractPoset, FinitePoset, cover_edges, leq, nvertices,
        _clear_cover_cache!, _pairkey, _chosen_predecessor, _chosen_predecessor_slow,
        _chain_parent_dense, _chain_parent_dict
 import ..FieldLinAlg
+import ..Results: _result_payload_poset
 import Base.Threads
 
 const MAP_LEQ_MEMO_MAX_PER_TASK = Ref(200_000)
@@ -501,6 +502,8 @@ struct PModule{K,F<:AbstractCoeffField,MatT<:AbstractMatrix{K},QT<:AbstractPoset
     identity_compose::_TaskLocalCache{Dict{Int, MatT}}
     map_last_pair::_TaskLocalCache{_MapLeqLastPairCache{MatT}}
 end
+
+_result_payload_poset(M::PModule) = M.Q
 
 # choose a storage matrix type from a user-provided mapping
 @inline _is_nemo_field(field::AbstractCoeffField) =

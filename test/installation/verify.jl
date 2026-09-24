@@ -6,6 +6,7 @@ config = TOML.parsefile(ARGS[1])
 phase = ARGS[2]
 phase in ("core", "plot") || error("Unknown verification phase: $phase")
 info = candidate_info(config)
+source_before = bytes2hex(Pkg.GitTools.tree_hash(info.source))
 inside(pwd(), config["checkout"]) && error("Verification must run outside the checkout")
 import TamerOp as OP
 
@@ -81,7 +82,8 @@ else
 end
 
 @testset "Installed package remains unchanged" begin
-    @test bytes2hex(Pkg.GitTools.tree_hash(info.source)) == config["tree"]
+    @test bytes2hex(Pkg.GitTools.tree_hash(info.source)) == source_before
+    @test verify_source(config, info.source) === nothing
 end
 report = environment_report(config, info)
 report["phase"] = phase

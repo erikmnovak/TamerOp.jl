@@ -1,5 +1,7 @@
 # Shared package-mode bootstrap for every maintained test entrypoint.
 using Test
+# Documentation lookup needs the REPL frontend in noninteractive owner processes.
+import REPL
 using Random
 using LinearAlgebra
 using SparseArrays
@@ -70,6 +72,7 @@ const TO = _TestSurface()
 # Convenient aliases used throughout the test suite.
 const DF  = TamerOp.DerivedFunctors
 const FF  = TamerOp.FiniteFringe
+const FL  = TamerOp.FieldLinAlg
 const EN  = TamerOp.Encoding
 const HE  = DF.HomExtEngine
 const MD  = TamerOp.Modules
@@ -82,6 +85,7 @@ const CC  = TamerOp.ChainComplexes
 const OP  = TamerOp.OrdinaryPersistence
 const OPT = TamerOp.Options
 const DT  = TamerOp.DataTypes
+const DI  = TamerOp.DataIngestion
 const EC  = TamerOp.EncodingCore
 const RES = TamerOp.Results
 const QQ  = TamerOp.CoreModules.QQ

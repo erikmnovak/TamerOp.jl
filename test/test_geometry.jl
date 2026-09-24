@@ -893,6 +893,7 @@ if field isa CM.QQField
     @test report_bad.kind == :region_geometry
     @test report_bad.valid == false
     @test !isempty(report_bad.issues)
+    @test_throws ArgumentError TO.RegionGeometry.check_region_geometry(unsupported; throw=true)
     txt_bad = sprint(show, MIME"text/plain"(), TO.RegionGeometry.region_geometry_validation_summary(report_bad))
     @test occursin("RegionGeometryValidationSummary", txt_bad)
     @test occursin("supported hooks", txt_bad)
@@ -925,6 +926,7 @@ if field isa CM.QQField
 
     report = TO.RegionGeometry.check_region_geometry(pi; box=box)
     @test report.valid
+    @test TO.RegionGeometry.check_region_geometry(pi; box=box, throw=true).valid
     @test report.hooks.weights
     @test report.hooks.bbox
     @test report.queries.region_volume
@@ -938,9 +940,13 @@ if field isa CM.QQField
 
     query_ok = TO.RegionGeometry.check_region_query(pi, rid; box=box, query=:region_bbox)
     @test query_ok.valid
+    @test TO.RegionGeometry.check_region_query(pi, rid; box=box, query=:region_bbox, throw=true).valid
     query_bad = TO.RegionGeometry.check_region_query(pi, 99; query=:region_bbox)
     @test !query_bad.valid
     @test !isempty(query_bad.issues)
+    @test_throws ArgumentError TO.RegionGeometry.check_region_query(pi, 99; query=:region_bbox, throw=true)
+    @test_throws ArgumentError TO.RegionGeometry.check_region_query(pi, rid;
+        box=([0.0, 0.0], [1.0, 1.0]), query=:region_bbox, throw=true)
 
     rg = TO.RegionGeometry.region_geometry_summary(pi, rid; box=box)
     @test rg isa TO.RegionGeometry.RegionGeometrySummary

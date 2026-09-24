@@ -165,10 +165,22 @@ julia --startup-file=no test/release_environment.jl /tmp/tamerop-release-env cor
 JULIA_NUM_THREADS=1 julia --startup-file=no --project=/tmp/tamerop-release-env test/release.jl --group=all --output=/tmp/tamerop-release-results
 ```
 
-Use a new environment with `extensions` instead of `core`, then add
-`--extensions=all --group=interfaces` to require all optional adapters. Existing
-package downloads can be reused; the resolved environment is always recorded.
-The [release guide](releasing.md) covers the distinct `Pkg.add` installation
-check, registration and tagging. The release suite does not need the ignored
-local tutorials or audit drivers; their absent tutorial checks remain explicit
-skips, while self-contained public mathematical checks still run.
+Use a new environment with `extensions` instead of `core`, then run both
+`--extensions=all --group=geometry` and `--extensions=all --group=interfaces`,
+with a separate new output directory for each. This reproduces the two optional
+integration jobs. Existing package downloads can be reused; the resolved
+environment is always recorded.
+
+The distinct [installed-package check](releasing.md#2-verify-before-registration)
+uses `Pkg.add` on the exact commit. It records `candidate_files.toml` from Git
+and verifies installed paths, raw file bytes and symlink kinds against that
+inventory before and after computation. POSIX executable bits are checked on
+POSIX systems; Windows retains those Git modes in the inventory without
+requiring its filesystem permissions to reproduce them. A mismatch produces
+`source_mismatch.toml`. The repository's `.gitattributes` keeps text line endings
+as LF across platforms, so byte comparisons do not hide newline changes.
+
+The [release guide](releasing.md) also covers registration and tagging. The
+release suite does not need the ignored local tutorials or audit drivers; their
+absent tutorial checks remain explicit skips, while self-contained public
+mathematical checks still run.

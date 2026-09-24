@@ -1334,7 +1334,7 @@ function check_table_columns(path::AbstractString;
     try
         kind == :auto && Base.throw(ArgumentError("check_table_columns: pass an explicit table kind."))
         fmt = _resolve_file_format(format, path, opts)
-        fmt in _TABLE_FORMATS || throw(ArgumentError("check_table_columns: format=$(fmt) is not a delimited table format."))
+        fmt in _TABLE_FORMATS || Base.throw(ArgumentError("check_table_columns: format=$(fmt) is not a delimited table format."))
         names, rows, _ = _parse_delimited_table(path, fmt, opts)
         info = _table_inspection(path, fmt, opts; sample_rows=0)
         cands = candidate_kinds(info)

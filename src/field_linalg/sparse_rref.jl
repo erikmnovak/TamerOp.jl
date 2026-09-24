@@ -2,12 +2,13 @@
 # field_linalg/sparse_rref.jl
 #
 # Scope:
-#   Shared sparse exact elimination primitives used by multiple FieldLinAlg
-#   engines and higher-level modules that rely on sparse row-space updates.
+#   Shared sparse elimination primitives used by multiple FieldLinAlg engines
+#   and higher-level modules that rely on sparse row-space updates.
 # Owns:
 #   - sparse row data structures,
 #   - REF/RREF streaming reducers,
 #   - low-level exact sparse row arithmetic primitives.
+#   - tolerance-aware ordered floating-point row reduction.
 # Does not own:
 #   - backend routing,
 #   - field-specific high-level solve/rank wrappers,
@@ -851,4 +852,78 @@ function _sparse_rows(A::SparseMatrixCSC{K,Int}) where {K}
         rows[i] = SparseRow{K}(rows_idx[i], rows_val[i])
     end
     return rows
+end
+
+# Ordered sparse floating-point RREF. Reuse sparse row arithmetic, but keep the
+# floating pivot policy separate from the exact streaming reducers above.
+function _rref_float_sparse(F::RealField, A; pivots::Bool=true)
+    T = coeff_type(F)
+    S = SparseMatrixCSC{T,Int}(sparse(A))
+    tol = _float_tol(F, S)
+    m, n = size(S)
+    rows = _sparse_rows(S)
+    pivs = Int[]
+    tmp_idx = Int[]
+    tmp_val = T[]
+    row = 1
+    for col in 1:n
+        row > m && break
+        pivrow = row
+        largest = abs(_row_coeff(rows[row], col))
+        for i in (row + 1):m
+            a = abs(_row_coeff(rows[i], col))
+            if a > largest
+                pivrow, largest = i, a
+            end
+        end
+        if largest <= tol
+            for i in row:m
+                ri = rows[i]
+                pos = searchsortedfirst(ri.idx, col)
+                if pos <= length(ri) && ri.idx[pos] == col
+                    deleteat!(ri.idx, pos)
+                    deleteat!(ri.val, pos)
+                end
+            end
+            continue
+        end
+        rows[row], rows[pivrow] = rows[pivrow], rows[row]
+        prow = rows[row]
+        # Earlier pivot and skipped columns have already been removed.
+        pivot = prow.val[1]
+        isfinite(pivot) || throw(ArgumentError("rref: arithmetic overflow; rescale the input or use higher precision"))
+        @inbounds for j in 2:length(prow)
+            prow.val[j] /= pivot
+        end
+        prow.val[1] = one(T)
+        for i in (row + 1):m
+            a = _row_coeff(rows[i], col)
+            tmp_idx, tmp_val = _row_axpy!(rows[i], -a, prow, tmp_idx, tmp_val)
+        end
+        push!(pivs, col)
+        row += 1
+    end
+    for k in length(pivs):-1:1
+        for i in 1:(k - 1)
+            a = _row_coeff(rows[i], pivs[k])
+            tmp_idx, tmp_val = _row_axpy!(rows[i], -a, rows[k], tmp_idx, tmp_val)
+        end
+    end
+    # Materialize only stored entries; even a large sparse input never requires
+    # an m-by-n dense workspace. Fill from elimination remains explicit.
+    count = sum(length, rows; init=0)
+    ii = Vector{Int}(undef, count)
+    jj = Vector{Int}(undef, count)
+    vv = Vector{T}(undef, count)
+    pos = 0
+    for i in eachindex(rows)
+        ri = rows[i]
+        @inbounds for j in eachindex(ri.idx)
+            pos += 1
+            ii[pos], jj[pos], vv[pos] = i, ri.idx[j], ri.val[j]
+        end
+    end
+    all(isfinite, vv) || throw(ArgumentError("rref: arithmetic overflow; rescale the input or use higher precision"))
+    R = sparse(ii, jj, vv, m, n)
+    return pivots ? (R, Tuple(pivs)) : R
 end

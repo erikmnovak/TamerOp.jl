@@ -1088,6 +1088,25 @@ end
         @test Rmods[1].dims == Ran.dims
         @test Rmods[2].dims == [0]
         @test Rmods[3].dims == [0]
+
+        # Workflow's curated root bindings preserve native module/morphism
+        # calls, positional and keyword options, and owner cache keywords.
+        opts0 = OPT.DerivedFunctorOptions(maxdeg=0)
+        sc = CM.SessionCache()
+        for (root_op, owner_op, expected) in
+            ((TO.derived_pushforward_left, TO.ChangeOfPosets.derived_pushforward_left, f2),
+             (TO.derived_pushforward_right, TO.ChangeOfPosets.derived_pushforward_right, reshape(f1, 1, 1)))
+            pushed = only(root_op(pi, M; opts=opts0, threads=false, session_cache=sc))
+            owner = only(owner_op(pi, M, opts0; threads=false, session_cache=sc))
+            @test pushed.dims == [size(expected, 1)]
+            @test pushed.dims == owner.dims
+            keyword_map = only(root_op(pi, f; opts=opts0, threads=false, session_cache=sc))
+            positional_map = only(root_op(pi, f, opts0; threads=false, session_cache=sc))
+            owner_map = only(owner_op(pi, f, opts0; threads=false, session_cache=sc))
+            @test Matrix(keyword_map.comps[1]) == expected
+            @test Matrix(positional_map.comps[1]) == expected
+            @test Matrix(owner_map.comps[1]) == expected
+        end
     end
 
 end
@@ -1813,16 +1832,14 @@ end
     plain_B_after = sprint(io -> show(io, MIME"text/plain"(), B))
     @test occursin("hom_materialized: true", plain_B_after)
 
-    describe_doc = repr(MIME"text/plain"(), @doc TamerOp.ChainComplexes.describe)
     homspace_doc = repr(MIME"text/plain"(), @doc CO.CommonRefinementHomSpace)
     restriction_doc = repr(MIME"text/plain"(), @doc CO.restriction)
     left_doc = repr(MIME"text/plain"(), @doc CO.pushforward_left)
     right_doc = repr(MIME"text/plain"(), @doc CO.pushforward_right)
     translate_doc = repr(MIME"text/plain"(), @doc CO.encode_pmodules_to_common_poset)
-    @test occursin("CommonRefinementHomSpace", describe_doc)
     @test occursin("Lazy common-refinement Hom space", homspace_doc)
     @test occursin("basis_matrix", homspace_doc)
-    @test occursin("canonical notebook-facing name", restriction_doc)
+    @test occursin("canonical notebook-facing name", lowercase(restriction_doc))
     @test occursin("canonical notebook-facing name", left_doc)
     @test occursin("canonical notebook-facing name", right_doc)
     @test occursin("CommonRefinementTranslationResult", translate_doc)
@@ -2005,3 +2022,820 @@ end
     end
 end
 end # with_fields
+
+@testset "A75 encoding I/O, refinement and explicit natural identifications" begin
+    CO = TamerOp.ChangeOfPosets
+    AR = TamerOp.ExactReals.AlgebraicReal
+    # Two distinct physical grades which have the same Float64 approximation.
+    a = sqrt(AR(2))
+    b = a + AR(1 // big(2)^90)
+    @test a < b && Float64(a) == Float64(b)
+    axes = (AR[0, a], AR[0, b])
+    P = FF.GridPoset(axes)
+    pi = EC.GridEncodingMap(P, axes; orientation=(1, -1))
+    Q = FF.GridPoset((AR[0, a / 2, a], AR[0, b]))
+    left = EN.EncodingMap(Q, P, [1, 1, 2, 3, 3, 4])
+    right = EN.EncodingMap(Q, P, [1, 2, 2, 3, 4, 4])
+    joint = CO.joint_encoding(left, right)
+    # All bases below have determinant one over Z, so these oracle diagrams
+    # and their natural automorphisms exist over every tested field. No
+    # cross-characteristic homology invariance is being assumed.
+    integral_bases = ([1 0; 0 1], [1 1; 0 1], [1 0; 1 1], [1 1; 1 2])
+    inv2(A) = [A[2, 2] -A[1, 2]; -A[2, 1] A[1, 1]] / (A[1, 1] * A[2, 2] - A[1, 2] * A[2, 1])
+    for field in FIELDS_FULL
+        K = CM.coeff_type(field)
+        equal(A, B) = field isa CM.RealField ? isapprox(A, B; atol=2e-9, rtol=2e-9) : A == B
+        G = [CM.coerce.(Ref(field), A) for A in integral_bases]
+        Gi = inv2.(G)
+        M = MD.PModule{K}(P, fill(2, 4), Dict((u, v) => G[v] * Gi[u] for (u, v) in FF.cover_edges(P)); field=field)
+        A = K[1 1; 0 1]
+        B = K[1 0; 1 1]
+        f = MD.PMorphism(M, M, [G[q] * A * Gi[q] for q in 1:4])
+        g = MD.PMorphism(M, M, [G[q] * B * Gi[q] for q in 1:4])
+        @test MD.check_morphism(f).valid && MD.check_morphism(g).valid
+        @test A * B != B * A
+        recorded = (degree=1, degree_convention=:homological,
+            window=(lower=(AR(0), AR(0)), upper=(a, b), coordinates=:oriented,
+                    outside_lower=:unrepresented, upper_extension=:constant),
+            orientation=(1, -1),
+            construction=(requested=:rhomboid, effective=:rhomboid, substitution=:none, grade_scale=:radius),
+            discretization=(grade_placement=:critical_grades, sampling=false, eps=nothing),
+            approximation=(grade_arithmetic=:exact_real_algebraic, sparsify=:none),
+            backend=(requested=:auto, effective=(:geometry => :exact_predicates,)),
+            reconstruction=:computed_graded_complex)
+        enc = RES.EncodingResult(P, M, pi; backend=:data, meta=(provenance=recorded,))
+        original = RES.provenance(enc)
+        mktempdir() do dir
+            for profile in (:compact, :portable, :debug), validation in (:strict, :trusted)
+                path = joinpath(dir, "encoding.json")
+                SER.save_encoding_json(path, enc; profile=profile)
+                # Repeat to verify that loaded provenance survives another save.
+                for round in 1:2
+                    loaded = SER.load_encoding_json(path; validation=validation)
+                    @test SER.check_encoding_json(path).valid
+                    @test loaded.M.field == field
+                    @test loaded.opts.field == field
+                    @test loaded.M.dims == fill(2, 4)
+                    @test EC.axes_from_encoding(loaded.pi) == axes
+                    @test EC.locate(loaded.pi, (a, -b)) == 4
+                    @test EC.locate(loaded.pi, (-AR(1), AR(0))) == 0
+                    p = RES.provenance(loaded)
+                    @test p.category == :finite_poset_representations
+                    @test p.base_poset === loaded.P
+                    @test p.field == field
+                    @test p.serialization.identification == :natural_isomorphism
+                    for key in keys(recorded)
+                        @test p[key] == original[key]
+                    end
+                    # Identify every loaded stalk with the independent constant
+                    # two-dimensional oracle, anchored at the minimal vertex.
+                    W = [MD.map_leq(loaded.M, 1, q) for q in 1:4]
+                    @test all(w -> !iszero(w[1, 1] * w[2, 2] - w[1, 2] * w[2, 1]), W)
+                    Wi = inv2.(W)
+                    J = [G[q] * Wi[q] for q in 1:4]
+                    loaded_f = MD.PMorphism(loaded.M, loaded.M, [W[q] * A * Wi[q] for q in 1:4])
+                    loaded_g = MD.PMorphism(loaded.M, loaded.M, [W[q] * B * Wi[q] for q in 1:4])
+                    @test MD.check_morphism(loaded_f).valid && MD.check_morphism(loaded_g).valid
+                    for u in 1:4, v in 1:4
+                        FF.leq(P, u, v) || continue
+                        expected = G[v] * Gi[u]
+                        @test equal(J[v] * MD.map_leq(loaded.M, u, v), expected * J[u])
+                    end
+                    for q in 1:4
+                        @test equal(J[q] * loaded_f.comps[q], f.comps[q] * J[q])
+                        @test equal(J[q] * loaded_g.comps[q] * loaded_f.comps[q], g.comps[q] * f.comps[q] * J[q])
+                    end
+                    # Deserialization creates a distinct poset object. The
+                    # identity-on-labels order isomorphism is explicit, as
+                    # required by restriction's target-poset contract.
+                    base_identification = EN.EncodingMap(P, loaded.P, collect(1:4))
+                    restored = CO.restriction(base_identification, loaded.M)
+                    restored_f = CO.restriction(base_identification, loaded_f)
+                    # Refine both restored and original modules through a
+                    # realized joint classifier and test the same identifications
+                    # on every map, with fresh and reused session caches.
+                    for sc in (nothing, CM.SessionCache())
+                        for repeat in 1:2
+                            direct = CO.restriction(left, restored; session_cache=sc)
+                            translated = CO.encode_pmodules_to_common_poset(restored, M, joint; session_cache=sc)
+                            via_joint = CO.restriction(EC.encoding_map(joint), CO.translated_modules(translated).left; session_cache=sc)
+                            jf = CO.restriction(EC.encoding_map(joint), CO.restriction(CO.projection_maps(joint).left, restored_f; session_cache=sc); session_cache=sc)
+                            for u in 1:6, v in 1:6
+                                FF.leq(Q, u, v) || continue
+                                pu, pv = left.pi_of_q[u], left.pi_of_q[v]
+                                expected = G[pv] * Gi[pu]
+                                @test equal(J[pv] * MD.map_leq(direct, u, v), expected * J[pu])
+                                @test equal(MD.map_leq(direct, u, v), MD.map_leq(via_joint, u, v))
+                            end
+                            for q in 1:6
+                                pq = left.pi_of_q[q]
+                                @test equal(J[pq] * jf.comps[q], f.comps[pq] * J[pq])
+                            end
+                        end
+                    end
+                    SER.save_encoding_json(path, loaded; profile=profile)
+                end
+            end
+        end
+    end
+end
+
+@testset "A75 serialization coefficient reinterpretation and strict mathematical records" begin
+    P = FF.GridPoset(([0.0, 1.0],))
+    pi = EC.GridEncodingMap(P, ([0.0, 1.0],))
+    H = FF.one_by_one_fringe(P, FF.principal_upset(P, 1), FF.principal_downset(P, 2), 2; field=CM.QQField())
+    enc = RES.EncodingResult(P, IR.pmodule_from_fringe(H), pi; H=H,
+        meta=(provenance=(degree=1, degree_convention=:homological, orientation=(1,),
+            window=(lower=(0.0,), upper=(1.0,), coordinates=:oriented),
+            construction=(grade_scale=:radius,), approximation=(grade_arithmetic=:float64,)),))
+    mktemp() do path, io
+        close(io)
+        mismatched = RES.EncodingResult(P, CM.change_field(enc.M, CM.F2()), pi; H=H)
+        @test_throws ArgumentError SER.save_encoding_json(path, mismatched)
+        SER.save_encoding_json(path, enc)
+        original = JSON3.read(read(path, String), Dict{String,Any})
+        for validation in (:strict, :trusted)
+            reduced = SER.load_encoding_json(path; field=CM.F2(), validation=validation)
+            @test reduced.M.dims == [0, 0]
+            @test size(MD.map_leq(reduced.M, 1, 2)) == (0, 0)
+            p = RES.provenance(reduced)
+            @test p.field == CM.F2()
+            @test p.degree === nothing
+            @test p.degree_convention == :not_applicable
+            @test p.source.degree == 1
+            @test p.source.field == CM.QQField()
+            @test p.coefficient_change.semantics == :reinterpret_stored_fringe_presentation
+            @test p.reconstruction == :stored_fringe_image_reinterpretation
+            @test p.ambient_identification == :not_asserted
+            SER.save_encoding_json(path, reduced)
+            reread = SER.load_encoding_json(path; validation=validation)
+            @test RES.provenance(reread).source.degree == 1
+            @test RES.provenance(reread).source.field == CM.QQField()
+            @test FF.poset_equal(RES.provenance(reread).source.base_poset, P)
+            write(path, JSON3.write(original))
+        end
+        # check_encoding_json must validate the complete stored contract, even
+        # though its computational load mode requests only the fringe image.
+        alterations = (
+            obj -> (obj["pi"]["coords"] = [[1.0, 0.0]]),
+            obj -> (obj["pi"]["coords"] = [[0.0, 2.0]]),
+            obj -> (obj["pi"]["coords"] = [[0.0, 1.0, 2.0]]),
+            obj -> (obj["coordinate_semantics"]["orientation"] = [-1]),
+            obj -> (obj["coordinate_semantics"]["grade_scale"] = "diameter"),
+            obj -> (obj["mathematical_provenance"]["type"] = "JuliaExpression"),
+            obj -> push!(obj["mathematical_provenance"]["keys"], "field"),
+            obj -> (obj["mathematical_provenance"]["values"][findfirst(==("degree"), obj["mathematical_provenance"]["keys"])] = true),
+        )
+        for alter in alterations
+            obj = deepcopy(original)
+            alter(obj)
+            write(path, JSON3.write(obj))
+            @test !SER.check_encoding_json(path).valid
+            @test_throws ArgumentError SER.check_encoding_json(path; throw=true)
+            for validation in (:strict, :trusted), output in (:fringe, :fringe_with_pi, :encoding_result)
+                @test_throws ArgumentError SER.load_encoding_json(path; output=output, validation=validation)
+            end
+        end
+        # A claimed window must agree with the actual classifier, not merely
+        # be copied into an apparently authoritative provenance summary.
+        bad_meta = merge(enc.meta.provenance, (window=(lower=(0.0,), upper=(2.0,), coordinates=:oriented),))
+        bad = RES.EncodingResult(P, enc.M, pi; H=H, meta=(provenance=bad_meta,))
+        SER.save_encoding_json(path, bad)
+        @test !SER.check_encoding_json(path).valid
+        @test_throws ArgumentError SER.load_encoding_json(path)
+        for unsupported in (big"1.0", Float16(1), NaN, (x -> x))
+            invalid = RES.EncodingResult(P, enc.M, pi; H=H,
+                meta=(provenance=merge(enc.meta.provenance, (unserializable=unsupported,)),))
+            @test_throws ArgumentError SER.save_encoding_json(path, invalid)
+        end
+    end
+end
+
+@testset "A75 serialization births, deaths and zero composites" begin
+    # The sum of intervals [1,2] and [2,3] on a four-point chain has dimensions
+    # 1,2,1,0 and zero composite 1 -> 3. This checks actual rank-changing maps,
+    # which cannot be certified by the constant-module oracle alone.
+    P = FF.GridPoset(([0.0, 1.0, 2.0, 3.0],))
+    pi = EC.GridEncodingMap(P, P.coords)
+    for field in FIELDS_FULL
+        K = CM.coeff_type(field)
+        equal(A, B) = field isa CM.RealField ? isapprox(A, B; atol=2e-9, rtol=2e-9) : A == B
+        G = K[1 1; 1 2]
+        Gi = K[2 -1; -1 1]
+        M = MD.PModule{K}(P, [1, 2, 1, 0], Dict(
+            (1, 2) => reshape(K[1, 1], 2, 1),
+            (2, 3) => reshape(K[-1, 1], 1, 2),
+            (3, 4) => zeros(K, 0, 1)); field=field)
+        f = MD.PMorphism(M, M, [ones(K, 1, 1), G * K[1 0; 0 2] * Gi,
+                                      fill(CM.coerce(field, 2), 1, 1), zeros(K, 0, 0)])
+        @test MD.check_morphism(f).valid
+        mktemp() do path, io
+            close(io)
+            SER.save_encoding_json(path, RES.EncodingResult(P, M, pi))
+            for validation in (:strict, :trusted)
+                restored = SER.load_encoding_json(path; validation=validation)
+                N = restored.M
+                @test N.dims == [1, 2, 1, 0]
+                alpha, beta = MD.map_leq(N, 1, 2), MD.map_leq(N, 2, 3)
+                @test equal(beta * alpha, zeros(K, 1, 1))
+                pivot = findfirst(x -> !iszero(x), vec(beta))
+                @test pivot !== nothing
+                second = zeros(K, 2)
+                second[pivot] = inv(beta[pivot])
+                W = hcat(alpha, second)
+                determinant = W[1, 1] * W[2, 2] - W[1, 2] * W[2, 1]
+                @test !iszero(determinant)
+                Wi = K[W[2, 2] -W[1, 2]; -W[2, 1] W[1, 1]] / determinant
+                J = [ones(K, 1, 1), G * Wi, ones(K, 1, 1), zeros(K, 0, 0)]
+                nf = MD.PMorphism(N, N, [ones(K, 1, 1), W * K[1 0; 0 2] * Wi,
+                                              fill(CM.coerce(field, 2), 1, 1), zeros(K, 0, 0)])
+                @test MD.check_morphism(nf).valid
+                for u in 1:4, v in u:4
+                    @test equal(J[v] * MD.map_leq(N, u, v), MD.map_leq(M, u, v) * J[u])
+                end
+                for q in 1:4
+                    @test equal(J[q] * nf.comps[q], f.comps[q] * J[q])
+                end
+            end
+        end
+    end
+end
+
+@testset "A75 native Zn and box classifier serialization maps" begin
+    face = FZ.Face(1, [false])
+    flange = FZ.Flange{QQ}(1, [FZ.IndFlat(face, [0])], [FZ.IndInj(face, [2])],
+                           ones(QQ, 1, 1); field=CM.QQField())
+    zn = TamerOp.Workflow.encode(flange)
+    boxes = TamerOp.Workflow.encode([PLB.BoxUpset([0.0])], [PLB.BoxDownset([2.0])]; backend=:pl_backend)
+    # Both represent the closed interval [0,2] on their respective domains.
+    for enc in (zn, boxes)
+        mktemp() do path, io
+            close(io)
+            SER.save_encoding_json(path, enc)
+            for validation in (:strict, :trusted)
+                loaded = SER.load_encoding_json(path; validation=validation)
+                @test SER.check_encoding_json(path).valid
+                @test loaded.M.field == CM.QQField()
+                @test RES.provenance(loaded).window == :unrestricted
+                @test RES.provenance(loaded).discretization.filtration_values == :not_resampled
+                points = [-1, 0, 1, 2, 3]
+                ids = [EC.locate(loaded.pi, [x]) for x in points]
+                @test ids == [EC.locate(enc.pi, [x]) for x in points]
+                expected_dims = [0, 1, 1, 1, 0]
+                @test loaded.M.dims[ids] == expected_dims
+                for i in eachindex(points), j in i:length(points)
+                    expected = ones(QQ, expected_dims[j], expected_dims[i])
+                    @test MD.map_leq(loaded.M, ids[i], ids[j]) == expected
+                end
+            end
+        end
+    end
+end
+
+@testset "A05 prime-field serialization boundaries" begin
+    P = chain_poset(1)
+    primes = Sys.WORD_SIZE == 64 ? (5, 4_294_967_311, 9_223_372_036_854_775_783) : (5, 2_147_483_647)
+    mktempdir() do dir
+        path = joinpath(dir, "prime_field.json")
+        for p in primes
+            field = CM.Fp(p)
+            M = one_by_one_fringe(P, FF.principal_upset(P, 1), FF.principal_downset(P, 1);
+                                 scalar=p - 1, field=field)
+            SER.save_encoding_json(path, M)
+            for validation in (:strict, :trusted)
+                loaded = SER.load_encoding_json(path; output=:fringe, validation=validation)
+                @test loaded.field == field
+                @test loaded.phi[1, 1].val == p - 1
+                @test loaded.phi[1, 1]^2 == one(CM.coeff_type(field))
+                @test FF.fiber_dimension(loaded, 1) == 1
+            end
+        end
+        obj = JSON3.read(read(path, String), Dict{String,Any})
+        for p in (4, 561)
+            obj["coeff_field"]["p"] = p
+            write(path, JSON3.write(obj))
+            for validation in (:strict, :trusted)
+                @test_throws ArgumentError SER.load_encoding_json(path; output=:fringe, validation=validation)
+            end
+        end
+    end
+    # The external finite-fringe parser must enforce the same field contract.
+    external = """
+    {"coeff_field":{"kind":"fp","p":4},
+     "poset":{"n":1,"leq":[[true]]},"U":[[true]],"D":[[true]],"phi":[[1]]}
+    """
+    for validation in (:strict, :trusted)
+        @test_throws ArgumentError SER.parse_finite_fringe_json(external; validation=validation)
+    end
+end
+
+with_fields(FIELDS_FULL) do field
+    K = CM.coeff_type(field)
+    a71_equal(A, B) = field isa CM.RealField ? isapprox(A, B; atol=1e-9, rtol=1e-9) : A == B
+
+    @testset "A71 finite joint encoding and factorization maps" begin
+        CO = TO.ChangeOfPosets
+        Q = chain_poset(3)
+        P = chain_poset(2)
+        left = EN.EncodingMap(Q, P, [1, 1, 2])
+        right = EN.EncodingMap(Q, P, [1, 2, 2])
+        joint = CO.joint_encoding(left, right)
+        j = EC.encoding_map(joint)
+        projections = CO.projection_maps(joint)
+        @test j.pi_of_q == [1, 2, 3]
+        @test projections.left.pi_of_q == [1, 1, 2]
+        @test projections.right.pi_of_q == [1, 2, 2]
+        @test FF.poset_equal(CO.common_poset(joint), Q)
+        @test projections.left.pi_of_q[j.pi_of_q] == left.pi_of_q
+        @test projections.right.pi_of_q[j.pi_of_q] == right.pi_of_q
+        @test FF.nvertices(CO.common_poset(joint)) == 3
+        @test FF.nvertices(CO.product_poset(P, P).P) == 4
+        @test CO.describe(joint).refinement == :realized_joint_image
+        @test CO.common_refinement_summary(joint) == CO.describe(joint)
+        @test CO.provenance(joint).base_poset === CO.common_poset(joint)
+        @test CO.describe(joint).provenance == CO.provenance(joint)
+        @test CO.check_joint_encoding(joint).valid
+        @test CO.check_joint_encoding(joint; throw=true).valid
+        @test occursin("realized_pairs=3", sprint(show, joint))
+        @test occursin("finite source", sprint(show, MIME"text/plain"(), joint))
+        @test occursin("valid=true", sprint(show, CO.check_joint_encoding(joint)))
+
+        # The classifier image is diagonal, even when both targets are the
+        # exact same poset object. Abstract targets do not determine this image.
+        diagonal = CO.joint_encoding(left, left)
+        @test FF.nvertices(CO.common_poset(diagonal)) == 2
+        @test EC.encoding_map(diagonal).pi_of_q == [1, 1, 2]
+        @test CO.projection_maps(diagonal).left.pi_of_q == [1, 2]
+
+        M = MD.PModule{K}(P, [1, 2], Dict((1, 2) => reshape(K[1, 1], 2, 1)); field=field)
+        N = MD.PModule{K}(P, [2, 1], Dict((1, 2) => reshape(K[1, 0], 1, 2)); field=field)
+        f = MD.PMorphism(M, M, [ones(K, 1, 1), K[0 1; 1 0]])
+        @test MD.check_morphism(f).valid
+        for sc in (nothing, CM.SessionCache())
+            translated = CO.encode_pmodules_to_common_poset(M, N, joint; session_cache=sc)
+            @test CO.describe(translated).refinement == :realized_joint_image
+            @test CO.provenance(translated).refinement == :realized_joint_image
+            @test CO.provenance(translated).field == field
+            mods = CO.translated_modules(translated)
+            for (original, projection, pulled) in ((M, left, mods.left), (N, right, mods.right))
+                direct = CO.restriction(projection, original; session_cache=sc)
+                composed = CO.restriction(j, pulled; session_cache=sc)
+                @test direct.dims == composed.dims
+                for (u, v) in FF.cover_edges(Q)
+                    @test a71_equal(direct.edge_maps[u, v], composed.edge_maps[u, v])
+                end
+            end
+            direct_map = CO.restriction(left, f; session_cache=sc)
+            composed_map = CO.restriction(j, CO.restriction(projections.left, f; session_cache=sc); session_cache=sc)
+            for q in 1:3
+                @test direct_map.comps[q] == composed_map.comps[q]
+            end
+        end
+        @test CO.describe(CO.encode_pmodules_to_common_poset(M, N)).refinement == :same_poset
+        # Independent Hom oracle: the only possible nonzero component of a
+        # product morphism S2 o pr1 -> S1 o pr2 is at the pair (2,1).
+        # That pair is unrealized for (left,right), and realized after swapping
+        # the classifiers. The target posets alone cannot decide ambient Hom.
+        S2 = MD.PModule{K}(P, [0, 1], Dict((1, 2) => zeros(K, 1, 0)); field=field)
+        S1 = MD.PModule{K}(P, [1, 0], Dict((1, 2) => zeros(K, 0, 1)); field=field)
+        product = CO.product_poset(P, P)
+        product_left = CO.restriction(product.pi1, S2)
+        product_right = CO.restriction(product.pi2, S1)
+        actual = CO.translated_modules(CO.encode_pmodules_to_common_poset(S2, S1, joint))
+        swapped = CO.translated_modules(CO.encode_pmodules_to_common_poset(S2, S1, CO.joint_encoding(right, left)))
+        @test DF.dim(DF.Hom(product_left, product_right)) == 1
+        @test DF.dim(DF.Hom(actual.left, actual.right)) == 0
+        @test DF.dim(DF.Hom(swapped.left, swapped.right)) == 1
+        @test DF.dim(DF.Hom(S2, S1)) == 0
+        @test_throws ArgumentError CO.encode_pmodules_to_common_poset(M, N; method=:unknown)
+        @test_throws ArgumentError CO.hom_common_refinement(M, N; method=:unknown)
+        @test_throws ArgumentError CO.hom_dim_common_refinement(M, N; method=:unknown)
+        @test_throws ArgumentError CO.joint_encoding(left, EN.EncodingMap(Q, P, [2, 1, 2]))
+        @test_throws ArgumentError CO.joint_encoding(left, EN.EncodingMap(chain_poset(2), P, [1, 2]))
+
+        # A product with unoccupied pairs is not a realized joint image.
+        prod = CO.product_poset(P, P)
+        bad = CO.JointEncodingResult(EN.EncodingMap(Q, prod.P, [1, 1, 4]), prod.pi1, prod.pi2)
+        @test !CO.check_joint_encoding(bad).valid
+        @test_throws ArgumentError CO.check_joint_encoding(bad; throw=true)
+        @test_throws ArgumentError CO.encode_pmodules_to_common_poset(M, N, bad)
+    end
+
+    @testset "A71 empty finite classifiers and Kan comparisons" begin
+        CO = TO.ChangeOfPosets
+        empty = FF.FinitePoset(falses(0, 0))
+        point = chain_poset(1)
+        two = chain_poset(2)
+        empty_id = EN.EncodingMap(empty, empty, Int[])
+        to_point = EN.EncodingMap(empty, point, Int[])
+        to_two = EN.EncodingMap(empty, two, Int[])
+        for joint in (CO.joint_encoding(to_point, to_two), CO.joint_encoding(empty_id, empty_id))
+            @test FF.nvertices(CO.common_poset(joint)) == 0
+            @test isempty(EC.encoding_map(joint).pi_of_q)
+            @test eltype(EC.encoding_map(joint).pi_of_q) == Int
+            @test isempty(CO.projection_maps(joint).left.pi_of_q)
+            @test isempty(CO.projection_maps(joint).right.pi_of_q)
+            @test CO.check_joint_encoding(joint; throw=true).valid
+        end
+        @test_throws MethodError CO.JointEncodingResult(nothing, nothing, nothing)
+        empty_module = MD.PModule{K}(empty, Int[], Dict{Tuple{Int,Int},Matrix{K}}(); field=field)
+        V = MD.PModule{K}(point, [2], Dict{Tuple{Int,Int},Matrix{K}}(); field=field)
+        @test MD.check_module(empty_module).valid
+        @test length(empty_module.edge_maps) == 0
+        empty_product = CO.encode_pmodules_to_common_poset(empty_module, V; use_cache=false)
+        @test FF.nvertices(CO.common_poset(empty_product)) == 0
+        for M in values(CO.translated_modules(empty_product))
+            @test isempty(M.dims)
+            @test MD.check_module(M).valid
+        end
+        for sc in (nothing, CM.SessionCache())
+            kwargs = (; threads=false, session_cache=sc)
+            etaL = CO.kan_unit(to_point, empty_module; side=:left, kwargs...)
+            epsR = CO.kan_counit(to_point, empty_module; side=:right, kwargs...)
+            epsL = CO.kan_counit(to_point, V; side=:left, kwargs...)
+            etaR = CO.kan_unit(to_point, V; side=:right, kwargs...)
+            @test isempty(etaL.comps)
+            @test isempty(epsR.comps)
+            @test epsL.dom.dims == [0]
+            @test etaR.cod.dims == [0]
+            @test size(epsL.comps[1]) == (2, 0)
+            @test size(etaR.comps[1]) == (0, 2)
+            for comparison in (etaL, epsR, epsL, etaR)
+                @test MD.check_morphism(comparison).valid
+            end
+            for operation in (CO.kan_unit, CO.kan_counit), side in (:left, :right)
+                comparison = operation(empty_id, empty_module; side=side, kwargs...)
+                @test isempty(comparison.comps)
+                @test MD.check_morphism(comparison).valid
+            end
+        end
+        zero_module = MD.PModule{K}(point, [0], Dict{Tuple{Int,Int},Matrix{K}}(); field=field)
+        point_id = EN.EncodingMap(point, point, [1])
+        for operation in (CO.kan_unit, CO.kan_counit), side in (:left, :right)
+            comparison = operation(point_id, zero_module; side=side)
+            @test size(comparison.comps[1]) == (0, 0)
+            @test MD.check_morphism(comparison).valid
+        end
+    end
+
+    @testset "A71 Kan adjunction maps, naturality and triangle identities" begin
+        CO = TO.ChangeOfPosets
+        P = chain_poset(3)
+        N = MD.PModule{K}(P, [1, 2, 1], Dict((1, 2) => reshape(K[1, 1], 2, 1),
+                                           (2, 3) => reshape(K[1, 0], 1, 2)); field=field)
+        N2 = MD.direct_sum(N, N)
+        g = MD.PMorphism(N, N2, [vcat(Matrix{K}(I, d, d), Matrix{K}(I, d, d)) for d in N.dims])
+        Qchain = chain_poset(2)
+        Qv = FF.FinitePoset(Bool[1 1 1; 0 1 0; 0 0 1])
+        Qlambda = FF.FinitePoset(transpose(FF.leq_matrix(Qv)))
+        Qdiscrete = FF.FinitePoset(Bool[1 0; 0 1])
+        cases = (
+            MD.PModule{K}(Qchain, [1, 2], Dict((1, 2) => reshape(K[1, 1], 2, 1)); field=field),
+            MD.PModule{K}(Qv, [1, 2, 2], Dict((1, 2) => reshape(K[1, 0], 2, 1),
+                                             (1, 3) => reshape(K[0, 1], 2, 1)); field=field),
+            MD.PModule{K}(Qlambda, [1, 2, 2], Dict((2, 1) => reshape(K[1, 0], 1, 2),
+                                                  (3, 1) => reshape(K[0, 1], 1, 2)); field=field),
+            MD.PModule{K}(Qdiscrete, [2, 3], Dict{Tuple{Int,Int},Matrix{K}}(); field=field),
+            # A zero-dimensional branch must still consume its prepared map
+            # slot, so the next nonzero branch uses the correct structure map.
+            MD.PModule{K}(Qv, [1, 0, 1], Dict((1, 2) => zeros(K, 0, 1),
+                                             (1, 3) => ones(K, 1, 1)); field=field),
+        )
+        for (case_index, M) in enumerate(cases), sc in (nothing, CM.SessionCache())
+            pi = EN.EncodingMap(M.Q, P, fill(2, FF.nvertices(M.Q)))
+            M2 = MD.direct_sum(M, M)
+            f = MD.PMorphism(M, M2, [vcat(Matrix{K}(I, d, d), Matrix{K}(I, d, d)) for d in M.dims])
+            kwargs = (; session_cache=sc, threads=false)
+            etaL = CO.kan_unit(pi, M; side=:left, kwargs...)
+            epsL = CO.kan_counit(pi, N; side=:left, kwargs...)
+            etaR = CO.kan_unit(pi, N; side=:right, kwargs...)
+            epsR = CO.kan_counit(pi, M; side=:right, kwargs...)
+            for comparison in (etaL, epsL, etaR, epsR)
+                @test MD.check_morphism(comparison).valid
+            end
+            # Empty Kan fibers are handled by unique zero maps.
+            @test size(epsL.comps[1]) == (1, 0)
+            @test size(etaR.comps[3]) == (0, 1)
+            if case_index == 1
+                @test etaL.comps[1] == M.edge_maps[1, 2]
+                @test etaL.comps[2] == Matrix{K}(I, 2, 2)
+                @test epsR.comps[1] == ones(K, 1, 1)
+                @test epsR.comps[2] == M.edge_maps[1, 2]
+            end
+
+            LM = CO.pushforward_left(pi, M; kwargs...)
+            RN = CO.restriction(pi, N; session_cache=sc)
+            RM = CO.pushforward_right(pi, M; kwargs...)
+            # Lan triangle: epsilon_(Lan M) o Lan(eta_M) = id.
+            L_eta = CO.pushforward_left(pi, etaL; kwargs...)
+            eps_LM = CO.kan_counit(pi, LM; side=:left, kwargs...)
+            # Restriction triangle for Lan: restriction(epsilon_N) o eta_(restriction N).
+            restrict_eps = CO.restriction(pi, epsL; session_cache=sc)
+            eta_RN = CO.kan_unit(pi, RN; side=:left, kwargs...)
+            # Ran triangle: Ran(epsilon_M) o eta_(Ran M) = id.
+            R_eps = CO.pushforward_right(pi, epsR; kwargs...)
+            eta_RM = CO.kan_unit(pi, RM; side=:right, kwargs...)
+            # Restriction triangle for Ran: epsilon_(restriction N) o restriction(eta_N).
+            restrict_eta = CO.restriction(pi, etaR; session_cache=sc)
+            eps_RN = CO.kan_counit(pi, RN; side=:right, kwargs...)
+            for (after, before, module_out) in ((eps_LM, L_eta, LM),
+                    (restrict_eps, eta_RN, RN), (R_eps, eta_RM, RM), (eps_RN, restrict_eta, RN))
+                for q in eachindex(module_out.dims)
+                    @test a71_equal(after.comps[q] * before.comps[q], Matrix{K}(I, module_out.dims[q], module_out.dims[q]))
+                end
+            end
+
+            # All four naturality squares, with nonsquare, nonzero morphisms.
+            etaL2 = CO.kan_unit(pi, M2; side=:left, kwargs...)
+            epsR2 = CO.kan_counit(pi, M2; side=:right, kwargs...)
+            etaR2 = CO.kan_unit(pi, N2; side=:right, kwargs...)
+            epsL2 = CO.kan_counit(pi, N2; side=:left, kwargs...)
+            RLf = CO.restriction(pi, CO.pushforward_left(pi, f; kwargs...); session_cache=sc)
+            RRf = CO.restriction(pi, CO.pushforward_right(pi, f; kwargs...); session_cache=sc)
+            Rg = CO.restriction(pi, g; session_cache=sc)
+            LRg = CO.pushforward_left(pi, Rg; kwargs...)
+            RRg = CO.pushforward_right(pi, Rg; kwargs...)
+            for q in eachindex(M.dims)
+                @test a71_equal(RLf.comps[q] * etaL.comps[q], etaL2.comps[q] * f.comps[q])
+                @test a71_equal(f.comps[q] * epsR.comps[q], epsR2.comps[q] * RRf.comps[q])
+            end
+            for p in eachindex(N.dims)
+                @test a71_equal(RRg.comps[p] * etaR.comps[p], etaR2.comps[p] * g.comps[p])
+                @test a71_equal(g.comps[p] * epsL.comps[p], epsL2.comps[p] * LRg.comps[p])
+            end
+        end
+
+        # A relabelling order isomorphism gives invertible comparisons. This
+        # is a genuine categorical equivalence, unlike arbitrary refinement.
+        Q = Qchain
+        Pcopy = FF.FinitePoset(Bool[1 0; 1 1])
+        iso = EN.EncodingMap(Q, Pcopy, [2, 1])
+        M = cases[1]
+        Niso = CO.pushforward_left(iso, M; threads=false)
+        for comparison in (CO.kan_unit(iso, M; side=:left),
+                           CO.kan_counit(iso, M; side=:right),
+                           CO.kan_unit(iso, Niso; side=:right),
+                           CO.kan_counit(iso, Niso; side=:left))
+            @test MD.check_morphism(comparison).valid
+            for A in comparison.comps
+                @test A == Matrix{K}(I, size(A, 1), size(A, 1))
+            end
+        end
+        # Structurally equal source copies preserve the actual user endpoint.
+        Mcopy = MD.PModule{K}(chain_poset(2), M.dims, M.edge_maps; field=field)
+        @test CO.kan_unit(iso, Mcopy).dom === Mcopy
+        @test CO.kan_counit(iso, Mcopy; side=:right).cod === Mcopy
+        @test_throws ArgumentError CO.kan_unit(iso, M; side=:unknown)
+        @test_throws ArgumentError CO.kan_counit(iso, M; side=:unknown)
+        @test_throws ArgumentError CO.kan_unit(iso, N)
+        bad_map = EN.EncodingMap(Q, chain_poset(2), [2, 1])
+        @test_throws ArgumentError CO.kan_unit(bad_map, M)
+
+        if Threads.nthreads() > 1
+            M = cases[2]
+            pi = EN.EncodingMap(M.Q, P, fill(2, FF.nvertices(M.Q)))
+            for comparison in (CO.kan_unit, CO.kan_counit), side in (:left, :right)
+                input = (comparison === CO.kan_unit) == (side === :left) ? M : N
+                serial = comparison(pi, input; side=side, threads=false)
+                threaded = comparison(pi, input; side=side, threads=true, session_cache=CM.SessionCache())
+                @test all(a71_equal(a, b) for (a, b) in zip(serial.comps, threaded.comps))
+            end
+        end
+    end
+
+    @testset "A71 left Kan quotient annihilator and nonzero induced map" begin
+        CO = TO.ChangeOfPosets
+        # Dualizing the annihilator basis must give the quotient map, not its
+        # section. The old arbitrary-left-inverse construction missed this.
+        for relations in (reshape(K[1, -1], 1, 2),
+                          K[1 -1 0; 1 0 -1], zeros(K, 0, 2), Matrix{K}(I, 2, 2))
+            W, L = CO._left_kan_quotient_summary(field, sparse(relations))
+            @test a71_equal(L * transpose(relations), zeros(K, size(L, 1), size(relations, 1)))
+            @test a71_equal(L * W, Matrix{K}(I, size(L, 1), size(L, 1)))
+        end
+        Q = FF.FinitePoset(Bool[1 1 1; 0 1 0; 0 0 1])
+        point = chain_poset(1)
+        pi = EN.EncodingMap(Q, point, [1, 1, 1])
+        V = MD.PModule{K}(point, [1], Dict{Tuple{Int,Int},Matrix{K}}(); field=field)
+        C = CO.restriction(pi, V)
+        M = MD.PModule{K}(Q, [0, 1, 1],
+            Dict((1, 2) => zeros(K, 1, 0), (1, 3) => zeros(K, 1, 0)); field=field)
+        f = MD.PMorphism(M, C, [zeros(K, 1, 0), ones(K, 1, 1), ones(K, 1, 1)])
+        @test MD.check_morphism(f).valid
+        # Colim(M)=k+k, Colim(C)=k, and the induced map is the fold [1 1].
+        # Express its two columns using canonical comparison maps, so this
+        # oracle is independent of the chosen quotient basis (also for RealField).
+        lan_f = CO.pushforward_left(pi, f; threads=false)
+        eta_M = CO.kan_unit(pi, M; threads=false)
+        eps_V = CO.kan_counit(pi, V; threads=false)
+        for q in (2, 3)
+            @test a71_equal(eps_V.comps[1] * lan_f.comps[1] * eta_M.comps[q], ones(K, 1, 1))
+        end
+
+        # The zero-branch slot bug also changed actual structure maps, not
+        # only comparison coordinates: Ran(M)(1)->Ran(M)(2) must be identity.
+        two = chain_poset(2)
+        split = EN.EncodingMap(Q, two, [1, 2, 2])
+        branched = MD.PModule{K}(Q, [1, 0, 1],
+            Dict((1, 2) => zeros(K, 0, 1), (1, 3) => ones(K, 1, 1)); field=field)
+        right = CO.pushforward_right(split, branched; threads=false)
+        @test right.dims == [1, 1]
+        @test a71_equal(right.edge_maps[1, 2], ones(K, 1, 1))
+    end
+
+    @testset "A71 nonzero higher derived Kan maps and composition" begin
+        CO = TO.ChangeOfPosets
+        Q = FF.FinitePoset(Bool[1 0 1 1; 0 1 1 1; 0 0 1 0; 0 0 0 1])
+        point = chain_poset(1)
+        pi = EN.EncodingMap(Q, point, ones(Int, 4))
+        C = MD.PModule{K}(Q, ones(Int, 4),
+            Dict((u, v) => ones(K, 1, 1) for (u, v) in FF.cover_edges(Q)); field=field)
+        M = MD.direct_sum(C, C)
+        i1 = MD.PMorphism(C, M, [reshape(K[1, 0], 2, 1) for _ in 1:4])
+        i2 = MD.PMorphism(C, M, [reshape(K[0, 1], 2, 1) for _ in 1:4])
+        A = K[1 1; 0 1]
+        B = K[1 0; 1 1]
+        fA = MD.PMorphism(M, M, [copy(A) for _ in 1:4])
+        fB = MD.PMorphism(M, M, [copy(B) for _ in 1:4])
+        fBA = MD.PMorphism(M, M, [B * A for _ in 1:4])
+        opts = OPT.DerivedFunctorOptions(maxdeg=1)
+        # The order complex is a circle: both homology and cohomology have one
+        # copy of k in degrees zero and one. The two constant summands give
+        # canonical inclusions identifying each derived group of M with k^2.
+        for derive in (CO.derived_pushforward_left, CO.derived_pushforward_right)
+            sc = CM.SessionCache()
+            kwargs = (; threads=false, session_cache=sc)
+            source_groups = derive(pi, C, opts; kwargs...)
+            target_groups = derive(pi, M, opts; kwargs...)
+            inclusion1 = derive(pi, i1, opts; kwargs...)
+            inclusion2 = derive(pi, i2, opts; kwargs...)
+            inducedA = derive(pi, fA, opts; kwargs...)
+            inducedB = derive(pi, fB, opts; kwargs...)
+            inducedBA = derive(pi, fBA, opts; kwargs...)
+            for index in 1:2
+                @test source_groups[index].dims == [1]
+                @test target_groups[index].dims == [2]
+                coordinates = hcat(inclusion1[index].comps[1], inclusion2[index].comps[1])
+                determinant = coordinates[1, 1] * coordinates[2, 2] - coordinates[1, 2] * coordinates[2, 1]
+                @test field isa CM.RealField ? abs(determinant) > 1e-9 : !iszero(determinant)
+                @test a71_equal(inducedA[index].comps[1] * coordinates, coordinates * A)
+                @test a71_equal(inducedB[index].comps[1] * coordinates, coordinates * B)
+                @test a71_equal(inducedBA[index].comps[1] * coordinates, coordinates * B * A)
+                @test a71_equal(inducedBA[index].comps[1], inducedB[index].comps[1] * inducedA[index].comps[1])
+            end
+        end
+    end
+
+    @testset "A71 same ambient module, different encoding Ext and Tor" begin
+        CO = TO.ChangeOfPosets
+        # The nerve of this height-one K2,2 poset is a four-edge circle.
+        # Identity Q->Q and the surjection Q->point both encode the same
+        # constant ambient module. Its finite-encoding derived groups differ.
+        relation = Bool[1 0 1 1; 0 1 1 1; 0 0 1 0; 0 0 0 1]
+        Q = FF.FinitePoset(relation)
+        Qop = FF.FinitePoset(transpose(relation))
+        point = chain_poset(1)
+        collapse = EN.EncodingMap(Q, point, ones(Int, 4))
+        constant_module(P) = MD.PModule{K}(P, ones(Int, FF.nvertices(P)),
+            Dict((u, v) => ones(K, 1, 1) for (u, v) in FF.cover_edges(P)); field=field)
+        C = constant_module(Q)
+        R = constant_module(Qop)
+        V = constant_module(point)
+        encoded_C = CO.restriction(collapse, V)
+        @test C.dims == encoded_C.dims
+        for (u, v) in FF.cover_edges(Q)
+            @test C.edge_maps[u, v] == encoded_C.edge_maps[u, v] == ones(K, 1, 1)
+        end
+        # Independent incidence oracle: d has rank three over EVERY field.
+        # Its rows sum to zero; the indicated 3x3 minor has determinant one.
+        d = K[-1 -1 0 0; 0 0 -1 -1; 1 0 1 0; 0 1 0 1]
+        @test sum(d; dims=1) == zeros(K, 1, 4)
+        @test d * K[1, -1, -1, 1] == zeros(K, 4)
+        @test d[1, 2] * d[2, 3] * d[3, 1] == one(K)
+        opts = OPT.DerivedFunctorOptions(maxdeg=1, model=:projective)
+        E = DF.Ext(C, C, opts)
+        Epoint = DF.Ext(V, V, opts)
+        @test [DF.dim(E, t) for t in 0:1] == [1, 1]
+        @test [DF.dim(Epoint, t) for t in 0:1] == [1, 0]
+        for model in (:first, :second)
+            T = DF.Tor(R, C, OPT.DerivedFunctorOptions(maxdeg=1, model=model))
+            Tpoint = DF.Tor(V, V, OPT.DerivedFunctorOptions(maxdeg=1, model=model))
+            @test [DF.dim(T, s) for s in 0:1] == [1, 1]
+            @test [DF.dim(Tpoint, s) for s in 0:1] == [1, 0]
+        end
+        # The comparison unit happens to be an isomorphism ON THIS MODULE.
+        # Its induced Ext/Tor maps within Rep(Q) have explicit inverse maps,
+        # but this still does not identify those groups with Rep(point).
+        eta = CO.kan_unit(collapse, C)
+        @test MD.check_morphism(eta).valid
+        @test all(size(A) == (1, 1) && !iszero(A[1, 1]) for A in eta.comps)
+        inverse = MD.PMorphism(eta.cod, C, [reshape(K[inv(A[1, 1])], 1, 1) for A in eta.comps])
+        @test MD.check_morphism(inverse).valid
+        E2 = DF.Ext(E.res, eta.cod)
+        T = DF.Tor(R, C, OPT.DerivedFunctorOptions(maxdeg=1, model=:first))
+        T2 = DF.Tor(R, eta.cod, OPT.DerivedFunctorOptions(maxdeg=1, model=:first); res=T.resRop)
+        for t in 0:1
+            forward = DF.ext_map_second(E, E2, eta; t=t)
+            backward = DF.ext_map_second(E2, E, inverse; t=t)
+            @test a71_equal(backward * forward, ones(K, 1, 1))
+            @test a71_equal(forward * backward, ones(K, 1, 1))
+            tor_forward = DF.tor_map_second(T, T2, eta; s=t)
+            tor_backward = DF.tor_map_second(T2, T, inverse; s=t)
+            @test a71_equal(tor_backward * tor_forward, ones(K, 1, 1))
+            @test a71_equal(tor_forward * tor_backward, ones(K, 1, 1))
+        end
+    end
+end
+
+@testset "A12 common-refinement inspection preserves lazy modules" begin
+    with_fields(FIELDS_FULL) do field
+        K = CM.coeff_type(field)
+        # Constant rank-one modules on connected chains have one-dimensional
+        # Hom after pulling back to their connected product poset.
+        P, Q = chain_poset(2), chain_poset(3)
+        M = MD.PModule{K}(P, ones(Int, 2),
+            Dict((1, 2) => ones(K, 1, 1)); field=field)
+        N = MD.PModule{K}(Q, ones(Int, 3),
+            Dict((1, 2) => ones(K, 1, 1), (2, 3) => ones(K, 1, 1)); field=field)
+        owner = TO.ChangeOfPosets
+        H = owner.hom_common_refinement(M, N; use_cache=false)
+        @test H isa owner.CommonRefinementHomSpace
+        B = DF.basis(H)
+        @test DF.dim(H) == length(B) == 1
+        for pass in 1:2
+            for object in (H, B)
+                @test !isempty(sprint(show, object))
+                @test !isempty(sprint(show, MIME"text/plain"(), object))
+                @test CC.describe(object).dimension == 1
+                @test owner.common_refinement_summary(object).basis_matrix_materialized == false
+                @test CC.source(object) === M
+                @test CC.target(object) === N
+            end
+            @test TO.provenance(H).base_poset === nothing
+            @test getfield(H, :translated) === nothing
+            @test getfield(H, :hom) === nothing
+            @test getfield(H, :basis_matrix) === nothing
+        end
+        # The vectorized basis can be requested without constructing modules.
+        basis_matrix = owner.basis_matrix(H)
+        @test size(basis_matrix) == (6, 1)
+        @test all(x -> x == basis_matrix[1, 1], basis_matrix)
+        @test !iszero(basis_matrix[1, 1])
+        @test getfield(H, :translated) === nothing
+        @test getfield(H, :hom) === nothing
+        @test owner.basis_matrix(H) === basis_matrix
+        @test !isempty(sprint(show, MIME"text/plain"(), B))
+        @test getfield(H, :translated) === nothing
+        morphism = B[1]
+        @test MD.check_morphism(morphism).valid
+        @test length(morphism.comps) == 6
+        @test all(A -> A == reshape(K[basis_matrix[1, 1]], 1, 1), morphism.comps)
+        @test getfield(H, :translated) !== nothing
+        @test getfield(H, :hom) !== nothing
+        @test B[1] === morphism
+    end
+end
+
+@testset "A16 Kan maps respect module-owned caches on equal posets" begin
+    owner = TamerOp.ChangeOfPosets
+    for representation in (:dense, :signature)
+        make_domain() = representation === :dense ?
+            FF.FinitePoset(Bool[1 1 1; 0 1 1; 0 0 1]) :
+            TO.ZnEncoding.SignaturePoset(
+                [BitVector([false, false]), BitVector([true, false]), BitVector([true, true])],
+                [BitVector(), BitVector(), BitVector()])
+        module_poset = make_domain()
+        classifier_poset = make_domain()
+        target = FF.FinitePoset(Bool[1 1; 0 1])
+        @test classifier_poset !== module_poset
+        @test FF.poset_equal(classifier_poset, module_poset)
+        pi = EN.EncodingMap(classifier_poset, target, [1, 1, 2])
+        with_fields(FIELDS_FULL) do field
+            K = CM.coeff_type(field)
+            A = CM.coerce.(Ref(field), [1 1; 0 1])
+            B = CM.coerce.(Ref(field), [1 0; 1 1])
+            M = MD.PModule{K}(module_poset, [2, 2, 2], Dict((1, 2)=>A, (2, 3)=>B); field=field)
+            # For 1<2<3 sent to 1,1,2, left Kan values are M(2),M(3),
+            # while right Kan values are M(1),M(3). These distinguished
+            # terminal/initial objects supply canonical coordinates.
+            for threads in (false, true), session_cache in (nothing, CM.SessionCache())
+                left = owner.pushforward_left(pi, M; threads=threads, session_cache=session_cache)
+                right = owner.pushforward_right(pi, M; threads=threads, session_cache=session_cache)
+                @test left.dims == right.dims == [2, 2]
+                @test MD.map_leq(left, 1, 2) == B
+                @test MD.map_leq(right, 1, 2) == B*A
+                @test MD.check_module(left).valid
+                @test MD.check_module(right).valid
+                for operation in (owner.pushforward_left, owner.pushforward_right)
+                    identity = operation(pi, MD.id_morphism(M); threads=threads, session_cache=session_cache)
+                    @test all(C -> C == Matrix{K}(I, 2, 2), identity.comps)
+                    @test MD.check_morphism(identity).valid
+                end
+                if session_cache !== nothing
+                    @test owner.pushforward_left(pi, M; threads=threads, session_cache=session_cache) === left
+                    @test owner.pushforward_right(pi, M; threads=threads, session_cache=session_cache) === right
+                end
+            end
+        end
+    end
+end

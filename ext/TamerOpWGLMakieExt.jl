@@ -7,10 +7,10 @@ const TO = TamerOp
 
 include("visualization_makie_common.jl")
 
-__register_visual_makie_backend!(TO, WGLMakie, :wglmakie; allow_save=false)
+const _HANDLERS = _visual_makie_handlers(TO, WGLMakie; allow_save=false)
 
 const VIZ = TO.Visualization
-const _BASE_WGL_RENDER = VIZ._VISUAL_RENDERERS[:wglmakie]
+const _BASE_WGL_RENDER = _HANDLERS.render
 
 function _save_wgl_visual(path::AbstractString, spec; kwargs...)
     spec isa VIZ.VisualizationSpec || throw(ArgumentError("save_spec expected a VisualizationSpec, got $(typeof(spec))."))
@@ -26,11 +26,14 @@ function _save_wgl_visual(path::AbstractString, spec; kwargs...)
     return path
 end
 
-VIZ._register_visual_backend!(:wglmakie;
-                              render=(spec; kwargs...) -> begin
-                                  WGLMakie.activate!(; use_html_widgets=true)
-                                  Base.invokelatest(_BASE_WGL_RENDER, spec; kwargs...)
-                              end,
-                              save=_save_wgl_visual)
+function __init__()
+    VIZ._register_visual_backend!(:wglmakie;
+                                  render=(spec; kwargs...) -> begin
+                                      WGLMakie.activate!(; use_html_widgets=true)
+                                      Base.invokelatest(_BASE_WGL_RENDER, spec; kwargs...)
+                                  end,
+                                  save=_save_wgl_visual)
+    return nothing
+end
 
 end # module TamerOpWGLMakieExt

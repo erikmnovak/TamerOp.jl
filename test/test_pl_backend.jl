@@ -7,6 +7,55 @@ with_fields(FIELDS_FULL) do field
     @inline c(x) = CM.coerce(field, x)
     if field isa CM.QQField
 
+@testset "A12 polyhedral inspection preserves deferred geometry" begin
+    hp = PLP.make_hpoly(K[c(1) c(0); c(0) c(1); c(-1) c(0); c(0) c(-1)],
+                       K[c(1), c(1), c(0), c(0)])
+    stored_poly = hp.poly
+    @test CC.describe(hp).nconstraints == 4
+    @test occursin("HPoly", sprint(show, MIME"text/plain"(), hp))
+    @test PLP.ambient_dim(hp) == 2
+    @test hp.poly === stored_poly
+    pi = PLP.PLEncodingMap(2, [BitVector()], [BitVector()], [hp], [(0.5, 0.5)])
+    box = ([0.0, 0.0], [1.0, 1.0])
+    cache = PLP.poly_in_box_cache(pi; box=box, level=:light)
+    enc = EC.compile_encoding(FF.ProductOfChainsPoset((1,)), pi)
+    for obj in (hp, pi, cache, enc)
+        @test !isempty(sprint(show, obj))
+        @test !isempty(sprint(show, MIME"text/plain"(), obj))
+        @test CC.describe(obj) isa NamedTuple
+    end
+    @test PLP.pl_encoding_summary(enc).nregions == 1
+    @test PLP.poly_cache_summary(cache).cached_region_count == 0
+    @test PLP.nregions(cache) == 1
+    @test PLP.region_witness(cache, 1) == (0.5, 0.5)
+    @test PLP.cache_box(cache) == (QQ[0, 0], QQ[1, 1])
+    @test PLP.cache_level(cache) == :light
+    @test cache.activity_state == Int8[0]
+    @test !cache.activity_scanned
+    @test isempty(cache.active_regions)
+    @test all(isnothing, cache.poly)
+    @test all(isnothing, cache.vrep)
+    @test all(isnothing, cache.hrep)
+    @test all(isnothing, cache.facets)
+    @test all(isnothing, cache.points_f)
+    @test all(isnothing, cache.hrep_float)
+    @test !any(cache.exact_weight_ready)
+    @test !any(cache.exact_centroid_ready)
+    @test isempty(cache.boundary_breakdown)
+    @test isempty(cache.boundary_measure)
+    @test isempty(cache.adjacency)
+
+    # The explicit geometry query still has the independently known area.
+    @test TO.RegionGeometry.region_volume(pi, 1; box=box, cache=cache) == 1.0
+    @test PLP.cached_region_count(cache) == 1
+    poly = cache.poly[1]
+    activity = copy(cache.activity_state)
+    @test occursin("cached_region_count = 1", sprint(show, MIME"text/plain"(), cache))
+    @test PLP.poly_cache_summary(cache).cached_region_count == 1
+    @test cache.poly[1] === poly
+    @test cache.activity_state == activity
+end
+
 @testset "Rn wrappers: common encoding matches explicit encoding route" begin
     # This test checks that the one-line R^n wrappers:
     #   - build the same finite encoding poset P as an explicit "encode then compute" route, and
@@ -38,11 +87,6 @@ with_fields(FIELDS_FULL) do field
     df2 = TO.DerivedFunctorOptions(maxdeg=2)
     res3 = TO.ResolutionOptions(maxlen=3)
 
-    # If Polyhedra is missing, encoding is unavailable by design.
-    if !PLP.HAVE_POLY
-        @test_throws ErrorException TO.encode((F1, F2); enc=enc_pl)
-        return
-    end
 
     # Common-encode both PL presentations to the same finite poset P and modules Ms on P.
     enc = TO.encode((F1, F2); enc=enc_pl)
@@ -161,96 +205,92 @@ end
     @test TOA.nupsets(F) == 1
     @test TOA.ndownsets(F) == 1
 
-    if !PLP.HAVE_POLY
-        @test true
-    else
-        opts = TO.EncodingOptions(backend=:pl, max_regions=128, strict_eps=PLP.STRICT_EPS_QQ)
-        P, H, pi = PLP.encode_from_PL_fringe(F, opts)
-        enc = EC.compile_encoding(P, pi)
+    opts = TO.EncodingOptions(backend=:pl, max_regions=128, strict_eps=PLP.STRICT_EPS_QQ)
+    P, H, pi = PLP.encode_from_PL_fringe(F, opts)
+    enc = EC.compile_encoding(P, pi)
 
-        @test TO.describe(pi).kind == :pl_encoding_map
-        @test PLP.nregions(pi) == length(pi.regions)
-        @test length(PLP.region_witnesses(pi)) == PLP.nregions(pi)
-        @test PLP.region_witness(pi, 1) == PLP.region_witnesses(pi)[1]
-        sig = PLP.region_signature(pi, 1)
-        @test sig isa NamedTuple
-        @test Set(keys(sig)) == Set((:y, :z))
-        @test PLP.has_spatial_index(pi) isa Bool
+    @test TO.describe(pi).kind == :pl_encoding_map
+    @test PLP.nregions(pi) == length(pi.regions)
+    @test length(PLP.region_witnesses(pi)) == PLP.nregions(pi)
+    @test PLP.region_witness(pi, 1) == PLP.region_witnesses(pi)[1]
+    sig = PLP.region_signature(pi, 1)
+    @test sig isa NamedTuple
+    @test Set(keys(sig)) == Set((:y, :z))
+    @test PLP.has_spatial_index(pi) isa Bool
 
-        sum_pi = PLP.pl_encoding_summary(pi)
-        sum_enc = PLP.pl_encoding_summary(enc)
-        @test sum_pi.kind == :pl_encoding_map
-        @test sum_pi.nregions == PLP.nregions(pi)
-        @test sum_enc.compiled
-        @test sum_enc.poset_size == FF.nvertices(P)
+    sum_pi = PLP.pl_encoding_summary(pi)
+    sum_enc = PLP.pl_encoding_summary(enc)
+    @test sum_pi.kind == :pl_encoding_map
+    @test sum_pi.nregions == PLP.nregions(pi)
+    @test sum_enc.compiled
+    @test sum_enc.poset_size == FF.nvertices(P)
 
-        inside = [0.5, 0.5]
-        outside = [2.0, 2.0]
-        qrep = PLP.check_pl_point(pi, inside)
-        @test qrep.valid
-        @test !PLP.check_pl_point(pi, [0.5]).valid
-        @test_throws ArgumentError PLP.check_pl_point(pi, [0.5]; throw=true)
+    inside = [0.5, 0.5]
+    outside = [2.0, 2.0]
+    qrep = PLP.check_pl_point(pi, inside)
+    @test qrep.valid
+    @test !PLP.check_pl_point(pi, [0.5]).valid
+    @test_throws ArgumentError PLP.check_pl_point(pi, [0.5]; throw=true)
 
-        X = Float64[0.25 0.75; 0.25 0.75]
-        @test PLP.check_pl_points(pi, X).valid
-        @test !PLP.check_pl_points(pi, reshape([0.25, 0.75], 1, 2)).valid
-        @test_throws ArgumentError PLP.check_pl_points(pi, reshape([0.25, 0.75], 1, 2); throw=true)
+    X = Float64[0.25 0.75; 0.25 0.75]
+    @test PLP.check_pl_points(pi, X).valid
+    @test !PLP.check_pl_points(pi, reshape([0.25, 0.75], 1, 2)).valid
+    @test_throws ArgumentError PLP.check_pl_points(pi, reshape([0.25, 0.75], 1, 2); throw=true)
 
-        box = (Float64[0.0, 0.0], Float64[1.0, 1.0])
-        @test PLP.check_pl_box(pi, box).valid
-        @test !PLP.check_pl_box(pi, (Float64[1.0, 0.0], Float64[0.0, 1.0])).valid
-        @test_throws ArgumentError PLP.check_pl_box(pi, (Float64[1.0, 0.0], Float64[0.0, 1.0]); throw=true)
+    box = (Float64[0.0, 0.0], Float64[1.0, 1.0])
+    @test PLP.check_pl_box(pi, box).valid
+    @test !PLP.check_pl_box(pi, (Float64[1.0, 0.0], Float64[0.0, 1.0])).valid
+    @test_throws ArgumentError PLP.check_pl_box(pi, (Float64[1.0, 0.0], Float64[0.0, 1.0]); throw=true)
 
-        qsum_in = PLP.pl_query_summary(pi, inside)
-        qsum_out = PLP.pl_query_summary(enc, outside)
-        rid_out = PLP.locate(enc, outside)
-        @test qsum_in.region != 0
-        @test qsum_in.outside == false
-        @test qsum_out.region == rid_out
-        @test qsum_out.outside == (rid_out == 0)
+    qsum_in = PLP.pl_query_summary(pi, inside)
+    qsum_out = PLP.pl_query_summary(enc, outside)
+    rid_out = PLP.locate(enc, outside)
+    @test qsum_in.region != 0
+    @test qsum_in.outside == false
+    @test qsum_out.region == rid_out
+    @test qsum_out.outside == (rid_out == 0)
 
-        @test PLP.check_pl_encoding_map(pi).valid
-        @test PLP.check_pl_encoding_map(enc).valid
-        @test !PLP.check_pl_encoding_map(:not_a_pl_encoding).valid
-        @test_throws ArgumentError PLP.check_pl_encoding_map(:not_a_pl_encoding; throw=true)
-        @test !PLP.check_pl_region(pi, 0).valid
-        @test_throws ArgumentError PLP.check_pl_region(pi, 0; throw=true)
+    @test PLP.check_pl_encoding_map(pi).valid
+    @test PLP.check_pl_encoding_map(enc).valid
+    @test !PLP.check_pl_encoding_map(:not_a_pl_encoding).valid
+    @test_throws ArgumentError PLP.check_pl_encoding_map(:not_a_pl_encoding; throw=true)
+    @test !PLP.check_pl_region(pi, 0).valid
+    @test_throws ArgumentError PLP.check_pl_region(pi, 0; throw=true)
 
-        cache = PLP.compile_geometry_cache(pi; box=box, closure=true, level=:light,
-                                           precompute_exact=false, precompute_facets=false,
-                                           precompute_centroids=false)
-        @test TO.describe(cache).kind == :poly_in_box_cache
-        @test TO.ambient_dim(cache) == 2
-        @test PLP.cache_box(cache)[1] == QQ[c(0), c(0)]
-        @test PLP.cache_box(cache)[2] == QQ[c(1), c(1)]
-        @test PLP.cache_level(cache) == :light
-        @test PLP.cached_region_count(cache) >= 0
-        @test PLP.check_poly_in_box_cache(cache).valid
-        @test PLP.poly_cache_summary(cache).cache_level == :light
-        @test occursin("PolyInBoxCache", sprint(show, MIME("text/plain"), cache))
-        @test TOA.check_pl_box(cache, box).valid
-        @test TOA.pl_encoding_summary(pi).nregions == PLP.nregions(pi)
-        @test TOA.poly_cache_summary(cache).cache_level == :light
-        rid = PLP.locate(pi, inside; mode=:verified)
-        @test rid != 0
-        reg_report = PLP.check_pl_region(pi, rid; box=box)
-        reg_report_cache = PLP.check_pl_region(cache, rid)
-        reg_summary = PLP.pl_region_summary(pi, rid; box=box, cache=cache)
-        @test reg_report.valid
-        @test reg_report.region_in_range
-        @test reg_report.finite_box_required
-        @test reg_report.signature_support_sizes !== nothing
-        @test reg_report.bbox isa Tuple
-        @test reg_report_cache.valid
-        @test reg_report_cache.finite_box_required == false
-        @test reg_summary.region == rid
-        @test reg_summary.signature_support_sizes == reg_report.signature_support_sizes
-        @test reg_summary.bbox isa Tuple
-        @test TOA.check_pl_region(cache, rid).valid
-        @test TOA.pl_region_summary(pi, rid; box=box, cache=cache).region == rid
+    cache = PLP.compile_geometry_cache(pi; box=box, closure=true, level=:light,
+                                       precompute_exact=false, precompute_facets=false,
+                                       precompute_centroids=false)
+    @test TO.describe(cache).kind == :poly_in_box_cache
+    @test TO.ambient_dim(cache) == 2
+    @test PLP.cache_box(cache)[1] == QQ[c(0), c(0)]
+    @test PLP.cache_box(cache)[2] == QQ[c(1), c(1)]
+    @test PLP.cache_level(cache) == :light
+    @test PLP.cached_region_count(cache) >= 0
+    @test PLP.check_poly_in_box_cache(cache).valid
+    @test PLP.poly_cache_summary(cache).cache_level == :light
+    @test occursin("PolyInBoxCache", sprint(show, MIME("text/plain"), cache))
+    @test TOA.check_pl_box(cache, box).valid
+    @test TOA.pl_encoding_summary(pi).nregions == PLP.nregions(pi)
+    @test TOA.poly_cache_summary(cache).cache_level == :light
+    rid = PLP.locate(pi, inside; mode=:verified)
+    @test rid != 0
+    reg_report = PLP.check_pl_region(pi, rid; box=box)
+    reg_report_cache = PLP.check_pl_region(cache, rid)
+    reg_summary = PLP.pl_region_summary(pi, rid; box=box, cache=cache)
+    @test reg_report.valid
+    @test reg_report.region_in_range
+    @test reg_report.finite_box_required
+    @test reg_report.signature_support_sizes !== nothing
+    @test reg_report.bbox isa Tuple
+    @test reg_report_cache.valid
+    @test reg_report_cache.finite_box_required == false
+    @test reg_summary.region == rid
+    @test reg_summary.signature_support_sizes == reg_report.signature_support_sizes
+    @test reg_summary.bbox isa Tuple
+    @test TOA.check_pl_region(cache, rid).valid
+    @test TOA.pl_region_summary(pi, rid; box=box, cache=cache).region == rid
 
-        @test TO.RegionGeometry.region_bbox(pi, rid; box=box, cache=cache) isa Tuple
-    end
+    @test TO.RegionGeometry.region_bbox(pi, rid; box=box, cache=cache) isa Tuple
 end
 
 
@@ -258,79 +298,60 @@ end
 
     enc_pl_10k = TO.EncodingOptions(backend=:pl, max_regions=10_000)
 
-    # We can build HPolys even without Polyhedra, but we can only encode if Polyhedra is available.
-    if !PLP.HAVE_POLY
-        U1 = PLP.PLUpset(PLP.PolyUnion(1, [PLP.make_hpoly([-1.0], [0.0])]))   # x >= 0
-        D1 = PLP.PLDownset(PLP.PolyUnion(1, [PLP.make_hpoly([ 1.0], [2.0])])) # x <= 2
-        F1 = PLP.PLFringe([U1], [D1], reshape(K[c(1)], 1, 1))
+    # Two 1D modules: support [0,2] and support [1,3].
+    U1 = PLP.PLUpset(PLP.PolyUnion(1, [PLP.make_hpoly([-1.0], [ 0.0])]))  # x >= 0
+    D1 = PLP.PLDownset(PLP.PolyUnion(1, [PLP.make_hpoly([ 1.0], [ 2.0])]))# x <= 2
 
-        @test_throws ErrorException PLP.encode_from_PL_fringes(F1, F1, enc_pl_10k)
-    else
-        # Two 1D modules: support [0,2] and support [1,3].
-        U1 = PLP.PLUpset(PLP.PolyUnion(1, [PLP.make_hpoly([-1.0], [ 0.0])]))  # x >= 0
-        D1 = PLP.PLDownset(PLP.PolyUnion(1, [PLP.make_hpoly([ 1.0], [ 2.0])]))# x <= 2
+    U2 = PLP.PLUpset(PLP.PolyUnion(1, [PLP.make_hpoly([-1.0], [-1.0])]))  # x >= 1
+    D2 = PLP.PLDownset(PLP.PolyUnion(1, [PLP.make_hpoly([ 1.0], [ 3.0])]))# x <= 3
 
-        U2 = PLP.PLUpset(PLP.PolyUnion(1, [PLP.make_hpoly([-1.0], [-1.0])]))  # x >= 1
-        D2 = PLP.PLDownset(PLP.PolyUnion(1, [PLP.make_hpoly([ 1.0], [ 3.0])]))# x <= 3
+    F1 = PLP.PLFringe([U1], [D1], reshape(K[c(1)], 1, 1))
+    F2 = PLP.PLFringe([U2], [D2], reshape(K[c(1)], 1, 1))
 
-        F1 = PLP.PLFringe([U1], [D1], reshape(K[c(1)], 1, 1))
-        F2 = PLP.PLFringe([U2], [D2], reshape(K[c(1)], 1, 1))
+    P, Hs, pi = PLP.encode_from_PL_fringes(F1, F2, enc_pl_10k)
 
-        P, Hs, pi = PLP.encode_from_PL_fringes(F1, F2, enc_pl_10k)
+    @test length(Hs) == 2
+    H1, H2 = Hs[1], Hs[2]
 
-        @test length(Hs) == 2
-        H1, H2 = Hs[1], Hs[2]
-
-        # Helper: insist locate returns a valid region.
-        function fd(H, x)
-            q = PLP.locate(pi, x)
-            @test q != 0
-            return FF.fiber_dimension(H, q)
-        end
-
-        @test fd(H1, [-1.0]) == 0
-        @test fd(H2, [-1.0]) == 0
-
-        @test fd(H1, [0.5]) == 1
-        @test fd(H2, [0.5]) == 0
-
-        @test fd(H1, [1.5]) == 1
-        @test fd(H2, [1.5]) == 1
-
-        @test fd(H1, [2.5]) == 0
-        @test fd(H2, [2.5]) == 1
-
-        @test fd(H1, [4.0]) == 0
-        @test fd(H2, [4.0]) == 0
+    # Helper: insist locate returns a valid region.
+    function fd(H, x)
+        q = PLP.locate(pi, x)
+        @test q != 0
+        return FF.fiber_dimension(H, q)
     end
+
+    @test fd(H1, [-1.0]) == 0
+    @test fd(H2, [-1.0]) == 0
+
+    @test fd(H1, [0.5]) == 1
+    @test fd(H2, [0.5]) == 0
+
+    @test fd(H1, [1.5]) == 1
+    @test fd(H2, [1.5]) == 1
+
+    @test fd(H1, [2.5]) == 0
+    @test fd(H2, [2.5]) == 1
+
+    @test fd(H1, [4.0]) == 0
+    @test fd(H2, [4.0]) == 0
 end
 
 
-@testset "PLPolyhedra optional backend" begin
-    if PLP.HAVE_POLY
-        # Unit square: 0 <= x <= 1, 0 <= y <= 1
-        A = K[c(1)  c(0);
-              c(0)  c(1);
-              c(-1) c(0);
-              c(0)  c(-1)]
-        b = K[c(1), c(1), c(0), c(0)]
-        h = PLP.make_hpoly(A, b)
+@testset "PLPolyhedra required backend" begin
+    # Unit square: 0 <= x <= 1, 0 <= y <= 1
+    A = K[c(1)  c(0);
+          c(0)  c(1);
+          c(-1) c(0);
+          c(0)  c(-1)]
+    b = K[c(1), c(1), c(0), c(0)]
+    h = PLP.make_hpoly(A, b)
 
-        @test PLP._in_hpoly(h, [0, 0]) == true
-        @test PLP._in_hpoly(h, [1, 1]) == true
-        @test PLP._in_hpoly(h, [2, 0]) == false
-        @test PLP._in_hpoly(h, [-1, 0]) == false
-    else
-        # Even without Polyhedra/CDDLib, make_hpoly should still build an HPoly
-        # that supports exact membership tests via its stored A*x <= b data.
-        A = reshape(K[c(1)], 1, 1)
-        b = K[c(1)]
-        h = PLP.make_hpoly(A, b)
-        @test h.poly === nothing
-        @test PLP._in_hpoly(h, [0]) == true
-        @test PLP._in_hpoly(h, [1]) == true
-        @test PLP._in_hpoly(h, [2]) == false
-    end
+    @test h.poly !== nothing
+    @test TO.Workflow.available_pl_backends() == [:pl_backend, :pl]
+    @test PLP._in_hpoly(h, [0, 0]) == true
+    @test PLP._in_hpoly(h, [1, 1]) == true
+    @test PLP._in_hpoly(h, [2, 0]) == false
+    @test PLP._in_hpoly(h, [-1, 0]) == false
 end
 
 @testset "PLPolyhedra float kernels and relaxed membership cache plumbing" begin
@@ -393,594 +414,580 @@ end
                Float64[0.0, 1.0, 0.0]]
     @test isapprox(PLP._facet_measure(square3, Float64[0.0, 0.0, 1.0]), 1.0; atol=1e-12)
 
-    if PLP.HAVE_POLY
-        box = ([-0.25, -0.25], [2.25, 1.25])
-        cache = PLP.compile_geometry_cache(pi; box=box, closure=true)
-        rid = EC.locate(pi, [0.5, 0.5]; mode=:verified)
-        facets = PLP._region_facets(cache, rid; tol=1e-10)
-        @test !isempty(facets)
-        @test length(facets) == 4
-        scratch1 = PLP._facet_classify_scratch!(cache, 2 * length(facets))
-        xid = objectid(scratch1.X)
-        inbox_id = objectid(scratch1.in_box)
-        loc_id = objectid(scratch1.loc)
-        kinds, neigh = PLP._classify_cached_facets(
-            pi, cache, facets, rid, cache.box_f[1], cache.box_f[2], 1e-8, :fast;
-            strict=false, tol=1e-10,
-        )
-        @test length(kinds) == length(facets)
-        @test length(neigh) == length(facets)
-        @test any(k -> k == UInt8(1) || k == UInt8(2), kinds)
-        scratch2 = PLP._facet_classify_scratch!(cache, 2 * length(facets))
-        @test objectid(scratch2.X) == xid
-        @test objectid(scratch2.in_box) == inbox_id
-        @test objectid(scratch2.loc) == loc_id
+    box = ([-0.25, -0.25], [2.25, 1.25])
+    cache = PLP.compile_geometry_cache(pi; box=box, closure=true)
+    rid = EC.locate(pi, [0.5, 0.5]; mode=:verified)
+    facets = PLP._region_facets(cache, rid; tol=1e-10)
+    @test !isempty(facets)
+    @test length(facets) == 4
+    scratch1 = PLP._facet_classify_scratch!(cache, 2 * length(facets))
+    xid = objectid(scratch1.X)
+    inbox_id = objectid(scratch1.in_box)
+    loc_id = objectid(scratch1.loc)
+    kinds, neigh = PLP._classify_cached_facets(
+        pi, cache, facets, rid, cache.box_f[1], cache.box_f[2], 1e-8, :fast;
+        strict=false, tol=1e-10,
+    )
+    @test length(kinds) == length(facets)
+    @test length(neigh) == length(facets)
+    @test any(k -> k == UInt8(1) || k == UInt8(2), kinds)
+    scratch2 = PLP._facet_classify_scratch!(cache, 2 * length(facets))
+    @test objectid(scratch2.X) == xid
+    @test objectid(scratch2.in_box) == inbox_id
+    @test objectid(scratch2.loc) == loc_id
 
-        Xq = [0.25 0.75 1.25 1.75;
-              0.50 0.50 0.50 0.50]
-        loc_full = fill(0, size(Xq, 2))
-        loc_pref = fill(-1, size(Xq, 2))
-        PLP.locate_many!(loc_full, cache, Xq; threaded=false, mode=:fast)
-        PLP._locate_many_prefix!(loc_pref, cache, Xq, size(Xq, 2); threaded=false, mode=:fast)
-        @test loc_pref == loc_full
+    Xq = [0.25 0.75 1.25 1.75;
+          0.50 0.50 0.50 0.50]
+    loc_full = fill(0, size(Xq, 2))
+    loc_pref = fill(-1, size(Xq, 2))
+    PLP.locate_many!(loc_full, cache, Xq; threaded=false, mode=:fast)
+    PLP._locate_many_prefix!(loc_pref, cache, Xq, size(Xq, 2); threaded=false, mode=:fast)
+    @test loc_pref == loc_full
 
-        adj_cache = TO.RegionGeometry.region_adjacency(pi; cache=cache, strict=false, mode=:fast)
-        adj_box = TO.RegionGeometry.region_adjacency(pi; box=box, strict=false, mode=:fast)
-        @test adj_cache == adj_box
-        @test length(adj_cache) == 1
-        @test haskey(adj_cache, (1, 2))
-        @test isapprox(adj_cache[(1, 2)], 1.0; atol=1e-8)
+    adj_cache = TO.RegionGeometry.region_adjacency(pi; cache=cache, strict=false, mode=:fast)
+    adj_box = TO.RegionGeometry.region_adjacency(pi; box=box, strict=false, mode=:fast)
+    @test adj_cache == adj_box
+    @test length(adj_cache) == 1
+    @test haskey(adj_cache, (1, 2))
+    @test isapprox(adj_cache[(1, 2)], 1.0; atol=1e-8)
 
-        hf1 = PLP._hrep_float_in_box(cache, rid)
-        hf2 = PLP._hrep_float_in_box(cache, rid)
-        @test hf1 === hf2
-        @test size(hf1.A, 2) == pi.n
-        @test length(hf1.b) == size(hf1.A, 1)
+    hf1 = PLP._hrep_float_in_box(cache, rid)
+    hf2 = PLP._hrep_float_in_box(cache, rid)
+    @test hf1 === hf2
+    @test size(hf1.A, 2) == pi.n
+    @test length(hf1.b) == size(hf1.A, 1)
 
-        vre = PLP._vrep_in_box(cache, rid)
-        hre = PLP._hrep_in_box(cache, rid)
-        pts = collect(PLP.Polyhedra.points(vre))
-        hs = collect(PLP.Polyhedra.halfspaces(hre))
-        ptsf = PLP._points_float_in_box(cache, rid)
-        @test !isempty(hs)
-        i = 1
-        idx_plain = PLP._incident_vertex_indices(vre, pts, hs[i]; tol=1e-12)
-        idx_cached = PLP._incident_vertex_indices(
-            vre, pts, hs[i];
-            tol=1e-12,
-            a_float=@view(hf1.A[i, :]),
-            b_float=hf1.b[i],
-            pts_float=ptsf,
-        )
-        @test idx_plain == idx_cached
+    vre = PLP._vrep_in_box(cache, rid)
+    hre = PLP._hrep_in_box(cache, rid)
+    pts = collect(PLP.Polyhedra.points(vre))
+    hs = collect(PLP.Polyhedra.halfspaces(hre))
+    ptsf = PLP._points_float_in_box(cache, rid)
+    @test !isempty(hs)
+    i = 1
+    idx_plain = PLP._incident_vertex_indices(vre, pts, hs[i]; tol=1e-12)
+    idx_cached = PLP._incident_vertex_indices(
+        vre, pts, hs[i];
+        tol=1e-12,
+        a_float=@view(hf1.A[i, :]),
+        b_float=hf1.b[i],
+        pts_float=ptsf,
+    )
+    @test idx_plain == idx_cached
 
-        # Spatial prefilter (bbox-grid) should be enabled on larger 2D maps and
-        # preserve locate_many correctness against exact membership scans.
-        nxg, nyg = 16, 16
-        ngrid = nxg * nyg
-        regs_g = Vector{PLP.HPoly}(undef, ngrid)
-        reps_g = Vector{Tuple{Float64,Float64}}(undef, ngrid)
-        sigy_g = [BitVector() for _ in 1:ngrid]
-        sigz_g = [BitVector() for _ in 1:ngrid]
-        k = 1
-        for gy in 0:nyg-1, gx in 0:nxg-1
-            xlo = float(gx)
-            xhi = float(gx + 1)
-            ylo = float(gy)
-            yhi = float(gy + 1)
-            regs_g[k] = PLP.make_hpoly(A, [xhi, yhi, -xlo, -ylo])
-            reps_g[k] = ((xlo + xhi) / 2.0, (ylo + yhi) / 2.0)
-            k += 1
-        end
-        pi_g = PLP.PLEncodingMap(2, sigy_g, sigz_g, regs_g, reps_g)
-        @test pi_g.prefilter.spatial.enabled
-        cands_mid = PLP._spatial_prefilter_candidates(pi_g.prefilter, [8.25, 8.75])
-        @test cands_mid !== nothing
-        @test !isempty(cands_mid)
-        @test length(cands_mid) < ngrid
-        @test PLP._should_use_grouped_locate(pi_g, nothing, 5_000)
-        if Threads.nthreads() >= 10
-            @test !PLP._should_use_grouped_locate(pi_g, nothing, 50_000)
-        else
-            @test PLP._should_use_grouped_locate(pi_g, nothing, 50_000)
-        end
-        @test !PLP._should_use_grouped_locate(pi_g, nothing, 120_000)
-        counts_bal = [0; fill(8, 32)]
-        counts_skew = [0; vcat([256], fill(0, 31))]
-        @test PLP._grouped_live_bucket_ok(counts_bal, 32, sum(counts_bal))
-        @test !PLP._grouped_live_bucket_ok(counts_skew, 32, sum(counts_skew))
+    # Spatial prefilter (bbox-grid) should be enabled on larger 2D maps and
+    # preserve locate_many correctness against exact membership scans.
+    nxg, nyg = 16, 16
+    ngrid = nxg * nyg
+    regs_g = Vector{PLP.HPoly}(undef, ngrid)
+    reps_g = Vector{Tuple{Float64,Float64}}(undef, ngrid)
+    sigy_g = [BitVector() for _ in 1:ngrid]
+    sigz_g = [BitVector() for _ in 1:ngrid]
+    k = 1
+    for gy in 0:nyg-1, gx in 0:nxg-1
+        xlo = float(gx)
+        xhi = float(gx + 1)
+        ylo = float(gy)
+        yhi = float(gy + 1)
+        regs_g[k] = PLP.make_hpoly(A, [xhi, yhi, -xlo, -ylo])
+        reps_g[k] = ((xlo + xhi) / 2.0, (ylo + yhi) / 2.0)
+        k += 1
+    end
+    pi_g = PLP.PLEncodingMap(2, sigy_g, sigz_g, regs_g, reps_g)
+    @test pi_g.prefilter.spatial.enabled
+    cands_mid = PLP._spatial_prefilter_candidates(pi_g.prefilter, [8.25, 8.75])
+    @test cands_mid !== nothing
+    @test !isempty(cands_mid)
+    @test length(cands_mid) < ngrid
+    @test PLP._should_use_grouped_locate(pi_g, nothing, 5_000)
+    if Threads.nthreads() >= 10
+        @test !PLP._should_use_grouped_locate(pi_g, nothing, 50_000)
+    else
+        @test PLP._should_use_grouped_locate(pi_g, nothing, 50_000)
+    end
+    @test !PLP._should_use_grouped_locate(pi_g, nothing, 120_000)
+    counts_bal = [0; fill(8, 32)]
+    counts_skew = [0; vcat([256], fill(0, 31))]
+    @test PLP._grouped_live_bucket_ok(counts_bal, 32, sum(counts_bal))
+    @test !PLP._grouped_live_bucket_ok(counts_skew, 32, sum(counts_skew))
 
-        Xg = Matrix{Float64}(undef, 2, 256)
-        rng = Random.MersenneTwister(0x91)
-        @inbounds for j in 1:size(Xg, 2)
-            # Stay strictly inside cells to avoid boundary ambiguity.
-            Xg[1, j] = rand(rng) * nxg - 1e-3
-            Xg[2, j] = rand(rng) * nyg - 1e-3
-        end
-        loc_fast = fill(0, size(Xg, 2))
-        PLP.locate_many!(loc_fast, pi_g, Xg; threaded=false, mode=:fast)
+    Xg = Matrix{Float64}(undef, 2, 256)
+    rng = Random.MersenneTwister(0x91)
+    @inbounds for j in 1:size(Xg, 2)
+        # Stay strictly inside cells to avoid boundary ambiguity.
+        Xg[1, j] = rand(rng) * nxg - 1e-3
+        Xg[2, j] = rand(rng) * nyg - 1e-3
+    end
+    loc_fast = fill(0, size(Xg, 2))
+    PLP.locate_many!(loc_fast, pi_g, Xg; threaded=false, mode=:fast)
 
-        loc_exact = fill(0, size(Xg, 2))
-        @inbounds for j in 1:size(Xg, 2)
-            xq = @view Xg[:, j]
-            for t in 1:length(pi_g.regions)
-                if PLP._in_hpoly(pi_g.regions[t], xq)
-                    loc_exact[j] = t
-                    break
-                end
+    loc_exact = fill(0, size(Xg, 2))
+    @inbounds for j in 1:size(Xg, 2)
+        xq = @view Xg[:, j]
+        for t in 1:length(pi_g.regions)
+            if PLP._in_hpoly(pi_g.regions[t], xq)
+                loc_exact[j] = t
+                break
             end
         end
-        @test loc_fast == loc_exact
+    end
+    @test loc_fast == loc_exact
 
-        # Bucket-grouped locate_many path: parity with grouped toggle off/on.
-        Xg_big = Matrix{Float64}(undef, 2, 5_000)
-        rng_big = Random.MersenneTwister(0x9B1)
-        @inbounds for j in 1:size(Xg_big, 2)
-            Xg_big[1, j] = rand(rng_big) * nxg - 1e-3
-            Xg_big[2, j] = rand(rng_big) * nyg - 1e-3
-        end
-        loc_group_off = fill(0, size(Xg_big, 2))
-        loc_group_on = fill(0, size(Xg_big, 2))
-        old_group_flag = PLP._LOCATE_BUCKET_GROUPING[]
-        try
-            PLP._LOCATE_BUCKET_GROUPING[] = false
-            PLP.locate_many!(loc_group_off, pi_g, Xg_big; threaded=true, mode=:fast)
-            PLP._LOCATE_BUCKET_GROUPING[] = true
-            PLP.locate_many!(loc_group_on, pi_g, Xg_big; threaded=true, mode=:fast)
-        finally
-            PLP._LOCATE_BUCKET_GROUPING[] = old_group_flag
-        end
-        @test loc_group_on == loc_group_off
+    # Bucket-grouped locate_many path: parity with grouped toggle off/on.
+    Xg_big = Matrix{Float64}(undef, 2, 5_000)
+    rng_big = Random.MersenneTwister(0x9B1)
+    @inbounds for j in 1:size(Xg_big, 2)
+        Xg_big[1, j] = rand(rng_big) * nxg - 1e-3
+        Xg_big[2, j] = rand(rng_big) * nyg - 1e-3
+    end
+    loc_group_off = fill(0, size(Xg_big, 2))
+    loc_group_on = fill(0, size(Xg_big, 2))
+    old_group_flag = PLP._LOCATE_BUCKET_GROUPING[]
+    try
+        PLP._LOCATE_BUCKET_GROUPING[] = false
+        PLP.locate_many!(loc_group_off, pi_g, Xg_big; threaded=true, mode=:fast)
+        PLP._LOCATE_BUCKET_GROUPING[] = true
+        PLP.locate_many!(loc_group_on, pi_g, Xg_big; threaded=true, mode=:fast)
+    finally
+        PLP._LOCATE_BUCKET_GROUPING[] = old_group_flag
+    end
+    @test loc_group_on == loc_group_off
 
-        cache_g = PLP.compile_geometry_cache(pi_g; box=(Float64[0.0, 0.0], Float64[float(nxg), float(nyg)]), closure=true)
-        loc_cache_group_off = fill(0, size(Xg_big, 2))
-        loc_cache_group_on = fill(0, size(Xg_big, 2))
-        old_group_flag = PLP._LOCATE_BUCKET_GROUPING[]
-        try
-            PLP._LOCATE_BUCKET_GROUPING[] = false
-            PLP.locate_many!(loc_cache_group_off, cache_g, Xg_big; threaded=true, mode=:fast)
-            PLP._LOCATE_BUCKET_GROUPING[] = true
-            PLP.locate_many!(loc_cache_group_on, cache_g, Xg_big; threaded=true, mode=:fast)
-        finally
-            PLP._LOCATE_BUCKET_GROUPING[] = old_group_flag
-        end
-        @test loc_cache_group_on == loc_cache_group_off
-        @test pi_g.prefilter.spatial.buckets isa PLP._PackedBuckets
-        @test cache_g.bucket_regions isa PLP._PackedBuckets
+    cache_g = PLP.compile_geometry_cache(pi_g; box=(Float64[0.0, 0.0], Float64[float(nxg), float(nyg)]), closure=true)
+    loc_cache_group_off = fill(0, size(Xg_big, 2))
+    loc_cache_group_on = fill(0, size(Xg_big, 2))
+    old_group_flag = PLP._LOCATE_BUCKET_GROUPING[]
+    try
+        PLP._LOCATE_BUCKET_GROUPING[] = false
+        PLP.locate_many!(loc_cache_group_off, cache_g, Xg_big; threaded=true, mode=:fast)
+        PLP._LOCATE_BUCKET_GROUPING[] = true
+        PLP.locate_many!(loc_cache_group_on, cache_g, Xg_big; threaded=true, mode=:fast)
+    finally
+        PLP._LOCATE_BUCKET_GROUPING[] = old_group_flag
+    end
+    @test loc_cache_group_on == loc_cache_group_off
+    @test pi_g.prefilter.spatial.buckets isa PLP._PackedBuckets
+    @test cache_g.bucket_regions isa PLP._PackedBuckets
 
-        old_exact_cache = PLP._LOCATE_COL_QQ_CACHE[]
-        loc_exact_cache_off = fill(0, size(Xg_big, 2))
-        loc_exact_cache_on = fill(0, size(Xg_big, 2))
-        try
-            PLP._LOCATE_COL_QQ_CACHE[] = false
-            PLP.locate_many!(loc_exact_cache_off, pi_g, Xg_big; threaded=true, mode=:fast)
-            PLP._LOCATE_COL_QQ_CACHE[] = true
-            PLP.locate_many!(loc_exact_cache_on, pi_g, Xg_big; threaded=true, mode=:fast)
-        finally
-            PLP._LOCATE_COL_QQ_CACHE[] = old_exact_cache
-        end
-        @test loc_exact_cache_on == loc_exact_cache_off
+    old_exact_cache = PLP._LOCATE_COL_QQ_CACHE[]
+    loc_exact_cache_off = fill(0, size(Xg_big, 2))
+    loc_exact_cache_on = fill(0, size(Xg_big, 2))
+    try
+        PLP._LOCATE_COL_QQ_CACHE[] = false
+        PLP.locate_many!(loc_exact_cache_off, pi_g, Xg_big; threaded=true, mode=:fast)
+        PLP._LOCATE_COL_QQ_CACHE[] = true
+        PLP.locate_many!(loc_exact_cache_on, pi_g, Xg_big; threaded=true, mode=:fast)
+    finally
+        PLP._LOCATE_COL_QQ_CACHE[] = old_exact_cache
+    end
+    @test loc_exact_cache_on == loc_exact_cache_off
 
-        old_row_dot_cache = PLP._LOCATE_ROW_DOT_CACHE[]
-        loc_row_dot_off = fill(0, size(Xg_big, 2))
-        loc_row_dot_on = fill(0, size(Xg_big, 2))
-        try
-            PLP._LOCATE_COL_QQ_CACHE[] = true
-            PLP._LOCATE_ROW_DOT_CACHE[] = false
-            PLP.locate_many!(loc_row_dot_off, pi_g, Xg_big; threaded=true, mode=:fast)
-            PLP._LOCATE_ROW_DOT_CACHE[] = true
-            PLP.locate_many!(loc_row_dot_on, pi_g, Xg_big; threaded=true, mode=:fast)
-        finally
-            PLP._LOCATE_COL_QQ_CACHE[] = old_exact_cache
-            PLP._LOCATE_ROW_DOT_CACHE[] = old_row_dot_cache
-        end
-        @test loc_row_dot_on == loc_row_dot_off
+    old_row_dot_cache = PLP._LOCATE_ROW_DOT_CACHE[]
+    loc_row_dot_off = fill(0, size(Xg_big, 2))
+    loc_row_dot_on = fill(0, size(Xg_big, 2))
+    try
+        PLP._LOCATE_COL_QQ_CACHE[] = true
+        PLP._LOCATE_ROW_DOT_CACHE[] = false
+        PLP.locate_many!(loc_row_dot_off, pi_g, Xg_big; threaded=true, mode=:fast)
+        PLP._LOCATE_ROW_DOT_CACHE[] = true
+        PLP.locate_many!(loc_row_dot_on, pi_g, Xg_big; threaded=true, mode=:fast)
+    finally
+        PLP._LOCATE_COL_QQ_CACHE[] = old_exact_cache
+        PLP._LOCATE_ROW_DOT_CACHE[] = old_row_dot_cache
+    end
+    @test loc_row_dot_on == loc_row_dot_off
 
-        # Direct Float64 cache dispatch should stay on the PLPolyhedra path.
-        loc_cache_float = fill(0, size(Xg_big, 2))
-        PLP.locate_many!(loc_cache_float, cache_g, Xg_big; threaded=false, mode=:fast)
-        @test loc_cache_float == loc_cache_group_on
+    # Direct Float64 cache dispatch should stay on the PLPolyhedra path.
+    loc_cache_float = fill(0, size(Xg_big, 2))
+    PLP.locate_many!(loc_cache_float, cache_g, Xg_big; threaded=false, mode=:fast)
+    @test loc_cache_float == loc_cache_group_on
 
-        # High-dimensional multiprojection prefilter: ensure enabled and parity
-        # with exact membership scans for 3D query batches.
-        nx3, ny3, nz3 = 5, 5, 3
-        nreg3 = nx3 * ny3 * nz3
-        A3 = QQ[1 0 0; 0 1 0; 0 0 1; -1 0 0; 0 -1 0; 0 0 -1]
-        regs3 = Vector{PLP.HPoly}(undef, nreg3)
-        reps3 = Vector{NTuple{3,Float64}}(undef, nreg3)
-        sigy3 = [BitVector() for _ in 1:nreg3]
-        sigz3 = [BitVector() for _ in 1:nreg3]
-        k3 = 1
-        for gz in 0:nz3-1, gy in 0:ny3-1, gx in 0:nx3-1
-            xlo = float(gx)
-            xhi = float(gx + 1)
-            ylo = float(gy)
-            yhi = float(gy + 1)
-            zlo = float(gz)
-            zhi = float(gz + 1)
-            regs3[k3] = PLP.make_hpoly(A3, QQ[xhi, yhi, zhi, -xlo, -ylo, -zlo])
-            reps3[k3] = ((xlo + xhi) / 2.0, (ylo + yhi) / 2.0, (zlo + zhi) / 2.0)
-            k3 += 1
-        end
-        pi3 = PLP.PLEncodingMap(3, sigy3, sigz3, regs3, reps3)
-        mp3 = pi3.prefilter.multiproj
-        @test mp3.enabled
-        @test mp3.ndims >= 2
-        @test all(d -> d >= 1 && d <= 3, mp3.dims[1:mp3.ndims])
-        rngs3 = PLP._multiproj_ranges(mp3, [2.5, 2.5, 1.5])
-        @test rngs3 !== nothing
-        @test !PLP._should_use_multiproj_prefilter(pi3.prefilter, length(pi3.regions), 240, true)
-        @test !PLP._should_use_grouped_locate(pi3, nothing, 10_000)
-        if Threads.nthreads() > 1
-            @test !PLP._should_thread_locate_many(pi3, nothing, 12_000; grouped=false)
-            @test !PLP._should_thread_locate_many(pi3, nothing, 25_000; grouped=false)
-            @test !PLP._should_thread_locate_many(pi3, nothing, 150_000; grouped=false)
-        end
+    # High-dimensional multiprojection prefilter: ensure enabled and parity
+    # with exact membership scans for 3D query batches.
+    nx3, ny3, nz3 = 5, 5, 3
+    nreg3 = nx3 * ny3 * nz3
+    A3 = QQ[1 0 0; 0 1 0; 0 0 1; -1 0 0; 0 -1 0; 0 0 -1]
+    regs3 = Vector{PLP.HPoly}(undef, nreg3)
+    reps3 = Vector{NTuple{3,Float64}}(undef, nreg3)
+    sigy3 = [BitVector() for _ in 1:nreg3]
+    sigz3 = [BitVector() for _ in 1:nreg3]
+    k3 = 1
+    for gz in 0:nz3-1, gy in 0:ny3-1, gx in 0:nx3-1
+        xlo = float(gx)
+        xhi = float(gx + 1)
+        ylo = float(gy)
+        yhi = float(gy + 1)
+        zlo = float(gz)
+        zhi = float(gz + 1)
+        regs3[k3] = PLP.make_hpoly(A3, QQ[xhi, yhi, zhi, -xlo, -ylo, -zlo])
+        reps3[k3] = ((xlo + xhi) / 2.0, (ylo + yhi) / 2.0, (zlo + zhi) / 2.0)
+        k3 += 1
+    end
+    pi3 = PLP.PLEncodingMap(3, sigy3, sigz3, regs3, reps3)
+    mp3 = pi3.prefilter.multiproj
+    @test mp3.enabled
+    @test mp3.ndims >= 2
+    @test all(d -> d >= 1 && d <= 3, mp3.dims[1:mp3.ndims])
+    rngs3 = PLP._multiproj_ranges(mp3, [2.5, 2.5, 1.5])
+    @test rngs3 !== nothing
+    @test !PLP._should_use_multiproj_prefilter(pi3.prefilter, length(pi3.regions), 240, true)
+    @test !PLP._should_use_grouped_locate(pi3, nothing, 10_000)
+    if Threads.nthreads() > 1
+        @test !PLP._should_thread_locate_many(pi3, nothing, 12_000; grouped=false)
+        @test !PLP._should_thread_locate_many(pi3, nothing, 25_000; grouped=false)
+        @test !PLP._should_thread_locate_many(pi3, nothing, 150_000; grouped=false)
+    end
 
-        X3 = Matrix{Float64}(undef, 3, 240)
-        rng3 = Random.MersenneTwister(0xBEE3)
-        @inbounds for j in 1:size(X3, 2)
-            rid3 = rand(rng3, 1:nreg3)
-            ctr = reps3[rid3]
-            # Stay strictly interior to avoid boundary ambiguity.
-            X3[1, j] = ctr[1] + (rand(rng3) - 0.5) * 0.6
-            X3[2, j] = ctr[2] + (rand(rng3) - 0.5) * 0.6
-            X3[3, j] = ctr[3] + (rand(rng3) - 0.5) * 0.6
-        end
-        loc3_fast = fill(0, size(X3, 2))
-        PLP.locate_many!(loc3_fast, pi3, X3; threaded=false, mode=:fast)
-        loc3_exact = fill(0, size(X3, 2))
-        @inbounds for j in 1:size(X3, 2)
-            xq = @view X3[:, j]
-            for t in 1:length(pi3.regions)
-                if PLP._in_hpoly(pi3.regions[t], xq)
-                    loc3_exact[j] = t
-                    break
-                end
+    X3 = Matrix{Float64}(undef, 3, 240)
+    rng3 = Random.MersenneTwister(0xBEE3)
+    @inbounds for j in 1:size(X3, 2)
+        rid3 = rand(rng3, 1:nreg3)
+        ctr = reps3[rid3]
+        # Stay strictly interior to avoid boundary ambiguity.
+        X3[1, j] = ctr[1] + (rand(rng3) - 0.5) * 0.6
+        X3[2, j] = ctr[2] + (rand(rng3) - 0.5) * 0.6
+        X3[3, j] = ctr[3] + (rand(rng3) - 0.5) * 0.6
+    end
+    loc3_fast = fill(0, size(X3, 2))
+    PLP.locate_many!(loc3_fast, pi3, X3; threaded=false, mode=:fast)
+    loc3_exact = fill(0, size(X3, 2))
+    @inbounds for j in 1:size(X3, 2)
+        xq = @view X3[:, j]
+        for t in 1:length(pi3.regions)
+            if PLP._in_hpoly(pi3.regions[t], xq)
+                loc3_exact[j] = t
+                break
             end
         end
-        @test loc3_fast == loc3_exact
+    end
+    @test loc3_fast == loc3_exact
 
-        # Heuristic contract: in a 3D family where x1 is effectively collapsed,
-        # multi-projection prefilter should activate for large threaded batches.
-        nx3b, ny3b = 18, 18
-        nreg3b = nx3b * ny3b
-        regs3b = Vector{PLP.HPoly}(undef, nreg3b)
-        reps3b = Vector{NTuple{3,Float64}}(undef, nreg3b)
-        sigy3b = [BitVector() for _ in 1:nreg3b]
-        sigz3b = [BitVector() for _ in 1:nreg3b]
-        kb = 1
-        for gz in 0:ny3b-1, gy in 0:nx3b-1
-            xlo = 0.0
-            xhi = 1.0
-            ylo = float(gy)
-            yhi = float(gy + 1)
-            zlo = float(gz)
-            zhi = float(gz + 1)
-            regs3b[kb] = PLP.make_hpoly(A3, QQ[xhi, yhi, zhi, -xlo, -ylo, -zlo])
-            reps3b[kb] = ((xlo + xhi) / 2.0, (ylo + yhi) / 2.0, (zlo + zhi) / 2.0)
-            kb += 1
-        end
-        pi3b = PLP.PLEncodingMap(3, sigy3b, sigz3b, regs3b, reps3b)
-        @test pi3b.prefilter.multiproj.enabled
-        @test PLP._should_use_multiproj_prefilter(pi3b.prefilter, length(pi3b.regions), 20_000, true)
-        @test !PLP._should_use_multiproj_prefilter(pi3b.prefilter, length(pi3b.regions), 20_000, false)
+    # Heuristic contract: in a 3D family where x1 is effectively collapsed,
+    # multi-projection prefilter should activate for large threaded batches.
+    nx3b, ny3b = 18, 18
+    nreg3b = nx3b * ny3b
+    regs3b = Vector{PLP.HPoly}(undef, nreg3b)
+    reps3b = Vector{NTuple{3,Float64}}(undef, nreg3b)
+    sigy3b = [BitVector() for _ in 1:nreg3b]
+    sigz3b = [BitVector() for _ in 1:nreg3b]
+    kb = 1
+    for gz in 0:ny3b-1, gy in 0:nx3b-1
+        xlo = 0.0
+        xhi = 1.0
+        ylo = float(gy)
+        yhi = float(gy + 1)
+        zlo = float(gz)
+        zhi = float(gz + 1)
+        regs3b[kb] = PLP.make_hpoly(A3, QQ[xhi, yhi, zhi, -xlo, -ylo, -zlo])
+        reps3b[kb] = ((xlo + xhi) / 2.0, (ylo + yhi) / 2.0, (zlo + zhi) / 2.0)
+        kb += 1
+    end
+    pi3b = PLP.PLEncodingMap(3, sigy3b, sigz3b, regs3b, reps3b)
+    @test pi3b.prefilter.multiproj.enabled
+    @test PLP._should_use_multiproj_prefilter(pi3b.prefilter, length(pi3b.regions), 20_000, true)
+    @test !PLP._should_use_multiproj_prefilter(pi3b.prefilter, length(pi3b.regions), 20_000, false)
 
-        # Facet probe batching: parity with batch toggle off/on (cache and non-cache).
-        function _canonical_bd(v)
-            canon_entry(e) = (
-                kind = e.kind,
-                neighbor = e.neighbor === nothing ? 0 : e.neighbor,
-                measure = round(e.measure; digits=10),
-                point = Tuple(round.(e.point; digits=10)),
-                normal = Tuple(round.(e.normal; digits=10)),
-            )
-            return sort!(map(canon_entry, v); by = x -> (x.kind, x.neighbor, x.point, x.normal, x.measure))
-        end
+    # Facet probe batching: parity with batch toggle off/on (cache and non-cache).
+    function _canonical_bd(v)
+        canon_entry(e) = (
+            kind = e.kind,
+            neighbor = e.neighbor === nothing ? 0 : e.neighbor,
+            measure = round(e.measure; digits=10),
+            point = Tuple(round.(e.point; digits=10)),
+            normal = Tuple(round.(e.normal; digits=10)),
+        )
+        return sort!(map(canon_entry, v); by = x -> (x.kind, x.neighbor, x.point, x.normal, x.measure))
+    end
 
-        @test !PLP._should_batch_facet_probes(:cached, 4, 2)
-        @test PLP._should_batch_facet_probes(:boundary, 4, 2)
-        @test !PLP._should_batch_facet_probes(:adjacency, 4, 2)
+    @test !PLP._should_batch_facet_probes(:cached, 4, 2)
+    @test PLP._should_batch_facet_probes(:boundary, 4, 2)
+    @test !PLP._should_batch_facet_probes(:adjacency, 4, 2)
 
-        old_batch_flag = PLP._FACET_PROBE_BATCH[]
-        try
-            PLP._FACET_PROBE_BATCH[] = false
-            bd_cache_off = TO.RegionGeometry.region_boundary_measure_breakdown(pi, rid; cache=cache, strict=false, mode=:fast)
-            adj_cache_off = TO.RegionGeometry.region_adjacency(pi; cache=cache, strict=false, mode=:fast)
-            bd_box_off = TO.RegionGeometry.region_boundary_measure_breakdown(pi, rid; box=box, strict=false, mode=:fast)
-            adj_box_off = TO.RegionGeometry.region_adjacency(pi; box=box, strict=false, mode=:fast)
+    old_batch_flag = PLP._FACET_PROBE_BATCH[]
+    try
+        PLP._FACET_PROBE_BATCH[] = false
+        bd_cache_off = TO.RegionGeometry.region_boundary_measure_breakdown(pi, rid; cache=cache, strict=false, mode=:fast)
+        adj_cache_off = TO.RegionGeometry.region_adjacency(pi; cache=cache, strict=false, mode=:fast)
+        bd_box_off = TO.RegionGeometry.region_boundary_measure_breakdown(pi, rid; box=box, strict=false, mode=:fast)
+        adj_box_off = TO.RegionGeometry.region_adjacency(pi; box=box, strict=false, mode=:fast)
 
-            PLP._FACET_PROBE_BATCH[] = true
-            bd_cache_on = TO.RegionGeometry.region_boundary_measure_breakdown(pi, rid; cache=cache, strict=false, mode=:fast)
-            adj_cache_on = TO.RegionGeometry.region_adjacency(pi; cache=cache, strict=false, mode=:fast)
-            bd_box_on = TO.RegionGeometry.region_boundary_measure_breakdown(pi, rid; box=box, strict=false, mode=:fast)
-            adj_box_on = TO.RegionGeometry.region_adjacency(pi; box=box, strict=false, mode=:fast)
+        PLP._FACET_PROBE_BATCH[] = true
+        bd_cache_on = TO.RegionGeometry.region_boundary_measure_breakdown(pi, rid; cache=cache, strict=false, mode=:fast)
+        adj_cache_on = TO.RegionGeometry.region_adjacency(pi; cache=cache, strict=false, mode=:fast)
+        bd_box_on = TO.RegionGeometry.region_boundary_measure_breakdown(pi, rid; box=box, strict=false, mode=:fast)
+        adj_box_on = TO.RegionGeometry.region_adjacency(pi; box=box, strict=false, mode=:fast)
 
-            @test _canonical_bd(bd_cache_on) == _canonical_bd(bd_cache_off)
-            @test _canonical_bd(bd_box_on) == _canonical_bd(bd_box_off)
-            @test adj_cache_on == adj_cache_off
-            @test adj_box_on == adj_box_off
-        finally
-            PLP._FACET_PROBE_BATCH[] = old_batch_flag
-        end
+        @test _canonical_bd(bd_cache_on) == _canonical_bd(bd_cache_off)
+        @test _canonical_bd(bd_box_on) == _canonical_bd(bd_box_off)
+        @test adj_cache_on == adj_cache_off
+        @test adj_box_on == adj_box_off
+    finally
+        PLP._FACET_PROBE_BATCH[] = old_batch_flag
     end
 end
 
 @testset "PLPolyhedra hand-solvable 2D oracle fixtures" begin
-    if !PLP.HAVE_POLY
-        @test true
-    else
-        Arect = QQ[1 0; 0 1; -1 0; 0 -1]
-        rect_hpoly(xl, xu, yl, yu) = PLP.make_hpoly(Arect, QQ[xu, yu, -xl, -yl])
+    Arect = QQ[1 0; 0 1; -1 0; 0 -1]
+    rect_hpoly(xl, xu, yl, yu) = PLP.make_hpoly(Arect, QQ[xu, yu, -xl, -yl])
 
-        function sigbits(i::Int, k::Int)
-            bv = BitVector(undef, k)
-            x = i - 1
-            @inbounds for b in 1:k
-                bv[b] = ((x >>> (b - 1)) & 0x1) == 0x1
-            end
-            return bv
+    function sigbits(i::Int, k::Int)
+        bv = BitVector(undef, k)
+        x = i - 1
+        @inbounds for b in 1:k
+            bv[b] = ((x >>> (b - 1)) & 0x1) == 0x1
+        end
+        return bv
+    end
+
+    function run_fixture(rects, witnesses, box, expected; outside=Tuple{Float64,Float64}[])
+        nreg = length(rects)
+        @test length(witnesses) == nreg
+
+        k = max(1, ceil(Int, log2(nreg + 1)))
+        sigy = [sigbits(i, k) for i in 1:nreg]
+        sigz = [falses(k) for _ in 1:nreg]
+        hps = [rect_hpoly(r[1], r[2], r[3], r[4]) for r in rects]
+        reps = [(w[1], w[2]) for w in witnesses]
+        pi = PLP.PLEncodingMap(2, sigy, sigz, hps, reps)
+
+        rid = Vector{Int}(undef, nreg)
+        for i in 1:nreg
+            rid[i] = EC.locate(pi, [witnesses[i][1], witnesses[i][2]]; mode=:verified)
+            @test rid[i] != 0
+        end
+        @test length(unique(rid)) == nreg
+
+        for p in outside
+            @test EC.locate(pi, [p[1], p[2]]; mode=:verified) == 0
         end
 
-        function run_fixture(rects, witnesses, box, expected; outside=Tuple{Float64,Float64}[])
-            nreg = length(rects)
-            @test length(witnesses) == nreg
+        w = TO.RegionGeometry.region_weights(pi; box=box, method=:exact)
+        for i in 1:nreg
+            @test isapprox(w[rid[i]], expected[:weights][i]; atol=1e-10)
+        end
+        @test isapprox(sum(w), sum(expected[:weights]); atol=1e-10)
 
-            k = max(1, ceil(Int, log2(nreg + 1)))
-            sigy = [sigbits(i, k) for i in 1:nreg]
-            sigz = [falses(k) for _ in 1:nreg]
-            hps = [rect_hpoly(r[1], r[2], r[3], r[4]) for r in rects]
-            reps = [(w[1], w[2]) for w in witnesses]
-            pi = PLP.PLEncodingMap(2, sigy, sigz, hps, reps)
-
-            rid = Vector{Int}(undef, nreg)
-            for i in 1:nreg
-                rid[i] = EC.locate(pi, [witnesses[i][1], witnesses[i][2]]; mode=:verified)
-                @test rid[i] != 0
-            end
-            @test length(unique(rid)) == nreg
-
-            for p in outside
-                @test EC.locate(pi, [p[1], p[2]]; mode=:verified) == 0
-            end
-
-            w = TO.RegionGeometry.region_weights(pi; box=box, method=:exact)
-            for i in 1:nreg
-                @test isapprox(w[rid[i]], expected[:weights][i]; atol=1e-10)
-            end
-            @test isapprox(sum(w), sum(expected[:weights]); atol=1e-10)
-
-            for i in 1:nreg
-                bb = TO.RegionGeometry.region_bbox(pi, rid[i]; box=box)
-                @test bb !== nothing
-                lo, hi = bb
-                elo, ehi = expected[:bbox][i]
-                @test all(isapprox.(lo, elo; atol=1e-10))
-                @test all(isapprox.(hi, ehi; atol=1e-10))
-            end
-
-            for i in 1:nreg
-                d = TO.RegionGeometry.region_diameter(pi, rid[i]; box=box, metric=:L2, method=:bbox)
-                @test isapprox(d, expected[:diameters][i]; atol=1e-10)
-            end
-
-            for i in 1:nreg
-                bm = TO.RegionGeometry.region_boundary_measure(pi, rid[i]; box=box, strict=true, mode=:verified)
-                @test isapprox(bm, expected[:boundary][i]; atol=1e-8)
-            end
-
-            adj = TO.RegionGeometry.region_adjacency(pi; box=box, strict=true, mode=:verified)
-            exp_adj = Dict{Tuple{Int,Int},Float64}()
-            for ((i, j), m) in expected[:adj]
-                ri = rid[i]
-                rj = rid[j]
-                key = ri < rj ? (ri, rj) : (rj, ri)
-                exp_adj[key] = float(m)
-            end
-            @test Set(keys(adj)) == Set(keys(exp_adj))
-            for (kpair, mexp) in exp_adj
-                @test isapprox(adj[kpair], mexp; atol=1e-8)
-            end
+        for i in 1:nreg
+            bb = TO.RegionGeometry.region_bbox(pi, rid[i]; box=box)
+            @test bb !== nothing
+            lo, hi = bb
+            elo, ehi = expected[:bbox][i]
+            @test all(isapprox.(lo, elo; atol=1e-10))
+            @test all(isapprox.(hi, ehi; atol=1e-10))
         end
 
-        fixtures = [
-            (
-                rects=[(0.0, 1.0, 0.0, 1.0)],
-                witnesses=[(0.5, 0.5)],
-                box=(Float64[0.0, 0.0], Float64[1.0, 1.0]),
-                expected=(
-                    weights=[1.0],
-                    bbox=[(Float64[0.0, 0.0], Float64[1.0, 1.0])],
-                    diameters=[sqrt(2.0)],
-                    boundary=[4.0],
-                    adj=Dict{Tuple{Int,Int},Float64}(),
-                ),
-                outside=[(-0.1, 0.5), (1.1, 0.5)],
-            ),
-            (
-                rects=[(0.0, 1.0, 0.0, 1.0), (1.0, 2.0, 0.0, 1.0)],
-                witnesses=[(0.5, 0.5), (1.5, 0.5)],
-                box=(Float64[0.0, 0.0], Float64[2.0, 1.0]),
-                expected=(
-                    weights=[1.0, 1.0],
-                    bbox=[(Float64[0.0, 0.0], Float64[1.0, 1.0]),
-                          (Float64[1.0, 0.0], Float64[2.0, 1.0])],
-                    diameters=[sqrt(2.0), sqrt(2.0)],
-                    boundary=[4.0, 4.0],
-                    adj=Dict((1, 2) => 1.0),
-                ),
-                outside=[(-0.1, 0.5), (2.1, 0.5)],
-            ),
-            (
-                rects=[(-1.0, 0.0, -1.0, 0.0), (0.0, 1.0, -1.0, 0.0), (-1.0, 0.0, 0.0, 1.0), (0.0, 1.0, 0.0, 1.0)],
-                witnesses=[(-0.5, -0.5), (0.5, -0.5), (-0.5, 0.5), (0.5, 0.5)],
-                box=(Float64[-1.0, -1.0], Float64[1.0, 1.0]),
-                expected=(
-                    weights=[1.0, 1.0, 1.0, 1.0],
-                    bbox=[(Float64[-1.0, -1.0], Float64[0.0, 0.0]),
-                          (Float64[0.0, -1.0], Float64[1.0, 0.0]),
-                          (Float64[-1.0, 0.0], Float64[0.0, 1.0]),
-                          (Float64[0.0, 0.0], Float64[1.0, 1.0])],
-                    diameters=[sqrt(2.0), sqrt(2.0), sqrt(2.0), sqrt(2.0)],
-                    boundary=[4.0, 4.0, 4.0, 4.0],
-                    adj=Dict((1, 2) => 1.0, (1, 3) => 1.0, (2, 4) => 1.0, (3, 4) => 1.0),
-                ),
-                outside=[(-1.1, 0.0), (1.1, 0.0)],
-            ),
-            (
-                rects=[(0.0, 1.0, 0.0, 2.0), (1.0, 3.0, 0.0, 2.0)],
-                witnesses=[(0.5, 1.0), (2.0, 1.0)],
-                box=(Float64[0.0, 0.0], Float64[3.0, 2.0]),
-                expected=(
-                    weights=[2.0, 4.0],
-                    bbox=[(Float64[0.0, 0.0], Float64[1.0, 2.0]),
-                          (Float64[1.0, 0.0], Float64[3.0, 2.0])],
-                    diameters=[sqrt(5.0), sqrt(8.0)],
-                    boundary=[6.0, 8.0],
-                    adj=Dict((1, 2) => 2.0),
-                ),
-                outside=[(-0.1, 1.0), (3.1, 1.0)],
-            ),
-            (
-                rects=[(0.0, 2.0, 0.0, 1.0), (0.0, 2.0, 1.0, 2.0), (0.0, 2.0, 2.0, 3.0)],
-                witnesses=[(1.0, 0.5), (1.0, 1.5), (1.0, 2.5)],
-                box=(Float64[0.0, 0.0], Float64[2.0, 3.0]),
-                expected=(
-                    weights=[2.0, 2.0, 2.0],
-                    bbox=[(Float64[0.0, 0.0], Float64[2.0, 1.0]),
-                          (Float64[0.0, 1.0], Float64[2.0, 2.0]),
-                          (Float64[0.0, 2.0], Float64[2.0, 3.0])],
-                    diameters=[sqrt(5.0), sqrt(5.0), sqrt(5.0)],
-                    boundary=[6.0, 6.0, 6.0],
-                    adj=Dict((1, 2) => 2.0, (2, 3) => 2.0),
-                ),
-                outside=[(-0.1, 0.5), (2.1, 0.5)],
-            ),
-            (
-                rects=[(0.0, 1.0, 0.0, 1.0), (1.0, 3.0, 0.0, 1.0), (0.0, 1.0, 1.0, 2.0), (1.0, 3.0, 1.0, 2.0)],
-                witnesses=[(0.5, 0.5), (2.0, 0.5), (0.5, 1.5), (2.0, 1.5)],
-                box=(Float64[0.0, 0.0], Float64[3.0, 2.0]),
-                expected=(
-                    weights=[1.0, 2.0, 1.0, 2.0],
-                    bbox=[(Float64[0.0, 0.0], Float64[1.0, 1.0]),
-                          (Float64[1.0, 0.0], Float64[3.0, 1.0]),
-                          (Float64[0.0, 1.0], Float64[1.0, 2.0]),
-                          (Float64[1.0, 1.0], Float64[3.0, 2.0])],
-                    diameters=[sqrt(2.0), sqrt(5.0), sqrt(2.0), sqrt(5.0)],
-                    boundary=[4.0, 6.0, 4.0, 6.0],
-                    adj=Dict((1, 2) => 1.0, (1, 3) => 1.0, (2, 4) => 2.0, (3, 4) => 1.0),
-                ),
-                outside=[(-0.1, 0.5), (3.1, 0.5)],
-            ),
-        ]
-
-        for fx in fixtures
-            run_fixture(fx.rects, fx.witnesses, fx.box, fx.expected; outside=fx.outside)
+        for i in 1:nreg
+            d = TO.RegionGeometry.region_diameter(pi, rid[i]; box=box, metric=:L2, method=:bbox)
+            @test isapprox(d, expected[:diameters][i]; atol=1e-10)
         end
+
+        for i in 1:nreg
+            bm = TO.RegionGeometry.region_boundary_measure(pi, rid[i]; box=box, strict=true, mode=:verified)
+            @test isapprox(bm, expected[:boundary][i]; atol=1e-8)
+        end
+
+        adj = TO.RegionGeometry.region_adjacency(pi; box=box, strict=true, mode=:verified)
+        exp_adj = Dict{Tuple{Int,Int},Float64}()
+        for ((i, j), m) in expected[:adj]
+            ri = rid[i]
+            rj = rid[j]
+            key = ri < rj ? (ri, rj) : (rj, ri)
+            exp_adj[key] = float(m)
+        end
+        @test Set(keys(adj)) == Set(keys(exp_adj))
+        for (kpair, mexp) in exp_adj
+            @test isapprox(adj[kpair], mexp; atol=1e-8)
+        end
+    end
+
+    fixtures = [
+        (
+            rects=[(0.0, 1.0, 0.0, 1.0)],
+            witnesses=[(0.5, 0.5)],
+            box=(Float64[0.0, 0.0], Float64[1.0, 1.0]),
+            expected=(
+                weights=[1.0],
+                bbox=[(Float64[0.0, 0.0], Float64[1.0, 1.0])],
+                diameters=[sqrt(2.0)],
+                boundary=[4.0],
+                adj=Dict{Tuple{Int,Int},Float64}(),
+            ),
+            outside=[(-0.1, 0.5), (1.1, 0.5)],
+        ),
+        (
+            rects=[(0.0, 1.0, 0.0, 1.0), (1.0, 2.0, 0.0, 1.0)],
+            witnesses=[(0.5, 0.5), (1.5, 0.5)],
+            box=(Float64[0.0, 0.0], Float64[2.0, 1.0]),
+            expected=(
+                weights=[1.0, 1.0],
+                bbox=[(Float64[0.0, 0.0], Float64[1.0, 1.0]),
+                      (Float64[1.0, 0.0], Float64[2.0, 1.0])],
+                diameters=[sqrt(2.0), sqrt(2.0)],
+                boundary=[4.0, 4.0],
+                adj=Dict((1, 2) => 1.0),
+            ),
+            outside=[(-0.1, 0.5), (2.1, 0.5)],
+        ),
+        (
+            rects=[(-1.0, 0.0, -1.0, 0.0), (0.0, 1.0, -1.0, 0.0), (-1.0, 0.0, 0.0, 1.0), (0.0, 1.0, 0.0, 1.0)],
+            witnesses=[(-0.5, -0.5), (0.5, -0.5), (-0.5, 0.5), (0.5, 0.5)],
+            box=(Float64[-1.0, -1.0], Float64[1.0, 1.0]),
+            expected=(
+                weights=[1.0, 1.0, 1.0, 1.0],
+                bbox=[(Float64[-1.0, -1.0], Float64[0.0, 0.0]),
+                      (Float64[0.0, -1.0], Float64[1.0, 0.0]),
+                      (Float64[-1.0, 0.0], Float64[0.0, 1.0]),
+                      (Float64[0.0, 0.0], Float64[1.0, 1.0])],
+                diameters=[sqrt(2.0), sqrt(2.0), sqrt(2.0), sqrt(2.0)],
+                boundary=[4.0, 4.0, 4.0, 4.0],
+                adj=Dict((1, 2) => 1.0, (1, 3) => 1.0, (2, 4) => 1.0, (3, 4) => 1.0),
+            ),
+            outside=[(-1.1, 0.0), (1.1, 0.0)],
+        ),
+        (
+            rects=[(0.0, 1.0, 0.0, 2.0), (1.0, 3.0, 0.0, 2.0)],
+            witnesses=[(0.5, 1.0), (2.0, 1.0)],
+            box=(Float64[0.0, 0.0], Float64[3.0, 2.0]),
+            expected=(
+                weights=[2.0, 4.0],
+                bbox=[(Float64[0.0, 0.0], Float64[1.0, 2.0]),
+                      (Float64[1.0, 0.0], Float64[3.0, 2.0])],
+                diameters=[sqrt(5.0), sqrt(8.0)],
+                boundary=[6.0, 8.0],
+                adj=Dict((1, 2) => 2.0),
+            ),
+            outside=[(-0.1, 1.0), (3.1, 1.0)],
+        ),
+        (
+            rects=[(0.0, 2.0, 0.0, 1.0), (0.0, 2.0, 1.0, 2.0), (0.0, 2.0, 2.0, 3.0)],
+            witnesses=[(1.0, 0.5), (1.0, 1.5), (1.0, 2.5)],
+            box=(Float64[0.0, 0.0], Float64[2.0, 3.0]),
+            expected=(
+                weights=[2.0, 2.0, 2.0],
+                bbox=[(Float64[0.0, 0.0], Float64[2.0, 1.0]),
+                      (Float64[0.0, 1.0], Float64[2.0, 2.0]),
+                      (Float64[0.0, 2.0], Float64[2.0, 3.0])],
+                diameters=[sqrt(5.0), sqrt(5.0), sqrt(5.0)],
+                boundary=[6.0, 6.0, 6.0],
+                adj=Dict((1, 2) => 2.0, (2, 3) => 2.0),
+            ),
+            outside=[(-0.1, 0.5), (2.1, 0.5)],
+        ),
+        (
+            rects=[(0.0, 1.0, 0.0, 1.0), (1.0, 3.0, 0.0, 1.0), (0.0, 1.0, 1.0, 2.0), (1.0, 3.0, 1.0, 2.0)],
+            witnesses=[(0.5, 0.5), (2.0, 0.5), (0.5, 1.5), (2.0, 1.5)],
+            box=(Float64[0.0, 0.0], Float64[3.0, 2.0]),
+            expected=(
+                weights=[1.0, 2.0, 1.0, 2.0],
+                bbox=[(Float64[0.0, 0.0], Float64[1.0, 1.0]),
+                      (Float64[1.0, 0.0], Float64[3.0, 1.0]),
+                      (Float64[0.0, 1.0], Float64[1.0, 2.0]),
+                      (Float64[1.0, 1.0], Float64[3.0, 2.0])],
+                diameters=[sqrt(2.0), sqrt(5.0), sqrt(2.0), sqrt(5.0)],
+                boundary=[4.0, 6.0, 4.0, 6.0],
+                adj=Dict((1, 2) => 1.0, (1, 3) => 1.0, (2, 4) => 2.0, (3, 4) => 1.0),
+            ),
+            outside=[(-0.1, 0.5), (3.1, 0.5)],
+        ),
+    ]
+
+    for fx in fixtures
+        run_fixture(fx.rects, fx.witnesses, fx.box, fx.expected; outside=fx.outside)
     end
 end
 
 @testset "PLPolyhedra non-convex union oracle fixtures (2D, QQ)" begin
-    if !PLP.HAVE_POLY
-        @test true
-    else
-        Arect = QQ[1 0; 0 1; -1 0; 0 -1]
-        rect_hpoly(xl, xu, yl, yu) = PLP.make_hpoly(Arect, QQ[xu, yu, -xl, -yl])
+    Arect = QQ[1 0; 0 1; -1 0; 0 -1]
+    rect_hpoly(xl, xu, yl, yu) = PLP.make_hpoly(Arect, QQ[xu, yu, -xl, -yl])
 
-        # Non-convex geometry: two disjoint boxes with a gap in between.
-        pi = PLP.PLEncodingMap(
-            2,
-            [BitVector((true, false)), BitVector((false, true))],
-            [falses(2), falses(2)],
-            [rect_hpoly(0.0, 1.0, 0.0, 1.0), rect_hpoly(2.0, 3.0, 0.0, 1.0)],
-            [(0.5, 0.5), (2.5, 0.5)],
-        )
-        box = (Float64[0.0, 0.0], Float64[3.0, 1.0])
+    # Non-convex geometry: two disjoint boxes with a gap in between.
+    pi = PLP.PLEncodingMap(
+        2,
+        [BitVector((true, false)), BitVector((false, true))],
+        [falses(2), falses(2)],
+        [rect_hpoly(0.0, 1.0, 0.0, 1.0), rect_hpoly(2.0, 3.0, 0.0, 1.0)],
+        [(0.5, 0.5), (2.5, 0.5)],
+    )
+    box = (Float64[0.0, 0.0], Float64[3.0, 1.0])
 
-        t_left = EC.locate(pi, [0.5, 0.5]; mode=:verified)
-        t_gap = EC.locate(pi, [1.5, 0.5]; mode=:verified)
-        t_right = EC.locate(pi, [2.5, 0.5]; mode=:verified)
-        @test t_left != 0 && t_right != 0
-        @test t_gap == 0
-        @test t_left != t_right
-        @test EC.locate(pi, [1.5, 1.5]; mode=:verified) == 0
+    t_left = EC.locate(pi, [0.5, 0.5]; mode=:verified)
+    t_gap = EC.locate(pi, [1.5, 0.5]; mode=:verified)
+    t_right = EC.locate(pi, [2.5, 0.5]; mode=:verified)
+    @test t_left != 0 && t_right != 0
+    @test t_gap == 0
+    @test t_left != t_right
+    @test EC.locate(pi, [1.5, 1.5]; mode=:verified) == 0
 
-        w = TO.RegionGeometry.region_weights(pi; box=box, method=:exact)
-        @test isapprox(w[t_left], 1.0; atol=1e-10)
-        @test isapprox(w[t_right], 1.0; atol=1e-10)
-        @test isapprox(sum(w), 2.0; atol=1e-10)
+    w = TO.RegionGeometry.region_weights(pi; box=box, method=:exact)
+    @test isapprox(w[t_left], 1.0; atol=1e-10)
+    @test isapprox(w[t_right], 1.0; atol=1e-10)
+    @test isapprox(sum(w), 2.0; atol=1e-10)
 
-        bb_left = TO.RegionGeometry.region_bbox(pi, t_left; box=box)
-        bb_right = TO.RegionGeometry.region_bbox(pi, t_right; box=box)
-        @test bb_left == (Float64[0.0, 0.0], Float64[1.0, 1.0])
-        @test bb_right == (Float64[2.0, 0.0], Float64[3.0, 1.0])
+    bb_left = TO.RegionGeometry.region_bbox(pi, t_left; box=box)
+    bb_right = TO.RegionGeometry.region_bbox(pi, t_right; box=box)
+    @test bb_left == (Float64[0.0, 0.0], Float64[1.0, 1.0])
+    @test bb_right == (Float64[2.0, 0.0], Float64[3.0, 1.0])
 
-        @test isapprox(TO.RegionGeometry.region_diameter(pi, t_left; box=box, metric=:L2, method=:bbox), sqrt(2.0); atol=1e-10)
-        @test isapprox(TO.RegionGeometry.region_diameter(pi, t_right; box=box, metric=:L2, method=:bbox), sqrt(2.0); atol=1e-10)
+    @test isapprox(TO.RegionGeometry.region_diameter(pi, t_left; box=box, metric=:L2, method=:bbox), sqrt(2.0); atol=1e-10)
+    @test isapprox(TO.RegionGeometry.region_diameter(pi, t_right; box=box, metric=:L2, method=:bbox), sqrt(2.0); atol=1e-10)
 
-        @test isapprox(TO.RegionGeometry.region_boundary_measure(pi, t_left; box=box, strict=false, mode=:verified), 4.0; atol=1e-8)
-        @test isapprox(TO.RegionGeometry.region_boundary_measure(pi, t_right; box=box, strict=false, mode=:verified), 4.0; atol=1e-8)
+    @test isapprox(TO.RegionGeometry.region_boundary_measure(pi, t_left; box=box, strict=false, mode=:verified), 4.0; atol=1e-8)
+    @test isapprox(TO.RegionGeometry.region_boundary_measure(pi, t_right; box=box, strict=false, mode=:verified), 4.0; atol=1e-8)
 
-        adj = TO.RegionGeometry.region_adjacency(pi; box=box, strict=false, mode=:verified)
-        @test isempty(adj)
-    end
+    adj = TO.RegionGeometry.region_adjacency(pi; box=box, strict=false, mode=:verified)
+    @test isempty(adj)
 end
 
 @testset "PLPolyhedra exact 3D oracle fixtures (QQ)" begin
-    if !PLP.HAVE_POLY
-        @test true
-    else
-        Acube = QQ[1 0 0; 0 1 0; 0 0 1; -1 0 0; 0 -1 0; 0 0 -1]
-        box_hpoly(xl, xu, yl, yu, zl, zu) = PLP.make_hpoly(Acube, QQ[xu, yu, zu, -xl, -yl, -zl])
+    Acube = QQ[1 0 0; 0 1 0; 0 0 1; -1 0 0; 0 -1 0; 0 0 -1]
+    box_hpoly(xl, xu, yl, yu, zl, zu) = PLP.make_hpoly(Acube, QQ[xu, yu, zu, -xl, -yl, -zl])
 
-        function mk_pi3(hps, reps)
-            n = length(hps)
-            k = max(1, ceil(Int, log2(n + 1)))
-            sigy = [BitVector(((i - 1) >>> (b - 1)) & 0x1 == 0x1 for b in 1:k) for i in 1:n]
-            sigz = [falses(k) for _ in 1:n]
-            return PLP.PLEncodingMap(3, sigy, sigz, hps, reps)
-        end
-
-        # Fixture A: single unit cube.
-        hp = box_hpoly(0.0, 1.0, 0.0, 1.0, 0.0, 1.0)
-        pi = mk_pi3([hp], [(0.5, 0.5, 0.5)])
-        box = (Float64[0.0, 0.0, 0.0], Float64[1.0, 1.0, 1.0])
-        r = EC.locate(pi, [0.5, 0.5, 0.5]; mode=:verified)
-        @test r != 0
-        @test isapprox(TO.RegionGeometry.region_weights(pi; box=box, method=:exact)[r], 1.0; atol=1e-10)
-        @test TO.RegionGeometry.region_bbox(pi, r; box=box) == (Float64[0.0, 0.0, 0.0], Float64[1.0, 1.0, 1.0])
-        @test isapprox(TO.RegionGeometry.region_diameter(pi, r; box=box, metric=:L2, method=:bbox), sqrt(3.0); atol=1e-10)
-        @test isapprox(TO.RegionGeometry.region_boundary_measure(pi, r; box=box, mode=:verified), 6.0; atol=1e-8)
-        @test isempty(TO.RegionGeometry.region_adjacency(pi; box=box, strict=true, mode=:verified))
-
-        # Fixture B: two adjacent unit cubes sharing one face.
-        hp1 = box_hpoly(0.0, 1.0, 0.0, 1.0, 0.0, 1.0)
-        hp2 = box_hpoly(1.0, 2.0, 0.0, 1.0, 0.0, 1.0)
-        pi2 = mk_pi3([hp1, hp2], [(0.5, 0.5, 0.5), (1.5, 0.5, 0.5)])
-        box2 = (Float64[0.0, 0.0, 0.0], Float64[2.0, 1.0, 1.0])
-        r1 = EC.locate(pi2, [0.5, 0.5, 0.5]; mode=:verified)
-        r2 = EC.locate(pi2, [1.5, 0.5, 0.5]; mode=:verified)
-        @test r1 != 0 && r2 != 0 && r1 != r2
-        w2 = TO.RegionGeometry.region_weights(pi2; box=box2, method=:exact)
-        @test isapprox(w2[r1], 1.0; atol=1e-10)
-        @test isapprox(w2[r2], 1.0; atol=1e-10)
-        @test isapprox(TO.RegionGeometry.region_boundary_measure(pi2, r1; box=box2, mode=:verified), 6.0; atol=1e-8)
-        @test isapprox(TO.RegionGeometry.region_boundary_measure(pi2, r2; box=box2, mode=:verified), 6.0; atol=1e-8)
-        adj2 = TO.RegionGeometry.region_adjacency(pi2; box=box2, strict=true, mode=:verified)
-        key = r1 < r2 ? (r1, r2) : (r2, r1)
-        @test haskey(adj2, key)
-        @test isapprox(adj2[key], 1.0; atol=1e-8)
-
-        # Fixture C: rectangular prism.
-        hp3 = box_hpoly(0.0, 2.0, 0.0, 1.0, 0.0, 3.0)
-        pi3 = mk_pi3([hp3], [(1.0, 0.5, 1.5)])
-        box3 = (Float64[0.0, 0.0, 0.0], Float64[2.0, 1.0, 3.0])
-        r3 = EC.locate(pi3, [1.0, 0.5, 1.5]; mode=:verified)
-        @test r3 != 0
-        @test isapprox(TO.RegionGeometry.region_weights(pi3; box=box3, method=:exact)[r3], 6.0; atol=1e-10)
-        @test isapprox(TO.RegionGeometry.region_diameter(pi3, r3; box=box3, metric=:L2, method=:bbox), sqrt(14.0); atol=1e-10)
-        @test isapprox(TO.RegionGeometry.region_boundary_measure(pi3, r3; box=box3, mode=:verified), 22.0; atol=1e-8)
+    function mk_pi3(hps, reps)
+        n = length(hps)
+        k = max(1, ceil(Int, log2(n + 1)))
+        sigy = [BitVector(((i - 1) >>> (b - 1)) & 0x1 == 0x1 for b in 1:k) for i in 1:n]
+        sigz = [falses(k) for _ in 1:n]
+        return PLP.PLEncodingMap(3, sigy, sigz, hps, reps)
     end
+
+    # Fixture A: single unit cube.
+    hp = box_hpoly(0.0, 1.0, 0.0, 1.0, 0.0, 1.0)
+    pi = mk_pi3([hp], [(0.5, 0.5, 0.5)])
+    box = (Float64[0.0, 0.0, 0.0], Float64[1.0, 1.0, 1.0])
+    r = EC.locate(pi, [0.5, 0.5, 0.5]; mode=:verified)
+    @test r != 0
+    @test isapprox(TO.RegionGeometry.region_weights(pi; box=box, method=:exact)[r], 1.0; atol=1e-10)
+    @test TO.RegionGeometry.region_bbox(pi, r; box=box) == (Float64[0.0, 0.0, 0.0], Float64[1.0, 1.0, 1.0])
+    @test isapprox(TO.RegionGeometry.region_diameter(pi, r; box=box, metric=:L2, method=:bbox), sqrt(3.0); atol=1e-10)
+    @test isapprox(TO.RegionGeometry.region_boundary_measure(pi, r; box=box, mode=:verified), 6.0; atol=1e-8)
+    @test isempty(TO.RegionGeometry.region_adjacency(pi; box=box, strict=true, mode=:verified))
+
+    # Fixture B: two adjacent unit cubes sharing one face.
+    hp1 = box_hpoly(0.0, 1.0, 0.0, 1.0, 0.0, 1.0)
+    hp2 = box_hpoly(1.0, 2.0, 0.0, 1.0, 0.0, 1.0)
+    pi2 = mk_pi3([hp1, hp2], [(0.5, 0.5, 0.5), (1.5, 0.5, 0.5)])
+    box2 = (Float64[0.0, 0.0, 0.0], Float64[2.0, 1.0, 1.0])
+    r1 = EC.locate(pi2, [0.5, 0.5, 0.5]; mode=:verified)
+    r2 = EC.locate(pi2, [1.5, 0.5, 0.5]; mode=:verified)
+    @test r1 != 0 && r2 != 0 && r1 != r2
+    w2 = TO.RegionGeometry.region_weights(pi2; box=box2, method=:exact)
+    @test isapprox(w2[r1], 1.0; atol=1e-10)
+    @test isapprox(w2[r2], 1.0; atol=1e-10)
+    @test isapprox(TO.RegionGeometry.region_boundary_measure(pi2, r1; box=box2, mode=:verified), 6.0; atol=1e-8)
+    @test isapprox(TO.RegionGeometry.region_boundary_measure(pi2, r2; box=box2, mode=:verified), 6.0; atol=1e-8)
+    adj2 = TO.RegionGeometry.region_adjacency(pi2; box=box2, strict=true, mode=:verified)
+    key = r1 < r2 ? (r1, r2) : (r2, r1)
+    @test haskey(adj2, key)
+    @test isapprox(adj2[key], 1.0; atol=1e-8)
+
+    # Fixture C: rectangular prism.
+    hp3 = box_hpoly(0.0, 2.0, 0.0, 1.0, 0.0, 3.0)
+    pi3 = mk_pi3([hp3], [(1.0, 0.5, 1.5)])
+    box3 = (Float64[0.0, 0.0, 0.0], Float64[2.0, 1.0, 3.0])
+    r3 = EC.locate(pi3, [1.0, 0.5, 1.5]; mode=:verified)
+    @test r3 != 0
+    @test isapprox(TO.RegionGeometry.region_weights(pi3; box=box3, method=:exact)[r3], 6.0; atol=1e-10)
+    @test isapprox(TO.RegionGeometry.region_diameter(pi3, r3; box=box3, metric=:L2, method=:bbox), sqrt(14.0); atol=1e-10)
+    @test isapprox(TO.RegionGeometry.region_boundary_measure(pi3, r3; box=box3, mode=:verified), 22.0; atol=1e-8)
 end
 
 @testset "PLBackend UX surface" begin
@@ -1281,57 +1288,55 @@ end
             @test axis_fast_ns <= 1.3 * axis_verified_ns + 20.0
         end
 
-        if PLP.HAVE_POLY
-            # PLPolyhedra cached-vs-uncached locate_many! guard on fixed points.
-            A1 = QQ[1 0; 0 1; -1 0; 0 -1]
-            b1 = QQ[1, 1, 0, 0]
-            A2 = QQ[1 0; 0 1; -1 0; 0 -1]
-            b2 = QQ[2, 1, -1, 0]
-            hp1 = PLP.make_hpoly(A1, b1)
-            hp2 = PLP.make_hpoly(A2, b2)
-            pi = PLP.PLEncodingMap(2,
-                                   [BitVector(), BitVector()],
-                                   [BitVector(), BitVector()],
-                                   [hp1, hp2],
-                                   [(0.5, 0.5), (1.5, 0.5)])
-            box = (Float64[0, 0], Float64[2, 1])
-            cache = PLP.compile_geometry_cache(pi; box=box, closure=true)
+        # PLPolyhedra cached-vs-uncached locate_many! guard on fixed points.
+        A1 = QQ[1 0; 0 1; -1 0; 0 -1]
+        b1 = QQ[1, 1, 0, 0]
+        A2 = QQ[1 0; 0 1; -1 0; 0 -1]
+        b2 = QQ[2, 1, -1, 0]
+        hp1 = PLP.make_hpoly(A1, b1)
+        hp2 = PLP.make_hpoly(A2, b2)
+        pi = PLP.PLEncodingMap(2,
+                               [BitVector(), BitVector()],
+                               [BitVector(), BitVector()],
+                               [hp1, hp2],
+                               [(0.5, 0.5), (1.5, 0.5)])
+        box = (Float64[0, 0], Float64[2, 1])
+        cache = PLP.compile_geometry_cache(pi; box=box, closure=true)
 
-            npts = 12_000
-            X = Matrix{Float64}(undef, 2, npts)
-            @inbounds for j in 1:npts
-                # Deterministic pseudo-grid samples.
-                X[1, j] = (j % 2000) / 1000
-                X[2, j] = ((j * 7) % 1000) / 1000
-            end
-            dest_uncached = zeros(Int, npts)
-            dest_cached = zeros(Int, npts)
+        npts = 12_000
+        X = Matrix{Float64}(undef, 2, npts)
+        @inbounds for j in 1:npts
+            # Deterministic pseudo-grid samples.
+            X[1, j] = (j % 2000) / 1000
+            X[2, j] = ((j * 7) % 1000) / 1000
+        end
+        dest_uncached = zeros(Int, npts)
+        dest_cached = zeros(Int, npts)
 
-            # Warmup
+        # Warmup
+        PLP.locate_many!(dest_uncached, pi, X; threaded=false, mode=:fast)
+        PLP.locate_many!(dest_cached, cache, X; threaded=false, mode=:fast)
+        t_uncached = _median_elapsed() do
             PLP.locate_many!(dest_uncached, pi, X; threaded=false, mode=:fast)
+        end
+        t_cached = _median_elapsed() do
             PLP.locate_many!(dest_cached, cache, X; threaded=false, mode=:fast)
-            t_uncached = _median_elapsed() do
-                PLP.locate_many!(dest_uncached, pi, X; threaded=false, mode=:fast)
-            end
-            t_cached = _median_elapsed() do
-                PLP.locate_many!(dest_cached, cache, X; threaded=false, mode=:fast)
-            end
+        end
 
-            @test dest_cached == dest_uncached
-            many_uncached_ns = _ns_per_item(t_uncached, npts)
-            many_cached_ns = _ns_per_item(t_cached, npts)
-            # Platform-normalized envelope: cache should be faster on per-query cost.
-            if strict_ci
-                @test many_cached_ns <= 1.10 * many_uncached_ns + 20.0
-            else
-                @test many_cached_ns <= 1.2 * many_uncached_ns + 30.0
-            end
+        @test dest_cached == dest_uncached
+        many_uncached_ns = _ns_per_item(t_uncached, npts)
+        many_cached_ns = _ns_per_item(t_cached, npts)
+        # Platform-normalized envelope: cache should be faster on per-query cost.
+        if strict_ci
+            @test many_cached_ns <= 1.10 * many_uncached_ns + 20.0
+        else
+            @test many_cached_ns <= 1.2 * many_uncached_ns + 30.0
         end
     end
 end
 
 @testset "PLPolyhedra adversarial degenerate geometry fixtures (QQ)" begin
-    if !PLP.HAVE_POLY || !(field isa CM.QQField)
+    if !(field isa CM.QQField)
         @test true
     else
         # Fixture A: near-coplanar thin slab in 3D.
@@ -1435,71 +1440,63 @@ end
 end
 
 @testset "PLPolyhedra non-QQ coercion and geometry parity ($(field))" begin
-    if !PLP.HAVE_POLY
-        @test true
-    else
-        A_up = -Matrix{QQ}(I, 1, 1)
-        b_up = QQ[0]
-        A_down = Matrix{QQ}(I, 1, 1)
-        b_down = QQ[2]
-        hp_up = PLP.make_hpoly(A_up, b_up)
-        hp_down = PLP.make_hpoly(A_down, b_down)
-        F = PLP.PLFringe(
-            [PLP.PLUpset(PLP.PolyUnion(1, [hp_up]))],
-            [PLP.PLDownset(PLP.PolyUnion(1, [hp_down]))],
-            reshape(QQ[1], 1, 1),
-        )
-        enc_opts = TO.EncodingOptions(backend=:pl, field=field)
-        enc = TO.encode(F, enc_opts; output=:result, cache=:auto)
+    A_up = -Matrix{QQ}(I, 1, 1)
+    b_up = QQ[0]
+    A_down = Matrix{QQ}(I, 1, 1)
+    b_down = QQ[2]
+    hp_up = PLP.make_hpoly(A_up, b_up)
+    hp_down = PLP.make_hpoly(A_down, b_down)
+    F = PLP.PLFringe(
+        [PLP.PLUpset(PLP.PolyUnion(1, [hp_up]))],
+        [PLP.PLDownset(PLP.PolyUnion(1, [hp_down]))],
+        reshape(QQ[1], 1, 1),
+    )
+    enc_opts = TO.EncodingOptions(backend=:pl, field=field)
+    enc = TO.encode(F, enc_opts; output=:result, cache=:auto)
 
-        @test enc.M.field == field
-        @test enc.H.field == field
+    @test enc.M.field == field
+    @test enc.H.field == field
 
-        box = ([-2.0], [7.0])
-        w = TO.RegionGeometry.region_weights(enc.pi; box=box, method=:exact)
-        t_left = EC.locate(enc.pi, [-1.0]; mode=:verified)
-        t_mid = EC.locate(enc.pi, [1.0]; mode=:verified)
-        t_right = EC.locate(enc.pi, [3.0]; mode=:verified)
+    box = ([-2.0], [7.0])
+    w = TO.RegionGeometry.region_weights(enc.pi; box=box, method=:exact)
+    t_left = EC.locate(enc.pi, [-1.0]; mode=:verified)
+    t_mid = EC.locate(enc.pi, [1.0]; mode=:verified)
+    t_right = EC.locate(enc.pi, [3.0]; mode=:verified)
 
-        @test FF.fiber_dimension(enc.H, t_left) == 0
-        @test FF.fiber_dimension(enc.H, t_mid) == 1
-        @test FF.fiber_dimension(enc.H, t_right) == 0
+    @test FF.fiber_dimension(enc.H, t_left) == 0
+    @test FF.fiber_dimension(enc.H, t_mid) == 1
+    @test FF.fiber_dimension(enc.H, t_right) == 0
 
-        @test isapprox(w[t_left], 2.0; atol=1e-9)
-        @test isapprox(w[t_mid], 2.0; atol=1e-9)
-        @test isapprox(w[t_right], 5.0; atol=1e-9)
-        @test isapprox(sum(w), 9.0; atol=1e-8)
-    end
+    @test isapprox(w[t_left], 2.0; atol=1e-9)
+    @test isapprox(w[t_mid], 2.0; atol=1e-9)
+    @test isapprox(w[t_right], 5.0; atol=1e-9)
+    @test isapprox(sum(w), 9.0; atol=1e-8)
 end
 
 @testset "PLPolyhedra near-boundary parity (fast vs verified, $(field))" begin
-    if !PLP.HAVE_POLY
-        @test true
-    else
-        A = reshape(QQ[1, -1], 2, 1)
-        hp1 = PLP.make_hpoly(A, QQ[1, 0])   # [0,1]
-        hp2 = PLP.make_hpoly(A, QQ[2, -1])  # [1,2]
-        pi = PLP.PLEncodingMap(1,
-                               [BitVector([false]), BitVector([true])],
-                               [BitVector([false]), BitVector([false])],
-                               [hp1, hp2],
-                               [(0.5,), (1.5,)])
+    A = reshape(QQ[1, -1], 2, 1)
+    hp1 = PLP.make_hpoly(A, QQ[1, 0])   # [0,1]
+    hp2 = PLP.make_hpoly(A, QQ[2, -1])  # [1,2]
+    pi = PLP.PLEncodingMap(1,
+                           [BitVector([false]), BitVector([true])],
+                           [BitVector([false]), BitVector([false])],
+                           [hp1, hp2],
+                           [(0.5,), (1.5,)])
 
-        epss = (1e-4, 1e-7, 1e-10, 1e-12)
-        probes = Float64[0.0, 1.0, 2.0]
-        for e in epss
-            append!(probes, (0.0 - e, 0.0 + e, 1.0 - e, 1.0 + e, 2.0 - e, 2.0 + e))
-        end
-        for x in probes
-            rf = PLP.locate(pi, [x]; mode=:fast)
-            rv = PLP.locate(pi, [x]; mode=:verified)
-            @test rf == rv
-        end
+    epss = (1e-4, 1e-7, 1e-10, 1e-12)
+    probes = Float64[0.0, 1.0, 2.0]
+    for e in epss
+        append!(probes, (0.0 - e, 0.0 + e, 1.0 - e, 1.0 + e, 2.0 - e, 2.0 + e))
+    end
+    for x in probes
+        rf = PLP.locate(pi, [x]; mode=:fast)
+        rv = PLP.locate(pi, [x]; mode=:verified)
+        @test rf == rv
     end
 end
 
 @testset "PL non-QQ deep geometry hand-oracles ($(field))" begin
-    if field isa CM.QQField || !PLP.HAVE_POLY
+    if field isa CM.QQField
         @test true
     else
         # 2D unit square exact oracle.
@@ -1535,3 +1532,320 @@ end
 end
     end
 end # with_fields
+
+@testset "PLPolyhedra A11 task-owned locate and centroid readiness" begin
+    nregions = 72
+    polys = [PLP.make_hpoly(reshape(QQ[1, -1], 2, 1), QQ[i, 1-i]) for i in 1:nregions]
+    pi = PLP.PLEncodingMap(1,
+        [BitVector([true]) for _ in 1:nregions],
+        [BitVector([false]) for _ in 1:nregions],
+        polys, [(i - 0.5,) for i in 1:nregions])
+    X = reshape([mod(j-1, nregions) + 0.5 for j in 1:4096], 1, :)
+    expected = [mod(j-1, nregions) + 1 for j in 1:4096]
+    @test PLP.locate_many(pi, X; threaded=false, mode=:verified) == expected
+    jobs = [Threads.@spawn PLP.locate_many(pi, X; threaded=true, mode=:verified) for _ in 1:4]
+    @test all(fetch(job) == expected for job in jobs)
+    nested = Vector{Vector{Int}}(undef, 4)
+    Threads.@threads for j in eachindex(nested)
+        nested[j] = PLP.locate_many(pi, X; threaded=true, mode=:fast)
+    end
+    @test all(==(expected), nested)
+    if Threads.nthreads(:interactive) > 0
+        job = Threads.@spawn :interactive PLP.locate_many(pi, X; threaded=true, mode=:verified)
+        @test fetch(job) == expected
+    end
+
+    # Deterministic task interleaving checks both exact-coordinate and grouped
+    # query scratch without relying on the OS to migrate a task during the test.
+    ready, resume = Channel{Nothing}(1), Channel{Nothing}(1)
+    first_task = @async begin
+        local q = PLP._locate_qcol_scratch!(1)
+        local g = PLP._locate_bucket_group_scratch!(pi, nothing, 4, 8)
+        q.qcol[1] = QQ(11)
+        g.cols[1] = 19
+        put!(ready, nothing)
+        take!(resume)
+        (q.qcol[1], g.cols[1])
+    end
+    take!(ready)
+    fetch(@async begin
+        PLP._locate_qcol_scratch!(1).qcol[1] = QQ(99)
+        PLP._locate_bucket_group_scratch!(pi, nothing, 4, 8).cols[1] = 29
+    end)
+    put!(resume, nothing)
+    @test fetch(first_task) == (QQ(11), 19)
+
+    cache = PLP.compile_geometry_cache(pi; box=([0.0], [Float64(nregions)]),
+                                      precompute_facets=false)
+    @test cache.exact_centroid_ready isa Vector{Bool}
+    @test all(cache.exact_centroid_ready)
+    @test all(cache.exact_weight_ready)
+    @test cache.exact_weight == ones(nregions)
+    @test [c[1] for c in cache.exact_centroid] == [i - 0.5 for i in 1:nregions]
+    @test fetch(Threads.@spawn PLP.locate_many(cache, X; threaded=true)) == expected
+    tasks = [Threads.@spawn begin
+        local scratch = PLP._facet_classify_scratch!(cache, 4)
+        scratch.loc[1] = i
+        yield()
+        scratch.loc[1]
+    end for i in 1:8]
+    @test fetch.(tasks) == collect(1:8)
+end
+
+@testset "PLPolyhedra A11 Bool batch destinations" begin
+    hp = PLP.make_hpoly(reshape(QQ[1, -1], 2, 1), QQ[1, 0])
+    pi = PLP.PLEncodingMap(1, [BitVector([true])], [BitVector([false])], [hp], [(0.5,)])
+    X = reshape([(-0.5, 0.25, 0.75, 1.5)[mod1(j, 4)] for j in 1:4099], 1, :)
+    expected = [0.0 <= x <= 1.0 for x in vec(X)]
+    targets = Any[pi]
+    push!(targets, PLP.poly_in_box_cache(pi; box=([0.0], [1.0]), level=:light))
+    old_queries = PLP._LOCATE_THREAD_MIN_QUERIES[]
+    old_work = PLP._LOCATE_THREAD_MIN_WORK[]
+    try
+        PLP._LOCATE_THREAD_MIN_QUERIES[] = 1
+        PLP._LOCATE_THREAD_MIN_WORK[] = 1
+        for target in targets, mode in (:fast, :verified), queries in (X, view(X, :, :))
+            for _ in 1:3
+                bits = falses(length(expected) + 2)
+                dest = view(bits, 2:length(bits)-1)
+                @test PLP.locate_many!(dest, target, queries; threaded=true, mode=mode) === dest
+                @test dest == expected
+                @test !first(bits) && !last(bits)
+            end
+            bytes = fill(false, length(expected))
+            @test PLP.locate_many!(bytes, target, queries; threaded=true, mode=mode) === bytes
+            @test bytes == expected
+        end
+    finally
+        PLP._LOCATE_THREAD_MIN_QUERIES[] = old_queries
+        PLP._LOCATE_THREAD_MIN_WORK[] = old_work
+    end
+end
+
+@testset "PLPolyhedra A11 shared cold-cache publication" begin
+    # Adjacent unit squares have volume 1, perimeter 4, centroid (i-.5,.5)
+    # and one unit of shared boundary between each consecutive pair.
+    nregions = 12
+    A = QQ[1 0; 0 1; -1 0; 0 -1]
+    polys = [PLP.make_hpoly(A,QQ[i,1,1-i,0]) for i in 1:nregions]
+    pi = PLP.PLEncodingMap(2,
+        [BitVector([true]) for _ in 1:nregions],
+        [BitVector([false]) for _ in 1:nregions],
+        polys, [(i-.5,.5) for i in 1:nregions])
+    box = ([0.0,0.0],[Float64(nregions),1.0])
+    cache = PLP.poly_in_box_cache(pi; box=box,level=:light)
+    expected_adjacency = Dict((i,i+1)=>1.0 for i in 1:nregions-1)
+    ready = Channel{Nothing}(12)
+    start = Channel{Nothing}(12)
+    tasks = [Threads.@spawn begin
+        put!(ready,nothing)
+        take!(start)
+        local region = mod1(index,nregions)
+        local weights = TO.RegionGeometry.region_weights(pi;box=box,cache=cache,method=:exact)
+        yield()
+        local center = TO.RegionGeometry.region_centroid(pi,region;box=box,cache=cache,method=:polyhedra)
+        local boundary = TO.RegionGeometry.region_boundary_measure(pi,region;box=box,cache=cache,mode=:verified)
+        local adjacent = TO.RegionGeometry.region_adjacency(pi;box=box,cache=cache,mode=:verified)
+        (weights,center,boundary,adjacent)
+    end for index in 1:12]
+    for _ in tasks
+        take!(ready)
+    end
+    for _ in tasks
+        put!(start,nothing)
+    end
+    results = fetch.(tasks)
+    for (index,result) in enumerate(results)
+        weights,center,boundary,adjacent = result
+        @test weights == ones(nregions)
+        @test center == [index-.5,.5]
+        @test isapprox(boundary,4.0;atol=1e-12)
+        @test adjacent == expected_adjacency
+    end
+    @test all(cache.exact_centroid_ready)
+    @test all(cache.exact_weight_ready)
+    @test count(cache.active_mask) == nregions
+    @test sort(cache.active_regions) == collect(1:nregions)
+    # Clearing is an exclusive maintenance operation, after all users join.
+    empty!(cache)
+    @test PLP.cached_region_count(cache) == 0
+    @test TO.RegionGeometry.region_weights(pi;box=box,cache=cache,method=:exact) == ones(nregions)
+end
+
+@testset "A78 CDD boundaries serialize mixed owners and preserve geometry" begin
+    DI78 = TO.DataIngestion
+    @test PLP._with_cdd_execution === CM._with_cdd_execution
+    @test DI78._with_cdd_execution === CM._with_cdd_execution
+    @test CM._with_cdd_execution(() -> CM._with_cdd_execution(() -> 42)) == 42
+    @test_throws ErrorException CM._with_cdd_execution(() -> error("A78 deliberate callback failure"))
+    @test !islocked(CM._CDD_EXECUTION_LOCK)
+
+    # Verify the actual shared mutex under task migration/yielding, separately
+    # from the mathematical stress checks. Stress alone cannot prove C safety.
+    active, peak = Ref(0), Ref(0)
+    fetch.([Threads.@spawn CM._with_cdd_execution() do
+        active[] += 1
+        peak[] = max(peak[],active[])
+        yield()
+        active[] -= 1
+    end for _ in 1:16])
+    @test active[] == 0
+    @test peak[] == 1
+
+    # These are hand-computable cube answers, including both CDD number
+    # types, and a separate exhaustive enumeration backend for the
+    # incremental route. A77 checks their shared geometry independently.
+    # Compare full chain data, not counts.
+    A = QQ[1 0 0;0 1 0;0 0 1;-1 0 0;0 -1 0;0 0 -1]
+    b = QQ[1,1,1,0,0,0]
+    hp = PLP.make_hpoly(A,b)
+    pi = PLP.PLEncodingMap(3,[BitVector()],[BitVector()],[hp],[(.5,.5,.5)])
+    box = ([0.0,0.0,0.0],[1.0,1.0,1.0])
+    cache = PLP.poly_in_box_cache(pi;box,level=:light)
+    lazy_hp = PLP.make_hpoly(A,b)
+    @test !PLP.Polyhedra.vrepiscomputed(lazy_hp.poly)
+    cloud = DT.PointCloud(QQ[0 0;2 0;1 2])
+    exhaustive = DI78.RhomboidFiltration(backend=:exhaustive,depth_range=(1,2))
+    incremental = DI78.RhomboidFiltration(backend=:incremental,depth_range=(1,2))
+    reference = DI78.encode(cloud,exhaustive;stage=:graded_complex,cache=nothing)
+    expected = (reference.grades,reference.boundaries)
+    # The triangle's lifted epigraph has four halfspaces. Its copied
+    # facets need 1280 estimated bytes in addition to the 963-byte current
+    # vertex/lift estimate; reject 2242 before collecting/emitting a cell.
+    limited = DI78.RhomboidFiltration(backend=:incremental,depth_range=(1,2),
+        construction=TO.Options.ConstructionOptions(budget=TO.Options.ConstructionBudget(
+            memory_budget_bytes=2242)))
+    emitted = Ref(0)
+    @test_throws ArgumentError DI78._rhomboid_incremental_top!(
+        (_,_) -> (emitted[] += 1),QQ[0 0;2 0;1 2],2,DI78._filtration_spec(limited),UInt64)
+    @test emitted[] == 0
+    @test !islocked(CM._CDD_EXECUTION_LOCK)
+    session = CM.SessionCache()
+    for round in 1:3
+        tasks = [Threads.@spawn begin
+            lane = mod1(index,4)
+            result = if lane == 1
+                G = DI78.encode(cloud,incremental;stage=:graded_complex,
+                                cache=isodd(round) ? nothing : session)
+                (:rhomboid,G.grades,G.boundaries)
+            elseif lane == 2
+                local_cache = isodd(round) ? cache : nothing
+                (:cube,
+                 TO.RegionGeometry.region_volume(pi,1;box,cache=local_cache,method=:exact),
+                 TO.RegionGeometry.region_centroid(pi,1;box,cache=local_cache),
+                 TO.RegionGeometry.region_boundary_measure(pi,1;box,cache=local_cache,mode=:verified))
+            elseif lane == 3
+                (:ball,
+                 TO.RegionGeometry.region_chebyshev_ball(pi,1;box,metric=:L2,method=:polyhedra),
+                 TO.RegionGeometry.region_chebyshev_ball(pi,1;box,metric=:Linf,method=:polyhedra))
+            else
+                (:lazy_bbox,PLP._region_bbox_from_poly(lazy_hp,3))
+            end
+            # Dependency finalizers may run on other tasks/threads. They
+            # are not monkeypatched; the reviewed native free routines own
+            # their allocations and do not modify global CDD statistics.
+            iseven(index) && GC.gc(false)
+            result
+        end for index in 1:12]
+        for result in fetch.(tasks)
+            if first(result) == :rhomboid
+                @test result[2] == expected[1]
+                @test result[3] == expected[2]
+                for degree in 1:length(result[3])-1
+                    @test iszero(result[3][degree]*result[3][degree+1])
+                end
+            elseif first(result) == :cube
+                @test result[2] == 1.0
+                @test result[3] == [.5,.5,.5]
+                @test isapprox(result[4],6.0;atol=1e-12,rtol=0)
+            elseif first(result) == :ball
+                for ball in result[2:3]
+                    @test isapprox(ball.radius,.5;atol=1e-12,rtol=0)
+                    @test isapprox(ball.center,[.5,.5,.5];atol=1e-12,rtol=0)
+                end
+            else
+                @test result[2] == (zeros(3),ones(3))
+            end
+        end
+    end
+    @test PLP.Polyhedra.vrepiscomputed(lazy_hp.poly)
+    # This window retains only eight original carriers (estimated 1424
+    # bytes), below the 2242 limit. A cached rejection therefore needs the
+    # newly recorded facet workspace peak, not the old carrier estimate.
+    budget_session = CM.SessionCache()
+    budget_window = DI78.RhomboidFiltration(backend=:incremental,depth_range=(3,3))
+    DI78.encode(cloud,budget_window;stage=:graded_complex,cache=budget_session)
+    budget_limited = DI78.RhomboidFiltration(backend=:incremental,depth_range=(3,3),
+        construction=TO.Options.ConstructionOptions(budget=TO.Options.ConstructionBudget(
+            memory_budget_bytes=2242)))
+    budget_entries = CM._workflow_encoding_cache(budget_session).geometry
+    geometry = only(v.value for (key,v) in budget_entries if first(key)==:rhomboid_geometry)
+    @test DI78._rhomboid_storage_check!(length.(geometry.cells),DI78._filtration_spec(budget_limited),3) === nothing
+    @test geometry.workspace_bytes > 2242
+    @test_throws ArgumentError DI78.encode(cloud,budget_limited;stage=:graded_complex,cache=budget_session)
+    @test_throws ArgumentError DI78.encode(cloud,budget_limited;stage=:graded_complex,cache=nothing)
+    empty!(cache)
+    @test PLP.cached_region_count(cache) == 0
+    @test TO.RegionGeometry.region_volume(pi,1;box,cache,method=:exact) == 1.0
+    # Exercise the guarded exact volume/centroid calls directly, and a
+    # non-box body with independently known rational volume and centroid.
+    @test PLP._exact_weight_from_cache(cache,1) == 1
+    @test PLP._exact_centroid_from_cache(cache,1) == [.5,.5,.5]
+    tetra = PLP.make_hpoly(QQ[-1 0 0;0 -1 0;0 0 -1;1 1 1],QQ[0,0,0,1])
+    tetra_pi = PLP.PLEncodingMap(3,[BitVector()],[BitVector()],[tetra],[(.25,.25,.25)])
+    for tetra_cache in (nothing,PLP.poly_in_box_cache(tetra_pi;box,level=:light))
+        @test isapprox(TO.RegionGeometry.region_volume(tetra_pi,1;box,cache=tetra_cache),1/6;atol=1e-12,rtol=0)
+        @test TO.RegionGeometry.region_centroid(tetra_pi,1;box,cache=tetra_cache) == [.25,.25,.25]
+    end
+    # A three-dimensional unit facet in R^4 reaches the floating CDD
+    # projection/volume fallback (2D/3D ambient facets are analytic).
+    facet4 = [Float64[x,y,z,0] for x in 0:1 for y in 0:1 for z in 0:1]
+    @test isapprox(PLP._facet_measure(facet4,[0.,0.,0.,1.]),1;atol=1e-12,rtol=0)
+    GC.gc()
+end
+
+@testset "A14 PL owner encoding options govern representation and coefficients" begin
+    ups = [PLB.BoxUpset([0.0])]
+    downs = [PLB.BoxDownset([2.0])]
+    phi = fill(QQ(3), 1, 1)
+    with_fields(FIELDS_FULL) do field
+        opts = TO.EncodingOptions(backend=:pl_backend, poset_kind=:dense, field=field)
+        P, H, pi = PLB.encode_fringe_boxes(ups, downs, phi, opts)
+        expected = iszero(CM.coerce(field, 3)) ? 0 : 1
+        @test P isa FF.FinitePoset
+        @test H.field == field
+        @test H.phi == fill(CM.coerce(field, 3), 1, 1)
+        @test [FF.fiber_dimension(H, EC.locate(pi, (x,))) for x in (-1.0, 0.0, 1.0, 2.0, 3.0)] == [0, expected, expected, expected, 0]
+        M = IR.pmodule_from_fringe(H)
+        @test TO.Invariants.rank_map(M, EC.locate(pi, (0.0,)), EC.locate(pi, (1.0,))) == expected
+        @test first(PLB.encode_fringe_boxes(ups, downs, opts)) isa FF.FinitePoset
+        @test first(PLB.encode_fringe_boxes(ups, downs, vec(phi), opts)) isa FF.FinitePoset
+        @test first(PLB.encode_fringe_boxes(ups, downs, phi, opts; poset_kind=:signature)) isa TO.ZnEncoding.SignaturePoset
+    end
+    @test_throws ArgumentError PLB.encode_fringe_boxes(ups, downs, TO.EncodingOptions(strict_eps=1//10))
+    U = PLP.PLUpset(PLP.PolyUnion(1, [PLP.make_hpoly(QQ[-1], QQ(0))]))
+    D = PLP.PLDownset(PLP.PolyUnion(1, [PLP.make_hpoly(QQ[1], QQ(2))]))
+    F = PLP.PLFringe([U], [D], phi)
+    with_fields(FIELDS_FULL) do field
+        opts = TO.EncodingOptions(backend=:pl, poset_kind=:dense, field=field)
+        P, H, pi = PLP.encode_from_PL_fringe(F; opts=opts)
+        expected = iszero(CM.coerce(field, 3)) ? 0 : 1
+        @test P isa FF.FinitePoset
+        @test H.field == field
+        @test H.phi == fill(CM.coerce(field, 3), 1, 1)
+        @test [FF.fiber_dimension(H, EC.locate(pi, (x,))) for x in (-1.0, 0.0, 1.0, 2.0, 3.0)] == [0, expected, expected, expected, 0]
+        M = IR.pmodule_from_fringe(H)
+        @test TO.Invariants.rank_map(M, EC.locate(pi, (0.0,)), EC.locate(pi, (1.0,))) == expected
+        P2, Hs, _ = PLP.encode_from_PL_fringes(F, F; opts=opts)
+        @test P2 isa FF.FinitePoset
+        @test all(h -> h.field == field && h.phi == H.phi, Hs)
+        @test first(PLP.encode_from_PL_fringes((F,), opts)) isa FF.FinitePoset
+        @test first(PLP.encode_from_PL_fringes([F], opts)) isa FF.FinitePoset
+        @test first(PLP.encode_from_PL_fringe_with_tag([U], [D], phi, opts)) isa FF.FinitePoset
+        @test first(PLP.encode_from_PL_fringe(F, opts; poset_kind=:signature)) isa TO.ZnEncoding.SignaturePoset
+        cache = PLP.poly_in_box_cache(pi; box=([-1.0], [3.0]), level=:light)
+        for mode in (:fast, :verified), x in (-0.5, 0.0, 1.0, 2.0, 2.5)
+            @test PLP.locate(cache, (x,); mode=mode) == PLP.locate(pi, [x]; mode=mode)
+        end
+    end
+end

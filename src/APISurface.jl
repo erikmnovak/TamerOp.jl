@@ -8,7 +8,7 @@
 # lists from module exports.
 
 const SIMPLE_API = (
-    :QQ,
+    :QQ, :AlgebraicReal,
     :PointCloud, :ImageNd, :GraphData, :EmbeddedPlanarGraph2D,
     :GradedComplex, :MultiCriticalGradedComplex,
     :FiltrationSpec, :ConstructionBudget, :ConstructionOptions, :PipelineOptions, :DataFileOptions,
@@ -19,18 +19,21 @@ const SIMPLE_API = (
     :GraphWeightThresholdFiltration,
     :ImageLowerStarFiltration, :ImageDistanceBifiltration, :WingVeinBifiltration,
     :DelaunayLowerStarFiltration, :AlphaFiltration, :FunctionDelaunayFiltration,
-    :CoreDelaunayFiltration, :CoreFiltration, :DegreeRipsFiltration, :CubicalFiltration,
+    :CoreDelaunayFiltration, :CoreFiltration, :GraphCoreFiltration, :DegreeRipsFiltration, :CubicalFiltration,
     :RhomboidFiltration,
     :filtration_kind, :filtration_arity, :build_graded_complex,
     :register_filtration_family!, :available_filtrations, :registered_filtration_families,
     :filtration_signature, :filtration_parameters, :construction_mode,
     :filtration_spec_summary, :filtration_family_summary,
+    :PersistenceDiagram, :persistence_diagram, :cubical_persistence,
+    :persistence_intervals, :finite_intervals, :essential_births,
+    :persistence_diagram_summary, :check_torus_persistence,
     :point_codensity, :PointCodensityResult, :codensity_values, :codensity_mass, :neighbor_count,
     :encode, :coarsen, :common_refinement, :restriction, :pushforward_left, :pushforward_right, :derived_pushforward_left, :derived_pushforward_right,
     :resolve, :betti_table, :bass_table, :hom_dimension, :hom, :ext, :tor, :rhom, :derived_tensor, :hyperext, :hypertor, :ext_algebra, :invariant, :invariants,
     :rank_invariant, :rank_signed_measure, :restricted_hilbert, :point_signed_measure, :euler_surface, :euler_signed_measure,
     :rectangle_signed_barcode, :rectangle_signed_barcode_image,
-    :slice_barcode, :slice_barcodes, :matching_distance, :matching_distance_exact_2d,
+    :slice_barcode, :slice_barcodes, :matching_distance, :matching_distance_exact_2d, :matching_distance_sampled_2d,
     :mp_landscape, :mpp_decomposition, :mpp_image,
     :mpp_decomposition_summary, :mpp_image_summary, :mp_landscape_summary,
     :visualize, :save_visual, :save_visuals, :available_visuals,
@@ -60,7 +63,7 @@ const SIMPLE_API = (
     :VisualExportResult,
     :export_path, :export_backend, :export_format, :export_kind, :export_stem,
     :EncodingResult, :EncodedComplexResult, :CohomologyDimsResult, :ModuleTranslationResult, :ResolutionResult, :InvariantResult, :unwrap,
-    :result_summary,
+    :result_summary, :provenance,
     :encoding_poset, :encoding_module, :encoding_complex, :translated_module, :translation_map, :translation_kind, :encoding_map, :cohomology_dims,
     :encoding_axes, :encoding_representatives,
     :resolution_object, :invariant_value, :source_result,
@@ -71,6 +74,7 @@ const SIMPLE_API = (
 )
 
 const SIMPLE_API_BINDINGS = (
+    (:ExactReals, (:AlgebraicReal,)),
     (:CoreModules, (
         :QQ,
         :SessionCache,
@@ -85,7 +89,7 @@ const SIMPLE_API_BINDINGS = (
     )),
     (:Results, (
         :EncodingResult, :EncodedComplexResult, :CohomologyDimsResult, :ModuleTranslationResult, :ResolutionResult, :InvariantResult, :unwrap,
-        :result_summary,
+        :result_summary, :provenance,
         :encoding_module, :encoding_complex, :translated_module, :translation_map, :translation_kind,
         :resolution_object, :invariant_value, :source_result,
     )),
@@ -103,7 +107,7 @@ const SIMPLE_API_BINDINGS = (
         :resolve, :betti_table, :bass_table, :hom_dimension, :hom, :ext, :tor, :rhom, :derived_tensor, :hyperext, :hypertor, :ext_algebra, :invariant, :invariants,
         :rank_invariant, :rank_signed_measure, :restricted_hilbert, :point_signed_measure, :euler_surface, :euler_signed_measure,
         :rectangle_signed_barcode, :rectangle_signed_barcode_image,
-        :slice_barcode, :slice_barcodes, :matching_distance_exact_2d,
+        :slice_barcode, :slice_barcodes, :matching_distance_exact_2d, :matching_distance_sampled_2d,
         :mp_landscape, :mpp_decomposition, :mpp_image,
     )),
     (:MultiparameterImages, (
@@ -122,7 +126,7 @@ const SIMPLE_API_BINDINGS = (
         :GraphWeightThresholdFiltration,
         :ImageLowerStarFiltration, :ImageDistanceBifiltration, :WingVeinBifiltration,
         :DelaunayLowerStarFiltration, :AlphaFiltration, :FunctionDelaunayFiltration,
-        :CoreDelaunayFiltration, :CoreFiltration, :DegreeRipsFiltration, :CubicalFiltration,
+        :CoreDelaunayFiltration, :CoreFiltration, :GraphCoreFiltration, :DegreeRipsFiltration, :CubicalFiltration,
         :RhomboidFiltration,
         :filtration_kind, :filtration_arity, :build_graded_complex,
         :register_filtration_family!, :available_filtrations, :registered_filtration_families,
@@ -130,6 +134,11 @@ const SIMPLE_API_BINDINGS = (
         :filtration_spec_summary, :filtration_family_summary,
         :point_codensity, :PointCodensityResult, :codensity_values, :codensity_mass, :neighbor_count,
         :one_criticalify, :criticality, :normalize_multicritical,
+    )),
+    (:OrdinaryPersistence, (
+        :PersistenceDiagram, :persistence_diagram, :cubical_persistence,
+        :persistence_intervals, :finite_intervals, :essential_births,
+        :persistence_diagram_summary, :check_torus_persistence,
     )),
     (:DataFileIO, (
         :load_data, :inspect_data_file,
@@ -163,6 +172,8 @@ const SIMPLE_API_BINDINGS = (
 )
 
 const _ADVANCED_ONLY_API_RAW = (
+    :PersistenceValidationSummary, :check_persistence_diagram,
+    :persistence_validation_summary, :filtration_order,
     :PModule, :PMorphism, :ModuleOptions,
     :EncodingOptions, :ResolutionOptions, :InvariantOptions, :DerivedFunctorOptions,
     :FinitePoset, :ProductOfChainsPoset, :GridPoset, :ProductPoset,
@@ -292,7 +303,8 @@ const _ADVANCED_ONLY_API_RAW = (
     :VisualizationValidationSummary,
     :visual_spec, :render, :check_visual_spec, :check_visual_request, :visual_summary,
     :visual_kind, :visual_layers, :visual_panels, :visual_axes, :visual_metadata,
-    :slice_chain, :slice_chain_exact_2d, :matching_distance_exact_slices_2d, :SliceSpec, :collect_slices, :save_slices_json, :load_slices_json,
+    :bottleneck_distance, :bottleneck_matching,
+    :slice_chain, :slice_chain_exact_2d, :matching_distance_slices_2d, :SliceSpec, :collect_slices, :save_slices_json, :load_slices_json,
     :FiberedArrangement2D, :FiberedBarcodeCache2D, :FiberedSliceFamily2D, :FiberedSliceResult,
     :ProjectedArrangement1D, :ProjectedArrangement, :ProjectedBarcodeCache,
     :ProjectedBarcodesResult, :ProjectedDistancesResult,
@@ -313,7 +325,7 @@ const _ADVANCED_ONLY_API_RAW = (
     :fibered_arrangement_2d, :fibered_barcode_cache_2d,
     :fibered_cell_id, :fibered_chain, :fibered_values, :fibered_barcode, :fibered_barcode_index,
     :fibered_slice, :fibered_barcode_cache_stats, :fibered_slice_family_2d,
-    :matching_distance_exact_2d,
+    :matching_distance_exact_2d, :matching_distance_sampled_2d,
     :projected_arrangement, :projected_barcode_cache, :projected_barcodes,
     :projected_distances, :projected_distance, :projected_kernel,
     :direct_sum, :direct_sum_with_maps, :zero_pmodule, :zero_morphism,
@@ -337,6 +349,8 @@ const _ADVANCED_ONLY_API_RAW = (
     :DiscretePairDiagram, :ParallelPairDiagram, :SpanDiagram, :CospanDiagram,
     :limit, :colimit,
     :ProductPosetResult, :CommonRefinementTranslationResult,
+    :JointEncodingResult, :JointEncodingValidationSummary, :joint_encoding, :check_joint_encoding,
+    :kan_unit, :kan_counit,
     :MonotoneMapValidationSummary, :CommonRefinementHomValidationSummary,
     :monotone_map_validation_summary, :common_refinement_hom_validation_summary,
     :common_poset, :projection_maps, :translated_modules,
@@ -439,6 +453,10 @@ const _ADVANCED_ONLY_API_RAW = (
 const ADVANCED_ONLY_API = Tuple(sym for sym in _ADVANCED_ONLY_API_RAW if !(sym in SIMPLE_API))
 
 const ADVANCED_ONLY_API_BINDINGS = (
+    (:OrdinaryPersistence, (
+        :PersistenceValidationSummary, :check_persistence_diagram,
+        :persistence_validation_summary, :filtration_order,
+    )),
     (:Modules, (
         :PModule, :PMorphism, :ModuleOptions,
         :direct_sum, :direct_sum_with_maps, :zero_pmodule, :zero_morphism,
@@ -701,6 +719,7 @@ const ADVANCED_ONLY_API_BINDINGS = (
         :point_signed_measure_summary, :signed_measure_decomposition_summary,
     )),
     (:SliceInvariants, (
+        :bottleneck_distance, :bottleneck_matching,
         :PersistenceLandscape1D, :PersistenceImage1D, :SliceBarcodesResult, :SliceFeaturesResult,
         :CompiledSlicePlan, :SlicePlanCache, :SliceModuleCache, :SliceModulePairCache,
         :SliceBarcodesTask, :SliceDistanceTask, :SliceKernelTask,
@@ -744,7 +763,7 @@ const ADVANCED_ONLY_API_BINDINGS = (
         :check_mpp_line_spec, :check_mpp_decomposition, :check_mpp_image, :check_mp_landscape,
     )),
     (:Fibered2D, (
-        :slice_chain_exact_2d, :matching_distance_exact_slices_2d,
+        :slice_chain_exact_2d, :matching_distance_slices_2d,
         :FiberedArrangement2D, :FiberedBarcodeCache2D, :FiberedSliceFamily2D, :FiberedSliceResult,
         :ProjectedArrangement1D, :ProjectedArrangement, :ProjectedBarcodeCache,
         :ProjectedBarcodesResult, :ProjectedDistancesResult,
@@ -765,7 +784,7 @@ const ADVANCED_ONLY_API_BINDINGS = (
         :fibered_arrangement_2d, :fibered_barcode_cache_2d,
         :fibered_cell_id, :fibered_chain, :fibered_values, :fibered_barcode, :fibered_barcode_index,
         :fibered_slice, :fibered_barcode_cache_stats, :fibered_slice_family_2d,
-        :matching_distance_exact_2d,
+        :matching_distance_exact_2d, :matching_distance_sampled_2d,
         :projected_arrangement, :projected_barcode_cache, :projected_barcodes,
         :projected_distances, :projected_distance, :projected_kernel,
     )),
@@ -791,6 +810,8 @@ const ADVANCED_ONLY_API_BINDINGS = (
     )),
     (:ChangeOfPosets, (
         :ProductPosetResult, :CommonRefinementTranslationResult,
+        :JointEncodingResult, :JointEncodingValidationSummary, :joint_encoding, :check_joint_encoding,
+        :kan_unit, :kan_counit,
         :MonotoneMapValidationSummary, :CommonRefinementHomValidationSummary,
         :monotone_map_validation_summary, :common_refinement_hom_validation_summary,
         :common_poset, :projection_maps, :translated_modules,

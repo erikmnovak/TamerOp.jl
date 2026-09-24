@@ -106,8 +106,6 @@ end
     ((64, 64), (96, 96), (64, 128), (128, 64)) :
     ((64, 64), (96, 96), (128, 128), (160, 160), (64, 128), (128, 64), (96, 192), (192, 96))
 
-@inline _autotune_float_sparse_dims() = (512, 1024)
-@inline _autotune_float_sparse_densities() = (0.004, 0.01)
 @inline _autotune_zn_dimat_probe_ncuts(profile::Symbol=:full) =
     profile == :startup ? (2, 4, 6) : (2, 4, 6, 8)
 @inline _autotune_zn_dimat_threshold_candidates(profile::Symbol=:full) =
@@ -187,9 +185,6 @@ function _autotune_total_steps(profile::Symbol)
                  length(_autotune_fp_solve_shapes(profile))
     end
     steps += length(_autotune_float_dense_shapes(profile))
-    if _have_svds_backend()
-        steps += length(_autotune_float_sparse_dims()) * length(_autotune_float_sparse_densities())
-    end
     if profile == :full
         steps += _autotune_modular_steps(profile)
         steps += _autotune_zn_dimat_steps(profile)
@@ -276,20 +271,6 @@ function _qq_sparse_fullcolumn_rand(m::Int, n::Int, density::Float64; rng=Random
         push!(V, _qq_nonzero_rand(rng))
     end
     return sparse(I, J, V, m, n)
-end
-
-function _float_sparse_singular_rand(n::Int, density::Float64; rng=Random.default_rng())
-    A = sprand(rng, Float64, n, n, density)
-    if n >= 2
-        A[:, n] = A[:, 1]
-    end
-    if nnz(A) == 0
-        A[1, 1] = 1.0
-        if n >= 2
-            A[1, n] = 1.0
-        end
-    end
-    return A
 end
 
 function _pick_crossover_threshold(works::Vector{Int}, tj::Vector{Float64}, tf::Vector{Float64}, default::Int;
@@ -1195,40 +1176,6 @@ function _autotune_float_thresholds!(profile::Symbol=:full, progress_step::Funct
     FLOAT_NULLSPACE_SVD_THRESHOLD[] = _pick_crossover_threshold(works, tqr, tsvd, FLOAT_NULLSPACE_SVD_THRESHOLD[])
 end
 
-function _autotune_float_sparse_svds_thresholds!(progress_step::Function=_noop_progress_step)
-    _have_svds_backend() || return
-    F = RealField(Float64; rtol=1e-10, atol=1e-12)
-    rng = Random.MersenneTwister(0x53564453)
-    dims = _autotune_float_sparse_dims()
-    densities = _autotune_float_sparse_densities()
-
-    winning_dims = Int[]
-    winning_nnz = Int[]
-    k = 0
-
-    for n in dims
-        for d in densities
-            A = _float_sparse_singular_rand(n, d; rng=rng)
-            tq = _bench_elapsed(() -> _nullspace_from_qr_sparse_float(F, A); reps=1)
-            ts = _bench_elapsed(() -> begin
-                Z = _nullspace_float_svds(F, A)
-                Z === nothing || return Z
-                return _nullspace_from_qr_sparse_float(F, A)
-            end; reps=1)
-            if ts < 0.9 * tq
-                push!(winning_dims, n)
-                push!(winning_nnz, nnz(A))
-            end
-            k += 1
-            progress_step("float-sparse svds gate probe $(k)/$(length(dims) * length(densities))")
-        end
-    end
-
-    isempty(winning_dims) && return
-    FLOAT_SPARSE_SVDS_MIN_DIM[] = minimum(winning_dims)
-    FLOAT_SPARSE_SVDS_MIN_NNZ[] = minimum(winning_nnz)
-end
-
 function _autotune_modular_thresholds!(profile::Symbol=:full, progress_step::Function=_noop_progress_step)
     rng = Random.MersenneTwister(0x4d4f44554c) # "MODUL"
 
@@ -1635,6 +1582,30 @@ function _autotune_zn_dimat_threshold!(profile::Symbol=:full, progress_step::Fun
     return nothing
 end
 
+"""
+    autotune_linalg_thresholds!(; path, save=true, quiet=false, profile=:full)
+
+Benchmark linear-algebra backend choices on this machine and apply the fitted
+thresholds to the current Julia session. Ordinary package loading never runs
+these benchmarks: it reads a matching saved profile if available and otherwise
+uses built-in defaults.
+
+`profile=:full` runs all probe families. `profile=:startup` is a smaller explicit
+probe set; its name does not imply automatic execution. `quiet=true` suppresses
+progress messages. Run tuning without competing CPU-intensive jobs.
+
+By default, `save=true` writes `linalg_thresholds.toml` at the package/repository
+root, the canonical developer profile location. Installed sources may be
+read-only. Use `save=false` for session-only tuning, or choose a writable `path`
+to retain the measured profile yourself. A custom path is not automatically
+loaded in later sessions. The profile at the package root is loaded only when
+its Julia, machine, and BLAS-thread fingerprint matches.
+
+```julia
+import TamerOp as OP
+OP.FieldLinAlg.autotune_linalg_thresholds!(save=false)
+```
+"""
 function autotune_linalg_thresholds!(; path::AbstractString=_linalg_thresholds_path(),
                                      save::Bool=true,
                                      quiet::Bool=false,
@@ -1647,7 +1618,6 @@ function autotune_linalg_thresholds!(; path::AbstractString=_linalg_thresholds_p
         profile == :full && _autotune_modular_thresholds!(profile, step)
         _autotune_fp_thresholds!(profile, step)
         _autotune_float_thresholds!(profile, step)
-        _autotune_float_sparse_svds_thresholds!(step)
         _autotune_qq_routing_thresholds!(profile, step)
         _autotune_rank_words_threshold!(profile, step)
         profile == :full && _autotune_zn_dimat_threshold!(profile, step)

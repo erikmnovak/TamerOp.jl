@@ -69,8 +69,7 @@ Those are sibling owner modules, not nested submodules of `FiniteFringe`.
 module FiniteFringe
 
 using SparseArrays, LinearAlgebra
-using ..CoreModules: QQ, QQField, AbstractCoeffField, coeff_type, field_from_eltype, coerce
-using ..Options: FiniteFringeOptions
+using ..CoreModules: _TaskLocalCache, _task_local!, _task_local_context, _clear_task_local!, QQ, QQField, AbstractCoeffField, coeff_type, field_from_eltype, coerce
 import ..CoreModules: change_field
 import ..FieldLinAlg
 

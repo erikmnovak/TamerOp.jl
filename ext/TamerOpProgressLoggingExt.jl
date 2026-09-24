@@ -4,15 +4,9 @@ using Logging
 using ProgressLogging
 using UUIDs: uuid4, UUID
 
-const TO = let pm = nothing
-    if isdefined(Main, :TamerOp)
-        pm = getfield(Main, :TamerOp)
-    else
-        @eval import TamerOp
-        pm = TamerOp
-    end
-    pm
-end
+import TamerOp
+
+const TO = TamerOp
 
 const FEA = TO.Featurizers
 
@@ -56,6 +50,9 @@ function _finish!(state::_ProgressState)
     return nothing
 end
 
-FEA._set_progress_impl!((init=_init, step!=_step!, finish!=_finish!))
+function __init__()
+    FEA._set_progress_impl!((; init=_init, step! = _step!, finish! = _finish!))
+    return nothing
+end
 
 end # module

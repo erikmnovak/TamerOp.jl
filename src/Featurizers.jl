@@ -11,13 +11,14 @@ using LinearAlgebra
 using SparseArrays
 using JSON3
 using Dates
+using ..ExactReals: AlgebraicReal
 
 using ..CoreModules: QQ, QQField, AbstractCoeffField, coeff_type, coerce,
                      ResolutionCache, SessionCache, EncodingCache,
                      _encoding_cache!, _session_resolution_cache, _session_hom_cache, _set_session_hom_cache!,
                      _session_slice_plan_cache, _set_session_slice_plan_cache!,
                      _resolve_workflow_session_cache, _resolve_workflow_specialized_cache,
-                     _workflow_encoding_cache,
+                     _workflow_encoding_cache, _StructuralCacheKey, _structural_cache_key,
                      _resolution_cache_from_session,
                      _slot_cache_from_session,
                      _session_encoding_values, _session_module_values,
@@ -57,6 +58,7 @@ using ..FiniteFringe: AbstractPoset, FinitePoset, GridPoset, ProductOfChainsPose
 using ..DerivedFunctors
 using ..Invariants
 using ..InvariantCore: RankQueryCache
+import ..SliceInvariants
 using ..SliceInvariants: CompiledSlicePlan, SlicePlanCache, SliceBarcodesTask,
                          PersistenceImage1D
 using ..Fibered2D: ProjectedArrangement, ProjectedBarcodeCache, FiberedBarcodeCache2D,
@@ -70,12 +72,19 @@ import ..ChainComplexes: describe
 using ..ModuleComplexes: ModuleCochainComplex
 
 using ..FlangeZn: Face, IndFlat, IndInj, Flange
+import ..Workflow
 import ..Workflow: _slice_plan_cache_from_session
 
 # Featurizer specs and dataset featurization
 # -----------------------------------------------------------------------------
 
 abstract type AbstractFeaturizerSpec end
+
+# Query coordinates select the represented stalks. Keep their exact lane
+# separate from the explicitly numerical landscape/image evaluation grids.
+const _QueryVectors = Union{Vector{Vector{Float64}},Vector{Vector{AlgebraicReal}}}
+const _QueryBound = Union{Nothing,Float64,AlgebraicReal}
+const _QueryWindow = Union{Nothing,Tuple{Float64,Float64},Tuple{AlgebraicReal,AlgebraicReal}}
 
 function feature_set_summary end
 function experiment_summary end
@@ -112,8 +121,8 @@ abstract type AbstractInvariantCache end
 
 Execution contract for dataset-level batch APIs.
 - `threaded`: enable parallel execution.
-- `backend`: `:serial`, `:threads`, or `:folds` (optional extension backend).
-- `progress`: reserved hook for optional progress extensions.
+- `backend`: `:serial`, `:threads`, or `:folds` (requires `using Folds` when threaded).
+- `progress`: emit progress through ProgressLogging; requires `using ProgressLogging`.
 - `deterministic`: use static partitioning with deterministic slot writes.
 - `chunk_size`: chunk size for static chunking (`0` means auto/static partition).
 """
@@ -206,12 +215,12 @@ mutable struct EncodingInvariantCache{K,F<:AbstractCoeffField,MatT<:AbstractMatr
     level::Symbol
     session_cache::Union{Nothing,SessionCache}
     slice_plan_cache::SlicePlanCache
-    slice_plans::Dict{UInt,CompiledSlicePlan}
-    projected_arrangements::Dict{UInt,ProjectedArrangement}
-    projected_module::Dict{UInt,ProjectedBarcodeCache{K}}
-    projected_refs::Dict{Tuple{UInt,UInt},ProjectedBarcodeCache}
-    fibered::Dict{UInt,FiberedBarcodeCache2D{K}}
-    mpp_decompositions::Dict{UInt,MPPDecomposition}
+    slice_plans::Dict{_StructuralCacheKey,CompiledSlicePlan}
+    projected_arrangements::Dict{_StructuralCacheKey,ProjectedArrangement}
+    projected_module::Dict{_StructuralCacheKey,ProjectedBarcodeCache{K}}
+    projected_refs::Dict{Tuple{_StructuralCacheKey,UInt},ProjectedBarcodeCache}
+    fibered::Dict{_StructuralCacheKey,FiberedBarcodeCache2D{K}}
+    mpp_decompositions::Dict{_StructuralCacheKey,MPPDecomposition}
     rank_query::Union{Nothing,RankQueryCache}
 end
 
@@ -255,15 +264,15 @@ const _InvariantCacheHandle = Union{
 Typed spec for slice-based landscape vectorization.
 """
 struct LandscapeSpec <: AbstractFeaturizerSpec
-    directions::Vector{Vector{Float64}}
-    offsets::Vector{Vector{Float64}}
+    directions::_QueryVectors
+    offsets::_QueryVectors
     offset_weights::Union{Nothing,Vector{Float64},Matrix{Float64}}
     kmax::Int
     tgrid::Vector{Float64}
     aggregate::Symbol
     normalize_weights::Bool
-    tmin::Union{Nothing,Float64}
-    tmax::Union{Nothing,Float64}
+    tmin::_QueryBound
+    tmax::_QueryBound
     nsteps::Int
     strict::Bool
     drop_unknown::Bool
@@ -279,8 +288,8 @@ end
 Typed spec for slice-based persistence-image vectorization.
 """
 struct PersistenceImageSpec <: AbstractFeaturizerSpec
-    directions::Vector{Vector{Float64}}
-    offsets::Vector{Vector{Float64}}
+    directions::_QueryVectors
+    offsets::_QueryVectors
     offset_weights::Union{Nothing,Vector{Float64},Matrix{Float64}}
     xgrid::Vector{Float64}
     ygrid::Vector{Float64}
@@ -291,8 +300,8 @@ struct PersistenceImageSpec <: AbstractFeaturizerSpec
     normalize::Symbol
     aggregate::Symbol
     normalize_weights::Bool
-    tmin::Union{Nothing,Float64}
-    tmax::Union{Nothing,Float64}
+    tmin::_QueryBound
+    tmax::_QueryBound
     nsteps::Int
     strict::Bool
     drop_unknown::Bool
@@ -308,14 +317,14 @@ end
 Typed spec for flattening a sampled multiparameter persistence landscape.
 """
 struct MPLandscapeSpec <: AbstractFeaturizerSpec
-    directions::Vector{Vector{Float64}}
-    offsets::Vector{Vector{Float64}}
+    directions::_QueryVectors
+    offsets::_QueryVectors
     offset_weights::Union{Nothing,Vector{Float64},Matrix{Float64}}
     kmax::Int
     tgrid::Vector{Float64}
     normalize_weights::Bool
-    tmin::Union{Nothing,Float64}
-    tmax::Union{Nothing,Float64}
+    tmin::_QueryBound
+    tmax::_QueryBound
     nsteps::Int
     strict::Bool
     drop_unknown::Bool
@@ -330,7 +339,7 @@ end
 
 Typed spec for Euler characteristic surface vectorization.
 """
-struct EulerSurfaceSpec{A<:Union{Nothing,NTuple}} <: AbstractFeaturizerSpec
+struct EulerSurfaceSpec{A<:Union{Nothing,Tuple}} <: AbstractFeaturizerSpec
     axes::A
     axes_policy::Symbol
     max_axis_len::Int
@@ -372,17 +381,17 @@ Policy:
 - `source` selects only the barcode backend (`:slice` or `:fibered`); feature semantics stay the same.
 """
 struct BarcodeTopKSpec <: AbstractFeaturizerSpec
-    directions::Vector{Vector{Float64}}
-    offsets::Vector{Vector{Float64}}
+    directions::_QueryVectors
+    offsets::_QueryVectors
     offset_weights::Union{Nothing,Vector{Float64},Matrix{Float64}}
     k::Int
     aggregate::Symbol
     source::Symbol
     infinite_policy::Symbol
-    window::Union{Nothing,Tuple{Float64,Float64}}
+    window::_QueryWindow
     normalize_weights::Bool
-    tmin::Union{Nothing,Float64}
-    tmax::Union{Nothing,Float64}
+    tmin::_QueryBound
+    tmax::_QueryBound
     nsteps::Int
     strict::Bool
     drop_unknown::Bool
@@ -398,8 +407,8 @@ end
 Typed spec for slice-barcode derived features (summary/entropy).
 """
 struct SlicedBarcodeSpec{S<:Tuple} <: AbstractFeaturizerSpec
-    directions::Vector{Vector{Float64}}
-    offsets::Vector{Vector{Float64}}
+    directions::_QueryVectors
+    offsets::_QueryVectors
     offset_weights::Union{Nothing,Vector{Float64},Matrix{Float64}}
     featurizer::Symbol
     summary_fields::S
@@ -409,8 +418,8 @@ struct SlicedBarcodeSpec{S<:Tuple} <: AbstractFeaturizerSpec
     entropy_p::Float64
     aggregate::Symbol
     normalize_weights::Bool
-    tmin::Union{Nothing,Float64}
-    tmax::Union{Nothing,Float64}
+    tmin::_QueryBound
+    tmax::_QueryBound
     nsteps::Int
     strict::Bool
     drop_unknown::Bool
@@ -431,18 +440,18 @@ Policy:
 - `source` switches only the barcode backend (`:slice` or `:fibered`).
 """
 struct BarcodeSummarySpec{S<:Tuple} <: AbstractFeaturizerSpec
-    directions::Vector{Vector{Float64}}
-    offsets::Vector{Vector{Float64}}
+    directions::_QueryVectors
+    offsets::_QueryVectors
     offset_weights::Union{Nothing,Vector{Float64},Matrix{Float64}}
     fields::S
     normalize_entropy::Bool
     aggregate::Symbol
     source::Symbol
     infinite_policy::Symbol
-    window::Union{Nothing,Tuple{Float64,Float64}}
+    window::_QueryWindow
     normalize_weights::Bool
-    tmin::Union{Nothing,Float64}
-    tmax::Union{Nothing,Float64}
+    tmin::_QueryBound
+    tmax::_QueryBound
     nsteps::Int
     strict::Bool
     drop_unknown::Bool
@@ -457,7 +466,7 @@ end
 
 Typed spec for rectangle signed-barcode image vectorization.
 """
-struct SignedBarcodeImageSpec{A<:Union{Nothing,NTuple}} <: AbstractFeaturizerSpec
+struct SignedBarcodeImageSpec{A<:Union{Nothing,Tuple}} <: AbstractFeaturizerSpec
     xs::Vector{Float64}
     ys::Vector{Float64}
     sigma::Float64
@@ -499,7 +508,7 @@ Policy:
 - ordering is by `abs(weight)` descending, then lexicographic support index,
 - slots encode `(present, weight, coordinates...)` and pad with zeros.
 """
-struct EulerSignedMeasureSpec{A<:Union{Nothing,NTuple}} <: AbstractFeaturizerSpec
+struct EulerSignedMeasureSpec{A<:Union{Nothing,Tuple}} <: AbstractFeaturizerSpec
     ndims::Int
     k::Int
     coords::Symbol
@@ -525,7 +534,7 @@ Policy:
 - missing slots are padded with zeros,
 - `coords` chooses axis values (`:values`) or grid indices (`:indices`) for rectangle corners.
 """
-struct RectangleSignedBarcodeTopKSpec{A<:Union{Nothing,NTuple},S<:Union{Nothing,Int,Tuple}} <: AbstractFeaturizerSpec
+struct RectangleSignedBarcodeTopKSpec{A<:Union{Nothing,Tuple},S<:Union{Nothing,Int,Tuple}} <: AbstractFeaturizerSpec
     ndims::Int
     k::Int
     coords::Symbol
@@ -547,7 +556,7 @@ end
 
 Typed spec for projected-distance features against a fixed reference bank.
 """
-struct ProjectedDistancesSpec{R<:AbstractVector,D<:Union{Nothing,Vector{Vector{Float64}}}} <: AbstractFeaturizerSpec
+struct ProjectedDistancesSpec{R<:AbstractVector,D<:Union{Nothing,_QueryVectors}} <: AbstractFeaturizerSpec
     references::R
     reference_names::Vector{Symbol}
     dist::Symbol
@@ -570,8 +579,21 @@ Reference-bank featurizer using multiparameter matching distance.
 Each feature is the matching distance from the sample to one reference module
 in a common encoding family. This keeps matching-distance use inside the same
 batch featurizer surface as the other bank-based specs.
+
+`method=:auto` or `:approx` samples the requested directions and offsets.
+`:sampled_2d` uses the deterministic arrangement representative family instead.
+`:exact_2d` computes the supremum for continuous, positively oriented coordinate
+box encodings in the finite `InvariantOptions.box` window; essential bars are
+clipped to that window. Polyhedral and rounded lattice classifiers require a
+sampled method. Exact banks use the distance evaluator's default candidate
+budget, and throw if it is exhausted.
+
+For `:exact_2d`, use the matched normalization/weight pair `:L1`/`:lesnick_l1`
+or `:Linf`/`:lesnick_linf`. Directions, offsets, and axis inclusion are not
+controls of an exact supremum. For both 2D arrangement methods, leave `n_dirs`,
+`n_offsets`, and `max_den` at their defaults; these only control `:approx`.
 """
-struct MatchingDistanceBankSpec{R<:AbstractVector,D<:Union{Nothing,Vector{Vector{Float64}}},O<:Union{Nothing,Vector{Vector{Float64}}}} <: AbstractFeaturizerSpec
+struct MatchingDistanceBankSpec{R<:AbstractVector,D<:Union{Nothing,_QueryVectors},O<:Union{Nothing,_QueryVectors}} <: AbstractFeaturizerSpec
     references::R
     reference_names::Vector{Symbol}
     method::Symbol
@@ -1354,8 +1376,8 @@ end
 function _check_spec_issues(spec::MatchingDistanceBankSpec)
     issues = String[]
     _check_reference_names!(issues, spec.references, spec.reference_names, "MatchingDistanceBankSpec")
-    spec.method in (:auto, :approx, :exact_2d) ||
-        _push_issue!(issues, "MatchingDistanceBankSpec.method must be :auto, :approx, or :exact_2d.")
+    spec.method in (:auto, :approx, :sampled_2d, :exact_2d) ||
+        _push_issue!(issues, "MatchingDistanceBankSpec.method must be :auto, :approx, :sampled_2d, or :exact_2d.")
     spec.n_dirs > 0 || _push_issue!(issues, "MatchingDistanceBankSpec.n_dirs must be > 0.")
     spec.n_offsets > 0 || _push_issue!(issues, "MatchingDistanceBankSpec.n_offsets must be > 0.")
     spec.max_den > 0 || _push_issue!(issues, "MatchingDistanceBankSpec.max_den must be > 0.")
@@ -1363,6 +1385,21 @@ function _check_spec_issues(spec::MatchingDistanceBankSpec)
         _push_issue!(issues, "MatchingDistanceBankSpec.normalize_dirs must be :none, :L1, or :Linf.")
     spec.weight in (:none, :lesnick_l1, :lesnick_linf) ||
         _push_issue!(issues, "MatchingDistanceBankSpec.weight must be :none, :lesnick_l1, or :lesnick_linf.")
+    if spec.method in (:sampled_2d, :exact_2d)
+        spec.directions === nothing || _push_issue!(issues,
+            "MatchingDistanceBankSpec.$(spec.method) chooses its own directions; use :approx for explicit directions.")
+        spec.offsets === nothing || _push_issue!(issues,
+            "MatchingDistanceBankSpec.$(spec.method) chooses its own offsets; use :approx for explicit offsets.")
+        (spec.n_dirs == 100 && spec.n_offsets == 50 && spec.max_den == 8) || _push_issue!(issues,
+            "MatchingDistanceBankSpec sampling counts only apply to :auto/:approx; leave them at their defaults for $(spec.method).")
+    end
+    if spec.method == :exact_2d
+        !spec.include_axes || _push_issue!(issues,
+            "MatchingDistanceBankSpec.exact_2d does not accept include_axes=true.")
+        ((spec.normalize_dirs == :L1 && spec.weight == :lesnick_l1) ||
+         (spec.normalize_dirs == :Linf && spec.weight == :lesnick_linf)) || _push_issue!(issues,
+            "MatchingDistanceBankSpec.exact_2d requires matching :L1/:lesnick_l1 or :Linf/:lesnick_linf.")
+    end
     if spec.directions !== nothing && spec.offsets !== nothing
         _check_directions_offsets!(issues, spec.directions, spec.offsets, nothing, "MatchingDistanceBankSpec")
     elseif spec.directions !== nothing
@@ -1379,13 +1416,13 @@ function _check_spec_issues(spec::MPPImageSpec)
     spec.xgrid === nothing || _check_feature_grid!(issues, spec.xgrid, "MPPImageSpec.xgrid")
     spec.ygrid === nothing || _check_feature_grid!(issues, spec.ygrid, "MPPImageSpec.ygrid")
     spec.sigma > 0 || _push_issue!(issues, "MPPImageSpec.sigma must be > 0.")
-    spec.N > 0 || _push_issue!(issues, "MPPImageSpec.N must be > 0.")
+    spec.N >= 2 || _push_issue!(issues, "MPPImageSpec.N must be >= 2.")
     if spec.delta isa Symbol
         spec.delta == :auto || _push_issue!(issues, "MPPImageSpec.delta must be :auto or a positive real.")
     else
-        spec.delta > 0 || _push_issue!(issues, "MPPImageSpec.delta must be > 0 when given numerically.")
+        isfinite(spec.delta) && spec.delta > 0 || _push_issue!(issues, "MPPImageSpec.delta must be finite and positive when given numerically.")
     end
-    spec.q > 0 || _push_issue!(issues, "MPPImageSpec.q must be > 0.")
+    isfinite(spec.q) && spec.q >= 0 || _push_issue!(issues, "MPPImageSpec.q must be finite and nonnegative.")
     spec.tie_break in (:center, :up, :down) ||
         _push_issue!(issues, "MPPImageSpec.tie_break must be :center, :up, or :down.")
     spec.cutoff_radius === nothing || spec.cutoff_radius >= 0 ||
@@ -1411,13 +1448,13 @@ function _check_spec_issues(spec::MPPDecompositionHistogramSpec)
         _push_issue!(issues, "MPPDecompositionHistogramSpec.weight must be :count or :mass.")
     spec.normalize in (:none, :l1, :l2, :max) ||
         _push_issue!(issues, "MPPDecompositionHistogramSpec.normalize must be :none, :l1, :l2, or :max.")
-    spec.N > 0 || _push_issue!(issues, "MPPDecompositionHistogramSpec.N must be > 0.")
+    spec.N >= 2 || _push_issue!(issues, "MPPDecompositionHistogramSpec.N must be >= 2.")
     if spec.delta isa Symbol
         spec.delta == :auto || _push_issue!(issues, "MPPDecompositionHistogramSpec.delta must be :auto or a positive real.")
     else
-        spec.delta > 0 || _push_issue!(issues, "MPPDecompositionHistogramSpec.delta must be > 0 when given numerically.")
+        isfinite(spec.delta) && spec.delta > 0 || _push_issue!(issues, "MPPDecompositionHistogramSpec.delta must be finite and positive when given numerically.")
     end
-    spec.q > 0 || _push_issue!(issues, "MPPDecompositionHistogramSpec.q must be > 0.")
+    isfinite(spec.q) && spec.q >= 0 || _push_issue!(issues, "MPPDecompositionHistogramSpec.q must be finite and nonnegative.")
     spec.tie_break in (:center, :up, :down) ||
         _push_issue!(issues, "MPPDecompositionHistogramSpec.tie_break must be :center, :up, or :down.")
     return issues
@@ -1469,7 +1506,8 @@ function check_featurizer_spec(spec::AbstractFeaturizerSpec; throw::Bool=false)
     issues = _check_spec_issues(spec)
     nf = try
         nfeatures(spec)
-    catch
+    catch err
+        err isa OverflowError && _push_issue!(issues, "Feature count exceeds the supported Int range.")
         0
     end
     valid = isempty(issues)
@@ -1899,8 +1937,12 @@ end
 
 @inline _jsonable(x::Nothing) = nothing
 @inline _jsonable(x::Bool) = x
-@inline _jsonable(x::Integer) = x
+@inline _jsonable(x::Integer) =
+    -9_007_199_254_740_992 <= x <= 9_007_199_254_740_992 ? x :
+    Serialization._coordinate_parameter_obj(BigInt(x))
 @inline _jsonable(x::AbstractFloat) = x
+@inline _jsonable(x::Union{AlgebraicReal,Rational,BigInt,BigFloat}) =
+    Serialization._coordinate_parameter_obj(x)
 @inline _jsonable(x::AbstractString) = String(x)
 @inline _jsonable(x::Symbol) = String(x)
 @inline _jsonable(x::VersionNumber) = string(x)
@@ -2031,10 +2073,17 @@ function _pkg_version_or_unknown()
     end
 end
 
-function _git_commit_or_unknown()
-    root = normpath(joinpath(@__DIR__, ".."))
+function _git_commit_or_unknown(root::AbstractString=normpath(joinpath(@__DIR__, "..")))
+    # Registry and Pkg.add installations normally have no Git checkout. Never
+    # walk up into a user's enclosing repository or require an external Git.
+    gitdir = joinpath(abspath(root), ".git")
+    ispath(gitdir) || return "unknown"
+    executable = Sys.which("git")
+    executable === nothing && return "unknown"
     try
-        return readchomp(`git -C $root rev-parse --short=12 HEAD`)
+        commit = readchomp(pipeline(`$executable --git-dir=$gitdir rev-parse --short=12 HEAD`;
+                                   stderr=devnull))
+        return isempty(commit) ? "unknown" : commit
     catch
         return "unknown"
     end
@@ -2042,6 +2091,19 @@ end
 
 @inline default_feature_metadata_path(path::AbstractString) = String(path) * ".meta.json"
 
+"""
+    feature_metadata(features; format=:wide, git_commit=nothing)
+
+Describe a feature matrix, its mathematical feature specification, and the
+TamerOp version used to produce it in a JSON-compatible dictionary.
+
+The optional `git_commit` records the TamerOp source revision. Automatic
+detection is best-effort and only inspects TamerOp's own Git checkout when Git
+is installed. Installed packages normally record `"unknown"` for that revision
+while still reporting their package version. Supply `git_commit` explicitly
+when a release or archived-source revision is known; an enclosing user's
+repository is never used as the library revision.
+"""
 function feature_metadata(fs::FeatureSet;
                           format::Symbol=:wide,
                           git_commit::Union{Nothing,AbstractString}=nothing)
@@ -2110,11 +2172,28 @@ end
 
 @inline _float_vec(v) = Float64[Float64(x) for x in v]
 @inline _int_vec(v) = Int[Int(x) for x in v]
-@inline _vecvec_float(vv) = [Float64[Float64(x) for x in v] for v in vv]
+function _query_from_json(x)
+    if x isa AbstractDict
+        return Serialization._coordinate_parameter_from_obj(x)
+    elseif x isa AbstractVector
+        # Decode each coordinate before choosing the vector scalar. Promoting
+        # a mixed large integer/float vector first can already erase its grade.
+        decoded = map(_query_from_json, x)
+        if all(v -> v isa Real, decoded)
+            T = any(v -> v isa AlgebraicReal, decoded) ? AlgebraicReal :
+                any(v -> v isa Rational, decoded) ? QQ : Float64
+            return T.(decoded)
+        end
+        return decoded
+    elseif x isa Integer && !( -9_007_199_254_740_992 <= x <= 9_007_199_254_740_992 )
+        return AlgebraicReal(x)
+    end
+    return x
+end
 
 function _axes_from_json(x)
     x === nothing && return nothing
-    parts = [Float64[Float64(v) for v in ax] for ax in x]
+    parts = [_query_from_json(ax) for ax in x]
     return tuple(parts...)
 end
 
@@ -2122,7 +2201,7 @@ function _box_from_json(x)
     x === nothing && return nothing
     if x isa AbstractVector && length(x) == 2 &&
        x[1] isa AbstractVector && x[2] isa AbstractVector
-        return (Float64[Float64(v) for v in x[1]], Float64[Float64(v) for v in x[2]])
+        return (_query_from_json(x[1]), _query_from_json(x[2]))
     end
     return x
 end
@@ -2191,15 +2270,15 @@ function spec_from_metadata(meta_or_spec;
 
     if Tname == "LandscapeSpec"
         return LandscapeSpec(
-            directions=_vecvec_float(fields["directions"]),
-            offsets=_vecvec_float(fields["offsets"]),
+            directions=_query_from_json(fields["directions"]),
+            offsets=_query_from_json(fields["offsets"]),
             offset_weights=_offset_weights_from_json(_obj_get(fields, "offset_weights", nothing)),
             kmax=Int(fields["kmax"]),
             tgrid=_float_vec(fields["tgrid"]),
             aggregate=_as_symbol(fields["aggregate"]),
             normalize_weights=Bool(fields["normalize_weights"]),
-            tmin=_as_float_or_nothing(_obj_get(fields, "tmin", nothing)),
-            tmax=_as_float_or_nothing(_obj_get(fields, "tmax", nothing)),
+            tmin=_query_from_json(_obj_get(fields, "tmin", nothing)),
+            tmax=_query_from_json(_obj_get(fields, "tmax", nothing)),
             nsteps=Int(fields["nsteps"]),
             strict=Bool(fields["strict"]),
             drop_unknown=Bool(fields["drop_unknown"]),
@@ -2210,8 +2289,8 @@ function spec_from_metadata(meta_or_spec;
         )
     elseif Tname == "PersistenceImageSpec"
         return PersistenceImageSpec(
-            directions=_vecvec_float(fields["directions"]),
-            offsets=_vecvec_float(fields["offsets"]),
+            directions=_query_from_json(fields["directions"]),
+            offsets=_query_from_json(fields["offsets"]),
             offset_weights=_offset_weights_from_json(_obj_get(fields, "offset_weights", nothing)),
             xgrid=_float_vec(fields["xgrid"]),
             ygrid=_float_vec(fields["ygrid"]),
@@ -2222,8 +2301,8 @@ function spec_from_metadata(meta_or_spec;
             normalize=_as_symbol(fields["normalize"]),
             aggregate=_as_symbol(fields["aggregate"]),
             normalize_weights=Bool(fields["normalize_weights"]),
-            tmin=_as_float_or_nothing(_obj_get(fields, "tmin", nothing)),
-            tmax=_as_float_or_nothing(_obj_get(fields, "tmax", nothing)),
+            tmin=_query_from_json(_obj_get(fields, "tmin", nothing)),
+            tmax=_query_from_json(_obj_get(fields, "tmax", nothing)),
             nsteps=Int(fields["nsteps"]),
             strict=Bool(fields["strict"]),
             drop_unknown=Bool(fields["drop_unknown"]),
@@ -2234,14 +2313,14 @@ function spec_from_metadata(meta_or_spec;
         )
     elseif Tname == "MPLandscapeSpec"
         return MPLandscapeSpec(
-            directions=_vecvec_float(fields["directions"]),
-            offsets=_vecvec_float(fields["offsets"]),
+            directions=_query_from_json(fields["directions"]),
+            offsets=_query_from_json(fields["offsets"]),
             offset_weights=_offset_weights_from_json(_obj_get(fields, "offset_weights", nothing)),
             kmax=Int(fields["kmax"]),
             tgrid=_float_vec(fields["tgrid"]),
             normalize_weights=Bool(fields["normalize_weights"]),
-            tmin=_as_float_or_nothing(_obj_get(fields, "tmin", nothing)),
-            tmax=_as_float_or_nothing(_obj_get(fields, "tmax", nothing)),
+            tmin=_query_from_json(_obj_get(fields, "tmin", nothing)),
+            tmax=_query_from_json(_obj_get(fields, "tmax", nothing)),
             nsteps=Int(fields["nsteps"]),
             strict=Bool(fields["strict"]),
             drop_unknown=Bool(fields["drop_unknown"]),
@@ -2270,17 +2349,17 @@ function spec_from_metadata(meta_or_spec;
         )
     elseif Tname == "BarcodeTopKSpec"
         return BarcodeTopKSpec(
-            directions=_vecvec_float(fields["directions"]),
-            offsets=_vecvec_float(fields["offsets"]),
+            directions=_query_from_json(fields["directions"]),
+            offsets=_query_from_json(fields["offsets"]),
             offset_weights=_offset_weights_from_json(_obj_get(fields, "offset_weights", nothing)),
             k=Int(fields["k"]),
             aggregate=_as_symbol(fields["aggregate"]),
             source=_as_symbol(fields["source"]),
             infinite_policy=_as_symbol(fields["infinite_policy"]),
-            window=_tuple2_float_or_nothing(_obj_get(fields, "window", nothing)),
+            window=_query_from_json(_obj_get(fields, "window", nothing)),
             normalize_weights=Bool(fields["normalize_weights"]),
-            tmin=_as_float_or_nothing(_obj_get(fields, "tmin", nothing)),
-            tmax=_as_float_or_nothing(_obj_get(fields, "tmax", nothing)),
+            tmin=_query_from_json(_obj_get(fields, "tmin", nothing)),
+            tmax=_query_from_json(_obj_get(fields, "tmax", nothing)),
             nsteps=Int(fields["nsteps"]),
             strict=Bool(fields["strict"]),
             drop_unknown=Bool(fields["drop_unknown"]),
@@ -2292,8 +2371,8 @@ function spec_from_metadata(meta_or_spec;
     elseif Tname == "SlicedBarcodeSpec"
         summary_fields = Tuple(_as_symbol(v) for v in fields["summary_fields"])
         return SlicedBarcodeSpec(
-            directions=_vecvec_float(fields["directions"]),
-            offsets=_vecvec_float(fields["offsets"]),
+            directions=_query_from_json(fields["directions"]),
+            offsets=_query_from_json(fields["offsets"]),
             offset_weights=_offset_weights_from_json(_obj_get(fields, "offset_weights", nothing)),
             featurizer=_as_symbol(fields["featurizer"]),
             summary_fields=summary_fields,
@@ -2303,8 +2382,8 @@ function spec_from_metadata(meta_or_spec;
             entropy_p=Float64(fields["entropy_p"]),
             aggregate=_as_symbol(fields["aggregate"]),
             normalize_weights=Bool(fields["normalize_weights"]),
-            tmin=_as_float_or_nothing(_obj_get(fields, "tmin", nothing)),
-            tmax=_as_float_or_nothing(_obj_get(fields, "tmax", nothing)),
+            tmin=_query_from_json(_obj_get(fields, "tmin", nothing)),
+            tmax=_query_from_json(_obj_get(fields, "tmax", nothing)),
             nsteps=Int(fields["nsteps"]),
             strict=Bool(fields["strict"]),
             drop_unknown=Bool(fields["drop_unknown"]),
@@ -2315,18 +2394,18 @@ function spec_from_metadata(meta_or_spec;
         )
     elseif Tname == "BarcodeSummarySpec"
         return BarcodeSummarySpec(
-            directions=_vecvec_float(fields["directions"]),
-            offsets=_vecvec_float(fields["offsets"]),
+            directions=_query_from_json(fields["directions"]),
+            offsets=_query_from_json(fields["offsets"]),
             offset_weights=_offset_weights_from_json(_obj_get(fields, "offset_weights", nothing)),
             fields=Tuple(_as_symbol(v) for v in fields["fields"]),
             normalize_entropy=Bool(fields["normalize_entropy"]),
             aggregate=_as_symbol(fields["aggregate"]),
             source=_as_symbol(fields["source"]),
             infinite_policy=_as_symbol(fields["infinite_policy"]),
-            window=_tuple2_float_or_nothing(_obj_get(fields, "window", nothing)),
+            window=_query_from_json(_obj_get(fields, "window", nothing)),
             normalize_weights=Bool(fields["normalize_weights"]),
-            tmin=_as_float_or_nothing(_obj_get(fields, "tmin", nothing)),
-            tmax=_as_float_or_nothing(_obj_get(fields, "tmax", nothing)),
+            tmin=_query_from_json(_obj_get(fields, "tmin", nothing)),
+            tmax=_query_from_json(_obj_get(fields, "tmax", nothing)),
             nsteps=Int(fields["nsteps"]),
             strict=Bool(fields["strict"]),
             drop_unknown=Bool(fields["drop_unknown"]),
@@ -2419,7 +2498,7 @@ function spec_from_metadata(meta_or_spec;
             p=Float64(fields["p"]),
             q=Float64(fields["q"]),
             agg=_as_symbol(fields["agg"]),
-            directions=dirs === nothing ? nothing : _vecvec_float(dirs),
+            directions=dirs === nothing ? nothing : _query_from_json(dirs),
             n_dirs=Int(fields["n_dirs"]),
             normalize=_as_symbol(fields["normalize"]),
             enforce_monotone=_as_symbol(fields["enforce_monotone"]),
@@ -2456,8 +2535,8 @@ function spec_from_metadata(meta_or_spec;
             refs;
             reference_names=names,
             method=_as_symbol(fields["method"]),
-            directions=dirs === nothing ? nothing : _vecvec_float(dirs),
-            offsets=offs === nothing ? nothing : _vecvec_float(offs),
+            directions=dirs === nothing ? nothing : _query_from_json(dirs),
+            offsets=offs === nothing ? nothing : _query_from_json(offs),
             n_dirs=Int(fields["n_dirs"]),
             n_offsets=Int(fields["n_offsets"]),
             max_den=Int(fields["max_den"]),
@@ -2729,28 +2808,32 @@ function _featureset_from_columntable(cols;
     end
 end
 
+function _missing_feature_extension(context::AbstractString, package::AbstractString)
+    throw(ArgumentError("$(context) requires $(package). Install it with `import Pkg; Pkg.add(\"$(package)\")`, then run `using $(package)` to activate its TamerOp extension."))
+end
+
 function save_features_arrow(path, fs; kwargs...)
-    throw(ArgumentError("save_features_arrow requires Arrow.jl extension (load Arrow and ensure TamerOpArrowExt is available)."))
+    _missing_feature_extension("save_features_arrow", "Arrow")
 end
 
 function load_features_arrow(path; kwargs...)
-    throw(ArgumentError("load_features_arrow requires Arrow.jl extension (load Arrow and ensure TamerOpArrowExt is available)."))
+    _missing_feature_extension("load_features_arrow", "Arrow")
 end
 
 function save_features_parquet(path, fs; kwargs...)
-    throw(ArgumentError("save_features_parquet requires Parquet2.jl extension (load Parquet2 and ensure TamerOpParquet2Ext is available)."))
+    _missing_feature_extension("save_features_parquet", "Parquet2")
 end
 
 function load_features_parquet(path; kwargs...)
-    throw(ArgumentError("load_features_parquet requires Parquet2.jl extension (load Parquet2 and ensure TamerOpParquet2Ext is available)."))
+    _missing_feature_extension("load_features_parquet", "Parquet2")
 end
 
 function save_features_npz(path, fs; kwargs...)
-    throw(ArgumentError("save_features_npz requires NPZ.jl extension (load NPZ and ensure TamerOpNPZExt is available)."))
+    _missing_feature_extension("save_features_npz", "NPZ")
 end
 
 function load_features_npz(path; kwargs...)
-    throw(ArgumentError("load_features_npz requires NPZ.jl extension (load NPZ and ensure TamerOpNPZExt is available)."))
+    _missing_feature_extension("load_features_npz", "NPZ")
 end
 
 function save_features_csv(path, fs; kwargs...)
@@ -2776,7 +2859,7 @@ function save_features_csv(path, fs; kwargs...)
         kk = Symbol(k)
         kk in allowed || push!(extra, kk)
     end
-    isempty(extra) || throw(ArgumentError("save_features_csv fallback does not support CSV-specific kwargs ($(join(string.(extra), ", "))). Load CSV.jl to enable extension-backed writer."))
+    isempty(extra) || _missing_feature_extension("save_features_csv with CSV-specific keywords ($(join(string.(extra), ", ")))", "CSV")
 
     fs_out = if layout == :samples_by_features
         fs
@@ -2806,7 +2889,7 @@ function save_features_csv(path, fs; kwargs...)
 end
 
 function load_features_csv(path; kwargs...)
-    throw(ArgumentError("load_features_csv requires CSV.jl extension (load CSV and ensure TamerOpCSVExt is available)."))
+    _missing_feature_extension("load_features_csv", "CSV")
 end
 
 @inline function _interop_format_from_path(path::AbstractString)
@@ -2911,12 +2994,13 @@ end
 """
     EulerSurfaceLongTable(values; axes=nothing, id="sample")
 
-Long-form table wrapper for 2D Euler surfaces.
+Long-form table wrapper for 2D Euler surfaces. Supplied axis labels retain
+their scalar types and exact values.
 """
-struct EulerSurfaceLongTable{T<:Real}
+struct EulerSurfaceLongTable{T<:Real,X<:Real,Y<:Real}
     id::String
-    x::Vector{Float64}
-    y::Vector{Float64}
+    x::Vector{X}
+    y::Vector{Y}
     values::Matrix{T}
 end
 
@@ -2963,12 +3047,12 @@ function euler_surface_table(values::AbstractMatrix{T};
         y = Float64[j for j in 1:size(values, 2)]
     else
         length(axes) == 2 || throw(ArgumentError("euler_surface_table: axes must be a 2-tuple"))
-        x = Float64[float(v) for v in axes[1]]
-        y = Float64[float(v) for v in axes[2]]
+        x = collect(axes[1])
+        y = collect(axes[2])
         length(x) == size(values, 1) || throw(DimensionMismatch("x-axis length does not match first dimension"))
         length(y) == size(values, 2) || throw(DimensionMismatch("y-axis length does not match second dimension"))
     end
-    return EulerSurfaceLongTable{T}(String(id), x, y, Matrix(values))
+    return EulerSurfaceLongTable(String(id), x, y, Matrix(values))
 end
 
 @inline persistence_image_table(pi::PersistenceImage1D; id::AbstractString="sample") =
@@ -2999,10 +3083,16 @@ end
 @inline _float_vector(v::AbstractVector) = Float64[float(x) for x in v]
 @inline _float_vector(v::AbstractArray) = Float64[float(x) for x in vec(v)]
 
-function _to_vecvec_float(xs)
-    out = Vector{Vector{Float64}}(undef, length(xs))
+@inline _needs_exact_query_scalar(x) = x isa Union{AlgebraicReal,Rational,BigFloat} ||
+    (x isa Integer && (x < -9_007_199_254_740_992 || x > 9_007_199_254_740_992))
+@inline _query_bound(x) = x === nothing ? nothing :
+    _needs_exact_query_scalar(x) ? AlgebraicReal(x) : Float64(x)
+
+function _to_query_vectors(xs)
+    T = any(_needs_exact_query_scalar,Iterators.flatten(xs)) ? AlgebraicReal : Float64
+    out = Vector{Vector{T}}(undef, length(xs))
     @inbounds for i in eachindex(xs)
-        out[i] = Float64[float(x) for x in xs[i]]
+        out[i] = T[x for x in xs[i]]
     end
     return out
 end
@@ -3035,15 +3125,15 @@ function LandscapeSpec(; directions,
                         direction_weight::Symbol=:none,
                         threads=nothing)
     return LandscapeSpec(
-        _to_vecvec_float(directions),
-        _to_vecvec_float(offsets),
+        _to_query_vectors(directions),
+        _to_query_vectors(offsets),
         _to_offset_weights(offset_weights),
         kmax,
         Float64[float(x) for x in tgrid],
         aggregate,
         normalize_weights,
-        tmin === nothing ? nothing : float(tmin),
-        tmax === nothing ? nothing : float(tmax),
+        _query_bound(tmin),
+        _query_bound(tmax),
         nsteps,
         strict,
         drop_unknown,
@@ -3076,8 +3166,8 @@ function PersistenceImageSpec(; directions,
                                direction_weight::Symbol=:none,
                                threads=nothing)
     return PersistenceImageSpec(
-        _to_vecvec_float(directions),
-        _to_vecvec_float(offsets),
+        _to_query_vectors(directions),
+        _to_query_vectors(offsets),
         _to_offset_weights(offset_weights),
         Float64[float(x) for x in xgrid],
         Float64[float(y) for y in ygrid],
@@ -3088,8 +3178,8 @@ function PersistenceImageSpec(; directions,
         normalize,
         aggregate,
         normalize_weights,
-        tmin === nothing ? nothing : float(tmin),
-        tmax === nothing ? nothing : float(tmax),
+        _query_bound(tmin),
+        _query_bound(tmax),
         nsteps,
         strict,
         drop_unknown,
@@ -3116,14 +3206,14 @@ function MPLandscapeSpec(; directions,
                           direction_weight::Symbol=:none,
                           threads=nothing)
     return MPLandscapeSpec(
-        _to_vecvec_float(directions),
-        _to_vecvec_float(offsets),
+        _to_query_vectors(directions),
+        _to_query_vectors(offsets),
         _to_offset_weights(offset_weights),
         kmax,
         Float64[float(x) for x in tgrid],
         normalize_weights,
-        tmin === nothing ? nothing : float(tmin),
-        tmax === nothing ? nothing : float(tmax),
+        _query_bound(tmin),
+        _query_bound(tmax),
         nsteps,
         strict,
         drop_unknown,
@@ -3140,7 +3230,7 @@ function EulerSurfaceSpec(; axes=nothing,
                            strict=nothing,
                            threads=nothing)
     axes2 = axes === nothing ? nothing :
-        ntuple(i -> Float64[float(x) for x in axes[i]], length(axes))
+        ntuple(i -> collect(axes[i]), length(axes))
     strict2 = strict === nothing ? nothing : Bool(strict)
     threads2 = threads === nothing ? nothing : Bool(threads)
     return EulerSurfaceSpec{typeof(axes2)}(axes2, axes_policy, max_axis_len, strict2, threads2)
@@ -3174,12 +3264,12 @@ function BarcodeTopKSpec(; directions,
         throw(ArgumentError("BarcodeTopKSpec.source must be :slice or :fibered"))
     infinite_policy in (:clip_to_window, :error) ||
         throw(ArgumentError("BarcodeTopKSpec.infinite_policy must be :clip_to_window or :error"))
-    window2 = window === nothing ? nothing : (float(window[1]), float(window[2]))
+    window2 = window === nothing ? nothing : promote(_query_bound(window[1]), _query_bound(window[2]))
     window2 === nothing || window2[1] <= window2[2] ||
         throw(ArgumentError("BarcodeTopKSpec.window must satisfy lo <= hi"))
     return BarcodeTopKSpec(
-        _to_vecvec_float(directions),
-        _to_vecvec_float(offsets),
+        _to_query_vectors(directions),
+        _to_query_vectors(offsets),
         _to_offset_weights(offset_weights),
         k,
         aggregate,
@@ -3187,8 +3277,8 @@ function BarcodeTopKSpec(; directions,
         infinite_policy,
         window2,
         normalize_weights,
-        tmin === nothing ? nothing : float(tmin),
-        tmax === nothing ? nothing : float(tmax),
+        _query_bound(tmin),
+        _query_bound(tmax),
         nsteps,
         strict,
         drop_unknown,
@@ -3220,8 +3310,8 @@ function SlicedBarcodeSpec(; directions,
                             direction_weight::Symbol=:none,
                             threads=nothing)
     return SlicedBarcodeSpec(
-        _to_vecvec_float(directions),
-        _to_vecvec_float(offsets),
+        _to_query_vectors(directions),
+        _to_query_vectors(offsets),
         _to_offset_weights(offset_weights),
         featurizer,
         Tuple(summary_fields),
@@ -3231,8 +3321,8 @@ function SlicedBarcodeSpec(; directions,
         float(entropy_p),
         aggregate,
         normalize_weights,
-        tmin === nothing ? nothing : float(tmin),
-        tmax === nothing ? nothing : float(tmax),
+        _query_bound(tmin),
+        _query_bound(tmax),
         nsteps,
         strict,
         drop_unknown,
@@ -3286,12 +3376,12 @@ function BarcodeSummarySpec(; directions,
     allowed = Set((:count, :sum_persistence, :mean_persistence, :max_persistence, :entropy))
     all(f -> Symbol(f) in allowed, fields) ||
         throw(ArgumentError("BarcodeSummarySpec.fields must be chosen from $(collect(allowed))"))
-    window2 = window === nothing ? nothing : (float(window[1]), float(window[2]))
+    window2 = window === nothing ? nothing : promote(_query_bound(window[1]), _query_bound(window[2]))
     window2 === nothing || window2[1] <= window2[2] ||
         throw(ArgumentError("BarcodeSummarySpec.window must satisfy lo <= hi"))
     return BarcodeSummarySpec(
-        _to_vecvec_float(directions),
-        _to_vecvec_float(offsets),
+        _to_query_vectors(directions),
+        _to_query_vectors(offsets),
         _to_offset_weights(offset_weights),
         Tuple(Symbol(f) for f in fields),
         normalize_entropy,
@@ -3300,8 +3390,8 @@ function BarcodeSummarySpec(; directions,
         infinite_policy,
         window2,
         normalize_weights,
-        tmin === nothing ? nothing : float(tmin),
-        tmax === nothing ? nothing : float(tmax),
+        _query_bound(tmin),
+        _query_bound(tmax),
         nsteps,
         strict,
         drop_unknown,
@@ -3323,7 +3413,7 @@ function SignedBarcodeImageSpec(; xs,
                                  strict=nothing,
                                  threads=nothing)
     axes2 = axes === nothing ? nothing :
-        ntuple(i -> Float64[float(x) for x in axes[i]], length(axes))
+        ntuple(i -> collect(axes[i]), length(axes))
     strict2 = strict === nothing ? nothing : Bool(strict)
     threads2 = threads === nothing ? nothing : Bool(threads)
     return SignedBarcodeImageSpec{typeof(axes2)}(
@@ -3367,7 +3457,7 @@ function EulerSignedMeasureSpec(; ndims::Int,
     coords in (:values, :indices) ||
         throw(ArgumentError("EulerSignedMeasureSpec.coords must be :values or :indices"))
     axes2 = axes === nothing ? nothing :
-        ntuple(i -> Float64[float(x) for x in axes[i]], length(axes))
+        ntuple(i -> collect(axes[i]), length(axes))
     strict2 = strict === nothing ? nothing : Bool(strict)
     return EulerSignedMeasureSpec{typeof(axes2)}(
         ndims,
@@ -3453,7 +3543,7 @@ function ProjectedDistancesSpec(references;
         Symbol[Symbol(x) for x in reference_names]
     end
     length(names) == length(refs) || throw(ArgumentError("reference_names length must match references length"))
-    dirs2 = directions === nothing ? nothing : _to_vecvec_float(directions)
+    dirs2 = directions === nothing ? nothing : _to_query_vectors(directions)
     return ProjectedDistancesSpec{typeof(refs),typeof(dirs2)}(
         refs,
         names,
@@ -3482,11 +3572,6 @@ function MatchingDistanceBankSpec(references;
                                   normalize_dirs::Symbol=:L1,
                                   weight::Symbol=:lesnick_l1,
                                   threads=nothing)
-    method in (:auto, :approx, :exact_2d) ||
-        throw(ArgumentError("MatchingDistanceBankSpec.method must be :auto, :approx, or :exact_2d"))
-    n_dirs > 0 || throw(ArgumentError("MatchingDistanceBankSpec.n_dirs must be > 0"))
-    n_offsets > 0 || throw(ArgumentError("MatchingDistanceBankSpec.n_offsets must be > 0"))
-    max_den > 0 || throw(ArgumentError("MatchingDistanceBankSpec.max_den must be > 0"))
     refs = collect(references)
     names = if reference_names === nothing
         [Symbol("ref_$(i)") for i in 1:length(refs)]
@@ -3494,9 +3579,9 @@ function MatchingDistanceBankSpec(references;
         Symbol[Symbol(x) for x in reference_names]
     end
     length(names) == length(refs) || throw(ArgumentError("reference_names length must match references length"))
-    dirs2 = directions === nothing ? nothing : _to_vecvec_float(directions)
-    offs2 = offsets === nothing ? nothing : _to_vecvec_float(offsets)
-    return MatchingDistanceBankSpec{typeof(refs),typeof(dirs2),typeof(offs2)}(
+    dirs2 = directions === nothing ? nothing : _to_query_vectors(directions)
+    offs2 = offsets === nothing ? nothing : _to_query_vectors(offsets)
+    spec = MatchingDistanceBankSpec{typeof(refs),typeof(dirs2),typeof(offs2)}(
         refs,
         names,
         method,
@@ -3510,6 +3595,8 @@ function MatchingDistanceBankSpec(references;
         weight,
         threads === nothing ? nothing : Bool(threads),
     )
+    check_featurizer_spec(spec; throw=true)
+    return spec
 end
 
 function MPPImageSpec(; resolution::Int=32,
@@ -3532,7 +3619,7 @@ function MPPImageSpec(; resolution::Int=32,
     delta2 = delta isa Symbol ? delta : float(delta)
     cutoff_radius2 = cutoff_radius === nothing ? nothing : float(cutoff_radius)
     cutoff_tol2 = cutoff_tol === nothing ? nothing : float(cutoff_tol)
-    return MPPImageSpec(
+    spec = MPPImageSpec(
         resolution,
         xgrid2,
         ygrid2,
@@ -3546,6 +3633,8 @@ function MPPImageSpec(; resolution::Int=32,
         segment_prune,
         threads === nothing ? nothing : Bool(threads),
     )
+    check_featurizer_spec(spec; throw=true)
+    return spec
 end
 
 function MPPDecompositionHistogramSpec(; orientation_bins::Int=12,
@@ -3568,7 +3657,7 @@ function MPPDecompositionHistogramSpec(; orientation_bins::Int=12,
     scale_range2 === nothing || scale_range2[1] <= scale_range2[2] ||
         throw(ArgumentError("MPPDecompositionHistogramSpec.scale_range must satisfy lo <= hi"))
     delta2 = delta isa Symbol ? delta : float(delta)
-    return MPPDecompositionHistogramSpec(
+    spec = MPPDecompositionHistogramSpec(
         orientation_bins,
         scale_bins,
         scale_range2,
@@ -3580,6 +3669,8 @@ function MPPDecompositionHistogramSpec(; orientation_bins::Int=12,
         tie_break,
         threads === nothing ? nothing : Bool(threads),
     )
+    check_featurizer_spec(spec; throw=true)
+    return spec
 end
 
 BettiTableSpec(; nvertices::Int,
@@ -3629,6 +3720,17 @@ end
 
 CompositeSpec(specs::Tuple; namespacing::Bool=true) = CompositeSpec{typeof(specs)}(specs, namespacing)
 
+# Counting a feature grid must not construct its (potentially enormous) list of
+# names. Checked arithmetic also keeps an unrepresentable count from wrapping.
+@inline function _feature_count_product(counts::Int...)
+    all(n -> n >= 0, counts) || throw(ArgumentError("feature axis lengths must be nonnegative"))
+    any(iszero, counts) && return 0
+    return foldl(Base.Checked.checked_mul, counts; init=1)
+end
+
+@inline _slice_feature_count(spec, per_slice::Int) = spec.aggregate == :stack ?
+    _feature_count_product(per_slice, length(spec.directions), length(spec.offsets)) : per_slice
+
 function _slice_feature_names(prefix::String, per_slice::Int, nd::Int, no::Int, aggregate::Symbol)
     if aggregate == :stack
         out = Vector{Symbol}(undef, per_slice * nd * no)
@@ -3645,9 +3747,9 @@ end
 
 feature_axes(::AbstractFeaturizerSpec) = NamedTuple()
 
-@inline _copy_vecvec(xs::Vector{Vector{Float64}}) = [copy(v) for v in xs]
+@inline _copy_vecvec(xs::_QueryVectors) = [copy(v) for v in xs]
 
-function _axis_namedtuple(axes::NTuple{N,Vector{Float64}}, prefix::String="axis") where {N}
+function _axis_namedtuple(axes::NTuple{N,AbstractVector}, prefix::String="axis") where {N}
     names = ntuple(i -> Symbol(prefix * "_" * string(i)), N)
     vals = ntuple(i -> copy(axes[i]), N)
     return NamedTuple{names}(vals)
@@ -3670,7 +3772,8 @@ feature_names(spec::LandscapeSpec) =
     _slice_feature_names("landscape", spec.kmax * length(spec.tgrid),
                          length(spec.directions), length(spec.offsets), spec.aggregate)
 
-nfeatures(spec::LandscapeSpec) = length(feature_names(spec))
+nfeatures(spec::LandscapeSpec) =
+    _slice_feature_count(spec, _feature_count_product(spec.kmax, length(spec.tgrid)))
 
 function feature_axes(spec::PersistenceImageSpec)
     base = (x=copy(spec.xgrid), y=copy(spec.ygrid))
@@ -3689,7 +3792,8 @@ feature_names(spec::PersistenceImageSpec) =
     _slice_feature_names("persistence_image", length(spec.xgrid) * length(spec.ygrid),
                          length(spec.directions), length(spec.offsets), spec.aggregate)
 
-nfeatures(spec::PersistenceImageSpec) = length(feature_names(spec))
+nfeatures(spec::PersistenceImageSpec) =
+    _slice_feature_count(spec, _feature_count_product(length(spec.xgrid), length(spec.ygrid)))
 
 function feature_axes(spec::MPLandscapeSpec)
     return (
@@ -3715,7 +3819,8 @@ function feature_names(spec::MPLandscapeSpec)
     return out
 end
 
-nfeatures(spec::MPLandscapeSpec) = length(feature_names(spec))
+nfeatures(spec::MPLandscapeSpec) =
+    _feature_count_product(length(spec.directions), length(spec.offsets), spec.kmax, length(spec.tgrid))
 
 function feature_axes(spec::EulerSurfaceSpec)
     spec.axes === nothing && return (axes_policy=spec.axes_policy, axes=nothing)
@@ -3728,20 +3833,23 @@ function feature_names(spec::EulerSurfaceSpec)
     return [Symbol("euler__f$(i)") for i in 1:nf]
 end
 
-nfeatures(spec::EulerSurfaceSpec) = length(feature_names(spec))
+nfeatures(spec::EulerSurfaceSpec) = spec.axes === nothing ? 0 :
+    _feature_count_product(map(length, spec.axes)...)
 
 feature_axes(spec::RankGridSpec) =
     (a=collect(1:spec.nvertices), b=collect(1:spec.nvertices), store_zeros=spec.store_zeros)
 
 feature_names(spec::RankGridSpec) = [Symbol("rank__a$(a)_b$(b)") for a in 1:spec.nvertices for b in 1:spec.nvertices]
-nfeatures(spec::RankGridSpec) = length(feature_names(spec))
+# The flattened output includes every ordered pair, padding incomparable and
+# unstored pairs with zero; store_zeros only changes the intermediate table.
+nfeatures(spec::RankGridSpec) = _feature_count_product(spec.nvertices, spec.nvertices)
 
 feature_axes(spec::RestrictedHilbertSpec) = (vertex=collect(1:spec.nvertices),)
 
 feature_names(spec::RestrictedHilbertSpec) =
     [Symbol("restricted_hilbert__p$(p)") for p in 1:spec.nvertices]
 
-nfeatures(spec::RestrictedHilbertSpec) = length(feature_names(spec))
+nfeatures(spec::RestrictedHilbertSpec) = _feature_count_product(spec.nvertices)
 
 @inline function _barcode_topk_field_labels(k::Int)
     out = Symbol[:count]
@@ -3782,7 +3890,8 @@ function feature_names(spec::BarcodeTopKSpec)
     return [Symbol("barcode_topk__" * String(fld)) for fld in base]
 end
 
-nfeatures(spec::BarcodeTopKSpec) = length(feature_names(spec))
+nfeatures(spec::BarcodeTopKSpec) =
+    _slice_feature_count(spec, Base.Checked.checked_add(1, _feature_count_product(3, spec.k)))
 
 @inline function _sliced_stat_axis(spec::SlicedBarcodeSpec)
     if spec.featurizer == :summary
@@ -3818,7 +3927,16 @@ function feature_names(spec::SlicedBarcodeSpec)
                                 length(spec.directions), length(spec.offsets), spec.aggregate)
 end
 
-nfeatures(spec::SlicedBarcodeSpec) = length(feature_names(spec))
+function nfeatures(spec::SlicedBarcodeSpec)
+    per_slice = if spec.featurizer == :summary
+        length(spec.summary_fields)
+    elseif spec.featurizer == :entropy
+        1
+    else
+        throw(ArgumentError("SlicedBarcodeSpec supports featurizer=:summary or :entropy"))
+    end
+    return _slice_feature_count(spec, per_slice)
+end
 
 function feature_axes(spec::BarcodeSummarySpec)
     if spec.aggregate == :stack
@@ -3848,7 +3966,7 @@ function feature_names(spec::BarcodeSummarySpec)
     return base
 end
 
-nfeatures(spec::BarcodeSummarySpec) = length(feature_names(spec))
+nfeatures(spec::BarcodeSummarySpec) = _slice_feature_count(spec, length(spec.fields))
 
 @inline function _point_measure_slot_fields(ndims::Int)
     out = Symbol[]
@@ -3874,7 +3992,8 @@ function feature_names(spec::PointSignedMeasureSpec)
     return out
 end
 
-nfeatures(spec::PointSignedMeasureSpec) = length(feature_names(spec))
+nfeatures(spec::PointSignedMeasureSpec) =
+    Base.Checked.checked_add(1, _feature_count_product(spec.k, Base.Checked.checked_add(2, spec.ndims)))
 
 function feature_axes(spec::EulerSignedMeasureSpec)
     out = (term=collect(1:spec.k), field=(:present, :weight, _point_measure_slot_fields(spec.ndims)...), coords=spec.coords)
@@ -3894,7 +4013,8 @@ function feature_names(spec::EulerSignedMeasureSpec)
     return out
 end
 
-nfeatures(spec::EulerSignedMeasureSpec) = length(feature_names(spec))
+nfeatures(spec::EulerSignedMeasureSpec) =
+    Base.Checked.checked_add(1, _feature_count_product(spec.k, Base.Checked.checked_add(2, spec.ndims)))
 
 function feature_axes(spec::RectangleSignedBarcodeTopKSpec)
     out = (term=collect(1:spec.k), field=(:present, :weight, :lo, :hi), coords=spec.coords, ndims=spec.ndims)
@@ -3917,7 +4037,8 @@ function feature_names(spec::RectangleSignedBarcodeTopKSpec)
     return out
 end
 
-nfeatures(spec::RectangleSignedBarcodeTopKSpec) = length(feature_names(spec))
+nfeatures(spec::RectangleSignedBarcodeTopKSpec) = Base.Checked.checked_add(1,
+    _feature_count_product(spec.k, Base.Checked.checked_add(2, _feature_count_product(2, spec.ndims))))
 
 function feature_axes(spec::SignedBarcodeImageSpec)
     out = (x=copy(spec.xs), y=copy(spec.ys), mode=spec.mode, method=spec.method)
@@ -3928,7 +4049,7 @@ end
 feature_names(spec::SignedBarcodeImageSpec) =
     [Symbol("signed_barcode_image__x$(i)_y$(j)") for i in 1:length(spec.xs) for j in 1:length(spec.ys)]
 
-nfeatures(spec::SignedBarcodeImageSpec) = length(feature_names(spec))
+nfeatures(spec::SignedBarcodeImageSpec) = _feature_count_product(length(spec.xs), length(spec.ys))
 
 function feature_axes(spec::ProjectedDistancesSpec)
     out = (reference=copy(spec.reference_names), dist=spec.dist, agg=spec.agg)
@@ -3976,7 +4097,8 @@ function feature_names(spec::MPPImageSpec)
     return [Symbol("mpp_image__x$(ix)_y$(iy)") for ix in 1:nx for iy in 1:ny]
 end
 
-nfeatures(spec::MPPImageSpec) = length(feature_names(spec))
+nfeatures(spec::MPPImageSpec) = _feature_count_product(
+    _grid_feature_length(spec.xgrid, spec.resolution), _grid_feature_length(spec.ygrid, spec.resolution))
 
 function feature_axes(spec::MPPDecompositionHistogramSpec)
     return (
@@ -4009,7 +4131,8 @@ function feature_names(spec::MPPDecompositionHistogramSpec)
     return out
 end
 
-nfeatures(spec::MPPDecompositionHistogramSpec) = length(feature_names(spec))
+nfeatures(spec::MPPDecompositionHistogramSpec) =
+    Base.Checked.checked_add(_feature_count_product(spec.orientation_bins, spec.scale_bins), 5)
 
 feature_axes(spec::BettiTableSpec) =
     (degree=collect(0:spec.pad_to), vertex=collect(1:spec.nvertices), resolution_maxlen=spec.resolution_maxlen)
@@ -4017,7 +4140,8 @@ feature_axes(spec::BettiTableSpec) =
 feature_names(spec::BettiTableSpec) =
     [Symbol("betti__a$(a)_p$(p)") for a in 0:spec.pad_to for p in 1:spec.nvertices]
 
-nfeatures(spec::BettiTableSpec) = length(feature_names(spec))
+nfeatures(spec::BettiTableSpec) =
+    _feature_count_product(Base.Checked.checked_add(spec.pad_to, 1), spec.nvertices)
 
 feature_axes(spec::BassTableSpec) =
     (degree=collect(0:spec.pad_to), vertex=collect(1:spec.nvertices), resolution_maxlen=spec.resolution_maxlen)
@@ -4025,7 +4149,8 @@ feature_axes(spec::BassTableSpec) =
 feature_names(spec::BassTableSpec) =
     [Symbol("bass__b$(b)_p$(p)") for b in 0:spec.pad_to for p in 1:spec.nvertices]
 
-nfeatures(spec::BassTableSpec) = length(feature_names(spec))
+nfeatures(spec::BassTableSpec) =
+    _feature_count_product(Base.Checked.checked_add(spec.pad_to, 1), spec.nvertices)
 
 feature_axes(spec::BettiSupportMeasuresSpec) =
     (degree=collect(0:spec.pad_to),
@@ -4041,7 +4166,8 @@ function feature_names(spec::BettiSupportMeasuresSpec)
     return out
 end
 
-nfeatures(spec::BettiSupportMeasuresSpec) = length(feature_names(spec))
+nfeatures(spec::BettiSupportMeasuresSpec) =
+    Base.Checked.checked_add(_feature_count_product(2, Base.Checked.checked_add(spec.pad_to, 1)), 3)
 
 feature_axes(spec::BassSupportMeasuresSpec) =
     (degree=collect(0:spec.pad_to),
@@ -4057,7 +4183,8 @@ function feature_names(spec::BassSupportMeasuresSpec)
     return out
 end
 
-nfeatures(spec::BassSupportMeasuresSpec) = length(feature_names(spec))
+nfeatures(spec::BassSupportMeasuresSpec) =
+    Base.Checked.checked_add(_feature_count_product(2, Base.Checked.checked_add(spec.pad_to, 1)), 3)
 
 function feature_axes(spec::CompositeSpec)
     comps = Vector{Any}(undef, length(spec.specs))
@@ -4092,7 +4219,8 @@ function feature_names(spec::CompositeSpec)
     return out
 end
 
-nfeatures(spec::CompositeSpec) = sum(nfeatures(s) for s in spec.specs)
+nfeatures(spec::CompositeSpec) =
+    foldl(Base.Checked.checked_add, (nfeatures(s) for s in spec.specs); init=0)
 
 @inline function _sample_module(obj)
     if obj isa EncodingResult
@@ -4266,17 +4394,17 @@ function supports(spec::ProjectedDistancesSpec, obj)
 end
 
 function supports(spec::MatchingDistanceBankSpec, obj)
+    check_featurizer_spec(spec).valid || return false
     _supports_module_pi(obj) || return false
-    if spec.method == :exact_2d
-        _, pi = _sample_module_pi(obj)
-        _supports_fibered_cache(pi) || return false
+    M, pi = _sample_module_pi(obj)
+    if spec.method in (:exact_2d, :sampled_2d)
+        _supports_matching_2d(pi, spec.method) || return false
     end
     @inbounds for r in spec.references
         _supports_module_pi(r) || return false
-        if spec.method == :exact_2d
-            _, pi = _sample_module_pi(r)
-            _supports_fibered_cache(pi) || return false
-        end
+        Mr, pir = _sample_module_pi(r)
+        M.Q === Mr.Q && M.field == Mr.field || return false
+        _unwrap_cache_pi(pi) === _unwrap_cache_pi(pir) || return false
     end
     return true
 end
@@ -4376,11 +4504,21 @@ end
 
 @inline _unwrap_cache_pi(pi) = pi isa CompiledEncoding ? pi.pi : pi
 
+@inline function _supports_matching_2d(pi, method::Symbol)
+    pi0 = _unwrap_cache_pi(pi)
+    pi0 isa AbstractPLikeEncodingMap && dimension(pi0) == 2 || return false
+    if method == :sampled_2d
+        return hasproperty(pi0, :coords) || pi0 isa PLPolyhedra.PLEncodingMap
+    end
+    hasproperty(pi0, :coords) || return false
+    pi0 isa ZnEncoding.ZnEncodingMap && return false
+    return !hasproperty(pi0, :orientation) || all(==(1), pi0.orientation)
+end
+
 @inline function _supports_fibered_cache(pi)
     pi0 = _unwrap_cache_pi(pi)
-    return pi0 isa PLikeEncodingMap &&
-           hasproperty(pi0, :n) &&
-           Int(getproperty(pi0, :n)) == 2
+    return pi0 isa AbstractPLikeEncodingMap && dimension(pi0) == 2 &&
+           (hasproperty(pi0, :coords) || pi0 isa PLPolyhedra.PLEncodingMap)
 end
 
 @inline function _effective_cache_level(level::Symbol, spec::AbstractFeaturizerSpec, pi=nothing)
@@ -4419,7 +4557,7 @@ end
                                         spec::MatchingDistanceBankSpec,
                                         pi=nothing)
     if level == :auto
-        return spec.method == :exact_2d ? :fibered : :slice
+        return spec.method in (:exact_2d, :sampled_2d) ? :fibered : :slice
     end
     return level
 end
@@ -4459,12 +4597,12 @@ function build_cache(M::PModule{K,F,MatT}, pi;
         level,
         session_cache,
         spcache,
-        Dict{UInt,CompiledSlicePlan}(),
-        Dict{UInt,ProjectedArrangement}(),
-        Dict{UInt,ProjectedBarcodeCache{K}}(),
-        Dict{Tuple{UInt,UInt},ProjectedBarcodeCache}(),
-        Dict{UInt,FiberedBarcodeCache2D{K}}(),
-        Dict{UInt,MPPDecomposition}(),
+        Dict{_StructuralCacheKey,CompiledSlicePlan}(),
+        Dict{_StructuralCacheKey,ProjectedArrangement}(),
+        Dict{_StructuralCacheKey,ProjectedBarcodeCache{K}}(),
+        Dict{Tuple{_StructuralCacheKey,UInt},ProjectedBarcodeCache}(),
+        Dict{_StructuralCacheKey,FiberedBarcodeCache2D{K}}(),
+        Dict{_StructuralCacheKey,MPPDecomposition}(),
         nothing,
     )
 end
@@ -4748,9 +4886,29 @@ function _slice_plan_for!(cache::EncodingInvariantCache,
     opts_compile = _slice_compile_opts(spec, opts0)
     kws = _slice_compile_kwargs(spec, opts0, threads0)
     # Keep geometry-identical slice specs on the same compiled plan.
-    key = UInt(hash((opts_compile.box, opts_compile.strict, kws)))
+    key = _structural_cache_key((opts_compile.box, opts_compile.strict, kws))
     return get!(cache.slice_plans, key) do
         Invariants.compile_slices(cache.pi, opts_compile; cache=cache.slice_plan_cache, kws...)
+    end
+end
+
+function _fibered_cache_for!(cache::EncodingInvariantCache,
+                             spec::MatchingDistanceBankSpec,
+                             opts0::InvariantOptions,
+                             threads0::Bool,
+                             level::Symbol)
+    pi0 = _unwrap_cache_pi(cache.pi)
+    _supports_matching_2d(pi0, spec.method) ||
+        throw(ArgumentError("$(spec.method) matching bank does not support this encoding map; choose a sampled method for polyhedral or rounded lattice classifiers"))
+    precompute = level == :all ? :cells_barcodes : :none
+    key = _structural_cache_key((:matching_bank, opts0.box, opts0.strict,
+                     spec.normalize_dirs, spec.include_axes, precompute))
+    return get!(cache.fibered, key) do
+        Invariants.fibered_barcode_cache_2d(cache.M, pi0, opts0;
+            include_axes=spec.include_axes,
+            normalize_dirs=spec.normalize_dirs,
+            precompute=precompute,
+            threads=threads0)
     end
 end
 
@@ -4763,7 +4921,7 @@ function _fibered_cache_for!(cache::EncodingInvariantCache,
     _supports_fibered_cache(pi0) ||
         throw(ArgumentError("fibered cache requested for non-2D/non-PL encoding"))
     precompute = level == :all ? :cells_barcodes : :none
-    key = UInt(hash((opts0.box, opts0.strict, spec.normalize_dirs, precompute)))
+    key = _structural_cache_key((opts0.box, opts0.strict, spec.normalize_dirs, precompute))
     return get!(cache.fibered, key) do
         Invariants.fibered_barcode_cache_2d(
             cache.M,
@@ -4786,7 +4944,7 @@ function _fibered_cache_for!(cache::EncodingInvariantCache,
     _supports_fibered_cache(pi0) ||
         throw(ArgumentError("fibered cache requested for non-2D/non-PL encoding"))
     precompute = level == :all ? :full : :none
-    key = UInt(hash((:mpp_image, opts0.box, opts0.strict, precompute)))
+    key = _structural_cache_key((:mpp_image, opts0.box, opts0.strict, precompute))
     return get!(cache.fibered, key) do
         Invariants.fibered_barcode_cache_2d(
             cache.M,
@@ -4808,7 +4966,7 @@ function _fibered_cache_for!(cache::EncodingInvariantCache,
     _supports_fibered_cache(pi0) ||
         throw(ArgumentError("fibered cache requested for non-2D/non-PL encoding"))
     precompute = level == :all ? :full : :none
-    key = UInt(hash((:mpp_hist, opts0.box, opts0.strict, precompute)))
+    key = _structural_cache_key((:mpp_hist, opts0.box, opts0.strict, precompute))
     return get!(cache.fibered, key) do
         Invariants.fibered_barcode_cache_2d(
             cache.M,
@@ -4822,11 +4980,11 @@ function _fibered_cache_for!(cache::EncodingInvariantCache,
 end
 
 @inline function _mpp_decomposition_key(spec::MPPImageSpec, opts0::InvariantOptions)
-    return UInt(hash((opts0.box, opts0.strict, spec.N, spec.delta, spec.q, spec.tie_break)))
+    return _structural_cache_key((opts0.box, opts0.strict, spec.N, spec.delta, spec.q, spec.tie_break))
 end
 
 @inline function _mpp_decomposition_key(spec::MPPDecompositionHistogramSpec, opts0::InvariantOptions)
-    return UInt(hash((opts0.box, opts0.strict, spec.N, spec.delta, spec.q, spec.tie_break)))
+    return _structural_cache_key((opts0.box, opts0.strict, spec.N, spec.delta, spec.q, spec.tie_break))
 end
 
 function _mpp_decomposition_for!(cache::EncodingInvariantCache,
@@ -4879,7 +5037,7 @@ end
 function _projected_arrangement_for!(cache::EncodingInvariantCache,
                                      spec::ProjectedDistancesSpec,
                                      threads0::Bool)
-    key = UInt(hash((spec.directions, spec.n_dirs, spec.normalize, spec.enforce_monotone)))
+    key = _structural_cache_key((spec.directions, spec.n_dirs, spec.normalize, spec.enforce_monotone))
     return get!(cache.projected_arrangements, key) do
         enc_cache = _workflow_encoding_cache(cache.session_cache)
         if spec.directions === nothing
@@ -4903,7 +5061,7 @@ end
 function _projected_cache_for!(cache::EncodingInvariantCache,
                                spec::ProjectedDistancesSpec,
                                threads0::Bool)
-    arr_key = UInt(hash((spec.directions, spec.n_dirs, spec.normalize, spec.enforce_monotone)))
+    arr_key = _structural_cache_key((spec.directions, spec.n_dirs, spec.normalize, spec.enforce_monotone))
     arr = _projected_arrangement_for!(cache, spec, threads0)
     cM = get!(cache.projected_module, arr_key) do
         Invariants.projected_barcode_cache(cache.M, arr; precompute=spec.precompute)
@@ -5161,7 +5319,7 @@ function _slice_feature_from_barcode(
 )
     if featurizer == :landscape
         pl = Invariants.persistence_landscape(bc; kmax=kmax, tgrid=tgrid)
-        return Invariants._landscape_feature_vector(pl)
+        return SliceInvariants._landscape_feature_vector(pl)
     elseif featurizer == :silhouette
         s = Invariants.persistence_silhouette(
             bc;
@@ -5182,7 +5340,7 @@ function _slice_feature_from_barcode(
             p=img_p,
             normalize=img_normalize,
         )
-        return Invariants._image_feature_vector(PI)
+        return SliceInvariants._image_feature_vector(PI)
     elseif featurizer == :entropy
         e = Invariants.barcode_entropy(
             bc;
@@ -5198,7 +5356,7 @@ function _slice_feature_from_barcode(
             normalize_entropy=summary_normalize_entropy,
         )
     elseif featurizer isa Function
-        return Invariants._as_feature_vector(featurizer(bc))
+        return SliceInvariants._as_feature_vector(featurizer(bc))
     end
     throw(ArgumentError("unsupported slice featurizer $(featurizer)"))
 end
@@ -5249,16 +5407,16 @@ function _slice_features_from_packed_grid(
 )
     tg = tgrid
     if (featurizer == :landscape || featurizer == :silhouette) && tg === nothing
-        tg = Invariants._default_tgrid_from_barcodes(bars; nsteps=401)
+        tg = SliceInvariants._default_tgrid_from_barcodes(bars; nsteps=401)
     end
     if tg !== nothing
-        tg = Invariants._clean_tgrid(tg)
+        tg = SliceInvariants._clean_tgrid(tg)
     end
 
     xg = xgrid
     yg = ygrid
     if featurizer == :image && (xg === nothing || yg === nothing)
-        xg2, yg2 = Invariants._default_image_grids_from_barcodes(
+        xg2, yg2 = SliceInvariants._default_image_grids_from_barcodes(
             bars;
             img_xgrid=xg,
             img_ygrid=yg,
@@ -5275,6 +5433,7 @@ function _slice_features_from_packed_grid(
     feats = Array{Vector{Float64}}(undef, nd, no)
     if threads && Threads.nthreads() > 1
         Threads.@threads for idx in 1:(nd * no)
+            local i, j
             i = div(idx - 1, no) + 1
             j = (idx - 1) % no + 1
             feats[i, j] = _slice_feature_from_barcode(
@@ -5324,18 +5483,18 @@ function _slice_features_from_packed_grid(
             )
         end
     end
-    return Invariants._aggregate_feature_vectors(feats, W; aggregate=aggregate, unwrap_scalar=true)
+    return SliceInvariants._aggregate_feature_vectors(feats, W; aggregate=aggregate, unwrap_scalar=true)
 end
 
 @inline function _barcode_working_window(pb::PackedBarcode,
-                                         window::Union{Nothing,Tuple{Float64,Float64}})
+                                         window::Union{Nothing,Tuple{Real,Real}})
     window !== nothing && return window
     lo = Inf
     hi = -Inf
     seen = false
     @inbounds for p in pb.pairs
-        b = Float64(p.b)
-        d = Float64(p.d)
+        b = p.b
+        d = p.d
         if isfinite(b)
             lo = min(lo, b)
             hi = max(hi, b)
@@ -5352,7 +5511,7 @@ end
 end
 
 function _barcode_grid_window(bars::PackedBarcodeGrid,
-                              window::Union{Nothing,Tuple{Float64,Float64}})
+                              window::Union{Nothing,Tuple{Real,Real}})
     window !== nothing && return window
     lo = Inf
     hi = -Inf
@@ -5367,25 +5526,29 @@ function _barcode_grid_window(bars::PackedBarcodeGrid,
     return seen ? (lo, hi) : nothing
 end
 
-@inline function _clip_barcode_endpoint(x::Float64,
-                                        lo::Float64,
-                                        hi::Float64,
+@inline function _clip_barcode_endpoint(x::Real,
+                                        lo::Real,
+                                        hi::Real,
                                         policy::Symbol)
     isfinite(x) && return x
     policy == :clip_to_window || throw(ArgumentError("barcode featurizer requires a finite working window when intervals are unbounded"))
     return x > 0 ? hi : lo
 end
 
-function _canonical_barcode_entries(pb::PackedBarcode,
-                                    window::Union{Nothing,Tuple{Float64,Float64}},
-                                    infinite_policy::Symbol)
+function _canonical_barcode_entries(pb::PackedBarcode{T},
+                                    window::Union{Nothing,Tuple{Real,Real}},
+                                    infinite_policy::Symbol) where {T}
     work = _barcode_working_window(pb, window)
     if infinite_policy == :clip_to_window && work === nothing
         throw(ArgumentError("barcode featurizer requires a finite working window to clip unbounded intervals"))
     end
     lo = work === nothing ? 0.0 : work[1]
     hi = work === nothing ? 0.0 : work[2]
-    entries = Vector{NTuple{4,Float64}}()
+    exact_endpoints = T <: Union{Integer,Rational,AlgebraicReal} ||
+        lo isa Union{Rational,AlgebraicReal} || hi isa Union{Rational,AlgebraicReal}
+    C = exact_endpoints ? AlgebraicReal : promote_type(T, typeof(lo), typeof(hi), Float64)
+    lo, hi = C(lo), C(hi)
+    entries = Vector{Tuple{C,C,C,Float64}}()
     count = 0
     total_persistence = 0.0
     max_persistence = 0.0
@@ -5399,8 +5562,8 @@ function _canonical_barcode_entries(pb::PackedBarcode,
         mult = pb.mults[idx]
         mult <= 0 && continue
         p = pb.pairs[idx]
-        b = Float64(p.b)
-        d = Float64(p.d)
+        b = isfinite(p.b) ? C(p.b) : p.b
+        d = isfinite(p.d) ? C(p.d) : p.d
         if !isfinite(b) || !isfinite(d)
             if infinite_policy == :error
                 throw(ArgumentError("barcode featurizer encountered an unbounded interval; use infinite_policy=:clip_to_window with a finite working window"))
@@ -5411,12 +5574,13 @@ function _canonical_barcode_entries(pb::PackedBarcode,
         d > b || continue
         pers = d - b
         count += mult
-        total_persistence += mult * pers
-        max_persistence = max(max_persistence, pers)
-        if pers > 0.0
-            w = mult * pers
+        pers_numeric = Float64(pers)
+        total_persistence += mult * pers_numeric
+        max_persistence = max(max_persistence, pers_numeric)
+        if pers_numeric > 0.0
+            w = mult * pers_numeric
             weight_total += w
-            weighted_log += w * log(pers)
+            weighted_log += w * log(pers_numeric)
         end
         push!(entries, (pers, b, d, Float64(mult)))
     end
@@ -5433,7 +5597,7 @@ end
 
 function _barcode_topk_vector(pb::PackedBarcode,
                               spec::BarcodeTopKSpec,
-                              window::Union{Nothing,Tuple{Float64,Float64}}=spec.window)
+                              window::Union{Nothing,Tuple{Real,Real}}=spec.window)
     entries, count, _, _, _ = _canonical_barcode_entries(pb, window, spec.infinite_policy)
     out = zeros(Float64, 1 + 3 * spec.k)
     out[1] = Float64(count)
@@ -5455,7 +5619,7 @@ end
 
 function _barcode_summary_vector(pb::PackedBarcode,
                                  spec::BarcodeSummarySpec,
-                                 window::Union{Nothing,Tuple{Float64,Float64}}=spec.window)
+                                 window::Union{Nothing,Tuple{Real,Real}}=spec.window)
     _, count, total_persistence, max_persistence, entropy =
         _canonical_barcode_entries(pb, window, spec.infinite_policy)
     mean_persistence = count == 0 ? 0.0 : total_persistence / Float64(count)
@@ -5484,6 +5648,7 @@ function _aggregate_barcode_feature_grid(
     feats = Matrix{Vector{Float64}}(undef, nd, no)
     if threads && Threads.nthreads() > 1
         Threads.@threads for idx in 1:(nd * no)
+            local i, j
             i = div(idx - 1, no) + 1
             j = (idx - 1) % no + 1
             feats[i, j] = builder(bars[i, j])
@@ -5895,49 +6060,52 @@ function transform(spec::MatchingDistanceBankSpec,
                    cache::EncodingInvariantCache;
                    opts::InvariantOptions=InvariantOptions(),
                    threaded::Bool=true)
+    check_featurizer_spec(spec; throw=true)
     opts0 = _cache_opts(cache, opts)
     threads0 = _resolve_spec_threads(spec.threads, opts0, _cache_threaded(cache, threaded))
     sample_pi = _unwrap_cache_pi(cache.pi)
     out = Vector{Float64}(undef, length(spec.references))
-    cache_slice = _slice_plan_cache_from_session(cache.slice_plan_cache, cache.session_cache)
+    arrangement_method = spec.method in (:exact_2d, :sampled_2d)
+    sample_fibered = arrangement_method ? _fibered_cache_for!(cache, spec, opts0,
+        threads0, _effective_cache_level(cache.level, spec, cache.pi)) : nothing
+    # The slice-based owner reads its thread choice from typed options. Preserve
+    # the remaining options when threading the resolved spec/batch control.
+    opts_run = InvariantOptions(axes=opts0.axes, axes_policy=opts0.axes_policy,
+        max_axis_len=opts0.max_axis_len, box=opts0.box, threads=threads0,
+        strict=opts0.strict, pl_mode=opts0.pl_mode)
+    cache_slice = arrangement_method ? nothing :
+        _slice_plan_cache_from_session(cache.slice_plan_cache, cache.session_cache)
     @inbounds for i in eachindex(spec.references)
         Mref_raw, piref = _sample_module_pi(spec.references[i])
         piref0 = _unwrap_cache_pi(piref)
         sample_pi === piref0 || throw(ArgumentError("MatchingDistanceBankSpec requires all references to share the sample encoding map"))
         Mref = materialize_module(Mref_raw)
         cache.M.Q === Mref.Q || throw(ArgumentError("MatchingDistanceBankSpec requires all references to share the sample poset"))
-        if spec.method == :exact_2d
-            out[i] = Invariants.matching_distance_exact_2d(
-                cache.M,
-                Mref,
-                sample_pi,
-                opts0;
-                weight=spec.weight,
-                normalize_dirs=spec.normalize_dirs,
-                include_axes=spec.include_axes,
-            )
-        else
-            md_kwargs = if spec.directions === nothing && spec.offsets === nothing
-                (;
-                    n_dirs=spec.n_dirs,
-                    n_offsets=spec.n_offsets,
-                    max_den=spec.max_den,
-                    include_axes=spec.include_axes,
-                    normalize_dirs=spec.normalize_dirs,
-                    weight=spec.weight,
-                    cache=cache_slice,
-                )
+        cache.M.field == Mref.field || throw(ArgumentError("MatchingDistanceBankSpec requires the same coefficient field for sample and references"))
+        if arrangement_method
+            ref_fibered = if Mref === cache.M
+                sample_fibered
             else
-                (;
-                    directions=spec.directions,
-                    offsets=spec.offsets,
-                    include_axes=spec.include_axes,
-                    normalize_dirs=spec.normalize_dirs,
-                    weight=spec.weight,
-                    cache=cache_slice,
-                )
+                key = _structural_cache_key((:matching_bank_reference, objectid(sample_fibered), objectid(Mref)))
+                get!(cache.fibered, key) do
+                    Invariants.fibered_barcode_cache_2d(Mref, Invariants.shared_arrangement(sample_fibered);
+                        precompute=:none, threads=threads0)
+                end
             end
-            out[i] = Invariants.matching_distance_approx(cache.M, Mref, sample_pi, opts0; md_kwargs...)
+            out[i] = if spec.method == :exact_2d
+                Invariants.matching_distance_exact_2d(sample_fibered, ref_fibered;
+                    weight=spec.weight, threads=threads0)
+            else
+                Invariants.matching_distance_sampled_2d(sample_fibered, ref_fibered;
+                    weight=spec.weight, threads=threads0)
+            end
+        else
+            out[i] = Invariants.matching_distance_approx(cache.M, Mref, sample_pi, opts_run;
+                directions=spec.directions === nothing ? :auto : spec.directions,
+                offsets=spec.offsets === nothing ? :auto : spec.offsets,
+                n_dirs=spec.n_dirs, n_offsets=spec.n_offsets, max_den=spec.max_den,
+                include_axes=spec.include_axes, normalize_dirs=spec.normalize_dirs,
+                weight=spec.weight, cache=cache_slice)
         end
     end
     return out
@@ -6769,12 +6937,12 @@ function _fill_composite_slice_parts!(
     opts0::InvariantOptions,
     threaded0::Bool,
 )
-    groups = Dict{UInt,Vector{Int}}()
+    groups = Dict{_StructuralCacheKey,Vector{Int}}()
     for i in eachindex(spec.specs)
         sub = spec.specs[i]
         _is_slice_family_spec(sub) || continue
         threads_i = _resolve_spec_threads(getproperty(sub, :threads), opts0, threaded0)
-        key = UInt(hash((_slice_compile_kwargs(sub, opts0, threads_i), _effective_cache_level(cache.level, sub, cache.pi))))
+        key = _structural_cache_key((_slice_compile_kwargs(sub, opts0, threads_i), _effective_cache_level(cache.level, sub, cache.pi)))
         push!(get!(groups, key) do
             Int[]
         end, i)
@@ -6794,7 +6962,7 @@ function _fill_composite_slice_parts!(
 end
 
 @inline function _mplandscape_feature_key(spec::MPLandscapeSpec)
-    return UInt(hash((spec.kmax, spec.tgrid, spec.normalize_weights)))
+    return _structural_cache_key((spec.kmax, spec.tgrid, spec.normalize_weights))
 end
 
 function _fill_composite_mplandscape_parts!(
@@ -6805,12 +6973,12 @@ function _fill_composite_mplandscape_parts!(
     opts0::InvariantOptions,
     threaded0::Bool,
 )
-    groups = Dict{UInt,Vector{Int}}()
+    groups = Dict{_StructuralCacheKey,Vector{Int}}()
     for i in eachindex(spec.specs)
         sub = spec.specs[i]
         _is_mplandscape_family_spec(sub) || continue
         threads_i = _resolve_spec_threads(sub.threads, opts0, threaded0)
-        key = UInt(hash((_slice_compile_kwargs(sub, opts0, threads_i), _effective_cache_level(cache.level, sub, cache.pi), threads_i)))
+        key = _structural_cache_key((_slice_compile_kwargs(sub, opts0, threads_i), _effective_cache_level(cache.level, sub, cache.pi), threads_i))
         push!(get!(groups, key) do
             Int[]
         end, i)
@@ -6820,7 +6988,7 @@ function _fill_composite_mplandscape_parts!(
         first_spec = spec.specs[first(idxs)]::MPLandscapeSpec
         threads_g = _resolve_spec_threads(first_spec.threads, opts0, threaded0)
         plan = _slice_plan_for!(cache, first_spec, opts0, threads_g)
-        feature_groups = Dict{UInt,Vector{Int}}()
+        feature_groups = Dict{_StructuralCacheKey,Vector{Int}}()
         for idx in idxs
             sub = spec.specs[idx]::MPLandscapeSpec
             push!(get!(feature_groups, _mplandscape_feature_key(sub)) do
@@ -6849,12 +7017,12 @@ function _fill_composite_projected_parts!(
     opts0::InvariantOptions,
     threaded0::Bool,
 )
-    groups = Dict{UInt,Vector{Int}}()
+    groups = Dict{_StructuralCacheKey,Vector{Int}}()
     for i in eachindex(spec.specs)
         sub = spec.specs[i]
         _is_projected_family_spec(sub) || continue
         threads_i = _resolve_spec_threads(sub.threads, opts0, threaded0)
-        key = UInt(hash((sub.references, sub.directions, sub.n_dirs, sub.normalize, sub.enforce_monotone, sub.precompute, threads_i)))
+        key = _structural_cache_key((sub.references, sub.directions, sub.n_dirs, sub.normalize, sub.enforce_monotone, sub.precompute, threads_i))
         push!(get!(groups, key) do
             Int[]
         end, i)
@@ -6888,7 +7056,7 @@ end
 @inline _is_mpp_hist_family_spec(spec) = spec isa MPPDecompositionHistogramSpec
 
 @inline function _mpp_image_feature_key(spec::MPPImageSpec)
-    return UInt(hash((spec.resolution, spec.xgrid, spec.ygrid, spec.sigma, spec.cutoff_radius, spec.cutoff_tol, spec.segment_prune)))
+    return _structural_cache_key((spec.resolution, spec.xgrid, spec.ygrid, spec.sigma, spec.cutoff_radius, spec.cutoff_tol, spec.segment_prune))
 end
 
 function _fill_composite_mpp_image_parts!(
@@ -6899,12 +7067,12 @@ function _fill_composite_mpp_image_parts!(
     opts0::InvariantOptions,
     threaded0::Bool,
 )
-    groups = Dict{UInt,Vector{Int}}()
+    groups = Dict{_StructuralCacheKey,Vector{Int}}()
     for i in eachindex(spec.specs)
         sub = spec.specs[i]
         _is_mpp_image_family_spec(sub) || continue
         threads_i = _resolve_spec_threads(sub.threads, opts0, threaded0)
-        key = UInt(hash((_mpp_decomposition_key(sub, opts0), _effective_cache_level(cache.level, sub, cache.pi), threads_i)))
+        key = _structural_cache_key((_mpp_decomposition_key(sub, opts0), _effective_cache_level(cache.level, sub, cache.pi), threads_i))
         push!(get!(groups, key) do
             Int[]
         end, i)
@@ -6915,7 +7083,7 @@ function _fill_composite_mpp_image_parts!(
         threads_g = _resolve_spec_threads(first_spec.threads, opts0, threaded0)
         lvl = _effective_cache_level(cache.level, first_spec, cache.pi)
         _, decomp = _mpp_decomposition_for!(cache, first_spec, opts0, threads_g, lvl)
-        feature_groups = Dict{UInt,Vector{Int}}()
+        feature_groups = Dict{_StructuralCacheKey,Vector{Int}}()
         for idx in idxs
             sub = spec.specs[idx]::MPPImageSpec
             push!(get!(feature_groups, _mpp_image_feature_key(sub)) do
@@ -6942,12 +7110,12 @@ function _fill_composite_mpp_hist_parts!(
     opts0::InvariantOptions,
     threaded0::Bool,
 )
-    groups = Dict{UInt,Vector{Int}}()
+    groups = Dict{_StructuralCacheKey,Vector{Int}}()
     for i in eachindex(spec.specs)
         sub = spec.specs[i]
         _is_mpp_hist_family_spec(sub) || continue
         threads_i = _resolve_spec_threads(sub.threads, opts0, threaded0)
-        key = UInt(hash((_mpp_decomposition_key(sub, opts0), _effective_cache_level(cache.level, sub, cache.pi), threads_i)))
+        key = _structural_cache_key((_mpp_decomposition_key(sub, opts0), _effective_cache_level(cache.level, sub, cache.pi), threads_i))
         push!(get!(groups, key) do
             Int[]
         end, i)
@@ -6958,10 +7126,10 @@ function _fill_composite_mpp_hist_parts!(
         threads_g = _resolve_spec_threads(first_spec.threads, opts0, threaded0)
         lvl = _effective_cache_level(cache.level, first_spec, cache.pi)
         _, decomp = _mpp_decomposition_for!(cache, first_spec, opts0, threads_g, lvl)
-        feature_groups = Dict{UInt,Vector{Int}}()
+        feature_groups = Dict{_StructuralCacheKey,Vector{Int}}()
         for idx in idxs
             sub = spec.specs[idx]::MPPDecompositionHistogramSpec
-            push!(get!(feature_groups, UInt(hash((sub.orientation_bins, sub.scale_bins, sub.scale_range, sub.weight, sub.normalize)))) do
+            push!(get!(feature_groups, _structural_cache_key((sub.orientation_bins, sub.scale_bins, sub.scale_range, sub.weight, sub.normalize))) do
                 Int[]
             end, idx)
         end
@@ -7017,14 +7185,14 @@ function _fill_composite_signed_barcode_parts!(
     opts0::InvariantOptions,
     threaded0::Bool,
 )
-    groups = Dict{UInt,Vector{Int}}()
+    groups = Dict{_StructuralCacheKey,Vector{Int}}()
     for i in eachindex(spec.specs)
         sub = spec.specs[i]
         _is_signed_barcode_family_spec(sub) || continue
         threads_i = _resolve_spec_threads(sub.threads, opts0, threaded0)
         axes_i = sub.axes === nothing ? opts0.axes : sub.axes
         strict_i = sub.strict === nothing ? opts0.strict : sub.strict
-        key = UInt(hash((sub.method, axes_i, sub.axes_policy, sub.max_axis_len, strict_i, threads_i)))
+        key = _structural_cache_key((sub.method, axes_i, sub.axes_policy, sub.max_axis_len, strict_i, threads_i))
         push!(get!(groups, key) do
             Int[]
         end, i)
@@ -7059,14 +7227,14 @@ function _fill_composite_euler_parts!(
     opts0::InvariantOptions,
     threaded0::Bool,
 )
-    groups = Dict{UInt,Vector{Int}}()
+    groups = Dict{_StructuralCacheKey,Vector{Int}}()
     for i in eachindex(spec.specs)
         sub = spec.specs[i]
         _is_euler_family_spec(sub) || continue
         threads_i = _resolve_spec_threads(sub.threads, opts0, threaded0)
         axes_i = sub.axes === nothing ? opts0.axes : sub.axes
         strict_i = sub.strict === nothing ? opts0.strict : sub.strict
-        key = UInt(hash((axes_i, sub.axes_policy, sub.max_axis_len, opts0.box, strict_i, threads_i)))
+        key = _structural_cache_key((axes_i, sub.axes_policy, sub.max_axis_len, opts0.box, strict_i, threads_i))
         push!(get!(groups, key) do
             Int[]
         end, i)
@@ -7094,14 +7262,14 @@ function _fill_composite_euler_parts!(
     opts0::InvariantOptions,
     threaded0::Bool,
 )
-    groups = Dict{UInt,Vector{Int}}()
+    groups = Dict{_StructuralCacheKey,Vector{Int}}()
     for i in eachindex(spec.specs)
         sub = spec.specs[i]
         _is_euler_family_spec(sub) || continue
         threads_i = _resolve_spec_threads(sub.threads, opts0, threaded0)
         axes_i = sub.axes === nothing ? opts0.axes : sub.axes
         strict_i = sub.strict === nothing ? opts0.strict : sub.strict
-        key = UInt(hash((axes_i, sub.axes_policy, sub.max_axis_len, opts0.box, strict_i, threads_i)))
+        key = _structural_cache_key((axes_i, sub.axes_policy, sub.max_axis_len, opts0.box, strict_i, threads_i))
         push!(get!(groups, key) do
             Int[]
         end, i)
@@ -7240,6 +7408,7 @@ function _batch_foreach_threads(n::Int, f; chunk_size::Int=0, deterministic::Boo
         if chunk_size > 0
             nchunks = cld(n, chunk_size)
             Threads.@threads for c in 1:nchunks
+                local lo, hi
                 lo = (c - 1) * chunk_size + 1
                 hi = min(n, c * chunk_size)
                 @inbounds for i in lo:hi
@@ -7253,6 +7422,7 @@ function _batch_foreach_threads(n::Int, f; chunk_size::Int=0, deterministic::Boo
         base = fld(n, nt_eff)
         remn = n - base * nt_eff
         Threads.@threads for t in 1:nt_eff
+            local extra, start, stop
             extra = t <= remn ? 1 : 0
             start = (t - 1) * base + min(t - 1, remn) + 1
             stop = start + base + extra - 1
@@ -7276,11 +7446,8 @@ end
         return _batch_foreach_threads(n, f; chunk_size=opts.chunk_size, deterministic=opts.deterministic)
     elseif opts.backend == :folds
         impl = _BATCH_IMPL[]
-        if impl !== nothing
-            return impl.foreach_indexed(n, f; chunk_size=opts.chunk_size, deterministic=opts.deterministic)
-        end
-        # Fallback keeps behavior usable when Folds extension is not loaded.
-        return _batch_foreach_threads(n, f; chunk_size=opts.chunk_size, deterministic=opts.deterministic)
+        impl === nothing && _missing_feature_extension("BatchOptions(backend=:folds)", "Folds")
+        return impl.foreach_indexed(n, f; chunk_size=opts.chunk_size, deterministic=opts.deterministic)
     end
     throw(ArgumentError("unsupported batch backend: $(opts.backend)"))
 end
@@ -7313,31 +7480,31 @@ compatible objects.
 """
 @inline function mp_landscape_kernel_object(; kwargs...)
     impl = _KERNELFUNCTIONS_IMPL[]
-    impl === nothing && throw(ArgumentError("mp_landscape_kernel_object requires KernelFunctions.jl extension (load KernelFunctions and ensure TamerOpKernelFunctionsExt is available)."))
+    impl === nothing && _missing_feature_extension("mp_landscape_kernel_object", "KernelFunctions")
     return impl.mp_landscape(; kwargs...)
 end
 
 @inline function projected_kernel_object(; kwargs...)
     impl = _KERNELFUNCTIONS_IMPL[]
-    impl === nothing && throw(ArgumentError("projected_kernel_object requires KernelFunctions.jl extension (load KernelFunctions and ensure TamerOpKernelFunctionsExt is available)."))
+    impl === nothing && _missing_feature_extension("projected_kernel_object", "KernelFunctions")
     return impl.projected(; kwargs...)
 end
 
 @inline function mpp_image_kernel_object(; kwargs...)
     impl = _KERNELFUNCTIONS_IMPL[]
-    impl === nothing && throw(ArgumentError("mpp_image_kernel_object requires KernelFunctions.jl extension (load KernelFunctions and ensure TamerOpKernelFunctionsExt is available)."))
+    impl === nothing && _missing_feature_extension("mpp_image_kernel_object", "KernelFunctions")
     return impl.mpp_image(; kwargs...)
 end
 
 @inline function point_signed_measure_kernel_object(; kwargs...)
     impl = _KERNELFUNCTIONS_IMPL[]
-    impl === nothing && throw(ArgumentError("point_signed_measure_kernel_object requires KernelFunctions.jl extension (load KernelFunctions and ensure TamerOpKernelFunctionsExt is available)."))
+    impl === nothing && _missing_feature_extension("point_signed_measure_kernel_object", "KernelFunctions")
     return impl.point_signed_measure(; kwargs...)
 end
 
 @inline function rectangle_signed_barcode_kernel_object(; kwargs...)
     impl = _KERNELFUNCTIONS_IMPL[]
-    impl === nothing && throw(ArgumentError("rectangle_signed_barcode_kernel_object requires KernelFunctions.jl extension (load KernelFunctions and ensure TamerOpKernelFunctionsExt is available)."))
+    impl === nothing && _missing_feature_extension("rectangle_signed_barcode_kernel_object", "KernelFunctions")
     return impl.rectangle_signed_barcode(; kwargs...)
 end
 
@@ -7354,44 +7521,44 @@ These can be used with `Distances.evaluate` and `Distances.pairwise`.
 """
 @inline function matching_distance_metric(; kwargs...)
     impl = _DISTANCES_IMPL[]
-    impl === nothing && throw(ArgumentError("matching_distance_metric requires Distances.jl extension (load Distances and ensure TamerOpDistancesExt is available)."))
+    impl === nothing && _missing_feature_extension("matching_distance_metric", "Distances")
     return impl.matching(; kwargs...)
 end
 
 @inline function mp_landscape_distance_metric(; kwargs...)
     impl = _DISTANCES_IMPL[]
-    impl === nothing && throw(ArgumentError("mp_landscape_distance_metric requires Distances.jl extension (load Distances and ensure TamerOpDistancesExt is available)."))
+    impl === nothing && _missing_feature_extension("mp_landscape_distance_metric", "Distances")
     return impl.mp_landscape(; kwargs...)
 end
 
 @inline function projected_distance_metric(; kwargs...)
     impl = _DISTANCES_IMPL[]
-    impl === nothing && throw(ArgumentError("projected_distance_metric requires Distances.jl extension (load Distances and ensure TamerOpDistancesExt is available)."))
+    impl === nothing && _missing_feature_extension("projected_distance_metric", "Distances")
     return impl.projected(; kwargs...)
 end
 
 @inline function bottleneck_distance_metric(; kwargs...)
     impl = _DISTANCES_IMPL[]
-    impl === nothing && throw(ArgumentError("bottleneck_distance_metric requires Distances.jl extension (load Distances and ensure TamerOpDistancesExt is available)."))
+    impl === nothing && _missing_feature_extension("bottleneck_distance_metric", "Distances")
     return impl.bottleneck(; kwargs...)
 end
 
 @inline function wasserstein_distance_metric(; kwargs...)
     impl = _DISTANCES_IMPL[]
-    impl === nothing && throw(ArgumentError("wasserstein_distance_metric requires Distances.jl extension (load Distances and ensure TamerOpDistancesExt is available)."))
+    impl === nothing && _missing_feature_extension("wasserstein_distance_metric", "Distances")
     return impl.wasserstein(; kwargs...)
 end
 
 @inline function mpp_image_distance_metric(; kwargs...)
     impl = _DISTANCES_IMPL[]
-    impl === nothing && throw(ArgumentError("mpp_image_distance_metric requires Distances.jl extension (load Distances and ensure TamerOpDistancesExt is available)."))
+    impl === nothing && _missing_feature_extension("mpp_image_distance_metric", "Distances")
     return impl.mpp_image(; kwargs...)
 end
 
 @inline function _progress_init(total::Int, label::AbstractString, enabled::Bool)
     enabled || return nothing
     impl = _PROGRESS_IMPL[]
-    impl === nothing && return nothing
+    impl === nothing && _missing_feature_extension("BatchOptions(progress=true)", "ProgressLogging")
     return impl.init(total, label)
 end
 
@@ -7405,6 +7572,16 @@ end
     impl = _PROGRESS_IMPL[]
     (state === nothing || impl === nothing) && return nothing
     return impl.finish!(state)
+end
+
+function _check_batch_extensions(opts::BatchOptions)
+    # Disabling threading explicitly selects serial execution, even with a stored
+    # parallel backend preference. Enabled optional features must be activated.
+    opts.threaded && opts.backend === :folds && _BATCH_IMPL[] === nothing &&
+        _missing_feature_extension("BatchOptions(backend=:folds)", "Folds")
+    opts.progress && _PROGRESS_IMPL[] === nothing &&
+        _missing_feature_extension("BatchOptions(progress=true)", "ProgressLogging")
+    return nothing
 end
 
 struct _CompiledFeaturizePlan{FS<:AbstractFeaturizerSpec,AX,LAB}
@@ -7582,6 +7759,7 @@ function featurize(samples::AbstractVector,
                    on_unsupported::Symbol=:error)
     opts0 = opts
     batch_opts = batch
+    _check_batch_extensions(batch_opts)
     ns = length(samples)
     session_cache, cache_mode = _resolve_feature_session_cache(cache)
     (on_unsupported == :error || on_unsupported == :skip || on_unsupported == :missing) ||
@@ -7661,6 +7839,7 @@ function batch_transform!(X::Matrix,
                           on_unsupported::Symbol=:error)
     opts0 = opts
     batch_opts = batch
+    _check_batch_extensions(batch_opts)
     session_cache, cache_mode = _resolve_feature_session_cache(cache)
     (on_unsupported == :error || on_unsupported == :skip || on_unsupported == :missing) ||
         throw(ArgumentError("on_unsupported must be :error, :skip, or :missing"))
@@ -7695,14 +7874,16 @@ function batch_transform!(X::Matrix,
 end
 
 @inline function _resolution_cache_stats(rc::ResolutionCache)
-    return Dict(
-        "projective" => length(rc.projective),
-        "injective" => length(rc.injective),
-        "indicator" => length(rc.indicator),
-        "projective_shards" => sum(length, rc.projective_shards),
-        "injective_shards" => sum(length, rc.injective_shards),
-        "indicator_shards" => sum(length, rc.indicator_shards),
+    Base.lock(rc.lock)
+    try
+        return Dict(
+        "projective" => length(rc.projective) + (rc.projective_primary === nothing ? 0 : length(rc.projective_primary)),
+        "injective" => length(rc.injective) + (rc.injective_primary === nothing ? 0 : length(rc.injective_primary)),
+        "indicator" => length(rc.indicator) + (rc.indicator_primary === nothing ? 0 : length(rc.indicator_primary)),
     )
+    finally
+        Base.unlock(rc.lock)
+    end
 end
 
 function _session_cache_stats(session::SessionCache)
@@ -8166,28 +8347,38 @@ Distance between two encoded modules, assuming a common encoding map `pi` (as pr
 
 `method`:
 - `:auto` or `:approx`    uses `Invariants.matching_distance_approx`
-- `:exact_2d`             uses `Invariants.matching_distance_exact_2d`
+- `:sampled_2d`          uses a deterministic arrangement representative family
+- `:exact_2d`            optimizes the supremum for continuous coordinate-box
+  encodings in the finite `opts.box` window; essential bars are clipped at its
+  boundary. Polyhedral and rounded lattice classifiers need a sampled method.
+
+The exact method requires matched normalization/weight choices
+`:L1`/`:lesnick_l1` or `:Linf`/`:lesnick_linf`. Its `max_candidates` budget
+throws on exhaustion; it never falls back to sampling.
+Pass `cache=sc::SessionCache` to reuse slice plans or arrangement geometry
+across repeated calls, according to the selected method.
 """
 function matching_distance(encA::EncodingResult, encB::EncodingResult;
                            method::Symbol=:auto,
                            opts::InvariantOptions=InvariantOptions(),
                            cache=:auto,
                            kwargs...)
-    opts = opts
     (encA.P === encB.P) || error("matching_distance: encodings are on different posets; common-encode first.")
     (encA.pi === encB.pi) || error("matching_distance: encodings do not share a common classifier map pi; common-encode first.")
 
-    pi = encA.pi
-    MA = materialize_module(encA.M)
-    MB = materialize_module(encB.M)
-    cache_slice, session_cache = _resolve_workflow_specialized_cache(cache, SlicePlanCache)
-    cache2 = _slice_plan_cache_from_session(cache_slice, session_cache)
     if method == :auto || method == :approx
+        MA = materialize_module(encA.M)
+        MB = materialize_module(encB.M)
+        cache_slice, session_cache = _resolve_workflow_specialized_cache(cache, SlicePlanCache)
+        cache2 = _slice_plan_cache_from_session(cache_slice, session_cache)
+        pi = encA.pi
         return Invariants.matching_distance_approx(MA, MB, pi, opts; cache=cache2, kwargs...)
     elseif method == :exact_2d
-        return Invariants.matching_distance_exact_2d(MA, MB, pi, opts; kwargs...)
+        return Workflow.matching_distance_exact_2d(encA, encB; opts=opts, cache=cache, kwargs...)
+    elseif method == :sampled_2d
+        return Workflow.matching_distance_sampled_2d(encA, encB; opts=opts, cache=cache, kwargs...)
     else
-        error("matching_distance: unknown method=$(method). Supported: :auto, :approx, :exact_2d")
+        throw(ArgumentError("matching_distance: unknown method=$(method). Supported: :auto, :approx, :sampled_2d, :exact_2d"))
     end
 end
 

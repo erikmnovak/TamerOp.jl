@@ -282,7 +282,7 @@ struct PointCloud{T}
 end
 
 function PointCloud(points::Matrix{T}; copy::Bool=false) where {T}
-    return PointCloud{T}(copy ? copy(points) : points)
+    return PointCloud{T}(copy ? Base.copy(points) : points)
 end
 
 function PointCloud(points::AbstractMatrix{T}) where {T}
@@ -418,7 +418,7 @@ function EmbeddedPlanarGraph2D(vertices::Matrix{T},
                                copy::Bool=false) where {T}
     edge_u, edge_v = _split_edges(edges)
     offsets, points = polylines === nothing ? (nothing, nothing) : _flatten_polylines(T, polylines)
-    verts = copy ? copy(vertices) : vertices
+    verts = copy ? Base.copy(vertices) : vertices
     return EmbeddedPlanarGraph2D{T}(verts, edge_u, edge_v, offsets, points, bbox)
 end
 
@@ -441,7 +441,7 @@ function EmbeddedPlanarGraph2D(vertices::Matrix{T},
     else
         Matrix{T}(polyline_points)
     end
-    verts = copy ? copy(vertices) : vertices
+    verts = copy ? Base.copy(vertices) : vertices
     offs === nothing || pts !== nothing || error("EmbeddedPlanarGraph2D: polyline_offsets requires polyline_points.")
     pts === nothing || offs !== nothing || error("EmbeddedPlanarGraph2D: polyline_points requires polyline_offsets.")
     if offs !== nothing
@@ -786,11 +786,13 @@ function GradedComplex(cells_by_dim::AbstractVector{<:AbstractVector{<:Integer}}
     total = last(dim_offsets) - 1
     length(grades) == total || error("GradedComplex: grades length mismatch.")
     cell_dims === nothing || _validate_cell_dims(cell_dims, dim_offsets, "GradedComplex")
+    isempty(grades) && throw(ArgumentError("An empty GradedComplex needs typed tuple grades, for example NTuple{2,Float64}[]."))
     N = length(grades[1])
     ng = Vector{NTuple{N,T}}(undef, length(grades))
     for i in eachindex(grades)
         length(grades[i]) == N || error("GradedComplex: grade $i has wrong length.")
-        ng[i] = ntuple(j -> T(grades[i][j]), N)
+        # Conversion preserves existing BigFloat precision; T(value) can round.
+        ng[i] = ntuple(j -> convert(T, grades[i][j]), N)
     end
     return GradedComplex{N,T}(cell_ids, dim_offsets, boundaries, ng)
 end
@@ -803,12 +805,26 @@ function GradedComplex(cells_by_dim::AbstractVector{<:AbstractVector{<:Integer}}
     total = last(dim_offsets) - 1
     length(grades) == total || error("GradedComplex: grades length mismatch.")
     cell_dims === nothing || _validate_cell_dims(cell_dims, dim_offsets, "GradedComplex")
-    N = length(grades[1])
-    T = eltype(grades[1])
+    if isempty(grades)
+        length(boundaries) == max(length(cells_by_dim) - 1, 0) ||
+            throw(ArgumentError("An empty GradedComplex needs one boundary per pair of adjacent chain degrees."))
+        all(B -> size(B) == (0, 0), boundaries) ||
+            throw(ArgumentError("An empty GradedComplex can only have 0-by-0 boundaries."))
+        grade_type = eltype(grades)
+        isconcretetype(grade_type) || throw(ArgumentError(
+            "An empty GradedComplex needs a concrete tuple grade type."))
+        N = fieldcount(grade_type)
+        N > 0 || throw(ArgumentError("An empty GradedComplex needs a positive parameter dimension."))
+        T = eltype(grade_type)
+    else
+        N = length(grades[1])
+        T = eltype(grades[1])
+    end
     ng = Vector{NTuple{N,T}}(undef, length(grades))
     for i in eachindex(grades)
         length(grades[i]) == N || error("GradedComplex: grade $i has wrong length.")
-        ng[i] = ntuple(j -> T(grades[i][j]), N)
+        # Conversion preserves existing BigFloat precision; T(value) can round.
+        ng[i] = ntuple(j -> convert(T, grades[i][j]), N)
     end
     return GradedComplex{N,T}(cell_ids, dim_offsets, boundaries, ng)
 end
@@ -1101,6 +1117,11 @@ function SimplexTreeMulti(simplex_offsets::Vector{Int},
     length(grade_offsets) == ns + 1 ||
         error("SimplexTreeMulti: grade_offsets must have length nsimplices+1.")
     !isempty(dim_offsets) || error("SimplexTreeMulti: dim_offsets cannot be empty.")
+    if ns == 0
+        N > 0 || throw(ArgumentError("An empty SimplexTreeMulti needs a positive parameter dimension."))
+        all(==(1), dim_offsets) || throw(ArgumentError(
+            "An empty SimplexTreeMulti must have only 1-valued dimension offsets."))
+    end
     first(simplex_offsets) == 1 || error("SimplexTreeMulti: simplex_offsets must start at 1.")
     first(grade_offsets) == 1 || error("SimplexTreeMulti: grade_offsets must start at 1.")
     last(simplex_offsets) == length(simplex_vertices) + 1 ||

@@ -6,20 +6,39 @@ using ..Options: EncodingOptions, ResolutionOptions, DerivedFunctorOptions
 using ..FieldLinAlg
 import ..Modules
 import ..AbelianCategories
+import ..Results: provenance
 using ..Modules: PModule, PMorphism
 using SparseArrays: sparse, SparseMatrixCSC
 import Base.Threads
+
+# Fixed-model computations cannot change representative coordinates merely by
+# accepting a different `canon`. Validate before cache lookup as well as builds.
+function _validate_native_derived_options(df::DerivedFunctorOptions, operation::AbstractString,
+                                          model::Symbol)
+    df.maxdeg >= 0 || throw(ArgumentError("$operation: maxdeg must be nonnegative."))
+    df.model in (:auto, model) ||
+        throw(ArgumentError("$operation: model must be :auto or :$model, got $(df.model)."))
+    native_canon = model in (:projective, :injective) ? model : :none
+    df.canon in (:auto, :none, native_canon) ||
+        throw(ArgumentError("$operation: canon=$(df.canon) is incompatible with the :$model model; use :auto, :none$(native_canon === :none ? "" : ", or :$native_canon")."))
+    return nothing
+end
 
 """
     HomSystemCache{K}()
     HomSystemCache(K::Type)
 
-Thread-local sharded cache for expensive Hom-system setup reused across derived pipelines.
+Shared cache for expensive Hom-system setup reused across derived pipelines.
+Lookup and publication are synchronized; Hom construction and coordinate solves
+run outside the lock with independently leased scratch.
 
 Stored entries:
 - `hom`: `HomSpace` objects keyed by `(objectid(dom), objectid(cod))`
-- `precompose`: precompose coordinate matrices keyed by `(objectid(Hdom), objectid(Hcod), objectid(f))`
-- `postcompose`: postcompose coordinate matrices keyed by `(objectid(Hdom), objectid(Hcod), objectid(g))`
+- `precompose`: typed coordinate matrices with weak input/basis identity witnesses
+- `postcompose`: typed coordinate matrices with weak input/basis identity witnesses
+
+Integer identity keys select candidate entries; every coordinate-result hit
+also verifies its live owners. Keep source matrices read-only while cached.
 """
 struct _HomKey2
     a::UInt
@@ -32,45 +51,107 @@ struct _HomKey3
     c::UInt
 end
 
+# Integer cache keys are only lookup hints: recycled IDs and hash collisions
+# must still identify the same live inputs before their result is reusable.
+struct _ImmutableIdentityWitness
+    value::Any
+end
+
+struct _ModuleIdentityWitness
+    token::WeakRef
+    field::AbstractCoeffField
+    poset::Any
+    dims::WeakRef
+    edge_arrays::NTuple{4,WeakRef}
+end
+
+# PModule is an immutable wrapper: a WeakRef to a temporary boxed copy can
+# expire while the same module value is still live. Witness its stable mutable
+# storage instead. The field/poset/storage contract also distinguishes manually
+# assembled modules that happen to share the same mutable memo owner.
+@inline function _identity_witness(M::PModule)
+    edges = M.edge_maps
+    return _ModuleIdentityWitness(WeakRef(M.map_compose), M.field, M.Q, WeakRef(M.dims),
+        map(WeakRef, (edges.preds, edges.succs, edges.maps_from_pred, edges.maps_to_succ)))
+end
+@inline function _identity_witness(owner)
+    # Generic immutable inputs, such as matrix views, have no unique mutable
+    # token. Retain that value itself; weakly retain ordinary mutable storage.
+    return ismutable(owner) ? WeakRef(owner) : _ImmutableIdentityWitness(owner)
+end
+
+@inline _identity_witness_matches(w::Union{WeakRef,_ImmutableIdentityWitness}, owner) = w.value === owner
+@inline function _identity_witness_matches(w::_ModuleIdentityWitness, M::PModule)
+    edges = M.edge_maps
+    return w.token.value === M.map_compose && w.field === M.field && w.poset === M.Q &&
+        w.dims.value === M.dims && w.edge_arrays[1].value === edges.preds &&
+        w.edge_arrays[2].value === edges.succs && w.edge_arrays[3].value === edges.maps_from_pred &&
+        w.edge_arrays[4].value === edges.maps_to_succ
+end
+@inline _identity_witness_matches(::_ModuleIdentityWitness, owner) = false
+
+struct _IdentityCacheEntry{N,C,V}
+    owners::NTuple{N,Union{WeakRef,_ImmutableIdentityWitness,_ModuleIdentityWitness}}
+    contract::C
+    value::V
+end
+_identity_cache_entry(owners::Tuple, contract, value) =
+    _IdentityCacheEntry(map(_identity_witness, owners), contract, value)
+@inline function _identity_cache_matches(entry::_IdentityCacheEntry{N}, owners::NTuple{N,Any}) where {N}
+    return all(i -> _identity_witness_matches(entry.owners[i], owners[i]), 1:N)
+end
+
+# PMorphism is immutable; its mutable component vector is the stable witness.
+# Basis witnesses also invalidate coordinate results when a Hom basis is replaced.
+@inline _hom_map_owners(Hdom, Hcod, f) =
+    (Hdom, Hcod, Hdom.basis_matrix, Hcod.basis_matrix, f.dom, f.cod, f.comps)
+
+# Derived-complex and tensor caches use this owner as a weak key. Its identity
+# must therefore be mutable/finalizable, even though its fields are not replaced.
 mutable struct HomSystemCache{HV,PV,QV} <: AbstractHomSystemCache
-    hom::Vector{Dict{_HomKey2,HV}}
-    precompose::Vector{Dict{_HomKey3,PV}}
-    postcompose::Vector{Dict{_HomKey3,QV}}
+    lock::ReentrantLock
+    hom::Dict{_HomKey2,HV}
+    precompose::Dict{_HomKey3,_IdentityCacheEntry{7,Nothing,PV}}
+    postcompose::Dict{_HomKey3,_IdentityCacheEntry{7,Nothing,QV}}
 end
 
 function HomSystemCache(::Type{HV}, ::Type{PV}, ::Type{QV}; shard_capacity::Int=256) where {HV,PV,QV}
-    nshards = max(1, Threads.maxthreadid())
-    hom = [Dict{_HomKey2,HV}() for _ in 1:nshards]
-    pre = [Dict{_HomKey3,PV}() for _ in 1:nshards]
-    post = [Dict{_HomKey3,QV}() for _ in 1:nshards]
+    hom = Dict{_HomKey2,HV}()
+    pre = Dict{_HomKey3,_IdentityCacheEntry{7,Nothing,PV}}()
+    post = Dict{_HomKey3,_IdentityCacheEntry{7,Nothing,QV}}()
     if shard_capacity > 0
-        for d in hom
-            sizehint!(d, shard_capacity)
-        end
-        for d in pre
-            sizehint!(d, shard_capacity)
-        end
-        for d in post
-            sizehint!(d, shard_capacity)
-        end
+        sizehint!(hom, shard_capacity)
+        sizehint!(pre, shard_capacity)
+        sizehint!(post, shard_capacity)
     end
-    return HomSystemCache(hom, pre, post)
+    return HomSystemCache(ReentrantLock(), hom, pre, post)
 end
 
-@inline _cache_tid_index(shards::AbstractVector) =
-    min(length(shards), max(1, Threads.threadid()))
+@inline function _cache_lookup(cache::HomSystemCache,
+                              store::Dict{_HomKey3,_IdentityCacheEntry{7,Nothing,V}},
+                              key::_HomKey3, owners::Tuple) where {V}
+    return lock(cache.lock) do
+        entry = get(store, key, nothing)
+        entry !== nothing && _identity_cache_matches(entry, owners) ? entry.value : nothing
+    end::Union{Nothing,V}
+end
 
-@inline _cache_shard(shards::AbstractVector) = shards[_cache_tid_index(shards)]
+@inline function _cache_store_or_get!(cache::HomSystemCache,
+                                     store::Dict{_HomKey3,_IdentityCacheEntry{7,Nothing,V}},
+                                     key::_HomKey3, value::V, owners::Tuple) where {V}
+    return lock(cache.lock) do
+        entry = get(store, key, nothing)
+        entry !== nothing && _identity_cache_matches(entry, owners) && return entry.value
+        store[key] = _identity_cache_entry(owners, nothing, value)
+        return value
+    end::V
+end
 
 function clear_hom_system_cache!(cache::HomSystemCache)
-    for d in cache.hom
-        empty!(d)
-    end
-    for d in cache.precompose
-        empty!(d)
-    end
-    for d in cache.postcompose
-        empty!(d)
+    lock(cache.lock) do
+        empty!(cache.hom)
+        empty!(cache.precompose)
+        empty!(cache.postcompose)
     end
     return nothing
 end
@@ -78,19 +159,16 @@ end
 @inline _cache_key2(a, b) = _HomKey2(UInt(objectid(a)), UInt(objectid(b)))
 @inline _cache_key3(a, b, c) = _HomKey3(UInt(objectid(a)), UInt(objectid(b)), UInt(objectid(c)))
 
-@inline function _cache_lookup(shards::AbstractVector{<:AbstractDict{K,V}}, key::K) where {K,V}
-    d = _cache_shard(shards)
-    return get(d, key, nothing)::Union{Nothing,V}
+@inline function _cache_lookup(cache::HomSystemCache, store::AbstractDict{K,V}, key::K) where {K,V}
+    return lock(cache.lock) do
+        get(store, key, nothing)::Union{Nothing,V}
+    end
 end
 
-@inline function _cache_store_or_get!(shards::AbstractVector{<:AbstractDict{K,V}}, key::K, value::V) where {K,V}
-    d = _cache_shard(shards)
-    existing = get(d, key, nothing)::Union{Nothing,V}
-    if existing === nothing
-        d[key] = value
-        return value
+@inline function _cache_store_or_get!(cache::HomSystemCache, store::AbstractDict{K,V}, key::K, value::V) where {K,V}
+    return lock(cache.lock) do
+        get!(store, key, value)::V
     end
-    return existing
 end
 
 # -----------------------------------------------------------------------------

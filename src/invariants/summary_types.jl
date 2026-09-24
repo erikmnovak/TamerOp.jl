@@ -386,7 +386,7 @@ function describe(result::RankInvariantResult)
     return (
         kind = :rank_invariant,
         nentries = nentries(result),
-        nnonzero = length(nonzero_pairs(result)),
+        nnonzero = count(!iszero, values(result.data)),
         store_zeros = store_zeros(result),
         nvertices = nvertices(source_poset(result)),
         poset_type = typeof(source_poset(result)),

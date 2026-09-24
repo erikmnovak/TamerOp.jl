@@ -320,8 +320,10 @@ end
         pi = pi.pi
     end
     if pi isa GridEncodingMap
+        exact = _exact_coordinate_rows(pi.coords)
         return _GridEncodingMapJSON(kind="GridEncodingMap",
-                                    coords=[collect(ax) for ax in pi.coords],
+                                    coords=exact === nothing ? [collect(ax) for ax in pi.coords] : Vector{Float64}[],
+                                    exact_coords=exact,
                                     orientation=collect(pi.orientation))
     elseif pi isa ZnEncoding.ZnEncodingMap
         return _ZnEncodingMapJSON(
@@ -368,10 +370,13 @@ end
 end
 
 function _pi_from_typed(P::AbstractPoset, obj::_GridEncodingMapJSON)
-    n = length(obj.coords)
-    coords = ntuple(i -> Vector{Float64}(obj.coords[i]), n)
-    length(obj.orientation) == n || error("GridEncodingMap.orientation length mismatch.")
+    rows = _coordinate_rows_from_obj(obj.coords, obj.exact_coords)
+    n = length(rows)
+    coords = ntuple(i -> rows[i], n)
+    length(obj.orientation) == n || throw(ArgumentError("GridEncodingMap.orientation length mismatch."))
+    prod(length.(rows)) == nvertices(P) || throw(ArgumentError("stored grid classifier size disagrees with the poset"))
     orientation = ntuple(i -> Int(obj.orientation[i]), n)
+    all(o -> o in (-1, 1), orientation) || throw(ArgumentError("stored grid orientation must contain only -1 and 1"))
     return GridEncodingMap(P, coords; orientation=orientation)
 end
 
@@ -473,6 +478,133 @@ function _encoding_obj(H::FringeModule{K};
     return obj
 end
 
+# A deliberately closed value vocabulary for mathematical records. It never
+# evaluates Julia text, serializes runtime caches or turns exact grades into
+# floating JSON numbers. Top-level field/base/map identities are reconstructed
+# from the loaded object; historical source fields and bases remain explicit.
+function _provenance_value_to_obj(x)
+    x === nothing && return nothing
+    x isa Bool && return x
+    x isa AbstractString && return String(x)
+    x isa Symbol && return Dict("type" => "symbol", "value" => String(x))
+    x isa Integer && return Dict("type" => "integer", "value" => string(x))
+    x isa Union{Float32,Float64} && !isnan(x) && return Dict("type" => "float", "value" => string(x), "precision" => string(typeof(x)))
+    x isa Union{Rational,AlgebraicReal} && return Dict("type" => "coordinate", "value" => _coordinate_parameter_obj(x))
+    x isa AbstractCoeffField && return Dict("type" => "field", "value" => _field_to_obj(x))
+    x isa AbstractPoset && return Dict("type" => "poset", "value" => _poset_obj(x))
+    x isa Pair && return Dict("type" => "pair", "values" => [_provenance_value_to_obj(first(x)), _provenance_value_to_obj(last(x))])
+    if x isa NamedTuple
+        return Dict("type" => "record", "keys" => String.(collect(keys(x))),
+                    "values" => [_provenance_value_to_obj(v) for v in values(x)])
+    elseif x isa UnitRange
+        return Dict("type" => "range", "values" => [_provenance_value_to_obj(first(x)), _provenance_value_to_obj(last(x))])
+    elseif x isa Tuple || x isa AbstractVector
+        return Dict("type" => x isa Tuple ? "tuple" : "vector", "values" => [_provenance_value_to_obj(v) for v in x])
+    end
+    throw(ArgumentError("unsupported mathematical provenance value $(typeof(x)); provide explicit mathematical data, not runtime objects"))
+end
+
+function _provenance_value_from_obj(x)
+    x === nothing && return nothing
+    x isa Bool && return x
+    x isa AbstractString && return String(x)
+    x isa AbstractDict && haskey(x, "type") || throw(ArgumentError("invalid mathematical provenance value"))
+    kind = String(x["type"])
+    expected = kind == "record" ? ("type", "keys", "values") :
+               kind == "float" ? ("type", "value", "precision") :
+               kind in ("pair", "range", "tuple", "vector") ? ("type", "values") : ("type", "value")
+    Set(String.(keys(x))) == Set(expected) || throw(ArgumentError("invalid mathematical provenance $kind keys"))
+    kind == "symbol" && return Symbol(x["value"])
+    if kind == "integer"
+        text = String(x["value"])
+        value = tryparse(BigInt, text)
+        value !== nothing && string(value) == text || throw(ArgumentError("invalid provenance integer"))
+        return typemin(Int) <= value <= typemax(Int) ? Int(value) : value
+    elseif kind == "float"
+        T = x["precision"] == "Float64" ? Float64 : x["precision"] == "Float32" ? Float32 :
+            throw(ArgumentError("unsupported provenance floating type"))
+        value = tryparse(T, String(x["value"]))
+        value !== nothing && !isnan(value) || throw(ArgumentError("invalid provenance floating value"))
+        return value
+    elseif kind == "coordinate"
+        return _coordinate_parameter_from_obj(x["value"])
+    elseif kind == "field"
+        return _field_from_obj(x["value"])
+    elseif kind == "poset"
+        return _parse_poset_from_obj(x["value"])
+    elseif kind in ("record", "pair", "range", "tuple", "vector")
+        vals = map(_provenance_value_from_obj, x["values"])
+        if kind == "record"
+            names = Symbol.(x["keys"])
+            length(names) == length(vals) && allunique(names) || throw(ArgumentError("invalid provenance record keys"))
+            return NamedTuple{Tuple(names)}(Tuple(vals))
+        elseif kind == "pair" || kind == "range"
+            length(vals) == 2 || throw(ArgumentError("invalid provenance $kind endpoints"))
+            kind == "pair" && return vals[1] => vals[2]
+            all(v -> v isa Integer, vals) || throw(ArgumentError("provenance range endpoints must be integers"))
+            return vals[1]:vals[2]
+        end
+        return kind == "tuple" ? Tuple(vals) : vals
+    end
+    throw(ArgumentError("unknown mathematical provenance type: $kind"))
+end
+
+function _encoding_provenance_record(p::NamedTuple; historical::Bool=false)
+    # Encoding map Julia types are implementation details. Nested historical
+    # records keep their actual base/field, unlike the reconstructed top level.
+    omitted = historical ? (:encoding,) : (:encoding, :base_poset, :field)
+    return (; (k => (k === :source && v isa NamedTuple ? _encoding_provenance_record(v; historical=true) : v)
+               for (k, v) in pairs(p) if !(k in omitted))...)
+end
+
+function _encoding_provenance_from_obj(obj, pi)
+    p = _provenance_value_from_obj(obj)
+    p isa NamedTuple || throw(ArgumentError("mathematical_provenance must contain a record"))
+    get(p, :category, nothing) === :finite_poset_representations ||
+        throw(ArgumentError("encoding provenance must describe finite poset representations"))
+    any(k -> haskey(p, k), (:base_poset, :field, :encoding)) &&
+        throw(ArgumentError("encoding provenance cannot override the stored base, field or classifier"))
+    degree = get(p, :degree, nothing)
+    degree === nothing || (degree isa Integer && !(degree isa Bool)) || throw(ArgumentError("encoding provenance degree must be an integer or nothing"))
+    get(p, :degree_convention, :not_applicable) in (:homological, :cohomological, :not_applicable, :not_recorded) ||
+        throw(ArgumentError("unknown encoding provenance degree convention"))
+    if pi isa GridEncodingMap
+        orientation = get(p, :orientation, :not_recorded)
+        orientation in (:not_recorded, :coordinatewise) || orientation == pi.orientation ||
+            throw(ArgumentError("provenance orientation disagrees with the classifier"))
+        window = get(p, :window, :not_recorded)
+        if window isa NamedTuple && get(window, :coordinates, nothing) === :oriented
+            get(window, :lower, nothing) == map(first, pi.coords) &&
+                get(window, :upper, nothing) == map(last, pi.coords) ||
+                throw(ArgumentError("provenance window disagrees with the classifier axes"))
+        end
+    end
+    return p
+end
+
+function _validate_stored_classifier(P, pi)
+    if pi isa GridEncodingMap
+        all(ax -> !isempty(ax) && issorted(ax) && allunique(ax) && all(isfinite, ax), pi.coords) ||
+            throw(ArgumentError("stored grid classifier axes must be nonempty, finite, sorted and unique"))
+        prod(pi.sizes) == nvertices(P) || throw(ArgumentError("stored grid classifier size disagrees with the poset"))
+        if P isa GridPoset
+            P.coords == pi.coords || throw(ArgumentError("stored grid classifier coordinates disagree with the grid poset"))
+        elseif P isa ProductOfChainsPoset
+            Tuple(P.sizes) == pi.sizes || throw(ArgumentError("stored grid classifier sizes disagree with the poset"))
+        else
+            FiniteFringe.poset_equal(P, ProductOfChainsPoset(collect(pi.sizes))) ||
+                throw(ArgumentError("stored grid classifier labels disagree with the poset order"))
+        end
+    elseif pi isa ZnEncoding.ZnEncodingMap
+        ZnEncoding.check_zn_encoding_map(pi; throw=true)
+        length(pi.reps) == nvertices(P) || throw(ArgumentError("stored Zn classifier region count disagrees with the poset"))
+    elseif pi isa PLBackend.PLEncodingMapBoxes
+        PLBackend.check_box_encoding_map(pi; throw=true)
+        length(pi.reps) == nvertices(P) || throw(ArgumentError("stored box classifier region count disagrees with the poset"))
+    end
+    return pi
+end
+
 """
     save_encoding_json(path, H::FringeModule; profile=:compact, include_leq=nothing, pretty=nothing)
     save_encoding_json(path, P, H::FringeModule, pi; profile=:compact, include_leq=nothing, pretty=nothing)
@@ -516,6 +648,13 @@ Convenience serialization entrypoint for workflow users.
 This uses the same owned encoding-schema contract as the lower-level
 `save_encoding_json` methods above while accepting a workflow-level
 `EncodingResult`.
+
+When the producer records a coordinate scale (for example physical radius),
+the artifact retains that scale, orientation and grade arithmetic in
+`coordinate_semantics`. The mathematical provenance record additionally retains
+degree, window, discretization, approximation and recorded producer backends.
+Loading reconstructs the fringe image up to natural isomorphism; its stalk bases
+need not equal the original module's bases. Runtime caches are not serialized.
 """
 function save_encoding_json(path::AbstractString, enc::EncodingResult;
                             profile::Symbol=:compact,
@@ -529,10 +668,43 @@ function save_encoding_json(path::AbstractString, enc::EncodingResult;
     H = enc.H
     H === nothing && (H = fringe_presentation(materialize_module(enc.M)))
     H isa FringeModule || error("save_encoding_json: EncodingResult.H must be a FringeModule.")
-    if include_pi_resolved
-        return save_encoding_json(path, enc.P, H, enc.pi; include_leq=include_leq_resolved, pretty=pretty_resolved)
+    enc.P === H.P || error("save_encoding_json: encoding poset does not match the fringe poset.")
+    H.field == provenance(enc).field || throw(ArgumentError("save_encoding_json: stored fringe and module coefficient fields disagree"))
+    obj = _encoding_obj(H; pi=include_pi_resolved ? enc.pi : nothing,
+                        include_leq=include_leq_resolved)
+    semantics = _encoding_coordinate_semantics(enc)
+    semantics === nothing || (obj["coordinate_semantics"] = semantics)
+    obj["mathematical_provenance"] = _provenance_value_to_obj(_encoding_provenance_record(provenance(enc)))
+    return _json_write(path, obj; pretty=pretty_resolved)
+end
+
+function _encoding_coordinate_semantics(enc::EncodingResult)
+    stored = enc.meta isa NamedTuple || enc.meta isa AbstractDict ? get(enc.meta, :coordinate_semantics, nothing) : nothing
+    p = provenance(enc)
+    scale = stored === nothing ? get(p.construction, :grade_scale, nothing) : stored.grade_scale
+    scale === nothing && return nothing
+    orientation = stored === nothing ? p.orientation : stored.orientation
+    orientation isa Tuple || orientation isa AbstractVector || return nothing
+    arithmetic = stored === nothing ?
+        (p.approximation isa NamedTuple ? get(p.approximation, :grade_arithmetic, :not_recorded) : :not_recorded) : stored.grade_arithmetic
+    return _CoordinateSemanticsJSON(grade_scale=String(scale), orientation=Int.(collect(orientation)),
+                                    grade_arithmetic=String(arithmetic))
+end
+
+function _coordinate_semantics_from_obj(obj::_CoordinateSemanticsJSON, pi)
+    obj.grade_scale in ("radius", "squared_radius", "diameter", "filtration_values") ||
+        throw(ArgumentError("unknown coordinate_semantics.grade_scale"))
+    obj.grade_arithmetic in ("exact_real_algebraic", "float64", "input_arithmetic", "not_recorded") ||
+        throw(ArgumentError("unknown coordinate_semantics.grade_arithmetic"))
+    all(o -> o in (-1, 1), obj.orientation) || throw(ArgumentError("coordinate orientation must contain only -1 and 1"))
+    if pi isa GridEncodingMap
+        Tuple(obj.orientation) == pi.orientation ||
+            throw(ArgumentError("coordinate_semantics.orientation disagrees with the classifier"))
+        obj.grade_arithmetic == "exact_real_algebraic" && !all(ax -> eltype(ax) <: AlgebraicReal, pi.coords) &&
+            throw(ArgumentError("exact algebraic coordinate semantics require exact algebraic axes"))
     end
-    return save_encoding_json(path, H; include_leq=include_leq_resolved, pretty=pretty_resolved)
+    return (grade_scale=Symbol(obj.grade_scale), orientation=Tuple(obj.orientation),
+            grade_arithmetic=Symbol(obj.grade_arithmetic))
 end
 
 # Load the schema emitted by save_encoding_json.
@@ -579,21 +751,48 @@ function _load_encoding_json_v1(raw;
     Phi = _decode_phi(obj.phi, saved_field, target_field, m, k)
 
     H = FiniteFringe.FringeModule{K}(P, U, D, Phi; field=target_field)
+    # Validate every stored mathematical payload even when the caller only
+    # requests the fringe. The trusted path skips masks, not these contracts.
+    pi = obj.pi === nothing ? nothing : _validate_stored_classifier(P, _pi_from_typed(P, obj.pi))
+    semantics = obj.coordinate_semantics === nothing ? nothing : _coordinate_semantics_from_obj(obj.coordinate_semantics, pi)
+    recorded = obj.mathematical_provenance === nothing ? NamedTuple() :
+        _encoding_provenance_from_obj(obj.mathematical_provenance, pi)
+    if semantics !== nothing
+        construction = get(recorded, :construction, NamedTuple())
+        approximation = get(recorded, :approximation, NamedTuple())
+        construction isa NamedTuple && haskey(construction, :grade_scale) && construction.grade_scale != semantics.grade_scale &&
+            throw(ArgumentError("coordinate semantics disagree with provenance grade scale"))
+        approximation isa NamedTuple && haskey(approximation, :grade_arithmetic) && approximation.grade_arithmetic != semantics.grade_arithmetic &&
+            throw(ArgumentError("coordinate semantics disagree with provenance grade arithmetic"))
+    end
     if outmode === :fringe
         return H
     elseif outmode === :fringe_with_pi
         obj.pi === nothing && error("load_encoding_json: output=:fringe_with_pi requires a stored pi payload. Re-save with save_encoding_json(...; include_pi=true) or load with output=:fringe.")
-        return H, _pi_from_typed(P, obj.pi)
+        return H, pi
     elseif outmode === :encoding_result
         obj.pi === nothing && error("load_encoding_json: output=:encoding_result requires a stored pi payload. Re-save with save_encoding_json(...; include_pi=true) or load with output=:fringe.")
-        pi = _pi_from_typed(P, obj.pi)
         M = pmodule_from_fringe(H)
+        if target_field != saved_field
+            recorded = merge(recorded, (source=merge(recorded, (field=saved_field, base_poset=P)),
+                degree=nothing, degree_convention=:not_applicable,
+                construction=(requested=:coefficient_reinterpretation, effective=:coefficient_reinterpretation, substitution=:none),
+                reconstruction=:stored_fringe_image_reinterpretation,
+                coefficient_change=(from=saved_field, to=target_field, semantics=:reinterpret_stored_fringe_presentation),
+                ambient_identification=:not_asserted))
+        end
+        semantics === nothing || (recorded = merge(recorded, (coordinate_semantics=semantics, orientation=semantics.orientation)))
+        recorded = merge(recorded, (serialization=(representation=:fringe_image,
+            identification=:natural_isomorphism, producer_field=saved_field),))
+        meta = (; source=:load_encoding_json, schema_version=obj.schema_version,
+                provenance=recorded)
+        semantics === nothing || (meta = merge(meta, (coordinate_semantics=semantics,)))
         return EncodingResult(P, M, pi;
                               H=H,
                               presentation=nothing,
-                              opts=EncodingOptions(),
+                              opts=EncodingOptions(field=target_field),
                               backend=:serialization,
-                              meta=(; source=:load_encoding_json, schema_version=obj.schema_version))
+                              meta=meta)
     end
     error("unreachable output mode: $(outmode)")
 end
@@ -606,7 +805,9 @@ Load an encoding artifact written by [`save_encoding_json`](@ref).
 Keywords
 --------
 - `output=:fringe | :fringe_with_pi | :encoding_result`
-- `field`: optional coefficient-field override
+- `field`: optional coefficient-field override; reinterprets the stored fringe
+  presentation and recomputes its image. This is not a claim of invariance
+  under coefficient change; original homology degree/identification is cleared.
 - `validation=:strict | :trusted`
 
 This is a strict owned-schema loader by default. The cheap-first exploration
@@ -624,4 +825,3 @@ function load_encoding_json(path::AbstractString;
     raw = read(path)
     return _load_encoding_json_v1(raw; output=output, field=field, validation=validation)
 end
-

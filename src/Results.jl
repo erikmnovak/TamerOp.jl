@@ -56,6 +56,21 @@ function resolution_object end
 function invariant_value end
 function source_result end
 function result_summary end
+"""
+    provenance(result) -> NamedTuple
+
+Inspect the mathematical meaning and recorded construction of a result without
+materializing it. Reports identify the actual coefficient field and finite
+base poset, degree convention, encoding, window and orientation, and recorded
+construction, discretization and approximation choices. `:not_recorded` means
+that the producer did not supply the information; it is not an exactness claim.
+
+For derived objects, resolution independence is within the reported finite
+category. `ambient_identification=:not_asserted` does not identify that result
+with Ext or Tor in an ambient persistence category. See `docs/math_categories.md`.
+The same report appears in `describe(result).provenance`.
+"""
+function provenance end
 function result_validation_summary end
 function check_encoding_result end
 function check_cohomology_dims_result end
@@ -63,7 +78,6 @@ function check_encoded_complex_result end
 function check_resolution_result end
 function check_invariant_result end
 function _materialize_complex end
-function _include_reps_when_rewrapping end
 
 """
     ResultValidationSummary
@@ -99,7 +113,10 @@ function _throw_invalid_result(kind::Symbol, issues::Vector{String})
 end
 
 @inline _try_length(x) = try length(x) catch; nothing end
-@inline _try_module_dims(x) = try module_dims(materialize_module(x)) catch; nothing end
+@inline _try_module_dims(x) = hasproperty(x, :dims) ? getproperty(x, :dims) : nothing
+@inline _module_materialized(x) = true
+@inline _complex_materialized(x) = true
+@inline _provenance_field(x) = hasproperty(x, :field) ? getproperty(x, :field) : nothing
 @inline _try_complex_term_count(x) = try length(getproperty(x, :terms)) catch; nothing end
 @inline _try_complex_degree_range(x) = try getproperty(x, :tmin):getproperty(x, :tmax) catch; nothing end
 @inline _materialize_complex(C) = C
@@ -156,7 +173,9 @@ Workflow-facing wrapper for dims-only cohomology output on an encoding poset.
 
 This is the cheap summary result returned by dims-first encoding workflows. It
 stores the encoding poset `P`, the degree-wise dimension data `dims`, the
-encoding map `pi`, and the chosen cohomological degree `degree`.
+encoding map `pi`, and the chosen degree `degree`. For data ingestion,
+`degree=k` is the nonnegative homological degree: these are the dimensions
+of `H_k`, equivalently degree `-k` cohomology of the reindexed cell chains.
 
 Use this when downstream work only needs cohomology dimensions. Prefer
 [`cohomology_dims`](@ref), [`result_summary`](@ref), and [`encoding_map`](@ref)
@@ -199,6 +218,10 @@ for inspection before falling back to [`unwrap`](@ref).
 The complex payload may be either a materialized `ModuleCochainComplex` or a
 lazy encoded-cochain storage object that is materialized only when a
 downstream workflow actually needs full term/differential data.
+
+Data ingestion places cell chains in nonpositive cohomological degrees:
+`C^{-k}=C_k`. Its degree `-k` cohomology is the covariant persistence module
+`H_k`, with inclusion-induced maps.
 """
 struct EncodedComplexResult{PType,CType,PiType,FType,MetaType}
     P::PType
@@ -270,7 +293,9 @@ result_summary(res::ModuleTranslationResult) = _result_describe(res)
 Return the encoded module stored in an [`EncodingResult`](@ref).
 
 This is the canonical semantic accessor for the module payload. Use it instead
-of reading `enc.M` directly.
+of reading `enc.M` directly. For lazy ingestion results this explicitly computes
+the full module, including its structure maps, and caches it. Use `describe(enc)`
+for stored information or `dimensions(enc)` for a dimensions-only computation.
 """
 encoding_module(enc::EncodingResult) = materialize_module(enc.M)
 
@@ -280,6 +305,8 @@ encoding_module(enc::EncodingResult) = materialize_module(enc.M)
 Return the encoded cochain complex stored in an [`EncodedComplexResult`](@ref).
 
 Use this instead of reading `enc.C` directly.
+The returned storage may be lazy; accessing or displaying it does not compute
+terms or differentials. Downstream algebra tasks materialize the required data.
 """
 encoding_complex(enc::EncodedComplexResult) = enc.C
 
@@ -352,9 +379,9 @@ encoding_map(enc::EncodingResult) = enc.pi
 encoding_map(enc::CohomologyDimsResult) = enc.pi
 encoding_map(enc::EncodedComplexResult) = enc.pi
 
-encoding_axes(enc::EncodingResult) = encoding_axes(compile_encoding(enc))
-encoding_axes(enc::CohomologyDimsResult) = encoding_axes(compile_encoding(enc))
-encoding_axes(enc::EncodedComplexResult) = encoding_axes(compile_encoding(enc))
+encoding_axes(enc::EncodingResult) = encoding_axes(enc.pi)
+encoding_axes(enc::CohomologyDimsResult) = encoding_axes(enc.pi)
+encoding_axes(enc::EncodedComplexResult) = encoding_axes(enc.pi)
 
 encoding_representatives(enc::EncodingResult) = encoding_representatives(compile_encoding(enc))
 encoding_representatives(enc::CohomologyDimsResult) = encoding_representatives(compile_encoding(enc))
@@ -364,7 +391,7 @@ function Base.show(io::IO, enc::EncodingResult)
     d = _result_describe(enc)
     print(io, "EncodingResult(backend=", d.backend,
           ", module_type=", nameof(d.module_type),
-          ", compiled=", d.compiled, ")")
+          ", compiled=", d.compiled, ", materialized=", d.materialized, ")")
 end
 
 function Base.show(io::IO, ::MIME"text/plain", enc::EncodingResult)
@@ -377,7 +404,10 @@ function Base.show(io::IO, ::MIME"text/plain", enc::EncodingResult)
           "\n  compiled: ", d.compiled,
           "\n  has_cohomology: ", d.has_cohomology,
           "\n  has_presentation: ", d.has_presentation,
-          "\n  module_dims: ", repr(d.module_dims))
+          "\n  materialized: ", d.materialized,
+          "\n  module_dims: ")
+    _show_stored_dimensions(io, d.module_dims)
+    _show_result_provenance(io, d.provenance)
 end
 
 function Base.show(io::IO, enc::CohomologyDimsResult)
@@ -397,13 +427,14 @@ function Base.show(io::IO, ::MIME"text/plain", enc::CohomologyDimsResult)
           "\n  dims_length: ", repr(d.dims_length),
           "\n  encoding_map_type: ", d.encoding_map_type,
           "\n  compiled: ", d.compiled)
+    _show_result_provenance(io, d.provenance)
 end
 
 function Base.show(io::IO, enc::EncodedComplexResult)
     d = _result_describe(enc)
     print(io, "EncodedComplexResult(field_type=", nameof(d.field_type),
           ", complex_type=", nameof(d.complex_type),
-          ", compiled=", d.compiled, ")")
+          ", compiled=", d.compiled, ", materialized=", d.materialized, ")")
 end
 
 function Base.show(io::IO, ::MIME"text/plain", enc::EncodedComplexResult)
@@ -415,7 +446,9 @@ function Base.show(io::IO, ::MIME"text/plain", enc::EncodedComplexResult)
           "\n  compiled: ", d.compiled,
           "\n  field_type: ", d.field_type,
           "\n  degree_range: ", repr(d.degree_range),
-          "\n  nterms: ", repr(d.nterms))
+          "\n  nterms: ", repr(d.nterms),
+          "\n  materialized: ", d.materialized)
+    _show_result_provenance(io, d.provenance)
 end
 
 function Base.show(io::IO, res::ModuleTranslationResult)
@@ -433,7 +466,9 @@ function Base.show(io::IO, ::MIME"text/plain", res::ModuleTranslationResult)
           "\n  map_type: ", d.map_type,
           "\n  has_classifier: ", d.has_classifier,
           "\n  source_type: ", d.source_type,
-          "\n  module_dims: ", repr(d.module_dims))
+          "\n  module_dims: ")
+    _show_stored_dimensions(io, d.module_dims)
+    _show_result_provenance(io, d.provenance)
 end
 
 """
@@ -511,13 +546,7 @@ end
 @inline function _encoding_with_session_cache(enc::EncodingResult,
                                               session_cache::Union{Nothing,SessionCache})
     session_cache === nothing && return enc
-    raw_pi = enc.pi isa CompiledEncoding ? enc.pi.pi : enc.pi
-    pi2 = _compile_encoding_cached(
-        enc.P,
-        raw_pi,
-        session_cache;
-        include_reps=_include_reps_when_rewrapping(enc),
-    )
+    pi2 = _compile_encoding_cached(enc.P, enc.pi, session_cache)
     return EncodingResult(enc.P, enc.M, pi2;
                           H=enc.H,
                           presentation=enc.presentation,
@@ -529,8 +558,7 @@ end
 @inline function _encoding_with_session_cache(enc::CohomologyDimsResult,
                                               session_cache::Union{Nothing,SessionCache})
     session_cache === nothing && return enc
-    raw_pi = enc.pi isa CompiledEncoding ? enc.pi.pi : enc.pi
-    pi2 = _compile_encoding_cached(enc.P, raw_pi, session_cache)
+    pi2 = _compile_encoding_cached(enc.P, enc.pi, session_cache)
     return CohomologyDimsResult(enc.P, enc.dims, pi2;
                                 degree=enc.degree,
                                 field=enc.field,
@@ -540,39 +568,49 @@ end
 @inline function _encoding_with_session_cache(enc::EncodedComplexResult,
                                               session_cache::Union{Nothing,SessionCache})
     session_cache === nothing && return enc
-    raw_pi = enc.pi isa CompiledEncoding ? enc.pi.pi : enc.pi
-    pi2 = _compile_encoding_cached(enc.P, raw_pi, session_cache; include_reps=false)
+    pi2 = _compile_encoding_cached(enc.P, enc.pi, session_cache)
     return EncodedComplexResult(enc.P, enc.C, pi2;
                                 field=enc.field,
                                 meta=enc.meta)
 end
 
+"""
+    change_field(enc::EncodingResult, field)
+
+Coerce the stored finite module's structure matrices to `field`. This is a
+matrix reinterpretation, not a claim that homology, images, resolutions or
+ambient derived groups commute with the coefficient change. Cached fringe and
+presentation witnesses are discarded: their images can change after reduction
+modulo a prime. To compute homology over another field, encode the original
+complex or data again with that field.
+
+Computed dimension, invariant and resolution wrappers require recomputation
+and reject relabelling over a different field.
+"""
 function change_field(enc::EncodingResult, field::AbstractCoeffField)
-    M2 = change_field(enc.M, field)
-    H2 = enc.H === nothing ? nothing : change_field(enc.H, field)
-    pres2 = enc.presentation
-    if pres2 !== nothing && hasmethod(change_field, (typeof(pres2), AbstractCoeffField))
-        pres2 = change_field(pres2, field)
-    end
+    _provenance_field(enc.M) == field && return enc
+    M2 = change_field(materialize_module(enc.M), field)
     return EncodingResult(enc.P, M2, enc.pi;
-                          H=H2,
-                          presentation=pres2,
-                          opts=enc.opts,
+                          H=nothing,
+                          presentation=nothing,
+                          opts=EncodingOptions(; backend=enc.opts.backend,
+                              max_regions=enc.opts.max_regions, strict_eps=enc.opts.strict_eps,
+                              poset_kind=enc.opts.poset_kind, field=field),
                           backend=enc.backend,
-                          meta=enc.meta)
+                          meta=_field_reinterpretation_meta(enc, field))
 end
 
 function change_field(enc::CohomologyDimsResult, field::AbstractCoeffField)
-    return CohomologyDimsResult(enc.P, copy(enc.dims), enc.pi;
-                                degree=enc.degree,
-                                field=field,
-                                meta=enc.meta)
+    enc.field == field && return enc
+    throw(ArgumentError("change_field: homology dimensions cannot be relabelled over a different field; recompute encode(...; field=...) from the original complex or data."))
 end
 
 function change_field(enc::EncodedComplexResult, field::AbstractCoeffField)
-    return EncodedComplexResult(enc.P, change_field(enc.C, field), enc.pi;
+    enc.field == field && return enc
+    C = change_field(_materialize_complex(enc.C), field)
+    return EncodedComplexResult(enc.P, C, enc.pi;
                                 field=field,
-                                meta=enc.meta)
+                                meta=_complex_field_reinterpretation_meta(enc, field))
 end
 
 unwrap(enc::EncodingResult) = (enc.P, enc.M, enc.pi)
@@ -595,7 +633,7 @@ function check_encoding_result(enc::EncodingResult; throw::Bool=false)
     issues = String[]
     enc.P === nothing && push!(issues, "encoding poset must not be nothing.")
     enc.backend isa Symbol || push!(issues, "backend must be a Symbol.")
-    _try_module_dims(enc.M) === nothing && push!(issues, "encoded module must support dimension inspection.")
+    hasproperty(enc.M, :dims) || push!(issues, "encoded module must support dimension inspection.")
     report = _try_encoding_check(enc.pi)
     report === nothing || report.valid || append!(issues, String.(report.issues))
     valid = isempty(issues)
@@ -753,6 +791,8 @@ function _result_describe(enc::EncodingResult)
         has_cohomology=enc.H !== nothing,
         has_presentation=enc.presentation !== nothing,
         module_dims=dims,
+        materialized=_module_materialized(enc.M),
+        provenance=provenance(enc),
     )
 end
 
@@ -766,6 +806,7 @@ function _result_describe(enc::CohomologyDimsResult)
         compiled=enc.pi isa CompiledEncoding,
         degree=enc.degree,
         field_type=typeof(enc.field),
+        provenance=provenance(enc),
     )
 end
 
@@ -779,6 +820,8 @@ function _result_describe(enc::EncodedComplexResult)
         field_type=typeof(enc.field),
         degree_range=_try_complex_degree_range(enc.C),
         nterms=_try_complex_term_count(enc.C),
+        materialized=_complex_materialized(enc.C),
+        provenance=provenance(enc),
     )
 end
 
@@ -791,6 +834,8 @@ function _result_describe(res::ModuleTranslationResult)
         has_classifier=res.classifier !== nothing,
         source_type=typeof(res.source),
         module_dims=_try_module_dims(res.M),
+        materialized=_module_materialized(res.M),
+        provenance=provenance(res),
     )
 end
 
@@ -802,6 +847,7 @@ function _result_describe(res::ResolutionResult)
         has_betti=res.betti !== nothing,
         has_minimality=res.minimality !== nothing,
         opts_type=typeof(res.opts),
+        provenance=provenance(res),
     )
 end
 
@@ -812,10 +858,11 @@ function _result_describe(inv::InvariantResult)
         invariant=inv.which,
         value_type=typeof(inv.value),
         opts_type=typeof(inv.opts),
+        provenance=provenance(inv),
     )
 end
 
-_encoding_result_dimensions(enc::EncodingResult) = _try_module_dims(enc.M)
+_encoding_result_dimensions(enc::EncodingResult) = module_dims(enc.M)
 _cohomology_dims_payload(enc::CohomologyDimsResult) = enc.dims
 
 unwrap(inv::InvariantResult) = inv.value
@@ -870,7 +917,10 @@ encoding_map(res::ModuleTranslationResult) = res.classifier
 encoding_map(res::ResolutionResult) = res.enc === nothing ? nothing : encoding_map(res.enc)
 encoding_map(inv::InvariantResult) = encoding_map(inv.enc)
 
-encoding_axes(res::ModuleTranslationResult) = encoding_axes(compile_encoding(res))
+function encoding_axes(res::ModuleTranslationResult)
+    res.classifier === nothing && throw(ArgumentError("encoding_axes: this ModuleTranslationResult does not carry an ambient classifier."))
+    return encoding_axes(res.classifier)
+end
 encoding_axes(res::ResolutionResult) = res.enc === nothing ? nothing : encoding_axes(res.enc)
 encoding_axes(inv::InvariantResult) = encoding_axes(inv.enc)
 
@@ -893,6 +943,7 @@ function Base.show(io::IO, ::MIME"text/plain", res::ResolutionResult)
           "\n  has_betti: ", d.has_betti,
           "\n  has_minimality: ", d.has_minimality,
           "\n  opts_type: ", d.opts_type)
+    _show_result_provenance(io, d.provenance)
 end
 
 function Base.show(io::IO, inv::InvariantResult)
@@ -908,6 +959,7 @@ function Base.show(io::IO, ::MIME"text/plain", inv::InvariantResult)
           "\n  source_type: ", d.source_type,
           "\n  value_type: ", d.value_type,
           "\n  opts_type: ", d.opts_type)
+    _show_result_provenance(io, d.provenance)
 end
 
 """
@@ -942,24 +994,20 @@ function check_invariant_result(inv::InvariantResult; throw::Bool=false)
 end
 
 function change_field(res::ResolutionResult, field::AbstractCoeffField)
-    enc2 = res.enc === nothing ? nothing : change_field(res.enc, field)
-    res2 = res.res
-    if res2 !== nothing && hasmethod(change_field, (typeof(res2), AbstractCoeffField))
-        res2 = change_field(res2, field)
-    end
-    return ResolutionResult(res2;
-                            enc=enc2,
-                            betti=res.betti,
-                            minimality=res.minimality,
-                            opts=res.opts,
-                            meta=res.meta)
+    provenance(res).field == field && return res
+    throw(ArgumentError("change_field: recompute the resolution over the requested field; stored resolutions and Betti/Bass data cannot be relabelled."))
 end
 
 function change_field(inv::InvariantResult, field::AbstractCoeffField)
-    enc2 = change_field(inv.enc, field)
-    return InvariantResult(enc2, inv.which, inv.value; opts=inv.opts, meta=inv.meta)
+    provenance(inv).field == field && return inv
+    throw(ArgumentError("change_field: recompute the invariant over the requested field; its stored value cannot be relabelled."))
 end
 
-@inline _include_reps_when_rewrapping(::EncodingResult) = true
+function _show_stored_dimensions(io::IO, dims)
+    dims === nothing && return print(io, "not computed")
+    show(IOContext(io, :limit => true), dims)
+end
+
+include("results/provenance.jl")
 
 end # module Results

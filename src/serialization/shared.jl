@@ -861,26 +861,29 @@ end
                              throw=throw)
 end
 
-struct _PointCloudColumnarJSON
-    kind::String
-    layout::String
-    n::Int
-    d::Int
-    points_flat::Vector{Float64}
+Base.@kwdef mutable struct _PointCloudColumnarJSON
+    kind::String = ""
+    layout::String = ""
+    n::Int = -1
+    d::Int = -1
+    points_flat::Union{Nothing,Vector{Float64}} = nothing
+    exact_points_flat::Union{Nothing,_ExactCoordinateRowsJSON} = nothing
 end
-JSON3.StructTypes.StructType(::Type{_PointCloudColumnarJSON}) = JSON3.StructTypes.Struct()
+JSON3.StructTypes.StructType(::Type{_PointCloudColumnarJSON}) = JSON3.StructTypes.Mutable()
 
-struct _GraphDataColumnarJSON
-    kind::String
-    layout::String
-    n::Int
-    edges_u::Vector{Int}
-    edges_v::Vector{Int}
-    coords_dim::Union{Nothing,Int}
-    coords_flat::Union{Nothing,Vector{Float64}}
-    weights::Union{Nothing,Vector{Float64}}
+Base.@kwdef mutable struct _GraphDataColumnarJSON
+    kind::String = ""
+    layout::String = ""
+    n::Int = -1
+    edges_u::Union{Nothing,Vector{Int}} = nothing
+    edges_v::Union{Nothing,Vector{Int}} = nothing
+    coords_dim::Union{Nothing,Int} = nothing
+    coords_flat::Union{Nothing,Vector{Float64}} = nothing
+    weights::Union{Nothing,Vector{Float64}} = nothing
+    exact_coords_flat::Union{Nothing,_ExactCoordinateRowsJSON} = nothing
+    exact_weights::Union{Nothing,_ExactCoordinateRowsJSON} = nothing
 end
-JSON3.StructTypes.StructType(::Type{_GraphDataColumnarJSON}) = JSON3.StructTypes.Struct()
+JSON3.StructTypes.StructType(::Type{_GraphDataColumnarJSON}) = JSON3.StructTypes.Mutable()
 
 const _DATASET_COLUMN_LAYOUT = "column_major_v2"
 
@@ -890,18 +893,19 @@ const _DATASET_COLUMN_LAYOUT = "column_major_v2"
     return nothing
 end
 
-@inline function _pointcloud_from_flat(n::Int, d::Int, flat::Vector{Float64})
+@inline function _pointcloud_from_flat(n::Int, d::Int, flat::Vector{T}) where {T}
+    n >= 0 && d >= 0 || error("PointCloud n and d must be nonnegative.")
     length(flat) == n * d || error("PointCloud points_flat length mismatch.")
     pts = reshape(flat, n, d)
-    return pts isa Matrix{Float64} ? PointCloud(pts; copy=false) : PointCloud(Matrix{Float64}(pts))
+    return pts isa Matrix{T} ? PointCloud(pts; copy=false) : PointCloud(Matrix{T}(pts))
 end
 
-@inline function _coords_from_flat(n::Int, d::Int, flat::Vector{Float64})
+@inline function _coords_from_flat(n::Int, d::Int, flat::Vector{T}) where {T}
     d >= 0 || error("GraphData coords_dim must be nonnegative.")
-    d == 0 && return Matrix{Float64}(undef, n, 0)
+    d == 0 && return Matrix{T}(undef, n, 0)
     length(flat) == n * d || error("GraphData coords_flat length mismatch.")
     coords = reshape(flat, n, d)
-    return coords isa Matrix{Float64} ? coords : Matrix{Float64}(coords)
+    return coords isa Matrix{T} ? coords : Matrix{T}(coords)
 end
 
 @inline function _coords_from_flat_rowmajor(n::Int, d::Int, flat::Vector{Float64})
@@ -972,15 +976,18 @@ end
                                      edges_u::Vector{Int},
                                      edges_v::Vector{Int};
                                      coords_dim::Union{Nothing,Int}=nothing,
-                                     coords_flat::Union{Nothing,Vector{Float64}}=nothing,
-                                     weights::Union{Nothing,Vector{Float64}}=nothing)
+                                     coords_flat::Union{Nothing,AbstractVector}=nothing,
+                                     weights::Union{Nothing,AbstractVector}=nothing)
+    n >= 0 || error("GraphData n must be nonnegative.")
     length(edges_u) == length(edges_v) || error("GraphData edge column lengths mismatch.")
     coords = if coords_dim === nothing || coords_flat === nothing
         nothing
     else
         _coords_from_flat(n, coords_dim, coords_flat)
     end
-    return GraphData(n, edges_u, edges_v; coords=coords, weights=weights, T=Float64, copy=false)
+    T = coords === nothing ? (weights === nothing ? Float64 : eltype(weights)) :
+        (weights === nothing ? eltype(coords) : promote_type(eltype(coords), eltype(weights)))
+    return GraphData(n, edges_u, edges_v; coords=coords, weights=weights, T=T, copy=false)
 end
 
 @inline function _dataset_from_raw(raw; validation::Bool=true)
@@ -993,7 +1000,9 @@ end
             return _dataset_from_obj(JSON3.read(raw))
         end
         validation && _require_dataset_layout(obj.layout, obj.kind)
-        return _pointcloud_from_flat(obj.n, obj.d, obj.points_flat)
+        obj.points_flat === nothing && error("PointCloud JSON missing canonical points_flat array.")
+        return _pointcloud_from_flat(obj.n, obj.d,
+            _coordinate_vector_from_obj(obj.points_flat, obj.exact_points_flat))
     elseif kind === :GraphData
         obj = try
             JSON3.read(raw, _GraphDataColumnarJSON)
@@ -1002,10 +1011,13 @@ end
             return _dataset_from_obj(JSON3.read(raw))
         end
         validation && _require_dataset_layout(obj.layout, obj.kind)
+        (obj.edges_u === nothing || obj.edges_v === nothing) && error("GraphData JSON missing canonical edge columns.")
+        obj.coords_flat === nothing && obj.exact_coords_flat !== nothing && error("exact_coords_flat requires an empty coords_flat array.")
+        obj.weights === nothing && obj.exact_weights !== nothing && error("exact_weights requires an empty weights array.")
         return _graph_from_columns(obj.n, obj.edges_u, obj.edges_v;
                                    coords_dim=obj.coords_dim,
-                                   coords_flat=obj.coords_flat,
-                                   weights=obj.weights)
+                                   coords_flat=obj.coords_flat === nothing ? nothing : _coordinate_vector_from_obj(obj.coords_flat, obj.exact_coords_flat),
+                                   weights=obj.weights === nothing ? nothing : _coordinate_vector_from_obj(obj.weights, obj.exact_weights))
     end
     return _dataset_from_obj(JSON3.read(raw))
 end
@@ -1097,6 +1109,7 @@ Base.@kwdef mutable struct _GridPosetJSON <: _PosetJSON
     kind::String = "GridPoset"
     n::Int = 0
     coords::Vector{Vector{Float64}} = Vector{Vector{Float64}}()
+    exact_coords::Union{Nothing,_ExactCoordinateRowsJSON} = nothing
     leq::Union{Nothing,_MaskPackedWordsJSON} = nothing
 end
 
@@ -1150,6 +1163,7 @@ end
 Base.@kwdef mutable struct _GridEncodingMapJSON <: _PiJSON
     kind::String = "GridEncodingMap"
     coords::Vector{Vector{Float64}} = Vector{Vector{Float64}}()
+    exact_coords::Union{Nothing,_ExactCoordinateRowsJSON} = nothing
     orientation::Vector{Int} = Int[]
 end
 
@@ -1185,6 +1199,12 @@ Base.@kwdef mutable struct _PLEncodingMapBoxesJSON <: _PiJSON
     axis_min::Vector{Float64} = Float64[]
 end
 
+Base.@kwdef mutable struct _CoordinateSemanticsJSON
+    grade_scale::String = ""
+    orientation::Vector{Int} = Int[]
+    grade_arithmetic::String = "not_recorded"
+end
+
 Base.@kwdef mutable struct _FiniteEncodingFringeJSONV1
     kind::String = ""
     schema_version::Int = 0
@@ -1194,6 +1214,8 @@ Base.@kwdef mutable struct _FiniteEncodingFringeJSONV1
     coeff_field::_CoeffFieldJSON = _QQFieldJSON()
     phi::_PhiJSON = _PhiQQChunksJSON()
     pi::Union{Nothing,_PiJSON} = nothing
+    coordinate_semantics::Union{Nothing,_CoordinateSemanticsJSON} = nothing
+    mathematical_provenance::Any = nothing
 end
 
 Base.@kwdef mutable struct _CanonicalPLHPolyJSON
@@ -1273,6 +1295,7 @@ JSON3.StructTypes.StructType(::Type{_GridEncodingMapJSON}) = JSON3.StructTypes.M
 JSON3.StructTypes.StructType(::Type{_ZnEncodingMapJSON}) = JSON3.StructTypes.Mutable()
 JSON3.StructTypes.StructType(::Type{_PLEncodingMapBoxesJSON}) = JSON3.StructTypes.Mutable()
 JSON3.StructTypes.StructType(::Type{_FiniteEncodingFringeJSONV1}) = JSON3.StructTypes.Mutable()
+JSON3.StructTypes.StructType(::Type{_CoordinateSemanticsJSON}) = JSON3.StructTypes.Mutable()
 JSON3.StructTypes.StructType(::Type{_CanonicalPLHPolyJSON}) = JSON3.StructTypes.Mutable()
 JSON3.StructTypes.StructType(::Type{_CanonicalPLUnionJSON}) = JSON3.StructTypes.Mutable()
 JSON3.StructTypes.StructType(::Type{_CanonicalPLFringeJSON}) = JSON3.StructTypes.Mutable()
@@ -1371,4 +1394,3 @@ function _write_feature_csv_long(path::AbstractString,
     end
     return path
 end
-

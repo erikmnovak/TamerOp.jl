@@ -18,10 +18,11 @@ using SparseArrays, LinearAlgebra
 using ..FiniteFringe
 using ..IndicatorTypes: UpsetPresentation, DownsetCopresentation,
                         check_upset_presentation, check_downset_copresentation
-using ..CoreModules: AbstractCoeffField, QQField, PrimeField, RealField,
+using ..CoreModules: _foreach_workchunk, AbstractCoeffField, QQField, PrimeField, RealField,
                      ResolutionCache, ResolutionKey3, _resolution_key3,
                      IndicatorResolutionPayload, coeff_type, eye, field_from_eltype
 using ..FieldLinAlg
+import ..Results: provenance
 
 using ..Modules: CoverCache, _get_cover_cache, _clear_cover_cache!,
                  CoverEdgeMapStore, _find_sorted_index,
@@ -449,28 +450,19 @@ end
     return true
 end
 
-@inline function _indicator_use_downset_injective_reuse(
-    field::AbstractCoeffField,
-    n::Int,
-    total_dims::Int,
-    maxlen::Union{Nothing,Int},
-)
-    maxlen !== nothing && maxlen <= 1 && return false
-    return true
-end
-
 @inline function _indicator_downset_auto_profile(M::PModule; maxlen::Union{Nothing,Int}=nothing)
     field = M.field
     n = nvertices(M.Q)
     total_dims = sum(M.dims)
+    transport_reuse = _indicator_use_downset_transport_reuse(field, n, total_dims, maxlen)
     return (
         n=n,
         total_dims=total_dims,
         vertex_cache=false,
         prefix_cache=(maxlen !== nothing &&
                       _indicator_use_prefix_cache(field, n, total_dims, maxlen, Val(:downset))),
-        transport_reuse=_indicator_use_downset_transport_reuse(field, n, total_dims, maxlen),
-        injective_reuse=_indicator_use_downset_injective_reuse(field, n, total_dims, maxlen),
+        transport_reuse=transport_reuse,
+        injective_reuse=transport_reuse,
         incremental_linalg_thresholds=_indicator_incremental_union_thresholds(field, Val(:downset)),
     )
 end
@@ -1204,6 +1196,21 @@ struct IndicatorResolutionsResult{UpsetType,DownsetType}
     downset::DownsetType
 end
 
+function _indicator_provenance(M, degree, model, degree_convention)
+    return (category=:finite_poset_representations, base_poset=M.Q, field=M.field,
+            degree=degree, degree_convention=degree_convention, model=model,
+            orientation=:forward, degree_scope=:stored_resolution_prefix,
+            ambient_identification=:not_asserted)
+end
+provenance(res::ProjectiveCoverResult) = _indicator_provenance(res.map.cod, 0:0, :projective_cover, :homological)
+provenance(res::InjectiveHullResult) = _indicator_provenance(res.map.dom, 0:0, :injective_hull, :cohomological)
+provenance(res::UpsetResolutionResult) = _indicator_provenance(res.source_module,
+    0:length(res.differentials), :projective_indicator, :homological)
+provenance(res::DownsetResolutionResult) = _indicator_provenance(res.source_module,
+    0:length(res.differentials), :injective_indicator, :cohomological)
+provenance(res::IndicatorResolutionsResult) =
+    (projective=provenance(res.upset), injective=provenance(res.downset))
+
 @inline function indicator_resolution_validation_summary(report::NamedTuple)
     return IndicatorResolutionValidationSummary(report)
 end
@@ -1440,6 +1447,7 @@ end
     counts = (_generator_total(res.generators),)
     return (
         kind=:projective_cover,
+        provenance=provenance(res),
         side=:projective,
         field=M.field,
         poset_kind=Symbol(nameof(typeof(M.Q))),
@@ -1481,6 +1489,7 @@ end
     counts = (_generator_total(res.generators),)
     return (
         kind=:injective_hull,
+        provenance=provenance(res),
         side=:injective,
         field=M.field,
         poset_kind=Symbol(nameof(typeof(M.Q))),
@@ -1499,6 +1508,7 @@ end
     M = res.source_module
     return (
         kind=:upset_resolution,
+        provenance=provenance(res),
         side=:upset,
         field=M.field,
         poset_kind=Symbol(nameof(typeof(M.Q))),
@@ -1517,6 +1527,7 @@ end
     M = res.source_module
     return (
         kind=:downset_resolution,
+        provenance=provenance(res),
         side=:downset,
         field=M.field,
         poset_kind=Symbol(nameof(typeof(M.Q))),
@@ -1534,6 +1545,7 @@ end
 @inline function _indicator_resolution_describe(res::IndicatorResolutionsResult)
     return (
         kind=:indicator_resolutions,
+        provenance=provenance(res),
         projective=_indicator_resolution_describe(res.upset),
         injective=_indicator_resolution_describe(res.downset),
     )
@@ -2175,7 +2187,7 @@ mutable struct _ResolutionWorkspace{K}
 end
 
 @inline function _new_resolution_workspace(::Type{K}, _n::Int) where {K}
-    nt = max(1, Threads.maxthreadid())
+    nt = max(1, Threads.nthreads())
     return _ResolutionWorkspace{K}(
         [Int[] for _ in 1:nt],
         [Int[] for _ in 1:nt],
@@ -2464,18 +2476,20 @@ end
             empty!(ws.J_chunks[tid])
             empty!(ws.V_chunks[tid])
         end
-        Threads.@threads for b in eachindex(pat.theta_vertices)
-            tid = _thread_local_index(ws.I_chunks)
-            I_t = ws.I_chunks[tid]
-            J_t = ws.J_chunks[tid]
-            V_t = ws.V_chunks[tid]
-            theta = pat.theta_vertices[b]
-            _accumulate_product_entries_downset!(
-                I_t, J_t, V_t,
-                j_comps[theta], q_comps[theta],
-                pat.row0s[b], pat.col0s[b], pat.nrowss[b], pat.ncolss[b],
-                pat.theta_gid0s[b], pat.lambda_gid0s[b],
-            )
+        _foreach_workchunk(length(pat.theta_vertices); threads=true) do work, tid
+            local I_t, J_t, V_t, theta
+            for b in work
+                I_t = ws.I_chunks[tid]
+                J_t = ws.J_chunks[tid]
+                V_t = ws.V_chunks[tid]
+                theta = pat.theta_vertices[b]
+                _accumulate_product_entries_downset!(
+                    I_t, J_t, V_t,
+                    j_comps[theta], q_comps[theta],
+                    pat.row0s[b], pat.col0s[b], pat.nrowss[b], pat.ncolss[b],
+                    pat.theta_gid0s[b], pat.lambda_gid0s[b],
+                )
+            end
         end
         empty!(ws.I)
         empty!(ws.J)
@@ -2512,6 +2526,7 @@ end
     resize!(ws.V, length(pat.I))
     if threaded && Threads.nthreads() > 1
         Threads.@threads for b in eachindex(pat.theta_vertices)
+            local theta, A, B, row0, col0, nrows, ncols, pos, kdim, row, col, s
             theta = pat.theta_vertices[b]
             A = j_comps[theta]
             B = q_comps[theta]
@@ -2593,26 +2608,28 @@ end
             empty!(ws.J_chunks[tid])
             empty!(ws.V_chunks[tid])
         end
-        Threads.@threads for idx in eachindex(next_birth_vertices)
-            ptheta = next_birth_vertices[idx]
-            tid = _thread_local_index(ws.I_chunks)
-            I_t = ws.I_chunks[tid]
-            J_t = ws.J_chunks[tid]
-            V_t = ws.V_chunks[tid]
-            _accumulate_product_entries_upset!(
-                I_t,
-                J_t,
-                V_t,
-                iota_comps[ptheta],
-                pinext_comps[ptheta],
-                prev_active_sources,
-                ptheta,
-                counts_prev,
-                gid_prev_starts,
-                starts_next[ptheta],
-                counts_next[ptheta],
-                gid_next_starts[ptheta],
-            )
+        _foreach_workchunk(length(next_birth_vertices); threads=true) do work, tid
+            local ptheta, I_t, J_t, V_t
+            for idx in work
+                ptheta = next_birth_vertices[idx]
+                I_t = ws.I_chunks[tid]
+                J_t = ws.J_chunks[tid]
+                V_t = ws.V_chunks[tid]
+                _accumulate_product_entries_upset!(
+                    I_t,
+                    J_t,
+                    V_t,
+                    iota_comps[ptheta],
+                    pinext_comps[ptheta],
+                    prev_active_sources,
+                    ptheta,
+                    counts_prev,
+                    gid_prev_starts,
+                    starts_next[ptheta],
+                    counts_next[ptheta],
+                    gid_next_starts[ptheta],
+                )
+            end
         end
         empty!(ws.I)
         empty!(ws.J)
@@ -2667,29 +2684,31 @@ end
             empty!(ws.J_chunks[tid])
             empty!(ws.V_chunks[tid])
         end
-        Threads.@threads for ptheta in 1:n
-            ctheta = counts_next[ptheta]
-            ctheta == 0 && continue
-            tid = _thread_local_index(ws.I_chunks)
-            I_t = ws.I_chunks[tid]
-            J_t = ws.J_chunks[tid]
-            V_t = ws.V_chunks[tid]
-            Ai = iota_comps[ptheta]
-            Bi = pinext_comps[ptheta]
-            theta_gid0 = gid_next_starts[ptheta]
-            col0 = starts_next[ptheta]
-            row0 = 1
-            @inbounds for plambda in birth_plan[ptheta]
-                clambda = counts_prev[plambda]
-                clambda == 0 && continue
-                lambda_gid0 = gid_prev_starts[plambda]
-                _accumulate_product_entries_upset!(
-                    I_t, J_t, V_t,
-                    Ai, Bi,
-                    row0, col0, clambda, ctheta,
-                    theta_gid0, lambda_gid0,
-                )
-                row0 += clambda
+        _foreach_workchunk(n; threads=true) do work, tid
+            local ctheta, I_t, J_t, V_t, Ai, Bi, theta_gid0, col0, row0, clambda, lambda_gid0
+            for ptheta in work
+                ctheta = counts_next[ptheta]
+                ctheta == 0 && continue
+                I_t = ws.I_chunks[tid]
+                J_t = ws.J_chunks[tid]
+                V_t = ws.V_chunks[tid]
+                Ai = iota_comps[ptheta]
+                Bi = pinext_comps[ptheta]
+                theta_gid0 = gid_next_starts[ptheta]
+                col0 = starts_next[ptheta]
+                row0 = 1
+                @inbounds for plambda in birth_plan[ptheta]
+                    clambda = counts_prev[plambda]
+                    clambda == 0 && continue
+                    lambda_gid0 = gid_prev_starts[plambda]
+                    _accumulate_product_entries_upset!(
+                        I_t, J_t, V_t,
+                        Ai, Bi,
+                        row0, col0, clambda, ctheta,
+                        theta_gid0, lambda_gid0,
+                    )
+                    row0 += clambda
+                end
             end
         end
         empty!(ws.I)
@@ -2740,7 +2759,19 @@ end
 
     A = Matrix{K}(undef, d, r + d)
     if r > 0
-        @views A[:, 1:r] .= Img
+        prefix = @view A[:, 1:r]
+        if field isa RealField
+            # Img is already an accepted independent basis. Appending I must
+            # not erase that span merely because Img has small coordinate
+            # scale. Use its thin orthonormal basis for complement selection.
+            fill!(prefix, zero(K))
+            @inbounds for j in 1:r
+                prefix[j, j] = one(K)
+            end
+            lmul!(qr(Matrix(Img)).Q, prefix)
+        else
+            prefix .= Img
+        end
     end
     @views fill!(A[:, (r + 1):(r + d)], zero(K))
     @inbounds for j in 1:d
@@ -2778,11 +2809,6 @@ id_morphism(H::FiniteFringe.FringeModule{K}) where {K} =
     id_morphism(pmodule_from_fringe(H))
 
 @inline _is_exact_field(field::AbstractCoeffField) = !(field isa RealField)
-
-@inline _resolution_cache_shard_index(dicts) =
-    min(length(dicts), max(1, Threads.threadid()))
-@inline _thread_local_index(arr) =
-    min(length(arr), max(1, Threads.threadid()))
 
 @inline function _indicator_use_threads(
     requested::Bool,
@@ -2825,147 +2851,48 @@ end
     return cache.indicator_primary::Dict{ResolutionKey3,R}
 end
 
-@inline function _indicator_primary_shard(cache::ResolutionCache, ::Type{R}) where {R}
-    cache.indicator_primary_type === R || return nothing
-    shard = cache.indicator_primary_shards[_resolution_cache_shard_index(cache.indicator_primary_shards)]
-    shard === nothing && return nothing
-    return shard::Dict{ResolutionKey3,R}
-end
-
 @inline function _ensure_indicator_primary_locked!(cache::ResolutionCache, ::Type{R}) where {R}
     if cache.indicator_primary_type === nothing && isempty(cache.indicator)
         cache.indicator_primary_type = R
         cache.indicator_primary = Dict{ResolutionKey3,R}()
-        for i in eachindex(cache.indicator_primary_shards)
-            cache.indicator_primary_shards[i] = Dict{ResolutionKey3,R}()
-        end
     end
     return _indicator_primary_dict(cache, R)
 end
 
 @inline function _resolution_cache_indicator_get(cache::ResolutionCache, key::ResolutionKey3, ::Type{R}) where {R}
-    primary = _indicator_primary_dict(cache, R)
-    if primary !== nothing
-        if length(cache.indicator_primary_shards) == 1
-            return get(primary, key, nothing)
-        end
-        shard = _indicator_primary_shard(cache, R)
-        shard === nothing || begin
-            v = get(shard, key, nothing)
-            v === nothing || return v
-        end
-        Base.lock(cache.lock)
-        try
-            v = get(primary, key, nothing)
-            if v !== nothing && shard !== nothing
-                shard[key] = v
-            end
-            return v
-        finally
-            Base.unlock(cache.lock)
-        end
-    end
-
-    # Single-thread fast path: avoid lock/shard indirection on misses.
-    if length(cache.indicator_shards) == 1
-        v = get(cache.indicator, key, nothing)
-        return v === nothing ? nothing : (v.value::R)
-    end
-
-    shard = cache.indicator_shards[_resolution_cache_shard_index(cache.indicator_shards)]
-    v = get(shard, key, nothing)
-    v === nothing || return (v.value::R)
     Base.lock(cache.lock)
     try
-        v = get(cache.indicator, key, nothing)
+        primary_type = cache.indicator_primary_type
+        if primary_type !== nothing && primary_type <: R
+            value = get(cache.indicator_primary, key, nothing)
+            value === nothing || return value::R
+        end
+        value = get(cache.indicator, key, nothing)
+        return value === nothing ? nothing : value.value::R
     finally
         Base.unlock(cache.lock)
     end
-    v === nothing || begin
-        vv = v.value::R
-        shard[key] = v
-        return vv
-    end
-    return nothing
 end
 
 @inline function _resolution_cache_indicator_store!(cache::ResolutionCache, key::ResolutionKey3, val::R) where {R}
-    primary = _indicator_primary_dict(cache, R)
-    if primary === nothing
-        Base.lock(cache.lock)
-        try
-            primary = _ensure_indicator_primary_locked!(cache, R)
-            if primary !== nothing
-                extant = get(primary, key, nothing)
-                extant === nothing || return extant
-                primary[key] = val
-                shard = cache.indicator_primary_shards[_resolution_cache_shard_index(cache.indicator_primary_shards)]::Dict{ResolutionKey3,R}
-                shard[key] = val
-                return val
-            end
-        finally
-            Base.unlock(cache.lock)
-        end
-    else
-        if length(cache.indicator_primary_shards) == 1
-            extant = get(primary, key, nothing)
-            extant === nothing || return extant
-            _indicator_cache_admit_locked!(cache, key, val) || return val
-            primary[key] = val
-            return val
-        end
-        shard = _indicator_primary_shard(cache, R)
-        shard === nothing || begin
-            extant = get(shard, key, nothing)
-            extant === nothing || return extant
-        end
-        Base.lock(cache.lock)
-        try
-            extant = get(primary, key, nothing)
-            extant === nothing || return extant
-            _indicator_cache_admit_locked!(cache, key, val) || return val
-            primary[key] = val
-            shard === nothing || (shard[key] = val)
-            return val
-        finally
-            Base.unlock(cache.lock)
-        end
-    end
-
-    # Single-thread fast path: lock-free get!/insert.
-    if length(cache.indicator_shards) == 1
-        extant = get(cache.indicator, key, nothing)
-        extant === nothing || return (extant.value::R)
-        _indicator_cache_admit_locked!(cache, key, val) || return val
-        out = get!(cache.indicator, key) do
-            IndicatorResolutionPayload(val)
-        end
-        return out.value::R
-    end
-
-    shard = cache.indicator_shards[_resolution_cache_shard_index(cache.indicator_shards)]
-    existing = get(shard, key, nothing)
-    existing === nothing || return (existing.value::R)
-
     Base.lock(cache.lock)
-    out = try
-        extant = get(cache.indicator, key, nothing)
-        if extant !== nothing
-            extant
-        elseif !_indicator_cache_admit_locked!(cache, key, val)
-            nothing
-        else
-            get!(cache.indicator, key) do
-                IndicatorResolutionPayload(val)
-            end
+    try
+        primary = _ensure_indicator_primary_locked!(cache, R)
+        if primary !== nothing
+            extant = get(primary, key, nothing)
+            extant === nothing || return extant
+            _indicator_cache_admit_locked!(cache, key, val) || return val
+            primary[key] = val
+            return val
         end
+        extant = get(cache.indicator, key, nothing)
+        extant === nothing || return extant.value::R
+        _indicator_cache_admit_locked!(cache, key, val) || return val
+        cache.indicator[key] = IndicatorResolutionPayload(val)
+        return val
     finally
         Base.unlock(cache.lock)
     end
-    out === nothing && return val
-    outR = out.value::R
-    shard[key] = out
-    return outR
 end
 
 function _is_zero_matrix(field::AbstractCoeffField, M)
@@ -3588,14 +3515,12 @@ function projective_cover(M::PModule{K};
     if ws === nothing && !threaded
         ws = _new_resolution_workspace(K, n)
     end
-    memos = threaded ?
-        [_indicator_new_array_memo(K, n)
-         for _ in 1:max(1, Threads.maxthreadid())] : Vector{Vector{Union{Nothing,Matrix{K}}}}()
 
     # number of generators at each vertex = dim(M_v) - rank(incoming_image)
     chosen_at = Vector{Vector{Int}}(undef, n)
     if threaded
         Threads.@threads for v in 1:n
+            local Img, chosen
             Img = _incoming_image_basis(M, v; cache=cc)
             chosen = _choose_projective_generators(field, Img, M.dims[v])
             chosen_at[v] = chosen
@@ -3628,6 +3553,7 @@ function projective_cover(M::PModule{K};
         edges = cover_edges(Q)
         mats = Vector{SparseMatrixCSC{K,Int}}(undef, length(edges))
         Threads.@threads for idx in eachindex(edges)
+            local u, v, Muv
             u, v = edges[idx]
             Muv = _subsequence_identity_sparse_blocks(
                 K,
@@ -3694,40 +3620,43 @@ function projective_cover(M::PModule{K};
 
     comps = Vector{Matrix{K}}(undef, n)
     if threaded
-        Threads.@threads for i in 1:n
-            memo = memos[_thread_local_index(memos)]
-            Mi = M.dims[i]
-            Fi = F0_dims[i]
-            cols = zeros(K, Mi, Fi)
-            col = 1
-            lo = _packed_firstindex(active_sources, i)
-            hi = _packed_lastindex(active_sources, i)
-            batch = if use_plans
-                batch_by_i[i]
-            else
-                if hi < lo
-                    nothing
+        _foreach_workchunk(n; threads=true) do work, _
+            local Mi, Fi, cols, col, lo, hi, batch, pairs, pos, maps, t, p, A
+            local memo = _indicator_new_array_memo(K, n)
+            for i in work
+                Mi = M.dims[i]
+                Fi = F0_dims[i]
+                cols = zeros(K, Mi, Fi)
+                col = 1
+                lo = _packed_firstindex(active_sources, i)
+                hi = _packed_lastindex(active_sources, i)
+                batch = if use_plans
+                    batch_by_i[i]
                 else
-                    pairs = Vector{Tuple{Int,Int}}(undef, hi - lo + 1)
-                    pos = 1
-                    for idx in lo:hi
-                        pairs[pos] = (active_sources.data[idx], i)
-                        pos += 1
+                    if hi < lo
+                        nothing
+                    else
+                        pairs = Vector{Tuple{Int,Int}}(undef, hi - lo + 1)
+                        pos = 1
+                        for idx in lo:hi
+                            pairs[pos] = (active_sources.data[idx], i)
+                            pos += 1
+                        end
+                        prepare_map_leq_batch(pairs)
                     end
-                    prepare_map_leq_batch(pairs)
                 end
-            end
-            maps = batch === nothing ? Matrix{K}[] : _map_leq_cached_many_indicator(M, batch, cc, memo)
-            if hi >= lo
-                t = 1
-                @inbounds for idx in lo:hi
-                    p = active_sources.data[idx]
-                    A = maps[t]
-                    col = _gather_selected_columns!(cols, col, A, J_at[p])
-                    t += 1
+                maps = batch === nothing ? Matrix{K}[] : _map_leq_cached_many_indicator(M, batch, cc, memo)
+                if hi >= lo
+                    t = 1
+                    @inbounds for idx in lo:hi
+                        p = active_sources.data[idx]
+                        A = maps[t]
+                        col = _gather_selected_columns!(cols, col, A, J_at[p])
+                        t += 1
+                    end
                 end
+                comps[i] = cols
             end
-            comps[i] = cols
         end
     else
         for i in 1:n
@@ -4258,9 +4187,6 @@ function _injective_hull(M::PModule{K};
     if ws === nothing && !threaded
         ws = _new_resolution_workspace(K, n)
     end
-    memos = threaded ?
-        [_indicator_new_array_memo(K, n)
-         for _ in 1:max(1, Threads.maxthreadid())] : Vector{Vector{Union{Nothing,Matrix{K}}}}()
 
     # socle bases at each vertex and their multiplicities
     Soc = Vector{Matrix{K}}(undef, n)
@@ -4272,6 +4198,7 @@ function _injective_hull(M::PModule{K};
     end
     if threaded
         Threads.@threads for idx in eachindex(support)
+            local u, can_reuse, Su
             u = support[idx]
             can_reuse = reuse_cache !== nothing &&
                         reuse_cache.valid[u] &&
@@ -4365,6 +4292,7 @@ function _injective_hull(M::PModule{K};
 
     if threaded
         Threads.@threads for u in 1:n
+            local su, pred_slots, local_maps, v
             su = succs[u]
             pred_slots = graph_lists === nothing ? _pred_slots_of_succ(cc, u) : graph_lists.pred_slot_of_succ[u]
             local_maps = Vector{SparseMatrixCSC{K,Int}}(undef, length(su))
@@ -4464,32 +4392,35 @@ function _injective_hull(M::PModule{K};
         comps[i] = zeros(K, Edims[i], M.dims[i])
     end
     if threaded
-        Threads.@threads for idx in eachindex(active_iota_vertices)
-            i = active_iota_vertices[idx]
-            memo = memos[_thread_local_index(memos)]
-            rows = comps[i]
-            r = 1
-            lo = active_ptr[i]
-            hi = active_ptr[i + 1] - 1
-            batch = if use_plans
-                batch_by_i[i]
-            else
-                pairs = hi < lo ? Tuple{Int,Int}[] : Tuple{Int,Int}[(i, active_data[idx]) for idx in lo:hi]
-                isempty(pairs) ? nothing : prepare_map_leq_batch(pairs)
-            end
-            maps = batch === nothing ? Matrix{K}[] : _map_leq_cached_many_indicator(M, batch, cc, memo)
-            pos = 1
-            if hi >= lo
-                @inbounds for idx in lo:hi
-                    u = active_data[idx]
-                    m = mult[u]
-                    Mi_to_Mu = maps[pos]
-                    @views mul!(rows[r:r+m-1, :], Linv[u], Mi_to_Mu)
-                    r += m
-                    pos += 1
+        _foreach_workchunk(length(active_iota_vertices); threads=true) do work, _
+            local i, rows, r, lo, hi, batch, pairs, maps, pos, u, m, Mi_to_Mu
+            local memo = _indicator_new_array_memo(K, n)
+            for idx in work
+                i = active_iota_vertices[idx]
+                rows = comps[i]
+                r = 1
+                lo = active_ptr[i]
+                hi = active_ptr[i + 1] - 1
+                batch = if use_plans
+                    batch_by_i[i]
+                else
+                    pairs = hi < lo ? Tuple{Int,Int}[] : Tuple{Int,Int}[(i, active_data[idx]) for idx in lo:hi]
+                    isempty(pairs) ? nothing : prepare_map_leq_batch(pairs)
                 end
+                maps = batch === nothing ? Matrix{K}[] : _map_leq_cached_many_indicator(M, batch, cc, memo)
+                pos = 1
+                if hi >= lo
+                    @inbounds for idx in lo:hi
+                        u = active_data[idx]
+                        m = mult[u]
+                        Mi_to_Mu = maps[pos]
+                        @views mul!(rows[r:r+m-1, :], Linv[u], Mi_to_Mu)
+                        r += m
+                        pos += 1
+                    end
+                end
+                @assert r == Edims[i] + 1
             end
-            @assert r == Edims[i] + 1
         end
     else
         for i in active_iota_vertices
@@ -5648,9 +5579,10 @@ function downset_resolution(M::PModule{K};
     initial_support_mask = _vertex_mask(n, initial_support_vertices)
     total_dims = sum(M.dims)
     use_transport_reuse = _indicator_use_downset_transport_reuse(field, n, total_dims, maxlen)
-    use_injective_reuse = _indicator_use_downset_injective_reuse(field, n, total_dims, maxlen)
     transport_cache = use_transport_reuse ? _new_downset_cokernel_transport_cache(K, n) : nothing
-    injective_cache = use_injective_reuse ? _new_injective_hull_reuse_cache(K, n) : nothing
+    # Socle reuse requires the transport cache's changed-map/frontier metadata.
+    # Equal stalk dimensions alone do not mean the outgoing maps are unchanged.
+    injective_cache = use_transport_reuse ? _new_injective_hull_reuse_cache(K, n) : nothing
     graph_lists = _cover_graph_lists(cc)
 
     # First injective hull: iota0 : M -> E0
@@ -5916,14 +5848,6 @@ Ext/Tor-style computation or detailed inspection.
     return IndicatorResolutionsResult(upset, downset)
 end
 
-@inline function _indicator_resolutions_cache_payload(res::IndicatorResolutionsResult)
-    return (
-        res.upset.presentations,
-        res.upset.differentials,
-        res.downset.presentations,
-        res.downset.differentials,
-    )
-end
 
 function indicator_resolutions(HM::FiniteFringe.FringeModule{K},
                                HN::FiniteFringe.FringeModule{K};
@@ -5934,26 +5858,9 @@ function indicator_resolutions(HM::FiniteFringe.FringeModule{K},
     key = cache === nothing ? nothing : _resolution_key3(HM, HN, maxlen === nothing ? -1 : Int(maxlen))
 
     if cache !== nothing
-        PT = typeof(HM.P)
-        UP = UpsetPresentation{K,PT,Nothing,SparseMatrixCSC{K,Int}}
-        DP = DownsetCopresentation{K,PT,Nothing,SparseMatrixCSC{K,Int}}
-        cache_val_type = Tuple{
-            Vector{UP},
-            Vector{SparseMatrixCSC{K,Int}},
-            Vector{DP},
-            Vector{SparseMatrixCSC{K,Int}},
-        }
-
-        cached = _resolution_cache_indicator_get(cache, key, cache_val_type)
-        if cached !== nothing
-            F, dF, E, dE = cached
-            MM = pmodule_from_fringe(HM)
-            NN = HM === HN ? MM : pmodule_from_fringe(HN)
-            upset = UpsetResolutionResult(F, dF, _ProjectiveGeneratorPlan[], nothing, MM, false, false)
-            downset = DownsetResolutionResult(E, dE, _InjectiveGeneratorPlan[], nothing, NN, false, false)
-            result = IndicatorResolutionsResult(upset, downset)
-            return _indicator_resolution_with_output(:indicator_resolutions, result, resolution_summary, output)
-        end
+        cached = _resolution_cache_indicator_get(cache, key, IndicatorResolutionsResult)
+        cached === nothing || return _indicator_resolution_with_output(
+            :indicator_resolutions, cached, resolution_summary, output)
     end
 
     MM = pmodule_from_fringe(HM)
@@ -5966,7 +5873,7 @@ function indicator_resolutions(HM::FiniteFringe.FringeModule{K},
     )
 
     if cache !== nothing
-        _resolution_cache_indicator_store!(cache, key::ResolutionKey3, _indicator_resolutions_cache_payload(out))
+        out = _resolution_cache_indicator_store!(cache, key::ResolutionKey3, out)
     end
     return _indicator_resolution_with_output(:indicator_resolutions, out, resolution_summary, output)
 end

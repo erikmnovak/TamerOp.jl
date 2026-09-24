@@ -9,9 +9,9 @@ module Options
 using ..CoreModules: AbstractCoeffField, QQField
 
 const _CONSTRUCTION_SPARSIFY_MODES = (:none, :radius, :knn, :greedy_perm)
-const _CONSTRUCTION_COLLAPSE_MODES = (:none, :dominated_edges, :acyclic)
-const _CONSTRUCTION_OUTPUT_STAGES = (:simplex_tree, :graded_complex, :cochain, :module,
-                                     :fringe, :flange, :encoding_result)
+const _CONSTRUCTION_COLLAPSE_MODES = (:none, :dominated_edges)
+const _CONSTRUCTION_OUTPUT_STAGES = (:simplex_tree, :graded_complex, :cochain, :encoded_complex,
+                                     :module, :fringe, :flange, :cohomology_dims, :encoding_result)
 const _DATAFILE_KINDS = (:auto, :point_cloud, :graph, :image, :distance_matrix)
 const _DATAFILE_FORMATS = (:auto, :dataset_json, :csv, :tsv, :txt,
                            :ripser_point_cloud, :ripser_distance, :ripser_lower_distance,
@@ -20,11 +20,11 @@ const _DATAFILE_FORMATS = (:auto, :dataset_json, :csv, :tsv, :txt,
 const _DATAFILE_MISSING_POLICIES = (:error, :drop_rows)
 const _AXES_POLICIES = (:encoding, :as_given, :coarsen)
 const _POSET_KINDS = (:signature, :dense, :regions)
+const _PIPELINE_POSET_KINDS = (:signature, :dense)
 const _ENCODING_BACKENDS = (:auto, :zn, :pl, :pl_backend, :pl_backend_boxes, :boxes, :axis,
                             :data, :serialization)
 const _DERIVED_FUNCTOR_MODELS = (:auto, :projective, :injective, :unified, :first, :second)
 const _DERIVED_FUNCTOR_CANONS = (:auto, :projective, :injective, :none)
-const _FINITE_FRINGE_POSET_KINDS = (:regions, :dense)
 
 @inline function _allowed_symbol_list(allowed::Tuple{Vararg{Symbol}})
     return join(string.(allowed), ", ")
@@ -60,8 +60,6 @@ end
     _validate_symbol_choice("DerivedFunctorOptions", "model", value, _DERIVED_FUNCTOR_MODELS)
 @inline _validate_derived_functor_canon(value::Symbol) =
     _validate_symbol_choice("DerivedFunctorOptions", "canon", value, _DERIVED_FUNCTOR_CANONS)
-@inline _validate_finite_fringe_poset_kind(value::Symbol) =
-    _validate_symbol_choice("FiniteFringeOptions", "poset_kind", value, _FINITE_FRINGE_POSET_KINDS)
 
 @inline function _render_option_namedtuple(io::IO, name::AbstractString, nt::NamedTuple)
     print(io, name, "(")
@@ -125,12 +123,18 @@ struct ConstructionBudget
     memory_budget_bytes::Union{Nothing,Int}
 end
 
-ConstructionBudget(; max_simplices::Union{Nothing,Integer}=nothing,
+function ConstructionBudget(; max_simplices::Union{Nothing,Integer}=nothing,
                    max_edges::Union{Nothing,Integer}=nothing,
-                   memory_budget_bytes::Union{Nothing,Integer}=nothing) =
-    ConstructionBudget(max_simplices === nothing ? nothing : Int(max_simplices),
+                   memory_budget_bytes::Union{Nothing,Integer}=nothing)
+    for (name, value) in ((:max_simplices, max_simplices), (:max_edges, max_edges),
+                          (:memory_budget_bytes, memory_budget_bytes))
+        (value === nothing || (!(value isa Bool) && 0 <= value <= typemax(Int))) ||
+            throw(ArgumentError("ConstructionBudget: $name must be nothing or a nonnegative integer representable as Int."))
+    end
+    return ConstructionBudget(max_simplices === nothing ? nothing : Int(max_simplices),
                        max_edges === nothing ? nothing : Int(max_edges),
                        memory_budget_bytes === nothing ? nothing : Int(memory_budget_bytes))
+end
 
 """
     ConstructionOptions(; sparsify=:none, collapse=:none, output_stage=:encoding_result,
@@ -142,14 +146,30 @@ These options govern how a filtration is built, not what mathematical family
 is being built:
 - `sparsify` controls whether the input graph is dense or radius/knn/pruning
   driven,
-- `collapse` controls simplification before downstream encoding,
+- `collapse=:none` leaves the complex unchanged; `:dominated_edges` performs
+  certified filtered edge collapses in supported Rips flag complexes,
 - `output_stage` chooses how far the construction proceeds,
 - `budget` adds explicit combinatorial guardrails.
 
 Defaults are chosen for ordinary user workflows:
 - `output_stage=:encoding_result` because that is the canonical high-level goal,
 - `sparsify=:none` and `collapse=:none` preserve the full construction unless
-  the user asks for a cheaper approximation/simplification.
+  the user explicitly chooses a sparse input graph.
+
+`collapse=:dominated_edges` preserves persistence in every homology degree of
+the requested `max_dim` skeleton, over every supported field. It uses actual
+vertex/edge grades and sequential witnesses, and keeps original vertex values
+(including degree/density values). Consequently `max_dim <= 1` retains all
+edges: deleting graph cycles would change top-dimensional homology. Reduction
+is conservative and is not promised to find every possible collapse.
+
+Supported inputs are point-cloud Rips, density/codensity Rips, function Rips,
+degree Rips, landmark Rips, and distance-matrix Rips, with coordinatewise
+sublevel grades and `simplex_agg=:max`. Other families/orientations/aggregators
+reject this option. Sparse inputs preserve the persistence of their selected
+flag graph; sparsification itself does not acquire an exactness guarantee.
+The former `:acyclic` spanning-forest mode has been removed because it changed
+persistence. Budgets apply to the input graph and retained clique expansion.
 """
 struct ConstructionOptions
     sparsify::Symbol
@@ -243,9 +263,18 @@ their reproducibility in serialized pipeline artifacts.
 
 - `axes_policy` controls whether downstream axes come from the encoding, are
   taken exactly as supplied, or are coarsened,
-- `poset_kind` chooses the representation of the finite encoding poset,
+- `poset_kind=:signature` keeps the product of chains structured;
+  `:dense` materializes the same finite order as a `FinitePoset`,
 - `orientation`, `axis_kind`, and `eps` thread geometric/ordering choices
-  through ingestion and serialization.
+  through ingestion and serialization. `eps` rounds grades to the nearest
+  positive step (one step per axis, or a shared scalar step),
+- `field` is a coefficient-field object, or `nothing` for the default QQ.
+  An explicit ingestion `field=...` keyword takes precedence,
+- `max_axis_len` is required only with `axes_policy=:coarsen`.
+
+Poset, field and axis-grid choices apply at encoded stages. Raw
+`:simplex_tree` and `:graded_complex` stages return the filtration before
+those choices are applied; grade quantization via `eps` does apply there.
 
 Use this object when you need reproducible pipeline configuration rather than
 ad-hoc keyword bundles.
@@ -260,20 +289,46 @@ struct PipelineOptions{OrientationT,AxisKindT,EpsT,FieldT}
     max_axis_len::Union{Nothing,Int}
 end
 
-PipelineOptions(; orientation=nothing,
+function PipelineOptions(; orientation=nothing,
                 axes_policy::Symbol=:encoding,
                 axis_kind=nothing,
                 eps=nothing,
                 poset_kind::Symbol=:signature,
                 field=nothing,
-                max_axis_len::Union{Nothing,Int}=nothing) =
-    PipelineOptions(orientation,
-                    _validate_axes_policy("PipelineOptions", axes_policy),
+                max_axis_len::Union{Nothing,Int}=nothing)
+    _validate_axes_policy("PipelineOptions", axes_policy)
+    _validate_symbol_choice("PipelineOptions", "poset_kind", poset_kind, _PIPELINE_POSET_KINDS)
+    (field === nothing || field isa AbstractCoeffField) ||
+        throw(ArgumentError("PipelineOptions: field must be nothing or a coefficient-field object such as QQField(), F2(), Fp(5), or RealField()."))
+    (axis_kind === nothing || axis_kind in (:zn, :rn)) ||
+        throw(ArgumentError("PipelineOptions: axis_kind must be nothing, :zn, or :rn."))
+    if orientation !== nothing
+        (orientation isa Tuple || orientation isa AbstractVector) &&
+            !isempty(orientation) && all(o -> o isa Integer && !(o isa Bool) && abs(o) == 1, orientation) ||
+            throw(ArgumentError("PipelineOptions: orientation must contain only +1 or -1."))
+        orientation = Tuple(Int(o) for o in orientation)
+    end
+    if eps !== nothing
+        steps = eps isa Real ? (eps,) : eps
+        steps isa Tuple && !isempty(steps) &&
+            all(e -> e isa Real && !(e isa Bool) && isfinite(e) && e > 0 &&
+                     isfinite(Float64(e)) && Float64(e) > 0, steps) ||
+            throw(ArgumentError("PipelineOptions: eps must be a finite positive real step or a tuple of such steps."))
+    end
+    if axes_policy == :coarsen
+        max_axis_len !== nothing && max_axis_len > 0 ||
+            throw(ArgumentError("PipelineOptions: axes_policy=:coarsen requires positive max_axis_len."))
+    elseif max_axis_len !== nothing
+        throw(ArgumentError("PipelineOptions: max_axis_len is used only with axes_policy=:coarsen."))
+    end
+    return PipelineOptions(orientation,
+                    axes_policy,
                     axis_kind,
                     eps,
-                    _validate_poset_kind("PipelineOptions", poset_kind),
+                    poset_kind,
                     field,
                     max_axis_len)
+end
 
 """
     EncodingOptions(; backend=:auto, max_regions=nothing, strict_eps=nothing,
@@ -283,11 +338,13 @@ Options controlling finite encodings.
 
 - `backend` chooses the encoding engine (`:auto` is the canonical user default),
 - `max_regions` caps region explosion in region-based encoders,
-- `strict_eps` threads exactness/tolerance information to encoders that support
-  it,
+- `strict_eps` controls strict inequalities in the polyhedral backend;
+  integer and box encoders reject a non-`nothing` value,
 - `poset_kind` chooses whether the output poset stays structured or is
   materialized densely,
-- `field` chooses the coefficient field of the resulting algebraic object.
+- `field` chooses the coefficient field for fringe/module outputs. Explicit
+  options take precedence; without options, flange encoders preserve the input
+  field. Poset/classifier-only methods have no coefficient field to change.
 
 Best practice:
 - simple users should usually keep `backend=:auto`,
@@ -322,8 +379,9 @@ EncodingOptions(; backend::Symbol=:auto,
 Options controlling projective/injective resolution construction.
 
 - `maxlen` truncates the computed resolution length,
-- `minimal` requests minimality when supported,
-- `check` enables correctness validation of the constructed resolution.
+- `minimal=true` requests a minimality assertion when `check=true`; finite-poset
+  builders already construct minimal resolutions,
+- `check` enables structural and chain validation of the constructed resolution.
 
 Defaults favor safety and ordinary exploratory workloads.
 """
@@ -333,8 +391,10 @@ struct ResolutionOptions
     check::Bool
 end
 
-ResolutionOptions(; maxlen::Int=3, minimal::Bool=false, check::Bool=true) =
-    ResolutionOptions(maxlen, minimal, check)
+function ResolutionOptions(; maxlen::Int=3, minimal::Bool=false, check::Bool=true)
+    maxlen >= 0 || throw(ArgumentError("ResolutionOptions: maxlen must be nonnegative."))
+    return ResolutionOptions(maxlen, minimal, check)
+end
 
 @inline function validate_pl_mode(mode::Symbol)::Symbol
     if mode === :fast
@@ -404,11 +464,13 @@ InvariantOptions(axes, axes_policy::Symbol, max_axis_len::Int, box, threads, str
 
 Options controlling Ext/Tor and related derived-functor computations.
 
-- `maxdeg` truncates the computed homological/cohomological degree range,
+- `maxdeg` requests homological/cohomological degrees `0:maxdeg`; ordinary
+  Ext/Tor resolve through `maxdeg+1` to determine the last group,
 - `model` chooses the computational model (`:projective`, `:injective`,
   `:unified`, `:first`, `:second`, or `:auto` depending on the functor),
-- `canon` chooses the preferred canonical representation when a symmetric model
-  admits multiple reasonable choices.
+- `canon` chooses the canonical representation in unified Ext (`:auto`,
+  `:projective`, or `:injective`). Native Ext permits `:auto`, `:none`, or its
+  realized model; Tor permits `:auto` or `:none`. Incompatible controls throw.
 
 These symbols are operational choices, not mathematical invariants; `:auto`
 remains the best default unless a workflow genuinely needs a specific model.
@@ -419,45 +481,24 @@ struct DerivedFunctorOptions
     canon::Symbol
 end
 
-DerivedFunctorOptions(; maxdeg::Int=3, model::Symbol=:auto, canon::Symbol=:auto) =
-    DerivedFunctorOptions(maxdeg,
+function DerivedFunctorOptions(; maxdeg::Int=3, model::Symbol=:auto, canon::Symbol=:auto)
+    maxdeg >= 0 || throw(ArgumentError("DerivedFunctorOptions: maxdeg must be nonnegative."))
+    return DerivedFunctorOptions(maxdeg,
                           _validate_derived_functor_model(model),
                           _validate_derived_functor_canon(canon))
-
-"""
-    FiniteFringeOptions(; check=true, cached=true, store_sparse=false, scalar=1, poset_kind=:regions)
-
-Options for `FiniteFringe` convenience entrypoints.
-
-- `check` validates hand-built inputs,
-- `cached` enables reuse of cached combinatorial helpers,
-- `store_sparse` prefers sparse storage for the resulting data,
-- `scalar` sets the scalar used in one-by-one fringe construction helpers,
-- `poset_kind` chooses the representation of the resulting finite poset.
-"""
-struct FiniteFringeOptions{S}
-    check::Bool
-    cached::Bool
-    store_sparse::Bool
-    scalar::S
-    poset_kind::Symbol
 end
-
-FiniteFringeOptions(; check::Bool=true,
-                    cached::Bool=true,
-                    store_sparse::Bool=false,
-                    scalar=1,
-                    poset_kind::Symbol=:regions) =
-    FiniteFringeOptions{typeof(scalar)}(check, cached, store_sparse, scalar,
-                                        _validate_finite_fringe_poset_kind(poset_kind))
 
 """
     ModuleOptions(; check_sizes=true, cache=nothing)
 
 Options for `Modules` convenience entrypoints.
 
-- `check_sizes=true` keeps constructor/query contracts strict,
-- `cache` threads a cover/session cache into hot module-map paths.
+- `check_sizes` controls `PModule` constructor matrix-shape checks; `false` is
+  a trusted-input opt-out. Queries always validate indices and comparability,
+  and reject `check_sizes=false`,
+- `cache` accepts `nothing` or a `CoverCache` for the same poset, reused by
+  construction and structure-map queries. `SessionCache` belongs to Workflow
+  and is not accepted here.
 
 This object is intentionally small. Simple users usually rely on the default.
 """
@@ -532,13 +573,6 @@ ModuleOptions(; check_sizes::Bool=true, cache=nothing) =
      maxdeg=opts.maxdeg,
      model=opts.model,
      canon=opts.canon)
-@inline _option_describe(opts::FiniteFringeOptions) =
-    (kind=:finite_fringe_options,
-     check=opts.check,
-     cached=opts.cached,
-     store_sparse=opts.store_sparse,
-     scalar=opts.scalar,
-     poset_kind=opts.poset_kind)
 @inline _option_describe(opts::ModuleOptions) =
     (kind=:module_options,
      check_sizes=opts.check_sizes,
@@ -658,20 +692,6 @@ end
 function Base.show(io::IO, ::MIME"text/plain", opts::DerivedFunctorOptions)
     _render_option_namedtuple_pretty(io, "DerivedFunctorOptions",
                                      (; maxdeg=opts.maxdeg, model=opts.model, canon=opts.canon))
-end
-
-function Base.show(io::IO, opts::FiniteFringeOptions)
-    _render_option_namedtuple(io, "FiniteFringeOptions",
-                              (; check=opts.check, cached=opts.cached,
-                                 store_sparse=opts.store_sparse, poset_kind=opts.poset_kind))
-end
-function Base.show(io::IO, ::MIME"text/plain", opts::FiniteFringeOptions)
-    _render_option_namedtuple_pretty(io, "FiniteFringeOptions",
-                                     (; check=opts.check,
-                                        cached=opts.cached,
-                                        store_sparse=opts.store_sparse,
-                                        scalar=opts.scalar,
-                                        poset_kind=opts.poset_kind))
 end
 
 function Base.show(io::IO, opts::ModuleOptions)

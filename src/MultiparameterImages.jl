@@ -14,7 +14,7 @@ finite families of 1D slice barcodes.
 
 using LinearAlgebra
 using JSON3
-using ..CoreModules: EncodingCache, AbstractCoeffField, RegionPosetCachePayload,
+using ..CoreModules: _foreach_workchunk, EncodingCache, AbstractCoeffField, RegionPosetCachePayload,
                      AbstractSlicePlanCache
 using ..Options: InvariantOptions
 import ..DataTypes: bounding_box
@@ -61,7 +61,7 @@ import ..Modules: PModule, map_leq, CoverCache, _get_cover_cache
 import ..IndicatorResolutions: pmodule_from_fringe
 import ..ZnEncoding: ZnEncodingMap
 import ..SliceInvariants: collect_slices, CompiledSlicePlan, SliceBarcodesResult, slice_barcode, slice_barcodes,
-                          _slice_barcode_packed,
+                          _slice_barcode_packed, _bottleneck_matching_points,
                           _slice_barcode_packed_with_workspace, _extended_values_view,
                           _persistence_landscape_values!,
                           _clean_tgrid, _plan_idx, compile_slices, default_offsets, uniform2d,
@@ -93,8 +93,9 @@ import ..Fibered2D: FiberedArrangement2D, FiberedBarcodeCache2D,
 #        k(x, I) = omega(l*) * exp(-d(x,I)^2 / sigma^2)
 #      where l* is the slice containing the closest segment in I.
 #
-# This produces a stable, low-dimensional representation that explicitly
-# accounts for multiparameter coherence across slices.
+# Tracks depend on the sampled line order and on choices of optimal matchings.
+# They are not a certified direct-sum decomposition; no unconditional stability
+# claim follows from arbitrary choices of bottleneck witnesses.
 
 """
     MPPLineSpec
@@ -116,7 +117,7 @@ Fields
 - `dir`: direction vector (Float64, length 2), normalized according to the
          arrangement's direction normalization convention (usually L1).
 - `off`: normal offset (Float64), so the line is { x : n . x = off } where
-         n is a unit normal associated to dir.
+         n = (-dir[2], dir[1]); it need not be a unit normal.
 - `x0`: a basepoint on the line (Float64, length 2), compatible with (dir, off).
 - `omega`: the Carriere direction weight omega(dir) = min(cos(theta), sin(theta))
            where theta is the direction angle in [0, pi/2]. Equivalently,
@@ -234,34 +235,6 @@ function check_mpp_line_spec(line::MPPLineSpec; throw::Bool=false)
     return _mppi_validation_result(MPPLineSpecValidationSummary, errors; throw=throw)
 end
 
-"""
-    MPPDecomposition
-
-A decomposition of a module into "summands" I_k as used by Carriere MPPI.
-
-Each summand is represented as a list of segments in R^2, where each segment
-lies on one of the chosen slice lines and corresponds to one barcode interval
-(birth -> death mapped into the plane).
-
-This is the canonical intermediate object for the multiparameter-image
-workflow:
-
-```julia
-decomp = mpp_decomposition(M, pi; N=8, delta=:auto)
-describe(decomp)
-mpp_decomposition_summary(decomp)
-check_mpp_decomposition(decomp)
-img = mpp_image(decomp; resolution=24, sigma=0.2)
-```
-
-Fields
-- `lines`: vector of `MPPLineSpec` used.
-- `summands`: vector of summands; each summand is a vector of segments.
-  A segment is stored as an `MPPSegment` with packed 2D endpoints `(p, q)` and
-  direction weight `omega`.
-- `weights`: w(I_k) geometric weights for each summand (Float64).
-- `box`: the ambient bounding box (a,b) in R^2 used for normalization.
-"""
 struct MPPSegment
     p::NTuple{2,Float64}
     q::NTuple{2,Float64}
@@ -295,6 +268,38 @@ end
     return nothing
 end
 
+"""
+    MPPDecomposition
+
+Sampled barcode tracks used to build a multiparameter persistence image.
+
+The stored "summands" are connected tracks of partial bottleneck matchings,
+not a certified direct-sum or indecomposable decomposition of the module.
+Track identities can change at matching ties; stability is not guaranteed.
+
+Each summand is represented as a list of segments in R^2, where each segment
+lies on one of the chosen slice lines and corresponds to one barcode interval
+(birth -> death mapped into the plane).
+
+This is the canonical intermediate object for the multiparameter-image
+workflow:
+
+```julia
+decomp = mpp_decomposition(M, pi; N=8, delta=:auto)
+describe(decomp)
+mpp_decomposition_summary(decomp)
+check_mpp_decomposition(decomp)
+img = mpp_image(decomp; resolution=24, sigma=0.2)
+```
+
+Fields
+- `lines`: vector of `MPPLineSpec` used.
+- `summands`: vector of summands; each summand is a vector of segments.
+  A segment is stored as an `MPPSegment` with packed 2D endpoints `(p, q)` and
+  direction weight `omega`.
+- `weights`: w(I_k) geometric weights for each summand (Float64).
+- `box`: the ambient bounding box (a,b) in R^2 used for normalization.
+"""
 struct MPPDecomposition
     lines::Vector{MPPLineSpec}
     summands::Vector{Vector{MPPSegment}}
@@ -461,7 +466,7 @@ end
 @inline line_specs(decomp::MPPDecomposition) = decomp.lines
 @inline summand_weights(decomp::MPPDecomposition) = decomp.weights
 @inline summand_segments(decomp::MPPDecomposition, k::Integer) = decomp.summands[Int(k)]
-@inline total_segments(decomp::MPPDecomposition)::Int = sum(length, decomp.summands)
+@inline total_segments(decomp::MPPDecomposition)::Int = sum(length, decomp.summands; init=0)
 @inline weight_sum(decomp::MPPDecomposition)::Float64 = sum(decomp.weights)
 @inline bounding_box(decomp::MPPDecomposition) = decomp.box
 
@@ -475,6 +480,7 @@ function describe(decomp::MPPDecomposition)
     w = summand_weights(decomp)
     return (
         kind = :mpp_decomposition,
+        interpretation = :sampled_tracks,
         nlines = nlines(decomp),
         nsummands = nsummands(decomp),
         total_segments = total_segments(decomp),
@@ -503,7 +509,7 @@ function Base.show(io::IO, decomp::MPPDecomposition)
     d = describe(decomp)
     print(io,
           "MPPDecomposition(",
-          "nsummands=", d.nsummands,
+          "sampled_tracks=", d.nsummands,
           ", nlines=", d.nlines,
           ", total_segments=", d.total_segments,
           ")")
@@ -513,7 +519,7 @@ function Base.show(io::IO, ::MIME"text/plain", decomp::MPPDecomposition)
     d = describe(decomp)
     print(io,
           "MPPDecomposition",
-          "\n  nsummands: ", d.nsummands,
+          "\n  sampled tracks: ", d.nsummands,
           "\n  nlines: ", d.nlines,
           "\n  total_segments: ", d.total_segments,
           "\n  weight_sum: ", d.weight_sum,
@@ -686,21 +692,15 @@ end
     return min(u1, u2)
 end
 
-# Convert a barcode dict to an explicit multiset of (b,d) points.
-function _barcode_points(bc::Dict{Tuple{Float64,Float64},Int})
-    pts = Tuple{Float64,Float64}[]
-    for (k,m) in bc
-        for _ in 1:m
-            push!(pts, k)
-        end
-    end
-    return pts
-end
-
-@inline function _barcode_point_count(bc::Dict{Tuple{Float64,Float64},Int})::Int
+# Canonical order makes tied matching choices independent of Dict insertion order.
+# Zero-length bars represent the zero module and must not create image tracks.
+function _barcode_point_count(bc::Dict{Tuple{Float64,Float64},Int})::Int
     n = 0
-    for m in values(bc)
-        n += m
+    for ((b,d),m) in bc
+        isfinite(b) && isfinite(d) && b <= d ||
+            throw(ArgumentError("mpp_decomposition requires finite ordered slice intervals"))
+        m >= 0 || throw(ArgumentError("mpp_decomposition requires nonnegative multiplicities"))
+        b < d && (n += m)
     end
     return n
 end
@@ -709,239 +709,14 @@ function _fill_barcode_points!(dest::Vector{Tuple{Float64,Float64}},
                                start::Int,
                                bc::Dict{Tuple{Float64,Float64},Int})::Int
     idx = start
-    for (k, m) in bc
-        for _ in 1:m
+    for k in sort!(collect(keys(bc)))
+        k[1] == k[2] && continue
+        for _ in 1:bc[k]
             dest[idx] = k
             idx += 1
         end
     end
     return idx
-end
-
-# Bottleneck matching between two multisets of points.
-# Returns a vector `match` of length length(A) with entries in 1:length(B) or 0 (diagonal).
-#
-# We reuse the internal 1D bottleneck machinery already present in this file:
-# `bottleneck_distance(barA, barB)` exists, but it does not expose matching.
-# Therefore, we implement a small exact bipartite matching specialized to the
-# Carriere construction where sizes are typically modest.
-#
-# This is O(n^3) Hungarian-style on the max metric, but n is usually small
-# (number of bars per slice).
-function _bottleneck_matching_points(A::AbstractVector{<:Tuple{Float64,Float64}},
-                                    B::AbstractVector{<:Tuple{Float64,Float64}})
-    n = length(A)
-    m = length(B)
-    # Cost to diagonal for a point (b,d): half persistence in L_infty.
-    diagcost(p) = 0.5*abs(p[2]-p[1])
-
-    # Build square cost matrix by padding with diagonal nodes.
-    N = max(n,m)
-    C = fill(0.0, N, N)
-    for i in 1:N
-        for j in 1:N
-            if i <= n && j <= m
-                # L_infty distance between points.
-                C[i,j] = max(abs(A[i][1]-B[j][1]), abs(A[i][2]-B[j][2]))
-            elseif i <= n
-                C[i,j] = diagcost(A[i])
-            elseif j <= m
-                C[i,j] = diagcost(B[j])
-            else
-                C[i,j] = 0.0
-            end
-        end
-    end
-
-    # Find minimal bottleneck threshold t such that a perfect matching exists.
-    vals = unique(vec(C))
-    sort!(vals)
-    function feasible(t)
-        # Build adjacency: i connects j if C[i,j] <= t.
-        adj = [Int[] for _ in 1:N]
-        for i in 1:N
-            for j in 1:N
-                C[i,j] <= t && push!(adj[i], j)
-            end
-        end
-        # Standard bipartite matching (DFS augment).
-        matchR = fill(0, N)
-        function dfs(u, seen)
-            for v in adj[u]
-                seen[v] && continue
-                seen[v] = true
-                if matchR[v] == 0 || dfs(matchR[v], seen)
-                    matchR[v] = u
-                    return true
-                end
-            end
-            return false
-        end
-        for u in 1:N
-            seen = falses(N)
-            dfs(u, seen) || return false
-        end
-        return true
-    end
-
-    lo = 1
-    hi = length(vals)
-    while lo < hi
-        mid = (lo+hi) >>> 1
-        feasible(vals[mid]) ? (hi = mid) : (lo = mid+1)
-    end
-    thr = vals[lo]
-
-    # Extract one matching at threshold thr.
-    adj = [Int[] for _ in 1:N]
-    for i in 1:N
-        for j in 1:N
-            C[i,j] <= thr && push!(adj[i], j)
-        end
-    end
-    matchR = fill(0, N)
-    function dfs(u, seen)
-        for v in adj[u]
-            seen[v] && continue
-            seen[v] = true
-            if matchR[v] == 0 || dfs(matchR[v], seen)
-                matchR[v] = u
-                return true
-            end
-        end
-        return false
-    end
-    for u in 1:N
-        seen = falses(N)
-        dfs(u, seen) || error("internal error: expected feasible matching")
-    end
-
-    # Convert matchingR (right->left) into left->right for original sizes.
-    matchL = fill(0, n)
-    for j in 1:N
-        i = matchR[j]
-        if i >= 1 && i <= n && j >= 1 && j <= m
-            matchL[i] = j
-        end
-    end
-    return matchL
-end
-
-function _bottleneck_matching_points_flat(pool::Vector{Tuple{Float64,Float64}},
-                                          startA::Int,
-                                          countA::Int,
-                                          startB::Int,
-                                          countB::Int)
-    countA >= 0 || throw(ArgumentError("_bottleneck_matching_points_flat: countA must be nonnegative"))
-    countB >= 0 || throw(ArgumentError("_bottleneck_matching_points_flat: countB must be nonnegative"))
-    countA == 0 && return Int[]
-    (1 <= startA <= length(pool) + 1) || throw(ArgumentError("_bottleneck_matching_points_flat: startA out of range"))
-    (1 <= startB <= length(pool) + 1) || throw(ArgumentError("_bottleneck_matching_points_flat: startB out of range"))
-    startA + countA - 1 <= length(pool) || throw(ArgumentError("_bottleneck_matching_points_flat: A range out of bounds"))
-    startB + countB - 1 <= length(pool) || throw(ArgumentError("_bottleneck_matching_points_flat: B range out of bounds"))
-
-    diagcost(b::Float64, d::Float64) = 0.5 * abs(d - b)
-
-    n = countA
-    m = countB
-    N = max(n, m)
-    C = fill(0.0, N, N)
-    @inbounds for i in 1:N
-        ai = startA + i - 1
-        if i <= n
-            Ab = pool[ai][1]
-            Ad = pool[ai][2]
-            for j in 1:N
-                if j <= m
-                    bj = startB + j - 1
-                    Bb = pool[bj][1]
-                    Bd = pool[bj][2]
-                    C[i, j] = max(abs(Ab - Bb), abs(Ad - Bd))
-                else
-                    C[i, j] = diagcost(Ab, Ad)
-                end
-            end
-        else
-            for j in 1:N
-                if j <= m
-                    bj = startB + j - 1
-                    Bb = pool[bj][1]
-                    Bd = pool[bj][2]
-                    C[i, j] = diagcost(Bb, Bd)
-                else
-                    C[i, j] = 0.0
-                end
-            end
-        end
-    end
-
-    vals = unique(vec(C))
-    sort!(vals)
-    function feasible(t)
-        adj = [Int[] for _ in 1:N]
-        @inbounds for i in 1:N
-            for j in 1:N
-                C[i, j] <= t && push!(adj[i], j)
-            end
-        end
-        matchR = fill(0, N)
-        function dfs(u, seen)
-            for v in adj[u]
-                seen[v] && continue
-                seen[v] = true
-                if matchR[v] == 0 || dfs(matchR[v], seen)
-                    matchR[v] = u
-                    return true
-                end
-            end
-            return false
-        end
-        for u in 1:N
-            seen = falses(N)
-            dfs(u, seen) || return false
-        end
-        return true
-    end
-
-    lo = 1
-    hi = length(vals)
-    while lo < hi
-        mid = (lo + hi) >>> 1
-        feasible(vals[mid]) ? (hi = mid) : (lo = mid + 1)
-    end
-    thr = vals[lo]
-
-    adj = [Int[] for _ in 1:N]
-    @inbounds for i in 1:N
-        for j in 1:N
-            C[i, j] <= thr && push!(adj[i], j)
-        end
-    end
-    matchR = fill(0, N)
-    function dfs(u, seen)
-        for v in adj[u]
-            seen[v] && continue
-            seen[v] = true
-            if matchR[v] == 0 || dfs(matchR[v], seen)
-                matchR[v] = u
-                return true
-            end
-        end
-        return false
-    end
-    for u in 1:N
-        seen = falses(N)
-        dfs(u, seen) || error("internal error: expected feasible matching")
-    end
-
-    matchL = fill(0, n)
-    @inbounds for j in 1:N
-        i = matchR[j]
-        if i >= 1 && i <= n && j >= 1 && j <= m
-            matchL[i] = j
-        end
-    end
-    return matchL
 end
 
 # -------------------- line families L_m^N, L_M^N, L_delta ---------------------
@@ -957,24 +732,10 @@ end
 
 function _make_line_spec(arr::FiberedArrangement2D,
                          dir_in::AbstractVector{<:Real},
-                         off_in::Real;
-                         tie_break::Symbol=:center)
+                         off_in::Real)
     d = _normalize_dir(_as_float2(dir_in), arr.normalize_dirs)
-    off = Float64(off_in)
-    # Nudge offsets away from boundaries if needed.
-    cid = fibered_cell_id(arr, d, off; tie_break=tie_break)
-    if cid === nothing
-        eps = max(10.0*arr.atol, 1e-12)
-        cid2 = fibered_cell_id(arr, d, off+eps; tie_break=tie_break)
-        if cid2 !== nothing
-            off += eps
-        else
-            cid2 = fibered_cell_id(arr, d, off-eps; tie_break=tie_break)
-            if cid2 !== nothing
-                off -= eps
-            end
-        end
-    end
+    # Normal offsets scale with the direction; preserve the physical line.
+    off = Float64(off_in) * norm(d) / norm(dir_in)
     x0 = _line_basepoint_from_normal_offset_2d(d, off)
     omega = _omega_from_dir(d)
     return MPPLineSpec(d, off, x0, omega)
@@ -984,7 +745,10 @@ function _line_families_carriere(arr::FiberedArrangement2D;
                                  N::Int=16,
                                  delta::Union{Real,Symbol}=:auto,
                                  tie_break::Symbol=:center)
-    N > 1 || error("mpp_image: N must be >= 2")
+    N > 1 || throw(ArgumentError("mpp_decomposition: N must be >= 2"))
+    tie_break in (:center, :up, :down) || throw(ArgumentError("invalid MPPI tie_break"))
+    (delta === :auto || (delta isa Real && isfinite(delta) && delta > 0)) ||
+        throw(ArgumentError("mpp_decomposition: delta must be :auto or finite and positive"))
     lo, hi = _box_corners_2d(arr.box)
     mpt = lo
     Mpt = hi
@@ -1003,18 +767,18 @@ function _line_families_carriere(arr::FiberedArrangement2D;
     for d in dirs
         (n1,n2) = _normal_from_dir_2d(d)
         off = n1*mpt[1] + n2*mpt[2]
-        push!(lines, _make_line_spec(arr, d, off; tie_break=tie_break))
+        push!(lines, _make_line_spec(arr, d, off))
     end
 
     # L_M^N: lines through top-right corner M.
     for d in dirs
         (n1,n2) = _normal_from_dir_2d(d)
         off = n1*Mpt[1] + n2*Mpt[2]
-        push!(lines, _make_line_spec(arr, d, off; tie_break=tie_break))
+        push!(lines, _make_line_spec(arr, d, off))
     end
 
     # L_delta: slope-1 lines sweeping across the box.
-    d45 = Float64[1.0, 1.0]
+    d45 = Float64[inv(sqrt(2.0)), inv(sqrt(2.0))]
     (n1,n2) = _normal_from_dir_2d(d45)
     # compute min/max normal offsets over corners
     corners = [
@@ -1034,12 +798,15 @@ function _line_families_carriere(arr::FiberedArrangement2D;
     else
         dstep = Float64(delta)
     end
-    dstep > 0.0 || error("mpp_image: delta must be positive")
-
-    off = omin
-    while off <= omax + 1e-12
-        push!(lines, _make_line_spec(arr, d45, off; tie_break=tie_break))
-        off += dstep
+    isfinite(dstep) && dstep > 0.0 ||
+        throw(ArgumentError("mpp_decomposition: the box must have finite positive area"))
+    omin + dstep > omin || throw(ArgumentError("mpp_decomposition: delta is below offset resolution"))
+    steps = delta === :auto ? Float64(N) : (omax - omin) / dstep
+    isfinite(steps) && steps < typemax(Int) - length(lines) ||
+        throw(ArgumentError("mpp_decomposition: delta requests too many slice lines"))
+    for j in 0:floor(Int, steps)
+        off = delta === :auto && j == N ? omax : omin + j*dstep
+        push!(lines, _make_line_spec(arr, d45, off))
     end
 
     return lines
@@ -1050,7 +817,7 @@ end
 """
     mpp_decomposition(cache::FiberedBarcodeCache2D; N=16, delta=:auto, q=1.0, tie_break=:center)
 
-Compute the Carriere MPPI summand decomposition from a fibered barcode cache.
+Build sampled bottleneck tracks from a fibered barcode cache.
 
 This is the cheap-first entrypoint when you already have a
 [`FiberedBarcodeCache2D`](@ref). It builds only the geometric decomposition, not
@@ -1064,10 +831,21 @@ img = mpp_image(decomp; resolution=24, sigma=0.2)
 ```
 
 Keyword arguments
-- `N`: number of slice directions used in the Carriere construction.
-- `delta`: vineyard matching threshold. Use `:auto` for the default heuristic.
-- `q`: exponent in the geometric summand-weight formula.
-- `tie_break`: deterministic rule for ambiguous local assignments.
+- `N`: angular subdivision count (`N >= 2`); each corner fan uses `N-1` directions.
+- `delta`: perpendicular spacing between slope-one sweep lines; `:auto` uses
+  the normal-offset span divided by `N`. It does not filter matches.
+- `q`: finite nonnegative exponent in the hull-area weight. At `q=0`, every
+  nonempty track has weight one, including single-segment tracks.
+- `tie_break`: arrangement-boundary choice (`:center`, `:up`, or `:down`),
+  forwarded to barcode queries. Optimal matching ties use deterministic bar order.
+
+Lines are ordered as the bottom-left angular fan, the top-right angular fan,
+then the slope-one sweep. Matchings also connect consecutive family endpoints;
+this is a sampling convention, not a claim of a continuous vineyard sweep.
+Matching uses Euclidean arclength from each line's orthogonal-projection
+basepoint, independent of the cache's direction normalization. Unmatched bars
+terminate or start tracks. Zero-length bars are discarded. The window clips
+all segments; these tracks need not be algebraic summands or stable under ties.
 
 Returns an [`MPPDecomposition`](@ref).
 """
@@ -1077,7 +855,11 @@ function mpp_decomposition(cache::FiberedBarcodeCache2D;
                            q::Real=1.0,
                            tie_break::Symbol=:center)
 
+    isfinite(q) && q >= 0 || throw(ArgumentError("mpp_decomposition: q must be finite and nonnegative"))
     arr = cache.arrangement
+    lo, hi = _box_corners_2d(arr.box)
+    all(isfinite, lo) && all(isfinite, hi) && all(lo .< hi) ||
+        throw(ArgumentError("mpp_decomposition requires a finite box of positive area"))
     lines = _line_families_carriere(arr; N=N, delta=delta, tie_break=tie_break)
     nlines = length(lines)
 
@@ -1089,19 +871,11 @@ function mpp_decomposition(cache::FiberedBarcodeCache2D;
     total = 0
     for i in 1:nlines
         spec = lines[i]
-        bc = fibered_barcode(cache, spec.dir, spec.off; values=:t, tie_break=:center)
+        bc = fibered_barcode(cache, spec.dir, spec.off; values=:t, tie_break=tie_break)
         bc_dicts[i] = bc
         cnt = _barcode_point_count(bc)
         counts[i] = cnt
         total += cnt
-    end
-
-    # Union-find for tracking connected components across matchings.
-    offsets = Vector{Int}(undef, nlines)
-    next_offset = 0
-    for i in 1:nlines
-        offsets[i] = next_offset
-        next_offset += counts[i]
     end
 
     bcs = Vector{Tuple{Float64,Float64}}(undef, total)
@@ -1109,7 +883,34 @@ function mpp_decomposition(cache::FiberedBarcodeCache2D;
     for i in 1:nlines
         cursor = _fill_barcode_points!(bcs, cursor, bc_dicts[i])
     end
+    return _mpp_decomposition_from_barcodes(lines, bcs, counts, (lo,hi); q=q, atol=arr.atol)
+end
 
+# Track assembly is separate from cache queries so geometry and witness contracts
+# have one owner boundary. Inputs are sorted positive-length finite slice bars.
+function _mpp_decomposition_from_barcodes(lines::Vector{MPPLineSpec},
+                                         bcs::Vector{Tuple{Float64,Float64}},
+                                         counts::Vector{Int}, box;
+                                         q::Real=1.0, atol::Real=0.0)
+    isfinite(q) && q >= 0 || throw(ArgumentError("mpp_decomposition: q must be finite and nonnegative"))
+    length(lines) == length(counts) && all(>=(0), counts) && sum(counts) == length(bcs) ||
+        throw(ArgumentError("mpp_decomposition: inconsistent line/barcode counts"))
+    all(p -> isfinite(p[1]) && isfinite(p[2]) && p[1] < p[2], bcs) ||
+        throw(ArgumentError("mpp_decomposition: track intervals must be finite with positive length"))
+    lo, hi = _box_corners_2d(box)
+    areaR = (hi[1]-lo[1])*(hi[2]-lo[2])
+    isfinite(areaR) && areaR > 0 || throw(ArgumentError("mpp_decomposition: box must have finite positive area"))
+    total, nlines = length(bcs), length(lines)
+    offsets = cumsum(vcat(0, counts[1:end-1]))
+    # Comparisons use L2 arclength, while physical segments retain cache t values.
+    matching_bcs = similar(bcs)
+    for i in 1:nlines
+        scale = norm(lines[i].dir)
+        for j in (offsets[i]+1):(offsets[i]+counts[i])
+            b,d = bcs[j]
+            matching_bcs[j] = (scale*b, scale*d)
+        end
+    end
     parent = collect(1:total)
     rankv = fill(0, total)
     findp(x) = (parent[x] == x ? x : (parent[x] = findp(parent[x])))
@@ -1132,13 +933,9 @@ function mpp_decomposition(cache::FiberedBarcodeCache2D;
         countA = counts[i]
         countB = counts[i + 1]
         (countA == 0 || countB == 0) && continue
-        match = _bottleneck_matching_points_flat(
-            bcs,
-            offsets[i] + 1,
-            countA,
-            offsets[i + 1] + 1,
-            countB,
-        )
+        A = view(matching_bcs, offsets[i]+1:offsets[i]+countA)
+        B = view(matching_bcs, offsets[i+1]+1:offsets[i+1]+countB)
+        match = _bottleneck_matching_points(A, B).a_to_b
         for a in 1:length(match)
             b = match[a]
             b == 0 && continue
@@ -1147,10 +944,6 @@ function mpp_decomposition(cache::FiberedBarcodeCache2D;
             unite(ida, idb)
         end
     end
-
-    lo, hi = _box_corners_2d(arr.box)
-    areaR = (hi[1]-lo[1])*(hi[2]-lo[2])
-    areaR > 0.0 || error("mpp_decomposition: box has zero area")
 
     total == 0 && return MPPDecomposition(lines, Vector{Vector{MPPSegment}}(), Float64[], (lo, hi))
 
@@ -1211,7 +1004,7 @@ function mpp_decomposition(cache::FiberedBarcodeCache2D;
             pts_for_hull[idx + 1] = seg.q
             idx += 2
         end
-        hull = _convex_hull_2d(pts_for_hull; atol=arr.atol)
+        hull = _convex_hull_2d(pts_for_hull; atol=Float64(atol))
         areaI = _polygon_area_2d(hull)
         weights[cid] = q == 0.0 ? 1.0 : (areaI / areaR)^Float64(q)
     end
@@ -1321,7 +1114,7 @@ end
               sigma=0.05, cutoff_radius=nothing, cutoff_tol=nothing,
               segment_prune=true)
 
-Evaluate a Carriere multiparameter persistence image from a precomputed vineyard decomposition.
+Evaluate a multiparameter persistence image from precomputed sampled tracks.
 
 This method does not recompute barcodes or matchings; it only evaluates the kernel sum
 on a grid in R^2.
@@ -1404,6 +1197,7 @@ function mpp_image(decomp::MPPDecomposition;
     #   because img[iy, ix] has the first index varying fastest.
     if threads && Threads.nthreads() > 1
         Threads.@threads for ix in 1:length(xg)
+            local x, y, acc, wI, bestd2, bestomega, segs, seg, d2
             x = xg[ix]
             for iy in 1:length(yg)
                 y = yg[iy]
@@ -1579,10 +1373,10 @@ end
 """
     mpp_decomposition(M, pi, opts::InvariantOptions; kwargs...)
 
-Compute a 2D multiparameter persistence (MPP) decomposition for `M` over `pi`.
+Build sampled 2D barcode tracks for `M` over `pi`.
 
 This wrapper:
-1) builds an exact 2D fibered arrangement (including axes),
+1) builds a 2D fibered arrangement (including axes),
 2) builds a fibered barcode cache,
 3) calls `mpp_decomposition(cache)`.
 
@@ -1622,7 +1416,7 @@ end
 """
     mpp_image(M, pi, opts::InvariantOptions; kwargs...)
 
-Compute the 2D MPP image for `M` over `pi` via an exact fibered cache.
+Compute the 2D MPP image for `M` over `pi` via a fibered cache.
 
 Opts usage:
 - `opts.box` and `opts.strict` control arrangement/windowing behavior.
@@ -2286,32 +2080,16 @@ function _mp_landscape_from_slice_barcodes(
         throw(ArgumentError("mp_landscape: slice barcode grid shape must match slice weight shape"))
 
     vals = zeros(Float64, nd, no, kk, nt)
-    if threads && Threads.nthreads() > 1 && (nd * no) > 1
-        point_scratch_by_thread = [Tuple{Float64,Float64}[] for _ in 1:Threads.nthreads()]
-        tent_scratch_by_thread = [Float64[] for _ in 1:Threads.nthreads()]
-        Threads.@threads for idx in 1:(nd * no)
-            i = div(idx - 1, no) + 1
-            j = mod(idx - 1, no) + 1
-            tid = Threads.threadid()
-            _persistence_landscape_values!(
-                @view(vals[i, j, :, :]),
-                bars[i, j],
-                tg;
-                points_scratch=point_scratch_by_thread[tid],
-                tent_scratch=tent_scratch_by_thread[tid],
-            )
-        end
-    else
+    _foreach_workchunk(nd * no; threads=threads) do work, _
+        local points_scratch, tent_scratch, i, j
         points_scratch = Tuple{Float64,Float64}[]
         tent_scratch = Float64[]
-        @inbounds for i in 1:nd, j in 1:no
+        for idx in work
+            i = div(idx - 1, no) + 1
+            j = mod1(idx, no)
             _persistence_landscape_values!(
-                @view(vals[i, j, :, :]),
-                bars[i, j],
-                tg;
-                points_scratch=points_scratch,
-                tent_scratch=tent_scratch,
-            )
+                @view(vals[i, j, :, :]), bars[i, j], tg;
+                points_scratch=points_scratch, tent_scratch=tent_scratch)
         end
     end
 
@@ -2667,48 +2445,15 @@ function mp_landscape(
     nQ = nvertices(M.Q)
     use_array_memo = _use_array_memo(nQ)
     max_chain = isempty(plan.chain_len) ? 0 : maximum(plan.chain_len)
-    if threads && Threads.nthreads() > 1
-        nT = Threads.nthreads()
-        memo_by_thread = use_array_memo ?
-            [_new_array_memo(K, nQ) for _ in 1:nT] :
-            [Dict{Tuple{Int,Int}, AbstractMatrix{K}}() for _ in 1:nT]
-        rank_by_thread = [Matrix{Int}(undef, max_chain, max_chain) for _ in 1:nT]
-        point_scratch_by_thread = [Tuple{Float64,Float64}[] for _ in 1:Threads.nthreads()]
-        tent_scratch_by_thread = [Float64[] for _ in 1:Threads.nthreads()]
-        Threads.@threads for idx in 1:ns
-            chain = plan.chains[idx]
-            s = plan.vals_start[idx]
-            l = plan.vals_len[idx]
-            if isempty(chain) || s == 0 || l == 0
-                continue
-            end
-            i = div(idx - 1, no) + 1
-            j = (idx - 1) % no + 1
-            tid = Threads.threadid()
-            endpoints = _extended_values_view(@view(plan.vals_pool[s:s + l - 1]))
-            bc = _slice_barcode_packed_with_workspace(
-                M,
-                chain,
-                endpoints,
-                cc,
-                memo_by_thread[tid],
-                rank_by_thread[tid],
-            )
-            _persistence_landscape_values!(
-                @view(vals[i, j, :, :]),
-                bc,
-                tg;
-                points_scratch=point_scratch_by_thread[tid],
-                tent_scratch=tent_scratch_by_thread[tid],
-            )
-        end
-    else
+    _foreach_workchunk(ns; threads=threads) do work, _
+        local memo, rank_work, points_scratch, tent_scratch, i, j, chain, s, l, endpoints, bc
         memo = use_array_memo ? _new_array_memo(K, nQ) : Dict{Tuple{Int,Int}, AbstractMatrix{K}}()
         rank_work = Matrix{Int}(undef, max_chain, max_chain)
         points_scratch = Tuple{Float64,Float64}[]
         tent_scratch = Float64[]
-        @inbounds for i in 1:nd, j in 1:no
-            idx = _plan_idx(no, i, j)
+        @inbounds for idx in work
+            i = div(idx - 1, no) + 1
+            j = mod1(idx, no)
             chain = plan.chains[idx]
             s = plan.vals_start[idx]
             l = plan.vals_len[idx]

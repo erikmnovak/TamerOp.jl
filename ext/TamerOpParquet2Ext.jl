@@ -3,15 +3,9 @@ module TamerOpParquet2Ext
 using Parquet2
 using Tables
 
-const TO = let pm = nothing
-    if isdefined(Main, :TamerOp)
-        pm = getfield(Main, :TamerOp)
-    else
-        @eval import TamerOp
-        pm = TamerOp
-    end
-    pm
-end
+import TamerOp
+
+const TO = TamerOp
 
 const FEA = TO.Featurizers
 

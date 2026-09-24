@@ -22,6 +22,9 @@ module HomExtEngine
     using ...FieldLinAlg
     using ...FiniteFringe: AbstractPoset, FinitePoset, Upset, Downset, cover_edges, nvertices
     using ...IndicatorTypes: UpsetPresentation, DownsetCopresentation
+    using ...IndicatorResolutions: UpsetResolutionResult, DownsetResolutionResult,
+                                   IndicatorResolutionsResult, resolution_modules,
+                                   resolution_maps, augmentation, coaugmentation
     import ..DerivedFunctors: _build_total_offsets_grid, _total_offset_get
 
     """
@@ -56,15 +59,15 @@ module HomExtEngine
     mutable struct CompCache{K}
         P::AbstractPoset
         adj::Vector{Vector{Int}}
-        components_of_intersection_shards::Vector{Dict{Tuple{UInt,UInt}, Tuple{Vector{Int}, Int}}}
-        component_inclusion_matrix_shards::Vector{Dict{NTuple{4,UInt},SparseMatrixCSC{K,Int}}}
+        lock::ReentrantLock
+        components_of_intersection::Dict{Tuple{UInt,UInt}, Tuple{Vector{Int}, Int}}
+        component_inclusion_matrix::Dict{NTuple{4,UInt},SparseMatrixCSC{K,Int}}
 
         function CompCache{K}(P::AbstractPoset) where {K}
             adj = _hasse_undirected(P)
-            nshards = max(1, Threads.maxthreadid())
-            return new(P, adj,
-                       [Dict{Tuple{UInt,UInt}, Tuple{Vector{Int}, Int}}() for _ in 1:nshards],
-                       [Dict{NTuple{4,UInt},SparseMatrixCSC{K,Int}}() for _ in 1:nshards])
+            return new(P, adj, ReentrantLock(),
+                       Dict{Tuple{UInt,UInt}, Tuple{Vector{Int}, Int}}(),
+                       Dict{NTuple{4,UInt},SparseMatrixCSC{K,Int}}())
         end
     end
 
@@ -106,9 +109,6 @@ module HomExtEngine
         _HomTripletWorkspace{K}(Int[], Int[], K[], Dict{Tuple{Int,Int},SparseMatrixCSC{K,Int}}())
 
     @inline _mask_signature(mask::BitVector)::UInt = UInt(objectid(mask))
-
-    @inline _compcache_shard_index(shards) = min(length(shards), max(1, Threads.threadid()))
-    @inline _compcache_shard(shards) = shards[_compcache_shard_index(shards)]
 
     """
         _components_of_mask(adj, mask) -> (comp_id, ncomp)
@@ -167,13 +167,12 @@ module HomExtEngine
     """
     function _components_cached!(C::CompCache, U::Upset, uid::Int, D::Downset, did::Int)
         k = (_mask_signature(U.mask), _mask_signature(D.mask))
-        shard = _compcache_shard(C.components_of_intersection_shards)
-        if haskey(shard, k)
-            return shard[k]
-        end
+        cached = lock(() -> get(C.components_of_intersection, k, nothing), C.lock)
+        cached === nothing || return cached
         val = _components_of_intersection(C.P, U, D)
-        shard[k] = val
-        return val
+        return lock(C.lock) do
+            get!(C.components_of_intersection, k, val)
+        end
     end
 
     """
@@ -203,10 +202,8 @@ module HomExtEngine
         key = (_mask_signature(Ubig.mask), _mask_signature(Dbig.mask),
                _mask_signature(Usmall.mask), _mask_signature(Dsmall.mask))
 
-        shard = _compcache_shard(C.component_inclusion_matrix_shards)
-        if haskey(shard, key)
-            return shard[key]
-        end
+        cached = lock(() -> get(C.component_inclusion_matrix, key, nothing), C.lock)
+        cached === nothing || return cached
 
         comps_big, nb = _components_cached!(C, Ubig, uid_big, Dbig, did_big)
         comps_small, ns = _components_cached!(C, Usmall, uid_small, Dsmall, did_small)
@@ -235,8 +232,9 @@ module HomExtEngine
         end
 
         M = sparse(rows, cols, vals, ns, nb)
-        shard[key] = M
-        return M
+        return lock(C.lock) do
+            get!(C.component_inclusion_matrix, key, M)
+        end
     end
 
     function size_block(C::CompCache, U_by_a, D_by_b, a::Int, b::Int)
@@ -383,7 +381,7 @@ module HomExtEngine
         P = F[1].P
         compcache = CompCache{K}(P)
         caches = threads && Threads.nthreads() > 1 ?
-            [CompCache{K}(P) for _ in 1:max(1, Threads.maxthreadid())] :
+            [CompCache{K}(P) for _ in 1:max(1, Threads.nthreads())] :
             Vector{CompCache{K}}()
 
         U_by_a = [f.U0 for f in F]
@@ -396,13 +394,18 @@ module HomExtEngine
         # size of Hom(F_a, E^b) in the component basis.
         # Use the module-level helper (also used by build_hom_bicomplex_data).
 
+        # Each deterministic work chunk owns its cache and triplet workspace;
+        # ownership must not depend on a task retaining the same thread id.
         # compute block offsets per total degree
         if threads && Threads.nthreads() > 1
-            Threads.@threads for idx in 1:((A + 1) * (B + 1))
-                a = (idx - 1) % (A + 1)
-                b = Int(div(idx - 1, (A + 1)))
-                c = caches[_compcache_shard_index(caches)]
-                block_sizes[a+1, b+1] = size_block(c, U_by_a, D_by_b, a, b)
+            Threads.@threads for shard in eachindex(caches)
+                local a, b, c
+                for idx in shard:length(caches):((A + 1) * (B + 1))
+                    a = (idx - 1) % (A + 1)
+                    b = Int(div(idx - 1, (A + 1)))
+                    local c = caches[shard]
+                    block_sizes[a+1, b+1] = size_block(c, U_by_a, D_by_b, a, b)
+                end
             end
         else
             for a in 0:A, b in 0:B
@@ -417,81 +420,84 @@ module HomExtEngine
         # prepare differentials d^t : C^t to C^{t+1}
         dts = Vector{SparseMatrixCSC{K,Int}}(undef, T-1)
         trip_ws = _HOM_ASSEMBLY_USE_TRIPLETS[] ?
-            [_hom_triplet_workspace(K) for _ in 1:max(1, Threads.maxthreadid())] :
+            [_hom_triplet_workspace(K) for _ in 1:max(1, Threads.nthreads())] :
             _HomTripletWorkspace{K}[]
 
         # fill post- and pre-composition contributions
         if threads && Threads.nthreads() > 1
-            Threads.@threads for t in tmin:(tmax - 1)
-                c = caches[_compcache_shard_index(caches)]
-                idx = t - tmin + 1
-                use_triplets = _HOM_ASSEMBLY_USE_TRIPLETS[]
-                ws = use_triplets ? _reset!(trip_ws[Threads.threadid()]) : nothing
-                M = use_triplets ? nothing : spzeros(K, dimsCt[idx+1], dimsCt[idx])
+            Threads.@threads for shard in eachindex(caches)
+                local c, idx, use_triplets, ws, M, alo, ahi, b, U, D, src0, dst0, coeff, Bmat, r0, c0, sign, Unexts
+                for t in (tmin + shard - 1):length(caches):(tmax - 1)
+                    local c = caches[shard]
+                    idx = t - tmin + 1
+                    use_triplets = _HOM_ASSEMBLY_USE_TRIPLETS[]
+                    local ws = use_triplets ? _reset!(trip_ws[shard]) : nothing
+                    M = use_triplets ? nothing : spzeros(K, dimsCt[idx+1], dimsCt[idx])
 
-                alo = max(0, t - B)
-                ahi = min(A, t)
-                for a in alo:ahi
-                    b = t - a
-                    U = U_by_a[a+1]
-                    D = D_by_b[b+1]
-                    src0 = _total_offset_get(offs_by_ta, t, tmin, 0, a)
+                    alo = max(0, t - B)
+                    ahi = min(A, t)
+                    for a in alo:ahi
+                        b = t - a
+                        U = U_by_a[a+1]
+                        D = D_by_b[b+1]
+                        src0 = _total_offset_get(offs_by_ta, t, tmin, 0, a)
 
-                    # post: Hom(F_a,E^b) -> Hom(F_a,E^{b+1}) via rho (if b < B)
-                    if b < B
-                        dst0 = _total_offset_get(offs_by_ta, t + 1, tmin, 0, a)
-                        for (rowD1, D1j) in enumerate(D_by_b[b+2]), (colD0, D0j) in enumerate(D)
-                            coeff = dE[b+1][rowD1, colD0]
-                            if coeff != zero(K)
-                                for (i, Uai) in enumerate(U)
-                                    Bmat = _component_inclusion_matrix_cached(c,
-                                        Uai, D0j, i, colD0,
-                                        Uai, D1j, i, rowD1, K)
+                        # post: Hom(F_a,E^b) -> Hom(F_a,E^{b+1}) via rho (if b < B)
+                        if b < B
+                            dst0 = _total_offset_get(offs_by_ta, t + 1, tmin, 0, a)
+                            for (rowD1, D1j) in enumerate(D_by_b[b+2]), (colD0, D0j) in enumerate(D)
+                                coeff = dE[b+1][rowD1, colD0]
+                                if coeff != zero(K)
+                                    for (i, Uai) in enumerate(U)
+                                        Bmat = _component_inclusion_matrix_cached(c,
+                                            Uai, D0j, i, colD0,
+                                            Uai, D1j, i, rowD1, K)
 
-                                    if nnz(Bmat) > 0
-                                        r0 = dst0 + _block_offset_lookup(offset_tables, c, U_by_a, D_by_b, a, b+1, rowD1, i) + 1
-                                        c0 = src0 + _block_offset_lookup(offset_tables, c, U_by_a, D_by_b, a, b,   colD0, i) + 1
-                                        if use_triplets
-                                            _append_shifted_scaled_triplets!(ws.I, ws.J, ws.V, Bmat, r0, c0; scale=coeff)
-                                        else
-                                            _accum!(M, r0, c0, coeff * Bmat)
+                                        if nnz(Bmat) > 0
+                                            r0 = dst0 + _block_offset_lookup(offset_tables, c, U_by_a, D_by_b, a, b+1, rowD1, i) + 1
+                                            c0 = src0 + _block_offset_lookup(offset_tables, c, U_by_a, D_by_b, a, b,   colD0, i) + 1
+                                            if use_triplets
+                                                _append_shifted_scaled_triplets!(ws.I, ws.J, ws.V, Bmat, r0, c0; scale=coeff)
+                                            else
+                                                _accum!(M, r0, c0, coeff * Bmat)
+                                            end
+                                        end
+                                    end
+                                end
+                            end
+                        end
+
+                        # pre: Hom(F_a,E^b) -> Hom(F_{a-1},E^b) via delta (if a < A) with sign (-1)^b
+                        if a < A
+                            sign = isodd(b) ? -one(K) : one(K)     # (-1)^b
+                            dst0 = _total_offset_get(offs_by_ta, t + 1, tmin, 0, a + 1)
+
+                            Unexts = U_by_a[a+2]  # U_{a+1}
+                            for (rowUnext, Unext) in enumerate(Unexts), (colUcur, Ucur) in enumerate(U)
+                                coeff = dF[a+1][rowUnext, colUcur]  # delta_a : U_{a+1} -> U_a
+                                if coeff != zero(K)
+                                    for (j, Dbj) in enumerate(D)
+                                        # restriction: (Ucur cap Dbj) -> (Unext cap Dbj)
+                                        Bmat = _component_inclusion_matrix_cached(c,
+                                            Ucur,  Dbj, colUcur,  j,
+                                            Unext, Dbj, rowUnext, j, K)
+
+                                        if nnz(Bmat) > 0
+                                            r0 = dst0 + _block_offset_lookup(offset_tables, c, U_by_a, D_by_b, a+1, b, j, rowUnext) + 1
+                                            c0 = src0 + _block_offset_lookup(offset_tables, c, U_by_a, D_by_b, a,   b, j, colUcur)  + 1
+                                            if use_triplets
+                                                _append_shifted_scaled_triplets!(ws.I, ws.J, ws.V, Bmat, r0, c0; scale=(sign * coeff))
+                                            else
+                                                _accum!(M, r0, c0, (sign * coeff) * Bmat)
+                                            end
                                         end
                                     end
                                 end
                             end
                         end
                     end
-
-                    # pre: Hom(F_a,E^b) -> Hom(F_{a-1},E^b) via delta (if a < A) with sign (-1)^b
-                    if a < A
-                        sign = isodd(b) ? -one(K) : one(K)     # (-1)^b
-                        dst0 = _total_offset_get(offs_by_ta, t + 1, tmin, 0, a + 1)
-
-                        Unexts = U_by_a[a+2]  # U_{a+1}
-                        for (rowUnext, Unext) in enumerate(Unexts), (colUcur, Ucur) in enumerate(U)
-                            coeff = dF[a+1][rowUnext, colUcur]  # delta_a : U_{a+1} -> U_a
-                            if coeff != zero(K)
-                                for (j, Dbj) in enumerate(D)
-                                    # restriction: (Ucur cap Dbj) -> (Unext cap Dbj)
-                                    Bmat = _component_inclusion_matrix_cached(c,
-                                        Ucur,  Dbj, colUcur,  j,
-                                        Unext, Dbj, rowUnext, j, K)
-
-                                    if nnz(Bmat) > 0
-                                        r0 = dst0 + _block_offset_lookup(offset_tables, c, U_by_a, D_by_b, a+1, b, j, rowUnext) + 1
-                                        c0 = src0 + _block_offset_lookup(offset_tables, c, U_by_a, D_by_b, a,   b, j, colUcur)  + 1
-                                        if use_triplets
-                                            _append_shifted_scaled_triplets!(ws.I, ws.J, ws.V, Bmat, r0, c0; scale=(sign * coeff))
-                                        else
-                                            _accum!(M, r0, c0, (sign * coeff) * Bmat)
-                                        end
-                                    end
-                                end
-                            end
-                        end
-                    end
+                    dts[idx] = use_triplets ? _finalize_sparse!(ws, dimsCt[idx+1], dimsCt[idx]) : M
                 end
-                dts[idx] = use_triplets ? _finalize_sparse!(ws, dimsCt[idx+1], dimsCt[idx]) : M
             end
         else
             ws = _HOM_ASSEMBLY_USE_TRIPLETS[] ? trip_ws[1] : nothing
@@ -606,19 +612,24 @@ module HomExtEngine
         P = F[1].P
         compcache = CompCache{K}(P)
         caches = threads && Threads.nthreads() > 1 ?
-            [CompCache{K}(P) for _ in 1:max(1, Threads.maxthreadid())] :
+            [CompCache{K}(P) for _ in 1:max(1, Threads.nthreads())] :
             Vector{CompCache{K}}()
         U_by_a = [f.U0 for f in F]
         D_by_b = [e.D0 for e in E]
 
+        # Work chunks own their mutable caches/scratch across each parallel
+        # phase; task migration cannot make two chunks share a workspace.
         # Block dimensions.
         dims = zeros(Int, A+1, B+1)
         if threads && Threads.nthreads() > 1
-            Threads.@threads for idx in 1:((A + 1) * (B + 1))
-                a = (idx - 1) % (A + 1)
-                b = Int(div(idx - 1, (A + 1)))
-                c = caches[_compcache_shard_index(caches)]
-                dims[a+1, b+1] = size_block(c, U_by_a, D_by_b, a, b)
+            Threads.@threads for shard in eachindex(caches)
+                local a, b, c
+                for idx in shard:length(caches):((A + 1) * (B + 1))
+                    a = (idx - 1) % (A + 1)
+                    b = Int(div(idx - 1, (A + 1)))
+                    local c = caches[shard]
+                    dims[a+1, b+1] = size_block(c, U_by_a, D_by_b, a, b)
+                end
             end
         else
             for a in 0:A, b in 0:B
@@ -639,43 +650,46 @@ module HomExtEngine
         end
 
         trip_ws = _HOM_ASSEMBLY_USE_TRIPLETS[] ?
-            [_hom_triplet_workspace(K) for _ in 1:max(1, Threads.maxthreadid())] :
+            [_hom_triplet_workspace(K) for _ in 1:max(1, Threads.nthreads())] :
             _HomTripletWorkspace{K}[]
 
         # Vertical differential: postcomposition with dE[b+1] : E^b -> E^{b+1}.
         if threads && Threads.nthreads() > 1
-            Threads.@threads for idx in 1:((A + 1) * B)
-                a = (idx - 1) % (A + 1)
-                b = Int(div(idx - 1, (A + 1)))
-                c = caches[_compcache_shard_index(caches)]
-                U = U_by_a[a+1]
-                D0 = D_by_b[b+1]
-                D1 = D_by_b[b+2]
-                use_triplets = _HOM_ASSEMBLY_USE_TRIPLETS[]
-                ws = use_triplets ? _reset!(trip_ws[Threads.threadid()]) : nothing
-                M = use_triplets ? nothing : spzeros(K, dims[a+1, b+2], dims[a+1, b+1])
-                for rowD1 in 1:length(D1), colD0 in 1:length(D0)
-                    coeff = dE[b+1][rowD1, colD0]
-                    if iszero(coeff)
-                        continue
-                    end
-                    for i in 1:length(U)
-                        Bmat = _component_inclusion_matrix_cached(
-                            c,
-                            U[i], D0[colD0], i, colD0,
-                            U[i], D1[rowD1], i, rowD1,
-                            K
-                        )
-                        r0 = _block_offset_lookup(offset_tables, c, U_by_a, D_by_b, a, b+1, rowD1, i) + 1
-                        c0 = _block_offset_lookup(offset_tables, c, U_by_a, D_by_b, a, b,   colD0, i) + 1
-                        if use_triplets
-                            _append_shifted_scaled_triplets!(ws.I, ws.J, ws.V, Bmat, r0, c0; scale=coeff)
-                        else
-                            _accum!(M, r0, c0, coeff * Bmat)
+            Threads.@threads for shard in eachindex(caches)
+                local a, b, c, U, D0, D1, use_triplets, ws, M, coeff, Bmat, r0, c0
+                for idx in shard:length(caches):((A + 1) * B)
+                    a = (idx - 1) % (A + 1)
+                    b = Int(div(idx - 1, (A + 1)))
+                    local c = caches[shard]
+                    U = U_by_a[a+1]
+                    D0 = D_by_b[b+1]
+                    D1 = D_by_b[b+2]
+                    use_triplets = _HOM_ASSEMBLY_USE_TRIPLETS[]
+                    local ws = use_triplets ? _reset!(trip_ws[shard]) : nothing
+                    M = use_triplets ? nothing : spzeros(K, dims[a+1, b+2], dims[a+1, b+1])
+                    for rowD1 in 1:length(D1), colD0 in 1:length(D0)
+                        coeff = dE[b+1][rowD1, colD0]
+                        if iszero(coeff)
+                            continue
+                        end
+                        for i in 1:length(U)
+                            Bmat = _component_inclusion_matrix_cached(
+                                c,
+                                U[i], D0[colD0], i, colD0,
+                                U[i], D1[rowD1], i, rowD1,
+                                K
+                            )
+                            r0 = _block_offset_lookup(offset_tables, c, U_by_a, D_by_b, a, b+1, rowD1, i) + 1
+                            c0 = _block_offset_lookup(offset_tables, c, U_by_a, D_by_b, a, b,   colD0, i) + 1
+                            if use_triplets
+                                _append_shifted_scaled_triplets!(ws.I, ws.J, ws.V, Bmat, r0, c0; scale=coeff)
+                            else
+                                _accum!(M, r0, c0, coeff * Bmat)
+                            end
                         end
                     end
+                    dv[a+1, b+1] = use_triplets ? _finalize_sparse!(ws, dims[a+1, b+2], dims[a+1, b+1]) : M
                 end
-                dv[a+1, b+1] = use_triplets ? _finalize_sparse!(ws, dims[a+1, b+2], dims[a+1, b+1]) : M
             end
         else
             ws = _HOM_ASSEMBLY_USE_TRIPLETS[] ? trip_ws[1] : nothing
@@ -715,39 +729,42 @@ module HomExtEngine
 
         # Horizontal differential: signed precomposition with dF[a+1] : F_{a+1} -> F_a.
         if threads && Threads.nthreads() > 1
-            Threads.@threads for idx in 1:((A) * (B + 1))
-                a = (idx - 1) % A
-                b = Int(div(idx - 1, A))
-                c = caches[_compcache_shard_index(caches)]
-                sign = isodd(b) ? -one(K) : one(K)
-                D0 = D_by_b[b+1]
-                Ucur = U_by_a[a+1]
-                Unext = U_by_a[a+2]
-                use_triplets = _HOM_ASSEMBLY_USE_TRIPLETS[]
-                ws = use_triplets ? _reset!(trip_ws[Threads.threadid()]) : nothing
-                M = use_triplets ? nothing : spzeros(K, dims[a+2, b+1], dims[a+1, b+1])
-                for rowUnext in 1:length(Unext), colUcur in 1:length(Ucur)
-                    coeff = dF[a+1][rowUnext, colUcur]
-                    if iszero(coeff)
-                        continue
-                    end
-                    for j in 1:length(D0)
-                        Bmat = _component_inclusion_matrix_cached(
-                            c,
-                            Ucur[colUcur], D0[j], colUcur, j,
-                            Unext[rowUnext], D0[j], rowUnext, j,
-                            K
-                        )
-                        r0 = _block_offset_lookup(offset_tables, c, U_by_a, D_by_b, a+1, b, j, rowUnext) + 1
-                        c0 = _block_offset_lookup(offset_tables, c, U_by_a, D_by_b, a,   b, j, colUcur) + 1
-                        if use_triplets
-                            _append_shifted_scaled_triplets!(ws.I, ws.J, ws.V, Bmat, r0, c0; scale=(sign * coeff))
-                        else
-                            _accum!(M, r0, c0, (sign * coeff) * Bmat)
+            Threads.@threads for shard in eachindex(caches)
+                local a, b, c, sign, D0, Ucur, Unext, use_triplets, ws, M, coeff, Bmat, r0, c0
+                for idx in shard:length(caches):((A) * (B + 1))
+                    a = (idx - 1) % A
+                    b = Int(div(idx - 1, A))
+                    local c = caches[shard]
+                    sign = isodd(b) ? -one(K) : one(K)
+                    D0 = D_by_b[b+1]
+                    Ucur = U_by_a[a+1]
+                    Unext = U_by_a[a+2]
+                    use_triplets = _HOM_ASSEMBLY_USE_TRIPLETS[]
+                    local ws = use_triplets ? _reset!(trip_ws[shard]) : nothing
+                    M = use_triplets ? nothing : spzeros(K, dims[a+2, b+1], dims[a+1, b+1])
+                    for rowUnext in 1:length(Unext), colUcur in 1:length(Ucur)
+                        coeff = dF[a+1][rowUnext, colUcur]
+                        if iszero(coeff)
+                            continue
+                        end
+                        for j in 1:length(D0)
+                            Bmat = _component_inclusion_matrix_cached(
+                                c,
+                                Ucur[colUcur], D0[j], colUcur, j,
+                                Unext[rowUnext], D0[j], rowUnext, j,
+                                K
+                            )
+                            r0 = _block_offset_lookup(offset_tables, c, U_by_a, D_by_b, a+1, b, j, rowUnext) + 1
+                            c0 = _block_offset_lookup(offset_tables, c, U_by_a, D_by_b, a,   b, j, colUcur) + 1
+                            if use_triplets
+                                _append_shifted_scaled_triplets!(ws.I, ws.J, ws.V, Bmat, r0, c0; scale=(sign * coeff))
+                            else
+                                _accum!(M, r0, c0, (sign * coeff) * Bmat)
+                            end
                         end
                     end
+                    dh[a+1, b+1] = use_triplets ? _finalize_sparse!(ws, dims[a+2, b+1], dims[a+1, b+1]) : M
                 end
-                dh[a+1, b+1] = use_triplets ? _finalize_sparse!(ws, dims[a+2, b+1], dims[a+1, b+1]) : M
             end
         else
             ws = _HOM_ASSEMBLY_USE_TRIPLETS[] ? trip_ws[1] : nothing
@@ -790,51 +807,104 @@ module HomExtEngine
         return cache_key === nothing ? data : _cache_hom_bicomplex_store!(cache, cache_key, data)
     end
 
+    # Terminal exactness for genuine indicator resolutions. Raw one-term
+    # arrays omit the augmentation, so their completion cannot be inferred.
+    function _indicator_resolution_is_complete(F::AbstractVector{<:UpsetPresentation}, dF, field)
+        isempty(last(F).U0) && return true
+        isempty(dF) && return false
+        for v in 1:nvertices(first(F).P)
+            rows = findall(u -> u.mask[v], last(F).U0)
+            isempty(rows) && continue
+            cols = findall(u -> u.mask[v], F[end - 1].U0)
+            FieldLinAlg.rank_restricted(field, last(dF), rows, cols) == length(rows) || return false
+        end
+        return true
+    end
+
+    function _indicator_resolution_is_complete(E::AbstractVector{<:DownsetCopresentation}, dE, field)
+        isempty(last(E).D0) && return true
+        isempty(dE) && return false
+        for v in 1:nvertices(first(E).P)
+            rows = findall(d -> d.mask[v], last(E).D0)
+            isempty(rows) && continue
+            cols = findall(d -> d.mask[v], E[end - 1].D0)
+            FieldLinAlg.rank_restricted(field, last(dE), rows, cols) == length(rows) || return false
+        end
+        return true
+    end
+
+    function _indicator_resolution_is_complete(res::UpsetResolutionResult)
+        if isempty(resolution_maps(res))
+            d = augmentation(res)
+            return all(v -> FieldLinAlg.rank(d.dom.field, d.comps[v]) == d.dom.dims[v], eachindex(d.dom.dims))
+        end
+        return _indicator_resolution_is_complete(resolution_modules(res), resolution_maps(res), res.source_module.field)
+    end
+
+    function _indicator_resolution_is_complete(res::DownsetResolutionResult)
+        if isempty(resolution_maps(res))
+            d = coaugmentation(res)
+            return all(v -> FieldLinAlg.rank(d.cod.field, d.comps[v]) == d.cod.dims[v], eachindex(d.cod.dims))
+        end
+        return _indicator_resolution_is_complete(resolution_modules(res), resolution_maps(res), res.source_module.field)
+    end
+
+    function _certified_indicator_ext_maxdeg(A::Int, B::Int, completeF::Bool, completeE::Bool)
+        return min(A + B, completeF ? A + B : A - 1, completeE ? A + B : B - 1)
+    end
+
     """
-        ext_dims_via_resolutions(F, dF, E, dE) -> Dict{Int,Int}
+        ext_dims_via_resolutions(res::IndicatorResolutionsResult; threads=false)
+        ext_dims_via_resolutions(F, dF, E, dE; threads=false) -> Dict{Int,Int}
 
-    Given an upset resolution F* with differentials dF and a downset resolution E* with
-    differentials dE, assemble the total cochain complex C^t = oplus_{a+b=t} Hom(F_a, E^b)
-    and return a dictionary mapping total degree t to dim H^t.
+    Compute Ext dimensions from projective/injective indicator resolutions
+    (in particular, the principal-indicator resolutions built by this package).
+    Certification here concerns the truncation boundary; it assumes the inputs
+    are resolutions by projective/injective modules. An unfinished
+    resolution ending in degree `L` certifies only total degrees below `L`.
+    Only stored, certified degrees are returned; an omitted dictionary key
+    does not assert vanishing.
 
-    This densifies each sparse block for rank computations.
+    Prefer the typed paired result: it retains (co)augmentations needed to
+    certify a one-term resolution. Raw one-term arrays cannot establish
+    completion. To study the entire explicitly truncated total complex, use
+    `build_hom_tot_complex` and the ChainComplexes cohomology interface instead.
     """
     function ext_dims_via_resolutions(F::AbstractVector{<:UpsetPresentation{K}},
                                     dF::Vector{SparseMatrixCSC{K,Int}},
                                     E::AbstractVector{<:DownsetCopresentation{K}},
                                     dE::Vector{SparseMatrixCSC{K,Int}};
                                     threads::Bool=false) where {K}
-        dimsCt, dts = build_hom_tot_complex(F, dF, E, dE; threads=threads)
         field = (F[1].H === nothing) ? field_from_eltype(K) : F[1].H.field
-        
-        A = length(F) - 1
-        B = length(E) - 1
-        tmin, tmax = 0, A + B
+        completeF = _indicator_resolution_is_complete(F, dF, field)
+        completeE = _indicator_resolution_is_complete(E, dE, field)
+        tmax = _certified_indicator_ext_maxdeg(length(F) - 1, length(E) - 1, completeF, completeE)
+        return _ext_dims_on_certified_range(F, dF, E, dE, field, tmax; threads=threads)
+    end
 
-        dimsH_vals = Vector{Int}(undef, tmax - tmin + 1)
+    function ext_dims_via_resolutions(res::IndicatorResolutionsResult; threads::Bool=false)
+        F, dF, E, dE = res
+        tmax = _certified_indicator_ext_maxdeg(length(F) - 1, length(E) - 1,
+            _indicator_resolution_is_complete(res.upset), _indicator_resolution_is_complete(res.downset))
+        return _ext_dims_on_certified_range(F, dF, E, dE, res.upset.source_module.field, tmax; threads=threads)
+    end
+
+    function _ext_dims_on_certified_range(F, dF, E, dE, field, tmax::Int; threads::Bool=false)
+        tmax < 0 && return Dict{Int,Int}()
+        dimsCt, dts = build_hom_tot_complex(F, dF, E, dE; threads=threads)
+        # Include the outgoing differential at the last *reported* degree.
+        ranks = zeros(Int, min(length(dts), tmax + 1))
         if threads && Threads.nthreads() > 1
-            Threads.@threads for t in tmin:tmax
-                i = t - tmin + 1
-                dimC = dimsCt[i]
-                r_next = (t < tmax) ? FieldLinAlg.rank_dim(field, dts[i]) : 0
-                r_prev = (t > tmin) ? FieldLinAlg.rank_dim(field, dts[i-1]) : 0
-                dimsH_vals[i] = dimC - r_next - r_prev
+            Threads.@threads for i in eachindex(ranks)
+                ranks[i] = FieldLinAlg.rank_dim(field, dts[i])
             end
         else
-            for t in tmin:tmax
-                i = t - tmin + 1
-                dimC = dimsCt[i]
-                r_next = (t < tmax) ? FieldLinAlg.rank_dim(field, dts[i]) : 0
-                r_prev = (t > tmin) ? FieldLinAlg.rank_dim(field, dts[i-1]) : 0
-                dimsH_vals[i] = dimC - r_next - r_prev
+            for i in eachindex(ranks)
+                ranks[i] = FieldLinAlg.rank_dim(field, dts[i])
             end
         end
-        dimsH = Dict{Int,Int}()
-        sizehint!(dimsH, length(dimsH_vals))
-        @inbounds for t in tmin:tmax
-            dimsH[t] = dimsH_vals[t - tmin + 1]
-        end
-        return dimsH
+        return Dict(t => dimsCt[t + 1] - (t < length(ranks) ? ranks[t + 1] : 0) -
+                    (t > 0 ? ranks[t] : 0) for t in 0:tmax)
     end
 
     """

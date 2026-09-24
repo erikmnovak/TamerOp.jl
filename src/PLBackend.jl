@@ -2178,16 +2178,21 @@ Returns
 - `P`: the finite encoding poset
 - `H`: a `FiniteFringe.FringeModule{QQ}` on `P`
 - `pi`: a `PLEncodingMapBoxes` classifier map
+
+`opts.field` selects the output coefficient field. `poset_kind` defaults to
+`opts.poset_kind`; an explicit keyword overrides it. A non-`nothing`
+`opts.strict_eps` is rejected because this backend uses closed boxes.
 """
 function encode_fringe_boxes(Ups::Vector{BoxUpset},
                              Downs::Vector{BoxDownset},
                              Phi_in::AbstractMatrix{QQ},
                              opts::EncodingOptions=EncodingOptions();
-                             poset_kind::Symbol = :signature)
+                             poset_kind::Symbol = opts.poset_kind)
     if opts.backend != :auto && opts.backend != :pl_backend &&
         opts.backend != :pl_backend_boxes && opts.backend != :boxes && opts.backend != :axis
         error("encode_fringe_boxes: EncodingOptions.backend must be :auto or :pl_backend (or :pl_backend_boxes/:boxes/:axis)")
     end
+    opts.strict_eps === nothing || throw(ArgumentError("Box encoding has no strict inequalities; strict_eps is only supported by the polyhedral backend."))
     max_regions = opts.max_regions === nothing ? 200_000 : Int(opts.max_regions)
 
     m = length(Ups)
@@ -2369,6 +2374,7 @@ function encode_fringe_boxes(Ups::Vector{BoxUpset},
     Uhat, Dhat = _images_on_P(P, sig_y, sig_z)
     Phi = _monomialize_phi(Phi_in, Uhat, Dhat)
     H = FiniteFringe.FringeModule{QQ}(P, Uhat, Dhat, Phi; field=QQField())
+    H = opts.field == QQField() ? H : FiniteFringe.change_field(H, opts.field)
 
     pi = PLEncodingMapBoxes{n,MY,MZ}(n,
                                   coords,
@@ -2390,7 +2396,7 @@ end
 function encode_fringe_boxes(Ups::Vector{BoxUpset}, 
                              Downs::Vector{BoxDownset}, 
                              opts::EncodingOptions=EncodingOptions();
-                             poset_kind::Symbol = :signature)
+                             poset_kind::Symbol = opts.poset_kind)
     m = length(Ups)
     r = length(Downs)
     Phi = reshape(ones(QQ, r * m), r, m)
@@ -2402,7 +2408,7 @@ function encode_fringe_boxes(Ups::Vector{BoxUpset},
                              Downs::Vector{BoxDownset},
                              Phi_vec::AbstractVector{QQ},
                              opts::EncodingOptions=EncodingOptions();
-                             poset_kind::Symbol = :signature)
+                             poset_kind::Symbol = opts.poset_kind)
     m = length(Ups)
     r = length(Downs)
     length(Phi_vec) == r * m || error("Phi vector has wrong length")

@@ -2,10 +2,9 @@
 
 const _VISUAL_RENDERERS = Dict{Symbol,Function}()
 const _VISUAL_SAVERS = Dict{Symbol,Function}()
-const _VISUAL_SPEC_HTML_BACKEND = :spec_html
 const _VISUAL_BACKEND_HELP = Dict{Symbol,String}(
-    :cairomakie => "Install CairoMakie.jl for deterministic static rendering/export.",
-    :wglmakie => "Install WGLMakie.jl for notebook-friendly interactive rendering.",
+    :cairomakie => "Install CairoMakie with `import Pkg; Pkg.add(\"CairoMakie\")`, then run `using CairoMakie` to activate static rendering/export.",
+    :wglmakie => "Install WGLMakie with `import Pkg; Pkg.add(\"WGLMakie\")`, then run `using WGLMakie` to activate interactive rendering.",
 )
 
 function _register_visual_backend!(backend::Symbol; render::Function, save::Union{Nothing,Function}=nothing)
@@ -22,42 +21,8 @@ function _in_notebook_context()
            haskey(ENV, "JPY_PARENT_PID") || haskey(ENV, "COLAB_RELEASE_TAG")
 end
 
-function _try_load_visual_backend!(backend::Symbol)
-    _visual_backend_available(backend) && return true
-    root = parentmodule(@__MODULE__)
-    spec = if backend === :cairomakie
-        (; dep=:CairoMakie, extmod=:TamerOpCairoMakieExt, extfile="TamerOpCairoMakieExt.jl")
-    elseif backend === :wglmakie
-        (; dep=:WGLMakie, extmod=:TamerOpWGLMakieExt, extfile="TamerOpWGLMakieExt.jl")
-    else
-        return false
-    end
-    isdefined(root, spec.extmod) && return true
-    try
-        Base.require(Main, spec.dep)
-    catch
-        return false
-    end
-    isdefined(root, spec.extmod) && return true
-    path = normpath(joinpath(@__DIR__, "..", "..", "ext", spec.extfile))
-    isfile(path) || return false
-    try
-        Base.include(root, path)
-    catch
-        return false
-    end
-    return _visual_backend_available(backend)
-end
-
-function _ensure_any_visual_backend!()
-    _try_load_visual_backend!(:wglmakie)
-    _try_load_visual_backend!(:cairomakie)
-    return nothing
-end
-
 function _resolve_visual_backend(requested::Symbol; for_save::Bool=false, display::Symbol=:inline)
     requested === :auto || begin
-        _try_load_visual_backend!(requested)
         if for_save
             _visual_save_available(requested) || throw(ArgumentError("No save-capable visualization backend registered for $(requested). $(get(_VISUAL_BACKEND_HELP, requested, ""))"))
         else
@@ -66,7 +31,6 @@ function _resolve_visual_backend(requested::Symbol; for_save::Bool=false, displa
         return requested
     end
 
-    _ensure_any_visual_backend!()
     if for_save
         if _visual_save_available(:cairomakie)
             return :cairomakie
@@ -84,8 +48,8 @@ function _resolve_visual_backend(requested::Symbol; for_save::Bool=false, displa
     end
 
     msg = string(
-        "No visualization renderer is available. Install CairoMakie.jl for static figures ",
-        "or WGLMakie.jl for notebook rendering. `visual_spec(...)` remains available without a renderer."
+        "No visualization renderer is activated. Install and run `using CairoMakie` for static figures ",
+        "or `using WGLMakie` for interactive rendering. `visual_spec(...)` remains available without a renderer."
     )
     throw(ArgumentError(msg))
 end
@@ -137,10 +101,9 @@ function _choose_visual_export_target(outdir::AbstractString,
                 stem=stem_s)
     end
 
-    _ensure_any_visual_backend!()
     if format !== :auto
         chosen_backend = if format === :html
-            _visual_save_available(:wglmakie) ? :wglmakie : _VISUAL_SPEC_HTML_BACKEND
+            _resolve_visual_backend(:wglmakie; for_save=true)
         else
             _resolve_visual_backend(:auto; for_save=true)
         end
@@ -156,7 +119,7 @@ function _choose_visual_export_target(outdir::AbstractString,
         elseif _visual_save_available(:wglmakie)
             (:wglmakie, :html)
         else
-            (_VISUAL_SPEC_HTML_BACKEND, :html)
+            (_resolve_visual_backend(:auto; for_save=true), :png)
         end
     else
         if _visual_save_available(:wglmakie)
@@ -164,7 +127,7 @@ function _choose_visual_export_target(outdir::AbstractString,
         elseif _visual_save_available(:cairomakie)
             (:cairomakie, :png)
         else
-            (_VISUAL_SPEC_HTML_BACKEND, :html)
+            (_resolve_visual_backend(:auto; for_save=true), :png)
         end
     end
 
@@ -189,29 +152,18 @@ function visualize(obj; kind::Symbol=:auto, backend::Symbol=:auto, display::Symb
     return render(spec; backend=backend, display=display, kwargs...)
 end
 
-function _write_visual_html(path::AbstractString, spec::VisualizationSpec)
-    open(path, "w") do io
-        show(io, MIME("text/html"), spec)
-    end
-    return path
-end
-
 function _save_visual_internal(path::AbstractString, spec::VisualizationSpec; backend::Symbol=:auto, kwargs...)
-    report = check_visual_spec(spec; throw=true)
-    _ = report
+    check_visual_spec(spec; throw=true)
     format = _visual_export_format_from_path(path)
-    if format === :html
-        if backend !== :cairomakie
-            _try_load_visual_backend!(:wglmakie)
-            if _visual_save_available(:wglmakie)
-                saved_path = Base.invokelatest(_VISUAL_SAVERS[:wglmakie], path, spec; kwargs...)
-                return (; path=String(saved_path), backend=:wglmakie, format=:html)
-            end
-        end
-        saved_path = _write_visual_html(path, spec)
-        return (; path=String(saved_path), backend=_VISUAL_SPEC_HTML_BACKEND, format=:html)
+    chosen = if format === :html
+        backend in (:auto, :wglmakie) ||
+            throw(ArgumentError("HTML figures require backend=:wglmakie and `using WGLMakie`; got backend=$(backend)."))
+        _resolve_visual_backend(:wglmakie; for_save=true)
+    else
+        backend === :wglmakie &&
+            throw(ArgumentError("WGLMakie figure export supports HTML; use CairoMakie for static files."))
+        _resolve_visual_backend(backend === :auto ? :cairomakie : backend; for_save=true)
     end
-    chosen = _resolve_visual_backend(backend; for_save=true)
     saved_path = Base.invokelatest(_VISUAL_SAVERS[chosen], path, spec; kwargs...)
     return (; path=String(saved_path), backend=chosen, format=format)
 end
@@ -225,12 +177,14 @@ Save a visualization to disk.
 
 The canonical notebook-facing form is `save_visual(outdir, stem, obj; ...)`.
 It chooses a concrete export target for you: by default it prefers a static PNG
-through CairoMakie, falls back to interactive HTML through WGLMakie, and then
-falls back to spec HTML when no renderer is installed.
+through an activated CairoMakie extension, or chooses interactive HTML when
+only WGLMakie is activated. Install a backend and import it explicitly with
+`using CairoMakie` or `using WGLMakie` before rendering. If no suitable backend
+is activated, export throws an actionable error; a specification summary is
+never substituted for a figure.
 
 Use the path-based form only when you want exact control over the filename,
-extension, or backend. That advanced form preserves the older contract and
-returns the written path string.
+extension, or backend. The path-based form returns the written path string.
 """
 save_visual
 

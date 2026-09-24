@@ -31,6 +31,68 @@ function _slice_weight_vector(offsets::AbstractVector, offset_weights)
     throw(ArgumentError("slice_barcodes: offset_weights must be nothing, a vector, or a function."))
 end
 
+# Sampled slices are restrictions of the encoded finite module, so use grid
+# birth indices (including any user-requested coarsening), not continuous cell
+# grades. The ordinary slice owner supplies clipping, deduplication, weights,
+# and the finite final endpoint; only the H0 rank computation differs here.
+function _sampled_h0_slice_barcodes(enc::EncodingResult,
+                                    pi::GridEncodingMap{N};
+                                    opts::InvariantOptions,
+                                    packed::Bool,
+                                    threads::Bool,
+                                    plan_cache,
+                                    kwargs...) where {N}
+    L = enc.M.lazy
+    enc.M.degree == 0 || return nothing
+    L.multicritical === :union || return nothing
+    pi.orientation == ntuple(_ -> 1, N) || return nothing
+    payload = _lazy_h0_rectangle_payload(L, Val(N))
+    payload === nothing && return nothing
+    vertex_births, edge_endpoints, edge_births = payload
+    plan = SliceInvariants.compile_slices(pi, opts;
+        cache=plan_cache, threads=threads, kwargs...)
+    T = eltype(plan.vals_pool)
+    bars = SliceInvariants._packed_grid_undef(SliceInvariants.PackedBarcode{T},
+                                             plan.nd, plan.no)
+    max_chain = isempty(plan.chain_len) ? 0 : maximum(plan.chain_len)
+    _foreach_workchunk(plan.nd * plan.no; threads=threads) do work, _
+        local ranks, stamps, stamp, i, j, plan_idx, chain, m, queries, roots, vals, R
+        ranks = Matrix{Int}(undef, max_chain, max_chain)
+        stamps = zeros(Int, length(vertex_births))
+        stamp = Ref(0)
+        for idx in work
+            i = mod1(idx, plan.nd)
+            j = div(idx - 1, plan.nd) + 1
+            plan_idx = SliceInvariants._plan_idx(plan.no, i, j)
+            chain = SliceInvariants._plan_chain(plan, plan_idx)
+            m = length(chain)
+            if m == 0
+                bars[idx] = SliceInvariants.PackedBarcode{T}(
+                    SliceInvariants.EndpointPair{T}[], Int[])
+                continue
+            end
+            SliceInvariants._assert_chain(L.P, chain)
+            # Convert only sampled labels, never materialize all |P| indices.
+            queries = [ntuple(d -> div(q - 1, pi.strides[d]) % pi.sizes[d] + 1, N)
+                       for q in chain]
+            for b in 1:m
+                roots = _lazy_h0_component_roots_at_query(
+                    vertex_births, edge_endpoints, edge_births, queries[b])
+                roots === nothing && error("slice_barcodes: invalid H0 edge birth.")
+                for a in 1:b
+                    ranks[a, b] = _lazy_h0_rank_from_component_roots(
+                        vertex_births, roots, queries[a], stamps, stamp)
+                end
+            end
+            vals = SliceInvariants._plan_vals(plan, plan_idx)
+            R = @view ranks[1:m, 1:m]
+            bars[idx] = SliceInvariants._packed_barcode_from_rank(
+                R, SliceInvariants._extended_values_view(vals))
+        end
+    end
+    return SliceInvariants._slice_barcodes_plan_result_from_packed(bars, plan; packed=packed)
+end
+
 function _supports_exact_slice_barcodes(enc::EncodingResult{PType,MType};
                                         opts::InvariantOptions=InvariantOptions(),
                                         directions=:auto,
@@ -39,6 +101,7 @@ function _supports_exact_slice_barcodes(enc::EncodingResult{PType,MType};
                                         values=nothing,
                                         packed::Bool=false,
                                         kwargs...) where {PType,MType<:_LazyEncodedModule}
+    isempty(kwargs) || return false
     directions === :auto && return false
     offsets === :auto && return false
     packed && return false
@@ -86,31 +149,61 @@ end
 
 function _exact_slice_barcodes(enc::EncodingResult{PType,MType};
                                opts::InvariantOptions=InvariantOptions(),
-                               directions,
-                               offsets,
+                               directions=:auto,
+                               offsets=:auto,
+                               normalize_dirs::Symbol=:none,
+                               values=nothing,
+                               packed::Bool=false,
+                               drop_unknown::Bool=true,
+                               dedup::Bool=true,
                                direction_weight::Union{Symbol,Function,Real}=:none,
                                offset_weights=nothing,
                                normalize_weights::Bool=true,
-                               threads::Bool=(Threads.nthreads() > 1)) where {PType,MType<:_LazyEncodedModule}
+                               threads::Bool=(opts.threads === nothing ? Threads.nthreads() > 1 : opts.threads),
+                               ts=nothing,
+                               plan_cache::Union{Nothing,SliceInvariants.SlicePlanCache}=nothing,
+                               kwargs...) where {PType,MType<:_LazyEncodedModule}
+    sampled = ts !== nothing || any(k -> haskey(kwargs, k), (:tmin, :tmax, :nsteps))
+    if sampled
+        values === nothing || return nothing
+        pi0 = enc.pi isa CompiledEncoding ? enc.pi.pi : enc.pi
+        pi0 isa GridEncodingMap || return nothing
+        return _sampled_h0_slice_barcodes(enc, pi0;
+            opts=opts, packed=packed, threads=threads, plan_cache=plan_cache,
+            directions=directions, offsets=offsets, normalize_dirs=normalize_dirs,
+            drop_unknown=drop_unknown, dedup=dedup, direction_weight=direction_weight,
+            offset_weights=offset_weights, normalize_weights=normalize_weights,
+            ts=ts, kwargs...)
+    end
+    # These controls belong to sampled chains. Other settings use that owner
+    # path instead of silently changing the continuous event computation.
+    drop_unknown && dedup || return nothing
     _supports_exact_slice_barcodes(enc;
         opts=opts,
         directions=directions,
         offsets=offsets,
-        normalize_dirs=:none,
-        values=nothing,
-        packed=false) || return nothing
+        normalize_dirs=normalize_dirs,
+        values=values,
+        packed=packed,
+        kwargs...) || return nothing
 
     pi0 = enc.pi isa CompiledEncoding ? enc.pi.pi : enc.pi
     nd = length(pi0.coords)
-    dirs = [_normalize_line_direction(dir, nd)::Vector{Float64} for dir in directions]
-    offs = [_normalize_line_basepoint(x0, nd)::Vector{Float64} for x0 in offsets]
+    L = enc.M.lazy
+    scalar_type = _h0_line_scalar_type(L)
+    dirs0 = [_normalize_line_direction(dir, nd; scalar_type=scalar_type) for dir in directions]
+    offs0 = [_normalize_line_basepoint(x0, nd; scalar_type=scalar_type) for x0 in offsets]
+    T = promote_type(scalar_type, map(eltype, dirs0)..., map(eltype, offs0)...)
+    dirs = [T.(dir) for dir in dirs0]
+    offs = [T.(x0) for x0 in offs0]
     ndirs = length(dirs)
     noffs = length(offs)
-    bars = Matrix{Dict{Tuple{Float64,Float64},Int}}(undef, ndirs, noffs)
-    L = enc.M.lazy
+    E = T === AlgebraicReal ? Union{AlgebraicReal,Float64} : Float64
+    bars = Matrix{Dict{Tuple{E,E},Int}}(undef, ndirs, noffs)
 
     if threads && Threads.nthreads() > 1 && (ndirs * noffs) > 1
         Threads.@threads for k in 1:(ndirs * noffs)
+            local i, j, bc
             i = div(k - 1, noffs) + 1
             j = mod(k - 1, noffs) + 1
             bc = _lazy_h0_line_barcode(L, offs[j], dirs[i])
@@ -215,14 +308,14 @@ function _supports_exact_rank_signed_measure(enc::EncodingResult{PType,MType};
 end
 
 @inline function _full_grid_birth_axes(pi0::GridEncodingMap{N}) where {N}
-    return ntuple(i -> Float64[Float64(x) for x in pi0.coords[i]], N)
+    return ntuple(i -> copy(pi0.coords[i]), N)
 end
 
-function _full_grid_death_axes(birth_axes::NTuple{N,Vector{Float64}}) where {N}
+function _full_grid_death_axes(birth_axes::NTuple{N,AbstractVector{<:Real}}) where {N}
     return ntuple(i -> begin
         ax = birth_axes[i]
         n = length(ax)
-        vals = Vector{Float64}(undef, n)
+        vals = Vector{Union{eltype(ax),Float64}}(undef, n)
         @inbounds for j in 1:n
             vals[j] = j < n ? ax[j + 1] : Inf
         end
@@ -376,7 +469,7 @@ function _exact_restricted_hilbert(enc::EncodingResult{PType,MType};
     return copy(dims)
 end
 
-@inline _rank_coord_token(x::Real) = repr(Float64(x))
+@inline _rank_coord_token(x::Real) = repr(x)
 
 @inline function _axis_position_map(axis_idx::Vector{Int})
     return Dict{Int,Int}(axis_idx[i] => i for i in eachindex(axis_idx))
@@ -422,8 +515,8 @@ end
 function _exact_rank_signed_measure_1d_lazy(vertex_births::Vector{NTuple{1,Int}},
                                             edge_endpoints::Vector{NTuple{2,Int}},
                                             edge_births::Vector{NTuple{1,Int}},
-                                            birth_axes::NTuple{1,Vector{Float64}},
-                                            death_axes::NTuple{1,Vector{Float64}},
+                                            birth_axes::NTuple{1,AbstractVector{<:Real}},
+                                            death_axes::NTuple{1,AbstractVector{<:Real}},
                                             axes_idx::NTuple{1,Vector{Int}};
                                             drop_zeros::Bool=true,
                                             tol::Int=0)
@@ -588,8 +681,8 @@ end
 function _exact_rank_signed_measure_2d_chain_lazy(vertex_births::Vector{NTuple{2,Int}},
                                                   edge_endpoints::Vector{NTuple{2,Int}},
                                                   edge_births::Vector{NTuple{2,Int}},
-                                                  birth_axes::NTuple{2,Vector{Float64}},
-                                                  death_axes::NTuple{2,Vector{Float64}},
+                                                  birth_axes::NTuple{2,AbstractVector{<:Real}},
+                                                  death_axes::NTuple{2,AbstractVector{<:Real}},
                                                   axes_idx::NTuple{2,Vector{Int}};
                                                   drop_zeros::Bool=true,
                                                   tol::Int=0,
@@ -636,6 +729,7 @@ function _exact_rank_signed_measure_2d_chain_lazy(vertex_births::Vector{NTuple{2
     slices = Vector{Dict{NTuple{2,Int},Int}}(undef, m2)
     if threads && Threads.nthreads() > 1 && m2 > 1
         Threads.@threads for q2 in 1:m2
+            local local_terms
             local_terms = _exact_rank_slice_measure_chain2d(
                 vertex_birth2_pos,
                 edge_endpoints,
@@ -690,6 +784,9 @@ function _exact_rank_signed_measure_2d_chain_lazy(vertex_births::Vector{NTuple{2
     sizehint!(inds, length(keys_sorted))
     sizehint!(wts, length(keys_sorted))
     @inbounds for key in keys_sorted
+        # Finite differences outside the comparable birth/death domain can
+        # produce empty rectangles. The canonical rank measure excludes them.
+        key[1] <= key[3] && key[2] <= key[4] || continue
         wt = weights[key]
         (drop_zeros && abs(wt) <= tol) && continue
         push!(inds, key)
@@ -700,7 +797,7 @@ end
 
 function _append_exact_rank_entry_1d!(io::IO,
                                       first_ref::Base.RefValue{Bool},
-                                      axis::Vector{Float64},
+                                      axis::AbstractVector{<:Real},
                                       p::Int,
                                       q::Int,
                                       val::Int)
@@ -715,7 +812,7 @@ end
 
 function _append_exact_rank_entry_2d!(io::IO,
                                       first_ref::Base.RefValue{Bool},
-                                      axes::NTuple{2,Vector{Float64}},
+                                      axes::NTuple{2,AbstractVector{<:Real}},
                                       p1::Int,
                                       p2::Int,
                                       q1::Int,
@@ -740,7 +837,7 @@ end
 function _exact_rank_query_table_1d_canonical(vertex_births::Vector{NTuple{1,Int}},
                                               edge_endpoints::Vector{NTuple{2,Int}},
                                               edge_births::Vector{NTuple{1,Int}},
-                                              birth_axis::Vector{Float64},
+                                              birth_axis::AbstractVector{<:Real},
                                               axis_idx::Vector{Int})
     nv = length(vertex_births)
     m = length(axis_idx)
@@ -830,7 +927,7 @@ function _exact_rank_query_table_2d_row_canonical(q1::Int,
                                                   vertex_births::Vector{NTuple{2,Int}},
                                                   edge_endpoints::Vector{NTuple{2,Int}},
                                                   edge_births::Vector{NTuple{2,Int}},
-                                                  birth_axes::NTuple{2,Vector{Float64}},
+                                                  birth_axes::NTuple{2,AbstractVector{<:Real}},
                                                   axes_idx::NTuple{2,Vector{Int}},
                                                   vertices_by_lb1::Vector{Vector{Int}},
                                                   vertex_lb2::Vector{Int})
@@ -897,7 +994,7 @@ end
 function _exact_rank_query_table_2d_canonical(vertex_births::Vector{NTuple{2,Int}},
                                               edge_endpoints::Vector{NTuple{2,Int}},
                                               edge_births::Vector{NTuple{2,Int}},
-                                              birth_axes::NTuple{2,Vector{Float64}},
+                                              birth_axes::NTuple{2,AbstractVector{<:Real}},
                                               axes_idx::NTuple{2,Vector{Int}};
                                               threads::Bool=(Threads.nthreads() > 1))
     m1 = length(axes_idx[1])
@@ -920,6 +1017,7 @@ function _exact_rank_query_table_2d_canonical(vertex_births::Vector{NTuple{2,Int
 
     if threads && Threads.nthreads() > 1 && m1 > 1
         Threads.@threads for q1 in 1:m1
+            local payload, nnz, abs_mass
             payload, nnz, abs_mass = _exact_rank_query_table_2d_row_canonical(
                 q1,
                 vertex_births,

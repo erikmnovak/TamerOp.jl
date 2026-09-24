@@ -35,6 +35,8 @@ Contributor note:
   wrappers or APISurface bindings.
 """
 module InvariantCore
+using ..ExactReals: AlgebraicReal
+
 
 using LinearAlgebra
 import Base.Threads

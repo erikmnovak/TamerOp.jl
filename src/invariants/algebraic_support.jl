@@ -209,7 +209,8 @@ Internal helper: determine the number of regions for common encoding map types.
 This is used by `region_values(pi, f; arg=:index)` to allow value evaluation by
 region index even when representatives are not available.
 
-We try (in this order):
+Compiled and grid encodings expose their region count through the attached
+finite poset; representatives are not generated. For other map types we try:
 - `length(pi.sig_y)` if `pi.sig_y` exists,
 - `length(pi.regions)` if `pi.regions` exists,
 - `length(pi.reps)` if `pi.reps` exists.
@@ -230,6 +231,9 @@ function _nregions_encoding(pi)
     error("_nregions_encoding: cannot determine number of regions; expected pi.sig_y, pi.regions, or pi.reps")
 end
 
+@inline _nregions_encoding(pi::Union{CompiledEncoding,GridEncodingMap}) =
+    nvertices(encoding_poset(pi))
+
 
 """
     region_values(pi, f; arg=:rep) -> AbstractVector
@@ -243,8 +247,9 @@ Arguments
 ---------
 - `pi`: an encoding map. If `arg` is `:rep` or `:both`, then `pi` must provide
   representative points via `representatives(pi)`. If `arg` is `:index`,
-  representatives are not needed, but `pi` must expose the number of regions via
-  one of the common fields `pi.sig_y`, `pi.regions`, or `pi.reps`.
+  representatives are not needed: compiled and grid encodings use their finite
+  encoding poset. Other maps expose the count through one of the common fields
+  `pi.sig_y`, `pi.regions`, or `pi.reps`.
 - `f`: function used to label regions.
 
 Keyword arguments

@@ -223,6 +223,121 @@ with_fields(FIELDS_FULL) do field
         @test H1.phi == H2.phi
     end
 
+    @testset "ZnEncoding A11 shared cold pushforward publication ($(field))" begin
+        # Eight interval modules give distinct plan keys on one common encoding.
+        # Their masks and all map ranks are known without any pushforward cache.
+        tau = FZ.face(1, [false])
+        flanges = [FZ.Flange{K}(1,
+            [FZ.IndFlat(tau, [j]; id=Symbol("F", j))],
+            [FZ.IndInj(tau, [j + 3]; id=Symbol("E", j))],
+            reshape(K[c(1)], 1, 1); field=field) for j in 1:8]
+        opts = TO.EncodingOptions(backend=:zn, max_regions=512, field=field)
+        for use_session in (false, true)
+            session = use_session ? CM.SessionCache() : nothing
+            if use_session
+                warm = ZE.compile_zn_cache(flanges, opts)
+                for FG in flanges
+                    ZE._get_or_build_pushforward_plan!(warm.pi, FG; session_cache=session)
+                end
+            end
+            compiled = ZE.compile_zn_cache(flanges, opts)
+            P, pi = compiled.P, compiled.pi
+            @test pi.pushforward_cache.flat_index === nothing
+            @test isempty(pi.pushforward_cache.plan_by_flange)
+            expected_upsets = [[FZ.in_flat(FG.flats[1], p) for p in pi.reps] for FG in flanges]
+            expected_downsets = [[FZ.in_inj(FG.injectives[1], p) for p in pi.reps] for FG in flanges]
+            # The serial oracle uses membership directly, on a separate poset.
+            reference = ZE.compile_zn_cache(flanges, opts)
+            expected_covers = collect(FF.cover_edges(reference.P))
+            njobs = 24
+            start = Channel{Nothing}(njobs + 1)
+            function pushforward_worker(worker)
+                take!(start)
+                j = mod1(worker, length(flanges))
+                covers = FF.cover_edges(P)
+                H = ZE._pushforward_flange_to_fringe(P, pi, flanges[j]; session_cache=session)
+                plan = ZE._get_or_build_pushforward_plan!(pi, flanges[j]; session_cache=session)
+                for _ in 1:8
+                    yield()
+                    # Repeated reads overlap publication of the other plan keys.
+                    @assert ZE._get_or_build_pushforward_plan!(pi, flanges[j]; session_cache=session) === plan
+                end
+                return (; j, H, plan, covers)
+            end
+            jobs = [Threads.@spawn pushforward_worker(worker) for worker in 1:njobs]
+            if Threads.nthreads(:interactive) > 0
+                push!(jobs, Threads.@spawn :interactive pushforward_worker(njobs + 1))
+            end
+            for _ in eachindex(jobs)
+                put!(start, nothing)
+            end
+            results = fetch.(jobs)
+            @test length(pi.pushforward_cache.plan_by_flange) == length(flanges)
+            for result in results
+                j, H = result.j, result.H
+                @test H.U[1].mask == expected_upsets[j]
+                @test H.D[1].mask == expected_downsets[j]
+                @test H.phi == reshape(K[c(1)], 1, 1)
+                @test result.plan === pi.pushforward_cache.plan_by_flange[ZE._flange_fingerprint(flanges[j])]
+                @test result.covers === FF.cover_edges(P)
+                @test collect(result.covers) == expected_covers
+            end
+            for j in eachindex(flanges)
+                H = results[j].H
+                M = IR.pmodule_from_fringe(H)
+                expected = Int.(expected_upsets[j] .& expected_downsets[j])
+                @test M.dims == expected
+                for (u, v) in FF.cover_edges(P)
+                    @test TamerOp.FieldLinAlg.rank(field, M.edge_maps[u, v]) == expected[u] * expected[v]
+                end
+            end
+        end
+    end
+
+    @testset "ZnEncoding A11 Bool batch destinations ($(field))" begin
+        tau = FZ.face(1, [true])
+        FG = FZ.Flange{K}(1, [FZ.IndFlat(tau, [0])], [FZ.IndInj(tau, [0])],
+                          reshape(K[c(1)], 1, 1); field=field)
+        cache = ZE.compile_zn_cache(FG, TO.EncodingOptions(backend=:zn, field=field))
+        @test FF.nvertices(cache.P) == 1
+        X = reshape(collect(-2049:2049), 1, :)
+        for target in (cache.pi, cache), queries in (X, Float64.(X) .+ 0.125)
+            for _ in 1:3
+                bits = falses(size(X, 2) + 2)
+                dest = view(bits, 2:length(bits)-1)
+                @test ZE.locate_many!(dest, target, queries; threaded=true) === dest
+                @test all(dest)
+                @test !first(bits) && !last(bits)
+            end
+            bytes = fill(false, size(X, 2))
+            @test ZE.locate_many!(bytes, target, queries; threaded=true) === bytes
+            @test all(bytes)
+        end
+    end
+
+    @testset "FlangeZn A11 recursive custom rank callback ($(field))" begin
+        tau = FZ.face(1, [false])
+        FG = FZ.Flange{K}(1,
+            [FZ.IndFlat(tau, [0]), FZ.IndFlat(tau, [2])],
+            [FZ.IndInj(tau, [1]), FZ.IndInj(tau, [3])],
+            K[c(1) c(0); c(0) c(1)]; field=field)
+        cache = FZ.FlangeDimCache(FG)
+        for outer in ([0], (0,)), inner in ([2], (2,))
+            calls = Ref(0)
+            callback = function (A)
+                calls[] += 1
+                before = Matrix(A)
+                @test before == reshape(K[c(1), c(0)], 2, 1)
+                # This changes both active row and column indices in the cache.
+                @test FZ.dim_at(FG, inner; cache=cache) == 1
+                @test Matrix(A) == before
+                return TamerOp.FieldLinAlg.rank(field, A)
+            end
+            @test FZ.dim_at(FG, outer; cache=cache, rankfun=callback) == 1
+            @test calls[] == 1
+        end
+    end
+
     @testset "ZnEncoding direct strict plan -> PModule matches fringe path" begin
         tau = FZ.face(2, [false, false])
         flats = [
@@ -634,6 +749,44 @@ with_fields(FIELDS_FULL) do field
     @test occursin("matrix_size = (1, 1)", sprint(show, MIME("text/plain"), FG))
     end
 
+    @testset "A12 Zn inspection preserves structured poset caches" begin
+    tau = FZ.Face(1, [false])
+    F = FZ.IndFlat(tau, [0])
+    E = FZ.IndInj(tau, [2])
+    FG = FZ.Flange{K}(1, [F], [E], reshape(K[c(1)], 1, 1); field=field)
+    P, pi = ZE.encode_poset_from_flanges(FG, TO.EncodingOptions(backend=:zn);
+                                        poset_kind=:signature)
+    cache = ZE.compile_zn_cache(P, pi)
+    enc = EC.compile_encoding(P, pi)
+    @test P.cache.cover === nothing
+    @test P.cache.cover_edges === nothing
+    @test P.cache.upsets === nothing
+    @test P.cache.downsets === nothing
+    for obj in (P, pi, cache, enc)
+        @test !isempty(sprint(show, obj))
+        @test !isempty(sprint(show, MIME"text/plain"(), obj))
+        @test CC.describe(obj) isa NamedTuple
+        @test ZE.zn_encoding_summary(obj).nregions == FF.nvertices(P)
+    end
+    @test ZE.nregions(enc) == length(pi.reps)
+    @test ZE.critical_coordinates(enc) === pi.coords
+    @test ZE.critical_coordinate_counts(enc) == map(length, pi.coords)
+    @test ZE.region_representatives(enc) === pi.reps
+    @test enc.axes === nothing
+    @test enc.reps === nothing
+    @test P.cache.cover === nothing
+    @test P.cache.cover_edges === nothing
+    @test P.cache.upsets === nothing
+    @test P.cache.downsets === nothing
+    # An explicit classifier query agrees on the raw map and wrapped object.
+    for (r, point) in enumerate(pi.reps)
+        @test EC.locate(pi, point) == r
+        @test EC.locate(enc, point) == r
+    end
+    @test P.cache.cover === nothing
+    @test P.cache.upsets === nothing
+    end
+
     @testset "ZnEncoding UX surface" begin
     tau0 = FZ.Face(1, [false])
     F = FZ.IndFlat(tau0, [0]; id=:F1)
@@ -652,7 +805,8 @@ with_fields(FIELDS_FULL) do field
     @test pi_desc.nregions == FF.nvertices(Psig)
     @test pi_desc.generator_counts == (; flats=1, injectives=1)
     @test pi_desc.poset_kind == :signature
-    @test pi_desc.critical_coordinate_counts == (1,)
+    @test pi_desc.critical_coordinate_counts == (2,)
+    @test ZE.critical_coordinates(pi) == ([0, 3],) # birth at 0, inclusive death at 2
 
     P_desc = TamerOp.describe(Psig)
     @test P_desc.kind == :signature_poset
@@ -696,7 +850,10 @@ with_fields(FIELDS_FULL) do field
     @test qsummary.signature_support_sizes isa NamedTuple
     @test qsummary.direct_lookup_enabled == ZE.has_direct_lookup(pi)
     qoutside = ZE.zn_query_summary(pi, (-10,))
-    @test qoutside.outside
+    # The negative tail is a represented region, even though this interval's
+    # fiber there is zero. Being outside module support is not outside the map.
+    @test !qoutside.outside
+    @test qoutside.region >= 1
     rsummary = ZE.zn_region_summary(pi, qsummary.region)
     @test rsummary.kind == :zn_region
     @test rsummary.region == qsummary.region
@@ -861,7 +1018,7 @@ with_fields(FIELDS_FULL) do field
     @test c2 == c2_alloc
     @test Matrix(A2) == Matrix(A2_alloc)
 
-    # Scratch variant reuses per-thread buffers and stays parity-correct.
+    # Scratch variant reuses per-task buffers and stays parity-correct.
     A3, r3, c3 = FZ.degree_matrix!(H, g1)
     A3_alloc, r3_alloc, c3_alloc = FZ.degree_matrix(H, g1)
     @test r3 == r3_alloc
@@ -875,6 +1032,23 @@ with_fields(FIELDS_FULL) do field
     @test Matrix(A4) == Matrix(A4_alloc)
     @test r4 === r3
     @test c4 === c3
+
+    # A suspended task must retain its ephemeral buffers when another task
+    # evaluates a different fiber on the same physical thread.
+    ready = Channel{Nothing}(1)
+    resume = Channel{Nothing}(1)
+    first_task = @async begin
+        local A, rows, cols = FZ.degree_matrix!(H, g1)
+        put!(ready, nothing)
+        take!(resume)
+        (Matrix(A), copy(rows), copy(cols))
+    end
+    take!(ready)
+    other_task = @async FZ.degree_matrix!(H, g2)
+    fetch(other_task)
+    put!(resume, nothing)
+    isolated = fetch(first_task)
+    @test isolated == (Matrix(A3_alloc), r3_alloc, c3_alloc)
     end
 
     @testset "FlangeDimCache + dim_at_many parity" begin
@@ -1253,6 +1427,22 @@ end
     ZE.locate_many!(d5, zcache, Xint; threaded=true)
     @test d5 == d1
 
+    # Batches exceed the threaded gate. Call from worker tasks and from nested
+    # threaded loops; :static scheduling would reject these supported callers.
+    Xlarge = repeat(Xint, 1, 256)
+    expected_large = repeat(d1, 256)
+    jobs = [Threads.@spawn ZE.locate_many(zcache, Xlarge; threaded=true) for _ in 1:4]
+    @test all(fetch(job) == expected_large for job in jobs)
+    nested = Vector{Vector{Int}}(undef, 4)
+    Threads.@threads for j in eachindex(nested)
+        nested[j] = ZE.locate_many(pi, Float64.(Xlarge); threaded=true)
+    end
+    @test all(==(expected_large), nested)
+    if Threads.nthreads(:interactive) > 0
+        interactive = Threads.@spawn :interactive ZE.locate_many(pi, Xlarge; threaded=true)
+        @test fetch(interactive) == expected_large
+    end
+
     # Reusable pmodule_on_box basis cache.
     bcache = ZE.compile_zn_box_cache(FG)
     Mbox1 = ZE.pmodule_on_box(FG; a=(-2, -2), b=(3, 3), cache=bcache)
@@ -1276,6 +1466,27 @@ end
     Mbox3 = ZE.pmodule_on_box(FG; a=(-1, -2), b=(4, 3), cache=bcache)
     Mbox3_ref = _naive_pmodule_on_box(FG, (-1, -2), (4, 3), field)
     _module_equal_on_covers(Mbox3, Mbox3_ref, field)
+end
+
+@testset "FlangeZn task-owned threaded sweeps ($(field))" begin
+    FG = FZ.Flange{K}(2,
+        [mk_flat([0, 0], [false, false])],
+        [mk_inj([31, 47], [false, false])],
+        reshape(K[one(K)], 1, 1))
+    points = [(x, y) for y in -2:49 for x in -2:33]
+    expected = [Int(0 <= x <= 31 && 0 <= y <= 47) for (x, y) in points]
+    for sweep in (:none, :box, :auto)
+        jobs = [Threads.@spawn FZ.dim_at_many(FG, points; threaded=true, sweep=sweep) for _ in 1:3]
+        @test all(fetch(job) == expected for job in jobs)
+    end
+    # Dense slabs with a missing coordinate in each row take the slab path.
+    slabs = [(x, y) for y in -2:49 for x in -2:33 if x != 7]
+    slab_expected = [Int(0 <= x <= 31 && 0 <= y <= 47) for (x, y) in slabs]
+    @test fetch(Threads.@spawn FZ.dim_at_many(FG, slabs; threaded=true, sweep=:auto)) == slab_expected
+    if Threads.nthreads(:interactive) > 0
+        task = Threads.@spawn :interactive FZ.dim_at_many(FG, points; threaded=true, sweep=:box)
+        @test fetch(task) == expected
+    end
 end
 
 @testset "ZnEncoding large oracle fixtures (all fields)" begin
@@ -1309,6 +1520,32 @@ end
         d2 = Mxy.dims[x + (lensy - 1) * lensx]
         @test d0 == d1 == d2
     end
+end
+
+@testset "ZnEncoding A11 parallel transition projection oracle ($(field))" begin
+    # Thirty-three distinct nonzero row-deletion maps cross the solve gate.
+    # Each fiber has the interval basis, and every edge is its coordinate projection.
+    count_intervals = 34
+    FG = FZ.Flange{K}(2,
+        [mk_flat([0, 0], [false, true]; id=Symbol(:Ftask, i)) for i in 1:count_intervals],
+        [mk_inj([i, 0], [false, true]; id=Symbol(:Etask, i)) for i in 1:count_intervals],
+        Matrix{K}(I, count_intervals, count_intervals))
+    cache = ZE.compile_zn_box_cache(FG)
+    model = fetch(Threads.@spawn ZE.pmodule_on_box(FG; a=(0, 0), b=(35, 3), cache=cache))
+    _, coords = ZE.grid_poset((0, 0), (35, 3))
+    expected_dims = [count(i -> x <= i, 1:count_intervals) for (x, y) in coords]
+    @test model.dims == expected_dims
+    @test cache.sparse_transition_solves + cache.dense_transition_solves == 33
+    for (u, v) in FF.cover_edges(model.Q)
+        source = [i for i in 1:count_intervals if coords[u][1] <= i]
+        target = [i for i in 1:count_intervals if coords[v][1] <= i]
+        expected = K[CM.coerce(field, i == j) for i in target, j in source]
+        @test model.edge_maps[u, v] == expected
+    end
+    solves_before = cache.sparse_transition_solves + cache.dense_transition_solves
+    repeated = fetch(Threads.@spawn ZE.pmodule_on_box(FG; a=(0, 0), b=(35, 3), cache=cache))
+    @test repeated.dims == expected_dims
+    @test cache.sparse_transition_solves + cache.dense_transition_solves == solves_before
 end
 
 @testset "ZnEncoding optimization-branch counters (all fields)" begin
@@ -1967,52 +2204,48 @@ end
     # -------------------------------------------------------------------------
     let
         PLP = TO.PLPolyhedra
-        if !PLP.HAVE_POLY
-            @test true
-        else
-            n = 1
+        n = 1
 
-            # PLPolyhedra uses H-polytopes { x : A*x <= b }.
-            # Upset: x >= 0  <=>  (-x <= 0)
-            Uhp = PLP.make_hpoly([-1.0], 0.0)
+        # PLPolyhedra uses H-polytopes { x : A*x <= b }.
+        # Upset: x >= 0  <=>  (-x <= 0)
+        Uhp = PLP.make_hpoly([-1.0], 0.0)
 
-            # Downset: x <= 2 <=>  (x <= 2)
-            Dhp = PLP.make_hpoly([1.0], 2.0)
+        # Downset: x <= 2 <=>  (x <= 2)
+        Dhp = PLP.make_hpoly([1.0], 2.0)
 
-            U = PLP.PLUpset(PLP.PolyUnion(n, [Uhp]))
-            D = PLP.PLDownset(PLP.PolyUnion(n, [Dhp]))
+        U = PLP.PLUpset(PLP.PolyUnion(n, [Uhp]))
+        D = PLP.PLDownset(PLP.PolyUnion(n, [Dhp]))
 
-            # PLFringe requires an explicit Phi of size (#Downs) x (#Ups).
-            F1 = PLP.PLFringe([U], PLP.PLDownset[], zeros(K, 0, 1))
-            F2 = PLP.PLFringe(PLP.PLUpset[], [D], zeros(K, 1, 0))
+        # PLFringe requires an explicit Phi of size (#Downs) x (#Ups).
+        F1 = PLP.PLFringe([U], PLP.PLDownset[], zeros(K, 0, 1))
+        F2 = PLP.PLFringe(PLP.PLUpset[], [D], zeros(K, 1, 0))
 
-            enc = TO.EncodingOptions(backend=:pl, max_regions=10_000)
-            Ppl, Hpl, pipl = PLP.encode_from_PL_fringes(F1, F2, enc; poset_kind = :signature)
-            out_tuple = TO.encode((F1, F2); enc=enc)
-            out_vec = TO.encode(PLP.PLFringe[F1, F2]; enc=enc)
-            @test length(out_tuple) == 2
-            @test length(out_vec) == 2
-            @test_throws MethodError TO.encode(F1, F2; enc=enc)
-            @test_throws MethodError TO.encode(F1, F2, F1; enc=enc)
-            @test Ppl isa TO.ZnEncoding.SignaturePoset
-            rpcache = CM.EncodingCache()
+        enc = TO.EncodingOptions(backend=:pl, max_regions=10_000)
+        Ppl, Hpl, pipl = PLP.encode_from_PL_fringes(F1, F2, enc; poset_kind = :signature)
+        out_tuple = TO.encode((F1, F2); enc=enc)
+        out_vec = TO.encode(PLP.PLFringe[F1, F2]; enc=enc)
+        @test length(out_tuple) == 2
+        @test length(out_vec) == 2
+        @test_throws MethodError TO.encode(F1, F2; enc=enc)
+        @test_throws MethodError TO.encode(F1, F2, F1; enc=enc)
+        @test Ppl isa TO.ZnEncoding.SignaturePoset
+        rpcache = CM.EncodingCache()
 
-            Qpl = TO.Invariants.region_poset(pipl; poset_kind = :signature, cache=rpcache)
-            @test TO.nvertices(Qpl) == TO.nvertices(Ppl)
-            @test FF.poset_equal(Qpl, Ppl)
+        Qpl = TO.Invariants.region_poset(pipl; poset_kind = :signature, cache=rpcache)
+        @test TO.nvertices(Qpl) == TO.nvertices(Ppl)
+        @test FF.poset_equal(Qpl, Ppl)
 
-            Qpl2 = TO.Invariants.region_poset(pipl; poset_kind = :signature, cache=rpcache)
-            @test Qpl2 === Qpl
+        Qpl2 = TO.Invariants.region_poset(pipl; poset_kind = :signature, cache=rpcache)
+        @test Qpl2 === Qpl
 
-            Qpl_dense = TO.Invariants.region_poset(pipl; poset_kind = :dense, cache=rpcache)
-            @test FF.leq_matrix(Qpl) == FF.leq_matrix(Qpl_dense)
+        Qpl_dense = TO.Invariants.region_poset(pipl; poset_kind = :dense, cache=rpcache)
+        @test FF.leq_matrix(Qpl) == FF.leq_matrix(Qpl_dense)
 
-            arr = Inv.projected_arrangement(pipl; dirs=[[1.0]])
-            @test FF.poset_equal(arr.Q, Ppl)
+        arr = Inv.projected_arrangement(pipl; dirs=[[1.0]])
+        @test FF.poset_equal(arr.Q, Ppl)
 
-            arr2 = Inv.projected_arrangement(pipl; dirs=[[1.0]], Q=Ppl)
-            @test FF.poset_equal(arr2.Q, Ppl)
-        end
+        arr2 = Inv.projected_arrangement(pipl; dirs=[[1.0]], Q=Ppl)
+        @test FF.poset_equal(arr2.Q, Ppl)
     end
 
 
@@ -2068,17 +2301,70 @@ if field isa CM.QQField
     end
 
     PLP = TO.PLPolyhedra
-    if PLP.HAVE_POLY
-        n = 1
-        Uhp = PLP.make_hpoly([-1.0], 0.0)
-        Dhp = PLP.make_hpoly([1.0], 2.0)
-        U = PLP.PLUpset(PLP.PolyUnion(n, [Uhp]))
-        D = PLP.PLDownset(PLP.PolyUnion(n, [Dhp]))
-        F = PLP.PLFringe([U], [D], ones(K, 1, 1))
-        enc = TO.EncodingOptions(backend=:pl, max_regions=10_000, poset_kind=:dense)
-        P, _H, _pi = TO.encode(F, enc)
-        @test P isa TO.FinitePoset
-    end
+    n = 1
+    Uhp = PLP.make_hpoly([-1.0], 0.0)
+    Dhp = PLP.make_hpoly([1.0], 2.0)
+    U = PLP.PLUpset(PLP.PolyUnion(n, [Uhp]))
+    D = PLP.PLDownset(PLP.PolyUnion(n, [Dhp]))
+    F = PLP.PLFringe([U], [D], ones(K, 1, 1))
+    enc = TO.EncodingOptions(backend=:pl, max_regions=10_000, poset_kind=:dense)
+    P, _H, _pi = TO.encode(F, enc)
+    @test P isa TO.FinitePoset
 end
 end
 end # with_fields
+
+@testset "A14 Zn owner encoding options govern representation and coefficients" begin
+    tau = FZ.face(1, [false])
+    FG = FZ.Flange{QQ}(1, [FZ.IndFlat(tau, [0])], [FZ.IndInj(tau, [2])], fill(QQ(3), 1, 1); field=CM.QQField())
+    with_fields(FIELDS_FULL) do field
+        opts = TO.EncodingOptions(backend=:zn, poset_kind=:dense, field=field)
+        P, H, pi = ZE.encode_from_flange(FG, opts)
+        @test P isa FF.FinitePoset
+        @test H.field == field
+        @test H.phi == fill(CM.coerce(field, 3), 1, 1)
+        expected = iszero(CM.coerce(field, 3)) ? 0 : 1
+        @test [FF.fiber_dimension(H, EC.locate(pi, (x,))) for x in (-1, 0, 1, 2, 3)] == [0, expected, expected, expected, 0]
+        M = IR.pmodule_from_fringe(H)
+        @test TO.Invariants.rank_map(M, EC.locate(pi, (0,)), EC.locate(pi, (1,))) == expected
+        @test ZE.compile_zn_cache(FG, opts).P isa FF.FinitePoset
+        @test first(ZE.encode_poset_from_flanges(FG, opts)) isa FF.FinitePoset
+        @test first(ZE.encode_from_flange(FG; opts=opts)) isa FF.FinitePoset
+        @test first(ZE.encode_from_flange(FG, opts; poset_kind=:signature)) isa ZE.SignaturePoset
+        for input in ((FG,), [FG])
+            Pn, Hs, _ = ZE.encode_from_flanges(input; opts=opts)
+            @test Pn isa FF.FinitePoset
+            @test only(Hs).field == field
+            @test only(Hs).phi == H.phi
+            @test first(ZE.encode_from_flanges(P, input, opts)) === P
+        end
+        @test first(ZE.encode_from_flanges(FG, FG, opts)) isa FF.FinitePoset
+        @test first(ZE.encode_from_flanges(FG, FG, FG; opts=opts)) isa FF.FinitePoset
+        @test first(ZE.encode_from_flange(P, FG; opts=opts)) === P
+        local_fg = FZ.change_field(FG, field)
+        @test ZE.encode_from_flange(local_fg)[2].field == field
+        @test only(ZE.encode_from_flanges((local_fg,))[2]).field == field
+        @test first(ZE.encode_from_flanges(local_fg, local_fg)[2]).field == field
+        @test ZE.encode_from_flange(local_fg, TO.EncodingOptions(field=CM.QQField()))[2].field == CM.QQField()
+        df = TO.DerivedFunctorOptions(maxdeg=0)
+        E = TO.DerivedFunctors.ExtZn(FG, FG, TO.EncodingOptions(field=field), df; method=:box, a=(0,), b=(1,))
+        @test TO.DerivedFunctors.source_module(E).field == field
+        @test TO.DerivedFunctors.dim(E, 0) == expected
+        @test TO.DerivedFunctors.source_module(TO.DerivedFunctors.ExtZn(local_fg, local_fg; df=df, method=:box, a=(0,), b=(1,))).field == field
+        box_options = TO.EncodingOptions(field=field, max_regions=2)
+        dc = TO.DerivedFunctors.ExtDoubleComplex(FG, FG, box_options; method=:box, a=(0,), b=(1,))
+        @test dc.field == field
+        ss = TO.DerivedFunctors.ExtSpectralSequence(FG, FG, box_options; method=:box, a=(0,), b=(1,))
+        @test ss.DC.field == field
+        @test only(filter(H -> H.t == 0, ss.Htot)).dimH == expected
+    end
+    @test_throws ArgumentError ZE.encode_poset_from_flanges(FG, TO.EncodingOptions(strict_eps=1//10))
+    @test_throws ArgumentError ZE.encode_from_flange(FG, TO.EncodingOptions(strict_eps=1//10))
+    for opts in (TO.EncodingOptions(poset_kind=:dense), TO.EncodingOptions(backend=:pl),
+                 TO.EncodingOptions(strict_eps=1//10), TO.EncodingOptions(max_regions=1))
+        @test_throws ArgumentError TO.DerivedFunctors.ExtZn(FG, FG, opts, TO.DerivedFunctorOptions(maxdeg=0);
+            method=:box, a=(0,), b=(1,))
+        @test_throws ArgumentError TO.DerivedFunctors.ExtDoubleComplex(FG, FG, opts; method=:box, a=(0,), b=(1,))
+        @test_throws ArgumentError TO.DerivedFunctors.ExtSpectralSequence(FG, FG, opts; method=:box, a=(0,), b=(1,))
+    end
+end

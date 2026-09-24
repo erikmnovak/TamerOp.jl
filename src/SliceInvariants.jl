@@ -1,4 +1,6 @@
 module SliceInvariants
+using ..ExactReals: AlgebraicReal
+
 # -----------------------------------------------------------------------------
 # SliceInvariants.jl
 #
@@ -14,8 +16,8 @@ compiled slice plans, slice vectorizations, and related sliced invariant APIs.
 
 using LinearAlgebra
 using JSON3
-using ..CoreModules: EncodingCache, AbstractCoeffField, RegionPosetCachePayload,
-                     AbstractSlicePlanCache
+using ..CoreModules: _foreach_workchunk, EncodingCache, AbstractCoeffField, RegionPosetCachePayload,
+                     AbstractSlicePlanCache, _StructuralCacheKey, _structural_cache_key
 using ..Options: InvariantOptions
 using ..EncodingCore: PLikeEncodingMap, CompiledEncoding, GridEncodingMap, locate, locate_many!, axes_from_encoding, dimension, representatives
 using Statistics: mean
@@ -43,7 +45,7 @@ using ..InvariantCore: SliceSpec, RankQueryCache,
                        _selection_kwargs_from_opts, _axes_kwargs_from_opts,
                        _eye, rank_map,
                        FloatBarcode, IndexBarcode,
-                       PackedBarcode, PackedBarcodeGrid, PackedIndexBarcode, PackedFloatBarcode,
+                       EndpointPair, PackedBarcode, PackedBarcodeGrid, PackedIndexBarcode, PackedFloatBarcode,
                        _empty_index_barcode, _empty_float_barcode,
                        _empty_packed_index_barcode, _empty_packed_float_barcode,
                        _packed_grid_undef, _packed_grid_from_matrix,
@@ -71,6 +73,7 @@ import ..DerivedFunctors: source_module
 import Base.Threads
 import ..Serialization: save_mpp_decomposition_json, load_mpp_decomposition_json,
                         save_mpp_image_json, load_mpp_image_json
+import ..Serialization
 import ..Modules: PModule, map_leq, CoverCache, _get_cover_cache
 import ..IndicatorResolutions: pmodule_from_fringe
 import ..ZnEncoding: ZnEncodingMap
@@ -113,8 +116,9 @@ end
 function _normalize_axis_aligned_box(box)
     (box isa Tuple && length(box) == 2) || error("expected box=(lo, hi)")
     lo, hi = box
-    lo_v = Float64[float(x) for x in lo]
-    hi_v = Float64[float(x) for x in hi]
+    T = any(x -> x isa AlgebraicReal, lo) || any(x -> x isa AlgebraicReal, hi) ? AlgebraicReal : Float64
+    lo_v = T[x for x in lo]
+    hi_v = T[x for x in hi]
     length(lo_v) == length(hi_v) || error("box endpoints must have the same length")
     @inbounds for i in 1:length(lo_v)
         lo_v[i] <= hi_v[i] || error("box must satisfy lo[i] <= hi[i] for all i")
@@ -147,8 +151,6 @@ end
 
 _SliceKernelScratch() = _SliceKernelScratch(Tuple{Float64,Float64}[], Tuple{Float64,Float64}[])
 
-@inline _scratch_arenas(threads::Bool) =
-    [_SliceKernelScratch() for _ in 1:(threads ? Threads.maxthreadid() : 1)]
 
 # Internal: intersect two axis-aligned boxes (either may be `nothing`).
 # If both are provided, we use their intersection.
@@ -281,6 +283,12 @@ function slice_chain(pi, x0::AbstractVector, dir::AbstractVector, opts::Invarian
     drop_unknown::Bool = true,
     dedup::Bool = true,
     check_chain::Bool = false)
+    pi0 = _unwrap_compiled(pi)
+    if hasproperty(pi0, :coords) && any(a -> eltype(a) <: AlgebraicReal, pi0.coords)
+        return _algebraic_sampled_chain(pi0, x0, dir, opts;
+            ts=ts, tmin=tmin, tmax=tmax, nsteps=nsteps, box2=box2,
+            drop_unknown=drop_unknown, dedup=dedup, check_chain=check_chain)
+    end
     return _slice_chain_collect(
         pi,
         Float64[float(x) for x in x0],
@@ -601,19 +609,19 @@ end
 # Tuple adapters keep the compute path vector-specialized while accepting tuple inputs.
 @inline function slice_chain(pi, x0::AbstractVector, dir::NTuple{N,<:Real},
                              opts::InvariantOptions; kwargs...) where {N}
-    return slice_chain(pi, x0, Float64[dir[i] for i in 1:N], opts; kwargs...)
+    return slice_chain(pi, x0, collect(dir), opts; kwargs...)
 end
 
 @inline function slice_chain(pi, x0::NTuple{N,<:Real}, dir::AbstractVector,
                              opts::InvariantOptions; kwargs...) where {N}
-    return slice_chain(pi, Float64[x0[i] for i in 1:N], dir, opts; kwargs...)
+    return slice_chain(pi, collect(x0), dir, opts; kwargs...)
 end
 
 @inline function slice_chain(pi, x0::NTuple{N,<:Real}, dir::NTuple{N,<:Real},
                              opts::InvariantOptions; kwargs...) where {N}
     return slice_chain(pi,
-        Float64[x0[i] for i in 1:N],
-        Float64[dir[i] for i in 1:N],
+        collect(x0),
+        collect(dir),
         opts; kwargs...)
 end
 
@@ -885,6 +893,20 @@ end
     return out
 end
 
+# Packed exact intervals retain their coordinate type until costs are formed.
+# In particular, distinct algebraic endpoints can round to the same Float64.
+function _barcode_points(bar::PackedBarcode{T}) where {T<:Real}
+    out = Tuple{T,T}[]
+    sizehint!(out, _packed_total_multiplicity(bar))
+    @inbounds for i in eachindex(bar.pairs)
+        pair = bar.pairs[i]
+        for _ in 1:bar.mults[i]
+            push!(out, (pair.b, pair.d))
+        end
+    end
+    return out
+end
+
 @inline function _barcode_points!(out::Vector{Tuple{Float64,Float64}},
                                   bar::PackedIndexBarcode)
     empty!(out)
@@ -901,7 +923,27 @@ end
     return out
 end
 
-function _barcode_points(bar)::Vector{Tuple{Float64,Float64}}
+function _barcode_points(bar)
+    intervals = bar isa AbstractDict ? keys(bar) : bar
+    if (bar isa AbstractDict || bar isa AbstractVector) &&
+       !(bar isa AbstractDict{Tuple{Float64,Float64}} || bar isa AbstractDict{Tuple{Int,Int}}) &&
+       any(interval -> any(x -> x isa Union{AlgebraicReal,Rational}, interval), intervals)
+        E = any(interval -> any(x -> x isa AlgebraicReal, interval), intervals) ?
+            AlgebraicReal : Rational{BigInt}
+        all_finite = all(interval -> all(isfinite, interval), intervals)
+        T = all_finite ? E : Union{E,Float64}
+        pts = Tuple{T,T}[]
+        entries = bar isa AbstractDict ? pairs(bar) : ((interval, 1) for interval in bar)
+        for (interval, mult) in entries
+            b, d = interval
+            birth = isfinite(b) ? E(b) : Float64(b)
+            death = isfinite(d) ? E(d) : Float64(d)
+            for _ in 1:Int(mult)
+                push!(pts, (birth, death))
+            end
+        end
+        return pts
+    end
     if bar isa AbstractVector
         pts = Tuple{Float64,Float64}[]
         for I in bar
@@ -956,8 +998,8 @@ end
 #--------------------------------------------------------------------
 
 function _point_distance(a::Tuple{<:Real,<:Real}, b::Tuple{<:Real,<:Real}, q::Real)
-    dx = abs(float(a[1] - b[1]))
-    dy = abs(float(a[2] - b[2]))
+    dx = Float64(abs(a[1] - b[1]))
+    dy = Float64(abs(a[2] - b[2]))
     if q == Inf
         return max(dx, dy)
     elseif q == 2
@@ -970,7 +1012,7 @@ function _point_distance(a::Tuple{<:Real,<:Real}, b::Tuple{<:Real,<:Real}, q::Re
 end
 
 function _diag_distance(a::Tuple{<:Real,<:Real}, q::Real)
-    d = abs(float(a[2] - a[1]))
+    d = Float64(abs(a[2] - a[1]))
     if q == Inf
         return d / 2
     elseif q == 2
@@ -1074,8 +1116,8 @@ Parameters:
 Diagonal matching is included in the standard way. The return value is a Float64.
 """
 @inline function _wasserstein_cost(i::Int, j::Int,
-                                   P::Vector{Tuple{Float64,Float64}},
-                                   Q::Vector{Tuple{Float64,Float64}},
+                                   P::AbstractVector{<:Tuple},
+                                   Q::AbstractVector{<:Tuple},
                                    m::Int, n::Int,
                                    diagP::Vector{Float64},
                                    diagQ::Vector{Float64},
@@ -1095,8 +1137,8 @@ Diagonal matching is included in the standard way. The return value is a Float64
     end
 end
 
-function _auction_assignment(P::Vector{Tuple{Float64,Float64}},
-                             Q::Vector{Tuple{Float64,Float64}};
+function _auction_assignment(P::AbstractVector{<:Tuple},
+                             Q::AbstractVector{<:Tuple};
                              p::Real=2, q::Real=Inf,
                              eps_factor::Real=5.0,
                              eps_min::Real=1e-6,
@@ -1137,7 +1179,11 @@ function _auction_assignment(P::Vector{Tuple{Float64,Float64}},
 
     max_iters == 0 && (max_iters = 10 * N * N)
 
-    while epsilon > eps_min
+    # Even sub-tolerance diagrams need one assignment pass. Otherwise small
+    # positive exact-coordinate costs leave every assignment equal to zero.
+    first_phase = true
+    while first_phase || epsilon > eps_min
+        first_phase = false
         unassigned = Int[]
         for i in 1:N
             if assign[i] == 0
@@ -1200,8 +1246,8 @@ Compute the p-Wasserstein distance between two 1-parameter barcodes (persistence
 - `:auction`  : use auction algorithm with epsilon-scaling
 """
 function _wasserstein_distance_points(
-    P::Vector{Tuple{Float64,Float64}},
-    Q::Vector{Tuple{Float64,Float64}};
+    P::AbstractVector{<:Tuple},
+    Q::AbstractVector{<:Tuple};
     p::Real=2, q::Real=Inf, backend::Symbol=:auto,
 )
     p >= 1 || error("wasserstein_distance: expected p >= 1")
@@ -1405,6 +1451,7 @@ function _slice_based_barcode_distance(
         if agg_mode == :max
             best_by_slot = fill(0.0, nT)
             Threads.@threads for slot in 1:nT
+                local best, w, d
                 best = 0.0
                 for idx in slot:nT:nslices
                     w = W[idx]
@@ -1424,6 +1471,7 @@ function _slice_based_barcode_distance(
             acc_by_slot = fill(0.0, nT)
             sumw_by_slot = fill(0.0, nT)
             Threads.@threads for slot in 1:nT
+                local acc, sumw, w
                 acc = 0.0
                 sumw = 0.0
                 for idx in slot:nT:nslices
@@ -1446,6 +1494,7 @@ function _slice_based_barcode_distance(
             acc_by_slot = fill(0.0, nT)
             sumw_by_slot = fill(0.0, nT)
             Threads.@threads for slot in 1:nT
+                local acc, sumw, w, d
                 acc = 0.0
                 sumw = 0.0
                 for idx in slot:nT:nslices
@@ -1564,7 +1613,9 @@ function _slice_based_barcode_distance(
         agg_norm = float(agg_norm),
         threads = threads,
     )
-    if cache === nothing
+    pi0 = _unwrap_compiled(pi)
+    exact_grades = hasproperty(pi0, :coords) && any(a -> eltype(a) <: AlgebraicReal, pi0.coords)
+    if cache === nothing && !exact_grades
         box0 = get(slice_kwargs, :box, nothing)
         strict0 = get(slice_kwargs, :strict, nothing)
         slice_kwargs0 = (; (k => v for (k, v) in pairs(slice_kwargs) if k != :box && k != :strict)...)
@@ -1818,39 +1869,108 @@ end
 
 
 
-_diag_cost(p::Tuple{Float64,Float64}) = 0.5 * abs(p[2] - p[1])
-_linf_dist(p::Tuple{Float64,Float64}, q::Tuple{Float64,Float64}) = max(abs(p[1] - q[1]), abs(p[2] - q[2]))
+# A finite interval on the diagonal contributes zero. Nonempty intervals with
+# an infinite endpoint have infinite deletion cost. Splitting opposite signs
+# before subtraction avoids overflowing a representable floating-point radius.
+@inline function _diag_cost(p::Tuple{<:Real,<:Real})
+    b, d = p
+    (!isfinite(b) || !isfinite(d)) && return Inf
+    width = d - b
+    return !isfinite(width) && isfinite(b) && isfinite(d) ? d / 2 - b / 2 : width / 2
+end
 
-# Hopcroft-Karp maximum matching for bipartite graphs given by adjacency lists.
-function _hopcroft_karp(adj::Vector{Vector{Int}}, n_left::Int, n_right::Int)::Int
-    pairU = fill(0, n_left)
-    pairV = fill(0, n_right)
-    dist = fill(0, n_left)
-    INF = typemax(Int)
+# Equal infinite endpoints have zero coordinate distance. In particular,
+# two essential bars match at the difference of their finite birth times.
+@inline function _linf_dist(p::Tuple{<:Real,<:Real}, q::Tuple{<:Real,<:Real})
+    z = zero(p[1])
+    return max(p[1] == q[1] ? z : (!isfinite(p[1]) || !isfinite(q[1])) ? Inf : abs(p[1] - q[1]),
+               p[2] == q[2] ? z : (!isfinite(p[2]) || !isfinite(q[2])) ? Inf : abs(p[2] - q[2]))
+end
+
+@inline _bottleneck_cost_endpoint(::Type{T}, x::Real) where {T<:Real} = T(x)
+@inline _bottleneck_cost_endpoint(::Type{Union{AlgebraicReal,Float64}}, x::Real) =
+    isfinite(x) ? AlgebraicReal(x) : Float64(x)
+@inline _bottleneck_cost_endpoint(::Type{Union{Rational{BigInt},Float64}}, x::Real) =
+    isfinite(x) ? Rational{BigInt}(x) : Float64(x)
+
+@inline function _check_bottleneck_interval(interval)
+    ((interval isa Tuple || interval isa AbstractVector) && length(interval) == 2) ||
+        throw(ArgumentError("bottleneck: each interval must contain exactly two real endpoints"))
+    b, d = interval
+    (b isa Real && d isa Real) ||
+        throw(ArgumentError("bottleneck: interval endpoints must be real"))
+    (!isnan(b) && !isnan(d) && b <= d) ||
+        throw(ArgumentError("bottleneck: interval endpoints must satisfy birth <= death and cannot be NaN"))
+    (b == d && !isfinite(b)) &&
+        throw(ArgumentError("bottleneck: a zero-length interval must have finite endpoints"))
+    return nothing
+end
+
+# Validate before expanding multiplicities: invalid zero-multiplicity entries
+# must not disappear, and negative/nonintegral multiplicities are never ignored.
+function _bottleneck_barcode_points(bar)
+    # The shared engine validates these already-expanded hot-path inputs.
+    if bar isa Vector{Tuple{Float64,Float64}}
+        return bar
+    elseif bar isa AbstractVector
+        for interval in bar
+            _check_bottleneck_interval(interval)
+        end
+    elseif bar isa AbstractDict
+        for (interval, multiplicity) in bar
+            _check_bottleneck_interval(interval)
+            (multiplicity isa Integer && 0 <= multiplicity <= typemax(Int)) ||
+                throw(ArgumentError("bottleneck: multiplicities must be nonnegative integers representable as Int"))
+        end
+    elseif bar isa PackedBarcode
+        length(bar.pairs) == length(bar.mults) ||
+            throw(ArgumentError("bottleneck: packed intervals and multiplicities must have equal lengths"))
+        for i in eachindex(bar.pairs)
+            p = bar.pairs[i]
+            _check_bottleneck_interval((p.b, p.d))
+            bar.mults[i] >= 0 ||
+                throw(ArgumentError("bottleneck: multiplicities must be nonnegative integers"))
+        end
+    else
+        throw(ArgumentError("bottleneck: expected a vector of intervals or a barcode dictionary"))
+    end
+    return _barcode_points(bar)
+end
+
+# Hopcroft-Karp maximum matching. The integer workspaces are reused across
+# thresholds; pairU and pairV contain the witness when the search finishes.
+function _hopcroft_karp!(pairU::Vector{Int}, pairV::Vector{Int},
+                         dist::Vector{Int}, queue::Vector{Int},
+                         adj::Vector{Vector{Int}})::Int
+    fill!(pairU, 0)
+    fill!(pairV, 0)
+    n_left = length(pairU)
+    infdist = typemax(Int)
 
     function bfs()::Bool
-        q = Int[]
+        nq = 0
         for u in 1:n_left
             if pairU[u] == 0
                 dist[u] = 0
-                push!(q, u)
+                nq += 1
+                queue[nq] = u
             else
-                dist[u] = INF
+                dist[u] = infdist
             end
         end
-
         found = false
         qi = 1
-        while qi <= length(q)
-            u = q[qi]
+        while qi <= nq
+            u = queue[qi]
             qi += 1
             for v in adj[u]
                 u2 = pairV[v]
                 if u2 == 0
                     found = true
-                elseif dist[u2] == INF
+                elseif dist[u2] == infdist
                     dist[u2] = dist[u] + 1
-                    push!(q, u2)
+                    nq += 1
+                    queue[nq] = u2
                 end
             end
         end
@@ -1866,7 +1986,7 @@ function _hopcroft_karp(adj::Vector{Vector{Int}}, n_left::Int, n_right::Int)::In
                 return true
             end
         end
-        dist[u] = INF
+        dist[u] = infdist
         return false
     end
 
@@ -1881,137 +2001,176 @@ function _hopcroft_karp(adj::Vector{Vector{Int}}, n_left::Int, n_right::Int)::In
     return matching
 end
 
-function _bottleneck_leq_eps(A::Vector{Tuple{Float64,Float64}}, B::Vector{Tuple{Float64,Float64}}, eps::Float64)::Bool
-    m = length(A)
-    n = length(B)
-
-    # Left side: A points + n diagonal copies.
-    # Right side: B points + m diagonal copies.
-    n_left = m + n
-    n_right = n + m
-
-    diag_nodes = n+1:n+m  # right diagonal indices (may be empty)
-
-    # Precompute which B points can be sent to the diagonal within eps.
-    Bok = Int[]
-    for j in 1:n
-        if _diag_cost(B[j]) <= eps
-            push!(Bok, j)
-        end
+function _bottleneck_threshold_matching!(adj, pairU, pairV, dist, queue,
+                                         costs, da, db, threshold)
+    m, n = length(da), length(db)
+    for row in adj
+        empty!(row)
     end
-
-    adj = Vector{Vector{Int}}(undef, n_left)
-    for u in 1:n_left
-        adj[u] = Int[]
-    end
-
-    # A points.
     for i in 1:m
-        p = A[i]
-        neigh = adj[i]
-        # to B points
+        row = adj[i]
         for j in 1:n
-            if _linf_dist(p, B[j]) <= eps
-                push!(neigh, j)
-            end
+            costs[i, j] <= threshold && push!(row, j)
         end
-        # to diagonal (any right diagonal copy)
-        if _diag_cost(p) <= eps
-            for v in diag_nodes
-                push!(neigh, v)
-            end
-        end
+        # Each real point needs only its own diagonal copy. The full
+        # diagonal-to-diagonal block supplies arbitrary deletion capacity.
+        da[i] <= threshold && push!(row, n + i)
     end
-
-    # Left diagonal copies (one per B point, but all identical as diagonal points).
-    for k in 1:n
-        neigh = adj[m + k]
-        # match B points to diagonal when allowed
-        for j in Bok
-            push!(neigh, j)
-        end
-        # diagonal to diagonal always allowed (cost 0)
-        for v in diag_nodes
-            push!(neigh, v)
-        end
+    for j in 1:n
+        row = adj[m + j]
+        db[j] <= threshold && push!(row, j)
+        append!(row, n+1:n+m)
     end
-
-    match_size = _hopcroft_karp(adj, n_left, n_right)
-    return match_size == n_left
+    return _hopcroft_karp!(pairU, pairV, dist, queue, adj) == m + n
 end
 
-"""
-    bottleneck_distance(barA, barB) -> Float64
-
-Compute the bottleneck distance between two 1D barcodes.
-
-Inputs can be:
-- a dictionary `(birth, death) => multiplicity` as returned by `slice_barcode`, or
-- a vector of intervals `[(birth, death), ...]` (multiplicity by repetition).
-
-We use the standard persistence-diagram L_infinity metric:
-- cost((b,d),(b',d')) = max(|b-b'|, |d-d'|)
-- cost((b,d), diagonal) = (d-b)/2
-
-This implementation is exact for the given finite barcodes (up to floating-point).
-"""
-function _bottleneck_distance_points(
-    A::Vector{Tuple{Float64,Float64}},
-    B::Vector{Tuple{Float64,Float64}};
-    backend::Symbol=:auto,
-)::Float64
-    if isempty(A) && isempty(B)
-        return 0.0
-    end
-
-    backend == :auto && (backend = :hk)
-    backend == :hk || error("bottleneck_distance: unknown backend=$(backend)")
-
-    # Candidate eps values: all pairwise distances and diagonal costs.
-    epss = Float64[0.0]
+# One threshold search owns both scalar distances and matching witnesses.
+# Keeping the cost type generic is essential for exact finite-window matching.
+function _bottleneck_points(A::AbstractVector{Tuple{T,T}},
+                            B::AbstractVector{Tuple{S,S}},
+                            ::Val{witness}; backend::Symbol=:auto) where {T<:Real,S<:Real,witness}
+    backend in (:auto, :hk) ||
+        throw(ArgumentError("bottleneck: unknown backend=$backend; expected :auto or :hk"))
+    Base.require_one_based_indexing(A, B)
     for p in A
-        push!(epss, _diag_cost(p))
+        _check_bottleneck_interval(p)
     end
-    for q in B
-        push!(epss, _diag_cost(q))
+    for p in B
+        _check_bottleneck_interval(p)
     end
-    for p in A
-        for q in B
-            push!(epss, _linf_dist(p, q))
-        end
+    algebraic = T <: AlgebraicReal || S <: AlgebraicReal ||
+                T === Union{AlgebraicReal,Float64} || S === Union{AlgebraicReal,Float64}
+    rational = T <: Rational || S <: Rational ||
+               T === Union{Rational{BigInt},Float64} || S === Union{Rational{BigInt},Float64}
+    E = algebraic ? AlgebraicReal : Rational{BigInt}
+    C = if algebraic || rational
+        all(p -> all(isfinite, p), A) && all(p -> all(isfinite, p), B) ?
+            E : Union{E,Float64}
+    else
+        promote_type(typeof(zero(T) / 2), typeof(zero(S) / 2))
     end
-    sort!(epss)
-    epss = unique(epss)
+    z = algebraic || rational ? zero(E) : zero(C)
+    m, n = length(A), length(B)
+    da = C[_diag_cost((_bottleneck_cost_endpoint(C, p[1]), _bottleneck_cost_endpoint(C, p[2]))) for p in A]
+    db = C[_diag_cost((_bottleneck_cost_endpoint(C, p[1]), _bottleneck_cost_endpoint(C, p[2]))) for p in B]
+    if m == 0 || n == 0
+        distance = max(maximum(da; init=z), maximum(db; init=z))
+        return witness ? (distance=distance, a_to_b=zeros(Int, m), b_to_a=zeros(Int, n)) : distance
+    end
 
+    costs = Matrix{C}(undef, m, n)
+    thresholds = C[z]
+    sizehint!(thresholds, 1 + m + n + m*n)
+    append!(thresholds, da)
+    append!(thresholds, db)
+    for j in 1:n, i in 1:m
+        p, q = A[i], B[j]
+        cost = _linf_dist((_bottleneck_cost_endpoint(C, p[1]), _bottleneck_cost_endpoint(C, p[2])),
+                          (_bottleneck_cost_endpoint(C, q[1]), _bottleneck_cost_endpoint(C, q[2])))
+        costs[i, j] = cost
+        push!(thresholds, cost)
+    end
+    sort!(thresholds)
+    unique!(thresholds)
+
+    adj = [Int[] for _ in 1:m+n]
+    pairU, pairV = zeros(Int, m+n), zeros(Int, m+n)
+    dist, queue = zeros(Int, m+n), zeros(Int, m+n)
     lo = 1
-    hi = length(epss)
+    # Deleting every bar is always a feasible upper bound (possibly infinite).
+    hi = searchsortedfirst(thresholds, max(maximum(da), maximum(db)))
     while lo < hi
         mid = (lo + hi) >>> 1
-        if _bottleneck_leq_eps(A, B, epss[mid])
+        if _bottleneck_threshold_matching!(adj, pairU, pairV, dist, queue,
+                                           costs, da, db, thresholds[mid])
             hi = mid
         else
             lo = mid + 1
         end
     end
-    return epss[lo]
+    distance = thresholds[lo]
+    if witness
+        _bottleneck_threshold_matching!(adj, pairU, pairV, dist, queue,
+                                        costs, da, db, distance)
+        a_to_b = [pairU[i] <= n ? pairU[i] : 0 for i in 1:m]
+        b_to_a = [pairV[j] <= m ? pairV[j] : 0 for j in 1:n]
+        return (distance=distance, a_to_b=a_to_b, b_to_a=b_to_a)
+    end
+    return distance
 end
 
+@inline _bottleneck_distance_points(A::AbstractVector{<:Tuple}, B::AbstractVector{<:Tuple}; backend::Symbol=:auto) =
+    _bottleneck_points(A, B, Val(false); backend=backend)
+
+@inline _bottleneck_matching_points(A::AbstractVector{<:Tuple}, B::AbstractVector{<:Tuple}; backend::Symbol=:auto) =
+    _bottleneck_points(A, B, Val(true); backend=backend)
+
+"""
+    bottleneck_distance(barA, barB; backend=:auto) -> Float64
+
+Compute the bottleneck distance between two 1D barcode multisets using
+Hopcroft-Karp matching (`backend=:auto` or `:hk`). Inputs are dictionaries
+`(birth, death) => multiplicity` or vectors of intervals, with multiplicity
+represented by repetition. Dictionary multiplicities must be nonnegative integers.
+
+The persistence-diagram metric uses the L_infinity distance between endpoints
+and half the interval length for a match to the diagonal. Equal infinite
+endpoints have zero coordinate distance: essential bars `(b, Inf)` and
+`(b', Inf)` match at cost `abs(b-b')`. An essential bar cannot match the diagonal
+at finite cost. Unmatched essential bars can therefore give distance `Inf`.
+
+Endpoints must be real, non-NaN, and satisfy `birth <= death`; equal infinite
+endpoints are invalid. Finite zero-length intervals are allowed and have zero
+diagonal cost. Rational and algebraic endpoints retain exact cost comparisons; ordinary
+floating endpoints use floating-point arithmetic. The reported distance is
+converted to `Float64` only after optimization. Use
+[`bottleneck_matching`](@ref) when the optimal correspondence is also needed.
+"""
 function bottleneck_distance(barA, barB; backend::Symbol=:auto)::Float64
-    A = _barcode_points(barA)
-    B = _barcode_points(barB)
+    A = _bottleneck_barcode_points(barA)
+    B = _bottleneck_barcode_points(barB)
     return _bottleneck_distance_points(A, B; backend=backend)
 end
 
-# Convenience: bottleneck distance between slice barcodes of two modules on the same chain.
-function bottleneck_distance(M::PModule{K}, N::PModule{K}, chain::AbstractVector{Int}; kwargs...)::Float64 where {K}
-    bM = slice_barcode(M, chain; kwargs...)
-    bN = slice_barcode(N, chain; kwargs...)
-    return bottleneck_distance(bM, bN)
+"""
+    bottleneck_matching(barA, barB; backend=:auto)
+
+Return an optimal bottleneck correspondence as a named tuple with fields
+`distance`, `a_to_b`, `b_to_a`, `points_a`, and `points_b`. The distance and input
+contracts are the same as for [`bottleneck_distance`](@ref).
+
+`a_to_b[i] == j` matches `points_a[i]` to `points_b[j]`; a zero entry means a
+match to the diagonal. `b_to_a` gives the inverse correspondence, including bars
+of the second barcode that match the diagonal. The returned point vectors
+expand multiplicities, preserve vector input order, and sort dictionary inputs
+lexicographically by `(birth, death)`. They are independent of the input storage.
+
+An optimal matching need not be unique. Ties are resolved deterministically for
+these ordered point vectors; the result makes no uniqueness claim. When the
+distance is infinite, the correspondence is an extended-cost witness, not a
+finite-cost matching.
+"""
+function bottleneck_matching(barA, barB; backend::Symbol=:auto)
+    A = _bottleneck_barcode_points(barA)
+    B = _bottleneck_barcode_points(barB)
+    A === barA && (A = copy(A))
+    B === barB && (B = copy(B))
+    barA isa AbstractDict && sort!(A)
+    barB isa AbstractDict && sort!(B)
+    result = _bottleneck_matching_points(A, B; backend=backend)
+    return (; result..., distance=Float64(result.distance), points_a=A, points_b=B)
 end
 
-# Aliases used by slice-based distance wrappers.
-# These accept Wasserstein-style kwargs for API convenience.
-matching_distance(barA, barB; kwargs...)::Float64 = bottleneck_distance(barA, barB)
+# Convenience: bottleneck distance between slice barcodes of two modules on the same chain.
+function bottleneck_distance(M::PModule{K}, N::PModule{K}, chain::AbstractVector{Int};
+                             backend::Symbol=:auto, kwargs...)::Float64 where {K}
+    bM = slice_barcode(M, chain; kwargs...)
+    bN = slice_barcode(N, chain; kwargs...)
+    return bottleneck_distance(bM, bN; backend=backend)
+end
+
+# Aliases used by slice-based distance wrappers preserve the metric's keywords.
+matching_distance(barA, barB; kwargs...)::Float64 = bottleneck_distance(barA, barB; kwargs...)
 matching_wasserstein_distance(barA, barB; p::Real=2, q::Real=1, kwargs...)::Float64 =
     wasserstein_distance(barA, barB; p=p, q=q, kwargs...)
 
@@ -2086,6 +2245,13 @@ Evaluate a direction weight.
     else
         throw(ArgumentError("direction_weight: unsupported spec type $(typeof(spec))"))
     end
+end
+
+@inline function _encoding_direction_weight(pi, direction, spec)
+    pi0 = _unwrap_compiled(pi)
+    oriented = hasproperty(pi0, :orientation) && any(!=(1), pi0.orientation) ?
+        [pi0.orientation[i]*direction[i] for i in eachindex(direction)] : direction
+    return direction_weight(oriented, spec)
 end
 
 """
@@ -2222,14 +2388,15 @@ Return an axis-aligned bounding box for an encoding.
 
 Opt override rules:
 
-- If `opts.box` is a concrete box `(lo, hi)`, it is returned (normalized to Float64)
+- If `opts.box` is a concrete box `(lo, hi)`, it is returned with algebraic
+  coordinates preserved (otherwise normalized to Float64)
   and `margin` is ignored (exactly as the old `box=...` override behavior).
 - If `opts.box === :auto`, we use `window_box(pi)` as the base box and then expand
   it by `margin`.
 - If `opts.box === nothing`, we infer the box from representative points (and for
   an explicit axis tuple, from axis extents) and expand by `margin`.
 
-The returned box is `(lo::Vector{Float64}, hi::Vector{Float64})`.
+Algebraic grid bounds remain algebraic, including arbitrarily small positive spans.
 """
 function encoding_box(pi::PLikeEncodingMap, opts::InvariantOptions; margin::Real = 0.05)
     # Explicit concrete override: return it as-is (normalized), ignore margin.
@@ -2242,6 +2409,17 @@ function encoding_box(pi::PLikeEncodingMap, opts::InvariantOptions; margin::Real
         lo, hi = _normalize_box(window_box(pi))
         _apply_margin!(lo, hi, margin)
         return (lo, hi)
+    end
+
+    pi0 = _unwrap_compiled(pi)
+    if hasproperty(pi0, :coords) && (hasproperty(pi0, :orientation) ||
+       any(a -> eltype(a) <: AlgebraicReal, pi0.coords))
+        orient = hasproperty(pi0, :orientation) ? pi0.orientation : ntuple(_ -> 1, length(pi0.coords))
+        T = any(a -> eltype(a) <: AlgebraicReal, pi0.coords) ? AlgebraicReal : Float64
+        lo = T[min(orient[i]*first(a), orient[i]*last(a)) for (i,a) in enumerate(pi0.coords)]
+        hi = T[max(orient[i]*first(a), orient[i]*last(a)) for (i,a) in enumerate(pi0.coords)]
+        _apply_margin!(lo, hi, margin)
+        return lo, hi
     end
 
     # Inference from representatives (default behavior).
@@ -2273,8 +2451,9 @@ function encoding_box(axes::Tuple{Vararg{<:AbstractVector}}, opts::InvariantOpti
         return _normalize_box(opts.box)
     end
 
-    lo = Float64[]
-    hi = Float64[]
+    T = any(a -> eltype(a) <: AlgebraicReal, axes) ? AlgebraicReal : Float64
+    lo = T[]
+    hi = T[]
     for a in axes
         push!(lo, float(a[1]))
         push!(hi, float(a[end]))
@@ -2287,8 +2466,9 @@ end
 
 function _normalize_box(box)
     lo, hi = box
-    lo_v = Float64[float(x) for x in lo]
-    hi_v = Float64[float(x) for x in hi]
+    T = any(x -> x isa AlgebraicReal, lo) || any(x -> x isa AlgebraicReal, hi) ? AlgebraicReal : Float64
+    lo_v = T[x for x in lo]
+    hi_v = T[x for x in hi]
     length(lo_v) == length(hi_v) || error("encoding_box: box endpoints must have same dimension")
     for i in 1:length(lo_v)
         lo_v[i] <= hi_v[i] || error("encoding_box: expected lo[i] <= hi[i] for all i")
@@ -2339,6 +2519,14 @@ function window_box(pi::PLikeEncodingMap; padding=0.0, margin=0.05, integerize=:
     try
         ax = axes_from_encoding(pi)
         coords_box = encoding_box(ax, empty_opts; margin=0.0)
+        pi0 = _unwrap_compiled(pi)
+        if hasproperty(pi0, :orientation)
+            for i in eachindex(coords_box[1])
+                if pi0.orientation[i] == -1
+                    coords_box[1][i], coords_box[2][i] = -coords_box[2][i], -coords_box[1][i]
+                end
+            end
+        end
     catch e
         if !(e isa MethodError)
             rethrow()
@@ -2363,7 +2551,8 @@ function window_box(pi::PLikeEncodingMap; padding=0.0, margin=0.05, integerize=:
     if method === :reps && coords_box !== nothing
         ell2, u2 = coords_box
         @inbounds for i in 1:length(ell)
-            if abs(u[i] - ell[i]) < 1e-12
+            width = u[i] - ell[i]
+            if width isa AlgebraicReal ? iszero(width) : abs(width) < 1e-12
                 ell[i] = ell2[i]
                 u[i] = u2[i]
             end
@@ -2372,7 +2561,8 @@ function window_box(pi::PLikeEncodingMap; padding=0.0, margin=0.05, integerize=:
 
     is_lattice = _is_lattice_encoding(pi)
     @inbounds for i in 1:length(ell)
-        if abs(u[i] - ell[i]) < 1e-12
+        width = u[i] - ell[i]
+        if width isa AlgebraicReal ? iszero(width) : abs(width) < 1e-12
             # Avoid degenerate axes in inferred windows (e.g., free lattice directions).
             if is_lattice
                 ell[i] -= 1
@@ -2467,6 +2657,10 @@ returned directions are integer tuples. Otherwise, directions are returned as
 `Float64` tuples, normalized according to `normalize` (one of `:L1`, `:Linf`,
 or `:none`).
 
+For oriented grid classifiers the signs follow the classifier's coordinate
+orientation, so the resulting physical lines are monotone in the encoding poset.
+Explicitly supplied directions are never reoriented.
+
 This function is intended to provide sensible defaults; it is not a substitute
 for problem-specific direction sampling.
 """
@@ -2474,9 +2668,13 @@ function default_directions(pi; n_dirs::Integer=16, max_den::Integer=8,
                            include_axes::Bool=false, normalize::Symbol=:L1)
     d = dimension(pi)
     integer_dirs = _is_lattice_encoding(pi)
-    return default_directions(d; n_dirs=n_dirs, max_den=max_den,
-                              include_axes=include_axes, normalize=normalize,
-                              integer=integer_dirs)
+    dirs = default_directions(d; n_dirs=n_dirs, max_den=max_den,
+                              include_axes=include_axes, normalize=normalize, integer=integer_dirs)
+    pi0 = _unwrap_compiled(pi)
+    if hasproperty(pi0, :orientation)
+        return [ntuple(i -> pi0.orientation[i]*dir[i], d) for dir in dirs]
+    end
+    return dirs
 end
 
 """
@@ -2551,16 +2749,20 @@ This is an opts-primary API:
   * concrete `(lo, hi)`     -> use it verbatim
 - `margin` expands the inferred box (ignored for a concrete box override).
 
-Returns a vector of offset points (each a tuple of `Float64`).
+Returns offset tuples, preserving algebraic coordinates. A single requested
+offset is the box center.
 """
 function default_offsets(pi::PLikeEncodingMap, opts::InvariantOptions;
     n_offsets::Int = 9,
     margin::Real = 0.05)
 
+    n_offsets >= 1 || throw(ArgumentError("default_offsets: n_offsets must be positive"))
     lo, hi = encoding_box(pi, opts; margin=margin)
     n = length(lo)
     offs = Vector{Tuple}(undef, n_offsets)
-    ts = range(0.0, 1.0, length=n_offsets)
+    ts = n_offsets == 1 ? (1//2,) :
+         eltype(lo) <: AlgebraicReal ? ((i-1)//(n_offsets-1) for i in 1:n_offsets) :
+         range(0.0, 1.0, length=n_offsets)
     for (i, t) in enumerate(ts)
         offs[i] = ntuple(k -> float(lo[k] + t * (hi[k] - lo[k])), n)
     end
@@ -2575,38 +2777,42 @@ end
 Direction-aware default offsets: choose `n_offsets` points along a line orthogonal
 to `dir`, spanning the projection of the working box along that normal.
 
+In two dimensions the normal is `(-dir[2], dir[1])`. In higher dimensions this
+samples one deterministic transverse line, obtained by projecting the least
+aligned coordinate vector orthogonally to `dir`; it does not cover the entire
+transverse hyperplane. In one dimension the sole offset is the box center.
+
 The working box is derived from `opts.box` (see the 1-argument method).
 """
 function _default_offsets_dir(pi::PLikeEncodingMap, dir::NTuple{N,<:Real}, opts::InvariantOptions;
     n_offsets::Int = 9,
     margin::Real = 0.05) where {N}
 
+    n_offsets >= 1 || throw(ArgumentError("default_offsets: n_offsets must be positive"))
     lo, hi = encoding_box(pi, opts; margin=margin)
+    N == length(lo) || throw(ArgumentError("default_offsets: direction dimension must match the encoding"))
+    T = eltype(lo) <: AlgebraicReal || any(x -> x isa AlgebraicReal, dir) ? AlgebraicReal : Float64
+    d = T[dir...]
+    squared_norm = sum(abs2, d)
+    iszero(squared_norm) && throw(ArgumentError("default_offsets: dir must be nonzero"))
+    ctr = ntuple(i -> (T(lo[i]) + T(hi[i])) / 2, N)
+    N == 1 && return [ctr]
 
-    n = ntuple(i -> float(dir[i]), N)
-    nrm = _l2_norm(n)
-    nrm == 0 && error("default_offsets: dir must be nonzero")
-    n = ntuple(i -> n[i] / nrm, N)
-
-    # Enumerate all corners of the axis-aligned box.
-    corners = Vector{Tuple}()
-    for bits in Iterators.product((0, 1) for _ in 1:length(lo))
-        c = ntuple(i -> float(bits[i] == 0 ? lo[i] : hi[i]), N)
-        push!(corners, c)
+    normal = if N == 2
+        T[-d[2], d[1]]
+    else
+        axis = argmin(abs.(d))
+        v = -(d[axis]/squared_norm) .* d
+        v[axis] += one(T)
+        v
     end
-
-    # Project corners onto the normal direction to get span.
-    projs = [_dot(n, c) for c in corners]
-    smin = minimum(projs)
-    smax = maximum(projs)
-
-    # Center point of the box, and its projection.
-    ctr = ntuple(i -> float((lo[i] + hi[i]) / 2), N)
-    cproj = _dot(n, ctr)
-
-    # Offsets are "ctr shifted along n" so that dot(offset, n) spans [smin, smax].
-    svals = range(smin, smax, length=n_offsets)
-    return [ntuple(i -> ctr[i] + (s - cproj) * n[i], N) for s in svals]
+    normal ./= sqrt(sum(abs2, normal))
+    # Extremal projections of a box are coordinatewise; no corner enumeration.
+    smin = sum(normal[i] * (normal[i] >= 0 ? lo[i] : hi[i]) for i in 1:N)
+    smax = sum(normal[i] * (normal[i] >= 0 ? hi[i] : lo[i]) for i in 1:N)
+    cproj = sum(normal[i]*ctr[i] for i in 1:N)
+    fractions = n_offsets == 1 ? (1//2,) : ((i-1)//(n_offsets-1) for i in 1:n_offsets)
+    return [ntuple(i -> ctr[i] + (smin+(smax-smin)*t-cproj)*normal[i], N) for t in fractions]
 end
 
 function default_offsets(pi::PLikeEncodingMap, dir::AbstractVector{<:Real}, opts::InvariantOptions;
@@ -2721,6 +2927,7 @@ function matching_distance_approx(
         normalize_dirs = normalize_dirs,
         dist_fn = matching_distance,
         dist_kwargs = NamedTuple(),
+        weight_mode = :scale,
         weight = weight,
         offset_weights = offset_weights,
         threads = threads0,
@@ -2899,7 +3106,7 @@ end
 
 # Internal: the tent function associated to an interval (b,d).
 # This is max(0, min(t-b, d-t)), i.e. a triangle with peak at (b+d)/2.
-@inline function _tent_value(b::Float64, d::Float64, t::Float64)::Float64
+@inline function _tent_value(b::Real, d::Real, t::Real)::Float64
     v = min(t - b, d - t)
     return v > 0 ? v : 0.0
 end
@@ -2932,7 +3139,7 @@ function persistence_landscape(
 )::PersistenceLandscape1D
     kmax >= 1 || error("persistence_landscape: kmax must be >= 1")
 
-    pts = _barcode_points(bar)  # Vector{Tuple{Float64,Float64}} (expanded multiplicities)
+    pts = _barcode_points(bar) # Expand multiplicities without rounding endpoints.
 
     # Choose a default grid if needed.
     if tgrid === nothing
@@ -2942,7 +3149,7 @@ function persistence_landscape(
             bmin = minimum(p[1] for p in pts)
             dmax = maximum(p[2] for p in pts)
             (bmin < dmax) || (dmax = bmin + 1.0)
-            tg = collect(range(bmin, dmax; length=nsteps))
+            tg = collect(range(Float64(bmin), Float64(dmax); length=nsteps))
         end
     else
         tg = collect(tgrid)
@@ -2957,7 +3164,7 @@ end
 
 function _persistence_landscape_values!(
     dest::AbstractMatrix{Float64},
-    pts::AbstractVector{<:Tuple{Float64,Float64}},
+    pts::AbstractVector{<:Tuple{<:Real,<:Real}},
     tg::AbstractVector{<:Real};
     tent_scratch::Vector{Float64}=Float64[],
 )
@@ -3000,6 +3207,9 @@ function _persistence_landscape_values!(
     points_scratch::Vector{Tuple{Float64,Float64}}=Tuple{Float64,Float64}[],
     tent_scratch::Vector{Float64}=Float64[],
 )
+    if bar isa PackedBarcode && !(bar isa Union{PackedFloatBarcode,PackedIndexBarcode})
+        return _persistence_landscape_values!(dest, _barcode_points(bar), tg; tent_scratch=tent_scratch)
+    end
     _barcode_points!(points_scratch, bar)
     return _persistence_landscape_values!(dest, points_scratch, tg; tent_scratch=tent_scratch)
 end
@@ -3097,6 +3307,14 @@ end
 
 # Weight assigned to a single interval.
 # This is used for persistence images, silhouettes, and entropy.
+# Exact coordinates stay exact through subtraction; transcendental feature
+# kernels then use numerical arguments. Other numeric types retain their own
+# arithmetic, including values tracked by automatic differentiation.
+@inline _numerical_feature_scalar(x) = x
+@inline _numerical_feature_scalar(x::Union{AlgebraicReal,Rational}) = Float64(x)
+@inline _feature_coordinate(x) = x
+@inline _feature_coordinate(x::Rational) = AlgebraicReal(x)
+
 function _interval_weight(weighting, b::Real, d::Real; p::Real=1)::Float64
     if weighting isa Function
         return float(weighting(b, d))
@@ -3104,9 +3322,9 @@ function _interval_weight(weighting, b::Real, d::Real; p::Real=1)::Float64
     if weighting == :none
         return 1.0
     elseif weighting == :persistence
-        pers = float(d) - float(b)
+        pers = _numerical_feature_scalar(d - b)
         pers < 0 && return 0.0
-        return pers^float(p)
+        return pers^_numerical_feature_scalar(float(p))
     else
         error("_interval_weight: unknown weighting $(weighting); supported: :none, :persistence, or a function")
     end
@@ -3174,6 +3392,7 @@ function persistence_image(bar;
         img = zeros(Float64, length(yg), length(xg))
         if threads && Threads.nthreads() > 1
             Threads.@threads for ix in 1:length(xg)
+                local xgix, ygiy, acc, b, d, x, y, w, dx2, dy2
                 xgix = xg[ix]
                 for iy in 1:length(yg)
                     ygiy = yg[iy]
@@ -3184,13 +3403,13 @@ function persistence_image(bar;
 
                         x, y = coords == :birth_persistence ? (b, d-b) :
                                coords == :birth_death ? (b, d) :
-                               coords == :midlife_persistence ? (0.5*(b+d), d-b) :
+                               coords == :midlife_persistence ? ((b+d)/2, d-b) :
                                error("unknown coords=$coords")
 
                         w = mult * _interval_weight(weighting, b, d; p=p)
-                        dx2 = (x - xgix)^2
-                        dy2 = (y - ygiy)^2
-                        acc += w * exp(-(dx2+dy2)*inv2sig2)
+                        dx2 = (_feature_coordinate(x) - xgix)^2
+                        dy2 = (_feature_coordinate(y) - ygiy)^2
+                        acc += w * exp(_numerical_feature_scalar(-(dx2+dy2)*inv2sig2))
                     end
                     img[iy, ix] = acc
                 end
@@ -3202,16 +3421,16 @@ function persistence_image(bar;
 
                 x, y = coords == :birth_persistence ? (b, d-b) :
                        coords == :birth_death ? (b, d) :
-                       coords == :midlife_persistence ? (0.5*(b+d), d-b) :
+                       coords == :midlife_persistence ? ((b+d)/2, d-b) :
                        error("unknown coords=$coords")
 
                 w = mult * _interval_weight(weighting, b, d; p=p)
 
                 for ix in eachindex(xg)
-                    dx2 = (x - xg[ix])^2
+                    dx2 = (_feature_coordinate(x) - xg[ix])^2
                     for iy in eachindex(yg)
-                        dy2 = (y - yg[iy])^2
-                        img[iy,ix] += w * exp(-(dx2+dy2)*inv2sig2)
+                        dy2 = (_feature_coordinate(y) - yg[iy])^2
+                        img[iy,ix] += w * exp(_numerical_feature_scalar(-(dx2+dy2)*inv2sig2))
                     end
                 end
             end
@@ -3227,13 +3446,14 @@ function persistence_image(bar;
                 d = bd[2]
                 x, y = coords == :birth_persistence ? (b, d-b) :
                        coords == :birth_death ? (b, d) :
-                       coords == :midlife_persistence ? (0.5*(b+d), d-b) :
+                       coords == :midlife_persistence ? ((b+d)/2, d-b) :
                        error("unknown coords=$coords")
                 w = mult * _interval_weight(weighting, b, d; p=p)
                 (x, y, w)
             end for (bd, mult) in bar]
 
-    img = [sum(t[3] * exp(-(((t[1]-xg[ix])^2 + (t[2]-yg[iy])^2))*inv2sig2) for t in terms)
+    img = [sum(t[3] * exp(_numerical_feature_scalar(-((_feature_coordinate(t[1])-xg[ix])^2 +
+                 (_feature_coordinate(t[2])-yg[iy])^2)*inv2sig2)) for t in terms)
            for iy in eachindex(yg), ix in eachindex(xg)]
 
     # Non-mutating normalization
@@ -3308,8 +3528,8 @@ function persistence_silhouette(
     for (bd, mult) in bar
         mult <= 0 && continue
         b0, d0 = bd
-        b = float(b0)
-        d = float(d0)
+        b = _feature_coordinate(b0)
+        d = _feature_coordinate(d0)
         d > b || continue
 
         w = float(mult) * _interval_weight(weighting, b, d; p=p)
@@ -3347,7 +3567,7 @@ function barcode_entropy(
     weighting=:persistence,
     p::Real=1
 )::Float64
-    base = float(base)
+    base = _numerical_feature_scalar(float(base))
     base > 0 || error("barcode_entropy: base must be > 0")
 
     tot = 0.0
@@ -3357,8 +3577,7 @@ function barcode_entropy(
     for (bd, mult) in bar
         mult <= 0 && continue
         b0, d0 = bd
-        b = float(b0)
-        d = float(d0)
+        b, d = b0, d0
         d > b || continue
 
         w = _interval_weight(weighting, b, d; p=p)
@@ -3408,11 +3627,10 @@ function barcode_summary(bar; normalize_entropy::Bool=true)
     for (bd, mult) in bar
         mult <= 0 && continue
         b0, d0 = bd
-        b = float(b0)
-        d = float(d0)
+        b, d = b0, d0
         d > b || continue
 
-        pers = d - b
+        pers = _numerical_feature_scalar(d - b)
         n += mult
         total += float(mult) * pers
         maxp = max(maxp, pers)
@@ -3474,7 +3692,7 @@ end
 # Typed explicit slice specs for stable statistics pipelines.
 #
 # `values === nothing` means endpoint indices are used (index barcode mode).
-# For numeric endpoint values, use `Vector{Int}` or `Vector{Float64}`.
+# Numeric endpoint values retain exact rational/algebraic coordinates.
 @inline _to_int_vec(v::Vector{Int}) = v
 @inline _to_int_vec(v::AbstractVector{<:Integer}) = Int.(v)
 
@@ -3515,11 +3733,17 @@ function _parse_slice_spec(spec; default_weight::Real = 1.0, weight_fn = nothing
     return (chain = chain_vec, values = values, weight = float(w))
 end
 
-const _SliceValues = Union{Nothing,Vector{Int},Vector{Float64}}
+const _SliceValues = Union{Nothing,Vector{Int},Vector{Float64},Vector{Rational{BigInt}},Vector{AlgebraicReal}}
 
 @inline function _normalize_slice_values(v)::_SliceValues
     if v === nothing
         return nothing
+    elseif v isa AbstractVector && all(x -> x isa Real, v) &&
+           (eltype(v) <: AlgebraicReal || any(x -> x isa AlgebraicReal, v))
+        return AlgebraicReal.(v)
+    elseif v isa AbstractVector && all(x -> x isa Real, v) &&
+           (eltype(v) <: Rational || any(x -> x isa Rational, v))
+        return Rational{BigInt}.(v)
     elseif _values_are_int_vector(v)
         return (v isa Vector{Int}) ? copy(v) : collect(Int, v)
     elseif v isa AbstractVector{<:Real}
@@ -3530,15 +3754,11 @@ const _SliceValues = Union{Nothing,Vector{Int},Vector{Float64}}
     throw(ArgumentError("collect_slices: unsupported values payload type $(typeof(v))"))
 end
 
-@inline _slice_mode_name(::Type{Nothing}) = :none
-@inline _slice_mode_name(::Type{<:AbstractVector{<:Integer}}) = :int
-@inline _slice_mode_name(::Type{<:AbstractVector{<:AbstractFloat}}) = :float
-@inline _slice_mode_name(::Type{<:AbstractVector{<:Real}}) = :float
-
 function _slice_mode_from_vals(vals::Vector{_SliceValues})::Symbol
     n_none = 0
     n_int = 0
     n_float = 0
+    n_exact = 0
     for v in vals
         if v === nothing
             n_none += 1
@@ -3546,6 +3766,8 @@ function _slice_mode_from_vals(vals::Vector{_SliceValues})::Symbol
             n_int += 1
         elseif v isa Vector{Float64}
             n_float += 1
+        elseif v isa Union{Vector{AlgebraicReal},Vector{Rational{BigInt}}}
+            n_exact += 1
         else
             throw(ArgumentError("collect_slices: unsupported values payload type $(typeof(v))"))
         end
@@ -3557,6 +3779,8 @@ function _slice_mode_from_vals(vals::Vector{_SliceValues})::Symbol
         return :int
     elseif (n_int + n_float) == n
         return :float
+    elseif (n_int + n_float + n_exact) == n
+        return :real
     end
     throw(ArgumentError("collect_slices: mixed values modes (some with values, some without) are not supported in typed mode"))
 end
@@ -3576,7 +3800,7 @@ function _collect_slices_int(chains::Vector{Vector{Int}}, vals::Vector{_SliceVal
         vi === nothing && throw(ArgumentError("collect_slices(values_mode=:int): values[$i] is missing"))
         if vi isa Vector{Int}
             out[i] = SliceSpec{Float64,Vector{Int}}(chains[i], copy(vi), weights[i])
-        elseif vi isa Vector{Float64} && _values_are_int_vector(vi)
+        elseif _values_are_int_vector(vi)
             out[i] = SliceSpec{Float64,Vector{Int}}(chains[i], round.(Int, vi), weights[i])
         else
             throw(ArgumentError("collect_slices(values_mode=:int): values[$i] is not integer-valued"))
@@ -3590,13 +3814,19 @@ function _collect_slices_float(chains::Vector{Vector{Int}}, vals::Vector{_SliceV
     @inbounds for i in eachindex(chains)
         vi = vals[i]
         vi === nothing && throw(ArgumentError("collect_slices(values_mode=:float): values[$i] is missing"))
-        if vi isa Vector{Float64}
-            out[i] = SliceSpec{Float64,Vector{Float64}}(chains[i], copy(vi), weights[i])
-        elseif vi isa Vector{Int}
-            out[i] = SliceSpec{Float64,Vector{Float64}}(chains[i], Float64[float(v) for v in vi], weights[i])
-        else
-            throw(ArgumentError("collect_slices(values_mode=:float): values[$i] is not numeric"))
-        end
+        out[i] = SliceSpec{Float64,Vector{Float64}}(chains[i], Float64.(vi), weights[i])
+    end
+    return out
+end
+
+function _collect_slices_real(chains::Vector{Vector{Int}}, vals::Vector{_SliceValues}, weights::Vector{Float64})
+    T = any(v -> v isa Vector{AlgebraicReal}, vals) ? AlgebraicReal :
+        any(v -> v isa Vector{Rational{BigInt}}, vals) ? Rational{BigInt} : Float64
+    out = Vector{SliceSpec{Float64,Vector{T}}}(undef, length(chains))
+    @inbounds for i in eachindex(chains)
+        vi = vals[i]
+        vi === nothing && throw(ArgumentError("collect_slices(values_mode=:real): values[$i] is missing"))
+        out[i] = SliceSpec{Float64,Vector{T}}(chains[i], T.(vi), weights[i])
     end
     return out
 end
@@ -3610,6 +3840,7 @@ Normalize boundary slice specs into a concrete, type-stable `Vector{SliceSpec}`.
 - `:auto`  infer from input (all `nothing`, all integer vectors, or all numeric vectors),
 - `:none`  force index-mode slices (`values = nothing`),
 - `:int`   force integer-valued endpoints,
+- `:real`  preserve rational/algebraic endpoints and promote mixed numeric inputs exactly,
 - `:float` force floating-point endpoints.
 """
 function collect_slices(slices::AbstractVector;
@@ -3640,14 +3871,16 @@ function collect_slices(slices::AbstractVector;
         mode = _slice_mode_from_vals(vals)
     elseif mode == :index
         mode = :none
-    elseif !(mode in (:none, :int, :float))
-        throw(ArgumentError("collect_slices: values_mode must be :auto, :none, :int, :float, or :index"))
+    elseif !(mode in (:none, :int, :float, :real))
+        throw(ArgumentError("collect_slices: values_mode must be :auto, :none, :int, :real, :float, or :index"))
     end
 
     if mode == :none
         return _collect_slices_none(chains, weights)
     elseif mode == :int
         return _collect_slices_int(chains, vals, weights)
+    elseif mode == :real
+        return _collect_slices_real(chains, vals, weights)
     else
         return _collect_slices_float(chains, vals, weights)
     end
@@ -3670,10 +3903,13 @@ const SLICE_SPEC_SCHEMA_VERSION = 1
     save_slices_json(path, slices; kwargs...) -> path
 
 Serialize typed slice specs as JSON for reproducible statistics workflows.
+
+Exact endpoints use the same rational/minimal-polynomial coordinate records
+owned by `Serialization`; no floating approximation enters their saved values.
 """
 function save_slices_json(path::AbstractString, slices; kwargs...)
     specs = collect_slices(slices; kwargs...)
-    mode = isempty(specs) ? "none" : String(_slice_mode_name(typeof(first(specs).values)))
+    mode = String(_slice_mode_from_vals(_SliceValues[_normalize_slice_values(s.values) for s in specs]))
     rows = Vector{Dict{String,Any}}(undef, length(specs))
     @inbounds for i in eachindex(specs)
         s = specs[i]
@@ -3682,6 +3918,9 @@ function save_slices_json(path::AbstractString, slices; kwargs...)
             "values" => s.values === nothing ? nothing : s.values,
             "weight" => float(s.weight),
         )
+        if s.values !== nothing && !(eltype(s.values) <: Integer)
+            Serialization._store_coordinate_vector!(rows[i], "values", s.values)
+        end
     end
     obj = Dict(
         "kind" => "slice_specs",
@@ -3705,14 +3944,19 @@ function load_slices_json(path::AbstractString; values_mode::Symbol=:auto)
     kind = haskey(obj, "kind") ? String(obj["kind"]) : ""
     kind == "slice_specs" || throw(ArgumentError("load_slices_json: unsupported kind $(kind)"))
     ver = haskey(obj, "schema_version") ? Int(obj["schema_version"]) : 0
-    ver <= SLICE_SPEC_SCHEMA_VERSION || throw(ArgumentError("load_slices_json: unsupported schema_version $(ver)"))
+    ver == SLICE_SPEC_SCHEMA_VERSION || throw(ArgumentError("load_slices_json: unsupported schema_version $(ver)"))
     rows = haskey(obj, "slices") ? obj["slices"] : Any[]
     spec_rows = Vector{NamedTuple{(:chain,:values,:weight),Tuple{Vector{Int},_SliceValues,Float64}}}(undef, length(rows))
     @inbounds for i in eachindex(rows)
         r = rows[i]
         chain = haskey(r, "chain") ? Vector{Int}(Int.(collect(r["chain"]))) : Int[]
         vals = haskey(r, "values") ? r["values"] : nothing
-        vals2 = vals === nothing ? nothing : _normalize_slice_values(collect(vals))
+        vals2 = if haskey(r, "exact_values")
+            vals === nothing && throw(ArgumentError("load_slices_json: exact_values requires an empty numeric values array"))
+            _normalize_slice_values(Serialization._coordinate_vector_from_obj(vals, r["exact_values"]))
+        else
+            vals === nothing ? nothing : _normalize_slice_values(collect(vals))
+        end
         w = haskey(r, "weight") ? float(r["weight"]) : 1.0
         spec_rows[i] = (chain=chain, values=vals2, weight=w)
     end
@@ -3771,7 +4015,6 @@ function _matching_distance_approx_specs(
 end
 
 const _EMPTY_CHAIN_POOL = Int[]
-const _EMPTY_VALS_POOL = Float64[]
 const _PooledChainSlice = SubArray{Int,1,Vector{Int},Tuple{UnitRange{Int}},true}
 
 struct _PooledChainRows <: AbstractVector{_PooledChainSlice}
@@ -3786,15 +4029,15 @@ end
 Precompiled slice geometry for repeated `slice_barcodes`/distance queries on a fixed
 encoding map and sampling configuration.
 """
-struct CompiledSlicePlan
-    dirs::Vector{Vector{Float64}}
-    offs::Vector{Vector{Float64}}
+struct CompiledSlicePlan{T<:Real}
+    dirs::Vector{Vector{T}}
+    offs::Vector{Vector{T}}
     weights::Matrix{Float64}
     chain_pool::Vector{Int}
     chain_start::Vector{Int}
     chain_len::Vector{Int}
     chains::_PooledChainRows
-    vals_pool::Vector{Float64}
+    vals_pool::Vector{T}
     vals_start::Vector{Int}
     vals_len::Vector{Int}
     nd::Int
@@ -3814,22 +4057,22 @@ end
 @inline function _plan_vals(plan::CompiledSlicePlan, idx::Int)
     s = plan.vals_start[idx]
     l = plan.vals_len[idx]
-    return l == 0 ? @view(_EMPTY_VALS_POOL[1:0]) : @view(plan.vals_pool[s:(s + l - 1)])
+    return l == 0 ? @view(plan.vals_pool[1:0]) : @view(plan.vals_pool[s:(s + l - 1)])
 end
 
 @inline function _compiled_slice_plan(
-    dirs::Vector{Vector{Float64}},
-    offs::Vector{Vector{Float64}},
+    dirs::Vector{Vector{T}},
+    offs::Vector{Vector{T}},
     W::Matrix{Float64},
     chain_pool::Vector{Int},
     chain_start::Vector{Int},
     chain_len::Vector{Int},
-    vals_pool::Vector{Float64},
+    vals_pool::Vector{T},
     vals_start::Vector{Int},
     vals_len::Vector{Int},
     nd::Int,
     no::Int,
-)
+) where {T<:Real}
     return CompiledSlicePlan(
         dirs,
         offs,
@@ -3847,14 +4090,14 @@ end
 end
 
 function _compiled_slice_plan_from_vectors(
-    dirs::Vector{Vector{Float64}},
-    offs::Vector{Vector{Float64}},
+    dirs::Vector{Vector{T}},
+    offs::Vector{Vector{T}},
     W::Matrix{Float64},
     chains::Vector{Vector{Int}},
-    vals_tmp::Vector{Vector{Float64}},
+    vals_tmp::Vector{Vector{T}},
     nd::Int,
     no::Int,
-)
+) where {T<:Real}
     ns = length(chains)
     chain_start = zeros(Int, ns)
     chain_len = zeros(Int, ns)
@@ -3879,7 +4122,7 @@ function _compiled_slice_plan_from_vectors(
     end
 
     chain_pool = Vector{Int}(undef, total_chain)
-    vals_pool = Vector{Float64}(undef, total_vals)
+    vals_pool = Vector{T}(undef, total_vals)
     @inbounds for idx in 1:ns
         lc = chain_len[idx]
         lc == 0 || copyto!(chain_pool, chain_start[idx], chains[idx], 1, lc)
@@ -3946,29 +4189,12 @@ end
 end
 
 
-struct SlicePlanCacheKey
-    pi_id::UInt
-    normalize_dirs::Symbol
-    n_dirs::Int
-    n_offsets::Int
-    max_den::Int
-    include_axes::Bool
-    offset_margin::Float64
-    drop_unknown::Bool
-    strict_code::Int8
-    box_hash::UInt
-    directions_hash::UInt
-    offsets_hash::UInt
-    weight_hash::UInt
-    kwargs_hash::UInt
-end
-
 mutable struct SlicePlanCache <: AbstractSlicePlanCache
     lock::ReentrantLock
-    plans::Dict{SlicePlanCacheKey,CompiledSlicePlan}
+    plans::Dict{_StructuralCacheKey,CompiledSlicePlan}
 end
 
-SlicePlanCache() = SlicePlanCache(ReentrantLock(), Dict{SlicePlanCacheKey,CompiledSlicePlan}())
+SlicePlanCache() = SlicePlanCache(ReentrantLock(), Dict{_StructuralCacheKey,CompiledSlicePlan}())
 
 const _GLOBAL_SLICE_PLAN_CACHE = SlicePlanCache()
 
@@ -4006,7 +4232,7 @@ end
 mutable struct SliceModuleCache{K,F<:AbstractCoeffField,MatT<:AbstractMatrix{K}}
     M::PModule{K,F,MatT}
     lock::ReentrantLock
-    packed_plan_barcodes::Dict{SliceBarcodeCacheKey,PackedBarcodeGrid{PackedFloatBarcode}}
+    packed_plan_barcodes::Dict{SliceBarcodeCacheKey,Union{PackedBarcodeGrid{PackedFloatBarcode},PackedBarcodeGrid{PackedBarcode{AlgebraicReal}}}}
     landscape_plan_features::Dict{SliceLandscapeCacheKey,Vector{Vector{Float64}}}
 end
 
@@ -4041,7 +4267,7 @@ function module_cache(M::PModule{K,F,MatT}) where {K,F<:AbstractCoeffField,MatT<
             cache = SliceModuleCache{K,F,MatT}(
                 M,
                 ReentrantLock(),
-                Dict{SliceBarcodeCacheKey,PackedBarcodeGrid{PackedFloatBarcode}}(),
+                Dict{SliceBarcodeCacheKey,Union{PackedBarcodeGrid{PackedFloatBarcode},PackedBarcodeGrid{PackedBarcode{AlgebraicReal}}}}(),
                 Dict{SliceLandscapeCacheKey,Vector{Vector{Float64}}}(),
             )
             _GLOBAL_SLICE_MODULE_CACHE[M] = cache
@@ -4077,15 +4303,15 @@ end
 
 function _slice_barcodes_plan_packed_uncached(
     M::PModule{K},
-    plan::CompiledSlicePlan;
+    plan::CompiledSlicePlan{T};
     threads::Bool = (Threads.nthreads() > 1),
-) where {K}
+) where {K,T}
     ns = plan.nd * plan.no
-    bars = _packed_grid_undef(PackedFloatBarcode, plan.nd, plan.no)
+    bars = _packed_grid_undef(PackedBarcode{T}, plan.nd, plan.no)
     max_chain = isempty(plan.chain_len) ? 0 : maximum(plan.chain_len)
     if max_chain == 0
         @inbounds for idx in 1:ns
-            bars[idx] = _empty_packed_float_barcode()
+            bars[idx] = PackedBarcode{T}(EndpointPair{T}[], Int[])
         end
         return bars
     end
@@ -4095,39 +4321,18 @@ function _slice_barcodes_plan_packed_uncached(
     nQ = nvertices(M.Q)
     use_array_memo = _use_array_memo(nQ)
 
-    if threads && Threads.nthreads() > 1
-        nT = Threads.nthreads()
-        memo_by_thread = use_array_memo ?
-            [_new_array_memo(K, nQ) for _ in 1:nT] :
-            [Dict{Tuple{Int,Int}, AbstractMatrix{K}}() for _ in 1:nT]
-        rank_by_thread = [Matrix{Int}(undef, max_chain, max_chain) for _ in 1:nT]
-        Threads.@threads for idx in 1:ns
-            chain = _plan_chain(plan, idx)
-            if isempty(chain)
-                bars[idx] = _empty_packed_float_barcode()
-                continue
-            end
-            vals = _plan_vals(plan, idx)
-            tid = Threads.threadid()
-            bars[idx] = _slice_barcode_packed_with_workspace(
-                M,
-                chain,
-                _extended_values_view(vals),
-                cc,
-                memo_by_thread[tid],
-                rank_by_thread[tid],
-            )
-        end
-    else
+    _foreach_workchunk(ns; threads=threads) do work, _
+        local memo, rank_work, plan_idx, chain, vals
         memo = use_array_memo ? _new_array_memo(K, nQ) : Dict{Tuple{Int,Int}, AbstractMatrix{K}}()
         rank_work = Matrix{Int}(undef, max_chain, max_chain)
-        @inbounds for idx in 1:ns
-            chain = _plan_chain(plan, idx)
+        @inbounds for idx in work
+            plan_idx = _plan_idx(plan.no, mod1(idx, plan.nd), div(idx - 1, plan.nd) + 1)
+            chain = _plan_chain(plan, plan_idx)
             if isempty(chain)
-                bars[idx] = _empty_packed_float_barcode()
+                bars[idx] = PackedBarcode{T}(EndpointPair{T}[], Int[])
                 continue
             end
-            vals = _plan_vals(plan, idx)
+            vals = _plan_vals(plan, plan_idx)
             bars[idx] = _slice_barcode_packed_with_workspace(
                 M,
                 chain,
@@ -4166,7 +4371,7 @@ function _slice_barcodes_plan_packed_cached(
 end
 
 @inline function _slice_barcodes_plan_result_from_packed(
-    bars::PackedBarcodeGrid{PackedFloatBarcode},
+    bars::PackedBarcodeGrid,
     plan::CompiledSlicePlan;
     packed::Bool,
 )
@@ -4239,7 +4444,8 @@ end
     if packed
         return _slice_barcodes_result(bars, weights, dirs, offs)
     end
-    return _slice_barcodes_result(_float_dict_matrix_from_packed_grid(bars), weights, dirs, offs)
+    dicts = [_barcode_from_packed(bars[i,j]) for i in axes(weights,1), j in axes(weights,2)]
+    return _slice_barcodes_result(dicts, weights, dirs, offs)
 end
 
 @inline function _slice_barcodes_plan_result_uncached(
@@ -4427,7 +4633,7 @@ Use these before reaching into the plan's internal fields directly.
 @inline plan_value_mode(::CompiledSlicePlan) = :t
 
 """
-    slice_spec(plan, idx) -> SliceSpec{Float64,Vector{Float64}}
+    slice_spec(plan, idx) -> SliceSpec
 
 Return the `idx`-th explicit slice encoded by a compiled plan.
 
@@ -4441,7 +4647,7 @@ function slice_spec(plan::CompiledSlicePlan, idx::Int)
     j = (idx - 1) % plan.no + 1
     return SliceSpec(
         Vector{Int}(_plan_chain(plan, idx));
-        values=Vector{Float64}(_plan_vals(plan, idx)),
+        values=collect(_plan_vals(plan, idx)),
         weight=plan.weights[i, j],
     )
 end
@@ -5355,7 +5561,7 @@ end
 Convert a compiled slice plan into an explicit typed slice list, useful for
 serialization or passing precompiled slices through other APIs.
 """
-function collect_slices(plan::CompiledSlicePlan; values::Symbol=:t)
+function collect_slices(plan::CompiledSlicePlan{T}; values::Symbol=:t) where {T}
     ns = plan.nd * plan.no
     if values == :index
         specs = Vector{SliceSpec{Float64,Nothing}}(undef, ns)
@@ -5365,12 +5571,12 @@ function collect_slices(plan::CompiledSlicePlan; values::Symbol=:t)
         end
         return specs
     elseif values == :t
-        specs = Vector{SliceSpec{Float64,Vector{Float64}}}(undef, ns)
+        specs = Vector{SliceSpec{Float64,Vector{T}}}(undef, ns)
         @inbounds for i in 1:plan.nd, j in 1:plan.no
             idx = _plan_idx(plan.no, i, j)
-            specs[idx] = SliceSpec{Float64,Vector{Float64}}(
+            specs[idx] = SliceSpec{Float64,Vector{T}}(
                 Vector{Int}(_plan_chain(plan, idx)),
-                Vector{Float64}(_plan_vals(plan, idx)),
+                Vector{T}(_plan_vals(plan, idx)),
                 plan.weights[i, j],
             )
         end
@@ -5399,23 +5605,25 @@ function _plan_cache_key(
     filtered::NamedTuple,
 )
     strict_code = strict_kw === nothing ? Int8(-1) : (Bool(strict_kw) ? Int8(1) : Int8(0))
-    return SlicePlanCacheKey(
+    return _structural_cache_key((
         UInt(objectid(pi)),
         normalize_dirs,
         Int(n_dirs),
         Int(n_offsets),
         Int(max_den),
         include_axes,
-        Float64(offset_margin),
+        offset_margin,
         drop_unknown,
         strict_code,
-        UInt(hash(box_kw)),
-        UInt(hash(directions)),
-        UInt(hash(offsets)),
-        UInt(hash((direction_weight, offset_weights, normalize_weights))),
-        UInt(hash(filtered)),
-    )
+        box_kw,
+        directions,
+        offsets,
+        (direction_weight, offset_weights, normalize_weights),
+        filtered,
+    ))
 end
+
+include("slice_invariants/exact_grades.jl")
 
 """
     compile_slice_plan(pi::PLikeEncodingMap; ...) -> CompiledSlicePlan
@@ -5517,6 +5725,14 @@ function compile_slice_plan(
         return empty_plan
     end
 
+    if hasproperty(pi, :coords) && any(a -> eltype(a) <: AlgebraicReal, pi.coords)
+        plan = _compile_algebraic_slices(pi, dirs0, offs0, opts_chain, normalize_dirs,
+            direction_weight, offset_weights, normalize_weights, drop_unknown, filtered)
+        cache === nothing || lock(cache.lock) do
+            cache.plans[key] = plan
+        end
+        return plan
+    end
     offs_vec = Vector{Vector{Float64}}(undef, length(offs0))
     @inbounds for j in eachindex(offs0)
         x0 = offs0[j]
@@ -5550,7 +5766,7 @@ function compile_slice_plan(
 
     wdir = Vector{Float64}(undef, nd)
     @inbounds for i in 1:nd
-        wdir[i] = SliceInvariants.direction_weight(dirs_vec[i], direction_weight)
+        wdir[i] = _encoding_direction_weight(pi, dirs_vec[i], direction_weight)
     end
     woff = _offset_sample_weights(offs_vec, offset_weights)
 
@@ -5564,26 +5780,10 @@ function compile_slice_plan(
     ns = nd * no
     chain_len = zeros(Int, ns)
     vals_len = zeros(Int, ns)
-    if threads && Threads.nthreads() > 1
-        locate_ws_by_thread = [_SliceLocateBatchWorkspace() for _ in 1:Threads.nthreads()]
-        Threads.@threads for idx in 1:ns
-            i = div(idx - 1, no) + 1
-            j = (idx - 1) % no + 1
-            n = _slice_chain_count(
-                pi,
-                offs_vec[j],
-                dirs_vec[i],
-                opts_chain;
-                drop_unknown = drop_unknown,
-                locate_ws = locate_ws_by_thread[Threads.threadid()],
-                filtered...,
-            )
-            chain_len[idx] = n
-            vals_len[idx] = n
-        end
-    else
+    _foreach_workchunk(ns; threads=threads) do work, _
+        local locate_ws, i, j, n
         locate_ws = _SliceLocateBatchWorkspace()
-        @inbounds for idx in 1:ns
+        @inbounds for idx in work
             i = div(idx - 1, no) + 1
             j = (idx - 1) % no + 1
             n = _slice_chain_count(
@@ -5620,30 +5820,12 @@ function compile_slice_plan(
     chain_pool = Vector{Int}(undef, total_chain)
     vals_pool = Vector{Float64}(undef, total_vals)
 
-    if threads && Threads.nthreads() > 1
-        locate_ws_by_thread = [_SliceLocateBatchWorkspace() for _ in 1:Threads.nthreads()]
-        Threads.@threads for idx in 1:ns
-            chain_len[idx] == 0 && continue
-            i = div(idx - 1, no) + 1
-            j = (idx - 1) % no + 1
-            _slice_chain_fill!(
-                chain_pool,
-                chain_start[idx],
-                vals_pool,
-                vals_start[idx],
-                pi,
-                offs_vec[j],
-                dirs_vec[i],
-                opts_chain;
-                drop_unknown = drop_unknown,
-                locate_ws = locate_ws_by_thread[Threads.threadid()],
-                filtered...,
-            )
-        end
-    else
+    _foreach_workchunk(ns; threads=threads) do work, _
+        local locate_ws, i, j, n
         locate_ws = _SliceLocateBatchWorkspace()
-        @inbounds for i in 1:nd, j in 1:no
-            idx = _plan_idx(no, i, j)
+        @inbounds for idx in work
+            i = div(idx - 1, no) + 1
+            j = mod1(idx, no)
             chain_len[idx] == 0 && continue
             _slice_chain_fill!(
                 chain_pool,
@@ -5772,6 +5954,48 @@ end
     error("_packed_distance_value!: unsupported distance kind=$kind")
 end
 
+function _packed_slice_distance_shard(
+    bcsM::PackedBarcodeGrid{PackedFloatBarcode},
+    bcsN::PackedBarcodeGrid{PackedFloatBarcode},
+    W::AbstractMatrix{Float64},
+    task::SliceDistanceTask,
+    dist_kind::Symbol,
+    reduction::Symbol,
+    indices,
+)::Float64
+    # Each invocation owns its mutable point buffers and accumulator. Keeping
+    # them in this function prevents capture by a surrounding threaded loop.
+    scratch = _SliceKernelScratch()
+    if reduction === :max
+        best = 0.0
+        @inbounds for idx in indices
+            w = W[idx]
+            w == 0.0 && continue
+            d = _packed_distance_value!(scratch, bcsM[idx], bcsN[idx], dist_kind, task)
+            best = max(best, w * d)
+        end
+        return best
+    elseif reduction === :pmean
+        p = float(task.agg_p)
+        acc = 0.0
+        @inbounds for idx in indices
+            w = W[idx]
+            w == 0.0 && continue
+            d = _packed_distance_value!(scratch, bcsM[idx], bcsN[idx], dist_kind, task)
+            acc += w * d^p
+        end
+        return acc
+    end
+
+    acc = 0.0
+    @inbounds for idx in indices
+        w = W[idx]
+        w == 0.0 && continue
+        acc += w * _packed_distance_value!(scratch, bcsM[idx], bcsN[idx], dist_kind, task)
+    end
+    return acc
+end
+
 function _run_slice_distance_from_packed_barcodes(
     bcsM::PackedBarcodeGrid{PackedFloatBarcode},
     bcsN::PackedBarcodeGrid{PackedFloatBarcode},
@@ -5784,123 +6008,26 @@ function _run_slice_distance_from_packed_barcodes(
     dist_kind = _slice_distance_fast_kind(task)
     dist_kind === :none && return _run_slice_distance_from_barcodes_generic(bcsM, bcsN, W, task)
 
-    threads = task.threads && Threads.nthreads() > 1
-    scratch_by_thread = _scratch_arenas(threads)
     sumw = sum(W)
     sumw == 0.0 && return 0.0
+    task.weight_mode in (:scale, :integrate) ||
+        return _run_slice_distance_from_barcodes_generic(bcsM, bcsN, W, task)
 
-    if task.weight_mode == :scale
-        if threads
-            nT = Threads.nthreads()
-            best_by_slot = fill(0.0, nT)
-            Threads.@threads for slot in 1:nT
-                scratch = scratch_by_thread[Threads.threadid()]
-                best = 0.0
-                for idx in slot:nT:length(bcsM)
-                    w = W[idx]
-                    w == 0.0 && continue
-                    d = _packed_distance_value!(scratch, bcsM[idx], bcsN[idx], dist_kind, task)
-                    best = max(best, w * d)
-                end
-                best_by_slot[slot] = best
-            end
-            return maximum(best_by_slot) / float(task.agg_norm)
+    reduction = task.weight_mode === :scale ? :max : agg_mode
+    total = if task.threads && Threads.nthreads() > 1
+        nshards = min(length(bcsM), Threads.nthreads())
+        partials = zeros(Float64, nshards)
+        Threads.@threads for slot in 1:nshards
+            partials[slot] = _packed_slice_distance_shard(
+                bcsM, bcsN, W, task, dist_kind, reduction, slot:nshards:length(bcsM))
         end
-
-        scratch = scratch_by_thread[1]
-        best = 0.0
-        @inbounds for idx in eachindex(bcsM)
-            w = W[idx]
-            w == 0.0 && continue
-            d = _packed_distance_value!(scratch, bcsM[idx], bcsN[idx], dist_kind, task)
-            best = max(best, w * d)
-        end
-        return best / float(task.agg_norm)
-    elseif task.weight_mode == :integrate
-        if agg_mode == :mean
-            if threads
-                nT = Threads.nthreads()
-                acc_by_slot = fill(0.0, nT)
-                Threads.@threads for slot in 1:nT
-                    scratch = scratch_by_thread[Threads.threadid()]
-                    acc = 0.0
-                    for idx in slot:nT:length(bcsM)
-                        w = W[idx]
-                        w == 0.0 && continue
-                        acc += w * _packed_distance_value!(scratch, bcsM[idx], bcsN[idx], dist_kind, task)
-                    end
-                    acc_by_slot[slot] = acc
-                end
-                return (sum(acc_by_slot) / sumw) / float(task.agg_norm)
-            end
-
-            scratch = scratch_by_thread[1]
-            acc = 0.0
-            @inbounds for idx in eachindex(bcsM)
-                w = W[idx]
-                w == 0.0 && continue
-                acc += w * _packed_distance_value!(scratch, bcsM[idx], bcsN[idx], dist_kind, task)
-            end
-            return (acc / sumw) / float(task.agg_norm)
-        elseif agg_mode == :pmean
-            p = float(task.agg_p)
-            if threads
-                nT = Threads.nthreads()
-                acc_by_slot = fill(0.0, nT)
-                Threads.@threads for slot in 1:nT
-                    scratch = scratch_by_thread[Threads.threadid()]
-                    acc = 0.0
-                    for idx in slot:nT:length(bcsM)
-                        w = W[idx]
-                        w == 0.0 && continue
-                        d = _packed_distance_value!(scratch, bcsM[idx], bcsN[idx], dist_kind, task)
-                        acc += w * d^p
-                    end
-                    acc_by_slot[slot] = acc
-                end
-                return ((sum(acc_by_slot) / sumw)^(1 / p)) / float(task.agg_norm)
-            end
-
-            scratch = scratch_by_thread[1]
-            acc = 0.0
-            @inbounds for idx in eachindex(bcsM)
-                w = W[idx]
-                w == 0.0 && continue
-                d = _packed_distance_value!(scratch, bcsM[idx], bcsN[idx], dist_kind, task)
-                acc += w * d^p
-            end
-            return ((acc / sumw)^(1 / p)) / float(task.agg_norm)
-        elseif agg_mode == :max
-            if threads
-                nT = Threads.nthreads()
-                best_by_slot = fill(0.0, nT)
-                Threads.@threads for slot in 1:nT
-                    scratch = scratch_by_thread[Threads.threadid()]
-                    best = 0.0
-                    for idx in slot:nT:length(bcsM)
-                        w = W[idx]
-                        w == 0.0 && continue
-                        d = _packed_distance_value!(scratch, bcsM[idx], bcsN[idx], dist_kind, task)
-                        best = max(best, w * d)
-                    end
-                    best_by_slot[slot] = best
-                end
-                return maximum(best_by_slot) / float(task.agg_norm)
-            end
-
-            scratch = scratch_by_thread[1]
-            best = 0.0
-            @inbounds for idx in eachindex(bcsM)
-                w = W[idx]
-                w == 0.0 && continue
-                d = _packed_distance_value!(scratch, bcsM[idx], bcsN[idx], dist_kind, task)
-                best = max(best, w * d)
-            end
-            return best / float(task.agg_norm)
-        end
+        reduction === :max ? maximum(partials) : sum(partials)
+    else
+        _packed_slice_distance_shard(bcsM, bcsN, W, task, dist_kind, reduction, eachindex(bcsM))
     end
-
-    return _run_slice_distance_from_barcodes_generic(bcsM, bcsN, W, task)
+    reduction === :max && return total / float(task.agg_norm)
+    reduction === :pmean && return ((total / sumw)^(1 / float(task.agg_p))) / float(task.agg_norm)
+    return (total / sumw) / float(task.agg_norm)
 end
 
 function _run_slice_distance_from_barcodes_generic(
@@ -5924,6 +6051,7 @@ function _run_slice_distance_from_barcodes_generic(
             nT = Threads.nthreads()
             best_by_slot = fill(0.0, nT)
             Threads.@threads for slot in 1:nT
+                local best, w, d
                 best = 0.0
                 for idx in slot:nT:length(bcsM)
                     w = W[idx]
@@ -5949,6 +6077,7 @@ function _run_slice_distance_from_barcodes_generic(
                 nT = Threads.nthreads()
                 acc_by_slot = fill(0.0, nT)
                 Threads.@threads for slot in 1:nT
+                    local acc, w
                     acc = 0.0
                     for idx in slot:nT:length(bcsM)
                         w = W[idx]
@@ -5973,6 +6102,7 @@ function _run_slice_distance_from_barcodes_generic(
                 nT = Threads.nthreads()
                 acc_by_slot = fill(0.0, nT)
                 Threads.@threads for slot in 1:nT
+                    local acc, w, d
                     acc = 0.0
                     for idx in slot:nT:length(bcsM)
                         w = W[idx]
@@ -5998,6 +6128,7 @@ function _run_slice_distance_from_barcodes_generic(
                 nT = Threads.nthreads()
                 best_by_slot = fill(0.0, nT)
                 Threads.@threads for slot in 1:nT
+                    local best, w, d
                     best = 0.0
                     for idx in slot:nT:length(bcsM)
                         w = W[idx]
@@ -6117,6 +6248,7 @@ function _landscape_feature_cache(
     out = Vector{Vector{Float64}}(undef, length(bcs))
     if threads && Threads.nthreads() > 1
         Threads.@threads for idx in eachindex(out)
+            local pl
             pl = persistence_landscape(bcs[idx]; kmax=kmax, tgrid=tgrid)
             out[idx] = _landscape_feature_vector(pl)
         end
@@ -6203,6 +6335,7 @@ function _run_slice_kernel_from_features(
         nT = Threads.nthreads()
         acc_by_slot = fill(0.0, nT)
         Threads.@threads for slot in 1:nT
+            local acc, w
             acc = 0.0
             for idx in slot:nT:length(featM)
                 w = W[idx]
@@ -6251,39 +6384,21 @@ function _run_slice_kernel_from_barcodes(
 
     # Fast point-kernel path on packed barcodes.
     if _kernel_uses_points_fast(kind) && _all_packed_float_grid(bM) && _all_packed_float_grid(bN)
-        scratch_by_thread = _scratch_arenas(threads)
-        if threads
-            nT = Threads.nthreads()
-            acc_by_slot = fill(0.0, nT)
-            Threads.@threads for slot in 1:nT
-                scratch = scratch_by_thread[Threads.threadid()]
-                acc = 0.0
-                for idx in slot:nT:length(bM)
-                    w = W[idx]
-                    w == 0.0 && continue
-                    _points_from_packed!(scratch.points_a, bM[idx]::PackedFloatBarcode)
-                    _points_from_packed!(scratch.points_b, bN[idx]::PackedFloatBarcode)
-                    acc += w * _kernel_from_points(
-                        scratch.points_a, scratch.points_b, kind, task.sigma, task.gamma, task.p, task.q
-                    )
-                end
-                acc_by_slot[slot] = acc
+        acc_by_slot = zeros(Float64, threads ? min(length(bM), Threads.nthreads()) : 1)
+        _foreach_workchunk(length(bM); threads=threads) do work, slot
+            local scratch = _SliceKernelScratch()
+            local acc = 0.0
+            for idx in work
+                local w = W[idx]
+                w == 0.0 && continue
+                _points_from_packed!(scratch.points_a, bM[idx]::PackedFloatBarcode)
+                _points_from_packed!(scratch.points_b, bN[idx]::PackedFloatBarcode)
+                acc += w * _kernel_from_points(
+                    scratch.points_a, scratch.points_b, kind, task.sigma, task.gamma, task.p, task.q)
             end
-            return sum(acc_by_slot) / sumw
+            acc_by_slot[slot] = acc
         end
-
-        scratch = scratch_by_thread[1]
-        acc = 0.0
-        @inbounds for idx in eachindex(bM)
-            w = W[idx]
-            w == 0.0 && continue
-            _points_from_packed!(scratch.points_a, bM[idx]::PackedFloatBarcode)
-            _points_from_packed!(scratch.points_b, bN[idx]::PackedFloatBarcode)
-            acc += w * _kernel_from_points(
-                scratch.points_a, scratch.points_b, kind, task.sigma, task.gamma, task.p, task.q
-            )
-        end
-        return acc / sumw
+        return sum(acc_by_slot) / sumw
     end
 
     tg = task.tgrid
@@ -6296,6 +6411,7 @@ function _run_slice_kernel_from_barcodes(
         nT = Threads.nthreads()
         acc_by_slot = fill(0.0, nT)
         Threads.@threads for slot in 1:nT
+            local acc, i, j, w
             acc = 0.0
             for k in slot:nT:(nd * no)
                 i = div(k - 1, no) + 1
@@ -6391,6 +6507,7 @@ function slice_barcodes(M::PModule{K}, slices::AbstractVector{<:SliceSpec{<:Real
         bcs = Vector{PackedIndexBarcode}(undef, n)
         if threads && Threads.nthreads() > 1
             Threads.@threads for i in 1:n
+                local ch
                 ch = slices[i].chain
                 bcs[i] = isempty(ch) ? _empty_packed_index_barcode() :
                     (_slice_barcode_packed(M, ch; values=nothing)::PackedIndexBarcode)
@@ -6408,6 +6525,7 @@ function slice_barcodes(M::PModule{K}, slices::AbstractVector{<:SliceSpec{<:Real
     bcs = Vector{IndexBarcode}(undef, n)
     if threads && Threads.nthreads() > 1
         Threads.@threads for i in 1:n
+            local ch
             ch = slices[i].chain
             bcs[i] = isempty(ch) ? _empty_index_barcode() : slice_barcode(M, ch; values=nothing)
         end
@@ -6442,6 +6560,7 @@ function slice_barcodes(M::PModule{K}, slices::AbstractVector{<:SliceSpec{<:Real
         bcs = Vector{PackedIndexBarcode}(undef, n)
         if threads && Threads.nthreads() > 1
             Threads.@threads for i in 1:n
+                local spec
                 spec = slices[i]
                 bcs[i] = isempty(spec.chain) ? _empty_packed_index_barcode() :
                     (_slice_barcode_packed(M, spec.chain; values=spec.values)::PackedIndexBarcode)
@@ -6459,6 +6578,7 @@ function slice_barcodes(M::PModule{K}, slices::AbstractVector{<:SliceSpec{<:Real
     bcs = Vector{IndexBarcode}(undef, n)
     if threads && Threads.nthreads() > 1
         Threads.@threads for i in 1:n
+            local spec
             spec = slices[i]
             bcs[i] = isempty(spec.chain) ? _empty_index_barcode() : slice_barcode(M, spec.chain; values=spec.values)
         end
@@ -6471,10 +6591,10 @@ function slice_barcodes(M::PModule{K}, slices::AbstractVector{<:SliceSpec{<:Real
     return _slice_barcodes_result_without_geometry(bcs, weights)
 end
 
-function slice_barcodes(M::PModule{K}, slices::AbstractVector{<:SliceSpec{<:Real,<:AbstractVector{<:Real}}};
+function slice_barcodes(M::PModule{K}, slices::AbstractVector{<:SliceSpec{<:Real,<:AbstractVector{T}}};
                         normalize_weights::Bool=true,
                         threads::Bool=Threads.nthreads() > 1,
-                        packed::Bool=false) where {K}
+                        packed::Bool=false) where {K,T<:Real}
     n = length(slices)
     weights = Vector{Float64}(undef, n)
     @inbounds for i in 1:n
@@ -6490,33 +6610,35 @@ function slice_barcodes(M::PModule{K}, slices::AbstractVector{<:SliceSpec{<:Real
     end
 
     if packed
-        bcs = Vector{PackedFloatBarcode}(undef, n)
+        bcs = Vector{PackedBarcode{T}}(undef, n)
         if threads && Threads.nthreads() > 1
             Threads.@threads for i in 1:n
+                local spec
                 spec = slices[i]
-                bcs[i] = isempty(spec.chain) ? _empty_packed_float_barcode() :
-                    (_slice_barcode_packed(M, spec.chain; values=spec.values)::PackedFloatBarcode)
+                bcs[i] = isempty(spec.chain) ? PackedBarcode{T}(EndpointPair{T}[], Int[]) :
+                    _slice_barcode_packed(M, spec.chain; values=spec.values)
             end
         else
             @inbounds for i in 1:n
                 spec = slices[i]
-                bcs[i] = isempty(spec.chain) ? _empty_packed_float_barcode() :
-                    (_slice_barcode_packed(M, spec.chain; values=spec.values)::PackedFloatBarcode)
+                bcs[i] = isempty(spec.chain) ? PackedBarcode{T}(EndpointPair{T}[], Int[]) :
+                    _slice_barcode_packed(M, spec.chain; values=spec.values)
             end
         end
         return _slice_barcodes_result_without_geometry(bcs, weights)
     end
 
-    bcs = Vector{FloatBarcode}(undef, n)
+    bcs = Vector{Dict{Tuple{T,T},Int}}(undef, n)
     if threads && Threads.nthreads() > 1
         Threads.@threads for i in 1:n
+            local spec
             spec = slices[i]
-            bcs[i] = isempty(spec.chain) ? _empty_float_barcode() : slice_barcode(M, spec.chain; values=spec.values)
+            bcs[i] = isempty(spec.chain) ? Dict{Tuple{T,T},Int}() : slice_barcode(M, spec.chain; values=spec.values)
         end
     else
         @inbounds for i in 1:n
             spec = slices[i]
-            bcs[i] = isempty(spec.chain) ? _empty_float_barcode() : slice_barcode(M, spec.chain; values=spec.values)
+            bcs[i] = isempty(spec.chain) ? Dict{Tuple{T,T},Int}() : slice_barcode(M, spec.chain; values=spec.values)
         end
     end
     return _slice_barcodes_result_without_geometry(bcs, weights)
@@ -6610,7 +6732,7 @@ function slice_barcodes(
 
     wdir = Vector{Float64}(undef, nd)
     for i in 1:nd
-        wdir[i] = SliceInvariants.direction_weight(dirs_in[i], direction_weight)
+        wdir[i] = _encoding_direction_weight(pi, dirs_in[i], direction_weight)
     end
     woff = _offset_sample_weights(offs0, offset_weights)
 
@@ -6626,6 +6748,7 @@ function slice_barcodes(
             bcs = Matrix{PackedFloatBarcode}(undef, nd, no)
             if threads && Threads.nthreads() > 1
                 Threads.@threads for k in 1:(nd * no)
+                    local i, j, chain, tvals, vals_use
                     i = div((k - 1), no) + 1
                     j = (k - 1) % no + 1
                     chain, tvals = slice_chain(pi, offs0[j], dirs_in[i], opts_chain; drop_unknown=drop_unknown, filtered...)
@@ -6652,6 +6775,7 @@ function slice_barcodes(
             bcs = Matrix{PackedIndexBarcode}(undef, nd, no)
             if threads && Threads.nthreads() > 1
                 Threads.@threads for k in 1:(nd * no)
+                    local i, j, chain, tvals
                     i = div((k - 1), no) + 1
                     j = (k - 1) % no + 1
                     chain, tvals = slice_chain(pi, offs0[j], dirs_in[i], opts_chain; drop_unknown=drop_unknown, filtered...)
@@ -6676,6 +6800,7 @@ function slice_barcodes(
             bcs = Matrix{PackedFloatBarcode}(undef, nd, no)
             if threads && Threads.nthreads() > 1
                 Threads.@threads for k in 1:(nd * no)
+                    local i, j, chain, tvals, vals_use, pb
                     i = div((k - 1), no) + 1
                     j = (k - 1) % no + 1
                     chain, tvals = slice_chain(pi, offs0[j], dirs_in[i], opts_chain; drop_unknown=drop_unknown, filtered...)
@@ -6707,6 +6832,7 @@ function slice_barcodes(
         bcs = Matrix{FloatBarcode}(undef, nd, no)
         if threads && Threads.nthreads() > 1
             Threads.@threads for k in 1:(nd * no)
+                local i, j, chain, tvals, vals_use
                 i = div((k - 1), no) + 1
                 j = (k - 1) % no + 1
                 chain, tvals = slice_chain(pi, offs0[j], dirs_in[i], opts_chain; drop_unknown=drop_unknown, filtered...)
@@ -6733,6 +6859,7 @@ function slice_barcodes(
         bcs = Matrix{IndexBarcode}(undef, nd, no)
         if threads && Threads.nthreads() > 1
             Threads.@threads for k in 1:(nd * no)
+                local i, j, chain, tvals
                 i = div((k - 1), no) + 1
                 j = (k - 1) % no + 1
                 chain, tvals = slice_chain(pi, offs0[j], dirs_in[i], opts_chain; drop_unknown=drop_unknown, filtered...)
@@ -6757,6 +6884,7 @@ function slice_barcodes(
         bcs = Matrix{FloatBarcode}(undef, nd, no)
         if threads && Threads.nthreads() > 1
             Threads.@threads for k in 1:(nd * no)
+                local i, j, chain, tvals, vals_use
                 i = div((k - 1), no) + 1
                 j = (k - 1) % no + 1
                 chain, tvals = slice_chain(pi, offs0[j], dirs_in[i], opts_chain; drop_unknown=drop_unknown, filtered...)
@@ -6871,7 +6999,7 @@ function _prepare_geometric_slice_query(
 
     wdir = Vector{Float64}(undef, nd)
     @inbounds for i in 1:nd
-        wdir[i] = SliceInvariants.direction_weight(dirs_in[i], direction_weight)
+        wdir[i] = _encoding_direction_weight(pi, dirs_in[i], direction_weight)
     end
     woff = _offset_sample_weights(offs0, offset_weights)
     W = wdir * woff'
@@ -6904,50 +7032,14 @@ function _slice_barcodes_geometric_packed(
     nQ = nvertices(M.Q)
     use_array_memo = _use_array_memo(nQ)
 
-    if threads && Threads.nthreads() > 1
-        nT = Threads.nthreads()
-        memo_by_thread = use_array_memo ?
-            [_new_array_memo(K, nQ) for _ in 1:nT] :
-            [Dict{Tuple{Int,Int}, AbstractMatrix{K}}() for _ in 1:nT]
-        rank_by_thread = [Matrix{Int}(undef, 0, 0) for _ in 1:nT]
-        locate_ws_by_thread = [_SliceLocateBatchWorkspace() for _ in 1:nT]
-        Threads.@threads for idx in 1:ns
-            i = div(idx - 1, no) + 1
-            j = (idx - 1) % no + 1
-            tid = Threads.threadid()
-            chain, tvals = _slice_chain_collect(
-                pi,
-                offs0[j],
-                dirs_in[i],
-                opts_chain;
-                drop_unknown = drop_unknown,
-                locate_ws = locate_ws_by_thread[tid],
-                filtered...,
-            )
-            if isempty(chain)
-                bars[idx] = _empty_packed_float_barcode()
-                continue
-            end
-            m = length(chain)
-            if size(rank_by_thread[tid], 1) < m
-                rank_by_thread[tid] = Matrix{Int}(undef, m, m)
-            end
-            bars[idx] = _slice_barcode_packed_with_workspace(
-                M,
-                chain,
-                _extended_values_view(tvals),
-                cc,
-                memo_by_thread[tid],
-                rank_by_thread[tid],
-            )
-        end
-    else
+    _foreach_workchunk(ns; threads=threads) do work, _
+        local memo, rank_work, locate_ws, i, j, chain, tvals, m
         memo = use_array_memo ? _new_array_memo(K, nQ) : Dict{Tuple{Int,Int}, AbstractMatrix{K}}()
         rank_work = Matrix{Int}(undef, 0, 0)
         locate_ws = _SliceLocateBatchWorkspace()
-        @inbounds for idx in 1:ns
-            i = div(idx - 1, no) + 1
-            j = (idx - 1) % no + 1
+        @inbounds for idx in work
+            i = mod1(idx, nd)
+            j = div(idx - 1, nd) + 1
             chain, tvals = _slice_chain_collect(
                 pi,
                 offs0[j],
@@ -6975,8 +7067,68 @@ function _slice_barcodes_geometric_packed(
             )
         end
     end
-
     return bars
+end
+
+# Every shard owns its mutable barcode, rank, map and locate workspaces.
+# A function boundary keeps these bindings private even when tasks migrate.
+function _slice_pair_distance_geometric_shard(
+    M::PModule{K},
+    N::PModule{K},
+    dirs_in,
+    offs0,
+    W,
+    pi,
+    opts_chain,
+    filtered,
+    task,
+    ccM,
+    ccN,
+    dist_kind,
+    indices,
+    reduction::Val{R},
+    drop_unknown::Bool,
+)::Float64 where {K,R}
+    nQM, nQN = nvertices(M.Q), nvertices(N.Q)
+    memoM = _use_array_memo(nQM) ? _new_array_memo(K, nQM) : Dict{Tuple{Int,Int}, AbstractMatrix{K}}()
+    memoN = _use_array_memo(nQN) ? _new_array_memo(K, nQN) : Dict{Tuple{Int,Int}, AbstractMatrix{K}}()
+    rankM = Matrix{Int}(undef, 0, 0)
+    rankN = Matrix{Int}(undef, 0, 0)
+    locate_ws = _SliceLocateBatchWorkspace()
+    scratch = _SliceKernelScratch()
+    nd = length(dirs_in)
+    p = float(task.agg_p)
+    result = 0.0
+    @inbounds for idx in indices
+        i = mod1(idx, nd)
+        j = div(idx - 1, nd) + 1
+        w = W[i, j]
+        w == 0.0 && continue
+        chain, tvals = _slice_chain_collect(
+            pi, offs0[j], dirs_in[i], opts_chain;
+            drop_unknown=drop_unknown, locate_ws=locate_ws, filtered...,
+        )
+        isempty(chain) && continue
+        m = length(chain)
+        if size(rankM, 1) < m
+            rankM = Matrix{Int}(undef, m, m)
+        end
+        if size(rankN, 1) < m
+            rankN = Matrix{Int}(undef, m, m)
+        end
+        endpoints = _extended_values_view(tvals)
+        pbM = _slice_barcode_packed_with_workspace(M, chain, endpoints, ccM, memoM, rankM)
+        pbN = _slice_barcode_packed_with_workspace(N, chain, endpoints, ccN, memoN, rankN)
+        d = _packed_distance_value!(scratch, pbM, pbN, dist_kind, task)
+        if R === :max
+            result = max(result, w * d)
+        elseif R === :mean
+            result += w * d
+        else
+            result += w * d^p
+        end
+    end
+    return result
 end
 
 function _slice_pair_distance_geometric_packed_fast(
@@ -6991,254 +7143,48 @@ function _slice_pair_distance_geometric_packed_fast(
     task::SliceDistanceTask;
     drop_unknown::Bool = true,
 )::Float64 where {K}
-    nd = length(dirs_in)
-    no = length(offs0)
-    ns = nd * no
+    ns = length(dirs_in) * length(offs0)
+    sumw = sum(W)
+    sumw == 0.0 && return 0.0
+    agg_mode = (task.agg === mean) ? :mean : (task.agg === maximum) ? :max : task.agg
+    reduction = if task.weight_mode == :scale || agg_mode == :max
+        Val(:max)
+    elseif task.weight_mode == :integrate && agg_mode == :mean
+        Val(:mean)
+    elseif task.weight_mode == :integrate && agg_mode == :pmean
+        Val(:pmean)
+    else
+        error("_slice_pair_distance_geometric_packed_fast: unsupported reduction")
+    end
 
     build_cache!(M.Q; cover=true, updown=true)
     build_cache!(N.Q; cover=true, updown=true)
     ccM = _get_cover_cache(M.Q)
     ccN = _get_cover_cache(N.Q)
-    nQM = nvertices(M.Q)
-    nQN = nvertices(N.Q)
-    use_array_memo_M = _use_array_memo(nQM)
-    use_array_memo_N = _use_array_memo(nQN)
-    threads = task.threads && Threads.nthreads() > 1
-    agg_mode = (task.agg === mean) ? :mean : (task.agg === maximum) ? :max : task.agg
-    sumw = sum(W)
-    sumw == 0.0 && return 0.0
     dist_kind = _slice_distance_fast_kind(task)
-    scratch_by_thread = _scratch_arenas(threads)
-
-    if threads
-        nT = Threads.nthreads()
-        memoM_by_thread = use_array_memo_M ?
-            [_new_array_memo(K, nQM) for _ in 1:nT] :
-            [Dict{Tuple{Int,Int}, AbstractMatrix{K}}() for _ in 1:nT]
-        memoN_by_thread = use_array_memo_N ?
-            [_new_array_memo(K, nQN) for _ in 1:nT] :
-            [Dict{Tuple{Int,Int}, AbstractMatrix{K}}() for _ in 1:nT]
-        rankM_by_thread = [Matrix{Int}(undef, 0, 0) for _ in 1:nT]
-        rankN_by_thread = [Matrix{Int}(undef, 0, 0) for _ in 1:nT]
-        locate_ws_by_thread = [_SliceLocateBatchWorkspace() for _ in 1:nT]
-
-        if task.weight_mode == :scale || agg_mode == :max
-            best_by_slot = fill(0.0, nT)
-            Threads.@threads for slot in 1:nT
-                tid = Threads.threadid()
-                scratch = scratch_by_thread[tid]
-                best = 0.0
-                for idx in slot:nT:ns
-                    w = W[idx]
-                    w == 0.0 && continue
-                    i = div(idx - 1, no) + 1
-                    j = (idx - 1) % no + 1
-                    chain, tvals = _slice_chain_collect(
-                        pi,
-                        offs0[j],
-                        dirs_in[i],
-                        opts_chain;
-                        drop_unknown = drop_unknown,
-                        locate_ws = locate_ws_by_thread[tid],
-                        filtered...,
-                    )
-                    isempty(chain) && continue
-                    m = length(chain)
-                    if size(rankM_by_thread[tid], 1) < m
-                        rankM_by_thread[tid] = Matrix{Int}(undef, m, m)
-                    end
-                    if size(rankN_by_thread[tid], 1) < m
-                        rankN_by_thread[tid] = Matrix{Int}(undef, m, m)
-                    end
-                    endpoints = _extended_values_view(tvals)
-                    pbM = _slice_barcode_packed_with_workspace(M, chain, endpoints, ccM, memoM_by_thread[tid], rankM_by_thread[tid])
-                    pbN = _slice_barcode_packed_with_workspace(N, chain, endpoints, ccN, memoN_by_thread[tid], rankN_by_thread[tid])
-                    d = _packed_distance_value!(scratch, pbM, pbN, dist_kind, task)
-                    best = max(best, w * d)
-                end
-                best_by_slot[slot] = best
-            end
-            return maximum(best_by_slot) / float(task.agg_norm)
-        elseif task.weight_mode == :integrate && agg_mode == :mean
-            acc_by_slot = fill(0.0, nT)
-            Threads.@threads for slot in 1:nT
-                tid = Threads.threadid()
-                scratch = scratch_by_thread[tid]
-                acc = 0.0
-                for idx in slot:nT:ns
-                    w = W[idx]
-                    w == 0.0 && continue
-                    i = div(idx - 1, no) + 1
-                    j = (idx - 1) % no + 1
-                    chain, tvals = _slice_chain_collect(
-                        pi,
-                        offs0[j],
-                        dirs_in[i],
-                        opts_chain;
-                        drop_unknown = drop_unknown,
-                        locate_ws = locate_ws_by_thread[tid],
-                        filtered...,
-                    )
-                    isempty(chain) && continue
-                    m = length(chain)
-                    if size(rankM_by_thread[tid], 1) < m
-                        rankM_by_thread[tid] = Matrix{Int}(undef, m, m)
-                    end
-                    if size(rankN_by_thread[tid], 1) < m
-                        rankN_by_thread[tid] = Matrix{Int}(undef, m, m)
-                    end
-                    endpoints = _extended_values_view(tvals)
-                    pbM = _slice_barcode_packed_with_workspace(M, chain, endpoints, ccM, memoM_by_thread[tid], rankM_by_thread[tid])
-                    pbN = _slice_barcode_packed_with_workspace(N, chain, endpoints, ccN, memoN_by_thread[tid], rankN_by_thread[tid])
-                    acc += w * _packed_distance_value!(scratch, pbM, pbN, dist_kind, task)
-                end
-                acc_by_slot[slot] = acc
-            end
-            return (sum(acc_by_slot) / sumw) / float(task.agg_norm)
-        elseif task.weight_mode == :integrate && agg_mode == :pmean
-            p = float(task.agg_p)
-            acc_by_slot = fill(0.0, nT)
-            Threads.@threads for slot in 1:nT
-                tid = Threads.threadid()
-                scratch = scratch_by_thread[tid]
-                acc = 0.0
-                for idx in slot:nT:ns
-                    w = W[idx]
-                    w == 0.0 && continue
-                    i = div(idx - 1, no) + 1
-                    j = (idx - 1) % no + 1
-                    chain, tvals = _slice_chain_collect(
-                        pi,
-                        offs0[j],
-                        dirs_in[i],
-                        opts_chain;
-                        drop_unknown = drop_unknown,
-                        locate_ws = locate_ws_by_thread[tid],
-                        filtered...,
-                    )
-                    isempty(chain) && continue
-                    m = length(chain)
-                    if size(rankM_by_thread[tid], 1) < m
-                        rankM_by_thread[tid] = Matrix{Int}(undef, m, m)
-                    end
-                    if size(rankN_by_thread[tid], 1) < m
-                        rankN_by_thread[tid] = Matrix{Int}(undef, m, m)
-                    end
-                    endpoints = _extended_values_view(tvals)
-                    pbM = _slice_barcode_packed_with_workspace(M, chain, endpoints, ccM, memoM_by_thread[tid], rankM_by_thread[tid])
-                    pbN = _slice_barcode_packed_with_workspace(N, chain, endpoints, ccN, memoN_by_thread[tid], rankN_by_thread[tid])
-                    d = _packed_distance_value!(scratch, pbM, pbN, dist_kind, task)
-                    acc += w * d^p
-                end
-                acc_by_slot[slot] = acc
-            end
-            return ((sum(acc_by_slot) / sumw)^(1 / p)) / float(task.agg_norm)
+    nshards = task.threads ? min(Threads.nthreads(), ns) : 1
+    partials = Vector{Float64}(undef, nshards)
+    if nshards > 1
+        Threads.@threads for slot in 1:nshards
+            partials[slot] = _slice_pair_distance_geometric_shard(
+                M, N, dirs_in, offs0, W, pi, opts_chain, filtered,
+                task, ccM, ccN, dist_kind, slot:nshards:ns, reduction, drop_unknown,
+            )
         end
     else
-        memoM = use_array_memo_M ? _new_array_memo(K, nQM) : Dict{Tuple{Int,Int}, AbstractMatrix{K}}()
-        memoN = use_array_memo_N ? _new_array_memo(K, nQN) : Dict{Tuple{Int,Int}, AbstractMatrix{K}}()
-        rankM = Matrix{Int}(undef, 0, 0)
-        rankN = Matrix{Int}(undef, 0, 0)
-        locate_ws = _SliceLocateBatchWorkspace()
-        scratch = scratch_by_thread[1]
-
-        if task.weight_mode == :scale || agg_mode == :max
-            best = 0.0
-            @inbounds for idx in 1:ns
-                w = W[idx]
-                w == 0.0 && continue
-                i = div(idx - 1, no) + 1
-                j = (idx - 1) % no + 1
-                chain, tvals = _slice_chain_collect(
-                    pi,
-                    offs0[j],
-                    dirs_in[i],
-                    opts_chain;
-                    drop_unknown = drop_unknown,
-                    locate_ws = locate_ws,
-                    filtered...,
-                )
-                isempty(chain) && continue
-                m = length(chain)
-                if size(rankM, 1) < m
-                    rankM = Matrix{Int}(undef, m, m)
-                end
-                if size(rankN, 1) < m
-                    rankN = Matrix{Int}(undef, m, m)
-                end
-                endpoints = _extended_values_view(tvals)
-                pbM = _slice_barcode_packed_with_workspace(M, chain, endpoints, ccM, memoM, rankM)
-                pbN = _slice_barcode_packed_with_workspace(N, chain, endpoints, ccN, memoN, rankN)
-                d = _packed_distance_value!(scratch, pbM, pbN, dist_kind, task)
-                best = max(best, w * d)
-            end
-            return best / float(task.agg_norm)
-        elseif task.weight_mode == :integrate && agg_mode == :mean
-            acc = 0.0
-            @inbounds for idx in 1:ns
-                w = W[idx]
-                w == 0.0 && continue
-                i = div(idx - 1, no) + 1
-                j = (idx - 1) % no + 1
-                chain, tvals = _slice_chain_collect(
-                    pi,
-                    offs0[j],
-                    dirs_in[i],
-                    opts_chain;
-                    drop_unknown = drop_unknown,
-                    locate_ws = locate_ws,
-                    filtered...,
-                )
-                isempty(chain) && continue
-                m = length(chain)
-                if size(rankM, 1) < m
-                    rankM = Matrix{Int}(undef, m, m)
-                end
-                if size(rankN, 1) < m
-                    rankN = Matrix{Int}(undef, m, m)
-                end
-                endpoints = _extended_values_view(tvals)
-                pbM = _slice_barcode_packed_with_workspace(M, chain, endpoints, ccM, memoM, rankM)
-                pbN = _slice_barcode_packed_with_workspace(N, chain, endpoints, ccN, memoN, rankN)
-                acc += w * _packed_distance_value!(scratch, pbM, pbN, dist_kind, task)
-            end
-            return (acc / sumw) / float(task.agg_norm)
-        elseif task.weight_mode == :integrate && agg_mode == :pmean
-            p = float(task.agg_p)
-            acc = 0.0
-            @inbounds for idx in 1:ns
-                w = W[idx]
-                w == 0.0 && continue
-                i = div(idx - 1, no) + 1
-                j = (idx - 1) % no + 1
-                chain, tvals = _slice_chain_collect(
-                    pi,
-                    offs0[j],
-                    dirs_in[i],
-                    opts_chain;
-                    drop_unknown = drop_unknown,
-                    locate_ws = locate_ws,
-                    filtered...,
-                )
-                isempty(chain) && continue
-                m = length(chain)
-                if size(rankM, 1) < m
-                    rankM = Matrix{Int}(undef, m, m)
-                end
-                if size(rankN, 1) < m
-                    rankN = Matrix{Int}(undef, m, m)
-                end
-                endpoints = _extended_values_view(tvals)
-                pbM = _slice_barcode_packed_with_workspace(M, chain, endpoints, ccM, memoM, rankM)
-                pbN = _slice_barcode_packed_with_workspace(N, chain, endpoints, ccN, memoN, rankN)
-                d = _packed_distance_value!(scratch, pbM, pbN, dist_kind, task)
-                acc += w * d^p
-            end
-            return ((acc / sumw)^(1 / p)) / float(task.agg_norm)
-        end
+        partials[1] = _slice_pair_distance_geometric_shard(
+            M, N, dirs_in, offs0, W, pi, opts_chain, filtered,
+            task, ccM, ccN, dist_kind, 1:ns, reduction, drop_unknown,
+        )
     end
-
-    error("_slice_pair_distance_geometric_packed_fast: unsupported reduction")
+    result = if reduction isa Val{:max}
+        maximum(partials)
+    elseif reduction isa Val{:mean}
+        sum(partials) / sumw
+    else
+        (sum(partials) / sumw)^(1 / float(task.agg_p))
+    end
+    return result / float(task.agg_norm)
 end
 
 function _slice_pair_distance_geometric(
@@ -7278,60 +7224,16 @@ function _slice_pair_distance_geometric(
     use_array_memo_N = _use_array_memo(nQN)
     threads = task.threads && Threads.nthreads() > 1
 
-    if threads
-        nT = Threads.nthreads()
-        memoM_by_thread = use_array_memo_M ?
-            [_new_array_memo(K, nQM) for _ in 1:nT] :
-            [Dict{Tuple{Int,Int}, AbstractMatrix{K}}() for _ in 1:nT]
-        memoN_by_thread = use_array_memo_N ?
-            [_new_array_memo(K, nQN) for _ in 1:nT] :
-            [Dict{Tuple{Int,Int}, AbstractMatrix{K}}() for _ in 1:nT]
-        rankM_by_thread = [Matrix{Int}(undef, 0, 0) for _ in 1:nT]
-        rankN_by_thread = [Matrix{Int}(undef, 0, 0) for _ in 1:nT]
-        locate_ws_by_thread = [_SliceLocateBatchWorkspace() for _ in 1:nT]
-        Threads.@threads for idx in 1:ns
-            i = div(idx - 1, no) + 1
-            j = (idx - 1) % no + 1
-            tid = Threads.threadid()
-            if W[idx] == 0.0
-                barsM[idx] = _empty_packed_float_barcode()
-                barsN[idx] = _empty_packed_float_barcode()
-                continue
-            end
-            chain, tvals = _slice_chain_collect(
-                pi,
-                offs0[j],
-                dirs_in[i],
-                opts_chain;
-                drop_unknown = drop_unknown,
-                locate_ws = locate_ws_by_thread[tid],
-                filtered...,
-            )
-            if isempty(chain)
-                barsM[idx] = _empty_packed_float_barcode()
-                barsN[idx] = _empty_packed_float_barcode()
-                continue
-            end
-            m = length(chain)
-            if size(rankM_by_thread[tid], 1) < m
-                rankM_by_thread[tid] = Matrix{Int}(undef, m, m)
-            end
-            if size(rankN_by_thread[tid], 1) < m
-                rankN_by_thread[tid] = Matrix{Int}(undef, m, m)
-            end
-            endpoints = _extended_values_view(tvals)
-            barsM[idx] = _slice_barcode_packed_with_workspace(M, chain, endpoints, ccM, memoM_by_thread[tid], rankM_by_thread[tid])
-            barsN[idx] = _slice_barcode_packed_with_workspace(N, chain, endpoints, ccN, memoN_by_thread[tid], rankN_by_thread[tid])
-        end
-    else
+    _foreach_workchunk(ns; threads=threads) do work, _
+        local memoM, memoN, rankM, rankN, locate_ws, i, j, chain, tvals, m, endpoints
         memoM = use_array_memo_M ? _new_array_memo(K, nQM) : Dict{Tuple{Int,Int}, AbstractMatrix{K}}()
         memoN = use_array_memo_N ? _new_array_memo(K, nQN) : Dict{Tuple{Int,Int}, AbstractMatrix{K}}()
         rankM = Matrix{Int}(undef, 0, 0)
         rankN = Matrix{Int}(undef, 0, 0)
         locate_ws = _SliceLocateBatchWorkspace()
-        @inbounds for idx in 1:ns
-            i = div(idx - 1, no) + 1
-            j = (idx - 1) % no + 1
+        @inbounds for idx in work
+            i = mod1(idx, nd)
+            j = div(idx - 1, nd) + 1
             if W[idx] == 0.0
                 barsM[idx] = _empty_packed_float_barcode()
                 barsN[idx] = _empty_packed_float_barcode()
@@ -7389,6 +7291,25 @@ function slice_barcodes(
     cache::Union{Nothing,SlicePlanCache} = nothing,
     slice_kwargs...
 ) where {K}
+    pi0 = _unwrap_compiled(pi)
+    if hasproperty(pi0, :coords) && any(a -> eltype(a) <: AlgebraicReal, pi0.coords)
+        plan = compile_slices(pi0, opts; directions=directions, offsets=offsets,
+            n_dirs=n_dirs, n_offsets=n_offsets, max_den=max_den, include_axes=include_axes,
+            normalize_dirs=normalize_dirs, direction_weight=direction_weight,
+            offset_weights=offset_weights, normalize_weights=normalize_weights,
+            offset_margin=offset_margin, drop_unknown=drop_unknown, threads=threads,
+            cache=cache, slice_kwargs...)
+        values === nothing && return slice_barcodes(M, plan; packed=packed, threads=threads)
+        values isa AbstractVector{<:Real} || throw(ArgumentError("values must be a real endpoint vector"))
+        T = eltype(values)
+        bars = _packed_grid_undef(PackedBarcode{T}, plan.nd, plan.no)
+        for i in 1:plan.nd, j in 1:plan.no
+            chain = _plan_chain(plan, _plan_idx(plan.no, i, j))
+            bars[i,j] = isempty(chain) ? PackedBarcode{T}(EndpointPair{T}[],Int[]) :
+                _slice_barcode_packed(M, chain; values=values)
+        end
+        return _slice_barcodes_plan_result_from_packed(bars, plan; packed=packed)
+    end
     prep = _prepare_geometric_slice_query(
         pi,
         opts;
@@ -7447,6 +7368,8 @@ function slice_barcodes(
         return run_invariants(plan, module_cache(M), SliceBarcodesTask(; packed = packed, threads = threads))
     end
 
+    opts_compile = prep.opts_chain
+    slice_kwargs0 = prep.filtered
     # Determine default directions/offsets if requested.
     dirs0 = directions
     offs0 = offsets
@@ -7505,7 +7428,7 @@ function slice_barcodes(
     # Slice weights (outer product of per-direction and per-offset weights).
     wdir = Vector{Float64}(undef, nd)
     for i in 1:nd
-        wdir[i] = SliceInvariants.direction_weight(dirs_in[i], direction_weight)
+        wdir[i] = _encoding_direction_weight(pi, dirs_in[i], direction_weight)
     end
     woff = _offset_sample_weights(offs0, offset_weights)
 
@@ -7522,6 +7445,7 @@ function slice_barcodes(
             bcs = Matrix{PackedFloatBarcode}(undef, nd, no)
             if threads && Threads.nthreads() > 1
                 Threads.@threads for k in 1:(nd * no)
+                    local i, j, chain, tvals, vals_use
                     i = div((k - 1), no) + 1
                     j = (k - 1) % no + 1
                     chain, tvals = slice_chain(pi, offs0[j], dirs_in[i], opts_chain; drop_unknown=drop_unknown, filtered...)
@@ -7548,6 +7472,7 @@ function slice_barcodes(
             bcs = Matrix{PackedIndexBarcode}(undef, nd, no)
             if threads && Threads.nthreads() > 1
                 Threads.@threads for k in 1:(nd * no)
+                    local i, j, chain, tvals
                     i = div((k - 1), no) + 1
                     j = (k - 1) % no + 1
                     chain, tvals = slice_chain(pi, offs0[j], dirs_in[i], opts_chain; drop_unknown=drop_unknown, filtered...)
@@ -7572,6 +7497,7 @@ function slice_barcodes(
             bcs = Matrix{PackedFloatBarcode}(undef, nd, no)
             if threads && Threads.nthreads() > 1
                 Threads.@threads for k in 1:(nd * no)
+                    local i, j, chain, tvals, vals_use, pb
                     i = div((k - 1), no) + 1
                     j = (k - 1) % no + 1
                     chain, tvals = slice_chain(pi, offs0[j], dirs_in[i], opts_chain; drop_unknown=drop_unknown, filtered...)
@@ -7603,6 +7529,7 @@ function slice_barcodes(
         bcs = Matrix{FloatBarcode}(undef, nd, no)
         if threads && Threads.nthreads() > 1
             Threads.@threads for k in 1:(nd * no)
+                local i, j, chain, tvals, vals_use
                 i = div((k - 1), no) + 1
                 j = (k - 1) % no + 1
                 chain, tvals = slice_chain(pi, offs0[j], dirs_in[i], opts_chain; drop_unknown=drop_unknown, filtered...)
@@ -7629,6 +7556,7 @@ function slice_barcodes(
         bcs = Matrix{IndexBarcode}(undef, nd, no)
         if threads && Threads.nthreads() > 1
             Threads.@threads for k in 1:(nd * no)
+                local i, j, chain, tvals
                 i = div((k - 1), no) + 1
                 j = (k - 1) % no + 1
                 chain, tvals = slice_chain(pi, offs0[j], dirs_in[i], opts_chain; drop_unknown=drop_unknown, filtered...)
@@ -7653,6 +7581,7 @@ function slice_barcodes(
         bcs = Matrix{FloatBarcode}(undef, nd, no)
         if threads && Threads.nthreads() > 1
             Threads.@threads for k in 1:(nd * no)
+                local i, j, chain, tvals, vals_use
                 i = div((k - 1), no) + 1
                 j = (k - 1) % no + 1
                 chain, tvals = slice_chain(pi, offs0[j], dirs_in[i], opts_chain; drop_unknown=drop_unknown, filtered...)
@@ -7990,6 +7919,7 @@ function slice_features(
     feats = Vector{Vector{Float64}}(undef, length(bcs))
     if threads && Threads.nthreads() > 1
         Threads.@threads for i in 1:length(bcs)
+            local bc, pl, s, PI, e
             bc = bcs[i]
             if featurizer == :landscape
                 pl = persistence_landscape(bc; kmax=kmax, tgrid=tg)
@@ -8133,6 +8063,7 @@ function slice_features(
     feats = Array{Vector{Float64}}(undef, nd, no)
     if threads && Threads.nthreads() > 1
         Threads.@threads for k in 1:(nd * no)
+            local i, j, bc, pl, s, PI, e
             i = div(k - 1, no) + 1
             j = (k - 1) % no + 1
             bc = bcs[i, j]
@@ -8311,6 +8242,7 @@ function slice_features(
     feats = Array{Vector{Float64}}(undef, nd, no)
     if threads && Threads.nthreads() > 1
         Threads.@threads for k in 1:(nd * no)
+            local i, j, bc, pl, s, PI, e
             i = div(k - 1, no) + 1
             j = (k - 1) % no + 1
             bc = bcs[i, j]
@@ -8517,6 +8449,7 @@ function slice_kernel(
         nT = Threads.nthreads()
         acc_by_slot = fill(0.0, nT)
         Threads.@threads for slot in 1:nT
+            local acc, w
             acc = 0.0
             for i in slot:nT:length(bM)
                 w = W[i]

@@ -25,6 +25,7 @@ module Backends
     using ...PLPolyhedra: PLFringe
 
     using ...ZnEncoding
+    import ...FlangeZn
     using ...FlangeZn: Flange
 
     import ..Utils: compose
@@ -46,19 +47,45 @@ module Backends
         return ZnEncoding.pmodule_on_box(FG; a=a, b=b)
     end
 
+    function _encoded_modules_on_box(FG1::Flange, FG2::Flange, enc::EncodingOptions, a, b)
+        a isa Tuple{Vararg{Int}} && b isa Tuple{Vararg{Int}} ||
+            throw(ArgumentError("Zn box encoding: provide integer tuples a and b."))
+        enc.backend in (:auto, :zn) || throw(ArgumentError("Zn box encoding: backend must be :auto or :zn."))
+        enc.strict_eps === nothing || throw(ArgumentError("Zn box encoding: strict_eps is not applicable to integer boxes."))
+        enc.poset_kind === :signature || throw(ArgumentError("Zn box encoding uses a structured product-of-chains poset; poset_kind=:$(enc.poset_kind) is not supported."))
+        length(a) == length(b) == FG1.n == FG2.n || throw(ArgumentError("Zn box encoding: box dimension must match both flanges."))
+        all(a .<= b) || throw(ArgumentError("Zn box encoding: box lower bounds must not exceed upper bounds."))
+        if enc.max_regions !== nothing
+            ncells = prod(big(b[i]) - a[i] + 1 for i in eachindex(a))
+            ncells <= enc.max_regions || throw(ArgumentError("Zn box encoding: box exceeds max_regions=$(enc.max_regions)."))
+        end
+        F1 = FG1.field == enc.field ? FG1 : FlangeZn.change_field(FG1, enc.field)
+        F2 = FG2.field == enc.field ? FG2 : FlangeZn.change_field(FG2, enc.field)
+        return pmodule_on_box(F1; a=a, b=b), pmodule_on_box(F2; a=a, b=b)
+    end
+
     """
         ExtZn(FG1, FG2, enc::EncodingOptions, df::DerivedFunctorOptions; method=:regions, a=nothing, b=nothing)
 
-    Compute Ext^s(FG1, FG2) for Z^n modules given by flange presentations.
+    Compute Ext in `Rep_k(P)` for finite encodings of two Z^n flange presentations.
 
     This is a workflow wrapper:
     1. Encode the infinite module(s) onto a finite encoding poset P (controlled by `enc`),
     2. Run homological algebra on the resulting finite-poset modules (controlled by `df`).
 
+    The result is Ext over the selected finite poset, not an automatically
+    encoding-independent Ext group in the ambient Z^n category. For `:box`,
+    the category is representations of that finite box. `provenance(result)`
+    records the actual base poset; retain the encoding separately when needed.
+
     Keyword `method`:
     - `:regions` (default): encode FG1 and FG2 to a common finite encoding poset.
     - `:box`: restrict both to the finite integer box [a,b] and compute on that box.
     When `method=:box` you must provide integer tuples `a` and `b`.
+    Both methods honor `enc.field`. For `:box`, `enc.max_regions` bounds the
+    number of grid vertices; the representation is the structured product of
+    chains (`poset_kind=:signature`). Polyhedral controls are not applicable.
+    Without explicit encoding options, the input coefficient field is preserved.
     """
     function ExtZn(FG1::Flange{K}, FG2::Flange{K},
                 enc::EncodingOptions, df::DerivedFunctorOptions;
@@ -67,10 +94,7 @@ module Backends
                 b::Union{Nothing,Tuple{Vararg{Int}}} = nothing) where {K}
 
         if method == :box
-            a === nothing && error("ExtZn(method=:box): missing keyword a")
-            b === nothing && error("ExtZn(method=:box): missing keyword b")
-            M = pmodule_on_box(FG1; a=a, b=b)
-            N = pmodule_on_box(FG2; a=a, b=b)
+            M, N = _encoded_modules_on_box(FG1, FG2, enc, a, b)
             return Ext(M, N, df)
         elseif method == :regions
             P, Hs, pi = ZnEncoding.encode_from_flanges(FG1, FG2, enc)
@@ -85,7 +109,7 @@ module Backends
     """
         projective_resolution_Zn(FG::Flange{K}, enc::EncodingOptions, res::ResolutionOptions; return_encoding=false)
 
-    Compute a projective resolution of the Z^n module presented by FG by:
+    Compute a projective resolution of the finite encoding of FG by:
         FG -> (P, M, pi) via region encoding, then projective_resolution(M) on P.
 
     If return_encoding=true, return a named tuple:
@@ -108,7 +132,7 @@ module Backends
     """
         injective_resolution_Zn(FG::Flange{K}, enc::EncodingOptions, res::ResolutionOptions; return_encoding=false)
 
-    Compute an injective resolution of the Z^n module presented by FG by:
+    Compute an injective resolution of the finite encoding of FG by:
         FG -> (P, M, pi) via region encoding, then injective_resolution(M) on P.
 
         If return_encoding=true, return a named tuple:
@@ -134,10 +158,11 @@ module Backends
     """
         ExtRn(F1, F2, enc::EncodingOptions, df::DerivedFunctorOptions)
 
-    Compute Ext^s(F1, F2) for modules over R^n given by PL fringe presentations.
+    Compute Ext in `Rep_k(P)` for finite encodings of two R^n PL presentations.
 
-    This follows the Ezra Miller pattern: do homological algebra on a finite encoding
-    poset, not on the infinite poset R^n directly.
+    The computation uses the chosen finite encoding poset. Miller's finite
+    encoding theorem does not by itself identify this with Ext over R^n;
+    such an identification needs additional comparison hypotheses.
 
     Algorithm:
     1. Build a single common encoding poset P that simultaneously encodes the union of
@@ -164,7 +189,7 @@ module Backends
     """
         projective_resolution_Rn(F, enc, res; return_encoding=false)
 
-    Compute a projective resolution of the module over R^n presented by F by:
+    Compute a projective resolution of the finite encoding of F by:
         F -> (P, M, pi) via encoding, then projective_resolution(M) on the finite poset P.
 
     If return_encoding=true, return a named tuple:
@@ -187,7 +212,7 @@ module Backends
     """
         injective_resolution_Rn(F, enc, res; return_encoding=false)
 
-    Compute an injective resolution of the module over R^n presented by F by:
+    Compute an injective resolution of the finite encoding of F by:
         F -> (P, M, pi) via encoding, then injective_resolution(M) on the finite poset P.
 
     If return_encoding=true, return a named tuple:
@@ -285,7 +310,8 @@ module Backends
 
     Keyword `method`:
     - `:regions` (default): common-encode FG1 and FG2 via region encoding.
-    - `:box`: ignore `enc`, restrict to the integer box [a,b], and compute on it.
+    - `:box`: restrict to the integer box [a,b], honoring `enc.field` and
+      `enc.max_regions`; polyhedral options and dense posets are not supported.
       When `method=:box` you must provide integer tuples `a` and `b`.
     """
     function ExtDoubleComplex(FG1::Flange{K}, FG2::Flange{K}, enc::EncodingOptions;
@@ -295,8 +321,8 @@ module Backends
                               maxlen::Union{Nothing,Int} = nothing,
                               cache::Union{Nothing,ResolutionCache}=nothing) where {K}
         if method == :box
-            # Delegate to the 2-argument method for consistent error messages.
-            return ExtDoubleComplex(FG1, FG2; method=:box, a=a, b=b, maxlen=maxlen, cache=cache)
+            M, N = _encoded_modules_on_box(FG1, FG2, enc, a, b)
+            return ExtDoubleComplex(M, N; maxlen=maxlen, cache=cache)
         elseif method == :regions
             _require_encoding_backend(enc, :zn, "ExtDoubleComplex(Zn)")
             _, Hs, _ = ZnEncoding.encode_from_flanges(FG1, FG2, enc)
@@ -316,12 +342,15 @@ module Backends
     Convenience wrapper: build the Ext bicomplex for two Z^n flange
     presentations and return its spectral sequence.
 
-    - For `method=:box`, this is a thin wrapper around the 2-argument
-      `ExtDoubleComplex(FG1,FG2; ...)`.
+    - For `method=:box`, restrict to the finite box and build its certified
+      `ExtSpectralSequence`.
     - For `method=:regions`, you must pass an EncodingOptions; see the
       3-argument method below.
 
     Keyword `first` is passed to `ChainComplexes.spectral_sequence`.
+    An explicit `maxlen` must complete both resolutions. The category is
+    representations of the selected finite poset; no ambient Ext identification
+    is asserted. The raw returned spectral sequence does not retain that poset.
     """
     function ExtSpectralSequence(FG1::Flange{K}, FG2::Flange{K};
                                  first::Symbol = :vertical,
@@ -332,9 +361,13 @@ module Backends
                                  cache::Union{Nothing,ResolutionCache}=nothing) where {K}
         if method == :regions
             error("ExtSpectralSequence(method=:regions): pass EncodingOptions explicitly: ExtSpectralSequence(FG1, FG2, enc; method=:regions, ...).")
+        elseif method != :box
+            throw(ArgumentError("ExtSpectralSequence: expected method=:box or :regions."))
         end
-        DC = ExtDoubleComplex(FG1, FG2; method=method, a=a, b=b, maxlen=maxlen, cache=cache)
-        return ChainComplexes.spectral_sequence(DC; output=:full, first=first)
+        (a === nothing || b === nothing) && throw(ArgumentError("ExtSpectralSequence(method=:box): provide box corners a and b."))
+        M = pmodule_on_box(FG1; a=a, b=b)
+        N = pmodule_on_box(FG2; a=a, b=b)
+        return ExtSpectralSequence(M, N; maxlen=maxlen, first=first, cache=cache)
     end
 
     """
@@ -356,8 +389,16 @@ module Backends
                                  b = nothing,
                                  maxlen::Union{Nothing,Int} = nothing,
                                  cache::Union{Nothing,ResolutionCache}=nothing) where {K}
-        DC = ExtDoubleComplex(FG1, FG2, enc; method=method, a=a, b=b, maxlen=maxlen, cache=cache)
-        return ChainComplexes.spectral_sequence(DC; output=:full, first=first)
+        if method == :box
+            M, N = _encoded_modules_on_box(FG1, FG2, enc, a, b)
+            return ExtSpectralSequence(M, N; maxlen=maxlen, first=first, cache=cache)
+        elseif method != :regions
+            throw(ArgumentError("ExtSpectralSequence: expected method=:box or :regions."))
+        end
+        _require_encoding_backend(enc, :zn, "ExtSpectralSequence(Zn)")
+        _, Hs, _ = ZnEncoding.encode_from_flanges(FG1, FG2, enc)
+        M, N = pmodule_from_fringe(Hs[1]), pmodule_from_fringe(Hs[2])
+        return ExtSpectralSequence(M, N; maxlen=maxlen, first=first, cache=cache)
     end
 
     """
@@ -396,14 +437,21 @@ module Backends
     R^n workflow wrapper: common-encode PL1 and PL2 using `enc`, build the Ext
     bicomplex, and return its spectral sequence.
 
+    The abutment is Ext over the finite encoding poset. Both resolutions must
+    terminate within `maxlen`; incomplete explicit budgets throw. This does
+    not identify the result with ambient R^n Ext, and the raw spectral-sequence
+    result does not retain the encoding poset or classifier.
+
     Encoding parameters are supplied exclusively via the EncodingOptions `enc`.
     """
     function ExtSpectralSequence(PL1::PLFringe, PL2::PLFringe, enc::EncodingOptions;
                                  first::Symbol = :vertical,
                                  maxlen::Union{Nothing,Int} = nothing,
                                  cache::Union{Nothing,ResolutionCache}=nothing)
-        DC = ExtDoubleComplex(PL1, PL2, enc; maxlen=maxlen, cache=cache)
-        return ChainComplexes.spectral_sequence(DC; output=:full, first=first)
+        _require_encoding_backend(enc, :pl, "ExtSpectralSequence(Rn)")
+        _, Hs, _ = PLPolyhedra.encode_from_PL_fringes(PL1, PL2, enc)
+        M, N = pmodule_from_fringe(Hs[1]), pmodule_from_fringe(Hs[2])
+        return ExtSpectralSequence(M, N; maxlen=maxlen, first=first, cache=cache)
     end
 
     function ExtSpectralSequence(PL1::PLFringe, PL2::PLFringe;

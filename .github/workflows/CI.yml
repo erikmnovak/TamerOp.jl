@@ -3,41 +3,100 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
+    inputs:
+      full_suite:
+        description: 'Run the full release suite (A79); ordinary CI uses focused owners'
+        type: boolean
+        default: false
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
+  focused:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            threads: '1'
+          - os: ubuntu-latest
+            threads: '4'
+          - os: macos-latest
+            threads: '1'
+          - os: windows-latest
+            threads: '1'
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 120
-
+    defaults:
+      run:
+        shell: bash
+    env:
+      JULIA_NUM_THREADS: ${{ matrix.threads }}
+      OPENBLAS_NUM_THREADS: '1'
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Julia
-        uses: julia-actions/setup-julia@v2
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
         with:
           version: '1.12'
-
-      - name: Cache Julia artifacts
-        uses: julia-actions/cache@v2
-
-      - name: Instantiate project
-        run: |
-          julia --startup-file=no --history-file=no --project=. -e '
-            using Pkg
-            Pkg.instantiate()
-            Pkg.precompile()
-          '
-
-      - name: Package load smoke
-        run: |
-          julia --startup-file=no --history-file=no --project=. -e '
-            using TamerOp
-            println("load ok")
-          '
-
-      - name: Focused package-mode runner
+      - uses: julia-actions/cache@v2
+      - name: Instantiate and record environment
+        run: julia --startup-file=no --project=. -e 'using Pkg, InteractiveUtils; Pkg.instantiate(); versioninfo(); Pkg.status()'
+      - name: Package, API, and maintained runner contracts
+        run: julia --startup-file=no --project=. test/runtests.jl --file=test_contracts.jl --file=test_test_runner.jl
+      - name: Field-aware linear algebra
+        run: julia --startup-file=no --project=. test/runtests.jl --file=test_field_linalg.jl --fields=QQ,F2,F3,F5,Real64
+      - name: Minimal optional boundaries and ordinary persistence
         env:
-          JULIA_NUM_THREADS: "1"
+          JULIA_LOAD_PATH: ${{ runner.os == 'Windows' && '@;@stdlib' || '@:@stdlib' }}
+          TAMEROP_TEST_MINIMAL: 'true'
+        run: julia --startup-file=no --project=. test/runtests.jl --file=test_ordinary_persistence.jl --file=test_extensions.jl --file=test_visualization.jl --file=test_featurizers.jl --prefix=A16 --prefix=A21
+      - name: Ingestion owner
+        run: julia --startup-file=no --project=. test/runtests.jl --file=test_data_pipeline.jl --fields=QQ,F2,F3,F5,Real64
+      - name: Kan cache ownership across fields
+        run: julia --startup-file=no --project=. test/runtests.jl --file=test_encoding.jl --prefix='A16 Kan maps respect module-owned caches on equal posets' --fields=QQ,F2,F3,F5,Real64
+      - name: Invariants owner
+        run: julia --startup-file=no --project=. test/runtests.jl --file=test_invariants.jl --fields=QQ,F2,F3,F5,Real64
+      - name: Behavioral option contracts across owners
+        run: julia --startup-file=no --project=. test/runtests.jl --file=test_zn_backend.jl --file=test_pl_backend.jl --file=test_derived_functors.jl --file=test_poset_interface.jl --prefix=A14 --fields=QQ,F2,F3,F5,Real64
+      - name: Public onboarding contracts
+        run: julia --startup-file=no --project=. test/runtests.jl --file=test_examples.jl --prefix="Package onboarding"
+      - name: Explicitly requested full release suite
+        if: github.event_name == 'workflow_dispatch' && inputs.full_suite
+        run: julia --startup-file=no --project=. -e 'using Pkg; Pkg.test()'
+
+  extensions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      JULIA_NUM_THREADS: '4'
+      OPENBLAS_NUM_THREADS: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1.12'
+      - uses: julia-actions/cache@v2
+      - name: Test target and required Tables extension
+        run: >-
+          julia --startup-file=no --project=. -e 'using Pkg;
+          Pkg.test(test_args=["--file=test_extensions.jl", "--file=test_featurizers.jl",
+          "--prefix=A17", "--prefix=Tables column interfaces", "--prefix=A64",
+          "--require-extension=TamerOpTablesExt"])'
+      - name: All declared extensions in an isolated environment
         run: |
-          julia --startup-file=no --history-file=no --compile=min -O0 --project=. .codex_focus_tests.jl
+          julia --startup-file=no --project=. -e '
+            using Pkg, TOML
+            root = pwd()
+            project = TOML.parsefile(joinpath(root, "Project.toml"))
+            mktempdir() do environment
+              open(joinpath(environment, "Project.toml"), "w") do io
+                TOML.print(io, Dict("deps" => merge(project["deps"], project["weakdeps"],
+                  project["extras"]), "compat" => project["compat"]))
+              end
+              Pkg.activate(environment)
+              Pkg.develop(path=root)
+              Pkg.instantiate()
+              Pkg.status()
+              append!(ARGS, ["--file=test_extensions.jl", "--file=test_featurizers.jl", "--file=test_visualization.jl", "--file=test_ordinary_persistence.jl", "--file=test_examples.jl"])
+              append!(ARGS, ["--require-extension=" * name for name in sort!(collect(keys(project["extensions"])))])
+              include(joinpath(root, "test", "runtests.jl"))
+            end'

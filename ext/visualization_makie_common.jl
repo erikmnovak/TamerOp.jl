@@ -1,4 +1,4 @@
-function __register_visual_makie_backend!(TO, MakieMod, backend::Symbol; allow_save::Bool=true)
+function _visual_makie_handlers(TO, MakieMod; allow_save::Bool=true)
     Viz = TO.Visualization
 
     Point2 = if isdefined(MakieMod, :Point2f)
@@ -182,7 +182,12 @@ function __register_visual_makie_backend!(TO, MakieMod, backend::Symbol; allow_s
         end
         isempty(elements) && return nothing
         title = get(legend, :title, "")
-        return MakieMod.Legend(slot, elements, labels; title=title)
+        at_right = get(Viz.visual_metadata(spec), :legend_position, :bottom) === :right
+        # Bottom legends constrain their row height, not the shared axis width.
+        # A vertical legend's defaults do the reverse and shrink the plot.
+        return MakieMod.Legend(slot, elements, labels; title=title,
+                               orientation=at_right ? :vertical : :horizontal,
+                               tellwidth=at_right, tellheight=!at_right)
     end
 
     function _make_axis(figslot, spec)
@@ -321,5 +326,5 @@ function __register_visual_makie_backend!(TO, MakieMod, backend::Symbol; allow_s
         nothing
     end
 
-    return Viz._register_visual_backend!(backend; render=render_spec, save=save_spec)
+    return (; render=render_spec, save=save_spec)
 end

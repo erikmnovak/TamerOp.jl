@@ -30,12 +30,13 @@ C) Invariant caches (MPPI):
 
 Private fragment layout
 -----------------------
-1) `serialization/shared.jl`
-2) `serialization/owned_datasets.jl`
-3) `serialization/owned_encodings.jl`
-4) `serialization/external_interop.jl`
-5) `serialization/external_cas.jl`
-6) `serialization/owned_mppi.jl`
+1) `serialization/coordinates.jl` (exact coordinate scalar codecs)
+2) `serialization/shared.jl`
+3) `serialization/owned_datasets.jl`
+4) `serialization/owned_encodings.jl`
+5) `serialization/external_interop.jl`
+6) `serialization/external_cas.jl`
+7) `serialization/owned_mppi.jl`
 
 Keep the owner file thin and place subsystem logic in the private fragments.
 """
@@ -43,8 +44,11 @@ module Serialization
 
 using JSON3
 using SparseArrays
+import Nemo
+using ..ExactReals: AlgebraicReal
 
 import ..CoreModules
+import ..SimplicialReduction
 using ..CoreModules: QQ, AbstractCoeffField, QQField, RealField, PrimeField,
     coeff_type, coerce, FpElem, rational_to_string, string_to_rational
 import ..FlangeZn: Face, IndFlat, IndInj, Flange, canonical_matrix
@@ -59,18 +63,19 @@ using ..DataTypes: PointCloud, ImageNd, GraphData, EmbeddedPlanarGraph2D, Graded
 using ..Options: FiltrationSpec, ConstructionBudget, ConstructionOptions, PipelineOptions, EncodingOptions
 using ..EncodingCore: GridEncodingMap, CompiledEncoding
 using ..Results: EncodingResult
-import ..Results: materialize_module
+import ..Results: materialize_module, provenance
 import ..ChainComplexes: describe
 import ..ZnEncoding
 import ..PLPolyhedra
 import ..PLBackend
 import ..IndicatorResolutions: pmodule_from_fringe, fringe_presentation
 
-const PIPELINE_SCHEMA_VERSION = 2
+const PIPELINE_SCHEMA_VERSION = 3
 const ENCODING_SCHEMA_VERSION = 1
 const PLFRINGE_SCHEMA_VERSION = 1
 const TAMER_FEATURE_SCHEMA_VERSION = v"0.2.0"
 
+include("serialization/coordinates.jl")
 include("serialization/shared.jl")
 include("serialization/owned_datasets.jl")
 include("serialization/owned_encodings.jl")

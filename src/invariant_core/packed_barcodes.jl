@@ -24,6 +24,10 @@ Packed internal barcode representation used in hot loops.
 - `pairs[i]` stores one endpoint pair,
 - `mults[i]` stores its multiplicity.
 
+Repeated endpoint pairs are permitted, for example when different index
+intervals acquire the same geometric endpoints. Their multiplicities add when
+materializing a barcode dictionary.
+
 This type is intentionally backend-facing. Prefer owner-level slice or fibered
 summary helpers for ordinary workflows, and use `describe(...)` here only when
 you are debugging packed-barcode kernels directly.
@@ -170,13 +174,15 @@ end
         sizehint!(out, length(bc.pairs))
         @inbounds for i in eachindex(bc.pairs)
             p = bc.pairs[i]
-            out[(float(p.b), float(p.d))] = bc.mults[i]
+            key = (Float64(p.b), Float64(p.d))
+            out[key] = get(out, key, 0) + bc.mults[i]
         end
         return out
     end
     out = FloatBarcode()
     for ((b, d), mult) in bc
-        out[(float(b), float(d))] = get(out, (float(b), float(d)), 0) + Int(mult)
+        key = (Float64(b), Float64(d))
+        out[key] = get(out, key, 0) + Int(mult)
     end
     return out
 end
@@ -297,7 +303,8 @@ end
     sizehint!(out, length(pb.pairs))
     @inbounds for i in eachindex(pb.pairs)
         p = pb.pairs[i]
-        out[(p.b, p.d)] = pb.mults[i]
+        key = (p.b, p.d)
+        out[key] = get(out, key, 0) + pb.mults[i]
     end
     return out
 end
@@ -310,7 +317,8 @@ end
     sizehint!(out, length(pb.pairs))
     @inbounds for i in eachindex(pb.pairs)
         p = pb.pairs[i]
-        out[(float(vals[p.b]), float(vals[p.d]))] = pb.mults[i]
+        key = (Float64(vals[p.b]), Float64(vals[p.d]))
+        out[key] = get(out, key, 0) + pb.mults[i]
     end
     return out
 end

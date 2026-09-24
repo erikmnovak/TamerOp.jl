@@ -6,7 +6,7 @@ Backend-agnostic visualization owner for encoding and invariant objects.
 Design
 ------
 - Core visualization data lives here as inspectable `VisualizationSpec` objects.
-- Rendering backends live in `ext/` and register themselves on demand.
+- Rendering backends live in `ext/` and register when explicitly imported.
 - The canonical simple-surface workflow is:
 
   `visualize(obj)` -> backend-native figure/widget
@@ -42,6 +42,7 @@ using ..CoreModules: SessionCache
 using ..FiniteFringe: AbstractPoset, ProductOfChainsPoset, GridPoset, ProductPoset, nvertices, leq
 import ..DataTypes
 import ..DataIngestion
+import ..OrdinaryPersistence
 using ..EncodingCore: AbstractPLikeEncodingMap, CompiledEncoding, GridEncodingMap,
                       compile_encoding, encoding_axes, encoding_map,
                       encoding_representatives, locate

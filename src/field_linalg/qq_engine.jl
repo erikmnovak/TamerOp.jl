@@ -258,6 +258,9 @@ function _solve_fullcolumn_rrefQQ(B::AbstractMatrix{<:QQ}, Y::AbstractVecOrMat{<
     size(Ymat, 1) == m || throw(DimensionMismatch("B and Y must have same row count"))
 
     if n == 0
+        if check_rhs && !all(iszero, Ymat)
+            error("right-hand side is not in column space of B")
+        end
         return want_vec ? QQ[] : zeros(QQ, 0, size(Ymat, 2))
     end
 
@@ -547,6 +550,17 @@ function _rankQQ(A::SparseMatrixCSC{QQ,Int})
     return _rref_rank(R)
 end
 
+# Rational reconstruction uses small-prime Int kernels. Actual Fp arithmetic
+# supports all Int-sized primes; these auxiliary probes deliberately stay in
+# the range where a product plus one residue fits in Int.
+function _check_qq_probe_prime(p::Int; require_small::Bool=false)
+    PrimeField(p) # Central primality/range contract; never a composite probe.
+    small = p <= isqrt(typemax(Int))
+    require_small && !small && throw(ArgumentError(
+        "QQ modular kernels require primes <= $(isqrt(typemax(Int))); use Fp(p) for larger prime-field computations"))
+    return small
+end
+
 @inline function _modp_qQ(q::QQ, p::Int)::Int
     q == 0 && return 0
     den = mod(denominator(q), p)
@@ -559,6 +573,7 @@ end
 end
 
 function _rref_modp_dense(A::AbstractMatrix{QQ}, p::Int)
+    _check_qq_probe_prime(p; require_small=true)
     m, n = size(A)
     M = Matrix{Int}(undef, m, n)
     @inbounds for j in 1:n
@@ -835,23 +850,6 @@ function _sparse_extract_restricted(
     return sparse(I, J, V, nr, nc)
 end
 
-function _rank_restricted_float_sparse(
-    F::RealField,
-    A::SparseMatrixCSC,
-    rows::AbstractVector{Int},
-    cols::AbstractVector{Int};
-    check::Bool=false,
-)
-    nr = length(rows)
-    nc = length(cols)
-    if nr == 0 || nc == 0
-        return 0
-    end
-    S = _sparse_extract_restricted(A, rows, cols; check=check)
-    R = qr(S).R
-    tol = _float_tol(F, S)
-    return count(x -> abs(x) > tol, diag(R))
-end
 
 
 """
@@ -870,6 +868,7 @@ Notes
   function throws DomainError.
 """
 function _rank_modp_sparse(A::SparseMatrixCSC{QQ,Int}, p::Int)::Int
+    _check_qq_probe_prime(p; require_small=true)
     m, n = size(A)
     if m == 0 || n == 0
         return 0
@@ -996,6 +995,7 @@ Rank over F_p for dense matrices by Gaussian elimination.
 Used by _rankQQ_dim for fast dimension computations.
 """
 function _rank_modp_dense(A::AbstractMatrix{QQ}, p::Int)::Int
+    _check_qq_probe_prime(p; require_small=true)
     m, n = size(A)
     (m == 0 || n == 0) && return 0
 
@@ -1069,6 +1069,7 @@ _rank_modp(A::Adjoint{QQ,<:SparseMatrixCSC{QQ,Int}}, p::Int)  = _rank_modp_spars
 # ---------------------------------------------------------------
 
 function _crt_combine!(A::Matrix{BigInt}, modulus::BigInt, B::Matrix{Int}, p::Int)
+    _check_qq_probe_prime(p; require_small=true)
     mp = Int(mod(modulus, p))
     invm = invmod(mp, p)
     m = modulus
@@ -1128,7 +1129,13 @@ function _verify_nullspaceQQ(A::AbstractMatrix{QQ}, N::AbstractMatrix{QQ})::Bool
 end
 
 function _verify_solveQQ(B::AbstractMatrix{QQ}, X::AbstractVecOrMat{QQ}, Y::AbstractVecOrMat{QQ})::Bool
-    Matrix{QQ}(B * X) == Matrix{QQ}(Y)
+    # Keep vector and matrix RHS contracts distinct, and compare exactly without
+    # densifying the RHS or copying the product merely to verify a solution.
+    ndims(X) == ndims(Y) || return false
+    size(X, 1) == size(B, 2) || return false
+    size(Y, 1) == size(B, 1) || return false
+    size(X, 2) == size(Y, 2) || return false
+    return B * X == Y
 end
 
 function _verify_solveQQ(B::SparseMatrixCSC{QQ,Int}, X::AbstractVector{QQ}, Y::AbstractVector{QQ})::Bool
@@ -1188,6 +1195,7 @@ function _nullspace_modularQQ(A::AbstractMatrix{QQ};
     used = 0
 
     for p in primes
+        _check_qq_probe_prime(p) || continue
         R, pivs = try
             _rref_modp_dense(A, p)
         catch
@@ -1243,12 +1251,14 @@ function _solve_fullcolumn_modularQQ(B::AbstractMatrix{QQ}, Y::AbstractVecOrMat{
         Ymat = reshape(Y, :, 1)
     end
 
+    size(Ymat, 1) == size(B, 1) || throw(DimensionMismatch("B and Y must have same row count"))
     n = size(B, 2)
     mod = BigInt(1)
     sol_mod = Matrix{BigInt}(undef, 0, 0)
     used = 0
 
     for p in primes
+        _check_qq_probe_prime(p) || continue
         Xp = try
             _solve_fullcolumn_modp(B, Ymat, p)
         catch
@@ -1287,16 +1297,31 @@ end
     _rankQQ_dim(A; backend=:auto, max_primes=4, primes=DEFAULT_MODULAR_PRIMES,
                  small_threshold=RANKQQ_DIM_SMALL_THRESHOLD[]) -> Int
 
-Fast rank intended for dimension-only queries:
-- backend=:exact  uses exact _rankQQ
-- backend=:modular uses ranks mod several primes
-- backend=:auto uses exact for small matrices, modular otherwise
+Exact rational rank intended for dimension-only queries:
+- `backend=:exact` uses exact `_rankQQ` directly.
+- `backend=:modular` first tries to certify full rank modulo a prime.
+- `backend=:auto` uses exact elimination for small matrices and tries modular
+  certificates otherwise.
+
+A modular rank is only a lower bound on rational rank. A full-rank reduction
+certifies the answer; every other outcome falls back to exact rank computation
+using the normal sparse/dense backend routing. No probabilistic answer is returned.
+
+At most `max_primes` entries of `primes` are attempted (zero skips probing).
+Primes that divide a denominator, or exceed the safe machine-integer range of
+the modular kernels, are skipped and count toward this budget. An attempted
+composite modulus raises `ArgumentError`.
 """
 function _rankQQ_dim(A::AbstractMatrix{QQ};
                     backend::Symbol=:auto,
                     max_primes::Int=4,
                     primes::Vector{Int}=DEFAULT_MODULAR_PRIMES,
                     small_threshold::Int=RANKQQ_DIM_SMALL_THRESHOLD[])::Int
+    backend in (:auto, :exact, :modular) ||
+        throw(ArgumentError("_rankQQ_dim: unsupported backend $(backend)"))
+    max_primes >= 0 || throw(ArgumentError("_rankQQ_dim: max_primes must be nonnegative"))
+    small_threshold >= 0 || throw(ArgumentError("_rankQQ_dim: small_threshold must be nonnegative"))
+
     m, n = size(A)
     (m == 0 || n == 0) && return 0
 
@@ -1304,24 +1329,22 @@ function _rankQQ_dim(A::AbstractMatrix{QQ};
 
     if backend == :auto
         (m*n <= small_threshold) && return _rankQQ(A)
-        backend = :modular
     end
 
-    backend != :modular && error("_rankQQ_dim: unsupported backend $(backend)")
-
-    r = 0
-    used = 0
-    for p in primes
-        used += 1
+    full_rank = min(m, n)
+    for p in Iterators.take(primes, max_primes)
+        _check_qq_probe_prime(p) || continue
         try
-            r = max(r, _rank_modp(A, p))
-        catch
-            continue
+            _rank_modp(A, p) == full_rank && return full_rank
+        catch err
+            # A denominator divisible by this prime makes the probe unusable.
+            err isa DomainError || rethrow()
         end
-        r == min(m,n) && break
-        used >= max_primes && break
     end
-    return r
+
+    # Even agreement at every chosen prime cannot certify a deficient rank:
+    # all those primes might divide the same nonzero rational minor.
+    return rank(QQField(), A)
 end
 
 function _rank_tiny_exact(A::AbstractMatrix{K}) where {K}
@@ -1362,48 +1385,7 @@ function _rank_tiny_exact(A::AbstractMatrix{K}) where {K}
     return r
 end
 
-function _rank_tiny_float(F::RealField, A::AbstractMatrix)
-    m, n = size(A)
-    if m == 0 || n == 0
-        return 0
-    end
-    M = Matrix{Float64}(A)
-    tol = _float_tol(F, M)
-    r = 0
-    row = 1
-    @inbounds for col in 1:n
-        row > m && break
-        piv = 0
-        best = tol
-        for rr in row:m
-            v = abs(M[rr, col])
-            if v > best
-                best = v
-                piv = rr
-            end
-        end
-        piv == 0 && continue
-        if piv != row
-            M[row, :], M[piv, :] = M[piv, :], M[row, :]
-        end
-        pivval = M[row, col]
-        for j in col:n
-            M[row, j] /= pivval
-        end
-        for rr in (row + 1):m
-            fac = M[rr, col]
-            abs(fac) <= tol && continue
-            for j in col:n
-                M[rr, j] -= fac * M[row, j]
-            end
-        end
-        r += 1
-        row += 1
-    end
-    return r
-end
-
-@inline _rank_tiny(field::RealField, A::AbstractMatrix) = _rank_tiny_float(field, A)
+@inline _rank_tiny(field::RealField, A::AbstractMatrix) = _rank_float(field, A)
 @inline _rank_tiny(::AbstractCoeffField, A::AbstractMatrix) = _rank_tiny_exact(A)
 
 @inline function _rhs_ok(field::RealField, BX::AbstractMatrix, Y::AbstractMatrix)

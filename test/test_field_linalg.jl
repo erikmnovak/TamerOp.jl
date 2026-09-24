@@ -3,6 +3,235 @@ using LinearAlgebra
 using SparseArrays
 using TOML
 
+@testset "A15 read-only linalg initialization and explicit profiles" begin
+    FL = TamerOp.FieldLinAlg
+    previous = FL._current_linalg_thresholds()
+    initialized = FL._LINALG_THRESHOLDS_INITIALIZED[]
+    try
+        mktempdir() do root
+            path = FL._linalg_thresholds_path(; root)
+            @test path == joinpath(root, "linalg_thresholds.toml")
+            @test FL._linalg_thresholds_path() ==
+                  joinpath(dirname(dirname(pathof(TamerOp))), "linalg_thresholds.toml")
+
+            # Importing an installed source tree with no profile must neither
+            # benchmark nor create directories/files. Defaults still compute
+            # the exact rank and nullspace of this rank-one map.
+            FL._LINALG_THRESHOLDS_INITIALIZED[] = false
+            @test_logs FL._initialize_linalg_thresholds!(path)
+            @test FL._LINALG_THRESHOLDS_INITIALIZED[]
+            @test isempty(readdir(root))
+            @test FL._current_linalg_thresholds() == previous
+            for field in (CM.QQField(), CM.F3())
+                K = CM.coeff_type(field)
+                A = K[1 2 3; 2 4 6]
+                @test FL.rank(field, A) == 1
+                N = FL.nullspace(field, A)
+                @test size(N) == (3, 2)
+                @test A * N == zeros(K, 2, 2)
+            end
+
+            # Saving remains explicit. A matching profile loads without
+            # changing its contents; subsequent initialization is idempotent.
+            @test FL._save_linalg_thresholds!(; path) == path
+            saved = read(path)
+            FL.FP_NEMO_RANK_THRESHOLD[] = previous["fp_nemo_rank_threshold"] + 17
+            FL._LINALG_THRESHOLDS_INITIALIZED[] = false
+            @test_logs FL._initialize_linalg_thresholds!(path)
+            @test FL._current_linalg_thresholds() == previous
+            @test read(path) == saved
+            FL.FP_NEMO_RANK_THRESHOLD[] += 19
+            @test_logs FL._initialize_linalg_thresholds!(path)
+            @test FL.FP_NEMO_RANK_THRESHOLD[] == previous["fp_nemo_rank_threshold"] + 19
+            @test FL._apply_linalg_thresholds!(previous)
+
+            # A developer's checked-in machine profile is ordinarily irrelevant
+            # on another machine, not a warning that users need to resolve.
+            doc = TOML.parsefile(path)
+            doc["fingerprint"]["cpu_name"] *= "-different-machine"
+            open(io -> TOML.print(io, doc), path, "w")
+            mismatched = read(path)
+            FL._LINALG_THRESHOLDS_INITIALIZED[] = false
+            @test_logs FL._initialize_linalg_thresholds!(path)
+            @test FL._current_linalg_thresholds() == previous
+            @test read(path) == mismatched
+            @test_logs (:warn, r"threshold fingerprint mismatch") begin
+                @test !FL._load_linalg_thresholds!(; path)
+            end
+
+            # Malformed explicit profiles retain useful diagnostics and cannot
+            # partially apply values before a later conversion fails.
+            doc["fingerprint"] = FL._current_linalg_fingerprint()
+            doc["thresholds"]["nemo_threshold"] = previous["nemo_threshold"] + 31
+            doc["thresholds"]["fp_nemo_nullspace_threshold"] = "not an integer"
+            open(io -> TOML.print(io, doc), path, "w")
+            @test_logs (:warn, r"malformed thresholds") begin
+                @test !FL._load_linalg_thresholds!(; path)
+            end
+            @test FL._current_linalg_thresholds() == previous
+            write(path, "fingerprint = 3\nthresholds = 4\n")
+            @test_logs (:warn, r"must contain fingerprint and thresholds tables") begin
+                @test !FL._load_linalg_thresholds!(; path)
+            end
+            write(path, "[unclosed\n")
+            @test_logs (:warn, r"failed to parse thresholds file") begin
+                @test !FL._load_linalg_thresholds!(; path)
+            end
+            @test FL._current_linalg_thresholds() == previous
+
+            # Invalid explicit tuning controls fail before probing or writing.
+            untuned = joinpath(root, "not-created", "thresholds.toml")
+            @test_throws ErrorException FL.autotune_linalg_thresholds!(;
+                path=untuned, save=false, quiet=true, profile=:unknown)
+            @test !isdir(dirname(untuned))
+            @test FL._current_linalg_thresholds() == previous
+        end
+    finally
+        FL._apply_linalg_thresholds!(previous)
+        FL._LINALG_THRESHOLDS_INITIALIZED[] = initialized
+    end
+end
+
+@testset "A74 RealField rational matrix and numerical-rank oracles" begin
+    FL = TamerOp.FieldLinAlg
+    real = CM.RealField(Float64; atol=0.0, rtol=1e-10)
+    # A = C*R has rank two. R is already reduced and C has full column rank.
+    # The two displayed kernel columns solve R*x=0 by inspection.
+    Cq = QQ[1 0; 0 1; 1 1; 2 -1]
+    Rq = QQ[1 0 2 -1; 0 1 -1 3]
+    Aq = Cq * Rq
+    Zq = QQ[-2 1; 1 -3; 1 0; 0 1]
+    @test Aq * Zq == zeros(QQ, 4, 2)
+    @test FL.rank(CM.QQField(), Aq) == 2
+    expected_rref = Float64.(vcat(Rq, zeros(QQ, 2, 4)))
+    for scale in (1e-6, 1.0, 1e6), storage in (identity, sparse)
+        A = storage(scale .* Float64.(Aq))
+        sigmas = svdvals(Matrix(A))
+        condition = sigmas[1] / sigmas[2]
+        @test condition < 10
+        @test sigmas[2] > 1e6 * FL._float_tol(real, A)
+        for backend in (:auto, :float_dense_qr, :float_sparse_qr, :float_dense_svd)
+            @test FL.rank(real, A; backend=backend) == 2
+            @test FL.rank_dim(real, A; backend=backend) == 2
+            N = FL.nullspace(real, A; backend=backend)
+            @test size(N) == (4, 2)
+            residual = norm(A * N) / (norm(A) * norm(N))
+            @test residual <= 1e-12
+            @test norm(N * (N \ Float64.(Zq)) - Float64.(Zq)) <= 1e-12 * norm(Float64.(Zq))
+            println("A74 matrix backend=", backend, " sparse=", issparse(A),
+                " scale=", scale, " nonzero_condition=", condition,
+                " relative_kernel_residual=", residual)
+        end
+        for backend in (:float_dense_rref, :float_sparse_rref)
+            reduced, pivots = FL.rref(real, A; backend=backend)
+            @test pivots == (1, 2)
+            @test isapprox(Matrix(reduced), expected_rref; atol=1e-12, rtol=1e-12)
+        end
+        for backend in (:float_dense_qr, :float_sparse_qr)
+            image = FL.colspace(real, A; backend=backend)
+            @test size(image) == (4, 2)
+            @test norm(image * (image \ Matrix(A)) - A) <= 1e-12 * norm(A)
+            routed = FL._real_backend_matrix(real, A, backend)
+            @test issparse(routed) == (backend == :float_sparse_qr)
+        end
+    end
+
+    @testset "Sparse QR tolerance is applied before pivot selection" begin
+        cutoff = CM.RealField(Float64; atol=1e-8, rtol=0.0)
+        for values in ([1.0, 1e-12, 2.0], [1e-12, 1.0, 2.0], [1.0, 2.0, 1e-12])
+            A = sparse(Diagonal(values))
+            small = argmin(values)
+            for backend in (:auto, :float_sparse_qr, :float_dense_qr, :float_dense_svd)
+                @test FL.rank(cutoff, A; backend=backend) == 2
+                @test FL.rank_dim(cutoff, A; backend=backend) == 2
+                @test FL.rank_restricted(cutoff, A, collect(1:3), collect(1:3); backend=backend) == 2
+                N = FL.nullspace(cutoff, A; backend=backend)
+                @test size(N) == (3, 1)
+                @test abs(N[small, 1]) > 0.9
+                @test norm(A * N) <= 1.01e-12
+            end
+            image = FL.colspace(cutoff, A)
+            @test size(image) == (3, 2)
+            @test all(iszero, image[small, :])
+            @test sort(vec(sum(abs.(image); dims=1))) == [1.0, 2.0]
+        end
+        # Both rank decisions are legitimate here: QR tests individual column
+        # residuals, whereas SVD detects their collective singular magnitude.
+        A = [0.8e-8 0.8e-8; 0.0 0.0]
+        @test FL.rank_dim(cutoff, A; backend=:float_dense_qr) == 0
+        @test FL.rank_dim(cutoff, A; backend=:float_dense_svd) == 1
+        @test length(last(FL.rref(cutoff, A))) == 0
+        for value in (prevfloat(1e-8), 1e-8, nextfloat(1e-8))
+            A = sparse(Diagonal([1.0, value]))
+            expected = 1 + (value > 1e-8)
+            for backend in (:float_sparse_qr, :float_dense_qr, :float_dense_svd)
+                @test FL.rank_dim(cutoff, A; backend=backend) == expected
+            end
+        end
+        @test_throws ArgumentError FL.nullspace(cutoff, sparse(ones(2, 2)); backend=:float_sparse_svds)
+    end
+
+    @testset "Full-column solves use per-RHS backward errors" begin
+        Xq = QQ[1//3 -2; -4//5 3//7]
+        Yq = Cq * Xq
+        @test FL.solve_fullcolumn(CM.QQField(), Cq, Yq) == Xq
+        @test cond(Float64.(Cq)) < 2
+        for backend in (:float_dense_qr, :float_sparse_qr), storage in (identity, sparse),
+            scale in (1e-12, 1.0, 1e12), cached in (false, true)
+            B = storage(Float64.(Cq))
+            expected = scale .* Float64.(Xq)
+            Y = scale .* Float64.(Yq)
+            for rhs in (Y, Y[:, 1])
+                X = FL.solve_fullcolumn(real, B, rhs; backend=backend, cache=cached)
+                target = rhs isa AbstractVector ? expected[:, 1] : expected
+                @test size(X) == size(target)
+                @test isapprox(X, target; atol=0.0, rtol=1e-12)
+                residual = norm(B * X - rhs) / (norm(B) * norm(X) + norm(rhs))
+                @test residual <= 1e-12
+                println("A74 solve backend=", backend, " sparse=", issparse(B),
+                    " cache=", cached, " scale=", scale, " rhs_columns=", size(rhs, 2),
+                    " condition=", cond(Matrix(B)), " backward_error=", residual)
+            end
+            # This small column lies in the orthogonal complement of im(C).
+            # The other, large valid RHS must not mask its inconsistency.
+            mixed = hcat(1e12 .* Float64.(Yq[:, 1]), [-1.0, -1.0, 1.0, 0.0])
+            @test_throws ErrorException FL.solve_fullcolumn(real, B, mixed; backend=backend, cache=cached)
+        end
+        # Reusing one sparse matrix under a new tolerance must refactor it.
+        B = sparse(Diagonal([1.0, 1e-9]))
+        strict = CM.RealField(Float64; atol=1e-12, rtol=0.0)
+        loose = CM.RealField(Float64; atol=1e-8, rtol=0.0)
+        @test FL.solve_fullcolumn(strict, B, B * ones(2)) == ones(2)
+        @test_throws ArgumentError FL.solve_fullcolumn(loose, B, B * ones(2))
+        @test FL.solve_fullcolumn(strict, B, B * ones(2)) == ones(2)
+        @test FL._FLOAT_SPARSE_FACTOR_CACHE[FL._float_sparse_cache_key(B)].tolerance == strict.atol
+        # With an absolute-only tolerance, overflowing norms must not enter
+        # the backward-error bound through an undefined 0*Inf product.
+        absolute = CM.RealField(Float64; atol=1e-12, rtol=0.0)
+        huge = 1e308 .* Matrix{Float64}(I, 4, 4)
+        @test FL._verify_float_solution(absolute, huge, ones(4, 1), fill(1e308, 4, 1)) === nothing
+        for backend in (:float_dense_qr, :float_sparse_qr)
+            @test_throws ArgumentError FL.solve_fullcolumn(real, zeros(2, 1), zeros(2); backend=backend)
+            @test_throws DimensionMismatch FL.solve_fullcolumn(real, ones(2, 1), ones(3); backend=backend)
+            @test_throws ArgumentError FL.solve_fullcolumn(real, ones(2, 1), [NaN, 1.0]; backend=backend, check_rhs=false)
+            @test FL.solve_fullcolumn(real, zeros(2, 0), zeros(2); backend=backend) == Float64[]
+            @test_throws ErrorException FL.solve_fullcolumn(real, zeros(2, 0), ones(2); backend=backend)
+        end
+    end
+
+    @testset "Numerical backend and input contracts" begin
+        for storage in (identity, sparse), op in (FL.rank, FL.rank_dim, FL.nullspace, FL.colspace)
+            @test_throws ArgumentError op(real, storage(ones(2, 2)); backend=:not_a_backend)
+            for invalid in (NaN, Inf, -Inf)
+                @test_throws ArgumentError op(real, storage([invalid 0.0; 0.0 1.0]))
+            end
+            for invalid in (CM.RealField(Float64; atol=-1.0), CM.RealField(Float64; rtol=NaN))
+                @test_throws ArgumentError op(invalid, storage(ones(2, 2)))
+            end
+        end
+    end
+end
+
 @testset "FieldLinAlg engines" begin
     FL = TamerOp.FieldLinAlg
     F2 = CM.F2()
@@ -284,6 +513,251 @@ using TOML
         end
     end
 
+    @testset "A05 prime-field constructors and BigInt arithmetic oracles" begin
+        # These include Carmichael numbers and strong pseudoprimes: checking a
+        # few trial divisors or one Miller-Rabin base is not a field contract.
+        composites = Sys.WORD_SIZE == 64 ?
+            (4, 9, 25, 341, 561, 1105, 1729, 3215031751,
+             341550071728321, 3825123056546413051, typemax(Int)) :
+            (4, 9, 25, 341, 561, 1105, 1729, 1373653, 25326001)
+        for p in (-7, 0, 1, composites...)
+            @test_throws ArgumentError CM.Fp(p)
+            @test_throws ArgumentError CM.PrimeField(p)
+            @test_throws ArgumentError CM.FpElem{p}(1)
+        end
+        for p in (big(typemax(Int)) + 1, typemax(UInt), typemax(UInt128))
+            @test_throws ArgumentError CM.Fp(p)
+            @test_throws ArgumentError CM.PrimeField(p)
+        end
+        for p in (UInt(3), Int128(3), 3.0)
+            @test_throws ArgumentError CM.FpElem{p}(1)
+            @test_throws ArgumentError CM.field_from_eltype(CM.FpElem{p})
+        end
+        for p in (UInt(5), Int128(5), big(5))
+            @test CM.Fp(p) == CM.Fp(5)
+            @test CM.coeff_type(CM.Fp(p)) === CM.FpElem{5}
+        end
+
+        rng = MersenneTwister(20260920)
+        primes = Sys.WORD_SIZE == 64 ?
+            (2, 3, 5, 2147483647, 4294967311, 9223372036854775783) :
+            (2, 3, 5, 32749, 2147483647)
+        for p in primes
+            @testset "characteristic $p" begin
+                field = CM.Fp(p)
+                K = CM.coeff_type(field)
+                bp = big(p)
+                @test CM.field_from_eltype(K) == field
+                @test zero(field) === K(0)
+                @test one(field) === K(1)
+                @test (K(p - 1) * K(p - 1)).val == 1
+                @test (K(p - 1) + K(p - 1)).val == p - 2
+                @test_throws DomainError inv(K(0))
+                @test_throws DomainError K(1) / K(0)
+                @test_throws DomainError K(0)^(-1)
+                @test K(0)^0 == K(1)
+                @test K(0)^big(17) == K(0)
+                @test K(p - 1)^true == K(p - 1)
+                @test K(p - 1)^false == K(1)
+                @test_throws ArgumentError K(1)^K(1)
+                @test_throws ArgumentError CM.Fp(K(1))
+
+                # Reduction must occur before conversion to the Int storage.
+                inputs = (typemin(Int), typemax(Int), typemax(UInt),
+                          typemin(Int128), typemax(UInt128),
+                          bp^4 + 37, -(bp^4 + 37))
+                for x in inputs
+                    expected = Int(mod(big(x), bp))
+                    @test K(x).val == expected
+                    @test convert(K, x).val == expected
+                    @test CM.coerce(field, x).val == expected
+                    @test (K(p - 1) + big(x)).val == Int(mod(bp - 1 + big(x), bp))
+                    @test (big(x) * K(p - 1)).val == Int(mod(big(x) * (bp - 1), bp))
+                end
+                den = p == 3 ? big(2) : big(3)
+                for q in ((bp - 1) // den, (bp^3 + bp - 1) // (bp^2 + den))
+                    expected = Int(mod(numerator(q) * invmod(denominator(q), bp), bp))
+                    @test CM.coerce(field, q).val == expected
+                end
+                @test_throws ArgumentError CM.coerce(field, big(1) // bp)
+                @test_throws ArgumentError CM.coerce(field, 1.5)
+                other = CM.Fp(p == 2 ? 3 : 2)
+                otherone = one(other)
+                @test_throws ArgumentError CM.coerce(field, otherone)
+                @test_throws ArgumentError K(otherone)
+                @test_throws ArgumentError convert(K, otherone)
+                @test_throws ArgumentError one(K) + otherone
+                @test_throws ArgumentError one(K) * otherone
+
+                residues = unique(vcat([0, 1, p - 1, p - 2, fld(p, 2)],
+                                       rand(rng, 0:(p - 1), 12)))
+                for x in residues, y in residues
+                    a, b = K(x), K(y)
+                    @test (a + b).val == Int(mod(big(x) + y, bp))
+                    @test (a - b).val == Int(mod(big(x) - y, bp))
+                    @test (a * b).val == Int(mod(big(x) * y, bp))
+                    @test (-a).val == Int(mod(-big(x), bp))
+                    if y != 0
+                        @test inv(b).val == Int(invmod(big(y), bp))
+                        @test (a / b).val == Int(mod(big(x) * invmod(big(y), bp), bp))
+                    end
+                end
+                for x in residues
+                    a = K(x)
+                    @test a + zero(K) == a
+                    @test a * one(K) == a
+                    @test a + (-a) == zero(K)
+                    x == 0 && continue
+                    @test a * inv(a) == one(K)
+                    literal_expected = Int(powermod(big(x), mod(big(typemin(Int)), bp - 1), bp))
+                    @test Base.literal_pow(^, a, Val(typemin(Int))).val == literal_expected
+                    for exponent in (0, 1, 2, p - 1, -1, -2, typemin(Int),
+                                     big(typemin(Int)) - 1, big(p)^2 + 3)
+                        # Fermat's theorem provides an independent nonnegative
+                        # exponent for the arbitrary-precision reference.
+                        expected = Int(powermod(big(x), mod(big(exponent), bp - 1), bp))
+                        @test (a^exponent).val == expected
+                    end
+                end
+                for _ in 1:48
+                    a, b, c = K.(rand(rng, 0:(p - 1), 3))
+                    @test (a + b) + c == a + (b + c)
+                    @test (a * b) * c == a * (b * c)
+                    @test a * (b + c) == a * b + a * c
+                end
+            end
+        end
+    end
+
+    @testset "A05 exact prime-field linear algebra oracles" begin
+        large_primes = Sys.WORD_SIZE == 64 ?
+            (4294967311, 9223372036854775783) : (2147483647,)
+        for p in (2, 3, 5, large_primes...)
+            @testset "characteristic $p" begin
+                field = CM.Fp(p)
+                K = CM.coeff_type(field)
+                # Third row = first + second. The first two columns form an
+                # invertible minor over every field; column three is their sum.
+                A = K.([-1 -1 -2; -1 0 -1; -2 -1 -3])
+                expected_rref = K.([1 0 1; 0 1 1; 0 0 0])
+                expected_kernel = reshape(K.([-1, -1, 1]), 3, 1)
+                B = A[:, 1:2]
+                X = K.([-1 2; -2 -1])
+                # Build the RHS independently, not with the field operations
+                # being tested. All reduction here is arbitrary precision.
+                Y = K.(mod.(BigInt[-1 -1; -1 0; -2 -1] * BigInt[-1 2; -2 -1], big(p)))
+                badY = copy(Y)
+                badY[3, 1] += one(K)
+                backends = FL._have_nemo() && p > 3 ? (:auto, :julia_exact, :nemo) : (:auto, :julia_exact)
+                for storage in (identity, sparse), backend in backends
+                    input = storage(A)
+                    @test FL.rank(field, input; backend=backend) == 2
+                    @test FL.rank_dim(field, input; backend=backend) == 2
+                    R, pivots = FL.rref(field, input; pivots=true, backend=backend)
+                    @test Tuple(pivots) == (1, 2)
+                    @test Matrix(R) == expected_rref
+                    N = Matrix(FL.nullspace(field, input; backend=backend))
+                    @test size(N) == (3, 1)
+                    @test N[3, 1] != zero(K)
+                    @test N / N[3, 1] == expected_kernel
+                    @test input * N == zeros(K, 3, 1)
+                    @test Matrix(FL.colspace(field, input; backend=backend)) == B
+                    solve_input = storage(B)
+                    for cached in (false, true)
+                        @test FL.solve_fullcolumn(field, solve_input, Y; backend=backend, cache=cached) == X
+                        @test vec(FL.solve_fullcolumn(field, solve_input, Y[:, 1]; backend=backend, cache=cached)) == X[:, 1]
+                    end
+                    @test FL.solve_fullcolumn(field, solve_input, Y; backend=backend, cache=true) == X
+                    @test_throws ErrorException FL.solve_fullcolumn(field, solve_input, badY; backend=backend)
+                end
+                @test FL.rank_restricted(field, sparse(A), [1, 2], [1, 2]) == 2
+                @test FL.rank_restricted(field, sparse(A), [1, 2, 3], [3]) == 1
+                if p > 3 && FL._have_nemo()
+                    wrapped = CM.BackendMatrix(A; backend=:nemo)
+                    @test FL.rank(field, wrapped; backend=:nemo) == 2
+                    @test FL.rref(field, wrapped; pivots=false, backend=:nemo) == expected_rref
+                    wrappedB = CM.BackendMatrix(B; backend=:nemo)
+                    @test FL.solve_fullcolumn(field, wrappedB, Y; backend=:nemo, cache=true) == X
+                    @test FL.solve_fullcolumn(field, wrappedB, Y; backend=:nemo, cache=true) == X
+                end
+            end
+        end
+
+        # A moderate rectangular fixture has a known RREF and nullity. Its
+        # entries fill the whole residue range, rather than only using 0 and 1.
+        rng = MersenneTwister(20260921)
+        for p in (5, large_primes...)
+            field = CM.Fp(p)
+            K = CM.coeff_type(field)
+            bp = big(p)
+            r, m, n = 5, 12, 17
+            right = BigInt.(rand(rng, 0:(p - 1), r, n - r))
+            lower = BigInt.(rand(rng, 0:(p - 1), m - r, r))
+            factor = vcat(-Matrix{BigInt}(I, r, r), lower)
+            coordinates = hcat(Matrix{BigInt}(I, r, r), right)
+            A = K.(mod.(factor * coordinates, bp))
+            expected_rref = K.(vcat(coordinates, zeros(BigInt, m - r, n)))
+            expected_kernel = K.(vcat(-right, Matrix{BigInt}(I, n - r, n - r)))
+            for input in (A, sparse(A))
+                @test FL.rank(field, input; backend=:julia_exact) == r
+                @test FL.rref(field, input; pivots=false, backend=:julia_exact) == expected_rref
+                @test Matrix(FL.nullspace(field, input; backend=:julia_exact)) == expected_kernel
+                @test input * expected_kernel == zeros(K, m, n - r)
+                @test FL.solve_fullcolumn(field, input[:, 1:r], input; backend=:julia_exact) == K.(coordinates)
+                if FL._have_nemo()
+                    @test FL.rank(field, input; backend=:nemo) == r
+                    N = Matrix(FL.nullspace(field, input; backend=:nemo))
+                    @test size(N) == (n, n - r)
+                    @test input * N == zeros(K, m, n - r)
+                    @test FL.rank(field, N; backend=:julia_exact) == n - r
+                    @test FL.solve_fullcolumn(field, input[:, 1:r], input; backend=:nemo) == K.(coordinates)
+                end
+            end
+        end
+    end
+
+    @testset "A05 rational modular probes validate their safe prime range" begin
+        field = CM.QQField()
+        A = QQ[-1 -1 -2; -1 0 -1; -2 -1 -3]
+        B = A[:, 1:2]
+        x = QQ[-1, 2]
+        y = B * x
+        for p in (0, 1, 4, 9, 561)
+            @test_throws ArgumentError FL._rref_modp_dense(A, p)
+            @test_throws ArgumentError FL._rank_modp_dense(A, p)
+            @test_throws ArgumentError FL._rank_modp_sparse(sparse(A), p)
+            @test_throws ArgumentError FL.rank_dim(field, A; backend=:modular, primes=[p])
+            @test_throws ArgumentError FL._nullspace_modularQQ(A; primes=[p])
+            @test_throws ArgumentError FL._solve_fullcolumn_modularQQ(B, y; primes=[p])
+        end
+        large_primes = Sys.WORD_SIZE == 64 ?
+            (4294967311, 9223372036854775783) : (2147483647,)
+        for p in large_primes
+            @test_throws ArgumentError FL._rref_modp_dense(A, p)
+            @test_throws ArgumentError FL._rank_modp_dense(A, p)
+            @test_throws ArgumentError FL._rank_modp_sparse(sparse(A), p)
+            # QQ probing may skip a valid large prime and use exact fallback;
+            # this is independent of the full-size Fp coefficient support.
+            @test FL.rank_dim(field, A; backend=:modular, primes=[p]) == 2
+            @test FL.rank_dim(field, sparse(A); backend=:modular, primes=[p]) == 2
+            @test FL._nullspace_modularQQ(A; primes=[p]) === nothing
+            @test FL._solve_fullcolumn_modularQQ(B, y; primes=[p]) === nothing
+        end
+        safe_prime = Sys.WORD_SIZE == 64 ? 2147483647 : 32749
+        for p in (5, 101, safe_prime)
+            R, pivots = FL._rref_modp_dense(A, p)
+            @test pivots == [1, 2]
+            @test R == [1 0 1; 0 1 1; 0 0 0]
+            @test FL._rank_modp_dense(A, p) == 2
+            @test FL._rank_modp_sparse(sparse(A), p) == 2
+            @test FL.rank_dim(field, A; backend=:modular, primes=[p]) == 2
+        end
+        @test FL._nullspace_modularQQ(A; primes=[101], min_primes=1) == reshape(QQ[-1, -1, 1], 3, 1)
+        @test FL._solve_fullcolumn_modularQQ(B, y; primes=[101], min_primes=1) == x
+        @test FL._nullspace_modularQQ(A; primes=[first(large_primes), 101], min_primes=1) == reshape(QQ[-1, -1, 1], 3, 1)
+        @test FL._solve_fullcolumn_modularQQ(B, y; primes=[first(large_primes), 101], min_primes=1) == x
+    end
+
     @testset "change_field helpers" begin
         FQ = CM.QQField()
         F2 = CM.F2()
@@ -333,20 +807,17 @@ using TOML
         enc = RES.EncodingResult(P, M, nothing; H=H, presentation=FG)
         enc2 = CM.change_field(enc, F2)
         @test enc2.M.field == F2
-        @test enc2.H.field == F2
-        @test enc2.presentation.field == F2
+        @test enc2.H === nothing
+        @test enc2.presentation === nothing
+        @test RES.provenance(enc2).coefficient_change.semantics == :reinterpret_stored_module_matrices
 
         # --- ResolutionResult ---
         res = RES.ResolutionResult(M; enc=enc)
-        res2 = CM.change_field(res, F2)
-        @test res2.enc.M.field == F2
-        @test res2.res.field == F2
+        @test_throws ArgumentError CM.change_field(res, F2)
 
         # --- InvariantResult ---
         inv = RES.InvariantResult(enc, :dummy, 7)
-        inv2 = CM.change_field(inv, F2)
-        @test inv2.enc.M.field == F2
-        @test inv2.value == 7
+        @test_throws ArgumentError CM.change_field(inv, F2)
     end
 
     @testset "_SparseRowAccumulator correctness" begin
@@ -444,7 +915,9 @@ using TOML
             FL._sparse_rref_push_homogeneous!(R, copy(row))
         end
 
-        @test R.pivot_cols == [1, 2, 3]
+        # The leading 4-by-4 minor has determinant -1, so all four rows
+        # are independent (including after the recursive elimination repair).
+        @test R.pivot_cols == [1, 2, 3, 4]
         @test exact_incidence_ok(R)
     end
 
@@ -1144,14 +1617,124 @@ using TOML
         @test isempty(FL._F2_FULLCOLUMN_FACTOR_CACHE)
     end
 
-    @testset "QQ rank_dim matches exact rank on small matrices" begin
+    @testset "QQ rank_dim certifies rational rank" begin
+        qf = CM.QQField()
         A = QQ[1 2 3;
                2 4 6;
                1 0 1]
         @test FL._rankQQ(A) == 2
         @test FL._rankQQ_dim(A; backend=:auto) == 2
         @test FL._rankQQ_dim(A; backend=:modular) == 2
-        @test FL.rank_dim(CM.QQField(), A; backend=:auto) == 2
+        @test FL.rank_dim(qf, A; backend=:auto) == 2
+
+        # Every default probe loses the same pivot. Agreement between modular
+        # ranks is not an upper bound on the rational rank.
+        bad_minor = prod(BigInt.(FL.DEFAULT_MODULAR_PRIMES[1:4]))
+        bad_denominator = prod(BigInt.(FL.DEFAULT_MODULAR_PRIMES))
+        fixtures = (
+            (QQ[bad_minor 0; 0 1], 2),
+            (QQ[bad_minor 0 0; 0 1 0; 0 0 0], 2),
+            (QQ[1//bad_denominator 0; 0 1], 2),
+            (QQ[1//bad_denominator 0 0; 0 1 0; 0 0 0], 2),
+            (QQ[1 2 3; 2 4 6], 1),
+            (QQ[1 0 2; 0 1 3], 2),
+            (zeros(QQ, 3, 4), 0),
+            (zeros(QQ, 0, 3), 0),
+            (zeros(QQ, 3, 0), 0),
+        )
+        for (B, expected) in fixtures
+            S = sparse(B)
+            for storage in (B, S, transpose(S), adjoint(S),
+                            CM.BackendMatrix(B; backend=:nemo), view(B, :, :))
+                for backend in (:auto, :modular, :exact)
+                    @test FL.rank_dim(qf, storage; backend=backend,
+                                      small_threshold=0) == expected
+                end
+                @test FL.rank_dim(qf, storage; backend=:modular,
+                                  max_primes=0) == expected
+                @test FL.rank_dim(qf, storage; backend=:modular,
+                                  primes=Int[]) == expected
+            end
+        end
+
+        # This reaches the automatic modular route under both the built-in and
+        # repository threshold profiles, without forcing a tuning switch.
+        wide = zeros(QQ, 1, 20_001)
+        wide[1, 1] = bad_minor
+        @test FL.rank_dim(qf, wide) == 1
+        @test FL.rank_dim(qf, sparse(wide)) == 1
+
+        # Arbitrarily chosen primes can all be bad. A later usable prime can
+        # certify full rank, while exhausting the budget must use exact rank.
+        for (B, expected) in ((QQ[30 0; 0 1], 2), (QQ[1//30 0; 0 1], 2))
+            for budget in (0, 1, 3, 4, 10)
+                @test FL.rank_dim(qf, B; backend=:modular,
+                                  primes=[2, 3, 5, 7], max_primes=budget) == expected
+            end
+        end
+        @test FL.rank_dim(qf, QQ[1//2 0; 0 0]; backend=:modular,
+                          primes=[2, 0], max_primes=1) == 1
+
+        # Large custom primes would overflow Int multiplication in a modular
+        # kernel. The outer product has rank one over QQ, regardless of prime.
+        if Sys.WORD_SIZE == 64
+            large_prime = Int(4_294_967_311)
+            a = BigInt(large_prime - 1)
+            outer = QQ[1 a; a a*a]
+            for storage in (outer, sparse(outer), CM.BackendMatrix(outer))
+                @test FL.rank_dim(qf, storage; backend=:modular,
+                                  primes=[large_prime]) == 1
+            end
+        end
+        # A05 makes the prime-probe contract strict, independently of whether
+        # a particular composite reduction could yield useful information.
+        @test_throws ArgumentError FL.rank_dim(qf, QQ[2 0; 0 1]; backend=:modular, primes=[4])
+
+        @test_throws ArgumentError FL.rank_dim(qf, A; backend=:unknown)
+        @test_throws ArgumentError FL.rank_dim(qf, A; max_primes=-1)
+        @test_throws ArgumentError FL.rank_dim(qf, A; small_threshold=-1)
+        @test_throws ArgumentError FL.rank_dim(qf, A; backend=:modular, primes=[1])
+        @test_throws ArgumentError FL.rank_dim(qf, zeros(QQ, 0, 0); backend=:unknown)
+
+        # Preserve the fast full-rank certificate, and let exact fallback reuse
+        # the normal backend-native payload on repeated deficient queries.
+        old_threshold = FL.QQ_NEMO_RANK_THRESHOLD_SQUARE[]
+        try
+            FL.QQ_NEMO_RANK_THRESHOLD_SQUARE[] = 1
+            full = CM.BackendMatrix(Matrix{QQ}(I, 8, 8); backend=:nemo)
+            FL._reset_conversion_counters!()
+            @test FL.rank_dim(qf, full; backend=:modular) == 8
+            @test FL._conversion_counters().qq_to_nemo == 0
+            @test CM._backend_payload(full) === nothing
+            deficient = copy(full)
+            deficient[8, 8] = 0
+            @test FL.rank_dim(qf, deficient; backend=:modular) == 7
+            @test FL.rank_dim(qf, deficient; backend=:modular) == 7
+            counts = FL._conversion_counters()
+            @test counts.qq_to_nemo == 1
+            @test counts.qq_to_nemo_cache_hits >= 1
+
+            # A sparse deficient matrix should keep the sparse exact route,
+            # even while dense rank routing is forced toward Nemo above.
+            sparse_deficient = spdiagm(0 => vcat(ones(QQ, 19), QQ[0]))
+            dropzeros!(sparse_deficient)
+            FL._reset_conversion_counters!()
+            for storage in (sparse_deficient, transpose(sparse_deficient), adjoint(sparse_deficient))
+                @test FL.rank_dim(qf, storage; backend=:modular) == 19
+            end
+            @test FL._conversion_counters().qq_to_nemo == 0
+        finally
+            FL.QQ_NEMO_RANK_THRESHOLD_SQUARE[] = old_threshold
+        end
+
+        # Downstream oracle: Q -> Q^2 -> Q with maps (bad_minor,0) and
+        # (0,bad_minor) is exact. Undercounted modular ranks invent cohomology.
+        C = CC.CochainComplex{QQ}(0, 2, [1, 2, 1],
+            [sparse(reshape(QQ[bad_minor, 0], 2, 1)),
+             sparse(reshape(QQ[0, bad_minor], 1, 2))])
+        @test CC.cohomology_dims(C; backend=:auto, small_threshold=0) == [0, 0, 0]
+        @test CC.cohomology_dims(C; backend=:modular) == [0, 0, 0]
+        @test CC.cohomology_dims(C; backend=:exact) == [0, 0, 0]
     end
 
     @testset "QQ modular nullspace + solve" begin
@@ -1320,6 +1903,30 @@ using TOML
             C = FL.colspace(F5, A)
             @test size(C, 1) == size(A, 1)
             @test FL.rank(F5, C) == FL.rank(F5, A)
+        end
+
+        @testset "Fp full-column solves distinguish coefficient and RHS pivots" begin
+            Bdef = F5Elem[1 0; 0 0; 0 0]
+            Bfull = F5Elem[1 0; 0 1; 1 1]
+            Xtrue = F5Elem[2 3; 4 1]
+            @test FL.solve_fullcolumn(F5, Bfull, Bfull * Xtrue; backend=:julia_exact) == Xtrue
+            for check_rhs in (false, true)
+                # rank([Bdef Y])=2 equals ncols(Bdef), but Bdef has rank one.
+                # The RHS pivot must never be used as an index into X.
+                for Y in (F5Elem[0, 1, 0], F5Elem[0 1; 1 0; 0 0])
+                    @test_throws ErrorException FL.solve_fullcolumn(F5, Bdef, Y;
+                        backend=:julia_exact, check_rhs=check_rhs)
+                end
+                @test_throws ErrorException FL.solve_fullcolumn(F5, Bdef, F5Elem[1, 0, 0];
+                    backend=:julia_exact, check_rhs=check_rhs)
+                @test_throws ErrorException FL.solve_fullcolumn(F5, Bfull, F5Elem[0, 0, 1];
+                    backend=:julia_exact, check_rhs=check_rhs)
+                Bempty = zeros(F5Elem, 3, 0)
+                @test FL.solve_fullcolumn(F5, Bempty, zeros(F5Elem, 3, 2);
+                    backend=:julia_exact, check_rhs=check_rhs) == zeros(F5Elem, 0, 2)
+                @test_throws ErrorException FL.solve_fullcolumn(F5, Bempty, F5Elem[0, 1, 0];
+                    backend=:julia_exact, check_rhs=check_rhs)
+            end
         end
 
         @testset "edge cases" begin
@@ -1500,6 +2107,189 @@ using TOML
         @test B * Xn == Y
     end
 
+    @testset "QQ vector and matrix RHS exact solve certification" begin
+        F = CM.QQField()
+        # The first two rows determine the solution; the last row makes a
+        # nonzero final RHS entry a hand-checkable inconsistency certificate.
+        B = QQ[2 0; 0 3; 1 1; 1 -1; 0 0]
+        xtrue = QQ[2//3, -4//5]
+        Xtrue = hcat(xtrue, QQ[-7//11, 5//13])
+        y = B * xtrue
+        Y = B * Xtrue
+        ybad = copy(y); ybad[end] = one(QQ)
+        Ybad = copy(Y); Ybad[end, end] = one(QQ)
+        padded = zeros(QQ, 7, 4)
+        padded[2:6, 2:3] .= B
+        matrices = (B, sparse(B), view(padded, 2:6, 2:3), transpose(sparse(transpose(B))))
+        backends = FL._have_nemo() ? (:auto, :julia_exact, :modular, :nemo) : (:auto, :julia_exact, :modular)
+
+        for A in matrices
+            @test FL._verify_solveQQ(A, xtrue, y)
+            @test FL._verify_solveQQ(A, Xtrue, Y)
+            @test !FL._verify_solveQQ(A, xtrue, ybad)
+            @test !FL._verify_solveQQ(A, Xtrue, Ybad)
+            @test !FL._verify_solveQQ(A, xtrue, reshape(y, :, 1))
+            @test !FL._verify_solveQQ(A, reshape(xtrue, :, 1), y)
+            @test !FL._verify_solveQQ(A, QQ[1], y)
+            @test !FL._verify_solveQQ(A, xtrue, y[1:end-1])
+            @test !FL._verify_solveQQ(A, Xtrue, Y[:, 1:1])
+            @test !FL._verify_solveQQ(A, Xtrue[1:1, :], Y)
+            for backend in backends, cache in (false, true)
+                xv = FL.solve_fullcolumn(F, A, y; backend=backend, cache=cache)
+                Xm = FL.solve_fullcolumn(F, A, reshape(y, :, 1); backend=backend, cache=cache)
+                @test xv isa AbstractVector
+                @test Xm isa AbstractMatrix
+                @test xv == xtrue == vec(Xm)
+                @test FL.solve_fullcolumn(F, A, Y; backend=backend, cache=cache) == Xtrue
+                @test size(FL.solve_fullcolumn(F, A, zeros(QQ, 5, 0); backend=backend, cache=cache)) == (2, 0)
+                @test_throws ErrorException FL.solve_fullcolumn(F, A, ybad; backend=backend, cache=cache)
+                @test_throws ErrorException FL.solve_fullcolumn(F, A, Ybad; backend=backend, cache=cache)
+                @test_throws DimensionMismatch FL.solve_fullcolumn(F, A, y[1:end-1]; backend=backend, cache=cache)
+                @test_throws DimensionMismatch FL.solve_fullcolumn(F, A, Y[1:end-1, :]; backend=backend, cache=cache)
+            end
+            for backend in (FL._have_nemo() ? (:julia_exact, :nemo) : (:julia_exact,))
+                fac = FL.factor_fullcolumn(F, A; backend=backend, cache=false)
+                @test FL.solve_fullcolumn(F, A, y; factor=fac, cache=false) == xtrue
+                @test FL.solve_fullcolumn(F, A, reshape(y, :, 1); factor=fac, cache=false) == reshape(xtrue, :, 1)
+                @test FL.solve_fullcolumn(F, A, Y; factor=fac, cache=false) == Xtrue
+                @test_throws ErrorException FL.solve_fullcolumn(F, A, ybad; factor=fac, cache=false)
+                @test_throws ErrorException FL.solve_fullcolumn(F, A, Ybad; factor=fac, cache=false)
+                @test FL.solve_fullcolumn(F, A, ybad; factor=fac, cache=false, check_rhs=false) == xtrue
+                analysis = FL.analyze_matrix(F, A; backend=backend, cache=false, fullcolumn_factor=true)
+                @test FL.solve_fullcolumn(F, A, y; analysis=analysis, cache=false) == xtrue
+                @test FL.solve_fullcolumn(F, A, Y; analysis=analysis, cache=false) == Xtrue
+                @test_throws ErrorException FL.solve_fullcolumn(F, A, ybad; analysis=analysis, cache=false)
+            end
+        end
+
+        # Verification also accepts sparse RHS storage and non-owning views.
+        for rhs in (sparse(y), view(y, :)), cache in (false, true)
+            @test FL.solve_fullcolumn(F, B, rhs; backend=:julia_exact, cache=cache) == xtrue
+        end
+        for rhs in (sparse(Y), view(Y, :, :)), cache in (false, true)
+            @test FL.solve_fullcolumn(F, B, rhs; backend=:julia_exact, cache=cache) == Xtrue
+        end
+
+        # Empty unknown/RHS axes preserve vector versus matrix output shape.
+        # With no columns, only the zero RHS belongs to the image, including
+        # on the uncached exact path that previously skipped verification.
+        for m in (0, 5), A in (zeros(QQ, m, 0), spzeros(QQ, m, 0)), backend in backends, cache in (false, true)
+            @test FL.solve_fullcolumn(F, A, zeros(QQ, m); backend=backend, cache=cache) == QQ[]
+            @test size(FL.solve_fullcolumn(F, A, zeros(QQ, m, 1); backend=backend, cache=cache)) == (0, 1)
+            @test size(FL.solve_fullcolumn(F, A, zeros(QQ, m, 0); backend=backend, cache=cache)) == (0, 0)
+            if m != 0
+                @test_throws ErrorException FL.solve_fullcolumn(F, A, ones(QQ, m); backend=backend, cache=cache)
+                @test_throws ErrorException FL.solve_fullcolumn(F, A, ones(QQ, m, 2); backend=backend, cache=cache)
+                @test FL.solve_fullcolumn(F, A, ones(QQ, m); backend=backend, cache=cache, check_rhs=false) == QQ[]
+                @test size(FL.solve_fullcolumn(F, A, ones(QQ, m, 2); backend=backend, cache=cache, check_rhs=false)) == (0, 2)
+            end
+        end
+        @test_throws ErrorException FL._solve_fullcolumn_rrefQQ(zeros(QQ, 3, 0), QQ[1, 0, 0])
+        @test_throws ErrorException FL._solve_fullcolumn_rrefQQ(zeros(QQ, 3, 0), reshape(QQ[1, 0, 0], :, 1))
+        @test FL._solve_fullcolumn_rrefQQ(zeros(QQ, 3, 0), zeros(QQ, 3)) == QQ[]
+        @test_throws DimensionMismatch FL._solve_fullcolumn_modularQQ(B, zeros(QQ, 4); primes=Int[])
+        @test_throws DimensionMismatch FL._solve_fullcolumn_modularQQ(B, zeros(QQ, 4, 1); primes=Int[])
+    end
+
+    @testset "Real RREF ordered row-reduction oracles" begin
+        F = CM.RealField(Float64; rtol=1e-10, atol=0.0)
+        fixtures = (
+            (reshape([2.0], 1, 1), ones(1, 1), (1,)),
+            ([0.0 2 4; 0 0 3], [0.0 1 0; 0 0 1], (2, 3)),
+            ([1.0 2 3; 2 4 6; 0 1 1], [1.0 0 1; 0 1 1; 0 0 0], (1, 2)),
+            ([0.0 2 4; 3 0 6; 6 0 12; 0 0 0], [1.0 0 2; 0 1 2; 0 0 0; 0 0 0], (1, 2)),
+            ([2.0 4 0 6; 0 0 3 9], [1.0 2 0 3; 0 0 1 3], (1, 3)),
+            ([0.01 1.0 0; 0 0 1], [1.0 100 0; 0 0 1], (1, 3)),
+            (zeros(3, 4), zeros(3, 4), ()),
+            (zeros(0, 4), zeros(0, 4), ()),
+            (zeros(3, 0), zeros(3, 0), ()),
+            (zeros(0, 0), zeros(0, 0), ()),
+        )
+        for (A, expected, expected_pivots) in fixtures
+            padded = zeros(size(A, 1) + 2, size(A, 2) + 2)
+            padded[2:end-1, 2:end-1] .= A
+            spadded = sparse(padded)
+            inputs = (A, sparse(A), view(padded, 2:size(A, 1)+1, 2:size(A, 2)+1),
+                      view(spadded, 2:size(A, 1)+1, 2:size(A, 2)+1),
+                      transpose(sparse(transpose(A))), adjoint(sparse(adjoint(A))))
+            for input in inputs, backend in (:auto, :float_dense_rref, :float_sparse_rref)
+                before = copy(input)
+                R, piv = FL.rref(F, input; backend=backend)
+                @test piv == expected_pivots
+                @test isapprox(Matrix(R), expected; atol=1e-12, rtol=1e-12)
+                @test input == before
+                @test FL.rref(F, input; backend=backend, pivots=false) == R
+                @test issparse(R) == (backend == :float_sparse_rref || (backend == :auto && issparse(input)))
+                @test eltype(R) == Float64
+                @test isapprox(FL.rref(F, R; pivots=false), R; atol=1e-12, rtol=1e-12)
+            end
+        end
+
+        # Random row-equivalent fixtures are checked against exact rational
+        # elimination, not another floating-point implementation.
+        rng = MersenneTwister(580059)
+        for (m, n, r) in ((4, 7, 2), (8, 5, 3), (6, 6, 6)), trial in 1:8
+            base = hcat(Matrix{Int}(I, r, r), rand(rng, -3:3, r, n-r))
+            mix = vcat(Matrix{Int}(I, r, r), rand(rng, -3:3, m-r, r))
+            Aint = (mix * base)[randperm(rng, m), randperm(rng, n)]
+            exact, pivots = FL.rref(CM.QQField(), QQ.(Aint); backend=:julia_exact)
+            for scale in (1e-100, 1.0, 1e100), storage in (identity, sparse)
+                A = storage(scale .* Aint)
+                R, piv = FL.rref(F, A)
+                @test piv == pivots
+                @test isapprox(Matrix(R), Float64.(exact); atol=1e-10, rtol=1e-10)
+                @test length(piv) == r
+                @test isapprox(Matrix(R[:, collect(piv)]), vcat(Matrix{Float64}(I, r, r), zeros(m-r, r)); atol=1e-12)
+            end
+        end
+
+        # Tolerance applies to unreduced candidates, not normalized unit pivots
+        # or small but meaningful coordinates in a retained row.
+        for storage in (identity, sparse)
+            @test FL.rref(F, storage([2e12 0.0; 0 3e12]); pivots=false) == Matrix{Float64}(I, 2, 2)
+            @test FL.rref(F, storage(reshape([2.0, 1e-14], 1, 2)); pivots=false) == reshape([1.0, 5e-15], 1, 2)
+            cutoff = CM.RealField(Float64; atol=1e-8, rtol=0.0)
+            R, piv = FL.rref(cutoff, storage([1e-9 0 0; 0 2.0 0; 0 0 2e-8]))
+            @test piv == (2, 3)
+            @test Matrix(R) == [0.0 1 0; 0 0 1; 0 0 0]
+        end
+        for T in (Float32, Float64, BigFloat), storage in (identity, sparse)
+            field = CM.RealField(T)
+            R, piv = FL.rref(field, storage([2 4 0; 0 0 3]))
+            @test eltype(R) == T
+            @test Matrix(R) == T[1 2 0; 0 0 1]
+            @test piv == (1, 3)
+        end
+        for storage in (identity, sparse)
+            for x in (NaN, Inf, -Inf)
+                @test_throws ArgumentError FL.rref(F, storage(reshape([x], 1, 1)))
+            end
+            for bad in (CM.RealField(Float64; atol=-1.0), CM.RealField(Float64; rtol=-1.0),
+                        CM.RealField(Float64; atol=Inf), CM.RealField(Float64; rtol=NaN))
+                @test_throws ArgumentError FL.rref(bad, storage(ones(1, 1)))
+            end
+        end
+        exact_float = CM.RealField(Float64; atol=0.0, rtol=0.0)
+        huge_range = [1e-300 1e300 1e-300; 1e-300 -1e300 1e-300]
+        for storage in (identity, sparse)
+            @test_throws ArgumentError FL.rref(exact_float, storage(huge_range))
+        end
+        for backend in (:float_dense_qr, :float_sparse_qr, :float_dense_svd, :unknown)
+            @test_throws ArgumentError FL.rref(F, ones(2, 2); backend=backend)
+        end
+        @test FL._choose_linalg_backend(F, ones(2, 2); op=:rref) == :float_dense_rref
+        @test FL._choose_linalg_backend(F, sparse(ones(2, 2)); op=:rref) == :float_sparse_rref
+
+        # Image selection remains QR-based and independent of ordered RREF.
+        A = [0.01 1.0 0; 0 0 1]
+        for input in (A, sparse(A), view(sparse(A), :, :))
+            C, piv = FL._colspace_with_pivots(F, input)
+            @test C == A[:, piv]
+            @test FL.rank(F, C) == 2
+            @test length(piv) == 2
+        end
+    end
+
     @testset "Real engine parity" begin
         F = CM.RealField(Float64; rtol=1e-10, atol=1e-12)
         A = [1.0 2.0 3.0;
@@ -1552,6 +2342,49 @@ using TOML
         @test FL.rank(F, Cs) == rs
 
         @test FL._choose_linalg_backend(F, As; op=:rank) == :float_sparse_qr
+    end
+
+    @testset "Real sparse-backed view rank and nullspace oracles" begin
+        field = CM.RealField(Float64; rtol=1e-10, atol=1e-12)
+        # All rows are combinations of the first two independent rows.
+        A = [1.0 0 1 0 2 0 0;
+             0 1 0 1 0 3 0;
+             1 1 1 1 2 3 0;
+             2 0 2 0 4 0 0;
+             0 0 0 0 0 0 0;
+             0 2 0 2 0 6 0]
+        S = sparse(A)
+        V = view(S, [1, 3, 2, 4], [1, 4, 2, 3, 7])
+        dense_view = view(A, 1:4, 1:5)
+        @test FL._real_sparse_input(S) === S
+        @test FL._real_sparse_input(dense_view) === dense_view
+        @test FL._real_sparse_input(V) isa SparseMatrixCSC
+
+        for (B, expected_rank) in ((V, 2), (transpose(V), 2), (adjoint(V), 2),
+                                   (view(S, 1:6, 1:7), 2),
+                                   (view(S, Int[], 1:5), 0),
+                                   (view(S, 1:5, Int[]), 0))
+            @test FL.rank(field, B) == expected_rank
+            @test FL.rank_dim(field, B) == expected_rank
+            @test FL.rank(field, B; backend=:float_sparse_qr) == expected_rank
+            for backend in (:auto, :float_sparse_qr)
+                Z = FL.nullspace(field, B; backend=backend)
+                @test size(Z) == (size(B, 2), size(B, 2) - expected_rank)
+                @test norm(B * Z) <= 1e-9
+                @test FL.rank(field, Z) == size(Z, 2)
+            end
+        end
+
+        # Dense views and an explicit dense-SVD request retain their paths.
+        for (B, backend) in ((dense_view, :auto), (V, :float_dense_svd))
+            Z = FL.nullspace(field, B; backend=backend)
+            @test size(Z) == (size(B, 2), size(B, 2) - 2)
+            @test norm(B * Z) <= 1e-9
+        end
+        # For V, the equations are x1+x4=0 and x2+x3=0; x5 is free.
+        known_kernel = [1.0 0 0; 0 1 0; 0 -1 0; -1 0 0; 0 0 1]
+        Z = FL.nullspace(field, V)
+        @test norm(Z * (Z \ known_kernel) - known_kernel) <= 1e-9
     end
 
     @testset "Real engine algorithmic oracles" begin
@@ -1632,17 +2465,7 @@ using TOML
         #  0 0 2 2] has rank 3.
         @test FL.rank_restricted(F, Abase, rows, cols; backend=:float_sparse_qr) == 3
 
-        # Optional oracle 6: sparse svds backend (when available).
-        if FL._have_svds_backend()
-            m = 30
-            n = 42
-            # [I_m 0] has rank m and nullity n-m.
-            Asv = hcat(sparse(1.0I, m, m), spzeros(m, n - m))
-            Nsv = FL.nullspace(F, Asv; backend=:float_sparse_svds)
-            @test size(Nsv) == (n, n - m)
-            @test norm(Asv * Nsv) <= 1e-7
-            @test FL.rank(F, Asv; backend=:float_sparse_qr) == m
-        end
+
     end
 
     @testset "Fp sparse adversarial oracle families (larger)" begin
@@ -1732,11 +2555,7 @@ using TOML
         Ns_qr = FL.nullspace(F, As; backend=:float_sparse_qr)
         @test size(Ns_qr, 2) == 2
         @test norm(As * Ns_qr) <= 1e-6
-        if FL._have_svds_backend()
-            Ns_svds = FL.nullspace(F, As; backend=:float_sparse_svds)
-            @test size(Ns_svds, 2) == 2
-            @test norm(As * Ns_svds) <= 1e-5
-        end
+
     end
 
     @testset "Real sparse extreme conditioning oracles (larger scale)" begin
@@ -1771,14 +2590,7 @@ using TOML
         @test norm(Ahi * Nhi_qr) <= 1e-7
         @test norm(Alo * Nlo_qr) <= 1e-7
 
-        if FL._have_svds_backend()
-            Nhi_svds = FL.nullspace(F, Ahi; backend=:float_sparse_svds)
-            Nlo_svds = FL.nullspace(F, Alo; backend=:float_sparse_svds)
-            @test size(Nhi_svds, 2) == n - (rbase + 1)
-            @test size(Nlo_svds, 2) == n - rbase
-            @test norm(Ahi * Nhi_svds) <= 1e-6
-            @test norm(Alo * Nlo_svds) <= 1e-6
-        end
+
 
         # Oracle family 2: large sparse ill-conditioned full-column solve.
         # We validate by residual envelope rather than exact X recovery.
@@ -1832,7 +2644,7 @@ using TOML
         mr, nr, rr = 82, 124, 49
         Ar = sparse(vcat(Matrix{Float64}(I, rr, rr), zeros(Float64, mr - rr, rr)) *
                     hcat(Matrix{Float64}(I, rr, rr), zeros(Float64, rr, nr - rr)))
-        Rr, pivr = FL.rref(F, Ar; pivots=true, backend=:float_sparse_qr)
+        Rr, pivr = FL.rref(F, Ar; pivots=true, backend=:float_sparse_rref)
         @test length(pivr) == rr
         Cr = FL.colspace(F, Ar; backend=:float_sparse_qr)
         @test size(Cr, 2) == rr
@@ -2175,7 +2987,12 @@ using TOML
         @test FL.fullcolumn_factor(AnaF) !== nothing
         @test FL.solve_fullcolumn(F, B, Y; factor=Fac, check_rhs=true) == Xtrue
         @test FL.solve_fullcolumn(F, B, Y; analysis=AnaF, check_rhs=true) == Xtrue
-        @test FL.elimination_summary(Fac) == FL.elimination_summary(AnaF)
+        # Independently built summaries contain mutable elimination workspaces;
+        # compare their mathematical answers, not workspace identity.
+        Sfac, Sana = FL.elimination_summary(Fac), FL.elimination_summary(AnaF)
+        @test FL.rank(Sfac) == FL.rank(Sana) == size(B, 2)
+        @test FL.nullspace(Sfac) == FL.nullspace(Sana) == zeros(QQ, size(B, 2), 0)
+        @test FL.colspace(Sfac) == FL.colspace(Sana) == B
         @test_throws ErrorException FL.solve_fullcolumn(F, B, Y; factor=Fac, analysis=AnaF)
     end
 
@@ -2242,6 +3059,179 @@ using TOML
             cols = [1, 2, 3]
             rr = FL.rank_restricted(field, As, rows, cols)
             @test rr == FL.rank(field, Matrix(A)[rows, cols])
+        end
+    end
+end
+
+@testset "A13 coefficient reinterpretation preserves relations" begin
+    relation = Bool[1 1 1 1; 0 1 0 1; 0 0 1 1; 0 0 0 1]
+    diamond = FF.FinitePoset(relation)
+    chain = chain_poset(2)
+    point = chain_poset(1)
+    rational = CM.QQField()
+    for p in (2,3,5)
+        field = CM.Fp(p)
+        K = CM.coeff_type(field)
+        # Both diamond paths are zero modulo p. Their canonical integer lifts
+        # are p and zero, so reinterpretation over QQ cannot be a P-module.
+        bad = MD.PModule{K}(diamond, [1,2,1,1], Dict(
+            (1,2) => reshape(K[1,p-1],2,1), (2,4) => reshape(K[1,1],1,2),
+            (1,3) => zeros(K,1,1), (3,4) => ones(K,1,1)); field=field)
+        @test bad.edge_maps[2,4] * bad.edge_maps[1,2] == zeros(K,1,1)
+        @test bad.edge_maps[3,4] * bad.edge_maps[1,3] == zeros(K,1,1)
+        @test_throws ArgumentError CM.change_field(bad, rational)
+        @test_throws ArgumentError CM.change_field(RES.EncodingResult(diamond,bad,nothing), rational)
+        @test CM.change_field(bad, field).field == field
+
+        good = MD.PModule{K}(diamond, [1,2,1,1], Dict(
+            (1,2) => sparse(reshape(K[1,0],2,1)), (2,4) => sparse(reshape(K[1,1],1,2)),
+            (1,3) => sparse(ones(K,1,1)), (3,4) => sparse(ones(K,1,1))); field=field)
+        converted = CM.change_field(good, rational)
+        @test converted.field == rational
+        @test MD.map_leq(converted,1,4) == ones(QQ,1,1)
+        @test converted.edge_maps[2,4] * converted.edge_maps[1,2] ==
+              converted.edge_maps[3,4] * converted.edge_maps[1,3]
+        @test good.field == field
+        @test good.edge_maps[1,2] == reshape(K[1,0],2,1)
+
+        # Domain and codomain are chain representations in every field, while
+        # the morphism square only commutes in characteristic p.
+        dom = MD.PModule{K}(chain,[1,1],Dict((1,2)=>zeros(K,1,1));field=field)
+        cod = MD.PModule{K}(chain,[2,1],Dict((1,2)=>reshape(K[1,1],1,2));field=field)
+        f = MD.PMorphism(dom,cod,[reshape(K[1,p-1],2,1),zeros(K,1,1)])
+        @test MD.check_morphism(f).valid
+        @test_throws ArgumentError CM.change_field(f,rational)
+        @test MD.check_morphism(CM.change_field(f,field)).valid
+        natural_complex = TamerOp.ModuleComplexes.ModuleCochainComplex([dom,cod],[f])
+        @test_throws ArgumentError CM.change_field(natural_complex,rational)
+        identity = CM.change_field(MD.id_morphism(good),rational)
+        @test identity.dom === identity.cod
+        @test MD.check_morphism(identity).valid
+        @test identity.comps == [Matrix{QQ}(I,d,d) for d in good.dims]
+
+        # A valid characteristic-p complex can cease to square to zero after
+        # lifting its coefficient representatives to characteristic zero.
+        one_term = MD.PModule{K}(point,[1],Dict{Tuple{Int,Int},Matrix{K}}();field=field)
+        two_term = MD.PModule{K}(point,[2],Dict{Tuple{Int,Int},Matrix{K}}();field=field)
+        d0 = MD.PMorphism(one_term,two_term,[reshape(K[1,p-1],2,1)])
+        d1 = MD.PMorphism(two_term,one_term,[reshape(K[1,1],1,2)])
+        complex = TamerOp.ModuleComplexes.ModuleCochainComplex([one_term,two_term,one_term],[d0,d1];tmin=-3)
+        @test d1.comps[1] * d0.comps[1] == zeros(K,1,1)
+        @test_throws ArgumentError CM.change_field(complex,rational)
+        wrapped = RES.EncodedComplexResult(point,complex,nothing;field=field)
+        @test CM.change_field(wrapped,field) === wrapped
+        @test_throws ArgumentError CM.change_field(wrapped,rational)
+
+        # Genuine liftable differentials remain supported, with shared endpoint
+        # identities and the complete cochain degree range preserved.
+        e0 = MD.PMorphism(one_term,two_term,[reshape(K[1,0],2,1)])
+        e1 = MD.PMorphism(two_term,one_term,[reshape(K[0,1],1,2)])
+        liftable = TamerOp.ModuleComplexes.ModuleCochainComplex([one_term,two_term,one_term],[e0,e1];tmin=-3)
+        lift = CM.change_field(liftable,rational)
+        @test lift.tmin == -3 && lift.tmax == -1
+        @test all(term -> term.field == rational,lift.terms)
+        @test lift.diffs[1].dom === lift.terms[1]
+        @test lift.diffs[1].cod === lift.terms[2]
+        @test lift.diffs[2].dom === lift.terms[2]
+        @test lift.diffs[2].cod === lift.terms[3]
+        @test lift.diffs[2].comps[1] * lift.diffs[1].comps[1] == zeros(QQ,1,1)
+        @test TamerOp.ModuleComplexes.check_module_complex(lift).valid
+        wrapped_lift = RES.EncodedComplexResult(point,liftable,nothing;field=field,
+            meta=(presentation=:historical,provenance=(construction=:original,reconstruction=:original)))
+        changed = CM.change_field(wrapped_lift,rational)
+        provenance = RES.provenance(changed)
+        @test provenance.field == rational
+        @test provenance.degree_range == -3:-1
+        @test provenance.degree_convention === :cohomological
+        @test provenance.reconstruction === :stored_complex_matrix_reinterpretation
+        @test provenance.coefficient_change.semantics === :reinterpret_stored_complex_matrices
+        @test provenance.source.field == field
+        @test !haskey(changed.meta,:presentation)
+        @test changed.meta.source_meta.presentation === :historical
+    end
+
+    # Real-field acceptance follows target tolerances, not sqrt(eps(eltype)).
+    loose = CM.RealField(Float64;atol=1e-6,rtol=0.)
+    strict = CM.RealField(Float64;atol=1e-12,rtol=0.)
+    delta = 1e-8
+    approximate = MD.PModule{Float64}(diamond,ones(Int,4),Dict(
+        (1,2)=>ones(1,1),(2,4)=>fill(1+delta,1,1),
+        (1,3)=>ones(1,1),(3,4)=>ones(1,1));field=loose)
+    @test CM.change_field(approximate,loose).field == loose
+    @test_throws ArgumentError CM.change_field(approximate,strict)
+    float_dom = MD.PModule{Float64}(chain,[1,1],Dict((1,2)=>ones(1,1));field=loose)
+    float_cod = MD.PModule{Float64}(chain,[1,1],Dict((1,2)=>fill(1+delta,1,1));field=loose)
+    approximate_map = MD.PMorphism(float_dom,float_cod,[ones(1,1),ones(1,1)])
+    @test CM.change_field(approximate_map,loose).dom.field == loose
+    @test_throws ArgumentError CM.change_field(approximate_map,strict)
+    float_one = MD.PModule{Float64}(point,[1],Dict{Tuple{Int,Int},Matrix{Float64}}();field=loose)
+    float_two = MD.PModule{Float64}(point,[2],Dict{Tuple{Int,Int},Matrix{Float64}}();field=loose)
+    float_d0 = MD.PMorphism(float_one,float_two,[reshape([1.,-1.],2,1)])
+    float_d1 = MD.PMorphism(float_two,float_one,[reshape([1.0, 1.0 + delta],1,2)])
+    approximate_complex = TamerOp.ModuleComplexes.ModuleCochainComplex(
+        [float_one,float_two,float_one],[float_d0,float_d1];check=false)
+    @test CM.change_field(approximate_complex,loose).terms[1].field == loose
+    @test_throws ArgumentError CM.change_field(approximate_complex,strict)
+    nonfinite = MD.PModule{Float64}(chain,[1,1],Dict((1,2)=>fill(Inf,1,1));field=loose)
+    @test_throws ArgumentError CM.change_field(nonfinite,loose)
+    nonfinite_map = MD.PMorphism(float_one,float_one,[fill(NaN,1,1)])
+    @test_throws ArgumentError CM.change_field(nonfinite_map,loose)
+
+    # Relative tolerance must use factor scale when a product cancels to zero.
+    relative = CM.RealField(Float64)
+    relative_strict = CM.RealField(Float64;atol=0.,rtol=1e-12)
+    cancellation = MD.PModule{Float64}(diamond,[1,2,1,1],Dict(
+        (1,2)=>ones(2,1),(2,4)=>reshape([1.0, -1.0 + 1e-9],1,2),
+        (1,3)=>zeros(1,1),(3,4)=>ones(1,1));field=relative)
+    @test CM.change_field(cancellation,relative).field == relative
+    @test_throws ArgumentError CM.change_field(cancellation,relative_strict)
+    cancel_dom = MD.PModule{Float64}(chain,[1,1],Dict((1,2)=>zeros(1,1));field=relative)
+    cancel_cod = MD.PModule{Float64}(chain,[2,1],Dict((1,2)=>reshape([1.0, -1.0 + 1e-9],1,2));field=relative)
+    cancel_map = MD.PMorphism(cancel_dom,cancel_cod,[ones(2,1),zeros(1,1)])
+    @test CM.change_field(cancel_map,relative).dom.field == relative
+    @test_throws ArgumentError CM.change_field(cancel_map,relative_strict)
+
+    # Lazy and materialized encoded complexes share exactly the same field
+    # conversion and provenance contract. Integral RP2 chains reduce modulo 2.
+    cells = DT.GradedComplex([Int[1],Int[1],Int[1]],
+        [spzeros(Int,1,1),sparse([1],[1],[2],1,1)],[(0.,),(0.,),(0.,)])
+    lazy = TamerOp.encode(cells,TamerOp.DataIngestion.GradedFiltration();
+        field=rational,stage=:encoded_complex)
+    eager = RES.EncodedComplexResult(lazy.P,RES.encoding_complex(lazy),lazy.pi;
+        field=rational,meta=lazy.meta)
+    for encoded in (lazy,eager)
+        @test CM.change_field(encoded,rational) === encoded
+        output = CM.change_field(encoded,CM.F2())
+        @test output.C isa TamerOp.ModuleComplexes.ModuleCochainComplex
+        @test all(term -> term.field == CM.F2(),output.C.terms)
+        @test output.C.tmin == -2 && output.C.tmax == 0
+        @test all(d -> all(iszero,d.comps[1]),output.C.diffs)
+        @test RES.provenance(output).degree_range == -2:0
+        @test RES.provenance(output).source.field == rational
+        @test RES.provenance(output).coefficient_change.semantics === :reinterpret_stored_complex_matrices
+        @test RES.provenance(output).construction.effective === :coefficient_reinterpretation
+    end
+
+    # Independent integer gauge oracle, on chains and branching posets. All
+    # interval maps telescope to [1 b_v-b_u; 0 1] in every supported field.
+    rng = MersenneTwister(71313)
+    for P in (chain_poset(4),diamond), repeat in 1:3
+        offsets = rand(rng,-4:4,FF.nvertices(P))
+        edge = Dict((u,v)=>QQ[1 offsets[v]-offsets[u];0 1] for (u,v) in MD.cover_edges(P))
+        input = MD.PModule{QQ}(P,fill(2,FF.nvertices(P)),edge;field=rational)
+        for field in FIELDS_FULL
+            K = CM.coeff_type(field)
+            output = CM.change_field(input,field)
+            for u in 1:FF.nvertices(P), v in 1:FF.nvertices(P)
+                FF.leq(P,u,v) || continue
+                oracle = CM.coerce.(Ref(field),[1 offsets[v]-offsets[u];0 1])
+                @test MD.map_leq(output,u,v) == oracle
+            end
+        end
+        if Threads.nthreads() > 1
+            tasks = [Threads.@spawn CM.change_field(input,rational) for _ in 1:8]
+            outputs = fetch.(tasks)
+            @test all(output -> MD.map_leq(output,1,4) == QQ[1 offsets[4]-offsets[1];0 1],outputs)
         end
     end
 end

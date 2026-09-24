@@ -3,6 +3,72 @@ using Random
 using JSON3
 import Base.Threads
 
+@testset "A12 rank and signed-measure passive inspection" begin
+    # Region-index functions use the four grid regions, without asking for
+    # representative points (compiled wrappers leave those unpopulated).
+    grid_poset = FF.ProductOfChainsPoset((2, 2))
+    grid = EC.GridEncodingMap(grid_poset, ([0.0, 1.0], [0.0, 1.0]))
+    compiled = EC.compile_encoding(grid_poset, grid)
+    @test compiled.reps === nothing
+    @test compiled.axes === nothing
+    for encoding in (grid, compiled)
+        visited = Int[]
+        values = Inv.region_values(encoding, r -> (push!(visited, r); r * r); arg=:index)
+        @test values == [1, 4, 9, 16]
+        @test visited == [1, 2, 3, 4]
+        @test Inv.region_values(encoding, r -> isodd(r) ? :odd : :even; arg=:index) ==
+              [:odd, :even, :odd, :even]
+    end
+    @test compiled.reps === nothing
+    @test compiled.axes === nothing
+
+    # The interval supported on the top 64 vertices of a 128-vertex chain
+    # has 64*65/2 nonzero ranks, including the diagonal. Keep all comparable
+    # entries in the result to distinguish entry counts from nonzero counts.
+    P = FF.ProductOfChainsPoset((128,))
+    data = Dict((i, j) => Int(i >= 65) for i in 1:128 for j in i:128)
+    result = Inv.RankInvariantResult(P, data, true)
+    before = copy(data)
+    d = Inv.describe(result)
+    @test d.nentries == 8256
+    @test d.nnonzero == 2080
+    @test d.store_zeros
+    @test occursin("nnonzero=2080", sprint(show, result))
+    @test occursin("nvertices: 128", sprint(show, MIME"text/plain"(), result))
+    @test result.data == before
+    Inv.nonzero_pairs(result)
+    Inv.describe(result)
+    pairs_bytes = @allocated Inv.nonzero_pairs(result)
+    summary_bytes = @allocated Inv.describe(result)
+    @test summary_bytes < div(pairs_bytes, 2)
+
+    # One-line display reports mass and variation, which require only a
+    # scan. Explicit describe still offers ranked terms and their stable
+    # original-index tie break. Display must not pay for that unused sort.
+    n = 4096
+    weights = [isodd(i) ? 1 : -2 for i in 1:n]
+    rects = fill(SM.Rect{1}((0,), (1,)), n)
+    sb = SM.RectSignedBarcode{1,Int}(([0, 1],), rects, weights)
+    pm = SM.PointSignedMeasure(([0.0, 1.0],), fill((1,), n), copy(weights))
+    for (obj, name) in ((sb, "RectSignedBarcode"), (pm, "PointSignedMeasure"))
+        @test sprint(show, obj) == "$(name)(dim=1, terms=4096, mass=-2048, variation=6144)"
+        ranked = SM.describe(obj; nlargest=3)
+        @test [t.weight for t in ranked.largest_terms] == [-2, -2, -2]
+        @test ranked.nterms == 4096
+        @test ranked.total_mass == -2048
+        @test ranked.total_variation == 6144
+        @test isempty(SM.describe(obj; nlargest=0).largest_terms)
+        io = IOBuffer(sizehint=1024)
+        show(io, obj)
+        truncate(io, 0)
+        seekstart(io)
+        SM.describe(obj; nlargest=3)
+        compact_bytes = @allocated show(io, obj)
+        ranked_bytes = @allocated SM.describe(obj; nlargest=3)
+        @test compact_bytes + div(n * sizeof(Int), 2) < ranked_bytes
+    end
+end
+
 function _median_elapsed(f::Function; warmup::Int=1, reps::Int=5)
     for _ in 1:warmup
         f()
@@ -131,9 +197,66 @@ function EC.locate(pi::ToyBoxes2D, x::NTuple{2,<:Real}; strict::Bool=true, closu
     end
 end
 
+# Force scheduling while a slice builder owns its mutable coordinate buffer.
+struct A11YieldingEncoding{P<:EC.PLikeEncodingMap} <: EC.PLikeEncodingMap
+    inner::P
+end
+EC.dimension(pi::A11YieldingEncoding) = EC.dimension(pi.inner)
+EC.representatives(pi::A11YieldingEncoding) = EC.representatives(pi.inner)
+EC.axes_from_encoding(pi::A11YieldingEncoding) = EC.axes_from_encoding(pi.inner)
+function EC.locate(pi::A11YieldingEncoding, x::AbstractVector; kwargs...)
+    yield()
+    return EC.locate(pi.inner, x; kwargs...)
+end
+
+# Expose the same coordinate walls while exercising callback scheduling during
+# lazy cell construction. The callback may yield, nest a query, or fail once.
+struct A11CallbackBoxes{P,F} <: EC.PLikeEncodingMap
+    inner::P
+    coords::NTuple{2,Vector{Float64}}
+    callback::F
+end
+EC.dimension(::A11CallbackBoxes) = 2
+EC.representatives(pi::A11CallbackBoxes) = EC.representatives(pi.inner)
+EC.axes_from_encoding(pi::A11CallbackBoxes) = pi.coords
+function EC.locate(pi::A11CallbackBoxes, x::AbstractVector; kwargs...)
+    pi.callback()
+    return EC.locate(pi.inner, x; kwargs...)
+end
+
+# Method-style probing must query the same exact point as the real batch.
+struct A64CoordinateProbe{P,T} <: EC.PLikeEncodingMap
+    inner::P
+    expected::Vector{T}
+    visits::Base.RefValue{Int}
+end
+function EC.locate(pi::A64CoordinateProbe, x::AbstractVector; kwargs...)
+    x == pi.expected || throw(ArgumentError("method probing changed the query coordinates"))
+    pi.visits[] += 1
+    return EC.locate(pi.inner, x)
+end
+
 with_fields(FIELDS_FULL) do field
 K = CM.coeff_type(field)
 @inline cf(x) = CM.coerce(field, x)
+
+
+# Build native coordinate cells and rectangular interval modules. Upper walls
+# are actual coordinate boundaries, so their terminal cells have dimension zero.
+function _a03_rectangle_modules(xs, ys, rectangles)
+    points = [(x, y) for y in ys for x in xs]
+    P = FF.FinitePoset([a[1] <= b[1] && a[2] <= b[2] for a in points, b in points])
+    pi = EC.GridEncodingMap(P, (collect(xs), collect(ys)))
+    modules = MD.PModule{K}[]
+    for (lo, hi) in rectangles
+        birth = searchsortedfirst(xs, lo[1]) + length(xs) * (searchsortedfirst(ys, lo[2]) - 1)
+        death = searchsortedfirst(xs, hi[1]) - 1 + length(xs) * (searchsortedfirst(ys, hi[2]) - 2)
+        H = one_by_one_fringe(P, FF.principal_upset(P, birth),
+                            FF.principal_downset(P, death), cf(1); field=field)
+        push!(modules, IR.pmodule_from_fringe(H))
+    end
+    return P, pi, modules
+end
 
 @testset "PLikeEncodingMap dispatch hook" begin
     @test TO.ZnEncoding.ZnEncodingMap <: TO.EncodingCore.PLikeEncodingMap
@@ -2332,7 +2455,7 @@ end
     # -------------------------
     # PLPolyhedra: defaults from pi.witnesses
     # -------------------------
-    if PLP.HAVE_POLY && (field isa CM.QQField)
+    if field isa CM.QQField
         # Lightweight PLPolyhedra smoke path:
         # avoid full polyhedral encoding solve in this cross-field defaults test.
         hp = PLP.make_hpoly([-1.0 0.0; 0.0 -1.0; 1.0 0.0; 0.0 1.0], [0.0, 0.0, 2.0, 2.0])
@@ -2368,11 +2491,11 @@ end
     @test Inv.sliced_bottleneck_distance(M, M, pi, opts) == 0.0
     @test Inv.matching_wasserstein_distance_approx(M, M, pi, opts) == 0.0
 
-    if PLP.HAVE_POLY && (field isa CM.QQField)
+    if field isa CM.QQField
         @test EC.dimension(pi2) == 2
     end
 
-    @testset "Exact 2D matching distance: deterministic and correct on a toy example" begin
+    @testset "Representative 2D matching distance: deterministic on a toy example" begin
         # Toy coords-based encoding map:
         # Box [0,3]x[0,3] partitioned into three vertical stripes:
         #   region 1: x1 in [0,1), region 2: x1 in [1,2), region 3: x1 in [2,3]
@@ -2422,14 +2545,14 @@ end
         @test isapprox(vals_trim[3], 2.0; atol=1e-12)
         @test isapprox(vals_trim[4], 3.0; atol=1e-12)
 
-        # Exact distance should be 1.0 on this toy configuration.
-        d1 = Inv.matching_distance_exact_2d(M23, M3, pi, opts_exact; weight=:lesnick_l1, normalize_dirs=:L1)
-        d2 = Inv.matching_distance_exact_2d(M23, M3, pi, opts_exact; weight=:lesnick_l1, normalize_dirs=:L1)
+        # This representative family attains 1.0 on the stripe fixture.
+        d1 = Inv.matching_distance_sampled_2d(M23, M3, pi, opts_exact; weight=:lesnick_l1, normalize_dirs=:L1)
+        d2 = Inv.matching_distance_sampled_2d(M23, M3, pi, opts_exact; weight=:lesnick_l1, normalize_dirs=:L1)
         @test d1 == d2  # determinism
         @test isapprox(d1, 1.0; atol=1e-10)
 
-        # Agreement with the slice-based evaluator using the exact slice list.
-        fam = Inv.matching_distance_exact_slices_2d(pi, opts_exact; normalize_dirs=:L1)
+        # Agreement with the same representative slice list.
+        fam = Inv.matching_distance_slices_2d(pi, opts_exact; normalize_dirs=:L1)
         d3 = Inv.matching_distance_approx(M23, M3, fam.slices)
         @test isapprox(d3, d1; atol=1e-12)
 
@@ -2462,7 +2585,7 @@ end
 
             pi_poly = TO.PLPolyhedra.PLEncodingMap(2, sigy, sigz, [hp1, hp2, hp3], witnesses)
 
-            d_poly = Inv.matching_distance_exact_2d(M23, M3, pi_poly, opts_exact; weight=:lesnick_l1, normalize_dirs=:L1)
+            d_poly = Inv.matching_distance_sampled_2d(M23, M3, pi_poly, opts_exact; weight=:lesnick_l1, normalize_dirs=:L1)
             @test isapprox(d_poly, 1.0; atol=1e-10)
         end
 
@@ -2585,8 +2708,8 @@ end
             @test SI._barcode_from_packed(sb_idx_packed.barcodes[1, 1]) == sb_idx.barcodes[1, 1]
 
             if Threads.nthreads() > 1
-                S_serial = TO.slice_barcodes(cache_full, dirs, offs; threads = false)
-                S_thread = TO.slice_barcodes(cache_full, dirs, offs; threads = true)
+                S_serial = Inv.slice_barcodes(cache_full; dirs=dirs, offsets=offs, threads=false)
+                S_thread = Inv.slice_barcodes(cache_full; dirs=dirs, offsets=offs, threads=true)
                 @test S_thread.barcodes == S_serial.barcodes
                 @test S_thread.weights == S_serial.weights
             end
@@ -2595,18 +2718,18 @@ end
             @test sb.barcodes[1, 1] == Inv.fibered_barcode(cache_full, dirs[1], 0.25; values=:t)
             @test sb.barcodes[1, 2] == Inv.fibered_barcode(cache_full, dirs[1], x0; values=:t)
 
-            # Cache-aware exact matching distance: reuse a shared arrangement.
+            # Cache-aware representative matching distance: reuse a shared arrangement.
             arr_shared = Inv.fibered_arrangement_2d(pi, opts_exact; normalize_dirs=:L1, precompute=:cells)
             cache23 = Inv.fibered_barcode_cache_2d(M23, arr_shared; precompute=:full)
             cache3  = Inv.fibered_barcode_cache_2d(M3,  arr_shared; precompute=:full)
 
-            d_cache = Inv.matching_distance_exact_2d(cache23, cache3; weight=:lesnick_l1)
+            d_cache = Inv.matching_distance_sampled_2d(cache23, cache3; weight=:lesnick_l1)
             @test isapprox(d_cache, d1; atol=1e-12)
 
             fam_shared = Inv.fibered_slice_family_2d(arr_shared;
                 direction_weight=:lesnick_l1, store_values=true)
             ns_shared = length(fam_shared.cell_id)
-            d_direct_reuse = Inv.matching_distance_exact_2d(M23, M3, pi, opts_exact;
+            d_direct_reuse = Inv.matching_distance_sampled_2d(M23, M3, pi, opts_exact;
                 weight=:lesnick_l1,
                 normalize_dirs=:L1,
                 arrangement=arr_shared,
@@ -2618,13 +2741,13 @@ end
             st_dist0 = Inv.fibered_barcode_cache_stats(cache23_family)
             @test st_dist0.n_distance_slices_computed == 0
 
-            d_cache_first = Inv.matching_distance_exact_2d(cache23_family, cache3_family;
+            d_cache_first = Inv.matching_distance_sampled_2d(cache23_family, cache3_family;
                 weight=:lesnick_l1, family=fam_shared, threads=false)
             st_dist1 = Inv.fibered_barcode_cache_stats(cache23_family)
             @test isapprox(d_cache_first, d1; atol=1e-12)
             @test st_dist1.n_distance_slices_computed == 0
 
-            d_cache_second = Inv.matching_distance_exact_2d(cache23_family, cache3_family;
+            d_cache_second = Inv.matching_distance_sampled_2d(cache23_family, cache3_family;
                 weight=:lesnick_l1, family=fam_shared, threads=false)
             st_dist2 = Inv.fibered_barcode_cache_stats(cache23_family)
             @test isapprox(d_cache_second, d1; atol=1e-12)
@@ -2664,8 +2787,8 @@ end
             @test st_distance1.n_distance_slices_computed == ns_shared
 
             if Threads.nthreads() > 1
-                d_serial = Inv.matching_distance_exact_2d(cache23, cache3; threads = false)
-                d_thread = Inv.matching_distance_exact_2d(cache23, cache3; threads = true)
+                d_serial = Inv.matching_distance_sampled_2d(cache23, cache3; threads = false)
+                d_thread = Inv.matching_distance_sampled_2d(cache23, cache3; threads = true)
                 @test d_thread == d_serial
             end
 
@@ -2690,8 +2813,8 @@ end
                 @test st_s.n_index_barcodes_computed == st_t.n_index_barcodes_computed
             end
 
-            # Arrangement-exact sliced kernel: compare to the slice-list backend.
-            fam2 = Inv.matching_distance_exact_slices_2d(pi, opts_exact; normalize_dirs=:L1)
+            # Representative sliced kernel: compare to the same slice-list backend.
+            fam2 = Inv.matching_distance_slices_2d(pi, opts_exact; normalize_dirs=:L1)
             slices2 = fam2.slices
             k_slices = Inv.slice_kernel(M23, M3, slices2; kind=:bottleneck_gaussian, sigma=1.0)
             k_cache  = Inv.slice_kernel(cache23, cache3;
@@ -3154,7 +3277,7 @@ end
     @test occursin("MPPDecomposition(", s_decomp)
     s_decomp_plain = sprint(show, MIME("text/plain"), img_exact.decomp)
     @test occursin("MPPDecomposition", s_decomp_plain)
-    @test occursin("nsummands", s_decomp_plain)
+    @test occursin("sampled tracks", s_decomp_plain)
     s_img = sprint(show, img_exact)
     @test occursin("MPPImage(", s_img)
     s_img_plain = sprint(show, MIME("text/plain"), img_exact)
@@ -3203,16 +3326,12 @@ end
     A_match = Tuple{Float64,Float64}[(0.0, 1.0), (0.2, 0.8), (0.55, 0.9)]
     B_match = Tuple{Float64,Float64}[(0.0, 1.0), (0.25, 0.75)]
     pool_match = vcat(A_match, B_match)
-    generic_match = TO.MultiparameterImages._bottleneck_matching_points(A_match, B_match)
-    flat_match = TO.MultiparameterImages._bottleneck_matching_points_flat(
-        pool_match,
-        1,
-        length(A_match),
-        length(A_match) + 1,
-        length(B_match),
-    )
-    @test flat_match == generic_match
-    @test TO.MultiparameterImages._bottleneck_matching_points_flat(pool_match, 1, length(A_match), length(pool_match) + 1, 0) == zeros(Int, length(A_match))
+    generic_match = TO.SliceInvariants._bottleneck_matching_points(A_match, B_match)
+    pooled_match = TO.SliceInvariants._bottleneck_matching_points(
+        view(pool_match, 1:length(A_match)),
+        view(pool_match, length(A_match)+1:length(pool_match)))
+    @test pooled_match == generic_match
+    @test TO.SliceInvariants._bottleneck_matching_points(A_match, Tuple{Float64,Float64}[]).a_to_b == zeros(Int, length(A_match))
 
     # Re-evaluation from the stored decomposition should match.
     img2 = Inv.mpp_image(img_exact.decomp; xgrid=img_exact.xgrid, ygrid=img_exact.ygrid, sigma=img_exact.sigma)
@@ -3525,31 +3644,31 @@ end
     # typed cache: packed barcodes are the internal representation.
     @test eltype(cache23.index_barcodes_packed) <: Union{Nothing,Inv.PackedIndexBarcode}
 
-    # exact distance matches slice-list backend
-    d_slices = Inv.matching_distance_exact_2d(M23, M3, pi, opts; weight=:lesnick_l1, normalize_dirs=:L1)
-    d_cache  = Inv.matching_distance_exact_2d(cache23, cache3; weight=:lesnick_l1, family=fam, threads=false)
+    # sampled distance matches the same representative slice-list backend
+    d_slices = Inv.matching_distance_sampled_2d(M23, M3, pi, opts; weight=:lesnick_l1, normalize_dirs=:L1)
+    d_cache  = Inv.matching_distance_sampled_2d(cache23, cache3; weight=:lesnick_l1, family=fam, threads=false)
     @test isapprox(d_cache, d_slices; atol=1e-12)
 
     # thread determinism
-    d_thr = Inv.matching_distance_exact_2d(cache23, cache3; weight=:lesnick_l1, family=fam, threads=true)
+    d_thr = Inv.matching_distance_sampled_2d(cache23, cache3; weight=:lesnick_l1, family=fam, threads=true)
     @test isapprox(d_thr, d_cache; atol=1e-12)
 
-    # Allocation regression for fibered exact matching + slice extraction.
+    # Allocation regression for representative matching and slice extraction.
     Inv.slice_barcodes(cache23; dirs=[[1.0, 1.0]], offsets=[0.0], values=:t, threads=false)
     alloc_slice = @allocated Inv.slice_barcodes(cache23; dirs=[[1.0, 1.0]], offsets=[0.0], values=:t, threads=false)
     @test alloc_slice < 2_000_000
 
-    Inv.matching_distance_exact_2d(cache23, cache3; weight=:lesnick_l1, family=fam, threads=false)
-    alloc_exact = @allocated Inv.matching_distance_exact_2d(cache23, cache3; weight=:lesnick_l1, family=fam, threads=false)
-    @test alloc_exact < 2_500_000
+    Inv.matching_distance_sampled_2d(cache23, cache3; weight=:lesnick_l1, family=fam, threads=false)
+    alloc_sampled = @allocated Inv.matching_distance_sampled_2d(cache23, cache3; weight=:lesnick_l1, family=fam, threads=false)
+    @test alloc_sampled < 2_500_000
 
-    t_exact = _median_elapsed(; warmup=1, reps=5) do
-        Inv.matching_distance_exact_2d(cache23, cache3; weight=:lesnick_l1, family=fam, threads=false)
+    t_sampled = _median_elapsed(; warmup=1, reps=5) do
+        Inv.matching_distance_sampled_2d(cache23, cache3; weight=:lesnick_l1, family=fam, threads=false)
     end
-    @test t_exact < 1.0
+    @test t_sampled < 1.0
 
     # kernel matches slice-list backend (uniform cell weighting)
-    fam2 = Inv.matching_distance_exact_slices_2d(pi, opts; normalize_dirs=:L1)
+    fam2 = Inv.matching_distance_slices_2d(pi, opts; normalize_dirs=:L1)
     slices2 = fam2.slices
     k_slices = Inv.slice_kernel(M23, M3, slices2; kind=:bottleneck_gaussian, sigma=1.0, normalize_weights=true)
     k_cache  = Inv.slice_kernel(cache23, cache3; kind=:bottleneck_gaussian, sigma=1.0,
@@ -4211,4 +4330,1990 @@ end
         @test TOA.check_fibered_arrangement_2d(arr2; throw=false).valid
     end
 end
+
+@testset "A03 exact finite-window matching distance oracles" begin
+    F2D = TO.Fibered2D
+    # For a single rectangle versus zero, deletion to the diagonal costs half
+    # its shorter side. Every weighted slice is at most this long, and a line
+    # through opposite corners attains the bound.
+    for (w, h, x0, y0) in ((1.0, 1.0, 0.0, 0.0),
+                           (2.0, 1.0, 0.0, 0.0),
+                           (3.0, 4.0, -3.0, 2.0),
+                           (1.0, 0.25, 0.0, 0.0))
+        lo, hi = (x0, y0), (x0 + w, y0 + h)
+        P, pi, modules = _a03_rectangle_modules([lo[1], hi[1]], [lo[2], hi[2]], [(lo, hi)])
+        M = only(modules)
+        Z = MD.zero_pmodule(P; field=field)
+        opts = TO.InvariantOptions(box=(collect(lo), collect(hi)), threads=false)
+        expected = min(w, h) / 2
+        for (normalization, weight) in ((:L1, :lesnick_l1), (:Linf, :lesnick_linf))
+            d = F2D.matching_distance_exact_2d(M, Z, pi, opts;
+                normalize_dirs=normalization, weight=weight)
+            @test isapprox(d, expected; atol=1e-12, rtol=1e-12)
+            @test isapprox(F2D.matching_distance_exact_2d(Z, M, pi, opts;
+                normalize_dirs=normalization, weight=weight), expected; atol=1e-12, rtol=1e-12)
+            arr = F2D.fibered_arrangement_2d(pi, opts; normalize_dirs=normalization)
+            cacheM = F2D.fibered_barcode_cache_2d(M, arr; precompute=:none)
+            cacheZ = F2D.fibered_barcode_cache_2d(Z, arr; precompute=:none)
+            @test isapprox(F2D.matching_distance_exact_2d(cacheM, cacheZ;
+                weight=weight, threads=false), expected; atol=1e-12, rtol=1e-12)
+            @test isapprox(F2D.matching_distance_exact_2d(M, Z, pi, opts;
+                normalize_dirs=normalization, weight=weight, arrangement=arr), expected;
+                atol=1e-12, rtol=1e-12)
+            if Threads.nthreads() > 1
+                @test isapprox(F2D.matching_distance_exact_2d(cacheM, cacheZ;
+                    weight=weight, threads=true), expected; atol=1e-12, rtol=1e-12)
+            end
+        end
+        @test F2D.matching_distance_exact_2d(M, M, pi, opts) == 0.0
+        @test F2D.matching_distance_exact_2d(Z, Z, pi, opts) == 0.0
+    end
+
+    # Translating a unit square horizontally by delta bounds every matching
+    # distance by delta; deleting both bars bounds it by 1/2. A diagonal slice
+    # attains min(delta, 1/2), including the disjoint-support case delta=2.
+    for delta in (0.25, 0.5, 2.0)
+        xs = sort!(unique([0.0, delta, 1.0, 1.0 + delta]))
+        rects = [((0.0, 0.0), (1.0, 1.0)), ((delta, 0.0), (delta + 1.0, 1.0))]
+        P, pi, modules = _a03_rectangle_modules(xs, [0.0, 1.0], rects)
+        M, N = modules
+        opts = TO.InvariantOptions(box=([0.0, 0.0], [1.0 + delta, 1.0]), threads=false)
+        @test isapprox(F2D.matching_distance_exact_2d(M, N, pi, opts), min(delta, 0.5);
+                       atol=1e-12, rtol=1e-12)
+    end
+
+    P, pi, modules = _a03_rectangle_modules([0.0, 1.0], [0.0, 1.0],
+        [((0.0, 0.0), (1.0, 1.0))])
+    M = only(modules)
+    Z = MD.zero_pmodule(P; field=field)
+    opts = TO.InvariantOptions(box=([0.0, 0.0], [1.0, 1.0]), threads=false)
+    @test F2D.matching_distance_exact_2d(M, Z, pi,
+        TO.InvariantOptions(box=([0.0, 0.0], [0.0, 1.0]), threads=false)) == 0.0
+    @test F2D.matching_distance_exact_2d(M, Z, pi,
+        TO.InvariantOptions(box=([0.0, 0.0], [1.0, 0.0]), threads=false)) == 0.0
+    @test_throws ArgumentError F2D.matching_distance_exact_2d(M, Z, pi, opts; max_candidates=0)
+    @test_throws ArgumentError F2D.matching_distance_exact_2d(M, Z, pi, opts; weight=:none)
+    @test_throws ArgumentError F2D.matching_distance_exact_2d(M, Z, pi, opts; normalize_dirs=:L2)
+    @test_throws ArgumentError F2D.matching_distance_exact_2d(M, Z, pi, opts;
+        normalize_dirs=:L1, weight=:lesnick_linf)
+    @test_throws ArgumentError F2D.matching_distance_exact_2d(M, Z, pi, opts;
+        normalize_dirs=:Linf, weight=:lesnick_l1)
+    @test_throws ArgumentError F2D.matching_distance_exact_2d(M, Z, pi,
+        TO.InvariantOptions(box=([1.0, 0.0], [0.0, 1.0]), threads=false))
+    @test_throws ArgumentError F2D.matching_distance_exact_2d(M, Z, pi,
+        TO.InvariantOptions(box=([0.0, 0.0], [Inf, 1.0]), threads=false))
+    arr = F2D.fibered_arrangement_2d(pi, opts; normalize_dirs=:L1)
+    cacheM = F2D.fibered_barcode_cache_2d(M, arr; precompute=:none)
+    cacheZ = F2D.fibered_barcode_cache_2d(Z, arr; precompute=:none)
+    @test_throws ArgumentError F2D.matching_distance_exact_2d(cacheM, cacheZ; max_candidates=0)
+    @test_throws ArgumentError F2D.matching_distance_exact_2d(cacheM, cacheZ; weight=:lesnick_linf)
+
+    # This module remains nonzero in the final, unbounded grid cells. Its
+    # bars are essential before windowing, but this API explicitly clips them
+    # at the finite window's exit. Enlarging the window changes that quantity.
+    E = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, 1),
+        FF.principal_downset(P, 4), cf(1); field=field))
+    @test isapprox(F2D.matching_distance_exact_2d(E, Z, pi, opts), 0.5; atol=1e-12)
+    opts_larger = TO.InvariantOptions(box=([0.0, 0.0], [2.0, 4.0]), threads=false)
+    @test isapprox(F2D.matching_distance_exact_2d(E, Z, pi, opts_larger), 1.0; atol=1e-12)
+    cacheE = F2D.fibered_barcode_cache_2d(E, arr; precompute=:none)
+    clipped = F2D.fibered_barcode(cacheE, [1.0, 1.0], 0.0; values=:t)
+    @test clipped == Dict((0.0, 2.0) => 1)
+    @test all(isfinite(b) && isfinite(d) for (b, d) in keys(clipped))
+end
+
+@testset "A03 exact matching includes interior cost switches" begin
+    if field isa CM.QQField
+        F2D = TO.Fibered2D
+        R = Rational{BigInt}
+        poly = Tuple{R,R}[(1//4, -1//4), (3//4, -1//4), (3//4, 1//4), (1//4, 1//4)]
+        z = (R(0), R(0), R(0))
+        barsM = F2D._ExactMatchingBar2D{R}[(z, (R(-2), R(0), R(2)))]
+        barsN = F2D._ExactMatchingBar2D{R}[((R(2), R(0), R(0)), (R(0), R(0), R(2)))]
+        # A(q)=[0,2-2q], B(q)=[2q,2]. Cross matching costs 2q;
+        # deleting both costs 1-q. Hence the optimum is min(2q,1-q),
+        # whose maximum is 2/3 at q=1/3, strictly inside the slope cell.
+        # Evaluating geometric cell vertices alone returns only 1/2.
+        @test maximum(min(2q, 1-q) for (q, h) in poly) == 1//2
+        budget = F2D._ExactMatchingBudget2D(0, 200_000)
+        candidates = F2D._exact_matching_candidates(poly, barsM, barsN, budget)
+        @test any(p -> p[1] == 1//3, candidates)
+        @test F2D._exact_matching_cell_max(F2D._ExactMatchingWork2D(poly, barsM, barsN)) == 1//2
+        @test F2D._exact_matching_cell_max(F2D._ExactMatchingWork2D(candidates, barsM, barsN)) == 2//3
+        @test budget.used > 0
+        @test_throws ArgumentError F2D._exact_matching_candidates(poly, barsM, barsN,
+            F2D._ExactMatchingBudget2D(0, 0))
+    end
+end
+
+@testset "A73 public matching maximum at an interior barcode-cost switch" begin
+    F2D = TO.Fibered2D
+    R = Rational{BigInt}
+    coords = R[0,1,3,4]
+    rectangles = [((0,1),(3,4)), ((1,0),(4,4)), ((1,1),(3,3))]
+    P, pi, summands = _a03_rectangle_modules(coords, coords, rectangles)
+    M, N = MD.direct_sum(summands[1],summands[2]), summands[3]
+    opts = TO.InvariantOptions(box=(R[0,0],R[4,4]),threads=false)
+
+    # Hand proof of the GLOBAL bound, independent of the optimizer: write a
+    # weighted line as (a*t,b*t+h), a,b>=1, min(a,b)=1. The smaller rectangle S
+    # is contained in both R1,R2; their birth/death shifts relative to S are at
+    # most 1. If S is absent, each R bar has length <=2. Otherwise match S to
+    # the longer R bar at cost <=1 and delete the shorter. Their lengths satisfy
+    # l1+l2 <= (3/a-(1-h)/b)+((4-h)/b-1/a) = 2/a+3/b <=5.
+    # Thus every line costs <=5/4. On y=x+h, 0<=h<=1, the two possible
+    # matchings cost 1+h/2 and 3/2-h/2. They cross at h=1/2, attaining 5/4.
+    # No grid-event ordering changes at this line: h=1/2 differs from every
+    # y-x with x,y in coords. The diagonal is only an artificial chart seam.
+    function rectangle_bars(rects,q,h,swapped)
+        bars = Tuple{R,R}[]
+        for (lo,hi) in rects
+            xlo,ylo = swapped ? reverse(lo) : lo
+            xhi,yhi = swapped ? reverse(hi) : hi
+            birth,death = max(q*xlo,ylo-h),min(q*xhi,yhi-h)
+            birth < death && push!(bars,(birth,death))
+        end
+        return bars
+    end
+    # At most two bars versus one: list every partial matching directly,
+    # rather than calling any production bottleneck/matching implementation.
+    function rectangle_distance(q,h,swapped=false)
+        A = rectangle_bars(rectangles[1:2],q,h,swapped)
+        B = rectangle_bars(rectangles[3:3],q,h,swapped)
+        deletion = [(d-b)/2 for (b,d) in A]
+        best = max(maximum(deletion;init=R(0)),
+                   maximum(((d-b)/2 for (b,d) in B);init=R(0)))
+        if !isempty(B)
+            b,d = only(B)
+            for i in eachindex(A)
+                cross = max(abs(A[i][1]-b),abs(A[i][2]-d))
+                best = min(best,max(cross,maximum((deletion[j] for j in eachindex(A)
+                                                  if j != i);init=R(0))))
+            end
+        end
+        return best
+    end
+    @test rectangle_bars(rectangles[1:2],R(1),R(1//2),false) ==
+          [(1//2,3//1),(1//1,7//2)]
+    @test rectangle_bars(rectangles[3:3],R(1),R(1//2),false) == [(1//1,5//2)]
+    for h in R[0,1//4,1//2,3//4,1]
+        @test rectangle_distance(R(1),h) == min(1+h/2,3//2-h/2)
+    end
+    @test all(y-x != 1//2 for x in coords,y in coords)
+
+    # Independently enumerate the vertices of the GEOMETRIC line arrangement:
+    # q=0, q=1, or an intersection of two lines h=y-q*x. A vertex-only
+    # algorithm cannot see the 5/4 answer; no private optimizer helper enters
+    # this reference calculation.
+    vertices = Set{Tuple{R,R}}((q,y-q*x) for q in R[0,1] for x in coords for y in coords)
+    for x in coords,y in coords,xx in coords,yy in coords
+        x == xx && continue
+        q = (y-yy)/(x-xx)
+        0 < q < 1 && push!(vertices,(q,y-q*x))
+    end
+    @test maximum(rectangle_distance(q,h,swapped) for (q,h) in vertices
+                  for swapped in (false,true)) == 9//8
+
+    encM = RES.EncodingResult(P,M,pi;backend=:test)
+    encN = RES.EncodingResult(P,N,pi;backend=:test)
+    session = CM.SessionCache()
+    for (normalization,weight,scale) in ((:L1,:lesnick_l1,2),(:Linf,:lesnick_linf,1))
+        @test F2D.matching_distance_exact_2d(M,N,pi,opts;
+            normalize_dirs=normalization,weight) == 1.25
+        arr = F2D.fibered_arrangement_2d(pi,opts;normalize_dirs=normalization,precompute=:none)
+        cacheM = F2D.fibered_barcode_cache_2d(M,arr;precompute=:none)
+        cacheN = F2D.fibered_barcode_cache_2d(N,arr;precompute=:none)
+        # Public slice extraction must realize the independently derived bars.
+        # Its basepoint is perpendicular to (1,1), so t=scale*(x+1/4).
+        @test F2D.fibered_barcode(cacheM,[1.,1.],[0.,0.5]) ==
+              Dict((scale*0.75,scale*3.25)=>1,(scale*1.25,scale*3.75)=>1)
+        @test F2D.fibered_barcode(cacheN,[1.,1.],[0.,0.5]) ==
+              Dict((scale*1.25,scale*2.75)=>1)
+        @test TO.Workflow.matching_distance_exact_2d(cacheM,cacheN;weight,threads=false) == 1.25
+        counts = (F2D.cached_barcode_count(cacheM),F2D.cached_barcode_count(cacheN))
+        @test F2D.matching_distance_exact_2d(cacheN,cacheM;weight,threads=false) == 1.25
+        @test counts == (F2D.cached_barcode_count(cacheM),F2D.cached_barcode_count(cacheN))
+        @test TO.Workflow.matching_distance_exact_2d(encM,encN;opts,cache=session,
+            normalize_dirs=normalization,weight) == 1.25
+        @test TO.matching_distance_exact_2d(encM,encN;opts,cache=session,
+            normalize_dirs=normalization,weight) == 1.25
+        if Threads.nthreads() > 1
+            @test F2D.matching_distance_exact_2d(cacheM,cacheN;weight,threads=true) == 1.25
+        end
+    end
+    @test TO.Workflow.matching_distance_exact_2d(M,N,pi;opts) == 1.25
+    @test TO.Workflow.matching_distance_exact_2d(encM,encM;opts,cache=session) == 0.0
+    CM._clear_session_cache!(session)
+    @test TO.Workflow.matching_distance_exact_2d(encM,encN;opts,cache=session) == 1.25
+    @test_throws ArgumentError TO.Workflow.matching_distance_exact_2d(encM,encN;
+        opts,max_candidates=1)
+end
+
+@testset "A73 exact-coordinate interior switches survive indistinguishable float coordinates" begin
+    # The five-field fixture above establishes coefficient parity. Here QQ
+    # coefficients isolate exact geometry, using both rational and genuinely
+    # algebraic rescalings with every axis coordinate rounding to one float.
+    if field isa CM.QQField
+        F2D = TO.Fibered2D
+        R = Rational{BigInt}
+        A = TO.ExactReals.AlgebraicReal
+        epsilon = R(1,big(2)^80)
+        for (origin,scale) in ((R(1),epsilon),(sqrt(A(2)),epsilon*sqrt(A(3))))
+            coords = [origin+scale*i for i in (0,1,3,4)]
+            transform(p) = (origin+scale*p[1],origin+scale*p[2])
+            rectangles = [(transform(lo),transform(hi)) for (lo,hi) in
+                [((0,1),(3,4)),((1,0),(4,4)),((1,1),(3,3))]]
+            @test issorted(coords) && length(unique(coords)) == 4
+            @test length(unique(Float64.(coords))) == 1
+            P,pi,summands = _a03_rectangle_modules(coords,coords,rectangles)
+            M,N = MD.direct_sum(summands[1],summands[2]),summands[3]
+            opts = TO.InvariantOptions(box=([first(coords),first(coords)],
+                                           [last(coords),last(coords)]),threads=false)
+            expected = Float64(5scale/4)
+            @test expected > 0
+            encM = RES.EncodingResult(P,M,pi;backend=:test)
+            encN = RES.EncodingResult(P,N,pi;backend=:test)
+            session = CM.SessionCache()
+            for (normalization,weight) in ((:L1,:lesnick_l1),(:Linf,:lesnick_linf))
+                @test isapprox(F2D.matching_distance_exact_2d(M,N,pi,opts;
+                    normalize_dirs=normalization,weight),expected;rtol=1e-13,atol=0)
+                @test isapprox(TO.Workflow.matching_distance_exact_2d(encM,encN;
+                    opts,cache=session,normalize_dirs=normalization,weight),
+                    expected;rtol=1e-13,atol=0)
+            end
+            @test isapprox(TO.Workflow.matching_distance_exact_2d(encM,encN;
+                opts,cache=session),expected;rtol=1e-13,atol=0)
+        end
+    end
+end
+
+@testset "A73 window clipping and public exact-distance boundaries" begin
+    F2D = TO.Fibered2D
+    R = Rational{BigInt}
+    P = FF.ProductOfChainsPoset((2,2))
+    pi = EC.GridEncodingMap(P,(R[0,3],R[0,3]))
+    E = IR.pmodule_from_fringe(one_by_one_fringe(P,FF.principal_upset(P,1),
+        FF.principal_downset(P,4),cf(1);field))
+    Z = MD.zero_pmodule(P;field)
+    encE = RES.EncodingResult(P,E,pi;backend=:test)
+    encZ = RES.EncodingResult(P,Z,pi;backend=:test)
+    session = CM.SessionCache()
+    # Neither corner is a grid coordinate. E is globally essential, yet its
+    # clipped distance to zero is half the shorter window side.
+    for (lo,hi,expected) in ((R[1//2,1//4],R[5//2,7//4],0.75),
+                           (R[1//2,1//4],R[9//2,25//4],2.0),
+                           (R[1//2,1//4],R[1//2,7//4],0.0),
+                           (R[1//2,1//4],R[5//2,1//4],0.0))
+        opts = TO.InvariantOptions(box=(lo,hi),threads=false)
+        @test F2D.matching_distance_exact_2d(E,Z,pi,opts) == expected
+        @test TO.Workflow.matching_distance_exact_2d(encE,encZ;opts,cache=session) == expected
+    end
+    opts = TO.InvariantOptions(box=(R[0,0],R[3,3]),threads=false)
+    arr = F2D.fibered_arrangement_2d(pi,opts;normalize_dirs=:L1)
+    @test_throws ArgumentError TO.Workflow.matching_distance_exact_2d(encE,encZ;
+        opts=TO.InvariantOptions(box=(R[0,0],R[2,2])),arrangement=arr)
+    @test_throws ArgumentError TO.Workflow.matching_distance_exact_2d(encE,encZ;
+        opts,normalize_dirs=:Linf,weight=:lesnick_linf,arrangement=arr)
+    @test_throws ArgumentError TO.Workflow.matching_distance_exact_2d(encE,encZ;
+        opts,normalize_dirs=:L1,weight=:none)
+    @test_throws ArgumentError TO.Workflow.matching_distance_exact_2d(encE,encZ;
+        opts=TO.InvariantOptions(box=([0.,0.],[Inf,3.])))
+    @test_throws ArgumentError TO.Workflow.matching_distance_exact_2d(encE,encZ;
+        opts=TO.InvariantOptions(box=(R[2,0],R[1,3])))
+end
+
+@testset "A03 rational bottleneck matches an independent partial-matching oracle" begin
+    if field isa CM.QQField
+        F2D = TO.Fibered2D
+        R = Rational{BigInt}
+        function exhaustive_partial_matching(A, B)
+            used = falses(length(B))
+            function visit(i, cost)
+                if i > length(A)
+                    return max(cost, maximum(((B[j][2] - B[j][1])/2
+                        for j in eachindex(B) if !used[j]); init=R(0)))
+                end
+                best = visit(i + 1, max(cost, (A[i][2] - A[i][1])/2))
+                for j in eachindex(B)
+                    used[j] && continue
+                    used[j] = true
+                    cross = max(abs(A[i][1] - B[j][1]), abs(A[i][2] - B[j][2]))
+                    best = min(best, visit(i + 1, max(cost, cross)))
+                    used[j] = false
+                end
+                return best
+            end
+            return visit(1, R(0))
+        end
+        rng = MersenneTwister(603)
+        for n in 0:3, m in 0:3, trial in 1:3
+            A = Tuple{R,R}[]
+            B = Tuple{R,R}[]
+            for (bars, count) in ((A, n), (B, m))
+                for _ in 1:count
+                    birth = R(rand(rng, -3:3))/3
+                    push!(bars, (birth, birth + R(rand(rng, 0:5))/3))
+                end
+            end
+            @test F2D._exact_matching_bottleneck(A, B) == exhaustive_partial_matching(A, B)
+        end
+        # Equal cardinalities must still allow every finite bar to use the diagonal.
+        @test F2D._exact_matching_bottleneck(Tuple{R,R}[(0, 1)], Tuple{R,R}[(10, 11)]) == 1//2
+        @test F2D._exact_matching_bottleneck(Tuple{R,R}[(0, 0)], Tuple{R,R}[]) == 0
+        # Unrestricted essential bars differ from the finite-window quantity.
+        @test TO.SliceInvariants.bottleneck_distance([(0.0, Inf)], [(2.0, Inf)]) == 2.0
+        @test TO.SliceInvariants.bottleneck_distance([(0.0, Inf)], [(0.0, Inf)]) == 0.0
+        @test TO.SliceInvariants.bottleneck_distance([(-Inf, 0.0)], [(-Inf, 2.0)]) == 2.0
+        @test TO.SliceInvariants.bottleneck_distance([(0.0, Inf), (4.0, Inf)],
+            [(3.0, Inf), (1.0, Inf)]) == 1.0
+        @test TO.SliceInvariants.bottleneck_distance([(0.0, Inf), (4.0, Inf)], [(0.0, Inf)]) == Inf
+        @test TO.SliceInvariants.bottleneck_distance([(0.0, Inf)], [(-Inf, 0.0)]) == Inf
+        @test TO.SliceInvariants.bottleneck_distance([(0.0, Inf)], Tuple{Float64,Float64}[]) == Inf
+    end
+end
+
+@testset "A03 representative kernels and explicit geometry failures" begin
+    F2D = TO.Fibered2D
+    P, pi, modules = _a03_rectangle_modules([0.0, 1.0], [0.0, 1.0],
+        [((0.0, 0.0), (1.0, 1.0))])
+    M = only(modules)
+    Z = MD.zero_pmodule(P; field=field)
+    opts = TO.InvariantOptions(box=([0.0, 0.0], [1.0, 1.0]), threads=false)
+    arr = F2D.fibered_arrangement_2d(pi, opts; normalize_dirs=:L1)
+    cacheM = F2D.fibered_barcode_cache_2d(M, arr; precompute=:none)
+    cacheZ = F2D.fibered_barcode_cache_2d(Z, arr; precompute=:none)
+    # The representative slopes are 1/2 and 2, each with three offset
+    # midpoints. Their unweighted barcode distances are 3/8, 3/4, 3/8.
+    # Thus this quadrature is independently known, without comparing two
+    # implementations using the same representative list.
+    expected = (2exp(-9 / 128) + exp(-9 / 32)) / 3
+    @test isapprox(F2D.matching_distance_sampled_2d(cacheM, cacheZ; threads=false), 0.25; atol=1e-12)
+    @test isapprox(F2D.slice_kernel(cacheM, cacheZ;
+        kind=:bottleneck_gaussian, sigma=1.0, normalize_weights=true, threads=false), expected; atol=1e-12)
+    @test isapprox(F2D.slice_kernel(cacheM, cacheZ;
+        kind=:bottleneck_gaussian, sigma=1.0, normalize_weights=false, threads=false), 2expected; atol=1e-12)
+    @test F2D.slice_kernel(cacheM, cacheM;
+        kind=:bottleneck_gaussian, sigma=1.0, normalize_weights=true, threads=false) == 1.0
+    @test isapprox(F2D.slice_kernel(cacheM, cacheZ;
+        kind=:wasserstein_gaussian, sigma=1.0, normalize_weights=true, threads=false), expected; atol=1e-12)
+    @test isapprox(F2D.slice_kernel(cacheZ, cacheM;
+        kind=:bottleneck_gaussian, sigma=1.0, normalize_weights=true, threads=false), expected; atol=1e-12)
+    family = F2D.fibered_slice_family_2d(arr; direction_weight=:lesnick_l1, store_values=false)
+    @test isapprox(F2D.slice_kernel(cacheM, cacheZ;
+        kind=:bottleneck_gaussian, sigma=1.0, family=family, threads=false), expected; atol=1e-12)
+    if Threads.nthreads() > 1
+        @test isapprox(F2D.slice_kernel(cacheM, cacheZ;
+            kind=:bottleneck_gaussian, sigma=1.0, threads=true), expected; atol=1e-12)
+        @test isapprox(F2D.matching_distance_sampled_2d(cacheM, cacheZ; threads=true), 0.25; atol=1e-12)
+    end
+
+    if field isa CM.QQField
+        hp = PLP.make_hpoly([-1.0 0.0; 0.0 -1.0; 1.0 0.0; 0.0 1.0], [0.0, 0.0, 1.0, 1.0])
+        pi_poly = PLP.PLEncodingMap(2, [BitVector([false])], [BitVector([false])], [hp], [(0.5, 0.5)])
+        Ppoly = chain_poset(1)
+        Mpoly = IR.pmodule_from_fringe(one_by_one_fringe(Ppoly, FF.principal_upset(Ppoly, 1),
+            FF.principal_downset(Ppoly, 1), cf(1); field=field))
+        Zpoly = MD.zero_pmodule(Ppoly; field=field)
+        @test_throws ArgumentError F2D.matching_distance_exact_2d(Mpoly, Zpoly, pi_poly, opts)
+        @test_throws ArgumentError F2D.fibered_arrangement_2d(pi_poly, opts; max_combinations=0)
+        @test_throws ArgumentError F2D.fibered_arrangement_2d(pi_poly, opts; max_vertices=0)
+        arr_poly = F2D.fibered_arrangement_2d(pi_poly, opts)
+        cpM = F2D.fibered_barcode_cache_2d(Mpoly, arr_poly; precompute=:none)
+        cpZ = F2D.fibered_barcode_cache_2d(Zpoly, arr_poly; precompute=:none)
+        @test_throws ArgumentError F2D.matching_distance_exact_2d(cpM, cpZ)
+        @test isapprox(F2D.matching_distance_sampled_2d(cpM, cpZ; threads=false), 0.25; atol=1e-12)
+    end
+end
+
+@testset "A03 geometric slice reductions own their threaded workspaces" begin
+    SI = TO.SliceInvariants
+    P, pi, modules = _a03_rectangle_modules([0.0, 2.25, 3.0], [0.0, 2.25, 3.0],
+        [((0.0, 0.0), (3.0, 3.0)), ((0.0, 0.0), (2.25, 2.25))])
+    M, N = modules
+    directions = [[1.0, 1.0], [1.0, 3.0]]
+    offsets = [[0.0, 3j/16] for j in 0:15]
+    box = ([0.0, 0.0], [3.0, 3.0])
+    # Every interval endpoint is a multiple of 1/8, so explicit parameters
+    # avoid geometric sampling error. At offset (0,s), the unweighted
+    # bottleneck is min(3/4, (3-s)/2) / dir[2]. The two L1-normalized
+    # directions have weights 1/2 and 1/4. Summing these known values gives
+    # max=3/4, weighted mean=25/24, and weighted mean square=1969/1536.
+    ts = collect(0.0:0.125:6.0)
+    for (mode, aggregate, expected) in ((:scale, :mean, 0.75),
+                                       (:integrate, :max, 0.75),
+                                       (:integrate, :mean, 25/24),
+                                       (:integrate, :pmean, sqrt(1969/1536))),
+        cache_value in (nothing, SI.SlicePlanCache())
+        saved_fastpath = SI._SLICE_USE_PACKED_DISTANCE_FASTPATH[]
+        try
+            SI._SLICE_USE_PACKED_DISTANCE_FASTPATH[] = true
+            serial = SI._slice_based_barcode_distance(M, N, pi;
+                dirs=directions, offs=offsets, normalize_dirs=:L1,
+                weight=:lesnick_l1, weight_mode=mode, agg=aggregate, agg_p=2.0,
+                normalize_weights=false, threads=false, cache=cache_value, box=box, ts=ts)
+            @test isapprox(serial, expected; atol=1e-12, rtol=1e-12)
+            if Threads.nthreads() > 1
+                for _ in 1:3
+                    parallel = SI._slice_based_barcode_distance(M, N, pi;
+                        dirs=directions, offs=offsets, normalize_dirs=:L1,
+                        weight=:lesnick_l1, weight_mode=mode, agg=aggregate, agg_p=2.0,
+                        normalize_weights=false, threads=true, cache=cache_value, box=box, ts=ts)
+                    @test isapprox(parallel, expected; atol=1e-12, rtol=1e-12)
+                end
+            end
+            SI._SLICE_USE_PACKED_DISTANCE_FASTPATH[] = false
+            fallback = SI._slice_based_barcode_distance(M, N, pi;
+                dirs=directions, offs=offsets, normalize_dirs=:L1,
+                weight=:lesnick_l1, weight_mode=mode, agg=aggregate, agg_p=2.0,
+                normalize_weights=false, threads=false, cache=cache_value, box=box, ts=ts)
+            @test isapprox(fallback, expected; atol=1e-12, rtol=1e-12)
+        finally
+            SI._SLICE_USE_PACKED_DISTANCE_FASTPATH[] = saved_fastpath
+        end
+    end
+    opts = TO.InvariantOptions(box=box, threads=false)
+    @test isapprox(SI.matching_distance_approx(M, N, pi, opts;
+        directions=directions, offsets=offsets, ts=ts, cache=nothing), 0.75; atol=1e-12)
+    # Public barcode grids must keep direction rows aligned with offset
+    # columns on both routes. Here each M-bar is [0, (3-s)/direction_y).
+    for cache_value in (nothing, SI.SlicePlanCache())
+        result = SI.slice_barcodes(M, pi; opts=opts, directions=directions,
+            offsets=offsets, normalize_dirs=:L1, ts=ts, threads=false, cache=cache_value)
+        bars = SI.slice_barcodes(result)
+        for i in eachindex(directions), j in eachindex(offsets)
+            dy = directions[i][2] / sum(directions[i])
+            @test bars[i, j] == Dict((0.0, (3.0 - offsets[j][2]) / dy) => 1)
+        end
+    end
+end
+
+@testset "A04 bottleneck distances and matching witnesses" begin
+    if field isa CM.QQField
+        # Enumerate partial injections directly: every unmatched interval on
+        # either side pays half its lifetime. This oracle does not construct
+        # the augmented bipartite graph used by the implementation.
+        coordinate_cost(x, y) = x == y ? zero(x) : abs(x - y)
+        interval_cost(a, b) = max(coordinate_cost(a[1], b[1]), coordinate_cost(a[2], b[2]))
+        diagonal_cost(a) = (a[2] - a[1]) / 2
+        function exhaustive_bottleneck(A, B)
+            used = falses(length(B))
+            cost0 = isempty(A) ? (isempty(B) ? 0.0 : zero(B[1][1])) : zero(A[1][1])
+            function visit(i, cost)
+                if i > length(A)
+                    return max(cost, maximum((diagonal_cost(B[j]) for j in eachindex(B)
+                        if !used[j]); init=cost0))
+                end
+                best = visit(i + 1, max(cost, diagonal_cost(A[i])))
+                for j in eachindex(B)
+                    used[j] && continue
+                    used[j] = true
+                    best = min(best, visit(i + 1, max(cost, interval_cost(A[i], B[j]))))
+                    used[j] = false
+                end
+                return best
+            end
+            return visit(1, cost0)
+        end
+        function check_witness(witness, A, B)
+            @test length(witness.a_to_b) == length(A)
+            @test length(witness.b_to_a) == length(B)
+            @test all(j -> 0 <= j <= length(B), witness.a_to_b)
+            @test all(i -> 0 <= i <= length(A), witness.b_to_a)
+            @test all(i -> witness.a_to_b[i] == 0 ||
+                witness.b_to_a[witness.a_to_b[i]] == i, eachindex(A))
+            @test all(j -> witness.b_to_a[j] == 0 ||
+                witness.a_to_b[witness.b_to_a[j]] == j, eachindex(B))
+            # Inverse consistency also excludes reusing a real interval.
+            cost = maximum((witness.a_to_b[i] == 0 ? diagonal_cost(A[i]) :
+                interval_cost(A[i], B[witness.a_to_b[i]]) for i in eachindex(A)); init=0.0)
+            cost = max(cost, maximum((diagonal_cost(B[j]) for j in eachindex(B)
+                if witness.b_to_a[j] == 0); init=0.0))
+            @test cost == witness.distance
+        end
+
+        empty_diagram = Tuple{Float64,Float64}[]
+        fixtures = [
+            (empty_diagram, empty_diagram, 0.0),
+            ([(0.0, 1.0)], [(10.0, 11.0)], 0.5),
+            ([(0.0, 4.0), (2.0, 6.0)], [(1.0, 5.0), (0.0, 4.0)], 1.0),
+            ([(0.0, 1.0), (3.0, 5.0)], empty_diagram, 1.0),
+            (empty_diagram, [(0.0, 1.0), (3.0, 5.0)], 1.0),
+            ([(0.0, 0.0), (4.0, 4.0)], empty_diagram, 0.0),
+            ([(0.0, 2.0), (0.0, 2.0)], [(0.0, 2.0)], 1.0),
+            ([(0.0, 1.0)], [(0.5, 1.5)], 0.5),
+            ([(0.0, Inf)], [(2.0, Inf)], 2.0),
+            ([(-Inf, 0.0)], [(-Inf, 2.0)], 2.0),
+            ([(-Inf, Inf)], [(-Inf, Inf)], 0.0),
+            ([(0.0, Inf), (4.0, Inf)], [(3.0, Inf), (1.0, Inf)], 1.0),
+            ([(0.0, Inf), (0.0, 1.0)], [(0.0, Inf), (10.0, 11.0)], 0.5),
+            ([(0.0, Inf), (4.0, Inf)], [(0.0, Inf)], Inf),
+            ([(0.0, Inf)], [(-Inf, 0.0)], Inf),
+            ([(-Inf, Inf)], empty_diagram, Inf),
+        ]
+        for (A, B, expected) in fixtures
+            @test exhaustive_bottleneck(A, B) == expected
+            @test SI.bottleneck_distance(A, B) == expected
+            @test SI.bottleneck_distance(B, A; backend=:hk) == expected
+            witness = SI.bottleneck_matching(A, B)
+            @test witness.distance == expected
+            @test witness.points_a == A
+            @test witness.points_b == B
+            @test witness == SI.bottleneck_matching(A, B; backend=:hk)
+            check_witness(witness, A, B)
+        end
+        # At equal cardinality both bars must be allowed to disappear.
+        diagonal_witness = SI.bottleneck_matching([(0.0, 1.0)], [(10.0, 11.0)])
+        @test diagonal_witness.a_to_b == [0]
+        @test diagonal_witness.b_to_a == [0]
+        augmenting_witness = SI.bottleneck_matching([(0.0, 4.0), (2.0, 6.0)],
+            [(1.0, 5.0), (0.0, 4.0)])
+        @test augmenting_witness.a_to_b == [2, 1]
+        # A representable deletion cost must not overflow while first forming
+        # the full lifetime between endpoints of opposite signs.
+        widest_interval = [(-floatmax(Float64), floatmax(Float64))]
+        @test SI.bottleneck_distance(widest_interval, empty_diagram) == floatmax(Float64)
+        widest_witness = SI.bottleneck_matching(widest_interval, empty_diagram)
+        @test widest_witness.distance == floatmax(Float64)
+        @test widest_witness.a_to_b == [0]
+
+        rng = MersenneTwister(604)
+        for n in 0:4, m in 0:4, trial in 1:3
+            A = Tuple{Float64,Float64}[]
+            B = Tuple{Float64,Float64}[]
+            for (bars, count) in ((A, n), (B, m))
+                for _ in 1:count
+                    birth = rand(rng, -8:8) / 4
+                    push!(bars, (birth, birth + rand(rng, 0:12) / 4))
+                end
+            end
+            expected = exhaustive_bottleneck(A, B)
+            witness = SI.bottleneck_matching(A, B)
+            @test SI.bottleneck_distance(A, B) == expected
+            @test SI.bottleneck_distance(B, A) == expected
+            @test witness.distance == expected
+            check_witness(witness, A, B)
+            # The pooled MPPI route consumes views of diagram point vectors.
+            pooled = vcat(A, B)
+            pooled_witness = SI._bottleneck_matching_points(
+                view(pooled, 1:n), view(pooled, (n + 1):(n + m)))
+            @test pooled_witness.distance == expected
+            @test pooled_witness.a_to_b == witness.a_to_b
+            @test pooled_witness.b_to_a == witness.b_to_a
+        end
+
+        # Dictionary multiplicities expand in lexicographic order, whereas
+        # vector positions are retained so indices have an unambiguous meaning.
+        dictionary_entries = [(3.0, 4.0) => 1, (-2.0, 1.0) => 2, (0.0, 1.0) => 0]
+        dictionaryA = Dict(dictionary_entries)
+        dictionaryB = Dict((3.0, 4.0) => 1, (-2.0, 1.0) => 1)
+        dictionary_witness = SI.bottleneck_matching(dictionaryA, dictionaryB)
+        @test dictionary_witness.points_a == [(-2.0, 1.0), (-2.0, 1.0), (3.0, 4.0)]
+        @test dictionary_witness.points_b == [(-2.0, 1.0), (3.0, 4.0)]
+        @test dictionary_witness.distance == 1.5
+        @test dictionary_witness == SI.bottleneck_matching(Dict(reverse(dictionary_entries)), dictionaryB)
+        check_witness(dictionary_witness, dictionary_witness.points_a, dictionary_witness.points_b)
+        vectorA = [(3.0, 4.0), (-2.0, 1.0)]
+        vector_witness = SI.bottleneck_matching(vectorA, vectorA)
+        @test vector_witness.points_a == vectorA
+        @test vector_witness.points_b == vectorA
+        @test vector_witness.points_a !== vectorA
+        @test vector_witness.points_b !== vectorA
+        vectorA[1] = (20.0, 21.0)
+        @test vector_witness.points_a == [(3.0, 4.0), (-2.0, 1.0)]
+        @test vector_witness.points_b == [(3.0, 4.0), (-2.0, 1.0)]
+
+        # The shared engine must retain rational arithmetic for A03's exact
+        # optimizer, even when Float64 cannot resolve the interval lifetime.
+        R = Rational{BigInt}
+        large_birth = R(big(10)^25)
+        exactA = Tuple{R,R}[(large_birth, large_birth + 1//3)]
+        exactB = Tuple{R,R}[]
+        exact_witness = SI._bottleneck_matching_points(exactA, exactB)
+        @test exact_witness.distance isa R
+        @test exact_witness.distance == 1//6
+        @test exact_witness.a_to_b == [0]
+        @test isempty(exact_witness.b_to_a)
+        @test TO.Fibered2D._exact_matching_bottleneck(exactA, exactB) == 1//6
+
+        for invalid in ([(NaN, 1.0)], [(0.0, NaN)], [(2.0, 1.0)],
+                        [(Inf, Inf)], [(-Inf, -Inf)], [(Inf, 0.0)],
+                        Dict((0.0, 1.0) => -1), Dict((0.0, 1.0) => 1.5),
+                        Dict((0.0, 1.0) => 1.0))
+            for metric in (SI.bottleneck_distance, SI.bottleneck_matching)
+                @test_throws ArgumentError metric(invalid, empty_diagram)
+                @test_throws ArgumentError metric(empty_diagram, invalid)
+            end
+        end
+        for metric in (SI.bottleneck_distance, SI.bottleneck_matching)
+            @test_throws ArgumentError metric(empty_diagram, empty_diagram; backend=:invalid)
+            @test_throws ArgumentError metric([(0.0, 1.0)], [(0.0, 1.0)]; backend=:invalid)
+        end
+        @test TO.Advanced.bottleneck_distance === SI.bottleneck_distance
+        @test TO.Advanced.bottleneck_matching === SI.bottleneck_matching
+        @test TO.Advanced.bottleneck_distance([(0.0, 1.0)], [(10.0, 11.0)]) == 0.5
+        @test TO.Advanced.bottleneck_matching([(0.0, 1.0)], [(10.0, 11.0)]) == diagonal_witness
+        @test Inv.bottleneck_matching === SI.bottleneck_matching
+        @test_throws ArgumentError SI.matching_distance(empty_diagram, empty_diagram; backend=:invalid)
+    end
+end
+
+@testset "A04 MPPI track geometry and image oracles" begin
+    if field isa CM.QQField
+        MI = TO.MultiparameterImages
+        omega = inv(sqrt(2.0))
+        box = ([0.0, 0.0], [3.0, 3.0])
+        lines = [MI.MPPLineSpec([0.5, 0.5], 0.0, [0.0, 0.0], omega),
+                 MI.MPPLineSpec([0.5, 0.5], 0.5, [-0.5, 0.5], omega)]
+        bars = [(0.0, 2.0), (3.0, 5.0)]
+        for line in lines
+            @test MI.check_mpp_line_spec(line).valid
+        end
+        # Physical segments are [(0,0),(1,1)] and [(1,2),(2,3)]. The
+        # bottleneck deletes both bars, so neither track has positive hull
+        # area. The former forced cross-match gave one hull of area 1,
+        # weight 1/9, and origin pixel 1/(9sqrt(2)) at q=1.
+        for q in (0.0, 1.0)
+            decomp = MI._mpp_decomposition_from_barcodes(lines, bars, [1, 1], box; q=q)
+            @test MI.nsummands(decomp) == 2
+            @test [length(MI.summand_segments(decomp, i)) for i in 1:2] == [1, 1]
+            @test only(MI.summand_segments(decomp, 1)).p == (0.0, 0.0)
+            @test only(MI.summand_segments(decomp, 1)).q == (1.0, 1.0)
+            @test only(MI.summand_segments(decomp, 2)).p == (1.0, 2.0)
+            @test only(MI.summand_segments(decomp, 2)).q == (2.0, 3.0)
+            @test MI.summand_weights(decomp) == (q == 0.0 ? [1.0, 1.0] : [0.0, 0.0])
+            @test MI.check_mpp_decomposition(decomp).valid
+            expected_origin = q == 0.0 ? (1.0 + exp(-5.0)) / sqrt(2.0) : 0.0
+            image = MI.mpp_image(decomp; xgrid=[0.0, 3.0], ygrid=[0.0, 3.0],
+                                 sigma=1.0, threads=false)
+            @test isapprox(MI.image_values(image)[1, 1], expected_origin; atol=1e-14, rtol=1e-14)
+            @test MI.check_mpp_image(image).valid
+            if q == 1.0
+                @test MI.image_values(image) == zeros(2, 2)
+            end
+            for prune in (false, true), threaded in (false, true)
+                threaded && Threads.nthreads() == 1 && continue
+                image_variant = MI.mpp_image(decomp; xgrid=image.xgrid, ygrid=image.ygrid,
+                    sigma=1.0, segment_prune=prune, threads=threaded)
+                @test MI.image_values(image_variant) == MI.image_values(image)
+            end
+            mktempdir() do dir
+                decomposition_path = joinpath(dir, "decomposition.json")
+                image_path = joinpath(dir, "image.json")
+                SER.save_mpp_decomposition_json(decomposition_path, decomp)
+                SER.save_mpp_image_json(image_path, image)
+                @test SER.check_mpp_decomposition_json(decomposition_path).valid
+                @test SER.check_mpp_image_json(image_path).valid
+                for validation in (:strict, :trusted)
+                    restored = SER.load_mpp_decomposition_json(decomposition_path; validation=validation)
+                    @test MI.line_specs(restored) == lines
+                    @test MI.summand_weights(restored) == MI.summand_weights(decomp)
+                    @test restored.summands == decomp.summands
+                    restored_image = MI.mpp_image(restored; xgrid=image.xgrid, ygrid=image.ygrid,
+                        sigma=1.0, threads=false)
+                    @test MI.image_values(restored_image) == MI.image_values(image)
+                    image_roundtrip = SER.load_mpp_image_json(image_path; validation=validation)
+                    @test MI.image_values(image_roundtrip) == MI.image_values(image)
+                    @test MI.decomposition(image_roundtrip).summands == decomp.summands
+                end
+            end
+        end
+
+        zero_bars = Dict((0.0, 0.0) => 2, (1.0, 1.0) => 1)
+        @test MI._barcode_point_count(zero_bars) == 0
+        empty_pool = Tuple{Float64,Float64}[]
+        @test MI._fill_barcode_points!(empty_pool, 1, zero_bars) == 1
+        empty_decomp = MI._mpp_decomposition_from_barcodes(lines, empty_pool, [0, 0], box; q=0)
+        @test MI.nsummands(empty_decomp) == 0
+        @test MI.total_segments(empty_decomp) == 0
+        @test MI.describe(empty_decomp).total_segments == 0
+        @test occursin("sampled_tracks=0", repr(empty_decomp))
+        @test MI.image_values(MI.mpp_image(empty_decomp; resolution=2, threads=false)) == zeros(2, 2)
+        # Empty intermediate slices terminate tracks; matching must not skip
+        # over the empty slice and connect two separate nonempty runs.
+        split = MI._mpp_decomposition_from_barcodes([lines[1], lines[1], lines[1]],
+            [(0.0, 2.0), (0.0, 2.0)], [1, 0, 1], box; q=0)
+        @test MI.nsummands(split) == 2
+        @test length.(split.summands) == [1, 1]
+        mixed_bars = Dict((4.0, 4.0) => 3, (0.0, 2.0) => 2, (3.0, 4.0) => 1)
+        @test MI._barcode_point_count(mixed_bars) == 3
+        pooled = Vector{Tuple{Float64,Float64}}(undef, 3)
+        @test MI._fill_barcode_points!(pooled, 1, mixed_bars) == 4
+        @test pooled == [(0.0, 2.0), (0.0, 2.0), (3.0, 4.0)]
+        duplicates = MI._mpp_decomposition_from_barcodes(lines,
+            fill((0.0, 2.0), 4), [2, 2], box; q=0)
+        @test MI.nsummands(duplicates) == 2
+        @test length.(duplicates.summands) == [2, 2]
+        @test isapprox(MI.image_values(MI.mpp_image(duplicates;
+            xgrid=[0.0, 3.0], ygrid=[0.0, 3.0], sigma=1.0, threads=false))[1, 1],
+            sqrt(2.0); atol=1e-14)
+
+        # Parameter t changes under direction normalization. The physical
+        # arclength intervals [0,2] and [0.9,2.9] have bottleneck 0.9, below
+        # their deletion cost 1. Hence they belong to one two-segment track
+        # for both normalizations, although matching raw t can split them.
+        physical_directions = [[cos(pi / 12), sin(pi / 12)], [cos(pi / 4), sin(pi / 4)]]
+        normalized_images = Matrix{Float64}[]
+        for normalization in (:L1, :Linf)
+            normalized_lines = MI.MPPLineSpec[]
+            normalized_bars = Tuple{Float64,Float64}[]
+            for (u, interval) in zip(physical_directions, ((0.0, 2.0), (0.9, 2.9)))
+                d = u / (normalization == :L1 ? sum(u) : maximum(u))
+                push!(normalized_lines, MI.MPPLineSpec(d, 0.0, [0.0, 0.0], minimum(u)))
+                push!(normalized_bars, (interval[1] / norm(d), interval[2] / norm(d)))
+            end
+            decomp = MI._mpp_decomposition_from_barcodes(normalized_lines, normalized_bars,
+                [1, 1], box; q=1)
+            @test MI.nsummands(decomp) == 1
+            segments = MI.summand_segments(decomp, 1)
+            @test length(segments) == 2
+            @test isapprox(collect(segments[1].p), [0.0, 0.0]; atol=1e-14)
+            @test isapprox(collect(segments[1].q), 2physical_directions[1]; atol=1e-14)
+            @test isapprox(collect(segments[2].p), 0.9physical_directions[2]; atol=1e-14)
+            @test isapprox(collect(segments[2].q), 2.9physical_directions[2]; atol=1e-14)
+            # The hull is the triangle 0, 2u, 2.9v, of area
+            # (2*2.9/2)*sin(pi/6) = 1.45, in a box of area 9.
+            @test isapprox(only(MI.summand_weights(decomp)), 1.45 / 9; atol=1e-14)
+            image = MI.mpp_image(decomp; xgrid=[0.0, 1.0], ygrid=[0.0, 1.0], sigma=1.0, threads=false)
+            @test isapprox(MI.image_values(image)[1, 1], (1.45 / 9) * sin(pi / 12); atol=1e-14)
+            push!(normalized_images, MI.image_values(image))
+        end
+        @test isapprox(normalized_images[1], normalized_images[2]; atol=1e-14)
+
+        # Several index bars can acquire the same endpoints when a query is
+        # on an arrangement boundary. All materialization routes must add
+        # their multiplicities instead of overwriting the first interval.
+        packed = IC.PackedIndexBarcode([IC.EndpointPair(1, 3), IC.EndpointPair(2, 3)], [1, 1])
+        values = [0.0, 0.0, 1.0]
+        expected_collision = Dict((0.0, 1.0) => 2)
+        @test IC._float_barcode_from_index_packed_values(packed, values) == expected_collision
+        float_packed = IC._float_packed_from_index_packed_values(packed, values)
+        @test IC._barcode_from_packed(float_packed) == expected_collision
+        @test IC._to_float_barcode(float_packed) == expected_collision
+        grid = IC.PackedBarcodeGrid{IC.PackedFloatBarcode}([float_packed], 1, 1)
+        @test IC._float_dict_matrix_from_packed_grid(grid)[1, 1] == expected_collision
+        index_bars = Dict((1, 3) => 1, (2, 3) => 1)
+        @test TO.Fibered2D._barcode_from_index_and_values!(Dict{Tuple{Float64,Float64},Int}(),
+            index_bars, values) == expected_collision
+        @test TO.Fibered2D._barcode_from_index_and_values!(Dict{Tuple{Float64,Float64},Int}(),
+            index_bars, [-99.0; values], 2) == expected_collision
+        rational_near_zero = big(1) // big(10)^400
+        rational_bars = Dict((0//big(1), 1//big(1)) => 1,
+            (rational_near_zero, 1//big(1)) => 1)
+        @test IC._to_float_barcode(rational_bars) == expected_collision
+    end
+end
+
+@testset "A04 MPPI physical slice families and public pipelines" begin
+    MI = TO.MultiparameterImages
+    F2D = TO.Fibered2D
+    WF = TO.Workflow
+    P, pi, modules = _a03_rectangle_modules([0.0, 1.0], [0.0, 1.0],
+        [((0.0, 0.0), (1.0, 1.0))])
+    M = only(modules)
+    Z = MD.zero_pmodule(P; field=field)
+    box = ([0.0, 0.0], [1.0, 1.0])
+    opts = TO.InvariantOptions(box=box, threads=false)
+    expected_image = sqrt(2.0) * [1.0 exp(-0.5); exp(-0.5) 1.0]
+    # A full module-to-image counterexample: disjoint unit rectangles at
+    # [0,1]^2 and [10,11] x [12,13]. At N=2 the two fan lines see one
+    # rectangle each; all three sweep lines only touch rectangle/window
+    # corners. Thus there are exactly two singleton tracks and zero hull
+    # weights at q=1. A forced cross-match creates a false positive-area hull.
+    _, separated_pi, separated_modules = _a03_rectangle_modules(
+        [0.0,1.0,10.0,11.0], [0.0,1.0,12.0,13.0],
+        [((0.0,0.0),(1.0,1.0)), ((10.0,12.0),(11.0,13.0))])
+    separated = MD.direct_sum(separated_modules...)
+    separated_opts = TO.InvariantOptions(box=([0.0,0.0],[11.0,13.0]), threads=false)
+    separated_image = MI.mpp_image(separated,separated_pi,separated_opts;
+        N=2,q=1,sigma=1.0,resolution=2,threads=false)
+    @test length.(MI.decomposition(separated_image).summands) == [1,1]
+    @test MI.summand_weights(MI.decomposition(separated_image)) == [0.0,0.0]
+    @test MI.image_values(separated_image) == zeros(2,2)
+    for normalization in (:L1, :Linf)
+        arrangement = F2D.fibered_arrangement_2d(pi, opts;
+            normalize_dirs=normalization, include_axes=true, threads=false)
+        if field isa CM.QQField
+            N = 4
+            family = MI._line_families_carriere(arrangement; N=N, delta=0.3)
+            @test length(family) == 2(N - 1) + 5
+            for (i, line) in enumerate(family)
+                n = [-line.dir[2], line.dir[1]]
+                @test isapprox(dot(n, line.x0), line.off; atol=1e-14)
+                @test isapprox(normalization == :L1 ? sum(line.dir) : maximum(line.dir), 1.0; atol=1e-14)
+                if i <= N - 1
+                    @test isapprox(dot(n, box[1]), line.off; atol=1e-14)
+                elseif i <= 2(N - 1)
+                    @test isapprox(dot(n, box[2]), line.off; atol=1e-14)
+                end
+            end
+            sweep = family[(2(N - 1) + 1):end]
+            physical_offsets = [line.off / norm(line.dir) for line in sweep]
+            @test isapprox(physical_offsets, [-inv(sqrt(2.0)) + 0.3j for j in 0:4]; atol=1e-14)
+            auto_family = MI._line_families_carriere(arrangement; N=N)
+            auto_sweep = auto_family[(2(N - 1) + 1):end]
+            @test isapprox(diff([line.off / norm(line.dir) for line in auto_sweep]),
+                fill(sqrt(2.0) / N, N); atol=1e-14)
+            @test MI._line_families_carriere(arrangement; N=N, delta=0.3, tie_break=:up) == family
+            @test MI._line_families_carriere(arrangement; N=N, delta=0.3, tie_break=:down) == family
+        end
+        for precompute in (:none, :barcodes)
+            cache = F2D.fibered_barcode_cache_2d(M, arrangement; precompute=precompute, threads=false)
+            for tie_break in (:center, :up, :down)
+                # N=2 gives two coincident fan slices, followed by a sweep
+                # with empty tangent slices around its middle diagonal.
+                # The empty slice separates a 2-segment track from a singleton.
+                decomp = MI.mpp_decomposition(cache; N=2, q=0, tie_break=tie_break)
+                @test MI.nlines(decomp) == 5
+                @test MI.nsummands(decomp) == 2
+                @test length.(decomp.summands) == [2, 1]
+                @test MI.summand_weights(decomp) == [1.0, 1.0]
+                for segments in decomp.summands, segment in segments
+                    @test isapprox(collect(segment.p), [0.0, 0.0]; atol=1e-12)
+                    @test isapprox(collect(segment.q), [1.0, 1.0]; atol=1e-12)
+                end
+                image = MI.mpp_image(cache; N=2, q=0, tie_break=tie_break,
+                    xgrid=[0.0, 1.0], ygrid=[0.0, 1.0], sigma=1.0, threads=false)
+                @test isapprox(MI.image_values(image), expected_image; atol=1e-12)
+                @test MI.check_mpp_decomposition(decomp).valid
+                @test MI.check_mpp_image(image).valid
+            end
+            if field isa CM.QQField
+                for bad_q in (-1.0, Inf, NaN)
+                    @test_throws ArgumentError MI.mpp_decomposition(cache; N=2, q=bad_q)
+                end
+                for bad_delta in (0.0, -1.0, Inf, NaN, nextfloat(0.0), :invalid)
+                    @test_throws ArgumentError MI.mpp_decomposition(cache; N=2, delta=bad_delta)
+                end
+                @test_throws ArgumentError MI.mpp_decomposition(cache; N=1)
+                @test_throws ArgumentError MI.mpp_decomposition(cache; N=2, tie_break=:invalid)
+            end
+        end
+        direct = MI.mpp_decomposition(M, pi, opts; N=2, q=0,
+            normalize_dirs=normalization, threads=false)
+        workflow = WF.mpp_decomposition(M, pi; opts=opts, N=2, q=0,
+            normalize_dirs=normalization, threads=false)
+        @test length.(direct.summands) == [2, 1]
+        @test workflow.summands == direct.summands
+        @test workflow.weights == direct.weights
+        direct_image = MI.mpp_image(M, pi, opts; N=2, q=0, sigma=1.0, resolution=2,
+            normalize_dirs=normalization, threads=false)
+        workflow_image = WF.mpp_image(M, pi; opts=opts, N=2, q=0, sigma=1.0, resolution=2,
+            normalize_dirs=normalization, threads=false)
+        @test isapprox(MI.image_values(direct_image), expected_image; atol=1e-12)
+        @test MI.image_values(workflow_image) == MI.image_values(direct_image)
+        zero_cache = F2D.fibered_barcode_cache_2d(Z, arrangement; threads=false)
+        zero_decomp = MI.mpp_decomposition(zero_cache; N=2, q=0)
+        @test MI.nsummands(zero_decomp) == 0
+        @test MI.image_values(MI.mpp_image(zero_cache; N=2, q=0, resolution=2, threads=false)) == zeros(2, 2)
+    end
+end
+
+@testset "A11 fibered caches publish cold and nested queries safely" begin
+    F2D = TO.Fibered2D
+    # The module is constantly rank one inside the unit window. Internal walls
+    # force nonempty event pools, but every line has exactly its window interval.
+    P, native_pi, modules = _a03_rectangle_modules([0.0,0.25,0.5,0.75,1.0],
+        [0.0,0.5,1.0], [((0.0,0.0),(1.0,1.0))])
+    M = only(modules)
+    Z = MD.zero_pmodule(P; field=field)
+    pi = A11CallbackBoxes(native_pi, native_pi.coords, yield)
+    opts = TO.InvariantOptions(box=([0.0,0.0],[1.0,1.0]), threads=true)
+    arr = F2D.fibered_arrangement_2d(pi, opts; precompute=:none)
+    cm = F2D.fibered_barcode_cache_2d(M, arr)
+    cz = F2D.fibered_barcode_cache_2d(Z, arr)
+    @test F2D.computed_cell_count(arr) == 0
+    @test F2D.cached_barcode_count(cm) == 0
+    function cold_queries(job)
+        local off = (job - 6) / 32
+        local bar = F2D.fibered_barcode(cm, [1.0,1.0], off)
+        local fam = F2D.fibered_slice_family_2d(arr; store_values=isodd(job))
+        local sampled = F2D.matching_distance_sampled_2d(cm, cz; family=fam, threads=true)
+        local kernel = F2D.slice_kernel(cm, cz; family=fam, threads=true)
+        # Exercise the other payload store too, not just the distance points.
+        local packed = F2D._precompute_family_barcodes!(cm, fam; threads=true)
+        return (off, bar, fam, sampled, kernel, packed)
+    end
+    tasks = [Threads.@spawn cold_queries(job) for job in 1:12]
+    observer = Threads.@spawn begin
+        for _ in 1:12
+            @test F2D.check_fibered_barcode_cache_2d(cm).valid
+            @test F2D.fibered_barcode_cache_stats(cm).n_cells_computed <= F2D.ncells(arr)
+            yield()
+        end
+    end
+    results = fetch.(tasks)
+    fetch(observer)
+    for (off, bar, fam, sampled, kernel, payload) in results
+        @test bar == Dict((2abs(off), 2 - 2abs(off)) => 1)
+        # Compute line/window intersections without the cached chain or values.
+        local weighted_distances = Float64[]
+        local weighted_kernels = Float64[]
+        local weights = Float64[]
+        for k in 1:F2D.nslices(fam)
+            local d = F2D.direction_representatives(arr)[fam.dir_idx[k]]
+            local normal = [-d[2], d[1]]
+            local x0 = fam.off_mid[k] .* normal ./ sum(abs2, normal)
+            local birth = max(-x0[1]/d[1], -x0[2]/d[2])
+            local death = min((1-x0[1])/d[1], (1-x0[2])/d[2])
+            local distance = max(0.0, death-birth)/2
+            local weight = min(d...)
+            push!(weighted_distances, weight*distance)
+            push!(weighted_kernels, weight*exp(-distance^2/2))
+            push!(weights, weight)
+        end
+        @test isapprox(sampled, maximum(weighted_distances); atol=1e-12)
+        @test isapprox(kernel, sum(weighted_kernels)/sum(weights); atol=1e-12)
+        @test F2D.check_fibered_slice_family_2d(fam).valid
+        @test payload.n_computed == F2D.nslices(fam)
+        @test payload.n_computed == count(!isnothing, payload.packed_barcodes)
+    end
+    @test all(results[j][3] === results[isodd(j) ? 1 : 2][3] for j in 1:12)
+    @test F2D.computed_cell_count(arr) == F2D.ncells(arr)
+    @test F2D.computed_cell_count(arr) == count(!iszero, arr.cell_chain_id)
+    @test F2D.chain_count(arr) == length(unique(arr.chains))
+    @test sum(arr.cell_event_len) == length(arr.event_pool)
+    @test F2D.cached_barcode_count(cm) == count(!isnothing, cm.index_barcodes_packed)
+    @test F2D.check_fibered_barcode_cache_2d(cm).valid
+    @test F2D.check_fibered_barcode_cache_2d(cz).valid
+
+    # Geometry callbacks run without cache locks, can query the same cache from
+    # another task, and leave no partial cell behind if construction throws.
+    hook = Ref{Function}(() -> nothing)
+    nested_pi = A11CallbackBoxes(native_pi, native_pi.coords, () -> hook[]())
+    nested_arr = F2D.fibered_arrangement_2d(nested_pi, opts; precompute=:none)
+    nested_cache = F2D.fibered_barcode_cache_2d(M, nested_arr)
+    hook[] = () -> error("A11 injected locate failure")
+    @test_throws ErrorException F2D.fibered_barcode(nested_cache, [1.0,1.0], 0.125)
+    @test F2D.computed_cell_count(nested_arr) == 0
+    @test F2D.chain_count(nested_arr) == 0
+    @test isempty(nested_arr.event_pool)
+    nested_bar = Ref(Dict{Tuple{Float64,Float64},Int}())
+    entered = Ref(false)
+    hook[] = function ()
+        @test !islocked(nested_arr.lock)
+        @test !islocked(nested_cache.lock)
+        if !entered[]
+            entered[] = true
+            nested_bar[] = fetch(Threads.@spawn F2D.fibered_barcode(nested_cache, [1.0,1.0], -0.125))
+        end
+        yield()
+    end
+    @test F2D.fibered_barcode(nested_cache, [1.0,1.0], 0.125) == Dict((0.25,1.75)=>1)
+    @test nested_bar[] == Dict((0.25,1.75)=>1)
+    @test F2D.check_fibered_barcode_cache_2d(nested_cache).valid
+
+    # Exact optimization can add chains after a representative family is ready.
+    # Simultaneous exact/sample queries must not race vector growth or counters.
+    Punit, unit_pi, unit_modules = _a03_rectangle_modules([0.0,1.0], [0.0,1.0],
+        [((0.0,0.0),(1.0,1.0))])
+    unit_arr = F2D.fibered_arrangement_2d(unit_pi, opts)
+    unit_m = F2D.fibered_barcode_cache_2d(only(unit_modules), unit_arr)
+    unit_z = F2D.fibered_barcode_cache_2d(MD.zero_pmodule(Punit; field=field), unit_arr)
+    function mixed_distance(job)
+        if isodd(job)
+            return F2D.matching_distance_exact_2d(unit_m, unit_z; threads=true)
+        end
+        return F2D.matching_distance_sampled_2d(unit_m, unit_z; threads=true)
+    end
+    distances = fetch.([Threads.@spawn mixed_distance(job) for job in 1:8])
+    @test all(isapprox(distances[j], isodd(j) ? 0.5 : 0.25; atol=1e-12) for j in 1:8)
+    @test F2D.check_fibered_barcode_cache_2d(unit_m).valid
+    @test F2D.check_fibered_barcode_cache_2d(unit_z).valid
+
+    # Pushforward on a three-point chain gives [1,3) and [2,3), respectively.
+    Q = chain_poset(3)
+    M23 = IR.pmodule_from_fringe(one_by_one_fringe(Q, FF.principal_upset(Q,2),
+        FF.principal_downset(Q,3), cf(1); field=field))
+    M3 = IR.pmodule_from_fringe(one_by_one_fringe(Q, FF.principal_upset(Q,3),
+        FF.principal_downset(Q,3), cf(1); field=field))
+    projections = F2D.projected_arrangement(Q, [0.0,1.0,2.0])
+    pc23 = F2D.projected_barcode_cache(M23, projections)
+    pc3 = F2D.projected_barcode_cache(M3, projections)
+    function cold_projection()
+        local packed = F2D._projected_packed_barcode(pc23, 1)
+        local bars = F2D.projected_barcodes(F2D.projected_barcodes(pc23; threads=true))
+        local distance = F2D.projected_distance(pc23, pc3; dist=:bottleneck, agg=:mean, threads=true)
+        local kernel = F2D.projected_kernel(pc23, pc23; kind=:wasserstein_gaussian, agg=:mean, threads=true)
+        return (packed, bars, distance, kernel)
+    end
+    projection_tasks = [Threads.@spawn cold_projection() for _ in 1:8]
+    if Threads.nthreads(:interactive) > 0
+        push!(projection_tasks, Threads.@spawn :interactive cold_projection())
+    end
+    projection_results = fetch.(projection_tasks)
+    for (packed, bars, distance, kernel) in projection_results
+        @test packed === projection_results[1][1]
+        @test bars == [Dict((1.0,3.0)=>1)]
+        @test distance == 1.0
+        @test kernel == 1.0
+    end
+    @test F2D.computed_projection_count(pc23) == 1
+    @test F2D.computed_projection_count(pc3) == 1
+    @test F2D.check_projected_barcode_cache(pc23).valid
+    @test F2D.check_projected_barcode_cache(pc3).valid
+end
+
+@testset "A11 rank flags and yielded slice scratch are task owned" begin
+    n = 67 # Adjacent row ranges share BitVector words in the old implementation.
+    P = chain_poset(n)
+    dims = [3 <= i <= 61 ? 1 : 0 for i in 1:n]
+    M = MD.PModule{K}(P, dims,
+        Dict((i,i+1) => fill(one(K), dims[i+1], dims[i]) for i in 1:n-1); field=field)
+    expected_rank = Dict((a,b) => (3 <= a <= b <= 61 ? 1 : 0)
+        for a in 1:n for b in a:n)
+    rank_task() = Dict(Inv.rank_invariant(M, TO.InvariantOptions(threads=true); store_zeros=true))
+    @test rank_task() == expected_rank
+    @test Dict(Inv.rank_invariant(M, TO.InvariantOptions(threads=false); store_zeros=true)) == expected_rank
+    jobs = [Threads.@spawn rank_task() for _ in 1:4]
+    @test all(fetch(task) == expected_rank for task in jobs)
+    nested = Vector{Bool}(undef, 3)
+    Threads.@threads for i in eachindex(nested)
+        nested[i] = rank_task() == expected_rank
+    end
+    @test all(nested)
+    if Threads.nthreads(:interactive) > 0
+        @test fetch(Threads.@spawn :interactive rank_task()) == expected_rank
+    end
+
+    _, native_pi, modules = _a03_rectangle_modules([0.0,3.0], [0.0,3.0],
+        [((0.0,0.0),(3.0,3.0))])
+    rectangle = only(modules)
+    zero_module = MD.zero_pmodule(rectangle.Q; field=field)
+    pi = A11YieldingEncoding(native_pi)
+    opts = TO.InvariantOptions(box=([0.0,0.0],[3.0,3.0]), threads=true)
+    dirs = [[1.0,1.0], [1.0,2.0]]
+    offs = [[0.0,j/4] for j in 0:7]
+    ts = collect(0.0:0.125:3.0)
+    tg = [0.0,0.5,1.0]
+    deaths = [(3.0-offset[2])/dir[2] for dir in dirs, offset in offs]
+    expected_bars = [Dict((0.0,death)=>1) for death in deaths]
+    expected_landscape = zeros(Float64, 2, 8, 2, 3)
+    for i in 1:2, j in 1:8, t in eachindex(tg)
+        expected_landscape[i,j,1,t] = max(0.0, min(tg[t], deaths[i,j]-tg[t]))
+    end
+    expected_kernel = sum(exp.(-deaths.^2 ./ 8)) / length(deaths)
+    function exercise_slices()
+        local plan = SI.compile_slice_plan(pi, opts; directions=dirs, offsets=offs,
+            ts=ts, normalize_dirs=:none, threads=true)
+        local result = SI.slice_barcodes(rectangle,plan; threads=true)
+        local landscape = TO.MultiparameterImages.mp_landscape(rectangle,plan;
+            kmax=2,tgrid=tg,threads=true)
+        local kernel = SI.run_invariants(plan,SI.module_cache(rectangle,zero_module),
+            SI.SliceKernelTask(kind=:bottleneck_gaussian,threads=true))
+        return SI.slice_barcodes(result), landscape.values, kernel
+    end
+    bars, landscape, kernel = exercise_slices()
+    @test bars == expected_bars
+    @test landscape == expected_landscape
+    @test isapprox(kernel, expected_kernel; atol=1e-12)
+    jobs = [Threads.@spawn exercise_slices() for _ in 1:4]
+    for task in jobs
+        actual_bars, actual_landscape, actual_kernel = fetch(task)
+        @test actual_bars == expected_bars
+        @test actual_landscape == expected_landscape
+        @test isapprox(actual_kernel, expected_kernel; atol=1e-12)
+    end
+    if Threads.nthreads(:interactive) > 0
+        actual_bars, actual_landscape, actual_kernel = fetch(Threads.@spawn :interactive exercise_slices())
+        @test actual_bars == expected_bars
+        @test actual_landscape == expected_landscape
+        @test isapprox(actual_kernel, expected_kernel; atol=1e-12)
+    end
+end
+
+@testset "A11 rectangle rank caches synchronize publication and lifecycle" begin
+    IC = TO.InvariantCore
+    FZ = TO.FlangeZn
+    tau = FZ.face(2, Int[])
+    flats = [FZ.IndFlat(tau, (i, 0)) for i in 0:3]
+    append!(flats, [FZ.IndFlat(tau, (0, i)) for i in 1:3])
+    flange = FZ.Flange{K}(2, flats, [FZ.IndInj(tau, (3, 3))],
+        fill(one(K), 1, length(flats)); field=field)
+    P, pi = TO.ZnEncoding.encode_poset_from_flanges((flange,),
+        TO.EncodingOptions(backend=:zn, max_regions=1000))
+    M = MD.PModule{K}(P, ones(Int, FF.nvertices(P)),
+        Dict((a,b) => fill(one(K), 1, 1) for (a,b) in FF.cover_edges(P)); field=field)
+    axes = (collect(0:3), collect(0:3))
+    opts = TO.InvariantOptions(axes=axes, axes_policy=:as_given)
+    expected = [Int(p1 <= q1 && p2 <= q2) for p1 in 1:4, p2 in 1:4, q1 in 1:4, q2 in 1:4]
+    expected_barcode = Dict(((0,0),(3,3)) => 1)
+    barcode_dict(sb) = Dict((r.lo,r.hi) => w for (r,w) in zip(sb.rects,sb.weights))
+
+    # Exercise both storage layouts without constructing an enormous poset for
+    # the dictionary threshold. Layout is configured before sharing the cache.
+    for layout in (:linear, :dict)
+        cache = IC.RankQueryCache(pi)
+        if layout == :dict
+            cache.use_linear_rank_cache = false
+            cache.rank_cache_linear = Int[]
+            cache.rank_cache_filled = falses(0)
+        end
+        @test IC.check_rank_query_cache(cache).valid
+        @test IC.rank_cache_size(cache) == IC.loc_cache_size(cache) == 0
+        m = min(16, IC.nregions(cache))
+        @test m * m > 64 # Multiple workers touch occupancy bits in shared words.
+        pairs = [(a,b) for a in 1:m for b in 1:m]
+        work = repeat(pairs, 3)
+        values = Vector{Int}(undef, length(work))
+        jobs = [Threads.@spawn begin
+            for i in worker:8:length(work)
+                local a, b = work[i]
+                values[i] = IC._rank_cache_get!(cache, a, b) do
+                    yield()
+                    mod(a + 2b, 3)
+                end
+            end
+        end for worker in 1:8]
+        foreach(fetch, jobs)
+        @test values == [mod(a + 2b, 3) for (a,b) in work]
+        @test IC.rank_cache_size(cache) == m * m
+        for (a,b) in pairs
+            @test IC._rank_cache_get!(cache, a, b, () -> error("warm entry recomputed")) == mod(a + 2b, 3)
+        end
+        @test IC.check_rank_query_cache(cache).valid
+        IC._clear_rank_query_cache!(cache)
+        @test IC.rank_cache_size(cache) == IC.loc_cache_size(cache) == 0
+
+        # A callback may wait for another task using the same cache: holding the
+        # publication lock across the callback would deadlock this query.
+        nested_value = IC._rank_cache_get!(cache, 1, 1) do
+            fetch(Threads.@spawn IC._rank_cache_get!(cache, 1, 2, () -> 2))
+        end
+        @test nested_value == 2
+        @test_throws ErrorException IC._rank_cache_get!(cache, 2, 2, () -> error("injected rank failure"))
+        @test IC._rank_cache_get!(cache, 2, 2, () -> 1) == 1
+        IC._clear_rank_query_cache!(cache)
+
+        # The actual constant module has rank one at every comparable pair.
+        # Concurrent point queries share both locate and rank memoization.
+        query_pairs = [((p1,p2),(q1,q2)) for p1 in 0:3 for p2 in 0:3 for q1 in p1:3 for q2 in p2:3]
+        jobs = [Threads.@spawn [Inv.rank_query(M,pi,x,y,opts; rq_cache=cache)
+                               for (x,y) in query_pairs] for _ in 1:4]
+        @test all(all(==(1), fetch(task)) for task in jobs)
+        @test IC.loc_cache_size(cache) == 16
+        @test IC.rank_cache_size(cache) > 0
+        @test IC.check_rank_query_cache(cache).valid
+        IC._clear_rank_query_cache!(cache)
+        @test !IC.describe(cache).warm
+        @test Inv.rank_query(M,pi,(0,0),(3,3),opts; rq_cache=cache) == 1
+    end
+
+    # Dense and packed bulk kernels must both invert to one full-grid rectangle,
+    # including nested default-pool calls and calls from the interactive pool.
+    saved_packed = SM._USE_PACKED_RECTANGLE_BULK_2D[]
+    try
+        for packed in (false,true)
+            SM._USE_PACKED_RECTANGLE_BULK_2D[] = packed
+            for threaded in (false,true)
+                sb = SM.rectangle_signed_barcode(M,pi,opts; method=:bulk, threads=threaded)
+                @test barcode_dict(sb) == expected_barcode
+                @test SM.rectangle_signed_barcode_rank(sb; threads=threaded) == expected
+            end
+            shared = IC.RankQueryCache(pi)
+            run_rectangle() = SM.rectangle_signed_barcode(M,pi,opts;
+                method=:bulk, threads=true, rq_cache=shared)
+            jobs = [Threads.@spawn run_rectangle() for _ in 1:4]
+            @test all(barcode_dict(fetch(task)) == expected_barcode for task in jobs)
+            @test IC.check_rank_query_cache(shared).valid
+            if Threads.nthreads(:interactive) > 0
+                @test barcode_dict(fetch(Threads.@spawn :interactive run_rectangle())) == expected_barcode
+            end
+        end
+    finally
+        SM._USE_PACKED_RECTANGLE_BULK_2D[] = saved_packed
+    end
+end
+
+@testset "A64 exact physical-grade slices and distances" begin
+    F2D = TamerOp.Fibered2D
+    A = TamerOp.ExactReals.AlgebraicReal
+    # This finite query is outside Float64's range. A probe that rounds it to
+    # infinity must fail the fixture's exact-point contract.
+    huge = A(big(10)^400)
+    probe_poset = FF.ProductOfChainsPoset((2,1))
+    probe_pi = EC.GridEncodingMap(probe_poset, (A[huge,huge+1],A[0]))
+    probe = A64CoordinateProbe(probe_pi,A[huge,0],Ref(0))
+    @test EC._probe_locate_many_style(probe,probe.expected;strict=true,closure=true) isa UInt8
+    @test probe.visits[] == 1
+    @test EC.locate_many(probe,reshape(probe.expected,2,1)) == [1]
+    function exact_rectangle(xs, ys, lo, hi)
+        # Each fixture owns its classifier; do not capture the outer P/pi.
+        local P, pi, birth, death, fringe
+        P = FF.ProductOfChainsPoset((length(xs),length(ys)))
+        pi = EC.GridEncodingMap(P, (A.(xs),A.(ys)))
+        birth = searchsortedfirst(xs,lo[1]) + length(xs)*(searchsortedfirst(ys,lo[2])-1)
+        death = searchsortedfirst(xs,hi[1])-1 + length(xs)*(searchsortedfirst(ys,hi[2])-2)
+        fringe = FF.one_by_one_fringe(P,FF.principal_upset(P,birth),
+                                     FF.principal_downset(P,death),cf(1);field)
+        return P, pi, IR.pmodule_from_fringe(fringe)
+    end
+
+    # Two actual algebraic radii whose Float64 renderings coincide. The bar
+    # between them is nevertheless nonempty, in both direct and cached paths.
+    left, right = sqrt(A(2)), sqrt(A(2+QQ(1,big(2)^70)))
+    @test left < right
+    @test Float64(left) == Float64(right)
+    @testset "A64 exact automatic windows and transverse defaults" begin
+        tiny_poset,tiny_pi,tiny_module = exact_rectangle(A[left,right],A[left,right],
+                                                        (left,left),(right,right))
+        @test SI.encoding_box((A[left,right],A[left,right]),OPT.InvariantOptions();margin=0) ==
+              (A[left,left],A[right,right])
+        for method in (:reps,:coords,:mix)
+            @test SI.window_box(tiny_pi;margin=0,integerize=:never,method) ==
+                  (A[left,left],A[right,right])
+        end
+        # No explicit box, directions, offsets, or parameter samples. Three
+        # parallel diagonal slices all see the same positive square interval.
+        automatic = SI.compile_slices(tiny_pi;n_dirs=1,max_den=1,n_offsets=3,nsteps=3)
+        @test SI.plan_directions(automatic) == [A[1,1]]
+        @test all(x -> eltype(x) === A,SI.plan_offsets(automatic))
+        automatic_bars = SI.slice_barcodes(SI.slice_barcodes(tiny_module,automatic;threads=false))
+        @test all(bar -> length(bar)==1 && only(keys(bar))[2]-only(keys(bar))[1]==right-left,
+                  automatic_bars)
+        @test_throws ArgumentError SI.compile_slices(tiny_pi;
+            directions=[A[1,-1]],offsets=[A[left,left]],nsteps=3)
+        @test_throws ArgumentError SI.slice_chain(tiny_pi,A[left,left],A[0,0],OPT.InvariantOptions();ts=A[0])
+
+        for T in (Float64,A)
+            square = EC.GridEncodingMap(FF.ProductOfChainsPoset((2,2)),(T[0,2],T[0,2]))
+            box = OPT.InvariantOptions(box=(T[0,0],T[2,2]))
+            transverse = SI.default_offsets(square,T[1,1],box;n_offsets=3)
+            expected_offsets = [(2,0),(1,1),(0,2)]
+            for (actual,expected_offset) in zip(transverse,expected_offsets)
+                @test all(isapprox(actual[i],expected_offset[i];atol=1e-14,rtol=0) for i in 1:2)
+            end
+            @test SI.default_offsets(square,box;n_offsets=1) == [(1,1)]
+            @test_throws ArgumentError SI.default_offsets(square,T[0,0],box;n_offsets=3)
+            @test_throws ArgumentError SI.default_offsets(square,box;n_offsets=0)
+            cube = EC.GridEncodingMap(FF.ProductOfChainsPoset((2,2,2)),(T[0,2],T[0,2],T[0,2]))
+            transverse3 = SI.default_offsets(cube,T[1,1,1],OPT.InvariantOptions(box=(T[0,0,0],T[2,2,2]));n_offsets=3)
+            @test all(o -> isapprox(sum(o),3;atol=1e-14,rtol=0),transverse3)
+            segment = EC.GridEncodingMap(FF.ProductOfChainsPoset((2,)),(T[0,2],))
+            @test SI.default_offsets(segment,T[1],OPT.InvariantOptions(box=(T[0],T[2]));n_offsets=5) == [(1,)]
+        end
+
+        # Two balls centred at 0 and 2: depth two is empty below radius 1;
+        # depth one has two components below 1, and one at radius 1.
+        # The default centred physical line is (r,k)=(1/2,1)+t*(1,-1).
+        ingestion = TamerOp.DataIngestion
+        data = TamerOp.DataTypes.PointCloud(reshape(QQ[0,2],:,1))
+        rhomboid = ingestion.encode(data,ingestion.RhomboidFiltration();degree=0,field,cache=nothing)
+        rhomboid_module = TamerOp.Workflow.pmodule(rhomboid)
+        expected_bars = Dict((A(0),A(1//2))=>1,(A(0),A(1))=>1)
+        actual_axes = EC.axes_from_encoding(rhomboid.pi)
+        float_pi = EC.GridEncodingMap(rhomboid.P,Tuple(Float64.(axis) for axis in actual_axes);orientation=(1,-1))
+        for classifier in (rhomboid.pi,float_pi), threaded in (false,true)
+            @test SI.default_directions(classifier;n_dirs=1,max_den=1,normalize=:none) == [(1,-1)]
+            default_options = classifier === rhomboid.pi ? OPT.InvariantOptions() :
+                OPT.InvariantOptions(box=([0.,0.],[1.,2.]))
+            default_plan = SI.compile_slices(classifier,default_options;n_dirs=1,max_den=1,n_offsets=1,nsteps=3,
+                direction_weight=:lesnick_l1,threads=threaded)
+            @test only(SI.slice_barcodes(SI.slice_barcodes(rhomboid_module,default_plan;threads=threaded))) == expected_bars
+        end
+    end
+    P, pi, M = exact_rectangle(A[0,left,right,2],A[0,2],(left,A(0)),(right,A(2)))
+    opts = OPT.InvariantOptions(box=(A[0,0],A[2,2]),threads=false)
+    chain, values = F2D.slice_chain_exact_2d(pi,[1,1],0,opts)
+    @test chain == [1,2,3]
+    @test values == A[0,2left,2right,4]
+    @test all(diff(values) .> 0)
+    arr = F2D.fibered_arrangement_2d(pi,opts;precompute=:none)
+    cache = F2D.fibered_barcode_cache_2d(M,arr;precompute=:none)
+    @test eltype(arr.box[1]) === A
+    @test arr.xs == A[0,left,right,2]
+    @test length(arr.points) == 8
+    expected_slopes = sort!(unique!([A(2)/(arr.xs[j]-arr.xs[i])
+                                     for i in 1:4 for j in i+1:4]))
+    @test arr.slope_breaks == expected_slopes
+    @test length(expected_slopes) == 6
+    nearby_slopes = (A(2)/right,A(2)/left)
+    middle_slope = sum(nearby_slopes)/2
+    cell = F2D.fibered_cell_id(arr,A[1,middle_slope],A(0))
+    @test cell !== nothing
+    @test first(cell) == searchsortedfirst(expected_slopes,middle_slope)
+    @test F2D.check_fibered_arrangement_2d(arr;throw=true).valid
+    @test F2D.check_fibered_query(arr,A[1,middle_slope],A(0);throw=true).valid
+    @test_throws ArgumentError F2D.fibered_barcode(cache,[1,0],0)
+    @test_throws ArgumentError F2D.fibered_barcode(cache,[1,1],0;tie_break=:invalid)
+    if field isa CM.QQField
+        family = F2D.fibered_slice_family_2d(arr)
+        @test eltype(family.vals_pool) === A
+        @test eltype(family.off_mid) === A
+        @test F2D.check_fibered_slice_family_2d(family;throw=true).valid
+        enumeration = F2D.matching_distance_slices_2d(pi,opts)
+        @test all(offsets -> eltype(offsets) === A,enumeration.offsets_by_dir)
+        @test all(slice -> eltype(slice.values) === A,enumeration.slices)
+        @test sum(length,enumeration.offsets_by_dir) == F2D.nslices(family)
+        payload = F2D._precompute_family_barcodes!(cache,family;threads=false)
+        for k in 1:F2D.nslices(family)
+            d = arr.dir_reps[family.dir_idx[k]]
+            @test F2D.fibered_cell_id(arr,d,family.off_mid[k]) == (family.dir_idx[k],family.off_idx[k])
+            @test all(diff(F2D.fibered_values(family,k)) .> 0)
+            @test F2D._barcode_from_packed(payload.packed_barcodes[k]) ==
+                  F2D.fibered_barcode(cache,d,family.off_mid[k])
+        end
+        reverse_pi = EC.GridEncodingMap(P,(A[0,left,right,2],A[-2,0]);orientation=(1,-1))
+        reverse_arr = F2D.fibered_arrangement_2d(reverse_pi,opts;precompute=:none)
+        reverse_cache = F2D.fibered_barcode_cache_2d(M,reverse_arr;precompute=:none)
+        @test F2D.fibered_barcode(reverse_cache,[1,-1],1) == Dict((2left-2,2right-2)=>1)
+        @test F2D.check_fibered_query(reverse_arr,[1,-1],1;throw=true).valid
+        @test F2D.fibered_query_summary(reverse_cache,[1,-1],A(1)).valid
+        @test F2D.fibered_cell_id(reverse_arr,[1,-1],1) !== nothing
+
+        # A finite window need not end at grid coordinates. Its intersections
+        # with grid walls are arrangement events: crossing one changes the
+        # first or last stalk of a slice, even without any interior grid vertex.
+        clipped_opts = OPT.InvariantOptions(box=(A[0,1//2],A[2,3//2]),threads=false)
+        clipped_arr = F2D.fibered_arrangement_2d(pi,clipped_opts;precompute=:none)
+        clipped_cache = F2D.fibered_barcode_cache_2d(M,clipped_arr;precompute=:none)
+        @test Set(clipped_arr.points) == Set((x,y) for x in pi.coords[1] for y in A[1//2,3//2])
+        walloff = (A(1//2)-left)/2
+        offsets = (walloff-(right-left)/4,walloff+(right-left)/4)
+        @test F2D.fibered_cell_id(clipped_arr,[1,1],offsets[1]) !=
+              F2D.fibered_cell_id(clipped_arr,[1,1],offsets[2])
+        for off in offsets
+            direct_chain, direct_values = F2D.slice_chain_exact_2d(pi,[1,1],off,clipped_opts)
+            cell = F2D.fibered_cell_id(clipped_arr,[1,1],off)
+            chain_id = F2D._arr2d_compute_cell!(clipped_arr,cell...)
+            @test F2D._arr2d_chain(clipped_arr,chain_id) == direct_chain
+            @test F2D.fibered_chain(clipped_arr,[1,1],off) == direct_chain
+            @test F2D.fibered_values(clipped_arr,[1,1],off) == direct_values
+            @test F2D.fibered_barcode(clipped_cache,[1,1],off) ==
+                  SI.slice_barcode(M,direct_chain;values=direct_values)
+        end
+
+        # The same geometric defect also affected the ordinary Float64 path.
+        _, float_pi, float_modules = _a03_rectangle_modules([0.,1.,2.],[0.,2.],
+            [((1.,0.),(2.,2.))])
+        float_module = only(float_modules)
+        float_opts = OPT.InvariantOptions(box=([0.,0.5],[2.,1.5]),threads=false)
+        float_arr = F2D.fibered_arrangement_2d(float_pi,float_opts;precompute=:none)
+        float_cache = F2D.fibered_barcode_cache_2d(float_module,float_arr;precompute=:none)
+        @test Set(float_arr.points) == Set((x,y) for x in [0.,1.,2.] for y in [0.5,1.5])
+        float_dir = [1.,0.75]
+        float_offsets = (-1/7-0.01,-1/7+0.01)
+        @test F2D.fibered_cell_id(float_arr,float_dir,float_offsets[1]) !=
+              F2D.fibered_cell_id(float_arr,float_dir,float_offsets[2])
+        for off in float_offsets
+            direct_chain, direct_values = F2D.slice_chain_exact_2d(float_pi,float_dir,off,float_opts)
+            @test F2D.fibered_chain(float_arr,float_dir,off) == direct_chain
+            @test isapprox(F2D.fibered_values(float_arr,float_dir,off), direct_values)
+            @test SI.bottleneck_distance(F2D.fibered_barcode(float_cache,float_dir,off),
+                SI.slice_barcode(float_module,direct_chain;values=direct_values)) <= 1e-10
+        end
+    end
+    expected = Dict((2left,2right)=>1)
+    for source in (pi,EC.compile_encoding(P,pi))
+        @test F2D.slice_chain_exact_2d(source,[1,1],0,opts) == (chain,values)
+    end
+    for _ in 1:2
+        @test F2D.fibered_barcode(cache,[1,1],0) == expected
+        result = F2D.fibered_slice(cache,[1,1],0)
+        @test F2D.slice_chain(result) == chain
+        @test F2D.slice_values(result) == values
+        @test F2D.slice_barcode(result) == expected
+    end
+    @test F2D.fibered_barcode(cache,[1,1],0;values=:index) == Dict((2,3)=>1)
+
+    # Sampled slicing keeps the declared sample locations exact. This does
+    # not turn a sampled API into continuous slicing: we deliberately supply
+    # both true critical endpoints and one sample strictly between them.
+    ts = A[0,left,(left+right)/2,right,19//10]
+    sampled_chain, sampled_values = SI.slice_chain(pi,A[0,0],A[1,1],opts;
+        ts,check_chain=true)
+    @test sampled_chain == [1,2,3]
+    @test sampled_values == A[0,left,right]
+    plan_cache = SI.SlicePlanCache()
+    plan = SI.compile_slices(pi,opts;directions=[A[1,1]],offsets=[A[0,0]],
+        ts,normalize_dirs=:none,threads=false,cache=plan_cache)
+    @test SI.compile_slices(pi,opts;directions=[A[1,1]],offsets=[A[0,0]],
+        ts,normalize_dirs=:none,threads=false,cache=plan_cache) === plan
+    specs = SI.collect_slices(plan)
+    @test only(specs).chain == sampled_chain
+    @test only(specs).values == sampled_values
+    @test SI.slice_spec(plan, 1).values == sampled_values
+    @test SI.slice_chain(pi, (A(0), A(0)), (A(1), A(1)), opts;
+                         ts, check_chain=true) == (sampled_chain, sampled_values)
+    # Both the typed and notebook-oriented collection boundaries retain the
+    # same strictly positive interval, even when its endpoints render equally.
+    rows = [(chain=sampled_chain, values=sampled_values, weight=1.0)]
+    collected = SI.collect_slices(rows)
+    @test eltype(only(collected).values) === A
+    @test only(collected).values == sampled_values
+    @test only(SI.collect_slices([(sampled_chain, sampled_values, 1.0)])).values == sampled_values
+    empty_spec = TamerOp.InvariantCore.SliceSpec(Int[]; values=A[])
+    for explicit in (specs, collected), packed in (false, true), threaded in (false, true)
+        result = SI.slice_barcodes(M, [only(explicit), empty_spec]; packed, threads=threaded)
+        actual = SI.slice_barcodes(result)
+        @test (packed ? Dict(actual[1]) : actual[1]) == Dict((left, right)=>1)
+        @test isempty(actual[2])
+    end
+    mktempdir() do dir
+        path = joinpath(dir, "exact_slices.json")
+        SI.save_slices_json(path, collected)
+        loaded = SI.load_slices_json(path)
+        @test only(loaded).values == sampled_values
+        @test eltype(only(loaded).values) === A
+        @test only(SI.slice_barcodes(SI.slice_barcodes(M, loaded; threads=false))) == Dict((left,right)=>1)
+        # The scalar codec rejects a mathematically invalid algebraic record.
+        payload = JSON3.read(read(path, String), Dict{String,Any})
+        payload["slices"][1]["exact_values"]["algebraic_values"][1]["real_root_index"] = 0
+        write(path, JSON3.write(payload))
+        @test_throws ArgumentError SI.load_slices_json(path)
+        # Exact rational endpoints use the same ownership boundary, and a
+        # heterogeneous typed list must not infer its mode from its first row.
+        rational_values = QQ[0, 1, 1 + QQ(1,big(2)^70)]
+        rational_specs = SI.collect_slices([(sampled_chain, rational_values)])
+        @test only(rational_specs).values == rational_values
+        @test eltype(only(rational_specs).values) === QQ
+        SI.save_slices_json(path, rational_specs)
+        @test only(SI.load_slices_json(path)).values == rational_values
+        ordinary = TamerOp.InvariantCore.SliceSpec(sampled_chain; values=[0.0,1.0,2.0])
+        SI.save_slices_json(path, TamerOp.InvariantCore.SliceSpec[ordinary, only(collected)])
+        @test SI.load_slices_json(path)[2].values == sampled_values
+    end
+    for _ in 1:2
+        result = SI.slice_barcodes(M,plan;packed=false,threads=false)
+        @test only(SI.slice_barcodes(result)) == Dict((left,right)=>1)
+    end
+    @test SI.slice_barcode(M,sampled_chain;values=sampled_values) == Dict((left,right)=>1)
+    SI.clear_slice_plan_cache!(plan_cache)
+    rebuilt = SI.compile_slices(pi,opts;directions=[A[1,1]],offsets=[A[0,0]],
+        ts,normalize_dirs=:none,threads=false,cache=plan_cache)
+    @test rebuilt !== plan
+    @test only(SI.slice_barcodes(SI.slice_barcodes(M,rebuilt;threads=false))) == Dict((left,right)=>1)
+
+    # The tuple basepoint overload must keep the same exact line as the vector
+    # overload. Here rounding the irrational point erases the nonzero offset.
+    basepoint = A[left,right]
+    offset = (right-left)/2
+    @test F2D.fibered_barcode(cache,[1,1],basepoint) ==
+          F2D.fibered_barcode(cache,[1,1],offset)
+    @test F2D.slice_values(F2D.fibered_slice(cache,[1,1],Tuple(basepoint))) ==
+          F2D.slice_values(F2D.fibered_slice(cache,[1,1],basepoint))
+
+    Z = MD.zero_pmodule(P;field)
+    narrow = Dict((left,right)=>1)
+    no_bars = Dict{Tuple{A,A},Int}()
+    packed_narrow = only(SI.slice_barcodes(SI.slice_barcodes(M, specs; packed=true, threads=false)))
+    packed_empty = only(SI.slice_barcodes(SI.slice_barcodes(Z, specs; packed=true, threads=false)))
+    expected_half_width = Float64((right-left)/2)
+    for (bar,empty_bar) in ((narrow,no_bars),(packed_narrow,packed_empty),([(left,right)],Tuple{A,A}[]))
+        @test SI.bottleneck_distance(bar,empty_bar) == expected_half_width
+        witness = SI.bottleneck_matching(bar,empty_bar)
+        @test witness.distance === expected_half_width
+        @test witness.points_a == [(left,right)]
+        @test SI.landscape_values(SI.persistence_landscape(bar;tgrid=[0.0,1.0],kmax=1)) == zeros(1,2)
+        for backend in (:auto,:hungarian,:auction), exponent in (1,2)
+            @test isapprox(SI.wasserstein_distance(bar,empty_bar;
+                            backend,p=exponent,q=Inf),expected_half_width;rtol=1e-12,atol=0)
+        end
+    end
+    # Essential endpoints remain supported without converting their finite
+    # births first; the exact birth difference is the optimal matching cost.
+    essential_a, essential_b = Dict((left,Inf)=>1), Dict((right,Inf)=>1)
+    @test SI.bottleneck_distance(essential_a,essential_b) == Float64(right-left)
+    @test SI.bottleneck_distance(essential_a,no_bars) == Inf
+    @test_throws ArgumentError SI.bottleneck_distance(Dict((right,left)=>1),no_bars)
+    # Rational endpoints serialized without loss must also survive the public
+    # distance boundary, including dictionaries and expanded tuple vectors.
+    qleft, qright = QQ(1), QQ(1)+QQ(1,big(2)^70)
+    rational_expected = Float64((qright-qleft)/2)
+    rational_specs = [TamerOp.InvariantCore.SliceSpec(sampled_chain;
+                                                    values=QQ[0,qleft,qright])]
+    rational_packed = only(SI.slice_barcodes(SI.slice_barcodes(M,rational_specs;
+                                                             packed=true,threads=false)))
+    empty_rational = Dict{Tuple{QQ,QQ},Int}()
+    for rational_bar in (Dict((qleft,qright)=>1),[(qleft,qright)],rational_packed)
+        @test SI.bottleneck_distance(rational_bar,empty_rational) == rational_expected
+        @test SI.bottleneck_distance(rational_bar,Dict{Tuple{Float64,Float64},Int}()) == rational_expected
+        @test SI.wasserstein_distance(rational_bar,empty_rational;p=1,q=Inf) == rational_expected
+    end
+    @test SI.bottleneck_distance(Dict((qleft,Inf)=>1),Dict((qright,Inf)=>1)) == Float64(qright-qleft)
+    # A representable numerical sample can lie between nonrepresentable
+    # endpoints. The tent must subtract before rounding, including workspaces.
+    epsilon = QQ(1,big(2)^70)
+    landscape_poset,landscape_pi,landscape_module = exact_rectangle(A[0,1-epsilon,1+epsilon,2],
+        A[0,2],(A(1-epsilon),A(0)),(A(1+epsilon),A(2)))
+    landscape_plan = SI.compile_slices(landscape_pi,OPT.InvariantOptions(box=(A[0,0],A[2,2]));
+        directions=[A[1,1]],offsets=[A[0,0]],ts=A[0,1-epsilon,1,1+epsilon,2])
+    for endpoint_type in (QQ,A)
+        exact_tent = Dict((endpoint_type(1-epsilon),endpoint_type(1+epsilon))=>1)
+        direct = SI.persistence_landscape(exact_tent;tgrid=[0.,1.,2.],kmax=1)
+        @test SI.landscape_values(direct) == reshape([0.,Float64(epsilon),0.],1,3)
+        packed_tent = TamerOp.InvariantCore.PackedBarcode{endpoint_type}(
+            [TamerOp.InvariantCore.EndpointPair{endpoint_type}(endpoint_type(1-epsilon),endpoint_type(1+epsilon))],[1])
+        workspace_values = zeros(1,3)
+        SI._persistence_landscape_values!(workspace_values,packed_tent,[0.,1.,2.])
+        @test workspace_values == SI.landscape_values(direct)
+    end
+    compiled_features = SI.slice_features(landscape_module,landscape_plan;
+        featurizer=:landscape,tgrid=[0.,1.,2.],kmax=1,threads=false)
+    @test SI.slice_features(compiled_features) == [0.,Float64(epsilon),0.]
+    for threaded in (false,true)
+        @test SI.run_invariants(plan,(M,Z),SI.SliceDistanceTask(threads=threaded)) == expected_half_width
+        @test isapprox(SI.run_invariants(plan,(M,Z),SI.SliceDistanceTask(
+                        dist_fn=SI.wasserstein_distance,threads=threaded)),
+                       expected_half_width;rtol=1e-12,atol=0)
+    end
+    # The ordinary public no-cache task path must use the same exact sample
+    # locations and coefficient-field modules as the compiled/cached path.
+    for query_cache in (nothing,SI.SlicePlanCache())
+        @test SI.matching_distance_approx(M,Z,pi,opts;
+            directions=[A[1,1]],offsets=[A[0,0]],normalize_dirs=:none,
+            weight=:none,cache=query_cache,ts) == expected_half_width
+        @test isapprox(SI.sliced_wasserstein_distance(M,Z,pi,opts;
+            directions=[A[1,1]],offsets=[A[0,0]],normalize_dirs=:none,
+            weight=:none,offset_weights=nothing,p=1,q=Inf,cache=query_cache,ts),
+            expected_half_width;rtol=1e-12,atol=0)
+    end
+    exact_distance = F2D.matching_distance_exact_2d(M,Z,pi,opts)
+    @test exact_distance > 0
+    @test isapprox(exact_distance,Float64((right-left)/2);rtol=1e-12,atol=0)
+    zero_cache = F2D.fibered_barcode_cache_2d(Z,arr;precompute=:none)
+    @test F2D.matching_distance_exact_2d(cache,zero_cache) == exact_distance
+    if field isa CM.QQField
+        sampled_distance = F2D.matching_distance_sampled_2d(cache,zero_cache;
+            family=family,threads=false)
+        @test sampled_distance > 0
+        @test isapprox(sampled_distance,exact_distance;rtol=1e-12,atol=0)
+        points = F2D._precompute_distance_payload!(cache,family;threads=false)
+        @test any(p -> !isempty(p),points.points)
+        for diagram in points.points, (birth,death) in diagram
+            @test birth isa A && death isa A
+            @test birth < death
+        end
+        for kind in (:bottleneck_gaussian,:wasserstein_gaussian)
+            kernel = F2D.slice_kernel(cache,zero_cache;family=family,kind=kind,
+                sigma=Float64(right-left),threads=false)
+            @test 0 < kernel < 1
+        end
+
+        # Projection is a finite-chain pushforward, distinct from slicing.
+        # Its chain and projection map must still retain different exact grades.
+        for threaded in (false,true)
+            geometric_projection = F2D.projected_arrangement(pi;
+                dirs=[A[1,0],A[1,1]],Q=P,threads=threaded)
+            xprojection = first(F2D.projections(geometric_projection))
+            @test length(F2D.projection_chain(xprojection)) == 4
+            @test F2D.projection_values(xprojection) == A[0,left,right,2,4-right]
+            @test F2D.check_projected_arrangement(geometric_projection;throw=true).valid
+        end
+        rational_next = 1+QQ(1,big(2)^70)
+        rational_pi = EC.GridEncodingMap(P,(QQ[0,1,rational_next,2],QQ[0,2]))
+        rational_projection = F2D.projected_arrangement(rational_pi;
+            dirs=[A[1,0]],Q=P,threads=false)
+        @test F2D.projection_values(only(F2D.projections(rational_projection))) ==
+              A[0,1,rational_next,2,4-rational_next]
+        @test F2D._dot((A(1),A(0)),(rational_next,QQ(0))) == A(rational_next)
+        Q = FF.ProductOfChainsPoset((3,))
+        interval = FF.one_by_one_fringe(Q,FF.principal_upset(Q,2),
+            FF.principal_downset(Q,2),cf(1);field)
+        projected_module = IR.pmodule_from_fringe(interval)
+        projection = F2D.projected_arrangement(Q,A[0,left,right])
+        @test F2D.projection_values(only(F2D.projections(projection))) == A[0,left,right,2right-left]
+        for side in (:left,:right)
+            pc = F2D.projected_barcode_cache(projected_module,projection;side,precompute=false)
+            pz = F2D.projected_barcode_cache(MD.zero_pmodule(Q;field),projection;side,precompute=false)
+            @test F2D.computed_projection_count(pc) == 0
+            for threaded in (false,true)
+                @test only(F2D.projected_barcodes(F2D.projected_barcodes(pc;threads=threaded))) ==
+                      Dict((left,right)=>1)
+                @test F2D.computed_projection_count(pc) == 1
+                for dist in (:bottleneck,:wasserstein)
+                    @test isapprox(F2D.projected_distance(pc,pz;dist,q=Inf,threads=threaded),
+                                   expected_half_width;rtol=1e-12,atol=0)
+                end
+            end
+            @test 0 < F2D.projected_kernel(pc,pz;sigma=Float64(right-left),q=Inf,threads=false) < 1
+        end
+    end
+
+    # A non-rational analytic rectangle oracle exercises algebraic arrangement
+    # intersections, switching predicates and bottleneck arithmetic. The exact
+    # finite-window matching distance to zero is half the shorter side.
+    for (lo,hi,height) in ((sqrt(A(2)),sqrt(A(3)),A(1)),(A(1),A(2),A(10)),(A(1),A(4),A(10)))
+        R,rpi,rectangle = exact_rectangle(A[lo,hi],A[0,height],(lo,A(0)),(hi,height))
+        zero_module = MD.zero_pmodule(R;field)
+        window = OPT.InvariantOptions(box=(A[lo,0],A[hi,height]),threads=false)
+        expected_distance = Float64(min(hi-lo,height)/2)
+        for (normalization,weight) in ((:L1,:lesnick_l1),(:Linf,:lesnick_linf))
+            @test isapprox(F2D.matching_distance_exact_2d(rectangle,zero_module,rpi,window;
+                          normalize_dirs=normalization,weight),expected_distance;atol=1e-13,rtol=1e-12)
+        end
+    end
+    # Squaring physical radii preserves ordering but changes this metric:
+    # [1,2] has distance 1/2 to zero, while its squared image [1,4] has 3/2.
+    # The preceding two oracle rows ensure no implicit squaring is performed.
+
+    # Rational geometry remains covered by the same canonical optimizer.
+    R,rpi,modules = _a03_rectangle_modules([0.,1.],[0.,2.],[((0.,0.),(1.,2.))])
+    @test F2D.matching_distance_exact_2d(only(modules),MD.zero_pmodule(R;field),rpi,
+          OPT.InvariantOptions(box=([0.,0.],[1.,2.]),threads=false)) == 0.5
+end
+
+@testset "A64 slice-plan cache distinguishes conjugates and snapshots inputs" begin
+    A = TamerOp.ExactReals.AlgebraicReal
+    small, large = sqrt(A(3))-sqrt(A(2)), sqrt(A(3))+sqrt(A(2))
+    @test 0 < small < 1 < 2 < large < 4
+    @test small != large
+    @test hash(small) == hash(large) # Intentional scalar collision remains legal.
+    # The same shared key is used at ingestion and feature-cache boundaries.
+    # Named tuples and nested arrays retain exact equality and their shape.
+    key_small = CM._structural_cache_key((request=(axes=[A[small]],),))
+    key_large = CM._structural_cache_key((request=(axes=[A[large]],),))
+    @test hash(key_small) == hash(key_large)
+    @test !isequal(key_small,key_large)
+    @test isequal(key_small,CM._structural_cache_key((request=(axes=[A[small]],),)))
+    @test CM._structural_cache_key(A[small,large]) !=
+          CM._structural_cache_key(reshape(A[small,large],1,2))
+    margin0, margin1 = A(1), A(1+QQ(1,big(2)^70))
+    @test Float64(margin0) == Float64(margin1)
+    @test CM._structural_cache_key((offset_margin=margin0,)) !=
+          CM._structural_cache_key((offset_margin=margin1,))
+    P = FF.ProductOfChainsPoset((4,))
+    pi = EC.GridEncodingMap(P,(A[0,2,4,6],))
+    fringe = FF.one_by_one_fringe(P,FF.principal_upset(P,2),
+        FF.principal_downset(P,2),cf(1);field)
+    M = IR.pmodule_from_fringe(fringe)
+    opts = OPT.InvariantOptions(box=(A[0],A[6]),threads=false)
+    directions = [A[1]]
+
+    # The first line meets the interval at sampled times 2 and 4. The other
+    # starts inside it and leaves at time 1. Equal hashes must not reuse a plan.
+    offsets = [A[small]]
+    original_offsets_hash = hash(offsets)
+    cache = SI.SlicePlanCache()
+    first_plan = SI.compile_slices(pi,opts;directions,offsets,ts=A[0,1,2,3,4,5],cache)
+    @test SI.slice_spec(first_plan,1).chain == [1,2,3]
+    @test SI.slice_spec(first_plan,1).values == A[0,2,4]
+    @test only(SI.slice_barcodes(SI.slice_barcodes(M,first_plan;threads=false))) == Dict((A(2),A(4))=>1)
+    offsets[1][1] = large
+    @test hash(offsets) == original_offsets_hash
+    second_plan = SI.compile_slices(pi,opts;directions,offsets,ts=A[0,1,2,3,4,5],cache)
+    uncached = SI.compile_slices(pi,opts;directions,offsets,ts=A[0,1,2,3,4,5])
+    @test second_plan !== first_plan
+    @test SI.slice_spec(second_plan,1).chain == SI.slice_spec(uncached,1).chain == [2,3]
+    @test SI.slice_spec(second_plan,1).values == SI.slice_spec(uncached,1).values == A[0,1]
+    @test only(SI.slice_barcodes(SI.slice_barcodes(M,second_plan;threads=false))) == Dict((A(0),A(1))=>1)
+    @test SI.plan_offsets(first_plan) == [A[small]]
+    offsets[1][1] = small
+    @test SI.compile_slices(pi,opts;directions,offsets,ts=A[0,1,2,3,4,5],cache) === first_plan
+    @test SI.slice_cache_summary(cache).cached_plans == 2
+
+    # Keyword sample arrays participate in the same collision-safe equality.
+    # Sampling below the birth sees no bar; its positive conjugate sees one.
+    samples = A[0,small,4]
+    original_samples_hash = hash(samples)
+    sample_cache = SI.SlicePlanCache()
+    missed = SI.compile_slices(pi,opts;directions,offsets=[A[0]],ts=samples,cache=sample_cache)
+    @test SI.slice_spec(missed,1).chain == [1,3]
+    @test isempty(only(SI.slice_barcodes(SI.slice_barcodes(M,missed;threads=false))))
+    samples[2] = large
+    @test hash(samples) == original_samples_hash
+    seen = SI.compile_slices(pi,opts;directions,offsets=[A[0]],ts=samples,cache=sample_cache)
+    uncached_seen = SI.compile_slices(pi,opts;directions,offsets=[A[0]],ts=samples)
+    @test seen !== missed
+    @test SI.slice_spec(seen,1).chain == SI.slice_spec(uncached_seen,1).chain == [1,2,3]
+    @test SI.slice_spec(seen,1).values == SI.slice_spec(uncached_seen,1).values == A[0,large,4]
+    @test only(SI.slice_barcodes(SI.slice_barcodes(M,seen;threads=false))) == Dict((large,A(4))=>1)
+    samples[2] = small
+    @test SI.compile_slices(pi,opts;directions,offsets=[A[0]],ts=samples,cache=sample_cache) === missed
+    @test SI.slice_cache_summary(sample_cache).cached_plans == 2
+
+    # Cover the remaining request groups: clipping boxes, directions, and
+    # weights also have exact conjugate collisions, including nested arrays.
+    box_end = A[small]
+    box_opts = OPT.InvariantOptions(box=(A[0],box_end),threads=false)
+    box_cache = SI.SlicePlanCache()
+    narrow = SI.compile_slices(pi,box_opts;directions,offsets=[A[0]],ts=A[0,1,2,3,4],cache=box_cache)
+    @test SI.slice_spec(narrow,1).chain == [1]
+    box_end[1] = large
+    wide = SI.compile_slices(pi,box_opts;directions,offsets=[A[0]],ts=A[0,1,2,3,4],cache=box_cache)
+    @test wide !== narrow
+    @test SI.slice_spec(wide,1).chain == [1,2]
+    @test SI.slice_spec(wide,1).values == A[0,2]
+    box_end[1] = small
+    @test SI.compile_slices(pi,box_opts;directions,offsets=[A[0]],ts=A[0,1,2,3,4],cache=box_cache) === narrow
+
+    varying_directions = [A[small]]
+    direction_cache = SI.SlicePlanCache()
+    slow = SI.compile_slices(pi,opts;directions=varying_directions,offsets=[A[0]],
+        ts=A[0,1,2],cache=direction_cache)
+    varying_directions[1][1] = large
+    fast = SI.compile_slices(pi,opts;directions=varying_directions,offsets=[A[0]],
+        ts=A[0,1,2],cache=direction_cache)
+    @test slow !== fast
+    @test SI.slice_spec(slow,1).chain == [1]
+    @test SI.slice_spec(fast,1).chain == [1,2]
+    varying_directions[1][1] = small
+    @test SI.compile_slices(pi,opts;directions=varying_directions,offsets=[A[0]],
+        ts=A[0,1,2],cache=direction_cache) === slow
+
+    offset_weights = A[small,large]
+    weight_cache = SI.SlicePlanCache()
+    weighted = SI.compile_slices(pi,opts;directions,offsets=[A[0],A[1]],offset_weights,
+        ts=A[0,2,4],cache=weight_cache)
+    offset_weights .= A[large,small]
+    reweighted = SI.compile_slices(pi,opts;directions,offsets=[A[0],A[1]],offset_weights,
+        ts=A[0,2,4],cache=weight_cache)
+    @test reweighted !== weighted
+    @test SI.plan_weights(weighted)[1,1] < SI.plan_weights(weighted)[1,2]
+    @test SI.plan_weights(reweighted)[1,1] > SI.plan_weights(reweighted)[1,2]
+    offset_weights .= A[small,large]
+    @test SI.compile_slices(pi,opts;directions,offsets=[A[0],A[1]],offset_weights,
+        ts=A[0,2,4],cache=weight_cache) === weighted
+    @test all(c -> SI.check_slice_plan_cache(c;throw=true).valid,
+        (cache,sample_cache,box_cache,direction_cache,weight_cache))
+end
+
+@testset "A64 exact Euler queries and signed-measure coordinates" begin
+    SM = TamerOp.SignedMeasures
+    AR = TamerOp.ExactReals.AlgebraicReal
+    epsilon = QQ(1, big(2)^70)
+    xs = AR[0, 1, 1 + epsilon]
+    ys = AR[0, sqrt(AR(2))]
+    P = FF.ProductOfChainsPoset((3, 2))
+    pi = EC.GridEncodingMap(P, (xs, ys))
+    values = collect(1:6)
+    expected = reshape(values, 3, 2)
+    for map in (pi, EC.compile_encoding(P, pi)), threads in (false, true)
+        opts = OPT.InvariantOptions(axes=(xs, ys), axes_policy=:as_given, threads=threads)
+        @test SM.euler_surface(values, map; opts) == expected
+        measure = SM.euler_signed_measure(values, map; opts)
+        @test measure.axes == (xs, ys)
+        @test SM.surface_from_point_signed_measure(measure) == expected
+        @test length(unique(measure.axes[1])) == 3
+    end
+    opts = OPT.InvariantOptions(axes=(AR[0, 1 + epsilon/2, 1 + epsilon], ys),
+                                axes_policy=:as_given, threads=false)
+    axes, indices = SM._rectangle_signed_barcode_grid_axes(pi, opts)
+    @test axes[1] == AR[0, 1 + epsilon/2, 1 + epsilon]
+    @test indices == ([1, 2, 3], [1, 2])
+    birth_axes, death_axes = SM._rectangle_signed_barcode_grid_semantic_axes(pi, opts)
+    @test birth_axes == axes
+    @test death_axes[1][1] == 1 + epsilon/2
+    @test death_axes[1][2] == 1 + epsilon
+    @test death_axes[1][3] == Inf
+    mixed = SM.PointSignedMeasure((birth_axes..., death_axes...), [(1,1,2,2)], [1])
+    @test mixed.axes[3][1] < mixed.axes[3][2]
+    @test mixed.axes[3][3] == Inf
+    @test SM._restrict_grid_axis_to_encoding(AR[0, 1 + epsilon], xs) == xs
+    @test SM._coarsen_axis_real_to_length(xs, 3) == xs
+
+    # Signed grid axes are already oriented. Applying the negative depth
+    # orientation a second time would query the wrong finite-poset stalk.
+    depth_axis = AR[-2, -1]
+    oriented = EC.GridEncodingMap(P, (xs, depth_axis); orientation=(1, -1))
+    for map in (oriented, EC.compile_encoding(P, oriented)), threads in (false, true)
+        opts = OPT.InvariantOptions(threads=threads)
+        @test SM.euler_surface(values, map; opts) == expected
+        measure = SM.euler_signed_measure(values, map; opts)
+        @test measure.axes == (xs, depth_axis)
+        @test SM.surface_from_point_signed_measure(measure) == expected
+    end
+    chain = FF.ProductOfChainsPoset((3,))
+    reverse_map = EC.GridEncodingMap(chain, (AR[-3, -2, -1],); orientation=(-1,))
+    @test SM.euler_surface([4, 5, 6], reverse_map) == [4, 5, 6]
+
+    # This explicitly numerical kernel must subtract the exact support points
+    # before conversion. Rounding each support first would incorrectly give 1.
+    first_atom = SM.PointSignedMeasure((AR[1],), [(1,)], [1])
+    next_atom = SM.PointSignedMeasure((AR[1 + epsilon],), [(1,)], [1])
+    @test isapprox(SM.point_signed_measure_kernel(first_atom, next_atom; sigma=epsilon),
+                   exp(-0.5); atol=1e-14, rtol=0)
+    setprecision(BigFloat, 160) do
+        high_first = SM.PointSignedMeasure((BigFloat[1],), [(1,)], [1])
+        high_next = SM.PointSignedMeasure((BigFloat[1 + epsilon],), [(1,)], [1])
+        value = SM.point_signed_measure_kernel(high_first, high_next; sigma=BigFloat(epsilon))
+        @test value isa BigFloat
+        @test isapprox(value, exp(BigFloat(-1//2)); atol=big(2.0)^(-140), rtol=0)
+    end
+end
+
+@testset "A63 batched rank cache publication, clearing, and private outputs" begin
+    IC = TO.InvariantCore
+    FZ = TO.FlangeZn
+    tau = FZ.face(2, Int[])
+    flats = [FZ.IndFlat(tau, (i,0)) for i in 0:3]
+    append!(flats, [FZ.IndFlat(tau, (0,i)) for i in 1:3])
+    flange = FZ.Flange{K}(2, flats, [FZ.IndInj(tau,(3,3))],
+        fill(one(K),1,length(flats));field)
+    _, pi = TO.ZnEncoding.encode_poset_from_flanges((flange,),
+        OPT.EncodingOptions(backend=:zn,max_regions=1000))
+    for layout in (:linear,:dict), threaded in (false,true)
+        cache = IC.RankQueryCache(pi)
+        if layout == :dict
+            cache.use_linear_rank_cache = false
+            cache.rank_cache_linear = Int[]
+            cache.rank_cache_filled = falses(0)
+        end
+        m = min(16,IC.nregions(cache))
+        @test m*m > 64
+        pairs = repeat([(a,b) for a in 1:m for b in 1:m],3)
+        append!(pairs,[(0,1),(1,0),(0,0)])
+        expected = [a == 0 || b == 0 ? 0 : mod(a+2b,7) for (a,b) in pairs]
+        calls = Threads.Atomic{Int}(0)
+        builder(a,b) = (Threads.atomic_add!(calls,1); yield(); mod(a+2b,7))
+        output = fill(-1,length(pairs))
+        @test IC._rank_cache_batch!(output,cache,i->pairs[i],builder;threads=threaded) === output
+        @test output == expected
+        @test calls[] == m*m # Duplicate misses within a call are computed once.
+        @test IC.rank_cache_size(cache) == m*m
+        untouched = copy(output)
+        IC._rank_cache_batch!(output,cache,i->pairs[i],(a,b)->error("warm miss");threads=threaded)
+        @test output == untouched
+        @test IC.check_rank_query_cache(cache;throw=true).valid
+        IC._clear_rank_query_cache!(cache)
+        @test output == untouched # A caller owns its results, not shared storage.
+        @test IC.rank_cache_size(cache) == 0
+        @test isempty(IC._rank_cache_batch!(Int[],cache,i->error("empty index"),builder;threads=threaded))
+
+        # Builders may yield, reenter, or throw without exposing partial misses.
+        @test_throws Exception IC._rank_cache_batch!(zeros(Int,2),cache,i->(i,i),
+            (a,b)->(a==2 ? error("injected failure") : 1);threads=threaded)
+        @test IC.rank_cache_size(cache) == 0
+        nested = IC._rank_cache_batch!(zeros(Int,1),cache,i->(1,1),
+            (a,b)->fetch(Threads.@spawn IC._rank_cache_get!(cache,1,2,()->3));threads=threaded)
+        @test nested == [3]
+        IC._clear_rank_query_cache!(cache)
+
+        # Clear while an old batch is blocked, then publish a replacement.
+        # The old call returns its private value, leaving the new cache intact.
+        entered, proceed = Channel{Nothing}(1), Channel{Nothing}(1)
+        old = Threads.@spawn IC._rank_cache_batch!(zeros(Int,5),cache,i->(1,1),
+            (a,b)->(put!(entered,nothing);take!(proceed);7);threads=threaded)
+        take!(entered)
+        IC._clear_rank_query_cache!(cache)
+        @test IC._rank_cache_get!(cache,1,1,()->11) == 11
+        put!(proceed,nothing)
+        @test fetch(old) == fill(7,5)
+        @test IC._rank_cache_get!(cache,1,1,()->error("replacement lost")) == 11
+        @test IC.rank_cache_size(cache) == 1
+        IC._clear_rank_query_cache!(cache)
+
+        # Without a clear, a concurrent first publisher wins for every alias.
+        entered, proceed = Channel{Nothing}(1), Channel{Nothing}(1)
+        old = Threads.@spawn IC._rank_cache_batch!(zeros(Int,5),cache,i->(1,1),
+            (a,b)->(put!(entered,nothing);take!(proceed);7);threads=threaded)
+        take!(entered)
+        @test IC._rank_cache_get!(cache,1,1,()->13) == 13
+        put!(proceed,nothing)
+        @test fetch(old) == fill(13,5)
+        IC._clear_rank_query_cache!(cache)
+
+        # The scalar path participates in the same clear fence, including when
+        # no replacement was installed while it computed outside the lock.
+        entered, proceed = Channel{Nothing}(1), Channel{Nothing}(1)
+        old = Threads.@spawn IC._rank_cache_get!(cache,1,1,
+            ()->(put!(entered,nothing);take!(proceed);5))
+        take!(entered)
+        IC._clear_rank_query_cache!(cache)
+        put!(proceed,nothing)
+        @test fetch(old) == 5
+        @test IC.rank_cache_size(cache) == 0
+
+        # All writers share one publication lock; several workers touch bits
+        # in the same occupancy word while queries use private rank arrays.
+        jobs = [Threads.@spawn begin
+            local result = zeros(Int,length(pairs))
+            IC._rank_cache_batch!(result,cache,i->pairs[i],(a,b)->(yield();mod(a+2b,7));threads=threaded)
+        end for _ in 1:4]
+        scalar = Threads.@spawn [IC._rank_cache_get!(cache,a,b,()->mod(a+2b,7))
+                                for a in 1:m for b in 1:m]
+        @test all(fetch(job)==expected for job in jobs)
+        @test fetch(scalar) == expected[1:m*m]
+        @test IC.rank_cache_size(cache) == m*m
+        @test IC.check_rank_query_cache(cache;throw=true).valid
+        if Threads.nthreads(:interactive) > 0
+            IC._clear_rank_query_cache!(cache)
+            from_interactive = Threads.@spawn :interactive IC._rank_cache_batch!(
+                zeros(Int,length(pairs)),cache,i->pairs[i],(a,b)->mod(a+2b,7);threads=threaded)
+            @test fetch(from_interactive) == expected
+            @test IC.check_rank_query_cache(cache;throw=true).valid
+        end
+    end
+end
+
+@testset "A63 rectangle rank batching has independent interval-sum oracles" begin
+    IC = TO.InvariantCore
+    FZ = TO.FlangeZn
+    for (N,side) in ((1,2),(2,2),(2,4),(3,2))
+        tau = FZ.face(N,Int[])
+        flats = [FZ.IndFlat(tau,ntuple(k->k==j ? i : 0,N))
+                 for j in 1:N for i in 0:side-1]
+        flange = FZ.Flange{K}(N,flats,[FZ.IndInj(tau,ntuple(_->side-1,N))],
+            fill(one(K),1,length(flats));field)
+        P,pi = TO.ZnEncoding.encode_poset_from_flanges((flange,),
+            OPT.EncodingOptions(backend=:zn,max_regions=1000))
+        lo = [ntuple(_->0,N),ntuple(_->0,N),ntuple(_->1,N)]
+        hi = [ntuple(_->side-1,N),ntuple(k->k==1 ? side-2 : side-1,N),ntuple(_->side-1,N)]
+        supports(x,j) = all(k->lo[j][k]<=x[k]<=hi[j][k],1:N)
+        active = [[j for j in 1:3 if supports(x,j)] for x in pi.reps]
+        maps = Dict((a,b)=>[u==v ? one(K) : zero(K) for u in active[b],v in active[a]]
+                    for (a,b) in FF.cover_edges(P))
+        M = MD.PModule{K}(P,length.(active),maps;field)
+        axes = ntuple(_->collect(0:side-1),N)
+        dims = ntuple(_->side,N)
+        oracle(p,q) = all(k->p[k]<=q[k],1:N) ?
+            count(j->supports(ntuple(k->p[k]-1,N),j)&&supports(ntuple(k->q[k]-1,N),j),1:3) : 0
+        expected = reshape([oracle(p.I,q.I) for p in CartesianIndices(dims),q in CartesianIndices(dims)],
+                           (dims...,dims...))
+        expected_barcode = Dict((lo[j],hi[j])=>1 for j in 1:3)
+        opts = OPT.InvariantOptions(axes=axes,axes_policy=:as_given)
+        FF.build_cache!(P;cover=true,updown=false)
+        cover = FF._get_cover_cache(P)
+        reg = SM._rectangle_region_grid(pi,axes,IC.RankQueryCache(pi);strict=true)
+        for threaded in (false,true)
+            for layout in (:linear,:dict)
+                cache = IC.RankQueryCache(pi)
+                if layout == :dict
+                    cache.use_linear_rank_cache = false
+                    cache.rank_cache_linear = Int[]
+                    cache.rank_cache_filled = falses(0)
+                end
+                tensor = SM._fill_rectangle_rank_tensor_dense_from_regions(reg,
+                    (a,b)->IC.rank_map(M,a,b;cache=cover),cache;threads=threaded)
+                @test tensor == expected
+                warm = SM._fill_rectangle_rank_tensor_dense_from_regions(reg,
+                    (a,b)->error("warm tensor recomputed a rank"),cache;threads=threaded)
+                @test warm == expected
+                @test IC.check_rank_query_cache(cache;throw=true).valid
+                if N==2
+                    @test SM._fill_rectangle_rank_tensor_dense_from_regions_2d(reg,
+                        (a,b)->IC.rank_map(M,a,b;cache=cover);threads=threaded) == expected
+                    packed = SM._fill_rectangle_rank_tensor_packed_from_regions_2d(reg,
+                        (a,b)->error("packed cache missed warm dense rank");threads=threaded,rq_cache=cache)
+                    for q1 in 1:side,p1 in 1:q1,q2 in 1:side,p2 in 1:q2
+                        @test packed[SM._interval_linear_index(p1,q1),SM._interval_linear_index(p2,q2)] ==
+                            expected[p1,p2,q1,q2]
+                    end
+                    # Duplicated region labels and absent regions need no extra
+                    # rank computation; zero-filled labels remain zero.
+                    repeated = repeat(reg;inner=(2,2))
+                    repeated[1,1] = 0
+                    doubled = SM._fill_rectangle_rank_tensor_packed_from_regions_2d(repeated,
+                        (a,b)->error("repeated region cache missed");threads=threaded,rq_cache=cache)
+                    for q1 in 1:2side,p1 in 1:q1,q2 in 1:2side,p2 in 1:q2
+                        @test doubled[SM._interval_linear_index(p1,q1),SM._interval_linear_index(p2,q2)] ==
+                            (repeated[p1,p2]==0 || repeated[q1,q2]==0 ? 0 :
+                             oracle((cld(p1,2),cld(p2,2)),(cld(q1,2),cld(q2,2))))
+                    end
+                end
+            end
+            saved = SM._USE_PACKED_RECTANGLE_BULK_2D[]
+            try
+                for packed in (false,true)
+                    SM._USE_PACKED_RECTANGLE_BULK_2D[] = packed
+                    result = SM.rectangle_signed_barcode(M,pi,opts;method=:bulk,threads=threaded)
+                    @test Dict((r.lo,r.hi)=>w for (r,w) in zip(result.rects,result.weights)) == expected_barcode
+                    @test SM.rectangle_signed_barcode_rank(result;threads=threaded) == expected
+                end
+            finally
+                SM._USE_PACKED_RECTANGLE_BULK_2D[] = saved
+            end
+        end
+    end
+end
+
 end # with_fields

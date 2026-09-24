@@ -101,7 +101,7 @@ const UPDOWN_CACHE_MODE = Ref(:auto)  # :auto | :always | :never
 const UPDOWN_CACHE_THRESHOLD_FINITE = Ref(500_000)
 const UPDOWN_CACHE_THRESHOLD_GENERIC = Ref(200_000)
 const CHAIN_PARENT_DENSE_MIN_ENTRIES = Ref(4_096)
-const CHAIN_PARENT_DENSE_MAX_ENTRIES_PER_THREAD = Ref(1_000_000)
+const CHAIN_PARENT_DENSE_MAX_ENTRIES_PER_TASK = Ref(1_000_000)
 const CHAIN_PARENT_DENSE_MAX_TOTAL_ENTRIES = Ref(8_000_000)
 
 @inline _updown_cache_skip_auto(::AbstractPoset) = false
@@ -255,8 +255,8 @@ This cache is stored lazily on each poset object (via `PosetCache`).
 Thread-safety:
 
 - `succs`, `preds`, and `C` are read-only once constructed.
-- `chain_parent` / `chain_parent_dense` are per-thread hot-path memos for witness
-  predecessor lookups. Writes are thread-local and do not require locks.
+- `chain_parent` / `chain_parent_dense` are task-owned hot-path memos for witness
+  predecessor lookups. Each task owns its memo across thread migration.
 """
 struct CoverCache
     Q::AbstractPoset
@@ -269,10 +269,10 @@ struct CoverCache
     pred_succ_slot::Vector{Int}
     undir::Union{Nothing,_PackedAdjacency}
 
-    # Sparse fallback memo: chain_parent[tid][pairkey(a,d)] = chosen predecessor b.
-    chain_parent::Vector{Dict{UInt64, Int}}
+    # Each task owns its chosen-predecessor memo across scheduling changes.
+    chain_parent::_TaskLocalCache{Dict{UInt64,Int}}
     # Dense memo for finite posets when n^2 is moderate; optional for memory control.
-    chain_parent_dense::Union{Nothing,Vector{_ChainParentDenseMemo}}
+    chain_parent_dense::Union{Nothing,_TaskLocalCache{_ChainParentDenseMemo}}
 
     # Number of cover edges in Q (used to size edge-indexed stores).
     nedges::Int
@@ -443,18 +443,15 @@ function _build_cover_cache(Q::AbstractPoset)
     end
 
     nt = max(1, Base.Threads.maxthreadid())
-    chain_parent = [Dict{UInt64, Int}() for _ in 1:max(1, Base.Threads.maxthreadid())]
+    chain_parent = _TaskLocalCache{Dict{UInt64,Int}}()
     chain_parent_dense = nothing
     dense_entries = n * n
     use_dense_parent = (Q isa FinitePoset) &&
                        (dense_entries >= CHAIN_PARENT_DENSE_MIN_ENTRIES[]) &&
-                       (dense_entries <= CHAIN_PARENT_DENSE_MAX_ENTRIES_PER_THREAD[]) &&
+                       (dense_entries <= CHAIN_PARENT_DENSE_MAX_ENTRIES_PER_TASK[]) &&
                        (dense_entries * nt <= CHAIN_PARENT_DENSE_MAX_TOTAL_ENTRIES[])
     if use_dense_parent
-        chain_parent_dense = [
-            _ChainParentDenseMemo(falses(dense_entries), zeros(Int, dense_entries), n)
-            for _ in 1:nt
-        ]
+        chain_parent_dense = _TaskLocalCache{_ChainParentDenseMemo}()
     end
 
     undir_ptr = Vector{Int}(undef, n + 1)
@@ -481,25 +478,20 @@ function _build_cover_cache(Q::AbstractPoset)
                       chain_parent, chain_parent_dense, nedges)
 end
 
-@inline function _chain_parent_dict(cc::CoverCache)::Dict{UInt64, Int}
-    return cc.chain_parent[min(length(cc.chain_parent), max(1, Base.Threads.threadid()))]
-end
+@inline _chain_parent_dict(cc::CoverCache, context=_task_local_context())::Dict{UInt64,Int} =
+    _task_local!(Dict{UInt64,Int}, cc.chain_parent, context)
 
-@inline function _chain_parent_dense(cc::CoverCache)
-    dense = cc.chain_parent_dense
-    dense === nothing && return nothing
-    return dense[min(length(dense), max(1, Base.Threads.threadid()))]
+@inline function _chain_parent_dense(cc::CoverCache, context=_task_local_context())
+    cc.chain_parent_dense === nothing && return nothing
+    return _task_local!(cc.chain_parent_dense, context) do
+        n = nvertices(cc.Q)
+        _ChainParentDenseMemo(falses(n*n), zeros(Int, n*n), n)
+    end
 end
 
 function _clear_chain_parent_cache!(cc::CoverCache)
-    for d in cc.chain_parent
-        empty!(d)
-    end
-    if cc.chain_parent_dense !== nothing
-        for m in cc.chain_parent_dense
-            fill!(m.seen, false)
-        end
-    end
+    _clear_task_local!(cc.chain_parent)
+    cc.chain_parent_dense === nothing || _clear_task_local!(cc.chain_parent_dense)
     return nothing
 end
 

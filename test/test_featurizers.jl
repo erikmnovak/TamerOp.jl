@@ -2,31 +2,217 @@ using Test
 
 const FEA = TamerOp.Featurizers
 
-# In include-based test harnesses (no package-extension autoload), manually
-# load optional table/IO extensions when their deps are present.
-if Base.find_package("Tables") !== nothing && !isdefined(Main, :TamerOpTablesExt)
-    include(joinpath(@__DIR__, "..", "ext", "TamerOpTablesExt.jl"))
+@testset "A15 installed-package feature provenance" begin
+    fs = FEA.FeatureSet(reshape([2.0, 3.0], 1, 2), [:left, :right], ["sample"], (;))
+    mktempdir() do root
+        package = mkdir(joinpath(root, "installed-package"))
+        log = joinpath(root, "stderr.txt")
+        open(log, "w") do io
+            redirect_stderr(io) do
+                @test FEA._git_commit_or_unknown(package) == "unknown"
+                # Even a directory claiming to be a checkout needs neither a
+                # system Git installation nor a valid repository to emit data.
+                mkdir(joinpath(package, ".git"))
+                withenv("PATH" => "") do
+                    @test FEA._git_commit_or_unknown(package) == "unknown"
+                    @test FEA.feature_metadata(fs)["git_commit"] == "unknown"
+                    @test FEA.feature_metadata(fs; git_commit="release-source")["git_commit"] ==
+                          "release-source"
+                end
+                @test FEA._git_commit_or_unknown(package) == "unknown"
+            end
+        end
+        @test isempty(read(log, String))
+        @test FEA.feature_metadata(fs)["package_version"] == string(Base.pkgversion(TamerOp))
+
+        # If Git is available, exercise a real commit and an installed copy
+        # nested inside that checkout. Its parent commit is not package provenance.
+        git = Sys.which("git")
+        if git !== nothing
+            repository = joinpath(root, "user-repository")
+            run(pipeline(`$git init $repository`; stdout=devnull, stderr=devnull))
+            run(pipeline(`$git -C $repository -c user.name=TamerOpTest -c user.email=test@example.invalid -c commit.gpgsign=false commit --allow-empty -m fixture`;
+                         stdout=devnull, stderr=devnull))
+            expected = readchomp(`$git -C $repository rev-parse --short=12 HEAD`)
+            @test FEA._git_commit_or_unknown(repository) == expected
+            nested = mkdir(joinpath(repository, "installed-package"))
+            @test FEA._git_commit_or_unknown(nested) == "unknown"
+            # Linked worktrees store .git as a file instead of a directory.
+            linked = joinpath(root, "linked-worktree")
+            run(pipeline(`$git -C $repository worktree add --detach $linked HEAD`;
+                         stdout=devnull, stderr=devnull))
+            @test isfile(joinpath(linked, ".git"))
+            @test FEA._git_commit_or_unknown(linked) == expected
+        end
+    end
 end
-if Base.find_package("Arrow") !== nothing && !isdefined(Main, :TamerOpArrowExt)
-    include(joinpath(@__DIR__, "..", "ext", "TamerOpArrowExt.jl"))
+
+@testset "A12 featurizer cardinalities without feature enumeration" begin
+    directions = [[1.0, 0.0], [1.0, 1.0]]
+    offsets = [[0.0, 0.0], [0.0, 1.0], [1.0, 0.0]]
+    # Two directions and three offsets give six slices. Independent counts
+    # below follow each documented vector layout, not generated labels.
+    specs_and_counts = [
+        (FEA.LandscapeSpec(; directions, offsets, kmax=2, tgrid=[0.0, 1.0, 2.0], aggregate=:stack), 36),
+        (FEA.LandscapeSpec(; directions, offsets, kmax=2, tgrid=[0.0, 1.0, 2.0], aggregate=:mean), 6),
+        (FEA.PersistenceImageSpec(; directions, offsets, xgrid=[0.0, 1.0], ygrid=[0.0, 1.0, 2.0], aggregate=:stack), 36),
+        (FEA.PersistenceImageSpec(; directions, offsets, xgrid=[0.0, 1.0], ygrid=[0.0, 1.0, 2.0], aggregate=:sum), 6),
+        (FEA.MPLandscapeSpec(; directions, offsets, kmax=2, tgrid=[0.0, 1.0, 2.0]), 36),
+        (FEA.EulerSurfaceSpec(axes=([0.0, 1.0], [0.0, 1.0, 2.0])), 6),
+        (FEA.EulerSurfaceSpec(), 0), # axes are resolved from the sample later
+        (FEA.RankGridSpec(nvertices=3, store_zeros=true), 9),
+        (FEA.RankGridSpec(nvertices=3, store_zeros=false), 9),
+        (FEA.RestrictedHilbertSpec(nvertices=3), 3),
+        (FEA.BarcodeTopKSpec(; directions, offsets, k=2, aggregate=:stack), 42),
+        (FEA.BarcodeTopKSpec(; directions, offsets, k=2, aggregate=:mean), 7),
+        (FEA.BarcodeTopKSpec(; directions, offsets, k=0, aggregate=:stack), 6),
+        (FEA.SlicedBarcodeSpec(; directions, offsets, summary_fields=(:count, :entropy), aggregate=:stack), 12),
+        (FEA.SlicedBarcodeSpec(; directions, offsets, summary_fields=(:count, :entropy), aggregate=:mean), 2),
+        (FEA.SlicedBarcodeSpec(; directions, offsets, featurizer=:entropy, aggregate=:stack), 6),
+        (FEA.SlicedBarcodeSpec(; directions, offsets, featurizer=:entropy, aggregate=:sum), 1),
+        (FEA.BarcodeSummarySpec(; directions, offsets, fields=(:count, :entropy), aggregate=:stack), 12),
+        (FEA.BarcodeSummarySpec(; directions, offsets, fields=(:count, :entropy), aggregate=:sum), 2),
+        (FEA.PointSignedMeasureSpec(ndims=3, k=2), 11),
+        (FEA.EulerSignedMeasureSpec(ndims=3, k=2), 11),
+        (FEA.RectangleSignedBarcodeTopKSpec(ndims=3, k=2), 17),
+        (FEA.SignedBarcodeImageSpec(xs=[0.0, 1.0], ys=[0.0, 1.0, 2.0]), 6),
+        (FEA.MPPImageSpec(resolution=3), 9),
+        (FEA.MPPImageSpec(resolution=3, xgrid=[0.0, 1.0]), 6),
+        (FEA.MPPImageSpec(resolution=3, xgrid=[0.0, 1.0], ygrid=[0.0, 1.0, 2.0, 3.0]), 8),
+        (FEA.MPPDecompositionHistogramSpec(orientation_bins=2, scale_bins=3), 11),
+        (FEA.BettiTableSpec(nvertices=3, pad_to=2), 9),
+        (FEA.BassTableSpec(nvertices=3, pad_to=2), 9),
+        (FEA.BettiSupportMeasuresSpec(pad_to=2), 9),
+        (FEA.BassSupportMeasuresSpec(pad_to=2), 9),
+        (FEA.RankGridSpec(nvertices=0), 0),
+        (FEA.RestrictedHilbertSpec(nvertices=0), 0),
+        (FEA.BettiTableSpec(nvertices=0, pad_to=2), 0),
+        (FEA.BassTableSpec(nvertices=0, pad_to=2), 0),
+        (FEA.PointSignedMeasureSpec(ndims=3, k=0), 1),
+        (FEA.EulerSignedMeasureSpec(ndims=3, k=0), 1),
+        (FEA.RectangleSignedBarcodeTopKSpec(ndims=3, k=0), 1),
+    ]
+    for (spec, expected) in specs_and_counts
+        @test FEA.nfeatures(spec) == expected
+        @test length(FEA.feature_names(spec)) == expected
+        @test FEA.describe(spec).nfeatures == expected
+        @test occursin("nfeatures=$(expected)", sprint(show, spec))
+    end
+    composite = FEA.CompositeSpec((
+        FEA.RankGridSpec(nvertices=3),
+        FEA.CompositeSpec((FEA.RestrictedHilbertSpec(nvertices=3),
+                           FEA.PointSignedMeasureSpec(ndims=3, k=2)))))
+    @test FEA.nfeatures(composite) == 23
+    @test length(FEA.feature_names(composite)) == 23
+    @test FEA.feature_axes(composite).components[2].start == 10
+    @test FEA.feature_axes(composite).components[2].stop == 23
+
+    @test_throws ArgumentError FEA.nfeatures(FEA.SlicedBarcodeSpec(;
+        directions, offsets, featurizer=:unknown))
+    overflow = FEA.RankGridSpec(nvertices=typemax(Int))
+    @test_throws OverflowError FEA.nfeatures(overflow)
+    @test !FEA.check_featurizer_spec(overflow).valid
+    @test_throws ArgumentError FEA.check_featurizer_spec(overflow; throw=true)
+
+    # A moderately sized Cartesian grid used to allocate all 65,536 symbols
+    # merely to return its cardinality or print a one-line summary. Compare
+    # with the explicit labels allocation after warming both paths; this is
+    # deliberately a wide allocation gap, not a timing threshold.
+    moderate = FEA.RankGridSpec(nvertices=256, store_zeros=false)
+    FEA.nfeatures(moderate)
+    FEA.feature_names(moderate)
+    FEA.describe(moderate)
+    sprint(show, moderate)
+    labels_bytes = @allocated FEA.feature_names(moderate)
+    count_bytes = @allocated FEA.nfeatures(moderate)
+    summary_bytes = @allocated FEA.describe(moderate)
+    show_bytes = @allocated sprint(show, moderate)
+    @test FEA.nfeatures(moderate) == 65_536
+    @test count_bytes < div(labels_bytes, 10)
+    @test summary_bytes < div(labels_bytes, 10)
+    @test show_bytes < div(labels_bytes, 10)
 end
-if Base.find_package("Parquet2") !== nothing && !isdefined(Main, :TamerOpParquet2Ext)
-    include(joinpath(@__DIR__, "..", "ext", "TamerOpParquet2Ext.jl"))
+
+@testset "A12 featurizer rank-grid vector oracle" begin
+    # A chain's six comparable pairs occupy a full nine-entry output vector.
+    # Sparse table storage never changes the vector's shape or ordering.
+    P = FF.ProductOfChainsPoset((3,))
+    field = CM.F3()
+    K = CM.coeff_type(field)
+    one_map = reshape([CM.coerce(field, 1)], 1, 1)
+    M = MD.PModule{K}(P, [1, 1, 1],
+        Dict((1, 2) => one_map, (2, 3) => copy(one_map)); field=field)
+    for store_zeros in (false, true)
+        spec = FEA.RankGridSpec(nvertices=3, store_zeros=store_zeros)
+        @test FEA.transform(spec, M; threaded=false) == [1, 1, 1, 0, 1, 1, 0, 0, 1]
+    end
 end
-if Base.find_package("NPZ") !== nothing && !isdefined(Main, :TamerOpNPZExt)
-    include(joinpath(@__DIR__, "..", "ext", "TamerOpNPZExt.jl"))
+
+# Exercise Julia's extension loader. Installed optional dependencies must load
+# successfully; direct inclusion of extension source would hide packaging bugs.
+for dependency in (:Tables, :Arrow, :Parquet2, :NPZ, :CSV, :Folds, :KernelFunctions, :Distances)
+    if Base.find_package(String(dependency)) !== nothing
+        Core.eval(@__MODULE__, Expr(:import, Expr(:., dependency)))
+    end
 end
-if Base.find_package("CSV") !== nothing && !isdefined(Main, :TamerOpCSVExt)
-    include(joinpath(@__DIR__, "..", "ext", "TamerOpCSVExt.jl"))
-end
-if Base.find_package("Folds") !== nothing && !isdefined(Main, :TamerOpFoldsExt)
-    include(joinpath(@__DIR__, "..", "ext", "TamerOpFoldsExt.jl"))
-end
-if Base.find_package("KernelFunctions") !== nothing && !isdefined(Main, :TamerOpKernelFunctionsExt)
-    include(joinpath(@__DIR__, "..", "ext", "TamerOpKernelFunctionsExt.jl"))
-end
-if Base.find_package("Distances") !== nothing && !isdefined(Main, :TamerOpDistancesExt)
-    include(joinpath(@__DIR__, "..", "ext", "TamerOpDistancesExt.jl"))
+
+@testset "Tables column interfaces" begin
+    if Base.find_package("Tables") === nothing
+        @test_skip false
+    else
+        @eval using Tables
+        fs = FEA.FeatureSet([1 2 3; 4 5 6], [:alpha, :beta, :gamma],
+                            ["first", "second"], nothing)
+        wide_columns = (id=["first", "second"], alpha=[1, 4],
+                        beta=[2, 5], gamma=[3, 6])
+        wide_rows = [(id="first", alpha=1, beta=2, gamma=3),
+                     (id="second", alpha=4, beta=5, gamma=6)]
+        for table in (fs, FEA.feature_table(fs; format=:wide))
+            @test Tables.istable(typeof(table))
+            @test Tables.columnaccess(typeof(table))
+            @test Tables.columns(table) == wide_columns
+            @test Tables.columntable(table) == wide_columns
+            @test Tables.schema(table).names == (:id, :alpha, :beta, :gamma)
+            @test Tables.schema(table).types == (String, Int, Int, Int)
+            @test Tables.rowtable(table) == wide_rows
+        end
+
+        long = FEA.feature_table(fs; format=:long)
+        long_columns = (sample_index=[1, 1, 1, 2, 2, 2],
+                        id=["first", "first", "first", "second", "second", "second"],
+                        feature=[:alpha, :beta, :gamma, :alpha, :beta, :gamma],
+                        value=[1, 2, 3, 4, 5, 6])
+        long_rows = [(sample_index=1, id="first", feature=:alpha, value=1),
+                     (sample_index=1, id="first", feature=:beta, value=2),
+                     (sample_index=1, id="first", feature=:gamma, value=3),
+                     (sample_index=2, id="second", feature=:alpha, value=4),
+                     (sample_index=2, id="second", feature=:beta, value=5),
+                     (sample_index=2, id="second", feature=:gamma, value=6)]
+        @test Tables.istable(typeof(long))
+        @test Tables.columnaccess(typeof(long))
+        @test Tables.columns(long) == long_columns
+        @test Tables.columntable(long) == long_columns
+        @test Tables.schema(long).names == (:sample_index, :id, :feature, :value)
+        @test Tables.schema(long).types == (Int, String, Symbol, Int)
+        @test Tables.rowtable(long) == long_rows
+
+        # Either empty axis gives no rows, while retaining exact column types.
+        A = TamerOp.ExactReals.AlgebraicReal
+        x = A[sqrt(A(2)), sqrt(A(3))]
+        y = QQ[-1//3, 1//3]
+        for (nx, ny) in ((0, 2), (2, 0), (0, 0))
+            empty_table = FEA.euler_surface_table(Matrix{Int}(undef, nx, ny);
+                axes=(x[1:nx], y[1:ny]), id="empty")
+            @test Tables.istable(typeof(empty_table))
+            @test Tables.columnaccess(typeof(empty_table))
+            @test Tables.schema(empty_table).names == (:id, :x, :y, :value)
+            @test Tables.schema(empty_table).types == (String, A, QQ, Int)
+            columns = Tables.columntable(empty_table)
+            @test columns == (id=String[], x=A[], y=QQ[], value=Int[])
+            @test eltype(columns.x) == A && eltype(columns.y) == QQ
+            @test isempty(Tables.rowtable(empty_table))
+        end
+    end
 end
 
 @testset "Workflow featurizer specs and batch featurize" begin
@@ -858,13 +1044,28 @@ end
     @test fs_batch_threads.ids == fs_batch_serial.ids
 
     bfolds = TO.BatchOptions(threaded=true, backend=:folds, deterministic=true)
-    fs_batch_folds = TO.featurize(samples, lspec; opts=opts_inv, batch=bfolds)
-    @test fs_batch_folds.X == fs_batch_serial.X
+    if Base.find_package("Folds") === nothing
+        @test_throws ArgumentError TO.featurize(samples, lspec; opts=opts_inv, batch=bfolds)
+    else
+        @eval import Folds
+        @test Base.get_extension(TamerOp, :TamerOpFoldsExt) !== nothing
+        fs_batch_folds = TO.featurize(samples, lspec; opts=opts_inv, batch=bfolds)
+        @test fs_batch_folds.X == fs_batch_serial.X
+    end
+    # Explicit serial execution does not require an unused parallel integration.
+    stored_folds = TO.BatchOptions(threaded=false, backend=:folds)
+    @test TO.featurize(samples, lspec; opts=opts_inv, batch=stored_folds).X == fs_batch_serial.X
 
     bprogress = TO.BatchOptions(threaded=false, backend=:serial, progress=true, deterministic=true)
-    fs_batch_progress = TO.featurize(samples, lspec; opts=opts_inv, batch=bprogress)
-    @test fs_batch_progress.X == fs_batch_serial.X
-    @test fs_batch_progress.meta.batch.progress
+    if Base.find_package("ProgressLogging") === nothing
+        @test_throws ArgumentError TO.featurize(samples, lspec; opts=opts_inv, batch=bprogress)
+    else
+        @eval import ProgressLogging
+        @test Base.get_extension(TamerOp, :TamerOpProgressLoggingExt) !== nothing
+        fs_batch_progress = TO.featurize(samples, lspec; opts=opts_inv, batch=bprogress)
+        @test fs_batch_progress.X == fs_batch_serial.X
+        @test fs_batch_progress.meta.batch.progress
+    end
 
     @test_throws ArgumentError TO.BatchOptions(threaded=true, backend=:bad_backend)
 
@@ -1750,5 +1951,635 @@ end
         @test t_raw < 4000.0
         @test t_auto < 4000.0
         @test t_auto <= (3.0 * t_raw + 1.0)
+    end
+end
+
+@testset "A04 MPPI features preserve corrected tracks and option contracts" begin
+    MI = TamerOp.MultiparameterImages
+    for constructor in (FEA.MPPImageSpec, FEA.MPPDecompositionHistogramSpec)
+        @test FEA.check_featurizer_spec(constructor(; N=2, q=0)).valid
+        @test FEA.check_featurizer_spec(constructor(; N=4, q=0.5, delta=0.25)).valid
+        for opts_bad in ((N=1,), (q=-1.0,), (q=Inf,), (q=NaN,),
+                         (delta=0.0,), (delta=Inf,), (delta=NaN,), (delta=:unknown,))
+            @test_throws ArgumentError constructor(; opts_bad...)
+        end
+    end
+    with_fields(FIELDS_FULL) do field
+        points = [(0,0), (1,0), (0,1), (1,1)]
+        P = FF.FinitePoset([a[1] <= b[1] && a[2] <= b[2] for a in points, b in points])
+        pi = EC.GridEncodingMap(P, ([0.0,1.0], [0.0,1.0]))
+        H = FF.one_by_one_fringe(P, FF.principal_upset(P,1), FF.principal_downset(P,1),
+            CM.coerce(field,1); field=field)
+        M = IR.pmodule_from_fringe(H)
+        enc = TO.EncodingResult(P,M,pi)
+        opts = TO.InvariantOptions(box=([0.0,0.0], [1.0,1.0]), threads=false)
+        for q in (0.0,1.0)
+            spec = FEA.MPPImageSpec(; N=2, q=q, resolution=3, sigma=0.4, threads=false)
+            image = MI.mpp_image(M,pi,opts; N=2,q=q,resolution=3,sigma=0.4,threads=false)
+            expected = vec(MI.image_values(image))
+            @test isapprox(FEA.transform(spec,enc; opts=opts,threaded=false), expected)
+            cache = FEA.build_cache(enc,spec; opts=opts,level=:fibered,threaded=false)
+            @test FEA.cache_stats(cache).n_mpp_decompositions == 0
+            @test isapprox(FEA.transform(spec,cache; threaded=false), expected)
+            @test FEA.cache_stats(cache).n_mpp_decompositions == 1
+            @test isapprox(FEA.transform(spec,cache; threaded=false), expected)
+            @test FEA.cache_stats(cache).n_mpp_decompositions == 1
+            hist_spec = FEA.MPPDecompositionHistogramSpec(; N=2, q=q,
+                orientation_bins=1, scale_bins=1, normalize=:none, threads=false)
+            mass = q == 0 ? 2.0 : 0.0
+            # Three unit-diagonal segments lie in two tracks. The entropy
+            # scalar is normalized by log(number of positive track weights).
+            hist_expected = [mass, mass, 2.0, 3.0, 1.0, q == 0 ? 1.0 : 0.0]
+            @test isapprox(FEA.transform(hist_spec,cache; threaded=false), hist_expected)
+            @test isapprox(FEA.transform(hist_spec,enc; opts=opts,threaded=false), hist_expected)
+            @test FEA.cache_stats(cache).n_mpp_decompositions == 1
+            if Threads.nthreads() > 1
+                @test isapprox(FEA.transform(spec,cache; threaded=true), expected)
+            end
+        end
+    end
+end
+
+@testset "A03 matching-distance banks use explicit exact and sampled methods" begin
+    with_fields(FIELDS_FULL) do field
+        K = CM.coeff_type(field)
+        points = [(0, 0), (1, 0), (0, 1), (1, 1)]
+        P = FF.FinitePoset([a[1] <= b[1] && a[2] <= b[2] for a in points, b in points])
+        pi = EC.GridEncodingMap(P, ([0.0, 1.0], [0.0, 1.0]))
+        H = FF.one_by_one_fringe(P, FF.principal_upset(P, 1), FF.principal_downset(P, 1),
+            CM.coerce(field, 1); field=field)
+        M = IR.pmodule_from_fringe(H)
+        Z = MD.zero_pmodule(P; field=field)
+        encM, encZ = TO.EncodingResult(P, M, pi), TO.EncodingResult(P, Z, pi)
+        opts = TO.InvariantOptions(box=([0.0, 0.0], [1.0, 1.0]), threads=true)
+        # The exact supremum is 1/2 on the diagonal; the arrangement's
+        # representative directions/offsets attain only 1/4 on this fixture.
+        exact = FEA.MatchingDistanceBankSpec([encZ, encM];
+            reference_names=[:zero, :self], method=:exact_2d, threads=false)
+        sampled = FEA.MatchingDistanceBankSpec([encZ, encM];
+            reference_names=[:zero, :self], method=:sampled_2d, threads=false)
+        @test FEA.check_featurizer_spec(exact).valid
+        @test FEA.check_featurizer_spec(sampled).valid
+        @test FEA.supports(exact, encM)
+        @test FEA.supports(sampled, encM)
+        @test FEA.feature_names(exact) == [:zero, :self]
+        @test FEA.nfeatures(exact) == 2
+        @test FEA._resolve_spec_threads(exact.threads, opts, true) == false
+        @test isapprox(FEA.transform(exact, encM; opts=opts, threaded=true), [0.5, 0.0]; atol=1e-12)
+        @test isapprox(FEA.transform(sampled, encM; opts=opts, threaded=true), [0.25, 0.0]; atol=1e-12)
+        @test isapprox(FEA.matching_distance(encM, encZ; method=:exact_2d, opts=opts), 0.5; atol=1e-12)
+        @test isapprox(FEA.matching_distance(encM, encZ; method=:sampled_2d, opts=opts), 0.25; atol=1e-12)
+        @test_throws ArgumentError FEA.matching_distance(encM, encZ; method=:unknown, opts=opts)
+        @test_throws ArgumentError FEA.matching_distance(encM, encZ;
+            method=:exact_2d, opts=opts, max_candidates=0)
+
+        # Scalar dispatch preserves the session's geometry cache. Repeated
+        # calls reuse its objects without allocating an unused slice plan.
+        for (method, expected) in ((:exact_2d, 0.5), (:sampled_2d, 0.25))
+            session = CM.SessionCache()
+            geometry_cache = CM._workflow_encoding_cache(session)
+            @test isempty(geometry_cache.geometry)
+            @test isapprox(FEA.matching_distance(encM, encZ;
+                method=method, opts=opts, cache=session), expected; atol=1e-12)
+            @test !isempty(geometry_cache.geometry)
+            @test session.slice_plan === nothing
+            geometry_objects = Dict(key => payload.value for (key, payload) in geometry_cache.geometry)
+            @test isapprox(FEA.matching_distance(encM, encZ;
+                method=method, opts=opts, cache=session), expected; atol=1e-12)
+            @test length(geometry_cache.geometry) == length(geometry_objects)
+            @test all(geometry_cache.geometry[key].value === value for (key, value) in geometry_objects)
+        end
+
+        cache = FEA.build_cache(encM, exact; opts=opts, threaded=false)
+        @test FEA.cache_stats(cache).n_fibered == 0
+        @test isapprox(FEA.transform(exact, cache; threaded=false), [0.5, 0.0]; atol=1e-12)
+        first_count = FEA.cache_stats(cache).n_fibered
+        @test first_count == 2  # sample and zero reference; self reuses sample
+        @test isapprox(FEA.transform(exact, cache; threaded=false), [0.5, 0.0]; atol=1e-12)
+        @test FEA.cache_stats(cache).n_fibered == first_count
+        @test isapprox(FEA.transform(sampled, cache; threaded=false), [0.25, 0.0]; atol=1e-12)
+        @test FEA.cache_stats(cache).n_fibered == first_count
+        linf = FEA.MatchingDistanceBankSpec([encZ]; method=:exact_2d,
+            normalize_dirs=:Linf, weight=:lesnick_linf, threads=false)
+        @test isapprox(FEA.transform(linf, encM; opts=opts, threaded=false), [0.5]; atol=1e-12)
+        if Threads.nthreads() > 1
+            parallel = FEA.MatchingDistanceBankSpec([encZ]; method=:exact_2d, threads=true)
+            @test isapprox(FEA.transform(parallel, encM; opts=opts, threaded=true), [0.5]; atol=1e-12)
+        end
+
+        # Arbitrary sampling keeps its explicit slice controls; a diagonal
+        # slice through the unit square gives the same known value 1/2.
+        approx = FEA.MatchingDistanceBankSpec([encZ]; method=:approx,
+            directions=[[1.0, 1.0]], offsets=[[0.0, 0.0]], threads=false)
+        @test isapprox(FEA.transform(approx, encM; opts=opts, threaded=true), [0.5]; atol=1e-12)
+        # Adding a slice with score 1/4 leaves the sampled maximum at 1/2.
+        approx_two = FEA.MatchingDistanceBankSpec([encZ]; method=:approx,
+            directions=[[1.0, 1.0]], offsets=[[0.0, 0.0], [0.0, 0.5]], threads=false)
+        @test isapprox(FEA.transform(approx_two, encM; opts=opts, threaded=true), [0.5]; atol=1e-12)
+        for method in (:exact_2d, :sampled_2d)
+            @test_throws ArgumentError FEA.MatchingDistanceBankSpec([encZ]; method=method,
+                directions=[[1.0, 1.0]])
+            @test_throws ArgumentError FEA.MatchingDistanceBankSpec([encZ]; method=method,
+                offsets=[[0.0, 0.0]])
+            @test_throws ArgumentError FEA.MatchingDistanceBankSpec([encZ]; method=method, n_dirs=8)
+            @test_throws ArgumentError FEA.MatchingDistanceBankSpec([encZ]; method=method, n_offsets=4)
+            @test_throws ArgumentError FEA.MatchingDistanceBankSpec([encZ]; method=method, max_den=3)
+        end
+        @test_throws ArgumentError FEA.MatchingDistanceBankSpec([encZ]; method=:exact_2d, include_axes=true)
+        @test_throws ArgumentError FEA.MatchingDistanceBankSpec([encZ]; method=:exact_2d, weight=:none)
+        @test_throws ArgumentError FEA.MatchingDistanceBankSpec([encZ]; method=:exact_2d,
+            normalize_dirs=:Linf, weight=:lesnick_l1)
+        @test_throws ArgumentError FEA.MatchingDistanceBankSpec([encZ]; method=:unknown)
+        @test_throws ArgumentError FEA.MatchingDistanceBankSpec([encZ]; weight=:unknown)
+        @test_throws ArgumentError FEA.MatchingDistanceBankSpec([encZ]; normalize_dirs=:unknown)
+        raw_bad = FEA.MatchingDistanceBankSpec(exact.references, exact.reference_names,
+            :exact_2d, nothing, nothing, 100, 50, 8, true, :L1, :lesnick_l1, false)
+        @test !FEA.check_featurizer_spec(raw_bad).valid
+        @test_throws ArgumentError FEA.check_featurizer_spec(raw_bad; throw=true)
+        @test !FEA.supports(raw_bad, encM)
+        @test_throws ArgumentError FEA.transform(raw_bad, cache; threaded=false)
+
+        # Native reflected grids are outside the exact optimizer's contract,
+        # and a different classifier object is not a shared encoding family.
+        reflected = EC.GridEncodingMap(P, ([0.0, 1.0], [0.0, 1.0]); orientation=(-1, 1))
+        reflected_sample = TO.EncodingResult(P, M, reflected)
+        reflected_spec = FEA.MatchingDistanceBankSpec([reflected_sample]; method=:exact_2d)
+        @test !FEA.supports(reflected_spec, reflected_sample)
+        @test_throws ArgumentError FEA.build_cache(reflected_sample, reflected_spec; opts=opts)
+        other_pi = EC.GridEncodingMap(P, ([0.0, 1.0], [0.0, 1.0]))
+        other_sample = TO.EncodingResult(P, M, other_pi)
+        @test !FEA.supports(exact, other_sample)
+        @test_throws ArgumentError FEA.transform(exact, other_sample; opts=opts)
+
+        # Both methods survive the existing metadata format; no new serialized
+        # fields or reference-resolution protocol are needed.
+        for spec in (exact, sampled)
+            fs = TO.FeatureSet(zeros(1, 2), FEA.feature_names(spec), ["square"], (spec=spec, opts=opts))
+            metadata = FEA.feature_metadata(fs; format=:wide)
+            rebuilt = FEA.load_spec_with_resolver(metadata["spec"],
+                id -> id == "zero" ? encZ : (id == "self" ? encM : nothing))
+            @test rebuilt.method == spec.method
+            @test FEA.check_featurizer_spec(rebuilt).valid
+            @test isapprox(FEA.transform(rebuilt, encM; opts=opts, threaded=false),
+                (spec.method == :exact_2d ? [0.5, 0.0] : [0.25, 0.0]); atol=1e-12)
+        end
+
+        if field isa CM.QQField
+            hp = PLP.make_hpoly([-1.0 0.0; 0.0 -1.0; 1.0 0.0; 0.0 1.0], [0.0, 0.0, 1.0, 1.0])
+            pp = PLP.PLEncodingMap(2, [BitVector([false])], [BitVector([false])], [hp], [(0.5, 0.5)])
+            Q = chain_poset(1)
+            PM = IR.pmodule_from_fringe(FF.one_by_one_fringe(Q, FF.principal_upset(Q, 1),
+                FF.principal_downset(Q, 1), CM.coerce(field, 1); field=field))
+            PZ = MD.zero_pmodule(Q; field=field)
+            epM, epZ = TO.EncodingResult(Q, PM, pp), TO.EncodingResult(Q, PZ, pp)
+            poly_exact = FEA.MatchingDistanceBankSpec([epZ]; method=:exact_2d)
+            poly_sampled = FEA.MatchingDistanceBankSpec([epZ]; method=:sampled_2d)
+            @test !FEA.supports(poly_exact, epM)
+            @test FEA.supports(poly_sampled, epM)
+            @test_throws ArgumentError FEA.transform(poly_exact, epM; opts=opts)
+            @test isapprox(FEA.transform(poly_sampled, epM; opts=opts, threaded=false), [0.25]; atol=1e-12)
+
+            face = FZ.face(2, [1, 2])
+            flange = FZ.Flange{K}(2, [FZ.IndFlat(face, [0, 0]; id=:F)],
+                [FZ.IndInj(face, [0, 0]; id=:E)], reshape([CM.coerce(field, 1)], 1, 1); field=field)
+            enc_zn = TO.encode(flange; backend=:zn)
+            zn_exact = FEA.MatchingDistanceBankSpec([enc_zn]; method=:exact_2d)
+            @test !FEA.supports(zn_exact, enc_zn)
+            @test_throws ArgumentError FEA.transform(zn_exact, enc_zn; opts=opts)
+        end
+    end
+end
+
+@testset "A64 exact featurizer query coordinates and structural caches" begin
+    SI = TamerOp.SliceInvariants
+    A = TO.ExactReals.AlgebraicReal
+    @testset "Euler table labels retain exact coordinates" begin
+        rho = sqrt(A(2))
+        epsilon = A(big(1)//(big(1)<<70))
+        x = A[rho, rho + epsilon]
+        y = QQ[-1//3, 0, 1//3]
+        values = [1 2 3; 4 5 6]
+        table = FEA.euler_surface_table(values; axes=(x, y), id="exact")
+        @test eltype(table.x) == A
+        @test eltype(table.y) == QQ
+        @test table.x == x && table.y == y && table.values == values
+        @test table.x[1] < table.x[2]
+        @test Float64(table.x[1]) == Float64(table.x[2])
+        x[1] = A(0)
+        @test table.x[1] == rho
+
+        ordinary = FEA.euler_surface_table(Float64.(values);
+            axes=([0.0, 1.0], [2.0, 3.0, 4.0]), id="ordinary")
+        @test eltype(ordinary.x) == eltype(ordinary.y) == Float64
+        @test ordinary.x == [0.0, 1.0] && ordinary.y == [2.0, 3.0, 4.0]
+        default = FEA.euler_surface_table(values)
+        @test default.x == [1.0, 2.0] && default.y == [1.0, 2.0, 3.0]
+        @test_throws DimensionMismatch FEA.euler_surface_table(values; axes=(A[rho], y))
+        @test_throws DimensionMismatch FEA.euler_surface_table(values; axes=(x, QQ[0]))
+
+        if Base.find_package("Tables") === nothing
+            @test_skip false
+        else
+            @eval using Tables
+            @test Base.get_extension(TamerOp, :TamerOpTablesExt) !== nothing
+            columns = Tables.columntable(table)
+            @test Tables.istable(typeof(table)) && Tables.columnaccess(typeof(table))
+            @test Tables.schema(table).names == (:id, :x, :y, :value)
+            @test Tables.schema(table).types == (String, A, QQ, Int)
+            @test columns.id == fill("exact", 6)
+            @test eltype(columns.x) == A && eltype(columns.y) == QQ
+            @test columns.x == A[rho, rho, rho, rho + epsilon, rho + epsilon, rho + epsilon]
+            @test columns.y == QQ[-1//3, 0, 1//3, -1//3, 0, 1//3]
+            @test columns.value == [1, 2, 3, 4, 5, 6]
+            @test columns.x[3] < columns.x[4]
+            float_columns = Tables.columntable(ordinary)
+            @test eltype(float_columns.x) == eltype(float_columns.y) == Float64
+            @test float_columns.x == [0.0, 0.0, 0.0, 1.0, 1.0, 1.0]
+            @test float_columns.y == [2.0, 3.0, 4.0, 2.0, 3.0, 4.0]
+            @test float_columns.value == Float64[1, 2, 3, 4, 5, 6]
+        end
+    end
+
+    a, b = sqrt(A(3)) - sqrt(A(2)), sqrt(A(3)) + sqrt(A(2))
+    @test 0 < a < 1 < b < 4
+    # Algebraic conjugates have the same minimal polynomial, hence the same
+    # legal scalar hash. Geometry requests must still compare their values.
+    @test a != b && hash(a) == hash(b)
+    kwargs = (directions=[A[0, 1]], offsets=[A[a, 0]], tmin=a, tmax=b,
+              nsteps=9, threads=false)
+    specs = (FEA.LandscapeSpec(; kwargs..., kmax=1, tgrid=[0.0, 1.0]),
+             FEA.PersistenceImageSpec(; kwargs..., xgrid=[0.0], ygrid=[1.0]),
+             FEA.MPLandscapeSpec(; kwargs..., kmax=1, tgrid=[0.0, 1.0]),
+             FEA.BarcodeTopKSpec(; kwargs..., k=1, window=(a, b)),
+             FEA.SlicedBarcodeSpec(; kwargs...),
+             FEA.BarcodeSummarySpec(; kwargs..., window=(a, b)))
+    for spec in specs
+        @test eltype(first(spec.directions)) == A
+        @test spec.offsets == [A[a, 0]]
+        @test spec.tmin == a && spec.tmax == b
+        @test FEA.check_featurizer_spec(spec).valid
+        @test !isempty(FEA.feature_axes(spec))
+    end
+    @test specs[4].window == (a, b) && specs[6].window == (a, b)
+    ordinary = FEA.BarcodeSummarySpec(directions=[[0.0, 1.0]], offsets=[[0.0, 0.0]])
+    @test eltype(first(ordinary.directions)) == Float64
+    rational = FEA.BarcodeSummarySpec(directions=[[0//1, 1//1]], offsets=[[1//3, 0//1]])
+    @test rational.offsets[1][1] == A(1//3)
+
+    # Sorting must also precede numerical conversion when the caller supplies
+    # rational barcode endpoints directly. The later-born bar is strictly
+    # longer, although their Float64 persistences coincide.
+    delta = big(1)//(big(1)<<70)
+    topk = FEA.BarcodeTopKSpec(directions=[[1.0]], offsets=[[0.0]], k=1)
+    qqbars = IC.PackedBarcode{CM.QQ}(
+        [IC.EndpointPair{CM.QQ}(0//1, 1//1), IC.EndpointPair{CM.QQ}(2//1, 3 + delta)], [1, 1])
+    @test FEA._barcode_topk_vector(qqbars, topk) == [2.0, 1.0, 2.0, 1.0]
+
+    # Infinite numerical endpoints are clipped before conversion to an exact
+    # finite scalar. The two exact clipping bounds have equal Float64 values.
+    rho_clip, width_clip = sqrt(A(2)), A(delta)
+    clipping = (rho_clip, rho_clip + width_clip)
+    essential = IC.PackedBarcode{Float64}([IC.EndpointPair{Float64}(-Inf, Inf)], [1])
+    clip_topk = FEA.BarcodeTopKSpec(directions=[[1.0]], offsets=[[0.0]], k=1, window=clipping)
+    clip_summary = FEA.BarcodeSummarySpec(directions=[[1.0]], offsets=[[0.0]],
+        fields=(:count, :sum_persistence), window=clipping)
+    @test Float64(clipping[1]) == Float64(clipping[2])
+    @test FEA._barcode_topk_vector(essential, clip_topk) ==
+          [1.0, 1.0, Float64(rho_clip), Float64(width_clip)]
+    @test FEA._barcode_summary_vector(essential, clip_summary) == [1.0, Float64(width_clip)]
+
+    # A Gaussian centered one exact half-width from the numerical sample has
+    # exponent -1/2, even though both endpoints display as 1.0. Numerical
+    # powers/exp/log are applied only after the exact coordinate differences.
+    for T in (CM.QQ, A)
+        thin = IC.PackedBarcode{T}([IC.EndpointPair{T}(T(1 - delta), T(1 + delta))], [1])
+        repeated = IC.PackedBarcode{T}(copy(thin.pairs), [2])
+        w = sqrt(Float64(2delta))
+        for (coords, xg, yg, expected) in
+            ((:birth_persistence, [1.0], [Float64(2delta)], w * exp(-0.5)),
+             (:birth_death, [1.0], [1.0], w * exp(-1.0)),
+             (:midlife_persistence, [1.0], [Float64(2delta)], w))
+            for threads in (false, true), differentiable in (false, true)
+                img = SI.persistence_image(thin; xgrid=xg, ygrid=yg, sigma=Float64(delta),
+                    coords=coords, p=0.5, threads=threads, differentiable=differentiable)
+                @test isapprox(img.values[1, 1], expected; rtol=5e-15, atol=0.0)
+            end
+        end
+        @test isapprox(SI.persistence_silhouette(thin; tgrid=[0.0, 1.0, 2.0], p=0.5),
+            [0.0, Float64(delta), 0.0]; rtol=5e-15, atol=0.0)
+        @test isapprox(SI.barcode_entropy(repeated; p=0.5), 1.0; atol=1e-14)
+        summary = SI.barcode_summary(repeated)
+        @test summary.n_intervals == 2
+        @test summary.total_persistence == Float64(4delta)
+        @test summary.max_persistence == Float64(2delta)
+        @test isapprox(summary.l2_persistence, sqrt(2.0) * Float64(2delta); rtol=5e-15, atol=0.0)
+    end
+
+    with_fields(FIELDS_FULL) do field
+        P = FF.ProductOfChainsPoset((2, 2))
+        pi = EC.GridEncodingMap(P, (A[0, 1], A[0, 1]))
+        # The rectangle module is one-dimensional precisely on [0,1)^2.
+        H = FF.one_by_one_fringe(P, FF.principal_upset(P, 1),
+            FF.principal_downset(P, 1), CM.coerce(field, 1); field=field)
+        M = IR.pmodule_from_fringe(H)
+        enc = TO.EncodingResult(P, M, pi)
+        opts = OPT.InvariantOptions(box=(A[0, 0], A[4, 4]), threads=false)
+
+        # The feature owner must reach the slice owner's vectorization
+        # kernels directly. These finite bars are [0,1), so both layouts
+        # have hand-computable outputs, including a nonscalar image.
+        landscape = FEA.LandscapeSpec(directions=[A[1,0]], offsets=[A[0,0]],
+            kmax=1, tgrid=[0.25,0.5,0.75], threads=false)
+        image = FEA.PersistenceImageSpec(directions=[A[1,0]], offsets=[A[0,0]],
+            xgrid=[0.0,1.0], ygrid=[0.0,1.0], sigma=1.0, threads=false)
+        for (spec, expected_features) in
+            ((landscape,[0.25,0.5,0.25]),
+             (image,[exp(-0.5),exp(-1.0),1.0,exp(-0.5)]))
+            features = FEA.build_cache(enc, spec; opts, level=:fibered, threaded=false)
+            @test isapprox(FEA.transform(spec, features; threaded=false),
+                expected_features; rtol=1e-14, atol=0.0)
+        end
+
+        euler_a = FEA.EulerSurfaceSpec(axes=(A[a], A[0]), axes_policy=:as_given)
+        euler_b = FEA.EulerSurfaceSpec(axes=(A[b], A[0]), axes_policy=:as_given)
+        @test FEA.feature_axes(euler_a).axis_1 == A[a]
+        @test FEA.transform(euler_a, enc; opts, threaded=false) == [1.0]
+        @test FEA.transform(euler_b, enc; opts, threaded=false) == [0.0]
+        euler_pair = FEA.CompositeSpec((euler_a, euler_b))
+        hcache = FEA.build_cache(enc, euler_pair; opts, threaded=false)
+        ecache = FEA.build_cache(M, pi; opts, level=:slice, threaded=false)
+        for cache in (hcache, ecache)
+            @test FEA.transform(euler_pair, cache; threaded=false) == [1.0, 0.0]
+        end
+
+        # Vertical lines through the two conjugate x coordinates meet the
+        # rectangle and its zero complement, respectively. Both public
+        # sampled and exact-fibered paths must retain that distinction.
+        for source in (:slice, :fibered)
+            slice_a = FEA.BarcodeSummarySpec(directions=[A[0, 1]], offsets=[A[a, 0]],
+                tmin=A(0), tmax=A(1), nsteps=3, fields=(:count,), source=source,
+                window=(0.0, 1.0), threads=false)
+            slice_b = FEA.BarcodeSummarySpec(directions=[A[0, 1]], offsets=[A[b, 0]],
+                tmin=A(0), tmax=A(1), nsteps=3, fields=(:count,), source=source,
+                window=(0.0, 1.0), threads=false)
+            pair = FEA.CompositeSpec((slice_a, slice_b))
+            cache = FEA.build_cache(enc, pair; opts, level=:slice, threaded=false)
+            @test FEA.transform(slice_a, cache; threaded=false) == [1.0]
+            @test FEA.transform(slice_b, cache; threaded=false) == [0.0]
+            @test FEA.transform(pair, cache; threaded=false) == [1.0, 0.0]
+            before = FEA.cache_stats(cache)
+            @test FEA.transform(pair, cache; threaded=false) == [1.0, 0.0]
+            after = FEA.cache_stats(cache)
+            @test after.n_slice_plans == before.n_slice_plans
+            @test after.n_fibered == before.n_fibered
+            if source == :slice
+                @test before.n_slice_plans == 2
+                # Frozen request snapshots survive mutation of a spec's
+                # array payload; restoring it reuses the original plan.
+                slice_a.offsets[1][1] = b
+                @test FEA.transform(slice_a, cache; threaded=false) == [0.0]
+                slice_a.offsets[1][1] = a
+                @test FEA.transform(slice_a, cache; threaded=false) == [1.0]
+                @test FEA.cache_stats(cache).n_slice_plans == 2
+            end
+        end
+
+        # The two clipping windows have colliding hashes but clip the same
+        # horizontal bar to lengths a and 1. Reusing one feature cache must
+        # build two geometries and then reuse each separately.
+        horiz = FEA.BarcodeSummarySpec(directions=[A[1, 0]], offsets=[A[0, 0]],
+            fields=(:sum_persistence,), source=:fibered, threads=false)
+        oa = OPT.InvariantOptions(box=(A[0, 0], A[a, 1]), threads=false)
+        ob = OPT.InvariantOptions(box=(A[0, 0], A[b, 1]), threads=false)
+        cache = FEA.build_cache(M, pi; opts=oa, threaded=false)
+        @test isapprox(FEA.transform(horiz, cache; opts=oa, threaded=false), [Float64(a)]; atol=1e-12)
+        @test FEA.transform(horiz, cache; opts=ob, threaded=false) == [1.0]
+        @test FEA.cache_stats(cache).n_fibered == 2
+        @test isapprox(FEA.transform(horiz, cache; opts=oa, threaded=false), [Float64(a)]; atol=1e-12)
+        @test FEA.cache_stats(cache).n_fibered == 2
+
+        # Here changing only the lower sampled parameter bound changes
+        # whether any nonzero stalk is encountered.
+        bound_specs = map((a, b)) do lo
+            FEA.BarcodeSummarySpec(directions=[A[0, 1]], offsets=[A[0, 0]],
+                tmin=lo, tmax=A(4), nsteps=9, fields=(:count,), window=(0.0, 4.0), threads=false)
+        end
+        @test FEA.transform(FEA.CompositeSpec(bound_specs), enc;
+            opts, threaded=false) == [1.0, 0.0]
+
+        # Numerical feature outputs may round birth coordinates, but a
+        # strictly positive exact persistence must not be discarded before
+        # counting or before subtracting its endpoints.
+        rho, eps = sqrt(A(2)), A(big(1)//(big(1)<<70))
+        Q = FF.ProductOfChainsPoset((3, 2))
+        qi = EC.GridEncodingMap(Q, (A[0, rho, rho + eps], A[0, 1]))
+        narrow = IR.pmodule_from_fringe(FF.one_by_one_fringe(Q,
+            FF.principal_upset(Q, 2), FF.principal_downset(Q, 2),
+            CM.coerce(field, 1); field=field))
+        narrow_spec = FEA.BarcodeSummarySpec(directions=[A[1, 0]], offsets=[A[0, 0]],
+            fields=(:count, :sum_persistence), source=:fibered, threads=false)
+        narrow_opts = OPT.InvariantOptions(box=(A[0, 0], A[rho + 2eps, 1]), threads=false)
+        @test Float64(rho) == Float64(rho + eps)
+        @test FEA.transform(narrow_spec, TO.EncodingResult(Q, narrow, qi);
+            opts=narrow_opts, threaded=false) == [1.0, Float64(eps)]
+        for threaded_image in (false, true)
+            image_spec = FEA.PersistenceImageSpec(directions=[A[1, 0]], offsets=[A[0, 0]],
+                xgrid=[0.0], ygrid=[Float64(eps)], sigma=1.0, p=0.5,
+                threads=threaded_image)
+            image_cache = FEA.build_cache(TO.EncodingResult(Q, narrow, qi), image_spec;
+                opts=narrow_opts, level=:fibered, threaded=threaded_image)
+            @test isapprox(FEA.transform(image_spec, image_cache; threaded=threaded_image),
+                [sqrt(Float64(eps)) * exp(-1.0)]; rtol=5e-15, atol=0.0)
+        end
+    end
+end
+
+@testset "A64 exact feature metadata roundtrips" begin
+    A = TO.ExactReals.AlgebraicReal
+    small, large = sqrt(A(3))-sqrt(A(2)), sqrt(A(3))+sqrt(A(2))
+    @test small < large
+    @test hash(small) == hash(large)
+    epsilon = QQ(1,big(2)^70)
+    @test Float64(QQ(1)) == Float64(QQ(1)+epsilon)
+    exact_axes = (A[0,small,large,4],QQ[0,1,1+epsilon])
+    opts = TO.Options.InvariantOptions(axes=exact_axes,axes_policy=:as_given,
+        box=(A[small,0],A[large,4]),strict=true,threads=false)
+    P = FF.ProductOfChainsPoset((1,1))
+    pi = EC.GridEncodingMap(P,(A[0],A[0]))
+    reference = TO.Results.EncodingResult(P,MD.zero_pmodule(P;field=CM.QQField()),pi)
+    resolver = id -> id == "origin" ? reference : nothing
+
+    mktempdir() do dir
+        path = joinpath(dir,"exact_features.meta.json")
+        # The six slice-spec families share the same mathematical query
+        # coordinates. Their numerical output grids remain ordinary Float64.
+        for (T,lo,hi) in ((A,small,large),(QQ,QQ(1),QQ(1)+epsilon),
+                          (Float64,0.25,0.75))
+            query_type = T === Float64 ? Float64 : A
+            directions = [T[1,lo],T[1,hi]]
+            offsets = [T[lo,0],T[hi,0]]
+            common = (;directions,offsets,tmin=lo,tmax=hi,nsteps=3,threads=false)
+            specs = (
+                FEA.LandscapeSpec(;common...,tgrid=[0.,1.,2.],kmax=1),
+                FEA.PersistenceImageSpec(;common...,xgrid=[0.,1.],ygrid=[0.,1.]),
+                FEA.MPLandscapeSpec(;common...,tgrid=[0.,1.,2.],kmax=1),
+                FEA.BarcodeTopKSpec(;common...,k=1,window=(lo,hi)),
+                FEA.SlicedBarcodeSpec(;common...),
+                FEA.BarcodeSummarySpec(;common...,window=(lo,hi)),
+            )
+            for spec in specs
+                features = FEA.FeatureSet(zeros(1,FEA.nfeatures(spec)),
+                    FEA.feature_names(spec),["sample"],(;spec,opts))
+                metadata = FEA.feature_metadata(features;git_commit="a64-test")
+                FEA.save_metadata_json(path,metadata)
+                restored = FEA.load_metadata_json(path;typed=true,validate_feature_schema=true)
+                @test typeof(restored.spec) === typeof(spec)
+                @test restored.spec.directions == directions
+                @test restored.spec.offsets == offsets
+                @test all(v -> eltype(v) === query_type,restored.spec.directions)
+                @test all(v -> eltype(v) === query_type,restored.spec.offsets)
+                @test restored.spec.tmin == lo
+                @test restored.spec.tmax == hi
+                @test restored.spec.tmin < restored.spec.tmax
+                @test restored.spec.tmin isa query_type && restored.spec.tmax isa query_type
+                if spec isa Union{FEA.BarcodeTopKSpec,FEA.BarcodeSummarySpec}
+                    @test restored.spec.window == (lo,hi)
+                    @test restored.spec.window[1] < restored.spec.window[2]
+                    @test all(x -> x isa query_type,restored.spec.window)
+                    @test restored.spec.infinite_policy === :clip_to_window
+                end
+                @test FEA.feature_names(restored.spec) == FEA.feature_names(spec)
+                @test restored.opts.axes == exact_axes
+                @test eltype(restored.opts.axes[1]) === A
+                @test eltype(restored.opts.axes[2]) === QQ
+                @test restored.opts.axes[2][2] < restored.opts.axes[2][3]
+                @test restored.opts.box == opts.box
+                @test all(v -> eltype(v) === A,restored.opts.box)
+                @test restored.opts.strict === true
+                @test restored.opts.axes_policy === :as_given
+            end
+
+            # Composite serialization must preserve each query and resolve
+            # actual reference identity without replacing exact coordinates.
+            projected = FEA.ProjectedDistancesSpec([reference];directions,
+                reference_names=[:origin],threads=false)
+            matching = FEA.MatchingDistanceBankSpec([reference];directions,offsets,
+                reference_names=[:origin],method=:approx,threads=false)
+            euler = FEA.EulerSurfaceSpec(axes=exact_axes,axes_policy=:as_given,threads=false)
+            composite = FEA.CompositeSpec((first(specs),euler,projected,matching))
+            features = FEA.FeatureSet(zeros(1,FEA.nfeatures(composite)),
+                FEA.feature_names(composite),["sample"],(spec=composite,opts=opts))
+            FEA.save_metadata_json(path,FEA.feature_metadata(features;git_commit="a64-test"))
+            restored = FEA.load_metadata_json(path;typed=true,validate_feature_schema=true,
+                resolve_ref=resolver,require_resolved_refs=true)
+            @test restored.spec isa FEA.CompositeSpec
+            @test restored.spec.specs[1].directions == directions
+            @test restored.spec.specs[1].offsets == offsets
+            @test restored.spec.specs[2].axes == exact_axes
+            @test restored.spec.specs[2].axes[1][2] == small
+            @test restored.spec.specs[2].axes[1][3] == large
+            @test restored.spec.specs[3].directions == directions
+            @test restored.spec.specs[3].references[1] === reference
+            @test restored.spec.specs[4].directions == directions
+            @test restored.spec.specs[4].offsets == offsets
+            @test restored.spec.specs[4].references[1] === reference
+            @test FEA.feature_names(restored.spec) == FEA.feature_names(composite)
+            @test_throws ArgumentError FEA.load_metadata_json(path;typed=true,
+                resolve_ref=(_ -> nothing),require_resolved_refs=true)
+        end
+
+        ordinary = FEA.LandscapeSpec(directions=[[1.,1.]],offsets=[[0.,0.]],
+            tgrid=[0.,1.],tmin=0.,tmax=1.,kmax=1)
+        ordinary_opts = TO.Options.InvariantOptions(axes=([0.,1.],[0.,2.]),
+            box=([0.,0.],[1.,2.]))
+        ordinary_features = FEA.FeatureSet(zeros(1,FEA.nfeatures(ordinary)),
+            FEA.feature_names(ordinary),["ordinary"],(spec=ordinary,opts=ordinary_opts))
+        FEA.save_metadata_json(path,FEA.feature_metadata(ordinary_features;git_commit="a64-test"))
+        ordinary_restored = FEA.load_metadata_json(path;typed=true)
+        @test ordinary_restored.spec.directions == [[1.,1.]]
+        @test all(v -> eltype(v) === Float64,ordinary_restored.opts.axes)
+        @test ordinary_restored.opts.box == ordinary_opts.box
+
+        # JSON3 promotes ordinary mixed numeric arrays during parsing. A large
+        # signed integer must be tagged before writing, so its unit difference
+        # from its rounded Float64 image remains observable after loading.
+        large_integer = Int64(9_007_199_254_740_993)
+        for grade in (large_integer,-large_integer)
+            query_axes = (Any[grade,Float64(grade)+8.],)
+            large_opts = TO.Options.InvariantOptions(axes=query_axes)
+            large_spec = FEA.EulerSurfaceSpec(axes=query_axes)
+            large_features = FEA.FeatureSet(zeros(1,FEA.nfeatures(large_spec)),
+                FEA.feature_names(large_spec),["large"],(spec=large_spec,opts=large_opts))
+            FEA.save_metadata_json(path,FEA.feature_metadata(large_features;git_commit="a64-test"))
+            large_restored = FEA.load_metadata_json(path;typed=true)
+            @test large_restored.spec.axes[1][1] == grade
+            @test large_restored.opts.axes[1][1] == grade
+            @test large_restored.spec.axes[1][1] != A(Float64(grade))
+            @test large_restored.opts.axes[1][1] != A(Float64(grade))
+            @test large_restored.spec.axes[1][2] == Float64(grade)+8.
+            @test large_restored.opts.axes[1][2] == Float64(grade)+8.
+        end
+
+        # Reject a mathematically invalid algebraic record through the public
+        # typed loader, rather than silently replacing it by an approximation.
+        malformed_spec = FEA.LandscapeSpec(directions=[A[1,small]],offsets=[A[large,0]],
+            tgrid=[0.,1.],tmin=small,tmax=large,kmax=1)
+        malformed_features = FEA.FeatureSet(zeros(1,FEA.nfeatures(malformed_spec)),
+            FEA.feature_names(malformed_spec),["bad"],(spec=malformed_spec,opts=opts))
+        malformed = FEA.feature_metadata(malformed_features;git_commit="a64-test")
+        malformed["spec"]["fields"]["directions"][1][2]["real_root_index"] = 0
+        FEA.save_metadata_json(path,malformed)
+        @test_throws ArgumentError FEA.load_metadata_json(path;typed=true)
+    end
+end
+
+@testset "A16 explicit featurizer extension requirements" begin
+    FEA = TamerOp.Featurizers
+    fs = FEA.FeatureSet(reshape([1.0, 2.0], 1, 2), [:x, :y], ["sample"], NamedTuple())
+    for (package, ext, savefun, loadfun, suffix) in (
+        ("Arrow", :TamerOpArrowExt, FEA.save_features_arrow, FEA.load_features_arrow, ".arrow"),
+        ("Parquet2", :TamerOpParquet2Ext, FEA.save_features_parquet, FEA.load_features_parquet, ".parquet"),
+        ("NPZ", :TamerOpNPZExt, FEA.save_features_npz, FEA.load_features_npz, ".npz"),
+    )
+        if Base.get_extension(TamerOp, ext) === nothing
+            for f in (() -> savefun("unused" * suffix, fs), () -> loadfun("unused" * suffix))
+                err = try f(); nothing catch caught; caught end
+                @test err isa ArgumentError
+                @test occursin("Pkg.add", sprint(showerror, err))
+                @test occursin("using " * package, sprint(showerror, err))
+            end
+        end
+    end
+    for (package, active, f) in (
+        ("CSV", Base.get_extension(TamerOp, :TamerOpCSVExt) !== nothing, () -> FEA.load_features_csv("unused.csv")),
+        ("Distances", FEA._DISTANCES_IMPL[] !== nothing, () -> FEA.bottleneck_distance_metric()),
+        ("KernelFunctions", FEA._KERNELFUNCTIONS_IMPL[] !== nothing, () -> FEA.mpp_image_kernel_object()),
+    )
+        if !active
+            err = try f(); nothing catch caught; caught end
+            @test err isa ArgumentError
+            @test occursin("Pkg.add", sprint(showerror, err))
+            @test occursin("using " * package, sprint(showerror, err))
+        end
+    end
+    # Validate requested integrations even for an empty dataset, before its
+    # early return. Plain CSV output remains available in the minimal package.
+    spec = FEA.RankGridSpec(nvertices=1)
+    if FEA._BATCH_IMPL[] === nothing
+        missing_folds = FEA.BatchOptions(backend=:folds)
+        @test_throws ArgumentError FEA.featurize(Any[], spec; batch=missing_folds)
+        @test_throws ArgumentError FEA.batch_transform!(zeros(0, 1), Any[], spec; batch=missing_folds)
+    end
+    if FEA._PROGRESS_IMPL[] === nothing
+        missing_progress = FEA.BatchOptions(progress=true)
+        @test_throws ArgumentError FEA.featurize(Any[], spec; batch=missing_progress)
+        @test_throws ArgumentError FEA.batch_transform!(zeros(0, 1), Any[], spec; batch=missing_progress)
+    end
+    serial = FEA.BatchOptions(threaded=false, backend=:folds)
+    @test size(FEA.featurize(Any[], spec; batch=serial).X) == (0, 1)
+    mktempdir() do dir
+        path = FEA.save_features_csv(joinpath(dir, "plain.csv"), fs; include_metadata=false)
+        @test isfile(path)
+        @test occursin("sample", read(path, String))
     end
 end

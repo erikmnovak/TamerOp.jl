@@ -36,7 +36,8 @@ using LinearAlgebra
 using SparseArrays
 import Base.Threads
 
-using ..CoreModules: _append_scaled_triplets!
+using ..CoreModules: _append_scaled_triplets!, AbstractCoeffField, coeff_type
+import ..CoreModules: change_field
 using ..Options: ResolutionOptions
 using ..FieldLinAlg
 using ..FiniteFringe
@@ -44,11 +45,14 @@ using ..FiniteFringe: AbstractPoset, FinitePoset, cover_edges, nvertices, upset_
 using ..Modules: PModule, PMorphism, id_morphism,
                  zero_pmodule, zero_morphism,
                  direct_sum, direct_sum_with_maps,
-                 map_leq, map_leq_many
+                 map_leq, map_leq_many, check_morphism,
+                 _coerce_morphism_on_modules,
+                 _coefficient_products_equal, _coefficient_product_zero
 
 import ..IndicatorResolutions
 import ..AbelianCategories
 import ..ChainComplexes
+import ..Results: provenance
 using ..AbelianCategories: kernel_with_inclusion, image_with_inclusion, _cokernel_module
 
 
@@ -73,6 +77,8 @@ import ..DerivedFunctors:
     source_module, target_module, nonzero_degrees, degree_dimensions, total_dimension
 
 # Internal Functoriality helpers live in DerivedFunctors.Functoriality.
+using ..DerivedFunctors.Resolutions: _resolution_is_complete
+
 using ..DerivedFunctors.Functoriality:
     _tensor_map_on_tor_chains_from_projective_coeff,
     _lift_pmodule_map_to_projective_resolution_chainmap_coeff
@@ -396,15 +402,17 @@ end
 @inline function _injective_resolution_cached(
     N::PModule{K},
     maxlen::Int,
-    ::Nothing,
+    ::Nothing;
+    threads::Bool,
 ) where {K}
-    return injective_resolution(N, ResolutionOptions(maxlen=maxlen))
+    return injective_resolution(N, ResolutionOptions(maxlen=maxlen); threads=threads)
 end
 
 function _injective_resolution_cached(
     N::PModule{K},
     maxlen::Int,
-    cache::HomSystemCache,
+    cache::HomSystemCache;
+    threads::Bool,
 ) where {K}
     lock(_INJECTIVE_RESOLUTION_CACHE_LOCK) do
         shard = get!(_INJECTIVE_RESOLUTION_CACHES, cache) do
@@ -415,7 +423,7 @@ function _injective_resolution_cached(
         end
         cached = get(per_module, maxlen, nothing)
         cached === nothing || return cached::InjectiveResolution{K}
-        res = injective_resolution(N, ResolutionOptions(maxlen=maxlen))
+        res = injective_resolution(N, ResolutionOptions(maxlen=maxlen); threads=threads)
         per_module[maxlen] = res
         return res
     end
@@ -432,7 +440,8 @@ function _rhom_complex_cached(
     cache::Union{Nothing, HomSystemCache} = nothing,
     threads::Bool = (Threads.nthreads() > 1),
 ) where {K}
-    resN_use = resN === nothing ? _injective_resolution_cached(N, maxlen, cache) : resN
+    maxlen >= 0 || throw(ArgumentError("maxlen must be nonnegative."))
+    resN_use = resN === nothing ? _injective_resolution_cached(N, maxlen, cache; threads=threads) : resN
     cache === nothing && return RHomComplex(C, N; maxlen=maxlen, resN=resN_use, cache=cache, threads=threads)
     key = _rhom_complex_cache_key(C, N, resN_use, maxlen, threads)
     lock(_RHOM_COMPLEX_CACHE_LOCK) do
@@ -460,7 +469,7 @@ function _rhom_complex_cached(
 end
 
 @inline function _hyperext_space_cached(R, ::Nothing)
-    return HyperExtSpace(R, cohomology_data(R.tot))
+    return _hyperext_space(R)
 end
 
 function _hyperext_space_cached(R, cache::HomSystemCache)
@@ -470,7 +479,7 @@ function _hyperext_space_cached(R, cache::HomSystemCache)
         end
         cached = get(shard, R, nothing)
         cached === nothing || return cached
-        H = HyperExtSpace(R, cohomology_data(R.tot))
+        H = _hyperext_space(R)
         shard[R] = H
         return H
     end
@@ -647,18 +656,42 @@ end
 
 poset(C::ModuleCochainComplex) = C.terms[1].Q
 
+"""
+    change_field(C::ModuleCochainComplex, field)
+
+Reinterpret the stored module and differential matrices over `field`. Validate
+path independence of every term, naturality of every differential, and `d*d=0`
+in the target field. This does not identify the old and new homology groups.
+`RealField` uses its supplied tolerances; the `d*d=0` residual is scaled by
+the differential factors as in the checked complex constructor.
+"""
+function change_field(C::ModuleCochainComplex, field::AbstractCoeffField)
+    isempty(C.terms) && throw(ArgumentError("change_field: complex terms must be nonempty."))
+    length(C.terms) == C.tmax - C.tmin + 1 && length(C.diffs) == length(C.terms) - 1 ||
+        throw(ArgumentError("change_field: inconsistent complex degree range or differential count."))
+    source_field = first(C.terms).field
+    Q = first(C.terms).Q
+    all(M -> M.Q === Q && M.field == source_field, C.terms) ||
+        throw(ArgumentError("change_field: complex terms must share one poset and coefficient field."))
+    for (i, d) in enumerate(C.diffs)
+        _pmodule_equal(d.dom, C.terms[i]) && _pmodule_equal(d.cod, C.terms[i + 1]) &&
+            d.dom.field == source_field && d.cod.field == source_field ||
+            throw(ArgumentError("change_field: differential endpoints disagree with complex terms."))
+    end
+    K = coeff_type(field)
+    terms = PModule{K}[change_field(M, field) for M in C.terms]
+    diffs = PMorphism{K}[_coerce_morphism_on_modules(d, terms[i], terms[i + 1])
+                        for (i, d) in enumerate(C.diffs)]
+    for i in 1:(length(diffs) - 1), u in 1:nvertices(Q)
+        _coefficient_product_zero(field, diffs[i + 1].comps[u], diffs[i].comps[u]) ||
+            throw(ArgumentError("change_field: coefficient reinterpretation breaks d*d=0 in degree $(C.tmin + i - 1), vertex $u."))
+    end
+    # Relations were checked above with the target field's own tolerance policy.
+    return ModuleCochainComplex(terms, diffs; tmin=C.tmin, check=false)
+end
+
 # Max cohomological degree stored in a module cochain complex.
 maxdeg_of_complex(C::ModuleCochainComplex) = C.tmax
-
-@inline function _matrix_is_zero(M)
-    # Fast exact check for "all entries are zero".
-    for x in M
-        if x != 0
-            return false
-        end
-    end
-    return true
-end
 
 @inline _field_of_complex(C::ModuleCochainComplex) = C.terms[1].field
 
@@ -710,6 +743,11 @@ If `check=true`, we validate:
   * all terms live over the same poset;
   * each differential has the correct domain/codomain;
   * d^(t+1) circ d^t = 0 in every degree (fiberwise, vertex-by-vertex).
+
+Exact fields use exact identities. For `RealField`, each product `A*B` has
+the entrywise scale `size(A,2)*maximum(abs,A)*maximum(abs,B)`; a zero product
+has maximum-entry residual at most `field.atol + field.rtol*scale`.
+Nonfinite factors or products are rejected.
 """
 function ModuleCochainComplex(
     terms::AbstractVector{<:PModule{K}},
@@ -722,10 +760,12 @@ function ModuleCochainComplex(
 
     if check
         Q = terms[1].Q
+        field = terms[1].field
         for (i, T) in enumerate(terms)
             if T.Q !== Q
                 error("ModuleCochainComplex: term $i lives over a different poset")
             end
+            T.field == field || error("ModuleCochainComplex: term $i uses a different coefficient field")
         end
 
         # Check each differential's endpoints.
@@ -744,8 +784,7 @@ function ModuleCochainComplex(
             d1 = diffs[i]
             d2 = diffs[i+1]
             for u in 1:Qn
-                prod = d2.comps[u] * d1.comps[u]
-                if !_matrix_is_zero(prod)
+                if !_coefficient_product_zero(field, d2.comps[u], d1.comps[u])
                     error("ModuleCochainComplex: d^(t+1)*d^t != 0 at degree $t, vertex $u")
                 end
             end
@@ -784,9 +823,17 @@ _diff(C::ModuleCochainComplex{K}, t::Int) where {K} =
 @inline component(C::ModuleCochainComplex{K}, t::Int) where {K} = _term(C, t)
 @inline differential(C::ModuleCochainComplex{K}, t::Int) where {K} = _diff(C, t)
 
+function provenance(C::ModuleCochainComplex)
+    return (category=:finite_poset_representations, base_poset=poset(C),
+            field=_field_of_complex(C), degree=degree_range(C),
+            degree_convention=:cohomological, model=:module_complex,
+            orientation=:forward, ambient_identification=:not_asserted)
+end
+
 @inline function describe(C::ModuleCochainComplex)
     return (
         kind=:module_cochain_complex,
+        provenance=provenance(C),
         field=_field_of_complex(C),
         nvertices=nvertices(poset(C)),
         degree_range=degree_range(C),
@@ -913,10 +960,13 @@ _map(f::ModuleCochainMap{K}, t::Int) where {K} =
 @inline source(f::ModuleCochainMap) = f.C
 @inline target(f::ModuleCochainMap) = f.D
 @inline component(f::ModuleCochainMap{K}, t::Int) where {K} = _map(f, t)
+provenance(f::ModuleCochainMap) = merge(provenance(f.C),
+    (degree=degree_range(f), model=:module_cochain_map))
 
 @inline function describe(f::ModuleCochainMap)
     return (
         kind=:module_cochain_map,
+        provenance=provenance(f),
         field=_field_of_complex(f.C),
         degree_range=degree_range(f),
         source_degree_range=degree_range(f.C),
@@ -957,6 +1007,9 @@ function ModuleCochainMap(
         if poset(C) !== poset(D)
             error("ModuleCochainMap: domain and codomain complexes live over different posets")
         end
+        field = _field_of_complex(C)
+        _field_of_complex(D) == field ||
+            error("ModuleCochainMap: domain and codomain complexes use different coefficient fields")
 
         # Degreewise domain/codomain checks (structural, not pointer-only).
         for t in tmin:tmax
@@ -979,9 +1032,8 @@ function ModuleCochainMap(
                                   comps[t + 1 - tmin + 1]
 
             for u in 1:nvertices(Q)
-                lhs = dD.comps[u] * ft.comps[u]
-                rhs = ftp.comps[u] * dC.comps[u]
-                if lhs != rhs
+                if !_coefficient_products_equal(field, dD.comps[u], ft.comps[u],
+                                           ftp.comps[u], dC.comps[u])
                     error("ModuleCochainMap: chain map equation fails at degree $t, vertex $u")
                 end
             end
@@ -1052,10 +1104,13 @@ _hcomp(H::ModuleCochainHomotopy{K}, t::Int) where {K} =
 @inline source_map(H::ModuleCochainHomotopy) = H.f
 @inline target_map(H::ModuleCochainHomotopy) = H.g
 @inline component(H::ModuleCochainHomotopy{K}, t::Int) where {K} = _hcomp(H, t)
+provenance(H::ModuleCochainHomotopy) = merge(provenance(H.f.C),
+    (degree=degree_range(H), model=:module_cochain_homotopy))
 
 @inline function describe(H::ModuleCochainHomotopy)
     return (
         kind=:module_cochain_homotopy,
+        provenance=provenance(H),
         field=_field_of_complex(H.f.C),
         degree_range=degree_range(H),
         source_map_range=degree_range(H.f),
@@ -1175,6 +1230,17 @@ end
 # shift / extend_range for module complexes
 # ============================================================
 
+"""
+    shift(C::ModuleCochainComplex, k::Int) -> ModuleCochainComplex
+
+Return the cohomological shift `C[k]`, with `(C[k])^t = C^(t+k)` and
+`d_(C[k])^t = (-1)^k d_C^(t+k)`. Positive `k` lowers the stored degree range
+by `k`, exactly as for `ChainComplexes.CochainComplex`. The module terms are
+reused; odd shifts negate their differentials without changing the input.
+
+For example, a module concentrated in degree zero moves to degree `-1` under
+`shift(C, 1)`. Cohomology satisfies `H^t(C[k]) = H^(t+k)(C)`.
+"""
 function shift(C::ModuleCochainComplex{K}, k::Int) where {K}
     if k == 0
         return C
@@ -1183,7 +1249,7 @@ function shift(C::ModuleCochainComplex{K}, k::Int) where {K}
     if isodd(k)
         diffs = [PMorphism{K}(d.dom, d.cod, [-M for M in d.comps]) for d in diffs]
     end
-    return ModuleCochainComplex{K}(C.tmin + k, C.tmax + k, C.terms, diffs)
+    return ModuleCochainComplex{K}(C.tmin - k, C.tmax - k, C.terms, diffs)
 end
 
 function extend_range(C::ModuleCochainComplex{K}, tmin::Int, tmax::Int) where {K}
@@ -1207,6 +1273,11 @@ end
     mapping_cone(f::ModuleCochainMap) -> ModuleCochainComplex
 
 Construct the module-valued mapping cone of a cochain map `f : C -> D`.
+
+The convention agrees with the scalar cochain cone:
+`Cone(f)^t = D^t + C^(t+1)`, with differential blocks
+`[d_D^t f^(t+1); 0 -d_C^(t+1)]`. Its supporting degree interval is
+`min(D.tmin, C.tmin-1):max(D.tmax, C.tmax-1)`.
 
 The returned complex represents the standard cone object `Cone(f)` in the
 derived category. It is the canonical module-level path when you want the cone
@@ -1253,7 +1324,14 @@ function mapping_cone(f::ModuleCochainMap{K}) where {K}
     return ModuleCochainComplex{K}(tmin,tmax,terms,diffs)
 end
 
-# Triangle object (optional but included)
+"""
+    ModuleDistinguishedTriangle
+
+The module cochain triangle `C -> D -> Cone(f) -> C[1]`, where
+`C[1]^t = C^(t+1)`. Construct it with [`mapping_cone_triangle`](@ref), inspect
+its objects and maps with [`triangle_objects`](@ref) and [`triangle_maps`](@ref),
+and validate canonical cone packaging with [`check_module_triangle`](@ref).
+"""
 struct ModuleDistinguishedTriangle{K}
     C::ModuleCochainComplex{K}
     D::ModuleCochainComplex{K}
@@ -1266,10 +1344,14 @@ end
 @inline triangle_objects(T::ModuleDistinguishedTriangle) = (; source=T.C, target=T.D, cone=T.Cone)
 @inline triangle_maps(T::ModuleDistinguishedTriangle) = (; morphism=T.f, inclusion=T.i, projection=T.p)
 @inline connecting_map(T::ModuleDistinguishedTriangle) = T.p
+provenance(T::ModuleDistinguishedTriangle) = merge(provenance(T.C),
+    (degree=(source=degree_range(T.C), target=degree_range(T.D), cone=degree_range(T.Cone)),
+     model=:mapping_cone_triangle))
 
 @inline function describe(T::ModuleDistinguishedTriangle)
     return (
         kind=:module_distinguished_triangle,
+        provenance=provenance(T),
         field=_field_of_complex(T.C),
         source_degree_range=degree_range(T.C),
         target_degree_range=degree_range(T.D),
@@ -1298,7 +1380,9 @@ Return the canonical distinguished triangle
 
 `C --f--> D -> Cone(f) -> C[1]`
 
-attached to a module-valued cochain map.
+attached to a module-valued cochain map. The inclusion is `y -> (y, 0)` and
+the projection is `(y, x) -> x` in each degree; the latter lands in
+`C[1]^t = C^(t+1)`, whose differential is `-d_C^(t+1)`.
 
 Use this when the categorical triangle is the object of interest. For quick
 inspection, prefer [`triangle_summary`](@ref) or [`describe`](@ref) before
@@ -1491,8 +1575,8 @@ Semantic accessors for an [`RHomComplex`](@ref).
 
 - `source_module(R)` returns the module complex `C`
 - `target_module(R)` returns the coefficient module `N`
-- `underlying_complex(R)` returns the total cochain complex computing
-  `RHom(C, N)`
+- `underlying_complex(R)` returns the total Hom complex for the stored
+  injective resolution prefix; use `hyperExt` for certified cohomology
 
 Use these accessors instead of raw field inspection when exploring derived Hom
 data.
@@ -1501,9 +1585,17 @@ data.
 @inline target_module(R::RHomComplex) = R.N
 @inline underlying_complex(R::RHomComplex) = R.tot
 
+function provenance(R::RHomComplex)
+    return merge(provenance(R.C),
+        (degree=R.tot.tmin:R.tot.tmax, model=:injective_rhom,
+         degree_scope=:stored_resolution_prefix,
+         argument_variance=(:contravariant, :covariant)))
+end
+
 @inline function describe(R::RHomComplex)
     return (
         kind=:rhom_complex,
+        provenance=provenance(R),
         field=R.N.field,
         source_degree_range=degree_range(R.C),
         target_total_dim=sum(R.N.dims),
@@ -1537,102 +1629,54 @@ function RHomComplex(
     cache::Union{Nothing,HomSystemCache}=nothing,
     threads::Bool = (Threads.nthreads() > 1),
 ) where {K}
-    Q = N.Q
-    maxlen = maxlen
-    maxdeg = maxdeg_of_complex(C)
-    resN = (resN === nothing) ? injective_resolution(N, ResolutionOptions(maxlen=maxlen)) : resN
+    maxlen >= 0 || throw(ArgumentError("maxlen must be nonnegative."))
+    resN = resN === nothing ? injective_resolution(N, ResolutionOptions(maxlen=maxlen); threads=threads) : resN
+    _pmodule_equal(resN.N, N) || throw(ArgumentError("resN must resolve the coefficient module N."))
+    length(resN.Emods) == maxlen + 1 ||
+        throw(ArgumentError("resN must contain exactly maxlen + 1 injective terms."))
 
-    na, nb = maxdeg + 1, maxlen + 1
+    # Hom(C^p, I^q) has total degree q-p. The first axis reverses C;
+    # dv raises q, and dh lowers p with (-1)^q so dv*dh + dh*dv = 0.
+    # Composition helpers take the output Hom space before the input space.
+    amin, amax = -C.tmax, -C.tmin
+    na, nb = length(C.terms), maxlen + 1
     homs = Array{HomSpace{K}}(undef, na, nb)
     dims = zeros(Int, na, nb)
-
-    # Build Hom blocks (expensive) in parallel if requested.
+    build_hom = function (idx)
+        ia, ib = Tuple(CartesianIndices(dims)[idx])
+        p, q = -(amin + ia - 1), ib - 1
+        h = hom_with_cache(_term(C, p), resN.Emods[q + 1]; cache=cache)
+        homs[ia, ib] = h
+        dims[ia, ib] = dim(h)
+    end
     if threads && Threads.nthreads() > 1
-        nT = Threads.nthreads()
-        Threads.@threads for slot in 1:nT
-            for idx in slot:nT:(na * nb)
-                ia = div((idx - 1), nb) + 1
-                ib = (idx - 1) % nb + 1
-                p = ia - 1
-                q = ib - 1
-
-                Cp = _term(C, p)
-                Eb = resN.Emods[q + 1]
-
-                h = hom_with_cache(Cp, Eb; cache=cache)
-                homs[ia, ib] = h
-                dims[ia, ib] = dim(h)
-            end
+        Threads.@threads for idx in eachindex(dims)
+            build_hom(idx)
         end
     else
-        for ia in 1:na, ib in 1:nb
-            p = ia - 1
-            q = ib - 1
-            Cp = _term(C, p)
-            Eb = resN.Emods[q + 1]
-            homs[ia, ib] = hom_with_cache(Cp, Eb; cache=cache)
-            dims[ia, ib] = dim(homs[ia, ib])
-        end
+        foreach(build_hom, eachindex(dims))
     end
 
-    # Vertical (C direction) differentials.
-    dv = Array{SparseMatrixCSC{K, Int}}(undef, na, nb)
+    dv = Array{SparseMatrixCSC{K,Int}}(undef, na, nb)
+    dh = similar(dv)
+    build_differentials = function (idx)
+        ia, ib = Tuple(CartesianIndices(dims)[idx])
+        p, q = -(amin + ia - 1), ib - 1
+        dv[ia, ib] = ib == nb ? spzeros(K, 0, dims[ia, ib]) :
+            postcompose_matrix_cached(homs[ia, ib + 1], homs[ia, ib], resN.d_mor[q + 1]; cache=cache)
+        dh[ia, ib] = ia == na ? spzeros(K, 0, dims[ia, ib]) :
+            (isodd(q) ? -one(K) : one(K)) *
+            precompose_matrix_cached(homs[ia + 1, ib], homs[ia, ib], _diff(C, p - 1); cache=cache)
+    end
     if threads && Threads.nthreads() > 1
-        nT = Threads.nthreads()
-        Threads.@threads for slot in 1:nT
-            for idx in slot:nT:(na * nb)
-                ia = div((idx - 1), nb) + 1
-                ib = (idx - 1) % nb + 1
-                if ia == na
-                    dv[ia, ib] = spzeros(K, dims[ia, ib], 0)
-                else
-                    p = ia - 1
-                    dv[ia, ib] = precompose_matrix_cached(homs[ia, ib], homs[ia + 1, ib], _diff(C, p); cache=cache)
-                end
-            end
+        Threads.@threads for idx in eachindex(dims)
+            build_differentials(idx)
         end
     else
-        for ia in 1:na, ib in 1:nb
-            if ia == na
-                dv[ia, ib] = spzeros(K, dims[ia, ib], 0)
-            else
-                p = ia - 1
-                dv[ia, ib] = precompose_matrix_cached(homs[ia, ib], homs[ia + 1, ib], _diff(C, p); cache=cache)
-            end
-        end
+        foreach(build_differentials, eachindex(dims))
     end
-
-    # Horizontal (resolution direction) differentials.
-    dh = Array{SparseMatrixCSC{K, Int}}(undef, na, nb)
-    if threads && Threads.nthreads() > 1
-        nT = Threads.nthreads()
-        Threads.@threads for slot in 1:nT
-            for idx in slot:nT:(na * nb)
-                ia = div((idx - 1), nb) + 1
-                ib = (idx - 1) % nb + 1
-                if ib == nb
-                    dh[ia, ib] = spzeros(K, dims[ia, ib], 0)
-                else
-                    q = ib - 1
-                    dh[ia, ib] = postcompose_matrix_cached(homs[ia, ib + 1], homs[ia, ib], resN.d_mor[q + 1]; cache=cache)
-                end
-            end
-        end
-    else
-        for ia in 1:na, ib in 1:nb
-            if ib == nb
-                dh[ia, ib] = spzeros(K, dims[ia, ib], 0)
-            else
-                q = ib - 1
-                dh[ia, ib] = postcompose_matrix_cached(homs[ia, ib + 1], homs[ia, ib], resN.d_mor[q + 1]; cache=cache)
-            end
-        end
-    end
-
-    # Index convention: a = cochain degree in C (0..maxdeg), b = injective degree in resN (0..maxlen).
-    DC = DoubleComplex{K}(0, maxdeg, 0, maxlen, dims, dv, dh)
-    tot = total_complex(DC)
-    return RHomComplex{K}(C, N, resN, homs, DC, tot)
+    DC = DoubleComplex{K}(amin, amax, 0, maxlen, dims, dv, dh; field=N.field)
+    return RHomComplex{K}(C, N, resN, homs, DC, total_complex(DC))
 end
 
 function RHomComplex(
@@ -1649,7 +1693,13 @@ end
 """
     RHom(C, N; maxlen=3, ...) -> CochainComplex
 
-Return the total cochain complex computing the derived Hom object `RHom(C, N)`.
+Return the total Hom complex using injective terms through degree `maxlen`.
+The Hom and resolution operations take place in `Rep_k(P)` for the finite
+module poset. Returning the raw vector-space complex discards that base-poset
+metadata; retain `RHomComplex` when provenance is needed.
+
+If the resolution has not terminated, this is a truncated complex; its boundary
+cohomology need not be hyper-Ext. Use `hyperExt` for certified groups.
 
 This is the canonical compute path when you want the chain-level object that
 feeds cohomology, spectral sequences, or induced maps. If you want the richer
@@ -1718,7 +1768,7 @@ function _build_rhom_map_first_plan(Rdom::RHomComplex{K}, Rcod::RHomComplex{K}) 
             (dim_block_src == 0 || dim_block_tgt == 0) && continue
             push!(row_off, row - 1)
             push!(col_off, src_off - 1)
-            push!(pdeg, a)
+            push!(pdeg, -a)
             push!(hdom, Rdom.homs[ai_src, bi_src])
             push!(hcod, Rcod.homs[ai_tgt, bi_tgt])
         end
@@ -1836,6 +1886,7 @@ function rhom_map_first(
 
     if threads && Threads.nthreads() > 1 && (tmax >= tmin)
         Threads.@threads for idx in eachindex(plan.degrees)
+            local dim_src, dim_tgt, dplan, I, F
             dim_src = plan.dims_src[idx]
             dim_tgt = plan.dims_tgt[idx]
 
@@ -1846,7 +1897,7 @@ function rhom_map_first(
             dplan = plan.degrees[idx]
             I = Int[]; J = Int[]; V = K[]
             for k in eachindex(dplan.pdeg)
-                F = precompose_matrix_cached(dplan.Hdom[k], dplan.Hcod[k], _map(f, dplan.pdeg[k]); cache=cache)
+                F = precompose_matrix_cached(dplan.Hcod[k], dplan.Hdom[k], _map(f, dplan.pdeg[k]); cache=cache)
                 _append_scaled_triplets!(I, J, V, F, dplan.row_off[k], dplan.col_off[k])
             end
 
@@ -1864,7 +1915,7 @@ function rhom_map_first(
             dplan = plan.degrees[idx]
             I = Int[]; J = Int[]; V = K[]
             for k in eachindex(dplan.pdeg)
-                F = precompose_matrix_cached(dplan.Hdom[k], dplan.Hcod[k], _map(f, dplan.pdeg[k]); cache=cache)
+                F = precompose_matrix_cached(dplan.Hcod[k], dplan.Hdom[k], _map(f, dplan.pdeg[k]); cache=cache)
                 _append_scaled_triplets!(I, J, V, F, dplan.row_off[k], dplan.col_off[k])
             end
 
@@ -1890,7 +1941,7 @@ function rhom_map_first(
     cache::Union{Nothing,HomSystemCache}=nothing,
     threads::Bool = (Threads.nthreads() > 1),
 ) where {K}
-    resN = isnothing(resN) ? _injective_resolution_cached(N, maxlen, cache) : resN
+    resN = isnothing(resN) ? _injective_resolution_cached(N, maxlen, cache; threads=threads) : resN
     Rdom = _rhom_complex_cached(f.D, N; maxlen=maxlen, resN=resN, cache=cache, threads=threads)
     Rcod = _rhom_complex_cached(f.C, N; maxlen=maxlen, resN=resN, cache=cache, threads=threads)
     return rhom_map_first(f, Rdom, Rcod; check=check, cache=cache, threads=threads)
@@ -2031,6 +2082,7 @@ function rhom_map_second(
 
     if threads && Threads.nthreads() > 1 && (plan.tmax >= plan.tmin)
         Threads.@threads for idx in eachindex(plan.degrees)
+            local dim_src, dim_tgt, dplan, I, Mb
             dim_src = plan.dims_src[idx]
             dim_tgt = plan.dims_tgt[idx]
             dplan = plan.degrees[idx]
@@ -2072,11 +2124,11 @@ function rhom_map_second(
     Nsrc = _pmodule_from_fringe_cached(Hsrc, cache)
     Ntgt = (Hsrc === Htgt) ? Nsrc : _pmodule_from_fringe_cached(Htgt, cache)
     g = _rebase_pmodule_morphism_cached(g, Nsrc, Ntgt, cache)
-    resNsrc = isnothing(resN) ? _injective_resolution_cached(Nsrc, maxlen, cache) : resN
+    resNsrc = isnothing(resN) ? _injective_resolution_cached(Nsrc, maxlen, cache; threads=threads) : resN
     resNtgt = if Ntgt === Nsrc
         resNsrc
     elseif isnothing(resN)
-        _injective_resolution_cached(Ntgt, maxlen, cache)
+        _injective_resolution_cached(Ntgt, maxlen, cache; threads=threads)
     else
         resN
     end
@@ -2105,7 +2157,30 @@ end
 
 struct HyperExtSpace{K}
     R::RHomComplex{K}
-    cohom
+    cohom::Vector{ChainComplexes.CohomologyData{K}}
+    degrees::UnitRange{Int}
+    resolution_complete::Bool
+end
+
+# A finite resolution prefix only certifies diagonals whose adjacent
+# differential does not require an omitted resolution term.
+function _certified_hyper_degrees(C::ModuleCochainComplex, maxlen::Int, complete::Bool)
+    return (-C.tmax):(complete ? maxlen - C.tmin : maxlen - C.tmax - 1)
+end
+
+function _hyperext_space(R::RHomComplex{K}) where {K}
+    complete = _resolution_is_complete(R.resN)
+    degrees = _certified_hyper_degrees(R.C, R.DC.bmax, complete)
+    return HyperExtSpace{K}(R, cohomology_data(R.tot; degrees=degrees), degrees, complete)
+end
+
+function _hyper_degree_data(H::HyperExtSpace, t::Int)
+    if t in H.degrees
+        return H.cohom[t - first(H.degrees) + 1]
+    end
+    !H.resolution_complete && t > last(H.degrees) &&
+        throw(ArgumentError("HyperExt degree $t is not certified by this resolution prefix; certified range is $(H.degrees). Increase maxlen."))
+    return nothing
 end
 
 """
@@ -2120,12 +2195,22 @@ space back to its mathematical inputs.
 """
 @inline source_module(H::HyperExtSpace) = H.R.C
 @inline target_module(H::HyperExtSpace) = H.R.N
+provenance(H::HyperExtSpace) = merge(provenance(H.R),
+    (degree=degree_range(H), model=:hyperext, degree_scope=:certified,
+     resolution_complete=H.resolution_complete))
 
 """
     hyperExt(C, N; maxlen=3, ...) -> HyperExtSpace
 
 Compute the graded hyper-Ext object `Ext^*(C, N)` attached to a module complex
 `C` and a coefficient module `N`.
+This is hyper-Ext in `Rep_k(P)`, not an automatic identification with an
+ambient persistence-module category associated with an encoding of `P`.
+
+`maxlen` is the resolution budget. If the injective resolution has not terminated,
+only degrees `-C.tmax:maxlen-C.tmax-1` are certified; higher-degree queries throw
+`ArgumentError`. If it has terminated, all degrees of the total complex are
+certified. `degree_range` and summaries report the stored certified range.
 
 The returned [`HyperExtSpace`](@ref) is already the cheap-first surface:
 inspect it with [`hyperext_summary`](@ref), [`nonzero_degrees`](@ref), or
@@ -2140,7 +2225,10 @@ function hyperExt(C::ModuleCochainComplex{K}, H::FF.FringeModule{K}; kwargs...) 
     return _hyperext_cached(C, H; kwargs...)
 end
 
-dim(H::HyperExtSpace, t::Int) = (t < H.R.tot.tmin || t > H.R.tot.tmax) ? 0 : H.cohom[t - H.R.tot.tmin + 1].dimH
+function dim(H::HyperExtSpace, t::Int)
+    data = _hyper_degree_data(H, t)
+    return data === nothing ? 0 : data.dimH
+end
 
 """
     nonzero_degrees(H::HyperExtSpace)
@@ -2152,7 +2240,7 @@ Cheap scalar accessors for a [`HyperExtSpace`](@ref).
 - `nonzero_degrees` returns the cohomological degrees supporting nonzero
   hyper-Ext.
 - `degree_dimensions` returns the degree-to-dimension table on the same support.
-- `total_dimension` returns the sum of those dimensions.
+- `total_dimension` sums those stored certified dimensions, not uncomputed degrees.
 
 These are the preferred notebook/REPL helpers before asking for bases or
 representatives in individual degrees.
@@ -2170,6 +2258,8 @@ end
 @inline function describe(H::HyperExtSpace)
     return (
         kind=:hyperext_space,
+        provenance=provenance(H),
+        resolution_complete=H.resolution_complete,
         field=target_module(H).field,
         source_degree_range=degree_range(source_module(H)),
         degree_range=degree_range(H),
@@ -2181,7 +2271,9 @@ end
 
 function Base.show(io::IO, H::HyperExtSpace)
     d = describe(H)
-    print(io, "HyperExtSpace(nonzero_degrees=", repr(d.nonzero_degrees),
+    print(io, "HyperExtSpace(degrees=", repr(d.degree_range),
+          ", resolution_complete=", d.resolution_complete,
+          ", nonzero_degrees=", repr(d.nonzero_degrees),
           ", total_dimension=", d.total_dimension, ")")
 end
 
@@ -2191,6 +2283,7 @@ function Base.show(io::IO, ::MIME"text/plain", H::HyperExtSpace)
           "\n  field: ", d.field,
           "\n  source_degree_range: ", repr(d.source_degree_range),
           "\n  degree_range: ", repr(d.degree_range),
+          "\n  resolution_complete: ", d.resolution_complete,
           "\n  nonzero_degrees: ", repr(d.nonzero_degrees),
           "\n  degree_dimensions: ", repr(d.degree_dimensions),
           "\n  total_dimension: ", d.total_dimension)
@@ -2249,8 +2342,10 @@ function hyperExt_map_first(
     check::Bool = true,
     cache::Union{Nothing,HomSystemCache}=nothing
 ) where {K}
-    Rmap = rhom_map_first(f, Hcod.R, Hdom.R; check=check, cache=cache)
-    return induced_map_on_cohomology(Rmap, Hdom.cohom, Hcod.cohom, t)
+    Ht_dom, Ht_cod = _hyper_degree_data(Hdom, t), _hyper_degree_data(Hcod, t)
+    (Ht_dom === nothing || Ht_cod === nothing) && return zeros(K, dim(Hcod, t), dim(Hdom, t))
+    Rmap = rhom_map_first(f, Hdom.R, Hcod.R; check=check, cache=cache)
+    return induced_map_on_cohomology(Ht_dom, Ht_cod, _map_at(Rmap, t))
 end
 
 """
@@ -2273,8 +2368,10 @@ function hyperExt_map_second(
     check::Bool = true,
     cache::Union{Nothing,HomSystemCache}=nothing
 ) where {K}
+    Ht_src, Ht_tgt = _hyper_degree_data(Hsrc, t), _hyper_degree_data(Htgt, t)
+    (Ht_src === nothing || Ht_tgt === nothing) && return zeros(K, dim(Htgt, t), dim(Hsrc, t))
     Rmap = rhom_map_second(g, Hsrc.R, Htgt.R; check=check, cache=cache)
-    return induced_map_on_cohomology(Rmap, Hsrc.cohom, Htgt.cohom, t)
+    return induced_map_on_cohomology(Ht_src, Ht_tgt, _map_at(Rmap, t))
 end
 
 
@@ -2299,16 +2396,25 @@ Semantic accessors for a [`DerivedTensorComplex`](@ref).
 - `source_module(T)` returns the right module supplying the projective
   resolution
 - `target_module(T)` returns the module cochain complex
-- `underlying_complex(T)` returns the total cochain complex computing the
-  derived tensor product
+- `underlying_complex(T)` returns the total cochain complex for the stored
+  projective resolution prefix of the derived tensor product
 """
 @inline source_module(T::DerivedTensorComplex) = T.Rop
 @inline target_module(T::DerivedTensorComplex) = T.C
 @inline underlying_complex(T::DerivedTensorComplex) = T.tot
 
+function provenance(T::DerivedTensorComplex)
+    return merge(provenance(T.C),
+        (category=:incidence_algebra_tensor, degree=T.tot.tmin:T.tot.tmax,
+         model=:projective_derived_tensor, degree_scope=:stored_resolution_prefix,
+         orientation=(right=:opposite, left=:forward),
+         argument_variance=(:covariant, :covariant)))
+end
+
 @inline function describe(T::DerivedTensorComplex)
     return (
         kind=:derived_tensor_complex,
+        provenance=provenance(T),
         field=T.Rop.field,
         source_total_dim=sum(T.Rop.dims),
         target_degree_range=degree_range(T.C),
@@ -2343,7 +2449,9 @@ function DerivedTensorComplex(
     threads::Bool = (Threads.nthreads() > 1),
     check::Bool = false,
 ) where {K}
-    resR = projective_resolution(Rop, ResolutionOptions(maxlen=maxlen, minimal=true, check=check))
+    maxlen >= 0 || throw(ArgumentError("maxlen must be nonnegative."))
+    C.tmin <= maxdeg <= C.tmax || throw(ArgumentError("maxdeg must lie in the source complex degree range."))
+    resR = projective_resolution(Rop, ResolutionOptions(maxlen=maxlen, minimal=true, check=check); threads=threads)
 
     # Double-complex bidegrees:
     #   A = -a  where a = 0..maxlen is the projective-resolution (homological) degree
@@ -2362,6 +2470,7 @@ function DerivedTensorComplex(
     total_jobs = na * nb
 
     build_cell = function (ai::Int, bi::Int)
+        local A, B, a, p, Mp, gens_a, offs_dom, Mp1, dC, offs_cod, sgn, Itrip, Jtrip, Vtrip, gens_am1, dP, cacheMp, pairs, pair_i, pair_j, pair_c, c, maps, Muv
         A = amin + (ai - 1)
         B = bmin + (bi - 1)
 
@@ -2452,6 +2561,7 @@ function DerivedTensorComplex(
 
     if threads && total_jobs > 1
         Threads.@threads for idx in 1:total_jobs
+            local bi, ai
             bi = Int(div(idx - 1, na)) + 1
             ai = (idx - 1) % na + 1
             build_cell(ai, bi)
@@ -2464,7 +2574,7 @@ function DerivedTensorComplex(
         end
     end
 
-    DC = DoubleComplex(amin, amax, bmin, bmax, dims, dv, dh)
+    DC = DoubleComplex{K}(amin, amax, bmin, bmax, dims, dv, dh; field=Rop.field)
     tot = total_complex(DC)
 
     return DerivedTensorComplex{K}(Rop, C, resR, DC, tot)
@@ -2664,8 +2774,11 @@ end
 """
     DerivedTensor(Rop, C; maxlen=3, ...) -> CochainComplex
 
-Return the total cochain complex computing the derived tensor product
-`Rop tensor^L C`.
+Return the tensor total complex using projective terms through `maxlen`.
+
+An unfinished resolution or an explicit `maxdeg` truncation of `C` produces an
+actual truncated complex whose boundary cohomology need not be hyper-Tor.
+Use `hyperTor` for certified groups of the entire source complex.
 
 Use this when the chain-level total complex is the real target. If you also
 want the underlying bicomplex bookkeeping and projective-resolution data, use
@@ -2677,7 +2790,19 @@ DerivedTensor(Rop::PModule{K}, C::ModuleCochainComplex{K}; kwargs...) where {K} 
 
 struct HyperTorSpace{K}
     T::DerivedTensorComplex{K}
-    cohom
+    cohom::Vector{ChainComplexes.CohomologyData{K}}
+    degrees::UnitRange{Int}
+    resolution_complete::Bool
+end
+
+function _hyper_degree_data(H::HyperTorSpace, n::Int)
+    if n in H.degrees
+        # Cohomology data are stored in increasing cochain degree t = -n.
+        return H.cohom[last(H.degrees) - n + 1]
+    end
+    !H.resolution_complete && n > last(H.degrees) &&
+        throw(ArgumentError("HyperTor degree $n is not certified by this resolution prefix; certified range is $(H.degrees). Increase maxlen."))
+    return nothing
 end
 
 """
@@ -2692,12 +2817,25 @@ without forcing users into raw field inspection.
 """
 @inline source_module(H::HyperTorSpace) = H.T.Rop
 @inline target_module(H::HyperTorSpace) = H.T.C
+provenance(H::HyperTorSpace) = merge(provenance(H.T),
+    (degree=degree_range(H), degree_convention=:homological,
+     model=:hypertor, degree_scope=:certified,
+     resolution_complete=H.resolution_complete))
 
 """
     hyperTor(Rop, C; maxlen=3, ...) -> HyperTorSpace
 
 Compute the graded hyper-Tor object `Tor_*(Rop, C)` attached to a right module
 and a module cochain complex.
+The tensor pairing is over the finite incidence algebra of `poset(C)`;
+the right module is represented on its opposite. Both arguments are
+covariant. Changing an ambient encoding requires a separate comparison theorem.
+
+`maxlen` is the resolution budget. An unfinished projective resolution certifies
+only `n` in `-C.tmax:maxlen-C.tmax-1`; higher-degree queries throw `ArgumentError`.
+A completed resolution certifies the entire total complex. The source complex
+must be used in full. Degrees `n` may be negative: a module in cochain degree `p`
+contributes ordinary `Tor_s` in hyper-Tor degree `n=s-p`.
 
 The returned [`HyperTorSpace`](@ref) is already the cheap-first exploration
 surface. Start with [`hypertor_summary`](@ref), [`nonzero_degrees`](@ref), and
@@ -2706,7 +2844,11 @@ specific Tor degrees.
 """
 function hyperTor(Rop::PModule{K}, C::ModuleCochainComplex{K}; kwargs...) where {K}
     T = DerivedTensorComplex(Rop,C; kwargs...)
-    return HyperTorSpace{K}(T, cohomology_data(T.tot))
+    T.DC.bmax == C.tmax || throw(ArgumentError("hyperTor requires the entire source complex; use DerivedTensorComplex for an explicit maxdeg truncation."))
+    complete = _resolution_is_complete(T.resR)
+    degrees = _certified_hyper_degrees(C, -T.DC.amin, complete)
+    cochain_degrees = (-last(degrees)):(-first(degrees))
+    return HyperTorSpace{K}(T, cohomology_data(T.tot; degrees=cochain_degrees), degrees, complete)
 end
 
 function hyperTor(H::FF.FringeModule{K}, C::ModuleCochainComplex{K}; kwargs...) where {K}
@@ -2718,22 +2860,12 @@ end
 
 Dimension of `hyperTor_n`, computed as `H^{-n}` of the total cochain complex.
 
-By convention:
-- returns 0 for `n < 0`,
-- returns 0 when the required total degree `t = -n` lies outside the stored range.
+Returns zero outside the mathematical support when the resolution is complete,
+or below the certified range. Queries above an incomplete range throw.
 """
 function dim(H::HyperTorSpace, n::Int)
-    if n < 0
-        return 0
-    end
-    # hyperTor_n = H^{-n}(Tot)
-    t = -n
-    tmin = H.T.tot.tmin
-    tmax = H.T.tot.tmax
-    if t < tmin || t > tmax
-        return 0
-    end
-    return H.cohom[t - tmin + 1].dimH
+    data = _hyper_degree_data(H, n)
+    return data === nothing ? 0 : data.dimH
 end
 
 # ---------------------------------------------------------------------------
@@ -2747,20 +2879,9 @@ Tor degrees `n` for which this `HyperTorSpace` stores data.
 
 Internally, the total complex is a cochain complex in degrees `t`, and
 `hyperTor_n` corresponds to cohomology degree `t = -n`. This function returns
-the induced nonnegative range of `n` values.
+the certified range of `n` values, which may include negative degrees.
 """
-function degree_range(H::HyperTorSpace)
-    tmin = H.T.tot.tmin
-    tmax = H.T.tot.tmax
-
-    # We need t = -n in [tmin, tmax], so n in [-tmax, -tmin].
-    n_lo = max(0, -tmax)
-    n_hi = -tmin
-    if n_lo > n_hi
-        return 0:-1  # empty range
-    end
-    return n_lo:n_hi
-end
+degree_range(H::HyperTorSpace) = H.degrees
 
 """
     nonzero_degrees(H::HyperTorSpace)
@@ -2771,7 +2892,7 @@ Cheap scalar accessors for a [`HyperTorSpace`](@ref).
 
 - `nonzero_degrees` returns the homological degrees supporting nonzero Tor.
 - `degree_dimensions` returns the Tor-dimension table on that support.
-- `total_dimension` returns the sum of those dimensions.
+- `total_dimension` sums those stored certified dimensions, not uncomputed degrees.
 
 These helpers are the preferred first stop in notebooks and REPL sessions
 before materializing basis or representative data.
@@ -2789,6 +2910,8 @@ end
 @inline function describe(H::HyperTorSpace)
     return (
         kind=:hypertor_space,
+        provenance=provenance(H),
+        resolution_complete=H.resolution_complete,
         field=source_module(H).field,
         source_total_dim=sum(source_module(H).dims),
         target_degree_range=degree_range(target_module(H)),
@@ -2801,7 +2924,9 @@ end
 
 function Base.show(io::IO, H::HyperTorSpace)
     d = describe(H)
-    print(io, "HyperTorSpace(nonzero_degrees=", repr(d.nonzero_degrees),
+    print(io, "HyperTorSpace(degrees=", repr(d.degree_range),
+          ", resolution_complete=", d.resolution_complete,
+          ", nonzero_degrees=", repr(d.nonzero_degrees),
           ", total_dimension=", d.total_dimension, ")")
 end
 
@@ -2812,6 +2937,7 @@ function Base.show(io::IO, ::MIME"text/plain", H::HyperTorSpace)
           "\n  source_total_dim: ", d.source_total_dim,
           "\n  target_degree_range: ", repr(d.target_degree_range),
           "\n  degree_range: ", repr(d.degree_range),
+          "\n  resolution_complete: ", d.resolution_complete,
           "\n  nonzero_degrees: ", repr(d.nonzero_degrees),
           "\n  degree_dimensions: ", repr(d.degree_dimensions),
           "\n  total_dimension: ", d.total_dimension)
@@ -2897,7 +3023,7 @@ Validate a hand-built [`ModuleCochainComplex`](@ref).
 The report checks poset/field consistency across terms, differential
 domain/codomain compatibility, and the identity `d^(t+1) * d^t = 0`. Use
 `throw=true` when invalid complexes should raise immediately instead of
-returning a report.
+returning a report. `RealField` uses the constructor's factor-based tolerance.
 """
 function check_module_complex(C::ModuleCochainComplex{K}; throw::Bool=false) where {K}
     issues = String[]
@@ -2916,7 +3042,7 @@ function check_module_complex(C::ModuleCochainComplex{K}; throw::Bool=false) whe
         left = C.diffs[i]
         right = C.diffs[i + 1]
         for u in 1:nvertices(Q)
-            if right.comps[u] * left.comps[u] != zeros(K, size(right.comps[u], 1), size(left.comps[u], 2))
+            if !_coefficient_product_zero(field, right.comps[u], left.comps[u])
                 d_squared_zero = false
                 push!(issues, "d^(t+1) * d^t is nonzero at degree $(C.tmin + i - 1), vertex $u.")
                 break
@@ -2940,31 +3066,41 @@ end
 Validate a hand-built [`ModuleCochainMap`](@ref).
 
 The report checks domain/codomain compatibility of the degreewise components and
-the chain-map identity `d_D * f = f * d_C`.
+the chain-map identity `d_D * f = f * d_C`. Exact fields use equality. For
+`RealField`, the maximum-entry residual must be at most `field.atol` plus
+`field.rtol` times the larger of the two factor-based product scales documented
+for [`ModuleCochainComplex`](@ref). Nonfinite factors or products fail.
 """
 function check_module_complex_map(f::ModuleCochainMap{K}; throw::Bool=false) where {K}
     issues = String[]
     Q = poset(f.C)
+    field = _field_of_complex(f.C)
     poset(f.D) === Q || push!(issues, "domain and codomain complexes live over different posets.")
+    _field_of_complex(f.D) == field || push!(issues, "domain and codomain complexes use different coefficient fields.")
     for t in f.tmin:f.tmax
         ft = _map(f, t)
         _pmodule_equal(ft.dom, _term(f.C, t)) || push!(issues, "component f^$t has wrong domain.")
         _pmodule_equal(ft.cod, _term(f.D, t)) || push!(issues, "component f^$t has wrong codomain.")
     end
-    chain_map = true
-    for t in (f.tmin - 1):f.tmax
-        dD = _diff(f.D, t)
-        dC = _diff(f.C, t)
-        ft = _map(f, t)
-        ftp = _map(f, t + 1)
-        for u in 1:nvertices(Q)
-            if dD.comps[u] * ft.comps[u] != ftp.comps[u] * dC.comps[u]
-                chain_map = false
-                push!(issues, "chain-map identity fails at degree $t, vertex $u.")
-                break
+    # Invalid endpoints can make boundary zero maps or matrix products
+    # undefined. Preserve the structural report instead of evaluating them.
+    chain_map = isempty(issues)
+    if chain_map
+        for t in (f.tmin - 1):f.tmax
+            dD = _diff(f.D, t)
+            dC = _diff(f.C, t)
+            ft = _map(f, t)
+            ftp = _map(f, t + 1)
+            for u in 1:nvertices(Q)
+                if !_coefficient_products_equal(field, dD.comps[u], ft.comps[u],
+                                               ftp.comps[u], dC.comps[u])
+                    chain_map = false
+                    push!(issues, "chain-map identity fails at degree $t, vertex $u.")
+                    break
+                end
             end
+            chain_map || break
         end
-        chain_map || break
     end
     valid = isempty(issues)
     throw && !valid && _throw_invalid_module_complex(:check_module_complex_map, issues)
@@ -2991,7 +3127,9 @@ function check_module_homotopy(H::ModuleCochainHomotopy{K}; throw::Bool=false) w
         _pmodule_equal(ht.dom, _term(H.f.C, t)) || push!(issues, "component h^$t has wrong domain.")
         _pmodule_equal(ht.cod, _term(H.f.D, t - 1)) || push!(issues, "component h^$t has wrong codomain.")
     end
-    homotopy_identity = is_cochain_homotopy(H)
+    # Endpoint errors already make the products in the homotopy identity
+    # ill-shaped; report them instead of leaking a matrix-dimension error.
+    homotopy_identity = isempty(issues) && is_cochain_homotopy(H)
     homotopy_identity || push!(issues, "cochain-homotopy identity does not hold.")
     valid = isempty(issues)
     throw && !valid && _throw_invalid_module_complex(:check_module_homotopy, issues)
@@ -3002,14 +3140,65 @@ function check_module_homotopy(H::ModuleCochainHomotopy{K}; throw::Bool=false) w
                                   issues=issues)
 end
 
+# Preflight hand-built triangle maps before the ordinary chain-map validator
+# multiplies matrices. Reused for differentials and degreewise map components.
+function _triangle_morphism_matches(f::PMorphism, dom::PModule, cod::PModule)
+    n = nvertices(dom.Q)
+    cod.Q === dom.Q || return false
+    dom.field == cod.field || return false
+    length(dom.dims) == length(cod.dims) == n || return false
+    f.dom.Q === dom.Q && f.cod.Q === cod.Q || return false
+    f.dom.field == dom.field && f.cod.field == cod.field || return false
+    _pmodule_equal(f.dom, dom) && _pmodule_equal(f.cod, cod) || return false
+    length(f.comps) == n || return false
+    for u in 1:n
+        size(f.comps[u]) == (cod.dims[u], dom.dims[u]) || return false
+    end
+    # Use the owner validator's numerical contract for real morphisms.
+    return check_morphism(f).valid
+end
+
+function _triangle_map_valid(f::ModuleCochainMap)
+    # Raw struct construction or subsequent vector mutation can bypass the
+    # public constructors. Check counts and shapes before indexed access.
+    for C in (source(f), target(f))
+        nterms = Int128(C.tmax) - Int128(C.tmin) + 1
+        nterms > 0 && length(C.terms) == nterms || return false
+        length(C.diffs) == nterms - 1 || return false
+        Q, field = poset(C), _field_of_complex(C)
+        for M in C.terms
+            M.Q === Q && M.field == field || return false
+            length(M.dims) == nvertices(Q) && all(>=(0), M.dims) || return false
+        end
+        for i in eachindex(C.diffs)
+            _triangle_morphism_matches(C.diffs[i], C.terms[i], C.terms[i + 1]) || return false
+        end
+        check_module_complex(C).valid || return false
+    end
+    poset(source(f)) === poset(target(f)) || return false
+    _field_of_complex(source(f)) == _field_of_complex(target(f)) || return false
+    ncomponents = Int128(f.tmax) - Int128(f.tmin) + 1
+    ncomponents >= 0 && length(f.comps) == ncomponents || return false
+    f.tmin > typemin(Int) && f.tmax < typemax(Int) || return false
+    for t in degree_range(f)
+        _triangle_morphism_matches(_map(f, t), _term(f.C, t), _term(f.D, t)) || return false
+    end
+    return check_module_complex_map(f).valid
+end
+
 """
     check_module_triangle(T; throw=false) -> NamedTuple
 
-Validate a hand-built [`ModuleDistinguishedTriangle`](@ref).
+Validate a hand-built canonical mapping-cone triangle.
 
-The report checks that the three structural maps have compatible sources and
-targets and that the stored cone/projection data matches the canonical mapping
-cone of the triangle morphism.
+Besides checking the cone object and the target `C[1]`, this checks that all
+three maps are module cochain maps and that inclusion/projection have the
+canonical coefficients `[I; 0]` and `[0 I]`. The checks include degrees omitted
+from a stored map window, where components are implicitly zero. A triangle
+isomorphic to the canonical one need not pass these stricter packaging checks.
+
+Malformed component counts, matrix shapes, and endpoints return an invalid
+report; `throw=true` raises `ArgumentError` for an invalid triangle.
 """
 function check_module_triangle(T::ModuleDistinguishedTriangle{K}; throw::Bool=false) where {K}
     issues = String[]
@@ -3021,12 +3210,50 @@ function check_module_triangle(T::ModuleDistinguishedTriangle{K}; throw::Bool=fa
     source(maps.inclusion) === objs.target || (push!(issues, "triangle inclusion has the wrong source complex."); source_target_ok = false)
     target(maps.inclusion) === objs.cone || (push!(issues, "triangle inclusion has the wrong target complex."); source_target_ok = false)
     source(maps.projection) === objs.cone || (push!(issues, "triangle projection has the wrong source complex."); source_target_ok = false)
-    expected_shift = shift(objs.source, 1)
-    projection_targets_shift = _module_complex_structurally_equal(target(maps.projection), expected_shift)
+    morphism_valid = _triangle_map_valid(maps.morphism)
+    inclusion_valid = _triangle_map_valid(maps.inclusion)
+    projection_valid = _triangle_map_valid(maps.projection)
+    chain_maps_valid = morphism_valid && inclusion_valid && projection_valid
+    morphism_valid || push!(issues, "triangle morphism is not a valid module cochain map (check storage, endpoints, and chain-map identity).")
+    inclusion_valid || push!(issues, "triangle inclusion is not a valid module cochain map (check storage, endpoints, and chain-map identity).")
+    projection_valid || push!(issues, "triangle projection is not a valid module cochain map (check storage, endpoints, and chain-map identity).")
+    projection_targets_shift = morphism_valid && projection_valid && source(maps.morphism) === objs.source &&
+        _module_complex_structurally_equal(target(maps.projection), shift(objs.source, 1))
     projection_targets_shift || push!(issues, "triangle projection must target the shift C[1].")
-    expected_cone = mapping_cone(maps.morphism)
-    cone_matches = _module_complex_structurally_equal(objs.cone, expected_cone)
+    cone_matches = morphism_valid && inclusion_valid && target(maps.inclusion) === objs.cone &&
+        _module_complex_structurally_equal(objs.cone, mapping_cone(maps.morphism))
     cone_matches || push!(issues, "stored cone does not match mapping_cone(f).")
+    inclusion_matches = cone_matches && source_target_ok && inclusion_valid
+    projection_matches = cone_matches && source_target_ok && projection_targets_shift
+    if inclusion_matches || projection_matches
+        # Include both object supports and explicitly stored map windows. A
+        # shortened window cannot conceal a required identity component.
+        tmin = min(objs.source.tmin - 1, objs.target.tmin,
+                   maps.inclusion.tmin, maps.projection.tmin)
+        tmax = max(objs.source.tmax - 1, objs.target.tmax,
+                   maps.inclusion.tmax, maps.projection.tmax)
+        for t in tmin:tmax
+            Dt, Ct1 = _term(objs.target, t), _term(objs.source, t + 1)
+            it = inclusion_matches ? _map(maps.inclusion, t) : nothing
+            pt = projection_matches ? _map(maps.projection, t) : nothing
+            for u in 1:nvertices(poset(objs.source))
+                a, b = Dt.dims[u], Ct1.dims[u]
+                if inclusion_matches
+                    A = it.comps[u]
+                    inclusion_matches = all(A[r, c] == (r == c ? one(K) : zero(K))
+                                            for r in 1:(a + b), c in 1:a)
+                end
+                if projection_matches
+                    A = pt.comps[u]
+                    projection_matches = all(A[r, c] == (c == a + r ? one(K) : zero(K))
+                                             for r in 1:b, c in 1:(a + b))
+                end
+            end
+            inclusion_matches || projection_matches || break
+        end
+    end
+    inclusion_matches || push!(issues, "triangle inclusion must be the canonical map [I; 0] in every degree.")
+    projection_matches || push!(issues, "triangle projection must be the canonical map [0 I] in every degree.")
     valid = isempty(issues)
     throw && !valid && _throw_invalid_module_complex(:check_module_triangle, issues)
     return _module_complex_report(:module_distinguished_triangle, valid;
@@ -3036,6 +3263,9 @@ function check_module_triangle(T::ModuleDistinguishedTriangle{K}; throw::Bool=fa
                                   source_target_ok=source_target_ok,
                                   projection_targets_shift=projection_targets_shift,
                                   cone_matches=cone_matches,
+                                  chain_maps_valid=chain_maps_valid,
+                                  inclusion_matches=inclusion_matches,
+                                  projection_matches=projection_matches,
                                   issues=issues)
 end
 
@@ -3052,8 +3282,8 @@ function check_rhom_complex(R::RHomComplex{K}; throw::Bool=false) where {K}
     expected_shape = (length(R.C.terms), length(R.resN.Emods))
     size(R.homs) == expected_shape || push!(issues, "homs has shape $(size(R.homs)), expected $expected_shape.")
     size(R.DC.dims) == expected_shape || push!(issues, "bicomplex dims have shape $(size(R.DC.dims)), expected $expected_shape.")
-    R.DC.amin == 0 || push!(issues, "bicomplex amin must equal 0.")
-    R.DC.amax == maxdeg_of_complex(R.C) || push!(issues, "bicomplex amax must equal maxdeg_of_complex(C).")
+    R.DC.amin == -R.C.tmax || push!(issues, "bicomplex amin must equal -C.tmax.")
+    R.DC.amax == -R.C.tmin || push!(issues, "bicomplex amax must equal -C.tmin.")
     R.DC.bmin == 0 || push!(issues, "bicomplex bmin must equal 0.")
     R.DC.bmax == length(R.resN.Emods) - 1 || push!(issues, "bicomplex bmax must match the injective-resolution length.")
     tmin, tmax, dims = _double_complex_total_dims(R.DC)
@@ -3110,38 +3340,24 @@ end
     cycles(H::HyperTorSpace, n::Int) -> Matrix{K}
 
 Columns form a basis of the cycle space in the relevant total cochain degree
-`t = -n`. Returns a 0 times 0 matrix if `n` is outside `degree_range(H)`.
+`t = -n`. Returns a 0 times 0 matrix for known zero degrees outside the stored
+range; queries above an uncertified boundary throw `ArgumentError`.
 """
-function cycles(H::HyperTorSpace, n::Int)
-    if n < 0
-        return zeros(K, 0, 0)
-    end
-    t = -n
-    tmin = H.T.tot.tmin
-    tmax = H.T.tot.tmax
-    if t < tmin || t > tmax
-        return zeros(K, 0, 0)
-    end
-    return H.cohom[t - tmin + 1].K
+function cycles(H::HyperTorSpace{K}, n::Int) where {K}
+    data = _hyper_degree_data(H, n)
+    return data === nothing ? zeros(K, 0, 0) : data.K
 end
 
 """
     boundaries(H::HyperTorSpace, n::Int) -> Matrix{K}
 
 Columns form a basis of the boundary space in the relevant total cochain degree
-`t = -n`. Returns a 0 times 0 matrix if `n` is outside `degree_range(H)`.
+`t = -n`. Returns a 0 times 0 matrix for known zero degrees outside the stored
+range; queries above an uncertified boundary throw `ArgumentError`.
 """
-function boundaries(H::HyperTorSpace, n::Int)
-    if n < 0
-        return zeros(K, 0, 0)
-    end
-    t = -n
-    tmin = H.T.tot.tmin
-    tmax = H.T.tot.tmax
-    if t < tmin || t > tmax
-        return zeros(K, 0, 0)
-    end
-    return H.cohom[t - tmin + 1].B
+function boundaries(H::HyperTorSpace{K}, n::Int) where {K}
+    data = _hyper_degree_data(H, n)
+    return data === nothing ? zeros(K, 0, 0) : data.B
 end
 
 """
@@ -3155,16 +3371,8 @@ Requirements:
 - `length(coords)` must equal `dim(H,n)`.
 """
 function representative(H::HyperTorSpace, n::Int, coords::AbstractVector{K}) where {K}
-    if n < 0
-        throw(DomainError(n, "Tor degree n must be nonnegative."))
-    end
-    t = -n
-    tmin = H.T.tot.tmin
-    tmax = H.T.tot.tmax
-    if t < tmin || t > tmax
-        throw(DomainError(n, "n must lie in degree_range(H) = $(degree_range(H))."))
-    end
-    data = H.cohom[t - tmin + 1]
+    data = _hyper_degree_data(H, n)
+    data === nothing && throw(DomainError(n, "Degree must lie in degree_range(H) = $(degree_range(H))."))
     d = size(data.Hrep, 2)
     if length(coords) != d
         throw(DimensionMismatch("Expected coordinates of length $d, got $(length(coords))."))
@@ -3179,16 +3387,8 @@ Compute coordinates of a cocycle representative in `hyperTor_n` relative to the
 fixed basis, via total cochain degree `t = -n`.
 """
 function coordinates(H::HyperTorSpace, n::Int, cocycle::AbstractVector{K}) where {K}
-    if n < 0
-        throw(DomainError(n, "Tor degree n must be nonnegative."))
-    end
-    t = -n
-    tmin = H.T.tot.tmin
-    tmax = H.T.tot.tmax
-    if t < tmin || t > tmax
-        throw(DomainError(n, "n must lie in degree_range(H) = $(degree_range(H))."))
-    end
-    data = H.cohom[t - tmin + 1]
+    data = _hyper_degree_data(H, n)
+    data === nothing && throw(DomainError(n, "Degree must lie in degree_range(H) = $(degree_range(H))."))
     x = cohomology_coordinates(data, cocycle)
     return vec(x)
 end
@@ -3197,19 +3397,13 @@ end
     basis(H::HyperTorSpace, n::Int) -> Vector{Vector{K}}
 
 Return a list of cocycle representatives forming a basis of `hyperTor_n`.
-If `n` is outside `degree_range(H)` or `dim(H,n) == 0`, returns an empty vector.
+Returns an empty vector for known zero groups. Queries above an uncertified
+boundary throw `ArgumentError`.
 """
 function basis(H::HyperTorSpace{K}, n::Int) where {K}
-    if n < 0
-        return Vector{Vector{K}}()
-    end
-    t = -n
-    tmin = H.T.tot.tmin
-    tmax = H.T.tot.tmax
-    if t < tmin || t > tmax
-        return Vector{Vector{K}}()
-    end
-    Hrep = H.cohom[t - tmin + 1].Hrep
+    data = _hyper_degree_data(H, n)
+    data === nothing && return Vector{Vector{K}}()
+    Hrep = data.Hrep
     d = size(Hrep, 2)
     B = Vector{Vector{K}}(undef, d)
     for i in 1:d
@@ -3226,43 +3420,37 @@ end
 """
     degree_range(H::HyperExtSpace) -> UnitRange{Int}
 
-Inclusive range of total degrees `t` for which this `HyperExtSpace` stores
-cohomology data of the total cochain complex `H.R.tot`.
+Inclusive range of certified hyper-Ext degrees. This can be smaller than the
+range of the underlying truncated total complex.
 
 This is the canonical iterator for graded-space queries:
 `dim(H,t)`, `basis(H,t)`, `representative(H,t,coords)`, `coordinates(H,t,z)`,
 `cycles(H,t)`, and `boundaries(H,t)`.
 """
-degree_range(H::HyperExtSpace) = H.R.tot.tmin:H.R.tot.tmax
+degree_range(H::HyperExtSpace) = H.degrees
 
 """
     cycles(H::HyperExtSpace, t::Int) -> Matrix{K}
 
 Columns form a basis of the cycle space `ker(d^t)` inside the total cochain group
-in degree `t`. Returns a 0 times 0 matrix if `t` is outside `degree_range(H)`.
+in degree `t`. Returns a 0 times 0 matrix for known zero degrees outside the
+stored range; queries above an uncertified boundary throw `ArgumentError`.
 """
-function cycles(H::HyperExtSpace, t::Int)
-    tmin = H.R.tot.tmin
-    tmax = H.R.tot.tmax
-    if t < tmin || t > tmax
-        return zeros(K, 0, 0)
-    end
-    return H.cohom[t - tmin + 1].K
+function cycles(H::HyperExtSpace{K}, t::Int) where {K}
+    data = _hyper_degree_data(H, t)
+    return data === nothing ? zeros(K, 0, 0) : data.K
 end
 
 """
     boundaries(H::HyperExtSpace, t::Int) -> Matrix{K}
 
 Columns form a basis of the boundary space `im(d^(t-1))` inside the total cochain
-group in degree `t`. Returns a 0 times 0 matrix if `t` is outside `degree_range(H)`.
+group in degree `t`. Returns a 0 times 0 matrix for known zero degrees outside the
+stored range; queries above an uncertified boundary throw `ArgumentError`.
 """
-function boundaries(H::HyperExtSpace, t::Int)
-    tmin = H.R.tot.tmin
-    tmax = H.R.tot.tmax
-    if t < tmin || t > tmax
-        return zeros(K, 0, 0)
-    end
-    return H.cohom[t - tmin + 1].B
+function boundaries(H::HyperExtSpace{K}, t::Int) where {K}
+    data = _hyper_degree_data(H, t)
+    return data === nothing ? zeros(K, 0, 0) : data.B
 end
 
 """
@@ -3277,12 +3465,8 @@ Requirements:
 - `length(coords)` must equal `dim(H,t)`.
 """
 function representative(H::HyperExtSpace, t::Int, coords::AbstractVector{K}) where {K}
-    tmin = H.R.tot.tmin
-    tmax = H.R.tot.tmax
-    if t < tmin || t > tmax
-        throw(DomainError(t, "t must lie in degree_range(H) = $(tmin):$(tmax)."))
-    end
-    data = H.cohom[t - tmin + 1]
+    data = _hyper_degree_data(H, t)
+    data === nothing && throw(DomainError(t, "Degree must lie in degree_range(H) = $(degree_range(H))."))
     d = size(data.Hrep, 2)
     if length(coords) != d
         throw(DimensionMismatch("Expected coordinates of length $d, got $(length(coords))."))
@@ -3302,12 +3486,8 @@ Notes:
   coordinates for an implicitly projected class depending on consistency.
 """
 function coordinates(H::HyperExtSpace, t::Int, cocycle::AbstractVector{K}) where {K}
-    tmin = H.R.tot.tmin
-    tmax = H.R.tot.tmax
-    if t < tmin || t > tmax
-        throw(DomainError(t, "t must lie in degree_range(H) = $(tmin):$(tmax)."))
-    end
-    data = H.cohom[t - tmin + 1]
+    data = _hyper_degree_data(H, t)
+    data === nothing && throw(DomainError(t, "Degree must lie in degree_range(H) = $(degree_range(H))."))
     x = cohomology_coordinates(data, cocycle)
     return vec(x)
 end
@@ -3316,17 +3496,15 @@ end
     basis(H::HyperExtSpace, t::Int) -> Vector{Vector{K}}
 
 Return a list of cocycle representatives forming a basis of `HyperExt^t`.
-If `t` is outside `degree_range(H)` or `dim(H,t) == 0`, returns an empty vector.
+Returns an empty vector for known zero groups. Queries above an uncertified
+boundary throw `ArgumentError`.
 
 Each basis element is a cochain vector in the ambient total cochain group.
 """
 function basis(H::HyperExtSpace{K}, t::Int) where {K}
-    tmin = H.R.tot.tmin
-    tmax = H.R.tot.tmax
-    if t < tmin || t > tmax
-        return Vector{Vector{K}}()
-    end
-    Hrep = H.cohom[t - tmin + 1].Hrep
+    data = _hyper_degree_data(H, t)
+    data === nothing && return Vector{Vector{K}}()
+    Hrep = data.Hrep
     d = size(Hrep, 2)
     B = Vector{Vector{K}}(undef, d)
     for i in 1:d
@@ -3448,6 +3626,7 @@ function _assemble_derived_tensor_map_first_maps(
     maps = Vector{SparseMatrixCSC{K,Int}}(undef, length(plan.degrees))
     if threads && Threads.nthreads() > 1 && !isempty(plan.degrees)
         Threads.@threads for idx in eachindex(plan.degrees)
+            local dim_dom, dim_cod, dplan, I, block
             dim_dom = plan.dims_src[idx]
             dim_cod = plan.dims_tgt[idx]
             dplan = plan.degrees[idx]
@@ -3641,15 +3820,9 @@ function hyperTor_map_first(
     check::Bool = true,
     cache=nothing,
 ) where {K}
-    t = -n
-    if t < Hdom.T.tot.tmin || t > Hdom.T.tot.tmax || t < Hcod.T.tot.tmin || t > Hcod.T.tot.tmax
-        dim_dom = (t < Hdom.T.tot.tmin || t > Hdom.T.tot.tmax) ? 0 : Hdom.cohom[t - Hdom.T.tot.tmin + 1].dimH
-        dim_cod = (t < Hcod.T.tot.tmin || t > Hcod.T.tot.tmax) ? 0 : Hcod.cohom[t - Hcod.T.tot.tmin + 1].dimH
-        return zeros(K, dim_cod, dim_dom)
-    end
-    Ft = _derived_tensor_map_first_degree(f, Hdom.T, Hcod.T, t; check=check, cache=cache)
-    Ht_dom = Hdom.cohom[t - Hdom.T.tot.tmin + 1]
-    Ht_cod = Hcod.cohom[t - Hcod.T.tot.tmin + 1]
+    Ht_dom, Ht_cod = _hyper_degree_data(Hdom, n), _hyper_degree_data(Hcod, n)
+    (Ht_dom === nothing || Ht_cod === nothing) && return zeros(K, dim(Hcod, n), dim(Hdom, n))
+    Ft = _derived_tensor_map_first_degree(f, Hdom.T, Hcod.T, -n; check=check, cache=cache)
     return induced_map_on_cohomology(Ht_dom, Ht_cod, Ft)
 end
 
@@ -3672,8 +3845,10 @@ function hyperTor_map_second(
     n::Int,
     check::Bool = true
 ) where {K}
+    Ht_src, Ht_tgt = _hyper_degree_data(Hsrc, n), _hyper_degree_data(Htgt, n)
+    (Ht_src === nothing || Ht_tgt === nothing) && return zeros(K, dim(Htgt, n), dim(Hsrc, n))
     Tmap = derived_tensor_map_second(g, Hsrc.T, Htgt.T; check=check)
-    return induced_map_on_cohomology(Tmap, Hsrc.cohom, Htgt.cohom, -n)
+    return induced_map_on_cohomology(Ht_src, Ht_tgt, _map_at(Tmap, -n))
 end
 
 

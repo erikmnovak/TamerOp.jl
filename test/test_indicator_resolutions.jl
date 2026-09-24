@@ -5,6 +5,58 @@ using LinearAlgebra
 
 const FL = TamerOp.FieldLinAlg
 
+@testset "A58 projective generators preserve the incoming-image prefix" begin
+    with_fields(FIELDS_FULL) do field
+        K = CM.coeff_type(field)
+        same(A, B) = field isa CM.RealField ?
+            isapprox(A, B; atol=field.atol, rtol=field.rtol) : A == B
+        # The incoming image must be retained before choosing standard basis
+        # complements. A column-pivoted QR of [Img I] instead prefers I when
+        # Img has small norm, and can choose a vector already in Img.
+        s = field isa CM.RealField ? K(0.01) : one(K)
+        Img = reshape(K[s, 0], 2, 1)
+        @test IR._choose_projective_generators(field, Img, 2) == [2]
+        Img4 = K[s 0; 0 s; s s; 0 0]
+        chosen = IR._choose_projective_generators(field, Img4, 4)
+        @test chosen == [1, 4]
+        @test FL.rank(field, hcat(Img4, CM.eye(field, 4)[:, chosen])) == 4
+        @test IR._choose_projective_generators(field, zeros(K, 3, 0), 3) == [1, 2, 3]
+        @test isempty(IR._choose_projective_generators(field, CM.eye(field, 3), 3))
+        @test isempty(IR._choose_projective_generators(field, zeros(K, 0, 0), 0))
+
+        # M = P1 + P2 on the two-vertex chain, with a scaled basis at vertex 2.
+        # Its cover has the same dimensions and an invertible augmentation.
+        P = chain_poset(2)
+        M = MD.PModule{K}(P, [1, 2],
+            Dict{Tuple{Int,Int},Matrix{K}}((1, 2) => Img); field=field)
+        cover = IR.projective_cover(M; threads=false)
+        F0, pi0, _ = cover
+        @test F0.dims == [1, 2]
+        @test IR.generator_count(cover) == 2
+        @test same(pi0.comps[1], CM.eye(field, 1))
+        @test same(pi0.comps[2], K[s 0; 0 1])
+        @test FL.rank(field, pi0.comps[2]) == 2
+        @test IR.check_projective_cover(cover).valid
+        ker, _ = TamerOp.AbelianCategories.kernel_with_inclusion(pi0)
+        @test ker.dims == [0, 0]
+
+        # This augmented solve consumer must remain on its RealField-specific
+        # left-inverse route while exact fields use normalized RREF rows.
+        S = K[s 0; 0 s; s s]
+        @test same(IR._left_inverse_full_column(field, S) * S, CM.eye(field, 2))
+    end
+
+    # Relative-only rank accepts a tiny but nonzero incoming map. Its span
+    # must survive the change in scale caused by appending the identity.
+    field = CM.RealField(Float64; rtol=1e-10, atol=0.0)
+    Img = reshape([1e-12, 0.0], 2, 1)
+    @test FL.rank(field, Img) == 1
+    chosen = IR._choose_projective_generators(field, Img, 2)
+    @test chosen == [2]
+    @test FL.rank(field, hcat(Img / norm(Img), CM.eye(field, 2)[:, chosen])) == 2
+    @test Img == reshape([1e-12, 0.0], 2, 1)
+end
+
 @testset "IndicatorResolutions internal invariants + Ext on A2" begin
     # Internal PModule should match fiber_dimension from the fringe.
     P = chain_poset(3)
@@ -718,7 +770,7 @@ end
     mid = zero_edge_module(P_mid, 2)
     prof_mid = IR._indicator_downset_auto_profile(mid; maxlen=2)
     @test prof_mid.transport_reuse == true
-    @test prof_mid.injective_reuse == false
+    @test prof_mid.injective_reuse == true
     @test prof_mid.prefix_cache == false
 
     P_big = grid_poset(12, 12)
@@ -726,8 +778,61 @@ end
     big = zero_edge_module(P_big, 2)
     prof_big = IR._indicator_downset_auto_profile(big; maxlen=3)
     @test prof_big.transport_reuse == true
-    @test prof_big.injective_reuse == false
+    @test prof_big.injective_reuse == true
     @test prof_big.prefix_cache == false
+end
+
+@testset "A02 downset truncation keeps socle recomputation valid" begin
+    old_reuse = IR._INDICATOR_DOWNSET_COKERNEL_TRANSPORT_REUSE[]
+    old_vertices = IR._INDICATOR_DOWNSET_TRANSPORT_REUSE_MIN_VERTICES[]
+    old_dims = IR._INDICATOR_DOWNSET_TRANSPORT_REUSE_MIN_TOTAL_DIMS[]
+    try
+        IR._INDICATOR_DOWNSET_TRANSPORT_REUSE_MIN_VERTICES[] = 0
+        IR._INDICATOR_DOWNSET_TRANSPORT_REUSE_MIN_TOTAL_DIMS[] = 0
+        with_fields(FIELDS_FULL) do field
+            K = CM.coeff_type(field)
+            P = diamond_poset()
+            S4f = one_by_one_fringe(P, FF.principal_upset(P, 4), FF.principal_downset(P, 4); field=field)
+            P1f = one_by_one_fringe(P, FF.principal_upset(P, 1), FF.principal_downset(P, 4); field=field)
+            S4 = IR.pmodule_from_fringe(S4f)
+            # The minimal injective resolution is I4 -> I2+I3 -> I1.
+            # At vertex 1 successive cokernels retain dimension one but their
+            # outgoing maps change: the final socle must be recomputed.
+            for reuse in (false, true)
+                IR._INDICATOR_DOWNSET_COKERNEL_TRANSPORT_REUSE[] = reuse
+                for cap in (nothing, 0, 1, 2, 3)
+                    res = IR.downset_resolution(S4; maxlen=cap, threads=false)
+                    E, dE = res
+                    top = cap === nothing ? 2 : min(cap, 2)
+                    @test [length(e.D0) for e in E] == [1, 2, 1][1:top+1]
+                    @test IR.verify_downset_resolution(E, dE)
+                    if top >= 1
+                        @test Matrix(dE[1]) == ones(K, 2, 1)
+                    end
+                    if top == 2
+                        @test FL.rank(field, dE[2]) == 1
+                        @test iszero(dE[2] * dE[1])
+                    end
+                    prof = IR._indicator_downset_auto_profile(S4; maxlen=cap)
+                    @test prof.injective_reuse == prof.transport_reuse == (reuse && (cap === nothing || cap > 1))
+                    if cap !== nothing
+                        dims = DF.ext_dimensions_via_indicator_resolutions(P1f, S4f; maxlen=cap, verify=true)
+                        expected_top = cap == 0 ? -1 : cap == 1 ? 0 : 2
+                        @test dims == Dict(t => 0 for t in 0:expected_top)
+                    end
+                    if Threads.nthreads() > 1
+                        Et, dt = IR.downset_resolution(S4; maxlen=cap, threads=true)
+                        @test [length(e.D0) for e in Et] == [length(e.D0) for e in E]
+                        @test dt == dE
+                    end
+                end
+            end
+        end
+    finally
+        IR._INDICATOR_DOWNSET_COKERNEL_TRANSPORT_REUSE[] = old_reuse
+        IR._INDICATOR_DOWNSET_TRANSPORT_REUSE_MIN_VERTICES[] = old_vertices
+        IR._INDICATOR_DOWNSET_TRANSPORT_REUSE_MIN_TOTAL_DIMS[] = old_dims
+    end
 end
 
 @testset "IndicatorResolutions projective generator plan parity" begin
@@ -1076,6 +1181,30 @@ end
     @test dE_fresh == dE_clear
 end
 
+@testset "A02 indicator cache retains augmentation and completion data" begin
+    with_fields(FIELDS_FULL) do field
+        P = chain_poset(1)
+        H = one_by_one_fringe(P, FF.principal_upset(P, 1), FF.principal_downset(P, 1); field=field)
+        cache = CM.ResolutionCache()
+        @test DF.ext_dimensions_via_indicator_resolutions(H, H; maxlen=0, cache=cache) == Dict(0 => 1)
+        first = IR.indicator_resolutions(H, H; maxlen=0, cache=cache)
+        again = IR.indicator_resolutions(H, H; maxlen=0, cache=cache)
+        @test first === again
+        @test IR.augmentation(IR.projective_resolution(first)) !== nothing
+        @test IR.coaugmentation(IR.injective_resolution(first)) !== nothing
+        @test IR.augmentation(IR.projective_resolution(first)) === IR.augmentation(IR.projective_resolution(again))
+        @test IR.coaugmentation(IR.injective_resolution(first)) === IR.coaugmentation(IR.injective_resolution(again))
+        @test length(IR.resolution_generators(IR.projective_resolution(again))) == 1
+        @test length(IR.resolution_generators(IR.injective_resolution(again))) == 1
+        @test DF.ext_dimensions_via_indicator_resolutions(H, H; maxlen=0, cache=cache) == Dict(0 => 1)
+        CM._clear_resolution_cache!(cache)
+        @test DF.ext_dimensions_via_indicator_resolutions(H, H; maxlen=0, cache=cache) == Dict(0 => 1)
+        fresh = IR.indicator_resolutions(H, H; maxlen=0, cache=cache)
+        @test fresh !== first
+        @test HE.ext_dims_via_resolutions(fresh) == Dict(0 => 1)
+    end
+end
+
 @testset "IndicatorResolutions adaptive cache admission policy" begin
     P = diamond_poset()
     field = CM.QQField()
@@ -1089,25 +1218,30 @@ end
     H = FF.FringeModule{K}(P, U, D, Phi; field=field)
 
     payload = IR.indicator_resolutions(H, H; maxlen=3, threads=false)
-    cache_payload = IR._indicator_resolutions_cache_payload(payload)
     key = CM._resolution_key3(H, H, 3)
     PT = typeof(P)
     UP = TamerOp.IndicatorTypes.UpsetPresentation{K,PT,Nothing,SparseMatrixCSC{K,Int}}
     DP = TamerOp.IndicatorTypes.DownsetCopresentation{K,PT,Nothing,SparseMatrixCSC{K,Int}}
-    cache_val_type = Tuple{
-        Vector{UP},
-        Vector{SparseMatrixCSC{K,Int}},
-        Vector{DP},
-        Vector{SparseMatrixCSC{K,Int}},
-    }
+    cache_val_type = typeof(payload)
 
     rc = CM.ResolutionCache()
-    stored = IR._resolution_cache_indicator_store!(rc, key, cache_payload)
-    @test stored === cache_payload
-    @test IR._resolution_cache_indicator_get(rc, key, cache_val_type) === cache_payload
-    @test rc.indicator_primary_type === typeof(cache_payload)
-    @test eltype(cache_payload[1]) === UP
-    @test eltype(cache_payload[3]) === DP
+    stored = IR._resolution_cache_indicator_store!(rc, key, payload)
+    @test stored === payload
+    @test IR._resolution_cache_indicator_get(rc, key, cache_val_type) === payload
+    @test IR._resolution_cache_indicator_get(rc, key, IR.IndicatorResolutionsResult) === payload
+    @test rc.indicator_primary_type === cache_val_type
+    @test eltype(IR.resolution_modules(IR.projective_resolution(payload))) === UP
+    @test eltype(IR.resolution_modules(IR.injective_resolution(payload))) === DP
+
+    # A second concrete family must be found in the heterogeneous fallback
+    # even when a different result type has already been promoted.
+    f2 = CM.F2()
+    H2 = one_by_one_fringe(P, FF.principal_upset(P, 4), FF.principal_downset(P, 4); field=f2)
+    payload2 = IR.indicator_resolutions(H2, H2; maxlen=0)
+    key2 = CM._resolution_key3(H2, H2, 0)
+    @test IR._resolution_cache_indicator_store!(rc, key2, payload2) === payload2
+    @test IR._resolution_cache_indicator_get(rc, key2, IR.IndicatorResolutionsResult) === payload2
+    @test IR._resolution_cache_indicator_get(rc, key, IR.IndicatorResolutionsResult) === payload
 
     other_key = CM._resolution_key3(H, H, 4)
     @test IR._resolution_cache_indicator_store!(rc, other_key, 17) == 17
@@ -1922,7 +2056,7 @@ end
     c(x) = CM.coerce(field, x)
     cc = MD._get_cover_cache(P)
     FF._clear_chain_parent_cache!(cc)
-    n_before = sum(length.(cc.chain_parent))
+    n_before = sum(length, CM._task_local_values(cc.chain_parent); init=0)
 
     # Build a tiny 2-dimensional module on the chain 1<2<3<4.
     dims = [2, 2, 2, 2]
@@ -1934,24 +2068,24 @@ end
     edge[(2, 3)] = K[c(5) c(0); c(0) c(7)]
     edge[(3, 4)] = K[c(11) c(0); c(0) c(13)]
     M = MD.PModule{K}(P, dims, edge; field=field)
-    for d in M.map_compose
+    for d in CM._task_local_values(M.map_compose)
         empty!(d)
     end
-    m_before = sum(length.(M.map_compose))
+    m_before = sum(length, CM._task_local_values(M.map_compose); init=0)
 
     A14 = MD.map_leq(M, 1, 4; cache=cc)
     @test A14 == K[c(110) c(0); c(0) c(273)]
 
     # The chosen-chain cache should now contain at least the (1,4) entry.
-    @test length(cc.chain_parent) >= 1
-    n_after_first = sum(length.(cc.chain_parent))
-    m_after_first = sum(length.(M.map_compose))
+    @test length(CM._task_local_values(cc.chain_parent)) >= 1
+    n_after_first = sum(length, CM._task_local_values(cc.chain_parent); init=0)
+    m_after_first = sum(length, CM._task_local_values(M.map_compose); init=0)
     @test m_after_first == m_before
 
     A14b = MD.map_leq(M, 1, 4; cache=cc)
     @test A14b == A14
-    @test sum(length.(cc.chain_parent)) == n_after_first
-    @test sum(length.(M.map_compose)) > m_after_first
+    @test sum(length, CM._task_local_values(cc.chain_parent); init=0) == n_after_first
+    @test sum(length, CM._task_local_values(M.map_compose); init=0) > m_after_first
 end
 
 @testset "map_leq long-chain cold path preserves multiplication order" begin
@@ -1974,15 +2108,15 @@ end
 
     A15 = MD.map_leq(M, 1, 5; cache=cc)
     @test A15 == K[c(16) c(18); c(7) c(8)]
-    @test sum(length.(cc.chain_parent)) > 0
-    @test sum(length.(M.map_compose)) == 0
-    slot_hits = M.map_pred_slot_dense === nothing ? sum(length, M.map_pred_slot) :
-        sum(d -> count(identity, d.seen), M.map_pred_slot_dense)
+    @test sum(length, CM._task_local_values(cc.chain_parent); init=0) > 0
+    @test sum(length, CM._task_local_values(M.map_compose); init=0) == 0
+    slot_hits = M.map_pred_slot_dense === nothing ? sum(length, CM._task_local_values(M.map_pred_slot); init=0) :
+        sum(d -> count(identity, d.seen), CM._task_local_values(M.map_pred_slot_dense); init=0)
     @test slot_hits > 0
 
     A15b = MD.map_leq(M, 1, 5; cache=cc)
     @test A15b == A15
-    @test sum(length.(M.map_compose)) > 0
+    @test sum(length, CM._task_local_values(M.map_compose); init=0) > 0
 end
 
 @testset "map_leq tiny fast paths bypass compose memo" begin
@@ -2001,11 +2135,11 @@ end
     M1 = MD.PModule{K}(P1, dims1, edge1; field=field)
     cc1 = MD._get_cover_cache(P1)
     FF._clear_chain_parent_cache!(cc1)
-    for d in M1.map_compose
+    for d in CM._task_local_values(M1.map_compose)
         empty!(d)
     end
     @test MD.map_leq(M1, 1, 4; cache=cc1) == reshape([c(30)], 1, 1)
-    @test sum(length.(M1.map_compose)) == 0
+    @test sum(length, CM._task_local_values(M1.map_compose); init=0) == 0
 
     # Two-edge path with nontrivial dimensions should also skip compose memo.
     P2 = chain_poset(3)
@@ -2025,12 +2159,12 @@ end
     M2 = MD.PModule{K}(P2, dims2, edge2; field=field)
     cc2 = MD._get_cover_cache(P2)
     FF._clear_chain_parent_cache!(cc2)
-    for d in M2.map_compose
+    for d in CM._task_local_values(M2.map_compose)
         empty!(d)
     end
     A13 = MD.map_leq(M2, 1, 3; cache=cc2)
     @test A13 == edge2[(2, 3)] * edge2[(1, 2)]
-    @test sum(length.(M2.map_compose)) == 0
+    @test sum(length, CM._task_local_values(M2.map_compose); init=0) == 0
 end
 
 
@@ -2053,7 +2187,7 @@ end
     edge[(1, 3)] = reshape([c(1)], 1, 1)
     edge[(3, 4)] = reshape([c(10)], 1, 1)  # composite also 10
     M = MD.PModule{K}(P, dims, edge; field=field)
-    for d in M.map_compose
+    for d in CM._task_local_values(M.map_compose)
         empty!(d)
     end
 
@@ -2083,10 +2217,10 @@ end
 
     cc = MD._get_cover_cache(P)
     FF._clear_chain_parent_cache!(cc)
-    for d in M1.map_compose
+    for d in CM._task_local_values(M1.map_compose)
         empty!(d)
     end
-    for d in M2.map_compose
+    for d in CM._task_local_values(M2.map_compose)
         empty!(d)
     end
 
@@ -2095,12 +2229,12 @@ end
     @test A1 == K[c(66) c(0); c(0) c(195)]
     @test A2 == K[c(455) c(0); c(0) c(1309)]
     @test A1 != A2
-    @test sum(length.(M1.map_compose)) == 0
-    @test sum(length.(M2.map_compose)) == 0
+    @test sum(length, CM._task_local_values(M1.map_compose); init=0) == 0
+    @test sum(length, CM._task_local_values(M2.map_compose); init=0) == 0
     @test MD.map_leq(M1, 1, 4; cache=cc) == A1
     @test MD.map_leq(M2, 1, 4; cache=cc) == A2
-    @test sum(length.(M1.map_compose)) >= 1
-    @test sum(length.(M2.map_compose)) >= 1
+    @test sum(length, CM._task_local_values(M1.map_compose); init=0) >= 1
+    @test sum(length, CM._task_local_values(M2.map_compose); init=0) >= 1
 end
 
 @testset "map_leq_many parity and preallocated output" begin
@@ -2118,7 +2252,7 @@ end
     M = MD.PModule{K}(P, dims, edge; field=field)
     cc = MD._get_cover_cache(P)
     FF._clear_chain_parent_cache!(cc)
-    for d in M.map_compose
+    for d in CM._task_local_values(M.map_compose)
         empty!(d)
     end
 
@@ -2136,7 +2270,7 @@ end
     out = Vector{Matrix{K}}(undef, length(pairs))
     MD.map_leq_many!(out, M, pairs; cache=cc)
     @test out == batch
-    @test sum(length.(M.map_compose)) == 0
+    @test sum(length, CM._task_local_values(M.map_compose); init=0) == 0
 end
 
 @testset "map_leq_many cached plan reuse + signature invalidation" begin
@@ -2158,11 +2292,11 @@ end
 
         pairs = Tuple{Int,Int}[(1, 1), (1, 3), (2, 5), (1, 7), (3, 7), (4, 7)]
         b1 = MD.map_leq_many(M, pairs; cache=cc)
-        @test sum(length.(M.map_compose)) == 0
+        @test sum(length, CM._task_local_values(M.map_compose); init=0) == 0
         b2 = MD.map_leq_many(M, pairs; cache=cc)
         @test b1 == b2
-        @test any(!isempty(d) for d in M.map_many_plan)
-        @test sum(length.(M.map_compose)) > 0
+        @test any(!isempty(d) for d in CM._task_local_values(M.map_many_plan))
+        @test sum(length, CM._task_local_values(M.map_compose); init=0) > 0
 
         # Mutate an interior pair in place (first/last unchanged); signature check must rebuild.
         pairs[3] = (2, 4)
@@ -2206,9 +2340,9 @@ end
 
         @test MD._map_leq_many_raw_route_kind(M, pairs, cc) == :oneoff_long
         batch = MD.map_leq_many(M, pairs; cache=cc)
-        @test all(isempty(d) for d in M.map_many_plan)
-        @test sum(length.(M.map_compose)) == 0
-        @test M.map_compose_dense === nothing || all(!any(m.seen) for m in M.map_compose_dense)
+        @test all(isempty(d) for d in CM._task_local_values(M.map_many_plan))
+        @test sum(length, CM._task_local_values(M.map_compose); init=0) == 0
+        @test M.map_compose_dense === nothing || all(!any(m.seen) for m in CM._task_local_values(M.map_compose_dense))
         @test all(batch[i] == MD.map_leq(M, pairs[i][1], pairs[i][2]; cache=cc) for i in eachindex(pairs))
     finally
         MD.MAP_LEQ_MANY_PLAN_MIN_LEN[] = old_plan_min
@@ -2276,8 +2410,8 @@ end
         MD._clear_map_leq_many_plan_cache!(M)
         @test MD._map_leq_many_raw_route_kind(M, pairs, cc) == :scalar_fallback
         batch = MD.map_leq_many(M, pairs; cache=cc)
-        @test all(isempty(d) for d in M.map_many_plan)
-        @test sum(length.(M.map_compose)) == 0
+        @test all(isempty(d) for d in CM._task_local_values(M.map_many_plan))
+        @test sum(length, CM._task_local_values(M.map_compose); init=0) == 0
         @test all(batch[i] == MD.map_leq(M, pairs[i][1], pairs[i][2]; cache=cc) for i in eachindex(pairs))
     finally
         MD.MAP_LEQ_MANY_PLAN_MIN_LEN[] = old_plan_min
@@ -2334,7 +2468,7 @@ end
         MD._clear_map_leq_many_plan_cache!(M)
         @test MD._map_leq_many_raw_route_kind(M, pairs, cc) == :plan_build
         batch = MD.map_leq_many(M, pairs; cache=cc)
-        @test any(!isempty(d) for d in M.map_many_plan)
+        @test any(!isempty(d) for d in CM._task_local_values(M.map_many_plan))
         @test all(batch[i] == MD.map_leq(M, pairs[i][1], pairs[i][2]; cache=cc) for i in eachindex(pairs))
 
         if MD.FieldLinAlg._have_nemo()
@@ -2428,13 +2562,13 @@ end
         out = Vector{Matrix{K}}(undef, length(pairs))
         @test MD._map_leq_many_scalar_long_batch!(out, M, arena, stats)
         ids = map(objectid, out)
-        @test sum(length.(M.map_compose)) == 0
+        @test sum(length, CM._task_local_values(M.map_compose); init=0) == 0
 
         FF._clear_chain_parent_cache!(cc)
         MD._clear_map_leq_memo!(M)
         @test MD._map_leq_many_scalar_long_batch!(out, M, arena, stats)
         @test map(objectid, out) == ids
-        @test sum(length.(M.map_compose)) == 0
+        @test sum(length, CM._task_local_values(M.map_compose); init=0) == 0
         @test all(out[i] == MD.map_leq(M, pairs[i][1], pairs[i][2]; cache=cc) for i in eachindex(pairs))
 
         if MD.FieldLinAlg._have_nemo()
@@ -2492,25 +2626,25 @@ end
         @test b_batch_after == b_batch
         @test b_vec_after[2] == MD.map_leq(M, 1, 4; cache=cc)
         @test b_batch_after[2] == MD.map_leq(M, 1, 3; cache=cc)
-        @test any(!isempty(d) for d in M.map_many_batch_plan)
-        @test any(x -> x !== nothing, M.map_many_batch_last)
+        @test any(!isempty(d) for d in CM._task_local_values(M.map_many_batch_plan))
+        @test any(x -> x !== nothing, getindex.(CM._task_local_values(M.map_many_batch_last)))
 
-        entry = only(filter(x -> x !== nothing, M.map_many_batch_last))
+        entry = only(filter(x -> x !== nothing, getindex.(CM._task_local_values(M.map_many_batch_last))))
         plan = (entry::MD._MapLeqManyBatchPlanEntry).plan
         @test !isempty(plan.suffix_u)
         @test length(plan.query_suffix) == length(batch.pairs)
         dense_before = cc.chain_parent_dense === nothing ? 0 :
-            sum(d -> count(identity, d.seen), cc.chain_parent_dense)
-        dict_before = sum(length, cc.chain_parent)
+            sum(d -> count(identity, d.seen), CM._task_local_values(cc.chain_parent_dense); init=0)
+        dict_before = sum(length, CM._task_local_values(cc.chain_parent); init=0)
         FF._clear_chain_parent_cache!(cc)
         dense_cleared = cc.chain_parent_dense === nothing ? 0 :
-            sum(d -> count(identity, d.seen), cc.chain_parent_dense)
+            sum(d -> count(identity, d.seen), CM._task_local_values(cc.chain_parent_dense); init=0)
         @test dense_cleared == 0
-        @test sum(length, cc.chain_parent) == 0
+        @test sum(length, CM._task_local_values(cc.chain_parent); init=0) == 0
         b_batch_again = MD.map_leq_many(M, batch; cache=cc)
         dense_after = cc.chain_parent_dense === nothing ? 0 :
-            sum(d -> count(identity, d.seen), cc.chain_parent_dense)
-        dict_after = sum(length, cc.chain_parent)
+            sum(d -> count(identity, d.seen), CM._task_local_values(cc.chain_parent_dense); init=0)
+        dict_after = sum(length, CM._task_local_values(cc.chain_parent); init=0)
         @test b_batch_again == b_batch
         @test dense_before >= 0
         @test dict_before >= 0
@@ -2518,7 +2652,7 @@ end
         @test dict_after == 0
 
         MD._clear_map_leq_many_plan_cache!(M)
-        @test all(x -> x === nothing, M.map_many_batch_last)
+        @test all(x -> x === nothing, getindex.(CM._task_local_values(M.map_many_batch_last)))
 
         out = Vector{Matrix{K}}(undef, length(b_batch))
         MD.map_leq_many!(out, M, batch; cache=cc)
@@ -2618,11 +2752,11 @@ end
 
 @testset "map_leq uses dense chain-parent cache on large finite posets" begin
     old_min = FF.CHAIN_PARENT_DENSE_MIN_ENTRIES[]
-    old_per = FF.CHAIN_PARENT_DENSE_MAX_ENTRIES_PER_THREAD[]
+    old_per = FF.CHAIN_PARENT_DENSE_MAX_ENTRIES_PER_TASK[]
     old_total = FF.CHAIN_PARENT_DENSE_MAX_TOTAL_ENTRIES[]
     try
         FF.CHAIN_PARENT_DENSE_MIN_ENTRIES[] = 1
-        FF.CHAIN_PARENT_DENSE_MAX_ENTRIES_PER_THREAD[] = 1_000_000
+        FF.CHAIN_PARENT_DENSE_MAX_ENTRIES_PER_TASK[] = 1_000_000
         FF.CHAIN_PARENT_DENSE_MAX_TOTAL_ENTRIES[] = max(1, Threads.maxthreadid()) * 1_000_000
 
         P = chain_poset(40)
@@ -2639,18 +2773,18 @@ end
             edge[(u, v)] = reshape([oneK], 1, 1)
         end
         M = MD.PModule{K}(P, dims, edge; field=field)
-        for d in M.map_compose
+        for d in CM._task_local_values(M.map_compose)
             empty!(d)
         end
 
         pairs = Tuple{Int,Int}[(1, 40), (5, 40), (10, 35), (20, 39), (1, 30)]
         mats = MD.map_leq_many(M, pairs; cache=cc)
         @test all(A -> A == reshape([oneK], 1, 1), mats)
-        @test sum(length.(cc.chain_parent)) == 0
-        @test any(m -> any(m.seen), cc.chain_parent_dense)
+        @test sum(length, CM._task_local_values(cc.chain_parent); init=0) == 0
+        @test any(m -> any(m.seen), CM._task_local_values(cc.chain_parent_dense))
     finally
         FF.CHAIN_PARENT_DENSE_MIN_ENTRIES[] = old_min
-        FF.CHAIN_PARENT_DENSE_MAX_ENTRIES_PER_THREAD[] = old_per
+        FF.CHAIN_PARENT_DENSE_MAX_ENTRIES_PER_TASK[] = old_per
         FF.CHAIN_PARENT_DENSE_MAX_TOTAL_ENTRIES[] = old_total
     end
 end
@@ -2718,29 +2852,29 @@ end
     end
 
     old_min = MD.MAP_LEQ_DENSE_MEMO_MIN_ENTRIES[]
-    old_max = MD.MAP_LEQ_DENSE_MEMO_MAX_ENTRIES_PER_THREAD[]
+    old_max = MD.MAP_LEQ_DENSE_MEMO_MAX_ENTRIES_PER_TASK[]
     try
         MD.MAP_LEQ_DENSE_MEMO_MIN_ENTRIES[] = 1
-        MD.MAP_LEQ_DENSE_MEMO_MAX_ENTRIES_PER_THREAD[] = 10_000
+        MD.MAP_LEQ_DENSE_MEMO_MAX_ENTRIES_PER_TASK[] = 10_000
         M = MD.PModule{K}(P, dims, edge; field=field)
         cc = MD._get_cover_cache(P)
 
         @test M.map_compose_dense !== nothing
         A = MD.map_leq(M, 1, 6; cache=cc)
         @test A == K[c(720) c(0); c(0) c(720)]
-        @test sum(length.(M.map_compose)) == 0
+        @test sum(length, CM._task_local_values(M.map_compose); init=0) == 0
         if M.map_pred_slot_dense === nothing
-            @test any(!isempty(d) for d in M.map_pred_slot)
+            @test any(!isempty(d) for d in CM._task_local_values(M.map_pred_slot))
         else
-            @test any(any(d.seen) for d in M.map_pred_slot_dense)
+            @test any(any(d.seen) for d in CM._task_local_values(M.map_pred_slot_dense))
         end
-        @test all(!any(d.seen) for d in M.map_compose_dense)
+        @test all(!any(d.seen) for d in CM._task_local_values(M.map_compose_dense))
 
         MD._clear_map_leq_memo!(M)
-        @test all(!any(d.seen) for d in M.map_compose_dense)
+        @test all(!any(d.seen) for d in CM._task_local_values(M.map_compose_dense))
     finally
         MD.MAP_LEQ_DENSE_MEMO_MIN_ENTRIES[] = old_min
-        MD.MAP_LEQ_DENSE_MEMO_MAX_ENTRIES_PER_THREAD[] = old_max
+        MD.MAP_LEQ_DENSE_MEMO_MAX_ENTRIES_PER_TASK[] = old_max
     end
 end
 
@@ -2896,17 +3030,17 @@ end
 
     MD._clear_map_leq_memo!(M)
     A13_1 = MD.map_leq(M, 1, 3; cache=cc)
-    @test sum(length.(M.map_compose)) == 0
+    @test sum(length, CM._task_local_values(M.map_compose); init=0) == 0
 
     A13_2 = MD.map_leq(M, 1, 3; cache=cc)
     @test A13_2 == A13_1
-    @test sum(length.(M.map_compose)) >= 1
+    @test sum(length, CM._task_local_values(M.map_compose); init=0) >= 1
 
-    slot = min(length(M.map_last_pair.us), max(1, Base.Threads.threadid()))
-    @test M.map_last_pair.seen[slot]
-    @test M.map_last_pair.us[slot] == 1
-    @test M.map_last_pair.vs[slot] == 3
-    @test M.map_last_pair.promoted[slot]
+    last_pair = MD._map_leq_last_pair_cache(M)
+    @test last_pair.seen
+    @test last_pair.u == 1
+    @test last_pair.v == 3
+    @test last_pair.promoted
 end
 
 @testset "map_leq cold short-chain fast path avoids chain-parent cache churn" begin
@@ -2927,8 +3061,8 @@ end
     MD._clear_map_leq_memo!(M)
 
     dense_before = cc.chain_parent_dense === nothing ? 0 :
-        sum(d -> count(identity, d.seen), cc.chain_parent_dense)
-    dict_before = sum(length, cc.chain_parent)
+        sum(d -> count(identity, d.seen), CM._task_local_values(cc.chain_parent_dense); init=0)
+    dict_before = sum(length, CM._task_local_values(cc.chain_parent); init=0)
     @test dense_before == 0
     @test dict_before == 0
 
@@ -2936,55 +3070,62 @@ end
     @test A13 == edge[(2, 3)] * edge[(1, 2)]
 
     dense_after = cc.chain_parent_dense === nothing ? 0 :
-        sum(d -> count(identity, d.seen), cc.chain_parent_dense)
-    dict_after = sum(length, cc.chain_parent)
+        sum(d -> count(identity, d.seen), CM._task_local_values(cc.chain_parent_dense); init=0)
+    dict_after = sum(length, CM._task_local_values(cc.chain_parent); init=0)
     @test dense_after == 0
     @test dict_after == 0
 end
 
 @testset "map_leq_many plan arena does not alias cached plan payload" begin
-    P = chain_poset(6)
-    field = CM.QQField()
-    K = CM.coeff_type(field)
-    oneK = CM.coerce(field, 1)
+    with_fields(FIELDS_FULL) do field
+        P = chain_poset(6)
+        K = CM.coeff_type(field)
+        oneK = CM.coerce(field, 1)
 
-    dims = ones(Int, 6)
-    edge = Dict{Tuple{Int,Int}, Matrix{K}}()
-    @inbounds for u in 1:5
-        edge[(u, u + 1)] = reshape(K[oneK], 1, 1)
-    end
-    M = MD.PModule{K}(P, dims, edge; field=field)
-    cc = MD._get_cover_cache(P)
+        dims = ones(Int, 6)
+        edge = Dict{Tuple{Int,Int}, Matrix{K}}()
+        @inbounds for u in 1:5
+            edge[(u, u + 1)] = reshape(K[oneK], 1, 1)
+        end
+        M = MD.PModule{K}(P, dims, edge; field=field)
+        cc = MD._get_cover_cache(P)
 
-    pairs1 = Tuple{Int,Int}[(1, 6), (1, 5), (2, 6), (3, 6)]
-    pairs2 = Tuple{Int,Int}[(1, 4), (2, 5), (3, 5), (4, 6)]
+        # Repeated queries select plan construction in every field, without
+        # relying on field-specific plan-score heuristics.
+        pairs1 = Tuple{Int,Int}[(1, 6), (1, 5), (2, 6), (1, 6)]
+        pairs2 = Tuple{Int,Int}[(1, 4), (2, 5), (3, 5), (1, 4)]
 
-    old_min = MD.MAP_LEQ_MANY_PLAN_MIN_LEN[]
-    old_max = MD.MAP_LEQ_MANY_PLAN_MAX_PER_THREAD[]
-    try
-        MD.MAP_LEQ_MANY_PLAN_MIN_LEN[] = 1
-        MD.MAP_LEQ_MANY_PLAN_MAX_PER_THREAD[] = 1024
-        MD._clear_map_leq_many_plan_cache!(M)
+        old_min = MD.MAP_LEQ_MANY_PLAN_MIN_LEN[]
+        old_max = MD.MAP_LEQ_MANY_PLAN_MAX_PER_TASK[]
+        old_batch_min = MD._MAP_LEQ_BATCH_VALUES_MIN_LEN[]
+        try
+            # This fixture exercises the leased arena, including batches smaller
+            # than the normal scalar-fallback gate.
+            MD._MAP_LEQ_BATCH_VALUES_MIN_LEN[] = 1
+            MD.MAP_LEQ_MANY_PLAN_MIN_LEN[] = 1
+            MD.MAP_LEQ_MANY_PLAN_MAX_PER_TASK[] = 1024
+            MD._clear_map_leq_many_plan_cache!(M)
 
-        MD.map_leq_many(M, pairs1; cache=cc)
-        slot = min(length(M.map_many_plan), max(1, Base.Threads.threadid()))
-        dict = M.map_many_plan[slot]
-        key1 = MD._map_leq_many_plan_key(pairs1)
-        @test haskey(dict, key1)
-        plan1 = dict[key1]
-        us_copy = copy(plan1.us)
-        chain_copy = copy(plan1.chain_data)
+            MD.map_leq_many(M, pairs1; cache=cc)
+            dict = MD._map_leq_many_plan_dict(M)
+            key1 = MD._map_leq_many_plan_key(pairs1)
+            @test haskey(dict, key1)
+            plan1 = dict[key1]
+            us_copy = copy(plan1.us)
+            chain_copy = copy(plan1.chain_data)
 
-        MD.map_leq_many(M, pairs2; cache=cc)
-        @test plan1.us == us_copy
-        @test plan1.chain_data == chain_copy
+            MD.map_leq_many(M, pairs2; cache=cc)
+            @test plan1.us == us_copy
+            @test plan1.chain_data == chain_copy
 
-        arena = M.map_many_plan_arena[slot]
-        @test !(arena.us === plan1.us)
-        @test !(arena.chain_data === plan1.chain_data)
-    finally
-        MD.MAP_LEQ_MANY_PLAN_MIN_LEN[] = old_min
-        MD.MAP_LEQ_MANY_PLAN_MAX_PER_THREAD[] = old_max
+            arena = MD._map_leq_many_plan_arena(M)
+            @test !(arena.us === plan1.us)
+            @test !(arena.chain_data === plan1.chain_data)
+        finally
+            MD.MAP_LEQ_MANY_PLAN_MIN_LEN[] = old_min
+            MD.MAP_LEQ_MANY_PLAN_MAX_PER_TASK[] = old_max
+            MD._MAP_LEQ_BATCH_VALUES_MIN_LEN[] = old_batch_min
+        end
     end
 end
 
@@ -3009,7 +3150,7 @@ end
         M = MD.PModule{K}(P, dims, edge; field=field)
         cc = MD._get_cover_cache(P)
         FF._clear_chain_parent_cache!(cc)
-        for d in M.map_compose
+        for d in CM._task_local_values(M.map_compose)
             empty!(d)
         end
 
@@ -3100,7 +3241,7 @@ end
 
                     M = MD.PModule{K}(P, dims, edge; field=field)
                     FF._clear_chain_parent_cache!(cc)
-                    for d in M.map_compose
+                    for d in CM._task_local_values(M.map_compose)
                         empty!(d)
                     end
 
@@ -3205,7 +3346,7 @@ end
             M = MD.PModule{K}(P, dims, edge; field=field)
             cc = MD._get_cover_cache(P)
             FF._clear_chain_parent_cache!(cc)
-            for dct in M.map_compose
+            for dct in CM._task_local_values(M.map_compose)
                 empty!(dct)
             end
 
@@ -3249,7 +3390,7 @@ end
     M = MD.PModule{K}(P, dims, edge; field=field)
     cc = MD._get_cover_cache(P)
     FF._clear_chain_parent_cache!(cc)
-    for dct in M.map_compose
+    for dct in CM._task_local_values(M.map_compose)
         empty!(dct)
     end
 
@@ -3307,7 +3448,7 @@ end
         @test M.edge_maps[2, 3] isa CM.BackendMatrix{K}
 
         cc = MD._get_cover_cache(P)
-        for dct in M.map_compose
+        for dct in CM._task_local_values(M.map_compose)
             empty!(dct)
         end
         oracle13 = E23 * E12
@@ -3343,7 +3484,7 @@ end
     M = MD.PModule{K}(P, dims, edge; field=field)
     cc = MD._get_cover_cache(P)
     FF._clear_chain_parent_cache!(cc)
-    for dct in M.map_compose
+    for dct in CM._task_local_values(M.map_compose)
         empty!(dct)
     end
 
@@ -3436,4 +3577,383 @@ end
         @test A == M.edge_maps[u, v]
     end
     @test seen == Set([(1,2), (2,3)])
+end
+
+@testset "A61 explicit task contexts preserve ownership and invalidation" begin
+    cache = CM._TaskLocalCache{Vector{Int}}()
+    context = CM._task_local_context()
+    @test context.owner === current_task()
+    value = @inferred CM._task_local!(() -> [7], cache, context)
+    @test (@inferred CM._task_local!(() -> [-1], cache, context)) === value
+
+    # Even an explicitly handed parent context cannot lend its mutable value
+    # to a child. Each child must retain its own value across task migration.
+    @test all(fetch.([Threads.@spawn begin
+        own = CM._task_local!(() -> [i], cache, context)
+        yield()
+        own !== value && own == [i] &&
+            CM._task_local!(() -> [-1], cache, context) === own
+    end for i in 1:8]))
+    @test value == [7]
+
+    # A held context is reusable, but a clear invalidates its old payload.
+    fetch(Threads.@spawn CM._clear_task_local!(cache))
+    replacement = CM._task_local!(() -> [11], cache, context)
+    @test replacement !== value
+    @test replacement == [11]
+    @test CM._task_local_values(cache) == [[11]]
+
+    # objectid is a lookup hint: a stale entry with another weak owner must
+    # be rejected even if its generation and payload type happen to match.
+    other = CM._TaskLocalCache{Vector{Int}}()
+    unrelated = CM._task_local!(() -> [19], other, context)
+    context.values[UInt(objectid(cache))] = CM._TaskLocalCacheEntry(
+        WeakRef(other), cache.epoch[], WeakRef(unrelated))
+    @test CM._task_local!(() -> [-1], cache, context) === replacement
+
+    # A failed allocation must publish nothing and release the owner lock.
+    failed = CM._TaskLocalCache{Vector{Int}}()
+    @test_throws ErrorException CM._task_local!(() -> error("factory failed"), failed, context)
+    @test isempty(CM._task_local_values(failed))
+    @test fetch(Threads.@spawn CM._task_local!(() -> [23], failed)) == [23]
+end
+
+@testset "A11 module caches and work chunks are task owned" begin
+    store = CM._TaskLocalCache{Vector{Int}}()
+    current = CM._task_local!(() -> [0], store)
+    @test CM._task_local!(() -> [-1], store) === current
+    tasks = [Threads.@spawn begin
+        local value = CM._task_local!(() -> [i], store)
+        for _ in 1:5
+            yield()
+            value[1] == i || return false
+            CM._task_local!(() -> [-1], store) === value || return false
+        end
+        true
+    end for i in 1:8]
+    @test all(fetch.(tasks))
+    @test current == [0]
+    CM._clear_task_local!(store)
+    refreshed = CM._task_local!(() -> [11], store)
+    @test refreshed !== current
+    @test refreshed == [11]
+    @test CM._task_local_values(store) == [[11]]
+
+    # A child may inherit or be handed its parent's TLS context. It must still
+    # create its own scratch, even when it begins on the same physical thread.
+    parent_context = task_local_storage()[CM._TASK_LOCAL_CACHE_KEY]
+    inherited = fetch(Threads.@spawn begin
+        task_local_storage()[CM._TASK_LOCAL_CACHE_KEY] = parent_context
+        local own = CM._task_local!(() -> [23], store)
+        yield()
+        own !== refreshed && own == [23] &&
+            CM._task_local!(() -> [-1], store) === own
+    end)
+    @test inherited
+    @test CM._task_local!(() -> [-1], store) === refreshed
+
+    # A long-lived task's fast lookup must not keep an abandoned cache owner or
+    # its scratch alive. Keep fixture locals in a separate uninlined frame so
+    # compiler lifetime extension cannot make this GC assertion accidental.
+    Base.@noinline function abandoned_task_cache()
+        local cache = CM._TaskLocalCache{Vector{Int}}()
+        local value = CM._task_local!(() -> [31], cache)
+        return WeakRef(cache), WeakRef(value)
+    end
+    owner_ref, value_ref = abandoned_task_cache()
+    GC.gc(true)
+    GC.gc(true)
+    @test owner_ref.value === nothing
+    @test value_ref.value === nothing
+
+    # A long-running task repeatedly uses short-lived owners. Their payloads
+    # must be collectible, the surviving owner's memo must remain reusable,
+    # and stale lookup metadata must not grow with the total number of owners.
+    churn_gc, churn_reuse, churn_slots = fetch(Threads.@spawn begin
+        local survivor = CM._TaskLocalCache{Vector{Int}}()
+        local survivor_value = CM._task_local!(() -> [41], survivor)
+        local collected = true
+        local reused = true
+        for _ in 1:4
+            local refs = [abandoned_task_cache() for _ in 1:128]
+            GC.gc(true)
+            GC.gc(true)
+            collected &= all(pair -> pair[1].value === nothing && pair[2].value === nothing, refs)
+            reused &= CM._task_local!(() -> [-1], survivor) === survivor_value
+        end
+        local context = task_local_storage()[CM._TASK_LOCAL_CACHE_KEY]
+        (collected, reused, length(context.values))
+    end)
+    @test churn_gc
+    @test churn_reuse
+    @test churn_slots <= 256
+
+    # The dual lifetime case keeps the owner alive after its task is abandoned.
+    # Use an unscheduled coroutine: a worker scheduler can retain its last
+    # completed Task even after fetch, independently of this cache's lifetime.
+    # Inspection must reap the unreachable task and release its workspace.
+    Base.@noinline function abandoned_task_value(cache)
+        local caller = current_task()
+        local task = Task() do
+            local value = CM._task_local!(() -> [59], cache)
+            yieldto(caller, value)
+        end
+        local value = yieldto(task)
+        return WeakRef(task), WeakRef(value)
+    end
+    retired_store = CM._TaskLocalCache{Vector{Int}}()
+    task_ref, retired_value_ref = abandoned_task_value(retired_store)
+    GC.gc(true)
+    GC.gc(true)
+    @test task_ref.value === nothing
+    @test isempty(CM._task_local_values(retired_store))
+    GC.gc(true)
+    GC.gc(true)
+    @test retired_value_ref.value === nothing
+
+    written = zeros(Int, 31)
+    CM._foreach_workchunk(length(written); threads=true) do work, slot
+        local scratch = [slot]
+        for i in work
+            yield()
+            written[i] = scratch[1]
+        end
+    end
+    @test all(>(0), written)
+
+    with_fields(FIELDS_FULL) do field
+        K = CM.coeff_type(field)
+        n = 67
+        P = chain_poset(n)
+        A = K[1 1; 0 1]
+        M = MD.PModule{K}(P, fill(2, n),
+            Dict((i,i+1) => copy(A) for i in 1:n-1); field=field)
+        cc = MD._get_cover_cache(P)
+        pairs = [(u,v) for u in 1:4 for v in u:n]
+        batch = MD.prepare_map_leq_batch(pairs)
+        expected = [K[1 CM.coerce(field,v-u); 0 1] for (u,v) in pairs]
+        same(xs, ys) = all(field isa CM.RealField ? isapprox(x,y; atol=1e-10, rtol=1e-10) : x == y
+            for (x,y) in zip(xs,ys))
+        @test same(MD.map_leq_many(M,batch; cache=cc), expected)
+        function concurrent_maps()
+            local memo = MD._map_leq_memo_dict(M)
+            local scratch = MD._map_leq_scratch(M)
+            local parents = FF._chain_parent_dict(cc)
+            yield()
+            actual = MD.map_leq_many(M,batch; cache=cc)
+            yield()
+            return same(actual,expected) && memo === MD._map_leq_memo_dict(M) &&
+                scratch === MD._map_leq_scratch(M) && parents === FF._chain_parent_dict(cc)
+        end
+        jobs = [Threads.@spawn concurrent_maps() for _ in 1:6]
+        @test all(fetch.(jobs))
+        nested = Vector{Bool}(undef, 3)
+        Threads.@threads for i in eachindex(nested)
+            nested[i] = concurrent_maps()
+        end
+        @test all(nested)
+        if Threads.nthreads(:interactive) > 0
+            @test fetch(Threads.@spawn :interactive concurrent_maps())
+        end
+        before = MD._map_leq_scratch(M)
+        MD._clear_map_leq_memo!(M)
+        MD._clear_map_leq_many_plan_cache!(M)
+        FF._clear_chain_parent_cache!(cc)
+        @test isempty(CM._task_local_values(M.map_compose))
+        @test isempty(CM._task_local_values(cc.chain_parent))
+        @test MD._map_leq_scratch(M) === before
+        @test same(MD.map_leq_many(M,batch; cache=cc), expected)
+    end
+end
+
+# A callback-bearing order tests public reentrancy without replacing an algebra
+# kernel. The underlying chain and every structure map remain hand-computable.
+mutable struct _A62CallbackPoset <: FF.AbstractPoset
+    base::FF.FinitePoset
+    cache::FF.PosetCache
+    action::Any
+    countdown::Int
+end
+FF.nvertices(P::_A62CallbackPoset) = FF.nvertices(P.base)
+FF.cover_edges(P::_A62CallbackPoset; cached::Bool=true) = FF.cover_edges(P.base; cached=cached)
+function FF.leq(P::_A62CallbackPoset, u::Int, v::Int)
+    if P.countdown > 0
+        P.countdown -= 1
+        P.countdown == 0 && P.action()
+    end
+    return FF.leq(P.base,u,v)
+end
+
+@testset "A62 batch map values, nested leases and epoch isolation" begin
+    fields = (CM.QQField(),CM.F2(),CM.F3(),CM.Fp(5),CM.RealField(Float64;atol=1e-12,rtol=1e-10))
+    for field in fields
+        K = CM.coeff_type(field)
+        same(A,B) = field isa CM.RealField ? isapprox(A,B;atol=1e-11,rtol=1e-10) : A==B
+        for n in (8,67)
+            P = chain_poset(n)
+            edge = K[1 1;0 1]
+            M = MD.PModule{K}(P,fill(2,n),Dict((i,i+1)=>copy(edge) for i in 1:n-1);field=field)
+            cc = MD._get_cover_cache(P)
+            pairs = [(u,v) for u in 1:4 for v in u:n]
+            # Include all executor kinds and repeated labels in the plan.
+            pairs = vcat(pairs,pairs)
+            expected = [K[1 CM.coerce(field,v-u);0 1] for (u,v) in pairs]
+            batch = MD.prepare_map_leq_batch(pairs)
+            @test all(same(A,B) for (A,B) in zip((@inferred MD.map_leq_many(M,batch;cache=cc)),expected))
+            for _ in 1:2
+                for queries in (pairs,batch)
+                    out = MD.map_leq_many(M,queries;cache=cc)
+                    @test all(same(out[i],expected[i]) for i in eachindex(pairs))
+                    @test all(same(MD.map_leq(M,u,v;cache=cc),expected[i]) for (i,(u,v)) in enumerate(pairs))
+                end
+                MD._clear_map_leq_memo!(M)
+                MD._clear_map_leq_many_plan_cache!(M)
+                FF._clear_chain_parent_cache!(cc)
+            end
+            # The assembled matrix and the two matrix-free consumers must agree
+            # with independent blockwise multiplication, including all signs.
+            m = length(pairs)
+            ids = collect(1:m)
+            offsets = collect(0:2:2m)
+            scales = [CM.coerce(field,isodd(i) ? -1 : 2) for i in ids]
+            vectors = [K[CM.coerce(field,i%3),1] for i in ids]
+            expected_action = reduce(vcat,[scales[i]*(expected[i]*vectors[i]) for i in ids])
+            for _ in 1:2
+                I,J,V = Int[],Int[],K[]
+                MD._append_map_leq_many_scaled_triplets!(I,J,V,M,batch,ids,ids,offsets,offsets,scales;cache=cc)
+                assembled = sparse(I,J,V,2m,2m)
+                @test same(assembled*reduce(vcat,vectors),expected_action)
+                for i in ids
+                    @test same(Matrix(assembled[2i-1:2i,2i-1:2i]),scales[i]*expected[i])
+                end
+                out = zeros(K,2m)
+                MD._accum_map_leq_many_scaled_matvecs!(out,M,batch,ids,ids,offsets,vectors,scales;cache=cc)
+                @test same(out,expected_action)
+                fill!(out,zero(K))
+                MD._accum_map_leq_many_scaled_sourcevec!(out,M,batch,ids,ids,offsets,offsets,reduce(vcat,vectors),scales;cache=cc)
+                @test same(out,expected_action)
+            end
+            jobs = map(1:6) do i
+                operation = () -> begin
+                    out = MD.map_leq_many(M,batch;cache=cc)
+                    yield()
+                    all(same(out[j],expected[j]) for j in eachindex(pairs))
+                end
+                Threads.nthreads(:interactive)>0 && iseven(i) ?
+                    Threads.@spawn(:interactive,operation()) : Threads.@spawn(operation())
+            end
+            @test all(fetch.(jobs))
+            @test !MD._map_leq_scratch(M).in_use
+            @test !MD._map_leq_many_plan_arena(M).in_use
+        end
+
+        P = _A62CallbackPoset(chain_poset(8),FF.PosetCache(),nothing,0)
+        edges = Dict((i,i+1)=>(isodd(i) ? K[1 i;0 1] : K[1 0;i 1]) for i in 1:7)
+        M = MD.PModule{K}(P,fill(2,8),edges;field=field)
+        cc = MD._get_cover_cache(P)
+        oracle(u,v) = foldl((A,i)->edges[(i,i+1)]*A,u:v-1;init=CM.eye(field,2))
+        pairs = repeat([(1,8),(2,7),(3,8),(1,1),(4,6)],32)
+        expected = [oracle(u,v) for (u,v) in pairs]
+        nested_pairs = repeat([(3,8),(2,3),(4,4)],13)
+        nested_expected = [oracle(u,v) for (u,v) in nested_pairs]
+        for prepared in (false,true), clears in (false,true)
+            MD._clear_map_leq_memo!(M)
+            MD._clear_map_leq_many_plan_cache!(M)
+            FF._clear_chain_parent_cache!(cc)
+            calls = Ref(0)
+            P.action = () -> begin
+                calls[] += 1
+                @test MD._map_leq_scratch(M).in_use
+                @test MD._map_leq_many_plan_arena(M).in_use
+                nested = MD.map_leq_many(M,nested_pairs;cache=cc)
+                @test all(same(nested[i],nested_expected[i]) for i in eachindex(nested))
+                if clears
+                    MD._clear_map_leq_memo!(M)
+                    MD._clear_map_leq_many_plan_cache!(M)
+                    FF._clear_chain_parent_cache!(cc)
+                end
+                yield()
+            end
+            P.countdown = 5
+            queries = prepared ? MD.prepare_map_leq_batch(pairs) : pairs
+            actual = MD.map_leq_many(M,queries;cache=cc)
+            @test calls[] == 1
+            @test all(same(actual[i],expected[i]) for i in eachindex(actual))
+            @test !MD._map_leq_scratch(M).in_use
+            @test !MD._map_leq_many_plan_arena(M).in_use
+            if clears
+                @test isempty(CM._task_local_values(M.map_compose))
+                @test isempty(CM._task_local_values(M.map_many_plan))
+                @test isempty(CM._task_local_values(M.map_many_batch_plan))
+                @test isempty(CM._task_local_values(cc.chain_parent))
+            end
+            @test all(same(A,B) for (A,B) in zip(MD.map_leq_many(M,queries;cache=cc),expected))
+        end
+        # A scalar long-chain callback may fire after an accumulator has been
+        # written. Its nested batch must not borrow that accumulator.
+        MD._clear_map_leq_memo!(M)
+        MD._clear_map_leq_many_plan_cache!(M)
+        FF._clear_chain_parent_cache!(cc)
+        scalar_nested = Ref(false)
+        P.action = () -> begin
+            scalar_nested[] = true
+            @test MD._map_leq_scratch(M).in_use
+            nested = MD.map_leq_many(M,nested_pairs;cache=cc)
+            @test all(same(nested[i],nested_expected[i]) for i in eachindex(nested))
+        end
+        P.countdown = 8
+        @test same(MD.map_leq(M,1,8;cache=cc),oracle(1,8))
+        @test scalar_nested[]
+        @test !MD._map_leq_scratch(M).in_use
+        # An interrupted fill returns both leases even before a plan exists.
+        MD._clear_map_leq_many_plan_cache!(M)
+        P.action = () -> error("A62 callback failure")
+        P.countdown = 1
+        @test_throws ErrorException MD.map_leq_many(M,MD.prepare_map_leq_batch(pairs);cache=cc)
+        @test !MD._map_leq_scratch(M).in_use
+        @test !MD._map_leq_many_plan_arena(M).in_use
+        @test all(same(A,B) for (A,B) in zip(MD.map_leq_many(M,pairs;cache=cc),expected))
+    end
+end
+
+@testset "A62 small-query gate preserves exact maps and contracts" begin
+    old_gate = MD._MAP_LEQ_BATCH_VALUES_MIN_LEN[]
+    try
+        for field in (CM.QQField(),CM.F2(),CM.F3(),CM.Fp(5),CM.RealField(Float64;atol=1e-12,rtol=1e-10))
+            K = CM.coeff_type(field)
+            P = chain_poset(8)
+            edge = K[1 1;0 1]
+            M = MD.PModule{K}(P,fill(2,8),Dict((i,i+1)=>copy(edge) for i in 1:7);field=field)
+            cc = MD._get_cover_cache(P)
+            pairs = [(1,8),(1,1),(2,5),(3,8),(4,7)]
+            same(A,B) = field isa CM.RealField ? isapprox(A,B;atol=1e-11,rtol=1e-10) : A==B
+            for count in (0,1,4,5), gate in (1,5)
+                MD._MAP_LEQ_BATCH_VALUES_MIN_LEN[] = gate
+                subset = pairs[1:count]
+                expected = [K[1 CM.coerce(field,v-u);0 1] for (u,v) in subset]
+                for queries in (subset,MD.prepare_map_leq_batch(subset))
+                    MD._clear_map_leq_memo!(M)
+                    MD._clear_map_leq_many_plan_cache!(M)
+                    FF._clear_chain_parent_cache!(cc)
+                    for _ in 1:2
+                        actual = MD.map_leq_many(M,queries;cache=cc)
+                        @test length(actual)==count
+                        @test all(same(A,B) for (A,B) in zip(actual,expected))
+                    end
+                end
+            end
+            for gate in (1,5)
+                MD._MAP_LEQ_BATCH_VALUES_MIN_LEN[] = gate
+                for pairs_bad in ([(0,2)],[(2,1)])
+                    @test_throws ErrorException MD.map_leq_many(M,pairs_bad;cache=cc)
+                    @test_throws ErrorException MD.map_leq_many(M,MD.prepare_map_leq_batch(pairs_bad);cache=cc)
+                end
+                @test_throws ErrorException MD.map_leq_many!(Matrix{K}[],M,[(1,2)];cache=cc)
+                @test_throws ErrorException MD.map_leq_many!(Matrix{K}[],M,Tuple{Int,Int}[];
+                    cache=cc,opts=OPT.ModuleOptions(check_sizes=false))
+            end
+        end
+    finally
+        MD._MAP_LEQ_BATCH_VALUES_MIN_LEN[] = old_gate
+    end
 end

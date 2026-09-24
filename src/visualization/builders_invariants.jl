@@ -777,7 +777,7 @@ end
 
 function _resolve_fibered_caches(owner, caches)
     (caches isa Tuple || caches isa AbstractVector) ||
-        throw(ArgumentError("fibered exact-family visuals require keyword caches=(cacheA, cacheB)."))
+        throw(ArgumentError("fibered family visuals require keyword caches=(cacheA, cacheB)."))
     length(caches) == 2 || throw(ArgumentError("caches must contain exactly two FiberedBarcodeCache2D objects."))
     cacheA, cacheB = caches
     cacheA isa FiberedBarcodeCache2D || throw(ArgumentError("first cache in caches must be a FiberedBarcodeCache2D."))
@@ -900,7 +900,7 @@ function _fibered_contribution_cell_spec(fam::FiberedSliceFamily2D, metrics;
                              layers=layers,
                              axes=_fibered_cell_axes(arr, isempty(fam.off_idx) ? 0 : maximum(fam.off_idx)),
                              metadata=(; object=:fibered_slice_family, nslices=length(fam.cell_id),
-                                        unique_chains=length(fam.unique_chain_ids), matching_distance=metrics.max_contribution,
+                                        unique_chains=length(fam.unique_chain_ids), sampled_matching_distance=metrics.max_contribution,
                                         argmax_index=metrics.argmax_index, figure_size=(820, 620), legend_position=:right),
                              legend=legend,
                              interaction=_default_interaction(hover=true, labels=true))
@@ -1031,8 +1031,8 @@ function _fibered_top_contributions_panel(fam::FiberedSliceFamily2D, metrics; nt
     isempty(labels) || push!(layers, _text_layer_from_labels(label_pts, labels; color=:black, textsize=8.0))
     xticks = (collect(1:length(idxs)), ["s$(k)" for k in idxs])
     return VisualizationSpec(:fibered_distance_diagnostic;
-                             title="Top exact contributions",
-                             subtitle="largest weighted bottleneck terms in the exact family",
+                             title="Top sampled contributions",
+                             subtitle="largest weighted bottleneck terms among the representative slices",
                              layers=layers,
                              axes=_default_axes_2d(xlabel="family slice", ylabel="w*d",
                                                    xlimits=(0.5, float(max(length(idxs), 1)) + 0.5),
@@ -1413,13 +1413,13 @@ function _visual_spec(arr::FiberedArrangement2D, kind::Symbol; dir=nothing, offs
     elseif kind === :fibered_projected_comparison
         projected isa ProjectedArrangement || throw(ArgumentError("fibered_projected_comparison requires keyword projected=<ProjectedArrangement>."))
         fam = fibered_slice_family_2d(arr)
-        exact_panel = _fibered_family_overlay_panel(fam; title="Exact fibered family",
-                                                    subtitle="one representative exact slice per nonempty arrangement cell")
+        family_panel = _fibered_family_overlay_panel(fam; title="Representative fibered family",
+                                                    subtitle="one representative slice per nonempty arrangement cell")
         proj_panel = _visual_spec(projected, :projected_arrangement)
         return VisualizationSpec(:fibered_projected_comparison;
                                  title="Fibered vs projected comparison",
-                                 subtitle="exact arrangement slices beside the projected 1D direction family",
-                                 panels=[exact_panel, proj_panel],
+                                 subtitle="representative arrangement slices beside the projected 1D direction family",
+                                 panels=[family_panel, proj_panel],
                                  metadata=(; object=:fibered_arrangement, nslices=length(fam.cell_id),
                                             nprojections=length(projections(projected)), panel_columns=2,
                                             figure_size=(1180, 620)))
@@ -1460,39 +1460,39 @@ function _visual_spec(fam::FiberedSliceFamily2D, kind::Symbol; caches=nothing, k
         caches === nothing && throw(ArgumentError("fibered_family_contributions requires keyword caches=(cacheA, cacheB)."))
         metrics = _fibered_family_metrics(fam, caches)
         cell_panel = _fibered_contribution_cell_spec(fam, metrics;
-                                                     title="Exact family contributions",
+                                                     title="Sampled family contributions",
                                                      subtitle=stores_values(fam) ?
-                                                         "weighted exact contributions by arrangement cell; boundary values cached" :
-                                                         "weighted exact contributions by arrangement cell; boundary values recomputed")
+                                                         "weighted representative contributions by cell; boundary values cached" :
+                                                         "weighted representative contributions by cell; boundary values recomputed")
         mult_panel = _fibered_chain_multiplicity_panel(fam, metrics)
         return VisualizationSpec(:fibered_family_contributions;
                                  title="Fibered family contributions",
-                                 subtitle="exact per-cell contributions and chain reuse across the cached family",
+                                 subtitle="representative contributions and chain reuse across the cached family",
                                  panels=[cell_panel, mult_panel],
                                  metadata=(; object=:fibered_slice_family, nslices=length(fam.cell_id),
-                                            unique_chains=length(fam.unique_chain_ids), matching_distance=metrics.max_contribution,
+                                            unique_chains=length(fam.unique_chain_ids), sampled_matching_distance=metrics.max_contribution,
                                             panel_columns=2, figure_size=(1260, 620)))
     elseif kind === :fibered_distance_diagnostic
         caches === nothing && throw(ArgumentError("fibered_distance_diagnostic requires keyword caches=(cacheA, cacheB)."))
         metrics = _fibered_family_metrics(fam, caches)
         cell_panel = _fibered_contribution_cell_spec(fam, metrics;
-                                                     title="Exact contribution map",
-                                                     subtitle="arrangement cells colored by weighted bottleneck contribution",
+                                                     title="Sampled contribution map",
+                                                     subtitle="cells colored by the weighted bottleneck value at their representative slice",
                                                      highlight_argmax=true)
         overlay_panel = _fibered_family_overlay_panel(fam;
                                                       values=metrics.contributions,
                                                       highlight_index=metrics.argmax_index,
-                                                      title="Extremizing exact slice",
+                                                      title="Maximizing representative slice",
                                                       subtitle=metrics.argmax_index === nothing ?
                                                           "no nonempty family slices" :
                                                           "argmax slice s$(metrics.argmax_index) at dir cell $(fam.dir_idx[metrics.argmax_index]), offset cell $(fam.off_idx[metrics.argmax_index])")
         top_panel = _fibered_top_contributions_panel(fam, metrics)
         return VisualizationSpec(:fibered_distance_diagnostic;
-                                 title="Exact fibered distance diagnostic",
-                                 subtitle="dominant exact-family cells and the slice attaining the matching distance",
+                                 title="Sampled fibered distance diagnostic",
+                                 subtitle="largest representative contributions and the slice attaining the sampled maximum",
                                  panels=[cell_panel, overlay_panel, top_panel],
                                  metadata=(; object=:fibered_slice_family, nslices=length(fam.cell_id),
-                                            unique_chains=length(fam.unique_chain_ids), matching_distance=metrics.max_contribution,
+                                            unique_chains=length(fam.unique_chain_ids), sampled_matching_distance=metrics.max_contribution,
                                             argmax_index=metrics.argmax_index, panel_columns=2,
                                             figure_size=(1260, 900)))
     end
@@ -1757,11 +1757,11 @@ function _visual_spec(decomp::MPPDecomposition, kind::Symbol; layout::Symbol=:ov
             push!(layers, PolylineLayer(paths_k, _mpp_summand_color(k), alpha_k, linewidth_k, false))
         end
         return VisualizationSpec(:mpp_decomposition;
-                                 title="MPP decomposition",
-                                 subtitle="summand segments in the ambient box",
+                                 title="Sampled MPPI tracks",
+                                 subtitle="bottleneck tracks in the ambient box",
                                  layers=layers,
                                  axes=axes,
-                                 metadata=(; nsummands=nsummands(decomp), nlines=nlines(decomp), weight_sum=sum(weights),
+                                 metadata=(; interpretation=:sampled_tracks, nsummands=nsummands(decomp), nlines=nlines(decomp), weight_sum=sum(weights),
                                             layout=:overlay, figure_size=(920, 620), legend_position=:right),
                                  legend=_default_legend(visible=true,
                                                         entries=(; (Symbol("S" * string(i)) => _mpp_summand_color(i) for i in 1:nsummands(decomp))...)))
@@ -1775,21 +1775,21 @@ function _visual_spec(decomp::MPPDecomposition, kind::Symbol; layout::Symbol=:ov
         end
         alpha_k, linewidth_k = _mpp_weight_style(weights, k)
         push!(panels, VisualizationSpec(:mpp_decomposition;
-                                        title="Summand $(k)",
+                                        title="Track $(k)",
                                         subtitle="weight=$(round(float(weights[k]); digits=3))",
                                         layers=AbstractVisualizationLayer[
                                             PolylineLayer([outline], :black, 1.0, 1.0, true),
                                             PolylineLayer(paths_k, _mpp_summand_color(k), alpha_k, linewidth_k, false),
                                         ],
                                         axes=axes,
-                                        metadata=(; summand=k, weight=float(weights[k]), nsegments=length(paths_k))))
+                                        metadata=(; interpretation=:sampled_tracks, summand=k, weight=float(weights[k]), nsegments=length(paths_k))))
     end
     return VisualizationSpec(:mpp_decomposition;
-                             title="MPP decomposition",
-                             subtitle="one panel per summand",
+                             title="Sampled MPPI tracks",
+                             subtitle="one panel per sampled track",
                              panels=panels,
                              axes=axes,
-                             metadata=(; nsummands=nsummands(decomp), nlines=nlines(decomp), weight_sum=sum(weights),
+                             metadata=(; interpretation=:sampled_tracks, nsummands=nsummands(decomp), nlines=nlines(decomp), weight_sum=sum(weights),
                                         layout=:summands, panel_columns=min(3, max(1, nsummands(decomp))),
                                         figure_size=(1120, 560)))
 end
@@ -1801,14 +1801,14 @@ function _visual_spec(img::MPPImage, kind::Symbol; kwargs...)
     yg = Float64.(image_ygrid(img))
     return VisualizationSpec(:mpp_image;
                              title="Multiparameter persistence image",
-                             subtitle="Gaussian-smoothed MPPI image",
+                             subtitle="Gaussian image of sampled bottleneck tracks",
                              layers=AbstractVisualizationLayer[
                                  HeatmapLayer(xg, yg, Float64.(image_values(img)), :magma, 1.0, "intensity"),
                              ],
                              axes=_default_axes_2d(xlabel="x1", ylabel="x2",
                                                    xlimits=(minimum(xg), maximum(xg)),
                                                    ylimits=(minimum(yg), maximum(yg))),
-                             metadata=(; image_shape=size(image_values(img)), sigma=img.sigma, nsummands=nsummands(decomposition(img))))
+                             metadata=(; interpretation=:sampled_tracks, image_shape=size(image_values(img)), sigma=img.sigma, nsummands=nsummands(decomposition(img))))
 end
 
 function _landscape_aggregate(L::MPLandscape)
@@ -1897,4 +1897,124 @@ function _visual_spec(L::MPLandscape, kind::Symbol; idir=nothing, ioff=nothing, 
                                             direction=slice_directions(L)[idir], offset=slice_offsets(L)[ioff]))
     end
     throw(ArgumentError("Unsupported MPLandscape visualization kind $(kind)."))
+end
+
+
+# Ordinary persistence: exact mathematical endpoints remain in the diagram;
+# these builders create a separate, explicitly approximate display copy.
+available_visuals(::OrdinaryPersistence.PersistenceDiagram) = (:persistence_diagram, :barcode)
+
+function _append_visual_request_issues!(issues::Vector{String},
+                                      diag::OrdinaryPersistence.PersistenceDiagram,
+                                      kind::Symbol; dim=0, kwargs...)
+    append!(issues, OrdinaryPersistence.check_persistence_diagram(diag).issues)
+    if !(dim isa Integer) || dim isa Bool || !(0 <= dim < typemax(Int))
+        push!(issues, "dim must be a nonnegative homological dimension fitting Int.")
+    end
+    return issues
+end
+
+function _ordinary_display_data(diag::OrdinaryPersistence.PersistenceDiagram, dim::Integer)
+    finite = OrdinaryPersistence.finite_intervals(diag; dim=dim)
+    essential = OrdinaryPersistence.essential_births(diag; dim=dim)
+    # Signed floating zeros are one mathematical endpoint. Canonicalize only
+    # the coordinate set used for conversion checks; preserve source bars and
+    # every essential birth (including their multiplicities) in the display.
+    values = vcat([v for interval in finite for v in interval], essential)
+    map!(x -> iszero(x) ? zero(x) : x, values, values)
+    sort!(unique!(values))
+    coords = Float64.(values)
+    all(isfinite, coords) ||
+        throw(ArgumentError("Persistence endpoints exceed the finite Float64 display range; rescale the grades before visualization. The original diagram retains its exact endpoints."))
+    all(i -> coords[i] < coords[i + 1], 1:(length(coords) - 1)) ||
+        throw(ArgumentError("Distinct persistence endpoints collapse under Float64 display conversion; shift or rescale the grades before visualization. The original diagram retains its exact endpoints."))
+    lo, hi = isempty(coords) ? (0.0, 1.0) : extrema(coords)
+    span = hi - lo
+    span == 0 && (span = max(abs(lo), 1.0))
+    order = OrdinaryPersistence.filtration_order(diag)
+    lane = order === :sublevel ? hi + span / 4 : lo - span / 4
+    limits = (min(lo, lane) - span / 10, max(hi, lane) + span / 10)
+    all(isfinite, (span, lane, limits...)) && limits[1] < limits[2] ||
+        throw(ArgumentError("Persistence endpoints leave no finite plotting margin; shift or rescale the grades before visualization."))
+    return (; finite, essential, order, lane, limits, span,
+              finite_display=NTuple{2,Float64}[(Float64(b), Float64(d)) for (b, d) in finite],
+              essential_display=Float64.(essential),
+              rounded_endpoint_count=count(i -> values[i] != coords[i], eachindex(values)))
+end
+
+"""
+    visual_spec(diag::PersistenceDiagram; kind=:persistence_diagram, dim=0)
+
+Build a persistence diagram or barcode for homological dimension `dim`.
+Finite endpoints and essential births are copied to Float64 display coordinates;
+the exact source endpoints remain available in the spec metadata. An error is
+raised if this conversion merges distinct endpoints or exceeds the display range.
+Essential classes are drawn on a separately labelled `+Inf` lane for sublevel
+persistence and `-Inf` lane for superlevel persistence. Those lane coordinates
+are display positions, never finite death values.
+"""
+function visual_spec(diag::OrdinaryPersistence.PersistenceDiagram;
+                     kind::Symbol=:auto, dim=0, cache=:auto, kwargs...)
+    report = check_visual_request(diag; kind=kind, dim=dim, throw=true)
+    return _visual_spec(diag, report.requested_kind; dim=dim, kwargs...)
+end
+
+function _visual_spec(diag::OrdinaryPersistence.PersistenceDiagram, kind::Symbol;
+                      dim::Integer=0, kwargs...)
+    kind in (:persistence_diagram, :barcode) ||
+        throw(ArgumentError("Ordinary persistence supports kind=:persistence_diagram or :barcode."))
+    data = _ordinary_display_data(diag, dim)
+    essential_label = data.order === :sublevel ? "+Inf" : "-Inf"
+    convention = data.order === :sublevel ? "[birth, death)" : "(death, birth]"
+    subtitle = "$(data.order), H_$(dim), $(convention); Float64 display; essential classes continue to $(essential_label)"
+    metadata = (; homological_dimension=Int(dim), order=data.order,
+                 finite_intervals=copy(data.finite), essential_births=copy(data.essential),
+                 finite_count=length(data.finite), essential_count=length(data.essential),
+                 display_coordinates=:float64, rounded_endpoint_count=data.rounded_endpoint_count,
+                 essential_display_coordinate=data.lane, essential_direction=data.order === :sublevel ? 1 : -1,
+                 interval_convention=convention, figure_size=(760, 560))
+    layers = AbstractVisualizationLayer[]
+    legend = (; visible=true, title="", entries=(
+        finite=(; label="finite intervals", color=:steelblue, style=:marker),
+        essential=(; label="essential intervals", color=:darkorange, style=:marker)))
+    if kind === :persistence_diagram
+        lo, hi = data.limits
+        push!(layers, SegmentLayer([(lo, lo, hi, hi)], :gray, 0.6, 1.0))
+        push!(layers, PointLayer(data.finite_display, :steelblue, 1.0, 9.0))
+        push!(layers, PointLayer([(b, data.lane) for b in data.essential_display], :darkorange, 1.0, 10.0))
+        if !isempty(data.essential)
+            push!(layers, SegmentLayer([(lo, data.lane, hi, data.lane)], :darkorange, 0.35, 1.0))
+        end
+        ticks = isempty(data.essential) ? nothing : begin
+            endpoints = vcat([v for iv in data.finite_display for v in iv], data.essential_display)
+            bounds = isempty(endpoints) ? (0.0, 1.0) : extrema(endpoints)
+            finite_ticks = bounds[1] == bounds[2] ? [bounds[1]] : collect(range(bounds[1], bounds[2]; length=4))
+            positions = vcat(finite_ticks, [data.lane])
+            labels = vcat([string(round(v; sigdigits=5)) for v in finite_ticks], [essential_label])
+            perm = sortperm(positions)
+            (positions[perm], labels[perm])
+        end
+        axes = merge(_default_axes_2d(xlabel="birth", ylabel="death", xlimits=data.limits,
+                                      ylimits=data.limits), (; yticks=ticks))
+        return VisualizationSpec(kind; title="Persistence diagram in dimension $(dim)",
+                                 subtitle=subtitle, layers=layers, axes=axes, legend=legend, metadata=metadata)
+    end
+
+    push!(layers, BarcodeLayer(data.finite_display, ones(Int, length(data.finite_display)), :steelblue, 3.0, 1.0, 1.0))
+    essential_segments = NTuple{4,Float64}[]
+    arrowheads = Vector{NTuple{2,Float64}}[]
+    direction = data.order === :sublevel ? 1.0 : -1.0
+    for (i, birth) in enumerate(data.essential_display)
+        y = Float64(length(data.finite_display) + i)
+        push!(essential_segments, (birth, y, data.lane, y))
+        head_base = data.lane - direction * data.span / 30
+        push!(arrowheads, [(head_base, y - 0.12), (data.lane, y), (head_base, y + 0.12)])
+    end
+    push!(layers, SegmentLayer(essential_segments, :darkorange, 1.0, 3.0))
+    push!(layers, PolylineLayer(arrowheads, :darkorange, 1.0, 2.0, false))
+    n = length(data.finite_display) + length(data.essential_display)
+    axes = _default_axes_2d(xlabel="filtration parameter", ylabel="interval", xlimits=data.limits,
+                           ylimits=(0.0, Float64(max(n + 1, 2))), aspect=:auto)
+    return VisualizationSpec(kind; title="Persistence barcode in dimension $(dim)",
+                             subtitle=subtitle, layers=layers, axes=axes, legend=legend, metadata=metadata)
 end

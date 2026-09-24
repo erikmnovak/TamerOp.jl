@@ -2,15 +2,9 @@ module TamerOpFoldsExt
 
 using Folds
 
-const TO = let pm = nothing
-    if isdefined(Main, :TamerOp)
-        pm = getfield(Main, :TamerOp)
-    else
-        @eval import TamerOp
-        pm = TamerOp
-    end
-    pm
-end
+import TamerOp
+
+const TO = TamerOp
 
 const FEA = TO.Featurizers
 
@@ -28,6 +22,9 @@ function _foreach_indexed(n::Int, f; chunk_size::Int=0, deterministic::Bool=true
     return nothing
 end
 
-FEA._set_batch_impl!((foreach_indexed=_foreach_indexed,))
+function __init__()
+    FEA._set_batch_impl!((foreach_indexed=_foreach_indexed,))
+    return nothing
+end
 
 end # module

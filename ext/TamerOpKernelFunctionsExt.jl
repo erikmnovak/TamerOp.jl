@@ -2,18 +2,13 @@ module TamerOpKernelFunctionsExt
 
 using KernelFunctions
 
-const TO = let pm = nothing
-    if isdefined(Main, :TamerOp)
-        pm = getfield(Main, :TamerOp)
-    else
-        @eval import TamerOp
-        pm = TamerOp
-    end
-    pm
-end
+import TamerOp
+
+const TO = TamerOp
 
 const FEA = TO.Featurizers
 const Inv = TO.Invariants
+const SM = TO.SignedMeasures
 
 abstract type AbstractTamerKernel <: KernelFunctions.Kernel end
 
@@ -100,7 +95,7 @@ end
     Inv.mpp_image_kernel(x, y; sigma=k.sigma)
 
 @inline KernelFunctions.kappa(k::PointSignedMeasureKernel, x, y) =
-    Inv.point_signed_measure_kernel(x, y; sigma=k.sigma)
+    SM.point_signed_measure_kernel(x, y; sigma=k.sigma)
 
 @inline KernelFunctions.kappa(k::RectangleSignedBarcodeKernel, x, y) =
     Inv.rectangle_signed_barcode_kernel(x, y; kind=k.kind, sigma=k.sigma)
@@ -143,12 +138,15 @@ function KernelFunctions.kernelmatrix_diag(k::AbstractTamerKernel, xs::AbstractV
     return d
 end
 
-FEA._set_kernelfunctions_impl!((
-    mp_landscape = (; kwargs...) -> MPLandscapeKernel(; kwargs...),
-    projected = (; kwargs...) -> ProjectedKernel(; kwargs...),
-    mpp_image = (; kwargs...) -> MPPImageKernel(; kwargs...),
-    point_signed_measure = (; kwargs...) -> PointSignedMeasureKernel(; kwargs...),
-    rectangle_signed_barcode = (; kwargs...) -> RectangleSignedBarcodeKernel(; kwargs...),
-))
+function __init__()
+    FEA._set_kernelfunctions_impl!((
+        mp_landscape = (; kwargs...) -> MPLandscapeKernel(; kwargs...),
+        projected = (; kwargs...) -> ProjectedKernel(; kwargs...),
+        mpp_image = (; kwargs...) -> MPPImageKernel(; kwargs...),
+        point_signed_measure = (; kwargs...) -> PointSignedMeasureKernel(; kwargs...),
+        rectangle_signed_barcode = (; kwargs...) -> RectangleSignedBarcodeKernel(; kwargs...),
+    ))
+    return nothing
+end
 
 end # module

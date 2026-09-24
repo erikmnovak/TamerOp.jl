@@ -23,11 +23,13 @@ Canonical user entrypoints:
 - [`pushforward_right`](@ref) / [`right_kan_extension`](@ref),
 - [`product_poset`](@ref),
 - [`encode_pmodules_to_common_poset`](@ref),
+- [`joint_encoding`](@ref),
 - [`hom_common_refinement`](@ref),
 - [`common_refinement_summary`](@ref),
 - [`check_monotone_map`](@ref) / [`check_common_refinement_hom`](@ref),
 - [`derived_pushforward_left`](@ref),
-- [`derived_pushforward_right`](@ref).
+- [`derived_pushforward_right`](@ref),
+- [`kan_unit`](@ref) / [`kan_counit`](@ref).
 
 Notation policy:
 - prefer [`restriction`](@ref), [`pushforward_left`](@ref),
@@ -57,6 +59,8 @@ import ..FiniteFringe
 using ..FiniteFringe: AbstractPoset, FinitePoset, ProductPoset, cover_edges, leq, leq_matrix, nvertices, poset_equal,
                       downset_indices, upset_indices, _preds, _succs, _pred_slots_of_succ
 using ..Encoding: EncodingMap
+import ..EncodingCore: encoding_map
+import ..Results: provenance
 using ..CoreModules: AbstractCoeffField, QQ, QQField, RealField, SessionCache, ProductPosetCacheEntry, _SessionProductKey,
                      EncodingCache, GeometryCachePayload, _encoding_cache!
 using ..Options: ResolutionOptions, DerivedFunctorOptions
@@ -340,11 +344,14 @@ end
 # requires the SAME poset object. Mathematically, a standard way to compare them
 # is to choose a common refinement poset and pull both modules back.
 #
-# The standard refinement is the cartesian product poset P = P1 x P2 with:
+# The abstract product comparison uses the cartesian product P = P1 x P2 with:
 #   (i1,j1) <= (i2,j2)  iff  i1 <= i2 in P1  AND  j1 <= j2 in P2.
 #
 # Then we pull back M1 along pr1 : P -> P1 and M2 along pr2 : P -> P2, and compute
 # Hom on the resulting common-poset modules.
+# This is not the realized joint image of two classifiers on an ambient source.
+# Use joint_encoding when those classifiers on a common finite source are known.
+# Neither construction alone identifies finite-poset Ext/Tor with ambient Ext/Tor.
 #
 # Performance notes:
 #   * Constructing the product leq matrix is inherently O((n1*n2)^2) bits.
@@ -413,6 +420,152 @@ struct CommonRefinementTranslationResult{PType,MsType,Pi1Type,Pi2Type}
     Ms::MsType
     pi1::Pi1Type
     pi2::Pi2Type
+    refinement::Symbol
+end
+
+CommonRefinementTranslationResult(P, Ms, pi1, pi2; refinement::Symbol=:unspecified) =
+    CommonRefinementTranslationResult(P, Ms, pi1, pi2, refinement)
+
+"""
+    JointEncodingResult
+
+The realized image of two monotone classifiers on the same finite source.
+`encoding_map(result)` is the surjection from that source to its joint image;
+`projection_maps(result)` recovers the two classifiers by composition. The
+image has the order induced from the product of the classifier targets.
+This finite construction makes no claim about unenumerated ambient points or
+invariance of Ext/Tor under changing the encoding.
+"""
+struct JointEncodingResult{J<:EncodingMap,L<:EncodingMap,R<:EncodingMap}
+    pi::J
+    pi1::L
+    pi2::R
+end
+
+"""
+    JointEncodingValidationSummary
+
+Validation report for a finite joint encoding, including surjectivity,
+projection monotonicity, and the induced product order.
+"""
+struct JointEncodingValidationSummary{R}
+    report::R
+end
+
+Base.getproperty(r::JointEncodingValidationSummary, s::Symbol) =
+    s === :report ? getfield(r, :report) : getproperty(getfield(r, :report), s)
+Base.propertynames(r::JointEncodingValidationSummary, private::Bool=false) =
+    private ? (:report, propertynames(getfield(r, :report), true)...) : propertynames(getfield(r, :report))
+describe(r::JointEncodingValidationSummary) = getfield(r, :report)
+function Base.show(io::IO, r::JointEncodingValidationSummary)
+    print(io, "JointEncodingValidationSummary(valid=", r.valid,
+          ", nregions=", r.nregions, ", nissues=", length(r.issues), ")")
+end
+function Base.show(io::IO, ::MIME"text/plain", r::JointEncodingValidationSummary)
+    show(io, r)
+    isempty(r.issues) || print(io, "\n  issues: ", join(r.issues, "\n          "))
+end
+
+"""
+    joint_encoding(left::EncodingMap, right::EncodingMap) -> JointEncodingResult
+
+For classifiers `left : Q -> P1` and `right : Q -> P2`, construct exactly the
+realized pairs `{(left(q), right(q)) : q in Q}`, with the order induced from
+`P1 x P2`. Both maps must be monotone and their source posets must agree as
+labelled posets. Pairs are labelled lexicographically. The full Cartesian
+product is never materialized.
+
+The returned factorization `j = encoding_map(result)` satisfies
+`projection_maps(result).left * j = left` and the corresponding right identity
+(composition here denotes composition of vertex labels). Consequently,
+restriction along these factorizations agrees on modules and morphisms.
+Surjectivity of `j` does not assert that restriction is fully faithful or
+preserves Ext/Tor. For infinite/geometric classifiers, a finite sample is not
+a certificate of the complete realized joint image.
+"""
+function joint_encoding(left::EncodingMap, right::EncodingMap)
+    check_monotone_map(left; throw=true)
+    check_monotone_map(right; throw=true)
+    poset_equal(left.Q, right.Q) ||
+        throw(ArgumentError("joint_encoding: classifiers must have the same labelled source poset."))
+    labels = Tuple{Int,Int}[(left.pi_of_q[q], right.pi_of_q[q]) for q in 1:nvertices(left.Q)]
+    pairs = sort!(unique(labels))
+    indices = Dict{Tuple{Int,Int},Int}(pair => i for (i, pair) in enumerate(pairs))
+    relation = falses(length(pairs), length(pairs))
+    for j in eachindex(pairs), i in eachindex(pairs)
+        relation[i, j] = leq(left.P, pairs[i][1], pairs[j][1]) &&
+                         leq(right.P, pairs[i][2], pairs[j][2])
+    end
+    P = FinitePoset(relation)
+    pi = EncodingMap(left.Q, P, Int[indices[pair] for pair in labels])
+    pi1 = EncodingMap(P, left.P, Int[pair[1] for pair in pairs])
+    pi2 = EncodingMap(P, right.P, Int[pair[2] for pair in pairs])
+    return JointEncodingResult(pi, pi1, pi2)
+end
+
+"""
+    check_joint_encoding(result; throw=false) -> JointEncodingValidationSummary
+
+Check the finite-source joint-image contract, including monotonicity, image
+surjectivity, distinct projected pairs and the exact induced product order.
+This validates finite combinatorial data, not coverage of an external ambient
+space or a derived-category equivalence.
+"""
+function check_joint_encoding(res::JointEncodingResult; throw::Bool=false)
+    issues = String[]
+    P = res.pi.P
+    maps_valid = true
+    for (name, pi) in (("joint classifier", res.pi), ("left projection", res.pi1), ("right projection", res.pi2))
+        report = check_monotone_map(pi)
+        maps_valid &= report.valid
+        append!(issues, [name * ": " * issue for issue in report.issues])
+    end
+    projections_match = res.pi1.Q === P && res.pi2.Q === P
+    projections_match || push!(issues, "projection sources must be the joint image poset.")
+    if maps_valid && projections_match
+        length(unique(res.pi.pi_of_q)) == nvertices(P) ||
+            push!(issues, "the joint classifier must be onto its image poset.")
+        pairs = collect(zip(res.pi1.pi_of_q, res.pi2.pi_of_q))
+        length(unique(pairs)) == nvertices(P) ||
+            push!(issues, "distinct joint regions must have distinct projected pairs.")
+        for j in eachindex(pairs), i in eachindex(pairs)
+            expected = leq(res.pi1.P, pairs[i][1], pairs[j][1]) &&
+                       leq(res.pi2.P, pairs[i][2], pairs[j][2])
+            if leq(P, i, j) != expected
+                push!(issues, "joint image order must equal the induced product order.")
+                break
+            end
+        end
+    end
+    report = (; valid=isempty(issues), nsource=nvertices(res.pi.Q), nregions=nvertices(P), issues)
+    throw && !report.valid && Base.throw(ArgumentError("check_joint_encoding: " * join(issues, " ")))
+    return JointEncodingValidationSummary(report)
+end
+
+encoding_map(res::JointEncodingResult) = res.pi
+common_poset(res::JointEncodingResult) = res.pi.P
+projection_maps(res::JointEncodingResult) = (; left=res.pi1, right=res.pi2)
+describe(res::JointEncodingResult) = (;
+    kind=:joint_encoding_result, category=:finite_poset_representations,
+    refinement=:realized_joint_image, ambient_identification=:not_asserted,
+    source_nvertices=nvertices(res.pi.Q), common_nvertices=nvertices(res.pi.P),
+    left_nvertices=nvertices(res.pi1.P), right_nvertices=nvertices(res.pi2.P),
+    provenance=provenance(res),
+)
+provenance(res::JointEncodingResult) = (;
+    category=:finite_poset_representations, base_poset=res.pi.P,
+    source_poset=res.pi.Q, refinement=:realized_joint_image,
+    encoding=res.pi, projection_maps=projection_maps(res),
+    ambient_identification=:not_asserted,
+)
+common_refinement_summary(res::JointEncodingResult) = describe(res)
+function Base.show(io::IO, res::JointEncodingResult)
+    print(io, "JointEncodingResult(source_nvertices=", nvertices(res.pi.Q),
+          ", realized_pairs=", nvertices(res.pi.P), ")")
+end
+function Base.show(io::IO, ::MIME"text/plain", res::JointEncodingResult)
+    show(io, res)
+    print(io, "\n  order: induced product order\n  scope: supplied finite source")
 end
 
 """
@@ -445,18 +598,25 @@ Return the two translated modules produced by
 @inline function _product_poset_result_describe(res::ProductPosetResult)
     return (;
         kind=:product_poset_result,
+        category=:finite_poset_representations,
+        refinement=:abstract_product,
+        ambient_identification=:not_asserted,
         common_nvertices=nvertices(res.P),
         left_nvertices=nvertices(res.pi1.P),
         right_nvertices=nvertices(res.pi2.P),
         common_poset_type=nameof(typeof(res.P)),
         left_poset_type=nameof(typeof(res.pi1.P)),
         right_poset_type=nameof(typeof(res.pi2.P)),
+        provenance=provenance(res),
     )
 end
 
 @inline function _common_refinement_translation_describe(res::CommonRefinementTranslationResult)
     return (;
         kind=:common_refinement_translation_result,
+        category=:finite_poset_representations,
+        refinement=res.refinement,
+        ambient_identification=:not_asserted,
         field=res.Ms[1].field,
         common_nvertices=nvertices(res.P),
         left_nvertices=nvertices(res.pi1.P),
@@ -464,11 +624,22 @@ end
         left_total_dim=_module_total_dim(res.Ms[1]),
         right_total_dim=_module_total_dim(res.Ms[2]),
         translated_on_common_poset=(res.Ms[1].Q === res.P) && (res.Ms[2].Q === res.P),
+        provenance=provenance(res),
     )
 end
 
 describe(res::ProductPosetResult) = _product_poset_result_describe(res)
 describe(res::CommonRefinementTranslationResult) = _common_refinement_translation_describe(res)
+provenance(res::ProductPosetResult) = (;
+    category=:finite_poset_representations, base_poset=res.P,
+    refinement=:abstract_product, projection_maps=projection_maps(res),
+    ambient_identification=:not_asserted,
+)
+provenance(res::CommonRefinementTranslationResult) = (;
+    category=:finite_poset_representations, base_poset=res.P, field=res.Ms[1].field,
+    refinement=res.refinement, projection_maps=projection_maps(res),
+    ambient_identification=:not_asserted,
+)
 
 function Base.show(io::IO, res::ProductPosetResult)
     d = describe(res)
@@ -480,6 +651,7 @@ end
 function Base.show(io::IO, res::CommonRefinementTranslationResult)
     d = describe(res)
     print(io, "CommonRefinementTranslationResult(field=", d.field,
+          ", refinement=", d.refinement,
           ", common_nvertices=", d.common_nvertices,
           ", left_total_dim=", d.left_total_dim,
           ", right_total_dim=", d.right_total_dim, ")")
@@ -498,6 +670,7 @@ function Base.show(io::IO, ::MIME"text/plain", res::CommonRefinementTranslationR
     d = describe(res)
     print(io, "CommonRefinementTranslationResult",
           "\n  field: ", d.field,
+          "\n  refinement: ", d.refinement,
           "\n  common_nvertices: ", d.common_nvertices,
           "\n  left_nvertices: ", d.left_nvertices,
           "\n  right_nvertices: ", d.right_nvertices,
@@ -840,10 +1013,10 @@ function _build_product_projection_pair_dense(
     end
 
     preds, succs, pred_slots = _cover_store_layout(Pprod)
-    maps_from_pred1 = [Vector{MatT1}(undef, length(preds[v])) for v in 1:n]
-    maps_from_pred2 = [Vector{MatT2}(undef, length(preds[v])) for v in 1:n]
-    maps_to_succ1 = [Vector{MatT1}(undef, length(succs[u])) for u in 1:n]
-    maps_to_succ2 = [Vector{MatT2}(undef, length(succs[u])) for u in 1:n]
+    maps_from_pred1 = Vector{MatT1}[Vector{MatT1}(undef, length(preds[v])) for v in 1:n]
+    maps_from_pred2 = Vector{MatT2}[Vector{MatT2}(undef, length(preds[v])) for v in 1:n]
+    maps_to_succ1 = Vector{MatT1}[Vector{MatT1}(undef, length(succs[u])) for u in 1:n]
+    maps_to_succ2 = Vector{MatT2}[Vector{MatT2}(undef, length(succs[u])) for u in 1:n]
     id_maps1 = _identity_maps_per_vertex(MatT1, K, M1.dims)
     id_maps2 = _identity_maps_per_vertex(MatT2, K, M2.dims)
 
@@ -875,7 +1048,7 @@ function _build_product_projection_pair_dense(
         end
     end
 
-    nedges = sum(length, succs)
+    nedges = sum(length, succs; init=0)
     store1 = CoverEdgeMapStore{K,MatT1}(preds, succs, maps_from_pred1, maps_to_succ1, nedges)
     store2 = CoverEdgeMapStore{K,MatT2}(preds, succs, maps_from_pred2, maps_to_succ2, nedges)
     return (
@@ -906,10 +1079,10 @@ function _build_product_projection_pair_structured(
     end
 
     preds, succs, pred_slots = _cover_store_layout(Pprod)
-    maps_from_pred1 = [Vector{MatT1}(undef, length(preds[v])) for v in 1:n]
-    maps_from_pred2 = [Vector{MatT2}(undef, length(preds[v])) for v in 1:n]
-    maps_to_succ1 = [Vector{MatT1}(undef, length(succs[u])) for u in 1:n]
-    maps_to_succ2 = [Vector{MatT2}(undef, length(succs[u])) for u in 1:n]
+    maps_from_pred1 = Vector{MatT1}[Vector{MatT1}(undef, length(preds[v])) for v in 1:n]
+    maps_from_pred2 = Vector{MatT2}[Vector{MatT2}(undef, length(preds[v])) for v in 1:n]
+    maps_to_succ1 = Vector{MatT1}[Vector{MatT1}(undef, length(succs[u])) for u in 1:n]
+    maps_to_succ2 = Vector{MatT2}[Vector{MatT2}(undef, length(succs[u])) for u in 1:n]
     id_maps1 = _identity_maps_per_vertex(MatT1, K, M1.dims)
     id_maps2 = _identity_maps_per_vertex(MatT2, K, M2.dims)
 
@@ -941,7 +1114,7 @@ function _build_product_projection_pair_structured(
         end
     end
 
-    nedges = sum(length, succs)
+    nedges = sum(length, succs; init=0)
     store1 = CoverEdgeMapStore{K,MatT1}(preds, succs, maps_from_pred1, maps_to_succ1, nedges)
     store2 = CoverEdgeMapStore{K,MatT2}(preds, succs, maps_from_pred2, maps_to_succ2, nedges)
     return (
@@ -978,8 +1151,8 @@ function _pullback_product_projection_dense(
     end
 
     preds, succs, pred_slots = _cover_store_layout(Pprod)
-    maps_from_pred = [Vector{MatT}(undef, length(preds[v])) for v in 1:n]
-    maps_to_succ = [Vector{MatT}(undef, length(succs[u])) for u in 1:n]
+    maps_from_pred = Vector{MatT}[Vector{MatT}(undef, length(preds[v])) for v in 1:n]
+    maps_to_succ = Vector{MatT}[Vector{MatT}(undef, length(succs[u])) for u in 1:n]
     id_maps = _identity_maps_per_vertex(MatT, K, M.dims)
     @inbounds for u in 1:n
         iu, ju = _dense_prod_decode(u, n2)
@@ -999,7 +1172,7 @@ function _pullback_product_projection_dense(
             maps_from_pred[v][slot] = A
         end
     end
-    nedges = sum(length, succs)
+    nedges = sum(length, succs; init=0)
     store = CoverEdgeMapStore{K,MatT}(preds, succs, maps_from_pred, maps_to_succ, nedges)
     return PModule{K}(Pprod, dims_out, store; field=M.field)
 end
@@ -1073,8 +1246,8 @@ function _pullback_product_projection_structured(
     end
 
     preds, succs, pred_slots = _cover_store_layout(Q)
-    maps_from_pred = [Vector{MatT}(undef, length(preds[v])) for v in 1:n]
-    maps_to_succ = [Vector{MatT}(undef, length(succs[u])) for u in 1:n]
+    maps_from_pred = Vector{MatT}[Vector{MatT}(undef, length(preds[v])) for v in 1:n]
+    maps_to_succ = Vector{MatT}[Vector{MatT}(undef, length(succs[u])) for u in 1:n]
     id_maps = _identity_maps_per_vertex(MatT, K, M.dims)
     @inbounds for u in 1:n
         iu, ju = _structured_prod_decode(u, n1)
@@ -1094,7 +1267,7 @@ function _pullback_product_projection_structured(
             maps_from_pred[v][slot] = A
         end
     end
-    nedges = sum(length, succs)
+    nedges = sum(length, succs; init=0)
     store = CoverEdgeMapStore{K,MatT}(preds, succs, maps_from_pred, maps_to_succ, nedges)
     return PModule{K}(Q, dims_out, store; field=M.field)
 end
@@ -1117,6 +1290,12 @@ are:
 
 Default refinement (`method=:product`):
   P = P1 x P2 (cartesian product poset).
+
+This is an abstract product comparison, not the realized intersection of two
+ambient classifiers. It does not identify this Hom space, or Ext/Tor on the
+product, with an ambient persistence-module computation. When both classifiers
+on a common finite source are available, pass their [`joint_encoding`](@ref)
+as the third argument to use the realized joint image instead.
 
 Special case (performance + usability):
   If P1 and P2 have identical leq matrices (even if they are different objects),
@@ -1173,6 +1352,8 @@ function encode_pmodules_to_common_poset(
     use_cache::Bool = true,
     session_cache::Union{Nothing,SessionCache}=nothing,
 ) where {K}
+    method == :product || throw(ArgumentError("encode_pmodules_to_common_poset: only method=:product is implemented."))
+    M1.field == M2.field || throw(ArgumentError("encode_pmodules_to_common_poset: coefficient fields must agree."))
     P1 = M1.Q
     P2 = M2.Q
 
@@ -1182,7 +1363,7 @@ function encode_pmodules_to_common_poset(
         id = collect(1:n)
         pi1 = EncodingMap(P1, P1, id)
         pi2 = EncodingMap(P1, P2, id)
-        return CommonRefinementTranslationResult(P1, (M1, M2), pi1, pi2)
+        return CommonRefinementTranslationResult(P1, (M1, M2), pi1, pi2, :same_poset)
     end
 
     # Structural equality: same leq, different objects. Avoid P1 x P2 blowup.
@@ -1194,7 +1375,7 @@ function encode_pmodules_to_common_poset(
 
         # Rebase M2 onto P1 (indices match because leq matrices match).
         M2b = PModule{K}(P1, M2.dims, M2.edge_maps; field=M2.field)
-        return CommonRefinementTranslationResult(P1, (M1, M2b), pi1, pi2)
+        return CommonRefinementTranslationResult(P1, (M1, M2b), pi1, pi2, :same_poset)
     end
 
     if method != :product
@@ -1225,7 +1406,7 @@ function encode_pmodules_to_common_poset(
             M1p = M1p === nothing ? M1pb : M1p
             M2p = M2p === nothing ? M2pb : M2p
         end
-        return CommonRefinementTranslationResult(P, (M1p, M2p), pi1, pi2)
+        return CommonRefinementTranslationResult(P, (M1p, M2p), pi1, pi2, :abstract_product)
     end
 
     if _CHANGE_OF_POSETS_USE_FUSED_PRODUCT_TRANSLATION[] && P isa ProductPoset
@@ -1242,7 +1423,7 @@ function encode_pmodules_to_common_poset(
             M1p = M1p === nothing ? M1pb : M1p
             M2p = M2p === nothing ? M2pb : M2p
         end
-        return CommonRefinementTranslationResult(P, (M1p, M2p), pi1, pi2)
+        return CommonRefinementTranslationResult(P, (M1p, M2p), pi1, pi2, :abstract_product)
     end
 
     if P1 isa FinitePoset && P2 isa FinitePoset && P isa FinitePoset
@@ -1263,13 +1444,37 @@ function encode_pmodules_to_common_poset(
             M2p = _pullback_to_product_pr2(M2, P, P1, P2, C1, C2)
             _translation_cache_set!(cache2, key2, M2p)
         end
-        return CommonRefinementTranslationResult(P, (M1p, M2p), pi1, pi2)
+        return CommonRefinementTranslationResult(P, (M1p, M2p), pi1, pi2, :abstract_product)
     end
 
     M1p = pullback(pi1, M1; check = check_poset, session_cache=session_cache)
     M2p = pullback(pi2, M2; check = check_poset, session_cache=session_cache)
 
-    return CommonRefinementTranslationResult(P, (M1p, M2p), pi1, pi2)
+    return CommonRefinementTranslationResult(P, (M1p, M2p), pi1, pi2, :abstract_product)
+end
+
+"""
+    encode_pmodules_to_common_poset(M1, M2, joint::JointEncodingResult;
+                                  check=true, session_cache=nothing)
+
+Restrict the modules along the projections of a verified finite realized joint
+image. The module posets must be the corresponding classifier targets. Pulling
+the result back along `encoding_map(joint)` recovers the original modules
+restricted to the supplied common finite source, including their structure
+maps. No Ext/Tor invariance is asserted by this factorization.
+"""
+function encode_pmodules_to_common_poset(M1::PModule{K}, M2::PModule{K},
+                                       joint::JointEncodingResult;
+                                       check::Bool=true,
+                                       session_cache::Union{Nothing,SessionCache}=nothing) where {K}
+    check && check_joint_encoding(joint; throw=true)
+    M1.field == M2.field || throw(ArgumentError("encode_pmodules_to_common_poset: coefficient fields must agree."))
+    M1.Q === joint.pi1.P && M2.Q === joint.pi2.P ||
+        throw(ArgumentError("encode_pmodules_to_common_poset: modules must live on the joint classifier targets."))
+    M1p = restriction(joint.pi1, M1; check=false, session_cache=session_cache)
+    M2p = restriction(joint.pi2, M2; check=false, session_cache=session_cache)
+    return CommonRefinementTranslationResult(common_poset(joint), (M1p, M2p),
+                                             joint.pi1, joint.pi2, :realized_joint_image)
 end
 
 """
@@ -1279,6 +1484,9 @@ Lazy common-refinement Hom space for modules on different ambient posets.
 
 Mathematically, this represents `Hom(M, N)` after translating `M` and `N` to a
 shared refinement poset, currently a product-poset refinement.
+This is the abstract Cartesian product of the finite target posets. It does
+not use geometric region intersections or identify the computed Hom space
+with Hom in an ambient persistence category.
 
 Source/target conventions:
 - `dom0` is the original source module before translation,
@@ -1504,6 +1712,9 @@ end
     translated = getfield(H, :translated)
     return (;
         kind=:common_refinement_hom_space,
+        category=:finite_poset_representations,
+        refinement=:abstract_product,
+        ambient_identification=:not_asserted,
         field=H.dom0.field,
         method=H.method,
         dimension=H.dim_cached,
@@ -1515,6 +1726,7 @@ end
         refinement_nvertices=translated === nothing ? nothing : nvertices(translated.dom.Q),
         basis_matrix_materialized=getfield(H, :basis_matrix) !== nothing,
         hom_materialized=getfield(H, :hom) !== nothing,
+        provenance=provenance(H),
     )
 end
 
@@ -1522,6 +1734,9 @@ end
     H = B.parent
     return (;
         kind=:common_refinement_hom_basis,
+        category=:finite_poset_representations,
+        refinement=:abstract_product,
+        ambient_identification=:not_asserted,
         field=source(H).field,
         dimension=length(B),
         source_nvertices=nvertices(source(H).Q),
@@ -1530,11 +1745,24 @@ end
         target_total_dim=_module_total_dim(target(H)),
         basis_matrix_materialized=getfield(H, :basis_matrix) !== nothing,
         hom_materialized=getfield(H, :hom) !== nothing,
+        provenance=provenance(H),
     )
 end
 
 describe(H::CommonRefinementHomSpace) = _common_refinement_describe(H)
 describe(B::CommonRefinementHomBasis) = _common_refinement_basis_describe(B)
+function provenance(H::CommonRefinementHomSpace)
+    translated = getfield(H, :translated)
+    return (;
+        category=:finite_poset_representations,
+        base_poset=translated === nothing ? nothing : translated.dom.Q,
+        base_poset_spec=(construction=:cartesian_product, left=H.dom0.Q, right=H.cod0.Q),
+        field=H.dom0.field, degree=0:0, degree_convention=:cohomological,
+        refinement=:abstract_product,
+        ambient_identification=:not_asserted,
+    )
+end
+provenance(B::CommonRefinementHomBasis) = provenance(B.parent)
 
 """
     common_refinement_summary(H) -> NamedTuple
@@ -1546,6 +1774,8 @@ before materializing explicit basis morphisms.
 """
 @inline common_refinement_summary(H::CommonRefinementHomSpace) = describe(H)
 @inline common_refinement_summary(B::CommonRefinementHomBasis) = describe(B)
+@inline common_refinement_summary(res::ProductPosetResult) = describe(res)
+@inline common_refinement_summary(res::CommonRefinementTranslationResult) = describe(res)
 
 """
     basis_matrix(H::CommonRefinementHomSpace) -> Matrix
@@ -1802,6 +2032,10 @@ end
 
 Compute `Hom(M1, M2)` after moving both modules to a common refinement poset.
 
+The unequal-poset case uses the abstract product of the finite module posets.
+It is not a geometric joint classifier and supplies no identification with
+ambient Hom/Ext/Tor. Equal labelled posets are identified directly instead.
+
 For product refinements this returns a lazy Hom-like object whose `dim` is
 computed directly from the product constraints without eagerly materializing the
 two translated modules. `basis(...)` returns a lazy vector-like view; taking
@@ -1823,6 +2057,8 @@ function hom_common_refinement(
     use_cache::Bool = true,
     session_cache::Union{Nothing,SessionCache}=nothing,
 ) where {K}
+    method == :product || throw(ArgumentError("hom_common_refinement: only method=:product is implemented."))
+    M1.field == M2.field || throw(ArgumentError("hom_common_refinement: coefficient fields must agree."))
     P1 = M1.Q
     P2 = M2.Q
     if P1 === P2
@@ -1864,6 +2100,8 @@ function hom_dim_common_refinement(
     use_cache::Bool = true,
     session_cache::Union{Nothing,SessionCache}=nothing,
 ) where {K}
+    method == :product || throw(ArgumentError("hom_dim_common_refinement: only method=:product is implemented."))
+    M1.field == M2.field || throw(ArgumentError("hom_dim_common_refinement: coefficient fields must agree."))
     P1 = M1.Q
     P2 = M2.Q
     if P1 === P2
@@ -1971,6 +2209,12 @@ Source/target convention
 - `pi.P` is the target poset of the monotone map,
 - `M` or `f` must live on `pi.P`,
 - the returned module or morphism lives on `pi.Q`.
+
+Restriction is exact, but it need not preserve projectives, injectives or
+derived groups. A module reconstructed by restriction can have different
+finite-category Ext/Tor groups from its encoding module. For an order
+isomorphism, restriction is an exact equivalence; for general classifiers no
+ambient or encoding-independent interpretation is asserted.
 
 Notation policy
 - For notebook-facing code, prefer [`restriction`](@ref) as the canonical name.
@@ -2177,7 +2421,7 @@ end
     maps_to_succ::Vector{Vector{SparseMatrixCSC{K,Int}}},
 ) where {K}
     n = length(preds)
-    maps_from_pred = [Vector{SparseMatrixCSC{K,Int}}(undef, length(preds[v])) for v in 1:n]
+    maps_from_pred = Vector{SparseMatrixCSC{K,Int}}[Vector{SparseMatrixCSC{K,Int}}(undef, length(preds[v])) for v in 1:n]
     @inbounds for u in 1:n
         su = succs[u]
         slots = pred_slots[u]
@@ -2187,7 +2431,7 @@ end
             maps_from_pred[v][slots[j]] = mu[j]
         end
     end
-    return CoverEdgeMapStore{K,SparseMatrixCSC{K,Int}}(preds, succs, maps_from_pred, maps_to_succ, sum(length, succs))
+    return CoverEdgeMapStore{K,SparseMatrixCSC{K,Int}}(preds, succs, maps_from_pred, maps_to_succ, sum(length, succs; init=0))
 end
 
 # Left inverse for a full-column-rank matrix using exact field linear algebra.
@@ -2365,24 +2609,28 @@ function _left_kan_relation_transpose(
 end
 
 function _left_kan_quotient_summary(field::AbstractCoeffField, RelT::AbstractMatrix{K}) where {K}
-    Wp = FieldLinAlg.nullspace(field, RelT)
-    return Wp, _left_inverse_full_column(field, Wp)
+    # Columns of N annihilate the relation rows. Thus transpose(N) is the
+    # quotient map S -> S/relations; N itself is NOT a quotient section.
+    # A relation space can intersect its annihilator (even over an exact field),
+    # so choosing N as the section and an arbitrary left inverse is incorrect.
+    N = FieldLinAlg.nullspace(field, RelT)
+    return Matrix(transpose(_left_inverse_full_column(field, N))), Matrix(transpose(N))
 end
 
 function _left_kan_quotient_summary(field::QQField, RelT::SparseMatrixCSC{QQ,Int})
     if _CHANGE_OF_POSETS_USE_LEFT_KAN_QQ_SUMMARY_QUOTIENT[]
         S = FieldLinAlg.elimination_summary(field, RelT)
-        Wp = FieldLinAlg.nullspace(S)
+        N = FieldLinAlg.nullspace(S)
         R = S.rref
         free_cols = Int[]
         sizehint!(free_cols, size(RelT, 2) - length(R.pivot_cols))
         @inbounds for j in 1:size(RelT, 2)
             R.pivot_pos[j] == 0 && push!(free_cols, j)
         end
-        return Wp, _selector_left_inverse(QQ, free_cols, size(RelT, 2))
+        return Matrix(transpose(_selector_left_inverse(QQ, free_cols, size(RelT, 2)))), Matrix(transpose(N))
     end
-    Wp = FieldLinAlg.nullspace(field, RelT)
-    return Wp, _left_inverse_full_column(field, Wp)
+    N = FieldLinAlg.nullspace(field, RelT)
+    return Matrix(transpose(_left_inverse_full_column(field, N))), Matrix(transpose(N))
 end
 
 @inline function _right_kan_row_offsets(fiber::_KanFiberPlan, d::Vector{Int})
@@ -2584,7 +2832,7 @@ function _index_sets_left(pi::EncodingMap)
     P = pi.P
     f = pi.pi_of_q
 
-    by_base = [Int[] for _ in 1:nvertices(P)]
+    by_base = Vector{Int}[Int[] for _ in 1:nvertices(P)]
     for q in 1:nvertices(Q)
         push!(by_base[f[q]], q)
     end
@@ -2626,8 +2874,9 @@ function _left_kan_data(pi::EncodingMap, M::PModule{K};
     store = M.edge_maps
     maps_to_succ = store.maps_to_succ
 
-    # Build once; reused many times in the terminal-object fast path.
-    cacheQ = _get_cover_cache(Q)
+    # Equal labelled domain posets need not be the same object. Map queries
+    # belong to M, so their cover cache must belong to M.Q rather than pi.Q.
+    cacheQ = _get_cover_cache(M.Q)
 
     if plan === nothing && session_cache !== nothing
         plan = _translation_plan(pi; session_cache=session_cache)
@@ -2642,6 +2891,7 @@ function _left_kan_data(pi::EncodingMap, M::PModule{K};
     dimV = Vector{Int}(undef, nvertices(P))
 
     @inline function _left_kan_at_p(p::Int)
+        local fiber, ip, offp, Sp, qmax, Vp, Wp, Lp, oq, maps, midx, q, dq, A, v, RelT
         fiber = fibers[p]
         ip = fiber.idxs
         offp, Sp = _offset_prefix(ip, d)
@@ -2725,7 +2975,7 @@ function _left_kan_data(pi::EncodingMap, M::PModule{K};
         end
     end
 
-    maps_to_succP = [Vector{SparseMatrixCSC{K,Int}}(undef, length(plan.succsP[u])) for u in 1:nvertices(P)]
+    maps_to_succP = Vector{SparseMatrixCSC{K,Int}}[Vector{SparseMatrixCSC{K,Int}}(undef, length(plan.succsP[u])) for u in 1:nvertices(P)]
     for u in 1:nvertices(P)
         Vu = dimV[u]
         Wu = W[u]
@@ -2894,6 +3144,7 @@ function _pushforward_left_morphism_from_data(
     comps = Vector{Matrix{K}}(undef, length(fibers))
 
     @inline function _left_pushforward_comp(p::Int)
+        local Vd, Vc, Fp, fiber, offs_dom, offs_cod, Lp, Wp, q, dd, dc, rd, cc, max_dc, tmp, tmpv, Lblock, Wblock
         Vd = data_dom.dimV[p]
         Vc = data_cod.dimV[p]
         if Vd == 0 || Vc == 0
@@ -2993,7 +3244,7 @@ function _index_sets_right(pi::EncodingMap)
     P = pi.P
     f = pi.pi_of_q
 
-    by_base = [Int[] for _ in 1:nvertices(P)]
+    by_base = Vector{Int}[Int[] for _ in 1:nvertices(P)]
     for q in 1:nvertices(Q)
         push!(by_base[f[q]], q)
     end
@@ -3137,7 +3388,7 @@ function _build_left_edge_embeds(
 )
     nQ = isempty(left_fibers) ? 0 : maximum((isempty(fp.idxs) ? 0 : maximum(fp.idxs) for fp in left_fibers))
     local_pos = zeros(Int, nQ)
-    embeds = [Vector{Vector{Int}}(undef, length(succsP[u])) for u in 1:length(succsP)]
+    embeds = Vector{Vector{Int}}[Vector{Vector{Int}}(undef, length(succsP[u])) for u in 1:length(succsP)]
     @inbounds for u in 1:length(succsP)
         su = succsP[u]
         for j in eachindex(su)
@@ -3167,7 +3418,7 @@ function _build_right_edge_embeds(
 )
     nQ = isempty(right_fibers) ? 0 : maximum((isempty(fp.idxs) ? 0 : maximum(fp.idxs) for fp in right_fibers))
     local_pos = zeros(Int, nQ)
-    embeds = [Vector{Vector{Int}}(undef, length(succsP[u])) for u in 1:length(succsP)]
+    embeds = Vector{Vector{Int}}[Vector{Vector{Int}}(undef, length(succsP[u])) for u in 1:length(succsP)]
     @inbounds for u in 1:length(succsP)
         su = succsP[u]
         idxu = right_fibers[u].idxs
@@ -3209,7 +3460,7 @@ struct _PiTranslationPlan{PB}
 end
 
 function _build_pi_translation_plan(pi::EncodingMap)
-    succsQ = [collect(_succs(_get_cover_cache(pi.Q), u)) for u in 1:nvertices(pi.Q)]
+    succsQ = Vector{Int}[collect(_succs(_get_cover_cache(pi.Q), u)) for u in 1:nvertices(pi.Q)]
     coverQ_edges = copy(cover_edges(pi.Q).edges)
     predsP, succsP, pred_slotsP = _cover_store_layout(pi.P)
     coverP_edges = copy(cover_edges(pi.P).edges)
@@ -3282,8 +3533,9 @@ function _right_kan_data(pi::EncodingMap, M::PModule{K};
     store = M.edge_maps
     maps_to_succ = store.maps_to_succ
 
-    # Build once; reused many times in the terminal-object fast path.
-    cacheQ = _get_cover_cache(Q)
+    # Equal labelled domain posets need not be the same object. Map queries
+    # belong to M, so their cover cache must belong to M.Q rather than pi.Q.
+    cacheQ = _get_cover_cache(M.Q)
 
     if plan === nothing && session_cache !== nothing
         plan = _translation_plan(pi; session_cache=session_cache)
@@ -3298,6 +3550,7 @@ function _right_kan_data(pi::EncodingMap, M::PModule{K};
     dimV = Vector{Int}(undef, nvertices(P))
 
     @inline function _right_kan_at_p(p::Int)
+        local fiber, jp, offp, Sp, qmin, Vp, Kp, Lp, maps, midx, q, dq, oq, A, nr, nc, v, C
         fiber = fibers[p]
         jp = fiber.idxs
         offp, Sp = _offset_prefix(jp, d)
@@ -3327,7 +3580,6 @@ function _right_kan_data(pi::EncodingMap, M::PModule{K};
             for loc in eachindex(jp)
                 q = jp[loc]
                 dq = d[q]
-                dq == 0 && continue
                 oq = offp[loc]
                 if q == qmin
                     for j in 1:Vp
@@ -3383,7 +3635,7 @@ function _right_kan_data(pi::EncodingMap, M::PModule{K};
         end
     end
 
-    maps_to_succP = [Vector{SparseMatrixCSC{K,Int}}(undef, length(plan.succsP[u])) for u in 1:nvertices(P)]
+    maps_to_succP = Vector{SparseMatrixCSC{K,Int}}[Vector{SparseMatrixCSC{K,Int}}(undef, length(plan.succsP[u])) for u in 1:nvertices(P)]
     for u in 1:nvertices(P)
         Vu = dimV[u]
         Ku = Ksec[u]
@@ -3565,6 +3817,7 @@ function _pushforward_right_morphism_from_data(
     comps = Vector{Matrix{K}}(undef, length(fibers))
 
     @inline function _right_pushforward_comp(p::Int)
+        local Vd, Vc, Fp, fiber, offs_dom, offs_cod, Lp, Kp, max_dc, tmp, q, dd, dc, rd, cc, tmpv, Lblock, Kblock
         Vd = data_dom.dimV[p]
         Vc = data_cod.dimV[p]
         if Vd == 0 || Vc == 0
@@ -3614,6 +3867,119 @@ function _pushforward_right_morphism_from_data(
     end
 
     return PMorphism(dom_out, cod_out, comps)
+end
+
+# The source or target may be a structurally equal copy. Rebase the finite map
+# so the resulting PMorphism has exactly the user's module as its endpoint.
+function _kan_comparison_map(pi::EncodingMap, M::PModule, side::Symbol,
+                             on_source::Bool, check::Bool)
+    side in (:left, :right) || throw(ArgumentError("Kan comparison side must be :left or :right."))
+    check && check_monotone_map(pi; throw=true)
+    expected = on_source ? pi.Q : pi.P
+    poset_equal(M.Q, expected) ||
+        throw(ArgumentError("Kan comparison module must live on " * (on_source ? "pi.Q." : "pi.P.")))
+    M.Q === expected && return pi
+    return on_source ? EncodingMap(M.Q, pi.P, copy(pi.pi_of_q)) :
+                       EncodingMap(pi.Q, M.Q, copy(pi.pi_of_q))
+end
+
+"""
+    kan_unit(pi::EncodingMap, M::PModule; side=:left, check=true,
+             threads=Threads.nthreads()>1, session_cache=nothing) -> PMorphism
+
+Construct the unit of one of the two finite-poset Kan adjunctions for
+`pi : Q -> P`:
+
+- `side=:left`: `M -> restriction(pi, pushforward_left(pi, M))`, with `M` on
+  `Q`, the unit of `Lan_pi` left adjoint to restriction.
+- `side=:right`: `M -> pushforward_right(pi, restriction(pi, M))`, with `M`
+  on `P`, the unit of restriction left adjoint to `Ran_pi`.
+
+These are explicit natural comparison morphisms, not assertions of
+isomorphism. They satisfy the corresponding triangle identities with
+[`kan_counit`](@ref). For an order isomorphism all four comparison maps are
+isomorphisms, giving the usual equivalence of finite representation categories.
+For a general classifier, invertibility on one module does not establish
+Ext/Tor invariance or a derived equivalence. Exactness of restriction alone
+does not supply such an equivalence.
+"""
+function kan_unit(pi::EncodingMap, M::PModule{K}; side::Symbol=:left,
+                  check::Bool=true, threads::Bool=(Threads.nthreads() > 1),
+                  session_cache::Union{Nothing,SessionCache}=nothing) where {K}
+    pi = _kan_comparison_map(pi, M, side, side === :left, check)
+    plan = _translation_plan(pi; session_cache=session_cache)
+    if side === :left
+        pushed, data = _left_kan_data(pi, M; check=false, threads=threads,
+                                      session_cache=session_cache, plan=plan)
+        target = pullback(pi, pushed; check=false, session_cache=session_cache, plan=plan)
+        comps = Vector{Matrix{K}}(undef, nvertices(pi.Q))
+        for p in eachindex(plan.left_fibers), (loc, q) in enumerate(plan.left_fibers[p].idxs)
+            pi.pi_of_q[q] == p || continue
+            cols = (data.offsets[p][loc] + 1):data.offsets[p][loc + 1]
+            comps[q] = data.L[p][:, cols]
+        end
+        return PMorphism(M, target, comps)
+    end
+    pulled = pullback(pi, M; check=false, session_cache=session_cache, plan=plan)
+    target, data = _right_kan_data(pi, pulled; check=false, threads=threads,
+                                   session_cache=session_cache, plan=plan)
+    comps = Vector{Matrix{K}}(undef, nvertices(pi.P))
+    for p in 1:nvertices(pi.P)
+        cone = zeros(K, data.dimS[p], M.dims[p])
+        for (loc, q) in enumerate(plan.right_fibers[p].idxs)
+            rows = (data.offsets[p][loc] + 1):data.offsets[p][loc + 1]
+            cone[rows, :] = map_leq(M, p, pi.pi_of_q[q])
+        end
+        comps[p] = data.L[p] * cone
+    end
+    return PMorphism(M, target, comps)
+end
+
+"""
+    kan_counit(pi::EncodingMap, M::PModule; side=:left, check=true,
+               threads=Threads.nthreads()>1, session_cache=nothing) -> PMorphism
+
+Construct the counit of the selected finite-poset Kan adjunction:
+
+- `side=:left`: `pushforward_left(pi, restriction(pi, M)) -> M`, with `M` on
+  `P`.
+- `side=:right`: `restriction(pi, pushforward_right(pi, M)) -> M`, with `M`
+  on `Q`.
+
+The comparison uses the actual quotient/kernel coordinates of the Kan
+construction. It is a natural morphism and need not be invertible. See
+[`kan_unit`](@ref) for the adjunctions and their categorical scope.
+"""
+function kan_counit(pi::EncodingMap, M::PModule{K}; side::Symbol=:left,
+                    check::Bool=true, threads::Bool=(Threads.nthreads() > 1),
+                    session_cache::Union{Nothing,SessionCache}=nothing) where {K}
+    pi = _kan_comparison_map(pi, M, side, side === :right, check)
+    plan = _translation_plan(pi; session_cache=session_cache)
+    if side === :right
+        pushed, data = _right_kan_data(pi, M; check=false, threads=threads,
+                                       session_cache=session_cache, plan=plan)
+        source = pullback(pi, pushed; check=false, session_cache=session_cache, plan=plan)
+        comps = Vector{Matrix{K}}(undef, nvertices(pi.Q))
+        for p in eachindex(plan.right_fibers), (loc, q) in enumerate(plan.right_fibers[p].idxs)
+            pi.pi_of_q[q] == p || continue
+            rows = (data.offsets[p][loc] + 1):data.offsets[p][loc + 1]
+            comps[q] = data.Ksec[p][rows, :]
+        end
+        return PMorphism(source, M, comps)
+    end
+    pulled = pullback(pi, M; check=false, session_cache=session_cache, plan=plan)
+    source, data = _left_kan_data(pi, pulled; check=false, threads=threads,
+                                  session_cache=session_cache, plan=plan)
+    comps = Vector{Matrix{K}}(undef, nvertices(pi.P))
+    for p in 1:nvertices(pi.P)
+        cocone = zeros(K, M.dims[p], data.dimS[p])
+        for (loc, q) in enumerate(plan.left_fibers[p].idxs)
+            cols = (data.offsets[p][loc] + 1):data.offsets[p][loc + 1]
+            cocone[:, cols] = map_leq(M, pi.pi_of_q[q], p)
+        end
+        comps[p] = cocone * data.W[p]
+    end
+    return PMorphism(source, M, comps)
 end
 
 function _pushforward_left_resolution_terms_data(
@@ -3976,6 +4342,7 @@ end
 
 Compute a cochain complex whose cohomology in degree -i is
 `L_i pushforward_left(pi, M)` for i = 0..df.maxdeg.
+The model must be `:auto` or `:projective`, with `canon=:auto`, `:none`, or `:projective`.
 
 Derived degree is controlled by `df.maxdeg`.
 
@@ -3986,6 +4353,7 @@ function pushforward_left_complex(pi::EncodingMap, M::PModule{K}, df::DerivedFun
                                   res=nothing,
                                   threads::Bool = (Threads.nthreads() > 1),
                                   session_cache::Union{Nothing,SessionCache}=nothing) where {K}
+    DerivedFunctors._validate_native_derived_options(df, "pushforward_left_complex", :projective)
     if check
         _check_monotone(pi)
         if !_same_poset(pi.Q, M.Q)
@@ -4047,6 +4415,7 @@ function Lpushforward_left(pi::EncodingMap, M::PModule{K}, df::DerivedFunctorOpt
                            check::Bool=true,
                            threads::Bool = (Threads.nthreads() > 1),
                            session_cache::Union{Nothing,SessionCache}=nothing) where {K}
+    DerivedFunctors._validate_native_derived_options(df, "Lpushforward_left", :projective)
     maxdeg = df.maxdeg
     cache = _translation_cache(session_cache, pi)
     key = _translation_complex_key(:Lpushforward_left_module, M, pi, maxdeg)
@@ -4129,6 +4498,7 @@ function pushforward_left_complex(pi::EncodingMap, f::PMorphism{K}, df::DerivedF
                                   res_cod=nothing,
                                   threads::Bool = (Threads.nthreads() > 1),
                                   session_cache::Union{Nothing,SessionCache}=nothing) where {K}
+    DerivedFunctors._validate_native_derived_options(df, "pushforward_left_complex", :projective)
     if check
         _check_monotone(pi)
         @assert _same_poset(pi.Q, f.dom.Q)
@@ -4225,6 +4595,7 @@ function Lpushforward_left(pi::EncodingMap, f::PMorphism{K}, df::DerivedFunctorO
                            res_cod=nothing,
                            threads::Bool = (Threads.nthreads() > 1),
                            session_cache::Union{Nothing,SessionCache}=nothing) where {K}
+    DerivedFunctors._validate_native_derived_options(df, "Lpushforward_left", :projective)
     maxdeg = df.maxdeg
     if res_dom === nothing
         res_dom = projective_resolution(f.dom, ResolutionOptions(maxlen=maxdeg + 1); threads=threads)
@@ -4313,6 +4684,7 @@ derived_pushforward_left(pi::EncodingMap, f::PMorphism{K};
 
 Compute a cochain complex whose cohomology in degree i is
 `R^i pushforward_right(pi, M)` for i = 0..df.maxdeg.
+The model must be `:auto` or `:injective`, with `canon=:auto`, `:none`, or `:injective`.
 
 Derived degree is controlled by `df.maxdeg`
 
@@ -4323,6 +4695,7 @@ function pushforward_right_complex(pi::EncodingMap, M::PModule{K}, df::DerivedFu
                                    res=nothing,
                                    threads::Bool = (Threads.nthreads() > 1),
                                    session_cache::Union{Nothing,SessionCache}=nothing) where {K}
+    DerivedFunctors._validate_native_derived_options(df, "pushforward_right_complex", :injective)
     if check
         _check_monotone(pi)
         if !_same_poset(pi.Q, M.Q)
@@ -4384,6 +4757,7 @@ function Rpushforward_right(pi::EncodingMap, M::PModule{K}, df::DerivedFunctorOp
                             check::Bool=true,
                             threads::Bool = (Threads.nthreads() > 1),
                             session_cache::Union{Nothing,SessionCache}=nothing) where {K}
+    DerivedFunctors._validate_native_derived_options(df, "Rpushforward_right", :injective)
     maxdeg = df.maxdeg
     cache = _translation_cache(session_cache, pi)
     key = _translation_complex_key(:Rpushforward_right_module, M, pi, maxdeg)
@@ -4470,6 +4844,7 @@ function pushforward_right_complex(pi::EncodingMap, f::PMorphism{K}, df::Derived
                                    res_cod=nothing,
                                    threads::Bool = (Threads.nthreads() > 1),
                                    session_cache::Union{Nothing,SessionCache}=nothing) where {K}
+    DerivedFunctors._validate_native_derived_options(df, "pushforward_right_complex", :injective)
     if check
         _check_monotone(pi)
         @assert _same_poset(pi.Q, f.dom.Q)
@@ -4533,6 +4908,7 @@ function Rpushforward_right(pi::EncodingMap, f::PMorphism{K}, df::DerivedFunctor
                             res_cod=nothing,
                             threads::Bool = (Threads.nthreads() > 1),
                             session_cache::Union{Nothing,SessionCache}=nothing) where {K}
+    DerivedFunctors._validate_native_derived_options(df, "Rpushforward_right", :injective)
     maxdeg = df.maxdeg
     if res_dom === nothing
         res_dom = injective_resolution(f.dom, ResolutionOptions(maxlen=maxdeg + 1); threads=threads)
@@ -4612,7 +4988,7 @@ derived_pushforward_right(pi::EncodingMap, f::PMorphism{K};
 # Active summand indices at each vertex u, respecting the canonical ordering used in projective covers.
 function _active_upset_indices_from_bases(Q::AbstractPoset, bases::Vector{Int})
     n = nvertices(Q)
-    by_base = [Int[] for _ in 1:n]
+    by_base = Vector{Int}[Int[] for _ in 1:n]
     for (j, b) in enumerate(bases)
         push!(by_base[b], j)
     end
@@ -4630,7 +5006,7 @@ end
 
 function _active_downset_indices_from_bases(Q::AbstractPoset, bases::Vector{Int})
     n = nvertices(Q)
-    by_base = [Int[] for _ in 1:n]
+    by_base = Vector{Int}[Int[] for _ in 1:n]
     for (j, b) in enumerate(bases)
         push!(by_base[b], j)
     end

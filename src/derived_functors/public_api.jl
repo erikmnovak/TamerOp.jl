@@ -53,7 +53,6 @@ import .Algebras:
     TorAlgebra, TorElement,
     set_chain_product!, set_chain_product_generator!,
     multiplication_matrix,
-    trivial_tor_product_generator,
     ext_action_on_tor
 
 import .SpectralSequences:
@@ -87,10 +86,10 @@ function _hom_with_cache(
     cache::HomSystemCache{HomSpace{K},SparseMatrixCSC{K,Int},SparseMatrixCSC{K,Int}},
 ) where {K}
     key = _cache_key2(M, N)
-    cached = _cache_lookup(cache.hom, key)
+    cached = _cache_lookup(cache, cache.hom, key)
     cached === nothing || return cached
     H = Hom(M, N)
-    return _cache_store_or_get!(cache.hom, key, H)
+    return _cache_store_or_get!(cache, cache.hom, key, H)
 end
 
 function _hom_with_cache(M::PModule{K}, N::PModule{K}, ::HomSystemCache) where {K}
@@ -112,10 +111,11 @@ function _precompose_cached(
     cache::HomSystemCache{HomSpace{K},SparseMatrixCSC{K,Int},SparseMatrixCSC{K,Int}},
 ) where {K}
     key = _cache_key3(Hdom, Hcod, f)
-    cached = _cache_lookup(cache.precompose, key)
+    owners = _hom_map_owners(Hdom, Hcod, f)
+    cached = _cache_lookup(cache, cache.precompose, key, owners)
     cached === nothing || return cached
     F = sparse(_precompose_matrix(Hdom, Hcod, f))
-    return _cache_store_or_get!(cache.precompose, key, F)
+    return _cache_store_or_get!(cache, cache.precompose, key, F, owners)
 end
 
 function _precompose_cached(Hdom::HomSpace{K}, Hcod::HomSpace{K}, f::PMorphism{K}, ::HomSystemCache) where {K}
@@ -137,10 +137,11 @@ function _postcompose_cached(
     cache::HomSystemCache{HomSpace{K},SparseMatrixCSC{K,Int},SparseMatrixCSC{K,Int}},
 ) where {K}
     key = _cache_key3(Hdom, Hcod, g)
-    cached = _cache_lookup(cache.postcompose, key)
+    owners = _hom_map_owners(Hdom, Hcod, g)
+    cached = _cache_lookup(cache, cache.postcompose, key, owners)
     cached === nothing || return cached
     F = sparse(_postcompose_matrix(Hdom, Hcod, g))
-    return _cache_store_or_get!(cache.postcompose, key, F)
+    return _cache_store_or_get!(cache, cache.postcompose, key, F, owners)
 end
 
 function _postcompose_cached(Hdom::HomSpace{K}, Hcod::HomSpace{K}, g::PMorphism{K}, ::HomSystemCache) where {K}
@@ -180,16 +181,12 @@ ExtAlgebra(M; opts::DerivedFunctorOptions=DerivedFunctorOptions()) =
 ext_action_on_tor(A, T, x; opts::DerivedFunctorOptions=DerivedFunctorOptions()) =
     ext_action_on_tor(A, T, x, opts)
 
-ExtDoubleComplex(M, N; opts::ResolutionOptions=ResolutionOptions(), cache=nothing) =
-    ExtDoubleComplex(M, N, opts; cache=cache)
-ExtSpectralSequence(M, N; opts::ResolutionOptions=ResolutionOptions(), first::Symbol=:vertical, cache=nothing) =
-    ExtSpectralSequence(M, N, opts; first=first, cache=cache)
 TorSpectralSequence(Rop, L; maxlen=nothing, maxlenR=nothing, maxlenL=nothing,
                     first::Symbol=:vertical, cache=nothing) =
     TorSpectralSequence(Rop, L; maxlen=maxlen, maxlenR=maxlenR, maxlenL=maxlenL,
                         first=first, cache=cache)
 
-ExtZn(FG1, FG2; enc::EncodingOptions=EncodingOptions(), df::DerivedFunctorOptions=DerivedFunctorOptions(), kwargs...) =
+ExtZn(FG1, FG2; enc::EncodingOptions=EncodingOptions(field=FG1.field), df::DerivedFunctorOptions=DerivedFunctorOptions(), kwargs...) =
     ExtZn(FG1, FG2, enc, df; kwargs...)
 ExtRn(F1, F2; enc::EncodingOptions=EncodingOptions(), df::DerivedFunctorOptions=DerivedFunctorOptions()) =
     ExtRn(F1, F2, enc, df)
@@ -214,11 +211,11 @@ TorLongExactSequenceFirst(L, i, p; opts::DerivedFunctorOptions=DerivedFunctorOpt
 TorLongExactSequenceFirst(L, ses; opts::DerivedFunctorOptions=DerivedFunctorOptions()) =
     TorLongExactSequenceFirst(L, ses, opts)
 
-projective_resolution_Zn(FG; enc::EncodingOptions=EncodingOptions(), res::ResolutionOptions=ResolutionOptions(), return_encoding::Bool=false,
+projective_resolution_Zn(FG; enc::EncodingOptions=EncodingOptions(field=FG.field), res::ResolutionOptions=ResolutionOptions(), return_encoding::Bool=false,
                          threads::Bool = (Threads.nthreads() > 1)) =
     projective_resolution_Zn(FG, enc, res;
                              return_encoding=return_encoding, threads=threads)
-injective_resolution_Zn(FG; enc::EncodingOptions=EncodingOptions(), res::ResolutionOptions=ResolutionOptions(), return_encoding::Bool=false,
+injective_resolution_Zn(FG; enc::EncodingOptions=EncodingOptions(field=FG.field), res::ResolutionOptions=ResolutionOptions(), return_encoding::Bool=false,
                         threads::Bool = (Threads.nthreads() > 1)) =
     injective_resolution_Zn(FG, enc, res;
                             return_encoding=return_encoding, threads=threads)
@@ -236,10 +233,75 @@ injective_resolution_Rn(FG; enc::EncodingOptions=EncodingOptions(), res::Resolut
 # Shared describe(...) bridge into ChainComplexes
 # -----------------------------------------------------------------------------
 
+# All entries retain the actual finite base by reference; no relation matrix,
+# resolution comparison or representative is materialized for provenance.
+function _finite_derived_provenance(P, field; degree, degree_convention, model,
+        category=:finite_poset_representations, orientation=:forward,
+        argument_variance=())
+    return (; category, base_poset=P, field, degree, degree_convention, model,
+            orientation, argument_variance, ambient_identification=:not_asserted)
+end
+
+provenance(H::HomSpace) = _finite_derived_provenance(H.dom.Q, H.dom.field;
+    degree=0:0, degree_convention=:cohomological, model=:ordinary,
+    argument_variance=(:contravariant, :covariant))
+
+provenance(E::ExtSpaceProjective) = _finite_derived_provenance(E.M.Q, E.M.field;
+    degree=degree_range(E), degree_convention=:cohomological, model=:projective,
+    argument_variance=(:contravariant, :covariant))
+provenance(E::ExtSpaceInjective) = _finite_derived_provenance(E.M.Q, E.M.field;
+    degree=degree_range(E), degree_convention=:cohomological, model=:injective,
+    argument_variance=(:contravariant, :covariant))
+provenance(E::ExtSpace) = merge(_finite_derived_provenance(E.M.Q, E.M.field;
+    degree=degree_range(E), degree_convention=:cohomological, model=:unified,
+    argument_variance=(:contravariant, :covariant)), (canonical_model=E.canon,))
+
+provenance(T::Union{TorSpace,TorSpaceSecond}) = _finite_derived_provenance(
+    target_module(T).Q, source_module(T).field;
+    category=:incidence_algebra_tensor, degree=degree_range(T),
+    degree_convention=:homological, model=T isa TorSpace ? :first : :second,
+    orientation=(right=:opposite, left=:forward),
+    argument_variance=(:covariant, :covariant))
+
+provenance(res::ProjectiveResolution) = _finite_derived_provenance(res.M.Q, res.M.field;
+    degree=0:resolution_length(res), degree_convention=:homological, model=:projective)
+provenance(res::InjectiveResolution) = _finite_derived_provenance(res.N.Q, res.N.field;
+    degree=0:resolution_length(res), degree_convention=:cohomological, model=:injective)
+provenance(A::ExtAlgebra) = merge(provenance(underlying_ext_space(A)), (product=:yoneda,))
+provenance(A::TorAlgebra) = merge(provenance(underlying_tor_space(A)), (product=:supplied_chain_maps,))
+provenance(x::Union{ExtElement,TorElement}) = merge(provenance(parent_algebra(x)), (degree=element_degree(x),))
+provenance(les::Union{ExtLongExactSequenceFirst,ExtLongExactSequenceSecond}) =
+    merge(provenance(les.EA), (degree=degree_range(les), construction=:long_exact_sequence))
+provenance(les::Union{TorLongExactSequenceFirst,TorLongExactSequenceSecond}) =
+    merge(provenance(les.TorA), (degree=degree_range(les), construction=:long_exact_sequence))
+
+# Raw vector-space complexes erase the module/encoding from which they arose.
+# They retain the coefficient field, including numerical tolerance policy.
+function provenance(C::ChainComplexes.CochainComplex{K}) where {K}
+    return (category=:vector_space_complexes, base_poset=nothing,
+            field=C.field, field_source=:stored_field,
+            degree=C.tmin:C.tmax, degree_convention=:cohomological,
+            model=:stored_complex, ambient_identification=:not_asserted)
+end
+function provenance(DC::ChainComplexes.DoubleComplex{K}) where {K}
+    return (category=:vector_space_complexes, base_poset=nothing,
+            field=DC.field, field_source=:stored_field,
+            degree=(DC.amin+DC.bmin):(DC.amax+DC.bmax), degree_convention=:cohomological,
+            model=:stored_bicomplex, ambient_identification=:not_asserted)
+end
+provenance(ss::ChainComplexes.SpectralSequence) =
+    merge(provenance(ss.DC), (model=:spectral_sequence_of_stored_bicomplex, filtration=ss.first))
+function provenance(TSS::TorSpectralSequence)
+    base = provenance(TSS.ss)
+    return merge(base, (degree=(-last(base.degree)):(-first(base.degree)),
+                       degree_convention=:homological, reindexing=:tor))
+end
+
 @inline function _describe_derived_element(kind::Symbol, x)
     coords = element_coordinates(x)
     return (
         kind=kind,
+        provenance=provenance(x),
         field=algebra_field(parent_algebra(x)),
         degree=element_degree(x),
         coordinate_length=length(coords),

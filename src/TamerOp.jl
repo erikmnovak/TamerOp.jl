@@ -20,9 +20,11 @@ module TamerOp
 
 # 1) Low-level runtime, shared contracts, and light public data/result wrappers.
 include("CoreModules.jl")
+include("ExactReals.jl")
 include("Stats.jl")
 include("Options.jl")
 include("DataTypes.jl")
+include("SimplicialReduction.jl")
 include("EncodingCore.jl")
 include("Results.jl")
 include("RegionGeometry.jl")
@@ -102,13 +104,16 @@ include("DataFileIO.jl")
 # 15) Data ingestion subsystem
 include("DataIngestion.jl")
 
-# 16) Synthetic data generators
+# 16) Ordinary one-parameter persistence helpers
+include("OrdinaryPersistence.jl")
+
+# 17) Synthetic data generators
 include("SyntheticData.jl")
 
-# 17) Visualization engine
+# 18) Visualization engine
 include("Visualization.jl")
 
-# 18) Featurization/experiment subsystem
+# 19) Featurization/experiment subsystem
 include("Featurizers.jl")
 
 # -----------------------------------------------------------------------------
@@ -124,46 +129,6 @@ DataTypes.nvertices(P::FiniteFringe.AbstractPoset) = FiniteFringe.nvertices(P)
 
 # 18) Curated API surface contracts (simple + advanced)
 include("APISurface.jl")
-
-# -----------------------------------------------------------------------------
-# Source-include optional extension loader
-#
-# In script/include mode (`include("src/TamerOp.jl")`) Julia package
-# extensions are not auto-activated. Load selected extension modules explicitly
-# when their dependency package is available.
-# -----------------------------------------------------------------------------
-
-@inline function _try_load_source_extension!(dep::Symbol, extmod::Symbol, extfile::String)
-    isdefined(@__MODULE__, extmod) && return true
-    try
-        Base.require(Main, dep)
-    catch
-        return false
-    end
-    isdefined(@__MODULE__, extmod) && return true
-    path = normpath(joinpath(@__DIR__, "..", "ext", extfile))
-    isfile(path) || return false
-    try
-        include(path)
-        return true
-    catch
-        return false
-    end
-end
-
-const _SOURCE_INCLUDE_MODE = pathof(@__MODULE__) === nothing
-
-const _SOURCE_EXT_NEARESTNEIGHBORS = _SOURCE_INCLUDE_MODE && _try_load_source_extension!(
-    :NearestNeighbors,
-    :TamerOpNearestNeighborsExt,
-    "TamerOpNearestNeighborsExt.jl",
-)
-
-const _SOURCE_EXT_DELAUNAY = _SOURCE_INCLUDE_MODE && _try_load_source_extension!(
-    :DelaunayTriangulation,
-    :TamerOpDelaunayTriangulationExt,
-    "TamerOpDelaunayTriangulationExt.jl",
-)
 
 # =============================================================================
 # Curated Public API Surface
@@ -271,6 +236,7 @@ import ..Invariants
 import ..Workflow
 import ..DataFileIO
 import ..DataIngestion
+import ..OrdinaryPersistence
 import ..Featurizers
 
 export CoreModules, Stats, Options, DataTypes, EncodingCore, Results,
@@ -279,7 +245,8 @@ export CoreModules, Stats, Options, DataTypes, EncodingCore, Results,
        PLPolyhedra, PLBackend, ChainComplexes, ZnEncoding, DerivedFunctors,
        Resolutions, ExtTorSpaces, Functoriality, Algebras, SpectralSequences, Backends,
        HomExtEngine, Utils,
-       ModuleComplexes, ChangeOfPosets, Invariants, Workflow, DataFileIO, DataIngestion, Featurizers
+       ModuleComplexes, ChangeOfPosets, Invariants, Workflow, DataFileIO, DataIngestion,
+       OrdinaryPersistence, Featurizers
 
 # -----------------------------------------------------------------------------
 # Static curated API binding (no dynamic lifting).
@@ -295,5 +262,8 @@ _assert_api_list_defined!(@__MODULE__, ADVANCED_API; label="ADVANCED_API")
 end # module Advanced
 
 export Advanced
+
+# Curated first-use workloads run only while writing a package image.
+include("precompile_workloads.jl")
 
 end # module

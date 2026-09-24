@@ -22,10 +22,11 @@ plumbing (`InvariantCore`).
 
 using LinearAlgebra
 using JSON3
-using ..CoreModules: EncodingCache, SessionCache, AbstractCoeffField, GeometryCachePayload,
+using ..CoreModules: _foreach_workchunk, EncodingCache, SessionCache, AbstractCoeffField, GeometryCachePayload,
                      RegionPosetCachePayload, AbstractSlicePlanCache,
                      _resolve_workflow_session_cache, _workflow_encoding_cache
 using ..Options: InvariantOptions
+using ..ExactReals: AlgebraicReal
 using ..EncodingCore: PLikeEncodingMap, CompiledEncoding, GridEncodingMap,
                       locate, axes_from_encoding, dimension, representatives
 using Statistics: mean
@@ -52,7 +53,7 @@ using ..InvariantCore: SliceSpec, RankQueryCache,
                        RANK_INVARIANT_MEMO_THRESHOLD, RECTANGLE_LOC_LINEAR_CACHE_THRESHOLD,
                        _use_array_memo, _new_array_memo, _grid_cache_index,
                        _memo_get, _memo_set!, _map_leq_cached,
-                       _rank_cache_get!, _resolve_rank_query_cache,
+                       _rank_cache_get!, _rank_cache_batch!, _resolve_rank_query_cache,
                        _rank_query_point_tuple, _rank_query_locate!
 import ..FiniteFringe: AbstractPoset, FinitePoset, FringeModule, Upset, Downset, fiber_dimension,
                        leq, leq_matrix, upset_indices, downset_indices, leq_col, nvertices, build_cache!,
@@ -248,6 +249,14 @@ struct PointSignedMeasure{N,T,W}
     axes::NTuple{N,Vector{T}}
     inds::Vector{NTuple{N,Int}}
     wts::Vector{W}
+end
+
+# Finite exact birth coordinates and infinite death endpoints can have
+# different scalar types. A union retains both without rounding the births.
+function PointSignedMeasure(axes::NTuple{N,AbstractVector},
+                            inds::Vector{NTuple{N,Int}}, wts::Vector{W}) where {N,W}
+    T = Union{map(eltype, axes)...}
+    return PointSignedMeasure{N,T,W}(ntuple(i -> Vector{T}(axes[i]), N), inds, wts)
 end
 
 Base.length(pm::PointSignedMeasure) = length(pm.wts)
@@ -503,7 +512,7 @@ function describe(pm::PointSignedMeasure; nlargest::Int = 5)
 end
 
 function Base.show(io::IO, sb::RectSignedBarcode)
-    d = describe(sb; nlargest = 3)
+    d = describe(sb; nlargest = 0)
     print(io,
           "RectSignedBarcode(dim=", d.ambient_dimension,
           ", terms=", d.nterms,
@@ -526,7 +535,7 @@ function Base.show(io::IO, ::MIME"text/plain", sb::RectSignedBarcode)
 end
 
 function Base.show(io::IO, pm::PointSignedMeasure)
-    d = describe(pm; nlargest = 3)
+    d = describe(pm; nlargest = 0)
     print(io,
           "PointSignedMeasure(dim=", d.ambient_dimension,
           ", terms=", d.nterms,
@@ -945,6 +954,9 @@ function surface_from_point_signed_measure(pm::PointSignedMeasure{N,T,W}) where 
     return f
 end
 
+@inline _measure_numeric(x::Real) = float(x)
+@inline _measure_numeric(x::AlgebraicReal) = Float64(x)
+
 """
     point_signed_measure_kernel(pm1, pm2; sigma=1.0, kind=:gaussian)
 
@@ -960,28 +972,28 @@ function point_signed_measure_kernel(pm1::PointSignedMeasure{N},
                                      sigma::Real=1.0,
                                      kind::Symbol=:gaussian) where {N}
     sigma > 0 || throw(ArgumentError("sigma must be positive"))
-    s2 = float(sigma*sigma)
+    s2 = _measure_numeric(sigma*sigma)
     acc = 0.0
     @inbounds for i in 1:length(pm1)
         I = pm1.inds[i]
-        w1 = float(pm1.wts[i])
+        w1 = _measure_numeric(pm1.wts[i])
         x = ntuple(d -> pm1.axes[d][I[d]], N)
         for j in 1:length(pm2)
             J = pm2.inds[j]
-            w2 = float(pm2.wts[j])
+            w2 = _measure_numeric(pm2.wts[j])
             y = ntuple(d -> pm2.axes[d][J[d]], N)
 
             # Euclidean distance in coordinate space
             dsq = 0.0
             for d in 1:N
-                t = float(x[d] - y[d])
+                t = _measure_numeric(x[d] - y[d])
                 dsq += t*t
             end
 
             k = if kind === :gaussian
                 exp(-dsq/(2*s2))
             elseif kind === :laplacian
-                exp(-sqrt(dsq)/float(sigma))
+                exp(-sqrt(dsq)/_measure_numeric(sigma))
             else
                 throw(ArgumentError("kind must be :gaussian or :laplacian"))
             end
@@ -1188,7 +1200,10 @@ Compute the Euler characteristic surface of `obj` on a finite grid induced by
 
 The grid is chosen from `opts.axes`, `opts.axes_policy`, and
 `opts.max_axis_len` in the same way as the signed-measure helpers in this
-module.
+module. For `GridEncodingMap`, these grid axes use oriented coordinates,
+matching `axes_from_encoding(pi)`: a decreasing depth parameter `k` is indexed
+by `-k`. This differs from individual `locate(pi, x)` calls, which accept
+physical parameter coordinates and apply the orientation themselves.
 """
 function _euler_characteristic_surface_on_axes(chi_dims::AbstractVector{<:Integer},
                                                pi::PLikeEncodingMap,
@@ -1196,24 +1211,42 @@ function _euler_characteristic_surface_on_axes(chi_dims::AbstractVector{<:Intege
                                                use_threads::Bool) where {N}
     surf = zeros(Int, length.(ax)...)
     n = dimension(pi)
-    if use_threads
-        xs = [zeros(Float64, n) for _ in 1:Threads.nthreads()]
-        Threads.@threads for I in CartesianIndices(size(surf))
-            x = xs[Threads.threadid()]
+    indices = CartesianIndices(size(surf))
+    _foreach_workchunk(length(indices); threads=use_threads) do work, _
+        local x, I, u
+        T = Union{map(eltype, ax)...}
+        x = Vector{T}(undef, n)
+        for k in work
+            I = indices[k]
             for i in 1:n
-                x[i] = float(ax[i][I[i]])
+                x[i] = ax[i][I[i]]
             end
             u = locate(pi, x)
             surf[I] = (u == 0) ? 0 : chi_dims[u]
         end
-    else
-        x = zeros(Float64, n)
-        for I in CartesianIndices(size(surf))
-            for i in 1:n
-                x[i] = float(ax[i][I[i]])
+    end
+    return surf
+end
+
+function _euler_characteristic_surface_on_axes(chi_dims::AbstractVector{<:Integer},
+                                               pi::GridEncodingMap{N},
+                                               ax::NTuple{N,AbstractVector},
+                                               use_threads::Bool) where {N}
+    surf = zeros(Int, length.(ax)...)
+    indices = CartesianIndices(size(surf))
+    _foreach_workchunk(length(indices); threads=use_threads) do work, _
+        for k in work
+            I = indices[k]
+            label = 1
+            for i in 1:N
+                index = searchsortedlast(pi.coords[i], ax[i][I[i]])
+                if index == 0
+                    label = 0
+                    break
+                end
+                label += (index - 1) * pi.strides[i]
             end
-            u = locate(pi, x)
-            surf[I] = (u == 0) ? 0 : chi_dims[u]
+            surf[I] = label == 0 ? 0 : chi_dims[label]
         end
     end
     return surf
@@ -1228,32 +1261,21 @@ function _euler_characteristic_surface_on_axes(chi_dims::AbstractVector{<:Intege
     surf = Vector{Int}(undef, length(axis))
     isempty(coords) && return fill!(surf, 0)
 
-    if pi.orientation[1] == 1
-        rid = 0
-        @inbounds for i in eachindex(axis)
-            xi = float(axis[i])
-            while rid < length(coords) && coords[rid + 1] <= xi
-                rid += 1
-            end
-            surf[i] = rid == 0 ? 0 : chi_dims[rid]
+    rid = 0
+    @inbounds for i in eachindex(axis)
+        xi = axis[i]
+        while rid < length(coords) && coords[rid + 1] <= xi
+            rid += 1
         end
-    else
-        rid = 0
-        @inbounds for i in length(axis):-1:1
-            xi = -float(axis[i])
-            while rid < length(coords) && coords[rid + 1] <= xi
-                rid += 1
-            end
-            surf[i] = rid == 0 ? 0 : chi_dims[rid]
-        end
+        surf[i] = rid == 0 ? 0 : chi_dims[rid]
     end
     return surf
 end
 
 function _euler_characteristic_surface_on_axes(chi_dims::AbstractVector{<:Integer},
                                                pi::CompiledEncoding{PiType},
-                                               ax::NTuple{1,AbstractVector},
-                                               use_threads::Bool) where {PiType<:GridEncodingMap{1}}
+                                               ax::NTuple{N,AbstractVector},
+                                               use_threads::Bool) where {N,PiType<:GridEncodingMap{N}}
     return _euler_characteristic_surface_on_axes(chi_dims, pi.pi, ax, use_threads)
 end
 
@@ -1688,6 +1710,7 @@ function _rectangle_signed_barcode_local(rank_idx::Function, axes::NTuple{N,Vect
         chunk_size = cld(total, nchunks)
 
         Threads.@threads for c in 1:nchunks
+            local start_idx, end_idx, rects_local, weights_local, pCI, p, ranges, q, w, p2, q2, ok, lo, hi
             start_idx = (c - 1) * chunk_size + 1
             end_idx = min(c * chunk_size, total)
             start_idx > end_idx && continue
@@ -1964,6 +1987,7 @@ function _extract_rectangles_from_mobius_tensor(
         chunk_size = cld(total, nchunks)
 
         Threads.@threads for c in 1:nchunks
+            local start_idx, end_idx, rects_local, weights_local, p, lo, q_ranges, q, wt, hi
             start_idx = (c - 1) * chunk_size + 1
             end_idx = min(c * chunk_size, total)
             start_idx > end_idx && continue
@@ -2096,6 +2120,7 @@ function _fill_rectangle_rank_tensor_dense(rank_idx::Function,
         nchunks = min(total, Threads.nthreads())
         chunk_size = cld(total, nchunks)
         Threads.@threads for c in 1:nchunks
+            local start_idx, end_idx, pCI, p, q_ranges, q
             start_idx = (c - 1) * chunk_size + 1
             end_idx = min(c * chunk_size, total)
             start_idx > end_idx && continue
@@ -2122,6 +2147,22 @@ function _fill_rectangle_rank_tensor_dense(rank_idx::Function,
     return r
 end
 
+function _fill_rectangle_rank_tensor_dense_from_regions(reg::AbstractArray{Int,N},
+                                                         rank_ab::F,
+                                                         rq_cache::RankQueryCache;
+                                                         threads::Bool=false) where {N,F}
+    r = Array{Int}(undef, (size(reg)..., size(reg)...))
+    indices = CartesianIndices(r)
+    function pair_at(i)
+        x = @inbounds indices[i]
+        p = ntuple(k -> x[k], Val(N))
+        q = ntuple(k -> x[N+k], Val(N))
+        all(k -> p[k] <= q[k], 1:N) || return (0,0)
+        @inbounds return (reg[p...], reg[q...])
+    end
+    return _rank_cache_batch!(r, rq_cache, pair_at, rank_ab; threads)
+end
+
 function _fill_rectangle_rank_tensor_dense_from_regions_2d(reg::AbstractMatrix{Int},
                                                            rank_ab::Function;
                                                            threads::Bool=false)
@@ -2129,6 +2170,7 @@ function _fill_rectangle_rank_tensor_dense_from_regions_2d(reg::AbstractMatrix{I
     r = zeros(Int, d1, d2, d1, d2)
     if threads && Threads.nthreads() > 1
         Threads.@threads for p1 in 1:d1
+            local a, b
             for p2 in 1:d2
                 a = @inbounds reg[p1, p2]
                 for q1 in p1:d1
@@ -2164,6 +2206,7 @@ function _fill_rectangle_rank_tensor_packed_2d(rank_idx::Function,
     r = Matrix{Int}(undef, n1, n2)
     if threads && Threads.nthreads() > 1
         Threads.@threads for q1 in 1:d1
+            local base1, i1, base2
             base1 = ((q1 - 1) * q1) >>> 1
             for p1 in 1:q1
                 i1 = base1 + p1
@@ -2194,13 +2237,27 @@ end
 
 function _fill_rectangle_rank_tensor_packed_from_regions_2d(reg::AbstractMatrix{Int},
                                                             rank_ab::Function;
-                                                            threads::Bool=false)
+                                                            threads::Bool=false,
+                                                            rq_cache::Union{Nothing,RankQueryCache}=nothing)
     d1, d2 = size(reg)
     n1 = _triangle_number(d1)
     n2 = _triangle_number(d2)
     r = Matrix{Int}(undef, n1, n2)
+    if rq_cache !== nothing
+        intervals1 = [(p,q) for q in 1:d1 for p in 1:q]
+        intervals2 = [(p,q) for q in 1:d2 for p in 1:q]
+        indices = CartesianIndices(r)
+        function pair_at(i)
+            index = @inbounds indices[i]
+            p1,q1 = @inbounds intervals1[index[1]]
+            p2,q2 = @inbounds intervals2[index[2]]
+            @inbounds return (reg[p1,p2], reg[q1,q2])
+        end
+        return _rank_cache_batch!(r, rq_cache, pair_at, rank_ab; threads)
+    end
     if threads && Threads.nthreads() > 1
         Threads.@threads for q1 in 1:d1
+            local base1, i1, base2, a, b
             base1 = ((q1 - 1) * q1) >>> 1
             for p1 in 1:q1
                 i1 = base1 + p1
@@ -2244,6 +2301,7 @@ function _mobius_inversion_interval_product_packed_2d!(w::AbstractMatrix{<:Integ
 
     if threads && Threads.nthreads() > 1
         Threads.@threads for j2 in 1:n2
+            local base1, i1, v
             for q1 in 1:d1
                 base1 = ((q1 - 1) * q1) >>> 1
                 for p1 in q1:-1:1
@@ -2263,6 +2321,7 @@ function _mobius_inversion_interval_product_packed_2d!(w::AbstractMatrix{<:Integ
             end
         end
         Threads.@threads for i1 in 1:n1
+            local base2, i2, v
             for q2 in 1:d2
                 base2 = ((q2 - 1) * q2) >>> 1
                 for p2 in q2:-1:1
@@ -2523,9 +2582,7 @@ function _rectangle_region_run_grid_2d(pi::ZnEncodingMap{2},
         y = axes[2][starts2[j]]
         for i in eachindex(starts1)
             x = (axes[1][starts1[i]], y)
-            a = get!(rq_cache.loc_cache, x) do
-                locate(pi, x)
-            end
+            a = _rank_query_locate!(rq_cache, x)
             if strict && a == 0
                 error("rectangle_signed_barcode: point not found in encoding")
             end
@@ -2630,10 +2687,8 @@ function _cached_rectangle_packed_tensor_2d(M::PModule,
     cached = _signed_measures_packed_tensor_2d_get(rq_cache, session_cache, key)
     cached === nothing || return cached
 
-    function rank_ab(a::Int, b::Int)
-        return _rank_cache_get!(rq_cache, a, b, () -> rank_map(M, a, b; cache=cc))
-    end
-    r = _fill_rectangle_rank_tensor_packed_from_regions_2d(reg_comp, rank_ab; threads=threads)
+    rank_ab(a::Int, b::Int) = rank_map(M, a, b; cache=cc)
+    r = _fill_rectangle_rank_tensor_packed_from_regions_2d(reg_comp, rank_ab; threads, rq_cache)
     _mobius_inversion_interval_product_packed_2d!(r, size(reg_comp, 1), size(reg_comp, 2); threads=threads)
     return _signed_measures_packed_tensor_2d_set!(
         rq_cache, session_cache, key, _RectanglePackedTensor2D(axes_comp, r)
@@ -2731,9 +2786,7 @@ function _rectangle_region_grid(pi::ZnEncodingMap,
         x = ntuple(Val(N)) do k
             @inbounds axes[k][p[k]]
         end
-        return get!(rq_cache.loc_cache, x) do
-            locate(pi, x)
-        end
+        return _rank_query_locate!(rq_cache, x)
     end
 
     for pCI in CartesianIndices(dims)
@@ -2900,9 +2953,7 @@ function rectangle_signed_barcode(M::PModule, pi::ZnEncodingMap, opts::Invariant
         x = ntuple(Val(N)) do k
             @inbounds axesN[k][p[k]]
         end
-        return get!(rq_cache.loc_cache, x) do
-            locate(pi, x)
-        end
+        return _rank_query_locate!(rq_cache, x)
     end
 
     if meth == :bulk
@@ -2925,16 +2976,8 @@ function rectangle_signed_barcode(M::PModule, pi::ZnEncodingMap, opts::Invariant
             )
         else
             reg = _cached_rectangle_region_grid(pi, axesN, rq_cache, session_cache; strict=strict)
-            r = if pi.n == 2
-                _fill_rectangle_rank_tensor_dense_from_regions_2d(reg::Matrix{Int}, rank_ab; threads=threads)
-            else
-                function rank_idx_reg(p::NTuple{N,Int}, q::NTuple{N,Int}) where {N}
-                    a = @inbounds reg[p...]
-                    b = @inbounds reg[q...]
-                    return (a == 0 || b == 0) ? 0 : rank_ab(a, b)
-                end
-                _fill_rectangle_rank_tensor_dense(rank_idx_reg, dims; threads=threads)
-            end
+            r = _fill_rectangle_rank_tensor_dense_from_regions(
+                reg, (a,b) -> rank_map(M,a,b;cache=cc), rq_cache; threads)
             _mobius_inversion_interval_product!(r, pi.n)
             sb = _extract_rectangles_from_mobius_tensor(
                 r, axesN; drop_zeros=drop_zeros, tol=tol, max_span=max_span, threads=threads
@@ -2965,7 +3008,7 @@ end
 
 @inline function _coarsen_axis_real_to_length(axis::AbstractVector{<:Real}, max_len::Int)
     max_len > 0 || throw(ArgumentError("coarsen_axis: max_len must be > 0"))
-    ax = sort(unique(float.(axis)))
+    ax = sort(unique(axis))
     while length(ax) > max_len
         ax = coarsen_axis(ax)
     end
@@ -2973,7 +3016,7 @@ end
 end
 
 @inline function _grid_encoding_axis_index(coords::AbstractVector{<:Real}, x::Real)
-    xi = float(x)
+    xi = x
     if xi == 0
         xi = zero(xi)
     end
@@ -2983,7 +3026,7 @@ end
 function _grid_encoding_axis_semantic_pairs(coords::AbstractVector{<:Real},
                                             axis_sem::AbstractVector{<:Real})
     idxs = Int[]
-    vals = Float64[]
+    vals = eltype(axis_sem)[]
     last_idx = 0
     for x in axis_sem
         idx = _grid_encoding_axis_index(coords, x)
@@ -2992,7 +3035,7 @@ function _grid_encoding_axis_semantic_pairs(coords::AbstractVector{<:Real},
         end
         if isempty(idxs) || idx != last_idx
             push!(idxs, idx)
-            push!(vals, float(x))
+            push!(vals, x)
             last_idx = idx
         end
     end
@@ -3002,14 +3045,15 @@ end
 @inline function _restrict_grid_axis_to_encoding(axis::AbstractVector{<:Real},
                                                  enc_axis::AbstractVector{<:Real};
                                                  keep_endpoints::Bool=true)
-    ax = sort(unique(float.(axis)))
-    isempty(ax) && return sort(unique(float.(enc_axis)))
+    ax = sort(unique(axis))
+    isempty(ax) && return sort(unique(enc_axis))
     lo = first(ax)
     hi = last(ax)
-    vals = Float64[]
+    T = Union{eltype(axis),eltype(enc_axis)}
+    vals = T[]
     sizehint!(vals, length(enc_axis) + (keep_endpoints ? 2 : 0))
     for v in enc_axis
-        lo <= v <= hi && push!(vals, float(v))
+        lo <= v <= hi && push!(vals, v)
     end
     if keep_endpoints
         push!(vals, lo)
@@ -3040,14 +3084,8 @@ function _rectangle_signed_barcode_grid_axes(pi::GridEncodingMap{N},
         end
     end
 
-    sem_aligned = Vector{Vector{Float64}}(undef, N)
-    idx_aligned = Vector{Vector{Int}}(undef, N)
-    for i in 1:N
-        vals, idxs = _grid_encoding_axis_semantic_pairs(pi.coords[i], axes_sem[i])
-        sem_aligned[i] = vals
-        idx_aligned[i] = idxs
-    end
-    return ntuple(i -> sem_aligned[i], N), ntuple(i -> idx_aligned[i], N)
+    aligned = ntuple(i -> _grid_encoding_axis_semantic_pairs(pi.coords[i], axes_sem[i]), N)
+    return ntuple(i -> aligned[i][1], N), ntuple(i -> aligned[i][2], N)
 end
 
 function _rectangle_signed_barcode_grid_semantic_axes(pi::GridEncodingMap{N},
@@ -3057,9 +3095,10 @@ function _rectangle_signed_barcode_grid_semantic_axes(pi::GridEncodingMap{N},
     death_axes = ntuple(i -> begin
         ax = birth_axes[i]
         n = length(ax)
-        vals = Vector{Float64}(undef, n)
+        T = Union{eltype(ax),Float64}
+        vals = Vector{T}(undef, n)
         @inbounds for j in 1:n
-            vals[j] = j < n ? Float64(ax[j + 1]) : Inf
+            vals[j] = j < n ? ax[j + 1] : Inf
         end
         vals
     end, N)
@@ -3289,6 +3328,7 @@ function rectangle_signed_barcode_rank(sb::RectSignedBarcode{N};
         CI = CartesianIndices(dims)
         if threads && Threads.nthreads() > 1
             Threads.@threads for idx in 1:length(CI)
+                local pCI, p, q, comparable
                 pCI = CI[idx]
                 p = pCI.I
                 for qCI in CI
@@ -3419,7 +3459,7 @@ function rectangle_signed_barcode_kernel(sb1::RectSignedBarcode{N}, sb2::RectSig
         end
         return s
     elseif kind == :gaussian
-        sig2 = float(sigma)^2
+        sig2 = Float64(sigma)^2
         sig2 > 0 || error("rectangle_signed_barcode_kernel: sigma must be > 0")
         emb1, wts1 = _rectangle_signed_barcode_embedding_cached(sb1)
         emb2, wts2 = _rectangle_signed_barcode_embedding_cached(sb2)
@@ -3488,11 +3528,11 @@ function _accumulate_rectangle_image!(img::AbstractMatrix{Float64},
 
     gx = Vector{Float64}(undef, ixhi - ixlo + 1)
     @inbounds for (j, ix) in enumerate(ixlo:ixhi)
-        dx = float(xs[ix]) - cx
+        dx = Float64(xs[ix] - cx)
         gx[j] = exp(-(dx * dx) * inv_two_sig2)
     end
     @inbounds for iy in iylo:iyhi
-        dy = float(ys[iy]) - cy
+        dy = Float64(ys[iy] - cy)
         wy = w * exp(-(dy * dy) * inv_two_sig2)
         for (j, ix) in enumerate(ixlo:ixhi)
             img[ix, iy] += wy * gx[j]
@@ -3511,7 +3551,7 @@ function rectangle_signed_barcode_image(sb::RectSignedBarcode{2};
 )
     xs === nothing && (xs = sb.axes[1])
     ys === nothing && (ys = sb.axes[2])
-    sigmaf = float(sigma)
+    sigmaf = Float64(sigma)
     sigmaf > 0 || error("rectangle_signed_barcode_image: sigma must be > 0")
     inv_two_sig2 = 0.5 / (sigmaf * sigmaf)
     cutoff_radius = _rectangle_image_cutoff_radius(sigmaf, cutoff_tol)
@@ -3525,6 +3565,7 @@ function rectangle_signed_barcode_image(sb::RectSignedBarcode{2};
         chunk_size = cld(nrect, nchunks)
         chunk_imgs = [zeros(Float64, length(xs), length(ys)) for _ in 1:nchunks]
         Threads.@threads for c in 1:nchunks
+            local lo, hi, local_img, cx, cy
             lo = (c - 1) * chunk_size + 1
             hi = min(c * chunk_size, nrect)
             lo > hi && continue

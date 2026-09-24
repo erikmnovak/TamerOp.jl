@@ -1,4 +1,6 @@
 using Test
+# Method-specific documentation lookup needs REPL's doc search even in scripts.
+import REPL
 
 using LinearAlgebra
 using InteractiveUtils
@@ -45,6 +47,704 @@ function _field_tol(field)
     return field.atol + field.rtol
 end
 
+function _derived_window_interval(Q, u, v, field)
+    K = CM.coeff_type(field)
+    return IR.pmodule_from_fringe(one_by_one_fringe(
+        Q, FF.principal_upset(Q, u), FF.principal_downset(Q, v);
+        scalar=one(K), field=field))
+end
+
+function _derived_window_chain(field)
+    P = chain_poset(2)
+    Pop = FF.FinitePoset(transpose(FF.leq_matrix(P)); check=false)
+    interval(Q, u, v) = _derived_window_interval(Q, u, v, field)
+    return (S1=interval(P, 1, 1), S2=interval(P, 2, 2), P1=interval(P, 1, 2),
+            R1=interval(Pop, 1, 1), R2=interval(Pop, 2, 2), Rfull=interval(Pop, 2, 1))
+end
+
+@testset "A74 numerical Ext on rationally conjugated diamond modules" begin
+    # M is the sum of the four simples and the constant projective-injective
+    # module on the diamond. Rational changes of basis mix these summands at
+    # each stalk without changing Ext dimensions (7,4,1).
+    P = diamond_poset()
+    gauge = [QQ[1 1//(v+2); 1//(v+3) 1] for v in 1:4]
+    inverses = inv.(gauge)
+    edge_exact = Dict((u, v) => gauge[v] * QQ[0 0; 0 1] * inverses[u]
+                      for (u, v) in FF.cover_edges(P))
+    real = CM.RealField(Float64; atol=1e-12, rtol=1e-10)
+    rational = CM.QQField()
+    MQ = MD.PModule{QQ}(P, fill(2, 4), edge_exact; field=rational)
+    MR = MD.PModule{Float64}(P, fill(2, 4),
+        Dict(e => Float64.(m) for (e, m) in edge_exact); field=real)
+    basis_conditions = [cond(Float64.(g)) for g in gauge]
+    @test maximum(basis_conditions) < 3
+    opts = OPT.DerivedFunctorOptions(maxdeg=2, model=:projective)
+    AQ, AR = DF.ExtAlgebra(MQ, opts), DF.ExtAlgebra(MR, opts)
+    EQ, ER = AQ.E, AR.E
+    @test ER.complex.field == real
+    @test all(H -> H.field == real, ER.cohom)
+    @test [DF.dim(EQ, t) for t in 0:2] == [7, 4, 1]
+    @test [DF.dim(ER, t) for t in 0:2] == [7, 4, 1]
+    injective = DF.Ext(MR, MR, OPT.DerivedFunctorOptions(maxdeg=2, model=:injective))
+    @test [DF.dim(injective, t) for t in 0:2] == [7, 4, 1]
+    @test injective.complex.field == real
+    @test all(H -> H.field == real, injective.cohom)
+
+    residuals = Float64[]
+    function numerical_identity(X, Y)
+        residual, scale = norm(X - Y), max(norm(X), norm(Y))
+        push!(residuals, residual / max(1.0, scale))
+        @test isfinite(residual) && residual <= real.atol + real.rtol * scale
+    end
+    # The Hom differentials have ranks 3 and 1; both are nonzero, so d^2=0
+    # tests an actual cancellation rather than a zero-dimensional product.
+    differential_conditions = Float64[]
+    for (index, expected_rank) in enumerate((3, 1))
+        @test FL.rank(rational, EQ.complex.d[index]) == expected_rank
+        @test FL.rank(real, ER.complex.d[index]) == expected_rank
+        singular_values = svdvals(Matrix(ER.complex.d[index]))
+        @test singular_values[expected_rank] > 1e-2
+        push!(differential_conditions, singular_values[1] / singular_values[expected_rank])
+        @test differential_conditions[end] < 20
+    end
+    @test iszero(EQ.complex.d[2] * EQ.complex.d[1])
+    numerical_identity(ER.complex.d[2] * ER.complex.d[1], zeros(2, 10))
+    for t in 0:2
+        for coordinate in eachcol(Matrix{Float64}(I, DF.dim(ER, t), DF.dim(ER, t)))
+            cocycle = DF.representative(ER, t, coordinate)
+            numerical_identity(DF.coordinates(ER, t, cocycle), coordinate)
+            numerical_identity(ER.complex.d[t + 1] * cocycle,
+                               zeros(ER.complex.dims[t + 2]))
+        end
+    end
+
+    # Diagonal endomorphisms in the known summand decomposition have explicit
+    # eigenvalues on Ext, regardless of the bases picked by QR or exact RREF.
+    lambdas = QQ[2//3, 3//2, 5//4, 7//6]
+    mu = QQ(4//3)
+    blocks = [gauge[v] * QQ[lambdas[v] 0; 0 mu] * inverses[v] for v in 1:4]
+    fQ = MD.PMorphism(MQ, MQ, blocks)
+    fR = MD.PMorphism(MR, MR, [Float64.(block) for block in blocks])
+    first_eigenvalues = (vcat(lambdas, [mu, mu, lambdas[4]]),
+                        lambdas[[1, 1, 2, 3]], lambdas[[1]])
+    second_eigenvalues = (vcat(lambdas, [mu, lambdas[1], mu]),
+                         lambdas[[2, 3, 4, 4]], lambdas[[4]])
+    first_maps, second_maps = Matrix{Float64}[], Matrix{Float64}[]
+    for t in 0:2
+        FQ = DF.ext_map_first(EQ, EQ, fQ; t)
+        GQ = DF.ext_map_second(EQ, EQ, fQ; t)
+        F = Matrix(DF.ext_map_first(ER, ER, fR; t))
+        G = Matrix(DF.ext_map_second(ER, ER, fR; t))
+        push!(first_maps, F)
+        push!(second_maps, G)
+        for (XQ, X, expected) in ((FQ, F, first_eigenvalues[t+1]),
+                                 (GQ, G, second_eigenvalues[t+1]))
+            for power in 1:length(expected)
+                @test tr(XQ^power) == sum(expected .^ power)
+                numerical_identity([tr(X^power)], [Float64(sum(expected .^ power))])
+            end
+        end
+        numerical_identity(F * G, G * F)
+    end
+
+    @testset "Public Hom on the same nonintegral module" begin
+        HQ, HR = DF.Hom(MQ, MQ), DF.Hom(MR, MR)
+        @test DF.dim(HQ) == 7
+        @test DF.dim(HR) == 7
+        for (H, exact) in ((HQ, true), (HR, false))
+            for morphism in DF.basis(H), (u, v) in FF.cover_edges(P)
+                edge = exact ? edge_exact[(u, v)] : Float64.(edge_exact[(u, v)])
+                left = edge * MD.component(morphism, u)
+                right = MD.component(morphism, v) * edge
+                exact ? (@test left == right) : numerical_identity(left, right)
+            end
+        end
+        flatten(morphism) = reduce(vcat, (vec(MD.component(morphism, v)) for v in 1:4))
+        BQ, BR = hcat(flatten.(DF.basis(HQ))...), hcat(flatten.(DF.basis(HR))...)
+        # A known summand-diagonal endomorphism must reconstruct from each
+        # Hom basis, and the QQ basis transports to the same numerical space.
+        qcoords = FL.solve_fullcolumn(rational, BQ, flatten(fQ))
+        rcoords = FL.solve_fullcolumn(real, BR, flatten(fR))
+        @test BQ * qcoords == flatten(fQ)
+        numerical_identity(BR * rcoords, flatten(fR))
+        transport = FL.solve_fullcolumn(real, BR, Float64.(BQ))
+        numerical_identity(BR * transport, Float64.(BQ))
+        @test FL.rank(real, transport) == 7
+    end
+
+    # Build the bilinear matrix from the public coordinate-product operation.
+    # The second basis index varies fastest, matching kron(x,y).
+    function product_matrix(A, p, q)
+        K = CM.coeff_type(DF.algebra_field(A))
+        left = Matrix{K}(I, DF.dim(A, p), DF.dim(A, p))
+        right = Matrix{K}(I, DF.dim(A, q), DF.dim(A, q))
+        result = zeros(K, DF.dim(A, p+q), size(left, 2) * size(right, 2))
+        for i in axes(left, 2), j in axes(right, 2)
+            result[:, (i-1)*size(right, 2)+j] =
+                DF.multiply(A, p, left[:, i], q, right[:, j])
+        end
+        return result
+    end
+    products = Dict((p, q) => product_matrix(AR, p, q) for p in 0:2 for q in 0:(2-p))
+    unit_coords = DF.unit(AR).coords
+    for p in 0:2, q in 0:(2-p)
+        product = products[(p, q)]
+        Ip, Iq = Matrix{Float64}(I, DF.dim(AR, p), DF.dim(AR, p)),
+                 Matrix{Float64}(I, DF.dim(AR, q), DF.dim(AR, q))
+        numerical_identity(second_maps[p+q+1] * product,
+                           product * kron(second_maps[p+1], Iq))
+        numerical_identity(first_maps[p+q+1] * product,
+                           product * kron(Ip, first_maps[q+1]))
+        numerical_identity(product * kron(first_maps[p+1], Iq),
+                           product * kron(Ip, second_maps[q+1]))
+        if p == 0
+            numerical_identity(product * kron(reshape(unit_coords, :, 1), Iq), Iq)
+        end
+        if q == 0
+            numerical_identity(product * kron(Ip, reshape(unit_coords, :, 1)), Ip)
+        end
+        for r in 0:(2-p-q)
+            Ir = Matrix{Float64}(I, DF.dim(AR, r), DF.dim(AR, r))
+            numerical_identity(products[(p+q, r)] * kron(product, Ir),
+                products[(p, q+r)] * kron(Ip, products[(q, r)]))
+        end
+    end
+    @test FL.rank(real, products[(1, 1)]) == 1
+    @test FL.rank(rational, product_matrix(AQ, 1, 1)) == 1
+
+    @info "A74 numerical Ext diagnostics" basis_conditions=repr(basis_conditions) differential_conditions=repr(differential_conditions) max_scaled_residual=maximum(residuals) atol=real.atol rtol=real.rtol
+end
+
+@testset "Derived functors respect requested degree windows" begin
+    with_fields(FIELDS_FULL) do field
+        (; S1, S2, P1, R1, R2, Rfull) = _derived_window_chain(field)
+        session = CM.SessionCache()
+        workflow_ext = TO.ext(S1, P1; maxdeg=0, cache=session)
+        workflow_tor_first = TO.tor(R2, P1; maxdeg=0, model=:first, cache=session)
+        workflow_tor_second = TO.tor(Rfull, S1; maxdeg=0, model=:second)
+        for result in (workflow_ext, workflow_tor_first, workflow_tor_second)
+            @test DF.degree_range(result) == 0:0
+            @test DF.dim(result, 0) == 0
+            @test_throws ArgumentError DF.dim(result, 1)
+        end
+        # 0 -> S2 -> P1 -> S1 -> 0 is the unique nonsplit extension.
+        # Hom(S1,P1) and Hom(P1,S2) vanish: retaining the next differential
+        # is necessary even when only degree zero is requested.
+        ext_cases = ((S1, P1, [0, 0, 0]), (P1, S2, [0, 0, 0]),
+                     (S1, S2, [0, 1, 0]), (S1, S1, [1, 0, 0]))
+        for model in (:projective, :injective, :unified), (M, N, expected) in ext_cases
+            for d in 0:2
+                E = DF.Ext(M, N, OPT.DerivedFunctorOptions(maxdeg=d, model=model))
+                @test DF.degree_range(E) == 0:d
+                @test DF.dim(E, -1) == 0
+                @test_throws ArgumentError DF.dim(E, d + 1)
+                @test [DF.dim(E, t) for t in 0:d] == expected[1:(d + 1)]
+                @test [length(DF.basis(E, t)) for t in 0:d] == expected[1:(d + 1)]
+                if model !== :unified
+                    @test E.complex.tmax >= d + 1
+                    @test length(E.cohom) == d + 1
+                    for t in 0:d
+                        @test CC.cohomology(E.complex; degree=t, output=:dims) == expected[t + 1]
+                        @test CC.cohomology(E.complex; degree=t, output=:full).dimH == expected[t + 1]
+                    end
+                end
+            end
+        end
+
+        # Tensoring the short projective resolutions above gives these exact
+        # Tor groups. Both resolution choices must retain the incoming boundary.
+        tor_cases = ((R2, P1, [0, 0, 0]), (Rfull, S1, [0, 0, 0]),
+                     (R2, S1, [0, 1, 0]), (R1, S1, [1, 0, 0]))
+        for model in (:first, :second), (R, L, expected) in tor_cases
+            for d in 0:2
+                T = DF.Tor(R, L, OPT.DerivedFunctorOptions(maxdeg=d, model=model))
+                @test DF.degree_range(T) == 0:d
+                @test DF.dim(T, -1) == 0
+                @test_throws ArgumentError DF.dim(T, d + 1)
+                @test [DF.dim(T, s) for s in 0:d] == expected[1:(d + 1)]
+                @test [length(DF.basis(T, s)) for s in 0:d] == expected[1:(d + 1)]
+                @test length(T.dims) >= d + 2
+                @test length(T.homol) == d + 1
+            end
+        end
+
+    end
+end
+
+@testset "Derived top-degree classes preserve maps and comparisons" begin
+    with_fields(FIELDS_FULL) do field
+        K = CM.coeff_type(field)
+        (; S1, S2, R2) = _derived_window_chain(field)
+        function test_equal_matrix(A, B)
+            if _is_real_field(field)
+                @test isapprox(Matrix(A), Matrix(B); atol=field.atol, rtol=field.rtol)
+            else
+                @test A == B
+            end
+        end
+        scalar_map(M, c) = MD.PMorphism(M, M, [c .* CM.eye(field, d) for d in M.dims])
+        for canon in (:projective, :injective)
+            E = DF.Ext(S1, S2, OPT.DerivedFunctorOptions(maxdeg=1, model=:unified, canon=canon))
+            @test DF.degree_range(E) == 0:1
+            @test [DF.dim(E, t) for t in 0:1] == [0, 1]
+            forward = DF.comparison_isomorphism(E, 1; from=:projective, to=:injective)
+            backward = DF.comparison_isomorphism(E, 1; from=:injective, to=:projective)
+            test_equal_matrix(backward * forward, CM.eye(field, 1))
+        end
+
+        # Nonzero top-degree classes retain their coordinates and induced maps.
+        # The scalar 2 also checks a zero map in characteristic 2.
+        c = CM.coerce(field, 2)
+        for model in (:projective, :injective, :unified)
+            E = DF.Ext(S1, S2, OPT.DerivedFunctorOptions(maxdeg=1, model=model))
+            test_equal_matrix(DF.ext_map_first(E, E, IR.id_morphism(S1); t=1), CM.eye(field, 1))
+            test_equal_matrix(DF.ext_map_first(E, E, scalar_map(S1, c); t=1), c .* CM.eye(field, 1))
+            test_equal_matrix(DF.ext_map_second(E, E, scalar_map(S2, c); t=1), c .* CM.eye(field, 1))
+            coords = K[one(K)]
+            recovered = DF.coordinates(E, 1, DF.representative(E, 1, coords))
+            @test _is_real_field(field) ? isapprox(recovered, coords; atol=field.atol, rtol=field.rtol) : recovered == coords
+        end
+        for model in (:first, :second)
+            T = DF.Tor(R2, S1, OPT.DerivedFunctorOptions(maxdeg=1, model=model))
+            test_equal_matrix(DF.tor_map_first(T, T, scalar_map(R2, c); s=1), c .* CM.eye(field, 1))
+            test_equal_matrix(DF.tor_map_second(T, T, IR.id_morphism(S1); s=1), CM.eye(field, 1))
+            test_equal_matrix(DF.tor_map_second(T, T, scalar_map(S1, c); s=1), c .* CM.eye(field, 1))
+            coords = K[one(K)]
+            recovered = DF.coordinates(T, 1, DF.representative(T, 1, coords))
+            @test _is_real_field(field) ? isapprox(recovered, coords; atol=field.atol, rtol=field.rtol) : recovered == coords
+        end
+
+    end
+end
+
+@testset "Real particular solves preserve coefficient pivots and residuals" begin
+    field = CM.RealField(Float64; rtol=1e-10, atol=1e-12)
+    solve(A, B) = DF.Utils.solve_particular(field, A, B)
+    planned(A, B) = DF.Functoriality._solve_particular(
+        DF.Functoriality._particular_solve_plan(field, A), B)
+    # An augmented QR can incorrectly pivot on the larger RHS column.
+    # Scaling A must change the solution, not the meaning of a pivot row.
+    @test solve([1.0;;], [2.0;;]) == [2.0;;]
+    @test solve([2.0;;], [2.0;;]) == [1.0;;]
+
+    A = [1.0 2.0; 2.0 4.0]
+    B = [3.0 0.0 -1.0; 6.0 0.0 -2.0]
+    X = solve(A, B)
+    @test size(X) == (2, 3)
+    @test isapprox(A * X, B; atol=field.atol, rtol=field.rtol)
+    @test isapprox(planned(A, B), X; atol=field.atol, rtol=field.rtol)
+    @test isapprox(solve(sparse(A), sparse(B)), X; atol=field.atol, rtol=field.rtol)
+    @test isapprox(planned(sparse(A), sparse(B)), X; atol=field.atol, rtol=field.rtol)
+    # The second RHS is outside the column space; a compatible first RHS
+    # must not hide it, including in the cached-plan route.
+    incompatible = [3.0 1.0; 6.0 3.0]
+    @test_throws ErrorException solve(A, incompatible)
+    @test_throws ErrorException planned(A, incompatible)
+
+    # A moderate rank-two square system exercises the same free-variable
+    # convention where a direct square solve would be singular.
+    A9 = zeros(9, 9)
+    A9[1, :] = [1.0, 0.0, 2.0, -1.0, 0.0, 3.0, 0.0, 1.0, 0.0]
+    A9[2, :] = [0.0, 1.0, 0.0, 2.0, -2.0, 0.0, 1.0, 0.0, 3.0]
+    B9 = zeros(9, 3)
+    B9[1:2, :] = [2.0 -1.0 0.0; -3.0 4.0 0.0]
+    X9 = solve(A9, B9)
+    @test size(X9) == (9, 3)
+    @test isapprox(A9 * X9, B9; atol=field.atol, rtol=field.rtol)
+    @test isapprox(planned(A9, B9), X9; atol=field.atol, rtol=field.rtol)
+    @test isapprox(solve(sparse(A9), B9), X9; atol=field.atol, rtol=field.rtol)
+    bad9 = copy(B9)
+    bad9[3, 2] = 1.0
+    @test_throws ErrorException solve(A9, bad9)
+    @test_throws ErrorException planned(A9, bad9)
+
+    for (empty_A, empty_B, shape) in ((zeros(2, 3), zeros(2, 2), (3, 2)),
+            (zeros(2, 0), zeros(2, 2), (0, 2)),
+            (zeros(0, 3), zeros(0, 2), (3, 2)),
+            (ones(2, 3), zeros(2, 0), (3, 0)))
+        @test solve(empty_A, empty_B) == zeros(shape)
+        @test planned(empty_A, empty_B) == zeros(shape)
+    end
+    @test_throws ErrorException solve(zeros(2, 3), ones(2, 1))
+    @test_throws ErrorException planned(zeros(2, 3), ones(2, 1))
+    @test_throws ErrorException solve(zeros(2, 0), ones(2, 1))
+    @test_throws DimensionMismatch solve(ones(2, 1), ones(3, 1))
+    @test_throws DimensionMismatch planned(ones(2, 1), ones(3, 1))
+
+    tolerant = CM.RealField(Float64; rtol=0.0, atol=1e-8)
+    tolerated = DF.Utils.solve_particular(tolerant, [1.0; 0.0;;], [2.0; 5e-9;;])
+    @test isapprox(tolerated, [2.0;;]; atol=1e-8, rtol=0.0)
+    @test_throws ErrorException DF.Utils.solve_particular(tolerant, [1.0; 0.0;;], [2.0; 2e-8;;])
+    @test DF.Utils.solve_particular(tolerant, [5e-9;;], [5e-9;;]) == [0.0;;]
+    @test_throws ErrorException DF.Utils.solve_particular(tolerant, [5e-9;;], [2e-8;;])
+end
+
+@testset "Hom solve caches validate basis identity and field contracts" begin
+    functor = DF.Functoriality
+    finite = CM.F3()
+    real = CM.RealField(Float64; rtol=1e-10, atol=1e-12)
+    loose = CM.RealField(Float64; rtol=0.0, atol=1e-8)
+    M3 = _derived_window_chain(finite).S1
+    Mr = _derived_window_chain(real).S1
+    Mother = _derived_window_chain(real).S1
+    Mloose = _derived_window_chain(loose).S1
+    H3, Hr, Hother, Hloose = DF.Hom(M3, M3), DF.Hom(Mr, Mr),
+        DF.Hom(Mother, Mother), DF.Hom(Mloose, Mloose)
+    # Sharing this exact basis is valid for both tolerance choices. Only the
+    # field contract changes, so the cached solver must still be rebuilt.
+    Hloose.basis_matrix = Hr.basis_matrix
+    f3 = MD.PMorphism(M3, M3, [CM.coerce(finite, 2) .* CM.eye(finite, d) for d in M3.dims])
+    fr = MD.PMorphism(Mr, Mr, [2.0 .* CM.eye(real, d) for d in Mr.dims])
+    old_plan = functor._FUNCTORIALITY_USE_HOM_BASIS_SOLVE_PLAN_CACHE[]
+    old_workspace = functor._FUNCTORIALITY_USE_HOM_SOLVE_WORKSPACE_CACHE[]
+    try
+        for use_plan in (true, false)
+            functor._FUNCTORIALITY_USE_HOM_BASIS_SOLVE_PLAN_CACHE[] = use_plan
+            functor._FUNCTORIALITY_USE_HOM_SOLVE_WORKSPACE_CACHE[] = !use_plan
+            store, cache_lock, entry = use_plan ?
+                (functor._HOM_BASIS_SOLVE_PLAN_CACHE, functor._HOM_BASIS_SOLVE_PLAN_LOCK,
+                    functor._hom_solve_plan_entry) :
+                (functor._HOM_SOLVE_WORKSPACE_CACHE, functor._HOM_SOLVE_WORKSPACE_LOCK,
+                    functor._hom_solve_workspace_entry)
+            key3, keyr, keyother = UInt(objectid(H3.basis_matrix)),
+                UInt(objectid(Hr.basis_matrix)), UInt(objectid(Hother.basis_matrix))
+            saved = lock(cache_lock) do
+                Dict(key => get(store, key, nothing) for key in (key3, keyr, keyother))
+            end
+            read_payload(key) = lock(() -> store[key], cache_lock)
+            write_payload(key, value) = lock(() -> (store[key] = value), cache_lock)
+            try
+                finite_entry = entry(H3)
+                @test entry(H3) === finite_entry
+                finite_payload = read_payload(key3)
+                # Deterministically emulate reuse of a collected matrix's
+                # integer objectid across fields, without depending on GC.
+                for induce in (functor._precompose_matrix, functor._postcompose_matrix)
+                    write_payload(keyr, finite_payload)
+                    @test isapprox(induce(Hr, Hr, fr), [2.0;;]; atol=real.atol, rtol=real.rtol)
+                    real_entry = entry(Hr)
+                    @test use_plan ? real_entry.plan isa functor._AbstractParticularSolvePlan{Float64} :
+                        real_entry isa functor._HomSolveWorkspaceEntry{Float64}
+                    @test entry(Hr) === real_entry
+                    @test induce(H3, H3, f3) == CM.coerce(finite, 2) .* CM.eye(finite, 1)
+                end
+
+                real_entry = entry(Hr)
+                write_payload(keyother, read_payload(keyr))
+                @test entry(Hother) !== real_entry
+                @test entry(Hother) === entry(Hother)
+                # A dead weak identity witness must invalidate even a value
+                # whose coefficient type and field happen to be correct.
+                write_payload(keyr, functor._HomSolveCacheEntry(WeakRef(nothing), real, real_entry))
+                rebuilt = entry(Hr)
+                @test rebuilt !== real_entry
+                @test entry(Hr) === rebuilt
+                loose_entry = entry(Hloose)
+                @test loose_entry !== rebuilt
+                @test entry(Hloose) === loose_entry
+                @test entry(Hr) !== loose_entry
+                @test isapprox(functor._precompose_matrix(Hr, Hr, fr), [2.0;;];
+                    atol=real.atol, rtol=real.rtol)
+            finally
+                lock(cache_lock) do
+                    for (key, value) in saved
+                        value === nothing ? delete!(store, key) : (store[key] = value)
+                    end
+                end
+            end
+        end
+        functor._FUNCTORIALITY_USE_HOM_BASIS_SOLVE_PLAN_CACHE[] = false
+        functor._FUNCTORIALITY_USE_HOM_SOLVE_WORKSPACE_CACHE[] = false
+        for induce in (functor._precompose_matrix, functor._postcompose_matrix)
+            @test isapprox(induce(Hr, Hr, fr), [2.0;;]; atol=real.atol, rtol=real.rtol)
+            @test induce(H3, H3, f3) == CM.coerce(finite, 2) .* CM.eye(finite, 1)
+        end
+    finally
+        functor._FUNCTORIALITY_USE_HOM_BASIS_SOLVE_PLAN_CACHE[] = old_plan
+        functor._FUNCTORIALITY_USE_HOM_SOLVE_WORKSPACE_CACHE[] = old_workspace
+    end
+end
+
+@testset "Derived long exact sequences certify connecting degrees" begin
+    with_fields(FIELDS_FULL) do field
+        (; S1, S2, P1, R1, R2, Rfull) = _derived_window_chain(field)
+        # The nonsplit short exact sequences give isomorphisms at their
+        # connecting maps. This also certifies the extra target degree of Ext LES.
+        inclusion = MD.PMorphism(S2, P1, [CM.zeros(field, 1, 0), CM.eye(field, 1)])
+        projection = MD.PMorphism(P1, S1, [CM.eye(field, 1), CM.zeros(field, 0, 1)])
+        inclusion_op = MD.PMorphism(R1, Rfull, [CM.eye(field, 1), CM.zeros(field, 1, 0)])
+        projection_op = MD.PMorphism(Rfull, R2, [CM.zeros(field, 0, 1), CM.eye(field, 1)])
+        for d in 0:1
+            second = DF.ExtLongExactSequenceSecond(S1, S2, P1, S1, inclusion, projection,
+                OPT.DerivedFunctorOptions(maxdeg=d))
+            first = DF.ExtLongExactSequenceFirst(S2, P1, S1, S2, inclusion, projection,
+                OPT.DerivedFunctorOptions(maxdeg=d))
+            for les in (second, first)
+                @test DF.degree_range(les) == 0:d
+                @test DF.degree_range(les.EA) == DF.degree_range(les.EC) == 0:(d + 1)
+                @test [DF.dim(les.EB, t) for t in 0:(d + 1)] == zeros(Int, d + 2)
+                @test size(les.delta[1]) == (1, 1)
+                @test FL.rank(field, les.delta[1]) == 1
+                @test all(iszero, les.iH[1]) && all(iszero, les.pH[1])
+            end
+            @test [DF.dim(second.EA, t) for t in 0:(d + 1)] == [Int(t == 1) for t in 0:(d + 1)]
+            @test [DF.dim(first.EC, t) for t in 0:(d + 1)] == [Int(t == 1) for t in 0:(d + 1)]
+            tor_second = DF.TorLongExactSequenceSecond(R2, inclusion, projection,
+                OPT.DerivedFunctorOptions(maxdeg=d))
+            tor_first = DF.TorLongExactSequenceFirst(S1, inclusion_op, projection_op,
+                OPT.DerivedFunctorOptions(maxdeg=d))
+            for les in (tor_second, tor_first)
+                @test DF.degree_range(les) == 0:d
+                @test DF.degree_range(les.TorA) == DF.degree_range(les.TorC) == 0:d
+                @test [DF.dim(les.TorA, s) for s in 0:d] == [Int(s == 0) for s in 0:d]
+                @test [DF.dim(les.TorB, s) for s in 0:d] == zeros(Int, d + 1)
+                @test [DF.dim(les.TorC, s) for s in 0:d] == [Int(s == 1) for s in 0:d]
+                @test size(les.delta[1], 1) == 0
+                if d == 1
+                    @test size(les.delta[2]) == (1, 1)
+                    @test FL.rank(field, les.delta[2]) == 1
+                end
+            end
+        end
+
+    end
+end
+
+@testset "A61 algebra workload survives clearing training caches" begin
+    with_fields(FIELDS_FULL) do field
+        (; S1, P1) = _derived_window_chain(field)
+        Msum = MD.direct_sum(S1, P1)
+        K = CM.coeff_type(field)
+        for pass in 1:2
+            E = TamerOp.Workflow.ext(Msum, Msum; maxdeg=1)
+            @test [DF.dim(E, t) for t in 0:1] == [3, 0]
+            A = DF.ExtAlgebra(Msum, OPT.DerivedFunctorOptions(maxdeg=1))
+            @test [DF.dim(A, t) for t in 0:1] == [3, 0]
+            x = DF.element(A, 0, K[1, 2, 1])
+            for product in (one(A) * x, x * one(A))
+                @test field isa CM.RealField ?
+                    isapprox(product.coords, x.coords; atol=field.atol, rtol=field.rtol) :
+                    product.coords == x.coords
+            end
+            DF.Resolutions._clear_resolution_plan_caches!()
+            DF.Functoriality._clear_functoriality_caches!()
+            IR._clear_indicator_prefix_caches!()
+            FL._clear_fullcolumn_cache!()
+            FL._clear_f2_fullcolumn_cache!()
+            FL._clear_f3_fullcolumn_cache!()
+            for name in (:_ACTIVE_INDEX_PLAN_CACHE, :_BASE_VERTEX_GROUPS_CACHE,
+                         :_ACTIVE_UPSET_VECTOR_CACHE, :_DOWNSET_HOM_STRUCTURE_CACHE,
+                         :_DOWNSET_POSTCOMPOSE_SYSTEM_CACHE)
+                @test isempty(getfield(DF.Resolutions, name))
+            end
+        end
+    end
+end
+
+@testset "Ext algebra uses certified degree-zero endomorphisms" begin
+    with_fields(FIELDS_FULL) do field
+        K = CM.coeff_type(field)
+        (; S1, P1) = _derived_window_chain(field)
+        c = CM.coerce(field, 2)
+        # End(S1 + P1) has dimension 3. A truncated projective presentation
+        # incorrectly counts the nonexistent map S1 -> P1 as a fourth map.
+        Msum = MD.direct_sum(S1, P1)
+        for d in 0:1
+            algebra = DF.ExtAlgebra(Msum, OPT.DerivedFunctorOptions(maxdeg=d))
+            @test DF.degree_range(algebra) == 0:d
+            @test [DF.dim(algebra, t) for t in 0:d] == [t == 0 ? 3 : 0 for t in 0:d]
+            x = DF.element(algebra, 0, K[one(K), c, one(K)])
+            left = (one(algebra) * x).coords
+            right = (x * one(algebra)).coords
+            @test _is_real_field(field) ? isapprox(left, x.coords; atol=field.atol, rtol=field.rtol) : left == x.coords
+            @test _is_real_field(field) ? isapprox(right, x.coords; atol=field.atol, rtol=field.rtol) : right == x.coords
+        end
+
+    end
+end
+
+@testset "Derived degree-two diamond relation and vanishing oracles" begin
+    with_fields(FIELDS_FULL) do field
+        interval(Q, u, v) = _derived_window_interval(Q, u, v, field)
+        # The diamond has one relation in degree two. Its projective resolution
+        # of S1 has terms P1, P2 + P3, P4, so the following answers are explicit.
+        Q = diamond_poset()
+        Qop = FF.FinitePoset(transpose(FF.leq_matrix(Q)); check=false)
+        A, B = interval(Q, 1, 1), interval(Q, 4, 4)
+        P2, I3 = interval(Q, 2, 4), interval(Q, 1, 3)
+        R4 = interval(Qop, 4, 4)
+        for model in (:projective, :injective), d in 1:3
+            E = DF.Ext(A, B, OPT.DerivedFunctorOptions(maxdeg=d, model=model))
+            @test DF.degree_range(E) == 0:d
+            @test [DF.dim(E, t) for t in 0:d] == [Int(t == 2) for t in 0:d]
+            # These cochain complexes have a nonzero degree-one outgoing map.
+            for (M, N) in ((A, P2), (I3, B))
+                Z = DF.Ext(M, N, OPT.DerivedFunctorOptions(maxdeg=d, model=model))
+                @test [DF.dim(Z, t) for t in 0:d] == zeros(Int, d + 1)
+            end
+        end
+        for model in (:first, :second), d in 1:3
+            T = DF.Tor(R4, A, OPT.DerivedFunctorOptions(maxdeg=d, model=model))
+            @test DF.degree_range(T) == 0:d
+            @test [DF.dim(T, s) for s in 0:d] == [Int(s == 2) for s in 0:d]
+            Z = DF.Tor(R4, P2, OPT.DerivedFunctorOptions(maxdeg=d, model=model))
+            @test [DF.dim(Z, s) for s in 0:d] == zeros(Int, d + 1)
+        end
+    end
+end
+
+@testset "Explicit resolutions certify and cap derived degree windows" begin
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+    P = chain_poset(2)
+    Pop = FF.FinitePoset(transpose(FF.leq_matrix(P)); check=false)
+    interval(Q, u, v) = IR.pmodule_from_fringe(one_by_one_fringe(
+        Q, FF.principal_upset(Q, u), FF.principal_downset(Q, v);
+        scalar=one(K), field=field))
+    S1, S2, P1 = interval(P, 1, 1), interval(P, 2, 2), interval(P, 1, 2)
+    R2 = interval(Pop, 2, 2)
+    resP = DF.projective_resolution(S1, OPT.ResolutionOptions(maxlen=3))
+    resI = DF.injective_resolution(S2, OPT.ResolutionOptions(maxlen=3))
+    resR = DF.projective_resolution(R2, OPT.ResolutionOptions(maxlen=3))
+    @test DF.degree_range(DF.Ext(resP, S2)) == 0:2
+    @test DF.degree_range(DF.ExtInjective(S1, resI)) == 0:2
+    for d in 0:2
+        E = DF.Ext(resP, S2; maxdeg=d)
+        I = DF.ExtInjective(S1, resI; maxdeg=d)
+        @test DF.degree_range(E) == DF.degree_range(I) == 0:d
+        @test [DF.dim(E, t) for t in 0:d] == [Int(t == 1) for t in 0:d]
+        @test [DF.dim(I, t) for t in 0:d] == [Int(t == 1) for t in 0:d]
+        for (model, res) in ((:first, resR), (:second, resP))
+            T = DF.Tor(R2, S1, OPT.DerivedFunctorOptions(maxdeg=d, model=model); res=res)
+            @test DF.degree_range(T) == 0:d
+            @test [DF.dim(T, s) for s in 0:d] == [Int(s == 1) for s in 0:d]
+        end
+    end
+    @test_throws ArgumentError DF.Ext(resP, S2; maxdeg=-1)
+    @test_throws ArgumentError DF.Ext(resP, S2; maxdeg=3)
+    @test_throws ArgumentError DF.ExtInjective(S1, resI; maxdeg=-1)
+    @test_throws ArgumentError DF.ExtInjective(S1, resI; maxdeg=3)
+    for model in (:projective, :injective, :unified)
+        @test_throws ArgumentError DF.Ext(S1, S2, OPT.DerivedFunctorOptions(maxdeg=-1, model=model))
+    end
+    for model in (:first, :second)
+        @test_throws ArgumentError DF.Tor(R2, S1, OPT.DerivedFunctorOptions(maxdeg=-1, model=model))
+    end
+    shortP = DF.projective_resolution(S1, OPT.ResolutionOptions(maxlen=0))
+    shortI = DF.injective_resolution(S2, OPT.ResolutionOptions(maxlen=0))
+    shortR = DF.projective_resolution(R2, OPT.ResolutionOptions(maxlen=0))
+    @test_throws ArgumentError DF.Ext(shortP, P1)
+    @test_throws ArgumentError DF.Ext(shortP, P1; maxdeg=0)
+    @test_throws ArgumentError DF.ExtInjective(P1, shortI)
+    @test_throws ArgumentError DF.ExtInjective(P1, shortI; maxdeg=0)
+    for (model, res) in ((:first, shortR), (:second, shortP))
+        @test_throws ArgumentError DF.Tor(R2, S1, OPT.DerivedFunctorOptions(maxdeg=0, model=model); res=res)
+    end
+    for (model, res) in ((:first, resR), (:second, resP))
+        @test_throws ArgumentError DF.Tor(R2, S1, OPT.DerivedFunctorOptions(maxdeg=3, model=model); res=res)
+    end
+end
+
+@testset "Derived degree windows survive cache reuse and reset" begin
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+    P = chain_poset(2)
+    Pop = FF.FinitePoset(transpose(FF.leq_matrix(P)); check=false)
+    interval(Q, u, v) = IR.pmodule_from_fringe(one_by_one_fringe(
+        Q, FF.principal_upset(Q, u), FF.principal_downset(Q, v);
+        scalar=one(K), field=field))
+    S1, S2, R2 = interval(P, 1, 1), interval(P, 2, 2), interval(Pop, 2, 2)
+    for model in (:projective, :injective, :unified)
+        cache = CM.ResolutionCache()
+        @test isempty(cache.ext_projective) && isempty(cache.ext_injective) && isempty(cache.ext_unified)
+        small = OPT.DerivedFunctorOptions(maxdeg=0, model=model)
+        large = OPT.DerivedFunctorOptions(maxdeg=2, model=model)
+        E0 = DF.Ext(S1, S2, small; cache=cache)
+        @test DF.Ext(S1, S2, small; cache=cache) === E0
+        E2 = DF.Ext(S1, S2, large; cache=cache)
+        @test E2 !== E0
+        @test DF.degree_range(E0) == 0:0
+        @test DF.degree_range(E2) == 0:2
+        @test [DF.dim(E2, t) for t in 0:2] == [0, 1, 0]
+        @test DF.dim(E0, 0) == 0
+        CM._clear_resolution_cache!(cache)
+        @test isempty(cache.ext_projective) && isempty(cache.ext_injective) && isempty(cache.ext_unified)
+        Enew = DF.Ext(S1, S2, small; cache=cache)
+        @test Enew !== E0
+        @test DF.dim(Enew, 0) == 0
+    end
+    for model in (:first, :second)
+        cache = CM.ResolutionCache()
+        @test isempty(cache.tor_first) && isempty(cache.tor_second)
+        small = OPT.DerivedFunctorOptions(maxdeg=0, model=model)
+        large = OPT.DerivedFunctorOptions(maxdeg=2, model=model)
+        T0 = DF.Tor(R2, S1, small; cache=cache)
+        @test DF.Tor(R2, S1, small; cache=cache) === T0
+        T2 = DF.Tor(R2, S1, large; cache=cache)
+        @test T2 !== T0
+        @test DF.degree_range(T0) == 0:0
+        @test DF.degree_range(T2) == 0:2
+        @test [DF.dim(T2, s) for s in 0:2] == [0, 1, 0]
+        @test DF.dim(T0, 0) == 0
+        CM._clear_resolution_cache!(cache)
+        @test isempty(cache.tor_first) && isempty(cache.tor_second)
+        Tnew = DF.Tor(R2, S1, small; cache=cache)
+        @test Tnew !== T0
+        @test DF.dim(Tnew, 0) == 0
+    end
+end
+
+@testset "A12 module inspection preserves stored data" begin
+    n = 4096
+    field = CM.F3()
+    K = CM.coeff_type(field)
+    P = FF.ProductOfChainsPoset((n,))
+    # Zero structure maps with stalk dimensions repeating 0,1,2,3 give a
+    # valid representation with known total 6144 and identity morphism.
+    stalks = [mod(i - 1, 4) for i in 1:n]
+    M = MD.PModule{K}(P, stalks, Dict{Tuple{Int,Int},Matrix{K}}(); field=field)
+    f = MD.id_morphism(M)
+    cache_counts = module_object -> Tuple(
+        (name, length(getfield(module_object, name).values))
+        for name in fieldnames(typeof(module_object))
+        if getfield(module_object, name) isa CM._TaskLocalCache)
+    before = cache_counts(M)
+    for _ in 1:2
+        dM = TOA.describe(M)
+        df = TOA.describe(f)
+        @test dM.vertices == n
+        @test dM.total_dimension == 6144
+        @test dM.maximum_stalk == 3
+        @test dM.edge_count == 4095
+        @test df.domain_total_dimension == 6144
+        @test df.codomain_total_dimension == 6144
+        @test df.nonzero_components == 3072
+        @test occursin("total_dim=6144", sprint(show, M))
+        @test occursin("nonzero_components=3072", sprint(show, f))
+        @test occursin("max stalk dimension: 3", sprint(show, MIME"text/plain"(), M))
+        @test occursin("domain total dimension: 6144", sprint(show, MIME"text/plain"(), f))
+        @test cache_counts(M) == before
+    end
+    # Full dimensions explicitly return owned vectors. Passive summaries
+    # expose only scalars, so they need no duplicate of either stalk vector.
+    dims = TOA.dimensions(M)
+    @test dims.stalks == stalks
+    @test dims.stalks !== stalks
+    dims.stalks[1] = 100
+    @test MD.dim_at(M, 1) == 0
+    TOA.dimensions(M)
+    TOA.dimensions(f)
+    TOA.describe(M)
+    TOA.describe(f)
+    module_dimensions_bytes = @allocated TOA.dimensions(M)
+    module_summary_bytes = @allocated TOA.describe(M)
+    morphism_dimensions_bytes = @allocated TOA.dimensions(f)
+    morphism_summary_bytes = @allocated TOA.describe(f)
+    @test module_summary_bytes + div(n * sizeof(Int), 2) < module_dimensions_bytes
+    @test morphism_summary_bytes + n * sizeof(Int) < morphism_dimensions_bytes
+    @test cache_counts(M) == before
+end
+
 @testset "Modules UX surface" begin
     field = CM.QQField()
     K = CM.coeff_type(field)
@@ -86,10 +786,10 @@ end
     @test occursin("stalk-dimension query", string(@doc MD.dim_at))
     @test occursin("named-keyword companion", string(@doc MD.structure_map))
     @test occursin("one component map per vertex", string(@doc MD.check_morphism_data))
-    @test occursin("dimension summaries", string(@doc TOA.dimensions(M)))
-    @test occursin("canonical basis", string(@doc TOA.basis(M, 1)))
-    @test occursin("compact mathematical summary", string(@doc TOA.describe(M)))
-    @test occursin("identity coordinate convention", string(@doc TOA.coordinates(M, 1, K[one(K)])))
+    @test occursin("dimension summaries", string(Base.Docs.doc(TOA.dimensions, Tuple{typeof(M)})))
+    @test occursin("canonical basis", string(Base.Docs.doc(TOA.basis, Tuple{typeof(M),Int})))
+    @test occursin("compact mathematical summary", string(Base.Docs.doc(TOA.describe, Tuple{typeof(M)})))
+    @test occursin("identity coordinate convention", string(Base.Docs.doc(TOA.coordinates, Tuple{typeof(M),Int,Vector{K}})))
     @test occursin("PModule", sprint(show, MIME"text/plain"(), M))
     @test occursin("PMorphism", sprint(show, MIME"text/plain"(), f))
 
@@ -133,30 +833,16 @@ end
         ext11 = DF.ext_dimensions_via_indicator_resolutions(S1, S1; maxlen=3)
         ext22 = DF.ext_dimensions_via_indicator_resolutions(S2, S2; maxlen=3)
 
-        if _is_real_field(field)
-            # Real-field Ext/Hom dimensions are numerical (rank-threshold dependent):
-            # keep stability checks but do not enforce exact algebraic dimensions.
-            @test all(v >= 0 for v in values(ext12))
-            @test all(v >= 0 for v in values(ext21))
-            @test all(v >= 0 for v in values(ext11))
-            @test all(v >= 0 for v in values(ext22))
-            @test get(ext11, 0, 0) >= 1
-            @test get(ext22, 0, 0) >= 1
-        else
-            @test get(ext12, 0, 0) == 0
-            @test get(ext12, 1, 0) == 1
-            @test get(ext21, 0, 0) == 0
-            @test get(ext21, 1, 0) == 0
-            @test get(ext11, 0, 0) == 1
-            @test get(ext11, 1, 0) == 0
-            @test get(ext22, 0, 0) == 1
-            @test get(ext22, 1, 0) == 0
-
-            @test get(ext12, 0, 0) == FF.hom_dimension(S1, S2)
-            @test get(ext21, 0, 0) == FF.hom_dimension(S2, S1)
-            @test get(ext11, 0, 0) == FF.hom_dimension(S1, S1)
-            @test get(ext22, 0, 0) == FF.hom_dimension(S2, S2)
-        end
+        # These zero/identity matrices are separated from every numerical
+        # rank threshold. The same hand-derived answer applies over reals.
+        @test [get(ext12, t, 0) for t in 0:3] == [0, 1, 0, 0]
+        @test [get(ext21, t, 0) for t in 0:3] == [0, 0, 0, 0]
+        @test [get(ext11, t, 0) for t in 0:3] == [1, 0, 0, 0]
+        @test [get(ext22, t, 0) for t in 0:3] == [1, 0, 0, 0]
+        @test get(ext12, 0, 0) == FF.hom_dimension(S1, S2)
+        @test get(ext21, 0, 0) == FF.hom_dimension(S2, S1)
+        @test get(ext11, 0, 0) == FF.hom_dimension(S1, S1)
+        @test get(ext22, 0, 0) == FF.hom_dimension(S2, S2)
     end
 end
 
@@ -170,13 +856,13 @@ end
         M = IR.pmodule_from_fringe(H)
         res = TO.ResolutionOptions(maxlen=2)
 
-        R_serial = TO.projective_resolution(M, res; threads=false)
-        R_thread = TO.projective_resolution(M, res; threads=true)
+        R_serial = DF.projective_resolution(M, res; threads=false)
+        R_thread = DF.projective_resolution(M, res; threads=true)
         @test R_thread.gens == R_serial.gens
         @test R_thread.d_mat == R_serial.d_mat
 
-        E_serial = TO.injective_resolution(M, res; threads=false)
-        E_thread = TO.injective_resolution(M, res; threads=true)
+        E_serial = DF.injective_resolution(M, res; threads=false)
+        E_thread = DF.injective_resolution(M, res; threads=true)
         @test E_thread.gens == E_serial.gens
         @test length(E_thread.d_mor) == length(E_serial.d_mor)
         for i in eachindex(E_thread.d_mor)
@@ -295,7 +981,7 @@ end
         M = IR.pmodule_from_fringe(Hm)
         N = IR.pmodule_from_fringe(Hn)
 
-        resM = DF.projective_resolution(M, TO.ResolutionOptions(maxlen=2); threads=false)
+        resM = DF.projective_resolution(M, TO.ResolutionOptions(maxlen=3); threads=false)
         E_serial = DF.Ext(resM, N; threads=false)
         E_thread = DF.Ext(resM, N; threads=true)
         @test E_thread.complex.d == E_serial.complex.d
@@ -307,7 +993,7 @@ end
         Rop = IR.pmodule_from_fringe(RopH)
         L = IR.pmodule_from_fringe(LH)
 
-        resR = DF.projective_resolution(Rop, TO.ResolutionOptions(maxlen=2); threads=false)
+        resR = DF.projective_resolution(Rop, TO.ResolutionOptions(maxlen=3); threads=false)
         T_serial = DF.ExtTorSpaces._Tor_resolve_first(Rop, L; maxdeg=2, threads=false, res=resR)
         T_thread = DF.ExtTorSpaces._Tor_resolve_first(Rop, L; maxdeg=2, threads=true, res=resR)
         @test T_thread.bd == T_serial.bd
@@ -325,12 +1011,12 @@ end
     M = IR.pmodule_from_fringe(Hm)
     N = IR.pmodule_from_fringe(Hn)
 
-    resM = DF.projective_resolution(M, TO.ResolutionOptions(maxlen=2); threads=false)
+    resM = DF.projective_resolution(M, TO.ResolutionOptions(maxlen=3); threads=false)
     E_from_res = DF.Ext(resM, N; threads=false)
     E_projective = DF.Ext(M, N, TO.DerivedFunctorOptions(maxdeg=2, model=:projective))
     @test [DF.dim(E_from_res, t) for t in 0:2] == [DF.dim(E_projective, t) for t in 0:2]
 
-    resN = DF.injective_resolution(N, TO.ResolutionOptions(maxlen=2); threads=false)
+    resN = DF.injective_resolution(N, TO.ResolutionOptions(maxlen=3); threads=false)
     Einj_from_res = DF.ExtInjective(M, resN; threads=false)
     Einj_direct = DF.ExtInjective(M, N, TO.DerivedFunctorOptions(maxdeg=2, model=:injective))
     @test [DF.dim(Einj_from_res, t) for t in 0:2] == [DF.dim(Einj_direct, t) for t in 0:2]
@@ -338,6 +1024,7 @@ end
 
 @testset "Resolution cache plumbing" begin
     P, S1, S2 = simple_modules_chain2()
+    field = S1.field
     opts = TO.ResolutionOptions(maxlen=2)
     cache = CM.ResolutionCache()
 
@@ -469,13 +1156,15 @@ end
     @test RH3.tmin == RH1.tmin
     @test RH3.tmax == RH1.tmax
     @test length(RH3.d) == length(RH1.d)
-    HX1 = TO.hyperext(C0, encN.M; maxdeg=2, cache=sc)
-    HX2 = TO.hyperext(C0, encN.M; maxdeg=2, cache=sc)
-    HX3 = TO.hyperext(encC0, encN.M; maxdeg=2, cache=sc)
+    HX1 = TO.hyperext(C0, encN.M; maxlen=2, cache=sc)
+    HX2 = TO.hyperext(C0, encN.M; maxlen=2, cache=sc)
+    HX3 = TO.hyperext(encC0, encN.M; maxlen=2, cache=sc)
     @test DF.dim(HX1, 0) == DF.dim(HX2, 0)
     @test DF.dim(HX3, 0) == DF.dim(HX1, 0)
     @test_throws MethodError TO.rhom(C0, encN; cache=sc)
-    @test_throws MethodError TO.hyperext(C0, encN; maxdeg=2, cache=sc)
+    @test_throws MethodError TO.hyperext(C0, encN; maxlen=2, cache=sc)
+    @test_throws MethodError TO.hyperext(C0, encN.M; maxdeg=2, cache=sc)
+    @test_throws MethodError TO.hyperext(encC0, encN.M; maxdeg=2, cache=sc)
 
     encRop = RES.EncodingResult(Pop, Rop, nothing; H=Hop, opts=OPT.EncodingOptions(field=Hop.field), backend=:test)
     @test_throws ErrorException TO.hom_dimension(enc, encRop; cache=sc)
@@ -493,9 +1182,14 @@ end
     DT1 = TO.derived_tensor(encRop, C0)
     DT2 = TO.derived_tensor(encRop, encC0)
     @test CC.describe(DT2).degree_range == CC.describe(DT1).degree_range
-    HT1 = TO.hypertor(encRop, C0; maxdeg=2)
-    HT2 = TO.hypertor(encRop, encC0; maxdeg=2)
+    HT1 = TO.hypertor(encRop, C0; maxlen=2)
+    HT2 = TO.hypertor(encRop, encC0; maxlen=2)
     @test DF.dim(HT2, 0) == DF.dim(HT1, 0)
+    HTmodule = TO.hypertor(encRop.M, C0; maxlen=2)
+    @test DF.dim(HTmodule, 0) == DF.dim(HT1, 0)
+    @test_throws MethodError TO.hypertor(encRop.M, C0; maxdeg=0)
+    @test_throws MethodError TO.hypertor(encRop, C0; maxdeg=2)
+    @test_throws MethodError TO.hypertor(encRop, encC0; maxdeg=2)
     @test_throws MethodError TO.tor(encRop, enc.M; maxdeg=2, model=:first, cache=sc)
     @test_throws MethodError TO.tor(encRop.M, enc; maxdeg=2, model=:first, cache=sc)
 
@@ -545,6 +1239,122 @@ end
     @test_throws ErrorException TO.resolve(enc; kind=:inj, opts=opts, cache=sc)
 end
 
+@testset "A13 result provenance and coefficient-change correctness" begin
+    @test TamerOp.provenance === RES.provenance
+    @test TOA.provenance === RES.provenance
+    for field in (CM.QQField(), CM.F2(), CM.F3(), CM.Fp(5), CM.RealField(Float64))
+        K = CM.coeff_type(field)
+        P = FF.FinitePoset(reshape(Bool[1], 1, 1))
+        M = MD.PModule{K}(P, [1], Dict{Tuple{Int,Int},Matrix{K}}(); field=field)
+        # Stale metadata must not override the actual field or finite category.
+        enc = RES.EncodingResult(P, M, nothing; backend=:test,
+            meta=(provenance=(field=:incorrect, base_poset=:incorrect,
+                category=:incorrect, degree=2, degree_convention=:homological,
+                window=(lower=(0,), upper=(3,)), orientation=(-1,),
+                construction=(requested=:provided, effective=:provided, substitution=:none)),))
+        p = RES.provenance(enc)
+        @test p.field == field
+        @test p.base_poset === P
+        @test p.category == :finite_poset_representations
+        @test p.degree == 2
+        @test p.orientation == (-1,)
+        @test RES.result_summary(enc).provenance == p
+        @test occursin("finite_poset_representations", sprint(show, MIME"text/plain"(), enc))
+        @test CM.change_field(enc, field) === enc
+        inv = RES.InvariantResult(enc, :custom, [1];
+            opts=OPT.InvariantOptions(box=([1], [2])), meta=(parameters=(method=:provided,),))
+        ip = RES.provenance(inv)
+        @test ip.field == field && ip.base_poset === P
+        @test ip.source == p
+        @test ip.window == p.window
+        @test ip.query.box == ([1], [2])
+        @test ip.query.parameters.method == :provided
+        @test ip.evaluation_window == :not_recorded
+        @test CM.change_field(inv, field) === inv
+        other = field == CM.F2() ? CM.QQField() : CM.F2()
+        @test_throws ArgumentError CM.change_field(inv, other)
+        res = TamerOp.Workflow.resolve(enc; opts=OPT.ResolutionOptions(maxlen=1))
+        @test RES.provenance(res).field == field
+        @test RES.provenance(res).base_poset === P
+        @test RES.provenance(res).ambient_identification == :not_asserted
+        @test CM.change_field(res, field) === res
+        @test_throws ArgumentError CM.change_field(res, other)
+        identity_map = EN.EncodingMap(P, P, [1])
+        restricted = TamerOp.restriction(identity_map, enc; cache=nothing)
+        rp = RES.provenance(restricted)
+        @test rp.source == p
+        @test rp.degree === nothing
+        @test rp.window == rp.orientation == :not_applicable
+        @test rp.reconstruction == :none
+        for (operation, convention) in ((TamerOp.derived_pushforward_left, :homological),
+                                        (TamerOp.derived_pushforward_right, :cohomological))
+            translated = operation(identity_map, enc;
+                opts=OPT.DerivedFunctorOptions(maxdeg=1), cache=nothing)
+            @test [RES.provenance(x).degree for x in translated] == [0, 1]
+            @test [RES.provenance(x).degree_convention for x in translated] == [convention, convention]
+            @test [RES.provenance(x).source.degree for x in translated] == [2, 2]
+            @test [RES.translated_module(x).dims for x in translated] == [[1], [0]]
+        end
+    end
+
+    # The same integral differential has different homology in characteristic 2.
+    # Copying its old dimensions and changing the field label is mathematically wrong.
+    P = FF.FinitePoset(reshape(Bool[1], 1, 1))
+    for (field, expected) in ((CM.QQField(), [0, 0]), (CM.F2(), [1, 1]))
+        K = CM.coeff_type(field)
+        C = CC.CochainComplex{K}(0, 1, [1, 1],
+            [sparse(reshape(K[CM.coerce(field, 2)], 1, 1))])
+        @test CC.cohomology_dims(C) == expected
+        dims = RES.CohomologyDimsResult(P, [expected[1]], nothing; degree=0, field=field)
+        @test RES.provenance(dims).field == field
+        @test RES.provenance(dims).output == :dimension_function
+        @test CM.change_field(dims, field) === dims
+        @test_throws ArgumentError CM.change_field(dims, field == CM.F2() ? CM.QQField() : CM.F2())
+    end
+    M = MD.PModule{QQ}(P, [1], Dict{Tuple{Int,Int},Matrix{QQ}}(); field=CM.QQField())
+    enc = RES.EncodingResult(P, M, nothing)
+    changed = CM.change_field(enc, CM.F3())
+    @test changed.opts.field == CM.F3()
+    @test RES.provenance(changed).field == CM.F3()
+    @test RES.provenance(changed).coefficient_change.semantics == :reinterpret_stored_module_matrices
+end
+
+@testset "A13 A71 public encoding and refinement provenance" begin
+    CO = TamerOp.ChangeOfPosets
+    @test TOA.joint_encoding === CO.joint_encoding
+    @test TOA.kan_unit === CO.kan_unit
+    @test TOA.kan_counit === CO.kan_counit
+    P = chain_poset(2)
+    Q = chain_poset(3)
+    left = EN.EncodingMap(Q, P, [1, 1, 2])
+    right = EN.EncodingMap(Q, P, [1, 2, 2])
+    joint = CO.joint_encoding(left, right)
+    M = MD.PModule{QQ}(P, [1, 1], Dict((1, 2) => ones(QQ, 1, 1)); field=CM.QQField())
+    enc = RES.EncodingResult(P, M, nothing)
+    for cache in (nothing, CM.SessionCache())
+        tr = TamerOp.common_refinement(enc, enc, joint; cache=cache)
+        @test RES.provenance(tr).refinement == :realized_joint_image
+        @test FF.nvertices(CO.common_poset(tr)) == 3
+        @test CO.translated_modules(tr).left.dims == [1, 1, 1]
+    end
+    FZ = TamerOp.FlangeZn
+    face = FZ.face(1, [false])
+    flange = FZ.Flange{QQ}(1, [FZ.IndFlat(face, [0])], [FZ.IndInj(face, [1])], ones(QQ, 1, 1); field=CM.QQField())
+    native = TamerOp.encode(flange)
+    p = RES.provenance(native)
+    @test p.backend == (requested=:auto, effective=:zn)
+    @test p.window == :unrestricted
+    @test p.discretization.filtration_values == :not_resampled
+    @test p.refinement == :single_encoding
+    coarse = TamerOp.coarsen(native)
+    cp = RES.provenance(coarse)
+    @test cp.refinement.kind == :uptight_quotient
+    @test cp.refinement.source_poset === native.P
+    @test cp.base_poset === coarse.P
+    @test cp.source == p
+    @test cp.ambient_identification == :not_asserted
+end
+
 @testset "Tor boundary assembly parity" begin
     field = CM.QQField()
     K = CM.coeff_type(field)
@@ -570,7 +1380,7 @@ end
 
     L = IR.pmodule_from_fringe(HL)
     Rop = IR.pmodule_from_fringe(HRop)
-    opts = TO.ResolutionOptions(maxlen=2)
+    opts = TO.ResolutionOptions(maxlen=3)
     resRop = DF.projective_resolution(Rop, opts; threads=false)
     resL = DF.projective_resolution(L, opts; threads=false)
     df_first = TO.DerivedFunctorOptions(maxdeg=2, model=:first)
@@ -699,7 +1509,7 @@ end
     Popm = FF.FinitePoset(transpose(FF.leq_matrix(Pm)); check=false)
     Lm = IR.pmodule_from_fringe(_random_fringe(Pm, field, 0xBEEF))
     Ropm = IR.pmodule_from_fringe(_random_fringe(Popm, field, 0xFACE))
-    opts_m = TO.ResolutionOptions(maxlen=3)
+    opts_m = TO.ResolutionOptions(maxlen=4)
     resRopm = DF.projective_resolution(Ropm, opts_m; threads=false)
     resLm = DF.projective_resolution(Lm, opts_m; threads=false)
 
@@ -731,9 +1541,9 @@ end
     N = IR.pmodule_from_fringe(S2)
     K = CM.coeff_type(M.field)
     cache = DF.HomSystemCache{K}()
-    @test keytype(cache.hom[1]) == DF._HomKey2
-    @test keytype(cache.precompose[1]) == DF._HomKey3
-    @test keytype(cache.postcompose[1]) == DF._HomKey3
+    @test keytype(cache.hom) == DF._HomKey2
+    @test keytype(cache.precompose) == DF._HomKey3
+    @test keytype(cache.postcompose) == DF._HomKey3
 
     _hom_cached(M1, N1, c) = DF.hom_with_cache(M1, N1; cache=c)
     report_hom = sprint(io -> InteractiveUtils.code_warntype(io, _hom_cached,
@@ -874,7 +1684,7 @@ end
                           scalar=one(K), field=field)
     )
 
-    resP = DF.projective_resolution(S1, TO.ResolutionOptions(maxlen=1))
+    resP = DF.projective_resolution(S1, TO.ResolutionOptions(maxlen=2))
     resI = DF.injective_resolution(S1, TO.ResolutionOptions(maxlen=1))
 
     @test DF.source_module(resP) === S1
@@ -1014,7 +1824,7 @@ end
                           scalar=one(K), field=field)
     )
 
-    resP = DF.projective_resolution(S1, TO.ResolutionOptions(maxlen=1))
+    resP = DF.projective_resolution(S1, TO.ResolutionOptions(maxlen=2))
     resI = DF.injective_resolution(S1, TO.ResolutionOptions(maxlen=1))
     H = DF.Hom(S1, I12)
     Eproj = DF.Ext(resP, I12)
@@ -1072,7 +1882,7 @@ end
     @test !isempty(bad_rep.issues)
     @test_throws ArgumentError DF.check_projective_resolution(bad_resP; throw=true)
 
-    bad_A = DF.ExtAlgebra{K}(Aext.E, Dict((0, 0) => zeros(K, 1, 2)), nothing, Aext.tmin, Aext.tmax)
+    bad_A = DF.ExtAlgebra{K}(ReentrantLock(), Aext.E, Dict((0, 0) => zeros(K, 1, 2)), nothing, Aext.tmin, Aext.tmax)
     bad_arep = DF.check_ext_algebra(bad_A)
     @test !bad_arep.valid
     @test_throws ArgumentError DF.check_ext_algebra(bad_A; throw=true)
@@ -1119,7 +1929,7 @@ end
                           scalar=one(K), field=field)
     )
 
-    resP = DF.projective_resolution(S1, TO.ResolutionOptions(maxlen=1))
+    resP = DF.projective_resolution(S1, TO.ResolutionOptions(maxlen=2))
     resI = DF.injective_resolution(S1, TO.ResolutionOptions(maxlen=1))
     H = DF.Hom(S1, I12)
     Eproj = DF.Ext(resP, I12)
@@ -1219,7 +2029,7 @@ end
     @test good_tor_report.kind == :tor_algebra
 
     bad_tor = DF.TorAlgebra{K}(
-        Ator.T,
+        ReentrantLock(), UInt(0), Ator.T,
         Dict{Tuple{Int,Int},SparseMatrixCSC{K,Int}}(),
         nothing,
         Dict((0, 0) => zeros(K, 1, 2)),
@@ -1333,27 +2143,8 @@ end
         b = DF.betti(res)
 
         Btbl = DF.betti_table(res)
-        if _is_real_field(field)
-            # Numerical resolutions over reals can introduce extra/duplicated generators.
-            @test get(b, (0, 1), 0) >= 1
-            @test get(b, (1, 2), 0) >= 1
-            @test get(b, (1, 3), 0) >= 1
-            @test get(b, (2, 4), 0) >= 1
-            @test Btbl[1,1] >= 1
-            @test Btbl[2,2] >= 1
-            @test Btbl[2,3] >= 1
-            @test Btbl[3,4] >= 1
-        else
-            @test length(b) == 4
-            @test b[(0, 1)] == 1
-            @test b[(1, 2)] == 1
-            @test b[(1, 3)] == 1
-            @test b[(2, 4)] == 1
-            @test Btbl[1,1] == 1
-            @test Btbl[2,2] == 1
-            @test Btbl[2,3] == 1
-            @test Btbl[3,4] == 1
-        end
+        @test b == Dict((0, 1) => 1, (1, 2) => 1, (1, 3) => 1, (2, 4) => 1)
+        @test Btbl == [1 0 0 0; 0 1 1 0; 0 0 0 1]
     end
 end
 
@@ -1373,11 +2164,6 @@ end
 
         # Compute the target Ext space once so coordinates are comparable.
         E14 = DF.Ext(S1, S4, TO.DerivedFunctorOptions(maxdeg=2))
-        if _is_real_field(field)
-            # Numerical Ext over reals can introduce duplicated classes in this setup.
-            @test DF.dim(E14, 2) >= 1
-            return
-        end
         @test DF.dim(E14, 2) == 1
 
         # Via the chain 1 -> 2 -> 4
@@ -1397,9 +2183,12 @@ end
         _, coords_3 = TO.DerivedFunctors.yoneda_product(E34, 1, [c(1)], E13, 1, [c(1)]; ELN=E14)
         @test coords_3[1] != 0
 
-        # In a 1-dimensional target, the two products must be proportional.
-        # With our deterministic lifts/basis choices, they should agree up to sign.
-        @test coords_2[1] == coords_3[1] || coords_2[1] == -coords_3[1]
+        # The signed diamond relation is the relation dual to the commutative
+        # square: the two oriented length-two extension products sum to zero.
+        # In odd characteristic this distinguishes the relation from equality.
+        @test _is_real_field(field) ?
+            isapprox(coords_2, -coords_3; atol=field.atol, rtol=field.rtol) :
+            coords_2 == -coords_3
     end
 end
 
@@ -1470,7 +2259,7 @@ end
 end
 
 
-@testset "Yoneda associativity sanity check (B3, degree 3 is nonzero)" begin
+@testset "Yoneda strict associativity (B3, degree 3 is nonzero)" begin
     with_fields(FIELDS_FULL) do field
         P = boolean_lattice_B3_poset()
         K = CM.coeff_type(field)
@@ -1490,11 +2279,7 @@ end
 
         # Target space: Ext^3(S0, S123) should be 1-dimensional for B3.
         E03 = DF.Ext(S0, S123, TO.DerivedFunctorOptions(maxdeg=3))
-        if _is_real_field(field)
-            @test DF.dim(E03, 3) >= 1
-        else
-            @test DF.dim(E03, 3) == 1
-        end
+        @test DF.dim(E03, 3) == 1
 
         # Degree-1 generators on the cover chain:
         #   {} -> {1} -> {1,2} -> {1,2,3}
@@ -1502,29 +2287,15 @@ end
         E12 = DF.Ext(S1,  S12, TO.DerivedFunctorOptions(maxdeg=3))
         E01 = DF.Ext(S0,  S1,   TO.DerivedFunctorOptions(maxdeg=3))
 
-        if _is_real_field(field)
-            @test DF.dim(E23, 1) >= 1
-            @test DF.dim(E12, 1) >= 1
-            @test DF.dim(E01, 1) >= 1
-        else
-            @test DF.dim(E23, 1) == 1
-            @test DF.dim(E12, 1) == 1
-            @test DF.dim(E01, 1) == 1
-        end
+        @test DF.dim(E23, 1) == 1
+        @test DF.dim(E12, 1) == 1
+        @test DF.dim(E01, 1) == 1
 
         # Intermediate targets in degree 2 (also 1-dimensional for this choice).
         E13 = DF.Ext(S1,  S123, TO.DerivedFunctorOptions(maxdeg=3))
         E02 = DF.Ext(S0,  S12, TO.DerivedFunctorOptions(maxdeg=3))
-        if _is_real_field(field)
-            @test DF.dim(E13, 2) >= 1
-            @test DF.dim(E02, 2) >= 1
-            # Numerical lift solves in this chain can be inconsistent under tolerance;
-            # keep a coarse sanity check for RealField and skip strict associativity.
-            return
-        else
-            @test DF.dim(E13, 2) == 1
-            @test DF.dim(E02, 2) == 1
-        end
+        @test DF.dim(E13, 2) == 1
+        @test DF.dim(E02, 2) == 1
 
         # Left bracketing: (e23 * e12) * e01
         _, x = TO.DerivedFunctors.yoneda_product(E23, 1, [c(1)], E12, 1, [c(1)]; ELN=E13)  # x in Ext^2(S1,S123)
@@ -1534,13 +2305,162 @@ end
         _, y = TO.DerivedFunctors.yoneda_product(E12, 1, [c(1)], E01, 1, [c(1)]; ELN=E02)  # y in Ext^2(S0,S12)
         _, right = TO.DerivedFunctors.yoneda_product(E23, 1, [c(1)], E02, 2, y; ELN=E03)
 
-        # Nontriviality + associativity up to sign in a 1-dimensional target.
+        # Both bracketings use the same target coordinates: associativity is
+        # equality, with no sign ambiguity (including over odd prime fields).
         @test left[1] != 0
         @test right[1] != 0
-        @test left[1] == right[1] || left[1] == -right[1]
+        @test _is_real_field(field) ?
+            isapprox(left, right; atol=field.atol, rtol=field.rtol) : left == right
     end
 end
 
+
+@testset "Ext degree-zero product is ordered matrix composition" begin
+    with_fields(FIELDS_FULL) do field
+        K = CM.coeff_type(field)
+        P = chain_poset(1)
+        M = MD.PModule{K}(P, [2], Dict{Tuple{Int,Int},Matrix{K}}(); field)
+        A = DF.ExtAlgebra(M, OPT.DerivedFunctorOptions(maxdeg=0))
+        E = DF.underlying_ext_space(A)
+        @test DF.dim(A, 0) == 4
+        equal_coefficients(x, y) = _is_real_field(field) ?
+            isapprox(x, y; atol=field.atol, rtol=field.rtol) : x == y
+        # Hom(M,M) is Mat_2(k). Products are left-after-right composition,
+        # so the two elementary nilpotents multiply to different idempotents.
+        X = K[0 1; 0 0]
+        Y = K[0 0; 1 0]
+        encode(f) = DF.coordinates(E, 0, vec(f * Matrix(E.res.aug.comps[1])))
+        x, y = encode(X), encode(Y)
+        xy = DF.multiply(A, 0, x, 0, y)
+        yx = DF.multiply(A, 0, y, 0, x)
+        @test equal_coefficients(xy, encode(K[1 0; 0 0]))
+        @test equal_coefficients(yx, encode(K[0 0; 0 1]))
+        @test !equal_coefficients(xy, yx)
+        @test equal_coefficients(DF.multiply(A, 0, x, 0, x), zeros(K, 4))
+        @test equal_coefficients(one(A).coords, encode(CM.eye(field, 2)))
+    end
+end
+
+@testset "Yoneda products respect coboundaries and comparison maps" begin
+    with_fields(FIELDS_FULL) do field
+        P = diamond_poset()
+        K = CM.coeff_type(field)
+        equal_coefficients(x, y) = _is_real_field(field) ?
+            isapprox(x, y; atol=field.atol, rtol=field.rtol) : x == y
+        simple(v) = _derived_window_interval(P, v, v, field)
+        S1, S2, S4 = simple(1), simple(2), simple(4)
+        P1 = _derived_window_interval(P, 1, 4, field)
+        M, i2, _, p2, _ = MD.direct_sum_with_maps(S2, P1)
+        N, i4, _, p4, _ = MD.direct_sum_with_maps(S4, P1)
+        opts = OPT.DerivedFunctorOptions(maxdeg=2, model=:projective)
+        E12 = DF.Ext(S1, S2, opts)
+        E24 = DF.Ext(S2, S4, opts)
+        E14 = DF.Ext(E12.res, S4)
+        ELM = DF.Ext(E12.res, M)
+        ELN = DF.Ext(E12.res, N)
+        EMN = DF.Ext(M, N, opts)
+        E2N = DF.Ext(E24.res, N)
+        @test DF.dim(ELM, 1) == DF.dim(EMN, 1) == DF.dim(ELN, 2) == 1
+
+        # P1 is both projective and injective. Its summands create actual
+        # coboundaries without changing the one-dimensional extension classes.
+        ba = DF.boundaries(ELM, 1)
+        bb = DF.boundaries(EMN, 1)
+        @test size(ba, 2) > 0
+        @test size(bb, 2) > 0
+        alpha = DF.representative(ELM, 1, K[1])
+        beta = DF.representative(EMN, 1, K[1])
+        _, expected, base_cocycle = DF.yoneda_product(
+            EMN, 1, K[1], ELM, 1, K[1]; ELN, return_cocycle=true)
+        @test !all(iszero, expected)
+        @test equal_coefficients(DF.coordinates(ELN, 2, base_cocycle), expected)
+        for da in (zeros(K, length(alpha)), ba[:, 1]),
+            db in (zeros(K, length(beta)), bb[:, 1])
+            a = alpha + da
+            b = beta + db
+            @test equal_coefficients(DF.coordinates(ELM, 1, a), K[1])
+            @test equal_coefficients(DF.coordinates(EMN, 1, b), K[1])
+            @test equal_coefficients(ELM.complex.d[2] * a,
+                                     zeros(K, ELM.complex.dims[3]))
+            @test equal_coefficients(EMN.complex.d[2] * b,
+                                     zeros(K, EMN.complex.dims[3]))
+            lift = DF.Functoriality._lift_cocycle_to_chainmap_coeff(
+                ELM.res, EMN.res, ELM, 1, a; upto=1)
+            # This is the classical unshifted comparison convention, dF=Fd.
+            # No Koszul sign is inserted in this Yoneda composition model.
+            @test equal_coefficients(EMN.res.d_mat[1] * lift[2],
+                                     lift[1] * ELM.res.d_mat[2])
+            product = DF.Algebras._compose_into_module_cocycle(
+                ELM.res, EMN.res, N, 1, 1, lift[2], b, EMN, ELN)
+            @test equal_coefficients(DF.coordinates(ELN, 2, product), expected)
+            # A pure boundary in either factor must induce the zero class.
+            boundary_product = DF.Algebras._compose_into_module_cocycle(
+                ELM.res, EMN.res, N, 1, 1, lift[2], bb[:, 1], EMN, ELN)
+            @test equal_coefficients(DF.coordinates(ELN, 2, boundary_product), zeros(K, 1))
+        end
+        boundary_lift = DF.Functoriality._lift_cocycle_to_chainmap_coeff(
+            ELM.res, EMN.res, ELM, 1, ba[:, 1]; upto=1)
+        boundary_product = DF.Algebras._compose_into_module_cocycle(
+            ELM.res, EMN.res, N, 1, 1, boundary_lift[2], beta, EMN, ELN)
+        @test equal_coefficients(DF.coordinates(ELN, 2, boundary_product), zeros(K, 1))
+
+        # Naturality under actual inclusions/projections, not just identity or
+        # scalar endomorphisms. First enlarge the middle and target modules.
+        a = DF.ext_map_second(E12, ELM, i2; t=1) * K[1]
+        beta2 = DF.ext_map_second(E24, E2N, i4; t=1) * K[1]
+        b = DF.ext_map_first(EMN, E2N, p2; t=1) * beta2
+        _, product = DF.yoneda_product(EMN, 1, b, ELM, 1, a; ELN)
+        _, base_product = DF.yoneda_product(E24, 1, K[1], E12, 1, K[1]; ELN=E14)
+        pushed_product = DF.ext_map_second(E14, ELN, i4; t=2) * base_product
+        @test equal_coefficients(product, pushed_product)
+        @test equal_coefficients(DF.ext_map_second(ELN, E14, p4; t=2) * product,
+                                 base_product)
+        # Balancing at the middle argument: beta o (i_* alpha) = (i^* beta) o alpha.
+        restricted_beta = DF.ext_map_first(E2N, EMN, i2; t=1) * b
+        _, balanced_product = DF.yoneda_product(E2N, 1, restricted_beta,
+                                                E12, 1, K[1]; ELN)
+        @test equal_coefficients(product, balanced_product)
+
+        # Contravariant naturality in the first argument.
+        L2, _, _, projection, _ = MD.direct_sum_with_maps(S1, P1)
+        EL2M = DF.Ext(L2, M, opts)
+        EL2N = DF.Ext(EL2M.res, N)
+        pulled_alpha = DF.ext_map_first(EL2M, ELM, projection; t=1) * a
+        _, pulled_product = DF.yoneda_product(EMN, 1, b, EL2M, 1, pulled_alpha; ELN=EL2N)
+        @test equal_coefficients(pulled_product,
+            DF.ext_map_first(EL2N, ELN, projection; t=2) * product)
+
+        # Reorient P_2(S1). This is the same resolution up to a basis change,
+        # but the identity comparison in degree two is minus the identity.
+        # Reading an old cochain in the new target coordinates gives the wrong
+        # sign over QQ/odd primes even though both Ext dimensions are one.
+        copied_poset = FF.FinitePoset(copy(FF.leq_matrix(P)))
+        copied_S1 = _derived_window_interval(copied_poset, 1, 1, field)
+        copied_S4 = _derived_window_interval(copied_poset, 4, 4, field)
+        copied_res = DF.projective_resolution(copied_S1, OPT.ResolutionOptions(maxlen=3))
+        for (res, target) in ((E12.res, S4), (copied_res, copied_S4))
+            signs = [t == 2 ? -one(K) : one(K) for t in 0:(length(res.Pmods)-1)]
+            factors = [signs[t] * signs[t+1] for t in eachindex(res.d_mat)]
+            changed_d = [factors[t] .* res.d_mat[t] for t in eachindex(res.d_mat)]
+            changed_mor = [MD.PMorphism(d.dom, d.cod,
+                [factors[t] .* component for component in d.comps])
+                for (t, d) in enumerate(res.d_mor)]
+            changed_res = DF.ProjectiveResolution(res.M, res.Pmods, res.gens,
+                                                  changed_mor, changed_d, res.aug)
+            @test DF.check_projective_resolution(changed_res).valid
+            changed_target = DF.Ext(changed_res, target)
+            _, changed_product, changed_cocycle = DF.yoneda_product(
+                E24, 1, K[1], E12, 1, K[1]; ELN=changed_target, return_cocycle=true)
+            @test equal_coefficients(changed_product, -base_product)
+            @test equal_coefficients(changed_cocycle, -DF.representative(E14, 2, base_product))
+            @test equal_coefficients(DF.coordinates(changed_target, 2, changed_cocycle), changed_product)
+            if res.M === S1
+                @test equal_coefficients(changed_product,
+                    DF.ext_map_first(changed_target, E14, IR.id_morphism(S1); t=2) * base_product)
+            end
+        end
+    end
+end
 
 @testset "Connecting homomorphisms: split exact sequences give zero maps" begin
     with_fields(FIELDS_FULL) do field
@@ -1563,9 +2483,9 @@ end
         C = S3
         B, i, p = direct_sum_with_split_sequence(A, C)
 
-        # We test delta^2 : Ext^2(M,C) -> Ext^3(M,A), so we need the resolution through degree t+1 = 3.
+        # Computing the target Ext^(t+1) requires the resolution through degree t+2.
         t = 2
-        resM = DF.projective_resolution(S1, TO.ResolutionOptions(maxlen=t+1))   # i.e. maxlen=3
+        resM = DF.projective_resolution(S1, TO.ResolutionOptions(maxlen=t+2))   # i.e. maxlen=4
         EMA = DF.Ext(resM, A)
         EMB = DF.Ext(resM, B)
         EMC = DF.Ext(resM, C)
@@ -1586,7 +2506,7 @@ end
         C1 = S2
         B1, i1, p1 = direct_sum_with_split_sequence(A1, C1)
 
-        resN = DF.injective_resolution(S4, TO.ResolutionOptions(maxlen=2))
+        resN = DF.injective_resolution(S4, TO.ResolutionOptions(maxlen=3))
         EA = TO.ExtInjective(A1, resN)
         EB = TO.ExtInjective(B1, resN)
         EC = TO.ExtInjective(C1, resN)
@@ -1613,7 +2533,7 @@ end
     end
     S1, S2, S3, S4 = Sm
 
-    resS1 = DF.projective_resolution(S1, TO.ResolutionOptions(maxlen=3))
+    resS1 = DF.projective_resolution(S1, TO.ResolutionOptions(maxlen=4))
     A = S4
     C = S3
     B, i, p = direct_sum_with_split_sequence(A, C)
@@ -1624,7 +2544,7 @@ end
     A1 = S3
     C1 = S2
     B1, i1, p1 = direct_sum_with_split_sequence(A1, C1)
-    resN = DF.injective_resolution(S4, TO.ResolutionOptions(maxlen=2))
+    resN = DF.injective_resolution(S4, TO.ResolutionOptions(maxlen=3))
     EA = TO.ExtInjective(A1, resN)
     EB = TO.ExtInjective(B1, resN)
     EC = TO.ExtInjective(C1, resN)
@@ -1947,7 +2867,7 @@ end
         end
     end
 
-    function _same_cochain_map(F::CC.ModuleCochainMap, G::CC.ModuleCochainMap)
+    function _same_cochain_map(F::TamerOp.ModuleComplexes.ModuleCochainMap, G::TamerOp.ModuleComplexes.ModuleCochainMap)
         @test F.tmin == G.tmin
         @test F.tmax == G.tmax
         @test [T.dims for T in F.C.terms] == [T.dims for T in G.C.terms]
@@ -2094,17 +3014,11 @@ end
 
         # The packaged long exact sequence should expose the same delta^0.
         les = TO.ExtLongExactSequenceSecond(S1, S2, I12, S1, i, p, TO.DerivedFunctorOptions(maxdeg=0))
-        if _is_real_field(field)
-            r0 = FL.rank(field, delta0)
-            r1 = FL.rank(field, les.delta[1])
-            @test r0 == r1
-            @test 0 <= r0 <= 1
-            @test norm(Matrix(les.delta[1]) - Matrix(delta0)) <= _field_tol(field)
-        else
-            @test FL.rank(field, delta0) == 1
-            @test FL.rank(field, les.delta[1]) == 1
-            @test Matrix(les.delta[1]) == Matrix(delta0)
-        end
+        @test FL.rank(field, delta0) == 1
+        @test FL.rank(field, les.delta[1]) == 1
+        @test _is_real_field(field) ?
+            isapprox(les.delta[1], delta0; atol=field.atol, rtol=field.rtol) :
+            les.delta[1] == delta0
     end
 end
 
@@ -2138,7 +3052,9 @@ end
         for t in 0:E.tmax
             @test DF.dim(A, t) == DF.dim(E, t)
         end
-        _is_real_field(field) && return
+        equal_coordinates(x, y) = _is_real_field(field) ?
+            isapprox(x, y; atol=field.atol, rtol=field.rtol) : x == y
+        @test [DF.dim(A, t) for t in 0:2] == [3, 2, 1]
 
         # The unit should act as both-sided identity on every homogeneous degree <= tmax.
         oneA = one(A)
@@ -2151,8 +3067,8 @@ end
             # Deterministic "generic" element: (1,2,3,...,dt).
             x = DF.element(A, t, [c(i) for i in 1:dt])
 
-            @test (oneA * x).coords == x.coords
-            @test (x * oneA).coords == x.coords
+            @test equal_coordinates((oneA * x).coords, x.coords)
+            @test equal_coordinates((x * oneA).coords, x.coords)
         end
 
         # Cache behavior: after one multiplication in (p,q), the multiplication matrix should exist,
@@ -2172,8 +3088,8 @@ end
             # Cached multiplication must match a direct call to the mathematical core (Yoneda product)
             # in the same Ext space and bases.
             _, coords_direct = TO.DerivedFunctors.yoneda_product(A.E, 1, x.coords, A.E, 1, y.coords; ELN=A.E)
-            @test prod1.coords == coords_direct
-            @test prod2.coords == coords_direct
+            @test equal_coordinates(prod1.coords, coords_direct)
+            @test equal_coordinates(prod2.coords, coords_direct)
         end
 
         # Associativity in the cached algebra (within truncation).
@@ -2191,8 +3107,8 @@ end
 
             c0 = oneA
 
-            @test ((a * b) * c0).coords == (a * (b * c0)).coords
-            @test ((c0 * a) * b).coords == (c0 * (a * b)).coords
+            @test equal_coordinates(((a * b) * c0).coords, (a * (b * c0)).coords)
+            @test equal_coordinates(((c0 * a) * b).coords, (c0 * (a * b)).coords)
         end
     end
 end
@@ -2526,11 +3442,11 @@ end
     Hn = one_by_one_fringe(P, FF.principal_upset(P, 2), FF.principal_downset(P, 3); scalar=one(K), field=field)
     M = IR.pmodule_from_fringe(Hm)
     N = IR.pmodule_from_fringe(Hn)
-    res = DF.projective_resolution(M, TO.ResolutionOptions(maxlen=1, minimal=false, check=false); threads=false)
+    res = DF.projective_resolution(M, TO.ResolutionOptions(maxlen=2, minimal=false, check=false); threads=false)
 
     C, offs = DF.ExtTorSpaces._projective_ext_cochain_complex(res, N; threads=false)
     E = DF.Ext(res, N; threads=false)
-    H = TamerOp.ChainComplexes.cohomology_data(C)
+    H = TamerOp.ChainComplexes.cohomology_data(C; degrees=0:1)
 
     @test C.dims == E.complex.dims
     @test C.d == E.complex.d
@@ -2621,5 +3537,450 @@ end
         F0 = CM.zeros(field, 3, 3)
         f0 = MD.PMorphism(X, E, [F0])
         @test_throws ErrorException DF._solve_downset_postcompose_coeff(f0, g, dom_bases, cod_bases, act_dom, act_cod)
+    end
+end
+
+@testset "A71 derived owner provenance identifies the finite category" begin
+    with_fields(FIELDS_FULL) do field
+        K = CM.coeff_type(field)
+        RSL = TO.Results
+        MC = TO.ModuleComplexes
+        CC = TO.ChainComplexes
+        P = chain_poset(2)
+        Pop = FF.FinitePoset(transpose(FF.leq_matrix(P)))
+        M = MD.PModule{K}(P, [1, 1], Dict((1, 2) => ones(K, 1, 1)); field)
+        R = MD.PModule{K}(Pop, [1, 1], Dict((2, 1) => ones(K, 1, 1)); field)
+        H = DF.Hom(M, M)
+        before = getfield(H, :basis)
+        pH = RSL.provenance(H)
+        @test getfield(H, :basis) === before
+        @test pH.base_poset === P
+        @test pH.category == :finite_poset_representations
+        @test pH.argument_variance == (:contravariant, :covariant)
+        @test DF.hom_summary(H).provenance == pH
+        for model in (:projective, :injective, :unified)
+            E = DF.Ext(M, M, OPT.DerivedFunctorOptions(; model, maxdeg=1))
+            p = RSL.provenance(E)
+            @test p.base_poset === P
+            @test p.field === field
+            @test p.degree == 0:1
+            @test p.degree_convention == :cohomological
+            @test p.model == model
+            @test p.ambient_identification == :not_asserted
+            @test DF.ext_summary(E).provenance == p
+            @test DF.describe(E).provenance == p
+            @test [DF.dim(E, t) for t in 0:1] == [1, 0]
+        end
+        for model in (:first, :second)
+            T = DF.Tor(R, M, OPT.DerivedFunctorOptions(; model, maxdeg=1))
+            p = RSL.provenance(T)
+            @test p.base_poset === P
+            @test p.base_poset !== Pop
+            @test p.category == :incidence_algebra_tensor
+            @test p.orientation == (right=:opposite, left=:forward)
+            @test p.argument_variance == (:covariant, :covariant)
+            @test p.degree_convention == :homological
+            @test p.field === field
+            @test DF.tor_summary(T).provenance == p
+            @test [DF.dim(T, t) for t in 0:1] == [1, 0]
+            A = DF.TorAlgebra(T; mu_chain=Dict((0, 0) => sparse(ones(K, 1, 1))))
+            @test DF.algebra_summary(A).provenance.product == :supplied_chain_maps
+            @test RSL.provenance(DF.element(A, 0, K[1])).degree == 0
+        end
+        A = DF.ExtAlgebra(M, OPT.DerivedFunctorOptions(maxdeg=1))
+        @test DF.algebra_summary(A).provenance.product == :yoneda
+        @test RSL.provenance(one(A)).base_poset === P
+        for res in (DF.projective_resolution(M, OPT.ResolutionOptions(maxlen=1)),
+                    DF.injective_resolution(M, OPT.ResolutionOptions(maxlen=1)))
+            @test DF.resolution_summary(res).provenance.base_poset === P
+            @test RSL.provenance(res).field === field
+        end
+        for res in (IR.upset_resolution(M; maxlen=1), IR.downset_resolution(M; maxlen=1))
+            @test IR.resolution_summary(res).provenance.base_poset === P
+            @test RSL.provenance(res).ambient_identification == :not_asserted
+        end
+        C = MC.ModuleCochainComplex([M], MD.PMorphism{K}[]; tmin=0)
+        @test MC.describe(C).provenance.base_poset === P
+        RH = MC.RHomComplex(C, M; maxlen=1)
+        DT = MC.DerivedTensorComplex(R, C; maxlen=1)
+        HX = MC.hyperExt(C, M; maxlen=1)
+        HT = MC.hyperTor(R, C; maxlen=1)
+        for object in (RH, DT, HX, HT)
+            @test RSL.provenance(object).base_poset === P
+            @test RSL.provenance(object).field === field
+            @test MC.describe(object).provenance == RSL.provenance(object)
+        end
+        @test RSL.provenance(RH).degree_scope == :stored_resolution_prefix
+        @test RSL.provenance(DT).degree_scope == :stored_resolution_prefix
+        @test RSL.provenance(HX).degree_scope == :certified
+        @test RSL.provenance(HT).degree_convention == :homological
+        @test RSL.provenance(MC.underlying_complex(RH)).base_poset === nothing
+        @test RSL.provenance(MC.underlying_complex(DT)).field_source == :stored_field
+        ss = DF.ExtSpectralSequence(M, M; maxlen=1)
+        @test RSL.provenance(ss).category == :vector_space_complexes
+        @test RSL.provenance(ss).base_poset === nothing
+        @test RSL.provenance(ss).model == :spectral_sequence_of_stored_bicomplex
+        @test DF.double_complex_summary(ss.DC).provenance.base_poset === nothing
+    end
+end
+
+@testset "A71 encoded Ext spectral wrappers reject uncertified abutments" begin
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+    FZ = TO.FlangeZn
+    PL = TO.PLPolyhedra
+    CC = TO.ChainComplexes
+    face = FZ.face(1, [false])
+    flange = FZ.Flange{K}(1, [FZ.IndFlat(face, [0])], [FZ.IndInj(face, [0])], ones(K, 1, 1); field)
+    enc = OPT.EncodingOptions(backend=:zn, field=field)
+    cache = CM.ResolutionCache()
+    # On {0<1}, the singleton interval at 0 is not projective. Its degree-zero
+    # projective prefix is therefore insufficient for a named Ext abutment.
+    @test_throws ArgumentError DF.ExtSpectralSequence(flange, flange;
+        method=:box, a=(0,), b=(1,), maxlen=0, cache=cache)
+    @test_throws ArgumentError DF.ExtSpectralSequence(flange, flange, enc;
+        method=:box, a=(0,), b=(1,), maxlen=0, cache=cache)
+    @test_throws ArgumentError DF.ExtSpectralSequence(flange, flange, enc; maxlen=0, cache=cache)
+    @test_throws ArgumentError DF.ExtSpectralSequence(flange, flange; method=:invalid)
+    @test_throws ArgumentError DF.ExtSpectralSequence(flange, flange, enc; method=:invalid)
+    for ss in (DF.ExtSpectralSequence(flange, flange; method=:box, a=(0,), b=(1,)),
+               DF.ExtSpectralSequence(flange, flange, enc))
+        @test only(filter(H -> H.t == 0, ss.Htot)).dimH == 1
+        @test all(H -> H.t == 0 || H.dimH == 0, ss.Htot)
+    end
+    # Raw truncated bicomplexes remain available under their explicit contract.
+    raw = DF.ExtDoubleComplex(flange, flange; method=:box, a=(0,), b=(1,), maxlen=0)
+    @test CC.spectral_sequence(raw; output=:full) isa CC.SpectralSequence
+    U = PL.PLUpset(PL.PolyUnion(1, [PL.make_hpoly(reshape(K[-1], 1, 1), K[0])]))
+    D = PL.PLDownset(PL.PolyUnion(1, [PL.make_hpoly(reshape(K[1], 1, 1), K[1])]))
+    fringe = PL.PLFringe([U], [D], ones(K, 1, 1))
+    encpl = OPT.EncodingOptions(backend=:pl, field=field)
+    @test_throws ArgumentError DF.ExtSpectralSequence(fringe, fringe, encpl; maxlen=0)
+    ss = DF.ExtSpectralSequence(fringe, fringe, encpl)
+    @test only(filter(H -> H.t == 0, ss.Htot)).dimH == 1
+    @test all(H -> H.t == 0 || H.dimH == 0, ss.Htot)
+end
+
+@testset "A71 module complex numerical chain identities" begin
+    MC = TO.ModuleComplexes
+    P = chain_poset(1)
+    # A two-term complex and a map from k concentrated in degree zero.
+    # The map condition is [1 -1+delta]*[1;1]=0. Its exact oracle has delta=0;
+    # Float64 cancellation at machine precision must use the product factors
+    # for its relative scale, including when the absolute tolerance is zero.
+    for (field, delta, valid) in (
+        (CM.RealField(Float64), nextfloat(-1.0) + 1.0, true),
+        (CM.RealField(Float64), 1e-3, false),
+        (CM.RealField(Float64; rtol=0.0, atol=0.0), nextfloat(-1.0) + 1.0, false),
+        (CM.QQField(), 1 // big(10)^20, false),
+    )
+        K = CM.coeff_type(field)
+        one_term = MD.PModule{K}(P, [1], Dict{Tuple{Int,Int},Matrix{K}}(); field=field)
+        two_term = MD.PModule{K}(P, [2], Dict{Tuple{Int,Int},Matrix{K}}(); field=field)
+        zero_term = MD.zero_pmodule(P; field=field)
+        d = MD.PMorphism(two_term, one_term, [reshape(K[1, -1 + delta], 1, 2)])
+        inclusion = MD.PMorphism(one_term, two_term, [reshape(K[1, 1], 2, 1)])
+        target = MC.ModuleCochainComplex([two_term, one_term], [d])
+        source = MC.ModuleCochainComplex([one_term, zero_term], [MD.zero_morphism(one_term, zero_term)])
+        components = [inclusion, MD.zero_morphism(zero_term, one_term)]
+        if valid
+            f = MC.ModuleCochainMap(source, target, components)
+            @test MC.check_module_complex_map(f).valid
+            @test MC.check_module_complex_map(f; throw=true).valid
+            C = MC.ModuleCochainComplex([one_term, two_term, one_term], [inclusion, d])
+            @test MC.check_module_complex(C).valid
+            @test MC.check_module_complex(C; throw=true).valid
+        else
+            @test_throws ErrorException MC.ModuleCochainMap(source, target, components)
+            f = MC.ModuleCochainMap(source, target, components; check=false)
+            @test !MC.check_module_complex_map(f).valid
+            @test_throws ArgumentError MC.check_module_complex_map(f; throw=true)
+            @test_throws ErrorException MC.ModuleCochainComplex([one_term, two_term, one_term], [inclusion, d])
+            C = MC.ModuleCochainComplex([one_term, two_term, one_term], [inclusion, d]; check=false)
+            @test !MC.check_module_complex(C).valid
+            @test_throws ArgumentError MC.check_module_complex(C; throw=true)
+        end
+    end
+
+    # Comparing two nonzero sides has the same field-aware contract. Overflow
+    # and Inf==Inf are never certificates of a chain equation.
+    field = CM.RealField(Float64)
+    M = MD.PModule{Float64}(P, [1], Dict{Tuple{Int,Int},Matrix{Float64}}(); field=field)
+    I = MD.id_morphism(M)
+    C = MC.ModuleCochainComplex([M, M], [I])
+    almost_I = MD.PMorphism(M, M, [fill(nextfloat(1.0), 1, 1)])
+    f = MC.ModuleCochainMap(C, C, [I, almost_I])
+    @test MC.check_module_complex_map(f).valid
+    for bad in (Inf, NaN)
+        bad_map = MD.PMorphism(M, M, [fill(bad, 1, 1)])
+        @test_throws ErrorException MC.ModuleCochainMap(C, C, [bad_map, bad_map])
+        unchecked = MC.ModuleCochainMap(C, C, [bad_map, bad_map]; check=false)
+        @test !MC.check_module_complex_map(unchecked).valid
+        @test_throws ErrorException MC.ModuleCochainComplex([M, M, M], [bad_map, I])
+        unchecked_complex = MC.ModuleCochainComplex([M, M, M], [bad_map, I]; check=false)
+        @test !MC.check_module_complex(unchecked_complex).valid
+    end
+
+    strict = CM.RealField(Float64; rtol=0.0, atol=0.0)
+    N = MD.PModule{Float64}(P, [1], Dict{Tuple{Int,Int},Matrix{Float64}}(); field=strict)
+    D = MC.ModuleCochainComplex([N, N], [MD.id_morphism(N)])
+    @test_throws ErrorException MC.ModuleCochainMap(C, D, [I, I])
+    unchecked = MC.ModuleCochainMap(C, D, [I, I]; check=false)
+    @test !MC.check_module_complex_map(unchecked).valid
+    @test_throws ArgumentError MC.check_module_complex_map(unchecked; throw=true)
+    other_poset = chain_poset(1)
+    other_module = MD.PModule{Float64}(other_poset, [1], Dict{Tuple{Int,Int},Matrix{Float64}}(); field=field)
+    other_complex = MC.ModuleCochainComplex([other_module, other_module], [MD.id_morphism(other_module)])
+    unchecked = MC.ModuleCochainMap(C, other_complex, [I, I]; check=false)
+    @test !MC.check_module_complex_map(unchecked).valid
+    @test_throws ArgumentError MC.check_module_complex_map(unchecked; throw=true)
+end
+
+@testset "A12 derived inspection preserves lazy algebra data" begin
+    with_fields(FIELDS_FULL) do field
+        K = CM.coeff_type(field)
+        (; S1, S2) = _derived_window_chain(field)
+        for canon in (:projective, :injective)
+            E = DF.Ext(S1, S2, OPT.DerivedFunctorOptions(maxdeg=1, model=:unified, canon=canon))
+            initial_models = (E.Eproj, E.Einj)
+            initial = canon === :projective ? E.Eproj : E.Einj
+            initial_representatives = map(H -> getfield(H, :_Hrep), initial.cohom)
+            comparison = E.comparison
+            forward, backward = DF.comparison_isomorphisms(E)
+            for pass in 1:2
+                @test DF.ext_summary(E).degree_dimensions == Dict(1 => 1)
+                @test CC.describe(E).nonzero_degrees == (1,)
+                @test DF.degree_dimensions(E) == Dict(1 => 1)
+                @test DF.total_dimension(E) == 1
+                @test DF.source_module(E) === S1
+                @test DF.target_module(E) === S2
+                @test TO.provenance(E).base_poset === S1.Q
+                for object in (E, forward, backward)
+                    @test !isempty(sprint(show, object))
+                    @test !isempty(sprint(show, MIME"text/plain"(), object))
+                end
+                @test length(forward) == length(backward) == 2
+                @test (E.Eproj, E.Einj) === initial_models
+                @test all(isnothing, comparison.P2I)
+                @test all(isnothing, comparison.I2P)
+                @test !comparison.complete
+                @test map(H -> getfield(H, :_Hrep), initial.cohom) == initial_representatives
+            end
+            # Only explicit comparison access constructs the missing model.
+            p2i, i2p = forward[2], backward[2]
+            @test E.Eproj !== nothing && E.Einj !== nothing
+            @test size(p2i) == size(i2p) == (1, 1)
+            if field isa CM.RealField
+                @test isapprox(i2p * p2i, ones(K, 1, 1); atol=1e-10, rtol=1e-10)
+            else
+                @test i2p * p2i == ones(K, 1, 1)
+            end
+            @test forward[2] === p2i
+            @test comparison.P2I[1] === nothing
+            @test comparison.I2P[1] === nothing
+        end
+
+        # On a point, Hom and Ext^0 are k and every positive derived group is
+        # zero. Inspection must not compute their representatives or products.
+        point = chain_poset(1)
+        M = MD.PModule{K}(point, [1], Dict{Tuple{Int,Int},Matrix{K}}(); field=field)
+        hom = DF.Hom(M, M)
+        @test getfield(hom, :basis) === nothing
+        ext_algebra = DF.ExtAlgebra(M, OPT.DerivedFunctorOptions(maxdeg=1))
+        tor = DF.Tor(M, M, OPT.DerivedFunctorOptions(maxdeg=1, model=:first))
+        calls = Ref(0)
+        generator = function (p, q)
+            calls[] += 1
+            @test (p, q) == (0, 0)
+            return sparse(ones(K, 1, 1))
+        end
+        tor_algebra = DF.TorAlgebra(tor; mu_chain_gen=generator)
+        for pass in 1:2
+            @test DF.hom_summary(hom).dimension == 1
+            for object in (hom, ext_algebra, tor, tor_algebra)
+                @test !isempty(sprint(show, object))
+                @test !isempty(sprint(show, MIME"text/plain"(), object))
+                @test CC.describe(object).kind isa Symbol
+                @test DF.total_dimension(object) == 1
+            end
+            @test getfield(hom, :basis) === nothing
+            @test isempty(DF.cached_product_degrees(ext_algebra))
+            @test ext_algebra.unit_coords === nothing
+            @test isempty(DF.cached_product_degrees(tor_algebra))
+            @test calls[] == 0
+        end
+        hom_basis = DF.basis(hom)
+        @test length(hom_basis) == 1
+        @test MD.check_morphism(hom_basis[1]).valid
+        ext_class = DF.element(ext_algebra, 0, ones(K, 1))
+        @test DF.element_coordinates(ext_class * ext_class) == ones(K, 1)
+        @test DF.cached_product_degrees(ext_algebra) == [(0, 0)]
+        @test DF.multiplication_matrix(tor_algebra, 0, 0) == ones(K, 1, 1)
+        @test calls[] == 1
+        @test DF.multiplication_matrix(tor_algebra, 0, 0) == ones(K, 1, 1)
+        @test calls[] == 1
+    end
+end
+
+@testset "A14 resolution validation controls" begin
+    with_fields(FIELDS_FULL) do field
+        K = CM.coeff_type(field)
+        P = chain_poset(1)
+        M = MD.PModule{K}(P, [1], Dict{Tuple{Int,Int},Matrix{K}}(); field=field)
+        larger = MD.PModule{K}(P, [2], Dict{Tuple{Int,Int},Matrix{K}}(); field=field)
+        checked = OPT.ResolutionOptions(maxlen=1, minimal=false, check=true)
+        unchecked = OPT.ResolutionOptions(maxlen=1, minimal=false, check=false)
+        for (builder, terms, validator) in (
+            (DF.projective_resolution, :Pmods, DF.check_projective_resolution),
+            (DF.injective_resolution, :Emods, DF.check_injective_resolution))
+            cache = CM.ResolutionCache()
+            res = builder(M, checked; cache=cache, threads=false)
+            @test validator(res).valid
+            @test length(res.gens[1]) == 1
+            @test all(isempty, res.gens[2:end])
+            @test builder(M, unchecked; cache=cache, threads=false) === res
+            stored_terms = getfield(res, terms)
+            original = stored_terms[1]
+            try
+                # Corrupt a cached term without changing its attached maps.
+                # check=true must run even when minimal=false and on cache hits.
+                stored_terms[1] = larger
+                @test builder(M, unchecked; cache=cache, threads=false) === res
+                @test_throws ArgumentError builder(M, checked; cache=cache, threads=false)
+            finally
+                stored_terms[1] = original
+            end
+            @test builder(M, checked; cache=cache, threads=false) === res
+            for storage in (stored_terms, res.gens)
+                removed = pop!(storage)
+                try
+                    @test !validator(res).valid
+                    @test_throws ArgumentError validator(res; throw=true)
+                    @test_throws ArgumentError builder(M, checked; cache=cache, threads=false)
+                finally
+                    push!(storage, removed)
+                end
+            end
+        end
+        @test_throws MethodError DF.ExtDoubleComplex(M, M, checked)
+        @test_throws MethodError DF.ExtSpectralSequence(M, M, checked)
+        @test_throws MethodError DF.ExtDoubleComplex(M, M; opts=checked)
+        @test_throws MethodError DF.ExtSpectralSequence(M, M; opts=checked)
+        dc = DF.ExtDoubleComplex(M, M; maxlen=1, threads=false)
+        @test CC.check_bicomplex(dc).valid
+    end
+    @test_throws ArgumentError OPT.ResolutionOptions(maxlen=-1)
+    @test_throws ArgumentError OPT.DerivedFunctorOptions(maxdeg=-1)
+end
+
+@testset "A14 derived options select coordinates or reject incompatible controls" begin
+    with_fields(FIELDS_FULL) do field
+        K = CM.coeff_type(field)
+        fixture = _derived_window_chain(field)
+        cache = CM.ResolutionCache()
+        for model in (:projective, :injective)
+            for canon in (:auto, :none, model)
+                opts = OPT.DerivedFunctorOptions(maxdeg=1, model=model, canon=canon)
+                E = DF.Ext(fixture.S1, fixture.S2, opts; cache=cache)
+                # The nonsplit interval 0 -> S2 -> [1,2] -> S1 -> 0.
+                @test [DF.dim(E, t) for t in 0:1] == [0, 1]
+                @test DF.provenance(E).model == model
+                cycle = DF.representative(E, 1, ones(K, 1))
+                coords = DF.coordinates(E, 1, cycle)
+                @test field isa CM.RealField ? isapprox(coords, ones(K, 1); atol=1e-10, rtol=1e-10) : coords == ones(K, 1)
+            end
+            other = model === :projective ? :injective : :projective
+            @test_throws ArgumentError DF.Ext(fixture.S1, fixture.S2,
+                OPT.DerivedFunctorOptions(maxdeg=1, model=model, canon=other); cache=cache)
+        end
+        for canon in (:projective, :injective)
+            E = DF.Ext(fixture.S1, fixture.S2,
+                OPT.DerivedFunctorOptions(maxdeg=1, model=:unified, canon=canon))
+            @test E.canon == canon
+            @test [DF.dim(E, t) for t in 0:1] == [0, 1]
+            @test DF.dim(DF.projective_model(E), 1) == DF.dim(DF.injective_model(E), 1) == 1
+            p2i = DF.comparison_isomorphism(E, 1; from=:projective, to=:injective)
+            i2p = DF.comparison_isomorphism(E, 1; from=:injective, to=:projective)
+            @test field isa CM.RealField ? isapprox(p2i * i2p, ones(K, 1, 1); atol=1e-10, rtol=1e-10) : p2i * i2p == ones(K, 1, 1)
+        end
+        @test_throws ArgumentError DF.ExtSpace(fixture.S1, fixture.S2,
+            OPT.DerivedFunctorOptions(maxdeg=1, model=:unified, canon=:none))
+        @test_throws ArgumentError DF.ExtInjective(fixture.S1, fixture.S2,
+            OPT.DerivedFunctorOptions(maxdeg=1, canon=:projective); cache=cache)
+
+        point = chain_poset(1)
+        M = MD.PModule{K}(point, [1], Dict{Tuple{Int,Int},Matrix{K}}(); field=field)
+        B, i, _, _, p = MD.direct_sum_with_maps(M, M)
+        for (constructor, model, arguments) in (
+            (DF.ExtLongExactSequenceSecond, :projective, (M, M, B, M, i, p)),
+            (DF.ExtLongExactSequenceFirst, :injective, (M, B, M, M, i, p)),
+            (DF.TorLongExactSequenceSecond, :first, (M, i, p)),
+            (DF.TorLongExactSequenceFirst, :second, (M, i, p)))
+            les = constructor(arguments..., OPT.DerivedFunctorOptions(maxdeg=1, model=model))
+            canonical = constructor(arguments...; opts=OPT.DerivedFunctorOptions(maxdeg=1, model=model))
+            @test canonical.iH == les.iH && canonical.pH == les.pH && canonical.delta == les.delta
+            @test size(les.iH[1]) == (2, 1) || size(les.pH[1]) == (2, 1)
+            @test size(les.iH[1], 1) + size(les.pH[1], 1) == 3
+            @test FL.rank(field, les.iH[1]) == FL.rank(field, les.pH[1]) == 1
+            @test all(iszero, les.pH[1] * les.iH[1]) || all(iszero, les.iH[1] * les.pH[1])
+            @test all(iszero, les.delta[1])
+            @test_throws ArgumentError constructor(arguments...,
+                OPT.DerivedFunctorOptions(maxdeg=1, model=:unified))
+            badcanon = model === :injective ? :projective : :injective
+            @test_throws ArgumentError constructor(arguments...,
+                OPT.DerivedFunctorOptions(maxdeg=1, model=model, canon=badcanon))
+        end
+        for model in (:first, :second)
+            T = DF.Tor(M, M, OPT.DerivedFunctorOptions(maxdeg=1, model=model, canon=:none); cache=cache)
+            @test [DF.dim(T, s) for s in 0:1] == [1, 0]
+            @test_throws ArgumentError DF.Tor(M, M,
+                OPT.DerivedFunctorOptions(maxdeg=1, model=model, canon=:projective); cache=cache)
+        end
+        A = DF.ExtAlgebra(M, OPT.DerivedFunctorOptions(maxdeg=1, canon=:projective))
+        T = DF.Tor(M, M, OPT.DerivedFunctorOptions(maxdeg=1, model=:second))
+        @test DF.ext_action_on_tor(A, T, one(A), OPT.DerivedFunctorOptions(maxdeg=0, model=:second))[1] == ones(K, 1, 1)
+        @test_throws ArgumentError DF.ExtAlgebra(M, OPT.DerivedFunctorOptions(maxdeg=1, canon=:injective))
+        @test_throws ArgumentError DF.ext_action_on_tor(A, T, one(A), OPT.DerivedFunctorOptions(maxdeg=0, model=:first))
+        @test_throws ArgumentError DF.ext_action_on_tor(A, T, one(A), OPT.DerivedFunctorOptions(maxdeg=0, canon=:injective))
+
+        tables = []
+        for Q in (FF.ProductOfChainsPoset((2,)), chain_poset(2))
+            S1 = _derived_window_interval(Q, 1, 1, field)
+            S2 = _derived_window_interval(Q, 2, 2, field)
+            resopts = OPT.ResolutionOptions(maxlen=2, check=true, minimal=true)
+            projective = DF.projective_resolution(S1, resopts; threads=false)
+            injective = DF.injective_resolution(S2, resopts; threads=false)
+            @test DF.check_projective_resolution(projective).valid
+            @test DF.check_injective_resolution(injective).valid
+            @test DF.betti(projective) == Dict((0, 1) => 1, (1, 2) => 1)
+            @test DF.bass(injective) == Dict((0, 2) => 1, (1, 1) => 1)
+            push!(tables, (DF.betti_table(projective), DF.bass_table(injective)))
+        end
+        @test tables[1] == tables[2]
+
+        CP = TO.ChangeOfPosets
+        pi = TO.Encoding.EncodingMap(point, point, [1])
+        identity_map = MD.id_morphism(M)
+        sc = CM.SessionCache()
+        for (complex_fun, result_fun, model) in (
+            (CP.pushforward_left_complex, CP.derived_pushforward_left, :projective),
+            (CP.pushforward_right_complex, CP.derived_pushforward_right, :injective))
+            opts = OPT.DerivedFunctorOptions(maxdeg=1, model=model, canon=model)
+            objects = result_fun(pi, M, opts; session_cache=sc, threads=false)
+            maps = result_fun(pi, identity_map, opts; session_cache=sc, threads=false)
+            @test [N.dims for N in objects] == [[1], [0]]
+            @test maps[1].comps[1] == ones(K, 1, 1)
+            @test size(maps[2].comps[1]) == (0, 0)
+            # Validation must also precede a populated cache hit.
+            opposite = model === :projective ? :injective : :projective
+            for input in (M, identity_map), fn in (complex_fun, result_fun)
+                @test_throws ArgumentError fn(pi, input,
+                    OPT.DerivedFunctorOptions(maxdeg=1, model=opposite); session_cache=sc)
+                @test_throws ArgumentError fn(pi, input,
+                    OPT.DerivedFunctorOptions(maxdeg=1, model=model, canon=opposite); session_cache=sc)
+                @test_throws ArgumentError fn(pi, input,
+                    OPT.DerivedFunctorOptions(-1, :auto, :auto); session_cache=sc)
+            end
+        end
     end
 end

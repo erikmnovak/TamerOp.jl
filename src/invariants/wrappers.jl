@@ -93,8 +93,8 @@ matching_wasserstein_distance_approx(M, N, pi; opts::InvariantOptions=InvariantO
 
 slice_chain_exact_2d(pi, dir, offset; opts::InvariantOptions=InvariantOptions(), kwargs...) =
     slice_chain_exact_2d(pi, dir, offset, opts; kwargs...)
-matching_distance_exact_slices_2d(pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
-    matching_distance_exact_slices_2d(pi, opts; kwargs...)
+matching_distance_slices_2d(pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    matching_distance_slices_2d(pi, opts; kwargs...)
 
 fibered_arrangement_2d(pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
     fibered_arrangement_2d(pi, opts; kwargs...)
@@ -103,6 +103,9 @@ fibered_barcode_cache_2d(M, pi; opts::InvariantOptions=InvariantOptions(), kwarg
 
 matching_distance_exact_2d(M, N, pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
     matching_distance_exact_2d(M, N, pi, opts; kwargs...)
+
+matching_distance_sampled_2d(M, N, pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+    matching_distance_sampled_2d(M, N, pi, opts; kwargs...)
 
 measure_by_value(values::AbstractVector, pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
     measure_by_value(values, pi, opts; kwargs...)

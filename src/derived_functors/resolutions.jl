@@ -11,6 +11,7 @@ This submodule should own:
 It is expected to be the main consumer of IndicatorResolutions machinery.
 """
 module Resolutions
+    import ..DerivedFunctors: provenance
 
     using LinearAlgebra
     using SparseArrays
@@ -30,6 +31,7 @@ module Resolutions
                                     _indicator_new_array_memo, _new_resolution_workspace
     import ...IndicatorResolutions: resolution_length
     using ...FiniteFringe: AbstractPoset
+    import ...FieldLinAlg
     using ...FieldLinAlg: _SparseRREFAugmented, SparseRow, _sparse_rref_push_augmented!, rref
 
 
@@ -59,9 +61,6 @@ module Resolutions
     const PROJECTIVE_PRIMARY_CACHE_ENABLED = Ref(true)
     const INJECTIVE_PRIMARY_CACHE_ENABLED = Ref(true)
 
-    @inline _resolution_cache_shard_index(dicts) =
-        min(length(dicts), max(1, Threads.threadid()))
-
     @inline function _projective_primary_dict(cache::ResolutionCache, ::Type{R}) where {R}
         PROJECTIVE_PRIMARY_CACHE_ENABLED[] || return nothing
         cache.projective_primary_type === R || return nothing
@@ -69,14 +68,6 @@ module Resolutions
         primary === nothing && return nothing
         isempty(primary) && return nothing
         return primary::Dict{ResolutionKey2,R}
-    end
-
-    @inline function _projective_primary_shard(cache::ResolutionCache, ::Type{R}) where {R}
-        PROJECTIVE_PRIMARY_CACHE_ENABLED[] || return nothing
-        cache.projective_primary_type === R || return nothing
-        shard = cache.projective_primary_shards[_resolution_cache_shard_index(cache.projective_primary_shards)]
-        shard === nothing && return nothing
-        return shard::Dict{ResolutionKey2,R}
     end
 
     @inline function _reset_projective_promotion_state!(cache::ResolutionCache)
@@ -125,148 +116,35 @@ module Resolutions
         end
         cache.projective_primary_type = R
         cache.projective_primary = primary
-        fill!(cache.projective_primary_shards, nothing)
         empty!(cache.projective)
-        for shard in cache.projective_shards
-            empty!(shard)
-        end
         _reset_projective_promotion_state!(cache)
         return primary
     end
 
-    @inline function _ensure_projective_primary_shard_locked!(cache::ResolutionCache, ::Type{R}) where {R}
-        length(cache.projective_primary_shards) == 1 && return nothing
-        idx = _resolution_cache_shard_index(cache.projective_primary_shards)
-        shard = cache.projective_primary_shards[idx]
-        if shard === nothing
-            shard = Dict{ResolutionKey2,R}()
-            cache.projective_primary_shards[idx] = shard
-        end
-        return shard::Dict{ResolutionKey2,R}
-    end
-
     @inline function _cache_projective_get(cache::ResolutionCache, key::ResolutionKey2, ::Type{R}) where {R}
-        primary = _projective_primary_dict(cache, R)
-        if primary !== nothing
-            if length(cache.projective_primary_shards) == 1
-                return get(primary, key, nothing)
-            end
-            shard = _projective_primary_shard(cache, R)
-            shard === nothing || begin
-                v = get(shard, key, nothing)
-                v === nothing || return v
-            end
-            Base.lock(cache.lock)
-            try
-                v = get(primary, key, nothing)
-                if v !== nothing
-                    shard === nothing || (shard[key] = v)
-                end
-                return v
-            finally
-                Base.unlock(cache.lock)
-            end
-        end
-
-        if length(cache.projective_shards) == 1
-            Base.lock(cache.lock)
-            try
-                v = get(cache.projective, key, nothing)
-                v === nothing && return nothing
-                if _note_projective_fallback_hit_locked!(cache, R)
-                    primary = _promote_projective_primary_locked!(cache, R)
-                    if primary !== nothing
-                        return get(primary, key, nothing)
-                    end
-                end
-                return v.value::R
-            finally
-                Base.unlock(cache.lock)
-            end
-        end
-        shard = cache.projective_shards[_resolution_cache_shard_index(cache.projective_shards)]
-        v = get(shard, key, nothing)
-        if v !== nothing && !PROJECTIVE_PRIMARY_CACHE_ENABLED[]
-            return (v.value::R)
-        end
-        Base.lock(cache.lock)
-        try
-            v === nothing && (v = get(cache.projective, key, nothing))
-            if v !== nothing && _note_projective_fallback_hit_locked!(cache, R)
+        return lock(cache.lock) do
+            primary = _projective_primary_dict(cache, R)
+            primary === nothing || return get(primary, key, nothing)
+            payload = get(cache.projective, key, nothing)
+            payload === nothing && return nothing
+            if _note_projective_fallback_hit_locked!(cache, R)
                 primary = _promote_projective_primary_locked!(cache, R)
-                if primary !== nothing
-                    vv = get(primary, key, nothing)
-                    if vv !== nothing
-                        shard_primary = _projective_primary_shard(cache, R)
-                        shard_primary === nothing || (shard_primary[key] = vv)
-                    end
-                    return vv
-                end
+                primary === nothing || return get(primary, key, nothing)
             end
-        finally
-            Base.unlock(cache.lock)
+            return payload.value::R
         end
-        v === nothing || begin
-            vv = v.value::R
-            shard[key] = v
-            return vv
-        end
-        return nothing
     end
 
     @inline function _cache_projective_store!(cache::ResolutionCache, key::ResolutionKey2, val::R) where {R}
-        primary = _projective_primary_dict(cache, R)
-        if primary !== nothing
-            if length(cache.projective_primary_shards) == 1
-                extant = get(primary, key, nothing)
-                extant === nothing || return extant
-                primary[key] = val
-                return val
-            end
-            shard = _projective_primary_shard(cache, R)
-            shard === nothing || begin
-                extant = get(shard, key, nothing)
-                extant === nothing || return extant
-            end
-            Base.lock(cache.lock)
-            try
-                extant = get(primary, key, nothing)
-                extant === nothing || return extant
-                primary[key] = val
-                if shard === nothing
-                    shard = _ensure_projective_primary_shard_locked!(cache, R)
-                end
-                shard === nothing || (shard[key] = val)
-                return val
-            finally
-                Base.unlock(cache.lock)
-            end
-        end
-
-        if length(cache.projective_shards) == 1
-            extant = get(cache.projective, key, nothing)
-            extant === nothing || return (extant.value::R)
-            payload = ProjectiveResolutionPayload(val)
+        return lock(cache.lock) do
+            primary = _projective_primary_dict(cache, R)
+            primary === nothing || return get!(primary, key, val)
+            payload = get(cache.projective, key, nothing)
+            payload === nothing || return payload.value::R
             _reset_projective_promotion_state!(cache)
-            cache.projective[key] = payload
+            cache.projective[key] = ProjectiveResolutionPayload(val)
             return val
         end
-        shard = cache.projective_shards[_resolution_cache_shard_index(cache.projective_shards)]
-        existing = get(shard, key, nothing)
-        existing === nothing || return (existing.value::R)
-        payload = ProjectiveResolutionPayload(val)
-        _reset_projective_promotion_state!(cache)
-        shard[key] = payload
-        Base.lock(cache.lock)
-        out = get(cache.projective, key, nothing)
-        if out === nothing
-            cache.projective[key] = payload
-            out = payload
-        end
-        Base.unlock(cache.lock)
-        outR = out.value::R
-        shard[key] = out
-        return outR
     end
 
     @inline function _injective_primary_dict(cache::ResolutionCache, ::Type{R}) where {R}
@@ -276,14 +154,6 @@ module Resolutions
         primary === nothing && return nothing
         isempty(primary) && return nothing
         return primary::Dict{ResolutionKey2,R}
-    end
-
-    @inline function _injective_primary_shard(cache::ResolutionCache, ::Type{R}) where {R}
-        INJECTIVE_PRIMARY_CACHE_ENABLED[] || return nothing
-        cache.injective_primary_type === R || return nothing
-        shard = cache.injective_primary_shards[_resolution_cache_shard_index(cache.injective_primary_shards)]
-        shard === nothing && return nothing
-        return shard::Dict{ResolutionKey2,R}
     end
 
     @inline function _reset_injective_promotion_state!(cache::ResolutionCache)
@@ -332,149 +202,37 @@ module Resolutions
         end
         cache.injective_primary_type = R
         cache.injective_primary = primary
-        fill!(cache.injective_primary_shards, nothing)
         empty!(cache.injective)
-        for shard in cache.injective_shards
-            empty!(shard)
-        end
         _reset_injective_promotion_state!(cache)
         return primary
     end
 
-    @inline function _ensure_injective_primary_shard_locked!(cache::ResolutionCache, ::Type{R}) where {R}
-        length(cache.injective_primary_shards) == 1 && return nothing
-        idx = _resolution_cache_shard_index(cache.injective_primary_shards)
-        shard = cache.injective_primary_shards[idx]
-        if shard === nothing
-            shard = Dict{ResolutionKey2,R}()
-            cache.injective_primary_shards[idx] = shard
-        end
-        return shard::Dict{ResolutionKey2,R}
-    end
-
     @inline function _cache_injective_get(cache::ResolutionCache, key::ResolutionKey2, ::Type{R}) where {R}
-        primary = _injective_primary_dict(cache, R)
-        if primary !== nothing
-            if length(cache.injective_primary_shards) == 1
-                return get(primary, key, nothing)
-            end
-            shard = _injective_primary_shard(cache, R)
-            shard === nothing || begin
-                v = get(shard, key, nothing)
-                v === nothing || return v
-            end
-            Base.lock(cache.lock)
-            try
-                v = get(primary, key, nothing)
-                if v !== nothing
-                    shard === nothing || (shard[key] = v)
-                end
-                return v
-            finally
-                Base.unlock(cache.lock)
-            end
-        end
-
-        if length(cache.injective_shards) == 1
-            Base.lock(cache.lock)
-            try
-                v = get(cache.injective, key, nothing)
-                v === nothing && return nothing
-                if _note_injective_fallback_hit_locked!(cache, R)
-                    primary = _promote_injective_primary_locked!(cache, R)
-                    if primary !== nothing
-                        return get(primary, key, nothing)
-                    end
-                end
-                return v.value::R
-            finally
-                Base.unlock(cache.lock)
-            end
-        end
-        shard = cache.injective_shards[_resolution_cache_shard_index(cache.injective_shards)]
-        v = get(shard, key, nothing)
-        if v !== nothing && !INJECTIVE_PRIMARY_CACHE_ENABLED[]
-            return (v.value::R)
-        end
-        Base.lock(cache.lock)
-        try
-            v === nothing && (v = get(cache.injective, key, nothing))
-            if v !== nothing && _note_injective_fallback_hit_locked!(cache, R)
+        return lock(cache.lock) do
+            primary = _injective_primary_dict(cache, R)
+            primary === nothing || return get(primary, key, nothing)
+            payload = get(cache.injective, key, nothing)
+            payload === nothing && return nothing
+            if _note_injective_fallback_hit_locked!(cache, R)
                 primary = _promote_injective_primary_locked!(cache, R)
-                if primary !== nothing
-                    vv = get(primary, key, nothing)
-                    if vv !== nothing
-                        shard_primary = _injective_primary_shard(cache, R)
-                        shard_primary === nothing || (shard_primary[key] = vv)
-                    end
-                    return vv
-                end
+                primary === nothing || return get(primary, key, nothing)
             end
-        finally
-            Base.unlock(cache.lock)
+            return payload.value::R
         end
-        v === nothing || begin
-            vv = v.value::R
-            shard[key] = v
-            return vv
-        end
-        return nothing
     end
 
     @inline function _cache_injective_store!(cache::ResolutionCache, key::ResolutionKey2, val::R) where {R}
-        primary = _injective_primary_dict(cache, R)
-        if primary !== nothing
-            if length(cache.injective_primary_shards) == 1
-                extant = get(primary, key, nothing)
-                extant === nothing || return extant
-                primary[key] = val
-                return val
-            end
-            shard = _injective_primary_shard(cache, R)
-            shard === nothing || begin
-                extant = get(shard, key, nothing)
-                extant === nothing || return extant
-            end
-            Base.lock(cache.lock)
-            try
-                extant = get(primary, key, nothing)
-                extant === nothing || return extant
-                primary[key] = val
-                if shard === nothing
-                    shard = _ensure_injective_primary_shard_locked!(cache, R)
-                end
-                shard === nothing || (shard[key] = val)
-                return val
-            finally
-                Base.unlock(cache.lock)
-            end
-        end
-
-        if length(cache.injective_shards) == 1
-            extant = get(cache.injective, key, nothing)
-            extant === nothing || return (extant.value::R)
-            payload = InjectiveResolutionPayload(val)
+        return lock(cache.lock) do
+            primary = _injective_primary_dict(cache, R)
+            primary === nothing || return get!(primary, key, val)
+            payload = get(cache.injective, key, nothing)
+            payload === nothing || return payload.value::R
             _reset_injective_promotion_state!(cache)
-            cache.injective[key] = payload
+            cache.injective[key] = InjectiveResolutionPayload(val)
             return val
         end
-        shard = cache.injective_shards[_resolution_cache_shard_index(cache.injective_shards)]
-        existing = get(shard, key, nothing)
-        existing === nothing || return (existing.value::R)
-        payload = InjectiveResolutionPayload(val)
-        _reset_injective_promotion_state!(cache)
-        shard[key] = payload
-        Base.lock(cache.lock)
-        out = get(cache.injective, key, nothing)
-        if out === nothing
-            cache.injective[key] = payload
-            out = payload
-        end
-        Base.unlock(cache.lock)
-        outR = out.value::R
-        shard[key] = out
-        return outR
     end
+
 
     # ----------------------------
     # Projective resolution (explicit summands + coefficient matrices)
@@ -491,6 +249,25 @@ module Resolutions
         d_mor::Vector{<:PMorphism{K}}                # d_a : P_a -> P_{a-1}, a=1..L
         d_mat::Vector{SparseMatrixCSC{K, Int}}       # coefficient matrices (rows cod summands, cols dom summands)
         aug::PMorphism{K}                            # P_0 -> M
+    end
+
+    # Equality of generator labels alone does not identify the chain coordinates:
+    # differentials and the augmentation can change under a basis change while
+    # those labels stay fixed. Independent deterministic builds may nevertheless
+    # represent exactly the same model, so do not require object identity.
+    function _same_projective_resolution_model(A::ProjectiveResolution{K},
+                                               B::ProjectiveResolution{K}) where {K}
+        A === B && return true
+        A.M.field == B.M.field || return false
+        poset_equal(A.M.Q, B.M.Q) || return false
+        A.M.dims == B.M.dims || return false
+        for (u, v) in cover_edges(A.M.Q)
+            A.M.edge_maps[u, v] == B.M.edge_maps[u, v] || return false
+        end
+        A.gens == B.gens || return false
+        A.d_mat == B.d_mat || return false
+        length(A.aug.comps) == length(B.aug.comps) || return false
+        return all(A.aug.comps[v] == B.aug.comps[v] for v in eachindex(A.aug.comps))
     end
 
     @inline resolution_terms(res::ProjectiveResolution) = copy(res.Pmods)
@@ -515,6 +292,7 @@ module Resolutions
     @inline function resolution_summary(res::ProjectiveResolution)
         return (
             kind=:projective_resolution,
+            provenance=provenance(res),
             side=:projective,
             field=res.M.field,
             nvertices=nvertices(res.M.Q),
@@ -951,9 +729,11 @@ module Resolutions
     end
 
 
-    # Internal implementation: build a projective resolution truncated/padded to `maxlen`.
+    # Build through `maxlen`; complete-resolution callers avoid allocating
+    # padded zero modules after the first vanishing kernel.
     function _projective_resolution_impl(M::PModule{K}, maxlen::Int;
-                                         threads::Bool = (Threads.nthreads() > 1)) where {K}
+                                         threads::Bool = (Threads.nthreads() > 1),
+                                         pad::Bool = true) where {K}
         maxlen >= 0 || error("_projective_resolution_impl: maxlen must be >= 0")
         n = nvertices(M.Q)
         cc = _get_cover_cache(M.Q)
@@ -1024,8 +804,22 @@ module Resolutions
         end
 
         res = ProjectiveResolution{K}(M, Pmods, gens, d_mor, d_mat, pi0)
-        _pad_projective_resolution!(res, maxlen)   # pads with zero P-modules/differentials
+        pad && _pad_projective_resolution!(res, maxlen)
         return res
+    end
+
+    # Finite-poset incidence algebras have global dimension at most |P|-1.
+    # Use that stopping bound without materializing its unused zero tail.
+    # The negative cache key is distinct from every explicit resolution budget.
+    function _complete_projective_resolution(M::PModule{K};
+                                             threads::Bool = (Threads.nthreads() > 1),
+                                             cache::Union{Nothing,ResolutionCache}=nothing) where {K}
+        key = _resolution_key2(M, -1)
+        R = cache === nothing ? nothing : _cache_projective_get(cache, key, ProjectiveResolution{K})
+        R === nothing || return R
+        R = _projective_resolution_impl(M, max(0, nvertices(M.Q) - 1); threads=threads, pad=false)
+        _resolution_is_complete(R) || error("projective resolution did not terminate within the finite-poset bound")
+        return cache === nothing ? R : _cache_projective_store!(cache, key, R)
     end
 
     """
@@ -1060,8 +854,9 @@ module Resolutions
             R = _projective_resolution_impl(M, res.maxlen; threads=threads)
             cache === nothing || (R = _cache_projective_store!(cache, key, R))
         end
-        if res.minimal && res.check
-            assert_minimal(R; check_cover=true)
+        if res.check
+            check_projective_resolution(R; throw=true)
+            res.minimal && assert_minimal(R; check_cover=true)
         end
         return R
     end
@@ -1079,8 +874,9 @@ module Resolutions
         key = _resolution_key2(M, res.maxlen)
         R = cache === nothing ? nothing : _cache_projective_get(cache, key, ProjectiveResolution{K})
         if R !== nothing
-            if res.minimal && res.check
-                assert_minimal(R; check_cover=true)
+            if res.check
+                check_projective_resolution(R; throw=true)
+                res.minimal && assert_minimal(R; check_cover=true)
             end
             return R
         end
@@ -1168,7 +964,7 @@ module Resolutions
     Return a dense Betti table B.
 
     - Rows are homological degrees a = 0,1,2,...
-    - Columns are vertices v = 1,...,Q.n
+    - Columns are vertices v = 1,...,nvertices(Q)
     - Entry B[a+1, v] is the multiplicity of k[Up(v)] in P_a.
 
     This is purely a formatting/convenience layer over `betti(res)`.
@@ -1176,7 +972,7 @@ module Resolutions
     function betti_table(res::ProjectiveResolution{K}; pad_to::Union{Nothing,Int}=nothing) where {K}
         Q = res.M.Q
         L = length(res.Pmods) - 1
-        B = zeros(Int, L + 1, Q.n)
+        B = zeros(Int, L + 1, nvertices(Q))
         for a in 0:L
             for v in res.gens[a + 1]
                 B[a + 1, v] += 1
@@ -1299,7 +1095,7 @@ module Resolutions
     """
     function minimality_report(res::ProjectiveResolution{K}; check_cover::Bool=true) where {K}
         Q = res.M.Q
-        n = Q.n
+        n = nvertices(Q)
 
         cover_actual = _vertex_counts(res.gens[1], n)
         cover_expected = copy(cover_actual)
@@ -1404,6 +1200,22 @@ module Resolutions
     @inline source_module(res::InjectiveResolution) = res.N
     @inline resolution_length(res::InjectiveResolution) = length(res.d_mor)
 
+    # Terminal exactness of a genuine resolution, not a replacement for the
+    # structural validators. A zero final term certifies completion cheaply.
+    function _resolution_is_complete(res::ProjectiveResolution)
+        all(iszero, last(res.Pmods).dims) && return true
+        d = isempty(res.d_mor) ? res.aug : last(res.d_mor)
+        return all(v -> FieldLinAlg.rank(res.M.field, d.comps[v]) == d.dom.dims[v],
+                   eachindex(d.dom.dims))
+    end
+
+    function _resolution_is_complete(res::InjectiveResolution)
+        all(iszero, last(res.Emods).dims) && return true
+        d = isempty(res.d_mor) ? res.iota0 : last(res.d_mor)
+        return all(v -> FieldLinAlg.rank(res.N.field, d.comps[v]) == d.cod.dims[v],
+                   eachindex(d.cod.dims))
+    end
+
     """
         resolution_summary(res::InjectiveResolution) -> NamedTuple
 
@@ -1420,6 +1232,7 @@ module Resolutions
     @inline function resolution_summary(res::InjectiveResolution)
         return (
             kind=:injective_resolution,
+            provenance=provenance(res),
             side=:injective,
             field=res.N.field,
             nvertices=nvertices(res.N.Q),
@@ -1553,8 +1366,9 @@ module Resolutions
         key = _resolution_key2(N, res.maxlen)
         R = cache === nothing ? nothing : _cache_injective_get(cache, key, InjectiveResolution{K})
         if R !== nothing
-            if res.minimal && res.check
-                assert_minimal(R; check_hull=true)
+            if res.check
+                check_injective_resolution(R; throw=true)
+                res.minimal && assert_minimal(R; check_hull=true)
             end
             return R
         end
@@ -1595,8 +1409,9 @@ module Resolutions
             R = _injective_resolution_impl(N, res.maxlen; threads=threads)
             cache === nothing || (R = _cache_injective_store!(cache, key, R))
         end
-        if res.minimal && res.check
-            assert_minimal(R; check_hull=true)
+        if res.check
+            check_injective_resolution(R; throw=true)
+            res.minimal && assert_minimal(R; check_hull=true)
         end
         return R
     end
@@ -1637,13 +1452,13 @@ module Resolutions
     Dense Bass table, analogous to `betti_table`:
 
     - Rows are cohomological degrees b = 0,1,2,...
-    - Columns are vertices v = 1,...,Q.n
+    - Columns are vertices v = 1,...,nvertices(Q)
     - Entry B[b+1, v] is the multiplicity of k[Dn(v)] in E^b.
     """
     function bass_table(res::InjectiveResolution{K}; pad_to::Union{Nothing,Int}=nothing) where {K}
         Q = res.N.Q
         L = length(res.Emods) - 1
-        B = zeros(Int, L + 1, Q.n)
+        B = zeros(Int, L + 1, nvertices(Q))
         for b in 0:L
             for v in res.gens[b + 1]
                 B[b + 1, v] += 1
@@ -1718,7 +1533,7 @@ module Resolutions
     """
     function minimality_report(res::InjectiveResolution{K}; check_hull::Bool=true) where {K}
         Q = res.N.Q
-        n = Q.n
+        n = nvertices(Q)
 
         hull_actual = _vertex_counts(res.gens[1], n)
         hull_expected = copy(hull_actual)
@@ -1821,23 +1636,32 @@ module Resolutions
                 push!(issues, "generator block $a contains a vertex outside 1:$nverts.")
         end
 
-        for a in eachindex(res.d_mor)
-            d = res.d_mor[a]
-            d.dom == res.Pmods[a + 1] || push!(issues, "d_$a domain must equal P_$a.")
-            d.cod == res.Pmods[a] || push!(issues, "d_$a codomain must equal P_$(a - 1).")
-            size(res.d_mat[a]) == (length(res.gens[a]), length(res.gens[a + 1])) ||
-                push!(issues, "coefficient matrix $a has size $(size(res.d_mat[a])) but expected ($(length(res.gens[a])), $(length(res.gens[a + 1]))).")
+        if isempty(issues)
+            for a in eachindex(res.d_mor)
+                d = res.d_mor[a]
+                d.dom == res.Pmods[a + 1] || push!(issues, "d_$a domain must equal P_$a.")
+                d.cod == res.Pmods[a] || push!(issues, "d_$a codomain must equal P_$(a - 1).")
+                size(res.d_mat[a]) == (length(res.gens[a]), length(res.gens[a + 1])) ||
+                    push!(issues, "coefficient matrix $a has size $(size(res.d_mat[a])) but expected ($(length(res.gens[a])), $(length(res.gens[a + 1]))).")
+            end
+        end
+        if isempty(issues)
+            try
+                for a in 1:max(0, length(res.d_mor) - 1)
+                    is_zero_morphism(compose(res.d_mor[a], res.d_mor[a + 1])) ||
+                        push!(issues, "d_$a * d_$(a + 1) must vanish.")
+                end
+
+                isempty(res.d_mor) || is_zero_morphism(compose(res.aug, res.d_mor[1])) ||
+                    push!(issues, "augmentation must kill the first differential.")
+            catch error
+                push!(issues, "differential composition is malformed: " * sprint(showerror, error))
+            end
         end
 
-        for a in 1:max(0, length(res.d_mor) - 1)
-            is_zero_morphism(compose(res.d_mor[a], res.d_mor[a + 1])) ||
-                push!(issues, "d_$a * d_$(a + 1) must vanish.")
-        end
+        minrep = isempty(issues) ? minimality_report(res; check_cover=check_cover) :
+            (minimal=false, cover_ok=false)
 
-        isempty(res.d_mor) || is_zero_morphism(compose(res.aug, res.d_mor[1])) ||
-            push!(issues, "augmentation must kill the first differential.")
-
-        minrep = minimality_report(res; check_cover=check_cover)
         report = _derived_validation_report(
             :projective_resolution,
             isempty(issues);
@@ -1846,7 +1670,7 @@ module Resolutions
             nvertices=nverts,
             resolution_length=resolution_length(res),
             generator_counts=Tuple(length(g) for g in res.gens),
-            cover_checked=check_cover,
+            cover_checked=check_cover && isempty(issues),
             cover_ok=minrep.cover_ok,
             minimal=minrep.minimal,
             issues=issues,
@@ -1887,21 +1711,30 @@ module Resolutions
                 push!(issues, "generator block $b contains a vertex outside 1:$nverts.")
         end
 
-        for b in eachindex(res.d_mor)
-            d = res.d_mor[b]
-            d.dom == res.Emods[b] || push!(issues, "d^$((b - 1)) domain must equal E^$((b - 1)).")
-            d.cod == res.Emods[b + 1] || push!(issues, "d^$((b - 1)) codomain must equal E^$b.")
+        if isempty(issues)
+            for b in eachindex(res.d_mor)
+                d = res.d_mor[b]
+                d.dom == res.Emods[b] || push!(issues, "d^$((b - 1)) domain must equal E^$((b - 1)).")
+                d.cod == res.Emods[b + 1] || push!(issues, "d^$((b - 1)) codomain must equal E^$b.")
+            end
+        end
+        if isempty(issues)
+            try
+                for b in 1:max(0, length(res.d_mor) - 1)
+                    is_zero_morphism(compose(res.d_mor[b + 1], res.d_mor[b])) ||
+                        push!(issues, "d^$b * d^$((b - 1)) must vanish.")
+                end
+
+                isempty(res.d_mor) || is_zero_morphism(compose(res.d_mor[1], res.iota0)) ||
+                    push!(issues, "first differential must kill the coaugmentation.")
+            catch error
+                push!(issues, "differential composition is malformed: " * sprint(showerror, error))
+            end
         end
 
-        for b in 1:max(0, length(res.d_mor) - 1)
-            is_zero_morphism(compose(res.d_mor[b + 1], res.d_mor[b])) ||
-                push!(issues, "d^$b * d^$((b - 1)) must vanish.")
-        end
+        minrep = isempty(issues) ? minimality_report(res; check_hull=check_hull) :
+            (minimal=false, hull_ok=false)
 
-        isempty(res.d_mor) || is_zero_morphism(compose(res.d_mor[1], res.iota0)) ||
-            push!(issues, "first differential must kill the coaugmentation.")
-
-        minrep = minimality_report(res; check_hull=check_hull)
         report = _derived_validation_report(
             :injective_resolution,
             isempty(issues);
@@ -1910,7 +1743,7 @@ module Resolutions
             nvertices=nverts,
             resolution_length=resolution_length(res),
             generator_counts=Tuple(length(g) for g in res.gens),
-            hull_checked=check_hull,
+            hull_checked=check_hull && isempty(issues),
             hull_ok=minrep.hull_ok,
             minimal=minrep.minimal,
             issues=issues,
@@ -2004,6 +1837,19 @@ module Resolutions
     const _DOWNSET_POSTCOMPOSE_SYSTEM_CACHE = Dict{_DownsetSystemKey,Any}()
     const _DOWNSET_POSTCOMPOSE_SYSTEM_LOCK = ReentrantLock()
 
+    # Package-image training must not retain fixture-specific identities or
+    # numerical workspaces. Also used by focused cache-lifecycle validation.
+    function _clear_resolution_plan_caches!()
+        for (store, cache_lock) in ((_ACTIVE_INDEX_PLAN_CACHE, _ACTIVE_INDEX_PLAN_LOCK),
+                                    (_BASE_VERTEX_GROUPS_CACHE, _BASE_VERTEX_GROUPS_LOCK),
+                                    (_ACTIVE_UPSET_VECTOR_CACHE, _ACTIVE_UPSET_VECTOR_LOCK),
+                                    (_DOWNSET_HOM_STRUCTURE_CACHE, _DOWNSET_HOM_STRUCTURE_LOCK),
+                                    (_DOWNSET_POSTCOMPOSE_SYSTEM_CACHE, _DOWNSET_POSTCOMPOSE_SYSTEM_LOCK))
+            lock(() -> empty!(store), cache_lock)
+        end
+        return nothing
+    end
+
     @inline function _cached_downset_hom_structure(Q::AbstractPoset,
                                                    dom_bases::Vector{Int},
                                                    cod_bases::Vector{Int})
@@ -2032,9 +1878,9 @@ module Resolutions
         Q = f.dom.Q
         rows = Vector{SparseRow{K}}()
         rhs_refs = Vector{_DownsetSystemRowRef}()
-        sizehint!(rows, sum(length(structure.act_cod[u]) * size(f.comps[u], 2) for u in 1:Q.n))
+        sizehint!(rows, sum(length(structure.act_cod[u]) * size(f.comps[u], 2) for u in 1:nvertices(Q)))
         sizehint!(rhs_refs, length(rows))
-        @inbounds for u in 1:Q.n
+        @inbounds for u in 1:nvertices(Q)
             rows_u = structure.act_cod[u]
             cols_u = structure.act_dom[u]
             Fu = f.comps[u]
@@ -2104,8 +1950,8 @@ module Resolutions
                                         C::Matrix{K}) where {K}
         Q = E.Q
         @assert _same_poset(Q, Ep.Q)
-        comps = Vector{Matrix{K}}(undef, Q.n)
-        for u in 1:Q.n
+        comps = Vector{Matrix{K}}(undef, nvertices(Q))
+        for u in 1:nvertices(Q)
             rows = act_cod[u]
             cols = act_dom[u]
             comps[u] = _gather_component_matrix(C, rows, cols)
@@ -2146,9 +1992,9 @@ module Resolutions
             @assert g.dom === f.dom
             @assert f.cod.Q === Q
             @assert g.cod.Q === Q
-            @assert length(act_dom) == Q.n
-            @assert length(act_cod) == Q.n
-            for u in 1:Q.n
+            @assert length(act_dom) == nvertices(Q)
+            @assert length(act_cod) == nvertices(Q)
+            for u in 1:nvertices(Q)
                 @assert f.cod.dims[u] == length(act_dom[u])
                 @assert g.cod.dims[u] == length(act_cod[u])
                 @assert size(f.comps[u], 1) == f.cod.dims[u]
@@ -2259,7 +2105,7 @@ module Resolutions
         cod_bases0 = res_cod.gens[1]
         structure0 = _cached_downset_hom_structure(Q, dom_bases0, cod_bases0)
 
-        rhs0_comps = [res_cod.iota0.comps[u] * g.comps[u] for u in 1:Q.n]
+        rhs0_comps = [res_cod.iota0.comps[u] * g.comps[u] for u in 1:nvertices(Q)]
         rhs0 = PMorphism{K}(g.dom, res_cod.Emods[1], rhs0_comps)
 
         C0 = _solve_downset_postcompose_coeff(res_dom.iota0, rhs0,
@@ -2275,7 +2121,7 @@ module Resolutions
             cod_bases = res_cod.gens[k+1]
             structure = _cached_downset_hom_structure(Q, dom_bases, cod_bases)
 
-            rhs_comps = [res_cod.d_mor[k].comps[u] * phis[k].comps[u] for u in 1:Q.n]
+            rhs_comps = [res_cod.d_mor[k].comps[u] * phis[k].comps[u] for u in 1:nvertices(Q)]
             rhs = PMorphism{K}(res_dom.Emods[k], res_cod.Emods[k+1], rhs_comps)
 
             Ck = _solve_downset_postcompose_coeff(res_dom.d_mor[k], rhs,

@@ -231,23 +231,18 @@ end
     )
 end
 
-const _FRINGE_SHOW_FIBER_SUMMARY_MAX_VERTICES = 12
-
 @inline function _fringe_show_fiber_summary(M::FringeModule)
     n = nvertices(M.P)
     dims = M.fiber_dims[]
     if dims !== nothing
         known = count(!=(typemin(Int)), dims)
         if known == n
-            vals = copy(dims)
-            return "fibers=$(repr(vals)), total=$(sum(vals)), max=$(isempty(vals) ? 0 : maximum(vals))"
+            stats = "total=$(sum(dims)), max=$(isempty(dims) ? 0 : maximum(dims))"
+            n <= 12 && return "fibers=$(repr(dims)), $stats"
+            return "fiber_cache=$known/$n known, $stats (use dimensions(M) for fibers)"
         elseif known > 0
             return "fiber_cache=$known/$n known (use dimensions(M) for full summary)"
         end
-    end
-    if n <= _FRINGE_SHOW_FIBER_SUMMARY_MAX_VERTICES
-        d = _fringe_dimensions(M)
-        return "fibers=$(repr(d.fibers)), total=$(d.total), max=$(d.maximum_fiber)"
     end
     return "fiber_summary=lazy (use dimensions(M))"
 end
@@ -323,6 +318,8 @@ Owner-local summary entrypoint for finite-fringe objects.
 This mirrors the shared `describe(...)` surface without requiring users to know
 that the generic is owned by another subsystem. Supported inputs currently
 include finite-fringe posets, upsets, downsets, and fringe modules.
+Neither summaries nor display compute missing fiber dimensions. Request
+`dimensions(M)` or `fiber_dimension(M, q)` explicitly when those ranks are needed.
 """
 fringe_summary(P::AbstractPoset) = _fringe_describe(P)
 fringe_summary(U::Upset) = _fringe_describe(U)

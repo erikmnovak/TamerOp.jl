@@ -2,6 +2,47 @@ with_fields(FIELDS_FULL) do field
 K = CM.coeff_type(field)
 @inline c(x) = CM.coerce(field, x)
 
+@testset "A12 fringe inspection never computes missing fibers" begin
+    for n in (3, 20)
+        P = chain_poset(n)
+        U = FF.principal_upset(P, 2)
+        D = FF.principal_downset(P, 2)
+        M = FF.one_by_one_fringe(P, U, D, c(1); field=field)
+        fiber_index = M.fiber_index[]
+        queries = M.fiber_queries[]
+        @test M.fiber_dims[] === nothing
+        @test occursin("FringeModule", sprint(show, M))
+        @test occursin("fiber_summary=lazy", sprint(show, MIME"text/plain"(), M))
+        @test CC.describe(M).nvertices == n
+        @test FF.fringe_summary(M).matrix_size == (1, 1)
+        @test FF.fringe_coefficients(M) == reshape(K[c(1)], 1, 1)
+        @test M.fiber_dims[] === nothing
+        @test M.fiber_index[] === fiber_index
+        @test M.fiber_queries[] == queries
+
+        # One explicit rank request populates just that fiber; display cannot
+        # compute the remaining n-1 values as an incidental side effect.
+        @test FF.fiber_dimension(M, 2) == 1
+        partial = copy(M.fiber_dims[])
+        @test count(!=(typemin(Int)), partial) == 1
+        @test occursin("fiber_cache=1/$n known", sprint(show, MIME"text/plain"(), M))
+        @test M.fiber_dims[] == partial
+        @test CC.describe(M).nvertices == n
+        @test M.fiber_dims[] == partial
+
+        expected = zeros(Int, n)
+        expected[2] = 1
+        @test CC.dimensions(M).fibers == expected
+        full = M.fiber_dims[]
+        @test occursin("total=1", sprint(show, MIME"text/plain"(), M))
+        if n > 12
+            @test occursin("use dimensions(M) for fibers", sprint(show, MIME"text/plain"(), M))
+        end
+        @test M.fiber_dims[] === full
+        @test M.fiber_dims[] == expected
+    end
+end
+
 @testset "FiniteFringe basics" begin
     P = chain_poset(3)
 
@@ -248,19 +289,9 @@ K = CM.coeff_type(field)
     end
 
     @testset "FiniteFringe exported API direct coverage" begin
-        # FiniteFringeOptions direct constructor/field contract.
-        opts = FF.FiniteFringeOptions()
-        @test opts.check === true
-        @test opts.cached === true
-        @test opts.store_sparse === false
-        @test opts.scalar == 1
-        @test opts.poset_kind == :regions
-        opts2 = FF.FiniteFringeOptions(check=false, cached=false, store_sparse=true, scalar=QQ(3), poset_kind=:dense)
-        @test opts2.check === false
-        @test opts2.cached === false
-        @test opts2.store_sparse === true
-        @test opts2.scalar == QQ(3)
-        @test opts2.poset_kind == :dense
+        # The unused option container is not a supported API.
+        @test !isdefined(FF, :FiniteFringeOptions)
+        @test !isdefined(OPT, :FiniteFringeOptions)
 
         # leq_row / leq_col direct API (FinitePoset specialization).
         P = chain_poset(4)

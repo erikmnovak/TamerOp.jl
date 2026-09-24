@@ -36,7 +36,7 @@ Keyword arguments:
   If `false`, store only positive ranks (sparser and usually faster).
 - `threads`: if `true` and Julia has more than one thread, parallelize over the
   outer vertex index `a`. This is safe: `CoverCache` is thread-safe and each
-  thread uses its own map memo and output dictionary.
+  work chunk owns its map memo and writes disjoint integer output entries.
 """
 function rank_invariant(
     M::PModule{K},
@@ -52,31 +52,23 @@ function rank_invariant(
     use_array_memo = _use_array_memo(n)
 
     if threads && Threads.nthreads() > 1
-        vals = zeros(Int, n * n)
-        filled = falses(n * n)
-        nT = Threads.nthreads()
-        memo_by_thread = use_array_memo ?
-            [_new_array_memo(K, n) for _ in 1:nT] :
-            [Dict{Tuple{Int, Int}, AbstractMatrix{K}}() for _ in 1:nT]
-
-        Threads.@threads for a in 1:nvertices(Q)
-            tid = Threads.threadid()
-            memo = memo_by_thread[tid]
-            for b in upset_indices(Q, a)
-                r = rank_map(M, a, b; cache = cc, memo = memo)
+        vals = fill(-1, n * n)
+        _foreach_workchunk(n; threads=true) do vertices, _
+            local r
+            local memo = use_array_memo ? _new_array_memo(K, n) : Dict{Tuple{Int,Int},AbstractMatrix{K}}()
+            for a in vertices, b in upset_indices(Q, a)
+                r = rank_map(M, a, b; cache=cc, memo=memo)
                 if store_zeros || r > 0
-                    idx = _memo_index(n, a, b)
-                    vals[idx] = r
-                    filled[idx] = true
+                    vals[_memo_index(n, a, b)] = r
                 end
             end
         end
-        ranks = Dict{Tuple{Int, Int}, Int}()
-        sizehint!(ranks, count(filled))
-        @inbounds for idx in eachindex(filled)
-            filled[idx] || continue
-            a = Int(div(idx - 1, n)) + 1
-            b = ((idx - 1) % n) + 1
+        ranks = Dict{Tuple{Int,Int},Int}()
+        sizehint!(ranks, count(>=(0), vals))
+        @inbounds for idx in eachindex(vals)
+            vals[idx] < 0 && continue
+            a = div(idx - 1, n) + 1
+            b = mod1(idx, n)
             ranks[(a, b)] = vals[idx]
         end
         return RankInvariantResult(Q, ranks, store_zeros)

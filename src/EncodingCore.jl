@@ -124,12 +124,11 @@ function _check_representative_contract(reps, dim::Int, issues::Vector{String})
 end
 
 function _encoding_describe(pi::AbstractPLikeEncodingMap)
-    axes = encoding_axes(pi)
     return (;
         kind=:encoding_map,
         map_type=typeof(pi),
         parameter_dim=dimension(pi),
-        has_axes=axes !== nothing,
+        has_axes=_supports_axes(pi),
         has_representatives=_supports_representatives(pi),
     )
 end
@@ -138,6 +137,10 @@ end
     encoding_summary(enc) -> NamedTuple
 
 Return a compact semantic summary of an encoding object.
+
+Inspection does not generate axes or representatives. The `has_axes` and
+`has_representatives` flags report supported accessors or explicitly supplied
+metadata; call those accessors when the actual data is needed.
 
 This is the owner-module inspection entrypoint for [`CompiledEncoding`](@ref)
 and encoding-map objects such as [`GridEncodingMap`](@ref). It mirrors the
@@ -215,20 +218,21 @@ for encoding maps. It records:
 - backend metadata/cache payload in `meta`.
 
 Defaults:
-- `axes=nothing` means "ask the encoding map whether axes are available";
-- `reps=nothing` means "ask the encoding map whether representatives are available";
+- `axes=nothing` leaves axes to the map's accessor, evaluated only on request;
+- `reps=nothing` leaves representatives to the map's accessor, evaluated only
+  on request;
 - `meta=NamedTuple()` keeps the wrapper lightweight unless a backend/cache
   layer explicitly needs metadata.
 
 Use this when you want an inspectable encoding object. Simple workflow code
 should usually rely on higher-level `encode(...)` entrypoints instead. For
 inspection inside `EncodingCore`, prefer [`encoding_summary`](@ref) over direct
-field access.
+field access. Wrapping never generates axes or representatives. To retain
+precomputed metadata, supply `axes=axes_from_encoding(pi)` or
+`reps=representatives(pi)` explicitly.
 """
 function compile_encoding(P, pi; axes=nothing, reps=nothing, meta=NamedTuple())
-    axes_val = axes === nothing ? _axes_or_nothing(pi) : axes
-    reps_val = reps === nothing ? _reps_or_nothing(pi) : reps
-    return CompiledEncoding(P, pi, axes_val, reps_val, meta)
+    return CompiledEncoding(P, pi, axes, reps, meta)
 end
 
 compile_encoding(::Any, ::Nothing; kwargs...) = nothing
@@ -426,9 +430,9 @@ function _probe_locate_style(pi, x0::AbstractVector{<:Real}; strict::Bool, closu
 end
 
 function _probe_locate_many_style(pi, x0::AbstractVector{<:Real}; strict::Bool, closure::Bool)
-    probe = Matrix{Float64}(undef, length(x0), 1)
+    probe = Matrix{eltype(x0)}(undef, length(x0), 1)
     @inbounds for i in eachindex(x0)
-        probe[i, 1] = float(x0[i])
+        probe[i, 1] = x0[i]
     end
     dest = Vector{Int}(undef, 1)
     try
@@ -532,15 +536,14 @@ dimension(enc::CompiledEncoding) = dimension(enc.pi)
 
 Return representative points for the regions of `pi`, when available.
 
-Representatives are optional metadata. Use them for inspection, plotting, and
- lightweight semantic summaries, not as a substitute for the actual encoding
- map.
+Representatives are optional data. This accessor may construct them: for a
+grid map it enumerates the Cartesian product of all coordinate axes. Prefer
+[`encoding_summary`](@ref) for cheap inspection, and request representatives
+explicitly for plotting or diagnostics. They do not replace the encoding map.
 """
 function representatives end
 
 @inline representatives(::AbstractPLikeEncodingMap) = nothing
-@inline _reps_or_nothing(::Any) = nothing
-@inline _reps_or_nothing(pi::AbstractPLikeEncodingMap) = representatives(pi)
 
 const _REPRESENTATIVES_FALLBACK_METHOD = which(representatives, Tuple{AbstractPLikeEncodingMap})
 
@@ -568,27 +571,26 @@ Axes are optional semantic metadata. When present, they are useful for
 function axes_from_encoding end
 
 @inline axes_from_encoding(::AbstractPLikeEncodingMap) = nothing
-@inline _axes_or_nothing(::Any) = nothing
-@inline _axes_or_nothing(pi::AbstractPLikeEncodingMap) = axes_from_encoding(pi)
+
+const _AXES_FALLBACK_METHOD = which(axes_from_encoding, Tuple{AbstractPLikeEncodingMap})
+
+@inline _supports_axes(::Any) = false
+@inline _supports_axes(pi::AbstractPLikeEncodingMap) =
+    which(axes_from_encoding, Tuple{typeof(pi)}) !== _AXES_FALLBACK_METHOD
+@inline _supports_axes(enc::CompiledEncoding) =
+    enc.axes !== nothing || _supports_axes(enc.pi)
 
 function axes_from_encoding(enc::CompiledEncoding)
     enc.axes === nothing ? axes_from_encoding(enc.pi) : enc.axes
 end
 
-@inline function _compile_encoding_without_reps(P, pi, meta)
-    return CompiledEncoding(P, pi, _axes_or_nothing(pi), nothing, meta)
-end
-
-@inline function _compile_encoding_cached(P, pi, session_cache::Union{Nothing,SessionCache};
-                                          include_reps::Bool=true)
-    if session_cache === nothing
-        ec = EncodingCache()
-        return include_reps ? compile_encoding(P, pi; meta=ec) :
-               _compile_encoding_without_reps(P, pi, ec)
+@inline function _compile_encoding_cached(P, pi, session_cache::Union{Nothing,SessionCache})
+    ec = session_cache === nothing ? EncodingCache() :
+         _encoding_cache!(session_cache, _WORKFLOW_ENCODING_CACHE_KEY)
+    if pi isa CompiledEncoding
+        return compile_encoding(P, pi.pi; axes=pi.axes, reps=pi.reps, meta=ec)
     end
-    ec = _encoding_cache!(session_cache, _WORKFLOW_ENCODING_CACHE_KEY)
-    return include_reps ? compile_encoding(P, pi; meta=ec) :
-           _compile_encoding_without_reps(P, pi, ec)
+    return compile_encoding(P, pi; meta=ec)
 end
 
 """
@@ -631,8 +633,10 @@ function _grid_strides(sizes::NTuple{N,Int}) where {N}
     return ntuple(i -> strides[i], N)
 end
 
-function GridEncodingMap(P, coords::NTuple{N,Vector{T}};
-                         orientation::NTuple{N,Int}=ntuple(_ -> 1, N)) where {N,T}
+function GridEncodingMap(P, coords::NTuple{N,AbstractVector};
+                         orientation::NTuple{N,Int}=ntuple(_ -> 1, N)) where {N}
+    T = promote_type(map(eltype, coords)...)
+    coords = map(a -> a isa Vector{T} ? a : T.(a), coords)
     sizes = ntuple(i -> length(coords[i]), N)
     for i in 1:N
         o = orientation[i]
@@ -684,8 +688,9 @@ encoding_axes(pi::AbstractPLikeEncodingMap) = axes_from_encoding(pi)
 Return representative points for the regions of an encoding object, when
 available.
 
-Representatives are intended for inspection and diagnostics. They should not be
-treated as a substitute for the underlying encoding map.
+This explicitly requests representative data and may enumerate all regions.
+Use [`encoding_summary`](@ref) for inspection without generating this data.
+Representatives should not replace the underlying encoding map.
 """
 encoding_representatives(enc::CompiledEncoding) = representatives(enc)
 encoding_representatives(pi::AbstractPLikeEncodingMap) = representatives(pi)
@@ -696,7 +701,7 @@ function _encoding_describe(enc::CompiledEncoding)
         poset_type=typeof(enc.P),
         map_type=typeof(enc.pi),
         parameter_dim=dimension(enc),
-        has_axes=encoding_axes(enc) !== nothing,
+        has_axes=_supports_axes(enc),
         has_representatives=_supports_representatives(enc),
         meta_type=typeof(enc.meta),
     )
@@ -763,7 +768,7 @@ function locate(pi::GridEncodingMap{N,T}, x::NTuple{N,<:Real}) where {N,T}
 end
 
 function locate_many!(dest::AbstractVector{<:Integer}, pi::GridEncodingMap{N,T},
-                      X::AbstractMatrix{<:AbstractFloat}; kwargs...) where {N,T}
+                      X::AbstractMatrix{<:Real}; kwargs...) where {N,T}
     size(X, 1) == N || throw(ArgumentError("locate_many!: expected query matrix with $N rows, got $(size(X, 1))."))
     length(dest) == size(X, 2) || throw(ArgumentError("locate_many!: destination length $(length(dest)) must equal the number of query columns $(size(X, 2))."))
     _ = kwargs
@@ -784,15 +789,6 @@ function locate_many!(dest::AbstractVector{<:Integer}, pi::GridEncodingMap{N,T},
         dest[j] = lin
     end
     return dest
-end
-
-function locate_many!(dest::AbstractVector{<:Integer}, pi::GridEncodingMap{N,T},
-                      X::AbstractMatrix{<:Real}; kwargs...) where {N,T}
-    Xf = Matrix{Float64}(undef, size(X, 1), size(X, 2))
-    @inbounds for j in axes(X, 2), i in axes(X, 1)
-        Xf[i, j] = float(X[i, j])
-    end
-    return locate_many!(dest, pi, Xf; kwargs...)
 end
 
 function representatives(pi::GridEncodingMap{N,T}) where {N,T}
@@ -911,7 +907,7 @@ function check_compiled_encoding(enc::CompiledEncoding; throw::Bool=false)
                                   poset_type=typeof(enc.P),
                                   map_type=typeof(enc.pi),
                                   parameter_dim=dim,
-                                  has_axes=enc.axes !== nothing,
+                                  has_axes=_supports_axes(enc),
                                   has_representatives=_supports_representatives(enc),
                                   issues=issues)
 end

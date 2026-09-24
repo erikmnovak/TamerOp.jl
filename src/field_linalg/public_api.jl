@@ -3,12 +3,12 @@
 #
 # Scope:
 #   Public FieldLinAlg entrypoints plus restricted helpers and module
-#   initialization for threshold loading/autotune.
+#   read-only initialization for threshold loading.
 # Owns:
 #   - exported/public entrypoints (`rank`, `nullspace`, `colspace`,
 #     `solve_fullcolumn`, restricted helpers),
 #   - thin public dispatch over routing + kernel families,
-#   - module initialization for threshold loading/autotune.
+#   - read-only module initialization for threshold loading.
 # Does not own:
 #   - backend heuristics themselves,
 #   - QQ/non-QQ kernel internals,
@@ -363,6 +363,25 @@ function elimination_summary(field::AbstractCoeffField, A; backend::Symbol=:auto
     error("FieldLinAlg.elimination_summary: reusable elimination summaries are currently implemented only for QQ")
 end
 
+"""
+    rref(field, A; pivots=true, backend=:auto)
+
+Return the reduced row echelon form of `A`, with increasing pivot-column indices
+as `(R, pivots)`. With `pivots=false`, return only `R`. The input is unchanged.
+
+For `RealField`, use partial row pivoting without permuting columns. An
+unreduced column is discarded when its remaining entries have magnitude at most
+`field.atol + field.rtol * opnorm(A, 1)`, measured in the input's coefficient
+type. This is tolerance-based Gaussian elimination, not a QR/SVD rank decision;
+near singularity these methods can disagree. Tolerances and entries must be
+finite, and tolerances nonnegative. Arithmetic overflow raises `ArgumentError`;
+rescale the input or use higher precision. `R` uses `coeff_type(field)`.
+
+Real backends are `:float_dense_rref` and `:float_sparse_rref`; `:auto` preserves
+dense/sparse storage (including sparse views). Sparse elimination can introduce
+fill. Use `rank`, `nullspace`, or `colspace` when reduced rows are not needed;
+their numerical QR/SVD backends remain independent of this operation.
+"""
 function rref(field::AbstractCoeffField, A; pivots::Bool=true, backend::Symbol=:auto)
     if field isa QQField
         trait = _matrix_backend_trait(field, A; op=:rref, backend=backend)
@@ -385,8 +404,11 @@ function rref(field::AbstractCoeffField, A; pivots::Bool=true, backend::Symbol=:
         return _rref_fp(A; pivots=pivots)
     end
     if field isa RealField
-        _ = _choose_linalg_backend(field, A; op=:rref, backend=backend)
-        return _rref_float(field, A; pivots=pivots)
+        be = _choose_linalg_backend(field, A; op=:rref, backend=backend)
+        be in (:float_dense_rref, :float_sparse_rref) ||
+            throw(ArgumentError("rref: RealField backend must be :auto, :float_dense_rref, or :float_sparse_rref"))
+        return be == :float_sparse_rref ? _rref_float_sparse(field, A; pivots=pivots) :
+                                         _rref_float_dense(field, A; pivots=pivots)
     end
     error("FieldLinAlg.rref: unsupported field $(typeof(field))")
 end
@@ -395,7 +417,7 @@ function rank(field::AbstractCoeffField, A; backend::Symbol=:auto)
     # Call path:
     # `rank` -> backend routing (`backend_routing.jl`) -> QQ/non-QQ kernel
     # (`qq_engine.jl` or `nonqq_engines.jl`).
-    if backend == :auto && _is_tiny_matrix(A)
+    if backend == :auto && _is_tiny_matrix(A) && !(field isa RealField)
         return _rank_tiny(field, A)
     end
     if field isa QQField
@@ -419,11 +441,12 @@ function rank(field::AbstractCoeffField, A; backend::Symbol=:auto)
         return _rank_fp(A)
     end
     if field isa RealField
+        A = _real_sparse_input(A)
         be = _choose_linalg_backend(field, A; op=:rank, backend=backend)
         if be == :float_dense_svd
-            return _rank_float_svd(field, A)
+            return _rank_float_svd(field, _real_backend_matrix(field, A, be))
         end
-        return _rank_float(field, A)
+        return _rank_float(field, _real_backend_matrix(field, A, be))
     end
     error("FieldLinAlg.rank: unsupported field $(typeof(field))")
 end
@@ -460,15 +483,12 @@ function nullspace(field::AbstractCoeffField, A; backend::Symbol=:auto)
         return _nullspace_fp(A)
     end
     if field isa RealField
+        A = _real_sparse_input(A)
         be = _choose_linalg_backend(field, A; op=:nullspace, backend=backend)
         if be == :float_dense_svd
-            return _nullspace_float_svd(field, A)
+            return _nullspace_float_svd(field, _real_backend_matrix(field, A, be))
         end
-        if be == :float_sparse_svds
-            Z = _nullspace_float_svds(field, A)
-            Z === nothing || return Z
-        end
-        return _nullspace_float(field, A)
+        return _nullspace_float(field, _real_backend_matrix(field, A, be))
     end
     error("FieldLinAlg.nullspace: unsupported field $(typeof(field))")
 end
@@ -511,13 +531,34 @@ function _colspace_with_pivots(field::AbstractCoeffField, A; backend::Symbol=:au
         return (A[:, cpivs], cpivs)
     end
     if field isa RealField
-        _, pivs = _rref_float(field, A; pivots=true)
-        cpivs = Int[collect(pivs)...]
+        A = _real_sparse_input(A)
+        be = _choose_linalg_backend(field, A; op=:colspace, backend=backend)
+        input = _real_backend_matrix(field, A, be)
+        cpivs = _pivot_columns_float(field, input)
         return (_img_from_pivots(eltype(A), A, cpivs), cpivs)
     end
     error("FieldLinAlg._colspace_with_pivots: unsupported field $(typeof(field))")
 end
 
+"""
+    solve_fullcolumn(field, B, Y; check_rhs=true, backend=:auto, cache=true,
+                     factor=nothing, analysis=nothing)
+
+Solve `B * X = Y` for a matrix with independent columns, preserving vector or
+matrix RHS shape. Exact fields verify equality when `check_rhs=true`.
+
+For `RealField`, dense or sparse QR checks full column rank at the field's
+input-scale tolerance. Every RHS column is checked separately using
+`norm(B*x-y) <= atol + rtol*(norm(B)*norm(x) + norm(y))`, with Frobenius/Euclidean
+norms. This is a backward-error contract, not a bound on solution error for an
+ill-conditioned matrix. Inputs and outputs must be finite even when RHS
+verification is disabled. Explicit real solve backends are
+`:float_dense_qr` and `:float_sparse_qr`.
+
+Cached or explicitly factored solves require an unchanged left matrix. Sparse
+numerical cache entries distinguish the effective rank tolerance. Reusable
+`factor_fullcolumn`/`analysis` objects are currently a QQ capability.
+"""
 function solve_fullcolumn(field::AbstractCoeffField, B, Y;
                           check_rhs::Bool=true, backend::Symbol=:auto,
                           cache::Bool=true, factor=nothing, analysis=nothing)
@@ -565,15 +606,38 @@ function solve_fullcolumn(field::AbstractCoeffField, B, Y;
     end
     if field isa RealField
         be = factor_backend
+        _choose_linalg_backend(field, B; op=:solve, backend=be)
         if be == :float_sparse_qr
-            Bs = B isa SparseMatrixCSC ? B : sparse(B)
+            Bs = _real_backend_matrix(field, B, be)
             return _solve_fullcolumn_float(field, Bs, Y; check_rhs=check_rhs, cache=cache, factor=factor_payload)
         end
-        return _solve_fullcolumn_float(field, B, Y; check_rhs=check_rhs)
+        return _solve_fullcolumn_float(field, _real_backend_matrix(field, B, be), Y; check_rhs=check_rhs)
     end
     error("FieldLinAlg.solve_fullcolumn: unsupported field $(typeof(field))")
 end
 
+"""
+    rank_dim(field, A; backend=:auto, kwargs...) -> Int
+
+Return the matrix rank for a dimension-only query. Over `QQField()`, the result
+is exact: modular reductions can certify full rank, and otherwise exact
+elimination determines the answer. The rational backends are `:auto`, `:exact`,
+and `:modular`; the latter still falls back to exact elimination when needed.
+
+Rational queries also accept `max_primes=4` (a nonnegative probe-attempt budget),
+`primes=DEFAULT_MODULAR_PRIMES`, and
+`small_threshold=RANKQQ_DIM_SMALL_THRESHOLD[]`. Primes dividing a denominator
+or exceeding the modular kernels' safe integer range are skipped; attempted
+composite moduli raise `ArgumentError`. An empty
+prime list or `max_primes=0` selects exact fallback. Over `RealField`, rank uses
+`atol + rtol * opnorm(A, 1)` with an operation-specific QR or SVD backend.
+Sparse QR applies this tolerance during factorization, before selecting pivot
+columns. QR and SVD can make different decisions near a numerical rank
+boundary; neither certifies the exact rank of the represented real matrix.
+Explicit real backends are `:float_dense_qr`, `:float_sparse_qr` and
+`:float_dense_svd`. All require finite entries and finite nonnegative
+tolerances.
+"""
 function rank_dim(field::AbstractCoeffField, A; backend::Symbol=:auto, kwargs...)
     if field isa QQField
         return _rankQQ_dim(A; backend=backend, kwargs...)
@@ -592,11 +656,12 @@ function rank_dim(field::AbstractCoeffField, A; backend::Symbol=:auto, kwargs...
         return _rank_fp(A)
     end
     if field isa RealField
+        A = _real_sparse_input(A)
         be = _choose_linalg_backend(field, A; op=:rank, backend=backend)
         if be == :float_dense_svd
-            return _rank_float_svd(field, A)
+            return _rank_float_svd(field, _real_backend_matrix(field, A, be))
         end
-        return _rank_float(field, A)
+        return _rank_float(field, _real_backend_matrix(field, A, be))
     end
     return rank(field, A; backend=backend)
 end
@@ -624,7 +689,8 @@ function rank_restricted(field::AbstractCoeffField, A::SparseMatrixCSC,
         return _rank_restricted_sparse_generic(A, rows, cols; kwargs...)
     end
     if field isa RealField
-        return _rank_restricted_float_sparse(field, A, rows, cols; kwargs...)
+        S = _sparse_extract_restricted(A, rows, cols; kwargs...)
+        return rank_dim(field, S; backend=backend)
     end
     error("FieldLinAlg.rank_restricted: unsupported field $(typeof(field))")
 end
@@ -1120,17 +1186,13 @@ function solve_fullcolumn_restricted_words(field::AbstractCoeffField,
     return solve_fullcolumn(field, B, Ysub; check_rhs=check_rhs, backend=backend, kws...)
 end
 
-function __init__()
+function _initialize_linalg_thresholds!(path::AbstractString)
     _LINALG_THRESHOLDS_INITIALIZED[] && return
-    path = _linalg_thresholds_path()
-    loaded = _load_linalg_thresholds!(; path=path, warn_on_mismatch=true)
-    if !loaded && !isfile(path)
-        try
-            autotune_linalg_thresholds!(; path=path, save=true, quiet=true, profile=:startup)
-        catch err
-            @warn "FieldLinAlg: startup autotune failed; using defaults." path exception=(err, catch_backtrace())
-        end
-    end
+    # Installed package sources may be read-only. A missing or machine-specific
+    # profile leaves the built-in defaults in place; tuning is an explicit task.
+    _load_linalg_thresholds!(; path=path, warn_on_mismatch=false)
     _LINALG_THRESHOLDS_INITIALIZED[] = true
     return nothing
 end
+
+__init__() = _initialize_linalg_thresholds!(_linalg_thresholds_path())

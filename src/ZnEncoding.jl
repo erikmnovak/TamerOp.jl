@@ -1272,6 +1272,7 @@ function pmodule_on_box(FG::Flange{K};
 
     # Gather rows_h from rows_g directly (rows_h subset rows_g), avoiding Pu * B[u].
     function gather_projection_rows(Bu::Matrix{K}, rows_g::Vector{Int}, rows_h::Vector{Int})
+        local Ph, du, out, Pg, j, i, target, c
         Ph = length(rows_h)
         du = size(Bu, 2)
         out = Matrix{K}(undef, Ph, du)
@@ -1293,7 +1294,7 @@ function pmodule_on_box(FG::Flange{K};
     end
 
     @inline function should_sparse_solve(Bv::Matrix{K}, Im::Matrix{K}) where {K}
-        mode = _ZN_TRANSITION_SPARSE_OVERRIDE[]
+        local mode = _ZN_TRANSITION_SPARSE_OVERRIDE[]
         mode === :always && return true
         mode === :never && return false
         return _should_sparse_transition_solve(field, Bv, Im)
@@ -1336,7 +1337,10 @@ function pmodule_on_box(FG::Flange{K};
         end
     end
 
-    function solve_transition_slot(s::Int)
+    # Resolve cheap transitions and populate coefficient caches sequentially.
+    # The remaining linear solves then read immutable basis/coefficient data.
+    function transition_fastpath(s::Int)
+        local ei, u, v, du, dv, entry_u, entry_v, same_rows, X
         ei = slot_rep_edge[s]
         u, v = edges[ei]
         du = dims[u]
@@ -1344,7 +1348,6 @@ function pmodule_on_box(FG::Flange{K};
         if dv == 0 || du == 0
             return zeros(K, dv, du)
         end
-
         entry_u = basis_entries[u]
         entry_v = basis_entries[v]
         if entry_u.id == entry_v.id
@@ -1372,39 +1375,51 @@ function pmodule_on_box(FG::Flange{K};
                 return X
             end
         end
-
-        rows_u = active_rows[u]
-        rows_v = active_rows[v]
-        Im = gather_projection_rows(B[u], rows_u, rows_v)  # E_v x du
-        Bv = B[v]
-
-        if should_sparse_solve(Bv, Im)
-            sparse_solves_ref[] += 1
-            return FieldLinAlg.solve_fullcolumn(field, sparse(Bv), sparse(Im))
-        end
-        dense_solves_ref[] += 1
-        return FieldLinAlg.solve_fullcolumn(field, Bv, Im)
+        return nothing
     end
 
-    if !isempty(missing_slots)
-        if Threads.nthreads() > 1 && length(missing_slots) >= 32
-            Threads.@threads :static for mi in eachindex(missing_slots)
-                s = missing_slots[mi]
-                transitions[s] = solve_transition_slot(s)
-            end
+    solve_slots = Int[]
+    for s in missing_slots
+        X = transition_fastpath(s)
+        if X === nothing
+            push!(solve_slots, s)
         else
-            @inbounds for s in missing_slots
-                transitions[s] = solve_transition_slot(s)
-            end
+            transitions[s] = X
         end
-        @inbounds for s in missing_slots
-            transition_cache[slot_keys[s]] = transitions[s]
+    end
+    # Each worker writes one distinct byte rather than a shared Ref/packed bit.
+    sparse_solve = fill(false, length(solve_slots))
+    function solve_transition_slot(mi::Int)
+        local s = solve_slots[mi]
+        local u, v = edges[slot_rep_edge[s]]
+        local Im = gather_projection_rows(B[u], active_rows[u], active_rows[v])
+        local Bv = B[v]
+        if should_sparse_solve(Bv, Im)
+            sparse_solve[mi] = true
+            transitions[s] = FieldLinAlg.solve_fullcolumn(field, sparse(Bv), sparse(Im))
+        else
+            transitions[s] = FieldLinAlg.solve_fullcolumn(field, Bv, Im)
         end
+        return nothing
+    end
+    if Threads.nthreads() > 1 && length(solve_slots) >= 32
+        Threads.@threads for mi in eachindex(solve_slots)
+            solve_transition_slot(mi)
+        end
+    else
+        for mi in eachindex(solve_slots)
+            solve_transition_slot(mi)
+        end
+    end
+    sparse_solves_ref[] += count(sparse_solve)
+    dense_solves_ref[] += length(solve_slots) - count(sparse_solve)
+    @inbounds for s in missing_slots
+        transition_cache[slot_keys[s]] = transitions[s]
     end
 
     edge_values = Vector{Matrix{K}}(undef, ne)
     if Threads.nthreads() > 1 && ne >= 256
-        Threads.@threads :static for ei in 1:ne
+        Threads.@threads for ei in 1:ne
             edge_values[ei] = transitions[slot_of_edge[ei]]
         end
     else
@@ -1592,18 +1607,18 @@ compile_zn_cache(enc::CompiledEncoding{<:ZnEncodingMap}) = ZnEncodingCache(enc.P
 
 function compile_zn_cache(FGs::Union{AbstractVector{<:Flange}, Tuple{Vararg{Flange}}},
                           opts::EncodingOptions=EncodingOptions();
-                          poset_kind::Symbol=:signature)
+                          poset_kind::Symbol=opts.poset_kind)
     P, pi = encode_poset_from_flanges(FGs, opts; poset_kind=poset_kind)
     return ZnEncodingCache(P, pi)
 end
 
-compile_zn_cache(FG::Flange, opts::EncodingOptions=EncodingOptions(); poset_kind::Symbol=:signature) =
+compile_zn_cache(FG::Flange, opts::EncodingOptions=EncodingOptions(); poset_kind::Symbol=opts.poset_kind) =
     compile_zn_cache((FG,), opts; poset_kind=poset_kind)
 
-compile_zn_cache(FG1::Flange, FG2::Flange, opts::EncodingOptions=EncodingOptions(); poset_kind::Symbol=:signature) =
+compile_zn_cache(FG1::Flange, FG2::Flange, opts::EncodingOptions=EncodingOptions(); poset_kind::Symbol=opts.poset_kind) =
     compile_zn_cache((FG1, FG2), opts; poset_kind=poset_kind)
 
-compile_zn_cache(FG1::Flange, FG2::Flange, FG3::Flange, opts::EncodingOptions=EncodingOptions(); poset_kind::Symbol=:signature) =
+compile_zn_cache(FG1::Flange, FG2::Flange, FG3::Flange, opts::EncodingOptions=EncodingOptions(); poset_kind::Symbol=opts.poset_kind) =
     compile_zn_cache((FG1, FG2, FG3), opts; poset_kind=poset_kind)
 
 """
@@ -1883,17 +1898,18 @@ function cover_edges(P::SignaturePoset; cached::Bool=true)
     if !cached
         return _signature_cover_edges_uncached(P)
     end
-    C = P.cache.cover_edges
-    C === nothing || return C
-
     Base.lock(P.cache.lock)
     try
         C = P.cache.cover_edges
-        if C === nothing
-            C = _signature_cover_edges_uncached(P)
-            P.cache.cover_edges = C
-        end
-        return C
+        C === nothing || return C
+    finally
+        Base.unlock(P.cache.lock)
+    end
+    built = _signature_cover_edges_uncached(P)
+    Base.lock(P.cache.lock)
+    try
+        P.cache.cover_edges === nothing && (P.cache.cover_edges = built)
+        return P.cache.cover_edges
     finally
         Base.unlock(P.cache.lock)
     end
@@ -2749,23 +2765,27 @@ end
 
 function _ensure_pushforward_cache!(pi::ZnEncodingMap)
     cache = pi.pushforward_cache
-    flat_index = cache.flat_index
-    inj_index = cache.inj_index
-    flat_masks = cache.flat_masks
-    inj_masks = cache.inj_masks
-    if flat_index !== nothing && inj_index !== nothing && flat_masks !== nothing && inj_masks !== nothing
-        return cache
+    Base.lock(cache.lock)
+    try
+        if cache.flat_index !== nothing && cache.inj_index !== nothing &&
+           cache.flat_masks !== nothing && cache.inj_masks !== nothing
+            return cache
+        end
+    finally
+        Base.unlock(cache.lock)
     end
 
+    # Compile privately, then publish immutable dictionaries and masks together.
+    # Concurrent cold callers may duplicate work, but never inspect partial data.
+    fi, ji = _generator_index_dicts(pi.flats, pi.injectives)
+    fm, im = _build_pushforward_masks(pi.sig_y, pi.sig_z, pi.sig_y.bitlen, pi.sig_z.bitlen)
     Base.lock(cache.lock)
     try
         if cache.flat_index === nothing || cache.inj_index === nothing
-            fi, ji = _generator_index_dicts(pi.flats, pi.injectives)
             cache.flat_index = fi
             cache.inj_index = ji
         end
         if cache.flat_masks === nothing || cache.inj_masks === nothing
-            fm, im = _build_pushforward_masks(pi.sig_y, pi.sig_z, pi.sig_y.bitlen, pi.sig_z.bitlen)
             cache.flat_masks = fm
             cache.inj_masks = im
         end
@@ -2795,8 +2815,13 @@ function _get_or_build_pushforward_plan!(pi::ZnEncodingMap, FG::Flange;
                                          session_cache::Union{Nothing,SessionCache}=nothing)
     cache = _ensure_pushforward_cache!(pi)
     fkey = _flange_fingerprint(FG)
-    plan = get(cache.plan_by_flange, fkey, nothing)
-    plan === nothing || return plan
+    Base.lock(cache.lock)
+    try
+        plan = get(cache.plan_by_flange, fkey, nothing)
+        plan === nothing || return plan
+    finally
+        Base.unlock(cache.lock)
+    end
 
     if session_cache !== nothing
         shared = _session_get_zn_pushforward_plan(session_cache, pi.encoding_fingerprint, fkey)
@@ -2805,51 +2830,41 @@ function _get_or_build_pushforward_plan!(pi::ZnEncodingMap, FG::Flange;
                 ZnPushforwardPlan(shared.flat_idxs, shared.inj_idxs, shared.zero_pairs)
             Base.lock(cache.lock)
             try
-                get!(cache.plan_by_flange, fkey, shared_plan)
+                return get!(cache.plan_by_flange, fkey, shared_plan)
             finally
                 Base.unlock(cache.lock)
             end
-            return shared_plan
         end
     end
 
-    built_plan = nothing
+    # The acquire in _ensure_pushforward_cache! establishes publication; these
+    # four fields are immutable after their first complete initialization.
+    flat_index = cache.flat_index::Dict{_GENERATOR_KEY,Int}
+    inj_index = cache.inj_index::Dict{_GENERATOR_KEY,Int}
+    flat_masks = cache.flat_masks::Vector{BitVector}
+    inj_masks = cache.inj_masks::Vector{BitVector}
+    flat_idxs = Vector{Int}(undef, length(FG.flats))
+    @inbounds for i in eachindex(FG.flats)
+        key = _flat_key(FG.flats[i])
+        idx = get(flat_index, key, 0)
+        idx == 0 && error("_pushforward_flange_to_fringe(strict=true): flat label $(FG.flats[i]) not present in encoding generators")
+        flat_idxs[i] = idx
+    end
+    inj_idxs = Vector{Int}(undef, length(FG.injectives))
+    @inbounds for j in eachindex(FG.injectives)
+        key = _inj_key(FG.injectives[j])
+        idx = get(inj_index, key, 0)
+        idx == 0 && error("_pushforward_flange_to_fringe(strict=true): injective label $(FG.injectives[j]) not present in encoding generators")
+        inj_idxs[j] = idx
+    end
+    zero_pairs = _zero_pairs_from_indices(flat_masks, inj_masks, flat_idxs, inj_idxs)
+    built_plan = ZnPushforwardPlan(flat_idxs, inj_idxs, zero_pairs)
     Base.lock(cache.lock)
-    try
-        plan = get(cache.plan_by_flange, fkey, nothing)
-        if plan !== nothing
-            built_plan = plan
-        else
-            flat_index = cache.flat_index::Dict{_GENERATOR_KEY,Int}
-            inj_index = cache.inj_index::Dict{_GENERATOR_KEY,Int}
-            flat_masks = cache.flat_masks::Vector{BitVector}
-            inj_masks = cache.inj_masks::Vector{BitVector}
-
-            flat_idxs = Vector{Int}(undef, length(FG.flats))
-            @inbounds for i in 1:length(FG.flats)
-                key = _flat_key(FG.flats[i])
-                idx = get(flat_index, key, 0)
-                idx == 0 && error("_pushforward_flange_to_fringe(strict=true): flat label $(FG.flats[i]) not present in encoding generators")
-                flat_idxs[i] = idx
-            end
-
-            inj_idxs = Vector{Int}(undef, length(FG.injectives))
-            @inbounds for j in 1:length(FG.injectives)
-                key = _inj_key(FG.injectives[j])
-                idx = get(inj_index, key, 0)
-                idx == 0 && error("_pushforward_flange_to_fringe(strict=true): injective label $(FG.injectives[j]) not present in encoding generators")
-                inj_idxs[j] = idx
-            end
-
-            zero_pairs = _zero_pairs_from_indices(flat_masks, inj_masks, flat_idxs, inj_idxs)
-            built_plan = ZnPushforwardPlan(flat_idxs, inj_idxs, zero_pairs)
-            cache.plan_by_flange[fkey] = built_plan
-        end
+    plan = try
+        get!(cache.plan_by_flange, fkey, built_plan)
     finally
         Base.unlock(cache.lock)
     end
-
-    plan = built_plan::ZnPushforwardPlan
     if session_cache !== nothing
         _session_set_zn_pushforward_plan!(session_cache, pi.encoding_fingerprint, fkey, plan)
     end
@@ -3167,16 +3182,21 @@ Best practice:
 - pair the result with [`compile_zn_cache`](@ref) when you expect repeated
   query or region-geometry work.
 
+`poset_kind` defaults to `opts.poset_kind`; an explicit keyword overrides it.
+This poset-only operation does not use `opts.field`. Integer encodings reject
+`opts.strict_eps`, which only applies to polyhedral inequalities.
+
 Use `_pushforward_flange_to_fringe(P, pi, FG)` to push a flange presentation
 down to a finite fringe presentation on `P` without rebuilding the encoding.
 """
 function encode_poset_from_flanges(FGs::Union{AbstractVector{<:Flange}, Tuple{Vararg{Flange}}},
                                    opts::EncodingOptions;
-                                   poset_kind::Symbol = :signature,
+                                   poset_kind::Symbol = opts.poset_kind,
                                    session_cache::Union{Nothing,SessionCache}=nothing)
     if opts.backend != :auto && opts.backend != :zn
         error("encode_poset_from_flanges: EncodingOptions.backend must be :auto or :zn")
     end
+    opts.strict_eps === nothing || throw(ArgumentError("Zn encoding has no strict inequalities; strict_eps is only supported by the polyhedral backend."))
     max_regions = opts.max_regions === nothing ? 200_000 : Int(opts.max_regions)
     n, flats_all, injectives_all, flat_keys, inj_keys = _collect_encoding_generators(FGs)
     encoding_fp = _generator_keyset_fingerprint(n, flat_keys, inj_keys)
@@ -3216,39 +3236,39 @@ end
 # Keyword-friendly overloads (opts may be nothing).
 encode_poset_from_flanges(FGs::Union{AbstractVector{<:Flange}, Tuple{Vararg{Flange}}};
                           opts::EncodingOptions=EncodingOptions(),
-                          poset_kind::Symbol = :signature,
+                          poset_kind::Symbol = opts.poset_kind,
                           session_cache::Union{Nothing,SessionCache}=nothing) =
     encode_poset_from_flanges(FGs, opts; poset_kind = poset_kind, session_cache=session_cache)
 
 # Small-arity overloads (avoid "varargs then opts" signatures).
 function encode_poset_from_flanges(FG::Flange, opts::EncodingOptions;
-                                   poset_kind::Symbol = :signature)
+                                   poset_kind::Symbol = opts.poset_kind)
     return encode_poset_from_flanges((FG,), opts; poset_kind = poset_kind)
 end
 
 encode_poset_from_flanges(FG::Flange;
                           opts::EncodingOptions=EncodingOptions(),
-                          poset_kind::Symbol = :signature) =
+                          poset_kind::Symbol = opts.poset_kind) =
     encode_poset_from_flanges((FG,), opts; poset_kind = poset_kind)
 
 function encode_poset_from_flanges(FG1::Flange, FG2::Flange, opts::EncodingOptions;
-                                   poset_kind::Symbol = :signature)
+                                   poset_kind::Symbol = opts.poset_kind)
     return encode_poset_from_flanges((FG1, FG2), opts; poset_kind = poset_kind)
 end
 
 encode_poset_from_flanges(FG1::Flange, FG2::Flange;
                           opts::EncodingOptions=EncodingOptions(),
-                          poset_kind::Symbol = :signature) =
+                          poset_kind::Symbol = opts.poset_kind) =
     encode_poset_from_flanges((FG1, FG2), opts; poset_kind = poset_kind)
 
 function encode_poset_from_flanges(FG1::Flange, FG2::Flange, FG3::Flange, opts::EncodingOptions;
-                                   poset_kind::Symbol = :signature)
+                                   poset_kind::Symbol = opts.poset_kind)
     return encode_poset_from_flanges((FG1, FG2, FG3), opts; poset_kind = poset_kind)
 end
 
 encode_poset_from_flanges(FG1::Flange, FG2::Flange, FG3::Flange;
                           opts::EncodingOptions=EncodingOptions(),
-                          poset_kind::Symbol = :signature) =
+                          poset_kind::Symbol = opts.poset_kind) =
     encode_poset_from_flanges((FG1, FG2, FG3), opts; poset_kind = poset_kind)
 
 """
@@ -3467,8 +3487,9 @@ function locate_many!(dest::AbstractVector{<:Integer},
     size(X, 1) == pi.n || error("locate_many!: expected X with $(pi.n) rows, got $(size(X, 1))")
     length(dest) == size(X, 2) || error("locate_many!: destination length mismatch")
     np = size(X, 2)
-    if threaded && nthreads() > 1 && np >= 1024
-        Threads.@threads :static for j in 1:np
+    # Bool destinations include packed BitVectors and views into their words.
+    if threaded && eltype(dest) !== Bool && nthreads() > 1 && np >= 1024
+        Threads.@threads for j in 1:np
             @inbounds dest[j] = _locate_col(pi, X, j)
         end
     else
@@ -3487,8 +3508,8 @@ function locate_many!(dest::AbstractVector{<:Integer},
     size(X, 1) == pi.n || error("locate_many!: expected X with $(pi.n) rows, got $(size(X, 1))")
     length(dest) == size(X, 2) || error("locate_many!: destination length mismatch")
     np = size(X, 2)
-    if threaded && nthreads() > 1 && np >= 1024
-        Threads.@threads :static for j in 1:np
+    if threaded && eltype(dest) !== Bool && nthreads() > 1 && np >= 1024
+        Threads.@threads for j in 1:np
             @inbounds dest[j] = _locate_col(pi, X, j)
         end
     else
@@ -4595,11 +4616,15 @@ end
 
 
 """
-    encode_from_flange(FG::Flange{K}, opts::EncodingOptions; poset_kind=:signature) -> (P, H, pi)
+    encode_from_flange(FG::Flange{K}, opts::EncodingOptions; poset_kind=opts.poset_kind) -> (P, H, pi)
 
 Encode a single Z^n flange presentation `FG` to a finite encoding poset `P` and a
 finite-poset fringe module `H` on `P`, together with the classifier `pi : Z^n -> P`
 (as a `ZnEncodingMap`).
+
+The output uses `opts.field` and defaults to `opts.poset_kind`. Without an
+options object, the input flange field is preserved. Explicit `poset_kind`
+overrides the options field of the same name.
 
 `opts` is required.
 - `opts.backend` must be `:auto` or `:zn`.
@@ -4613,7 +4638,7 @@ Best practice:
   `describe(pi)` before touching heavier downstream objects.
 """
 function encode_from_flange(FG::Flange{K}, opts::EncodingOptions;
-                            poset_kind::Symbol = :signature) where {K}
+                            poset_kind::Symbol = opts.poset_kind) where {K}
     if opts.backend != :auto && opts.backend != :zn
         error("encode_from_flange: EncodingOptions.backend must be :auto or :zn")
     end
@@ -4622,8 +4647,8 @@ function encode_from_flange(FG::Flange{K}, opts::EncodingOptions;
 end
 
 encode_from_flange(FG::Flange{K};
-                   opts::EncodingOptions=EncodingOptions(),
-                   poset_kind::Symbol = :signature) where {K} =
+                   opts::EncodingOptions=EncodingOptions(field=FG.field),
+                   poset_kind::Symbol = opts.poset_kind) where {K} =
     encode_from_flange(FG, opts; poset_kind = poset_kind)
 
 function encode_from_flange(
@@ -4631,7 +4656,7 @@ function encode_from_flange(
     FG::Flange{K},
     opts::EncodingOptions;
     check_poset::Bool = true,
-    poset_kind::Symbol = :signature,
+    poset_kind::Symbol = opts.poset_kind,
 ) where {K}
     if opts.backend != :auto && opts.backend != :zn
         error("encode_from_flange: EncodingOptions.backend must be :auto or :zn")
@@ -4644,16 +4669,16 @@ end
 function encode_from_flange(
     P::AbstractPoset,
     FG::Flange{K};
-    opts::EncodingOptions=EncodingOptions(),
+    opts::EncodingOptions=EncodingOptions(field=FG.field),
     check_poset::Bool = true,
-    poset_kind::Symbol = :signature,
+    poset_kind::Symbol = opts.poset_kind,
 ) where {K}
     return encode_from_flange(P, FG, opts;
                               check_poset = check_poset, poset_kind = poset_kind)
 end
 
 """
-    encode_from_flanges(FGs, opts::EncodingOptions; poset_kind=:signature) -> (P, Hs, pi)
+    encode_from_flanges(FGs, opts::EncodingOptions; poset_kind=opts.poset_kind) -> (P, Hs, pi)
 
 Common-encode several Z^n flange presentations to a single finite encoding poset `P`,
 and return the pushed-down fringe modules `Hs` on `P`.
@@ -4666,7 +4691,7 @@ Arguments
 
 Returns
 - `P`  : the common finite encoding poset
-- `Hs` : a vector of `FiniteFringe.FringeModule{K}`, one per input flange
+- `Hs` : a vector of finite fringe modules over `opts.field`, one per input flange
 - `pi` : classifier `pi : Z^n -> P` (as `ZnEncodingMap`)
 
 Best practice:
@@ -4679,26 +4704,27 @@ Best practice:
 """
 function encode_from_flanges(FGs::Union{AbstractVector{<:Flange{K}}, Tuple{Vararg{Flange{K}}}},
                              opts::EncodingOptions;
-                             poset_kind::Symbol = :signature) where {K}
+                             poset_kind::Symbol = opts.poset_kind) where {K}
     if opts.backend != :auto && opts.backend != :zn
         error("encode_from_flanges: EncodingOptions.backend must be :auto or :zn")
     end
     P, pi = encode_poset_from_flanges(FGs, opts; poset_kind = poset_kind)
 
-    Hs = Vector{FringeModule{K}}(undef, length(FGs))
+    Hs = Vector{FringeModule{coeff_type(opts.field)}}(undef, length(FGs))
     for k in 1:length(FGs)
-        Hs[k] = _pushforward_flange_to_fringe(P, pi, FGs[k]; strict=true)
+        H = _pushforward_flange_to_fringe(P, pi, FGs[k]; strict=true)
+        Hs[k] = H.field == opts.field ? H : FiniteFringe.change_field(H, opts.field)
     end
     return P, Hs, pi
 end
 
 encode_from_flanges(FGs::Union{AbstractVector{<:Flange{K}}, Tuple{Vararg{Flange{K}}}};
-                    opts::EncodingOptions=EncodingOptions(),
-                    poset_kind::Symbol = :signature) where {K} =
+                    opts::EncodingOptions=EncodingOptions(field=(isempty(FGs) ? QQField() : first(FGs).field)),
+                    poset_kind::Symbol = opts.poset_kind) where {K} =
     encode_from_flanges(FGs, opts; poset_kind = poset_kind)
 
 """
-    encode_from_flanges(P, FGs, opts::EncodingOptions; check_poset=true, poset_kind=:signature) -> (P, Hs, pi)
+    encode_from_flanges(P, FGs, opts::EncodingOptions; check_poset=true, poset_kind=opts.poset_kind) -> (P, Hs, pi)
 
 Use a user-provided poset `P` (possibly structured) as the encoding poset.
 We still build the encoding map `pi` from the flanges; `check_poset=true`
@@ -4713,7 +4739,7 @@ function encode_from_flanges(
     FGs::Union{AbstractVector{<:Flange{K}}, Tuple{Vararg{Flange{K}}}},
     opts::EncodingOptions;
     check_poset::Bool = true,
-    poset_kind::Symbol = :signature,
+    poset_kind::Symbol = opts.poset_kind,
 ) where {K}
     if opts.backend != :auto && opts.backend != :zn
         error("encode_from_flanges: EncodingOptions.backend must be :auto or :zn")
@@ -4724,9 +4750,10 @@ function encode_from_flanges(
         poset_equal(P, P0) || error("encode_from_flanges: provided P is not equal to the encoding poset")
     end
 
-    Hs = Vector{FringeModule{K}}(undef, length(FGs))
+    Hs = Vector{FringeModule{coeff_type(opts.field)}}(undef, length(FGs))
     for k in 1:length(FGs)
-        Hs[k] = _pushforward_flange_to_fringe(P, pi, FGs[k]; strict=true)
+        H = _pushforward_flange_to_fringe(P, pi, FGs[k]; strict=true)
+        Hs[k] = H.field == opts.field ? H : FiniteFringe.change_field(H, opts.field)
     end
     return P, Hs, pi
 end
@@ -4734,9 +4761,9 @@ end
 function encode_from_flanges(
     P::AbstractPoset,
     FGs::Union{AbstractVector{<:Flange{K}}, Tuple{Vararg{Flange{K}}}};
-    opts::EncodingOptions=EncodingOptions(),
+    opts::EncodingOptions=EncodingOptions(field=(isempty(FGs) ? QQField() : first(FGs).field)),
     check_poset::Bool = true,
-    poset_kind::Symbol = :signature,
+    poset_kind::Symbol = opts.poset_kind,
 ) where {K}
     return encode_from_flanges(P, FGs, opts;
                                check_poset = check_poset, poset_kind = poset_kind)
@@ -4744,23 +4771,23 @@ end
 
 # Small-arity overloads (avoid "varargs then opts" signatures).
 function encode_from_flanges(FG1::Flange{K}, FG2::Flange{K}, opts::EncodingOptions;
-                             poset_kind::Symbol = :signature) where {K}
+                             poset_kind::Symbol = opts.poset_kind) where {K}
     return encode_from_flanges((FG1, FG2), opts; poset_kind = poset_kind)
 end
 
 encode_from_flanges(FG1::Flange{K}, FG2::Flange{K};
-                    opts::EncodingOptions=EncodingOptions(),
-                    poset_kind::Symbol = :signature) where {K} =
+                    opts::EncodingOptions=EncodingOptions(field=FG1.field),
+                    poset_kind::Symbol = opts.poset_kind) where {K} =
     encode_from_flanges((FG1, FG2), opts; poset_kind = poset_kind)
 
 function encode_from_flanges(FG1::Flange{K}, FG2::Flange{K}, FG3::Flange{K}, opts::EncodingOptions;
-                             poset_kind::Symbol = :signature) where {K}
+                             poset_kind::Symbol = opts.poset_kind) where {K}
     return encode_from_flanges((FG1, FG2, FG3), opts; poset_kind = poset_kind)
 end
 
 encode_from_flanges(FG1::Flange{K}, FG2::Flange{K}, FG3::Flange{K};
-                    opts::EncodingOptions=EncodingOptions(),
-                    poset_kind::Symbol = :signature) where {K} =
+                    opts::EncodingOptions=EncodingOptions(field=FG1.field),
+                    poset_kind::Symbol = opts.poset_kind) where {K} =
     encode_from_flanges((FG1, FG2, FG3), opts; poset_kind = poset_kind)
 
 function encode_from_flanges(
@@ -4769,7 +4796,7 @@ function encode_from_flanges(
     FG2::Flange{K},
     opts::EncodingOptions;
     check_poset::Bool = true,
-    poset_kind::Symbol = :signature,
+    poset_kind::Symbol = opts.poset_kind,
 ) where {K}
     return encode_from_flanges(P, (FG1, FG2), opts;
                                check_poset = check_poset, poset_kind = poset_kind)
@@ -4779,9 +4806,9 @@ function encode_from_flanges(
     P::AbstractPoset,
     FG1::Flange{K},
     FG2::Flange{K};
-    opts::EncodingOptions=EncodingOptions(),
+    opts::EncodingOptions=EncodingOptions(field=FG1.field),
     check_poset::Bool = true,
-    poset_kind::Symbol = :signature,
+    poset_kind::Symbol = opts.poset_kind,
 ) where {K}
     return encode_from_flanges(P, (FG1, FG2), opts;
                                check_poset = check_poset, poset_kind = poset_kind)
@@ -4794,7 +4821,7 @@ function encode_from_flanges(
     FG3::Flange{K},
     opts::EncodingOptions;
     check_poset::Bool = true,
-    poset_kind::Symbol = :signature,
+    poset_kind::Symbol = opts.poset_kind,
 ) where {K}
     return encode_from_flanges(P, (FG1, FG2, FG3), opts;
                                check_poset = check_poset, poset_kind = poset_kind)
@@ -4805,9 +4832,9 @@ function encode_from_flanges(
     FG1::Flange{K},
     FG2::Flange{K},
     FG3::Flange{K};
-    opts::EncodingOptions=EncodingOptions(),
+    opts::EncodingOptions=EncodingOptions(field=FG1.field),
     check_poset::Bool = true,
-    poset_kind::Symbol = :signature,
+    poset_kind::Symbol = opts.poset_kind,
 ) where {K}
     return encode_from_flanges(P, (FG1, FG2, FG3), opts;
                                check_poset = check_poset, poset_kind = poset_kind)

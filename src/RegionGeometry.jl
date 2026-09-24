@@ -32,7 +32,8 @@ module RegionGeometry
 using LinearAlgebra
 using Random
 
-using ..CoreModules: EncodingCache, GeometryCachePayload
+using ..CoreModules: EncodingCache, GeometryCachePayload,
+                     _TaskLocalCache, _task_local!, _clear_task_local!
 import ..EncodingCore: locate, locate_many!, CompiledEncoding,
                        _geometry_fingerprint, _locate_call_style
 
@@ -1191,6 +1192,7 @@ end
 end
 
 mutable struct _RegionBatchWorkspace
+    in_use::Bool
     n::Int
     batchsize::Int
     ndirs::Int
@@ -1211,6 +1213,7 @@ end
 
 @inline function _RegionBatchWorkspace(n::Integer, batchsize::Integer, ndirs::Integer=0)
     return _RegionBatchWorkspace(
+        false,
         Int(n),
         Int(batchsize),
         Int(ndirs),
@@ -1230,9 +1233,9 @@ end
     )
 end
 
-const _REGION_WORKSPACES = let n = max(1, Base.Threads.nthreads())
-    [Dict{Tuple{Int,Int,Int},_RegionBatchWorkspace}() for _ in 1:n]
-end
+# A task can re-enter geometry through an extensible locate callback. Keep a
+# small pool per shape, and lease each workspace until that call completes.
+const _REGION_WORKSPACES = _TaskLocalCache{Dict{Tuple{Int,Int,Int},Vector{_RegionBatchWorkspace}}}()
 
 mutable struct _RegionSampleCache{T}
     locks::Vector{Base.ReentrantLock}
@@ -1258,8 +1261,10 @@ end
 
 function Base.length(cache::_RegionSampleCache)
     total = 0
-    for shard in cache.shards
-        total += length(shard)
+    for i in eachindex(cache.shards)
+        lock(cache.locks[i]) do
+            total += length(cache.shards[i])
+        end
     end
     return total
 end
@@ -1292,21 +1297,29 @@ function _clear_region_geometry_runtime_caches!()
             end
         end
     end
-    for ws in _REGION_WORKSPACES
-        empty!(ws)
-    end
+    _clear_task_local!(_REGION_WORKSPACES)
     return nothing
 end
 
 @inline function _region_workspace(n::Integer, batchsize::Integer, ndirs::Integer=0)
     if !_REGION_WORKSPACE_REUSE[]
-        return _RegionBatchWorkspace(n, batchsize, ndirs)
+        ws = _RegionBatchWorkspace(n, batchsize, ndirs)
+        ws.in_use = true
+        return ws
     end
-    tid = min(Base.Threads.threadid(), length(_REGION_WORKSPACES))
+    store = _task_local!(Dict{Tuple{Int,Int,Int},Vector{_RegionBatchWorkspace}}, _REGION_WORKSPACES)
     key = (Int(n), Int(batchsize), Int(ndirs))
-    return get!(_REGION_WORKSPACES[tid], key) do
-        _RegionBatchWorkspace(n, batchsize, ndirs)
+    pool = get!(Vector{_RegionBatchWorkspace}, store, key)
+    for ws in pool
+        if !ws.in_use
+            ws.in_use = true
+            return ws
+        end
     end
+    ws = _RegionBatchWorkspace(n, batchsize, ndirs)
+    ws.in_use = true
+    push!(pool, ws)
+    return ws
 end
 
 @inline function _sample_cache_get(cache::_RegionSampleCache{T}, key::UInt64) where {T}
@@ -1712,63 +1725,67 @@ function _region_principal_directions_scalar(pi, r::Integer;
     n = length(a)
 
     ws = _region_workspace(n, _principal_cov_blocksize(nsamples), 0)
-    sumx = ws.mu
-    sumxx = ws.C
-    sumx_b = ws.mu_b
-    sumxx_b = ws.C_b
-    x = ws.x
-    accepted = ws.accepted
-    _zero_moments!(sumx, sumxx)
-    _zero_moments!(sumx_b, sumxx_b)
-    a_f, widths = _box_lower_widths(box)
+    try
+        sumx = ws.mu
+        sumxx = ws.C
+        sumx_b = ws.mu_b
+        sumxx_b = ws.C_b
+        x = ws.x
+        accepted = ws.accepted
+        _zero_moments!(sumx, sumxx)
+        _zero_moments!(sumx_b, sumxx_b)
+        a_f, widths = _box_lower_widths(box)
 
-    nacc = 0
-    nprop = 0
-    nbuf = 0
-    nacc_b = 0
+        nacc = 0
+        nprop = 0
+        nbuf = 0
+        nacc_b = 0
 
-    want_batches = return_info ? (nbatches > 0 ? nbatches : 10) : 0
-    batch_evals = Matrix{Float64}(undef, n, want_batches > 0 ? want_batches : 0)
-    batch_n = Int[]
-    nbatch_used = 0
-    if want_batches > 0
-        sizehint!(batch_n, want_batches)
-    end
-    batch_target = want_batches > 0 ? max(2, Int(floor(nsamples / want_batches))) : 0
+        want_batches = return_info ? (nbatches > 0 ? nbatches : 10) : 0
+        batch_evals = Matrix{Float64}(undef, n, want_batches > 0 ? want_batches : 0)
+        batch_n = Int[]
+        nbatch_used = 0
+        if want_batches > 0
+            sizehint!(batch_n, want_batches)
+        end
+        batch_target = want_batches > 0 ? max(2, Int(floor(nsamples / want_batches))) : 0
 
-    x0 = Float64[a_f[i] + 0.5 * widths[i] for i in 1:n]
-    locate_style = _resolve_locate_style(pi, x0; strict=strict, closure=closure)
+        x0 = Float64[a_f[i] + 0.5 * widths[i] for i in 1:n]
+        locate_style = _resolve_locate_style(pi, x0; strict=strict, closure=closure)
 
-    while (nacc < nsamples) && (nprop < max_proposals)
-        _fill_random_point!(x, a_f, widths, rng)
-        nprop += 1
+        while (nacc < nsamples) && (nprop < max_proposals)
+            _fill_random_point!(x, a_f, widths, rng)
+            nprop += 1
 
-        if _locate_dispatch(pi, x, locate_style; strict=strict, closure=closure) == r
-            nacc += 1
-            nbuf += 1
-            @inbounds for i in 1:n
-                accepted[i, nbuf] = x[i]
-            end
-            if want_batches > 0
-                nacc_b += 1
-            end
+            if _locate_dispatch(pi, x, locate_style; strict=strict, closure=closure) == r
+                nacc += 1
+                nbuf += 1
+                @inbounds for i in 1:n
+                    accepted[i, nbuf] = x[i]
+                end
+                if want_batches > 0
+                    nacc_b += 1
+                end
 
-            if nbuf >= size(accepted, 2) || (want_batches > 0 && nacc_b >= batch_target) || nacc >= nsamples
-                nbuf = _principal_flush_buffer!(sumx, sumxx, sumx_b, sumxx_b, accepted, nbuf, ws, want_batches)
-            end
-            if want_batches > 0 && nacc_b >= batch_target
-                nbatch_used = _principal_finish_batch!(batch_evals, batch_n, nbatch_used, sumx_b, sumxx_b, nacc_b)
-                nacc_b = 0
+                if nbuf >= size(accepted, 2) || (want_batches > 0 && nacc_b >= batch_target) || nacc >= nsamples
+                    nbuf = _principal_flush_buffer!(sumx, sumxx, sumx_b, sumxx_b, accepted, nbuf, ws, want_batches)
+                end
+                if want_batches > 0 && nacc_b >= batch_target
+                    nbatch_used = _principal_finish_batch!(batch_evals, batch_n, nbatch_used, sumx_b, sumxx_b, nacc_b)
+                    nacc_b = 0
+                end
             end
         end
-    end
 
-    nbuf = _principal_flush_buffer!(sumx, sumxx, sumx_b, sumxx_b, accepted, nbuf, ws, want_batches)
-    if want_batches > 0 && nacc_b > 0
-        nbatch_used = _principal_finish_batch!(batch_evals, batch_n, nbatch_used, sumx_b, sumxx_b, nacc_b)
-    end
+        nbuf = _principal_flush_buffer!(sumx, sumxx, sumx_b, sumxx_b, accepted, nbuf, ws, want_batches)
+        if want_batches > 0 && nacc_b > 0
+            nbatch_used = _principal_finish_batch!(batch_evals, batch_n, nbatch_used, sumx_b, sumxx_b, nacc_b)
+        end
 
-    return _principal_directions_result(sumx, sumxx, batch_evals, nbatch_used, batch_n, nacc, nprop, return_info)
+        return _principal_directions_result(sumx, sumxx, batch_evals, nbatch_used, batch_n, nacc, nprop, return_info)
+    finally
+        ws.in_use = false
+    end
 end
 
 function _region_principal_directions_batched(pi, r::Integer;
@@ -1786,69 +1803,73 @@ function _region_principal_directions_batched(pi, r::Integer;
     n = length(a)
 
     ws = _region_workspace(n, max(1, _REGION_LOCATE_BATCH_SIZE[]), 0)
-    sumx = ws.mu
-    sumxx = ws.C
-    sumx_b = ws.mu_b
-    sumxx_b = ws.C_b
-    accepted = ws.accepted
-    _zero_moments!(sumx, sumxx)
-    _zero_moments!(sumx_b, sumxx_b)
-    a_f, widths = _box_lower_widths(box)
+    try
+        sumx = ws.mu
+        sumxx = ws.C
+        sumx_b = ws.mu_b
+        sumxx_b = ws.C_b
+        accepted = ws.accepted
+        _zero_moments!(sumx, sumxx)
+        _zero_moments!(sumx_b, sumxx_b)
+        a_f, widths = _box_lower_widths(box)
 
-    nacc = 0
-    nprop = 0
-    nbuf = 0
-    nacc_b = 0
+        nacc = 0
+        nprop = 0
+        nbuf = 0
+        nacc_b = 0
 
-    want_batches = return_info ? (nbatches > 0 ? nbatches : 10) : 0
-    batch_evals = Matrix{Float64}(undef, n, want_batches > 0 ? want_batches : 0)
-    batch_n = Int[]
-    nbatch_used = 0
-    if want_batches > 0
-        sizehint!(batch_n, want_batches)
-    end
-    batch_target = want_batches > 0 ? max(2, Int(floor(nsamples / want_batches))) : 0
-
-    x0 = Float64[a_f[i] + 0.5 * widths[i] for i in 1:n]
-    locate_style = _resolve_locate_many_style(pi, x0; strict=strict, closure=closure)
-
-    while (nacc < nsamples) && (nprop < max_proposals)
-        nbatch = min(size(ws.X, 2), max_proposals - nprop)
-        _fill_random_points!(ws.X, a_f, widths, rng, nbatch)
-        Xbatch = view(ws.X, :, 1:nbatch)
-        locbatch = view(ws.locs, 1:nbatch)
-        _locate_many_dispatch!(locbatch, pi, Xbatch, locate_style; strict=strict, closure=closure)
-        nprop += nbatch
-
-        @inbounds for j in 1:nbatch
-            locbatch[j] == r || continue
-            nacc += 1
-            nbuf += 1
-            for i in 1:n
-                accepted[i, nbuf] = ws.X[i, j]
-            end
-            if want_batches > 0
-                nacc_b += 1
-            end
-
-            if nbuf >= size(accepted, 2) || (want_batches > 0 && nacc_b >= batch_target) || nacc >= nsamples
-                nbuf = _principal_flush_buffer!(sumx, sumxx, sumx_b, sumxx_b, accepted, nbuf, ws, want_batches)
-            end
-            if want_batches > 0 && nacc_b >= batch_target
-                nbatch_used = _principal_finish_batch!(batch_evals, batch_n, nbatch_used, sumx_b, sumxx_b, nacc_b)
-                nacc_b = 0
-            end
-
-            nacc >= nsamples && break
+        want_batches = return_info ? (nbatches > 0 ? nbatches : 10) : 0
+        batch_evals = Matrix{Float64}(undef, n, want_batches > 0 ? want_batches : 0)
+        batch_n = Int[]
+        nbatch_used = 0
+        if want_batches > 0
+            sizehint!(batch_n, want_batches)
         end
-    end
+        batch_target = want_batches > 0 ? max(2, Int(floor(nsamples / want_batches))) : 0
 
-    nbuf = _principal_flush_buffer!(sumx, sumxx, sumx_b, sumxx_b, accepted, nbuf, ws, want_batches)
-    if want_batches > 0 && nacc_b > 0
-        nbatch_used = _principal_finish_batch!(batch_evals, batch_n, nbatch_used, sumx_b, sumxx_b, nacc_b)
-    end
+        x0 = Float64[a_f[i] + 0.5 * widths[i] for i in 1:n]
+        locate_style = _resolve_locate_many_style(pi, x0; strict=strict, closure=closure)
 
-    return _principal_directions_result(sumx, sumxx, batch_evals, nbatch_used, batch_n, nacc, nprop, return_info)
+        while (nacc < nsamples) && (nprop < max_proposals)
+            nbatch = min(size(ws.X, 2), max_proposals - nprop)
+            _fill_random_points!(ws.X, a_f, widths, rng, nbatch)
+            Xbatch = view(ws.X, :, 1:nbatch)
+            locbatch = view(ws.locs, 1:nbatch)
+            _locate_many_dispatch!(locbatch, pi, Xbatch, locate_style; strict=strict, closure=closure)
+            nprop += nbatch
+
+            @inbounds for j in 1:nbatch
+                locbatch[j] == r || continue
+                nacc += 1
+                nbuf += 1
+                for i in 1:n
+                    accepted[i, nbuf] = ws.X[i, j]
+                end
+                if want_batches > 0
+                    nacc_b += 1
+                end
+
+                if nbuf >= size(accepted, 2) || (want_batches > 0 && nacc_b >= batch_target) || nacc >= nsamples
+                    nbuf = _principal_flush_buffer!(sumx, sumxx, sumx_b, sumxx_b, accepted, nbuf, ws, want_batches)
+                end
+                if want_batches > 0 && nacc_b >= batch_target
+                    nbatch_used = _principal_finish_batch!(batch_evals, batch_n, nbatch_used, sumx_b, sumxx_b, nacc_b)
+                    nacc_b = 0
+                end
+
+                nacc >= nsamples && break
+            end
+        end
+
+        nbuf = _principal_flush_buffer!(sumx, sumxx, sumx_b, sumxx_b, accepted, nbuf, ws, want_batches)
+        if want_batches > 0 && nacc_b > 0
+            nbatch_used = _principal_finish_batch!(batch_evals, batch_n, nbatch_used, sumx_b, sumxx_b, nacc_b)
+        end
+
+        return _principal_directions_result(sumx, sumxx, batch_evals, nbatch_used, batch_n, nacc, nprop, return_info)
+    finally
+        ws.in_use = false
+    end
 end
 
 
@@ -2542,39 +2563,43 @@ function _region_mean_width_scalar(pi, r::Integer; box,
 
     U = _direction_matrix(directions, n, ndirs; rng=rng, enc_cache=enc_cache)
     ws = _region_workspace(n, 1, size(U, 2))
-    minproj = ws.minproj
-    maxproj = ws.maxproj
-    fill!(minproj, Inf)
-    fill!(maxproj, -Inf)
-    x = ws.x
-    x0 = Float64[a_f[i] + 0.5 * widths[i] for i in 1:n]
-    locate_style = _resolve_locate_style(pi, x0; strict=strict, closure=closure)
-    nacc = 0
-    proposals = 0
-    @inbounds while nacc < nsamples && proposals < max_proposals
-        proposals += 1
-        _fill_random_point!(x, a_f, widths, rng)
-        q = _locate_dispatch(pi, x, locate_style; strict=strict, closure=closure)
-        if q == r
-            nacc += 1
-            ws.accepted[:, 1] = x
-            _update_projection_extrema_blocked!(minproj, maxproj, U, ws.accepted, 1, ws)
-        elseif q == 0 && strict
-            error("region_mean_width: encountered locate()==0; use strict=false or closure=true.")
+    try
+        minproj = ws.minproj
+        maxproj = ws.maxproj
+        fill!(minproj, Inf)
+        fill!(maxproj, -Inf)
+        x = ws.x
+        x0 = Float64[a_f[i] + 0.5 * widths[i] for i in 1:n]
+        locate_style = _resolve_locate_style(pi, x0; strict=strict, closure=closure)
+        nacc = 0
+        proposals = 0
+        @inbounds while nacc < nsamples && proposals < max_proposals
+            proposals += 1
+            _fill_random_point!(x, a_f, widths, rng)
+            q = _locate_dispatch(pi, x, locate_style; strict=strict, closure=closure)
+            if q == r
+                nacc += 1
+                ws.accepted[:, 1] = x
+                _update_projection_extrema_blocked!(minproj, maxproj, U, ws.accepted, 1, ws)
+            elseif q == 0 && strict
+                error("region_mean_width: encountered locate()==0; use strict=false or closure=true.")
+            end
         end
-    end
 
-    if nacc == 0
-        return 0.0
-    end
-
-    wsum = 0.0
-    @inbounds for j in 1:length(minproj)
-        if isfinite(minproj[j])
-            wsum += (maxproj[j] - minproj[j])
+        if nacc == 0
+            return 0.0
         end
+
+        wsum = 0.0
+        @inbounds for j in 1:length(minproj)
+            if isfinite(minproj[j])
+                wsum += (maxproj[j] - minproj[j])
+            end
+        end
+        return wsum / float(length(minproj))
+    finally
+        ws.in_use = false
     end
-    return wsum / float(length(minproj))
 end
 
 function _region_mean_width_batched(pi, r::Integer; box,
@@ -2588,51 +2613,55 @@ function _region_mean_width_batched(pi, r::Integer; box,
 
     U = _direction_matrix(directions, n, ndirs; rng=rng, enc_cache=enc_cache)
     ws = _region_workspace(n, max(1, _REGION_LOCATE_BATCH_SIZE[]), size(U, 2))
-    minproj = ws.minproj
-    maxproj = ws.maxproj
-    fill!(minproj, Inf)
-    fill!(maxproj, -Inf)
-    x0 = Float64[a_f[i] + 0.5 * widths[i] for i in 1:n]
-    locate_style = _resolve_locate_many_style(pi, x0; strict=strict, closure=closure)
+    try
+        minproj = ws.minproj
+        maxproj = ws.maxproj
+        fill!(minproj, Inf)
+        fill!(maxproj, -Inf)
+        x0 = Float64[a_f[i] + 0.5 * widths[i] for i in 1:n]
+        locate_style = _resolve_locate_many_style(pi, x0; strict=strict, closure=closure)
 
-    nacc = 0
-    proposals = 0
-    @inbounds while nacc < nsamples && proposals < max_proposals
-        nbatch = min(size(ws.X, 2), max_proposals - proposals)
-        _fill_random_points!(ws.X, a_f, widths, rng, nbatch)
-        Xbatch = view(ws.X, :, 1:nbatch)
-        locbatch = view(ws.locs, 1:nbatch)
-        _locate_many_dispatch!(locbatch, pi, Xbatch, locate_style; strict=strict, closure=closure)
-        proposals += nbatch
+        nacc = 0
+        proposals = 0
+        @inbounds while nacc < nsamples && proposals < max_proposals
+            nbatch = min(size(ws.X, 2), max_proposals - proposals)
+            _fill_random_points!(ws.X, a_f, widths, rng, nbatch)
+            Xbatch = view(ws.X, :, 1:nbatch)
+            locbatch = view(ws.locs, 1:nbatch)
+            _locate_many_dispatch!(locbatch, pi, Xbatch, locate_style; strict=strict, closure=closure)
+            proposals += nbatch
 
-        naccepted_batch = 0
-        for j in 1:nbatch
-            q = locbatch[j]
-            if q == r
-                nacc += 1
-                naccepted_batch += 1
-                @inbounds for i in 1:n
-                    ws.accepted[i, naccepted_batch] = ws.X[i, j]
+            naccepted_batch = 0
+            for j in 1:nbatch
+                q = locbatch[j]
+                if q == r
+                    nacc += 1
+                    naccepted_batch += 1
+                    @inbounds for i in 1:n
+                        ws.accepted[i, naccepted_batch] = ws.X[i, j]
+                    end
+                    nacc >= nsamples && break
+                elseif q == 0 && strict
+                    error("region_mean_width: encountered locate()==0; use strict=false or closure=true.")
                 end
-                nacc >= nsamples && break
-            elseif q == 0 && strict
-                error("region_mean_width: encountered locate()==0; use strict=false or closure=true.")
+            end
+            _update_projection_extrema_blocked!(minproj, maxproj, U, ws.accepted, naccepted_batch, ws)
+        end
+
+        if nacc == 0
+            return 0.0
+        end
+
+        wsum = 0.0
+        @inbounds for j in eachindex(minproj)
+            if isfinite(minproj[j])
+                wsum += (maxproj[j] - minproj[j])
             end
         end
-        _update_projection_extrema_blocked!(minproj, maxproj, U, ws.accepted, naccepted_batch, ws)
+        return wsum / float(length(minproj))
+    finally
+        ws.in_use = false
     end
-
-    if nacc == 0
-        return 0.0
-    end
-
-    wsum = 0.0
-    @inbounds for j in eachindex(minproj)
-        if isfinite(minproj[j])
-            wsum += (maxproj[j] - minproj[j])
-        end
-    end
-    return wsum / float(length(minproj))
 end
 
 """

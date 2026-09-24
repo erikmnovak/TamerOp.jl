@@ -13,14 +13,14 @@
 .ipynb_checkpoints/
 **/.ipynb_checkpoints/
 
-# Example outputs
-examples/_outputs/
+# Local development material (keep on disk; do not publish)
+/AGENTS.md
+/examples/
+/audit/
+/benchmark/
 
-# Benchmark temp outputs
-benchmark/_tmp_*
-benchmark/ingestion_compare_harness/_tmp_*
-benchmark/ingestion_compare_harness/_runstate*/
-benchmark/ingestion_compare_harness/__pycache__/
+# Generated output from user computations
+tamerop_outputs/
 
 # LaTeX build products
 *.aux

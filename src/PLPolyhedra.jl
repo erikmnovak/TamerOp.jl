@@ -2,12 +2,9 @@ module PLPolyhedra
 # =============================================================================
 # Piecewise-linear (PL) backend using Polyhedra + CDD exact arithmetic.
 #
-# NOTE ON OPTIONAL DEPENDENCIES
-# - Polyhedra/CDDLib are optional.
-# - This module still loads without them.
-# - Membership tests in HPoly / PolyUnion are implemented directly from stored
-#   H-representations A*x <= b (exact QQ) and DO NOT require Polyhedra.
-# - Feasibility enumeration (encode_from_PL_fringe) DOES require Polyhedra/CDDLib.
+# Polyhedra/CDDLib are required package dependencies. Import failures remain
+# visible as package-loading errors. Membership tests use stored exact
+# H-representations directly and avoid geometry-object construction.
 #
 # Key robustness change:
 #   We store the H-rep matrix (A,b) inside HPoly and avoid Polyhedra API helpers
@@ -17,12 +14,14 @@ module PLPolyhedra
 using ..FiniteFringe
 import ..FiniteFringe: AbstractPoset, nvertices, birth_upsets, death_downsets, field
 import ..ZnEncoding: SignaturePoset, nregions, region_signature
-using ..CoreModules: QQ, EncodingCache, GeometryCachePayload
+using ..CoreModules: QQ, EncodingCache, GeometryCachePayload, _TaskLocalCache, _task_local!,
+                     _with_cdd_execution
 using ..Options: EncodingOptions, validate_pl_mode
 using ..EncodingCore: AbstractPLikeEncodingMap, CompiledEncoding
 import ..DataTypes: ambient_dim
 import ..FlangeZn: coefficient_matrix
 using ..CoreModules.CoeffFields: QQField
+using ..CoreModules: coeff_type
 using ..Stats: _wilson_interval
 using Random
 
@@ -45,19 +44,11 @@ using LinearAlgebra
 
 
 
-# ------------------------------ Optional deps ---------------------------------
-const HAVE_POLY = try
-    @eval begin
-        import Polyhedra
-        import CDDLib
-    end
-    true
-catch
-    false
-end
+import Polyhedra
+import CDDLib
 
-const _CDD = HAVE_POLY ? CDDLib.Library(:exact) : nothing
-const _CDD_FLOAT = HAVE_POLY ? CDDLib.Library(:float) : nothing
+const _CDD = CDDLib.Library(:exact)
+const _CDD_FLOAT = CDDLib.Library(:float)
 
 # Small positive slack for strict facet violation (kept exact)
 const STRICT_EPS_QQ = 1//(big(1) << 40)
@@ -113,8 +104,8 @@ A single convex polyhedron in H-representation:
 We store A,b explicitly (QQ) to avoid relying on Polyhedra internals for
 membership tests and facet extraction.
 
-Field `poly` is an optional Polyhedra object (Any). It is present only when
-HAVE_POLY is true and the polyhedron was constructed with Polyhedra.
+Field `poly` is a Polyhedra object (Any), or `nothing` when only the stored
+H-representation has been constructed.
 """
 struct HPoly
     n::Int
@@ -263,13 +254,13 @@ Best practice:
 - `opts.strict_eps` controls strict inequality handling in feasibility checks
   (default: `STRICT_EPS_QQ`).
 """
-function encode_from_PL_fringe(F::PLFringe, opts::EncodingOptions; poset_kind::Symbol = :signature)
+function encode_from_PL_fringe(F::PLFringe, opts::EncodingOptions; poset_kind::Symbol = opts.poset_kind)
     return encode_from_PL_fringe(F.Ups, F.Downs, F.Phi, opts; poset_kind = poset_kind)
 end
 
 encode_from_PL_fringe(F::PLFringe;
                       opts::EncodingOptions=EncodingOptions(),
-                      poset_kind::Symbol = :signature) =
+                      poset_kind::Symbol = opts.poset_kind) =
     encode_from_PL_fringe(F, opts; poset_kind = poset_kind)
 
 
@@ -299,8 +290,8 @@ end
 Build a convex polyhedron { x : A*x <= b }.
 
 - Stores A,b exactly in QQ inside the returned HPoly.
-- If Polyhedra/CDDLib are available, also builds an exact Polyhedra object
-  for feasibility testing and witness extraction used by encode_from_PL_fringe.
+- Builds an exact Polyhedra object for feasibility testing and witness
+  extraction used by encode_from_PL_fringe.
 """
 function make_hpoly(A::AbstractMatrix, b::AbstractVector)
     m, n = size(A)
@@ -309,11 +300,8 @@ function make_hpoly(A::AbstractMatrix, b::AbstractVector)
     Aqq = _toQQ_mat(A)
     bqq = _toQQ_vec(b)
 
-    poly = nothing
-    if HAVE_POLY
-        hrep = Polyhedra.hrep(Aqq, bqq)
-        poly = Polyhedra.polyhedron(hrep, _CDD)
-    end
+    hrep = Polyhedra.hrep(Aqq, bqq)
+    poly = _with_cdd_execution(() -> Polyhedra.polyhedron(hrep, _CDD))
 
     return HPoly(n, Aqq, bqq, poly, falses(m), STRICT_EPS_QQ)
 end
@@ -448,7 +436,7 @@ end
 function _internal_build_poly(in_parts::Vector{HPoly},
                               out_halfspaces::Vector{Tuple{Vector{T},T}};
                               strict_eps::QQ=STRICT_EPS_QQ) where {T<:Real}
-    HAVE_POLY || error("Polyhedra/CDDLib not available; install Polyhedra.jl and CDDLib.jl.")
+
 
     # Determine ambient dimension.
     n = if !isempty(in_parts)
@@ -496,27 +484,28 @@ function _internal_build_poly(in_parts::Vector{HPoly},
     # Mark which rows correspond to strict "outside" constraints (the last m_out rows).
     strict_mask = BitVector(vcat(fill(false, m_in), fill(true, m_out)))
 
-    hrep = Polyhedra.hrep(A, b)
-    P = Polyhedra.polyhedron(hrep, _CDD)
+    return _with_cdd_execution() do
+        hrep = Polyhedra.hrep(A, b)
+        P = Polyhedra.polyhedron(hrep, _CDD)
 
-    if Polyhedra.isempty(P)
-        return (nothing, nothing, true)
-    end
-
-    # Best-effort witness (not required for correctness; safe if Polyhedra API differs).
-    witness = nothing
-    try
-        V = Polyhedra.vrep(P)
-        pts = Polyhedra.points(V)
-        firstpt = iterate(pts)
-        if firstpt !== nothing
-            witness = Vector{Float64}(firstpt[1])
+        if Polyhedra.isempty(P)
+            return (nothing, nothing, true)
         end
-    catch
-        witness = nothing
-    end
 
-    return (HPoly(n, A, b, P, strict_mask, strict_eps), witness, false)
+        # Best-effort witness; iteration must finish inside the CDD boundary.
+        witness = nothing
+        try
+            V = Polyhedra.vrep(P)
+            firstpt = iterate(Polyhedra.points(V))
+            if firstpt !== nothing
+                witness = Vector{Float64}(firstpt[1])
+            end
+        catch
+            witness = nothing
+        end
+
+        return (HPoly(n, A, b, P, strict_mask, strict_eps), witness, false)
+    end
 end
 
 # ------------------------- Region enumeration (Y-signatures) ------------------
@@ -524,7 +513,7 @@ end
 function enumerate_feasible_regions(Ups::Vector{PLUpset}, Downs::Vector{PLDownset};
                                     max_regions::Int=10_000,
                                     strict_eps::QQ=STRICT_EPS_QQ)
-    HAVE_POLY || error("Polyhedra/CDDLib not available; install Polyhedra.jl and CDDLib.jl.")
+
 
     m = length(Ups)
     r = length(Downs)
@@ -758,10 +747,10 @@ struct PLEncodingMap <: AbstractPLikeEncodingMap
 end
 
 function _region_bbox_from_poly(hp::HPoly, n::Int)
-    HAVE_POLY || return nothing
+
     hp.poly === nothing && return nothing
     pts = try
-        collect(Polyhedra.points(Polyhedra.vrep(hp.poly)))
+        _with_cdd_execution(() -> collect(Polyhedra.points(Polyhedra.vrep(hp.poly))))
     catch
         return nothing
     end
@@ -789,7 +778,7 @@ end
 
 function _build_locate_spatial_index(n::Int, regions::Vector{HPoly})
     nr = length(regions)
-    if !HAVE_POLY || n == 0 || n > 2 || nr < 64
+    if n == 0 || n > 2 || nr < 64
         return _empty_spatial_index()
     end
 
@@ -992,7 +981,7 @@ function _build_locate_prefilter(n::Int, regions::Vector{HPoly}, witnesses::Vect
     return _LocatePrefilter(true, x1s, perm, pos, window, spatial, multiproj)
 end
 
-@inline function _spatial_prefilter_candidates(pf::_LocatePrefilter, x::AbstractVector{<:Real})
+@inline function _spatial_prefilter_candidates(pf::_LocatePrefilter, x::Union{AbstractVector{<:Real},Tuple{Vararg{Real}}})
     si = pf.spatial
     if !si.enabled || isempty(si.buckets) || length(x) < 1
         return nothing
@@ -1029,7 +1018,7 @@ end
     return lo, hi
 end
 
-@inline function _multiproj_ranges(mp::_MultiProjPrefilter, x::AbstractVector{<:Real})
+@inline function _multiproj_ranges(mp::_MultiProjPrefilter, x::Union{AbstractVector{<:Real},Tuple{Vararg{Real}}})
     mp.enabled || return nothing
     nd = mp.ndims
     d1 = mp.dims[1]
@@ -1163,7 +1152,7 @@ mutable struct _LocateBucketGroupScratch
     cols::Vector{Int}
 end
 
-const _LOCATE_GROUP_SCRATCH = [IdDict{Any,_LocateBucketGroupScratch}() for _ in 1:max(1, Threads.maxthreadid())]
+const _LOCATE_GROUP_SCRATCH = _TaskLocalCache{IdDict{Any,_LocateBucketGroupScratch}}()
 const _LOCATE_COL_QQ_CACHE = Ref(true)
 const _LOCATE_ROW_DOT_CACHE = Ref(true)
 
@@ -1177,13 +1166,13 @@ mutable struct _LocateQQColScratch
     dot_cache::Dict{UInt64, Vector{_LocateQQDotEntry}}
 end
 
-const _LOCATE_QQCOL_SCRATCH = [Dict{Int,_LocateQQColScratch}() for _ in 1:max(1, Threads.maxthreadid())]
+const _LOCATE_QQCOL_SCRATCH = _TaskLocalCache{Dict{Int,_LocateQQColScratch}}()
 
 @inline _locate_group_key(pi::PLEncodingMap, cache) = (cache === nothing ? pi.cache : cache)
 
 function _locate_bucket_group_scratch!(pi::PLEncodingMap, cache, nb::Int, npts::Int)
     ng = nb + 1
-    store = _LOCATE_GROUP_SCRATCH[Threads.threadid()]
+    store = _task_local!(IdDict{Any,_LocateBucketGroupScratch}, _LOCATE_GROUP_SCRATCH)
     key = _locate_group_key(pi, cache)
     scratch = get(store, key, nothing)
     if scratch === nothing
@@ -1204,7 +1193,7 @@ function _locate_bucket_group_scratch!(pi::PLEncodingMap, cache, nb::Int, npts::
 end
 
 function _locate_qcol_scratch!(n::Int)
-    store = _LOCATE_QQCOL_SCRATCH[Threads.threadid()]
+    store = _task_local!(Dict{Int,_LocateQQColScratch}, _LOCATE_QQCOL_SCRATCH)
     scratch = get(store, n, nothing)
     if scratch === nothing
         scratch = _LocateQQColScratch(Vector{QQ}(undef, n), Dict{UInt64, Vector{_LocateQQDotEntry}}())
@@ -1216,7 +1205,7 @@ function _locate_qcol_scratch!(n::Int)
 end
 
 @inline function _estimate_locate_candidate_width(pi::PLEncodingMap, cache)::Float64
-    if cache isa PolyInBoxCache && cache.bucket_enabled
+    if cache isa PolyInBoxCache && _bucket_index_enabled(cache)
         return max(1.0, cache.bucket_avg_len)
     end
     si = pi.prefilter.spatial
@@ -1230,7 +1219,7 @@ end
 end
 
 @inline function _locate_group_bucket_stats(pi::PLEncodingMap, cache)
-    if cache isa PolyInBoxCache && cache.bucket_enabled
+    if cache isa PolyInBoxCache && _bucket_index_enabled(cache)
         nb = cache.bucket_nx * cache.bucket_ny
         return true, nb, cache.bucket_avg_len
     end
@@ -1324,10 +1313,10 @@ end
     end
 end
 
+# Called only by grouped locate after its synchronized enabled check. Bucket
+# metadata then stays immutable for the batch (empty! requires inactive users).
 @inline function _cache_bucket_id_col(cache, X::AbstractMatrix{<:Real}, col::Int)::Int
-    if !cache.bucket_enabled || size(X, 1) < 1
-        return 0
-    end
+    size(X, 1) < 1 && return 0
     x1 = float(X[1, col])
     if x1 < cache.box_f[1][1] || x1 > cache.box_f[2][1]
         return 0
@@ -1482,7 +1471,7 @@ function _locate_many_grouped!(
     length(dest) >= npts || return false
     _should_use_grouped_locate(pi, cache, npts) || return false
 
-    use_cache_buckets = (cache !== nothing && hasproperty(cache, :bucket_enabled) && getproperty(cache, :bucket_enabled))
+    use_cache_buckets = (cache isa PolyInBoxCache && _bucket_index_enabled(cache))
     use_spatial_buckets = (!use_cache_buckets && pi.prefilter.spatial.enabled && !isempty(pi.prefilter.spatial.buckets))
     (use_cache_buckets || use_spatial_buckets) || return false
 
@@ -1520,7 +1509,8 @@ function _locate_many_grouped!(
     do_thread = threaded && _should_thread_locate_many(pi, cache, npts; grouped=true)
 
     if do_thread
-        Threads.@threads :static for g in 1:ng
+        Threads.@threads for g in 1:ng
+            local lo, hi, cands, p, j
             lo = offsets[g]
             hi = offsets[g + 1] - 1
             lo <= hi || continue
@@ -2458,7 +2448,9 @@ function _locate_many_pl!(dest::AbstractVector{<:Integer}, pi_or_cache, X::Abstr
     npts = size(X, 2)
     mode0 = validate_pl_mode(mode)
     verify_safe = (mode0 === :verified)
-    do_thread = threaded && _should_thread_locate_many(pi, cache, npts; grouped=false)
+    # Bool vectors can share packed words even when logical indices differ.
+    do_thread = threaded && eltype(dest) !== Bool &&
+                _should_thread_locate_many(pi, cache, npts; grouped=false)
     use_multiproj = _should_use_multiproj_prefilter(
         pi.prefilter,
         length(pi.regions),
@@ -2478,7 +2470,7 @@ function _locate_many_pl!(dest::AbstractVector{<:Integer}, pi_or_cache, X::Abstr
         return dest
     end
     if do_thread
-        Threads.@threads :static for j in 1:npts
+        Threads.@threads for j in 1:npts
             dest[j] = _locate_hybrid_col(
                 pi, X, j;
                 cache=cache,
@@ -2574,7 +2566,7 @@ end
         return dest
     end
     if do_thread
-        Threads.@threads :static for j in 1:npts
+        Threads.@threads for j in 1:npts
             dest[j] = _locate_hybrid_col(
                 pi, X, j;
                 cache=cache,
@@ -2668,7 +2660,10 @@ It stores (lazily) the polyhedra:
 and (also lazily) their V- and H-representations.
 
 Users should treat the fields as internal. Construct with `poly_in_box_cache`
-and pass via the `cache=` keyword to geometry routines.
+and pass via the `cache=` keyword to geometry routines. Concurrent geometry
+queries may share a cold cache: region payloads and summary publication are
+synchronized. Finish active queries before `empty!(cache)` or modifying any
+returned cached arrays.
 """
 struct CachedFacet
     measure::Float64
@@ -2708,6 +2703,7 @@ mutable struct PolyInBoxCache{PolyT,VRepT,HRepT}
     closure::Bool
     level::Symbol
     lock::Base.ReentrantLock
+    region_locks::Vector{Base.ReentrantLock}
     # Precompiled float membership data for repeated locate/geometry probes.
     Af::Vector{Matrix{Float64}}
     bf_strict::Vector{Vector{Float64}}
@@ -2739,16 +2735,25 @@ mutable struct PolyInBoxCache{PolyT,VRepT,HRepT}
     boundary_breakdown::Dict{BoundaryBreakdownCacheKey,Vector{BoundaryBreakdownEntry}}
     boundary_measure::Dict{BoundaryBreakdownCacheKey,Float64}
     adjacency::Dict{AdjacencyCacheKey,Dict{Tuple{Int,Int},Float64}}
-    facet_classify_scratch::Vector{_FacetClassifyScratch}
+    facet_classify_scratch::_TaskLocalCache{_FacetClassifyScratch}
     # Exact volume cache for repeated region_weights(method=:exact) on the same box.
     exact_weight::Vector{Float64}
-    exact_weight_ready::BitVector
+    exact_weight_ready::Vector{Bool}
     # Exact centroid cache for repeated region_centroid(method=:polyhedra).
     exact_centroid::Vector{Vector{Float64}}
-    exact_centroid_ready::BitVector
+    exact_centroid_ready::Vector{Bool}
     poly::Vector{Union{Nothing,PolyT}}
     vrep::Vector{Union{Nothing,VRepT}}
     hrep::Vector{Union{Nothing,HRepT}}
+end
+
+@inline function _bucket_index_enabled(cache::PolyInBoxCache)
+    Base.lock(cache.lock)
+    try
+        return cache.bucket_enabled
+    finally
+        Base.unlock(cache.lock)
+    end
 end
 
 """
@@ -2890,7 +2895,7 @@ This is a cheap capability accessor. It tells you whether the fast query path
 can prefilter candidate regions before exact H-poly membership checks.
 """
 @inline has_spatial_index(pi::PLEncodingMap) = pi.prefilter.spatial.enabled
-@inline has_spatial_index(cache::PolyInBoxCache) = cache.bucket_enabled || has_spatial_index(cache.pi)
+@inline has_spatial_index(cache::PolyInBoxCache) = _bucket_index_enabled(cache) || has_spatial_index(cache.pi)
 @inline has_spatial_index(enc::CompiledEncoding{<:PLEncodingMap}) = has_spatial_index(enc.pi)
 
 """
@@ -2908,8 +2913,22 @@ Use these to inspect a cache object without reading internal fields directly:
   intersect the cached box.
 """
 @inline cache_box(cache::PolyInBoxCache) = cache.box_q
-@inline cache_level(cache::PolyInBoxCache) = cache.level
-@inline cached_region_count(cache::PolyInBoxCache) = count(==(Int8(1)), cache.activity_state)
+@inline function cache_level(cache::PolyInBoxCache)
+    Base.lock(cache.lock)
+    try
+        return cache.level
+    finally
+        Base.unlock(cache.lock)
+    end
+end
+@inline function cached_region_count(cache::PolyInBoxCache)
+    Base.lock(cache.lock)
+    try
+        return count(==(Int8(1)), cache.activity_state)
+    finally
+        Base.unlock(cache.lock)
+    end
+end
 
 @inline _plpoly_issue_report(kind::Symbol, valid::Bool; kwargs...) = (; kind, valid, kwargs...)
 
@@ -3164,7 +3183,7 @@ function check_poly_in_box_cache(cache::PolyInBoxCache; throw::Bool=false)
     length(cache.active_index) == nr || push!(issues, "active_index has length $(length(cache.active_index)), expected $nr.")
     cache_level(cache) in (:light, :geometry, :full) ||
         push!(issues, "cache level must be one of :light, :geometry, :full.")
-    cache.bucket_enabled && (cache.bucket_nx < 1 || cache.bucket_ny < 1) &&
+    _bucket_index_enabled(cache) && (cache.bucket_nx < 1 || cache.bucket_ny < 1) &&
         push!(issues, "bucket-enabled caches must have positive bucket grid dimensions.")
     valid = isempty(issues)
     throw && !valid && _throw_invalid_plpoly(:check_poly_in_box_cache, issues)
@@ -3174,7 +3193,7 @@ function check_poly_in_box_cache(cache::PolyInBoxCache; throw::Bool=false)
                                 cached_region_count=cached_region_count(cache),
                                 cache_level=cache_level(cache),
                                 box=cache_box(cache),
-                                bucket_lookup_enabled=cache.bucket_enabled,
+                                bucket_lookup_enabled=_bucket_index_enabled(cache),
                                 issues=issues)
 end
 
@@ -3445,7 +3464,7 @@ function _plpoly_describe(cache::PolyInBoxCache)
         cache_level=cache_level(cache),
         box=cache_box(cache),
         spatial_index_enabled=has_spatial_index(cache.pi),
-        bucket_lookup_enabled=cache.bucket_enabled,
+        bucket_lookup_enabled=_bucket_index_enabled(cache),
     )
 end
 
@@ -3737,6 +3756,10 @@ function locate_many!(dest::AbstractVector{<:Integer},
                       tol::Float64=LOCATE_FLOAT_TOL,
                       boundary_tol::Float64=LOCATE_BOUNDARY_TOL)
     npts = size(X, 2)
+    if !(dest isa Vector{Int})
+        return _locate_many_pl!(dest, cache, X; threaded=threaded, mode=mode,
+                                tol=tol, boundary_tol=boundary_tol)
+    end
     _locate_many_prefix!(dest, cache, X, npts;
                          threaded=threaded,
                          mode=mode,
@@ -3791,10 +3814,12 @@ function _poly_cache_types(n::Int)
         end
         b[row] = zero(QQ)
     end
-    p = Polyhedra.polyhedron(Polyhedra.hrep(A, b), _CDD)
-    v = Polyhedra.vrep(p)
-    h = Polyhedra.hrep(p)
-    return typeof(p), typeof(v), typeof(h)
+    return _with_cdd_execution() do
+        p = Polyhedra.polyhedron(Polyhedra.hrep(A, b), _CDD)
+        v = Polyhedra.vrep(p)
+        h = Polyhedra.hrep(p)
+        (typeof(p), typeof(v), typeof(h))
+    end
 end
 
 """
@@ -3835,7 +3860,7 @@ Notes:
   - Per-region exact geometry is materialized lazily on first touch.
 """
 function poly_in_box_cache(pi::PLEncodingMap; box, closure::Bool=true, level::Symbol=:light)
-    HAVE_POLY || error("poly_in_box_cache: Polyhedra.jl + CDDLib.jl required")
+
     box === nothing && error("poly_in_box_cache: please provide box=(a,b)")
     a_in, b_in = box
     length(a_in) == pi.n || error("poly_in_box_cache: box lower corner has wrong dimension")
@@ -3899,18 +3924,15 @@ function poly_in_box_cache(pi::PLEncodingMap; box, closure::Bool=true, level::Sy
     adjacency = Dict{AdjacencyCacheKey,Dict{Tuple{Int,Int},Float64}}()
     hrep_float = Vector{Union{Nothing,_HRepFloatCache}}(undef, nregions)
     fill!(hrep_float, nothing)
-    facet_classify_scratch = [_FacetClassifyScratch(
-        Matrix{Float64}(undef, pi.n, 0),
-        falses(0),
-        Int[],
-    ) for _ in 1:max(1, Threads.nthreads())]
+    facet_classify_scratch = _TaskLocalCache{_FacetClassifyScratch}()
     exact_weight = zeros(Float64, nregions)
-    exact_weight_ready = falses(nregions)
+    exact_weight_ready = fill(false, nregions)
     exact_centroid = [zeros(Float64, pi.n) for _ in 1:nregions]
-    exact_centroid_ready = falses(nregions)
+    exact_centroid_ready = fill(false, nregions)
 
     return PolyInBoxCache{PolyT,VRepT,HRepT}(pi, (a_q, b_q), (a_f, b_f), closure,
                                               level, Base.ReentrantLock(),
+                                              [Base.ReentrantLock() for _ in 1:nregions],
                                               Af, bf_strict, bf_relaxed,
                                               activity_state, activity_scanned,
                                               aabb_lo, aabb_hi, active_regions, active_mask, active_index,
@@ -4059,9 +4081,11 @@ end
 
 function _compute_region_geometry(cache::PolyInBoxCache, r::Int)
     Pr = _hpoly_in_box_polyhedron(cache.pi.regions[r], cache.box_q; closure=cache.closure)
-    Vr = Polyhedra.vrep(Pr)
-    Hr = Polyhedra.hrep(Pr)
-    raw = collect(Polyhedra.points(Vr))
+    Vr, Hr, raw = _with_cdd_execution() do
+        vr = Polyhedra.vrep(Pr)
+        hr = Polyhedra.hrep(Pr)
+        (vr, hr, collect(Polyhedra.points(vr)))
+    end
     n = cache.pi.n
     lo = fill(Inf, n)
     hi = fill(-Inf, n)
@@ -4087,31 +4111,30 @@ function _compute_region_geometry(cache::PolyInBoxCache, r::Int)
 end
 
 function _materialize_region_geometry!(cache::PolyInBoxCache, r::Int)
-    st = cache.activity_state[r]
-    st == Int8(0) || return (st == Int8(1))
-
-    Pr, Vr, Hr, pts, lo, hi = _compute_region_geometry(cache, r)
-    active = _is_aabb_active(lo, hi)
-
-    Base.lock(cache.lock)
+    Base.lock(cache.region_locks[r])
     try
-        st2 = cache.activity_state[r]
-        if st2 == Int8(0)
-            cache.poly[r] = Pr
-            cache.vrep[r] = Vr
-            cache.hrep[r] = Hr
-            cache.points_f[r] = pts
-            copyto!(cache.aabb_lo[r], lo)
-            copyto!(cache.aabb_hi[r], hi)
+        st = cache.activity_state[r]
+        st == Int8(0) || return (st == Int8(1))
+        Pr, Vr, Hr, pts, lo, hi = _compute_region_geometry(cache, r)
+        active = _is_aabb_active(lo, hi)
+        cache.poly[r] = Pr
+        cache.vrep[r] = Vr
+        cache.hrep[r] = Hr
+        cache.points_f[r] = pts
+        copyto!(cache.aabb_lo[r], lo)
+        copyto!(cache.aabb_hi[r], hi)
+        Base.lock(cache.lock)
+        try
             _set_region_activity!(cache, r, active)
-            # Any newly materialized region invalidates bucket metadata until rebuilt.
             cache.bucket_enabled = false
             cache.bucket_avg_len = 0.0
             cache.bucket_regions = _empty_packed_buckets()
+        finally
+            Base.unlock(cache.lock)
         end
-        return cache.activity_state[r] == Int8(1)
+        return active
     finally
-        Base.unlock(cache.lock)
+        Base.unlock(cache.region_locks[r])
     end
 end
 
@@ -4122,132 +4145,118 @@ end
 
 function _materialize_pending_regions!(cache::PolyInBoxCache, pending::Vector{Int}; threaded::Bool=true)
     isempty(pending) && return nothing
-    do_thread = threaded && _should_thread_region_loop(length(pending), _GEOM_BUILD_EST_OPS[])
-    if do_thread
+    if threaded && _should_thread_region_loop(length(pending), _GEOM_BUILD_EST_OPS[])
         Threads.@threads for i in eachindex(pending)
-            r = pending[i]
-            Pr, Vr, Hr, pts, lo, hi = _compute_region_geometry(cache, r)
-            cache.poly[r] = Pr
-            cache.vrep[r] = Vr
-            cache.hrep[r] = Hr
-            cache.points_f[r] = pts
-            copyto!(cache.aabb_lo[r], lo)
-            copyto!(cache.aabb_hi[r], hi)
-            cache.activity_state[r] = _is_aabb_active(lo, hi) ? Int8(1) : Int8(-1)
+            _materialize_region_geometry!(cache, pending[i])
         end
     else
-        @inbounds for r in pending
-            Pr, Vr, Hr, pts, lo, hi = _compute_region_geometry(cache, r)
-            cache.poly[r] = Pr
-            cache.vrep[r] = Vr
-            cache.hrep[r] = Hr
-            cache.points_f[r] = pts
-            copyto!(cache.aabb_lo[r], lo)
-            copyto!(cache.aabb_hi[r], hi)
-            cache.activity_state[r] = _is_aabb_active(lo, hi) ? Int8(1) : Int8(-1)
+        for r in pending
+            _materialize_region_geometry!(cache, r)
         end
     end
     return nothing
 end
 
 function _ensure_all_region_activity!(cache::PolyInBoxCache; threaded::Bool=true)
-    cache.activity_scanned && return cache.active_regions
-
-    pending = Int[]
-    sizehint!(pending, length(cache.activity_state))
-    @inbounds for r in eachindex(cache.activity_state)
-        if cache.activity_state[r] == Int8(0)
-            push!(pending, r)
-        end
-    end
-    _materialize_pending_regions!(cache, pending; threaded=threaded)
-
     Base.lock(cache.lock)
-    try
-        _rebuild_active_regions!(cache)
-        cache.activity_scanned = true
+    pending = try
+        cache.activity_scanned && return cache.active_regions
+        findall(==(Int8(0)), cache.activity_state)
     finally
         Base.unlock(cache.lock)
     end
-    return cache.active_regions
+    _materialize_pending_regions!(cache, pending; threaded=threaded)
+    Base.lock(cache.lock)
+    try
+        if !cache.activity_scanned
+            _rebuild_active_regions!(cache)
+            cache.activity_scanned = true
+        end
+        return cache.active_regions
+    finally
+        Base.unlock(cache.lock)
+    end
 end
 
 function _build_bucket_index!(cache::PolyInBoxCache)
-    if cache.bucket_enabled && cache.activity_scanned
-        return cache
-    end
     _ensure_all_region_activity!(cache; threaded=true)
-    nactive = length(cache.active_regions)
-    if nactive == 0 || cache.pi.n < 1
-        cache.bucket_enabled = false
-        cache.bucket_regions = _empty_packed_buckets()
-        cache.bucket_avg_len = 0.0
+    Base.lock(cache.lock)
+    try
+        _bucket_index_enabled(cache) && return cache
+        nactive = length(cache.active_regions)
+        if nactive == 0 || cache.pi.n < 1
+            cache.bucket_enabled = false
+            cache.bucket_regions = _empty_packed_buckets()
+            cache.bucket_avg_len = 0.0
+            return cache
+        end
+
+        a_f, b_f = cache.box_f
+        nx = max(4, min(128, round(Int, sqrt(nactive))))
+        ny = cache.pi.n >= 2 ? max(4, min(128, round(Int, sqrt(nactive)))) : 1
+        dx = max((b_f[1] - a_f[1]) / nx, 1e-12)
+        dy = cache.pi.n >= 2 ? max((b_f[2] - a_f[2]) / ny, 1e-12) : 1.0
+        x0 = a_f[1]
+        y0 = (cache.pi.n >= 2 ? a_f[2] : 0.0)
+        nb = nx * ny
+        counts = zeros(Int, nb)
+        @inbounds for r in cache.active_regions
+            lo = cache.aabb_lo[r]
+            hi = cache.aabb_hi[r]
+            ix0 = clamp(Int(floor((lo[1] - x0) / dx)) + 1, 1, nx)
+            ix1 = clamp(Int(floor((hi[1] - x0) / dx)) + 1, 1, nx)
+            iy0 = 1
+            iy1 = 1
+            if cache.pi.n >= 2
+                iy0 = clamp(Int(floor((lo[2] - y0) / dy)) + 1, 1, ny)
+                iy1 = clamp(Int(floor((hi[2] - y0) / dy)) + 1, 1, ny)
+            end
+            for iy in iy0:iy1, ix in ix0:ix1
+                counts[(iy - 1) * nx + ix] += 1
+            end
+        end
+
+        ptr = Vector{Int}(undef, nb + 1)
+        ptr[1] = 1
+        @inbounds for bid in 1:nb
+            ptr[bid + 1] = ptr[bid] + counts[bid]
+        end
+        idx = Vector{Int}(undef, ptr[end] - 1)
+        writepos = copy(ptr[1:end-1])
+
+        @inbounds for r in cache.active_regions
+            lo = cache.aabb_lo[r]
+            hi = cache.aabb_hi[r]
+            ix0 = clamp(Int(floor((lo[1] - x0) / dx)) + 1, 1, nx)
+            ix1 = clamp(Int(floor((hi[1] - x0) / dx)) + 1, 1, nx)
+            iy0 = 1
+            iy1 = 1
+            if cache.pi.n >= 2
+                iy0 = clamp(Int(floor((lo[2] - y0) / dy)) + 1, 1, ny)
+                iy1 = clamp(Int(floor((hi[2] - y0) / dy)) + 1, 1, ny)
+            end
+            for iy in iy0:iy1, ix in ix0:ix1
+                bid = (iy - 1) * nx + ix
+                pos = writepos[bid]
+                idx[pos] = r
+                writepos[bid] = pos + 1
+            end
+        end
+
+        total_bucket = ptr[end] - 1
+        cache.bucket_nx = nx
+        cache.bucket_ny = ny
+        cache.bucket_x0 = x0
+        cache.bucket_y0 = y0
+        cache.bucket_dx = dx
+        cache.bucket_dy = dy
+        cache.bucket_regions = _PackedBuckets(ptr, idx)
+        cache.bucket_avg_len = nb == 0 ? 0.0 : (total_bucket / nb)
+        cache.bucket_enabled = true
         return cache
+    finally
+        Base.unlock(cache.lock)
     end
-
-    a_f, b_f = cache.box_f
-    nx = max(4, min(128, round(Int, sqrt(nactive))))
-    ny = cache.pi.n >= 2 ? max(4, min(128, round(Int, sqrt(nactive)))) : 1
-    dx = max((b_f[1] - a_f[1]) / nx, 1e-12)
-    dy = cache.pi.n >= 2 ? max((b_f[2] - a_f[2]) / ny, 1e-12) : 1.0
-    x0 = a_f[1]
-    y0 = (cache.pi.n >= 2 ? a_f[2] : 0.0)
-    nb = nx * ny
-    counts = zeros(Int, nb)
-    @inbounds for r in cache.active_regions
-        lo = cache.aabb_lo[r]
-        hi = cache.aabb_hi[r]
-        ix0 = clamp(Int(floor((lo[1] - x0) / dx)) + 1, 1, nx)
-        ix1 = clamp(Int(floor((hi[1] - x0) / dx)) + 1, 1, nx)
-        iy0 = 1
-        iy1 = 1
-        if cache.pi.n >= 2
-            iy0 = clamp(Int(floor((lo[2] - y0) / dy)) + 1, 1, ny)
-            iy1 = clamp(Int(floor((hi[2] - y0) / dy)) + 1, 1, ny)
-        end
-        for iy in iy0:iy1, ix in ix0:ix1
-            counts[(iy - 1) * nx + ix] += 1
-        end
-    end
-
-    ptr = Vector{Int}(undef, nb + 1)
-    ptr[1] = 1
-    @inbounds for bid in 1:nb
-        ptr[bid + 1] = ptr[bid] + counts[bid]
-    end
-    idx = Vector{Int}(undef, ptr[end] - 1)
-    writepos = copy(ptr[1:end-1])
-
-    @inbounds for r in cache.active_regions
-        lo = cache.aabb_lo[r]
-        hi = cache.aabb_hi[r]
-        ix0 = clamp(Int(floor((lo[1] - x0) / dx)) + 1, 1, nx)
-        ix1 = clamp(Int(floor((hi[1] - x0) / dx)) + 1, 1, nx)
-        iy0 = 1
-        iy1 = 1
-        if cache.pi.n >= 2
-            iy0 = clamp(Int(floor((lo[2] - y0) / dy)) + 1, 1, ny)
-            iy1 = clamp(Int(floor((hi[2] - y0) / dy)) + 1, 1, ny)
-        end
-        for iy in iy0:iy1, ix in ix0:ix1
-            bid = (iy - 1) * nx + ix
-            pos = writepos[bid]
-            idx[pos] = r
-            writepos[bid] = pos + 1
-        end
-    end
-
-    total_bucket = ptr[end] - 1
-    cache.bucket_enabled = true
-    cache.bucket_nx = nx
-    cache.bucket_ny = ny
-    cache.bucket_x0 = x0
-    cache.bucket_y0 = y0
-    cache.bucket_dx = dx
-    cache.bucket_dy = dy
-    cache.bucket_regions = _PackedBuckets(ptr, idx)
-    cache.bucket_avg_len = nb == 0 ? 0.0 : (total_bucket / nb)
-    return cache
 end
 
 @inline function _cache_level_requires_materialization(level::Symbol, intent::Symbol)::Bool
@@ -4269,11 +4278,16 @@ function _promote_cache_level!(cache::PolyInBoxCache, level::Symbol;
                                precompute_centroids::Bool=false,
                                precompute_weights::Bool=false)
     target = _normalize_cache_level(level)
-    cur_rank = _cache_level_rank(cache.level)
     target_rank = _cache_level_rank(target)
+    Base.lock(cache.lock)
+    cur_rank, activity_scanned, bucket_enabled = try
+        (_cache_level_rank(cache.level), cache.activity_scanned, cache.bucket_enabled)
+    finally
+        Base.unlock(cache.lock)
+    end
     promoted = target_rank > cur_rank
     need_materialization = _cache_level_requires_materialization(target, intent) &&
-                           (!cache.activity_scanned || !cache.bucket_enabled)
+                           (!activity_scanned || !bucket_enabled)
     if need_materialization
         _ensure_all_region_activity!(cache; threaded=true)
         _build_bucket_index!(cache)
@@ -4290,7 +4304,12 @@ function _promote_cache_level!(cache::PolyInBoxCache, level::Symbol;
         )
     end
     if promoted
-        cache.level = target
+        Base.lock(cache.lock)
+        try
+            _cache_level_rank(target) > _cache_level_rank(cache.level) && (cache.level = target)
+        finally
+            Base.unlock(cache.lock)
+        end
     end
     return cache
 end
@@ -4427,107 +4446,154 @@ end
 
 function _poly_in_box(cache::PolyInBoxCache{PolyT}, r::Integer) where {PolyT}
     (1 <= r <= length(cache.poly)) || error("_poly_in_box: region index out of range")
-    _materialize_region_geometry!(cache, Int(r))
-    if cache.poly[r] === nothing
-        cache.poly[r] = _hpoly_in_box_polyhedron(cache.pi.regions[Int(r)], cache.box_q; closure=cache.closure)
+    Base.lock(cache.region_locks[r])
+    try
+        _materialize_region_geometry!(cache, Int(r))
+        if cache.poly[r] === nothing
+            cache.poly[r] = _hpoly_in_box_polyhedron(cache.pi.regions[Int(r)], cache.box_q; closure=cache.closure)
+        end
+        return cache.poly[r]::PolyT
+    finally
+        Base.unlock(cache.region_locks[r])
     end
-    return cache.poly[r]::PolyT
 end
 
 function _vrep_in_box(cache::PolyInBoxCache{PolyT,VRepT}, r::Integer) where {PolyT,VRepT}
     (1 <= r <= length(cache.vrep)) || error("_vrep_in_box: region index out of range")
-    _materialize_region_geometry!(cache, Int(r))
-    if cache.vrep[r] === nothing
-        cache.vrep[r] = Polyhedra.vrep(_poly_in_box(cache, r))
+    Base.lock(cache.region_locks[r])
+    try
+        _materialize_region_geometry!(cache, Int(r))
+        if cache.vrep[r] === nothing
+            poly = _poly_in_box(cache, r)
+            cache.vrep[r] = _with_cdd_execution(() -> Polyhedra.vrep(poly))
+        end
+        return cache.vrep[r]::VRepT
+    finally
+        Base.unlock(cache.region_locks[r])
     end
-    return cache.vrep[r]::VRepT
 end
 
 function _hrep_in_box(cache::PolyInBoxCache{PolyT,VRepT,HRepT}, r::Integer) where {PolyT,VRepT,HRepT}
     (1 <= r <= length(cache.hrep)) || error("_hrep_in_box: region index out of range")
-    _materialize_region_geometry!(cache, Int(r))
-    if cache.hrep[r] === nothing
-        cache.hrep[r] = Polyhedra.hrep(_poly_in_box(cache, r))
+    Base.lock(cache.region_locks[r])
+    try
+        _materialize_region_geometry!(cache, Int(r))
+        if cache.hrep[r] === nothing
+            poly = _poly_in_box(cache, r)
+            cache.hrep[r] = _with_cdd_execution(() -> Polyhedra.hrep(poly))
+        end
+        return cache.hrep[r]::HRepT
+    finally
+        Base.unlock(cache.region_locks[r])
     end
-    return cache.hrep[r]::HRepT
 end
 
 function _hrep_float_in_box(cache::PolyInBoxCache, r::Integer)
     (1 <= r <= length(cache.hrep_float)) || error("_hrep_float_in_box: region index out of range")
-    hf = cache.hrep_float[r]
-    hf === nothing || return hf
+    Base.lock(cache.region_locks[r])
+    try
+        hf = cache.hrep_float[r]
+        hf === nothing || return hf
 
-    hre = _hrep_in_box(cache, r)
-    hs = collect(Polyhedra.halfspaces(hre))
-    m = length(hs)
-    n = cache.pi.n
-    A = Matrix{Float64}(undef, m, n)
-    b = Vector{Float64}(undef, m)
-    @inbounds for i in 1:m
-        h = hs[i]
-        j = 0
-        for c in h.a
-            j += 1
-            A[i, j] = float(c)
+        hre = _hrep_in_box(cache, r)
+        hs = _with_cdd_execution(() -> collect(Polyhedra.halfspaces(hre)))
+        m = length(hs)
+        n = cache.pi.n
+        A = Matrix{Float64}(undef, m, n)
+        b = Vector{Float64}(undef, m)
+        @inbounds for i in 1:m
+            h = hs[i]
+            j = 0
+            for c in h.a
+                j += 1
+                A[i, j] = float(c)
+            end
+            j == n || error("_hrep_float_in_box: halfspace dimension mismatch")
+            b[i] = float(_halfspace_rhs(h))
         end
-        j == n || error("_hrep_float_in_box: halfspace dimension mismatch")
-        b[i] = float(_halfspace_rhs(h))
+        out = _HRepFloatCache(A, b)
+        cache.hrep_float[r] = out
+        return out
+    finally
+        Base.unlock(cache.region_locks[r])
     end
-    out = _HRepFloatCache(A, b)
-    cache.hrep_float[r] = out
-    return out
 end
 
 function _points_float_in_box(cache::PolyInBoxCache, r::Integer)
     (1 <= r <= length(cache.points_f)) || error("_points_float_in_box: region index out of range")
-    _materialize_region_geometry!(cache, Int(r))
-    pts = cache.points_f[r]
-    pts === nothing || return pts
+    Base.lock(cache.region_locks[r])
+    try
+        _materialize_region_geometry!(cache, Int(r))
+        pts = cache.points_f[r]
+        pts === nothing || return pts
 
-    vre = _vrep_in_box(cache, r)
-    raw = collect(Polyhedra.points(vre))
-    if isempty(raw)
-        cache.points_f[r] = zeros(Float64, 0, cache.pi.n)
-        return cache.points_f[r]::Matrix{Float64}
-    end
-
-    out = Matrix{Float64}(undef, length(raw), cache.pi.n)
-    @inbounds for i in eachindex(raw)
-        x = _point_to_floatvec(raw[i], cache.pi.n)
-        for j in 1:cache.pi.n
-            out[i, j] = x[j]
+        vre = _vrep_in_box(cache, r)
+        raw = _with_cdd_execution(() -> collect(Polyhedra.points(vre)))
+        if isempty(raw)
+            cache.points_f[r] = zeros(Float64, 0, cache.pi.n)
+            return cache.points_f[r]::Matrix{Float64}
         end
+
+        out = Matrix{Float64}(undef, length(raw), cache.pi.n)
+        @inbounds for i in eachindex(raw)
+            x = _point_to_floatvec(raw[i], cache.pi.n)
+            for j in 1:cache.pi.n
+                out[i, j] = x[j]
+            end
+        end
+        cache.points_f[r] = out
+        return out
+    finally
+        Base.unlock(cache.region_locks[r])
     end
-    cache.points_f[r] = out
-    return out
 end
 
 @inline function _exact_centroid_from_cache(cache::PolyInBoxCache, r::Int)
-    if cache.exact_centroid_ready[r]
-        return cache.exact_centroid[r]
-    end
-    active = _cache_region_active(cache, r)
-    c = cache.exact_centroid[r]
+    Base.lock(cache.region_locks[r])
     try
-        cm = Polyhedra.center_of_mass(_poly_in_box(cache, r))
-        i = 0
-        for ci in cm
-            i += 1
-            c[i] = float(ci)
+        if cache.exact_centroid_ready[r]
+            return cache.exact_centroid[r]
         end
-    catch
-        lo = cache.aabb_lo[r]
-        hi = cache.aabb_hi[r]
-        if !active
-            fill!(c, 0.0)
-        else
-            @inbounds for i in 1:cache.pi.n
-                c[i] = 0.5 * (lo[i] + hi[i])
+        active = _cache_region_active(cache, r)
+        c = cache.exact_centroid[r]
+        try
+            poly = _poly_in_box(cache, r)
+            cm = _with_cdd_execution(() -> Polyhedra.center_of_mass(poly))
+            i = 0
+            for ci in cm
+                i += 1
+                c[i] = float(ci)
+            end
+        catch
+            lo = cache.aabb_lo[r]
+            hi = cache.aabb_hi[r]
+            if !active
+                fill!(c, 0.0)
+            else
+                @inbounds for i in 1:cache.pi.n
+                    c[i] = 0.5 * (lo[i] + hi[i])
+                end
             end
         end
+        cache.exact_centroid_ready[r] = true
+        return c
+    finally
+        Base.unlock(cache.region_locks[r])
     end
-    cache.exact_centroid_ready[r] = true
-    return c
+end
+
+function _exact_weight_from_cache(cache::PolyInBoxCache, r::Integer)
+    Base.lock(cache.region_locks[r])
+    try
+        if !cache.exact_weight_ready[r]
+            poly = _poly_in_box(cache, r)
+            cache.exact_weight[r] = _with_cdd_execution(() -> Polyhedra.volume(poly))
+            cache.exact_weight_ready[r] = true
+        end
+        return cache.exact_weight[r]
+    finally
+        Base.unlock(cache.region_locks[r])
+    end
 end
 
 function _precompute_exact_geometry!(cache::PolyInBoxCache;
@@ -4539,20 +4605,14 @@ function _precompute_exact_geometry!(cache::PolyInBoxCache;
     isempty(active) && return cache
 
     if precompute_weights
-        vals = Vector{Float64}(undef, length(active))
         if _should_thread_region_loop(length(active), 256)
             Threads.@threads for i in eachindex(active)
-                vals[i] = Polyhedra.volume(_poly_in_box(cache, active[i]))
+                _exact_weight_from_cache(cache, active[i])
             end
         else
-            @inbounds for i in eachindex(active)
-                vals[i] = Polyhedra.volume(_poly_in_box(cache, active[i]))
+            for r in active
+                _exact_weight_from_cache(cache, r)
             end
-        end
-        @inbounds for i in eachindex(active)
-            r = active[i]
-            cache.exact_weight[r] = vals[i]
-            cache.exact_weight_ready[r] = true
         end
     end
 
@@ -4693,18 +4753,36 @@ _region_centroid_fast(pi::CompiledEncoding{<:PLEncodingMap}, r::Integer;
     return (Int(r), strict, mode, dstep, tol)
 end
 
+@inline function _geometry_memo_get(cache::PolyInBoxCache, memo::Dict, key, default=nothing)
+    Base.lock(cache.lock)
+    try
+        return get(memo, key, default)
+    finally
+        Base.unlock(cache.lock)
+    end
+end
+
+@inline function _geometry_memo_publish!(cache::PolyInBoxCache, memo::Dict, key, value)
+    Base.lock(cache.lock)
+    try
+        return get!(memo, key, value)
+    finally
+        Base.unlock(cache.lock)
+    end
+end
+
 @inline function _region_boundary_measure_cached_value(cache::PolyInBoxCache, r::Integer;
     strict::Bool=true, mode::Symbol=:fast, tol::Float64=1e-10)
     key = _boundary_measure_cache_key(cache, r; strict=strict, mode=mode, tol=tol)
-    cached = get(cache.boundary_measure, key, nothing)
+    cached = _geometry_memo_get(cache, cache.boundary_measure, key, nothing)
     cached === nothing || return cached
-    breakdown = get(cache.boundary_breakdown, key, nothing)
+    breakdown = _geometry_memo_get(cache, cache.boundary_breakdown, key, nothing)
     breakdown === nothing && return nothing
     s = 0.0
     @inbounds for e in breakdown
         s += e.measure
     end
-    cache.boundary_measure[key] = s
+    _geometry_memo_publish!(cache, cache.boundary_measure, key, s)
     return s
 end
 
@@ -4712,11 +4790,7 @@ function _region_volume_fast(pi::PLEncodingMap, r::Integer; box, closure::Bool=t
     cache isa PolyInBoxCache || return nothing
     _check_cache_compatible(cache, pi, box, closure)
     _cache_region_active(cache, r) || return 0.0
-    if !cache.exact_weight_ready[r]
-        cache.exact_weight[r] = Polyhedra.volume(_poly_in_box(cache, r))
-        cache.exact_weight_ready[r] = true
-    end
-    return cache.exact_weight[r]
+    return _exact_weight_from_cache(cache, r)
 end
 
 _region_volume_fast(pi::CompiledEncoding{<:PLEncodingMap}, r::Integer; box, closure::Bool=true, cache=nothing) =
@@ -4856,8 +4930,8 @@ _region_geometry_summary_fast(pi::CompiledEncoding{<:PLEncodingMap}, r::Integer;
         mean_width_rng=mean_width_rng, mean_width_directions=mean_width_directions,
         need_mean_width=need_mean_width)
 
-@inline function _bucket_candidates(cache::PolyInBoxCache, x::AbstractVector{<:Real})
-    if !cache.bucket_enabled || length(x) < 1
+@inline function _bucket_candidates(cache::PolyInBoxCache, x::Union{AbstractVector{<:Real},Tuple{Vararg{Real}}})
+    if !_bucket_index_enabled(cache) || length(x) < 1
         return nothing
     end
     x1 = float(x[1])
@@ -4875,7 +4949,7 @@ _region_geometry_summary_fast(pi::CompiledEncoding{<:PLEncodingMap}, r::Integer;
 end
 
 @inline function _bucket_candidates_col(cache::PolyInBoxCache, X::AbstractMatrix{<:Real}, col::Int)
-    if !cache.bucket_enabled || size(X, 1) < 1
+    if !_bucket_index_enabled(cache) || size(X, 1) < 1
         return nothing
     end
     x1 = float(X[1, col])
@@ -4894,54 +4968,59 @@ end
 
 function _region_facets(cache::PolyInBoxCache, r::Integer; tol::Float64=1e-12)
     (1 <= r <= length(cache.facets)) || error("_region_facets: region index out of range")
-    fr = cache.facets[r]
-    fr === nothing || return fr
+    Base.lock(cache.region_locks[r])
+    try
+        fr = cache.facets[r]
+        fr === nothing || return fr
 
-    n = cache.pi.n
-    vre = _vrep_in_box(cache, r)
-    hre = _hrep_in_box(cache, r)
-    pts = collect(Polyhedra.points(vre))
-    pts_f = _points_float_in_box(cache, r)
-    hf = _hrep_float_in_box(cache, r)
-    hs = collect(Polyhedra.halfspaces(hre))
-    seen = Set{Tuple{Vararg{Int}}}()
-    out = CachedFacet[]
-    for (hidx, h) in enumerate(hs)
-        idxs = _incident_vertex_indices(vre, pts, h;
-                                        tol=tol,
-                                        a_float=@view(hf.A[hidx, :]),
-                                        b_float=hf.b[hidx],
-                                        pts_float=pts_f)
-        length(idxs) < n && continue
-        sig = Tuple(sort(idxs))
-        sig in seen && continue
-        push!(seen, sig)
+        n = cache.pi.n
+        vre = _vrep_in_box(cache, r)
+        hre = _hrep_in_box(cache, r)
+        pts = _with_cdd_execution(() -> collect(Polyhedra.points(vre)))
+        pts_f = _points_float_in_box(cache, r)
+        hf = _hrep_float_in_box(cache, r)
+        hs = _with_cdd_execution(() -> collect(Polyhedra.halfspaces(hre)))
+        seen = Set{Tuple{Vararg{Int}}}()
+        out = CachedFacet[]
+        for (hidx, h) in enumerate(hs)
+            idxs = _incident_vertex_indices(vre, pts, h;
+                                            tol=tol,
+                                            a_float=@view(hf.A[hidx, :]),
+                                            b_float=hf.b[hidx],
+                                            pts_float=pts_f)
+            length(idxs) < n && continue
+            sig = Tuple(sort(idxs))
+            sig in seen && continue
+            push!(seen, sig)
 
-        face = Vector{Vector{Float64}}(undef, length(idxs))
-        for (k, i) in enumerate(idxs)
-            face[k] = _point_to_floatvec(pts[i], n)
-        end
-
-        x0 = zeros(Float64, n)
-        for p in face
-            @inbounds for i in 1:n
-                x0[i] += p[i]
+            face = Vector{Vector{Float64}}(undef, length(idxs))
+            for (k, i) in enumerate(idxs)
+                face[k] = _point_to_floatvec(pts[i], n)
             end
-        end
-        x0 ./= length(face)
 
-        normal = Vector{Float64}(undef, n)
-        @inbounds for i in 1:n
-            normal[i] = hf.A[hidx, i]
+            x0 = zeros(Float64, n)
+            for p in face
+                @inbounds for i in 1:n
+                    x0[i] += p[i]
+                end
+            end
+            x0 ./= length(face)
+
+            normal = Vector{Float64}(undef, n)
+            @inbounds for i in 1:n
+                normal[i] = hf.A[hidx, i]
+            end
+            nn = sqrt(sum(normal[i]^2 for i in 1:n))
+            nn == 0.0 && continue
+            unit = normal ./ nn
+            m = _facet_measure(face, normal)
+            push!(out, CachedFacet(float(m), normal, unit, x0))
         end
-        nn = sqrt(sum(normal[i]^2 for i in 1:n))
-        nn == 0.0 && continue
-        unit = normal ./ nn
-        m = _facet_measure(face, normal)
-        push!(out, CachedFacet(float(m), normal, unit, x0))
+        cache.facets[r] = out
+        return out
+    finally
+        Base.unlock(cache.region_locks[r])
     end
-    cache.facets[r] = out
-    return out
 end
 
 @inline function _membership_mats(pi::PLEncodingMap, cache, use_relaxed_b::Bool)
@@ -4952,8 +5031,9 @@ end
 end
 
 @inline function _facet_classify_scratch!(cache::PolyInBoxCache, npts::Int)
-    tid = Threads.threadid()
-    scratch0 = cache.facet_classify_scratch[tid]
+    scratch0 = _task_local!(cache.facet_classify_scratch) do
+        _FacetClassifyScratch(Matrix{Float64}(undef, cache.pi.n, 0), falses(0), Int[])
+    end
     X = scratch0.X
     n = cache.pi.n
     if size(X, 1) != n || size(X, 2) < npts
@@ -5053,7 +5133,7 @@ end
             do_thread,
         )
         if do_thread
-            Threads.@threads :static for c in 1:npts
+            Threads.@threads for c in 1:npts
                 if in_box[c]
                     loc[c] = _locate_region_float(
                         pi, Af, bf, @view(X[:, c]);
@@ -5093,39 +5173,22 @@ end
 
 # Internal helpers for region_weights ------------------------------------------------
 
-# Exact region weights via Polyhedra volume computations (if available).
+# Exact region weights via Polyhedra volume computations.
 function _region_weights_exact(pi::PLEncodingMap, box; closure::Bool=true, cache=nothing)
-    HAVE_POLY || error("method=:exact requires Polyhedra/CDDLib. Use method=:mc instead.")
+
     nregions = length(pi.regions)
     w = zeros(Float64, nregions)
     if cache isa PolyInBoxCache
         _check_cache_compatible(cache, pi, box, closure)
         active = _ensure_all_region_activity!(cache; threaded=true)
-        if !isempty(active)
-            missing = Int[]
-            sizehint!(missing, length(active))
-            @inbounds for r in active
-                cache.exact_weight_ready[r] || push!(missing, r)
+        if _should_thread_region_loop(length(active), 256)
+            Threads.@threads for i in eachindex(active)
+                local r = active[i]
+                w[r] = _exact_weight_from_cache(cache, r)
             end
-            if !isempty(missing)
-                vals = Vector{Float64}(undef, length(missing))
-                if _should_thread_region_loop(length(missing), 256)
-                    Threads.@threads for i in eachindex(missing)
-                        vals[i] = Polyhedra.volume(_poly_in_box(cache, missing[i]))
-                    end
-                else
-                    @inbounds for i in eachindex(missing)
-                        vals[i] = Polyhedra.volume(_poly_in_box(cache, missing[i]))
-                    end
-                end
-                @inbounds for i in eachindex(missing)
-                    r = missing[i]
-                    cache.exact_weight[r] = vals[i]
-                    cache.exact_weight_ready[r] = true
-                end
-            end
-            @inbounds for r in active
-                w[r] = cache.exact_weight[r]
+        else
+            for r in active
+                w[r] = _exact_weight_from_cache(cache, r)
             end
         end
         return w
@@ -5145,8 +5208,10 @@ function _region_weights_exact(pi::PLEncodingMap, box; closure::Bool=true, cache
         b = closure ? _relaxed_b(pi.regions[r]) : pi.regions[r].b
         Aall = vcat(A, Aupper, Alower)
         ball = vcat(b, bupper, blower)
-        p = Polyhedra.polyhedron(Polyhedra.hrep(Aall, ball), CDDLib.Library(:exact))
-        w[r] = Polyhedra.volume(p)
+        w[r] = _with_cdd_execution() do
+            p = Polyhedra.polyhedron(Polyhedra.hrep(Aall, ball), _CDD)
+            Polyhedra.volume(p)
+        end
     end
     return w
 end
@@ -5229,7 +5294,7 @@ end
 Region weights (volumes) for PL polyhedral encodings.
 
 For a finite query `box = (ell, u)`:
-- `method=:exact` computes exact polytope volumes (requires optional Polyhedra/CDDLib).
+- `method=:exact` computes exact polytope volumes (Polyhedra/CDDLib).
 - `method=:mc` estimates volumes by Monte Carlo sampling (always available).
 
 If `return_info=false`, returns only the weight vector.
@@ -5355,8 +5420,9 @@ function region_volume(pi::PLEncodingMap, r::Integer;
         cache0 isa PolyInBoxCache && _check_cache_compatible(cache0, pi, box0, closure)
         fast = _region_volume_fast(pi, r; box=box0, closure=closure, cache=cache0)
         fast === nothing || return float(fast)
-        HAVE_POLY || error("region_volume(method=:exact): Polyhedra.jl + CDDLib.jl required")
-        return float(Polyhedra.volume(_hpoly_in_box_polyhedron(pi.regions[r], box0; closure=closure)))
+
+        poly = _hpoly_in_box_polyhedron(pi.regions[r], box0; closure=closure)
+        return _with_cdd_execution(() -> float(Polyhedra.volume(poly)))
     elseif method == :mc
         return float(region_weights(pi; box=box, cache=cache, method=:mc,
             nsamples=nsamples, rng=rng, strict=strict, closure=closure, mode=mode)[Int(r)])
@@ -5371,7 +5437,7 @@ end
 # Build (hp intersect box) as an exact Polyhedra.jl polyhedron.
 # If closure=true, strict rows are relaxed to closed halfspaces.
 function _hpoly_in_box_polyhedron(hp::HPoly, box; closure::Bool=true)
-    HAVE_POLY || error("_hpoly_in_box_polyhedron: Polyhedra.jl + CDDLib.jl required")
+
 
     a_in, b_in = box
     n = hp.n
@@ -5413,7 +5479,7 @@ function _hpoly_in_box_polyhedron(hp::HPoly, box; closure::Bool=true)
     end
 
     hre = Polyhedra.hrep(Aall, ball)
-    return Polyhedra.polyhedron(hre, _CDD)
+    return _with_cdd_execution(() -> Polyhedra.polyhedron(hre, _CDD))
 end
 
 """
@@ -5428,7 +5494,7 @@ function region_boundary_measure(pi::PLEncodingMap, r::Integer; box=nothing,
                                  closure::Bool=true, strict::Bool=true,
                                  cache=nothing,
                                  mode::Symbol=:fast)::Float64
-    HAVE_POLY || error("region_boundary_measure: Polyhedra.jl + CDDLib.jl required")
+
     mode0 = validate_pl_mode(mode)
     cache0 = _auto_geometry_cache(
         pi, cache, box, closure, mode0;
@@ -5452,7 +5518,7 @@ function region_boundary_measure(pi::PLEncodingMap, r::Integer; box=nothing,
     dstep = max(1e-8 * width, 1e-10)
     key = (Int(r), strict, mode0, dstep, tol)
     if cache0 isa PolyInBoxCache
-        cached = get(cache0.boundary_measure, key, nothing)
+        cached = _geometry_memo_get(cache0, cache0.boundary_measure, key, nothing)
         cached === nothing || return cached
     end
 
@@ -5465,7 +5531,7 @@ function region_boundary_measure(pi::PLEncodingMap, r::Integer; box=nothing,
     for f in bd
         s += f.measure
     end
-    cache0 isa PolyInBoxCache && (cache0.boundary_measure[key] = s)
+    cache0 isa PolyInBoxCache && _geometry_memo_publish!(cache0, cache0.boundary_measure, key, s)
     return s
 end
 
@@ -5496,7 +5562,7 @@ function region_boundary_measure_breakdown(pi::PLEncodingMap, r::Integer;
                                            mode::Symbol=:fast,
                                            delta::Union{Nothing,Real}=nothing,
                                            tol::Float64=1e-10)
-    HAVE_POLY || error("region_boundary_measure_breakdown: Polyhedra.jl + CDDLib.jl required")
+
     mode0 = validate_pl_mode(mode)
     cache0 = _auto_geometry_cache(
         pi, cache, box, closure, mode0;
@@ -5523,14 +5589,14 @@ function region_boundary_measure_breakdown(pi::PLEncodingMap, r::Integer;
 
     if cache0 isa PolyInBoxCache
         key = (Int(r), strict, mode0, dstep, tol)
-        cached = get(cache0.boundary_breakdown, key, nothing)
+        cached = _geometry_memo_get(cache0, cache0.boundary_breakdown, key, nothing)
         if cached !== nothing
-            if !haskey(cache0.boundary_measure, key)
+            if _geometry_memo_get(cache0, cache0.boundary_measure, key) === nothing
                 s_cached = 0.0
                 @inbounds for e in cached
                     s_cached += e.measure
                 end
-                cache0.boundary_measure[key] = s_cached
+                _geometry_memo_publish!(cache0, cache0.boundary_measure, key, s_cached)
             end
             return cached
         end
@@ -5541,8 +5607,8 @@ function region_boundary_measure_breakdown(pi::PLEncodingMap, r::Integer;
         key = (Int(r), strict, mode0, dstep, tol)
         facets = _region_facets(cache0, r; tol=tol)
         if isempty(facets)
-            cache0.boundary_breakdown[key] = out
-            cache0.boundary_measure[key] = 0.0
+            _geometry_memo_publish!(cache0, cache0.boundary_breakdown, key, out)
+            _geometry_memo_publish!(cache0, cache0.boundary_measure, key, 0.0)
             return out
         end
         kinds, neigh = _classify_cached_facets(
@@ -5564,19 +5630,20 @@ function region_boundary_measure_breakdown(pi::PLEncodingMap, r::Integer;
             neighbor = (kinds[j] == UInt8(2)) ? neigh[j] : nothing
             push!(out, (measure=cf.measure, normal=cf.normal, point=cf.point, kind=kind, neighbor=neighbor))
         end
-        cache0.boundary_breakdown[key] = out
+        _geometry_memo_publish!(cache0, cache0.boundary_breakdown, key, out)
         s_out = 0.0
         @inbounds for e in out
             s_out += e.measure
         end
-        cache0.boundary_measure[key] = s_out
+        _geometry_memo_publish!(cache0, cache0.boundary_measure, key, s_out)
         return out
     else
         P = _hpoly_in_box_polyhedron(pi.regions[r], box; closure=closure)
-        vre = Polyhedra.vrep(P)
-        hre = Polyhedra.hrep(P)
-        pts = collect(Polyhedra.points(vre))
-        hs = collect(Polyhedra.halfspaces(hre))
+        vre, pts, hs = _with_cdd_execution() do
+            vr = Polyhedra.vrep(P)
+            hr = Polyhedra.hrep(P)
+            (vr, collect(Polyhedra.points(vr)), collect(Polyhedra.halfspaces(hr)))
+        end
         isempty(pts) && return out
         isempty(hs) && return out
 
@@ -5768,7 +5835,6 @@ function region_centroid(pi::PLEncodingMap, r::Integer; box=nothing,
         error("region_centroid: unsupported method=$method")
     end
 
-    HAVE_POLY || error("region_centroid(method=:polyhedra): Polyhedra.jl + CDDLib.jl required")
     cache0 isa PolyInBoxCache && _check_cache_compatible(cache0, pi, box, closure)
     if cache0 isa PolyInBoxCache
         if !_cache_region_active(cache0, r)
@@ -5785,7 +5851,7 @@ function region_centroid(pi::PLEncodingMap, r::Integer; box=nothing,
     P = _hpoly_in_box_polyhedron(pi.regions[r], box; closure=closure)
 
     try
-        c = Polyhedra.center_of_mass(P)
+        c = _with_cdd_execution(() -> Polyhedra.center_of_mass(P))
         v = Vector{Float64}(undef, pi.n)
         i = 0
         for ci in c
@@ -6109,12 +6175,12 @@ Compute a Chebyshev (largest inscribed) ball for the convex polytope
 `pi.regions[r]` intersected with `box=(a,b)`.
 
 Methods:
-- `method=:polyhedra`  exact LP in variables (center, radius) when Polyhedra is available.
+- `method=:polyhedra`  LP in variables (center, radius).
                        For `metric=:L2`, LP uses Float64 (norms involve sqrt).
                        For `metric=:Linf` or `:L1`, LP is exact over rationals (QQ).
 - `method=:rep`        fast fallback: pick an interior point and take minimum distance to
                        constraints (guaranteed inscribed, not necessarily optimal).
-- `method=:auto`       uses `:polyhedra` when available, otherwise `:rep`.
+- `method=:auto`       uses `:polyhedra`.
 
 Returns `(center, radius)`.
 """
@@ -6129,12 +6195,10 @@ function region_chebyshev_ball(pi::PLEncodingMap, r::Integer; box=nothing,
 
     # Choose a default method.
     if method === :auto
-        method = HAVE_POLY ? :polyhedra : :rep
+        method = :polyhedra
     end
 
     if method === :polyhedra
-        HAVE_POLY || error("region_chebyshev_ball(method=:polyhedra) requires Polyhedra")
-
         hp = pi.regions[r]
         bvec = closure ? _relaxed_b(hp) : hp.b
 
@@ -6180,9 +6244,10 @@ function region_chebyshev_ball(pi::PLEncodingMap, r::Integer; box=nothing,
             Aaug[row, n + 1] = -1.0
             baug[row] = 0.0
 
-            poly = Polyhedra.polyhedron(Polyhedra.hrep(Aaug, baug), _CDD_FLOAT)
-            vre = Polyhedra.vrep(poly)
-            pts = collect(Polyhedra.points(vre))
+            pts = _with_cdd_execution() do
+                poly = Polyhedra.polyhedron(Polyhedra.hrep(Aaug, baug), _CDD_FLOAT)
+                collect(Polyhedra.points(Polyhedra.vrep(poly)))
+            end
             isempty(pts) && return (center=copy(pi.reps[r]), radius=0.0)
 
             best = pts[1]
@@ -6254,9 +6319,10 @@ function region_chebyshev_ball(pi::PLEncodingMap, r::Integer; box=nothing,
             Aaug[row, n + 1] = -one(QQ)
             baug[row] = zero(QQ)
 
-            poly = Polyhedra.polyhedron(Polyhedra.hrep(Aaug, baug), _CDD)
-            vre = Polyhedra.vrep(poly)
-            pts = collect(Polyhedra.points(vre))
+            pts = _with_cdd_execution() do
+                poly = Polyhedra.polyhedron(Polyhedra.hrep(Aaug, baug), _CDD)
+                collect(Polyhedra.points(Polyhedra.vrep(poly)))
+            end
             isempty(pts) && return (center=copy(pi.reps[r]), radius=0.0)
 
             best = pts[1]
@@ -6378,7 +6444,6 @@ function region_circumradius(pi::PLEncodingMap, r::Integer; box=nothing, center=
         error("region_circumradius: unknown method=$method (use :vertices or :bbox)")
     end
 
-    HAVE_POLY || error("region_circumradius(method=:vertices) requires Polyhedra")
 
     # Prefer cached vrep if available.
     pts = nothing
@@ -6510,7 +6575,6 @@ function region_mean_width(pi::PLEncodingMap, r::Integer; box=nothing,
         error("region_mean_width: unknown method=$method (use :auto, :cauchy, :vertices)")
     end
 
-    HAVE_POLY || error("region_mean_width(method=:vertices) requires Polyhedra")
     cache0 = _auto_geometry_cache(
         pi, cache, box, closure, :fast;
         level=:geometry,
@@ -6686,9 +6750,11 @@ function _facet_measure(face_pts::Vector{Vector{Float64}}, normal::Vector{Float6
         hull = _convex_hull_2d(pts2)
         return _polygon_area_2d(hull)
     else
-        vre = Polyhedra.vrep(proj)
-        P = Polyhedra.polyhedron(vre, _CDD_FLOAT)
-        return float(Polyhedra.volume(P))
+        return _with_cdd_execution() do
+            vre = Polyhedra.vrep(proj)
+            P = Polyhedra.polyhedron(vre, _CDD_FLOAT)
+            float(Polyhedra.volume(P))
+        end
     end
 end
 
@@ -6905,7 +6971,7 @@ function _incident_vertex_indices(vre, pts, h;
                                   pts_float::Union{Nothing,Matrix{Float64}}=nothing)::Vector{Int}
     # 1) Use Polyhedra's incidence iterator when available.
     try
-        return collect(Polyhedra.incidentpointindices(vre, h))
+        return _with_cdd_execution(() -> collect(Polyhedra.incidentpointindices(vre, h)))
     catch
         # Fall through to direct computation.
     end
@@ -6991,7 +7057,7 @@ Uses Polyhedra.jl + CDDLib exact facet enumeration and incidence queries.
 """
 function region_adjacency(pi::PLEncodingMap; box=nothing, strict::Bool=true,
                           closure::Bool=true, cache=nothing, mode::Symbol=:fast)
-    HAVE_POLY || error("region_adjacency: Polyhedra.jl + CDDLib.jl required")
+
     mode0 = validate_pl_mode(mode)
     cache0 = _auto_geometry_cache(
         pi, cache, box, closure, mode0;
@@ -7017,33 +7083,25 @@ function region_adjacency(pi::PLEncodingMap; box=nothing, strict::Bool=true,
 
     if cache0 isa PolyInBoxCache
         key = (strict, mode0, delta, tol)
-        cached = get(cache0.adjacency, key, nothing)
+        cached = _geometry_memo_get(cache0, cache0.adjacency, key, nothing)
         cached === nothing || return cached
 
         active = _ensure_all_region_activity!(cache0; threaded=true)
-        # Phase 1: sequentially populate per-region boundary breakdown cache.
-        for r in active
-            bd_key = (Int(r), strict, mode0, delta, tol)
-            if !haskey(cache0.boundary_breakdown, bd_key)
-                region_boundary_measure_breakdown(
-                    pi, r;
-                    box = box,
-                    cache = cache0,
-                    closure = closure,
-                    strict = strict,
-                    mode = mode0,
-                    delta = delta,
-                    tol = tol,
-                )
-            end
+        # Phase 1: populate and snapshot the per-region boundary vectors.
+        breakdowns = Vector{Vector{BoundaryBreakdownEntry}}(undef, length(active))
+        for (index, r) in enumerate(active)
+            breakdowns[index] = region_boundary_measure_breakdown(
+                pi, r; box=box, cache=cache0, closure=closure,
+                strict=strict, mode=mode0, delta=delta, tol=tol)
         end
 
         # Phase 2: read-only extraction into deterministic per-region shards.
         locals = Vector{Vector{_AdjEdgeAcc}}(undef, length(active))
         if _should_thread_region_loop(length(active), 96)
             Threads.@threads for idx in eachindex(active)
+                local r, bd, shard, f, s
                 r = active[idx]
-                bd = get(cache0.boundary_breakdown, (Int(r), strict, mode0, delta, tol), BoundaryBreakdownEntry[])
+                bd = breakdowns[idx]
                 shard = _AdjEdgeAcc[]
                 @inbounds for f in bd
                     if f.kind == :internal
@@ -7058,7 +7116,7 @@ function region_adjacency(pi::PLEncodingMap; box=nothing, strict::Bool=true,
         else
             @inbounds for idx in eachindex(active)
                 r = active[idx]
-                bd = get(cache0.boundary_breakdown, (Int(r), strict, mode0, delta, tol), BoundaryBreakdownEntry[])
+                bd = breakdowns[idx]
                 shard = _AdjEdgeAcc[]
                 @inbounds for f in bd
                     if f.kind == :internal
@@ -7098,16 +7156,17 @@ function region_adjacency(pi::PLEncodingMap; box=nothing, strict::Bool=true,
                 edges[(r, s)] = m
             end
         end
-        cache0.adjacency[key] = edges
+        _geometry_memo_publish!(cache0, cache0.adjacency, key, edges)
         return edges
     end
 
     for r in 1:nregions
         P = _hpoly_in_box_polyhedron(pi.regions[r], box; closure=closure)
-        vre = Polyhedra.vrep(P)
-        hre = Polyhedra.hrep(P)
-        pts = collect(Polyhedra.points(vre))
-        hs = collect(Polyhedra.halfspaces(hre))
+        vre, pts, hs = _with_cdd_execution() do
+            vr = Polyhedra.vrep(P)
+            hr = Polyhedra.hrep(P)
+            (vr, collect(Polyhedra.points(vr)), collect(Polyhedra.halfspaces(hr)))
+        end
 
         use_batch = _should_batch_facet_probes(:adjacency, length(hs), n)
         if !use_batch
@@ -7741,12 +7800,14 @@ This low-level overload is used by `encode_from_PL_fringe(::PLFringe, ::Encoding
 - `opts.backend` must be `:auto` or `:pl`.
 - `opts.max_regions` caps region enumeration (default: 10_000).
 - `opts.strict_eps` controls strict inequality handling in feasibility checks (default: STRICT_EPS_QQ).
+- `opts.field` selects the output coefficient field; geometry remains rational.
+- `poset_kind` defaults to `opts.poset_kind`, with an explicit keyword taking precedence.
 """
 function encode_from_PL_fringe(Ups::Vector{PLUpset},
                                Downs::Vector{PLDownset},
                                Phi_in::AbstractMatrix,
                                opts::EncodingOptions;
-                               poset_kind::Symbol = :signature)
+                               poset_kind::Symbol = opts.poset_kind)
     if opts.backend != :auto && opts.backend != :pl
         error("encode_from_PL_fringe: EncodingOptions.backend must be :auto or :pl")
     end
@@ -7754,7 +7815,7 @@ function encode_from_PL_fringe(Ups::Vector{PLUpset},
     strict_eps = opts.strict_eps === nothing ? STRICT_EPS_QQ : _toQQ(opts.strict_eps)
 
     _assert_PL_inputs(Ups, Downs)
-    HAVE_POLY || error("Polyhedra/CDDLib not available; install Polyhedra.jl and CDDLib.jl.")
+
 
     feasible = enumerate_feasible_regions(Ups, Downs; max_regions=max_regions, strict_eps=strict_eps)
 
@@ -7764,6 +7825,7 @@ function encode_from_PL_fringe(Ups::Vector{PLUpset},
         Dhat = FiniteFringe.Downset[FiniteFringe.downset_closure(P, BitVector([false])) for _ in 1:length(Downs)]
         Phi0 = zeros(QQ, length(Downs), length(Ups))
         H = FiniteFringe.FringeModule{QQ}(P, Uhat, Dhat, Phi0; field=QQField())
+        H = opts.field == QQField() ? H : FiniteFringe.change_field(H, opts.field)
         n0 = (length(Ups) > 0 ? Ups[1].U.n : (length(Downs) > 0 ? Downs[1].D.n : 0))
         pi = PLEncodingMap(n0, BitVector[], BitVector[], HPoly[], Tuple[])
         return P, H, pi
@@ -7794,6 +7856,7 @@ function encode_from_PL_fringe(Ups::Vector{PLUpset},
 
     Phi = _monomialize_phi(_toQQ_mat(Phi_in), Uhat, Dhat)
     H = FiniteFringe.FringeModule{QQ}(P, Uhat, Dhat, Phi; field=QQField())
+    H = opts.field == QQField() ? H : FiniteFringe.change_field(H, opts.field)
 
     pi = PLEncodingMap(n, sigy, sigz, regs, wits)
     return P, H, pi
@@ -7803,18 +7866,18 @@ encode_from_PL_fringe(Ups::Vector{PLUpset},
                       Downs::Vector{PLDownset},
                       Phi_in::AbstractMatrix;
                       opts::EncodingOptions=EncodingOptions(),
-                      poset_kind::Symbol = :signature) =
+                      poset_kind::Symbol = opts.poset_kind) =
     encode_from_PL_fringe(Ups, Downs, Phi_in, opts;
                           poset_kind = poset_kind)
 
-function encode_from_PL_fringe_with_tag(Ups, Downs, Phi_in, opts::EncodingOptions; poset_kind::Symbol = :signature)
+function encode_from_PL_fringe_with_tag(Ups, Downs, Phi_in, opts::EncodingOptions; poset_kind::Symbol = opts.poset_kind)
     P, H, pi = encode_from_PL_fringe(Ups, Downs, Phi_in, opts; poset_kind = poset_kind)
     return P, H, pi, :PL
 end
 
 encode_from_PL_fringe_with_tag(Ups, Downs, Phi_in;
                                opts::EncodingOptions=EncodingOptions(),
-                               poset_kind::Symbol = :signature) =
+                               poset_kind::Symbol = opts.poset_kind) =
     encode_from_PL_fringe_with_tag(Ups, Downs, Phi_in, opts;
                                    poset_kind = poset_kind)
 
@@ -7834,11 +7897,12 @@ This is the PL/R^n analog of `ZnEncoding.encode_from_flanges` for Z^n:
 - `opts.backend` must be `:auto` or `:pl`.
 - `opts.max_regions` caps region enumeration (default: 10_000).
 - `opts.strict_eps` controls strict inequality handling (default: STRICT_EPS_QQ).
-- `poset_kind`: `:signature` (structured, default) or `:dense` (materialized `FinitePoset`).
+- `poset_kind`: defaults to `opts.poset_kind`, either `:signature` (structured) or `:dense` (materialized `FinitePoset`).
+- `opts.field` selects the output coefficient field; geometry remains rational.
 
 Return values:
 - `P`  : the common encoding poset (a finite poset of regions)
-- `Hs` : a vector of `FiniteFringe.FringeModule{QQ}`, one per input `PLFringe`
+- `Hs` : a vector of finite fringe modules over `opts.field`, one per input `PLFringe`
 - `pi` : a classifier `pi : R^n -> P` (as `PLEncodingMap`)
 
 Notes:
@@ -7846,7 +7910,7 @@ Notes:
   may yield a smaller poset. Use `encode_from_PL_fringe` for that case.
 """
 function encode_from_PL_fringes(Fs::AbstractVector{<:PLFringe}, opts::EncodingOptions;
-                                poset_kind::Symbol = :signature)
+                                poset_kind::Symbol = opts.poset_kind)
     if opts.backend != :auto && opts.backend != :pl
         error("encode_from_PL_fringes: EncodingOptions.backend must be :auto or :pl")
     end
@@ -7854,7 +7918,7 @@ function encode_from_PL_fringes(Fs::AbstractVector{<:PLFringe}, opts::EncodingOp
     strict_eps = opts.strict_eps === nothing ? STRICT_EPS_QQ : _toQQ(opts.strict_eps)
 
     length(Fs) > 0 || error("encode_from_PL_fringes: need at least one PLFringe")
-    HAVE_POLY || error("Polyhedra/CDDLib not available; install Polyhedra.jl and CDDLib.jl.")
+
 
     n = Fs[1].n
     for (k, F) in enumerate(Fs)
@@ -7890,7 +7954,7 @@ function encode_from_PL_fringes(Fs::AbstractVector{<:PLFringe}, opts::EncodingOp
     if isempty(feasible)
         P = FiniteFringe.FinitePoset(reshape(Bool[true], 1, 1))
 
-        Hs = Vector{FiniteFringe.FringeModule{QQ}}(undef, length(Fs))
+        Hs = Vector{FiniteFringe.FringeModule{coeff_type(opts.field)}}(undef, length(Fs))
         for (k, F) in enumerate(Fs)
             Uhat = FiniteFringe.Upset[
                 FiniteFringe.upset_closure(P, BitVector([false])) for _ in 1:length(F.Ups)
@@ -7899,7 +7963,8 @@ function encode_from_PL_fringes(Fs::AbstractVector{<:PLFringe}, opts::EncodingOp
                 FiniteFringe.downset_closure(P, BitVector([false])) for _ in 1:length(F.Downs)
             ]
             Phi0 = zeros(QQ, length(F.Downs), length(F.Ups))
-            Hs[k] = FiniteFringe.FringeModule{QQ}(P, Uhat, Dhat, Phi0; field=QQField())
+            H = FiniteFringe.FringeModule{QQ}(P, Uhat, Dhat, Phi0; field=QQField())
+            Hs[k] = opts.field == QQField() ? H : FiniteFringe.change_field(H, opts.field)
         end
 
         pi = PLEncodingMap(n, BitVector[], BitVector[], HPoly[], Tuple[])
@@ -7927,11 +7992,12 @@ function encode_from_PL_fringes(Fs::AbstractVector{<:PLFringe}, opts::EncodingOp
     end
     pi = PLEncodingMap(nfeas, sigy, sigz, regs, wits)
 
-    Hs = Vector{FiniteFringe.FringeModule{QQ}}(undef, length(Fs))
+    Hs = Vector{FiniteFringe.FringeModule{coeff_type(opts.field)}}(undef, length(Fs))
     for (k, F) in enumerate(Fs)
         Uhat, Dhat = _images_on_P(P, sigy, sigz, up_ranges[k], dn_ranges[k])
         Phi = _monomialize_phi(_toQQ_mat(F.Phi), Uhat, Dhat)
-        Hs[k] = FiniteFringe.FringeModule{QQ}(P, Uhat, Dhat, Phi; field=QQField())
+        H = FiniteFringe.FringeModule{QQ}(P, Uhat, Dhat, Phi; field=QQField())
+        Hs[k] = opts.field == QQField() ? H : FiniteFringe.change_field(H, opts.field)
     end
 
     return P, Hs, pi
@@ -7939,49 +8005,49 @@ end
 
 encode_from_PL_fringes(Fs::AbstractVector{<:PLFringe};
                        opts::EncodingOptions=EncodingOptions(),
-                       poset_kind::Symbol = :signature) =
+                       poset_kind::Symbol = opts.poset_kind) =
     encode_from_PL_fringes(Fs, opts; poset_kind = poset_kind)
 
 # Tuple-friendly overload.
 function encode_from_PL_fringes(Fs::Tuple{Vararg{PLFringe}}, opts::EncodingOptions;
-                                poset_kind::Symbol = :signature)
+                                poset_kind::Symbol = opts.poset_kind)
     return encode_from_PL_fringes(collect(Fs), opts; poset_kind = poset_kind)
 end
 
 encode_from_PL_fringes(Fs::Tuple{Vararg{PLFringe}};
                        opts::EncodingOptions=EncodingOptions(),
-                       poset_kind::Symbol = :signature) =
+                       poset_kind::Symbol = opts.poset_kind) =
     encode_from_PL_fringes(collect(Fs), opts; poset_kind = poset_kind)
 
 # Small-arity overloads (avoid varargs-then-opts signatures).
 function encode_from_PL_fringes(F::PLFringe, opts::EncodingOptions;
-                                poset_kind::Symbol = :signature)
+                                poset_kind::Symbol = opts.poset_kind)
     return encode_from_PL_fringes(PLFringe[F], opts; poset_kind = poset_kind)
 end
 
 encode_from_PL_fringes(F::PLFringe;
                        opts::EncodingOptions=EncodingOptions(),
-                       poset_kind::Symbol = :signature) =
+                       poset_kind::Symbol = opts.poset_kind) =
     encode_from_PL_fringes(PLFringe[F], opts; poset_kind = poset_kind)
 
 function encode_from_PL_fringes(F1::PLFringe, F2::PLFringe, opts::EncodingOptions;
-                                poset_kind::Symbol = :signature)
+                                poset_kind::Symbol = opts.poset_kind)
     return encode_from_PL_fringes(PLFringe[F1, F2], opts; poset_kind = poset_kind)
 end
 
 encode_from_PL_fringes(F1::PLFringe, F2::PLFringe;
                        opts::EncodingOptions=EncodingOptions(),
-                       poset_kind::Symbol = :signature) =
+                       poset_kind::Symbol = opts.poset_kind) =
     encode_from_PL_fringes(PLFringe[F1, F2], opts; poset_kind = poset_kind)
 
 function encode_from_PL_fringes(F1::PLFringe, F2::PLFringe, F3::PLFringe, opts::EncodingOptions;
-                                poset_kind::Symbol = :signature)
+                                poset_kind::Symbol = opts.poset_kind)
     return encode_from_PL_fringes(PLFringe[F1, F2, F3], opts; poset_kind = poset_kind)
 end
 
 encode_from_PL_fringes(F1::PLFringe, F2::PLFringe, F3::PLFringe;
                        opts::EncodingOptions=EncodingOptions(),
-                       poset_kind::Symbol = :signature) =
+                       poset_kind::Symbol = opts.poset_kind) =
     encode_from_PL_fringes(PLFringe[F1, F2, F3], opts; poset_kind = poset_kind)
 
 # -----------------------------------------------------------------------------

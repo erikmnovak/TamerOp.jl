@@ -842,6 +842,7 @@ function _resolve_table_columns(names::Vector{Symbol},
                                 rows::Vector{Vector{String}},
                                 kind::Symbol,
                                 opts::DataFileOptions)
+    _validate_load_options(kind, :csv, opts)
     if kind == :point_cloud
         cols_raw = _col_selector_vec(opts.cols)
         col_idx = cols_raw === nothing ? collect(1:length(names)) : [_column_index(names, c) for c in cols_raw]
@@ -982,6 +983,26 @@ function _load_distance_matrix_table(path::AbstractString, fmt::Symbol, opts::Da
     )
 end
 
+function _validate_load_options(kind::Symbol, format::Symbol, opts::DataFileOptions)
+    table = format in (:csv, :tsv, :txt)
+    unused = Symbol[]
+    if !table
+        opts.header === nothing || push!(unused, :header)
+        opts.delimiter === nothing || push!(unused, :delimiter)
+        opts.comment_prefix == '#' || push!(unused, :comment_prefix)
+        opts.missing_policy === :error || push!(unused, :missing_policy)
+    end
+    (table && kind === :point_cloud) || opts.cols === nothing || push!(unused, :cols)
+    if !(table && kind === :graph)
+        opts.u_col === :u || push!(unused, :u_col)
+        opts.v_col === :v || push!(unused, :v_col)
+        opts.weight_col === nothing || push!(unused, :weight_col)
+    end
+    isempty(unused) || throw(ArgumentError(
+        "load_data: format=$format, kind=$kind does not use DataFileOptions controls $(join(unused, ", "))."))
+    return nothing
+end
+
 @inline function _kind_matches_data(data, kind::Symbol)::Bool
     kind == :auto && return true
     if kind == :point_cloud
@@ -1010,6 +1031,9 @@ Typical workflow
 
 For delimited tables (`.csv`, `.tsv`, `.txt`), `kind=:auto` is intentionally
 rejected because the same table shape can encode several mathematical objects.
+Table parsing controls are rejected for owned JSON and Ripser formats.
+`cols` selects point-cloud coordinates; `u_col`, `v_col`, and `weight_col`
+select graph columns. Nondefault selectors for other dataset kinds throw.
 """
 function load_data(path::AbstractString;
                    kind::Symbol=:auto,
@@ -1018,6 +1042,7 @@ function load_data(path::AbstractString;
                    kwargs...)
     k = _resolve_file_kind(kind, opts)
     f = _resolve_file_format(format, path, opts)
+    _validate_load_options(k, f, opts)
 
     if f == :dataset_json
         if !isempty(kwargs)
@@ -1028,6 +1053,10 @@ function load_data(path::AbstractString;
         _kind_matches_data(data, k) || throw(ArgumentError("load_data: expected kind=$(k), but dataset JSON decoded to $(typeof(data))."))
         return data
     elseif f == :ripser_point_cloud
+        if !isempty(kwargs)
+            bad = join(string.(keys(kwargs)), ", ")
+            throw(ArgumentError("load_data: ripser point-cloud parsing does not accept extra kwargs ($(bad)); pass construction options to the subsequent ingestion step."))
+        end
         data = Serialization.load_ripser_point_cloud(path)
         _kind_matches_data(data, k) || throw(ArgumentError("load_data: expected kind=$(k), but ripser point-cloud loader returns PointCloud."))
         return data
@@ -1358,7 +1387,9 @@ function check_load_data(path::AbstractString;
     cands = ()
     cols0 = nothing
     try
+        kind = _resolve_file_kind(kind, opts)
         fmt = _resolve_file_format(format, path, opts)
+        _validate_load_options(kind, fmt, opts)
         info = inspect_data_file(path; format=fmt, opts=opts)
         cands = candidate_kinds(info)
         if is_table_file(info)

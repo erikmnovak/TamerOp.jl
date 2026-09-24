@@ -9,6 +9,7 @@ This submodule should define (move here incrementally):
 - graded-space methods that expose dims/bases/representatives
 """
 module ExtTorSpaces
+    import ..DerivedFunctors: provenance, _validate_native_derived_options
     using LinearAlgebra: rank, I, mul!
     using SparseArrays
 
@@ -17,7 +18,7 @@ module ExtTorSpaces
                           TorFirstPayload, TorSecondPayload,
                           _resolution_key3, _resolution_key4, field_from_eltype
     using ...Options: ResolutionOptions, DerivedFunctorOptions
-    import ...CoreModules: _append_scaled_triplets!
+    import ...CoreModules: _append_scaled_triplets!, _foreach_workchunk
     import ...FieldLinAlg
     import ...FieldLinAlg: _SparseRREF, SparseRow,
               _SparseRowAccumulator, _reset_sparse_row_accumulator!,
@@ -44,7 +45,7 @@ module ExtTorSpaces
         CompCache, size_block, _block_offset, _component_inclusion_matrix_cached, _accum!
     import ..Resolutions: ProjectiveResolution, InjectiveResolution, _PackedActiveIndexPlan,
         _active_upset_indices, _packed_active_upset_plan,
-        projective_resolution, injective_resolution, _pad_projective_resolution!
+        projective_resolution, injective_resolution
     import ..DerivedFunctors: source_module, target_module, nonzero_degrees, degree_dimensions,
                               total_dimension, hom_summary, ext_summary, tor_summary,
                               underlying_ext_space, underlying_tor_space, cached_product_degrees
@@ -292,6 +293,41 @@ module ExtTorSpaces
         return PMorphism{K}(dom, cod, comps)
     end
 
+    # Numerical naturality equations must be reduced with the field's rank
+    # policy. Exact streaming elimination can turn rounding residuals into
+    # pivots and discard genuine morphisms even on well-conditioned modules.
+    function _hom_numerical_basis(M::PModule{K}, N::PModule{K}, offs::Vector{Int}) where {K}
+        rows, cols, vals = Int[], Int[], K[]
+        row = 0
+        storeM, storeN = M.edge_maps, N.edge_maps
+        for u in 1:nvertices(M.Q)
+            du, dNu = M.dims[u], N.dims[u]
+            for (j, v) in enumerate(storeM.succs[u])
+                dv, dNv = M.dims[v], N.dims[v]
+                Muv, Nuv = storeM.maps_to_succ[u][j], storeN.maps_to_succ[u][j]
+                for ii in 1:dNv, jj in 1:du
+                    row += 1
+                    for k in 1:dNu
+                        c = Nuv[ii, k]
+                        iszero(c) && continue
+                        push!(rows, row)
+                        push!(cols, offs[u] + k + (jj - 1) * dNu)
+                        push!(vals, c)
+                    end
+                    for l in 1:dv
+                        c = Muv[l, jj]
+                        iszero(c) && continue
+                        push!(rows, row)
+                        push!(cols, offs[v] + ii + (l - 1) * dNv)
+                        push!(vals, -c)
+                    end
+                end
+            end
+        end
+        equations = sparse(rows, cols, vals, row, offs[end])
+        return Matrix{K}(FieldLinAlg.nullspace(M.field, equations))
+    end
+
     """
         Hom(M::PModule{K}, N::PModule{K}) -> HomSpace{K}
 
@@ -306,8 +342,9 @@ module ExtTorSpaces
     - This function used to assemble a dense constraint matrix A=zeros(K,neqs,nvars)
     and then call FieldLinAlg.nullspace(field, A). That is prohibitively expensive when nvars is
     large, even though each constraint row is very sparse.
-    - We now stream each naturality equation into an exact sparse RREF reducer
-    (dictionary-of-rows) without ever materializing A.
+    - Exact fields stream each naturality equation into a sparse RREF reducer
+      without materializing A. Real fields assemble sparse constraints and use
+      field-aware numerical nullspaces, retaining the supplied tolerances.
 
     Mathematical content
     - Unknowns are the entries of the vertex maps F_u : M_u -> N_u for all u.
@@ -317,6 +354,7 @@ module ExtTorSpaces
     function Hom(M::PModule{K}, N::PModule{K}) where {K}
         Q = M.Q
         @assert N.Q === Q
+        M.field == N.field || throw(ArgumentError("Hom: coefficient fields must agree"))
 
         offs = _hom_offsets(M, N)
         nvars = offs[end]
@@ -324,6 +362,9 @@ module ExtTorSpaces
         # Degenerate case: all vertex dimensions are zero.
         if nvars == 0
             return HomSpace{K}(M, N, PMorphism{K}[], zeros(K, 0, 0), offs)
+        end
+        if M.field isa RealField
+            return HomSpace{K}(M, N, nothing, _hom_numerical_basis(M, N, offs), offs)
         end
 
         dM = M.dims
@@ -456,7 +497,9 @@ module ExtTorSpaces
     High-level Ext-dimension computation via indicator resolutions.
 
     Builds indicator resolutions for `HM` and `HN`, optionally verifies them on selected vertices,
-    then calls `ext_dims_via_resolutions` from `HomExtEngine`.
+    then returns only the certified degrees via `ext_dims_via_resolutions`.
+    `maxlen` is a resolution budget: if either resolution has not terminated,
+    its boundary degree and higher degrees are omitted, not reported as zero.
     """
     function ext_dimensions_via_indicator_resolutions(HM::FringeModule{K},
                                                     HN::FringeModule{K};
@@ -464,14 +507,16 @@ module ExtTorSpaces
                                                     verify::Bool=true,
                                                     vertices::Symbol=:all,
                                                     cache::Union{Nothing,ResolutionCache}=nothing) where {K}
-        F, dF, E, dE = indicator_resolutions(HM, HN; maxlen=maxlen, cache=cache)
+        maxlen >= 0 || throw(ArgumentError("maxlen must be nonnegative."))
+        res = indicator_resolutions(HM, HN; maxlen=maxlen, cache=cache)
+        F, dF, E, dE = res
 
         if verify
             verify_upset_resolution(F, dF; vertices=vertices)
             verify_downset_resolution(E, dE; vertices=vertices)
         end
 
-        return ext_dims_via_resolutions(F, dF, E, dE)
+        return ext_dims_via_resolutions(res)
     end
 
     # ----------------------------
@@ -511,7 +556,7 @@ module ExtTorSpaces
         M = getfield(res, :M)
         Q = getfield(M, :Q)
         tmin = getfield(complex, :tmin)
-        tmax = getfield(complex, :tmax)
+        tmax = tmin + length(cohom) - 1
         return ExtSpaceProjective{K,typeof(Q)}(Q, M, res, N, complex, offsets, cohom, tmin, tmax)
     end
 
@@ -617,7 +662,8 @@ module ExtTorSpaces
             local_J = [Int[] for _ in 1:nth]
             local_V = [K[] for _ in 1:nth]
 
-            Threads.@threads :static for tid in 1:nth
+            Threads.@threads for tid in 1:nth
+                local kstart, kend, Ii_loc, Jj_loc, Vv_loc, j, i, c, A
                 kstart = fld((tid - 1) * nnz_delta, nth) + 1
                 kend = fld(tid * nnz_delta, nth)
                 Ii_loc = local_I[tid]
@@ -671,9 +717,11 @@ module ExtTorSpaces
     function _projective_ext_cochain_complex(
         res::ProjectiveResolution{K},
         N::PModule{K,F,MatT,QT};
+        maxlen::Int=length(res.Pmods) - 1,
         threads::Bool=(Threads.nthreads() > 1),
     ) where {K,F,MatT<:AbstractMatrix{K},QT}
-        L = length(res.Pmods) - 1
+        L = maxlen
+        0 <= L < length(res.Pmods) || throw(ArgumentError("maxlen exceeds the supplied projective resolution"))
         dimsC = Vector{Int}(undef, L + 1)
         offs = Vector{Vector{Int}}(undef, L + 1)
         for a in 0:L
@@ -694,7 +742,7 @@ module ExtTorSpaces
             end
         end
 
-        C = ChainComplexes.CochainComplex{K}(0, L, dimsC, dC)
+        C = ChainComplexes.CochainComplex{K}(0, L, dimsC, dC; field=N.field)
         return C, offs
     end
 
@@ -702,6 +750,9 @@ module ExtTorSpaces
         Ext(M, N, df::DerivedFunctorOptions)
 
     Compute Ext^t(M,N) for 0 <= t <= df.maxdeg.
+    Internally the resolution includes degree `df.maxdeg+1`. Queries with
+    `dim` above the computed range throw `ArgumentError`; an uncomputed group
+    is not assumed to vanish. Negative Ext degrees have dimension zero.
 
     The return type depends on df.model (interpreted for Ext):
 
@@ -734,9 +785,10 @@ module ExtTorSpaces
                  cache::Union{Nothing,ResolutionCache}=nothing) where {K}
         maxdeg = df.maxdeg
         model = df.model === :auto ? :projective : df.model
-        canon = df.canon === :auto ? :projective : df.canon
+        canon = df.canon
 
         if model === :projective
+            _validate_native_derived_options(df, "Ext", :projective)
             return _Ext_projective(M, N; maxdeg=maxdeg, cache=cache)
         elseif model === :injective
             df_inj = DerivedFunctorOptions(maxdeg=maxdeg, model=:injective, canon=canon)
@@ -745,7 +797,7 @@ module ExtTorSpaces
             df_uni = DerivedFunctorOptions(maxdeg=maxdeg, model=:unified, canon=canon)
             return ExtSpace(M, N, df_uni; cache=cache)
         else
-            error("Ext: unknown df.model=$(df.model). Supported for Ext: :projective, :injective, :unified, :auto.")
+            throw(ArgumentError("Ext: unknown df.model=$(df.model). Supported for Ext: :projective, :injective, :unified, :auto."))
         end
     end
 
@@ -756,10 +808,35 @@ module ExtTorSpaces
         return Ext(Mp, Np, df; cache=cache)
     end
 
+    # A derived group in degree d needs the resolution differential at d+1.
+    # Keep this bound separate from the degrees exposed by the result object.
+    function _required_resolution_length(maxdeg::Int)
+        0 <= maxdeg < typemax(Int) || throw(ArgumentError("maxdeg must be nonnegative and less than typemax(Int)"))
+        return maxdeg + 1
+    end
+
+    function _check_resolution_length(maxdeg::Int, available::Int)
+        needed = _required_resolution_length(maxdeg)
+        needed <= available || throw(ArgumentError(
+            "computing through degree $maxdeg requires a resolution through degree $needed; supplied resolution ends at $available"))
+        return needed
+    end
+
+    """
+        Ext(res::ProjectiveResolution, N; maxdeg=resolution_length(res)-1, threads=true)
+
+    Compute Ext in degrees `0:maxdeg` using a supplied projective resolution.
+    The resolution must include degree `maxdeg+1` to determine the outgoing
+    differential in the last requested cohomology group. By default, compute
+    all degrees strictly below the last supplied resolution term. A resolution
+    containing only degree zero is insufficient, even for Ext^0.
+    """
     function Ext(res::ProjectiveResolution{K}, N::PModule{K,F,MatT,QT};
+                 maxdeg::Int=length(res.Pmods) - 2,
                  threads::Bool=(Threads.nthreads() > 1)) where {K,F,MatT<:AbstractMatrix{K},QT}
-        C, offs = _projective_ext_cochain_complex(res, N; threads=threads)
-        cohom = ChainComplexes.cohomology_data(C)
+        maxlen = _check_resolution_length(maxdeg, length(res.Pmods) - 1)
+        C, offs = _projective_ext_cochain_complex(res, N; maxlen=maxlen, threads=threads)
+        cohom = ChainComplexes.cohomology_data(C; degrees=0:maxdeg)
         return ExtSpaceProjective(res, N, C, offs, cohom)
     end
 
@@ -770,9 +847,8 @@ module ExtTorSpaces
         threads::Bool=(Threads.nthreads() > 1),
     ) where {K}
         local_cache = ResolutionCache()
-        res = projective_resolution(M, ResolutionOptions(maxlen=maxdeg); threads=threads, cache=local_cache)
-        _pad_projective_resolution!(res, maxdeg)
-        return Ext(res, N; threads=threads)
+        res = projective_resolution(M, ResolutionOptions(maxlen=_required_resolution_length(maxdeg)); threads=threads, cache=local_cache)
+        return Ext(res, N; maxdeg=maxdeg, threads=threads)
     end
 
     # Internal helper: the traditional projective-resolution model of Ext.
@@ -787,18 +863,19 @@ module ExtTorSpaces
             cached = _cache_ext_projective_get(cache, key, ExtSpaceProjective{K})
             cached === nothing || return cached
         end
-        res = projective_resolution(M, ResolutionOptions(maxlen=maxdeg); threads=threads, cache=cache)
-        _pad_projective_resolution!(res, maxdeg)
-        E = Ext(res, N; threads=threads)
+        res = projective_resolution(M, ResolutionOptions(maxlen=_required_resolution_length(maxdeg)); threads=threads, cache=cache)
+        E = Ext(res, N; maxdeg=maxdeg, threads=threads)
         return cache === nothing ? E : _cache_ext_projective_store!(cache, _resolution_key3(M, N, maxdeg), E)
     end
 
-    function dim(E::ExtSpaceProjective, t::Int)
-        if t < E.tmin || t > E.tmax
-            return 0
-        end
-        return E.cohom[t+1].dimH
+    function _derived_dimension(data::AbstractVector, degree::Int, first_degree::Int=0)
+        degree < first_degree && return 0
+        degree - first_degree < length(data) || throw(ArgumentError(
+            "degree $degree is outside the computed range $first_degree:$(first_degree + length(data) - 1); increase maxdeg"))
+        return data[degree - first_degree + 1].dimH
     end
+
+    dim(E::ExtSpaceProjective, t::Int) = _derived_dimension(E.cohom, t, E.tmin)
 
     function cycles(E::ExtSpaceProjective, t::Int)
         return E.cohom[t+1].K
@@ -955,7 +1032,7 @@ module ExtTorSpaces
     ) where {K}
         N = getfield(res, :N)
         tmin = getfield(complex, :tmin)
-        tmax = getfield(complex, :tmax)
+        tmax = tmin + length(cohom) - 1
         return ExtSpaceInjective{K}(M, N, res, homs, complex, cohom, tmin, tmax)
     end
 
@@ -984,12 +1061,7 @@ module ExtTorSpaces
     # Basic queries for ExtSpaceInjective (parity with ExtSpaceProjective)
     # -----------------------------------------------------------------------------
 
-    function dim(E::ExtSpaceInjective, t::Int)
-        if t < E.tmin || t > E.tmax
-            return 0
-        end
-        return E.cohom[t + 1].dimH
-    end
+    dim(E::ExtSpaceInjective, t::Int) = _derived_dimension(E.cohom, t, E.tmin)
 
     function cycles(E::ExtSpaceInjective, t::Int)
         return E.cohom[t + 1].K
@@ -1031,14 +1103,6 @@ module ExtTorSpaces
         return get!(cache, (nrows, ncols)) do
             spzeros(K, nrows, ncols)
         end
-    end
-
-    @inline function _empty_dense_row_cache(::Type{K}, dims::AbstractVector{<:Integer}) where {K}
-        return [zeros(K, 0, Int(d)) for d in dims]
-    end
-
-    @inline function _empty_dense_col_cache(::Type{K}, dims::AbstractVector{<:Integer}) where {K}
-        return [zeros(K, Int(d), 0) for d in dims]
     end
 
     @inline function _postcompose_rhs_buffer!(
@@ -1101,14 +1165,12 @@ module ExtTorSpaces
     """
     function ExtInjective(M::PModule{K}, N::PModule{K}, df::DerivedFunctorOptions;
                           cache::Union{Nothing,ResolutionCache}=nothing) where {K}
-        if !(df.model === :auto || df.model === :injective)
-            error("ExtInjective: df.model must be :injective or :auto, got $(df.model)")
-        end
+        _validate_native_derived_options(df, "ExtInjective", :injective)
         if cache === nothing
             threads = Threads.nthreads() > 1
             local_cache = ResolutionCache()
-            resN = injective_resolution(N, ResolutionOptions(maxlen=df.maxdeg); threads=threads, cache=local_cache)
-            return ExtInjective(M, resN; threads=threads)
+            resN = injective_resolution(N, ResolutionOptions(maxlen=_required_resolution_length(df.maxdeg)); threads=threads, cache=local_cache)
+            return ExtInjective(M, resN; maxdeg=df.maxdeg, threads=threads)
         end
         if cache !== nothing
             key = _resolution_key3(M, N, df.maxdeg)
@@ -1116,12 +1178,20 @@ module ExtTorSpaces
             cached === nothing || return cached
         end
         threads = Threads.nthreads() > 1
-        resN = injective_resolution(N, ResolutionOptions(maxlen=df.maxdeg); threads=threads, cache=cache)
-        E = ExtInjective(M, resN; threads=threads)
+        resN = injective_resolution(N, ResolutionOptions(maxlen=_required_resolution_length(df.maxdeg)); threads=threads, cache=cache)
+        E = ExtInjective(M, resN; maxdeg=df.maxdeg, threads=threads)
         return cache === nothing ? E : _cache_ext_injective_store!(cache, _resolution_key3(M, N, df.maxdeg), E)
     end
 
+    """
+        ExtInjective(M, resN::InjectiveResolution; maxdeg=resolution_length(resN)-1, threads=true)
+
+    Compute Ext in degrees `0:maxdeg` from an injective resolution of the target.
+    Supply terms through degree `maxdeg+1`; the last term determines the kernel
+    in degree `maxdeg` and is not itself reported as a computed Ext group.
+    """
     function ExtInjective(M::PModule{K}, resN::InjectiveResolution{K};
+                          maxdeg::Int=length(resN.Emods) - 2,
                           threads::Bool=(Threads.nthreads() > 1)) where {K}
         # Build the cochain complex C^b = Hom(M, E^b), where
         #   0 -> N -> E^0 -> E^1 -> ... -> E^L
@@ -1133,7 +1203,7 @@ module ExtTorSpaces
         # - The cochain differential is induced by postcomposition with the
         #   resolution differential d^b : E^b -> E^{b+1}.
 
-        L = length(resN.Emods) - 1
+        L = _check_resolution_length(maxdeg, length(resN.Emods) - 1)
 
         homs = Vector{HomSpace{K}}(undef, L + 1)
         dims = Vector{Int}(undef, L + 1)
@@ -1146,48 +1216,27 @@ module ExtTorSpaces
 
         # Build differentials dC[b+1] : C^b -> C^{b+1} for b = 0..L-1.
         dC = Vector{SparseMatrixCSC{K, Int}}(undef, L)
-        empty_dC = [Dict{Tuple{Int,Int},SparseMatrixCSC{K,Int}}() for _ in 1:Threads.maxthreadid()]
-
-        if threads && Threads.nthreads() > 1 && L >= 2
-            Threads.@threads for b in 0:(L - 1)
-                Hb  = homs[b + 1]
-                Hb1 = homs[b + 2]
-                db  = resN.d_mor[b + 1]   # E^b -> E^{b+1}
-
-                dimHb  = dims[b + 1]
-                dimHb1 = dims[b + 2]
-
-                # Fast-path: empty source or target.
-                if dimHb == 0 || dimHb1 == 0
-                    dC[b + 1] = _empty_sparse_matrix!(empty_dC[Threads.threadid()], dimHb1, dimHb)
-                    continue
-                end
-                dC[b + 1] = sparse(_postcompose_matrix(Hb1, Hb, db))
-            end
-        else
-            ws = _PostcomposeWorkspace(K)
-            empty_cache = empty_dC[1]
-            for b in 0:(L - 1)
-                Hb  = homs[b + 1]
-                Hb1 = homs[b + 2]
-                db  = resN.d_mor[b + 1]   # E^b -> E^{b+1}
-
-                dimHb  = dims[b + 1]
-                dimHb1 = dims[b + 2]
-
-                # Fast-path: empty source or target.
-                if dimHb == 0 || dimHb1 == 0
-                    dC[b + 1] = _empty_sparse_matrix!(empty_cache, dimHb1, dimHb)
-                    continue
-                end
-                dC[b + 1] = sparse(_postcompose_matrix(Hb1, Hb, db; workspace=ws))
-            end
+        _foreach_workchunk(L; threads=threads) do indices, _slot
+            _injective_hom_differentials!(dC, homs, resN.d_mor, dims, indices)
         end
 
-        C = ChainComplexes.CochainComplex{K}(0, L, dims, dC)
-        cohom = ChainComplexes.cohomology_data(C)
+        C = ChainComplexes.CochainComplex{K}(0, L, dims, dC; field=M.field)
+        cohom = ChainComplexes.cohomology_data(C; degrees=0:maxdeg)
 
         return ExtSpaceInjective(M, resN, homs, C, cohom)
+    end
+
+    function _injective_hom_differentials!(dC::Vector{SparseMatrixCSC{K,Int}}, homs, differentials, dims, indices) where {K}
+        workspace = _PostcomposeWorkspace(K)
+        empty_cache = Dict{Tuple{Int,Int},SparseMatrixCSC{K,Int}}()
+        for i in indices
+            if dims[i] == 0 || dims[i + 1] == 0
+                dC[i] = _empty_sparse_matrix!(empty_cache, dims[i + 1], dims[i])
+            else
+                dC[i] = sparse(_postcompose_matrix(homs[i + 1], homs[i], differentials[i]; workspace=workspace))
+            end
+        end
+        return nothing
     end
 
     # =============================================================================
@@ -1301,8 +1350,10 @@ module ExtTorSpaces
         resE = Einj.res
         Q = Eproj.M.Q
 
-        amax = maxdeg
-        bmax = maxdeg
+        # The total complex must also contain the outgoing differential at
+        # maxdeg; a square ending at maxdeg can introduce artificial classes.
+        amax = _check_resolution_length(maxdeg, length(resP.Pmods) - 1)
+        bmax = _check_resolution_length(maxdeg, length(resE.Emods) - 1)
 
         offs_blocks = Array{Vector{Int}}(undef, amax + 1, bmax + 1)
         dims_blocks = zeros(Int, amax + 1, bmax + 1)
@@ -1347,7 +1398,7 @@ module ExtTorSpaces
             end
         end
 
-        DC = ChainComplexes.DoubleComplex{K}(0, amax, 0, bmax, dims_blocks, dv, dh)
+        DC = ChainComplexes.DoubleComplex{K}(0, amax, 0, bmax, dims_blocks, dv, dh; field=Eproj.M.field)
         Tot = ChainComplexes.total_complex(DC)
         tot_offsets, tot_tmin, _ = _total_offsets(DC)
         basesP0 = resP.gens[1]
@@ -1579,7 +1630,9 @@ module ExtTorSpaces
     @inline function _ensure_ext_injective!(E::ExtSpace{K}) where {K}
         inj = E.Einj
         if inj === nothing
-            df = DerivedFunctorOptions(maxdeg=E.tmax, model=:injective, canon=E.canon)
+            # The native realization uses its own coordinates. The unified
+            # object's canonical coordinates are transported by the comparison.
+            df = DerivedFunctorOptions(maxdeg=E.tmax, model=:injective, canon=:injective)
             inj = ExtInjective(E.M, E.N, df; cache=E.cache)
             E.Einj = inj
         end
@@ -1656,13 +1709,14 @@ module ExtTorSpaces
     function ExtSpace(M::PModule{K}, N::PModule{K}, df::DerivedFunctorOptions;
                       check::Bool=true,
                       cache::Union{Nothing,ResolutionCache}=nothing) where {K}
+        df.maxdeg >= 0 || throw(ArgumentError("ExtSpace: maxdeg must be nonnegative."))
         if !(df.model === :auto || df.model === :unified)
-            error("ExtSpace: df.model must be :unified or :auto, got $(df.model)")
+            throw(ArgumentError("ExtSpace: df.model must be :unified or :auto, got $(df.model)"))
         end
         maxdeg = df.maxdeg
         canon = df.canon === :auto ? :projective : df.canon
         if !(canon === :projective || canon === :injective)
-            error("ExtSpace: df.canon must be :projective or :injective (or :auto), got $(df.canon)")
+            throw(ArgumentError("ExtSpace: df.canon must be :projective or :injective (or :auto), got $(df.canon)"))
         end
 
         threads = Threads.nthreads() > 1
@@ -1841,13 +1895,14 @@ module ExtTorSpaces
     struct TorSpace{K}
         resRop::ProjectiveResolution{K}    # projective resolution computed on P^op
         L::PModule{K}                      # left module on P
-        bd::Vector{SparseMatrixCSC{K, Int}}  # boundaries bd_s : C_s -> C_{s-1}, s=1..S
-        dims::Vector{Int}                    # dim C_s for s=0..S
+        bd::Vector{SparseMatrixCSC{K, Int}}  # includes bd_{maxdeg+1}
+        dims::Vector{Int}                    # dim C_s through maxdeg+1
         offsets::Vector{Vector{Int}}         # offsets per degree
         homol::Vector{ChainComplexes.HomologyData{K}}  # homology data per degree
     end
 
-    # NOTE: The maximum computed Tor degree is (length(T.dims) - 1).
+    # Chain data include one extra degree for the last incoming boundary;
+    # only homol determines the computed Tor degree range.
 
     function _op_poset(P::AbstractPoset)
         leq = transpose(leq_matrix(P))
@@ -1883,7 +1938,7 @@ module ExtTorSpaces
         homol::Vector{ChainComplexes.HomologyData{K}}
     end
 
-    # NOTE: The maximum computed Tor degree is (length(T.dims) - 1).
+    # Chain data include one extra degree for the last incoming boundary.
 
     # Small helper used for defensive checks when the user supplies a precomputed resolution.
     # (We avoid requiring object identity `===` and instead check structural equality.)
@@ -2042,7 +2097,34 @@ module ExtTorSpaces
         return _tor_boundary_denseassign(Mmod, plan, cod_offs, dom_offs, out_dim, in_dim)
     end
 
-    # Internal implementation: resolve the first argument (existing Tor behavior).
+    function _tor_homology(bd::AbstractVector{<:AbstractMatrix{K}}, dims::Vector{Int},
+                           maxdeg::Int; threads::Bool, field::AbstractCoeffField) where {K}
+        homol = Vector{ChainComplexes.HomologyData{K}}(undef, maxdeg + 1)
+        bd_zero = zeros(K, 0, dims[1])
+        if threads && Threads.nthreads() > 1 && maxdeg >= 1
+            Threads.@threads for s in 0:maxdeg
+                local bd_curr = s == 0 ? bd_zero : bd[s]
+                homol[s + 1] = ChainComplexes.homology_data(bd[s + 1], bd_curr, s; field=field)
+            end
+        else
+            for s in 0:maxdeg
+                bd_curr = s == 0 ? bd_zero : bd[s]
+                homol[s + 1] = ChainComplexes.homology_data(bd[s + 1], bd_curr, s; field=field)
+            end
+        end
+        return homol
+    end
+
+    function _tor_boundary_chunk!(boundaries, M, resolution, offsets, dims, indices)
+        workspace = _tor_boundary_workspace(M)
+        for s in indices
+            plan = _tor_coeff_plan(resolution.d_mat[s], resolution.gens[s + 1], resolution.gens[s])
+            boundaries[s] = _tor_boundary_matrix(M, plan, offsets[s], offsets[s + 1], dims[s], dims[s + 1], workspace)
+        end
+        return nothing
+    end
+
+    # Internal implementation: resolve the first argument.
     function _Tor_resolve_first(Rop::PModule{K}, L::PModule{K};
                                 maxdeg::Int=3,
                                 threads::Bool=(Threads.nthreads() > 1),
@@ -2053,9 +2135,9 @@ module ExtTorSpaces
 
         # Projective resolution of Rop as a Pop module.
         if res === nothing
-            res = projective_resolution(Rop, ResolutionOptions(maxlen=maxdeg); threads=threads)
+            res = projective_resolution(Rop, ResolutionOptions(maxlen=_required_resolution_length(maxdeg)); threads=threads)
         end
-        S = length(res.Pmods) - 1
+        S = _check_resolution_length(maxdeg, length(res.Pmods) - 1)
 
         # Chain group dims and block offsets.
         dims = Int64[]
@@ -2073,46 +2155,12 @@ module ExtTorSpaces
 
         # Boundary matrices C_s -> C_{s-1}.
         bd = Vector{SparseMatrixCSC{K, Int64}}(undef, S)
-        workspaces = [_tor_boundary_workspace(L) for _ in 1:Threads.maxthreadid()]
-        if threads && Threads.nthreads() > 1 && S >= 2
-            Threads.@threads for s in 1:S
-                dom_bases = res.gens[s + 1]
-                cod_bases = res.gens[s]
-                delta = res.d_mat[s]   # rows=cod, cols=dom
-                ws = workspaces[Threads.threadid()]
-                plan = _tor_coeff_plan(delta, dom_bases, cod_bases)
-                bd[s] = _tor_boundary_matrix(L, plan,
-                                             offs[s], offs[s + 1], dims[s], dims[s + 1], ws)
-            end
-        else
-            ws = workspaces[1]
-            for s in 1:S
-                dom_bases = res.gens[s + 1]
-                cod_bases = res.gens[s]
-                delta = res.d_mat[s]   # rows=cod, cols=dom
-                plan = _tor_coeff_plan(delta, dom_bases, cod_bases)
-                bd[s] = _tor_boundary_matrix(L, plan,
-                                             offs[s], offs[s + 1], dims[s], dims[s + 1], ws)
-            end
+        _foreach_workchunk(S; threads=threads) do indices, _slot
+            _tor_boundary_chunk!(bd, L, res, offs, dims, indices)
         end
 
-        # Homology data per degree.
-        homol = Vector{ChainComplexes.HomologyData{K}}(undef, S + 1)
-        empty_left = _empty_dense_row_cache(K, dims)
-        empty_right = _empty_dense_col_cache(K, dims)
-        if threads && Threads.nthreads() > 1 && S >= 1
-            Threads.@threads for s in 0:S
-                bd_curr = (s == 0) ? empty_left[s + 1] : bd[s]
-                bd_next = (s == S) ? empty_right[s + 1] : bd[s + 1]
-                homol[s + 1] = ChainComplexes.homology_data(bd_next, bd_curr, s)
-            end
-        else
-            for s in 0:S
-                bd_curr = (s == 0) ? empty_left[s + 1] : bd[s]
-                bd_next = (s == S) ? empty_right[s + 1] : bd[s + 1]
-                homol[s + 1] = ChainComplexes.homology_data(bd_next, bd_curr, s)
-            end
-        end
+        # The extra chain group supplies boundaries in the final requested degree.
+        homol = _tor_homology(bd, dims, maxdeg; threads=threads, field=L.field)
 
         return TorSpace{K}(res, L, bd, dims, offs, homol)
     end
@@ -2127,8 +2175,8 @@ module ExtTorSpaces
         @assert poset_equal(L.Q, P)
 
         # Projective resolution of L as a P module.
-        resL = (res === nothing) ? projective_resolution(L, ResolutionOptions(maxlen=maxdeg); threads=threads) : res
-        S = length(resL.Pmods) - 1
+        resL = (res === nothing) ? projective_resolution(L, ResolutionOptions(maxlen=_required_resolution_length(maxdeg)); threads=threads) : res
+        S = _check_resolution_length(maxdeg, length(resL.Pmods) - 1)
 
         # Chain group dims and block offsets: C_s = oplus Rop_u.
         dims = Int64[]
@@ -2146,46 +2194,11 @@ module ExtTorSpaces
 
         # Boundary matrices C_s -> C_{s-1}.
         bd = Vector{SparseMatrixCSC{K, Int64}}(undef, S)
-        workspaces = [_tor_boundary_workspace(Rop) for _ in 1:Threads.maxthreadid()]
-        if threads && Threads.nthreads() > 1 && S >= 2
-            Threads.@threads for s in 1:S
-                dom_bases = resL.gens[s + 1]
-                cod_bases = resL.gens[s]
-                delta = resL.d_mat[s]   # rows=cod, cols=dom
-                ws = workspaces[Threads.threadid()]
-                plan = _tor_coeff_plan(delta, dom_bases, cod_bases)
-                bd[s] = _tor_boundary_matrix(Rop, plan,
-                                             offs[s], offs[s + 1], dims[s], dims[s + 1], ws)
-            end
-        else
-            ws = workspaces[1]
-            for s in 1:S
-                dom_bases = resL.gens[s + 1]
-                cod_bases = resL.gens[s]
-                delta = resL.d_mat[s]   # rows=cod, cols=dom
-                plan = _tor_coeff_plan(delta, dom_bases, cod_bases)
-                bd[s] = _tor_boundary_matrix(Rop, plan,
-                                             offs[s], offs[s + 1], dims[s], dims[s + 1], ws)
-            end
+        _foreach_workchunk(S; threads=threads) do indices, _slot
+            _tor_boundary_chunk!(bd, Rop, resL, offs, dims, indices)
         end
 
-        # Homology data per degree.
-        homol = Vector{ChainComplexes.HomologyData{K}}(undef, S + 1)
-        empty_left = _empty_dense_row_cache(K, dims)
-        empty_right = _empty_dense_col_cache(K, dims)
-        if threads && Threads.nthreads() > 1 && S >= 1
-            Threads.@threads for s in 0:S
-                bd_curr = (s == 0) ? empty_left[s + 1] : bd[s]
-                bd_next = (s == S) ? empty_right[s + 1] : bd[s + 1]
-                homol[s + 1] = ChainComplexes.homology_data(bd_next, bd_curr, s)
-            end
-        else
-            for s in 0:S
-                bd_curr = (s == 0) ? empty_left[s + 1] : bd[s]
-                bd_next = (s == S) ? empty_right[s + 1] : bd[s + 1]
-                homol[s + 1] = ChainComplexes.homology_data(bd_next, bd_curr, s)
-            end
-        end
+        homol = _tor_homology(bd, dims, maxdeg; threads=threads, field=Rop.field)
 
         return TorSpaceSecond{K}(resL, Rop, bd, dims, offs, homol)
     end
@@ -2194,6 +2207,8 @@ module ExtTorSpaces
         Tor(Rop, L, df::DerivedFunctorOptions; res=nothing)
 
     Compute Tor_s(Rop, L) for 0 <= s <= df.maxdeg.
+    `dim` above this range throws `ArgumentError` rather than treating an
+    uncomputed group as zero. Negative Tor degrees have dimension zero.
 
     - Rop is a P^op-module (right module over P).
     - L is a P-module.
@@ -2209,12 +2224,17 @@ module ExtTorSpaces
       explicit chain-level representatives.
 
     You may optionally supply a projective resolution via keyword `res`.
-    If supplied, df.maxdeg is ignored and the maximum computed degree is determined by the length of `res`.
+    It must include terms through degree `df.maxdeg+1`, providing the incoming
+    boundary in the last requested homology group. `df.maxdeg` always controls
+    the returned degree range, including when a longer resolution is supplied.
     """
     function Tor(Rop::PModule{K}, L::PModule{K}, df::DerivedFunctorOptions;
                  res=nothing,
                  cache::Union{Nothing,ResolutionCache}=nothing) where {K}
         model = df.model === :auto ? :first : df.model
+        model in (:first, :second) || throw(ArgumentError("Tor: model must be :auto, :first, or :second."))
+        _validate_native_derived_options(df, "Tor", model)
+        maxlen = _required_resolution_length(df.maxdeg)
         cache_key = cache === nothing || res !== nothing ? nothing : _resolution_key3(Rop, L, df.maxdeg)
 
         if res !== nothing && !(res isa ProjectiveResolution{K})
@@ -2230,7 +2250,7 @@ module ExtTorSpaces
                 @assert _same_pmodule(res.M, Rop)
             end
             if res === nothing && cache !== nothing
-                res = projective_resolution(Rop, ResolutionOptions(maxlen=df.maxdeg); cache=cache)
+                res = projective_resolution(Rop, ResolutionOptions(maxlen=maxlen); cache=cache)
             end
             T = _Tor_resolve_first(Rop, L; maxdeg=df.maxdeg, threads=(Threads.nthreads() > 1), res=res)
             return cache_key === nothing ? T : _cache_tor_first_store!(cache, cache_key, T)
@@ -2243,7 +2263,7 @@ module ExtTorSpaces
                 @assert _same_pmodule(res.M, L)
             end
             if res === nothing && cache !== nothing
-                res = projective_resolution(L, ResolutionOptions(maxlen=df.maxdeg); cache=cache)
+                res = projective_resolution(L, ResolutionOptions(maxlen=maxlen); cache=cache)
             end
             T = _Tor_resolve_second(Rop, L; maxdeg=df.maxdeg, threads=(Threads.nthreads() > 1), res=res)
             return cache_key === nothing ? T : _cache_tor_second_store!(cache, cache_key, T)
@@ -2259,7 +2279,7 @@ module ExtTorSpaces
     """
         dim(T::TorSpace, s::Int) -> Int
     """
-    dim(T::TorSpace, s::Int) = T.homol[s + 1].dimH
+    dim(T::TorSpace, s::Int) = _derived_dimension(T.homol, s)
 
     """
         cycles(T::TorSpace, s::Int) -> Matrix
@@ -2317,7 +2337,7 @@ module ExtTorSpaces
     # Resolve-second Tor object (TorSpaceSecond)
     # -------------------------------------------------------------------------
 
-    dim(T::TorSpaceSecond, s::Int) = T.homol[s + 1].dimH
+    dim(T::TorSpaceSecond, s::Int) = _derived_dimension(T.homol, s)
 
     # BUGFIX: homology_data returns HomologyData, which has fields Z and B, not Zrep/Brep.
     cycles(T::TorSpaceSecond, s::Int) = T.homol[s + 1].Z
@@ -2374,12 +2394,12 @@ module ExtTorSpaces
     """
         degree_range(T::TorSpace) -> UnitRange{Int}
     """
-    degree_range(T::TorSpace) = 0:(length(T.dims) - 1)
+    degree_range(T::TorSpace) = 0:(length(T.homol) - 1)
 
     """
         degree_range(T::TorSpaceSecond) -> UnitRange{Int}
     """
-    degree_range(T::TorSpaceSecond) = 0:(length(T.dims) - 1)
+    degree_range(T::TorSpaceSecond) = 0:(length(T.homol) - 1)
 
 
         """
@@ -2479,6 +2499,7 @@ module ExtTorSpaces
     @inline function hom_summary(H::HomSpace)
         return (
             kind=:hom_space,
+            provenance=provenance(H),
             field=H.dom.field,
             nvertices=nvertices(H.dom.Q),
             dimension=dim(H),
@@ -2493,6 +2514,7 @@ module ExtTorSpaces
         return (
             kind=kind,
             model=model,
+            provenance=provenance(E),
             field=source_module(E).field,
             nvertices=nvertices(source_module(E).Q),
             degree_range=degree_range(E),
@@ -2509,6 +2531,8 @@ module ExtTorSpaces
 
     This reports the chosen model, graded support, and graded dimensions
     without forcing bases, representatives, or comparison isomorphisms.
+    `provenance` identifies the actual category `Rep_k(P)`. Changing a
+    resolution model does not change `P`; changing an encoding generally does.
 
     Start with this, `nonzero_degrees(E)`, and `degree_dimensions(E)` before
     asking for explicit classes or comparison data.
@@ -2521,6 +2545,7 @@ module ExtTorSpaces
         return (
             kind=kind,
             model=model,
+            provenance=provenance(T),
             field=source_module(T).field,
             nvertices=nvertices(source_module(T).Q),
             degree_range=degree_range(T),
@@ -2537,6 +2562,8 @@ module ExtTorSpaces
 
     This reports the chosen Tor model, graded support, and graded dimensions
     without forcing representatives or chain-level coordinates.
+    `provenance.base_poset` is the left module's poset; the right module lives
+    on its opposite. Both module arguments are covariant as arguments of Tor.
 
     Start with this, `nonzero_degrees(T)`, and `degree_dimensions(T)` before
     asking for explicit Tor classes or chain-level data.

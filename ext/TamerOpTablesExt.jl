@@ -2,15 +2,9 @@ module TamerOpTablesExt
 
 using Tables
 
-const TO = let pm = nothing
-    if isdefined(Main, :TamerOp)
-        pm = getfield(Main, :TamerOp)
-    else
-        @eval import TamerOp
-        pm = TamerOp
-    end
-    pm
-end
+import TamerOp
+
+const TO = TamerOp
 
 const FEA = TO.Featurizers
 const Inv = TO.Invariants
@@ -58,8 +52,8 @@ function _euler_surface_long_columntable(t::FEA.EulerSurfaceLongTable)
     ny = length(t.y)
     n = nx * ny
     id = Vector{String}(undef, n)
-    x = Vector{Float64}(undef, n)
-    y = Vector{Float64}(undef, n)
+    x = Vector{eltype(t.x)}(undef, n)
+    y = Vector{eltype(t.y)}(undef, n)
     value = Vector{eltype(t.values)}(undef, n)
     k = 1
     @inbounds for i in 1:nx

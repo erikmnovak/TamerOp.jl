@@ -6,20 +6,24 @@
 # =============================================================================
 
 module DataIngestion
+using ..ExactReals: AlgebraicReal
+
 
 using LinearAlgebra
 using SparseArrays
 using JSON3
 using Dates
+import Polyhedra, CDDLib
+using Base.ScopedValues: ScopedValue, with
 
-using ..CoreModules: QQ, QQField, PrimeField, RealField, AbstractCoeffField, coeff_type, coerce,
+using ..CoreModules: _foreach_workchunk, QQ, QQField, PrimeField, RealField, AbstractCoeffField, coeff_type, coerce,
                      ResolutionCache, SessionCache, EncodingCache,
                      _encoding_cache!, _session_resolution_cache, _session_hom_cache, _set_session_hom_cache!,
                      _session_slice_plan_cache, _set_session_slice_plan_cache!,
                      _resolve_workflow_session_cache, _resolve_workflow_specialized_cache,
-                     _workflow_encoding_cache,
+                     _workflow_encoding_cache, _structural_cache_key, _StructuralCacheKey,
                      _resolution_cache_from_session, _slot_cache_from_session,
-                     PosetCachePayload, CubicalCachePayload, GeometryCachePayload
+                     PosetCachePayload, CubicalCachePayload, GeometryCachePayload, _with_cdd_execution
 using ..Options: EncodingOptions, ResolutionOptions, DerivedFunctorOptions, InvariantOptions,
                  FiltrationSpec, ConstructionBudget, ConstructionOptions, PipelineOptions, DataFileOptions
 using ..DataTypes: PointCloud, ImageNd, GraphData, EmbeddedPlanarGraph2D,
@@ -30,13 +34,16 @@ using ..DataTypes: PointCloud, ImageNd, GraphData, EmbeddedPlanarGraph2D,
                    _packed_dim_count, _packed_dim_counts, _packed_total_cells,
                    _rebuild_graded_complex, _rebuild_multicritical_complex
 using ..EncodingCore: AbstractPLikeEncodingMap, CompiledEncoding, compile_encoding, GridEncodingMap,
-                      _compile_encoding_cached, _compile_encoding_without_reps
+                      _compile_encoding_cached
 using ..Results: EncodingResult, EncodedComplexResult, CohomologyDimsResult, ResolutionResult, InvariantResult,
                  _encoding_with_session_cache
-import ..Results: materialize_module, module_dims, _materialize_complex
-import ..Results: _include_reps_when_rewrapping
+import ..Results: materialize_module, module_dims, _materialize_complex, _provenance_field,
+                  _module_materialized, _complex_materialized, _show_stored_dimensions
 import ..EncodingCore: locate, dimension, representatives, axes_from_encoding, _grid_strides, GridEncodingMap
 
+using ..SimplicialReduction: _collapse_dominated_edges, _flag_simplices, _flag_grades
+import ..Options: _validate_construction_collapse, _validate_construction_sparsify,
+                  _validate_construction_output_stage
 import ..Serialization
 import ..Serialization: TAMER_FEATURE_SCHEMA_VERSION, feature_schema_header, validate_feature_metadata_schema
 import ..DataFileIO
@@ -78,6 +85,8 @@ using ..FlangeZn: Face, IndFlat, IndInj, Flange
 import ..Workflow: encode, fringe_presentation, flange_presentation
 import ..ChainComplexes: describe, filtration_summary
 
+include("data_ingestion/provenance.jl")
+
 const _POINTCLOUD_KNN_GRAPH_IMPL = Ref{Any}(nothing)
 const _POINTCLOUD_RADIUS_GRAPH_IMPL = Ref{Any}(nothing)
 const _POINTCLOUD_KNN_DISTANCES_IMPL = Ref{Any}(nothing)
@@ -95,7 +104,7 @@ const _POINTCLOUD_LOWDIM_RADIUS_STREAMING = Ref{Bool}(true)
 const _POINTCLOUD_DIM2_PACKED_KERNEL = Ref{Bool}(true)
 const _GRAPH_CLIQUE_ENUM_MODE = Ref{Symbol}(:auto) # :auto | :intersection | :combinations
 const _H0_CHAIN_SWEEP_FASTPATH = Ref{Bool}(true)
-const _H1_COKERNEL_FASTPATH = Ref{Bool}(true)
+const _H1_KERNEL_FASTPATH = Ref{Bool}(true)
 const _H0_ACTIVE_CHAIN_INCREMENTAL = Ref{Bool}(true)
 const _H0_ACTIVE_CHAIN_INCREMENTAL_MIN_POS_VERTICES = Ref{Int}(32)
 const _H0_ACTIVE_CHAIN_INCREMENTAL_MIN_TOTAL_ACTIVE_VERTICES = Ref{Int}(3_000)
@@ -137,10 +146,9 @@ const _POINTCLOUD_BACKEND_RESOLVE_CACHE_ORDER = NTuple{3,Int}[]
 const _POINTCLOUD_BACKEND_RESOLVE_CACHE_LOCK = ReentrantLock()
 const _POINTCLOUD_DELAUNAY_CACHE_ENABLED = Ref{Bool}(true)
 const _POINTCLOUD_DELAUNAY_CACHE_MAX = Ref{Int}(48)
-const _POINTCLOUD_DELAUNAY_CACHE = Dict{NTuple{4,UInt64},Any}()
-const _POINTCLOUD_DELAUNAY_CACHE_ORDER = NTuple{4,UInt64}[]
+const _POINTCLOUD_DELAUNAY_CACHE = Dict{_StructuralCacheKey,Any}()
+const _POINTCLOUD_DELAUNAY_CACHE_ORDER = _StructuralCacheKey[]
 const _POINTCLOUD_DELAUNAY_CACHE_LOCK = ReentrantLock()
-const _POINTCLOUD_DELAUNAY_AUTOLOAD_ATTEMPTED = Ref{Bool}(false)
 const _CUBICAL_2D_FASTPATH = Ref{Bool}(true)
 
 struct _PackedDelaunay2D
@@ -154,6 +162,7 @@ mutable struct _PackedDelaunay2DCacheEntry
     packed::_PackedDelaunay2D
     edge_boundary::Union{Nothing,SparseMatrixCSC{Int,Int}}
     tri_boundary::Union{Nothing,SparseMatrixCSC{Int,Int}}
+    backend::Symbol
 end
 
 struct _StructuralInclusionMap{K} <: AbstractMatrix{K}
@@ -459,7 +468,6 @@ end
 
 function _set_pointcloud_delaunay_2d_impl!(impl=nothing)
     _POINTCLOUD_DELAUNAY_2D_IMPL[] = impl
-    _POINTCLOUD_DELAUNAY_AUTOLOAD_ATTEMPTED[] = false
     _clear_pointcloud_delaunay_cache!()
     return nothing
 end
@@ -471,32 +479,6 @@ end
 @inline _have_pointcloud_delaunay_backend() =
     _POINTCLOUD_DELAUNAY_2D_IMPL[] !== nothing
 
-@inline function _try_activate_pointcloud_delaunay_backend!()
-    _have_pointcloud_delaunay_backend() && return true
-    _POINTCLOUD_DELAUNAY_AUTOLOAD_ATTEMPTED[] && return false
-    _POINTCLOUD_DELAUNAY_AUTOLOAD_ATTEMPTED[] = true
-    try
-        Core.eval(@__MODULE__, :(import DelaunayTriangulation))
-    catch
-        # Optional dependency may be unavailable in this environment.
-    end
-    if !_have_pointcloud_delaunay_backend()
-        try
-            pm = parentmodule(@__MODULE__)
-            if isdefined(pm, :_try_load_source_extension!)
-                getfield(pm, :_try_load_source_extension!)(
-                    :DelaunayTriangulation,
-                    :TamerOpDelaunayTriangulationExt,
-                    "TamerOpDelaunayTriangulationExt.jl",
-                )
-            end
-        catch
-            # Source-mode extension loader is best-effort only.
-        end
-    end
-    return _have_pointcloud_delaunay_backend()
-end
-
 @inline function _pointcloud_nn_backend(spec::FiltrationSpec)::Symbol
     b = Symbol(get(spec.params, :nn_backend, :auto))
     (b == :auto || b == :bruteforce || b == :nearestneighbors || b == :approx) ||
@@ -505,7 +487,7 @@ end
         return _have_pointcloud_nn_backend() ? :auto : :bruteforce
     end
     if (b == :nearestneighbors || b == :approx) && !_have_pointcloud_nn_backend()
-        throw(ArgumentError("PointCloud nn_backend=$(b) requires NearestNeighbors extension. Install NearestNeighbors.jl and load the extension, or use nn_backend=:bruteforce."))
+        throw(ArgumentError("PointCloud nn_backend=$(b) requires NearestNeighbors extension. Install NearestNeighbors with Pkg.add(\"NearestNeighbors\") and run `using NearestNeighbors`, or use nn_backend=:bruteforce."))
     end
     return b
 end
@@ -515,11 +497,10 @@ end
     (b == :auto || b == :naive || b == :fast) ||
         throw(ArgumentError("PointCloud delaunay_backend must be :auto, :naive, or :fast (got $(b))."))
     if b == :auto
-        _have_pointcloud_delaunay_backend() || _try_activate_pointcloud_delaunay_backend!()
         return _have_pointcloud_delaunay_backend() ? :fast : :naive
     end
-    if b == :fast && !_have_pointcloud_delaunay_backend() && !_try_activate_pointcloud_delaunay_backend!()
-        throw(ArgumentError("PointCloud delaunay_backend=:fast requires DelaunayTriangulation extension. Install DelaunayTriangulation.jl and load the extension, or use delaunay_backend=:naive."))
+    if b == :fast && !_have_pointcloud_delaunay_backend()
+        throw(ArgumentError("PointCloud delaunay_backend=:fast requires DelaunayTriangulation extension. Install DelaunayTriangulation with Pkg.add(\"DelaunayTriangulation\") and run `using DelaunayTriangulation`, or use delaunay_backend=:naive."))
     end
     return b
 end
@@ -610,6 +591,7 @@ const _BUILTIN_FILTRATION_KINDS = (
     :function_delaunay,
     :core_delaunay,
     :core,
+    :graph_core,
     :degree_rips,
     :rhomboid,
 )
@@ -781,7 +763,7 @@ function filtration_arity(filtration::AbstractFiltration, data=nothing)
         return 1
     elseif kind === :rips_density || kind === :rips_codensity || kind === :rips_lowerstar ||
            kind === :function_rips ||
-           kind === :degree_rips || kind === :rhomboid || kind === :core ||
+           kind === :degree_rips || kind === :rhomboid || kind === :graph_core || kind === :core ||
            kind === :function_delaunay || kind === :core_delaunay ||
            kind === :graph_function_geodesic_bifiltration ||
            kind === :image_distance_bifiltration || kind === :wing_vein_bifiltration
@@ -927,7 +909,7 @@ function filtration_signature(kind::Symbol)
             return 1
         elseif k === :rips_density || k === :rips_codensity || k === :rips_lowerstar ||
                k === :function_rips ||
-               k === :degree_rips || k === :rhomboid || k === :core ||
+               k === :degree_rips || k === :rhomboid || k === :graph_core || k === :core ||
                k === :function_delaunay || k === :core_delaunay ||
                k === :graph_function_geodesic_bifiltration ||
                k === :image_distance_bifiltration || k === :wing_vein_bifiltration
@@ -1192,15 +1174,17 @@ struct ImageLowerStarFiltration{P<:NamedTuple} <: AbstractFiltration
     params::P
 end
 ImageLowerStarFiltration(; channels=nothing,
+                          periodic=false,
                           construction::ConstructionOptions=ConstructionOptions()) =
-    ImageLowerStarFiltration((; channels, construction))
+    ImageLowerStarFiltration((; channels, periodic, construction))
 
 struct ImageDistanceBifiltration{P<:NamedTuple} <: AbstractFiltration
     params::P
 end
 ImageDistanceBifiltration(; mask=nothing, channels=nothing,
+                           periodic=false,
                            construction::ConstructionOptions=ConstructionOptions()) =
-    ImageDistanceBifiltration((; mask, channels, construction))
+    ImageDistanceBifiltration((; mask, channels, periodic, construction))
 
 struct WingVeinBifiltration{P<:NamedTuple} <: AbstractFiltration
     params::P
@@ -1209,6 +1193,15 @@ WingVeinBifiltration(; grid=(32, 32), bbox=nothing, orientation=(-1, 1),
                       construction::ConstructionOptions=ConstructionOptions()) =
     WingVeinBifiltration((; grid, bbox, orientation, construction))
 
+"""
+    DelaunayLowerStarFiltration(; max_dim=2, vertex_values=nothing,
+        vertex_function=nothing, delaunay_backend=:auto, highdim_policy=:error, ...)
+
+Lower-star filtration of the planar or one-dimensional Delaunay support.
+Higher-dimensional inputs throw by default. `highdim_policy=:rips` explicitly
+substitutes the function-coordinate projection of a function-Rips complex;
+this is a different construction, recorded by `provenance(encode(...))`.
+"""
 struct DelaunayLowerStarFiltration{P<:NamedTuple} <: AbstractFiltration
     params::P
 end
@@ -1217,51 +1210,370 @@ DelaunayLowerStarFiltration(; max_dim::Int=2,
                             vertex_function=nothing,
                             simplex_agg::Symbol=:max,
                             delaunay_backend::Symbol=:auto,
-                            highdim_policy::Symbol=:rips,
+                            highdim_policy::Symbol=:error,
                             construction::ConstructionOptions=ConstructionOptions()) =
-    DelaunayLowerStarFiltration((; max_dim, vertex_values, vertex_function, simplex_agg, delaunay_backend, highdim_policy, construction))
+    begin
+        p = (; max_dim, vertex_values, vertex_function, simplex_agg, delaunay_backend, highdim_policy, construction)
+        _validate_geometric_filtration_params(:delaunay_lower_star, p)
+        DelaunayLowerStarFiltration(p)
+    end
 
+"""
+    AlphaFiltration(; max_dim=2, delaunay_backend=:auto, highdim_policy=:error, ...)
+
+One-dimensional or planar alpha filtration with squared-radius grades.
+Higher-dimensional inputs throw by default. `highdim_policy=:rips` explicitly
+substitutes a Rips filtration with diameter grades, not squared alpha radii.
+Inspect `provenance(encode(...)).construction` before comparing these scales.
+"""
 struct AlphaFiltration{P<:NamedTuple} <: AbstractFiltration
     params::P
 end
 AlphaFiltration(; max_dim::Int=2,
                 delaunay_backend::Symbol=:auto,
-                highdim_policy::Symbol=:rips,
+                highdim_policy::Symbol=:error,
                 construction::ConstructionOptions=ConstructionOptions()) =
-    AlphaFiltration((; max_dim, delaunay_backend, highdim_policy, construction))
+    begin
+        p = (; max_dim, delaunay_backend, highdim_policy, construction)
+        _validate_geometric_filtration_params(:alpha, p)
+        AlphaFiltration(p)
+    end
 
+"""
+    FunctionDelaunayFiltration(; vertex_values=nothing, vertex_function=nothing,
+        max_dim=3, delaunay_backend=:auto, construction=ConstructionOptions())
+
+Published incremental Delaunay-Cech bifiltration of function-sublevel offsets.
+Sort vertices by increasing function value (breaking ties by input index),
+retain the Delaunay triangulations of all prefixes, and attach the insertion
+conflict cofaces. A simplex has grade `(minimum_enclosing_ball_radius,
+maximum_vertex_value)`, with orientation `(1,1)`.
+
+Supports distinct finite points in ambient dimension one or two. The
+incremental complex can have dimension `d+1`; `max_dim=3` retains the whole
+complex for planar inputs. A smaller `max_dim` truncates the complex and can
+create artificial homology in that top degree. Supply either `vertex_values`
+or `vertex_function(point, index)`. Exact cocircular insertion degeneracies
+are rejected explicitly; no perturbation or different filtration is substituted.
+
+This is the Delaunay-Cech model in arXiv:2310.15902, with the same persistent
+homotopy type as function-sublevel offsets, rather than the alternative
+incremental-Delaunay-radius grading. Use `estimate_ingestion(data, f)` before
+construction and `encode(data, f; stage=:graded_complex)` to inspect grades.
+"""
 struct FunctionDelaunayFiltration{P<:NamedTuple} <: AbstractFiltration
     params::P
 end
-FunctionDelaunayFiltration(; max_dim::Int=2,
-                           vertex_values=nothing,
-                           vertex_function=nothing,
-                           simplex_agg::Symbol=:max,
-                           delaunay_backend::Symbol=:auto,
-                           highdim_policy::Symbol=:rips,
-                           construction::ConstructionOptions=ConstructionOptions()) =
-    FunctionDelaunayFiltration((; max_dim, vertex_values, vertex_function, simplex_agg, delaunay_backend, highdim_policy, construction))
+function FunctionDelaunayFiltration(; max_dim::Int=3,
+                                     vertex_values=nothing,
+                                     vertex_function=nothing,
+                                     delaunay_backend::Symbol=:auto,
+                                     construction::ConstructionOptions=ConstructionOptions())
+    p = (; max_dim, vertex_values, vertex_function, delaunay_backend, construction)
+    _validate_geometric_filtration_params(:function_delaunay, p)
+    return FunctionDelaunayFiltration(p)
+end
 
+"""
+    CoreDelaunayFiltration(; max_dim=2, beta=1.0, k_values=nothing,
+        delaunay_backend=:auto, construction=ConstructionOptions())
+
+Published Delaunay-core bifiltration (arXiv:2405.01214). At `(r,k)`, take the
+nerve of radius-`r` balls restricted to full-cloud Voronoi cells, keeping a
+center only if `beta * kth_neighbor_distance <= r`. The center itself counts
+as neighbor one. Radius increases and `k` decreases: orientation `(1,-1)`.
+
+A simplex has potentially several incomparable grades
+`(max(alpha_radius, beta * maximum_vertex_core_distance(k)), k)`.
+The alpha radius uses distance units, not squared distance. Cocircular
+Voronoi intersections retain their full simplices, not just one triangulation.
+`max_dim` explicitly truncates this nerve; computing homology in degree `h`
+requires at least `max_dim=h+1`.
+
+Supports distinct finite 1D/2D points. `k_values=nothing` uses every `k=1:n`;
+provide a nonempty subset to sample density slices and reduce grade storage.
+The resulting step filtration is exact on those selected slices. `beta` must
+be positive and finite. No graph-core or Rips substitution is performed.
+Use `estimate_ingestion` first and `stage=:graded_complex` to inspect the
+multicritical complex before requesting a full encoding.
+"""
 struct CoreDelaunayFiltration{P<:NamedTuple} <: AbstractFiltration
     params::P
 end
-CoreDelaunayFiltration(; max_dim::Int=2,
-                       delaunay_backend::Symbol=:auto,
-                       highdim_policy::Symbol=:rips,
-                       construction::ConstructionOptions=ConstructionOptions()) =
-    CoreDelaunayFiltration((; max_dim, delaunay_backend, highdim_policy, construction))
+function CoreDelaunayFiltration(; max_dim::Int=2,
+                                 beta::Real=1.0,
+                                 k_values=nothing,
+                                 delaunay_backend::Symbol=:auto,
+                                 construction::ConstructionOptions=ConstructionOptions())
+    p = (; max_dim, beta=_core_beta(beta), k_values, delaunay_backend, construction)
+    _validate_geometric_filtration_params(:core_delaunay, p)
+    return CoreDelaunayFiltration(p)
+end
 
+"""
+    CoreFiltration(; max_dim=2, beta=1.0, k_values=nothing,
+        construction=ConstructionOptions())
+
+Cech nerve of the published core bifiltration (arXiv:2405.01214).
+At `(r,k)`, retain the radius-`r` ball centered at each point whose
+`beta * kth_neighbor_distance <= r`. The center counts as its own first
+neighbor. A simplex has grades `(max(minimum_enclosing_ball_radius,
+beta * maximum_vertex_core_distance(k)), k)` and orientation `(1,-1)`.
+
+Supports finite 1D/2D point clouds. Unlike [`CoreDelaunayFiltration`](@ref),
+this constructs the Cech nerve on all subsets through `max_dim` and can
+have a much larger combinatorial footprint. Use `estimate_ingestion` and a
+`ConstructionBudget` before building large inputs. Degree `h` homology needs
+`max_dim >= h+1`. Default `k_values=nothing` uses `1:n`; a supplied nonempty
+subset samples density slices, with exact answers on the selected slices.
+`beta` must be positive and finite. Radius is measured in distance units.
+
+For graph k-core superlevels use [`GraphCoreFiltration`](@ref), a distinct
+construction with no nearest-neighbor core-distance interpretation.
+"""
 struct CoreFiltration{P<:NamedTuple} <: AbstractFiltration
     params::P
 end
-CoreFiltration(; radius=nothing,
-               knn::Int=8,
-               nn_backend::Symbol=:auto,
-               nn_approx_candidates::Int=0,
-               vertex_values=nothing,
-               vertex_function=nothing,
-               construction::ConstructionOptions=ConstructionOptions()) =
-    CoreFiltration((; radius, knn, nn_backend, nn_approx_candidates, vertex_values, vertex_function, construction))
+function CoreFiltration(; max_dim::Int=2,
+                         beta::Real=1.0,
+                         k_values=nothing,
+                         construction::ConstructionOptions=ConstructionOptions())
+    p = (; max_dim, beta=_core_beta(beta), k_values, construction)
+    _validate_geometric_filtration_params(:core, p)
+    return CoreFiltration(p)
+end
+
+"""
+    GraphCoreFiltration(; radius=nothing, knn=8, nn_backend=:auto,
+        nn_approx_candidates=0, vertex_values=nothing, vertex_function=nothing,
+        construction=ConstructionOptions())
+
+Function-sublevel / graph-core-superlevel bifiltration of a fixed graph.
+At `(s,k)`, retain vertices with function value at most `s` and graph core
+number at least `k`, together with the edges between them. Core numbers are
+computed once on the full graph, not recomputed after function thresholding.
+The orientation is `(1,-1)`. Default function values are zero.
+
+For `GraphData`, use its supplied edges. For a point cloud, first form a
+closed radius graph if `radius` is provided; otherwise use the undirected
+union of the `knn` nearest-neighbor choices. `nn_backend=:approx` explicitly
+opts into an approximate graph. Radius/neighbor options only select this
+fixed graph; they are not persistence parameters. The output is a graph,
+without clique filling. Point callbacks have signature `(point, index)`;
+graph callbacks have signature `(coordinate_or_index, index)`.
+
+This is a graph k-core construction, not the published nearest-neighbor
+core bifiltration. Inspect `filtration_summary(f)` and
+`check_data_filtration(data, f)` before building an encoding.
+"""
+struct GraphCoreFiltration{P<:NamedTuple} <: AbstractFiltration
+    params::P
+end
+function GraphCoreFiltration(; radius=nothing,
+                              knn::Int=8,
+                              nn_backend::Symbol=:auto,
+                              nn_approx_candidates::Int=0,
+                              vertex_values=nothing,
+                              vertex_function=nothing,
+                              construction::ConstructionOptions=ConstructionOptions())
+    p = (; radius, knn, nn_backend, nn_approx_candidates, vertex_values, vertex_function, construction)
+    _validate_geometric_filtration_params(:graph_core, p)
+    return GraphCoreFiltration(p)
+end
+
+# One contract shared by constructors, serialized specs, direct builders and
+# plans, so conversion cannot silently discard a mathematical option.
+const _GEOMETRIC_FILTRATION_KINDS =
+    (:function_delaunay, :core_delaunay, :core, :graph_core, :rhomboid)
+
+# Coverage depths are used as array indices and signed axis coordinates.
+# Normalize once at owner boundaries; unsigned negation and generic-integer
+# iteration must not leak into geometry kernels.
+function _rhomboid_depth_range(depths)
+    depths === nothing && return nothing
+    depths isa Tuple && length(depths) == 2 &&
+        all(k -> k isa Integer && !(k isa Bool), depths) &&
+        0 <= depths[1] <= depths[2] <= typemax(Int) ||
+        throw(ArgumentError("RhomboidFiltration depth_range must be nothing or an inclusive tuple of representable Int endpoints with 0 <= lo <= hi."))
+    return (Int(depths[1]), Int(depths[2]))
+end
+
+function _validate_geometric_filtration_params(kind::Symbol, p::NamedTuple)
+    if kind in (:alpha, :delaunay_lower_star)
+        policy = get(p, :highdim_policy, :error)
+        policy in (:error, :rips) || throw(ArgumentError("highdim_policy must be :error or :rips."))
+        backend = get(p, :delaunay_backend, :auto)
+        backend in (:auto, :naive, :fast) || throw(ArgumentError("delaunay_backend must be :auto, :naive, or :fast."))
+        return nothing
+    end
+    kind in _GEOMETRIC_FILTRATION_KINDS || return nothing
+    family_keys = if kind === :function_delaunay
+        (:max_dim, :vertex_values, :vertex_function, :delaunay_backend)
+    elseif kind === :core_delaunay
+        (:max_dim, :beta, :k_values, :delaunay_backend)
+    elseif kind === :core
+        (:max_dim, :beta, :k_values)
+    elseif kind === :rhomboid
+        (:max_dim, :radius, :depth_range, :backend)
+    else
+        (:radius, :knn, :nn_backend, :nn_approx_candidates, :vertex_values, :vertex_function)
+    end
+    pipeline_keys = (:construction, :orientation, :axes, :axes_policy, :axis_kind,
+                     :eps, :poset_kind, :field, :max_axis_len, :multicritical,
+                     :onecritical_selector, :onecritical_enforce_boundary)
+    for key in keys(p)
+        (key in family_keys || key in pipeline_keys) ||
+            throw(ArgumentError("Filtration kind=:$kind does not accept parameter `$key`."))
+    end
+    expected_orientation = kind === :function_delaunay ? (1, 1) : (1, -1)
+    orientation = get(p, :orientation, nothing)
+    (orientation === nothing ||
+     ((orientation isa Tuple || orientation isa AbstractVector) &&
+      Tuple(orientation) == expected_orientation)) ||
+        throw(ArgumentError("Filtration kind=:$kind requires orientation=$expected_orientation."))
+    construction = _construction_from_params(p)
+    construction.sparsify === :none ||
+        throw(ArgumentError("Filtration kind=:$kind requires construction.sparsify=:none."))
+    construction.collapse === :none ||
+        throw(ArgumentError("Filtration kind=:$kind requires construction.collapse=:none."))
+    values = get(p, :vertex_values, nothing)
+    fun = get(p, :vertex_function, nothing)
+    (values === nothing || fun === nothing) ||
+        throw(ArgumentError("Supply either vertex_values or vertex_function, not both."))
+    if values !== nothing
+        values isa AbstractVector && all(x -> x isa Real && isfinite(Float64(x)), values) ||
+            throw(ArgumentError("vertex_values must be a vector of finite real values."))
+    end
+    if kind === :function_delaunay
+        (values !== nothing || fun !== nothing) ||
+            throw(ArgumentError("FunctionDelaunayFiltration requires vertex_values or vertex_function."))
+    end
+    if kind === :graph_core
+        radius = get(p, :radius, nothing)
+        (radius === nothing || (radius isa Real && isfinite(Float64(radius)) && radius >= 0)) ||
+            throw(ArgumentError("GraphCoreFiltration radius must be finite and nonnegative."))
+        knn = get(p, :knn, 8)
+        knn isa Integer && !(knn isa Bool) && knn > 0 ||
+            throw(ArgumentError("GraphCoreFiltration knn must be a positive integer."))
+        Symbol(get(p, :nn_backend, :auto)) in (:auto, :bruteforce, :nearestneighbors, :approx) ||
+            throw(ArgumentError("Invalid GraphCoreFiltration nn_backend."))
+        candidates = get(p, :nn_approx_candidates, 0)
+        candidates isa Integer && candidates >= 0 ||
+            throw(ArgumentError("nn_approx_candidates must be a nonnegative integer."))
+    else
+        max_dim = get(p, :max_dim, kind === :rhomboid ? nothing : kind === :function_delaunay ? 3 : 2)
+        if kind === :rhomboid
+            (max_dim === nothing || (max_dim isa Integer && !(max_dim isa Bool) && 0 <= max_dim <= typemax(Int))) ||
+                throw(ArgumentError("RhomboidFiltration max_dim must be nothing or a nonnegative integer representable as Int."))
+            radius = get(p, :radius, nothing)
+            (radius === nothing || (radius isa Real && !(radius isa Bool) && isfinite(radius) && radius >= 0)) ||
+                throw(ArgumentError("RhomboidFiltration radius must be finite and nonnegative."))
+            backend = get(p, :backend, :auto)
+            backend in (:auto, :exhaustive, :incremental, :subdivision_cech) ||
+                throw(ArgumentError("RhomboidFiltration backend must be :auto, :exhaustive, :incremental, or :subdivision_cech."))
+            _rhomboid_depth_range(get(p, :depth_range, nothing))
+            if backend === :subdivision_cech && construction.budget.max_simplices === nothing
+                throw(ArgumentError("backend=:subdivision_cech requires an explicit ConstructionBudget(max_simplices=...)."))
+            end
+            return nothing
+        end
+        max_dim isa Integer && !(max_dim isa Bool) && max_dim >= 0 ||
+            throw(ArgumentError("Filtration kind=:$kind requires nonnegative integer max_dim."))
+        kind !== :function_delaunay || max_dim <= 3 ||
+            throw(ArgumentError("FunctionDelaunayFiltration supports max_dim in 0:3."))
+        if kind !== :core
+            Symbol(get(p, :delaunay_backend, :auto)) in (:auto, :naive, :fast) ||
+                throw(ArgumentError("delaunay_backend must be :auto, :naive, or :fast."))
+        end
+        if kind === :core || kind === :core_delaunay
+            _core_beta(get(p, :beta, 1.0))
+            ks = get(p, :k_values, nothing)
+            if ks !== nothing
+                (ks isa AbstractVector || ks isa Tuple) && !isempty(ks) &&
+                    all(k -> k isa Integer && !(k isa Bool) && k > 0, ks) &&
+                    length(unique(ks)) == length(ks) ||
+                    throw(ArgumentError("k_values must be a nonempty collection of distinct positive integers."))
+            end
+            Symbol(get(p, :multicritical, :union)) === :union ||
+                throw(ArgumentError("The core bifiltrations require multicritical=:union."))
+        end
+    end
+    return nothing
+end
+
+function _validate_geometric_filtration_request(data, spec::FiltrationSpec)
+    kind = spec.kind
+    if kind in (:alpha, :delaunay_lower_star)
+        _validate_geometric_filtration_params(kind, spec.params)
+        data isa PointCloud || throw(ArgumentError("Filtration kind=:$kind requires a PointCloud."))
+        isempty(data.points) && throw(ArgumentError("PointCloud has no points."))
+        if length(first(data.points)) > 2 && _delaunay_highdim_policy(spec) === :error
+            throw(ArgumentError("Filtration kind=:$kind supports only 1D/2D point clouds. Set highdim_policy=:rips to explicitly substitute a different Rips construction."))
+        end
+        return nothing
+    end
+    kind in _GEOMETRIC_FILTRATION_KINDS || return nothing
+    _validate_geometric_filtration_params(kind, spec.params)
+    if kind !== :graph_core
+        data isa PointCloud || throw(ArgumentError("Filtration kind=:$kind requires a PointCloud."))
+        # Preflight and execution enforce the same geometric input contract,
+        # including points that coincide only after Float64 conversion.
+        if kind === :rhomboid
+            backend = get(spec.params, :backend, :auto)
+            coordinates = _rhomboid_points(data; allow_coincident=backend === :subdivision_cech)
+            backend !== :incremental || _rhomboid_affine_dimension(coordinates) <= 3 ||
+                throw(ArgumentError("RhomboidFiltration backend=:incremental supports affine dimensions 0 through 3."))
+            depths = _rhomboid_depth_range(get(spec.params, :depth_range, nothing))
+            (depths === nothing || depths[2] <= length(data.points)) ||
+                throw(ArgumentError("RhomboidFiltration depth_range must lie in 0:npoints."))
+            axes = get(spec.params, :axes, nothing)
+            if axes !== nothing
+                (axes isa Tuple || axes isa AbstractVector) && length(axes) == 2 ||
+                    throw(ArgumentError("RhomboidFiltration axes must contain radius and oriented-depth axes."))
+                all(a -> a isa AbstractVector && !isempty(a), axes) ||
+                    throw(ArgumentError("RhomboidFiltration axes must be nonempty coordinate vectors."))
+                lo, hi = depths === nothing ? (0, length(data.points)) : depths
+                cutoff = get(spec.params, :radius, nothing)
+                all(r -> r isa Real && isfinite(r) && r >= 0 &&
+                         (cutoff === nothing || r <= cutoff), axes[1]) ||
+                    throw(ArgumentError("RhomboidFiltration radius axis must stay in the requested nonnegative radius window."))
+                all(k -> k isa Real && isfinite(k) && -hi <= k <= -lo, axes[2]) ||
+                    throw(ArgumentError("RhomboidFiltration oriented-depth axis must stay in [-hi,-lo]."))
+            end
+        else
+            _validate_delaunay_points(data.points)
+        end
+        n = length(data.points)
+        if kind === :core || kind === :core_delaunay
+            _core_k_values(get(spec.params, :k_values, nothing), n)
+        end
+    elseif !(data isa PointCloud || data isa GraphData || data isa EmbeddedPlanarGraph2D)
+        throw(ArgumentError("GraphCoreFiltration requires a point cloud or graph."))
+    end
+    values = get(spec.params, :vertex_values, nothing)
+    if values !== nothing
+        n = data isa PointCloud ? length(data.points) :
+            data isa GraphData ? data.n : length(data.vertices)
+        length(values) == n || throw(ArgumentError("vertex_values length mismatch: expected $n, got $(length(values))."))
+    end
+    return nothing
+end
+
+function _canonical_geometric_filtration_spec(spec::FiltrationSpec)
+    kind = spec.kind
+    kind in _GEOMETRIC_FILTRATION_KINDS || return spec
+    _validate_geometric_filtration_params(kind, spec.params)
+    orientation = kind === :function_delaunay ? (1, 1) : (1, -1)
+    params = spec.params
+    if kind === :rhomboid
+        if haskey(params, :depth_range)
+            params = merge(params, (depth_range=_rhomboid_depth_range(params.depth_range),))
+        end
+        max_dim = get(params, :max_dim, nothing)
+        max_dim === nothing || (params = merge(params, (max_dim=Int(max_dim),)))
+    end
+    return FiltrationSpec(kind, merge(params, (; orientation)))
+end
 
 struct DegreeRipsFiltration{P<:NamedTuple} <: AbstractFiltration
     params::P
@@ -1287,22 +1599,62 @@ struct CubicalFiltration{P<:NamedTuple} <: AbstractFiltration
     params::P
 end
 CubicalFiltration(; channels=nothing,
+                  periodic=false,
                   construction::ConstructionOptions=ConstructionOptions()) =
-    CubicalFiltration((; channels, construction))
+    CubicalFiltration((; channels, periodic, construction))
 
+"""
+    RhomboidFiltration(; max_dim=nothing, radius=nothing, depth_range=nothing,
+                        backend=:auto, construction=ConstructionOptions())
+
+An exact multicover bifiltration of a Euclidean point cloud, modeling points
+contained in at least `k` closed balls of radius `r`. Grades are `(r, k)`, with
+orientation `(1, -1)`. Sphere predicates and squared birth radii use exact
+rational arithmetic on the supplied coordinates. Physical radii are stored as
+`AlgebraicReal` values, so distinct critical grades remain distinct. Converting
+them with `Float64` is an explicit display approximation; it does not change
+the encoding. Squaring the radius is a nonlinear reparameterization and changes
+straight slices and metric distances.
+
+The native default retains all cellular dimensions (intrinsic affine dimension
+plus one). `max_dim` requests a skeleton; computing degree `h` generally needs
+dimension `h+1` to retain boundaries. `radius` restricts the radius coordinate.
+`depth_range=(lo,hi)` is an inclusive coverage-depth window in `0:npoints`.
+It constructs integer slices and closed slabs with the horizontal cap at `hi`,
+preserving persistence within the window. It prunes carriers during geometry
+construction, before allocating the retained cells.
+
+Native `backend=:exhaustive` enumerates supports in arbitrary affine dimension;
+`:incremental` discovers weighted-Delaunay levels in affine dimensions 0:3.
+Both require general position in the geometry they compute, and retain exact
+constrained radius minima. `:auto` selects incremental enumeration for planar
+affine geometry with at least 32 sites and an explicit upper depth of two;
+other requests use exhaustive enumeration. Provenance records the executed
+backend. Clouds in a proper affine subspace retain their Euclidean metric.
+
+For degenerate or repeated labeled sites, explicitly choose
+`backend=:subdivision_cech` and supply
+`ConstructionOptions(budget=ConstructionBudget(max_simplices=...))`.
+This exact flag-complex model has exponential growth; its budgets protect
+intermediate subsets and output flags. Sites at identical coordinates count
+as separate balls. Its dimension can exceed the native rhomboid dimension.
+
+Native graded-complex and module stages use cellular boundaries directly.
+`stage=:simplex_tree` requests a coherent simplicial subdivision, which can be
+substantially larger. Construction budgets also protect the intermediate tiling.
+"""
 struct RhomboidFiltration{P<:NamedTuple} <: AbstractFiltration
     params::P
 end
-RhomboidFiltration(; max_dim::Int=2,
-                   radius=nothing,
-                   knn::Union{Nothing,Int}=nothing,
-                   n_landmarks::Union{Nothing,Int}=nothing,
-                   nn_backend::Symbol=:auto,
-                   nn_approx_candidates::Int=0,
-                   vertex_values=nothing,
-                   vertex_function=nothing,
-                   construction::ConstructionOptions=ConstructionOptions()) =
-    RhomboidFiltration((; max_dim, radius, knn, n_landmarks, nn_backend, nn_approx_candidates, vertex_values, vertex_function, construction))
+function RhomboidFiltration(; max_dim::Union{Nothing,Int}=nothing,
+                            radius::Union{Nothing,Real}=nothing,
+                            depth_range=nothing, backend::Symbol=:auto,
+                            construction::ConstructionOptions=ConstructionOptions())
+    depth_range = _rhomboid_depth_range(depth_range)
+    p = (; max_dim, radius, depth_range, backend, construction)
+    _validate_geometric_filtration_params(:rhomboid, p)
+    return RhomboidFiltration(p)
+end
 
 filtration_kind(::Type{<:GradedFiltration}) = :graded
 filtration_kind(::Type{<:RipsFiltration}) = :rips
@@ -1326,6 +1678,7 @@ filtration_kind(::Type{<:AlphaFiltration}) = :alpha
 filtration_kind(::Type{<:FunctionDelaunayFiltration}) = :function_delaunay
 filtration_kind(::Type{<:CoreDelaunayFiltration}) = :core_delaunay
 filtration_kind(::Type{<:CoreFiltration}) = :core
+filtration_kind(::Type{<:GraphCoreFiltration}) = :graph_core
 filtration_kind(::Type{<:DegreeRipsFiltration}) = :degree_rips
 filtration_kind(::Type{<:CubicalFiltration}) = :cubical
 filtration_kind(::Type{<:RhomboidFiltration}) = :rhomboid
@@ -1357,6 +1710,12 @@ function _construction_from_raw(raw;
     if raw === nothing
         return ConstructionOptions(; output_stage=default_output_stage)
     elseif raw isa ConstructionOptions
+        _validate_construction_collapse(raw.collapse)
+        _validate_construction_sparsify(raw.sparsify)
+        _validate_construction_output_stage(raw.output_stage)
+        ConstructionBudget(; max_simplices=raw.budget.max_simplices,
+                             max_edges=raw.budget.max_edges,
+                             memory_budget_bytes=raw.budget.memory_budget_bytes)
         return raw
     elseif raw isa NamedTuple
         return ConstructionOptions(;
@@ -1382,6 +1741,46 @@ function _construction_from_raw(raw;
         return ConstructionOptions(; sparsify=sparsify, collapse=collapse, output_stage=output_stage, budget=budget)
     end
     throw(ArgumentError("Invalid construction payload. Expected ConstructionOptions, NamedTuple, AbstractDict, or nothing."))
+end
+
+const _COLLAPSE_FLAG_FAMILIES = (:rips, :rips_density, :rips_codensity,
+                                  :rips_lowerstar, :function_rips, :degree_rips,
+                                  :landmark_rips)
+
+function _validate_collapse_spec(spec::FiltrationSpec)
+    construction = _construction_from_params(spec.params)
+    construction.collapse == :none && return nothing
+    spec.kind in _COLLAPSE_FLAG_FAMILIES ||
+        throw(ArgumentError("collapse=:dominated_edges requires a Rips flag filtration; unsupported kind=$(spec.kind)."))
+    Int(get(spec.params, :max_dim, 1)) >= 0 ||
+        throw(ArgumentError("certified collapse requires max_dim >= 0."))
+    Symbol(get(spec.params, :simplex_agg, :max)) == :max ||
+        throw(ArgumentError("certified collapse requires simplex_agg=:max (flag grades are joins of edge grades)."))
+    orientation = get(spec.params, :orientation, nothing)
+    (orientation === nothing || all(==(1), orientation)) ||
+        throw(ArgumentError("certified collapse requires coordinatewise sublevel orientation (+1 on every axis)."))
+    return nothing
+end
+
+function _validate_construction_request(data, spec::FiltrationSpec)
+    construction = _construction_from_params(spec.params)
+    if construction.sparsify !== :none && spec.kind in _BUILTIN_FILTRATION_KINDS
+        supported = if data isa PointCloud
+            (spec.kind in _COLLAPSE_FLAG_FAMILIES &&
+             !(spec.kind === :landmark_rips && construction.sparsify === :greedy_perm)) ||
+                (spec.kind in (:alpha, :delaunay_lower_star) && construction.sparsify === :greedy_perm)
+        else
+            data isa AbstractMatrix{<:Real} && spec.kind === :rips &&
+                construction.sparsify in (:knn, :radius)
+        end
+        supported || throw(ArgumentError(
+            "construction.sparsify=$(construction.sparsify) is unsupported for $(_ingestion_data_kind(data)) with filtration kind=$(spec.kind)."))
+    end
+    _validate_collapse_spec(spec)
+    construction.collapse == :none && return nothing
+    (data isa PointCloud || (data isa AbstractMatrix{<:Real} && spec.kind == :rips)) ||
+        throw(ArgumentError("collapse=:dominated_edges supports point-cloud or distance-matrix Rips input, not $(_ingestion_data_kind(data))."))
+    return nothing
 end
 
 function _construction_from_params(params::NamedTuple;
@@ -1844,17 +2243,22 @@ end
 
 function _filtration_spec(f::FunctionDelaunayFiltration)
     p = _params_with_nonnothing(f.params)
-    return FiltrationSpec(; kind=:function_delaunay, p...)
+    return _canonical_geometric_filtration_spec(FiltrationSpec(; kind=:function_delaunay, p...))
 end
 
 function _filtration_spec(f::CoreDelaunayFiltration)
     p = _params_with_nonnothing(f.params)
-    return FiltrationSpec(; kind=:core_delaunay, p...)
+    return _canonical_geometric_filtration_spec(FiltrationSpec(; kind=:core_delaunay, p...))
 end
 
 function _filtration_spec(f::CoreFiltration)
     p = _params_with_nonnothing(f.params)
-    return FiltrationSpec(; kind=:core, p...)
+    return _canonical_geometric_filtration_spec(FiltrationSpec(; kind=:core, p...))
+end
+
+function _filtration_spec(f::GraphCoreFiltration)
+    p = _params_with_nonnothing(f.params)
+    return _canonical_geometric_filtration_spec(FiltrationSpec(; kind=:graph_core, p...))
 end
 
 function _filtration_spec(f::DegreeRipsFiltration)
@@ -1864,7 +2268,7 @@ end
 
 function _filtration_spec(f::RhomboidFiltration)
     p = _params_with_nonnothing(f.params)
-    return FiltrationSpec(; kind=:rhomboid, p...)
+    return _canonical_geometric_filtration_spec(FiltrationSpec(; kind=:rhomboid, p...))
 end
 
 function _filtration_spec(f::AbstractFiltration)
@@ -1892,6 +2296,7 @@ end
 Convert serialized `FiltrationSpec` into a typed runtime filtration object.
 """
 function to_filtration(spec::FiltrationSpec)::AbstractFiltration
+    _validate_geometric_filtration_params(spec.kind, spec.params)
     p = spec.params
     k = spec.kind
     construction = _construction_from_params(p)
@@ -2030,9 +2435,18 @@ function to_filtration(spec::FiltrationSpec)::AbstractFiltration
             construction = construction,
         )
     elseif k === :lower_star
-        return ImageLowerStarFiltration(; channels=get(p, :channels, nothing), construction=construction)
+        return ImageLowerStarFiltration(;
+            channels=get(p, :channels, nothing),
+            periodic=get(p, :periodic, false),
+            construction=construction,
+        )
     elseif k === :image_distance_bifiltration
-        return ImageDistanceBifiltration(; mask=get(p, :mask, nothing), channels=get(p, :channels, nothing), construction=construction)
+        return ImageDistanceBifiltration(;
+            mask=get(p, :mask, nothing),
+            channels=get(p, :channels, nothing),
+            periodic=get(p, :periodic, false),
+            construction=construction,
+        )
     elseif k === :wing_vein_bifiltration
         return WingVeinBifiltration(;
             grid = get(p, :grid, (32, 32)),
@@ -2043,6 +2457,7 @@ function to_filtration(spec::FiltrationSpec)::AbstractFiltration
     elseif k === :cubical
         return CubicalFiltration(;
             channels = get(p, :channels, nothing),
+            periodic = get(p, :periodic, false),
             construction = construction,
         )
     elseif k === :delaunay_lower_star
@@ -2052,35 +2467,41 @@ function to_filtration(spec::FiltrationSpec)::AbstractFiltration
             vertex_function = get(p, :vertex_function, nothing),
             simplex_agg = get(p, :simplex_agg, :max),
             delaunay_backend = Symbol(get(p, :delaunay_backend, :auto)),
-            highdim_policy = get(p, :highdim_policy, :rips),
+            highdim_policy = get(p, :highdim_policy, :error),
             construction = construction,
         )
     elseif k === :alpha
         return AlphaFiltration(;
             max_dim = get(p, :max_dim, 2),
             delaunay_backend = Symbol(get(p, :delaunay_backend, :auto)),
-            highdim_policy = get(p, :highdim_policy, :rips),
+            highdim_policy = get(p, :highdim_policy, :error),
             construction = construction,
         )
     elseif k === :function_delaunay
         return FunctionDelaunayFiltration(;
-            max_dim = get(p, :max_dim, 2),
+            max_dim = get(p, :max_dim, 3),
             vertex_values = get(p, :vertex_values, nothing),
             vertex_function = get(p, :vertex_function, nothing),
-            simplex_agg = get(p, :simplex_agg, :max),
             delaunay_backend = Symbol(get(p, :delaunay_backend, :auto)),
-            highdim_policy = get(p, :highdim_policy, :rips),
             construction = construction,
         )
     elseif k === :core_delaunay
         return CoreDelaunayFiltration(;
             max_dim = get(p, :max_dim, 2),
+            beta = get(p, :beta, 1.0),
+            k_values = get(p, :k_values, nothing),
             delaunay_backend = Symbol(get(p, :delaunay_backend, :auto)),
-            highdim_policy = get(p, :highdim_policy, :rips),
             construction = construction,
         )
     elseif k === :core
         return CoreFiltration(;
+            max_dim = get(p, :max_dim, 2),
+            beta = get(p, :beta, 1.0),
+            k_values = get(p, :k_values, nothing),
+            construction = construction,
+        )
+    elseif k === :graph_core
+        return GraphCoreFiltration(;
             radius = get(p, :radius, nothing),
             knn = get(p, :knn, 8),
             nn_backend = Symbol(get(p, :nn_backend, :auto)),
@@ -2100,15 +2521,12 @@ function to_filtration(spec::FiltrationSpec)::AbstractFiltration
             construction = construction,
         )
     elseif k === :rhomboid
+        max_dim = get(p, :max_dim, nothing)
         return RhomboidFiltration(;
-            max_dim = get(p, :max_dim, 2),
+            max_dim = max_dim === nothing ? nothing : Int(max_dim),
             radius = get(p, :radius, nothing),
-            knn = get(p, :knn, nothing),
-            n_landmarks = get(p, :n_landmarks, nothing),
-            nn_backend = Symbol(get(p, :nn_backend, :auto)),
-            nn_approx_candidates = Int(get(p, :nn_approx_candidates, 0)),
-            vertex_values = get(p, :vertex_values, nothing),
-            vertex_function = get(p, :vertex_function, nothing),
+            depth_range = get(p, :depth_range, nothing),
+            backend = get(p, :backend, :auto),
             construction = construction,
         )
     end
@@ -2229,6 +2647,7 @@ function _estimate_rips_like_cell_counts(n::Int,
                                          strict::Bool)
     n < 0 && throw(ArgumentError("estimate_ingestion: invalid point count $n"))
     max_dim = max(Int(get(spec.params, :max_dim, 1)), 0)
+    max_dim == 0 && return BigInt[big(n)]
     construction = _construction_from_params(spec.params)
     if construction.sparsify == :radius
         radius = get(spec.params, :radius, nothing)
@@ -2250,13 +2669,13 @@ function _estimate_rips_like_cell_counts(n::Int,
             end
             edges = big(edges_i)
         end
-        return BigInt[big(n), edges]
+        return vcat(BigInt[big(n), edges], BigInt[binomial(big(n), big(k)) for k in 3:(max_dim + 1)])
     end
     if construction.sparsify == :knn
         k = max(Int(get(spec.params, :knn, 8)), 0)
         max_pairs = binomial(big(n), big(2))
-        edges = min(max_pairs, big(cld(n * k, 2)))
-        return BigInt[big(n), edges]
+        edges = min(max_pairs, big(n) * k)
+        return vcat(BigInt[big(n), edges], BigInt[binomial(big(n), big(k)) for k in 3:(max_dim + 1)])
     end
     if construction.sparsify == :greedy_perm
         n_landmarks = get(spec.params, :n_landmarks, nothing)
@@ -2302,7 +2721,7 @@ function _construction_check_memory_budget!(dense_bytes_est::BigInt,
                                             spec::FiltrationSpec)
     mb = _construction_memory_budget(spec)
     if mb !== nothing && dense_bytes_est > big(mb)
-        throw(ArgumentError("Ingestion construction budget exceeded: estimated dense boundary footprint $dense_bytes_est bytes > memory_budget_bytes=$mb."))
+        throw(ArgumentError("Ingestion construction budget exceeded: estimated storage $dense_bytes_est bytes > memory_budget_bytes=$mb."))
     end
     return nothing
 end
@@ -2319,6 +2738,22 @@ function _construction_check_max_edges!(edge_count::Integer, spec::FiltrationSpe
     cap = _construction_max_edges(spec)
     if cap !== nothing && edge_count > cap
         throw(ArgumentError("Ingestion construction budget exceeded: edge count=$(edge_count) > max_edges=$(cap)."))
+    end
+    return nothing
+end
+
+# Enforce budgets at common materialization boundaries, including prebuilt
+# complexes and cubical/graph routes that do not enumerate point-cloud cliques.
+function _construction_check_counts!(counts, spec::FiltrationSpec)
+    budget = _construction_budget(spec)
+    budget.max_simplices === nothing && budget.max_edges === nothing &&
+        budget.memory_budget_bytes === nothing && return nothing
+    total = sum(big(n) for n in counts; init=big(0))
+    _construction_check_max_simplices!(total, length(counts) - 1, spec)
+    length(counts) >= 2 && _construction_check_max_edges!(counts[2], spec)
+    if budget.memory_budget_bytes !== nothing
+        _construction_check_memory_budget!(
+            _estimate_dense_bytes_from_cell_counts(BigInt[big(n) for n in counts]), spec)
     end
     return nothing
 end
@@ -2400,132 +2835,6 @@ function _greedy_perm_indices(points::AbstractVector{<:AbstractVector{<:Real}}, 
     return sort(unique(chosen))
 end
 
-function _collapse_acyclic_edges_with_dists(edges::Vector{NTuple{2,Int}},
-                                            dists::Vector{Float64},
-                                            n::Int)
-    parent = collect(1:n)
-    rank = zeros(Int, n)
-    function findp(x)
-        while parent[x] != x
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        end
-        return x
-    end
-    function unite(x, y)
-        rx, ry = findp(x), findp(y)
-        rx == ry && return false
-        if rank[rx] < rank[ry]
-            parent[rx] = ry
-        elseif rank[rx] > rank[ry]
-            parent[ry] = rx
-        else
-            parent[ry] = rx
-            rank[rx] += 1
-        end
-        return true
-    end
-    idx = sortperm(eachindex(edges); by=i -> dists[i])
-    out_edges = NTuple{2,Int}[]
-    out_dists = Float64[]
-    sizehint!(out_edges, length(edges))
-    sizehint!(out_dists, length(edges))
-    for i in idx
-        u, v = edges[i]
-        if unite(u, v)
-            e = edges[i]
-            push!(out_edges, e)
-            push!(out_dists, dists[i])
-        end
-    end
-    return out_edges, out_dists
-end
-
-function _collapse_dominated_edges_points(edges::Vector{NTuple{2,Int}},
-                                          dists::Vector{Float64},
-                                          points::AbstractVector{<:AbstractVector{<:Real}};
-                                          tol::Float64=1e-12)
-    n = length(points)
-    out_edges = NTuple{2,Int}[]
-    out_dists = Float64[]
-    sizehint!(out_edges, length(edges))
-    sizehint!(out_dists, length(edges))
-    for idx in eachindex(edges)
-        u, v = edges[idx]
-        duv = dists[idx]
-        dominated = false
-        for w in 1:n
-            (w == u || w == v) && continue
-            if max(_euclidean_distance(points[u], points[w]),
-                   _euclidean_distance(points[w], points[v])) <= duv + tol
-                dominated = true
-                break
-            end
-        end
-        if !dominated
-            push!(out_edges, (u, v))
-            push!(out_dists, duv)
-        end
-    end
-    return out_edges, out_dists
-end
-
-function _collapse_dominated_edges_points(edges::Vector{NTuple{2,Int}},
-                                          dists::Vector{Float64},
-                                          points::AbstractMatrix{<:Real};
-                                          tol::Float64=1e-12)
-    n = size(points, 1)
-    out_edges = NTuple{2,Int}[]
-    out_dists = Float64[]
-    sizehint!(out_edges, length(edges))
-    sizehint!(out_dists, length(edges))
-    @inbounds for idx in eachindex(edges)
-        u, v = edges[idx]
-        duv = dists[idx]
-        dominated = false
-        for w in 1:n
-            (w == u || w == v) && continue
-            if max(_euclidean_distance(points, u, w),
-                   _euclidean_distance(points, w, v)) <= duv + tol
-                dominated = true
-                break
-            end
-        end
-        dominated && continue
-        push!(out_edges, (u, v))
-        push!(out_dists, duv)
-    end
-    return out_edges, out_dists
-end
-
-function _apply_construction_collapse_edge_driven(edges::Vector{NTuple{2,Int}},
-                                                  dists::Vector{Float64},
-                                                  points::AbstractVector{<:AbstractVector{<:Real}},
-                                                  construction::ConstructionOptions)
-    if construction.collapse == :none
-        return edges, dists
-    elseif construction.collapse == :dominated_edges
-        return _collapse_dominated_edges_points(edges, dists, points)
-    elseif construction.collapse == :acyclic
-        return _collapse_acyclic_edges_with_dists(edges, dists, length(points))
-    end
-    throw(ArgumentError("Unsupported construction.collapse=$(construction.collapse)."))
-end
-
-function _apply_construction_collapse_edge_driven(edges::Vector{NTuple{2,Int}},
-                                                  dists::Vector{Float64},
-                                                  points::AbstractMatrix{<:Real},
-                                                  construction::ConstructionOptions)
-    if construction.collapse == :none
-        return edges, dists
-    elseif construction.collapse == :dominated_edges
-        return _collapse_dominated_edges_points(edges, dists, points)
-    elseif construction.collapse == :acyclic
-        return _collapse_acyclic_edges_with_dists(edges, dists, size(points, 1))
-    end
-    throw(ArgumentError("Unsupported construction.collapse=$(construction.collapse)."))
-end
-
 function _point_cloud_sparsify_edge_driven(points::AbstractVector{<:AbstractVector{<:Real}},
                                            spec::FiltrationSpec,
                                            construction::ConstructionOptions)
@@ -2605,7 +2914,48 @@ function _estimate_pointcloud_cell_counts(data::PointCloud,
                                           strict::Bool)
     n = length(data.points)
     kind = spec.kind
-    if kind == :landmark_rips
+    if kind === :rhomboid
+        backend = get(spec.params, :backend, :auto)
+        depths = get(spec.params, :depth_range, nothing)
+        lo, hi = depths === nothing ? (0, n) : depths
+        if backend === :subdivision_cech
+            requested = get(spec.params, :max_dim, nothing)
+            max_dim = requested === nothing ? n-lo : min(Int(requested), n-lo)
+            # Exact flag counts before radius restriction, by the size of the
+            # largest subset. No subset or simplex enumeration is needed.
+            counts = BigInt[]
+            current = BigInt[binomial(big(n), s) for s in lo:n]
+            for dim in 0:max_dim
+                push!(counts, sum(current))
+                dim == max_dim && break
+                current = BigInt[sum(current[t-lo+1] * binomial(big(n-t), s-t)
+                                      for t in lo:s-1; init=big(0)) for s in lo:n]
+            end
+            return counts
+        end
+        d = _rhomboid_affine_dimension(_rhomboid_points(data)) + 1
+        requested = get(spec.params, :max_dim, nothing)
+        max_dim = requested === nothing ? d : min(Int(requested), d)
+        depths === (0, 0) && return BigInt[1; zeros(BigInt, max_dim)]
+        top = binomial(big(n), d)
+        original = BigInt[top * binomial(big(d), q) * big(2)^(d - q) for q in 0:d]
+        depths === nothing && return original[1:max_dim+1]
+        # Conservatively count each original carrier's retained slabs and
+        # internal horizontal slices. Shared faces only decrease this bound.
+        return BigInt[q == 0 ? original[1] :
+            min(q, hi-lo) * original[q+1] +
+            (q < d ? min(q, hi-lo+1) * original[q+2] : 0) for q in 0:max_dim]
+    elseif kind in (:function_delaunay, :core, :core_delaunay)
+        requested = Int(get(spec.params, :max_dim, kind === :function_delaunay ? 3 : 2))
+        max_dim = min(requested, n - 1)
+        if kind === :function_delaunay
+            max_dim = min(max_dim, size(point_matrix(data), 2) + 1)
+        end
+        # Incremental support can be quadratic in planar clouds; cocircular
+        # Voronoi cells can have arbitrarily many vertices. A planar linear
+        # triangulation bound is not valid for either of these nerves.
+        return BigInt[binomial(big(n), d + 1) for d in 0:max_dim]
+    elseif kind == :landmark_rips
         landmarks = get(spec.params, :landmarks, nothing)
         landmarks === nothing && throw(ArgumentError("estimate_ingestion: landmark_rips requires landmarks."))
         m = length(landmarks)
@@ -2615,8 +2965,7 @@ function _estimate_pointcloud_cell_counts(data::PointCloud,
                                                exact_pairwise_limit=exact_pairwise_limit,
                                                warnings=warnings,
                                                strict=strict)
-    elseif kind == :delaunay_lower_star || kind == :function_delaunay ||
-           kind == :alpha || kind == :core_delaunay
+    elseif kind == :delaunay_lower_star || kind == :alpha
         d = length(data.points[1])
         max_dim = min(max(Int(get(spec.params, :max_dim, 2)), 0), 2)
         if d <= 2
@@ -2627,7 +2976,7 @@ function _estimate_pointcloud_cell_counts(data::PointCloud,
                 elseif n <= 1
                     big(0)
                 else
-                    min(big(3 * n - 6), binomial(big(n), big(2)))
+                    min(big(max(n - 1, 3 * n - 6)), binomial(big(n), big(2)))
                 end
                 push!(counts, edges)
             end
@@ -2641,24 +2990,24 @@ function _estimate_pointcloud_cell_counts(data::PointCloud,
             end
             return counts
         end
-        policy = Symbol(get(spec.params, :highdim_policy, :rips))
+        policy = Symbol(get(spec.params, :highdim_policy, :error))
         if policy == :error
             _ingestion_warn!(warnings, "Delaunay high-dimensional input (dimension=$d) with highdim_policy=:error will fail at ingestion.", strict)
             return BigInt[big(n)]
         elseif policy != :rips
             throw(ArgumentError("estimate_ingestion: unsupported highdim_policy=$(policy) for Delaunay filtrations."))
         end
-        _ingestion_warn!(warnings, "Delaunay high-dimensional estimate uses Rips fallback policy (:rips).", strict)
+        _ingestion_warn!(warnings, "Explicit highdim_policy=:rips substitutes a different Rips construction; the estimate does not describe a Delaunay or alpha filtration.", strict)
         ps = merge(spec.params, (_points_ref = data.points,))
-        fallback_kind = kind == :alpha ? :rips : (kind == :core_delaunay ? :degree_rips : :function_rips)
+        fallback_kind = kind == :alpha ? :rips : :function_rips
         return _estimate_rips_like_cell_counts(n, FiltrationSpec(; kind=fallback_kind, ps...);
                                                exact_pairwise_limit=exact_pairwise_limit,
                                                warnings=warnings,
                                                strict=strict)
-    elseif kind == :core
+    elseif kind == :graph_core
         if haskey(spec.params, :radius) && spec.params[:radius] !== nothing
             if n > exact_pairwise_limit
-                _ingestion_warn!(warnings, "core(radius=...) estimate used complete-graph edge upper bound (n=$n > exact_pairwise_limit=$exact_pairwise_limit).", strict)
+                _ingestion_warn!(warnings, "graph_core(radius=...) estimate used complete-graph edge upper bound (n=$n > exact_pairwise_limit=$exact_pairwise_limit).", strict)
                 edges = binomial(big(n), big(2))
             else
                 r = Float64(spec.params[:radius])
@@ -2672,10 +3021,10 @@ function _estimate_pointcloud_cell_counts(data::PointCloud,
             end
         else
             k = Int(get(spec.params, :knn, 8))
-            edges = min(binomial(big(n), big(2)), big(cld(n * max(k, 0), 2)))
+            edges = min(binomial(big(n), big(2)), big(n) * max(k, 0))
         end
         return BigInt[big(n), edges]
-    elseif kind == :rhomboid || kind == :rips || kind == :rips_density ||
+    elseif kind == :rips || kind == :rips_density ||
            kind == :rips_codensity || kind == :rips_lowerstar ||
            kind == :function_rips || kind == :degree_rips
         ps = merge(spec.params, (_points_ref = data.points,))
@@ -2694,7 +3043,7 @@ function _estimate_graph_cell_counts(data::GraphData,
     n = data.n
     m = length(data.edges)
     kind = spec.kind
-    if kind == :graph_lower_star || kind == :edge_weighted || kind == :core ||
+    if kind == :graph_lower_star || kind == :edge_weighted || kind == :graph_core ||
        kind == :graph_centrality || kind == :graph_geodesic || kind == :graph_function_geodesic_bifiltration
         lift = Symbol(get(spec.params, :lift, :lower_star))
         if lift == :clique
@@ -2705,7 +3054,7 @@ function _estimate_graph_cell_counts(data::GraphData,
             throw(ArgumentError("estimate_ingestion: unsupported graph lift=$(lift)."))
         end
         return BigInt[big(n), big(m)]
-    elseif kind == :clique_lower_star || kind == :rhomboid ||
+    elseif kind == :clique_lower_star ||
            (kind == :graph_weight_threshold && Symbol(get(spec.params, :lift, :graph)) == :clique)
         max_dim = max(Int(get(spec.params, :max_dim, 2)), 1)
         _ingestion_warn!(warnings, "Graph clique-based estimate is an upper bound (complete-graph assumption).", strict)
@@ -2718,13 +3067,16 @@ function _estimate_graph_cell_counts(data::GraphData,
     throw(ArgumentError("estimate_ingestion: unsupported graph filtration kind=$(kind)."))
 end
 
-function _estimate_cubical_cell_counts(dims::NTuple{N,Int}) where {N}
+function _estimate_cubical_cell_counts(dims::NTuple{N,Int};
+                                       periodic::NTuple{N,Bool}=ntuple(_ -> false, N)) where {N}
     counts = fill(big(0), N + 1)
-    for mask in 0:(Int(2^N) - 1)
+    for mask in 0:((1 << N) - 1)
         k = count_ones(mask)
         c = big(1)
         for i in 1:N
-            c *= big(dims[i] - Int((mask >> (i - 1)) & 1))
+            maskbit = Int((mask >> (i - 1)) & 1)
+            axis_count = periodic[i] ? dims[i] : max(dims[i] - maskbit, 0)
+            c *= big(axis_count)
         end
         counts[k + 1] += c
     end
@@ -2734,20 +3086,25 @@ end
 function _estimate_image_cell_counts(data::ImageNd,
                                      spec::FiltrationSpec;
                                      warnings::Vector{String},
-                                     strict::Bool)
+    strict::Bool)
     kind = spec.kind
     if kind == :lower_star || kind == :cubical
-        return _estimate_cubical_cell_counts(size(data.data))
+        dims = size(data.data)
+        periodic = _cubical_periodic_from_spec(spec, Val(length(dims)))
+        return _estimate_cubical_cell_counts(dims; periodic=periodic)
     elseif kind == :image_distance_bifiltration
         channels = get(spec.params, :channels, nothing)
         if channels === nothing
-            return _estimate_cubical_cell_counts(size(data.data))
+            dims = size(data.data)
+            periodic = _cubical_periodic_from_spec(spec, Val(length(dims)))
+            return _estimate_cubical_cell_counts(dims; periodic=periodic)
         end
         dims = size(channels[1])
         for ch in channels
             size(ch) == dims || throw(ArgumentError("estimate_ingestion: all channels must have the same size."))
         end
-        return _estimate_cubical_cell_counts(dims)
+        periodic = _cubical_periodic_from_spec(spec, Val(length(dims)))
+        return _estimate_cubical_cell_counts(dims; periodic=periodic)
     end
     throw(ArgumentError("estimate_ingestion: unsupported image filtration kind=$(kind)."))
 end
@@ -2768,7 +3125,7 @@ function _estimate_embedded_planar_cell_counts(data::EmbeddedPlanarGraph2D,
         _ingestion_warn!(warnings, "EmbeddedPlanarGraph2D image_distance_bifiltration estimate used graph surrogate counts.", strict)
         return BigInt[big(length(data.vertices)), big(length(data.edges))]
     elseif kind == :graph_lower_star || kind == :clique_lower_star || kind == :edge_weighted ||
-           kind == :core || kind == :rhomboid || kind == :graph_centrality ||
+           kind == :graph_core || kind == :graph_centrality ||
            kind == :graph_geodesic || kind == :graph_function_geodesic_bifiltration ||
            kind == :graph_weight_threshold
         gd = GraphData(length(data.vertices), data.edges)
@@ -2862,7 +3219,8 @@ Cheap-first workflow
 - inspect the returned [`IngestionEstimate`](@ref) with `describe(...)` or
   [`ingestion_estimate_summary`](@ref) and the scalar accessors in this module;
 - use `strict=true` only when you want warnings such as budget overruns or
-  unsupported high-dimensional Delaunay policies to throw immediately.
+  budget concerns to throw immediately. Unsupported geometric input contracts
+throw regardless of `strict`.
 
 This function does not build the graded complex or encoding. It only estimates
 the likely combinatorial footprint of the requested ingestion route.
@@ -2874,13 +3232,22 @@ function _estimate_ingestion_report(data,
                                     dense_elem_bytes::Integer=8,
                                     exact_pairwise_limit::Int=5_000,
                                     strict::Bool=false)
+    spec.kind === :rhomboid && (spec = _canonical_geometric_filtration_spec(spec))
+    _validate_geometric_filtration_request(data, spec)
+    _validate_construction_request(data, spec)
     warnings = String[]
     cell_counts = _estimate_cell_counts(data, spec;
                                        exact_pairwise_limit=exact_pairwise_limit,
                                        warnings=warnings,
                                        strict=strict)
     n_cells_est = _sum_bigint(cell_counts)
-    nnz_est = _estimate_nnz_from_cell_counts(cell_counts)
+    nnz_est = if spec.kind === :rhomboid && get(spec.params, :backend, :auto) !== :subdivision_cech
+        sliced = get(spec.params, :depth_range, nothing) !== nothing
+        sum(big(2d + (sliced ? 2 : 0)) * cell_counts[d + 1]
+            for d in 1:length(cell_counts)-1; init=big(0))
+    else
+        _estimate_nnz_from_cell_counts(cell_counts)
+    end
     dense_bytes_est = _estimate_dense_bytes_from_cell_counts(cell_counts; elem_bytes=dense_elem_bytes)
 
     axis_sizes = _estimate_axis_sizes(data, spec; warnings=warnings, strict=strict)
@@ -2922,6 +3289,8 @@ function _estimate_ingestion_report(data,
         nnz_est = nnz_est,
         dense_bytes_est = dense_bytes_est,
         warnings = warnings,
+        construction = _ingestion_construction_provenance(data, spec, nothing),
+        backend_status = :not_executed,
     )
 end
 
@@ -2956,6 +3325,8 @@ estimate_ingestion(data, filtration::AbstractFiltration; kwargs...) =
         estimated_nnz = estimated_nnz(est),
         estimated_dense_bytes = estimated_dense_bytes(est),
         nwarnings = length(estimate_warnings(est)),
+        construction = get(est.report, :construction, nothing),
+        backend_status = :not_executed,
     )
 end
 
@@ -3000,7 +3371,7 @@ function Base.show(io::IO, ::MIME"text/plain", est::IngestionEstimate)
 end
 
 @inline function _axes_from_complex_grades(G::GradedComplex, orientation)
-    N = length(G.grades[1])
+    N = DataTypes.parameter_dim(G)
     return _axes_from_grades(G.grades, N; orientation=orientation)
 end
 
@@ -3274,6 +3645,8 @@ end
 
 function _validate_axes_sorted(axes)
     for (i, ax) in enumerate(axes)
+        isempty(ax) && throw(ArgumentError(
+            "encode(data, filtration): axis $i is empty; supply explicit axes for an empty graded dataset."))
         if !issorted(ax)
             error("encode(data, filtration): axis $i must be sorted ascending.")
         end
@@ -3314,6 +3687,7 @@ end
 function _coarsen_axis(ax::Vector{T}, max_len::Int) where {T}
     n = length(ax)
     n <= max_len && return ax
+    max_len == 1 && return T[first(ax)]
     idxs = round.(Int, range(1, n; length=max_len))
     return ax[idxs]
 end
@@ -3333,7 +3707,7 @@ end
 end
 
 function _quantize_grades(G::GradedComplex, eps)
-    N = length(G.grades[1])
+    N = DataTypes.parameter_dim(G)
     eps_vec = _quantize_eps_vec(eps, Val(N))
     grades = Vector{NTuple{N,Float64}}(undef, length(G.grades))
     for i in eachindex(G.grades)
@@ -3405,16 +3779,22 @@ function _quantize_simplex_tree(ST::SimplexTreeMulti{N,T}, eps) where {N,T}
 end
 
 function _poset_from_axes_cached(axes, orientation;
+                                 poset_kind::Symbol=:signature,
                                  cache::Union{Nothing,EncodingCache}=nothing)
-    key = (_axes_key(axes), orientation)
+    # Axis coordinates are already oriented (e.g. -k). Their index order
+    # is increasing in every coordinate; reversing again changes the module.
+    index_orientation = ntuple(_ -> 1, length(orientation))
+    kind = poset_kind === :signature ? :grid : poset_kind === :dense ? :dense :
+        throw(ArgumentError("ingestion poset_kind must be :signature or :dense."))
+    key = (_axes_key(axes), orientation, poset_kind)
     if cache === nothing
-        return poset_from_axes(axes; orientation=orientation, kind=:grid)
+        return poset_from_axes(axes; orientation=index_orientation, kind=kind)
     end
     Base.lock(cache.lock)
     try
         entry = get(cache.posets, key, nothing)
         if entry === nothing
-            P = poset_from_axes(axes; orientation=orientation, kind=:grid)
+            P = poset_from_axes(axes; orientation=index_orientation, kind=kind)
             cache.posets[key] = PosetCachePayload(P)
             return P
         end
@@ -3426,28 +3806,43 @@ end
 
 @inline function _ingestion_poset_fast_key(data,
                                            filtration::AbstractFiltration,
+                                           axes,
                                            orientation,
                                            axes_policy::Symbol,
+                                           poset_kind::Symbol,
                                            max_axis_len,
                                            axis_kind,
                                            eps,
                                            multicritical::Symbol,
                                            onecritical_selector::Symbol,
                                            onecritical_enforce_boundary::Bool)
-    fs_hash = let f = filtration
+    # A digest alone is not a filtration identity: distinct algebraic radii
+    # can be conjugate roots with the same hash. Retain the exact request.
+    fs_key, geometric_points = let f = filtration
         try
             fs = _filtration_spec(f)
-            UInt(hash((fs.kind, fs.params)))
+            (_structural_cache_key((fs.kind, fs.params)),
+             fs.kind in (:alpha, :delaunay_lower_star, :function_delaunay,
+                         :core_delaunay, :core, :graph_core, :rhomboid))
         catch
-            UInt(hash((typeof(f), f)))
+            (_structural_cache_key((typeof(f), f)), false)
         end
+    end
+    # PointCloud keeps its coordinate matrix by reference. Geometry-dependent
+    # posets and modules must follow in-place edits to that matrix as well.
+    data_key = if geometric_points && data isa PointCloud
+        (UInt(objectid(data)), _structural_cache_key(point_matrix(data)))
+    else
+        UInt(objectid(data))
     end
     return (
         :ingestion_poset_fast,
-        UInt(objectid(data)),
-        fs_hash,
+        data_key,
+        fs_key,
+        _structural_cache_key(axes),
         orientation,
         axes_policy,
+        poset_kind,
         max_axis_len,
         axis_kind,
         eps,
@@ -3479,13 +3874,34 @@ end
     return value
 end
 
-@inline function _ingestion_module_fast_key(poset_fast_key, P, degree::Int, field)
+# Cache the actual constructed chain data, not only the identity of its source.
+# Sparse storage is snapshotted in O(nnz), never as a dense matrix. This also
+# covers callback filtrations whose emitted grades change between calls.
+function _ingestion_complex_cache_key(ST, G, payload)
+    if ST !== nothing
+        return _structural_cache_key((ST.simplex_offsets, ST.simplex_vertices,
+            ST.simplex_dims, ST.dim_offsets, ST.grade_offsets, ST.grade_data))
+    end
+    boundaries = payload === nothing ? G.boundaries : payload.boundaries
+    sparse_data = [(size(B), B.colptr, B.rowval, B.nzval) for B in boundaries]
+    data = if payload !== nothing
+        (payload.grades_by_dim, sparse_data)
+    elseif G isa MultiCriticalGradedComplex
+        (G.cell_ids, G.dim_offsets, G.grade_offsets, G.grade_data, sparse_data)
+    else
+        (G.cell_ids, G.dim_offsets, G.grades, sparse_data)
+    end
+    return _structural_cache_key(data)
+end
+
+@inline function _ingestion_module_fast_key(poset_fast_key, P, degree::Int, field, complex_key)
     return (
         :ingestion_module_fast,
         poset_fast_key,
         UInt(objectid(P)),
         Int(degree),
-        UInt(hash((typeof(field), field))),
+        _structural_cache_key((typeof(field), field)),
+        complex_key,
     )
 end
 
@@ -3494,9 +3910,9 @@ end
                                           field::AbstractCoeffField)
     return (
         :ingestion_plan_norm,
-        UInt(hash((spec.kind, spec.params))),
+        _structural_cache_key((spec.kind, spec.params)),
         stage,
-        UInt(hash((typeof(field), field))),
+        _structural_cache_key((typeof(field), field)),
     )
 end
 
@@ -3516,10 +3932,10 @@ function _grades_by_dim(G::GradedComplex)
     total = _packed_total_cells(dim_offsets)
     length(G.grades) == total ||
         error("GradedComplex.grades length $(length(G.grades)) does not match total cells $(total).")
-    out = Vector{Vector{typeof(G.grades[1])}}(undef, length(counts))
+    out = Vector{Vector{eltype(G.grades)}}(undef, length(counts))
     idx = 1
     for d in 1:length(counts)
-        out[d] = Vector{typeof(G.grades[1])}(undef, counts[d])
+        out[d] = Vector{eltype(G.grades)}(undef, counts[d])
         for j in 1:counts[d]
             out[d][j] = G.grades[idx]
             idx += 1
@@ -3870,7 +4286,9 @@ end
 function _normalize_cochain_boundaries(grades_by_dim::Vector,
                                        boundaries_in::Vector{SparseMatrixCSC{Int,Int}})
     expected = length(grades_by_dim) - 1
-    boundaries = copy(boundaries_in)
+    # Lazy evaluation must represent the same complex as eager evaluation even
+    # if the caller later edits the source sparse matrices.
+    boundaries = copy.(boundaries_in)
     if length(boundaries) < expected
         for k in (length(boundaries) + 1):expected
             rows = length(grades_by_dim[k])
@@ -3883,6 +4301,9 @@ function _normalize_cochain_boundaries(grades_by_dim::Vector,
     return boundaries
 end
 
+# Arrays are indexed by increasing cell dimension: slot k+1 stores C_k.
+# The materialized cochain complex has C^{-k}=C_k and d^{-k}=partial_k;
+# its maps are covariant inclusions of chains, never zero-extended cochains.
 mutable struct LazyModuleCochainComplex
     tmin::Int
     tmax::Int
@@ -3937,11 +4358,11 @@ function _lazy_cochain_complex_from_grades_and_boundaries(grades_by_dim::Vector{
     fill!(boundaries_field, nothing)
 
     return LazyModuleCochainComplex(
+        1 - nd,
         0,
-        nd - 1,
         P,
         axes,
-        orientation,
+        ntuple(_ -> 1, N), # birth indices are already in oriented coordinates
         field,
         multicritical,
         grades_by_dim,
@@ -4016,7 +4437,7 @@ end
     return 0
 end
 
-@inline function _restricted_coboundary_component(B::SparseMatrixCSC{Int,Int},
+@inline function _restricted_boundary_component(B::SparseMatrixCSC{Int,Int},
                                                   active_rows::Vector{Int},
                                                   active_cols::Vector{Int},
                                                   field::AbstractCoeffField)
@@ -4040,16 +4461,16 @@ end
         for ptr in colptr[c_global]:(colptr[c_global + 1] - 1)
             r_local = _sorted_pos_or_zero(active_rows, rows[ptr])
             if r_local != 0
-                push!(I, c_local)
-                push!(J, r_local)
+                push!(I, r_local)
+                push!(J, c_local)
                 push!(V, coerce(field, vals[ptr]))
             end
         end
     end
-    return sparse(I, J, V, length(active_cols), length(active_rows))
+    return sparse(I, J, V, length(active_rows), length(active_cols))
 end
 
-@inline function _restricted_coboundary_component(B::SparseMatrixCSC{Int,Int},
+@inline function _restricted_boundary_component(B::SparseMatrixCSC{Int,Int},
                                                   active_rows::Vector{Int},
                                                   active_cols::Vector{Int},
                                                   field::AbstractCoeffField,
@@ -4076,13 +4497,13 @@ end
         for ptr in colptr[c_global]:(colptr[c_global + 1] - 1)
             r_local = _active_lookup_get(scratch, rows[ptr])
             if r_local != 0
-                push!(I, c_local)
-                push!(J, r_local)
+                push!(I, r_local)
+                push!(J, c_local)
                 push!(V, coerce(field, vals[ptr]))
             end
         end
     end
-    return sparse(I, J, V, length(active_cols), length(active_rows))
+    return sparse(I, J, V, length(active_rows), length(active_cols))
 end
 
 function _lazy_diff_components(L::LazyModuleCochainComplex,
@@ -4099,27 +4520,15 @@ function _lazy_diff_components(L::LazyModuleCochainComplex,
     threaded_ok = threaded &&
                   Threads.nthreads() > 1 &&
                   nP >= _LAZY_DIFF_THREADS_MIN_VERTICES[]
-    if threaded_ok
-        scratch = use_lookup ? [_ActiveIndexLookupScratch(size(B, 1)) for _ in 1:Threads.nthreads()] : nothing
-        Threads.@threads :static for i in 1:nP
-            Lk = active_k[i]
-            Lk1 = active_k1[i]
-            if use_lookup
-                comps[i] = _restricted_coboundary_component(B, Lk, Lk1, L.field, scratch[Threads.threadid()])
-            else
-                comps[i] = _restricted_coboundary_component(B, Lk, Lk1, L.field)
-            end
-        end
-    else
+    _foreach_workchunk(nP; threads=threaded_ok) do vertices, _
+        local scratch, Lk, Lk1
         scratch = use_lookup ? _ActiveIndexLookupScratch(size(B, 1)) : nothing
-        @inbounds for i in 1:nP
+        @inbounds for i in vertices
             Lk = active_k[i]
             Lk1 = active_k1[i]
-            if use_lookup
-                comps[i] = _restricted_coboundary_component(B, Lk, Lk1, L.field, scratch)
-            else
-                comps[i] = _restricted_coboundary_component(B, Lk, Lk1, L.field)
-            end
+            comps[i] = use_lookup ?
+                _restricted_boundary_component(B, Lk, Lk1, L.field, scratch) :
+                _restricted_boundary_component(B, Lk, Lk1, L.field)
         end
     end
     return comps
@@ -4129,8 +4538,8 @@ function _lazy_diff_idx!(L::LazyModuleCochainComplex, k::Int)
     d = L.diffs[k]
     if d === nothing
         K = coeff_type(L.field)
-        dom = _lazy_term_idx!(L, k)
-        cod = _lazy_term_idx!(L, k + 1)
+        dom = _lazy_term_idx!(L, k + 1)
+        cod = _lazy_term_idx!(L, k)
         if nnz(L.boundaries[k]) == 0
             d = Modules.zero_morphism(dom, cod)
         else
@@ -4146,8 +4555,7 @@ function _lazy_term(L::LazyModuleCochainComplex, t::Int)
     if t < L.tmin || t > L.tmax
         return Modules.zero_pmodule(L.P; field=L.field)
     end
-    idx = t - L.tmin + 1
-    return _lazy_term_idx!(L, idx)
+    return _lazy_term_idx!(L, 1 - t)
 end
 
 @inline function _lazy_term_dims_idx!(L::LazyModuleCochainComplex, idx::Int)
@@ -4266,7 +4674,7 @@ function _euler_dims_from_lazy_chain_1d(L::LazyModuleCochainComplex)
     orientation = L.orientation[1]
     @inbounds for idx in 1:nd
         births = L.births_by_dim[idx]
-        t = L.tmin + idx - 1
+        t = 1 - idx
         sgn = isodd(t) ? -1 : 1
         if births isa Vector{NTuple{1,Int}}
             _accumulate_euler_dims_chain_1d!(chi, scratch, births, sgn, orientation)
@@ -4284,7 +4692,7 @@ function _euler_dims_from_lazy(L::LazyModuleCochainComplex)
     chi = zeros(Int, nvertices(L.P))
     @inbounds for idx in 1:nd
         dims = _lazy_term_dims_idx!(L, idx)
-        t = L.tmin + idx - 1
+        t = 1 - idx
         sgn = isodd(t) ? -1 : 1
         for u in eachindex(chi)
             chi[u] += sgn * dims[u]
@@ -4352,7 +4760,7 @@ function _euler_signed_measure_from_lazy_chain_1d(L::LazyModuleCochainComplex,
     delta = zeros(Int, length(ax1))
     @inbounds for idx in eachindex(L.births_by_dim)
         births = L.births_by_dim[idx]
-        t = L.tmin + idx - 1
+        t = 1 - idx
         sgn = isodd(t) ? -1 : 1
         if births isa Vector{NTuple{1,Int}}
             _accumulate_euler_measure_chain_1d!(delta, births, sgn)
@@ -4394,7 +4802,7 @@ function _euler_signed_measure_from_lazy_grid_2d(L::LazyModuleCochainComplex,
 
     @inbounds for idx in eachindex(L.births_by_dim)
         births = L.births_by_dim[idx]::Vector{NTuple{2,Int}}
-        t = L.tmin + idx - 1
+        t = 1 - idx
         sgn = isodd(t) ? -1 : 1
         for bc in births
             i, j = bc
@@ -4433,8 +4841,7 @@ function _lazy_diff(L::LazyModuleCochainComplex, t::Int)
     if t < L.tmin || t >= L.tmax
         return Modules.zero_morphism(_lazy_term(L, t), _lazy_term(L, t + 1))
     end
-    idx = t - L.tmin + 1
-    return _lazy_diff_idx!(L, idx)
+    return _lazy_diff_idx!(L, -t)
 end
 
 mutable struct _LazyEncodedModule
@@ -4444,6 +4851,9 @@ mutable struct _LazyEncodedModule
     dims::Any
 end
 
+_provenance_field(M::_LazyEncodedModule) = M.lazy.field
+
+
 @inline function _lazy_encoded_module_from_lazy(lazy::LazyModuleCochainComplex, degree::Int)
     return _LazyEncodedModule(lazy, degree, nothing, nothing)
 end
@@ -4452,6 +4862,7 @@ function _materialize_lazy_module!(M::_LazyEncodedModule)
     if M.cached_module === nothing
         M.cached_module = _cohomology_module_from_lazy(M.lazy, M.degree)
     end
+    M.dims = M.cached_module.dims
     return M.cached_module
 end
 
@@ -4467,9 +4878,7 @@ module_dims(M::_LazyEncodedModule) = _lazy_encoded_module_dims!(M)
 
 _materialize_complex(L::LazyModuleCochainComplex) = _materialize_cochain(L; check=true)
 
-function change_field(L::LazyModuleCochainComplex, field::AbstractCoeffField)
-    return change_field(_materialize_cochain(L; check=true), field)
-end
+include("data_ingestion/inspection.jl")
 
 @inline function _uf_find!(parent::Vector{Int}, x::Int)
     @inbounds while parent[x] != x
@@ -4531,7 +4940,7 @@ end
     nP = nvertices(L.P)
     nP >= _COHOMOLOGY_DEGREE_LOCAL_T1_MIN_POS_VERTICES[] || return false
 
-    idx1 = 1 - L.tmin + 1
+    idx1 = 2
     (1 <= idx1 <= length(L.active_by_dim)) || return false
     active1, _ = _lazy_ensure_active!(L, idx1)
     total_active1 = _sum_nested_lengths(active1)
@@ -4593,6 +5002,7 @@ function _edge_endpoints_from_boundary(B::SparseMatrixCSC{Int,Int})
     ne = size(B, 2)
     colptr = B.colptr
     rows = rowvals(B)
+    vals = nonzeros(B)
     endpoints = Vector{NTuple{2,Int}}(undef, ne)
     @inbounds for e in 1:ne
         lo = colptr[e]
@@ -4600,6 +5010,11 @@ function _edge_endpoints_from_boundary(B::SparseMatrixCSC{Int,Int})
         if (hi - lo + 1) != 2
             return nothing
         end
+        # Union-find computes H0 only for ordinary oriented edges. Weighted
+        # columns may vanish in positive characteristic, and equal signs need
+        # field-aware quotient maps rather than identification of endpoints.
+        ((vals[lo] == 1 && vals[hi] == -1) ||
+         (vals[lo] == -1 && vals[hi] == 1)) || return nothing
         a = rows[lo]
         b = rows[lo + 1]
         if a == b
@@ -4709,18 +5124,10 @@ function _cohomology_module_h0_unionfind_from_lazy(
     n0_global = isempty(L.boundaries) ? 0 : size(L.boundaries[1], 1)
     use_lookup = n0_global > 0 && n0_global <= _ACTIVE_INDEX_TABLE_MAX_ROWS[]
     threaded_ok = Threads.nthreads() > 1 && nP >= _LAZY_DIFF_THREADS_MIN_VERTICES[]
-    if threaded_ok
-        lookup = use_lookup ? [_ActiveIndexLookupScratch(n0_global) for _ in 1:Threads.nthreads()] : nothing
-        Threads.@threads :static for i in 1:nP
-            lk = use_lookup ? lookup[Threads.threadid()] : nothing
-            loc, reps = _h0_components_unionfind_vertex(active0[i], active1[i], edge_endpoints; lookup=lk)
-            comp_of_local[i] = loc
-            comp_reps[i] = reps
-            dims[i] = length(reps)
-        end
-    else
-        lookup = use_lookup ? _ActiveIndexLookupScratch(n0_global) : nothing
-        @inbounds for i in 1:nP
+    _foreach_workchunk(nP; threads=threaded_ok) do vertices, _
+        local loc, reps
+        local lookup = use_lookup ? _ActiveIndexLookupScratch(n0_global) : nothing
+        @inbounds for i in vertices
             loc, reps = _h0_components_unionfind_vertex(active0[i], active1[i], edge_endpoints; lookup=lookup)
             comp_of_local[i] = loc
             comp_reps[i] = reps
@@ -4787,16 +5194,10 @@ function _cohomology_dims_h0_unionfind_from_lazy(
     n0_global = isempty(L.boundaries) ? 0 : size(L.boundaries[1], 1)
     use_lookup = n0_global > 0 && n0_global <= _ACTIVE_INDEX_TABLE_MAX_ROWS[]
     threaded_ok = Threads.nthreads() > 1 && nP >= _LAZY_DIFF_THREADS_MIN_VERTICES[]
-    if threaded_ok
-        lookup = use_lookup ? [_ActiveIndexLookupScratch(n0_global) for _ in 1:Threads.nthreads()] : nothing
-        Threads.@threads :static for i in 1:nP
-            lk = use_lookup ? lookup[Threads.threadid()] : nothing
-            _, reps = _h0_components_unionfind_vertex(active0[i], active1[i], edge_endpoints; lookup=lk)
-            dims[i] = length(reps)
-        end
-    else
+    _foreach_workchunk(nP; threads=threaded_ok) do vertices, _
+        local lookup, _, reps
         lookup = use_lookup ? _ActiveIndexLookupScratch(n0_global) : nothing
-        @inbounds for i in 1:nP
+        @inbounds for i in vertices
             _, reps = _h0_components_unionfind_vertex(active0[i], active1[i], edge_endpoints; lookup=lookup)
             dims[i] = length(reps)
         end
@@ -4957,26 +5358,27 @@ function _h0_module_chain_sweep(P::AbstractPoset,
     return PModule{K}(P, dims, store; field=field)
 end
 
-@inline function _line_time_from_grade(grade::NTuple{N,<:Real},
+# Exact coordinates remain exact through straight-line restriction. Infinity is
+# only an endpoint sentinel, never a finite grade coerced to floating point.
+@inline function _line_time_from_grade(grade::NTuple{N,G},
                                        x0::AbstractVector{<:Real},
-                                       dir::AbstractVector{<:Real};
-                                       atol::Float64=1e-12) where {N}
+                                       dir::AbstractVector{<:Real}) where {N,G<:Real}
     length(x0) == N || return Inf
     length(dir) == N || return Inf
+    T = G <: Union{AlgebraicReal,Rational} ? AlgebraicReal :
+        promote_type(Float64, eltype(x0), eltype(dir))
     t = -Inf
     has_positive = false
     @inbounds for k in 1:N
-        dk = Float64(dir[k])
-        gk = Float64(grade[k])
-        xk = Float64(x0[k])
-        if dk > atol
+        dk, gk, xk = T(dir[k]), T(grade[k]), T(x0[k])
+        if dk > 0
             has_positive = true
             tk = (gk - xk) / dk
             tk > t && (t = tk)
-        elseif dk < -atol
+        elseif dk < 0
             return Inf
         else
-            gk <= xk + atol || return Inf
+            gk <= xk || return Inf
         end
     end
     return has_positive ? t : Inf
@@ -4984,65 +5386,44 @@ end
 
 @inline function _line_time_from_grade(grade::AbstractVector{<:NTuple{N,<:Real}},
                                        x0::AbstractVector{<:Real},
-                                       dir::AbstractVector{<:Real};
-                                       atol::Float64=1e-12) where {N}
-    isempty(grade) && return Inf
+                                       dir::AbstractVector{<:Real}) where {N}
     t = Inf
     @inbounds for g in grade
-        tg = _line_time_from_grade(g, x0, dir; atol=atol)
+        tg = _line_time_from_grade(g, x0, dir)
         tg < t && (t = tg)
     end
     return t
 end
 
-@inline function _normalize_line_direction(dir, nd::Int; atol::Float64=1e-12)
-    vals = if dir isa AbstractVector || dir isa Tuple
-        length(dir) == nd || return nothing
-        Float64[Float64(v) for v in dir]
-    else
-        return nothing
-    end
-    has_positive = false
-    @inbounds for i in eachindex(vals)
-        if vals[i] > atol
-            has_positive = true
-        elseif vals[i] < -atol
-            return nothing
-        else
-            vals[i] = 0.0
-        end
-    end
-    return has_positive ? vals : nothing
+@inline function _normalize_line_direction(dir, nd::Int; scalar_type::Type=Float64)
+    (dir isa AbstractVector || dir isa Tuple) && length(dir) == nd || return nothing
+    all(v -> v isa Real && isfinite(v), dir) || return nothing
+    T = any(v -> v isa Union{AlgebraicReal,Rational}, dir) ? AlgebraicReal : scalar_type
+    vals = T[T(v) for v in dir]
+    any(>(0), vals) && all(>=(0), vals) || return nothing
+    return vals
 end
 
-@inline function _normalize_line_basepoint(x0, nd::Int)
-    if nd == 1 && x0 isa Real
-        return Float64[Float64(x0)]
-    elseif x0 isa AbstractVector || x0 isa Tuple
-        length(x0) == nd || return nothing
-        return Float64[Float64(v) for v in x0]
-    end
-    return nothing
+@inline function _normalize_line_basepoint(x0, nd::Int; scalar_type::Type=Float64)
+    raw = nd == 1 && x0 isa Real ? (x0,) : x0
+    (raw isa AbstractVector || raw isa Tuple) && length(raw) == nd || return nothing
+    all(v -> v isa Real && isfinite(v), raw) || return nothing
+    T = any(v -> v isa Union{AlgebraicReal,Rational}, raw) ? AlgebraicReal : scalar_type
+    return T[T(v) for v in raw]
 end
 
-@inline function _barcode_add_interval!(bc::Dict{Tuple{Float64,Float64},Int},
-                                        birth::Float64,
-                                        death::Float64)
+@inline function _barcode_add_interval!(bc::Dict{Tuple{T,T},Int}, birth, death) where {T<:Real}
     key = (birth, death)
     bc[key] = get(bc, key, 0) + 1
     return bc
 end
 
-@inline function _h0_survivor_root(birth_time::Vector{Float64},
-                                   root_min::Vector{Int},
-                                   ra::Int,
-                                   rb::Int;
-                                   atol::Float64=1e-12)
-    ta = birth_time[ra]
-    tb = birth_time[rb]
-    if ta < tb - atol
+@inline function _h0_survivor_root(birth_time::AbstractVector{<:Real},
+                                   root_min::Vector{Int}, ra::Int, rb::Int)
+    ta, tb = birth_time[ra], birth_time[rb]
+    if ta < tb
         return ra, rb
-    elseif tb < ta - atol
+    elseif tb < ta
         return rb, ra
     elseif root_min[ra] <= root_min[rb]
         return ra, rb
@@ -5051,35 +5432,29 @@ end
     end
 end
 
-function _h0_line_barcode(vertex_times::Vector{Float64},
+function _h0_line_barcode(vertex_times::Vector{T},
                           edge_endpoints::Vector{NTuple{2,Int}},
-                          edge_times::Vector{Float64})
+                          edge_times::Vector{T}) where {T<:Real}
     length(edge_endpoints) == length(edge_times) || return nothing
-    nv = length(vertex_times)
-    ne = length(edge_times)
+    nv, ne = length(vertex_times), length(edge_times)
     parent = collect(1:nv)
     sz = ones(Int, nv)
     root_min = collect(1:nv)
-    birth_time = fill(Inf, nv)
+    birth_time = fill!(similar(vertex_times), Inf)
     active = falses(nv)
-    barcode = Dict{Tuple{Float64,Float64},Int}()
-
-    vperm = sortperm(vertex_times)
-    eperm = sortperm(edge_times)
-    vptr = 1
-    eptr = 1
-    atol = 1e-12
+    barcode = Dict{Tuple{T,T},Int}()
+    vperm, eperm = sortperm(vertex_times), sortperm(edge_times)
+    vptr, eptr = 1, 1
 
     while true
         tv = vptr <= nv ? vertex_times[vperm[vptr]] : Inf
         te = eptr <= ne ? edge_times[eperm[eptr]] : Inf
         t = min(tv, te)
         isfinite(t) || break
-
         while vptr <= nv
             idx = vperm[vptr]
             tv = vertex_times[idx]
-            abs(tv - t) <= atol || break
+            tv == t || break
             active[idx] = true
             parent[idx] = idx
             sz[idx] = 1
@@ -5087,34 +5462,23 @@ function _h0_line_barcode(vertex_times::Vector{Float64},
             birth_time[idx] = tv
             vptr += 1
         end
-
         while eptr <= ne
             idx = eperm[eptr]
             te = edge_times[idx]
-            abs(te - t) <= atol || break
+            te == t || break
             a, b = edge_endpoints[idx]
-            if !(1 <= a <= nv && 1 <= b <= nv)
-                return nothing
-            end
-            if active[a] && active[b]
-                ra = _uf_find!(parent, a)
-                rb = _uf_find!(parent, b)
-                if ra != rb
-                    survive, die = _h0_survivor_root(birth_time, root_min, ra, rb; atol=atol)
-                    _barcode_add_interval!(barcode, birth_time[die], t)
-                    parent[die] = survive
-                    sz[survive] += sz[die]
-                    if root_min[die] < root_min[survive]
-                        root_min[survive] = root_min[die]
-                    end
-                end
-            else
-                return nothing
+            (1 <= a <= nv && 1 <= b <= nv && active[a] && active[b]) || return nothing
+            ra, rb = _uf_find!(parent, a), _uf_find!(parent, b)
+            if ra != rb
+                survive, die = _h0_survivor_root(birth_time, root_min, ra, rb)
+                _barcode_add_interval!(barcode, birth_time[die], t)
+                parent[die] = survive
+                sz[survive] += sz[die]
+                root_min[survive] = min(root_min[survive], root_min[die])
             end
             eptr += 1
         end
     end
-
     seen = falses(nv)
     @inbounds for v in 1:nv
         active[v] || continue
@@ -5126,27 +5490,29 @@ function _h0_line_barcode(vertex_times::Vector{Float64},
     return barcode
 end
 
+@inline function _h0_line_scalar_type(L::LazyModuleCochainComplex)
+    T = eltype(eltype(first(L.grades_by_dim)))
+    return T <: Union{AlgebraicReal,Rational} ? AlgebraicReal : Float64
+end
+
 function _lazy_h0_line_barcode(L::LazyModuleCochainComplex,
                                x0::AbstractVector{<:Real},
                                dir::AbstractVector{<:Real})
-    length(L.grades_by_dim) >= 1 || return Dict{Tuple{Float64,Float64},Int}()
+    T = promote_type(_h0_line_scalar_type(L), eltype(x0), eltype(dir))
+    E = T === AlgebraicReal ? Union{AlgebraicReal,Float64} : Float64
+    length(L.grades_by_dim) >= 1 || return Dict{Tuple{E,E},Int}()
     grades0 = L.grades_by_dim[1]
     grades0 isa Vector || return nothing
-    vertex_times = Float64[_line_time_from_grade(g, x0, dir) for g in grades0]
-
-    edge_endpoints = if length(L.boundaries) >= 1
-        _edge_endpoints_from_boundary(L.boundaries[1])
-    else
-        NTuple{2,Int}[]
-    end
+    vertex_times = E[_line_time_from_grade(g, x0, dir) for g in grades0]
+    edge_endpoints = length(L.boundaries) >= 1 ?
+        _edge_endpoints_from_boundary(L.boundaries[1]) : NTuple{2,Int}[]
     edge_endpoints === nothing && return nothing
-
     if length(L.grades_by_dim) >= 2
         grades1 = L.grades_by_dim[2]
         grades1 isa Vector || return nothing
-        edge_times = Float64[_line_time_from_grade(g, x0, dir) for g in grades1]
+        edge_times = E[_line_time_from_grade(g, x0, dir) for g in grades1]
     else
-        edge_times = Float64[]
+        edge_times = E[]
     end
     return _h0_line_barcode(vertex_times, edge_endpoints, edge_times)
 end
@@ -5313,75 +5679,16 @@ function _cohomology_module_h0_chain_sweep_from_simplex_tree(ST::SimplexTreeMult
     return _h0_module_chain_sweep(P, vertex_births_1, edge_births_1, edge_endpoints; field=field)
 end
 
-function _h0_coboundary_components_from_lazy(L::LazyModuleCochainComplex)
-    nP = nvertices(L.P)
-    K = coeff_type(L.field)
-    active0, _ = _lazy_ensure_active!(L, 1)
-    nd = length(L.grades_by_dim)
-
-    if nd >= 2
-        _lazy_ensure_active!(L, 2)
-        comps = _lazy_diff_components(L, 1; threaded=true)
-        return comps
-    end
-
-    comps = Vector{SparseMatrixCSC{K,Int}}(undef, nP)
-    @inbounds for i in 1:nP
-        comps[i] = spzeros(K, 0, length(active0[i]))
-    end
-    return comps
-end
-
-function _kernel_module_from_vertex_maps(M::PModule{K},
-                                         comps::Vector{MatT}) where {K,MatT<:AbstractMatrix{K}}
-    n = nvertices(M.Q)
-    basisK = Vector{Matrix{K}}(undef, n)
-    K_dims = zeros(Int, n)
-    cc = _get_cover_cache(M.Q)
-    succs = [_succs(cc, u) for u in 1:n]
-    pred_slot_of_succ = u -> _pred_slots_of_succ(cc, u)
-    @inbounds for i in 1:n
-        B = FieldLinAlg.nullspace(M.field, comps[i])
-        basisK[i] = B
-        K_dims[i] = size(B, 2)
-    end
-
-    preds = [_preds(cc, v) for v in 1:n]
-    maps_from_pred = [Vector{Matrix{K}}(undef, length(preds[v])) for v in 1:n]
-    maps_to_succ = [Vector{Matrix{K}}(undef, length(succs[u])) for u in 1:n]
-    @inbounds for u in 1:n
-        su = succs[u]
-        maps_u_M = M.edge_maps.maps_to_succ[u]
-        outu = maps_to_succ[u]
-        for j in eachindex(su)
-            v = su[j]
-            X = if K_dims[u] == 0 || K_dims[v] == 0
-                zeros(K, K_dims[v], K_dims[u])
-            else
-                Im = maps_u_M[j] * basisK[u]
-                FieldLinAlg.solve_fullcolumn(M.field, basisK[v], Im; check_rhs=false)
-            end
-            outu[j] = X
-            ip = pred_slot_of_succ(u)[j]
-            maps_from_pred[v][ip] = X
-        end
-    end
-    storeK = CoverEdgeMapStore{K,Matrix{K}}(preds, succs, maps_from_pred, maps_to_succ, cc.nedges)
-    return PModule{K}(M.Q, K_dims, storeK; field=M.field)
-end
-
+# The covariant H0 module is a cokernel of the edge boundary. Kernel of
+# the vertex coboundary would require contravariant restriction maps.
 function _cohomology_module_h0_lowdim_from_lazy(L::LazyModuleCochainComplex)
-    dom0 = _lazy_term_idx!(L, 1)
-    comps = _h0_coboundary_components_from_lazy(L)
-    return _kernel_module_from_vertex_maps(dom0, comps)
+    H, _ = _cokernel_module(_lazy_diff(L, -1))
+    return H
 end
 
-function _cohomology_module_h1_cokernel_from_lazy(L::LazyModuleCochainComplex)
-    M1 = _lazy_term(L, 1)
-    d0 = _lazy_diff(L, 0)
-    B, iB = image_with_inclusion(d0)
-    H, _ = _cokernel_module(iB)
-    return H
+# A graph has no two-dimensional boundaries, so H1 is ker(partial_1).
+function _cohomology_module_h1_kernel_from_lazy(L::LazyModuleCochainComplex)
+    return kernel_with_inclusion(_lazy_diff(L, -1))[1]
 end
 
 function _identity_structural_morphism(M::PModule{K}) where {K}
@@ -5410,9 +5717,9 @@ end
 
 function _cohomology_module_degree_local_from_lazy(L::LazyModuleCochainComplex, t::Int)
     K = coeff_type(L.field)
-    M = _lazy_term(L, t)
-    d0 = _lazy_diff(L, t - 1)
-    d1 = _lazy_diff(L, t)
+    M = _lazy_term(L, -t)
+    d0 = _lazy_diff(L, -t - 1)
+    d1 = _lazy_diff(L, -t)
 
     Z, iZ = if is_zero_morphism(d1)
         M, _identity_structural_morphism(M)
@@ -5455,25 +5762,13 @@ function _cohomology_module_degree_local_from_lazy(L::LazyModuleCochainComplex, 
 end
 
 function _cohomology_module_from_lazy_generic(L::LazyModuleCochainComplex, t::Int)
+    # Reindex the covariant chain complex by C^{-k}=C_k. Its degree -t
+    # cohomology is precisely H_t, including the genuine inclusion maps.
     K = coeff_type(L.field)
-    terms = Vector{PModule{K}}(undef, 3)
-    terms[1] = _lazy_term(L, t - 1)
-    terms[2] = _lazy_term(L, t)
-    terms[3] = _lazy_term(L, t + 1)
-    diffs = Vector{PMorphism{K}}(undef, 2)
-    diffs[1] = _lazy_diff(L, t - 1)
-    diffs[2] = _lazy_diff(L, t)
-    C_local = ModuleCochainComplex(terms, diffs; tmin=t - 1, check=false)
-    try
-        return cohomology_module(C_local, t)
-    catch
-        # Some exact-field module kernels/cokernels remain sensitive to the
-        # reduced local presentation. Fall back to the fully materialized
-        # cochain complex so the lazy encoding_result path preserves the eager
-        # result contract instead of surfacing an internal solver failure.
-        C_full = _materialize_cochain(L; check=false)
-        return cohomology_module(C_full, t)
-    end
+    terms = PModule{K}[_lazy_term(L, -t - 1), _lazy_term(L, -t), _lazy_term(L, 1 - t)]
+    diffs = PMorphism{K}[_lazy_diff(L, -t - 1), _lazy_diff(L, -t)]
+    C_local = ModuleCochainComplex(terms, diffs; tmin=-t - 1, check=false)
+    return cohomology_module(C_local, -t)
 end
 
 function _boundary_rows_in_field(B::SparseMatrixCSC{Int,Int},
@@ -5734,9 +6029,9 @@ function _rank_dims_from_lazy_diff_monotone_chain_baseline(L::LazyModuleCochainC
             FieldLinAlg.rank_restricted(L.field, Bf, active_rows[p], active_cols[p]; check=false)
         else
             comp = if use_lookup
-                _restricted_coboundary_component(B, active_rows[p], active_cols[p], L.field, lookup)
+                _restricted_boundary_component(B, active_rows[p], active_cols[p], L.field, lookup)
             else
-                _restricted_coboundary_component(B, active_rows[p], active_cols[p], L.field)
+                _restricted_boundary_component(B, active_rows[p], active_cols[p], L.field)
             end
             FieldLinAlg.rank_dim(L.field, comp)
         end
@@ -5829,10 +6124,10 @@ end
 
 function _cohomology_dims_from_lazy(L::LazyModuleCochainComplex, t::Int)
     nP = nvertices(L.P)
-    if t < L.tmin || t > L.tmax
+    if t < 0 || t >= length(L.terms)
         return zeros(Int, nP)
     end
-    if t == 0 && L.tmin == 0
+    if t == 0
         active0, _ = _lazy_ensure_active!(L, 1)
         active1 = if length(L.grades_by_dim) >= 2
             _lazy_ensure_active!(L, 2)[1]
@@ -5844,7 +6139,7 @@ function _cohomology_dims_from_lazy(L::LazyModuleCochainComplex, t::Int)
         duf = _cohomology_dims_h0_unionfind_from_lazy(L, active0, active1)
         duf !== nothing && return duf
     end
-    idx = t - L.tmin + 1
+    idx = t + 1
     active_t, _ = _lazy_ensure_active!(L, idx)
     dims = Vector{Int}(undef, nP)
     @inbounds for i in 1:nP
@@ -5852,7 +6147,7 @@ function _cohomology_dims_from_lazy(L::LazyModuleCochainComplex, t::Int)
     end
 
     rank_dt = zeros(Int, nP)
-    if t < L.tmax
+    if idx < length(L.terms)
         _lazy_ensure_active!(L, idx + 1)
         ranks_fast = _COHOMOLOGY_DIMS_MONOTONE_RANK_FASTPATH[] ?
             _rank_dims_from_lazy_diff_monotone_chain(L, idx) : nothing
@@ -5873,7 +6168,7 @@ function _cohomology_dims_from_lazy(L::LazyModuleCochainComplex, t::Int)
     end
 
     rank_dprev = zeros(Int, nP)
-    if t > L.tmin
+    if t > 0
         _lazy_ensure_active!(L, idx - 1)
         ranks_fast = _COHOMOLOGY_DIMS_MONOTONE_RANK_FASTPATH[] ?
             _rank_dims_from_lazy_diff_monotone_chain(L, idx - 1) : nothing
@@ -5901,40 +6196,26 @@ function _cohomology_dims_from_lazy(L::LazyModuleCochainComplex, t::Int)
 end
 
 function _cohomology_module_from_lazy(L::LazyModuleCochainComplex, t::Int)
-    if t == 0 && L.tmin == 0
+    if t < 0 || t >= length(L.terms)
+        return Modules.zero_pmodule(L.P; field=L.field)
+    end
+    if t == 0
         active0, _ = _lazy_ensure_active!(L, 1)
         active1 = if length(L.grades_by_dim) >= 2
             _lazy_ensure_active!(L, 2)[1]
         else
             [Int[] for _ in 1:nvertices(L.P)]
         end
-        # H0 maps are induced by component merges, not by restricting the
-        # kernel of the vertex coboundary under structural inclusion.  The
-        # union-find path computes those merge maps directly and is therefore
-        # the canonical lazy H0 route whenever the dim-1 boundary looks like a
-        # graph incidence matrix.
+        # Component merges give H0 inclusion maps without linear algebra.
         Muf = _cohomology_module_h0_unionfind_from_lazy(L, active0, active1)
-        if Muf !== nothing
-            return Muf
-        end
+        Muf !== nothing && return Muf
         return _cohomology_module_h0_lowdim_from_lazy(L)
     end
-    if t == 1 && _H1_COKERNEL_FASTPATH[] && L.tmin == 0 && L.tmax <= 1
-        try
-            return _cohomology_module_h1_cokernel_from_lazy(L)
-        catch
-            # Some sparse-restricted module maps can violate strict image solver
-            # checks on this shortcut path; fall back to the canonical generic
-            # cohomology route in that case.
-        end
+    if t == 1 && _H1_KERNEL_FASTPATH[] && length(L.terms) <= 2
+        return _cohomology_module_h1_kernel_from_lazy(L)
     end
     if _use_degree_local_module_fastpath(L, t)
-        try
-            return _cohomology_module_degree_local_from_lazy(L, t)
-        catch
-            # Keep the generic path as the canonical fallback for unusual
-            # complexes where the degree-local shortcut assumptions do not hold.
-        end
+        return _cohomology_module_degree_local_from_lazy(L, t)
     end
     return _cohomology_module_from_lazy_generic(L, t)
 end
@@ -5944,11 +6225,11 @@ function _materialize_cochain(L::LazyModuleCochainComplex; check::Bool=true)
     K = coeff_type(L.field)
     terms = Vector{PModule{K}}(undef, nd)
     for i in 1:nd
-        terms[i] = _lazy_term_idx!(L, i)
+        terms[i] = _lazy_term_idx!(L, nd - i + 1)
     end
     diffs = Vector{PMorphism{K}}(undef, max(0, nd - 1))
     for k in eachindex(diffs)
-        diffs[k] = _lazy_diff_idx!(L, k)
+        diffs[k] = _lazy_diff_idx!(L, nd - k)
     end
     return ModuleCochainComplex(terms, diffs; tmin=L.tmin, check=check)
 end
@@ -6076,38 +6357,19 @@ function _cochain_complex_from_grades_and_boundaries(grades_by_dim::Vector,
                                                      orientation::NTuple{N,Int}=ntuple(_ -> 1, N),
                                                      field::AbstractCoeffField=QQField(),
                                                      multicritical::Symbol=:union) where {N,T}
-    sizes = ntuple(i -> length(axes[i]), N)
-    vertex_idxs = _grid_tuples(sizes)
-
-    active_by_dim = Vector{Vector{Vector{Int}}}(undef, length(grades_by_dim))
-    for d in 1:length(grades_by_dim)
-        births_d = _birth_indices(grades_by_dim[d], axes, orientation)
-        active_by_dim[d] = _active_lists(births_d, vertex_idxs, orientation; multicritical=multicritical)
-    end
-
-    K = coeff_type(field)
-    terms = Vector{PModule{K}}(undef, length(grades_by_dim))
-    for d in 1:length(grades_by_dim)
-        terms[d] = _pmodule_from_active_lists(P, active_by_dim[d]; field=field)
-    end
-
-    diffs = PMorphism{K}[]
-    boundaries = _normalize_cochain_boundaries(grades_by_dim, boundaries_in)
-
-    for k in 1:length(boundaries)
-        B = boundaries[k]  # boundary C_{k+1} -> C_k
-        comps = Vector{SparseMatrixCSC{K,Int}}(undef, nvertices(P))
-        for i in 1:nvertices(P)
-            Lk = active_by_dim[k][i]
-            Lk1 = active_by_dim[k + 1][i]
-            comps[i] = _restricted_coboundary_component(B, Lk, Lk1, field)
-        end
-        push!(diffs, PMorphism{K}(terms[k], terms[k + 1], comps))
-    end
-
-    return ModuleCochainComplex(terms, diffs; tmin=0, check=true)
+    L = _lazy_cochain_complex_from_grades_and_boundaries(
+        grades_by_dim, boundaries_in, P, axes; orientation=orientation,
+        field=field, multicritical=multicritical)
+    return _materialize_cochain(L; check=true)
 end
 
+"""
+    cochain_complex_from_graded_complex(G, P, axes; field=QQField(), ...)
+
+Build the covariant cell-chain complex as a cochain complex in nonpositive
+degrees: `C^{-k}=C_k` and `d^{-k}=partial_k`. Its degree `-k` cohomology is
+the persistent homology module `H_k` with inclusion-induced maps.
+"""
 function cochain_complex_from_graded_complex(G::Union{GradedComplex,MultiCriticalGradedComplex},
                                              P::AbstractPoset,
                                              axes::NTuple{N,Vector{T}};
@@ -6249,6 +6511,12 @@ function _one_critical_grades_by_dim(grades_by_dim::Vector{Vector{Vector{NTuple{
     return out
 end
 
+"""
+    cochain_complex_from_simplex_tree(ST, P, axes; field=QQField(), ...)
+
+Build simplicial chains with their covariant inclusion maps, reindexed by
+`C^{-k}=C_k`. Compute persistent `H_k` as `cohomology_module(C, -k)`.
+"""
 function cochain_complex_from_simplex_tree(ST::SimplexTreeMulti{N,T},
                                            P::AbstractPoset,
                                            axes::NTuple{N,Vector{A}};
@@ -6474,7 +6742,7 @@ end
 
 function _simplex_tree_unique_grade_storage(ST::SimplexTreeMulti{N,T}) where {N,T}
     ns = simplex_count(ST)
-    isempty(ST.grade_data) && error("simplex-tree: each simplex must have at least one grade.")
+    ns > 0 && isempty(ST.grade_data) && error("simplex-tree: each simplex must have at least one grade.")
     out_offsets = Vector{Int}(undef, ns + 1)
     out_offsets[1] = 1
     out_data = Vector{NTuple{N,T}}()
@@ -6506,7 +6774,6 @@ function _simplex_tree_multi_from_simplices_packed(simplices::Vector{Vector{Vect
                                                    grade_data::AbstractVector{<:NTuple{N,T}}) where {N,T}
     isempty(simplices) && error("simplex-tree: simplices cannot be empty.")
     total = sum(length, simplices)
-    total > 0 || error("simplex-tree: simplices cannot be empty.")
     length(grade_offsets) == total + 1 ||
         error("simplex-tree grade-set length mismatch: expected $(total), got $(length(grade_offsets) - 1).")
 
@@ -6516,7 +6783,7 @@ function _simplex_tree_multi_from_simplices_packed(simplices::Vector{Vector{Vect
     dim_offsets = Int[1]
     sizehint!(simplex_dims, total)
     sizehint!(simplex_offsets, total + 1)
-    sizehint!(simplex_vertices_flat, sum(length, Iterators.flatten(simplices)))
+    sizehint!(simplex_vertices_flat, sum(length, Iterators.flatten(simplices); init=0))
 
     gidx = 1
     for d in eachindex(simplices)
@@ -6554,10 +6821,10 @@ function _simplex_tree_multi_from_simplices(simplices::Vector{Vector{Vector{Int}
                                             grades::Vector)
     isempty(simplices) && error("simplex-tree: simplices cannot be empty.")
     total = sum(length, simplices)
-    total > 0 || error("simplex-tree: simplices cannot be empty.")
     grade_sets = _simplex_tree_grade_sets(simplices, grades)
-    N = length(grade_sets[1][1])
-    T = eltype(grade_sets[1][1])
+    grade_type = eltype(eltype(grade_sets))
+    N = fieldcount(grade_type)
+    T = eltype(grade_type)
 
     simplex_offsets = Int[1]
     simplex_vertices_flat = Int[]
@@ -6695,6 +6962,7 @@ function _materialize_simplicial_output(simplices::Vector{Vector{Vector{Int}}},
                                         grades::Vector{<:NTuple{N,T}},
                                         spec::FiltrationSpec;
                                         return_simplex_tree::Bool=false) where {N,T}
+    _construction_check_counts!(map(length, simplices), spec)
     orientation = get(spec.params, :orientation, ntuple(_ -> 1, N))
     if return_simplex_tree
         ST = _simplex_tree_multi_from_simplices(simplices, grades)
@@ -6715,6 +6983,7 @@ function _materialize_simplicial_output(simplices::Vector{Vector{Vector{Int}}},
                                         grades::Vector{<:AbstractVector{<:NTuple{N,T}}},
                                         spec::FiltrationSpec;
                                         return_simplex_tree::Bool=false) where {N,T}
+    _construction_check_counts!(map(length, simplices), spec)
     orientation = get(spec.params, :orientation, ntuple(_ -> 1, N))
     if return_simplex_tree
         ST = _simplex_tree_multi_from_simplices(simplices, grades)
@@ -7090,11 +7359,15 @@ function _point_cloud_knn_graph(points::AbstractVector{<:AbstractVector{<:Real}}
         impl = _POINTCLOUD_KNN_GRAPH_IMPL[]
         if impl !== nothing
             out = impl(points, k; backend=backend0, approx_candidates=approx_candidates)
-            out === nothing || return out
+            out === nothing || begin
+                _record_ingestion_backend(:knn_graph, backend0)
+                return out
+            end
         elseif backend0 == :nearestneighbors || backend0 == :approx
-            throw(ArgumentError("PointCloud nn_backend=$(backend0) requires NearestNeighbors extension."))
+            throw(ArgumentError("PointCloud nn_backend=$(backend0) requires NearestNeighbors extension. Install it with Pkg.add(\"NearestNeighbors\") and run `using NearestNeighbors`, or use nn_backend=:bruteforce."))
         end
     end
+    _record_ingestion_backend(:knn_graph, :bruteforce)
     return _knn_graph_bruteforce(points, k)
 end
 
@@ -7112,6 +7385,7 @@ function _point_cloud_knn_graph(points::AbstractMatrix{<:Real},
                                       backend=backend0,
                                       approx_candidates=approx_candidates)
     end
+    _record_ingestion_backend(:knn_graph, :bruteforce)
     return _knn_graph_bruteforce(points, k)
 end
 
@@ -7128,16 +7402,23 @@ function _point_cloud_knn_edges(points::AbstractVector{<:AbstractVector{<:Real}}
         impl = _POINTCLOUD_KNN_GRAPH_EDGES_IMPL[]
         if impl !== nothing
             out = impl(points, k; backend=backend0, approx_candidates=approx_candidates)
-            out === nothing || return out
+            out === nothing || begin
+                _record_ingestion_backend(:knn_graph, backend0)
+                return out
+            end
         end
         impl_full = _POINTCLOUD_KNN_GRAPH_IMPL[]
         if impl_full !== nothing
             out_full = impl_full(points, k; backend=backend0, approx_candidates=approx_candidates)
-            out_full === nothing || return out_full[1]
+            out_full === nothing || begin
+                _record_ingestion_backend(:knn_graph, backend0)
+                return out_full[1]
+            end
         elseif backend0 == :nearestneighbors || backend0 == :approx
-            throw(ArgumentError("PointCloud nn_backend=$(backend0) requires NearestNeighbors extension."))
+            throw(ArgumentError("PointCloud nn_backend=$(backend0) requires NearestNeighbors extension. Install it with Pkg.add(\"NearestNeighbors\") and run `using NearestNeighbors`, or use nn_backend=:bruteforce."))
         end
     end
+    _record_ingestion_backend(:knn_graph, :bruteforce)
     return _knn_graph_bruteforce_edges_only(points, k)
 end
 
@@ -7155,6 +7436,7 @@ function _point_cloud_knn_edges(points::AbstractMatrix{<:Real},
                                       backend=backend0,
                                       approx_candidates=approx_candidates)
     end
+    _record_ingestion_backend(:knn_graph, :bruteforce)
     return _knn_graph_bruteforce_edges_only(points, k)
 end
 
@@ -7172,11 +7454,15 @@ function _point_cloud_radius_graph(points::AbstractVector{<:AbstractVector{<:Rea
         impl = _POINTCLOUD_RADIUS_GRAPH_IMPL[]
         if impl !== nothing
             out = impl(points, r; backend=backend0, approx_candidates=approx_candidates)
-            out === nothing || return out
+            out === nothing || begin
+                _record_ingestion_backend(:radius_graph, backend0)
+                return out
+            end
         elseif backend0 == :nearestneighbors || backend0 == :approx
-            throw(ArgumentError("PointCloud nn_backend=$(backend0) requires NearestNeighbors extension."))
+            throw(ArgumentError("PointCloud nn_backend=$(backend0) requires NearestNeighbors extension. Install it with Pkg.add(\"NearestNeighbors\") and run `using NearestNeighbors`, or use nn_backend=:bruteforce."))
         end
     end
+    _record_ingestion_backend(:radius_graph, :bruteforce)
     return _radius_graph_bruteforce(points, r)
 end
 
@@ -7193,6 +7479,7 @@ function _point_cloud_radius_graph(points::AbstractMatrix{<:Real},
                                          backend=backend0,
                                          approx_candidates=approx_candidates)
     end
+    _record_ingestion_backend(:radius_graph, :bruteforce)
     return _radius_graph_bruteforce(points, r)
 end
 
@@ -7208,16 +7495,23 @@ function _point_cloud_radius_edges(points::AbstractVector{<:AbstractVector{<:Rea
         impl = _POINTCLOUD_RADIUS_GRAPH_EDGES_IMPL[]
         if impl !== nothing
             out = impl(points, r; backend=backend0, approx_candidates=approx_candidates)
-            out === nothing || return out
+            out === nothing || begin
+                _record_ingestion_backend(:radius_graph, backend0)
+                return out
+            end
         end
         impl_full = _POINTCLOUD_RADIUS_GRAPH_IMPL[]
         if impl_full !== nothing
             out_full = impl_full(points, r; backend=backend0, approx_candidates=approx_candidates)
-            out_full === nothing || return out_full[1]
+            out_full === nothing || begin
+                _record_ingestion_backend(:radius_graph, backend0)
+                return out_full[1]
+            end
         elseif backend0 == :nearestneighbors || backend0 == :approx
-            throw(ArgumentError("PointCloud nn_backend=$(backend0) requires NearestNeighbors extension."))
+            throw(ArgumentError("PointCloud nn_backend=$(backend0) requires NearestNeighbors extension. Install it with Pkg.add(\"NearestNeighbors\") and run `using NearestNeighbors`, or use nn_backend=:bruteforce."))
         end
     end
+    _record_ingestion_backend(:radius_graph, :bruteforce)
     return _radius_graph_bruteforce_edges_only(points, r)
 end
 
@@ -7234,6 +7528,7 @@ function _point_cloud_radius_edges(points::AbstractMatrix{<:Real},
                                          backend=backend0,
                                          approx_candidates=approx_candidates)
     end
+    _record_ingestion_backend(:radius_graph, :bruteforce)
     return _radius_graph_bruteforce_edges_only(points, r)
 end
 
@@ -7472,6 +7767,7 @@ function _materialize_point_cloud_packed(n::Int,
     max_dim = clamp(max_dim, 0, 2)
     ne = max_dim >= 1 ? length(edges) : 0
     nt = max_dim >= 2 ? length(triangles) : 0
+    _construction_check_counts!((n, ne, nt), spec)
     expected = n + ne + nt
     length(grades) == expected ||
         error("materialize_point_cloud_packed: grades length mismatch, expected $(expected), got $(length(grades)).")
@@ -7510,6 +7806,7 @@ function _materialize_point_cloud_packed_with_cached_boundaries(n::Int,
     packed = entry.packed
     ne = max_dim >= 1 ? length(packed.edges) : 0
     nt = max_dim >= 2 ? length(packed.triangles) : 0
+    _construction_check_counts!((n, ne, nt), spec)
     expected = n + ne + nt
     length(grades) == expected ||
         error("materialize_point_cloud_packed_with_cached_boundaries: grades length mismatch, expected $(expected), got $(length(grades)).")
@@ -7644,39 +7941,6 @@ function _point_cloud_edges_within_radius(points::AbstractMatrix{<:Real},
     return edges, dists
 end
 
-function _point_cloud_edges_within_radius_edges_only(points::AbstractVector{<:AbstractVector{<:Real}},
-                                                     radius::Float64)
-    n = length(points)
-    n <= 1 && return NTuple{2,Int}[]
-    isfinite(radius) || return _complete_point_cloud_edges(n)
-    edges = NTuple{2,Int}[]
-    sizehint!(edges, min(max(0, 4 * n), 200_000))
-    @inbounds for i in 1:(n - 1)
-        pi = points[i]
-        for j in (i + 1):n
-            _euclidean_distance(pi, points[j]) <= radius || continue
-            push!(edges, (i, j))
-        end
-    end
-    return edges
-end
-
-function _point_cloud_edges_within_radius_edges_only(points::AbstractMatrix{<:Real},
-                                                     radius::Float64)
-    n = size(points, 1)
-    n <= 1 && return NTuple{2,Int}[]
-    isfinite(radius) || return _complete_point_cloud_edges(n)
-    edges = NTuple{2,Int}[]
-    sizehint!(edges, min(max(0, 4 * n), 200_000))
-    @inbounds for i in 1:(n - 1)
-        for j in (i + 1):n
-            _euclidean_distance(points, i, j) <= radius || continue
-            push!(edges, (i, j))
-        end
-    end
-    return edges
-end
-
 function _point_cloud_edges_within_radius_indexed(points::AbstractVector{<:AbstractVector{<:Real}},
                                                   idxs::AbstractVector{Int},
                                                   radius::Float64)
@@ -7719,25 +7983,29 @@ function _point_cloud_edges_within_radius_indexed(points::AbstractMatrix{<:Real}
     return edges, dists
 end
 
-@inline _point_cloud_ref_id(points::MatrixRowsView) = UInt(objectid(getfield(points, :mat)))
-@inline _point_cloud_ref_id(points::AbstractMatrix{<:Real}) = UInt(objectid(points))
-@inline _point_cloud_ref_id(points) = UInt(objectid(points))
+# Packed matrices and their row views describe the same indexed coordinates.
+# Freeze that canonical storage in cache keys so later edits and equal hashes
+# cannot reuse a graph or a triangulation belonging to another point cloud.
+@inline _point_cloud_cache_coordinates(points::MatrixRowsView) = getfield(points, :mat)
+@inline _point_cloud_cache_coordinates(points) = points
 
 @inline function _landmark_radius_cache_key(points,
-                                            landmark_hash::UInt,
+                                            landmarks::AbstractVector{Int},
                                             backend::Symbol,
                                             dim_bucket::Int,
                                             radius::Float64,
                                             approx_candidates::Int)
-    return (
-        :landmark_radius_subgraph,
-        _point_cloud_ref_id(points),
-        landmark_hash,
+    coordinates = _point_cloud_cache_coordinates(points)
+    selected = coordinates isa AbstractMatrix ? view(coordinates, landmarks, :) :
+                                                view(coordinates, landmarks)
+    return (:landmark_radius_subgraph, _structural_cache_key((
+        selected,
+        landmarks,
         backend,
         dim_bucket,
-        UInt(hash(radius)),
+        radius,
         Int(approx_candidates),
-    )
+    )))
 end
 
 function _landmark_radius_subgraph_cached(points::AbstractVector{<:AbstractVector{<:Real}},
@@ -7750,10 +8018,13 @@ function _landmark_radius_subgraph_cached(points::AbstractVector{<:AbstractVecto
     d = length(points[landmarks[1]])
     backend_key = _pointcloud_nn_backend(spec)
     approx_candidates = _pointcloud_nn_approx_candidates(spec)
-    lhash = UInt(hash(landmarks))
+    if cache === nothing
+        edges, dists = _point_cloud_edges_within_radius_indexed(points, landmarks, radius)
+        return (edges=edges, dists=dists)
+    end
     key = _landmark_radius_cache_key(
         points,
-        lhash,
+        landmarks,
         backend_key,
         _pointcloud_bucket_value(d),
         radius,
@@ -7777,10 +8048,13 @@ function _landmark_radius_subgraph_cached(points::AbstractMatrix{<:Real},
     d = size(points, 2)
     backend_key = _pointcloud_nn_backend(spec)
     approx_candidates = _pointcloud_nn_approx_candidates(spec)
-    lhash = UInt(hash(landmarks))
+    if cache === nothing
+        edges, dists = _point_cloud_edges_within_radius_indexed(points, landmarks, radius)
+        return (edges=edges, dists=dists)
+    end
     key = _landmark_radius_cache_key(
         points,
-        lhash,
+        landmarks,
         backend_key,
         _pointcloud_bucket_value(d),
         radius,
@@ -7900,11 +8174,15 @@ function _point_cloud_knn_distances(points::AbstractVector{<:AbstractVector{<:Re
         impl = _POINTCLOUD_KNN_DISTANCES_IMPL[]
         if impl !== nothing
             out = impl(points, k_eff; backend=backend0, approx_candidates=approx_candidates)
-            out === nothing || return out
+            out === nothing || begin
+                _record_ingestion_backend(:knn_distances, backend0)
+                return out
+            end
         elseif backend0 == :nearestneighbors || backend0 == :approx
-            throw(ArgumentError("PointCloud nn_backend=$(backend0) requires NearestNeighbors extension."))
+            throw(ArgumentError("PointCloud nn_backend=$(backend0) requires NearestNeighbors extension. Install it with Pkg.add(\"NearestNeighbors\") and run `using NearestNeighbors`, or use nn_backend=:bruteforce."))
         end
     end
+    _record_ingestion_backend(:knn_distances, :bruteforce)
     _, _, kdist = _knn_graph_bruteforce(points, k_eff)
     return kdist
 end
@@ -7925,6 +8203,7 @@ function _point_cloud_knn_distances(points::AbstractMatrix{<:Real},
                                           backend=backend0,
                                           approx_candidates=approx_candidates)
     end
+    _record_ingestion_backend(:knn_distances, :bruteforce)
     _, _, kdist = _knn_graph_bruteforce(points, k_eff)
     return kdist
 end
@@ -7950,11 +8229,15 @@ function _point_cloud_dtm_values(points::AbstractVector{<:AbstractVector{<:Real}
         impl = _POINTCLOUD_DTM_VALUES_IMPL[]
         if impl !== nothing
             out = impl(points, Float64(dtm_mass); backend=backend0, approx_candidates=approx_candidates)
-            out === nothing || return out
+            out === nothing || begin
+                _record_ingestion_backend(:dtm, backend0)
+                return out
+            end
         elseif backend0 == :nearestneighbors || backend0 == :approx
-            throw(ArgumentError("PointCloud nn_backend=$(backend0) requires NearestNeighbors extension."))
+            throw(ArgumentError("PointCloud nn_backend=$(backend0) requires NearestNeighbors extension. Install it with Pkg.add(\"NearestNeighbors\") and run `using NearestNeighbors`, or use nn_backend=:bruteforce."))
         end
     end
+    _record_ingestion_backend(:dtm, :bruteforce)
     vals = Vector{Float64}(undef, n)
     idxs = fill(0, k_eff)
     dtmp = fill(Inf, k_eff)
@@ -7983,6 +8266,7 @@ function _point_cloud_dtm_values(points::AbstractMatrix{<:Real},
                                        backend=backend0,
                                        approx_candidates=approx_candidates)
     end
+    _record_ingestion_backend(:dtm, :bruteforce)
     vals = Vector{Float64}(undef, n)
     idxs = fill(0, k_eff)
     dtmp = fill(Inf, k_eff)
@@ -8197,7 +8481,7 @@ function _point_vertex_values(points::AbstractVector{<:AbstractVector{<:Real}},
         f = spec.params[:vertex_function]
         return Float64[Float64(f(points[i], i)) for i in 1:n]
     end
-    error("function-Rips requires vertex_values or vertex_function.")
+    throw(ArgumentError("Filtration kind=:$(spec.kind) requires vertex_values or vertex_function."))
 end
 
 function _point_vertex_values(points::AbstractMatrix{<:Real},
@@ -8218,7 +8502,7 @@ function _point_vertex_values(points::AbstractMatrix{<:Real},
         f = spec.params[:vertex_function]
         return Float64[Float64(f(view(points, i, :), i)) for i in 1:n]
     end
-    error("function-Rips requires vertex_values or vertex_function.")
+    throw(ArgumentError("Filtration kind=:$(spec.kind) requires vertex_values or vertex_function."))
 end
 
 function _point_vertex_values_or_default(points::AbstractVector{<:AbstractVector{<:Real}},
@@ -8295,26 +8579,120 @@ function _codensity_function_rips_spec(data::PointCloud, spec::FiltrationSpec)
     return FiltrationSpec(; kind=:function_rips, params...)
 end
 
-@inline function _orient2d(a::AbstractVector{<:Real}, b::AbstractVector{<:Real}, c::AbstractVector{<:Real})
-    return (Float64(b[1]) - Float64(a[1])) * (Float64(c[2]) - Float64(a[2])) -
-           (Float64(b[2]) - Float64(a[2])) * (Float64(c[1]) - Float64(a[1]))
+# Floating determinant filters follow the orientation/incircle approach of
+# Shewchuk (1997), https://www.cs.cmu.edu/~quake/robust.html. Uncertain signs
+# fall back to exact rationals of the represented Float64 coordinates. In
+# particular, geometric ties are never decided by an absolute tolerance.
+@inline function _half_coordinate_difference(a::Real, b::Real)
+    x, y = Float64(a), Float64(b)
+    delta = x - y
+    return isfinite(delta) ? delta / 2 : x / 2 - y / 2
 end
 
-function _circumcircle_2d(a::AbstractVector{<:Real},
-                          b::AbstractVector{<:Real},
-                          c::AbstractVector{<:Real}; atol::Float64=1e-12)
-    ax, ay = Float64(a[1]), Float64(a[2])
-    bx, by = Float64(b[1]), Float64(b[2])
-    cx, cy = Float64(c[1]), Float64(c[2])
-    d = 2.0 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by))
-    abs(d) <= atol && return nothing
-    aa = ax * ax + ay * ay
-    bb = bx * bx + by * by
-    cc = cx * cx + cy * cy
-    ux = (aa * (by - cy) + bb * (cy - ay) + cc * (ay - by)) / d
-    uy = (aa * (cx - bx) + bb * (ax - cx) + cc * (bx - ax)) / d
-    r2 = (ux - ax)^2 + (uy - ay)^2
-    return (ux, uy, r2)
+@inline _delaunay_exact_xy(p) = (Rational{BigInt}(Float64(p[1])), Rational{BigInt}(Float64(p[2])))
+
+@inline function _delaunay_orient_sign(a, b, c)
+    ax = Float64(a[1]) - Float64(c[1])
+    ay = Float64(a[2]) - Float64(c[2])
+    bx = Float64(b[1]) - Float64(c[1])
+    by = Float64(b[2]) - Float64(c[2])
+    lhs, rhs = ax * by, ay * bx
+    det = lhs - rhs
+    permanent = abs(lhs) + abs(rhs)
+    if isfinite(permanent) && permanent >= floatmin(Float64) &&
+       abs(det) > 64eps(Float64) * permanent
+        return det > 0 ? 1 : -1
+    end
+    aq, bq, cq = _delaunay_exact_xy(a), _delaunay_exact_xy(b), _delaunay_exact_xy(c)
+    exact = (aq[1] - cq[1]) * (bq[2] - cq[2]) -
+            (aq[2] - cq[2]) * (bq[1] - cq[1])
+    return Int(sign(exact))
+end
+
+@inline function _delaunay_incircle_sign(a, b, c, d)
+    ax, ay = Float64(a[1]) - Float64(d[1]), Float64(a[2]) - Float64(d[2])
+    bx, by = Float64(b[1]) - Float64(d[1]), Float64(b[2]) - Float64(d[2])
+    cx, cy = Float64(c[1]) - Float64(d[1]), Float64(c[2]) - Float64(d[2])
+    aa, bb, cc = ax * ax + ay * ay, bx * bx + by * by, cx * cx + cy * cy
+    det = aa * (bx * cy - by * cx) - bb * (ax * cy - ay * cx) + cc * (ax * by - ay * bx)
+    permanent = aa * (abs(bx * cy) + abs(by * cx)) +
+                bb * (abs(ax * cy) + abs(ay * cx)) +
+                cc * (abs(ax * by) + abs(ay * bx))
+    if isfinite(permanent) && permanent >= floatmin(Float64) &&
+       abs(det) > 128eps(Float64) * permanent
+        return det > 0 ? 1 : -1
+    end
+    aq, bq, cq, dq = _delaunay_exact_xy(a), _delaunay_exact_xy(b), _delaunay_exact_xy(c), _delaunay_exact_xy(d)
+    axq, ayq = aq[1] - dq[1], aq[2] - dq[2]
+    bxq, byq = bq[1] - dq[1], bq[2] - dq[2]
+    cxq, cyq = cq[1] - dq[1], cq[2] - dq[2]
+    exact = (axq^2 + ayq^2) * (bxq * cyq - byq * cxq) -
+            (bxq^2 + byq^2) * (axq * cyq - ayq * cxq) +
+            (cxq^2 + cyq^2) * (axq * byq - ayq * bxq)
+    return Int(sign(exact))
+end
+
+function _delaunay_cocircular_sign(points, i::Int, j::Int, k::Int, t::Int)
+    # Break cocircular ties by the regular triangulation with lifted heights
+    # |x_v|^2 + epsilon^v. The first nonzero height cofactor determines the
+    # determinant sign. These infinitesimals alter connectivity only, never
+    # the geometric radius assigned to a simplex.
+    ids = (i, j, k, t)
+    signs = (_delaunay_orient_sign(points[j], points[k], points[t]),
+             -_delaunay_orient_sign(points[i], points[k], points[t]),
+             _delaunay_orient_sign(points[i], points[j], points[t]),
+             -_delaunay_orient_sign(points[i], points[j], points[k]))
+    first_id = typemax(Int)
+    result = 0
+    @inbounds for q in 1:4
+        if signs[q] != 0 && ids[q] < first_id
+            first_id = ids[q]
+            result = signs[q]
+        end
+    end
+    return result
+end
+
+function _delaunay_circumradius(a, b, c)
+    bx, by = Float64(b[1]) - Float64(a[1]), Float64(b[2]) - Float64(a[2])
+    cx, cy = Float64(c[1]) - Float64(a[1]), Float64(c[2]) - Float64(a[2])
+    scale = max(abs(bx), abs(by), abs(cx), abs(cy))
+    if isfinite(scale) && scale > 0
+        bx, by, cx, cy = bx / scale, by / scale, cx / scale, cy / scale
+        det = bx * cy - by * cx
+        permanent = abs(bx * cy) + abs(by * cx)
+        if abs(det) > 64eps(Float64) * permanent
+            radius = scale * (hypot(bx, by) * hypot(cx, cy) * hypot(cx - bx, cy - by) / (2abs(det)))
+            isfinite(radius) && radius > 0 && return radius
+        end
+    end
+    aq, bq, cq = _delaunay_exact_xy(a), _delaunay_exact_xy(b), _delaunay_exact_xy(c)
+    bxq, byq = bq[1] - aq[1], bq[2] - aq[2]
+    cxq, cyq = cq[1] - aq[1], cq[2] - aq[2]
+    detq = bxq * cyq - byq * cxq
+    iszero(detq) && throw(ArgumentError("A Delaunay triangle must be noncollinear."))
+    radius_sq = (bxq^2 + byq^2) * (cxq^2 + cyq^2) * ((cxq - bxq)^2 + (cyq - byq)^2) / (4detq^2)
+    radius = Float64(sqrt(BigFloat(radius_sq)))
+    isfinite(radius) || throw(ArgumentError("Delaunay circumradius is not representable as Float64; rescale the coordinates."))
+    return radius
+end
+
+function _validate_delaunay_points(points)
+    isempty(points) && throw(ArgumentError("PointCloud has no points."))
+    d = length(first(points))
+    d in (1, 2) || throw(ArgumentError("Delaunay geometry supports only 1D/2D point clouds (got dimension $d)."))
+    seen = Set{NTuple{2,Float64}}()
+    sizehint!(seen, length(points))
+    for p in points
+        length(p) == d || throw(ArgumentError("Delaunay points must have a common dimension."))
+        xy = (Float64(p[1]), d == 1 ? 0.0 : Float64(p[2]))
+        all(isfinite, xy) || throw(ArgumentError("Delaunay points must have finite Float64 coordinates."))
+        # Treat signed zeros as the same geometric coordinate.
+        key = (iszero(xy[1]) ? 0.0 : xy[1], iszero(xy[2]) ? 0.0 : xy[2])
+        key in seen && throw(ArgumentError("Delaunay points must be distinct after conversion to Float64."))
+        push!(seen, key)
+    end
+    return d
 end
 
 @inline function _sort_triplet(i::Int, j::Int, k::Int)::NTuple{3,Int}
@@ -8324,9 +8702,10 @@ end
     return (a, b, c)
 end
 
-function _packed_delaunay_simplices_1d(points::AbstractVector{<:AbstractVector{<:Real}}; max_dim::Int=2)
+function _packed_delaunay_collinear(points::AbstractVector{<:AbstractVector{<:Real}})
     n = length(points)
-    order = sortperm(1:n; by=i -> (Float64(points[i][1]), i))
+    d = isempty(points) ? 1 : length(points[1])
+    order = sortperm(1:n; by=i -> (Float64(points[i][1]), d == 1 ? 0.0 : Float64(points[i][2])))
     nedges = max(0, n - 1)
     edges = Vector{NTuple{2,Int}}(undef, nedges)
     edge_radius = Vector{Float64}(undef, nedges)
@@ -8335,11 +8714,18 @@ function _packed_delaunay_simplices_1d(points::AbstractVector{<:AbstractVector{<
         j = order[t + 1]
         a, b = min(i, j), max(i, j)
         edges[t] = (a, b)
-        edge_radius[t] = _euclidean_distance(points[a], points[b]) / 2
+        edge_radius[t] = _half_point_distance(points[a], points[b])
     end
+    perm = sortperm(edges)
+    edges, edge_radius = edges[perm], edge_radius[perm]
     triangles = NTuple{3,Int}[]
     tri_radius = Float64[]
     return _PackedDelaunay2D(edges, edge_radius, triangles, tri_radius)
+end
+
+@inline function _delaunay_points_collinear(points)
+    length(points) <= 2 && return true
+    return all(i -> _delaunay_orient_sign(points[1], points[2], points[i]) == 0, 3:length(points))
 end
 
 @inline function _push_delaunay_edge!(edges::Vector{NTuple{2,Int}},
@@ -8353,12 +8739,14 @@ end
     end
     @inbounds edge_seen[a, b] = true
     push!(edges, (a, b))
-    push!(edge_radius, _euclidean_distance(points[a], points[b]) / 2)
+    radius = _half_point_distance(points[a], points[b])
+    push!(edge_radius, radius)
     return nothing
 end
 
 function _packed_delaunay_simplices_2d_naive(points::AbstractVector{<:AbstractVector{<:Real}}; max_dim::Int=2)
     n = length(points)
+    _delaunay_points_collinear(points) && return _packed_delaunay_collinear(points)
     edges = NTuple{2,Int}[]
     edge_radius = Float64[]
     triangles = NTuple{3,Int}[]
@@ -8368,51 +8756,30 @@ function _packed_delaunay_simplices_2d_naive(points::AbstractVector{<:AbstractVe
     max_dim >= 2 && sizehint!(triangles, max(0, 2n))
     max_dim >= 2 && sizehint!(tri_radius, max(0, 2n))
     edge_seen = falses(n, n)
-    tol = 1e-10
 
-    if max_dim >= 2
-        @inbounds for i in 1:n, j in (i + 1):n, k in (j + 1):n
-            cc = _circumcircle_2d(points[i], points[j], points[k]; atol=tol)
-            cc === nothing && continue
-            ux, uy, r2 = cc
-            empty_ball = true
-            for t in 1:n
-                (t == i || t == j || t == k) && continue
-                px = Float64(points[t][1])
-                py = Float64(points[t][2])
-                d2 = (px - ux)^2 + (py - uy)^2
-                if d2 < r2 - tol
-                    empty_ball = false
-                    break
-                end
-            end
-            empty_ball || continue
-            push!(triangles, (i, j, k))
-            push!(tri_radius, sqrt(r2))
-            _push_delaunay_edge!(edges, edge_radius, edge_seen, points, i, j)
-            _push_delaunay_edge!(edges, edge_radius, edge_seen, points, i, k)
-            _push_delaunay_edge!(edges, edge_radius, edge_seen, points, j, k)
-        end
-    end
-
-    # Ensure convex-hull edges are included.
-    @inbounds for i in 1:n, j in (i + 1):n
-        edge_seen[i, j] && continue
-        pos = false
-        neg = false
+    # Find the complete triangulation before truncating its output dimension.
+    # Its graph includes interior edges even when only degrees 0/1 are retained.
+    @inbounds for i in 1:n, j in (i + 1):n, k in (j + 1):n
+        orientation = _delaunay_orient_sign(points[i], points[j], points[k])
+        orientation == 0 && continue
+        empty_ball = true
         for t in 1:n
-            (t == i || t == j) && continue
-            o = _orient2d(points[i], points[j], points[t])
-            if o > tol
-                pos = true
-            elseif o < -tol
-                neg = true
+            (t == i || t == j || t == k) && continue
+            incircle = _delaunay_incircle_sign(points[i], points[j], points[k], points[t])
+            incircle == 0 && (incircle = _delaunay_cocircular_sign(points, i, j, k, t))
+            if incircle == orientation
+                empty_ball = false
+                break
             end
-            (pos && neg) && break
         end
-        if !(pos && neg)
-            _push_delaunay_edge!(edges, edge_radius, edge_seen, points, i, j)
+        empty_ball || continue
+        if max_dim >= 2
+            push!(triangles, (i, j, k))
+            push!(tri_radius, _delaunay_circumradius(points[i], points[j], points[k]))
         end
+        _push_delaunay_edge!(edges, edge_radius, edge_seen, points, i, j)
+        _push_delaunay_edge!(edges, edge_radius, edge_seen, points, i, k)
+        _push_delaunay_edge!(edges, edge_radius, edge_seen, points, j, k)
     end
 
     if !isempty(edges)
@@ -8431,14 +8798,14 @@ end
 @inline function _delaunay_cache_key(points::AbstractVector{<:AbstractVector{<:Real}},
                                      max_dim::Int,
                                      backend::Symbol)
-    return (UInt64(objectid(points)), UInt64(length(points)), UInt64(max_dim), UInt64(hash(backend)))
+    return _structural_cache_key((_point_cloud_cache_coordinates(points), max_dim, backend))
 end
 
 @inline function _as_packed_delaunay_entry(out::Any)
     if out isa _PackedDelaunay2DCacheEntry
         return out
     elseif out isa _PackedDelaunay2D
-        return _PackedDelaunay2DCacheEntry(out, nothing, nothing)
+        return _PackedDelaunay2DCacheEntry(out, nothing, nothing, :not_recorded)
     else
         return nothing
     end
@@ -8448,8 +8815,7 @@ function _cached_packed_delaunay_entry_2d(points::AbstractVector{<:AbstractVecto
                                           max_dim::Int,
                                           backend::Symbol)
     if !_POINTCLOUD_DELAUNAY_CACHE_ENABLED[]
-        packed = _packed_delaunay_simplices_2d(points; max_dim=max_dim, backend=backend)
-        return _PackedDelaunay2DCacheEntry(packed, nothing, nothing)
+        return _build_packed_delaunay_entry_2d(points; max_dim=max_dim, backend=backend)
     end
     key = _delaunay_cache_key(points, max_dim, backend)
     cached = lock(_POINTCLOUD_DELAUNAY_CACHE_LOCK) do
@@ -8462,11 +8828,11 @@ function _cached_packed_delaunay_entry_2d(points::AbstractVector{<:AbstractVecto
                 _POINTCLOUD_DELAUNAY_CACHE[key] = entry
             end
         end
+        _record_ingestion_backend(:delaunay, entry.backend)
         return entry
     end
 
-    packed = _packed_delaunay_simplices_2d(points; max_dim=max_dim, backend=backend)
-    entry = _PackedDelaunay2DCacheEntry(packed, nothing, nothing)
+    entry = _build_packed_delaunay_entry_2d(points; max_dim=max_dim, backend=backend)
     return lock(_POINTCLOUD_DELAUNAY_CACHE_LOCK) do
         existing = get(_POINTCLOUD_DELAUNAY_CACHE, key, nothing)
         existing_entry = _as_packed_delaunay_entry(existing)
@@ -8499,31 +8865,41 @@ function _ensure_packed_delaunay_boundaries!(entry::_PackedDelaunay2DCacheEntry,
     return entry
 end
 
-function _packed_delaunay_simplices_2d(points::AbstractVector{<:AbstractVector{<:Real}};
-                                       max_dim::Int=2,
-                                       backend::Symbol=:auto)
+function _build_packed_delaunay_entry_2d(points::AbstractVector{<:AbstractVector{<:Real}};
+                                          max_dim::Int=2, backend::Symbol=:auto)
+    if _delaunay_points_collinear(points)
+        _record_ingestion_backend(:delaunay, :collinear)
+        return _PackedDelaunay2DCacheEntry(_packed_delaunay_collinear(points), nothing, nothing, :collinear)
+    end
     if backend != :naive && _have_pointcloud_delaunay_backend()
         impl = _POINTCLOUD_DELAUNAY_2D_IMPL[]
-        # Optional-extension callbacks may be registered in a younger world than
-        # long-lived ingestion call sites. Dispatch through invokelatest so the
-        # alpha/Delaunay path remains callable under Julia 1.12 world-age rules.
+        # Extensions may be registered in a younger world than the caller.
         out = impl === nothing ? nothing : Base.invokelatest(impl, points; max_dim=max_dim)
         if out !== nothing
-            return out
+            _record_ingestion_backend(:delaunay, :fast)
+            return _PackedDelaunay2DCacheEntry(out, nothing, nothing, :fast)
         end
     end
-    return _packed_delaunay_simplices_2d_naive(points; max_dim=max_dim)
+    _record_ingestion_backend(:delaunay, :naive)
+    packed = _packed_delaunay_simplices_2d_naive(points; max_dim=max_dim)
+    return _PackedDelaunay2DCacheEntry(packed, nothing, nothing, :naive)
+end
+
+# Direct incremental-Delaunay consumers need the packed support, while cached
+# consumers also need the execution evidence and lazily populated boundaries.
+function _packed_delaunay_simplices_2d(points::AbstractVector{<:AbstractVector{<:Real}};
+                                      max_dim::Int=2, backend::Symbol=:auto)
+    return _build_packed_delaunay_entry_2d(points; max_dim=max_dim, backend=backend).packed
 end
 
 function _packed_delaunay_entry(points::AbstractVector{<:AbstractVector{<:Real}},
                                 spec::FiltrationSpec;
                                 max_dim::Int=2)
-    n = length(points)
-    n == 0 && error("PointCloud has no points.")
-    d = length(points[1])
+    d = _validate_delaunay_points(points)
     if d == 1
-        packed = _packed_delaunay_simplices_1d(points; max_dim=max_dim)
-        return _PackedDelaunay2DCacheEntry(packed, nothing, nothing)
+        packed = _packed_delaunay_collinear(points)
+        _record_ingestion_backend(:delaunay, :collinear)
+        return _PackedDelaunay2DCacheEntry(packed, nothing, nothing, :collinear)
     elseif d == 2
         backend = _pointcloud_delaunay_backend(spec)
         return _cached_packed_delaunay_entry_2d(points, max_dim, backend)
@@ -9160,6 +9536,217 @@ function _graph_centrality_values(data::GraphData, spec::FiltrationSpec)
         return _graph_eigenvector_centrality(data, weights; weighted=weighted)
     end
     throw(ArgumentError("Unsupported centrality=$(cent). Supported: :degree, :closeness, :betweenness, :pagerank, :eigenvector"))
+end
+
+function _validate_distance_matrix(data::AbstractMatrix{<:Real};
+                                   symmetry_tol::Real=1.0e-10)
+    size(data, 1) == size(data, 2) ||
+        throw(ArgumentError("distance-matrix Rips ingestion expects a square matrix; got size $(size(data))."))
+    n = size(data, 1)
+    n > 0 || throw(ArgumentError("distance-matrix Rips ingestion expects at least one point."))
+    tol = Float64(symmetry_tol)
+    @inbounds for i in 1:n
+        dii = Float64(data[i, i])
+        isfinite(dii) || throw(ArgumentError("distance matrix diagonal entry ($i,$i) is not finite."))
+        abs(dii) <= tol ||
+            throw(ArgumentError("distance matrix diagonal entry ($i,$i) must be zero within tolerance $tol; got $dii."))
+        for j in (i + 1):n
+            dij = Float64(data[i, j])
+            dji = Float64(data[j, i])
+            (isfinite(dij) && isfinite(dji)) ||
+                throw(ArgumentError("distance matrix entry ($i,$j) or ($j,$i) is not finite."))
+            (dij >= -tol && dji >= -tol) ||
+                throw(ArgumentError("distance matrix entries must be nonnegative within tolerance $tol."))
+            abs(dij - dji) <= tol ||
+                throw(ArgumentError("distance matrix is not symmetric within tolerance $tol at ($i,$j)."))
+        end
+    end
+    return n
+end
+
+@inline _dm_packed_key(n::Int, i::Int, j::Int) = _packed_pair_index(n, i, j)
+
+function _distance_matrix_edges_within_radius(data::AbstractMatrix{<:Real},
+                                              radius::Float64)
+    n = size(data, 1)
+    edges = NTuple{2,Int}[]
+    dists = Float64[]
+    hint = min(max(0, 4n), div(n * max(n - 1, 0), 2))
+    sizehint!(edges, hint)
+    sizehint!(dists, hint)
+    @inbounds for i in 1:(n - 1)
+        for j in (i + 1):n
+            d = max(0.0, Float64(data[i, j]))
+            d <= radius || continue
+            push!(edges, (i, j))
+            push!(dists, d)
+        end
+    end
+    return edges, dists
+end
+
+function _distance_matrix_knn_edges(data::AbstractMatrix{<:Real}, k::Int)
+    n = size(data, 1)
+    k > 0 || throw(ArgumentError("distance-matrix Rips knn sparsification expects knn > 0."))
+    edges = Set{Int}()
+    @inbounds for i in 1:n
+        order = collect(1:n)
+        sort!(order, by = j -> (j == i ? Inf : Float64(data[i, j])))
+        for t in 1:min(k, n - 1)
+            j = order[t]
+            j == i && continue
+            a, b = i < j ? (i, j) : (j, i)
+            push!(edges, _dm_packed_key(n, a, b))
+        end
+    end
+    out_edges = NTuple{2,Int}[]
+    out_dists = Float64[]
+    sizehint!(out_edges, length(edges))
+    sizehint!(out_dists, length(edges))
+    @inbounds for i in 1:(n - 1)
+        for j in (i + 1):n
+            _dm_packed_key(n, i, j) in edges || continue
+            push!(out_edges, (i, j))
+            push!(out_dists, max(0.0, Float64(data[i, j])))
+        end
+    end
+    return out_edges, out_dists
+end
+
+@inline function _distance_matrix_simplex_diameter(data::AbstractMatrix{<:Real},
+                                                   simplex::AbstractVector{Int})
+    md = 0.0
+    @inbounds for a in 1:(length(simplex) - 1)
+        ia = simplex[a]
+        for b in (a + 1):length(simplex)
+            d = Float64(data[ia, simplex[b]])
+            d > md && (md = d)
+        end
+    end
+    return md
+end
+
+function _distance_matrix_triangles_from_edges(data::AbstractMatrix{<:Real},
+                                               edges::Vector{NTuple{2,Int}},
+                                               radius::Float64)
+    n = size(data, 1)
+    edge_keys = Set{Int}()
+    adj_hi = [Int[] for _ in 1:n]
+    @inbounds for (i, j) in edges
+        push!(edge_keys, _dm_packed_key(n, i, j))
+        push!(adj_hi[i], j)
+    end
+    triangles = Vector{Vector{Int}}()
+    tri_diams = Float64[]
+    @inbounds for i in 1:(n - 2)
+        nbrs = adj_hi[i]
+        ln = length(nbrs)
+        for a in 1:(ln - 1)
+            j = nbrs[a]
+            for b in (a + 1):ln
+                k = nbrs[b]
+                _dm_packed_key(n, j, k) in edge_keys || continue
+                d = max(Float64(data[i, j]), max(Float64(data[i, k]), Float64(data[j, k])))
+                d <= radius || continue
+                push!(triangles, [i, j, k])
+                push!(tri_diams, d)
+            end
+        end
+    end
+    return triangles, tri_diams
+end
+
+function _graded_complex_from_distance_matrix(data::AbstractMatrix{<:Real},
+                                              spec::FiltrationSpec;
+                                              return_simplex_tree::Bool=false)
+    _validate_geometric_filtration_request(data, spec)
+    _validate_construction_request(data, spec)
+    spec.kind == :rips ||
+        throw(ArgumentError("distance-matrix ingestion currently supports RipsFiltration / kind=:rips, got kind=$(spec.kind)."))
+    n = _validate_distance_matrix(data)
+    max_dim = max(Int(get(spec.params, :max_dim, 1)), 0)
+    construction = _construction_from_params(spec.params)
+    radius_raw = get(spec.params, :radius, nothing)
+    radius = radius_raw === nothing ? Inf : Float64(radius_raw)
+    radius >= 0 || throw(ArgumentError("RipsFiltration radius must be nonnegative."))
+
+    simplices = Vector{Vector{Vector{Int}}}(undef, max_dim + 1)
+    simplices[1] = [[i] for i in 1:n]
+    total = big(n)
+
+    edge_dists = Float64[]
+    if max_dim >= 1
+        edges, dists = if construction.sparsify == :knn
+            k = Int(get(spec.params, :knn, 8))
+            _distance_matrix_knn_edges(data, k)
+        elseif construction.sparsify == :radius
+            isfinite(radius) || throw(ArgumentError("construction.sparsify=:radius requires RipsFiltration radius."))
+            _distance_matrix_edges_within_radius(data, radius)
+        elseif construction.sparsify == :none
+            _distance_matrix_edges_within_radius(data, radius)
+        else
+            throw(ArgumentError("distance-matrix Rips supports construction.sparsify=:none, :radius, or :knn."))
+        end
+        _construction_check_max_edges!(length(edges), spec)
+        if construction.collapse == :dominated_edges || construction.sparsify != :none
+            _construction_check_max_simplices!(big(n), 0, spec)
+            return _materialize_flag_output(edges, fill((0.0,), n), [(d,) for d in dists], spec;
+                                             return_simplex_tree=return_simplex_tree)
+        end
+        simplices[2] = [Int[e[1], e[2]] for e in edges]
+        edge_dists = dists
+        total += length(edges)
+        _construction_check_max_simplices!(total, 1, spec)
+    end
+
+    tri_diams = Float64[]
+    if max_dim >= 2
+        if max_dim == 2 && isfinite(radius)
+            edges_t = NTuple{2,Int}[(s[1], s[2]) for s in simplices[2]]
+            tris, tri_diams = _distance_matrix_triangles_from_edges(data, edges_t, radius)
+            simplices[3] = tris
+            total += length(tris)
+            _construction_check_max_simplices!(total, 2, spec)
+        else
+            for k in 3:(max_dim + 1)
+                count_k = _construction_precheck_combination_enumeration!(n, k, total, spec)
+                sims = Vector{Vector{Int}}()
+                sizehint!(sims, count_k)
+                for s in _combinations(n, k)
+                    d = _distance_matrix_simplex_diameter(data, s)
+                    d <= radius || continue
+                    push!(sims, s)
+                    k == 3 && push!(tri_diams, d)
+                end
+                simplices[k] = sims
+                total += length(sims)
+            end
+        end
+    end
+
+    _construction_check_memory_budget!(
+        _estimate_dense_bytes_from_cell_counts(BigInt[length(s) for s in simplices]),
+        spec,
+    )
+
+    grades = Vector{NTuple{1,Float64}}()
+    total <= 10_000_000 && sizehint!(grades, Int(total))
+    for _ in simplices[1]
+        push!(grades, (0.0,))
+    end
+    if max_dim >= 1
+        for d in edge_dists
+            push!(grades, (d,))
+        end
+    end
+    for k in 3:(max_dim + 1)
+        for (idx, s) in enumerate(simplices[k])
+            d = (k == 3 && length(tri_diams) == length(simplices[k])) ?
+                tri_diams[idx] : _distance_matrix_simplex_diameter(data, s)
+            push!(grades, (d,))
+        end
+    end
+    return _materialize_simplicial_output(simplices, grades, spec; return_simplex_tree=return_simplex_tree)
 end
 
 function _graph_sources(spec::FiltrationSpec, n::Int)
@@ -9948,7 +10535,7 @@ function _graph_weight_threshold_complex(data::GraphData, spec::FiltrationSpec;
 end
 
 @inline function _delaunay_highdim_policy(spec::FiltrationSpec)
-    policy = Symbol(get(spec.params, :highdim_policy, :rips))
+    policy = Symbol(get(spec.params, :highdim_policy, :error))
     (policy === :rips || policy === :error) ||
         throw(ArgumentError("Unsupported Delaunay highdim_policy=$(policy). Expected :rips or :error."))
     return policy
@@ -9956,19 +10543,15 @@ end
 
 function _graded_complex_from_point_cloud_delaunay_highdim_fallback(data::PointCloud,
                                                                     spec::FiltrationSpec;
-                                                                    function_style::Bool=false,
                                                                     return_simplex_tree::Bool=false)
     d = length(data.points[1])
     policy = _delaunay_highdim_policy(spec)
     if policy === :error
-        error("Delaunay filtrations currently support only 1D/2D point clouds (got dimension $d). Set highdim_policy=:rips to enable higher-dimensional fallback.")
+        throw(ArgumentError("Delaunay filtrations support only 1D/2D point clouds (got dimension $d). Set highdim_policy=:rips to explicitly substitute Rips."))
     end
 
     fallback_params = _filter_params(spec.params, [:highdim_policy, :delaunay_backend])
     fallback_spec = FiltrationSpec(; kind=:function_rips, fallback_params...)
-    if function_style
-        return _graded_complex_from_point_cloud(data, fallback_spec; return_simplex_tree=return_simplex_tree)
-    end
 
     # Lower-star fallback keeps 1-parameter output by projecting function-Rips grades.
     G2, _, _ = _graded_complex_from_point_cloud(data, fallback_spec; return_simplex_tree=false)
@@ -9987,89 +10570,42 @@ end
 
 function _graded_complex_from_point_cloud_delaunay(data::PointCloud,
                                                    spec::FiltrationSpec;
-                                                   function_style::Bool=false,
                                                    return_simplex_tree::Bool=false)
     points = data.points
     d = length(points[1])
     if d > 2
         return _graded_complex_from_point_cloud_delaunay_highdim_fallback(
-            data, spec;
-            function_style=function_style,
-            return_simplex_tree=return_simplex_tree,
-        )
+            data, spec; return_simplex_tree=return_simplex_tree)
     end
-
-    max_dim = Int(get(spec.params, :max_dim, 2))
-    max_dim = min(max_dim, 2)
-    entry = _packed_delaunay_entry(points, spec; max_dim=max_dim)
+    max_dim = min(Int(get(spec.params, :max_dim, 2)), 2)
+    entry = _packed_delaunay_entry(points, spec; max_dim=2)
     packed = entry.packed
     vals = _point_vertex_values(points, spec)
+    all(isfinite, vals) || throw(ArgumentError("vertex function values must be finite."))
     agg = get(spec.params, :simplex_agg, :max)
     n = length(points)
     ne = max_dim >= 1 ? length(packed.edges) : 0
     nt = max_dim >= 2 ? length(packed.triangles) : 0
+    _construction_check_max_edges!(ne, spec)
+    _construction_check_max_simplices!(n + ne + nt, max_dim, spec)
     if return_simplex_tree
-        if function_style
-            return _materialize_point_cloud_packed_simplex_tree(
-                n, max_dim, packed.edges, packed.triangles, spec, NTuple{2,Float64},
-                v -> (0.0, vals[v]),
-                (idx, i, j) -> (packed.edge_radius[idx], _aggregate_pair(Float64(vals[i]), Float64(vals[j]), agg)),
-                (idx, i, j, k) -> (packed.tri_radius[idx], _aggregate_triple(Float64(vals[i]), Float64(vals[j]), Float64(vals[k]), agg)),
-            )
-        end
         return _materialize_point_cloud_packed_simplex_tree(
             n, max_dim, packed.edges, packed.triangles, spec, NTuple{1,Float64},
             v -> (vals[v],),
-            (_idx, i, j) -> (_aggregate_pair(Float64(vals[i]), Float64(vals[j]), agg),),
-            (_idx, i, j, k) -> (_aggregate_triple(Float64(vals[i]), Float64(vals[j]), Float64(vals[k]), agg),),
+            (_idx, i, j) -> (_aggregate_pair(vals[i], vals[j], agg),),
+            (_idx, i, j, k) -> (_aggregate_triple(vals[i], vals[j], vals[k], agg),),
         )
     end
-
-    grades = if function_style
-        Vector{NTuple{2,Float64}}(undef, n + ne + nt)
-    else
-        Vector{NTuple{1,Float64}}(undef, n + ne + nt)
+    grades = NTuple{1,Float64}[(vals[v],) for v in 1:n]
+    sizehint!(grades, n + ne + nt)
+    for index in 1:ne
+        i, j = packed.edges[index]
+        push!(grades, (_aggregate_pair(vals[i], vals[j], agg),))
     end
-
-    t = 1
-    # Vertices
-    @inbounds for v in 1:n
-        if function_style
-            grades[t] = (0.0, vals[v])
-        else
-            grades[t] = (vals[v],)
-        end
-        t += 1
+    for index in 1:nt
+        i, j, k = packed.triangles[index]
+        push!(grades, (_aggregate_triple(vals[i], vals[j], vals[k], agg),))
     end
-    # Edges
-    if max_dim >= 1
-        @inbounds for idx in 1:ne
-            i, j = packed.edges[idx]
-            r = packed.edge_radius[idx]
-            f = _aggregate_pair(Float64(vals[i]), Float64(vals[j]), agg)
-            if function_style
-                grades[t] = (r, f)
-            else
-                grades[t] = (f,)
-            end
-            t += 1
-        end
-    end
-    # Triangles
-    if max_dim >= 2
-        @inbounds for idx in 1:nt
-            i, j, k = packed.triangles[idx]
-            r = packed.tri_radius[idx]
-            f = _aggregate_triple(Float64(vals[i]), Float64(vals[j]), Float64(vals[k]), agg)
-            if function_style
-                grades[t] = (r, f)
-            else
-                grades[t] = (f,)
-            end
-            t += 1
-        end
-    end
-
     if max_dim >= 1
         if d == 2 && _POINTCLOUD_DELAUNAY_CACHE_ENABLED[]
             lock(_POINTCLOUD_DELAUNAY_CACHE_LOCK) do
@@ -10090,7 +10626,7 @@ function _graded_complex_from_point_cloud_alpha(data::PointCloud,
     if d > 2
         policy = _delaunay_highdim_policy(spec)
         if policy === :error
-            error("Alpha filtrations currently support only 1D/2D point clouds (got dimension $d). Set highdim_policy=:rips to enable higher-dimensional fallback.")
+            throw(ArgumentError("Alpha filtrations support only 1D/2D point clouds (got dimension $d). Set highdim_policy=:rips to explicitly substitute Rips."))
         end
         fallback_params = _filter_params(spec.params, [:highdim_policy, :delaunay_backend])
         fallback_spec = FiltrationSpec(; kind=:rips, fallback_params...)
@@ -10098,7 +10634,7 @@ function _graded_complex_from_point_cloud_alpha(data::PointCloud,
     end
 
     max_dim = min(Int(get(spec.params, :max_dim, 2)), 2)
-    entry = _packed_delaunay_entry(points, spec; max_dim=max_dim)
+    entry = _packed_delaunay_entry(points, spec; max_dim=2)
     packed = entry.packed
     n = length(points)
     ne = max_dim >= 1 ? length(packed.edges) : 0
@@ -10156,83 +10692,26 @@ end
     return deg
 end
 
-function _graded_complex_from_point_cloud_core_delaunay(data::PointCloud,
-                                                        spec::FiltrationSpec;
-                                                        return_simplex_tree::Bool=false)
-    points = data.points
-    n = length(points)
-    d = length(points[1])
-    if d > 2
-        policy = _delaunay_highdim_policy(spec)
-        if policy === :error
-            error("Core-Delaunay filtrations currently support only 1D/2D point clouds (got dimension $d). Set highdim_policy=:rips to enable higher-dimensional fallback.")
-        end
-        fallback_params = _filter_params(spec.params, [:highdim_policy, :delaunay_backend])
-        fallback_spec = FiltrationSpec(; kind=:degree_rips, fallback_params...)
-        return _graded_complex_from_point_cloud(data, fallback_spec; return_simplex_tree=return_simplex_tree)
-    end
+include("data_ingestion/enclosing_geometry.jl")
+include("data_ingestion/core_bifiltrations.jl")
+include("data_ingestion/cech_core.jl")
+include("data_ingestion/function_delaunay.jl")
 
-    max_dim = min(Int(get(spec.params, :max_dim, 2)), 2)
-    entry = _packed_delaunay_entry(points, spec; max_dim=max_dim)
-    packed = entry.packed
-    core = _core_numbers(n, packed.edges)
-    ne = max_dim >= 1 ? length(packed.edges) : 0
-    nt = max_dim >= 2 ? length(packed.triangles) : 0
-    if return_simplex_tree
-        return _materialize_point_cloud_packed_simplex_tree(
-            n, max_dim, packed.edges, packed.triangles, spec, NTuple{2,Float64},
-            i -> (0.0, Float64(core[i])),
-            (idx, i, j) -> (packed.edge_radius[idx], Float64(max(core[i], core[j]))),
-            (idx, i, j, k) -> (packed.tri_radius[idx], Float64(max(core[i], max(core[j], core[k])))),
-        )
-    end
-
-    grades = Vector{NTuple{2,Float64}}(undef, n + ne + nt)
-
-    t = 1
-    @inbounds for i in 1:n
-        grades[t] = (0.0, Float64(core[i]))
-        t += 1
-    end
-    if max_dim >= 1
-        @inbounds for idx in 1:ne
-            i, j = packed.edges[idx]
-            r = packed.edge_radius[idx]
-            grades[t] = (r, Float64(max(core[i], core[j])))
-            t += 1
-        end
-    end
-    if max_dim >= 2
-        @inbounds for idx in 1:nt
-            i, j, k = packed.triangles[idx]
-            r = packed.tri_radius[idx]
-            grades[t] = (r, Float64(max(core[i], max(core[j], core[k]))))
-            t += 1
-        end
-    end
-
-    if max_dim >= 1
-        if d == 2 && _POINTCLOUD_DELAUNAY_CACHE_ENABLED[]
-            lock(_POINTCLOUD_DELAUNAY_CACHE_LOCK) do
-                _ensure_packed_delaunay_boundaries!(entry, n, max_dim)
-            end
-        else
-            _ensure_packed_delaunay_boundaries!(entry, n, max_dim)
-        end
-    end
-    return _materialize_point_cloud_packed_with_cached_boundaries(n, max_dim, entry, grades, spec)
-end
-
-function _graded_complex_from_point_cloud_core(data::PointCloud,
+function _graded_complex_from_point_cloud_graph_core(data::PointCloud,
                                                spec::FiltrationSpec;
                                                return_simplex_tree::Bool=false)
+    _validate_geometric_filtration_request(data, spec)
+    spec = _canonical_geometric_filtration_spec(spec)
     points = data.points
     pmat = point_matrix(data)
     n = length(points)
     edges = _core_edges_from_point_cloud(pmat, spec)
     core = _core_numbers(n, edges)
     vals = _point_graph_scalar_values(points, spec)
+    all(isfinite, vals) || throw(ArgumentError("vertex function values must be finite."))
     m = length(edges)
+    _construction_check_max_edges!(m, spec)
+    _construction_check_max_simplices!(n + m, 1, spec)
     grades = Vector{NTuple{2,Float64}}(undef, n + m)
     t = 1
     @inbounds for i in 1:n
@@ -10259,7 +10738,6 @@ function _rips_like_simplices_for_point_cloud(data::PointCloud,
     simplices[1] = [[i] for i in 1:n]
     if construction.sparsify != :none
         edges, edge_dists, _ = _point_cloud_sparsify_edge_driven(pmat, spec, construction)
-        edges, _ = _apply_construction_collapse_edge_driven(edges, edge_dists, pmat, construction)
         simplices = [simplices[1], _edge_vectors_from_tuples(edges)]
         return simplices
     end
@@ -10291,89 +10769,10 @@ end
     return true
 end
 
-function _rhomboid_fill_dim_simplices_and_grades!(simplices_k::Vector{Vector{Int}},
-                                                  grades::Vector{NTuple{2,Float64}},
-                                                  vals::Vector{Float64},
-                                                  k::Int)
-    n = length(vals)
-    isempty(simplices_k) && return nothing
-    comb = collect(1:k)
-    out = 1
-    while true
-        s = Vector{Int}(undef, k)
-        vmin = vals[comb[1]]
-        vmax = vmin
-        @inbounds for t in 1:k
-            c = comb[t]
-            s[t] = c
-            v = vals[c]
-            v < vmin && (vmin = v)
-            v > vmax && (vmax = v)
-        end
-        simplices_k[out] = s
-        push!(grades, (vmin, vmax))
-        out += 1
-        _next_combination!(comb, n, k) || break
-    end
-    return nothing
-end
-
-function _graded_complex_from_point_cloud_rhomboid(data::PointCloud,
-                                                   spec::FiltrationSpec;
-                                                   return_simplex_tree::Bool=false)
-    points = data.points
-    construction = _construction_from_params(spec.params)
-    max_dim = Int(get(spec.params, :max_dim, 2))
-    vals = _point_vertex_values(points, spec)
-
-    if max_dim <= 1 || construction.sparsify != :none || construction.collapse != :none
-        simplices = _rips_like_simplices_for_point_cloud(data, spec)
-        grades = Vector{NTuple{2,Float64}}()
-        sizehint!(grades, sum(length.(simplices)))
-        for s in simplices[1]
-            v = vals[s[1]]
-            push!(grades, (v, v))
-        end
-        for k in 2:length(simplices)
-            for s in simplices[k]
-                vmin = Float64(vals[s[1]])
-                vmax = vmin
-                @inbounds for t in 2:length(s)
-                    v = Float64(vals[s[t]])
-                    v < vmin && (vmin = v)
-                    v > vmax && (vmax = v)
-                end
-                push!(grades, (vmin, vmax))
-            end
-        end
-        return _materialize_simplicial_output(simplices, grades, spec; return_simplex_tree=return_simplex_tree)
-    end
-
-    n = length(points)
-    simplices = Vector{Vector{Vector{Int}}}(undef, max_dim + 1)
-    simplices[1] = [[i] for i in 1:n]
-    grades = Vector{NTuple{2,Float64}}()
-    sizehint!(grades, n)
-    @inbounds for i in 1:n
-        v = vals[i]
-        push!(grades, (v, v))
-    end
-
-    total = big(n)
-    for k in 2:max_dim+1
-        count_k = _construction_precheck_combination_enumeration!(n, k, total, spec)
-        simplices_k = Vector{Vector{Int}}(undef, count_k)
-        sizehint!(grades, length(grades) + count_k)
-        _rhomboid_fill_dim_simplices_and_grades!(simplices_k, grades, vals, k)
-        simplices[k] = simplices_k
-        total += count_k
-    end
-    _construction_check_memory_budget!(
-        _estimate_dense_bytes_from_cell_counts(BigInt[length(s) for s in simplices]),
-        spec,
-    )
-    return _materialize_simplicial_output(simplices, grades, spec; return_simplex_tree=return_simplex_tree)
-end
+include("data_ingestion/rhomboid.jl")
+include("data_ingestion/rhomboid_incremental.jl")
+include("data_ingestion/rhomboid_depth.jl")
+include("data_ingestion/subdivision_cech.jl")
 
 function _materialize_point_cloud_dim01(n::Int,
                                         include_edge_dim::Bool,
@@ -10419,8 +10818,21 @@ function _point_cloud_lowdim_edge_payload(data::PointCloud, spec::FiltrationSpec
     kind = spec.kind
     construction = _construction_from_params(spec.params)
     max_dim = Int(get(spec.params, :max_dim, 1))
-    include_edge_dim = (max_dim >= 1) || (construction.sparsify != :none)
-    rhomboid_edge_only = (kind == :rhomboid)
+    include_edge_dim = max_dim >= 1
+    _construction_check_max_simplices!(big(n), 0, spec)
+    will_reduce = construction.collapse == :dominated_edges && max_dim >= 2
+    if include_edge_dim && construction.sparsify == :none &&
+       !isfinite(Float64(get(spec.params, :radius, Inf)))
+        edge_count = if will_reduce
+            count = _combination_count(n, 2)
+            count <= typemax(Int) || throw(ArgumentError("input edge count exceeds representable collection size before enumeration."))
+            Int(count)
+        else
+            _construction_precheck_combination_enumeration!(n, 2, big(n), spec)
+        end
+        _construction_check_max_edges!(edge_count, spec)
+        will_reduce || _construction_check_memory_budget!(big(8) * n * edge_count, spec)
+    end
 
     edges = NTuple{2,Int}[]
     edge_dists = Float64[]
@@ -10429,19 +10841,8 @@ function _point_cloud_lowdim_edge_payload(data::PointCloud, spec::FiltrationSpec
     if include_edge_dim
         if construction.sparsify != :none
             edges, edge_dists, kdist = _point_cloud_sparsify_edge_driven(pmat, spec, construction)
-            edges, edge_dists = _apply_construction_collapse_edge_driven(edges, edge_dists, pmat, construction)
         else
             radius = haskey(spec.params, :radius) ? Float64(spec.params[:radius]) : Inf
-            if rhomboid_edge_only
-                if isfinite(radius)
-                    edges = _point_cloud_edges_within_radius_edges_only(pmat, radius)
-                    _construction_check_max_edges!(length(edges), spec)
-                else
-                    edge_count = _combination_count(n, 2)
-                    _construction_check_max_edges!(edge_count, spec)
-                    edges = _complete_point_cloud_edges(n)
-                end
-            else
                 if isfinite(radius) && _POINTCLOUD_LOWDIM_RADIUS_STREAMING[]
                     edges, edge_dists = _point_cloud_edges_within_radius(pmat, radius)
                     _construction_check_max_edges!(length(edges), spec)
@@ -10465,11 +10866,14 @@ function _point_cloud_lowdim_edge_payload(data::PointCloud, spec::FiltrationSpec
                         edge_dists = dists_all
                     end
                 end
-            end
         end
-        total = big(n) + big(length(edges))
-        _construction_check_max_simplices!(total, 1, spec)
-        _construction_check_memory_budget!(_estimate_dense_bytes_from_cell_counts(BigInt[n, length(edges)]), spec)
+        # Edge budgets protect the input graph. Simplex and boundary-memory
+        # budgets protect the retained expansion when reduction is requested.
+        if !will_reduce
+            total = big(n) + big(length(edges))
+            _construction_check_max_simplices!(total, 1, spec)
+            _construction_check_memory_budget!(_estimate_dense_bytes_from_cell_counts(BigInt[n, length(edges)]), spec)
+        end
     else
         _construction_check_max_simplices!(big(n), 0, spec)
         _construction_check_memory_budget!(_estimate_dense_bytes_from_cell_counts(BigInt[n]), spec)
@@ -10581,6 +10985,36 @@ function _point_cloud_lowdim_grades_by_dim(payload::_PointCloudLowdimEdgePayload
     error("_point_cloud_lowdim_grades_by_dim: unsupported kind $(kind).")
 end
 
+# Freeze all input grades before deletion, in particular degree-Rips scores.
+# The retained flag complex inherits its simplex grades from this fixed graph.
+function _materialize_flag_output(edges::Vector{NTuple{2,Int}}, vertex_grades,
+                                  edge_grades, spec::FiltrationSpec;
+                                  return_simplex_tree::Bool=false)
+    n = length(vertex_grades)
+    max_dim = Int(get(spec.params, :max_dim, 1))
+    construction = _construction_from_params(spec.params)
+    if construction.collapse == :dominated_edges && max_dim >= 2
+        retained = _collapse_dominated_edges(edges, edge_grades, n, max_dim)
+        edges = edges[retained]
+        edge_grades = edge_grades[retained]
+    end
+    budget = construction.budget
+    simplices = _flag_simplices(edges, n, max_dim;
+                                max_simplices=budget.max_simplices,
+                                memory_budget_bytes=budget.memory_budget_bytes)
+    grades = _flag_grades(simplices, edges, vertex_grades, edge_grades)
+    return _materialize_simplicial_output(simplices, grades, spec;
+                                          return_simplex_tree=return_simplex_tree)
+end
+
+function _graded_complex_from_point_cloud_flag(data::PointCloud, spec::FiltrationSpec;
+                                                return_simplex_tree::Bool=false)
+    payload = _point_cloud_lowdim_edge_payload(data, spec)
+    grades = _point_cloud_lowdim_grades_by_dim(payload, spec)
+    return _materialize_flag_output(payload.edges, grades[1], grades[2], spec;
+                                     return_simplex_tree=return_simplex_tree)
+end
+
 function _point_cloud_lowdim_lazy_payload(data::PointCloud, spec::FiltrationSpec)
     payload = _point_cloud_lowdim_edge_payload(data, spec)
     grades_by_dim = _point_cloud_lowdim_grades_by_dim(payload, spec)
@@ -10616,26 +11050,6 @@ function _graded_complex_from_point_cloud_lowdim(data::PointCloud,
     elseif kind == :rips_codensity || kind == :rips_lowerstar || kind == :function_rips || kind == :degree_rips
         grades_by_dim = _point_cloud_lowdim_grades_by_dim(payload, spec)
         grades = include_edge_dim ? vcat(grades_by_dim[1], grades_by_dim[2]) : grades_by_dim[1]
-        return _materialize_point_cloud_dim01(n, include_edge_dim, edges, grades, spec; return_simplex_tree=return_simplex_tree)
-    elseif kind == :rhomboid
-        points = payload.points
-        vals = _point_vertex_values(points, spec)
-        grades = Vector{NTuple{2,Float64}}(undef, n + (include_edge_dim ? length(edges) : 0))
-        t = 1
-        @inbounds for i in 1:n
-            v = Float64(vals[i])
-            grades[t] = (v, v)
-            t += 1
-        end
-        if include_edge_dim
-            @inbounds for idx in eachindex(edges)
-                u, v = edges[idx]
-                vu = Float64(vals[u])
-                vv = Float64(vals[v])
-                grades[t] = (min(vu, vv), max(vu, vv))
-                t += 1
-            end
-        end
         return _materialize_point_cloud_dim01(n, include_edge_dim, edges, grades, spec; return_simplex_tree=return_simplex_tree)
     end
     error("Unsupported low-dimensional point cloud filtration kind: $(kind).")
@@ -10806,6 +11220,8 @@ end
 function _graded_complex_from_point_cloud(data::PointCloud, spec::FiltrationSpec;
                                           return_simplex_tree::Bool=false,
                                           cache::Union{Nothing,EncodingCache}=nothing)
+    _validate_geometric_filtration_request(data, spec)
+    _validate_construction_request(data, spec)
     data2, spec2, _ = _maybe_greedy_perm_reduce(data, spec)
     data = data2
     spec = spec2
@@ -10824,13 +11240,17 @@ function _graded_complex_from_point_cloud(data::PointCloud, spec::FiltrationSpec
     end
 
     if kind == :delaunay_lower_star
-        return _graded_complex_from_point_cloud_delaunay(data, spec; function_style=false, return_simplex_tree=return_simplex_tree)
+        return _graded_complex_from_point_cloud_delaunay(data, spec; return_simplex_tree=return_simplex_tree)
     elseif kind == :alpha
         return _graded_complex_from_point_cloud_alpha(data, spec; return_simplex_tree=return_simplex_tree)
     elseif kind == :function_delaunay
-        return _graded_complex_from_point_cloud_delaunay(data, spec; function_style=true, return_simplex_tree=return_simplex_tree)
+        return _graded_complex_from_point_cloud_function_delaunay(data, spec; return_simplex_tree=return_simplex_tree)
+    elseif kind == :core
+        return _graded_complex_from_point_cloud_core(data, spec; return_simplex_tree=return_simplex_tree)
     elseif kind == :core_delaunay
         return _graded_complex_from_point_cloud_core_delaunay(data, spec; return_simplex_tree=return_simplex_tree)
+    elseif kind == :rhomboid
+        return _graded_complex_from_point_cloud_rhomboid(data, spec; return_simplex_tree, cache)
     end
 
     if kind == :landmark_rips
@@ -10848,7 +11268,7 @@ function _graded_complex_from_point_cloud(data::PointCloud, spec::FiltrationSpec
             construction
         end
         radius = get(spec.params, :radius, nothing)
-        include_edge_dim = (max_dim >= 1) || (construction_lm.sparsify != :none)
+        include_edge_dim = max_dim >= 1
         if include_edge_dim &&
            radius !== nothing &&
            construction_lm.sparsify == :radius &&
@@ -10896,12 +11316,6 @@ function _graded_complex_from_point_cloud(data::PointCloud, spec::FiltrationSpec
         )
     end
 
-    if construction.sparsify != :none && max_dim > 1
-        error("construction.sparsify=$(construction.sparsify) currently supports max_dim <= 1.")
-    end
-    if construction.collapse != :none && max_dim > 1
-        error("construction.collapse=$(construction.collapse) currently supports max_dim <= 1.")
-    end
 
     # For large point clouds, require explicit sparse construction for Rips-like ingestion.
     if construction.sparsify == :none &&
@@ -10912,97 +11326,25 @@ function _graded_complex_from_point_cloud(data::PointCloud, spec::FiltrationSpec
         throw(ArgumentError("PointCloud with n=$(n) requires sparse construction for this filtration. Use ConstructionOptions(sparsify=:knn|:radius|:greedy_perm) and set a budget."))
     end
 
-    if max_dim <= 1 &&
-       (kind == :rips || kind == :rips_density || kind == :rips_codensity ||
-        kind == :rips_lowerstar || kind == :function_rips || kind == :rhomboid || kind == :degree_rips)
-        return _graded_complex_from_point_cloud_lowdim(data, spec; return_simplex_tree=return_simplex_tree)
+    if max_dim >= 2 && (construction.collapse == :dominated_edges ||
+                        construction.sparsify != :none ||
+                        (max_dim >= 3 && Symbol(get(spec.params, :simplex_agg, :max)) == :max)) &&
+       kind in _COLLAPSE_FLAG_FAMILIES
+        # Sparse higher-dimensional input is the flag expansion of its selected
+        # graph, with the same grade contract as the dense Rips construction.
+        Symbol(get(spec.params, :simplex_agg, :max)) == :max ||
+            throw(ArgumentError("sparse flag expansion requires simplex_agg=:max."))
+        return _graded_complex_from_point_cloud_flag(data, spec;
+                                                     return_simplex_tree=return_simplex_tree)
+    end
+    if construction.sparsify != :none && max_dim > 1
+        throw(ArgumentError("sparse max_dim > 1 requires a supported Rips flag filtration."))
     end
 
-    if construction.sparsify != :none &&
+    if max_dim <= 1 &&
        (kind == :rips || kind == :rips_density || kind == :rips_codensity ||
         kind == :rips_lowerstar || kind == :function_rips || kind == :degree_rips)
-        simplices = Vector{Vector{Vector{Int}}}(undef, 2)
-        simplices[1] = [[i] for i in 1:n]
-        edges, edge_dists, kdist = _point_cloud_sparsify_edge_driven(pmat, spec, construction)
-        edges, edge_dists = _apply_construction_collapse_edge_driven(edges, edge_dists, pmat, construction)
-        simplices[2] = edges
-        total = big(n + length(edges))
-        _construction_check_max_simplices!(total, 1, spec)
-        _construction_check_memory_budget!(_estimate_dense_bytes_from_cell_counts(BigInt[length(s) for s in simplices]), spec)
-
-        if kind == :rips
-            grades = Vector{NTuple{1,Float64}}(undef, n + length(edges))
-            t = 1
-            for _ in 1:n
-                grades[t] = (0.0,)
-                t += 1
-            end
-            for d in edge_dists
-                grades[t] = (d,)
-                t += 1
-            end
-        elseif kind == :rips_density
-            density_k = Int(get(spec.params, :density_k, 2))
-            density_k > 0 || error("density_k must be > 0.")
-            nn_backend = _pointcloud_nn_backend(spec)
-            approx_candidates = _pointcloud_nn_approx_candidates(spec)
-            dens = if construction.sparsify == :knn && density_k == Int(get(spec.params, :knn, 8)) && length(kdist) == n
-                kdist
-            else
-                _point_cloud_knn_distances(pmat, density_k; backend=nn_backend, approx_candidates=approx_candidates)
-            end
-            grades = Vector{NTuple{2,Float64}}(undef, n + length(edges))
-            t = 1
-            for i in 1:n
-                grades[t] = (0.0, dens[i])
-                t += 1
-            end
-            for idx in eachindex(edges)
-                e = edges[idx]
-                grades[t] = (edge_dists[idx], max(dens[e[1]], dens[e[2]]))
-                t += 1
-            end
-        elseif kind == :rips_codensity || kind == :rips_lowerstar || kind == :function_rips
-            vvals = _point_vertex_values(points, spec)
-            agg = get(spec.params, :simplex_agg, :max)
-            grades = Vector{NTuple{2,Float64}}(undef, n + length(edges))
-            t = 1
-            for i in 1:n
-                grades[t] = (0.0, vvals[i])
-                t += 1
-            end
-            for idx in eachindex(edges)
-                e = edges[idx]
-                uv = if agg == :max
-                    max(vvals[e[1]], vvals[e[2]])
-                elseif agg == :min
-                    min(vvals[e[1]], vvals[e[2]])
-                elseif agg == :sum
-                    vvals[e[1]] + vvals[e[2]]
-                elseif agg == :mean
-                    (vvals[e[1]] + vvals[e[2]]) / 2
-                else
-                    throw(ArgumentError("Unsupported simplex_agg=$(agg). Supported: :max, :min, :sum, :mean"))
-                end
-                grades[t] = (edge_dists[idx], uv)
-                t += 1
-            end
-        else
-            deg = _vertex_degree_scores(n, edges)
-            grades = Vector{NTuple{2,Float64}}(undef, n + length(edges))
-            t = 1
-            for i in 1:n
-                grades[t] = (0.0, Float64(deg[i]))
-                t += 1
-            end
-            for idx in eachindex(edges)
-                e = edges[idx]
-                grades[t] = (edge_dists[idx], Float64(max(deg[e[1]], deg[e[2]])))
-                t += 1
-            end
-        end
-
-        return _materialize_simplicial_output(simplices, grades, spec; return_simplex_tree=return_simplex_tree)
+        return _graded_complex_from_point_cloud_lowdim(data, spec; return_simplex_tree=return_simplex_tree)
     end
 
     if _POINTCLOUD_DIM2_PACKED_KERNEL[] &&
@@ -11018,10 +11360,8 @@ function _graded_complex_from_point_cloud(data::PointCloud, spec::FiltrationSpec
         )
     end
 
-    if kind == :core
-        return _graded_complex_from_point_cloud_core(data, spec; return_simplex_tree=return_simplex_tree)
-    elseif kind == :rhomboid
-        return _graded_complex_from_point_cloud_rhomboid(data, spec; return_simplex_tree=return_simplex_tree)
+    if kind == :graph_core
+        return _graded_complex_from_point_cloud_graph_core(data, spec; return_simplex_tree=return_simplex_tree)
     end
 
     # Dense non-sparse Rips-like path: avoid n x n dense distance matrices.
@@ -11164,6 +11504,8 @@ end
 
 function _graded_complex_from_graph(data::GraphData, spec::FiltrationSpec;
                                     return_simplex_tree::Bool=false)
+    _validate_geometric_filtration_request(data, spec)
+    spec = _canonical_geometric_filtration_spec(spec)
     kind = spec.kind
     n = data.n
     edges = data.edges
@@ -11199,8 +11541,9 @@ function _graded_complex_from_graph(data::GraphData, spec::FiltrationSpec;
         return _graph_lifted_complex(data, spec, pairs; return_simplex_tree=return_simplex_tree)
     elseif kind == :graph_weight_threshold
         return _graph_weight_threshold_complex(data, spec; return_simplex_tree=return_simplex_tree)
-    elseif kind == :core
+    elseif kind == :graph_core
         vals = _graph_vertex_scalar_values(data, spec; required=false)
+        all(isfinite, vals) || throw(ArgumentError("vertex function values must be finite."))
         core = _core_numbers(n, edges)
         packed_edges = Vector{NTuple{2,Int}}(undef, length(edges))
         @inbounds for idx in eachindex(edges)
@@ -11208,6 +11551,8 @@ function _graded_complex_from_graph(data::GraphData, spec::FiltrationSpec;
             packed_edges[idx] = (u, v)
         end
         m = length(packed_edges)
+        _construction_check_max_edges!(m, spec)
+        _construction_check_max_simplices!(n + m, 1, spec)
         grades = Vector{NTuple{2,Float64}}(undef, n + m)
         t = 1
         @inbounds for i in 1:n
@@ -11222,41 +11567,6 @@ function _graded_complex_from_graph(data::GraphData, spec::FiltrationSpec;
         return _materialize_point_cloud_dim01(
             n, true, packed_edges, grades, spec; return_simplex_tree=return_simplex_tree
         )
-    elseif kind == :rhomboid
-        vals = _graph_vertex_scalar_values(data, spec; required=true)
-        construction = _construction_from_params(spec.params)
-        construction.collapse == :none || error("construction.collapse=$(construction.collapse) is unsupported for graph rhomboid ingestion.")
-        construction.sparsify == :none || error("construction.sparsify=$(construction.sparsify) is unsupported for graph rhomboid ingestion.")
-        max_dim = Int(get(spec.params, :max_dim, 2))
-        _construction_check_max_edges!(length(edges), spec)
-        simplices = Vector{Vector{Vector{Int}}}(undef, max_dim + 1)
-        simplices[1] = [[i] for i in 1:n]
-        packed = nothing
-        adj_lists = nothing
-        total = big(n)
-        for k in 2:max_dim+1
-            sims, packed, adj_lists = _enumerate_cliques_k_cached(
-                edges, n, k, spec, total;
-                context="graph rhomboid",
-                packed=packed,
-                adj_lists=adj_lists,
-            )
-            simplices[k] = sims
-            total += length(sims)
-            _construction_check_max_simplices!(total, k - 1, spec)
-        end
-        grades = NTuple{2,Float64}[]
-        for s in simplices[1]
-            v = vals[s[1]]
-            push!(grades, (v, v))
-        end
-        for k in 2:max_dim+1
-            for s in simplices[k]
-                vv = Float64[vals[v] for v in s]
-                push!(grades, (minimum(vv), maximum(vv)))
-            end
-        end
-        return _materialize_simplicial_output(simplices, grades, spec; return_simplex_tree=return_simplex_tree)
     elseif kind == :edge_weighted
         weights = get(spec.params, :edge_weights, nothing)
         weights === nothing && error("edge_weighted requires edge_weights.")
@@ -11437,8 +11747,33 @@ function _distance_transform_cached(mask::AbstractArray{Bool};
     return _set_geometry_cached!(cache, key, dist)
 end
 
-function _cubical_structure_2d(dims::NTuple{2,Int})
+function _cubical_periodic_tuple(periodic, ::Val{N}) where {N}
+    if periodic isa Bool
+        return ntuple(_ -> Bool(periodic), N)
+    elseif periodic isa Tuple || periodic isa AbstractVector
+        length(periodic) == N ||
+            throw(ArgumentError("cubical periodic contract expects $N entries, got $(length(periodic))."))
+        return ntuple(i -> Bool(periodic[i]), N)
+    end
+    throw(ArgumentError("cubical periodic contract must be a Bool or a tuple/vector of Bool."))
+end
+
+@inline _cubical_periodic_from_spec(spec::FiltrationSpec, ::Val{N}) where {N} =
+    _cubical_periodic_tuple(get(spec.params, :periodic, false), Val(N))
+
+@inline _cubical_axis_count(dim::Int, maskbit::Int, periodic::Bool) =
+    periodic ? dim : max(dim - maskbit, 0)
+
+@inline _cubical_next_coord(x::Int, dim::Int, periodic::Bool) =
+    (periodic && x == dim) ? 1 : x + 1
+
+@inline _cubical_cache_key(dims::NTuple{N,Int}, periodic::NTuple{N,Bool}) where {N} =
+    tuple(dims..., ntuple(i -> periodic[i] ? 1 : 0, N)...)
+
+function _cubical_structure_2d(dims::NTuple{2,Int},
+                               periodic::NTuple{2,Bool}=(false, false))
     nx, ny = dims
+    px, py = periodic
     TCell = Tuple{NTuple{2,Int},NTuple{2,Int}}
     mask0 = (0, 0)
     mask10 = (1, 0)
@@ -11446,15 +11781,19 @@ function _cubical_structure_2d(dims::NTuple{2,Int})
     mask11 = (1, 1)
 
     nv = nx * ny
-    neh = max(nx - 1, 0) * ny
-    nev = nx * max(ny - 1, 0)
+    nhx = _cubical_axis_count(nx, 1, px)
+    nvy = _cubical_axis_count(ny, 1, py)
+    nfx = nhx
+    nfy = nvy
+    neh = nhx * ny
+    nev = nx * nvy
     ne = neh + nev
-    nf = max(nx - 1, 0) * max(ny - 1, 0)
+    nf = nfx * nfy
 
     @inline vid(i::Int, j::Int) = i + (j - 1) * nx
-    @inline hid(i::Int, j::Int) = i + (j - 1) * (nx - 1)
+    @inline hid(i::Int, j::Int) = i + (j - 1) * nhx
     @inline vidx(i::Int, j::Int) = neh + i + (j - 1) * nx
-    @inline fid(i::Int, j::Int) = i + (j - 1) * (nx - 1)
+    @inline fid(i::Int, j::Int) = i + (j - 1) * nfx
 
     cells0 = Vector{TCell}(undef, nv)
     t = 1
@@ -11468,12 +11807,12 @@ function _cubical_structure_2d(dims::NTuple{2,Int})
     cells1 = Vector{TCell}(undef, ne)
     t = 1
     @inbounds for j in 1:ny
-        for i in 1:(nx - 1)
+        for i in 1:nhx
             cells1[t] = ((i, j), mask10)
             t += 1
         end
     end
-    @inbounds for j in 1:(ny - 1)
+    @inbounds for j in 1:nvy
         for i in 1:nx
             cells1[t] = ((i, j), mask01)
             t += 1
@@ -11482,8 +11821,8 @@ function _cubical_structure_2d(dims::NTuple{2,Int})
 
     cells2 = Vector{TCell}(undef, nf)
     t = 1
-    @inbounds for j in 1:(ny - 1)
-        for i in 1:(nx - 1)
+    @inbounds for j in 1:nfy
+        for i in 1:nfx
             cells2[t] = ((i, j), mask11)
             t += 1
         end
@@ -11494,37 +11833,41 @@ function _cubical_structure_2d(dims::NTuple{2,Int})
     V1 = Vector{Int}(undef, 2 * ne)
     t = 1
     @inbounds for j in 1:ny
-        for i in 1:(nx - 1)
+        for i in 1:nhx
             col = hid(i, j)
+            i2 = _cubical_next_coord(i, nx, px)
             I1[t] = vid(i, j); J1[t] = col; V1[t] = 1; t += 1
-            I1[t] = vid(i + 1, j); J1[t] = col; V1[t] = -1; t += 1
+            I1[t] = vid(i2, j); J1[t] = col; V1[t] = -1; t += 1
         end
     end
-    @inbounds for j in 1:(ny - 1)
+    @inbounds for j in 1:nvy
         for i in 1:nx
             col = vidx(i, j)
+            j2 = _cubical_next_coord(j, ny, py)
             I1[t] = vid(i, j); J1[t] = col; V1[t] = 1; t += 1
-            I1[t] = vid(i, j + 1); J1[t] = col; V1[t] = -1; t += 1
+            I1[t] = vid(i, j2); J1[t] = col; V1[t] = -1; t += 1
         end
     end
-    b1 = sparse(I1, J1, V1, nv, ne)
+    b1 = dropzeros!(sparse(I1, J1, V1, nv, ne))
 
     I2 = Vector{Int}(undef, 4 * nf)
     J2 = Vector{Int}(undef, 4 * nf)
     V2 = Vector{Int}(undef, 4 * nf)
     t = 1
-    @inbounds for j in 1:(ny - 1)
-        for i in 1:(nx - 1)
+    @inbounds for j in 1:nfy
+        for i in 1:nfx
             col = fid(i, j)
+            i2 = _cubical_next_coord(i, nx, px)
+            j2 = _cubical_next_coord(j, ny, py)
             # axis 1 faces: low/high vertical edges.
             I2[t] = vidx(i, j); J2[t] = col; V2[t] = 1; t += 1
-            I2[t] = vidx(i + 1, j); J2[t] = col; V2[t] = -1; t += 1
+            I2[t] = vidx(i2, j); J2[t] = col; V2[t] = -1; t += 1
             # axis 2 faces: low/high horizontal edges.
             I2[t] = hid(i, j); J2[t] = col; V2[t] = -1; t += 1
-            I2[t] = hid(i, j + 1); J2[t] = col; V2[t] = 1; t += 1
+            I2[t] = hid(i, j2); J2[t] = col; V2[t] = 1; t += 1
         end
     end
-    b2 = sparse(I2, J2, V2, ne, nf)
+    b2 = dropzeros!(sparse(I2, J2, V2, ne, nf))
 
     cells_by_dim = Vector{Vector{TCell}}(undef, 3)
     cells_by_dim[1] = cells0
@@ -11535,8 +11878,9 @@ function _cubical_structure_2d(dims::NTuple{2,Int})
 end
 
 function _cubical_structure(dims::NTuple{N,Int};
+                            periodic::NTuple{N,Bool}=ntuple(_ -> false, N),
                             cache::Union{Nothing,EncodingCache}=nothing) where {N}
-    key = Tuple(dims)
+    key = _cubical_cache_key(dims, periodic)
     if cache !== nothing
         Base.lock(cache.lock)
         try
@@ -11548,7 +11892,7 @@ function _cubical_structure(dims::NTuple{N,Int};
     end
 
     cached = if N == 2 && _CUBICAL_2D_FASTPATH[]
-        _cubical_structure_2d((dims[1], dims[2]))
+        _cubical_structure_2d((dims[1], dims[2]), (periodic[1], periodic[2]))
     else
         cells_by_dim = Vector{Vector{Tuple{NTuple{N,Int},NTuple{N,Int}}}}(undef, N + 1)
         cell_index = Vector{Dict{Tuple{NTuple{N,Int},NTuple{N,Int}},Int}}(undef, N + 1)
@@ -11570,7 +11914,7 @@ function _cubical_structure(dims::NTuple{N,Int};
                 mask = ntuple(i -> (i in mask_idxs ? 1 : 0), N)
                 ranges = Vector{UnitRange{Int}}(undef, N)
                 for i in 1:N
-                    ranges[i] = 1:(dims[i] - mask[i])
+                    ranges[i] = 1:_cubical_axis_count(dims[i], mask[i], periodic[i])
                 end
                 for coords in CartesianIndices(Tuple(ranges))
                     origin = ntuple(i -> coords[i], N)
@@ -11596,7 +11940,7 @@ function _cubical_structure(dims::NTuple{N,Int};
                 for (pos, axis) in enumerate(axes)
                     mask_face = ntuple(i -> (i == axis ? 0 : mask[i]), N)
                     origin_low = origin
-                    origin_high = ntuple(i -> (i == axis ? origin[i] + 1 : origin[i]), N)
+                    origin_high = ntuple(i -> (i == axis ? _cubical_next_coord(origin[i], dims[i], periodic[i]) : origin[i]), N)
                     low_key = (origin_low, mask_face)
                     high_key = (origin_high, mask_face)
                     row_low = cell_index[k][low_key]
@@ -11607,7 +11951,7 @@ function _cubical_structure(dims::NTuple{N,Int};
                     push!(I, row_high); push!(J, j); push!(V, sign_high)
                 end
             end
-            push!(boundaries, sparse(I, J, V, length(cells_by_dim[k]), length(cells_by_dim[k+1])))
+            push!(boundaries, dropzeros!(sparse(I, J, V, length(cells_by_dim[k]), length(cells_by_dim[k+1]))))
         end
         (cells_by_dim=cells_by_dim, cell_index=cell_index, boundaries=boundaries)
     end
@@ -11628,13 +11972,19 @@ function _cubical_structure(dims::NTuple{N,Int};
     return cached
 end
 
-function _cubical_grades_2d(channels::Vector{<:AbstractArray})
+function _cubical_grades_2d(channels::Vector{<:AbstractArray},
+                            periodic::NTuple{2,Bool}=(false, false))
     img = channels[1]
     nx, ny = size(img)
+    px, py = periodic
     C = length(channels)
-    neh = max(nx - 1, 0) * ny
-    nev = nx * max(ny - 1, 0)
-    nf = max(nx - 1, 0) * max(ny - 1, 0)
+    nhx = _cubical_axis_count(nx, 1, px)
+    nvy = _cubical_axis_count(ny, 1, py)
+    nfx = nhx
+    nfy = nvy
+    neh = nhx * ny
+    nev = nx * nvy
+    nf = nfx * nfy
     total = nx * ny + neh + nev + nf
     grades = Vector{NTuple{C,Float64}}(undef, total)
     t = 1
@@ -11646,32 +11996,36 @@ function _cubical_grades_2d(channels::Vector{<:AbstractArray})
         end
     end
     @inbounds for j in 1:ny
-        for i in 1:(nx - 1)
+        for i in 1:nhx
+            i2 = _cubical_next_coord(i, nx, px)
             grades[t] = ntuple(ch -> begin
                 a = Float64(channels[ch][i, j])
-                b = Float64(channels[ch][i + 1, j])
+                b = Float64(channels[ch][i2, j])
                 a >= b ? a : b
             end, C)
             t += 1
         end
     end
-    @inbounds for j in 1:(ny - 1)
+    @inbounds for j in 1:nvy
+        j2 = _cubical_next_coord(j, ny, py)
         for i in 1:nx
             grades[t] = ntuple(ch -> begin
                 a = Float64(channels[ch][i, j])
-                b = Float64(channels[ch][i, j + 1])
+                b = Float64(channels[ch][i, j2])
                 a >= b ? a : b
             end, C)
             t += 1
         end
     end
-    @inbounds for j in 1:(ny - 1)
-        for i in 1:(nx - 1)
+    @inbounds for j in 1:nfy
+        j2 = _cubical_next_coord(j, ny, py)
+        for i in 1:nfx
+            i2 = _cubical_next_coord(i, nx, px)
             grades[t] = ntuple(ch -> begin
                 a = Float64(channels[ch][i, j])
-                b = Float64(channels[ch][i + 1, j])
-                c = Float64(channels[ch][i, j + 1])
-                d = Float64(channels[ch][i + 1, j + 1])
+                b = Float64(channels[ch][i2, j])
+                c = Float64(channels[ch][i, j2])
+                d = Float64(channels[ch][i2, j2])
                 m1 = a >= b ? a : b
                 m2 = c >= d ? c : d
                 m1 >= m2 ? m1 : m2
@@ -11683,66 +12037,43 @@ function _cubical_grades_2d(channels::Vector{<:AbstractArray})
 end
 
 function _cubical_grades_2d_image_distance(img::AbstractArray,
-                                           dist::AbstractArray)
+                                           dist::AbstractArray,
+                                           periodic::NTuple{2,Bool}=(false, false))
     size(img) == size(dist) || error("image and distance channels must have the same size.")
-    nx, ny = size(img)
-    neh = max(nx - 1, 0) * ny
-    nev = nx * max(ny - 1, 0)
-    nf = max(nx - 1, 0) * max(ny - 1, 0)
-    total = nx * ny + neh + nev + nf
-    grades = Vector{NTuple{2,Float64}}(undef, total)
-    t = 1
+    return _cubical_grades_2d(AbstractArray[img, dist], periodic)
+end
 
-    @inbounds for j in 1:ny
-        for i in 1:nx
-            grades[t] = (Float64(img[i, j]), Float64(dist[i, j]))
-            t += 1
+function _cubical_cell_grade(channels::Vector{<:AbstractArray},
+                             origin::NTuple{N,Int},
+                             mask::NTuple{N,Int},
+                             dims::NTuple{N,Int},
+                             periodic::NTuple{N,Bool}) where {N}
+    C = length(channels)
+    maxv = fill(-Inf, C)
+    active = Int[]
+    for i in 1:N
+        mask[i] == 1 && push!(active, i)
+    end
+    bitpos = zeros(Int, N)
+    for (p, axis) in enumerate(active)
+        bitpos[axis] = p
+    end
+    nverts = 1 << length(active)
+    @inbounds for bits in 0:(nverts - 1)
+        coords = ntuple(i -> begin
+            c = origin[i]
+            bp = bitpos[i]
+            if bp != 0 && ((bits >>> (bp - 1)) & 1) == 1
+                c = _cubical_next_coord(c, dims[i], periodic[i])
+            end
+            c
+        end, N)
+        for ch in 1:C
+            v = Float64(channels[ch][coords...])
+            v > maxv[ch] && (maxv[ch] = v)
         end
     end
-    @inbounds for j in 1:ny
-        for i in 1:(nx - 1)
-            v1a = Float64(img[i, j])
-            v1b = Float64(img[i + 1, j])
-            v2a = Float64(dist[i, j])
-            v2b = Float64(dist[i + 1, j])
-            grades[t] = (
-                v1a >= v1b ? v1a : v1b,
-                v2a >= v2b ? v2a : v2b,
-            )
-            t += 1
-        end
-    end
-    @inbounds for j in 1:(ny - 1)
-        for i in 1:nx
-            v1a = Float64(img[i, j])
-            v1b = Float64(img[i, j + 1])
-            v2a = Float64(dist[i, j])
-            v2b = Float64(dist[i, j + 1])
-            grades[t] = (
-                v1a >= v1b ? v1a : v1b,
-                v2a >= v2b ? v2a : v2b,
-            )
-            t += 1
-        end
-    end
-    @inbounds for j in 1:(ny - 1)
-        for i in 1:(nx - 1)
-            a1 = Float64(img[i, j]); b1 = Float64(img[i + 1, j])
-            c1 = Float64(img[i, j + 1]); d1 = Float64(img[i + 1, j + 1])
-            a2 = Float64(dist[i, j]); b2 = Float64(dist[i + 1, j])
-            c2 = Float64(dist[i, j + 1]); d2 = Float64(dist[i + 1, j + 1])
-            m11 = a1 >= b1 ? a1 : b1
-            m12 = c1 >= d1 ? c1 : d1
-            m21 = a2 >= b2 ? a2 : b2
-            m22 = c2 >= d2 ? c2 : d2
-            grades[t] = (
-                m11 >= m12 ? m11 : m12,
-                m21 >= m22 ? m21 : m22,
-            )
-            t += 1
-        end
-    end
-    return grades
+    return ntuple(i -> maxv[i], C)
 end
 
 function _graded_complex_from_image_channels(channels::Vector{<:AbstractArray},
@@ -11755,33 +12086,26 @@ function _graded_complex_from_image_channels(channels::Vector{<:AbstractArray},
     end
     N = length(dims)
     C = length(channels)
+    periodic = _cubical_periodic_from_spec(spec, Val(N))
 
-    cached = _cubical_structure(dims; cache=cache)
+    budget = _construction_budget(spec)
+    if budget.max_simplices !== nothing || budget.max_edges !== nothing ||
+       budget.memory_budget_bytes !== nothing
+        _construction_check_counts!(_estimate_cubical_cell_counts(dims; periodic=periodic), spec)
+    end
+    cached = _cubical_structure(dims; periodic=periodic, cache=cache)
     cells_by_dim = cached.cells_by_dim
     grades = if N == 2 && _CUBICAL_2D_FASTPATH[]
         if C == 2 && spec.kind == :image_distance_bifiltration
-            _cubical_grades_2d_image_distance(channels[1], channels[2])
+            _cubical_grades_2d_image_distance(channels[1], channels[2], periodic)
         else
-            _cubical_grades_2d(channels)
+            _cubical_grades_2d(channels, periodic)
         end
     else
         out = Vector{NTuple{C,Float64}}()
         for k in 0:N
             for (origin, mask) in cells_by_dim[k+1]
-                maxv = fill(-Inf, C)
-                ranges = Vector{UnitRange{Int}}(undef, N)
-                for i in 1:N
-                    ranges[i] = origin[i]:(origin[i] + mask[i])
-                end
-                for coords in CartesianIndices(Tuple(ranges))
-                    for ch in 1:C
-                        v = Float64(channels[ch][coords])
-                        if v > maxv[ch]
-                            maxv[ch] = v
-                        end
-                    end
-                end
-                push!(out, ntuple(i -> maxv[i], C))
+                push!(out, _cubical_cell_grade(channels, origin, mask, dims, periodic))
             end
         end
         out
@@ -11812,17 +12136,22 @@ end
 
 function _graded_complex_from_data(data, spec::FiltrationSpec;
                                    cache::Union{Nothing,EncodingCache}=nothing)
+    _validate_geometric_filtration_request(data, spec)
+    _validate_construction_request(data, spec)
     if data isa GradedComplex
-        N = length(data.grades[1])
+        _construction_check_counts!(DataTypes.cell_counts(data), spec)
+        N = DataTypes.parameter_dim(data)
         orientation = get(spec.params, :orientation, ntuple(_ -> 1, N))
         axes = get(spec.params, :axes, _axes_from_grades(data.grades, N; orientation=orientation))
         return data, axes, orientation
     elseif data isa SimplexTreeMulti
-        N = length(data.grade_data[1])
+        _construction_check_counts!(DataTypes.cell_counts(data), spec)
+        N = DataTypes.parameter_dim(data)
         orientation = get(spec.params, :orientation, ntuple(_ -> 1, N))
         axes = get(spec.params, :axes, _axes_from_simplex_tree(data; orientation=orientation))
         return _graded_complex_from_simplex_tree(data), axes, orientation
     elseif data isa MultiCriticalGradedComplex
+        _construction_check_counts!(DataTypes.cell_counts(data), spec)
         _, grade_data = _packed_multigrade_storage(data)
         isempty(grade_data) && error("MultiCriticalGradedComplex has no grades.")
         N = length(grade_data[1])
@@ -11833,6 +12162,8 @@ function _graded_complex_from_data(data, spec::FiltrationSpec;
         return _graded_complex_from_point_cloud(data, spec; cache=cache)
     elseif data isa ImageNd
         return _graded_complex_from_image(data, spec; cache=cache)
+    elseif data isa AbstractMatrix{<:Real}
+        return _graded_complex_from_distance_matrix(data, spec)
     elseif data isa GraphData
         return _graded_complex_from_graph(data, spec)
     elseif data isa EmbeddedPlanarGraph2D
@@ -11941,18 +12272,22 @@ function _build_graded_complex_tuple(data, filtration::AbstractFiltration;
     spec = try
         _filtration_spec(filtration)
     catch err
-        if !(err isa ArgumentError)
+        if !(err isa ArgumentError && occursin("No FiltrationSpec conversion for", sprint(showerror, err)))
             rethrow()
         end
         nothing
     end
     if spec !== nothing
+        _validate_geometric_filtration_request(data, spec)
+        _validate_construction_request(data, spec)
         entry = _filtration_registry_get(spec.kind)
         if entry !== nothing && !(spec.kind in _BUILTIN_FILTRATION_KINDS)
             return _normalize_build_graded_complex_output(entry.builder(data, filtration; cache=cache), spec.kind)
         end
         return _graded_complex_from_data(data, spec; cache=cache)
     end
+    _construction_from_filtration(filtration).collapse == :none ||
+        throw(ArgumentError("certified collapse requires a supported Rips FiltrationSpec."))
     kind = filtration_kind(typeof(filtration))
     entry = _filtration_registry_get(kind)
     entry === nothing &&
@@ -12048,14 +12383,19 @@ end
 
 function _simplex_tree_from_data(data, spec::FiltrationSpec;
                                  cache::Union{Nothing,EncodingCache}=nothing)
+    _validate_geometric_filtration_request(data, spec)
+    _validate_construction_request(data, spec)
     if data isa SimplexTreeMulti
-        N = length(data.grade_data[1])
+        _construction_check_counts!(DataTypes.cell_counts(data), spec)
+        N = DataTypes.parameter_dim(data)
         orientation = get(spec.params, :orientation, ntuple(_ -> 1, N))
         axes = get(spec.params, :axes, _axes_from_simplex_tree(data; orientation=orientation))
         return data, axes, orientation
     end
     if data isa PointCloud
         return _graded_complex_from_point_cloud(data, spec; return_simplex_tree=true, cache=cache)
+    elseif data isa AbstractMatrix{<:Real}
+        return _graded_complex_from_distance_matrix(data, spec; return_simplex_tree=true)
     elseif data isa GraphData
         return _graded_complex_from_graph(data, spec; return_simplex_tree=true)
     elseif data isa EmbeddedPlanarGraph2D && spec.kind != :wing_vein_bifiltration
@@ -12116,6 +12456,20 @@ end
     end
 end
 
+# Revalidate hand-built positional objects at every planning/execution boundary.
+# Grid options remain meaningful when the same plan is run at a later stage.
+function _validate_pipeline_options(pipeline::PipelineOptions, spec)
+    PipelineOptions(; orientation=pipeline.orientation, axes_policy=pipeline.axes_policy,
+                    axis_kind=pipeline.axis_kind, eps=pipeline.eps,
+                    poset_kind=pipeline.poset_kind, field=pipeline.field,
+                    max_axis_len=pipeline.max_axis_len)
+    if pipeline.axes_policy === :as_given
+        spec isa FiltrationSpec && get(spec.params, :axes, nothing) !== nothing ||
+            throw(ArgumentError("axes_policy=:as_given requires explicit filtration axes."))
+    end
+    return nothing
+end
+
 @inline function _spec_with_plan_options(spec::FiltrationSpec,
                                          construction::ConstructionOptions,
                                          pipeline::PipelineOptions)::FiltrationSpec
@@ -12132,7 +12486,8 @@ end
     return FiltrationSpec(spec.kind, p2)
 end
 
-@inline function _ingestion_route_hint(data)::Symbol
+@inline function _ingestion_route_hint(data, spec)::Symbol
+    spec !== nothing && spec.kind === :rhomboid && return :graded_complex_only
     if data isa SimplexTreeMulti
         return :simplex_tree_input
     elseif data isa PointCloud || data isa GraphData || data isa EmbeddedPlanarGraph2D
@@ -12185,10 +12540,13 @@ end
         filtration_kind = filtration_kind(typeof(plan_filtration(plan))),
         planned_stage = planned_stage(plan),
         field = Symbol(nameof(typeof(plan_field(plan)))),
+        poset_kind = plan_pipeline(plan).poset_kind,
         route_hint = route_hint(plan),
         has_preflight = has_preflight(plan),
         construction_mode = _construction_mode_summary(plan_construction(plan)),
         multicritical_mode = multicritical_mode(plan),
+        construction = _ingestion_construction_provenance(plan.data, plan.spec, plan.filtration),
+        backend_status = :not_executed,
     )
 end
 
@@ -12238,7 +12596,7 @@ function Base.show(io::IO, ::MIME"text/plain", plan::IngestionPlan)
 end
 
 """
-    plan_ingestion(data, filtration; stage=:auto, field=QQField(), cache=:auto,
+    plan_ingestion(data, filtration; stage=:auto, field=nothing, cache=:auto,
                    construction=nothing, pipeline=nothing,
                    preflight=false, strict_preflight=false)
         -> IngestionPlan
@@ -12259,13 +12617,16 @@ Cheap-first workflow
 - use `:graded_complex` or `:simplex_tree` when you want to stay at a cheaper
   intermediate mathematical object instead of building the final encoding.
 
+The field is the explicit `field` keyword when supplied, otherwise
+`pipeline.field`, otherwise QQ. Pipeline fields are coefficient-field objects.
+
 Preflight
 - `preflight=true` stores an [`IngestionEstimate`](@ref) on `plan.preflight`;
 - `strict_preflight=true` makes preflight warnings throw immediately.
 """
 function plan_ingestion(data, filtration::AbstractFiltration;
                         stage::Symbol=:auto,
-                        field::AbstractCoeffField=QQField(),
+                        field::Union{Nothing,AbstractCoeffField}=nothing,
                         cache=:auto,
                         construction::Union{Nothing,ConstructionOptions}=nothing,
                         pipeline::Union{Nothing,PipelineOptions}=nothing,
@@ -12274,6 +12635,7 @@ function plan_ingestion(data, filtration::AbstractFiltration;
     base_construction = _construction_from_filtration(filtration)
     construction_final = construction === nothing ? base_construction : construction
     pipeline_final = pipeline === nothing ? _pipeline_options_from_filtration(filtration) : pipeline
+    field = field === nothing ? something(pipeline_final.field, QQField()) : field
     session_cache = _resolve_workflow_session_cache(cache)
     stage_final = _resolve_ingestion_stage(stage, construction_final)
     enc_cache = _workflow_encoding_cache(session_cache)
@@ -12288,6 +12650,9 @@ function plan_ingestion(data, filtration::AbstractFiltration;
     try
         spec0 = _filtration_spec(filtration)
         spec = _spec_with_plan_options(spec0, construction_final, pipeline_final)
+        _validate_pipeline_options(pipeline_final, spec)
+        _validate_geometric_filtration_request(data, spec)
+        _validate_construction_request(data, spec)
         if _INGESTION_PLAN_NORM_CACHE[] && session_cache !== nothing
             norm_key = _ingestion_plan_norm_key(spec, stage_final, field)
             cached = _get_geometry_cached(enc_cache, norm_key)
@@ -12327,6 +12692,8 @@ function plan_ingestion(data, filtration::AbstractFiltration;
         if construction !== nothing || pipeline !== nothing
             throw(ArgumentError("plan_ingestion: construction/pipeline overrides require a filtration that round-trips through FiltrationSpec."))
         end
+        construction_final.collapse == :none ||
+            throw(ArgumentError("certified collapse requires a supported Rips FiltrationSpec."))
     end
 
     return IngestionPlan(
@@ -12339,7 +12706,7 @@ function plan_ingestion(data, filtration::AbstractFiltration;
         field,
         session_cache,
         preflight_report,
-        _ingestion_route_hint(data),
+        _ingestion_route_hint(data, spec),
         multicritical,
         onecritical_selector,
         onecritical_enforce_boundary,
@@ -12348,17 +12715,22 @@ end
 
 function plan_ingestion(data, spec::FiltrationSpec;
                         stage::Symbol=:auto,
-                        field::AbstractCoeffField=QQField(),
+                        field::Union{Nothing,AbstractCoeffField}=nothing,
                         cache=:auto,
                         construction::Union{Nothing,ConstructionOptions}=nothing,
                         pipeline::Union{Nothing,PipelineOptions}=nothing,
                         preflight::Bool=false,
                         strict_preflight::Bool=false)
+    spec.kind === :rhomboid && (spec = _canonical_geometric_filtration_spec(spec))
     base_construction = _construction_from_params(spec.params)
     construction_final = construction === nothing ? base_construction : construction
     base_pipeline = _pipeline_options_from_spec(spec)
     pipeline_final = pipeline === nothing ? base_pipeline : pipeline
+    field = field === nothing ? something(pipeline_final.field, QQField()) : field
     spec_final = _spec_with_plan_options(spec, construction_final, pipeline_final)
+    _validate_pipeline_options(pipeline_final, spec_final)
+    _validate_geometric_filtration_request(data, spec_final)
+    _validate_construction_request(data, spec_final)
     session_cache = _resolve_workflow_session_cache(cache)
     stage_final = _resolve_ingestion_stage(stage, construction_final)
     enc_cache = _workflow_encoding_cache(session_cache)
@@ -12415,7 +12787,7 @@ function plan_ingestion(data, spec::FiltrationSpec;
         field,
         session_cache,
         preflight_report,
-        _ingestion_route_hint(data),
+        _ingestion_route_hint(data, spec_final),
         multicritical,
         onecritical_selector,
         onecritical_enforce_boundary,
@@ -12476,7 +12848,7 @@ function plan_ingestion(path::AbstractString, filtration::AbstractFiltration;
                         file_opts::DataFileOptions=DataFileOptions(),
                         load_kwargs::NamedTuple=NamedTuple(),
                         stage::Symbol=:auto,
-                        field::AbstractCoeffField=QQField(),
+                        field::Union{Nothing,AbstractCoeffField}=nothing,
                         cache=:auto,
                         construction::Union{Nothing,ConstructionOptions}=nothing,
                         pipeline::Union{Nothing,PipelineOptions}=nothing,
@@ -12500,7 +12872,7 @@ function plan_ingestion(path::AbstractString, spec::FiltrationSpec;
                         file_opts::DataFileOptions=DataFileOptions(),
                         load_kwargs::NamedTuple=NamedTuple(),
                         stage::Symbol=:auto,
-                        field::AbstractCoeffField=QQField(),
+                        field::Union{Nothing,AbstractCoeffField}=nothing,
                         cache=:auto,
                         construction::Union{Nothing,ConstructionOptions}=nothing,
                         pipeline::Union{Nothing,PipelineOptions}=nothing,
@@ -12633,8 +13005,26 @@ function check_construction_options(data, construction::ConstructionOptions; thr
     stage_report = check_ingestion_stage(construction.output_stage; throw=false)
     get(stage_report, :valid, false) || append!(issues, get(stage_report, :issues, String[]))
     data_kind = _ingestion_data_kind(data)
-    if construction.sparsify != :none && !(data isa PointCloud)
-        push!(issues, "construction.sparsify=$(construction.sparsify) is currently only supported for point-cloud ingestion.")
+    for (validate, value) in ((_validate_construction_collapse, construction.collapse),
+                               (_validate_construction_sparsify, construction.sparsify))
+        try
+            validate(value)
+        catch err
+            push!(issues, sprint(showerror, err))
+        end
+    end
+    try
+        _construction_from_raw(construction)
+    catch err
+        push!(issues, sprint(showerror, err))
+    end
+    if construction.collapse != :none && !(data isa PointCloud || data isa AbstractMatrix{<:Real})
+        push!(issues, "certified collapse requires point-cloud or distance-matrix Rips input.")
+    elseif construction.collapse == :dominated_edges
+        push!(warnings, "certified collapse requires a supported sublevel Rips flag filtration; max_dim <= 1 retains all edges.")
+    end
+    if construction.sparsify != :none && !(data isa PointCloud || data isa AbstractMatrix{<:Real})
+        push!(issues, "construction.sparsify=$(construction.sparsify) requires point-cloud or distance-matrix ingestion.")
     elseif data isa PointCloud && construction.sparsify != :none
         push!(warnings, "sparse point-cloud construction also depends on filtration-specific radius/knn contracts; use check_data_filtration(...) for the full route check.")
     end
@@ -12676,6 +13066,7 @@ function check_filtration_spec(spec::FiltrationSpec; throw::Bool=false)
     end
     try
         construction_mode(spec)
+        _validate_collapse_spec(spec)
     catch err
         push!(issues, sprint(showerror, err))
     end
@@ -12803,19 +13194,26 @@ function check_filtration(f::AbstractFiltration; throw::Bool=false)
         push!(issues, sprint(showerror, err))
     end
     try
-        _filtration_spec(f)
+        spec_for_check = _filtration_spec(f)
+        _validate_collapse_spec(spec_for_check)
         spec_convertible = true
     catch err
         if !(err isa ArgumentError && occursin("No FiltrationSpec conversion for", sprint(showerror, err)))
             push!(issues, sprint(showerror, err))
         end
     end
+    construction_summary = try
+        _construction_mode_summary(construction_mode(f))
+    catch err
+        push!(issues, sprint(showerror, err))
+        nothing
+    end
     valid = isempty(issues)
     throw && !valid && _throw_invalid_ingestion("filtration", issues)
     return _ingestion_validation_report(:filtration, valid;
                                         filtration_kind=kind,
                                         arity=arity,
-                                        construction_mode=_construction_mode_summary(construction_mode(f)),
+                                        construction_mode=construction_summary,
                                         spec_convertible=spec_convertible,
                                         issues=issues)
 end
@@ -12885,12 +13283,13 @@ function check_data_filtration(data, filtration::AbstractFiltration; throw::Bool
                 _ingestion_warning_is_error(msg) && push!(issues, msg)
             end
         catch err
-            try
-                _build_graded_complex_tuple(data, filtration; cache=nothing)
-            catch inner
-                push!(issues, sprint(showerror, inner))
-            end
-            if !(err isa ArgumentError && occursin("No FiltrationSpec conversion for", sprint(showerror, err)))
+            if err isa ArgumentError && occursin("No FiltrationSpec conversion for", sprint(showerror, err))
+                try
+                    _build_graded_complex_tuple(data, filtration; cache=nothing)
+                catch inner
+                    push!(issues, sprint(showerror, inner))
+                end
+            else
                 push!(issues, sprint(showerror, err))
             end
         end
@@ -12922,6 +13321,12 @@ function check_ingestion_plan(plan::IngestionPlan; throw::Bool=false)
     if !(planned_stage(plan) in (:simplex_tree, :graded_complex, :cochain, :encoded_complex, :module,
                                  :fringe, :flange, :cohomology_dims, :encoding_result))
         push!(issues, "planned_stage must be one of the canonical ingestion stages.")
+    end
+    try
+        _validate_pipeline_options(plan_pipeline(plan), plan_spec(plan))
+        _construction_from_raw(plan_construction(plan))
+    catch err
+        push!(issues, sprint(showerror, err))
     end
     pair_report = check_data_filtration(source_data(plan), plan_filtration(plan); throw=false)
     get(pair_report, :valid, false) || append!(issues, get(pair_report, :issues, String[]))
@@ -12995,9 +13400,17 @@ end
     )
 end
 
-function _run_ingestion_plan(plan::IngestionPlan;
+function _run_ingestion_plan(plan::IngestionPlan; degree::Int=0, stage::Symbol=:auto)
+    trace = _IngestionExecutionTrace()
+    return with(_INGESTION_EXECUTION_TRACE => trace) do
+        _execute_ingestion_plan(plan, trace; degree=degree, stage=stage)
+    end
+end
+
+function _execute_ingestion_plan(plan::IngestionPlan, trace::_IngestionExecutionTrace;
                              degree::Int=0,
                              stage::Symbol=:auto)
+    degree >= 0 || throw(ArgumentError("ingestion degree must be nonnegative (homological degree)."))
     data = plan.data
     filtration = plan.filtration
     construction = plan.construction
@@ -13007,10 +13420,22 @@ function _run_ingestion_plan(plan::IngestionPlan;
     multicritical = plan.multicritical
     onecritical_selector = plan.onecritical_selector
     onecritical_enforce_boundary = plan.onecritical_enforce_boundary
-    stage = _resolve_ingestion_stage(stage, construction)
+    stage = _resolve_ingestion_stage(stage === :auto ? plan.stage : stage, construction)
+    _validate_pipeline_options(pipeline, plan.spec)
+    if plan.spec isa FiltrationSpec
+        runtime_spec = _spec_with_plan_options(plan.spec, construction, pipeline)
+        _validate_geometric_filtration_request(data, runtime_spec)
+        _validate_construction_request(data, runtime_spec)
+        if data isa GradedComplex || data isa MultiCriticalGradedComplex || data isa SimplexTreeMulti
+            _construction_check_counts!(DataTypes.cell_counts(data), runtime_spec)
+        end
+    elseif construction.collapse != :none
+        throw(ArgumentError("certified collapse requires a supported Rips FiltrationSpec."))
+    end
 
     axes_override = if plan.spec isa FiltrationSpec
-        get(plan.spec.params, :axes, nothing)
+        requested_axes = get(plan.spec.params, :axes, nothing)
+        requested_axes === nothing ? nothing : Tuple(requested_axes)
     else
         nothing
     end
@@ -13024,7 +13449,7 @@ function _run_ingestion_plan(plan::IngestionPlan;
 
     if stage == :simplex_tree
         ST, _, _ = _simplex_tree_from_data(data, filtration; cache=enc_cache)
-        return ST
+        return eps === nothing ? ST : _quantize_simplex_tree(ST, eps)
     end
 
     ST = nothing
@@ -13041,7 +13466,7 @@ function _run_ingestion_plan(plan::IngestionPlan;
             nothing
         end
         if spec_try isa FiltrationSpec
-            tree_route_ok = spec_try.kind in _BUILTIN_FILTRATION_KINDS
+            tree_route_ok = spec_try.kind in _BUILTIN_FILTRATION_KINDS && spec_try.kind !== :rhomboid
         else
             tree_route_ok = false
         end
@@ -13050,8 +13475,8 @@ function _run_ingestion_plan(plan::IngestionPlan;
        eps === nothing &&
        data isa PointCloud &&
        spec_try isa FiltrationSpec &&
-       Int(get(spec_try.params, :max_dim, 1)) <= 1 &&
-       _is_point_cloud_lowdim_direct_lazy_kind(spec_try.kind)
+       _is_point_cloud_lowdim_direct_lazy_kind(spec_try.kind) &&
+       Int(get(spec_try.params, :max_dim, 1)) <= 1
         direct_payload = _point_cloud_lowdim_lazy_payload(data, spec_try)
         axes0 = direct_payload.axes
         orientation0 = direct_payload.orientation
@@ -13086,7 +13511,7 @@ function _run_ingestion_plan(plan::IngestionPlan;
             if G === nothing
                 G = _graded_complex_from_simplex_tree(ST)
             end
-            return G
+            return eps === nothing ? G : _quantize_grades(G, eps)
         end
     end
 
@@ -13095,7 +13520,7 @@ function _run_ingestion_plan(plan::IngestionPlan;
     end
     orientation_final = orientation === nothing ? orientation0 : orientation
     axes_final = if axes_override === nothing
-        if orientation === nothing
+        if orientation === nothing || orientation == orientation0
             axes0
         elseif ST !== nothing
             _axes_from_simplex_tree(ST; orientation=orientation_final)
@@ -13118,10 +13543,21 @@ function _run_ingestion_plan(plan::IngestionPlan;
     if eps !== nothing
         if ST !== nothing
             ST = _quantize_simplex_tree(ST, eps)
-            axes_final = _axes_from_simplex_tree(ST; orientation=orientation_final)
+            axes_final = axes_override === nothing ?
+                _axes_from_simplex_tree(ST; orientation=orientation_final) : axes_override
         else
             G = _quantize_grades(G, eps)
-            axes_final = _axes_from_complex_grades(G, orientation_final)
+            axes_final = axes_override === nothing ?
+                _axes_from_complex_grades(G, orientation_final) : axes_override
+        end
+        if spec_try isa FiltrationSpec && spec_try.kind === :rhomboid && axes_override === nothing
+            # The requested endpoints can describe zero stalks, so they are
+            # part of the represented window even when no cell has that grade.
+            steps = _quantize_eps_vec(eps, Val(length(axes0)))
+            axes_final = ntuple(length(axes0)) do i
+                sort!(unique!(vcat(axes_final[i],
+                    [round(Float64(x)/steps[i])*steps[i] for x in axes0[i]])))
+            end
         end
     end
 
@@ -13135,6 +13571,12 @@ function _run_ingestion_plan(plan::IngestionPlan;
         error("encode(data, filtration): unknown axes_policy $(axes_policy).")
     end
 
+    # A mixed radius/depth axis tuple is natural (exact reals and integers).
+    # Promote once at the grid boundary, preserving all supplied values.
+    axis_scalar = promote_type(map(eltype, axes_final)...)
+    # A result owns its classifier grid: later edits to requested axes must
+    # not change point labels while leaving the stored module/provenance fixed.
+    axes_final = map(a -> axis_scalar.(a), axes_final)
     _validate_axes_sorted(axes_final)
     _validate_axes_kind(axes_final; axis_kind=axis_kind)
     needs_flange = (stage == :flange)
@@ -13142,11 +13584,13 @@ function _run_ingestion_plan(plan::IngestionPlan;
         error("encode(data, filtration; stage=:flange): axis_kind must be :zn (integer axes).")
     end
 
-    poset_fast_key = _ingestion_poset_fast_key(
+    poset_fast_key = session_cache === nothing ? nothing : _ingestion_poset_fast_key(
         data,
         filtration,
+        axes_final,
         orientation_final,
         axes_policy,
+        pipeline.poset_kind,
         max_axis_len,
         axis_kind,
         eps,
@@ -13156,11 +13600,13 @@ function _run_ingestion_plan(plan::IngestionPlan;
     )
     P = session_cache === nothing ? nothing : _get_geometry_cached(enc_cache, poset_fast_key)
     if !(P isa AbstractPoset)
-        P = _poset_from_axes_cached(axes_final, orientation_final; cache=enc_cache)
+        P = _poset_from_axes_cached(axes_final, orientation_final;
+                                         poset_kind=pipeline.poset_kind, cache=enc_cache)
         session_cache === nothing || _set_geometry_cached!(enc_cache, poset_fast_key, P)
     end
     module_fast_key = session_cache === nothing ? nothing :
-        _ingestion_module_fast_key(poset_fast_key, P, degree, field)
+        _ingestion_module_fast_key(poset_fast_key, P, degree, field,
+            _ingestion_complex_cache_key(ST, G, direct_payload))
     cached_module = module_fast_key === nothing ? nothing : _get_geometry_cached(enc_cache, module_fast_key)
     cached_module_hit = cached_module isa NamedTuple && hasproperty(cached_module, :M)
 
@@ -13169,9 +13615,7 @@ function _run_ingestion_plan(plan::IngestionPlan;
     # Session-level cache reuse for ingestion happens at the poset/data level above.
     # Lazy encoding-result and encoded-complex paths defer full-grid representatives
     # until explicitly requested via `encoding_representatives(...)`.
-    pi2 = (stage == :encoded_complex || stage == :encoding_result) ?
-        _compile_encoding_without_reps(P, pi, (encoding_cache=EncodingCache(),)) :
-        compile_encoding(P, pi; meta=(encoding_cache=EncodingCache(),))
+    pi2 = compile_encoding(P, pi; meta=(encoding_cache=EncodingCache(),))
 
     build_lazy = () -> direct_payload === nothing ?
         _build_ingestion_lazy_cochain(
@@ -13191,6 +13635,15 @@ function _run_ingestion_plan(plan::IngestionPlan;
         lazyC === nothing && (lazyC = build_lazy())
         return _materialize_cochain(lazyC; check=true)
     end
+    result_provenance = _ingestion_provenance(
+        plan, P, axes_final, orientation_final, degree, stage, trace;
+        grades = ST !== nothing ? ST.grade_data :
+                 direct_payload !== nothing ? Iterators.flatten(direct_payload.grades_by_dim) :
+                 G isa MultiCriticalGradedComplex ? last(_packed_multigrade_storage(G)) : G.grades,
+        cell_counts = ST !== nothing ? DataTypes.cell_counts(ST) :
+                      direct_payload !== nothing ? map(length, direct_payload.grades_by_dim) :
+                      DataTypes.cell_counts(G),
+    )
     if stage == :encoded_complex
         lazyC === nothing && (lazyC = build_lazy())
         return EncodedComplexResult(
@@ -13198,13 +13651,13 @@ function _run_ingestion_plan(plan::IngestionPlan;
             lazyC,
             pi2;
             field=field,
-            meta=(presentation=(data=data, filtration=filtration), backend=:data),
+            meta=(presentation=(data=data, filtration=filtration), backend=:data, provenance=result_provenance),
         )
     end
     if stage == :cohomology_dims
         lazyC === nothing && (lazyC = build_lazy())
         dims = _cohomology_dims_from_lazy(lazyC, degree)
-        return CohomologyDimsResult(P, dims, pi2; degree=degree, field=field)
+        return CohomologyDimsResult(P, dims, pi2; degree=degree, field=field, meta=(provenance=result_provenance,))
     end
     use_lazy_encoding_module = stage == :encoding_result &&
                                _ENCODING_RESULT_LAZY_MODULE[] &&
@@ -13255,7 +13708,7 @@ function _run_ingestion_plan(plan::IngestionPlan;
         return flange_presentation(M, pi)
     end
     res = EncodingResult(P, M, pi2; H=H_cached, presentation=(data=data, filtration=filtration),
-                         opts=EncodingOptions(; backend=:data, field=field), backend=:data, meta=(;))
+                         opts=EncodingOptions(; backend=:data, poset_kind=pipeline.poset_kind, field=field), backend=:data, meta=(provenance=result_provenance,))
     return res
 end
 
@@ -13299,11 +13752,17 @@ encode(plan::IngestionPlan; degree::Int=0) =
     _run_ingestion_plan(plan; degree=degree, stage=:encoding_result)
 
 """
-    encode(data, filtration; degree=0, stage=:auto, field=QQField(), cache=:auto,
+    encode(data, filtration; degree=0, stage=:auto, field=nothing, cache=:auto,
            construction=nothing, pipeline=nothing,
            preflight=false, strict_preflight=false) -> Any
 
 Canonical data-ingestion entrypoint.
+
+`degree=k` is the nonnegative homological degree: module outputs compute
+`H_k` with the maps induced by inclusion of filtered cell complexes.
+`field` overrides `pipeline.field`; when neither is supplied, QQ is used.
+`pipeline.poset_kind=:signature` uses a structured product of chains and
+`:dense` materializes the same order without changing labels, modules or maps.
 
 `stage` controls the returned object:
 - `:simplex_tree`, `:graded_complex`, `:cochain`, `:module`, `:fringe`,
@@ -13314,11 +13773,18 @@ Canonical data-ingestion entrypoint.
 and skips module-map materialization; this is intended for dim/rank-only
 invariant workflows.
 
+`stage=:cochain` returns the chain complex reindexed as a cochain complex:
+`C^{-k}=C_k`, with the original boundary as `d^{-k}`. Thus the ordinary
+homology module in degree `k` is `cohomology_module(C, -k)`. This reindexing
+preserves covariant inclusion maps and places the complex in nonpositive
+cohomological degrees.
+
 `stage=:encoded_complex` returns `EncodedComplexResult(P, C, pi; field)` where
 `C` is an encoded cochain-complex payload, typically stored lazily until a
 downstream workflow needs full term/differential materialization. This is the
 canonical ingestion stage for exact whole-complex invariants such as Euler
-signed measures.
+signed measures. Its materialized complex uses the same nonpositive grading
+as `stage=:cochain`.
 
 `stage=:encoding_result` avoids eager fringe materialization on the hot path.
 When `_ENCODING_RESULT_LAZY_MODULE[]` is enabled, `enc.M` is a lazy module
@@ -13353,7 +13819,7 @@ Best practices
 function encode(data, filtration::AbstractFiltration;
                 degree::Int=0,
                 stage::Symbol=:auto,
-                field::AbstractCoeffField=QQField(),
+                field::Union{Nothing,AbstractCoeffField}=nothing,
                 cache=:auto,
                 construction::Union{Nothing,ConstructionOptions}=nothing,
                 pipeline::Union{Nothing,PipelineOptions}=nothing,
@@ -13373,7 +13839,7 @@ end
 function encode(data, spec::FiltrationSpec;
                 degree::Int=0,
                 stage::Symbol=:auto,
-                field::AbstractCoeffField=QQField(),
+                field::Union{Nothing,AbstractCoeffField}=nothing,
                 cache=:auto,
                 construction::Union{Nothing,ConstructionOptions}=nothing,
                 pipeline::Union{Nothing,PipelineOptions}=nothing,
@@ -13407,7 +13873,7 @@ function encode(path::AbstractString, filtration::AbstractFiltration;
                 load_kwargs::NamedTuple=NamedTuple(),
                 degree::Int=0,
                 stage::Symbol=:auto,
-                field::AbstractCoeffField=QQField(),
+                field::Union{Nothing,AbstractCoeffField}=nothing,
                 cache=:auto,
                 construction::Union{Nothing,ConstructionOptions}=nothing,
                 pipeline::Union{Nothing,PipelineOptions}=nothing,
@@ -13435,7 +13901,7 @@ function encode(path::AbstractString, spec::FiltrationSpec;
                 load_kwargs::NamedTuple=NamedTuple(),
                 degree::Int=0,
                 stage::Symbol=:auto,
-                field::AbstractCoeffField=QQField(),
+                field::Union{Nothing,AbstractCoeffField}=nothing,
                 cache=:auto,
                 construction::Union{Nothing,ConstructionOptions}=nothing,
                 pipeline::Union{Nothing,PipelineOptions}=nothing,
@@ -13455,7 +13921,5 @@ function encode(path::AbstractString, spec::FiltrationSpec;
                           strict_preflight=strict_preflight)
     return run_ingestion(plan; stage=plan.stage, degree=degree)
 end
-
-@inline _include_reps_when_rewrapping(::EncodingResult{PType,<:_LazyEncodedModule}) where {PType} = false
 
 end # module DataIngestion

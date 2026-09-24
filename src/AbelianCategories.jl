@@ -202,9 +202,6 @@ standard cover cache for `Q`. Internal callers should pass a concrete
     return _get_cover_cache(Q)
 end
 
-const _PUBLIC_LAST_Q = Any[nothing for _ in 1:max(1, Threads.nthreads())]
-const _PUBLIC_LAST_CC = Any[nothing for _ in 1:max(1, Threads.nthreads())]
-
 @inline _cheap_wrapper_prefers_fast_auto_cache(field::AbstractCoeffField) =
     (field isa PrimeField) || (field isa RealField)
 
@@ -225,24 +222,6 @@ to reuse an existing cache without forcing fresh construction.
         end
     end
     return nothing
-end
-
-"""
-    _record_public_cover_cache!(Q, cc) -> CoverCache
-
-Record a recently used `(Q, cc)` pair in the small thread-local AbelianCategories
-public cache memo and return `cc`.
-
-This is an internal latency optimization for repeated `cache=:auto` calls on the
-same poset. It does not change ownership or lifetime of the cache.
-"""
-@inline function _record_public_cover_cache!(Q, cc::CoverCache)
-    tid = Threads.threadid()
-    @inbounds begin
-        _PUBLIC_LAST_Q[tid] = Q
-        _PUBLIC_LAST_CC[tid] = cc
-    end
-    return cc
 end
 
 """
@@ -272,21 +251,10 @@ paths, it falls back to the standard `_get_cover_cache(Q)` behavior.
 @inline function _resolve_public_cover_cache(Q, field::AbstractCoeffField, cache::Symbol)
     cache === :auto || error("cache must be :auto or a CoverCache")
     if _cheap_wrapper_prefers_fast_auto_cache(field)
-        tid = Threads.threadid()
-        lastQ = @inbounds _PUBLIC_LAST_Q[tid]
-        lastcc = @inbounds _PUBLIC_LAST_CC[tid]
-        if lastQ === Q && lastcc isa CoverCache
-            live = _peek_cover_cache(Q)
-            if live === lastcc
-                return lastcc
-            end
-        end
         live = _peek_cover_cache(Q)
-        if live isa CoverCache
-            return _record_public_cover_cache!(Q, live)
-        end
+        live isa CoverCache && return live
     end
-    return _record_public_cover_cache!(Q, _get_cover_cache(Q))
+    return _get_cover_cache(Q)
 end
 
 """
@@ -2334,11 +2302,16 @@ function _right_inverse_full_row(field::AbstractCoeffField, Q::AbstractMatrix{K}
         return zeros(K, m, 0)
     end
     Qm = Q isa Matrix{K} ? Q : Matrix(Q)
-    _, pivs = FieldLinAlg.rref(field, Qm)
-    length(pivs) == r || error("_right_inverse_full_row: expected full row rank, got rank $(length(pivs)) < $r")
-
-    piv = collect(pivs[1:r])
-    Qp = Qm[:, piv]
+    # Only a well-conditioned independent column set is needed over RealField;
+    # preserve QR selection rather than computing a full row reduction.
+    Qp, piv = if field isa RealField
+        FieldLinAlg._colspace_with_pivots(field, Qm)
+    else
+        _, pivs = FieldLinAlg.rref(field, Qm)
+        cols = collect(pivs)
+        (Qm[:, cols], cols)
+    end
+    length(piv) == r || error("_right_inverse_full_row: expected full row rank, got rank $(length(piv)) < $r")
     invQp = FieldLinAlg.solve_fullcolumn(field, Qp, eye(field, r))
 
     R = zeros(K, m, r)

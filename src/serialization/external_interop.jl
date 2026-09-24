@@ -525,8 +525,8 @@ function _parse_poset_from_typed(poset_obj::_ProductOfChainsPosetJSON)
 end
 
 function _parse_poset_from_typed(poset_obj::_GridPosetJSON)
-    coords_any = poset_obj.coords
-    coords = ntuple(i -> Vector{Float64}(coords_any[i]), length(coords_any))
+    coords_any = _coordinate_rows_from_obj(poset_obj.coords, poset_obj.exact_coords)
+    coords = ntuple(i -> coords_any[i], length(coords_any))
     P = GridPoset(coords)
     poset_obj.n == nvertices(P) || error("GridPoset.n mismatch.")
     _clear_cover_cache!(P)
@@ -1051,9 +1051,9 @@ function _parse_poset_from_obj(poset_obj)
         return P
     elseif kind == "GridPoset"
         haskey(poset_obj, "coords") || error("GridPoset missing required key 'coords'.")
-        coords_any = poset_obj["coords"]
+        coords_any = _coordinate_rows_from_obj(poset_obj["coords"], get(poset_obj, "exact_coords", nothing))
         coords_any isa AbstractVector || error("GridPoset.coords must be a list-of-lists.")
-        coords = ntuple(i -> Vector{Float64}(coords_any[i]), length(coords_any))
+        coords = ntuple(i -> coords_any[i], length(coords_any))
         P = GridPoset(coords)
         _clear_cover_cache!(P)
         return P
@@ -1118,9 +1118,10 @@ function _poset_obj(P::AbstractPoset; include_leq::Union{Bool,Symbol}=:auto)
         end
         return obj
     elseif P isa GridPoset
-        obj = Dict("kind" => "GridPoset",
+        obj = Dict{String,Any}("kind" => "GridPoset",
                    "n" => nvertices(P),
                    "coords" => [collect(c) for c in P.coords])
+        _store_coordinate_rows!(obj, "coords", P.coords)
         if include_leq_resolved
             L = leq_matrix(P)
             obj["leq"] = _pack_bitmatrix_obj(L)
@@ -1359,7 +1360,7 @@ function _triangular_from_rows(rows::Vector{Vector{Float64}}; upper::Bool)
                     dist[j, i] = row[k]
                 end
             end
-            dist[i, i] = 0.0
+            include_diag || (dist[i, i] = 0.0)
         end
         return dist
     else
@@ -1384,7 +1385,7 @@ function _triangular_from_rows(rows::Vector{Vector{Float64}}; upper::Bool)
                     dist[j, i] = row[j]
                 end
             end
-            dist[i, i] = 0.0
+            include_diag || (dist[i, i] = 0.0)
         end
         return dist
     end
@@ -1410,7 +1411,7 @@ function _triangular_from_vals(vals::Vector{Float64}; upper::Bool)
                     dist[j, i] = val
                 end
             end
-            dist[i, i] = 0.0
+            include_diag || (dist[i, i] = 0.0)
         end
     else
         for i in 1:n
@@ -1427,36 +1428,16 @@ function _triangular_from_vals(vals::Vector{Float64}; upper::Bool)
                     dist[j, i] = val
                 end
             end
-            dist[i, i] = 0.0
+            include_diag || (dist[i, i] = 0.0)
         end
     end
     return dist
 end
 
-function _combinations(n::Int, k::Int)
-    if k == 0
-        return [Int[]]
-    end
-    out = Vector{Vector{Int}}()
-    function rec(start::Int, acc::Vector{Int})
-        if length(acc) == k
-            push!(out, copy(acc))
-            return
-        end
-        for i in start:(n - (k - length(acc)) + 1)
-            push!(acc, i)
-            rec(i + 1, acc)
-            pop!(acc)
-        end
-    end
-    rec(1, Int[])
-    return out
-end
-
 @inline function _dm_budget_check_max_simplices!(total::Integer, budget::ConstructionBudget)
     ms = budget.max_simplices
     if ms !== nothing && total > ms
-        error("distance matrix Rips: exceeded max_simplices=$(ms).")
+        throw(ArgumentError("distance matrix Rips: exceeded max_simplices=$(ms)."))
     end
     return nothing
 end
@@ -1464,107 +1445,61 @@ end
 @inline function _dm_budget_check_max_edges!(edge_count, budget::ConstructionBudget)
     cap = budget.max_edges
     if cap !== nothing && big(edge_count) > big(cap)
-        error("distance matrix Rips: exceeded max_edges=$(cap).")
+        throw(ArgumentError("distance matrix Rips: exceeded max_edges=$(cap)."))
     end
     return nothing
 end
 
-function _dm_edges_radius(dist::AbstractMatrix{<:Real}, radius::Float64)
+function _dm_edges_radius(dist::AbstractMatrix{<:Real}, radius::Float64,
+                          budget::ConstructionBudget)
     n = size(dist, 1)
-    edges = Vector{Vector{Int}}()
+    edges = NTuple{2,Int}[]
     for i in 1:n, j in i+1:n
-        if Float64(dist[i, j]) <= radius
-            push!(edges, [i, j])
+        d = Float64(dist[i, j])
+        if isfinite(d) && d <= radius
+            _dm_budget_check_max_edges!(length(edges) + 1, budget)
+            push!(edges, (i, j))
         end
     end
     return edges
 end
 
-function _dm_edges_knn(dist::AbstractMatrix{<:Real}, k::Int)
+function _dm_edges_knn(dist::AbstractMatrix{<:Real}, k::Int,
+                       budget::ConstructionBudget)
     n = size(dist, 1)
-    0 < k < n || error("construction.sparsify=:knn requires 0 < knn < n.")
+    0 < k < n || throw(ArgumentError("construction.sparsify=:knn requires 0 < knn < n."))
     e = Set{Tuple{Int,Int}}()
     for i in 1:n
         neigh = [(Float64(dist[i, j]), j) for j in 1:n if j != i]
         sort!(neigh, by=x -> x[1])
         tmax = min(k, length(neigh))
         for t in 1:tmax
+            isfinite(neigh[t][1]) || break
             j = neigh[t][2]
             a, b = min(i, j), max(i, j)
             push!(e, (a, b))
+            _dm_budget_check_max_edges!(length(e), budget)
         end
     end
-    edges = [[ab[1], ab[2]] for ab in e]
-    sort!(edges; by=s -> (s[1], s[2]))
+    edges = sort!(collect(e))
     return edges
 end
 
-function _dm_edges_collapse_dominated(edges::Vector{Vector{Int}},
-                                      dist::AbstractMatrix{<:Real};
-                                      tol::Float64=1e-12)
+function _dm_validate_distances(dist::AbstractMatrix{<:Real})
+    size(dist, 1) == size(dist, 2) || throw(ArgumentError("distance matrix must be square."))
     n = size(dist, 1)
-    out = Vector{Vector{Int}}()
-    for e in edges
-        u, v = e[1], e[2]
-        duv = Float64(dist[u, v])
-        dominated = false
-        for w in 1:n
-            (w == u || w == v) && continue
-            if max(Float64(dist[u, w]), Float64(dist[w, v])) <= duv + tol
-                dominated = true
-                break
-            end
+    n > 0 || throw(ArgumentError("distance matrix has size 0."))
+    for i in 1:n
+        iszero(dist[i, i]) || throw(ArgumentError("distance matrix diagonal entry ($i,$i) must be zero."))
+        for j in (i + 1):n
+            dij, dji = dist[i, j], dist[j, i]
+            dij == dji || throw(ArgumentError("distance matrix must be symmetric at ($i,$j)."))
+            dij >= 0 || throw(ArgumentError("distance matrix entries must be nonnegative and not NaN."))
+            isfinite(dij) && !isfinite(Float64(dij)) &&
+                throw(ArgumentError("distance matrix entry ($i,$j) cannot be represented as a finite Float64 grade."))
         end
-        dominated || push!(out, e)
     end
-    return out
-end
-
-function _dm_edges_collapse_acyclic(edges::Vector{Vector{Int}},
-                                    dist::AbstractMatrix{<:Real})
-    n = size(dist, 1)
-    parent = collect(1:n)
-    rank = zeros(Int, n)
-    function findp(x)
-        while parent[x] != x
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        end
-        return x
-    end
-    function unite(x, y)
-        rx, ry = findp(x), findp(y)
-        rx == ry && return false
-        if rank[rx] < rank[ry]
-            parent[rx] = ry
-        elseif rank[rx] > rank[ry]
-            parent[ry] = rx
-        else
-            parent[ry] = rx
-            rank[rx] += 1
-        end
-        return true
-    end
-    idx = sortperm(1:length(edges); by=i -> Float64(dist[edges[i][1], edges[i][2]]))
-    out = Vector{Vector{Int}}()
-    for i in idx
-        e = edges[i]
-        unite(e[1], e[2]) && push!(out, e)
-    end
-    return out
-end
-
-function _dm_apply_collapse(edges::Vector{Vector{Int}},
-                            dist::AbstractMatrix{<:Real},
-                            collapse::Symbol)
-    if collapse == :none
-        return edges
-    elseif collapse == :dominated_edges
-        return _dm_edges_collapse_dominated(edges, dist)
-    elseif collapse == :acyclic
-        return _dm_edges_collapse_acyclic(edges, dist)
-    end
-    error("construction.collapse must be :none, :dominated_edges, or :acyclic.")
+    return n
 end
 
 function _graded_complex_from_distance_matrix(dist::AbstractMatrix{<:Real};
@@ -1572,67 +1507,53 @@ function _graded_complex_from_distance_matrix(dist::AbstractMatrix{<:Real};
                                               radius::Union{Nothing,Real}=nothing,
                                               knn::Union{Nothing,Int}=nothing,
                                               construction::ConstructionOptions=ConstructionOptions())
-    size(dist, 1) == size(dist, 2) || error("distance matrix must be square.")
-    max_dim >= 0 || error("max_dim must be >= 0.")
-    n = size(dist, 1)
-    n > 0 || error("distance matrix has size 0.")
-
+    max_dim >= 0 || throw(ArgumentError("max_dim must be >= 0."))
     sparsify = construction.sparsify
     collapse = construction.collapse
     budget = construction.budget
-
-    if sparsify == :greedy_perm
-        error("construction.sparsify=:greedy_perm is not supported for distance-matrix ingestion.")
+    sparsify in (:none, :radius, :knn) ||
+        throw(ArgumentError("distance matrix Rips: construction.sparsify must be :none, :radius, or :knn."))
+    collapse in (:none, :dominated_edges) ||
+        throw(ArgumentError("distance matrix Rips: construction.collapse must be :none or :dominated_edges."))
+    for cap in (budget.max_simplices, budget.max_edges, budget.memory_budget_bytes)
+        (cap === nothing || cap >= 0) || throw(ArgumentError("construction budgets must be nonnegative."))
     end
-    if sparsify != :none && max_dim > 1
-        error("construction.sparsify=$(sparsify) currently supports max_dim <= 1 for distance-matrix ingestion.")
-    end
-    if collapse != :none && sparsify == :none
-        error("construction.collapse requires construction.sparsify != :none for distance-matrix ingestion.")
-    end
-    if radius !== nothing && sparsify != :radius
-        error("radius is only valid when construction.sparsify=:radius.")
+    if sparsify == :radius && radius === nothing
+        throw(ArgumentError("construction.sparsify=:radius requires radius."))
+    elseif radius !== nothing && sparsify == :knn
+        throw(ArgumentError("radius is only valid with construction.sparsify=:none or :radius."))
     end
     if knn !== nothing && sparsify != :knn
-        error("knn is only valid when construction.sparsify=:knn.")
+        throw(ArgumentError("knn is only valid when construction.sparsify=:knn."))
+    elseif sparsify == :knn && knn === nothing
+        throw(ArgumentError("construction.sparsify=:knn requires knn."))
     end
+    cutoff = radius === nothing ? Inf : Float64(radius)
+    cutoff >= 0 || throw(ArgumentError("radius must be nonnegative and not NaN."))
+    n = _dm_validate_distances(dist)
+    sparsify == :knn && !(0 < knn < n) &&
+        throw(ArgumentError("construction.sparsify=:knn requires 0 < knn < n."))
+    _dm_budget_check_max_simplices!(n, budget)
 
-    simplices = Vector{Vector{Vector{Int}}}(undef, max_dim + 1)
-    simplices[1] = [ [i] for i in 1:n ]
-    total = length(simplices[1])
-
-    if sparsify == :none
-        if max_dim >= 1
-            _dm_budget_check_max_edges!(binomial(big(n), big(2)), budget)
-        end
-        for k in 2:max_dim+1
-            sims = Vector{Vector{Int}}()
-            for comb in _combinations(n, k)
-                push!(sims, comb)
-            end
-            simplices[k] = sims
-            total += length(sims)
-            _dm_budget_check_max_simplices!(total, budget)
-        end
+    edges = if max_dim == 0
+        NTuple{2,Int}[]
+    elseif sparsify == :knn
+        _dm_edges_knn(dist, knn, budget)
     else
-        edges = if sparsify == :radius
-            radius === nothing && error("construction.sparsify=:radius requires radius.")
-            _dm_edges_radius(dist, Float64(radius))
-        elseif sparsify == :knn
-            knn === nothing && error("construction.sparsify=:knn requires knn.")
-            _dm_edges_knn(dist, Int(knn))
-        else
-            error("construction.sparsify must be :none, :radius, or :knn for distance-matrix ingestion.")
-        end
-        edges = _dm_apply_collapse(edges, dist, collapse)
-        _dm_budget_check_max_edges!(length(edges), budget)
-        simplices = [simplices[1], edges]
-        max_dim = 1
-        total += length(edges)
-        _dm_budget_check_max_simplices!(total, budget)
+        _dm_edges_radius(dist, cutoff, budget)
     end
+    if collapse == :dominated_edges && max_dim >= 2
+        edge_grades = [(Float64(dist[u, v]),) for (u, v) in edges]
+        keep = SimplicialReduction._collapse_dominated_edges(edges, edge_grades, n, max_dim)
+        edges = edges[keep]
+    end
+    simplices = SimplicialReduction._flag_simplices(
+        edges, n, max_dim; max_simplices=budget.max_simplices,
+        memory_budget_bytes=budget.memory_budget_bytes,
+    )
 
     grades = Vector{Vector{Float64}}()
+    sizehint!(grades, sum(length, simplices))
     for _ in simplices[1]
         push!(grades, [0.0])
     end
@@ -1676,6 +1597,18 @@ end
                          construction=ConstructionOptions()) -> GradedComplex
 
 Parse a full distance matrix (square) and build a 1-parameter Rips graded complex.
+
+Distances must be symmetric, nonnegative, and zero on the diagonal. Positive
+infinity denotes an absent edge. `radius` restricts edges before clique
+expansion; `sparsify=:knn` instead selects the undirected k-nearest-neighbor
+graph. Sparse constructions need not preserve the full Rips filtration.
+
+`construction.collapse=:dominated_edges` certifies each deletion against the
+retained filtered graph before clique expansion. It preserves persistence in
+every degree of the requested `max_dim` skeleton, including its top degree.
+Consequently, it leaves a 0- or 1-dimensional construction unchanged. Use
+`collapse=:none` for the unreduced construction. Edge budgets apply before
+collapse; simplex budgets apply while expanding the retained graph.
 """
 function load_ripser_distance(path::AbstractString;
                               max_dim::Int=1,
@@ -1754,8 +1687,17 @@ function load_ripser_sparse_triplet(path::AbstractString;
     for row in rows
         length(row) == 3 || error("sparse triplet rows must have 3 entries.")
     end
-    idxs = [Int(round(r[1])) for r in rows]
-    jdxs = [Int(round(r[2])) for r in rows]
+    for row in rows
+        for index in row[1:2]
+            (isfinite(index) && isinteger(index) && index >= 0) ||
+                throw(ArgumentError("sparse triplet vertex indices must be nonnegative integers."))
+        end
+        row[3] >= 0 || throw(ArgumentError("sparse triplet distances must be nonnegative and not NaN."))
+        row[1] == row[2] && !iszero(row[3]) &&
+            throw(ArgumentError("sparse triplet diagonal distances must be zero."))
+    end
+    idxs = [Int(r[1]) for r in rows]
+    jdxs = [Int(r[2]) for r in rows]
     base0 = any(i == 0 for i in idxs) || any(j == 0 for j in jdxs)
     if base0
         idxs .= idxs .+ 1
@@ -1957,4 +1899,3 @@ function load_flange_json(path::AbstractString;
     _resolve_validation_mode(validation)
     return _load_flange_obj(_json_read(path); field=field)
 end
-

@@ -2,15 +2,9 @@ module TamerOpDistancesExt
 
 using Distances
 
-const TO = let pm = nothing
-    if isdefined(Main, :TamerOp)
-        pm = getfield(Main, :TamerOp)
-    else
-        @eval import TamerOp
-        pm = TamerOp
-    end
-    pm
-end
+import TamerOp
+
+const TO = TamerOp
 
 const FEA = TO.Featurizers
 const Inv = TO.Invariants
@@ -129,13 +123,16 @@ function Distances.pairwise(m::AbstractTamerDistanceMetric,
     return D
 end
 
-FEA._set_distances_impl!((
-    matching = (; kwargs...) -> MatchingDistanceMetric(; kwargs...),
-    mp_landscape = (; kwargs...) -> MPLandscapeDistanceMetric(; kwargs...),
-    projected = (; kwargs...) -> ProjectedDistanceMetric(; kwargs...),
-    bottleneck = (; kwargs...) -> BottleneckDistanceMetric(; kwargs...),
-    wasserstein = (; kwargs...) -> WassersteinDistanceMetric(; kwargs...),
-    mpp_image = (; kwargs...) -> MPPImageDistanceMetric(),
-))
+function __init__()
+    FEA._set_distances_impl!((
+        matching = (; kwargs...) -> MatchingDistanceMetric(; kwargs...),
+        mp_landscape = (; kwargs...) -> MPLandscapeDistanceMetric(; kwargs...),
+        projected = (; kwargs...) -> ProjectedDistanceMetric(; kwargs...),
+        bottleneck = (; kwargs...) -> BottleneckDistanceMetric(; kwargs...),
+        wasserstein = (; kwargs...) -> WassersteinDistanceMetric(; kwargs...),
+        mpp_image = (; kwargs...) -> MPPImageDistanceMetric(),
+    ))
+    return nothing
+end
 
 end # module

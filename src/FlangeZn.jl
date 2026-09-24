@@ -1,7 +1,8 @@
 module FlangeZn
 
 using LinearAlgebra
-using ..CoreModules: QQ, AbstractCoeffField, coeff_type, field_from_eltype, QQField, coerce
+using ..CoreModules: QQ, AbstractCoeffField, coeff_type, field_from_eltype, QQField, coerce,
+                     _TaskLocalCache, _task_local!, _foreach_workchunk
 using ..CoreModules.CoeffFields: zeros
 import ..FieldLinAlg
 import ..CoreModules: change_field
@@ -1664,22 +1665,12 @@ active_flats(FG::Flange, g::NTuple{N,Int}) where {N} = active_flats(FG.flats, g)
 active_injectives(FG::Flange, g::Vector{Int}) = active_injectives(FG.injectives, g)
 active_injectives(FG::Flange, g::NTuple{N,Int}) where {N} = active_injectives(FG.injectives, g)
 
-const _DEGREE_SCRATCH_LOCK = ReentrantLock()
-const _DEGREE_ROWS_SCRATCH = Vector{Vector{Int}}()
-const _DEGREE_COLS_SCRATCH = Vector{Vector{Int}}()
+const _DEGREE_SCRATCH = _TaskLocalCache{Tuple{Vector{Int},Vector{Int}}}()
 
-@inline function _thread_degree_scratch(nrows_hint::Int, ncols_hint::Int)
-    tid = Base.Threads.threadid()
-    if tid > length(_DEGREE_ROWS_SCRATCH)
-        lock(_DEGREE_SCRATCH_LOCK) do
-            while length(_DEGREE_ROWS_SCRATCH) < tid
-                push!(_DEGREE_ROWS_SCRATCH, Int[])
-                push!(_DEGREE_COLS_SCRATCH, Int[])
-            end
-        end
+@inline function _task_degree_scratch(nrows_hint::Int, ncols_hint::Int)
+    rows, cols = _task_local!(_DEGREE_SCRATCH) do
+        (Int[], Int[])
     end
-    rows = @inbounds _DEGREE_ROWS_SCRATCH[tid]
-    cols = @inbounds _DEGREE_COLS_SCRATCH[tid]
     sizehint!(rows, nrows_hint)
     sizehint!(cols, ncols_hint)
     return rows, cols
@@ -1728,17 +1719,17 @@ degree_matrix!(rows::Vector{Int}, cols::Vector{Int},
 """
     degree_matrix!(FG, g)
 
-Thread-local scratch variant of `degree_matrix!` (non-allocating, ephemeral
+Task-local scratch variant of `degree_matrix!` (non-allocating, ephemeral
 `rows`/`cols` buffers). Use this in tight loops when results are consumed
-immediately.
+immediately, before the next call in the same task.
 """
 function degree_matrix!(FG::Flange{K}, g::Vector{Int}) where {K}
-    rows, cols = _thread_degree_scratch(length(FG.injectives), length(FG.flats))
+    rows, cols = _task_degree_scratch(length(FG.injectives), length(FG.flats))
     return degree_matrix!(rows, cols, FG, g)
 end
 
 function degree_matrix!(FG::Flange{K}, g::NTuple{N,Int}) where {K,N}
-    rows, cols = _thread_degree_scratch(length(FG.injectives), length(FG.flats))
+    rows, cols = _task_degree_scratch(length(FG.injectives), length(FG.flats))
     return degree_matrix!(rows, cols, FG, g)
 end
 
@@ -1827,16 +1818,12 @@ Cache behavior:
 
 Heavier path:
 - Supplying `rankfun` disables the restricted-rank fast path and passes the
-  explicit local matrix to the user-provided rank routine.
+  explicit local matrix to the user-provided rank routine. Its active indices
+  are private to the call, so the callback can recursively query the same cache.
 """
 function dim_at(FG::Flange{K}, g::Vector{Int}; rankfun=nothing, cache::Union{Nothing,FlangeDimCache}=nothing) where {K}
     if rankfun === nothing
         return cache === nothing ? _dim_at_auto(FG, g) : _dim_at_cached!(cache, FG, g)
-    end
-    if cache !== nothing
-        rows = cache.rows
-        cols = cache.cols
-        return _dim_at_rankfun!(FG, g, rankfun, rows, cols)
     end
     Phi_g, _, _ = degree_matrix(FG, g)
     isempty(Phi_g) && return 0
@@ -1846,11 +1833,6 @@ end
 function dim_at(FG::Flange{K}, g::NTuple{N,Int}; rankfun=nothing, cache::Union{Nothing,FlangeDimCache}=nothing) where {K,N}
     if rankfun === nothing
         return cache === nothing ? _dim_at_auto(FG, g) : _dim_at_cached!(cache, FG, g)
-    end
-    if cache !== nothing
-        rows = cache.rows
-        cols = cache.cols
-        return _dim_at_rankfun!(FG, g, rankfun, rows, cols)
     end
     Phi_g, _, _ = degree_matrix(FG, g)
     isempty(Phi_g) && return 0
@@ -2002,18 +1984,12 @@ function _evaluate_unique_threaded!(vals::AbstractVector{Int},
                                     FG::Flange,
                                     unique_points::AbstractVector,
                                     order)
-    nt = Threads.maxthreadid()
-    caches = Vector{Any}(undef, nt)
-    fill!(caches, nothing)
-    Threads.@threads for k in eachindex(order)
-        oi = order[k]
-        tid = Threads.threadid()
-        c = caches[tid]
-        if c === nothing
-            c = FlangeDimCache(FG)
-            caches[tid] = c
+    _foreach_workchunk(length(order)) do indices, _
+        local c = FlangeDimCache(FG)
+        @inbounds for k in indices
+            local oi = order[k]
+            vals[oi] = _dim_at_cached!(c, FG, unique_points[oi])
         end
-        @inbounds vals[oi] = _dim_at_cached!(c, FG, unique_points[oi])
     end
     return vals
 end
@@ -2101,26 +2077,14 @@ function _eval_unique_box_sweep!(vals::Vector{Int},
     if threaded && Threads.nthreads() > 1
         rest_lines = collect(Iterators.product(rest_ranges...))
         if length(rest_lines) >= 2 * Threads.nthreads()
-            nt = Threads.maxthreadid()
-            caches = Vector{Any}(undef, nt)
-            scratches = Vector{Any}(undef, nt)
-            fill!(caches, nothing)
-            fill!(scratches, nothing)
-            Threads.@threads for li in eachindex(rest_lines)
-                tid = Threads.threadid()
-                c = caches[tid]
-                if c === nothing
-                    c = FlangeDimCache(FG)
-                    caches[tid] = c
+            _foreach_workchunk(length(rest_lines)) do indices, _
+                local c = FlangeDimCache(FG)
+                local s = _box_sweep_scratch(c.kernel, xlen)
+                for li in indices
+                    local rest = rest_lines[li]
+                    local xmin, xmax = _fill_box_line_uids!(s.line_uids, uid_lookup, axes, axis, rest)
+                    _eval_unique_line_sweep!(vals, FG, c, s, s.line_uids, xmin, xmax, rest; axis=axis)
                 end
-                s = scratches[tid]
-                if s === nothing
-                    s = _box_sweep_scratch(c.kernel, xlen)
-                    scratches[tid] = s
-                end
-                rest = rest_lines[li]
-                xmin, xmax = _fill_box_line_uids!(s.line_uids, uid_lookup, axes, axis, rest)
-                _eval_unique_line_sweep!(vals, FG, c, s, s.line_uids, xmin, xmax, rest; axis=axis)
             end
             return vals
         end
@@ -2173,27 +2137,16 @@ function _eval_unique_slab_sweep!(vals::Vector{Int},
     fill!(vals, 0)
 
     if threaded && Threads.nthreads() > 1 && length(slabs) >= 2 * Threads.nthreads()
-        nt = Threads.maxthreadid()
-        caches = Vector{Any}(undef, nt)
-        scratches = Vector{Any}(undef, nt)
-        fill!(caches, nothing)
-        fill!(scratches, nothing)
-        Threads.@threads for li in eachindex(slabs)
-            tid = Threads.threadid()
-            c = caches[tid]
-            if c === nothing
-                c = FlangeDimCache(FG)
-                caches[tid] = c
+        _foreach_workchunk(length(slabs)) do indices, _
+            local c = FlangeDimCache(FG)
+            local max_xlen = maximum(length(slabs[li].line_uids) for li in indices)
+            local s = _box_sweep_scratch(c.kernel, max_xlen)
+            for li in indices
+                local slab = slabs[li]
+                @views s.line_uids[1:length(slab.line_uids)] .= slab.line_uids
+                _eval_unique_line_sweep!(vals, FG, c, s, @view(s.line_uids[1:length(slab.line_uids)]),
+                                         slab.xmin, slab.xmax, slab.rest; axis=slab.axis)
             end
-            slab = slabs[li]
-            s = scratches[tid]
-            if s === nothing || length(s.line_uids) < length(slab.line_uids)
-                s = _box_sweep_scratch(c.kernel, length(slab.line_uids))
-                scratches[tid] = s
-            end
-            @views s.line_uids[1:length(slab.line_uids)] .= slab.line_uids
-            _eval_unique_line_sweep!(vals, FG, c, s, @view(s.line_uids[1:length(slab.line_uids)]),
-                                     slab.xmin, slab.xmax, slab.rest; axis=slab.axis)
         end
         return vals
     end
@@ -2239,7 +2192,7 @@ processed in lexicographic order to increase active-set cache reuse.
 
 `dedup=true` deduplicates query points before evaluation and scatters results back.
 
-`threaded=true` evaluates unique points in parallel using per-thread `FlangeDimCache`.
+`threaded=true` evaluates unique points in parallel using a private `FlangeDimCache` for each work chunk.
 
 `sweep=:auto|:none|:box` controls a line-sweep kernel for full box/grid tuple queries:
 - `:auto` tries it opportunistically.

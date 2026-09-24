@@ -9,6 +9,7 @@ This submodule is intended to hold:
 - convergence and comparison utilities
 """
 module SpectralSequences
+    import ..DerivedFunctors: provenance
     using LinearAlgebra
     using SparseArrays
 
@@ -27,8 +28,8 @@ module SpectralSequences
     using ...IndicatorResolutions: upset_resolution, downset_resolution
     using ...IndicatorTypes: UpsetPresentation, DownsetCopresentation
 
-    import ..HomExtEngine: build_hom_bicomplex_data
-    import ..Resolutions: projective_resolution, _pad_projective_resolution!
+    import ..HomExtEngine: build_hom_bicomplex_data, _indicator_resolution_is_complete
+    import ..Resolutions: projective_resolution, _complete_projective_resolution, _resolution_is_complete
     import ..ExtTorSpaces: ExtSpaceProjective, ExtSpaceInjective, Ext, ExtInjective, Tor, TorSpace, TorSpaceSecond,
                            _TorCoeffPlan, _tor_coeff_plan, _tor_use_direct_triplets,
                            _TOR_USE_DIRECT_MAP_TRIPLET_ASSEMBLY
@@ -91,7 +92,7 @@ module SpectralSequences
     end
 
     @inline function _cache_tor_doublecomplex_get(cache::ResolutionCache, key::ResolutionKey5)
-        if _TOR_DOUBLE_COMPLEX_CACHE_FASTPATH[] && Threads.nthreads() == 1
+        if _TOR_DOUBLE_COMPLEX_CACHE_FASTPATH[] && Threads.maxthreadid() == 1
             payload = get(cache.tor_doublecomplex, key, nothing)
             return payload === nothing ? nothing : payload.value
         end
@@ -103,7 +104,7 @@ module SpectralSequences
 
     @inline function _cache_tor_doublecomplex_store!(cache::ResolutionCache, key::ResolutionKey5, value)
         payload = TorDoubleComplexPayload(value)
-        if _TOR_DOUBLE_COMPLEX_CACHE_FASTPATH[] && Threads.nthreads() == 1
+        if _TOR_DOUBLE_COMPLEX_CACHE_FASTPATH[] && Threads.maxthreadid() == 1
             cache.tor_doublecomplex[key] = payload
             return value
         end
@@ -151,6 +152,7 @@ module SpectralSequences
         dims = zeros(Int, na, nb)
         if threads && Threads.nthreads() > 1
             Threads.@threads for idx in 1:(na * nb)
+                local ia, ib, gens_a, Qb, d
                 ia = (idx - 1) % na + 1
                 ib = Int(div(idx - 1, na)) + 1
                 gens_a = gens_by_a[ia]
@@ -250,10 +252,12 @@ module SpectralSequences
     - F is an upset resolution of M,
     - E is a downset resolution of N.
 
-    Tot(ExtDoubleComplex(M,N)) computes Ext^*(M,N).
+    If maxlen is nothing, each resolution is computed until it terminates,
+    and the total cohomology computes Ext^*(M,N).
 
-    If maxlen is provided, both resolutions are truncated at that length.
-    If maxlen is nothing, each resolution is computed until it terminates.
+    An explicit maxlen constructs an actual truncated bicomplex. Its boundary
+    cohomology can differ from Ext; use `ExtSpectralSequence` when a certified
+    Ext abutment is required.
 
     Cheap-first workflow
     - Start with `double_complex_summary(DC)` or `ChainComplexes.bicomplex_summary(DC)`.
@@ -264,6 +268,8 @@ module SpectralSequences
                               maxlen::Union{Nothing,Int}=nothing,
                               threads::Bool = (Threads.nthreads() > 1),
                               cache::Union{Nothing,ResolutionCache}=nothing) where {K}
+        M.field == N.field || throw(ArgumentError("ExtDoubleComplex requires the same coefficient field and tolerances."))
+        maxlen === nothing || maxlen >= 0 || throw(ArgumentError("maxlen must be nonnegative."))
         cache_key = (cache === nothing || maxlen === nothing) ? nothing : _ext_doublecomplex_cache_key(M, N, maxlen)
         if cache_key !== nothing
             cached = _cache_ext_doublecomplex_get(cache, cache_key)
@@ -271,40 +277,44 @@ module SpectralSequences
         end
         F, dF = IndicatorResolutions.upset_resolution(M; maxlen=maxlen, threads=threads)
         E, dE = IndicatorResolutions.downset_resolution(N; maxlen=maxlen, threads=threads)
-        DC = ExtDoubleComplex(F, dF, E, dE; threads=threads, cache=cache)
+        DC = ExtDoubleComplex(F, dF, E, dE; field=M.field, threads=threads, cache=cache)
         return cache_key === nothing ? DC : _cache_ext_doublecomplex_store!(cache, cache_key, DC)
-    end
-
-    """
-        ExtDoubleComplex(M::PModule{K}, N::PModule{K}, res::ResolutionOptions)
-    
-    Options-based overload.
-    
-    This is equivalent to calling `ExtDoubleComplex(M, N; maxlen=res.maxlen)`.
-    Only `res.maxlen` is used; the other fields of `ResolutionOptions` do not
-    affect indicator resolutions.
-    """
-    function ExtDoubleComplex(M::PModule{K}, N::PModule{K}, res::ResolutionOptions;
-                              threads::Bool = (Threads.nthreads() > 1),
-                              cache::Union{Nothing,ResolutionCache}=nothing) where {K}
-        return ExtDoubleComplex(M, N; maxlen=res.maxlen, threads=threads, cache=cache)
     end
 
     """
         ExtDoubleComplex(F, dF, E, dE) -> ChainComplexes.DoubleComplex{K}
 
-    Low-level constructor from precomputed resolutions.
+    Low-level constructor of the Hom bicomplex from supplied indicator terms
+    and coefficient differentials. It describes that actual bicomplex. An Ext
+    interpretation additionally requires valid resolutions and acyclicity
+    hypotheses (in particular, projective first terms and injective second
+    terms suffice). Arbitrary upset/downset indicators need not be projective
+    or injective. The `PModule` overload builds principal indicator resolutions.
     """
     function ExtDoubleComplex(F::AbstractVector{<:UpsetPresentation{K}},
                               dF::Vector{SparseMatrixCSC{K,Int}},
                               E::AbstractVector{<:DownsetCopresentation{K}},
                               dE::Vector{SparseMatrixCSC{K,Int}};
+                              field::Union{Nothing,AbstractCoeffField}=nothing,
                               threads::Bool = (Threads.nthreads() > 1),
                               cache::Union{Nothing,ResolutionCache}=nothing) where {K}
+        # Attached modules carry the numerical contract. Bare indicator terms
+        # have only a scalar type, so callers may supply their field explicitly.
+        for terms in (F, E), presentation in terms
+            presentation.H === nothing && continue
+            attached_field = presentation.H.field
+            if field === nothing
+                field = attached_field
+            else
+                field == attached_field || throw(ArgumentError(
+                    "ExtDoubleComplex requires indicator terms over the same coefficient field and tolerances."))
+            end
+        end
+        field === nothing && (field = field_from_eltype(K))
         dims, dv, dh = build_hom_bicomplex_data(F, dF, E, dE; threads=threads, cache=cache)
         A = length(F) - 1
         B = length(E) - 1
-        return ChainComplexes.DoubleComplex{K}(0, A, 0, B, dims, dv, dh)
+        return ChainComplexes.DoubleComplex{K}(0, A, 0, B, dims, dv, dh; field=field)
     end
 
     """
@@ -314,6 +324,15 @@ module SpectralSequences
 
     - first=:vertical uses vertical cohomology first (E1^{a,b} = H^b of columns).
     - first=:horizontal uses horizontal cohomology first.
+
+    Both resolutions must terminate within maxlen. An insufficient explicit
+    budget throws `ArgumentError`; omitting it builds complete resolutions.
+    For pages of an explicitly truncated bicomplex, use `ExtDoubleComplex`
+    followed by `ChainComplexes.spectral_sequence`.
+
+    The abutment is Ext in `Rep_k(P)` for the finite input poset. The raw
+    `SpectralSequence` retains the bicomplex but not `P`, the modules, or an
+    ambient encoding. Its provenance therefore reports no retained base poset.
 
     The returned object includes E1, d1, E2, Einf (graded pieces), and dim H^*(Tot).
 
@@ -338,24 +357,26 @@ module SpectralSequences
                                 maxlen::Union{Nothing,Int}=nothing,
                                 threads::Bool = (Threads.nthreads() > 1),
                                 cache::Union{Nothing,ResolutionCache}=nothing) where {K}
-        DC = ExtDoubleComplex(M, N; maxlen=maxlen, threads=threads, cache=cache)
-        return ChainComplexes.spectral_sequence(DC; output=:full, first=first)
-    end
-
-    """
-        ExtSpectralSequence(M::PModule{K}, N::PModule{K}, res::ResolutionOptions;
-                            first=:vertical)
-    
-    Options-based overload.
-    
-    This is equivalent to calling `ExtSpectralSequence(M, N; first=first, maxlen=res.maxlen)`.
-    Only `res.maxlen` is used.
-    """
-    function ExtSpectralSequence(M::PModule{K}, N::PModule{K}, res::ResolutionOptions;
-                                 first::Symbol = :vertical,
-                                 threads::Bool = (Threads.nthreads() > 1),
-                                 cache::Union{Nothing,ResolutionCache}=nothing) where {K}
-        DC = ExtDoubleComplex(M, N, res; threads=threads, cache=cache)
+        M.field == N.field || throw(ArgumentError("ExtSpectralSequence requires the same coefficient field and tolerances."))
+        maxlen === nothing || maxlen >= 0 || throw(ArgumentError("maxlen must be nonnegative."))
+        # Certified entries use negative keys, disjoint from raw capped
+        # ExtDoubleComplex entries (nonnegative). Never let a cached truncated
+        # complex bypass the completion check. The complete default is -1;
+        # explicit budgets use -(maxlen+2), with checked overflow.
+        cache_key = cache === nothing ? nothing : _ext_doublecomplex_cache_key(
+            M, N, maxlen === nothing ? -1 : -Base.Checked.checked_add(maxlen, 2))
+        if cache_key !== nothing
+            cached = _cache_ext_doublecomplex_get(cache, cache_key)
+            cached === nothing || return ChainComplexes.spectral_sequence(cached; output=:full, first=first)
+        end
+        up = IndicatorResolutions.upset_resolution(M; maxlen=maxlen, threads=threads)
+        down = IndicatorResolutions.downset_resolution(N; maxlen=maxlen, threads=threads)
+        _indicator_resolution_is_complete(up) && _indicator_resolution_is_complete(down) ||
+            throw(ArgumentError("maxlen truncates an unfinished resolution. Increase maxlen or omit it for a complete Ext spectral sequence; for the explicitly truncated complex use spectral_sequence(ExtDoubleComplex(...))."))
+        F, dF = up
+        E, dE = down
+        DC = ExtDoubleComplex(F, dF, E, dE; field=M.field, threads=threads, cache=cache)
+        cache_key === nothing || _cache_ext_doublecomplex_store!(cache, cache_key, DC)
         return ChainComplexes.spectral_sequence(DC; output=:full, first=first)
     end
 
@@ -366,7 +387,7 @@ module SpectralSequences
     """
         TorDoubleComplex(Rop, L; maxlen=nothing, maxlenR=nothing, maxlenL=nothing)
 
-    Build a double complex computing Tor_*(Rop,L) from:
+    Build the tensor double complex of projective resolutions of:
 
     - a projective resolution of Rop as a P^op-module (right module),
     - a projective resolution of L as a P-module (left module).
@@ -392,6 +413,11 @@ module SpectralSequences
     - maxlen: if set, both resolutions are built/padded to this length (override with maxlenR/maxlenL).
     - maxlenR: length for the Rop resolution.
     - maxlenL: length for the L resolution.
+
+    Omitted lengths compute complete resolutions and stop at their natural length.
+    Explicit lengths construct the actual truncated bicomplex, whose boundary
+    homology need not equal Tor. `TorSpectralSequence` checks completion before
+    advertising a Tor abutment.
     """
     function TorDoubleComplex(Rop::PModule{K}, L::PModule{K};
         maxlen=nothing,
@@ -400,22 +426,41 @@ module SpectralSequences
         threads::Bool = (Threads.nthreads() > 1),
         cache::Union{Nothing,ResolutionCache}=nothing,
     ) where {K}
-        # Choose resolution lengths.
-        lenR = (maxlenR === nothing) ? (maxlen === nothing ? 3 : maxlen) : maxlenR
-        lenL = (maxlenL === nothing) ? (maxlen === nothing ? 3 : maxlen) : maxlenL
-        @assert lenR >= 0 && lenL >= 0
-
-        cache_key = cache === nothing ? nothing : _tor_doublecomplex_cache_key(Rop, L, lenR, lenL)
+        requestedR, requestedL = _tor_resolution_lengths(maxlen, maxlenR, maxlenL)
+        # Complete default resolutions and explicit padded prefixes differ.
+        cache_key = cache === nothing ? nothing :
+            _tor_doublecomplex_cache_key(Rop, L, something(requestedR, -1), something(requestedL, -1))
         if cache_key !== nothing
             cached = _cache_tor_doublecomplex_get(cache, cache_key)
             cached === nothing || return cached
         end
+        resR, resL = _tor_resolutions(Rop, L, requestedR, requestedL; threads=threads, cache=cache)
+        lenR, lenL = length(resR.gens) - 1, length(resL.gens) - 1
+        DC = _tor_double_complex_from_resolutions(Rop, L, resR, resL, lenR, lenL; threads=threads, cache=cache)
+        return cache_key === nothing ? DC : _cache_tor_doublecomplex_store!(cache, cache_key, DC)
+    end
 
-        # Build and pad both resolutions so the double complex is a full rectangle.
-        resR = projective_resolution(Rop, ResolutionOptions(maxlen=lenR); cache=cache)
-        resL = projective_resolution(L, ResolutionOptions(maxlen=lenL); cache=cache)
-        _pad_projective_resolution!(resR, lenR)
-        _pad_projective_resolution!(resL, lenL)
+    function _tor_resolution_lengths(maxlen, maxlenR, maxlenL)
+        for len in (maxlen, maxlenR, maxlenL)
+            (len === nothing || (len isa Int && len >= 0)) ||
+                throw(ArgumentError("resolution lengths must be nonnegative integers or nothing."))
+        end
+        return maxlenR === nothing ? maxlen : maxlenR,
+               maxlenL === nothing ? maxlen : maxlenL
+    end
+
+    function _tor_resolutions(Rop, L, lenR, lenL; threads::Bool, cache)
+        Rop.field == L.field || throw(ArgumentError("Tor bicomplexes require the same coefficient field and tolerances."))
+        resR = lenR === nothing ? _complete_projective_resolution(Rop; threads=threads, cache=cache) :
+            projective_resolution(Rop, ResolutionOptions(maxlen=lenR); threads=threads, cache=cache)
+        resL = lenL === nothing ? _complete_projective_resolution(L; threads=threads, cache=cache) :
+            projective_resolution(L, ResolutionOptions(maxlen=lenL); threads=threads, cache=cache)
+        return resR, resL
+    end
+
+    function _tor_double_complex_from_resolutions(Rop::PModule{K}, L::PModule{K},
+                                                  resR, resL, lenR::Int, lenL::Int;
+                                                  threads::Bool, cache) where {K}
         plan_key = cache === nothing ? nothing : _tor_doublecomplex_cache_key(resR, resL, lenR, lenL)
         plan = if plan_key === nothing
             _build_tor_doublecomplex_plan(Rop, L, resR, resL, lenR, lenL; threads=threads)
@@ -439,10 +484,11 @@ module SpectralSequences
         # Vertical differentials: dv_{A,B} : C^{A,B} -> C^{A,B+1}
         # Corresponds to (-1)^a * (id otimes d_Q_b) in the original chain bicomplex.
         dv = Array{SparseMatrixCSC{K, Int64}, 2}(undef, na, nb - 1)
-        dv_workspaces = [_tor_bicomplex_workspace(K) for _ in 1:Threads.maxthreadid()]
         if threads && Threads.nthreads() > 1
             Threads.@threads for ia in 1:na
-                ws = dv_workspaces[Threads.threadid()]
+                local A, a, gens_a, sgn, B, b, dQ, Qb, Qbm1, offs_dom, offs_cod
+                # This work item owns its scratch, including after migration.
+                local ws = _tor_bicomplex_workspace(K)
                 A = amin + (ia - 1)
                 a = -A
                 gens_a = plan.gens_by_a[ia]
@@ -461,7 +507,7 @@ module SpectralSequences
                 end
             end
         else
-            ws = dv_workspaces[1]
+            ws = _tor_bicomplex_workspace(K)
             for ia in 1:na
                 A = amin + (ia - 1)
                 a = -A
@@ -489,10 +535,11 @@ module SpectralSequences
         # for each nonzero (j,i,c): gen u=gens_dom[i] maps to gen v=gens_cod[j] with scalar c.
         # In the tensor with Q_b (a P-module), this yields Q_b[u] -> Q_b[v] via map_leq(Q_b, u, v).
 
-        dh_workspaces = [_tor_bicomplex_workspace(K) for _ in 1:Threads.maxthreadid()]
         if threads && Threads.nthreads() > 1
             Threads.@threads for ia in 1:(na - 1)
-                ws = dh_workspaces[Threads.threadid()]
+                local gens_dom, gens_cod, hplan, B, b, Qb, offs_dom, offs_cod
+                # Keep this binding local; the serial branch also uses ws.
+                local ws = _tor_bicomplex_workspace(K)
                 gens_dom = plan.gens_by_a[ia]
                 gens_cod = plan.gens_by_a[ia + 1]
                 hplan = plan.hplans[ia]
@@ -507,7 +554,7 @@ module SpectralSequences
                 end
             end
         else
-            ws = dh_workspaces[1]
+            ws = _tor_bicomplex_workspace(K)
             for ia in 1:(na - 1)
                 gens_dom = plan.gens_by_a[ia]
                 gens_cod = plan.gens_by_a[ia + 1]
@@ -525,14 +572,17 @@ module SpectralSequences
             end
         end
 
-        DC = ChainComplexes.DoubleComplex(amin, amax, bmin, bmax, dims, dv, dh)
-        return cache_key === nothing ? DC : _cache_tor_doublecomplex_store!(cache, cache_key, DC)
+        return ChainComplexes.DoubleComplex{K}(amin, amax, bmin, bmax, dims, dv, dh; field=Rop.field)
     end
 
     """
         TorSpectralSequence(Rop, L; maxlen=nothing, maxlenR=nothing, maxlenL=nothing, first=:vertical)
 
     Return a spectral sequence associated to `TorDoubleComplex(Rop,L)`.
+    Both resolutions must terminate within the chosen budgets. Insufficient
+    explicit lengths throw `ArgumentError`; omitted lengths compute complete
+    resolutions. For pages of a truncated complex, call
+    `ChainComplexes.spectral_sequence(TorDoubleComplex(...))` directly.
 
     This is a small wrapper around `ChainComplexes.SpectralSequence` that reindexes bidegrees
     to a homological convention (a,b) >= 0.
@@ -664,8 +714,22 @@ module SpectralSequences
                                  maxlen=nothing, maxlenR=nothing, maxlenL=nothing, first=:vertical,
                                  threads::Bool = (Threads.nthreads() > 1),
                                  cache::Union{Nothing,ResolutionCache}=nothing) where {K}
-        DC = TorDoubleComplex(Rop, L; maxlen=maxlen, maxlenR=maxlenR, maxlenL=maxlenL,
-                              threads=threads, cache=cache)
+        requestedR, requestedL = _tor_resolution_lengths(maxlen, maxlenR, maxlenL)
+        resR, resL = _tor_resolutions(Rop, L, requestedR, requestedL; threads=threads, cache=cache)
+        _resolution_is_complete(resR) && _resolution_is_complete(resL) ||
+            throw(ArgumentError("resolution budget truncates an unfinished resolution. Increase the lengths or omit them for a complete Tor spectral sequence; for the explicitly truncated complex use spectral_sequence(TorDoubleComplex(...))."))
+        # Sharing raw-complex cache entries is safe only after completion of
+        # these requested resolutions has been checked.
+        cache_key = cache === nothing ? nothing :
+            _tor_doublecomplex_cache_key(Rop, L, something(requestedR, -1), something(requestedL, -1))
+        if cache_key !== nothing
+            cached = _cache_tor_doublecomplex_get(cache, cache_key)
+            cached === nothing || return TorSpectralSequence{K}(
+                ChainComplexes.spectral_sequence(cached; output=:full, first=first))
+        end
+        lenR, lenL = length(resR.gens) - 1, length(resL.gens) - 1
+        DC = _tor_double_complex_from_resolutions(Rop, L, resR, resL, lenR, lenL; threads=threads, cache=cache)
+        cache_key === nothing || _cache_tor_doublecomplex_store!(cache, cache_key, DC)
         ss = ChainComplexes.spectral_sequence(DC; output=:full, first=first)
         return TorSpectralSequence{K}(ss)
     end
@@ -690,6 +754,7 @@ module SpectralSequences
         base = ChainComplexes.spectral_sequence_summary(TSS.ss)
         return merge(base, (
             kind=:tor_spectral_sequence,
+            provenance=provenance(TSS),
             indexing=:tor_homological,
             wrapped_kind=base.kind,
         ))
@@ -709,8 +774,9 @@ module SpectralSequences
 
     function Base.show(io::IO, TSS::TorSpectralSequence)
         d = spectral_sequence_summary(TSS)
-        print(io, "TorSpectralSequence(convergence_page=", d.convergence_page,
-              ", page2_terms=", length(page_dimensions(TSS, 2)), ")")
+        print(io, "TorSpectralSequence(convergence_page=",
+              d.convergence_page === nothing ? "not computed" : d.convergence_page,
+              ", page2_terms=", count(!iszero, TSS.ss.E2_dims), ")")
     end
 
     function Base.show(io::IO, ::MIME"text/plain", TSS::TorSpectralSequence)
@@ -718,8 +784,9 @@ module SpectralSequences
         print(io, "TorSpectralSequence",
               "\n  field: ", d.field,
               "\n  index_kind: ", d.indexing,
-              "\n  convergence_page: ", d.convergence_page,
-              "\n  e2_nonzero_terms: ", length(page_dimensions(TSS, 2)),
+              "\n  convergence_page: ", d.convergence_page === nothing ? "not computed" : d.convergence_page,
+              "\n  convergence_bound: ", d.convergence_bound,
+              "\n  e2_nonzero_terms: ", count(!iszero, TSS.ss.E2_dims),
               "\n  total_degree_range: ", repr(d.total_degree_range))
     end
 
@@ -734,7 +801,7 @@ module SpectralSequences
     """
     @inline function double_complex_summary(DC::ChainComplexes.DoubleComplex)
         base = ChainComplexes.bicomplex_summary(DC)
-        return merge(base, (kind=:derived_double_complex,))
+        return merge(base, (kind=:derived_double_complex, provenance=provenance(DC)))
     end
 
     """

@@ -114,7 +114,7 @@ end
     ))
 
     Eproj = DF.Ext(A, B, TO.DerivedFunctorOptions(maxdeg=2))
-    resBinj = DF.injective_resolution(B, TO.ResolutionOptions(maxlen=2))
+    resBinj = DF.injective_resolution(B, TO.ResolutionOptions(maxlen=3))
     Einj = TO.ExtInjective(A, resBinj)
 
     @test [TO.dim(Eproj, t) for t in 0:2] == [TO.dim(Einj, t) for t in 0:2]
@@ -248,6 +248,43 @@ end
     @test size(B) == (5, 5)
     @test FL.rank(field, B) == 5
     @test FL.rank(field, B[:, 1:FL.rank(field, C)]) == FL.rank(field, C)
+end
+
+@testset "A58 pivot-only basis completion and right inverse oracles" begin
+    same(A, B) = field isa CM.RealField ?
+        isapprox(A, B; atol=field.atol, rtol=field.rtol) : A == B
+    s = field isa CM.RealField ? Kc(0.01) : one(Kc)
+    C = Kc[s 0; 0 s; s s; 0 0]
+    for complete in (CC.extend_to_basis, CC.extend_to_basis_from_basis)
+        B = complete(C)
+        @test size(B) == (4, 4)
+        @test FL.rank(field, B) == 4
+        @test FL.rank(field, hcat(B[:, 1:2], C)) == 2
+        @test same(B * FL.solve_fullcolumn(field, B, C), C)
+    end
+    @test same(CC.extend_to_basis_from_basis(C)[:, 1:2], C)
+
+    # Any independent columns give a right inverse; the numerical path should
+    # retain QR selection rather than inheriting the ordered RREF pivots.
+    Q = Kc[s 0 1; 0 1 0]
+    abelian = TamerOp.AbelianCategories
+    for A in (Q, sparse(Q))
+        R = abelian._right_inverse_full_row(field, A)
+        @test size(R) == (3, 2)
+        @test same(A * R, CM.eye(field, 2))
+    end
+    @test size(abelian._right_inverse_full_row(field, zeros(Kc, 0, 3))) == (3, 0)
+    @test_throws ErrorException abelian._right_inverse_full_row(field, Kc[1 0; 0 0])
+
+    # Augmented solve rows must be normalized; the RealField route independently
+    # solves and checks the residual instead of interpreting QR pivots as rows.
+    A = Kc[s 0; s s; 0 0]
+    X = Kc[1 -1; -1 1]
+    Y = A * X
+    @test same(CC.solve_particular(field, A, Y), X)
+    bad = copy(Y)
+    bad[3, 2] = one(Kc)
+    @test_throws ErrorException CC.solve_particular(field, A, bad)
 end
 
 @testset "ChainComplexes: fused diff summary and lazy cohomology representatives" begin
@@ -404,10 +441,9 @@ end
 end
 
 @testset "Module complexes / hyperExt / hyperTor" begin
-    if field isa CM.RealField
-        # This block validates exact homological equalities that are unstable under floating solves.
-        @test true
-    else
+    same(A, B) = field isa CM.RealField ?
+        isapprox(A, B; atol=field.atol, rtol=field.rtol) : A == B
+    same_blocks(A, B) = size(A) == size(B) && all(same(a, b) for (a, b) in zip(A, B))
 
     # --------------------------
     # 1) hyperExt agrees with Ext for degree-0 complex
@@ -424,37 +460,41 @@ end
     maxdeg = 2
     E = DF.Ext(M, N, TO.DerivedFunctorOptions(maxdeg=maxdeg, model=:injective))
     H = TO.hyperExt(C0, Nf; maxlen=maxdeg)
+    # 0 -> P_3 -> P_1 -> I[1,2] -> 0 and Hom(P_i,N)=N(i)
+    # give Hom=0, Ext^1=k, and no higher Ext, over every field.
+    @test [DF.dim(E, t) for t in 0:maxdeg] == [0, 1, 0]
+    @test [MCM.dim(H, t) for t in 0:maxdeg] == [0, 1, 0]
 
     # Graded-space interface sanity checks: HyperExtSpace
-    rH = TO.degree_range(H)
+    rH = MCM.degree_range(H)
     if !isempty(rH)
-        @test TO.dim(H, first(rH) - 1) == 0
-        @test TO.dim(H, last(rH) + 1) == 0
+        @test MCM.dim(H, first(rH) - 1) == 0
+        @test MCM.dim(H, last(rH) + 1) == 0
         for t in rH
-            d = TO.dim(H, t)
-            B = TO.basis(H, t)
+            d = MCM.dim(H, t)
+            B = MCM.basis(H, t)
             @test length(B) == d
             if d > 0
                 coords = zeros(Kc, d)
                 coords[1] = c(1)
-                z = TO.representative(H, t, coords)
-                coords2 = TO.coordinates(H, t, z)
-                @test coords2 == coords
+                z = MCM.representative(H, t, coords)
+                coords2 = MCM.coordinates(H, t, z)
+                @test same(coords2, coords)
             end
         end
     end
 
 
     for t in 0:maxdeg
-        @test DF.dim(E,t) == TO.dim(H,t)
+        @test DF.dim(E,t) == MCM.dim(H,t)
     end
 
     if Threads.nthreads() > 1
         H_serial = TO.hyperExt(C0, Nf; maxlen = maxdeg, threads = false)
         H_thread = TO.hyperExt(C0, Nf; maxlen = maxdeg, threads = true)
-        @test dim(H_serial, 0) == dim(H_thread, 0)
-        @test dim(H_serial, 1) == dim(H_thread, 1)
-        @test dim(H_serial, 2) == dim(H_thread, 2)
+        @test MCM.dim(H_serial, 0) == MCM.dim(H_thread, 0)
+        @test MCM.dim(H_serial, 1) == MCM.dim(H_thread, 1)
+        @test MCM.dim(H_serial, 2) == MCM.dim(H_thread, 2)
     end
 
     # --------------------------
@@ -509,8 +549,8 @@ end
     R0_cached1 = TO.RHomComplex(C0, N; maxlen=maxdeg, resN=resN, cache=hcache, threads=false)
     R0_cached2 = TO.RHomComplex(C0, N; maxlen=maxdeg, resN=resN, cache=hcache, threads=false)
     @test R0_cached1.tot.dims == R0.tot.dims
-    @test R0_cached1.tot.d == R0.tot.d
-    @test R0_cached2.tot.d == R0.tot.d
+    @test same_blocks(R0_cached1.tot.d, R0.tot.d)
+    @test same_blocks(R0_cached2.tot.d, R0.tot.d)
     @test R0_cached1.homs[1, 1] === R0_cached2.homs[1, 1]
 
     Hc1 = DF.hom_with_cache(M, resN.Emods[1]; cache=hcache)
@@ -522,15 +562,15 @@ end
 
     rf_uncached = TO.rhom_map_first(fmap, N; maxlen=maxdeg, resN=resN, threads=false)
     rf_cached = TO.rhom_map_first(fmap, N; maxlen=maxdeg, resN=resN, cache=hcache, threads=false)
-    @test rf_cached.maps == rf_uncached.maps
+    @test same_blocks(rf_cached.maps, rf_uncached.maps)
 
     if Threads.nthreads() > 1
         R0_cached_thread = TO.RHomComplex(C0, N; maxlen=maxdeg, resN=resN, cache=hcache, threads=true)
         @test R0_cached_thread.tot.dims == R0_cached1.tot.dims
-        @test R0_cached_thread.tot.d == R0_cached1.tot.d
+        @test same_blocks(R0_cached_thread.tot.d, R0_cached1.tot.d)
 
         rf_cached_thread = TO.rhom_map_first(fmap, N; maxlen=maxdeg, resN=resN, cache=hcache, threads=true)
-        @test rf_cached_thread.maps == rf_cached.maps
+        @test same_blocks(rf_cached_thread.maps, rf_cached.maps)
     end
 
     # induced maps on Tot are just precomposition matrices degreewise, so compare by multiplication
@@ -542,7 +582,10 @@ end
     hgf = TO.induced_map_on_cohomology_modules(gfmap,0)
 
     for u in 1:M.Q.n
-        @test hgf.comps[u] == hg.comps[u]*hf.comps[u]
+        @test same(hf.comps[u], c(2) * eye_mat(M.dims[u]))
+        @test same(hg.comps[u], c(3) * eye_mat(M.dims[u]))
+        @test same(hgf.comps[u], c(6) * eye_mat(M.dims[u]))
+        @test same(hgf.comps[u], hg.comps[u]*hf.comps[u])
     end
 
     # --------------------------
@@ -550,37 +593,44 @@ end
     # --------------------------
     Pop = FF.FinitePoset(transpose(FF.leq_matrix(P)))
 
-    # Pop is the opposite poset of P.
-    # The interval [1,3] in P corresponds to the interval [3,1] in Pop.
-    Rop = interval_module(Pop, 3, 1)
+    # The right representable at 2 evaluates a left module at vertex 2.
+    # Consequently Tor_0(Rop,M)=M(2)=k and all higher Tor vanishes.
+    Rop = interval_module(Pop, 2, 1)
 
     RopP = IR.pmodule_from_fringe(Rop)
     Tplain = DF.Tor(RopP, M, TO.DerivedFunctorOptions(maxdeg=maxdeg))
     HT = TO.hyperTor(Rop,C0; maxlen=maxdeg)
+    @test [DF.dim(Tplain, s) for s in 0:maxdeg] == [1, 0, 0]
+    @test [MCM.dim(HT, s) for s in 0:maxdeg] == [1, 0, 0]
+    # Preserve the original vanishing fixture as an independent evaluation at
+    # vertex 3, where M(3)=0, rather than using it for vacuous coordinate tests.
+    Rfull = interval_module(Pop, 3, 1)
+    HTzero = TO.hyperTor(Rfull, C0; maxlen=maxdeg)
+    @test [MCM.dim(HTzero, s) for s in 0:maxdeg] == [0, 0, 0]
 
     for s in 0:maxdeg
-        @test DF.dim(Tplain,s) == TO.dim(HT,s)
+        @test DF.dim(Tplain,s) == MCM.dim(HT,s)
     end
 
     # Graded-space interface sanity checks: HyperTorSpace
-    @test TO.dim(HT, -1) == 0
-    rT = TO.degree_range(HT)
+    @test MCM.dim(HT, -1) == 0
+    rT = MCM.degree_range(HT)
     if !isempty(rT)
         @test first(rT) >= 0
         if first(rT) > 0
-            @test TO.dim(HT, first(rT) - 1) == 0
+            @test MCM.dim(HT, first(rT) - 1) == 0
         end
-        @test TO.dim(HT, last(rT) + 1) == 0
+        @test MCM.dim(HT, last(rT) + 1) == 0
         for n in rT
-            d = TO.dim(HT, n)
-            B = TO.basis(HT, n)
+            d = MCM.dim(HT, n)
+            B = MCM.basis(HT, n)
             @test length(B) == d
             if d > 0
                 coords = zeros(Kc, d)
                 coords[1] = c(1)
-                z = TO.representative(HT, n, coords)
-                coords2 = TO.coordinates(HT, n, z)
-                @test coords2 == coords
+                z = MCM.representative(HT, n, coords)
+                coords2 = MCM.coordinates(HT, n, z)
+                @test same(coords2, coords)
             end
         end
     end
@@ -588,9 +638,9 @@ end
     if Threads.nthreads() > 1
         T_serial = TO.hyperTor(Rop, C0; maxlen = maxdeg, threads = false)
         T_thread = TO.hyperTor(Rop, C0; maxlen = maxdeg, threads = true)
-        @test dim(T_serial, 0) == dim(T_thread, 0)
-        @test dim(T_serial, 1) == dim(T_thread, 1)
-        @test dim(T_serial, 2) == dim(T_thread, 2)
+        @test MCM.dim(T_serial, 0) == MCM.dim(T_thread, 0)
+        @test MCM.dim(T_serial, 1) == MCM.dim(T_thread, 1)
+        @test MCM.dim(T_serial, 2) == MCM.dim(T_thread, 2)
     end
 
     # FringeModule wrappers for RHom/RHomComplex and rhom_map_first/second.
@@ -609,7 +659,7 @@ end
     rs = TO.rhom_map_second(gN, C0, Nf, Nf; maxlen=maxdeg)
     @test size(rs.maps, 1) == rs.tmax - rs.tmin + 1
     rs_cached = TO.rhom_map_second(gN, C0, Nf, Nf; maxlen=maxdeg, cache=hcache)
-    @test rs_cached.maps == rs.maps
+    @test same_blocks(rs_cached.maps, rs.maps)
 
     # --------------------------
     # 5) RHom spectral sequence degenerates at E2 if horizontal differential=0
@@ -626,19 +676,371 @@ end
         for B in 0:maxdeg
             Mp = (A==0) ? M : M
             Eab = DF.Ext(Mp,N, TO.DerivedFunctorOptions(maxdeg=maxdeg, model=:injective))
-            a = -A
+            a = A
             b = B
             E2ab = CC.term(ss, 2, (a, b)).dimH
-            @test E2ab == DF.dim(Eab, B)
+            @test E2ab == DF.dim(Eab, B) == (B == 1 ? 1 : 0)
         end
-    end
     end
 
 end
 
+@testset "A60 cohomological shifts and canonical module cone triangles" begin
+    same(A, B) = field isa CM.RealField ?
+        isapprox(A, B; atol=field.atol, rtol=field.rtol) : A == B
+    P = chain_poset(1)
+    vector_space(n) = MD.PModule{Kc}(P, [n], Dict{Tuple{Int,Int}, Matrix{Kc}}(); field=field)
+    function module_complex(tmin, dims, matrices)
+        terms = vector_space.(dims)
+        diffs = [MD.PMorphism(terms[j], terms[j + 1], [matrices[j]])
+                 for j in eachindex(matrices)]
+        return MCM.ModuleCochainComplex(terms, diffs; tmin=tmin)
+    end
+    function module_map(C, D, matrices; tmin)
+        comps = [MD.PMorphism(MCM.component(C, t), MCM.component(D, t), [A])
+                 for (t, A) in zip(tmin:(tmin + length(matrices) - 1), matrices)]
+        return MCM.ModuleCochainMap(C, D, comps; tmin=tmin, tmax=tmin + length(comps) - 1)
+    end
+
+    # C: k -> k^3 -> k^2 in degrees -2:0, with cohomology dimensions 0,1,1.
+    # D: k^2 -> k^3 -> k in degrees -1:1, with cohomology dimensions 1,1,0.
+    c_diffs = [reshape(Kc[1, 0, 0], 3, 1), Kc[0 1 0; 0 0 0]]
+    d_diffs = [Kc[0 1; 0 0; 0 0], reshape(Kc[0, 0, 1], 1, 3)]
+    C = module_complex(-2, [1, 3, 2], c_diffs)
+    D = module_complex(-1, [2, 3, 1], d_diffs)
+    scalarC = CC.CochainComplex{Kc}(-2, 0, [1, 3, 2], sparse.(c_diffs))
+    scalarD = CC.CochainComplex{Kc}(-1, 1, [2, 3, 1], sparse.(d_diffs))
+    f_matrices = [zeros(Kc, 0, 1), Kc[0 0 1; 0 1 0], Kc[1 0; 0 0; 0 0]]
+    f = module_map(C, D, f_matrices; tmin=-2)
+    scalarf = CC.CochainMap(scalarC, scalarD, f_matrices; tmin=-2, tmax=0)
+
+    @test MCM.check_module_complex_map(f).valid
+    @test CC.is_cochain_map(scalarf)
+    @test [only(MCM.cohomology_module(C, t).dims) for t in -2:0] == [0, 1, 1]
+    @test [only(MCM.cohomology_module(D, t).dims) for t in -1:1] == [1, 1, 0]
+    for k in -3:3
+        shifted = MCM.shift(C, k)
+        scalar_shifted = CC.shift(scalarC, k)
+        @test MCM.degree_range(shifted) == (-2-k):(0-k)
+        @test MCM.degree_range(shifted) == CC.degree_range(scalar_shifted)
+        @test MCM.check_module_complex(shifted).valid
+        @test [only(MCM.cohomology_module(shifted, t).dims)
+               for t in MCM.degree_range(shifted)] == [0, 1, 1]
+        for t in MCM.degree_range(shifted)
+            @test MCM.component(shifted, t) === MCM.component(C, t + k)
+            @test same(MCM.differential(shifted, t).comps[1],
+                       (isodd(k) ? -one(Kc) : one(Kc)) * MCM.differential(C, t + k).comps[1])
+            @test same(MCM.differential(shifted, t).comps[1], CC.differential(scalar_shifted, t))
+        end
+        inverse_shift = MCM.shift(shifted, -k)
+        @test MCM.degree_range(inverse_shift) == -2:0
+        @test inverse_shift.terms == C.terms
+        @test all(same(a.comps[1], b) for (a, b) in zip(inverse_shift.diffs, c_diffs))
+        for ell in (-1, 2)
+            composed = MCM.shift(shifted, ell)
+            combined = MCM.shift(C, k + ell)
+            @test MCM.degree_range(composed) == MCM.degree_range(combined)
+            @test composed.terms == combined.terms
+            @test all(same(a.comps[1], b.comps[1]) for (a, b) in zip(composed.diffs, combined.diffs))
+        end
+    end
+    @test MCM.shift(C, 0) === C
+    @test all(same(a.comps[1], b) for (a, b) in zip(C.diffs, c_diffs))
+
+    # Explicit unshifted oracle, independent of the other cone implementation.
+    expected_diffs = [reshape(Kc[-1, 0, 0], 3, 1),
+                      Kc[0 0 1; 0 1 0; 0 -1 0; 0 0 0],
+                      Kc[0 1 1 0; 0 0 0 0; 0 0 0 0],
+                      reshape(Kc[0, 0, 1], 1, 3)]
+    cone = MCM.mapping_cone(f)
+    @test MCM.degree_range(cone) == -3:1
+    @test [only(M.dims) for M in cone.terms] == [1, 3, 4, 3, 1]
+    @test all(same(d.comps[1], A) for (d, A) in zip(cone.diffs, expected_diffs))
+    @test [only(MCM.cohomology_module(cone, t).dims) for t in -3:1] == [0, 0, 1, 1, 0]
+
+    for k in (-2, -1, 0, 1, 2)
+        Cs, Ds = MCM.shift(C, k), MCM.shift(D, k)
+        fs = module_map(Cs, Ds, f_matrices; tmin=-2-k)
+        scalarfs = CC.CochainMap(CC.shift(scalarC, k), CC.shift(scalarD, k),
+                                f_matrices; tmin=-2-k, tmax=-k)
+        tri = MCM.mapping_cone_triangle(fs)
+        scalartri = CC.mapping_cone_triangle(scalarfs)
+        objects, maps = MCM.triangle_objects(tri), MCM.triangle_maps(tri)
+        @test objects.source === Cs
+        @test objects.target === Ds
+        @test maps.morphism === fs
+        @test MCM.connecting_map(tri) === maps.projection
+        @test MCM.degree_range(objects.cone) == (-3-k):(1-k)
+        @test MCM.degree_range(MCM.target(maps.projection)) == (-3-k):(-1-k)
+        @test MCM.check_module_triangle(tri).valid
+        @test MCM.check_module_triangle(tri; throw=true).valid
+        @test MCM.check_module_complex(objects.cone).valid
+        @test MCM.check_module_complex_map(maps.inclusion).valid
+        @test MCM.check_module_complex_map(maps.projection).valid
+        @test [only(MCM.cohomology_module(objects.cone, t).dims)
+               for t in MCM.degree_range(objects.cone)] == [0, 0, 1, 1, 0]
+        for t in MCM.degree_range(objects.cone)
+            a = only(MCM.component(Ds, t).dims)
+            b = only(MCM.component(Cs, t + 1).dims)
+            a_next = only(MCM.component(Ds, t + 1).dims)
+            b_next = only(MCM.component(Cs, t + 2).dims)
+            inclusion = [eye_mat(a); zeros(Kc, b, a)]
+            projection = [zeros(Kc, b, a) eye_mat(b)]
+            block = [MCM.differential(Ds, t).comps[1] MCM.component(fs, t + 1).comps[1];
+                     zeros(Kc, b_next, a) -MCM.differential(Cs, t + 1).comps[1]]
+            dt = MCM.differential(objects.cone, t).comps[1]
+            it = MCM.component(maps.inclusion, t).comps[1]
+            pt = MCM.component(maps.projection, t).comps[1]
+            @test size(dt) == (a_next + b_next, a + b)
+            @test same(dt, block)
+            @test same(dt, CC.differential(scalartri.cone, t))
+            @test same(it, inclusion)
+            @test same(pt, projection)
+            @test same(it, CC.component(scalartri.i, t))
+            @test same(pt, CC.component(scalartri.p, t))
+            @test same(pt * it, zeros(Kc, b, a))
+            @test same(dt * it,
+                       MCM.component(maps.inclusion, t + 1).comps[1] * MCM.differential(Ds, t).comps[1])
+            @test same(MCM.differential(MCM.target(maps.projection), t).comps[1] * pt,
+                       MCM.component(maps.projection, t + 1).comps[1] * dt)
+        end
+
+        # The cone of the identity is contractible. The zero-map cone is the
+        # direct sum D + C[1], so its cohomology dimensions add degreewise.
+        idcone = MCM.mapping_cone(MCM.idmap(Cs))
+        @test all(iszero(only(MCM.cohomology_module(idcone, t).dims))
+                  for t in MCM.degree_range(idcone))
+        zero_maps = [zeros(Kc, size(A)) for A in f_matrices]
+        zero_tri = MCM.mapping_cone_triangle(module_map(Cs, Ds, zero_maps; tmin=-2-k))
+        @test MCM.check_module_triangle(zero_tri).valid
+        for t in MCM.degree_range(zero_tri.Cone)
+            @test only(MCM.cohomology_module(zero_tri.Cone, t).dims) ==
+                  only(MCM.cohomology_module(Ds, t).dims) + only(MCM.cohomology_module(Cs, t + 1).dims)
+        end
+    end
+
+    tri = MCM.mapping_cone_triangle(f)
+    function scaled_map(g, scale)
+        comps = [MD.PMorphism(a.dom, a.cod, [scale * a.comps[1]]) for a in g.comps]
+        return MCM.ModuleCochainMap(MCM.source(g), MCM.target(g), comps;
+                                   tmin=g.tmin, tmax=g.tmax)
+    end
+    # Correct endpoints and chain-map identities do not certify the canonical
+    # triangle: even zero maps and the negated canonical maps must be rejected.
+    for (inclusion, projection) in ((scaled_map(tri.i, zero(Kc)), tri.p),
+                                    (tri.i, scaled_map(tri.p, zero(Kc))))
+        @test MCM.check_module_complex_map(inclusion).valid
+        @test MCM.check_module_complex_map(projection).valid
+        bad = MCM.ModuleDistinguishedTriangle(C, D, tri.Cone, f, inclusion, projection)
+        @test !MCM.check_module_triangle(bad; throw=false).valid
+        @test_throws ArgumentError MCM.check_module_triangle(bad; throw=true)
+    end
+    for (inclusion, projection) in ((scaled_map(tri.i, -one(Kc)), tri.p),
+                                    (tri.i, scaled_map(tri.p, -one(Kc))))
+        bad = MCM.ModuleDistinguishedTriangle(C, D, tri.Cone, f, inclusion, projection)
+        if -one(Kc) == one(Kc)
+            @test MCM.check_module_triangle(bad).valid
+        else
+            @test !MCM.check_module_triangle(bad; throw=false).valid
+            @test_throws ArgumentError MCM.check_module_triangle(bad; throw=true)
+        end
+    end
+
+    shift_target = MCM.target(tri.p)
+    wrong_sign = MCM.ModuleCochainComplex(shift_target.terms,
+        [MD.PMorphism(d.dom, d.cod, [-d.comps[1]]) for d in shift_target.diffs]; tmin=shift_target.tmin)
+    wrong_projection = MCM.ModuleCochainMap(tri.Cone, wrong_sign, tri.p.comps;
+                                          tmin=tri.p.tmin, tmax=tri.p.tmax, check=false)
+    bad_sign = MCM.ModuleDistinguishedTriangle(C, D, tri.Cone, f, tri.i, wrong_projection)
+    if -one(Kc) == one(Kc)
+        @test MCM.check_module_triangle(bad_sign).valid
+    else
+        @test !MCM.check_module_complex_map(wrong_projection).valid
+        @test !MCM.check_module_triangle(bad_sign; throw=false).valid
+        @test_throws ArgumentError MCM.check_module_triangle(bad_sign; throw=true)
+    end
+    # Raw hand-built storage should produce a validation report, not BoundsError.
+    short_inclusion = MCM.ModuleCochainMap{Kc}(D, tri.Cone, tri.i.tmin, tri.i.tmax,
+                                              MD.PMorphism{Kc}[])
+    bad_storage = MCM.ModuleDistinguishedTriangle(C, D, tri.Cone, f, short_inclusion, tri.p)
+    @test !MCM.check_module_triangle(bad_storage; throw=false).valid
+    @test_throws ArgumentError MCM.check_module_triangle(bad_storage; throw=true)
+end
+
+@testset "A60 shifts preserve hyperderived degrees and differentials" begin
+    same(A, B) = field isa CM.RealField ?
+        isapprox(A, B; atol=field.atol, rtol=field.rtol) : A == B
+    # k -> k^2 by the first coordinate has H^1 = k. Over one vertex,
+    # both resolutions terminate in degree zero, so these are exact oracles.
+    M = one_vertex_module(1)
+    N = MD.PModule{Kc}(M.Q, [1], Dict{Tuple{Int,Int},Matrix{Kc}}(); field=field)
+    M2 = MD.PModule{Kc}(M.Q, [2], Dict{Tuple{Int,Int},Matrix{Kc}}(); field=field)
+    inc = MD.PMorphism(M, M2, [reshape(Kc[c(1), c(0)], 2, 1)])
+    C = MCM.ModuleCochainComplex([M, M2], [inc]; tmin=0)
+    resN = DF.injective_resolution(N, TO.ResolutionOptions(maxlen=0))
+    R = MCM.RHomComplex(C, N; maxlen=0, resN=resN, threads=false)
+    T = MCM.DerivedTensorComplex(N, C; maxlen=0, threads=false)
+    for k in (-2, -1, 0, 1, 2)
+        Cs = MCM.shift(C, k)
+        HX = MCM.hyperExt(Cs, N; maxlen=0, resN=resN, threads=false)
+        HT = MCM.hyperTor(N, Cs; maxlen=0, threads=false)
+        @test MCM.degree_dimensions(HX) == Dict(k - 1 => 1)
+        @test MCM.degree_dimensions(HT) == Dict(k - 1 => 1)
+        @test MCM.check_rhom_complex(HX.R).valid
+        @test MCM.check_derived_tensor_complex(HT.T).valid
+        # The Hom argument is contravariant; the tensor argument is covariant.
+        expected_r = CC.shift(R.tot, -k)
+        expected_t = CC.shift(T.tot, k)
+        @test CC.degree_range(HX.R.tot) == CC.degree_range(expected_r)
+        @test HX.R.tot.dims == expected_r.dims
+        @test all(same(a, b) for (a, b) in zip(HX.R.tot.d, expected_r.d))
+        @test CC.degree_range(HT.T.tot) == CC.degree_range(expected_t)
+        @test HT.T.tot.dims == expected_t.dims
+        @test all(same(a, b) for (a, b) in zip(HT.T.tot.d, expected_t.d))
+        scalar = MCM.ModuleCochainMap(Cs, Cs,
+            [scalar_morphism(M, 2), scalar_morphism(M2, 2)])
+        @test same(MCM.hyperExt_map_first(scalar, HX, HX; t=k-1), reshape(Kc[c(2)], 1, 1))
+        @test same(MCM.hyperTor_map_second(scalar, HT, HT; n=k-1), reshape(Kc[c(2)], 1, 1))
+    end
+
+    # Both bicomplex directions nonzero: shifting the input changes just
+    # its own differential. In positive resolution degree, the total shift
+    # isomorphism also has a Koszul sign on each resolution-degree block.
+    P = chain_poset(2)
+    P1 = IR.pmodule_from_fringe(interval_module(P, 1, 2))
+    S2 = IR.pmodule_from_fringe(interval_module(P, 2, 2))
+    Pop = FF.FinitePoset(transpose(FF.leq_matrix(P)))
+    R2 = IR.pmodule_from_fringe(interval_module(Pop, 2, 2))
+    contractible = MCM.ModuleCochainComplex([P1, P1], [MD.id_morphism(P1)]; tmin=-1)
+    resN = DF.injective_resolution(S2, TO.ResolutionOptions(maxlen=1))
+    R = MCM.RHomComplex(contractible, S2; maxlen=1, resN=resN, threads=false)
+    T = MCM.DerivedTensorComplex(R2, contractible; maxlen=1, threads=false)
+    @test any(A -> !iszero(A), R.DC.dv)
+    @test any(A -> !iszero(A), R.DC.dh)
+    @test any(A -> !iszero(A), T.DC.dv)
+    @test any(A -> !iszero(A), T.DC.dh)
+    for k in (-2, -1, 1, 2)
+        Cs = MCM.shift(contractible, k)
+        Rs = MCM.RHomComplex(Cs, S2; maxlen=1, resN=resN, threads=false)
+        Ts = MCM.DerivedTensorComplex(R2, Cs; maxlen=1, threads=false)
+        sgn = isodd(k) ? -one(Kc) : one(Kc)
+        @test Rs.DC.dims == R.DC.dims
+        @test Rs.DC.dv == R.DC.dv
+        @test Rs.DC.dh == map(A -> sgn * A, R.DC.dh)
+        @test Ts.DC.dims == T.DC.dims
+        @test Ts.DC.dv == map(A -> sgn * A, T.DC.dv)
+        @test Ts.DC.dh == T.DC.dh
+        @test CC.check_bicomplex(Rs.DC).valid
+        @test CC.check_bicomplex(Ts.DC).valid
+        @test all(iszero, CC.cohomology_dims(Rs.tot))
+        @test all(iszero, CC.cohomology_dims(Ts.tot))
+    end
+end
+
+@testset "A60 triangle validation checks omitted degrees and module maps" begin
+    M = one_vertex_module(1)
+    C = MCM.ModuleCochainComplex([M], MD.PMorphism[]; tmin=0)
+    fzero = MCM.ModuleCochainMap(C, C, [MD.zero_morphism(M, M)])
+    tri = MCM.mapping_cone_triangle(fzero)
+    @test MCM.check_module_triangle(tri).valid
+
+    # Each shortened map is a valid zero cochain map. Its storage count and
+    # stored component are correct, but it omits a required identity component.
+    short_i = MCM.ModuleCochainMap(C, tri.Cone, [MCM.component(tri.i, -1)]; tmin=-1, tmax=-1)
+    short_p = MCM.ModuleCochainMap(tri.Cone, MCM.target(tri.p), [MCM.component(tri.p, 0)]; tmin=0, tmax=0)
+    for (inclusion, projection) in ((short_i, tri.p), (tri.i, short_p))
+        @test MCM.check_module_complex_map(inclusion).valid
+        @test MCM.check_module_complex_map(projection).valid
+        bad = MCM.ModuleDistinguishedTriangle(C, C, tri.Cone, fzero, inclusion, projection)
+        report = MCM.check_module_triangle(bad; throw=false)
+        @test report.chain_maps_valid
+        @test !report.valid
+        @test_throws ArgumentError MCM.check_module_triangle(bad; throw=true)
+    end
+
+    # The fully parameterized inner PMorphism constructor intentionally permits
+    # raw storage. The triangle validator must catch its shape before products.
+    i0 = MCM.component(tri.i, 0)
+    malformed = MD.PMorphism{Kc,typeof(M.field),Matrix{Kc}}(i0.dom, i0.cod, [zeros(Kc, 0, 1)])
+    comps = copy(tri.i.comps)
+    comps[1 - tri.i.tmin] = malformed
+    bad_i = MCM.ModuleCochainMap{Kc}(C, tri.Cone, tri.i.tmin, tri.i.tmax, comps)
+    bad_shape = MCM.ModuleDistinguishedTriangle(C, C, tri.Cone, fzero, bad_i, tri.p)
+    @test !MCM.check_module_triangle(bad_shape; throw=false).valid
+    @test_throws ArgumentError MCM.check_module_triangle(bad_shape; throw=true)
+
+    # Cochain identities alone are insufficient over a nontrivial poset.
+    # On the constant chain-two module, vertex scalars 1 and 0 do not commute
+    # with the identity structure map, although every complex differential is 0.
+    P2 = chain_poset(2)
+    constant = MD.PModule{Kc}(P2, [1, 1], Dict((1, 2) => eye_mat(1)); field=field)
+    C2 = MCM.ModuleCochainComplex([constant], MD.PMorphism[]; tmin=0)
+    @test MCM.check_module_triangle(MCM.mapping_cone_triangle(MCM.idmap(C2))).valid
+    nonnatural = MD.PMorphism(constant, constant, [eye_mat(1), zeros(Kc, 1, 1)])
+    bad_f = MCM.ModuleCochainMap(C2, C2, [nonnatural])
+    @test MCM.check_module_complex_map(bad_f).valid
+    bad_naturality = MCM.mapping_cone_triangle(bad_f)
+    @test !MCM.check_module_triangle(bad_naturality; throw=false).valid
+    @test_throws ArgumentError MCM.check_module_triangle(bad_naturality; throw=true)
+
+    if field isa CM.RealField
+        # Decimal products introduce rounding despite mathematical naturality:
+        # 0.1 * 0.2 = 1 * 0.02. Preserve the module owner's tolerance contract.
+        source_module = MD.PModule{Kc}(P2, [1, 1], Dict((1, 2) => fill(0.02, 1, 1)); field=field)
+        target_module = MD.PModule{Kc}(P2, [1, 1], Dict((1, 2) => fill(0.1, 1, 1)); field=field)
+        g = MD.PMorphism(source_module, target_module, [fill(0.2, 1, 1), eye_mat(1)])
+        @test !iszero(0.1 * 0.2 - 0.02)
+        @test abs(0.1 * 0.2 - 0.02) <= field.atol
+        @test MD.check_morphism(g).valid
+        Cs = MCM.ModuleCochainComplex([source_module], MD.PMorphism[]; tmin=0)
+        Ds = MCM.ModuleCochainComplex([target_module], MD.PMorphism[]; tmin=0)
+        real_tri = MCM.mapping_cone_triangle(MCM.ModuleCochainMap(Cs, Ds, [g]))
+        @test MCM.check_module_triangle(real_tri).valid
+        @test MCM.check_module_triangle(real_tri; throw=true).valid
+    end
+end
+
+@testset "ModuleComplexes: negative degrees encode covariant cellular homology" begin
+    # An edge included in a filled triangle. Assemble the chain modules directly,
+    # independently of DataIngestion, with C^{-k}=C_k and d^{-k}=boundary_k.
+    P = chain_poset(2)
+    B1 = Kc[c(-1) c(-1) c(0); c(1) c(0) c(-1); c(0) c(1) c(1)]
+    B2 = reshape(Kc[c(1), c(-1), c(1)], 3, 1)
+    edge_boundary = reshape(Kc[c(-1), c(1)], 2, 1)
+    vertex_inclusion = Kc[c(1) c(0); c(0) c(1); c(0) c(0)]
+    edge_inclusion = reshape(Kc[c(1), c(0), c(0)], 3, 1)
+    C0 = MD.PModule{Kc}(P, [2, 3],
+        Dict((1, 2) => vertex_inclusion); field=field)
+    C1 = MD.PModule{Kc}(P, [1, 3],
+        Dict((1, 2) => edge_inclusion); field=field)
+    C2 = MD.PModule{Kc}(P, [0, 1],
+        Dict((1, 2) => zmat(1, 0)); field=field)
+    boundary1 = MD.PMorphism(C1, C0, [edge_boundary, B1])
+    boundary2 = MD.PMorphism(C2, C1, [zmat(1, 0), B2])
+    @test MD.check_morphism(boundary1; throw=true).valid
+    @test MD.check_morphism(boundary2; throw=true).valid
+    C = MCM.ModuleCochainComplex([C2, C1, C0], [boundary2, boundary1]; tmin=-2)
+    @test MCM.degree_range(C) == -2:0
+    @test MCM.component(C, -1) === C1
+    @test MCM.differential(C, -1) === boundary1
+    @test MCM.check_module_complex(C; throw=true).valid
+    H0 = MCM.cohomology_module(C, 0)
+    @test H0.dims == [1, 1]
+    @test FL.rank(field, MD.structure_map(H0; source=1, target=2)) == 1
+    @test MCM.cohomology_module(C, -1).dims == [0, 0]
+    @test MCM.cohomology_module(C, -2).dims == [0, 0]
+
+    # Transposing only the boundary while keeping covariant inclusions is not a
+    # natural transformation, despite giving the same pointwise Betti numbers.
+    false_coboundary = MD.PMorphism(C0, C1,
+        [Matrix(transpose(edge_boundary)), Matrix(transpose(B1))])
+    @test !MD.check_morphism(false_coboundary).valid
+    @test_throws ErrorException MD.check_morphism(false_coboundary; throw=true)
+end
+
 @testset "ModuleComplexes UX surface" begin
     M = one_vertex_module(1)
-    N = one_vertex_module(1)
+    N = MD.PModule{Kc}(M.Q, [1], Dict{Tuple{Int,Int},Matrix{Kc}}(); field=field)
     idM = MD.id_morphism(M)
     zM = TO.zero_morphism(M, M)
     Z = TO.zero_pmodule(M.Q; field=field)
@@ -682,7 +1084,7 @@ end
     @test maps.morphism === f
     @test maps.inclusion === tri.i
     @test maps.projection === tri.p
-    @test TO.connecting_map(tri) === tri.p
+    @test MCM.connecting_map(tri) === tri.p
 
     @test DF.source_module(RH) === C0
     @test DF.target_module(RH) === N
@@ -882,12 +1284,6 @@ end
 end
 
 @testset "mapping_cone(identity) is acyclic and id is quasi-iso" begin
-    if field isa CM.RealField
-        # Real-field solve checks are numerically sensitive on this tiny exact fixture.
-        @test true
-        return
-    end
-
     M = one_vertex_module(1)
     C = TO.ModuleCochainComplex([M], TO.PMorphism[]; tmin=0, check=true)
     id = TO.ModuleCochainMap(C, C, [MD.id_morphism(M)]; tmin=0, tmax=0, check=true)
@@ -2411,7 +2807,7 @@ end
     @test CC.check_bicomplex(DC).valid
     @test CC.check_filtered_complex(FDC; first=:vertical).valid
 
-    Cbad = CC.CochainComplex{Kc,Any}(0, 1, [1, 1], [spzeros(Kc, 2, 1)], [Int[], Int[]], nothing)
+    Cbad = CC.CochainComplex{Kc,Any}(0, 1, [1, 1], [spzeros(Kc, 2, 1)], [Int[], Int[]], nothing, field)
     creport = CC.check_complex(Cbad)
     @test !creport.valid
     @test any(occursin("expected d^0", msg) for msg in creport.issues)
@@ -2928,15 +3324,11 @@ end
         @test ss_thread.Einf_dims == ss_serial.Einf_dims
     end
 
-    # Compare to ext_dims_via_resolutions on the same truncation.
-    F, dF = TO.IndicatorResolutions.upset_resolution(M; maxlen=2)
-    E, dE = TO.IndicatorResolutions.downset_resolution(N; maxlen=2)
-    ext_dims = HE.ext_dims_via_resolutions(F, dF, E, dE)
-
     tmin = ss.DC.amin + ss.DC.bmin
     tmax = ss.DC.amax + ss.DC.bmax
+    ordinary = DF.Ext(M, N, TO.DerivedFunctorOptions(maxdeg=tmax))
     for t in tmin:tmax
-        @test ss.Htot_dims[t - tmin + 1] == get(ext_dims, t, 0)
+        @test ss.Htot_dims[t - tmin + 1] == DF.dim(ordinary, t)
     end
 
     # Einf diagonal sums must match Htot dims.
@@ -2980,20 +3372,25 @@ end
 @testset "TorSpectralSequence threading parity" begin
     if Threads.nthreads() > 1
         P = chain_poset(3)
+        Pop = FF.FinitePoset(transpose(FF.leq_matrix(P)))
         M = IR.pmodule_from_fringe(one_by_one_fringe(
-            P,
-            FF.principal_upset(P, 1),
-            FF.principal_downset(P, 1),
+            Pop,
+            FF.principal_upset(Pop, 3),
+            FF.principal_downset(Pop, 3);
+            field=field,
         ))
         N = IR.pmodule_from_fringe(one_by_one_fringe(
             P,
-            FF.principal_upset(P, 3),
-            FF.principal_downset(P, 3),
+            FF.principal_upset(P, 1),
+            FF.principal_downset(P, 3);
+            field=field,
         ))
 
-        ss_serial = TO.TorSpectralSequence(M, N; maxlen=2, threads=false)
-        ss_thread = TO.TorSpectralSequence(M, N; maxlen=2, threads=true)
+        ss_serial = DF.TorSpectralSequence(M, N; maxlen=2, threads=false)
+        ss_thread = DF.TorSpectralSequence(M, N; maxlen=2, threads=true)
 
+        # Tensor against the bottom projective evaluates M at vertex1: zero.
+        @test all(iszero, ss_serial.ss.Htot_dims)
         @test ss_thread.ss.Htot_dims == ss_serial.ss.Htot_dims
         @test ss_thread.ss.Einf_dims == ss_serial.ss.Einf_dims
     end
@@ -3046,11 +3443,14 @@ end
     @test CC.page(ss, 2)[(0,1)] == 1
     @test CC.page(ss, 2)[(2,0)] == 1
 
-    # d2: E2^{0,1} -> E2^{2,0} is nonzero (in fact iso).
+    # The source/target classes are the surviving standard unit vectors.
+    # The lift across the identity vertical map is the standard unit vector
+    # too, so the second horizontal identity gives coefficient +1 in the
+    # library's total-differential sign convention, not merely a nonzero map.
     d2 = CC.differential(ss, 2, (0,1))
     @test size(d2) == (1, 1)
     if _is_real_field(field)
-        @test !iszero(d2[1,1])
+        @test isapprox(d2[1,1], one(Kc); atol=field.atol, rtol=field.rtol)
     else
         @test d2[1,1] == one(Kc)
     end
@@ -3292,4 +3692,782 @@ end
         end
     end
 end
+
+@testset "A02 bounded cohomology keeps neighboring differentials" begin
+    # C^0=k -> C^1=k^2 -> C^2=k^2 -> C^3=k. The first
+    # two differentials have ranks one and disjoint image/kernel directions.
+    # H^0=0, H^1=0, H^2=k, H^3=k.
+    d0 = reshape(Kc[c(1), c(0)], 2, 1)
+    d1 = Kc[0 1; 0 0]
+    d2 = zeros(Kc, 1, 2)
+    # CochainComplex stores sparse matrices; cover both sparse and dense
+    # differential patterns with the same hand-computed cohomology.
+    for dense_pattern in (false, true)
+        ds = dense_pattern ? sparse.([ones(Kc, 2, 1), Kc[1 -1; 1 -1], d2]) : sparse.([d0, d1, d2])
+        C = CC.CochainComplex{Kc}(0, 3, [1, 2, 2, 1], ds)
+        full = CC.cohomology_data(C)
+        @test [h.dimH for h in full] == [0, 0, 1, 1]
+        @test [h.dimH for h in CC.cohomology_data(C; degrees=0:0)] == [0]
+        @test [h.dimH for h in CC.cohomology_data(C; degrees=1:1)] == [0]
+        @test [h.dimH for h in CC.cohomology_data(C; degrees=2:2)] == [1]
+        @test [h.dimH for h in CC.cohomology_data(C; degrees=0:3)] == [h.dimH for h in full]
+        emptydata = CC.cohomology_data(C; degrees=1:0)
+        @test emptydata isa Vector{CC.CohomologyData{Kc}}
+        @test isempty(emptydata)
+        @test_throws ArgumentError CC.cohomology_data(C; degrees=-1:0)
+        @test_throws ArgumentError CC.cohomology_data(C; degrees=3:4)
+        @test_throws TypeError CC.cohomology_data(C; degrees=0:2:2)
+        for shift_amount in (-4, 5)
+            shifted = CC.shift(C, shift_amount)
+            base_degree = shifted.tmin
+            shifted_full = CC.cohomology_data(shifted)
+            selected = CC.cohomology_data(shifted; degrees=(base_degree + 2):(base_degree + 3))
+            @test [h.t for h in selected] == [base_degree + 2, base_degree + 3]
+            @test [h.dimH for h in selected] == [1, 1]
+            @test [h.K for h in selected] == [h.K for h in shifted_full[3:4]]
+            @test [h.B for h in selected] == [h.B for h in shifted_full[3:4]]
+            @test only(CC.cohomology_data(shifted; degrees=(base_degree + 2):(base_degree + 2))).dimH == 1
+            @test only(CC.cohomology_data(shifted; degrees=(base_degree + 3):(base_degree + 3))).dimH == 1
+        end
+    end
+    # H^0 is zero because d0 is injective. The unrequested d1 has a large
+    # identity kernel; the benchmark measures avoiding its materialization.
+    halo_dim = 256
+    halo = CC.CochainComplex{Kc}(0, 2, [1, halo_dim, 0],
+        [sparse([1], [1], Kc[c(1)], halo_dim, 1), spzeros(Kc, 0, halo_dim)])
+    bounded = only(CC.cohomology_data(halo; degrees=0:0))
+    scalar = CC.cohomology_data(halo, 0)
+    @test bounded.dimH == scalar.dimH == 0
+    @test bounded.dimZ == bounded.dimB == 0
+    @test size(bounded.K) == (1, 0)
+end
+
+@testset "A02 shifted hyperderived degrees and RHom differential signs" begin
+    M = one_vertex_module(1)
+    N = MD.PModule{Kc}(M.Q, [1], Dict{Tuple{Int,Int},Matrix{Kc}}(); field=field)
+    M2 = MD.PModule{Kc}(M.Q, [2], Dict{Tuple{Int,Int},Matrix{Kc}}(); field=field)
+    inclusion = MD.PMorphism(M, M2, [reshape(Kc[c(1), c(0)], 2, 1)])
+    resN = DF.injective_resolution(N, TO.ResolutionOptions(maxlen=0))
+    for p in (-2, 1, 3)
+        C = MCM.ModuleCochainComplex([M], MD.PMorphism[]; tmin=p)
+        D = MCM.ModuleCochainComplex([M2], MD.PMorphism[]; tmin=p)
+        f = MCM.ModuleCochainMap(C, D, [inclusion]; tmin=p, tmax=p)
+        HX = MCM.hyperExt(C, N; maxlen=0, resN=resN)
+        HD = MCM.hyperExt(D, N; maxlen=0, resN=resN)
+        HT = MCM.hyperTor(N, C; maxlen=0)
+        HTD = MCM.hyperTor(N, D; maxlen=0)
+        @test MCM.degree_range(HX) == (-p):(-p)
+        @test MCM.degree_range(HT) == (-p):(-p)
+        @test MCM.dim(HX, -p) == 1
+        @test MCM.dim(HT, -p) == 1
+        @test MCM.check_rhom_complex(HX.R).valid
+        @test MCM.describe(HX).resolution_complete
+        @test MCM.describe(HT).resolution_complete
+        @test MCM.hyperExt_map_first(f, HX, HD; t=-p) == reshape(Kc[c(1), c(0)], 1, 2)
+        @test MCM.hyperTor_map_second(f, HT, HTD; n=-p) == reshape(Kc[c(1), c(0)], 2, 1)
+        for H in (HX, HT)
+            @test MCM.dim(H, -p-1) == 0
+            @test MCM.dim(H, -p+1) == 0
+            @test size(MCM.cycles(H, -p-1)) == (0, 0)
+            @test size(MCM.boundaries(H, -p-1)) == (0, 0)
+            @test length(MCM.basis(H, -p)) == 1
+            z = MCM.representative(H, -p, Kc[c(1)])
+            @test MCM.coordinates(H, -p, z) == Kc[c(1)]
+        end
+    end
+
+    # Nonzero differentials in both bicomplex directions require a Koszul
+    # sign. RHom of the identity complex must be acyclic over every field.
+    P = chain_poset(2)
+    P1 = IR.pmodule_from_fringe(interval_module(P, 1, 2))
+    S2 = IR.pmodule_from_fringe(interval_module(P, 2, 2))
+    contractible = MCM.ModuleCochainComplex([P1, P1], [MD.id_morphism(P1)]; tmin=-1)
+    R = MCM.RHomComplex(contractible, S2; maxlen=1, threads=false)
+    @test CC.check_bicomplex(R.DC).valid
+    @test all(iszero, CC.cohomology_dims(R.tot))
+    @test MCM.total_dimension(MCM.hyperExt(contractible, S2; maxlen=1)) == 0
+    @test_throws ArgumentError MCM.RHomComplex(contractible, S2; maxlen=-1)
+    if Threads.nthreads() > 1
+        Rt = MCM.RHomComplex(contractible, S2; maxlen=1, threads=true)
+        @test Rt.DC.dims == R.DC.dims
+        @test Rt.DC.dv == R.DC.dv
+        @test Rt.DC.dh == R.DC.dh
+    end
+end
+
+@testset "A02 hyperderived resolution boundaries are not invariants" begin
+    P = diamond_poset()
+    P1f = interval_module(P, 1, 4)
+    S4f = interval_module(P, 4, 4)
+    P1 = IR.pmodule_from_fringe(P1f)
+    S4 = IR.pmodule_from_fringe(S4f)
+    Pop = FF.FinitePoset(transpose(FF.leq_matrix(P)))
+    R4 = IR.pmodule_from_fringe(interval_module(Pop, 4, 4))
+    for p in (0, 2)
+        C = MCM.ModuleCochainComplex([P1], MD.PMorphism[]; tmin=p)
+        HX = MCM.hyperExt(C, S4; maxlen=1)
+        HT = MCM.hyperTor(R4, C; maxlen=1)
+        @test CC.cohomology_data(HX.R.tot, 1-p).dimH == 1
+        @test CC.cohomology_data(HT.T.tot, p-1).dimH == 1
+        for H in (HX, HT)
+            @test MCM.degree_range(H) == (-p):(-p)
+            @test !MCM.describe(H).resolution_complete
+            @test occursin("resolution_complete=false", sprint(show, H))
+            @test occursin("resolution_complete: false", sprint(show, MIME"text/plain"(), H))
+            @test MCM.dim(H, -p) == 0
+            @test_throws ArgumentError MCM.dim(H, 1-p)
+            @test_throws ArgumentError MCM.basis(H, 1-p)
+            @test_throws ArgumentError MCM.cycles(H, 1-p)
+            @test_throws ArgumentError MCM.boundaries(H, 1-p)
+            @test_throws ArgumentError MCM.coordinates(H, 1-p, Kc[])
+            @test_throws ArgumentError MCM.representative(H, 1-p, Kc[])
+        end
+        HXfull = MCM.hyperExt(C, S4; maxlen=2)
+        HTfull = MCM.hyperTor(R4, C; maxlen=2)
+        @test all(iszero(MCM.dim(HXfull, t)) for t in -p:2-p)
+        @test all(iszero(MCM.dim(HTfull, n)) for n in -p:2-p)
+        HXempty = MCM.hyperExt(C, S4; maxlen=0)
+        HTempty = MCM.hyperTor(R4, C; maxlen=0)
+        for H in (HXempty, HTempty)
+            @test isempty(MCM.degree_range(H))
+            @test occursin("degrees=$(repr(MCM.degree_range(H)))", sprint(show, H))
+            @test occursin("resolution_complete=false", sprint(show, H))
+            plain = sprint(show, MIME"text/plain"(), H)
+            @test occursin("degree_range: $(repr(MCM.degree_range(H)))", plain)
+            @test occursin("resolution_complete: false", plain)
+            @test_throws ArgumentError MCM.dim(H, -p)
+        end
+    end
+    # Enlarging a resolution budget preserves already certified nonzero
+    # classes, including representative/coordinate access and cache reuse.
+    CS4 = MCM.ModuleCochainComplex([S4], MD.PMorphism[]; tmin=0)
+    hcache = DF.HomSystemCache{Kc}()
+    HXshort = MCM.hyperExt(CS4, S4; maxlen=1, cache=hcache)
+    HXlong = MCM.hyperExt(CS4, S4; maxlen=2, cache=hcache)
+    @test MCM.hyperExt(CS4, S4; maxlen=1, cache=hcache) === HXshort
+    HTshort = MCM.hyperTor(R4, CS4; maxlen=1)
+    HTlong = MCM.hyperTor(R4, CS4; maxlen=2)
+    for (short, long) in ((HXshort, HXlong), (HTshort, HTlong))
+        @test MCM.dim(short, 0) == MCM.dim(long, 0) == 1
+        z = MCM.representative(short, 0, Kc[c(1)])
+        @test MCM.coordinates(long, 0, z) == Kc[c(1)]
+    end
+    idC = MCM.ModuleCochainMap(CS4, CS4, [MD.id_morphism(S4)])
+    @test MCM.hyperExt_map_first(idC, HXshort, HXshort; t=0) == eye_mat(1)
+    @test MCM.hyperExt_map_second(MD.id_morphism(S4), HXshort, HXshort; t=0) == eye_mat(1)
+    @test MCM.hyperTor_map_first(MD.id_morphism(R4), HTshort, HTshort; n=0) == eye_mat(1)
+    @test MCM.hyperTor_map_second(idC, HTshort, HTshort; n=0) == eye_mat(1)
+    @test_throws ArgumentError MCM.hyperExt_map_first(idC, HXshort, HXshort; t=1)
+    @test_throws ArgumentError MCM.hyperExt_map_second(MD.id_morphism(S4), HXshort, HXshort; t=1)
+    @test_throws ArgumentError MCM.hyperTor_map_first(MD.id_morphism(R4), HTshort, HTshort; n=1)
+    @test_throws ArgumentError MCM.hyperTor_map_second(idC, HTshort, HTshort; n=1)
+    Ctwo = MCM.ModuleCochainComplex([P1, P1], [MD.zero_morphism(P1, P1)]; tmin=0)
+    @test_throws ArgumentError MCM.hyperTor(R4, Ctwo; maxlen=1, maxdeg=0)
+    @test_throws ArgumentError MCM.DerivedTensorComplex(R4, Ctwo; maxlen=-1)
+    @test_throws ArgumentError MCM.DerivedTensorComplex(R4, Ctwo; maxlen=1, maxdeg=2)
+end
+
+@testset "A02 indicator Ext and spectral sequences certify resolution limits" begin
+    P = diamond_poset()
+    P1f, S4f = interval_module(P, 1, 4), interval_module(P, 4, 4)
+    P1, S4 = IR.pmodule_from_fringe(P1f), IR.pmodule_from_fringe(S4f)
+    Pop = FF.FinitePoset(transpose(FF.leq_matrix(P)))
+    R4 = IR.pmodule_from_fringe(interval_module(Pop, 4, 4))
+    partial = DF.ext_dimensions_via_indicator_resolutions(P1f, S4f; maxlen=1)
+    @test partial == Dict(0 => 0)
+    @test isempty(DF.ext_dimensions_via_indicator_resolutions(P1f, S4f; maxlen=0))
+    @test_throws ArgumentError DF.ExtSpectralSequence(P1, S4; maxlen=1)
+    @test_throws ArgumentError DF.TorSpectralSequence(R4, P1; maxlen=1)
+    # Users may still ask for the actual explicitly truncated complexes.
+    extdc = DF.ExtDoubleComplex(P1, S4; maxlen=1)
+    tordc = DF.TorDoubleComplex(R4, P1; maxlen=1)
+    @test CC.cohomology_data(CC.total_complex(extdc), 1).dimH == 1
+    @test CC.cohomology_data(CC.total_complex(tordc), -1).dimH == 1
+    @test all(iszero, DF.ExtSpectralSequence(P1, S4).Htot_dims)
+    @test all(iszero, DF.wrapped_spectral_sequence(DF.TorSpectralSequence(R4, P1)).Htot_dims)
+    @test all(iszero, DF.ExtSpectralSequence(P1, S4; maxlen=2).Htot_dims)
+    @test all(iszero, DF.wrapped_spectral_sequence(DF.TorSpectralSequence(R4, P1; maxlen=2)).Htot_dims)
+    # A cached raw truncation cannot count as a completion certificate.
+    ecache = CM.ResolutionCache()
+    @test isempty(ecache.ext_doublecomplex)
+    DF.ExtDoubleComplex(P1, S4; maxlen=1, cache=ecache)
+    @test length(ecache.ext_doublecomplex) == 1
+    @test_throws ArgumentError DF.ExtSpectralSequence(P1, S4; maxlen=1, cache=ecache)
+    @test length(ecache.ext_doublecomplex) == 1
+    ess = DF.ExtSpectralSequence(P1, S4; maxlen=2, cache=ecache)
+    @test length(ecache.ext_doublecomplex) == 2
+    @test_throws ArgumentError DF.ExtDoubleComplex(P1, S4; maxlen=-4, cache=ecache)
+    @test DF.ExtSpectralSequence(P1, S4; maxlen=2, cache=ecache).DC === ess.DC
+    @test DF.ExtSpectralSequence(P1, S4; maxlen=2, first=:horizontal, cache=ecache).DC === ess.DC
+    defaultss = DF.ExtSpectralSequence(P1, S4; cache=ecache)
+    @test defaultss.DC !== ess.DC
+    @test length(ecache.ext_doublecomplex) == 3
+    @test DF.ExtSpectralSequence(P1, S4; cache=ecache).DC === defaultss.DC
+    @test_throws ArgumentError DF.ExtSpectralSequence(P1, S4; maxlen=-1, cache=ecache)
+    @test_throws OverflowError DF.ExtSpectralSequence(P1, S4; maxlen=typemax(Int), cache=ecache)
+    CM._clear_resolution_cache!(ecache)
+    @test isempty(ecache.ext_doublecomplex)
+    @test DF.ExtSpectralSequence(P1, S4; maxlen=2, cache=ecache).DC !== ess.DC
+    @test_throws ArgumentError DF.TorDoubleComplex(R4, P1; maxlen=-1)
+    rcache = CM.ResolutionCache()
+    defaultdc = DF.TorDoubleComplex(R4, P1; cache=rcache)
+    padded = DF.TorDoubleComplex(R4, P1; maxlen=3, cache=rcache)
+    @test size(defaultdc.dims) == (3, 1)
+    @test size(padded.dims) == (4, 4)
+    @test DF.TorDoubleComplex(R4, P1; cache=rcache) === defaultdc
+    @test DF.TorDoubleComplex(R4, P1; maxlen=3, cache=rcache) === padded
+    @test DF.wrapped_spectral_sequence(DF.TorSpectralSequence(R4, P1; cache=rcache)).DC === defaultdc
+    @test DF.wrapped_spectral_sequence(DF.TorSpectralSequence(R4, P1; maxlen=3, cache=rcache)).DC === padded
+    DF.TorDoubleComplex(R4, P1; maxlen=1, cache=rcache)
+    @test_throws ArgumentError DF.TorSpectralSequence(R4, P1; maxlen=1, cache=rcache)
+    CM._clear_resolution_cache!(rcache)
+    @test isempty(rcache.tor_doublecomplex)
+    rebuilt = DF.wrapped_spectral_sequence(DF.TorSpectralSequence(R4, P1; cache=rcache))
+    @test rebuilt.DC !== defaultdc
+    @test DF.TorDoubleComplex(R4, P1; cache=rcache) === rebuilt.DC
+    if Threads.nthreads() > 1
+        up = IR.upset_resolution(P1; maxlen=2, threads=false)
+        down = IR.downset_resolution(S4; maxlen=2, threads=false)
+        fullpair = IR.IndicatorResolutionsResult(up, down)
+        Ffull, dFfull, Efull, dEfull = fullpair
+        total_serial = HE.build_hom_tot_complex(Ffull, dFfull, Efull, dEfull; threads=false)
+        @test first(total_serial) == [1, 2, 1]
+        for _ in 1:4
+            @test HE.build_hom_tot_complex(Ffull, dFfull, Efull, dEfull; threads=true) == total_serial
+            @test HE.ext_dims_via_resolutions(fullpair; threads=true) == Dict(0 => 0, 1 => 0, 2 => 0)
+        end
+    end
+
+    # One-term complete resolutions need their retained augmentation to
+    # distinguish completion from truncation.
+    M = one_vertex_module(1)
+    Mf = FF.one_by_one_fringe(M.Q, FF.principal_upset(M.Q, 1), FF.principal_downset(M.Q, 1), c(1); field=field)
+    paired = IR.indicator_resolutions(Mf, Mf; maxlen=0)
+    @test HE.ext_dims_via_resolutions(paired) == Dict(0 => 1)
+    F, dF, E, dE = paired
+    @test isempty(HE.ext_dims_via_resolutions(F, dF, E, dE))
+    @test DF.ExtSpectralSequence(M, M; maxlen=0).Htot_dims == [1]
+    @test DF.wrapped_spectral_sequence(DF.TorSpectralSequence(M, M; maxlen=0)).Htot_dims == [1]
+
+    if field isa CM.QQField
+        # B4 has a length-four resolution. The old implicit cap three produced
+        # a spurious Tor_3. Evaluation against the bottom projective is zero.
+        B4 = FF.FinitePoset([((i - 1) & (j - 1)) == i - 1 for i in 1:16, j in 1:16])
+        B4op = FF.FinitePoset(transpose(FF.leq_matrix(B4)))
+        left = IR.pmodule_from_fringe(interval_module(B4, 1, 16))
+        right = IR.pmodule_from_fringe(interval_module(B4op, 16, 16))
+        bcache = CM.ResolutionCache()
+        dcfull = DF.TorDoubleComplex(right, left; cache=bcache)
+        @test size(dcfull.dims) == (5, 1)
+        @test all(iszero, CC.cohomology_dims(CC.total_complex(dcfull)))
+        dcpartial = DF.TorDoubleComplex(right, left; maxlen=3, cache=bcache)
+        @test CC.cohomology_data(CC.total_complex(dcpartial), -3).dimH == 1
+        @test_throws ArgumentError DF.TorSpectralSequence(right, left; maxlen=3, cache=bcache)
+        @test all(iszero, DF.wrapped_spectral_sequence(DF.TorSpectralSequence(right, left; cache=bcache)).Htot_dims)
+    end
+end
 end # with_fields
+
+@testset "A74: numerical fields survive homology and spectral construction" begin
+    numerical = CM.RealField(Float64; rtol=1e-10, atol=1e-12)
+    strict = CM.RealField(Float64; rtol=0.0, atol=0.0)
+    # Rational complex Q -> Q^3 -> Q: both maps have rank one and
+    # (1/3,1/7,-737/441) * (1/3,2/7,1/11) = 0. Thus H = (0,1,0).
+    entering_q = reshape(QQ[1//3, 2//7, 1//11], 3, 1)
+    leaving_q = reshape(QQ[1//3, 1//7, -737//441], 1, 3)
+    @test leaving_q * entering_q == zeros(QQ, 1, 1)
+    entering, leaving = sparse(Float64.(entering_q)), sparse(Float64.(leaving_q))
+    h = CC.homology_data(entering, leaving, 1; field=numerical)
+    @test CC.dimensions(h) == (ambient=3, cycles=2, boundaries=1, homology=1)
+    @test CC.describe(h).field === numerical
+    @test isapprox(CC.coordinates(h, Matrix(entering)), zeros(1, 1); atol=1e-10, rtol=1e-10)
+    @test isapprox(CC.coordinates(h, CC.basis(h)), ones(1, 1); atol=1e-10, rtol=1e-10)
+    @test isapprox(CC.induced_map_on_homology(h, h, 2.0 * Matrix{Float64}(I, 3, 3)),
+                   fill(2.0, 1, 1); atol=1e-10, rtol=1e-10)
+
+    numerator = Float64[1 0; 0 1; 0 0]
+    denominator = reshape(Float64[1, 0, 0], 3, 1)
+    quotient = CC.subquotient_data(numerator, denominator; field=numerical)
+    @test CC.dimensions(quotient) == (ambient=3, numerator=2, denominator=1, quotient=1)
+    @test CC.describe(quotient).field === numerical
+    @test isapprox(CC.coordinates(quotient, Float64[0, 1, 1e-14]), ones(1, 1); atol=1e-10, rtol=1e-10)
+    @test_throws ErrorException CC.coordinates(quotient, Float64[0, 0, 1])
+    # The zero quotient still requires numerator membership, using the stored
+    # tolerance. A zero numerator cannot silently swallow a nonzero denominator.
+    zero_quotient = CC.subquotient_data(denominator, denominator; field=numerical)
+    @test size(CC.coordinates(zero_quotient, Float64[1, 0, 1e-14])) == (0, 1)
+    @test_throws ErrorException CC.coordinates(zero_quotient, Float64[0, 0, 1])
+    zero_numerator = CC.subquotient_data(zeros(3, 0), zeros(3, 0); field=numerical)
+    @test size(CC.coordinates(zero_numerator, Float64[1e-14, 0, 0])) == (0, 1)
+    @test_throws ErrorException CC.subquotient_data(zeros(3, 0), denominator; field=numerical)
+    strict_zero = CC.subquotient_data(zeros(3, 0), zeros(3, 0); field=strict)
+    @test_throws ErrorException CC.coordinates(strict_zero, Float64[1e-14, 0, 0])
+    @test_throws ArgumentError CC.homology_data(entering, leaving, 1; field=CM.QQField())
+    @test_throws ArgumentError CC.subquotient_data(numerator, denominator; field=CM.QQField())
+
+    dims = reshape([1, 3, 1], 1, 3)
+    dv = reshape([entering, leaving, spzeros(0, 1)], 1, 3)
+    dh = reshape([spzeros(0, 1), spzeros(0, 3), spzeros(0, 1)], 1, 3)
+    dc = CC.DoubleComplex(0, 0, 0, 2, dims, dv, dh; field=numerical)
+    @test CC.check_bicomplex(dc).valid
+    @test CC.describe(dc).field === numerical
+    @test CC.total_complex(dc).field === numerical
+    @test CC.cohomology_dims(CC.total_complex(dc)) == [0, 1, 0]
+    @test_throws ArgumentError CC.DoubleComplex{Float64}(0, 0, 0, 2, dims, dv, dh; field=CM.QQField())
+    for first in (:vertical, :horizontal)
+        ss = CC.spectral_sequence(dc; output=:full, first=first)
+        @test CC.describe(ss).field === numerical
+        @test all(hd -> hd.field === numerical, ss.Htot)
+        @test ss.Htot_dims == [0, 1, 0]
+        @test CC.page_dims_dict(ss, 2) == Dict((0, 1) => 1)
+        @test CC.page_dims_dict(ss, :inf) == Dict((0, 1) => 1)
+        for page in (1, 2, :inf)
+            terms = CC.page_terms(ss, page)
+            @test all(sq -> sq.field === numerical, terms)
+            @test CC.E_r_terms(ss, page)[(9, 9)].field === numerical
+        end
+        term = CC.term(ss; page=2, p=0, q=1)
+        @test isapprox(CC.coordinates(term, CC.basis(term)), ones(1, 1); atol=1e-10, rtol=1e-10)
+        p = first == :vertical ? 0 : 1
+        graded = CC.filtration_subquotient(ss; filtration=p, degree=1)
+        @test graded.field === numerical
+        @test CC.dimensions(graded).quotient == 1
+        @test CC.filtration_subquotient(ss; filtration=p, degree=99).field === numerical
+        splitting = CC.split_total_cohomology(ss; degree=1)
+        @test isapprox(splitting.Binv * splitting.B, ones(1, 1); atol=1e-10, rtol=1e-10)
+    end
+    for first in (:vertical, :horizontal), preserve_filtration in (true, false)
+        # The same rational complex, placed either in one filtration step
+        # (d0) or along p=t (d1). Swapping the convention exchanges the
+        # horizontal and vertical storage directions, never the linear maps.
+        pieces = preserve_filtration ? Dict((0, 0) => 1, (0, 1) => 3, (0, 2) => 1) :
+                                       Dict((0, 0) => 1, (1, 1) => 3, (2, 2) => 1)
+        maps = preserve_filtration ? Dict((0, 0) => entering, (0, 1) => leaving) :
+                                     Dict((0, 0) => entering, (1, 1) => leaving)
+        empty_maps = Dict{Tuple{Int,Int},SparseMatrixCSC{Float64,Int}}()
+        filtered = CC.filtered_cochain_complex(Float64; field=numerical, first=first,
+            pieces=pieces, d0=preserve_filtration ? maps : empty_maps,
+            d1=preserve_filtration ? empty_maps : maps)
+        @test filtered.field === numerical
+        @test CC.check_filtered_complex(filtered; first=first).valid
+        total = CC.total_complex(filtered)
+        @test CC.cohomology_dims(total) == [t == 1 ? 1 : 0 for t in total.tmin:total.tmax]
+        preserve_filtration && @test CC.cohomology_dims(total) == [0, 1, 0]
+        for ((p, t), matrix) in maps
+            a, b = first == :vertical ? (p, t - p) : (t - p, p)
+            ai, bi = a - filtered.amin + 1, b - filtered.bmin + 1
+            vertical = (first == :vertical) == preserve_filtration
+            @test (vertical ? filtered.dv[ai, bi] : filtered.dh[ai, bi]) == matrix
+        end
+    end
+
+    poset = chain_poset(1)
+    module_ = MD.PModule{Float64}(poset, [1], Dict{Tuple{Int,Int},Matrix{Float64}}(); field=numerical)
+    @test DF.ExtDoubleComplex(module_, module_).field === numerical
+    @test DF.TorDoubleComplex(module_, module_).field === numerical
+    @test DF.ExtSpectralSequence(module_, module_).DC.field === numerical
+    @test DF.wrapped_spectral_sequence(DF.TorSpectralSequence(module_, module_)).DC.field === numerical
+end
+
+@testset "A05 prime-field homology with large coefficients" begin
+    # A filled triangle with one extra loop has (b0,b1,b2)=(1,1,0).
+    # Rescaling every edge by a nonzero residue changes the differential
+    # coefficients but not the homology. Build the rescaled maps with BigInt
+    # arithmetic so the oracle does not depend on FpElem multiplication.
+    large_primes = Sys.WORD_SIZE == 64 ?
+        (4294967311, 9223372036854775783) : (2147483647,)
+    for p in (2, 3, 5, large_primes...)
+        field = CM.Fp(p)
+        K = CM.coeff_type(field)
+        bp = big(p)
+        scale = big(fld(p, 2))
+        unscale = invmod(scale, bp)
+        d1 = K.(mod.(scale * BigInt[-1 -1 0 0; 1 0 -1 0; 0 1 1 0], bp))
+        d2 = reshape(K.(mod.(unscale * BigInt[1, -1, 1, 0], bp)), 4, 1)
+        for storage in (identity, sparse)
+            D1, D2 = storage(d1), storage(d2)
+            @test D1 * D2 == zeros(K, 3, 1)
+            H0 = CC.homology_data(D1, storage(zeros(K, 0, 3)), 0)
+            H1 = CC.homology_data(D2, D1, 1)
+            H2 = CC.homology_data(storage(zeros(K, 1, 0)), D2, 2)
+            @test (H0.dimH, H1.dimH, H2.dimH) == (1, 1, 0)
+            @test (H1.dimZ, H1.dimB) == (2, 1)
+            @test CC.homology_coordinates(H1, D2) == zeros(K, 1, 1)
+            @test CC.homology_coordinates(H1, K[0, 0, 0, 1])[1, 1] != zero(K)
+            @test CC.homology_coordinates(H0, K[1, 0, 0]) ==
+                  CC.homology_coordinates(H0, K[0, 1, 0]) ==
+                  CC.homology_coordinates(H0, K[0, 0, 1])
+            @test_throws ErrorException CC.homology_coordinates(H1, K[1, 0, 0, 0])
+            # A scalar chain map induces that scalar on either nonzero
+            # homology group, regardless of the representatives chosen.
+            scalar = K(p - 1)
+            @test CC.induced_map_on_homology(H0, H0, scalar * Matrix{K}(I, 3, 3)) == reshape(K[scalar], 1, 1)
+            @test CC.induced_map_on_homology(H1, H1, scalar * Matrix{K}(I, 4, 4)) == reshape(K[scalar], 1, 1)
+        end
+    end
+end
+
+@testset "A12 spectral inspection preserves lazy pages" begin
+    with_fields(FIELDS_FULL) do field
+        K = CM.coeff_type(field)
+        # A staircase of length r has exactly two vertical-cohomology classes,
+        # joined by a nonzero d_r. Padding with zero columns separates actual
+        # collapse at r+1 from the filtration-width bound r+3.
+        for r in (2, 3)
+            dims = zeros(Int, r + 3, r)
+            dims[1, r] = dims[r + 1, 1] = 1
+            for a in 1:(r - 1)
+                dims[a + 1, r - a] = dims[a + 1, r - a + 1] = 1
+            end
+            dv = [spzeros(K, b < r ? dims[a, b + 1] : 0, dims[a, b])
+                  for a in 1:(r + 3), b in 1:r]
+            dh = [spzeros(K, a < r + 3 ? dims[a + 1, b] : 0, dims[a, b])
+                  for a in 1:(r + 3), b in 1:r]
+            for a in 1:(r - 1)
+                dv[a + 1, r - a][1, 1] = one(K)
+            end
+            for a in 0:(r - 1)
+                dh[a + 1, r - a][1, 1] = one(K)
+            end
+            dc = CC.DoubleComplex{K}(0, r + 2, 0, r - 1, dims, dv, dh)
+            ss = CC.spectral_sequence(dc; output=:full, first=:vertical)
+            wrapped = DF.TorSpectralSequence{K}(ss)
+            @test Set(keys(ss.page_cache)) == Set([1])
+            @test Set(keys(ss.diff_cache)) == Set([1])
+            @test all(iszero, ss.Einf_dims)
+            @test all(iszero, ss.Htot_dims)
+            @test sum(ss.E1_dims) == sum(ss.E2_dims) == 2
+            @test CC.describe(ss).convergence_page === nothing
+            @test CC.describe(ss).convergence_bound == r + 3
+            @test DF.spectral_sequence_summary(wrapped).convergence_page === nothing
+
+            # Every cache remains unchanged by printing, summaries, provenance,
+            # and the already stored E1/E2/infinity dimension queries.
+            initial_state = (copy(ss.page_cache), copy(ss.diff_cache), copy(ss.split_cache),
+                             ss.filt_img.value, ss.Einf_spaces.value,
+                             map(x -> x.value, ss.filt_img_cols),
+                             copy.(ss.filt_img_summary_cache),
+                             map(H -> getfield(H, :_Hrep), ss.Htot))
+            for pass in 1:2
+                for object in (ss, wrapped)
+                    @test !isempty(sprint(show, object))
+                    @test !isempty(sprint(show, MIME"text/plain"(), object))
+                    @test CC.describe(object).convergence_page === nothing
+                    @test TO.provenance(object).category == :vector_space_complexes
+                end
+                for page in (1, 2, :inf)
+                    expected = page === :inf ? Dict{Tuple{Int,Int},Int}() :
+                               Dict((0, r - 1) => 1, (r, 0) => 1)
+                    @test CC.page_dims_dict(ss, page) == expected
+                end
+                @test CC.spectral_sequence_summary(ss).convergence_page === nothing
+                @test DF.spectral_sequence_summary(wrapped).convergence_page === nothing
+                @test (ss.page_cache, ss.diff_cache, ss.split_cache,
+                       ss.filt_img.value, ss.Einf_spaces.value,
+                       map(x -> x.value, ss.filt_img_cols), ss.filt_img_summary_cache,
+                       map(H -> getfield(H, :_Hrep), ss.Htot)) == initial_state
+            end
+
+            # Requesting convergence explicitly is allowed to compute pages.
+            # The differential, not matching another implementation, supplies
+            # the independent answer: d_r kills both classes, so collapse is r+1.
+            @test CC.convergence_page(ss) == r + 1
+            @test CC.describe(ss).convergence_page == r + 1
+            populated_pages = copy(ss.page_cache)
+            @test haskey(populated_pages, 3)
+            @test Set(keys(ss.diff_cache)) == Set([1])
+            @test DF.spectral_sequence_summary(wrapped).convergence_page == r + 1
+            @test !isempty(sprint(show, MIME"text/plain"(), wrapped))
+            @test ss.page_cache == populated_pages
+            @test Set(keys(ss.diff_cache)) == Set([1])
+            dr = CC.differential(ss, r, (0, r - 1))
+            @test size(dr) == (1, 1)
+            if field isa CM.RealField
+                @test isapprox(abs(dr[1, 1]), 1.0; atol=1e-10, rtol=1e-10)
+            else
+                @test !iszero(dr[1, 1])
+            end
+            @test CC.page_dims_dict(ss, r + 1) == Dict{Tuple{Int,Int},Int}()
+        end
+    end
+end
+
+@testset "A12 homology inspection preserves representatives" begin
+    with_fields(FIELDS_FULL) do field
+        K = CM.coeff_type(field)
+        entering = sparse(reshape(K[1, 0, 0], 3, 1))
+        leaving = sparse(reshape(K[0, 0, 1], 1, 3))
+        complex = CC.CochainComplex{K}(0, 2, [1, 3, 1], [entering, leaving])
+        # The windowed builder deliberately defers quotient representatives;
+        # the single-degree builder computes them eagerly during construction.
+        cohomology = only(CC.cohomology_data(complex; degrees=1:1))
+        homology = CC.homology_data(entering, leaving, 1)
+        for object in (cohomology, homology)
+            @test (object.dimC, object.dimZ, object.dimB, object.dimH) == (3, 2, 1, 1)
+            @test getfield(object, :_Hrep) === nothing
+            for pass in 1:2
+                @test !isempty(sprint(show, object))
+                @test !isempty(sprint(show, MIME"text/plain"(), object))
+                @test CC.describe(object).dimensions == CC.dimensions(object)
+                @test getfield(object, :_Hrep) === nothing
+                @test getfield(object, :_Q) === nothing
+                @test getfield(object, :_Bfull) === nothing
+            end
+            representative = CC.basis(object)
+            @test size(representative) == (3, 1)
+            @test leaving * representative == zeros(K, 1, 1)
+            @test CC.coordinates(object, entering) == zeros(K, 1, 1)
+            @test CC.coordinates(object, representative) == ones(K, 1, 1)
+            @test CC.basis(object) === representative
+        end
+    end
+end
+
+@testset "A75 spectral higher differentials commute with explicit comparison maps" begin
+    with_fields(FIELDS_FULL) do field
+        K = CM.coeff_type(field)
+        same = (A, B) -> field isa CM.RealField ?
+            isapprox(A, B; atol=field.atol, rtol=field.rtol) : A == B
+        for r in (2, 3)
+            # Two parallel length-r staircases, with the last horizontal map
+            # replaced by T. Its rank is one in every field: d_r kills one
+            # class at each endpoint and leaves two total-cohomology classes.
+            T = K[0 1; 0 0]
+            U = Matrix{K}(I, 2, 2) + T
+            dims = zeros(Int, r + 3, r)
+            dims[1, r] = dims[r + 1, 1] = 2
+            for a in 1:(r - 1)
+                dims[a + 1, r - a] = dims[a + 1, r - a + 1] = 2
+            end
+            dv = [spzeros(K, b < r ? dims[a, b + 1] : 0, dims[a, b])
+                  for a in 1:(r + 3), b in 1:r]
+            dh = [spzeros(K, a < r + 3 ? dims[a + 1, b] : 0, dims[a, b])
+                  for a in 1:(r + 3), b in 1:r]
+            gauges = [dims[a, b] == 0 ? zeros(K, 0, 0) :
+                      K[1 1; a % 2 1 + a % 2] for a in 1:(r + 3), b in 1:r]
+            inverse_gauges = [size(B, 1) == 0 ? B : K[B[2,2] -B[1,2]; -B[2,1] B[1,1]]
+                              for B in gauges]
+            for a in 1:(r - 1)
+                # DoubleComplex stores already anticommuting differentials;
+                # its total map is their sum. Encode the usual vertical sign
+                # here so the standard staircase recurrence is explicit.
+                dv[a + 1, r - a] = sparse((isodd(a) ? -one(K) : one(K)) .* Matrix{K}(I, 2, 2))
+            end
+            for a in 0:(r - 1)
+                dh[a + 1, r - a] = sparse(a == r - 1 ? T : Matrix{K}(I, 2, 2))
+            end
+            gv = [b < r ? sparse(gauges[a,b+1] * dv[a,b] * inverse_gauges[a,b]) : dv[a,b]
+                  for a in 1:(r + 3), b in 1:r]
+            gh = [a < r + 3 ? sparse(gauges[a+1,b] * dh[a,b] * inverse_gauges[a,b]) : dh[a,b]
+                  for a in 1:(r + 3), b in 1:r]
+            dc = CC.DoubleComplex{K}(0, r + 2, 0, r - 1, dims, dv, dh; field=field)
+            gc = CC.DoubleComplex{K}(0, r + 2, 0, r - 1, dims, gv, gh; field=field)
+            ss = CC.spectral_sequence(dc; output=:full)
+            sg = CC.spectral_sequence(gc; output=:full)
+            # Construct total maps independently by the documented increasing
+            # first-degree order. Every gauge is unimodular over Z, hence
+            # invertible after reduction in F2, F3 and F5 as well as QQ/Real.
+            total = function (t, kind)
+                blocks = Matrix{K}[]
+                for a in 0:(r + 2)
+                    b = t - a
+                    if 0 <= b < r && dims[a+1,b+1] != 0
+                        push!(blocks, kind === :gauge ? gauges[a+1,b+1] :
+                            kind === :inverse ? inverse_gauges[a+1,b+1] : U)
+                    end
+                end
+                isempty(blocks) ? zeros(K, 0, 0) : Matrix(blockdiag(sparse.(blocks)...))
+            end
+            for t in (r - 1):r
+                @test same(total(t, :inverse) * total(t, :gauge), Matrix{K}(I, 2r, 2r))
+            end
+            d = ss.Tot.d[r]
+            dg = sg.Tot.d[r]
+            @test same(dg * total(r - 1, :gauge), total(r, :gauge) * d)
+            @test same(d * total(r - 1, :unipotent), total(r, :unipotent) * d)
+            @test ss.Htot_dims[r:r+1] == sg.Htot_dims[r:r+1] == [1, 1]
+            @test sum(ss.Htot_dims) == 2
+            @test Set(keys(ss.page_cache)) == Set([1])
+            # Eager term access on the gauged side; differential-first access
+            # on the original side. The resulting maps must be naturally
+            # identified, even if elimination selected different bases.
+            for page in 1:(r + 1)
+                CC.page_terms(sg, page)
+            end
+            source, target = (0, r - 1), (r, 0)
+            endpoint_target = zeros(K, 2r, 2)
+            endpoint_target[(2r-1):2r, :] = Matrix{K}(I, 2, 2)
+            sign = one(K)
+            final_lift = zeros(K, 2r, 2)
+            for page in 1:r
+                lift = zeros(K, 2r, 2)
+                coefficient = one(K)
+                for a in 0:(page - 1)
+                    a > 0 && (coefficient *= isodd(a + 1) ? -one(K) : one(K))
+                    lift[(2a+1):(2a+2), :] = coefficient .* Matrix{K}(I, 2, 2)
+                end
+                page == r && (final_lift .= lift; sign = coefficient)
+                dpage = CC.differential(ss, page, source)
+                src = CC.term(ss, page, source)
+                dst = CC.term(ss, page, target)
+                gsrc = CC.term(sg, page, source)
+                gdst = CC.term(sg, page, target)
+                JS, JD = CC.coordinates(src, lift), CC.coordinates(dst, endpoint_target)
+                if field isa CM.QQField && page == 2
+                    # Exact filtered terms solve only on their supported rows.
+                    # A vector outside that filtration must not be silently
+                    # projected before its quotient coordinates are computed.
+                    outside = copy(endpoint_target)
+                    outside[1, 1] = one(K)
+                    @test_throws ErrorException CC.coordinates(dst, outside)
+                end
+                JGS = CC.coordinates(gsrc, total(r-1, :gauge) * lift)
+                JGD = CC.coordinates(gdst, total(r, :gauge) * endpoint_target)
+                @test (src.dimH, dst.dimH, gsrc.dimH, gdst.dimH) == (2, 2, 2, 2)
+                for (S, G, degree, J, JG) in ((src, gsrc, r-1, JS, JGS), (dst, gdst, r, JD, JGD))
+                    forward = CC.coordinates(G, total(degree, :gauge) * CC.basis(S))
+                    backward = CC.coordinates(S, total(degree, :inverse) * CC.basis(G))
+                    endomorphism = CC.coordinates(S, total(degree, :unipotent) * CC.basis(S))
+                    composite = CC.coordinates(G, total(degree, :gauge) * total(degree, :unipotent) * CC.basis(S))
+                    @test same(forward * J, JG)
+                    @test same(backward * forward, Matrix{K}(I, 2, 2))
+                    @test same(endomorphism * J, J * U)
+                    @test same(composite, forward * endomorphism)
+                    @test same(CC.coordinates(G, total(degree, :gauge) * S.Bbasis), zeros(K, 2, S.dimB))
+                    @test S.field === G.field === field
+                end
+                if page < r
+                    @test same(dpage, zeros(K, size(dpage)))
+                else
+                    # The recurrence is dictated by d_tot = dh + (-1)^a dv:
+                    # x_a = (-1)^(a+1) x_(a-1), hence d2=+T and d3=-T.
+                    @test sign == (r == 2 ? one(K) : -one(K))
+                    @test same(dpage * JS, JD * (sign .* T))
+                    gauged_d = CC.differential(sg, page, source)
+                    @test same(gauged_d * JGS, JGD * (sign .* T))
+                    FS = CC.coordinates(gsrc, total(r-1, :gauge) * CC.basis(src))
+                    FD = CC.coordinates(gdst, total(r, :gauge) * CC.basis(dst))
+                    @test same(gauged_d * FS, FD * dpage)
+                    @test CC.differential(ss, page, source) === dpage
+                    if field isa CM.QQField
+                        previous = CC._spectral_exact_diff_mode[]
+                        try
+                            CC._spectral_exact_diff_mode[] = :ambient
+                            fresh = CC.spectral_sequence(dc; output=:full)
+                            @test CC.differential(fresh, page, source) == dpage
+                        finally
+                            CC._spectral_exact_diff_mode[] = previous
+                        end
+                    end
+                end
+            end
+            # Explicit endpoint kernel/cokernel generators identify the stable
+            # page with graded total cohomology. U acts as identity on both.
+            for (termkey, degree, representative) in
+                ((source, r-1, final_lift[:, 1:1]), (target, r, endpoint_target[:, 2:2]))
+                stable = CC.term(ss, r+1, termkey)
+                @test stable.dimH == 1
+                @test TamerOp.FieldLinAlg.rank(field, CC.coordinates(stable, representative)) == 1
+                H, HG = ss.Htot[degree+1], sg.Htot[degree+1]
+                cohom_map = CC.induced_map_on_cohomology(H, HG, total(degree, :gauge))
+                cohom_endo = CC.induced_map_on_cohomology(H, H, total(degree, :unipotent))
+                @test same(cohom_endo, ones(K, 1, 1))
+                @test same(cohom_map * CC.coordinates(H, representative),
+                           CC.coordinates(HG, total(degree, :gauge) * representative))
+                inf, infg = CC.term(ss, :inf, termkey), CC.term(sg, :inf, termkey)
+                @test inf.dimH == infg.dimH == 1
+                graded_map = CC.coordinates(infg, cohom_map * CC.basis(inf))
+                @test same(graded_map * CC.coordinates(inf, CC.coordinates(H, representative)),
+                           CC.coordinates(infg, CC.coordinates(HG, total(degree, :gauge) * representative)))
+                @test TamerOp.FieldLinAlg.rank(field, graded_map) == 1
+            end
+            @test CC.collapse_page(ss) == CC.collapse_page(sg) == r + 1
+        end
+    end
+end
+
+@testset "A75 algebra backends preserve quotient maps through explicit identifications" begin
+    with_fields(FIELDS_FULL) do field
+        K = CM.coeff_type(field)
+        same = (A, B) -> field isa CM.RealField ?
+            isapprox(A, B; atol=field.atol, rtol=field.rtol) : A == B
+        # A unimodular change of basis of 0 -> k -> k^4 -> k -> 0,
+        # with d0=e1 and d1=e4*. H^1 has the explicit basis e2,e3.
+        G = K[1 1 0 0; 0 1 1 0; 0 0 1 1; 0 0 0 1]
+        Ginv = K[1 -1 1 -1; 0 1 -1 1; 0 0 1 -1; 0 0 0 1]
+        d0, d1 = G[:, 1:1], Ginv[4:4, :]
+        U = K[1 1; -1 0]
+        Fstandard = Matrix{K}(I, 4, 4)
+        Fstandard[2:3, 2:3] = U
+        F = G * Fstandard * Ginv
+        @test same(d1 * F, d1)
+        @test same(F * d0, d0)
+        backends = field isa CM.RealField ? (:float_dense_svd, :float_sparse_qr) :
+                   field isa CM.QQField ? (:julia_exact, :julia_sparse, :nemo) :
+                   field == CM.Fp(5) ? (:julia_exact, :nemo) : (:auto,)
+        spaces = CC.CohomologyData{K}[]
+        for backend in backends
+            if backend === :nemo && !TamerOp.FieldLinAlg._have_nemo()
+                @test_skip "Nemo unavailable"
+                continue
+            end
+            storage = backend === :nemo ? A -> CM.BackendMatrix(A; backend=:nemo) :
+                      backend in (:julia_sparse, :float_sparse_qr) ? sparse : identity
+            Z = Matrix(TamerOp.FieldLinAlg.nullspace(field, storage(d1); backend=backend))
+            image_backend = backend === :float_dense_svd ? :float_dense_qr : backend
+            B = Matrix(TamerOp.FieldLinAlg.colspace(field, storage(d0); backend=image_backend))
+            @test size(Z) == (4, 3)
+            @test size(B) == (4, 1)
+            @test same(d1 * Z, zeros(K, 1, 3))
+            for lazy in (true, false)
+                H = CC._cohomology_data_from_bases(K, 1, 4, Z, B; lazy_reps=lazy, field=field)
+                @test H.dimH == 2
+                lazy && (@test getfield(H, :_Hrep) === nothing)
+                J = CC.coordinates(H, G[:, 2:3])
+                A = CC.induced_map_on_cohomology(H, H, storage(F))
+                @test same(A * J, J * U)
+                @test same(CC.coordinates(H, d0), zeros(K, 2, 1))
+                @test H.field === field
+                push!(spaces, H)
+            end
+            # Convert backend storage into the complex's canonical sparse
+            # storage, and pass the backend-stored map into its cohomology.
+            C = CC.CochainComplex{K}(0, 2, [1, 4, 1], sparse.([storage(d0), storage(d1)]); field=field)
+            @test CC.cohomology_dims(C) == [0, 2, 0]
+            H = CC.cohomology(C; degree=1, output=:full)
+            @test same(CC.induced_map_on_cohomology(H, H, storage(F)) * CC.coordinates(H, G[:, 2:3]),
+                       CC.coordinates(H, G[:, 2:3]) * U)
+            push!(spaces, H)
+        end
+        reference = first(spaces)
+        reference_map = CC.induced_map_on_cohomology(reference, reference, F)
+        for H in spaces
+            forward = CC.coordinates(H, CC.basis(reference))
+            backward = CC.coordinates(reference, CC.basis(H))
+            actual = CC.induced_map_on_cohomology(H, H, F)
+            @test same(backward * forward, Matrix{K}(I, 2, 2))
+            @test same(forward * reference_map, actual * forward)
+        end
+    end
+end
+
+@testset "A75 restricted quotient coordinates validate all ambient components" begin
+    field = CM.QQField()
+    empty = CC._subquotient_data_from_coords(zeros(QQ, 2, 0), zeros(QQ, 0, 0);
+        Zsolve_rows=1:0, Zsolve_basis=zeros(QQ, 0, 0), field=field)
+    @test CC.coordinates(empty, zeros(QQ, 2, 1)) == zeros(QQ, 0, 1)
+    @test_throws ErrorException CC.coordinates(empty, reshape(QQ[1, 0], 2, 1))
+    # A supported-row representation can also carry a numerical field. When
+    # omitted entries are nonzero, use the same full membership tolerance as
+    # an unrestricted quotient, rather than enforcing exact floating zeros.
+    numerical = CM.RealField(Float64; atol=1e-8, rtol=0.0)
+    Z = reshape([0.0, 1.0], 2, 1)
+    restricted = CC._subquotient_data_from_coords(Z, zeros(1, 0);
+        Zsolve_rows=2:2, Zsolve_basis=ones(1, 1), field=numerical)
+    full = CC.subquotient_data(Z, zeros(2, 0); field=numerical)
+    for vector in ([0.0, 2.0], [1e-10, 2.0])
+        @test CC.coordinates(restricted, vector) == CC.coordinates(full, vector) == fill(2.0, 1, 1)
+    end
+    @test_throws ErrorException CC.coordinates(restricted, [1e-5, 2.0])
+    @test_throws ErrorException CC.coordinates(full, [1e-5, 2.0])
+end

@@ -6,6 +6,23 @@ struct DummyEncodingMapForTupleContract <: EC.AbstractPLikeEncodingMap end
 EC.dimension(::DummyEncodingMapForTupleContract) = 1
 EC.locate(::DummyEncodingMapForTupleContract, x::AbstractVector{<:Real}) = (length(x) == 1 && x[1] >= 0 ? 1 : 0)
 
+# Metadata queries can be genuinely computational on an extension-owned map.
+struct A12DeferredMetadataMap <: EC.AbstractPLikeEncodingMap
+    axes_calls::Base.RefValue{Int}
+    reps_calls::Base.RefValue{Int}
+end
+EC.dimension(::A12DeferredMetadataMap) = 1
+function EC.axes_from_encoding(pi::A12DeferredMetadataMap)
+    pi.axes_calls[] += 1
+    return ([0.0, 1.0],)
+end
+function EC.representatives(pi::A12DeferredMetadataMap)
+    pi.reps_calls[] += 1
+    return [(0.0,), (1.0,)]
+end
+EC.locate(::A12DeferredMetadataMap, x::AbstractVector{<:Real}) =
+    x[1] < 0 ? 0 : (x[1] < 1 ? 1 : 2)
+
 with_fields(FIELDS_FULL) do field
 K = CM.coeff_type(field)
 @inline c(x) = CM.coerce(field, x)
@@ -315,6 +332,59 @@ end
     @test enc.reps === nothing
 end
 
+@testset "A12 encoding metadata stays deferred during inspection" begin
+    P = FF.ProductOfChainsPoset((2,))
+    pi = A12DeferredMetadataMap(Ref(0), Ref(0))
+    enc = EC.compile_encoding(P, pi)
+    @test enc.axes === nothing
+    @test enc.reps === nothing
+    @test (pi.axes_calls[], pi.reps_calls[]) == (0, 0)
+    for obj in (pi, enc)
+        report = EC.encoding_summary(obj)
+        @test report.has_axes
+        @test report.has_representatives
+    end
+    @test CC.describe(enc) == EC.encoding_summary(enc)
+    @test occursin("CompiledEncoding", sprint(show, enc))
+    @test occursin("has_axes", sprint(show, MIME"text/plain"(), enc))
+    @test EC.encoding_map(enc) === pi
+    @test EC.encoding_poset(enc) === P
+    @test EC.dimension(enc) == 1
+    @test (pi.axes_calls[], pi.reps_calls[]) == (0, 0)
+
+    # Asking for axes does not also enumerate representatives.
+    @test EC.encoding_axes(enc) == ([0.0, 1.0],)
+    @test (pi.axes_calls[], pi.reps_calls[]) == (1, 0)
+    @test EC.encoding_representatives(enc) == [(0.0,), (1.0,)]
+    @test (pi.axes_calls[], pi.reps_calls[]) == (1, 1)
+    @test EC.locate(enc, [0.5]) == 1
+    @test EC.locate(enc, [1.0]) == 2
+
+    # Explicit supplied data remains the canonical opt-in to retain it.
+    axes = ([0.0, 1.0],)
+    reps = [(0.0,), (1.0,)]
+    supplied = EC.compile_encoding(P, pi; axes=axes, reps=reps)
+    @test EC.encoding_axes(supplied) === axes
+    @test EC.encoding_representatives(supplied) === reps
+    @test (pi.axes_calls[], pi.reps_calls[]) == (1, 1)
+    unsupported = EC.compile_encoding(chain_poset(1), DummyEncodingMapForTupleContract())
+    @test !EC.encoding_summary(unsupported).has_axes
+    @test !EC.encoding_summary(unsupported).has_representatives
+
+    # Product size must not cause Cartesian enumeration or dense order storage.
+    grid = FF.GridPoset((collect(1:200), collect(1:200)))
+    grid_pi = EC.GridEncodingMap(grid, grid.coords)
+    grid_enc = EC.compile_encoding(grid, grid_pi)
+    @test grid_enc.reps === nothing
+    @test EC.encoding_axes(grid_enc) === grid.coords
+    @test CC.describe(grid_pi).nregions == 40_000
+    @test EC.locate(grid_enc, [2, 3]) == 402
+    @test grid.cache.cover === nothing
+    @test grid.cache.upsets === nothing
+    @test grid.cache.downsets === nothing
+    @test grid_enc.reps === nothing
+end
+
 @testset "EncodingCore UX surface" begin
     P = chain_poset(4)
     pi = EC.GridEncodingMap(P, ([0.0, 1.0], [0.0, 2.0]))
@@ -476,13 +546,11 @@ end
 @testset "Option structs are concretely typed" begin
     enc_opts = OPT.EncodingOptions()
     inv_opts = OPT.InvariantOptions()
-    ff_opts = OPT.FiniteFringeOptions()
     mod_opts = OPT.ModuleOptions()
 
     @test fieldtype(typeof(enc_opts), :strict_eps) !== Any
     @test fieldtype(typeof(inv_opts), :axes) !== Any
     @test fieldtype(typeof(inv_opts), :box) !== Any
-    @test fieldtype(typeof(ff_opts), :scalar) !== Any
     @test fieldtype(typeof(mod_opts), :cache) !== Any
 end
 
@@ -495,7 +563,6 @@ end
     ropt = OPT.ResolutionOptions()
     iopt = OPT.InvariantOptions()
     fopt = OPT.DerivedFunctorOptions()
-    ffopt = OPT.FiniteFringeOptions()
     mopt = OPT.ModuleOptions()
 
     @test CC.describe(fs).kind == :filtration_spec
@@ -508,7 +575,6 @@ end
     @test CC.describe(ropt).kind == :resolution_options
     @test CC.describe(iopt).kind == :invariant_options
     @test CC.describe(fopt).kind == :derived_functor_options
-    @test CC.describe(ffopt).kind == :finite_fringe_options
     @test CC.describe(mopt).kind == :module_options
 
     @test TOA.describe(eopt).backend == :auto
@@ -666,7 +732,7 @@ end
 
     vals = TO.codensity_values(cod)
     @test length(vals) == 3
-    @test all(v -> v ≈ inv(sqrt(2)), vals)
+    @test all(v -> isapprox(v, inv(sqrt(2))), vals)
 
     ds = TO.describe(cod)
     @test ds.kind == :point_codensity_result
@@ -674,15 +740,15 @@ end
     @test ds.ambient_dim == 2
     @test ds.dtm_mass == 0.5
     @test ds.neighbor_count == 2
-    @test ds.value_range[1] ≈ inv(sqrt(2))
-    @test ds.value_range[2] ≈ inv(sqrt(2))
+    @test isapprox(ds.value_range[1], inv(sqrt(2)))
+    @test isapprox(ds.value_range[2], inv(sqrt(2)))
 
     @test occursin("PointCodensityResult(", sprint(show, cod))
     @test occursin("neighbor_count:", sprint(show, MIME"text/plain"(), cod))
 
     spec = OPT.FiltrationSpec(kind=:rips_codensity, max_dim=1, knn=2, dtm_mass=0.5, nn_backend=:bruteforce)
     cod_spec = TO.point_codensity(pc, spec)
-    @test TO.codensity_values(cod_spec) ≈ vals
+    @test isapprox(TO.codensity_values(cod_spec), vals)
 
     @test_throws ArgumentError TO.point_codensity(pc, DI.RipsFiltration(max_dim=1, nn_backend=:bruteforce))
     @test_throws ArgumentError TO.point_codensity(pc, OPT.FiltrationSpec(kind=:rips, max_dim=1, nn_backend=:bruteforce))
@@ -864,6 +930,7 @@ end
     @test TamerOp.betti_table === TamerOp.Workflow.betti_table
     @test TamerOp.bass_table === TamerOp.Workflow.bass_table
     @test TamerOp.matching_distance_exact_2d === TamerOp.Workflow.matching_distance_exact_2d
+    @test TamerOp.matching_distance_sampled_2d === TamerOp.Workflow.matching_distance_sampled_2d
     @test TamerOp.CommonRefinementTranslationResult === TO.ChangeOfPosets.CommonRefinementTranslationResult
     @test TamerOp.ModuleTranslationResult === RES.ModuleTranslationResult
     @test TamerOp.common_poset === TO.ChangeOfPosets.common_poset
@@ -1018,8 +1085,6 @@ end
         cache=sc,
         weight=:lesnick_l1,
         normalize_dirs=:L1,
-        precompute=:none,
-        store_values=true,
     )
     d_exact_direct = TO.Fibered2D.matching_distance_exact_2d(
         M_left,
@@ -1028,8 +1093,6 @@ end
         opts_exact;
         weight=:lesnick_l1,
         normalize_dirs=:L1,
-        precompute=:none,
-        store_values=true,
     )
     @test isapprox(d_exact, d_exact_direct; atol=1e-12, rtol=0.0)
     @test TamerOp.matching_distance_exact_2d(enc_left, enc_right;
@@ -1037,8 +1100,7 @@ end
                                                   cache=sc,
                                                   weight=:lesnick_l1,
                                                   normalize_dirs=:L1,
-                                                  precompute=:none,
-                                                  store_values=true) == d_exact
+                                                                                            max_candidates=200_000) == d_exact
     @test_throws ErrorException TamerOp.matching_distance_exact_2d(encP, encQ; opts=opts_exact, cache=sc)
     @test_throws ErrorException TamerOp.matching_distance_exact_2d(enc, enc; cache=sc)
 
@@ -1131,8 +1193,8 @@ end
     @test occursin("rect_kwargs", rectimage_doc)
     @test occursin("one slice-barcode value", slicebar_doc)
     @test occursin("cache=:auto", slice_doc)
-    @test occursin("exact 2D", exact2d_doc)
-    @test occursin("common classifier map", exact2d_doc)
+    @test occursin("Exact supremum", exact2d_doc)
+    @test occursin("coordinate-cell classifier", exact2d_doc)
     @test occursin("cache=sc::SessionCache", exact2d_doc)
     @test occursin("cache=:auto", landscape_doc)
     @test occursin("bare multiparameter decomposition", mppdec_doc)
@@ -1209,4 +1271,248 @@ end
     @test occursin("cache=SessionCache()", msg)
     @test occursin("cache=nothing", msg)
 end
+@testset "A03 matching workflow, cache lifecycle, and rational windows" begin
+    F2D = TamerOp.Fibered2D
+    WF = TamerOp.Workflow
+    P, _, pi = PLB.encode_fringe_boxes([PLB.BoxUpset([0.0, 0.0])],
+        [PLB.BoxDownset([1.0, 1.0])], OPT.EncodingOptions())
+    r = EC.locate(pi, [0.5, 0.5])
+    M = IR.pmodule_from_fringe(FF.one_by_one_fringe(P,
+        FF.principal_upset(P, r), FF.principal_downset(P, r), c(1); field=field))
+    Z = MD.zero_pmodule(P; field=field)
+    encM = RES.EncodingResult(P, M, pi; backend=:test)
+    encZ = RES.EncodingResult(P, Z, pi; backend=:test)
+    opts = OPT.InvariantOptions(box=([0.0, 0.0], [1.0, 1.0]), threads=false)
+    sc = CM.SessionCache()
+    ec = CM._workflow_encoding_cache(sc)
+    @test isempty(ec.geometry)
+    @test WF.matching_distance_exact_2d(encM, encZ; opts=opts, cache=sc) == 0.5
+    caches = [payload.value for payload in values(ec.geometry)
+              if payload.value isa F2D.FiberedBarcodeCache2D]
+    @test length(caches) == 2
+    counts = F2D.cached_barcode_count.(caches)
+    @test all(>(0), counts)
+    objects = Dict(key => payload.value for (key, payload) in ec.geometry)
+    @test TamerOp.matching_distance_exact_2d(encM, encZ; opts=opts, cache=sc) == 0.5
+    @test all(ec.geometry[key].value === value for (key, value) in objects)
+    @test F2D.cached_barcode_count.(caches) == counts
+    @test F2D.check_fibered_barcode_cache_2d(caches[1]).valid
+    @test TamerOp.matching_distance_exact_2d(caches[1], caches[2]; threads=false) == 0.5
+    @test TamerOp.matching_distance_exact_2d(M, Z, pi; opts=opts) == 0.5
+    @test TamerOp.Advanced.matching_distance_exact_2d(caches[1], caches[2]; threads=false) == 0.5
+    @test isapprox(TamerOp.matching_distance_sampled_2d(encM, encZ;
+        opts=opts, cache=sc), 0.25; atol=1e-12)
+    @test isapprox(TamerOp.Advanced.matching_distance_sampled_2d(caches[1], caches[2];
+        threads=false), 0.25; atol=1e-12)
+    @test isdefined(TamerOp.Advanced, :matching_distance_slices_2d)
+    @test !isdefined(TamerOp.Advanced, :matching_distance_exact_slices_2d)
+    @test !isdefined(F2D, :matching_distance_exact_slices_2d)
+    @test_throws MethodError WF.matching_distance_exact_2d(encM, encZ; opts=opts, family=nothing)
+    @test_throws ArgumentError WF.matching_distance_exact_2d(encM, encZ;
+        opts=opts, max_candidates=1)
+    CM._clear_session_cache!(sc)
+    @test isempty(ec.geometry)
+    @test WF.matching_distance_exact_2d(encM, encZ; opts=opts, cache=sc) == 0.5
+
+    # Rational endpoints less than one Float64 ulp apart must remain distinct
+    # in the exact window, even though representative slice geometry rounds.
+    P1 = chain_poset(1)
+    pi1 = EC.GridEncodingMap(P1, ([-1.0], [-1.0]))
+    E = MD.PModule{K}(P1, [1], Dict{Tuple{Int,Int},Matrix{K}}(); field=field)
+    Z1 = MD.zero_pmodule(P1; field=field)
+    a = big(1)//3
+    width = big(1)//big(10)^20
+    b = a + width
+    @test Float64(a) == Float64(b)
+    opts_rational = OPT.InvariantOptions(box=([a, a], [b, b]), threads=false)
+    arr_rational = F2D.fibered_arrangement_2d(pi1, opts_rational)
+    @test F2D.check_fibered_arrangement_2d(arr_rational).valid
+    @test F2D.matching_distance_exact_2d(E, Z1, pi1, opts_rational) == Float64(width/2)
+    @test F2D.matching_distance_exact_2d(E, Z1, pi1, opts_rational;
+        arrangement=arr_rational) == Float64(width/2)
+    er = RES.EncodingResult(P1, E, pi1; backend=:test)
+    zr = RES.EncodingResult(P1, Z1, pi1; backend=:test)
+    @test WF.matching_distance_exact_2d(er, zr; opts=opts_rational, cache=sc) == Float64(width/2)
+    @test_throws ArgumentError WF.matching_distance_exact_2d(er, zr; opts=opts,
+        arrangement=arr_rational)
+    @test_throws ArgumentError F2D.matching_distance_exact_2d(E, Z1, pi1, opts;
+        arrangement=arr_rational)
+
+    # :auto must resolve identically on direct and SessionCache entrypoints.
+    opts_auto = OPT.InvariantOptions(box=:auto, threads=false)
+    bx = TamerOp.SliceInvariants.encoding_box(pi, opts_auto)
+    opts_resolved = OPT.InvariantOptions(box=bx, threads=false)
+    expected = F2D.matching_distance_exact_2d(M, Z, pi, opts_resolved)
+    @test F2D.matching_distance_exact_2d(M, Z, pi, opts_auto) == expected
+    @test WF.matching_distance_exact_2d(encM, encZ; opts=opts_auto, cache=sc) == expected
+end
+
 end # with_fields
+
+@testset "A64: exact algebraic coordinate arithmetic and ordering" begin
+    AR = TamerOp.ExactReals.AlgebraicReal
+    @test TamerOp.AlgebraicReal === AR
+    @test TamerOp.Advanced.AlgebraicReal === AR
+    @test :AlgebraicReal in names(TamerOp)
+    root2, root3 = sqrt(AR(2)), sqrt(AR(3))
+    @test root2^2 == 2
+    @test root2 * root2 == 2//1
+    @test (root2 + root3)^2 == 5 + 2sqrt(AR(6))
+    @test (root3 + root2) * (root3 - root2) == 1
+    @test root2 / root2 == 1
+    @test inv(root2) * root2 == 1
+    @test root2^(-2) == 1//2
+    @test AR(4)^(1//2) == 2
+    @test QQ(root2^2) == 2
+    @test_throws InexactError QQ(root2)
+    @test_throws InexactError Int(root2)
+    @test_throws DomainError sqrt(AR(-1))
+    @test_throws DomainError AR(Inf)
+    @test_throws DomainError AR(NaN)
+    @test_throws DivideError inv(AR(0))
+    @test_throws ArgumentError AR(pi)
+    @test Int(AR(2)) == 2
+    @test QQ(AR(0.1)) == QQ(0.1)
+    @test QQ(AR(big"0.1")) == QQ(big"0.1")
+    @test root2 < 3//2 < root3
+    @test -Inf < -root3 < root2 < Inf
+    @test !(root2 == Inf) && !(root2 == NaN)
+    @test !(root2 < NaN) && !(NaN < root2)
+    @test isless(root2, NaN) && !isless(NaN, root2)
+    @test isequal(AR(0), 0.0)
+    @test !isequal(AR(0), -0.0)
+    @test isless(-0.0, AR(0)) && !isless(AR(0), -0.0)
+    @test float(root2) === root2
+    @test promote_type(AR, Float64) === AR
+    @test promote_type(AR, QQ) === AR
+    @test root2 + 0.5 == root2 + 1//2
+    @test abs(-root2) == root2
+    @test sign(-root2) == -1
+    @test floor(Int, root2) == 1
+    @test ceil(Int, root2) == 2
+    @test trunc(Int, -root2) == -1
+    @test round(Int, AR(5//2)) == 2
+    @test round(Int, AR(7//2)) == 4
+    @test round(Int, -root2, RoundToZero) == -1
+    @test round(Int, -root2, RoundFromZero) == -2
+    @test round(Int, AR(-3//2), RoundNearestTiesUp) == -1
+    @test min(root2, Inf) == root2
+    @test min(-Inf, root2) == -Inf
+    @test max(root2, Inf) == Inf
+    @test max(-Inf, root2) == root2
+    @test isequal(min(AR(0), -0.0), -0.0)
+    @test isequal(min(-0.0, AR(0)), -0.0)
+    @test isequal(max(AR(0), -0.0), AR(0))
+    @test isequal(minmax(AR(0), -0.0), (-0.0, AR(0)))
+    @test isapprox(root2, sqrt(2.0))
+    @test isapprox(root2, root2; atol=0, rtol=0)
+    @test !isapprox(root2, Inf)
+    @test !isapprox(1, AR(1 + QQ(1,big(2)^100)); atol=0, rtol=0)
+    @test isapprox(Float64(root2), sqrt(2.0); atol=eps(Float64), rtol=0)
+    @test precision(BigFloat(root2; precision=160)) == 160
+    @test occursin("sqrt", sprint(show, root2))
+
+    epsilon = QQ(1, big(2)^100)
+    near = AR(1 + epsilon)
+    @test Float64(near) == 1.0
+    @test near > 1
+    @test sort([near, AR(1), AR(0)]) == [AR(0), AR(1), near]
+    @test length(Set([AR(1), near])) == 2
+    @test hash(AR(1)) == hash(1) == hash(1.0) == hash(QQ(1))
+    @test hash(root2) == hash(sqrt(AR(8))/2)
+    @test Dict(root2 => 7)[sqrt(AR(8))/2] == 7
+    # Concurrent immutable reads must agree without entering a shared
+    # polynomial-parent cache through the hash implementation.
+    parallel_hashes = zeros(UInt, 32)
+    Threads.@threads for i in eachindex(parallel_hashes)
+        parallel_hashes[i] = hash(sqrt(AR(8))/2)
+    end
+    @test all(==(hash(root2)), parallel_hashes)
+    @test all(isfinite, (near, AR(big(2)^2000), AR(QQ(1,big(2)^2000))))
+end
+
+@testset "A14 ModuleOptions govern construction and every query path" begin
+    for field in FIELDS_FULL
+        @testset "ModuleOptions over $(field)" begin
+            K = CM.coeff_type(field)
+            P = chain_poset(4)
+            # Build a caller-owned cache without populating the poset's lazy
+            # cover slot, so actual forwarding is observable, not only parity.
+            cc = FF._build_cover_cache(P)
+            @test P.cache.cover === nothing
+            c(A) = map(x -> CM.coerce(field, x), A)
+            edges = Dict{Tuple{Int,Int},Matrix{K}}(
+                (1, 2) => c([1 1; 0 1]),
+                (2, 3) => c([1 0; 1 1]),
+                (3, 4) => c([1 2; 0 1]),
+            )
+            options = OPT.ModuleOptions(cache=cc)
+            M = MD.PModule{K}(P, fill(2, 4), edges; field=field, opts=options)
+            @test P.cache.cover === nothing
+            modules = (
+                M,
+                MD.PModule(P, fill(2, 4), edges; field=field, opts=options),
+                MD.PModule{K}(P, fill(2, 4), M.edge_maps; field=field, opts=options),
+                MD.PModule(P, fill(2, 4), M.edge_maps; field=field, opts=options),
+            )
+            @test P.cache.cover === nothing
+            # The noncommuting cover matrices give C*B*A = [3 5; 1 2].
+            expected = c([3 5; 1 2])
+            pairs = [(1, 4), (1, 1), (2, 3)]
+            oracle = [expected, c([1 0; 0 1]), edges[(2, 3)]]
+            for module_value in modules
+                @test MD.map_leq(module_value, 1, 4; opts=options) == expected
+                @test MD.structure_map(module_value; source=1, target=4, opts=options) == expected
+                for queries in (pairs, MD.prepare_map_leq_batch(pairs))
+                    @test MD.map_leq_many(module_value, queries; opts=options) == oracle
+                    destination = Vector{Matrix{K}}(undef, length(pairs))
+                    @test MD.map_leq_many!(destination, module_value, queries; opts=options) === destination
+                    @test destination == oracle
+                end
+            end
+            @test P.cache.cover === nothing
+            @test MD.map_leq(M, 1, 4) == expected
+            @test P.cache.cover !== nothing
+
+            # Same-cover store reuse must honor size checking, not return an
+            # invalid module before the constructor's validation is reached.
+            wrong_dims = [2, 3, 2, 2]
+            for stored in (edges, M.edge_maps)
+                @test_throws ErrorException MD.PModule{K}(P, wrong_dims, stored; field=field)
+                @test_throws ErrorException MD.PModule(P, wrong_dims, stored; field=field)
+                trusted = MD.PModule{K}(P, wrong_dims, stored; field=field,
+                    opts=OPT.ModuleOptions(check_sizes=false, cache=cc))
+                @test trusted.dims == wrong_dims
+            end
+            @test_throws ArgumentError MD.PModule{K}(P, [2, 2], edges; field=field)
+            @test_throws ArgumentError MD.PModule{K}(P, [2, -1, 2, 2], edges; field=field)
+
+            other_cache = FF._build_cover_cache(chain_poset(4))
+            for bad_cache in (:unused, other_cache, CM.SessionCache())
+                bad_options = OPT.ModuleOptions(cache=bad_cache)
+                @test_throws ArgumentError MD.PModule{K}(P, fill(2, 4), edges; field=field, opts=bad_options)
+                @test_throws ArgumentError MD.PModule(P, fill(2, 4), edges; field=field, opts=bad_options)
+                @test_throws ArgumentError MD.PModule{K}(P, fill(2, 4), M.edge_maps; field=field, opts=bad_options)
+                @test_throws ArgumentError MD.map_leq(M, 1, 1; opts=bad_options)
+                @test_throws ArgumentError MD.map_leq(M, 1, 4; opts=bad_options)
+                for queries in (Tuple{Int,Int}[], MD.prepare_map_leq_batch(Tuple{Int,Int}[]))
+                    @test_throws ArgumentError MD.map_leq_many(M, queries; opts=bad_options)
+                end
+            end
+            query_opt_out = OPT.ModuleOptions(check_sizes=false)
+            @test_throws ArgumentError MD.map_leq(M, 1, 1; opts=query_opt_out)
+            @test_throws ArgumentError MD.map_leq(M, 1, 4; opts=query_opt_out)
+            @test_throws ArgumentError MD.structure_map(M; source=1, target=1, opts=query_opt_out)
+            @test_throws ErrorException MD.map_leq(M, 1, 1; cache=cc, opts=options)
+            @test_throws ArgumentError MD.map_leq(M, 1, 1; cache=other_cache)
+            @test_throws ErrorException MD.map_leq(M, 0, 1; opts=options)
+            @test_throws ErrorException MD.map_leq(M, 4, 1; opts=options)
+            for queries in (Tuple{Int,Int}[], MD.prepare_map_leq_batch(Tuple{Int,Int}[]),
+                            pairs, MD.prepare_map_leq_batch(pairs))
+                @test_throws ArgumentError MD.map_leq_many(M, queries; opts=query_opt_out)
+                @test_throws ArgumentError MD.map_leq_many(M, queries; cache=other_cache)
+                @test_throws ErrorException MD.map_leq_many(M, queries; cache=cc, opts=options)
+            end
+        end
+    end
+end

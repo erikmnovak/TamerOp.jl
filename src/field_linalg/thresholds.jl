@@ -74,8 +74,6 @@ const FP_NEMO_RANK_THRESHOLD = Ref(40_000)
 const FP_NEMO_NULLSPACE_THRESHOLD = Ref(60_000)
 const FP_NEMO_SOLVE_THRESHOLD = Ref(60_000)
 const FLOAT_NULLSPACE_SVD_THRESHOLD = Ref(180_000)
-const FLOAT_SPARSE_SVDS_MIN_DIM = Ref(1_024)
-const FLOAT_SPARSE_SVDS_MIN_NNZ = Ref(120_000)
 const ZN_QQ_DIMAT_SUBMATRIX_WORK_THRESHOLD = Ref(48)
 const MODULAR_NULLSPACE_THRESHOLD = Ref(120_000)
 const MODULAR_SOLVE_THRESHOLD = Ref(120_000)
@@ -102,7 +100,6 @@ struct NemoMatrixBackend <: MatrixBackendTrait end
 
 const _JULIA_BACKEND_TRAIT = JuliaMatrixBackend()
 const _NEMO_BACKEND_TRAIT = NemoMatrixBackend()
-const _SVDS_IMPL = Ref{Any}(nothing)
 
 @inline function _matrix_backend_trait(field::AbstractCoeffField, A;
                                       op::Symbol=:rank, backend::Symbol=:auto)
@@ -138,19 +135,6 @@ function _conversion_counters()
         fp_to_nemo_cache_hits=_FP_TO_NEMO_CACHE_HITS[],
         fp_from_nemo=_FP_FROM_NEMO_CONVERSIONS[],
     )
-end
-
-@inline _have_svds_backend() = _SVDS_IMPL[] !== nothing
-
-function _set_svds_impl!(impl)
-    _SVDS_IMPL[] = impl
-    return nothing
-end
-
-function _nullspace_float_svds(F::RealField, A)
-    impl = _SVDS_IMPL[]
-    impl === nothing && return nothing
-    return impl(F, A)
 end
 
 @inline _nemo_dense_compatible(A) = A isa StridedMatrix
@@ -425,8 +409,6 @@ function _current_linalg_thresholds()
         "rankqq_dim_small_threshold" => Int(RANKQQ_DIM_SMALL_THRESHOLD[]),
         "rankqq_restricted_words_nemo_threshold" => Int(RANKQQ_RESTRICTED_WORDS_NEMO_THRESHOLD[]),
         "float_nullspace_svd_threshold" => Int(FLOAT_NULLSPACE_SVD_THRESHOLD[]),
-        "float_sparse_svds_min_dim" => Int(FLOAT_SPARSE_SVDS_MIN_DIM[]),
-        "float_sparse_svds_min_nnz" => Int(FLOAT_SPARSE_SVDS_MIN_NNZ[]),
         "zn_qq_dimat_submatrix_work_threshold" => Int(ZN_QQ_DIMAT_SUBMATRIX_WORK_THRESHOLD[]),
     )
 end
@@ -486,8 +468,6 @@ function _apply_linalg_thresholds!(vals)::Bool
         RANKQQ_RESTRICTED_WORDS_NEMO_THRESHOLD[] = Int(get(vals, "rankqq_restricted_words_nemo_threshold",
                                                            RANKQQ_RESTRICTED_WORDS_NEMO_THRESHOLD[]))
         FLOAT_NULLSPACE_SVD_THRESHOLD[] = Int(get(vals, "float_nullspace_svd_threshold", FLOAT_NULLSPACE_SVD_THRESHOLD[]))
-        FLOAT_SPARSE_SVDS_MIN_DIM[] = Int(get(vals, "float_sparse_svds_min_dim", FLOAT_SPARSE_SVDS_MIN_DIM[]))
-        FLOAT_SPARSE_SVDS_MIN_NNZ[] = Int(get(vals, "float_sparse_svds_min_nnz", FLOAT_SPARSE_SVDS_MIN_NNZ[]))
         _set_zn_qq_dimat_submatrix_work_threshold!(
             Int(get(vals, "zn_qq_dimat_submatrix_work_threshold",
                     ZN_QQ_DIMAT_SUBMATRIX_WORK_THRESHOLD[])))
@@ -569,24 +549,31 @@ function _load_linalg_thresholds!(; path::AbstractString=_linalg_thresholds_path
     doc = try
         TOML.parsefile(path)
     catch err
-        @warn "FieldLinAlg: failed to parse thresholds file; using defaults." path exception=(err, catch_backtrace())
+        @warn "FieldLinAlg: failed to parse thresholds file; retaining current thresholds." path exception=(err, catch_backtrace())
         return false
     end
-    haskey(doc, "fingerprint") || return false
-    haskey(doc, "thresholds") || return false
+    if !(get(doc, "fingerprint", nothing) isa AbstractDict) ||
+       !(get(doc, "thresholds", nothing) isa AbstractDict)
+        @warn "FieldLinAlg: thresholds file must contain fingerprint and thresholds tables; retaining current thresholds." path
+        return false
+    end
 
     current_fp = _current_linalg_fingerprint()
     stored_fp = doc["fingerprint"]
     if !_fingerprints_match(stored_fp, current_fp)
         if warn_on_mismatch
-            @warn "FieldLinAlg: threshold fingerprint mismatch; using defaults. Run `FieldLinAlg.autotune_linalg_thresholds!()` to regenerate." path
+            @warn "FieldLinAlg: threshold fingerprint mismatch; retaining current thresholds. Explicit autotuning is available through `FieldLinAlg.autotune_linalg_thresholds!`." path
         end
         return false
     end
 
+    previous = _current_linalg_thresholds()
     ok = _apply_linalg_thresholds!(doc["thresholds"])
     if !ok
-        @warn "FieldLinAlg: malformed thresholds in file; using defaults." path
+        # Conversion can fail after earlier entries have been applied. Reject
+        # the whole profile rather than leaving a mixture of old and new values.
+        _apply_linalg_thresholds!(previous)
+        @warn "FieldLinAlg: malformed thresholds in file; retaining current thresholds." path
         return false
     end
     return true

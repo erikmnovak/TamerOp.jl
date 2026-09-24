@@ -1,4 +1,121 @@
+@testset "A16 native visualization activation and honest failures" begin
+    VIZ = TamerOp.Visualization
+    spec = VIZ.VisualizationSpec(:activation_test;
+        layers=VIZ.AbstractVisualizationLayer[VIZ.PointLayer([(0.0, 1.0)], :black, 1.0, 5.0)])
+    activated_before = Set(keys(VIZ._VISUAL_RENDERERS))
+    for backend in (:cairomakie, :wglmakie)
+        if !VIZ._visual_backend_available(backend)
+            err = try
+                VIZ.render(spec; backend=backend)
+                nothing
+            catch caught
+                caught
+            end
+            @test err isa ArgumentError
+            @test occursin(backend === :cairomakie ? "using CairoMakie" : "using WGLMakie", sprint(showerror, err))
+        end
+    end
+    @test Set(keys(VIZ._VISUAL_RENDERERS)) == activated_before
+    @test_throws ArgumentError VIZ.render(spec; backend=:not_a_backend)
+    mktempdir() do dir
+        @test_throws ArgumentError VIZ.save_visual(joinpath(dir, "wrong.html"), spec; backend=:cairomakie)
+        @test_throws ArgumentError VIZ.save_visual(joinpath(dir, "wrong.html"), spec; backend=:not_a_backend)
+        @test_throws ArgumentError VIZ.save_visual(joinpath(dir, "wrong.png"), spec; backend=:wglmakie)
+        @test isempty(readdir(dir))
+        if !VIZ._visual_save_available(:wglmakie)
+            @test_throws ArgumentError VIZ.save_visual(joinpath(dir, "missing.html"), spec)
+            @test !isfile(joinpath(dir, "missing.html"))
+        end
+        if isempty(activated_before)
+            @test_throws ArgumentError VIZ.render(spec)
+            @test_throws ArgumentError VIZ.save_visual(dir, "missing", spec)
+            @test isempty(readdir(dir))
+        end
+        # A real backend error must propagate; it must never become a summary file.
+        VIZ._register_visual_backend!(:a16_failing;
+            render=(spec; kwargs...) -> error("A16 renderer failure"),
+            save=(path, spec; kwargs...) -> error("A16 saver failure"))
+        try
+            @test_throws ErrorException VIZ.render(spec; backend=:a16_failing)
+            @test_throws ErrorException VIZ.save_visual(joinpath(dir, "failure.png"), spec; backend=:a16_failing)
+            @test !isfile(joinpath(dir, "failure.png"))
+        finally
+            delete!(VIZ._VISUAL_RENDERERS, :a16_failing)
+            delete!(VIZ._VISUAL_SAVERS, :a16_failing)
+        end
+    end
+end
+
 using SparseArrays
+
+@testset "A04 MPPI visualizations identify sampled tracks" begin
+    VIZ = TamerOp.Visualization
+    MI = TamerOp.MultiparameterImages
+    omega = inv(sqrt(2.0))
+    lines = [MI.MPPLineSpec([0.5,0.5], 0.0, [0.0,0.0], omega),
+             MI.MPPLineSpec([0.5,0.5], 0.5, [-0.5,0.5], omega)]
+    decomp = MI._mpp_decomposition_from_barcodes(lines, [(0.0,2.0),(3.0,5.0)],
+        [1,1], ([0.0,0.0],[3.0,3.0]); q=0)
+    @test MI.nsummands(decomp) == 2
+    for layout in (:overlay, :summands)
+        spec = VIZ.visual_spec(decomp; kind=:mpp_decomposition, layout=layout)
+        @test spec.title == "Sampled MPPI tracks"
+        @test VIZ.visual_metadata(spec).interpretation == :sampled_tracks
+        @test VIZ.visual_metadata(spec).nsummands == 2
+        @test VIZ.check_visual_spec(spec).valid
+        if layout == :summands
+            @test [panel.title for panel in VIZ.visual_panels(spec)] == ["Track 1", "Track 2"]
+        end
+    end
+    img = MI.mpp_image(decomp; xgrid=[0.0,1.0], ygrid=[0.0,1.0], sigma=1, threads=false)
+    spec = VIZ.visual_spec(img; kind=:mpp_image)
+    @test VIZ.visual_metadata(spec).interpretation == :sampled_tracks
+    @test occursin("sampled bottleneck tracks", spec.subtitle)
+    @test isapprox(spec.layers[1].values, MI.image_values(img))
+end
+
+@testset "A03 fibered distance visualizations report sampled maxima" begin
+    VIZ = TamerOp.Visualization
+    F2D = TamerOp.Fibered2D
+    CM = TamerOp.CoreModules
+    FF = TamerOp.FiniteFringe
+    MD = TamerOp.Modules
+    EC = TamerOp.EncodingCore
+    OPT = TamerOp.Options
+
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+    P = FF.FinitePoset(reshape(Bool[true], 1, 1))
+    pi = EC.GridEncodingMap(P, ([0.0], [0.0]))
+    M = MD.PModule{K}(P, [1], Dict{Tuple{Int,Int},Matrix{K}}(); field=field)
+    Z = MD.zero_pmodule(P; field=field)
+    opts = OPT.InvariantOptions(box=([0.0, 0.0], [1.0, 1.0]), threads=false)
+    arr = F2D.fibered_arrangement_2d(pi, opts; precompute=:none, threads=false)
+    cacheM = F2D.fibered_barcode_cache_2d(M, arr; precompute=:none, threads=false)
+    cacheZ = F2D.fibered_barcode_cache_2d(Z, arr; precompute=:none, threads=false)
+    fam = F2D.fibered_slice_family_2d(arr)
+
+    # The unit square has exact distance 1/2 on the diagonal, while this
+    # representative family attains 1/4. The plot must identify its statistic.
+    @test F2D.matching_distance_exact_2d(cacheM, cacheZ; threads=false) == 0.5
+    for owner in (fam, cacheM), kind in (:fibered_family_contributions, :fibered_distance_diagnostic)
+        spec = VIZ.visual_spec(owner; kind=kind, caches=(cacheM, cacheZ))
+        metadata = VIZ.visual_metadata(spec)
+        @test isapprox(metadata.sampled_matching_distance, 0.25; atol=1e-12, rtol=0)
+        @test !hasproperty(metadata, :matching_distance)
+        cell_panel = first(VIZ.visual_panels(spec))
+        @test VIZ.visual_metadata(cell_panel).sampled_matching_distance == metadata.sampled_matching_distance
+        @test !hasproperty(VIZ.visual_metadata(cell_panel), :matching_distance)
+        @test occursin("Sampled", cell_panel.title)
+        if kind == :fibered_distance_diagnostic
+            @test spec.title == "Sampled fibered distance diagnostic"
+            @test occursin("sampled maximum", spec.subtitle)
+            @test VIZ.visual_panels(spec)[2].title == "Maximizing representative slice"
+            @test VIZ.visual_panels(spec)[3].title == "Top sampled contributions"
+        end
+    end
+    @test_throws ArgumentError VIZ.visual_spec(fam; kind=:fibered_distance_diagnostic)
+end
 
 @testset "Visualization engine v1" begin
     TOA = TamerOp.Advanced
@@ -440,7 +557,7 @@ using SparseArrays
     spec_fcontrib = TOA.visual_spec(fam_box; kind=:fibered_family_contributions, caches=(cache_box, cache_box_alt))
     @test TOA.visual_kind(spec_fcontrib) == :fibered_family_contributions
     @test length(TOA.visual_panels(spec_fcontrib)) == 2
-    @test TOA.visual_metadata(spec_fcontrib).matching_distance >= 0.0
+    @test TOA.visual_metadata(spec_fcontrib).sampled_matching_distance >= 0.0
 
     spec_fdist = TOA.visual_spec(fam_box; kind=:fibered_distance_diagnostic, caches=(cache_box, cache_box_alt))
     @test TOA.visual_kind(spec_fdist) == :fibered_distance_diagnostic
@@ -567,7 +684,7 @@ using SparseArrays
     @test all(length(panel.layers) == 3 for panel in spec_cod_snap.panels)
     @test all(panel.layers[2] isa TOA.PointLayer for panel in spec_cod_snap.panels)
     @test all(panel.layers[2].markerspace == :data for panel in spec_cod_snap.panels)
-    @test all(panel.layers[2].markersize ≈ 2.0 * panel.metadata.radius for panel in spec_cod_snap.panels)
+    @test all(isapprox(panel.layers[2].markersize, 2.0 * panel.metadata.radius) for panel in spec_cod_snap.panels)
     @test TOA.check_visual_spec(spec_cod_snap).valid
 
     spec_pc3 = TOA.visual_spec(pc3; kind=:points_3d)
@@ -634,11 +751,11 @@ using SparseArrays
     @test !bad_report.valid
     @test_throws ArgumentError TOA.check_visual_spec(bad_spec; throw=true)
 
-    have_cairo = try
-        import CairoMakie
-        TamerOp.Visualization._try_load_visual_backend!(:cairomakie)
-    catch
-        false
+    have_cairo = Base.find_package("CairoMakie") !== nothing
+    if have_cairo
+        @eval import CairoMakie
+        @test Base.get_extension(TamerOp, :TamerOpCairoMakieExt) !== nothing
+        @test VIZ._visual_backend_available(:cairomakie)
     end
     if have_cairo
         fig_box = TamerOp.visualize(box_pi; kind=:regions, backend=:cairomakie)
@@ -677,48 +794,53 @@ using SparseArrays
         @test isfile(TamerOp.export_path(png_export))
     end
 
-    have_wgl = try
-        import WGLMakie
-        TamerOp.Visualization._try_load_visual_backend!(:wglmakie)
-    catch
-        false
-    end
-
-    html_path = tempname() * ".html"
-    html_saved = TamerOp.save_visual(html_path, img)
-    @test html_saved == html_path
-    @test isfile(html_path)
-    @test filesize(html_path) > 0
-    html_text = read(html_path, String)
+    have_wgl = Base.find_package("WGLMakie") !== nothing
     if have_wgl
-        @test !occursin("VisualizationSpec", html_text)
-    else
-        @test occursin("VisualizationSpec", html_text)
+        @eval import WGLMakie
+        @test Base.get_extension(TamerOp, :TamerOpWGLMakieExt) !== nothing
+        @test VIZ._visual_backend_available(:wglmakie)
     end
 
     export_dir = mktempdir()
-    export_res = TamerOp.save_visual(export_dir, "mpp_image_export", img; format=:html)
-    @test export_res isa TamerOp.VisualExportResult
-    @test TamerOp.export_stem(export_res) == "mpp_image_export"
-    @test TamerOp.export_kind(export_res) == :mpp_image
-    @test TamerOp.export_format(export_res) == :html
-    @test TamerOp.export_backend(export_res) in (:wglmakie, :spec_html)
-    @test isfile(TamerOp.export_path(export_res))
-    @test describe(export_res).kind == :visual_export_result
-    @test occursin("VisualExportResult", repr(MIME("text/plain"), export_res))
+    if have_wgl
+        html_path = tempname() * ".html"
+        html_saved = TamerOp.save_visual(html_path, img)
+        @test html_saved == html_path
+        @test isfile(html_path)
+        @test filesize(html_path) > 0
+        html_text = read(html_path, String)
+        @test !occursin("VisualizationSpec", html_text)
 
-    batch_dir = mktempdir()
-    exports = TamerOp.save_visuals(batch_dir,
-                                        [
-                                            (; stem="mpp_image", obj=img, kind=:mpp_image),
-                                            (; stem="mpp_decomposition", obj=decomp, kind=:mpp_decomposition, layout=:summands),
-                                        ];
-                                        format=:html)
-    @test length(exports) == 2
-    @test all(res -> res isa TamerOp.VisualExportResult, exports)
-    @test [TamerOp.export_stem(res) for res in exports] == ["mpp_image", "mpp_decomposition"]
-    @test all(res -> TamerOp.export_format(res) == :html, exports)
-    @test all(res -> isfile(TamerOp.export_path(res)), exports)
+        export_dir = mktempdir()
+        export_res = TamerOp.save_visual(export_dir, "mpp_image_export", img; format=:html)
+        @test export_res isa TamerOp.VisualExportResult
+        @test TamerOp.export_stem(export_res) == "mpp_image_export"
+        @test TamerOp.export_kind(export_res) == :mpp_image
+        @test TamerOp.export_format(export_res) == :html
+        @test TamerOp.export_backend(export_res) == :wglmakie
+        @test isfile(TamerOp.export_path(export_res))
+        @test describe(export_res).kind == :visual_export_result
+        @test occursin("VisualExportResult", repr(MIME("text/plain"), export_res))
+
+        batch_dir = mktempdir()
+        exports = TamerOp.save_visuals(batch_dir,
+                                            [
+                                                (; stem="mpp_image", obj=img, kind=:mpp_image),
+                                                (; stem="mpp_decomposition", obj=decomp, kind=:mpp_decomposition, layout=:summands),
+                                            ];
+                                            format=:html)
+        @test length(exports) == 2
+        @test all(res -> res isa TamerOp.VisualExportResult, exports)
+        @test [TamerOp.export_stem(res) for res in exports] == ["mpp_image", "mpp_decomposition"]
+        @test all(res -> TamerOp.export_format(res) == :html, exports)
+        @test all(res -> isfile(TamerOp.export_path(res)), exports)
+
+    else
+        missing_path = joinpath(export_dir, "requires_wgl.html")
+        @test_throws ArgumentError TamerOp.save_visual(missing_path, img)
+        @test !isfile(missing_path)
+        @test_throws ArgumentError TamerOp.save_visual(export_dir, "requires_wgl", img; format=:html)
+    end
 
     @test_throws ArgumentError TamerOp.save_visual(export_dir, "mpp_image_export.html", img)
     @test_throws ArgumentError TamerOp.save_visuals(export_dir, [(; obj=img)]; format=:html)
@@ -731,5 +853,167 @@ using SparseArrays
     if have_wgl
         fig = TOA.render(spec_img; backend=:wglmakie)
         @test fig !== nothing
+    end
+end
+
+@testset "A21 ordinary persistence visual oracles" begin
+    VIZ = TamerOp.Visualization
+    finite = [[(1//3, 5//3), (2//1, 3//1)], Tuple{Rational{Int},Rational{Int}}[]]
+    essential = [[0//1, 4//1], [2//1]]
+    diagram = OP.PersistenceDiagram(finite, essential; field=CM.F2())
+    @test VIZ.available_visuals(diagram) == (:persistence_diagram, :barcode)
+    spec = VIZ.visual_spec(diagram)
+    @test VIZ.visual_kind(spec) === :persistence_diagram
+    @test VIZ.check_visual_spec(spec).valid
+    metadata = VIZ.visual_metadata(spec)
+    @test metadata.finite_intervals == finite[1]
+    @test eltype(metadata.finite_intervals) == Tuple{Rational{Int},Rational{Int}}
+    @test metadata.essential_births == essential[1]
+    @test metadata.rounded_endpoint_count == 2
+    @test metadata.display_coordinates === :float64
+    @test metadata.essential_direction == 1
+    @test metadata.essential_display_coordinate > 4
+    @test metadata.interval_convention == "[birth, death)"
+    @test occursin("Float64 display", spec.subtitle)
+    @test occursin("+Inf", spec.subtitle)
+    @test spec.layers[2] isa VIZ.PointLayer
+    @test spec.layers[2].points == [(1/3, 5/3), (2.0, 3.0)]
+    @test spec.layers[3].points == [(0.0, metadata.essential_display_coordinate), (4.0, metadata.essential_display_coordinate)]
+    @test "+Inf" in spec.axes.yticks[2]
+
+    bars = VIZ.visual_spec(diagram; kind=:barcode)
+    @test bars.axes.aspect === :auto
+    @test bars.layers[1] isa VIZ.BarcodeLayer
+    @test bars.layers[1].intervals == [(1/3, 5/3), (2.0, 3.0)]
+    @test bars.layers[2].segments == [(0.0, 3.0, metadata.essential_display_coordinate, 3.0),
+                                     (4.0, 4.0, metadata.essential_display_coordinate, 4.0)]
+    @test length(bars.layers[3].paths) == 2
+    @test all(path -> path[1][1] < path[2][1] && path[3][1] < path[2][1], bars.layers[3].paths)
+    @test VIZ.visual_spec(diagram; dim=1).metadata.finite_count == 0
+    @test VIZ.visual_spec(diagram; dim=1).metadata.essential_count == 1
+    @test VIZ.visual_spec(diagram; dim=7).metadata.essential_count == 0
+    @test VIZ.check_visual_spec(VIZ.visual_spec(diagram; dim=7)).valid
+    @test !VIZ.check_visual_request(diagram; dim=-1).valid
+    @test !VIZ.check_visual_request(diagram; dim=true).valid
+    @test !VIZ.check_visual_request(diagram; dim=0.5).valid
+    @test_throws ArgumentError VIZ.visual_spec(diagram; dim=-1)
+    @test_throws ArgumentError VIZ.visual_spec(diagram; kind=:not_a_kind)
+    malformed = deepcopy(diagram)
+    push!(malformed.finite_by_dim[1], (2//1, 2//1))
+    @test !VIZ.check_visual_request(malformed).valid
+    @test_throws ArgumentError VIZ.visual_spec(malformed)
+
+    super_finite = [[(5//3, 1//3), (3//1, 2//1)]]
+    super_diagram = OP.PersistenceDiagram(super_finite, [[0//1, 4//1]]; order=:superlevel)
+    super_spec = VIZ.visual_spec(super_diagram)
+    super_meta = super_spec.metadata
+    @test super_spec.layers[2].points == [(5/3, 1/3), (3.0, 2.0)]
+    @test super_meta.finite_intervals == super_finite[1]
+    @test super_meta.essential_display_coordinate < 0
+    @test super_meta.essential_direction == -1
+    @test super_meta.interval_convention == "(death, birth]"
+    @test "-Inf" in super_spec.axes.yticks[2]
+    super_bars = VIZ.visual_spec(super_diagram; kind=:barcode)
+    @test all(path -> path[1][1] > path[2][1] && path[3][1] > path[2][1], super_bars.layers[3].paths)
+    @test super_bars.layers[1].intervals == [(5/3, 1/3), (3.0, 2.0)]
+
+    signed_zeros = OP.PersistenceDiagram([Tuple{Float64,Float64}[]], [[-0.0, 0.0]])
+    zero_spec = VIZ.visual_spec(signed_zeros)
+    @test VIZ.check_visual_spec(zero_spec).valid
+    @test zero_spec.metadata.essential_count == 2
+    @test isequal(zero_spec.metadata.essential_births, [-0.0, 0.0])
+    @test length(zero_spec.layers[3].points) == 2
+    zero_bars = VIZ.visual_spec(signed_zeros; kind=:barcode)
+    @test length(zero_bars.layers[2].segments) == 2
+
+    large = big(2)^60
+    close_endpoints = OP.PersistenceDiagram([[(large, large + 1)]], [BigInt[]])
+    @test_throws ArgumentError VIZ.visual_spec(close_endpoints)
+    overflow = OP.PersistenceDiagram([[(big(10)^400, big(10)^401)]], [BigInt[]])
+    @test_throws ArgumentError VIZ.visual_spec(overflow)
+    @test OP.finite_intervals(close_endpoints; dim=0) == [(large, large + 1)]
+    @test OP.finite_intervals(diagram; dim=0) == finite[1]
+
+    if Base.find_package("CairoMakie") === nothing
+        @test_skip false
+    else
+        @eval import CairoMakie
+        @test Base.get_extension(TamerOp, :TamerOpCairoMakieExt) !== nothing
+        @test VIZ._visual_backend_available(:cairomakie)
+        barcode_figure = VIZ.visualize(super_diagram; kind=:barcode, backend=:cairomakie)
+        CairoMakie.Makie.update_state_before_display!(barcode_figure)
+        barcode_axis = only(filter(item -> item isa CairoMakie.Axis, barcode_figure.content))
+        plot_size = CairoMakie.Makie.widths(CairoMakie.Makie.viewport(barcode_axis.scene)[])
+        figure_size = CairoMakie.Makie.widths(CairoMakie.Makie.viewport(barcode_figure.scene)[])
+        # The plot should occupy the canvas; a bottom legend must not determine
+        # the axis column width or absorb half of the available row height.
+        @test plot_size[1] > 0.6 * figure_size[1]
+        @test plot_size[2] > 0.5 * figure_size[2]
+        mktempdir() do dir
+            path = VIZ.save_visual(joinpath(dir, "ordinary.svg"), diagram; backend=:cairomakie)
+            svg = read(path, String)
+            @test occursin("<svg", svg)
+            @test occursin("<path", svg)
+            @test !occursin("VisualizationSpec", svg)
+            barcode_path = VIZ.save_visual(joinpath(dir, "ordinary_superlevel.png"), super_diagram;
+                                           kind=:barcode, backend=:cairomakie)
+            bytes = read(barcode_path)
+            @test bytes[1:8] == UInt8[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
+            @test length(bytes) > 1000
+            # Public computation-to-figure path: a ring is born at 0 and dies at 5.
+            image = zeros(Int, 3, 3)
+            image[2, 2] = 5
+            computed = TamerOp.cubical_persistence(image)
+            @test TamerOp.finite_intervals(computed; dim=1) == [(0, 5)]
+            computed_path = TamerOp.save_visual(joinpath(dir, "computed_ring.svg"), computed;
+                                               kind=:barcode, dim=1, backend=:cairomakie)
+            @test occursin("<svg", read(computed_path, String))
+        end
+    end
+end
+
+@testset "A16 WGL HTML export and backend switching" begin
+    if Base.find_package("WGLMakie") === nothing
+        @test_skip false
+    else
+        @eval import WGLMakie
+        have_cairo = Base.find_package("CairoMakie") !== nothing
+        have_cairo && (@eval import CairoMakie)
+        @test Base.get_extension(TamerOp, :TamerOpWGLMakieExt) !== nothing
+        @test TamerOp.Visualization._visual_save_available(:wglmakie)
+        diagram = TamerOp.OrdinaryPersistence.PersistenceDiagram(
+            [[(1//3, 5//3)]], [[0//1]])
+        mktempdir() do dir
+            exported = TamerOp.save_visual(dir, "ordinary_interactive", diagram;
+                kind=:barcode, backend=:wglmakie, format=:html)
+            @test TamerOp.export_backend(exported) === :wglmakie
+            @test TamerOp.export_format(exported) === :html
+            @test TamerOp.export_kind(exported) === :barcode
+            html = read(TamerOp.export_path(exported), String)
+            # Bonito serializes the WGL scene and its canvas into a standalone
+            # document. Browser execution is a separate integration concern.
+            @test occursin("<html", lowercase(html))
+            @test occursin("<canvas", lowercase(html))
+            @test occursin("<script", lowercase(html))
+            @test occursin("Bonito", html)
+            @test !occursin("VisualizationSpec", html)
+            @test sizeof(html) > 10_000
+            @test WGLMakie.Makie.current_backend() === WGLMakie
+            if have_cairo
+                # Import order and a previously active WGL renderer must not
+                # override the explicit static export request.
+                @test Base.get_extension(TamerOp, :TamerOpCairoMakieExt) !== nothing
+                static = TamerOp.save_visual(dir, "ordinary_after_wgl", diagram;
+                    kind=:barcode, backend=:cairomakie, format=:png)
+                @test TamerOp.export_backend(static) === :cairomakie
+                @test TamerOp.export_format(static) === :png
+                bytes = read(TamerOp.export_path(static))
+                @test bytes[1:8] == UInt8[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
+                @test length(bytes) > 1000
+                @test CairoMakie.Makie.current_backend() === CairoMakie
+            else
+                @test_skip false
+            end
+        end
     end
 end

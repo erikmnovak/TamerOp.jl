@@ -9,6 +9,201 @@ module CoreModules
 
 using LinearAlgebra, SparseArrays
 
+# The installed cddlib artifact has thread-local workspaces but updates shared
+# non-atomic statistics. All library-owned CDD operations, including lazy work,
+# use this one lock across owners and exact/floating arithmetic. Take any
+# session/region cache locks first; never acquire them inside this boundary.
+# This does not coordinate external CDD callers or changes to CDD globals.
+const _CDD_EXECUTION_LOCK = ReentrantLock()
+@inline function _with_cdd_execution(f::F) where {F}
+    Base.lock(_CDD_EXECUTION_LOCK)
+    try
+        return f()
+    finally
+        Base.unlock(_CDD_EXECUTION_LOCK)
+    end
+end
+
+# Mutable memo values belong to tasks, not to physical thread IDs. Weak task
+# references release completed-task storage; the lock protects shared lookup.
+# This is for memo data and non-reentrant workspaces. A workspace held across
+# user callbacks or recursive calls requires an explicit lease instead.
+struct _TaskLocalCacheValue{T}
+    task::WeakRef
+    value::T
+end
+
+mutable struct _TaskLocalCache{T}
+    values::Dict{UInt,_TaskLocalCacheValue{T}}
+    lock::ReentrantLock
+    epoch::Threads.Atomic{UInt}
+    dirty::Threads.Atomic{Bool}
+end
+_TaskLocalCache{T}() where {T} =
+    _TaskLocalCache{T}(Dict{UInt,_TaskLocalCacheValue{T}}(), ReentrantLock(),
+        Threads.Atomic{UInt}(0), Threads.Atomic{Bool}(false))
+
+# Called with cache.lock held. Finalizers only set the flag and never mutate a
+# dictionary or wait on a lock. A later miss/inspection reclaims dead tasks.
+function _prune_task_local_values!(cache::_TaskLocalCache)
+    if Threads.atomic_xchg!(cache.dirty, false)
+        filter!(pair -> pair.second.task.value !== nothing, cache.values)
+    end
+    return nothing
+end
+
+const _TASK_LOCAL_CACHE_KEY = gensym(:tamerop_task_cache)
+
+# Neither an entry's owner nor its payload is retained by the task's hot lookup.
+# Pointer-valued entries avoid boxing a multi-field tuple on every memo hit.
+mutable struct _TaskLocalCacheEntry
+    owner::WeakRef
+    epoch::UInt
+    value::WeakRef
+end
+
+# The task-storage dictionary has Any-valued entries. Recover this concrete
+# context before each lookup so hot memo hits do not dynamically dispatch or
+# lose the entry type. The owner guard also rejects inherited contexts.
+mutable struct _TaskLocalCacheContext
+    owner::Task
+    values::Dict{UInt,_TaskLocalCacheEntry}
+    prune_at::Int
+end
+
+@noinline function _new_task_local_context!(storage, task::Task)
+    context = _TaskLocalCacheContext(task, Dict{UInt,_TaskLocalCacheEntry}(), 64)
+    storage[_TASK_LOCAL_CACHE_KEY] = context
+    return context
+end
+
+# Batches may acquire this once per calling task/work chunk, then obtain each
+# needed owner value through the three-argument lookup. Never share mutable
+# memo values across tasks or retain them across reentrant user callbacks.
+@inline function _task_local_context()
+    storage = task_local_storage()
+    context = get(storage, _TASK_LOCAL_CACHE_KEY, nothing)
+    task = current_task()
+    if !(context isa _TaskLocalCacheContext) || context.owner !== task
+        return _new_task_local_context!(storage, task)
+    end
+    return context::_TaskLocalCacheContext
+end
+
+@inline _task_local!(factory::F, cache::_TaskLocalCache{T}) where {F,T} =
+    _task_local!(factory, cache, _task_local_context())
+
+@inline function _task_local!(factory::F, cache::_TaskLocalCache{T},
+                             context::_TaskLocalCacheContext)::T where {F,T}
+    # Recheck ownership even for an explicitly supplied context: a spawned
+    # task may inherit it, but must always acquire its own memo values.
+    context.owner === current_task() || (context = _task_local_context())
+    key = UInt(objectid(cache))
+    entry = get(context.values, key, nothing)
+    # objectid may be reused after collection; it is only a lookup key. The
+    # weak owner's identity must match before any cached value can be reused.
+    if entry !== nothing && entry.owner.value === cache && entry.epoch == cache.epoch[]
+        value = entry.value.value
+        value === nothing || return value::T
+    end
+    return _task_local_miss!(factory, cache, context, key)
+end
+
+# Keep allocation, locking, finalizers and metadata pruning out of every
+# caller's inferred/inlined hit path. Cleanup depends only on weak references,
+# so it also need not specialize on the payload or factory type.
+@noinline function _register_task_cache_cleanup!(task::Task, weak_owner::WeakRef)
+    finalizer(task) do _
+        owner = weak_owner.value
+        owner === nothing || (owner.dirty[] = true)
+        nothing
+    end
+    return nothing
+end
+
+@noinline function _publish_task_local_entry!(context::_TaskLocalCacheContext,
+                                            key::UInt, entry::_TaskLocalCacheEntry)
+    local_values = context.values
+    # Only insertions scan dead metadata, never hot hits. After a scan, the
+    # next scan waits for max(64, twice the surviving entry count) slots.
+    if length(local_values) >= context.prune_at
+        filter!(local_values) do pair
+            cached = pair.second
+            cached.owner.value !== nothing && cached.value.value !== nothing
+        end
+        context.prune_at = max(64, 2 * length(local_values))
+    end
+    local_values[key] = entry
+    return nothing
+end
+
+@noinline function _task_local_miss!(factory::F, cache::_TaskLocalCache{T},
+                                   context::_TaskLocalCacheContext, key::UInt)::T where {F,T}
+    task = current_task()
+    lock(cache.lock)
+    try
+        _prune_task_local_values!(cache)
+        task_key = UInt(objectid(task))
+        stored = get(cache.values, task_key, nothing)
+        value = if stored !== nothing && stored.task.value === task
+            stored.value
+        else
+            created = factory()::T
+            cache.values[task_key] = _TaskLocalCacheValue{T}(WeakRef(task), created)
+            # Capturing the owner itself here would keep all its payloads alive
+            # until this task dies, even after the owner was abandoned. Only a
+            # weak owner reference may be retained by the task's finalizer.
+            _register_task_cache_cleanup!(task, WeakRef(cache))
+            created
+        end
+        _publish_task_local_entry!(context, key,
+            _TaskLocalCacheEntry(WeakRef(cache), cache.epoch[], WeakRef(value)))
+        return value
+    finally
+        unlock(cache.lock)
+    end
+end
+
+function _clear_task_local!(cache::_TaskLocalCache)
+    lock(cache.lock)
+    try
+        empty!(cache.values)
+        Threads.atomic_add!(cache.epoch, UInt(1))
+    finally
+        unlock(cache.lock)
+    end
+    return nothing
+end
+
+# Snapshot for cache lifecycle checks and owner maintenance; callers must not
+# mutate another active task's cached workspace through this inspection hook.
+function _task_local_values(cache::_TaskLocalCache)
+    lock(cache.lock)
+    try
+        _prune_task_local_values!(cache)
+        return [entry.value for entry in values(cache.values)]
+    finally
+        unlock(cache.lock)
+    end
+end
+
+# Each invocation of f owns its chunk's scratch and writes deterministic indices.
+# Dynamic scheduling permits calls from worker/interactive tasks and nested loops.
+function _foreach_workchunk(f::F, n::Integer; threads::Bool=true) where {F}
+    n <= 0 && return nothing
+    nshards = threads ? min(Int(n), Threads.nthreads()) : 1
+    if nshards > 1
+        Threads.@threads for slot in 1:nshards
+            lo = fld((slot - 1) * n, nshards) + 1
+            hi = fld(slot * n, nshards)
+            f(lo:hi, slot)
+        end
+    else
+        f(1:Int(n), 1)
+    end
+    return nothing
+end
+
 # ----- canonical field of scalars used everywhere --------------------------------
 "Exact rationals used throughout (Rational{BigInt})."
 const QQ = Rational{BigInt}
@@ -37,12 +232,54 @@ function RealField(::Type{T}; rtol::T = sqrt(eps(T)), atol::T = zero(T)) where {
     RealField{T}(rtol, atol)
 end
 
-"Prime field of characteristic p."
+# The seven witnesses are deterministic for n < 2^64, hence cover every
+# positive Int modulus. See Forisek--Jancina, Theorem 3:
+# https://ceur-ws.org/Vol-1326/020-Forisek.pdf
+function _is_prime_modulus(n::Int)
+    n >= 2 || return false
+    for q in (2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37)
+        n == q && return true
+        rem(n, q) == 0 && return false
+    end
+    n < 41^2 && return true
+    s = trailing_zeros(n - 1)
+    d = (n - 1) >> s
+    for witness in (2, 325, 9375, 28178, 450775, 9780504, 1795265022)
+        a = rem(witness, n)
+        a == 0 && continue
+        x = powermod(a, d, n)
+        (x == 1 || x == n - 1) && continue
+        passed = false
+        for _ in 1:(s - 1)
+            x = Int(rem(widemul(x, x), n))
+            if x == n - 1
+                passed = true
+                break
+            end
+        end
+        passed || return false
+    end
+    return true
+end
+
+"""
+    PrimeField(p::Integer)
+    Fp(p::Integer)
+
+The prime field of characteristic `p`. The modulus must be prime and fit in
+`Int`; arbitrary-sized integer inputs are accepted when their value fits.
+Composite and out-of-range moduli throw `ArgumentError`. Use `coeff_type(F)`
+for its scalar type and `coerce(F, x)` for integer or rational coefficients.
+"""
 struct PrimeField <: AbstractCoeffField
     p::Int
     function PrimeField(p::Integer)
-        p > 1 || throw(ArgumentError("prime field requires p > 1"))
-        new(Int(p))
+        2 <= p <= typemax(Int) ||
+            throw(ArgumentError("prime field requires a prime modulus in 2:typemax(Int); got $p"))
+        modulus = Int(p)
+        _is_prime_modulus(modulus) ||
+            throw(ArgumentError("prime field requires a prime modulus; got $p"))
+        new(modulus)
     end
 end
 
@@ -53,16 +290,49 @@ Base.:(==)(a::PrimeField, b::PrimeField) = a.p == b.p
 
 F2() = PrimeField(2)
 F3() = PrimeField(3)
+"""
+    Fp(p::Integer)
+
+Construct the prime field of characteristic `p`, for primes in
+`2:typemax(Int)`. Composite or out-of-range moduli raise `ArgumentError`.
+For example, `F = Fp(5); coerce(F, 1//2)` gives the residue `3`.
+Use `coeff_type(F)` when constructing coefficient arrays. See [`PrimeField`](@ref).
+"""
 Fp(p::Integer) = PrimeField(p)
 
-"Element type for prime fields, parameterized by modulus."
+# Type parameters are constant at specialization time. Validate once there,
+# rather than checking primality for every scalar construction or operation.
+# Returning the field constant also avoids repeating validation on inference.
+@generated function _prime_field(::Val{p}) where {p}
+    p isa Int || return :(throw(ArgumentError("FpElem requires an Int modulus; use coeff_type(Fp(p)) for other integer types")))
+    if _is_prime_modulus(p)
+        return QuoteNode(PrimeField(p))
+    end
+    message = "FpElem requires a prime modulus in 2:typemax(Int); got $p"
+    return :(throw(ArgumentError($message)))
+end
+
+"""
+    FpElem{p}(x::Integer)
+
+An element of the prime field of characteristic `p`, represented by the unique
+integer residue in `0:p-1`. The type parameter `p` must be an `Int` prime.
+Prefer `K = coeff_type(Fp(p)); K(x)` when the modulus has another integer type.
+Integer inputs may have arbitrary size; conversion from another characteristic
+is rejected. Arithmetic is exact throughout the supported modulus range.
+"""
 struct FpElem{p} <: Integer
     val::Int
-    function FpElem{p}(x::Integer) where {p}
+    @inline function FpElem{p}(x::Integer) where {p}
+        _prime_field(Val(p))
         x isa FpElem{p} && return x
-        new{p}(mod(x, p))
+        x isa FpElem && throw(ArgumentError("cannot convert $(typeof(x)) into FpElem{$p}"))
+        new{p}(Int(mod(x, p)))
     end
 end
+
+PrimeField(p::FpElem) =
+    throw(ArgumentError("prime field modulus must be an integer characteristic, not a finite-field element"))
 
 Base.show(io::IO, x::FpElem{p}) where {p} = print(io, x.val)
 Base.zero(::Type{FpElem{p}}) where {p} = FpElem{p}(0)
@@ -74,11 +344,32 @@ Base.hash(x::FpElem{p}, h::UInt) where {p} = hash(x.val, h)
 Base.convert(::Type{FpElem{p}}, x::Integer) where {p} = FpElem{p}(x)
 Base.convert(::Type{FpElem{p}}, x::FpElem{p}) where {p} = x
 Base.promote_rule(::Type{FpElem{p}}, ::Type{<:Integer}) where {p} = FpElem{p}
+# Base otherwise promotes any Integer paired with BigInt to BigInt.
+Base.promote_rule(::Type{BigInt}, ::Type{FpElem{p}}) where {p} = FpElem{p}
+function Base.promote_rule(::Type{FpElem{p}}, ::Type{FpElem{q}}) where {p,q}
+    p == q || throw(ArgumentError("cannot promote elements of characteristics $p and $q"))
+    return FpElem{p}
+end
 
-Base.:+(a::FpElem{p}, b::FpElem{p}) where {p} = FpElem{p}(a.val + b.val)
+@inline function Base.:+(a::FpElem{p}, b::FpElem{p}) where {p}
+    # The native sum is safe for small moduli. Above that bound, subtract
+    # the distance to p before adding, so no intermediate can overflow.
+    if p <= (typemax(Int) >> 1) + 1
+        return FpElem{p}(a.val + b.val)
+    end
+    gap = p - b.val
+    return FpElem{p}(a.val >= gap ? a.val - gap : a.val + b.val)
+end
 Base.:-(a::FpElem{p}, b::FpElem{p}) where {p} = FpElem{p}(a.val - b.val)
 Base.:-(a::FpElem{p}) where {p} = FpElem{p}(-a.val)
-Base.:*(a::FpElem{p}, b::FpElem{p}) where {p} = FpElem{p}(a.val * b.val)
+const _FP_NATIVE_PRODUCT_LIMIT = isqrt(typemax(Int))
+@inline function Base.:*(a::FpElem{p}, b::FpElem{p}) where {p}
+    # This is an exact overflow bound, not a performance heuristic.
+    if p - 1 <= _FP_NATIVE_PRODUCT_LIMIT
+        return FpElem{p}(a.val * b.val)
+    end
+    return FpElem{p}(Int(rem(widemul(a.val, b.val), p)))
+end
 Base.:(==)(a::FpElem{p}, b::FpElem{p}) where {p} = a.val == b.val
 
 function Base.inv(a::FpElem{p}) where {p}
@@ -87,6 +378,35 @@ function Base.inv(a::FpElem{p}) where {p}
 end
 
 Base.:/(a::FpElem{p}, b::FpElem{p}) where {p} = a * inv(b)
+
+function _fp_power(a::FpElem{p}, exponent::Integer) where {p}
+    if iszero(a)
+        exponent < 0 && throw(DomainError(a, "division by zero in Fp"))
+        return exponent == 0 ? one(a) : a
+    end
+    # Fermat reduction also handles negative and arbitrarily large exponents
+    # without negating typemin(Int) or converting the input to a machine Int.
+    e = Int(mod(exponent, p - 1))
+    result = one(a)
+    factor = a
+    while e != 0
+        isodd(e) && (result *= factor)
+        e >>= 1
+        e == 0 && break
+        factor *= factor
+    end
+    return result
+end
+
+Base.:^(a::FpElem, exponent::Integer) = _fp_power(a, exponent)
+# Resolve Base's Integer/BigInt and Integer/Bool specializations explicitly.
+Base.:^(a::FpElem, exponent::BigInt) = _fp_power(a, exponent)
+Base.:^(a::FpElem, exponent::Bool) = exponent ? a : one(a)
+Base.:^(a::FpElem, exponent::FpElem) =
+    throw(ArgumentError("a finite-field exponent must be an ordinary integer"))
+# Base's generic negative-literal rewrite negates the exponent; bypass it so
+# the literal typemin(Int) has the same exact semantics as a runtime exponent.
+@inline Base.literal_pow(::typeof(^), a::FpElem, ::Val{n}) where {n} = a^n
 
 "Return the scalar element type used for a given field."
 coeff_type(::QQField) = QQ
@@ -97,7 +417,9 @@ coeff_type(F::PrimeField) = FpElem{F.p}
 field_from_eltype(::Type{QQ}) = QQField()
 field_from_eltype(::Type{<:Rational}) = QQField()
 field_from_eltype(::Type{T}) where {T<:AbstractFloat} = RealField(T)
-field_from_eltype(::Type{FpElem{p}}) where {p} = PrimeField(p)
+function field_from_eltype(::Type{FpElem{p}}) where {p}
+    return _prime_field(Val(p))
+end
 field_from_eltype(::Type{K}) where {K} =
     throw(ArgumentError("no field mapping for element type $(K)"))
 
@@ -122,16 +444,15 @@ function coerce(F::PrimeField, x::Integer)
     return K(x)
 end
 
-function coerce(F::PrimeField, x::Rational)
-    p = F.p
-    den = denominator(x)
-    g = gcd(den, p)
-    g == 1 || g == one(g) || throw(ArgumentError("denominator not invertible mod $p"))
-    num = numerator(x)
-    num_mod = Int(mod(num, p))
-    den_mod = Int(mod(den, p))
-    inv_den = invmod(den_mod, p)
-    return FpElem{p}(num_mod * inv_den)
+coerce(F::PrimeField, x::Rational) = _coerce_fp_rational(coeff_type(F), x)
+
+# Specialize the whole conversion on the characteristic, so dynamic field
+# objects cross one dispatch boundary rather than boxing each scalar step.
+function _coerce_fp_rational(::Type{FpElem{p}}, x::Rational) where {p}
+    K = FpElem{p}
+    den = K(denominator(x))
+    iszero(den) && throw(ArgumentError("denominator not invertible mod $p"))
+    return K(numerator(x)) / den
 end
 
 function coerce(F::PrimeField, x::FpElem{p}) where {p}
@@ -403,6 +724,44 @@ function string_to_rational(s::AbstractString)::QQ
     parse(BigInt, t[1]) // parse(BigInt, t[2])
 end
 
+# Shared request-key plumbing for geometry/ingestion/feature caches. Hashes
+# locate candidates; exact structural equality decides whether they can share
+# results. Distinct algebraic conjugates may intentionally have equal hashes.
+struct _CacheArraySnapshot
+    shape::Tuple
+    entries::Tuple
+end
+Base.isequal(a::_CacheArraySnapshot, b::_CacheArraySnapshot) =
+    isequal(a.shape, b.shape) && isequal(a.entries, b.entries)
+Base.:(==)(a::_CacheArraySnapshot, b::_CacheArraySnapshot) = isequal(a, b)
+Base.hash(x::_CacheArraySnapshot, seed::UInt) = hash((x.shape, x.entries), seed)
+
+_cache_key_snapshot(x) = x
+_cache_key_snapshot(x::Tuple) = map(_cache_key_snapshot, x)
+_cache_key_snapshot(x::NamedTuple) = map(_cache_key_snapshot, x)
+_cache_key_snapshot(x::AbstractArray) =
+    _CacheArraySnapshot(size(x), Tuple(_cache_key_snapshot(v) for v in x))
+
+struct _StructuralCacheKey
+    digest::UInt
+    snapshot::Tuple
+end
+
+"""
+    _structural_cache_key(request)
+
+Internal collision-safe key for a mathematical request. Nested array shape and
+contents are captured independently of caller-owned storage. Scalar values and
+callables keep their existing equality/identity semantics; this does not copy
+mutable state captured by a callback or replace an owner's identity contract.
+"""
+_structural_cache_key(request) =
+    _StructuralCacheKey(UInt(hash(request)), (_cache_key_snapshot(request),))
+Base.hash(key::_StructuralCacheKey, seed::UInt) = hash(key.digest, seed)
+Base.isequal(a::_StructuralCacheKey, b::_StructuralCacheKey) =
+    a.digest == b.digest && isequal(a.snapshot, b.snapshot)
+Base.:(==)(a::_StructuralCacheKey, b::_StructuralCacheKey) = isequal(a, b)
+
 """
     ResolutionCache()
 
@@ -562,17 +921,10 @@ mutable struct ResolutionCache
     injective_primary::Any
     indicator_primary_type::Union{Nothing,DataType}
     indicator_primary::Any
-    # Thread-sharded memo stores for lock-free fast-path lookups/inserts.
-    projective_shards::Vector{Dict{ResolutionKey2,ProjectiveResolutionPayload}}
-    injective_shards::Vector{Dict{ResolutionKey2,InjectiveResolutionPayload}}
-    indicator_shards::Vector{Dict{ResolutionKey3,IndicatorResolutionPayload}}
-    projective_primary_shards::Vector{Any}
-    injective_primary_shards::Vector{Any}
-    indicator_primary_shards::Vector{Any}
+
 end
 
 function ResolutionCache()
-    nshards = max(1, Base.Threads.maxthreadid())
     return ResolutionCache(
         Base.ReentrantLock(),
         Dict{ResolutionKey2,ProjectiveResolutionPayload}(),
@@ -597,68 +949,48 @@ function ResolutionCache()
         nothing,
         nothing,
         nothing,
-        [Dict{ResolutionKey2,ProjectiveResolutionPayload}() for _ in 1:nshards],
-        [Dict{ResolutionKey2,InjectiveResolutionPayload}() for _ in 1:nshards],
-        [Dict{ResolutionKey3,IndicatorResolutionPayload}() for _ in 1:nshards],
-        fill(nothing, nshards),
-        fill(nothing, nshards),
-        fill(nothing, nshards),
+
     )
 end
 
 function _clear_resolution_cache!(cache::ResolutionCache)
     Base.lock(cache.lock)
-    empty!(cache.projective)
-    empty!(cache.injective)
-    empty!(cache.indicator)
-    empty!(cache.ext_projective)
-    empty!(cache.ext_injective)
-    empty!(cache.ext_unified)
-    empty!(cache.tor_first)
-    empty!(cache.tor_second)
-    empty!(cache.hom_bicomplex)
-    empty!(cache.ext_doublecomplex)
-    empty!(cache.tor_doublecomplex_plan)
-    empty!(cache.tor_doublecomplex)
-    cache.projective_promotion_type = nothing
-    cache.projective_promotion_hits = 0
-    cache.injective_promotion_type = nothing
-    cache.injective_promotion_hits = 0
-    if cache.projective_primary_type === nothing
-        cache.projective_primary = nothing
-    else
-        empty!(cache.projective_primary)
+    try
+        empty!(cache.projective)
+        empty!(cache.injective)
+        empty!(cache.indicator)
+        empty!(cache.ext_projective)
+        empty!(cache.ext_injective)
+        empty!(cache.ext_unified)
+        empty!(cache.tor_first)
+        empty!(cache.tor_second)
+        empty!(cache.hom_bicomplex)
+        empty!(cache.ext_doublecomplex)
+        empty!(cache.tor_doublecomplex_plan)
+        empty!(cache.tor_doublecomplex)
+        cache.projective_promotion_type = nothing
+        cache.projective_promotion_hits = 0
+        cache.injective_promotion_type = nothing
+        cache.injective_promotion_hits = 0
+        if cache.projective_primary_type === nothing
+            cache.projective_primary = nothing
+        else
+            empty!(cache.projective_primary)
+        end
+        if cache.injective_primary_type === nothing
+            cache.injective_primary = nothing
+        else
+            empty!(cache.injective_primary)
+        end
+        cache.indicator_primary_type = nothing
+        cache.indicator_primary = nothing
+    finally
+        Base.unlock(cache.lock)
     end
-    if cache.injective_primary_type === nothing
-        cache.injective_primary = nothing
-    else
-        empty!(cache.injective_primary)
-    end
-    cache.indicator_primary_type = nothing
-    cache.indicator_primary = nothing
-    for d in cache.projective_shards
-        empty!(d)
-    end
-    for d in cache.injective_shards
-        empty!(d)
-    end
-    for d in cache.indicator_shards
-        empty!(d)
-    end
-    for i in eachindex(cache.projective_primary_shards)
-        shard = cache.projective_primary_shards[i]
-        shard === nothing || empty!(shard)
-    end
-    for i in eachindex(cache.injective_primary_shards)
-        shard = cache.injective_primary_shards[i]
-        shard === nothing || empty!(shard)
-    end
-    fill!(cache.indicator_primary_shards, nothing)
-    Base.unlock(cache.lock)
     return nothing
 end
 
-const _ENCODING_POSET_KEY = Tuple{Tuple,Tuple{Vararg{Int}}}
+const _ENCODING_POSET_KEY = Tuple{Tuple,Tuple{Vararg{Int}},Symbol}
 const _ENCODING_CUBICAL_KEY = Tuple{Vararg{Int}}
 const _ENCODING_GEOMETRY_KEY = Tuple
 
@@ -684,7 +1016,7 @@ const _SESSION_ZN_PLAN_VALUE = NamedTuple{
 Per-encoding cache bucket for geometry/poset-derived artifacts.
 
 Intended contents:
-- `posets`: derived encoding posets (e.g. axes/orientation -> poset)
+- `posets`: derived encoding posets keyed by axes, orientation and representation
 - `cubical`: cubical cell structures keyed by grid size
 - `region_posets`: reconstructed region posets keyed by signature identities
 """

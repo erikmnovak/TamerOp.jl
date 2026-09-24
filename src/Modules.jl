@@ -1,7 +1,7 @@
 module Modules
 
 using SparseArrays, LinearAlgebra
-using ..CoreModules: QQ, AbstractCoeffField, QQField, PrimeField, RealField,
+using ..CoreModules: _TaskLocalCache, _task_local!, _task_local_context, _clear_task_local!, QQ, AbstractCoeffField, QQField, PrimeField, RealField,
     BackendMatrix, coeff_type, field_from_eltype, eye, coerce
 using ..Options: ModuleOptions
 import ..CoreModules: change_field, _append_scaled_triplets!
@@ -14,13 +14,16 @@ import ..FiniteFringe: AbstractPoset, FinitePoset, cover_edges, leq, nvertices,
 import ..FieldLinAlg
 import Base.Threads
 
-const MAP_LEQ_MEMO_MAX_PER_THREAD = Ref(200_000)
+const MAP_LEQ_MEMO_MAX_PER_TASK = Ref(200_000)
 const MAP_LEQ_DENSE_MEMO_MIN_ENTRIES = Ref(4_096)
-const MAP_LEQ_DENSE_MEMO_MAX_ENTRIES_PER_THREAD = Ref(500_000)
+const MAP_LEQ_DENSE_MEMO_MAX_ENTRIES_PER_TASK = Ref(500_000)
 const MAP_LEQ_SLOT_DENSE_MIN_ENTRIES = Ref(4_096)
-const MAP_LEQ_SLOT_DENSE_MAX_ENTRIES_PER_THREAD = Ref(1_000_000)
+const MAP_LEQ_SLOT_DENSE_MAX_ENTRIES_PER_TASK = Ref(1_000_000)
 const MAP_LEQ_MANY_PLAN_MIN_LEN = Ref(128)
-const MAP_LEQ_MANY_PLAN_MAX_PER_THREAD = Ref(128)
+# Acquiring the complete batch state does not amortize for 1-4 queries.
+# Keep this small scalar route inspectable for parity and measurement.
+const _MAP_LEQ_BATCH_VALUES_MIN_LEN = Ref(5)
+const MAP_LEQ_MANY_PLAN_MAX_PER_TASK = Ref(128)
 const MAP_LEQ_MANY_ONEOFF_LONG_MIN_LEN = Ref(128)
 const MAP_LEQ_MANY_ONEOFF_LONG_MIN_LONG = Ref(64)
 const MAP_LEQ_MANY_ONEOFF_MIN_OVERLAP_QQ = Ref(0.28)
@@ -278,7 +281,7 @@ function CoverEdgeMapStore{K,MatT}(
         end
     end
 
-    nedges = sum(length, succs)
+    nedges = sum(length, succs; init=0)
     return CoverEdgeMapStore{K,MatT}(preds, succs, maps_from_pred, maps_to_succ, nedges)
 end
 
@@ -334,6 +337,7 @@ mutable struct MapLeqScratch{K}
     pool2::Vector{Matrix{K}}
     qq_nemo_owner::Any
     qq_nemo_edge::IdDict{Any,Any}
+    in_use::Bool
 end
 
 const _MAP_LEQ_BATCH_ID_COUNTER = Threads.Atomic{UInt}(UInt(1))
@@ -400,6 +404,7 @@ mutable struct _MapLeqManyPlanArena
     target_seen::BitVector
     tmp_chain::Vector{Int}
     tmp_slots::Vector{Int}
+    in_use::Bool
 end
 
 struct _MapComposeDenseMemo{MatT}
@@ -423,11 +428,11 @@ struct _DirectSumEdgeStats
 end
 
 mutable struct _MapLeqLastPairCache{MatT}
-    seen::BitVector
-    us::Vector{Int}
-    vs::Vector{Int}
-    promoted::BitVector
-    vals::Vector{MatT}
+    seen::Bool
+    u::Int
+    v::Int
+    promoted::Bool
+    value::MatT
 end
 
 struct _MapLeqManyBatchPlanEntry
@@ -484,17 +489,17 @@ struct PModule{K,F<:AbstractCoeffField,MatT<:AbstractMatrix{K},QT<:AbstractPoset
     dims::Vector{Int}
     edge_maps::CoverEdgeMapStore{K,MatT}
     direct_sum_stats::_DirectSumEdgeStats
-    map_compose::Vector{Dict{UInt64, MatT}}
-    map_compose_dense::Union{Nothing,Vector{_MapComposeDenseMemo{MatT}}}
-    map_pred_slot::Vector{Dict{UInt64, Int}}
-    map_pred_slot_dense::Union{Nothing,Vector{_MapPredSlotDenseMemo}}
-    map_many_plan::Vector{Dict{UInt64,_MapLeqManyPlan}}
-    map_many_batch_plan::Vector{Dict{UInt64,_MapLeqManyBatchPlanEntry}}
-    map_many_batch_last::Vector{Union{Nothing,_MapLeqManyBatchPlanEntry}}
-    map_many_plan_arena::Vector{_MapLeqManyPlanArena}
-    map_scratch::Vector{MapLeqScratch{K}}
-    identity_compose::Vector{Dict{Int, MatT}}
-    map_last_pair::_MapLeqLastPairCache{MatT}
+    map_compose::_TaskLocalCache{Dict{UInt64, MatT}}
+    map_compose_dense::Union{Nothing,_TaskLocalCache{_MapComposeDenseMemo{MatT}}}
+    map_pred_slot::_TaskLocalCache{Dict{UInt64, Int}}
+    map_pred_slot_dense::Union{Nothing,_TaskLocalCache{_MapPredSlotDenseMemo}}
+    map_many_plan::_TaskLocalCache{Dict{UInt64,_MapLeqManyPlan}}
+    map_many_batch_plan::_TaskLocalCache{Dict{UInt64,_MapLeqManyBatchPlanEntry}}
+    map_many_batch_last::_TaskLocalCache{Base.RefValue{Union{Nothing,_MapLeqManyBatchPlanEntry}}}
+    map_many_plan_arena::_TaskLocalCache{_MapLeqManyPlanArena}
+    map_scratch::_TaskLocalCache{MapLeqScratch{K}}
+    identity_compose::_TaskLocalCache{Dict{Int, MatT}}
+    map_last_pair::_TaskLocalCache{_MapLeqLastPairCache{MatT}}
 end
 
 # choose a storage matrix type from a user-provided mapping
@@ -533,104 +538,36 @@ end
     return Matrix{K}
 end
 
-@inline function _new_map_leq_memo(::Type{MatT}) where {MatT}
-    nt = max(1, Threads.maxthreadid())
-    return [Dict{UInt64, MatT}() for _ in 1:nt]
-end
+@inline _new_map_leq_memo(::Type{MatT}) where {MatT} = _TaskLocalCache{Dict{UInt64,MatT}}()
 
 @inline function _new_map_leq_dense_memo(::Type{MatT}, n::Int) where {MatT}
-    dense_entries = n * n
-    use_dense = dense_entries >= MAP_LEQ_DENSE_MEMO_MIN_ENTRIES[] &&
-                dense_entries <= MAP_LEQ_DENSE_MEMO_MAX_ENTRIES_PER_THREAD[]
-    use_dense || return nothing
-    nt = max(1, Threads.maxthreadid())
-    return [_MapComposeDenseMemo{MatT}(falses(dense_entries), Vector{MatT}(undef, dense_entries), n)
-            for _ in 1:nt]
+    entries = n * n
+    use_dense = MAP_LEQ_DENSE_MEMO_MIN_ENTRIES[] <= entries <= MAP_LEQ_DENSE_MEMO_MAX_ENTRIES_PER_TASK[]
+    return use_dense ? _TaskLocalCache{_MapComposeDenseMemo{MatT}}() : nothing
 end
 
-@inline function _new_map_leq_many_plan_cache()
-    nt = max(1, Threads.maxthreadid())
-    return [Dict{UInt64,_MapLeqManyPlan}() for _ in 1:nt]
-end
-
-@inline function _new_map_pred_slot_memo()
-    nt = max(1, Threads.maxthreadid())
-    return [Dict{UInt64, Int}() for _ in 1:nt]
-end
+@inline _new_map_leq_many_plan_cache() = _TaskLocalCache{Dict{UInt64,_MapLeqManyPlan}}()
+@inline _new_map_pred_slot_memo() = _TaskLocalCache{Dict{UInt64,Int}}()
 
 @inline function _new_map_pred_slot_dense_memo(n::Int)
-    dense_entries = n * n
-    use_dense = dense_entries >= MAP_LEQ_SLOT_DENSE_MIN_ENTRIES[] &&
-                dense_entries <= MAP_LEQ_SLOT_DENSE_MAX_ENTRIES_PER_THREAD[]
-    use_dense || return nothing
-    nt = max(1, Threads.maxthreadid())
-    return [_MapPredSlotDenseMemo(falses(dense_entries), zeros(Int, dense_entries), n)
-            for _ in 1:nt]
+    entries = n * n
+    use_dense = MAP_LEQ_SLOT_DENSE_MIN_ENTRIES[] <= entries <= MAP_LEQ_SLOT_DENSE_MAX_ENTRIES_PER_TASK[]
+    return use_dense ? _TaskLocalCache{_MapPredSlotDenseMemo}() : nothing
 end
 
-@inline function _new_map_leq_many_batch_plan_cache()
-    nt = max(1, Threads.maxthreadid())
-    return [Dict{UInt64,_MapLeqManyBatchPlanEntry}() for _ in 1:nt]
+@inline _new_map_leq_many_batch_plan_cache() = _TaskLocalCache{Dict{UInt64,_MapLeqManyBatchPlanEntry}}()
+@inline _new_map_leq_many_batch_last_cache() = _TaskLocalCache{Base.RefValue{Union{Nothing,_MapLeqManyBatchPlanEntry}}}()
+@inline _new_map_leq_many_plan_arena() = _TaskLocalCache{_MapLeqManyPlanArena}()
+
+@noinline function _new_map_leq_many_plan_arena_value()
+    return _MapLeqManyPlanArena(UInt8[], Int[], Int[], Int[], Int[], Int[], Int[],
+        Int[], Int[], Int[], Int[], Int[], Int[], Int[], Int[], Int[], Int[],
+        falses(0), Int[], Int[], false)
 end
 
-@inline function _new_map_leq_many_batch_last_cache()
-    nt = max(1, Threads.maxthreadid())
-    v = Vector{Union{Nothing,_MapLeqManyBatchPlanEntry}}(undef, nt)
-    fill!(v, nothing)
-    return v
-end
-
-@inline function _new_map_leq_many_plan_arena()
-    nt = max(1, Threads.maxthreadid())
-    return [_MapLeqManyPlanArena(
-                UInt8[],
-                Int[],
-                Int[],
-                Int[],
-                Int[],
-                Int[],
-                Int[],
-                Int[],
-                Int[],
-                Int[],
-                Int[],
-                Int[],
-                Int[],
-                Int[],
-                Int[],
-                Int[],
-                Int[],
-                falses(0),
-                Int[],
-                Int[],
-            ) for _ in 1:nt]
-end
-
-@inline function _new_map_leq_scratch(::Type{K}) where {K}
-    nt = max(1, Threads.maxthreadid())
-    return [MapLeqScratch{K}(Matrix{K}(undef, 0, 0), Matrix{K}(undef, 0, 0),
-                             Matrix{K}[], Matrix{K}[], nothing, IdDict{Any,Any}())
-            for _ in 1:nt]
-end
-
-@inline function _new_identity_compose(::Type{MatT}) where {MatT}
-    nt = max(1, Threads.maxthreadid())
-    return [Dict{Int, MatT}() for _ in 1:nt]
-end
-
-@inline function _new_map_leq_last_pair_cache(::Type{K}, ::Type{MatT}) where {K,MatT}
-    nt = max(1, Threads.maxthreadid())
-    seen = falses(nt)
-    promoted = falses(nt)
-    us = zeros(Int, nt)
-    vs = zeros(Int, nt)
-    vals = Vector{MatT}(undef, nt)
-    empty_map = _zero_edge_map(MatT, K, 0, 0)
-    @inbounds for i in 1:nt
-        vals[i] = empty_map
-    end
-    return _MapLeqLastPairCache{MatT}(seen, us, vs, promoted, vals)
-end
+@inline _new_map_leq_scratch(::Type{K}) where {K} = _TaskLocalCache{MapLeqScratch{K}}()
+@inline _new_identity_compose(::Type{MatT}) where {MatT} = _TaskLocalCache{Dict{Int,MatT}}()
+@inline _new_map_leq_last_pair_cache(::Type{K}, ::Type{MatT}) where {K,MatT} = _TaskLocalCache{_MapLeqLastPairCache{MatT}}()
 
 @inline function _edge_nnz_count(::Type{MatT}, A::AbstractMatrix{K}) where {K,MatT}
     if MatT <: SparseMatrixCSC
@@ -664,23 +601,54 @@ function _build_direct_sum_edge_stats(dims::Vector{Int}, store::CoverEdgeMapStor
     return _DirectSumEdgeStats(n_edges, total_entries, total_nnz, sum_dom, sum_cod)
 end
 
+@inline function _module_cover_cache(Q::AbstractPoset, cache)
+    cache === nothing && return nothing
+    cache isa CoverCache || throw(ArgumentError("ModuleOptions.cache must be nothing or a CoverCache."))
+    cache.Q === Q || throw(ArgumentError("The CoverCache must belong to the module's poset."))
+    return cache
+end
+
+@inline function _module_constructor_options(Q::AbstractPoset, dims, check_sizes::Bool,
+                                              opts::ModuleOptions)
+    if opts != ModuleOptions()
+        check_sizes == true || error("PModule: pass either check_sizes or opts, not both.")
+        check_sizes = opts.check_sizes
+    end
+    cache = _module_cover_cache(Q, opts.cache)
+    if check_sizes
+        length(dims) == nvertices(Q) || throw(ArgumentError("PModule: need one dimension per poset vertex."))
+        all(d -> d >= 0, dims) || throw(ArgumentError("PModule: dimensions must be nonnegative."))
+    end
+    return check_sizes, cache
+end
+
+@inline function _module_query_cache(Q::AbstractPoset, cache, opts::ModuleOptions)
+    if opts != ModuleOptions()
+        cache === nothing || error("Module query: pass either cache or opts, not both.")
+        cache = opts.cache
+    end
+    opts.check_sizes || throw(ArgumentError(
+        "ModuleOptions(check_sizes=false) is only supported by PModule constructors; queries always validate their inputs."))
+    return _module_cover_cache(Q, cache)
+end
+
 """
-    PModule{K}(Q, dims, edge_maps; check_sizes=true)
+    PModule{K}(Q, dims, edge_maps; check_sizes=true, opts=ModuleOptions())
 
 Construct a `PModule` over coefficient type `K`. `edge_maps` may be a dict or
 any mapping supporting `(u,v)` keys. Missing cover maps become zero maps.
+`opts.cache` can reuse a `CoverCache` belonging to `Q`. The trusted-input
+`check_sizes=false` opt-out applies to construction, including an existing map
+store; structure-map queries retain their index and comparability checks.
 """
 function PModule{K}(Q::AbstractPoset, dims::Vector{Int}, edge_maps;
                     check_sizes::Bool=true,
                     opts::ModuleOptions=ModuleOptions(),
                     field::AbstractCoeffField=field_from_eltype(K)) where {K}
-    if opts != ModuleOptions()
-        check_sizes == true || error("PModule: pass either check_sizes or opts, not both.")
-        check_sizes = opts.check_sizes
-    end
+    check_sizes, cache = _module_constructor_options(Q, dims, check_sizes, opts)
     coeff_type(field) == K || error("PModule: coeff_type(field) != K")
     MatT = _pmodule_mat_type(K, edge_maps, field)
-    store = CoverEdgeMapStore{K,MatT}(Q, dims, edge_maps; check_sizes=check_sizes)
+    store = CoverEdgeMapStore{K,MatT}(Q, dims, edge_maps; cache=cache, check_sizes=check_sizes)
     ds_stats = _build_direct_sum_edge_stats(dims, store)
     QT = typeof(Q)
     return PModule{K, typeof(field), MatT, QT}(field, Q, dims, store, ds_stats,
@@ -702,23 +670,22 @@ function PModule{K}(Q::AbstractPoset, dims::Vector{Int}, store::CoverEdgeMapStor
                     check_sizes::Bool=true,
                     opts::ModuleOptions=ModuleOptions(),
                     field::AbstractCoeffField=field_from_eltype(K)) where {K,MatT<:AbstractMatrix{K}}
-    if opts != ModuleOptions()
-        check_sizes == true || error("PModule: pass either check_sizes or opts, not both.")
-        check_sizes = opts.check_sizes
-    end
-    cc = _get_cover_cache(Q)
+    check_sizes, cache = _module_constructor_options(Q, dims, check_sizes, opts)
+    cc = cache === nothing ? _get_cover_cache(Q) : cache
     if MatT == Matrix{K} && _should_backendize_maps(field, store)
         dense_edge = Dict{Tuple{Int,Int}, Matrix{K}}()
         sizehint!(dense_edge, length(store))
         for ((u, v), A) in store
             dense_edge[(u, v)] = Matrix{K}(A)
         end
-        return PModule{K}(Q, dims, dense_edge; check_sizes=check_sizes, field=field)
+        return PModule{K}(Q, dims, dense_edge;
+                         opts=ModuleOptions(check_sizes=check_sizes, cache=cc), field=field)
     end
     if length(store.preds) == nvertices(Q) && length(store.succs) == nvertices(Q) &&
        all(store.preds[v] == _preds(cc, v) for v in 1:nvertices(Q)) &&
        all(store.succs[u] == _succs(cc, u) for u in 1:nvertices(Q))
         coeff_type(field) == K || error("PModule: coeff_type(field) != K")
+        CoverEdgeMapStore{K,MatT}(Q, dims, store; cache=cc, check_sizes=check_sizes)
         ds_stats = _build_direct_sum_edge_stats(dims, store)
         QT = typeof(Q)
         return PModule{K, typeof(field), MatT, QT}(field, Q, dims, store, ds_stats,
@@ -757,12 +724,9 @@ function PModule(Q::AbstractPoset, dims::Vector{Int}, edge_maps;
                  check_sizes::Bool=true,
                  opts::ModuleOptions=ModuleOptions(),
                  field::Union{AbstractCoeffField,Nothing}=nothing)
-    if opts != ModuleOptions()
-        check_sizes == true || error("PModule: pass either check_sizes or opts, not both.")
-        check_sizes = opts.check_sizes
-    end
     for (_, A) in edge_maps
         return PModule{eltype(A)}(Q, dims, edge_maps; check_sizes=check_sizes,
+                                  opts=opts,
                                   field=field === nothing ? field_from_eltype(eltype(A)) : field)
     end
     error("Cannot infer coefficient type K from empty edge_maps; use PModule{K}(...)")
@@ -938,14 +902,13 @@ end
 end
 
 @inline function _pmodule_describe(M::PModule)
-    dims = _pmodule_dimensions(M)
     return (
         kind = :pmodule,
         field = _module_field_label(M.field),
-        vertices = dims.vertices,
-        total_dimension = dims.total,
-        maximum_stalk = dims.maximum_stalk,
-        edge_count = dims.edges,
+        vertices = nvertices(M.Q),
+        total_dimension = sum(M.dims),
+        maximum_stalk = isempty(M.dims) ? 0 : maximum(M.dims),
+        edge_count = length(M.edge_maps),
         poset_type = nameof(typeof(M.Q)),
     )
 end
@@ -960,14 +923,13 @@ end
 end
 
 @inline function _pmorphism_describe(f)
-    dims = _pmorphism_dimensions(f)
     return (
         kind = :pmorphism,
         field = _module_field_label(f.dom.field),
-        vertices = dims.vertices,
-        domain_total_dimension = sum(dims.domain),
-        codomain_total_dimension = sum(dims.codomain),
-        nonzero_components = dims.nonzero_components,
+        vertices = length(f.comps),
+        domain_total_dimension = sum(f.dom.dims),
+        codomain_total_dimension = sum(f.cod.dims),
+        nonzero_components = _module_nonzero_components(f.comps),
     )
 end
 
@@ -1164,10 +1126,97 @@ function _coerce_matrix(field::AbstractCoeffField, A::AbstractMatrix{K}) where {
     return M
 end
 
+# Coefficient reinterpretation is not generally induced by a field
+# homomorphism. Certify its defining relations in the target coefficient field.
+# Real relations use max-entry norms and the supplied field tolerances; reject
+# nonfinite entries before comparisons (Inf <= Inf would otherwise pass).
+@inline _coefficient_relation_equal(::AbstractCoeffField, A, B) = A == B
+function _coefficient_relation_equal(field::RealField, A, B)
+    size(A) == size(B) || return false
+    scale = zero(field.atol)
+    residual = zero(field.atol)
+    for (a, b) in zip(A, B)
+        (isfinite(a) && isfinite(b)) || return false
+        scale = max(scale, abs(a), abs(b))
+        residual = max(residual, abs(a - b))
+    end
+    isfinite(residual) || return false
+    return residual <= field.atol + field.rtol * scale
+end
+
+@inline _coefficient_products_equal(field::AbstractCoeffField, A, B, C, D) =
+    _coefficient_relation_equal(field, A * B, C * D)
+
+function _coefficient_products_equal(field::RealField, A, B, C, D)
+    left, right = A * B, C * D
+    size(left) == size(right) || return false
+    for matrix in (A, B, C, D, left, right)
+        all(isfinite, matrix) || return false
+    end
+    # Include operand scales: products that nearly cancel to zero still have
+    # roundoff proportional to the original multiplication, not its residual.
+    left_scale = size(A,2) * maximum(abs,A;init=zero(field.atol)) * maximum(abs,B;init=zero(field.atol))
+    right_scale = size(C,2) * maximum(abs,C;init=zero(field.atol)) * maximum(abs,D;init=zero(field.atol))
+    scale = max(left_scale,right_scale)
+    isfinite(scale) || return false
+    residual = maximum(abs,left-right;init=zero(field.atol))
+    isfinite(residual) || return false
+    return residual <= field.atol + field.rtol * scale
+end
+
+@inline _coefficient_product_zero(::AbstractCoeffField, A, B) = iszero(A * B)
+
+function _coefficient_product_zero(field::RealField, A, B)
+    product = A * B
+    all(isfinite, A) && all(isfinite, B) && all(isfinite, product) || return false
+    scale = size(A, 2) * maximum(abs, A; init=zero(field.atol)) *
+            maximum(abs, B; init=zero(field.atol))
+    isfinite(scale) || return false
+    residual = maximum(abs, product; init=zero(field.atol))
+    return residual <= field.atol + field.rtol * scale
+end
+
+function _check_coefficient_functoriality(M::PModule)
+    field = M.field
+    for (_, A) in M.edge_maps
+        _coefficient_relation_equal(field, A, A) ||
+            throw(ArgumentError("change_field: converted structure maps contain nonfinite values."))
+    end
+    # All factorizations u->v->w with v a cover predecessor of w must agree.
+    # Induction on path length proves independence of every cover path; this
+    # checks arbitrary merge shapes, not only four-vertex diamonds.
+    cc = _get_cover_cache(M.Q)
+    for w in 1:nvertices(M.Q)
+        predecessors = _preds(cc,w)
+        length(predecessors) > 1 || continue
+        for u in 1:nvertices(M.Q)
+            (u != w && leq(M.Q,u,w)) || continue
+            reference = 0
+            for v in predecessors
+                leq(M.Q,u,v) || continue
+                if reference == 0
+                    reference = v
+                    continue
+                end
+                _coefficient_products_equal(field,
+                    M.edge_maps[reference,w],map_leq(M,u,reference),
+                    M.edge_maps[v,w],map_leq(M,u,v)) ||
+                    throw(ArgumentError("change_field: coefficient reinterpretation breaks path independence from $u to $w through $v; recompute the module over the requested field."))
+            end
+        end
+    end
+    return M
+end
+
 """
     change_field(M, field)
 
-Return a P-module obtained by coercing all structure maps into `field`.
+Coerce the stored structure matrices into `field` and verify path independence
+in the target field. This is a matrix reinterpretation, not an assertion that
+homology or other constructions commute with coefficient change. Incompatible
+relations and nonfinite target maps throw `ArgumentError`. For `RealField`,
+relations use its configured absolute tolerance and a relative max-entry
+multiplication bound from the factors.
 """
 function change_field(M::PModule{K}, field::AbstractCoeffField) where {K}
     K2 = coeff_type(field)
@@ -1176,7 +1225,7 @@ function change_field(M::PModule{K}, field::AbstractCoeffField) where {K}
     for ((u, v), A) in M.edge_maps
         edge[(u, v)] = _coerce_matrix(field, A)
     end
-    return PModule{K2}(M.Q, M.dims, edge; field=field)
+    return _check_coefficient_functoriality(PModule{K2}(M.Q, copy(M.dims), edge; field=field))
 end
 
 """
@@ -1478,20 +1527,32 @@ function Base.show(io::IO, ::MIME"text/plain", f::PMorphism)
           "  nonzero components: ", d.nonzero_components)
 end
 
+function _coerce_morphism_on_modules(f::PMorphism, dom::PModule{K}, cod::PModule{K}) where {K}
+    comps = Matrix{K}[_coerce_matrix(dom.field, A) for A in f.comps]
+    out = PMorphism(dom, cod, comps)
+    for A in out.comps
+        _coefficient_relation_equal(dom.field, A, A) ||
+            throw(ArgumentError("change_field: converted morphism components contain nonfinite values."))
+    end
+    for (u, v) in cover_edges(dom.Q)
+        _coefficient_products_equal(dom.field,
+            cod.edge_maps[u, v],out.comps[u],out.comps[v],dom.edge_maps[u, v]) ||
+            throw(ArgumentError("change_field: coefficient reinterpretation breaks morphism naturality on cover $u -> $v."))
+    end
+    return out
+end
+
 """
     change_field(f, field)
 
-Return a PMorphism obtained by coercing domain, codomain, and components into `field`.
+Coerce domain, codomain and components into `field`, checking the resulting
+module relations and morphism naturality in that field. Invalid reinterpretations
+throw `ArgumentError`; `RealField` uses its configured relation tolerances.
 """
-function change_field(f::PMorphism{K}, field::AbstractCoeffField) where {K}
-    dom2 = change_field(f.dom, field)
-    cod2 = change_field(f.cod, field)
-    K2 = coeff_type(field)
-    comps2 = Vector{Matrix{K2}}(undef, length(f.comps))
-    @inbounds for i in 1:length(f.comps)
-        comps2[i] = _coerce_matrix(field, f.comps[i])
-    end
-    return PMorphism{K2, typeof(field)}(dom2, cod2, comps2)
+function change_field(f::PMorphism, field::AbstractCoeffField)
+    dom = change_field(f.dom, field)
+    cod = f.cod === f.dom ? dom : change_field(f.cod, field)
+    return _coerce_morphism_on_modules(f, dom, cod)
 end
 
 "Identity morphism."
@@ -1500,137 +1561,175 @@ id_morphism(M::PModule{K,F}) where {K,F} =
 
 @inline _map_leq_key(u::Int, v::Int)::UInt64 = _pairkey(u, v)
 
-@inline function _thread_slot(n::Int)::Int
-    return min(n, max(1, Threads.threadid()))
-end
+@inline _map_leq_memo_dict(M::PModule{K,F,MatT}, context=_task_local_context()) where {K,F,MatT} =
+    _task_local!(Dict{UInt64,MatT}, M.map_compose, context)
 
-@inline function _map_leq_memo_dict(M::PModule{K,F,MatT}) where {K,F,MatT}
-    return M.map_compose[_thread_slot(length(M.map_compose))]
-end
-
-@inline function _map_leq_memo_dense(M::PModule{K,F,MatT}) where {K,F,MatT}
-    d = M.map_compose_dense
-    d === nothing && return nothing
-    return d[_thread_slot(length(d))]
-end
-
-@inline function _map_leq_many_plan_dict(M::PModule)
-    return M.map_many_plan[_thread_slot(length(M.map_many_plan))]
-end
-
-@inline function _map_leq_pred_slot_dict(M::PModule)
-    return M.map_pred_slot[_thread_slot(length(M.map_pred_slot))]
-end
-
-@inline function _map_leq_pred_slot_dense(M::PModule)
-    d = M.map_pred_slot_dense
-    d === nothing && return nothing
-    return d[_thread_slot(length(d))]
-end
-
-@inline function _map_leq_many_batch_plan_dict(M::PModule)
-    return M.map_many_batch_plan[_thread_slot(length(M.map_many_batch_plan))]
-end
-
-@inline function _map_leq_many_plan_arena(M::PModule)
-    return M.map_many_plan_arena[_thread_slot(length(M.map_many_plan_arena))]
-end
-
-@inline function _map_leq_scratch(M::PModule{K}) where {K}
-    return M.map_scratch[_thread_slot(length(M.map_scratch))]
-end
-
-@inline function _identity_compose_dict(M::PModule{K,F,MatT}) where {K,F,MatT}
-    return M.identity_compose[_thread_slot(length(M.identity_compose))]
-end
-
-@inline function _map_leq_memo_get(M::PModule{K,F,MatT}, u::Int, v::Int) where {K,F,MatT}
-    dense = _map_leq_memo_dense(M)
-    if dense !== nothing
-        @inbounds idx = (u - 1) * dense.n + v
-        if dense.seen[idx]
-            return dense.vals[idx]
-        end
-        return nothing
+@inline function _map_leq_memo_dense(M::PModule{K,F,MatT}, context=_task_local_context()) where {K,F,MatT}
+    M.map_compose_dense === nothing && return nothing
+    return _task_local!(M.map_compose_dense, context) do
+        n = nvertices(M.Q)
+        _MapComposeDenseMemo{MatT}(falses(n*n), Vector{MatT}(undef, n*n), n)
     end
-
-    memo = _map_leq_memo_dict(M)
-    A = get(memo, _map_leq_key(u, v), nothing)
-    A === nothing && return nothing
-    return A::MatT
 end
 
-@inline function _map_leq_memo_set!(M::PModule{K,F,MatT}, u::Int, v::Int, A) where {K,F,MatT}
-    dense = _map_leq_memo_dense(M)
-    if dense !== nothing
-        @inbounds idx = (u - 1) * dense.n + v
-        Atyped = A isa MatT ? A : convert(MatT, A)
-        dense.vals[idx] = Atyped
-        dense.seen[idx] = true
-        return Atyped
-    end
+@inline _map_leq_many_plan_dict(M::PModule, context=_task_local_context()) = _task_local!(Dict{UInt64,_MapLeqManyPlan}, M.map_many_plan, context)
+@inline _map_leq_pred_slot_dict(M::PModule, context=_task_local_context()) = _task_local!(Dict{UInt64,Int}, M.map_pred_slot, context)
 
-    memo = _map_leq_memo_dict(M)
-    if length(memo) >= MAP_LEQ_MEMO_MAX_PER_THREAD[]
-        empty!(memo)
+@inline function _map_leq_pred_slot_dense(M::PModule, context=_task_local_context())
+    M.map_pred_slot_dense === nothing && return nothing
+    return _task_local!(M.map_pred_slot_dense, context) do
+        n = nvertices(M.Q)
+        _MapPredSlotDenseMemo(falses(n*n), zeros(Int, n*n), n)
     end
-    Atyped = A isa MatT ? A : convert(MatT, A)
-    memo[_map_leq_key(u, v)] = Atyped
-    return Atyped
 end
 
-@inline function _map_leq_pred_slot_get(M::PModule, u::Int, v::Int)::Int
-    dense = _map_leq_pred_slot_dense(M)
-    if dense !== nothing
-        @inbounds idx = (u - 1) * dense.n + v
-        return dense.seen[idx] ? dense.vals[idx] : 0
+@inline _map_leq_many_batch_plan_dict(M::PModule, context=_task_local_context()) =
+    _task_local!(Dict{UInt64,_MapLeqManyBatchPlanEntry}, M.map_many_batch_plan, context)
+@inline _map_leq_many_plan_arena(M::PModule, context=_task_local_context()) =
+    _task_local!(_new_map_leq_many_plan_arena_value, M.map_many_plan_arena, context)
+
+@inline function _map_leq_scratch(M::PModule{K}, context=_task_local_context()) where {K}
+    return _task_local!(M.map_scratch, context) do
+        _new_map_leq_scratch_value(K)
     end
-    return get(_map_leq_pred_slot_dict(M), _map_leq_key(u, v), 0)
 end
 
-@inline function _map_leq_pred_slot_set!(M::PModule, u::Int, v::Int, slot::Int)::Int
-    dense = _map_leq_pred_slot_dense(M)
-    if dense !== nothing
-        @inbounds idx = (u - 1) * dense.n + v
-        dense.vals[idx] = slot
-        dense.seen[idx] = true
-        return slot
+@inline _identity_compose_dict(M::PModule{K,F,MatT}, context=_task_local_context()) where {K,F,MatT} =
+    _task_local!(Dict{Int,MatT}, M.identity_compose, context)
+
+@inline function _map_leq_last_pair_cache(M::PModule{K,F,MatT}, context=_task_local_context()) where {K,F,MatT}
+    return _task_local!(M.map_last_pair, context) do
+        _MapLeqLastPairCache{MatT}(false, 0, 0, false, _zero_edge_map(MatT, K, 0, 0))
     end
-    _map_leq_pred_slot_dict(M)[_map_leq_key(u, v)] = slot
+end
+
+@inline _map_leq_many_batch_last(M::PModule, context=_task_local_context()) = _task_local!(M.map_many_batch_last, context) do
+    Ref{Union{Nothing,_MapLeqManyBatchPlanEntry}}(nothing)
+end
+
+# Batch calls keep actual task-owned values, not a TLS context, across the inner
+# loop. A clear detaches these values; finishing the old call never populates the
+# replacement epoch. Mutable scratch is leased so nested callbacks cannot reuse it.
+@inline function _map_leq_memo(M::PModule, context=_task_local_context())
+    dense = _map_leq_memo_dense(M, context)
+    return dense === nothing ? _map_leq_memo_dict(M, context) : dense
+end
+@inline function _map_leq_pred_memo(M::PModule, context=_task_local_context())
+    dense = _map_leq_pred_slot_dense(M, context)
+    return dense === nothing ? _map_leq_pred_slot_dict(M, context) : dense
+end
+@inline function _map_leq_parent_memo(cc::CoverCache, context=_task_local_context())
+    dense = _chain_parent_dense(cc, context)
+    return dense === nothing ? _chain_parent_dict(cc, context) : dense
+end
+
+@inline _map_leq_memo_get(M::PModule, u::Int, v::Int) = _map_leq_memo_get(_map_leq_memo(M), u, v)
+@inline _map_leq_memo_get(memo::Dict{UInt64,T}, u::Int, v::Int) where {T} = get(memo, _map_leq_key(u,v), nothing)
+@inline function _map_leq_memo_get(memo::_MapComposeDenseMemo, u::Int, v::Int)
+    idx = (u-1)*memo.n + v
+    @inbounds return memo.seen[idx] ? memo.vals[idx] : nothing
+end
+@inline _map_leq_memo_set!(M::PModule, u::Int, v::Int, A) = _map_leq_memo_set!(_map_leq_memo(M), u, v, A)
+@inline function _map_leq_memo_set!(memo::Dict{UInt64,T}, u::Int, v::Int, A) where {T}
+    length(memo) >= MAP_LEQ_MEMO_MAX_PER_TASK[] && empty!(memo)
+    value = A isa T ? A : convert(T,A)
+    memo[_map_leq_key(u,v)] = value
+    return value
+end
+@inline function _map_leq_memo_set!(memo::_MapComposeDenseMemo{T}, u::Int, v::Int, A) where {T}
+    idx = (u-1)*memo.n + v
+    value = A isa T ? A : convert(T,A)
+    @inbounds memo.vals[idx] = value
+    @inbounds memo.seen[idx] = true
+    return value
+end
+@inline _map_leq_pred_slot_get(M::PModule, u::Int,v::Int) = _map_leq_pred_slot_get(_map_leq_pred_memo(M),u,v)
+@inline _map_leq_pred_slot_get(memo::Dict{UInt64,Int},u::Int,v::Int) = get(memo,_map_leq_key(u,v),0)
+@inline function _map_leq_pred_slot_get(memo::_MapPredSlotDenseMemo,u::Int,v::Int)
+    idx=(u-1)*memo.n+v
+    @inbounds return memo.seen[idx] ? memo.vals[idx] : 0
+end
+@inline _map_leq_pred_slot_set!(M::PModule,u::Int,v::Int,slot::Int) = _map_leq_pred_slot_set!(_map_leq_pred_memo(M),u,v,slot)
+@inline function _map_leq_pred_slot_set!(memo::Dict{UInt64,Int},u::Int,v::Int,slot::Int)
+    memo[_map_leq_key(u,v)] = slot
+    return slot
+end
+@inline function _map_leq_pred_slot_set!(memo::_MapPredSlotDenseMemo,u::Int,v::Int,slot::Int)
+    idx=(u-1)*memo.n+v
+    @inbounds memo.vals[idx]=slot
+    @inbounds memo.seen[idx]=true
     return slot
 end
 
-@inline function _map_leq_last_pair_get(M::PModule{K,F,MatT}, u::Int, v::Int) where {K,F,MatT}
-    c = M.map_last_pair
-    slot = _thread_slot(length(c.us))
-    @inbounds if c.seen[slot] && c.us[slot] == u && c.vs[slot] == v
-        A = c.vals[slot]
-        if !c.promoted[slot]
-            _map_leq_memo_set!(M, u, v, A)
-            c.promoted[slot] = true
+struct _MapLeqBatchValues{C,P,R,I,L,S}
+    compose::C
+    pred::P
+    parent::R
+    identities::I
+    last::L
+    scratch::S
+end
+@inline _map_leq_memo_get(values::_MapLeqBatchValues,u::Int,v::Int) = _map_leq_memo_get(values.compose,u,v)
+@inline _map_leq_memo_set!(values::_MapLeqBatchValues,u::Int,v::Int,A) = _map_leq_memo_set!(values.compose,u,v,A)
+@inline _map_leq_pred_slot_get(values::_MapLeqBatchValues,u::Int,v::Int) = _map_leq_pred_slot_get(values.pred,u,v)
+@inline _map_leq_pred_slot_set!(values::_MapLeqBatchValues,u::Int,v::Int,slot::Int) = _map_leq_pred_slot_set!(values.pred,u,v,slot)
+@inline _map_leq_scratch(values::_MapLeqBatchValues) = values.scratch
+
+@noinline function _new_map_leq_scratch_value(::Type{K}) where {K}
+    MapLeqScratch{K}(Matrix{K}(undef,0,0),Matrix{K}(undef,0,0),
+        Matrix{K}[],Matrix{K}[],nothing,IdDict{Any,Any}(),false)
+end
+@inline function _with_map_leq_batch(f::F, M::PModule{K}, cc::CoverCache) where {F,K}
+    context = _task_local_context()
+    scratch = _map_leq_scratch(M,context)
+    scratch.in_use && (scratch = _new_map_leq_scratch_value(K))
+    values = _MapLeqBatchValues(_map_leq_memo(M,context),_map_leq_pred_memo(M,context),
+        _map_leq_parent_memo(cc,context),_identity_compose_dict(M,context),
+        _map_leq_last_pair_cache(M,context),scratch)
+    scratch.in_use = true
+    try
+        return f(values)
+    finally
+        scratch.in_use = false
+    end
+end
+@inline function _with_map_leq_plan_arena(f::F, M::PModule) where {F}
+    arena = _map_leq_many_plan_arena(M)
+    arena.in_use && (arena = _new_map_leq_many_plan_arena_value())
+    arena.in_use = true
+    try
+        return f(arena)
+    finally
+        arena.in_use = false
+    end
+end
+
+@inline function _map_leq_last_pair_get(M::PModule{K,F,MatT}, u::Int, v::Int, values=M) where {K,F,MatT}
+    c = values === M ? _map_leq_last_pair_cache(M) : values.last
+    if c.seen && c.u == u && c.v == v
+        if !c.promoted
+            _map_leq_memo_set!(values, u, v, c.value)
+            c.promoted = true
         end
-        return A
+        return c.value
     end
     return nothing
 end
 
-@inline function _map_leq_last_pair_set!(M::PModule{K,F,MatT}, u::Int, v::Int, A) where {K,F,MatT}
-    c = M.map_last_pair
-    slot = _thread_slot(length(c.us))
+@inline function _map_leq_last_pair_set!(M::PModule{K,F,MatT}, u::Int, v::Int, A, values=M) where {K,F,MatT}
+    c = values === M ? _map_leq_last_pair_cache(M) : values.last
     Atyped = A isa MatT ? A : convert(MatT, A)
-    @inbounds begin
-        c.seen[slot] = true
-        c.us[slot] = u
-        c.vs[slot] = v
-        c.promoted[slot] = false
-        c.vals[slot] = Atyped
-    end
+    c.seen = true
+    c.u = u
+    c.v = v
+    c.promoted = false
+    c.value = Atyped
     return Atyped
 end
 
-@inline function _identity_map(M::PModule{K,F,MatT}, v::Int) where {K,F,MatT}
+@inline function _identity_map(M::PModule{K,F,MatT}, v::Int, values=M) where {K,F,MatT}
     d = M.dims[v]
-    memo = _identity_compose_dict(M)
+    memo = values === M ? _identity_compose_dict(M) : values.identities
     A = get(memo, d, nothing)
     if A === nothing
         Aeye = eye(M.field, d)
@@ -1642,35 +1741,18 @@ end
 end
 
 function _clear_map_leq_memo!(M::PModule)
-    for d in M.map_compose
-        empty!(d)
-    end
-    if M.map_compose_dense !== nothing
-        for d in M.map_compose_dense
-            fill!(d.seen, false)
-        end
-    end
-    for d in M.map_pred_slot
-        empty!(d)
-    end
-    if M.map_pred_slot_dense !== nothing
-        for d in M.map_pred_slot_dense
-            fill!(d.seen, false)
-        end
-    end
-    fill!(M.map_last_pair.seen, false)
-    fill!(M.map_last_pair.promoted, false)
+    _clear_task_local!(M.map_compose)
+    M.map_compose_dense === nothing || _clear_task_local!(M.map_compose_dense)
+    _clear_task_local!(M.map_pred_slot)
+    M.map_pred_slot_dense === nothing || _clear_task_local!(M.map_pred_slot_dense)
+    _clear_task_local!(M.map_last_pair)
     return nothing
 end
 
 function _clear_map_leq_many_plan_cache!(M::PModule)
-    for d in M.map_many_plan
-        empty!(d)
-    end
-    for d in M.map_many_batch_plan
-        empty!(d)
-    end
-    fill!(M.map_many_batch_last, nothing)
+    _clear_task_local!(M.map_many_plan)
+    _clear_task_local!(M.map_many_batch_plan)
+    _clear_task_local!(M.map_many_batch_last)
     return nothing
 end
 
@@ -1807,7 +1889,7 @@ function _fill_map_leq_many_plan_arena!(arena::_MapLeqManyPlanArena,
                                         M::PModule,
                                         pairs::AbstractVector{<:Tuple{Int,Int}},
                                         Q::AbstractPoset,
-                                        cc::CoverCache)
+                                        cc::CoverCache, values=M)
     m = length(pairs)
     kinds = arena.kinds
     us = arena.us
@@ -1867,7 +1949,7 @@ function _fill_map_leq_many_plan_arena!(arena::_MapLeqManyPlanArena,
             continue
         end
 
-        p = _chosen_predecessor(cc, u, v)
+        p, _ = _chosen_predecessor_with_slot(M, cc, u, v, values)
         if p == u
             kinds[i] = 0x01
             chain_ptr[i + 1] = chain_ptr[i]
@@ -1883,7 +1965,7 @@ function _fill_map_leq_many_plan_arena!(arena::_MapLeqManyPlanArena,
 
         kinds[i] = 0x03
         nlong += 1
-        _build_cover_chain_with_slots!(tmp_chain, tmp_slots, M, u, v, cc)
+        _build_cover_chain_with_slots!(tmp_chain, tmp_slots, M, u, v, cc, values)
         append!(chain_data, tmp_chain)
         push!(chain_slots, 0)
         append!(chain_slots, tmp_slots)
@@ -1913,8 +1995,8 @@ function _build_map_leq_many_plan(M::PModule,
                                   pairs::AbstractVector{<:Tuple{Int,Int}},
                                   Q::AbstractPoset,
                                   cc::CoverCache,
-                                  arena::_MapLeqManyPlanArena):: _MapLeqManyPlan
-    stats = _fill_map_leq_many_plan_arena!(arena, M, pairs, Q, cc)
+                                  arena::_MapLeqManyPlanArena, values):: _MapLeqManyPlan
+    stats = _fill_map_leq_many_plan_arena!(arena, M, pairs, Q, cc, values)
     return _copy_map_leq_many_plan(arena, stats)
 end
 
@@ -1932,31 +2014,13 @@ function _lookup_map_leq_many_plan(M::PModule,
 end
 
 function _get_or_build_map_leq_many_plan!(M::PModule,
-                                          pairs::AbstractVector{<:Tuple{Int,Int}},
-                                          Q::AbstractPoset,
-                                          cc::CoverCache)
-    plan = _lookup_map_leq_many_plan(M, pairs)
-    plan === nothing || return plan
-    length(pairs) >= MAP_LEQ_MANY_PLAN_MIN_LEN[] || return nothing
-    cache = _map_leq_many_plan_dict(M)
-    k = _map_leq_many_plan_key(pairs)
-    arena = _map_leq_many_plan_arena(M)
-    new_plan = _build_map_leq_many_plan(M, pairs, Q, cc, arena)
-    if length(cache) >= MAP_LEQ_MANY_PLAN_MAX_PER_THREAD[]
-        empty!(cache)
-    end
-    cache[k] = new_plan
-    return new_plan
-end
-
-function _get_or_build_map_leq_many_plan!(M::PModule,
                                           batch::MapLeqQueryBatch,
                                           Q::AbstractPoset,
-                                          cc::CoverCache)
+                                          cc::CoverCache, values)
     pairs = batch.pairs
     length(pairs) >= MAP_LEQ_MANY_PLAN_MIN_LEN[] || return nothing
-    slot = _thread_slot(length(M.map_many_batch_last))
-    last = M.map_many_batch_last[slot]
+    last_ref = _map_leq_many_batch_last(M)
+    last = last_ref[]
     if last !== nothing
         e = last::_MapLeqManyBatchPlanEntry
         if e.batch === batch
@@ -1972,31 +2036,31 @@ function _get_or_build_map_leq_many_plan!(M::PModule,
         e = entry::_MapLeqManyBatchPlanEntry
         if e.batch === batch
             e.plan.warmed = true
-            M.map_many_batch_last[slot] = e
+            last_ref[] = e
             return e.plan
         end
     end
 
-    arena = _map_leq_many_plan_arena(M)
-    new_plan = _build_map_leq_many_plan(M, pairs, Q, cc, arena)
-    if length(cache) >= MAP_LEQ_MANY_PLAN_MAX_PER_THREAD[]
+    new_plan = _with_map_leq_plan_arena(M) do arena
+        _build_map_leq_many_plan(M, pairs, Q, cc, arena, values)
+    end
+    if length(cache) >= MAP_LEQ_MANY_PLAN_MAX_PER_TASK[]
         empty!(cache)
     end
     entry_new = _MapLeqManyBatchPlanEntry(batch, new_plan)
     cache[k] = entry_new
-    M.map_many_batch_last[slot] = entry_new
+    last_ref[] = entry_new
     return new_plan
 end
 
 function _cache_map_leq_many_plan_from_arena!(M::PModule,
                                               pairs::AbstractVector{<:Tuple{Int,Int}},
                                               stats::_MapLeqManyBatchStats,
-                                              arena::_MapLeqManyPlanArena)
+                                              arena::_MapLeqManyPlanArena, cache)
     stats.npairs >= MAP_LEQ_MANY_PLAN_MIN_LEN[] || return nothing
-    cache = _map_leq_many_plan_dict(M)
     k = _map_leq_many_plan_key(pairs)
     new_plan = _copy_map_leq_many_plan(arena, stats)
-    if length(cache) >= MAP_LEQ_MANY_PLAN_MAX_PER_THREAD[]
+    if length(cache) >= MAP_LEQ_MANY_PLAN_MAX_PER_TASK[]
         empty!(cache)
     end
     cache[k] = new_plan
@@ -2158,13 +2222,13 @@ end
                                                 suffix_child_node::AbstractVector{Int},
                                                 suffix_head_slot::AbstractVector{Int},
                                                 suffix_tail_slot::AbstractVector{Int},
-                                                suffix_hops::AbstractVector{Int};
+                                                suffix_hops::AbstractVector{Int}, values;
                                                 store_results::Bool) where {K,F,MatT}
     store = M.edge_maps
     @inbounds for sid in eachindex(suffix_u)
         u = suffix_u[sid]
         v = suffix_v[sid]
-        memoA = _map_leq_memo_get(M, u, v)
+        memoA = _map_leq_memo_get(values, u, v)
         if memoA !== nothing
             suffix_vals[sid] = memoA
             continue
@@ -2182,14 +2246,14 @@ end
         else
             out = Matrix{K}(undef, size(tail, 1), size(head, 2))
             if K === QQ && _use_qq_nemo_suffix_product(M, tail, head, suffix_hops[sid])
-                s = _map_leq_scratch(M)
+                s = _map_leq_scratch(values)
                 _mul_qq_nemo_into!(out, s, M, tail, head)
             else
                 _mul_dense_maybe_tiny!(out, tail, head)
             end
             _as_mattype(MatT, out)
         end
-        suffix_vals[sid] = store_results ? _map_leq_memo_set!(M, u, v, A) : A
+        suffix_vals[sid] = store_results ? _map_leq_memo_set!(values, u, v, A) : A
     end
     return suffix_vals
 end
@@ -2201,13 +2265,13 @@ end
                                                   suffix_child::AbstractVector{Int},
                                                   suffix_child_node::AbstractVector{Int},
                                                   suffix_head_slot::AbstractVector{Int},
-                                                  suffix_tail_slot::AbstractVector{Int};
+                                                  suffix_tail_slot::AbstractVector{Int}, values;
                                                   store_results::Bool) where {K,F,MatT}
     store = M.edge_maps
     @inbounds for sid in eachindex(suffix_u)
         u = suffix_u[sid]
         v = suffix_v[sid]
-        memoA = _map_leq_memo_get(M, u, v)
+        memoA = _map_leq_memo_get(values, u, v)
         if memoA !== nothing
             suffix_vals[sid] = memoA
             continue
@@ -2225,7 +2289,7 @@ end
         else
             _as_mattype(MatT, FieldLinAlg._matmul(tail, head))
         end
-        suffix_vals[sid] = store_results ? _map_leq_memo_set!(M, u, v, A) : A
+        suffix_vals[sid] = store_results ? _map_leq_memo_set!(values, u, v, A) : A
     end
     return suffix_vals
 end
@@ -2233,7 +2297,7 @@ end
 function _map_leq_many_with_plan_unchecked!(dest::AbstractVector,
                                             M::PModule{K,F,MatT},
                                             pairs::AbstractVector{<:Tuple{Int,Int}},
-                                            plan::_MapLeqManyPlan) where {K,F,MatT}
+                                            plan::_MapLeqManyPlan, values) where {K,F,MatT}
     length(pairs) == plan.npairs || return false
     store_results = plan.has_repeats || plan.warmed
     suffix_vals = isempty(plan.suffix_u) ? nothing : _new_suffix_vals(MatT, length(plan.suffix_u))
@@ -2242,12 +2306,12 @@ function _map_leq_many_with_plan_unchecked!(dest::AbstractVector,
             _execute_suffix_program_dense!(suffix_vals, M, plan.suffix_u, plan.suffix_v,
                                            plan.suffix_child, plan.suffix_child_node,
                                            plan.suffix_head_slot, plan.suffix_tail_slot,
-                                           plan.suffix_hops;
+                                           plan.suffix_hops, values;
                                            store_results=store_results)
         else
             _execute_suffix_program_generic!(suffix_vals, M, plan.suffix_u, plan.suffix_v,
                                              plan.suffix_child, plan.suffix_child_node,
-                                             plan.suffix_head_slot, plan.suffix_tail_slot;
+                                             plan.suffix_head_slot, plan.suffix_tail_slot, values;
                                              store_results=store_results)
         end
     end
@@ -2258,7 +2322,7 @@ function _map_leq_many_with_plan_unchecked!(dest::AbstractVector,
         v = plan.vs[i]
 
         if kind == 0x00
-            dest[i] = _identity_map(M, v)
+            dest[i] = _identity_map(M, v, values)
             continue
         elseif kind == 0x01
             dest[i] = M.edge_maps[u, v]
@@ -2277,7 +2341,7 @@ function _map_leq_many_with_plan_unchecked!(dest::AbstractVector,
             continue
         end
 
-        memoA = _map_leq_memo_get(M, u, v)
+        memoA = _map_leq_memo_get(values, u, v)
         if memoA !== nothing
             dest[i] = memoA
             continue
@@ -2285,7 +2349,7 @@ function _map_leq_many_with_plan_unchecked!(dest::AbstractVector,
 
         p = plan.mids[i]
         A = if MatT <: Matrix{K}
-            s = _map_leq_scratch(M)
+            s = _map_leq_scratch(values)
             E2 = M.edge_maps[p, v]
             E1 = M.edge_maps[u, p]
             out = _scratch_mat!(s, true, size(E2, 1), size(E1, 2))
@@ -2295,7 +2359,7 @@ function _map_leq_many_with_plan_unchecked!(dest::AbstractVector,
             _as_mattype(MatT, FieldLinAlg._matmul(M.edge_maps[p, v], M.edge_maps[u, p]))
         end
 
-        dest[i] = store_results ? _map_leq_memo_set!(M, u, v, A) : A
+        dest[i] = store_results ? _map_leq_memo_set!(values, u, v, A) : A
     end
     return true
 end
@@ -2303,14 +2367,14 @@ end
 function _map_leq_many_with_plan!(dest::AbstractVector,
                                   M::PModule{K,F,MatT},
                                   pairs::AbstractVector{<:Tuple{Int,Int}},
-                                  plan::_MapLeqManyPlan) where {K,F,MatT}
+                                  plan::_MapLeqManyPlan, values) where {K,F,MatT}
     _plan_signature_matches(plan, pairs) || return false
-    return _map_leq_many_with_plan_unchecked!(dest, M, pairs, plan)
+    return _map_leq_many_with_plan_unchecked!(dest, M, pairs, plan, values)
 end
 function _map_leq_many_oneoff_long_batch!(dest::AbstractVector,
                                           M::PModule{K,F,MatT},
                                           arena::_MapLeqManyPlanArena,
-                                          stats::_MapLeqManyBatchStats) where {K,F,MatT}
+                                          stats::_MapLeqManyBatchStats, values) where {K,F,MatT}
     _use_map_leq_many_oneoff_long(stats, M.field) || return false
     suffix_vals = isempty(arena.suffix_u) ? nothing : _new_suffix_vals(MatT, length(arena.suffix_u))
     if suffix_vals !== nothing
@@ -2318,12 +2382,12 @@ function _map_leq_many_oneoff_long_batch!(dest::AbstractVector,
             _execute_suffix_program_dense!(suffix_vals, M, arena.suffix_u, arena.suffix_v,
                                            arena.suffix_child, arena.suffix_child_node,
                                            arena.suffix_head_slot, arena.suffix_tail_slot,
-                                           arena.suffix_hops;
+                                           arena.suffix_hops, values;
                                            store_results=false)
         else
             _execute_suffix_program_generic!(suffix_vals, M, arena.suffix_u, arena.suffix_v,
                                              arena.suffix_child, arena.suffix_child_node,
-                                             arena.suffix_head_slot, arena.suffix_tail_slot;
+                                             arena.suffix_head_slot, arena.suffix_tail_slot, values;
                                              store_results=false)
         end
     end
@@ -2334,7 +2398,7 @@ function _map_leq_many_oneoff_long_batch!(dest::AbstractVector,
         v = arena.vs[i]
 
         if kind == 0x00
-            dest[i] = _identity_map(M, v)
+            dest[i] = _identity_map(M, v, values)
         elseif kind == 0x01
             dest[i] = M.edge_maps[u, v]
         elseif kind == 0x03
@@ -2345,7 +2409,7 @@ function _map_leq_many_oneoff_long_batch!(dest::AbstractVector,
             A[1, 1] = M.edge_maps[p, v][1, 1] * M.edge_maps[u, p][1, 1]
             dest[i] = _as_mattype(MatT, A)
         elseif MatT <: Matrix{K}
-            s = _map_leq_scratch(M)
+            s = _map_leq_scratch(values)
             p = arena.mids[i]
             E2 = M.edge_maps[p, v]
             E1 = M.edge_maps[u, p]
@@ -2363,7 +2427,7 @@ end
 function _map_leq_many_scalar_long_batch!(dest::AbstractVector,
                                           M::PModule{K,F,MatT},
                                           arena::_MapLeqManyPlanArena,
-                                          stats::_MapLeqManyBatchStats) where {K,F,MatT}
+                                          stats::_MapLeqManyBatchStats, values=M) where {K,F,MatT}
     _prefer_map_leq_many_scalar_long(stats, M.field) || return false
     chain_ptr = arena.chain_ptr
     chain_data = arena.chain_data
@@ -2373,7 +2437,7 @@ function _map_leq_many_scalar_long_batch!(dest::AbstractVector,
         u = arena.us[i]
         v = arena.vs[i]
         if kind == 0x00
-            dest[i] = _identity_map(M, v)
+            dest[i] = _identity_map(M, v, values)
         elseif kind == 0x01
             dest[i] = M.edge_maps[u, v]
         elseif kind == 0x02
@@ -2388,7 +2452,7 @@ function _map_leq_many_scalar_long_batch!(dest::AbstractVector,
                     dest[i] = _as_mattype(MatT, A)
                 end
             elseif MatT <: Matrix{K}
-                s = _map_leq_scratch(M)
+                s = _map_leq_scratch(values)
                 E2 = M.edge_maps[p, v]
                 E1 = M.edge_maps[u, p]
                 out = _ensure_dense_dest_matrix!(dest, i, K, size(E2, 1), size(E1, 2))
@@ -2400,7 +2464,7 @@ function _map_leq_many_scalar_long_batch!(dest::AbstractVector,
             sidx = chain_ptr[i]
             eidx = chain_ptr[i + 1] - 1
             if MatT <: Matrix{K}
-                s = _map_leq_scratch(M)
+                s = _map_leq_scratch(values)
                 out = _ensure_dense_dest_matrix!(dest, i, K, M.dims[v], M.dims[u])
                 if K === QQ && _use_qq_nemo_long_product(M, chain_data, chain_slots, sidx, eidx)
                     _compose_chain_dense_packed_slots_nemo_into!(out, M, chain_data, chain_slots, sidx, eidx, s)
@@ -2854,13 +2918,13 @@ end
                                                 slots::Vector{Int},
                                                 M::PModule,
                                                 u::Int, v::Int,
-                                                cc::CoverCache)
+                                                cc::CoverCache, values)
     empty!(chain)
     empty!(slots)
     push!(chain, v)
     d = v
     while d != u
-        p, slot = _chosen_predecessor_with_slot(M, cc, u, d)
+        p, slot = _chosen_predecessor_with_slot(M, cc, u, d, values)
         push!(chain, p)
         push!(slots, slot)
         d = p
@@ -2870,21 +2934,22 @@ end
     return chain, slots
 end
 
-@inline function _chosen_predecessor_with_slot(M::PModule, cc::CoverCache, a::Int, d::Int)::Tuple{Int,Int}
+@inline function _chosen_predecessor_with_slot(M::PModule, cc::CoverCache, a::Int, d::Int, values=M)::Tuple{Int,Int}
     lo = cc.pred_ptr[d]
     hi = cc.pred_ptr[d + 1] - 1
-    slot = _map_leq_pred_slot_get(M, a, d)
+    slot = _map_leq_pred_slot_get(values, a, d)
     if slot != 0
         @inbounds return cc.pred_idx[lo + slot - 1], slot
     end
 
-    dense = _chain_parent_dense(cc)
+    parent = values === M ? _map_leq_parent_memo(cc) : values.parent
+    dense = parent isa Dict ? nothing : parent
     if dense !== nothing
         idx = (a - 1) * dense.n + d
         @inbounds if dense.seen[idx]
             p = dense.vals[idx]
             slot = _find_sorted_index_range(cc.pred_idx, lo, hi, p)
-            slot == 0 || _map_leq_pred_slot_set!(M, a, d, slot)
+            slot == 0 || _map_leq_pred_slot_set!(values, a, d, slot)
             return p, slot
         end
         slot_a = 0
@@ -2896,22 +2961,22 @@ end
             elseif leq(cc.Q, a, b)
                 dense.vals[idx] = b
                 dense.seen[idx] = true
-                _map_leq_pred_slot_set!(M, a, d, slot)
+                _map_leq_pred_slot_set!(values, a, d, slot)
                 return b, slot
             end
         end
         dense.vals[idx] = a
         dense.seen[idx] = true
-        slot_a == 0 || _map_leq_pred_slot_set!(M, a, d, slot_a)
+        slot_a == 0 || _map_leq_pred_slot_set!(values, a, d, slot_a)
         return a, slot_a
     end
 
-    cache = _chain_parent_dict(cc)
+    cache = parent
     key = _pairkey(a, d)
     p = get(cache, key, 0)
     if p != 0
         slot = _find_sorted_index_range(cc.pred_idx, lo, hi, p)
-        slot == 0 || _map_leq_pred_slot_set!(M, a, d, slot)
+        slot == 0 || _map_leq_pred_slot_set!(values, a, d, slot)
         return p, slot
     end
 
@@ -2923,12 +2988,12 @@ end
             slot_a = slot
         elseif leq(cc.Q, a, b)
             cache[key] = b
-            _map_leq_pred_slot_set!(M, a, d, slot)
+            _map_leq_pred_slot_set!(values, a, d, slot)
             return b, slot
         end
     end
     cache[key] = a
-    slot_a == 0 || _map_leq_pred_slot_set!(M, a, d, slot_a)
+    slot_a == 0 || _map_leq_pred_slot_set!(values, a, d, slot_a)
     return a, slot_a
 end
 
@@ -2998,7 +3063,16 @@ end
     end
 
     last_edge = store.maps_from_pred[chain_data[eidx]][chain_slots[eidx]]
-    _mul_dense_maybe_tiny!(out, last_edge, acc)
+    if out === acc
+        # Triplet assembly may borrow the output from this same scratch pool.
+        # Neither mul! nor the tiny kernel permits overwriting an input; use
+        # the opposite bank before copying into the requested destination.
+        tmp = _scratch_mat!(s, !acc_is_tmp1, size(last_edge, 1), size(acc, 2))
+        _mul_dense_maybe_tiny!(tmp, last_edge, acc)
+        copyto!(out, tmp)
+    else
+        _mul_dense_maybe_tiny!(out, last_edge, acc)
+    end
     return out
 end
 
@@ -3085,10 +3159,10 @@ end
 @inline function _compose_chain_dense_backward!(M::PModule{K},
                                                 u::Int, v::Int,
                                                 cc::CoverCache,
-                                                s::MapLeqScratch{K}) where {K}
+                                                s::MapLeqScratch{K}, values) where {K}
     store = M.edge_maps
     d = v
-    p, slot = _chosen_predecessor_with_slot(M, cc, u, d)
+    p, slot = _chosen_predecessor_with_slot(M, cc, u, d, values)
     slot == 0 && error("missing cover-edge map for ($p,$d)")
     first_map = store.maps_from_pred[d][slot]
     acc = _scratch_mat!(s, true, size(first_map, 1), size(first_map, 2))
@@ -3097,7 +3171,7 @@ end
 
     while p != u
         d = p
-        p, slot = _chosen_predecessor_with_slot(M, cc, u, d)
+        p, slot = _chosen_predecessor_with_slot(M, cc, u, d, values)
         slot == 0 && error("missing cover-edge map for ($p,$d)")
         E = store.maps_from_pred[d][slot]
         out = _scratch_mat!(s, !acc_is_tmp1, size(acc, 1), size(E, 2))
@@ -3110,16 +3184,16 @@ end
 
 @inline function _compose_chain_generic_backward(M::PModule,
                                                  u::Int, v::Int,
-                                                 cc::CoverCache)
+                                                 cc::CoverCache, values)
     store = M.edge_maps
     d = v
-    p, slot = _chosen_predecessor_with_slot(M, cc, u, d)
+    p, slot = _chosen_predecessor_with_slot(M, cc, u, d, values)
     slot == 0 && error("missing cover-edge map for ($p,$d)")
     A = store.maps_from_pred[d][slot]
 
     while p != u
         d = p
-        p, slot = _chosen_predecessor_with_slot(M, cc, u, d)
+        p, slot = _chosen_predecessor_with_slot(M, cc, u, d, values)
         slot == 0 && error("missing cover-edge map for ($p,$d)")
         E = store.maps_from_pred[d][slot]
         A = FieldLinAlg._matmul(A, E)
@@ -3187,7 +3261,7 @@ end
     return _as_mattype(MatT, A)
 end
 
-@inline function _map_leq_cover_chain(M::PModule{K,F,MatT}, u::Int, v::Int, cc::CoverCache) where {K,F,MatT}
+@inline function _map_leq_cover_chain(M::PModule{K,F,MatT}, u::Int, v::Int, cc::CoverCache, values=M) where {K,F,MatT}
     # Compute M(u<=v) by composing cover-edge maps along a cached cover chain.
     # Assumes u < v and u <= v.
     @inbounds if cc.C !== nothing && cc.C[u, v]
@@ -3196,30 +3270,35 @@ end
     if cc.C === nothing && haskey(M.edge_maps, u, v)
         return M.edge_maps[u, v]
     end
-    lastA = _map_leq_last_pair_get(M, u, v)
+    lastA = _map_leq_last_pair_get(M, u, v, values)
     lastA === nothing || return lastA
-    memoA = _map_leq_memo_get(M, u, v)
+    memoA = _map_leq_memo_get(values, u, v)
     memoA === nothing || return memoA
 
     # Fast path: skip memo/scratch machinery for tiny queries.
     # - scalar-chain composition for 1x1 fibers
     # - short chosen chains (<=2 edges)
     Afast = _map_leq_scalar_chain_no_memo(M, u, v, cc)
-    Afast === nothing || return _map_leq_last_pair_set!(M, u, v, Afast)
+    Afast === nothing || return _map_leq_last_pair_set!(M, u, v, Afast, values)
     Afast = _map_leq_short_chain_no_memo(M, u, v, cc)
-    Afast === nothing || return _map_leq_last_pair_set!(M, u, v, Afast)
+    Afast === nothing || return _map_leq_last_pair_set!(M, u, v, Afast, values)
 
-    seen_before = _map_leq_pred_slot_get(M, u, v) != 0
-    s = _map_leq_scratch(M)
+    seen_before = _map_leq_pred_slot_get(values, u, v) != 0
+    if values === M
+        return _with_map_leq_batch(M, cc) do leased
+            _map_leq_cover_chain(M, u, v, cc, leased)
+        end
+    end
+    s = values.scratch
     A = MatT <: Matrix{K} ?
-        _compose_chain_dense_backward!(M, u, v, cc, s) :
-        _compose_chain_generic_backward(M, u, v, cc)
+        _compose_chain_dense_backward!(M, u, v, cc, s, values) :
+        _compose_chain_generic_backward(M, u, v, cc, values)
     if seen_before
-        Atyped = _map_leq_memo_set!(M, u, v, A)
-        _map_leq_last_pair_set!(M, u, v, Atyped)
+        Atyped = _map_leq_memo_set!(values, u, v, A)
+        _map_leq_last_pair_set!(M, u, v, Atyped, values)
         return Atyped
     end
-    return _map_leq_last_pair_set!(M, u, v, A)
+    return _map_leq_last_pair_set!(M, u, v, A, values)
 end
 
 """
@@ -3255,16 +3334,13 @@ function map_leq(M::PModule{K}, u::Int, v::Int;
                  cache::Union{Nothing,CoverCache}=nothing,
                  opts::ModuleOptions=ModuleOptions()) where {K}
     Q = M.Q
+    cache = _module_query_cache(Q, cache, opts)
     n = nvertices(Q)
     (1 <= u <= n && 1 <= v <= n) || error("map_leq: indices out of range")
 
     u == v && return _identity_map(M, v)
     leq(Q, u, v) || error("map_leq: need u <= v in the poset (got u=$u, v=$v)")
 
-    if opts != ModuleOptions()
-        cache === nothing || error("map_leq: pass either cache or opts, not both.")
-        cache = opts.cache
-    end
     cc = cache === nothing ? _get_cover_cache(Q) : cache
     return _map_leq_cover_chain(M, u, v, cc)
 end
@@ -3275,16 +3351,27 @@ function _map_leq_many_raw_route_kind(M::PModule,
     plan = _lookup_map_leq_many_plan(M, pairs)
     plan === nothing || return :plan_cached
     Q = M.Q
-    arena = _map_leq_many_plan_arena(M)
-    stats = _fill_map_leq_many_plan_arena!(arena, M, pairs, Q, cc)
-    if _use_map_leq_many_oneoff_long(stats, M.field)
-        return :oneoff_long
-    elseif _prefer_map_leq_many_scalar_long(stats, M.field)
-        return :scalar_fallback
-    elseif _prefer_map_leq_many_plan_build(stats, M.field)
-        return :plan_build
+    return _with_map_leq_batch(M, cc) do values
+        _with_map_leq_plan_arena(M) do arena
+            stats = _fill_map_leq_many_plan_arena!(arena, M, pairs, Q, cc, values)
+            if _use_map_leq_many_oneoff_long(stats, M.field)
+                return :oneoff_long
+            elseif _prefer_map_leq_many_scalar_long(stats, M.field)
+                return :scalar_fallback
+            elseif _prefer_map_leq_many_plan_build(stats, M.field)
+                return :plan_build
+            end
+            return :scalar_fallback
+        end
     end
-    return :scalar_fallback
+end
+
+@inline function _map_leq_batch_at(M::PModule, u::Int, v::Int, cc::CoverCache, values)
+    n = nvertices(M.Q)
+    (1 <= u <= n && 1 <= v <= n) || error("map_leq: indices out of range")
+    u == v && return _identity_map(M,v,values)
+    leq(M.Q,u,v) || error("map_leq: need u <= v in the poset (got u=$u, v=$v)")
+    return _map_leq_cover_chain(M,u,v,cc,values)
 end
 
 @inline function _map_leq_many_fallback!(dest::AbstractVector,
@@ -3292,15 +3379,15 @@ end
                                          pairs::AbstractVector{<:Tuple{Int,Int}},
                                          Q::AbstractPoset,
                                          n::Int,
-                                         cc::CoverCache) where {K}
+                                         cc::CoverCache, values=M) where {K}
     @inbounds for i in eachindex(pairs)
         u, v = pairs[i]
         (1 <= u <= n && 1 <= v <= n) || error("map_leq_many!: indices out of range at i=$i (u=$u, v=$v)")
         if u == v
-            dest[i] = _identity_map(M, v)
+            dest[i] = _identity_map(M, v, values)
         else
             leq(Q, u, v) || error("map_leq_many!: need u <= v at i=$i (u=$u, v=$v)")
-            dest[i] = _map_leq_cover_chain(M, u, v, cc)
+            dest[i] = _map_leq_cover_chain(M, u, v, cc, values)
         end
     end
     return dest
@@ -3352,34 +3439,38 @@ function map_leq_many!(dest::AbstractVector,
                        pairs::AbstractVector{<:Tuple{Int,Int}};
                        cache::Union{Nothing,CoverCache}=nothing,
                        opts::ModuleOptions=ModuleOptions()) where {K,F,MatT}
-    if opts != ModuleOptions()
-        cache === nothing || error("map_leq_many!: pass either cache or opts, not both.")
-        cache = opts.cache
-    end
+    cache = _module_query_cache(M.Q, cache, opts)
     length(dest) == length(pairs) ||
         error("map_leq_many!: destination length $(length(dest)) does not match pair count $(length(pairs)).")
 
+    isempty(pairs) && return dest
     Q = M.Q
     n = nvertices(Q)
     cc = cache === nothing ? _get_cover_cache(Q) : cache
-    plan = _lookup_map_leq_many_plan(M, pairs)
-    if plan !== nothing && _map_leq_many_with_plan!(dest, M, pairs, plan)
-        return dest
+    length(pairs) < _MAP_LEQ_BATCH_VALUES_MIN_LEN[] &&
+        return _map_leq_many_fallback!(dest, M, pairs, Q, n, cc)
+    return _with_map_leq_batch(M, cc) do values
+        plan = _lookup_map_leq_many_plan(M, pairs)
+        if plan !== nothing && _map_leq_many_with_plan!(dest, M, pairs, plan, values)
+            return dest
+        end
+        plan_cache = _map_leq_many_plan_dict(M)
+        return _with_map_leq_plan_arena(M) do arena
+            stats = _fill_map_leq_many_plan_arena!(arena, M, pairs, Q, cc, values)
+            if _map_leq_many_oneoff_long_batch!(dest, M, arena, stats, values)
+                return dest
+            end
+            if _map_leq_many_scalar_long_batch!(dest, M, arena, stats, values)
+                return dest
+            end
+            plan = _prefer_map_leq_many_plan_build(stats, M.field) ?
+                _cache_map_leq_many_plan_from_arena!(M, pairs, stats, arena, plan_cache) : nothing
+            if plan !== nothing && _map_leq_many_with_plan!(dest, M, pairs, plan, values)
+                return dest
+            end
+            return _map_leq_many_fallback!(dest, M, pairs, Q, n, cc, values)
+        end
     end
-    arena = _map_leq_many_plan_arena(M)
-    stats = _fill_map_leq_many_plan_arena!(arena, M, pairs, Q, cc)
-    if _map_leq_many_oneoff_long_batch!(dest, M, arena, stats)
-        return dest
-    end
-    if _map_leq_many_scalar_long_batch!(dest, M, arena, stats)
-        return dest
-    end
-    plan = _prefer_map_leq_many_plan_build(stats, M.field) ?
-        _cache_map_leq_many_plan_from_arena!(M, pairs, stats, arena) : nothing
-    if plan !== nothing && _map_leq_many_with_plan!(dest, M, pairs, plan)
-        return dest
-    end
-    return _map_leq_many_fallback!(dest, M, pairs, Q, n, cc)
 end
 
 """
@@ -3396,22 +3487,24 @@ function map_leq_many!(dest::AbstractVector,
                        batch::MapLeqQueryBatch;
                        cache::Union{Nothing,CoverCache}=nothing,
                        opts::ModuleOptions=ModuleOptions()) where {K,F,MatT}
-    if opts != ModuleOptions()
-        cache === nothing || error("map_leq_many!: pass either cache or opts, not both.")
-        cache = opts.cache
-    end
+    cache = _module_query_cache(M.Q, cache, opts)
     pairs = batch.pairs
     length(dest) == length(pairs) ||
         error("map_leq_many!: destination length $(length(dest)) does not match pair count $(length(pairs)).")
 
+    isempty(pairs) && return dest
     Q = M.Q
     n = nvertices(Q)
     cc = cache === nothing ? _get_cover_cache(Q) : cache
-    plan = _get_or_build_map_leq_many_plan!(M, batch, Q, cc)
-    if plan !== nothing && _map_leq_many_with_plan_unchecked!(dest, M, pairs, plan)
-        return dest
+    length(pairs) < _MAP_LEQ_BATCH_VALUES_MIN_LEN[] &&
+        return _map_leq_many_fallback!(dest, M, pairs, Q, n, cc)
+    return _with_map_leq_batch(M, cc) do values
+        plan = _get_or_build_map_leq_many_plan!(M, batch, Q, cc, values)
+        if plan !== nothing && _map_leq_many_with_plan_unchecked!(dest, M, pairs, plan, values)
+            return dest
+        end
+        return _map_leq_many_fallback!(dest, M, pairs, Q, n, cc, values)
     end
-    return _map_leq_many_fallback!(dest, M, pairs, Q, n, cc)
 end
 
 @inline function _append_scaled_identity_triplets!(I::Vector{Int},
@@ -3439,7 +3532,7 @@ end
                                                         idx::Int,
                                                         row_off::Int,
                                                         col_off::Int,
-                                                        scale::K) where {K,F,MatT}
+                                                        scale::K, values) where {K,F,MatT}
     iszero(scale) && return nothing
 
     kind = plan.kinds[idx]
@@ -3452,7 +3545,7 @@ end
         return _append_scaled_triplets!(I, J, V, M.edge_maps[u, v], row_off, col_off; scale=scale)
     end
 
-    memoA = _map_leq_memo_get(M, u, v)
+    memoA = _map_leq_memo_get(values, u, v)
     memoA === nothing || return _append_scaled_triplets!(I, J, V, memoA, row_off, col_off; scale=scale)
 
     if kind == 0x03
@@ -3460,7 +3553,7 @@ end
         sidx = plan.chain_ptr[idx]
         eidx = plan.chain_ptr[idx + 1] - 1
         if MatT <: Matrix{K}
-            s = _map_leq_scratch(M)
+            s = _map_leq_scratch(values)
             out = _scratch_mat!(s, true, M.dims[v], M.dims[u])
             if K === QQ && _use_qq_nemo_long_product(M, plan.chain_data, plan.chain_slots, sidx, eidx)
                 _compose_chain_dense_packed_slots_nemo_into!(out, M, plan.chain_data, plan.chain_slots, sidx, eidx, s)
@@ -3468,7 +3561,7 @@ end
                 _compose_chain_dense_packed_slots_into!(out, M, plan.chain_data, plan.chain_slots, sidx, eidx, s)
             end
             if store_results
-                A = _map_leq_memo_set!(M, u, v, _as_mattype(MatT, copy(out)))
+                A = _map_leq_memo_set!(values, u, v, _as_mattype(MatT, copy(out)))
                 return _append_scaled_triplets!(I, J, V, A, row_off, col_off; scale=scale)
             end
             return _append_scaled_triplets!(I, J, V, out, row_off, col_off; scale=scale)
@@ -3476,7 +3569,7 @@ end
 
         A = _as_mattype(MatT, _compose_chain_generic_packed_slots(M, plan.chain_data, plan.chain_slots, sidx, eidx))
         if store_results
-            A = _map_leq_memo_set!(M, u, v, A)
+            A = _map_leq_memo_set!(values, u, v, A)
         end
         return _append_scaled_triplets!(I, J, V, A, row_off, col_off; scale=scale)
     end
@@ -3494,13 +3587,13 @@ end
 
     store_results = plan.has_repeats || plan.warmed
     if MatT <: Matrix{K}
-        s = _map_leq_scratch(M)
+        s = _map_leq_scratch(values)
         E2 = M.edge_maps[p, v]
         E1 = M.edge_maps[u, p]
         out = _scratch_mat!(s, true, size(E2, 1), size(E1, 2))
         _mul_dense_maybe_tiny!(out, E2, E1)
         if store_results
-            A = _map_leq_memo_set!(M, u, v, _as_mattype(MatT, copy(out)))
+            A = _map_leq_memo_set!(values, u, v, _as_mattype(MatT, copy(out)))
             return _append_scaled_triplets!(I, J, V, A, row_off, col_off; scale=scale)
         end
         return _append_scaled_triplets!(I, J, V, out, row_off, col_off; scale=scale)
@@ -3508,7 +3601,7 @@ end
 
     A = _as_mattype(MatT, FieldLinAlg._matmul(M.edge_maps[p, v], M.edge_maps[u, p]))
     if store_results
-        A = _map_leq_memo_set!(M, u, v, A)
+        A = _map_leq_memo_set!(values, u, v, A)
     end
     return _append_scaled_triplets!(I, J, V, A, row_off, col_off; scale=scale)
 end
@@ -3532,31 +3625,33 @@ function _append_map_leq_many_scaled_triplets!(I::Vector{Int},
 
     Q = M.Q
     cc = cache === nothing ? _get_cover_cache(Q) : cache
-    plan = _get_or_build_map_leq_many_plan!(M, batch, Q, cc)
-    if plan === nothing && npairs >= MAP_LEQ_MANY_TRIPLET_PLAN_MIN_LEN[]
-        arena = _map_leq_many_plan_arena(M)
-        stats = _fill_map_leq_many_plan_arena!(arena, M, pairs, Q, cc)
-        plan = _copy_map_leq_many_plan(arena, stats)
-    end
-    if plan === nothing
+    return _with_map_leq_batch(M, cc) do values
+        plan = _get_or_build_map_leq_many_plan!(M, batch, Q, cc, values)
+        if plan === nothing && npairs >= MAP_LEQ_MANY_TRIPLET_PLAN_MIN_LEN[]
+            plan = _with_map_leq_plan_arena(M) do arena
+                _build_map_leq_many_plan(M, pairs, Q, cc, arena, values)
+            end
+        end
+        if plan === nothing
+            @inbounds for idx in 1:npairs
+                scale = scales[idx]
+                iszero(scale) && continue
+                row_off = Int(row_offsets[Int(row_ids[idx])])
+                col_off = Int(col_offsets[Int(col_ids[idx])])
+                A = _map_leq_batch_at(M, pairs[idx][1], pairs[idx][2], cc, values)
+                _append_scaled_triplets!(I, J, V, A, row_off, col_off; scale=scale)
+            end
+            return nothing
+        end
+
         @inbounds for idx in 1:npairs
-            scale = scales[idx]
-            iszero(scale) && continue
             row_off = Int(row_offsets[Int(row_ids[idx])])
             col_off = Int(col_offsets[Int(col_ids[idx])])
-            A = map_leq(M, pairs[idx][1], pairs[idx][2]; cache=cc)
-            _append_scaled_triplets!(I, J, V, A, row_off, col_off; scale=scale)
+            _append_map_leq_triplets_from_plan_at!(I, J, V, M, plan, nothing,
+                                                   idx, row_off, col_off, scales[idx], values)
         end
         return nothing
     end
-
-    @inbounds for idx in 1:npairs
-        row_off = Int(row_offsets[Int(row_ids[idx])])
-        col_off = Int(col_offsets[Int(col_ids[idx])])
-        _append_map_leq_triplets_from_plan_at!(I, J, V, M, plan, nothing,
-                                               idx, row_off, col_off, scales[idx])
-    end
-    return nothing
 end
 
 @inline function _accum_scaled_vec!(dst::AbstractVector{K},
@@ -3592,7 +3687,7 @@ end
                                                      x::AbstractVector{K},
                                                      scale::K,
                                                      tmp1::Vector{K},
-                                                     tmp2::Vector{K}) where {K,F,MatT}
+                                                     tmp2::Vector{K}, values) where {K,F,MatT}
     iszero(scale) && return nothing
 
     kind = plan.kinds[idx]
@@ -3605,7 +3700,7 @@ end
         return _accum_scaled_matvec!(dst, M.edge_maps[u, v], x, scale, tmp1)
     end
 
-    memoA = _map_leq_memo_get(M, u, v)
+    memoA = _map_leq_memo_get(values, u, v)
     memoA === nothing || return _accum_scaled_matvec!(dst, memoA, x, scale, tmp1)
 
     if kind == 0x03
@@ -3673,30 +3768,32 @@ function _accum_map_leq_many_scaled_matvecs!(out::AbstractVector{K},
 
     Q = M.Q
     cc = cache === nothing ? _get_cover_cache(Q) : cache
-    plan = _get_or_build_map_leq_many_plan!(M, batch, Q, cc)
-    if plan === nothing && npairs >= MAP_LEQ_MANY_TRIPLET_PLAN_MIN_LEN[]
-        arena = _map_leq_many_plan_arena(M)
-        stats = _fill_map_leq_many_plan_arena!(arena, M, pairs, Q, cc)
-        plan = _copy_map_leq_many_plan(arena, stats)
-    end
-
-    tmp1 = Vector{K}()
-    tmp2 = Vector{K}()
-    @inbounds for idx in 1:npairs
-        scale = scales[idx]
-        iszero(scale) && continue
-        did = Int(dest_ids[idx])
-        sid = Int(src_ids[idx])
-        dst = view(out, Int(dest_offsets[did]) + 1:Int(dest_offsets[did + 1]))
-        x = src_parts[sid]
-        if plan === nothing
-            A = map_leq(M, pairs[idx][1], pairs[idx][2]; cache=cc)
-            _accum_scaled_matvec!(dst, A, x, scale, tmp1)
-        else
-            _accum_map_leq_matvec_from_plan_at!(dst, M, plan, idx, x, scale, tmp1, tmp2)
+    return _with_map_leq_batch(M, cc) do values
+        plan = _get_or_build_map_leq_many_plan!(M, batch, Q, cc, values)
+        if plan === nothing && npairs >= MAP_LEQ_MANY_TRIPLET_PLAN_MIN_LEN[]
+            plan = _with_map_leq_plan_arena(M) do arena
+                _build_map_leq_many_plan(M, pairs, Q, cc, arena, values)
+            end
         end
+
+        tmp1 = Vector{K}()
+        tmp2 = Vector{K}()
+        @inbounds for idx in 1:npairs
+            scale = scales[idx]
+            iszero(scale) && continue
+            did = Int(dest_ids[idx])
+            sid = Int(src_ids[idx])
+            dst = view(out, Int(dest_offsets[did]) + 1:Int(dest_offsets[did + 1]))
+            x = src_parts[sid]
+            if plan === nothing
+                A = _map_leq_batch_at(M, pairs[idx][1], pairs[idx][2], cc, values)
+                _accum_scaled_matvec!(dst, A, x, scale, tmp1)
+            else
+                _accum_map_leq_matvec_from_plan_at!(dst, M, plan, idx, x, scale, tmp1, tmp2, values)
+            end
+        end
+        return out
     end
-    return out
 end
 
 function _accum_map_leq_many_scaled_sourcevec!(out::AbstractVector{K},
@@ -3717,30 +3814,32 @@ function _accum_map_leq_many_scaled_sourcevec!(out::AbstractVector{K},
 
     Q = M.Q
     cc = cache === nothing ? _get_cover_cache(Q) : cache
-    plan = _get_or_build_map_leq_many_plan!(M, batch, Q, cc)
-    if plan === nothing && npairs >= MAP_LEQ_MANY_TRIPLET_PLAN_MIN_LEN[]
-        arena = _map_leq_many_plan_arena(M)
-        stats = _fill_map_leq_many_plan_arena!(arena, M, pairs, Q, cc)
-        plan = _copy_map_leq_many_plan(arena, stats)
-    end
-
-    tmp1 = Vector{K}()
-    tmp2 = Vector{K}()
-    @inbounds for idx in 1:npairs
-        scale = scales[idx]
-        iszero(scale) && continue
-        did = Int(dest_ids[idx])
-        sid = Int(src_ids[idx])
-        dst = view(out, Int(dest_offsets[did]) + 1:Int(dest_offsets[did + 1]))
-        x = view(src, Int(src_offsets[sid]) + 1:Int(src_offsets[sid + 1]))
-        if plan === nothing
-            A = map_leq(M, pairs[idx][1], pairs[idx][2]; cache=cc)
-            _accum_scaled_matvec!(dst, A, x, scale, tmp1)
-        else
-            _accum_map_leq_matvec_from_plan_at!(dst, M, plan, idx, x, scale, tmp1, tmp2)
+    return _with_map_leq_batch(M, cc) do values
+        plan = _get_or_build_map_leq_many_plan!(M, batch, Q, cc, values)
+        if plan === nothing && npairs >= MAP_LEQ_MANY_TRIPLET_PLAN_MIN_LEN[]
+            plan = _with_map_leq_plan_arena(M) do arena
+                _build_map_leq_many_plan(M, pairs, Q, cc, arena, values)
+            end
         end
+
+        tmp1 = Vector{K}()
+        tmp2 = Vector{K}()
+        @inbounds for idx in 1:npairs
+            scale = scales[idx]
+            iszero(scale) && continue
+            did = Int(dest_ids[idx])
+            sid = Int(src_ids[idx])
+            dst = view(out, Int(dest_offsets[did]) + 1:Int(dest_offsets[did + 1]))
+            x = view(src, Int(src_offsets[sid]) + 1:Int(src_offsets[sid + 1]))
+            if plan === nothing
+                A = _map_leq_batch_at(M, pairs[idx][1], pairs[idx][2], cc, values)
+                _accum_scaled_matvec!(dst, A, x, scale, tmp1)
+            else
+                _accum_map_leq_matvec_from_plan_at!(dst, M, plan, idx, x, scale, tmp1, tmp2, values)
+            end
+        end
+        return out
     end
-    return out
 end
 
 """

@@ -1,4 +1,6 @@
 module Fibered2D
+using ..ExactReals: AlgebraicReal
+
 # -----------------------------------------------------------------------------
 # Fibered2D.jl
 #
@@ -8,13 +10,13 @@ module Fibered2D
 """
     Fibered2D
 
-Owner module for exact 2D fibered/matching-distance machinery and repeated
+Owner module for 2D fibered queries, exact windowed matching distance, and repeated
 slice/barcode query structures in two parameters.
 """
 
 using LinearAlgebra
 using JSON3
-using ..CoreModules: EncodingCache, AbstractCoeffField, RegionPosetCachePayload,
+using ..CoreModules: _foreach_workchunk, EncodingCache, AbstractCoeffField, RegionPosetCachePayload,
                      AbstractSlicePlanCache
 using ..Options: InvariantOptions
 import ..DataTypes: ambient_dim
@@ -92,9 +94,9 @@ import ..SliceInvariants: SliceBarcodesResult, nslices,
 @inline _nregions_encoding(pi) = getfield(_invariants_module(), :_nregions_encoding)(pi)
 
 # -----------------------------------------------------------------------------
-# Exact 2D matching distance (deterministic, no RNG)
+# Representative 2D slice families (deterministic sampling, no RNG)
 #
-# This implements the screenshot algorithm:
+# The representative construction:
 #   - Collect critical points (grid vertices or polyhedral vertices) + box corners.
 #   - Build critical slopes from dy/dx over pairs, then use midpoints between slopes
 #     as representative directions (optionally include axes).
@@ -110,8 +112,9 @@ import ..SliceInvariants: SliceBarcodesResult, nslices,
 # Notes:
 #   - Values passed to slice_barcode are boundary parameter values (length n+1).
 #   - Determinism is enforced by sorting and stable de-duplication.
-#   - For speed, we avoid sampling and use O(K^2) slope enumeration over critical points,
-#     which is feasible for modest K (typical in exact use).
+#   - These representatives sample the line-parameter space; they do not optimize
+#     the varying endpoint costs inside a cell. Exact box-window optimization is
+#     implemented separately in fibered2d/exact_matching.jl.
 # -----------------------------------------------------------------------------
 
 # In-place unique of a sorted float vector using an absolute tolerance.
@@ -201,20 +204,20 @@ end
 
 # Convert a list of segment labels and boundary times into a compressed chain and boundary list.
 # boundaries has length = length(labels)+1.
-function _chain_values_from_boundaries(labels::Vector{Int}, boundaries::Vector{Float64};
-                                       strict::Bool=true, atol::Float64=1e-12)
+function _chain_values_from_boundaries(labels::Vector{Int}, boundaries::Vector{T};
+                                       strict::Bool=true, atol::Float64=1e-12) where {T<:Real}
     if isempty(labels)
-        return Int[], Float64[]
+        return Int[], T[]
     end
     if !strict
         first_kept = findfirst(!iszero, labels)
-        first_kept === nothing && return Int[], Float64[]
+        first_kept === nothing && return Int[], T[]
         last_kept = findlast(!iszero, labels)
         labels = @view labels[first_kept:last_kept]
         boundaries = @view boundaries[first_kept:(last_kept + 1)]
     end
     chain = Int[]
-    values = Float64[]
+    values = T[]
     sizehint!(chain, length(labels))
     sizehint!(values, length(labels)+1)
 
@@ -243,7 +246,8 @@ function _chain_values_from_boundaries(labels::Vector{Int}, boundaries::Vector{F
 end
 
 # Critical points for coords-based (axis-aligned) backend:
-# all grid vertices coords[1] x coords[2] (finite, inside box) + box corners.
+# all intersections of grid/window walls. Window-side intersections are events
+# too: crossing one changes the first or last region of a clipped slice.
 function _critical_points_boxes_2d(pi, box::Tuple{Vector{Float64},Vector{Float64}}; atol::Float64=1e-12)
     a, b = box
     coords = getproperty(pi, :coords)
@@ -274,23 +278,20 @@ function _critical_points_boxes_2d(pi, box::Tuple{Vector{Float64},Vector{Float64
         end
     end
 
+    append!(xs,(a[1],b[1])); append!(ys,(a[2],b[2]))
+    _unique_sorted_floats!(xs;atol=atol)
+    _unique_sorted_floats!(ys;atol=atol)
     pts = NTuple{2,Float64}[]
-    sizehint!(pts, length(xs)*length(ys) + 4)
+    sizehint!(pts, length(xs)*length(ys))
     for x in xs, y in ys
         push!(pts, (x,y))
     end
-    # box corners
-    push!(pts, (a[1],a[2]))
-    push!(pts, (a[1],b[2]))
-    push!(pts, (b[1],a[2]))
-    push!(pts, (b[1],b[2]))
-
     _unique_points_2d!(pts; atol=atol)
     return pts
 end
 
 # Critical points for polyhedral backend:
-# all vertices of each region inside box (when enumerable) + box corners.
+# all vertices of each region inside box + box corners; fail if a budget is exceeded.
 function _critical_points_poly_2d(pi::PLPolyhedra.PLEncodingMap,
                                   box::Tuple{Vector{Float64},Vector{Float64}};
                                   max_combinations::Int=200000,
@@ -301,20 +302,17 @@ function _critical_points_poly_2d(pi::PLPolyhedra.PLEncodingMap,
     sizehint!(pts, 32)
 
     # Collect region vertices in the box. This is deterministic up to sorting below.
-    for hp in pi.regions
+    for (region, hp) in enumerate(pi.regions)
         verts = PLPolyhedra._vertices_of_hpoly_in_box(hp, a, b;
                                                      max_combinations=max_combinations,
                                                      max_vertices=max_vertices)
-        if verts !== nothing
-            for v in verts
-                # v is a tuple of scalars (dimension 2 here).
-                push!(pts, (float(v[1]), float(v[2])))
-            end
-        else
-            # Fallback: include witness points if enumeration fails.
-            # This does not guarantee exactness, but avoids crashes.
-            # The exact algorithm is intended for cases where vertex enumeration succeeds.
-            # (Witnesses are Float64 already.)
+        verts === nothing && throw(ArgumentError(
+            "fibered_arrangement_2d: vertex enumeration exceeded its budget for region $region " *
+            "(max_combinations=$max_combinations, max_vertices=$max_vertices); " *
+            "increase the limits or reduce the region geometry"))
+        for v in verts
+            # v is a tuple of scalars (dimension 2 here).
+            push!(pts, (float(v[1]), float(v[2])))
         end
     end
 
@@ -666,19 +664,26 @@ function slice_chain_exact_2d(
     pi0 = _unwrap_compiled(pi)
     strict0 = opts.strict === nothing ? true : opts.strict
 
-    # Legacy default for this exact routine: if opts.box is unset, use encoding_box(pi).
+    # Default for this exact routine: if opts.box is unset, use encoding_box(pi).
     # (Note: encoding_box itself supports :auto if the caller explicitly requests it.)
     bx_raw = (opts.box === nothing ? encoding_box(pi, InvariantOptions()) : _resolve_box(pi, opts.box))
-    bx = ([float(bx_raw[1][1]), float(bx_raw[1][2])],
-          [float(bx_raw[2][1]), float(bx_raw[2][2])])
+    if _algebraic_grid(pi0) || (hasproperty(pi0,:coords) &&
+       any(x -> x isa AlgebraicReal,Iterators.flatten(bx_raw)))
+        return _exact_grade_slice(pi0, dir, offset, bx_raw;
+            normalize_dirs=normalize_dirs, strict=strict0)
+    end
+    bx = (Float64[bx_raw[1][1], bx_raw[1][2]],
+          Float64[bx_raw[2][1], bx_raw[2][2]])
+    all(isfinite, bx[1]) && all(isfinite, bx[2]) ||
+        throw(ArgumentError("slice_chain_exact_2d: window endpoints must be representable as finite Float64 values"))
 
     # Normalize direction representation.
     d = _normalize_dir(float.(dir), normalize_dirs)
 
     if hasproperty(pi0, :coords)
         coords = getproperty(pi0, :coords)
-        xs = [float(x) for x in coords[1] if isfinite(x)]
-        ys = [float(y) for y in coords[2] if isfinite(y)]
+        xs = Float64[Float64(x) for x in coords[1] if isfinite(x)]
+        ys = Float64[Float64(y) for y in coords[2] if isfinite(y)]
         return _slice_chain_exact_boxes_2d_fast(
             pi0, d, float(offset);
             box = bx,
@@ -701,28 +706,28 @@ end
 
 
 """
-    matching_distance_exact_slices_2d(pi, opts::InvariantOptions;
+    matching_distance_slices_2d(pi, opts::InvariantOptions;
         normalize_dirs=:L1,
         include_axes=false,
         atol=1e-12)
 
-Deterministically enumerate the slice representatives used in the exact 2D matching distance.
+Deterministically enumerate the representative slices used by
+[`matching_distance_sampled_2d`](@ref). This finite family does not certify the
+supremum over all positive-slope lines.
 
 Opts usage:
 - `opts.box` provides the working 2D box. If unset (`nothing`), we use `encoding_box(pi, InvariantOptions())`
   (default behavior).
 - `opts.strict` is forwarded to `locate` as needed (defaults to true).
 
-Returns a vector of NamedTuples with fields:
-  - `dir`    (Vector{Float64}, length 2)
-  - `offset` (Float64), the normal offset c = dot(n, x) with n = [-dir[2], dir[1]]
-  - `chain`  (Vector{Int})
-  - `values` (Vector{Float64}, length chain+1)
-  - `weight` (Float64)
+Returns a named tuple containing `box`, `strict`, `normalize_dirs`,
+`include_axes`, `slopes`, `directions`, `offsets_by_dir`, and `slices`.
+Each entry of `slices` has `chain`, boundary `values` (length `chain + 1`),
+and a Lesnick L1 direction `weight`.
 
 One representative is produced per arrangement cell determined by the critical points.
 """
-function matching_distance_exact_slices_2d(
+function matching_distance_slices_2d(
     pi::PLikeEncodingMap,
     opts::InvariantOptions;
     normalize_dirs::Symbol = :L1,
@@ -737,12 +742,13 @@ function matching_distance_exact_slices_2d(
     )
 
     slices = NamedTuple[]
-    offsets_by_dir = Vector{Vector{Float64}}(undef, length(arr.dir_reps))
+    T = eltype(arr.box[1])
+    offsets_by_dir = Vector{Vector{T}}(undef, length(arr.dir_reps))
 
     for di in 1:length(arr.dir_reps)
         d = arr.dir_reps[di]
-        w = _direction_weight(d; scheme=:lesnick_l1)
-        offs = Float64[]
+        w = _direction_weight(_algebraic_arrangement(arr) ? abs.(d) : d; scheme=:lesnick_l1)
+        offs = T[]
         for oi in 1:arr.noff[di]
             cell = _arr2d_cell_linear_index(arr, di, oi)
             cid = arr.cell_chain_id[cell]
@@ -852,8 +858,6 @@ InvariantScratch() = InvariantScratch(
     Float64[],
 )
 
-@inline _scratch_arenas(threads::Bool) =
-    [InvariantScratch() for _ in 1:(threads ? Threads.maxthreadid() : 1)]
 
 # ----- Fast fibered-barcode queries in 2D: RIVET-style augmented arrangement -----
 #
@@ -878,15 +882,17 @@ struct FiberedSliceFamilyKey
     store_values::Bool
 end
 
-mutable struct _FiberedFamilyBarcodePayload2D
+mutable struct _FiberedFamilyBarcodePayload2D{T<:Real}
+    lock::ReentrantLock
     key::FiberedSliceFamilyKey
-    packed_barcodes::Vector{Union{Nothing,PackedFloatBarcode}}
+    packed_barcodes::Vector{Union{Nothing,PackedBarcode{T}}}
     n_computed::Int
 end
 
-mutable struct _FiberedDistancePayload2D
+mutable struct _FiberedDistancePayload2D{T<:Real}
+    lock::ReentrantLock
     key::FiberedSliceFamilyKey
-    points::Vector{Union{Nothing,Vector{Tuple{Float64,Float64}}}}
+    points::Vector{Union{Nothing,Vector{Tuple{T,T}}}}
     n_computed::Int
 end
 
@@ -903,22 +909,28 @@ Geometry-only cache for fast point-location of 2D lines in the space of
   values quickly for any query line in the same cell
 
 This object is independent of any module `M` and can be shared between many modules.
+Concurrent queries publish lazy entries atomically. Keep the source geometry and
+returned cached storage read-only while queries are active.
 
 Construct with [`fibered_arrangement_2d`](@ref).
 Augment with [`fibered_barcode_cache_2d`](@ref).
 """
-mutable struct FiberedArrangement2D{PI,RC,SFC}
+mutable struct FiberedArrangement2D{PI,RC,SFC,T<:Real,G<:Real}
+    lock::ReentrantLock
     pi::PI
-    box::Tuple{Vector{Float64},Vector{Float64}}
+    box::Tuple{Vector{G},Vector{G}}
+    # The floating geometry lane retains its original window for rational
+    # optimization; algebraic geometry keeps both windows exact.
+    input_box::Tuple{Vector{T},Vector{T}}
     normalize_dirs::Symbol
     include_axes::Bool
     strict::Bool
     atol::Float64
 
     backend::Symbol
-    points::Vector{NTuple{2,Float64}}
-    slope_breaks::Vector{Float64}
-    dir_reps::Vector{Vector{Float64}}
+    points::Vector{NTuple{2,G}}
+    slope_breaks::Vector{G}
+    dir_reps::Vector{Vector{G}}
 
     # For each direction cell:
     # - orders[k] is a permutation of critical points sorted by normal offset
@@ -945,8 +957,8 @@ mutable struct FiberedArrangement2D{PI,RC,SFC}
     event_pool::Vector{_AxisCoordIndex2D}
 
     # coordinate lists for boxes backend (filtered to box)
-    xs::Vector{Float64}
-    ys::Vector{Float64}
+    xs::Vector{G}
+    ys::Vector{G}
 
     # poly backend cache: (A_list, b_list)
     region_cache::RC
@@ -967,12 +979,14 @@ end
 
 Module-augmented cache on top of [`FiberedArrangement2D`](@ref).
 It memoizes the *index barcode* for each chain encountered so that repeated
-fibered barcode queries are fast.
+fibered barcode queries are fast. Concurrent queries share completed entries;
+the source module and returned cached storage must remain read-only.
 
 Construct with [`fibered_barcode_cache_2d`](@ref).
 Query with [`fibered_barcode`](@ref).
 """
 mutable struct FiberedBarcodeCache2D{K,FBP,DPP}
+    lock::ReentrantLock
     arrangement::FiberedArrangement2D
     M::PModule{K}
     # Packed barcodes are the internal default for all hot loops.
@@ -1012,6 +1026,8 @@ end
 @inline _fibered_slice_result(chain, values, barcode) = FiberedSliceResult(chain, values, barcode)
 @inline _empty_fibered_slice_result() =
     _fibered_slice_result(Int[], Float64[], Dict{Tuple{Float64,Float64},Int}())
+
+include("fibered2d/exact_grades.jl")
 
 # ------------------------ internal helpers ------------------------
 
@@ -1055,7 +1071,9 @@ function _unique_sorted_slopes(points; atol::Float64=1e-12)
     return _critical_slopes_2d(pts; atol=atol)
 end
 
-function _fibered_dir_cell_index(arr::FiberedArrangement2D, d::Vector{Float64})::Int
+function _fibered_dir_cell_index(arr::FiberedArrangement2D, direction::AbstractVector{<:Real})::Int
+    orientation = _algebraic_arrangement(arr) && hasproperty(arr.pi, :orientation) ? arr.pi.orientation : (1,1)
+    d = (orientation[1]*direction[1], orientation[2]*direction[2])
     if d[1] < -arr.atol || d[2] < -arr.atol
         throw(ArgumentError("direction must lie in the nonnegative quadrant"))
     end
@@ -1090,7 +1108,7 @@ function _fibered_offset_cell_index(
     arr::FiberedArrangement2D,
     dir_idx::Int,
     d::Union{AbstractVector{<:Real},NTuple{2,<:Real}},
-    off::Float64;
+    off::Real;
     tie_break::Symbol = :up,
 )
     tie_break === :center && (tie_break = :up)
@@ -1145,15 +1163,21 @@ end
 end
 
 function _arr2d_chain_id!(arr::FiberedArrangement2D, chain::Vector{Int})::Int
-    # IMPORTANT: `chain` is used as a Dict key. Do not mutate it after insertion.
-    id = get(arr.chain_key_to_id, chain, 0)
-    if id == 0
-        id = length(arr.chains) + 1
-        arr.chain_key_to_id[chain] = id
-        push!(arr.chains, chain)
+    # Stored chains are immutable cache values even though represented by vectors.
+    return lock(arr.lock) do
+        id = get(arr.chain_key_to_id, chain, 0)
+        if id == 0
+            id = length(arr.chains) + 1
+            arr.chain_key_to_id[chain] = id
+            push!(arr.chains, chain)
+        end
+        return id
     end
-    return id
 end
+
+@inline _arr2d_chain(arr::FiberedArrangement2D, id::Int) =
+    lock(() -> arr.chains[id], arr.lock)
+
 
 function _nearest_coord_index(coords::Vector{Float64}, v::Float64; atol::Float64=1e-8)
     n = length(coords)
@@ -1234,7 +1258,11 @@ function _slice_chain_exact_boxes_2d_fast(
     return chain, values
 end
 
-function _arr2d_slice_chain_and_values(arr::FiberedArrangement2D, dir::Union{AbstractVector{<:Real},NTuple{2,<:Real}}, off::Float64)
+function _arr2d_slice_chain_and_values(arr::FiberedArrangement2D, dir::Union{AbstractVector{<:Real},NTuple{2,<:Real}}, off::Real)
+    if _algebraic_arrangement(arr)
+        return _exact_grade_slice(arr.pi, dir, off, arr.input_box;
+            normalize_dirs=:none, strict=arr.strict)
+    end
     if arr.backend === :boxes
         return _slice_chain_exact_boxes_2d_fast(
             arr.pi, dir, off;
@@ -1286,7 +1314,7 @@ end
 
 function _arr2d_compute_cell!(arr::FiberedArrangement2D, dir_idx::Int, off_idx::Int)
     cell = _arr2d_cell_linear_index(arr, dir_idx, off_idx)
-    cached = arr.cell_chain_id[cell]
+    cached = lock(() -> arr.cell_chain_id[cell], arr.lock)
     if cached != 0
         return cached
     end
@@ -1305,34 +1333,35 @@ function _arr2d_compute_cell!(arr::FiberedArrangement2D, dir_idx::Int, off_idx::
     off_mid = 0.5*(cL + cR)
 
     chain, vals = _arr2d_slice_chain_and_values(arr, drep, off_mid)
-    arr.n_cell_computed += 1
-
-    if isempty(chain)
-        arr.cell_chain_id[cell] = -1
-        return -1
+    events = arr.backend === :boxes && !_algebraic_arrangement(arr) && !isempty(chain) ?
+        _events_from_values_boxes(arr, drep, off_mid, vals) : _AxisCoordIndex2D[]
+    return lock(arr.lock) do
+        cached = arr.cell_chain_id[cell]
+        cached == 0 || return cached
+        cid = isempty(chain) ? -1 : _arr2d_chain_id!(arr, chain)
+        if !isempty(chain) && arr.backend === :boxes
+            first_event = length(arr.event_pool) + 1
+            append!(arr.event_pool, events)
+            arr.cell_event_start[cell] = first_event
+            arr.cell_event_len[cell] = length(events)
+        end
+        arr.cell_chain_id[cell] = cid
+        arr.n_cell_computed += 1
+        return cid
     end
-
-    cid = _arr2d_chain_id!(arr, chain)
-    arr.cell_chain_id[cell] = cid
-
-    if arr.backend === :boxes
-        ev = _events_from_values_boxes(arr, drep, off_mid, vals)
-        s = length(arr.event_pool) + 1
-        append!(arr.event_pool, ev)
-        arr.cell_event_start[cell] = s
-        arr.cell_event_len[cell] = length(ev)
-    end
-
-    return cid
 end
 
 function _arr2d_values_from_cell_boxes(
     arr::FiberedArrangement2D,
     cell::Int,
-    d::Vector{Float64},
-    off::Float64,
+    d::AbstractVector{<:Real},
+    off::Real,
     chain_len::Int,
 )
+    if _algebraic_arrangement(arr)
+        return last(_exact_grade_slice(arr.pi, d, off, arr.input_box;
+            normalize_dirs=:none, strict=arr.strict))
+    end
     x0 = _line_basepoint_from_normal_offset_2d(d, off)
     tmin, tmax = _line_param_range_in_box_2d(x0, d, arr.box; atol=arr.atol)
     if tmax <= tmin + arr.atol
@@ -1344,20 +1373,22 @@ function _arr2d_values_from_cell_boxes(
     values[1] = tmin
     values[end] = tmax
 
-    s = arr.cell_event_start[cell]
-    l = arr.cell_event_len[cell]
-    if l != nvals - 2
-        throw(ErrorException("event count does not match chain length"))
-    end
+    lock(arr.lock) do
+        s = arr.cell_event_start[cell]
+        l = arr.cell_event_len[cell]
+        if l != nvals - 2
+            throw(ErrorException("event count does not match chain length"))
+        end
 
-    for k in 1:l
-        axis, idx = arr.event_pool[s + k - 1]
-        if axis == 1
-            x = arr.xs[idx]
-            values[k+1] = (x - x0[1]) / d[1]
-        else
-            y = arr.ys[idx]
-            values[k+1] = (y - x0[2]) / d[2]
+        for k in 1:l
+            axis, idx = arr.event_pool[s + k - 1]
+            if axis == 1
+                x = arr.xs[idx]
+                values[k+1] = (x - x0[1]) / d[1]
+            else
+                y = arr.ys[idx]
+                values[k+1] = (y - x0[2]) / d[2]
+            end
         end
     end
 
@@ -1421,44 +1452,37 @@ function _arr2d_values_for_chain_poly(arr::FiberedArrangement2D, d::Vector{Float
     return copy(_arr2d_values_for_chain_poly!(scratch, arr, d, off, chain))
 end
 
-function _sync_index_barcodes!(cache::FiberedBarcodeCache2D)
-    n = length(cache.arrangement.chains)
-    while length(cache.index_barcodes_packed) < n
-        push!(cache.index_barcodes_packed, nothing)
-    end
-    return nothing
-end
-
 function _index_barcode_for_chain!(cache::FiberedBarcodeCache2D, chain_id::Int)
     return _barcode_from_packed(_index_packed_for_chain!(cache, chain_id))
 end
 
 function _index_packed_for_chain!(cache::FiberedBarcodeCache2D, chain_id::Int)
-    _sync_index_barcodes!(cache)
-    pb = cache.index_barcodes_packed[chain_id]
-    if pb !== nothing
-        return pb
+    cached = lock(cache.lock) do
+        chain_id <= length(cache.index_barcodes_packed) ? cache.index_barcodes_packed[chain_id] : nothing
     end
-    chain = cache.arrangement.chains[chain_id]
-    pb = _slice_barcode_packed(cache.M, chain; values=nothing, check_chain=false)::PackedIndexBarcode
-    cache.index_barcodes_packed[chain_id] = pb
-    cache.n_barcode_computed += 1
-    return pb
+    cached === nothing || return cached
+    chain = _arr2d_chain(cache.arrangement, chain_id)
+    barcode = _slice_barcode_packed(cache.M, chain; values=nothing, check_chain=false)::PackedIndexBarcode
+    return lock(cache.lock) do
+        while length(cache.index_barcodes_packed) < chain_id
+            push!(cache.index_barcodes_packed, nothing)
+        end
+        cached = cache.index_barcodes_packed[chain_id]
+        cached === nothing || return cached
+        cache.index_barcodes_packed[chain_id] = barcode
+        cache.n_barcode_computed += 1
+        return barcode
+    end
 end
 
 function _precompute_cells!(arr::FiberedArrangement2D;
                             threads::Bool = (Threads.nthreads() > 1))
-    if threads && Threads.nthreads() > 1
-        Threads.@threads for dir_idx in 1:length(arr.dir_reps)
-            for off_idx in 1:arr.noff[dir_idx]
-                _arr2d_compute_cell!(arr, dir_idx, off_idx)
-            end
-        end
-    else
-        for dir_idx in 1:length(arr.dir_reps)
-            for off_idx in 1:arr.noff[dir_idx]
-                _arr2d_compute_cell!(arr, dir_idx, off_idx)
-            end
+    # Compile cells sequentially within each request. Concurrent requests may
+    # duplicate geometry work, then share the first complete published cell;
+    # no arrangement lock is held through geometry callbacks.
+    for dir_idx in 1:length(arr.dir_reps)
+        for off_idx in 1:arr.noff[dir_idx]
+            _arr2d_compute_cell!(arr, dir_idx, off_idx)
         end
     end
     return nothing
@@ -1466,57 +1490,26 @@ end
 
 function _precompute_index_barcodes!(cache::FiberedBarcodeCache2D;
                                      threads::Bool = (Threads.nthreads() > 1))
-    arr = cache.arrangement
-    _sync_index_barcodes!(cache)
-    if threads && Threads.nthreads() > 1
-        Threads.@threads for i in 1:length(arr.chains)
-            pb = cache.index_barcodes_packed[i]
-            if pb === nothing
-                chain = arr.chains[i]
-                cache.index_barcodes_packed[i] =
-                    _slice_barcode_packed(cache.M, chain; values=nothing, check_chain=false)::PackedIndexBarcode
-            end
-        end
-        cache.n_barcode_computed = count(!isnothing, cache.index_barcodes_packed)
-    else
-        for i in 1:length(arr.chains)
-            _index_packed_for_chain!(cache, i)
-        end
-    end
+    _precompute_index_barcodes_for_chain_ids!(cache, 1:chain_count(cache.arrangement); threads=threads)
     return nothing
 end
 
-function _precompute_index_barcodes_for_chain_ids!(
-    cache::FiberedBarcodeCache2D,
-    chain_ids::AbstractVector{Int};
-    threads::Bool = (Threads.nthreads() > 1),
-)
-    isempty(chain_ids) && return nothing
-    arr = cache.arrangement
-    _sync_index_barcodes!(cache)
-    if threads && Threads.nthreads() > 1
-        Threads.@threads for k in eachindex(chain_ids)
-            i = chain_ids[k]
-            pb = cache.index_barcodes_packed[i]
-            if pb === nothing
-                chain = arr.chains[i]
-                cache.index_barcodes_packed[i] =
-                    _slice_barcode_packed(cache.M, chain; values=nothing, check_chain=false)::PackedIndexBarcode
-            end
-        end
-        cache.n_barcode_computed = count(!isnothing, cache.index_barcodes_packed)
-    else
-        for i in chain_ids
-            _index_packed_for_chain!(cache, i)
+function _precompute_index_barcodes_for_chain_ids!(cache::FiberedBarcodeCache2D,
+                                                   chain_ids::AbstractVector{Int};
+                                                   threads::Bool = (Threads.nthreads() > 1))
+    _foreach_workchunk(length(chain_ids); threads=threads) do work, _
+        for k in work
+            _index_packed_for_chain!(cache, chain_ids[k])
         end
     end
     return nothing
 end
 
 @inline function _prepare_fibered_arrangement_readonly!(arr::FiberedArrangement2D)
-    # Two-phase policy: build mutable arrangement caches sequentially, then
-    # treat them as read-only in threaded compute regions.
-    if arr.n_cell_computed != arr.total_cells
+    # Fill representative cells before threaded evaluation. The chain registry
+    # can still grow through concurrent exact or boundary queries, so accesses
+    # to that registry and its barcode vectors remain synchronized.
+    if computed_cell_count(arr) != arr.total_cells
         _precompute_cells!(arr; threads=false)
     end
     return nothing
@@ -1524,7 +1517,7 @@ end
 
 @inline function _prepare_fibered_cache_readonly!(cache::FiberedBarcodeCache2D)
     _prepare_fibered_arrangement_readonly!(cache.arrangement)
-    if cache.n_barcode_computed != length(cache.arrangement.chains)
+    if cached_barcode_count(cache) != chain_count(cache.arrangement)
         _precompute_index_barcodes!(cache; threads=false)
     end
     return nothing
@@ -1548,10 +1541,14 @@ Cheap-first workflow:
 - inspect it with [`describe`](@ref) or [`fibered_arrangement_summary`](@ref),
 - then attach one or more modules with [`fibered_barcode_cache_2d`](@ref).
 
-Use this exact arrangement path when many line queries, exact matching-distance
-queries, or arrangement-integrated kernels will share the same 2D encoding
-geometry. For one-off sampled slice workflows, stay on the lighter
+Use this arrangement when many line queries, matching-distance queries, or
+kernel quadrature evaluations will share the same 2D encoding geometry.
+For one-off sampled slice workflows, stay on the lighter
 `SliceInvariants` APIs instead of paying arrangement-build cost.
+
+Polyhedral vertex enumeration must finish within `max_combinations` and
+`max_vertices` for every region. Exceeding either budget throws an
+`ArgumentError`; no incomplete arrangement is returned.
 
 Opts usage:
 - `opts.box` supplies the working box (if unset, we infer via `encoding_box(pi, opts)`).
@@ -1577,17 +1574,34 @@ function fibered_arrangement_2d(
     threads::Bool = (Threads.nthreads() > 1)
 )
     pi0 = _unwrap_compiled(pi)
+    dimension(pi0) == 2 || throw(ArgumentError("fibered_arrangement_2d: expected a two-dimensional classifier"))
     backend = (pi0 isa PLPolyhedra.PLEncodingMap ? :poly : :boxes)
 
     strict_arg = opts.strict === nothing ? true : opts.strict
     strict0 = (backend == :poly ? false : strict_arg)
 
     # Working box: inferred from opts via encoding_box.
-    bx_raw = encoding_box(pi, opts)
-    bx = ([float(bx_raw[1][1]), float(bx_raw[1][2])],
-          [float(bx_raw[2][1]), float(bx_raw[2][2])])
+    bx_raw = opts.box === nothing || opts.box === :auto ? encoding_box(pi, opts) : opts.box
+    length(bx_raw) == 2 && length(bx_raw[1]) == 2 && length(bx_raw[2]) == 2 ||
+        throw(ArgumentError("fibered_arrangement_2d: expected two two-dimensional window endpoints"))
+    all(isfinite, bx_raw[1]) && all(isfinite, bx_raw[2]) ||
+        throw(ArgumentError("fibered_arrangement_2d: the working window must be finite"))
+    all(bx_raw[1] .<= bx_raw[2]) ||
+        throw(ArgumentError("fibered_arrangement_2d: window endpoints must be ordered"))
+    T = hasproperty(pi0, :coords) && any(a -> eltype(a) <: AlgebraicReal, pi0.coords) ||
+        any(x -> x isa AlgebraicReal, Iterators.flatten(bx_raw)) ? AlgebraicReal : Rational{BigInt}
+    input_box = (T.(bx_raw[1]), T.(bx_raw[2]))
+    exact_geometry = T === AlgebraicReal && backend === :boxes && hasproperty(pi0,:coords)
+    G = exact_geometry ? AlgebraicReal : Float64
+    bx = (G.(bx_raw[1]),G.(bx_raw[2]))
+    all(isfinite,bx[1]) && all(isfinite,bx[2]) ||
+        throw(ArgumentError("fibered_arrangement_2d: window endpoints must be finite"))
+    exact_geometry && (atol = 0.0)
 
-    points = if backend == :boxes && hasproperty(pi0, :coords)
+    exact_data = exact_geometry ? _exact_arrangement_geometry(pi0,bx,normalize_dirs,include_axes) : nothing
+    points = if exact_geometry
+        exact_data[1]
+    elseif backend == :boxes && hasproperty(pi0, :coords)
         _critical_points_boxes_2d(pi0, bx; atol=atol)
     elseif backend == :poly && (pi0 isa PLPolyhedra.PLEncodingMap)
         _critical_points_poly_2d(pi0, bx; max_combinations=max_combinations, max_vertices=max_vertices, atol=atol)
@@ -1600,9 +1614,13 @@ function fibered_arrangement_2d(
         pts
     end
 
-    slopes = _unique_sorted_slopes(points; atol=atol)
-    dir_reps_raw = _direction_representatives(slopes; normalize_dirs=normalize_dirs, include_axes=include_axes, atol=atol)
-    dir_reps = [Float64[d[1], d[2]] for d in dir_reps_raw]
+    slopes = exact_geometry ? exact_data[2] : _unique_sorted_slopes(points; atol=atol)
+    dir_reps = if exact_geometry
+        exact_data[3]
+    else
+        raw = _direction_representatives(slopes; normalize_dirs=normalize_dirs, include_axes=include_axes, atol=atol)
+        [Float64[d[1],d[2]] for d in raw]
+    end
 
     ndirs = length(dir_reps)
     orders = Vector{Vector{Int}}(undef, ndirs)
@@ -1632,14 +1650,16 @@ function fibered_arrangement_2d(
     cell_event_len = zeros(Int, total_cells)
     event_pool = _AxisCoordIndex2D[]
 
-    xs = Float64[]
-    ys = Float64[]
+    xs = G[]
+    ys = G[]
     region_cache = nothing
 
-    if backend == :boxes && hasproperty(pi0, :coords)
+    if exact_geometry
+        xs,ys = exact_data[4],exact_data[5]
+    elseif backend == :boxes && hasproperty(pi0, :coords)
         coords = getproperty(pi0, :coords)
-        xs = [float(x) for x in coords[1] if isfinite(x)]
-        ys = [float(y) for y in coords[2] if isfinite(y)]
+        xs = Float64[Float64(x) for x in coords[1] if isfinite(Float64(x))]
+        ys = Float64[Float64(y) for y in coords[2] if isfinite(Float64(y))]
         _unique_sorted_floats!(xs; atol=atol)
         _unique_sorted_floats!(ys; atol=atol)
     elseif backend == :boxes
@@ -1653,14 +1673,14 @@ function fibered_arrangement_2d(
     end
 
     arr = FiberedArrangement2D(
-        pi0, bx, normalize_dirs, include_axes, strict0, atol,
+        ReentrantLock(), pi0, bx, input_box, normalize_dirs, include_axes, strict0, atol,
         backend, points, slopes, dir_reps, orders, unique_pos,
         noff, start, total_cells, cell_chain_id,
         cell_event_start, cell_event_len, event_pool,
         xs, ys, region_cache,
         Dict{Vector{Int},Int}(), Vector{Vector{Int}}(),
         0,
-        Dict{FiberedSliceFamilyKey,FiberedSliceFamily2D}(),
+        Dict{FiberedSliceFamilyKey,FiberedSliceFamily2D{G}}(),
     )
 
     _precompute_arrangement_cache!(arr, precompute; threads=threads)
@@ -1713,7 +1733,7 @@ Precomputation options
 - `:none`     : lazy cells, lazy families, lazy payloads (default)
 - `:family`   : precompute arrangement cells and the default slice family only
 - `:barcodes` : additionally precompute representative packed barcodes per family cell
-- `:distance` : additionally precompute point payloads used by exact distances/kernels
+- `:distance` : additionally precompute representative point payloads used by sampled distances and kernels
 
 Compatibility aliases
 - `:cells`, `:cells_barcodes`, `:full` map to `:barcodes`
@@ -1770,18 +1790,18 @@ Example: shared arrangement workflow
 
     # 4. Higher-level computations that reuse the same arrangement.
     #
-    # Exact matching distance by enumerating one representative slice per arrangement cell.
-    d_match = Inv.matching_distance_exact_2d(cacheM, cacheN; weight = :lesnick_l1)
+    # Sampled matching distance: maximum over one representative slice per cell.
+    d_match = Inv.matching_distance_sampled_2d(cacheM, cacheN; weight = :lesnick_l1)
 
-    # Kernel computed by integrating a per-slice kernel over arrangement cells.
+    # Finite weighted average of per-slice kernels at those representatives.
     k = Inv.slice_kernel(cacheM, cacheN;
-        kind = :gaussian,
+        kind = :bottleneck_gaussian,
         direction_weight = :lesnick_l1,
         cell_weight = :uniform,
     )
 
 Notes
-- `matching_distance_exact_2d(cacheM, cacheN)` and `slice_kernel(cacheM, cacheN)` require
+- Pairwise matching-distance and `slice_kernel(cacheM, cacheN)` calls require
   `cacheM.arrangement === cacheN.arrangement` (the same arrangement object).
 - If you do not pass an existing arrangement, `fibered_barcode_cache_2d(M, pi; ...)` will
   build a fresh one (convenient, but not shared across modules unless you pass it around).
@@ -1843,13 +1863,14 @@ function fibered_barcode_cache_2d(
 ) where {K}
     level = _normalize_fibered_cache_precompute(precompute)
 
+    T = eltype(arr.box[1])
     cache = FiberedBarcodeCache2D(
-        arr,
+        ReentrantLock(), arr,
         M,
         Union{Nothing,PackedIndexBarcode}[],
         0,
-        Dict{FiberedSliceFamilyKey,_FiberedFamilyBarcodePayload2D}(),
-        Dict{FiberedSliceFamilyKey,_FiberedDistancePayload2D}(),
+        Dict{FiberedSliceFamilyKey,_FiberedFamilyBarcodePayload2D{T}}(),
+        Dict{FiberedSliceFamilyKey,_FiberedDistancePayload2D{T}}(),
     )
 
     if level != :none
@@ -1882,9 +1903,12 @@ Return the arrangement cell id `(dir_cell, offset_cell)` for the line determined
 Returns `nothing` if the line misses the arrangement box or lies on its boundary.
 """
 function fibered_cell_id(arr::FiberedArrangement2D, dir, offset::Real; tie_break::Symbol=:up)
-    d = _normalize_dir(_as_float2(dir), arr.normalize_dirs)
+    tie_break in (:up,:down,:center) || throw(ArgumentError("tie_break must be :up, :down, or :center"))
+    d = _algebraic_arrangement(arr) ? _exact_grade_direction(dir,arr.normalize_dirs) :
+        _normalize_dir(_as_float2(dir), arr.normalize_dirs)
     dir_idx = _fibered_dir_cell_index(arr, d)
-    off_idx = _fibered_offset_cell_index(arr, dir_idx, d, Float64(offset); tie_break=tie_break)
+    off = _algebraic_arrangement(arr) ? AlgebraicReal(offset) : Float64(offset)
+    off_idx = _fibered_offset_cell_index(arr, dir_idx, d, off; tie_break=tie_break)
     if off_idx == 0
         return nothing
     end
@@ -1892,9 +1916,12 @@ function fibered_cell_id(arr::FiberedArrangement2D, dir, offset::Real; tie_break
 end
 
 function fibered_cell_id(arr::FiberedArrangement2D, dir, x0::AbstractVector{<:Real}; tie_break::Symbol=:up)
-    d = _normalize_dir(_as_float2(dir), arr.normalize_dirs)
+    length(x0) == 2 || throw(ArgumentError("basepoint must have length two"))
+    T = _algebraic_arrangement(arr) ? AlgebraicReal : Float64
+    d = _algebraic_arrangement(arr) ? _exact_grade_direction(dir,arr.normalize_dirs) :
+        _normalize_dir(_as_float2(dir), arr.normalize_dirs)
     (n1, n2) = _normal_from_dir_2d(d)
-    off = n1*Float64(x0[1]) + n2*Float64(x0[2])
+    off = n1*T(x0[1]) + n2*T(x0[2])
     return fibered_cell_id(arr, d, off; tie_break=tie_break)
 end
 
@@ -1905,6 +1932,10 @@ Return the slice chain (as a vector of region labels) for the given line.
 The chain is computed lazily and then cached in the arrangement cell.
 """
 function fibered_chain(arr::FiberedArrangement2D, dir, offset::Real; tie_break::Symbol=:up, copy::Bool=true)
+    if _algebraic_arrangement(arr)
+        fibered_cell_id(arr,dir,offset;tie_break=tie_break) # Validate direction and boundary policy.
+        return first(_exact_grade_slice(arr.pi,dir,offset,arr.input_box;normalize_dirs=arr.normalize_dirs,strict=arr.strict))
+    end
     cid = fibered_cell_id(arr, dir, offset; tie_break=tie_break)
     if cid === nothing
         return Int[]
@@ -1915,7 +1946,7 @@ function fibered_chain(arr::FiberedArrangement2D, dir, offset::Real; tie_break::
     if chain_id <= 0
         return Int[]
     end
-    return copy ? Base.copy(arr.chains[chain_id]) : arr.chains[chain_id]
+    return copy ? Base.copy(_arr2d_chain(arr, chain_id)) : _arr2d_chain(arr, chain_id)
 end
 
 """
@@ -1925,6 +1956,10 @@ Return boundary parameter values along the line segment inside `arr.box`.
 These are the `t` values used by `slice_barcode` to map index endpoints to real endpoints.
 """
 function fibered_values(arr::FiberedArrangement2D, dir, offset::Real; tie_break::Symbol=:up)
+    if _algebraic_arrangement(arr)
+        fibered_cell_id(arr,dir,offset;tie_break=tie_break)
+        return last(_exact_grade_slice(arr.pi,dir,offset,arr.input_box;normalize_dirs=arr.normalize_dirs,strict=arr.strict))
+    end
     cid = fibered_cell_id(arr, dir, offset; tie_break=tie_break)
     if cid === nothing
         return Float64[]
@@ -1937,7 +1972,7 @@ function fibered_values(arr::FiberedArrangement2D, dir, offset::Real; tie_break:
     if chain_id <= 0
         return Float64[]
     end
-    chain = arr.chains[chain_id]
+    chain = _arr2d_chain(arr, chain_id)
 
     if arr.backend === :boxes
         return _arr2d_values_from_cell_boxes(arr, cell, d, off, length(chain))
@@ -1981,6 +2016,7 @@ function fibered_barcode(
     verify::Bool = false,
 )
     arr = cache.arrangement
+    _algebraic_arrangement(arr) && return last(_exact_grade_barcode(cache, dir, offset; values=values, tie_break=tie_break))
     d = _normalize_dir(_as_float2(dir), arr.normalize_dirs)
     off = Float64(offset)
 
@@ -2002,7 +2038,7 @@ function fibered_barcode(
         throw(ArgumentError("values must be :t or :index"))
     end
 
-    chain = arr.chains[chain_id]
+    chain = _arr2d_chain(arr, chain_id)
     vals = Float64[]
     ok = true
 
@@ -2054,6 +2090,11 @@ end
 
 function fibered_barcode(cache::FiberedBarcodeCache2D, dir, x0::AbstractVector{<:Real}; kwargs...)
     arr = cache.arrangement
+    if _algebraic_arrangement(arr)
+        d = _exact_grade_direction(dir, arr.normalize_dirs)
+        off = -d[2]*AlgebraicReal(x0[1]) + d[1]*AlgebraicReal(x0[2])
+        return fibered_barcode(cache, d, off; kwargs...)
+    end
     d = _normalize_dir(_as_float2(dir), arr.normalize_dirs)
     (n1, n2) = _normal_from_dir_2d(d)
     off = n1*Float64(x0[1]) + n2*Float64(x0[2])
@@ -2077,6 +2118,7 @@ end
     tie_break::Symbol = :up,
 )
     arr = cache.arrangement
+    _algebraic_arrangement(arr) && return last(_exact_grade_barcode(cache, dir, offset; values=values, packed=true, tie_break=tie_break))
     d = _normalize_dir(_as_float2(dir), arr.normalize_dirs)
     off = Float64(offset)
 
@@ -2099,7 +2141,7 @@ end
         throw(ArgumentError("values must be :t or :index"))
     end
 
-    chain = arr.chains[chain_id]
+    chain = _arr2d_chain(arr, chain_id)
     vals = Float64[]
     ok = true
 
@@ -2133,6 +2175,11 @@ end
 
 @inline function _fibered_barcode_packed(cache::FiberedBarcodeCache2D, dir, x0::AbstractVector{<:Real}; kwargs...)
     arr = cache.arrangement
+    if _algebraic_arrangement(arr)
+        d = _exact_grade_direction(dir, arr.normalize_dirs)
+        off = -d[2]*AlgebraicReal(x0[1]) + d[1]*AlgebraicReal(x0[2])
+        return _fibered_barcode_packed(cache, d, off; kwargs...)
+    end
     d = _normalize_dir(_as_float2(dir), arr.normalize_dirs)
     (n1, n2) = _normal_from_dir_2d(d)
     off = n1 * Float64(x0[1]) + n2 * Float64(x0[2])
@@ -2157,6 +2204,7 @@ function fibered_slice(
     tie_break::Symbol = :up,
 )
     arr = cache.arrangement
+    _algebraic_arrangement(arr) && return _fibered_slice_result(_exact_grade_barcode(cache, dir, offset; tie_break=tie_break)...)
     d = _normalize_dir(_as_float2(dir), arr.normalize_dirs)
     off = Float64(offset)
 
@@ -2174,7 +2222,7 @@ function fibered_slice(
     end
 
     bidx_packed = _index_packed_for_chain!(cache, chain_id)
-    chain = arr.chains[chain_id]
+    chain = _arr2d_chain(arr, chain_id)
     vals = Float64[]
     ok = true
 
@@ -2211,6 +2259,11 @@ end
 
 function fibered_slice(cache::FiberedBarcodeCache2D, dir, x0::AbstractVector{<:Real}; kwargs...)
     arr = cache.arrangement
+    if _algebraic_arrangement(arr)
+        d = _exact_grade_direction(dir, arr.normalize_dirs)
+        off = -d[2]*AlgebraicReal(x0[1]) + d[1]*AlgebraicReal(x0[2])
+        return fibered_slice(cache, d, off; kwargs...)
+    end
     d = _normalize_dir(_as_float2(dir), arr.normalize_dirs)
     x = _as_real_vector2(x0)
     x === nothing && throw(ArgumentError("basepoint must be given as a 2-vector or 2-tuple of reals."))
@@ -2220,7 +2273,7 @@ function fibered_slice(cache::FiberedBarcodeCache2D, dir, x0::AbstractVector{<:R
 end
 
 @inline fibered_slice(cache::FiberedBarcodeCache2D, dir, x0::NTuple{2,<:Real}; kwargs...) =
-    fibered_slice(cache, dir, Float64[x0[1], x0[2]]; kwargs...)
+    fibered_slice(cache, dir, collect(x0); kwargs...)
 
 """
     fibered_barcode_cache_stats(cache)
@@ -2229,34 +2282,38 @@ Return a NamedTuple with basic statistics describing the cache state.
 Useful to confirm caching/precomputation.
 """
 function fibered_barcode_cache_stats(cache::FiberedBarcodeCache2D)
-    arr = cache.arrangement
-    n_family_barcode_payloads = length(cache.family_barcode_payloads)
-    n_distance_payloads = length(cache.distance_payloads)
-    n_family_barcode_slices_computed = 0
-    n_distance_slices_computed = 0
-    for payload in values(cache.family_barcode_payloads)
-        n_family_barcode_slices_computed += payload.n_computed
+    return lock(cache.arrangement.lock) do
+        return lock(cache.lock) do
+            arr = cache.arrangement
+            n_family_barcode_payloads = length(cache.family_barcode_payloads)
+            n_distance_payloads = length(cache.distance_payloads)
+            n_family_barcode_slices_computed = 0
+            n_distance_slices_computed = 0
+            for payload in values(cache.family_barcode_payloads)
+                n_family_barcode_slices_computed += lock(() -> payload.n_computed, payload.lock)
+            end
+            for payload in values(cache.distance_payloads)
+                n_distance_slices_computed += lock(() -> payload.n_computed, payload.lock)
+            end
+            return (
+                n_points = length(arr.points),
+                n_dir_cells = length(arr.dir_reps),
+                total_cells = arr.total_cells,
+                n_cells_computed = arr.n_cell_computed,
+                n_chains = length(arr.chains),
+                n_index_barcodes_computed = cache.n_barcode_computed,
+                n_slice_families_cached = length(arr.slice_family_cache),
+                n_family_barcode_payloads = n_family_barcode_payloads,
+                n_family_barcode_slices_computed = n_family_barcode_slices_computed,
+                n_distance_payloads = n_distance_payloads,
+                n_distance_slices_computed = n_distance_slices_computed,
+                normalize_dirs = arr.normalize_dirs,
+                include_axes = arr.include_axes,
+                strict = arr.strict,
+                atol = arr.atol,
+            )
+        end
     end
-    for payload in values(cache.distance_payloads)
-        n_distance_slices_computed += payload.n_computed
-    end
-    return (
-        n_points = length(arr.points),
-        n_dir_cells = length(arr.dir_reps),
-        total_cells = arr.total_cells,
-        n_cells_computed = arr.n_cell_computed,
-        n_chains = length(arr.chains),
-        n_index_barcodes_computed = cache.n_barcode_computed,
-        n_slice_families_cached = length(arr.slice_family_cache),
-        n_family_barcode_payloads = n_family_barcode_payloads,
-        n_family_barcode_slices_computed = n_family_barcode_slices_computed,
-        n_distance_payloads = n_distance_payloads,
-        n_distance_slices_computed = n_distance_slices_computed,
-        normalize_dirs = arr.normalize_dirs,
-        include_axes = arr.include_axes,
-        strict = arr.strict,
-        atol = arr.atol,
-    )
 end
 
 
@@ -2301,6 +2358,16 @@ function _arr2d_direction_cell_theta_width(arr::FiberedArrangement2D, dir_idx::I
         return 0.5 * Base.MathConstants.pi
     end
 
+    if _algebraic_arrangement(arr)
+        # Numerical quadrature weights may be rounded, but subtract neighboring
+        # exact slopes first so a narrow nonzero cell does not disappear through
+        # cancellation of two rounded arctangents.
+        dir_idx == 1 && return atan(Float64(first(arr.slope_breaks)))
+        dir_idx == n_base && return atan(Float64(inv(last(arr.slope_breaks))))
+        lo,hi = arr.slope_breaks[dir_idx-1],arr.slope_breaks[dir_idx]
+        return atan(Float64((hi-lo)/(1+lo*hi)))
+    end
+
     if dir_idx == 1
         sL = 0.0
         sR = arr.slope_breaks[1]
@@ -2333,7 +2400,7 @@ function _arr2d_representative_tmin_tmax(arr::FiberedArrangement2D)
             chain_id <= 0 && continue
 
             off_mid, _, _ = _arr2d_cell_representative_offset(arr, dir_idx, off_idx)
-            chain = arr.chains[chain_id]
+            chain = _arr2d_chain(arr, chain_id)
             cell = _arr2d_cell_linear_index(arr, dir_idx, off_idx)
 
             vals = Float64[]
@@ -2354,7 +2421,7 @@ function _arr2d_representative_tmin_tmax(arr::FiberedArrangement2D)
 
             if !ok || isempty(vals)
                 opts_exact = InvariantOptions(box = arr.box, strict = arr.strict)
-                _, vals = slice_chain_exact_2d(arr.pi, d, off, opts_exact; normalize_dirs = :none, atol = arr.atol)
+                _, vals = slice_chain_exact_2d(arr.pi, d, off_mid, opts_exact; normalize_dirs = :none, atol = arr.atol)
             end
             isempty(vals) && continue
 
@@ -2380,7 +2447,8 @@ end
     empty!(out)
     sizehint!(out, length(bidx))
     @inbounds for ((i, j), m) in bidx
-        out[(Float64(vals[i]), Float64(vals[j]))] = m
+        key = (Float64(vals[i]), Float64(vals[j]))
+        out[key] = get(out, key, 0) + m
     end
     return out
 end
@@ -2394,7 +2462,8 @@ end
     empty!(out)
     sizehint!(out, length(bidx))
     @inbounds for ((i, j), m) in bidx
-        out[(pool[start + i - 1], pool[start + j - 1])] = m
+        key = (pool[start + i - 1], pool[start + j - 1])
+        out[key] = get(out, key, 0) + m
     end
     return out
 end
@@ -2407,17 +2476,20 @@ end
 """
     FiberedSliceFamily2D
 
-Geometry-only precomputation for arrangement-exact slice families in R^2.
+Geometry-only precomputation for representative slice families in R^2.
 
 A `FiberedArrangement2D` partitions (direction, offset) space into finitely many 2-cells.
-On each nonempty cell the sliced module is constant. A `FiberedSliceFamily2D` chooses
-one representative slice per nonempty cell and (optionally) stores the boundary
-parameter values for that slice.
+Within each nonempty cell, the ordered region chain and its index barcode are
+constant. Geometric barcode endpoints, distances, and kernel values can vary
+within a cell. A `FiberedSliceFamily2D` chooses one representative slice per
+nonempty cell and (optionally) stores the boundary parameter values for that
+slice. This finite family supports sampled distances and kernel quadrature;
+its representatives alone do not determine a supremum or an exact integral.
 
 This object is intended for many-pair workloads: build once per dataset, reuse across
 many module pairs.
 """
-struct FiberedSliceFamily2D
+struct FiberedSliceFamily2D{T<:Real}
     arrangement::FiberedArrangement2D
 
     # one entry per nonempty arrangement cell
@@ -2427,12 +2499,12 @@ struct FiberedSliceFamily2D
     chain_id::Vector{Int}
 
     # representative offsets and interval endpoints
-    off_mid::Vector{Float64}
-    off0::Vector{Float64}
-    off1::Vector{Float64}
+    off_mid::Vector{T}
+    off0::Vector{T}
+    off1::Vector{T}
 
     # concatenated boundary values storage
-    vals_pool::Vector{Float64}
+    vals_pool::Vector{T}
     vals_start::Vector{Int}
     vals_len::Vector{Int}
 
@@ -2451,7 +2523,7 @@ end
     s = fam.vals_start[k]
     l = fam.vals_len[k]
     if s == 0 || l == 0
-        return Float64[]
+        return eltype(fam.vals_pool)[]
     end
     return @view fam.vals_pool[s:(s + l - 1)]
 end
@@ -2479,7 +2551,7 @@ Build and cache a [`FiberedSliceFamily2D`](@ref) for a given arrangement.
 The result is cached in `arr.slice_family_cache[FiberedSliceFamilyKey(direction_weight, store_values)]`.
 
 Use this when you will reuse one representative slice per nonempty arrangement
-cell across many pairwise exact matching-distance or kernel computations.
+cell across many pairwise sampled matching-distance or kernel computations.
 Inspect the cached family first with [`fibered_family_summary`](@ref).
 """
 function fibered_slice_family_2d(
@@ -2488,12 +2560,12 @@ function fibered_slice_family_2d(
     store_values::Bool = true,
 )
     key = FiberedSliceFamilyKey(direction_weight, store_values)
-    cached = get(arr.slice_family_cache, key, nothing)
+    cached = lock(() -> get(arr.slice_family_cache, key, nothing), arr.lock)
     if cached !== nothing
         return cached::FiberedSliceFamily2D
     end
 
-    if arr.n_cell_computed != arr.total_cells
+    if computed_cell_count(arr) != arr.total_cells
         _precompute_cells!(arr)
     end
 
@@ -2502,7 +2574,7 @@ function fibered_slice_family_2d(
     theta_w = Vector{Float64}(undef, ndirs)
     for i in 1:ndirs
         d = arr.dir_reps[i]
-        dir_w[i] = _direction_weight(d; scheme=direction_weight)
+        dir_w[i] = Float64(_direction_weight(_algebraic_arrangement(arr) ? abs.(d) : d; scheme=direction_weight))
         theta_w[i] = _arr2d_direction_cell_theta_width(arr, i)
     end
 
@@ -2510,11 +2582,12 @@ function fibered_slice_family_2d(
     off_idx = Int[]
     cell_id = Int[]
     chain_id = Int[]
-    off_mid = Float64[]
-    off0 = Float64[]
-    off1 = Float64[]
+    T = eltype(arr.box[1])
+    off_mid = T[]
+    off0 = T[]
+    off1 = T[]
 
-    vals_pool = Float64[]
+    vals_pool = T[]
     vals_start = Int[]
     vals_len = Int[]
     scratch = InvariantScratch()
@@ -2537,7 +2610,7 @@ function fibered_slice_family_2d(
             push!(off1, c1)
 
             if store_values
-                chain = arr.chains[cid]
+                chain = _arr2d_chain(arr, cid)
                 m = length(chain)
 
                 vals = if arr.backend == :boxes
@@ -2572,8 +2645,9 @@ function fibered_slice_family_2d(
         direction_weight, store_values, uniq,
     )
 
-    arr.slice_family_cache[key] = fam
-    return fam
+    return lock(arr.lock) do
+        get!(arr.slice_family_cache, key, fam)
+    end
 end
 
 @inline function _normalize_fibered_cache_precompute(precompute::Symbol)
@@ -2590,40 +2664,42 @@ end
 @inline _family_key(fam::FiberedSliceFamily2D) =
     FiberedSliceFamilyKey(fam.direction_weight_scheme, fam.store_values)
 
-@inline function _float_packed_from_index_packed_pool(
+@inline function _packed_from_index_packed_pool(
     pb::PackedIndexBarcode,
-    vals_pool::AbstractVector{Float64},
+    vals_pool::AbstractVector{T},
     start::Int,
-)::PackedFloatBarcode
-    pairs = Vector{EndpointPair{Float64}}(undef, length(pb.pairs))
+) where {T<:Real}
+    pairs = Vector{EndpointPair{T}}(undef, length(pb.pairs))
     mults = copy(pb.mults)
     @inbounds for i in eachindex(pb.pairs)
         p = pb.pairs[i]
-        pairs[i] = EndpointPair{Float64}(vals_pool[start + p.b - 1], vals_pool[start + p.d - 1])
+        pairs[i] = EndpointPair{T}(vals_pool[start + p.b - 1], vals_pool[start + p.d - 1])
     end
-    return PackedFloatBarcode(pairs, mults)
+    return PackedBarcode{T}(pairs, mults)
 end
 
 @inline function _family_barcode_payload!(cache::FiberedBarcodeCache2D, fam::FiberedSliceFamily2D)
     key = _family_key(fam)
-    return get!(cache.family_barcode_payloads, key) do
-        _FiberedFamilyBarcodePayload2D(
-            key,
-            Vector{Union{Nothing,PackedFloatBarcode}}(fill(nothing, nslices(fam))),
-            0,
-        )
-    end
+    cached = lock(() -> get(cache.family_barcode_payloads, key, nothing), cache.lock)
+    cached === nothing || return cached
+    T = eltype(fam.vals_pool)
+    payload = _FiberedFamilyBarcodePayload2D(
+        ReentrantLock(), key,
+        Vector{Union{Nothing,PackedBarcode{T}}}(fill(nothing, nslices(fam))), 0,
+    )
+    return lock(() -> get!(cache.family_barcode_payloads, key, payload), cache.lock)
 end
 
 @inline function _distance_payload!(cache::FiberedBarcodeCache2D, fam::FiberedSliceFamily2D)
     key = _family_key(fam)
-    return get!(cache.distance_payloads, key) do
-        _FiberedDistancePayload2D(
-            key,
-            Vector{Union{Nothing,Vector{Tuple{Float64,Float64}}}}(fill(nothing, nslices(fam))),
-            0,
-        )
-    end
+    cached = lock(() -> get(cache.distance_payloads, key, nothing), cache.lock)
+    cached === nothing || return cached
+    T = eltype(fam.vals_pool)
+    payload = _FiberedDistancePayload2D(
+        ReentrantLock(), key,
+        Vector{Union{Nothing,Vector{Tuple{T,T}}}}(fill(nothing, nslices(fam))), 0,
+    )
+    return lock(() -> get!(cache.distance_payloads, key, payload), cache.lock)
 end
 
 @inline function _family_barcode_packed_uncached!(
@@ -2637,16 +2713,16 @@ end
     bidx = _index_packed_for_chain!(cache, cid)
     s = fam.vals_start[k]
     if s != 0
-        return _float_packed_from_index_packed_pool(bidx, fam.vals_pool, s)
+        return _packed_from_index_packed_pool(bidx, fam.vals_pool, s)
     end
 
     di = fam.dir_idx[k]
     d = arr.dir_reps[di]
     if arr.backend === :boxes
         _, vals = _arr2d_slice_chain_and_values(arr, d, fam.off_mid[k])
-        return _float_packed_from_index_packed_values(bidx, vals)
+        return _packed_from_index_packed_pool(bidx, vals, 1)
     end
-    vals = _arr2d_values_for_chain_poly!(scratch, arr, d, fam.off_mid[k], arr.chains[cid])
+    vals = _arr2d_values_for_chain_poly!(scratch, arr, d, fam.off_mid[k], _arr2d_chain(arr, cid))
     return _float_packed_from_index_packed_values(bidx, vals)
 end
 
@@ -2657,14 +2733,18 @@ end
     k::Int,
     scratch::InvariantScratch,
 )
-    pb = payload.packed_barcodes[k]
+    pb = lock(() -> payload.packed_barcodes[k], payload.lock)
     if pb !== nothing
-        return pb::PackedFloatBarcode
+        return pb
     end
     out = _family_barcode_packed_uncached!(cache, fam, k, scratch)
-    payload.packed_barcodes[k] = out
-    payload.n_computed += 1
-    return out
+    return lock(payload.lock) do
+        cached = payload.packed_barcodes[k]
+        cached === nothing || return cached
+        payload.packed_barcodes[k] = out
+        payload.n_computed += 1
+        return out
+    end
 end
 
 @inline function _distance_points_for_slice_uncached!(
@@ -2675,6 +2755,17 @@ end
 )
     cid = fam.chain_id[k]
     bidx = _index_packed_for_chain!(cache, cid)
+    if _algebraic_arrangement(cache.arrangement)
+        # Keep absolute endpoints exact until the distance engine subtracts
+        # them. Rounding each endpoint first can erase an entire short bar.
+        packed = _family_barcode_packed_uncached!(cache,fam,k,scratch)
+        points = Tuple{AlgebraicReal,AlgebraicReal}[]
+        sizehint!(points,_packed_total_multiplicity(packed))
+        for (i,pair) in enumerate(packed.pairs), _ in 1:packed.mults[i]
+            push!(points,(pair.b,pair.d))
+        end
+        return points
+    end
     out = Tuple{Float64,Float64}[]
     s = fam.vals_start[k]
     if s != 0
@@ -2690,7 +2781,7 @@ end
         _points_from_index_packed_and_values!(out, bidx, vals)
         return out
     end
-    vals = _arr2d_values_for_chain_poly!(scratch, arr, d, fam.off_mid[k], arr.chains[cid])
+    vals = _arr2d_values_for_chain_poly!(scratch, arr, d, fam.off_mid[k], _arr2d_chain(arr, cid))
     _points_from_index_packed_and_values!(out, bidx, vals)
     return out
 end
@@ -2702,14 +2793,18 @@ end
     k::Int,
     scratch::InvariantScratch,
 )
-    pts = distance_payload.points[k]
+    pts = lock(() -> distance_payload.points[k], distance_payload.lock)
     if pts !== nothing
-        return pts::Vector{Tuple{Float64,Float64}}
+        return pts
     end
     out = _distance_points_for_slice_uncached!(cache, fam, k, scratch)
-    distance_payload.points[k] = out
-    distance_payload.n_computed += 1
-    return out
+    return lock(distance_payload.lock) do
+        cached = distance_payload.points[k]
+        cached === nothing || return cached
+        distance_payload.points[k] = out
+        distance_payload.n_computed += 1
+        return out
+    end
 end
 
 function _precompute_family_barcodes!(
@@ -2720,24 +2815,15 @@ function _precompute_family_barcodes!(
     _prepare_fibered_arrangement_readonly!(cache.arrangement)
     _precompute_index_barcodes!(cache; threads=false)
     payload = _family_barcode_payload!(cache, fam)
-    if payload.n_computed == nslices(fam)
+    if lock(() -> payload.n_computed, payload.lock) == nslices(fam)
         return payload
     end
 
-    if threads && Threads.nthreads() > 1
-        Threads.@threads for k in 1:nslices(fam)
-            payload.packed_barcodes[k] === nothing || continue
-            scratch = InvariantScratch()
-            payload.packed_barcodes[k] = _family_barcode_packed_uncached!(cache, fam, k, scratch)
-        end
-        payload.n_computed = count(!isnothing, payload.packed_barcodes)
-    else
+    _foreach_workchunk(nslices(fam); threads=threads) do work, _
         scratch = InvariantScratch()
-        for k in 1:nslices(fam)
-            payload.packed_barcodes[k] === nothing || continue
-            payload.packed_barcodes[k] = _family_barcode_packed_uncached!(cache, fam, k, scratch)
+        for k in work
+            _family_barcode_packed!(cache, fam, payload, k, scratch)
         end
-        payload.n_computed = nslices(fam)
     end
     return payload
 end
@@ -2750,24 +2836,15 @@ function _precompute_distance_payload!(
     _prepare_fibered_arrangement_readonly!(cache.arrangement)
     _precompute_index_barcodes_for_chain_ids!(cache, fam.unique_chain_ids; threads=false)
     distance_payload = _distance_payload!(cache, fam)
-    if distance_payload.n_computed == nslices(fam)
+    if lock(() -> distance_payload.n_computed, distance_payload.lock) == nslices(fam)
         return distance_payload
     end
 
-    if threads && Threads.nthreads() > 1
-        Threads.@threads for k in 1:nslices(fam)
-            distance_payload.points[k] === nothing || continue
-            scratch = InvariantScratch()
-            distance_payload.points[k] = _distance_points_for_slice_uncached!(cache, fam, k, scratch)
-        end
-        distance_payload.n_computed = count(!isnothing, distance_payload.points)
-    else
+    _foreach_workchunk(nslices(fam); threads=threads) do work, _
         scratch = InvariantScratch()
-        for k in 1:nslices(fam)
-            distance_payload.points[k] === nothing || continue
-            distance_payload.points[k] = _distance_points_for_slice_uncached!(cache, fam, k, scratch)
+        for k in work
+            _distance_points_for_slice!(cache, fam, distance_payload, k, scratch)
         end
-        distance_payload.n_computed = nslices(fam)
     end
     return distance_payload
 end
@@ -2831,6 +2908,24 @@ function slice_barcodes(
 
     nd = length(dirs)
     no = length(offsets)
+    if _algebraic_arrangement(cache.arrangement)
+        values in (:t, :index) || throw(ArgumentError("values must be :t or :index"))
+        dirs_used = [_exact_grade_direction(d, cache.arrangement.normalize_dirs) for d in dirs]
+        wdir = [_direction_weight(abs.(d); scheme=direction_weight) for d in dirs_used]
+        weights = wdir * _offset_sample_weights(offsets, offset_weights)'
+        normalize_weights && sum(weights) > 0 && (weights ./= sum(weights))
+        B = values === :index ? PackedIndexBarcode : PackedBarcode{AlgebraicReal}
+        grids = _packed_grid_undef(B, nd, no)
+        # Chain and rank caches publish atomically, but deterministic serial build
+        # avoids duplicate exact algebraic work for repeated queries.
+        for i in 1:nd, j in 1:no
+            off = offsets[j] isa Tuple ? collect(offsets[j]) : offsets[j]
+            grids[i,j] = _fibered_barcode_packed(cache, dirs_used[i], off;
+                values=values, tie_break=tie_break)
+        end
+        bars = packed ? grids : [_barcode_from_packed(grids[i,j]) for i in 1:nd, j in 1:no]
+        return SliceBarcodesResult(bars, weights, dirs_used, offsets)
+    end
     dirs_used = Vector{Vector{Float64}}(undef, nd)
     for i in 1:nd
         dirs_used[i] = _normalize_dir(_as_float2(dirs[i]), cache.arrangement.normalize_dirs)
@@ -2854,6 +2949,7 @@ function slice_barcodes(
         grids = _packed_grid_undef(PackedIndexBarcode, nd, no)
         if threads
             Threads.@threads for idx in 1:(nd * no)
+                local i, j
                 i = div((idx - 1), no) + 1
                 j = (idx - 1) % no + 1
                 grids[i, j] = _fibered_barcode_packed(cache, dirs_used[i], offsets[j]; values=:index, tie_break=tie_break)
@@ -2871,6 +2967,7 @@ function slice_barcodes(
         grids = _packed_grid_undef(PackedFloatBarcode, nd, no)
         if threads
             Threads.@threads for idx in 1:(nd * no)
+                local i, j
                 i = div((idx - 1), no) + 1
                 j = (idx - 1) % no + 1
                 grids[i, j] = _fibered_barcode_packed(cache, dirs_used[i], offsets[j]; values=:t, tie_break=tie_break)
@@ -2895,110 +2992,197 @@ slice_barcodes(cache::FiberedBarcodeCache2D, dirs, offsets; kwargs...) =
 
 
 
+include("fibered2d/exact_matching.jl")
+
+# Both supported normalization/weight pairs give min(dx,dy) times the
+# bottleneck distance measured in the corresponding line parameter.
+function _check_exact_matching_weight(normalize_dirs, weight)
+    ((normalize_dirs === :L1 && weight === :lesnick_l1) ||
+     (normalize_dirs === :Linf && weight === :lesnick_linf)) ||
+        throw(ArgumentError("matching_distance_exact_2d: use normalize_dirs=:L1 with weight=:lesnick_l1, or :Linf with :lesnick_linf; other weights are available through matching_distance_sampled_2d"))
+    return nothing
+end
+
 """
-    matching_distance_exact_2d(M, N, pi, opts::InvariantOptions; ...) -> Float64
+    matching_distance_exact_2d(M, N, pi, opts::InvariantOptions;
+        weight=:lesnick_l1, normalize_dirs=:L1, max_candidates=200_000,
+        max_cells=5_000_000, arrangement=nothing) -> Float64
+    matching_distance_exact_2d(cacheM, cacheN;
+        weight=:lesnick_l1, max_candidates=200_000, threads=true) -> Float64
 
-Exact 2D matching distance computed by enumerating *all* arrangement cells
-(one representative slice per cell), reusing the same augmented arrangement
-across many module pairs.
+Compute the supremum of weighted bottleneck distances over all positive-slope
+lines, after clipping both slice barcodes to the finite working box.
+The diagonal direction, changes of optimal matching, and limits of degenerate
+lines are included. This is an exact optimization of the computed barcodes:
+geometric predicates, switching intersections, and bottleneck comparisons use
+rational arithmetic (real algebraic arithmetic for exact physical radii), and the final value is converted to `Float64`.
+Coefficient-field computations retain their usual exact or numerical contract.
 
-This returns an exact distance over the full arrangement-cell family. Use it
-when the same arrangement will be reused across many module pairs and you want
-deterministic exactness. For cheaper exploratory work, prefer the sampled
-slice-based approximations in `SliceInvariants`.
+Supported encodings are axis-aligned coordinate-cell classifiers, including
+`PLBackend.PLEncodingMapBoxes` and positively oriented `GridEncodingMap`.
+Custom classifiers must define an order-preserving encoding, including on
+coordinate boundaries, be constant on open coordinate cells, and locate
+exact rational or real algebraic query points faithfully. Polyhedral classifiers and `ZnEncodingMap`
+are rejected: their slice geometry is outside this optimizer's contract.
+Use [`matching_distance_sampled_2d`](@ref) for those supported sampled queries.
 
-This overload is intended for the workflow:
-1. Build one `FiberedArrangement2D` once (from `pi` and `box`).
-2. Build one `FiberedBarcodeCache2D` per module on that same arrangement.
-3. Call `matching_distance_exact_2d(cacheM, cacheN)` repeatedly.
+`opts.box` sets the window; when omitted it is inferred by `encoding_box`.
+Every interval is truncated at the window boundary, including intervals that
+would be essential on an unbounded slice. It agrees with the unrestricted
+matching distance when the window contains both modules' support; otherwise
+this API promises only the clipped-window quantity.
 
-Requirements
-- `cacheM.arrangement === cacheN.arrangement` (same arrangement object)
-- same base field `Q` in both modules.
-
-Opts usage:
-- `opts.box` controls the arrangement window and slice clipping.
-- `opts.strict` controls strictness when locating regions (defaults to true, but poly backend forces false).
-- `opts.threads` controls parallel evaluation in the final exact distance stage.
-
-All other keyword arguments match the previous API (except `box`, `strict`, `threads`
-which are now read from opts).
+Use the matched normalization/weight pairs `:L1`/`:lesnick_l1` (default) or
+`:Linf`/`:lesnick_linf`. Caches must share an arrangement, poset, and field.
+`opts.threads` controls parallel cell optimization; cache population is serial.
+`max_candidates` bounds combinatorial work, including rejected intersections;
+exceeding it raises `ArgumentError`, never a sampled substitute. This exhaustive
+method is intended for modest coordinate grids. Reuse barcode caches for
+repeated module comparisons; use the sampled method for quick exploration.
+The final `Float64` conversion can underflow or overflow at extreme scales;
+exact optimization does not enlarge that output format's numerical range.
+See `docs/exact_matching.md` for the proof and its implementation checklist.
 """
-function _matching_distance_exact_2d_from_caches(
+function matching_distance_exact_2d(
+    M::PModule{K}, N::PModule{K}, pi::PLikeEncodingMap, opts::InvariantOptions;
+    weight::Symbol=:lesnick_l1,
+    normalize_dirs::Symbol=:L1,
+    max_candidates::Int=200_000,
+    max_cells::Int=5_000_000,
+    arrangement=nothing,
+)::Float64 where {K}
+    _check_exact_matching_weight(normalize_dirs, weight)
+    max_candidates > 0 || throw(ArgumentError("matching_distance_exact_2d: max_candidates must be positive"))
+    pi0 = _unwrap_compiled(pi)
+    (pi0 isa PLPolyhedra.PLEncodingMap || pi0 isa ZnEncodingMap || !hasproperty(pi0, :coords)) &&
+        throw(ArgumentError("matching_distance_exact_2d: this classifier does not support exact coordinate-cell optimization; use matching_distance_sampled_2d"))
+    dimension(pi0) == 2 || throw(ArgumentError("matching_distance_exact_2d: expected a two-dimensional classifier"))
+    threads0 = _default_threads(opts.threads)
+    arr = arrangement === nothing ? fibered_arrangement_2d(pi, opts;
+        normalize_dirs=normalize_dirs, max_cells=max_cells, precompute=:none,
+        threads=false) : arrangement
+    arr.pi === pi0 || throw(ArgumentError("matching_distance_exact_2d: provided arrangement uses a different classifier"))
+    arr.normalize_dirs === normalize_dirs || throw(ArgumentError("matching_distance_exact_2d: provided arrangement uses a different direction normalization"))
+    if opts.box !== nothing
+        bx = opts.box === :auto ? encoding_box(pi, opts) : opts.box
+        (arr.input_box[1] == bx[1] && arr.input_box[2] == bx[2]) ||
+            throw(ArgumentError("matching_distance_exact_2d: provided arrangement uses a different window"))
+    end
+    cacheM = fibered_barcode_cache_2d(M, arr; precompute=:none)
+    cacheN = fibered_barcode_cache_2d(N, arr; precompute=:none)
+    return matching_distance_exact_2d(cacheM, cacheN;
+        weight=weight, max_candidates=max_candidates, threads=threads0)
+end
+
+function matching_distance_exact_2d(
+    cacheM::FiberedBarcodeCache2D, cacheN::FiberedBarcodeCache2D;
+    weight::Symbol=:lesnick_l1,
+    max_candidates::Int=200_000,
+    threads::Bool=(Threads.nthreads() > 1),
+)::Float64
+    cacheM.arrangement === cacheN.arrangement ||
+        throw(ArgumentError("matching_distance_exact_2d: caches must share the same arrangement"))
+    cacheM.M.Q === cacheN.M.Q || throw(ArgumentError("matching_distance_exact_2d: modules must share the same poset"))
+    cacheM.M.field == cacheN.M.field || throw(ArgumentError("matching_distance_exact_2d: modules must share the same coefficient field"))
+    _check_exact_matching_weight(cacheM.arrangement.normalize_dirs, weight)
+    return _matching_distance_box_exact_2d(cacheM, cacheN;
+        max_candidates=max_candidates, threads=threads)
+end
+
+function _matching_distance_sampled_2d_from_caches(
     cacheM::FiberedBarcodeCache2D,
     cacheN::FiberedBarcodeCache2D,
     fam::FiberedSliceFamily2D;
     threads::Bool = (Threads.nthreads() > 1),
 )::Float64
-    arr = cacheM.arrangement
     ns = nslices(fam)
-
+    ns == 0 && return 0.0
+    # Populate rank barcodes before either compute path. Slice evaluation then
+    # reads cache storage only, and each shard owns its scratch and reduction.
+    _precompute_index_barcodes_for_chain_ids!(cacheM, fam.unique_chain_ids; threads=false)
+    _precompute_index_barcodes_for_chain_ids!(cacheN, fam.unique_chain_ids; threads=false)
     if threads && Threads.nthreads() > 1
-        scratch_by_thread = _scratch_arenas(true)
-        best_by_thread = fill(0.0, length(scratch_by_thread))
-        Threads.@threads for k in 1:ns
-            tid = Threads.threadid()
-            scratch = scratch_by_thread[tid]
-            di = fam.dir_idx[k]
-            cid = fam.chain_id[k]
-            w = fam.dir_weight[di]
-
-            bidxM = cacheM.index_barcodes_packed[cid]::PackedIndexBarcode
-            bidxN = cacheN.index_barcodes_packed[cid]::PackedIndexBarcode
-            s = fam.vals_start[k]
-
-            if s == 0
-                d = arr.dir_reps[di]
-                vals = if arr.backend === :boxes
-                    _, vals0 = _arr2d_slice_chain_and_values(arr, d, fam.off_mid[k])
-                    vals0
-                else
-                    _arr2d_values_for_chain_poly!(scratch, arr, d, fam.off_mid[k], arr.chains[cid])
-                end
-                _points_from_index_packed_and_values!(scratch.points_a, bidxM, vals)
-                _points_from_index_packed_and_values!(scratch.points_b, bidxN, vals)
-            else
-                _points_from_index_packed_and_values!(scratch.points_a, bidxM, fam.vals_pool, s)
-                _points_from_index_packed_and_values!(scratch.points_b, bidxN, fam.vals_pool, s)
-            end
-            best_by_thread[tid] = max(best_by_thread[tid], w * bottleneck_distance(scratch.points_a, scratch.points_b))
+        nshards = min(ns, Threads.nthreads())
+        maxima = zeros(Float64, nshards)
+        Threads.@threads for shard in 1:nshards
+            first = fld((shard - 1) * ns, nshards) + 1
+            last = fld(shard * ns, nshards)
+            maxima[shard] = _matching_distance_sampled_shard_2d(cacheM, cacheN, fam, first:last)
         end
-        return maximum(best_by_thread)
+        return maximum(maxima)
     end
+    return _matching_distance_sampled_shard_2d(cacheM, cacheN, fam, 1:ns)
+end
 
+function _matching_distance_sampled_shard_2d(cacheM::FiberedBarcodeCache2D,
+                                            cacheN::FiberedBarcodeCache2D,
+                                            fam::FiberedSliceFamily2D,
+                                            indices::UnitRange{Int})
+    # This function boundary prevents scratch/reduction locals from being
+    # captured in shared closure boxes by the caller's threaded loop.
+    scratch = InvariantScratch()
     best = 0.0
-    scratch = _scratch_arenas(false)[1]
-    for k in 1:ns
-        di = fam.dir_idx[k]
-        cid = fam.chain_id[k]
-        w = fam.dir_weight[di]
-
-        bidxM = _index_packed_for_chain!(cacheM, cid)
-        bidxN = _index_packed_for_chain!(cacheN, cid)
-        s = fam.vals_start[k]
-
-        if s == 0
-            d = arr.dir_reps[di]
-            vals = if arr.backend === :boxes
-                _, vals0 = _arr2d_slice_chain_and_values(arr, d, fam.off_mid[k])
-                vals0
-            else
-                _arr2d_values_for_chain_poly!(scratch, arr, d, fam.off_mid[k], arr.chains[cid])
-            end
-            _points_from_index_packed_and_values!(scratch.points_a, bidxM, vals)
-            _points_from_index_packed_and_values!(scratch.points_b, bidxN, vals)
-        else
-            _points_from_index_packed_and_values!(scratch.points_a, bidxM, fam.vals_pool, s)
-            _points_from_index_packed_and_values!(scratch.points_b, bidxN, fam.vals_pool, s)
-        end
-
-        best = max(best, w * bottleneck_distance(scratch.points_a, scratch.points_b))
+    for k in indices
+        best = max(best, _matching_distance_sampled_slice_2d(cacheM, cacheN, fam, k, scratch))
     end
-
     return best
 end
 
-function matching_distance_exact_2d(
+function _matching_distance_sampled_slice_2d(cacheM::FiberedBarcodeCache2D,
+                                            cacheN::FiberedBarcodeCache2D,
+                                            fam::FiberedSliceFamily2D,
+                                            k::Int, scratch::InvariantScratch)
+    arr = cacheM.arrangement
+    if _algebraic_arrangement(arr)
+        M = _family_barcode_packed_uncached!(cacheM,fam,k,scratch)
+        N = _family_barcode_packed_uncached!(cacheN,fam,k,scratch)
+        return fam.dir_weight[fam.dir_idx[k]] * bottleneck_distance(M,N)
+    end
+    di, cid, s = fam.dir_idx[k], fam.chain_id[k], fam.vals_start[k]
+    bidxM = _index_packed_for_chain!(cacheM, cid)::PackedIndexBarcode
+    bidxN = _index_packed_for_chain!(cacheN, cid)::PackedIndexBarcode
+    if s == 0
+        d = arr.dir_reps[di]
+        vals = if arr.backend === :boxes
+            _, vals0 = _arr2d_slice_chain_and_values(arr, d, fam.off_mid[k])
+            vals0
+        else
+            _arr2d_values_for_chain_poly!(scratch, arr, d, fam.off_mid[k], _arr2d_chain(arr, cid))
+        end
+        _points_from_index_packed_and_values!(scratch.points_a, bidxM, vals)
+        _points_from_index_packed_and_values!(scratch.points_b, bidxN, vals)
+    else
+        _points_from_index_packed_and_values!(scratch.points_a, bidxM, fam.vals_pool, s)
+        _points_from_index_packed_and_values!(scratch.points_b, bidxN, fam.vals_pool, s)
+    end
+    return fam.dir_weight[di] * bottleneck_distance(scratch.points_a, scratch.points_b)
+end
+
+"""
+    matching_distance_sampled_2d(M, N, pi, opts::InvariantOptions; ...) -> Float64
+    matching_distance_sampled_2d(cacheM, cacheN; weight=:lesnick_l1, ...) -> Float64
+
+Maximum weighted bottleneck distance over a deterministic finite family of
+representative slices. When slice extraction faithfully restricts the classifier,
+this is a lower bound for the corresponding supremum over window-clipped slices,
+with no certified approximation error. For `ZnEncodingMap`, integer coordinate
+walls differ from the half-integer walls of its rounded real-point locator:
+the result is only a representative estimate, not a certified lower bound.
+Geometric barcode endpoints and the optimal matching can vary within each
+arrangement cell, so one representative does not determine its maximum.
+
+Reuse one `FiberedArrangement2D` and one barcode cache per module for repeated
+queries. Caches must share the same arrangement and coefficient field.
+`family` optionally supplies a precomputed representative family;
+`store_values` controls storage of its geometric endpoints.
+
+`opts.box` sets the finite slice-clipping window, `opts.strict` controls region
+lookup, and `opts.threads` controls parallel evaluation. Polyhedral encodings
+are supported; failed vertex enumeration raises an explicit error. For an
+exact supremum on supported axis-aligned encodings, use
+[`matching_distance_exact_2d`](@ref).
+"""
+function matching_distance_sampled_2d(
     M::PModule{K},
     N::PModule{K},
     pi::PLikeEncodingMap,
@@ -3037,12 +3221,12 @@ function matching_distance_exact_2d(
     end
 
     fam = family === nothing ? fibered_slice_family_2d(arr; direction_weight=weight, store_values=store_values) : family
-    fam.arrangement === arr || error("matching_distance_exact_2d: provided family does not match arrangement")
+    fam.arrangement === arr || error("matching_distance_sampled_2d: provided family does not match arrangement")
 
     cacheM = fibered_barcode_cache_2d(M, arr; precompute=precompute, threads=threads0)
     cacheN = fibered_barcode_cache_2d(N, arr; precompute=precompute, threads=threads0)
 
-    return matching_distance_exact_2d(cacheM, cacheN;
+    return matching_distance_sampled_2d(cacheM, cacheN;
         weight = weight,
         family = fam,
         store_values = store_values,
@@ -3050,7 +3234,7 @@ function matching_distance_exact_2d(
     )
 end
 
-function matching_distance_exact_2d(
+function matching_distance_sampled_2d(
     cacheM::FiberedBarcodeCache2D,
     cacheN::FiberedBarcodeCache2D;
     weight::Symbol = :lesnick_l1,
@@ -3059,10 +3243,10 @@ function matching_distance_exact_2d(
     threads::Bool = (Threads.nthreads() > 1),
 )::Float64
     arr = cacheM.arrangement
-    arr === cacheN.arrangement || error("matching_distance_exact_2d: caches must share the same arrangement")
+    arr === cacheN.arrangement || error("matching_distance_sampled_2d: caches must share the same arrangement")
 
     fam = family === nothing ? fibered_slice_family_2d(arr; direction_weight = weight, store_values = store_values) : family
-    fam.arrangement === arr || error("matching_distance_exact_2d: provided family does not match arrangement")
+    fam.arrangement === arr || error("matching_distance_sampled_2d: provided family does not match arrangement")
 
     if threads && Threads.nthreads() > 1
         _prepare_fibered_arrangement_readonly!(arr)
@@ -3070,7 +3254,7 @@ function matching_distance_exact_2d(
         _precompute_index_barcodes_for_chain_ids!(cacheN, fam.unique_chain_ids; threads=false)
     end
 
-    return _matching_distance_exact_2d_from_caches(cacheM, cacheN, fam; threads=threads)
+    return _matching_distance_sampled_2d_from_caches(cacheM, cacheN, fam; threads=threads)
 end
 
 
@@ -3079,10 +3263,12 @@ end
 """
     slice_kernel(cacheM::FiberedBarcodeCache2D, cacheN::FiberedBarcodeCache2D; ...) -> Float64
 
-Compute a sliced kernel by integrating over *all* arrangement cells (one
-representative slice per cell), using the shared augmented arrangement.
+Compute a finite weighted sum or average of per-slice kernels, using one
+representative from every nonempty cell of the shared arrangement.
 
-This is the arrangement-exact analogue of sampling-based `slice_kernel(M,N,pi; ...)`.
+This is deterministic quadrature when the weights are interpreted as a measure
+on slice parameters. It is not an exact integral: geometric barcode endpoints
+and kernel values vary within a cell. No integration error bound is provided.
 
 Use this when arrangement construction and per-chain barcode caching will be
 amortized across many kernel evaluations. Inspect the shared arrangement and
@@ -3090,18 +3276,27 @@ cached family first with [`fibered_arrangement_summary`](@ref) and
 [`fibered_family_summary`](@ref).
 
 Keywords
-- `kind`, `sigma`, `gamma`, `tgrid`, `kmax`: forwarded to `_barcode_kernel`.
-- `direction_weight`: direction weighting scheme (`:none`, `:lesnick_l1`, `:lesnick_linf`).
+- `kind`: `:bottleneck_gaussian`, `:bottleneck_laplacian`,
+  `:wasserstein_gaussian`, or `:wasserstein_laplacian`.
+- `sigma`: positive kernel bandwidth (default `1.0`). Wasserstein kernels use
+  the default barcode distance parameters `p=2`, `q=Inf`.
+- `direction_weight`: direction weighting scheme (`:none`, `:lesnick_l1`,
+  `:lesnick_linf`) used when constructing a family.
 - `cell_weight`: how to weight arrangement cells. Supported symbols:
     * `:uniform`      (each nonempty cell weight 1)
-    * `:offset_length` (weight by the length of the offset interval in normal-offset)
+    * `:offset_length` (normal-offset interval length at the representative direction)
     * `:theta`        (weight by angular width of the direction cell)
     * `:theta_offset` (product of `:theta` and `:offset_length`)
-  or a function `w(dir, off, dir_cell, off_cell, arr)::Real`.
-- `normalize_weights`: kept for API symmetry; the result is always a
-  weighted average as in `slice_kernel` for explicit slice lists.
-- `tgrid_nsteps`: if `tgrid` is not provided and `kind` is landscape-based,
-  we build a default grid with this many points.
+  The total slice weight is its direction weight times its cell weight.
+  In particular, `:theta_offset` approximates angular-offset cell area; it
+  does not integrate the varying offset width over the direction cell.
+- `normalize_weights`: if `true` (default), divide by the total weight when
+  it is positive; if `false`, return the weighted sum. An empty family returns
+  zero.
+- `family`: reuse a [`FiberedSliceFamily2D`](@ref) from the same arrangement,
+  including its stored direction weights.
+- `store_values`: cache representative boundary values when building a family.
+- `threads`: evaluate representative slices in parallel when enabled.
 """
 function slice_kernel(
     cacheM::FiberedBarcodeCache2D,
@@ -3124,140 +3319,47 @@ function slice_kernel(
     fam = family === nothing ? fibered_slice_family_2d(arr; direction_weight=direction_weight, store_values=store_values) : family
     fam.arrangement === arr || error("slice_kernel: provided family does not match arrangement")
 
-    # Kernel on barcodes (reuse existing kernel definitions)
-    kernel_fn = (bA, bB) -> _barcode_kernel(bA, bB; kind = kind, sigma = sigma)
-    use_distance_payload = kind in (:bottleneck_gaussian, :bottleneck_laplacian, :wasserstein_gaussian, :wasserstein_laplacian)
-
-    if threads && Threads.nthreads() > 1
-        if use_distance_payload
-            _precompute_distance_payload!(cacheM, fam; threads=false)
-            _precompute_distance_payload!(cacheN, fam; threads=false)
-        else
-            _precompute_family_barcodes!(cacheM, fam; threads=false)
-            _precompute_family_barcodes!(cacheN, fam; threads=false)
-        end
-    end
-
-    scratch_by_thread = use_distance_payload ? InvariantScratch[] : _scratch_arenas(threads)
-    acc_by_thread = fill(0.0, max(length(scratch_by_thread), Threads.nthreads()))
-    sumw_by_thread = fill(0.0, max(length(scratch_by_thread), Threads.nthreads()))
-
+    use_distance_payload = kind in (:bottleneck_gaussian, :bottleneck_laplacian,
+        :wasserstein_gaussian, :wasserstein_laplacian)
+    payloadM = use_distance_payload ? _precompute_distance_payload!(cacheM, fam; threads=false) :
+        _precompute_family_barcodes!(cacheM, fam; threads=false)
+    payloadN = use_distance_payload ? _precompute_distance_payload!(cacheN, fam; threads=false) :
+        _precompute_family_barcodes!(cacheN, fam; threads=false)
     ns = nslices(fam)
-
-    # helper: cell weight
-    @inline function _cell_w(k::Int)::Float64
-        if cell_weight === :uniform || cell_weight === :none
-            return 1.0
-        elseif cell_weight === :offset_length
-            return fam.off1[k] - fam.off0[k]
-        elseif cell_weight === :theta
-            return fam.theta_width[fam.dir_idx[k]]
-        elseif cell_weight === :theta_offset
-            return fam.theta_width[fam.dir_idx[k]] * (fam.off1[k] - fam.off0[k])
-        else
-            throw(ArgumentError("slice_kernel: unknown cell_weight=$(cell_weight)"))
-        end
-    end
-
-    if threads
-        if use_distance_payload
-            payloadM = _distance_payload!(cacheM, fam)
-            payloadN = _distance_payload!(cacheN, fam)
-            Threads.@threads for k in 1:ns
-                tid = Threads.threadid()
-                di = fam.dir_idx[k]
-                w = fam.dir_weight[di] * _cell_w(k)
-                ptsM = payloadM.points[k]::Vector{Tuple{Float64,Float64}}
-                ptsN = payloadN.points[k]::Vector{Tuple{Float64,Float64}}
-                acc_by_thread[tid] += w * kernel_fn(ptsM, ptsN)
-                sumw_by_thread[tid] += w
-            end
-            acc = sum(acc_by_thread)
-            sumw = sum(sumw_by_thread)
-            return normalize_weights && sumw > 0 ? acc / sumw : acc
-        end
-
-        Threads.@threads for k in 1:ns
-            tid = Threads.threadid()
-            scratch = scratch_by_thread[tid]
-            di = fam.dir_idx[k]
-            cid = fam.chain_id[k]
-            w = fam.dir_weight[di] * _cell_w(k)
-
-            bidxM = cacheM.index_barcodes_packed[cid]::PackedIndexBarcode
-            bidxN = cacheN.index_barcodes_packed[cid]::PackedIndexBarcode
-            s = fam.vals_start[k]
-            if s == 0
-                d = arr.dir_reps[di]
-                vals = if arr.backend === :boxes
-                    _, vals0 = _arr2d_slice_chain_and_values(arr, d, fam.off_mid[k])
-                    vals0
-                else
-                    _arr2d_values_for_chain_poly!(scratch, arr, d, fam.off_mid[k], arr.chains[cid])
-                end
-                _points_from_index_packed_and_values!(scratch.points_a, bidxM, vals)
-                _points_from_index_packed_and_values!(scratch.points_b, bidxN, vals)
-            else
-                _points_from_index_packed_and_values!(scratch.points_a, bidxM, fam.vals_pool, s)
-                _points_from_index_packed_and_values!(scratch.points_b, bidxN, fam.vals_pool, s)
-            end
-
-            acc_by_thread[tid] += w * kernel_fn(scratch.points_a, scratch.points_b)
-            sumw_by_thread[tid] += w
-        end
-        acc = sum(acc_by_thread)
-        sumw = sum(sumw_by_thread)
-        return normalize_weights && sumw > 0 ? acc / sumw : acc
-    else
-        if use_distance_payload
-            distance_payloadM = _distance_payload!(cacheM, fam)
-            distance_payloadN = _distance_payload!(cacheN, fam)
-            scratchM = InvariantScratch()
-            scratchN = InvariantScratch()
-            acc = 0.0
-            sumw = 0.0
-            for k in 1:ns
-                di = fam.dir_idx[k]
-                w = fam.dir_weight[di] * _cell_w(k)
-                ptsM = _distance_points_for_slice!(cacheM, fam, distance_payloadM, k, scratchM)
-                ptsN = _distance_points_for_slice!(cacheN, fam, distance_payloadN, k, scratchN)
-                acc += w * kernel_fn(ptsM, ptsN)
-                sumw += w
-            end
-            return normalize_weights && sumw > 0 ? acc / sumw : acc
-        end
-
+    acc_by_slot = zeros(Float64, threads ? min(ns, Threads.nthreads()) : 1)
+    weights_by_slot = similar(acc_by_slot)
+    fill!(weights_by_slot, 0.0)
+    _foreach_workchunk(ns; threads=threads) do work, slot
         acc = 0.0
         sumw = 0.0
-        scratch = scratch_by_thread[1]
-        for k in 1:ns
+        for k in work
             di = fam.dir_idx[k]
-            cid = fam.chain_id[k]
-            w = fam.dir_weight[di] * _cell_w(k)
-
-            bidxM = _index_packed_for_chain!(cacheM, cid)
-            bidxN = _index_packed_for_chain!(cacheN, cid)
-            s = fam.vals_start[k]
-            if s == 0
-                d = arr.dir_reps[di]
-                vals = if arr.backend === :boxes
-                    _, vals0 = _arr2d_slice_chain_and_values(arr, d, fam.off_mid[k])
-                    vals0
-                else
-                    _arr2d_values_for_chain_poly!(scratch, arr, d, fam.off_mid[k], arr.chains[cid])
-                end
-                _points_from_index_packed_and_values!(scratch.points_a, bidxM, vals)
-                _points_from_index_packed_and_values!(scratch.points_b, bidxN, vals)
+            wc = if cell_weight === :uniform || cell_weight === :none
+                1.0
+            elseif cell_weight === :offset_length
+                Float64(fam.off1[k] - fam.off0[k])
+            elseif cell_weight === :theta
+                fam.theta_width[di]
+            elseif cell_weight === :theta_offset
+                fam.theta_width[di] * Float64(fam.off1[k] - fam.off0[k])
             else
-                _points_from_index_packed_and_values!(scratch.points_a, bidxM, fam.vals_pool, s)
-                _points_from_index_packed_and_values!(scratch.points_b, bidxN, fam.vals_pool, s)
+                throw(ArgumentError("slice_kernel: unknown cell_weight=$(cell_weight)"))
             end
-
-            acc += w * kernel_fn(scratch.points_a, scratch.points_b)
+            w = fam.dir_weight[di] * wc
+            bM = use_distance_payload ? payloadM.points[k] :
+                payloadM.packed_barcodes[k]
+            bN = use_distance_payload ? payloadN.points[k] :
+                payloadN.packed_barcodes[k]
+            acc += w * _barcode_kernel(bM, bN; kind=kind, sigma=sigma)
             sumw += w
         end
-        return normalize_weights && sumw > 0 ? acc / sumw : acc
+        acc_by_slot[slot] = acc
+        weights_by_slot[slot] = sumw
     end
+    total = sum(acc_by_slot)
+    total_weight = sum(weights_by_slot)
+    return normalize_weights && total_weight > 0 ? total / total_weight : total
+
 end
 
 
@@ -3280,13 +3382,13 @@ Fields:
 - `values`: endpoint coordinates for the chain (length C.n+1), suitable for `slice_barcode`
 - `dir`: the direction vector used to define this projection (for bookkeeping)
 """
-struct ProjectedArrangement1D{P<:AbstractPoset}
+struct ProjectedArrangement1D{P<:AbstractPoset,T<:Real}
     Q::P
     C::FinitePoset
     f::EncodingMap
     chain::UnitRange{Int}
-    values::Vector{Float64}
-    dir::Vector{Float64}
+    values::Vector{T}
+    dir::Vector{T}
 end
 
 """
@@ -3294,9 +3396,9 @@ end
 
 A family of 1D projections sharing the same source poset `Q`.
 """
-struct ProjectedArrangement{P<:AbstractPoset}
+struct ProjectedArrangement{P<:AbstractPoset,T<:Real}
     Q::P
-    projections::Vector{ProjectedArrangement1D{P}}
+    projections::Vector{ProjectedArrangement1D{P,T}}
 end
 
 # Internal: build the chain poset {1,...,k} with i <= j ordering.
@@ -3312,11 +3414,12 @@ end
 # t(p) = max_{q <= p} s(q). This guarantees monotonicity.
 function _monotone_upper_closure(Q::AbstractPoset, s::AbstractVector{<:Real})
     n = nvertices(Q)
-    t = Vector{Float64}(undef, n)
+    T = eltype(s)
+    t = Vector{T}(undef, n)
     @inbounds for p in 1:n
-        m = -Inf
+        m = s[p]
         for q in downset_indices(Q, p)
-            v = float(s[q])
+            v = s[q]
             if v > m
                 m = v
             end
@@ -3335,6 +3438,10 @@ map determined by a real-valued function on the elements of `Q`.
 If `enforce_monotone=:upper`, we replace `values` by its minimal isotone majorant
 so that the resulting map `Q -> chain` is guaranteed monotone.
 
+Real algebraic values retain their exact ordering and barcode endpoints. This
+finite-chain pushforward is a different construction from restriction to a
+line; preserving its scalar grades does not identify those two constructions.
+
 Inspect the result first with [`projected_arrangement_summary`](@ref) before
 building barcode caches on top of it.
 """
@@ -3343,8 +3450,9 @@ function projected_arrangement(Q::AbstractPoset, values::AbstractVector{<:Real};
                                dir = nothing)
     length(values) == nvertices(Q) || error("values must have length nvertices(Q)")
 
-    t = enforce_monotone == :upper ? _monotone_upper_closure(Q, values) :
-        Float64.(values)
+    T = any(x -> x isa AlgebraicReal,values) ? AlgebraicReal : Float64
+    input_values = T.(values)
+    t = enforce_monotone == :upper ? _monotone_upper_closure(Q, input_values) : input_values
 
     uvals = sort(unique(t))
     k = length(uvals)
@@ -3359,7 +3467,7 @@ function projected_arrangement(Q::AbstractPoset, values::AbstractVector{<:Real};
     f = EncodingMap(Q, C, pi_of_q)
     vals_ext = _extend_values(uvals)
 
-    d = dir === nothing ? Float64[] : Float64.(collect(dir))
+    d = dir === nothing ? T[] : T.(collect(dir))
     proj = ProjectedArrangement1D(Q, C, f, 1:k, vals_ext, d)
     return ProjectedArrangement(Q, [proj])
 end
@@ -3368,7 +3476,9 @@ end
 @inline function _dot(dir::AbstractVector{<:Real}, x)
     s = 0.0
     @inbounds for i in eachindex(dir)
-        s += float(dir[i]) * float(x[i])
+        # Mixed algebraic/rational multiplication promotes exactly; applying
+        # float to a rational representative first would lose its value.
+        s += dir[i] * x[i]
     end
     return s
 end
@@ -3376,7 +3486,7 @@ end
 @inline function _dot(dir::NTuple{N,<:Real}, x) where {N}
     s = 0.0
     @inbounds for i in 1:N
-        s += float(dir[i]) * float(x[i])
+        s += dir[i] * x[i]
     end
     return s
 end
@@ -3422,16 +3532,20 @@ function projected_arrangement(pi::PLikeEncodingMap;
                                                    include_axes=include_axes,
                                                    normalize=normalize))
 
-    arrs = Vector{ProjectedArrangement1D{typeof(Qposet)}}(undef, length(dirs))
+    T = _algebraic_grid(_unwrap_compiled(pi)) || any(d -> any(x -> x isa AlgebraicReal,d),dirs) ?
+        AlgebraicReal : Float64
+    typed_dirs = [T.(collect(dir)) for dir in dirs]
+    arrs = Vector{ProjectedArrangement1D{typeof(Qposet),T}}(undef, length(typed_dirs))
     if threads && Threads.nthreads() > 1
-        Threads.@threads for j in eachindex(dirs)
-            dir = dirs[j]
+        Threads.@threads for j in eachindex(typed_dirs)
+            local dir, vals, tmp
+            dir = typed_dirs[j]
             vals = _region_values(pi, x -> _dot(dir, x))
             tmp = projected_arrangement(Qposet, vals; enforce_monotone=enforce_monotone, dir=dir)
             arrs[j] = tmp.projections[1]
         end
     else
-        for (j,dir) in enumerate(dirs)
+        for (j,dir) in enumerate(typed_dirs)
             vals = _region_values(pi, x -> _dot(dir, x))
             tmp = projected_arrangement(Qposet, vals; enforce_monotone=enforce_monotone, dir=dir)
             arrs[j] = tmp.projections[1]
@@ -3446,16 +3560,20 @@ end
 Cache the 1D barcodes obtained by pushing a module forward along each projection
 in a fixed `ProjectedArrangement`.
 
+Concurrent queries share completed barcodes. Keep the source module,
+arrangement, and returned cached storage read-only while queries are active.
+
 This is the recommended workflow:
 - build `arr = projected_arrangement(pi; ...)` once,
 - build caches for many modules,
 - compare rapidly via `projected_distance` / `projected_kernel`.
 """
-mutable struct ProjectedBarcodeCache{K}
-    arrangement::ProjectedArrangement
+mutable struct ProjectedBarcodeCache{K,T<:Real,A<:ProjectedArrangement}
+    lock::ReentrantLock
+    arrangement::A
     M::PModule{K}
     side::Symbol
-    packed_barcodes::Vector{Union{Nothing,PackedFloatBarcode}}
+    packed_barcodes::Vector{Union{Nothing,PackedBarcode{T}}}
     n_computed::Int
 end
 
@@ -3548,13 +3666,14 @@ end
 @inline _vector_range(v) = isempty(v) ? nothing : (first(v), last(v))
 
 @inline function _all_finite_real(xs)
-    return all(x -> x isa Real && isfinite(Float64(x)), xs)
+    return all(x -> x isa Real && isfinite(x), xs)
 end
 
 @inline function _as_real_vector2(x)
     if x isa AbstractVector || x isa Tuple
         try
-            return Float64.(collect(x))
+            T = any(v -> v isa AlgebraicReal,x) ? AlgebraicReal : Float64
+            return T.(collect(x))
         catch
             return nothing
         end
@@ -3615,7 +3734,7 @@ Return the total number of arrangement cells in the exact 2D fibered cache.
 Return how many arrangement cells have already been materialized in the lazy
 fibered arrangement cache.
 """
-@inline computed_cell_count(arr::FiberedArrangement2D)::Int = arr.n_cell_computed
+@inline computed_cell_count(arr::FiberedArrangement2D)::Int = lock(() -> arr.n_cell_computed, arr.lock)
 
 """
     chain_count(arr::FiberedArrangement2D) -> Int
@@ -3623,7 +3742,7 @@ fibered arrangement cache.
 Return the number of distinct slice chains currently registered in the
 arrangement cache.
 """
-@inline chain_count(arr::FiberedArrangement2D)::Int = length(arr.chains)
+@inline chain_count(arr::FiberedArrangement2D)::Int = lock(() -> length(arr.chains), arr.lock)
 
 """
     backend(arr::FiberedArrangement2D)
@@ -3648,7 +3767,7 @@ Return the arrangement object shared by a fibered or projected barcode cache.
 
 Return how many chain-index barcodes have been materialized in a fibered cache.
 """
-@inline cached_barcode_count(cache::FiberedBarcodeCache2D)::Int = cache.n_barcode_computed
+@inline cached_barcode_count(cache::FiberedBarcodeCache2D)::Int = lock(() -> cache.n_barcode_computed, cache.lock)
 
 """
     source_arrangement(fam::FiberedSliceFamily2D)
@@ -3761,7 +3880,7 @@ Return the target chain indexing a projected arrangement slice.
 Return how many projected barcodes have already been realized in a projected
 barcode cache.
 """
-@inline computed_projection_count(cache::ProjectedBarcodeCache)::Int = cache.n_computed
+@inline computed_projection_count(cache::ProjectedBarcodeCache)::Int = lock(() -> cache.n_computed, cache.lock)
 
 """
     slice_chain(result::FiberedSliceResult)
@@ -3809,7 +3928,7 @@ Semantic accessors for typed projected batch-query results.
         total_cells=ncells(arr),
         computed_cells=computed_cell_count(arr),
         chain_count=chain_count(arr),
-        cached_slice_families=length(arr.slice_family_cache),
+        cached_slice_families=lock(() -> length(arr.slice_family_cache), arr.lock),
     )
 end
 
@@ -3828,9 +3947,9 @@ end
         computed_cells=computed_cell_count(arr),
         chain_count=chain_count(arr),
         cached_barcodes=cached_barcode_count(cache),
-        cached_slice_families=length(arr.slice_family_cache),
-        family_payloads=length(cache.family_barcode_payloads),
-        distance_payloads=length(cache.distance_payloads),
+        cached_slice_families=lock(() -> length(arr.slice_family_cache), arr.lock),
+        family_payloads=lock(() -> length(cache.family_barcode_payloads), cache.lock),
+        distance_payloads=lock(() -> length(cache.distance_payloads), cache.lock),
     )
 end
 
@@ -4163,11 +4282,11 @@ Validate a normal-offset scalar for an exact fibered query.
 function check_fibered_offset(offset; throw::Bool=false)
     issues = String[]
     offset isa Real || push!(issues, "offset must be a real scalar.")
-    offset isa Real && !isfinite(Float64(offset)) && push!(issues, "offset must be finite.")
+    offset isa Real && !isfinite(offset) && push!(issues, "offset must be finite.")
     valid = isempty(issues)
     throw && !valid && _throw_invalid_fibered2d(:check_fibered_offset, issues)
     return _fibered_issue_report(:fibered_offset, valid;
-                                 offset=offset isa Real ? Float64(offset) : nothing,
+                                 offset=offset isa Real ? offset : nothing,
                                  issues=issues)
 end
 
@@ -4214,7 +4333,10 @@ selected arrangement cell.
 function check_fibered_query(arr_or_cache, dir, off_or_x0; throw::Bool=false)
     arr = _fibered_query_arrangement(arr_or_cache)
     issues = String[]
-    dir_report = check_fibered_direction(dir; throw=false)
+    orientation = _algebraic_arrangement(arr) && hasproperty(arr.pi,:orientation) ? arr.pi.orientation : (1,1)
+    validated_dir = (dir isa AbstractVector || dir isa Tuple) && length(dir) == 2 && all(x -> x isa Real,dir) ?
+        [orientation[i]*dir[i] for i in 1:2] : dir
+    dir_report = check_fibered_direction(validated_dir; throw=false)
     append!(issues, dir_report.issues)
     query_kind = off_or_x0 isa Real ? :offset : (off_or_x0 isa AbstractVector || off_or_x0 isa Tuple ? :basepoint : :invalid)
     off_report = query_kind === :offset ? check_fibered_offset(off_or_x0; throw=false) : nothing
@@ -4228,7 +4350,8 @@ function check_fibered_query(arr_or_cache, dir, off_or_x0; throw::Bool=false)
     tie_break_relevant = false
     if isempty(issues)
         try
-            query_arg = query_kind === :offset ? Float64(off_or_x0) : Float64.(collect(off_or_x0))
+            T = _algebraic_arrangement(arr) ? AlgebraicReal : Float64
+            query_arg = query_kind === :offset ? T(off_or_x0) : T.(collect(off_or_x0))
             cell_up = fibered_cell_id(arr, dir, query_arg; tie_break=:up)
             cell_down = fibered_cell_id(arr, dir, query_arg; tie_break=:down)
             tie_break_relevant = cell_up != cell_down
@@ -4262,40 +4385,49 @@ metadata lengths, backend validity, and chain-id bounds. Prefer this helper
 before debugging a malformed arrangement by inspecting raw fields.
 """
 function check_fibered_arrangement_2d(arr::FiberedArrangement2D; throw::Bool=false)
-    issues = String[]
-    box = working_box(arr)
-    length(box[1]) == 2 && length(box[2]) == 2 || push!(issues, "working box must have 2D endpoints.")
-    backend(arr) in (:boxes, :poly) || push!(issues, "backend must be :boxes or :poly.")
-    all(length(d) == 2 for d in direction_representatives(arr)) || push!(issues, "all representative directions must have length 2.")
-    ndir = length(direction_representatives(arr))
-    length(arr.orders) == ndir || push!(issues, "orders must have one entry per direction cell.")
-    length(arr.unique_pos) == ndir || push!(issues, "unique_pos must have one entry per direction cell.")
-    length(arr.noff) == ndir || push!(issues, "noff must have one entry per direction cell.")
-    length(arr.start) == ndir || push!(issues, "start must have one entry per direction cell.")
-    arr.total_cells == sum(arr.noff) || push!(issues, "total_cells must equal sum(noff).")
-    length(arr.cell_chain_id) == ncells(arr) || push!(issues, "cell_chain_id length must equal total_cells.")
-    length(arr.cell_event_start) == ncells(arr) || push!(issues, "cell_event_start length must equal total_cells.")
-    length(arr.cell_event_len) == ncells(arr) || push!(issues, "cell_event_len length must equal total_cells.")
-    0 <= computed_cell_count(arr) <= ncells(arr) || push!(issues, "n_cell_computed must lie between 0 and total_cells.")
-    for i in 1:ndir
-        arr.noff[i] >= 0 || push!(issues, "offset-cell counts must be nonnegative.")
-        length(arr.unique_pos[i]) >= 1 || push!(issues, "each direction cell must record at least one unique position.")
-        max(length(arr.unique_pos[i]) - 1, 0) == arr.noff[i] || push!(issues, "noff[$i] must equal length(unique_pos[$i]) - 1.")
-        all(1 <= idx <= length(arr.points) for idx in arr.orders[i]) || push!(issues, "orders[$i] contains an out-of-bounds critical-point index.")
-        all(1 <= idx <= length(arr.orders[i]) for idx in arr.unique_pos[i]) || push!(issues, "unique_pos[$i] contains an out-of-bounds order index.")
+    return lock(arr.lock) do
+        issues = String[]
+        box = working_box(arr)
+        length(box[1]) == 2 && length(box[2]) == 2 || push!(issues, "working box must have 2D endpoints.")
+        input_box = arr.input_box
+        if length(input_box[1]) != 2 || length(input_box[2]) != 2
+            push!(issues, "the original working window must have 2D endpoints.")
+        elseif !all(input_box[1] .<= input_box[2]) ||
+               box != (eltype(box[1]).(input_box[1]), eltype(box[2]).(input_box[2]))
+            push!(issues, "geometry must agree with the ordered original working window.")
+        end
+        backend(arr) in (:boxes, :poly) || push!(issues, "backend must be :boxes or :poly.")
+        all(length(d) == 2 for d in direction_representatives(arr)) || push!(issues, "all representative directions must have length 2.")
+        ndir = length(direction_representatives(arr))
+        length(arr.orders) == ndir || push!(issues, "orders must have one entry per direction cell.")
+        length(arr.unique_pos) == ndir || push!(issues, "unique_pos must have one entry per direction cell.")
+        length(arr.noff) == ndir || push!(issues, "noff must have one entry per direction cell.")
+        length(arr.start) == ndir || push!(issues, "start must have one entry per direction cell.")
+        arr.total_cells == sum(arr.noff) || push!(issues, "total_cells must equal sum(noff).")
+        length(arr.cell_chain_id) == ncells(arr) || push!(issues, "cell_chain_id length must equal total_cells.")
+        length(arr.cell_event_start) == ncells(arr) || push!(issues, "cell_event_start length must equal total_cells.")
+        length(arr.cell_event_len) == ncells(arr) || push!(issues, "cell_event_len length must equal total_cells.")
+        0 <= computed_cell_count(arr) <= ncells(arr) || push!(issues, "n_cell_computed must lie between 0 and total_cells.")
+        for i in 1:ndir
+            arr.noff[i] >= 0 || push!(issues, "offset-cell counts must be nonnegative.")
+            length(arr.unique_pos[i]) >= 1 || push!(issues, "each direction cell must record at least one unique position.")
+            max(length(arr.unique_pos[i]) - 1, 0) == arr.noff[i] || push!(issues, "noff[$i] must equal length(unique_pos[$i]) - 1.")
+            all(1 <= idx <= length(arr.points) for idx in arr.orders[i]) || push!(issues, "orders[$i] contains an out-of-bounds critical-point index.")
+            all(1 <= idx <= length(arr.orders[i]) for idx in arr.unique_pos[i]) || push!(issues, "unique_pos[$i] contains an out-of-bounds order index.")
+        end
+        max_chain_id = isempty(arr.cell_chain_id) ? 0 : maximum(arr.cell_chain_id)
+        max_chain_id <= chain_count(arr) || push!(issues, "cell_chain_id references a chain beyond the registered chain list.")
+        valid = isempty(issues)
+        throw && !valid && _throw_invalid_fibered2d(:check_fibered_arrangement_2d, issues)
+        return _fibered_issue_report(:fibered_arrangement_2d, valid;
+                                     backend=backend(arr),
+                                     ambient_dim=ambient_dim(arr),
+                                     direction_cells=ndir,
+                                     total_cells=ncells(arr),
+                                     computed_cells=computed_cell_count(arr),
+                                     chain_count=chain_count(arr),
+                                     issues=issues)
     end
-    max_chain_id = isempty(arr.cell_chain_id) ? 0 : maximum(arr.cell_chain_id)
-    max_chain_id <= chain_count(arr) || push!(issues, "cell_chain_id references a chain beyond the registered chain list.")
-    valid = isempty(issues)
-    throw && !valid && _throw_invalid_fibered2d(:check_fibered_arrangement_2d, issues)
-    return _fibered_issue_report(:fibered_arrangement_2d, valid;
-                                 backend=backend(arr),
-                                 ambient_dim=ambient_dim(arr),
-                                 direction_cells=ndir,
-                                 total_cells=ncells(arr),
-                                 computed_cells=computed_cell_count(arr),
-                                 chain_count=chain_count(arr),
-                                 issues=issues)
 end
 
 """
@@ -4307,30 +4439,34 @@ The report checks the shared arrangement, chain-barcode storage length, and the
 cached family/distance payload bookkeeping.
 """
 function check_fibered_barcode_cache_2d(cache::FiberedBarcodeCache2D; throw::Bool=false)
-    issues = String[]
-    arr_report = check_fibered_arrangement_2d(shared_arrangement(cache); throw=false)
-    append!(issues, arr_report.issues)
-    length(cache.index_barcodes_packed) == chain_count(shared_arrangement(cache)) ||
-        push!(issues, "index_barcodes_packed must have one slot per registered chain.")
-    0 <= cached_barcode_count(cache) <= length(cache.index_barcodes_packed) ||
-        push!(issues, "n_barcode_computed must lie between 0 and the number of cached chain barcodes.")
-    for payload in values(cache.family_barcode_payloads)
-        0 <= payload.n_computed <= length(payload.packed_barcodes) ||
-            push!(issues, "family barcode payload counts must lie within their storage length.")
+    return lock(cache.arrangement.lock) do
+        return lock(cache.lock) do
+            issues = String[]
+            arr_report = check_fibered_arrangement_2d(shared_arrangement(cache); throw=false)
+            append!(issues, arr_report.issues)
+            length(cache.index_barcodes_packed) <= chain_count(shared_arrangement(cache)) ||
+                push!(issues, "index_barcodes_packed cannot contain slots beyond the registered chains.")
+            cached_barcode_count(cache) == count(!isnothing, cache.index_barcodes_packed) ||
+                push!(issues, "n_barcode_computed must equal the number of populated chain barcodes.")
+            for payload in values(cache.family_barcode_payloads)
+                0 <= lock(() -> payload.n_computed, payload.lock) <= length(payload.packed_barcodes) ||
+                    push!(issues, "family barcode payload counts must lie within their storage length.")
+            end
+            for payload in values(cache.distance_payloads)
+                0 <= lock(() -> payload.n_computed, payload.lock) <= length(payload.points) ||
+                    push!(issues, "distance payload counts must lie within their storage length.")
+            end
+            valid = isempty(issues)
+            throw && !valid && _throw_invalid_fibered2d(:check_fibered_barcode_cache_2d, issues)
+            return _fibered_issue_report(:fibered_barcode_cache_2d, valid;
+                                         backend=backend(cache),
+                                         chain_count=chain_count(shared_arrangement(cache)),
+                                         cached_barcodes=cached_barcode_count(cache),
+                                         family_payloads=length(cache.family_barcode_payloads),
+                                         distance_payloads=length(cache.distance_payloads),
+                                         issues=issues)
+        end
     end
-    for payload in values(cache.distance_payloads)
-        0 <= payload.n_computed <= length(payload.points) ||
-            push!(issues, "distance payload counts must lie within their storage length.")
-    end
-    valid = isempty(issues)
-    throw && !valid && _throw_invalid_fibered2d(:check_fibered_barcode_cache_2d, issues)
-    return _fibered_issue_report(:fibered_barcode_cache_2d, valid;
-                                 backend=backend(cache),
-                                 chain_count=chain_count(shared_arrangement(cache)),
-                                 cached_barcodes=cached_barcode_count(cache),
-                                 family_payloads=length(cache.family_barcode_payloads),
-                                 distance_payloads=length(cache.distance_payloads),
-                                 issues=issues)
 end
 
 """
@@ -4376,8 +4512,10 @@ function check_fibered_slice_family_2d(fam::FiberedSliceFamily2D; throw::Bool=fa
         else
             1 <= s <= length(fam.vals_pool) || push!(issues, "slice $k value start is out of range.")
             s + l - 1 <= length(fam.vals_pool) || push!(issues, "slice $k value range exceeds the stored value pool.")
-            l == length(arr.chains[fam.chain_id[k]]) + 1 ||
-                push!(issues, "slice $k value count must match chain length plus one.")
+            if 1 <= fam.chain_id[k] <= chain_count(arr)
+                l == length(_arr2d_chain(arr, fam.chain_id[k])) + 1 ||
+                    push!(issues, "slice $k value count must match chain length plus one.")
+            end
         end
     end
     valid = isempty(issues)
@@ -4434,21 +4572,23 @@ end
 Validate a [`ProjectedBarcodeCache`](@ref).
 """
 function check_projected_barcode_cache(cache::ProjectedBarcodeCache; throw::Bool=false)
-    issues = String[]
-    arr_report = check_projected_arrangement(shared_arrangement(cache); throw=false)
-    append!(issues, arr_report.issues)
-    length(cache.packed_barcodes) == nprojections(shared_arrangement(cache)) ||
-        push!(issues, "packed_barcodes must have one slot per projection.")
-    0 <= computed_projection_count(cache) <= length(cache.packed_barcodes) ||
-        push!(issues, "n_computed must lie between 0 and the number of projections.")
-    cache.side in (:left, :right) || push!(issues, "side must be :left or :right.")
-    valid = isempty(issues)
-    throw && !valid && _throw_invalid_fibered2d(:check_projected_barcode_cache, issues)
-    return _fibered_issue_report(:projected_barcode_cache, valid;
-                                 side=cache.side,
-                                 nprojections=nprojections(shared_arrangement(cache)),
-                                 computed_projections=computed_projection_count(cache),
-                                 issues=issues)
+    return lock(cache.lock) do
+        issues = String[]
+        arr_report = check_projected_arrangement(shared_arrangement(cache); throw=false)
+        append!(issues, arr_report.issues)
+        length(cache.packed_barcodes) == nprojections(shared_arrangement(cache)) ||
+            push!(issues, "packed_barcodes must have one slot per projection.")
+        computed_projection_count(cache) == count(!isnothing, cache.packed_barcodes) ||
+            push!(issues, "n_computed must equal the number of populated projection barcodes.")
+        cache.side in (:left, :right) || push!(issues, "side must be :left or :right.")
+        valid = isempty(issues)
+        throw && !valid && _throw_invalid_fibered2d(:check_projected_barcode_cache, issues)
+        return _fibered_issue_report(:projected_barcode_cache, valid;
+                                     side=cache.side,
+                                     nprojections=nprojections(shared_arrangement(cache)),
+                                     computed_projections=computed_projection_count(cache),
+                                     issues=issues)
+    end
 end
 
 """
@@ -4518,7 +4658,7 @@ TamerOp.Advanced.fibered_cache_summary(cacheM)
 
 barres = TamerOp.slice_barcodes(cacheM; dirs=[(1.0, 1.0)], offsets=[0.0])
 fam = TamerOp.Advanced.fibered_slice_family_2d(arr)
-d = TamerOp.Advanced.matching_distance_exact_2d(cacheM, cacheN; family=fam)
+d = TamerOp.Advanced.matching_distance_sampled_2d(cacheM, cacheN; family=fam)
 
 parr = TamerOp.Advanced.projected_arrangement(pi; dirs=[(1.0, 0.0), (0.0, 1.0)])
 TamerOp.Advanced.projected_arrangement_summary(parr)
@@ -4551,14 +4691,18 @@ function fibered_query_summary(arr_or_cache, dir, off_or_x0; tie_break::Symbol=:
     report = check_fibered_query(arr_or_cache, dir, off_or_x0; throw=false)
     arr = _fibered_query_arrangement(arr_or_cache)
 
-    dir_report = check_fibered_direction(dir; throw=false)
-    dnorm = dir_report.valid ? _normalize_dir(dir_report.direction, arr.normalize_dirs) : nothing
+    dnorm = if report.valid
+        _algebraic_arrangement(arr) ? _exact_grade_direction(dir,arr.normalize_dirs) :
+            _normalize_dir(_as_float2(dir),arr.normalize_dirs)
+    else
+        nothing
+    end
     query_kind = report.query_kind
     basepoint = query_kind === :basepoint ? _as_real_vector2(off_or_x0) : nothing
     offset = nothing
     if report.valid
         if query_kind === :offset
-            offset = Float64(off_or_x0)
+            offset = _algebraic_arrangement(arr) ? AlgebraicReal(off_or_x0) : Float64(off_or_x0)
         else
             (n1, n2) = _normal_from_dir_2d(dnorm)
             offset = n1 * basepoint[1] + n2 * basepoint[2]
@@ -4580,9 +4724,10 @@ function fibered_query_summary(arr_or_cache, dir, off_or_x0; tie_break::Symbol=:
             barcode_total_multiplicity = _fibered_barcode_total_multiplicity(bc)
             if cell_id !== nothing
                 chain_id = _arr2d_compute_cell!(arr, cell_id[1], cell_id[2])
-                cached_chain_barcode = chain_id > 0 &&
-                    chain_id <= length(arr_or_cache.index_barcodes_packed) &&
-                    !isnothing(arr_or_cache.index_barcodes_packed[chain_id])
+                cached_chain_barcode = lock(arr_or_cache.lock) do
+                    chain_id > 0 && chain_id <= length(arr_or_cache.index_barcodes_packed) &&
+                        !isnothing(arr_or_cache.index_barcodes_packed[chain_id])
+                end
             end
         end
     end
@@ -4623,13 +4768,13 @@ Cheap-first workflow:
 - then call [`projected_barcodes`](@ref), [`projected_distance`](@ref), or
   [`projected_kernel`](@ref).
 """
-function projected_barcode_cache(M::PModule{K}, arr::ProjectedArrangement;
+function projected_barcode_cache(M::PModule{K}, arr::ProjectedArrangement{P,T};
                                  side::Symbol = :left,
-                                 precompute::Bool = false) where {K}
+                                 precompute::Bool = false) where {K,P,T}
     side in (:left, :right) || error("side must be :left or :right")
-    packed_barcodes = Vector{Union{Nothing,PackedFloatBarcode}}(undef, length(arr.projections))
+    packed_barcodes = Vector{Union{Nothing,PackedBarcode{T}}}(undef, length(arr.projections))
     fill!(packed_barcodes, nothing)
-    cache = ProjectedBarcodeCache(arr, M, side, packed_barcodes, 0)
+    cache = ProjectedBarcodeCache(ReentrantLock(), arr, M, side, packed_barcodes, 0)
     precompute && projected_barcodes(cache)
     return cache
 end
@@ -4640,30 +4785,31 @@ function _projected_barcode(cache::ProjectedBarcodeCache, i::Int)
 end
 
 function _projected_packed_barcode(cache::ProjectedBarcodeCache, i::Int)
-    pb = cache.packed_barcodes[i]
+    pb = lock(() -> cache.packed_barcodes[i], cache.lock)
     if pb !== nothing
         return pb
     end
     proj = cache.arrangement.projections[i]
     Mp = cache.side == :left ? pushforward_left(proj.f, cache.M; check=false) :
                                pushforward_right(proj.f, cache.M; check=false)
-    pb0 = _slice_barcode_packed(Mp, proj.chain; values=proj.values, check_chain=false)
-    pb = pb0 isa PackedFloatBarcode ? pb0 : _pack_float_barcode(_barcode_from_packed(pb0))
-    cache.packed_barcodes[i] = pb
-    cache.n_computed += 1
-    return pb
+    pb = _slice_barcode_packed(Mp, proj.chain; values=proj.values, check_chain=false)
+    return lock(cache.lock) do
+        cached = cache.packed_barcodes[i]
+        cached === nothing || return cached
+        cache.packed_barcodes[i] = pb
+        cache.n_computed += 1
+        return pb
+    end
 end
 
 function _prepare_projected_cache_readonly!(cache::ProjectedBarcodeCache)
     n = length(cache.arrangement.projections)
-    if cache.n_computed == n
+    if computed_projection_count(cache) == n
         return nothing
     end
     for i in 1:n
-        cache.packed_barcodes[i] === nothing || continue
         _projected_packed_barcode(cache, i)
     end
-    cache.n_computed = n
     return nothing
 end
 
@@ -4684,17 +4830,18 @@ Use [`projected_barcodes`](@ref), [`projection_indices`](@ref), and
 working with the barcode vector itself. If you only need scalar comparisons,
 prefer [`projected_distance`](@ref) or [`projected_kernel`](@ref).
 """
-function projected_barcodes(cache::ProjectedBarcodeCache;
+function projected_barcodes(cache::ProjectedBarcodeCache{K,T};
                             inds=nothing,
-                            threads::Bool = (Threads.nthreads() > 1))
+                            threads::Bool = (Threads.nthreads() > 1)) where {K,T}
     n = length(cache.arrangement.projections)
     inds_vec = inds === nothing ? collect(1:n) : collect(inds)
-    out = Vector{FloatBarcode}(undef, length(inds_vec))
+    out = Vector{Dict{Tuple{T,T},Int}}(undef, length(inds_vec))
     if threads && Threads.nthreads() > 1
         _prepare_projected_cache_readonly!(cache)
         Threads.@threads for k in eachindex(inds_vec)
+            local i, pb
             i = inds_vec[k]
-            pb = cache.packed_barcodes[i]::PackedFloatBarcode
+            pb = cache.packed_barcodes[i]::PackedBarcode{T}
             out[k] = _barcode_from_packed(pb)
         end
     else
@@ -4732,29 +4879,22 @@ function projected_distances(cacheM::ProjectedBarcodeCache,
     (dist == :bottleneck || dist == :wasserstein) || error("unknown dist=$dist")
 
     out = Vector{Float64}(undef, n)
-    scratch_by_thread = _scratch_arenas(threads)
-    if threads && Threads.nthreads() > 1
-        _prepare_projected_cache_readonly!(cacheM)
-        _prepare_projected_cache_readonly!(cacheN)
-        Threads.@threads for i in 1:n
-            tid = Threads.threadid()
-            scratch = scratch_by_thread[tid]
-            pb1 = cacheM.packed_barcodes[i]::PackedFloatBarcode
-            pb2 = cacheN.packed_barcodes[i]::PackedFloatBarcode
-            _points_from_packed!(scratch.points_a, pb1)
-            _points_from_packed!(scratch.points_b, pb2)
-            out[i] = dist == :bottleneck ? bottleneck_distance(scratch.points_a, scratch.points_b) :
-                     wasserstein_distance(scratch.points_a, scratch.points_b; p=p, q=q)
-        end
-    else
-        scratch = scratch_by_thread[1]
-        for i in 1:n
-            pb1 = _projected_packed_barcode(cacheM, i)
-            pb2 = _projected_packed_barcode(cacheN, i)
-            _points_from_packed!(scratch.points_a, pb1)
-            _points_from_packed!(scratch.points_b, pb2)
-            out[i] = dist == :bottleneck ? bottleneck_distance(scratch.points_a, scratch.points_b) :
-                     wasserstein_distance(scratch.points_a, scratch.points_b; p=p, q=q)
+    _prepare_projected_cache_readonly!(cacheM)
+    _prepare_projected_cache_readonly!(cacheN)
+    _foreach_workchunk(n; threads=threads) do work, _
+        scratch = InvariantScratch()
+        for i in work
+            pb1 = cacheM.packed_barcodes[i]
+            pb2 = cacheN.packed_barcodes[i]
+            if pb1 isa PackedFloatBarcode && pb2 isa PackedFloatBarcode
+                _points_from_packed!(scratch.points_a, pb1)
+                _points_from_packed!(scratch.points_b, pb2)
+                out[i] = dist == :bottleneck ? bottleneck_distance(scratch.points_a, scratch.points_b) :
+                    wasserstein_distance(scratch.points_a, scratch.points_b; p=p, q=q)
+            else
+                out[i] = dist == :bottleneck ? bottleneck_distance(pb1,pb2) :
+                    wasserstein_distance(pb1,pb2;p=p,q=q)
+            end
         end
     end
     inds = collect(1:n)
@@ -4830,42 +4970,22 @@ function projected_kernel(cacheM::ProjectedBarcodeCache,
     vals = Vector{Float64}(undef, n)
     fast_points_kernel = kind in (:bottleneck_gaussian, :bottleneck_laplacian,
                                   :wasserstein_gaussian, :wasserstein_laplacian)
-    scratch_by_thread = _scratch_arenas(threads)
-    if threads && Threads.nthreads() > 1
-        _prepare_projected_cache_readonly!(cacheM)
-        _prepare_projected_cache_readonly!(cacheN)
-        Threads.@threads for i in 1:n
-            if fast_points_kernel
-                tid = Threads.threadid()
-                scratch = scratch_by_thread[tid]
-                pb1 = cacheM.packed_barcodes[i]::PackedFloatBarcode
-                pb2 = cacheN.packed_barcodes[i]::PackedFloatBarcode
+    _prepare_projected_cache_readonly!(cacheM)
+    _prepare_projected_cache_readonly!(cacheN)
+    _foreach_workchunk(n; threads=threads) do work, _
+        scratch = InvariantScratch()
+        for i in work
+            pb1 = cacheM.packed_barcodes[i]
+            pb2 = cacheN.packed_barcodes[i]
+            if fast_points_kernel && pb1 isa PackedFloatBarcode && pb2 isa PackedFloatBarcode
                 _points_from_packed!(scratch.points_a, pb1)
                 _points_from_packed!(scratch.points_b, pb2)
                 vals[i] = _barcode_kernel(scratch.points_a, scratch.points_b; kind=kind, sigma=sigma, p=p, q=q)
             else
-                b1 = _projected_barcode(cacheM, i)
-                b2 = _projected_barcode(cacheN, i)
-                vals[i] = _barcode_kernel(b1, b2; kind=kind, sigma=sigma, p=p, q=q)
-            end
-        end
-    else
-        scratch = scratch_by_thread[1]
-        for i in 1:n
-            if fast_points_kernel
-                pb1 = _projected_packed_barcode(cacheM, i)
-                pb2 = _projected_packed_barcode(cacheN, i)
-                _points_from_packed!(scratch.points_a, pb1)
-                _points_from_packed!(scratch.points_b, pb2)
-                vals[i] = _barcode_kernel(scratch.points_a, scratch.points_b; kind=kind, sigma=sigma, p=p, q=q)
-            else
-                b1 = _projected_barcode(cacheM, i)
-                b2 = _projected_barcode(cacheN, i)
-                vals[i] = _barcode_kernel(b1, b2; kind=kind, sigma=sigma, p=p, q=q)
+                vals[i] = _barcode_kernel(pb1, pb2; kind=kind, sigma=sigma, p=p, q=q)
             end
         end
     end
-
     if agg == :mean
         return sum(w .* vals)
     elseif agg == :sum

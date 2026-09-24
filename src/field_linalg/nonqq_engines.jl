@@ -446,13 +446,19 @@ end
 # -----------------------------------------------------------------------------
 
 function _float_tol(F::RealField, A)
-    return F.atol + F.rtol * opnorm(A, 1)
+    isfinite(F.atol) && isfinite(F.rtol) && F.atol >= 0 && F.rtol >= 0 ||
+        throw(ArgumentError("RealField tolerances must be finite and nonnegative"))
+    all(isfinite, A isa SparseMatrixCSC ? nonzeros(A) : A) ||
+        throw(ArgumentError("RealField matrix entries must be finite"))
+    tol = isempty(A) || iszero(F.rtol) ? F.atol : F.atol + F.rtol * opnorm(A, 1)
+    isfinite(tol) || throw(ArgumentError("RealField tolerance overflow; rescale the input"))
+    return tol
 end
 
 function _rank_float(F::RealField, A::StridedMatrix{<:Real})
+    tol = _float_tol(F, A)
     R = qr(A, Val(true)).R
     d = diag(R)
-    tol = _float_tol(F, A)
     return count(x -> abs(x) > tol, d)
 end
 
@@ -461,20 +467,18 @@ function _rank_float(F::RealField, A::AbstractMatrix{<:Real})
 end
 
 function _rank_float_svd(F::RealField, A)
-    s = svdvals(Matrix(A))
     tol = _float_tol(F, A)
+    s = svdvals(Matrix(A))
     return count(>(tol), s)
 end
 
 function _rank_float(F::RealField, A::SparseMatrixCSC)
+    tol = _float_tol(F, A)
     m, n = size(A)
     if m == 0 || n == 0
         return 0
     end
-    R = qr(A).R
-    d = diag(R)
-    tol = _float_tol(F, A)
-    return count(x -> abs(x) > tol, d)
+    return LinearAlgebra.rank(qr(A; tol=tol))
 end
 
 function _rank_float(F::RealField, A::Transpose{<:Real,<:SparseMatrixCSC})
@@ -486,15 +490,17 @@ function _rank_float(F::RealField, A::Adjoint{<:Real,<:SparseMatrixCSC})
 end
 
 function _nullspace_from_qr_sparse_float(F::RealField, A)
+    tol = _float_tol(F, A)
     m, n = size(A)
     n == 0 && return zeros(Float64, 0, 0)
     m == 0 && return Matrix{Float64}(I, n, n)
 
-    Fq = qr(A)
+    # SPQR must reject small columns during factorization so accepted pivots
+    # form a leading block. Counting diagonals afterward can select the wrong
+    # free columns when a tiny pivot precedes a large one.
+    Fq = qr(A; tol=tol)
     R = Fq.R
-    d = diag(R)
-    tol = _float_tol(F, A)
-    r = count(x -> abs(x) > tol, d)
+    r = LinearAlgebra.rank(Fq)
     nfree = n - r
     nfree <= 0 && return zeros(Float64, n, 0)
 
@@ -517,6 +523,7 @@ function _nullspace_from_qr_sparse_float(F::RealField, A)
 end
 
 function _nullspace_float_qr_dense(F::RealField, A::AbstractMatrix{<:Real})
+    tol = _float_tol(F, A)
     m, n = size(A)
     n == 0 && return zeros(Float64, 0, 0)
     m == 0 && return Matrix{Float64}(I, n, n)
@@ -524,7 +531,6 @@ function _nullspace_float_qr_dense(F::RealField, A::AbstractMatrix{<:Real})
     Fq = qr(A, Val(true))
     R = Fq.R
     d = diag(R)
-    tol = _float_tol(F, A)
     r = count(x -> abs(x) > tol, d)
     nfree = n - r
     nfree <= 0 && return zeros(Float64, n, 0)
@@ -548,8 +554,9 @@ function _nullspace_float_qr_dense(F::RealField, A::AbstractMatrix{<:Real})
 end
 
 function _nullspace_float_svd(F::RealField, A)
+    tol = _float_tol(F, A)
     S = svd(Matrix(A); full=true)
-    r = _rank_float_svd(F, A)
+    r = count(>(tol), S.S)
     n = size(A, 2)
     r >= n && return zeros(eltype(S.Vt), n, 0)
     return Matrix(S.Vt[(r + 1):end, :])'
@@ -571,59 +578,111 @@ function _nullspace_float(F::RealField, A::Adjoint{<:Real,<:SparseMatrixCSC})
     return _nullspace_from_qr_sparse_float(F, A)
 end
 
-function _rref_float(F::RealField, A; pivots::Bool=true)
-    M = Matrix(A)
-    Q, R, piv = qr(M, Val(true))
-    r = _rank_float(F, A)
-    pivs = Vector{Int}(piv[1:r])
+function _rref_float_dense(F::RealField, A; pivots::Bool=true)
+    M = Matrix{coeff_type(F)}(A)
+    tol = _float_tol(F, M)
+    m, n = size(M)
+    pivs = Int[]
+    row = 1
+    # Keep column order: quotient/complement construction depends on preserving
+    # an independent prefix. Only rows are pivoted, by largest absolute entry.
+    for col in 1:n
+        row > m && break
+        pivrow = row
+        @inbounds for i in (row + 1):m
+            abs(M[i, col]) > abs(M[pivrow, col]) && (pivrow = i)
+        end
+        if abs(M[pivrow, col]) <= tol
+            @inbounds for i in row:m
+                M[i, col] = 0
+            end
+            continue
+        end
+        if pivrow != row
+            @inbounds for j in col:n
+                M[row, j], M[pivrow, j] = M[pivrow, j], M[row, j]
+            end
+        end
+        pivot = M[row, col]
+        isfinite(pivot) || throw(ArgumentError("rref: arithmetic overflow; rescale the input or use higher precision"))
+        @inbounds for j in (col + 1):n
+            M[row, j] /= pivot
+        end
+        M[row, col] = 1
+        @inbounds for i in (row + 1):m
+            a = M[i, col]
+            if !iszero(a)
+                for j in (col + 1):n
+                    M[i, j] -= a * M[row, j]
+                end
+            end
+            M[i, col] = 0
+        end
+        push!(pivs, col)
+        row += 1
+    end
+    # Never apply the input-scale tolerance to normalized rows: it could erase
+    # unit pivots or meaningful small coordinates after a large rescaling.
+    for k in length(pivs):-1:1
+        col = pivs[k]
+        @inbounds for i in 1:(k - 1)
+            a = M[i, col]
+            if !iszero(a)
+                for j in (col + 1):n
+                    M[i, j] -= a * M[k, j]
+                end
+            end
+            M[i, col] = 0
+        end
+    end
+    all(isfinite, M) || throw(ArgumentError("rref: arithmetic overflow; rescale the input or use higher precision"))
     return pivots ? (M, Tuple(pivs)) : M
 end
 
-function _rref_float(F::RealField, A::SparseMatrixCSC; pivots::Bool=true)
-    Fq = qr(A)
-    r = _rank_float(F, A)
-    pivs = Vector{Int}(Fq.pcol[1:r])
-    return pivots ? (copy(A), Tuple(pivs)) : copy(A)
+# Independent columns for numerical image/solve queries need QR, not full RREF.
+function _pivot_columns_float(F::RealField, A)
+    tol = _float_tol(F, A)
+    min(size(A)...) == 0 && return Int[]
+    Fq = qr(Matrix{coeff_type(F)}(A), Val(true))
+    r = count(x -> abs(x) > tol, diag(Fq.R))
+    return Vector{Int}(Fq.p[1:r])
 end
 
-function _colspace_float(F::RealField, A)
-    Q, R, piv = qr(Matrix(A), Val(true))
-    r = _rank_float(F, A)
-    cols = piv[1:r]
-    return Matrix(A)[:, cols]
-end
-
-function _colspace_float(F::RealField, A::Transpose{<:Real,<:SparseMatrixCSC})
-    Fq = qr(A)
-    r = _rank_float(F, A)
-    cols = Fq.pcol[1:r]
-    return A[:, cols]
-end
-
-function _colspace_float(F::RealField, A::Adjoint{<:Real,<:SparseMatrixCSC})
-    Fq = qr(A)
-    r = _rank_float(F, A)
-    cols = Fq.pcol[1:r]
-    return A[:, cols]
-end
-
-function _colspace_float(F::RealField, A::SparseMatrixCSC)
-    Fq = qr(A)
-    r = _rank_float(F, A)
-    cols = Fq.pcol[1:r]
-    return A[:, cols]
+function _pivot_columns_float(F::RealField, A::SparseMatrixCSC)
+    tol = _float_tol(F, A)
+    min(size(A)...) == 0 && return Int[]
+    Fq = qr(A; tol=tol)
+    r = LinearAlgebra.rank(Fq)
+    return Vector{Int}(Fq.pcol[1:r])
 end
 
 function _solve_fullcolumn_float(F::RealField, B, Y; check_rhs::Bool=true)
+    tol = _float_tol(F, B)
     Ymat = Y isa AbstractVector ? reshape(Y, :, 1) : Matrix(Y)
+    size(Ymat, 1) == size(B, 1) || throw(DimensionMismatch("solve_fullcolumn: RHS row count must match the matrix"))
+    all(isfinite, Ymat) || throw(ArgumentError("solve_fullcolumn: RHS entries must be finite"))
     Fq = qr(Matrix(B), Val(true))
+    count(x -> abs(x) > tol, diag(Fq.R)) == size(B, 2) ||
+        throw(ArgumentError("solve_fullcolumn: matrix is not full column rank at the field tolerance"))
     X = Fq \ Ymat
-    if check_rhs
-        R = Matrix(B) * X - Ymat
-        tol = _float_tol(F, B)
-        norm(R) <= tol || error("solve_fullcolumn_float: RHS residual too large")
-    end
+    all(isfinite, X) || throw(ArgumentError("solve_fullcolumn: nonfinite solution; rescale the system"))
+    check_rhs && _verify_float_solution(F, B, X, Ymat)
     return (Y isa AbstractVector) ? vec(X) : X
+end
+
+# Verify each RHS separately: a large consistent column must not hide a small
+# inconsistent one. Rank thresholds and solution backward error have different
+# scales. This check does not claim a small forward error for ill-conditioned B.
+function _verify_float_solution(F::RealField, B, X, Y)
+    residual = B * X - Y
+    relative = !iszero(F.rtol)
+    scaled_norm_B = relative ? F.rtol * norm(B) : zero(F.rtol)
+    for j in axes(Y, 2)
+        bound = relative ? F.atol + scaled_norm_B * norm(view(X, :, j)) + F.rtol * norm(view(Y, :, j)) : F.atol
+        isfinite(bound) || throw(ArgumentError("solve_fullcolumn: residual bound overflow; rescale the system"))
+        norm(view(residual, :, j)) <= bound || error("solve_fullcolumn_float: RHS residual too large in column $(j)")
+    end
+    return nothing
 end
 
 const _FLOAT_SPARSE_FACTOR_CACHE = Dict{NTuple{5,UInt},Any}()
@@ -641,26 +700,35 @@ end
 
 function _solve_fullcolumn_float(F::RealField, B::SparseMatrixCSC, Y;
                                  check_rhs::Bool=true, cache::Bool=true, factor=nothing)
+    tol = _float_tol(F, B)
     Ymat = Y isa AbstractVector ? reshape(Y, :, 1) : Matrix(Y)
+    size(Ymat, 1) == size(B, 1) || throw(DimensionMismatch("solve_fullcolumn: RHS row count must match the matrix"))
+    all(isfinite, Ymat) || throw(ArgumentError("solve_fullcolumn: RHS entries must be finite"))
     fac = factor
     if fac === nothing && cache
-        fac = get(_FLOAT_SPARSE_FACTOR_CACHE, _float_sparse_cache_key(B), nothing)
+        entry = get(_FLOAT_SPARSE_FACTOR_CACHE, _float_sparse_cache_key(B), nothing)
+        if entry !== nothing && entry.matrix === B && entry.tolerance == tol
+            fac = entry.factor
+        end
     end
     if fac === nothing
-        fac = qr(B)
+        fac = qr(B; tol=tol)
         if cache
             if length(_FLOAT_SPARSE_FACTOR_CACHE) >= FLOAT_SPARSE_FACTOR_CACHE_MAX[]
                 empty!(_FLOAT_SPARSE_FACTOR_CACHE)
             end
-            _FLOAT_SPARSE_FACTOR_CACHE[_float_sparse_cache_key(B)] = fac
+            # Retaining B also prevents recycled array object IDs from matching
+            # an unrelated matrix. Callers must keep this fixed matrix unchanged.
+            _FLOAT_SPARSE_FACTOR_CACHE[_float_sparse_cache_key(B)] =
+                (matrix=B, tolerance=tol, factor=fac)
         end
     end
+    LinearAlgebra.rank(fac) == size(B, 2) &&
+        all(x -> abs(x) > tol, diag(fac.R)) ||
+        throw(ArgumentError("solve_fullcolumn: matrix is not full column rank at the field tolerance"))
     X = fac \ Ymat
-    if check_rhs
-        R = B * X - Ymat
-        tol = _float_tol(F, B)
-        norm(R) <= tol || error("solve_fullcolumn_float: RHS residual too large")
-    end
+    all(isfinite, X) || throw(ArgumentError("solve_fullcolumn: nonfinite solution; rescale the system"))
+    check_rhs && _verify_float_solution(F, B, X, Ymat)
     return (Y isa AbstractVector) ? vec(X) : X
 end
 # -----------------------------------------------------------------------------
@@ -824,9 +892,13 @@ function _solve_fullcolumn_fp(B::AbstractMatrix{FpElem{p}},
 
     Aug = hcat(B, Ymat)
     R, pivs = _rref_fp(Aug; pivots=true)
-    if length(pivs) != n
-        error("solve_fullcolumn_fp: expected full column rank, got rank $(length(pivs)) < $n")
+    rank_B = count(col -> col <= n, pivs)
+    if rank_B != n
+        error("solve_fullcolumn_fp: expected full column rank, got rank $rank_B < $n")
     end
+    # A pivot in an appended RHS column certifies inconsistency. In particular,
+    # it cannot replace a missing B pivot or index a row of the n-row solution.
+    length(pivs) == n || error("solve_fullcolumn_fp: RHS is not in column space of B")
 
     rhs = size(Ymat, 2)
     X = zeros(FpElem{p}, n, rhs)

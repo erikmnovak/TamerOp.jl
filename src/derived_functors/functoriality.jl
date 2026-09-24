@@ -10,6 +10,7 @@ This submodule should define (move here incrementally):
 - any internal caches used to compute these maps efficiently
 """
 module Functoriality
+    import ..DerivedFunctors: provenance, _validate_native_derived_options
 
     using LinearAlgebra
     using SparseArrays
@@ -25,7 +26,7 @@ module Functoriality
     using ...FieldLinAlg
     import ...FieldLinAlg: SparseRow
 
-    using ...Modules: PModule, PMorphism, MapLeqQueryBatch, map_leq, map_leq_many, map_leq_many!,
+    using ...Modules: PModule, PMorphism, id_morphism, MapLeqQueryBatch, map_leq, map_leq_many, map_leq_many!,
                        _prepare_map_leq_batch_owned, _append_map_leq_many_scaled_triplets!,
                        _accum_map_leq_many_scaled_matvecs!
     import ...FiniteFringe: AbstractPoset, nvertices, leq, poset_equal
@@ -37,11 +38,14 @@ module Functoriality
     import ..Utils: compose
     import ..ExtTorSpaces: ExtSpaceProjective, ExtSpaceInjective, ExtSpace,
         TorSpace, TorSpaceSecond, Ext, Tor, ExtInjective, HomSpace, Hom,
-        _comparison_P2I, _comparison_I2P
+        _comparison_P2I, _comparison_I2P, _required_resolution_length,
+        projective_model, injective_model, _block_offsets_for_gens
     import ..Resolutions: ProjectiveResolution, InjectiveResolution,
-        projective_resolution, injective_resolution, _pad_projective_resolution!,
-        lift_injective_chainmap, _base_vertex_groups, _active_upset_indices_cached
+        projective_resolution, injective_resolution,
+        lift_injective_chainmap, _base_vertex_groups, _active_upset_indices_cached,
+        _same_projective_resolution_model
     import ..DerivedFunctors: derived_les_summary
+    import ..DerivedFunctors: _IdentityCacheEntry, _identity_cache_entry, _identity_cache_matches
 
     import ..GradedSpaces: degree_range, dim
 
@@ -89,23 +93,57 @@ module Functoriality
 
     @inline _PostcomposeWorkspace(::Type{K}) where {K} = _PostcomposeWorkspace{K}(zeros(K, 0, 0))
 
-    mutable struct _HomSolveWorkspaceEntry{K}
-        pre::_PrecomposeWorkspace{K}
-        post::_PostcomposeWorkspace{K}
+    struct _HomSolveWorkspaceEntry{K}
+        lock::ReentrantLock
+        pre::Vector{_PrecomposeWorkspace{K}}
+        post::Vector{_PostcomposeWorkspace{K}}
     end
 
     abstract type _AbstractParticularSolvePlan{K} end
 
-    mutable struct _HomSolvePlanEntry{K}
+    struct _HomSolvePlanEntry{K}
         plan::_AbstractParticularSolvePlan{K}
-        pre::_PrecomposeWorkspace{K}
-        post::_PostcomposeWorkspace{K}
     end
 
     const _HOM_SOLVE_WORKSPACE_CACHE = Dict{UInt,Any}()
     const _HOM_SOLVE_WORKSPACE_LOCK = ReentrantLock()
     const _HOM_BASIS_SOLVE_PLAN_CACHE = Dict{UInt,Any}()
     const _HOM_BASIS_SOLVE_PLAN_LOCK = ReentrantLock()
+
+    struct _HomSolveCacheEntry{F,E}
+        basis::WeakRef
+        field::F
+        value::E
+    end
+
+    # An objectid may be reused after its matrix is collected. Retain a weak
+    # identity witness and the field contract before reusing a plan or buffer;
+    # a bare integer key can otherwise return another field's old workspace.
+    function _hom_solve_cache_entry(build, store, cache_lock, H::HomSpace)
+        basis = H.basis_matrix
+        field = H.dom.field
+        key = UInt(objectid(basis))
+        cached = lock(cache_lock) do
+            cached = get(store, key, nothing)
+            if cached !== nothing && cached.basis.value === basis && cached.field === field
+                return cached.value
+            end
+            return nothing
+        end
+        cached === nothing || return cached
+        # Plans can require substantial exact elimination. Concurrent misses
+        # may build independently, but never hold the publication lock while
+        # computing or expose partially initialized data.
+        value = build()
+        return lock(cache_lock) do
+            cached = get(store, key, nothing)
+            if cached !== nothing && cached.basis.value === basis && cached.field === field
+                return cached.value
+            end
+            store[key] = _HomSolveCacheEntry(WeakRef(basis), field, value)
+            return value
+        end
+    end
 
     @inline function _rhs_buffer!(
         ::Nothing,
@@ -137,40 +175,47 @@ module Functoriality
 
     @inline function _hom_solve_workspace_entry(H::HomSpace{K}) where {K}
         if !_FUNCTORIALITY_USE_HOM_SOLVE_WORKSPACE_CACHE[]
-            return _HomSolveWorkspaceEntry{K}(_PrecomposeWorkspace(K), _PostcomposeWorkspace(K))
+            return _HomSolveWorkspaceEntry{K}(ReentrantLock(), _PrecomposeWorkspace{K}[], _PostcomposeWorkspace{K}[])
         end
-        key = UInt(objectid(H.basis_matrix))
-        lock(_HOM_SOLVE_WORKSPACE_LOCK)
+        return _hom_solve_cache_entry(_HOM_SOLVE_WORKSPACE_CACHE, _HOM_SOLVE_WORKSPACE_LOCK, H) do
+            _HomSolveWorkspaceEntry{K}(ReentrantLock(), _PrecomposeWorkspace{K}[], _PostcomposeWorkspace{K}[])
+        end::_HomSolveWorkspaceEntry{K}
+    end
+
+    @inline _hom_idle_workspaces(entry::_HomSolveWorkspaceEntry{K}, ::Type{_PrecomposeWorkspace{K}}) where {K} = entry.pre
+    @inline _hom_idle_workspaces(entry::_HomSolveWorkspaceEntry{K}, ::Type{_PostcomposeWorkspace{K}}) where {K} = entry.post
+
+    function _with_hom_workspace(f, H::HomSpace{K}, workspace, ::Type{W}) where {K,W}
+        workspace === nothing || return f(workspace)
+        _FUNCTORIALITY_USE_HOM_SOLVE_WORKSPACE_CACHE[] || return f(nothing)
+        entry = _hom_solve_workspace_entry(H)
+        idle = _hom_idle_workspaces(entry, W)
+        owned = lock(entry.lock) do
+            isempty(idle) ? nothing : pop!(idle)
+        end
+        owned === nothing && (owned = W(zeros(K, 0, 0)))
+        # Ownership follows this invocation, not a worker ID or task-local
+        # singleton. Nested calls and yielding/migrating tasks take new leases.
         try
-            return get!(_HOM_SOLVE_WORKSPACE_CACHE, key) do
-                _HomSolveWorkspaceEntry{K}(_PrecomposeWorkspace(K), _PostcomposeWorkspace(K))
-            end
+            return f(owned)
         finally
-            unlock(_HOM_SOLVE_WORKSPACE_LOCK)
+            lock(entry.lock) do
+                push!(idle, owned)
+            end
         end
     end
 
     @inline function _hom_solve_plan_entry(H::HomSpace{K}) where {K}
-        key = UInt(objectid(H.basis_matrix))
         if !_FUNCTORIALITY_USE_HOM_BASIS_SOLVE_PLAN_CACHE[]
             return _HomSolvePlanEntry{K}(
                 _particular_solve_plan(H.dom.field, H.basis_matrix),
-                _PrecomposeWorkspace(K),
-                _PostcomposeWorkspace(K),
             )
         end
-        lock(_HOM_BASIS_SOLVE_PLAN_LOCK)
-        try
-            return get!(_HOM_BASIS_SOLVE_PLAN_CACHE, key) do
-                _HomSolvePlanEntry{K}(
-                    _particular_solve_plan(H.dom.field, H.basis_matrix),
-                    _PrecomposeWorkspace(K),
-                    _PostcomposeWorkspace(K),
-                )
-            end
-        finally
-            unlock(_HOM_BASIS_SOLVE_PLAN_LOCK)
-        end
+        return _hom_solve_cache_entry(_HOM_BASIS_SOLVE_PLAN_CACHE, _HOM_BASIS_SOLVE_PLAN_LOCK, H) do
+            _HomSolvePlanEntry{K}(
+                _particular_solve_plan(H.dom.field, H.basis_matrix),
+            )
+        end::_HomSolvePlanEntry{K}
     end
 
     struct _ExactParticularSolvePlan{K,F<:AbstractCoeffField} <: _AbstractParticularSolvePlan{K}
@@ -193,8 +238,8 @@ module Functoriality
         ncols::Int
     end
 
-    const _SUPPORT_SOLVE_PLAN_CACHE = [Dict{_SupportSolvePlanKey,Any}() for _ in 1:max(1, Threads.maxthreadid())]
-    @inline _support_plan_shard() = _SUPPORT_SOLVE_PLAN_CACHE[min(length(_SUPPORT_SOLVE_PLAN_CACHE), max(1, Threads.threadid()))]
+    const _SUPPORT_SOLVE_PLAN_CACHE = Dict{_SupportSolvePlanKey,Any}()
+    const _SUPPORT_SOLVE_PLAN_LOCK = ReentrantLock()
 
     @inline function _support_hash(cols::AbstractVector{<:Integer})
         h = hash(length(cols), UInt(0x9172b7a9))
@@ -219,13 +264,18 @@ module Functoriality
 
     @inline function _cached_particular_solve_plan(field::AbstractCoeffField,
                                                    A::AbstractMatrix{K},
-                                                   matrix_id::UInt,
-                                                   support_hash::UInt) where {K}
-        shard = _support_plan_shard()
-        key = _SupportSolvePlanKey(matrix_id, support_hash, size(A, 1), size(A, 2))
-        return get!(shard, key) do
-            _particular_solve_plan(field, A)
+                                                   source::AbstractMatrix,
+                                                   support::Union{Nothing,AbstractVector{<:Integer}}) where {K}
+        support_hash = support === nothing ? UInt(0) : _support_hash(support)
+        key = _SupportSolvePlanKey(UInt(objectid(source)), support_hash, size(A, 1), size(A, 2))
+        owners = (source,)
+        valid = entry -> _identity_cache_matches(entry, owners) &&
+            entry.contract.field === field && entry.contract.support == support
+        entry = _cached_functor_entry(valid, _SUPPORT_SOLVE_PLAN_CACHE, _SUPPORT_SOLVE_PLAN_LOCK, key) do
+            contract = (field=field, support=support === nothing ? nothing : collect(Int, support))
+            _identity_cache_entry(owners, contract, _particular_solve_plan(field, A))
         end
+        return entry.value::_AbstractParticularSolvePlan{K}
     end
 
     @inline function _dense_identity(::Type{K}, n::Int) where {K}
@@ -258,12 +308,7 @@ module Functoriality
     end
 
     function _solve_particular(plan::_RealParticularSolvePlan{K}, B::AbstractMatrix{K}) where {K}
-        X = plan.A \ Matrix(B)
-        R = plan.A * X - B
-        maxabs = isempty(R) ? zero(K) : maximum(abs, R)
-        tol = plan.field.atol + plan.field.rtol * (isempty(plan.A) ? zero(K) : opnorm(plan.A, 1))
-        maxabs <= tol || error("solve_particular: inconsistent system (residual=$maxabs, tol=$tol)")
-        return X
+        return Utils.solve_particular(plan.field, plan.A, B)
     end
 
     @inline function _projective_q0_step_inconsistent(err)
@@ -323,11 +368,6 @@ module Functoriality
                                                  alpha_parts::Vector{Vector{K}},
                                                  active_M::Vector{Vector{Vector{Int}}}) where {K}
         length(active_M) >= 2 || error("_solve_projective_q0_q1_joint_coeff: expected active data for degrees 0 and 1")
-
-        if resL === resM && f.dom === f.cod
-            scalar = _pmorphism_scalar_multiple_identity(f)
-            scalar === nothing || return _scalar_chainmap_coeffs(resL, scalar, upto)
-        end
 
         dom_gens_0 = resL.gens[1]
         dom_gens_1 = resL.gens[2]
@@ -468,8 +508,8 @@ module Functoriality
                 plan = _cached_particular_solve_plan(
                     resM.M.field,
                     A,
-                    UInt(objectid(resM.d_mat[k])),
-                    _support_hash(allowed),
+                    resM.d_mat[k],
+                    allowed,
                 )
                 X = _solve_particular(plan, Matrix(@view RHS[:, cols]))
                 @inbounds for (jj, col) in enumerate(cols), (pos, j) in enumerate(allowed)
@@ -533,13 +573,55 @@ module Functoriality
         coeff_id::UInt
     end
 
-    const _COEFF_MAP_PLAN_CACHE = [Dict{_CoeffMapPlanKey,_CoeffMapPlan}() for _ in 1:max(1, Threads.maxthreadid())]
+    struct _CoeffPatternContract
+        colptr::Vector{Int}
+        rowval::Vector{Int}
+        stored_zeros::BitVector
+    end
+
+    function _coeff_pattern_contract(coeff::SparseMatrixCSC)
+        return _CoeffPatternContract(copy(coeff.colptr), copy(coeff.rowval), BitVector(iszero.(coeff.nzval)))
+    end
+
+    @inline function _coeff_pattern_matches(contract::_CoeffPatternContract, coeff::SparseMatrixCSC)
+        return contract.colptr == coeff.colptr && contract.rowval == coeff.rowval &&
+            length(contract.stored_zeros) == length(coeff.nzval) &&
+            all(i -> contract.stored_zeros[i] == iszero(coeff.nzval[i]), eachindex(coeff.nzval))
+    end
+
+    const _COEFF_MAP_PLAN_CACHE = Dict{_CoeffMapPlanKey,_IdentityCacheEntry{3,_CoeffPatternContract,_CoeffMapPlan}}()
+    const _COEFF_MAP_PLAN_LOCK = ReentrantLock()
     const _TENSOR_COEFF_PLAN_CACHE_LOCK = ReentrantLock()
     const _TENSOR_COEFF_PLAN_CACHES = WeakKeyDict{Any, Dict{_TensorCoeffCacheKey, Any}}()
     const _TENSOR_COEFF_RESULT_CACHE_LOCK = ReentrantLock()
     const _TENSOR_COEFF_RESULT_CACHES = WeakKeyDict{Any, Dict{_TensorCoeffCacheKey, Any}}()
 
-    @inline _coeff_plan_shard() = _COEFF_MAP_PLAN_CACHE[min(length(_COEFF_MAP_PLAN_CACHE), max(1, Threads.threadid()))]
+
+    function _cached_functor_entry(build, valid, store, cache_lock, key)
+        cached = lock(() -> get(store, key, nothing), cache_lock)
+        cached !== nothing && valid(cached) && return cached
+        entry = build()
+        return lock(cache_lock) do
+            cached = get(store, key, nothing)
+            cached !== nothing && valid(cached) && return cached
+            store[key] = entry
+            return entry
+        end
+    end
+
+    # Clearing detaches idle pools. Active calls retain their own pool and
+    # return leases there, so they cannot publish old scratch into a new pool.
+    function _clear_functoriality_caches!()
+        for (store, cache_lock) in ((_HOM_SOLVE_WORKSPACE_CACHE, _HOM_SOLVE_WORKSPACE_LOCK),
+                                    (_HOM_BASIS_SOLVE_PLAN_CACHE, _HOM_BASIS_SOLVE_PLAN_LOCK),
+                                    (_SUPPORT_SOLVE_PLAN_CACHE, _SUPPORT_SOLVE_PLAN_LOCK),
+                                    (_COEFF_MAP_PLAN_CACHE, _COEFF_MAP_PLAN_LOCK),
+                                    (_TENSOR_COEFF_PLAN_CACHES, _TENSOR_COEFF_PLAN_CACHE_LOCK),
+                                    (_TENSOR_COEFF_RESULT_CACHES, _TENSOR_COEFF_RESULT_CACHE_LOCK))
+            lock(() -> empty!(store), cache_lock)
+        end
+        return nothing
+    end
 
     @inline function _coeff_sparse_pattern_hash(coeff::SparseMatrixCSC)
         h = hash(size(coeff, 1), UInt(0x6f7b9a1d))
@@ -754,10 +836,12 @@ module Functoriality
             return builder(coeff, dom_gens, cod_gens)
         end
         key = _coeff_plan_key(M, dom_gens, cod_gens, coeff, mode)
-        shard = _coeff_plan_shard()
-        return get!(shard, key) do
-            builder(coeff, dom_gens, cod_gens)
+        owners = (M, dom_gens, cod_gens)
+        valid = entry -> _identity_cache_matches(entry, owners) && _coeff_pattern_matches(entry.contract, coeff)
+        entry = _cached_functor_entry(valid, _COEFF_MAP_PLAN_CACHE, _COEFF_MAP_PLAN_LOCK, key) do
+            _identity_cache_entry(owners, _coeff_pattern_contract(coeff), builder(coeff, dom_gens, cod_gens))
         end
+        return entry.value
     end
 
     @inline function _precompose_coeff_plan(N::PModule,
@@ -803,17 +887,18 @@ module Functoriality
                                        cod_offsets::Vector{Int},
                                        coeff::AbstractMatrix,
                                        cache::AbstractHomSystemCache)
-        return lock(_TENSOR_COEFF_PLAN_CACHE_LOCK) do
-            shard = get!(_TENSOR_COEFF_PLAN_CACHES, cache) do
+        shard = lock(_TENSOR_COEFF_PLAN_CACHE_LOCK) do
+            get!(_TENSOR_COEFF_PLAN_CACHES, cache) do
                 Dict{_TensorCoeffCacheKey, Any}()
             end
-            key = _tensor_coeff_cache_key(M, dom_bases, cod_bases, dom_offsets, cod_offsets, coeff)
-            cached = get(shard, key, nothing)
-            cached === nothing || return cached::_CoeffMapPlan
-            plan = _tensor_coeff_plan(M, dom_bases, cod_bases, coeff)
-            shard[key] = plan
-            return plan
         end
+        key = _tensor_coeff_cache_key(M, dom_bases, cod_bases, dom_offsets, cod_offsets, coeff)
+        owners = (M, dom_bases, cod_bases, dom_offsets, cod_offsets, coeff)
+        entry = _cached_functor_entry(e -> _identity_cache_matches(e, owners),
+                                      shard, _TENSOR_COEFF_PLAN_CACHE_LOCK, key) do
+            _identity_cache_entry(owners, nothing, _tensor_coeff_plan(M, dom_bases, cod_bases, coeff))
+        end
+        return entry.value::_CoeffMapPlan
     end
 
     @inline function _tensor_coeff_result_cached(builder::Function,
@@ -836,17 +921,18 @@ module Functoriality
                                          coeff::AbstractMatrix{K},
                                          cache::AbstractHomSystemCache) where {K}
         _FUNCTORIALITY_USE_TENSOR_COEFF_RESULT_CACHE[] || return builder()
-        return lock(_TENSOR_COEFF_RESULT_CACHE_LOCK) do
-            shard = get!(_TENSOR_COEFF_RESULT_CACHES, cache) do
+        shard = lock(_TENSOR_COEFF_RESULT_CACHE_LOCK) do
+            get!(_TENSOR_COEFF_RESULT_CACHES, cache) do
                 Dict{_TensorCoeffCacheKey, Any}()
             end
-            key = _tensor_coeff_cache_key(M, dom_bases, cod_bases, dom_offsets, cod_offsets, coeff)
-            cached = get(shard, key, nothing)
-            cached === nothing || return cached::SparseMatrixCSC{K,Int}
-            block = builder()
-            shard[key] = block
-            return block
         end
+        key = _tensor_coeff_cache_key(M, dom_bases, cod_bases, dom_offsets, cod_offsets, coeff)
+        owners = (M, dom_bases, cod_bases, dom_offsets, cod_offsets, coeff)
+        entry = _cached_functor_entry(e -> _identity_cache_matches(e, owners),
+                                      shard, _TENSOR_COEFF_RESULT_CACHE_LOCK, key) do
+            _identity_cache_entry(owners, nothing, builder())
+        end
+        return entry.value::SparseMatrixCSC{K,Int}
     end
 
     @inline function _cocycle_coeff_plan(M::PModule,
@@ -871,10 +957,22 @@ module Functoriality
     # ----------------------------
 
     function ext_map_second(E1::ExtSpaceProjective{K}, E2::ExtSpaceProjective{K}, g::PMorphism{K}; t::Int) where {K}
-        # Both E1 and E2 must be built from the same projective resolution (same M).
-        @assert length(E1.res.gens) == length(E2.res.gens)
-        gens_t = E1.res.gens[t+1]
-        F = _blockdiag_on_hom_cochains(g, gens_t, E1.offsets[t+1], E2.offsets[t+1])
+        @assert E1.M === E2.M
+        @assert g.dom === E1.N && g.cod === E2.N
+        @assert 0 <= t <= min(E1.tmax, E2.tmax)
+        F = if _same_projective_resolution_model(E1.res, E2.res)
+            _blockdiag_on_hom_cochains(g, E1.res.gens[t+1], E1.offsets[t+1], E2.offsets[t+1])
+        else
+            # Hom is contravariant in the resolution: compare target to
+            # source projectives, then apply the covariant module map.
+            coefficients = _lift_pmodule_map_to_projective_resolution_chainmap_coeff(
+                E2.res, E1.res, id_morphism(E1.M); upto=t)
+            target_gens, source_gens = E2.res.gens[t+1], E1.res.gens[t+1]
+            middle_offsets = _block_offsets_for_gens(E1.N, target_gens)
+            comparison = _precompose_on_hom_cochains_from_projective_coeff(
+                E1.N, target_gens, source_gens, middle_offsets, E1.offsets[t+1], coefficients[t+1])
+            _blockdiag_on_hom_cochains(g, target_gens, middle_offsets, E2.offsets[t+1]) * comparison
+        end
         return ChainComplexes.induced_map_on_cohomology(E1.cohom[t+1], E2.cohom[t+1], F)
     end
 
@@ -1049,8 +1147,8 @@ module Functoriality
                 plan = _cached_particular_solve_plan(
                     resM.M.field,
                     A_u,
-                    UInt(objectid(resM.aug.comps[u])),
-                    UInt(length(act)),
+                    resM.aug.comps[u],
+                    nothing,
                 )
                 X = _solve_particular(plan, B)
                 @inbounds for (jj, col) in enumerate(cols), (pos, j) in enumerate(act)
@@ -1117,31 +1215,6 @@ module Functoriality
         return true
     end
 
-    @inline function _pmorphism_scalar_multiple_identity(f::PMorphism{K}) where {K}
-        f.dom === f.cod || return nothing
-        scalar = nothing
-        @inbounds for u in eachindex(f.comps)
-            d = f.dom.dims[u]
-            A = f.comps[u]
-            size(A, 1) == d && size(A, 2) == d || return nothing
-            for j in 1:d
-                for i in 1:d
-                    v = A[i, j]
-                    if i == j
-                        if scalar === nothing
-                            scalar = v
-                        elseif v != scalar
-                            return nothing
-                        end
-                    else
-                        iszero(v) || return nothing
-                    end
-                end
-            end
-        end
-        return scalar === nothing ? one(K) : scalar
-    end
-
     @inline function _identity_chainmap_coeffs(res::ProjectiveResolution{K}, maxlen::Int) where {K}
         H = Vector{SparseMatrixCSC{K, Int}}(undef, maxlen + 1)
         @inbounds for k in 0:maxlen
@@ -1151,22 +1224,6 @@ module Functoriality
             else
                 idx = collect(1:n)
                 vals = fill(one(K), n)
-                H[k + 1] = sparse(idx, idx, vals, n, n)
-            end
-        end
-        return H
-    end
-
-    @inline function _scalar_chainmap_coeffs(res::ProjectiveResolution{K}, scalar::K, maxlen::Int) where {K}
-        isone(scalar) && return _identity_chainmap_coeffs(res, maxlen)
-        H = Vector{SparseMatrixCSC{K, Int}}(undef, maxlen + 1)
-        @inbounds for k in 0:maxlen
-            n = length(res.gens[k + 1])
-            if n == 0
-                H[k + 1] = spzeros(K, 0, 0)
-            else
-                idx = collect(1:n)
-                vals = fill(scalar, n)
                 H[k + 1] = sparse(idx, idx, vals, n, n)
             end
         end
@@ -1386,17 +1443,16 @@ module Functoriality
                                     i::PMorphism{K},
                                     p::PMorphism{K},
                                     df::DerivedFunctorOptions) where {K}
-        if !(df.model === :auto || df.model === :projective)
-            error("ExtLongExactSequenceSecond: df.model must be :projective or :auto, got $(df.model)")
-        end
+        _validate_native_derived_options(df, "ExtLongExactSequenceSecond", :projective)
         maxdeg = df.maxdeg
-        # Need Ext up to degree maxdeg+1 to define delta^maxdeg.
-        res = projective_resolution(M, ResolutionOptions(maxlen=maxdeg + 1))
-        _pad_projective_resolution!(res, maxdeg+1)
+        # The connecting map lands in degree maxdeg+1, whose cycles need
+        # the resolution differential one further degree away.
+        target_degree = _required_resolution_length(maxdeg)
+        res = projective_resolution(M, ResolutionOptions(maxlen=_required_resolution_length(target_degree)))
 
-        EA = Ext(res, A)
-        EB = Ext(res, B)
-        EC = Ext(res, C)
+        EA = Ext(res, A; maxdeg=target_degree)
+        EB = Ext(res, B; maxdeg=target_degree)
+        EC = Ext(res, C; maxdeg=target_degree)
 
         iH = Matrix{K}[]
         pH = Matrix{K}[]
@@ -1464,6 +1520,12 @@ module Functoriality
 
     This is the standard "comparison map" construction used to implement the Yoneda
     product via projective resolutions.
+
+    Convention: these maps commute with the differentials on the unshifted
+    resolution tails, `d_M * F_k = F_{k-1} * d_L`. Yoneda composition uses this
+    convention directly, without a Koszul factor. To regard the lift as a closed
+    homogeneous degree-q map in the signed Hom complex, multiply component k
+    by `(-1)^(q*k)`; the two conventions must not be mixed within one product.
     """
     function _lift_cocycle_to_chainmap_coeff(resL::ProjectiveResolution{K},
                                             resM::ProjectiveResolution{K},
@@ -1542,8 +1604,8 @@ module Functoriality
                 plan = _cached_particular_solve_plan(
                     resM.M.field,
                     A_u,
-                    UInt(objectid(resM.aug.comps[u])),
-                    UInt(length(act)),
+                    resM.aug.comps[u],
+                    nothing,
                 )
                 X = _solve_particular(plan, B)
                 @inbounds for (jj, col) in enumerate(cols), (pos, j) in enumerate(act)
@@ -1611,8 +1673,8 @@ module Functoriality
                     plan = _cached_particular_solve_plan(
                         resM.M.field,
                         A,
-                        UInt(objectid(resM.d_mat[k])),
-                        _support_hash(allowed),
+                        resM.d_mat[k],
+                        allowed,
                     )
                     X = _solve_particular(plan, Matrix(@view RHS[:, cols]))
                     @inbounds for (jj, col) in enumerate(cols), (pos, j) in enumerate(allowed)
@@ -1646,10 +1708,21 @@ module Functoriality
 
     # Contravariant map in first argument: f : M -> Mp induces Ext^t(Mp,N) -> Ext^t(M,N)
     function ext_map_first(EMN::ExtSpaceInjective{K}, EMPN::ExtSpaceInjective{K}, f::PMorphism{K}; t::Int) where {K}
+        @assert EMN.N === EMPN.N
+        @assert EMN.M === f.dom && EMPN.M === f.cod
+        @assert 0 <= t <= min(EMN.tmax, EMPN.tmax)
         # map on cochains at degree t: Hom(Mp, E^t) -> Hom(M, E^t), g |-> g circ f
         Hsrc = EMPN.homs[t+1]
         Htgt = EMN.homs[t+1]
-        F = _precompose_matrix(Htgt, Hsrc, f)
+        F = if EMN.res === EMPN.res
+            _precompose_matrix(Htgt, Hsrc, f)
+        else
+            # Independently built models need not use the same injective
+            # coordinates. Lift id_N instead of identifying their storage.
+            phis = lift_injective_chainmap(id_morphism(EMN.N), EMPN.res, EMN.res; upto=t)
+            Hmid = Hom(EMN.M, Hsrc.cod)
+            _postcompose_matrix(Htgt, Hmid, phis[t+1]) * _precompose_matrix(Hmid, Hsrc, f)
+        end
         return ChainComplexes.induced_map_on_cohomology(EMPN.cohom[t+1], EMN.cohom[t+1], F)
     end
 
@@ -1718,14 +1791,13 @@ module Functoriality
         else
             nothing
         end
-        if workspace === nothing
-            if plan_entry !== nothing
-                workspace = plan_entry.pre
-            elseif _FUNCTORIALITY_USE_HOM_SOLVE_WORKSPACE_CACHE[]
-                workspace = _hom_solve_workspace_entry(Hdom).pre
-            end
+        return _with_hom_workspace(Hdom, workspace, _PrecomposeWorkspace{K}) do owned
+            _precompose_matrix_owned(Hdom, Hcod, f, owned, plan_entry, ncols)
         end
+    end
 
+    function _precompose_matrix_owned(Hdom::HomSpace{K}, Hcod::HomSpace{K},
+                                       f::PMorphism{K}, workspace, plan_entry, ncols::Int) where {K}
         rhs = _rhs_buffer!(workspace, K, size(Hdom.basis_matrix, 1), ncols)
         @inbounds for i in 1:nvertices(Hdom.dom.Q)
             ai = Hdom.dom.dims[i]
@@ -1798,14 +1870,13 @@ module Functoriality
         else
             nothing
         end
-        if workspace === nothing
-            if plan_entry !== nothing
-                workspace = plan_entry.post
-            elseif _FUNCTORIALITY_USE_HOM_SOLVE_WORKSPACE_CACHE[]
-                workspace = _hom_solve_workspace_entry(Hdom).post
-            end
+        return _with_hom_workspace(Hdom, workspace, _PostcomposeWorkspace{K}) do owned
+            _postcompose_matrix_owned(Hdom, Hcod, g, owned, plan_entry, ncols)
         end
+    end
 
+    function _postcompose_matrix_owned(Hdom::HomSpace{K}, Hcod::HomSpace{K},
+                                       g::PMorphism{K}, workspace, plan_entry, ncols::Int) where {K}
         rhs = _rhs_buffer!(workspace, K, size(Hdom.basis_matrix, 1), ncols)
         M = Hdom.dom
         @inbounds for i in 1:nvertices(M.Q)
@@ -1927,16 +1998,18 @@ module Functoriality
                                     i::PMorphism{K},
                                     p::PMorphism{K},
                                     df::DerivedFunctorOptions) where {K}
+        _validate_native_derived_options(df, "ExtLongExactSequenceFirst", :injective)
         @assert i.dom === A && i.cod === B
         @assert p.dom === B && p.cod === C
 
         maxdeg = df.maxdeg
 
-        # Need Ext^{t+1} for t leq maxdeg, so resolve N one step further.
-        resN = injective_resolution(N, ResolutionOptions(maxlen=maxdeg + 1))
-        EA = ExtInjective(A, resN)
-        EB = ExtInjective(B, resN)
-        EC = ExtInjective(C, resN)
+        # Include the outgoing differential of the connecting map's target.
+        target_degree = _required_resolution_length(maxdeg)
+        resN = injective_resolution(N, ResolutionOptions(maxlen=_required_resolution_length(target_degree)))
+        EA = ExtInjective(A, resN; maxdeg=target_degree)
+        EB = ExtInjective(B, resN; maxdeg=target_degree)
+        EC = ExtInjective(C, resN; maxdeg=target_degree)
         @assert EA.res === EB.res && EB.res === EC.res
 
         pH    = Vector{Matrix{K}}(undef, maxdeg + 1)
@@ -1950,19 +2023,6 @@ module Functoriality
         end
 
         return ExtLongExactSequenceFirst{K}(0, maxdeg, EA, EB, EC, pH, iH, delta)
-    end
-
-    function ExtLongExactSequenceFirst(A::PModule{K},
-                                    B::PModule{K},
-                                    C::PModule{K},
-                                    N::PModule{K},
-                                    i::PMorphism{K},
-                                    p::PMorphism{K};
-                                    maxdeg::Int=4,
-                                    model::Symbol=:auto,
-                                    canon::Symbol=:projective) where {K}
-        df = DerivedFunctorOptions(maxdeg=maxdeg, model=model, canon=canon)
-        return ExtLongExactSequenceFirst(A, B, C, N, i, p, df)
     end
 
         # -----------------------------------------------------------------------------
@@ -1996,12 +2056,15 @@ module Functoriality
         ext_map_first(EMN, EMPN, f; t, backend=:projective)
 
     Induced map on Ext in degree t, contravariant in the first argument:
-    given f: Mp -> M, returns f^*: Ext^t(M,N) -> Ext^t(Mp,N).
+    given f: M -> Mp, returns f^*: Ext^t(Mp,N) -> Ext^t(M,N).
+    Thus `EMN` is the target and `EMPN` is the source of the induced map.
 
     The matrix is always returned in the CANONICAL bases of EMN and EMPN.
 
     `backend` chooses which realization is used for computation. `:projective` is always
     available and is the default.
+    A missing realization is constructed on demand. Independently constructed
+    injective resolutions are compared by lifting the identity of `N`.
     """
     function ext_map_first(
         EMN::ExtSpace{K},
@@ -2014,18 +2077,14 @@ module Functoriality
         @assert EMN.canon === EMPN.canon
 
         if backend === :projective || backend === :auto
-            Aproj = ext_map_first(EMN.Eproj, EMPN.Eproj, f; t=t)
+            Aproj = ext_map_first(projective_model(EMN), projective_model(EMPN), f; t=t)
             if EMN.canon === :projective
                 return Aproj
             else
                 return _comparison_P2I(EMN, t) * Aproj * _comparison_I2P(EMPN, t)
             end
         elseif backend === :injective
-            # Only safe if they literally share the same injective resolution object.
-            if EMN.Einj.res !== EMPN.Einj.res
-                error("ext_map_first(::ExtSpace, backend=:injective) requires a shared injective resolution.")
-            end
-            Ainj = ext_map_first(EMN.Einj, EMPN.Einj, f; t=t)
+            Ainj = ext_map_first(injective_model(EMN), injective_model(EMPN), f; t=t)
             if EMN.canon === :injective
                 return Ainj
             else
@@ -2046,6 +2105,8 @@ module Functoriality
 
     `backend=:projective` is fastest and always available.
     `backend=:injective` uses the symmetric injective functoriality layer.
+    Both backends work on a fresh lazy `ExtSpace`; no preliminary model or
+    comparison access is required.
     """
     function ext_map_second(
         EMN::ExtSpace{K},
@@ -2058,14 +2119,14 @@ module Functoriality
         @assert EMN.canon === EMNp.canon
 
         if backend === :projective || backend === :auto
-            Aproj = ext_map_second(EMN.Eproj, EMNp.Eproj, g; t=t)
+            Aproj = ext_map_second(projective_model(EMN), projective_model(EMNp), g; t=t)
             if EMN.canon === :projective
                 return Aproj
             else
                 return _comparison_P2I(EMNp, t) * Aproj * _comparison_I2P(EMN, t)
             end
         elseif backend === :injective
-            Ainj = ext_map_second(EMN.Einj, EMNp.Einj, g; t=t)
+            Ainj = ext_map_second(injective_model(EMN), injective_model(EMNp), g; t=t)
             if EMN.canon === :injective
                 return Ainj
             else
@@ -2199,10 +2260,31 @@ module Functoriality
     # Functoriality: resolve-second model
     # ----------------------------------------------------------------------
 
+    # A map in the unresolved tensor variable still needs a comparison when
+    # the two objects use different coordinates in the fixed resolution.
+    function _tensor_map_with_resolution_comparison(f::PMorphism{K},
+            source::ProjectiveResolution{K}, target::ProjectiveResolution{K},
+            source_offsets, target_offsets, s::Int;
+            cache::Union{Nothing,AbstractHomSystemCache}=nothing) where {K}
+        @assert source.M === target.M
+        source_gens, target_gens = source.gens[s+1], target.gens[s+1]
+        if _same_projective_resolution_model(source, target)
+            return _tor_blockdiag_map_on_chains(f, source_gens, source_offsets, target_offsets)
+        end
+        coefficients = _lift_pmodule_map_to_projective_resolution_chainmap_coeff(
+            source, target, id_morphism(source.M); upto=s)
+        middle_offsets = _block_offsets_for_gens(f.cod, source_gens)
+        variable_map = _tor_blockdiag_map_on_chains(f, source_gens, source_offsets, middle_offsets)
+        comparison = _tensor_map_on_tor_chains_from_projective_coeff(
+            f.cod, source_gens, target_gens, middle_offsets, target_offsets, coefficients[s+1]; cache=cache)
+        return comparison * variable_map
+    end
+
     """
         tor_map_first(T1, T2, f; s)
 
-    For `TorSpaceSecond` objects, Tor is *strictly functorial* in the first argument by a block-diagonal map.
+    For `TorSpaceSecond` objects, the first-variable map is block diagonal when
+    the chosen resolutions agree. Otherwise an identity lift compares them.
 
     Here `f : Rop -> Rop'` is a P^op-module map (right module map).
     The output is the induced linear map:
@@ -2215,13 +2297,10 @@ module Functoriality
     ) where {K}
         s === nothing && (s = n)
         s === nothing && error("tor_map_first: provide s or n")
-        @assert poset_equal(T1.resL.M.Q, T2.resL.M.Q)
-        @assert T1.resL.gens == T2.resL.gens
-        @assert poset_equal(f.dom.Q, T1.Rop.Q)
-        @assert poset_equal(f.cod.Q, T2.Rop.Q)
-
-        gens_s = T1.resL.gens[s + 1]
-        F = _tor_blockdiag_map_on_chains(f, gens_s, T1.offsets[s + 1], T2.offsets[s + 1])
+        @assert f.dom === T1.Rop && f.cod === T2.Rop
+        @assert 0 <= s < min(length(T1.homol), length(T2.homol))
+        F = _tensor_map_with_resolution_comparison(f, T1.resL, T2.resL,
+            T1.offsets[s+1], T2.offsets[s+1], s)
         return ChainComplexes.induced_map_on_homology(T1.homol[s + 1], T2.homol[s + 1], F)
     end
 
@@ -2284,10 +2363,9 @@ module Functoriality
     Tor_s(Rop, L) -> Tor_s(Rop, L').
 
     Implementation notes:
-    - Requires that T1 and T2 were computed using the SAME projective resolution of Rop,
-    so that the chain-level direct sum decomposition matches degreewise.
-    - The chain-level map is block-diagonal over the resolution summands: each summand
-    is a copy of L_u, and we apply g_u on that block.
+    - The chain-level map applies g_u on each resolution summand.
+    - Independently chosen projective resolutions of Rop are compared by
+      lifting its identity; equal generator labels alone do not identify them.
     """
     function tor_map_second(T1::TorSpace{K}, T2::TorSpace{K}, g::PMorphism{K};
         s::Union{Nothing,Int}=nothing,
@@ -2296,9 +2374,10 @@ module Functoriality
     ) where {K}
         s === nothing && (s = n)
         s === nothing && error("tor_map_second: provide s or n")
-        @assert T1.resRop.gens == T2.resRop.gens
-        gens_s = T1.resRop.gens[s + 1]
-        F = _tor_blockdiag_map_on_chains(g, gens_s, T1.offsets[s + 1], T2.offsets[s + 1])
+        @assert g.dom === T1.L && g.cod === T2.L
+        @assert 0 <= s < min(length(T1.homol), length(T2.homol))
+        F = _tensor_map_with_resolution_comparison(g, T1.resRop, T2.resRop,
+            T1.offsets[s+1], T2.offsets[s+1], s; cache=cache)
         return ChainComplexes.induced_map_on_homology(T1.homol[s+1], T2.homol[s+1], F)
     end
 
@@ -2544,9 +2623,7 @@ module Functoriality
                                     df::DerivedFunctorOptions) where {K}
         # For stability of the LES, we must resolve Rop (model = :first) so that all Tor spaces
         # share the same projective resolution of Rop.
-        if !(df.model === :auto || df.model === :first)
-            error("TorLongExactSequenceSecond requires model :first or :auto.")
-        end
+        _validate_native_derived_options(df, "TorLongExactSequenceSecond", :first)
         maxdeg = df.maxdeg
 
         # Short exact sequence 0 -> A --i--> B --p--> C -> 0 in the second variable.
@@ -2556,9 +2633,8 @@ module Functoriality
         @assert poset_equal(B.Q, A.Q) && poset_equal(B.Q, C.Q)
         @assert i.cod == p.dom
 
-        # Shared resolution of Rop, padded out to maxdeg.
-        resR = projective_resolution(Rop, ResolutionOptions(maxlen=maxdeg))
-        _pad_projective_resolution!(resR, maxdeg)
+        # Shared resolution includes the incoming boundary at maxdeg.
+        resR = projective_resolution(Rop, ResolutionOptions(maxlen=_required_resolution_length(maxdeg)))
 
         df_first = DerivedFunctorOptions(maxdeg=maxdeg, model=:first)
         TA = Tor(Rop, A, df_first; res=resR)
@@ -2646,9 +2722,7 @@ module Functoriality
                                     df::DerivedFunctorOptions) where {K}
         # For stability of the LES, we must resolve L (model = :second) so that all Tor spaces
         # share the same projective resolution of L.
-        if !(df.model === :auto || df.model === :second)
-            error("TorLongExactSequenceFirst requires model :second or :auto.")
-        end
+        _validate_native_derived_options(df, "TorLongExactSequenceFirst", :second)
         maxdeg = df.maxdeg
 
         # Short exact sequence 0 -> A --i--> B --p--> C -> 0 in the first variable.
@@ -2658,9 +2732,8 @@ module Functoriality
         @assert poset_equal(B.Q, A.Q) && poset_equal(B.Q, C.Q)
         @assert i.cod == p.dom
 
-        # Shared resolution of L, padded out to maxdeg.
-        resL = projective_resolution(L, ResolutionOptions(maxlen=maxdeg))
-        _pad_projective_resolution!(resL, maxdeg)
+        # Shared resolution includes the incoming boundary at maxdeg.
+        resL = projective_resolution(L, ResolutionOptions(maxlen=_required_resolution_length(maxdeg)))
 
         df_second = DerivedFunctorOptions(maxdeg=maxdeg, model=:second)
         TA = Tor(A, L, df_second; res=resL)
@@ -2813,6 +2886,7 @@ module Functoriality
         return (
             kind=kind,
             field=_les_field(les),
+            provenance=provenance(les),
             degree_range=dr,
             first_entry=sequence_entry(les, firstdeg),
             last_entry=sequence_entry(les, lastdeg),

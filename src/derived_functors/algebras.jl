@@ -9,6 +9,7 @@ This submodule should contain:
 - precomputed multiplication tables/caches (when appropriate)
 """
 module Algebras
+    import ..DerivedFunctors: provenance, _validate_native_derived_options
     using LinearAlgebra
     using SparseArrays
 
@@ -17,17 +18,19 @@ module Algebras
     using ...Modules: PModule, PMorphism, map_leq, map_leq_many, map_leq_many!, _prepare_map_leq_batch_owned,
                         _accum_map_leq_many_scaled_matvecs!, _accum_map_leq_many_scaled_sourcevec!
     using ...ChainComplexes
+    using ...FieldLinAlg: solve_fullcolumn
     using ...FiniteFringe: FinitePoset, FringeModule, cover_edges, nvertices, leq, poset_equal
     using ...IndicatorResolutions: pmodule_from_fringe
 
     import ..Utils: compose
-    import ..Resolutions: ProjectiveResolution
+    import ..Resolutions: ProjectiveResolution, _same_projective_resolution_model
     import ..ExtTorSpaces:
         Ext, Tor,
         ExtSpaceProjective, ExtSpaceInjective,
         TorSpace, TorSpaceSecond,
         representative, coordinates, cycles, boundaries
-    import ..Functoriality: _lift_cocycle_to_chainmap_coeff
+    import ..Functoriality: _lift_cocycle_to_chainmap_coeff,
+                             _precompose_on_hom_cochains_from_projective_coeff
     import ..Functoriality: _tensor_map_on_tor_chains_from_projective_coeff,
                              _FUNCTORIALITY_USE_DIRECT_COEFF_MATVECS,
                              _FUNCTORIALITY_USE_COEFF_PLAN_CACHE,
@@ -109,6 +112,7 @@ module Algebras
     # -----------------------------------------------------------------------------
 
     function _assert_same_pmodule_structure(A::PModule{K}, B::PModule{K}, ctx::String) where {K}
+        A.field == B.field || error("$ctx: modules use different coefficient fields.")
         if !_same_poset(A.Q, B.Q)
             error("$ctx: modules live on different posets.")
         end
@@ -321,7 +325,7 @@ module Algebras
     representative in the cochain space Hom(P_{p+q}(L), N).
 
     Cheap-first workflow
-    - Use `ExtAlgebra` and `multiplication_matrix` when you plan to multiply many
+    - Use `ExtAlgebra` and homogeneous element multiplication when you plan to multiply many
       classes in the same module.
     - Set `return_cocycle=true` only when you actually need an explicit chain-level
       representative of the product.
@@ -331,6 +335,9 @@ module Algebras
     between projective resolutions and composing at the chain level.
     - The result is well-defined in cohomology; chain-level representatives depend on
     deterministic but non-canonical lift choices (as always).
+    - If `ELN` uses another projective resolution of L, an identity comparison map
+      transports the product into that resolution before coordinates are taken.
+      The optional returned cocycle belongs to the returned `E_LN` model.
 
     Technical requirements:
     - `E_MN` must have `tmax >= p`.
@@ -385,8 +392,28 @@ module Algebras
         F = _lift_cocycle_to_chainmap_coeff(resL, resM, E_LM, q, alpha_cocycle; upto=p)
         Fp = F[p+1]  # P_{p+q}(L) -> P_p(M)
 
-        # Compose at chain level to get a cocycle in Hom(P_{p+q}(L), N).
-        cocycle = _compose_into_module_cocycle(resL, resM, N, p, q, Fp, beta_cocycle, E_MN, ELN_use)
+        # The composition is initially a cochain on resL, even if the requested
+        # target uses a differently based or nonminimal resolution of L.
+        same_model = _same_projective_resolution_model(resL, ELN_use.res)
+        source_model = same_model ? ELN_use : Ext(resL, N; maxdeg=p+q)
+        cocycle = _compose_into_module_cocycle(resL, resM, N, p, q, Fp, beta_cocycle, E_MN, source_model)
+        if !same_model
+            # Ext is contravariant in the resolved module: lift id_L from the
+            # requested target resolution to resL, then precompose the cocycle.
+            # Encode the augmentation as id_L in degree zero. The cocycle
+            # lift also supports equal indexed posets stored as distinct
+            # objects, whereas a public PMorphism requires poset identity.
+            identity_model = Ext(ELN_use.res, ELN_use.res.M; maxdeg=0)
+            identity_cocycle = _cochain_vector_from_morphism(
+                identity_model, 0, ELN_use.res.aug)
+            comparison = _lift_cocycle_to_chainmap_coeff(
+                ELN_use.res, resL, identity_model, 0, identity_cocycle; upto=p+q)
+            transfer = _precompose_on_hom_cochains_from_projective_coeff(
+                N, ELN_use.res.gens[p+q+1], resL.gens[p+q+1],
+                ELN_use.offsets[p+q+1], source_model.offsets[p+q+1],
+                comparison[p+q+1])
+            cocycle = transfer * cocycle
+        end
 
         coords = coordinates(ELN_use, p+q, cocycle)
 
@@ -435,6 +462,7 @@ module Algebras
     The product is only defined when deg(x) + deg(y) <= A.tmax.
     """
     mutable struct ExtAlgebra{K}
+        lock::ReentrantLock
         E::ExtSpaceProjective{K}
         mult_cache::Dict{Tuple{Int,Int}, Matrix{K}}
         unit_coords::Union{Nothing, Vector{K}}
@@ -468,17 +496,18 @@ module Algebras
     This reports the graded support, total graded dimension, and current
     multiplication-cache state without forcing any new Yoneda products.
 
-    Use this before asking for `basis(A, t)`, `multiplication_matrix(A, p, q)`,
+    Use this before asking for `basis(A, t)`, products of homogeneous elements,
     or explicit `ExtElement`s when you are exploring an algebra interactively.
     """
     @inline function algebra_summary(A::ExtAlgebra)
         return (
             kind=:ext_algebra,
+            provenance=provenance(A),
             field=algebra_field(A),
             degree_range=degree_range(A),
             nonzero_degrees=Tuple(nonzero_degrees(A)),
             total_dimension=total_dimension(A),
-            cached_products=length(A.mult_cache),
+            cached_products=lock(() -> length(A.mult_cache), A.lock),
         )
     end
 
@@ -502,7 +531,7 @@ module Algebras
     The result is cheap and reflects only products already computed or
     precomputed. It does not trigger new multiplication work.
     """
-    @inline cached_product_degrees(A::ExtAlgebra) = sort!(collect(keys(A.mult_cache)))
+    @inline cached_product_degrees(A::ExtAlgebra) = lock(() -> sort!(collect(keys(A.mult_cache))), A.lock)
 
     function Base.show(io::IO, A::ExtAlgebra)
         d = algebra_summary(A)
@@ -560,6 +589,7 @@ module Algebras
         coords = element_coordinates(x)
         return (
             kind=kind,
+            provenance=provenance(x),
             field=algebra_field(parent_algebra(x)),
             degree=element_degree(x),
             coordinate_length=length(coords),
@@ -623,19 +653,19 @@ module Algebras
     projective-resolution model. Multiplication is via Yoneda products.
 
     The returned ExtAlgebra caches multiplication matrices so repeated products are fast.
+    Concurrent queries may compute a missing product independently; only complete
+    matrices are published, and subsequent queries share the published result.
 
     Cheap-first workflow
     - Start with `algebra_summary(A)`, `nonzero_degrees(A)`, and
       `generator_degrees(A)`.
-    - Ask for `basis(A, t)`, `multiplication_matrix(A, p, q)`, or explicit
+    - Ask for `basis(A, t)`, products of homogeneous elements, or explicit
       `ExtElement`s only when you need multiplicative coordinates.
     """
     function ExtAlgebra(M::PModule{K}, df::DerivedFunctorOptions) where {K}
-        if !(df.model === :auto || df.model === :projective)
-            error("ExtAlgebra: df.model must be :projective or :auto, got $(df.model)")
-        end
+        _validate_native_derived_options(df, "ExtAlgebra", :projective)
         E = _Ext_projective(M, M; maxdeg=df.maxdeg)
-        return ExtAlgebra{K}(E, Dict{Tuple{Int,Int}, Matrix{K}}(), nothing, E.tmin, E.tmax)
+        return ExtAlgebra{K}(ReentrantLock(), E, Dict{Tuple{Int,Int}, Matrix{K}}(), nothing, E.tmin, E.tmax)
     end
 
     function ExtAlgebra(M::FringeModule{K}, df::DerivedFunctorOptions) where {K}
@@ -764,16 +794,21 @@ module Algebras
     That augmentation is a cocycle in C^0 and represents the unit class in H^0.
     """
     function unit(A::ExtAlgebra{K}) where {K}
-        if A.unit_coords === nothing
-            if dim(A, 0) == 0
+        coords = lock(() -> A.unit_coords, A.lock)
+        if coords === nothing
+            computed = if dim(A, 0) == 0
                 # Zero module edge case: Ext^0(0,0) is 0 as a vector space.
-                A.unit_coords = zeros(K, 0)
+                zeros(K, 0)
             else
                 cocycle = _cochain_vector_from_morphism(A.E, 0, A.E.res.aug)
-                A.unit_coords = coordinates(A.E, 0, cocycle)
+                coordinates(A.E, 0, cocycle)
+            end
+            coords = lock(A.lock) do
+                A.unit_coords === nothing && (A.unit_coords = computed)
+                A.unit_coords
             end
         end
-        return ExtElement{K}(A, 0, copy(A.unit_coords))
+        return ExtElement{K}(A, 0, copy(coords))
     end
 
     Base.one(A::ExtAlgebra{K}) where {K} = unit(A)
@@ -787,29 +822,31 @@ module Algebras
     and graded dimension bookkeeping without forcing any new multiplication work.
     """
     function check_ext_algebra(A::ExtAlgebra{K}; throw::Bool=false) where {K}
-        issues = String[]
-        for ((p, q), MU) in A.mult_cache
-            expected = (dim(A, p + q), dim(A, p) * dim(A, q))
-            size(MU) == expected ||
-                push!(issues, "cached multiplication matrix for degrees ($p,$q) has size $(size(MU)) but expected $expected.")
+        return lock(A.lock) do
+            issues = String[]
+            for ((p, q), MU) in A.mult_cache
+                expected = (dim(A, p + q), dim(A, p) * dim(A, q))
+                size(MU) == expected ||
+                    push!(issues, "cached multiplication matrix for degrees ($p,$q) has size $(size(MU)) but expected $expected.")
+            end
+            if A.unit_coords !== nothing
+                length(A.unit_coords) == dim(A, 0) ||
+                    push!(issues, "unit coordinates must have length $(dim(A, 0)).")
+            end
+            length(generator_degrees(A)) == total_dimension(A) ||
+                push!(issues, "generator degree list must match the total graded dimension.")
+            report = _derived_validation_report(
+                :ext_algebra,
+                isempty(issues);
+                field=algebra_field(A),
+                degree_range=degree_range(A),
+                total_dimension=total_dimension(A),
+                cached_products=length(A.mult_cache),
+                issues=issues,
+            )
+            throw && !report.valid && _throw_invalid_derived_functor(:check_ext_algebra, issues)
+            return report
         end
-        if A.unit_coords !== nothing
-            length(A.unit_coords) == dim(A, 0) ||
-                push!(issues, "unit coordinates must have length $(dim(A, 0)).")
-        end
-        length(generator_degrees(A)) == total_dimension(A) ||
-            push!(issues, "generator degree list must match the total graded dimension.")
-        report = _derived_validation_report(
-            :ext_algebra,
-            isempty(issues);
-            field=algebra_field(A),
-            degree_range=degree_range(A),
-            total_dimension=total_dimension(A),
-            cached_products=length(A.mult_cache),
-            issues=issues,
-        )
-        throw && !report.valid && _throw_invalid_derived_functor(:check_ext_algebra, issues)
-        return report
     end
 
     # ----------------------------
@@ -819,9 +856,8 @@ module Algebras
     # Ensure the multiplication matrix MU[p,q] is present in the cache.
     function _ensure_mult_cache!(A::ExtAlgebra{K}, p::Int, q::Int) where {K}
         key = (p, q)
-        if haskey(A.mult_cache, key)
-            return A.mult_cache[key]
-        end
+        cached = lock(() -> get(A.mult_cache, key, nothing), A.lock)
+        cached === nothing || return cached
 
         if p < 0 || q < 0
             error("_ensure_mult_cache!: degrees must be nonnegative.")
@@ -838,8 +874,7 @@ module Algebras
 
         # Cache even the trivial cases so repeated calls are O(1).
         if dp == 0 || dq == 0 || dr == 0
-            A.mult_cache[key] = MU
-            return MU
+            return lock(() -> get!(A.mult_cache, key, MU), A.lock)
         end
 
         # Precompute all products of basis elements e_i in Ext^p and e_j in Ext^q.
@@ -862,8 +897,7 @@ module Algebras
             end
         end
 
-        A.mult_cache[key] = MU
-        return MU
+        return lock(() -> get!(A.mult_cache, key, MU), A.lock)
     end
 
 
@@ -944,16 +978,27 @@ module Algebras
     - This is implemented by lifting a cocycle representative of x to a chain map of the resolution
     (via `_lift_cocycle_to_chainmap_coeff`) and then tensoring that chain map with Rop.
     - For s < m, the target degree is negative, so the action is the zero map.
+    - The source degree must be computed by `T`, and `x` must belong to `A`.
+      The resolution models must agree in their generator, differential and
+      augmentation coordinates; construct `T` with `res=A.E.res` to share them.
+    - With this Yoneda convention, `action(x*y, s)` equals
+      `action(x, s-deg(y)) * action(y, s)` whenever all source degrees exist.
+      The Ext unit acts as the identity. No Tor multiplication is required.
     """
     function ext_action_on_tor(A::ExtAlgebra{K}, T::TorSpaceSecond{K}, x::ExtElement{K}; s::Int) where {K}
+        x.A === A || throw(ArgumentError("ext_action_on_tor: x must belong to the supplied Ext algebra."))
+        s in degree_range(T) || throw(ArgumentError(
+            "ext_action_on_tor: source degree s=$s is outside $(degree_range(T))."))
         m = x.deg
+        m in degree_range(A) || throw(ArgumentError(
+            "ext_action_on_tor: Ext degree m=$m is outside $(degree_range(A))."))
+        length(x.coords) == dim(A, m) || throw(DimensionMismatch(
+            "ext_action_on_tor: expected $(dim(A, m)) Ext coordinates, got $(length(x.coords))."))
+        _same_projective_resolution_model(A.E.res, T.resL) || throw(ArgumentError(
+            "ext_action_on_tor: the resolution models differ; construct Tor with res=A.E.res."))
         if s < m
             return zeros(K, 0, dim(T, s))
         end
-
-        # Basic compatibility checks: same resolved module and same chosen resolution.
-        @assert poset_equal(A.E.M.Q, T.resL.M.Q)
-        @assert A.E.res.gens == T.resL.gens
 
         # Choose a cocycle representative alpha in cochain degree m.
         alpha = reshape(representative(A.E, m, x.coords), :, 1)
@@ -1002,10 +1047,12 @@ module Algebras
 
     # Convenience: compute action matrices for s = 0..df.maxdeg.
     function ext_action_on_tor(A::ExtAlgebra{K}, T::TorSpaceSecond{K}, x::ExtElement{K}, df::DerivedFunctorOptions) where {K}
-        maxavail = length(T.dims) - 1
+        _validate_native_derived_options(df, "ext_action_on_tor", :second)
+        maxavail = last(degree_range(T))
         maxdeg = df.maxdeg
+        maxdeg >= 0 || throw(ArgumentError("ext_action_on_tor: df.maxdeg must be nonnegative."))
         if maxdeg > maxavail
-            error("ext_action_on_tor: df.maxdeg=$(maxdeg) exceeds available Tor degrees $(maxavail)")
+            throw(ArgumentError("ext_action_on_tor: df.maxdeg=$(maxdeg) exceeds available Tor degrees $(maxavail)"))
         end
         mats = Vector{Matrix{K}}(undef, maxdeg + 1)
         for s in 0:maxdeg
@@ -1022,7 +1069,8 @@ module Algebras
     """
         TorAlgebra(T; mu_chain=Dict(), mu_chain_gen=nothing, unit_coords=nothing)
 
-    A thin wrapper that equips a computed Tor space `T` with a bilinear graded multiplication.
+    Equip a computed Tor space with explicitly supplied multiplication data.
+    Arbitrary right and left modules do not determine a canonical Tor algebra.
 
     Mathematical input:
     - `T` is a Tor computation object (either TorSpace or TorSpaceSecond).
@@ -1030,19 +1078,36 @@ module Algebras
 
         mu_chain[(p,q)] : C_p tensor C_q -> C_{p+q}
 
-    in the chosen chain bases.
+    in the chosen chain bases, with input coordinates `kron(x, y)` for
+    `x in C_p` and `y in C_q` (the right factor varies fastest).
+    Products must preserve cycles and boundaries. Every induced product checks
+    these conditions before returning or caching a homology multiplication.
 
     Practical API:
     - You may supply all maps explicitly via `mu_chain`.
     - Or, supply a lazy generator `mu_chain_gen(p,q)` that returns the required sparse matrix.
     The result is cached in `A.mu_chain` automatically on first use.
 
-    This design is exactly what the screenshot describes: once the infrastructure exists,
-    adding a specific canonical multiplication is "just supplying mu_chain[(p,q)] maps
-    (or a generator that builds them)".
+    Cache publication is synchronized; product construction runs outside the cache
+    lock. A generator must therefore support concurrent independent calls, including
+    repeated calls for one degree pair, and return the same product until replaced
+    with a setter. Mutating captured generator state is unsupported.
+    Supplied and cached matrices are treated as
+    read-only; use the setters below to replace products.
+
+    Use `check_tor_algebra(A; algebraic=true)` to additionally check the chain
+    Leibniz rule, associativity on homology, and both unit identities when
+    `unit_coords` is supplied. A unit is an H_0 class, not a chosen strict chain
+    unit. Associativity is checked through the computed Tor degree range; no
+    assertion is made about uncomputed products. Leibniz checks also require
+    chain products in the extra incoming-boundary degree `maxdeg + 1`.
+    Missing products are not assumed zero unless their source or target chain
+    group is zero. Without `unit_coords`, the algebra may be nonunital.
     """
     mutable struct TorAlgebra{K}
-        T::Any
+        lock::ReentrantLock
+        generation::UInt
+        T::Union{TorSpace{K},TorSpaceSecond{K}}
         mu_chain::Dict{Tuple{Int,Int}, SparseMatrixCSC{K, Int}}
         mu_chain_gen::Union{Nothing, Function}
         mu_H_cache::Dict{Tuple{Int,Int}, Matrix{K}}
@@ -1050,22 +1115,19 @@ module Algebras
     end
 
     """
-        TorAlgebra(T::Any; mu_chain=Dict(), mu_chain_gen=nothing, unit_coords=nothing)
+        TorAlgebra(T; mu_chain=Dict(), mu_chain_gen=nothing, unit_coords=nothing)
 
     Constructor with optional lazy generator.
     """
-    function TorAlgebra(T::TorSpace{K};
+    function TorAlgebra(T::Union{TorSpace{K},TorSpaceSecond{K}};
         mu_chain::Dict{Tuple{Int,Int}, SparseMatrixCSC{K,Int}}=Dict{Tuple{Int,Int}, SparseMatrixCSC{K,Int}}(),
         mu_chain_gen::Union{Nothing,Function}=nothing,
         unit_coords::Union{Nothing,Vector{K}}=nothing) where {K}
-        return TorAlgebra{K}(T, mu_chain, mu_chain_gen, Dict{Tuple{Int,Int}, Matrix{K}}(), unit_coords)
-    end
-
-    function TorAlgebra(T::TorSpaceSecond{K};
-        mu_chain::Dict{Tuple{Int,Int}, SparseMatrixCSC{K,Int}}=Dict{Tuple{Int,Int}, SparseMatrixCSC{K,Int}}(),
-        mu_chain_gen::Union{Nothing,Function}=nothing,
-        unit_coords::Union{Nothing,Vector{K}}=nothing) where {K}
-        return TorAlgebra{K}(T, mu_chain, mu_chain_gen, Dict{Tuple{Int,Int}, Matrix{K}}(), unit_coords)
+        A = TorAlgebra{K}(ReentrantLock(), UInt(0), T, copy(mu_chain), mu_chain_gen,
+                         Dict{Tuple{Int,Int}, Matrix{K}}(),
+                         unit_coords === nothing ? nothing : copy(unit_coords))
+        check_tor_algebra(A; throw=true)
+        return A
     end
 
     function TorAlgebra(T::Any; kwargs...)
@@ -1100,16 +1162,20 @@ module Algebras
     matrices.
     """
     @inline function algebra_summary(A::TorAlgebra)
-        return (
-            kind=:tor_algebra,
-            field=algebra_field(A),
-            degree_range=degree_range(A),
-            nonzero_degrees=Tuple(nonzero_degrees(A)),
-            total_dimension=total_dimension(A),
-            cached_chain_products=length(A.mu_chain),
-            cached_homology_products=length(A.mu_H_cache),
-            has_lazy_generator=A.mu_chain_gen !== nothing,
-        )
+        return lock(A.lock) do
+            return (
+                kind=:tor_algebra,
+                provenance=provenance(A),
+                field=algebra_field(A),
+                degree_range=degree_range(A),
+                nonzero_degrees=Tuple(nonzero_degrees(A)),
+                total_dimension=total_dimension(A),
+                cached_chain_products=length(A.mu_chain),
+                cached_homology_products=length(A.mu_H_cache),
+                has_lazy_generator=A.mu_chain_gen !== nothing,
+                has_unit=A.unit_coords !== nothing,
+            )
+        end
     end
 
     """
@@ -1133,7 +1199,9 @@ module Algebras
     of new chain products or induced homology products.
     """
     @inline function cached_product_degrees(A::TorAlgebra)
-        return sort!(collect(union(Set(keys(A.mu_chain)), Set(keys(A.mu_H_cache)))))
+        return lock(A.lock) do
+            sort!(collect(union(Set(keys(A.mu_chain)), Set(keys(A.mu_H_cache)))))
+        end
     end
 
     function Base.show(io::IO, A::TorAlgebra)
@@ -1154,7 +1222,7 @@ module Algebras
     end
 
     """
-        check_tor_algebra(A; throw=false) -> NamedTuple
+        check_tor_algebra(A; algebraic=false, throw=false) -> NamedTuple
 
     Validate the cheap structural contracts of a `TorAlgebra`.
 
@@ -1162,57 +1230,226 @@ module Algebras
     degree bookkeeping of the underlying Tor space without forcing any new
     product computations.
 
-    This is the right first check for a hand-built `TorAlgebra` or for an
-    algebra whose multiplication caches were populated manually. Use
-    `algebra_summary(A)` and `cached_product_degrees(A)` first when you only
-    need inspection.
+    With `algebraic=true`, use a consistent snapshot of the product data to
+    check descent, the chain Leibniz rule through the extra incoming-boundary
+    degree, associativity on homology through `last(degree_range(A))`, and
+    both unit identities if a unit was supplied. This may generate every
+    needed product and is intentionally opt-in. It does not fill the original
+    algebra's product caches. Strict associativity or a strict unit on chains
+    is not required. RealField identities use its `atol` and `rtol`.
+
+    The report distinguishes `checks=:structural` from `checks=:algebraic`
+    and gives `verified_through` only for a successful algebraic check.
+    A structural success alone does not certify an algebra.
     """
-    function check_tor_algebra(A::TorAlgebra{K}; throw::Bool=false) where {K}
+    function check_tor_algebra(A::TorAlgebra{K}; algebraic::Bool=false, throw::Bool=false) where {K}
+        snapshot = _tor_algebra_snapshot(A)
         issues = String[]
-        T = underlying_tor_space(A)
-        for ((p, q), MU) in A.mu_H_cache
-            expected = (dim(A, p + q), dim(A, p) * dim(A, q))
-            size(MU) == expected ||
-                push!(issues, "cached homology multiplication matrix for degrees ($p,$q) has size $(size(MU)) but expected $expected.")
-        end
-        for ((p, q), mu) in A.mu_chain
-            p in degree_range(A) || push!(issues, "cached chain product degree p=$p is outside $(repr(degree_range(A))).")
-            q in degree_range(A) || push!(issues, "cached chain product degree q=$q is outside $(repr(degree_range(A))).")
-            (p + q) in degree_range(A) || push!(issues, "cached chain product target degree $(p + q) is outside $(repr(degree_range(A))).")
-            if p in degree_range(A) && q in degree_range(A) && (p + q) in degree_range(A)
-                expected = (Int(T.dims[p + q + 1]), Int(T.dims[p + 1]) * Int(T.dims[q + 1]))
-                size(mu) == expected ||
-                    push!(issues, "cached chain product for degrees ($p,$q) has size $(size(mu)) but expected $expected.")
+        T = snapshot.T
+        n = last(degree_range(snapshot))
+        original_pairs = Tuple(cached_product_degrees(snapshot))
+        for ((p, q), MU) in snapshot.mu_H_cache
+            if !_tor_product_degrees(p, q, n)
+                push!(issues, "cached homology product ($p,$q) is outside degrees 0:$n.")
+            else
+                expected = (dim(snapshot, p + q), dim(snapshot, p) * dim(snapshot, q))
+                size(MU) == expected || push!(issues, "cached homology product ($p,$q) has size $(size(MU)); expected $expected.")
+                _tor_finite(MU) || push!(issues, "cached homology product ($p,$q) contains nonfinite entries.")
             end
         end
-        length(generator_degrees(A)) == total_dimension(A) ||
-            push!(issues, "generator degree list must match the total graded dimension.")
+        for ((p, q), mu) in snapshot.mu_chain
+            try
+                _tor_check_chain_product(T, p, q, mu)
+            catch err
+                err isa ArgumentError || rethrow()
+                push!(issues, sprint(showerror, err))
+            end
+        end
+        u = snapshot.unit_coords
+        if u !== nothing
+            length(u) == dim(snapshot, 0) || push!(issues, "unit coordinates must have length $(dim(snapshot, 0)).")
+            _tor_finite(u) || push!(issues, "unit coordinates contain nonfinite entries.")
+        end
+        if algebraic && isempty(issues)
+            # Recompute from chain data, so stale/hand-built homology tables do
+            # not conceal an invalid product in the underlying chain model.
+            stored_products = copy(snapshot.mu_H_cache)
+            empty!(snapshot.mu_H_cache)
+            try
+                _check_tor_algebraic!(issues, snapshot)
+                for (pair, stored) in stored_products
+                    _tor_equal(algebra_field(snapshot), stored, snapshot.mu_H_cache[pair]) ||
+                        push!(issues, "cached homology product $pair disagrees with the supplied chain product.")
+                end
+            catch err
+                (err isa ArgumentError || err isa ErrorException || err isa DimensionMismatch) || rethrow()
+                push!(issues, sprint(showerror, err))
+            end
+        end
         report = _derived_validation_report(
-            :tor_algebra,
-            isempty(issues);
-            field=algebra_field(A),
-            degree_range=degree_range(A),
-            total_dimension=total_dimension(A),
-            cached_product_degrees=Tuple(cached_product_degrees(A)),
-            issues=issues,
-        )
+            :tor_algebra, isempty(issues); field=algebra_field(snapshot),
+            degree_range=degree_range(snapshot), total_dimension=total_dimension(snapshot),
+            cached_product_degrees=original_pairs,
+            checks=algebraic ? :algebraic : :structural,
+            verified_through=algebraic && isempty(issues) ? n : nothing,
+            unit_supplied=u !== nothing, issues=issues)
         throw && !report.valid && _throw_invalid_derived_functor(:check_tor_algebra, issues)
         return report
     end
 
+    function _tor_algebra_snapshot(A::TorAlgebra{K}) where {K}
+        return lock(A.lock) do
+            TorAlgebra{K}(ReentrantLock(), A.generation, A.T, copy(A.mu_chain),
+                          A.mu_chain_gen, copy(A.mu_H_cache),
+                          A.unit_coords === nothing ? nothing : copy(A.unit_coords))
+        end
+    end
+
+    @inline _tor_product_degrees(p::Int, q::Int, n::Int) = 0 <= p <= n && 0 <= q <= n - p
+    @inline _tor_finite(A::AbstractArray{<:AbstractFloat}) = all(isfinite, A)
+    @inline _tor_finite(A::AbstractArray) = true
+    @inline _tor_equal(field, X, Y) = _tor_finite(X) && _tor_finite(Y) &&
+        (field isa RealField ? isapprox(X, Y; atol=field.atol, rtol=field.rtol) : X == Y)
+
+    function _tor_check_chain_product(T, p::Int, q::Int, mu)
+        n = length(T.dims) - 1
+        _tor_product_degrees(p, q, n) ||
+            throw(ArgumentError("Tor chain product ($p,$q) is outside available chain degrees 0:$n."))
+        expected = (T.dims[p + q + 1], T.dims[p + 1] * T.dims[q + 1])
+        size(mu) == expected || throw(ArgumentError("Tor chain product ($p,$q) has size $(size(mu)); expected $expected."))
+        _tor_finite(mu) || throw(ArgumentError("Tor chain product ($p,$q) contains nonfinite entries."))
+        return nothing
+    end
+
+    # Stream columns instead of materializing a tensor product of basis matrices.
+    function _tor_product_images(mu::AbstractMatrix{K}, X, Y) where {K}
+        out = Matrix{K}(undef, size(mu, 1), size(X, 2) * size(Y, 2))
+        col = 0
+        for i in axes(X, 2), j in axes(Y, 2)
+            col += 1
+            out[:, col] = mu * kron(view(X, :, i), view(Y, :, j))
+        end
+        return out
+    end
+
+    function _tor_homology_coordinates(field, H, z)
+        _tor_finite(z) || throw(ArgumentError("Tor product arithmetic produced nonfinite chain coordinates."))
+        c = if field isa RealField
+            # Retain the user's numerical contract rather than reconstructing
+            # a default tolerance solely from the coefficient element type.
+            alpha = solve_fullcolumn(field, H.Z, z)
+            gamma = solve_fullcolumn(field, H.Bfull, alpha)
+            gamma[H.dimB + 1:end, :]
+        else
+            ChainComplexes.homology_coordinates(H, z)
+        end
+        _tor_finite(c) || throw(ArgumentError("Tor product arithmetic produced nonfinite homology coordinates."))
+        return c
+    end
+
+    function _tor_product_coordinates(A::TorAlgebra{K}, p::Int, q::Int, mu) where {K}
+        _tor_check_chain_product(A.T, p, q, mu)
+        Hp, Hq, Hr = A.T.homol[p + 1], A.T.homol[q + 1], A.T.homol[p + q + 1]
+        field = algebra_field(A)
+        # Z = B + span(Hrep): these two ideal conditions plus the Hrep products
+        # certify every cycle product and independence of both representatives.
+        for (X, Y) in ((Hp.B, Hq.Z), (Hp.Hrep, Hq.B))
+            (size(X, 2) == 0 || size(Y, 2) == 0) && continue
+            z = _tor_product_images(mu, X, Y)
+            c = try
+                _tor_homology_coordinates(field, Hr, z)
+            catch err
+                (err isa ErrorException || err isa ArgumentError) || rethrow()
+                throw(ArgumentError("Tor product ($p,$q) does not preserve cycles: $(sprint(showerror, err))"))
+            end
+            _tor_equal(field, c, zeros(K, size(c))) ||
+                throw(ArgumentError("Tor product ($p,$q) does not preserve boundaries; it is not independent of representatives."))
+        end
+        z = _tor_product_images(mu, Hp.Hrep, Hq.Hrep)
+        return try
+            _tor_homology_coordinates(field, Hr, z)
+        catch err
+            (err isa ErrorException || err isa ArgumentError) || rethrow()
+            throw(ArgumentError("Tor product ($p,$q) does not preserve cycles: $(sprint(showerror, err))"))
+        end
+    end
+
+    function _check_tor_algebraic!(issues, A::TorAlgebra{K}) where {K}
+        T, field = A.T, algebra_field(A)
+        n = last(degree_range(A))
+        # One additional degree is essential: boundaries in H_n come from C_{n+1}.
+        for s in 1:(n + 1), p in 0:s
+            q = s - p
+            mu, _ = _get_mu_chain(A, p, q)
+            lhs = T.bd[s] * mu
+            rhs = zeros(K, size(lhs))
+            if p > 0
+                lower, _ = _get_mu_chain(A, p - 1, q)
+                Iq = spdiagm(0 => fill(one(K), T.dims[q + 1]))
+                rhs .+= lower * kron(T.bd[p], Iq)
+            end
+            if q > 0
+                lower, _ = _get_mu_chain(A, p, q - 1)
+                Ip = spdiagm(0 => fill(one(K), T.dims[p + 1]))
+                rhs .+= (isodd(p) ? -one(K) : one(K)) .* (lower * kron(Ip, T.bd[q]))
+            end
+            _tor_equal(field, lhs, rhs) || push!(issues, "chain Leibniz identity fails in degrees ($p,$q).")
+        end
+        for s in 0:n, p in 0:s
+            multiplication_matrix(A, p, s - p)
+        end
+        for s in 0:n, p in 0:s, q in 0:(s - p)
+            r = s - p - q
+            pq = multiplication_matrix(A, p, q)
+            qr = multiplication_matrix(A, q, r)
+            Ip = Matrix{K}(I, dim(A, p), dim(A, p))
+            Ir = Matrix{K}(I, dim(A, r), dim(A, r))
+            lhs = multiplication_matrix(A, p + q, r) * kron(pq, Ir)
+            rhs = multiplication_matrix(A, p, q + r) * kron(Ip, qr)
+            _tor_equal(field, lhs, rhs) || push!(issues, "homology associativity fails in degrees ($p,$q,$r).")
+        end
+        _check_tor_unit!(issues, A)
+        return nothing
+    end
+
+    function _check_tor_unit!(issues, A::TorAlgebra{K}) where {K}
+        u = A.unit_coords
+        u === nothing && return nothing
+        field = algebra_field(A)
+        for p in degree_range(A)
+            Ip = Matrix{K}(I, dim(A, p), dim(A, p))
+            lhs = multiplication_matrix(A, 0, p) * kron(u, Ip)
+            rhs = multiplication_matrix(A, p, 0) * kron(Ip, u)
+            _tor_equal(field, lhs, Ip) || push!(issues, "left unit identity fails in degree $p.")
+            _tor_equal(field, rhs, Ip) || push!(issues, "right unit identity fails in degree $p.")
+        end
+        return nothing
+    end
+
     # Internal: obtain a chain-level multiplication map, generating it if needed.
     function _get_mu_chain(A::TorAlgebra{K}, p::Int, q::Int) where {K}
+        _tor_product_degrees(p, q, length(A.T.dims) - 1) ||
+            throw(ArgumentError("Tor chain product degrees ($p,$q) are outside the available range."))
         key = (p,q)
-        if haskey(A.mu_chain, key)
-            return A.mu_chain[key]
+        cached, generator, generation = lock(A.lock) do
+            (get(A.mu_chain, key, nothing), A.mu_chain_gen, A.generation)
         end
-        if A.mu_chain_gen === nothing
-            error("TorAlgebra: no mu_chain[(p,q)] provided and no mu_chain_gen set for (p,q)=($p,$q).")
+        cached === nothing || return (cached, generation)
+        rows, cols = A.T.dims[p + q + 1], A.T.dims[p + 1] * A.T.dims[q + 1]
+        M = if rows == 0 || cols == 0
+            spzeros(K, rows, cols)
+        elseif generator === nothing
+            throw(ArgumentError("TorAlgebra: supply a chain product or generator for degrees ($p,$q); a generic Tor space has no canonical multiplication."))
+        else
+            generator(p,q)
         end
-        M = A.mu_chain_gen(p,q)
-        isa(M, SparseMatrixCSC{K,Int}) || error("mu_chain_gen must return SparseMatrixCSC{K,Int}")
-        A.mu_chain[key] = M
-        return M
+        isa(M, SparseMatrixCSC{K,Int}) || throw(ArgumentError("mu_chain_gen must return SparseMatrixCSC{$K,Int}."))
+        _tor_check_chain_product(A.T, p, q, M)
+        return lock(A.lock) do
+            # An overlapping setter invalidates publication, not the private
+            # result already being computed by this invocation.
+            A.generation == generation ? (get!(A.mu_chain, key, M), generation) : (M, generation)
+        end
     end
 
     """
@@ -1270,19 +1507,48 @@ module Algebras
               "\n  is_zero: ", d.is_zero)
     end
 
-    element(A::TorAlgebra{K}, deg::Int, coords::AbstractVector{K}) where {K} =
-        TorElement{K}(A, deg, collect(coords))
+    function element(A::TorAlgebra{K}, deg::Int, coords::AbstractVector{K}) where {K}
+        deg in degree_range(A) || throw(ArgumentError("Tor element degree $deg is outside $(degree_range(A))."))
+        length(coords) == dim(A, deg) || throw(DimensionMismatch("Tor element expects $(dim(A, deg)) coordinates in degree $deg."))
+        _tor_finite(coords) || throw(ArgumentError("Tor element contains nonfinite coordinates."))
+        return TorElement{K}(A, deg, collect(coords))
+    end
+
+    """
+        unit(A::TorAlgebra)
+        one(A::TorAlgebra)
+
+    Return the supplied H_0 unit after checking its left and right identities
+    in every computed degree. No unit is inferred from the chain basis.
+    Product data are checked on a consistent snapshot; returned coordinates
+    are owned by the element and can be edited without changing the algebra.
+    """
+    function unit(A::TorAlgebra{K}) where {K}
+        snapshot = _tor_algebra_snapshot(A)
+        snapshot.unit_coords === nothing && throw(ArgumentError("TorAlgebra has no supplied unit_coords."))
+        check_tor_algebra(snapshot; throw=true)
+        issues = String[]
+        _check_tor_unit!(issues, snapshot)
+        isempty(issues) || _throw_invalid_derived_functor(:unit, issues)
+        return TorElement{K}(A, 0, copy(snapshot.unit_coords))
+    end
+    Base.one(A::TorAlgebra) = unit(A)
 
     """
         set_chain_product!(A, p, q, mu)
 
     Set the chain-level product map for degrees (p,q).
     This overrides any lazily generated value.
+    An overlapping query may finish with its previously captured product, but cannot
+    restore that old result to the cache after this setter returns.
     """
     function set_chain_product!(A::TorAlgebra{K}, p::Int, q::Int, mu::SparseMatrixCSC{K,Int}) where {K}
-        A.mu_chain[(p,q)] = mu
-        # If we already cached induced homology matrices, clear them.
-        empty!(A.mu_H_cache)
+        _tor_check_chain_product(A.T, p, q, mu)
+        lock(A.lock) do
+            A.mu_chain[(p,q)] = mu
+            empty!(A.mu_H_cache)
+            A.generation += UInt(1)
+        end
         return A
     end
 
@@ -1291,11 +1557,16 @@ module Algebras
 
     Attach a lazy generator `gen(p,q)` to supply mu_chain maps on demand.
     Clears caches.
+    An overlapping query may finish with its previously captured generator, but its
+    result cannot populate the replacement generator's caches.
     """
     function set_chain_product_generator!(A::TorAlgebra{K}, gen::Function) where {K}
-        A.mu_chain_gen = gen
-        empty!(A.mu_chain)
-        empty!(A.mu_H_cache)
+        lock(A.lock) do
+            A.mu_chain_gen = gen
+            empty!(A.mu_chain)
+            empty!(A.mu_H_cache)
+            A.generation += UInt(1)
+        end
         return A
     end
 
@@ -1309,41 +1580,33 @@ module Algebras
     The returned matrix has size:
         dim(Tor_{p+q}) x (dim(Tor_p)*dim(Tor_q)),
 
-    and its column ordering matches `kron(x.coords, y.coords)`.
+    and its column ordering matches `kron(x.coords, y.coords)`, exactly as for
+    the supplied chain product. Before publishing a newly computed matrix,
+    all cycle products and both boundary-ideal conditions are checked. Thus
+    invalid products cannot silently depend on the chosen representatives.
+    Associativity and unit identities can be checked separately with
+    `check_tor_algebra(A; algebraic=true)`.
+    The returned matrix is cached and must be treated as read-only. Copy it before
+    editing its entries.
     """
     function multiplication_matrix(A::TorAlgebra{K}, p::Int, q::Int) where {K}
+        # Both supported models expose the same typed homology vector, so
+        # checking the degree range does not allocate on cached queries.
+        n = length(A.T.homol)
+        _tor_product_degrees(p, q, n - 1) ||
+            throw(ArgumentError("Tor product ($p,$q) is outside computed homology degrees $(degree_range(A))."))
         key = (p,q)
-        if haskey(A.mu_H_cache, key)
-            return A.mu_H_cache[key]
-        end
+        cached = lock(() -> get(A.mu_H_cache, key, nothing), A.lock)
+        cached === nothing || return cached
 
         # Get chain-level multiplication map (possibly generated lazily)
-        mu = _get_mu_chain(A, p, q)
+        mu, generation = _get_mu_chain(A, p, q)
 
-        # Existing logic (unchanged): push reps through mu, then project to homology.
-        Tp = A.T.homol[p+1]
-        Tq = A.T.homol[q+1]
-        Tr = A.T.homol[p+q+1]
+        out = _tor_product_coordinates(A, p, q, mu)
 
-        Hp = size(Tp.Hrep, 2)
-        Hq = size(Tq.Hrep, 2)
-        Hr = size(Tr.Hrep, 2)
-
-        out = zeros(K, Hr, Hp * Hq)
-        col = 0
-        for i in 1:Hp
-            for j in 1:Hq
-                col += 1
-                xp = Tp.Hrep[:, i:i]
-                xq = Tq.Hrep[:, j:j]
-                x = kron(xq, xp)
-                y = mu * x
-                out[:, col:col] .= ChainComplexes.homology_coordinates(Tr, y)
-            end
+        return lock(A.lock) do
+            A.generation == generation ? get!(A.mu_H_cache, key, out) : out
         end
-
-        A.mu_H_cache[key] = out
-        return out
     end
 
     """
@@ -1352,45 +1615,16 @@ module Algebras
     Multiply Tor elements using the registered chain-level product.
     """
     function multiply(A::TorAlgebra{K}, x::TorElement{K}, y::TorElement{K}) where {K}
-        @assert x.A === A && y.A === A
+        x.A === A && y.A === A || throw(ArgumentError("Tor factors must belong to the supplied algebra."))
         p, q = x.deg, y.deg
+        p in degree_range(A) && q in degree_range(A) || throw(ArgumentError("Tor factor degree is outside the computed range."))
+        length(x.coords) == dim(A, p) && length(y.coords) == dim(A, q) ||
+            throw(DimensionMismatch("Tor factor coordinate lengths do not match their degrees."))
+        _tor_finite(x.coords) && _tor_finite(y.coords) || throw(ArgumentError("Tor factor contains nonfinite coordinates."))
         M = multiplication_matrix(A, p, q)
         out_coords = M * kron(x.coords, y.coords)
+        _tor_finite(out_coords) || throw(ArgumentError("Tor multiplication produced nonfinite coordinates."))
         return TorElement{K}(A, p + q, out_coords)
-    end
-
-    """
-        trivial_tor_product_generator(T)
-
-    Return a mu_chain_gen(p,q) implementing the canonical "degree-0 only" product:
-    - if p==0 and q==0, multiply by identity on C_0 (using the chain basis)
-    - otherwise, return the zero map.
-
-    This is the maximal canonical choice available without extra structure on the poset/algebra.
-    It is always a valid chain-level multiplication (and hence induces a graded algebra structure),
-    and serves as a safe default. More sophisticated products (bar/shuffle/Koszul) can be plugged
-    in by supplying a different generator via `set_chain_product_generator!`.
-    """
-    function trivial_tor_product_generator(T)
-        field = T isa TorSpaceSecond ? T.resL.M.field : T.resRop.M.field
-        K = coeff_type(field)
-        # We need chain group dimensions. Both TorSpace and TorSpaceSecond store dims as T.dims.
-        function gen(p::Int, q::Int)
-            if p != 0 || q != 0
-                return spzeros(K, T.dims[p+1+q], T.dims[p+1] * T.dims[q+1])
-            end
-            # degree 0: C_0 tensor C_0 -> C_0
-            # Use basis-dependent diagonal multiplication: e_i tensor e_j -> delta_{ij} e_i
-            n = T.dims[1]
-            M = spzeros(K, n, n*n)
-            for i in 1:n
-                # column index for (i,i) in kron basis: (j-1)*n + i
-                col = (i-1)*n + i
-                M[i, col] = one(K)
-            end
-            return M
-        end
-        return gen
     end
 
 end

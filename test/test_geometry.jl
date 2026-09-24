@@ -17,6 +17,22 @@ TO.RegionGeometry._region_minkowski_functionals_fast(::Val{:region_hook_stub}, :
     mean_width_directions=nothing, strict::Bool=true, closure::Bool=true,
     cache=nothing) = (volume=3.5, boundary_measure=7.0, mean_width=1.25)
 
+# A backend callback can yield or recursively request another geometry summary.
+struct _ReentrantGeometryProbe{P,F}
+    pi::P
+    callback::F
+end
+function EC.locate(probe::_ReentrantGeometryProbe, x::AbstractVector; kwargs...)
+    probe.callback()
+    return EC.locate(probe.pi, x)
+end
+function EC.locate_many!(dest::AbstractVector{<:Integer},
+                         probe::_ReentrantGeometryProbe,
+                         X::AbstractMatrix{<:Real}; kwargs...)
+    probe.callback()
+    return EC.locate_many!(dest, probe.pi, X)
+end
+
 with_fields(FIELDS_FULL) do field
 K = CM.coeff_type(field)
 @inline c(x) = CM.coerce(field, x)
@@ -174,15 +190,13 @@ if field isa CM.QQField
     PLP.locate_many!(dest_verified, pi, Xq[1:1, :]; threaded=false, mode=:verified)
     @test dest_verified == expected
 
-    if PLP.HAVE_POLY
-        cache = PLP.compile_geometry_cache(pi; box=box)
-        dest_cache = fill(0, size(Xq, 2))
-        PLP.locate_many!(dest_cache, cache, Xq[1:1, :]; threaded=false)
-        @test dest_cache == expected
-        dest_cache_verified = fill(0, size(Xq, 2))
-        PLP.locate_many!(dest_cache_verified, cache, Xq[1:1, :]; threaded=false, mode=:verified)
-        @test dest_cache_verified == expected
-    end
+    cache = PLP.compile_geometry_cache(pi; box=box)
+    dest_cache = fill(0, size(Xq, 2))
+    PLP.locate_many!(dest_cache, cache, Xq[1:1, :]; threaded=false)
+    @test dest_cache == expected
+    dest_cache_verified = fill(0, size(Xq, 2))
+    PLP.locate_many!(dest_cache_verified, cache, Xq[1:1, :]; threaded=false, mode=:verified)
+    @test dest_cache_verified == expected
 end
 end
 
@@ -230,314 +244,308 @@ if field isa CM.QQField
         @test fast_ns <= 1.3 * verified_ns + 20.0
     end
 
-    if PLP.HAVE_POLY
-        # PLPolyhedra locate_many!: cached should improve per-query cost.
-        A1 = QQ[1 0; 0 1; -1 0; 0 -1]
-        b1 = QQ[1, 1, 0, 0]
-        A2 = QQ[1 0; 0 1; -1 0; 0 -1]
-        b2 = QQ[2, 1, -1, 0]
-        hp1 = PLP.make_hpoly(A1, b1)
-        hp2 = PLP.make_hpoly(A2, b2)
-        pi = PLP.PLEncodingMap(2,
-                               [BitVector(), BitVector()],
-                               [BitVector(), BitVector()],
-                               [hp1, hp2],
-                               [(0.5, 0.5), (1.5, 0.5)])
-        box = (Float64[0, 0], Float64[2, 1])
-        cache = PLP.compile_geometry_cache(pi; box=box, closure=true)
+    # PLPolyhedra locate_many!: cached should improve per-query cost.
+    A1 = QQ[1 0; 0 1; -1 0; 0 -1]
+    b1 = QQ[1, 1, 0, 0]
+    A2 = QQ[1 0; 0 1; -1 0; 0 -1]
+    b2 = QQ[2, 1, -1, 0]
+    hp1 = PLP.make_hpoly(A1, b1)
+    hp2 = PLP.make_hpoly(A2, b2)
+    pi = PLP.PLEncodingMap(2,
+                           [BitVector(), BitVector()],
+                           [BitVector(), BitVector()],
+                           [hp1, hp2],
+                           [(0.5, 0.5), (1.5, 0.5)])
+    box = (Float64[0, 0], Float64[2, 1])
+    cache = PLP.compile_geometry_cache(pi; box=box, closure=true)
 
-        npts = 8_000
-        X = Matrix{Float64}(undef, 2, npts)
-        @inbounds for j in 1:npts
-            X[1, j] = (j % 2000) / 1000
-            X[2, j] = ((j * 7) % 1000) / 1000
-        end
-        dest_uncached = zeros(Int, npts)
-        dest_cached = zeros(Int, npts)
+    npts = 8_000
+    X = Matrix{Float64}(undef, 2, npts)
+    @inbounds for j in 1:npts
+        X[1, j] = (j % 2000) / 1000
+        X[2, j] = ((j * 7) % 1000) / 1000
+    end
+    dest_uncached = zeros(Int, npts)
+    dest_cached = zeros(Int, npts)
 
-        PLP.locate_many!(dest_uncached, pi, X; threaded=false, mode=:fast)       # warmup
-        PLP.locate_many!(dest_cached, cache, X; threaded=false, mode=:fast)      # warmup
+    PLP.locate_many!(dest_uncached, pi, X; threaded=false, mode=:fast)       # warmup
+    PLP.locate_many!(dest_cached, cache, X; threaded=false, mode=:fast)      # warmup
 
-        t_uncached = _median_elapsed() do
-            PLP.locate_many!(dest_uncached, pi, X; threaded=false, mode=:fast)
-        end
-        t_cached = _median_elapsed() do
-            PLP.locate_many!(dest_cached, cache, X; threaded=false, mode=:fast)
-        end
+    t_uncached = _median_elapsed() do
+        PLP.locate_many!(dest_uncached, pi, X; threaded=false, mode=:fast)
+    end
+    t_cached = _median_elapsed() do
+        PLP.locate_many!(dest_cached, cache, X; threaded=false, mode=:fast)
+    end
 
-        @test dest_uncached == dest_cached
-        uncached_ns = _ns_per_item(t_uncached, npts)
-        cached_ns = _ns_per_item(t_cached, npts)
-        if strict_ci
-            @test cached_ns <= 1.45 * uncached_ns + 25.0
-        else
-            @test cached_ns <= 1.75 * uncached_ns + 40.0
-        end
+    @test dest_uncached == dest_cached
+    uncached_ns = _ns_per_item(t_uncached, npts)
+    cached_ns = _ns_per_item(t_cached, npts)
+    if strict_ci
+        @test cached_ns <= 1.45 * uncached_ns + 25.0
+    else
+        @test cached_ns <= 1.75 * uncached_ns + 40.0
     end
 end
 end
 
 if field isa CM.QQField
 @testset "PLPolyhedra heavy geometry: perimeter/surface/adjacency/PCA" begin
-    if !PLP.HAVE_POLY
-        @test true
-    else
-        # 2D: square [0,1]^2 perimeter should be 4
-        A = K[ 1 0;
-                0 1;
-               -1 0;
-                0 -1 ]
-        b = K[1, 1, 0, 0]
-        hp = PLP.make_hpoly(A, b)
+    # 2D: square [0,1]^2 perimeter should be 4
+    A = K[ 1 0;
+            0 1;
+           -1 0;
+            0 -1 ]
+    b = K[1, 1, 0, 0]
+    hp = PLP.make_hpoly(A, b)
 
-        sigy = [BitVector()]
-        sigz = [BitVector()]
-        pi = PLP.PLEncodingMap(2, sigy, sigz, [hp], [(0.5, 0.5)])
+    sigy = [BitVector()]
+    sigz = [BitVector()]
+    pi = PLP.PLEncodingMap(2, sigy, sigz, [hp], [(0.5, 0.5)])
 
-        box = (Float64[0.0, 0.0], Float64[1.0, 1.0])
-        perim = TO.RegionGeometry.region_perimeter(pi, 1; box=box)
-        @test isapprox(perim, 4.0; atol=1e-9)
+    box = (Float64[0.0, 0.0], Float64[1.0, 1.0])
+    perim = TO.RegionGeometry.region_perimeter(pi, 1; box=box)
+    @test isapprox(perim, 4.0; atol=1e-9)
 
-        # 3D: cube [0,1]^3 surface area is 6
-        A3 = K[ 1 0 0;
-                 0 1 0;
-                 0 0 1;
-                -1 0 0;
-                 0 -1 0;
-                 0 0 -1 ]
-        b3 = K[1, 1, 1, 0, 0, 0]
-        hp3 = PLP.make_hpoly(A3, b3)
-        pi3 = PLP.PLEncodingMap(3, [BitVector()], [BitVector()], [hp3], [(0.5, 0.5, 0.5)])
-        box3 = (Float64[0,0,0], Float64[1,1,1])
-        sa = TO.RegionGeometry.region_surface_area(pi3, 1; box=box3)
-        @test isapprox(sa, 6.0; atol=1e-9)
+    # 3D: cube [0,1]^3 surface area is 6
+    A3 = K[ 1 0 0;
+             0 1 0;
+             0 0 1;
+            -1 0 0;
+             0 -1 0;
+             0 0 -1 ]
+    b3 = K[1, 1, 1, 0, 0, 0]
+    hp3 = PLP.make_hpoly(A3, b3)
+    pi3 = PLP.PLEncodingMap(3, [BitVector()], [BitVector()], [hp3], [(0.5, 0.5, 0.5)])
+    box3 = (Float64[0,0,0], Float64[1,1,1])
+    sa = TO.RegionGeometry.region_surface_area(pi3, 1; box=box3)
+    @test isapprox(sa, 6.0; atol=1e-9)
 
-        # Adjacency: two rectangles sharing a vertical edge of length 1
-        # R1 = [0,1]x[0,1], R2 = [1,2]x[0,1]
-        A1 = K[ 1 0; 0 1; -1 0; 0 -1 ]
-        b1 = K[1, 1, 0, 0]
-        A2 = K[ 1 0; 0 1; -1 0; 0 -1 ]
-        b2 = K[2, 1, -1, 0]
-        hp1 = PLP.make_hpoly(A1, b1)
-        hp2 = PLP.make_hpoly(A2, b2)
-        sigy2 = [BitVector(), BitVector()]
-        sigz2 = [BitVector(), BitVector()]
-        pi2 = PLP.PLEncodingMap(2, sigy2, sigz2,
-                                        [hp1, hp2],
-                                        [(0.5,0.5), (1.5,0.5)])
-        box2 = (Float64[0,0], Float64[2,1])
-        adj = TO.RegionGeometry.region_adjacency(pi2; box=box2)
-        @test haskey(adj, (1,2))
-        @test isapprox(adj[(1,2)], 1.0; atol=1e-8)
+    # Adjacency: two rectangles sharing a vertical edge of length 1
+    # R1 = [0,1]x[0,1], R2 = [1,2]x[0,1]
+    A1 = K[ 1 0; 0 1; -1 0; 0 -1 ]
+    b1 = K[1, 1, 0, 0]
+    A2 = K[ 1 0; 0 1; -1 0; 0 -1 ]
+    b2 = K[2, 1, -1, 0]
+    hp1 = PLP.make_hpoly(A1, b1)
+    hp2 = PLP.make_hpoly(A2, b2)
+    sigy2 = [BitVector(), BitVector()]
+    sigz2 = [BitVector(), BitVector()]
+    pi2 = PLP.PLEncodingMap(2, sigy2, sigz2,
+                                    [hp1, hp2],
+                                    [(0.5,0.5), (1.5,0.5)])
+    box2 = (Float64[0,0], Float64[2,1])
+    adj = TO.RegionGeometry.region_adjacency(pi2; box=box2)
+    @test haskey(adj, (1,2))
+    @test isapprox(adj[(1,2)], 1.0; atol=1e-8)
 
-        # --- PCA / principal directions diagnostics ---
-        rng = MersenneTwister(1)
-        pca = TO.RegionGeometry.region_principal_directions(pi, 1; box=box, nsamples=5000, rng=rng, strict=true)
+    # --- PCA / principal directions diagnostics ---
+    rng = MersenneTwister(1)
+    pca = TO.RegionGeometry.region_principal_directions(pi, 1; box=box, nsamples=5000, rng=rng, strict=true)
 
-        @test :n_accepted in propertynames(pca)
-        @test :n_proposed in propertynames(pca)
+    @test :n_accepted in propertynames(pca)
+    @test :n_proposed in propertynames(pca)
 
-        @test pca.n_accepted == 5000
-        @test pca.n_proposed == 5000
+    @test pca.n_accepted == 5000
+    @test pca.n_proposed == 5000
 
-        @test isapprox(pca.mean[1], 0.5; atol=0.02)
-        @test isapprox(pca.mean[2], 0.5; atol=0.02)
-        @test isapprox(pca.evals[1], 1/12; atol=0.02)
-        @test isapprox(pca.evals[2], 1/12; atol=0.02)
+    @test isapprox(pca.mean[1], 0.5; atol=0.02)
+    @test isapprox(pca.mean[2], 0.5; atol=0.02)
+    @test isapprox(pca.evals[1], 1/12; atol=0.02)
+    @test isapprox(pca.evals[2], 1/12; atol=0.02)
 
-        rng2 = MersenneTwister(2)
-        pca_info = TO.RegionGeometry.region_principal_directions(pi, 1;
-            box=box, nsamples=4000, nbatches=4, rng=rng2, strict=true, return_info=true)
+    rng2 = MersenneTwister(2)
+    pca_info = TO.RegionGeometry.region_principal_directions(pi, 1;
+        box=box, nsamples=4000, nbatches=4, rng=rng2, strict=true, return_info=true)
 
-        @test pca_info.nbatches == 4
-        @test _batch_count(pca_info.batch_evals) == 4
-        @test length(pca_info.batch_n_accepted) == 4
-        @test sum(pca_info.batch_n_accepted) == 4000
+    @test pca_info.nbatches == 4
+    @test _batch_count(pca_info.batch_evals) == 4
+    @test length(pca_info.batch_n_accepted) == 4
+    @test sum(pca_info.batch_n_accepted) == 4000
 
-        @test all(pca_info.mean_stderr .>= 0.0)
-        @test all(pca_info.evals_stderr .>= 0.0)
+    @test all(pca_info.mean_stderr .>= 0.0)
+    @test all(pca_info.evals_stderr .>= 0.0)
 
 
 
-        # -------------------------------------------------------------------------
-        # New features:
-        #   (1) exact volume mode for region_weights via Polyhedra.volume
-        #   (2) caching of polyhedra-in-box objects
-        #   (3) per-facet boundary-measure breakdown diagnostics
-        # -------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
+    # New features:
+    #   (1) exact volume mode for region_weights via Polyhedra.volume
+    #   (2) caching of polyhedra-in-box objects
+    #   (3) per-facet boundary-measure breakdown diagnostics
+    # -------------------------------------------------------------------------
 
-        # (1) exact volume mode: unit square in unit box has area 1.
-        w_exact = TO.RegionGeometry.region_weights(pi; box=box, method=:exact)
-        @test length(w_exact) == 1
-        @test isapprox(w_exact[1], 1.0; atol=1e-12, rtol=0.0)
+    # (1) exact volume mode: unit square in unit box has area 1.
+    w_exact = TO.RegionGeometry.region_weights(pi; box=box, method=:exact)
+    @test length(w_exact) == 1
+    @test isapprox(w_exact[1], 1.0; atol=1e-12, rtol=0.0)
 
-        # (2) cache: results should match (and box may be omitted if cache is provided)
-        cache1 = PLP.poly_in_box_cache(pi; box=box, closure=true)
+    # (2) cache: results should match (and box may be omitted if cache is provided)
+    cache1 = PLP.poly_in_box_cache(pi; box=box, closure=true)
 
-        perim_cache = TO.RegionGeometry.region_perimeter(pi, 1; cache=cache1)
-        @test isapprox(perim_cache, perim; atol=1e-12, rtol=0.0)
+    perim_cache = TO.RegionGeometry.region_perimeter(pi, 1; cache=cache1)
+    @test isapprox(perim_cache, perim; atol=1e-12, rtol=0.0)
 
-        # Define the non-cached centroid for comparison.
-        centroid = TO.RegionGeometry.region_centroid(pi, 1; box=box)
+    # Define the non-cached centroid for comparison.
+    centroid = TO.RegionGeometry.region_centroid(pi, 1; box=box)
 
-        c_cache = TO.RegionGeometry.region_centroid(pi, 1; cache=cache1)
-        @test isapprox(c_cache[1], centroid[1]; atol=1e-10)
-        @test isapprox(c_cache[2], centroid[2]; atol=1e-10)
+    c_cache = TO.RegionGeometry.region_centroid(pi, 1; cache=cache1)
+    @test isapprox(c_cache[1], centroid[1]; atol=1e-10)
+    @test isapprox(c_cache[2], centroid[2]; atol=1e-10)
 
-        # (3) boundary-measure breakdown: sum of facet measures should match perimeter.
-        bd = TO.RegionGeometry.region_boundary_measure_breakdown(pi, 1; cache=cache1)
-        @test !isempty(bd)
-        @test all(e.measure > 0 for e in bd)
-        @test isapprox(sum(e.measure for e in bd), perim; atol=1e-8, rtol=0.0)
+    # (3) boundary-measure breakdown: sum of facet measures should match perimeter.
+    bd = TO.RegionGeometry.region_boundary_measure_breakdown(pi, 1; cache=cache1)
+    @test !isempty(bd)
+    @test all(e.measure > 0 for e in bd)
+    @test isapprox(sum(e.measure for e in bd), perim; atol=1e-8, rtol=0.0)
 
-        # Two adjacent rectangles in the same window; internal facet should be detected.
-        A = [ 1 0;
-             -1 0;
-              0 1;
-              0 -1]
-        hp_left  = PLP.make_hpoly(A, [1,  0, 1, 0])   # 0 <= x <= 1, 0 <= y <= 1
-        hp_right = PLP.make_hpoly(A, [2, -1, 1, 0])   # 1 <= x <= 2, 0 <= y <= 1
-        sigy3 = [BitVector(), BitVector()]
-        sigz3 = [BitVector(), BitVector()]
-        pi2 = PLP.PLEncodingMap(2, sigy3, sigz3, [hp_left, hp_right],
-                                [(0.5, 0.5), (1.5, 0.5)])
-        box2 = ([0.0, 0.0], [2.0, 1.0])
-        cache2 = PLP.poly_in_box_cache(pi2; box=box2, closure=true)
-        @test cache2.level == :light
-        @test !cache2.activity_scanned
-        @test isempty(cache2.active_regions)
-        @test all(==(Int8(0)), cache2.activity_state)
-        @test all(cache2.points_f[r] === nothing for r in cache2.active_regions)
+    # Two adjacent rectangles in the same window; internal facet should be detected.
+    A = [ 1 0;
+         -1 0;
+          0 1;
+          0 -1]
+    hp_left  = PLP.make_hpoly(A, [1,  0, 1, 0])   # 0 <= x <= 1, 0 <= y <= 1
+    hp_right = PLP.make_hpoly(A, [2, -1, 1, 0])   # 1 <= x <= 2, 0 <= y <= 1
+    sigy3 = [BitVector(), BitVector()]
+    sigz3 = [BitVector(), BitVector()]
+    pi2 = PLP.PLEncodingMap(2, sigy3, sigz3, [hp_left, hp_right],
+                            [(0.5, 0.5), (1.5, 0.5)])
+    box2 = ([0.0, 0.0], [2.0, 1.0])
+    cache2 = PLP.poly_in_box_cache(pi2; box=box2, closure=true)
+    @test cache2.level == :light
+    @test !cache2.activity_scanned
+    @test isempty(cache2.active_regions)
+    @test all(==(Int8(0)), cache2.activity_state)
+    @test all(cache2.points_f[r] === nothing for r in cache2.active_regions)
 
-        # Single-region geometry calls on tiny maps should use the no-auto-cache route.
-        cache_skip = PLP._auto_geometry_cache(pi2, nothing, box2, true, :fast;
-                                              level=:geometry, intent=:single_region_exact)
-        @test cache_skip === nothing
-        CM._clear_encoding_cache!(pi2.cache)
-        bb_direct = TO.RegionGeometry.region_bbox(pi2, 1; box=box2)
-        @test bb_direct == (Float64[0.0, 0.0], Float64[1.0, 1.0])
-        @test isempty(pi2.cache.geometry)
-        @test cache2.activity_state[2] == Int8(0)
+    # Single-region geometry calls on tiny maps should use the no-auto-cache route.
+    cache_skip = PLP._auto_geometry_cache(pi2, nothing, box2, true, :fast;
+                                          level=:geometry, intent=:single_region_exact)
+    @test cache_skip === nothing
+    CM._clear_encoding_cache!(pi2.cache)
+    bb_direct = TO.RegionGeometry.region_bbox(pi2, 1; box=box2)
+    @test bb_direct == (Float64[0.0, 0.0], Float64[1.0, 1.0])
+    @test isempty(pi2.cache.geometry)
+    @test cache2.activity_state[2] == Int8(0)
 
-        w2 = TO.RegionGeometry.region_weights(pi2; cache=cache2, method=:exact)
-        @test length(w2) == 2
-        @test isapprox(w2[1], 1.0; atol=1e-12, rtol=0.0)
-        @test isapprox(w2[2], 1.0; atol=1e-12, rtol=0.0)
-        @test length(cache2.active_regions) == 2
-        @test count(cache2.exact_weight_ready) == 2
-        w2_b = TO.RegionGeometry.region_weights(pi2; cache=cache2, method=:exact)
-        @test w2_b == w2
-        @test count(cache2.exact_weight_ready) == 2
+    w2 = TO.RegionGeometry.region_weights(pi2; cache=cache2, method=:exact)
+    @test length(w2) == 2
+    @test isapprox(w2[1], 1.0; atol=1e-12, rtol=0.0)
+    @test isapprox(w2[2], 1.0; atol=1e-12, rtol=0.0)
+    @test length(cache2.active_regions) == 2
+    @test count(cache2.exact_weight_ready) == 2
+    w2_b = TO.RegionGeometry.region_weights(pi2; cache=cache2, method=:exact)
+    @test w2_b == w2
+    @test count(cache2.exact_weight_ready) == 2
 
-        bd1 = TO.RegionGeometry.region_boundary_measure_breakdown(pi2, 1; cache=cache2)
-        bd2 = TO.RegionGeometry.region_boundary_measure_breakdown(pi2, 2; cache=cache2)
-        @test all(cache2.points_f[r] !== nothing for r in cache2.active_regions)
-        p1 = TO.RegionGeometry.region_perimeter(pi2, 1; cache=cache2)
-        @test isapprox(sum(e.measure for e in bd1), p1; atol=1e-8, rtol=0.0)
-        @test isapprox(sum(e.measure for e in bd2), TO.RegionGeometry.region_perimeter(pi2, 2; cache=cache2); atol=1e-8, rtol=0.0)
-        @test any(e.kind == :internal for e in bd1)
-        # The only internal neighbor of region 1 in this setup is region 2; its shared edge has length 1.
-        mint = sum(e.measure for e in bd1 if e.neighbor == 2)
-        @test isapprox(mint, 1.0; atol=1e-8, rtol=0.0)
+    bd1 = TO.RegionGeometry.region_boundary_measure_breakdown(pi2, 1; cache=cache2)
+    bd2 = TO.RegionGeometry.region_boundary_measure_breakdown(pi2, 2; cache=cache2)
+    @test all(cache2.points_f[r] !== nothing for r in cache2.active_regions)
+    p1 = TO.RegionGeometry.region_perimeter(pi2, 1; cache=cache2)
+    @test isapprox(sum(e.measure for e in bd1), p1; atol=1e-8, rtol=0.0)
+    @test isapprox(sum(e.measure for e in bd2), TO.RegionGeometry.region_perimeter(pi2, 2; cache=cache2); atol=1e-8, rtol=0.0)
+    @test any(e.kind == :internal for e in bd1)
+    # The only internal neighbor of region 1 in this setup is region 2; its shared edge has length 1.
+    mint = sum(e.measure for e in bd1 if e.neighbor == 2)
+    @test isapprox(mint, 1.0; atol=1e-8, rtol=0.0)
 
-        # Final-product cache reuse (same key => same cached object instance).
-        bd1_b = TO.RegionGeometry.region_boundary_measure_breakdown(pi2, 1; cache=cache2, strict=true, mode=:fast)
-        @test bd1_b === bd1
-        n_bd_before_adj = length(cache2.boundary_breakdown)
-        adj_cache_a = TO.RegionGeometry.region_adjacency(pi2; cache=cache2, strict=true, mode=:fast)
-        n_bd_after_adj = length(cache2.boundary_breakdown)
-        adj_cache_b = TO.RegionGeometry.region_adjacency(pi2; cache=cache2, strict=true, mode=:fast)
-        @test adj_cache_b === adj_cache_a
-        @test n_bd_after_adj >= n_bd_before_adj
-        @test length(cache2.boundary_breakdown) == n_bd_after_adj
-        n_bm_before = length(cache2.boundary_measure)
-        @test TO.RegionGeometry.region_perimeter(pi2, 1; cache=cache2) == p1
-        @test length(cache2.boundary_measure) == n_bm_before
+    # Final-product cache reuse (same key => same cached object instance).
+    bd1_b = TO.RegionGeometry.region_boundary_measure_breakdown(pi2, 1; cache=cache2, strict=true, mode=:fast)
+    @test bd1_b === bd1
+    n_bd_before_adj = length(cache2.boundary_breakdown)
+    adj_cache_a = TO.RegionGeometry.region_adjacency(pi2; cache=cache2, strict=true, mode=:fast)
+    n_bd_after_adj = length(cache2.boundary_breakdown)
+    adj_cache_b = TO.RegionGeometry.region_adjacency(pi2; cache=cache2, strict=true, mode=:fast)
+    @test adj_cache_b === adj_cache_a
+    @test n_bd_after_adj >= n_bd_before_adj
+    @test length(cache2.boundary_breakdown) == n_bd_after_adj
+    n_bm_before = length(cache2.boundary_measure)
+    @test TO.RegionGeometry.region_perimeter(pi2, 1; cache=cache2) == p1
+    @test length(cache2.boundary_measure) == n_bm_before
 
-        # Auto-cache parity (no explicit cache argument).
-        bd1_auto = TO.RegionGeometry.region_boundary_measure_breakdown(pi2, 1; box=box2, strict=true, mode=:fast)
-        @test bd1_auto == bd1
-        adj_auto = TO.RegionGeometry.region_adjacency(pi2; box=box2, strict=true, mode=:fast)
-        @test adj_auto == adj_cache_a
-        # Auto exact geometry cache on bare PLEncodingMap should be retained by
-        # (pi, box, closure) and reused across :fast/:verified modes.
-        CM._clear_encoding_cache!(pi2.cache)
-        key_auto = PLP._canonical_box_key(pi2, box2, true)
-        @test !haskey(pi2.cache.geometry, key_auto)
-        _ = TO.RegionGeometry.region_adjacency(pi2; box=box2, strict=true, mode=:fast)
-        @test haskey(pi2.cache.geometry, key_auto)
-        auto_cache = pi2.cache.geometry[key_auto].value
-        @test auto_cache isa PLP.PolyInBoxCache
-        @test auto_cache.level == :full
-        @test auto_cache.activity_scanned
-        @test auto_cache.bucket_enabled
-        @test count(auto_cache.exact_weight_ready) == length(auto_cache.active_regions)
-        _ = TO.RegionGeometry.region_adjacency(pi2; box=box2, strict=true, mode=:verified)
-        @test length(pi2.cache.geometry) == 1
-        @test pi2.cache.geometry[key_auto].value === auto_cache
-        @test TO.RegionGeometry.region_weights(pi2; box=box2, method=:exact, mode=:fast) == w2
-        @test count(auto_cache.exact_weight_ready) == length(auto_cache.active_regions)
+    # Auto-cache parity (no explicit cache argument).
+    bd1_auto = TO.RegionGeometry.region_boundary_measure_breakdown(pi2, 1; box=box2, strict=true, mode=:fast)
+    @test bd1_auto == bd1
+    adj_auto = TO.RegionGeometry.region_adjacency(pi2; box=box2, strict=true, mode=:fast)
+    @test adj_auto == adj_cache_a
+    # Auto exact geometry cache on bare PLEncodingMap should be retained by
+    # (pi, box, closure) and reused across :fast/:verified modes.
+    CM._clear_encoding_cache!(pi2.cache)
+    key_auto = PLP._canonical_box_key(pi2, box2, true)
+    @test !haskey(pi2.cache.geometry, key_auto)
+    _ = TO.RegionGeometry.region_adjacency(pi2; box=box2, strict=true, mode=:fast)
+    @test haskey(pi2.cache.geometry, key_auto)
+    auto_cache = pi2.cache.geometry[key_auto].value
+    @test auto_cache isa PLP.PolyInBoxCache
+    @test auto_cache.level == :full
+    @test auto_cache.activity_scanned
+    @test auto_cache.bucket_enabled
+    @test count(auto_cache.exact_weight_ready) == length(auto_cache.active_regions)
+    _ = TO.RegionGeometry.region_adjacency(pi2; box=box2, strict=true, mode=:verified)
+    @test length(pi2.cache.geometry) == 1
+    @test pi2.cache.geometry[key_auto].value === auto_cache
+    @test TO.RegionGeometry.region_weights(pi2; box=box2, method=:exact, mode=:fast) == w2
+    @test count(auto_cache.exact_weight_ready) == length(auto_cache.active_regions)
 
-        # Compile-cache alias should behave like poly_in_box_cache and also accelerate
-        # Monte Carlo membership probes by reusing precompiled float inequalities.
-        cache_comp = PLP.compile_geometry_cache(pi2; box=box2, closure=true)
-        @test cache_comp isa PLP.PolyInBoxCache
-        @test cache_comp.level == :full
-        @test length(cache_comp.Af) == 2
-        @test length(cache_comp.bf_strict) == 2
-        @test length(cache_comp.bf_relaxed) == 2
-        @test count(cache_comp.exact_weight_ready) == length(cache_comp.active_regions)
-        @test count(cache_comp.exact_centroid_ready) == length(cache_comp.active_regions)
-        @test all(cache_comp.facets[r] !== nothing for r in cache_comp.active_regions)
-        @test all(cache_comp.points_f[r] !== nothing for r in cache_comp.active_regions)
+    # Compile-cache alias should behave like poly_in_box_cache and also accelerate
+    # Monte Carlo membership probes by reusing precompiled float inequalities.
+    cache_comp = PLP.compile_geometry_cache(pi2; box=box2, closure=true)
+    @test cache_comp isa PLP.PolyInBoxCache
+    @test cache_comp.level == :full
+    @test length(cache_comp.Af) == 2
+    @test length(cache_comp.bf_strict) == 2
+    @test length(cache_comp.bf_relaxed) == 2
+    @test count(cache_comp.exact_weight_ready) == length(cache_comp.active_regions)
+    @test count(cache_comp.exact_centroid_ready) == length(cache_comp.active_regions)
+    @test all(cache_comp.facets[r] !== nothing for r in cache_comp.active_regions)
+    @test all(cache_comp.points_f[r] !== nothing for r in cache_comp.active_regions)
 
-        cache_geom = PLP.compile_geometry_cache(pi2; box=box2, closure=true,
-                                                precompute_exact=false, level=:geometry)
-        @test cache_geom.level == :geometry
-        @test cache_geom.activity_scanned
-        @test cache_geom.bucket_enabled
-        @test count(cache_geom.exact_weight_ready) == 0
-        @test all(cache_geom.facets[r] === nothing for r in cache_geom.active_regions)
+    cache_geom = PLP.compile_geometry_cache(pi2; box=box2, closure=true,
+                                            precompute_exact=false, level=:geometry)
+    @test cache_geom.level == :geometry
+    @test cache_geom.activity_scanned
+    @test cache_geom.bucket_enabled
+    @test count(cache_geom.exact_weight_ready) == 0
+    @test all(cache_geom.facets[r] === nothing for r in cache_geom.active_regions)
 
-        # Near-boundary classify path should agree in fast/verified modes.
-        for delta in (-1e-12, -1e-14, 0.0, 1e-14, 1e-12)
-            q = [1.0 + delta, 0.5]
-            @test EC.locate(cache_comp, q; mode=:fast) == EC.locate(cache_comp, q; mode=:verified)
-        end
-
-        rng_mc_a = MersenneTwister(77)
-        rng_mc_b = MersenneTwister(77)
-        w_mc_uncached = TO.RegionGeometry.region_weights(pi2; box=box2, method=:mc, nsamples=20_000, rng=rng_mc_a, strict=false)
-        w_mc_cached = TO.RegionGeometry.region_weights(pi2; cache=cache_comp, method=:mc, nsamples=20_000, rng=rng_mc_b, strict=false)
-        @test w_mc_cached == w_mc_uncached
-
-        # Active-region pruning oracle for exact paths: only one region intersects the box.
-        A1d = reshape(QQ[1, -1], 2, 1)
-        hp_a = PLP.make_hpoly(A1d, QQ[1, 0])      # [0,1]
-        hp_b = PLP.make_hpoly(A1d, QQ[11, -10])   # [10,11]
-        hp_c = PLP.make_hpoly(A1d, QQ[21, -20])   # [20,21]
-        pi_sparse = PLP.PLEncodingMap(
-            1,
-            [BitVector([false, false]), BitVector([true, false]), BitVector([false, true])],
-            [falses(2), falses(2), falses(2)],
-            [hp_a, hp_b, hp_c],
-            [(0.5,), (10.5,), (20.5,)],
-        )
-        box_sparse = (Float64[0.0], Float64[1.0])
-        cache_sparse = PLP.compile_geometry_cache(pi_sparse; box=box_sparse, closure=true)
-        @test cache_sparse.active_regions == [1]
-        @test count(cache_sparse.exact_weight_ready) == 1
-        w_sparse = TO.RegionGeometry.region_weights(pi_sparse; cache=cache_sparse, method=:exact)
-        @test isapprox(w_sparse[1], 1.0; atol=1e-12)
-        @test isapprox(w_sparse[2], 0.0; atol=1e-12)
-        @test isapprox(w_sparse[3], 0.0; atol=1e-12)
-        @test count(cache_sparse.exact_weight_ready) == 1
-        @test TO.RegionGeometry.region_weights(pi_sparse; cache=cache_sparse, method=:exact) == w_sparse
-        @test count(cache_sparse.exact_weight_ready) == 1
-        @test TO.RegionGeometry.region_bbox(pi_sparse, 2; cache=cache_sparse) === nothing
-        @test TO.RegionGeometry.region_bbox(pi_sparse, 3; cache=cache_sparse) === nothing
-        @test TO.RegionGeometry.region_bbox(pi_sparse, 1; cache=cache_sparse) == (Float64[0.0], Float64[1.0])
+    # Near-boundary classify path should agree in fast/verified modes.
+    for delta in (-1e-12, -1e-14, 0.0, 1e-14, 1e-12)
+        q = [1.0 + delta, 0.5]
+        @test EC.locate(cache_comp, q; mode=:fast) == EC.locate(cache_comp, q; mode=:verified)
     end
+
+    rng_mc_a = MersenneTwister(77)
+    rng_mc_b = MersenneTwister(77)
+    w_mc_uncached = TO.RegionGeometry.region_weights(pi2; box=box2, method=:mc, nsamples=20_000, rng=rng_mc_a, strict=false)
+    w_mc_cached = TO.RegionGeometry.region_weights(pi2; cache=cache_comp, method=:mc, nsamples=20_000, rng=rng_mc_b, strict=false)
+    @test w_mc_cached == w_mc_uncached
+
+    # Active-region pruning oracle for exact paths: only one region intersects the box.
+    A1d = reshape(QQ[1, -1], 2, 1)
+    hp_a = PLP.make_hpoly(A1d, QQ[1, 0])      # [0,1]
+    hp_b = PLP.make_hpoly(A1d, QQ[11, -10])   # [10,11]
+    hp_c = PLP.make_hpoly(A1d, QQ[21, -20])   # [20,21]
+    pi_sparse = PLP.PLEncodingMap(
+        1,
+        [BitVector([false, false]), BitVector([true, false]), BitVector([false, true])],
+        [falses(2), falses(2), falses(2)],
+        [hp_a, hp_b, hp_c],
+        [(0.5,), (10.5,), (20.5,)],
+    )
+    box_sparse = (Float64[0.0], Float64[1.0])
+    cache_sparse = PLP.compile_geometry_cache(pi_sparse; box=box_sparse, closure=true)
+    @test cache_sparse.active_regions == [1]
+    @test count(cache_sparse.exact_weight_ready) == 1
+    w_sparse = TO.RegionGeometry.region_weights(pi_sparse; cache=cache_sparse, method=:exact)
+    @test isapprox(w_sparse[1], 1.0; atol=1e-12)
+    @test isapprox(w_sparse[2], 0.0; atol=1e-12)
+    @test isapprox(w_sparse[3], 0.0; atol=1e-12)
+    @test count(cache_sparse.exact_weight_ready) == 1
+    @test TO.RegionGeometry.region_weights(pi_sparse; cache=cache_sparse, method=:exact) == w_sparse
+    @test count(cache_sparse.exact_weight_ready) == 1
+    @test TO.RegionGeometry.region_bbox(pi_sparse, 2; cache=cache_sparse) === nothing
+    @test TO.RegionGeometry.region_bbox(pi_sparse, 3; cache=cache_sparse) === nothing
+    @test TO.RegionGeometry.region_bbox(pi_sparse, 1; cache=cache_sparse) == (Float64[0.0], Float64[1.0])
 end
 end
 
@@ -628,18 +636,16 @@ if field isa CM.QQField
         TO.RegionGeometry._REGION_FAST_WRAPPERS[] = fast_prev
     end
 
-    if PLP.HAVE_POLY
-        A = K[ 1 0;
-               0 1;
-              -1 0;
-               0 -1 ]
-        b = K[1, 1, 0, 0]
-        hp = PLP.make_hpoly(A, b)
-        pi_poly = PLP.PLEncodingMap(2, [BitVector()], [BitVector()], [hp], [(0.5, 0.5)])
-        cache = PLP.poly_in_box_cache(pi_poly; box=box, closure=true)
-        w_poly = TO.RegionGeometry.region_weights(pi_poly; box=box, cache=cache)
-        @test TO.RegionGeometry.region_volume(pi_poly, 1; box=box, cache=cache) == w_poly[1]
-    end
+    A = K[ 1 0;
+           0 1;
+          -1 0;
+           0 -1 ]
+    b = K[1, 1, 0, 0]
+    hp = PLP.make_hpoly(A, b)
+    pi_poly = PLP.PLEncodingMap(2, [BitVector()], [BitVector()], [hp], [(0.5, 0.5)])
+    cache = PLP.poly_in_box_cache(pi_poly; box=box, closure=true)
+    w_poly = TO.RegionGeometry.region_weights(pi_poly; box=box, cache=cache)
+    @test TO.RegionGeometry.region_volume(pi_poly, 1; box=box, cache=cache) == w_poly[1]
 end
 end
 
@@ -752,16 +758,15 @@ if field isa CM.QQField
 
         TO.RegionGeometry._clear_region_geometry_runtime_caches!()
         empty!(pi_cached.meta.geometry)
-        tid = min(Base.Threads.threadid(), length(TO.RegionGeometry._REGION_WORKSPACES))
         _ = TO.RegionGeometry.region_mean_width(pi_cached, r;
             box=box, method=:mc, ndirs=size(dirs, 2), directions=dirs,
             nsamples=128, max_proposals=512, rng=MersenneTwister(41), strict=true)
-        nwork1 = length(TO.RegionGeometry._REGION_WORKSPACES[tid])
+        nwork1 = sum(length, CM._task_local_values(TO.RegionGeometry._REGION_WORKSPACES); init=0)
         ngeom1 = length(pi_cached.meta.geometry)
         _ = TO.RegionGeometry.region_mean_width(pi_cached, r;
             box=box, method=:mc, ndirs=size(dirs, 2), directions=dirs,
             nsamples=128, max_proposals=512, rng=MersenneTwister(41), strict=true)
-        nwork2 = length(TO.RegionGeometry._REGION_WORKSPACES[tid])
+        nwork2 = sum(length, CM._task_local_values(TO.RegionGeometry._REGION_WORKSPACES); init=0)
         ngeom2 = length(pi_cached.meta.geometry)
         @test nwork1 == nwork2
         @test nwork1 >= 1
@@ -817,42 +822,38 @@ end
 
 if field isa CM.QQField
 @testset "RegionGeometry fast wrapper parity" begin
-    if !PLP.HAVE_POLY
-        @test true
-    else
-        A = K[ 1 0;
-               0 1;
-              -1 0;
-               0 -1 ]
-        b = K[1, 1, 0, 0]
-        hp = PLP.make_hpoly(A, b)
-        pi = PLP.PLEncodingMap(2, [BitVector()], [BitVector()], [hp], [(0.5, 0.5)])
-        box = (Float64[0.0, 0.0], Float64[1.0, 1.0])
-        cache = PLP.poly_in_box_cache(pi; box=box, closure=true)
+    A = K[ 1 0;
+           0 1;
+          -1 0;
+           0 -1 ]
+    b = K[1, 1, 0, 0]
+    hp = PLP.make_hpoly(A, b)
+    pi = PLP.PLEncodingMap(2, [BitVector()], [BitVector()], [hp], [(0.5, 0.5)])
+    box = (Float64[0.0, 0.0], Float64[1.0, 1.0])
+    cache = PLP.poly_in_box_cache(pi; box=box, closure=true)
 
-        fast_prev = TO.RegionGeometry._REGION_FAST_WRAPPERS[]
-        try
-            TO.RegionGeometry._REGION_FAST_WRAPPERS[] = false
-            @test !cache.exact_centroid_ready[1]
-            perim_slow = TO.RegionGeometry.region_perimeter(pi, 1; cache=cache)
-            ratio_slow = TO.RegionGeometry.region_boundary_to_volume_ratio(pi, 1; box=box, cache=cache)
-            mf_slow = TO.RegionGeometry.region_minkowski_functionals(pi, 1;
-                box=box, cache=cache, mean_width_method=:cauchy)
-            @test !cache.exact_centroid_ready[1]
+    fast_prev = TO.RegionGeometry._REGION_FAST_WRAPPERS[]
+    try
+        TO.RegionGeometry._REGION_FAST_WRAPPERS[] = false
+        @test !cache.exact_centroid_ready[1]
+        perim_slow = TO.RegionGeometry.region_perimeter(pi, 1; cache=cache)
+        ratio_slow = TO.RegionGeometry.region_boundary_to_volume_ratio(pi, 1; box=box, cache=cache)
+        mf_slow = TO.RegionGeometry.region_minkowski_functionals(pi, 1;
+            box=box, cache=cache, mean_width_method=:cauchy)
+        @test !cache.exact_centroid_ready[1]
 
-            TO.RegionGeometry._REGION_FAST_WRAPPERS[] = true
-            perim_fast = TO.RegionGeometry.region_perimeter(pi, 1; cache=cache)
-            ratio_fast = TO.RegionGeometry.region_boundary_to_volume_ratio(pi, 1; box=box, cache=cache)
-            mf_fast = TO.RegionGeometry.region_minkowski_functionals(pi, 1;
-                box=box, cache=cache, mean_width_method=:cauchy)
+        TO.RegionGeometry._REGION_FAST_WRAPPERS[] = true
+        perim_fast = TO.RegionGeometry.region_perimeter(pi, 1; cache=cache)
+        ratio_fast = TO.RegionGeometry.region_boundary_to_volume_ratio(pi, 1; box=box, cache=cache)
+        mf_fast = TO.RegionGeometry.region_minkowski_functionals(pi, 1;
+            box=box, cache=cache, mean_width_method=:cauchy)
 
-            @test perim_fast == perim_slow
-            @test ratio_fast == ratio_slow
-            @test mf_fast == mf_slow
-            @test !cache.exact_centroid_ready[1]
-        finally
-            TO.RegionGeometry._REGION_FAST_WRAPPERS[] = fast_prev
-        end
+        @test perim_fast == perim_slow
+        @test ratio_fast == ratio_slow
+        @test mf_fast == mf_slow
+        @test !cache.exact_centroid_ready[1]
+    finally
+        TO.RegionGeometry._REGION_FAST_WRAPPERS[] = fast_prev
     end
 end
 end
@@ -1401,3 +1402,65 @@ if field isa CM.QQField
 end
 end
 end # with_fields
+
+@testset "RegionGeometry A11 task isolation and recursive workspace leases" begin
+    RG = TO.RegionGeometry
+    pi = EC.GridEncodingMap(FF.ProductOfChainsPoset((1, 1)), ([0.0], [0.0]))
+    box = ([0.0, 0.0], [1.0, 2.0])
+    for kernel in (RG._region_principal_directions_scalar, RG._region_principal_directions_batched)
+        reference = kernel(pi, 1; box=box, nsamples=384, max_proposals=384,
+                           rng=MersenneTwister(17), return_info=true, nbatches=4)
+        calls = Ref(0)
+        callback = function ()
+            calls[] += 1
+            if calls[] == 2
+                kernel(pi, 1; box=box, nsamples=384, max_proposals=384,
+                       rng=MersenneTwister(29), return_info=true, nbatches=4)
+            end
+            yield()
+        end
+        actual = kernel(_ReentrantGeometryProbe(pi, callback), 1;
+                        box=box, nsamples=384, max_proposals=384,
+                        rng=MersenneTwister(17), return_info=true, nbatches=4)
+        @test calls[] >= 2
+        @test actual.mean == reference.mean
+        @test actual.cov == reference.cov
+        @test actual.batch_evals == reference.batch_evals
+        jobs = [Threads.@spawn kernel(_ReentrantGeometryProbe(pi, yield), 1;
+                    box=box, nsamples=384, max_proposals=384,
+                    rng=MersenneTwister(17), return_info=true, nbatches=4) for _ in 1:4]
+        @test all(fetch(job).cov == reference.cov for job in jobs)
+        if Threads.nthreads(:interactive) > 0
+            job = Threads.@spawn :interactive kernel(_ReentrantGeometryProbe(pi, yield), 1;
+                box=box, nsamples=384, max_proposals=384,
+                rng=MersenneTwister(17), return_info=true, nbatches=4)
+            @test fetch(job).cov == reference.cov
+        end
+    end
+    dirs = [1.0 0.0; 0.0 1.0]
+    for kernel in (RG._region_mean_width_scalar, RG._region_mean_width_batched)
+        reference = kernel(pi, 1; box=box, nsamples=384, max_proposals=384,
+                           directions=dirs, rng=MersenneTwister(17))
+        calls = Ref(0)
+        callback = function ()
+            calls[] += 1
+            calls[] == 2 && kernel(pi, 1; box=box, nsamples=384, max_proposals=384,
+                                  directions=dirs, rng=MersenneTwister(29))
+            yield()
+        end
+        actual = kernel(_ReentrantGeometryProbe(pi, callback), 1;
+                        box=box, nsamples=384, max_proposals=384,
+                        directions=dirs, rng=MersenneTwister(17))
+        @test calls[] >= 2
+        @test actual == reference
+        @test 0.0 < actual <= 1.5 # Average of widths 1 and 2.
+        bad = _ReentrantGeometryProbe(pi, () -> error("locate callback failure"))
+        @test_throws ErrorException kernel(bad, 1; box=box, nsamples=384,
+                                           directions=dirs, rng=MersenneTwister(17))
+    end
+    for store in CM._task_local_values(RG._REGION_WORKSPACES), pool in values(store)
+        @test all(ws -> !ws.in_use, pool)
+    end
+    RG._clear_region_geometry_runtime_caches!()
+    @test isempty(CM._task_local_values(RG._REGION_WORKSPACES))
+end

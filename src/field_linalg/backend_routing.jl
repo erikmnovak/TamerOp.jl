@@ -17,8 +17,33 @@
 #   - later engine files for the kernels selected here.
 # -----------------------------------------------------------------------------
 
+# Sparse-backed views do not dispatch to the CSC floating-point kernels.
+# Normalize those wrappers before choosing a RealField rank/nullspace backend;
+# keep direct sparse, sparse transpose/adjoint, and dense storage unchanged.
+@inline function _real_sparse_input(A)
+    return issparse(A) && !_is_sparse_like(A) ? sparse(A) : A
+end
+
+# Explicit numerical backend requests also select storage: a dense QR request
+# on a sparse input must not silently run SPQR (or conversely).
+@inline function _real_backend_matrix(field::RealField, A, backend::Symbol)
+    K = coeff_type(field)
+    if backend == :float_sparse_qr
+        return A isa SparseMatrixCSC{K} ? A : sparse(K.(A))
+    end
+    return A isa StridedMatrix{K} ? A : Matrix{K}(A)
+end
+
 function _choose_linalg_backend(field::AbstractCoeffField, A; op::Symbol=:rank, backend::Symbol=:auto)
-    backend != :auto && return backend
+    if backend != :auto
+        if field isa RealField
+            allowed = op == :rref ? (:float_dense_rref, :float_sparse_rref) :
+                op in (:rank, :nullspace) ? (:float_dense_qr, :float_sparse_qr, :float_dense_svd) :
+                (:float_dense_qr, :float_sparse_qr)
+            backend in allowed || throw(ArgumentError("$(op): unsupported RealField backend $(backend); expected one of $(allowed)"))
+        end
+        return backend
+    end
     if field isa QQField
         m, n = size(A)
         shape = _qq_shape_bucket(m, n)
@@ -109,14 +134,10 @@ function _choose_linalg_backend(field::AbstractCoeffField, A; op::Symbol=:rank, 
         return :julia_exact
     end
     if field isa RealField
+        if op == :rref
+            return issparse(A) ? :float_sparse_rref : :float_dense_rref
+        end
         if _is_sparse_like(A)
-            m, n = size(A)
-            if op == :nullspace &&
-               _have_svds_backend() &&
-               min(m, n) >= FLOAT_SPARSE_SVDS_MIN_DIM[] &&
-               _sparse_nnz(A) >= FLOAT_SPARSE_SVDS_MIN_NNZ[]
-                return :float_sparse_svds
-            end
             return :float_sparse_qr
         end
         if op == :nullspace && size(A, 1) * size(A, 2) >= FLOAT_NULLSPACE_SVD_THRESHOLD[]
@@ -224,12 +245,10 @@ function _explain_backend_choice(field::AbstractCoeffField, A; op::Symbol=:rank,
                 "generic prime-field dense input stayed on the Julia exact path"
         end
     elseif field isa RealField
-        if sparse_like
-            push!(thresholds, (name=:float_sparse_svds_min_dim, value=FLOAT_SPARSE_SVDS_MIN_DIM[]))
-            push!(thresholds, (name=:float_sparse_svds_min_nnz, value=FLOAT_SPARSE_SVDS_MIN_NNZ[]))
-            reason = chosen == :float_sparse_svds ?
-                "real sparse nullspace crossed the SVDS gate" :
-                "real sparse input stayed on sparse QR / sparse direct path"
+        if op == :rref
+            reason = "real RREF uses ordered columns and partial row pivoting"
+        elseif sparse_like
+            reason = "real sparse input uses tolerance-aware sparse QR"
         else
             push!(thresholds, (name=:float_nullspace_svd_threshold, value=FLOAT_NULLSPACE_SVD_THRESHOLD[]))
             reason = chosen == :float_dense_svd ?

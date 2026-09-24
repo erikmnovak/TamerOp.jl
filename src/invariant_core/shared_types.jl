@@ -76,7 +76,8 @@ function SliceSpec(chain::AbstractVector{<:Integer}; values=nothing, weight::Rea
     elseif values isa AbstractVector{<:Integer}
         return SliceSpec{Float64,Vector{Int}}(c, Int[values...], w)
     elseif values isa AbstractVector{<:Real}
-        return SliceSpec{Float64,Vector{Float64}}(c, Float64[float(v) for v in values], w)
+        v = collect(values)
+        return SliceSpec{Float64,typeof(v)}(c, v, w)
     end
     throw(ArgumentError("SliceSpec: values must be nothing, integer vector, or real vector"))
 end

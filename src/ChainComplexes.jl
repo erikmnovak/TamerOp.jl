@@ -7,11 +7,11 @@ import Base.Threads
 using ..CoreModules: AbstractCoeffField, RealField, QQField, QQ, coeff_type, field_from_eltype
 using ..Options: FiltrationSpec, ConstructionBudget, ConstructionOptions, DataFileOptions,
                  PipelineOptions, EncodingOptions, ResolutionOptions, InvariantOptions,
-                 DerivedFunctorOptions, FiniteFringeOptions, ModuleOptions, _option_describe
+                 DerivedFunctorOptions, ModuleOptions, _option_describe
 using ..DataTypes: PointCloud, GraphData, EmbeddedPlanarGraph2D, GradedComplex,
                    MultiCriticalGradedComplex, SimplexTreeMulti, _datatype_describe
 using ..FiniteFringe: FinitePoset, ProductOfChainsPoset, GridPoset, ProductPoset, RegionsPoset,
-                      Upset, Downset, FringeModule, _fringe_describe
+                      Upset, Downset, FringeModule, _fringe_describe, _fringe_dimensions
 using ..IndicatorTypes: UpsetPresentation, DownsetCopresentation, _indicator_describe
 using ..FlangeZn: Face, IndFlat, IndInj, Flange, _flange_describe
 using ..ZnEncoding: ZnEncodingMap, SignaturePoset, ZnEncodingCache, _znencoding_describe
@@ -79,7 +79,6 @@ describe(opts::EncodingOptions) = _option_describe(opts)
 describe(opts::ResolutionOptions) = _option_describe(opts)
 describe(opts::InvariantOptions) = _option_describe(opts)
 describe(opts::DerivedFunctorOptions) = _option_describe(opts)
-describe(opts::FiniteFringeOptions) = _option_describe(opts)
 describe(opts::ModuleOptions) = _option_describe(opts)
 describe(data::PointCloud) = _datatype_describe(data)
 describe(data::GraphData) = _datatype_describe(data)
@@ -462,13 +461,12 @@ end
 # Extend columns of C (k x r) to an invertible (k x k) matrix by adding standard basis vectors.
 # This uses one elimination pass on transpose(Cbasis) to identify row pivots and then
 # selects complement standard basis vectors from nonpivot rows.
-function extend_to_basis(C::Matrix{K}) where {K}
+function extend_to_basis(C::Matrix{K}; field::AbstractCoeffField=field_from_eltype(K)) where {K}
+    _validate_complex_field(K, field)
     k = size(C, 1)
     if k == 0
         return zeros(K, 0, 0)
     end
-    field = field_from_eltype(K)
-
     Cbasis = if size(C, 2) == 0
         zeros(K, k, 0)
     else
@@ -489,7 +487,9 @@ function extend_to_basis(C::Matrix{K}) where {K}
 
     # Pivot columns in transpose(Cbasis) correspond to a maximal set of rows of Cbasis
     # whose restriction gives an invertible r x r minor.
-    _, pivs = FieldLinAlg.rref(field, Matrix(transpose(Cbasis)); pivots=true)
+    rows = Matrix(transpose(Cbasis))
+    _, pivs = field isa RealField ? FieldLinAlg._colspace_with_pivots(field, rows) :
+                                  FieldLinAlg.rref(field, rows; pivots=true)
     pivot_mask = falses(k)
     @inbounds for p in pivs
         if 1 <= p <= k
@@ -516,7 +516,8 @@ function extend_to_basis(C::Matrix{K}) where {K}
     return B
 end
 
-function extend_to_basis_from_basis(Cbasis::Matrix{K}) where {K}
+function extend_to_basis_from_basis(Cbasis::Matrix{K}; field::AbstractCoeffField=field_from_eltype(K)) where {K}
+    _validate_complex_field(K, field)
     k = size(Cbasis, 1)
     if k == 0
         return zeros(K, 0, 0)
@@ -533,8 +534,9 @@ function extend_to_basis_from_basis(Cbasis::Matrix{K}) where {K}
         return I
     end
 
-    field = field_from_eltype(K)
-    _, pivs = FieldLinAlg.rref(field, Matrix(transpose(Cbasis)); pivots=true)
+    rows = Matrix(transpose(Cbasis))
+    _, pivs = field isa RealField ? FieldLinAlg._colspace_with_pivots(field, rows) :
+                                  FieldLinAlg.rref(field, rows; pivots=true)
     pivot_mask = falses(k)
     @inbounds for p in pivs
         1 <= p <= k && (pivot_mask[p] = true)
@@ -555,8 +557,8 @@ function extend_to_basis_from_basis(Cbasis::Matrix{K}) where {K}
     return B
 end
 
-@inline function _cohomology_completion_from_basis(Cbasis::Matrix{K}) where {K}
-    Bfull = extend_to_basis_from_basis(Cbasis)
+@inline function _cohomology_completion_from_basis(Cbasis::Matrix{K}; field::AbstractCoeffField=field_from_eltype(K)) where {K}
+    Bfull = extend_to_basis_from_basis(Cbasis; field=field)
     r = size(Cbasis, 2)
     Q = @view Bfull[:, (r + 1):end]
     return Bfull, Matrix{K}(Q)
@@ -573,6 +575,17 @@ struct CochainComplex{K,A}
     d::Vector{SparseMatrixCSC{K, Int}}        # d[idx] : C^t -> C^{t+1}
     labels::Vector{Vector{Int}}               # typed compute labels, per degree
     annotations::Union{Nothing,Vector{Vector{A}}}  # optional heterogeneous boundary metadata
+    field::AbstractCoeffField
+end
+
+function _validate_complex_field(::Type{K}, field::AbstractCoeffField) where {K}
+    coeff_type(field) === K || throw(ArgumentError(
+        "coefficient field has scalar type $(coeff_type(field)); expected $K"))
+    if field isa RealField
+        isfinite(field.atol) && isfinite(field.rtol) && field.atol >= 0 && field.rtol >= 0 ||
+            throw(ArgumentError("real-field tolerances must be finite and nonnegative"))
+    end
+    return field
 end
 
 # Max cohomological degree stored in a cochain complex.
@@ -586,7 +599,7 @@ function degree_index(C::CochainComplex, t::Int)
 end
 
 """
-    CochainComplex{K}(tmin, tmax, dims, d; labels=nothing)
+    CochainComplex{K}(tmin, tmax, dims, d; labels=nothing, field=field_from_eltype(K))
 
 Construct a bounded cochain complex C with degrees tmin..tmax.
 
@@ -599,12 +612,16 @@ paths keep typed integer labels; heterogeneous user metadata is preserved in
 `annotations` and stays out of hot loops.
 
 If labels is omitted, each degree stores an empty label list.
+The coefficient field, including numerical tolerances, is retained by all
+cohomology and change-of-complex constructions. Its scalar type must be `K`.
 """
 function CochainComplex{K}(tmin::Int,
                            tmax::Int,
                            dims::Vector{Int},
                            d::Vector{SparseMatrixCSC{K,Int}};
-                           labels=nothing) where {K}
+                           labels=nothing,
+                           field::AbstractCoeffField=field_from_eltype(K)) where {K}
+    _validate_complex_field(K, field)
     if tmax < tmin
         error("CochainComplex: require tmax >= tmin.")
     end
@@ -667,16 +684,15 @@ function CochainComplex{K}(tmin::Int,
         end
     end
 
-    return CochainComplex{K,annT}(tmin, tmax, dims, d, labs, anns)
+    return CochainComplex{K,annT}(tmin, tmax, dims, d, labs, anns, field)
 end
 
-@inline function _check_zero_matrix(M::SparseMatrixCSC{K,Int}) where {K}
-    if K <: AbstractFloat
-        tol = sqrt(eps(K))
-        @inbounds for x in nonzeros(M)
-            abs(x) <= tol || return false
-        end
-        return true
+@inline function _check_zero_matrix(M::SparseMatrixCSC{K,Int};
+                                    field::AbstractCoeffField=field_from_eltype(K),
+                                    scale::Real=1) where {K}
+    if field isa RealField
+        residual = norm(M)
+        return isfinite(residual) && residual <= field.atol + field.rtol * scale
     end
     return nnz(M) == 0
 end
@@ -701,6 +717,11 @@ Set `throw=true` to raise an error when validation fails.
 """
 function check_complex(C::CochainComplex{K}; throw::Bool=false) where {K}
     issues = String[]
+    try
+        _validate_complex_field(K, C.field)
+    catch error
+        push!(issues, sprint(showerror, error))
+    end
     expected_len = C.tmax - C.tmin + 1
     length(C.dims) == expected_len || push!(issues,
         "expected dims to have length $(expected_len) for degrees $(C.tmin):$(C.tmax); got $(length(C.dims))")
@@ -733,7 +754,8 @@ function check_complex(C::CochainComplex{K}; throw::Bool=false) where {K}
 
     for i in 1:max(ndiff - 1, 0)
         try
-            _check_zero_matrix(C.d[i + 1] * C.d[i]) || push!(issues,
+            _check_zero_matrix(C.d[i + 1] * C.d[i]; field=C.field,
+                               scale=C.field isa RealField ? norm(C.d[i + 1]) * norm(C.d[i]) : 1) || push!(issues,
                  "expected d^$(C.tmin + i) circ d^$(C.tmin + i - 1) = 0")
         catch
             push!(issues,
@@ -833,8 +855,11 @@ This object stores:
 
 For ordinary use, start with `dimensions`, `basis`, `representatives`, and
 `coordinates` rather than inspecting the internal matrices directly.
+Lazy representatives and coordinate plans support concurrent queries. Returned
+basis matrices are shared cached data and must be treated as read-only.
 """
 mutable struct CohomologyData{K}
+    _cache_lock::ReentrantLock
     t::Int
     dimC::Int
     dimZ::Int
@@ -850,6 +875,7 @@ mutable struct CohomologyData{K}
     _coord_proj::Union{Nothing,Matrix{K}}
     Kfactor::Base.RefValue{Union{Nothing,FieldLinAlg.FullColumnFactor{QQ}}}
     Bfull_factor::Base.RefValue{Union{Nothing,FieldLinAlg.FullColumnFactor{QQ}}}
+    field::AbstractCoeffField
 end
 
 struct _CohomologyCoordPlan{K}
@@ -857,7 +883,9 @@ struct _CohomologyCoordPlan{K}
     proj::Matrix{K}
 end
 
-const _COHOMOLOGY_COORD_PLAN_LOCK = ReentrantLock()
+# Factor slots are also shared by shifted homology/cohomology views. Only their
+# lookup and publication use this lock; factorization and solves run outside it.
+const _FULLCOLUMN_FACTOR_LOCK = ReentrantLock()
 
 struct _DiffSummary{K}
     rank::Int
@@ -881,43 +909,49 @@ const CHAIN_DIFF_SUMMARIES_THREADS_MIN_WORK = Ref(0)
 @inline _use_page_workspace(::Type{K}) where {K} = !(field_from_eltype(K) isa QQField)
 @inline _use_precolspace_den(::Type{K}) where {K} = !(field_from_eltype(K) isa QQField)
 
-function _zero_cohomology_data(::Type{K}, t::Int) where {K}
+function _zero_cohomology_data(::Type{K}, t::Int;
+                               field::AbstractCoeffField=field_from_eltype(K)) where {K}
+    _validate_complex_field(K, field)
     Z0 = _empty_mat(K, 0, 0)
-    return CohomologyData{K}(t, 0, 0, 0, 0, Z0, Z0, Z0, Z0, Z0, Z0, nothing, nothing,
+    return CohomologyData{K}(ReentrantLock(), t, 0, 0, 0, 0, Z0, Z0, Z0, Z0, Z0, Z0, nothing, nothing,
                              Ref{Union{Nothing,FieldLinAlg.FullColumnFactor{QQ}}}(nothing),
-                             Ref{Union{Nothing,FieldLinAlg.FullColumnFactor{QQ}}}(nothing))
+                             Ref{Union{Nothing,FieldLinAlg.FullColumnFactor{QQ}}}(nothing), field)
 end
 
 @inline _fullcolumn_factor_ref() = Ref{Union{Nothing,FieldLinAlg.FullColumnFactor{QQ}}}(nothing)
 
 @inline function _fullcolumn_factor!(field::AbstractCoeffField, B, ref::Base.RefValue{Union{Nothing,FieldLinAlg.FullColumnFactor{QQ}}})
     field isa QQField || return nothing
-    factor = ref[]
+    factor = lock(() -> ref[], _FULLCOLUMN_FACTOR_LOCK)
     if factor === nothing && size(B, 2) > 0
-        factor = FieldLinAlg._factor_fullcolumnQQ(B)
-        ref[] = factor
+        computed = FieldLinAlg._factor_fullcolumnQQ(B)
+        factor = lock(_FULLCOLUMN_FACTOR_LOCK) do
+            ref[] === nothing && (ref[] = computed)
+            ref[]
+        end
     end
     return factor
 end
 
 function _cohomology_coord_plan(H::CohomologyData{QQ})
-    rows = getfield(H, :_coord_rows)
-    proj = getfield(H, :_coord_proj)
+    rows, proj = lock(getfield(H, :_cache_lock)) do
+        (getfield(H, :_coord_rows), getfield(H, :_coord_proj))
+    end
     if rows !== nothing && proj !== nothing
         return _CohomologyCoordPlan{QQ}(rows::Vector{Int}, proj::Matrix{QQ})
     end
-    lock(_COHOMOLOGY_COORD_PLAN_LOCK) do
+
+    kfac = _fullcolumn_factor!(QQField(), H.K, H.Kfactor)
+    bfac = _fullcolumn_factor!(QQField(), H.Bfull, H.Bfull_factor)
+    rows_new = copy(kfac.rows)
+    proj_new = Matrix{QQ}(undef, H.dimH, length(rows_new))
+    mul!(proj_new, Matrix{QQ}(@view(bfac.invB[H.dimB + 1:end, :])), kfac.invB)
+    return lock(getfield(H, :_cache_lock)) do
         rows = getfield(H, :_coord_rows)
         proj = getfield(H, :_coord_proj)
         if rows !== nothing && proj !== nothing
             return _CohomologyCoordPlan{QQ}(rows::Vector{Int}, proj::Matrix{QQ})
         end
-
-        kfac = _fullcolumn_factor!(QQField(), H.K, H.Kfactor)
-        bfac = _fullcolumn_factor!(QQField(), H.Bfull, H.Bfull_factor)
-        rows_new = copy(kfac.rows)
-        proj_new = Matrix{QQ}(undef, H.dimH, length(rows_new))
-        mul!(proj_new, Matrix{QQ}(@view(bfac.invB[H.dimB + 1:end, :])), kfac.invB)
         setfield!(H, :_coord_rows, rows_new)
         setfield!(H, :_coord_proj, proj_new)
         return _CohomologyCoordPlan{QQ}(rows_new, proj_new)
@@ -955,9 +989,9 @@ function _cohomology_coordinates_vector(H::CohomologyData{QQ},
 end
 
 function _ensure_cohomology_reps!(H::CohomologyData{K}) where {K}
-    Bfull = getfield(H, :_Bfull)
-    Q = getfield(H, :_Q)
-    Hrep = getfield(H, :_Hrep)
+    Bfull, Q, Hrep = lock(getfield(H, :_cache_lock)) do
+        (getfield(H, :_Bfull), getfield(H, :_Q), getfield(H, :_Hrep))
+    end
     if Bfull !== nothing && Q !== nothing && Hrep !== nothing
         return Bfull::Matrix{K}, Q::Matrix{K}, Hrep::Matrix{K}
     end
@@ -976,14 +1010,22 @@ function _ensure_cohomology_reps!(H::CohomologyData{K}) where {K}
         Q_new = Bfull_new
         Hrep_new = Kbasis
     else
-        Bfull_new, Q_new = _cohomology_completion_from_basis(getfield(H, :Cx))
+        Bfull_new, Q_new = _cohomology_completion_from_basis(getfield(H, :Cx); field=H.field)
         Hrep_new = Kbasis * Q_new
     end
 
-    setfield!(H, :_Bfull, Bfull_new)
-    setfield!(H, :_Q, Q_new)
-    setfield!(H, :_Hrep, Hrep_new)
-    return Bfull_new, Q_new, Hrep_new
+    return lock(getfield(H, :_cache_lock)) do
+        Bfull = getfield(H, :_Bfull)
+        Q = getfield(H, :_Q)
+        Hrep = getfield(H, :_Hrep)
+        if Bfull !== nothing && Q !== nothing && Hrep !== nothing
+            return Bfull::Matrix{K}, Q::Matrix{K}, Hrep::Matrix{K}
+        end
+        setfield!(H, :_Bfull, Bfull_new)
+        setfield!(H, :_Q, Q_new)
+        setfield!(H, :_Hrep, Hrep_new)
+        return Bfull_new, Q_new, Hrep_new
+    end
 end
 
 @inline _cohomology_Bfull(H::CohomologyData{K}) where {K} = (_ensure_cohomology_reps!(H)[1]::Matrix{K})
@@ -1002,15 +1044,15 @@ function Base.getproperty(H::CohomologyData{K}, s::Symbol) where {K}
 end
 
 Base.propertynames(::CohomologyData, private::Bool=false) =
-    private ? (:t, :dimC, :dimZ, :dimB, :dimH, :K, :B, :Cx, :_Q, :_Bfull, :_Hrep, :_coord_rows, :_coord_proj, :Kfactor, :Bfull_factor) :
-              (:t, :dimC, :dimZ, :dimB, :dimH, :K, :B, :Cx, :Q, :Bfull, :Hrep, :Kfactor, :Bfull_factor)
+    private ? (:_cache_lock, :t, :dimC, :dimZ, :dimB, :dimH, :K, :B, :Cx, :_Q, :_Bfull, :_Hrep, :_coord_rows, :_coord_proj, :Kfactor, :Bfull_factor, :field) :
+              (:t, :dimC, :dimZ, :dimB, :dimH, :K, :B, :Cx, :Q, :Bfull, :Hrep, :Kfactor, :Bfull_factor, :field)
 
 function _diff_summary(field::AbstractCoeffField, d::AbstractMatrix{K}) where {K}
     summary = FieldLinAlg._kernel_image_summary(field, d)
     return _DiffSummary{K}(summary.rank, _concrete_mat(summary.ker), _concrete_mat(summary.img))
 end
 
-function _diff_summary(::AbstractCoeffField, d::SparseMatrixCSC{K,Int}) where {K}
+function _diff_summary(field::AbstractCoeffField, d::SparseMatrixCSC{K,Int}) where {K}
     m, n = size(d)
     if m == 0
         return _DiffSummary{K}(0, _eye_mat(K, n), _empty_mat(K, 0, 0))
@@ -1021,30 +1063,34 @@ function _diff_summary(::AbstractCoeffField, d::SparseMatrixCSC{K,Int}) where {K
     if nnz(d) == 0
         return _DiffSummary{K}(0, _eye_mat(K, n), _empty_mat(K, m, 0))
     end
-    summary = FieldLinAlg._kernel_image_summary(field_from_eltype(K), d)
+    summary = FieldLinAlg._kernel_image_summary(field, d)
     return _DiffSummary{K}(summary.rank, _concrete_mat(summary.ker), _concrete_mat(summary.img))
 end
 
-@inline function _diff_summaries_threaded(C::CochainComplex)
-    nd = length(C.d)
+@inline function _diff_summaries_threaded(C::CochainComplex,
+                                         indices::UnitRange{Int}=1:length(C.d))
+    nd = length(indices)
     nd >= CHAIN_DIFF_SUMMARIES_THREADS_MIN_DIFFS[] || return false
     work = 0
-    @inbounds for d in C.d
+    @inbounds for i in indices
+        d = C.d[i]
         work += size(d, 1) * size(d, 2)
     end
     return work >= CHAIN_DIFF_SUMMARIES_THREADS_MIN_WORK[]
 end
 
-function _diff_summaries(C::CochainComplex{K}) where {K}
-    field = field_from_eltype(K)
-    out = Vector{_DiffSummary{K}}(undef, length(C.d))
-    if Threads.nthreads() > 1 && _diff_summaries_threaded(C)
+function _diff_summaries(C::CochainComplex{K},
+                        indices::UnitRange{Int}=1:length(C.d)) where {K}
+    field = C.field
+    out = Vector{_DiffSummary{K}}(undef, length(indices))
+    first_idx = first(indices)
+    if Threads.nthreads() > 1 && _diff_summaries_threaded(C, indices)
         Threads.@threads for i in eachindex(out)
-            out[i] = _diff_summary(field, C.d[i])
+            out[i] = _diff_summary(field, C.d[first_idx + i - 1])
         end
     else
         for i in eachindex(out)
-            out[i] = _diff_summary(field, C.d[i])
+            out[i] = _diff_summary(field, C.d[first_idx + i - 1])
         end
     end
     return out
@@ -1055,28 +1101,28 @@ function _cohomology_data_from_bases(::Type{K},
                                      dimCt::Int,
                                      Zin::AbstractMatrix{K},
                                      Bin::AbstractMatrix{K};
-                                     lazy_reps::Bool=true) where {K}
+                                     lazy_reps::Bool=true,
+                                     field::AbstractCoeffField=field_from_eltype(K)) where {K}
+    _validate_complex_field(K, field)
     Z = _concrete_mat(Zin)
     B = _concrete_mat(Bin)
     dimZ = size(Z, 2)
     dimB = size(B, 2)
-    field = field_from_eltype(K)
-
     if dimCt == 0
-        return _zero_cohomology_data(K, t)
+        return _zero_cohomology_data(K, t; field=field)
     end
 
     if dimB == 0
         Bcoords = _empty_mat(K, dimZ, 0)
         if lazy_reps
-            return CohomologyData{K}(t, dimCt, dimZ, 0, dimZ, Z, B, Bcoords, nothing, nothing, nothing, nothing, nothing,
+            return CohomologyData{K}(ReentrantLock(), t, dimCt, dimZ, 0, dimZ, Z, B, Bcoords, nothing, nothing, nothing, nothing, nothing,
                                      _fullcolumn_factor_ref(),
-                                     _fullcolumn_factor_ref())
+                                     _fullcolumn_factor_ref(), field)
         end
         Bfull = _eye_mat(K, dimZ)
-        return CohomologyData{K}(t, dimCt, dimZ, 0, dimZ, Z, B, Bcoords, Bfull, Bfull, Z, nothing, nothing,
+        return CohomologyData{K}(ReentrantLock(), t, dimCt, dimZ, 0, dimZ, Z, B, Bcoords, Bfull, Bfull, Z, nothing, nothing,
                                  _fullcolumn_factor_ref(),
-                                 _fullcolumn_factor_ref())
+                                 _fullcolumn_factor_ref(), field)
     end
 
     # Because Z and B are both bases and B subseteq span(Z), the coordinate matrix X in
@@ -1085,23 +1131,23 @@ function _cohomology_data_from_bases(::Type{K},
     Cx = _solve_fullcolumn_cached(field, Z, B)
     rB = size(Cx, 2)
     if rB == dimZ
-        Bfull = extend_to_basis_from_basis(Cx)
-        return CohomologyData{K}(t, dimCt, dimZ, rB, 0, Z, B, Cx, _empty_mat(K, dimZ, 0), Bfull, _empty_mat(K, dimCt, 0), nothing, nothing,
+        Bfull = extend_to_basis_from_basis(Cx; field=field)
+        return CohomologyData{K}(ReentrantLock(), t, dimCt, dimZ, rB, 0, Z, B, Cx, _empty_mat(K, dimZ, 0), Bfull, _empty_mat(K, dimCt, 0), nothing, nothing,
                                  _fullcolumn_factor_ref(),
-                                 _fullcolumn_factor_ref())
+                                 _fullcolumn_factor_ref(), field)
     end
 
     dimH = dimZ - rB
     if lazy_reps
-        return CohomologyData{K}(t, dimCt, dimZ, rB, dimH, Z, B, Cx, nothing, nothing, nothing, nothing, nothing,
+        return CohomologyData{K}(ReentrantLock(), t, dimCt, dimZ, rB, dimH, Z, B, Cx, nothing, nothing, nothing, nothing, nothing,
                                  _fullcolumn_factor_ref(),
-                                 _fullcolumn_factor_ref())
+                                 _fullcolumn_factor_ref(), field)
     end
-    Bfull, Q = _cohomology_completion_from_basis(Cx)
+    Bfull, Q = _cohomology_completion_from_basis(Cx; field=field)
     Hrep = Z * Q
-    return CohomologyData{K}(t, dimCt, dimZ, rB, dimH, Z, B, Cx, Q, Bfull, Hrep, nothing, nothing,
+    return CohomologyData{K}(ReentrantLock(), t, dimCt, dimZ, rB, dimH, Z, B, Cx, Q, Bfull, Hrep, nothing, nothing,
                              _fullcolumn_factor_ref(),
-                             _fullcolumn_factor_ref())
+                             _fullcolumn_factor_ref(), field)
 end
 
 function _cohomology_data_from_diffs(::Type{K},
@@ -1109,9 +1155,10 @@ function _cohomology_data_from_diffs(::Type{K},
                                      dimCt::Int,
                                      d_prev::AbstractMatrix{K},
                                      d_curr::AbstractMatrix{K};
-                                     lazy_reps::Bool=true) where {K}
-    field = field_from_eltype(K)
-    dimCt == 0 && return _zero_cohomology_data(K, t)
+                                     lazy_reps::Bool=true,
+                                     field::AbstractCoeffField=field_from_eltype(K)) where {K}
+    _validate_complex_field(K, field)
+    dimCt == 0 && return _zero_cohomology_data(K, t; field=field)
 
     Z = if size(d_curr, 1) == 0
         _eye_mat(K, dimCt)
@@ -1125,26 +1172,27 @@ function _cohomology_data_from_diffs(::Type{K},
         _diff_summary(field, d_prev).img
     end
 
-    return _cohomology_data_from_bases(K, t, dimCt, Z, B; lazy_reps=lazy_reps)
+    return _cohomology_data_from_bases(K, t, dimCt, Z, B; lazy_reps=lazy_reps, field=field)
 end
 
 # Compute cohomology data at degree t:
 # Z^t = ker(d^t), B^t = im(d^{t-1}), H^t = Z^t / B^t
 function _cohomology_data(C::CochainComplex{K},
                           idx::Int,
-                          summaries::Union{Nothing,AbstractVector{_DiffSummary{K}}}=nothing) where {K}
+                          summaries::Union{Nothing,AbstractVector{_DiffSummary{K}}}=nothing,
+                          summary_first_idx::Int=1) where {K}
     t = C.tmin + idx - 1
     dimCt = C.dims[idx]
 
     if summaries === nothing
         d_prev = (idx == 1) ? _empty_mat(K, dimCt, 0) : C.d[idx-1]
         d_curr = (idx > length(C.d)) ? _empty_mat(K, 0, dimCt) : C.d[idx]
-        return _cohomology_data_from_diffs(K, t, dimCt, d_prev, d_curr; lazy_reps=false)
+        return _cohomology_data_from_diffs(K, t, dimCt, d_prev, d_curr; lazy_reps=false, field=C.field)
     end
 
-    Z = idx > length(summaries) ? _eye_mat(K, dimCt) : summaries[idx].ker
-    B = idx == 1 ? _empty_mat(K, dimCt, 0) : summaries[idx - 1].img
-    return _cohomology_data_from_bases(K, t, dimCt, Z, B; lazy_reps=true)
+    Z = idx > length(C.d) ? _eye_mat(K, dimCt) : summaries[idx - summary_first_idx + 1].ker
+    B = idx == 1 ? _empty_mat(K, dimCt, 0) : summaries[idx - summary_first_idx].img
+    return _cohomology_data_from_bases(K, t, dimCt, Z, B; lazy_reps=true, field=C.field)
 end
 
 function cohomology_data(C::CochainComplex{K}, t::Int) where {K}
@@ -1155,28 +1203,43 @@ function cohomology_data(C::CochainComplex{K}, t::Int) where {K}
 end
 
 """
-    cohomology_data(C::CochainComplex{K}) -> Vector{CohomologyData{K}}
+    cohomology_data(C::CochainComplex{K}; degrees=C.tmin:C.tmax) -> Vector{CohomologyData{K}}
 
-Return cohomology data in every degree t in C.tmin:C.tmax.
+Return cohomology data in the contiguous range `degrees`, defaulting to every
+degree in `C.tmin:C.tmax`. Differentials into and out of the requested range
+are retained when computing its boundary groups; this does not truncate `C`.
+Differentials that cannot affect the requested groups are not summarized.
+An empty range returns an empty vector. Nonempty ranges must lie inside `C`.
 
 The output is ordered by increasing degree:
-the entry at index i corresponds to t = C.tmin + i - 1.
+the entry at index i corresponds to t = first(degrees) + i - 1.
 
 This whole-complex overload is required by higher-level routines (notably
 `spectral_sequence`) that need all cohomology groups (and chosen bases) at once.
 
 If you only need a single degree, use `cohomology_data(C, t)` instead.
 """
-function cohomology_data(C::CochainComplex{K}) where {K}
-    out = Vector{CohomologyData{K}}(undef, C.tmax - C.tmin + 1)
-    summaries = _diff_summaries(C)
+function cohomology_data(C::CochainComplex{K};
+                         degrees::AbstractUnitRange{<:Integer}=C.tmin:C.tmax) where {K}
+    isempty(degrees) && return CohomologyData{K}[]
+    C.tmin <= first(degrees) <= last(degrees) <= C.tmax ||
+        throw(ArgumentError("cohomology_data: degrees must lie within $(C.tmin):$(C.tmax)"))
+    first_idx = degree_index(C, Int(first(degrees)))
+    last_idx = degree_index(C, Int(last(degrees)))
+    out = Vector{CohomologyData{K}}(undef, length(degrees))
+    # Only the incoming neighbor and the requested outgoing differentials can
+    # affect this window. In particular, a halo term's zero outgoing map can
+    # have a large identity kernel that the requested groups never use.
+    summary_indices = max(1, first_idx - 1):min(last_idx, length(C.d))
+    summaries = _diff_summaries(C, summary_indices)
+    summary_first_idx = first(summary_indices)
     if Threads.nthreads() > 1 && length(out) >= 2
         Threads.@threads for i in eachindex(out)
-            out[i] = _cohomology_data(C, i, summaries)
+            out[i] = _cohomology_data(C, first_idx + i - 1, summaries, summary_first_idx)
         end
     else
         for i in eachindex(out)
-            out[i] = _cohomology_data(C, i, summaries)
+            out[i] = _cohomology_data(C, first_idx + i - 1, summaries, summary_first_idx)
         end
     end
     return out
@@ -1198,7 +1261,7 @@ function cohomology_dims(C::CochainComplex{K};
                          small_threshold::Int=20_000)::Vector{Int} where {K}
     ndeg = C.tmax - C.tmin + 1
     out = Vector{Int}(undef, ndeg)
-    field = field_from_eltype(K)
+    field = C.field
     ranks = Vector{Int}(undef, max(0, ndeg - 1))
 
     for i in eachindex(ranks)
@@ -1319,17 +1382,10 @@ function cohomology_coordinates(H::CohomologyData{K}, z::AbstractMatrix{K}) wher
         error("cohomology_coordinates: wrong ambient dimension; got size $(size(z)), expected $(H.dimC) times k")
     end
 
-    # If Z^t = 0, then the only cocycle is 0.
-    if H.dimZ == 0
-        if !all(iszero, z)
-            error("cohomology_coordinates: input is not a cocycle (Z^t = 0)")
-        end
-        return zeros(K, 0, size(z, 2))
-    end
-
     # Enforce cocycle condition and compute Z-coordinates:
     # z in Z^t  iff  z in im(K), and then z = K * alpha for unique alpha.
-    field = field_from_eltype(K)
+    # This also validates the zero-cycle-space case with the retained field.
+    field = H.field
     alpha = _solve_fullcolumn_cached(field, H.K, z, H.Kfactor)
 
     # If H^t = 0, every cocycle represents the zero class, but we already validated z in Z^t.
@@ -1382,6 +1438,8 @@ end
 
 # Given a linear map f: C^t -> D^t and cohomology data for both sides, compute induced map on H^t.
 function induced_map_on_cohomology(src::CohomologyData{K}, tgt::CohomologyData{K}, f::AbstractMatrix{K}) where {K}
+    src.field == tgt.field || throw(ArgumentError(
+        "induced_map_on_cohomology: source and target coefficient fields must agree"))
     size(f, 1) == tgt.dimC && size(f, 2) == src.dimC || error(
         "induced_map_on_cohomology: expected a linear map C^t -> D^t with size ($(tgt.dimC), $(src.dimC)); got $(size(f))",
     )
@@ -1416,8 +1474,11 @@ This is the homological analogue of `CohomologyData`: it stores cycles,
 boundaries, a chosen quotient basis, and ambient representatives.
 For ordinary use, prefer `dimensions`, `basis`, `representatives`, and
 `coordinates`.
+Lazy representatives support concurrent queries. Returned basis matrices are
+shared cached data and must be treated as read-only.
 """
 mutable struct HomologyData{K}
+    _cache_lock::ReentrantLock
     s::Int
     dimC::Int
     dimZ::Int
@@ -1431,17 +1492,21 @@ mutable struct HomologyData{K}
     _Hrep::Union{Nothing,Matrix{K}}   # cycle representatives in C_s
     Zfactor::Base.RefValue{Union{Nothing,FieldLinAlg.FullColumnFactor{QQ}}}
     Bfull_factor::Base.RefValue{Union{Nothing,FieldLinAlg.FullColumnFactor{QQ}}}
+    field::AbstractCoeffField
 end
 
-function _zero_homology_data(::Type{K}, s::Int) where {K}
+function _zero_homology_data(::Type{K}, s::Int;
+                             field::AbstractCoeffField=field_from_eltype(K)) where {K}
+    _validate_complex_field(K, field)
     Z0 = _empty_mat(K, 0, 0)
-    return HomologyData{K}(s, 0, 0, 0, 0, Z0, Z0, Z0, Z0, Z0, Z0, _fullcolumn_factor_ref(), _fullcolumn_factor_ref())
+    return HomologyData{K}(ReentrantLock(), s, 0, 0, 0, 0, Z0, Z0, Z0, Z0, Z0, Z0,
+                           _fullcolumn_factor_ref(), _fullcolumn_factor_ref(), field)
 end
 
 function _ensure_homology_reps!(H::HomologyData{K}) where {K}
-    Bfull = getfield(H, :_Bfull)
-    Q = getfield(H, :_Q)
-    Hrep = getfield(H, :_Hrep)
+    Bfull, Q, Hrep = lock(getfield(H, :_cache_lock)) do
+        (getfield(H, :_Bfull), getfield(H, :_Q), getfield(H, :_Hrep))
+    end
     if Bfull !== nothing && Q !== nothing && Hrep !== nothing
         return Bfull::Matrix{K}, Q::Matrix{K}, Hrep::Matrix{K}
     end
@@ -1460,14 +1525,22 @@ function _ensure_homology_reps!(H::HomologyData{K}) where {K}
         Q_new = Bfull_new
         Hrep_new = Zbasis
     else
-        Bfull_new, Q_new = _cohomology_completion_from_basis(getfield(H, :Cx))
+        Bfull_new, Q_new = _cohomology_completion_from_basis(getfield(H, :Cx); field=H.field)
         Hrep_new = Zbasis * Q_new
     end
 
-    setfield!(H, :_Bfull, Bfull_new)
-    setfield!(H, :_Q, Q_new)
-    setfield!(H, :_Hrep, Hrep_new)
-    return Bfull_new, Q_new, Hrep_new
+    return lock(getfield(H, :_cache_lock)) do
+        Bfull = getfield(H, :_Bfull)
+        Q = getfield(H, :_Q)
+        Hrep = getfield(H, :_Hrep)
+        if Bfull !== nothing && Q !== nothing && Hrep !== nothing
+            return Bfull::Matrix{K}, Q::Matrix{K}, Hrep::Matrix{K}
+        end
+        setfield!(H, :_Bfull, Bfull_new)
+        setfield!(H, :_Q, Q_new)
+        setfield!(H, :_Hrep, Hrep_new)
+        return Bfull_new, Q_new, Hrep_new
+    end
 end
 
 @inline _homology_Bfull(H::HomologyData{K}) where {K} = (_ensure_homology_reps!(H)[1]::Matrix{K})
@@ -1486,12 +1559,13 @@ function Base.getproperty(H::HomologyData{K}, s::Symbol) where {K}
 end
 
 Base.propertynames(::HomologyData, private::Bool=false) =
-    private ? (:s, :dimC, :dimZ, :dimB, :dimH, :Z, :B, :Cx, :_Q, :_Bfull, :_Hrep, :Zfactor, :Bfull_factor) :
-              (:s, :dimC, :dimZ, :dimB, :dimH, :Z, :B, :Cx, :Q, :Bfull, :Hrep, :Zfactor, :Bfull_factor)
+    private ? (:_cache_lock, :s, :dimC, :dimZ, :dimB, :dimH, :Z, :B, :Cx, :_Q, :_Bfull, :_Hrep, :Zfactor, :Bfull_factor, :field) :
+              (:s, :dimC, :dimZ, :dimB, :dimH, :Z, :B, :Cx, :Q, :Bfull, :Hrep, :Zfactor, :Bfull_factor, :field)
 
 # Induced map on homology in a fixed degree.
 # src, tgt are HomologyData objects for that degree, and f is the chain map matrix in that degree.
 function induced_map_on_homology(src::HomologyData{K}, tgt::HomologyData{K}, f::AbstractMatrix{K}) where {K}
+    src.field == tgt.field || throw(ArgumentError("homology source and target must use the same coefficient field and tolerances"))
     size(f, 1) == tgt.dimC && size(f, 2) == src.dimC || error(
         "induced_map_on_homology: expected a linear map C_s -> D_s with size ($(tgt.dimC), $(src.dimC)); got $(size(f))",
     )
@@ -1515,28 +1589,29 @@ function _homology_data_from_bases(::Type{K},
                                    dimCs::Int,
                                    Zin::AbstractMatrix{K},
                                    Bin::AbstractMatrix{K};
-                                   lazy_reps::Bool=true) where {K}
+                                   lazy_reps::Bool=true,
+                                   field::AbstractCoeffField=field_from_eltype(K)) where {K}
     Z = _concrete_mat(Zin)
     B = _concrete_mat(Bin)
     dimZ = size(Z, 2)
     dimB = size(B, 2)
-    field = field_from_eltype(K)
+    _validate_complex_field(K, field)
 
     if dimCs == 0
-        return _zero_homology_data(K, s)
+        return _zero_homology_data(K, s; field=field)
     end
 
     if dimB == 0
         Bcoords = _empty_mat(K, dimZ, 0)
         if lazy_reps
-            return HomologyData{K}(s, dimCs, dimZ, 0, dimZ, Z, B, Bcoords, nothing, nothing, nothing,
+            return HomologyData{K}(ReentrantLock(), s, dimCs, dimZ, 0, dimZ, Z, B, Bcoords, nothing, nothing, nothing,
                                    _fullcolumn_factor_ref(),
-                                   _fullcolumn_factor_ref())
+                                   _fullcolumn_factor_ref(), field)
         end
         Bfull = _eye_mat(K, dimZ)
-        return HomologyData{K}(s, dimCs, dimZ, 0, dimZ, Z, B, Bcoords, Bfull, Bfull, Z,
+        return HomologyData{K}(ReentrantLock(), s, dimCs, dimZ, 0, dimZ, Z, B, Bcoords, Bfull, Bfull, Z,
                                _fullcolumn_factor_ref(),
-                               _fullcolumn_factor_ref())
+                               _fullcolumn_factor_ref(), field)
     end
 
     # As in the cohomology path, the coordinate matrix X in Z * X = B already has
@@ -1544,23 +1619,23 @@ function _homology_data_from_bases(::Type{K},
     Cx = _solve_fullcolumn_cached(field, Z, B)
     rB = size(Cx, 2)
     if rB == dimZ
-        Bfull = extend_to_basis_from_basis(Cx)
-        return HomologyData{K}(s, dimCs, dimZ, rB, 0, Z, B, Cx, _empty_mat(K, dimZ, 0), Bfull, _empty_mat(K, dimCs, 0),
+        Bfull = extend_to_basis_from_basis(Cx; field=field)
+        return HomologyData{K}(ReentrantLock(), s, dimCs, dimZ, rB, 0, Z, B, Cx, _empty_mat(K, dimZ, 0), Bfull, _empty_mat(K, dimCs, 0),
                                _fullcolumn_factor_ref(),
-                               _fullcolumn_factor_ref())
+                               _fullcolumn_factor_ref(), field)
     end
 
     dimH = dimZ - rB
     if lazy_reps
-        return HomologyData{K}(s, dimCs, dimZ, rB, dimH, Z, B, Cx, nothing, nothing, nothing,
+        return HomologyData{K}(ReentrantLock(), s, dimCs, dimZ, rB, dimH, Z, B, Cx, nothing, nothing, nothing,
                                _fullcolumn_factor_ref(),
-                               _fullcolumn_factor_ref())
+                               _fullcolumn_factor_ref(), field)
     end
-    Bfull, Q = _cohomology_completion_from_basis(Cx)
+    Bfull, Q = _cohomology_completion_from_basis(Cx; field=field)
     Hrep = Z * Q
-    return HomologyData{K}(s, dimCs, dimZ, rB, dimH, Z, B, Cx, Q, Bfull, Hrep,
+    return HomologyData{K}(ReentrantLock(), s, dimCs, dimZ, rB, dimH, Z, B, Cx, Q, Bfull, Hrep,
                            _fullcolumn_factor_ref(),
-                           _fullcolumn_factor_ref())
+                           _fullcolumn_factor_ref(), field)
 end
 
 function _homology_data_from_diffs(::Type{K},
@@ -1568,9 +1643,10 @@ function _homology_data_from_diffs(::Type{K},
                                    dimCs::Int,
                                    bd_next::AbstractMatrix{K},
                                    bd_curr::AbstractMatrix{K};
-                                   lazy_reps::Bool=true) where {K}
-    field = field_from_eltype(K)
-    dimCs == 0 && return _zero_homology_data(K, s)
+                                   lazy_reps::Bool=true,
+                                   field::AbstractCoeffField=field_from_eltype(K)) where {K}
+    _validate_complex_field(K, field)
+    dimCs == 0 && return _zero_homology_data(K, s; field=field)
 
     Z = if size(bd_curr, 1) == 0
         _eye_mat(K, dimCs)
@@ -1584,17 +1660,18 @@ function _homology_data_from_diffs(::Type{K},
         _diff_summary(field, bd_next).img
     end
 
-    return _homology_data_from_bases(K, s, dimCs, Z, B; lazy_reps=lazy_reps)
+    return _homology_data_from_bases(K, s, dimCs, Z, B; lazy_reps=lazy_reps, field=field)
 end
 
 # Homology at degree s uses:
 # cycles = ker(bd_s : C_s -> C_{s-1})
 # boundaries = im(bd_{s+1} : C_{s+1} -> C_s)
-function homology_data(bd_next::AbstractMatrix{K}, bd_curr::AbstractMatrix{K}, s::Int) where {K}
+function homology_data(bd_next::AbstractMatrix{K}, bd_curr::AbstractMatrix{K}, s::Int;
+                       field::AbstractCoeffField=field_from_eltype(K)) where {K}
     bdN = bd_next
     bdC = bd_curr
     dimCs = size(bdC, 2)
-    return _homology_data_from_diffs(K, s, dimCs, bdN, bdC; lazy_reps=true)
+    return _homology_data_from_diffs(K, s, dimCs, bdN, bdC; lazy_reps=true, field=field)
 end
 
 # Reduce a cycle z in C_s to coordinates in H_s, using precomputed homology data.
@@ -1615,7 +1692,7 @@ function homology_coordinates(data::HomologyData{K}, z::AbstractMatrix{K}) where
         error("homology_coordinates: wrong ambient dimension; got size $(size(z)), expected $(data.dimC) x k")
     end
 
-    field = field_from_eltype(K)
+    field = data.field
     z0 = Matrix{K}(z)
     alpha = _solve_fullcolumn_cached(field, data.Z, z0, data.Zfactor)
     gamma = _solve_fullcolumn_cached(field, data.Bfull, alpha, data.Bfull_factor)
@@ -1705,9 +1782,9 @@ shared `describe(...)` surface exposes the operational contract without
 requiring field archaeology.
 """
 describe(H::CohomologyData{K}) where {K} =
-    (kind=:cohomology, degree=H.t, field=_field_label(K), dimensions=dimensions(H))
+    (kind=:cohomology, degree=H.t, field=H.field, dimensions=dimensions(H))
 describe(H::HomologyData{K}) where {K} =
-    (kind=:homology, degree=H.s, field=_field_label(K), dimensions=dimensions(H))
+    (kind=:homology, degree=H.s, field=H.field, dimensions=dimensions(H))
 
 
 
@@ -1754,10 +1831,20 @@ function extend_range(C::CochainComplex{K}, tmin::Int, tmax::Int) where {K}
         push!(d_new, _diff_at(C, t))
     end
     labels_new = [ Vector{Int}(_labels_at(C, t)) for t in tmin:tmax ]
-    return CochainComplex{K}(tmin, tmax, dims_new, d_new; labels=labels_new)
+    return CochainComplex{K}(tmin, tmax, dims_new, d_new; labels=labels_new, field=C.field)
 end
 
-# Sign convention: (C[k])^t = C^{t+k}, d_{C[k]} = (-1)^k d_C.
+"""
+    shift(C::CochainComplex, k::Int) -> CochainComplex
+
+Return the cohomological shift `C[k]`: `(C[k])^t = C^(t+k)` and
+`d_(C[k])^t = (-1)^k d_C^(t+k)`. Thus positive `k` moves the stored degree
+range down by `k`, and `H^t(C[k]) = H^(t+k)(C)`.
+
+The same convention is used for module-valued cochain complexes. In
+particular, the cone triangle ends in `C[1]`, with degree-`t` projection
+`D^t + C^(t+1) -> C^(t+1)`.
+"""
 function shift(C::CochainComplex{K}, k::Int) where {K}
     tmin = C.tmin - k
     tmax = C.tmax - k
@@ -1771,7 +1858,7 @@ function shift(C::CochainComplex{K}, k::Int) where {K}
         push!(d, dt)
     end
     labels = [ Vector{Int}(_labels_at(C, t+k)) for t in tmin:tmax ]
-    return CochainComplex{K}(tmin, tmax, dims, d; labels=labels)
+    return CochainComplex{K}(tmin, tmax, dims, d; labels=labels, field=C.field)
 end
 
 """
@@ -1796,13 +1883,15 @@ function _map_at(f::CochainMap{K}, t::Int) where {K}
 end
 
 function is_cochain_map(f::CochainMap{K})::Bool where {K}
+    f.C.field == f.D.field || return false
     for t in f.tmin:f.tmax
         # Compare as sparse, do not densify:
         lhs = _diff_at(f.D, t) * _map_at(f, t)
         rhs = _map_at(f, t + 1) * _diff_at(f.C, t)
         diff = lhs - rhs
         dropzeros!(diff)
-        if nnz(diff) != 0
+        scale = f.C.field isa RealField ? max(norm(lhs), norm(rhs)) : 1
+        if !_check_zero_matrix(diff; field=f.C.field, scale=scale)
             return false
         end
     end
@@ -1823,6 +1912,8 @@ function CochainMap(C::CochainComplex{K},
                     tmin::Union{Nothing,Int}=nothing,
                     tmax::Union{Nothing,Int}=nothing,
                     check::Bool=true) where {K}
+    C.field == D.field || throw(ArgumentError(
+        "CochainMap: source and target coefficient fields must agree"))
     tmin2 = tmin === nothing ? min(C.tmin, D.tmin) : tmin
     tmax2 = tmax === nothing ? max(C.tmax, D.tmax) : tmax
     if length(maps) != tmax2 - tmin2 + 1
@@ -1895,6 +1986,8 @@ tmin = min(D.tmin, C.tmin - 1), tmax = max(D.tmax, C.tmax - 1).
 """
 function mapping_cone(f::CochainMap{K}) where {K}
     C, D = f.C, f.D
+    C.field == D.field || throw(ArgumentError(
+        "mapping_cone: source and target coefficient fields must agree"))
     tmin = min(D.tmin, C.tmin - 1)
     tmax = max(D.tmax, C.tmax - 1)
 
@@ -1927,7 +2020,7 @@ function mapping_cone(f::CochainMap{K}) where {K}
         push!(d, d_cone_t)
     end
 
-    return CochainComplex{K}(tmin, tmax, dims, d; labels=labels)
+    return CochainComplex{K}(tmin, tmax, dims, d; labels=labels, field=C.field)
 end
 
 struct DistinguishedTriangle{K}
@@ -2020,7 +2113,7 @@ function _long_exact_sequence_full(tri::DistinguishedTriangle{K}) where {K}
                 if X.tmin <= t <= X.tmax
                     out[idx] = local_data[t - X.tmin + 1]
                 else
-                    out[idx] = _zero_cohomology_data(K, t)
+                    out[idx] = _zero_cohomology_data(K, t; field=X.field)
                 end
             end
         else
@@ -2029,7 +2122,7 @@ function _long_exact_sequence_full(tri::DistinguishedTriangle{K}) where {K}
                 if X.tmin <= t <= X.tmax
                     out[idx] = cohomology_data(X, t)
                 else
-                    out[idx] = _zero_cohomology_data(K, t)
+                    out[idx] = _zero_cohomology_data(K, t; field=X.field)
                 end
             end
         end
@@ -2043,7 +2136,7 @@ function _long_exact_sequence_full(tri::DistinguishedTriangle{K}) where {K}
     for (k, t) in enumerate(tmin:tmax)
         if t + 1 <= tmax
             Hn = HC[k + 1]
-            HCshift[k] = CohomologyData{K}(t,
+            HCshift[k] = CohomologyData{K}(ReentrantLock(), t,
                                            Hn.dimC,
                                            Hn.dimZ,
                                            Hn.dimB,
@@ -2057,9 +2150,10 @@ function _long_exact_sequence_full(tri::DistinguishedTriangle{K}) where {K}
                                            Hn._coord_rows,
                                            Hn._coord_proj,
                                            Hn.Kfactor,
-                                           Hn.Bfull_factor)
+                                           Hn.Bfull_factor,
+                                           Hn.field)
         else
-            HCshift[k] = _zero_cohomology_data(K, t)
+            HCshift[k] = _zero_cohomology_data(K, t; field=C.field)
         end
     end
 
@@ -2261,6 +2355,9 @@ Storage convention:
 - `dims[aidx,bidx] = dim(C^{a,b})` where aidx = a-amin+1 and bidx = b-bmin+1.
 - `dv[aidx,bidx]` is the matrix for dv^{a,b} (or a correctly-sized zero matrix at the boundary).
 - `dh[aidx,bidx]` is the matrix for dh^{a,b} (or a correctly-sized zero matrix at the boundary).
+
+Pass `field=...` to preserve a numerical field's tolerances. The same field is
+used in total cohomology, spectral pages, quotient coordinates, and validation.
 """
 struct DoubleComplex{K}
     amin::Int
@@ -2270,6 +2367,21 @@ struct DoubleComplex{K}
     dims::Matrix{Int}
     dv::Array{SparseMatrixCSC{K,Int},2}
     dh::Array{SparseMatrixCSC{K,Int},2}
+    field::AbstractCoeffField
+
+    function DoubleComplex{K}(amin::Int, amax::Int, bmin::Int, bmax::Int,
+                               dims, dv, dh;
+                               field::AbstractCoeffField=field_from_eltype(K)) where {K}
+        return new{K}(amin, amax, bmin, bmax, dims, dv, dh,
+                      _validate_complex_field(K, field))
+    end
+end
+
+function DoubleComplex(amin::Int, amax::Int, bmin::Int, bmax::Int,
+                       dims, dv::Array{SparseMatrixCSC{K,Int},2},
+                       dh::Array{SparseMatrixCSC{K,Int},2};
+                       field::AbstractCoeffField=field_from_eltype(K)) where {K}
+    return DoubleComplex{K}(amin, amax, bmin, bmax, dims, dv, dh; field=field)
 end
 
 """
@@ -2317,7 +2429,8 @@ function check_bicomplex(DC::DoubleComplex{K}; throw::Bool=false) where {K}
         b = DC.bmin + bi - 1
         if bi < nb
             try
-                _check_zero_matrix(DC.dv[ai, bi + 1] * DC.dv[ai, bi]) || push!(issues,
+                _check_zero_matrix(DC.dv[ai, bi + 1] * DC.dv[ai, bi]; field=DC.field,
+                    scale=DC.field isa RealField ? norm(DC.dv[ai, bi + 1]) * norm(DC.dv[ai, bi]) : 1) || push!(issues,
                     "expected d_v^($(a),$(b + 1)) circ d_v^($(a),$(b)) = 0")
             catch
                 push!(issues, "could not form d_v^($(a),$(b + 1)) circ d_v^($(a),$(b)) because the block sizes are incompatible")
@@ -2325,7 +2438,8 @@ function check_bicomplex(DC::DoubleComplex{K}; throw::Bool=false) where {K}
         end
         if ai < na
             try
-                _check_zero_matrix(DC.dh[ai + 1, bi] * DC.dh[ai, bi]) || push!(issues,
+                _check_zero_matrix(DC.dh[ai + 1, bi] * DC.dh[ai, bi]; field=DC.field,
+                    scale=DC.field isa RealField ? norm(DC.dh[ai + 1, bi]) * norm(DC.dh[ai, bi]) : 1) || push!(issues,
                     "expected d_h^($(a + 1),$(b)) circ d_h^($(a),$(b)) = 0")
             catch
                 push!(issues, "could not form d_h^($(a + 1),$(b)) circ d_h^($(a),$(b)) because the block sizes are incompatible")
@@ -2334,7 +2448,10 @@ function check_bicomplex(DC::DoubleComplex{K}; throw::Bool=false) where {K}
         if ai < na && bi < nb
             try
                 mixed = DC.dv[ai + 1, bi] * DC.dh[ai, bi] + DC.dh[ai, bi + 1] * DC.dv[ai, bi]
-                _check_zero_matrix(mixed) || push!(issues,
+                _check_zero_matrix(mixed; field=DC.field,
+                    scale=DC.field isa RealField ?
+                        norm(DC.dv[ai + 1, bi]) * norm(DC.dh[ai, bi]) +
+                        norm(DC.dh[ai, bi + 1]) * norm(DC.dv[ai, bi]) : 1) || push!(issues,
                     "expected d_v d_h + d_h d_v = 0 at bidegree ($(a),$(b))")
             catch
                 push!(issues, "could not form d_v d_h + d_h d_v at bidegree ($(a),$(b)) because the block sizes are incompatible")
@@ -2419,6 +2536,7 @@ object.
 
 """
     filtered_cochain_complex(::Type{K};
+        field=field_from_eltype(K),
         first=:vertical,
         pieces,
         d0=Dict(),
@@ -2444,6 +2562,7 @@ This constructor is the canonical user-facing path when the spectral input is
 known in filtration/degree coordinates rather than raw bicomplex indices.
 """
 function filtered_cochain_complex(::Type{K};
+                                  field::AbstractCoeffField=field_from_eltype(K),
                                   first::Symbol=:vertical,
                                   pieces,
                                   d0=Dict{Tuple{Int,Int},SparseMatrixCSC{K,Int}}(),
@@ -2503,14 +2622,18 @@ function filtered_cochain_complex(::Type{K};
             dv_tgt_dim = (b < bmax ? dims[a - amin + 1, b - bmin + 2] : 0)
             dh_tgt_dim = (a < amax ? dims[a - amin + 2, b - bmin + 1] : 0)
 
-            dv_mat = sparse(get(d0, (p, t), spzeros(K, dv_tgt_dim, src_dim)))
-            dh_mat = sparse(get(d1, (p, t), spzeros(K, dh_tgt_dim, src_dim)))
+            # d0 preserves p and d1 raises p. With horizontal filtration
+            # b=p, so d0 moves in a and d1 in b; both retain their coefficients.
+            dv_data, dh_data = first == :vertical ? (d0, d1) : (d1, d0)
+            dv_name, dh_name = first == :vertical ? ("d0", "d1") : ("d1", "d0")
+            dv_mat = sparse(get(dv_data, (p, t), spzeros(K, dv_tgt_dim, src_dim)))
+            dh_mat = sparse(get(dh_data, (p, t), spzeros(K, dh_tgt_dim, src_dim)))
 
             size(dv_mat) == (dv_tgt_dim, src_dim) || error(
-                "filtered_cochain_complex: expected d0 at (p,t)=($(p),$(t)) to have size ($(dv_tgt_dim), $(src_dim)); got $(size(dv_mat))",
+                "filtered_cochain_complex: expected $(dv_name) at (p,t)=($(p),$(t)) to have size ($(dv_tgt_dim), $(src_dim)); got $(size(dv_mat))",
             )
             size(dh_mat) == (dh_tgt_dim, src_dim) || error(
-                "filtered_cochain_complex: expected d1 at (p,t)=($(p),$(t)) to have size ($(dh_tgt_dim), $(src_dim)); got $(size(dh_mat))",
+                "filtered_cochain_complex: expected $(dh_name) at (p,t)=($(p),$(t)) to have size ($(dh_tgt_dim), $(src_dim)); got $(size(dh_mat))",
             )
 
             dv[a - amin + 1, b - bmin + 1] = dv_mat
@@ -2518,27 +2641,8 @@ function filtered_cochain_complex(::Type{K};
         end
     end
 
-    DC = DoubleComplex{K}(amin, amax, bmin, bmax, dims, dv, dh)
-    check || return DC
-
-    for a in amin:amax
-        for b in bmin:bmax
-            ai = a - amin + 1
-            bi = b - bmin + 1
-            if b < bmax && b + 1 <= bmax
-                dv2 = dv[ai, bi + 1] * dv[ai, bi]
-                nnz(dv2) == 0 || error("filtered_cochain_complex: expected d0^(t+1) circ d0^t = 0 on Gr^$(first == :vertical ? a : b) C^$(a + b)")
-            end
-            if a < amax && a + 1 <= amax
-                dh2 = dh[ai + 1, bi] * dh[ai, bi]
-                nnz(dh2) == 0 || error("filtered_cochain_complex: expected d1^(p+1,t+1) circ d1^(p,t) = 0 on filtered graded pieces")
-            end
-            if a < amax && b < bmax
-                mixed = dv[ai + 1, bi] * dh[ai, bi] + dh[ai, bi + 1] * dv[ai, bi]
-                nnz(mixed) == 0 || error("filtered_cochain_complex: expected d0*d1 + d1*d0 = 0 (a filtered bicomplex relation)")
-            end
-        end
-    end
+    DC = DoubleComplex{K}(amin, amax, bmin, bmax, dims, dv, dh; field=field)
+    check && check_bicomplex(DC; throw=true)
     return DC
 end
 
@@ -2687,10 +2791,11 @@ struct SubquotientData{K}
     Zsolve_basis::Matrix{K}
     Zsolve_factor::Base.RefValue{Union{Nothing,FieldLinAlg.FullColumnFactor{QQ}}}
     Bfull_factor::Base.RefValue{Union{Nothing,FieldLinAlg.FullColumnFactor{QQ}}}
+    field::AbstractCoeffField
 end
 
 """
-    subquotient_data(Zbasis, Bgens) -> SubquotientData{K}
+    subquotient_data(Zbasis, Bgens; field=field_from_eltype(eltype(Zbasis))) -> SubquotientData{K}
 
 Build explicit data for a subquotient `Z/B`.
 
@@ -2698,7 +2803,8 @@ Inputs:
   * `Zbasis`: ambient_dim x dimZ, columns form a basis of Z.
   * `Bgens`:  ambient_dim x m, columns generate B, with B subset span(Zbasis).
 
-All arithmetic is exact for exact fields.
+All arithmetic is exact for exact fields. The supplied field, including
+numerical tolerances, is retained for later representative/coordinate queries.
 """
 @inline function _solve_fullcolumn_cached(field::AbstractCoeffField, B, Y; check_rhs::Bool=true)
     if field isa QQField
@@ -2728,8 +2834,9 @@ end
 function _subquotient_data_from_coords(Zbasis::AbstractMatrix{K},
                                        Bcoords_in_Z::AbstractMatrix{K};
                                        Zsolve_rows::UnitRange{Int}=1:size(Zbasis, 1),
-                                       Zsolve_basis::AbstractMatrix{K}=Zbasis) where {K}
-    field = field_from_eltype(K)
+                                       Zsolve_basis::AbstractMatrix{K}=Zbasis,
+                                       field::AbstractCoeffField=field_from_eltype(K)) where {K}
+    _validate_complex_field(K, field)
     Zmat = _concrete_mat(Zbasis)
     ambient_dim = size(Zmat, 1)
     dimZ = size(Zmat, 2)
@@ -2739,7 +2846,8 @@ function _subquotient_data_from_coords(Zbasis::AbstractMatrix{K},
         Z0 = _empty_mat(K, ambient_dim, 0)
         return SubquotientData{K}(ambient_dim, 0, 0, 0,
                                   Z0, Z0, zeros(K, 0, 0), zeros(K, 0, 0),
-                                  zeros(K, 0, 0), Z0, Zsolve_rows, Z0, _fullcolumn_factor_ref(), _fullcolumn_factor_ref())
+                                  zeros(K, 0, 0), Z0, Zsolve_rows, Zsolve,
+                                  _fullcolumn_factor_ref(), _fullcolumn_factor_ref(), field)
     end
 
     if size(Bcoords_in_Z, 2) == 0
@@ -2750,7 +2858,7 @@ function _subquotient_data_from_coords(Zbasis::AbstractMatrix{K},
     dimB = size(Bcoords, 2)
     Bbasis = Zmat * Bcoords
 
-    Bfull = extend_to_basis_from_basis(Bcoords)
+    Bfull = extend_to_basis_from_basis(Bcoords; field=field)
     Hcoords = Bfull[:, (dimB+1):dimZ]
     Hrep = Zmat * Hcoords
     dimH = size(Hcoords, 2)
@@ -2759,17 +2867,18 @@ function _subquotient_data_from_coords(Zbasis::AbstractMatrix{K},
                               Zmat, Bbasis, Bcoords, Bfull, Hcoords, Hrep,
                               Zsolve_rows, Zsolve,
                               _fullcolumn_factor_ref(),
-                              _fullcolumn_factor_ref())
+                              _fullcolumn_factor_ref(), field)
 end
 
-function subquotient_data(Zbasis::AbstractMatrix{K}, Bgens::AbstractMatrix{K}) where {K}
+function subquotient_data(Zbasis::AbstractMatrix{K}, Bgens::AbstractMatrix{K};
+                         field::AbstractCoeffField=field_from_eltype(K)) where {K}
     size(Bgens, 1) == size(Zbasis, 1) || error(
         "subquotient_data: expected numerator and denominator generators in the same ambient dimension; got $(size(Zbasis, 1)) and $(size(Bgens, 1))",
     )
-    field = field_from_eltype(K)
+    _validate_complex_field(K, field)
     Zmat = _concrete_mat(Zbasis)
     dimZ = size(Zmat, 2)
-    Bcoords = if size(Bgens, 2) == 0 || dimZ == 0
+    Bcoords = if size(Bgens, 2) == 0
         _empty_mat(K, dimZ, 0)
     else
         try
@@ -2778,16 +2887,13 @@ function subquotient_data(Zbasis::AbstractMatrix{K}, Bgens::AbstractMatrix{K}) w
             error("subquotient_data: expected denominator generators to lie in the span of the numerator basis")
         end
     end
-    return _subquotient_data_from_coords(Zmat, Bcoords; Zsolve_rows=1:size(Zmat, 1), Zsolve_basis=Zmat)
+    return _subquotient_data_from_coords(Zmat, Bcoords; Zsolve_rows=1:size(Zmat, 1), Zsolve_basis=Zmat, field=field)
 end
 
 function _subquotient_coordinates_rows(SQ::SubquotientData{K}, zrows::AbstractMatrix{K}) where {K}
     size(zrows, 1) == size(SQ.Zsolve_basis, 1) ||
         error("subquotient_coordinates: restricted dimension mismatch")
-    if SQ.dimH == 0
-        return zeros(K, 0, size(zrows, 2))
-    end
-    field = field_from_eltype(K)
+    field = SQ.field
     alpha = _solve_fullcolumn_cached(field, SQ.Zsolve_basis, Matrix{K}(zrows), SQ.Zsolve_factor)
     gamma = _solve_fullcolumn_cached(field, SQ.Bfull, alpha, SQ.Bfull_factor)
     return gamma[(SQ.dimB+1):SQ.dimZ, :]
@@ -2802,6 +2908,17 @@ chosen basis of `Z/B`.
 function subquotient_coordinates(SQ::SubquotientData{K}, z::Matrix{K}) where {K}
     if size(z, 1) != SQ.ambient_dim
         error("subquotient_coordinates: ambient dimension mismatch")
+    end
+    rows = SQ.Zsolve_rows
+    if !all(iszero, @view z[1:first(rows)-1, :]) ||
+       !all(iszero, @view z[last(rows)+1:SQ.ambient_dim, :])
+        # Restricted-row elimination is valid only on the supported subspace;
+        # it must not project an arbitrary ambient vector onto that subspace.
+        # Fall back to full membership validation, retaining numerical field
+        # tolerances when the omitted entries are small roundoff errors.
+        alpha = _solve_fullcolumn_cached(SQ.field, SQ.Zbasis, z)
+        gamma = _solve_fullcolumn_cached(SQ.field, SQ.Bfull, alpha, SQ.Bfull_factor)
+        return gamma[(SQ.dimB+1):SQ.dimZ, :]
     end
     return _subquotient_coordinates_rows(SQ, @view(z[SQ.Zsolve_rows, :]))
 end
@@ -2827,7 +2944,7 @@ representatives(SQ::SubquotientData{K}) where {K} = basis(SQ)
 coordinates(SQ::SubquotientData{K}, z::AbstractVector{K}) where {K} = subquotient_coordinates(SQ, z)
 coordinates(SQ::SubquotientData{K}, z::AbstractMatrix{K}) where {K} = subquotient_coordinates(SQ, z)
 describe(SQ::SubquotientData{K}) where {K} =
-    (kind=:subquotient, field=_field_label(K), dimensions=dimensions(SQ))
+    (kind=:subquotient, field=SQ.field, dimensions=dimensions(SQ))
 
 function _subquotient_pushforward_coords(src::SubquotientData{K},
                                          tgt::SubquotientData{K},
@@ -3025,7 +3142,7 @@ function Base.getindex(P::SpectralTermsPage{K}, ab::Tuple{Int,Int}) where {K}
     a, b = ab
     if a < ss.DC.amin || a > ss.DC.amax || b < ss.DC.bmin || b > ss.DC.bmax
         # Outside the defined rectangle, terms are zero.
-        return _ss_zero_subquotient(K, 0)
+        return _ss_zero_subquotient(K, 0; field=ss.DC.field)
     end
     return P.terms[a - ss.DC.amin + 1, b - ss.DC.bmin + 1]
 end
@@ -3208,14 +3325,14 @@ function _ss_filtered_cohomology_data(Tot::CochainComplex{K},
         d_curr = Tot.d[tidx][r_tp1, r_t]
     end
 
-    return _cohomology_data_from_diffs(K, t, dimCt, d_prev, d_curr)
+    return _cohomology_data_from_diffs(K, t, dimCt, d_prev, d_curr; field=Tot.field)
 end
 
 function _ss_E2_dims_from_d1(DC::DoubleComplex{K},
                              first::Symbol,
                              E1_dims::Matrix{Int},
                              d1::Array{SparseMatrixCSC{K,Int},2}) where {K}
-    field = field_from_eltype(K)
+    field = DC.field
     Alen, Blen = size(E1_dims)
     dranks = zeros(Int, Alen, Blen)
     dims = zeros(Int, Alen, Blen)
@@ -3277,7 +3394,7 @@ function _ss_Z_basis_with_coords(Tot::CochainComplex{K},
                                  t::Int,
                                  high::UnitRange{Int},
                                  low_tp1::UnitRange{Int}) where {K}
-    field = field_from_eltype(K)
+    field = Tot.field
     dim_t = _ss_totdim(Tot, t)
     if length(high) == 0
         return zeros(K, dim_t, 0), zeros(K, 0, 0)
@@ -3297,24 +3414,23 @@ function _ss_Z_intersection_Fp1(Zbasis::Matrix{K},
                                 blocks_t::Vector{NTuple{4,Int}},
                                 dim_t::Int,
                                 t::Int,
-                                p1::Int) where {K}
+                                p1::Int; field::AbstractCoeffField) where {K}
     low_p1 = _ss_low_range(first, blocks_t, dim_t, t, p1)
-    return _ss_Z_intersection_Fp1(Zbasis, low_p1)
+    return _ss_Z_intersection_Fp1(Zbasis, low_p1; field=field)
 end
 
 function _ss_Z_intersection_Fp1(Zbasis::Matrix{K},
-                                low_p1::UnitRange{Int}) where {K}
-    Zint_coords = _ss_Z_intersection_Fp1_coords(Zbasis, low_p1)
+                                low_p1::UnitRange{Int}; field::AbstractCoeffField) where {K}
+    Zint_coords = _ss_Z_intersection_Fp1_coords(Zbasis, low_p1; field=field)
     if size(Zbasis, 2) == 0
         return zeros(K, size(Zbasis, 1), 0)
     end
     Zint = Zbasis * Zint_coords
-    return FieldLinAlg.colspace(field_from_eltype(K), Zint)
+    return FieldLinAlg.colspace(field, Zint)
 end
 
 function _ss_Z_intersection_Fp1_coords(Zbasis::Matrix{K},
-                                       low_p1::UnitRange{Int}) where {K}
-    field = field_from_eltype(K)
+                                       low_p1::UnitRange{Int}; field::AbstractCoeffField) where {K}
     dimZ = size(Zbasis, 2)
     if dimZ == 0
         return zeros(K, 0, 0)
@@ -3350,7 +3466,7 @@ function _ss_B_basis(Tot::CochainComplex{K},
                      dim_t::Int,
                      dom_range::UnitRange{Int},
                      low_p::UnitRange{Int}) where {K}
-    field = field_from_eltype(K)
+    field = Tot.field
     if length(dom_range) == 0
         return zeros(K, dim_t, 0)
     end
@@ -3387,7 +3503,7 @@ function _ss_compute_page_term_ambient(DC::DoubleComplex{K},
                                        a::Int,
                                        b::Int,
                                        ws::_SSPageWorkspace{K}) where {K}
-    field = field_from_eltype(K)
+    field = DC.field
     p = _ss_p(first, a, b)
     t = a + b
 
@@ -3405,7 +3521,7 @@ function _ss_compute_page_term_ambient(DC::DoubleComplex{K},
 
     Z = _ss_Z_basis(Tot, t, high, low_tp1)
     B = _ss_B_basis(Tot, t, dim_t, dom_range, low_p)
-    Zint = _ss_Z_intersection_Fp1(Z, low_p1)
+    Zint = _ss_Z_intersection_Fp1(Z, low_p1; field=field)
     Den = if _use_page_workspace(K)
         FieldLinAlg.colspace(field, _ss_den_buf!(ws, B, Zint))
     elseif _use_precolspace_den(K)
@@ -3413,7 +3529,7 @@ function _ss_compute_page_term_ambient(DC::DoubleComplex{K},
     else
         hcat(B, Zint)
     end
-    return subquotient_data(Z, Den)
+    return subquotient_data(Z, Den; field=field)
 end
 
 function _ss_compute_page_term_exact(DC::DoubleComplex{K},
@@ -3424,7 +3540,7 @@ function _ss_compute_page_term_exact(DC::DoubleComplex{K},
                                      a::Int,
                                      b::Int,
                                      ws::_SSPageWorkspace{K}) where {K}
-    field = field_from_eltype(K)
+    field = DC.field
     p = _ss_p(first, a, b)
     t = a + b
 
@@ -3442,7 +3558,7 @@ function _ss_compute_page_term_exact(DC::DoubleComplex{K},
 
     Z, Zcoords = _ss_Z_basis_with_coords(Tot, t, high, low_tp1)
     B = _ss_B_basis(Tot, t, dim_t, dom_range, low_p)
-    Zint_coords = _ss_Z_intersection_Fp1_coords(Z, low_p1)
+    Zint_coords = _ss_Z_intersection_Fp1_coords(Z, low_p1; field=field)
     Zint = size(Zint_coords, 2) == 0 ? zeros(K, dim_t, 0) : Z * Zint_coords
     Den = if size(B, 2) == 0
         Zint
@@ -3456,7 +3572,7 @@ function _ss_compute_page_term_exact(DC::DoubleComplex{K},
     else
         _solve_fullcolumn_cached(field, Zcoords, @view Den[high, :])
     end
-    return _subquotient_data_from_coords(Z, Dencoords; Zsolve_rows=high, Zsolve_basis=Zcoords)
+    return _subquotient_data_from_coords(Z, Dencoords; Zsolve_rows=high, Zsolve_basis=Zcoords, field=field)
 end
 
 function _ss_compute_page_spaces(DC::DoubleComplex{K},
@@ -3477,7 +3593,7 @@ function _ss_compute_page_spaces(DC::DoubleComplex{K},
         b = DC.bmin + bi - 1
         dim_hint = known_dims === nothing ? -1 : known_dims[ai, bi]
         SQ = if dim_hint == 0
-            _ss_zero_subquotient(K, _ss_totdim(Tot, a + b))
+            _ss_zero_subquotient(K, _ss_totdim(Tot, a + b); field=DC.field)
         else
             _ss_compute_page_term(DC, Tot, blocks, first, r, a, b, ws)
         end
@@ -3700,7 +3816,7 @@ function _total_complex_with_blocks(DC::DoubleComplex{K}) where {K}
         d_tot[tidx] = sparse(I, J, V, cod_dim, dom_dim)
     end
 
-    return CochainComplex{K}(tmin, tmax, dims_tot, d_tot), blocks
+    return CochainComplex{K}(tmin, tmax, dims_tot, d_tot; field=DC.field), blocks
 end
 
 function _ss_inclusion_coords(tgt::CohomologyData{K},
@@ -3878,7 +3994,7 @@ function _ss_build_filt_img_exact_dims(Tot::CochainComplex{K},
                                        fp_ranges::AbstractMatrix{UnitRange{Int}};
                                        prefer_cache::Bool=false,
                                        summary_cache::Union{Nothing,Vector{Dict{NTuple{6,Int},_QQEliminationSummary}}}=nothing) where {K}
-    field = field_from_eltype(K)
+    field = Tot.field
     tmin = Tot.tmin
     tmax = Tot.tmax
     tlen = tmax - tmin + 1
@@ -3935,7 +4051,7 @@ function _ss_build_filt_img_exact_bases(Tot::CochainComplex{K},
                                         fp_ranges::AbstractMatrix{UnitRange{Int}};
                                         prefer_cache::Bool=false,
                                         summary_cache::Union{Nothing,Vector{Dict{NTuple{6,Int},_QQEliminationSummary}}}=nothing) where {K}
-    field = field_from_eltype(K)
+    field = Tot.field
     tmin = Tot.tmin
     tmax = Tot.tmax
     tlen = tmax - tmin + 1
@@ -4002,7 +4118,7 @@ function _ss_build_filt_img_exact_bases_t(Tot::CochainComplex{K},
                                           tidx::Int;
                                           prefer_cache::Bool=false,
                                           summary_cache::Union{Nothing,Vector{Dict{NTuple{6,Int},_QQEliminationSummary}}}=nothing) where {K}
-    field = field_from_eltype(K)
+    field = Tot.field
     plen = size(fp_ranges, 1)
     bases = Vector{Matrix{K}}(undef, plen)
     hf_cache = Dict{NTuple{6,Int},CohomologyData{K}}()
@@ -4076,7 +4192,7 @@ function _spectral_sequence_full(DC::DoubleComplex{K}; first::Symbol = :vertical
     Tot, blocks = _total_complex_with_blocks(DC)
     Htot = cohomology_data(Tot)
     Htot_dims = [H.dimH for H in Htot]
-    field = field_from_eltype(K)
+    field = DC.field
 
     if first == :vertical
         pmin = DC.amin
@@ -4338,12 +4454,12 @@ function _ss_build_einf_spaces(ss::SpectralSequence{K}) where {K}
         dimH = ss.Htot_dims[tidx]
 
         if dimH == 0
-            spaces[ai, bi] = _ss_zero_subquotient(K, 0)
+            spaces[ai, bi] = _ss_zero_subquotient(K, 0; field=ss.DC.field)
             continue
         end
 
         if ss.Einf_dims[ai, bi] == 0
-            spaces[ai, bi] = _ss_zero_subquotient(K, dimH)
+            spaces[ai, bi] = _ss_zero_subquotient(K, dimH; field=ss.DC.field)
             continue
         end
 
@@ -4356,7 +4472,7 @@ function _ss_build_einf_spaces(ss::SpectralSequence{K}) where {K}
                 collect(@view full_bases[:, tidx])
             tcols[tidx] = col
         end
-        spaces[ai, bi] = subquotient_data(col[ip], col[ip1])
+        spaces[ai, bi] = subquotient_data(col[ip], col[ip1]; field=ss.DC.field)
     end
 
     return spaces
@@ -4941,11 +5057,13 @@ end
 # -----------------------------------------------------------------------------
 
 # Internal helper: a canonical "zero" SubquotientData with a prescribed ambient dimension.
-function _ss_zero_subquotient(::Type{K}, ambient_dim::Int) where {K}
+function _ss_zero_subquotient(::Type{K}, ambient_dim::Int;
+                              field::AbstractCoeffField=field_from_eltype(K)) where {K}
+    _validate_complex_field(K, field)
     Z0 = zeros(K, ambient_dim, 0)
     return SubquotientData{K}(ambient_dim, 0, 0, 0,
                               Z0, Z0, zeros(K, 0, 0), zeros(K, 0, 0),
-                              zeros(K, 0, 0), Z0, 1:ambient_dim, Z0, _fullcolumn_factor_ref(), _fullcolumn_factor_ref())
+                              zeros(K, 0, 0), Z0, 1:ambient_dim, Z0, _fullcolumn_factor_ref(), _fullcolumn_factor_ref(), field)
 end
 
 """
@@ -4968,12 +5086,12 @@ Prefer the keyword form in public-facing code:
 """
 function filtration_subquotient(ss::SpectralSequence{K}, p::Int, t::Int) where {K}
     if t < ss.Tot.tmin || t > ss.Tot.tmax
-        return _ss_zero_subquotient(K, 0)
+        return _ss_zero_subquotient(K, 0; field=ss.DC.field)
     end
     tidx = t - ss.Tot.tmin + 1
     dimH = ss.Htot_dims[tidx]
     if dimH == 0
-        return _ss_zero_subquotient(K, 0)
+        return _ss_zero_subquotient(K, 0; field=ss.DC.field)
     end
 
     a, b = if ss.first == :vertical
@@ -4983,7 +5101,7 @@ function filtration_subquotient(ss::SpectralSequence{K}, p::Int, t::Int) where {
     end
 
     if a < ss.DC.amin || a > ss.DC.amax || b < ss.DC.bmin || b > ss.DC.bmax
-        return _ss_zero_subquotient(K, dimH)
+        return _ss_zero_subquotient(K, dimH; field=ss.DC.field)
     end
 
     return term(ss, :inf, (a, b))
@@ -5057,7 +5175,7 @@ function _ss_split_tot_cohomology!(ss::SpectralSequence{K}, t::Int) where {K}
 
     B = hcat(blocks...)
     # Invert B exactly via a full-column solve against the identity.
-    field = field_from_eltype(K)
+    field = ss.DC.field
     Binv = FieldLinAlg.solve_fullcolumn(field, B, _ss_identity(K, dimH))
 
     sd = SSSplitData{K}(t, B, Binv, ranges)
@@ -5286,16 +5404,39 @@ nonzero_terms(ss::SpectralSequence{K}; page::Union{Int,Symbol}=2) where {K} = no
     convergence_page(ss) -> Int
 
 Return the first page on which the dimension tables stabilize.
+This explicit computation may populate intermediate page terms. For inspection
+without additional computation, use `describe(ss).convergence_page`, which is
+`nothing` until the stored dimension tables certify the first stable page.
 """
 convergence_page(ss::SpectralSequence{K}) where {K} = collapse_page(ss)
 
+# Earlier pages must all be known before identifying the *first* stable page.
+# Equality at a later cached page alone does not certify earliest convergence.
+function _cached_convergence_page(ss::SpectralSequence)
+    for r in 1:ss.rmax_possible
+        r >= ss.rmax_possible && return r
+        dims = if r == 1
+            ss.E1_dims
+        elseif r == 2
+            ss.E2_dims
+        else
+            data = get(ss.page_cache, r, nothing)
+            data === nothing && return nothing
+            data.dims
+        end
+        dims == ss.Einf_dims && return r
+    end
+    return ss.rmax_possible
+end
+
 describe(ss::SpectralSequence{K}) where {K} = (
     kind=:spectral_sequence,
-    field=_field_label(K),
+    field=ss.DC.field,
     first=ss.first,
     p_range=(ss.pmin, ss.pmax),
     total_degree_range=(ss.Tot.tmin, ss.Tot.tmax),
-    convergence_page=convergence_page(ss),
+    convergence_page=_cached_convergence_page(ss),
+    convergence_bound=ss.rmax_possible,
     cached_pages=sort!(collect(keys(ss.page_cache))),
     cached_differentials=sort!(collect(keys(ss.diff_cache))),
     total_cohomology_dims=ss.Htot_dims,
@@ -5306,6 +5447,9 @@ describe(ss::SpectralSequence{K}) where {K} = (
 
 Owner-local summary alias for the cheap inspection surface of a spectral
 sequence.
+This reads stored data only. `convergence_page` is the first stable page when
+already certified by stored dimension tables, and `nothing` otherwise;
+`convergence_bound` always reports the bound from the finite filtration width.
 
 For first-pass exploration, prefer
 
@@ -5759,7 +5903,7 @@ end
 
 describe(C::CochainComplex{K,A}) where {K,A} = (
     kind = :cochain_complex,
-    field = _field_label(K),
+    field = C.field,
     degree_range = (C.tmin, C.tmax),
     dimensions = copy(C.dims),
     stored_differentials = length(C.d),
@@ -5768,7 +5912,7 @@ describe(C::CochainComplex{K,A}) where {K,A} = (
 
 describe(f::CochainMap{K}) where {K} = (
     kind = :cochain_map,
-    field = _field_label(K),
+    field = f.C.field,
     degree_range = (f.tmin, f.tmax),
     source_degree_range = (f.C.tmin, f.C.tmax),
     target_degree_range = (f.D.tmin, f.D.tmax),
@@ -5777,7 +5921,7 @@ describe(f::CochainMap{K}) where {K} = (
 
 describe(tri::DistinguishedTriangle{K}) where {K} = (
     kind = :distinguished_triangle,
-    field = _field_label(K),
+    field = tri.C.field,
     source_degree_range = (tri.C.tmin, tri.C.tmax),
     target_degree_range = (tri.D.tmin, tri.D.tmax),
     cone_degree_range = (tri.cone.tmin, tri.cone.tmax),
@@ -5786,7 +5930,7 @@ describe(tri::DistinguishedTriangle{K}) where {K} = (
 
 describe(DC::DoubleComplex{K}) where {K} = (
     kind = :bicomplex,
-    field = _field_label(K),
+    field = DC.field,
     a_range = (DC.amin, DC.amax),
     b_range = (DC.bmin, DC.bmax),
     total_degree_range = (DC.amin + DC.bmin, DC.amax + DC.bmax),
@@ -5820,12 +5964,12 @@ describe(ep::ExtensionProblem{K}) where {K} = (
 @inline _field_label(::Type{K}) where {K} = string(K)
 
 function Base.show(io::IO, C::CochainComplex{K,A}) where {K,A}
-    print(io, "CochainComplex(field=", _field_label(K), ", degrees=", C.tmin, ":", C.tmax, ")")
+    print(io, "CochainComplex(field=", C.field, ", degrees=", C.tmin, ":", C.tmax, ")")
 end
 
 function Base.show(io::IO, ::MIME"text/plain", C::CochainComplex{K,A}) where {K,A}
     println(io, "CochainComplex")
-    println(io, "  field = ", _field_label(K))
+    println(io, "  field = ", C.field)
     println(io, "  degree range = [", C.tmin, ", ", C.tmax, "]")
     println(io, "  dimensions = ", C.dims)
     println(io, "  stored differentials = ", length(C.d))
@@ -5861,7 +6005,7 @@ end
 function Base.show(io::IO, DC::DoubleComplex{K}) where {K}
     print(io,
           "DoubleComplex(field=",
-          _field_label(K),
+          DC.field,
           ", a=",
           DC.amin,
           ":",
@@ -5875,7 +6019,7 @@ end
 
 function Base.show(io::IO, ::MIME"text/plain", DC::DoubleComplex{K}) where {K}
     println(io, "DoubleComplex")
-    println(io, "  field = ", _field_label(K))
+    println(io, "  field = ", DC.field)
     println(io, "  a range = [", DC.amin, ", ", DC.amax, "]")
     println(io, "  b range = [", DC.bmin, ", ", DC.bmax, "]")
     println(io, "  shape = ", size(DC.dims))
@@ -5916,7 +6060,7 @@ end
 function Base.show(io::IO, ::MIME"text/plain", H::CohomologyData{K}) where {K}
     println(io, "CohomologyData")
     println(io, "  degree = ", H.t)
-    println(io, "  field = ", _field_label(K))
+    println(io, "  field = ", H.field)
     println(io, "  ambient_dim = ", H.dimC)
     println(io, "  dimZ = ", H.dimZ)
     println(io, "  dimB = ", H.dimB)
@@ -5930,7 +6074,7 @@ end
 function Base.show(io::IO, ::MIME"text/plain", H::HomologyData{K}) where {K}
     println(io, "HomologyData")
     println(io, "  degree = ", H.s)
-    println(io, "  field = ", _field_label(K))
+    println(io, "  field = ", H.field)
     println(io, "  ambient_dim = ", H.dimC)
     println(io, "  dimZ = ", H.dimZ)
     println(io, "  dimB = ", H.dimB)
@@ -5942,7 +6086,7 @@ function Base.show(io::IO, ss::SpectralSequence{K}) where {K}
           "SpectralSequence(first=",
           ss.first,
           ", field=",
-          _field_label(K),
+          ss.DC.field,
           ", a=",
           ss.DC.amin,
           ":",
@@ -5956,13 +6100,14 @@ end
 
 function Base.show(io::IO, ::MIME"text/plain", ss::SpectralSequence{K}) where {K}
     println(io, "SpectralSequence")
-    println(io, "  field = ", _field_label(K))
+    println(io, "  field = ", ss.DC.field)
     println(io, "  first = ", ss.first)
     println(io, "  a in [", ss.DC.amin, ", ", ss.DC.amax, "]")
     println(io, "  b in [", ss.DC.bmin, ", ", ss.DC.bmax, "]")
     println(io, "  total degrees = [", ss.Tot.tmin, ", ", ss.Tot.tmax, "]")
     println(io, "  rmax_possible = ", ss.rmax_possible)
-    println(io, "  convergence_page (dims) = ", convergence_page(ss))
+    known_page = _cached_convergence_page(ss)
+    println(io, "  convergence_page (dims) = ", known_page === nothing ? "not computed" : known_page)
     println(io, "  total cohomology dims = ", ss.Htot_dims)
     println(io, "  cached pages = ", sort!(collect(keys(ss.page_cache))))
     println(io, "  cached differentials = ", sort!(collect(keys(ss.diff_cache))))
@@ -6012,7 +6157,7 @@ end
 
 function Base.show(io::IO, ::MIME"text/plain", SQ::SubquotientData{K}) where {K}
     println(io, "SubquotientData (explicit Z/B model)")
-    println(io, "  field = ", _field_label(K))
+    println(io, "  field = ", SQ.field)
     println(io, "  ambient_dim = ", SQ.ambient_dim)
     println(io, "  dimZ = ", SQ.dimZ)
     println(io, "  dimB = ", SQ.dimB)

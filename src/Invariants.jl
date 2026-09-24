@@ -22,10 +22,11 @@ Private fragments loaded here:
 
 using LinearAlgebra
 using JSON3
-using ..CoreModules: EncodingCache, AbstractCoeffField, RegionPosetCachePayload,
+using ..CoreModules: _foreach_workchunk, EncodingCache, AbstractCoeffField, RegionPosetCachePayload,
                      AbstractSlicePlanCache
 using ..Options: InvariantOptions
-using ..EncodingCore: PLikeEncodingMap, CompiledEncoding, locate, axes_from_encoding, dimension, representatives,
+using ..EncodingCore: PLikeEncodingMap, CompiledEncoding, GridEncodingMap, encoding_poset,
+                       locate, axes_from_encoding, dimension, representatives,
                        check_query_point
 using Statistics: mean
 using ..Stats: _wilson_interval
@@ -87,7 +88,7 @@ import ..SignedMeasures: Rect, RectSignedBarcode, PointSignedMeasure,
                            restrict_axes_to_encoding
 import ..SliceInvariants: _normalize_box, encoding_box, window_box,
                           slice_chain, restrict_to_chain, slice_barcode,
-                          bottleneck_distance, SliceDistanceTask,
+                          bottleneck_distance, bottleneck_matching, SliceDistanceTask,
                           wasserstein_distance, wasserstein_kernel, sliced_wasserstein_kernel,
                           sliced_wasserstein_distance, sliced_bottleneck_distance,
                           sample_directions_2d, default_directions, default_offsets,
@@ -96,13 +97,13 @@ import ..SliceInvariants: _normalize_box, encoding_box, window_box,
                           PersistenceImage1D, persistence_image, feature_map, feature_vector,
                           persistence_silhouette, barcode_entropy, barcode_summary,
                           collect_slices, save_slices_json, load_slices_json,
-                          CompiledSlicePlan, SlicePlanCacheKey, SlicePlanCache,
+                          CompiledSlicePlan, SlicePlanCache,
                           clear_slice_plan_cache!, clear_slice_module_cache!,
                           SliceModuleCache, SliceModulePairCache,
                           compile_slice_plan, compile_slices, slice_barcodes, run_invariants,
                           slice_features, slice_kernel, module_cache,
                           SliceBarcodesTask, SliceKernelTask
-import ..Fibered2D: slice_chain_exact_2d, matching_distance_exact_slices_2d,
+import ..Fibered2D: slice_chain_exact_2d, matching_distance_slices_2d,
                     FiberedArrangement2D, FiberedBarcodeCache2D,
                     FiberedSliceResult,
                     ProjectedArrangement1D, ProjectedArrangement, ProjectedBarcodeCache,
@@ -129,7 +130,7 @@ import ..Fibered2D: slice_chain_exact_2d, matching_distance_exact_slices_2d,
                     fibered_arrangement_summary, fibered_cache_summary,
                     fibered_family_summary, projected_arrangement_summary,
                     projected_cache_summary, fibered_query_summary,
-                    fibered_slice_family_2d, matching_distance_exact_2d,
+                    fibered_slice_family_2d, matching_distance_exact_2d, matching_distance_sampled_2d,
                     projected_arrangement, projected_barcode_cache, projected_barcodes,
                     projected_distances, projected_distance, projected_kernel
 import ..MultiparameterImages: MPPLineSpec, MPPDecomposition, MPPImage, MPLandscape,

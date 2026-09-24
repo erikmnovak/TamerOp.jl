@@ -20,7 +20,7 @@ Canonical workflow policy
 Workflow output policy
 - `encode`, `resolve`, and `invariant` return typed result wrappers by
   default,
-- `restriction`, `pushforward_left`, and `pushforward_right` return
+- `restriction`, `pushforward_left`, and `pushforward_right` on `EncodingResult` inputs return
   [`ModuleTranslationResult`](@ref) wrappers that preserve workflow
   provenance,
 - `hom`, `ext`, `tor`, `rhom`, `hyperext`, and `hypertor` return algebraic
@@ -29,6 +29,17 @@ Workflow output policy
   `bass_table(enc)`, `matching_distance_exact_2d(encA, encB)`, or
   `mpp_image(enc)` return bare values,
 - raw tuples and intermediate ingestion stages remain explicit opt-in only.
+
+For native `PModule` and `PMorphism` inputs, the change-of-poset task names
+preserve the `ChangeOfPosets` methods, their return types and their keywords.
+
+Hom, Ext, resolutions, and hyper-derived computations belong to the reported
+finite representation category; Tor pairs modules over its incidence algebra.
+An encoding classifier alone does not identify them with ambient derived
+functors. `provenance(result)` exposes the actual category and field. Inspect
+the input encoding's provenance for its geometric construction and sampling
+contract; native algebraic results retain their finite base, not an original
+dataset. Abstract product transport is distinct from a realized joint image.
 
 Ownership map
 - `encode`, `coarsen`, `common_refinement`, `restriction`,
@@ -183,7 +194,8 @@ using ..DataTypes: PointCloud, ImageNd, GraphData, EmbeddedPlanarGraph2D,
 using ..EncodingCore: AbstractPLikeEncodingMap, CompiledEncoding, GridEncodingMap,
                       _compile_encoding_cached
 using ..Results: EncodingResult, EncodedComplexResult, CohomologyDimsResult, ModuleTranslationResult, ResolutionResult, InvariantResult,
-                 _encoding_with_session_cache, materialize_module, module_dims, encoding_complex, _materialize_complex
+                 _encoding_with_session_cache, materialize_module, module_dims, encoding_complex, _materialize_complex,
+                 _presentation_encoding_meta, provenance
 import ..EncodingCore: locate, dimension, representatives, axes_from_encoding, _grid_strides,
                       GridEncodingMap
 import ..Serialization
@@ -198,7 +210,7 @@ using ..PLPolyhedra
 using ..PLBackend: BoxUpset, BoxDownset, encode_fringe_boxes
 using ..Encoding: build_uptight_encoding_from_fringe,
                  pushforward_fringe_along_encoding,
-                 PostcomposedEncodingMap
+                 PostcomposedEncodingMap, EncodingMap
 using ..Modules: PModule, PMorphism, cover_edges, dim_at
 using ..FiniteFringe: AbstractPoset, FinitePoset, GridPoset, ProductOfChainsPoset, FringeModule,
                      Upset, Downset, principal_upset, principal_downset, leq, nvertices,
@@ -297,26 +309,12 @@ end
 # A future goal is that these are essentially the only names exported by default.
 
 """
-    has_polyhedra_backend()::Bool
-
-Return true if the optional Polyhedra-based backend is available at runtime.
-"""
-has_polyhedra_backend()::Bool = PLPolyhedra.HAVE_POLY
-
-"""
     available_pl_backends()::Vector{Symbol}
 
-Report which R^n encoding backends are available in this session.
-Always includes :pl_backend (because PLBackend is always loaded).
-Includes :pl if Polyhedra/CDDLib are available.
+Return the supported R^n encoding backends: `:pl_backend` for axis-aligned
+partitions and `:pl` for general polyhedra. Their dependencies are mandatory.
 """
-function available_pl_backends()::Vector{Symbol}
-    out = Symbol[:pl_backend]
-    if has_polyhedra_backend()
-        push!(out, :pl)
-    end
-    return out
-end
+available_pl_backends()::Vector{Symbol} = Symbol[:pl_backend, :pl]
 
 # Internal: normalize user backend selectors for R^n
 # Canonical symbols:
@@ -501,7 +499,6 @@ Returns :pl_backend or :pl.
 Rules:
 - If opts.backend is explicitly set (e.g. :pl_backend or :pl), try to honor it.
 - If opts.backend=:auto, prefer :pl_backend when supported; otherwise fall back to :pl.
-- If :pl is requested but Polyhedra backend is unavailable, throw.
 """
 function choose_pl_backend(Ups::Vector{BoxUpset}, Downs::Vector{BoxDownset};
                            opts::EncodingOptions=EncodingOptions())::Symbol
@@ -511,13 +508,11 @@ function choose_pl_backend(Ups::Vector{BoxUpset}, Downs::Vector{BoxDownset};
         supports_pl_backend(Ups, Downs; opts=opts) || error("PLBackend requested, but this input is not supported by PLBackend.")
         return :pl_backend
     elseif b == :pl
-        has_polyhedra_backend() || error("PLPolyhedra backend requested, but Polyhedra/CDDLib is not available.")
         return :pl
     elseif b == :auto
         if supports_pl_backend(Ups, Downs; opts=opts)
             return :pl_backend
         else
-            has_polyhedra_backend() || error("PLBackend not applicable and Polyhedra backend is unavailable.")
             return :pl
         end
     else
@@ -532,13 +527,11 @@ function choose_pl_backend(F::PLPolyhedra.PLFringe; opts::EncodingOptions=Encodi
         supports_pl_backend(F; opts=opts) || error("PLBackend requested, but this PLFringe is not supported by PLBackend.")
         return :pl_backend
     elseif b == :pl
-        has_polyhedra_backend() || error("PLPolyhedra backend requested, but Polyhedra/CDDLib is not available.")
         return :pl
     elseif b == :auto
         if supports_pl_backend(F; opts=opts)
             return :pl_backend
         else
-            has_polyhedra_backend() || error("PLBackend not applicable and Polyhedra backend is unavailable.")
             return :pl
         end
     else
@@ -842,7 +835,8 @@ function encode(FG::Flange{K}, enc::EncodingOptions;
                                                  session_cache=session_cache)
     H, M = _workflow_zn_pushforward_module(P, pi, FG2, session_cache, enc.poset_kind)
     pi2 = _compile_encoding_cached(P, pi, session_cache)
-    res = EncodingResult(P, M, pi2; H=H, presentation=FG2, opts=enc, backend=:zn, meta=(;))
+    res = EncodingResult(P, M, pi2; H=H, presentation=FG2, opts=enc, backend=:zn,
+                         meta=_presentation_encoding_meta(enc, :zn))
     return _return_encoding(res, output)
 end
 
@@ -888,7 +882,8 @@ function encode(FGs::Union{AbstractVector{<:Flange}, Tuple{Vararg{Flange}}},
     for i in eachindex(FGs2)
         H = Hs[i]
         out[i] = EncodingResult(P, Ms[i], pi2;
-                                H=H, presentation=FGs2[i], opts=enc, backend=:zn, meta=(;))
+                                H=H, presentation=FGs2[i], opts=enc, backend=:zn,
+                                meta=_presentation_encoding_meta(enc, :zn; joint=true))
     end
     return output === :result ? out : [_return_encoding(enc_i, output) for enc_i in out]
 end
@@ -919,7 +914,8 @@ function encode(F::PLPolyhedra.PLFringe, enc::EncodingOptions=EncodingOptions();
     M = pmodule_from_fringe(H)
     b = choose_pl_backend(F; opts=enc)
     pi2 = _compile_encoding_cached(P, pi, session_cache)
-    res = EncodingResult(P, M, pi2; H=H, presentation=F, opts=enc, backend=b, meta=(;))
+    res = EncodingResult(P, M, pi2; H=H, presentation=F, opts=enc, backend=b,
+                         meta=_presentation_encoding_meta(enc, b))
     return _return_encoding(res, output)
 end
 
@@ -934,7 +930,7 @@ function encode(Ups::Vector{BoxUpset}, Downs::Vector{BoxDownset}, Phi::AbstractM
     pi2 = _compile_encoding_cached(P, pi, session_cache)
     res = EncodingResult(P, M, pi2;
                          H=H, presentation=(Ups=Ups, Downs=Downs, Phi=Phi),
-                         opts=enc, backend=b, meta=(;))
+                         opts=enc, backend=b, meta=_presentation_encoding_meta(enc, b))
     return _return_encoding(res, output)
 end
 
@@ -978,7 +974,7 @@ function _encode_synthetic_box_fringe(B,
     pi2 = _compile_encoding_cached(P, pi, session_cache)
     res = EncodingResult(P, M, pi2;
                          H=H, presentation=B,
-                         opts=enc, backend=b, meta=(;))
+                         opts=enc, backend=b, meta=_presentation_encoding_meta(enc, b))
     return _return_encoding(res, output)
 end
 
@@ -999,7 +995,8 @@ function encode(Fs::AbstractVector{<:PLPolyhedra.PLFringe}, enc::EncodingOptions
     for i in eachindex(Fs)
         H = Hs[i]
         out[i] = EncodingResult(P, pmodule_from_fringe(H), pi2;
-                                H=H, presentation=Fs[i], opts=enc, backend=:pl, meta=(;))
+                                H=H, presentation=Fs[i], opts=enc, backend=:pl,
+                                meta=_presentation_encoding_meta(enc, :pl; joint=true))
     end
     return output === :result ? out : [_return_encoding(enc_i, output) for enc_i in out]
 end
@@ -1106,6 +1103,15 @@ function coarsen(enc::EncodingResult;
         )
     end
 
+    refinement_provenance = merge(provenance(enc), (
+        base_poset=pi.P,
+        refinement=(kind=:uptight_quotient, source_poset=enc.P, map=pi),
+        source=provenance(enc), ambient_identification=:not_asserted))
+    if meta2 isa AbstractDict
+        meta2[:provenance] = refinement_provenance
+    else
+        meta2 = merge(meta2, (provenance=refinement_provenance,))
+    end
     return EncodingResult(pi.P, M2, pi2c;
         H = H2,
         presentation = enc.presentation,
@@ -1166,6 +1172,10 @@ poset(enc::EncodingResult) = enc.P
     pmodule(enc::EncodingResult)
 
 Return the encoded module stored inside `enc`.
+
+For a lazy encoding this explicitly computes and caches the full module,
+including structure maps. Use `describe(enc)` to inspect stored information
+without computation, or `dimensions(enc)` for dimensions without full maps.
 """
 pmodule(enc::EncodingResult) = materialize_module(enc.M)
 
@@ -1201,6 +1211,14 @@ presentation(enc::EncodingResult) = enc.presentation
 Translate two encoded modules to a common refinement poset and return the typed
 change-of-poset result from `ChangeOfPosets`.
 
+The two-argument operation uses an abstract Cartesian product (or the shared
+finite poset when already equal). It does not inspect the ambient classifiers
+to remove unrealized pairs and does not establish encoding-invariance of Ext
+or Tor. For classifiers with a common finite source, construct
+`joint_encoding(pi1, pi2)` and pass that result as a third argument to use the
+realized joint image. General continuous classifier intersection is not
+inferred by this operation.
+
 This is the workflow entrypoint for "put these two encoded objects on one
 finite poset so I can inspect the translated pair". The returned
 `CommonRefinementTranslationResult` is already a semantic owner-level result
@@ -1226,6 +1244,39 @@ function common_refinement(A::EncodingResult, B::EncodingResult; cache=:auto, kw
         kwargs...,
     )
 end
+
+function common_refinement(A::EncodingResult, B::EncodingResult,
+                           joint::ChangeOfPosets.JointEncodingResult;
+                           cache=:auto, check::Bool=true)
+    session_cache = _resolve_workflow_session_cache(cache)
+    return ChangeOfPosets.encode_pmodules_to_common_poset(
+        pmodule(A), pmodule(B), joint; session_cache=session_cache, check=check)
+end
+
+# Workflow owns these root bindings. Preserve the owner-native module and
+# morphism methods alongside the EncodingResult orchestration below.
+restriction(pi::EncodingMap, object::Union{PModule,PMorphism}; kwargs...) =
+    ChangeOfPosets.restriction(pi, object; kwargs...)
+
+pushforward_left(pi::EncodingMap, object::Union{PModule,PMorphism}; kwargs...) =
+    ChangeOfPosets.pushforward_left(pi, object; kwargs...)
+
+pushforward_right(pi::EncodingMap, object::Union{PModule,PMorphism}; kwargs...) =
+    ChangeOfPosets.pushforward_right(pi, object; kwargs...)
+
+derived_pushforward_left(pi::EncodingMap, object::Union{PModule,PMorphism},
+                         opts::DerivedFunctorOptions; kwargs...) =
+    ChangeOfPosets.derived_pushforward_left(pi, object, opts; kwargs...)
+
+derived_pushforward_left(pi::EncodingMap, object::Union{PModule,PMorphism}; kwargs...) =
+    ChangeOfPosets.derived_pushforward_left(pi, object; kwargs...)
+
+derived_pushforward_right(pi::EncodingMap, object::Union{PModule,PMorphism},
+                          opts::DerivedFunctorOptions; kwargs...) =
+    ChangeOfPosets.derived_pushforward_right(pi, object, opts; kwargs...)
+
+derived_pushforward_right(pi::EncodingMap, object::Union{PModule,PMorphism}; kwargs...) =
+    ChangeOfPosets.derived_pushforward_right(pi, object; kwargs...)
 
 """
     restriction(pi, enc::EncodingResult; cache=:auto) -> ModuleTranslationResult
@@ -1515,12 +1566,13 @@ end
     return value
 end
 
-@inline function _workflow_exact2d_box_key(box)
+@inline function _workflow_fibered2d_box_key(box)
     box === nothing && return nothing
+    box === :auto && return :auto
     return (Tuple(box[1]), Tuple(box[2]))
 end
 
-@inline function _workflow_exact2d_arrangement_key(pi,
+@inline function _workflow_fibered2d_arrangement_key(pi,
                                                    opts::InvariantOptions;
                                                    normalize_dirs=:L1,
                                                    include_axes::Bool=false,
@@ -1530,10 +1582,13 @@ end
                                                    max_cells::Int=5_000_000,
                                                    precompute::Symbol=:cells_barcodes)
     arr_precompute = precompute in (:cells, :cells_barcodes) ? :cells : :none
+    # Session wrapping may recreate optional representatives on every call.
+    # The arrangement belongs to the underlying classifier, not that wrapper.
+    pi0 = pi isa CompiledEncoding ? pi.pi : pi
     return (
-        :workflow_exact2d_arrangement,
-        UInt(objectid(pi)),
-        _workflow_exact2d_box_key(opts.box),
+        :workflow_fibered2d_arrangement,
+        UInt(objectid(pi0)),
+        _workflow_fibered2d_box_key(opts.box),
         opts.strict,
         normalize_dirs,
         include_axes,
@@ -1545,18 +1600,18 @@ end
     )
 end
 
-@inline function _workflow_exact2d_family_key(arr;
+@inline function _workflow_fibered2d_family_key(arr;
                                               weight::Symbol=:lesnick_l1,
                                               store_values::Bool=true)
     return (
-        :workflow_exact2d_family,
+        :workflow_fibered2d_family,
         UInt(objectid(arr)),
         weight,
         store_values,
     )
 end
 
-function _workflow_exact2d_arrangement(pi,
+function _workflow_fibered2d_arrangement(pi,
                                        opts::InvariantOptions,
                                        cache::Union{Nothing,EncodingCache};
                                        normalize_dirs=:L1,
@@ -1566,7 +1621,7 @@ function _workflow_exact2d_arrangement(pi,
                                        max_vertices::Int=20_000,
                                        max_cells::Int=5_000_000,
                                        precompute::Symbol=:cells_barcodes)
-    key = _workflow_exact2d_arrangement_key(
+    key = _workflow_fibered2d_arrangement_key(
         pi,
         opts;
         normalize_dirs=normalize_dirs,
@@ -1594,11 +1649,11 @@ function _workflow_exact2d_arrangement(pi,
     return _workflow_geometry_set!(cache, key, arr)
 end
 
-function _workflow_exact2d_family(arr,
+function _workflow_fibered2d_family(arr,
                                   cache::Union{Nothing,EncodingCache};
                                   weight::Symbol=:lesnick_l1,
                                   store_values::Bool=true)
-    key = _workflow_exact2d_family_key(arr; weight=weight, store_values=store_values)
+    key = _workflow_fibered2d_family_key(arr; weight=weight, store_values=store_values)
     cached = _workflow_geometry_get(cache, key)
     cached === nothing || return cached
     fam = Fibered2D.fibered_slice_family_2d(
@@ -1607,6 +1662,14 @@ function _workflow_exact2d_family(arr,
         store_values=store_values,
     )
     return _workflow_geometry_set!(cache, key, fam)
+end
+
+function _workflow_fibered2d_barcode_cache(M, arr, cache::Union{Nothing,EncodingCache})
+    key = (:workflow_fibered2d_barcode, UInt(objectid(M)), UInt(objectid(arr)))
+    cached = _workflow_geometry_get(cache, key)
+    cached === nothing || return cached
+    result = Fibered2D.fibered_barcode_cache_2d(M, arr; precompute=:none)
+    return _workflow_geometry_set!(cache, key, result)
 end
 
 @inline function _workflow_fringe_cache_key(enc::EncodingResult)
@@ -1748,48 +1811,112 @@ end
 
 """
     matching_distance_exact_2d(encA::EncodingResult, encB::EncodingResult;
-                               opts=InvariantOptions(), cache=:auto, kwargs...) -> Float64
+        opts=InvariantOptions(), cache=:auto, max_candidates=200_000, ...) -> Float64
 
-Exact 2D workflow wrapper for the full arrangement-cell matching distance.
+Exact supremum of weighted bottleneck distances over all positive-slope slices
+clipped to the finite working window. Both encodings must share a poset and an
+axis-aligned coordinate-cell classifier. Polyhedral and rounded Zn classifiers
+are unsupported; use `matching_distance_sampled_2d` for representative queries.
 
-This is the canonical workflow entrypoint when both encoded modules share one
-2D classifier map and you want deterministic exactness rather than the sampled
-slice approximation from [`matching_distance`](@ref).
+The default normalization/weight pair is `:L1`/`:lesnick_l1`; `:Linf` with
+`:lesnick_linf` gives the same quantity. Exact rational or real algebraic
+switching geometry and bottleneck comparisons precede final `Float64`
+conversion. Coefficient-field rank computations retain their usual exact or
+numerical contract.
 
-Contract
-- `encA.P === encB.P` and `encA.pi === encB.pi`; common-encode first when they
-  do not already share the same classifier map,
-- the shared classifier map must be 2-dimensional,
-- `cache=:auto` is the canonical one-shot path,
-- `cache=sc::SessionCache` reuses the exact arrangement and slice family across
-  repeated exact-2D calls with the same classifier/options.
+Set `opts.box` explicitly to choose the mathematical window. Intervals are
+truncated at its boundary, including globally essential intervals. It agrees
+with the unrestricted matching distance when the window contains both modules'
+support; otherwise this API promises only the clipped-window quantity. `max_candidates` caps combinatorial work and raises an error
+if exhausted. The optimizer is intended for modest coordinate grids.
 
-Cheap-first workflow
-- use [`matching_distance`](@ref) for quick approximate exploration,
-- choose `matching_distance_exact_2d(...)` when you want exactness on the same
-  shared 2D encoding,
-- pass `cache=sc` when exact 2D queries will be repeated.
+`cache=sc::SessionCache` reuses arrangements and module barcode caches.
+`opts.threads` controls parallel optimization after sequential cache population.
 """
-matching_distance_exact_2d(M::PModule{K},
+matching_distance_exact_2d(M::PModule{K}, N::PModule{K}, pi,
+                           opts::InvariantOptions; kwargs...) where {K} =
+    Fibered2D.matching_distance_exact_2d(M, N, pi, opts; kwargs...)
+
+matching_distance_exact_2d(M::PModule{K}, N::PModule{K}, pi;
+                           opts::InvariantOptions=InvariantOptions(), kwargs...) where {K} =
+    matching_distance_exact_2d(M, N, pi, opts; kwargs...)
+
+matching_distance_exact_2d(cacheM::Fibered2D.FiberedBarcodeCache2D,
+                           cacheN::Fibered2D.FiberedBarcodeCache2D; kwargs...) =
+    Fibered2D.matching_distance_exact_2d(cacheM, cacheN; kwargs...)
+
+function matching_distance_exact_2d(encA::EncodingResult, encB::EncodingResult;
+                                    opts::InvariantOptions=InvariantOptions(),
+                                    cache=:auto,
+                                    weight::Symbol=:lesnick_l1,
+                                    normalize_dirs::Symbol=:L1,
+                                    max_candidates::Int=200_000,
+                                    max_cells::Int=5_000_000,
+                                    arrangement=nothing)
+    encA.P === encB.P ||
+        error("matching_distance_exact_2d: encodings are on different posets; common-encode first.")
+    encA.pi === encB.pi ||
+        error("matching_distance_exact_2d: encodings do not share a common classifier map pi; common-encode first.")
+    dimension(encA.pi) == 2 ||
+        error("matching_distance_exact_2d: exact 2D distance requires a 2-dimensional classifier map.")
+    session_cache = _resolve_workflow_session_cache(cache)
+    encA2 = _encoding_with_session_cache(encA, session_cache)
+    encB2 = _encoding_with_session_cache(encB, session_cache)
+    pi = encA2.pi
+    enc_cache = _workflow_encoding_cache(session_cache)
+    arr = arrangement === nothing ? _workflow_fibered2d_arrangement(
+        pi, opts, enc_cache; normalize_dirs=normalize_dirs,
+        max_cells=max_cells, precompute=:none) : arrangement
+    # An explicit arrangement must represent this encoding and window.
+    pi0 = pi isa CompiledEncoding ? pi.pi : pi
+    arr.pi === pi0 || throw(ArgumentError("matching_distance_exact_2d: provided arrangement uses a different classifier"))
+    arr.normalize_dirs === normalize_dirs || throw(ArgumentError("matching_distance_exact_2d: provided arrangement uses a different direction normalization"))
+    if opts.box !== nothing
+        bx = opts.box === :auto ? Invariants.encoding_box(pi, opts) : opts.box
+        (arr.input_box[1] == bx[1] && arr.input_box[2] == bx[2]) ||
+            throw(ArgumentError("matching_distance_exact_2d: provided arrangement uses a different window"))
+    end
+    cacheM = _workflow_fibered2d_barcode_cache(pmodule(encA2), arr, enc_cache)
+    cacheN = _workflow_fibered2d_barcode_cache(pmodule(encB2), arr, enc_cache)
+    threads0 = opts.threads === nothing ? (Threads.nthreads() > 1) : opts.threads
+    return Fibered2D.matching_distance_exact_2d(cacheM, cacheN;
+        weight=weight, max_candidates=max_candidates, threads=threads0)
+end
+
+"""
+    matching_distance_sampled_2d(encA, encB;
+        opts=InvariantOptions(), cache=:auto, kwargs...) -> Float64
+
+Maximum weighted bottleneck distance on a deterministic finite family of
+window-clipped representative slices. It is a lower bound for the corresponding
+supremum when extraction faithfully restricts the classifier. For rounded
+`ZnEncodingMap` classifiers, the integer coordinate walls used by extraction
+differ from the locator's half-integer walls, so this is only a representative
+estimate, not a certified bound. No approximation error is certified.
+Both encodings must share a two-dimensional classifier and poset.
+`cache=sc::SessionCache` reuses the arrangement and family.
+Use `matching_distance_exact_2d` for exact optimization on modest axis-aligned grids.
+"""
+matching_distance_sampled_2d(M::PModule{K},
                            N::PModule{K},
                            pi,
                            opts::InvariantOptions;
                            kwargs...) where {K} =
-    Fibered2D.matching_distance_exact_2d(M, N, pi, opts; kwargs...)
+    Fibered2D.matching_distance_sampled_2d(M, N, pi, opts; kwargs...)
 
-matching_distance_exact_2d(M::PModule{K},
+matching_distance_sampled_2d(M::PModule{K},
                            N::PModule{K},
                            pi;
                            opts::InvariantOptions=InvariantOptions(),
                            kwargs...) where {K} =
-    matching_distance_exact_2d(M, N, pi, opts; kwargs...)
+    matching_distance_sampled_2d(M, N, pi, opts; kwargs...)
 
-matching_distance_exact_2d(cacheM::Fibered2D.FiberedBarcodeCache2D,
+matching_distance_sampled_2d(cacheM::Fibered2D.FiberedBarcodeCache2D,
                            cacheN::Fibered2D.FiberedBarcodeCache2D;
                            kwargs...) =
-    Fibered2D.matching_distance_exact_2d(cacheM, cacheN; kwargs...)
+    Fibered2D.matching_distance_sampled_2d(cacheM, cacheN; kwargs...)
 
-function matching_distance_exact_2d(encA::EncodingResult,
+function matching_distance_sampled_2d(encA::EncodingResult,
                                     encB::EncodingResult;
                                     opts::InvariantOptions=InvariantOptions(),
                                     cache=:auto,
@@ -1805,11 +1932,11 @@ function matching_distance_exact_2d(encA::EncodingResult,
                                     store_values::Bool=true,
                                     family=nothing)
     (encA.P === encB.P) ||
-        error("matching_distance_exact_2d: encodings are on different posets; common-encode first.")
+        error("matching_distance_sampled_2d: encodings are on different posets; common-encode first.")
     (encA.pi === encB.pi) ||
-        error("matching_distance_exact_2d: encodings do not share a common classifier map pi; common-encode first.")
+        error("matching_distance_sampled_2d: encodings do not share a common classifier map pi; common-encode first.")
     dimension(encA.pi) == 2 ||
-        error("matching_distance_exact_2d: exact 2D distance requires a 2-dimensional classifier map.")
+        error("matching_distance_sampled_2d: sampled 2D distance requires a 2-dimensional classifier map.")
 
     session_cache = _resolve_workflow_session_cache(cache)
     encA2 = _encoding_with_session_cache(encA, session_cache)
@@ -1817,7 +1944,7 @@ function matching_distance_exact_2d(encA::EncodingResult,
     pi = encA2.pi
     enc_cache = _workflow_encoding_cache(session_cache)
 
-    arr = arrangement === nothing ? _workflow_exact2d_arrangement(
+    arr = arrangement === nothing ? _workflow_fibered2d_arrangement(
         pi,
         opts,
         enc_cache;
@@ -1830,14 +1957,14 @@ function matching_distance_exact_2d(encA::EncodingResult,
         precompute=precompute,
     ) : arrangement
 
-    fam = family === nothing ? _workflow_exact2d_family(
+    fam = family === nothing ? _workflow_fibered2d_family(
         arr,
         enc_cache;
         weight=weight,
         store_values=store_values,
     ) : family
 
-    return Fibered2D.matching_distance_exact_2d(
+    return Fibered2D.matching_distance_sampled_2d(
         pmodule(encA2),
         pmodule(encB2),
         pi,
@@ -1861,6 +1988,12 @@ end
 
 Compute Tor_t(Rop, L), where `Rop` is a right-module represented as a module on
 the opposite poset P^op, and `L` is a left-module on P.
+This is Tor over the incidence algebra of that finite P, not automatically
+Tor in the original ambient persistence category. Changing the encoding may
+change the answer, even when its pullback represents the same ambient module.
+Inspect `provenance(result)` for the actual finite base and coefficient field.
+The result stores degrees `0:maxdeg`; the resolution includes the next boundary.
+Querying `dim` above this range throws `ArgumentError`.
 
 For EncodingResult inputs, the underlying posets must be opposite:
     poset_equal_opposite(L.P, Rop.P)
@@ -1920,6 +2053,12 @@ end
     ext(A::EncodingResult, B::EncodingResult; maxdeg=3, model=:auto, canon=:auto, cache=:auto)
 
 Compute Ext^t(A, B) using the finite-poset modules stored in EncodingResult.
+The category is `Rep_k(P)` for that finite P. Independence of the resolution
+model does not imply independence of the encoding or equality with ambient
+persistence Ext; those comparisons require additional hypotheses.
+Inspect `provenance(result)` for the actual finite base and coefficient field.
+The result stores degrees `0:maxdeg`; the resolution includes the next differential.
+Querying `dim` above this range throws `ArgumentError`.
 
 If `A` and `B` are not encoded on the same poset object, you must common-encode first:
     encs = encode(x, y; backend=...)
@@ -2077,10 +2216,14 @@ derived_tensor(Rop::EncodingResult, enc::EncodedComplexResult; kwargs...) =
 
 
 """
-    hyperext(C, N; maxdeg=3, kwargs...)
-    hyperext(enc::EncodedComplexResult, N; maxdeg=3, kwargs...)
+    hyperext(C, N; maxlen=3, kwargs...)
+    hyperext(enc::EncodedComplexResult, N; maxlen=3, kwargs...)
 
 Compute `HyperExt^t(C, N)` for a module cochain complex `C` and a module `N`.
+
+An ingested `EncodedComplexResult` uses `C^{-k}=C_k`. HyperExt retains this
+cohomological grading; its degree labels are derived-functor degrees, not the
+nonnegative `degree=k` homology selector of data ingestion.
 
 Source/target convention
 - `C` is the first derived argument,
@@ -2089,7 +2232,10 @@ Source/target convention
 Workflow policy
 - `cache=:auto` is the canonical one-shot path,
 - `cache=sc::SessionCache` reuses the same Hom-system cache as `rhom(...)`,
-- keep `maxdeg` small when you only need low degrees.
+- `maxlen` is the injective-resolution budget, not an output-degree cutoff,
+- `describe(result).degree_range` reports the certified degrees; increase `maxlen` to extend an
+  unfinished resolution. For a complex supported through degree `p`, a budget
+  `L` certifies hyper-Ext through degree `L-p-1` before termination.
 
 Cheap-first workflow
 - prefer `ext(...)` when you want ordinary Ext for encoded modules,
@@ -2100,35 +2246,41 @@ Return contract
   `ResolutionResult`.
 """
 function hyperext(C::ModuleComplexes.ModuleCochainComplex{K}, N::Modules.PModule{K};
-                  maxdeg::Int=3,
+                  maxlen::Int=3,
                   cache=:auto,
-                  kwargs...) where {K}
+                  resN=nothing,
+                  threads::Bool=(Threads.nthreads() > 1)) where {K}
     cache_hom, session_cache = _resolve_workflow_specialized_cache(cache, DerivedFunctors.HomSystemCache)
     cache2 = _hom_cache_from_session(cache_hom, session_cache, K)
-    return ModuleComplexes.hyperExt(C, N; maxlen=maxdeg, cache=cache2, kwargs...)
+    return ModuleComplexes.hyperExt(C, N; maxlen=maxlen, cache=cache2, resN=resN, threads=threads)
 end
 
 hyperext(enc::EncodedComplexResult, N::Modules.PModule{K};
-         maxdeg::Int=3,
+         maxlen::Int=3,
          cache=:auto,
          kwargs...) where {K} =
-    hyperext(_materialize_complex(encoding_complex(enc)), N; maxdeg=maxdeg, cache=cache, kwargs...)
+    hyperext(_materialize_complex(encoding_complex(enc)), N; maxlen=maxlen, cache=cache, kwargs...)
 
 """
-    hypertor(Rop, C; maxdeg=3, kwargs...)
-    hypertor(Rop, enc::EncodedComplexResult; maxdeg=3, kwargs...)
+    hypertor(Rop, C; maxlen=3, kwargs...)
+    hypertor(Rop, enc::EncodedComplexResult; maxlen=3, kwargs...)
 
 Compute `HyperTor_t(Rop, C)` for a right-module `Rop` on `P^op` and a module
 complex `C` on `P`.
+
+An ingested `EncodedComplexResult` uses the cochain grading `C^{-k}=C_k`.
+This grading passes through to the derived tensor complex without changing
+the meaning of HyperTor's homological degree labels.
 
 Source/target convention
 - `Rop` is the right-module argument on the opposite poset,
 - `C` is the left-module complex argument on `P`.
 
 Workflow policy
-- `maxdeg` truncates the computed degree range,
-- keep the default model unless you are deliberately matching a derived-functor
-  backend experiment,
+- `maxlen` is the projective-resolution budget, not an output-degree cutoff,
+- `describe(result).degree_range` reports the certified degrees, including negative degrees for
+  shifted cochain complexes. If the resolution is unfinished and `C` ends in
+  degree `p`, a budget `L` certifies hyper-Tor through degree `L-p-1`,
 - prefer `tor(...)` first when the second argument is an ordinary module rather
   than a module complex.
 
@@ -2136,18 +2288,20 @@ Return contract
 - returns the algebraic HyperTor object directly.
 """
 function hypertor(Rop::Modules.PModule{K}, C::ModuleComplexes.ModuleCochainComplex{K};
-                  maxdeg::Int=3, kwargs...) where {K}
-    return ModuleComplexes.hyperTor(Rop, C; maxlen=maxdeg, kwargs...)
+                  maxlen::Int=3,
+                  threads::Bool=(Threads.nthreads() > 1),
+                  check::Bool=false) where {K}
+    return ModuleComplexes.hyperTor(Rop, C; maxlen=maxlen, threads=threads, check=check)
 end
 
 hypertor(Rop::EncodingResult, C::ModuleComplexes.ModuleCochainComplex; kwargs...) =
     hypertor(pmodule(Rop), C; kwargs...)
 
-hypertor(Rop::Modules.PModule{K}, enc::EncodedComplexResult; maxdeg::Int=3, kwargs...) where {K} =
-    hypertor(Rop, _materialize_complex(encoding_complex(enc)); maxdeg=maxdeg, kwargs...)
+hypertor(Rop::Modules.PModule{K}, enc::EncodedComplexResult; maxlen::Int=3, kwargs...) where {K} =
+    hypertor(Rop, _materialize_complex(encoding_complex(enc)); maxlen=maxlen, kwargs...)
 
-hypertor(Rop::EncodingResult, enc::EncodedComplexResult; maxdeg::Int=3, kwargs...) =
-    hypertor(pmodule(Rop), _materialize_complex(encoding_complex(enc)); maxdeg=maxdeg, kwargs...)
+hypertor(Rop::EncodingResult, enc::EncodedComplexResult; maxlen::Int=3, kwargs...) =
+    hypertor(pmodule(Rop), _materialize_complex(encoding_complex(enc)); maxlen=maxlen, kwargs...)
 
 
 
@@ -2309,11 +2463,11 @@ function invariant(enc::EncodingResult;
     enc2 = _encoding_with_session_cache(enc, session_cache)
     if which isa Symbol
         handled, val = _workflow_invariant_value(enc2, which, opts, session_cache, kwargs...)
-        handled && return InvariantResult(enc2, which, val; opts=opts, meta=NamedTuple())
+        handled && return InvariantResult(enc2, which, val; opts=opts, meta=(parameters=(; kwargs...),))
     end
     f = which isa Symbol ? _resolve_invariant_function(which) : which
     val = _call_invariant(f, enc2, opts; kwargs...)
-    return InvariantResult(enc2, which, val; opts=opts, meta=NamedTuple())
+    return InvariantResult(enc2, which, val; opts=opts, meta=(parameters=(; kwargs...),))
 end
 
 """
@@ -2338,7 +2492,7 @@ function invariant(enc::CohomologyDimsResult;
     enc2 = _encoding_with_session_cache(enc, session_cache)
     f = which isa Symbol ? _resolve_invariant_function(which) : which
     val = _call_invariant(f, enc2, opts; kwargs...)
-    return InvariantResult(enc2, which, val; opts=opts, meta=NamedTuple())
+    return InvariantResult(enc2, which, val; opts=opts, meta=(parameters=(; kwargs...),))
 end
 
 """
@@ -2362,7 +2516,7 @@ function invariant(enc::EncodedComplexResult;
     enc2 = _encoding_with_session_cache(enc, session_cache)
     f = which isa Symbol ? _resolve_invariant_function(which) : which
     val = _call_invariant(f, enc2, opts; kwargs...)
-    return InvariantResult(enc2, which, val; opts=opts, meta=NamedTuple())
+    return InvariantResult(enc2, which, val; opts=opts, meta=(parameters=(; kwargs...),))
 end
 
 
@@ -2543,6 +2697,10 @@ end
     euler_signed_measure(enc::EncodedComplexResult; opts=InvariantOptions(), cache=:auto, kwargs...)
 
 Workflow convenience wrapper returning the bare Euler signed measure.
+
+An `EncodingResult` denotes one chosen homology module, so its Euler surface
+is that module's dimension function. An `EncodedComplexResult` instead uses
+the alternating dimensions of the entire complex.
 
 - `cache=:auto` is the canonical one-shot path,
 - `cache=sc::SessionCache` reuses the same workflow/session cache across
@@ -2767,6 +2925,9 @@ Encoding-first exact path
   materializing a `PModule`.
 - This exact line-persistence route preserves zero-length bars when the query
   is given by explicit `directions` and basepoint `offsets`.
+- Explicit `ts` (or `tmin`/`tmax`/`nsteps`) instead requests sampled persistence
+  on the encoded grid. Lazy H0 queries retain the ordinary sampled endpoint
+  and deduplication conventions without materializing the full module.
 """
 function slice_barcodes(enc::EncodingResult;
                         opts::InvariantOptions=InvariantOptions(),
@@ -2774,11 +2935,27 @@ function slice_barcodes(enc::EncodingResult;
                         kwargs...)
     session_cache = _resolve_workflow_session_cache(cache)
     enc2 = _encoding_with_session_cache(enc, session_cache)
-    exact = _exact_slice_barcodes(enc2; opts=opts, kwargs...)
+    plan_cache = _slice_plan_cache_from_session(nothing, session_cache)
+    exact = _exact_slice_barcodes(enc2; opts=opts, plan_cache=plan_cache, kwargs...)
     exact === nothing || return exact
     return slice_barcodes(pmodule(enc2), enc2.pi, opts;
                           cache=session_cache,
                           kwargs...)
+end
+
+function _mp_landscape_workflow_options(opts::InvariantOptions, kwargs::NamedTuple)
+    opt_keys = (:box, :strict, :threads, :axes, :axes_policy, :max_axis_len, :pl_mode)
+    any(k -> haskey(kwargs, k), opt_keys) || return opts, kwargs
+    opts2 = InvariantOptions(
+        box=get(kwargs, :box, opts.box),
+        strict=get(kwargs, :strict, opts.strict),
+        threads=get(kwargs, :threads, opts.threads),
+        axes=get(kwargs, :axes, opts.axes),
+        axes_policy=get(kwargs, :axes_policy, opts.axes_policy),
+        max_axis_len=get(kwargs, :max_axis_len, opts.max_axis_len),
+        pl_mode=get(kwargs, :pl_mode, opts.pl_mode),
+    )
+    return opts2, (; (k => v for (k, v) in pairs(kwargs) if !(k in opt_keys))...)
 end
 
 """
@@ -2801,7 +2978,8 @@ function mp_landscape(enc::EncodingResult;
                       kwargs...)
     session_cache = _resolve_workflow_session_cache(cache)
     enc2 = _encoding_with_session_cache(enc, session_cache)
-    req = _mp_landscape_slice_request(enc2.pi, opts; kwargs...)
+    opts2, kwargs2 = _mp_landscape_workflow_options(opts, NamedTuple(kwargs))
+    req = _mp_landscape_slice_request(enc2.pi, opts2; kwargs2...)
     bars = slice_barcodes(
         enc2;
         opts=req.opts_chain,
@@ -2832,33 +3010,18 @@ function mp_landscape(M::PModule{K}, pi;
                       opts::InvariantOptions=InvariantOptions(),
                       cache=:auto,
                       kwargs...) where {K}
-    opt_keys = (:box, :strict, :threads, :axes, :axes_policy, :max_axis_len, :pl_mode)
     cache_slice, session_cache = _resolve_workflow_specialized_cache(cache, SlicePlanCache)
     cache2 = _slice_plan_cache_from_session(cache_slice, session_cache)
-    opts0 = opts
-    if any(k -> haskey(kwargs, k), opt_keys)
-        base = opts0
-        opts = InvariantOptions(
-            box = get(kwargs, :box, base.box),
-            strict = get(kwargs, :strict, base.strict),
-            threads = get(kwargs, :threads, base.threads),
-            axes = get(kwargs, :axes, base.axes),
-            axes_policy = get(kwargs, :axes_policy, base.axes_policy),
-            max_axis_len = get(kwargs, :max_axis_len, base.max_axis_len),
-            pl_mode = get(kwargs, :pl_mode, base.pl_mode),
-        )
-        kwargs_nt = NamedTuple(kwargs)
-        kwargs2 = (; (k => v for (k, v) in pairs(kwargs_nt) if !(k in opt_keys))...)
-        return Invariants.mp_landscape(M, pi, opts; cache=cache2, kwargs2...)
-    end
-    return Invariants.mp_landscape(M, pi, opts0; cache=cache2, kwargs...)
+    opts2, kwargs2 = _mp_landscape_workflow_options(opts, NamedTuple(kwargs))
+    return Invariants.mp_landscape(M, pi, opts2; cache=cache2, kwargs2...)
 end
 
 @doc raw"""
     mpp_decomposition(enc::EncodingResult; opts=InvariantOptions(), kwargs...)
     mpp_decomposition(M, pi; opts=InvariantOptions(), kwargs...)
 
-Workflow convenience wrapper returning the bare multiparameter decomposition.
+Return the sampled barcode tracks used by multiparameter persistence images.
+These tracks are not a certified direct-sum decomposition of the module.
 
 This is the lightest owner-local way to obtain the decomposition data from an
 encoded workflow object. Use `invariant(...; which=:mpp_decomposition)` when you

@@ -131,3 +131,77 @@ end
     @test !occursin("include(joinpath(_TO_SRC_DIR", prelude)
     @test !isfile(joinpath(@__DIR__, "..", ".codex_focus_tests.jl"))
 end
+
+module _A79InstalledSource
+    include("installation/common.jl")
+end
+
+@testset "A79 installed source identity across checkout conventions" begin
+    H = _A79InstalledSource
+    mktempdir() do directory
+        source = joinpath(directory, "source")
+        output = joinpath(directory, "evidence")
+        mkpath(joinpath(source, "src"))
+        mkpath(output)
+        attrs = joinpath(source, ".gitattributes")
+        code = joinpath(source, "src", "demo.jl")
+        binary = joinpath(source, "binary.bin")
+        write(attrs, "* text=auto eol=lf\n")
+        write(code, "x = 17\n")
+        write(binary, UInt8[0, 255, 13, 10])
+        # Fixed independent `git hash-object --stdin` answers, including raw
+        # binary CRLF bytes which must never undergo text normalization.
+        blobs = Dict(".gitattributes" => "6313b56c57848efce05faa7aa7e901ccfc2886ea",
+                     "src/demo.jl" => "d8b8a2389cde43a205eeea35ca19d687311a09d3",
+                     "binary.bin" => "00822ce7dfc6f27759b94e2c7dfd26f25afbac9d")
+        entries = [Dict("path" => p, "mode" => "100644", "blob" => b) for (p,b) in blobs]
+        tree = repeat("0", 40) # This unit fixture exercises comparison, not Git authentication.
+        inventory = joinpath(output, "inventory.toml")
+        H.write_report(inventory, Dict("tree" => tree, "files" => entries))
+        config = Dict("inventory" => inventory, "tree" => tree, "output" => output)
+        @test isempty(H.verify_source(config, source; windows=true))
+        if !Sys.iswindows()
+            @test isempty(H.verify_source(config, source; windows=false))
+        end
+        write(attrs, "* text=auto eol=lf\r\n")
+        @test H.verify_source(config, source; windows=true) == [".gitattributes: CRLF to LF"]
+        redirect_stderr(devnull) do
+            if !Sys.iswindows()
+                @test_throws ErrorException H.verify_source(config, source; windows=false)
+            end
+            write(attrs, "* text=auto eol=crlf\r\n")
+            @test_throws ErrorException H.verify_source(config, source; windows=true)
+            write(attrs, "* text=auto eol=lf\r\n")
+            write(code, "x = 17\r\n")
+            @test_throws ErrorException H.verify_source(config, source; windows=true)
+            write(code, "x = 18\n")
+            @test_throws ErrorException H.verify_source(config, source; windows=true)
+            write(code, "x = 17\n")
+            write(binary, UInt8[0, 255, 10])
+            @test_throws ErrorException H.verify_source(config, source; windows=true)
+            rm(binary)
+            @test_throws ErrorException H.verify_source(config, source; windows=true)
+            write(binary, UInt8[0, 255, 13, 10])
+            write(joinpath(source, "extra"), "extra")
+            @test_throws ErrorException H.verify_source(config, source; windows=true)
+            rm(joinpath(source, "extra"))
+            mkdir(joinpath(source, "empty"))
+            @test_throws ErrorException H.verify_source(config, source; windows=true)
+            rm(joinpath(source, "empty"))
+            if !Sys.iswindows()
+                rm(code)
+                symlink("../binary.bin", code)
+                @test_throws ErrorException H.verify_source(config, source; windows=true)
+                rm(code)
+                write(code, "x = 17\n")
+                write(attrs, "* text=auto eol=lf\n")
+                chmod(code, 0o755)
+                @test_throws ErrorException H.verify_source(config, source; windows=false)
+                @test isempty(H.verify_source(config, source; windows=true))
+                chmod(code, 0o644)
+            end
+        end
+        write(attrs, "* text=auto eol=lf\n")
+        @test isempty(H.verify_source(config, source; windows=true))
+    end
+end

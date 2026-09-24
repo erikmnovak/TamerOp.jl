@@ -10,6 +10,11 @@ end
 
 write_report(path, values) = open(io -> TOML.print(io, values; sorted=true), path, "w")
 
+function _git_blob_hash(data)
+    header = Vector{UInt8}(codeunits("blob $(length(data))\0"))
+    return bytes2hex(sha1([header; data]))
+end
+
 function source_files(directory)
     files = Dict{String,String}()
     modes = Dict{String,String}()
@@ -23,8 +28,7 @@ function source_files(directory)
             else
                 # Git hashes the exact bytes, including a symlink's target.
                 data = islink(path) ? Vector{UInt8}(codeunits(readlink(path))) : read(path)
-                header = Vector{UInt8}(codeunits("blob $(length(data))\0"))
-                files[relative] = bytes2hex(sha1([header; data]))
+                files[relative] = _git_blob_hash(data)
                 modes[relative] = islink(path) ? "120000" :
                     iszero(filemode(path) & 0o100) ? "100644" : "100755"
             end
@@ -34,7 +38,7 @@ function source_files(directory)
     return files, modes, directories
 end
 
-function verify_source(config, source)
+function verify_source(config, source; windows::Bool=Sys.iswindows())
     inventory = TOML.parsefile(config["inventory"])
     inventory["tree"] == config["tree"] || error("Candidate inventory has the wrong tree")
     expected = Dict(entry["path"] => entry["blob"] for entry in inventory["files"])
@@ -49,14 +53,27 @@ function verify_source(config, source)
     actual, modes, directories = source_files(source)
     missing = sort!(collect(setdiff(keys(expected), keys(actual))))
     extra = sort!(collect(setdiff(keys(actual), keys(expected))))
-    changed = [Dict("path" => path, "expected" => expected[path], "actual" => actual[path])
-               for path in sort!(collect(intersect(keys(expected), keys(actual))))
-               if expected[path] != actual[path]]
+    changed = Dict{String,String}[]
+    checkout_transforms = String[]
+    for path in sort!(collect(intersect(keys(expected), keys(actual))))
+        expected[path] == actual[path] && continue
+        # Windows checkouts can leave the attributes file itself with CRLF
+        # despite its LF policy. Accept only this verified metadata
+        # transformation; code, data, symlinks and every other file stay exact.
+        if windows && path == ".gitattributes" && modes[path] != "120000"
+            normalized = codeunits(replace(read(joinpath(source, path), String), "\r\n" => "\n"))
+            if _git_blob_hash(normalized) == expected[path]
+                push!(checkout_transforms, ".gitattributes: CRLF to LF")
+                continue
+            end
+        end
+        push!(changed, Dict("path" => path, "expected" => expected[path], "actual" => actual[path]))
+    end
     # NTFS ACLs do not represent Git's POSIX executable bit. On Windows the
     # authenticated Git inventory retains that metadata; raw file bytes and
     # symlink kinds still must match exactly. POSIX checks executable bits too.
     mode_changes = [path for path in intersect(keys(expected), keys(actual))
-                    if (Sys.iswindows() ? (expected_modes[path] == "120000") !=
+                    if (windows ? (expected_modes[path] == "120000") !=
                                           (modes[path] == "120000") :
                                           expected_modes[path] != modes[path])]
     if !isempty(missing) || !isempty(extra) || !isempty(changed) ||
@@ -71,7 +88,7 @@ function verify_source(config, source)
         TOML.print(stderr, report; sorted=true)
         error("Installed source does not match the pinned Git file inventory")
     end
-    return nothing
+    return checkout_transforms
 end
 
 function candidate_info(config)
@@ -105,7 +122,8 @@ function environment_report(config, info)
         "revision" => config["revision"],
         "tree" => config["tree"],
         "filesystem_tree" => bytes2hex(Pkg.GitTools.tree_hash(info.source)),
-        "source_verification" => "exact Git paths, raw blob bytes and symlink kinds",
+        "source_verification" => "Git paths, raw blob bytes and symlink kinds; Windows attributes-file CRLF permitted",
+        "checkout_transforms" => verify_source(config, info.source),
         "posix_executable_modes_checked" => !Sys.iswindows(),
         "installed_source" => info.source,
         "active_project" => Base.active_project(),

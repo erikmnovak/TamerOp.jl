@@ -719,7 +719,8 @@ Presentation encoding
 - `encode(x; backend=:auto, output=:result, cache=:auto)` takes a mathematical
   presentation object such as a `Flange`, `PLFringe`, box-generator
   presentation, or `SyntheticBoxFringe`.
-- The canonical simple-user result is `EncodingResult`.
+- The canonical simple-user result is `EncodingResult`;
+  `output=:encoding_result` also selects this typed result.
 - `output=:raw` is advanced opt-in and returns the storage-shaped tuple
   `(P, H, pi)` for the same encoding task.
 

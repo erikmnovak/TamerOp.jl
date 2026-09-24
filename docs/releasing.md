@@ -64,8 +64,13 @@ separately installs the published commit with
 `Pkg.add(url=..., rev=...)`, outside the checkout, and checks core computation
 and actual CairoMakie figure exports on its configured platforms. Its report
 records the pinned Git tree, installed source and dependency environment. The
-harness compares every installed file's raw bytes, path and symlink kind with
-an inventory from that commit, and checks again after computation and export.
+harness compares installed paths, raw file bytes and symlink kinds with an
+inventory from that commit. Windows checkouts can leave `.gitattributes` itself
+with CRLF despite its LF policy; that specific metadata conversion is
+accepted only when normalization reproduces the expected Git blob, and is
+recorded in the report. Code and data files must match their raw Git bytes.
+The harness checks again after computation and export, including an unchanged
+raw filesystem fingerprint.
 On POSIX systems it also checks executable bits; Windows filesystem permissions
 do not represent those Git modes. The recorded `filesystem_tree` is diagnostic
 and can therefore differ on Windows even when the source verification passes.

@@ -150,6 +150,9 @@ include("APISurface.jl")
 # Root public bindings are explicitly contract-driven from APISurface.jl.
 _bind_api_bindings!(@__MODULE__, SIMPLE_API_BINDINGS)
 
+# Make the owner narrative available through the curated root type binding.
+@doc (@doc Results.ModuleTranslationResult) ModuleTranslationResult
+
 # -----------------------------------------------------------------------------
 # Stable public exports
 # -----------------------------------------------------------------------------

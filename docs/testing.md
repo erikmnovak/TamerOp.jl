@@ -178,7 +178,11 @@ inventory before and after computation. POSIX executable bits are checked on
 POSIX systems; Windows retains those Git modes in the inventory without
 requiring its filesystem permissions to reproduce them. A mismatch produces
 `source_mismatch.toml`. The repository's `.gitattributes` keeps text line endings
-as LF across platforms, so byte comparisons do not hide newline changes.
+as LF across platforms. Windows checkouts can leave `.gitattributes` itself with
+CRLF despite that policy. Only that metadata file may be normalized for
+comparison, only when it reproduces the expected Git blob; the report records
+this conversion. Code/data bytes remain exact, and an unchanged raw filesystem
+fingerprint is required after computation and export.
 
 The [release guide](releasing.md) also covers registration and tagging. The
 release suite does not need the ignored local tutorials or audit drivers; their

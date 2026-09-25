@@ -296,6 +296,74 @@ function EC.locate(pi::A64CoordinateProbe, x::AbstractVector; kwargs...)
     return EC.locate(pi.inner, x)
 end
 
+# Exercise the documented keyword API independently of the numerical kernels.
+with_fields(FIELDS_FULL) do field
+    @testset "A79 invariant keyword options preserve public contracts" begin
+        P = chain_poset(3)
+        unit = CM.coerce(field, 1)
+        H = FF.one_by_one_fringe(P, FF.principal_upset(P, 2),
+            FF.principal_downset(P, 3), unit; field=field)
+        M = IR.pmodule_from_fringe(H)
+        H3 = FF.one_by_one_fringe(P, FF.principal_upset(P, 3),
+            FF.principal_downset(P, 3), unit; field=field)
+        M3 = IR.pmodule_from_fringe(H3)
+        C = TamerOp.ModuleComplexes.ModuleCochainComplex([M, M3], [MD.zero_morphism(M, M3)]; tmin=0)
+        pi = ToyPi1DIntervals()
+        expected_rank = Dict((a, b) => Int(a >= 2) for a in 1:3 for b in a:3)
+        positive_rank = Dict((2, 2) => 1, (2, 3) => 1, (3, 3) => 1)
+        expected_barcode = Dict((2, 4) => 1)
+        geometry = (directions=[[1.0]], offsets=[[0.0]], ts=[0.0, 1.0, 2.0])
+        plan = SI.compile_slices(pi, OPT.InvariantOptions(strict=false, threads=false);
+            geometry..., cache=nothing, threads=false)
+
+        for threads in (nothing, false, true)
+            opts = OPT.InvariantOptions(threads=threads, strict=false,
+                axes=([0.5, 1.5, 2.5],), axes_policy=:as_given)
+            for api in (TamerOp.rank_invariant, Inv.rank_invariant), object in (M, H)
+                @test Dict(api(object; opts=opts)) == positive_rank
+                @test Dict(api(object, opts; store_zeros=true)) == expected_rank
+                @test Dict(api(object; opts=opts, store_zeros=true)) == expected_rank
+            end
+            @test TamerOp.Workflow.rank_map(M, pi, [1.5], [2.5]; opts=opts) == 1
+            @test TamerOp.Workflow.rank_map(M, pi, [-0.5], [2.5]; opts=opts) == 0
+            @test TamerOp.restricted_hilbert(M, pi, [1.5]; opts=opts) == 1
+            @test TamerOp.restricted_hilbert(M, pi, [-0.5]; opts=opts) == 0
+            @test TamerOp.restricted_hilbert(M, pi, [1.5], opts) == 1
+            @test TamerOp.euler_surface(M, pi; opts=opts) == [0, 1, 1]
+            @test TamerOp.euler_surface(M, pi, opts) == [0, 1, 1]
+            @test TamerOp.euler_surface(C, pi; opts=opts) == [0, 1, 0]
+            @test TamerOp.euler_surface(C, pi, opts) == [0, 1, 0]
+            @test TamerOp.slice_barcode(M, [1, 2, 3]; opts=opts) == expected_barcode
+            @test TamerOp.slice_barcode(M, [1, 2, 3], opts) == expected_barcode
+            chains = TamerOp.slice_barcodes(M, [[1, 2, 3]]; opts=opts)
+            @test SI.slice_barcodes(chains) == [expected_barcode]
+            @test SI.slice_weights(chains) == [1.0]
+            @test SI.slice_barcodes(TamerOp.slice_barcodes(M, [[1, 2, 3]], opts)) == [expected_barcode]
+            for result in (
+                TamerOp.slice_barcodes(M, plan; opts=opts),
+                TamerOp.slice_barcodes(M, plan, opts),
+                TamerOp.slice_barcodes(M, pi; opts=opts, geometry..., cache=nothing),
+                TamerOp.slice_barcodes(M, pi, opts; geometry..., cache=nothing),
+            )
+                @test size(SI.slice_barcodes(result)) == (1, 1)
+                @test SI.slice_barcodes(result)[1, 1] == Dict((1.0, 3.0) => 1)
+                @test SI.slice_weights(result) == ones(1, 1)
+            end
+        end
+        # Default and explicit strictness must preserve their distinct contracts.
+        for opts in (OPT.InvariantOptions(), OPT.InvariantOptions(strict=true))
+            @test_throws ErrorException TamerOp.Workflow.rank_map(M, pi, [-0.5], [2.5]; opts=opts)
+            @test_throws ErrorException TamerOp.restricted_hilbert(M, pi, [-0.5]; opts=opts)
+        end
+        @test Dict(Inv.rank_invariant(M)) == positive_rank
+        @test Dict(TamerOp.rank_invariant(H)) == positive_rank
+        @test SI.slice_barcodes(TamerOp.slice_barcodes(M, plan))[1, 1] == Dict((1.0, 3.0) => 1)
+        @test_throws ErrorException TamerOp.slice_barcode(M, [2, 1]; opts=OPT.InvariantOptions())
+        @test_throws ArgumentError TamerOp.slice_barcodes(M, plan; opts=OPT.InvariantOptions(), unsupported=true)
+        @test_throws ArgumentError TamerOp.slice_barcodes(M, pi; opts=OPT.InvariantOptions(), box=([0.0], [3.0]))
+    end
+end
+
 with_fields(FIELDS_FULL) do field
 K = CM.coeff_type(field)
 @inline cf(x) = CM.coerce(field, x)

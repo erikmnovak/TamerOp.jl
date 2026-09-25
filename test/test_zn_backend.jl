@@ -1704,24 +1704,38 @@ end
         iters = strict_ci ? 16 : 12
         reps_box = strict_ci ? 7 : 5
 
-        t_uncached = _median_elapsed(reps=reps_box) do
+        function box_total(cache)
             s = 0
             for _ in 1:iters
-                M = ZE.pmodule_on_box(FG_box; a=a_box, b=b_box, cache=nothing)
+                M = ZE.pmodule_on_box(FG_box; a=a_box, b=b_box, cache=cache)
                 s += sum(M.dims)
             end
-            @test s >= 0
+            return s
         end
-        t_cached = _median_elapsed(reps=reps_box) do
-            s = 0
-            for _ in 1:iters
-                M = ZE.pmodule_on_box(FG_box; a=a_box, b=b_box, cache=bcache_perf)
-                s += sum(M.dims)
+        expected_total = iters * sum(M_uncached.dims)
+        @test box_total(nothing) == expected_total
+        @test box_total(bcache_perf) == expected_total
+        times_uncached = Vector{Float64}(undef, reps_box)
+        times_cached = similar(times_uncached)
+        # Interleave both orders and remove garbage from the preceding sample.
+        # Separate batches can charge the uncached allocation/thermal history
+        # to the cached variant. Collection within each batch remains measured.
+        for sample in 1:reps_box
+            for cached in (isodd(sample) ? (false, true) : (true, false))
+                GC.gc()
+                if cached
+                    times_cached[sample] = @elapsed observed = box_total(bcache_perf)
+                else
+                    times_uncached[sample] = @elapsed observed = box_total(nothing)
+                end
+                @test observed == expected_total
             end
-            @test s >= 0
         end
-        ns_uncached = _ns_per_item(t_uncached, iters * ncells)
-        ns_cached = _ns_per_item(t_cached, iters * ncells)
+        ns_uncached = _ns_per_item(sort(times_uncached)[cld(reps_box, 2)], iters * ncells)
+        ns_cached = _ns_per_item(sort(times_cached)[cld(reps_box, 2)], iters * ncells)
+        println("Zn box cache paired timing guard: ns_uncached=", ns_uncached,
+                "; ns_cached=", ns_cached, "; uncached_seconds=", repr(times_uncached),
+                "; cached_seconds=", repr(times_cached))
 
         if strict_ci
             @test ns_cached <= 1.50 * ns_uncached + 220.0

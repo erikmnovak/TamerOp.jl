@@ -6,6 +6,9 @@
 # Public opts-default wrappers (keyword opts)
 # -----------------------------------------------------------------------------
 
+rank_invariant(M::PModule{K}; opts::InvariantOptions=InvariantOptions(), kwargs...) where {K} =
+    rank_invariant(M, opts; kwargs...)
+
 rank_invariant(H::FringeModule{K}; opts::InvariantOptions=InvariantOptions(), kwargs...) where {K} =
     rank_invariant(H, opts; kwargs...)
 

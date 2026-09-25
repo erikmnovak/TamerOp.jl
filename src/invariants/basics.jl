@@ -260,13 +260,13 @@ end
 
 
 """
-    restricted_hilbert(M, pi, x; strict=true) -> Int
+    restricted_hilbert(M, pi, x; opts=InvariantOptions()) -> Int
 
 Evaluate the restricted Hilbert function at a point `x` in the original domain,
 by first locating its region via `locate(pi, x)`.
 
-If `strict=true` and `locate` returns 0, an error is thrown.
-If `strict=false`, unknown regions return 0.
+If `opts.strict=true` (the effective default) and `locate` returns 0, an
+error is thrown. With `opts.strict=false`, unknown regions return 0.
 """
 function restricted_hilbert(M::PModule{K}, pi, x, opts::InvariantOptions)::Int where {K}
     strict0 = opts.strict === nothing ? true : opts.strict

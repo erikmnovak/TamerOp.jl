@@ -51,6 +51,9 @@ requirements are in [the maintainer guide](docs/releasing.md).
 - Encoding/result validators check stored dimensions, coefficient fields and
   base-poset agreement without forcing lazy computations. Exceptions raised
   inside custom invariant callbacks retain their original meaning.
+- Invariant entrypoints accept their documented keyword options and preserve
+  positional owner calls, query strictness and automatic thread defaults. Rank
+  invariants accept both finite-poset modules and fringe presentations.
 - Polyhedral encodings retain coefficients, closed boundary classes and every
   piece of a nonconvex support. General PL strict feasibility is rational by
   default, with explicit fixed-margin approximation available as an option.

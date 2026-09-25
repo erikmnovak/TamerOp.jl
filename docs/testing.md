@@ -149,13 +149,22 @@ combination of optional packages, backends and dependency versions has been
 tested. Linear-algebra owner tests explicitly exercise supported backend routes;
 other owners retain their automatic or fixture-specific backend selection.
 
-The workflow runs on `release/**` branches or by manual dispatch. Each group
+The workflow runs on `release/**` branches or by manual dispatch. Verification
+workflows use [per-workflow, per-branch concurrency groups](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#concurrency)
+to cancel superseded candidate runs when a new commit is pushed. Each group
 uploads its source commit/tree, resolved Project/Manifest, Julia/platform/thread
 settings, initial seed, threshold-profile hash, commands, per-owner exit codes
 and raw logs, including assertion totals and skipped tests. A passing release
 requires every group and the separate installed-package workflow to pass on the
 same candidate. A later source change requires revalidating affected checks and
 a final unchanged candidate; a configured workflow alone is not evidence.
+
+Some owner suites include timing guards. The integer-grid box-cache comparison
+warms both variants, alternates their order, collects unused objects before each
+timed batch, and records the raw samples. Collections within a batch remain
+measured. Interpret these bounds within the recorded machine, Julia version
+and thread configuration; retain and investigate timing failures alongside
+mathematical assertions.
 
 To reproduce a complete core run locally, use a clean candidate checkout and
 fresh directories **outside** that checkout:

@@ -2586,24 +2586,31 @@ end
 
 Workflow convenience wrapper returning the bare rank-invariant value.
 
-- On `PModule`, this forwards to the owner-level invariant kernel directly.
+- On `PModule` or `FringeModule`, this forwards to the owner-level invariant
+  kernel directly. Both keyword and positional `InvariantOptions` are accepted.
 - On `EncodingResult`, this routes through `invariant(enc; which=:rank_invariant)`
   and then unwraps `.value`.
 
 Prefer `invariant(...)` when you want provenance, `describe(...)`, or
 `result_summary(...)` on the result wrapper.
 """ rank_invariant
-rank_invariant(M::PModule{K}, opts::InvariantOptions=InvariantOptions(); kwargs...) where {K} =
+rank_invariant(M::Union{PModule{K},FringeModule{K}}, opts::InvariantOptions; kwargs...) where {K} =
     Invariants.rank_invariant(M, opts; kwargs...)
+rank_invariant(M::Union{PModule{K},FringeModule{K}};
+               opts::InvariantOptions=InvariantOptions(), kwargs...) where {K} =
+    rank_invariant(M, opts; kwargs...)
 
-rank_map(M::PModule{K}, pi, x, y, opts::InvariantOptions=InvariantOptions(); kwargs...) where {K} =
+rank_map(M::PModule{K}, pi, x, y; opts::InvariantOptions=InvariantOptions(), kwargs...) where {K} =
+    rank_map(M, pi, x, y, opts; kwargs...)
+rank_map(M::PModule{K}, pi, x, y, opts::InvariantOptions; kwargs...) where {K} =
     Invariants.rank_map(M, pi, x, y, opts; kwargs...)
 rank_map(M::PModule{K}, a::Int, b::Int; kwargs...) where {K} = Invariants.rank_map(M, a, b; kwargs...)
 
 restricted_hilbert(M::PModule{K}) where {K} = Invariants.restricted_hilbert(M)
 
 @doc raw"""
-    restricted_hilbert(M::PModule; opts=InvariantOptions(), kwargs...)
+    restricted_hilbert(M::PModule)
+    restricted_hilbert(M::PModule, pi, x; opts=InvariantOptions())
     restricted_hilbert(enc::EncodingResult; opts=InvariantOptions(), cache=:auto, kwargs...)
     restricted_hilbert(enc::CohomologyDimsResult; opts=InvariantOptions(), kwargs...)
 
@@ -2617,7 +2624,9 @@ Workflow convenience wrapper returning the bare restricted-Hilbert value.
 - Use `invariant(...; which=:restricted_hilbert)` when you want a typed wrapper
   with provenance instead of just the value.
 """ restricted_hilbert
-restricted_hilbert(M::PModule{K}, pi, x, opts::InvariantOptions=InvariantOptions(); kwargs...) where {K} =
+restricted_hilbert(M::PModule{K}, pi, x; opts::InvariantOptions=InvariantOptions(), kwargs...) where {K} =
+    restricted_hilbert(M, pi, x, opts; kwargs...)
+restricted_hilbert(M::PModule{K}, pi, x, opts::InvariantOptions; kwargs...) where {K} =
     Invariants.restricted_hilbert(M, pi, x, opts; kwargs...)
 
 @doc raw"""
@@ -2801,7 +2810,7 @@ Workflow convenience wrapper returning the bare Euler-surface value.
 - Prefer the typed `InvariantResult` route when you want provenance or notebook
   inspection before using the surface data.
 """ euler_surface
-function euler_surface(M::PModule{K}, pi, opts::InvariantOptions=InvariantOptions(); kwargs...) where {K}
+function euler_surface(M::PModule{K}, pi, opts::InvariantOptions; kwargs...) where {K}
     opts = opts
     if any(haskey(kwargs, k) for k in (:axes, :axes_policy, :max_axis_len, :box, :threads, :strict))
         opts = InvariantOptions(
@@ -2819,8 +2828,14 @@ function euler_surface(M::PModule{K}, pi, opts::InvariantOptions=InvariantOption
     return SignedMeasures.euler_surface(M, pi, opts; kwargs...)
 end
 
-euler_surface(C::ModuleCochainComplex{K}, pi, opts::InvariantOptions=InvariantOptions(); kwargs...) where {K} =
+euler_surface(C::ModuleCochainComplex{K}, pi, opts::InvariantOptions; kwargs...) where {K} =
     SignedMeasures.euler_surface(C, pi, opts; kwargs...)
+
+euler_surface(M::PModule{K}, pi; opts::InvariantOptions=InvariantOptions(), kwargs...) where {K} =
+    euler_surface(M, pi, opts; kwargs...)
+
+euler_surface(C::ModuleCochainComplex{K}, pi; opts::InvariantOptions=InvariantOptions(), kwargs...) where {K} =
+    euler_surface(C, pi, opts; kwargs...)
 
 @doc raw"""
     slice_barcode(M::PModule, chain; opts=InvariantOptions(), kwargs...)
@@ -2829,16 +2844,22 @@ euler_surface(C::ModuleCochainComplex{K}, pi, opts::InvariantOptions=InvariantOp
 Workflow convenience wrapper returning one slice-barcode value directly.
 
 - On `EncodingResult`, this unwraps `invariant(...; which=:slice_barcode).value`.
+- For an explicit chain, sampling options do not change the supplied vertices;
+  use `values` for endpoints and `check_chain` for chain validation.
 - Use `slice_barcodes(...)` when you want a family of slices or cached plan
   reuse across repeated calls.
 """ slice_barcode
-slice_barcode(M::PModule{K}, chain::AbstractVector{Int}, opts::InvariantOptions=InvariantOptions(); kwargs...) where {K} =
+slice_barcode(M::PModule{K}, chain::AbstractVector{Int}; opts::InvariantOptions=InvariantOptions(), kwargs...) where {K} =
+    slice_barcode(M, chain, opts; kwargs...)
+slice_barcode(M::PModule{K}, chain::AbstractVector{Int}, opts::InvariantOptions; kwargs...) where {K} =
     Invariants.slice_barcode(M, chain; kwargs...)
 
-slice_barcodes(M::PModule{K}, chains::AbstractVector, opts::InvariantOptions=InvariantOptions(); kwargs...) where {K} =
-    Invariants.slice_barcodes(M, chains; kwargs...)
+slice_barcodes(M::PModule{K}, chains::AbstractVector, opts::InvariantOptions;
+               threads::Bool=(opts.threads === nothing ? Threads.nthreads() > 1 : opts.threads),
+               kwargs...) where {K} =
+    Invariants.slice_barcodes(M, chains; threads=threads, kwargs...)
 
-function slice_barcodes(M::PModule{K}, plan::CompiledSlicePlan, opts::InvariantOptions=InvariantOptions(); kwargs...) where {K}
+function slice_barcodes(M::PModule{K}, plan::CompiledSlicePlan, opts::InvariantOptions; kwargs...) where {K}
     opts0 = opts
     kwargs_nt = NamedTuple(kwargs)
     for k in keys(kwargs_nt)
@@ -2847,10 +2868,10 @@ function slice_barcodes(M::PModule{K}, plan::CompiledSlicePlan, opts::InvariantO
     end
     return Invariants.slice_barcodes(M, plan;
         packed = get(kwargs_nt, :packed, false),
-        threads = get(kwargs_nt, :threads, opts0.threads))
+        threads = get(kwargs_nt, :threads, opts0.threads === nothing ? Threads.nthreads() > 1 : opts0.threads))
 end
 
-function slice_barcodes(M::PModule{K}, pi, opts::InvariantOptions=InvariantOptions();
+function slice_barcodes(M::PModule{K}, pi, opts::InvariantOptions;
                         cache=:auto,
                         kwargs...) where {K}
     opts0 = opts
@@ -2864,10 +2885,14 @@ function slice_barcodes(M::PModule{K}, pi, opts::InvariantOptions=InvariantOptio
     cache2 = _slice_plan_cache_from_session(cache_slice, session_cache)
     return Invariants.slice_barcodes(M, pi;
         opts = opts0,
-        threads = get(kwargs_nt, :threads, opts0.threads),
+        threads = get(kwargs_nt, :threads, opts0.threads === nothing ? Threads.nthreads() > 1 : opts0.threads),
         cache = cache2,
         kwargs2...)
 end
+
+slice_barcodes(M::PModule{K}, slices;
+               opts::InvariantOptions=InvariantOptions(), kwargs...) where {K} =
+    slice_barcodes(M, slices, opts; kwargs...)
 
 rank_invariant(enc::EncodingResult; opts::InvariantOptions=InvariantOptions(), kwargs...) =
     invariant(enc; which=:rank_invariant, opts=opts, kwargs...).value

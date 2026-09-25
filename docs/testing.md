@@ -159,9 +159,9 @@ requires every group and the separate installed-package workflow to pass on the
 same candidate. A later source change requires revalidating affected checks and
 a final unchanged candidate; a configured workflow alone is not evidence.
 
-Some owner suites include timing guards. The integer-grid box-cache comparison
-warms both variants, alternates their order, collects unused objects before each
-timed batch, and records the raw samples. Collections within a batch remain
+Some owner suites include timing guards. The integer-grid box-cache and
+polyhedral batch-cache comparisons warm both variants, alternate their order,
+collect unused objects before each paired sample, and record the raw samples. Collections within a batch remain
 measured. Interpret these bounds within the recorded machine, Julia version
 and thread configuration; retain and investigate timing failures alongside
 mathematical assertions.

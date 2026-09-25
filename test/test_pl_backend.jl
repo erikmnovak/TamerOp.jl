@@ -6,18 +6,23 @@ using Test
     # Independent closed-rectangle oracle. Their shared face has two valid
     # labels; cache use must retain the bare-map choice on that face.
     A = QQ[1 0; 0 1; -1 0; 0 -1]
+    # A third cell keeps the indexed path active and tests the fallback for
+    # points outside the cache window without falling into the tiny-scan case.
     polys = [PLP.make_hpoly(A, QQ[1, 1, 0, 0]),
-             PLP.make_hpoly(A, QQ[2, 1, -1, 0])]
-    pi = PLP.PLEncodingMap(2, [BitVector(), BitVector()],
-        [BitVector(), BitVector()], polys, [(0.5, 0.5), (1.5, 0.5)])
+             PLP.make_hpoly(A, QQ[2, 1, -1, 0]),
+             PLP.make_hpoly(A, QQ[5, 1, -4, 0])]
+    pi = PLP.PLEncodingMap(2, [BitVector() for _ in polys],
+        [BitVector() for _ in polys], polys, [(0.5, 0.5), (1.5, 0.5), (4.5, 0.5)])
     points = [(-0.25, 0.5), (0.0, 0.5), (0.0, 0.0), (0.0, 1.0),
               (0.25, 0.5), (0.5, 0.0), (0.5, 1.0),
               (prevfloat(1.0), 0.5), (1.0, 0.5), (1.0, 0.0), (1.0, 1.0),
               (nextfloat(1.0), 0.5), (1.5, 0.5), (1.5, 0.0), (1.5, 1.0),
               (2.0, 0.5), (2.0, 0.0), (2.0, 1.0), (2.25, 0.5),
-              (0.5, -0.25), (0.5, 1.25), (1.5, -0.25), (1.5, 1.25)]
+              (0.5, -0.25), (0.5, 1.25), (1.5, -0.25), (1.5, 1.25),
+              (4.5, 0.5), (4.0, 0.0), (5.0, 1.0)]
     X = [p[i] for i in 1:2, p in points]
     allowed = map(points) do (x, y)
+        0 <= y <= 1 && 4 <= x <= 5 ? (3,) :
         !(0 <= y <= 1 && 0 <= x <= 2) ? (0,) :
             x == 1 ? (1, 2) : x < 1 ? (1,) : (2,)
     end
@@ -27,6 +32,7 @@ using Test
     end
     cache = PLP.poly_in_box_cache(pi; box=([0.0, 0.0], [2.0, 1.0]), level=:light)
     PLP._build_bucket_index!(cache)
+    @test PLP._batch_locate_cache(pi, cache) === cache
     retained = PLP._locate_bucket_snapshot(cache)
     @test retained !== nothing
     stored_ptr, stored_idx = copy(retained.regions.ptr), copy(retained.regions.idx)
@@ -76,6 +82,69 @@ using Test
                 @test dest[1:size(X, 2)] == PLP.locate_many(pi, X; mode=mode, threaded=threaded)
                 @test dest[end-1:end] == [-19, -19]
             end
+        end
+    finally
+        PLP._LOCATE_THREAD_MIN_QUERIES[] = old_queries
+        PLP._LOCATE_THREAD_MIN_WORK[] = old_work
+    end
+end
+
+@testset "A79 small PL batches preserve closed-cell membership" begin
+    # Direct inequalities are the oracle, including shared faces, points just
+    # beside them, and queries outside the cache's box. The 3-cell and extra-
+    # facet cases retain bucket indexing on the other side of the size gate.
+    old_queries = PLP._LOCATE_THREAD_MIN_QUERIES[]
+    old_work = PLP._LOCATE_THREAD_MIN_WORK[]
+    try
+        PLP._LOCATE_THREAD_MIN_QUERIES[] = 1
+        PLP._LOCATE_THREAD_MIN_WORK[] = 1
+        for (nr, extra) in ((1, 0), (2, 0), (3, 0), (2, 1), (2, 32))
+            A = vcat(repeat(QQ[1 1], extra, 1), QQ[1 0; 0 1; -1 0; 0 -1])
+            polys = [PLP.make_hpoly(A, vcat(fill(QQ(4nr + 10), extra),
+                        QQ[r, 1, 1-r, 0])) for r in 1:nr]
+            pi = PLP.PLEncodingMap(2, [BitVector() for _ in polys],
+                [BitVector() for _ in polys], polys, [(r-0.5, 0.5) for r in 1:nr])
+            cache = PLP.compile_geometry_cache(pi; box=([0.0, 0.0], [Float64(nr), 1.0]))
+            small = nr <= 2 && extra == 0
+            @test PLP._batch_locate_cache(pi, cache) === (small ? nothing : cache)
+            @test PLP._batch_locate_cache(pi, nothing) === nothing
+            snapshot = PLP._locate_bucket_snapshot(cache)
+            @test snapshot !== nothing
+            delta = big(1) // big(2)^54
+            xs = unique(QQ[-1//4; [QQ(r)+d for r in 0:nr for d in (-delta, 0, delta)];
+                           [QQ(r)-1//2 for r in 1:nr]; QQ(nr)+1//4])
+            points = [(x, y) for x in xs for y in QQ[-1//4, 0, 1//2, 1, 5//4]]
+            Xq = [p[i] for i in 1:2, p in points]
+            Xf = Float64.(Xq)
+            for X in (Xq, Xf, view(Xf, :, :)), mode in (:fast, :verified), threaded in (false, true)
+                # Recompute from the actual input values: conversion to Float64
+                # can legitimately identify two distinct rational probes.
+                expected = [begin
+                    labels = [r for r in 1:nr if r-1 <= X[1,j] <= r && 0 <= X[2,j] <= 1]
+                    isempty(labels) ? [0] : labels
+                end for j in axes(X, 2)]
+                for target in (pi, cache)
+                    result = PLP.locate_many(target, X; mode, threaded)
+                    @test all(result[j] in expected[j] for j in eachindex(result))
+                end
+                dest = fill(-1, size(X, 2))
+                for lookup in (nothing, snapshot)
+                    PLP._locate_columns!(dest, pi, X, size(X, 2), lookup,
+                        threaded, mode === :verified, false,
+                        PLP.LOCATE_FLOAT_TOL, PLP.LOCATE_BOUNDARY_TOL)
+                    @test all(dest[j] in expected[j] for j in eachindex(dest))
+                end
+            end
+            for mode in (:fast, :verified), threaded in (false, true)
+                dest = fill(-19, size(Xf, 2)+2)
+                PLP._locate_many_prefix!(dest, cache, Xf, size(Xf, 2); mode, threaded)
+                @test dest[1:size(Xf, 2)] == PLP.locate_many(pi, Xf; mode, threaded)
+                @test dest[end-1:end] == [-19, -19]
+                PLP._locate_many_prefix!(dest, cache, Xf, 0; mode, threaded)
+                @test dest[end-1:end] == [-19, -19]
+            end
+            @test isempty(PLP.locate_many(cache, zeros(2,0)))
+            @test PLP._locate_bucket_snapshot(cache).regions.ptr === snapshot.regions.ptr
         end
     finally
         PLP._LOCATE_THREAD_MIN_QUERIES[] = old_queries
@@ -1543,20 +1612,28 @@ end
         dest_uncached = zeros(Int, npts)
         dest_cached = zeros(Int, npts)
 
-        # Warmup
+        # Warm both compiled paths, then alternate their measurement order.
+        # Collect before each pair so preceding owner tests do not charge an
+        # unrelated collection to just one route. Keep every raw sample.
         PLP.locate_many!(dest_uncached, pi, X; threaded=false, mode=:fast)
         PLP.locate_many!(dest_cached, cache, X; threaded=false, mode=:fast)
-        t_uncached = _median_elapsed() do
-            PLP.locate_many!(dest_uncached, pi, X; threaded=false, mode=:fast)
+        bare_times, cached_times = Float64[], Float64[]
+        for sample in 1:5
+            GC.gc()
+            for cached in (isodd(sample), !isodd(sample))
+                target = cached ? cache : pi
+                dest = cached ? dest_cached : dest_uncached
+                elapsed = @elapsed PLP.locate_many!(dest, target, X; threaded=false, mode=:fast)
+                push!(cached ? cached_times : bare_times, elapsed)
+            end
         end
-        t_cached = _median_elapsed() do
-            PLP.locate_many!(dest_cached, cache, X; threaded=false, mode=:fast)
-        end
-
         @test dest_cached == dest_uncached
-        many_uncached_ns = _ns_per_item(t_uncached, npts)
-        many_cached_ns = _ns_per_item(t_cached, npts)
-        # Platform-normalized envelope: cache should be faster on per-query cost.
+        many_uncached_ns = _ns_per_item(sort(bare_times)[3], npts)
+        many_cached_ns = _ns_per_item(sort(cached_times)[3], npts)
+        println("PL batch cache paired timing guard: ns_uncached=", many_uncached_ns,
+            " ns_cached=", many_cached_ns, " raw_uncached_ns=", _ns_per_item.(bare_times, npts),
+            " raw_cached_ns=", _ns_per_item.(cached_times, npts))
+        # Platform-normalized envelope: caching must not penalize a tiny batch.
         if strict_ci
             @test many_cached_ns <= 1.10 * many_uncached_ns + 20.0
         else

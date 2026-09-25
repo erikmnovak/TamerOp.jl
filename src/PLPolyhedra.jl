@@ -1261,6 +1261,20 @@ end
     return true
 end
 
+# Bucket indexing costs more than scanning one or two small inequality
+# systems. The 16-coefficient budget includes two 2D rectangles; extra facets
+# and larger decompositions retain spatial lookup and grouping machinery.
+@inline function _batch_locate_cache(pi::PLEncodingMap, cache)
+    cache === nothing && return nothing
+    length(pi.regions) <= 2 || return cache
+    remaining = 16
+    for A in pi.Af
+        remaining -= length(A)
+        remaining < 0 && return cache
+    end
+    return nothing
+end
+
 @inline function _should_use_grouped_locate(pi::PLEncodingMap, cache, npts::Int)::Bool
     _LOCATE_BUCKET_GROUPING[] || return false
     npts >= _LOCATE_GROUP_MIN_QUERIES[] || return false
@@ -2475,6 +2489,7 @@ function _locate_many_pl!(dest::AbstractVector{<:Integer}, pi_or_cache, X::Abstr
     pi = pi_or_cache isa PLEncodingMap ? pi_or_cache :
          (cache === nothing ? (hasproperty(pi_or_cache, :pi) ? getproperty(pi_or_cache, :pi) : nothing) : cache.pi)
     pi isa PLEncodingMap || error("locate_many!: expected PLEncodingMap or PolyInBoxCache")
+    cache = _batch_locate_cache(pi, cache)
     size(X, 1) == pi.n || error("locate_many!: X must have size (n, npoints) with n=$(pi.n)")
     length(dest) == size(X, 2) || error("locate_many!: destination length mismatch")
 
@@ -2569,6 +2584,7 @@ end
     pi = pi_or_cache isa PLEncodingMap ? pi_or_cache :
          (cache === nothing ? (hasproperty(pi_or_cache, :pi) ? getproperty(pi_or_cache, :pi) : nothing) : cache.pi)
     pi isa PLEncodingMap || error("_locate_many_prefix!: expected PLEncodingMap or PolyInBoxCache")
+    cache = _batch_locate_cache(pi, cache)
     size(X, 1) == pi.n || error("_locate_many_prefix!: X must have size (n, npoints) with n=$(pi.n)")
     mode0 = validate_pl_mode(mode)
     verify_safe = (mode0 === :verified)

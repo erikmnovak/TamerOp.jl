@@ -54,6 +54,8 @@ requirements are in [the maintainer guide](docs/releasing.md).
 - Invariant entrypoints accept their documented keyword options and preserve
   positional owner calls, query strictness and automatic thread defaults. Rank
   invariants accept both finite-poset modules and fringe presentations.
+- Batched polyhedral lookup skips bucket indexing for one or two small
+  inequality systems while retaining indexing for larger or facet-heavy cells.
 - Polyhedral encodings retain coefficients, closed boundary classes and every
   piece of a nonconvex support. General PL strict feasibility is rational by
   default, with explicit fixed-margin approximation available as an option.

@@ -1,7 +1,13 @@
 # Ordinary persistent homology
 
+When a shape grows, connected components can merge and holes can appear or
+fill in. Ordinary persistence records how long these features survive as one
+parameter changes. In the example below, squares appear at their array values:
+the boundary squares form a ring at zero, and the center fills its hole at five.
+
 `persistence_diagram` computes the persistent homology of a finite
-one-parameter chain complex. Its current reduction backend works over
+one-parameter chain complex: cells with boundary maps and a single birth
+parameter for each cell. Its current reduction backend works over
 `TamerOp.CoreModules.F2()` only. Integer boundary coefficients are read modulo
 two; other coefficient fields and symbolic field aliases are rejected.
 
@@ -19,10 +25,13 @@ describe(D)
 provenance(D)
 ```
 
-The result represents homological degrees `H_0`, `H_1`, and so on. Degree
-arguments are named keywords. A nonnegative degree above the stored range has
-no intervals. Negative degrees are invalid. The two exact-data accessors return
-copies, so editing their output does not modify the diagram.
+The result records connected components in degree `H_0`, holes bounded by
+loops in degree `H_1`, and higher-dimensional features in subsequent degrees.
+Here the single finite degree-one interval records the hole from zero to five;
+the essential degree-zero birth records the connected component that remains.
+Degree arguments are named keywords. A nonnegative degree above the stored
+range has no intervals. Negative degrees are invalid. The two exact-data
+accessors return copies, so editing their output does not modify the diagram.
 
 ## Interval conventions
 
@@ -140,3 +149,9 @@ that collapse at display precision are rejected. Essential bars have a separate
 labelled infinity lane or continuation arrows, including `-Inf` for superlevels.
 Rendering requires an explicitly loaded plotting extension; constructing and
 inspecting a diagram does not require a plotting package.
+
+This is a direct route from a one-parameter filtered complex to its barcode;
+it does not require constructing an `EncodingResult`. With several parameters,
+we need to retain vector spaces and their maps to support a wider range of
+questions. The [finite-encoding introduction](finite_encodings.md) explains
+that next step and how a finite model relates to the original parameters.

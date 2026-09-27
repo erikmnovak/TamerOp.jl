@@ -1,3 +1,32 @@
+"""
+    TamerOp
+
+Toolkit for Algebraic Module Encodings over R^n and Other Posets.
+
+TamerOp began as an implementation of Ezra Miller's *Homological algebra of
+modules over posets*. Its name also recalls tameness, the finiteness condition
+linking finite encodings, indicator presentations, and resolutions in that
+theory. Finite encoding remains the organizing object of the library.
+
+A persistence module assigns vector spaces to parameter values and linear maps
+to comparable pairs of parameters. TamerOp builds finite descriptions of
+supported modules: a finite poset, a module on that poset, and an encoding map
+relating the original parameters to the finite model.
+
+Start with data and a filtration, or with a mathematical presentation, and use
+[`encode`](@ref) to construct the finite model. Use the resulting object for
+algebraic computations, invariants, feature extraction, and figures.
+[`describe`](@ref) inspects a result; [`provenance`](@ref) reports its recorded
+mathematical conventions. Intermediate ingestion stages and direct
+ordinary-persistence computations are also available.
+
+Load the package with `import TamerOp as OP`. The root functions support common
+tasks; `TamerOp.Advanced` and the owner modules expose detailed constructions.
+Derived computations use their reported finite category; an encoding alone
+does not identify them with derived functors over the original parameter poset.
+
+Mathematical foundation: https://arxiv.org/abs/2008.00063
+"""
 module TamerOp
 # =============================================================================
 # TamerOp.jl
@@ -78,8 +107,11 @@ include("Workflow.jl")
 @doc raw"""
     Workflow
 
-High-level orchestration owner for the canonical task-oriented workflow surface
-in `TamerOp`.
+Construct a finite encoding, then ask mathematical questions of that object.
+
+The encoded module retains vector spaces and the maps between them; its encoding
+map relates the finite labels to the original parameter domain. These functions
+connect encoding to resolutions, module comparisons, and chosen summaries.
 
 - start here for `encode`, `resolve`, `invariant`, `hom_dimension`, `hom`,
   `ext`, `tor`, `slice_barcodes`, and `mp_landscape`,

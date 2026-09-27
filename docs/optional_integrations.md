@@ -1,8 +1,10 @@
 # Optional integrations
 
-`using TamerOp` loads the mathematical core. Rendering, ecosystem adapters and
-accelerated geometric backends activate through Julia's native package
-extensions when you explicitly import their dependency packages.
+To render a result, exchange tables with another package, or accelerate a
+supported geometry calculation, install and import the dependency for that
+task. `using TamerOp` loads the mathematical core. The additional capabilities
+activate through Julia's native package extensions: code that becomes available
+when you explicitly import the corresponding dependency packages.
 
 From an activated environment containing TamerOp, install a dependency once,
 then import it in each Julia session:

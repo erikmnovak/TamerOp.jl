@@ -1,5 +1,12 @@
 # Options must affect the requested computation
 
+An option can change the mathematical input, select a computational method,
+or control storage and checking. Knowing which effect it has lets you decide
+whether two results should agree. This guide follows those choices from finite
+encoding through algebra and module queries; the
+[finite-encoding introduction](finite_encodings.md) describes the underlying
+object whose spaces and maps those operations use.
+
 Use the options object belonging to the task. The [ingestion guide](ingestion_options.md)
 describes filtration construction, grid representation, field selection and JSON
 replay. The following contracts apply to the other option owners.

@@ -1,8 +1,18 @@
 # Ingestion options and their mathematical effects
 
+A filtration assigns cells the parameter values at which they appear, with
+boundaries present whenever their cells are present. Turning it into a finite
+module requires choosing a parameter grid, coefficient field, and homological
+degree. These choices determine what is represented; other options only change
+how the same finite data are stored. The
+[finite-encoding introduction](finite_encodings.md) explains how the resulting
+spaces and maps are related to the original parameters.
+
 `PipelineOptions` controls how a built filtration becomes an encoded module.
-For example, these two calls produce the same vector spaces and maps, with
-structured and dense representations of the finite grid order:
+The distinction between changing the module and changing its storage matters
+when comparing results. For example, these two calls produce the same vector
+spaces and maps, with structured and dense representations of the finite grid
+order:
 
 ```julia
 using TamerOp

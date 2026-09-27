@@ -1,8 +1,27 @@
 # TamerOp
 
-TamerOp is a Julia library for computing with persistence modules and finite
-posets. It supports point clouds, images, graphs and hand-built algebraic
-presentations, with tools for homology, invariants, derived functors and figures.
+**Toolkit for Algebraic Module Encodings over $\mathbb{R}^n$ and Other Posets.**
+
+TamerOp is a Julia library built around the **finite encoding**. A persistence
+module describes information at different parameter values and the linear
+maps that relate those values. A finite encoding represents such a module
+using a finite collection of vector spaces and maps, together with an
+assignment from the original parameters to that finite model.
+
+The project began as an implementation of Ezra Miller's
+[Homological algebra of modules over posets](https://arxiv.org/abs/2008.00063).
+That theory remains its mathematical foundation. The name also recalls
+*tameness*, the finiteness condition that makes these descriptions possible.
+
+Once the encoded object has been constructed, we can keep working with it:
+compare modules, study their algebra, choose numerical summaries, and produce
+figures. Supported starting points include point clouds, images, graphs, and
+mathematical presentations that describe a module directly.
+
+Read [why finite encodings matter](#mathematical-background) below, or go
+directly to [installation](#install-tamerop). The
+[finite-encoding introduction](docs/finite_encodings.md) develops the idea
+with a small example and connects it to the detailed guides.
 
 **Requirements:** Julia **1.12 or a compatible later 1.x version** and an internet
 connection for the initial installation. Julia 1.12 is the version currently
@@ -16,6 +35,7 @@ already happened. GitHub installation retrieves the committed, published source.
 Local changes on the author's computer become available only after they are
 committed and pushed.
 
+- [Why finite encodings?](#mathematical-background)
 - [Install TamerOp](#install-tamerop)
 - [Your first computation](#your-first-computation)
 - [Save and run a script](#save-and-run-a-script)
@@ -25,9 +45,53 @@ committed and pushed.
 - [Update or reproduce your environment](#update-or-reproduce-your-environment)
 - [Troubleshooting](#troubleshooting)
 - [Advanced users and performance settings](#advanced-users-and-performance-settings)
+- [Optional plotting and integrations](#optional-plotting-and-integrations)
 - [Mathematical scope and provenance](#mathematical-scope-and-provenance)
 - [Releases and citation](#releases-and-citation)
 - [Developing TamerOp](#developing-tamerop)
+
+## Mathematical background
+
+Why build a library around finite encodings? In ordinary persistence, we follow
+a shape as one parameter changes. For familiar finite filtrations, a barcode
+records when independent homology classes appear and disappear. It gives a
+complete description of the resulting one-parameter module.
+
+With two or more parameters, some parameter values cannot be compared: one
+coordinate can increase while another decreases. There is generally no
+decomposition into intervals that describes the whole module as an ordinary
+barcode does. Dimensions, ranks, and barcodes along individual slices still
+answer useful questions, but they leave out some of the module's structure.
+
+Finite encoding addresses how to retain that structure in a form we can compute
+with. We construct a finite partially ordered set, or *poset*, recording which
+labels can be compared. We keep the module's vector spaces and maps on that
+poset, along with a map assigning original parameter values to finite labels.
+For a valid encoding of the represented module, these pieces recover both its
+spaces and its structure maps.
+
+Miller's theory supplies the connection between these finite descriptions.
+Under its hypotheses, tameness can be expressed through finite encodings,
+presentations using regions called upsets and downsets, and resolutions built
+from such region-supported modules. These are related ways of describing the
+same controlled variation over a poset; see
+[Sections 4 and 6 of the paper](https://arxiv.org/html/2008.00063).
+TamerOp grew from making this theory computational, and its later data,
+invariant, and visualization tools continue to work around the encoded object.
+
+The expanded name describes that purpose. **Algebraic Module Encodings** are
+the objects the toolkit constructs and works with. **Over $\mathbb{R}^n$ and
+Other Posets** includes supported presentations over real parameter spaces,
+integer lattices, and finite partially ordered sets. The echo of **tame**
+identifies the theory that makes a finite description possible even when the
+parameter domain is infinite. Supported inputs and constructions have explicit
+hypotheses; the name does not promise an encoder for every abstract poset module.
+
+The [introduction](docs/finite_encodings.md) shows these pieces in a small
+example. It also distinguishes preserving a represented module from earlier
+choices such as selecting a filtration or a grid. Derived computations such
+as Ext and Tor have an additional category dependence, explained in the
+[mathematical scope](#mathematical-scope-and-provenance).
 
 ## Install TamerOp
 
@@ -112,6 +176,11 @@ Julia session or standalone script. There is no need to import internal source
 files, change `LOAD_PATH`, or assemble a long setup block.
 
 ## Your first computation
+
+Start with a small one-parameter computation whose answer we can see by hand.
+This direct barcode routine introduces births and deaths; the
+[finite-encoding introduction](docs/finite_encodings.md) then explains how we
+retain the module when moving to several parameters.
 
 Run this in **Julia**, after installing the package:
 
@@ -279,10 +348,13 @@ For function help, type `?` at an empty Julia prompt, then `OP.encode`, or use:
 @doc OP.encode
 ```
 
-Start multiparameter workflows with `OP.encode`, then choose an invariant or
-algebraic operation. The [ingestion options guide](docs/ingestion_options.md)
+Start multiparameter workflows with `OP.encode`, then inspect the encoded
+object before choosing an invariant or algebraic operation. The
+[finite-encoding introduction](docs/finite_encodings.md) explains what that
+object contains. The [ingestion options guide](docs/ingestion_options.md)
 explains coefficient fields, grids and output stages; the
-[multicover guide](docs/multicover.md) includes point-cloud examples.
+[multicover guide](docs/multicover.md) follows a point cloud through a
+radius-and-coverage construction.
 
 ## Update or reproduce your environment
 
@@ -371,17 +443,6 @@ explicit persistence, the same function accepts a writable `path` with
 at the repository root. Saving to another path does not automatically select
 that file on a future import; normal users can simply use the defaults.
 
-## Mathematical background
-
-TamerOp is a Julia library for multiparameter persistence built from an encoding-first viewpoint. The central idea is that a multiparameter persistence module should be represented first by a finite, computable encoding on a finite poset, and then analyzed through that encoding. This perspective is guided by the theory of tame modules, especially the viewpoint developed by Ezra Miller: a multiparameter module is understood through finite combinatorial data that captures its essential structure while remaining mathematically faithful.
-
-In practice, this means TamerOp treats encoding not as an implementation detail, but as the central mathematical bridge between raw data and downstream computation. Rather than committing early to one invariant or one storage format, the library emphasizes building finite encoded models that can support many later tasks. This makes it possible to organize multiparameter persistence workflows around a common discrete object instead of a collection of unrelated ad hoc pipelines.
-
-TamerOp starts from several kinds of inputs. These include raw data such as point clouds, graphs, and images, as well as more algebraic inputs such as fringes, flanges, and other presentation-style objects. From those inputs, the library constructs finite-poset encodings that serve as the canonical computational model. Once that encoded model is available, TamerOp supports a broad range of outputs: invariant computations, signed measures, sliced and fibered constructions, homological algebra, derived-functor calculations, visualization, serialization, and related workflows.
-
-This organization is meant to make the library useful both for computation and for mathematical experimentation. A user can begin from concrete data, move to an encoding, and then ask many different questions of the same encoded object. The same encoded perspective also supports more algebraic workflows, where the starting point is already a module presentation rather than a dataset. In both cases, the finite-poset encoding is the common language connecting input, computation, and output.
-
-
 ## Optional plotting and integrations
 
 The mathematical core loads with `using TamerOp`. Plotting and ecosystem
@@ -394,9 +455,12 @@ sublevel/superlevel intervals and periodic cubical examples.
 
 ## Mathematical scope and provenance
 
-`hom`, `ext`, resolutions and Yoneda products compute in the representation
-category of the reported finite poset. `tor` computes over its incidence
-algebra. Different encodings of the same ambient module can have different
+The finite encoding gives us a module on which we can perform algebra.
+The choice of finite poset remains part of that computation: `hom`, `ext`,
+resolutions and Yoneda products use modules on the reported finite poset.
+This setting is called its *representation category*. The `tor` operation
+uses the associated incidence algebra, which records the order relations.
+Different encodings of the same ambient module can have different
 finite-category Ext/Tor groups. Resolution independence does not establish
 encoding independence; see the [category and comparison guide](docs/math_categories.md)
 for precise hypotheses, explicit comparison maps and a counterexample.
@@ -406,8 +470,10 @@ contract and explains why geometric cells and barcode-cost switches suffice.
 The [numerical algebra guide](docs/numerical_algebra.md) explains `RealField`
 rank decisions, solve residuals and the limits of near-singular computations.
 
-Use `provenance(result)` or `describe(result).provenance` to inspect the actual
-field, finite base, degree convention and recorded construction. Ingestion
+A result's *provenance* records how it was obtained and which mathematical
+conventions were retained. Use `provenance(result)` or
+`describe(result).provenance` to inspect the actual coefficient field, finite
+poset, degree convention and recorded construction. Ingestion
 results also report their window, orientation, executed backends, grade
 arithmetic, sparsification and whether a chosen grid floor-snapped births. This
 inspection does not materialize a lazy module. Information not retained by a
@@ -415,9 +481,11 @@ raw object is explicitly marked as unknown.
 
 Inspection preserves lazy computation. `show(result)` and `describe(result)`
 report stored information; an uncomputed dimension is shown as `not computed`.
-For an ingestion encoding, `dimensions(result)` computes and caches only the
-dimension vector, while `pmodule(result)` explicitly constructs the module and
-its structure maps. Axes queries do not enumerate grid representatives.
+For an ingestion encoding, `dimensions(result)` computes and stores only the
+dimension vector for reuse, while `encoding_module(result)` explicitly
+constructs the module and its structure maps. This distinction matters:
+a table of dimensions does not tell us how classes move between parameters.
+Axes queries do not enumerate grid representatives.
 See [inspection and explicit computation](docs/lazy_inspection.md) for spectral
 pages, representative data, and cache behavior.
 
@@ -429,6 +497,12 @@ original data or complex. Relabelling a stored answer is not a coefficient
 change.
 
 ## Geometric bifiltrations
+
+A *bifiltration* varies two parameters. For a point cloud, we might vary a
+distance scale and a measure of density. The choice determines the family of
+spaces whose homology we study; encoding then gives us a finite model of the
+resulting module. The constructions below make different modeling choices,
+so choose one according to the question you want to ask.
 
 For finite point clouds in one or two ambient dimensions:
 
@@ -504,7 +578,7 @@ installation instructions until this README announces otherwise. The
 registration needed to enable `Pkg.add("TamerOp")`.
 
 If TamerOp contributes to your research, cite **Erik Novak, TamerOp.jl:
-Computing with persistence modules and finite posets**, with the
+Toolkit for Algebraic Module Encodings over R^n and Other Posets**, with the
 [repository URL](https://github.com/erikmnovak/TamerOp.jl), and record the version
 or Git commit used. [CITATION.cff](CITATION.cff) contains the software citation
 metadata. GitHub can use this file to provide a **Cite this repository** button
@@ -545,3 +619,7 @@ The runner also supports field selection, required extensions and threaded runs.
 See [option contracts](docs/option_contracts.md) and
 [ingestion options](docs/ingestion_options.md) for representation, coefficient-field,
 stage and validation choices.
+
+Documentation contributions follow the [writing guide](docs/writing.md).
+It explains the shared finite-encoding narrative, how to introduce unfamiliar
+terms, and how to check that an explanation helps its intended reader.

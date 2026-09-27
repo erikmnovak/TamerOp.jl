@@ -1,6 +1,15 @@
 # Exact rhomboid grades
 
-`RhomboidFiltration()` stores physical radii as `AlgebraicReal` values. The
+Two nearby radii can mark different topological events even when a plot displays
+them at the same position. A grade is the parameter value at which a cell
+appears. For rhomboid filtrations, keeping these grades distinct preserves the
+events that determine the finite model's spaces and maps. This guide explains
+which coordinates remain exact during construction, queries, and saving; the
+[finite-encoding introduction](finite_encodings.md) explains the role of those
+coordinates in recovering the represented module.
+
+`RhomboidFiltration()` stores physical radii as `AlgebraicReal` values, which
+represent real roots of polynomials with rational coefficients. The
 construction computes rational squared radii and takes exact square roots.
 Sorting, membership, cell attachments and grid indices use these exact values;
 two radii with the same `Float64` display remain different computational grades.

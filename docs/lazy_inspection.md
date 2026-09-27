@@ -1,5 +1,13 @@
 # Inspection and explicit computation
 
+After constructing an encoding, first ask what is already known and which
+calculation your next question requires. Its finite poset and parameter map
+may be available before all vector spaces and structure maps have been computed.
+Such a result is *lazy*: it keeps enough data to carry out the deferred work
+when requested. The [finite-encoding introduction](finite_encodings.md)
+describes these mathematical pieces; this guide explains how to inspect them
+and deliberately request more.
+
 Displaying a mathematical object should not silently solve another mathematical
 problem. `show`, `describe`, and owner summary functions inspect stored data.
 They may count or summarize that data, but do not construct missing modules,
@@ -63,6 +71,11 @@ memoized; callers who want retained metadata can supply `axes=...` and
 metadata and leaves absent metadata lazy.
 
 ## Algebra, geometry, and features
+
+The same distinction applies after encoding: a summary describes what is stored,
+while a mathematical query may construct a new answer. Choose the query from
+the information you need, such as a dimension, a representative vector, or a
+geometric measurement.
 
 - A fringe display reports existing fiber dimensions. Use `fiber_dimension`
   or `dimensions` explicitly to compute ranks.

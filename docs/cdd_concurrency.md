@@ -1,11 +1,13 @@
 # Concurrent polyhedral computations
 
-TamerOp coordinates its CDD-backed polyhedral computations with one internal
-execution lock shared by PL geometry and incremental rhomboid construction.
-You can issue these library operations from different Julia tasks: CDD work is
-serialized, while surrounding computations can still run concurrently. Exact
-rational and floating CDD operations use the same boundary. There is no user
-option to disable it.
+Use this guide when running polyhedral computations from several Julia
+tasks or changing code that calls CDD, the polyhedral backend. TamerOp runs
+its CDD work one operation at a time, while surrounding computations can
+still run concurrently.
+
+One internal execution lock coordinates this work across PL geometry and
+incremental rhomboid construction. Exact rational and floating CDD operations
+use the same protected boundary. There is no user option to disable it.
 
 The boundary includes lazy conversion, point/facet materialization, incidence,
 volume, and centroid computation. Incremental rhomboid construction copies its

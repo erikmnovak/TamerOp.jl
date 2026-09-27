@@ -3,7 +3,7 @@ message: >-
   If you use TamerOp in your research, please cite this software and record
   the version or Git commit used for your analysis.
 type: software
-title: "TamerOp.jl: Computing with persistence modules and finite posets"
+title: "TamerOp.jl: Toolkit for Algebraic Module Encodings over R^n and Other Posets"
 authors:
   - family-names: Novak
     given-names: Erik
@@ -11,9 +11,20 @@ repository-code: "https://github.com/erikmnovak/TamerOp.jl"
 url: "https://github.com/erikmnovak/TamerOp.jl"
 license: MIT
 abstract: >-
-  TamerOp is a Julia library for finite encodings of persistence modules,
-  homology, invariants, derived functors, and mathematical visualization.
+  TamerOp stands for Toolkit for Algebraic Module Encodings over R^n and
+  Other Posets. It began as an implementation of Ezra Miller's Homological
+  algebra of modules over posets, and finite encoding remains its organizing
+  mathematical idea. The name also recalls tameness, the finiteness condition
+  linking encodings, indicator presentations, and resolutions in that theory.
+  The library constructs finite-poset models from supported data and
+  mathematical presentations, retaining vector spaces, structure maps,
+  and their relationship to the original parameter domain. These encoded
+  objects support module algebra, derived computations, invariants,
+  feature extraction, and visualization, with explicit mathematical scope.
 keywords:
+  - finite encodings
+  - finite posets
+  - tame modules
   - persistence modules
   - multiparameter persistence
   - computational topology

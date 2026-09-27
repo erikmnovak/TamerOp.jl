@@ -1,9 +1,18 @@
 # Exact coverage-depth windows
 
+A multicover asks which locations lie in at least a chosen number of balls.
+If only a few coverage depths matter, a bounded construction can avoid storing
+the full range. It must still retain the cells that connect features at the
+chosen depths. This guide explains that boundary issue and why the resulting
+finite module has the required spaces and maps within its window. Start with
+the [multicover guide](multicover.md) for the radius/depth interpretation and
+the available construction methods.
+
 `RhomboidFiltration(depth_range=(lo, hi))` represents the inclusive integer
 coverage-depth window `lo:hi`. Radius increases and depth decreases. The
-construction retains the horizontal cap at depth `hi`, including when
-`lo == hi`.
+construction retains the horizontal cap at depth `hi`: the boundary cells
+created by cutting the rhomboid model at that depth. They are retained even
+when `lo == hi`.
 
 ```julia
 using TamerOp
@@ -13,9 +22,11 @@ filtration = RhomboidFiltration(depth_range=(1, 1), backend=:exhaustive)
 enc = encode(points, filtration; degree=0)
 ```
 
-Here the degree-zero dimension is two below radius one and one at radius one.
-The cap contains the joining edge. Removing the original depth-two vertex and
-all its incident cells would lose that edge and give the wrong answer.
+Here degree zero counts connected components. The two balls are disjoint below
+radius one and touch at radius one, so the degree-zero dimension is two below
+that radius and one at it. The cap contains the joining edge. Removing the
+original depth-two vertex and all its incident cells would lose that edge and
+give the wrong answer.
 
 ## The represented bifiltration
 

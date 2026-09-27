@@ -1,5 +1,13 @@
 # Numerical derived algebra
 
+The algebra of a finite module depends on which vectors are independent, which
+are sent to zero, and which represent the same class after taking a quotient.
+With floating coefficients, these questions require a numerical rank decision.
+This guide explains how tolerances affect derived computations on the retained
+finite module and how to assess their results. The
+[category guide](math_categories.md) specifies what its Hom, Ext, and Tor
+calculations mean; the numerical choices here do not change that category.
+
 `RealField` computes numerical kernels, images and quotient coordinates using
 the tolerances stored in the field. It does not supply the exact-rank guarantee
 of `QQField` or a prime field. On well-conditioned data whose nonzero singular

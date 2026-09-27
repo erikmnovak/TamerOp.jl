@@ -1,5 +1,14 @@
 # Exact matching distance in a finite window
 
+Once two modules have compatible finite encodings, we can compare what they
+show along increasing lines through parameter space. Each line uses the retained
+spaces and maps to give a one-parameter barcode. The bottleneck distance to
+another barcode minimizes the largest cost of matching endpoints, allowing a finite
+interval to be discarded at half its length. Matching distance combines these
+comparisons over all positive-slope lines with a direction-dependent weight.
+This summarizes differences between the two retained modules; see the
+[finite-encoding introduction](finite_encodings.md) for the object being compared.
+
 `matching_distance_exact_2d` computes the supremum of weighted bottleneck
 distances over all positive-slope lines, with both slice barcodes clipped to
 the same finite rectangle. The optimization uses exact arithmetic; the public
@@ -58,6 +67,12 @@ the API does not expose an exact scalar or a certified interval. Exactness
 here concerns exhaustive optimization before that conversion.
 
 ## Proof of coverage
+
+There are infinitely many lines through the window, so checking a chosen sample
+would not establish the maximum. The proof below divides the line parameters
+into finitely many pieces on which both barcode events and matching costs have
+fixed formulas. It then explains why checking the vertices of those pieces
+suffices under the preceding hypotheses.
 
 Write the window as `[xmin,xmax] × [ymin,ymax]`, and initially assume positive
 width and height. In the shallow chart parameterize a line by

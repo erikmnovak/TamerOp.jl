@@ -1,15 +1,31 @@
 # Categories, encodings, and derived computations
 
+Retaining a module's spaces and maps lets us ask how modules map to one another,
+and how those maps fit into exact sequences. Hom collects compatible linear
+maps. Resolutions express a module using simpler building blocks; Ext and Tor
+use these resolutions to study the failure of Hom and tensor to preserve
+exact sequences. The [finite-encoding introduction](finite_encodings.md)
+explains the starting object. This guide identifies the category in which
+each calculation takes place and when a comparison with another category is
+justified.
+
 TamerOp computes Hom, Ext, resolutions, and Yoneda products in the category
 `Rep_k(P)` of finite-dimensional covariant representations of the **actual finite
-input poset** `P`. Its Tor operation pairs a representation of `P^op` with one of
-`P`, using the finite incidence-algebra tensor product. These are the categories
-reported by `provenance(result)` and by existing result summaries.
+input poset** `P`. Here a representation assigns a finite-dimensional vector
+space over the coefficient field `k` to each label in `P` and compatible linear
+maps to comparable labels. Morphisms are families of linear maps that commute
+with these structure maps. TamerOp's Tor operation pairs a representation of `P^op`
+(the same labels with reversed order) with one of `P`, using the finite
+incidence-algebra tensor product. These are the categories reported by
+`provenance(result)` and by existing result summaries.
 
 An ambient encoding is additional data: an order-preserving map `q: Q -> P`
-together with a specified identification `M ≅ q*H`. Keeping that identification
-retains the original module, including its structure maps. It does not by itself
-identify Ext or Tor computed on `P` with the corresponding groups on `Q`.
+from the original parameter poset, together with a specified identification
+`M ≅ q*H` for a module `H` on `P`. The pullback `q*H` assigns `H(q(a))` to an
+original parameter `a` and uses `H`'s maps between the corresponding labels.
+Keeping that identification retains the original module `M`, including its
+structure maps. It does not by itself identify Ext or Tor computed on `P` with
+the corresponding groups on `Q`.
 
 ## What each API computes
 
@@ -265,6 +281,11 @@ Floating-point conversions additionally impose a numerical tolerance contract;
 they are not exact base-change certificates.
 
 ## Encoding serialization and comparison maps
+
+Saving an encoding should let a later computation recover its spaces and maps,
+even if the chosen coordinates change. A natural isomorphism means that the
+changes of basis at individual labels commute with every structure map. This
+is the comparison needed when checking a saved and reloaded module.
 
 `save_encoding_json(path, enc)` stores a finite fringe presentation. Loading
 reconstructs its image as a module on the stored finite poset. Preservation is

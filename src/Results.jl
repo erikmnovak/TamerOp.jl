@@ -179,18 +179,24 @@ end
     EncodingResult(P, M, pi; H=nothing, presentation=nothing,
                   opts=EncodingOptions(), backend=opts.backend, meta=NamedTuple())
 
-Workflow-facing wrapper for the output of a user-facing `encode(...)`.
+The finite encoded object returned by a completed `encode(...)` computation.
+
+It keeps a module on a finite poset together with the map relating original
+parameter values to finite labels. For a valid encoding of the represented
+module, these pieces recover its vector spaces and structure maps, subject
+to the construction's domain and assumptions. The same object can then be
+used for algebraic questions, invariants, and figures.
 
 `EncodingResult` stores:
 - the finite encoding poset `P`,
 - the encoded module `M`,
 - the encoding map `pi`,
-- optional cohomological provenance `H`,
+- optional supporting algebraic data `H`, such as a pushed-down fringe
+  presentation or cohomological data, depending on the construction,
 - optional presentation/provenance data,
 - the encoding options used to produce the result.
 
-Use this object when you want an inspectable workflow result. Prefer semantic
-accessors such as [`encoding_poset`](@ref), [`encoding_module`](@ref), and
+Prefer semantic accessors such as [`encoding_poset`](@ref), [`encoding_module`](@ref), and
 [`encoding_map`](@ref) over direct field access. Prefer `describe(enc)` or
 [`result_summary`](@ref) plus `dimensions(enc)` for inspection before falling
 back to `unwrap(enc)`. Use [`unwrap`](@ref) only when you explicitly want the

@@ -1,8 +1,12 @@
 """
     Workflow
 
-User-facing orchestration layer for the canonical mathematical tasks in
-TamerOp.
+Build a finite encoding and use it for subsequent mathematical questions.
+
+Start from a presentation, or from data with a chosen filtration. The completed
+encoding relates the original parameter domain to a finite module whose vector
+spaces and maps can be inspected and used for algebra, invariants, and figures.
+The functions here connect these steps through task-oriented calls.
 
 Canonical workflow policy
 - prefer task-oriented entrypoints:
@@ -713,7 +717,23 @@ end
 @doc raw"""
     encode(...)
 
-Canonical workflow entrypoint with two distinct families that share one name.
+Construct a finite model of a persistence module from a presentation or
+filtered data.
+
+A completed encoding consists of a finite poset, the module's vector spaces
+and maps on that poset, and a map relating the original parameters to the
+finite model. It lets later operations use the same represented module for
+different questions. Recovery of the original module refers to the domain
+and mathematical assumptions of the selected construction.
+
+Inspect an encoding with `describe(enc)` and `provenance(enc)`. Use
+`encoding_poset(enc)` and `encoding_map(enc)` for its finite labels and
+assignment map. `encoding_module(enc)` provides the module, explicitly
+computing its spaces and structure maps if they were stored lazily;
+`dimensions(enc)` computes only dimensions.
+
+The two input families below differ in how they reach this object. Data
+ingestion can also stop at an intermediate stage, before a module is built.
 
 Presentation encoding
 - `encode(x; backend=:auto, output=:result, cache=:auto)` takes a mathematical

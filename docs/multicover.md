@@ -1,5 +1,14 @@
 # Exact multicover computation
 
+Growing a ball around every data point gives one way to study the shape of a
+point cloud. Requiring each location to lie in several balls adds a second
+question: which features remain when we demand more coverage? The resulting
+two-parameter family is the multicover bifiltration. This guide explains how
+TamerOp constructs a finite model for its homology and which geometry, window,
+and size choices determine the represented module. The
+[finite-encoding introduction](finite_encodings.md) explains why retaining the
+maps between parameter values matters alongside the spaces at those values.
+
 For a nonempty finite point cloud, `RhomboidFiltration` models the region
 covered by at least `k` indexed closed balls of radius `r`. Radius increases
 and coverage decreases: physical grades
@@ -17,6 +26,11 @@ filtration = RhomboidFiltration(depth_range=(1,2))
 result = encode(points, filtration; degree=1)
 provenance(result) # model, depth window, field and executed backend
 ```
+
+The example requests degree-one homology, which records loop classes, over
+coverage depths one and two. Its result relates the selected radius/depth
+parameters to a finite module; `provenance` records the construction choices
+needed to interpret it. Intermediate output stages are described below.
 
 `depth_range=(lo,hi)` includes both endpoints and must lie in `0:npoints`.
 Depth zero is contractible ambient space. A positive-depth window can be

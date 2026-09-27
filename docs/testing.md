@@ -1,8 +1,16 @@
 # Running correctness tests
 
-Run tests from the repository root with Julia 1.12 and an instantiated project.
-The maintained entrypoint is `test/runtests.jl`; it loads this checkout using
-`using TamerOp`. A package or extension loading failure fails the run.
+Use this guide to choose correctness checks for a change and collect evidence
+for a release. Start with the test files for the affected subsystem; the later
+sections explain optional integrations, public examples, and verification of a
+complete release candidate. For documentation changes, also follow the
+[writing and review guidance](writing.md): a passing example does not establish
+that its explanation is clear or its mathematical claims are justified.
+
+Run the terminal commands below from the repository root with Julia 1.12 and an
+instantiated project. The maintained entrypoint is `test/runtests.jl`; it loads
+this checkout using `using TamerOp`. A package or extension loading failure
+fails the run.
 
 ```sh
 julia --project=. -e 'using Pkg; Pkg.instantiate()'

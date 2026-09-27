@@ -1,6 +1,8 @@
 # Releasing TamerOp
 
-This guide is for the package maintainer. To use the library, follow
+Use this guide to prepare and verify a release candidate, register that exact
+commit, and confirm that users can install the registered release. It is for the
+package maintainer; library users should follow
 [the installation walkthrough](../README.md#install-tamerop).
 
 The first planned release is **0.1.0**. Until its registration has merged,

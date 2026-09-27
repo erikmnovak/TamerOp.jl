@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased documentation updates
+
+- Use the expanded name, Toolkit for Algebraic Module Encodings over R^n
+  and Other Posets, in the software citation. Explain the connection to
+  tameness and the project's origin as an implementation of Miller's theory.
+- Center the README and Julia help on the finite encoded object and the
+  computations it supports.
+- Add a [finite-encoding introduction](docs/finite_encodings.md) and a
+  [writing guide](docs/writing.md) for connected, approachable exposition.
+- Give existing guides question-driven introductions while retaining their
+  mathematical hypotheses and detailed operation requirements.
+
 ## 0.1.0 — unreleased candidate
 
 This section describes the first planned package release. It does not announce

@@ -4203,7 +4203,7 @@ end
         leaving = sparse(reshape(K[0, 0, 1], 1, 3))
         complex = CC.CochainComplex{K}(0, 2, [1, 3, 1], [entering, leaving])
         # Both windowed and single-degree cohomology builders defer quotient
-        # representatives until an explicit basis or coordinate query.
+        # representatives during passive inspection.
         cohomology = only(CC.cohomology_data(complex; degrees=1:1))
         homology = CC.homology_data(entering, leaving, 1)
         for object in (cohomology, homology)
@@ -4711,9 +4711,11 @@ end
         @test vector == weights[:, 2]
     end
 
-    # Compare the composed projection with its two exact changes of basis.
-    kfac, bfac = fresh.Kfactor[], fresh.Bfull_factor[]
-    @test plan.proj == bfac.invB[3:4, :] * kfac.invB
+    # These equations uniquely specify the quotient map in the retained
+    # representative basis, without asking for an unnecessary square inverse.
+    @test plan.proj * reps[plan.rows, :] == Matrix{QQ}(I, 2, 2)
+    @test plan.proj * B[plan.rows, :] == zeros(QQ, 2, 2)
+    @test fresh.Bfull_factor[] === nothing
     for input in (z, sparse(z), view(hcat(z, z), :, 1:3))
         @test CC.coordinates(fresh, input) == weights
         @test CC._cohomology_coordinates_from_cocycles(fresh, input) == weights
@@ -4740,4 +4742,338 @@ end
     @test isempty(CC._cohomology_coordinates_vector(zeroquotient, z[:, 1]))
     @test_throws DimensionMismatch CC._cohomology_coordinates_from_cocycles(zeroquotient, zeros(QQ, 5, 1))
     @test_throws DimensionMismatch CC._cohomology_coordinates_vector(zeroquotient, zeros(QQ, 5))
+end
+
+
+@testset "Checked quotient coordinates validate every ambient row" begin
+    field = CM.QQField()
+    # The graph is embedded with scattered independent rows. A dense rational
+    # change of column basis prevents the selected square matrix from being
+    # the identity. Quotienting columns 2 and 4 still leaves columns 1 and 3.
+    graph = QQ[0 0 0 0; 1 0 0 0; 2//3 0 0 0;
+               0 1 0 0; 0 0 1 0; -3//5 1//2 7//11 0;
+               0 0 0 1; 1//3 2//5 -1//7 3//11]
+    u = QQ[1, 2, -1, 3]
+    v = QQ[1//2, -1//3, 2//5, 1//7]
+    gauge = Matrix{QQ}(I, 4, 4) + u * transpose(v)
+    @test 1 + dot(v, u) != 0 # exact Sherman–Morrison invertibility condition
+    Z = graph * gauge
+    B = Z[:, [2, 4]]
+    reps = Z[:, [1, 3]]
+    weights = QQ[2//3 -7//13 0; -1//5 3//11 2//17]
+    boundary_weights = QQ[1//7 0 -3//5; -2//3 1//13 0]
+    cycles = reps * weights + B * boundary_weights
+    Zcopy, Bcopy, inputcopy = copy(Z), copy(B), copy(cycles)
+    builders = (CC._cohomology_data_from_bases, CC._homology_data_from_bases)
+
+    for build in builders, lazy in (true, false)
+        H = build(QQ, 2, 8, Z, B; field=field, lazy_reps=lazy)
+        @test getfield(H, :_checked_coord_plan) === nothing
+        @test CC.coordinates(H, cycles) == weights
+        plan = getfield(H, :_checked_coord_plan)
+        @test plan.rows == [2, 4, 5, 7]
+        @test plan.check_rows == [1, 3, 6, 8]
+        @test plan.check == graph[plan.check_rows, :]
+        @test CC.basis(H) == reps
+        @test CC.coordinates(H, B) == zeros(QQ, 2, 2)
+        @test CC.coordinates(H, reps) == Matrix{QQ}(I, 2, 2)
+        for input in (cycles, sparse(cycles), view(hcat(cycles, cycles), :, 1:3))
+            @test CC.coordinates(H, input) == weights
+            @test getfield(H, :_checked_coord_plan) === plan
+        end
+        for input in (cycles[:, 2], sparse(cycles[:, 2]), view(cycles, :, 2),
+                      transpose(cycles[:, 2]), reshape(cycles[:, 2], 1, :))
+            @test CC.coordinates(H, input) == weights[:, 2:2]
+        end
+        for input in (zeros(QQ, 8, 0), spzeros(QQ, 8, 0), view(cycles, :, 1:0))
+            @test size(CC.coordinates(H, input)) == (2, 0)
+        end
+        @test_throws ErrorException CC.coordinates(H, zeros(QQ, 7))
+        @test_throws ErrorException CC.coordinates(H, zeros(QQ, 7, 2))
+
+        # Every invalid input agrees with a valid cycle on all selected rows.
+        # A projection alone would return the same plausible coordinates.
+        for row in plan.check_rows
+            invalid = copy(cycles[:, 2])
+            invalid[row] += QQ(1, 101)
+            @test invalid[plan.rows] == cycles[plan.rows, 2]
+            for input in (invalid, sparse(invalid), view(reshape(invalid, :, 1), :, 1),
+                          transpose(invalid), hcat(cycles, invalid))
+                @test_throws ErrorException CC.coordinates(H, input)
+            end
+        end
+
+        # Mutation of a returned coordinate matrix never changes its cache.
+        returned = CC.coordinates(H, cycles)
+        returned[1, 1] += 1
+        @test CC.coordinates(H, cycles) == weights
+        if H isa CC.CohomologyData
+            @test plan.proj === CC._cohomology_coord_plan(H).proj
+        end
+    end
+    @test Z == Zcopy
+    @test B == Bcopy
+    @test cycles == inputcopy
+
+    # Mixed concurrent first callers include invalid inputs as well as scalar,
+    # batched and sparse inputs. All successful calls use one published plan.
+    for build in builders
+        H = build(QQ, 2, 8, Z, B; field=field)
+        bad = copy(cycles[:, 1])
+        bad[8] += 1
+        tasks = [Threads.@spawn begin
+            if j % 4 == 0
+                rejected = try
+                    CC.coordinates(H, bad)
+                    false
+                catch err
+                    err isa ErrorException
+                end
+                (rejected, getfield(H, :_checked_coord_plan))
+            elseif j % 4 == 1
+                (CC.coordinates(H, sparse(cycles)) == weights,
+                 getfield(H, :_checked_coord_plan))
+            elseif j % 4 == 2
+                (CC.coordinates(H, view(cycles, :, 2)) == weights[:, 2:2],
+                 getfield(H, :_checked_coord_plan))
+            else
+                (CC.coordinates(H, cycles) == weights,
+                 getfield(H, :_checked_coord_plan))
+            end
+        end for j in 1:24]
+        for (j, (correct, cached)) in enumerate(fetch.(tasks))
+            @test correct
+            if j % 4 == 0
+                @test cached === nothing || cached === getfield(H, :_checked_coord_plan)
+            else
+                @test cached === getfield(H, :_checked_coord_plan)
+                @test cached !== nothing
+            end
+        end
+    end
+
+    # Rejected first queries retain the old lazy behavior: they may factor
+    # the cycle basis but do not construct any quotient representatives.
+    for build in builders
+        H = build(QQ, 2, 8, Z, B; field=field)
+        bad = copy(cycles[:, 1])
+        bad[3] += 1
+        @test_throws ErrorException CC.coordinates(H, bad)
+        @test getfield(H, :_Hrep) === nothing
+        @test getfield(H, :_Bfull) === nothing
+        @test getfield(H, :_checked_coord_plan) === nothing
+        @test H.Bfull_factor[] === nothing
+        @test CC.coordinates(H, cycles) == weights
+    end
+
+    # A zero quotient must validate membership, while a zero cycle space
+    # accepts only zero inputs. A full cycle space accepts every ambient vector.
+    for build in builders
+        Hzero = build(QQ, 0, 8, Z, Z; field=field)
+        reps_before = getfield(Hzero, :_Hrep)
+        @test CC.coordinates(Hzero, cycles) == zeros(QQ, 0, 3)
+        @test getfield(Hzero, :_Hrep) === reps_before
+        @test getfield(Hzero, :Bfull_factor)[] === nothing
+        bad = copy(cycles[:, 1])
+        bad[6] += 1
+        @test_throws ErrorException CC.coordinates(Hzero, bad)
+
+        Hempty = build(QQ, 0, 8, zeros(QQ, 8, 0), zeros(QQ, 8, 0); field=field)
+        @test size(CC.coordinates(Hempty, zeros(QQ, 8))) == (0, 1)
+        @test size(CC.coordinates(Hempty, spzeros(QQ, 8, 3))) == (0, 3)
+        @test size(CC.coordinates(Hempty, zeros(QQ, 8, 0))) == (0, 0)
+        for row in 1:8
+            bad = zeros(QQ, 8)
+            bad[row] = 1
+            @test_throws ErrorException CC.coordinates(Hempty, bad)
+        end
+
+        Hfull = build(QQ, 0, 4, gauge, gauge[:, [2, 4]]; field=field)
+        @test isempty(CC.coordinates(Hfull, zeros(QQ, 4, 0)))
+        @test isempty(getfield(Hfull, :_checked_coord_plan).check_rows)
+        @test CC.coordinates(Hfull, gauge * QQ[1 2; 3 4; 5 6; 7 8]) == QQ[1 2; 5 6]
+
+        Hambient0 = build(QQ, 0, 0, zeros(QQ, 0, 0), zeros(QQ, 0, 0); field=field)
+        @test size(CC.coordinates(Hambient0, QQ[])) == (0, 1)
+        @test size(CC.coordinates(Hambient0, zeros(QQ, 0, 3))) == (0, 3)
+        @test size(CC.coordinates(Hambient0, zeros(QQ, 1, 0))) == (0, 1)
+    end
+
+    # Numerical membership continues using the configured solve residual;
+    # an exact graph check would wrongly reject the first small perturbation.
+    numerical = CM.RealField(Float64; atol=1e-8, rtol=0.0)
+    Zreal = reshape([1.0, 0.0], 2, 1)
+    for build in builders
+        H = build(Float64, 0, 2, Zreal, zeros(2, 0); field=numerical)
+        @test CC.coordinates(H, [2.0, 1e-10]) ≈ reshape([2.0], 1, 1)
+        @test_throws ErrorException CC.coordinates(H, [2.0, 1e-5])
+        @test getfield(H, :_checked_coord_plan) === nothing
+    end
+end
+
+
+@testset "QQ quotient projections reuse cycle factors and preserve lazy bases" begin
+    field = CM.QQField()
+    # Embed six cycle coordinates in nine ambient coordinates. Earlier
+    # dependent rows use only preceding independent rows, prescribing the
+    # earliest independent row indices without calling an elimination routine.
+    ambient_rows = [1, 2, 4, 5, 7, 8]
+    omitted_rows = [3, 6, 9]
+    graph = zeros(QQ, 9, 6)
+    graph[ambient_rows, :] = Matrix{QQ}(I, 6, 6)
+    graph[3, 1:2] = QQ[1//3, -2//5]
+    graph[6, 1:4] = QQ[3//7, 1//2, -4//9, 2//11]
+    graph[9, :] = QQ[1//2, -2//3, 3//5, -4//7, 5//11, -6//13]
+    u, v = QQ[1, 2, 3, 4, 5, 6], QQ[1//3, 1//4, 1//5, 1//6, 1//7, 1//8]
+    gauge = Matrix{QQ}(I, 6, 6) + u * transpose(v)
+    inverse_gauge = Matrix{QQ}(I, 6, 6) - u * transpose(v) / (1 + dot(v, u))
+    @test gauge * inverse_gauge == Matrix{QQ}(I, 6, 6)
+    Z = graph * gauge
+
+    # Dense mixing of two boundary generators gives a nonidentity minor in
+    # rows 2 and 4. Its ordered complement is 1,3,5,6. In cycle coordinates,
+    # subtracting the boundary determined by entries 2 and 4 gives the
+    # explicitly written quotient map below.
+    boundary_graph = QQ[0 0; 1 0; 2//3 0; 0 1; -3//5 7//11; 5//13 -2//7]
+    boundary_gauge = QQ[2 3//5; -1//7 4//3]
+    @test 2 * QQ(4, 3) - QQ(3, 5) * QQ(-1, 7) != 0
+    Cx = boundary_graph * boundary_gauge
+    B = Z * Cx
+    complement_rows = [1, 3, 5, 6]
+    complement = Matrix{QQ}(I, 6, 6)[:, complement_rows]
+    expected_reps = Z[:, complement_rows]
+    quotient = QQ[1 0 0 0 0 0;
+                  0 -2//3 1 0 0 0;
+                  0 3//5 0 -7//11 1 0;
+                  0 -5//13 0 2//7 0 1]
+    @test quotient * Cx == zeros(QQ, 4, 2)
+    @test quotient * complement == Matrix{QQ}(I, 4, 4)
+    weights = QQ[1//2 -2//3 3//5; -3//7 4//9 1//3; 2//11 0 -5//13; 0 7//17 3//2]
+    boundary_weights = QQ[2//3 -1//5 4//7; -3//11 2//13 1//2]
+    cycles = expected_reps * weights + B * boundary_weights
+    alpha = QQ[(i - 2j) // (i + j + 1) for i in 1:6, j in 1:3]
+    arbitrary_cycles = Z * alpha
+    invalid = copy(cycles[:, 1])
+    invalid[6] += QQ(1, 101)
+    @test invalid[ambient_rows] == cycles[ambient_rows, 1]
+    savedZ, savedB, saved_cycles = deepcopy(Z), deepcopy(B), deepcopy(cycles)
+
+    for build in (CC._cohomology_data_from_bases, CC._homology_data_from_bases)
+        H = build(QQ, 1, 9, copy(Z), copy(B); field)
+        factor_ref = H isa CC.CohomologyData ? H.Kfactor : H.Zfactor
+        factor = factor_ref[]
+        # Construction already checked the boundary solve. Its actual factor
+        # must remain available, rather than being recomputed by coordinates.
+        @test factor !== nothing
+        @test factor.rows == ambient_rows
+        @test factor.invB == inverse_gauge
+        # Keep H alive while constructing another result on equal but distinct
+        # matrices. Cross-result reuse and result-local reuse should alias one
+        # inverse, rather than trade one form of reuse for the other.
+        repeated = build(QQ, 1, 9, copy(Z), copy(B); field)
+        repeated_ref = repeated isa CC.CohomologyData ? repeated.Kfactor : repeated.Zfactor
+        cycle_basis = H isa CC.CohomologyData ? H.K : H.Z
+        repeated_basis = repeated isa CC.CohomologyData ? repeated.K : repeated.Z
+        @test repeated_basis !== cycle_basis
+        @test repeated_basis == cycle_basis
+        @test repeated_ref[] === factor
+        @test H.Cx == Cx
+        @test_throws ErrorException CC.coordinates(H, invalid)
+        @test getfield(H, :_checked_coord_plan) === nothing
+        for slot in (:_Bfull, :_Q, :_Hrep)
+            @test getfield(H, slot) === nothing
+        end
+        @test CC.coordinates(H, cycles) == weights
+        @test CC.coordinates(repeated, cycles) == weights
+        @test repeated_ref[] === factor_ref[] === factor
+        @test CC.coordinates(H, arbitrary_cycles) == quotient * alpha
+        @test CC.coordinates(H, B) == zeros(QQ, 4, 2)
+        @test size(CC.coordinates(H, zeros(QQ, 9, 0))) == (4, 0)
+        plan = getfield(H, :_checked_coord_plan)
+        @test plan.rows == ambient_rows
+        @test plan.check == graph[omitted_rows, :]
+        @test plan.proj == quotient * inverse_gauge
+        if H isa CC.CohomologyData
+            @test CC._cohomology_coordinates_from_cocycles(H, cycles) == weights
+            @test CC._cohomology_coordinates_vector(H, cycles[:, 2]) == weights[:, 2]
+            @test CC._cohomology_coord_plan(H).proj === plan.proj
+        end
+        @test factor_ref[] === factor
+        @test H.Bfull_factor[] === nothing
+        for slot in (:_Bfull, :_Q, :_Hrep)
+            @test getfield(H, slot) === nothing
+        end
+        # Later basis materialization keeps exactly the old ordered columns
+        # and does not replace the already published coordinate calculation.
+        @test CC.basis(H) == expected_reps
+        @test H.Q == complement
+        @test H.Bfull == hcat(Cx, complement)
+        @test CC.coordinates(H, expected_reps) == Matrix{QQ}(I, 4, 4)
+        @test getfield(H, :_checked_coord_plan) === plan
+        @test factor_ref[] === factor
+        @test H.Bfull_factor[] === nothing
+
+        # With no boundaries, cycle coefficients are already quotient
+        # coordinates; no completed basis or inverse is needed.
+        free = build(QQ, 1, 9, copy(Z), zeros(QQ, 9, 0); field)
+        @test CC.coordinates(free, arbitrary_cycles) == alpha
+        for slot in (:_Bfull, :_Q, :_Hrep)
+            @test getfield(free, slot) === nothing
+        end
+        @test free.Bfull_factor[] === nothing
+    end
+
+    # A trusted coordinate query may be the first query too. It must not
+    # materialize representatives, nor weaken a later public membership check.
+    trusted = CC._cohomology_data_from_bases(QQ, 1, 9, copy(Z), copy(B); field)
+    @test CC._cohomology_coordinates_from_cocycles(trusted, cycles) == weights
+    projection = CC._cohomology_coord_plan(trusted).proj
+    @test_throws ErrorException CC.coordinates(trusted, invalid)
+    @test getfield(trusted, :_checked_coord_plan) === nothing
+    @test CC.coordinates(trusted, cycles) == weights
+    @test getfield(trusted, :_checked_coord_plan).proj === projection
+    @test trusted.Bfull_factor[] === nothing
+    for slot in (:_Bfull, :_Q, :_Hrep)
+        @test getfield(trusted, slot) === nothing
+    end
+
+    # A differential certificate defers the boundary solve itself. Invalid
+    # first input must still fail before that solve or any quotient work.
+    differential = zeros(QQ, 3, 9)
+    differential[:, omitted_rows] = Matrix{QQ}(I, 3, 3)
+    differential[:, ambient_rows] = -graph[omitted_rows, :]
+    @test differential * Z == zeros(QQ, 3, 6)
+    # The reuse also matters on the public homology surface: repeated equal
+    # differentials produce equal fresh cycle bases, while the first result
+    # keeps the existing factor alive.
+    public_first = CC.homology_data(copy(B), copy(differential), 1; field)
+    public_second = CC.homology_data(copy(B), copy(differential), 1; field)
+    @test public_first.Z !== public_second.Z
+    @test public_first.Z == public_second.Z
+    @test public_first.Zfactor[] !== nothing
+    @test public_second.Zfactor[] === public_first.Zfactor[]
+    @test CC.dimensions(public_first) == CC.dimensions(public_second)
+    @test public_first.dimH == 4
+    @test CC.coordinates(public_first, cycles) == CC.coordinates(public_second, cycles)
+    @test CC.coordinates(public_first, CC.basis(public_second)) == Matrix{QQ}(I, 4, 4)
+    @test CC.coordinates(public_first, B) == zeros(QQ, 4, 2)
+
+    deferred = CC._cohomology_data_from_bases(QQ, 1, 9, copy(Z), copy(B);
+        field, cycle_differential=differential)
+    @test getfield(deferred, :_Cx) === nothing
+    @test deferred.Kfactor[] === nothing
+    @test_throws ErrorException CC.coordinates(deferred, invalid)
+    @test getfield(deferred, :_Cx) === nothing
+    factor = deferred.Kfactor[]
+    @test factor !== nothing
+    @test CC.coordinates(deferred, cycles) == weights
+    @test deferred.Kfactor[] === factor
+    @test deferred.Cx == Cx
+    @test deferred.Bfull_factor[] === nothing
+    for slot in (:_Bfull, :_Q, :_Hrep)
+        @test getfield(deferred, slot) === nothing
+    end
+    @test Z == savedZ
+    @test B == savedB
+    @test cycles == saved_cycles
 end

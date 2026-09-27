@@ -119,7 +119,16 @@ does not change which Ext class a coordinate vector describes.
 Comparisons check inverse identities exactly over exact fields and with the
 supplied field tolerances for numerical coefficients.
 Public coordinate queries continue to check that the supplied vectors are
-cycles, even after a coordinate calculation has been cached.
+cycles, even after a coordinate calculation has been cached. Over rational
+coefficients, the retained calculation uses a set of independent ambient
+coordinates to recover the class and checks that every remaining coordinate
+agrees with a cycle. This avoids solving for all boundary coordinates on each
+query while keeping the check exact. Requesting these coordinates does not
+construct the representative matrices: those remain deferred until a basis or
+representative is requested. A factorization already needed to check boundaries
+is reused by the same result. A vector outside the cycle space is rejected even
+when the quotient has dimension zero; numerical coefficients retain their
+supplied tolerance rules.
 
 Validators and explicit mathematical queries are separate from passive
 inspection: they can perform the work required by their documented contracts.

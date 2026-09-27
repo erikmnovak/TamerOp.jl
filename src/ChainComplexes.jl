@@ -803,6 +803,16 @@ particular components, differentials, or derived constructions.
 """
 @inline complex_summary(C::CochainComplex) = describe(C)
 
+# Exact cycle membership and quotient coordinates use the same selected
+# ambient rows. The remaining rows certify membership independently of the
+# quotient projection, including when the quotient is zero.
+struct _CheckedQuotientCoordPlan{K}
+    rows::Vector{Int}
+    check_rows::Vector{Int}
+    check::Matrix{K}
+    proj::Matrix{K}
+end
+
 """
     CohomologyData{K}
 
@@ -839,6 +849,7 @@ mutable struct CohomologyData{K}
     _coord_proj::Union{Nothing,Matrix{K}}
     Kfactor::Base.RefValue{Union{Nothing,FieldLinAlg.FullColumnFactor{QQ}}}
     Bfull_factor::Base.RefValue{Union{Nothing,FieldLinAlg.FullColumnFactor{QQ}}}
+    _checked_coord_plan::Union{Nothing,_CheckedQuotientCoordPlan{K}}
     field::AbstractCoeffField
 end
 
@@ -879,7 +890,7 @@ function _zero_cohomology_data(::Type{K}, t::Int;
     Z0 = _empty_mat(K, 0, 0)
     return CohomologyData{K}(ReentrantLock(), t, 0, 0, 0, 0, Z0, Z0, Z0, Z0, Z0, Z0, nothing, nothing,
                              Ref{Union{Nothing,FieldLinAlg.FullColumnFactor{QQ}}}(nothing),
-                             Ref{Union{Nothing,FieldLinAlg.FullColumnFactor{QQ}}}(nothing), field)
+                             Ref{Union{Nothing,FieldLinAlg.FullColumnFactor{QQ}}}(nothing), nothing, field)
 end
 
 @inline _fullcolumn_factor_ref() = Ref{Union{Nothing,FieldLinAlg.FullColumnFactor{QQ}}}(nothing)
@@ -897,6 +908,33 @@ end
     return factor
 end
 
+# Quotient coordinates for the same standard-vector complement used by
+# _basis_completion_from_basis, without building or inverting [Cx Q].
+# If I are the pivot columns of R = rref(transpose(Cx)) and J their ordered
+# complement, R[:,I] = I and Cx[J,:] = transpose(R[:,J]) * Cx[I,:].
+# Thus alpha = Cx*beta + E_J*h gives h = alpha[J] - R[:,J]'*alpha[I].
+# Compose this with alpha = inverse_cycle * z[selected ambient rows].
+function _quotient_projection_from_boundary_coordinates(Cx::Matrix{QQ},
+                                                         inverse_cycle::Matrix{QQ})
+    dimZ, dimB = size(Cx)
+    dimB == 0 && return inverse_cycle # Cached factors/projections are read-only.
+    dimB == dimZ && return zeros(QQ, 0, size(inverse_cycle, 2))
+    R, pivot_indices = FieldLinAlg.rref(QQField(), Matrix(transpose(Cx)); pivots=true)
+    pivs = collect(pivot_indices)
+    length(pivs) == dimB || error("quotient coordinates: boundary coordinates must have full column rank")
+    pivot_mask = falses(dimZ)
+    pivot_mask[pivs] .= true
+    complement = findall(!, pivot_mask)
+    projection = inverse_cycle[complement, :]
+    correction = FieldLinAlg._mulQQ(transpose(view(R, :, complement)),
+                                    view(inverse_cycle, pivs, :))
+    @inbounds for i in eachindex(projection, correction)
+        c = correction[i]
+        iszero(c) || (projection[i] -= c)
+    end
+    return projection
+end
+
 function _cohomology_coord_plan(H::CohomologyData{QQ})
     rows, proj = lock(getfield(H, :_cache_lock)) do
         (getfield(H, :_coord_rows), getfield(H, :_coord_proj))
@@ -906,9 +944,8 @@ function _cohomology_coord_plan(H::CohomologyData{QQ})
     end
 
     kfac = _fullcolumn_factor!(QQField(), H.K, H.Kfactor)
-    bfac = _fullcolumn_factor!(QQField(), H.Bfull, H.Bfull_factor)
     rows_new = copy(kfac.rows)
-    proj_new = FieldLinAlg._mulQQ(@view(bfac.invB[H.dimB + 1:end, :]), kfac.invB)
+    proj_new = _quotient_projection_from_boundary_coordinates(H.Cx, kfac.invB)
     return lock(getfield(H, :_cache_lock)) do
         rows = getfield(H, :_coord_rows)
         proj = getfield(H, :_coord_proj)
@@ -1022,7 +1059,7 @@ function Base.getproperty(H::CohomologyData{K}, s::Symbol) where {K}
 end
 
 Base.propertynames(::CohomologyData, private::Bool=false) =
-    private ? (:_cache_lock, :t, :dimC, :dimZ, :dimB, :dimH, :K, :B, :_Cx, :_Q, :_Bfull, :_Hrep, :_coord_rows, :_coord_proj, :Kfactor, :Bfull_factor, :field) :
+    private ? (:_cache_lock, :t, :dimC, :dimZ, :dimB, :dimH, :K, :B, :_Cx, :_Q, :_Bfull, :_Hrep, :_coord_rows, :_coord_proj, :Kfactor, :Bfull_factor, :_checked_coord_plan, :field) :
               (:t, :dimC, :dimZ, :dimB, :dimH, :K, :B, :Cx, :Q, :Bfull, :Hrep, :Kfactor, :Bfull_factor, :field)
 
 function _diff_summary(field::AbstractCoeffField, d::AbstractMatrix{K}) where {K}
@@ -1096,29 +1133,31 @@ function _cohomology_data_from_bases(::Type{K},
         if lazy_reps
             return CohomologyData{K}(ReentrantLock(), t, dimCt, dimZ, 0, dimZ, Z, B, Bcoords, nothing, nothing, nothing, nothing, nothing,
                                      _fullcolumn_factor_ref(),
-                                     _fullcolumn_factor_ref(), field)
+                                     _fullcolumn_factor_ref(), nothing, field)
         end
         Bfull = _eye_mat(K, dimZ)
         return CohomologyData{K}(ReentrantLock(), t, dimCt, dimZ, 0, dimZ, Z, B, Bcoords, Bfull, Bfull, Z, nothing, nothing,
                                  _fullcolumn_factor_ref(),
-                                 _fullcolumn_factor_ref(), field)
+                                 _fullcolumn_factor_ref(), nothing, field)
     end
 
     # Differential-derived exact bases satisfy Z = ker(d). Checking d*B = 0
     # certifies B ⊆ Z without constructing its coordinates. The bases-only
     # caller has no such certificate. RealField keeps the original checked
     # solve, whose residual tolerance need not agree with a check on d*B.
+    cycle_factor = _fullcolumn_factor_ref()
     Cx = if lazy_reps && cycle_differential !== nothing && !(field isa RealField)
         all(iszero, cycle_differential * B) || error(
             "cohomology_data: incoming boundaries are not cycles in degree $t")
         nothing
     else
-        _solve_fullcolumn_cached(field, Z, B)
+        field isa QQField && (cycle_factor[] = FieldLinAlg._cached_fullcolumn_factorQQ(Z))
+        _solve_fullcolumn_cached(field, Z, B, cycle_factor)
     end
     dimB <= dimZ || error("cohomology_data: boundary dimension exceeds cycle dimension")
     H = CohomologyData{K}(ReentrantLock(), t, dimCt, dimZ, dimB, dimZ - dimB,
                           Z, B, Cx, nothing, nothing, nothing, nothing, nothing,
-                          _fullcolumn_factor_ref(), _fullcolumn_factor_ref(), field)
+                          cycle_factor, _fullcolumn_factor_ref(), nothing, field)
     lazy_reps || _ensure_cohomology_reps!(H)
     return H
 end
@@ -1358,6 +1397,10 @@ function cohomology_coordinates(H::CohomologyData{K}, z::AbstractMatrix{K}) wher
         error("cohomology_coordinates: wrong ambient dimension; got size $(size(z)), expected $(H.dimC) times k")
     end
 
+    if K === QQ
+        return _checked_quotient_coordinates(H, H.K, H.Kfactor, z)
+    end
+
     # Enforce cocycle condition and compute Z-coordinates:
     # z in Z^t  iff  z in im(K), and then z = K * alpha for unique alpha.
     # This also validates the zero-cycle-space case with the retained field.
@@ -1468,6 +1511,7 @@ mutable struct HomologyData{K}
     _Hrep::Union{Nothing,Matrix{K}}   # cycle representatives in C_s
     Zfactor::Base.RefValue{Union{Nothing,FieldLinAlg.FullColumnFactor{QQ}}}
     Bfull_factor::Base.RefValue{Union{Nothing,FieldLinAlg.FullColumnFactor{QQ}}}
+    _checked_coord_plan::Union{Nothing,_CheckedQuotientCoordPlan{K}}
     field::AbstractCoeffField
 end
 
@@ -1476,7 +1520,7 @@ function _zero_homology_data(::Type{K}, s::Int;
     _validate_complex_field(K, field)
     Z0 = _empty_mat(K, 0, 0)
     return HomologyData{K}(ReentrantLock(), s, 0, 0, 0, 0, Z0, Z0, Z0, Z0, Z0, Z0,
-                           _fullcolumn_factor_ref(), _fullcolumn_factor_ref(), field)
+                           _fullcolumn_factor_ref(), _fullcolumn_factor_ref(), nothing, field)
 end
 
 function _ensure_homology_reps!(H::HomologyData{K}) where {K}
@@ -1535,7 +1579,7 @@ function Base.getproperty(H::HomologyData{K}, s::Symbol) where {K}
 end
 
 Base.propertynames(::HomologyData, private::Bool=false) =
-    private ? (:_cache_lock, :s, :dimC, :dimZ, :dimB, :dimH, :Z, :B, :Cx, :_Q, :_Bfull, :_Hrep, :Zfactor, :Bfull_factor, :field) :
+    private ? (:_cache_lock, :s, :dimC, :dimZ, :dimB, :dimH, :Z, :B, :Cx, :_Q, :_Bfull, :_Hrep, :Zfactor, :Bfull_factor, :_checked_coord_plan, :field) :
               (:s, :dimC, :dimZ, :dimB, :dimH, :Z, :B, :Cx, :Q, :Bfull, :Hrep, :Zfactor, :Bfull_factor, :field)
 
 # Induced map on homology in a fixed degree.
@@ -1582,36 +1626,38 @@ function _homology_data_from_bases(::Type{K},
         if lazy_reps
             return HomologyData{K}(ReentrantLock(), s, dimCs, dimZ, 0, dimZ, Z, B, Bcoords, nothing, nothing, nothing,
                                    _fullcolumn_factor_ref(),
-                                   _fullcolumn_factor_ref(), field)
+                                   _fullcolumn_factor_ref(), nothing, field)
         end
         Bfull = _eye_mat(K, dimZ)
         return HomologyData{K}(ReentrantLock(), s, dimCs, dimZ, 0, dimZ, Z, B, Bcoords, Bfull, Bfull, Z,
                                _fullcolumn_factor_ref(),
-                               _fullcolumn_factor_ref(), field)
+                               _fullcolumn_factor_ref(), nothing, field)
     end
 
     # As in the cohomology path, the coordinate matrix X in Z * X = B already has
     # full column rank because Z and B are bases and B subseteq span(Z).
-    Cx = _solve_fullcolumn_cached(field, Z, B)
+    cycle_factor = _fullcolumn_factor_ref()
+    field isa QQField && (cycle_factor[] = FieldLinAlg._cached_fullcolumn_factorQQ(Z))
+    Cx = _solve_fullcolumn_cached(field, Z, B, cycle_factor)
     rB = size(Cx, 2)
     if rB == dimZ
         Bfull = extend_to_basis_from_basis(Cx; field=field)
         return HomologyData{K}(ReentrantLock(), s, dimCs, dimZ, rB, 0, Z, B, Cx, _empty_mat(K, dimZ, 0), Bfull, _empty_mat(K, dimCs, 0),
-                               _fullcolumn_factor_ref(),
-                               _fullcolumn_factor_ref(), field)
+                               cycle_factor,
+                               _fullcolumn_factor_ref(), nothing, field)
     end
 
     dimH = dimZ - rB
     if lazy_reps
         return HomologyData{K}(ReentrantLock(), s, dimCs, dimZ, rB, dimH, Z, B, Cx, nothing, nothing, nothing,
-                               _fullcolumn_factor_ref(),
-                               _fullcolumn_factor_ref(), field)
+                               cycle_factor,
+                               _fullcolumn_factor_ref(), nothing, field)
     end
     Bfull, Q, comp_rows = _cohomology_completion_from_basis(Cx; field=field)
     Hrep = Z[:, comp_rows]
     return HomologyData{K}(ReentrantLock(), s, dimCs, dimZ, rB, dimH, Z, B, Cx, Q, Bfull, Hrep,
-                           _fullcolumn_factor_ref(),
-                           _fullcolumn_factor_ref(), field)
+                           cycle_factor,
+                           _fullcolumn_factor_ref(), nothing, field)
 end
 
 function _homology_data_from_diffs(::Type{K},
@@ -1655,7 +1701,7 @@ end
 # Important: even when dimH == 0, we MUST still validate that z is a cycle
 # (i.e. z lies in Z_s = ker(bd_s)). Therefore we do NOT early-return on dimH==0.
 function homology_coordinates(data::HomologyData{K}, z::AbstractVector{K}) where {K}
-    return homology_coordinates(data, reshape(Vector{K}(z), :, 1))
+    return homology_coordinates(data, reshape(z, :, 1))
 end
 
 # Convenience overload: allow matrix batches with ambient dimension in rows,
@@ -1668,12 +1714,64 @@ function homology_coordinates(data::HomologyData{K}, z::AbstractMatrix{K}) where
         error("homology_coordinates: wrong ambient dimension; got size $(size(z)), expected $(data.dimC) x k")
     end
 
+    if K === QQ
+        return _checked_quotient_coordinates(data, data.Z, data.Zfactor, z)
+    end
+
     field = data.field
     z0 = Matrix{K}(z)
     alpha = _solve_fullcolumn_cached(field, data.Z, z0, data.Zfactor)
     gamma = _solve_fullcolumn_cached(field, data.Bfull, alpha, data.Bfull_factor)
     rB = data.dimB
     return gamma[rB+1:end, :]
+end
+
+# Trusted and checked cohomology queries share their projection. Homology's
+# checked plan owns its projection directly. Both retain the original quotient
+# basis convention without materializing quotient representatives.
+_quotient_coord_projection(H::CohomologyData{QQ}, factor) =
+    _cohomology_coord_plan(H).proj
+
+function _quotient_coord_projection(H::HomologyData{QQ}, factor)
+    return _quotient_projection_from_boundary_coordinates(H.Cx, factor.invB)
+end
+
+function _checked_quotient_coordinates(H, Z::Matrix{QQ}, factor_ref,
+                                       z::AbstractMatrix{QQ})
+    plan = lock(() -> getfield(H, :_checked_coord_plan), getfield(H, :_cache_lock))
+    if plan === nothing
+        factor = _fullcolumn_factor!(QQField(), Z, factor_ref)
+        rows = factor === nothing ? Int[] : factor.rows
+        selected_rows = falses(H.dimC)
+        selected_rows[rows] .= true
+        check_rows = findall(!, selected_rows)
+        # Z[rows,:] is invertible. Thus z belongs to im(Z) exactly when every
+        # other row agrees with Z[check_rows,:] * inv(Z[rows,:]) * z[rows,:].
+        # This certificate retains the part of an arbitrary input outside the
+        # cycle space, independently of whether its quotient class is zero.
+        check = factor === nothing || isempty(check_rows) ?
+            zeros(QQ, length(check_rows), H.dimZ) :
+            FieldLinAlg._mulQQ(view(Z, check_rows, :), factor.invB)
+    else
+        rows, check_rows, check = plan.rows, plan.check_rows, plan.check
+    end
+
+    selected = view(z, rows, :)
+    FieldLinAlg._verify_solveQQ(check, selected, view(z, check_rows, :)) ||
+        error("right-hand side is not in column space of B")
+
+    # An invalid first query must fail before materializing quotient data.
+    if plan === nothing
+        proj = H.dimH == 0 ? zeros(QQ, 0, H.dimZ) : _quotient_coord_projection(H, factor)
+        computed = _CheckedQuotientCoordPlan{QQ}(rows, check_rows, check, proj)
+        plan = lock(getfield(H, :_cache_lock)) do
+            cached = getfield(H, :_checked_coord_plan)
+            cached !== nothing && return cached::_CheckedQuotientCoordPlan{QQ}
+            setfield!(H, :_checked_coord_plan, computed)
+            computed
+        end
+    end
+    return FieldLinAlg._mulQQ(plan.proj, selected)
 end
 
 function homology_representative(H::HomologyData{K}, coords::AbstractVector{K}) where {K}
@@ -2120,7 +2218,7 @@ function _long_exact_sequence_full(tri::DistinguishedTriangle{K}) where {K}
                     getfield(Hn, :_Cx), getfield(Hn, :_Q),
                     getfield(Hn, :_Bfull), getfield(Hn, :_Hrep),
                     getfield(Hn, :_coord_rows), getfield(Hn, :_coord_proj),
-                    Hn.Kfactor, Hn.Bfull_factor, Hn.field)
+                    Hn.Kfactor, Hn.Bfull_factor, getfield(Hn, :_checked_coord_plan), Hn.field)
             end
         else
             HCshift[k] = _zero_cohomology_data(K, t; field=C.field)

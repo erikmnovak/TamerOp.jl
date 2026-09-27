@@ -3479,3 +3479,165 @@ end
     @test FL._FULLCOLUMN_FACTOR_CACHE[B] !== cached
     FL._clear_fullcolumn_cache!()
 end
+
+@testset "QQ coordinate setup elimination oracles" begin
+    field = CM.QQField()
+    # Prescribe the RREF first, then mix its independent rows by an explicitly
+    # invertible rational matrix. The expected result and nullspace therefore
+    # do not depend on another elimination implementation.
+    prescribed = Tuple{Matrix{QQ},Matrix{QQ},Vector{Int}}[]
+    for (r, m, n, pivots) in ((1, 5, 6, [3]), (3, 7, 10, [2, 5, 7]),
+                              (4, 4, 7, [1, 2, 4, 6]), (3, 3, 3, [1, 2, 3]),
+                              (2, 6, 2, [1, 2]))
+        R = zeros(QQ, r, n)
+        free = setdiff(collect(1:n), pivots)
+        for i in 1:r
+            R[i, pivots[i]] = 1
+            for j in free
+                j > pivots[i] || continue
+                denominator = i == 1 && j == last(free) ? big(2)^137 + 13 : big(i + j + 1)
+                R[i, j] = QQ((-1)^(i + j) * (i + 2j), denominator)
+            end
+        end
+        u = QQ[i for i in 1:r]
+        v = QQ[1 // (i + 2) for i in 1:r]
+        U = Matrix{QQ}(I, r, r) + u * transpose(v)
+        Uinverse = Matrix{QQ}(I, r, r) - u * transpose(v) / (1 + dot(v, u))
+        @test U * Uinverse == Matrix{QQ}(I, r, r)
+        @test Uinverse * U == Matrix{QQ}(I, r, r)
+        # A leading zero row forces a swap whenever there is an extra row.
+        L = if m > r
+            extra = QQ[(i + j) // (i + 2j + 1) for i in 1:(m-r-1), j in 1:r]
+            vcat(zeros(QQ, 1, r), U[end:-1:1, :], extra * U)
+        else
+            U[end:-1:1, :]
+        end
+        push!(prescribed, (L * R, vcat(R, zeros(QQ, m-r, n)), pivots))
+    end
+    # Exact unit and negative-unit pivots, with nonzero free entries to the
+    # left of a later pivot, exercise elimination above the pivot as well.
+    push!(prescribed, (QQ[0 0 0 0 0; 0 0 0 1 -2; 0 -1 2 0 3],
+                       QQ[0 1 -2 0 -3; 0 0 0 1 -2; 0 0 0 0 0], [2, 4]))
+    for (m, n) in ((0, 0), (0, 4), (5, 0), (3, 5))
+        push!(prescribed, (zeros(QQ, m, n), zeros(QQ, m, n), Int[]))
+    end
+
+    for (A, expected, pivots) in prescribed
+        m, n = size(A)
+        free = setdiff(collect(1:n), pivots)
+        expected_kernel = zeros(QQ, n, length(free))
+        for (j, column) in enumerate(free)
+            expected_kernel[column, j] = 1
+            for (i, pivot) in enumerate(pivots)
+                expected_kernel[pivot, j] = -expected[i, column]
+            end
+        end
+        before = deepcopy(A)
+        for input in (A, view(A, :, :), transpose(copy(transpose(A))),
+                      adjoint(copy(adjoint(A))), sparse(A), transpose(sparse(transpose(A))))
+            saved = deepcopy(input)
+            reduced, actual_pivots = FL._rrefQQ(input)
+            @test Tuple(actual_pivots) == Tuple(pivots)
+            @test reduced == expected
+            @test FL._rrefQQ(input; pivots=false) == expected
+            public_reduced, public_pivots = FL.rref(field, input; pivots=true, backend=:julia_exact)
+            @test public_reduced == expected
+            @test Tuple(public_pivots) == Tuple(pivots)
+            @test FL._nullspaceQQ(input) == expected_kernel
+            @test input * expected_kernel == zeros(QQ, m, length(free))
+            @test Matrix(FL._colspaceQQ(input)) == A[:, pivots]
+            @test input == saved
+        end
+        @test A == before
+    end
+
+    # The earliest independent rows are prescribed, including interspersed
+    # zero/dependent rows. Dense column mixing changes neither their indices
+    # nor the known inverse of the selected minor.
+    for n in (1, 3, 7)
+        u = QQ[i for i in 1:n]
+        v = QQ[1 // (i + 3) for i in 1:n]
+        U = Matrix{QQ}(I, n, n) + u * transpose(v)
+        inverseU = Matrix{QQ}(I, n, n) - u * transpose(v) / (1 + dot(v, u))
+        graph = zeros(QQ, 2n + 2, n)
+        selected = collect(2:2:2n)
+        for j in 1:n
+            graph[2j, j] = 1
+            graph[2j + 1, 1:j] = QQ[(i + j) // (i + 2j + 1) for i in 1:j]
+        end
+        graph[end, :] = QQ[(i + 1) // (2i + 3) for i in 1:n]
+        rectangular = graph * U
+        swap = reverse(collect(1:n))
+        cases = ((rectangular, selected, inverseU),
+                 (U, collect(1:n), inverseU),
+                 (U[swap, :], collect(1:n), inverseU[:, swap]),
+                 (Matrix{QQ}(I, n, n), collect(1:n), Matrix{QQ}(I, n, n)),
+                 (-Matrix{QQ}(I, n, n), collect(1:n), -Matrix{QQ}(I, n, n)))
+        for (B, rows, expected_inverse) in cases
+            X = QQ[(i - 2j) // (i + j + 1) for i in 1:n, j in 1:3]
+            Y = B * X
+            beforeB, beforeY = deepcopy(B), deepcopy(Y)
+            for input in (B, view(B, :, :), transpose(copy(transpose(B))),
+                          adjoint(copy(adjoint(B))), sparse(B))
+                factor = FL._factor_fullcolumnQQ(input)
+                @test factor.rows == rows
+                @test factor.invB == expected_inverse
+                @test factor.invB * B[rows, :] == Matrix{QQ}(I, n, n)
+                @test B[rows, :] * factor.invB == Matrix{QQ}(I, n, n)
+                @test FL._solve_fullcolumnQQ(input, Y; factor=factor) == X
+                @test FL._solve_fullcolumnQQ(input, view(Y, :, 2); factor=factor) == X[:, 2]
+                @test FL._solve_fullcolumn_rrefQQ(input, Y) == X
+                @test size(FL._solve_fullcolumnQQ(input, zeros(QQ, size(B, 1), 0);
+                                                 factor=factor)) == (n, 0)
+                @test input == beforeB
+                @test Y == beforeY
+            end
+        end
+    end
+
+    # Appending an identity can make an augmented matrix full row rank even
+    # when the original square matrix is singular; the factor must still fail.
+    for B in (QQ[1 2; 2 4], QQ[0 1; 0 0], QQ[0 0; 0 0],
+              QQ[1 2 3; 0 1 2], QQ[1 2; 2 4; 3 6], zeros(QQ, 0, 3))
+        for input in (B, sparse(B), view(B, :, :))
+            saved = deepcopy(input)
+            @test_throws ErrorException FL._factor_fullcolumnQQ(input)
+            @test_throws ErrorException FL._solve_fullcolumn_rrefQQ(input, zeros(QQ, size(B, 1), 1))
+            @test input == saved
+        end
+    end
+    for m in (0, 4)
+        B = zeros(QQ, m, 0)
+        factor = FL._factor_fullcolumnQQ(B)
+        @test isempty(factor.rows)
+        @test size(factor.invB) == (0, 0)
+        @test size(FL._solve_fullcolumnQQ(B, zeros(QQ, m, 3); factor=factor)) == (0, 3)
+        if m > 0
+            invalid = zeros(QQ, m)
+            invalid[end] = 1
+            @test_throws ErrorException FL._solve_fullcolumnQQ(B, invalid; factor=factor)
+        end
+    end
+    # Rational{BigInt} can represent ±1//0, but these are not elements of QQ.
+    # Skipping 0*x, x/x or pivot cancellation must not turn such inputs into
+    # apparently valid field reductions, including nonfinite free entries.
+    for sign in (-1, 1)
+        infinity = QQ(sign, 0)
+        @test !isfinite(infinity)
+        for A in (fill(infinity, 1, 1), QQ[1 0; infinity 1], QQ[1 infinity],
+                  QQ[0 1; 0 infinity], QQ[0 infinity; 0 1],
+                  QQ[1 0; 0 1; 0 infinity])
+            for input in (A, view(A, :, :), transpose(copy(transpose(A))))
+                saved = deepcopy(input)
+                @test_throws ArgumentError FL._rrefQQ(input)
+                @test_throws ArgumentError FL.rref(field, input; backend=:julia_exact)
+                @test_throws ArgumentError FL.rref(field, input; pivots=false, backend=:julia_exact)
+                @test_throws ArgumentError FL._factor_fullcolumnQQ(input)
+                @test_throws ArgumentError FL.factor_fullcolumn(
+                    field, input; backend=:julia_exact, cache=false)
+                @test input == saved
+            end
+        end
+    end
+
+end

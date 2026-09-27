@@ -28,6 +28,7 @@
 
 function _rref_backend(A::AbstractMatrix{QQ}; pivots::Bool=true)
     M = Matrix{QQ}(A)
+    all(isfinite, M) || throw(ArgumentError("rref: entries must be finite rational numbers"))
     m, n = size(M)
     pivs = Int[]
     row = 1
@@ -51,16 +52,27 @@ function _rref_backend(A::AbstractMatrix{QQ}; pivots::Bool=true)
         end
 
         pivval = M[row, col]
-        @inbounds for j in 1:n
-            M[row, j] /= pivval
+        # Every earlier column of the active pivot row is already zero.
+        # Preserve the pivot scan/order while avoiding exact arithmetic on
+        # structural zeros and multiplication or division by one.
+        if !isone(pivval)
+            @inbounds for j in col+1:n
+                value = M[row, j]
+                iszero(value) || (M[row, j] = value / pivval)
+            end
+            M[row, col] = one(QQ)
         end
 
         @inbounds for r in 1:m
             r == row && continue
             fac = M[r, col]
-            fac == 0 && continue
-            for j in 1:n
-                M[r, j] -= fac * M[row, j]
+            iszero(fac) && continue
+            M[r, col] = zero(QQ)
+            unit_factor = isone(fac)
+            for j in col+1:n
+                value = M[row, j]
+                iszero(value) && continue
+                M[r, j] -= unit_factor ? value : fac * value
             end
         end
 
@@ -234,6 +246,16 @@ function _factor_fullcolumnQQ(B::AbstractMatrix{<:QQ})::FullColumnFactor{QQ}
     m, n = size(B)
     n == 0 && return FullColumnFactor{QQ}(Int[], Matrix{QQ}(I, 0, 0))
 
+    if m == n
+        # A full-rank square matrix necessarily selects every row. Its
+        # augmented inverse reduction also detects singular inputs, without
+        # a second elimination just to rediscover those same row indices.
+        R, pivs = _rrefQQ(hcat(Matrix{QQ}(B), Matrix{QQ}(I, n, n)))
+        rankB = count(p -> p <= n, pivs)
+        rankB == n || error("_solve_fullcolumnQQ: expected full column rank, got rank $rankB < $n")
+        return FullColumnFactor{QQ}(collect(1:n), R[:, n+1:end])
+    end
+
     rows = collect(_pivot_columnsQQ(transpose(B)))
     if length(rows) != n
         error("_solve_fullcolumnQQ: expected full column rank, got rank $(length(rows)) < $n")
@@ -338,6 +360,17 @@ function _solve_fullcolumn_factorQQ(B::AbstractMatrix{<:QQ}, fac::FullColumnFact
     return X
 end
 
+# Share the same factor with result-local owners of a checked solve. The weak
+# cache can also reuse it for another equal matrix while the original key lives.
+function _cached_fullcolumn_factorQQ(B::AbstractMatrix{<:QQ})::FullColumnFactor{QQ}
+    if _can_weak_cache_key(B)
+        return get!(_FULLCOLUMN_FACTOR_CACHE, B) do
+            _factor_fullcolumnQQ(B)
+        end
+    end
+    return _factor_fullcolumnQQ(B)
+end
+
 """
     _solve_fullcolumnQQ(B, Y; cache=true, factor=nothing, check_rhs=true)
 
@@ -354,13 +387,7 @@ function _solve_fullcolumnQQ(B::AbstractMatrix{<:QQ}, Y::AbstractVecOrMat{<:QQ};
         return _solve_fullcolumn_factorQQ(B, factor, Y; check_rhs=check_rhs)
     end
     if cache
-        fac = if _can_weak_cache_key(B)
-            get!(_FULLCOLUMN_FACTOR_CACHE, B) do
-                _factor_fullcolumnQQ(B)
-            end
-        else
-            _factor_fullcolumnQQ(B)
-        end
+        fac = _cached_fullcolumn_factorQQ(B)
         return _solve_fullcolumn_factorQQ(B, fac, Y; check_rhs=check_rhs)
     end
 

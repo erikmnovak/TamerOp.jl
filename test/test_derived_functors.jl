@@ -141,6 +141,126 @@ end
     end
 end
 
+@testset "Product-poset Ext coordinates and projector maps" begin
+    # For a product of chains of lengths l_i, the vertex-simple Ext polynomial
+    # is product(l_i + (l_i - 1)t): a nonzero degree-t class advances one
+    # step along t distinct axes. Adding the constant P_min = I_max module
+    # adds three Hom dimensions and no positive-degree Ext.
+    grid_points = [(i, j) for j in 1:4 for i in 1:4]
+    grid_order = BitMatrix([all(grid_points[u][axis] <= grid_points[v][axis]
+                               for axis in 1:2)
+                            for u in eachindex(grid_points), v in eachindex(grid_points)])
+    cases = (
+        ("Boolean three-cube", boolean_lattice_B3_poset(), [11, 12, 6, 1], [1, 3, 3, 1]),
+        ("Four by four grid", FF.FinitePoset(grid_order), [19, 24, 9], [1, 2, 1]),
+    )
+    for (label, P, expected, bottom_source_ranks) in cases
+        @testset "$label" begin
+            with_fields(FIELDS_FULL) do field
+                K = CM.coeff_type(field)
+                c(x) = CM.coerce(field, x)
+                same(x, y) = field isa CM.RealField ?
+                    isapprox(x, y; atol=field.atol, rtol=field.rtol) : x == y
+                # Nonintegral, determinant-one gauges mix the simple and
+                # constant summands. Denominator seven is invertible in every
+                # tested exact field, and the Real64 matrices stay well conditioned.
+                gauge, inverse_gauge = Matrix{K}[], Matrix{K}[]
+                for v in 1:P.n
+                    a, b = c((mod(v, 3) - 1) // 7), c((mod(v + 1, 3) - 1) // 7)
+                    push!(gauge, K[1 + a*b a; b 1])
+                    push!(inverse_gauge, K[1 -a; -b 1 + a*b])
+                    @test same(gauge[end] * inverse_gauge[end], Matrix{K}(I, 2, 2))
+                end
+                edges = Dict((u, v) => gauge[v] * K[0 0; 0 1] * inverse_gauge[u]
+                             for (u, v) in FF.cover_edges(P))
+                M = MD.PModule{K}(P, fill(2, P.n), edges; field)
+                @test MD.check_module(M).valid
+                top_degree = length(expected) - 1
+                E = DF.Ext(M, M, OPT.DerivedFunctorOptions(
+                    maxdeg=top_degree + 1, model=:projective))
+                @test [DF.dim(E, t) for t in 0:top_degree + 1] == vcat(expected, 0)
+
+                constant = MD.PMorphism(M, M,
+                    [gauge[v] * K[0 0; 0 1] * inverse_gauge[v] for v in 1:P.n])
+                all_simples = MD.PMorphism(M, M,
+                    [gauge[v] * K[1 0; 0 0] * inverse_gauge[v] for v in 1:P.n])
+                bottom_blocks = [zeros(K, 2, 2) for _ in 1:P.n]
+                bottom_blocks[1] = gauge[1] * K[1 0; 0 0] * inverse_gauge[1]
+                bottom = MD.PMorphism(M, M, bottom_blocks)
+                @test MD.check_morphism(constant).valid
+                @test MD.check_morphism(all_simples).valid
+                @test MD.check_morphism(bottom).valid
+
+                for t in 0:top_degree
+                    d = expected[t + 1]
+                    identity = Matrix{K}(I, d, d)
+                    reps = DF.basis(E, t)
+                    @test length(reps) == d
+                    for j in 1:d
+                        @test same(DF.coordinates(E, t, reps[j]), identity[:, j])
+                        @test same(E.complex.d[t + 1] * reps[j],
+                                   zeros(K, E.complex.dims[t + 2]))
+                    end
+                    # An independently chosen rational combination exercises
+                    # actual coordinates, rather than only unit-vector roundtrips.
+                    weights = K[c((-1)^j * (mod(j, 5) + 1) // 7) for j in 1:d]
+                    mixed = sum(weights[j] .* reps[j] for j in 1:d)
+                    @test same(DF.coordinates(E, t, mixed), weights)
+                    if t > 0
+                        boundaries = DF.boundaries(E, t)
+                        @test size(boundaries, 2) > 0
+                        for boundary in eachcol(boundaries)
+                            @test !same(boundary, zeros(K, length(boundary)))
+                            @test same(DF.coordinates(E, t, boundary), zeros(K, d))
+                            @test same(DF.coordinates(E, t, mixed + boundary), weights)
+                        end
+                    end
+
+                    # The bottom simple contributes binomial(axis_count,t)
+                    # source classes, but no positive-degree target classes.
+                    # Constant-source and constant-target classes vanish in
+                    # positive degree because C is projective and injective.
+                    bottom_first = Matrix(DF.ext_map_first(E, E, bottom; t))
+                    bottom_second = Matrix(DF.ext_map_second(E, E, bottom; t))
+                    constant_first = Matrix(DF.ext_map_first(E, E, constant; t))
+                    constant_second = Matrix(DF.ext_map_second(E, E, constant; t))
+                    @test FL.rank(field, bottom_first) == bottom_source_ranks[t + 1]
+                    @test FL.rank(field, bottom_second) == (t == 0 ? 2 : 0)
+                    @test FL.rank(field, constant_first) == (t == 0 ? 2 : 0)
+                    @test FL.rank(field, constant_second) == (t == 0 ? 2 : 0)
+                    for projection in (bottom_first, bottom_second,
+                                       constant_first, constant_second)
+                        @test same(projection * projection, projection)
+                    end
+                    @test same(bottom_first * bottom_second, bottom_second * bottom_first)
+                    @test same(constant_first * constant_second,
+                               constant_second * constant_first)
+                    @test same(bottom_first * constant_first, zeros(K, d, d))
+                    @test same(bottom_second * constant_second, zeros(K, d, d))
+                    if t > 0
+                        @test same(constant_first, zeros(K, d, d))
+                        @test same(constant_second, zeros(K, d, d))
+                        if t == top_degree
+                            # Check actual induced maps for the complementary
+                            # all-simples projector on a nonzero top Ext group.
+                            @test same(Matrix(DF.ext_map_first(E, E, all_simples; t)), identity)
+                            @test same(Matrix(DF.ext_map_second(E, E, all_simples; t)), identity)
+                        end
+                    else
+                        @test FL.rank(field, constant_first * constant_second) == 1
+                    end
+                end
+                # Compute and check the first vanishing degree, rather than
+                # inferring it from the requested truncation.
+                vanished = top_degree + 1
+                @test isempty(DF.basis(E, vanished))
+                zero_cocycle = zeros(K, E.cohom[vanished + 1].dimC)
+                @test isempty(DF.coordinates(E, vanished, zero_cocycle))
+            end
+        end
+    end
+end
+
 @testset "Unified Ext bases retain canonical coordinates and independent copies" begin
     with_fields(FIELDS_FULL) do field
         K = CM.coeff_type(field)

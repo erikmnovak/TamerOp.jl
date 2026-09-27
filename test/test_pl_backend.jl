@@ -198,6 +198,178 @@ end
     end
 end
 
+@testset "Publication strip: exact nonzero fibers and maps on unbounded support" begin
+    # The scalar-one fringe is the image k_U -> k_D for
+    # U = {x+y >= 0}, D = {x+y <= epsilon}. Its image is k on the
+    # closed strip and zero elsewhere. This oracle does not use a geometry
+    # predicate, an encoder, or a second implementation of the same algorithm.
+    for epsilon in (QQ(1), big(1) // big(2)^200, QQ(0)), field in FIELDS_FULL
+        U = PLP.PLUpset(PLP.poly_union(PLP.make_hpoly(QQ[-1 -1], QQ[0])))
+        D = PLP.PLDownset(PLP.poly_union(PLP.make_hpoly(QQ[1 1], QQ[epsilon])))
+        F = PLP.PLFringe([U], [D], ones(QQ, 1, 1))
+        enc = TO.encode(F, OPT.EncodingOptions(backend=:pl, field=field); cache=nothing)
+        M, pi = RES.encoding_module(enc), RES.encoding_map(enc)
+        P = RES.encoding_poset(enc)
+        @test PLP.check_pl_fringe(F).valid
+        @test MD.check_module(M).valid
+        @test sort([MD.dim_at(M, i) for i in 1:FF.nvertices(P)]) == [0, 0, 1]
+        @test PLP.nregions(EC.encoding_map(pi)) == 3
+
+        # Moving (t,-t) leaves x+y unchanged. These exact translations verify
+        # unbounded support and cancellation where a Float64 conversion loses
+        # the distinction between boundary, thin interior, and exterior.
+        scale = iszero(epsilon) ? QQ(1) : epsilon
+        translations = QQ[-big(2)^220, 0, big(2)^220]
+        sums = scale .* QQ[-1, -1//2, 0, 1//4, 1//2, 3//4, 1, 3//2, 2]
+        points = unique([(t + s, -t) for t in translations for s in sums])
+        append!(points, [(s/2, s/2) for s in sums if !iszero(s)])
+        expected_dims = [Int(0 <= x+y <= epsilon) for (x, y) in points]
+        @test any(==(1), expected_dims)
+        @test any(==(0), expected_dims)
+        for mode in (:fast, :verified)
+            labels = [EC.locate(pi, collect(point); mode=mode) for point in points]
+            @test all(>(0), labels)
+            for i in eachindex(points)
+                @test MD.dim_at(M, labels[i]) == expected_dims[i]
+            end
+            for i in eachindex(points), j in eachindex(points)
+                all(points[i] .<= points[j]) || continue
+                a, b = labels[i], labels[j]
+                @test FF.leq(P, a, b)
+                expected = fill(CM.coerce(field,1), expected_dims[j], expected_dims[i])
+                @test MD.structure_map(M; source=a, target=b) == expected
+            end
+
+            # Test the functor equation on a chain through both boundaries,
+            # including nonidentity ambient maps within each positive strip.
+            for t in translations
+                chain = [(t + s, -t) for s in sums]
+                ids = [EC.locate(pi, collect(point); mode=mode) for point in chain]
+                for i in eachindex(chain), j in i:length(chain), k in j:length(chain)
+                    f = MD.structure_map(M; source=ids[i], target=ids[j])
+                    g = MD.structure_map(M; source=ids[j], target=ids[k])
+                    h = MD.structure_map(M; source=ids[i], target=ids[k])
+                    @test g * f == h
+                end
+            end
+
+            if iszero(epsilon)
+                boundary = [(t, -t) for t in translations]
+                # Distinct points on x+y=0 are incomparable in R^2. The
+                # encoding may give them the same label, but that does not
+                # create an ambient structure map between them.
+                for i in eachindex(boundary), j in eachindex(boundary)
+                    i == j && continue
+                    @test !all(boundary[i] .<= boundary[j])
+                end
+                boundary_labels = [EC.locate(pi, collect(point); mode=mode) for point in boundary]
+                @test length(unique(boundary_labels)) == 1
+                @test MD.structure_map(M; source=boundary_labels[1], target=boundary_labels[1]) == fill(CM.coerce(field,1), 1, 1)
+            else
+                a = EC.locate(pi, QQ[0, 0]; mode=mode)
+                b = EC.locate(pi, QQ[epsilon/2, 0]; mode=mode)
+                c = EC.locate(pi, QQ[epsilon, 0]; mode=mode)
+                @test MD.structure_map(M; source=a, target=b) == fill(CM.coerce(field,1), 1, 1)
+                @test MD.structure_map(M; source=b, target=c) == fill(CM.coerce(field,1), 1, 1)
+            end
+        end
+    end
+end
+
+@testset "Publication branching: independent images require a partial order" begin
+    # M = k_U ⊕ k_V, U={x+(1+delta)y >= 0}, V={(1+delta)x+y >= 0}.
+    # Membership is monotone; the structure maps include the active coordinate
+    # lines into the constant k^2 module. At p=(-1,1), q=(1,-1), r=(1,1)
+    # the two incoming images are independent. In any pullback from a total
+    # order they would be nested, since one map to r factors through the other.
+    # This is a synthetic capability check, not a software-novelty claim.
+    for delta in (QQ(1), big(1)//big(2)^200)
+        slope = 1 + delta
+        U = PLP.PLUpset(PLP.poly_union(PLP.make_hpoly(QQ[-1 -slope], QQ[0])))
+        V = PLP.PLUpset(PLP.poly_union(PLP.make_hpoly(QQ[-slope -1], QQ[0])))
+        whole = PLP.PLDownset(PLP.poly_union(PLP.make_hpoly(zeros(QQ,0,2), QQ[])))
+        F = PLP.PLFringe([U,V], [whole,whole], Matrix{QQ}(I,2,2))
+        @test PLP.check_pl_fringe(F).valid
+        union_uv = PLP.PLUpset(PLP.PolyUnion(2,[
+            PLP.make_hpoly(QQ[-1 -slope], QQ[0]),
+            PLP.make_hpoly(QQ[-slope -1], QQ[0])]))
+        intersection_uv = PLP.PLUpset(PLP.poly_union(
+            PLP.make_hpoly(QQ[-1 -slope; -slope -1], QQ[0,0])))
+        G = PLP.PLFringe([union_uv,intersection_uv], [whole,whole], Matrix{QQ}(I,2,2))
+        @test PLP.check_pl_fringe(G).valid
+        coordinates(u,v) = ((u-slope*v)/(1-slope^2), (v-slope*u)/(1-slope^2))
+        points = unique(vcat(
+            [(QQ(x),QQ(y)) for x in -1:1 for y in -1:1],
+            [coordinates(u,v) for u in QQ[-1,0,1] for v in QQ[-1,0,1]],
+            [(QQ(scale)*x,QQ(scale)*y) for scale in (big(2)^220,1//big(2)^200)
+                                     for (x,y) in ((-1,1),(1,-1),(-1,-1),(1,1))]))
+        active = [findall((x+slope*y >= 0, slope*x+y >= 0)) for (x,y) in points]
+        other_active = [isempty(a) ? Int[] : length(a)==1 ? [1] : [1,2] for a in active]
+        with_fields(FIELDS_FULL) do field
+            enc = TO.encode(F, OPT.EncodingOptions(backend=:pl,field=field); cache=nothing)
+            M, pi, P = RES.encoding_module(enc), RES.encoding_map(enc), RES.encoding_poset(enc)
+            other = TO.encode(G, OPT.EncodingOptions(backend=:pl,field=field); cache=nothing)
+            N, rho = RES.encoding_module(other), RES.encoding_map(other)
+            unit = CM.eye(field,2)
+            @test MD.check_module(N).valid
+            @test sort(CC.dimensions(other)) == [0,1,1,2]
+            @test MD.check_module(M).valid
+            @test sort(CC.dimensions(enc)) == [0,1,1,2]
+            for mode in (:fast,:verified)
+                labels = [EC.locate(pi,collect(point);mode=mode) for point in points]
+                other_labels = [EC.locate(rho,collect(point);mode=mode) for point in points]
+                @test all(>(0),labels)
+                @test all(>(0),other_labels)
+                for i in eachindex(points)
+                    @test MD.dim_at(M,labels[i]) == length(active[i])
+                    @test MD.dim_at(N,other_labels[i]) == length(other_active[i]) == length(active[i])
+                end
+                for i in eachindex(points), j in eachindex(points)
+                    all(points[i] .<= points[j]) || continue
+                    @test FF.leq(P,labels[i],labels[j])
+                    f = MD.structure_map(M;source=labels[i],target=labels[j])
+                    @test f == unit[active[j],active[i]]
+                    # Naturality of the explicit coordinate inclusion M -> k^2.
+                    @test unit[:,active[j]] * f == unit[:,active[i]]
+                    nf = MD.structure_map(N;source=other_labels[i],target=other_labels[j])
+                    @test nf == unit[other_active[j],other_active[i]]
+                    @test unit[:,other_active[j]] * nf == unit[:,other_active[i]]
+                    # The rank invariant cannot distinguish these modules:
+                    # every comparable map in either module is injective.
+                    @test FL.rank(field,f) == FL.rank(field,nf) == length(active[i])
+                end
+                for i in eachindex(points), j in eachindex(points), k in eachindex(points)
+                    all(points[i] .<= points[j]) && all(points[j] .<= points[k]) || continue
+                    f = MD.structure_map(M;source=labels[i],target=labels[j])
+                    g = MD.structure_map(M;source=labels[j],target=labels[k])
+                    h = MD.structure_map(M;source=labels[i],target=labels[k])
+                    @test g*f == h
+                    nf = MD.structure_map(N;source=other_labels[i],target=other_labels[j])
+                    ng = MD.structure_map(N;source=other_labels[j],target=other_labels[k])
+                    nh = MD.structure_map(N;source=other_labels[i],target=other_labels[k])
+                    @test ng*nf == nh
+                end
+                p,q,r = [EC.locate(pi,QQ[x,y];mode=mode)
+                         for (x,y) in ((-1,1),(1,-1),(1,1))]
+                left = MD.structure_map(M;source=p,target=r)
+                right = MD.structure_map(M;source=q,target=r)
+                @test left == unit[:,1:1]
+                @test right == unit[:,2:2]
+                @test FL.rank(field,left) == 1
+                @test FL.rank(field,right) == 1
+                @test FL.rank(field,hcat(left,right)) == 2
+                @test !FF.leq(P,p,q) && !FF.leq(P,q,p)
+                np,nq,nr = [EC.locate(rho,QQ[x,y];mode=mode)
+                            for (x,y) in ((-1,1),(1,-1),(1,1))]
+                nleft = MD.structure_map(N;source=np,target=nr)
+                nright = MD.structure_map(N;source=nq,target=nr)
+                @test nleft == nright == unit[:,1:1]
+                @test FL.rank(field,hcat(nleft,nright)) == 1
+            end
+        end
+    end
+end
+
 @testset "A79 exact strict feasibility and geometric closure" begin
     # Tiny oblique cells exercise general PL feasibility, not an orthant-only
     # coordinate-gap heuristic. Their witnesses and classifications are exact.

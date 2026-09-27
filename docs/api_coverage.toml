@@ -1,0 +1,351 @@
+# Documentation intent, not a second list of all public symbols.
+# Runtime bindings and object identities come from api_inventory.toml.
+# Planned reference paths may be absent while reference_status = "backlog".
+schema_version = 1
+inventory = "docs/api_inventory.toml"
+
+[policy]
+routing = "override_then_canonical_owner_then_declaration_owner"
+owner_assignment_status = "provisional_until_method_family_review"
+docstring_presence_is_reference_completion = false
+owner_candidates_are_automatically_public = false
+remaining_owner_candidates = "review_backlog"
+publication_gate = "first_path_complete; other_families_may_remain_backlog"
+
+[first_path]
+plan = "docs/learning_path.md"
+reference_status = "backlog"
+review_status = "mathematical_oracle_available; prose_and_reader_review_pending"
+reference_pages = ["docs/src/reference/first_learning_path.md"]
+example_sources = ["docs/build_scripts/check_first_encoding.jl"]
+rendering_status = "recipe_selection_and_execution_pending"
+bindings = [
+  "TamerOp.cubical_persistence", "TamerOp.PersistenceDiagram",
+  "TamerOp.finite_intervals", "TamerOp.essential_births",
+  "TamerOp.describe", "TamerOp.provenance",
+  "TamerOp.encode", "TamerOp.EncodingResult", "TamerOp.QQ",
+  "TamerOp.CoreModules.QQField", "TamerOp.CoreModules.F2",
+  "TamerOp.Advanced.BoxUpset", "TamerOp.Advanced.BoxDownset",
+  "TamerOp.Advanced.EncodingOptions", "TamerOp.encoding_poset",
+  "TamerOp.encoding_map", "TamerOp.dimensions", "TamerOp.encoding_module",
+  "TamerOp.Advanced.nvertices", "TamerOp.Advanced.locate",
+  "TamerOp.Advanced.leq", "TamerOp.Advanced.dim_at",
+  "TamerOp.Advanced.structure_map", "TamerOp.Advanced.check_module",
+  "TamerOp.available_visuals", "TamerOp.visualize", "TamerOp.save_visual",
+]
+
+[[families]]
+id = "inputs"
+title = "Inputs, filtrations, construction options, budgets, and registries"
+question = "How do my data and a chosen filtration define the input module?"
+owners = ["TamerOp.DataTypes", "TamerOp.DataIngestion", "TamerOp.SyntheticData"]
+reference_pages = ["docs/src/reference/inputs.md"]
+guides = ["docs/ingestion_options.md", "docs/multicover.md", "docs/rhomboid_depth.md", "docs/option_contracts.md"]
+example_sources = []
+example_status = "verified_end_to_end_tutorial_needed"
+reference_status = "backlog"
+review_status = "owner_routing_only; method_families_pending"
+backlog = ["Distinguish raw data, filtered complexes, and completed encodings", "Explain grade orientation, axes, truncation, budgets, and extension requirements", "Choose one data route that joins the first inspection lesson"]
+
+[[families]]
+id = "modules"
+title = "Finite posets, modules, morphisms, indicators, fringes, and flanges"
+question = "What spaces and maps does this finite mathematical object contain?"
+owners = ["TamerOp.FiniteFringe", "TamerOp.Modules", "TamerOp.AbelianCategories", "TamerOp.IndicatorTypes", "TamerOp.FlangeZn"]
+reference_pages = ["docs/src/reference/modules.md"]
+guides = ["docs/persistence_modules.md", "docs/finite_encodings.md", "docs/indicator_presentations.md", "docs/tameness.md", "docs/math_categories.md"]
+example_sources = ["docs/build_scripts/check_first_encoding.jl", "docs/build_scripts/check_indicator_presentations.jl"]
+example_status = "square_and_overlapping_summands_oracles; general_module_tutorial_needed"
+reference_status = "backlog"
+review_status = "first_path_subset_selected; method_families_pending"
+backlog = ["Write the square's indicator constructors and space/map queries first", "Later cover morphisms, kernels, images, and direct sums with nontrivial matrices", "Separate finite-poset modules from ambient presentations"]
+
+[[families]]
+id = "encodings"
+title = "Encodings and geometric or lattice queries"
+question = "How does a finite representation recover my module on its parameter domain?"
+owners = ["TamerOp.EncodingCore", "TamerOp.Encoding", "TamerOp.ZnEncoding", "TamerOp.RegionGeometry", "TamerOp.PLPolyhedra", "TamerOp.PLBackend"]
+reference_pages = ["docs/src/reference/encodings.md"]
+guides = ["docs/finite_encodings.md", "docs/indicator_presentations.md", "docs/tameness.md", "docs/exact_grades.md", "docs/cdd_concurrency.md"]
+example_sources = ["docs/build_scripts/check_first_encoding.jl", "docs/build_scripts/check_indicator_presentations.jl"]
+example_status = "square_oracle_verified; teaching_notebook_pending"
+reference_status = "backlog"
+review_status = "first_path_subset_selected; other_encoders_pending"
+backlog = ["Write the selected box-presentation encode method and classifier queries first", "Explain returned signatures rather than assume the illustrative nine labels", "Later review lattice and polyhedral query domains, sentinels, exact grades, and caches"]
+
+[[families]]
+id = "complexes"
+title = "Chain complexes and ordinary persistence"
+question = "How do a filtered complex and its homology give spaces or intervals?"
+owners = ["TamerOp.ChainComplexes", "TamerOp.OrdinaryPersistence", "TamerOp.ModuleComplexes"]
+reference_pages = ["docs/src/reference/complexes.md", "docs/src/reference/ordinary_persistence.md"]
+guides = ["docs/persistence_modules.md", "docs/ordinary_persistence.md", "docs/lazy_inspection.md"]
+example_sources = ["docs/build_scripts/check_first_encoding.jl"]
+example_status = "ring_oracle_verified; complex_tutorial_pending"
+reference_status = "backlog"
+review_status = "first_path_subset_selected; degree_conventions_pending"
+backlog = ["Write cubical_persistence and interval accessors for the ring first", "Distinguish homology from cohomology and specify grading conventions", "Later cover module complexes and heavier computed outputs"]
+
+[[families]]
+id = "resolutions"
+title = "Resolutions and Betti or Bass data"
+question = "How is this module assembled from simpler objects?"
+owners = ["TamerOp.IndicatorResolutions"]
+reference_pages = ["docs/src/reference/resolutions.md"]
+guides = ["docs/tameness.md", "docs/math_categories.md", "docs/lazy_inspection.md"]
+example_sources = []
+example_status = "worked_example_needed"
+reference_status = "backlog"
+review_status = "owner_routing_only; shared_derived_owner_requires_finer_review"
+backlog = ["Lead with resolve and cheap tables before full resolutions", "Review additional resolution methods currently routed under DerivedFunctors", "State category, field, truncation, and resolution bounds"]
+
+[[families]]
+id = "derived"
+title = "Hom, Ext, Tor, products, functorial maps, and spectral sequences"
+question = "What algebraic relations can I compute, and in which category?"
+owners = ["TamerOp.DerivedFunctors"]
+reference_pages = ["docs/src/reference/derived.md"]
+guides = ["docs/math_categories.md", "docs/numerical_algebra.md", "docs/lazy_inspection.md"]
+example_sources = []
+example_status = "worked_examples_with_known_answers_needed"
+reference_status = "backlog"
+review_status = "owner_routing_only; products_and_spectral_sequences_pending"
+backlog = ["Explain finite-category versus ambient-category computations and comparison hypotheses", "Cover cheap dimensions before bases and representatives", "Separate products, functorial maps, and spectral-sequence method families"]
+
+[[families]]
+id = "change_of_posets"
+title = "Change of posets, common refinement, and translation"
+question = "How can I compare objects represented on different finite posets?"
+owners = ["TamerOp.ChangeOfPosets"]
+reference_pages = ["docs/src/reference/change_of_posets.md"]
+guides = ["docs/math_categories.md"]
+example_sources = []
+example_status = "map_level_comparison_example_needed"
+reference_status = "backlog"
+review_status = "owner_routing_only; adjunctions_and_derived_methods_pending"
+backlog = ["Show common refinement and semantic result accessors", "Verify translated maps as well as dimensions", "Explain when comparison does or does not preserve a derived computation"]
+
+[[families]]
+id = "invariants"
+title = "Invariants, measures, slices, landscapes, images, and distances"
+question = "Which summary answers my question, and what information does it omit?"
+owners = ["TamerOp.Invariants", "TamerOp.InvariantCore", "TamerOp.SignedMeasures", "TamerOp.SliceInvariants", "TamerOp.Fibered2D", "TamerOp.MultiparameterImages"]
+reference_pages = ["docs/src/reference/invariants.md"]
+guides = ["docs/exact_matching.md", "docs/finite_encodings.md"]
+example_sources = []
+example_status = "summary_comparison_tutorial_needed"
+reference_status = "backlog"
+review_status = "owner_routing_only; materially_distinct_summaries_pending"
+backlog = ["Choose summaries by mathematical question", "State slice direction, finite-window, exact/sample, and field assumptions", "Include examples showing what a selected summary cannot recover"]
+
+[[families]]
+id = "visualization"
+title = "Visualization specifications, renderers, and exports"
+question = "How do I interpret and save a figure of the object I computed?"
+owners = ["TamerOp.Visualization"]
+reference_pages = ["docs/src/reference/visualization.md"]
+guides = ["docs/optional_integrations.md"]
+example_sources = []
+example_status = "first_path_recipe_selection_and_rendering_pending"
+reference_status = "backlog"
+review_status = "first_path_subset_selected; browser_review_pending"
+backlog = ["Choose and execute a figure recipe for the square encoding", "Explain geometry, label order, spaces, and maps in its caption", "Document renderer activation and export semantics"]
+
+[[families]]
+id = "features"
+title = "Features, transformations, batches, and experiment artifacts"
+question = "How do I turn chosen summaries into comparable numerical features?"
+owners = ["TamerOp.Featurizers"]
+reference_pages = ["docs/src/reference/features.md"]
+guides = ["docs/optional_integrations.md", "docs/option_contracts.md"]
+example_sources = []
+example_status = "reproducible_feature_workflow_needed"
+reference_status = "backlog"
+review_status = "owner_routing_only; feature_meanings_pending"
+backlog = ["Explain each feature's input, units, dimensions, and information loss", "Cover transforms, batches, and optional integrations", "Provide a small saved and reloaded experiment with interpretable output"]
+
+[[families]]
+id = "io"
+title = "Input/output, serialization, and validation"
+question = "What does loading or saving preserve, and how do I inspect an ambiguous input?"
+owners = ["TamerOp.DataFileIO", "TamerOp.Serialization"]
+reference_pages = ["docs/src/reference/io.md"]
+guides = ["docs/optional_integrations.md", "docs/ingestion_options.md"]
+example_sources = []
+example_status = "roundtrip_and_external_input_examples_needed"
+reference_status = "backlog"
+review_status = "documented_qualified_entries_selected; format_review_pending"
+backlog = ["Explain inspect_data_file before loading ambiguous inputs", "Specify field, grades, maps, and provenance preserved by each format", "Document qualified external readers and optional format extensions"]
+
+[[families]]
+id = "inspection"
+title = "Results, provenance, inspection, caching, fields, and backends"
+question = "What have I computed, under which conventions, and at what cost?"
+owners = ["TamerOp.Results", "TamerOp.CoreModules", "TamerOp.ExactReals", "TamerOp.Options", "TamerOp.Workflow", "TamerOp.Advanced", "TamerOp"]
+reference_pages = ["docs/src/reference/results.md", "docs/src/reference/fields.md", "docs/src/reference/api_organization.md"]
+guides = ["docs/lazy_inspection.md", "docs/numerical_algebra.md", "docs/exact_grades.md", "docs/option_contracts.md"]
+example_sources = ["docs/build_scripts/check_first_encoding.jl"]
+example_status = "first_path_oracle_only; caching_and_backend_examples_pending"
+reference_status = "backlog"
+review_status = "first_path_subset_selected; method_specific_returns_pending"
+backlog = ["Explain describe, provenance, dimensions, and explicit module computation first", "Separate coefficient fields from geometric arithmetic", "Review overloaded inspection methods individually; a shared generic is not one semantic contract", "Provide owner and alphabetical indices; API metadata/module exports are not mathematical functions"]
+
+# Cross-owner generics and task wrappers need semantic routing. The inventory
+# still retains each distinct owner object and groups actual aliases by identity.
+[[overrides]]
+family = "encodings"
+bindings = ["TamerOp.Workflow.encode", "TamerOp.Workflow.coarsen", "TamerOp.Options.EncodingOptions"]
+
+[[overrides]]
+family = "modules"
+bindings = ["TamerOp.Workflow.fringe_presentation", "TamerOp.Workflow.flange_presentation"]
+
+[[overrides]]
+family = "resolutions"
+bindings = ["TamerOp.Workflow.resolve", "TamerOp.Workflow.betti_table", "TamerOp.Workflow.bass_table", "TamerOp.DerivedFunctors.betti_table", "TamerOp.DerivedFunctors.bass_table", "TamerOp.Options.ResolutionOptions"]
+
+[[overrides]]
+family = "derived"
+bindings = ["TamerOp.Workflow.hom", "TamerOp.Workflow.hom_dimension", "TamerOp.Workflow.ext", "TamerOp.Workflow.tor", "TamerOp.Workflow.rhom", "TamerOp.Workflow.derived_tensor", "TamerOp.Workflow.hyperext", "TamerOp.Workflow.hypertor", "TamerOp.Workflow.ext_algebra", "TamerOp.Options.DerivedFunctorOptions"]
+
+[[overrides]]
+family = "change_of_posets"
+bindings = ["TamerOp.Workflow.common_refinement", "TamerOp.Workflow.restriction", "TamerOp.Workflow.pushforward_left", "TamerOp.Workflow.pushforward_right", "TamerOp.Workflow.derived_pushforward_left", "TamerOp.Workflow.derived_pushforward_right"]
+
+[[overrides]]
+family = "invariants"
+bindings = ["TamerOp.Workflow.invariant", "TamerOp.Workflow.invariants", "TamerOp.Workflow.rank_invariant", "TamerOp.Workflow.restricted_hilbert", "TamerOp.Workflow.point_signed_measure", "TamerOp.Workflow.rank_signed_measure", "TamerOp.Workflow.euler_signed_measure", "TamerOp.Workflow.euler_surface", "TamerOp.Workflow.rectangle_signed_barcode", "TamerOp.Workflow.rectangle_signed_barcode_image", "TamerOp.Workflow.slice_barcode", "TamerOp.Workflow.slice_barcodes", "TamerOp.Workflow.matching_distance_exact_2d", "TamerOp.Workflow.matching_distance_sampled_2d", "TamerOp.Workflow.mp_landscape", "TamerOp.Workflow.mpp_decomposition", "TamerOp.Workflow.mpp_image", "TamerOp.Options.InvariantOptions"]
+
+[[overrides]]
+family = "inputs"
+bindings = ["TamerOp.Options.FiltrationSpec", "TamerOp.Options.ConstructionOptions", "TamerOp.Options.ConstructionBudget", "TamerOp.Options.PipelineOptions"]
+
+[[overrides]]
+family = "io"
+bindings = ["TamerOp.Options.DataFileOptions"]
+
+[[overrides]]
+family = "inspection"
+bindings = ["TamerOp.describe", "TamerOp.dimensions", "TamerOp.provenance", "TamerOp.QQ"]
+
+# These documented owner APIs are added explicitly, rather than treating every
+# non-underscore owner binding as public. The remaining candidate queue needs
+# review; docstring presence alone is not a public-API decision.
+[[qualified_apis]]
+binding = "TamerOp.CoreModules.QQField"
+family = "inspection"
+evidence = ["src/CoreModules.jl", "docs/numerical_algebra.md", "docs/build_scripts/check_first_encoding.jl"]
+reason = "Supported exact coefficient-field constructor used by the square oracle; intentionally accessed through its owner."
+review_status = "reference_backlog"
+
+[[qualified_apis]]
+binding = "TamerOp.CoreModules.F2"
+family = "inspection"
+evidence = ["src/CoreModules.jl", "docs/ordinary_persistence.md", "docs/build_scripts/check_first_encoding.jl"]
+reason = "Supported two-element coefficient-field constructor used explicitly by the ring oracle."
+review_status = "reference_backlog"
+
+[[qualified_apis]]
+binding = "TamerOp.DataIngestion.to_filtration"
+family = "inputs"
+evidence = ["src/DataIngestion.jl"]
+reason = "Documented conversion from a serialized filtration spec; registration contract also points to this entrypoint."
+review_status = "reference_backlog"
+
+[[qualified_apis]]
+binding = "TamerOp.DataTypes.SimplexTreeMulti"
+family = "inputs"
+evidence = ["src/DataTypes.jl", "docs/ingestion_options.md"]
+reason = "Documented constructor and user-visible simplex-tree construction stage."
+review_status = "reference_backlog"
+
+[[qualified_apis]]
+binding = "TamerOp.DataFileIO.detail"
+family = "io"
+evidence = ["src/DataFileIO.jl"]
+reason = "Used in the DelimitedTableInspection docstring's public inspection example."
+review_status = "reference_backlog"
+
+[[qualified_apis]]
+binding = "TamerOp.DataFileIO.columns"
+family = "io"
+evidence = ["src/DataFileIO.jl"]
+reason = "Used in the DelimitedTableInspection docstring's public inspection example."
+review_status = "reference_backlog"
+
+[[qualified_apis]]
+binding = "TamerOp.DataFileIO.artifact"
+family = "io"
+evidence = ["src/DataFileIO.jl"]
+reason = "Documented file-validation accessor; distinct from the Featurizers generic of this name."
+review_status = "reference_backlog"
+
+[[qualified_apis]]
+binding = "TamerOp.DataFileIO.ok"
+family = "io"
+evidence = ["src/DataFileIO.jl"]
+reason = "Documented Boolean validity accessor."
+review_status = "reference_backlog"
+
+[[qualified_apis]]
+binding = "TamerOp.DataFileIO.inspection"
+family = "io"
+evidence = ["src/DataFileIO.jl"]
+reason = "Documented accessor to the underlying file inspection."
+review_status = "reference_backlog"
+
+[[qualified_apis]]
+binding = "TamerOp.DataFileIO.is_ambiguous"
+family = "io"
+evidence = ["src/DataFileIO.jl"]
+reason = "Documented predicate used by the file-inspection example."
+review_status = "reference_backlog"
+
+[[qualified_apis]]
+binding = "TamerOp.DataFileIO.requires_explicit_kind"
+family = "io"
+evidence = ["src/DataFileIO.jl"]
+reason = "Documented predicate for when a reader must choose the input interpretation."
+review_status = "reference_backlog"
+
+[[qualified_apis]]
+binding = "TamerOp.DataFileIO.suggested_kind"
+family = "io"
+evidence = ["src/DataFileIO.jl"]
+reason = "Documented canonical load-data kind suggested by an inspection."
+review_status = "reference_backlog"
+
+[[qualified_apis]]
+binding = "TamerOp.Serialization.load_gudhi_json"
+family = "io"
+evidence = ["src/serialization/external_interop.jl"]
+reason = "Documented external JSON reader with an explicit schema contract."
+review_status = "reference_backlog"
+
+[[qualified_apis]]
+binding = "TamerOp.Serialization.load_rivet_bifiltration"
+family = "io"
+evidence = ["src/serialization/external_interop.jl"]
+reason = "Documented RIVET bifiltration reader."
+review_status = "reference_backlog"
+
+[[qualified_apis]]
+binding = "TamerOp.Serialization.load_rivet_firep"
+family = "io"
+evidence = ["src/serialization/external_interop.jl"]
+reason = "Documented RIVET free implicit representation reader."
+review_status = "reference_backlog"
+
+[[qualified_apis]]
+binding = "TamerOp.Serialization.load_ripser_distance"
+family = "io"
+evidence = ["src/serialization/external_interop.jl", "src/DataFileIO.jl"]
+reason = "Documented distance-matrix reader also used by public file routing."
+review_status = "reference_backlog"
+
+[[qualified_apis]]
+binding = "TamerOp.Serialization.flange_from_m2"
+family = "io"
+evidence = ["src/serialization/external_cas.jl"]
+reason = "Documented Macaulay2 command adapter with a user-facing return contract."
+review_status = "reference_backlog"

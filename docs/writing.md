@@ -9,6 +9,11 @@ Two principles govern documentation contributions: develop a connected
 finite-encoding narrative, and teach in approachable language. Apply them
 to tutorials, mathematical explanations, reference entries, and figures.
 
+The [first learning-path brief](learning_path.md) records the initial page
+sequence, reader questions, and expected mathematical answers. The
+[API inventory guide](api_inventory.md) explains how to maintain the generated
+binding inventory and the explicit reference-writing backlog.
+
 ## Follow the mathematical question
 
 The [finite-encoding introduction](finite_encodings.md) gives the shared

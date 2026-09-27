@@ -1,0 +1,116 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="620" viewBox="0 0 960 620" role="img" aria-labelledby="title description">
+  <title id="title">Nine parameter regions and their finite encoding poset</title>
+  <desc id="description">An authored schematic with two panels. The left panel is a cropped window of the x, y parameter plane, partitioned by coordinate values zero and two. Each coordinate receives the label L if it is less than zero, C if it is between zero and two inclusive, and H if it is greater than two. The nine regions carry the corresponding ordered pairs of labels. The central closed square, zero to two in both coordinates, is shaded blue and has vector space Q. Regions continue outside the drawn window. The assignment pi nine sends each parameter to its region label in the right panel. The right panel shows the nine-element product poset of the chain L less than C less than H, with cover arrows rightward and upward. Its central label C, C has vector space Q, and its other eight labels have zero vector spaces. Positions in the two panels are diagram layouts, not comparisons between parameter points and finite labels.</desc>
+  <defs>
+    <marker id="order-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 1 1 L 9 5 L 1 9" fill="none" stroke="#0f766e" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <marker id="axis-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 1 1 L 9 5 L 1 9" fill="none" stroke="#64748b" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+  <rect width="960" height="620" fill="#ffffff"/>
+  <g font-family="DejaVu Sans, sans-serif" fill="#172b42" text-anchor="middle">
+    <text x="480" y="38" font-size="29">Nine regions, one finite encoding</text>
+    <text x="207" y="92" font-size="24">Parameter plane (x, y)</text>
+    <text x="720" y="92" font-size="24">Finite poset P₉</text>
+
+    <!-- A dashed outer frame marks the drawing window, not a region boundary. -->
+    <rect x="50" y="138" width="315" height="315" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="5 5"/>
+    <g fill="none" stroke="#94a3b8" stroke-width="1.5">
+      <path d="M 155 138 V 453 M 260 138 V 453"/>
+      <path d="M 50 243 H 365 M 50 348 H 365"/>
+    </g>
+    <rect x="155" y="243" width="105" height="105" fill="#dbeafe" stroke="#245c99" stroke-width="2.5"/>
+    <g fill="none" stroke="#64748b" stroke-width="1.8" marker-end="url(#axis-arrow)">
+      <path d="M 35 470 H 387"/>
+      <path d="M 35 470 V 117"/>
+    </g>
+    <g fill="none" stroke="#64748b" stroke-width="1.5">
+      <path d="M 155 466 V 475 M 260 466 V 475"/>
+      <path d="M 30 348 H 40 M 30 243 H 40"/>
+    </g>
+    <g font-size="20" fill="#475569">
+      <text x="155" y="496">0</text>
+      <text x="260" y="496">2</text>
+      <text x="17" y="355">0</text>
+      <text x="17" y="250">2</text>
+      <text x="403" y="478" font-size="24">x</text>
+      <text x="21" y="112" font-size="24">y</text>
+    </g>
+    <g font-size="21">
+      <text x="102.5" y="198">(L, H)</text>
+      <text x="207.5" y="198">(C, H)</text>
+      <text x="312.5" y="198">(H, H)</text>
+      <text x="102.5" y="303">(L, C)</text>
+      <text x="207.5" y="286">(C, C)</text>
+      <text x="312.5" y="303">(H, C)</text>
+      <text x="102.5" y="408">(L, L)</text>
+      <text x="207.5" y="408">(C, L)</text>
+      <text x="312.5" y="408">(H, L)</text>
+    </g>
+    <text x="207.5" y="321" font-size="28" fill="#245c99">ℚ</text>
+
+    <path d="M 402 295 H 488" fill="none" stroke="#0f766e" stroke-width="2.5" marker-end="url(#order-arrow)"/>
+    <text x="445" y="271" font-size="28" fill="#145e59">π₉</text>
+
+    <!-- Covers of the product chain L &lt; C &lt; H; draw edges before nodes. -->
+    <g fill="none" stroke="#0f766e" stroke-width="2.3" marker-end="url(#order-arrow)">
+      <path d="M 616 190 H 663"/>
+      <path d="M 771 190 H 818"/>
+      <path d="M 616 310 H 663"/>
+      <path d="M 771 310 H 818"/>
+      <path d="M 616 430 H 663"/>
+      <path d="M 771 430 H 818"/>
+      <path d="M 565 393 V 353"/>
+      <path d="M 565 273 V 233"/>
+      <path d="M 720 393 V 353"/>
+      <path d="M 720 273 V 233"/>
+      <path d="M 875 393 V 353"/>
+      <path d="M 875 273 V 233"/>
+    </g>
+    <g fill="#ffffff" stroke="#245c99" stroke-width="1.8">
+      <rect x="515" y="154" width="100" height="72" rx="7"/>
+      <rect x="670" y="154" width="100" height="72" rx="7"/>
+      <rect x="825" y="154" width="100" height="72" rx="7"/>
+      <rect x="515" y="274" width="100" height="72" rx="7"/>
+      <rect x="670" y="274" width="100" height="72" rx="7" fill="#dbeafe"/>
+      <rect x="825" y="274" width="100" height="72" rx="7"/>
+      <rect x="515" y="394" width="100" height="72" rx="7"/>
+      <rect x="670" y="394" width="100" height="72" rx="7"/>
+      <rect x="825" y="394" width="100" height="72" rx="7"/>
+    </g>
+    <g font-size="21">
+      <text x="565" y="183">(L, H)</text>
+      <text x="720" y="183">(C, H)</text>
+      <text x="875" y="183">(H, H)</text>
+      <text x="565" y="303">(L, C)</text>
+      <text x="720" y="303">(C, C)</text>
+      <text x="875" y="303">(H, C)</text>
+      <text x="565" y="423">(L, L)</text>
+      <text x="720" y="423">(C, L)</text>
+      <text x="875" y="423">(H, L)</text>
+    </g>
+    <g font-size="25">
+      <text x="565" y="212">0</text>
+      <text x="720" y="212">0</text>
+      <text x="875" y="212">0</text>
+      <text x="565" y="332">0</text>
+      <text x="720" y="332" fill="#245c99">ℚ</text>
+      <text x="875" y="332">0</text>
+      <text x="565" y="452">0</text>
+      <text x="720" y="452">0</text>
+      <text x="875" y="452">0</text>
+    </g>
+    <g font-size="19" fill="#475569">
+      <text x="207" y="531">Regions extend beyond the window.</text>
+      <text x="720" y="531">Arrows show cover relations.</text>
+    </g>
+    <g font-size="21">
+      <text x="165" y="573">L: coordinate &lt; 0</text>
+      <text x="480" y="573">C: 0 ≤ coordinate ≤ 2</text>
+      <text x="795" y="573">H: coordinate &gt; 2</text>
+    </g>
+    <text x="480" y="604" font-size="19" fill="#475569">Both boundary values, 0 and 2, belong to C.</text>
+  </g>
+</svg>

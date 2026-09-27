@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="960" height="366" viewBox="0 0 960 366" role="img" aria-labelledby="title description">
+  <title id="title">A square ring appears at zero and its hole fills at five</title>
+  <desc id="description">Three stages of an increasing filtration, connected by inclusion arrows. For t less than zero the complex is empty, with first homology zero. For zero less than or equal to t less than five, eight closed unit squares form the outer ring of a three-by-three square grid, leaving its center open; first homology over F two is F two. At t greater than or equal to five, the center square is added, highlighted in teal and labeled new. The full three-by-three square has first homology zero. These are authored schematics.</desc>
+  <defs>
+    <marker id="inclusion-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M 1 1 L 9 5 L 1 9" fill="none" stroke="#0f766e" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <g id="outer-squares" fill="#dbeafe" stroke="#245c99" stroke-width="2">
+      <rect x="0" y="0" width="56" height="56"/>
+      <rect x="56" y="0" width="56" height="56"/>
+      <rect x="112" y="0" width="56" height="56"/>
+      <rect x="0" y="56" width="56" height="56"/>
+      <rect x="112" y="56" width="56" height="56"/>
+      <rect x="0" y="112" width="56" height="56"/>
+      <rect x="56" y="112" width="56" height="56"/>
+      <rect x="112" y="112" width="56" height="56"/>
+    </g>
+  </defs>
+  <rect width="960" height="366" fill="#ffffff"/>
+  <g font-family="DejaVu Sans, sans-serif" fill="#172b42" text-anchor="middle">
+    <g font-size="28">
+      <text x="160" y="48">t &lt; 0</text>
+      <text x="480" y="48">0 ≤ t &lt; 5</text>
+      <text x="800" y="48">t ≥ 5</text>
+    </g>
+    <!-- The empty stage has no grid or edges: only the empty-set symbol. -->
+    <text x="160" y="194" font-size="74" fill="#475569">∅</text>
+    <text x="160" y="235" font-size="20" fill="#475569">empty</text>
+    <use href="#outer-squares" xlink:href="#outer-squares" x="396" y="90"/>
+    <use href="#outer-squares" xlink:href="#outer-squares" x="716" y="90"/>
+    <rect x="772" y="146" width="56" height="56" fill="#b7e2dd" stroke="#245c99" stroke-width="2"/>
+    <text x="800" y="180" font-size="17" fill="#145e59">new</text>
+    <g fill="none" stroke="#0f766e" stroke-width="2.5" marker-end="url(#inclusion-arrow)">
+      <path d="M 260 174 H 350"/>
+      <path d="M 590 174 H 680"/>
+    </g>
+    <g font-size="17" fill="#145e59">
+      <text x="305" y="153">inclusion</text>
+      <text x="635" y="153">inclusion</text>
+    </g>
+    <g font-size="26">
+      <text x="160" y="311">H₁ = 0</text>
+      <text x="480" y="311">H₁ ≅ F₂</text>
+      <text x="800" y="311">H₁ = 0</text>
+    </g>
+    <text x="480" y="350" font-size="18" fill="#475569">First homology with coefficients in F₂</text>
+  </g>
+</svg>

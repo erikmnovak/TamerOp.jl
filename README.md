@@ -22,6 +22,9 @@ Read [why finite encodings matter](#mathematical-background) below, or go
 directly to [installation](#install-tamerop). The
 [finite-encoding introduction](docs/finite_encodings.md) develops the idea
 with a small example and connects it to the detailed guides.
+For a fuller mathematical starting point, read
+[persistence modules over posets](docs/persistence_modules.md), which follows
+the ring example through vector spaces, linear maps, and several parameters.
 
 **Requirements:** Julia **1.12 or a compatible later 1.x version** and an internet
 connection for the initial installation. Julia 1.12 is the version currently

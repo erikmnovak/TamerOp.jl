@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="820" height="550" viewBox="0 0 820 550" role="img" aria-labelledby="title description">
+  <title id="title">Coordinatewise order on four sampled points in the a, b parameter plane</title>
+  <desc id="description">The horizontal coordinate a increases to the right and the vertical coordinate b increases upward. Four sampled points are p equals one quarter, one quarter; q equals one quarter, three halves; r equals three halves, one quarter; and s equals three halves, three halves. Arrows run from p to q, p to r, q to s, and r to s. The points q and r are incomparable: each has one coordinate larger and one smaller than the other. The comparison p to s is obtained by composition and is not drawn separately. Only four sampled points are shown, not cover relations of the continuous parameter plane. This is an authored schematic.</desc>
+  <defs>
+    <marker id="axis-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 1 1 L 9 5 L 1 9" fill="none" stroke="#64748b" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <marker id="comparison-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M 1 1 L 9 5 L 1 9" fill="none" stroke="#0f766e" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+  <rect width="820" height="550" fill="#ffffff"/>
+  <!-- Equal scale on both axes: origin (110,470), 240 SVG units per coordinate unit. -->
+  <g fill="none" stroke="#64748b" stroke-width="2" marker-end="url(#axis-arrow)">
+    <path d="M 110 470 H 600"/>
+    <path d="M 110 470 V 35"/>
+  </g>
+  <g fill="none" stroke="#0f766e" stroke-width="2.8" marker-end="url(#comparison-arrow)">
+    <path d="M 170 396 V 124"/>
+    <path d="M 184 410 H 456"/>
+    <path d="M 184 110 H 456"/>
+    <path d="M 470 396 V 124"/>
+  </g>
+  <g fill="#245c99" stroke="#ffffff" stroke-width="2">
+    <circle cx="170" cy="410" r="8"/>
+    <circle cx="170" cy="110" r="8"/>
+    <circle cx="470" cy="410" r="8"/>
+    <circle cx="470" cy="110" r="8"/>
+  </g>
+  <g font-family="DejaVu Sans, sans-serif" fill="#172b42" text-anchor="middle">
+    <g font-size="25">
+      <text x="170" y="438">p</text>
+      <text x="170" y="61">q</text>
+      <text x="470" y="438">r</text>
+      <text x="470" y="61">s</text>
+    </g>
+    <g font-size="19">
+      <text x="170" y="461">(1/4, 1/4)</text>
+      <text x="170" y="86">(1/4, 3/2)</text>
+      <text x="470" y="461">(3/2, 1/4)</text>
+      <text x="470" y="86">(3/2, 3/2)</text>
+    </g>
+    <g font-size="25" fill="#475569">
+      <text x="624" y="478">a</text>
+      <text x="78" y="46">b</text>
+      <text x="93" y="494" font-size="18">0</text>
+    </g>
+    <g font-size="22" fill="#145e59">
+      <text x="650" y="250">q and r</text>
+      <text x="650" y="280">are incomparable</text>
+    </g>
+    <text x="410" y="533" font-size="18" fill="#475569">Four sampled points in the parameter plane</text>
+  </g>
+</svg>

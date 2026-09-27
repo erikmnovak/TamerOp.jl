@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="820" height="625" viewBox="0 0 820 625" role="img" aria-labelledby="title description">
+  <title id="title">Four semantic signatures and their encoded vector spaces</title>
+  <desc id="description">An authored schematic of the four-element Boolean poset P four. Each label is a pair of semantic signature bits u, c. The bit u is one exactly when both parameter coordinates x and y are at least zero. The bit c is one exactly when at least one coordinate is greater than two. Each bit is zero otherwise. The bottom label zero, zero has vector space zero. The middle left label one, zero has vector space Q. The middle right label zero, one has vector space zero. The top label one, one has vector space zero. The four upward arrows are the cover relations, increasing one bit from zero to one. The two middle labels are incomparable. Node positions are a layout of the finite poset, not points in the original parameter plane.</desc>
+  <defs>
+    <marker id="order-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M 1 1 L 9 5 L 1 9" fill="none" stroke="#0f766e" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+  <rect width="820" height="625" fill="#ffffff"/>
+  <g font-family="DejaVu Sans, sans-serif" fill="#172b42" text-anchor="middle">
+    <text x="410" y="40" font-size="29">Four signatures in P₄</text>
+    <text x="410" y="78" font-size="21" fill="#475569">Labels are semantic signatures (u, c).</text>
+
+    <g fill="none" stroke="#0f766e" stroke-width="2.7" marker-end="url(#order-arrow)">
+      <path d="M 359 413 L 281 345"/>
+      <path d="M 461 413 L 539 345"/>
+      <path d="M 281 255 L 359 187"/>
+      <path d="M 539 255 L 461 187"/>
+    </g>
+    <g fill="#ffffff" stroke="#245c99" stroke-width="2">
+      <rect x="345" y="98" width="130" height="88" rx="8"/>
+      <rect x="165" y="256" width="130" height="88" rx="8" fill="#dbeafe"/>
+      <rect x="525" y="256" width="130" height="88" rx="8"/>
+      <rect x="345" y="414" width="130" height="88" rx="8"/>
+    </g>
+    <g font-size="27">
+      <text x="410" y="132">(1, 1)</text>
+      <text x="230" y="290">(1, 0)</text>
+      <text x="590" y="290">(0, 1)</text>
+      <text x="410" y="448">(0, 0)</text>
+    </g>
+    <g font-size="28">
+      <text x="410" y="168">0</text>
+      <text x="230" y="326" fill="#245c99">ℚ</text>
+      <text x="590" y="326">0</text>
+      <text x="410" y="484">0</text>
+    </g>
+    <g font-size="21" fill="#475569">
+      <text x="410" y="558">u = 1 if x ≥ 0 and y ≥ 0; otherwise 0.</text>
+      <text x="410" y="593">c = 1 if x &gt; 2 or y &gt; 2; otherwise 0.</text>
+    </g>
+  </g>
+</svg>

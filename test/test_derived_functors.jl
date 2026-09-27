@@ -4338,3 +4338,159 @@ end
         end
     end
 end
+
+@testset "Unequal module Hom and Ext oracles over four exact fields" begin
+    # These examples are specified here, independently of local benchmark data.
+    # The fork has three incomparable sources and one common sink.
+    fork_order = Matrix{Bool}(I, 4, 4)
+    fork_order[1:3, 4] .= true
+    fork = FF.FinitePoset(fork_order)
+    diamond = diamond_poset()
+    chain = chain_poset(4)
+
+    function check_pair(M, N, expected)
+        field = M.field
+        K = CM.coeff_type(field)
+        @test MD.check_module(M).valid && MD.check_module(N).valid
+        maps = DF.basis(DF.Hom(M, N))
+        @test length(maps) == expected[1]
+        @test all(h -> MD.check_morphism(h).valid, maps)
+        flat = zeros(K, sum(M.dims .* N.dims), length(maps))
+        for (j, h) in enumerate(maps)
+            flat[:, j] = vcat([vec(Matrix(MD.component(h, v))) for v in 1:M.Q.n]...)
+        end
+        @test FL.rank(field, flat) == expected[1]
+        projective = nothing
+        for model in (:projective, :injective)
+            E = DF.Ext(M, N, OPT.DerivedFunctorOptions(maxdeg=length(expected)-1, model=model))
+            model === :projective && (projective = E)
+            @test [DF.dim(E, t) for t in 0:length(expected)-1] == expected
+            for t in 0:length(expected)-1
+                H = E.cohom[t + 1]
+                reps = DF.basis(E, t)
+                @test length(reps) == expected[t + 1]
+                R = zeros(K, H.dimC, length(reps))
+                for (j, rep) in enumerate(reps)
+                    R[:, j] = rep
+                    @test DF.coordinates(E, t, rep) == Matrix{K}(I, H.dimH, H.dimH)[:, j]
+                end
+                @test all(iszero, E.complex.d[t + 1] * R)
+                @test CC.coordinates(H, R) == Matrix{K}(I, H.dimH, H.dimH)
+                @test CC.coordinates(H, DF.boundaries(E, t)) == zeros(K, H.dimH, H.dimB)
+                weights = K[CM.coerce(field, (-1)^j * (2j + 1)) for j in 1:H.dimH]
+                mixed = R * weights
+                @test DF.representative(E, t, weights) == mixed
+                @test DF.coordinates(E, t, mixed) == weights
+                for boundary in eachcol(DF.boundaries(E, t))
+                    @test DF.coordinates(E, t, mixed + boundary) == weights
+                end
+                D = E.complex.d[t + 1]
+                noncycle = findfirst(j -> any(!iszero, view(D, :, j)), axes(D, 2))
+                if noncycle !== nothing
+                    invalid = zeros(K, H.dimC)
+                    invalid[noncycle] = one(K)
+                    @test_throws ErrorException DF.coordinates(E, t, invalid)
+                end
+            end
+        end
+        projective
+    end
+
+    # This is a deliberate characteristic comparison, including a generic odd
+    # prime beyond the specialized F2/F3 kernels, independent of runner filtering.
+    for field in (CM.QQField(), CM.F2(), CM.F3(), CM.Fp(101))
+        K = CM.coeff_type(field)
+        interval(P, a, b) = _derived_window_interval(P, a, b, field)
+        @testset "$(field)" begin
+            # On a chain, Ext^1(I[a,b],I[c,d]) has dimension one exactly when
+            # a < c <= b+1 <= d; here Hom is zero and higher Ext vanishes.
+            check_pair(interval(chain, 1, 3), interval(chain, 2, 4), [0, 1, 0])
+            S1, S2, S4 = interval(diamond, 1, 1), interval(diamond, 2, 2), interval(diamond, 4, 4)
+            I12 = interval(diamond, 1, 2)
+            check_pair(S1, S2, [0, 1, 0, 0])
+            # The nonsplit sequence 0 -> S2 -> I[1,2] -> S1 -> 0 has no
+            # section: every map S1 -> I[1,2] is zero by edge naturality.
+            inclusion = MD.PMorphism(S2, I12, [v == 2 ? ones(K, 1, 1) : zeros(K, I12.dims[v], S2.dims[v]) for v in 1:4])
+            projection = MD.PMorphism(I12, S1, [v == 1 ? ones(K, 1, 1) : zeros(K, S1.dims[v], I12.dims[v]) for v in 1:4])
+            @test MD.check_morphism(inclusion).valid && MD.check_morphism(projection).valid
+            @test isempty(DF.basis(DF.Hom(S1, I12)))
+            for v in 1:4
+                i, p = Matrix(MD.component(inclusion, v)), Matrix(MD.component(projection, v))
+                @test all(iszero, p * i)
+                @test FL.rank(field, i) + FL.rank(field, p) == I12.dims[v]
+            end
+            # S1 has minimal terms P1, P2+P3, P4: the diamond relation gives
+            # a single degree-two extension to S4 in every characteristic.
+            check_pair(S1, S4, [0, 0, 1, 0])
+            constant = interval(diamond, 1, 4)
+            mixed = MD.direct_sum(constant, S2)
+            check_pair(interval(diamond, 2, 4), mixed, [2, 0, 0, 0])
+            check_pair(mixed, interval(diamond, 1, 2), [2, 0, 0, 0])
+
+            # C is coker(P4 -> P1+P2+P3) for relation vector (1,1,1).
+            # Thus Ext^1(C,S4)=k. Each Ext^1(Si,C) has dimension 2-1=1.
+            C = MD.PModule{K}(fork, [1, 1, 1, 2], Dict(
+                (1, 4) => reshape(K[-1, -1], 2, 1),
+                (2, 4) => reshape(K[1, 0], 2, 1),
+                (3, 4) => reshape(K[0, 1], 2, 1)); field)
+            sink = interval(fork, 4, 4)
+            sources = MD.PModule{K}(fork, [1, 1, 1, 0], Dict(
+                (v, 4) => zeros(K, 0, 1) for v in 1:3); field)
+            check_pair(C, sink, [0, 1, 0])
+            check_pair(sources, C, [0, 3, 0])
+            # An endomorphism preserving these three distinct lines in k^2
+            # is scalar, including in F2. The relation map onto C_4 has rank
+            # two, so Ext^1(C,C)=0 and Ext^1(C,C+S4)=k.
+            @test length(DF.basis(DF.Hom(C, C))) == 1
+            check_pair(C, MD.direct_sum(C, sink), [1, 1, 0])
+
+            # D is the cokernel of relations [1 1; 1 -1] at the sink of
+            # P1+P2. Rank falls from two to one in characteristic two.
+            is_two = field isa CM.PrimeField && field.p == 2
+            topdim = is_two ? 1 : 0
+            D = MD.PModule{K}(fork, [1, 1, 0, topdim], Dict(
+                (1, 4) => ones(K, topdim, 1),
+                (2, 4) => ones(K, topdim, 1),
+                (3, 4) => zeros(K, topdim, 0)); field)
+            check_pair(D, sink, [0, is_two ? 1 : 2, 0])
+        end
+    end
+
+    @testset "Rational coefficient growth preserves maps and Ext" begin
+        field = CM.QQField()
+        K = CM.coeff_type(field)
+        C = MD.PModule{K}(fork, [1, 1, 1, 2], Dict(
+            (1, 4) => reshape(K[-1, -1], 2, 1),
+            (2, 4) => reshape(K[1, 0], 2, 1),
+            (3, 4) => reshape(K[0, 1], 2, 1)); field)
+        sink = _derived_window_interval(fork, 4, 4, field)
+        M, N = MD.direct_sum(C, C), MD.direct_sum(sink, sink)
+        base = check_pair(M, N, [0, 4, 0])
+        # Determinant-one upper-block gauges are invertible at every size.
+        # The three families separately exercise numerator, denominator, and
+        # simultaneous numerator/denominator growth without changing the module.
+        for bits in (16, 64, 256), mode in (:numerator, :denominator, :both)
+            q = (big(1) << bits) - 1
+            a = mode === :numerator ? q // big(1) :
+                mode === :denominator ? big(1) // q : q // (q - 2)
+            gauges = [Matrix{K}(I, d, d) for d in M.dims]
+            inverses = deepcopy(gauges)
+            gauges[4][1:2, 3:4] .= a .* K[1 2; 3 5]
+            inverses[4][1:2, 3:4] .= -a .* K[1 2; 3 5]
+            maps = Dict((u, v) => gauges[v] * Matrix(MD.map_leq(M, u, v)) * inverses[u]
+                        for (u, v) in FF.cover_edges(fork))
+            changed = MD.PModule{K}(fork, copy(M.dims), maps; field)
+            to_changed = MD.PMorphism(M, changed, gauges)
+            to_original = MD.PMorphism(changed, M, inverses)
+            @test MD.check_morphism(to_changed).valid && MD.check_morphism(to_original).valid
+            for v in 1:4
+                @test inverses[v] * gauges[v] == Matrix{K}(I, M.dims[v], M.dims[v])
+            end
+            E = check_pair(changed, N, [0, 4, 0])
+            pullback = Matrix(DF.ext_map_first(base, E, to_changed; t=1))
+            inverse_pullback = Matrix(DF.ext_map_first(E, base, to_original; t=1))
+            @test pullback * inverse_pullback == Matrix{K}(I, 4, 4)
+            @test inverse_pullback * pullback == Matrix{K}(I, 4, 4)
+        end
+    end
+end

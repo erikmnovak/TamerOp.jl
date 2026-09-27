@@ -141,6 +141,130 @@ end
     end
 end
 
+@testset "Unified Ext bases retain canonical coordinates and independent copies" begin
+    with_fields(FIELDS_FULL) do field
+        K = CM.coeff_type(field)
+        same(x, y) = field isa CM.RealField ?
+            isapprox(x, y; atol=field.atol, rtol=field.rtol) : x == y
+        P = diamond_poset()
+        # Four simples plus the constant projective-injective summand give
+        # independently known Ext dimensions (7,4,1), with nonzero boundaries.
+        gauge = [K[1 CM.coerce(field, v); 0 1] for v in 1:4]
+        inverse_gauge = [K[1 -CM.coerce(field, v); 0 1] for v in 1:4]
+        edges = Dict((u, v) => gauge[v] * K[0 0; 0 1] * inverse_gauge[u]
+                     for (u, v) in FF.cover_edges(P))
+        M = MD.PModule{K}(P, fill(2, 4), edges; field)
+        components = [zeros(K, 2, 2) for _ in 1:4]
+        components[1] = gauge[1] * K[1 0; 0 0] * inverse_gauge[1]
+        projection = MD.PMorphism(M, M, components)
+        @test MD.check_morphism(projection).valid
+        for canon in (:projective, :injective)
+            E = DF.Ext(M, M, OPT.DerivedFunctorOptions(maxdeg=2, model=:unified, canon=canon))
+            native = canon === :projective ? E.Eproj : E.Einj
+            other_slot = canon === :projective ? :Einj : :Eproj
+            @test [DF.dim(E, t) for t in 0:2] == [7, 4, 1]
+            for t in 0:2
+                canonical = DF.basis(E, t)
+                @test all(same(a, b) for (a, b) in zip(canonical, DF.basis(native, t)))
+                @test getfield(E, other_slot) === nothing
+                @test all(isnothing, E.comparison.P2I)
+                @test all(isnothing, E.comparison.I2P)
+            end
+            for t in 0:2
+                d = DF.dim(E, t)
+                identity = Matrix{K}(I, d, d)
+                for model in (:canonical, :projective, :injective)
+                    requested = model === :canonical ? canon : model
+                    B = DF.basis(E, t; model)
+                    realization = requested === :projective ? E.Eproj : E.Einj
+                    @test B isa Vector{Vector{K}}
+                    @test length(B) == d
+                    for i in 1:d
+                        # The scalar API is a separate implementation; roundtrips
+                        # and cocycle equations additionally verify the quotient.
+                        @test same(B[i], DF.representative(E, t, identity[:, i]; model))
+                        @test same(DF.coordinates(E, t, B[i]; model), identity[:, i])
+                        @test same(realization.complex.d[t + 1] * B[i],
+                                   zeros(K, realization.complex.dims[t + 2]))
+                        for boundary in eachcol(DF.boundaries(realization, t))
+                            @test same(DF.coordinates(E, t, B[i] + boundary; model), identity[:, i])
+                        end
+                    end
+                    # Returned vectors may be edited without mutating cached
+                    # representatives, comparison maps, or another returned vector.
+                    saved = deepcopy(B)
+                    B[1][1] += one(K)
+                    again = DF.basis(E, t; model)
+                    @test all(same(a, b) for (a, b) in zip(again, saved))
+                    @test all(B[i] !== again[i] for i in 1:d)
+                    @test all(same(B[i], saved[i]) for i in 2:d)
+                end
+                # The bottom-simple projection has known ranks on the two Ext
+                # arguments. Both realizations must express the same canonical map.
+                for (operation, expected_rank) in ((DF.ext_map_first, (1, 2, 1)[t + 1]),
+                                                  (DF.ext_map_second, (2, 0, 0)[t + 1]))
+                    a = Matrix(operation(E, E, projection; t, backend=:projective))
+                    b = Matrix(operation(E, E, projection; t, backend=:injective))
+                    @test FL.rank(field, a) == expected_rank
+                    @test same(a, b)
+                    @test same(a * a, a)
+                end
+            end
+            # Products of the transported degree-one basis still span the
+            # diamond-relation class in degree two. Convert actual returned
+            # cochains to native coordinates for the projective Yoneda API.
+            Ep = DF.projective_model(E)
+            x = [DF.coordinates(Ep, 1, z) for z in DF.basis(E, 1; model=:projective)]
+            products = hcat([last(DF.yoneda_product(Ep, 1, a, Ep, 1, b; ELN=Ep))
+                             for a in x for b in x]...)
+            @test FL.rank(field, products) == 1
+            @test_throws ErrorException DF.basis(E, 0; model=:unsupported)
+            @test_throws AssertionError DF.basis(E, -1)
+            @test_throws AssertionError DF.basis(E, 3)
+        end
+
+        # Vanishing Hom and higher Ext need no other model or quotient data,
+        # but even an empty answer must reject an invalid requested model.
+        (; S1, S2) = _derived_window_chain(field)
+        for canon in (:projective, :injective)
+            E = DF.Ext(S1, S2, OPT.DerivedFunctorOptions(maxdeg=2, model=:unified, canon=canon))
+            original_models = (E.Eproj, E.Einj)
+            for t in (0, 2), model in (:canonical, :projective, :injective)
+                @test DF.basis(E, t; model) == Vector{Vector{K}}()
+                @test (E.Eproj, E.Einj) === original_models
+                @test all(isnothing, E.comparison.P2I)
+                @test all(isnothing, E.comparison.I2P)
+            end
+            @test_throws ErrorException DF.basis(E, 0; model=:unsupported)
+            @test_throws ErrorException DF.basis(E, 2; model=:unsupported)
+        end
+    end
+
+    # The public RealField case above exercises roundoff in actual comparison
+    # solves. These controlled inverse pairs also test the tolerance boundary,
+    # both product directions, and rejection of nonfinite or exact discrepancies.
+    check_inverse = DF.ExtTorSpaces._check_ext_comparison_inverses
+    numerical = CM.RealField(Float64; atol=1e-12, rtol=1e-10)
+    I2 = Matrix{Float64}(I, 2, 2)
+    @test check_inverse(numerical, I2, I2 + 1e-12 .* I2, 0) === nothing
+    @test_throws ErrorException check_inverse(numerical, I2, I2 + 1e-8 .* I2, 0)
+    strict = CM.RealField(Float64; atol=0.0, rtol=0.0)
+    @test_throws ErrorException check_inverse(strict, I2, I2 + eps(Float64) .* I2, 0)
+    # AB is within tolerance, while conjugation by A amplifies BA's residual.
+    # Testing only one inverse direction would incorrectly accept this pair.
+    forward = [100.0 0.0; 0.0 1.0]
+    backward = [0.01 1e-11; 0.0 1.0]
+    @test isapprox(backward * forward, I2; atol=numerical.atol, rtol=numerical.rtol)
+    @test_throws ErrorException check_inverse(numerical, forward, backward, 0)
+    for bad in (Inf, NaN)
+        invalid = copy(I2)
+        invalid[1, 1] = bad
+        @test_throws ErrorException check_inverse(numerical, I2, invalid, 0)
+    end
+    @test_throws ErrorException check_inverse(CM.QQField(), Matrix{QQ}(I, 1, 1),
+                                             fill(QQ(1) + QQ(1, 10^12), 1, 1), 0)
+end
+
 @testset "A74 numerical Ext on rationally conjugated diamond modules" begin
     # M is the sum of the four simples and the constant projective-injective
     # module on the diamond. Rational changes of basis mix these summands at
@@ -616,6 +740,37 @@ end
                          :_DOWNSET_POSTCOMPOSE_SYSTEM_CACHE)
                 @test isempty(getfield(DF.Resolutions, name))
             end
+        end
+    end
+    # The branching QQ workload uses nonzero higher-degree map batches. The
+    # module is the four vertex simples plus the constant module in rational
+    # stalk bases, so the expected dimensions follow from the diamond relation.
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+    P = diamond_poset()
+    edges = Dict(
+        (1, 2) => K[-3//44 3//11; -3//11 12//11],
+        (1, 3) => K[-3//55 12//55; -3//11 12//11],
+        (2, 4) => K[-2//57 10//57; -4//19 20//19],
+        (3, 4) => K[-5//174 5//29; -5//29 30//29],
+    )
+    M = MD.PModule{K}(P, fill(2, 4), edges; field=field)
+    for pass in 1:2
+        maps = DF.basis(DF.Hom(M, M))
+        @test length(maps) == 7
+        @test all(f -> MD.check_morphism(f).valid, maps)
+        E = DF.Ext(M, M, OPT.DerivedFunctorOptions(maxdeg=2, model=:projective))
+        @test [DF.dim(E, t) for t in 0:2] == [7, 4, 1]
+        DF.Resolutions._clear_resolution_plan_caches!()
+        DF.Functoriality._clear_functoriality_caches!()
+        IR._clear_indicator_prefix_caches!()
+        FL._clear_fullcolumn_cache!()
+        FL._clear_f2_fullcolumn_cache!()
+        FL._clear_f3_fullcolumn_cache!()
+        for name in (:_ACTIVE_INDEX_PLAN_CACHE, :_BASE_VERTEX_GROUPS_CACHE,
+                     :_ACTIVE_UPSET_VECTOR_CACHE, :_DOWNSET_HOM_STRUCTURE_CACHE,
+                     :_DOWNSET_POSTCOMPOSE_SYSTEM_CACHE)
+            @test isempty(getfield(DF.Resolutions, name))
         end
     end
 end

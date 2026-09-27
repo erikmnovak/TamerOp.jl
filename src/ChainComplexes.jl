@@ -463,77 +463,38 @@ end
 # selects complement standard basis vectors from nonpivot rows.
 function extend_to_basis(C::Matrix{K}; field::AbstractCoeffField=field_from_eltype(K)) where {K}
     _validate_complex_field(K, field)
-    k = size(C, 1)
-    if k == 0
-        return zeros(K, 0, 0)
-    end
-    Cbasis = if size(C, 2) == 0
-        zeros(K, k, 0)
-    else
-        FieldLinAlg.colspace(field, C)
-    end
-    r = size(Cbasis, 2)
-
-    if r == k
-        return Cbasis
-    end
-    if r == 0
-        I = zeros(K, k, k)
-        @inbounds for i in 1:k
-            I[i, i] = one(K)
-        end
-        return I
-    end
-
-    # Pivot columns in transpose(Cbasis) correspond to a maximal set of rows of Cbasis
-    # whose restriction gives an invertible r x r minor.
-    rows = Matrix(transpose(Cbasis))
-    _, pivs = field isa RealField ? FieldLinAlg._colspace_with_pivots(field, rows) :
-                                  FieldLinAlg.rref(field, rows; pivots=true)
-    pivot_mask = falses(k)
-    @inbounds for p in pivs
-        if 1 <= p <= k
-            pivot_mask[p] = true
-        end
-    end
-
-    comp_rows = Int[]
-    @inbounds for i in 1:k
-        if !pivot_mask[i]
-            push!(comp_rows, i)
-        end
-    end
-
-    Q = zeros(K, k, length(comp_rows))
-    @inbounds for (j, irow) in enumerate(comp_rows)
-        Q[irow, j] = one(K)
-    end
-    B = hcat(Cbasis, Q)
-
-    if size(B, 2) != k
-        error("extend_to_basis: could not extend to a full basis")
-    end
-    return B
+    size(C, 1) == 0 && return zeros(K, 0, 0)
+    Cbasis = size(C, 2) == 0 ? C : FieldLinAlg.colspace(field, C)
+    return extend_to_basis_from_basis(Cbasis; field=field)
 end
 
 function extend_to_basis_from_basis(Cbasis::Matrix{K}; field::AbstractCoeffField=field_from_eltype(K)) where {K}
+    return first(_basis_completion_from_basis(Cbasis; field=field))
+end
+
+# Retain the indices of the added unit vectors, in the same ascending order as
+# the completed basis. Multiplying a cycle basis by this complement is exactly
+# column selection; no field arithmetic or new choice of quotient basis is needed.
+function _basis_completion_from_basis(Cbasis::Matrix{K}; field::AbstractCoeffField=field_from_eltype(K)) where {K}
     _validate_complex_field(K, field)
     k = size(Cbasis, 1)
     if k == 0
-        return zeros(K, 0, 0)
+        return zeros(K, 0, 0), Int[]
     end
     r = size(Cbasis, 2)
     if r == k
-        return Cbasis
+        return Cbasis, Int[]
     end
     if r == 0
         I = zeros(K, k, k)
         @inbounds for i in 1:k
             I[i, i] = one(K)
         end
-        return I
+        return I, collect(1:k)
     end
 
+    # Pivot columns of the transpose identify an invertible row minor.
+    # Retain the numerical field's pivot selection and tolerance policy.
     rows = Matrix(transpose(Cbasis))
     _, pivs = field isa RealField ? FieldLinAlg._colspace_with_pivots(field, rows) :
                                   FieldLinAlg.rref(field, rows; pivots=true)
@@ -554,14 +515,14 @@ function extend_to_basis_from_basis(Cbasis::Matrix{K}; field::AbstractCoeffField
     end
     B = hcat(Cbasis, Q)
     size(B, 2) == k || error("extend_to_basis_from_basis: could not extend to a full basis")
-    return B
+    return B, comp_rows
 end
 
 @inline function _cohomology_completion_from_basis(Cbasis::Matrix{K}; field::AbstractCoeffField=field_from_eltype(K)) where {K}
-    Bfull = extend_to_basis_from_basis(Cbasis; field=field)
+    Bfull, comp_rows = _basis_completion_from_basis(Cbasis; field=field)
     r = size(Cbasis, 2)
     Q = @view Bfull[:, (r + 1):end]
-    return Bfull, Matrix{K}(Q)
+    return Bfull, Matrix{K}(Q), comp_rows
 end
 
 # ----------------------------
@@ -947,8 +908,7 @@ function _cohomology_coord_plan(H::CohomologyData{QQ})
     kfac = _fullcolumn_factor!(QQField(), H.K, H.Kfactor)
     bfac = _fullcolumn_factor!(QQField(), H.Bfull, H.Bfull_factor)
     rows_new = copy(kfac.rows)
-    proj_new = Matrix{QQ}(undef, H.dimH, length(rows_new))
-    mul!(proj_new, Matrix{QQ}(@view(bfac.invB[H.dimB + 1:end, :])), kfac.invB)
+    proj_new = FieldLinAlg._mulQQ(@view(bfac.invB[H.dimB + 1:end, :]), kfac.invB)
     return lock(getfield(H, :_cache_lock)) do
         rows = getfield(H, :_coord_rows)
         proj = getfield(H, :_coord_proj)
@@ -972,9 +932,7 @@ function _cohomology_coordinates_from_cocycles(H::CohomologyData{QQ},
         "_cohomology_coordinates_from_cocycles: expected $(H.dimC) rows, got $(size(z, 1))"))
     H.dimH == 0 && return zeros(QQ, 0, size(z, 2))
     plan = _cohomology_coord_plan(H)
-    out = Matrix{QQ}(undef, H.dimH, size(z, 2))
-    mul!(out, plan.proj, view(z, plan.rows, :))
-    return out
+    return FieldLinAlg._mulQQ(plan.proj, view(z, plan.rows, :))
 end
 
 @inline function _cohomology_coordinates_vector(H::CohomologyData{K},
@@ -988,7 +946,7 @@ function _cohomology_coordinates_vector(H::CohomologyData{QQ},
         "_cohomology_coordinates_vector: expected length $(H.dimC), got $(length(z))"))
     H.dimH == 0 && return zeros(QQ, 0)
     plan = _cohomology_coord_plan(H)
-    return plan.proj * view(z, plan.rows)
+    return FieldLinAlg._mulQQ(plan.proj, view(z, plan.rows))
 end
 
 function _cohomology_boundary_coordinates(H::CohomologyData{K}) where {K}
@@ -1028,8 +986,8 @@ function _ensure_cohomology_reps!(H::CohomologyData{K}) where {K}
         Q_new = Bfull_new
         Hrep_new = Kbasis
     else
-        Bfull_new, Q_new = _cohomology_completion_from_basis(H.Cx; field=H.field)
-        Hrep_new = Kbasis * Q_new
+        Bfull_new, Q_new, comp_rows = _cohomology_completion_from_basis(H.Cx; field=H.field)
+        Hrep_new = Kbasis[:, comp_rows]
     end
 
     return lock(getfield(H, :_cache_lock)) do
@@ -1543,8 +1501,8 @@ function _ensure_homology_reps!(H::HomologyData{K}) where {K}
         Q_new = Bfull_new
         Hrep_new = Zbasis
     else
-        Bfull_new, Q_new = _cohomology_completion_from_basis(getfield(H, :Cx); field=H.field)
-        Hrep_new = Zbasis * Q_new
+        Bfull_new, Q_new, comp_rows = _cohomology_completion_from_basis(getfield(H, :Cx); field=H.field)
+        Hrep_new = Zbasis[:, comp_rows]
     end
 
     return lock(getfield(H, :_cache_lock)) do
@@ -1649,8 +1607,8 @@ function _homology_data_from_bases(::Type{K},
                                _fullcolumn_factor_ref(),
                                _fullcolumn_factor_ref(), field)
     end
-    Bfull, Q = _cohomology_completion_from_basis(Cx; field=field)
-    Hrep = Z * Q
+    Bfull, Q, comp_rows = _cohomology_completion_from_basis(Cx; field=field)
+    Hrep = Z[:, comp_rows]
     return HomologyData{K}(ReentrantLock(), s, dimCs, dimZ, rB, dimH, Z, B, Cx, Q, Bfull, Hrep,
                            _fullcolumn_factor_ref(),
                            _fullcolumn_factor_ref(), field)
@@ -2870,9 +2828,8 @@ function _subquotient_data_from_coords(Zbasis::AbstractMatrix{K},
     dimB = size(Bcoords, 2)
     Bbasis = Zmat * Bcoords
 
-    Bfull = extend_to_basis_from_basis(Bcoords; field=field)
-    Hcoords = Bfull[:, (dimB+1):dimZ]
-    Hrep = Zmat * Hcoords
+    Bfull, Hcoords, comp_rows = _cohomology_completion_from_basis(Bcoords; field=field)
+    Hrep = Zmat[:, comp_rows]
     dimH = size(Hcoords, 2)
 
     return SubquotientData{K}(ambient_dim, dimZ, dimB, dimH,

@@ -13,7 +13,7 @@ module ExtTorSpaces
     using LinearAlgebra: rank, I, mul!
     using SparseArrays
 
-    using ...CoreModules: AbstractCoeffField, RealField, ResolutionCache, ResolutionKey3, ResolutionKey4,
+    using ...CoreModules: AbstractCoeffField, RealField, QQ, ResolutionCache, ResolutionKey3, ResolutionKey4,
                           ExtProjectivePayload, ExtInjectivePayload, ExtUnifiedPayload,
                           TorFirstPayload, TorSecondPayload,
                           _resolution_key3, _resolution_key4, field_from_eltype
@@ -1406,6 +1406,21 @@ module ExtTorSpaces
         return (maxdeg, resP, resE, DC, Tot, dims_blocks, offs_blocks, tot_offsets, tot_tmin, basesP0, activeP0)
     end
 
+    # The two models must describe inverse changes of Ext coordinates. Numerical
+    # solves need the coefficient field's tolerance; exact fields retain equality.
+    function _check_ext_comparison_inverses(field::AbstractCoeffField,
+                                            P2I::Matrix{K}, I2P::Matrix{K},
+                                            t::Int) where {K}
+        identity = Matrix{K}(I, size(P2I, 2), size(P2I, 2))
+        for (left, right, label) in ((I2P, P2I, "I2P*P2I"), (P2I, I2P, "P2I*I2P"))
+            product = left * right
+            valid = field isa RealField ?
+                isapprox(product, identity; atol=field.atol, rtol=field.rtol) : product == identity
+            valid || error("comparison: $(label) != identity at t=$(t)")
+        end
+        return nothing
+    end
+
     function _comparison_projective_injective_degree(
         Eproj::ExtSpaceProjective{K},
         Einj::ExtSpaceInjective{K},
@@ -1455,13 +1470,7 @@ module ExtTorSpaces
             if dp != di
                 error("comparison: dim mismatch at t=$(t): projective=$(dp), injective=$(di)")
             end
-            I_d = Matrix{K}(I, dp, dp)
-            if I2P * P2I != I_d
-                error("comparison: I2P*P2I != identity at t=$(t)")
-            end
-            if P2I * I2P != I_d
-                error("comparison: P2I*I2P != identity at t=$(t)")
-            end
+            _check_ext_comparison_inverses(field, P2I, I2P, t)
         end
 
         return P2I, I2P
@@ -1536,13 +1545,7 @@ module ExtTorSpaces
                 if dp != di
                     error("comparison: dim mismatch at t=$(t): projective=$(dp), injective=$(di)")
                 end
-                I_d = Matrix{K}(I, dp, dp)
-                if I2P[t+1] * P2I[t+1] != I_d
-                    error("comparison: I2P*P2I != identity at t=$(t)")
-                end
-                if P2I[t+1] * I2P[t+1] != I_d
-                    error("comparison: P2I*I2P != identity at t=$(t)")
-                end
+                _check_ext_comparison_inverses(field, P2I[t + 1], I2P[t + 1], t)
             end
         end
 
@@ -1874,18 +1877,29 @@ module ExtTorSpaces
     Return a basis of Ext^t(M,N) as cocycle representatives in the requested model,
     ordered by the canonical coordinate basis.
 
-    This is the "coherent basis transport" API: the basis vectors correspond to the
-    same Ext classes regardless of which model you ask for.
+    The vectors represent the same Ext classes in either model and are independent
+    copies. Requesting the canonical model does not construct the other resolution.
     """
     function basis(E::ExtSpace{K}, t::Int; model::Symbol=:canonical) where {K}
+        @assert 0 <= t <= E.tmax
+        model === :canonical && (model = E.canon)
+        model in (:projective, :injective) ||
+            error("basis(::ExtSpace): model must be :projective, :injective, or :canonical")
+        # An empty basis needs neither representatives nor a comparison map.
         d = dim(E, t)
-        out = Vector{Vector{K}}(undef, d)
-        for i in 1:d
-            e = zeros(K, d)
-            e[i] = one(K)
-            out[i] = representative(E, t, e; model=model)
+        d == 0 && return Vector{Vector{K}}()
+        if model === E.canon
+            native = model === :projective ? _ensure_ext_projective!(E) : _ensure_ext_injective!(E)
+            return basis(native, t)
         end
-        return out
+
+        # Native bases can have different coordinates and order. Transport the
+        # entire canonical basis together, then copy its representative columns.
+        transport = model === :projective ? _comparison_I2P(E, t) : _comparison_P2I(E, t)
+        native = model === :projective ? _ensure_ext_projective!(E) : _ensure_ext_injective!(E)
+        Hrep = native.cohom[t + 1].Hrep
+        representatives = K === QQ ? FieldLinAlg._mulQQ(Hrep, transport) : Hrep * transport
+        return [Vector{K}(column) for column in eachcol(representatives)]
     end
 
     # ----------------------------

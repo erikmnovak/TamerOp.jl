@@ -110,5 +110,16 @@ Numerical fields keep
 their checked boundary solve at construction, with the supplied tolerances.
 Cached basis matrices are shared data and should be treated as read-only.
 
+For a unified Ext result, `basis(E, t)` returns copies of its chosen
+representatives. Repeating that call reuses the stored basis. If you request
+the other resolution model with `model=:projective` or `model=:injective`,
+the comparison map carries those same classes into that model; the order
+still agrees with the result's canonical coordinates. Thus changing models
+does not change which Ext class a coordinate vector describes.
+Comparisons check inverse identities exactly over exact fields and with the
+supplied field tolerances for numerical coefficients.
+Public coordinate queries continue to check that the supplied vectors are
+cycles, even after a coordinate calculation has been cached.
+
 Validators and explicit mathematical queries are separate from passive
 inspection: they can perform the work required by their documented contracts.

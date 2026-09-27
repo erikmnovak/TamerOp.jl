@@ -4589,3 +4589,155 @@ end
         end
     end
 end
+
+
+@testset "Quotient representatives preserve selected-column ordering" begin
+    with_fields(FIELDS_FULL) do field
+        K = CM.coeff_type(field)
+        same = (A, B) -> field isa CM.RealField ?
+            isapprox(A, B; atol=field.atol, rtol=field.rtol) : A == B
+        I4 = Matrix{K}(I, 4, 4)
+        # Z is the graph of a linear map k^4 -> k^2. Modding out its
+        # second and fourth columns leaves the first and third, in that order.
+        Z = K[1 0 0 0; 0 1 0 0; 0 0 1 0; 0 0 0 1; 1 1 0 1; 0 1 1 0]
+        Cx = I4[:, [2, 4]]
+        B = Z[:, [2, 4]]
+        expected = Z[:, [1, 3]]
+        Zcopy, Bcopy = copy(Z), copy(B)
+        basis_full, complement, indices = CC._cohomology_completion_from_basis(Cx; field=field)
+        @test indices == [1, 3]
+        @test complement == I4[:, [1, 3]]
+        @test basis_full == hcat(Cx, I4[:, [1, 3]])
+        @test CC.extend_to_basis_from_basis(Cx; field=field) == basis_full
+
+        # Edge cases preserve dimensions, identity completion, and the empty
+        # quotient; no artificial representative is introduced.
+        for (numerator_dim, boundary_dim) in ((0, 0), (4, 0), (4, 4))
+            C = Matrix{K}(I, numerator_dim, numerator_dim)[:, 1:boundary_dim]
+            full, Q, selected = CC._cohomology_completion_from_basis(C; field=field)
+            @test full == Matrix{K}(I, numerator_dim, numerator_dim)
+            @test selected == collect(boundary_dim+1:numerator_dim)
+            @test size(Q) == (numerator_dim, numerator_dim-boundary_dim)
+            @test full[:, boundary_dim+1:end] == Q
+        end
+
+        # A nontrivial map of Z/B acts by U in the independently known basis.
+        U = K[1 1; -1 0]
+        G = Matrix{K}(I, 6, 6)
+        G[5:6, 1:4] = Z[5:6, :]
+        Ginv = Matrix{K}(I, 6, 6)
+        Ginv[5:6, 1:4] = -Z[5:6, :]
+        Fstandard = Matrix{K}(I, 6, 6)
+        Fstandard[[1, 3], [1, 3]] = U
+        F = G * Fstandard * Ginv
+        weights = K[1 -1 2; 0 1 -1]
+        boundary_weights = K[1 0 -1; -1 1 0]
+        cycles = expected * weights + B * boundary_weights
+        noncycle = K[0, 0, 0, 0, 1, 0]
+
+        for lazy in (true, false)
+            coho = CC._cohomology_data_from_bases(K, 1, 6, Z, B; lazy_reps=lazy, field=field)
+            homo = CC._homology_data_from_bases(K, 1, 6, Z, B; lazy_reps=lazy, field=field)
+            for H in (coho, homo)
+                @test H.field === field
+                lazy && (@test getfield(H, :_Hrep) === nothing)
+                @test same(CC.basis(H), expected)
+                @test same(H.Q, complement)
+                @test same(H.Bfull, basis_full)
+                @test same(CC.coordinates(H, cycles), weights)
+                @test same(CC.coordinates(H, B), zeros(K, 2, 2))
+                @test same(CC.coordinates(H, expected), Matrix{K}(I, 2, 2))
+                @test size(CC.coordinates(H, zeros(K, 6, 0))) == (2, 0)
+                @test_throws ErrorException CC.coordinates(H, noncycle)
+                @test_throws ErrorException CC.coordinates(H, hcat(cycles, noncycle))
+            end
+            @test same(CC.induced_map_on_cohomology(coho, coho, F), U)
+            @test same(CC.induced_map_on_homology(homo, homo, F), U)
+            @test same(CC.induced_map_on_cohomology(coho, coho, F * F), U * U)
+        end
+        SQ = CC.subquotient_data(Z, hcat(B, B[:, 1]); field=field)
+        @test same(CC.basis(SQ), expected)
+        @test same(CC.coordinates(SQ, cycles), weights)
+        @test same(CC.coordinates(SQ, B), zeros(K, 2, 2))
+        @test same(CC.coordinates(SQ, expected), Matrix{K}(I, 2, 2))
+        @test_throws ErrorException CC.coordinates(SQ, noncycle)
+        @test_throws ErrorException CC.coordinates(SQ, hcat(cycles, noncycle))
+        @test Z == Zcopy
+        @test B == Bcopy
+
+        for boundaries in (zeros(K, 6, 0), Z)
+            for H in (CC._cohomology_data_from_bases(K, 0, 6, Z, boundaries; field=field),
+                      CC._homology_data_from_bases(K, 0, 6, Z, boundaries; field=field),
+                      CC.subquotient_data(Z, boundaries; field=field))
+                hdim = 4 - size(boundaries, 2)
+                @test size(CC.basis(H)) == (6, hdim)
+                @test size(CC.coordinates(H, Z)) == (hdim, 4)
+                @test_throws ErrorException CC.coordinates(H, noncycle)
+            end
+        end
+    end
+end
+
+@testset "QQ quotient coordinate projections preserve checked public coordinates" begin
+    field = CM.QQField()
+    # This rational graph basis is deliberately not orthonormal; coordinates
+    # are known from its identity first block, independently of any solver.
+    Z = QQ[1 0 0 0; 0 1 0 0; 0 0 1 0; 0 0 0 1;
+           1//2 -2//3 0 5//7; 0 7//11 -3//5 0]
+    B = Z[:, [2, 4]]
+    reps = Z[:, [1, 3]]
+    weights = QQ[2//3 -7//13 0; -1//5 3//11 2//17]
+    boundaries = QQ[1//7 0 -3//5; -2//3 1//13 0]
+    z = reps * weights + B * boundaries
+    fresh = CC._cohomology_data_from_bases(QQ, 1, 6, Z, B; field=field)
+    @test getfield(fresh, :_Hrep) === nothing
+    @test getfield(fresh, :_coord_proj) === nothing
+
+    # Competing first readers must publish a consistent basis and projection.
+    # The quotient projection is used only on independently known cocycles.
+    jobs = [Threads.@spawn begin
+        batch = CC._cohomology_coordinates_from_cocycles(fresh, z)
+        vector = CC._cohomology_coordinates_vector(fresh, view(z, :, 2))
+        (CC.basis(fresh), CC._cohomology_coord_plan(fresh), batch, vector)
+    end for _ in 1:16]
+    results = fetch.(jobs)
+    plan = CC._cohomology_coord_plan(fresh)
+    for (basis, cached, batch, vector) in results
+        @test basis === CC.basis(fresh)
+        @test basis == reps
+        @test cached.rows === plan.rows
+        @test cached.proj === plan.proj
+        @test batch == weights
+        @test vector == weights[:, 2]
+    end
+
+    # Compare the composed projection with its two exact changes of basis.
+    kfac, bfac = fresh.Kfactor[], fresh.Bfull_factor[]
+    @test plan.proj == bfac.invB[3:4, :] * kfac.invB
+    for input in (z, sparse(z), view(hcat(z, z), :, 1:3))
+        @test CC.coordinates(fresh, input) == weights
+        @test CC._cohomology_coordinates_from_cocycles(fresh, input) == weights
+    end
+    for input in (z[:, 2], sparse(z[:, 2]), view(z, :, 2))
+        @test CC.coordinates(fresh, input) == weights[:, 2:2]
+        @test CC._cohomology_coordinates_vector(fresh, input) == weights[:, 2]
+    end
+    @test CC._cohomology_coordinates_from_cocycles(fresh, B) == zeros(QQ, 2, 2)
+    @test size(CC._cohomology_coordinates_from_cocycles(fresh, zeros(QQ, 6, 0))) == (2, 0)
+    @test_throws DimensionMismatch CC._cohomology_coordinates_from_cocycles(fresh, zeros(QQ, 5, 2))
+    @test_throws DimensionMismatch CC._cohomology_coordinates_vector(fresh, zeros(QQ, 5))
+
+    # Retaining a projection does not authorize the public API to discard the
+    # part of an arbitrary vector outside Z, even when the quotient is zero.
+    bad = QQ[0, 0, 0, 0, 1, 0]
+    @test_throws ErrorException CC.coordinates(fresh, bad)
+    @test_throws ErrorException CC.coordinates(fresh, hcat(z, bad))
+    @test_throws ErrorException CC.coordinates(fresh, zeros(QQ, 5, 1))
+    zeroquotient = CC._cohomology_data_from_bases(QQ, 1, 6, Z, Z; field=field)
+    @test CC.coordinates(zeroquotient, z) == zeros(QQ, 0, 3)
+    @test_throws ErrorException CC.coordinates(zeroquotient, bad)
+    @test size(CC._cohomology_coordinates_from_cocycles(zeroquotient, z)) == (0, 3)
+    @test isempty(CC._cohomology_coordinates_vector(zeroquotient, z[:, 1]))
+    @test_throws DimensionMismatch CC._cohomology_coordinates_from_cocycles(zeroquotient, zeros(QQ, 5, 1))
+    @test_throws DimensionMismatch CC._cohomology_coordinates_vector(zeroquotient, zeros(QQ, 5))
+end

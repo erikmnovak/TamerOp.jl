@@ -2,9 +2,11 @@
 
 ## Unreleased documentation updates
 
+- Add a [contributor guide](CONTRIBUTING.md) covering issue reports, development
+  setup, focused checks, documentation, and pull requests.
 - Use the expanded name, Toolkit for Algebraic Module Encodings over R^n
   and Other Posets, in the software citation. Explain the connection to
-  tameness and the project's origin as an implementation of Miller's theory.
+  tameness and the project's origin as an implementation of Ezra Miller's theory.
 - Center the README and Julia help on the finite encoded object and the
   computations it supports.
 - Add a [finite-encoding introduction](docs/finite_encodings.md) and a

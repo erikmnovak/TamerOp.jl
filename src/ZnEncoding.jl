@@ -3278,7 +3278,7 @@ Convert a Z^n flange presentation `FG` into a fringe presentation on the finite
 encoding poset `P` determined by `pi`.
 
 Interpretation (paper-level):
-This is the direct "flange -> fringe" bridge (cf. Miller, Remark 6.14): once an
+This is the direct "flange -> fringe" bridge (cf. Ezra Miller, Remark 6.14): once an
 encoding `pi : Z^n -> P` is fixed, the fringe presentation on `P` is obtained by
 
 1. pushing forward each flat label to an upset in `P`,

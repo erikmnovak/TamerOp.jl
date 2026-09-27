@@ -70,7 +70,7 @@ poset, along with a map assigning original parameter values to finite labels.
 For a valid encoding of the represented module, these pieces recover both its
 spaces and its structure maps.
 
-Miller's theory supplies the connection between these finite descriptions.
+Ezra Miller's theory supplies the connection between these finite descriptions.
 Under its hypotheses, tameness can be expressed through finite encodings,
 presentations using regions called upsets and downsets, and resolutions built
 from such region-supported modules. These are related ways of describing the
@@ -599,8 +599,10 @@ help someone reproduce the computation.
 
 ## Developing TamerOp
 
-This section is for contributors editing the library. Users running analyses
-can follow the installation instructions above without cloning the repository.
+This section is for contributors editing the library. The
+[contributor guide](CONTRIBUTING.md) explains how to report a problem, set up a
+checkout, and send a pull request. Users running analyses can follow the
+installation instructions above without cloning the repository.
 
 From a clone, instantiate its development environment, then run selected tests:
 

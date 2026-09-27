@@ -103,11 +103,11 @@ isomorphisms in the chosen bases. Ext defined by resolutions agrees with
 derived-category and Yoneda Ext under the usual resolution hypotheses; see the
 [Stacks Project, Ext groups](https://stacks.math.columbia.edu/tag/06XP).
 
-Miller's finite-encoding and syzygy theorems establish finite representations
+Ezra Miller's finite-encoding and syzygy theorems establish finite representations
 and indicator resolutions for tame modules; they do not state that every
 finite encoding preserves ambient Ext. The category of tame modules in that
 theory also specifies tame morphisms, rather than silently taking every
-ambient morphism. See [Miller, Sections 4.1, 4.5, and 6.2](https://arxiv.org/html/2008.00063).
+ambient morphism. See [Ezra Miller, Sections 4.1, 4.5, and 6.2](https://arxiv.org/html/2008.00063).
 
 ### Why exact pullback is insufficient
 

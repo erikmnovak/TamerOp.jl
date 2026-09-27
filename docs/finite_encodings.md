@@ -112,7 +112,7 @@ possible. “Over $\mathbb{R}^n$ and Other Posets” reflects supported real
 parameter domains, integer lattices, and finite partially ordered sets.
 
 The name also recalls **tameness**. An infinite domain need not require an
-infinite amount of data to describe how a module varies. Miller's tameness
+infinite amount of data to describe how a module varies. Ezra Miller's tameness
 condition makes that finiteness precise. His theory relates finite encodings,
 presentations, and resolutions by basic modules supported on order-theoretic
 regions, under the hypotheses stated in the paper. These are the mathematical

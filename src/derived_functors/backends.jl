@@ -160,7 +160,7 @@ module Backends
 
     Compute Ext in `Rep_k(P)` for finite encodings of two R^n PL presentations.
 
-    The computation uses the chosen finite encoding poset. Miller's finite
+    The computation uses the chosen finite encoding poset. Ezra Miller's finite
     encoding theorem does not by itself identify this with Ext over R^n;
     such an identification needs additional comparison hypotheses.
 

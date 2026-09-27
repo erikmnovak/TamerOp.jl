@@ -95,5 +95,20 @@ geometric measurement.
   always has `nvertices^2` slots, even when its intermediate rank table omits
   zero entries.
 
+For example, after constructing a finite encoded module, you may first want
+only the dimensions of its Ext spaces. Over an exact field, that query retains
+the cycles and boundaries but leaves the choice of quotient representatives
+and their coordinates until you request them. You can still ask the same
+result for representatives, coordinates, induced maps, and products. The first
+such request does the additional work; later requests reuse the stored data.
+These computations remain in the finite-poset category described in
+[Mathematical categories](math_categories.md).
+
+Deferring coordinates does not defer checking that boundaries are cycles.
+Cohomology results from exact complexes check that condition when built.
+Numerical fields keep
+their checked boundary solve at construction, with the supplied tolerances.
+Cached basis matrices are shared data and should be treated as read-only.
+
 Validators and explicit mathematical queries are separate from passive
 inspection: they can perform the work required by their documented contracts.

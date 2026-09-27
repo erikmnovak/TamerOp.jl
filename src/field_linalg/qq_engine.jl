@@ -280,6 +280,29 @@ function _solve_fullcolumn_rrefQQ(B::AbstractMatrix{<:QQ}, Y::AbstractVecOrMat{<
     return want_vec ? vec(X) : X
 end
 
+# Exact products for Julia QQ solve factors. Generic matrix multiplication
+# performs rational arithmetic even on structural zeros, creating BigInt
+# temporaries for every dense entry. Factors and cycle bases commonly contain
+# many zeros; skip them without changing the selected solver backend.
+function _mulQQ(A::AbstractMatrix{QQ}, B::AbstractVecOrMat{QQ})
+    m, k = size(A)
+    size(B, 1) == k || throw(DimensionMismatch("A and B inner dimensions must match"))
+    n = size(B, 2)
+    C = B isa AbstractVector ? zeros(QQ, m) : zeros(QQ, m, n)
+    @inbounds for j in 1:n
+        for t in 1:k
+            b = B[t, j]
+            iszero(b) && continue
+            for i in 1:m
+                a = A[i, t]
+                iszero(a) && continue
+                C[i, j] += a * b
+            end
+        end
+    end
+    return C
+end
+
 # Fast solve using factor data
 function _solve_fullcolumn_factorQQ(B::AbstractMatrix{<:QQ}, fac::FullColumnFactor{QQ},
                                     Y::AbstractVecOrMat{<:QQ};
@@ -290,7 +313,7 @@ function _solve_fullcolumn_factorQQ(B::AbstractMatrix{<:QQ}, fac::FullColumnFact
         length(Y) == m || throw(DimensionMismatch("B and Y must have same row count"))
         ysub = Vector{QQ}(undef, n)
         _gather_rows!(ysub, Y, fac.rows)
-        x = fac.invB * ysub
+        x = _mulQQ(fac.invB, ysub)
         if check_rhs && !_verify_solveQQ(B, x, Y)
             error("right-hand side is not in column space of B")
         end
@@ -301,13 +324,11 @@ function _solve_fullcolumn_factorQQ(B::AbstractMatrix{<:QQ}, fac::FullColumnFact
     size(Ymat, 1) == m || throw(DimensionMismatch("B and Y must have same row count"))
     rhs = size(Ymat, 2)
     X = if rhs < _QQ_FACTOR_GATHER_MIN_RHS[]
-        fac.invB * view(Ymat, fac.rows, :)
+        _mulQQ(fac.invB, view(Ymat, fac.rows, :))
     else
         Ysub = Matrix{QQ}(undef, n, rhs)
         _gather_rows!(Ysub, Ymat, fac.rows)
-        Xtmp = Matrix{QQ}(undef, n, rhs)
-        mul!(Xtmp, fac.invB, Ysub)
-        Xtmp
+        _mulQQ(fac.invB, Ysub)
     end
 
     if check_rhs && !_verify_solveQQ(B, X, Ymat)
@@ -427,9 +448,15 @@ function _solve_fullcolumn_nemoQQ(B::AbstractMatrix{<:QQ}, Y::AbstractVecOrMat{<
         _gather_rows!(tmp, Ymat, fac.rows)
     end
     Xn = fac.invB * _to_fmpq_mat(Ysub)
+    # Keep dense verification in the selected exact backend. Converting X
+    # first and multiplying Rational{BigInt} matrices discards the benefit of
+    # the native solve. Sparse inputs retain their sparse certificate below.
+    sparse_check = issparse(B)
+    if check_rhs && !sparse_check && _to_fmpq_mat(B) * Xn != _to_fmpq_mat(Ymat)
+        error("solve_fullcolumn_nemoQQ: RHS check failed")
+    end
     X = _from_fmpq_mat(Xn)
-
-    if check_rhs && !_verify_solveQQ(B, X, Ymat)
+    if check_rhs && sparse_check && !_verify_solveQQ(B, X, Ymat)
         error("solve_fullcolumn_nemoQQ: RHS check failed")
     end
 
@@ -1129,13 +1156,30 @@ function _verify_nullspaceQQ(A::AbstractMatrix{QQ}, N::AbstractMatrix{QQ})::Bool
 end
 
 function _verify_solveQQ(B::AbstractMatrix{QQ}, X::AbstractVecOrMat{QQ}, Y::AbstractVecOrMat{QQ})::Bool
-    # Keep vector and matrix RHS contracts distinct, and compare exactly without
-    # densifying the RHS or copying the product merely to verify a solution.
+    # Keep vector and matrix RHS contracts distinct. Dense certificates stream
+    # each dot product, skipping structural zeros and avoiding a full product
+    # allocation. Sparse wrappers keep Julia's sparse multiplication; direct
+    # CSC inputs use the column-streaming methods below.
     ndims(X) == ndims(Y) || return false
     size(X, 1) == size(B, 2) || return false
     size(Y, 1) == size(B, 1) || return false
     size(X, 2) == size(Y, 2) || return false
-    return B * X == Y
+    isempty(X) && return all(iszero, Y)
+    issparse(B) && return B * X == Y
+    @inbounds for j in axes(Y, 2)
+        for i in axes(Y, 1)
+            value = zero(QQ)
+            for t in axes(B, 2)
+                b = B[i, t]
+                iszero(b) && continue
+                x = X[t, j]
+                iszero(x) && continue
+                value += b * x
+            end
+            value == Y[i, j] || return false
+        end
+    end
+    return true
 end
 
 function _verify_solveQQ(B::SparseMatrixCSC{QQ,Int}, X::AbstractVector{QQ}, Y::AbstractVector{QQ})::Bool

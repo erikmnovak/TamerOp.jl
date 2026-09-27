@@ -61,6 +61,86 @@ function _derived_window_chain(field)
             R1=interval(Pop, 1, 1), R2=interval(Pop, 2, 2), Rfull=interval(Pop, 2, 1))
 end
 
+@testset "Ext dimensions defer quotient data without losing maps and products" begin
+    with_fields(filter(field -> !(field isa CM.RealField), FIELDS_FULL)) do field
+        P = diamond_poset()
+        K = CM.coeff_type(field)
+        c(x) = CM.coerce(field, x)
+        # Four vertex simples plus the constant projective-injective module.
+        # Invertible integral changes of basis mix the summands in every
+        # characteristic; the cochain complex has actual nonzero boundaries.
+        gauge = [K[1 c(v); 0 1] for v in 1:4]
+        inverse_gauge = [K[1 -c(v); 0 1] for v in 1:4]
+        edges = Dict((u, v) => gauge[v] * K[0 0; 0 1] * inverse_gauge[u]
+                     for (u, v) in FF.cover_edges(P))
+        M = MD.PModule{K}(P, fill(2, 4), edges; field=field)
+        A = DF.ExtAlgebra(M, OPT.DerivedFunctorOptions(maxdeg=2, model=:projective))
+        E = DF.underlying_ext_space(A)
+        @test [DF.dim(E, t) for t in 0:2] == [7, 4, 1]
+        @test [H.dimB for H in E.cohom] == [0, 3, 1]
+        @test DF.ext_summary(E).degree_dimensions == Dict(0 => 7, 1 => 4, 2 => 1)
+        @test all(H -> getfield(H, :_Hrep) === nothing, E.cohom)
+        @test all(H -> getfield(H, :_Cx) === nothing, E.cohom[2:3])
+        @test isempty(DF.cached_product_degrees(A))
+
+        # Request degrees out of order: materializing one quotient must not
+        # force another. Every returned representative is a cocycle and every
+        # boundary addition must leave its class unchanged.
+        for t in (2, 0, 1)
+            H = E.cohom[t + 1]
+            standard = Matrix{K}(I, DF.dim(E, t), DF.dim(E, t))
+            for coord in eachcol(standard)
+                z = DF.representative(E, t, coord)
+                @test iszero(E.complex.d[t + 1] * z)
+                @test DF.coordinates(E, t, z) == coord
+                for boundary in eachcol(DF.boundaries(E, t))
+                    @test DF.coordinates(E, t, z + boundary) == coord
+                end
+            end
+            @test H.K * H.Cx == H.B
+            if t == 2
+                @test getfield(E.cohom[2], :_Cx) === nothing
+                @test getfield(E.cohom[2], :_Hrep) === nothing
+            end
+        end
+
+        # Projection onto the bottom simple has known ranks on Ext in each
+        # argument. This tests a genuine non-scalar map after lazy queries.
+        components = [zeros(K, 2, 2) for _ in 1:4]
+        components[1] = gauge[1] * K[1 0; 0 0] * inverse_gauge[1]
+        projection = MD.PMorphism(M, M, components)
+        @test MD.check_morphism(projection).valid
+        first_maps, second_maps = Matrix{K}[], Matrix{K}[]
+        for t in 0:2
+            first = Matrix(DF.ext_map_first(E, E, projection; t))
+            second = Matrix(DF.ext_map_second(E, E, projection; t))
+            @test FL.rank(field, first) == (1, 2, 1)[t + 1]
+            @test FL.rank(field, second) == (2, 0, 0)[t + 1]
+            @test first * first == first
+            @test second * second == second
+            @test first * second == second * first
+            push!(first_maps, first)
+            push!(second_maps, second)
+        end
+
+        I1 = Matrix{K}(I, 4, 4)
+        products = hcat([DF.multiply(A, 1, I1[:, i], 1, I1[:, j])
+                         for i in 1:4 for j in 1:4]...)
+        @test FL.rank(field, products) == 1
+        @test first_maps[3] * products == products * kron(I1, first_maps[2])
+        @test second_maps[3] * products == products * kron(second_maps[2], I1)
+        @test products * kron(first_maps[2], I1) ==
+              products * kron(I1, second_maps[2])
+        oneA = DF.unit(A)
+        for t in 0:2, x in DF.basis(A, t)
+            @test DF.coordinates(oneA * x) == DF.coordinates(x)
+            @test DF.coordinates(x * oneA) == DF.coordinates(x)
+        end
+        # Reusing the full result leaves its mathematical dimensions intact.
+        @test [DF.dim(E, t) for t in 0:2] == [7, 4, 1]
+    end
+end
+
 @testset "A74 numerical Ext on rationally conjugated diamond modules" begin
     # M is the sum of the four simples and the constant projective-injective
     # module on the diamond. Rational changes of basis mix these summands at

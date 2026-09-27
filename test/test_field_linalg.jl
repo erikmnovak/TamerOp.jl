@@ -3405,3 +3405,77 @@ end
         end
     end
 end
+
+@testset "QQ factored solve product and certification oracles" begin
+    field = CM.QQField()
+    for n in (2, 9, 28), rhs in (1, 7)
+        # Unit lower-bidiagonal minor, independent rational coefficients, and
+        # an all-zero last row give a predetermined solution and a direct
+        # inconsistency certificate. Large denominators exclude float shortcuts.
+        B = zeros(QQ, n + 3, n)
+        for j in 1:n
+            B[j, j] = 1
+            j < n && (B[j + 1, j] = QQ(j + 1, j + 3))
+            B[n + 1, j] = QQ(2j - 5, 3j + 2)
+            B[n + 2, j] = QQ((-1)^j * j, big(2)^150 + j)
+        end
+        X = [QQ(2i - 3j, i + 2j + 1) for i in 1:n, j in 1:rhs]
+        Y = B * X
+        bad = copy(Y); bad[end, end] = QQ(1, big(2)^180 + 3)
+        beforeB, beforeY, beforeX = deepcopy(B), deepcopy(Y), deepcopy(X)
+        for storage in (B, sparse(B), view(B, :, :), transpose(sparse(transpose(B))))
+            for backend in (:julia_exact, :nemo)
+                factor = FL.factor_fullcolumn(field, storage; backend=backend, cache=false)
+                inverse_before = deepcopy(factor.payload.invB)
+                FL._reset_conversion_counters!()
+                @test FL.solve_fullcolumn(field, storage, Y; factor=factor) == X
+                backend == :julia_exact && @test FL._conversion_counters().qq_to_nemo == 0
+                @test FL.solve_fullcolumn(field, storage, Y; factor=factor) == X
+                @test FL.solve_fullcolumn(field, storage, view(Y, :, 1); factor=factor) == X[:, 1]
+                @test_throws ErrorException FL.solve_fullcolumn(field, storage, bad; factor=factor)
+                @test_throws ErrorException FL.solve_fullcolumn(field, storage, bad[:, end]; factor=factor)
+                @test factor.payload.invB == inverse_before
+                @test FL.solve_fullcolumn(field, storage, Y; factor=factor) == X
+                @test_throws ErrorException FL.solve_fullcolumn(
+                    field, storage, Y; factor=factor,
+                    backend=backend == :nemo ? :julia_exact : :nemo)
+            end
+            @test FL._verify_solveQQ(storage, X, Y)
+            @test !FL._verify_solveQQ(storage, X, bad)
+        end
+        @test B == beforeB
+        @test X == beforeX
+        @test Y == beforeY
+    end
+
+    # Scratch arithmetic, if used by a kernel, must never alias input BigInts,
+    # other output entries, or a factor reused by concurrent readers.
+    B = QQ[1 0 0; 2 1 0; 0 3 1; 1 -1 2; 0 0 0]
+    X = QQ[1//3 1//3; 2//5 2//5; -3//7 -3//7]
+    Y = B * X
+    for backend in (:julia_exact, :nemo)
+        factor = FL.factor_fullcolumn(field, B; backend=backend, cache=false)
+        results = fetch.([Threads.@spawn FL.solve_fullcolumn(field, B, Y; factor=factor)
+                          for _ in 1:8])
+        @test all(==(X), results)
+        results[1][1, 1] = QQ(99)
+        @test results[1][1, 2] == X[1, 2]
+        @test all(==(X), results[2:end])
+        @test FL.solve_fullcolumn(field, B, Y; factor=factor) == X
+    end
+
+    # Cache lifecycle is unchanged: no eager factor on a disabled cache, reuse
+    # on repeated calls, and a new factor only after an explicit reset.
+    FL._clear_fullcolumn_cache!()
+    @test FL.solve_fullcolumn(field, B, Y; backend=:julia_exact, cache=false) == X
+    @test !haskey(FL._FULLCOLUMN_FACTOR_CACHE, B)
+    @test FL.solve_fullcolumn(field, B, Y; backend=:julia_exact, cache=true) == X
+    cached = FL._FULLCOLUMN_FACTOR_CACHE[B]
+    @test FL.solve_fullcolumn(field, B, Y; backend=:julia_exact, cache=true) == X
+    @test FL._FULLCOLUMN_FACTOR_CACHE[B] === cached
+    FL._clear_fullcolumn_cache!()
+    @test !haskey(FL._FULLCOLUMN_FACTOR_CACHE, B)
+    @test FL.solve_fullcolumn(field, B, Y; backend=:julia_exact, cache=true) == X
+    @test FL._FULLCOLUMN_FACTOR_CACHE[B] !== cached
+    FL._clear_fullcolumn_cache!()
+end

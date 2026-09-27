@@ -855,8 +855,11 @@ This object stores:
 
 For ordinary use, start with `dimensions`, `basis`, `representatives`, and
 `coordinates` rather than inspecting the internal matrices directly.
-Lazy representatives and coordinate plans support concurrent queries. Returned
-basis matrices are shared cached data and must be treated as read-only.
+Exact complexes defer boundary coordinates and quotient representatives until
+they are requested; dimension queries do not construct them. Numerical fields
+retain the checked boundary solve at construction to preserve their tolerance
+contract. Lazy data support concurrent queries. Returned basis matrices are
+shared cached data and must be treated as read-only.
 """
 mutable struct CohomologyData{K}
     _cache_lock::ReentrantLock
@@ -867,7 +870,7 @@ mutable struct CohomologyData{K}
     dimH::Int
     K::Matrix{K}          # cycle basis in C^t
     B::Matrix{K}          # boundary basis in C^t
-    Cx::Matrix{K}         # boundary subspace basis in K-coordinates
+    _Cx::Union{Nothing,Matrix{K}}    # boundary subspace basis in K-coordinates
     _Q::Union{Nothing,Matrix{K}}      # complement basis in K-coordinates
     _Bfull::Union{Nothing,Matrix{K}}  # [Cx Q], square dimZ x dimZ, invertible
     _Hrep::Union{Nothing,Matrix{K}}   # cocycle representatives: K * Q
@@ -988,6 +991,21 @@ function _cohomology_coordinates_vector(H::CohomologyData{QQ},
     return plan.proj * view(z, plan.rows)
 end
 
+function _cohomology_boundary_coordinates(H::CohomologyData{K}) where {K}
+    Cx = lock(() -> getfield(H, :_Cx), getfield(H, :_cache_lock))
+    Cx !== nothing && return Cx::Matrix{K}
+
+    # A differential-derived exact complex already checked B ⊆ ker(d). Keep
+    # the solve's independent membership check when coordinates are requested.
+    computed = _solve_fullcolumn_cached(H.field, H.K, H.B, H.Kfactor)
+    return lock(getfield(H, :_cache_lock)) do
+        Cx = getfield(H, :_Cx)
+        Cx !== nothing && return Cx::Matrix{K}
+        setfield!(H, :_Cx, computed)
+        return computed::Matrix{K}
+    end
+end
+
 function _ensure_cohomology_reps!(H::CohomologyData{K}) where {K}
     Bfull, Q, Hrep = lock(getfield(H, :_cache_lock)) do
         (getfield(H, :_Bfull), getfield(H, :_Q), getfield(H, :_Hrep))
@@ -1010,7 +1028,7 @@ function _ensure_cohomology_reps!(H::CohomologyData{K}) where {K}
         Q_new = Bfull_new
         Hrep_new = Kbasis
     else
-        Bfull_new, Q_new = _cohomology_completion_from_basis(getfield(H, :Cx); field=H.field)
+        Bfull_new, Q_new = _cohomology_completion_from_basis(H.Cx; field=H.field)
         Hrep_new = Kbasis * Q_new
     end
 
@@ -1033,7 +1051,9 @@ end
 @inline _cohomology_Hrep(H::CohomologyData{K}) where {K} = (_ensure_cohomology_reps!(H)[3]::Matrix{K})
 
 function Base.getproperty(H::CohomologyData{K}, s::Symbol) where {K}
-    if s === :Bfull
+    if s === :Cx
+        return _cohomology_boundary_coordinates(H)
+    elseif s === :Bfull
         return _cohomology_Bfull(H)
     elseif s === :Q
         return _cohomology_Q(H)
@@ -1044,7 +1064,7 @@ function Base.getproperty(H::CohomologyData{K}, s::Symbol) where {K}
 end
 
 Base.propertynames(::CohomologyData, private::Bool=false) =
-    private ? (:_cache_lock, :t, :dimC, :dimZ, :dimB, :dimH, :K, :B, :Cx, :_Q, :_Bfull, :_Hrep, :_coord_rows, :_coord_proj, :Kfactor, :Bfull_factor, :field) :
+    private ? (:_cache_lock, :t, :dimC, :dimZ, :dimB, :dimH, :K, :B, :_Cx, :_Q, :_Bfull, :_Hrep, :_coord_rows, :_coord_proj, :Kfactor, :Bfull_factor, :field) :
               (:t, :dimC, :dimZ, :dimB, :dimH, :K, :B, :Cx, :Q, :Bfull, :Hrep, :Kfactor, :Bfull_factor, :field)
 
 function _diff_summary(field::AbstractCoeffField, d::AbstractMatrix{K}) where {K}
@@ -1102,6 +1122,7 @@ function _cohomology_data_from_bases(::Type{K},
                                      Zin::AbstractMatrix{K},
                                      Bin::AbstractMatrix{K};
                                      lazy_reps::Bool=true,
+                                     cycle_differential::Union{Nothing,AbstractMatrix{K}}=nothing,
                                      field::AbstractCoeffField=field_from_eltype(K)) where {K}
     _validate_complex_field(K, field)
     Z = _concrete_mat(Zin)
@@ -1125,29 +1146,23 @@ function _cohomology_data_from_bases(::Type{K},
                                  _fullcolumn_factor_ref(), field)
     end
 
-    # Because Z and B are both bases and B subseteq span(Z), the coordinate matrix X in
-    # Z * X = B already has full column rank. Reusing it directly avoids an extra
-    # colspace pass on the hot exact-cohomology path.
-    Cx = _solve_fullcolumn_cached(field, Z, B)
-    rB = size(Cx, 2)
-    if rB == dimZ
-        Bfull = extend_to_basis_from_basis(Cx; field=field)
-        return CohomologyData{K}(ReentrantLock(), t, dimCt, dimZ, rB, 0, Z, B, Cx, _empty_mat(K, dimZ, 0), Bfull, _empty_mat(K, dimCt, 0), nothing, nothing,
-                                 _fullcolumn_factor_ref(),
-                                 _fullcolumn_factor_ref(), field)
+    # Differential-derived exact bases satisfy Z = ker(d). Checking d*B = 0
+    # certifies B ⊆ Z without constructing its coordinates. The bases-only
+    # caller has no such certificate. RealField keeps the original checked
+    # solve, whose residual tolerance need not agree with a check on d*B.
+    Cx = if lazy_reps && cycle_differential !== nothing && !(field isa RealField)
+        all(iszero, cycle_differential * B) || error(
+            "cohomology_data: incoming boundaries are not cycles in degree $t")
+        nothing
+    else
+        _solve_fullcolumn_cached(field, Z, B)
     end
-
-    dimH = dimZ - rB
-    if lazy_reps
-        return CohomologyData{K}(ReentrantLock(), t, dimCt, dimZ, rB, dimH, Z, B, Cx, nothing, nothing, nothing, nothing, nothing,
-                                 _fullcolumn_factor_ref(),
-                                 _fullcolumn_factor_ref(), field)
-    end
-    Bfull, Q = _cohomology_completion_from_basis(Cx; field=field)
-    Hrep = Z * Q
-    return CohomologyData{K}(ReentrantLock(), t, dimCt, dimZ, rB, dimH, Z, B, Cx, Q, Bfull, Hrep, nothing, nothing,
-                             _fullcolumn_factor_ref(),
-                             _fullcolumn_factor_ref(), field)
+    dimB <= dimZ || error("cohomology_data: boundary dimension exceeds cycle dimension")
+    H = CohomologyData{K}(ReentrantLock(), t, dimCt, dimZ, dimB, dimZ - dimB,
+                          Z, B, Cx, nothing, nothing, nothing, nothing, nothing,
+                          _fullcolumn_factor_ref(), _fullcolumn_factor_ref(), field)
+    lazy_reps || _ensure_cohomology_reps!(H)
+    return H
 end
 
 function _cohomology_data_from_diffs(::Type{K},
@@ -1172,7 +1187,8 @@ function _cohomology_data_from_diffs(::Type{K},
         _diff_summary(field, d_prev).img
     end
 
-    return _cohomology_data_from_bases(K, t, dimCt, Z, B; lazy_reps=lazy_reps, field=field)
+    return _cohomology_data_from_bases(K, t, dimCt, Z, B; lazy_reps=lazy_reps,
+                                       cycle_differential=d_curr, field=field)
 end
 
 # Compute cohomology data at degree t:
@@ -1187,12 +1203,14 @@ function _cohomology_data(C::CochainComplex{K},
     if summaries === nothing
         d_prev = (idx == 1) ? _empty_mat(K, dimCt, 0) : C.d[idx-1]
         d_curr = (idx > length(C.d)) ? _empty_mat(K, 0, dimCt) : C.d[idx]
-        return _cohomology_data_from_diffs(K, t, dimCt, d_prev, d_curr; lazy_reps=false, field=C.field)
+        return _cohomology_data_from_diffs(K, t, dimCt, d_prev, d_curr; lazy_reps=true, field=C.field)
     end
 
     Z = idx > length(C.d) ? _eye_mat(K, dimCt) : summaries[idx - summary_first_idx + 1].ker
     B = idx == 1 ? _empty_mat(K, dimCt, 0) : summaries[idx - summary_first_idx].img
-    return _cohomology_data_from_bases(K, t, dimCt, Z, B; lazy_reps=true, field=C.field)
+    d_curr = idx > length(C.d) ? _empty_mat(K, 0, dimCt) : C.d[idx]
+    return _cohomology_data_from_bases(K, t, dimCt, Z, B; lazy_reps=true,
+                                       cycle_differential=d_curr, field=C.field)
 end
 
 function cohomology_data(C::CochainComplex{K}, t::Int) where {K}
@@ -2136,22 +2154,16 @@ function _long_exact_sequence_full(tri::DistinguishedTriangle{K}) where {K}
     for (k, t) in enumerate(tmin:tmax)
         if t + 1 <= tmax
             Hn = HC[k + 1]
-            HCshift[k] = CohomologyData{K}(ReentrantLock(), t,
-                                           Hn.dimC,
-                                           Hn.dimZ,
-                                           Hn.dimB,
-                                           Hn.dimH,
-                                           Hn.K,
-                                           Hn.B,
-                                           Hn.Cx,
-                                           Hn.Q,
-                                           Hn.Bfull,
-                                           Hn.Hrep,
-                                           Hn._coord_rows,
-                                           Hn._coord_proj,
-                                           Hn.Kfactor,
-                                           Hn.Bfull_factor,
-                                           Hn.field)
+            # Changing the degree does not require materializing quotient
+            # coordinates. Copy the published cache state as one locked snapshot.
+            HCshift[k] = lock(getfield(Hn, :_cache_lock)) do
+                CohomologyData{K}(ReentrantLock(), t,
+                    Hn.dimC, Hn.dimZ, Hn.dimB, Hn.dimH, Hn.K, Hn.B,
+                    getfield(Hn, :_Cx), getfield(Hn, :_Q),
+                    getfield(Hn, :_Bfull), getfield(Hn, :_Hrep),
+                    getfield(Hn, :_coord_rows), getfield(Hn, :_coord_proj),
+                    Hn.Kfactor, Hn.Bfull_factor, Hn.field)
+            end
         else
             HCshift[k] = _zero_cohomology_data(K, t; field=C.field)
         end

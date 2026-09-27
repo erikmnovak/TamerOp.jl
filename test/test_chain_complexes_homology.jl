@@ -326,9 +326,9 @@ end
     @test H1deg.K * H1deg.Cx == H1deg.B
     @test size(H1deg.Cx, 2) == H1deg.dimB
     @test FL.rank(field, H1deg.Cx) == H1deg.dimB
-    @test getfield(H1deg, :_Q) !== nothing
-    @test getfield(H1deg, :_Bfull) !== nothing
-    @test getfield(H1deg, :_Hrep) !== nothing
+    @test getfield(H1deg, :_Q) === nothing
+    @test getfield(H1deg, :_Bfull) === nothing
+    @test getfield(H1deg, :_Hrep) === nothing
 
     Hall = CC.cohomology_data(Ccoh)
     H1 = Hall[2]
@@ -4202,8 +4202,8 @@ end
         entering = sparse(reshape(K[1, 0, 0], 3, 1))
         leaving = sparse(reshape(K[0, 0, 1], 1, 3))
         complex = CC.CochainComplex{K}(0, 2, [1, 3, 1], [entering, leaving])
-        # The windowed builder deliberately defers quotient representatives;
-        # the single-degree builder computes them eagerly during construction.
+        # Both windowed and single-degree cohomology builders defer quotient
+        # representatives until an explicit basis or coordinate query.
         cohomology = only(CC.cohomology_data(complex; degrees=1:1))
         homology = CC.homology_data(entering, leaving, 1)
         for object in (cohomology, homology)
@@ -4474,4 +4474,118 @@ end
     end
     @test_throws ErrorException CC.coordinates(restricted, [1e-5, 2.0])
     @test_throws ErrorException CC.coordinates(full, [1e-5, 2.0])
+end
+
+
+@testset "Lazy cohomology boundary coordinates preserve quotient algebra" begin
+    with_fields(FIELDS_FULL) do field
+        K = CM.coeff_type(field)
+        same = (A, B) -> field isa CM.RealField ?
+            isapprox(A, B; atol=field.atol, rtol=field.rtol) : A == B
+        # A unimodular change of basis of k -> k^4 -> k. The middle
+        # cohomology has basis classes G*e2, G*e3 over every supported field.
+        G = K[1 0 0 0; 1 1 0 0; 0 1 1 0; 0 0 1 1]
+        Ginv = K[1 0 0 0; -1 1 0 0; 1 -1 1 0; -1 1 -1 1]
+        d0, d1 = sparse(G[:, 1:1]), sparse(Ginv[4:4, :])
+        C = CC.CochainComplex{K}(0, 2, [1, 4, 1], [d0, d1]; field=field)
+        U = K[1 1; -1 0]
+        Fstandard = Matrix{K}(I, 4, 4)
+        Fstandard[2:3, 2:3] = U
+        F = G * Fstandard * Ginv
+        @test same(d1 * F, d1)
+        @test same(F * d0, d0)
+        eager = CC._cohomology_data_from_diffs(K, 1, 4, d0, d1;
+                                              lazy_reps=false, field=field)
+        for H in (CC.cohomology_data(C, 1), CC.cohomology_data(C)[2],
+                  only(CC.cohomology_data(C; degrees=1:1)))
+            @test CC.dimensions(H) == (ambient=4, cycles=3, boundaries=1, cohomology=2)
+            @test H.field === field
+            @test getfield(H, :_Hrep) === nothing
+            if !(field isa CM.RealField)
+                @test getfield(H, :_Cx) === nothing
+            end
+            initial = getfield(H, :_Cx)
+            @test CC.describe(H).dimensions == CC.dimensions(H)
+            @test !isempty(sprint(show, MIME"text/plain"(), H))
+            @test getfield(H, :_Cx) === initial
+            @test getfield(H, :_Hrep) === nothing
+            # Cx remains available, with its original mathematical meaning.
+            @test same(H.K * H.Cx, H.B)
+            @test H.Cx === getfield(H, :_Cx)
+            @test getfield(H, :_Hrep) === nothing
+            @test same(CC.basis(H), CC.basis(eager))
+            @test same(H.Bfull, eager.Bfull)
+            @test same(H.Q, eager.Q)
+            J = CC.coordinates(H, G[:, 2:3])
+            @test FL.rank(field, J) == 2
+            @test same(CC.coordinates(H, Matrix(d0)), zeros(K, 2, 1))
+            @test same(CC.coordinates(H, G[:, 2:3] + Matrix(d0) * K[1 -1]), J)
+            @test same(CC.coordinates(H, CC.basis(H)), Matrix{K}(I, 2, 2))
+            @test same(CC.coordinates(H, CC.cohomology_representative(H, J)), J)
+            @test same(CC._cohomology_coordinates_from_cocycles(H, G[:, 2:3]), J)
+            @test same(CC.induced_map_on_cohomology(H, H, F) * J, J * U)
+            @test same(CC.induced_map_on_cohomology(H, H, F * F) * J, J * U * U)
+            @test_throws ErrorException CC.coordinates(H, G[:, 4])
+        end
+        # Concurrent first access publishes one consistent coordinate/basis
+        # choice. Use per-task results, avoiding shared mutable test state.
+        fresh = CC.cohomology_data(C, 1)
+        jobs = [Threads.@spawn begin
+            cx = fresh.Cx
+            reps = CC.basis(fresh)
+            coords = CC.coordinates(fresh, G[:, 2:3])
+            (cx, reps, coords)
+        end for _ in 1:16]
+        results = fetch.(jobs)
+        for (cx, reps, coords) in results
+            @test cx === fresh.Cx
+            @test reps === CC.basis(fresh)
+            @test same(fresh.K * cx, fresh.B)
+            @test same(coords, CC.coordinates(eager, G[:, 2:3]))
+        end
+        # Vanishing cohomology must still reject noncycles, without needing
+        # quotient coordinates just to return the zero cohomology class.
+        acyclic = CC.CochainComplex{K}(0, 2, [1, 2, 1],
+            [sparse(reshape(K[1, 0], 2, 1)), sparse(reshape(K[0, 1], 1, 2))]; field=field)
+        Hzero = CC.cohomology_data(acyclic, 1)
+        @test Hzero.dimH == 0
+        @test size(CC.coordinates(Hzero, K[1, 0])) == (0, 1)
+        @test_throws ErrorException CC.coordinates(Hzero, K[0, 1])
+        if !(field isa CM.RealField)
+            @test getfield(Hzero, :_Cx) === nothing
+        end
+        @test same(Hzero.K * Hzero.Cx, Hzero.B)
+        @test size(CC.basis(Hzero)) == (2, 0)
+        @test size(Hzero.Bfull) == (1, 1)
+        @test size(Hzero.Q) == (1, 0)
+        # Malformed input has plausible ranks, but d1*d0 != 0. Laziness
+        # cannot turn this into a spurious, positive-dimensional quotient.
+        bad = CC.CochainComplex{K}(0, 2, [1, 3, 1],
+            [sparse(reshape(K[1, 0, 0], 3, 1)), sparse(reshape(K[1, 0, 0], 1, 3))]; field=field)
+        @test_throws ErrorException CC.cohomology_data(bad, 1)
+        @test_throws Exception CC.cohomology_data(bad)
+        @test_throws Exception CC.cohomology_data(bad; degrees=1:1)
+        @test_throws ErrorException CC._cohomology_data_from_bases(K, 0, 3,
+            K[1 0; 0 1; 0 0], reshape(K[0, 0, 1], 3, 1); field=field)
+    end
+end
+
+@testset "Lazy cohomology preserves RealField boundary membership tolerance" begin
+    numerical = CM.RealField(Float64; atol=1e-8, rtol=0.0)
+    for residual in (0.0, 1e-10, 1e-5)
+        d0 = sparse(reshape([0.0, residual, 1.0], 3, 1))
+        d1 = sparse(reshape([0.0, 1.0, 0.0], 1, 3))
+        C = CC.CochainComplex{Float64}(0, 2, [1, 3, 1], [d0, d1]; field=numerical)
+        if residual <= numerical.atol
+            H = CC.cohomology_data(C, 1)
+            @test H.field === numerical
+            @test H.dimH == 1
+            @test getfield(H, :_Cx) !== nothing
+            @test norm(H.K * H.Cx - H.B) <= numerical.atol
+            @test FL.rank(numerical, CC.coordinates(H, [1.0, 0.0, 0.0])) == 1
+            @test CC.coordinates(H, CC.basis(H)) ≈ ones(1, 1)
+        else
+            @test_throws ErrorException CC.cohomology_data(C, 1)
+        end
+    end
 end

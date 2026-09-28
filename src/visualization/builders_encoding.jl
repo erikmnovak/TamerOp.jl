@@ -3,9 +3,11 @@
 available_visuals(::Any) = ()
 
 function visual_spec(obj; kind::Symbol=:auto, cache=:auto, kwargs...)
+    haskey(kwargs, :backend) && throw(ArgumentError("backend belongs to visualize/render, not visual_spec"))
+    cache === :auto || throw(ArgumentError("visual_spec does not support a cache override"))
     report = check_visual_request(obj; kind=kind, kwargs..., throw=true)
     chosen = report.requested_kind
-    return _visual_spec(obj, chosen; cache=cache, kwargs...)
+    return _visual_spec(obj, chosen; kwargs...)
 end
 
 _visual_spec(obj, kind::Symbol; kwargs...) =
@@ -25,21 +27,30 @@ function _as_points2(point)
 end
 
 function _collect_query_points(; point=nothing, points=nothing)
-    out = NTuple{2,Float64}[]
-    point === nothing || append!(out, _as_points2(point))
+    out = Tuple{Real,Real}[]
+    function append_point(p)
+        (p isa Tuple || p isa AbstractVector) && length(p) == 2 && all(x -> x isa Real && isfinite(x), p) ||
+            throw(ArgumentError("query points must contain two finite real coordinates"))
+        push!(out, (p[1], p[2]))
+    end
+    point === nothing || append_point(point)
     if points !== nothing
-        if points isa AbstractMatrix{<:Real}
-            size(points, 1) == 2 || throw(ArgumentError("points matrix must have 2 rows."))
-            @inbounds for j in 1:size(points, 2)
-                push!(out, (float(points[1, j]), float(points[2, j])))
+        if points isa AbstractMatrix
+            size(points, 1) == 2 || throw(ArgumentError("points matrix must have 2 rows"))
+            for j in axes(points, 2)
+                append_point((points[1, j], points[2, j]))
             end
         else
-            for p in points
-                append!(out, _as_points2(p))
-            end
+            foreach(append_point, points)
         end
     end
     return out
+end
+
+function _query_geometry_readout(pi, points, box)
+    return [(; point=p, region_id=_visual_locate(pi, p), display_point=_drawing_point(p),
+               display_rounded=any(p[i] != _drawing_point(p)[i] for i in 1:2),
+               inside_viewport=all(box[1][i] <= p[i] <= box[2][i] for i in 1:2)) for p in points]
 end
 
 function _text_layer_from_labels(points::AbstractVector{<:NTuple{2,<:Real}}, labels::AbstractVector{<:AbstractString}; color::Symbol=:black, textsize::Float64=10.0)
@@ -63,95 +74,6 @@ end
 
 function _rect_text_centers(rects::Vector{NTuple{4,Float64}})
     return NTuple{2,Float64}[_midpoint(rect) for rect in rects]
-end
-
-function _expanded_axis(axis::AbstractVector{<:Real})
-    isempty(axis) && return Float64[]
-    if length(axis) == 1
-        a = float(axis[1])
-        return [a - 0.5, a + 0.5]
-    end
-    out = Vector{Float64}(undef, length(axis) + 1)
-    @inbounds begin
-        out[1] = float(axis[1]) - 0.5 * (float(axis[2]) - float(axis[1]))
-        for i in 2:length(axis)
-            out[i] = 0.5 * (float(axis[i - 1]) + float(axis[i]))
-        end
-        out[end] = float(axis[end]) + 0.5 * (float(axis[end]) - float(axis[end - 1]))
-    end
-    return out
-end
-
-function _grid_rectangles_2d(pi::GridEncodingMap{2}; box=nothing)
-    xedges = _expanded_axis(pi.coords[1])
-    yedges = _expanded_axis(pi.coords[2])
-    rects = NTuple{4,Float64}[]
-    labels = String[]
-    for j in 1:(length(yedges) - 1), i in 1:(length(xedges) - 1)
-        xlo, xhi = xedges[i], xedges[i + 1]
-        ylo, yhi = yedges[j], yedges[j + 1]
-        push!(rects, (xlo, ylo, xhi, yhi))
-        idx = 1 + (i - 1) * pi.strides[1] + (j - 1) * pi.strides[2]
-        push!(labels, string(idx))
-    end
-    axes = _default_axes_2d(xlabel="x1", ylabel="x2",
-                            xlimits=(xedges[1], xedges[end]),
-                            ylimits=(yedges[1], yedges[end]))
-    return rects, labels, axes
-end
-
-function _pl_view_box_2d(pi::PLEncodingMapBoxes)
-    reps = region_representatives(pi)
-    xr = _finite_extrema((rep[1] for rep in reps if length(rep) == 2))
-    yr = _finite_extrema((rep[2] for rep in reps if length(rep) == 2))
-
-    if xr === nothing || yr === nothing
-        xr = _finite_extrema(pi.coords[1])
-        yr = _finite_extrema(pi.coords[2])
-    end
-
-    xr === nothing && (xr = (-1.0, 1.0))
-    yr === nothing && (yr = (-1.0, 1.0))
-
-    xpad = xr[1] == xr[2] ? 1.0 : max(1.0, 0.1 * (xr[2] - xr[1]))
-    ypad = yr[1] == yr[2] ? 1.0 : max(1.0, 0.1 * (yr[2] - yr[1]))
-    return ([xr[1] - xpad, yr[1] - ypad], [xr[2] + xpad, yr[2] + ypad])
-end
-
-function _pl_rectangles_2d(pi::PLEncodingMapBoxes; box=nothing)
-    view_box = box === nothing ? _pl_view_box_2d(pi) : box
-    region_rects = Vector{Vector{NTuple{4,Float64}}}()
-    labels = String[]
-    label_positions = NTuple{2,Float64}[]
-    reps = region_representatives(pi)
-    nreg = nregions(pi)
-    for r in 1:nreg
-        lows, highs = _cells_in_region_in_box(pi, r, view_box; strict=false)
-        isempty(lows) && continue
-        rects_r = NTuple{4,Float64}[]
-        for (lo, hi) in zip(lows, highs)
-            if length(lo) == 2 && length(hi) == 2
-                push!(rects_r, (float(lo[1]), float(lo[2]), float(hi[1]), float(hi[2])))
-            end
-        end
-        isempty(rects_r) && continue
-        push!(region_rects, rects_r)
-        push!(labels, string(r))
-        rep = reps[r]
-        rep_pt = (float(rep[1]), float(rep[2]))
-        if view_box[1][1] <= rep_pt[1] <= view_box[2][1] && view_box[1][2] <= rep_pt[2] <= view_box[2][2]
-            push!(label_positions, rep_pt)
-        else
-            rect0 = first(rects_r)
-            push!(label_positions, _midpoint(rect0))
-        end
-    end
-    xlimits = (float(view_box[1][1]), float(view_box[2][1]))
-    ylimits = (float(view_box[1][2]), float(view_box[2][2]))
-    axes = _default_axes_2d(xlabel="x1", ylabel="x2",
-                            xlimits=xlimits,
-                            ylimits=ylimits)
-    return region_rects, labels, axes, label_positions
 end
 
 const _BOX_REGION_COLORS = (
@@ -191,58 +113,6 @@ function _region_boundary_segments(rects::Vector{NTuple{4,Float64}})
     return segments
 end
 
-function _zn_rectangles_2d(pi::ZnEncodingMap)
-    rects = NTuple{4,Float64}[]
-    labels = String[]
-    reps = region_representatives(pi)
-    for (r, rep) in enumerate(reps)
-        length(rep) == 2 || continue
-        x = float(rep[1])
-        y = float(rep[2])
-        push!(rects, (x - 0.5, y - 0.5, x + 0.5, y + 0.5))
-        push!(labels, string(r))
-    end
-    lims = _bbox_from_points(_rect_text_centers(rects))
-    axes = _default_axes_2d(xlabel="g1", ylabel="g2",
-                            xlimits=lims === nothing ? nothing : lims[1],
-                            ylimits=lims === nothing ? nothing : lims[2],
-                            aspect=:equal)
-    return rects, labels, axes
-end
-
-function _encoding_region_spec(rects::Vector{NTuple{4,Float64}}, labels::Vector{String};
-                               title::AbstractString, kind::Symbol,
-                               show_labels::Bool=false, points=NTuple{2,Float64}[], point_labels=String[],
-                               label_positions=nothing,
-                               metadata::NamedTuple=NamedTuple(), axes::NamedTuple=_default_axes_2d(),
-                               fill_color::Symbol=:dodgerblue)
-    layers = AbstractVisualizationLayer[
-        RectLayer(rects, fill_color, :black, 0.22, 1.0),
-    ]
-    if show_labels && !isempty(labels)
-        positions = label_positions === nothing ? _rect_text_centers(rects) : label_positions
-        push!(layers, _text_layer_from_labels(positions, labels; color=:black, textsize=10.0))
-    end
-    if !isempty(points)
-        push!(layers, PointLayer(points, :orange3, 0.95, 14.0))
-        isempty(point_labels) || push!(layers, _text_layer_from_labels(points, point_labels; color=:black, textsize=10.0))
-    end
-    return VisualizationSpec(kind; title=title,
-                             layers=layers,
-                             axes=axes,
-                             metadata=merge((; figure_size=(760, 620), legend_position=:none), metadata),
-                             interaction=_default_interaction(hover=true, labels=show_labels || !isempty(point_labels)))
-end
-
-function _query_overlay_labels(pi::AbstractPLikeEncodingMap, pts::Vector{NTuple{2,Float64}})
-    labels = String[]
-    for (j, p) in enumerate(pts)
-        region = locate(pi, collect(p))
-        push!(labels, string("q", j, " -> ", region))
-    end
-    return labels
-end
-
 function _flange_default_box(FG::Flange)
     xs = Int[]
     ys = Int[]
@@ -265,7 +135,7 @@ function _clip_rect_2d(ell::NTuple{2,Float64}, u::NTuple{2,Float64}; L1=-Inf, U1
     return (xlo, ylo, xhi, yhi)
 end
 
-available_visuals(::Flange) = (:regions, :constant_subdivision)
+available_visuals(FG::Flange) = FG.n == 2 ? (:regions, :constant_subdivision) : ()
 
 function _visual_spec(FG::Flange, kind::Symbol; box=nothing, alpha_up::Real=0.25, alpha_dn::Real=0.25, kwargs...)
     FG.n == 2 || throw(ArgumentError("Visualization v1 only supports 2D flanges."))
@@ -307,7 +177,7 @@ function _visual_spec(FG::Flange, kind::Symbol; box=nothing, alpha_up::Real=0.25
                                  axes=_default_axes_2d(xlabel="x1", ylabel="x2", xlimits=(ell[1], u[1]), ylimits=(ell[2], u[2]), aspect=:equal),
                                  metadata=(; object=:flange, nflats=length(up_rects), ninjectives=length(dn_rects), box=b),
                                  legend=_default_legend(visible=true, entries=(; flats=:dodgerblue, injectives=:crimson)),
-                                 interaction=_default_interaction(hover=true, labels=true))
+                                 interaction=_default_interaction(labels=true))
     elseif kind === :constant_subdivision
         xlo = ceil(Int, ell[1]); ylo = ceil(Int, ell[2])
         xhi = floor(Int, u[1]); yhi = floor(Int, u[2])
@@ -334,70 +204,53 @@ function _visual_spec(FG::Flange, kind::Symbol; box=nothing, alpha_up::Real=0.25
 end
 
 available_visuals(::GridEncodingMap{2}) = (:regions, :region_labels, :query_overlay)
-available_visuals(::PLEncodingMapBoxes) = (:regions, :region_labels, :query_overlay)
-available_visuals(::ZnEncodingMap) = (:regions, :region_labels, :query_overlay)
+available_visuals(pi::PLEncodingMapBoxes) = pi.n == 2 ? (:regions, :region_labels, :query_overlay) : ()
+available_visuals(pi::PLEncodingMap) = pi.n == 2 ? (:regions, :region_labels, :query_overlay) : ()
+available_visuals(pi::ZnEncodingMap) = pi.n == 2 ? (:regions, :region_labels, :query_overlay) : ()
 
-function _visual_spec(pi::GridEncodingMap{2}, kind::Symbol; point=nothing, points=nothing, kwargs...)
-    _ = kwargs
-    rects, labels, axes = _grid_rectangles_2d(pi)
-    pts = kind === :query_overlay ? _collect_query_points(point=point, points=points) : NTuple{2,Float64}[]
-    point_labels = kind === :query_overlay ? _query_overlay_labels(pi, pts) : String[]
-    return _encoding_region_spec(rects, labels;
-                                 title="Grid encoding",
-                                 kind=kind,
-                                 show_labels=(kind === :region_labels),
-                                 points=pts,
-                                 point_labels=point_labels,
-                                 axes=axes,
-                                 metadata=(; object=:grid_encoding_map, nregions=length(rects), axis_sizes=pi.sizes),
-                                 fill_color=:cornflowerblue)
-end
-
-function _visual_spec(pi::PLEncodingMapBoxes, kind::Symbol; point=nothing, points=nothing, box=nothing, kwargs...)
-    _ = kwargs
-    region_rects, labels, axes, label_positions = _pl_rectangles_2d(pi; box=box)
-    label_text_positions = _offset_label_positions(label_positions, axes)
-    pts = kind === :query_overlay ? _collect_query_points(point=point, points=points) : NTuple{2,Float64}[]
-    point_labels = kind === :query_overlay ? _query_overlay_labels(pi, pts) : String[]
-    layers = AbstractVisualizationLayer[]
-    for (idx, rects_r) in enumerate(region_rects)
-        color = _box_region_color(idx)
-        push!(layers, RectLayer(rects_r, color, :black, 0.18, 0.8))
-        push!(layers, SegmentLayer(_region_boundary_segments(rects_r), color, 0.95, 1.6))
-    end
-    isempty(label_positions) || push!(layers, PointLayer(label_positions, :black, 0.9, 5.5))
-    if kind === :region_labels && !isempty(labels)
-        push!(layers, _text_layer_from_labels(label_text_positions, labels; color=:black, textsize=10.0))
+function _visual_spec(pi::Union{GridEncodingMap{2},PLEncodingMapBoxes,PLEncodingMap,ZnEncodingMap},
+                      kind::Symbol; point=nothing, points=nothing, box=nothing, kwargs...)
+    kind in (:regions, :region_labels, :query_overlay) || throw(ArgumentError("unsupported encoding visualization kind $kind"))
+    geometry = _region_geometry_2d(pi; box)
+    exact_points = kind === :query_overlay ? _collect_query_points(; point, points) : Tuple{Real,Real}[]
+    readout = _query_geometry_readout(pi, exact_points, geometry.box)
+    pts = NTuple{2,Float64}[q.display_point for q in readout]
+    point_labels = [string("q", i, " -> ", q.region_id, q.inside_viewport ? "" : " (outside view)") for (i,q) in enumerate(readout)]
+    layers = _region_geometry_layers(geometry)
+    if kind === :region_labels
+        # Every visible component gets its actual classifier label, including
+        # disconnected pieces. No renumbering after viewport filtering.
+        positions = NTuple{2,Float64}[_drawing_point((sum(p[1] for p in c.vertices)/length(c.vertices),
+                                                     sum(p[2] for p in c.vertices)/length(c.vertices))) for c in geometry.components]
+        labels = [c.region_id == 0 ? "outside (0)" : string(c.region_id) for c in geometry.components]
+        push!(layers, _text_layer_from_labels(positions, labels))
     end
     if !isempty(pts)
         push!(layers, PointLayer(pts, :orange3, 0.95, 14.0))
-        isempty(point_labels) || push!(layers, _text_layer_from_labels(pts, point_labels; color=:black, textsize=10.0))
+        push!(layers, _text_layer_from_labels(pts, point_labels))
     end
-    return VisualizationSpec(kind;
-                             title="Box encoding",
-                             layers=layers,
-                             axes=axes,
-                             metadata=(; object=:pl_boxes, nregions=length(labels), ncells=sum(length, region_rects),
-                                        query_count=length(pts), figure_size=(860, 620), legend_position=:right),
-                             legend=_default_legend(visible=true,
-                                                    entries=(; (Symbol("R" * string(i)) => _box_region_color(i) for i in 1:length(region_rects))...)),
-                             interaction=_default_interaction(hover=true, labels=(kind === :region_labels) || !isempty(point_labels)))
-end
-
-function _visual_spec(pi::ZnEncodingMap, kind::Symbol; point=nothing, points=nothing, kwargs...)
-    _ = kwargs
-    rects, labels, axes = _zn_rectangles_2d(pi)
-    pts = kind === :query_overlay ? _collect_query_points(point=point, points=points) : NTuple{2,Float64}[]
-    point_labels = kind === :query_overlay ? _query_overlay_labels(pi, pts) : String[]
-    return _encoding_region_spec(rects, labels;
-                                 title="Zn encoding",
-                                 kind=kind,
-                                 show_labels=(kind === :region_labels),
-                                 points=pts,
-                                 point_labels=point_labels,
-                                 axes=axes,
-                                 metadata=(; object=:zn_encoding_map, nregions=length(rects), query_count=length(pts)),
-                                 fill_color=:darkorange2)
+    query_collisions = _display_collisions(exact_points)
+    warnings = String[]
+    isempty(geometry.coordinate_collisions) || push!(warnings, "Distinct exact geometry coordinates coincide in this display; inspect metadata.geometry.coordinate_collisions.")
+    isempty(geometry.dimension_collapses) || push!(warnings, "A region loses dimension at drawing precision; inspect metadata.geometry.dimension_collapses for its exact geometry.")
+    isempty(query_collisions) || push!(warnings, "Distinct exact queries coincide in this display; inspect metadata.query_readout.")
+    any(q.display_rounded for q in readout) && push!(warnings, "Query markers are rounded for drawing; labels use the original coordinates in metadata.query_readout.")
+    object, title = pi isa GridEncodingMap ? (:grid_encoding_map, "Grid encoding") :
+                    pi isa PLEncodingMapBoxes ? (:pl_boxes, "Box encoding") :
+                    pi isa ZnEncodingMap ? (:zn_encoding_map, "Integer encoding") : (:pl_encoding_map, "Polyhedral encoding")
+    subtitle = geometry.geometry_kind === :nearest_lattice_tiles ?
+        "integer fibers shown as nearest-lattice tiles; ties use round-to-even" :
+        "solid: included edge; dashed: excluded edge; dotted: viewing-window edge; open circles: excluded vertices"
+    isempty(warnings) || (subtitle *= " | Exact-coordinate readout available; display rounding detected.")
+    ids = geometry.region_ids
+    return VisualizationSpec(kind; title, subtitle, layers, axes=geometry.axes,
+        metadata=(; object, nregions=count(!iszero, ids), ncells=length(geometry.components),
+                    query_count=length(pts), query_readout=readout, query_collisions, warnings,
+                    geometry, region_ids=ids, box=geometry.box, figure_size=(860, 620), legend_position=:right,
+                    outside_region_id=0, outside_meaning=:not_represented),
+        legend=_default_legend(visible=true, entries=(; (Symbol(r == 0 ? "outside_0" : "R$r") =>
+            (r == 0 ? :gray90 : _box_region_color(r)) for r in ids)...)),
+        interaction=_default_interaction(labels=kind === :region_labels || !isempty(point_labels)))
 end
 
 function _visual_spec(enc::CompiledEncoding, kind::Symbol; kwargs...)
@@ -408,12 +261,11 @@ function available_visuals(enc::CompiledEncoding)
     return available_visuals(encoding_map(enc))
 end
 
-function _visual_spec(res::EncodingResult, kind::Symbol; cache=:auto, kwargs...)
-    _ = cache
-    return _visual_spec(compile_encoding(res), kind; kwargs...)
+function _visual_spec(res::EncodingResult, kind::Symbol; kwargs...)
+    return _visual_spec(encoding_map(res), kind; kwargs...)
 end
 
-available_visuals(res::EncodingResult) = available_visuals(compile_encoding(res))
+available_visuals(res::EncodingResult) = available_visuals(encoding_map(res))
 
 function _poset_coordinates_2d(P::ProductOfChainsPoset{2})
     pts = Vector{NTuple{2,Float64}}(undef, nvertices(P))
@@ -448,14 +300,15 @@ end
 
 _poset_coordinates_2d(P::AbstractPoset) = nothing
 
-available_visuals(pi::EncodingMap) = let tgt = _poset_coordinates_2d(target_poset(pi)); src = _poset_coordinates_2d(source_poset(pi))
-    if tgt === nothing
-        ()
-    elseif src === nothing
-        (:regions, :region_labels)
-    else
-        (:regions, :region_labels, :pushforward_overlay)
-    end
+_has_poset_coordinates_2d(::AbstractPoset) = false
+_has_poset_coordinates_2d(::Union{ProductOfChainsPoset{2},GridPoset{2},ProductPoset}) = true
+
+available_visuals(pi::EncodingMap) = if !_has_poset_coordinates_2d(target_poset(pi))
+    ()
+elseif !_has_poset_coordinates_2d(source_poset(pi))
+    (:regions, :region_labels)
+else
+    (:regions, :region_labels, :pushforward_overlay)
 end
 
 function _visual_spec(pi::EncodingMap, kind::Symbol; kwargs...)
@@ -511,7 +364,7 @@ function _visual_spec(pi::EncodingMap, kind::Symbol; kwargs...)
     throw(ArgumentError("Unsupported EncodingMap visualization kind $(kind)."))
 end
 
-available_visuals(::CommonRefinementTranslationResult) = (:common_refinement,)
+available_visuals(res::CommonRefinementTranslationResult) = _has_poset_coordinates_2d(common_poset(res)) ? (:common_refinement,) : ()
 
 function _visual_spec(res::CommonRefinementTranslationResult, kind::Symbol; kwargs...)
     _ = kwargs
@@ -540,7 +393,7 @@ end
 
 available_visuals(res::ModuleTranslationResult) = begin
     map = translation_map(res)
-    map isa EncodingMap && _poset_coordinates_2d(source_poset(map)) !== nothing && _poset_coordinates_2d(target_poset(map)) !== nothing ?
+    map isa EncodingMap && _has_poset_coordinates_2d(source_poset(map)) && _has_poset_coordinates_2d(target_poset(map)) ?
         (:pushforward_overlay,) : ()
 end
 

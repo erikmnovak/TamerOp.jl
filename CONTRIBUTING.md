@@ -30,8 +30,9 @@ For a source checkout, `git rev-parse HEAD` in a terminal identifies the commit.
 If the issue concerns a mathematical result, explain how you obtained the
 expected answer. A hand calculation, a cited theorem with its assumptions,
 or an independent computation helps us understand the discrepancy. A
-performance report should include the input size, thread count, and whether
-the timing includes the first compilation.
+performance report should follow the [benchmarking manual](docs/benchmarking.md):
+state the requested output, input size, thread count, compilation state and
+which mathematical results or caches were already available.
 
 For a feature proposal, start with the question you want to answer and an
 example input and desired result. Discuss substantial algorithm or API changes
@@ -105,6 +106,16 @@ Keep required checks self-contained in the public repository.
 For documentation edits, check links, mathematical assumptions, and the
 explanation around each example. Run examples whose executable content you
 change. A prose correction does not require rerunning the entire test suite.
+
+## Measure performance changes
+
+Read the [benchmarking manual](docs/benchmarking.md) before planning or reporting
+performance work. Its primary comparison measures compiled code recomputing the
+mathematics without prior results; startup and reuse have separate measurements.
+Use its study brief to define outputs, valid inputs, cache state, correctness
+checks and evidence. External tools may use different algorithms for the same
+verified answer. The guide also plans a future reproducible benchmark release;
+local benchmark and audit files remain excluded from the public package.
 
 ## Write explanations that teach
 

@@ -27,6 +27,7 @@ end
 
 function _project_coords(A::AbstractMatrix{<:Real}, target_dim::Int; dims=nothing)
     d = size(A, 2)
+    d >= target_dim || throw(ArgumentError("this view requires at least $target_dim coordinate axes."))
     chosen = if dims === nothing
         if d <= target_dim
             collect(1:d)
@@ -37,7 +38,9 @@ function _project_coords(A::AbstractMatrix{<:Real}, target_dim::Int; dims=nothin
     else
         collect(Int, dims)
     end
-    isempty(chosen) && (chosen = collect(1:min(target_dim, d)))
+    length(chosen) == target_dim || throw(ArgumentError("dims must select exactly $target_dim coordinate axes."))
+    length(unique(chosen)) == target_dim || throw(ArgumentError("dims must select distinct coordinate axes."))
+    all(j -> 1 <= j <= d, chosen) || throw(ArgumentError("dims must lie between 1 and $d."))
     P = Matrix{Float64}(undef, size(A, 1), length(chosen))
     @inbounds for j in eachindex(chosen), i in 1:size(A, 1)
         P[i, j] = float(A[i, chosen[j]])
@@ -99,6 +102,8 @@ function _density_heatmap(points::AbstractMatrix{<:Real}; nbins::Int=24)
     ys = Float64.(points[:, 2])
     xlo, xhi = minimum(xs), maximum(xs)
     ylo, yhi = minimum(ys), maximum(ys)
+    xlo == xhi && ((xlo, xhi) = _pad_limits_1d((xlo, xhi)))
+    ylo == yhi && ((ylo, yhi) = _pad_limits_1d((ylo, yhi)))
     xspan = max(xhi - xlo, 1e-9)
     yspan = max(yhi - ylo, 1e-9)
     vals = zeros(Float64, nbins, nbins)
@@ -216,7 +221,7 @@ function _weighted_edge_layers_2d(points::AbstractMatrix{<:Real}, edges, weights
     palette = (:steelblue3, :darkorange2, :crimson)
     bins = [NTuple{4,Float64}[] for _ in 1:3]
     @inbounds for (edge, w) in zip(edges, weights)
-        q = clamp(1 + floor(Int, 2 * (float(w) - wmin) / span), 1, 3)
+        q = clamp(1 + floor(Int, 3 * (float(w) - wmin) / span), 1, 3)
         push!(bins[q], (float(points[edge[1], 1]), float(points[edge[1], 2]),
                         float(points[edge[2], 1]), float(points[edge[2], 2])))
     end
@@ -240,7 +245,7 @@ function _weighted_edge_layers_3d(points::AbstractMatrix{<:Real}, edges, weights
     palette = (:steelblue3, :darkorange2, :crimson)
     bins = [NTuple{6,Float64}[] for _ in 1:3]
     @inbounds for (edge, w) in zip(edges, weights)
-        q = clamp(1 + floor(Int, 2 * (float(w) - wmin) / span), 1, 3)
+        q = clamp(1 + floor(Int, 3 * (float(w) - wmin) / span), 1, 3)
         push!(bins[q], (float(points[edge[1], 1]), float(points[edge[1], 2]), float(points[edge[1], 3]),
                         float(points[edge[2], 1]), float(points[edge[2], 2]), float(points[edge[2], 3])))
     end
@@ -303,6 +308,7 @@ end
 
 function available_visuals(pc::DataTypes.PointCloud)
     d = DataTypes.ambient_dim(pc)
+    d < 2 && return ()
     if d >= 3
         return (:points_3d, :points_2d, :point_density, :knn_graph, :radius_graph)
     end
@@ -421,8 +427,7 @@ function _visual_spec(pc::DataTypes.PointCloud, kind::Symbol; dims=nothing, labe
     _ = kwargs
     A = DataTypes.point_matrix(pc)
     if kind === :points_3d
-        P, chosen = _project_coords(A, min(size(A, 2), 3); dims=dims)
-        size(P, 2) == 3 || return _visual_spec(pc, :points_2d; dims=chosen, labels=labels, color_values=color_values, density=density)
+        P, chosen = _project_coords(A, 3; dims=dims)
         pts = NTuple{3,Float64}[(P[i, 1], P[i, 2], P[i, 3]) for i in 1:size(P, 1)]
         ax = _axes_from_matrix_3d(P; labels=Tuple("x$(d)" for d in chosen))
         layers = AbstractVisualizationLayer[Point3Layer(pts,
@@ -441,9 +446,9 @@ function _visual_spec(pc::DataTypes.PointCloud, kind::Symbol; dims=nothing, labe
                                  legend=_default_legend(visible=false, title="layers",
                                                         entries=[(; label="points", color=:dodgerblue3, style=:marker)]),
                                  metadata=metadata,
-                                 interaction=_default_interaction(hover=true))
+                                 interaction=_default_interaction())
     elseif kind === :points_2d || kind === :point_density || kind === :knn_graph || kind === :radius_graph
-        P, chosen = _project_coords(A, min(size(A, 2), 2); dims=dims)
+        P, chosen = _project_coords(A, 2; dims=dims)
         ax = _axes_from_matrix_2d(P; labels=Tuple("x$(d)" for d in chosen))
         layers = AbstractVisualizationLayer[]
         legend_entries = NamedTuple[]
@@ -454,7 +459,8 @@ function _visual_spec(pc::DataTypes.PointCloud, kind::Symbol; dims=nothing, labe
             push!(layers, SegmentLayer(_segments_from_edges_2d(P, edges), :gray35, 0.62, 1.3))
             push!(legend_entries, (; label="kNN edges", color=:gray55, style=:line))
         elseif kind === :radius_graph
-            rr = radius === nothing ? sqrt(maximum(_dist2(A, 1, j) for j in 2:size(A, 1))) / 2 : float(radius)
+            rr = radius === nothing ? (size(A, 1) <= 1 ? 0.0 :
+                 sqrt(maximum(_dist2(A, 1, j) for j in 2:size(A, 1))) / 2) : float(radius)
             edges = size(A, 1) <= 1 ? Tuple{Int,Int}[] : _radius_edges(A, rr)
             push!(layers, SegmentLayer(_segments_from_edges_2d(P, edges), :gray35, 0.62, 1.3))
             push!(legend_entries, (; label="radius edges", color=:gray55, style=:line))
@@ -488,17 +494,19 @@ function _visual_spec(pc::DataTypes.PointCloud, kind::Symbol; dims=nothing, labe
                                                         title="layers",
                                                         entries=legend_entries),
                                  metadata=metadata,
-                                 interaction=_default_interaction(hover=true, labels=!isempty(labvec)))
+                                 interaction=_default_interaction(labels=!isempty(labvec)))
     end
     throw(ArgumentError("Unsupported PointCloud visualization kind $(kind)."))
 end
 
 function available_visuals(data::DataTypes.GraphData)
     d = DataTypes.ambient_dim(data)
+    d !== nothing && d < 2 && return ()
+    weighted = DataTypes.edge_weights(data) === nothing ? () : (:weighted_graph,)
     if d !== nothing && d >= 3
-        return (:graph_3d, :graph, :weighted_graph)
+        return (:graph_3d, :graph, weighted...)
     end
-    return (:graph, :weighted_graph)
+    return (:graph, weighted...)
 end
 
 function _visual_spec(data::DataTypes.GraphData, kind::Symbol; dims=nothing, labels=nothing, kwargs...)
@@ -550,7 +558,7 @@ function _visual_spec(data::DataTypes.GraphData, kind::Symbol; dims=nothing, lab
                                  axes=_axes_from_matrix_2d(pts; labels=Tuple("x$(d)" for d in chosen)),
                                  legend=_default_legend(visible=true, title="layers", entries=legend_entries),
                                  metadata=(; object=:graph_data, projected_dims=Tuple(chosen), layout, nvertices=DataTypes.nvertices(data), nedges=DataTypes.nedges(data)),
-                                 interaction=_default_interaction(hover=true, labels=!isempty(labvec)))
+                                 interaction=_default_interaction(labels=!isempty(labvec)))
     end
     throw(ArgumentError("Unsupported GraphData visualization kind $(kind)."))
 end
@@ -560,8 +568,12 @@ available_visuals(::DataTypes.EmbeddedPlanarGraph2D) = (:embedded_planar_graph,)
 function _visual_spec(data::DataTypes.EmbeddedPlanarGraph2D, kind::Symbol; labels=nothing, kwargs...)
     _ = kwargs
     kind === :embedded_planar_graph || throw(ArgumentError("Unsupported EmbeddedPlanarGraph2D visualization kind $(kind)."))
-    verts = reduce(vcat, [[float(v[1]) float(v[2])] for v in DataTypes.vertex_positions(data)])
-    pts = size(verts, 1) == 0 ? zeros(0, 2) : reshape(verts, :, 2)
+    positions = DataTypes.vertex_positions(data)
+    pts = Matrix{Float64}(undef, length(positions), 2)
+    for (i, vertex) in enumerate(positions)
+        pts[i, 1] = float(vertex[1])
+        pts[i, 2] = float(vertex[2])
+    end
     poly = DataTypes.polylines(data)
     layers = AbstractVisualizationLayer[]
     if poly === nothing
@@ -594,10 +606,11 @@ function _visual_spec(data::DataTypes.EmbeddedPlanarGraph2D, kind::Symbol; label
                                                     entries=[(; label="edges", color=:gray40, style=:line),
                                                              (; label="vertices", color=:black, style=:marker)]),
                              metadata=(; object=:embedded_planar_graph_2d, nvertices=DataTypes.nvertices(data), nedges=DataTypes.nedges(data)),
-                             interaction=_default_interaction(hover=true, labels=!isempty(labvec)))
+                             interaction=_default_interaction(labels=!isempty(labvec)))
 end
 
 function available_visuals(img::DataTypes.ImageNd{T,N}) where {T,N}
+    (N < 2 || isempty(_image_array(img))) && return ()
     if N == 2
         return (:image,)
     elseif N == 3
@@ -609,71 +622,85 @@ function available_visuals(img::DataTypes.ImageNd{T,N}) where {T,N}
     return (:image, :slice_viewer)
 end
 
-function _image_slice_matrix(img::DataTypes.ImageNd, view_dims::Tuple{Int,Int}, fixed::Dict{Int,Int})
-    A = _image_array(img)
-    idx = Any[Colon() for _ in 1:ndims(A)]
-    for (dim, pos) in fixed
-        idx[dim] = clamp(Int(pos), 1, size(A, dim))
-    end
-    idx[view_dims[1]] = Colon()
-    idx[view_dims[2]] = Colon()
-    slice = Float64.(A[idx...])
-    ndims(slice) == 2 || (slice = reshape(slice, size(A, view_dims[1]), size(A, view_dims[2])))
-    return slice
-end
-
-function _image_default_view(img::DataTypes.ImageNd)
+function _image_view_selection(img::DataTypes.ImageNd, kind::Symbol;
+                               view_dims=nothing, slice_indices=nothing)
     A = _image_array(img)
     nd = ndims(A)
-    if nd == 2
-        return (1, 2), Dict{Int,Int}()
-    elseif nd == 3 && size(A, 3) <= 4
-        return (1, 2), Dict(3 => clamp(1, 1, size(A, 3)))
+    nd >= 2 || throw(ArgumentError("image views require at least two array axes."))
+    isempty(A) && throw(ArgumentError("image views require nonempty array axes."))
+    kind in available_visuals(img) || throw(ArgumentError("kind=$kind is unsupported for this image shape."))
+    # view_dims names (x, y); the default preserves Julia's row/column image layout.
+    vd = if view_dims === nothing
+        (2, 1)
     else
-        fixed = Dict{Int,Int}()
-        for d in 3:nd
-            fixed[d] = cld(size(A, d), 2)
-        end
-        return (1, 2), fixed
+        length(view_dims) == 2 || throw(ArgumentError("view_dims must contain exactly two array axes (x, y)."))
+        (Int(view_dims[1]), Int(view_dims[2]))
     end
+    vd[1] != vd[2] || throw(ArgumentError("view_dims must select distinct array axes."))
+    all(d -> 1 <= d <= nd, vd) || throw(ArgumentError("view_dims must lie between 1 and $nd."))
+    if kind === :channels
+        sort(collect(vd)) == [1, 2] || throw(ArgumentError("channels requires view_dims to select axes 1 and 2; axis 3 indexes panels."))
+        slice_indices === nothing || throw(ArgumentError("channels displays every stored axis-3 slice; slice_indices is inapplicable."))
+    end
+    fixed = Dict{Int,Int}()
+    for d in 1:nd
+        d in vd && continue
+        fixed[d] = nd == 3 && d == 3 && size(A, 3) <= 4 ? 1 : cld(size(A, d), 2)
+    end
+    if slice_indices !== nothing
+        for (dim, pos) in pairs(slice_indices)
+            d, p = Int(dim), Int(pos)
+            1 <= d <= nd || throw(ArgumentError("slice_indices axis $d is outside 1:$nd."))
+            d in vd && throw(ArgumentError("slice_indices cannot fix displayed axis $d."))
+            1 <= p <= size(A, d) || throw(ArgumentError("slice index $p is outside axis $d."))
+            fixed[d] = p
+        end
+    end
+    return vd, fixed
+end
+
+# Shared with the live volume renderer: HeatmapLayer stores rows=y, columns=x.
+function _image_slice_values(A::AbstractArray, view_dims::Tuple{Int,Int}, fixed::Dict{Int,Int})
+    idx = ntuple(d -> d in view_dims ? Colon() : fixed[d], ndims(A))
+    slice = Float64.(A[idx...])
+    # Scalar indexing preserves the original order of the two remaining axes.
+    return view_dims[2] < view_dims[1] ? slice : permutedims(slice)
 end
 
 function _image_spec(img::DataTypes.ImageNd; kind::Symbol=:image, view_dims=nothing,
                      slice_indices=nothing, colormap::Symbol=:magma, kwargs...)
     _ = kwargs
     A = _image_array(img)
-    vd, fixed = _image_default_view(img)
-    view_dims === nothing || (vd = (Int(view_dims[1]), Int(view_dims[2])))
-    if slice_indices !== nothing
-        fixed = Dict{Int,Int}(Int(k) => Int(v) for (k, v) in pairs(slice_indices))
-    end
-    vals = if kind === :channels && ndims(A) == 3 && size(A, 3) <= 4
-        mats = [Float64.(A[:, :, c]) for c in 1:size(A, 3)]
-        x = Float64[1:size(A, 2);]
-        y = Float64[1:size(A, 1);]
+    vd, fixed = _image_view_selection(img, kind; view_dims=view_dims, slice_indices=slice_indices)
+    x = Float64.(1:size(A, vd[1]))
+    y = Float64.(1:size(A, vd[2]))
+    if kind === :channels
         panels = VisualizationSpec[]
-        for c in 1:length(mats)
+        for c in 1:size(A, 3)
+            vals = _image_slice_values(A, vd, Dict(3 => c))
             push!(panels, VisualizationSpec(:channels;
                                             title="channel $c",
                                             layers=AbstractVisualizationLayer[
-                                                HeatmapLayer(x, y, mats[c], colormap, 1.0, "intensity"),
+                                                HeatmapLayer(x, y, vals, colormap, 1.0, "intensity"),
                                             ],
-                                            axes=_default_axes_2d(xlabel="x$(vd[1])", ylabel="x$(vd[2])",
+                                            axes=_default_axes_2d(xlabel="axis $(vd[1])", ylabel="axis $(vd[2])",
                                                                   xlimits=(minimum(x), maximum(x)),
-                                                                  ylimits=(minimum(y), maximum(y)))))
+                                                                  ylimits=(minimum(y), maximum(y))),
+                                            metadata=(; view_dims=vd, fixed_indices=Dict(3 => c))))
         end
         return VisualizationSpec(:channels;
                                  title="Image channels",
-                                 subtitle="one panel per stored channel",
+                                 subtitle="one panel per stored axis-3 slice",
                                  panels=panels,
-                                 metadata=(; shape=size(A), nchannels=size(A, 3)))
-    else
-        _image_slice_matrix(img, vd, fixed)
+                                 metadata=(; shape=size(A), nchannels=size(A, 3), view_dims=vd,
+                                             coordinate_convention=:array_indices, channel_axis=3))
     end
-    x = Float64[1:size(vals, 2);]
-    y = Float64[1:size(vals, 1);]
+    vals = _image_slice_values(A, vd, fixed)
     widgets = kind === :slice_viewer ? (:slice_index,) : ()
-    subtitle = kind === :slice_viewer ? "interactive slice preview" : "heatmap preview"
+    subtitle = kind === :slice_viewer ? "slice controls require a live Julia session" : "heatmap preview"
+    metadata = (; shape=size(A), view_dims=vd, fixed_indices=copy(fixed), colormap,
+                 coordinate_convention=:array_indices)
+    kind === :slice_viewer && (metadata = (; metadata..., volume=A, requires_live_julia=true))
     return VisualizationSpec(kind;
                              title="Image preview",
                              subtitle=subtitle,
@@ -683,8 +710,8 @@ function _image_spec(img::DataTypes.ImageNd; kind::Symbol=:image, view_dims=noth
                              axes=_default_axes_2d(xlabel="axis $(vd[1])", ylabel="axis $(vd[2])",
                                                    xlimits=(minimum(x), maximum(x)),
                                                    ylimits=(minimum(y), maximum(y))),
-                             metadata=(; shape=size(A), view_dims=vd, fixed_indices=Dict(fixed), volume=A, colormap),
-                             interaction=_default_interaction(hover=true, widgets=widgets, notebook=kind === :slice_viewer ? :widget_viewer : :summary_card))
+                             metadata=metadata,
+                             interaction=_default_interaction(widgets=widgets, notebook=kind === :slice_viewer ? :widget_viewer : :summary_card))
 end
 
 function _visual_spec(img::DataTypes.ImageNd, kind::Symbol; kwargs...)

@@ -16,6 +16,36 @@ end
 @inline _visual_backend_available(backend::Symbol) = haskey(_VISUAL_RENDERERS, backend)
 @inline _visual_save_available(backend::Symbol) = haskey(_VISUAL_SAVERS, backend)
 
+function _visual_render_capabilities(spec::Union{Nothing,VisualizationSpec}=nothing)
+    widgets = spec === nothing ? () : get(spec.interaction, :widgets, ())
+    return (; activated_backends=Tuple(sort!(collect(keys(_VISUAL_RENDERERS)))),
+            renderer_keywords=(:figure, :size),
+            cairo=(mode=:static, widgets=false),
+            wgl=(mode=:browser_scene, live_julia_widgets=widgets,
+                 offline_widget_callbacks=false),
+            hover=false, selection=false)
+end
+
+function _check_visual_render_options(; display::Symbol=:inline, figure=nothing,
+                                       size=nothing, kwargs...)
+    isempty(kwargs) || throw(ArgumentError("Unsupported renderer keywords $(Tuple(keys(kwargs))); supported controls are figure and size."))
+    display === :inline || throw(ArgumentError("display must be :inline; render returns the figure for the caller to display."))
+    if size !== nothing
+        size isa Tuple && length(size) == 2 &&
+            all(x -> x isa Integer && !(x isa Bool) && x > 0, size) ||
+            throw(ArgumentError("size must be a tuple of two positive integer pixel dimensions."))
+        figure === nothing || throw(ArgumentError("size cannot be combined with an existing figure; resize that figure directly."))
+    end
+    return nothing
+end
+
+function _check_existing_visual_kind(spec::VisualizationSpec, kind::Symbol, cache)
+    kind in (:auto, visual_kind(spec)) ||
+        throw(ArgumentError("A VisualizationSpec already has kind=$(visual_kind(spec)); construct a new specification to choose $(kind)."))
+    cache === :auto || throw(ArgumentError("A VisualizationSpec is already constructed and does not consume a cache."))
+    return nothing
+end
+
 function _in_notebook_context()
     return isdefined(Main, :IJulia) || isdefined(Main, :PlutoRunner) ||
            haskey(ENV, "JPY_PARENT_PID") || haskey(ENV, "COLAB_RELEASE_TAG")
@@ -139,22 +169,52 @@ end
 
 available_visuals(spec::VisualizationSpec) = (visual_kind(spec),)
 
-function render(spec::VisualizationSpec; backend::Symbol=:auto, display::Symbol=:inline, kwargs...)
+function visual_spec(spec::VisualizationSpec; kind::Symbol=:auto, cache=:auto, kwargs...)
+    _check_existing_visual_kind(spec, kind, cache)
+    isempty(kwargs) || throw(ArgumentError("An existing VisualizationSpec does not accept recipe keywords $(Tuple(keys(kwargs)))."))
+    check_visual_spec(spec; throw=true)
+    return spec
+end
+
+"""
+    render(spec; backend=:auto, display=:inline, figure=nothing, size=nothing)
+
+Render a specification with an activated backend and return its figure.
+`size=(width, height)` sets the new figure's pixel dimensions; `figure` draws
+into an existing backend figure. These controls cannot be combined. Recipe
+keywords belong to `visual_spec`; arbitrary Makie keywords are not forwarded.
+Cairo produces static views. WGL supports browser scene navigation and the
+volume slider while Julia is running, without general picking or hover tools.
+"""
+function render(spec::VisualizationSpec; backend::Symbol=:auto, display::Symbol=:inline,
+                figure=nothing, size=nothing, kwargs...)
+    _check_visual_render_options(; display, figure, size, kwargs...)
     report = check_visual_spec(spec; throw=true)
     _ = report
     chosen = _resolve_visual_backend(backend; for_save=false, display=display)
-    return Base.invokelatest(_VISUAL_RENDERERS[chosen], spec; display=display, kwargs...)
+    return Base.invokelatest(_VISUAL_RENDERERS[chosen], spec; display, figure, size)
 end
 
 function visualize(obj; kind::Symbol=:auto, backend::Symbol=:auto, display::Symbol=:inline,
-                   cache=:auto, kwargs...)
+                   cache=:auto, figure=nothing, size=nothing, kwargs...)
+    _check_visual_render_options(; display, figure, size)
+    obj isa VisualizationSpec && begin
+        _check_existing_visual_kind(obj, kind, cache)
+        isempty(kwargs) || throw(ArgumentError("An existing VisualizationSpec does not accept recipe keywords $(Tuple(keys(kwargs)))."))
+    end
     spec = obj isa VisualizationSpec ? obj : visual_spec(obj; kind=kind, cache=cache, kwargs...)
-    return render(spec; backend=backend, display=display, kwargs...)
+    return render(spec; backend, display, figure, size)
 end
 
-function _save_visual_internal(path::AbstractString, spec::VisualizationSpec; backend::Symbol=:auto, kwargs...)
+function _save_visual_internal(path::AbstractString, spec::VisualizationSpec;
+                               backend::Symbol=:auto, figure=nothing, size=nothing, kwargs...)
+    _check_visual_render_options(; figure, size, kwargs...)
     check_visual_spec(spec; throw=true)
     format = _visual_export_format_from_path(path)
+    if format === :html && (get(spec.interaction, :requires_live_julia, false) ||
+                            get(spec.interaction, :notebook, nothing) === :widget_viewer)
+        throw(ArgumentError("This view uses Julia-side widget callbacks and cannot be exported as a working offline HTML widget. Export kind=:image for the selected slice, or use visualize(...; backend=:wglmakie) in a live Julia session."))
+    end
     chosen = if format === :html
         backend in (:auto, :wglmakie) ||
             throw(ArgumentError("HTML figures require backend=:wglmakie and `using WGLMakie`; got backend=$(backend)."))
@@ -164,7 +224,7 @@ function _save_visual_internal(path::AbstractString, spec::VisualizationSpec; ba
             throw(ArgumentError("WGLMakie figure export supports HTML; use CairoMakie for static files."))
         _resolve_visual_backend(backend === :auto ? :cairomakie : backend; for_save=true)
     end
-    saved_path = Base.invokelatest(_VISUAL_SAVERS[chosen], path, spec; kwargs...)
+    saved_path = Base.invokelatest(_VISUAL_SAVERS[chosen], path, spec; figure, size)
     return (; path=String(saved_path), backend=chosen, format=format)
 end
 
@@ -188,22 +248,28 @@ extension, or backend. The path-based form returns the written path string.
 """
 save_visual
 
-function save_visual(path::AbstractString, spec::VisualizationSpec; backend::Symbol=:auto, kwargs...)
+function save_visual(path::AbstractString, spec::VisualizationSpec; kind::Symbol=:auto,
+                     cache=:auto, backend::Symbol=:auto, kwargs...)
+    _check_existing_visual_kind(spec, kind, cache)
     return _save_visual_internal(path, spec; backend=backend, kwargs...).path
 end
 
-function save_visual(path::AbstractString, obj; kind::Symbol=:auto, backend::Symbol=:auto, cache=:auto, kwargs...)
+function save_visual(path::AbstractString, obj; kind::Symbol=:auto, backend::Symbol=:auto,
+                     cache=:auto, figure=nothing, size=nothing, kwargs...)
     spec = obj isa VisualizationSpec ? obj : visual_spec(obj; kind=kind, cache=cache, kwargs...)
-    return save_visual(path, spec; backend=backend, kwargs...)
+    return save_visual(path, spec; backend, figure, size)
 end
 
 function save_visual(outdir::AbstractString,
                      stem::AbstractString,
                      spec::VisualizationSpec;
+                     kind::Symbol=:auto,
+                     cache=:auto,
                      prefer::Symbol=:static,
                      format::Symbol=:auto,
                      backend::Symbol=:auto,
                      kwargs...)
+    _check_existing_visual_kind(spec, kind, cache)
     target = _choose_visual_export_target(outdir, stem; prefer=prefer, format=format, backend=backend)
     saved = _save_visual_internal(target.path, spec; backend=target.backend, kwargs...)
     return VisualExportResult(saved.path, saved.backend, saved.format, visual_kind(spec), target.stem)
@@ -217,9 +283,11 @@ function save_visual(outdir::AbstractString,
                      format::Symbol=:auto,
                      backend::Symbol=:auto,
                      cache=:auto,
+                     figure=nothing,
+                     size=nothing,
                      kwargs...)
     spec = obj isa VisualizationSpec ? obj : visual_spec(obj; kind=kind, cache=cache, kwargs...)
-    return save_visual(outdir, stem, spec; prefer=prefer, format=format, backend=backend, kwargs...)
+    return save_visual(outdir, stem, spec; prefer, format, backend, figure, size)
 end
 
 @inline _visual_request_missing(field::Symbol) = throw(ArgumentError("Each visualization export request must include `$(field)`."))

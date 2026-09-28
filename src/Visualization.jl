@@ -38,13 +38,13 @@ module Visualization
 using Statistics
 
 import ..ChainComplexes: describe, cohomology_dims
-using ..CoreModules: SessionCache
+using ..ExactReals: AlgebraicReal
 using ..FiniteFringe: AbstractPoset, ProductOfChainsPoset, GridPoset, ProductPoset, nvertices, leq
 import ..DataTypes
 import ..DataIngestion
 import ..OrdinaryPersistence
 using ..EncodingCore: AbstractPLikeEncodingMap, CompiledEncoding, GridEncodingMap,
-                      compile_encoding, encoding_axes, encoding_map,
+                      encoding_axes, encoding_map,
                       encoding_representatives, locate
 using ..Encoding: EncodingMap, source_poset, target_poset, region_map
 using ..Results: EncodingResult, CohomologyDimsResult, ModuleTranslationResult, InvariantResult,
@@ -53,8 +53,9 @@ using ..ChangeOfPosets: CommonRefinementTranslationResult, common_poset, project
 using ..FlangeZn: Flange, active_flats, active_injectives, flats, injectives
 using ..FieldLinAlg: rank_restricted
 using ..Invariants: RankInvariantResult, value_at, source_poset, check_rank_query_points
-using ..PLBackend: PLEncodingMapBoxes, region_bbox, nregions, _cells_in_region_in_box
-using ..ZnEncoding: ZnEncodingMap, region_representatives
+using ..PLBackend: PLEncodingMapBoxes
+using ..PLPolyhedra: PLEncodingMap
+using ..ZnEncoding: ZnEncodingMap
 using ..SliceInvariants: SliceBarcodesResult, slice_barcodes, slice_weights, slice_directions, slice_offsets,
                          bottleneck_distance
 using ..Fibered2D: FiberedArrangement2D, FiberedBarcodeCache2D, FiberedSliceFamily2D, FiberedSliceResult,
@@ -82,6 +83,7 @@ using ..MultiparameterImages: MPPLineSpec, MPPDecomposition, MPPImage, MPLandsca
 include("visualization/types.jl")
 include("visualization/validation.jl")
 include("visualization/rendering.jl")
+include("visualization/region_geometry.jl")
 include("visualization/builders_encoding.jl")
 include("visualization/builders_invariants.jl")
 include("visualization/builders_ingestion.jl")

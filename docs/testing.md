@@ -7,6 +7,10 @@ complete release candidate. For documentation changes, also follow the
 [writing and review guidance](writing.md): a passing example does not establish
 that its explanation is clear or its mathematical claims are justified.
 
+For performance studies, also read the [benchmarking manual](benchmarking.md).
+Passing correctness checks makes a timing eligible for comparison; it does not
+establish that compilation, caching or setup costs were measured equivalently.
+
 Run the terminal commands below from the repository root with Julia 1.12 and an
 instantiated project. The maintained entrypoint is `test/runtests.jl`; it loads
 this checkout using `using TamerOp`. A package or extension loading failure

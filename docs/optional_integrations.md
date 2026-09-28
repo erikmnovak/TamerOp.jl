@@ -71,3 +71,6 @@ The root `Manifest.toml` describes the core environment. Installing an optional
 package into that environment will intentionally update its project and
 manifest; use a separate Julia environment for a distinct selection of adapters.
 See [testing](testing.md) for minimal and extension-enabled verification.
+
+For region boundaries, exact query readouts, supported selections, and the
+difference between static and live views, see [visualization](visualization.md).

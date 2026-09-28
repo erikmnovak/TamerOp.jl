@@ -20,6 +20,15 @@ function check_visual_spec(spec::VisualizationSpec; throw::Bool=false)
     haskey(spec.axes, :ylabel) || push!(issues, "axes must define :ylabel")
     haskey(spec.axes, :xlimits) || push!(issues, "axes must define :xlimits")
     haskey(spec.axes, :ylimits) || push!(issues, "axes must define :ylimits")
+    get(spec.interaction, :hover, false) && push!(issues, "Hover callbacks are not implemented by the visualization renderers.")
+    get(spec.interaction, :clicks, false) && push!(issues, "Selection callbacks are not implemented by the visualization renderers.")
+    widgets = get(spec.interaction, :widgets, ())
+    if !isempty(widgets)
+        widgets == (:slice_index,) && get(spec.interaction, :notebook, nothing) === :widget_viewer ||
+            push!(issues, "The only implemented widget is :slice_index in a standalone slice viewer.")
+        haskey(spec.metadata, :volume) && haskey(spec.metadata, :view_dims) && haskey(spec.metadata, :fixed_indices) ||
+            push!(issues, "A slice widget requires volume, view_dims, and fixed_indices metadata.")
+    end
 
     for (idx, layer) in enumerate(spec.layers)
         if layer isa HeatmapLayer
@@ -32,6 +41,17 @@ function check_visual_spec(spec::VisualizationSpec; throw::Bool=false)
                 rect[1] <= rect[3] || push!(issues, "RectLayer $idx has xlo > xhi.")
                 rect[2] <= rect[4] || push!(issues, "RectLayer $idx has ylo > yhi.")
             end
+        elseif layer isa PolygonLayer
+            for polygon in layer.polygons
+                length(polygon) >= 3 || push!(issues, "PolygonLayer $idx polygons need at least three vertices.")
+                all(p -> all(isfinite, p), polygon) ||
+                    push!(issues, "PolygonLayer $idx vertices must have finite display coordinates.")
+            end
+        elseif layer isa SegmentLayer
+            layer.linestyle in (:solid, :dash, :dot) ||
+                push!(issues, "SegmentLayer $idx linestyle must be :solid, :dash, or :dot.")
+            all(seg -> all(isfinite, seg), layer.segments) ||
+                push!(issues, "SegmentLayer $idx coordinates must be finite.")
         elseif layer isa TextLayer
             length(layer.labels) == length(layer.positions) ||
                 push!(issues, "TextLayer $idx labels/positions length mismatch.")
@@ -56,6 +76,8 @@ function check_visual_spec(spec::VisualizationSpec; throw::Bool=false)
 
     for (idx, panel) in enumerate(spec.panels)
         isempty(panel.panels) || push!(issues, "panel $idx cannot contain nested panels.")
+        isempty(get(panel.interaction, :widgets, ())) ||
+            push!(issues, "panel $idx contains a widget; render slice viewers as standalone figures.")
         panel_report = check_visual_spec(panel; throw=false)
         get(panel_report, :valid, false) || begin
             for issue in get(panel_report, :issues, String[])
@@ -73,7 +95,19 @@ function check_visual_spec(spec::VisualizationSpec; throw::Bool=false)
                                 issues=issues)
 end
 
-function check_visual_request(obj; kind::Symbol=:auto, throw::Bool=false, kwargs...)
+"""
+    check_visual_request(obj; kind=:auto, backend=:auto, throw=false, kwargs...)
+
+Check recipe availability, prerequisites, and effective recipe keywords without
+constructing the picture. The report includes `supported_keywords`, qualitative
+construction cost, and renderer availability. `backend=:auto` permits building
+specifications without an activated renderer; a named backend must be activated.
+Renderer controls (`figure`, `size`) belong to `render`/`visualize`/`save_visual`,
+not to recipe construction. Unsupported keywords are errors, including keywords
+that apply to a different kind on the same object.
+"""
+function check_visual_request(obj; kind::Symbol=:auto, backend::Symbol=:auto,
+                              throw::Bool=false, kwargs...)
     supported = available_visuals(obj)
     issues = String[]
     isempty(supported) && push!(issues, "no visualization kinds are registered for $(nameof(typeof(obj))).")
@@ -81,17 +115,115 @@ function check_visual_request(obj; kind::Symbol=:auto, throw::Bool=false, kwargs
     if kind !== :auto && !(kind in supported)
         push!(issues, "kind=$(kind) is unsupported for $(nameof(typeof(obj))); supported kinds are $(supported).")
     end
-    _append_visual_request_issues!(issues, obj, requested; kwargs...)
+    keywords = _visual_request_keywords(obj, requested)
+    for name in keys(kwargs)
+        name in keywords || push!(issues, "keyword $(name) is unsupported for kind=$(requested); supported recipe keywords are $(keywords).")
+    end
+    backend === :auto || _visual_backend_available(backend) ||
+        push!(issues, "visualization backend $(backend) is not activated. $(get(_VISUAL_BACKEND_HELP, backend, ""))")
+    try
+        _append_visual_request_issues!(issues, obj, requested; kwargs...)
+    catch err
+        err isa InterruptException && rethrow()
+        push!(issues, sprint(showerror, err))
+    end
     valid = isempty(issues)
     throw && !valid && _throw_invalid_visual(:check_visual_request, issues)
     return _visual_issue_report(:visual_request, valid;
                                 object_type=Symbol(nameof(typeof(obj))),
                                 requested_kind=requested,
                                 supported_kinds=supported,
+                                supported_keywords=keywords,
+                                construction_cost=_visual_request_cost(obj, requested),
+                                rendering=_visual_render_capabilities(),
                                 issues=issues)
 end
 
+# This is the validation contract for the existing recipes, not a second recipe
+# registry. Dispatch follows their mathematical owners; kind-specific tuples
+# deliberately exclude keywords that the selected recipe would ignore.
+_visual_request_keywords(obj, kind::Symbol) = ()
+_visual_request_keywords(obj::Union{AbstractPLikeEncodingMap,CompiledEncoding,EncodingResult}, kind::Symbol) =
+    kind === :query_overlay ? (:box, :point, :points) : (:box,)
+_visual_request_keywords(obj::Flange, kind::Symbol) =
+    kind === :regions ? (:box, :alpha_up, :alpha_dn) : (:box,)
+_visual_request_keywords(obj::CohomologyDimsResult, kind::Symbol) =
+    kind in (:cohomology_support, :cohomology_support_plane) ? (:box,) : ()
+_visual_request_keywords(obj::InvariantResult, kind::Symbol) =
+    kind === :rank_query_overlay ? (:box, :pair, :pairs) :
+    kind === :hilbert_heatmap ? (:box,) : ()
+_visual_request_keywords(obj::SliceBarcodesResult, kind::Symbol) = kind === :barcode ? (:index,) : ()
+_visual_request_keywords(obj::FiberedSliceResult, kind::Symbol) =
+    kind === :fibered_slice_overlay ? (:arrangement, :dir, :offset, :basepoint, :tie_break) : ()
+function _visual_request_keywords(obj::Union{FiberedArrangement2D,FiberedBarcodeCache2D}, kind::Symbol)
+    kind in (:fibered_query, :fibered_cell_highlight, :fibered_tie_break, :fibered_query_barcode) &&
+        return (:dir, :offset, :basepoint, :tie_break)
+    kind === :fibered_offset_intervals && return (:dir,)
+    kind === :fibered_projected_comparison && return (:projected,)
+    kind in (:fibered_family_contributions, :fibered_distance_diagnostic) && return (:caches,)
+    return ()
+end
+_visual_request_keywords(obj::FiberedSliceFamily2D, kind::Symbol) =
+    kind in (:fibered_family_contributions, :fibered_distance_diagnostic) ? (:caches,) : ()
+_visual_request_keywords(obj::MPPLineSpec, kind::Symbol) = (:box,)
+_visual_request_keywords(obj::MPPDecomposition, kind::Symbol) = (:layout,)
+_visual_request_keywords(obj::MPLandscape, kind::Symbol) =
+    kind === :landscape_slices ? (:idir, :ioff, :layer) : ()
+_visual_request_keywords(obj::OrdinaryPersistence.PersistenceDiagram, kind::Symbol) = (:dim,)
+function _visual_request_keywords(obj::DataTypes.PointCloud, kind::Symbol)
+    kind === :points_3d && return (:dims, :color_values)
+    kind === :point_density && return (:dims, :labels, :color_values)
+    common = (:dims, :labels, :color_values, :density)
+    kind === :knn_graph && return (common..., :k)
+    kind === :radius_graph && return (common..., :radius)
+    return common
+end
+function _visual_request_keywords(obj::DataIngestion.PointCodensityResult, kind::Symbol)
+    kind === :codensity_radius_snapshots && return (:radii, :codensity_levels)
+    return Tuple(k for k in _visual_request_keywords(DataIngestion.source_data(obj), kind) if k !== :color_values)
+end
+_visual_request_keywords(obj::DataTypes.GraphData, kind::Symbol) =
+    DataTypes.coord_matrix(obj) === nothing ? (:labels,) :
+    kind === :graph_3d ? (:dims,) : (:dims, :labels)
+_visual_request_keywords(obj::DataTypes.EmbeddedPlanarGraph2D, kind::Symbol) = (:labels,)
+_visual_request_keywords(obj::DataTypes.ImageNd, kind::Symbol) =
+    kind === :channels ? (:view_dims, :colormap) : (:view_dims, :slice_indices, :colormap)
+
+function _visual_request_cost(obj, kind::Symbol)
+    work = if kind in (:rank_heatmap, :rank_rectangles)
+        :dense_pair_table
+    elseif kind === :constant_subdivision
+        :fiber_rank_grid
+    elseif kind in (:knn_graph, :radius_graph)
+        :all_pairs_distances
+    elseif kind in (:fibered_family_contributions, :fibered_distance_diagnostic)
+        :sampled_family_bottleneck_queries
+    elseif kind === :fibered_query_barcode
+        :slice_barcode_query
+    elseif kind in (:regions, :region_labels, :query_overlay, :rank_query_overlay,
+                     :hilbert_heatmap, :cohomology_support, :cohomology_support_plane)
+        :geometry_materialization
+    elseif kind === :density_image
+        :dense_sample_grid
+    else
+        :recipe_materialization
+    end
+    return (; work, timing=:not_measured, cache_reuse=:recipe_dependent)
+end
+
 _append_visual_request_issues!(issues::Vector{String}, obj, kind::Symbol; kwargs...) = issues
+
+function _append_visual_request_issues!(issues::Vector{String}, obj::Union{Flange,MPPLineSpec}, kind::Symbol; kwargs...)
+    box = get(kwargs, :box, nothing)
+    box === nothing || _visual_box_2d(box)
+    for name in (:alpha_up, :alpha_dn)
+        alpha = get(kwargs, name, nothing)
+        alpha === nothing && continue
+        alpha isa Real && isfinite(alpha) && 0 <= alpha <= 1 ||
+            push!(issues, "$(name) must be a finite opacity between 0 and 1.")
+    end
+    return issues
+end
 
 function _require_one_of!(issues::Vector{String}, names::Tuple, kwargs::NamedTuple, context::AbstractString)
     any(name -> get(kwargs, name, nothing) !== nothing, names) ||
@@ -108,14 +240,29 @@ end
 
 function _append_visual_request_issues!(issues::Vector{String}, obj::Union{AbstractPLikeEncodingMap,CompiledEncoding,EncodingResult}, kind::Symbol; kwargs...)
     params = (; kwargs...)
+    get(params, :box, nothing) === nothing || _visual_box_2d(params.box)
     if kind === :query_overlay
         _require_one_of!(issues, (:point, :points), params, "query_overlay")
+        points = _collect_query_points(; point=get(params, :point, nothing), points=get(params, :points, nothing))
+        isempty(points) && push!(issues, "query_overlay requires at least one query point.")
+        foreach(_drawing_point, points)
     end
     return issues
 end
 
 function _append_visual_request_issues!(issues::Vector{String}, obj::DataTypes.PointCloud, kind::Symbol; kwargs...)
     params = (; kwargs...)
+    target = kind === :points_3d ? 3 : 2
+    dims = get(params, :dims, nothing)
+    if dims !== nothing
+        length(dims) == target && length(unique(dims)) == target &&
+            all(d -> d isa Integer && !(d isa Bool) && 1 <= d <= DataTypes.ambient_dim(obj), dims) ||
+            push!(issues, "dims must select $target distinct coordinate axes within the point cloud.")
+    end
+    colors = get(params, :color_values, nothing)
+    colors === nothing || length(colors) == DataTypes.npoints(obj) ||
+        push!(issues, "color_values must contain one value per point.")
+    get(params, :labels, nothing) === nothing || _collect_point_labels(params.labels, DataTypes.npoints(obj))
     if kind === :knn_graph
         k = get(params, :k, nothing)
         k === nothing || Int(k) > 0 || push!(issues, "knn_graph k must be positive.")
@@ -123,6 +270,33 @@ function _append_visual_request_issues!(issues::Vector{String}, obj::DataTypes.P
         radius = get(params, :radius, nothing)
         radius === nothing || float(radius) > 0 || push!(issues, "radius_graph radius must be positive.")
     end
+    return issues
+end
+
+function _append_visual_request_issues!(issues::Vector{String}, obj::DataTypes.ImageNd, kind::Symbol; kwargs...)
+    params = (; kwargs...)
+    _image_view_selection(obj, kind; view_dims=get(params, :view_dims, nothing),
+                           slice_indices=get(params, :slice_indices, nothing))
+    get(params, :colormap, :magma) isa Symbol || push!(issues, "colormap must be a Symbol naming a Makie colormap.")
+    return issues
+end
+
+function _append_visual_request_issues!(issues::Vector{String}, obj::DataTypes.GraphData, kind::Symbol; kwargs...)
+    params = (; kwargs...)
+    dims = get(params, :dims, nothing)
+    if dims !== nothing && DataTypes.coord_matrix(obj) !== nothing
+        target = kind === :graph_3d ? 3 : 2
+        length(dims) == target && length(unique(dims)) == target &&
+            all(d -> d isa Integer && !(d isa Bool) && 1 <= d <= DataTypes.ambient_dim(obj), dims) ||
+            push!(issues, "dims must select $target distinct axes within the graph coordinates.")
+    end
+    get(params, :labels, nothing) === nothing || _collect_point_labels(params.labels, DataTypes.nvertices(obj))
+    return issues
+end
+
+function _append_visual_request_issues!(issues::Vector{String}, obj::CohomologyDimsResult, kind::Symbol; kwargs...)
+    box = get(kwargs, :box, nothing)
+    box === nothing || _visual_box_2d(box)
     return issues
 end
 
@@ -184,6 +358,8 @@ function _append_visual_request_issues!(issues::Vector{String}, obj::Union{Fiber
         _require_all!(issues, (:projected,), params, string(kind))
         projected = get(params, :projected, nothing)
         projected isa ProjectedArrangement || push!(issues, "fibered_projected_comparison requires projected to be a ProjectedArrangement.")
+        projected isa ProjectedArrangement && !(:projected_arrangement in available_visuals(projected)) &&
+            push!(issues, "fibered_projected_comparison requires 2D projected directions.")
     elseif kind in (:fibered_family_contributions, :fibered_distance_diagnostic)
         _require_all!(issues, (:caches,), params, string(kind))
         if isempty(issues)
@@ -239,6 +415,12 @@ function _append_visual_request_issues!(issues::Vector{String}, obj::MPLandscape
     if kind === :landscape_slices
         get(params, :idir, nothing) !== nothing || push!(issues, "landscape_slices requires keyword idir.")
         get(params, :ioff, nothing) !== nothing || push!(issues, "landscape_slices requires keyword ioff.")
+        for (name, bound) in ((:idir, ndirections(obj)), (:ioff, noffsets(obj)), (:layer, landscape_layers(obj)))
+            value = get(params, name, name === :layer ? 1 : nothing)
+            value === nothing && continue
+            value isa Integer && !(value isa Bool) && 1 <= value <= bound ||
+                push!(issues, "$(name) must be an integer in 1:$(bound).")
+        end
     end
     return issues
 end
@@ -249,14 +431,25 @@ function _append_visual_request_issues!(issues::Vector{String}, obj::MPPDecompos
         layout = get(params, :layout, :overlay)
         layout in (:overlay, :summands) ||
             push!(issues, "mpp_decomposition layout must be :overlay or :summands.")
+        layout === :summands && nsummands(obj) == 0 &&
+            push!(issues, "layout=:summands requires at least one sampled track; use layout=:overlay for an empty decomposition.")
     end
     return issues
 end
 
 function _append_visual_request_issues!(issues::Vector{String}, obj::InvariantResult, kind::Symbol; kwargs...)
     params = (; kwargs...)
+    get(params, :box, nothing) === nothing || _visual_box_2d(params.box)
     if kind === :rank_query_overlay
         _require_one_of!(issues, (:pair, :pairs), params, "rank_query_overlay")
+        query_pairs = _collect_rank_query_pairs(; pair=get(params, :pair, nothing), pairs=get(params, :pairs, nothing))
+        isempty(query_pairs) && push!(issues, "rank_query_overlay requires at least one query pair.")
+        for (x, y) in query_pairs
+            _drawing_point(x)
+            _drawing_point(y)
+            report = _visual_rank_query_points(encoding_map(obj), collect(x), collect(y); throw=false)
+            report.valid || append!(issues, String.(report.issues))
+        end
     end
     return issues
 end

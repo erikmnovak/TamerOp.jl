@@ -446,6 +446,10 @@ explicit persistence, the same function accepts a writable `path` with
 at the repository root. Saving to another path does not automatically select
 that file on a future import; normal users can simply use the defaults.
 
+For measuring or improving performance, use the [benchmarking manual](docs/benchmarking.md).
+It separates compilation from uncached computation and reuse, explains fair
+comparisons with other tools, and describes how to preserve reproducible evidence.
+
 ## Optional plotting and integrations
 
 The mathematical core loads with `using TamerOp`. Plotting and ecosystem

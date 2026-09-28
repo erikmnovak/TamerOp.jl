@@ -5,6 +5,11 @@ commit, and confirm that users can install the registered release. It is for the
 package maintainer; library users should follow
 [the installation walkthrough](../README.md#install-tamerop).
 
+When release notes or a paper make performance claims, follow the
+[benchmarking manual](benchmarking.md), including its evidence and reproducible
+bundle requirements. Publishing benchmark artifacts is a separate planned
+release; this does not change the current local-only benchmark/audit policy.
+
 The first planned release is **0.1.0**. Until its registration has merged,
 users install from the GitHub URL. A GitHub repository, a Git tag, and a General
 registry entry serve different purposes: General is what makes name-only

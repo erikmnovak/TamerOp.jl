@@ -46,12 +46,34 @@ struct RectLayer <: AbstractVisualizationLayer
     linewidth::Float64
 end
 
+"""
+    PolygonLayer(polygons, fill_color, stroke_color, alpha, linewidth)
+
+Filled polygons in display coordinates. Each polygon is a cyclic list of
+vertices; its last vertex is connected to its first. Exact classifier geometry
+and boundary inclusion, when available, live in the specification metadata.
+Use separate `SegmentLayer`s to distinguish included, excluded, and clipped
+edges, with `linewidth=0` here.
+"""
+struct PolygonLayer <: AbstractVisualizationLayer
+    polygons::Vector{Vector{NTuple{2,Float64}}}
+    fill_color::Symbol
+    stroke_color::Symbol
+    alpha::Float64
+    linewidth::Float64
+end
+
 struct SegmentLayer <: AbstractVisualizationLayer
     segments::Vector{NTuple{4,Float64}}
     color::Symbol
     alpha::Float64
     linewidth::Float64
+    linestyle::Symbol
 end
+
+SegmentLayer(segments::Vector{NTuple{4,Float64}}, color::Symbol,
+             alpha::Float64, linewidth::Float64) =
+    SegmentLayer(segments, color, alpha, linewidth, :solid)
 
 struct PolylineLayer <: AbstractVisualizationLayer
     paths::Vector{Vector{NTuple{2,Float64}}}
@@ -225,8 +247,7 @@ function VisualizationSpec(kind::Symbol;
                                              zlabel="z", zlimits=nothing,
                                              aspect=:auto, xticks=nothing, yticks=nothing),
                            legend::NamedTuple=(; visible=false, title="", entries=NamedTuple()),
-                           interaction::NamedTuple=(; hover=false, labels=false, clicks=false,
-                                                    widgets=(), notebook=:summary_card),
+                           interaction::NamedTuple=_default_interaction(),
                            metadata::NamedTuple=NamedTuple())
     return VisualizationSpec(kind, String(title), String(subtitle), layers, panels, axes, legend, interaction, metadata)
 end
@@ -254,6 +275,8 @@ function describe(spec::VisualizationSpec)
         metadata = spec.metadata,
         legend_visible = get(spec.legend, :visible, false),
         interaction = spec.interaction,
+        construction_cost = _visual_request_cost(spec, visual_kind(spec)),
+        rendering = _visual_render_capabilities(spec),
     )
 end
 
@@ -332,10 +355,14 @@ end
             aspect=aspect, xticks=xticks, yticks=yticks)
 end
 
-@inline function _default_interaction(; hover::Bool=false, labels::Bool=false,
-                                       clicks::Bool=false, widgets=(),
+@inline function _default_interaction(; labels::Bool=false, widgets=(),
                                        notebook=:summary_card)
-    return (; hover, labels, clicks, widgets, notebook)
+    # Report actual callbacks; static text labels are distinct from tooltips.
+    live_widgets = notebook === :widget_viewer && !isempty(widgets)
+    return (; hover=false, labels, clicks=false, widgets, notebook,
+            mode=live_widgets ? :live_julia : :static,
+            requires_live_julia=live_widgets,
+            offline_widgets=false)
 end
 
 @inline function _default_legend(; visible::Bool=false, title::AbstractString="", entries=NamedTuple())

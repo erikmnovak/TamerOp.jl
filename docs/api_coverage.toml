@@ -144,11 +144,11 @@ title = "Visualization specifications, renderers, and exports"
 question = "How do I interpret and save a figure of the object I computed?"
 owners = ["TamerOp.Visualization"]
 reference_pages = ["docs/src/reference/visualization.md"]
-guides = ["docs/optional_integrations.md"]
+guides = ["docs/visualization.md", "docs/optional_integrations.md"]
 example_sources = []
 example_status = "first_path_recipe_selection_and_rendering_pending"
 reference_status = "backlog"
-review_status = "first_path_subset_selected; browser_review_pending"
+review_status = "A81_A82_contracts_and_exact_planar_geometry; browser_review_pending"
 backlog = ["Choose and execute a figure recipe for the square encoding", "Explain geometry, label order, spaces, and maps in its caption", "Document renderer activation and export semantics"]
 
 [[families]]

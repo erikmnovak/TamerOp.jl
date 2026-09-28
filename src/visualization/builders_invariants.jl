@@ -45,8 +45,9 @@ function _integer_value_palette(values::AbstractVector{<:Integer})
     return uniq, cmap
 end
 
-function _integer_value_legend(values::AbstractVector{<:Integer}; title::AbstractString)
-    uniq, cmap = _integer_value_palette(values)
+function _integer_value_legend(values::AbstractVector{<:Integer}; title::AbstractString, colors=nothing)
+    uniq, default_colors = _integer_value_palette(values)
+    cmap = colors === nothing ? default_colors : colors
     entries = (; (Symbol("v" * string(i)) => (; label=string(v), color=cmap[v], style=:patch)
                    for (i, v) in enumerate(uniq))...)
     return _default_legend(visible=!isempty(uniq), title=title, entries=entries)
@@ -105,295 +106,87 @@ function _hilbert_curve_path(dims::AbstractVector{<:Integer})
     return pts
 end
 
-_has_hilbert_heatmap_geometry(::GridEncodingMap{2}) = true
-_has_hilbert_heatmap_geometry(::PLEncodingMapBoxes) = true
-_has_hilbert_heatmap_geometry(::ZnEncodingMap) = true
+# Scalar region views share the exact classifier geometry used by query overlays.
+# The plotting layers contain Float64 coordinates; the metadata retain exact cells.
+const _GeometricEncoding2D = Union{GridEncodingMap{2},PLEncodingMapBoxes,PLEncodingMap,ZnEncodingMap{2}}
+_has_hilbert_heatmap_geometry(pi::_GeometricEncoding2D) = :regions in available_visuals(pi)
 _has_hilbert_heatmap_geometry(enc::CompiledEncoding) = _has_hilbert_heatmap_geometry(encoding_map(enc))
 _has_hilbert_heatmap_geometry(_) = false
 
-_has_rank_query_geometry(::AbstractPLikeEncodingMap) = true
-_has_rank_query_geometry(enc::CompiledEncoding) = _has_rank_query_geometry(encoding_map(enc))
-_has_rank_query_geometry(_) = false
+_has_rank_query_geometry(pi) = :query_overlay in available_visuals(pi)
 
-function _hilbert_heatmap_spec(pi::GridEncodingMap{2}, dims::AbstractVector{<:Integer})
-    rects, _, axes = _grid_rectangles_2d(pi)
-    length(rects) == length(dims) || throw(ArgumentError("hilbert_heatmap expects one Hilbert value per grid region."))
-    values = Int.(dims)
-    uniq, cmap = _integer_value_palette(values)
-    layers = AbstractVisualizationLayer[]
-    for v in uniq
-        idx = findall(==(v), values)
-        isempty(idx) || push!(layers, RectLayer(rects[idx], cmap[v], :black, 0.48, 0.8))
+function _dimension_region_spec(pi::_GeometricEncoding2D, dims::AbstractVector{<:Integer},
+                                kind::Symbol; box=nothing, degree=nothing)
+    geometry = _region_geometry_2d(pi; box=box)
+    ids = filter(!iszero, geometry.region_ids)
+    all(r -> 1 <= r <= length(dims), ids) ||
+        throw(ArgumentError("dimension data do not cover the encoding's region IDs."))
+    values = Int[dims[r] for r in ids]
+    _, palette = _integer_value_palette(Int.(dims))
+    kind === :cohomology_support_plane && (palette[0] = :gray90)
+    colors = Dict{Int,Symbol}(0 => :gray70)
+    for r in ids
+        colors[r] = kind === :cohomology_support ? (dims[r] > 0 ? :chartreuse3 : :gray90) :
+                    kind === :cohomology_support_plane && iszero(dims[r]) ? :gray90 : palette[Int(dims[r])]
     end
-    push!(layers, _text_layer_from_labels(_rect_text_centers(rects), string.(values); color=:black, textsize=10.0))
-    return VisualizationSpec(:hilbert_heatmap;
-                             title="Restricted Hilbert heatmap",
-                             subtitle="piecewise-constant dimensions on encoding regions",
-                             layers=layers,
-                             axes=axes,
-                             metadata=(; object=:restricted_hilbert, nregions=length(values), max_dim=maximum(values),
-                                        figure_size=(760, 620), legend_position=:right),
-                             legend=_integer_value_legend(values; title="dim"),
-                             interaction=_default_interaction(hover=true, labels=true))
-end
-
-function _hilbert_heatmap_spec(pi::PLEncodingMapBoxes, dims::AbstractVector{<:Integer}; box=nothing)
-    region_rects, labels, axes, label_positions = _pl_rectangles_2d(pi; box=box)
-    region_ids = parse.(Int, labels)
-    values = Int[dims[r] for r in region_ids]
-    uniq, cmap = _integer_value_palette(values)
-    layers = AbstractVisualizationLayer[]
-    for (rects_r, v) in zip(region_rects, values)
-        color = cmap[v]
-        push!(layers, RectLayer(rects_r, color, :black, 0.28, 0.8))
-        push!(layers, SegmentLayer(_region_boundary_segments(rects_r), :black, 0.7, 1.0))
+    layers = _region_geometry_layers(geometry; colors=colors)
+    labels = String[]
+    positions = NTuple{2,Float64}[]
+    if kind !== :cohomology_support_plane
+        for component in geometry.components
+            r = component.region_id
+            iszero(r) && continue
+            kind === :cohomology_support && iszero(dims[r]) && continue
+            vertices = component.vertices
+            isempty(vertices) && continue
+            push!(positions, (Float64(sum(first, vertices) / length(vertices)),
+                              Float64(sum(last, vertices) / length(vertices))))
+            push!(labels, string(dims[r]))
+        end
+        isempty(labels) || push!(layers, _text_layer_from_labels(positions, labels; textsize=10.0))
     end
-    label_text_positions = _offset_label_positions(label_positions, axes)
-    push!(layers, _text_layer_from_labels(label_text_positions, string.(values); color=:black, textsize=10.0))
-    return VisualizationSpec(:hilbert_heatmap;
-                             title="Restricted Hilbert heatmap",
-                             subtitle="piecewise-constant dimensions on encoding regions",
-                             layers=layers,
-                             axes=axes,
-                             metadata=(; object=:restricted_hilbert, nregions=length(values), max_dim=maximum(values),
-                                        figure_size=(860, 620), legend_position=:right),
-                             legend=_integer_value_legend(values; title="dim"),
-                             interaction=_default_interaction(hover=true, labels=true))
-end
-
-function _hilbert_heatmap_spec(pi::ZnEncodingMap, dims::AbstractVector{<:Integer})
-    rects, _, axes = _zn_rectangles_2d(pi)
-    length(rects) == length(dims) || throw(ArgumentError("hilbert_heatmap expects one Hilbert value per Zn region."))
-    values = Int.(dims)
-    uniq, cmap = _integer_value_palette(values)
-    layers = AbstractVisualizationLayer[]
-    for v in uniq
-        idx = findall(==(v), values)
-        isempty(idx) || push!(layers, RectLayer(rects[idx], cmap[v], :black, 0.48, 0.8))
+    legend = kind === :cohomology_support ? _cohomology_support_legend() :
+             _integer_value_legend(Int.(dims); title="dim", colors=palette)
+    if 0 in geometry.region_ids
+        legend = merge(legend, (; visible=true, entries=merge(legend.entries,
+            (; outside=(; label="outside encoding (unknown)", color=:gray70, style=:patch)))))
     end
-    push!(layers, _text_layer_from_labels(_rect_text_centers(rects), string.(values); color=:black, textsize=10.0))
-    return VisualizationSpec(:hilbert_heatmap;
-                             title="Restricted Hilbert heatmap",
-                             subtitle="dimension values on the Zn encoding support",
-                             layers=layers,
-                             axes=axes,
-                             metadata=(; object=:restricted_hilbert, nregions=length(values), max_dim=maximum(values),
-                                        figure_size=(760, 620), legend_position=:right),
-                             legend=_integer_value_legend(values; title="dim"),
-                             interaction=_default_interaction(hover=true, labels=true))
-end
-
-_hilbert_heatmap_spec(enc::CompiledEncoding, dims::AbstractVector{<:Integer}; kwargs...) =
-    _hilbert_heatmap_spec(encoding_map(enc), dims; kwargs...)
-
-function _grid_value_matrix_2d(pi::GridEncodingMap{2}, values::AbstractVector{<:Real})
-    nx, ny = pi.sizes
-    length(values) == nx * ny ||
-        throw(ArgumentError("grid value matrix expects one value per grid cell."))
-    mat = Matrix{Float64}(undef, ny, nx)
-    @inbounds for j in 1:ny, i in 1:nx
-        idx = 1 + (i - 1) * pi.strides[1] + (j - 1) * pi.strides[2]
-        mat[j, i] = float(values[idx])
-    end
-    return Float64.(pi.coords[1]), Float64.(pi.coords[2]), mat
+    is_hilbert = kind === :hilbert_heatmap
+    title = is_hilbert ? "Restricted Hilbert heatmap" :
+            kind === :cohomology_support ? "H^$(degree) region support" : "H^$(degree) dimension plane"
+    warnings = isempty(geometry.coordinate_collisions) && isempty(geometry.dimension_collapses) ? String[] :
+        ["Exact geometry loses precision in this display; inspect metadata.geometry.coordinate_collisions and dimension_collapses."]
+    subtitle = geometry.geometry_kind === :nearest_lattice_tiles ?
+        "dimensions on nearest-lattice tiles; ties use round-to-even" :
+        "dimensions on exact encoding regions, clipped to the viewing box"
+    isempty(warnings) || (subtitle *= " | Exact-coordinate readout available; display rounding detected.")
+    return VisualizationSpec(kind;
+        title=title, subtitle=subtitle,
+        layers=layers, axes=kind === :cohomology_support_plane ? merge(geometry.axes, (; aspect=:auto)) : geometry.axes, legend=legend,
+        metadata=(; object=is_hilbert ? :restricted_hilbert : :cohomology_dims,
+                    degree, region_ids=ids, nregions=length(ids),
+                    support_count=count(>(0), values), max_dim=maximum(values; init=0),
+                    geometry, warnings, box=geometry.box, figure_size=(860, 620), legend_position=:right),
+        interaction=_default_interaction(labels=!isempty(labels)))
 end
 
 @inline function _cohomology_support_legend()
-    return _default_legend(visible=true,
-                           title="support",
-                           entries=(;
-                               supported=(; label="nonzero", color=:chartreuse3, style=:patch),
-                               unsupported=(; label="zero", color=:gray90, style=:patch),
-                           ))
+    return _default_legend(visible=true, title="support", entries=(;
+        supported=(; label="nonzero", color=:chartreuse3, style=:patch),
+        unsupported=(; label="zero", color=:gray90, style=:patch)))
 end
 
-@inline _axes_with_auto_aspect(axes::NamedTuple) = merge(axes, (; aspect=:auto))
-
-function _cohomology_support_spec(pi::GridEncodingMap{2}, dims::AbstractVector{<:Integer}; degree::Int)
-    rects, _, axes = _grid_rectangles_2d(pi)
-    length(rects) == length(dims) || throw(ArgumentError("cohomology_support expects one dimension value per grid region."))
-    values = Int.(dims)
-    supported = values .> 0
-    layers = AbstractVisualizationLayer[
-        RectLayer(rects, :gray90, :gray60, 0.92, 0.8),
-    ]
-    if any(supported)
-        push!(layers, RectLayer(rects[supported], :chartreuse3, :black, 0.62, 1.0))
-        push!(layers, _text_layer_from_labels(_rect_text_centers(rects[supported]),
-                                              string.(values[supported]);
-                                              color=:black,
-                                              textsize=10.0))
-    end
-    return VisualizationSpec(:cohomology_support;
-                             title="H^$(degree) region support",
-                             subtitle="nonzero cohomology dimensions on encoding regions",
-                             layers=layers,
-                             axes=axes,
-                             metadata=(; object=:cohomology_dims,
-                                        degree,
-                                        nregions=length(values),
-                                        support_count=count(supported),
-                                        max_dim=isempty(values) ? 0 : maximum(values),
-                                        figure_size=(760, 620),
-                                        legend_position=:right),
-                             legend=_cohomology_support_legend(),
-                             interaction=_default_interaction(hover=true, labels=any(supported)))
-end
-
-function _cohomology_support_spec(pi::PLEncodingMapBoxes, dims::AbstractVector{<:Integer}; degree::Int, box=nothing)
-    region_rects, labels, axes, label_positions = _pl_rectangles_2d(pi; box=box)
-    region_ids = parse.(Int, labels)
-    values = Int[dims[r] for r in region_ids]
-    supported = values .> 0
-    layers = AbstractVisualizationLayer[]
-    for (rects_r, keep) in zip(region_rects, supported)
-        push!(layers, RectLayer(rects_r, keep ? :chartreuse3 : :gray90, :black, keep ? 0.42 : 0.18, 0.8))
-        push!(layers, SegmentLayer(_region_boundary_segments(rects_r), :black, 0.7, 1.0))
-    end
-    if any(supported)
-        text_positions = _offset_label_positions(label_positions[supported], axes)
-        push!(layers, _text_layer_from_labels(text_positions,
-                                              string.(values[supported]);
-                                              color=:black,
-                                              textsize=10.0))
-    end
-    return VisualizationSpec(:cohomology_support;
-                             title="H^$(degree) region support",
-                             subtitle="nonzero cohomology dimensions on encoding regions",
-                             layers=layers,
-                             axes=axes,
-                             metadata=(; object=:cohomology_dims,
-                                        degree,
-                                        nregions=length(values),
-                                        support_count=count(supported),
-                                        max_dim=isempty(values) ? 0 : maximum(values),
-                                        figure_size=(860, 620),
-                                        legend_position=:right),
-                             legend=_cohomology_support_legend(),
-                             interaction=_default_interaction(hover=true, labels=any(supported)))
-end
-
-function _cohomology_support_spec(pi::ZnEncodingMap, dims::AbstractVector{<:Integer}; degree::Int)
-    rects, _, axes = _zn_rectangles_2d(pi)
-    length(rects) == length(dims) || throw(ArgumentError("cohomology_support expects one dimension value per Zn region."))
-    values = Int.(dims)
-    supported = values .> 0
-    layers = AbstractVisualizationLayer[
-        RectLayer(rects, :gray90, :gray60, 0.92, 0.8),
-    ]
-    if any(supported)
-        push!(layers, RectLayer(rects[supported], :chartreuse3, :black, 0.62, 1.0))
-        push!(layers, _text_layer_from_labels(_rect_text_centers(rects[supported]),
-                                              string.(values[supported]);
-                                              color=:black,
-                                              textsize=10.0))
-    end
-    return VisualizationSpec(:cohomology_support;
-                             title="H^$(degree) region support",
-                             subtitle="nonzero cohomology dimensions on the Zn encoding support",
-                             layers=layers,
-                             axes=axes,
-                             metadata=(; object=:cohomology_dims,
-                                        degree,
-                                        nregions=length(values),
-                                        support_count=count(supported),
-                                        max_dim=isempty(values) ? 0 : maximum(values),
-                                        figure_size=(760, 620),
-                                        legend_position=:right),
-                             legend=_cohomology_support_legend(),
-                             interaction=_default_interaction(hover=true, labels=any(supported)))
-end
-
-_cohomology_support_spec(enc::CompiledEncoding, dims::AbstractVector{<:Integer}; kwargs...) =
+_hilbert_heatmap_spec(pi::_GeometricEncoding2D, dims; box=nothing) =
+    _dimension_region_spec(pi, dims, :hilbert_heatmap; box=box)
+_cohomology_support_spec(pi::_GeometricEncoding2D, dims; degree::Int, box=nothing) =
+    _dimension_region_spec(pi, dims, :cohomology_support; degree=degree, box=box)
+_cohomology_support_plane_spec(pi::_GeometricEncoding2D, dims; degree::Int, box=nothing) =
+    _dimension_region_spec(pi, dims, :cohomology_support_plane; degree=degree, box=box)
+_hilbert_heatmap_spec(enc::CompiledEncoding, dims; kwargs...) =
+    _hilbert_heatmap_spec(encoding_map(enc), dims; kwargs...)
+_cohomology_support_spec(enc::CompiledEncoding, dims; kwargs...) =
     _cohomology_support_spec(encoding_map(enc), dims; kwargs...)
-
-function _cohomology_support_plane_spec(pi::GridEncodingMap{2}, dims::AbstractVector{<:Integer}; degree::Int)
-    _, _, axes = _grid_rectangles_2d(pi)
-    values = Int.(dims)
-    supported = values .> 0
-    _, _, plane_vals = _grid_value_matrix_2d(pi, values)
-    plane_vals .= ifelse.(plane_vals .> 0.0, plane_vals, NaN)
-    xedges = _expanded_axis(pi.coords[1])
-    yedges = _expanded_axis(pi.coords[2])
-    layers = AbstractVisualizationLayer[
-        RectLayer([(xedges[1], yedges[1], xedges[end], yedges[end])], :gray90, :gray90, 0.98, 0.2),
-        HeatmapLayer(xedges, yedges, plane_vals, :viridis, 0.92, "dim"),
-    ]
-    return VisualizationSpec(:cohomology_support_plane;
-                             title="H^$(degree) dimension plane",
-                             subtitle="cohomology dimensions on the bifiltration parameter plane",
-                             layers=layers,
-                             axes=_axes_with_auto_aspect(axes),
-                             metadata=(; object=:cohomology_dims,
-                                        degree,
-                                        nregions=length(values),
-                                        support_count=count(supported),
-                                        max_dim=isempty(values) ? 0 : maximum(values),
-                                        figure_size=(820, 520),
-                                        legend_position=:none),
-                             legend=_default_legend(visible=false),
-                             interaction=_default_interaction(hover=true, labels=false))
-end
-
-function _cohomology_support_plane_spec(pi::PLEncodingMapBoxes, dims::AbstractVector{<:Integer}; degree::Int, box=nothing)
-    region_rects, labels, axes, _ = _pl_rectangles_2d(pi; box=box)
-    region_ids = parse.(Int, labels)
-    values = Int[dims[r] for r in region_ids]
-    supported = values .> 0
-    nz_values = values[supported]
-    _, cmap = _integer_value_palette(isempty(nz_values) ? [0] : nz_values)
-    layers = AbstractVisualizationLayer[]
-    for (rects_r, v) in zip(region_rects, values)
-        color = v > 0 ? cmap[v] : :gray90
-        alpha = v > 0 ? 0.90 : 0.98
-        push!(layers, RectLayer(rects_r, color, color, alpha, 0.2))
-    end
-    return VisualizationSpec(:cohomology_support_plane;
-                             title="H^$(degree) dimension plane",
-                             subtitle="cohomology dimensions on the bifiltration parameter plane",
-                             layers=layers,
-                             axes=_axes_with_auto_aspect(axes),
-                             metadata=(; object=:cohomology_dims,
-                                        degree,
-                                        nregions=length(values),
-                                        support_count=count(supported),
-                                        max_dim=isempty(values) ? 0 : maximum(values),
-                                        figure_size=(880, 520),
-                                        legend_position=:right),
-                             legend=_integer_value_legend(nz_values; title="dim"),
-                             interaction=_default_interaction(hover=true, labels=false))
-end
-
-function _cohomology_support_plane_spec(pi::ZnEncodingMap, dims::AbstractVector{<:Integer}; degree::Int)
-    rects, _, axes = _zn_rectangles_2d(pi)
-    length(rects) == length(dims) || throw(ArgumentError("cohomology_support_plane expects one dimension value per Zn region."))
-    values = Int.(dims)
-    supported = values .> 0
-    nz_values = values[supported]
-    _, cmap = _integer_value_palette(isempty(nz_values) ? [0] : nz_values)
-    layers = AbstractVisualizationLayer[]
-    for (rect, v) in zip(rects, values)
-        color = v > 0 ? cmap[v] : :gray90
-        alpha = v > 0 ? 0.92 : 0.98
-        push!(layers, RectLayer([rect], color, color, alpha, 0.2))
-    end
-    return VisualizationSpec(:cohomology_support_plane;
-                             title="H^$(degree) dimension plane",
-                             subtitle="cohomology dimensions on the bifiltration parameter plane",
-                             layers=layers,
-                             axes=_axes_with_auto_aspect(axes),
-                             metadata=(; object=:cohomology_dims,
-                                        degree,
-                                        nregions=length(values),
-                                        support_count=count(supported),
-                                        max_dim=isempty(values) ? 0 : maximum(values),
-                                        figure_size=(820, 520),
-                                        legend_position=:right),
-                             legend=_integer_value_legend(nz_values; title="dim"),
-                             interaction=_default_interaction(hover=true, labels=false))
-end
-
-_cohomology_support_plane_spec(enc::CompiledEncoding, dims::AbstractVector{<:Integer}; kwargs...) =
+_cohomology_support_plane_spec(enc::CompiledEncoding, dims; kwargs...) =
     _cohomology_support_plane_spec(encoding_map(enc), dims; kwargs...)
 
 function _hilbert_bar_spec(dims::AbstractVector{<:Integer})
@@ -439,13 +232,25 @@ end
 function _as_query_pair(pair)
     if pair isa Tuple || pair isa AbstractVector
         length(pair) == 2 || throw(ArgumentError("rank_query_overlay expects each query pair to contain exactly two points."))
-        return (only(_as_points2(pair[1])), only(_as_points2(pair[2])))
+        return (only(_collect_query_points(point=pair[1])), only(_collect_query_points(point=pair[2])))
     end
     throw(ArgumentError("rank_query_overlay expects query pairs of the form (x, y)."))
 end
 
+# Integer-encoding pictures use the owner's nearest-lattice convention. Preserve
+# the ambient comparison before rounding so reversed pairs cannot become valid.
+_visual_rank_query_points(pi, x, y; throw::Bool=true) =
+    check_rank_query_points(pi, collect(x), collect(y); throw=throw)
+_visual_rank_query_points(pi::CompiledEncoding, x, y; kwargs...) =
+    _visual_rank_query_points(encoding_map(pi), x, y; kwargs...)
+function _visual_rank_query_points(pi::ZnEncodingMap, x, y; throw::Bool=true)
+    all(x[i] <= y[i] for i in eachindex(x)) ||
+        Base.throw(ArgumentError("rank_query_overlay requires coordinatewise x <= y before nearest-lattice rounding."))
+    return check_rank_query_points(pi, round.(Int, collect(x)), round.(Int, collect(y)); throw=throw)
+end
+
 function _collect_rank_query_pairs(; pair=nothing, pairs=nothing)
-    out = Tuple{NTuple{2,Float64},NTuple{2,Float64}}[]
+    out = Tuple{Tuple{Real,Real},Tuple{Real,Real}}[]
     pair === nothing || push!(out, _as_query_pair(pair))
     if pairs !== nothing
         for qpair in pairs
@@ -506,9 +311,9 @@ function _visual_spec(res::CohomologyDimsResult, kind::Symbol; kwargs...)
     _has_hilbert_heatmap_geometry(pi) ||
         throw(ArgumentError("cohomology support visuals require a 2D encoding with region geometry in its provenance."))
     if kind === :cohomology_support_plane
-        return _cohomology_support_plane_spec(pi, cohomology_dims(res); degree=res.degree)
+        return _cohomology_support_plane_spec(pi, cohomology_dims(res); degree=res.degree, kwargs...)
     end
-    return _cohomology_support_spec(pi, cohomology_dims(res); degree=res.degree)
+    return _cohomology_support_spec(pi, cohomology_dims(res); degree=res.degree, kwargs...)
 end
 
 function _visual_spec(result::RankInvariantResult, kind::Symbol; kwargs...)
@@ -553,7 +358,7 @@ function _visual_spec(result::RankInvariantResult, kind::Symbol; kwargs...)
                                  metadata=(; object=:rank_invariant, nvertices=n, nstored=length(result),
                                             figure_size=(760, 620), legend_position=:right),
                                  legend=_integer_value_legend(values; title="rank"),
-                                 interaction=_default_interaction(hover=true, labels=!isempty(labels)))
+                                 interaction=_default_interaction(labels=!isempty(labels)))
     end
     throw(ArgumentError("RankInvariantResult supports kind=:rank_heatmap or :rank_rectangles only."))
 end
@@ -565,7 +370,7 @@ function _visual_spec(inv::InvariantResult, kind::Symbol; pair=nothing, pairs=no
         if kind === :rank_query_overlay
             pi = encoding_map(inv)
             _has_rank_query_geometry(pi) || throw(ArgumentError("rank_query_overlay requires an invariant result with 2D query geometry in its encoding provenance."))
-            base = _visual_spec(pi, :regions)
+            base = _visual_spec(pi, :regions; kwargs...)
             query_pairs = _collect_rank_query_pairs(pair=pair, pairs=pairs)
             isempty(query_pairs) && throw(ArgumentError("rank_query_overlay requires keyword pair or pairs."))
             segments = NTuple{4,Float64}[]
@@ -573,20 +378,29 @@ function _visual_spec(inv::InvariantResult, kind::Symbol; pair=nothing, pairs=no
             ypts = NTuple{2,Float64}[]
             label_pts = NTuple{2,Float64}[]
             labels = String[]
+            query_results = NamedTuple[]
             Q = source_poset(val)
             for (i, (x, y)) in enumerate(query_pairs)
-                report = check_rank_query_points(pi, collect(x), collect(y); throw=true)
+                report = _visual_rank_query_points(pi, x, y; throw=true)
                 a = Int(report.x_region)
                 b = Int(report.y_region)
                 leq(Q, a, b) || throw(ArgumentError("rank_query_overlay requires located regions to satisfy a <= b; got a=$(a), b=$(b)."))
                 rank_ab = value_at(val, a, b)
-                push!(segments, (x[1], x[2], y[1], y[2]))
-                push!(xpts, x)
-                push!(ypts, y)
-                mid = (0.5 * (x[1] + y[1]), 0.5 * (x[2] + y[2]))
+                push!(query_results, (; source=x, target=y, source_region=a, target_region=b, rank=rank_ab))
+                xd, yd = _drawing_point(x), _drawing_point(y)
+                push!(segments, (xd[1], xd[2], yd[1], yd[2]))
+                push!(xpts, xd)
+                push!(ypts, yd)
+                mid = (0.5 * xd[1] + 0.5 * yd[1], 0.5 * xd[2] + 0.5 * yd[2])
                 push!(label_pts, mid)
                 push!(labels, "r$(i) = $(rank_ab)")
             end
+            exact_points = [p for pair in query_pairs for p in pair]
+            query_collisions = _display_collisions(exact_points)
+            rounded = any(_drawing_point(p) != p for p in exact_points)
+            warnings = copy(get(base.metadata, :warnings, String[]))
+            rounded && push!(warnings, "Rank markers are rounded for drawing; metadata.query_results retain the exact coordinates and ranks.")
+            isempty(query_collisions) || push!(warnings, "Distinct exact query coordinates coincide in this display; inspect metadata.query_results.")
             label_positions = _offset_label_positions(label_pts, base.axes; dx_frac=0.008, dy_frac=0.008)
             layers = copy(base.layers)
             push!(layers, SegmentLayer(segments, :orange3, 0.9, 2.0))
@@ -600,19 +414,19 @@ function _visual_spec(inv::InvariantResult, kind::Symbol; pair=nothing, pairs=no
             legend = merge(base.legend, (; visible=true, entries=merge(base_entries, query_entries)))
             return VisualizationSpec(:rank_query_overlay;
                                      title="Rank query overlay",
-                                     subtitle="query pairs on the encoding with rank labels",
+                                     subtitle=isempty(warnings) ? "query pairs on the encoding with rank labels" : "query pairs on the encoding; display rounding detected (see exact query_results)",
                                      layers=layers,
                                      axes=base.axes,
-                                     metadata=merge(base.metadata, (; object=:rank_invariant, npairs=length(query_pairs))),
+                                     metadata=merge(base.metadata, (; object=:rank_invariant, npairs=length(query_pairs), exact_query_pairs=query_pairs, query_results, query_collisions, warnings)),
                                      legend=legend,
-                                     interaction=_default_interaction(hover=true, labels=true))
+                                     interaction=_default_interaction(labels=true))
         end
-        return _visual_spec(val, kind)
+        return _visual_spec(val, kind; kwargs...)
     elseif inv.which === :restricted_hilbert && val isa AbstractVector{<:Integer}
         if kind === :hilbert_heatmap
             pi = encoding_map(inv)
             _has_hilbert_heatmap_geometry(pi) || throw(ArgumentError("hilbert_heatmap requires an invariant result whose encoding provenance has 2D region geometry."))
-            return _hilbert_heatmap_spec(pi, val)
+            return _hilbert_heatmap_spec(pi, val; kwargs...)
         elseif kind === :hilbert_bars
             return _hilbert_bar_spec(val)
         elseif kind === :restricted_hilbert_curve
@@ -709,7 +523,8 @@ available_visuals(::FiberedBarcodeCache2D) = (:fibered_arrangement, :fibered_que
                                              :fibered_distance_diagnostic, :fibered_query_barcode)
 available_visuals(::FiberedSliceFamily2D) = (:fibered_family, :fibered_chain_cells, :fibered_family_contributions, :fibered_distance_diagnostic)
 available_visuals(::FiberedSliceResult) = (:fibered_slice, :fibered_slice_overlay, :barcode)
-available_visuals(::ProjectedArrangement) = (:projected_arrangement,)
+available_visuals(arr::ProjectedArrangement) =
+    all(proj -> length(proj.dir) == 2, projections(arr)) ? (:projected_arrangement,) : ()
 available_visuals(::ProjectedBarcodesResult) = (:barcode_bank,)
 available_visuals(::ProjectedDistancesResult) = (:projected_distances,)
 
@@ -870,7 +685,7 @@ function _fibered_chain_cells_spec(fam::FiberedSliceFamily2D)
                                         unique_chains=length(fam.unique_chain_ids), figure_size=(780, 620),
                                         legend_position=length(uniq) <= 8 ? :right : :none),
                              legend=legend,
-                             interaction=_default_interaction(hover=true, labels=length(chain_ids) <= 48))
+                             interaction=_default_interaction(labels=length(chain_ids) <= 48))
 end
 
 function _fibered_contribution_cell_spec(fam::FiberedSliceFamily2D, metrics;
@@ -903,7 +718,7 @@ function _fibered_contribution_cell_spec(fam::FiberedSliceFamily2D, metrics;
                                         unique_chains=length(fam.unique_chain_ids), sampled_matching_distance=metrics.max_contribution,
                                         argmax_index=metrics.argmax_index, figure_size=(820, 620), legend_position=:right),
                              legend=legend,
-                             interaction=_default_interaction(hover=true, labels=true))
+                             interaction=_default_interaction(labels=true))
 end
 
 function _fibered_chain_multiplicity_panel(fam::FiberedSliceFamily2D, metrics)
@@ -1006,7 +821,7 @@ function _fibered_family_overlay_panel(fam::FiberedSliceFamily2D;
                                         unique_chains=length(fam.unique_chain_ids), figure_size=(860, 620),
                                         legend_position=get(legend, :visible, false) ? :right : :none),
                              legend=legend,
-                             interaction=_default_interaction(hover=true, labels=values !== nothing))
+                             interaction=_default_interaction(labels=values !== nothing))
 end
 
 function _fibered_top_contributions_panel(fam::FiberedSliceFamily2D, metrics; ntop::Int=8)
@@ -1082,7 +897,7 @@ function _fibered_offset_interval_spec(arr::FiberedArrangement2D, dir)
                                         offset_cells=noff, figure_size=(860, 420),
                                         legend_position=get(legend, :visible, false) ? :right : :none),
                              legend=legend,
-                             interaction=_default_interaction(hover=true, labels=noff <= 24))
+                             interaction=_default_interaction(labels=noff <= 24))
 end
 
 function _fibered_slice_overlay_spec(result::FiberedSliceResult;
@@ -1126,7 +941,7 @@ function _fibered_slice_overlay_spec(result::FiberedSliceResult;
                              axes=axes,
                              metadata=merge((; object=:fibered_slice, chain_length=length(chain), value_count=length(vals),
                                                figure_size=(860, 620), legend_position=:none), report),
-                             interaction=_default_interaction(hover=true, labels=true))
+                             interaction=_default_interaction(labels=true))
 end
 
 function _visual_spec(result::FiberedSliceResult, kind::Symbol; arrangement=nothing, dir=nothing, offset=nothing, basepoint=nothing, tie_break::Symbol=:up, kwargs...)
@@ -1193,7 +1008,7 @@ function _visual_spec(result::FiberedSliceResult, kind::Symbol; arrangement=noth
                                  metadata=(; object=:fibered_slice, chain_length=length(chain), value_count=length(vals),
                                             barcode_intervals=_barcode_count(bc), total_multiplicity=_barcode_count(bc),
                                             figure_size=(860, 520), legend_position=:none),
-                                 interaction=_default_interaction(hover=true, labels=true))
+                                 interaction=_default_interaction(labels=true))
     end
     throw(ArgumentError("FiberedSliceResult supports kind=:fibered_slice, :fibered_slice_overlay, or :barcode only."))
 end
@@ -1562,9 +1377,9 @@ available_visuals(::RectSignedBarcode{2}) = (:rectangles, :density_image)
 available_visuals(::PointSignedMeasure{2}) = (:signed_atoms,)
 function available_visuals(out::SignedMeasureDecomposition)
     kinds = Symbol[]
-    has_rectangles(out) && append!(kinds, [:rectangles, :density_image])
-    has_euler_signed_measure(out) && push!(kinds, :signed_atoms)
-    has_mpp_image(out) && (:density_image in kinds || push!(kinds, :density_image))
+    has_rectangles(out) && append!(kinds, available_visuals(rectangles(out)))
+    has_euler_signed_measure(out) && append!(kinds, available_visuals(euler_signed_measure(out)))
+    has_mpp_image(out) && append!(kinds, available_visuals(mpp_image(out)))
     return Tuple(kinds)
 end
 
@@ -1585,7 +1400,10 @@ function _rect_density(sb::RectSignedBarcode{2})
     ys = Float64[float(y) for y in sb.axes[2]]
     vals = zeros(Float64, length(ys), length(xs))
     for (rect, wt) in zip(rectangles(sb), weights(sb))
-        for j in rect.lo[2]:rect.hi[2], i in rect.lo[1]:rect.hi[1]
+        # Rectangle endpoints are grade coordinates, not array indices.
+        ix = searchsortedfirst(sb.axes[1], rect.lo[1]):searchsortedlast(sb.axes[1], rect.hi[1])
+        iy = searchsortedfirst(sb.axes[2], rect.lo[2]):searchsortedlast(sb.axes[2], rect.hi[2])
+        for j in iy, i in ix
             vals[j, i] += float(wt)
         end
     end
@@ -1603,7 +1421,8 @@ function _visual_spec(sb::RectSignedBarcode{2}, kind::Symbol; kwargs...)
             isempty(idx) || push!(layers, RectLayer(rects[idx], color, color, 0.28, 1.0))
         end
         push!(layers, _text_layer_from_labels(centers, labels; color=:black, textsize=9.0))
-        bbox = _bbox_from_points(centers)
+        corners = [(r[i], r[i + 1]) for r in rects for i in (1, 3)]
+        bbox = _bbox_from_points(corners)
         return VisualizationSpec(:rectangles;
                                  title="Rectangle signed barcode",
                                  subtitle="signed rectangles colored by coefficient sign",
@@ -1668,13 +1487,9 @@ function _visual_spec(out::SignedMeasureDecomposition, kind::Symbol; kwargs...)
         has_euler_signed_measure(out) || throw(ArgumentError("SignedMeasureDecomposition has no euler_signed_measure component."))
         return _visual_spec(euler_signed_measure(out), :signed_atoms; kwargs...)
     elseif kind === :density_image
-        if has_mpp_image(out)
-            return _visual_spec(mpp_image(out), :mpp_image; kwargs...)
-        elseif has_rectangles(out)
-            return _visual_spec(rectangles(out), :density_image; kwargs...)
-        elseif has_euler_signed_measure(out)
-            return _visual_spec(euler_signed_measure(out), :signed_atoms; kwargs...)
-        end
+        has_rectangles(out) && return _visual_spec(rectangles(out), :density_image; kwargs...)
+    elseif kind === :mpp_image
+        has_mpp_image(out) && return _visual_spec(mpp_image(out), :mpp_image; kwargs...)
     end
     throw(ArgumentError("SignedMeasureDecomposition does not support kind=$(kind) with its present components $(component_names(out))."))
 end
@@ -1716,7 +1531,7 @@ function _visual_spec(line::MPPLineSpec, kind::Symbol; box=nothing, kwargs...)
                            [maximum((line_basepoint(line)[1], 1.0)) + 1, maximum((line_basepoint(line)[2], 1.0)) + 1]) : box
     line_pts = _line_through_box(line_direction(line), line_offset(line), b)
     base_pt = _as_points2(line_basepoint(line))
-    bbox = _bbox_from_points(vcat(line_pts, base_pt))
+    view = _visual_box_2d(b)
     return VisualizationSpec(:mpp_line_spec;
                              title="MPPI line specification",
                              subtitle="one weighted slice line used in the decomposition",
@@ -1726,10 +1541,10 @@ function _visual_spec(line::MPPLineSpec, kind::Symbol; box=nothing, kwargs...)
                                  PointLayer(base_pt, :darkorange2, 1.0, 12.0),
                              ],
                              axes=_default_axes_2d(xlabel="x1", ylabel="x2",
-                                                   xlimits=bbox === nothing ? nothing : bbox[1],
-                                                   ylimits=bbox === nothing ? nothing : bbox[2],
+                                                   xlimits=(Float64(view[1][1]), Float64(view[2][1])),
+                                                   ylimits=(Float64(view[1][2]), Float64(view[2][2])),
                                                    aspect=:equal),
-                             metadata=(; offset=line_offset(line), omega=line_omega(line)))
+                             metadata=(; box=view, offset=line_offset(line), omega=line_omega(line)))
 end
 
 function _visual_spec(decomp::MPPDecomposition, kind::Symbol; layout::Symbol=:overlay, kwargs...)
@@ -1955,8 +1770,10 @@ are display positions, never finite death values.
 """
 function visual_spec(diag::OrdinaryPersistence.PersistenceDiagram;
                      kind::Symbol=:auto, dim=0, cache=:auto, kwargs...)
-    report = check_visual_request(diag; kind=kind, dim=dim, throw=true)
-    return _visual_spec(diag, report.requested_kind; dim=dim, kwargs...)
+    haskey(kwargs, :backend) && throw(ArgumentError("backend belongs to visualize/render; visual_spec constructs backend-independent data."))
+    cache === :auto || throw(ArgumentError("visual_spec does not support a cache override"))
+    report = check_visual_request(diag; kind=kind, dim=dim, kwargs..., throw=true)
+    return _visual_spec(diag, report.requested_kind; dim=dim)
 end
 
 function _visual_spec(diag::OrdinaryPersistence.PersistenceDiagram, kind::Symbol;

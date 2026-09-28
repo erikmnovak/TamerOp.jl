@@ -359,7 +359,9 @@ end
     @test TamerOp.available_visuals(fam) == (:fibered_family, :fibered_chain_cells, :fibered_family_contributions, :fibered_distance_diagnostic)
     @test TamerOp.available_visuals(slice_res) == (:fibered_slice, :fibered_slice_overlay, :barcode)
     @test TamerOp.available_visuals(cache_grid) == (:fibered_arrangement, :fibered_query, :fibered_cell_highlight, :fibered_tie_break, :fibered_offset_intervals, :fibered_projected_comparison, :fibered_family, :fibered_chain_cells, :fibered_family_contributions, :fibered_distance_diagnostic, :fibered_query_barcode)
-    @test TamerOp.available_visuals(parr) == (:projected_arrangement,)
+    @test isempty(TamerOp.available_visuals(parr))
+    @test TamerOp.available_visuals(parr_grid) == (:projected_arrangement,)
+    @test_throws ArgumentError TOA.visual_spec(parr; kind=:projected_arrangement)
     @test TamerOp.available_visuals(pdres) == (:projected_distances,)
     @test TamerOp.available_visuals(FG) == (:regions, :constant_subdivision)
     @test TamerOp.available_visuals(pc2) == (:points_2d, :point_density, :knn_graph, :radius_graph)
@@ -448,10 +450,10 @@ end
 
     spec_grid = TOA.visual_spec(grid_pi; kind=:query_overlay, points=[(0.25, 0.25), (0.75, 0.75)])
     @test TOA.visual_kind(spec_grid) == :query_overlay
-    @test spec_grid.layers[1] isa TOA.RectLayer
-    @test length(spec_grid.layers[1].rects) == 4
-    @test spec_grid.layers[2] isa TOA.PointLayer
-    @test length(spec_grid.layers[2].points) == 2
+    @test any(layer -> layer isa TOA.PolygonLayer, spec_grid.layers)
+    @test spec_grid.metadata.region_ids == [0, 1, 2, 3, 4]
+    @test length(spec_grid.metadata.query_readout) == 2
+    @test all(q.region_id == EC.locate(grid_pi, collect(q.point)) for q in spec_grid.metadata.query_readout)
     @test TOA.check_visual_spec(spec_grid).valid
 
     spec_compiled = TOA.visual_spec(compiled_grid; kind=:regions)
@@ -468,19 +470,15 @@ end
     @test TOA.visual_metadata(spec_box).legend_position == :right
     spec_box_regions = TOA.visual_spec(box_pi; kind=:regions)
     @test spec_box_regions.legend.visible
-    rect_layers = [layer for layer in spec_box.layers if layer isa TOA.RectLayer]
-    @test length(rect_layers) == 3
-    @test sum(length(layer.rects) for layer in rect_layers) == 6
-    @test length(unique(layer.fill_color for layer in rect_layers)) == 3
-    segment_layers = [layer for layer in spec_box.layers if layer isa TOA.SegmentLayer]
-    @test length(segment_layers) == 3
-    rep_layer = only(layer for layer in spec_box.layers if layer isa TOA.PointLayer)
-    @test rep_layer.points == [(-1.0, -11.0), (0.5, -9.0), (2.0, -9.0)]
-    @test rep_layer.markersize == 5.5
+    polygon_layers = [layer for layer in spec_box.layers if layer isa TOA.PolygonLayer]
+    @test !isempty(polygon_layers)
+    @test length(unique(layer.fill_color for layer in polygon_layers)) == 3
+    @test sort(unique(c.region_id for c in spec_box.metadata.geometry.components)) == [1, 2, 3]
     label_layer = only(layer for layer in spec_box.layers if layer isa TOA.TextLayer)
-    @test label_layer.labels == ["1", "2", "3"]
-    @test all(isapprox(p[1], q[1]; atol=1e-12) && isapprox(p[2], q[2]; atol=1e-12)
-              for (p, q) in zip(label_layer.positions, [(-0.93, -10.96), (0.57, -8.96), (2.07, -8.96)]))
+    @test sort(unique(label_layer.labels)) == ["1", "2", "3"]
+    for (p, label) in zip(label_layer.positions, label_layer.labels)
+        @test EC.locate(box_pi, collect(p)) == parse(Int, label)
+    end
 
     spec_rank_heat = TOA.visual_spec(rank_raw; kind=:rank_heatmap)
     @test spec_rank_heat.layers[1] isa TOA.HeatmapLayer
@@ -514,22 +512,19 @@ end
     @test TOA.visual_metadata(spec_cdr_support_plane).max_dim == 2
     @test spec_cdr_support_plane.legend.visible
     @test spec_cdr_support_plane.axes.aspect == :auto
-    @test count(layer -> layer isa TOA.RectLayer, spec_cdr_support_plane.layers) == 3
+    @test count(layer -> layer isa TOA.PolygonLayer, spec_cdr_support_plane.layers) == length(spec_cdr_support_plane.metadata.geometry.components)
     @test count(layer -> layer isa TOA.TextLayer, spec_cdr_support_plane.layers) == 0
 
     spec_cdr_support_plane_grid = TOA.visual_spec(cdr_grid; kind=:cohomology_support_plane)
     @test TOA.visual_kind(spec_cdr_support_plane_grid) == :cohomology_support_plane
     @test spec_cdr_support_plane_grid.axes.aspect == :auto
-    @test !spec_cdr_support_plane_grid.legend.visible
-    @test count(layer -> layer isa TOA.RectLayer, spec_cdr_support_plane_grid.layers) == 1
-    @test count(layer -> layer isa TOA.HeatmapLayer, spec_cdr_support_plane_grid.layers) == 1
-    heat_layer = only(layer for layer in spec_cdr_support_plane_grid.layers if layer isa TOA.HeatmapLayer)
-    @test size(heat_layer.values) == (2, 2)
-    @test length(heat_layer.x) == 3
-    @test length(heat_layer.y) == 3
-    @test heat_layer.show_colorbar
-    @test count(isfinite, heat_layer.values) == 2
-    @test maximum(skipmissing(vec(replace(heat_layer.values, NaN => missing)))) == 1.0
+    @test spec_cdr_support_plane_grid.legend.visible
+    @test any(layer -> layer isa TOA.PolygonLayer, spec_cdr_support_plane_grid.layers)
+    @test spec_cdr_support_plane_grid.metadata.region_ids == [1, 2, 3, 4]
+    @test spec_cdr_support_plane_grid.metadata.support_count == 2
+    @test spec_cdr_support_plane_grid.metadata.max_dim == 1
+    # The negative-parameter area is outside this finite grid, not dimension zero.
+    @test 0 in spec_cdr_support_plane_grid.metadata.geometry.region_ids
 
     spec_cdr_support = TOA.visual_spec(cdr_box; kind=:cohomology_support)
     @test TOA.visual_kind(spec_cdr_support) == :cohomology_support
@@ -537,15 +532,15 @@ end
     @test TOA.visual_metadata(spec_cdr_support).support_count == 2
     @test TOA.visual_metadata(spec_cdr_support).max_dim == 2
     @test spec_cdr_support.legend.visible
-    @test count(layer -> layer isa TOA.RectLayer, spec_cdr_support.layers) == 3
-    @test count(layer -> layer isa TOA.SegmentLayer, spec_cdr_support.layers) == 3
+    @test count(layer -> layer isa TOA.PolygonLayer, spec_cdr_support.layers) == length(spec_cdr_support.metadata.geometry.components)
+    @test any(layer -> layer isa TOA.SegmentLayer, spec_cdr_support.layers)
     cdr_labels = [layer for layer in spec_cdr_support.layers if layer isa TOA.TextLayer]
     @test length(cdr_labels) == 1
-    @test only(cdr_labels).labels == ["1", "2"]
+    @test sort(unique(only(cdr_labels).labels)) == ["1", "2"]
 
     spec_hilbert_heat = TOA.visual_spec(hilbert_inv; kind=:hilbert_heatmap)
     @test TOA.visual_kind(spec_hilbert_heat) == :hilbert_heatmap
-    @test any(layer -> layer isa TOA.RectLayer, spec_hilbert_heat.layers)
+    @test any(layer -> layer isa TOA.PolygonLayer, spec_hilbert_heat.layers)
     @test spec_hilbert_heat.legend.visible
 
     spec_hilbert_bars = TOA.visual_spec(hilbert_inv; kind=:hilbert_bars)
@@ -637,7 +632,7 @@ end
     @test TOA.visual_kind(spec_compare) == :fibered_projected_comparison
     @test length(TOA.visual_panels(spec_compare)) == 2
 
-    spec_parr = TOA.visual_spec(parr; kind=:projected_arrangement)
+    spec_parr = TOA.visual_spec(parr_grid; kind=:projected_arrangement)
     @test spec_parr.layers[1] isa TOA.PointLayer
 
     spec_pd = TOA.visual_spec(pdres; kind=:projected_distances)
@@ -911,6 +906,9 @@ end
     essential = [[0//1, 4//1], [2//1]]
     diagram = OP.PersistenceDiagram(finite, essential; field=CM.F2())
     @test VIZ.available_visuals(diagram) == (:persistence_diagram, :barcode)
+    @test_throws ArgumentError VIZ.visual_spec(diagram; typo=true)
+    @test_throws ArgumentError VIZ.visual_spec(diagram; backend=:cairomakie)
+    @test_throws ArgumentError VIZ.visual_spec(diagram; cache=:unused)
     spec = VIZ.visual_spec(diagram)
     @test VIZ.visual_kind(spec) === :persistence_diagram
     @test VIZ.check_visual_spec(spec).valid
@@ -1065,4 +1063,521 @@ end
             end
         end
     end
+end
+
+@testset "A81 signed density coordinate reconstruction" begin
+    V = TamerOp.Visualization
+    for axes in (([10, 20], [10, 20]), ([-7, -2, 10], [-11, 5]))
+        xs, ys = axes
+        rects = [SM.Rect{2}((first(xs), first(ys)), (last(xs), last(ys))),
+                 SM.Rect{2}((last(xs), first(ys)), (last(xs), last(ys)))]
+        sb = SM.RectSignedBarcode(axes, rects, [2, -1])
+        @test SM.check_rect_signed_barcode(sb).valid
+        spec = V.visual_spec(sb; kind=:density_image)
+        heat = only(spec.layers)
+        # Independent rectangle-membership oracle; no endpoint-to-index conversion.
+        expected = [sum(w for (r, w) in zip(rects, [2, -1])
+                        if r.lo[1] <= x <= r.hi[1] && r.lo[2] <= y <= r.hi[2])
+                    for y in ys, x in xs]
+        @test heat.values == expected
+        @test heat.x == xs
+        @test heat.y == ys
+        drawing = V.visual_spec(sb; kind=:rectangles)
+        @test drawing.axes.xlimits[1] <= first(xs) <= last(xs) <= drawing.axes.xlimits[2]
+        @test drawing.axes.ylimits[1] <= first(ys) <= last(ys) <= drawing.axes.ylimits[2]
+        out = SM.SignedMeasureDecomposition(rectangles=sb)
+        @test V.visual_spec(out; kind=:density_image).layers[1].values == expected
+        @test !V.check_visual_request(sb; kind=:density_image, box=([0,0], [1,1])).valid
+    end
+    sb3 = SM.RectSignedBarcode(([1, 2], [1, 2], [1, 2]),
+        [SM.Rect{3}((1, 1, 1), (2, 2, 2))], [1])
+    @test isempty(V.available_visuals(SM.SignedMeasureDecomposition(rectangles=sb3)))
+end
+
+@testset "A81 and A82 invariant windows and exact rank queries" begin
+    V = TamerOp.Visualization
+    # The closed square has a one-dimensional stalk on [0,2]^2 and zero outside.
+    for field in FIELDS_FULL
+        enc = TamerOp.encode([PLB.BoxUpset([0.0, 0.0])], [PLB.BoxDownset([2.0, 2.0])],
+            reshape([CM.coerce(field, 1)], 1, 1),
+            OPT.EncodingOptions(backend=:pl_backend, poset_kind=:signature, field=field))
+        rank = TamerOp.invariant(enc; which=:rank_invariant)
+        hilbert = TamerOp.invariant(enc; which=:restricted_hilbert)
+        boundary = (2//1, 1//1)
+        exterior = (2 + 1//(2^53), 1//1)
+        box = ([3//2, 1//2], [5//2, 3//2])
+        spec = V.visual_spec(rank; kind=:rank_query_overlay,
+            pairs=[(boundary, boundary), (exterior, exterior)], box=box)
+        @test [q.rank for q in spec.metadata.query_results] == [1, 0]
+        @test spec.metadata.query_results[2].source == exterior
+        @test spec.axes.xlimits == (1.5, 2.5)
+        @test spec.axes.ylimits == (0.5, 1.5)
+        heat = V.visual_spec(hilbert; kind=:hilbert_heatmap, box=box)
+        @test heat.axes.xlimits == (1.5, 2.5)
+        @test heat.axes.ylimits == (0.5, 1.5)
+        @test !V.check_visual_request(hilbert; kind=:hilbert_bars, box=box).valid
+    end
+    P = FF.ProductOfChainsPoset((3, 2))
+    pi = EC.GridEncodingMap(P, ([0, 2, 7], [-4, 1]); orientation=(1, -1))
+    dims = [1, 2, 3, 4, 5, 6]
+    res = RES.CohomologyDimsResult(P, dims, EC.compile_encoding(P, pi); degree=2)
+    box = ([1, -3], [5, 0])
+    for kind in V.available_visuals(res)
+        spec = V.visual_spec(res; kind=kind, box=box)
+        @test spec.axes.xlimits == (1.0, 5.0)
+        @test spec.axes.ylimits == (-3.0, 0.0)
+        @test spec.metadata.region_ids == sort(unique(c.region_id for c in spec.metadata.geometry.components if c.region_id > 0))
+        for c in spec.metadata.geometry.components
+            q = [sum(v[j] for v in c.vertices) / length(c.vertices) for j in 1:2]
+            c.dimension == 2 && @test EC.locate(pi, q) == c.region_id
+        end
+    end
+    P3 = FF.ProductOfChainsPoset((2, 2, 2))
+    pi3 = EC.GridEncodingMap(P3, ([0,1], [0,1], [0,1]))
+    c3 = RES.CohomologyDimsResult(P3, ones(Int, 8), EC.compile_encoding(P3, pi3); degree=0)
+    @test isempty(V.available_visuals(c3))
+    @test !V.check_visual_request(c3; kind=:cohomology_support).valid
+end
+@testset "A81 ingestion axes and effective previews" begin
+    VIZ = TamerOp.Visualization
+    DT = TamerOp.DataTypes
+
+    # Entries identify the source axis coordinates independently of the renderer.
+    A = [100i + 10j + k for i in 1:2, j in 1:3, k in 1:5]
+    img = DT.ImageNd(A)
+    default = VIZ.visual_spec(img; kind=:image)
+    @test default.metadata.view_dims == (2, 1)
+    @test default.metadata.fixed_indices == Dict(3 => 3)
+    @test default.layers[1].values == Float64.(A[:, :, 3])
+    @test default.axes.xlabel == "axis 2"
+    @test default.axes.ylabel == "axis 1"
+    @test !haskey(default.metadata, :volume)
+
+    for xdim in 1:3, ydim in 1:3
+        xdim == ydim && continue
+        other = only(setdiff(1:3, (xdim, ydim)))
+        fixed = Dict(other => 1)
+        spec = VIZ.visual_spec(img; kind=:image, view_dims=(xdim, ydim),
+                               slice_indices=fixed, colormap=:viridis)
+        heatmap = only(spec.layers)
+        @test heatmap.x == collect(1.0:size(A, xdim))
+        @test heatmap.y == collect(1.0:size(A, ydim))
+        @test size(heatmap.values) == (size(A, ydim), size(A, xdim))
+        @test spec.axes.xlabel == "axis $xdim"
+        @test spec.axes.ylabel == "axis $ydim"
+        @test heatmap.colormap == :viridis
+        for y in axes(heatmap.values, 1), x in axes(heatmap.values, 2)
+            index = ones(Int, 3)
+            index[xdim] = x
+            index[ydim] = y
+            @test heatmap.values[y, x] == A[index...]
+        end
+        @test VIZ.check_visual_spec(spec).valid
+
+        live = VIZ.visual_spec(img; kind=:slice_viewer, view_dims=(xdim, ydim),
+                               slice_indices=fixed)
+        @test only(live.layers).values == heatmap.values
+        @test live.metadata.requires_live_julia
+        @test live.interaction.widgets == (:slice_index,)
+        @test !live.interaction.hover
+        # The renderer uses this same extraction after each slider update.
+        last_fixed = Dict(other => size(A, other))
+        last_spec = VIZ.visual_spec(img; kind=:image, view_dims=(xdim, ydim),
+                                    slice_indices=last_fixed)
+        @test VIZ._image_slice_values(A, (xdim, ydim), last_fixed) == only(last_spec.layers).values
+    end
+
+    # An explicit partial selection must retain defaults for every other fixed axis.
+    A4 = [1000i + 100j + 10k + l for i in 1:2, j in 1:3, k in 1:4, l in 1:5]
+    img4 = DT.ImageNd(A4)
+    plane = VIZ.visual_spec(img4; kind=:image, view_dims=(4, 2), slice_indices=Dict(1 => 2))
+    @test plane.metadata.fixed_indices == Dict(1 => 2, 3 => 2)
+    @test only(plane.layers).values == [Float64(A4[2, y, 2, x]) for y in 1:3, x in 1:5]
+    @test VIZ.check_visual_spec(plane).valid
+
+    channels = DT.ImageNd(A[:, :, 1:4])
+    panels = VIZ.visual_spec(channels; kind=:channels, view_dims=(1, 2))
+    @test length(panels.panels) == 4
+    for (c, panel) in enumerate(panels.panels)
+        @test only(panel.layers).values == [Float64(A[x, y, c]) for y in 1:3, x in 1:2]
+        @test panel.axes.xlabel == "axis 1"
+        @test panel.axes.ylabel == "axis 2"
+    end
+    @test VIZ.check_visual_spec(panels).valid
+    @test_throws ArgumentError VIZ.visual_spec(channels; kind=:channels, view_dims=(3, 1))
+    @test_throws ArgumentError VIZ.visual_spec(channels; kind=:channels, slice_indices=Dict(3 => 2))
+    @test_throws ArgumentError VIZ.visual_spec(img; kind=:image, view_dims=(1, 1))
+    @test_throws ArgumentError VIZ.visual_spec(img; kind=:image, view_dims=(1, 4))
+    @test_throws ArgumentError VIZ.visual_spec(img; kind=:image, slice_indices=Dict(1 => 1))
+    @test_throws ArgumentError VIZ.visual_spec(img; kind=:image, slice_indices=Dict(3 => 0))
+    @test_throws ArgumentError VIZ.visual_spec(img; kind=:image, slice_indices=Dict(3 => 6))
+    @test_throws ArgumentError VIZ.visual_spec(img; kind=:image, view_dims=(1, 2, 3))
+    @test VIZ.available_visuals(DT.ImageNd([1.0, 2.0])) == ()
+    @test VIZ.available_visuals(DT.ImageNd(zeros(0, 2))) == ()
+
+    # A request must produce its stated dimension, not silently fall back.
+    pc = DT.PointCloud([1.0 2.0 3.0; 4.0 5.0 6.0])
+    projected = VIZ.visual_spec(pc; kind=:points_2d, dims=(3, 1))
+    @test only(projected.layers).points == [(3.0, 1.0), (6.0, 4.0)]
+    @test projected.axes.xlabel == "x3"
+    @test projected.axes.ylabel == "x1"
+    @test_throws ArgumentError VIZ.visual_spec(pc; kind=:points_2d, dims=(1, 1))
+    @test_throws ArgumentError VIZ.visual_spec(pc; kind=:points_3d, dims=(1, 2))
+    @test_throws ArgumentError VIZ.visual_spec(pc; kind=:points_2d, dims=(1, 4))
+    @test_throws ArgumentError VIZ.visual_spec(pc; kind=:points_3d, labels=["a", "b"])
+    @test VIZ.available_visuals(DT.PointCloud(reshape([1.0, 2.0], 2, 1))) == ()
+    @test VIZ.available_visuals(DT.GraphData(2, [(1, 2)]; coords=reshape([1.0, 2.0], 2, 1))) == ()
+    unweighted = DT.GraphData(2, [(1, 2)])
+    @test VIZ.available_visuals(unweighted) == (:graph,)
+    @test_throws ArgumentError VIZ.visual_spec(unweighted; kind=:weighted_graph)
+    @test_throws ArgumentError VIZ.visual_spec(unweighted; kind=:graph, dims=(2, 1))
+
+    for points in (zeros(0, 2), [2.0 3.0])
+        preview = VIZ.visual_spec(DT.PointCloud(points); kind=:radius_graph)
+        @test VIZ.check_visual_spec(preview).valid
+        @test isempty(preview.layers[1].segments)
+    end
+    density = VIZ.visual_spec(DT.PointCloud([2.0 3.0]); kind=:point_density)
+    @test sum(density.layers[1].values) == 1.0
+    @test all(diff(density.layers[1].x) .> 0)
+    @test all(diff(density.layers[1].y) .> 0)
+
+    # Colors must use the same thirds of the weight range that the legend states.
+    weighted = DT.GraphData(4, [(1, 2), (2, 3), (3, 4)];
+                           coords=[0.0 0.0; 1.0 0.0; 2.0 0.0; 3.0 0.0],
+                           weights=[0.0, 0.4, 1.0])
+    edge_spec = VIZ.visual_spec(weighted; kind=:weighted_graph)
+    @test edge_spec.layers[1].segments == [(0.0, 0.0, 1.0, 0.0)]
+    @test edge_spec.layers[2].segments == [(1.0, 0.0, 2.0, 0.0)]
+    @test edge_spec.layers[3].segments == [(2.0, 0.0, 3.0, 0.0)]
+end
+
+@testset "A82 exact queries retain their mathematical coordinates" begin
+    VIZ = TamerOp.Visualization
+    PLB = TamerOp.PLBackend
+    EC = TamerOp.EncodingCore
+    _, _, pi = PLB.encode_fringe_boxes([PLB.BoxUpset([0.0, 0.0])],
+        [PLB.BoxDownset([2.0, 2.0])], TamerOp.Advanced.EncodingOptions())
+    epsilon = 1 // (big(1) << 53)
+    boundary = (2//big(1), 1//big(1))
+    exterior = (2 + epsilon, 1//big(1))
+    spec = VIZ.visual_spec(pi; kind=:query_overlay, points=[boundary, exterior], box=([-1, -1], [3, 3]))
+    q = spec.metadata.query_readout
+    @test q[1].point == boundary
+    @test q[2].point == exterior
+    @test q[1].region_id != q[2].region_id
+    @test pi.sig_y[q[1].region_id] == pi.sig_y[q[2].region_id] == BitVector([true])
+    @test pi.sig_z[q[1].region_id] == BitVector([false]) # complement of the downset
+    @test pi.sig_z[q[2].region_id] == BitVector([true])
+    @test q[1].display_point == q[2].display_point == (2.0, 1.0)
+    @test !q[1].display_rounded && q[2].display_rounded
+    @test length(spec.metadata.query_collisions) == 1
+    @test !isempty(spec.metadata.warnings)
+    @test occursin("rounding", spec.subtitle)
+    @test_throws ArgumentError VIZ.visual_spec(pi; kind=:query_overlay, point=(Inf, 1))
+    @test_throws ArgumentError VIZ.visual_spec(pi; kind=:query_overlay, point=(0, NaN))
+end
+
+@testset "A82 grid fibers follow grades orientation and viewport" begin
+    VIZ = TamerOp.Visualization
+    EC = TamerOp.EncodingCore
+    FF = TamerOp.FiniteFringe
+    pi = EC.GridEncodingMap(FF.ProductOfChainsPoset((2, 2)), ([0, 2], [1, 4]); orientation=(-1, 1))
+    spec = VIZ.visual_spec(pi; kind=:regions, box=([-5, 0], [1, 6]))
+    geometry = spec.metadata.geometry
+    @test geometry.region_ids == [0, 1, 2, 3, 4]
+    @test geometry.has_unrepresented_area
+    cell = only(filter(c -> c.region_id == 1, geometry.components))
+    @test Set(cell.vertices) == Set([(-2, 1), (0, 1), (0, 4), (-2, 4)])
+    # This fiber is (-2,0] x [1,4): the reflected axis reverses boundary ownership.
+    @test cell.edge_included == BitVector([true, true, false, false])
+    @test cell.vertex_included == BitVector([false, true, false, false])
+    @test all(!, cell.edge_clipped)
+    @test all(c -> all(p -> -5 <= p[1] <= 1 && 0 <= p[2] <= 6, c.vertices), geometry.components)
+    queries = VIZ.visual_spec(pi; kind=:query_overlay, points=[(-2, 1), (0, 1), (0, 4), (1, 1)], box=([-5, 0], [1, 6]))
+    @test [q.region_id for q in queries.metadata.query_readout] == [2, 1, 3, 0]
+    clipped = VIZ.visual_spec(pi; kind=:region_labels, box=([-5, 9//2], [-3, 11//2]))
+    @test clipped.metadata.region_ids == [4]
+    @test keys(clipped.legend.entries) == (:R4,)
+    @test clipped.legend.entries.R4 == spec.legend.entries.R4
+    @test only(filter(l -> l isa VIZ.TextLayer, clipped.layers)).labels == ["4"]
+    @test !clipped.metadata.geometry.has_unrepresented_area
+end
+
+@testset "A82 clipped polyhedra retain open edges and lower strata" begin
+    VIZ = TamerOp.Visualization
+    PLP = TamerOp.PLPolyhedra
+    Q = Rational{BigInt}
+    function make_map(A, b, witness; strict=falses(length(b)))
+        hp = PLP.HPoly(2, Q.(A), Q.(b), nothing, strict, zero(Q))
+        PLP.PLEncodingMap(2, [BitVector()], [BitVector()], [hp], [witness])
+    end
+    triangle = make_map([-1 0; 0 -1; 1 1], [0, 0, 1], (1//4, 1//4); strict=BitVector([false, false, true]))
+    spec = VIZ.visual_spec(triangle; kind=:region_labels, box=([-1, -1], [2, 2]))
+    c = only(spec.metadata.geometry.components)
+    @test c.dimension == 2
+    @test Set(c.vertices) == Set([(0, 0), (1, 0), (0, 1)])
+    @test count(c.vertex_included) == 1
+    @test only(c.vertices[c.vertex_included]) == (0, 0)
+    @test count(c.edge_included) == 2
+    @test any(l -> l isa VIZ.SegmentLayer && l.linestyle === :dash, spec.layers)
+    @test spec.metadata.geometry.has_unrepresented_area
+    @test any(l -> l isa VIZ.PolygonLayer, spec.layers)
+    @test VIZ.check_visual_spec(spec).valid
+    # x=1, 0<=y<=1 is a line-only fiber, rather than an empty 2D cell.
+    line = make_map([1 0; -1 0; 0 -1; 0 1], [1, -1, 0, 1], (1, 1//2))
+    line_spec = VIZ.visual_spec(line; kind=:regions, box=([0, -1], [2, 2]))
+    line_cell = only(line_spec.metadata.geometry.components)
+    @test line_cell.dimension == 1
+    @test Set(line_cell.vertices) == Set([(1, 0), (1, 1)])
+    @test all(line_cell.vertex_included) && all(line_cell.edge_included)
+    @test any(l -> l isa VIZ.SegmentLayer && l.linewidth == 3.0, line_spec.layers)
+    point = make_map([1 0; -1 0; 0 1; 0 -1], [1, -1, 2, -2], (1, 2))
+    point_spec = VIZ.visual_spec(point; kind=:regions, box=([0, 0], [3, 3]))
+    point_cell = only(point_spec.metadata.geometry.components)
+    @test point_cell.dimension == 0
+    @test point_cell.vertices == [(1, 2)]
+    @test point_cell.vertex_included == BitVector([true])
+    @test any(l -> l isa VIZ.PointLayer && l.points == [(1.0, 2.0)] && l.markersize == 11.0, point_spec.layers)
+    # A window touching only the excluded hypotenuse contains no part of the fiber.
+    empty_spec = VIZ.visual_spec(triangle; kind=:regions, box=([1, 0], [2, 1]))
+    @test isempty(empty_spec.metadata.geometry.components)
+    @test empty_spec.metadata.region_ids == [0]
+end
+
+@testset "A82 disconnected box fibers and colliding exact geometry" begin
+    VIZ = TamerOp.Visualization
+    PLB = TamerOp.PLBackend
+    PLP = TamerOp.PLPolyhedra
+    EC = TamerOp.EncodingCore
+    _, _, pi = PLB.encode_fringe_boxes([PLB.BoxUpset([0.0, 0.0])],
+        [PLB.BoxDownset([2.0, 2.0])], TamerOp.Advanced.EncodingOptions())
+    r = EC.locate(pi, [-1, 3])
+    @test EC.locate(pi, [3, -1]) == r
+    @test pi.sig_y[r] == BitVector([false])
+    @test pi.sig_z[r] == BitVector([true]) # outside both indicators
+    spec = VIZ.visual_spec(pi; kind=:regions, box=([-2, -2], [4, 4]))
+    pieces = filter(c -> c.region_id == r, spec.metadata.geometry.components)
+    @test length(pieces) == 2
+    @test Set(Set(c.vertices) for c in pieces) == Set([Set([(-2, 2), (0, 2), (0, 4), (-2, 4)]),
+                                                     Set([(2, -2), (4, -2), (4, 0), (2, 0)])])
+    Q = Rational{BigInt}
+    epsilon = 1 // (big(1) << 54)
+    hp = PLP.HPoly(2, Q[-1 0; 1 0; 0 -1; 0 1], Q[-1, 1+epsilon, 0, 1], nothing, falses(4), zero(Q))
+    thin = PLP.PLEncodingMap(2, [BitVector()], [BitVector()], [hp], [(1+epsilon/2, 1//2)])
+    thin_spec = VIZ.visual_spec(thin; kind=:regions, box=([0, -1], [2, 2]))
+    tc = only(thin_spec.metadata.geometry.components)
+    @test tc.dimension == 2
+    @test maximum(p[1] for p in tc.vertices) - minimum(p[1] for p in tc.vertices) == epsilon
+    @test !isempty(thin_spec.metadata.geometry.coordinate_collisions)
+    @test !isempty(thin_spec.metadata.warnings)
+end
+
+@testset "A81 visualization request and renderer contracts" begin
+    VIZ = TamerOp.Visualization
+    DT = TamerOp.DataTypes
+    pc = DT.PointCloud([0.0 0.0; 1.0 2.0; 3.0 1.0])
+    report = VIZ.check_visual_request(pc; kind=:knn_graph, k=1)
+    @test report.valid
+    @test :k in report.supported_keywords
+    @test report.construction_cost.work == :all_pairs_distances
+    @test report.construction_cost.timing == :not_measured
+    @test !report.rendering.hover
+    @test !report.rendering.selection
+    @test !VIZ.check_visual_request(pc; kind=:points_2d, k=1).valid
+    @test !VIZ.check_visual_request(pc; kind=:knn_graph, k="one").valid
+    @test !VIZ.check_visual_request(pc; kind=:points_2d, dims=(1, 1)).valid
+    @test !VIZ.check_visual_request(pc; kind=:points_2d, color_values=[1.0]).valid
+    @test !VIZ.check_visual_request(pc; kind=:points_2d, backend=:a81_missing).valid
+    @test_throws ArgumentError VIZ.visual_spec(pc; kind=:points_2d, typo=1)
+    @test_throws ArgumentError VIZ.visual_spec(pc; kind=:points_2d, backend=:cairomakie)
+
+    spec = VIZ.visual_spec(pc; labels=["a", "b", "c"])
+    @test VIZ.visual_spec(spec) === spec
+    @test !spec.interaction.hover && !spec.interaction.clicks
+    @test spec.interaction.labels
+    @test spec.interaction.mode == :static
+    @test !spec.interaction.requires_live_julia
+    @test VIZ.visual_summary(spec).rendering.renderer_keywords == (:figure, :size)
+    @test_throws ArgumentError VIZ.visualize(spec; kind=:barcode)
+    @test_throws ArgumentError VIZ.render(spec; linewidth=10)
+    @test_throws ArgumentError VIZ.render(spec; size=(-1, 400))
+    @test_throws ArgumentError VIZ.render(spec; size=(500, 400), figure=:existing)
+    @test_throws ArgumentError VIZ.render(spec; display=:imaginary)
+
+    # The receiver has no kwargs splat: recipe keywords must never leak to it.
+    VIZ._register_visual_backend!(:a81_capture;
+        render=(spec; display, figure, size) -> (; spec, display, figure, size))
+    try
+        rendered = VIZ.visualize(pc; kind=:knn_graph, k=1, backend=:a81_capture, size=(601, 407))
+        @test rendered.size == (601, 407)
+        @test rendered.spec.kind == :knn_graph
+        @test VIZ.check_visual_request(pc; backend=:a81_capture).valid
+        @test :a81_capture in VIZ.visual_summary(spec).rendering.activated_backends
+        @test_throws ArgumentError VIZ.visualize(pc; kind=:points_2d, alpha=0.5, backend=:a81_capture)
+    finally
+        delete!(VIZ._VISUAL_RENDERERS, :a81_capture)
+    end
+
+    poly = VIZ.PolygonLayer([[(0.0, 0.0), (2.0, 0.0), (0.0, 1.0)]], :orange, :black, 0.5, 0.0)
+    solid = VIZ.SegmentLayer([(0.0, 0.0, 2.0, 0.0)], :black, 1.0, 1.0)
+    @test solid.linestyle == :solid
+    dashed = VIZ.SegmentLayer([(2.0, 0.0, 0.0, 1.0)], :black, 1.0, 1.0, :dash)
+    polygon_spec = VIZ.VisualizationSpec(:polygon_test;
+        layers=VIZ.AbstractVisualizationLayer[poly, solid, dashed])
+    @test VIZ.check_visual_spec(polygon_spec).valid
+    malformed = VIZ.VisualizationSpec(:polygon_test; layers=VIZ.AbstractVisualizationLayer[
+        VIZ.PolygonLayer([[(0.0, 0.0), (1.0, 0.0)]], :orange, :black, 0.5, 0.0)])
+    @test !VIZ.check_visual_spec(malformed).valid
+    false_hover = VIZ.VisualizationSpec(:hover_test;
+        layers=spec.layers, interaction=(; hover=true))
+    @test !VIZ.check_visual_spec(false_hover).valid
+
+    A = [100i + 10j + k for i in 1:2, j in 1:3, k in 1:4]
+    image = DT.ImageNd(A)
+    @test !VIZ.check_visual_request(image; view_dims=(1, 1)).valid
+    @test !VIZ.check_visual_request(image; view_dims=(1, 3), slice_indices=Dict(2 => 9)).valid
+    widget = VIZ.visual_spec(image; kind=:slice_viewer, view_dims=(1, 3), slice_indices=Dict(2 => 1))
+    @test widget.interaction.requires_live_julia
+    @test !widget.interaction.offline_widgets
+    mktempdir() do dir
+        @test_throws ArgumentError VIZ.save_visual(joinpath(dir, "widget.html"), widget)
+        @test !isfile(joinpath(dir, "widget.html"))
+        @test_throws ArgumentError VIZ.save_visual(joinpath(dir, "unknown.png"), spec; imaginary=1)
+    end
+
+    if Base.find_package("CairoMakie") !== nothing
+        @eval import CairoMakie
+        fig = VIZ.render(polygon_spec; backend=:cairomakie, size=(601, 407))
+        CairoMakie.Makie.update_state_before_display!(fig)
+        @test Tuple(CairoMakie.Makie.widths(CairoMakie.Makie.viewport(fig.scene)[])) == (601, 407)
+        static_widget = VIZ.render(widget; backend=:cairomakie)
+        @test !any(item -> item isa CairoMakie.Slider, static_widget.content)
+        ax = only(filter(item -> item isa CairoMakie.Axis, static_widget.content))
+        hm = only(filter(plot -> plot isa CairoMakie.Makie.Heatmap, ax.scene.plots))
+        @test hm[3][] == Float64.(A[:, 1, :])
+    end
+end
+
+@testset "A81 live volume coordinates" begin
+    if Base.find_package("WGLMakie") !== nothing
+        @eval import WGLMakie
+        VIZ = TamerOp.Visualization
+        A = [100i + 10j + k for i in 1:2, j in 1:3, k in 1:4]
+        img = TamerOp.DataTypes.ImageNd(A)
+        for vd in ((1, 3), (3, 1))
+            spec = VIZ.visual_spec(img; kind=:slice_viewer, view_dims=vd, slice_indices=Dict(2 => 1))
+            fig = VIZ.render(spec; backend=:wglmakie, size=(600, 420))
+            ax = only(filter(item -> item isa WGLMakie.Axis, fig.content))
+            hm = only(filter(plot -> plot isa WGLMakie.Makie.Heatmap, ax.scene.plots))
+            # Makie's first matrix axis follows displayed x.
+            expected = vd == (1, 3) ? Float64.(A[:, 1, :]) : permutedims(Float64.(A[:, 1, :]))
+            @test hm[3][] == expected
+            slider = only(filter(item -> item isa WGLMakie.Makie.Slider, fig.content))
+            slider.value[] = 3
+            expected = vd == (1, 3) ? Float64.(A[:, 3, :]) : permutedims(Float64.(A[:, 3, :]))
+            @test hm[3][] == expected
+        end
+    end
+end
+
+@testset "A82 viewport retains fibers only on its edges and corners" begin
+    VIZ = TamerOp.Visualization
+    EC = TamerOp.EncodingCore
+    FF = TamerOp.FiniteFringe
+    pi = EC.GridEncodingMap(FF.ProductOfChainsPoset((2, 2)), ([0, 2], [0, 2]))
+    edge = VIZ.visual_spec(pi; kind=:regions, box=([0, 0], [2, 1])).metadata.geometry
+    @test edge.region_ids == [1, 2]
+    @test only(filter(c -> c.region_id == 2, edge.components)).dimension == 1
+    @test only(filter(c -> c.region_id == 2, edge.components)).vertices == [(2, 0), (2, 1)]
+    corner = VIZ.visual_spec(pi; kind=:regions, box=([0, 0], [2, 2])).metadata.geometry
+    @test corner.region_ids == [1, 2, 3, 4]
+    @test only(filter(c -> c.region_id == 4, corner.components)).dimension == 0
+    @test only(filter(c -> c.region_id == 4, corner.components)).vertices == [(2, 2)]
+    @test only(filter(c -> c.region_id == 2, corner.components)).dimension == 1
+    @test only(filter(c -> c.region_id == 3, corner.components)).dimension == 1
+end
+
+@testset "A82 exact algebraic grid geometry" begin
+    VIZ = TamerOp.Visualization
+    EC = TamerOp.EncodingCore
+    FF = TamerOp.FiniteFringe
+    AR = TamerOp.ExactReals.AlgebraicReal
+    radius = sqrt(AR(2))
+    pi = EC.GridEncodingMap(FF.ProductOfChainsPoset((2, 2)), ([AR(0), radius], [AR(0), AR(1)]))
+    spec = VIZ.visual_spec(pi; kind=:query_overlay, points=[(radius, AR(1)/2)], box=([0, 0], [2, 2]))
+    @test only(spec.metadata.query_readout).region_id == 2
+    @test only(spec.metadata.query_readout).point[1] == radius
+    @test only(spec.metadata.query_readout).display_rounded
+    first_region = only(filter(c -> c.region_id == 1, spec.metadata.geometry.components))
+    @test maximum(p[1] for p in first_region.vertices) == radius
+    @test first_region.vertices[2][1]^2 == 2
+    @test !first_region.edge_included[2]
+end
+
+@testset "A81 and A82 integer query and scalar view contracts" begin
+    V = TamerOp.Visualization
+    ZE = TamerOp.ZnEncoding
+    face = FZ.Face(2, [false, false])
+    field = CM.QQField()
+    flange = FZ.Flange(2, [FZ.IndFlat(face, (0,0); id=:U)],
+        [FZ.IndInj(face, (2,2); id=:D)], reshape([CM.coerce(field, 1)], 1, 1); field=field)
+    P, H, pi = ZE.encode_from_flange(flange)
+    enc = RES.EncodingResult(P, TO.pmodule_from_fringe(H), EC.compile_encoding(P, pi))
+    inv = TamerOp.invariant(enc; which=:rank_invariant)
+    a, b = (5//2, 1//1), (5//2 + 1//(2^53), 1//1)
+    spec = V.visual_spec(inv; kind=:rank_query_overlay, pairs=[(a, a), (b, b)])
+    @test [r.rank for r in spec.metadata.query_results] == [1, 0]
+    @test spec.metadata.exact_query_pairs == [(a, a), (b, b)]
+    @test !V.check_visual_request(inv; kind=:rank_query_overlay, pair=(b, a)).valid
+    @test V.check_visual_request(inv; kind=:rank_query_overlay, pair=(a, b)).valid
+    hilbert = TamerOp.invariant(enc; which=:restricted_hilbert)
+    heat = V.visual_spec(hilbert; kind=:hilbert_heatmap)
+    @test heat.metadata.geometry.geometry_kind == :nearest_lattice_tiles
+    @test occursin("nearest-lattice", heat.subtitle)
+
+    # Unknown geometry and a known zero stalk have distinct displayed colors.
+    Q = QQ
+    hp = PLP.HPoly(2, Q[-1 0; 0 -1; 1 1], Q[0,0,1], nothing, falses(3), zero(Q))
+    partial = PLP.PLEncodingMap(2, [BitVector()], [BitVector()], [hp], [(1//4,1//4)])
+    cdr = RES.CohomologyDimsResult(chain_poset(1), [0], partial; degree=0)
+    for kind in (:cohomology_support, :cohomology_support_plane)
+        s = V.visual_spec(cdr; kind=kind, box=([-1,-1], [2,2]))
+        background = first(s.layers)
+        fill = only(filter(l -> l isa V.PolygonLayer, s.layers))
+        @test background.fill_color == s.legend.entries.outside.color
+        @test background.fill_color != fill.fill_color
+        entry = kind === :cohomology_support ? s.legend.entries.unsupported : s.legend.entries.v1
+        @test fill.fill_color == entry.color
+    end
+    MI = TamerOp.MultiparameterImages
+    line = MI.MPPLineSpec([1.0,1.0], 0.0, [0.0,0.0], 0.5)
+    view = V.visual_spec(line; box=([-5,-2], [3,7]))
+    @test view.axes.xlimits == (-5.0, 3.0)
+    @test view.axes.ylimits == (-2.0, 7.0)
+end
+@testset "A82 contours omit internal cells of the same fiber" begin
+    VIZ = TamerOp.Visualization
+    PLB = TamerOp.PLBackend
+    _, _, pi = PLB.encode_fringe_boxes([PLB.BoxUpset([0.0, 0.0])],
+        [PLB.BoxDownset([2.0, 2.0])], TamerOp.Advanced.EncodingOptions())
+    spec = VIZ.visual_spec(pi; kind=:regions, box=([-1, -1], [3, 3]))
+    segments = [seg for layer in spec.layers if layer isa VIZ.SegmentLayer for seg in layer.segments]
+    canonical(seg) = (seg[1], seg[2]) <= (seg[3], seg[4]) ? seg : (seg[3], seg[4], seg[1], seg[2])
+    boundaries = Set(canonical.(segments))
+    # Below the square neither crossing x=0 nor crossing y=0 changes the
+    # classifier signature. Above it x=2 and y=2 also leave the fiber unchanged.
+    for internal in ((0.0, -1.0, 0.0, 0.0), (-1.0, 0.0, 0.0, 0.0),
+                     (2.0, 2.0, 2.0, 3.0), (2.0, 2.0, 3.0, 2.0))
+        @test !(canonical(internal) in boundaries)
+    end
+    # All four true support boundaries remain, as does the clipped outer box.
+    for boundary in ((0.0, 0.0, 2.0, 0.0), (0.0, 0.0, 0.0, 2.0),
+                     (0.0, 2.0, 2.0, 2.0), (2.0, 0.0, 2.0, 2.0))
+        @test canonical(boundary) in boundaries
+    end
+    cuts = Set(canonical(seg) for layer in spec.layers if layer isa VIZ.SegmentLayer && layer.linestyle === :dot for seg in layer.segments)
+    @test (-1.0, -1.0, 0.0, -1.0) in cuts
+    # Rendering simplification must retain the exact cell subdivision for queries.
+    @test count(c -> c.dimension == 2, spec.metadata.geometry.components) == 9
 end

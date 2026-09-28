@@ -1,10 +1,8 @@
 function _visual_makie_handlers(TO, MakieMod; allow_save::Bool=true)
     Viz = TO.Visualization
 
-    Point2 = if isdefined(MakieMod, :Point2f)
-        MakieMod.Point2f
-    elseif isdefined(MakieMod, :Point2f0)
-        MakieMod.Point2f0
+    Point2 = if isdefined(MakieMod, :Point2d)
+        MakieMod.Point2d
     else
         nothing
     end
@@ -92,10 +90,18 @@ function _visual_makie_handlers(TO, MakieMod; allow_save::Bool=true)
                                    strokecolor=layer.stroke_color,
                                    strokewidth=layer.linewidth)
                 end
+            elseif layer isa Viz.PolygonLayer
+                for polygon in layer.polygons
+                    MakieMod.poly!(ax, to_point2.(polygon);
+                                   color=(layer.fill_color, layer.alpha),
+                                   strokecolor=layer.stroke_color,
+                                   strokewidth=layer.linewidth)
+                end
             elseif layer isa Viz.SegmentLayer
                 for seg in layer.segments
                     MakieMod.lines!(ax, [seg[1], seg[3]], [seg[2], seg[4]];
-                                    color=(layer.color, layer.alpha), linewidth=layer.linewidth)
+                                    color=(layer.color, layer.alpha), linewidth=layer.linewidth,
+                                    linestyle=layer.linestyle)
                 end
             elseif layer isa Viz.Segment3Layer
                 for seg in layer.segments
@@ -114,7 +120,6 @@ function _visual_makie_handlers(TO, MakieMod; allow_save::Bool=true)
                 end
             elseif layer isa Viz.PointLayer
                 isempty(layer.points) || begin
-                    scatter_color = layer.color isa AbstractVector ? layer.color : (layer.color, layer.alpha)
                     kwargs = layer.color isa AbstractVector ?
                              (; color=layer.color, colormap=layer.colormap, alpha=layer.alpha,
                                 markersize=layer.markersize, markerspace=layer.markerspace) :
@@ -226,18 +231,6 @@ function _visual_makie_handlers(TO, MakieMod; allow_save::Bool=true)
         return ax
     end
 
-    function _slice_from_volume(volume, view_dims::Tuple{Int,Int}, fixed::Dict{Int,Int})
-        idx = Any[Colon() for _ in 1:ndims(volume)]
-        for (dim, pos) in fixed
-            idx[dim] = Int(pos)
-        end
-        idx[view_dims[1]] = Colon()
-        idx[view_dims[2]] = Colon()
-        slice = Float64.(volume[idx...])
-        ndims(slice) == 2 && return slice
-        return reshape(slice, size(volume, view_dims[1]), size(volume, view_dims[2]))
-    end
-
     function _render_slice_viewer(spec; figure=nothing)
         volume = get(spec.metadata, :volume, nothing)
         volume === nothing && return nothing
@@ -252,10 +245,12 @@ function _visual_makie_handlers(TO, MakieMod; allow_save::Bool=true)
                            title=spec.title,
                            subtitle=spec.subtitle)
         current = copy(fixed)
-        zobs = MakieMod.Observable(_slice_from_volume(volume, view_dims, current))
+        # The core stores rows=y, columns=x. Makie needs rows=x, columns=y;
+        # use the same slice helper for initial state and every slider update.
+        zobs = MakieMod.Observable(permutedims(Viz._image_slice_values(volume, view_dims, current)))
         hm = MakieMod.heatmap!(ax,
-                               1:size(zobs[], 2),
                                1:size(zobs[], 1),
+                               1:size(zobs[], 2),
                                zobs;
                                colormap=get(spec.metadata, :colormap, :magma),
                                alpha=1.0)
@@ -263,34 +258,34 @@ function _visual_makie_handlers(TO, MakieMod; allow_save::Bool=true)
         MakieMod.Colorbar(fig[1, 2], hm; label="intensity")
         for (row, dim) in enumerate(control_dims)
             MakieMod.Label(fig[row + 1, 1], "slice dim $dim"; tellwidth=false)
-            slider = MakieMod.Slider(fig[row + 1, 2];
+            slider = MakieMod.Makie.Slider(fig[row + 1, 2];
                                      range=1:size(volume, dim),
                                      startvalue=get(current, dim, cld(size(volume, dim), 2)))
             MakieMod.Label(fig[row + 1, 3], MakieMod.lift(v -> string(Int(round(v))), slider.value))
             MakieMod.on(slider.value) do v
                 current[dim] = Int(round(v))
-                zobs[] = _slice_from_volume(volume, view_dims, current)
+                zobs[] = permutedims(Viz._image_slice_values(volume, view_dims, current))
             end
         end
         return fig
     end
 
-    function render_spec(spec; display::Symbol=:inline, figure=nothing, kwargs...)
+    function render_spec(spec; display::Symbol=:inline, figure=nothing, size=nothing)
         spec isa Viz.VisualizationSpec || throw(ArgumentError("render_spec expected a VisualizationSpec, got $(typeof(spec))."))
-        _ = (display, kwargs)
-        get(Viz.visual_interaction(spec), :notebook, :summary_card) === :widget_viewer && begin
-            widget_fig = _render_slice_viewer(spec; figure=figure)
-            widget_fig === nothing || return widget_fig
-        end
-        panels = Viz.visual_panels(spec)
-        ncols = isempty(panels) ? 1 : Int(clamp(get(Viz.visual_metadata(spec), :panel_columns, min(3, length(panels))), 1, max(length(panels), 1)))
-        nrows = isempty(panels) ? 1 : cld(length(panels), ncols)
+        Viz._check_visual_render_options(; display, figure, size)
         fig = if figure === nothing
-            fig_size = get(Viz.visual_metadata(spec), :figure_size, nothing)
+            fig_size = size === nothing ? get(Viz.visual_metadata(spec), :figure_size, nothing) : size
             fig_size === nothing ? MakieMod.Figure() : MakieMod.Figure(size=fig_size)
         else
             figure
         end
+        nameof(MakieMod) === :WGLMakie &&
+            get(Viz.visual_interaction(spec), :notebook, :summary_card) === :widget_viewer && begin
+            widget_fig = _render_slice_viewer(spec; figure=fig)
+            widget_fig === nothing || return widget_fig
+        end
+        panels = Viz.visual_panels(spec)
+        ncols = isempty(panels) ? 1 : Int(clamp(get(Viz.visual_metadata(spec), :panel_columns, min(3, length(panels))), 1, max(length(panels), 1)))
         if isempty(panels)
             grid = fig[1, 1] = MakieMod.GridLayout()
             _render_spec_into_grid!(fig, grid, spec)

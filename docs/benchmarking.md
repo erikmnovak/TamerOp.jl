@@ -26,6 +26,7 @@ package. Preserve losses and coverage gaps: they identify what to improve next.
 | Task | Start here |
 | --- | --- |
 | Plan the comparison | [Define the question and output](#define-the-question-and-output) |
+| Choose what to compare first | [Prioritize complete mathematical workflows](#prioritize-complete-mathematical-workflows) |
 | Measure actual computation | [Measure compiled code with uncached mathematics](#measure-compiled-code-with-uncached-mathematics) |
 | Investigate first use | [Measure and improve compilation](#measure-and-improve-compilation) |
 | Diagnose storage | [Measure memory separately](#measure-memory-separately) |
@@ -49,9 +50,52 @@ trusted-input path.
 
 Useful boundaries include raw data or a presentation to an encoding; an encoding
 to an invariant or algebraic result; raw input to the completed answer; and an
-existing result to an additional query. Report the end-to-end task alongside
-component timings for workflow claims. A matrix-kernel improvement must reach
-the relevant public entrypoint before it becomes a user-facing speedup.
+existing result to an additional query. Use the measured end-to-end task as the
+primary evidence for a workflow claim. Add component timings when they answer a
+specific diagnostic question. A matrix-kernel improvement must reach the
+relevant public entrypoint before it becomes a user-facing speedup.
+
+## Prioritize complete mathematical workflows
+
+Start with what a user wants to learn from the finite encoding. For example,
+a user may need complete Hom maps together with Ext representatives and their
+coordinates to compare two modules. The primary comparison measures the time to
+produce that whole answer from equivalent starting information. A verified
+advantage for this task stands on its own: identifying which internal stage
+accounts for the gain is not a prerequisite for reporting it. Different
+algorithms, representations and reuse within the computation can all contribute
+to a legitimate workflow advantage.
+
+Choose the requested outputs for their mathematical purpose before looking at
+timings. Cover a variety of relevant workflows and input families, including
+unfavorable cases. Do not bundle unrelated requests or adjust their frequency
+to obtain a preferred ranking. For a session answering several questions from
+one encoding, explain why those questions belong together and measure the
+session directly, giving both tools equivalent reuse opportunities.
+
+A complete task can also be a single Hom basis or the dimension of Ext in one
+degree. Include such standalone requests when they represent intended use or
+are needed to support the scope of a claim. Computing dimensions alone has a
+different finishing point from computing representatives and coordinates. A
+win on the combined workflow does not establish a win on each standalone task;
+a standalone loss does not invalidate the combined result. Preserve and report
+both with their respective scope.
+
+TamerOp component measurements and profiles serve a specific investigation:
+locating a bottleneck, explaining a regression, examining allocation or scaling,
+or checking whether a surprising comparison charges equivalent work. Select the
+relevant diagnostics for that question. An exhaustive breakdown and wins in every
+component are not completion requirements for a valid workflow comparison.
+Time spent broadening meaningful workflow and input coverage can provide more
+useful comparative evidence than explaining an already verified advantage.
+
+Keep the reset boundary at the start of the declared task. A combined Hom/Ext
+query may reuse a projective cover or resolution across its stages and degrees.
+Resetting between those stages would measure a different algorithm. A separately
+benchmarked standalone request begins from its own verified reset and declared
+inputs; any supplied result or preparation must be charged or identified as
+retained state under the timing regimes below. Separately reset component times
+must not be summed to stand in for a directly measured complete workflow.
 
 ## Compare answers while respecting different designs
 
@@ -86,13 +130,54 @@ conversions charged. Disclose any unavoidable extra outputs. If starting
 information or answers cannot be aligned, explain the difference and report a
 directional comparison rather than a matched speedup.
 
-Use current supported releases and record exact versions; justify development
-commits. Check that the comparator's chosen call is an efficient supported route,
-without redundant calculations or unnecessarily long resolutions. Give both
-tools comparable tuning effort and resource budgets. Keep default and tuned
-results separate, tune on development fixtures, and evaluate held-out fixtures.
-Use relevant supported accelerators, reporting common resource budgets separately
-from each tool's best practical configuration.
+### Keep competitor implementations unchanged
+
+**Repairing, redesigning or modifying competitor implementations is prohibited
+in this benchmarking work.** Compare unmodified released software through its
+supported interfaces. Do not patch competitor source or replace its methods.
+Implementation optimization work belongs to TamerOp.
+
+A competitor's internal algorithm, data structures, arithmetic costs and missed
+reuse are part of its measured performance. Leave those implementation costs
+intact. A large measured ratio warrants checking our experimental setup and
+answers; it does not authorize fixing the competitor's internal bottlenecks.
+Report an unexplained timing difference as an observation without inventing a
+cause. Timing, resource measurement, output validation and cache-reset
+verification remain part of a fair comparison.
+
+Profiling a competitor is allowed as an optional diagnostic when it answers a
+concrete question about observed behavior. It must not change the competitor's
+implementation. Run profiling separately from the measurements used for speedup
+claims, so instrumentation overhead does not enter the comparison. Explaining
+the competitor's bottlenecks is not a prerequisite for reporting a verified
+workflow advantage, and profiling findings do not authorize repairs or redesigns.
+
+The benchmark harness remains our responsibility. Use an appropriate supported
+public route for the agreed answer. Avoid adding unnecessary calls, asking for
+extra degrees, or discarding useful intermediate results within one task.
+For example, if the competitor's own routine reconstructs a factor internally,
+that cost belongs to its implementation. If our harness needlessly calls a
+constructor again when the documented workflow reuses its result, correct the
+harness. Different legitimate internal steps do not need to be matched.
+
+Before the main run, make a bounded check of the documented entrypoints,
+relevant algorithm options and normal reuse for the chosen task. Record the
+selected calls, options and starting state. No proof of a globally fastest
+configuration or exhaustive search of alternative algorithms is required.
+A default-route comparison is valid when labeled as such. If an established,
+more appropriate supported route is known, include it before making a broader
+claim about the competitor's practical performance; do not select an inferior
+route to preserve a favorable ratio. A suspected misuse or output mismatch needs
+resolution, whereas a verified slower implementation can remain slower.
+
+Use current supported competitor releases and record exact versions. Identify
+any TamerOp development commit separately. Give both tools comparable resource
+budgets and access to options and accelerators supported by their recorded
+versions. For competitors, configuration is limited to those existing supported
+settings; it must not change the implementation. Keep default and configured
+results separate. Any configuration selection uses development fixtures and is
+evaluated on held-out fixtures. Report common resource budgets separately from
+each tool's tested practical configuration.
 
 ## Name the timing regime
 
@@ -334,12 +419,27 @@ if that prepares hidden computation state.
 
 Define “same output.” Hom bases can differ in entries while spanning the same
 space: check naturality, independence and completeness. For Ext representatives,
-check cycles, boundaries, quotient dimensions and coordinates. Construct
-comparison maps when claiming identification between resolution models; native
-checks alone do not provide that identification. Module-valued outputs require
-maps and commuting diagrams alongside dimensions. State the exact sample family
-for sampled invariants. Numerical answers need tolerances, conditioning and
-precision; distinguish them from exact output.
+check cycles, boundaries, quotient dimensions and coordinates. Module-valued
+outputs require maps and commuting diagrams alongside dimensions. State the exact
+sample family for sampled invariants. Numerical answers need tolerances,
+conditioning and precision; distinguish them from exact output.
+
+Different valid resolution models can satisfy a request for an Ext basis in
+native coordinates. Establish that both models compute the stated Ext group in
+the same category, field, variance and degree, and verify representative validity,
+independence and completeness in each model, with independent checks appropriate
+to the claim. Matching dimensions alone is insufficient. An explicit map between
+the two returned bases is not automatically required for this performance
+comparison. State when such an identification has not been constructed.
+
+If a claim identifies particular extension classes, induced maps or products
+across models, provide comparison maps or another mathematically justified
+identification sufficient to check that claim. Separate native checks alone do
+not establish it. Add these operations to the timed workflow when the user's
+mathematical question requires them. A study of native basis construction need
+not expand into a study of products solely because the tools use different
+representations. Correctness and answer equivalence remain requirements;
+matching implementation details is unnecessary.
 
 Fix category, field, variance, degree, parameter orientation, window, endpoint
 rules, grading and truncation. Ext/Tor on different encoding posets need not
@@ -394,8 +494,11 @@ before reporting; give family results and coverage counts alongside any geometri
 mean. Distinguish medians of measured batch totals from sums of individual
 medians. Separate single-field and mixed-field observations.
 
-## Use measurements to choose an optimization
+## Use measurements to choose a TamerOp optimization
 
+The implementation changes in this section apply to TamerOp only. Competitor
+implementations remain unchanged; optional competitor profiling follows the
+comparison policy above.
 A profile suggests a hypothesis; a controlled before/after experiment tests it.
 Keep fixtures and required outputs fixed. Match each revision to its own usable
 precompiled image for startup tests. Hold tuning constant unless tuning is the
@@ -477,8 +580,11 @@ while planning; keep them visible if still unresolved in the final claim.
 
 ```text
 Question and intended TamerOp workflow:
+Primary user tasks and reason for their selection or combination:
+Targeted TamerOp component diagnostics and the question each addresses, if needed:
 Versions/commits and source/configuration hashes:
 Competitors, surveyed overlap and untested/unsupported cells:
+Supported public routes/options checked; selected route and default/configured scope:
 Input category, field, hypotheses, conventions and data provenance:
 Requested output, mathematical equivalence and independent oracle:
 Starting information, timed boundary, conversions and materialization:

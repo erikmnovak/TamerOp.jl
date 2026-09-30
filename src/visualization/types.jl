@@ -145,6 +145,31 @@ struct TextLayer <: AbstractVisualizationLayer
     textsize::Float64
 end
 
+"""
+    MatrixLayer(entries, row_labels, column_labels)
+
+A matrix displayed as coefficient text, with rows labelled by the target basis
+and columns by the source basis. `entries` is a `Matrix{String}`; its strings
+are displayed literally, without conversion to real numbers or a magnitude
+color scale. The label lengths must match the displayed matrix dimensions.
+
+Use this layer in a `VisualizationSpec` with `metadata.panel_style = :matrix`.
+A standalone specification containing this layer also selects the matrix
+renderer automatically. Each matrix panel contains exactly one `MatrixLayer`.
+
+Keep the exact numerical matrix and the original shape in the specification's
+metadata. When displaying a submatrix, the labels identify the displayed basis
+vectors; `metadata.matrix_size`, `metadata.displayed_rows`, and
+`metadata.displayed_columns` record the original shape and displayed indices.
+State truncation in the specification subtitle. Empty matrices retain their
+shape and are rendered with an explicit empty-matrix message.
+"""
+struct MatrixLayer <: AbstractVisualizationLayer
+    entries::Matrix{String}
+    row_labels::Vector{String}
+    column_labels::Vector{String}
+end
+
 struct Segment3Layer <: AbstractVisualizationLayer
     segments::Vector{NTuple{6,Float64}}
     color::Symbol

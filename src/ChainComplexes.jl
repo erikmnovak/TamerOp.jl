@@ -31,6 +31,8 @@ using ..IndicatorResolutions: ProjectiveCoverResult, InjectiveHullResult,
 import ..Modules: component
 using ..FieldLinAlg: SparseRow, _SparseRREFAugmented, _sparse_rref_push_augmented!
 using ..FieldLinAlg
+import ..IndicatorResolutions
+using ..IndicatorResolutions: PresentationStalk, PresentationMap
 
 function dimensions end
 function basis end
@@ -58,6 +60,25 @@ function spectral_sequence_summary end
 function filtration_summary end
 function extension_summary end
 function long_exact_sequence_summary end
+
+describe(s::Union{PresentationStalk,PresentationMap}) = IndicatorResolutions.presentation_summary(s)
+"""
+    dimensions(s::PresentationStalk) -> Int
+    dimensions(m::PresentationMap) -> Tuple{Int,Int}
+
+Return the selected image dimension, or the induced matrix's (target, source)
+dimensions. These accessors do no additional linear algebra.
+"""
+dimensions(s::PresentationStalk) = IndicatorResolutions.presentation_summary(s).dimension
+dimensions(m::PresentationMap) = size(IndicatorResolutions.induced_map(m))
+"""
+    image_basis(s::PresentationStalk)
+
+Return the stored image embedding in active downset coordinates, or `nothing`
+when it was not requested. Use `presentation_stalk(H; vertex=q, basis=true)` to
+compute it. This accessor never computes a missing basis.
+"""
+image_basis(s::PresentationStalk) = IndicatorResolutions.image_basis(s)
 
 """
     describe(opts::OptionsType) -> NamedTuple

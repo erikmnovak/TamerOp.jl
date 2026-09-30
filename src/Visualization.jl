@@ -37,7 +37,13 @@ module Visualization
 
 using Statistics
 
-import ..ChainComplexes: describe, cohomology_dims
+import ..ChainComplexes: describe, cohomology_dims, dimensions
+import ..FiniteFringe
+import ..Modules
+import ..Results
+import ..CoreModules
+import ..FieldLinAlg
+import ..IndicatorResolutions
 using ..ExactReals: AlgebraicReal
 using ..FiniteFringe: AbstractPoset, ProductOfChainsPoset, GridPoset, ProductPoset, nvertices, leq
 import ..DataTypes
@@ -86,6 +92,9 @@ include("visualization/rendering.jl")
 include("visualization/region_geometry.jl")
 include("visualization/builders_encoding.jl")
 include("visualization/builders_invariants.jl")
+include("visualization/hasse_layout.jl")
+include("visualization/builders_modules.jl")
+include("visualization/builders_presentations.jl")
 include("visualization/builders_ingestion.jl")
 
 end # module Visualization

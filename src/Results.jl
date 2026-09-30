@@ -48,6 +48,7 @@ import ..EncodingCore: compile_encoding, encoding_poset, encoding_map, encoding_
                        encoding_representatives, check_encoding_map, check_compiled_encoding
 
 function encoding_module end
+function encoding_presentation end
 function encoding_complex end
 function translated_module end
 function translation_map end
@@ -353,6 +354,25 @@ the full module, including its structure maps, and caches it. Use `describe(enc)
 for stored information or `dimensions(enc)` for a dimensions-only computation.
 """
 encoding_module(enc::EncodingResult) = materialize_module(enc.M)
+
+"""
+    encoding_presentation(enc::EncodingResult)
+
+Return the retained finite fringe presentation on the result's current poset
+and coefficient field, or `nothing` when none is available. This cheap accessor
+does not reconstruct a presentation, compute image bases, or materialize a lazy
+module. The original input presentation may belong to a different base after
+coarsening and is not returned here.
+
+The result is a retained witness, not a certification that independently
+hand-built storage represents the same module or uses the same coordinate bases. Use
+`presentation_stalk` / `presentation_map` to inspect its image coordinates.
+"""
+encoding_presentation(enc::EncodingResult) =
+    _encoding_presentation(enc.H, enc.P, _provenance_field(enc.M))
+
+# The finite-fringe owner attaches the supported witness type after loading.
+_encoding_presentation(H, P, field) = nothing
 
 """
     encoding_complex(enc::EncodedComplexResult)

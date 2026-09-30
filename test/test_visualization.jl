@@ -346,7 +346,7 @@ end
     @test TamerOp.available_visuals(nothing) == ()
     @test TamerOp.available_visuals(grid_pi) == (:regions, :region_labels, :query_overlay)
     @test TamerOp.available_visuals(compiled_grid) == (:regions, :region_labels, :query_overlay)
-    @test TamerOp.available_visuals(enc_result) == (:regions, :region_labels, :query_overlay)
+    @test TamerOp.available_visuals(enc_result) == (:regions, :region_labels, :query_overlay, :hasse, :module_inspector)
     @test TamerOp.available_visuals(emap) == (:regions, :region_labels, :pushforward_overlay)
     @test TamerOp.available_visuals(cref) == (:common_refinement,)
     @test TamerOp.available_visuals(trans) == (:pushforward_overlay,)
@@ -1580,4 +1580,825 @@ end
     @test (-1.0, -1.0, 0.0, -1.0) in cuts
     # Rendering simplification must retain the exact cell subdivision for queries.
     @test count(c -> c.dimension == 2, spec.metadata.geometry.components) == 9
+end
+@testset "A42a finite-poset layout and selection semantics" begin
+    V = TamerOp.Visualization
+    # Numeric IDs deliberately disagree with topological order: min=4, max=1.
+    relation = falses(4, 4)
+    for i in 1:4
+        relation[i, i] = true
+    end
+    expected_edges = Set([(4, 2), (4, 3), (2, 1), (3, 1)])
+    for (u, v) in expected_edges
+        relation[u, v] = true
+    end
+    relation[4, 1] = true
+    P = FF.FinitePoset(relation)
+    spec = V.visual_spec(P; kind=:hasse)
+    @test :hasse in V.available_visuals(P)
+    @test spec.metadata.vertex_ids == collect(1:4)
+    @test Set(spec.metadata.cover_edges) == expected_edges
+    @test !((4, 1) in spec.metadata.cover_edges)
+    @test length(unique(spec.metadata.positions)) == 4
+    @test all(spec.metadata.positions[u][2] < spec.metadata.positions[v][2] for (u, v) in expected_edges)
+    @test spec.metadata.dimensions === nothing
+    @test V.check_visual_spec(spec).valid
+    @test V.visual_spec(P; kind=:hasse, pair=(4, 1)).metadata.relation == :comparable
+    @test V.visual_spec(P; kind=:hasse, pair=(4, 2)).metadata.relation == :cover
+    @test V.visual_spec(P; kind=:hasse, pair=(2, 2)).metadata.relation == :equal
+    @test V.visual_spec(P; kind=:hasse, pair=(2, 3)).metadata.relation == :incomparable
+    @test V.visual_spec(P; kind=:hasse, pair=(1, 4)).metadata.relation == :reverse_comparable
+    @test_throws ArgumentError V.visual_spec(P; kind=:hasse, vertex=0)
+    @test_throws ArgumentError V.visual_spec(P; kind=:hasse, pair=(1, 5))
+    @test_throws ArgumentError V.visual_spec(P; kind=:hasse, vertex=true)
+    @test_throws ArgumentError V.visual_spec(P; kind=:hasse, vertex=1, pair=(1, 2))
+
+    disconnected = V.visual_spec(disjoint_two_chains_poset(); kind=:hasse)
+    @test Set(disconnected.metadata.cover_edges) == Set([(1, 2), (3, 4)])
+    @test length(unique(disconnected.metadata.positions)) == 4
+    empty = V.visual_spec(chain_poset(0); kind=:hasse)
+    @test isempty(empty.metadata.vertex_ids)
+    @test isempty(empty.metadata.cover_edges)
+    @test V.check_visual_spec(empty).valid
+    product = V.visual_spec(FF.ProductOfChainsPoset((2, 2)); kind=:hasse)
+    @test Set(product.metadata.cover_edges) == Set([(1, 2), (1, 3), (2, 4), (3, 4)])
+
+    for field in FIELDS_FULL
+        K = CM.coeff_type(field)
+        M = MD.PModule{K}(P, ones(Int, 4),
+            Dict(edge => reshape(K[1], 1, 1) for edge in expected_edges); field=field)
+        diagram = V.visual_spec(M; kind=:hasse)
+        @test diagram.metadata.dimensions == ones(Int, 4)
+        direct = V.visual_spec(M; kind=:module_inspector, pair=(4, 1)).metadata.inspection
+        @test direct.defined
+        @test direct.matrix == reshape(K[1], 1, 1)
+        @test direct.rank == 1
+        for pair in ((2, 3), (1, 4))
+            absent = V.visual_spec(M; kind=:module_inspector, pair).metadata.inspection
+            @test !absent.defined
+            @test absent.matrix === nothing
+            @test absent.rank === nothing
+        end
+        overview = V.visual_spec(M; kind=:module_inspector).metadata.inspection
+        @test overview.kind == :overview
+        @test V.visual_spec(M; kind=:module_inspector, vertex=4).metadata.inspection.kind == :stalk
+    end
+end
+
+@testset "A42a selected maps over the supported coefficient fields" begin
+    V = TamerOp.Visualization
+    P = chain_poset(3)
+    for field in FIELDS_FULL
+        K = CM.coeff_type(field)
+        injection = reshape(K[1, 0], 2, 1)
+        projection = K[0 1]
+        M = MD.PModule{K}(P, [1, 2, 1],
+            Dict((1, 2) => injection, (2, 3) => projection); field=field)
+        @test V.visual_spec(M).kind == :hasse
+        @test Set(V.available_visuals(M)) == Set((:hasse, :module_inspector))
+        cases = [
+            (pair=(1, 2), matrix=injection, rank=1, nullity=0),
+            (pair=(2, 3), matrix=projection, rank=1, nullity=1),
+            (pair=(1, 3), matrix=zeros(K, 1, 1), rank=0, nullity=1),
+            (pair=(2, 2), matrix=K[1 0; 0 1], rank=2, nullity=0),
+        ]
+        for c in cases
+            spec = V.visual_spec(M; kind=:module_inspector, pair=c.pair)
+            selected = spec.metadata.inspection
+            @test selected.kind == :map
+            @test selected.defined
+            @test (selected.source, selected.target) == c.pair
+            @test selected.matrix == c.matrix
+            @test eltype(selected.matrix) == K
+            @test selected.rank == selected.image_dimension == c.rank
+            @test selected.kernel_dimension == c.nullity
+            @test selected.source_dimension == size(c.matrix, 2)
+            @test selected.target_dimension == size(c.matrix, 1)
+            @test selected.basis_convention == :module_coordinates
+            @test selected.field == field
+            @test selected.exact == !(field isa CM.RealField)
+            table = only(l for l in last(spec.panels).layers if l isa V.MatrixLayer)
+            @test size(table.entries) == size(c.matrix)
+            @test length(table.row_labels) == size(c.matrix, 1)
+            @test length(table.column_labels) == size(c.matrix, 2)
+            @test V.check_visual_spec(spec).valid
+        end
+        # Two nonzero adjacent maps have zero composite: dimensions alone
+        # cannot recover this distinction. The matrix is a safe snapshot.
+        selected = V.visual_spec(M; kind=:module_inspector, pair=(1, 2)).metadata.inspection
+        selected.matrix[1, 1] = zero(K)
+        @test MD.structure_map(M; source=1, target=2) == injection
+
+        A = K[1 1; 1 -1]
+        N = MD.PModule{K}(chain_poset(2), [2, 2], Dict((1, 2) => A); field=field)
+        # det(A)=-2: only characteristic 2 drops rank, independently of the
+        # numerical/exact rank implementation used by the visualization.
+        expected_rank = field isa CM.PrimeField && field.p == 2 ? 1 : 2
+        char_spec = V.visual_spec(N; kind=:module_inspector, pair=(1, 2))
+        @test char_spec.metadata.inspection.rank == expected_rank
+        @test char_spec.metadata.inspection.kernel_dimension == 2 - expected_rank
+        char_table = only(l for l in last(char_spec.panels).layers if l isa V.MatrixLayer)
+        @test char_table.entries == (field isa CM.QQField ? string.(numerator.(A)) : string.(A))
+    end
+
+    # Exact rational coefficients remain exact in the retained matrix and text.
+    field = CM.QQField()
+    A = reshape(QQ[1//3], 1, 1)
+    M = MD.PModule{QQ}(chain_poset(2), [1, 1], Dict((1, 2) => A); field=field)
+    spec = V.visual_spec(M; kind=:module_inspector, pair=(1, 2))
+    @test spec.metadata.inspection.matrix == A
+    table = only(l for l in last(spec.panels).layers if l isa V.MatrixLayer)
+    @test table.entries == reshape(["1/3"], 1, 1)
+
+    # Rank follows the declared RealField tolerance, not Float64's default.
+    for (atol, expected_rank) in ((1e-6, 1), (1e-10, 2))
+        real_field = CM.RealField(Float64; rtol=0.0, atol)
+        N = MD.PModule{Float64}(chain_poset(2), [2, 2],
+            Dict((1, 2) => [1.0 0.0; 0.0 1e-8]); field=real_field)
+        numerical = V.visual_spec(N; kind=:module_inspector, pair=(1, 2)).metadata.inspection
+        @test numerical.rank == expected_rank
+        @test numerical.kernel_dimension == 2 - expected_rank
+        @test !numerical.exact
+        @test numerical.atol == atol
+        @test numerical.rtol == 0.0
+    end
+end
+
+@testset "A42a empty maps and matrix table limits" begin
+    V = TamerOp.Visualization
+    for field in FIELDS_FULL
+        K = CM.coeff_type(field)
+        M = MD.PModule{K}(chain_poset(3), [0, 2, 0], Dict(
+            (1, 2) => zeros(K, 2, 0), (2, 3) => zeros(K, 0, 2)); field=field)
+        for (pair, shape, nullity) in (((1, 2), (2, 0), 0),
+                                      ((2, 3), (0, 2), 2),
+                                      ((1, 3), (0, 0), 0),
+                                      ((1, 1), (0, 0), 0))
+            spec = V.visual_spec(M; kind=:module_inspector, pair)
+            selected = spec.metadata.inspection
+            @test selected.defined
+            @test size(selected.matrix) == shape
+            @test selected.rank == 0
+            @test selected.kernel_dimension == nullity
+            table = only(l for l in last(spec.panels).layers if l isa V.MatrixLayer)
+            @test size(table.entries) == shape
+            @test V.check_visual_spec(spec).valid
+        end
+        empty = MD.PModule{K}(chain_poset(0), Int[], Dict{Tuple{Int,Int},Matrix{K}}(); field=field)
+        @test isempty(V.visual_spec(empty; kind=:hasse).metadata.dimensions)
+        @test V.visual_spec(empty; kind=:module_inspector).metadata.inspection.kind == :overview
+    end
+    A = zeros(QQ, 14, 15)
+    for i in 1:14
+        A[i, i] = 1
+    end
+    M = MD.PModule{QQ}(chain_poset(2), [15, 14], Dict((1, 2) => A); field=CM.QQField())
+    spec = V.visual_spec(M; kind=:module_inspector, pair=(1, 2), matrix_limit=(3, 4))
+    selected = spec.metadata.inspection
+    @test selected.matrix == A
+    @test selected.rank == 14
+    @test selected.kernel_dimension == 1
+    @test selected.displayed_rows == collect(1:3)
+    @test selected.displayed_columns == collect(1:4)
+    @test selected.truncated
+    table = only(l for l in last(spec.panels).layers if l isa V.MatrixLayer)
+    @test table.entries == string.(numerator.(A[1:3, 1:4]))
+    @test_throws ArgumentError V.visual_spec(M; kind=:module_inspector, pair=(1, 2), matrix_limit=(0, 4))
+    @test_throws ArgumentError V.visual_spec(M; kind=:hasse, matrix_limit=(3, 4))
+end
+
+@testset "A42a square parameters, stalks, and actual labels" begin
+    V = TamerOp.Visualization
+    opts = TOA.EncodingOptions(; backend=:pl_backend, poset_kind=:signature, field=CM.QQField())
+    enc = TamerOp.encode([TOA.BoxUpset([0.0, 0.0])],
+        [TOA.BoxDownset([2.0, 2.0])], reshape(QQ[1], 1, 1), opts)
+    pi = TamerOp.encoding_map(enc)
+    expected_dims = TamerOp.dimensions(enc)
+    @test :hasse in V.available_visuals(enc)
+    @test :module_inspector in V.available_visuals(enc)
+    for point in ((0, 0), (2, 2), (0, 2), (2, 0), (-1, 1), (3, 1))
+        spec = V.visual_spec(enc; kind=:module_inspector, point, box=([-1, -1], [3, 3]))
+        selected = spec.metadata.inspection
+        @test selected.kind == :stalk
+        hasse = only(p for p in spec.panels if p.kind == :hasse)
+        @test hasse.metadata.selected_vertex == EC.locate(pi, point)
+        @test hasse.metadata.dimensions == expected_dims
+        @test expected_dims[hasse.metadata.selected_vertex] == Int(all(0 .<= collect(point) .<= 2))
+        @test first(spec.panels).axes.xlimits == (-1.0, 3.0)
+        @test first(spec.panels).axes.ylimits == (-1.0, 3.0)
+        @test V.check_visual_spec(spec).valid
+    end
+    cases = [
+        (points=((1//4, 1//2), (1, 3//2)), matrix=reshape(QQ[1], 1, 1)),
+        (points=((-1, 1), (0, 1)), matrix=zeros(QQ, 1, 0)),
+        (points=((1, 3//2), (3, 3//2)), matrix=zeros(QQ, 0, 1)),
+        (points=((-1, 1), (3, 1)), matrix=zeros(QQ, 0, 0)),
+    ]
+    for c in cases
+        spec = V.visual_spec(enc; kind=:module_inspector, parameter_pair=c.points)
+        selected = spec.metadata.inspection
+        @test selected.defined
+        @test selected.source == EC.locate(pi, collect(c.points[1]))
+        @test selected.target == EC.locate(pi, collect(c.points[2]))
+        @test selected.matrix == c.matrix
+        @test size(selected.matrix) == size(c.matrix)
+    end
+    # A shared label does not turn incomparable ambient points into a map.
+    a, b = (1//4, 3//2), (3//2, 1//4)
+    label = EC.locate(pi, a)
+    @test EC.locate(pi, b) == label
+    incomparable = V.visual_spec(enc; kind=:module_inspector, parameter_pair=(a, b)).metadata.inspection
+    @test !incomparable.defined
+    @test incomparable.matrix === nothing
+    @test V.visual_spec(enc; kind=:module_inspector, pair=(label, label)).metadata.inspection.matrix == reshape(QQ[1], 1, 1)
+    @test_throws ArgumentError V.visual_spec(enc; kind=:module_inspector, point=a, pair=(label, label))
+    @test_throws ArgumentError V.visual_spec(enc; kind=:module_inspector, point=(NaN, 0))
+    @test !V.check_visual_request(enc; kind=:module_inspector, point=(big(10)^400, 0)).valid
+
+    # Exterior points are zero-dimensional represented stalks, not missing
+    # classifier regions. The outside status occurs only where locate is 0.
+    P = FF.ProductOfChainsPoset((2, 2))
+    grid = EC.GridEncodingMap(P, ([0, 2], [1, 4]); orientation=(-1, 1))
+    constant_module = MD.PModule{QQ}(P, ones(Int, 4),
+        Dict(edge => reshape(QQ[1], 1, 1) for edge in FF.cover_edges(P)); field=CM.QQField())
+    grid_enc = RES.EncodingResult(P, constant_module, EC.compile_encoding(P, grid))
+    @test V.visual_spec(grid_enc; kind=:module_inspector, point=(1, 1)).metadata.inspection.kind == :outside
+    extreme = V.visual_spec(grid_enc; kind=:module_inspector, point=(typemin(Int), 1))
+    @test extreme.metadata.inspection.vertex == 2
+    @test extreme.metadata.inspection.dimension == 1
+    @test V.visual_spec(grid_enc; kind=:module_inspector,
+        point=(typemax(UInt), UInt(1))).metadata.inspection.kind == :outside
+    # Ambient orientation (-1,+1): decreasing x, increasing y is forward.
+    forward = V.visual_spec(grid_enc; kind=:module_inspector,
+        parameter_pair=((0, 1), (-2, 4))).metadata.inspection
+    @test forward.defined && forward.matrix == reshape(QQ[1], 1, 1)
+    backward = V.visual_spec(grid_enc; kind=:module_inspector,
+        parameter_pair=((-2, 4), (0, 1))).metadata.inspection
+    @test !backward.defined && backward.matrix === nothing
+end
+
+@testset "A42a overlapping squares distinguish maps from dimensions" begin
+    V = TamerOp.Visualization
+    opts = TOA.EncodingOptions(; backend=:pl_backend, poset_kind=:signature, field=CM.QQField())
+    enc = TamerOp.encode([TOA.BoxUpset([0.0, 0.0]), TOA.BoxUpset([1.0, 1.0])],
+        [TOA.BoxDownset([2.0, 2.0]), TOA.BoxDownset([3.0, 3.0])], QQ[1 0; 0 1], opts)
+    a, b, c = (1//2, 1//2), (3//2, 3//2), (5//2, 5//2)
+    left = V.visual_spec(enc; kind=:module_inspector, parameter_pair=(a, b)).metadata.inspection
+    right = V.visual_spec(enc; kind=:module_inspector, parameter_pair=(b, c)).metadata.inspection
+    full = V.visual_spec(enc; kind=:module_inspector, parameter_pair=(a, c)).metadata.inspection
+    @test (left.source_dimension, left.target_dimension, right.target_dimension) == (1, 2, 1)
+    @test (left.rank, right.rank, full.rank) == (1, 1, 0)
+    @test any(!iszero, left.matrix)
+    @test any(!iszero, right.matrix)
+    @test full.matrix == zeros(QQ, 1, 1)
+    @test right.matrix * left.matrix == full.matrix
+    mixed = V.visual_spec(enc; kind=:module_inspector, point=(1//2, 5//2))
+    hasse = only(p for p in mixed.panels if p.kind == :hasse)
+    @test hasse.metadata.dimensions[hasse.metadata.selected_vertex] == 0
+end
+
+@testset "A42a lazy module inspection delays map construction" begin
+    V = TamerOp.Visualization
+    # Three edges form a cycle at (1,0), filled by the triangle at (2,1).
+    # H1 therefore has dimensions [0,1,1] at y=0 and [0,1,0] at y=1.
+    boundary1 = sparse([-1 -1 0; 1 0 -1; 0 1 1])
+    boundary2 = sparse(reshape([1, -1, 1], 3, 1))
+    graded = DT.GradedComplex([Int[1, 2, 3], Int[1, 2, 3], Int[1]],
+        [boundary1, boundary2],
+        [(0., 0.), (0., 0.), (0., 0.), (1., 0.), (1., 0.), (1., 0.), (2., 1.)])
+    filtration = OPT.FiltrationSpec(kind=:graded, axes=([0., 1., 2.], [0., 1.]))
+    enc = TamerOp.encode(graded, filtration; degree=1, field=CM.QQField(), stage=:encoding_result)
+    @test enc.M isa DI._LazyEncodedModule
+    @test enc.M.cached_module === nothing && enc.M.dims === nothing
+    @test :hasse in V.available_visuals(enc)
+    @test V.check_visual_request(enc; kind=:hasse).valid
+    @test V.check_visual_request(enc; kind=:module_inspector, pair=(2, 5)).valid
+    @test enc.M.cached_module === nothing && enc.M.dims === nothing
+    h = V.visual_spec(enc; kind=:hasse)
+    @test h.metadata.dimensions == [0, 1, 1, 0, 1, 0]
+    @test enc.M.cached_module === nothing
+    @test V.visual_spec(enc; kind=:module_inspector).metadata.inspection.kind == :overview
+    @test enc.M.cached_module === nothing
+    @test V.visual_spec(enc; kind=:module_inspector, vertex=2).metadata.inspection.kind == :stalk
+    @test enc.M.cached_module === nothing
+    absent = V.visual_spec(enc; kind=:module_inspector, pair=(5, 2)).metadata.inspection
+    @test !absent.defined && absent.matrix === nothing
+    @test enc.M.cached_module === nothing
+    selected = V.visual_spec(enc; kind=:module_inspector, pair=(2, 5)).metadata.inspection
+    @test selected.defined && selected.rank == 1
+    @test enc.M.cached_module !== nothing
+end
+
+@testset "A42a matrix layers and native inspection figures" begin
+    V = TamerOp.Visualization
+    @test TOA.MatrixLayer === V.MatrixLayer
+    malformed = V.VisualizationSpec(:matrix_test; layers=V.AbstractVisualizationLayer[
+        V.MatrixLayer(reshape(["1"], 1, 1), String[], ["source"] )])
+    @test !V.check_visual_spec(malformed).valid
+    mixed = V.VisualizationSpec(:matrix_test; layers=V.AbstractVisualizationLayer[
+        V.MatrixLayer(reshape(["1"], 1, 1), ["target"], ["source"]),
+        V.TextLayer(["ignored?"], [(0.0, 0.0)], :black, 12.0)])
+    @test !V.check_visual_spec(mixed).valid
+    for shape in ((-1, 1), (true, 1), (1,), (0, 1), [1, 1])
+        bad_shape = V.VisualizationSpec(:matrix_test; layers=V.AbstractVisualizationLayer[
+            V.MatrixLayer(reshape(["1"], 1, 1), ["target"], ["source"])],
+            metadata=(; matrix_size=shape))
+        @test !V.check_visual_spec(bad_shape).valid
+    end
+    M = MD.PModule{QQ}(chain_poset(2), [1, 1],
+        Dict((1, 2) => reshape(QQ[1//3], 1, 1)); field=CM.QQField())
+    inspector = V.visual_spec(M; kind=:module_inspector, pair=(1, 2))
+    @test !inspector.interaction.hover && !inspector.interaction.clicks
+    @test V.check_visual_request(M; kind=:hasse).construction_cost.map_queries == :none
+    for backend in (:cairomakie, :wglmakie)
+        name = backend === :cairomakie ? "CairoMakie" : "WGLMakie"
+        if Base.find_package(name) === nothing
+            @test_skip false
+            continue
+        end
+        if backend === :cairomakie
+            @eval import CairoMakie
+            makie = CairoMakie.Makie
+        else
+            @eval import WGLMakie
+            makie = WGLMakie.Makie
+        end
+        fig = V.render(inspector; backend, size=(1000, 600))
+        makie.update_state_before_display!(fig)
+        labels = [String(item.text[]) for item in fig.content if item isa makie.Label]
+        @test "1/3" in labels
+        @test "e1 @ 1" in labels
+        @test "e1 @ 2" in labels
+        @test "target / source" in labels
+        ax = only(item for item in fig.content if item isa makie.Axis)
+        @test !ax.xticklabelsvisible[] && !ax.yticklabelsvisible[]
+        @test makie.widths(makie.viewport(ax.scene)[])[2] > 250
+        @test Tuple(makie.widths(makie.viewport(fig.scene)[])) == (1000, 600)
+        for shape in ((0, 0), (0, 2), (2, 0))
+            empty = V.VisualizationSpec(:matrix_test; layers=V.AbstractVisualizationLayer[
+                V.MatrixLayer(fill("0", shape...), ["t$i" for i in 1:shape[1]],
+                    ["s$j" for j in 1:shape[2]])], metadata=(; matrix_size=shape))
+            empty_fig = V.render(empty; backend)
+            @test any(item -> item isa makie.Label &&
+                occursin("Empty matrix ($(shape[1]) x $(shape[2]))", item.text[]), empty_fig.content)
+        end
+        mktempdir() do dir
+            if backend === :cairomakie
+                path = joinpath(dir, "inspector.svg")
+                V.save_visual(path, inspector; backend)
+                @test occursin("<svg", read(path, String))
+                @test filesize(path) > 1000
+            else
+                path = joinpath(dir, "inspector.html")
+                V.save_visual(path, inspector; backend)
+                @test occursin("html", lowercase(read(path, String)))
+                @test filesize(path) > 1000
+            end
+        end
+    end
+end
+
+@testset "A83 retained witness discovery and presentation request contracts" begin
+    help_text = sprint(show, MIME"text/plain"(), Base.Docs.doc(TamerOp.Visualization.visual_spec))
+    @test occursin(":module_inspector", help_text)
+    @test occursin(":presentation_inspector", help_text)
+    V, IR = TamerOp.Visualization, TamerOp.IndicatorResolutions
+    P = chain_poset(3)
+    H = FF.FringeModule{QQ}(P,
+        [FF.Upset(P, trues(3)), FF.Upset(P, BitVector([false, true, true]))],
+        [FF.Downset(P, BitVector([true, true, false])), FF.Downset(P, trues(3))],
+        QQ[1 0; 0 1]; field=CM.QQField())
+    M = TOA.pmodule_from_fringe(H)
+    enc = RES.EncodingResult(P, M, nothing; H)
+    @test TamerOp.encoding_presentation(enc) === H
+    @test V.available_visuals(H) == (:presentation_inspector,)
+    @test V.available_visuals(enc) == (:hasse, :module_inspector, :presentation_inspector)
+    @test !(:presentation_inspector in V.available_visuals(M))
+    @test V.visual_spec(H).kind == :presentation_inspector
+    before = (H.fiber_queries[], H.fiber_dims[])
+    overview = V.visual_spec(enc; kind=:presentation_inspector)
+    @test isempty(overview.metadata.stalks)
+    @test overview.metadata.presentation_map === nothing
+    @test (H.fiber_queries[], H.fiber_dims[]) == before
+    @test overview.metadata.selected_fibers_only
+    @test overview.metadata.basis_convention == :embedded_presentation_image
+    @test !overview.interaction.clicks && !overview.interaction.hover
+    @test V.check_visual_spec(overview).valid
+
+    otherP = chain_poset(3)
+    wrong_base = FF.FringeModule{QQ}(otherP, [FF.Upset(otherP, trues(3))],
+        [FF.Downset(otherP, trues(3))], reshape(QQ[1], 1, 1); field=CM.QQField())
+    wrong_field = FF.change_field(H, CM.PrimeField(3))
+    for absent in (
+        RES.EncodingResult(P, M, nothing),
+        RES.EncodingResult(P, M, nothing; presentation=H),
+        RES.EncodingResult(P, M, nothing; H=(historical=H,)),
+        RES.EncodingResult(P, M, nothing; H=wrong_base),
+        RES.EncodingResult(P, M, nothing; H=wrong_field),
+        CM.change_field(enc, CM.PrimeField(3)),
+    )
+        @test TamerOp.encoding_presentation(absent) === nothing
+        @test !(:presentation_inspector in V.available_visuals(absent))
+        @test !V.check_visual_request(absent; kind=:presentation_inspector).valid
+        @test_throws ArgumentError V.visual_spec(absent; kind=:presentation_inspector)
+    end
+    @test V.check_visual_request(H; vertex=2, basis=false).valid
+    @test V.check_visual_request(H; vertex=2, basis=true, upset=2, downset=1).valid
+    for options in (
+        (; basis=true), (; basis=false), (; vertex=2, basis=1),
+        (; pair=(1, 2), basis=true), (; pair=(1, 2), basis=false),
+        (; vertex=0), (; vertex=true), (; vertex=4), (; pair=(1, 4)),
+        (; vertex=1, pair=(1, 2)), (; upset=0), (; downset=3), (; upset=true),
+        (; matrix_limit=(0, 2)), (; point=(0, 0)), (; box=([0, 0], [1, 1])),
+        (; hover=true),
+    )
+        @test !V.check_visual_request(H; options...).valid
+        @test_throws ArgumentError V.visual_spec(H; options...)
+    end
+end
+
+@testset "A83 active zero coefficients and exact support membership" begin
+    V, IR = TamerOp.Visualization, TamerOp.IndicatorResolutions
+    opts = TOA.EncodingOptions(; backend=:pl_backend, poset_kind=:signature, field=CM.QQField())
+    enc = TamerOp.encode([TOA.BoxUpset([0.0, 0.0]), TOA.BoxUpset([1.0, 1.0])],
+        [TOA.BoxDownset([2.0, 2.0]), TOA.BoxDownset([3.0, 3.0])], QQ[1 0; 0 1], opts)
+    pi = TamerOp.encoding_map(enc)
+    @test V.available_visuals(enc) == (:regions, :region_labels, :query_overlay,
+        :hasse, :module_inspector, :presentation_inspector)
+    t = (1//2, 5//2)
+    qt = EC.locate(pi, t)
+    spec = V.visual_spec(enc; kind=:presentation_inspector, point=t,
+        basis=true, upset=1, downset=2, box=([-1, -1], [4, 4]))
+    s = only(spec.metadata.stalks)
+    @test spec.metadata.relation == :stalk
+    @test IR.active_rows(s) == [2]
+    @test IR.active_columns(s) == [1]
+    @test IR.presentation_matrix(s) == reshape(QQ[0], 1, 1)
+    @test IR.presentation_summary(s).dimension == 0
+    @test size(IR.image_basis(s)) == (1, 0)
+    @test IR.presentation_vertex(s) == qt
+    full = only(p for p in spec.panels if p.title == "Full coefficient matrix Phi")
+    @test full.metadata.matrix == QQ[1 0; 0 1]
+    @test only(full.layers).entries == ["1" "0"; "0" "1"]
+    @test full.metadata.row_colors == [:gray55, :seagreen]
+    @test full.metadata.column_colors == [:seagreen, :gray55]
+    @test full.metadata.cell_colors == [:gray55 :gray55; :seagreen :gray55]
+    block = only(p for p in spec.panels if p.title == "Selected stalk: active block")
+    @test only(block.layers).row_labels == ["D2"]
+    @test only(block.layers).column_labels == ["U1"]
+    @test only(block.layers).entries == reshape(["0"], 1, 1)
+    basis_panel = only(p for p in spec.panels if p.title == "Selected stalk: embedded image basis")
+    @test basis_panel.metadata.matrix_size == (1, 0)
+    @test size(only(basis_panel.layers).entries) == (1, 0)
+    supports = [p for p in spec.panels if p.kind == :presentation_support]
+    @test length(supports) == 2
+    @test [(p.metadata.family, p.metadata.support_id) for p in supports] == [(:upset, 1), (:downset, 2)]
+    @test supports[1].metadata.geometry === supports[2].metadata.geometry
+    for panel in supports
+        @test panel.axes.xlimits == (-1.0, 4.0)
+        @test panel.axes.ylimits == (-1.0, 4.0)
+        @test panel.metadata.membership[qt]
+        @test only(panel.metadata.query_readout).point == t
+        @test only(panel.metadata.query_readout).region_id == qt
+        # Independent geometric oracle, sampled at each displayed polygon's
+        # interior centroid: U1 is x,y >= 0; D2 is x,y <= 3.
+        for layer in panel.layers
+            layer isa V.PolygonLayer || continue
+            for polygon in layer.polygons
+                x = sum(first, polygon) / length(polygon)
+                y = sum(last, polygon) / length(polygon)
+                member = panel.metadata.family === :upset ? x >= 0 && y >= 0 : x <= 3 && y <= 3
+                @test layer.fill_color == (member ? :seagreen : :gray80)
+            end
+        end
+    end
+    @test V.check_visual_spec(spec).valid
+    rank_only = V.visual_spec(enc; kind=:presentation_inspector, vertex=qt)
+    @test IR.image_basis(only(rank_only.metadata.stalks)) === nothing
+    @test !IR.presentation_summary(only(rank_only.metadata.stalks)).basis_available
+    other_supports = V.visual_spec(enc; kind=:presentation_inspector, point=t, upset=2, downset=1)
+    @test IR.presentation_matrix(only(other_supports.metadata.stalks)) == reshape(QQ[0], 1, 1)
+    @test !other_supports.panels[1].metadata.membership[qt]
+    @test !other_supports.panels[2].metadata.membership[qt]
+
+    # Classification retains exact boundary distinctions despite coincident
+    # drawing coordinates. The second square remains present past x=2.
+    for (point, dim) in (((2//1, 3//2), 2), ((2 + 1//(2^53), 3//2), 1))
+        exact = V.visual_spec(enc; kind=:presentation_inspector, point)
+        @test IR.presentation_summary(only(exact.metadata.stalks)).dimension == dim
+        @test only(exact.panels[1].metadata.query_readout).point == point
+    end
+    rounded = V.visual_spec(enc; kind=:presentation_inspector, point=(2 + 1//(2^53), 3//2))
+    @test !isempty(rounded.panels[1].metadata.warnings)
+    @test !V.check_visual_request(enc; kind=:presentation_inspector, point=t, pair=(qt, qt)).valid
+end
+
+@testset "A83 induced maps, finite membership tables, and display limits" begin
+    V, IR = TamerOp.Visualization, TamerOp.IndicatorResolutions
+    P = chain_poset(3)
+    H = FF.FringeModule{QQ}(P,
+        [FF.Upset(P, trues(3)), FF.Upset(P, BitVector([false, true, true]))],
+        [FF.Downset(P, BitVector([true, true, false])), FF.Downset(P, trues(3))],
+        QQ[1 0; 0 1]; field=CM.QQField())
+    expected = (((1, 2), reshape(QQ[1, 0], 2, 1)),
+                ((2, 3), QQ[0 1]), ((1, 3), zeros(QQ, 1, 1)),
+                ((2, 2), QQ[1 0; 0 1]))
+    maps = Dict{Tuple{Int,Int},Any}()
+    for (pair, matrix) in expected
+        spec = V.visual_spec(H; pair)
+        m = spec.metadata.presentation_map
+        maps[pair] = m
+        @test spec.metadata.defined
+        @test IR.induced_map(m) == matrix
+        @test IR.image_basis(IR.target_stalk(m)) * IR.induced_map(m) ==
+            IR.ambient_projection(m) * IR.image_basis(IR.source_stalk(m))
+        @test all(IR.presentation_summary(s).basis_available for s in spec.metadata.stalks)
+        @test V.check_visual_spec(spec).valid
+        @test all(p.kind != :presentation_support for p in spec.panels)
+    end
+    @test IR.induced_map(maps[(2, 3)]) * IR.induced_map(maps[(1, 2)]) == IR.induced_map(maps[(1, 3)])
+    colored = V.visual_spec(H; pair=(1, 3))
+    full = only(p for p in colored.panels if p.title == "Full coefficient matrix Phi")
+    @test full.metadata.cell_colors == [:royalblue :gray55; :purple :firebrick]
+    @test full.metadata.row_colors == [:royalblue, :purple]
+    @test full.metadata.column_colors == [:purple, :firebrick]
+
+    limited = V.visual_spec(H; vertex=3, basis=true, upset=2, downset=1, matrix_limit=(1, 2))
+    up, down = limited.panels[1:2]
+    @test up.metadata.family == :upset && up.metadata.support_id == 2
+    @test down.metadata.family == :downset && down.metadata.support_id == 1
+    @test up.metadata.matrix == reshape([0, 1, 1], 1, 3)
+    @test down.metadata.matrix == reshape([1, 1, 0], 1, 3)
+    @test up.metadata.membership == [false, true, true]
+    @test down.metadata.membership == [true, true, false]
+    @test only(up.layers).column_labels == ["q1", "q2"]
+    @test only(up.layers).entries == ["0" "1"]
+    @test up.metadata.truncated && down.metadata.truncated
+    @test up.metadata.matrix_size == (1, 3)
+    @test up.metadata.displayed_columns == 1:2
+    limited_full = only(p for p in limited.panels if p.title == "Full coefficient matrix Phi")
+    @test size(limited_full.metadata.matrix) == (2, 2)
+    @test size(only(limited_full.layers).entries) == (1, 2)
+    @test size(limited_full.metadata.cell_colors) == (1, 2)
+    @test length(limited_full.metadata.row_colors) == 1
+    @test length(limited_full.metadata.column_colors) == 2
+    active = only(p for p in limited.panels if p.title == "Selected stalk: active block")
+    @test only(active.layers).row_labels == ["D2"]
+    @test only(active.layers).entries == ["0" "1"]
+    @test IR.presentation_summary(only(limited.metadata.stalks)).dimension == 1
+    @test V.check_visual_spec(limited).valid
+
+    empty = FF.FringeModule{QQ}(P, FF.Upset[], FF.Downset[], zeros(QQ, 0, 0); field=CM.QQField())
+    empty_spec = V.visual_spec(empty; vertex=1, basis=true)
+    @test IR.presentation_summary(only(empty_spec.metadata.stalks)).dimension == 0
+    @test size(IR.image_basis(only(empty_spec.metadata.stalks))) == (0, 0)
+    @test V.check_visual_spec(empty_spec).valid
+    @test !V.check_visual_request(empty; vertex=1, upset=1).valid
+    @test !V.check_visual_request(empty; vertex=1, downset=1).valid
+
+    for field in FIELDS_FULL
+        K = CM.coeff_type(field)
+        scalar = reshape(K[-1], 1, 1)
+        constant = FF.FringeModule{K}(P, [FF.Upset(P, trues(3))],
+            [FF.Downset(P, trues(3))], scalar; field)
+        coefficient_spec = V.visual_spec(constant; vertex=2)
+        full = only(p for p in coefficient_spec.panels if p.title == "Full coefficient matrix Phi")
+        expected_text = field isa CM.QQField ? "-1" : string(only(scalar))
+        @test only(only(full.layers).entries) == expected_text
+        @test eltype(full.metadata.matrix) == K
+        @test IR.presentation_summary(only(coefficient_spec.metadata.stalks)).dimension == 1
+    end
+end
+
+@testset "A83 no map for unordered or unrepresented parameters" begin
+    V, IR = TamerOp.Visualization, TamerOp.IndicatorResolutions
+    opts = TOA.EncodingOptions(; backend=:pl_backend, poset_kind=:signature, field=CM.QQField())
+    enc = TamerOp.encode([TOA.BoxUpset([0.0, 0.0])],
+        [TOA.BoxDownset([2.0, 2.0])], reshape(QQ[1], 1, 1), opts)
+    a, b = (1//4, 3//2), (3//2, 1//4)
+    q = EC.locate(TamerOp.encoding_map(enc), a)
+    @test EC.locate(TamerOp.encoding_map(enc), b) == q
+    absent = V.visual_spec(enc; kind=:presentation_inspector, parameter_pair=(a, b))
+    @test absent.metadata.relation == :incomparable
+    @test !absent.metadata.defined && absent.metadata.presentation_map === nothing
+    @test all(IR.image_basis(s) === nothing for s in absent.metadata.stalks)
+    finite_identity = V.visual_spec(enc; kind=:presentation_inspector, pair=(q, q))
+    @test finite_identity.metadata.relation == :equal
+    @test IR.induced_map(finite_identity.metadata.presentation_map) == reshape(QQ[1], 1, 1)
+
+    P = FF.ProductOfChainsPoset((2, 2))
+    grid = EC.GridEncodingMap(P, ([0, 2], [1, 4]); orientation=(-1, 1))
+    H = FF.FringeModule{QQ}(P, [FF.Upset(P, trues(4))],
+        [FF.Downset(P, trues(4))], reshape(QQ[1], 1, 1); field=CM.QQField())
+    grid_enc = RES.EncodingResult(P, TOA.pmodule_from_fringe(H), EC.compile_encoding(P, grid); H)
+    outside = V.visual_spec(grid_enc; kind=:presentation_inspector, point=(1, 1))
+    @test outside.metadata.relation == :outside
+    @test only(outside.metadata.stalks) === nothing
+    @test only(outside.panels[1].metadata.query_readout).region_id == 0
+    for (points, relation) in ((((1, 1), (0, 1)), :outside), (((-2, 4), (0, 1)), :reverse_comparable))
+        missing = V.visual_spec(grid_enc; kind=:presentation_inspector, parameter_pair=points)
+        @test missing.metadata.relation == relation
+        @test !missing.metadata.defined && missing.metadata.presentation_map === nothing
+        @test all(s === nothing || IR.image_basis(s) === nothing for s in missing.metadata.stalks)
+        @test V.check_visual_spec(missing).valid
+    end
+    forward = V.visual_spec(grid_enc; kind=:presentation_inspector, parameter_pair=((0, 1), (-2, 4)))
+    @test forward.metadata.defined
+    @test IR.induced_map(forward.metadata.presentation_map) == reshape(QQ[1], 1, 1)
+    @test forward.metadata.relation == :comparable
+    unordered_labels = V.visual_spec(H; pair=(2, 3))
+    @test unordered_labels.metadata.relation == :incomparable
+    @test unordered_labels.metadata.presentation_map === nothing
+end
+
+@testset "A83 native presentation figures and active coefficient text" begin
+    V = TamerOp.Visualization
+    for metadata in ((; row_colors=[:red, :blue]), (; cell_colors=fill(:red, 2, 1)),
+                     (; empty_matrix_reason=false), (; matrix_row_heading=1))
+        malformed = V.VisualizationSpec(:matrix_test;
+            layers=V.AbstractVisualizationLayer[V.MatrixLayer(reshape(["0"], 1, 1), ["D1"], ["U1"])],
+            metadata)
+        @test !V.check_visual_spec(malformed).valid
+        @test_throws ArgumentError V.check_visual_spec(malformed; throw=true)
+    end
+    opts = TOA.EncodingOptions(; backend=:pl_backend, poset_kind=:signature, field=CM.QQField())
+    enc = TamerOp.encode([TOA.BoxUpset([0.0, 0.0]), TOA.BoxUpset([1.0, 1.0])],
+        [TOA.BoxDownset([2.0, 2.0]), TOA.BoxDownset([3.0, 3.0])], QQ[1 0; 0 1], opts)
+    zero_view = V.visual_spec(enc; kind=:presentation_inspector, point=(1//2, 5//2),
+        basis=true, upset=1, downset=2, box=([-1, -1], [4, 4]))
+    map_view = V.visual_spec(enc; kind=:presentation_inspector,
+        parameter_pair=((3//2, 3//2), (5//2, 5//2)), box=([-1, -1], [4, 4]))
+    for backend in (:cairomakie, :wglmakie)
+        name = backend === :cairomakie ? "CairoMakie" : "WGLMakie"
+        if Base.find_package(name) === nothing
+            @test_skip false
+            continue
+        end
+        if backend === :cairomakie
+            @eval import CairoMakie
+            makie = CairoMakie.Makie
+        else
+            @eval import WGLMakie
+            makie = WGLMakie.Makie
+        end
+        fig = V.render(zero_view; backend)
+        makie.update_state_before_display!(fig)
+        labels = [item for item in fig.content if item isa makie.Label]
+        texts = [String(item.text[]) for item in labels]
+        @test "downset / upset" in texts
+        @test "D2" in texts && "U1" in texts
+        @test any(occursin("Empty matrix (1 x 0): the image has no basis vectors"), texts)
+        @test "Active downset coordinates: D2" in texts
+        @test any(item -> item.text[] == "0" &&
+            makie.to_color(item.color[]) == makie.to_color(:seagreen), labels)
+        @test any(item -> item.text[] == "D2" &&
+            makie.to_color(item.color[]) == makie.to_color(:seagreen), labels)
+        axes = [item for item in fig.content if item isa makie.Axis]
+        for ax in (item for item in fig.content if item isa makie.Axis)
+            isempty(ax.subtitle[]) && continue
+            subtitle_plot = only(p for p in ax.blockscene.plots if
+                p isa makie.Text && (p.text[] == ax.subtitle[] || p.text[] == [ax.subtitle[]]))
+            # Axis title/subtitle text uses markerspace=:data in a campixel blockscene.
+            # Its bounding box therefore has the same figure-pixel x coordinates as
+            # the panel grid's allocated (suggested) bounding box.
+            text_box = makie.boundingbox(subtitle_plot, :data)
+            panel_grid = ax.layoutobservables.gridcontent[].parent
+            panel_box = panel_grid.layoutobservables.suggestedbbox[]
+            tolerance = 2.0  # rounding/font metric tolerance in figure pixels
+            @test text_box.origin[1] >= panel_box.origin[1] - tolerance
+            @test text_box.origin[1] + text_box.widths[1] <=
+                  panel_box.origin[1] + panel_box.widths[1] + tolerance
+        end
+        @test length(axes) == 2
+        @test all(makie.widths(makie.viewport(ax.scene)[])[2] > 150 for ax in axes)
+        @test Tuple(makie.widths(makie.viewport(fig.scene)[])) == zero_view.metadata.figure_size
+        mapped = V.render(map_view; backend)
+        makie.update_state_before_display!(mapped)
+        map_texts = [String(item.text[]) for item in mapped.content if item isa makie.Label]
+        @test "Induced map C" in map_texts
+        @test "Ambient downset projection R" in map_texts
+        @test "downset / image basis" in map_texts
+        mktempdir() do dir
+            ext = backend === :cairomakie ? "svg" : "html"
+            path = joinpath(dir, "presentation.$ext")
+            V.save_visual(path, zero_view; backend)
+            @test filesize(path) > 1000
+            @test occursin(ext == "svg" ? "<svg" : "html", lowercase(read(path, String)))
+        end
+    end
+end
+
+@testset "A83 canonical integer and general PL encodings retain inspectable witnesses" begin
+    viz = TamerOp.Visualization
+    field = CM.QQField()
+    face = FZ.Face(2, [false, false])
+    flange = FZ.Flange(2,
+        [FZ.IndFlat(face, (0, 0); id=:U)],
+        [FZ.IndInj(face, (2, 2); id=:D)],
+        reshape(QQ[1], 1, 1); field)
+    integer_enc = TamerOp.encode(flange; backend=:zn)
+
+    # This band is genuinely non-axis-aligned, so the PL test cannot pass by
+    # silently taking the box encoder: U={x+y>=0}, D={x+y<=2}.
+    up = PLP.PLUpset(PLP.poly_union(PLP.make_hpoly(QQ[-1 -1], QQ[0])))
+    down = PLP.PLDownset(PLP.poly_union(PLP.make_hpoly(QQ[1 1], QQ[2])))
+    pl_fringe = PLP.PLFringe([up], [down], reshape(QQ[1], 1, 1))
+    pl_enc = TamerOp.encode(pl_fringe,
+        TOA.EncodingOptions(; backend=:pl, field))
+
+    # Both input modules are one-dimensional at (0,0) and (1,1), and vanish
+    # at (3,3). The PL endpoint (1,1) is on the closed death boundary.
+    for (enc, backend) in ((integer_enc, :zn), (pl_enc, :pl))
+        @test RES.result_summary(enc).backend == backend
+        witness = TamerOp.encoding_presentation(enc)
+        @test witness isa FF.FringeModule
+        @test FF.ambient_poset(witness) === TamerOp.encoding_poset(enc)
+        @test :presentation_inspector in TamerOp.available_visuals(enc)
+        classifier = TamerOp.encoding_map(enc)
+        source, target, outside_support = (0//1, 0//1), (1//1, 1//1), (3//1, 3//1)
+        # Integral representatives obey both owners' low-level query contracts;
+        # the visual requests below separately exercise exact rational points.
+        source_id = EC.locate(classifier, [0, 0])
+        target_id = EC.locate(classifier, [1, 1])
+        outside_id = EC.locate(classifier, [3, 3])
+        @test all(>(0), (source_id, target_id, outside_id))
+
+        stalk_spec = TOA.visual_spec(enc; kind=:presentation_inspector,
+            point=target, basis=true, box=([-1, -1], [4, 4]))
+        stalk = only(stalk_spec.metadata.stalks)
+        @test IR.presentation_vertex(stalk) == target_id
+        @test IR.active_rows(stalk) == [1]
+        @test IR.active_columns(stalk) == [1]
+        @test IR.presentation_matrix(stalk) == reshape(QQ[1], 1, 1)
+        @test IR.presentation_summary(stalk).dimension == 1
+        @test IR.image_basis(stalk) == reshape(QQ[1], 1, 1)
+        support_panels = filter(p -> p.kind == :presentation_support, stalk_spec.panels)
+        @test length(support_panels) == 2
+        @test all(p -> p.metadata.membership[target_id], support_panels)
+        @test support_panels[1].metadata.membership[outside_id]
+        @test !support_panels[2].metadata.membership[outside_id]
+        @test all(p -> only(p.metadata.query_readout).region_id == target_id, support_panels)
+        @test viz.check_visual_spec(stalk_spec).valid
+
+        identity_spec = TOA.visual_spec(enc; kind=:presentation_inspector,
+            parameter_pair=(source, target), box=([-1, -1], [4, 4]))
+        identity = identity_spec.metadata.presentation_map
+        @test identity_spec.metadata.defined
+        @test IR.ambient_projection(identity) == reshape(QQ[1], 1, 1)
+        @test IR.induced_map(identity) == reshape(QQ[1], 1, 1)
+        @test IR.image_basis(IR.target_stalk(identity)) * IR.induced_map(identity) ==
+              IR.ambient_projection(identity) * IR.image_basis(IR.source_stalk(identity))
+
+        leaving_spec = TOA.visual_spec(enc; kind=:presentation_inspector,
+            parameter_pair=(target, outside_support), box=([-1, -1], [4, 4]))
+        leaving = leaving_spec.metadata.presentation_map
+        @test leaving_spec.metadata.defined
+        @test isempty(IR.active_rows(IR.target_stalk(leaving)))
+        @test IR.active_columns(IR.target_stalk(leaving)) == [1]
+        @test size(IR.presentation_matrix(IR.target_stalk(leaving))) == (0, 1)
+        @test size(IR.image_basis(IR.target_stalk(leaving))) == (0, 0)
+        @test IR.ambient_projection(leaving) == zeros(QQ, 0, 1)
+        @test IR.induced_map(leaving) == zeros(QQ, 0, 1)
+        @test viz.check_visual_spec(leaving_spec).valid
+
+        if backend === :zn
+            @test support_panels[1].metadata.geometry.geometry_kind == :nearest_lattice_tiles
+            @test occursin("ties round-to-even", support_panels[1].subtitle)
+            # The drawing's real-coordinate tiles retain the documented
+            # nearest-lattice query convention: 2.5 rounds to 2, not 3.
+            edge = TOA.visual_spec(enc; kind=:presentation_inspector,
+                point=(5//2, 1//1), box=([-1, -1], [4, 4]))
+            past_edge = TOA.visual_spec(enc; kind=:presentation_inspector,
+                point=(5//2 + 1//(2^53), 1//1), box=([-1, -1], [4, 4]))
+            @test IR.presentation_summary(only(edge.metadata.stalks)).dimension == 1
+            @test IR.presentation_summary(only(past_edge.metadata.stalks)).dimension == 0
+        end
+    end
+end
+
+@testset "A83 three-parameter encodings retain finite-label presentation inspection" begin
+    viz = TamerOp.Visualization
+    # A singleton finite model is sufficient to check the geometry boundary:
+    # a three-parameter classifier does not imply a planar support picture.
+    P = FF.ProductOfChainsPoset((1, 1, 1))
+    H = FF.FringeModule{QQ}(P, [FF.Upset(P, trues(1))],
+        [FF.Downset(P, trues(1))], reshape(QQ[1], 1, 1); field=CM.QQField())
+    M = TOA.pmodule_from_fringe(H)
+    raw_classifier = EC.GridEncodingMap(P, ([0], [0], [0]))
+    enc = RES.EncodingResult(P, M, EC.compile_encoding(P, raw_classifier); H)
+    @test TamerOp.encoding_presentation(enc) === H
+    @test :presentation_inspector in TamerOp.available_visuals(enc)
+    spec = TOA.visual_spec(enc; kind=:presentation_inspector, vertex=1, basis=true)
+    @test all(p -> p.kind != :presentation_support, spec.panels)
+    for support_panel in spec.panels[1:2]
+        @test support_panel.metadata.support_coordinate == :finite_vertex
+        @test support_panel.metadata.membership == [true]
+        @test only(support_panel.layers).column_labels == ["q1"]
+    end
+    stalk = only(spec.metadata.stalks)
+    @test IR.presentation_matrix(stalk) == reshape(QQ[1], 1, 1)
+    @test IR.image_basis(stalk) == reshape(QQ[1], 1, 1)
+    @test viz.check_visual_spec(spec).valid
+    @test !viz.check_visual_request(enc; kind=:presentation_inspector, point=(0, 0, 0)).valid
+    @test_throws ArgumentError TOA.visual_spec(enc; kind=:presentation_inspector, point=(0, 0, 0))
 end

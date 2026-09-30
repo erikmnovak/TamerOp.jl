@@ -50,6 +50,9 @@ function _visual_makie_handlers(TO, MakieMod; allow_save::Bool=true)
     end
 
     function _render_text_panel!(fig, grid, spec)
+        # Compact readouts must not constrain neighboring plot heights.
+        grid.tellheight[] = false
+        grid.valign[] = :top
         lines = String[]
         for layer in Viz.visual_layers(spec)
             layer isa Viz.TextLayer || continue
@@ -63,12 +66,85 @@ function _visual_makie_handlers(TO, MakieMod; allow_save::Bool=true)
         end
         if !isempty(spec.subtitle)
             MakieMod.Label(grid[title_row, 1], spec.subtitle;
-                           fontsize=12, tellwidth=false, halign=:left)
+                           fontsize=12, tellwidth=false, halign=:left, word_wrap=true)
             title_row += 1
         end
         for (i, line) in enumerate(lines)
             MakieMod.Label(grid[title_row + i - 1, 1], line;
-                           fontsize=13, tellwidth=false, halign=:left)
+                           fontsize=13, tellwidth=false, halign=:left, word_wrap=true)
+        end
+        return nothing
+    end
+
+    function _render_matrix_panel!(grid, spec)
+        grid.tellheight[] = false
+        grid.valign[] = :top
+        layers = Viz.visual_layers(spec)
+        length(layers) == 1 && only(layers) isa Viz.MatrixLayer ||
+            throw(ArgumentError("A matrix panel must contain exactly one MatrixLayer and no other layers."))
+        row = 1
+        if !isempty(spec.title)
+            MakieMod.Label(grid[row, 1], spec.title;
+                           fontsize=18, tellwidth=false, halign=:left)
+            row += 1
+        end
+        if !isempty(spec.subtitle)
+            MakieMod.Label(grid[row, 1], spec.subtitle;
+                           fontsize=12, tellwidth=false, halign=:left, word_wrap=true)
+            row += 1
+        end
+        for layer in layers
+            nr, nc = Base.size(layer.entries)
+            length(layer.row_labels) == nr && length(layer.column_labels) == nc ||
+                throw(ArgumentError("MatrixLayer label lengths must match its displayed matrix dimensions."))
+            if nr == 0 || nc == 0
+                shape = get(Viz.visual_metadata(spec), :matrix_size, (nr, nc))
+                reason = if shape[1] == 0 && shape[2] == 0
+                    "both source and target are zero-dimensional"
+                elseif shape[1] == 0
+                    "the target is zero-dimensional"
+                elseif shape[2] == 0
+                    "the source is zero-dimensional"
+                else
+                    "the displayed submatrix has no entries"
+                end
+                reason = get(Viz.visual_metadata(spec), :empty_matrix_reason, reason)
+                MakieMod.Label(grid[row, 1], "Empty matrix ($(shape[1]) x $(shape[2])): $reason.";
+                               fontsize=14, tellwidth=false, halign=:left, word_wrap=true)
+                row += 1
+                for (name, labels) in ((get(Viz.visual_metadata(spec), :matrix_row_heading, "Target basis"), layer.row_labels),
+                                       ("Source basis", layer.column_labels))
+                    isempty(labels) && continue
+                    MakieMod.Label(grid[row, 1], "$name: " * join(labels, ", ");
+                                   fontsize=12, tellwidth=false, halign=:left, word_wrap=true)
+                    row += 1
+                end
+                continue
+            end
+            # Each coefficient remains text, including finite-field residues and
+            # exact fractions. Layout performs no algebra or coefficient scaling.
+            table = MakieMod.GridLayout(grid[row, 1]; rowgap=8, colgap=14,
+                                        halign=:center, valign=:top, tellwidth=false)
+            meta = Viz.visual_metadata(spec)
+            row_colors = get(meta, :row_colors, fill(:gray30, nr))
+            column_colors = get(meta, :column_colors, fill(:gray30, nc))
+            cell_colors = get(meta, :cell_colors, fill(:black, nr, nc))
+            MakieMod.Label(table[1, 1], get(meta, :matrix_corner, "target / source");
+                           fontsize=11, color=:gray30)
+            for j in 1:nc
+                MakieMod.Label(table[1, j + 1], layer.column_labels[j];
+                               fontsize=12, color=column_colors[j])
+            end
+            entry_fontsize = nc > 8 ? 12 : 14
+            for i in 1:nr
+                MakieMod.Label(table[i + 1, 1], layer.row_labels[i];
+                               fontsize=12, color=row_colors[i])
+                for j in 1:nc
+                    MakieMod.Label(table[i + 1, j + 1], layer.entries[i, j];
+                                   fontsize=entry_fontsize, color=cell_colors[i,j])
+                end
+            end
+            row += 1
         end
         return nothing
     end
@@ -203,15 +279,23 @@ function _visual_makie_handlers(TO, MakieMod; allow_save::Bool=true)
                                   zlabel=get(spec.axes, :zlabel, "z"),
                                   title=spec.title)
         end
-        return MakieMod.Axis(figslot;
-                             xlabel=spec.axes.xlabel,
-                             ylabel=spec.axes.ylabel,
-                             title=spec.title,
-                             subtitle=spec.subtitle)
+        ax = MakieMod.Axis(figslot;
+                           xlabel=spec.axes.xlabel,
+                           ylabel=spec.axes.ylabel,
+                           title=spec.title,
+                           subtitle=spec.subtitle)
+        if get(Viz.visual_metadata(spec), :hide_decorations, false)
+            MakieMod.hidedecorations!(ax)
+            MakieMod.hidespines!(ax)
+        end
+        return ax
     end
 
     function _render_spec_into_grid!(fig, grid, spec)
-        if get(Viz.visual_metadata(spec), :panel_style, nothing) === :text_only
+        panel_style = get(Viz.visual_metadata(spec), :panel_style, nothing)
+        if panel_style === :matrix || any(layer -> layer isa Viz.MatrixLayer, Viz.visual_layers(spec))
+            return _render_matrix_panel!(grid, spec)
+        elseif panel_style === :text_only
             return _render_text_panel!(fig, grid, spec)
         end
         axis_slot = grid[1, 1]

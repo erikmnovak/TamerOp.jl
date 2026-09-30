@@ -28,6 +28,14 @@ dimension one to show why controlling stalk dimensions alone is insufficient.
 Their static diagrams are available; the interactive views described there
 remain planned.
 
+The square's inspection lesson now has a
+[canonical teaching notebook](tutorials/inspect_encoding.ipynb). It follows
+original parameters into the actual finite poset, checks stalks and maps, and
+exports a combined figure through the package API. Two overlapping squares
+show why nonzero successive maps can have zero composite. This supplies the
+square portion of pages 4-6; connecting it to the ring lesson and publishing
+the complete site remain separate steps.
+
 ## Page briefs
 
 ### 1. Install and reopen a working environment
@@ -120,6 +128,11 @@ remain planned.
   For these objects, `dimensions(enc)` returns the stalk-dimension vector,
   whereas `dimensions(M)` returns a summary with a `stalks` entry; explain
   method-specific return values instead of treating them as interchangeable.
+  The implemented notebook also follows `encoding_presentation` into the active
+  downset rows and upset columns. It explains why the image of the restricted
+  matrix is the stalk, explicitly requests embedded image bases, and checks
+  the induced-map equation and the two-square zero composite. An active-zero
+  block distinguishes support membership from a nonzero coefficient.
 - **Expected conclusion:** The reader can recover an interior identity and a
   correctly shaped zero map, and can distinguish order in ℝ² from order among
   finite labels. Equal labels do not imply that the original points are comparable.
@@ -223,18 +236,19 @@ julia --startup-file=no --project=. docs/build_scripts/check_indicator_presentat
 ```
 
 Keep installation verification, mathematical checks, rendering checks, and
-reader review separate. At this preparation stage, the outline and oracle
-exist; the site, executed teaching notebook, first-path reference prose, and
-package-generated figure still require implementation and review.
+reader review separate. The background chapters, mathematical oracles, and
+square inspection notebook are available. The documentation site, the linked
+ring-to-square narrative, first-path reference prose, and reader review remain
+to be completed.
 
 1. Reconcile the [API inventory and backlog](api_coverage.toml); use the selected
    first-path bindings to constrain the first reference-writing pass.
 2. Add the documentation environment, site build, and navigation containing
    only finished pages. Move existing explanations with links and redirects
    where needed, preserving their mathematical qualifications.
-3. Author one canonical notebook for the linked ring/square calculations and
-   inspection/figure lesson, following these briefs. Generate displayed cells,
-   outputs, and downloads from that source; do not maintain competing examples.
+3. Integrate the canonical square inspection notebook into this route and
+   connect the ring calculation to it. Generate displayed cells, outputs, and
+   downloads from the notebook source; do not maintain competing examples.
 4. Write only the reference entries needed for this route initially. Include
    the specific method families, field/grade conventions, options, returned
    objects, and meaningful errors. Keep other families in the manifest backlog.

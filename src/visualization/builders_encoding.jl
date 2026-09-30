@@ -2,6 +2,80 @@
 
 available_visuals(::Any) = ()
 
+"""
+    visual_spec(obj; kind=:auto, cache=:auto, kwargs...)
+
+Build an inspectable visualization specification without activating a renderer.
+`available_visuals(obj)` lists supported recipes; `kind=:auto` selects the first.
+`check_visual_request` reports effective keywords and qualitative construction
+cost without constructing a figure. Unknown recipe keywords are rejected.
+`backend` and renderer sizing belong to `visualize`, `render`, or `save_visual`.
+Only the default `cache=:auto` is currently supported.
+
+# Spaces and structure maps
+
+    visual_spec(P; kind=:hasse, vertex=nothing, pair=nothing)
+    visual_spec(M; kind=:module_inspector, vertex=nothing, pair=nothing,
+                matrix_limit=(12,12))
+    visual_spec(enc; kind=:module_inspector, point=nothing,
+                parameter_pair=nothing, box=nothing, matrix_limit=(12,12))
+
+Inspect the finite poset and the spaces and maps of a `PModule` or `EncodingResult`.
+`:hasse` draws actual cover relations with a deterministic schematic layout;
+module/result inputs attach stalk dimensions. It does not query structure maps.
+`:module_inspector` adds a selected stalk or coefficient matrix, and for planar
+encodings a parameter panel sharing the actual finite vertex IDs and colors.
+
+Choose at most one selection: `vertex=q`, `pair=(u,v)` in finite labels, or,
+for supported planar encodings, `point=x` / `parameter_pair=(x,y)` in original
+parameters. Parameter comparisons use the classifier's axis orientation and
+exact supplied coordinates. Incomparable and reversed pairs have no forward
+map and are displayed as such. Classifier label 0 means unrepresented, not a
+zero-dimensional stalk. A finite-label selection makes no ambient-order claim.
+
+Matrices use source columns and target rows in the stored module's coordinate
+bases, not embedded presentation-image bases or source cycle representatives.
+Field coefficients remain literal text. Numerical ranks follow the module's
+`RealField` tolerances. `matrix_limit` limits displayed rows/columns, not the
+retained matrix or the rank computation. Inspection snapshots copy selected maps.
+
+Dimensions-only views keep lazy structure maps uncomputed. A defined pair
+selection materializes a lazy encoded module through `encoding_module`, which
+may compute its cover maps before the selected structure map and rank. No view
+requests the full table of transitive maps. All selections are static API
+arguments, not hover or click callbacks. Use `visualize` / `save_visual` to
+render the resulting specification with an optional backend.
+
+# Indicator presentations
+
+    visual_spec(H::FringeModule; kind=:presentation_inspector, vertex=nothing,
+                pair=nothing, basis=false, upset=nothing, downset=nothing,
+                matrix_limit=(12,12))
+    visual_spec(enc::EncodingResult; kind=:presentation_inspector, point=nothing,
+                parameter_pair=nothing, box=nothing, kwargs...)
+
+Inspect a finite fringe presentation as supports, a coefficient matrix, and its
+image. `enc` must retain a presentation on its current poset and field; inspect
+this with `encoding_presentation(enc)`. Raw finite fringes need no geometric
+embedding: their support panels report membership at actual finite vertex IDs.
+Supported planar encodings instead show that membership on classifier fibers.
+Their boundary styles describe fibers, not a merged support boundary.
+
+`upset=i` and `downset=j` select the two displayed supports (the first of each
+family by default). Select at most one stalk or pair using the same finite-ID
+and exact original-parameter contract as `:module_inspector`. Single-stalk views
+compute an active block and its rank; `basis=true` explicitly adds an embedded
+image basis. A defined pair computes both embedded bases, the ambient downset
+projection R, and the induced image-coordinate map C, satisfying B_target*C =
+R*B_source. `basis` is accepted only for single-stalk selection. No-selection
+views compute no ranks or bases. Only selected fibers are materialized.
+
+The presented image coordinates belong to this retained witness; no equality
+with separately stored module coordinates is asserted. Exact coefficients and
+full matrices remain in metadata; `matrix_limit` only truncates their display.
+`RealField` rank and solve semantics use its recorded tolerances. Selections are
+static API arguments. Click/hover linkage is not part of this view.
+"""
 function visual_spec(obj; kind::Symbol=:auto, cache=:auto, kwargs...)
     haskey(kwargs, :backend) && throw(ArgumentError("backend belongs to visualize/render, not visual_spec"))
     cache === :auto || throw(ArgumentError("visual_spec does not support a cache override"))
@@ -262,10 +336,14 @@ function available_visuals(enc::CompiledEncoding)
 end
 
 function _visual_spec(res::EncodingResult, kind::Symbol; kwargs...)
+    kind in (:hasse, :module_inspector) && return _module_visual_spec(res, kind; kwargs...)
+    kind === :presentation_inspector && return _presentation_visual_spec(res; kwargs...)
     return _visual_spec(encoding_map(res), kind; kwargs...)
 end
 
-available_visuals(res::EncodingResult) = available_visuals(encoding_map(res))
+available_visuals(res::EncodingResult) = Results.encoding_presentation(res) === nothing ?
+    (available_visuals(encoding_map(res))..., :hasse, :module_inspector) :
+    (available_visuals(encoding_map(res))..., :hasse, :module_inspector, :presentation_inspector)
 
 function _poset_coordinates_2d(P::ProductOfChainsPoset{2})
     pts = Vector{NTuple{2,Float64}}(undef, nvertices(P))

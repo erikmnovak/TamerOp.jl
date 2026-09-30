@@ -3986,3 +3986,532 @@ end
         MD._MAP_LEQ_BATCH_VALUES_MIN_LEN[] = old_gate
     end
 end
+
+@testset "A83 presentation stalks preserve empty block shapes" begin
+    for field in FIELDS_FULL
+        K = CM.coeff_type(field)
+        P = chain_poset(3)
+        H = FF.FringeModule{K}(P, [FF.principal_upset(P, 2)],
+            [FF.principal_downset(P, 2)], reshape(K[1], 1, 1); field=field)
+        # The interval is supported only at vertex 2. At vertex 1 the active
+        # target survives without a source; at vertex 3 the reverse holds.
+        cases = (
+            (; vertex=1, rows=[1], columns=Int[], block=zeros(K, 1, 0), dimension=0),
+            (; vertex=2, rows=[1], columns=[1], block=reshape(K[1], 1, 1), dimension=1),
+            (; vertex=3, rows=Int[], columns=[1], block=zeros(K, 0, 1), dimension=0),
+        )
+        for c in cases
+            cheap = IR.presentation_stalk(H; vertex=c.vertex)
+            @test cheap isa IR.PresentationStalk
+            @test IR.presentation_vertex(cheap) == c.vertex
+            @test FF.field(cheap) == field
+            @test FF.ambient_poset(cheap) === P
+            @test IR.active_rows(cheap) == c.rows
+            @test IR.active_columns(cheap) == c.columns
+            @test IR.presentation_matrix(cheap) == c.block
+            @test size(IR.presentation_matrix(cheap)) == size(c.block)
+            @test eltype(IR.presentation_matrix(cheap)) == K
+            @test IR.presentation_summary(cheap).dimension == c.dimension
+            @test !IR.presentation_summary(cheap).basis_available
+            @test IR.image_basis(cheap) === nothing
+            @test IR.check_presentation_stalk(cheap).valid
+            @test IR.image_basis(cheap) === nothing # Validation is not an opt-in to bases.
+
+            based = IR.presentation_stalk(H; vertex=c.vertex, basis=true)
+            @test IR.presentation_summary(based).dimension == c.dimension
+            @test IR.presentation_summary(based).basis_available
+            @test size(IR.image_basis(based)) == (length(c.rows), c.dimension)
+            @test IR.check_presentation_stalk(based).valid
+            if c.dimension == 1
+                @test !iszero(only(IR.image_basis(based)))
+            end
+        end
+        # Both active lists can be empty, even though the presentation itself
+        # has a row and a column. Its only permitted coefficient is zero here.
+        gap = FF.FringeModule{K}(P, [FF.principal_upset(P, 3)],
+            [FF.principal_downset(P, 1)], zeros(K, 1, 1); field=field)
+        middle = IR.presentation_stalk(gap; vertex=2, basis=true)
+        @test isempty(IR.active_rows(middle)) && isempty(IR.active_columns(middle))
+        @test size(IR.presentation_matrix(middle)) == (0, 0)
+        @test size(IR.image_basis(middle)) == (0, 0)
+        @test IR.presentation_summary(middle).dimension == 0
+        @test IR.check_presentation_stalk(middle).valid
+
+        # These zero maps are defined, with the indicated source/target shape.
+        for (u, v, shape) in ((1, 2, (1, 0)), (2, 3, (0, 1)),
+                              (1, 3, (0, 0)), (1, 1, (0, 0)))
+            f = IR.presentation_map(H; source=u, target=v)
+            @test f isa IR.PresentationMap
+            @test IR.presentation_vertex(IR.source_stalk(f)) == u
+            @test IR.presentation_vertex(IR.target_stalk(f)) == v
+            @test IR.induced_map(f) == zeros(K, shape...)
+            @test size(IR.induced_map(f)) == shape
+            @test size(IR.ambient_projection(f)) ==
+                  (length(IR.active_rows(IR.target_stalk(f))), length(IR.active_rows(IR.source_stalk(f))))
+            @test IR.check_presentation_map(f).valid
+        end
+        identity = IR.presentation_map(H; source=2, target=2)
+        @test IR.induced_map(identity) == reshape(K[1], 1, 1)
+        @test IR.ambient_projection(identity) == reshape(K[1], 1, 1)
+    end
+end
+
+@testset "A83 two summands have nonzero adjacent maps and zero composite" begin
+    for field in FIELDS_FULL
+        K = CM.coeff_type(field)
+        same(A, B) = field isa CM.RealField ? isapprox(A, B; atol=1e-9, rtol=1e-9) : A == B
+        P = chain_poset(3)
+        H = FF.FringeModule{K}(P,
+            [FF.principal_upset(P, 1), FF.principal_upset(P, 2)],
+            [FF.principal_downset(P, 2), FF.principal_downset(P, 3)],
+            K[1 0; 0 1]; field=field)
+        # The two interval summands are [1,2] and [2,3]. Their ambient target
+        # spaces have dimensions 2,2,1, while their images have dimensions 1,2,1.
+        expected = (
+            (; rows=[1, 2], columns=[1], block=reshape(K[1, 0], 2, 1), dimension=1),
+            (; rows=[1, 2], columns=[1, 2], block=K[1 0; 0 1], dimension=2),
+            (; rows=[2], columns=[1, 2], block=K[0 1], dimension=1),
+        )
+        for q in 1:3
+            s = IR.presentation_stalk(H; vertex=q, basis=true)
+            @test IR.active_rows(s) == expected[q].rows
+            @test IR.active_columns(s) == expected[q].columns
+            @test IR.presentation_matrix(s) == expected[q].block
+            @test IR.presentation_summary(s).dimension == expected[q].dimension
+            @test size(IR.image_basis(s)) == (length(expected[q].rows), expected[q].dimension)
+        end
+        first = IR.presentation_map(H; source=1, target=2)
+        second = IR.presentation_map(H; source=2, target=3)
+        direct = IR.presentation_map(H; source=1, target=3)
+        @test IR.ambient_projection(first) == K[1 0; 0 1]
+        @test IR.ambient_projection(second) == K[0 1]
+        @test IR.ambient_projection(direct) == K[0 1]
+        @test any(!iszero, IR.induced_map(first))
+        @test any(!iszero, IR.induced_map(second))
+        @test same(IR.induced_map(direct), zeros(K, 1, 1))
+        @test same(IR.induced_map(second) * IR.induced_map(first), IR.induced_map(direct))
+        # The ambient projection followed by the source embedding equals the
+        # target embedding followed by the induced map. This is the mathematical
+        # square the explorer must explain; basis coordinates may vary.
+        for f in (first, second, direct)
+            Bu, Bv = IR.image_basis(IR.source_stalk(f)), IR.image_basis(IR.target_stalk(f))
+            @test same(Bv * IR.induced_map(f), IR.ambient_projection(f) * Bu)
+            @test IR.check_presentation_map(f).valid
+        end
+        # Compatibility with the existing PModule coordinates is additional
+        # integration evidence, separate from the independent summand oracle.
+        M = IR.pmodule_from_fringe(H)
+        for f in (first, second, direct)
+            u = IR.presentation_vertex(IR.source_stalk(f))
+            v = IR.presentation_vertex(IR.target_stalk(f))
+            @test same(IR.induced_map(f), MD.structure_map(M; source=u, target=v))
+        end
+    end
+end
+
+@testset "A83 square and overlapping-square active coefficients" begin
+    for field in FIELDS_FULL
+        K = CM.coeff_type(field)
+        same(A, B) = field isa CM.RealField ? isapprox(A, B; atol=1e-9, rtol=1e-9) : A == B
+        opts = TOA.EncodingOptions(; backend=:pl_backend, poset_kind=:signature, field=field)
+        square = TamerOp.encode([TOA.BoxUpset([0.0, 0.0])],
+            [TOA.BoxDownset([2.0, 2.0])], reshape(K[1], 1, 1), opts)
+        H = square.H
+        pi = TamerOp.encoding_map(square)
+        @test H isa FF.FringeModule
+        # This is the closed square [0,2]^2. Numeric IDs come from the actual
+        # encoder, not the illustrative nine-region model.
+        square_cases = (
+            (; point=(-1, -1), rows=[1], columns=Int[], block=zeros(K, 1, 0), dimension=0),
+            (; point=(0, 0), rows=[1], columns=[1], block=reshape(K[1], 1, 1), dimension=1),
+            (; point=(2, 2), rows=[1], columns=[1], block=reshape(K[1], 1, 1), dimension=1),
+            (; point=(0, 2), rows=[1], columns=[1], block=reshape(K[1], 1, 1), dimension=1),
+            (; point=(2, 0), rows=[1], columns=[1], block=reshape(K[1], 1, 1), dimension=1),
+            (; point=(3, 3), rows=Int[], columns=[1], block=zeros(K, 0, 1), dimension=0),
+            (; point=(-1, 3), rows=Int[], columns=Int[], block=zeros(K, 0, 0), dimension=0),
+        )
+        for c in square_cases
+            q = EC.locate(pi, collect(c.point))
+            s = IR.presentation_stalk(H; vertex=q, basis=true)
+            @test IR.active_rows(s) == c.rows
+            @test IR.active_columns(s) == c.columns
+            @test IR.presentation_matrix(s) == c.block
+            @test size(IR.presentation_matrix(s)) == size(c.block)
+            @test IR.presentation_summary(s).dimension == c.dimension
+            @test size(IR.image_basis(s)) == (length(c.rows), c.dimension)
+            @test IR.check_presentation_stalk(s).valid
+        end
+        for (x, y, shape, scalar) in (
+                ((-1, 1), (0, 1), (1, 0), 0),
+                ((1//4, 1//2), (1, 3//2), (1, 1), 1),
+                ((1, 1), (3, 1), (0, 1), 0))
+            u, v = EC.locate(pi, collect(x)), EC.locate(pi, collect(y))
+            f = IR.presentation_map(H; source=u, target=v)
+            expected_map = fill(K(scalar), shape...)
+            @test same(IR.induced_map(f), expected_map)
+            @test IR.check_presentation_map(f).valid
+        end
+
+        overlap = TamerOp.encode(
+            [TOA.BoxUpset([0.0, 0.0]), TOA.BoxUpset([1.0, 1.0])],
+            [TOA.BoxDownset([2.0, 2.0]), TOA.BoxDownset([3.0, 3.0])], K[1 0; 0 1], opts)
+        G = overlap.H
+        pi2 = TamerOp.encoding_map(overlap)
+        overlap_cases = (
+            (; point=(-1, -1), rows=[1, 2], columns=Int[], block=zeros(K, 2, 0), dimension=0),
+            (; point=(0, 0), rows=[1, 2], columns=[1], block=reshape(K[1, 0], 2, 1), dimension=1),
+            (; point=(1, 1), rows=[1, 2], columns=[1, 2], block=K[1 0; 0 1], dimension=2),
+            (; point=(2, 2), rows=[1, 2], columns=[1, 2], block=K[1 0; 0 1], dimension=2),
+            (; point=(3, 3), rows=[2], columns=[1, 2], block=K[0 1], dimension=1),
+            (; point=(4, 4), rows=Int[], columns=[1, 2], block=zeros(K, 0, 2), dimension=0),
+            (; point=(0, 3), rows=[2], columns=[1], block=zeros(K, 1, 1), dimension=0),
+            (; point=(-1, 4), rows=Int[], columns=Int[], block=zeros(K, 0, 0), dimension=0),
+        )
+        for c in overlap_cases
+            q = EC.locate(pi2, collect(c.point))
+            s = IR.presentation_stalk(G; vertex=q, basis=true)
+            @test IR.active_rows(s) == c.rows
+            @test IR.active_columns(s) == c.columns
+            @test IR.presentation_matrix(s) == c.block
+            @test size(IR.presentation_matrix(s)) == size(c.block)
+            @test IR.presentation_summary(s).dimension == c.dimension
+            @test size(IR.image_basis(s)) == (length(c.rows), c.dimension)
+            @test IR.check_presentation_stalk(s).valid
+        end
+        # At (0,3), both a source column and target row are active, but their
+        # one-by-one intersection is zero. Activity alone is not stalk rank.
+        z = IR.presentation_stalk(G; vertex=EC.locate(pi2, [0, 3]), basis=true)
+        @test IR.active_rows(z) == [2] && IR.active_columns(z) == [1]
+        @test size(IR.image_basis(z)) == (1, 0)
+        a, b, c = (1//2, 1//2), (3//2, 3//2), (5//2, 5//2)
+        u, v, w = [EC.locate(pi2, collect(p)) for p in (a, b, c)]
+        left = IR.presentation_map(G; source=u, target=v)
+        right = IR.presentation_map(G; source=v, target=w)
+        total = IR.presentation_map(G; source=u, target=w)
+        @test (IR.presentation_summary(IR.source_stalk(left)).dimension,
+               IR.presentation_summary(IR.target_stalk(left)).dimension,
+               IR.presentation_summary(IR.target_stalk(right)).dimension) == (1, 2, 1)
+        @test any(!iszero, IR.induced_map(left)) && any(!iszero, IR.induced_map(right))
+        @test same(IR.induced_map(total), zeros(K, 1, 1))
+        @test same(IR.induced_map(right) * IR.induced_map(left), IR.induced_map(total))
+        M = TamerOp.encoding_module(overlap)
+        for (f, source, target) in ((left, u, v), (right, v, w), (total, u, w))
+            @test same(IR.induced_map(f), MD.structure_map(M; source, target))
+            @test same(IR.image_basis(IR.target_stalk(f)) * IR.induced_map(f),
+                       IR.ambient_projection(f) * IR.image_basis(IR.source_stalk(f)))
+        end
+    end
+end
+
+@testset "A83 non-coordinate embeddings on a permuted diamond" begin
+    # min=4, max=1; vertex IDs are not a topological order. One target row dies
+    # along the branch through vertex 3. The initial image is span((1,1)), not
+    # an abstract coordinate line in a one-dimensional target space.
+    relation = falses(4, 4)
+    for q in 1:4
+        relation[q, q] = true
+    end
+    for (u, v) in ((4, 2), (4, 3), (2, 1), (3, 1), (4, 1))
+        relation[u, v] = true
+    end
+    P = FF.FinitePoset(relation)
+    for field in FIELDS_FULL
+        K = CM.coeff_type(field)
+        same(A, B) = field isa CM.RealField ? isapprox(A, B; atol=1e-9, rtol=1e-9) : A == B
+        H = FF.FringeModule{K}(P, [FF.principal_upset(P, 4)],
+            [FF.principal_downset(P, 2), FF.principal_downset(P, 1)],
+            reshape(K[1, 1], 2, 1); field=field)
+        for q in (4, 2)
+            s = IR.presentation_stalk(H; vertex=q, basis=true)
+            B = IR.image_basis(s)
+            @test IR.active_rows(s) == [1, 2]
+            @test IR.active_columns(s) == [1]
+            @test IR.presentation_matrix(s) == reshape(K[1, 1], 2, 1)
+            @test size(B) == (2, 1)
+            @test !iszero(B[1, 1])
+            @test same(B[1:1, :], B[2:2, :]) # Exactly the diagonal image line.
+        end
+        maps = Dict((u, v) => IR.presentation_map(H; source=u, target=v)
+            for (u, v) in ((4, 2), (4, 3), (2, 1), (3, 1), (4, 1)))
+        @test IR.ambient_projection(maps[(4, 2)]) == K[1 0; 0 1]
+        @test IR.ambient_projection(maps[(4, 3)]) == K[0 1]
+        @test IR.ambient_projection(maps[(2, 1)]) == K[0 1]
+        @test IR.ambient_projection(maps[(3, 1)]) == reshape(K[1], 1, 1)
+        @test IR.ambient_projection(maps[(4, 1)]) == K[0 1]
+        for f in values(maps)
+            @test size(IR.induced_map(f)) == (1, 1)
+            @test !iszero(only(IR.induced_map(f)))
+            @test same(IR.image_basis(IR.target_stalk(f)) * IR.induced_map(f),
+                       IR.ambient_projection(f) * IR.image_basis(IR.source_stalk(f)))
+            @test IR.check_presentation_map(f).valid
+        end
+        direct = IR.induced_map(maps[(4, 1)])
+        @test same(IR.induced_map(maps[(2, 1)]) * IR.induced_map(maps[(4, 2)]), direct)
+        @test same(IR.induced_map(maps[(3, 1)]) * IR.induced_map(maps[(4, 3)]), direct)
+        @test_throws ArgumentError IR.presentation_map(H; source=2, target=3)
+        @test_throws ArgumentError IR.presentation_map(H; source=1, target=4)
+    end
+end
+
+@testset "A83 presentation rank respects the coefficient field" begin
+    P = chain_poset(1)
+    for field in FIELDS_FULL
+        K = CM.coeff_type(field)
+        U, D = FF.principal_upset(P, 1), FF.principal_downset(P, 1)
+        A = K[1 1; 1 -1]
+        H = FF.FringeModule{K}(P, [U, U], [D, D], A; field=field)
+        # det(A)=-2 gives rank one exactly in characteristic 2, rank two in
+        # every other tested field. No rank implementation supplies this oracle.
+        expected_dimension = field isa CM.PrimeField && field.p == 2 ? 1 : 2
+        for basis in (false, true)
+            s = IR.presentation_stalk(H; vertex=1, basis)
+            @test IR.presentation_summary(s).dimension == expected_dimension
+            @test IR.presentation_matrix(s) == A
+            @test eltype(IR.presentation_matrix(s)) == K
+            if basis
+                B = IR.image_basis(s)
+                @test size(B) == (2, expected_dimension)
+                if expected_dimension == 1
+                    @test !iszero(B[1, 1]) && B[1, 1] == B[2, 1]
+                else
+                    @test !iszero(B[1, 1] * B[2, 2] - B[1, 2] * B[2, 1])
+                end
+            else
+                @test IR.image_basis(s) === nothing
+            end
+            @test IR.check_presentation_stalk(s).valid
+        end
+        # The same inspection contract works when the coefficients are sparse.
+        sparse_H = FF.FringeModule{K}(P, [U, U], [D, D], sparse(A); field=field)
+        @test IR.presentation_summary(IR.presentation_stalk(sparse_H; vertex=1)).dimension == expected_dimension
+    end
+    U, D = FF.principal_upset(P, 1), FF.principal_downset(P, 1)
+    rational = FF.FringeModule{QQ}(P, [U], [D], reshape(QQ[1//3], 1, 1); field=CM.QQField())
+    s = IR.presentation_stalk(rational; vertex=1, basis=true)
+    @test IR.presentation_matrix(s) == reshape(QQ[1//3], 1, 1)
+    @test eltype(IR.image_basis(s)) == QQ
+    @test IR.presentation_summary(s).dimension == 1
+    for (atol, expected_dimension) in ((1e-6, 1), (1e-10, 2))
+        field = CM.RealField(Float64; rtol=0.0, atol)
+        H = FF.FringeModule{Float64}(P, [U, U], [D, D], [1.0 0.0; 0.0 1e-8]; field=field)
+        cheap = IR.presentation_stalk(H; vertex=1)
+        based = IR.presentation_stalk(H; vertex=1, basis=true)
+        @test IR.presentation_summary(cheap).dimension == expected_dimension
+        @test IR.presentation_summary(based).dimension == expected_dimension
+        @test size(IR.image_basis(based)) == (2, expected_dimension)
+        @test FF.field(based) == field
+        @test IR.check_presentation_stalk(based).valid
+    end
+end
+
+@testset "A83 snapshot ownership and invalid selection contracts" begin
+    field = CM.QQField()
+    P = chain_poset(2)
+    U, D = FF.principal_upset(P, 1), FF.principal_downset(P, 2)
+    H = FF.FringeModule{QQ}(P, [U, U], [D, D], QQ[1 0; 0 1]; field=field)
+    expected_coefficients = QQ[1 0; 0 1]
+    # Preserve the existing no-keyword presentation coefficient accessor.
+    @test IR.presentation_map(H) == expected_coefficients
+    for invalid in (0, 3, -1, true, 1.5, big(typemax(Int)) + 1)
+        @test_throws ArgumentError IR.presentation_stalk(H; vertex=invalid)
+        @test_throws ArgumentError IR.presentation_map(H; source=invalid, target=2)
+        @test_throws ArgumentError IR.presentation_map(H; source=1, target=invalid)
+    end
+    @test_throws ArgumentError IR.presentation_map(H; source=1)
+    @test_throws ArgumentError IR.presentation_map(H; target=2)
+    @test_throws ArgumentError IR.presentation_map(H; source=2, target=1)
+    no_vertices = chain_poset(0)
+    empty_H = FF.FringeModule{QQ}(no_vertices, FF.Upset{typeof(no_vertices)}[],
+        FF.Downset{typeof(no_vertices)}[], zeros(QQ, 0, 0); field=field)
+    @test_throws ArgumentError IR.presentation_stalk(empty_H; vertex=1)
+    @test_throws ArgumentError IR.presentation_map(empty_H; source=1, target=1)
+
+    s = IR.presentation_stalk(H; vertex=1, basis=true)
+    IR.presentation_matrix(s)[1, 1] = 7
+    IR.image_basis(s)[:, :] .= 0
+    IR.active_rows(s)[1] = 2
+    IR.active_columns(s)[1] = 2
+    @test !IR.check_presentation_stalk(s).valid
+    @test_throws ArgumentError IR.check_presentation_stalk(s; throw=true)
+    @test FF.fringe_coefficients(H) == expected_coefficients
+    fresh = IR.presentation_stalk(H; vertex=1, basis=true)
+    @test IR.active_rows(fresh) == [1, 2]
+    @test IR.active_columns(fresh) == [1, 2]
+    @test IR.presentation_matrix(fresh) == expected_coefficients
+    @test IR.presentation_summary(fresh).dimension == 2
+    @test IR.check_presentation_stalk(fresh).valid
+
+    f = IR.presentation_map(H; source=1, target=2)
+    IR.ambient_projection(f)[1, 1] = 7
+    IR.induced_map(f)[1, 1] = 7
+    IR.presentation_matrix(IR.source_stalk(f))[1, 1] = 7
+    @test !IR.check_presentation_map(f).valid
+    @test_throws ArgumentError IR.check_presentation_map(f; throw=true)
+    @test FF.fringe_coefficients(H) == expected_coefficients
+    again = IR.presentation_map(H; source=1, target=2)
+    @test IR.ambient_projection(again) == expected_coefficients
+    @test IR.induced_map(again) == expected_coefficients
+    @test IR.check_presentation_map(again).valid
+end
+
+@testset "A83 curated presentation APIs and retained encoding witnesses" begin
+    @test TamerOp.encoding_presentation === RES.encoding_presentation
+    @test TOA.encoding_presentation === RES.encoding_presentation
+    for name in (:PresentationStalk, :PresentationMap, :presentation_stalk,
+                 :presentation_map, :presentation_vertex, :presentation_matrix,
+                 :active_rows, :active_columns, :source_stalk,
+                 :target_stalk, :ambient_projection, :induced_map,
+                 :presentation_summary, :check_presentation_stalk, :check_presentation_map)
+        @test getproperty(TOA, name) === getproperty(IR, name)
+    end
+    @test TOA.presentation_matrix === TamerOp.IndicatorTypes.presentation_matrix
+    @test TOA.image_basis === TamerOp.ChainComplexes.image_basis
+
+    opts = TOA.EncodingOptions(; backend=:pl_backend, poset_kind=:signature, field=CM.QQField())
+    enc = TamerOp.encode([TOA.BoxUpset([0.0, 0.0])],
+        [TOA.BoxDownset([2.0, 2.0])], reshape(QQ[1], 1, 1), opts)
+    P, M, pi = TamerOp.encoding_poset(enc), TamerOp.encoding_module(enc), TamerOp.encoding_map(enc)
+    H = TamerOp.encoding_presentation(enc)
+    @test H isa FF.FringeModule
+    @test H === enc.H
+    @test FF.ambient_poset(H) === P
+    @test FF.field(H) == CM.QQField()
+    # Witness discovery borrows the retained presentation and computes no fibers.
+    before_dims, before_queries = H.fiber_dims[], H.fiber_queries[]
+    @test RES.encoding_presentation(enc) === H
+    @test H.fiber_dims[] === before_dims
+    @test H.fiber_queries[] == before_queries
+    @test TOA.presentation_map(enc) === FF.fringe_coefficients(H)
+    inside = EC.locate(pi, [1, 1])
+    stalk = TOA.presentation_stalk(enc; vertex=inside, basis=true)
+    @test TOA.presentation_summary(stalk).dimension == 1
+    # ChainComplexes loads after IndicatorResolutions and forwards this shared
+    # public accessor to the presentation owner, so compare method results.
+    @test TOA.image_basis(stalk) === IR.image_basis(stalk)
+    @test TamerOp.ChainComplexes.image_basis(stalk) === IR.image_basis(stalk)
+    @test TOA.presentation_matrix(stalk) == reshape(QQ[1], 1, 1)
+    identity = TOA.presentation_map(enc; source=inside, target=inside)
+    @test TOA.induced_map(identity) == reshape(QQ[1], 1, 1)
+    @test TOA.check_presentation_map(identity).valid
+
+    # The original input is not a substitute for a retained finite witness.
+    missing = RES.EncodingResult(P, M, pi; presentation=H, opts=opts)
+    @test TamerOp.encoding_presentation(missing) === nothing
+    @test_throws ArgumentError TOA.presentation_stalk(missing; vertex=inside)
+    @test_throws ArgumentError TOA.presentation_map(missing; source=inside, target=inside)
+    unsupported = RES.EncodingResult(P, M, pi; H=(note=:not_a_fringe,), opts=opts)
+    @test TamerOp.encoding_presentation(unsupported) === nothing
+
+    # Even an order-identical poset is a different retained base identity.
+    # Construct a valid new module on that base, then attach the old witness.
+    Pcopy = FF.FinitePoset(copy(FF.leq_matrix(P)))
+    Hcopy = FF.FringeModule{QQ}(Pcopy,
+        [FF.Upset(Pcopy, copy(U.mask)) for U in FF.birth_upsets(H)],
+        [FF.Downset(Pcopy, copy(D.mask)) for D in FF.death_downsets(H)],
+        copy(FF.fringe_coefficients(H)); field=CM.QQField())
+    Mcopy = IR.pmodule_from_fringe(Hcopy)
+    wrong_base = RES.EncodingResult(Pcopy, Mcopy, nothing; H=H, opts=opts)
+    @test Pcopy !== P
+    @test FF.leq_matrix(Pcopy) == FF.leq_matrix(P)
+    @test TamerOp.encoding_presentation(wrong_base) === nothing
+    @test_throws ArgumentError TOA.presentation_stalk(wrong_base; vertex=inside)
+    @test TamerOp.encoding_presentation(RES.EncodingResult(Pcopy, Mcopy, nothing; H=Hcopy, opts=opts)) === Hcopy
+
+    # Matching the number of rows/stalks does not make a witness over QQ a
+    # witness over F2. Field conversion intentionally discards retained images.
+    mod2 = CM.F2()
+    M2 = TamerOp.change_field(M, mod2)
+    wrong_field = RES.EncodingResult(P, M2, pi; H=H,
+        opts=TOA.EncodingOptions(; field=mod2))
+    @test TamerOp.encoding_presentation(wrong_field) === nothing
+    @test_throws ArgumentError TOA.presentation_map(wrong_field; source=inside, target=inside)
+    unchanged = TamerOp.change_field(enc, CM.QQField())
+    @test unchanged === enc
+    @test TamerOp.encoding_presentation(unchanged) === H
+    changed = TamerOp.change_field(enc, mod2)
+    @test changed !== enc
+    @test changed.H === nothing && changed.presentation === nothing
+    @test TamerOp.encoding_presentation(changed) === nothing
+    @test TamerOp.change_field(changed, mod2) === changed
+    @test_throws ArgumentError TOA.presentation_stalk(changed; vertex=inside)
+end
+
+@testset "A83 numerical image truncation and absolute map tolerance" begin
+    P = chain_poset(1)
+    U, D = FF.principal_upset(P, 1), FF.principal_downset(P, 1)
+    field = CM.RealField(Float64; rtol=1e-8, atol=0.0)
+    H = FF.FringeModule{Float64}(P, [U, U], [D, D],
+        [1.0 0.0; 0.0 1e-10]; field=field)
+    s = IR.presentation_stalk(H; vertex=1, basis=true)
+    @test IR.presentation_summary(s).dimension == 1
+    @test size(IR.image_basis(s)) == (2, 1)
+    # The second column lies below the whole input's numerical rank scale.
+    # Its nonzero residual need not satisfy a relative per-RHS solve bound.
+    @test IR.check_presentation_stalk(s).valid
+    @test IR.check_presentation_map(IR.presentation_map(H; source=1, target=1)).valid
+    IR.image_basis(s)[:, 1] .= [0.0, 1.0]
+    @test !IR.check_presentation_stalk(s).valid
+    @test_throws ArgumentError IR.check_presentation_stalk(s; throw=true)
+
+    # Absolute-only tolerance must not inspect an unused overflowing Frobenius
+    # norm. Every matrix entry, column norm and identity product is finite.
+    absolute = CM.RealField(Float64; rtol=0.0, atol=1e-12)
+    A = zeros(4, 4)
+    for i in 1:4
+        A[i, i] = 1e308
+    end
+    huge = FF.FringeModule{Float64}(P, fill(U, 4), fill(D, 4), A; field=absolute)
+    identity = IR.presentation_map(huge; source=1, target=1)
+    @test IR.induced_map(identity) == Matrix{Float64}(I, 4, 4)
+    @test IR.check_presentation_map(identity).valid
+end
+
+@testset "A83 map snapshots retain one presentation" begin
+    P = chain_poset(2)
+    U, D = FF.principal_upset(P, 1), FF.principal_downset(P, 2)
+    for field in (CM.QQField(), CM.RealField(Float64))
+        K = CM.coeff_type(field)
+        H = FF.FringeModule{K}(P, [U, U], [D, D], K[1 0; 0 1]; field=field)
+        m = IR.presentation_map(H; source=1, target=2)
+        target = IR.target_stalk(m)
+        # Both matrices still have full image, and the unchanged bases/maps
+        # still commute. But these blocks cannot come from a shared phi.
+        # Even a floating mismatch below solve tolerance is a different stored
+        # original coefficient, rather than image-basis rounding error.
+        IR.presentation_matrix(target)[1, 1] = field isa CM.RealField ? K(1 + 1e-10) : K(2)
+        @test IR.check_presentation_stalk(target).valid
+        report = IR.check_presentation_map(m)
+        @test !report.valid
+        @test any(issue -> occursin("overlapping presentation coefficients", issue), report.issues)
+        @test_throws ArgumentError IR.check_presentation_map(m; throw=true)
+    end
+
+    # Relabel a target upset within range without changing its 1x1 image.
+    # Each stalk remains valid by itself, but an active upset cannot disappear
+    # when moving to a larger vertex.
+    P3 = chain_poset(3)
+    H3 = FF.FringeModule{QQ}(P3,
+        [FF.principal_upset(P3, 1), FF.principal_upset(P3, 3)],
+        [FF.principal_downset(P3, 3)], QQ[1 0]; field=CM.QQField())
+    m = IR.presentation_map(H3; source=1, target=2)
+    IR.active_columns(IR.target_stalk(m))[1] = 2
+    @test IR.check_presentation_stalk(IR.target_stalk(m)).valid
+    report = IR.check_presentation_map(m)
+    @test !report.valid
+    @test any(issue -> occursin("source upset columns", issue), report.issues)
+    @test_throws ArgumentError IR.check_presentation_map(m; throw=true)
+
+    # Equal vertices impose equality of active lists, beyond containment.
+    P1 = chain_poset(1)
+    U1, D1 = FF.principal_upset(P1, 1), FF.principal_downset(P1, 1)
+    Uempty = FF.Upset(P1, falses(1))
+    Hsource = FF.FringeModule{QQ}(P1, [U1, Uempty], [D1], QQ[1 0]; field=CM.QQField())
+    Htarget = FF.FringeModule{QQ}(P1, [U1, U1], [D1], QQ[1 0]; field=CM.QQField())
+    s = IR.presentation_stalk(Hsource; vertex=1, basis=true)
+    t = IR.presentation_stalk(Htarget; vertex=1, basis=true)
+    @test IR.check_presentation_stalk(s).valid && IR.check_presentation_stalk(t).valid
+    m = IR.PresentationMap(s, t, sparse(reshape(QQ[1], 1, 1)), reshape(QQ[1], 1, 1))
+    report = IR.check_presentation_map(m)
+    @test !report.valid
+    @test any(issue -> occursin("equal vertices", issue), report.issues)
+end

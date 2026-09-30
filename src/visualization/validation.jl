@@ -30,12 +30,39 @@ function check_visual_spec(spec::VisualizationSpec; throw::Bool=false)
             push!(issues, "A slice widget requires volume, view_dims, and fixed_indices metadata.")
     end
 
+    matrix_layers = count(layer -> layer isa MatrixLayer, spec.layers)
+    matrix_layers > 0 && (matrix_layers != 1 || length(spec.layers) != 1) &&
+        push!(issues, "A matrix panel must contain exactly one MatrixLayer and no other layers.")
+    get(spec.metadata, :panel_style, nothing) === :matrix && matrix_layers != 1 &&
+        push!(issues, "A matrix panel requires one MatrixLayer.")
     for (idx, layer) in enumerate(spec.layers)
         if layer isa HeatmapLayer
             xok = size(layer.values, 2) == length(layer.x) || size(layer.values, 2) + 1 == length(layer.x)
             yok = size(layer.values, 1) == length(layer.y) || size(layer.values, 1) + 1 == length(layer.y)
             (xok && yok) ||
                 push!(issues, "HeatmapLayer $idx values shape must match x/y lengths or cell-edge lengths.")
+        elseif layer isa MatrixLayer
+            size(layer.entries) == (length(layer.row_labels), length(layer.column_labels)) ||
+                push!(issues, "MatrixLayer $idx entries must match target-row and source-column labels.")
+            shape = get(spec.metadata, :matrix_size, size(layer.entries))
+            if !(shape isa Tuple && length(shape) == 2 &&
+                 all(n -> n isa Integer && !(n isa Bool) && n >= 0, shape))
+                push!(issues, "matrix_size must be a pair of nonnegative integer dimensions.")
+            elseif any(size(layer.entries, i) > shape[i] for i in 1:2)
+                push!(issues, "Displayed MatrixLayer entries cannot exceed the full matrix_size.")
+            end
+            for (key, dims) in ((:row_colors, (size(layer.entries,1),)),
+                                (:column_colors, (size(layer.entries,2),)),
+                                (:cell_colors, size(layer.entries)))
+                haskey(spec.metadata, key) || continue
+                colors = spec.metadata[key]
+                colors isa AbstractArray && size(colors) == dims ||
+                    push!(issues, "$key must match the displayed matrix dimensions.")
+            end
+            for key in (:matrix_corner, :matrix_row_heading, :empty_matrix_reason)
+                get(spec.metadata, key, "") isa AbstractString ||
+                    push!(issues, "$key must be a string.")
+            end
         elseif layer isa RectLayer
             for rect in layer.rects
                 rect[1] <= rect[3] || push!(issues, "RectLayer $idx has xlo > xhi.")
@@ -190,6 +217,22 @@ _visual_request_keywords(obj::DataTypes.ImageNd, kind::Symbol) =
     kind === :channels ? (:view_dims, :colormap) : (:view_dims, :slice_indices, :colormap)
 
 function _visual_request_cost(obj, kind::Symbol)
+    if kind === :presentation_inspector
+        return (; work=:selected_presentation_fibers, timing=:not_measured,
+            cache_reuse=:none, default=:supports_and_coefficients_without_ranks,
+            single_stalk=:active_block_and_rank, basis=:explicit_single_stalk_opt_in,
+            map_queries=:defined_pair_computes_two_bases_and_induced_map,
+            lazy_encoding=:no_module_materialization,
+            geometry=:when_supported_by_encoding)
+    end
+    if kind in (:hasse, :module_inspector)
+        return (; work=kind === :hasse ? :cover_graph_and_dimensions : :selected_stalk_or_map,
+            timing=:not_measured, cache_reuse=:module_owner,
+            default=:dimensions_without_structure_maps,
+            map_queries=kind === :hasse ? :none : :selected_pair_only,
+            lazy_encoding=kind === :hasse ? :dimensions_only : :defined_pair_may_materialize_cover_maps,
+            geometry=kind === :module_inspector ? :when_supported_by_encoding : :schematic)
+    end
     work = if kind in (:rank_heatmap, :rank_rectangles)
         :dense_pair_table
     elseif kind === :constant_subdivision

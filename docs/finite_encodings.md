@@ -229,12 +229,12 @@ when we start with a valid comparison in $Q$. Order preservation is a
 one-way implication; it does not reconstruct the order of the original
 parameters from their labels.
 
-> **Coming visualization: recover a space and a map.** Linked views of the
-> parameter plane and the finite poset will highlight the label of a selected
-> point. Selecting a comparable source and target will display their spaces
-> and the corresponding finite matrix. Boundary points will remain included
-> in the square, exterior points will show zero spaces, and an incomparable
-> pair will be identified as having no prescribed structure map.
+> **Available now: recover a space and a map.** The
+> [inspection notebook](tutorials/inspect_encoding.ipynb) shows the parameter
+> plane, the returned finite poset, and a selected matrix in one figure.
+> It checks included boundary points, exterior zero spaces, and incomparable
+> parameters with no prescribed structure map. Selections are code arguments;
+> clicking across linked panels remains planned.
 
 ## Another valid encoding has four labels
 

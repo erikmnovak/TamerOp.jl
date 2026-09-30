@@ -95,6 +95,9 @@ function _visual_component(pi, region_id::Int, vertices::Vector{_VisualPoint}, b
 end
 
 _visual_locate(pi, p) = locate(pi, collect(p))
+# Reversed axes negate coordinates in the grid classifier. Widen before that
+# operation so typemin(Int) and unsigned coordinates retain their exact order.
+_visual_locate(pi::GridEncodingMap{2}, p) = locate(pi, collect(_visual_point(p)))
 # Zn's real convenience classifier rounds to the nearest lattice point. Match
 # that rule exactly, without an intermediate floating conversion.
 _visual_locate(pi::ZnEncodingMap, p) = locate(pi, (round(Int, p[1]), round(Int, p[2])))

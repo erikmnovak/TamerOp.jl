@@ -271,6 +271,11 @@ indexing them can be infinite.
 > four-point selection will show the two compositions around a square and
 > their common result.
 
+For a static version of the pair comparison, the
+[square inspection notebook](tutorials/inspect_encoding.ipynb) already shows
+selected stalks and matrices, including incomparable parameters with no map.
+The four-point interaction described above remains future work.
+
 ## Equal dimensions can hide different behavior
 
 Even on two ordered parameters $u<v$, the dimensions do not determine the

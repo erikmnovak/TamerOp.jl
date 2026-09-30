@@ -397,6 +397,7 @@ in their guide.
 
 The immediate next step is practical: follow a parameter through the
 square's returned classifier to its space, then follow a comparable pair
-to its map. The [first learning path](learning_path.md) sets out that
-inspection lesson and its planned visualization. Its purpose is now
-precise: make the finite description, and what it recovers, visible.
+to its map. The [inspection notebook](tutorials/inspect_encoding.ipynb) now
+performs that calculation and produces the combined figure; the
+[first learning path](learning_path.md) places it in the wider route.
+Its purpose is to make the finite description, and what it recovers, visible.

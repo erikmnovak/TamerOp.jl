@@ -11,9 +11,21 @@ introduction](finite_encodings.md) explains the central object; the
 [testing guide](testing.md) explains correctness checks. This manual does not
 retroactively certify existing benchmark scripts or results.
 
+Before choosing further experiments, use [Designing a comparison that can
+finish](benchmark_suites.md). Freeze a finite suite, its intended claim and
+completion criteria. Existing adequate evidence earns credit; another possible
+input size or operation does not automatically extend the current study.
+
+The [comparison roadmap](benchmark_suites.md#planned-competitor-comparisons)
+tracks QPA and the other libraries planned for comparison, with their intended
+overlap and remaining scope checks. Consult it when choosing the next study.
+
 **The primary measure of computational efficiency is compiled code performing
 the requested mathematics without reusing results from an earlier query.**
-Construction, compilation, legitimate reuse and memory also need measurements.
+Elapsed time is the primary performance objective, subject to correct answers
+and declared resource limits. Construction, compilation, legitimate reuse and
+memory also need measurements. Report memory separately: a larger footprint
+does not cancel a speed advantage, but a resource failure prevents completion.
 A fixture is a fully specified example input. A sample is a timed execution; an
 independent process run starts the runtime again and contains its own samples.
 
@@ -25,6 +37,7 @@ package. Preserve losses and coverage gaps: they identify what to improve next.
 
 | Task | Start here |
 | --- | --- |
+| Set the scope and decide when to stop | [Design a bounded suite](benchmark_suites.md) |
 | Plan the comparison | [Define the question and output](#define-the-question-and-output) |
 | Choose what to compare first | [Prioritize complete mathematical workflows](#prioritize-complete-mathematical-workflows) |
 | Measure actual computation | [Measure compiled code with uncached mathematics](#measure-compiled-code-with-uncached-mathematics) |
@@ -116,8 +129,10 @@ Maintain a versioned coverage table for each competitor:
 | Status and version/date checked | Distinguish verified overlap, untested overlap, unknown support, unsupported tasks and different semantics |
 | Input families, evidence and remaining work | Track coverage of the intersection |
 
-Survey the relevant APIs before selecting favorable cases. Build a staged plan
-for the identified intersection, recording which cells were actually tested.
+Survey the relevant APIs before selecting favorable cases. Freeze a staged
+plan for a representative subset of the intended overlap, including explicit
+deferrals and a completion rule; record which cells were actually tested.
+The intersection inventory is not an obligation to benchmark every operation.
 One Ext family cannot establish leadership over all finite algebra. Separate
 TamerOp-only capabilities from comparative timings; unsupported tasks have no
 speedup ratio. Recheck support when competitor versions change.
@@ -394,7 +409,9 @@ arithmetic difficulty but not a new module type. Reducing rational data modulo a
 prime can change ranks or invalidate a basis change; validate each field's case.
 Do not count an empty coordinate loop as a nontrivial algebraic speedup.
 
-Increase sizes through affordable levels to a declared resource limit. Record
+Use a fixed, affordable size ladder and a declared resource limit. Stop at
+the planned final level or the resource cap; neither a loss nor the existence
+of larger inputs automatically extends the ladder. Record
 actual encoding size, relations, matrix nonzeros, output size and relevant
 coefficient growth. Raw point count alone need not predict difficulty. Include
 real target shapes, tiny and moderate-sparsity cases, and both sides of backend
@@ -499,6 +516,12 @@ medians. Separate single-field and mixed-field observations.
 The implementation changes in this section apply to TamerOp only. Competitor
 implementations remain unchanged; optional competitor profiling follows the
 comparison policy above.
+Address every diagnosed major TamerOp bottleneck where feasible; there is no
+fixed count of fixes or optimization cycles. Reassess affected workflows until
+remaining diagnosed feasible improvements offer only minor gains, accounting
+for their combined effect. Document major costs that cannot feasibly be reduced.
+Follow the [optimization stopping rule](benchmark_suites.md#separate-investigation-from-confirmation);
+a timing budget or an aggregate speed win does not by itself complete that work.
 A profile suggests a hypothesis; a controlled before/after experiment tests it.
 Keep fixtures and required outputs fixed. Match each revision to its own usable
 precompiled image for startup tests. Hold tuning constant unless tuning is the
@@ -579,6 +602,7 @@ Copy this **planning template** into each new study. Unknowns are acceptable
 while planning; keep them visible if still unresolved in the final claim.
 
 ```text
+Suite/version, finite scope, deferred overlap and completion rule:
 Question and intended TamerOp workflow:
 Primary user tasks and reason for their selection or combination:
 Targeted TamerOp component diagnostics and the question each addresses, if needed:
@@ -596,7 +620,10 @@ Resources, machine availability and monitoring:
 Pilot budget; main process/sample counts, order, timeouts and stop rules:
 Memory roots/estimators, omissions and result lifetimes:
 Raw schema, provenance binding, completion checks and failures:
-Statistics/weights and planned plots:
+Statistics/weights, practical speed margin and planned plots:
+Major-bottleneck dispositions, residual-gain stopping rule and diagnostic budgets:
+Candidate freeze and evaluation policy:
+Claim decision if results favor TamerOp, are mixed or remain unresolved:
 Reproduction commands, archive plan and third-party licenses:
 Permitted conclusions and unresolved limitations:
 ```
@@ -606,6 +633,11 @@ consistent charging of setup/construction, and demonstrated cache reset for
 uncached rows. Check compilation diagnostics for accepted compiled-code samples.
 Preserve failures, variation and machine conditions, and regenerate reports from
 raw evidence. State limitations from coverage, scale, inspection or activity.
+
+Close the suite when its fixed plan has recorded outcomes, checked claims and
+reproducible evidence. Passing a superiority threshold is a possible conclusion,
+not a completion requirement. Apply the [closure rules](benchmark_suites.md#decide-when-enough-is-enough)
+before recommending more work or moving to another competitor.
 
 Historical artifacts keep their original definitions. A row named “cold” may
 mean the first query after code warmup: preserve its raw label and explain its

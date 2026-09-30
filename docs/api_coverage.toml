@@ -17,8 +17,8 @@ plan = "docs/learning_path.md"
 reference_status = "backlog"
 review_status = "mathematical_oracle_available; prose_and_reader_review_pending"
 reference_pages = ["docs/src/reference/first_learning_path.md"]
-example_sources = ["docs/build_scripts/check_first_encoding.jl"]
-rendering_status = "recipe_selection_and_execution_pending"
+example_sources = ["docs/build_scripts/check_first_encoding.jl", "docs/tutorials/inspect_encoding.ipynb"]
+rendering_status = "A42a_A83_static_inspection_notebook_executed; native_rendering_and_figures_verified"
 bindings = [
   "TamerOp.cubical_persistence", "TamerOp.PersistenceDiagram",
   "TamerOp.finite_intervals", "TamerOp.essential_births",
@@ -28,10 +28,18 @@ bindings = [
   "TamerOp.Advanced.BoxUpset", "TamerOp.Advanced.BoxDownset",
   "TamerOp.Advanced.EncodingOptions", "TamerOp.encoding_poset",
   "TamerOp.encoding_map", "TamerOp.dimensions", "TamerOp.encoding_module",
+  "TamerOp.encoding_presentation", "TamerOp.Advanced.presentation_stalk",
+  "TamerOp.Advanced.presentation_map", "TamerOp.Advanced.presentation_matrix",
+  "TamerOp.Advanced.active_rows", "TamerOp.Advanced.active_columns",
+  "TamerOp.Advanced.image_basis", "TamerOp.Advanced.induced_map",
+  "TamerOp.Advanced.ambient_projection", "TamerOp.Advanced.presentation_summary",
+  "TamerOp.Advanced.source_stalk", "TamerOp.Advanced.target_stalk",
   "TamerOp.Advanced.nvertices", "TamerOp.Advanced.locate",
   "TamerOp.Advanced.leq", "TamerOp.Advanced.dim_at",
   "TamerOp.Advanced.structure_map", "TamerOp.Advanced.check_module",
   "TamerOp.available_visuals", "TamerOp.visualize", "TamerOp.save_visual",
+  "TamerOp.export_path",
+  "TamerOp.Advanced.visual_spec", "TamerOp.Advanced.visual_metadata",
 ]
 
 [[families]]
@@ -53,11 +61,11 @@ title = "Finite posets, modules, morphisms, indicators, fringes, and flanges"
 question = "What spaces and maps does this finite mathematical object contain?"
 owners = ["TamerOp.FiniteFringe", "TamerOp.Modules", "TamerOp.AbelianCategories", "TamerOp.IndicatorTypes", "TamerOp.FlangeZn"]
 reference_pages = ["docs/src/reference/modules.md"]
-guides = ["docs/persistence_modules.md", "docs/finite_encodings.md", "docs/indicator_presentations.md", "docs/tameness.md", "docs/math_categories.md"]
-example_sources = ["docs/build_scripts/check_first_encoding.jl", "docs/build_scripts/check_indicator_presentations.jl"]
-example_status = "square_and_overlapping_summands_oracles; general_module_tutorial_needed"
+guides = ["docs/persistence_modules.md", "docs/finite_encodings.md", "docs/indicator_presentations.md", "docs/tameness.md", "docs/math_categories.md", "docs/visualization.md"]
+example_sources = ["docs/build_scripts/check_first_encoding.jl", "docs/build_scripts/check_indicator_presentations.jl", "docs/tutorials/inspect_encoding.ipynb"]
+example_status = "square_and_overlapping_summands_oracles_and_inspection_notebook; general_module_tutorial_needed"
 reference_status = "backlog"
-review_status = "first_path_subset_selected; method_families_pending"
+review_status = "first_path_subset_selected; A83_selected_presentation_queries_reviewed; remaining_method_families_pending"
 backlog = ["Write the square's indicator constructors and space/map queries first", "Later cover morphisms, kernels, images, and direct sums with nontrivial matrices", "Separate finite-poset modules from ambient presentations"]
 
 [[families]]
@@ -67,8 +75,8 @@ question = "How does a finite representation recover my module on its parameter 
 owners = ["TamerOp.EncodingCore", "TamerOp.Encoding", "TamerOp.ZnEncoding", "TamerOp.RegionGeometry", "TamerOp.PLPolyhedra", "TamerOp.PLBackend"]
 reference_pages = ["docs/src/reference/encodings.md"]
 guides = ["docs/finite_encodings.md", "docs/indicator_presentations.md", "docs/tameness.md", "docs/exact_grades.md", "docs/cdd_concurrency.md"]
-example_sources = ["docs/build_scripts/check_first_encoding.jl", "docs/build_scripts/check_indicator_presentations.jl"]
-example_status = "square_oracle_verified; teaching_notebook_pending"
+example_sources = ["docs/build_scripts/check_first_encoding.jl", "docs/build_scripts/check_indicator_presentations.jl", "docs/tutorials/inspect_encoding.ipynb"]
+example_status = "square_oracle_and_inspection_notebook_verified"
 reference_status = "backlog"
 review_status = "first_path_subset_selected; other_encoders_pending"
 backlog = ["Write the selected box-presentation encode method and classifier queries first", "Explain returned signatures rather than assume the illustrative nine labels", "Later review lattice and polyhedral query domains, sentinels, exact grades, and caches"]
@@ -145,11 +153,11 @@ question = "How do I interpret and save a figure of the object I computed?"
 owners = ["TamerOp.Visualization"]
 reference_pages = ["docs/src/reference/visualization.md"]
 guides = ["docs/visualization.md", "docs/optional_integrations.md"]
-example_sources = []
-example_status = "first_path_recipe_selection_and_rendering_pending"
+example_sources = ["docs/tutorials/inspect_encoding.ipynb"]
+example_status = "square_and_overlapping_squares_module_and_presentation_inspection_notebook_executed"
 reference_status = "backlog"
-review_status = "A81_A82_contracts_and_exact_planar_geometry; browser_review_pending"
-backlog = ["Choose and execute a figure recipe for the square encoding", "Explain geometry, label order, spaces, and maps in its caption", "Document renderer activation and export semantics"]
+review_status = "A81_A82_contracts_and_exact_planar_geometry; A42a_static_poset_stalk_map_inspector; A83_static_presentation_inspector_validated; notebook_executed; native_rendering_and_figures_verified"
+backlog = ["Complete generated reference entries for visualization recipes", "A37/A40: connect region, poset, and matrix selection through live interaction", "Review standalone browser interaction separately from live Julia callbacks"]
 
 [[families]]
 id = "features"
@@ -198,7 +206,17 @@ bindings = ["TamerOp.Workflow.encode", "TamerOp.Workflow.coarsen", "TamerOp.Opti
 
 [[overrides]]
 family = "modules"
-bindings = ["TamerOp.Workflow.fringe_presentation", "TamerOp.Workflow.flange_presentation"]
+bindings = [
+  "TamerOp.Workflow.fringe_presentation", "TamerOp.Workflow.flange_presentation",
+  "TamerOp.Results.encoding_presentation",
+  "TamerOp.IndicatorResolutions.PresentationStalk", "TamerOp.IndicatorResolutions.PresentationMap",
+  "TamerOp.IndicatorResolutions.presentation_stalk", "TamerOp.IndicatorResolutions.presentation_map",
+  "TamerOp.IndicatorResolutions.active_rows", "TamerOp.IndicatorResolutions.active_columns",
+  "TamerOp.IndicatorResolutions.presentation_vertex", "TamerOp.IndicatorResolutions.source_stalk",
+  "TamerOp.IndicatorResolutions.target_stalk", "TamerOp.IndicatorResolutions.ambient_projection",
+  "TamerOp.IndicatorResolutions.induced_map", "TamerOp.IndicatorResolutions.check_presentation_stalk",
+  "TamerOp.IndicatorResolutions.check_presentation_map",
+]
 
 [[overrides]]
 family = "resolutions"

@@ -318,19 +318,44 @@ Boundaries provide another useful check. Both $(1,1)$ and $(2,2)$ lie in
 both closed squares, so both stalks have dimension two. The query domain
 remains all of $\mathbb{R}^2$, including parameters outside the support.
 
-> **Coming visualization: inspect a presentation at a point.** A linked
-> view will show the two squares, the upset and downset membership tests,
-> and the full coefficient matrix. Moving a point will highlight its
-> active rows and columns and display the selected matrix, an image basis,
-> and its rank. The point $t$ will demonstrate an active row and column
-> whose intersection entry is zero.
+### Inspect the calculation in the package
 
-> **Coming visualization: follow a vector through the overlap.** Selecting
-> a comparable pair will display its structure matrix and source and
-> target bases. A three-point mode will multiply the maps along
-> $p\leq q\leq r$ and compare with the direct map, showing the first
-> summand disappearing while the second remains. These interactive views
-> are planned; the diagrams above are static mathematical schematics.
+The [inspection notebook](tutorials/inspect_encoding.ipynb) constructs these
+two square summands and follows the hand calculation with the reusable
+`:presentation_inspector` recipe. A static selection shows membership in a
+chosen upset and downset on the actual encoding regions, identifies active
+rows and columns of the full coefficient matrix, and displays their block.
+Requesting an image basis adds its embedding in the active target coordinates.
+At $t$, that basis has shape $1\times0$: the ambient target has one coordinate,
+and its image has no basis vectors. The active $1\times1$ zero block is shown
+as zero, rather than as missing support.
+
+For a comparable pair, the figure displays the endpoint blocks and image
+bases, the coordinate projection, and the induced map. The notebook checks
+the equation $B_r C_{q,r}=P_{q,r}B_q$ and multiplies the two successive induced
+maps to obtain the zero composite. The projection and the induced map can
+have different shapes: their source and target coordinates describe different
+spaces, even when both arise from the same presentation.
+
+The package exposes these ingredients through `presentation_stalk`,
+`active_rows`, `active_columns`, `presentation_matrix`, and `image_basis`.
+`presentation_map` with `source` and `target` returns the endpoint stalks,
+`ambient_projection`, and `induced_map`. A stalk query computes only the
+active block and its rank unless `basis=true`; a map query computes the bases
+it needs. See the [visualization guide](visualization.md#from-a-presentation-matrix-to-its-image)
+for calling conventions and supported inputs.
+
+These queries inspect the finite presentation retained by the encoding, in
+its chosen image bases. Those bases need not be the coordinates of an
+arbitrary stored module, and they do not identify input cycles. Inspection
+does not invent a presentation when none is retained. It also works from
+finite labels without a geometric parameter picture.
+
+> **Coming interaction: follow a chosen vector.** The static support,
+> active-block, basis, and induced-map views are available. Moving a point
+> to update every panel, selecting a vector to follow through its images,
+> and a linked three-point composition view remain planned. The notebook
+> already verifies the three-point composition through explicit queries.
 
 ## How the presentation leads to a finite encoding
 

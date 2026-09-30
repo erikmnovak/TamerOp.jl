@@ -18,11 +18,13 @@ using SparseArrays, LinearAlgebra
 using ..FiniteFringe
 using ..IndicatorTypes: UpsetPresentation, DownsetCopresentation,
                         check_upset_presentation, check_downset_copresentation
+import ..IndicatorTypes: presentation_matrix
 using ..CoreModules: _foreach_workchunk, AbstractCoeffField, QQField, PrimeField, RealField,
                      ResolutionCache, ResolutionKey3, _resolution_key3,
                      IndicatorResolutionPayload, coeff_type, eye, field_from_eltype
 using ..FieldLinAlg
 import ..Results: provenance
+import ..Results
 
 using ..Modules: CoverCache, _get_cover_cache, _clear_cover_cache!,
                  CoverEdgeMapStore, _find_sorted_index,
@@ -1443,7 +1445,6 @@ end
 @inline coaugmentation(res::InjectiveHullResult) = res.map
 @inline coaugmentation(res::DownsetResolutionResult) = res.coaugmentation_map
 @inline presentation_module(H::FiniteFringe.FringeModule) = H
-@inline presentation_map(H::FiniteFringe.FringeModule) = FiniteFringe.fringe_coefficients(H)
 
 @inline function _indicator_resolution_describe(res::ProjectiveCoverResult)
     M = cover_module(res)
@@ -3390,6 +3391,8 @@ function pmodule_from_fringe(H::FiniteFringe.FringeModule{K}) where {K}
     store = CoverEdgeMapStore{K,Matrix{K}}(preds, succs, maps_from_pred, maps_to_succ, cc.nedges)
     return PModule{K}(Q, dims, store; field=field)
 end
+
+include("indicator_resolutions/presentation_inspection.jl")
 
 # -------------------------- projective cover (Def. 6.4.1) --------------------------
 

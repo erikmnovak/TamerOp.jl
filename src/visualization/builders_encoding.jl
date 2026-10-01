@@ -127,7 +127,7 @@ function _query_geometry_readout(pi, points, box)
                inside_viewport=all(box[1][i] <= p[i] <= box[2][i] for i in 1:2)) for p in points]
 end
 
-function _text_layer_from_labels(points::AbstractVector{<:NTuple{2,<:Real}}, labels::AbstractVector{<:AbstractString}; color::Symbol=:black, textsize::Float64=10.0)
+function _text_layer_from_labels(points::AbstractVector{<:NTuple{2,<:Real}}, labels::AbstractVector{<:AbstractString}; color::Union{Symbol,_VisualRole}=_VisualRole(:foreground), textsize::Float64=10.0)
     return TextLayer(String[String(lbl) for lbl in labels],
                      NTuple{2,Float64}[(float(p[1]), float(p[2])) for p in points],
                      color,
@@ -150,18 +150,7 @@ function _rect_text_centers(rects::Vector{NTuple{4,Float64}})
     return NTuple{2,Float64}[_midpoint(rect) for rect in rects]
 end
 
-const _BOX_REGION_COLORS = (
-    :seagreen3,
-    :cornflowerblue,
-    :goldenrod2,
-    :orchid3,
-    :tomato2,
-    :slateblue3,
-    :darkkhaki,
-    :cadetblue3,
-)
-
-@inline _box_region_color(i::Int) = _BOX_REGION_COLORS[1 + mod(i - 1, length(_BOX_REGION_COLORS))]
+@inline _box_region_color(i::Int) = _VisualRole(:categorical, i)
 
 @inline function _segment_key(seg::NTuple{4,Float64})
     x1, y1, x2, y2 = seg
@@ -283,14 +272,16 @@ available_visuals(pi::PLEncodingMap) = pi.n == 2 ? (:regions, :region_labels, :q
 available_visuals(pi::ZnEncodingMap) = pi.n == 2 ? (:regions, :region_labels, :query_overlay) : ()
 
 function _visual_spec(pi::Union{GridEncodingMap{2},PLEncodingMapBoxes,PLEncodingMap,ZnEncodingMap},
-                      kind::Symbol; point=nothing, points=nothing, box=nothing, kwargs...)
+                      kind::Symbol; point=nothing, points=nothing, box=nothing,
+                      prepared_geometry=nothing, query_roles=nothing, kwargs...)
     kind in (:regions, :region_labels, :query_overlay) || throw(ArgumentError("unsupported encoding visualization kind $kind"))
-    geometry = _region_geometry_2d(pi; box)
+    geometry = prepared_geometry === nothing ? _region_geometry_2d(pi; box) : prepared_geometry
     exact_points = kind === :query_overlay ? _collect_query_points(; point, points) : Tuple{Real,Real}[]
     readout = _query_geometry_readout(pi, exact_points, geometry.box)
     pts = NTuple{2,Float64}[q.display_point for q in readout]
     point_labels = [string("q", i, " -> ", q.region_id, q.inside_viewport ? "" : " (outside view)") for (i,q) in enumerate(readout)]
     layers = _region_geometry_layers(geometry)
+    query_label_layer = nothing
     if kind === :region_labels
         # Every visible component gets its actual classifier label, including
         # disconnected pieces. No renumbering after viewport filtering.
@@ -300,8 +291,26 @@ function _visual_spec(pi::Union{GridEncodingMap{2},PLEncodingMapBoxes,PLEncoding
         push!(layers, _text_layer_from_labels(positions, labels))
     end
     if !isempty(pts)
-        push!(layers, PointLayer(pts, :orange3, 0.95, 14.0))
-        push!(layers, _text_layer_from_labels(pts, point_labels))
+        label_points = pts
+        if query_roles === nothing
+            push!(layers, PointLayer(pts, _VisualRole(:selected), 0.95, 14.0))
+        elseif query_roles == (:source, :target) && exact_points[1] == exact_points[2]
+            # Only identical mathematical queries share a glyph. Distinct exact
+            # points that round to the same pixel remain separate queries.
+            push!(layers, PointLayer([pts[1]], _VisualRole(:both), 0.95, 14.0))
+            point_labels = [replace(point_labels[1], r"^q1" => "q1 = q2") * _visual_role_label(:both)]
+            label_points = [pts[1]]
+        else
+            length(query_roles) == length(pts) || throw(ArgumentError("One role is required per displayed query."))
+            for (i, role) in enumerate(query_roles)
+                push!(layers, PointLayer([pts[i]], _VisualRole(role), 0.95, 14.0))
+                point_labels[i] *= _visual_role_label(role)
+            end
+        end
+        push!(layers, _text_layer_from_labels(label_points, point_labels))
+        # Renderers may offset this annotation in pixels without moving either
+        # its mathematical anchor or the exact query retained in metadata.
+        query_label_layer = length(layers)
     end
     query_collisions = _display_collisions(exact_points)
     warnings = String[]
@@ -319,11 +328,11 @@ function _visual_spec(pi::Union{GridEncodingMap{2},PLEncodingMapBoxes,PLEncoding
     ids = geometry.region_ids
     return VisualizationSpec(kind; title, subtitle, layers, axes=geometry.axes,
         metadata=(; object, nregions=count(!iszero, ids), ncells=length(geometry.components),
-                    query_count=length(pts), query_readout=readout, query_collisions, warnings,
+                    query_count=length(pts), query_readout=readout, query_label_layer, query_collisions, warnings,
                     geometry, region_ids=ids, box=geometry.box, figure_size=(860, 620), legend_position=:right,
                     outside_region_id=0, outside_meaning=:not_represented),
         legend=_default_legend(visible=true, entries=(; (Symbol(r == 0 ? "outside_0" : "R$r") =>
-            (r == 0 ? :gray90 : _box_region_color(r)) for r in ids)...)),
+            (r == 0 ? _VisualRole(:unrepresented) : _box_region_color(r)) for r in ids)...)),
         interaction=_default_interaction(labels=kind === :region_labels || !isempty(point_labels)))
 end
 

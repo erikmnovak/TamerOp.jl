@@ -36,7 +36,7 @@ const SIMPLE_API = (
     :slice_barcode, :slice_barcodes, :matching_distance, :matching_distance_exact_2d, :matching_distance_sampled_2d,
     :mp_landscape, :mpp_decomposition, :mpp_image,
     :mpp_decomposition_summary, :mpp_image_summary, :mp_landscape_summary,
-    :visualize, :save_visual, :save_visuals, :available_visuals,
+    :visualize, :save_visual, :save_visuals, :available_visuals, :inspection_session,
     :AbstractFeaturizerSpec,
     :PersistenceImageSpec, :LandscapeSpec, :MPLandscapeSpec, :EulerSurfaceSpec, :RankGridSpec,
     :RestrictedHilbertSpec,
@@ -60,7 +60,7 @@ const SIMPLE_API = (
     :save_encoding_json, :load_encoding_json,
     :inspect_json,
     :SessionCache,
-    :VisualExportResult,
+    :VisualExportResult, :VisualStyle,
     :export_path, :export_backend, :export_format, :export_kind, :export_stem,
     :EncodingResult, :EncodedComplexResult, :CohomologyDimsResult, :ModuleTranslationResult, :ResolutionResult, :InvariantResult, :unwrap,
     :result_summary, :provenance,
@@ -114,8 +114,8 @@ const SIMPLE_API_BINDINGS = (
         :mpp_decomposition_summary, :mpp_image_summary, :mp_landscape_summary,
     )),
     (:Visualization, (
-        :visualize, :save_visual, :save_visuals, :available_visuals,
-        :VisualExportResult,
+        :visualize, :save_visual, :save_visuals, :available_visuals, :inspection_session,
+        :VisualExportResult, :VisualStyle,
         :export_path, :export_backend, :export_format, :export_kind, :export_stem,
     )),
     (:DataIngestion, (
@@ -173,7 +173,7 @@ const SIMPLE_API_BINDINGS = (
 
 const _ADVANCED_ONLY_API_RAW = (
     :PersistenceValidationSummary, :check_persistence_diagram,
-    :persistence_validation_summary, :filtration_order,
+    :persistence_validation_summary, :filtration_order, :persistence_representative,
     :PModule, :PMorphism, :ModuleOptions,
     :EncodingOptions, :ResolutionOptions, :InvariantOptions, :DerivedFunctorOptions,
     :FinitePoset, :ProductOfChainsPoset, :GridPoset, :ProductPoset,
@@ -301,10 +301,13 @@ const _ADVANCED_ONLY_API_RAW = (
     :mpp_line_spec_summary, :mpp_decomposition_summary, :mpp_image_summary, :mp_landscape_summary,
     :check_mpp_line_spec, :check_mpp_decomposition, :check_mpp_image, :check_mp_landscape,
     :VisualizationSpec, :AbstractVisualizationLayer,
-    :VisualExportResult,
+    :VisualExportResult, :VisualStyle,
     :export_path, :export_backend, :export_format, :export_kind, :export_stem,
     :HeatmapLayer, :MatrixLayer, :RectLayer, :PolygonLayer, :SegmentLayer, :PolylineLayer, :PointLayer, :Point3Layer, :TextLayer, :Segment3Layer, :BarcodeLayer,
     :VisualizationValidationSummary,
+    :InspectionSession, :IntervalInspectionSession, :inspection_selection, :inspection_summary, :inspection_snapshot,
+    :select_inspection!, :reset_inspection!, :close_inspection!,
+    :check_inspection_session, :check_inspection_selection,
     :visual_spec, :render, :check_visual_spec, :check_visual_request, :visual_summary,
     :visual_kind, :visual_layers, :visual_panels, :visual_axes, :visual_metadata,
     :bottleneck_distance, :bottleneck_matching,
@@ -459,7 +462,7 @@ const ADVANCED_ONLY_API = Tuple(sym for sym in _ADVANCED_ONLY_API_RAW if !(sym i
 const ADVANCED_ONLY_API_BINDINGS = (
     (:OrdinaryPersistence, (
         :PersistenceValidationSummary, :check_persistence_diagram,
-        :persistence_validation_summary, :filtration_order,
+        :persistence_validation_summary, :filtration_order, :persistence_representative,
     )),
     (:Modules, (
         :PModule, :PMorphism, :ModuleOptions,
@@ -586,10 +589,13 @@ const ADVANCED_ONLY_API_BINDINGS = (
     )),
     (:Visualization, (
         :VisualizationSpec, :AbstractVisualizationLayer,
-        :VisualExportResult,
+        :VisualExportResult, :VisualStyle,
         :export_path, :export_backend, :export_format, :export_kind, :export_stem,
         :HeatmapLayer, :MatrixLayer, :RectLayer, :PolygonLayer, :SegmentLayer, :PolylineLayer, :PointLayer, :Point3Layer, :TextLayer, :Segment3Layer, :BarcodeLayer,
         :VisualizationValidationSummary,
+        :InspectionSession, :IntervalInspectionSession, :inspection_selection, :inspection_summary, :inspection_snapshot,
+        :select_inspection!, :reset_inspection!, :close_inspection!,
+        :check_inspection_session, :check_inspection_selection,
         :visual_spec, :render, :check_visual_spec, :check_visual_request, :visual_summary,
         :visual_kind, :visual_layers, :visual_panels, :visual_axes, :visual_metadata,
     )),

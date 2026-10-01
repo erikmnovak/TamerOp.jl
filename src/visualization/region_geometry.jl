@@ -206,13 +206,13 @@ function _region_geometry_layers(geometry; colors=nothing)
     layers = AbstractVisualizationLayer[]
     if geometry.has_unrepresented_area
         lo, hi = _drawing_point(geometry.box[1]), _drawing_point(geometry.box[2])
-        background = colors === nothing ? :gray90 : get(colors, 0, :gray90)
+        background = colors === nothing ? _VisualRole(:unrepresented) : get(colors, 0, _VisualRole(:unrepresented))
         push!(layers, RectLayer([(lo..., hi...)], background, background, 1.0, 0.0))
     end
     # Draw full-dimensional fills first so face-only regions stay visible.
     for c in geometry.components
         c.dimension == 2 || continue
-        color = colors === nothing ? (c.region_id == 0 ? :gray90 : _box_region_color(c.region_id)) : get(colors, c.region_id, :gray90)
+        color = colors === nothing ? (c.region_id == 0 ? _VisualRole(:unrepresented) : _box_region_color(c.region_id)) : get(colors, c.region_id, _VisualRole(:unrepresented))
         points = NTuple{2,Float64}[_drawing_point(p) for p in c.vertices]
         # A mathematically nonzero cell can collapse at drawing precision.
         # Its exact geometry and visible warning survive; do not ask a backend
@@ -239,7 +239,7 @@ function _region_geometry_layers(geometry; colors=nothing)
         end
     end
     for style in (:dot, :dash, :solid), c in geometry.components
-        color = colors === nothing ? (c.region_id == 0 ? :gray55 : _box_region_color(c.region_id)) : get(colors, c.region_id, :gray55)
+        color = colors === nothing ? (c.region_id == 0 ? _VisualRole(:unrepresented) : _box_region_color(c.region_id)) : get(colors, c.region_id, _VisualRole(:unrepresented))
         segs = NTuple{4,Float64}[]
         for i in eachindex(c.edge_included)
             edge_style = c.edge_clipped[i] ? :dot : c.edge_included[i] ? :solid : :dash
@@ -253,14 +253,14 @@ function _region_geometry_layers(geometry; colors=nothing)
     # Open markers go underneath included vertices, so a shared boundary never
     # paints over the point's actual owning region with a later open marker.
     for included in (false, true), c in geometry.components
-        color = colors === nothing ? (c.region_id == 0 ? :gray55 : _box_region_color(c.region_id)) : get(colors, c.region_id, :gray55)
+        color = colors === nothing ? (c.region_id == 0 ? _VisualRole(:unrepresented) : _box_region_color(c.region_id)) : get(colors, c.region_id, _VisualRole(:unrepresented))
         points = NTuple{2,Float64}[_drawing_point(p) for (p, yes) in zip(c.vertices, c.vertex_included) if yes == included]
         isempty(points) && continue
         if included
             push!(layers, PointLayer(points, color, 1.0, c.dimension == 0 ? 11.0 : 4.0))
         else
             push!(layers, PointLayer(points, color, 0.95, 6.0))
-            push!(layers, PointLayer(points, :white, 1.0, 3.0))
+            push!(layers, PointLayer(points, _VisualRole(:background), 1.0, 3.0))
         end
     end
     return layers

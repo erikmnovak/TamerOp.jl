@@ -23,7 +23,6 @@ module ExtTorSpaces
     import ...FieldLinAlg: _SparseRREF, SparseRow,
               _SparseRowAccumulator, _reset_sparse_row_accumulator!,
               _push_sparse_row_entry!, _materialize_sparse_row!,
-              _sparse_rref_push_homogeneous!,
               _nullspace_from_pivots
 
     using ...IndicatorTypes: UpsetPresentation, DownsetCopresentation
@@ -342,8 +341,9 @@ module ExtTorSpaces
     - This function used to assemble a dense constraint matrix A=zeros(K,neqs,nvars)
     and then call FieldLinAlg.nullspace(field, A). That is prohibitively expensive when nvars is
     large, even though each constraint row is very sparse.
-    - Exact fields stream each naturality equation into a sparse RREF reducer
-      without materializing A. Real fields assemble sparse constraints and use
+    - Exact fields stream naturality equations without materializing A. Rational
+      equations use primitive integer echelon rows and final back substitution;
+      finite fields use sparse RREF. Real fields assemble sparse constraints and use
       field-aware numerical nullspaces, retaining the supplied tolerances.
 
     Mathematical content
@@ -370,8 +370,8 @@ module ExtTorSpaces
         dM = M.dims
         dN = N.dims
 
-        # RREF basis of the row space of the constraint system, streamed row-by-row.
-        R = _SparseRREF{K}(nvars)
+        # Stream the constraint row space; retain the ordered free-variable basis.
+        R = K === QQ ? FieldLinAlg._SparseQQEchelon(nvars) : _SparseRREF{K}(nvars)
         row = SparseRow{K}()
         acc = _SparseRowAccumulator{K}(nvars)
         fullrank = false
@@ -427,7 +427,7 @@ module ExtTorSpaces
 
                     _materialize_sparse_row!(row, acc)
                     isempty(row.idx) && continue
-                    _sparse_rref_push_homogeneous!(R, row)
+                    FieldLinAlg._sparse_kernel_push!(R, row)
 
                     if length(R.pivot_cols) == nvars
                         fullrank = true
@@ -913,7 +913,7 @@ module ExtTorSpaces
         if length(coords) != size(Hrep, 2)
             error("representative: coordinate vector has length $(length(coords)), expected $(size(Hrep,2)).")
         end
-        v = Hrep * reshape(coords, :, 1)
+        v = FieldLinAlg._matmul(Hrep, coords)
         return vec(v)
     end
 
@@ -1053,7 +1053,7 @@ module ExtTorSpaces
         if length(coords) != size(Hrep, 2)
             error("representative: coordinate vector has length $(length(coords)), expected $(size(Hrep,2)).")
         end
-        v = Hrep * reshape(coords, :, 1)
+        v = FieldLinAlg._matmul(Hrep, coords)
         return vec(v)
     end
 
@@ -1152,7 +1152,7 @@ module ExtTorSpaces
             dst_rng = (Hdom.offsets[i] + 1):Hdom.offsets[i + 1]
             src_view = reshape(@view(Hcod.basis_matrix[src_rng, :]), src_dim, mi * ncols)
             dst_view = reshape(@view(rhs[dst_rng, :]), dst_dim, mi * ncols)
-            mul!(dst_view, g.comps[i], src_view)
+            FieldLinAlg._matmul!(dst_view, g.comps[i], src_view)
         end
         return FieldLinAlg.solve_fullcolumn(Hdom.dom.field, Hdom.basis_matrix, rhs)
     end
@@ -2331,7 +2331,7 @@ module ExtTorSpaces
         size(data.Hrep, 2) == length(c) || throw(DimensionMismatch(
             "representative(TorSpace): expected coords of length $(size(data.Hrep,2)), got $(length(c))"
         ))
-        return data.Hrep * c
+        return FieldLinAlg._matmul(data.Hrep, c)
     end
 
     """
@@ -2378,7 +2378,7 @@ module ExtTorSpaces
         size(data.Hrep, 2) == length(c) || throw(DimensionMismatch(
             "representative(TorSpaceSecond): expected coords of length $(size(data.Hrep,2)), got $(length(c))"
         ))
-        return data.Hrep * c
+        return FieldLinAlg._matmul(data.Hrep, c)
     end
 
     function coordinates(T::TorSpaceSecond{K}, s::Int, z::AbstractVector) where {K}

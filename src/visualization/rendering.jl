@@ -16,19 +16,22 @@ end
 @inline _visual_backend_available(backend::Symbol) = haskey(_VISUAL_RENDERERS, backend)
 @inline _visual_save_available(backend::Symbol) = haskey(_VISUAL_SAVERS, backend)
 
-function _visual_render_capabilities(spec::Union{Nothing,VisualizationSpec}=nothing)
-    widgets = spec === nothing ? () : get(spec.interaction, :widgets, ())
+function _visual_render_capabilities(spec::Union{Nothing,VisualizationSpec}=nothing; kind=nothing)
+    linked = kind === :linked_inspector || (spec !== nothing && spec.kind === :linked_inspector)
+    widgets = spec === nothing ? (linked ? (:inspection_selection, :inspection_view, :inspection_basis, :inspection_slice) : ()) :
+        get(spec.interaction, :widgets, ())
     return (; activated_backends=Tuple(sort!(collect(keys(_VISUAL_RENDERERS)))),
-            renderer_keywords=(:figure, :size),
+            renderer_keywords=(:figure, :size, :style),
             cairo=(mode=:static, widgets=false),
             wgl=(mode=:browser_scene, live_julia_widgets=widgets,
                  offline_widget_callbacks=false),
-            hover=false, selection=false)
+            hover=linked, selection=linked)
 end
 
 function _check_visual_render_options(; display::Symbol=:inline, figure=nothing,
-                                       size=nothing, kwargs...)
-    isempty(kwargs) || throw(ArgumentError("Unsupported renderer keywords $(Tuple(keys(kwargs))); supported controls are figure and size."))
+                                       size=nothing, style=VisualStyle(), kwargs...)
+    style isa VisualStyle || throw(ArgumentError("style must be a VisualStyle."))
+    isempty(kwargs) || throw(ArgumentError("Unsupported renderer keywords $(Tuple(keys(kwargs))); supported controls are figure, size and style."))
     display === :inline || throw(ArgumentError("display must be :inline; render returns the figure for the caller to display."))
     if size !== nothing
         size isa Tuple && length(size) == 2 &&
@@ -177,40 +180,55 @@ function visual_spec(spec::VisualizationSpec; kind::Symbol=:auto, cache=:auto, k
 end
 
 """
-    render(spec; backend=:auto, display=:inline, figure=nothing, size=nothing)
+    render(spec; backend=:auto, display=:inline, figure=nothing, size=nothing, style=VisualStyle())
 
 Render a specification with an activated backend and return its figure.
 `size=(width, height)` sets the new figure's pixel dimensions; `figure` draws
-into an existing backend figure. These controls cannot be combined. Recipe
+into an existing backend figure. These controls cannot be combined.
+An existing figure retains its identity and size, while `style` updates its
+background, outer padding and panel spacing along with the new content.
+`style=VisualStyle(...)` shares appearance across static and live views. Recipe
 keywords belong to `visual_spec`; arbitrary Makie keywords are not forwarded.
-Cairo produces static views. WGL supports browser scene navigation and the
-volume slider while Julia is running, without general picking or hover tools.
+Cairo produces static views. WGL supports live linked inspection sessions,
+including selection and hover readouts, and the volume slider while Julia runs.
+A linked inspector returns a browser application. Use
+`inspection_snapshot(session)` for its ordinary static figure specification.
 """
 function render(spec::VisualizationSpec; backend::Symbol=:auto, display::Symbol=:inline,
-                figure=nothing, size=nothing, kwargs...)
-    _check_visual_render_options(; display, figure, size, kwargs...)
+                figure=nothing, size=nothing, style=VisualStyle(), kwargs...)
+    _check_visual_render_options(; display, figure, size, style, kwargs...)
     report = check_visual_spec(spec; throw=true)
     _ = report
-    chosen = _resolve_visual_backend(backend; for_save=false, display=display)
-    return Base.invokelatest(_VISUAL_RENDERERS[chosen], spec; display, figure, size)
+    linked = spec.kind === :linked_inspector
+    linked && !(backend in (:auto, :wglmakie)) &&
+        throw(ArgumentError("A live linked inspector requires WGLMakie. Render inspection_snapshot(session) for a static figure."))
+    chosen = _resolve_visual_backend(linked && backend === :auto ? :wglmakie : backend;
+                                     for_save=false, display=display)
+    return Base.invokelatest(_VISUAL_RENDERERS[chosen], spec; display, figure, size, style)
 end
 
 function visualize(obj; kind::Symbol=:auto, backend::Symbol=:auto, display::Symbol=:inline,
-                   cache=:auto, figure=nothing, size=nothing, kwargs...)
-    _check_visual_render_options(; display, figure, size)
+                   cache=:auto, figure=nothing, size=nothing, style=VisualStyle(), kwargs...)
+    _check_visual_render_options(; display, figure, size, style)
     obj isa VisualizationSpec && begin
         _check_existing_visual_kind(obj, kind, cache)
         isempty(kwargs) || throw(ArgumentError("An existing VisualizationSpec does not accept recipe keywords $(Tuple(keys(kwargs)))."))
     end
     spec = obj isa VisualizationSpec ? obj : visual_spec(obj; kind=kind, cache=cache, kwargs...)
-    return render(spec; backend, display, figure, size)
+    return render(spec; backend, display, figure, size, style)
 end
 
 function _save_visual_internal(path::AbstractString, spec::VisualizationSpec;
-                               backend::Symbol=:auto, figure=nothing, size=nothing, kwargs...)
-    _check_visual_render_options(; figure, size, kwargs...)
-    check_visual_spec(spec; throw=true)
+                               backend::Symbol=:auto, figure=nothing, size=nothing, style=VisualStyle(), kwargs...)
+    _check_visual_render_options(; figure, size, style, kwargs...)
     format = _visual_export_format_from_path(path)
+    if spec.kind === :linked_inspector
+        format === :html && throw(ArgumentError("Live linked selection requires Julia and cannot be saved as working offline HTML. Save inspection_snapshot(session) for a static view."))
+        session = get(spec.metadata, :session, nothing)
+        session isa _AbstractInspectionSession || throw(ArgumentError("A linked inspector requires an inspection session."))
+        spec = inspection_snapshot(session)
+    end
+    check_visual_spec(spec; throw=true)
     if format === :html && (get(spec.interaction, :requires_live_julia, false) ||
                             get(spec.interaction, :notebook, nothing) === :widget_viewer)
         throw(ArgumentError("This view uses Julia-side widget callbacks and cannot be exported as a working offline HTML widget. Export kind=:image for the selected slice, or use visualize(...; backend=:wglmakie) in a live Julia session."))
@@ -224,8 +242,8 @@ function _save_visual_internal(path::AbstractString, spec::VisualizationSpec;
             throw(ArgumentError("WGLMakie figure export supports HTML; use CairoMakie for static files."))
         _resolve_visual_backend(backend === :auto ? :cairomakie : backend; for_save=true)
     end
-    saved_path = Base.invokelatest(_VISUAL_SAVERS[chosen], path, spec; figure, size)
-    return (; path=String(saved_path), backend=chosen, format=format)
+    saved_path = Base.invokelatest(_VISUAL_SAVERS[chosen], path, spec; figure, size, style)
+    return (; path=String(saved_path), backend=chosen, format=format, kind=visual_kind(spec))
 end
 
 """
@@ -255,9 +273,10 @@ function save_visual(path::AbstractString, spec::VisualizationSpec; kind::Symbol
 end
 
 function save_visual(path::AbstractString, obj; kind::Symbol=:auto, backend::Symbol=:auto,
-                     cache=:auto, figure=nothing, size=nothing, kwargs...)
+                     cache=:auto, figure=nothing, size=nothing, style=VisualStyle(), kwargs...)
+    _check_visual_render_options(; figure, size, style)
     spec = obj isa VisualizationSpec ? obj : visual_spec(obj; kind=kind, cache=cache, kwargs...)
-    return save_visual(path, spec; backend, figure, size)
+    return save_visual(path, spec; backend, figure, size, style)
 end
 
 function save_visual(outdir::AbstractString,
@@ -270,9 +289,10 @@ function save_visual(outdir::AbstractString,
                      backend::Symbol=:auto,
                      kwargs...)
     _check_existing_visual_kind(spec, kind, cache)
+    _check_visual_render_options(; kwargs...)
     target = _choose_visual_export_target(outdir, stem; prefer=prefer, format=format, backend=backend)
     saved = _save_visual_internal(target.path, spec; backend=target.backend, kwargs...)
-    return VisualExportResult(saved.path, saved.backend, saved.format, visual_kind(spec), target.stem)
+    return VisualExportResult(saved.path, saved.backend, saved.format, saved.kind, target.stem)
 end
 
 function save_visual(outdir::AbstractString,
@@ -285,9 +305,11 @@ function save_visual(outdir::AbstractString,
                      cache=:auto,
                      figure=nothing,
                      size=nothing,
+                     style=VisualStyle(),
                      kwargs...)
+    _check_visual_render_options(; figure, size, style)
     spec = obj isa VisualizationSpec ? obj : visual_spec(obj; kind=kind, cache=cache, kwargs...)
-    return save_visual(outdir, stem, spec; prefer, format, backend, figure, size)
+    return save_visual(outdir, stem, spec; prefer, format, backend, figure, size, style)
 end
 
 @inline _visual_request_missing(field::Symbol) = throw(ArgumentError("Each visualization export request must include `$(field)`."))
@@ -297,24 +319,25 @@ function _save_visual_request(outdir::AbstractString,
                               prefer::Symbol=:static,
                               format::Symbol=:auto,
                               backend::Symbol=:auto,
-                              cache=:auto)
+                              cache=:auto, style=VisualStyle())
     hasproperty(request, :stem) || _visual_request_missing(:stem)
     hasproperty(request, :obj) || _visual_request_missing(:obj)
     stem = getproperty(request, :stem)
     obj = getproperty(request, :obj)
     overrides = Base.structdiff(request, (; stem=nothing, obj=nothing))
-    opts = merge((; prefer=prefer, format=format, backend=backend, cache=cache), overrides)
+    opts = merge((; prefer=prefer, format=format, backend=backend, cache=cache, style=style), overrides)
     return save_visual(outdir, stem, obj; opts...)
 end
 
 """
     save_visuals(outdir, requests; prefer=:static, format=:auto,
-                 backend=:auto, cache=:auto)
+                 backend=:auto, cache=:auto, style=VisualStyle())
 
 Save a batch of visualization requests into `outdir`.
 
 Each request is a named tuple with at least `stem` and `obj`. Any additional
 keys are forwarded as keyword arguments to `save_visual(outdir, stem, obj; ...)`.
+A request-specific `style` overrides the batch style.
 This keeps notebook code focused on the mathematical objects being exported
 instead of manual backend/extension bookkeeping.
 """
@@ -323,9 +346,10 @@ function save_visuals(outdir::AbstractString,
                       prefer::Symbol=:static,
                       format::Symbol=:auto,
                       backend::Symbol=:auto,
-                      cache=:auto)
+                      cache=:auto, style=VisualStyle())
+    _check_visual_render_options(; style)
     return [
-        _save_visual_request(outdir, request; prefer=prefer, format=format, backend=backend, cache=cache)
+        _save_visual_request(outdir, request; prefer=prefer, format=format, backend=backend, cache=cache, style=style)
         for request in requests
     ]
 end

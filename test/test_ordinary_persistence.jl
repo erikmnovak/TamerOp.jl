@@ -2,6 +2,49 @@
 # tensor products of interval/circle chain complexes directly; it uses neither
 # DataIngestion geometry nor the production persistence reduction or field algebra.
 
+function _a41_check_retained_cycle(G, representative)
+    @test representative.available
+    @test representative.field == CM.F2()
+    @test representative.choice === :noncanonical_f2_column_reduction
+    @test representative.source_geometry === :not_asserted
+    dim = representative.dimension
+    chain = representative.cycle
+    counts = length.(G.cells_by_dim)
+    z = zeros(Int, counts[dim + 1])
+    z[collect(chain.cell_indices)] .= collect(chain.coefficients)
+    @test chain.dimension == dim
+    @test chain.cell_ids == Tuple(G.cells_by_dim[dim + 1][collect(chain.cell_indices)])
+    @test all(==(1), chain.coefficients)
+    dim == 0 || @test all(iseven, G.boundaries[dim] * z)
+    birth, death = representative.interval
+    order = representative.order
+    @test all(g -> order === :sublevel ? g <= birth : g >= birth, chain.cell_grades)
+    # Direct ranks in each source subcomplex independently certify that this
+    # same cycle is nonzero before death, and is a boundary from death onward.
+    for level in unique(first.(G.grades))
+        born = order === :sublevel ? birth <= level : birth >= level
+        born || continue
+        active_next = dim + 2 <= length(counts) ?
+            findall(g -> order === :sublevel ? g[1] <= level : g[1] >= level,
+                    G.grades[sum(counts[1:(dim + 1)]) .+ (1:counts[dim + 2])]) : Int[]
+        B = dim + 2 <= length(counts) ? Matrix(G.boundaries[dim + 1][:, active_next]) : zeros(Int, length(z), 0)
+        alive = order === :sublevel ? level < death : level > death
+        @test _a21_binary_rank(hcat(B, z)) - _a21_binary_rank(B) == Int(alive)
+    end
+    if representative.kind === :finite
+        filling = representative.bounding_chain
+        @test filling !== nothing
+        @test filling.dimension == dim + 1
+        c = zeros(Int, counts[dim + 2])
+        c[collect(filling.cell_indices)] .= collect(filling.coefficients)
+        @test mod.(G.boundaries[dim + 1] * c, 2) == z
+        @test all(g -> order === :sublevel ? g <= death : g >= death, filling.cell_grades)
+    else
+        @test representative.bounding_chain === nothing
+    end
+    return z
+end
+
 function _a21_binary_rref(A::AbstractMatrix)
     R = isodd.(Int.(A))
     pivots = Int[]
@@ -455,4 +498,117 @@ end
     @test TamerOp.result_summary(diagram) == OP.persistence_diagram_summary(diagram)
     @test TOA.check_persistence_diagram(diagram; throw=true).valid
     @test TOA.filtration_order(diagram) === :sublevel
+end
+
+@testset "A41 retained ordinary interval representatives" begin
+    d1 = sparse([-1 -1 0; 1 0 -1; 0 1 1])
+    d2 = sparse(reshape([1, -1, 1], 3, 1))
+    for order in (:sublevel, :superlevel)
+        grade = order === :sublevel ? identity : (x -> 3 - x)
+        G = DT.GradedComplex([[11, 12, 13], [21, 22, 23], [31]], [d1, d2],
+            [(grade(0),), (grade(0),), (grade(0),),
+             (grade(1),), (grade(1),), (grade(1),), (grade(2),)])
+        plain = OP.persistence_diagram(G; order)
+        retained = OP.persistence_diagram(G; order, representatives=true)
+        @test OP.check_persistence_diagram(retained).valid
+        @test OP.persistence_diagram_summary(retained).representatives_available
+        @test !OP.persistence_diagram_summary(plain).representatives_available
+        @test OP.provenance(retained).representatives === :retained_reduction_cycles
+        @test all(OP.persistence_intervals(plain; dim=d) == OP.persistence_intervals(retained; dim=d) for d in 0:2)
+        for dim in 0:2, kind in (:finite, :essential)
+            count = length(kind === :finite ? OP.finite_intervals(retained; dim) : OP.essential_births(retained; dim))
+            for index in 1:count
+                rep = OP.persistence_representative(retained; dim, kind, index)
+                _a41_check_retained_cycle(G, rep)
+                @test rep.birth_included && !rep.death_included
+                @test rep.index == index
+                absent = OP.persistence_representative(plain; dim, kind, index)
+                @test !absent.available && absent.reason === :not_retained
+                @test absent.cycle === absent.bounding_chain === nothing
+            end
+        end
+        loop = OP.persistence_representative(retained; dim=1)
+        @test loop.cycle.cell_indices == (1, 2, 3)
+        @test loop.cycle.cell_ids == (21, 22, 23)
+        @test loop.bounding_chain.cell_indices == (1,)
+        @test loop.bounding_chain.cell_ids == (31,)
+        # Equal H0 intervals must retain two distinguishable, independent
+        # members; matching an endpoint pair alone cannot choose their cycles.
+        a = OP.persistence_representative(retained; dim=0, index=1)
+        b = OP.persistence_representative(retained; dim=0, index=2)
+        @test a.interval == b.interval
+        @test a.cycle != b.cycle
+        Za = _a41_check_retained_cycle(G, a)
+        Zb = _a41_check_retained_cycle(G, b)
+        @test _a21_binary_rank(hcat(Za, Zb)) == 2
+
+        # Without the filling face, the nontrivial essential H1 representative
+        # requires accumulated change-of-basis columns, not the last edge alone.
+        unfilled = DT.GradedComplex([[11, 12, 13], [21, 22, 23]], [d1], G.grades[1:6])
+        ring = OP.persistence_diagram(unfilled; order, representatives=true)
+        essential = OP.persistence_representative(ring; dim=1, kind=:essential)
+        _a41_check_retained_cycle(unfilled, essential)
+        @test essential.cycle.cell_indices == (1, 2, 3)
+        @test essential.interval == (grade(1), order === :sublevel ? Inf : -Inf)
+    end
+    # Exact endpoint distinctions survive retention even when display floats
+    # cannot separate them. Even incidence coefficients vanish modulo two.
+    a = BigInt(1)//BigInt(1)
+    b = a + BigInt(1)//(BigInt(2)^70)
+    exact = DT.GradedComplex([[1], [2], [3]], [spzeros(Int, 1, 1), sparse(reshape([2], 1, 1))],
+        [(a,), (b,), (b + 1,)])
+    diagram = OP.persistence_diagram(exact; representatives=true)
+    for dim in 0:2
+        rep = OP.persistence_representative(diagram; dim, kind=:essential)
+        _a41_check_retained_cycle(exact, rep)
+        @test rep.cycle.cell_grades == (exact.grades[dim + 1][1],)
+    end
+end
+
+@testset "A41 ordinary representative contracts and ingestion" begin
+    G = DT.GradedComplex([[1, 2], [3]], [sparse(reshape([-1, 1], 2, 1))], [(0,), (0,), (1,)])
+    diagram = OP.persistence_diagram(G; representatives=true)
+    for dim in (-1, true), index in (0, 1)
+        @test_throws ArgumentError OP.persistence_representative(diagram; dim, index)
+    end
+    for index in (0, -1, true, 2)
+        @test_throws ArgumentError OP.persistence_representative(diagram; dim=0, index)
+    end
+    @test_throws ArgumentError OP.persistence_representative(diagram; dim=1)
+    @test_throws ArgumentError OP.persistence_representative(diagram; dim=0, kind=:cycle)
+    @test_throws ArgumentError OP.persistence_diagram(G; representatives=:yes)
+    @test_throws ArgumentError OP.cubical_persistence(zeros(2, 2); representatives=1)
+    handbuilt = OP.PersistenceDiagram([[(0, 1)]], [[0]];
+        meta=(representatives=:retained_reduction_cycles, backend=:f2_column_reduction))
+    @test !OP.persistence_representative(handbuilt; dim=0).available
+    @test OP.provenance(handbuilt).representatives === :not_retained
+    # Mutation must not silently select an unrelated retained cycle.
+    diagram.finite_by_dim[1][1] = (0, 2)
+    @test !OP.check_persistence_diagram(diagram).valid
+    @test_throws ArgumentError OP.persistence_representative(diagram; dim=0)
+
+    ring = zeros(Int, 3, 3)
+    ring[2, 2] = 5
+    for input in (:top_cells, :vertices), order in (:sublevel, :superlevel)
+        values = order === :sublevel ? ring : 5 .- ring
+        cube = OP.cubical_persistence(values; input, order, representatives=true)
+        @test OP.check_persistence_diagram(cube).valid
+        @test OP.persistence_diagram_summary(cube).representatives_available
+        for dim in 0:2, kind in (:finite, :essential)
+            members = kind === :finite ? OP.finite_intervals(cube; dim) : OP.essential_births(cube; dim)
+            for index in eachindex(members)
+                @test OP.persistence_representative(cube; dim, kind, index).available
+            end
+        end
+    end
+    image = DT.ImageNd(Float64.(ring))
+    typed = OP.persistence_diagram(image, TamerOp.DataIngestion.CubicalFiltration(); representatives=true)
+    @test OP.persistence_diagram_summary(typed).representatives_available
+    @test OP.check_persistence_diagram(typed).valid
+    rips = OP.persistence_diagram([0.0 2.0; 2.0 0.0],
+        TamerOp.DataIngestion.RipsFiltration(max_dim=1); representatives=true)
+    @test OP.persistence_representative(rips; dim=0).available
+    @test OP.persistence_representative(rips; dim=0, kind=:essential).available
+    @test OP.check_persistence_diagram(rips).valid
+    @test TOA.persistence_representative === OP.persistence_representative
 end

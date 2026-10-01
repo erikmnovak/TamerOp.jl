@@ -216,6 +216,12 @@ A fractional-millisecond loss may matter in a frequent batch; report the batch
 that makes it important. Faster arithmetic matters more than explaining a
 competitor's internals. Preserve our mathematical objects and intended outputs.
 
+Prioritize meaningful elapsed-time gains on larger inputs. A small absolute
+slowdown on a tiny fixture can be an acceptable tradeoff for substantial gains
+on larger requests. Report its absolute cost and relative change, and check
+any existing batch workload that could make the cost material. This guides
+optimization decisions; it does not change frozen suite weights or remove losses.
+
 There is no fixed limit on the number of TamerOp bottlenecks or optimization
 cycles. Address every diagnosed major bottleneck where a feasible improvement
 preserves correctness, required outputs and TamerOp's intended capabilities.
@@ -341,8 +347,9 @@ approximate distances, and broader algebra workflows add more conventions and
 validation work.
 
 QPA is ranked 12 for *remaining* effort: its existing harnesses and verified
-algebra save substantial work, but 80 adapters and the main confirmation campaign
-remain. It stays the active priority. multipers is ranked 21 because of the
+algebra save substantial work. All adapters are implemented and the bounded
+development pilot has run. Optimization assessment and the main confirmation
+campaign remain. QPA stays the active priority. multipers is ranked 21 because of the
 breadth of the planned filtration-to-invariant and feature workflows. Existing
 ingestion/invariant comparison scripts are a starting point; review their
 versions, output contracts and reset behavior before counting them as completed
@@ -359,16 +366,99 @@ than treating missing functionality as an indefinitely large benchmark task.
 
 ### QPA progress and remaining work
 
-As of 2026-09-30, QPA is the active, substantially developed comparison, but
-its final campaign is not complete. The fixed suite has adapters for **140 of
-220 tasks**: Q1–Q5 and Q8–Q10. All **96 Q1–Q5 cases** have passed mathematical
-verification in both tools. Six development QQ examples have also passed the
-timing protocol check; that check is not a 96-case performance campaign.
+As of 2026-09-30, **all 220 task adapters are implemented**. All 96 Q1–Q5
+cases and all 80 Q6–Q7 cases have passed mathematical verification in both
+tools. Q6–Q7 covers 20 pushouts, 20 pullbacks, 20 homology requests and 20
+mapping cones over QQ, F₂, F₃ and F₁₀₁. Its checks compare actual canonical
+maps, homology structure maps and signed cone differentials, with explicit
+isomorphisms between the two tools' outputs. Reserved inputs were checked
+without timing them. Sixteen development examples also passed two timing
+protocol checks: 192 measured rows across the three phases, with zero
+compilation in every accepted Julia sample. These are protocol checks, not
+the full-suite performance campaign.
 
-The remaining **80 Q6–Q7 cases** cover pushouts, pullbacks, homology and mapping
-cones. Implement and verify these, complete the bounded development pilot,
-address diagnosed major feasible TamerOp bottlenecks, then freeze the candidate
-for confirmation and reserved evaluation. Existing historical timing evidence
+The bounded development pilot has now run on 52 cases: one for each of the
+thirteen requests over four fields, selected by input size. It produced 100
+verified native answers and 48 matched mathematical outputs. There are 46
+comparisons with matching construction-plus-query timing passes; 38 have two
+passes and eight have one. All 551 accepted timing rows passed reset checks,
+and every accepted Julia row recorded zero compilation and recompilation.
+The 90-minute cap left the second rational pass incomplete. Four QPA tensor
+errors and two requests without matching timing passes remain explicit gaps.
+No reserved cases were timed.
+
+These are development diagnostics on a shared machine. The installed GAP timer
+uses a nonmonotonic wall clock; a supported monotonic timing route or stock
+runtime build must be verified before confirmation, without changing QPA.
+Final verification was separately bounded and recorded after the timing cap.
+
+Development profiling covers seventeen existing cases and all thirteen request
+types. Its first three improvements are now implemented: shared exact products
+for rational representatives, request-local reuse of Yoneda lifts, and shared
+products in composition, induced maps and validation. `ExtAlgebra` uses the same
+public table request. Focused correctness checks cover exact/numerical fields,
+signs, target-resolution transport, structured storage and invalid inputs.
+
+A before/after development study independently verified all nineteen selected
+answers and 228 main timing rows. The rational cube Yoneda table improves by
+23.8–27.3× and the rational grid table by 2.83–4.20×. Dense first use and several
+small requests regress; the kernel-only follow-up does not explain those losses.
+The final baseline hit its time cap during the last dense repetitions: all main
+cases have two complete passes, and four dense homology cells have only one
+complete paired pass. Keep those limitations and regressions explicit.
+
+A subsequent timing-only follow-up uses symmetric workers and records 380
+accepted samples, with exact answers, verified resets and zero compilation.
+The rational cube gain remains 22.9–24.4×; the complete grid Hom/Ext request is
+1.11–1.16× faster. The small F3 product adds 0.18–0.65 ms, an accepted tradeoff
+for this small request under the stated priority for larger workloads.
+
+Two size-16 dense cells remain slower in the standalone runs. Separate stage
+profiles and interleaved rollback checks do not consistently attribute those
+losses to the new multiplication. A final CPU-time diagnostic puts the scalar
+cost near parity to 6.6% higher, while batch8 is at parity or better. This does
+not erase the standalone losses or establish their hardware/runtime cause.
+The bounded regression investigation retains the implementation without a
+speculative gate; the recorded uncertainty remains for fixed-suite confirmation.
+The next implementation replaces rational Hom's repeated sparse RREF updates
+with integer echelon rows and back substitution, and reuses native prime-field
+coordinate factors on the owning result. Two further process pairs verified
+520 warm-uncached samples and ten independently checked, identical answers.
+The large-coefficient rational Hom request improves by 1.39–2.08× with 64% fewer
+allocated bytes; F101 Yoneda tables improve by 1.72–2.90× with 40% fewer allocated
+bytes. The full F101 tensor request ranges from near parity to 1.62× faster.
+
+Focused verification passed 7,863 maintained-runner assertions, including
+strict products and checked prime coordinates. Another 240 diagnostic rows
+separate prime first use, retained queries and result-owned storage.
+
+Those gains do not erase the controls: a size-16 rational cohomology scalar
+request adds 2.23–2.27 ms in both pairs, and several other results are mixed.
+Keep the dense loss as an unresolved observation, without assuming its cause
+or adding an unmeasured threshold. These are TamerOp before/after results on a
+shared host. M3 remains open, and no new QPA comparison is claimed.
+
+A subsequent reprofile revisits the original seventeen development cases across
+all thirteen request variants. Two timing processes and two separate sampling
+processes completed within a forty-minute worker budget. All 570 timing samples
+passed reset and zero-compilation checks; all seventeen workflow answers passed
+independent mathematical verification. The existing dense and prime-coordinate
+controls remain included, with no reserved timings or suite expansion.
+
+The strongest remaining leads are rational factorization, checked F2 coordinate
+application and temporary arrays in exact particular solves. Dense rational
+scalar setup takes 18.79–21.64 ms; full RREF used for pivot-only selection is a
+concrete target. Most smaller-request profiles have few snapshots, so these
+are optimization candidates rather than measured removable costs. Retained
+32-column F101 queries cost 0.19–0.33 ms on the size-16 controls; that alone does
+not justify reversing useful factor reuse. Shared-host variation, empty profiles
+and earlier losses remain explicit. No new production change or QPA ranking is
+claimed, and M3 remains open.
+
+The final performance campaign remains open. Implement and reassess diagnosed
+major feasible TamerOp improvements within the fixed suite, then freeze the
+candidate for confirmation and reserved evaluation. Neither adapter
+qualification nor this pilot establishes a full-suite speed result. Existing historical timing evidence
 continues to count within its original scope. Known QPA tensor-evaluation
 failures remain recorded outcomes, not infinite speedups or deleted cases.
 The existing QPA allocation, size bounds, budgets and scoring remain unchanged.

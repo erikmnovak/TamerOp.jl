@@ -103,8 +103,13 @@ function _hasse_arrow!(segments::Vector{NTuple{4,Float64}},
     return nothing
 end
 
+function _prepare_hasse(P::AbstractPoset)
+    edges = sort!(Tuple{Int,Int}[(u, v) for (u, v) in FiniteFringe.cover_edges(P)])
+    return (; edges, layout=_hasse_positions(nvertices(P), edges))
+end
+
 function _hasse_spec(P::AbstractPoset; dims=nothing, vertex=nothing, pair=nothing,
-                     field_label=nothing)
+                     field_label=nothing, prepared=nothing)
     n = nvertices(P)
     vertex === nothing || (vertex isa Integer && !(vertex isa Bool) && 1 <= vertex <= n) ||
         throw(ArgumentError("vertex must be a poset vertex identifier in 1:$n"))
@@ -116,8 +121,8 @@ function _hasse_spec(P::AbstractPoset; dims=nothing, vertex=nothing, pair=nothin
     selected_vertex = vertex === nothing ? nothing : Int(vertex)
     selected_pair = pair === nothing ? nothing : (Int(pair[1]), Int(pair[2]))
     dimensions = dims === nothing ? nothing : Int[d for d in dims]
-    edges = sort!(Tuple{Int,Int}[(u, v) for (u, v) in FiniteFringe.cover_edges(P)])
-    layout = _hasse_positions(n, edges)
+    prepared = prepared === nothing ? _prepare_hasse(P) : prepared
+    edges, layout = prepared.edges, prepared.layout
     positions = layout.positions
     relation = if selected_pair === nothing
         :none
@@ -133,10 +138,10 @@ function _hasse_spec(P::AbstractPoset; dims=nothing, vertex=nothing, pair=nothin
         _hasse_arrow!(segments, heads, positions[u], positions[v])
     end
     layers = AbstractVisualizationLayer[
-        SegmentLayer(segments, :gray45, 1.0, 1.4),
-        PolygonLayer(heads, :gray45, :gray45, 1.0, 0.0),
+        SegmentLayer(segments, _VisualRole(:edge), 1.0, 1.4),
+        PolygonLayer(heads, _VisualRole(:edge), _VisualRole(:edge), 1.0, 0.0),
     ]
-    legend_entries = [(; label="cover relation (upward)", color=:gray45, style=:line)]
+    legend_entries = [(; label="cover relation (upward)", color=_VisualRole(:edge), style=:line, linestyle=:solid)]
     if relation in (:cover, :comparable)
         u, v = selected_pair
         selected_segments = NTuple{4,Float64}[]
@@ -154,25 +159,27 @@ function _hasse_spec(P::AbstractPoset; dims=nothing, vertex=nothing, pair=nothin
             push!(selected_segments, (start[1], start[2], bend[1], bend[2]))
             _hasse_arrow!(selected_segments, selected_heads, bend, target; start_gap=0.0)
         end
-        push!(layers, SegmentLayer(selected_segments, :navy, 1.0, 2.6,
+        push!(layers, SegmentLayer(selected_segments, _VisualRole(:selected), 1.0, 2.6,
                                    relation === :cover ? :solid : :dash))
-        push!(layers, PolygonLayer(selected_heads, :navy, :navy, 1.0, 0.0))
+        push!(layers, PolygonLayer(selected_heads, _VisualRole(:selected), _VisualRole(:selected), 1.0, 0.0))
         push!(legend_entries, (; label=relation === :cover ? "selected cover" :
-            "selected comparable pair (not a cover)", color=:navy, style=:line))
+            "selected comparable pair (not a cover)", color=_VisualRole(:selected), style=:line,
+            linestyle=relation === :cover ? :solid : :dash))
     end
     selected_vertex === nothing || push!(layers,
-        PointLayer([positions[selected_vertex]], :black, 1.0, 29.0))
+        PointLayer([positions[selected_vertex]], _VisualRole(:selected), 1.0, 29.0))
     if selected_pair !== nothing
         u, v = selected_pair
-        push!(layers, PointLayer([positions[u]], :navy, 1.0, 27.0))
-        u == v || push!(layers, PointLayer([positions[v]], :firebrick3, 1.0, 27.0))
+        push!(layers, PointLayer([positions[u]], _VisualRole(u == v ? :both : :source), 1.0, 27.0))
+        u == v || push!(layers, PointLayer([positions[v]], _VisualRole(:target), 1.0, 27.0))
     end
     labels = String[]
     label_positions = NTuple{2,Float64}[]
     for v in 1:n
-        push!(layers, PointLayer([positions[v]], _box_region_color(v), 1.0, 17.0))
+        push!(layers, PointLayer([positions[v]], _VisualRole(:categorical, v), 1.0, 17.0))
         label = string(v)
         dimensions === nothing || (label *= "\ndim = $(dimensions[v])")
+        v == selected_vertex && (label *= "\nselected")
         if selected_pair !== nothing
             u, w = selected_pair
             v == u && (label *= u == w ? "\nsource = target" : "\nsource")
@@ -182,8 +189,8 @@ function _hasse_spec(P::AbstractPoset; dims=nothing, vertex=nothing, pair=nothin
         # Leave room for upward arrows beside multiline dimension/role labels.
         push!(label_positions, (positions[v][1] + 0.5, positions[v][2] + 0.07))
     end
-    push!(layers, TextLayer(labels, label_positions, :black, 12.0))
-    n == 0 && push!(layers, TextLayer(["empty poset"], [(0.0, 0.0)], :gray40, 14.0))
+    push!(layers, TextLayer(labels, label_positions, _VisualRole(:foreground), 12.0))
+    n == 0 && push!(layers, TextLayer(["empty poset"], [(0.0, 0.0)], _VisualRole(:muted), 14.0))
 
     subtitle = "Schematic order layout; not ambient coordinates"
     field_label === nothing || (subtitle *= "\nField: $(field_label)")
@@ -195,7 +202,7 @@ function _hasse_spec(P::AbstractPoset; dims=nothing, vertex=nothing, pair=nothin
     return VisualizationSpec(:hasse;
         title=dimensions === nothing ? "Finite poset" : "Finite poset and stalk dimensions",
         subtitle, layers,
-        axes=_default_axes_2d(; xlabel="", ylabel="", xlimits, ylimits,
+        axes=_default_axes_2d(; xlabel="", ylabel="", xlimits, ylimits, aspect=:auto,
                               xticks=(Float64[], String[]), yticks=(Float64[], String[])),
         legend=_default_legend(; visible=!isempty(edges) || relation in (:cover, :comparable),
                                 entries=legend_entries),

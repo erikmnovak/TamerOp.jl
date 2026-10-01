@@ -12,6 +12,9 @@ function visual_summary end
 
 abstract type AbstractVisualizationLayer end
 
+# Shared lifecycle contract for encoding and interval-only inspectors.
+abstract type _AbstractInspectionSession end
+
 """
     HeatmapLayer(x, y, values, colormap, alpha, colorbar_label[, show_colorbar])
 
@@ -40,8 +43,8 @@ HeatmapLayer(x::Vector{Float64},
 
 struct RectLayer <: AbstractVisualizationLayer
     rects::Vector{NTuple{4,Float64}}
-    fill_color::Symbol
-    stroke_color::Symbol
+    fill_color::Union{Symbol,_VisualRole}
+    stroke_color::Union{Symbol,_VisualRole}
     alpha::Float64
     linewidth::Float64
 end
@@ -57,27 +60,27 @@ edges, with `linewidth=0` here.
 """
 struct PolygonLayer <: AbstractVisualizationLayer
     polygons::Vector{Vector{NTuple{2,Float64}}}
-    fill_color::Symbol
-    stroke_color::Symbol
+    fill_color::Union{Symbol,_VisualRole}
+    stroke_color::Union{Symbol,_VisualRole}
     alpha::Float64
     linewidth::Float64
 end
 
 struct SegmentLayer <: AbstractVisualizationLayer
     segments::Vector{NTuple{4,Float64}}
-    color::Symbol
+    color::Union{Symbol,_VisualRole}
     alpha::Float64
     linewidth::Float64
     linestyle::Symbol
 end
 
-SegmentLayer(segments::Vector{NTuple{4,Float64}}, color::Symbol,
+SegmentLayer(segments::Vector{NTuple{4,Float64}}, color::Union{Symbol,_VisualRole},
              alpha::Float64, linewidth::Float64) =
     SegmentLayer(segments, color, alpha, linewidth, :solid)
 
 struct PolylineLayer <: AbstractVisualizationLayer
     paths::Vector{Vector{NTuple{2,Float64}}}
-    color::Symbol
+    color::Union{Symbol,_VisualRole}
     alpha::Float64
     linewidth::Float64
     closed::Bool
@@ -85,7 +88,7 @@ end
 
 struct PointLayer <: AbstractVisualizationLayer
     points::Vector{NTuple{2,Float64}}
-    color::Union{Symbol,Vector{Float64}}
+    color::Union{Symbol,_VisualRole,Vector{Float64}}
     alpha::Float64
     markersize::Float64
     colormap::Symbol
@@ -93,7 +96,7 @@ struct PointLayer <: AbstractVisualizationLayer
 end
 
 PointLayer(points::Vector{NTuple{2,Float64}},
-           color::Symbol,
+           color::Union{Symbol,_VisualRole},
            alpha::Float64,
            markersize::Float64) =
     PointLayer(points, color, alpha, markersize, :viridis, :pixel)
@@ -105,7 +108,7 @@ PointLayer(points::Vector{NTuple{2,Float64}},
     PointLayer(points, color, alpha, markersize, :viridis, :pixel)
 
 PointLayer(points::Vector{NTuple{2,Float64}},
-           color::Symbol,
+           color::Union{Symbol,_VisualRole},
            alpha::Float64,
            markersize::Float64,
            colormap::Symbol) =
@@ -120,14 +123,14 @@ PointLayer(points::Vector{NTuple{2,Float64}},
 
 struct Point3Layer <: AbstractVisualizationLayer
     points::Vector{NTuple{3,Float64}}
-    color::Union{Symbol,Vector{Float64}}
+    color::Union{Symbol,_VisualRole,Vector{Float64}}
     alpha::Float64
     markersize::Float64
     colormap::Symbol
 end
 
 Point3Layer(points::Vector{NTuple{3,Float64}},
-            color::Symbol,
+            color::Union{Symbol,_VisualRole},
             alpha::Float64,
             markersize::Float64) =
     Point3Layer(points, color, alpha, markersize, :viridis)
@@ -141,7 +144,7 @@ Point3Layer(points::Vector{NTuple{3,Float64}},
 struct TextLayer <: AbstractVisualizationLayer
     labels::Vector{String}
     positions::Vector{NTuple{2,Float64}}
-    color::Symbol
+    color::Union{Symbol,_VisualRole}
     textsize::Float64
 end
 
@@ -172,7 +175,7 @@ end
 
 struct Segment3Layer <: AbstractVisualizationLayer
     segments::Vector{NTuple{6,Float64}}
-    color::Symbol
+    color::Union{Symbol,_VisualRole}
     alpha::Float64
     linewidth::Float64
 end
@@ -180,7 +183,7 @@ end
 struct BarcodeLayer <: AbstractVisualizationLayer
     intervals::Vector{NTuple{2,Float64}}
     multiplicities::Vector{Int}
-    color::Symbol
+    color::Union{Symbol,_VisualRole}
     linewidth::Float64
     ystart::Float64
     ystep::Float64

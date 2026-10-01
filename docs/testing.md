@@ -62,6 +62,163 @@ separate integration check. Ordinary persistence has an independent
 cubical chain and homology-map oracle. These checks do not replace the full
 release matrix.
 
+The `A35` visualization testsets check shared styles against the two-square
+example: the two rank-one maps still compose to zero, exact matrix entries
+remain unchanged, and equal endpoints remain distinct from different parameters
+that round to the same drawing coordinates. Native renderer checks cover fonts,
+marker shapes and sizes, grayscale, missing heatmap cells, SVG/batch exports
+and live-control serialization. Supplied figures must retain their identity and
+size while adopting the style; text offsets must leave exact query coordinates
+and coefficients unchanged. Default text-role contrast is checked separately
+from custom palette choices. Run them with both rendering extensions available:
+
+```sh
+julia --project=. test/runtests.jl --file=test_visualization.jl --prefix=A35 --require-extension=TamerOpCairoMakieExt --require-extension=TamerOpWGLMakieExt
+```
+
+Inspect representative exported figures for clipping and readable labels.
+Recheck the live inspector in a browser at narrow widths and larger text sizes;
+native serialization assertions do not certify CSS layout or keyboard focus.
+
+The `A40 A41` visualization testsets check linked finite-window slices using
+independent intersections of lines with closed squares. They retain closed
+deaths, tangent singleton intervals, multiplicities and censored window ends;
+dimension and map-rank checks connect the intervals to the encoded module.
+Session tests check rollback, bounded reuse, independent stalk/map selection
+and interval IDs shared by the barcode and diagram. Native controls and
+serialization remain separate from manual browser acceptance:
+
+```sh
+julia --project=. test/runtests.jl --file=test_visualization.jl --prefix="A40 A41" --require-extension=TamerOpCairoMakieExt --require-extension=TamerOpWGLMakieExt
+```
+
+In the browser, move both draft sliders and verify that results change only
+after **Apply slice**. Select intervals from each chart and from the dropdown;
+the same group must highlight in both charts and the parameter plane. Check
+singleton and empty slices, invalid input recovery, linked tabs and closure.
+Read exact endpoints when drawing coordinates coincide. The author reports
+that the separate A40/A41 finite-window live-browser checklist passed on
+30 September 2026. That acceptance covers the earlier controls, not the new
+whole-line scope, interval-family inspector or representative selection below.
+
+### A41 interval semantics and retained representatives
+
+The additional A41 files separate mathematical interval behavior from browser
+controls. They cover complete-line restrictions with certified tails, shared
+barcode/diagram adapters, selection under display budgets, and original interval
+members. The ordinary persistence owner checks retained cycles directly against
+source boundary matrices: cycles have zero boundary, finite bounding chains have
+the selected cycle as their boundary, and the class is nonzero exactly during
+the reported lifetime. These checks include duplicates, both parameter orders,
+exact grades and unavailable representatives.
+
+Native plot checks also measure diagram-label bounds and separation in Cairo
+and WGL at two text sizes, before and after resizing. They verify that annotations
+retain the same interval anchors and exact records.
+
+Run the mathematical and session checks first, then the native live controls
+in an environment containing WGLMakie:
+
+```sh
+julia --project=. test/runtests.jl \
+  --file=test_ordinary_persistence.jl \
+  --file=test_visualization_a41_intervals.jl \
+  --file=test_visualization_a41_slices.jl \
+  --file=test_visualization_a41_sessions.jl --prefix=A41
+
+julia --project=. test/runtests.jl \
+  --file=test_visualization_a41_live.jl --prefix=A41 \
+  --require-extension=TamerOpWGLMakieExt
+```
+
+The live checks dispatch actual native mouse events and serialize Bonito controls;
+they do not execute a browser's JavaScript or certify its layout. As of
+1 October 2026, all 1,173 dedicated A41 assertions pass. The focused runs cover
+12,086 distinct passing assertions, including affected ordinary-persistence and
+visualization regressions, API guards and runner contracts. The final renderer
+run passes 806 checks, including 344 label-bound, separation and resize checks
+in Cairo and WGL. Eight static examples were exported in PNG, SVG and PDF;
+the PNG figures passed visual review. These are focused checks, not a full
+package-suite run. Manual browser acceptance of the new controls remains open;
+earlier finite-window acceptance does not close this check.
+
+For a manual check, display a fresh `visualize(session; backend=:wglmakie)` widget
+in the live frontend or local Bonito server being tested. Keep Julia running;
+static exported HTML is not a substitute for testing these callbacks. Each
+independent browser page must create its own widget, sharing the same session
+when testing linked views. Start with two equal essential intervals:
+
+```julia
+import TamerOp as OP
+import TamerOp.Advanced as OA
+using WGLMakie
+
+torus = OP.cubical_persistence(fill(2//3, 1, 1);
+    periodic=true, representatives=true)
+session = OP.inspection_session(torus; dim=1)
+viewer = OP.visualize(session; backend=:wglmakie)
+display(viewer)
+```
+
+Check the following sequence:
+
+1. Select the interval group in either chart and in **Selected interval group**.
+   Both charts should highlight the same group, with birth `2/3`, essential death
+   `+Inf`, and multiplicity two. The infinity lane is a display position, not a
+   finite death value.
+2. Request **Show retained representative** before choosing a member. The error
+   should explain the missing member, leave the mathematical selection unchanged,
+   and return the checkbox to its previous state. Enter `1`, press **Select
+   member**, then request the representative. Repeat with member `2`; the two
+   cycles have different cell indices. Selecting a new member clears the previous
+   representative request. Invalid text and member `3` should recover without
+   replacing the last valid state.
+3. Recompute the same torus without `representatives=true` and open a new session.
+   Selecting a member and requesting its cycle should explain that it was not
+   retained. It must not invent a cycle from the interval endpoints.
+4. Repeat with `order=:superlevel`. The essential lane and exact interval must
+   point toward `-Inf`. For a finite representative, use the square ring from
+   [ordinary persistence](ordinary_persistence.md#which-cells-represent-an-interval)
+   in degree one: its `[0,5)` class has a cycle and a bounding chain at five.
+
+Next open an interval-only fixture to separate clipping from infinity:
+
+```julia
+clipped = OP.inspection_session([(0,2), (0,3), (10,11)];
+    window=(0,1), max_intervals=2)
+display(OP.visualize(clipped; backend=:wglmakie))
+```
+
+The first two diagram points coincide at drawing coordinates `(0,1)`. Their exact
+deaths remain two and three, with finite continuation marks. Repeated clicks
+should cycle between the two groups, and the selector should distinguish them.
+Select the third group: its exact `[10,11)` readout should remain available while
+no bar or point is highlighted in the window. All three IDs remain selectable.
+With `max_intervals=1`, selecting the other visible group should bring it into
+the single displayed slot without changing the total count. Requesting a
+representative of a raw interval must explain the absent source correspondence.
+
+Finally, check **Slice scope** in the linked encoding inspector. For the existing
+two-square example and diagonal line, use the narrow viewing box
+`([3//2,3//2], [7//4,7//4])`. **Whole line (certified endpoints)** should retain
+`[0,2]` and `[1,3]`, with finite endpoints outside the drawing window. **Viewing-window
+restriction** should instead show one multiplicity-two interval from `3/2` to
+`7/4`, censored at both ends. Changing the scope must clear the old interval
+selection and preserve the independent stalk/map selection. A whole-line request
+on an incompletely represented domain must report that limitation and preserve
+the previous valid state.
+
+For every fixture, test keyboard access, narrow widths, 150--200% zoom, readable
+exact labels and error recovery. Diagram labels should remain inside the panel;
+their connector lines should end at the unchanged interval points. Check both
+superlevel points near the right edge and nearby points in the infinity lanes.
+Two fresh widgets for one session should share
+selections while retaining independent browser clients. Closing one client must
+leave its sibling usable; **Close inspector** closes the shared session. Hover
+must not request a representative or change the selection. Compare an exported
+static snapshot with the selected browser state, and record the browser/frontend
+and source revision alongside the result.
+
 ## Public onboarding checks and local tutorials
 
 The published package does not contain the local `examples/`, `audit/`, or

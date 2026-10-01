@@ -351,11 +351,22 @@ arbitrary stored module, and they do not identify input cycles. Inspection
 does not invent a presentation when none is retained. It also works from
 finite labels without a geometric parameter picture.
 
-> **Coming interaction: follow a chosen vector.** The static support,
-> active-block, basis, and induced-map views are available. Moving a point
-> to update every panel, selecting a vector to follow through its images,
-> and a linked three-point composition view remain planned. The notebook
-> already verifies the three-point composition through explicit queries.
+The notebook also connects these panels through a live inspection session.
+Selecting a point or pair updates the finite-poset, support, and matrix views;
+changing between module and presentation views preserves the query. Exact
+coordinate entry resolves boundaries that a pointer cannot distinguish.
+These controls require WGLMakie and a running Julia process; the selected
+state can be saved as a static figure. All 23 notebook code cells pass under
+headless display capture, and the static figures have passed visual review.
+Native inspector checks pass across five coefficient fields; the
+[visualization guide](visualization.md#explore-the-same-encoding-in-a-live-session)
+records the still-unverified browser clicks, keyboard events and JavaScript
+display transport.
+
+> **Coming interaction: follow a chosen vector.** Selecting a vector to
+> follow through its images and a linked three-point composition view remain
+> planned. The notebook already verifies the three-point composition through
+> explicit queries.
 
 ## How the presentation leads to a finite encoding
 

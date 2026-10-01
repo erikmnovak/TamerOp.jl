@@ -191,14 +191,16 @@ function _inspection_readout(obj, dims, selection, label_relation, matrix_limit)
     panel = VisualizationSpec(:structure_matrix; title="Map $u -> $v", subtitle,
         layers=AbstractVisualizationLayer[MatrixLayer(entries,
             ["e$i @ $v" for i in rows], ["e$j @ $u" for j in cols])],
-        metadata=merge(info, (; panel_style=:matrix)))
+        metadata=merge(info, (; panel_style=:matrix,
+            row_roles=fill(:target, length(rows)), column_roles=fill(:source, length(cols)))))
     return panel, info
 end
 
-function _inspection_region_panel(enc, selection; box=nothing)
+function _inspection_region_panel(enc, selection; box=nothing, prepared=nothing)
     pi = _inspection_classifier(encoding_map(enc))
-    region = isempty(selection.query_points) ? _visual_spec(pi, :region_labels; box) :
-        _visual_spec(pi, :query_overlay; points=selection.query_points, box)
+    query_roles = length(selection.query_points) == 2 ? (:source, :target) : (:selected,)
+    region = isempty(selection.query_points) ? _visual_spec(pi, :region_labels; box, prepared_geometry=prepared) :
+        _visual_spec(pi, :query_overlay; points=selection.query_points, box, prepared_geometry=prepared, query_roles)
     subtitle = "Solid/dashed: included/excluded; dotted: window cut\nColors and IDs match the finite-poset panel"
     pi isa ZnEncodingMap && (subtitle *= "\nInteger fibers: nearest-lattice tiles; ties round-to-even")
     isempty(region.metadata.warnings) || (subtitle *= "\nDrawing precision warning: inspect exact query/geometry metadata.")
@@ -209,23 +211,27 @@ end
 
 function _module_visual_spec(obj, kind::Symbol; vertex=nothing, pair=nothing,
                              point=nothing, parameter_pair=nothing, box=nothing,
-                             matrix_limit=(12, 12))
+                             matrix_limit=(12, 12), prepared=nothing, selection=nothing,
+                             inspection_data=nothing, graph=nothing, materialized_before=nothing)
     P = _inspection_poset(obj)
-    selection = _inspection_selection(obj; vertex, pair, point, parameter_pair)
-    dims = _inspection_dimensions(obj)
+    selection = selection === nothing ? _inspection_selection(obj; vertex, pair, point, parameter_pair) : selection
+    dims = prepared === nothing ? _inspection_dimensions(obj) : prepared.dims
     length(dims) == nvertices(P) || throw(ArgumentError("Module dimensions do not match its poset."))
     field = _inspection_field(obj)
     graph_pair = selection.pair === nothing || any(iszero, selection.pair) ? nothing : selection.pair
     graph_vertex = selection.vertex === 0 ? nothing : selection.vertex
-    graph = _hasse_spec(P; dims, vertex=graph_vertex, pair=graph_pair,
-                       field_label=_inspection_field_label(field))
+    graph = graph === nothing ? _hasse_spec(P; dims, vertex=graph_vertex, pair=graph_pair,
+        field_label=_inspection_field_label(field), prepared=prepared === nothing ? nothing : prepared.hasse) : graph
     kind === :hasse && return graph
     kind === :module_inspector || throw(ArgumentError("Unsupported module visualization kind=$kind."))
-    was_materialized = obj isa EncodingResult ? Results.result_summary(obj).materialized : true
-    readout, inspection = _inspection_readout(obj, dims, selection, graph.metadata.relation, matrix_limit)
+    was_materialized = materialized_before === nothing ?
+        (obj isa EncodingResult ? Results.result_summary(obj).materialized : true) : materialized_before
+    readout, inspection = inspection_data === nothing ?
+        _inspection_readout(obj, dims, selection, graph.metadata.relation, matrix_limit) : inspection_data
     panels = VisualizationSpec[graph, readout]
     geometry = obj isa EncodingResult && _inspection_has_geometry(obj)
-    geometry && pushfirst!(panels, _inspection_region_panel(obj, selection; box))
+    geometry && pushfirst!(panels, _inspection_region_panel(obj, selection; box,
+        prepared=prepared === nothing ? nothing : prepared.geometry))
     materialized = obj isa EncodingResult ? Results.result_summary(obj).materialized : true
     subtitle = "Finite-poset representation over $(_inspection_field_label(field)); arrows point from source to target"
     selection.parameter_relation in (:incomparable, :reverse_comparable) &&

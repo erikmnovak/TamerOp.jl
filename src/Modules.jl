@@ -1148,7 +1148,7 @@ function _coefficient_relation_equal(field::RealField, A, B)
 end
 
 @inline _coefficient_products_equal(field::AbstractCoeffField, A, B, C, D) =
-    _coefficient_relation_equal(field, A * B, C * D)
+    _coefficient_relation_equal(field, FieldLinAlg._matmul(A, B), FieldLinAlg._matmul(C, D))
 
 function _coefficient_products_equal(field::RealField, A, B, C, D)
     left, right = A * B, C * D
@@ -1167,7 +1167,7 @@ function _coefficient_products_equal(field::RealField, A, B, C, D)
     return residual <= field.atol + field.rtol * scale
 end
 
-@inline _coefficient_product_zero(::AbstractCoeffField, A, B) = iszero(A * B)
+@inline _coefficient_product_zero(::AbstractCoeffField, A, B) = iszero(FieldLinAlg._matmul(A, B))
 
 function _coefficient_product_zero(field::RealField, A, B)
     product = A * B
@@ -3155,7 +3155,7 @@ end
     if FieldLinAlg._is_tiny_mul(A, B)
         return _mul_tiny_dense!(out, A, B)
     end
-    mul!(out, A, B)
+    FieldLinAlg._matmul!(out, A, B)
     return out
 end
 
@@ -3676,7 +3676,7 @@ end
     nrows = size(A, 1)
     resize!(tmpbuf, nrows)
     tmp = view(tmpbuf, 1:nrows)
-    mul!(tmp, A, x)
+    FieldLinAlg._matmul!(tmp, A, x)
     @inbounds for t in 1:nrows
         dst[t] += scale * tmp[t]
     end
@@ -3714,7 +3714,7 @@ end
         E = store.maps_from_pred[plan.chain_data[sidx + 1]][plan.chain_slots[sidx + 1]]
         resize!(tmp1, size(E, 1))
         cur = view(tmp1, 1:size(E, 1))
-        mul!(cur, E, x)
+        FieldLinAlg._matmul!(cur, E, x)
         if sidx + 1 == eidx
             return _accum_scaled_vec!(dst, cur, scale)
         end
@@ -3729,7 +3729,7 @@ end
                 resize!(tmp1, size(E, 1))
                 nxt = view(tmp1, 1:size(E, 1))
             end
-            mul!(nxt, E, cur)
+            FieldLinAlg._matmul!(nxt, E, cur)
             cur = nxt
             cur_is_tmp1 = !cur_is_tmp1
         end
@@ -3746,11 +3746,11 @@ end
     E1 = M.edge_maps[u, p]
     resize!(tmp1, size(E1, 1))
     mid = view(tmp1, 1:size(E1, 1))
-    mul!(mid, E1, x)
+    FieldLinAlg._matmul!(mid, E1, x)
     E2 = M.edge_maps[p, v]
     resize!(tmp2, size(E2, 1))
     out = view(tmp2, 1:size(E2, 1))
-    mul!(out, E2, mid)
+    FieldLinAlg._matmul!(out, E2, mid)
     return _accum_scaled_vec!(dst, out, scale)
 end
 

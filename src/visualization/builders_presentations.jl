@@ -44,11 +44,11 @@ function _presentation_matrix_panel(A, title, row_labels, column_labels, limit;
     subtitle *= (isempty(subtitle) ? "" : "\n") * "$(size(A,1)) x $(size(A,2))"
     truncated && (subtitle *= "; showing $(length(rows)) x $(length(cols)); full matrix in metadata")
     clipped = metadata
-    for (key, inds) in ((:row_colors, (rows,)), (:column_colors, (cols,)), (:cell_colors, (rows, cols)))
+    for (key, inds) in ((:row_roles, (rows,)), (:column_roles, (cols,)), (:cell_roles, (rows, cols)))
         haskey(metadata, key) || continue
         # Cell styling is already limited to displayed entries, even for a very
         # large sparse coefficient matrix. Row/column metadata can be linear.
-        value = key === :cell_colors ? copy(metadata[key]) : metadata[key][inds...]
+        value = key === :cell_roles ? copy(metadata[key]) : metadata[key][inds...]
         clipped = merge(clipped, NamedTuple{(key,)}((value,)))
     end
     return VisualizationSpec(:presentation_matrix; title, subtitle,
@@ -57,6 +57,20 @@ function _presentation_matrix_panel(A, title, row_labels, column_labels, limit;
             String.(row_labels[rows]), String.(column_labels[cols]))],
         metadata=merge((; panel_style=:matrix, matrix=copy(A), matrix_size=size(A),
             displayed_rows=rows, displayed_columns=cols, truncated), clipped))
+end
+
+function _presentation_support_layers(geometry, membership)
+    colors = Dict(q => _VisualRole(membership[q] ? :support : :absent) for q in eachindex(membership))
+    colors[0] = _VisualRole(:unrepresented)
+    layers = _region_geometry_layers(geometry; colors)
+    # Membership is a mathematical label, independent of the chosen palette.
+    positions = NTuple{2,Float64}[_drawing_point((
+        sum(p[1] for p in c.vertices) / length(c.vertices),
+        sum(p[2] for p in c.vertices) / length(c.vertices))) for c in geometry.components]
+    labels = [c.region_id == 0 ? "0: ?" :
+        "$(c.region_id): $(membership[c.region_id] ? "+" : "-")" for c in geometry.components]
+    push!(layers, TextLayer(labels, positions, _VisualRole(:foreground), 10.0))
+    return layers
 end
 
 function _presentation_support_panel(H, family, id, region, limit)
@@ -77,24 +91,31 @@ function _presentation_support_panel(H, family, id, region, limit)
             subtitle="1 = member; 0 = absent. Actual finite vertex IDs.",
             metadata=merge(meta, (; matrix_corner="support / vertex")))
     end
-    colors = Dict(q => (membership[q] ? :seagreen : :gray80) for q in eachindex(membership))
-    colors[0] = :gray90
-    layers = _region_geometry_layers(region.metadata.geometry; colors)
+    layers = _presentation_support_layers(region.metadata.geometry, membership)
     queries = region.metadata.query_readout
+    query_label_layer = nothing
     if !isempty(queries)
         points = NTuple{2,Float64}[q.display_point for q in queries]
-        push!(layers, PointLayer(points, :orange3, 0.95, 14.0))
-        labels = ["$(length(queries) == 1 ? "q" : i == 1 ? "source" : "target") -> $(q.region_id)$(q.inside_viewport ? "" : " (outside view)")" for (i,q) in enumerate(queries)]
-        push!(layers, _text_layer_from_labels(points, labels))
+        same_point = length(queries) == 2 && queries[1].point == queries[2].point
+        marker_points = same_point ? points[1:1] : points
+        for (i, point) in enumerate(marker_points)
+            role = same_point ? :both : length(queries) == 1 ? :selected : i == 1 ? :source : :target
+            push!(layers, PointLayer([point], _VisualRole(role), 0.95, 14.0))
+        end
+        labels = same_point ?
+            ["source = target -> $(queries[1].region_id)$(queries[1].inside_viewport ? "" : " (outside view)")"] :
+            ["$(length(queries) == 1 ? "q" : i == 1 ? "source" : "target") -> $(q.region_id)$(q.inside_viewport ? "" : " (outside view)")" for (i,q) in enumerate(queries)]
+        push!(layers, TextLayer(labels, marker_points, _VisualRole(:foreground), 10.0))
+        query_label_layer = length(layers)
     end
-    subtitle = "Green: member; gray: absent.\nMembership on the actual encoding regions.\nFiber edges: solid included; dashed excluded;\ndotted at the viewing-window boundary."
+    subtitle = "Labels: + member; - absent.\nMembership on the actual encoding regions.\nFiber edges: solid included; dashed excluded;\ndotted at the viewing-window boundary."
     region.metadata.geometry.has_unrepresented_area &&
-        (subtitle *= "\nLight gray: unrepresented label 0;\nsupport membership is unknown.")
+        (subtitle *= "\n?: unrepresented label 0;\nsupport membership is unknown.")
     region.metadata.geometry.geometry_kind === :nearest_lattice_tiles &&
         (subtitle *= "\nInteger fibers: nearest-lattice tiles;\nties round-to-even.")
     isempty(region.metadata.warnings) || (subtitle *= "\nDrawing precision warning: inspect\nexact geometry/query metadata.")
     return VisualizationSpec(:presentation_support; title, subtitle, layers, axes=region.axes,
-        metadata=merge(region.metadata, meta, (; legend_position=:none)))
+        metadata=merge(region.metadata, meta, (; legend_position=:none, query_label_layer)))
 end
 
 function _presentation_active_panel(s, name, limit)
@@ -127,41 +148,32 @@ function _presentation_full_panel(H, stalks, limit)
     column_labels = ["U$j" for j in axes(A,2)]
     displayed_rows = 1:min(size(A,1), limit[1])
     displayed_columns = 1:min(size(A,2), limit[2])
-    colors = fill(:gray55, length(displayed_rows), length(displayed_columns))
-    row_colors, column_colors = fill(:gray55, size(A,1)), fill(:gray55, size(A,2))
+    cell_roles = fill(:inactive, length(displayed_rows), length(displayed_columns))
+    row_roles, column_roles = fill(:inactive, size(A,1)), fill(:inactive, size(A,2))
     n = length(stalks)
-    state_color(s, t) = s && t ? :purple : s ? :royalblue : t ? :firebrick : :gray55
+    state_role(s, t) = s && t ? :both : s ? :source : t ? :target : :inactive
     for i in axes(A,1)
         active = [s !== nothing && i in IR.active_rows(s) for s in stalks]
-        row_colors[i] = n == 1 ? (active[1] ? :seagreen : :gray55) : n == 2 ? state_color(active...) : :gray55
+        row_roles[i] = n == 1 ? (active[1] ? :selected : :inactive) : n == 2 ? state_role(active...) : :inactive
     end
     for j in axes(A,2)
         active = [s !== nothing && j in IR.active_columns(s) for s in stalks]
-        column_colors[j] = n == 1 ? (active[1] ? :seagreen : :gray55) : n == 2 ? state_color(active...) : :gray55
+        column_roles[j] = n == 1 ? (active[1] ? :selected : :inactive) : n == 2 ? state_role(active...) : :inactive
     end
     for j in displayed_columns, i in displayed_rows
         active = [s !== nothing && i in IR.active_rows(s) && j in IR.active_columns(s) for s in stalks]
-        colors[i,j] = n == 1 ? (active[1] ? :seagreen : :gray55) : n == 2 ? state_color(active...) : :gray55
+        cell_roles[i,j] = n == 1 ? (active[1] ? :selected : :inactive) : n == 2 ? state_role(active...) : :inactive
     end
-    subtitle = n == 1 ? "Green entries: selected active block, including its zeros." :
-        n == 2 ? "Blue: source; red: target; purple: both active blocks; gray: neither." :
+    subtitle = n == 1 ? "Selected rows and columns define the active block, including its zeros." :
+        n == 2 ? "Row and column labels identify source, target, both active blocks, or inactive coordinates." :
         "Rows index downsets; columns index upsets. Coefficients are field elements."
     return _presentation_matrix_panel(A, "Full coefficient matrix Phi", row_labels, column_labels, limit;
-        subtitle, metadata=(; matrix_corner="downset / upset", row_colors, column_colors, cell_colors=colors))
+        subtitle, metadata=(; matrix_corner="downset / upset", row_roles, column_roles, cell_roles))
 end
 
-function _presentation_visual_spec(obj; vertex=nothing, pair=nothing, point=nothing,
-                                   parameter_pair=nothing, box=nothing, basis=nothing,
-                                   upset=nothing, downset=nothing, matrix_limit=(12,12))
+function _presentation_fibers(H, selection; basis=false)
     IR = IndicatorResolutions
-    H = _inspection_presentation(obj)
-    P, field = FiniteFringe.ambient_poset(H), FiniteFringe.field(H)
-    selection = _inspection_selection(obj; vertex, pair, point, parameter_pair)
-    geometry = obj isa EncodingResult && _inspection_has_geometry(obj)
-    region = geometry ? _inspection_region_panel(obj, selection; box) : nothing
-    panels = VisualizationSpec[
-        _presentation_support_panel(H, :upset, upset, region, matrix_limit),
-        _presentation_support_panel(H, :downset, downset, region, matrix_limit)]
+    P = FiniteFringe.ambient_poset(H)
     stalks = Union{Nothing,IR.PresentationStalk}[]
     map = nothing
     relation = :not_selected
@@ -183,6 +195,26 @@ function _presentation_visual_spec(obj; vertex=nothing, pair=nothing, point=noth
                             v == 0 ? nothing : IR.presentation_stalk(H; vertex=v)))
         end
     end
+    return (; stalks, map, relation)
+end
+
+function _presentation_visual_spec(obj; vertex=nothing, pair=nothing, point=nothing,
+                                   parameter_pair=nothing, box=nothing, basis=nothing,
+                                   upset=nothing, downset=nothing, matrix_limit=(12,12),
+                                   prepared=nothing, selection=nothing, presentation_data=nothing, graph=nothing)
+    IR = IndicatorResolutions
+    H = _inspection_presentation(obj)
+    P, field = FiniteFringe.ambient_poset(H), FiniteFringe.field(H)
+    selection = selection === nothing ? _inspection_selection(obj; vertex, pair, point, parameter_pair) : selection
+    geometry = obj isa EncodingResult && _inspection_has_geometry(obj)
+    region = geometry ? _inspection_region_panel(obj, selection; box,
+        prepared=prepared === nothing ? nothing : prepared.geometry) : nothing
+    panels = VisualizationSpec[
+        _presentation_support_panel(H, :upset, upset, region, matrix_limit),
+        _presentation_support_panel(H, :downset, downset, region, matrix_limit)]
+    data = presentation_data === nothing ? _presentation_fibers(H, selection; basis=basis === true) : presentation_data
+    stalks, map, relation = data.stalks, data.map, data.relation
+    graph === nothing || pushfirst!(panels, graph)
     push!(panels, _presentation_full_panel(H, stalks, matrix_limit))
     if isempty(stalks)
         push!(panels, _inspection_text_panel("From a presentation to a stalk",
@@ -190,7 +222,7 @@ function _presentation_visual_spec(obj; vertex=nothing, pair=nothing, point=noth
              "Membership selects rows and columns of Phi.",
              "The image of that active block is the stalk.",
              "Select pair=(u,v) to see an induced map.",
-             "No ranks or image bases have been computed."]))
+             "No selected presentation ranks or image bases have been computed."]))
     else
         for (i,s) in enumerate(stalks)
             name = length(stalks) == 1 ? "Selected stalk" : i == 1 ? "Source" : "Target"

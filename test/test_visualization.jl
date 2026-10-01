@@ -46,6 +46,570 @@
     end
 end
 
+function _a40_closed_square_encoding(field=CM.QQField(); repeated::Bool=false)
+    K = CM.coeff_type(field)
+    opts = TOA.EncodingOptions(; backend=:pl_backend, poset_kind=:signature, field)
+    second_lo = repeated ? [0.0,0.0] : [1.0,1.0]
+    second_hi = repeated ? [2.0,2.0] : [3.0,3.0]
+    return TamerOp.encode([TOA.BoxUpset([0.0,0.0]), TOA.BoxUpset(second_lo)],
+        [TOA.BoxDownset([2.0,2.0]), TOA.BoxDownset(second_hi)],
+        K[1 0;0 1], opts)
+end
+
+@testset "A40 A41 exact closed-square slice intervals" begin
+    V = TamerOp.Visualization
+    enc = _a40_closed_square_encoding()
+    s = V.inspection_session(enc; box=([-1,-1],[4,4]))
+    try
+        # These intervals come directly from intersecting each closed square
+        # with x(t)=basepoint+t*direction. They do not use a computed chain.
+        cases = (
+            ((0//1,0//1),(1//1,1//1), ((0//1,2//1),(1//1,3//1))),
+            ((0//1,1//1),(1//1,1//1), ((0//1,1//1),(1//1,2//1))),
+            ((0//1,2//1),(1//1,1//1), ((0//1,0//1),(1//1,1//1))),
+            ((0//1,3//1),(1//1,1//1), ()),
+            ((0//1,0//1),(1//1,2//1), ((0//1,1//1),(1//1,3//2))),
+            ((1//3,-1//5),(2//1,3//1), ((1//15,11//15),(2//5,16//15))),
+            ((0//1,3//2),(1//1,0//1), ((0//1,2//1),(1//1,3//1))),
+        )
+        for (basepoint, direction, expected) in cases
+            V.select_inspection!(s; slice=(;basepoint,direction))
+            snap = V.inspection_snapshot(s)
+            result = snap.metadata.slice_result
+            @test result.endpoint_semantics == :decorated_finite_window
+            @test result.essential_status == :not_inferred
+            @test result.exact_geometry
+            @test result.line.basepoint == basepoint
+            @test result.line.direction == direction
+            @test Set((r.birth,r.death) for r in result.intervals) == Set(expected)
+            @test all(r -> r.left_closed && r.right_closed, result.intervals)
+            @test all(r -> r.multiplicity == 1, result.intervals)
+            @test all(r -> !r.left_clipped && !r.right_clipped, result.intervals)
+            @test all(r -> r.singleton == (r.birth == r.death), result.intervals)
+            @test all(r -> r.birth isa Rational && r.death isa Rational, result.intervals)
+            @test V.check_visual_spec(snap).valid
+            @test V.check_inspection_session(s).valid
+        end
+
+        # Closed deaths and simultaneous births are visible at the event itself.
+        V.select_inspection!(s; slice=(basepoint=(0,0),direction=(1,1)))
+        result = V.inspection_snapshot(s).metadata.slice_result
+        samples = (-1//2,0//1,1//2,1//1,3//2,2//1,5//2,3//1,7//2)
+        dimensions = (0,1,1,2,2,2,1,1,0)
+        for (t, expected) in zip(samples,dimensions)
+            @test sum(r.multiplicity for r in result.intervals
+                if r.birth <= t <= r.death; init=0) == expected
+            stalk = V.visual_spec(enc; kind=:module_inspector,point=(t,t))
+            @test stalk.metadata.inspection.dimension == expected
+        end
+        # The same dimension profile is insufficient: adjacent maps are nonzero
+        # while their composite vanishes, as the two interval summands require.
+        for (source,target,expected_rank) in ((1//2,3//2,1),(3//2,5//2,1),(1//2,5//2,0))
+            map = V.visual_spec(enc; kind=:module_inspector,
+                parameter_pair=((source,source),(target,target)))
+            @test map.metadata.inspection.defined
+            @test map.metadata.inspection.rank == expected_rank
+        end
+
+        # A tangent encounters two isolated, nonzero stalks; neither may be
+        # deleted as an empty half-open interval or merged into a long bar.
+        V.select_inspection!(s; slice=(basepoint=(0,2),direction=(1,1)))
+        for (t,expected) in ((0//1,1),(1//2,0),(1//1,1))
+            stalk = V.visual_spec(enc; kind=:module_inspector,point=(t,2+t))
+            @test stalk.metadata.inspection.dimension == expected
+        end
+        @test length(V.inspection_snapshot(s).metadata.slice_result.intervals) == 2
+    finally
+        V.close_inspection!(s)
+    end
+    square = TamerOp.encode([TOA.BoxUpset([0.0,0.0])], [TOA.BoxDownset([2.0,2.0])],
+        reshape(QQ[1],1,1), TOA.EncodingOptions(;backend=:pl_backend,poset_kind=:signature,field=CM.QQField()))
+    single = V.inspection_session(square;box=([-1,-1],[3,3]),
+        slice=(basepoint=(0,0),direction=(1,1)))
+    try
+        r = only(V.inspection_snapshot(single).metadata.slice_result.intervals)
+        @test (r.birth,r.death,r.multiplicity,r.left_closed,r.right_closed) == (0,2,1,true,true)
+        V.select_inspection!(single;slice=(basepoint=(0,2),direction=(1,1)))
+        r = only(V.inspection_snapshot(single).metadata.slice_result.intervals)
+        @test (r.birth,r.death,r.singleton,r.multiplicity) == (0,0,true,1)
+    finally
+        V.close_inspection!(single)
+    end
+end
+
+@testset "A40 A41 finite windows and interval multiplicity" begin
+    V = TamerOp.Visualization
+    enc = _a40_closed_square_encoding()
+    line = (basepoint=(0,0),direction=(1,1))
+    clipped = V.inspection_session(enc; box=([1//2,1//2],[5//2,5//2]),slice=line)
+    interior = V.inspection_session(enc; box=([3//2,3//2],[7//4,7//4]),slice=line)
+    repeated = V.inspection_session(_a40_closed_square_encoding(;repeated=true);
+        box=([-1,-1],[4,4]),slice=line)
+    corner = V.inspection_session(enc;box=([0,0],[2,2]),
+        slice=(basepoint=(0,2),direction=(1,1)))
+    try
+        result = V.inspection_snapshot(clipped).metadata.slice_result
+        @test result.window == (1//2,5//2)
+        @test Set((r.birth,r.death,r.multiplicity,r.left_clipped,r.right_clipped)
+            for r in result.intervals) == Set(((1//2,2//1,1,true,false),(1//1,5//2,1,false,true)))
+        @test all(r -> r.left_closed && r.right_closed, result.intervals)
+        @test result.essential_status == :not_inferred
+        @test all(r -> isfinite(r.birth) && isfinite(r.death), result.intervals)
+
+        # Both summands continue beyond this viewport. The displayed restricted
+        # module is two copies of one finite censored interval, never an
+        # essential bar and never an extrapolated death from sample spacing.
+        middle = V.inspection_snapshot(interior).metadata.slice_result
+        r = only(middle.intervals)
+        @test (r.birth,r.death,r.multiplicity) == (3//2,7//4,2)
+        @test r.left_clipped && r.right_clipped && r.left_closed && r.right_closed
+        @test middle.essential_status == :not_inferred
+        repeated_result = V.inspection_snapshot(repeated).metadata.slice_result
+        r = only(repeated_result.intervals)
+        @test (r.birth,r.death,r.multiplicity) == (0//1,2//1,2)
+        @test !r.left_clipped && !r.right_clipped && !r.singleton
+        corner_result = V.inspection_snapshot(corner).metadata.slice_result
+        @test corner_result.window == (0,0)
+        r = only(corner_result.intervals)
+        @test (r.birth,r.death,r.multiplicity,r.singleton) == (0,0,1,true)
+        @test r.left_closed && r.right_closed && r.left_clipped && r.right_clipped
+
+        # A supported axis direction that misses the viewport gives an empty
+        # restriction, without pretending that it observed the ambient module.
+        V.select_inspection!(repeated; slice=(basepoint=(10,0),direction=(0,1)))
+        missing = V.inspection_snapshot(repeated).metadata.slice_result
+        @test missing.window === nothing
+        @test isempty(missing.intervals)
+        @test V.check_visual_spec(V.inspection_snapshot(repeated)).valid
+    finally
+        foreach(V.close_inspection!, (clipped,interior,repeated,corner))
+    end
+end
+
+@testset "A40 A41 coincident diagram points retain distinct decorated groups" begin
+    V = TamerOp.Visualization
+    # These distinct interval summands have the same diagram location, but
+    # their endpoint inclusion and multiplicity must remain separately readable.
+    closed = (id=1,birth=0//1,death=1//1,left_closed=true,right_closed=true,
+        multiplicity=1,left_clipped=false,right_clipped=false,singleton=false)
+    half_open = merge(closed,(id=2,right_closed=false,multiplicity=2))
+    records = (closed,half_open)
+    result = (line=(basepoint=(0//1,0//1),direction=(1//1,1//1)),
+        window=(-1//1,2//1),intervals=records,
+        endpoint_semantics=:decorated_finite_window,essential_status=:not_inferred)
+    for selected in (nothing,1,2)
+        barcode, diagram = V._inspection_slice_panels(result,selected)
+        @test barcode.metadata.records === diagram.metadata.records === records
+        @test diagram.metadata.interval_ids == (1,2)
+        @test diagram.metadata.selected_interval === selected
+        @test diagram.metadata.total_multiplicity == 3
+        @test diagram.metadata.interval_points == ((0.0,1.0),(0.0,1.0))
+        @test barcode.metadata.interval_segments == ((0.0,1.0,1.0,1.0),(0.0,2.0,1.0,2.0))
+        annotation = only(layer for layer in diagram.layers if layer isa V.TextLayer)
+        @test annotation.positions == [(0.0,1.0)]
+        @test Set(split(only(annotation.labels),'\n')) == Set(("#1 [] x1","#2 [) x2"))
+        @test V.check_visual_spec(barcode).valid && V.check_visual_spec(diagram).valid
+    end
+end
+
+@testset "A40 A41 slice selection transactions and linked identity" begin
+    V = TamerOp.Visualization
+    enc = _a40_closed_square_encoding()
+    line = (basepoint=(0,0),direction=(1,1))
+    s = V.inspection_session(enc; box=([-1,-1],[4,4]),cache_limit=2,slice=line)
+    try
+        @test V.inspection_summary(s).slice_available
+        V.select_inspection!(s; point=(1//2,1//2))
+        V.select_inspection!(s; interval=1)
+        selected = V.inspection_selection(s)
+        @test selected.interval == 1
+        @test selected.query_points == ((1//2,1//2),)
+        snap = V.inspection_snapshot(s)
+        result = snap.metadata.slice_result
+        panels = [p for p in snap.panels if p.kind in (:slice_barcode,:slice_diagram)]
+        @test Set(p.kind for p in panels) == Set((:slice_barcode,:slice_diagram))
+        @test all(p -> p.metadata.records === result.intervals, panels)
+        @test all(p -> p.metadata.interval_ids == Tuple(r.id for r in result.intervals), panels)
+        @test all(p -> p.metadata.selected_interval == 1, panels)
+        @test snap.metadata.slice_view.records === result.intervals
+        V.select_inspection!(s; view=:presentation,upset=2,downset=1)
+        @test V.inspection_selection(s).interval == 1
+        @test V.inspection_selection(s).query_points == selected.query_points
+        @test V.inspection_selection(s).slice == selected.slice
+
+        # A changed line clears a bar identity, while retaining the separate
+        # original-parameter stalk selection shared by the module panels.
+        translated = (basepoint=(0,1),direction=(1,1))
+        V.select_inspection!(s; slice=translated)
+        @test V.inspection_selection(s).interval === nothing
+        @test V.inspection_selection(s).query_points == selected.query_points
+        @test Set((r.birth,r.death) for r in V.inspection_snapshot(s).metadata.slice_result.intervals) ==
+            Set(((0//1,1//1),(1//1,2//1)))
+        hits = V.inspection_summary(s).slice_cache_hits
+        retained = V.inspection_snapshot(s).metadata.slice_result
+        V.select_inspection!(s; slice=translated)
+        @test V.inspection_snapshot(s).metadata.slice_result === retained
+        @test V.inspection_summary(s).slice_cache_hits == hits
+        V.select_inspection!(s; slice=line)
+        @test V.inspection_summary(s).slice_cache_hits > hits
+        @test V.inspection_summary(s).slice_cache_entries <= 2
+
+        for options in ((; slice=(basepoint=(0,0),direction=(0,0))),
+                        (; slice=(basepoint=(0,0),direction=(-1,1))),
+                        (; slice=(basepoint=(NaN,0),direction=(1,1))),
+                        (; slice=(basepoint=(0,0),direction=(Inf,1))),
+                        (; slice=(basepoint=(0,),direction=(1,1))),
+                        (; slice=(basepoint=(0,0),direction=(true,1))),
+                        (; slice=(basepoint=(0,0),direction=(1,1),unknown=true)),
+                        (; interval=-1), (; interval=1000), (; interval=true))
+            before = V.inspection_selection(s)
+            picture = V.inspection_snapshot(s)
+            @test !V.check_inspection_selection(s; options...).valid
+            @test_throws ArgumentError V.select_inspection!(s; options...)
+            @test V.inspection_selection(s) == before
+            @test V.inspection_snapshot(s) === picture
+        end
+        V.select_inspection!(s; interval=1)
+        V.select_inspection!(s; interval=0)
+        @test V.inspection_selection(s).interval === nothing
+        V.select_inspection!(s; slice=false)
+        @test V.inspection_selection(s).slice === nothing
+        @test get(V.inspection_snapshot(s).metadata,:slice_result,nothing) === nothing
+        @test !any(p -> p.kind in (:slice_barcode,:slice_diagram), V.inspection_snapshot(s).panels)
+        @test V.inspection_selection(s).query_points == selected.query_points
+        @test_throws ArgumentError V.select_inspection!(s; interval=1)
+        V.select_inspection!(s; slice=line)
+        final_snapshot = V.inspection_snapshot(s)
+        V.close_inspection!(s)
+        @test V.inspection_snapshot(s) === final_snapshot
+        @test V.inspection_summary(s).slice_cache_entries == 0
+        @test_throws ArgumentError V.select_inspection!(s; slice=translated)
+    finally
+        V.close_inspection!(s)
+    end
+
+    P = chain_poset(2)
+    finite = MD.PModule{QQ}(P,[1,1],Dict((1,2)=>reshape(QQ[1],1,1));field=CM.QQField())
+    @test_throws ArgumentError V.inspection_session(finite; slice=line)
+    finite_session = V.inspection_session(finite)
+    try
+        @test !V.inspection_summary(finite_session).slice_available
+        @test_throws ArgumentError V.select_inspection!(finite_session; slice=line)
+    finally
+        V.close_inspection!(finite_session)
+    end
+end
+
+@testset "A40 A41 slice restrictions preserve coefficient fields" begin
+    V = TamerOp.Visualization
+    for field in FIELDS_FULL
+        s = V.inspection_session(_a40_closed_square_encoding(field);
+            box=([-1,-1],[4,4]),slice=(basepoint=(0,0),direction=(1,1)))
+        try
+            result = V.inspection_snapshot(s).metadata.slice_result
+            if field isa CM.QQField
+                @test result.coefficient_field == "QQ"
+            elseif field isa CM.PrimeField
+                @test result.coefficient_field == "F$(field.p)"
+            else
+                @test occursin("numerical rank",result.coefficient_field)
+                @test occursin("atol=$(field.atol)",result.coefficient_field)
+                @test occursin("rtol=$(field.rtol)",result.coefficient_field)
+            end
+            @test Set((r.birth,r.death,r.multiplicity,r.left_closed,r.right_closed)
+                for r in result.intervals) == Set(((0//1,2//1,1,true,true),(1//1,3//1,1,true,true)))
+            for (source,target,expected_rank) in ((1//2,3//2,1),(3//2,5//2,1),(1//2,5//2,0))
+                V.select_inspection!(s; parameter_pair=((source,source),(target,target)))
+                @test V.inspection_snapshot(s).metadata.inspection.rank == expected_rank
+                @test V.inspection_snapshot(s).metadata.slice_result === result
+            end
+            @test V.check_inspection_session(s).valid
+        finally
+            V.close_inspection!(s)
+        end
+    end
+end
+
+@testset "A40 A41 open deaths exact collisions and computation limits" begin
+    V = TamerOp.Visualization
+    line = (basepoint=(0,0),direction=(1,1))
+    # A one-vertex-supported product-grid module is nonzero on the half-open
+    # middle square. Its right endpoint is open, unlike the closed box fixture.
+    for (left,right) in ((0//1,2//1),(2//1,2//1+1//(big(2)^56)))
+        P = FF.ProductOfChainsPoset((3,3))
+        pi = EC.GridEncodingMap(P, ([-1//1,left,right],[-1//1,left,right]))
+        dims = [0,0,0,0,1,0,0,0,0]
+        maps = Dict(edge => zeros(QQ,dims[edge[2]],dims[edge[1]]) for edge in FF.cover_edges(P))
+        module_on_grid = MD.PModule{QQ}(P,dims,maps;field=CM.QQField())
+        enc = RES.EncodingResult(P,module_on_grid,EC.compile_encoding(P,pi))
+        s = V.inspection_session(enc;box=([-1,-1],[3,3]),slice=line)
+        try
+            snap = V.inspection_snapshot(s)
+            r = only(snap.metadata.slice_result.intervals)
+            @test (r.birth,r.death,r.left_closed,r.right_closed,r.multiplicity) ==
+                (left,right,true,false,1)
+            @test !r.singleton && !r.left_clipped && !r.right_clipped
+            @test V.visual_spec(enc;kind=:module_inspector,point=(right,right)).metadata.inspection.dimension == 0
+            mid = (left+right)/2
+            @test V.visual_spec(enc;kind=:module_inspector,point=(mid,mid)).metadata.inspection.dimension == 1
+            diagram = only(p for p in snap.panels if p.kind == :slice_diagram)
+            @test diagram.metadata.coordinate_collisions == (left == 0 ? () : (r.id,))
+            @test only(diagram.metadata.interval_points) == (Float64(left),Float64(right))
+            @test V.check_visual_spec(snap).valid
+        finally
+            V.close_inspection!(s)
+        end
+    end
+
+    enc = _a40_closed_square_encoding()
+    bounded = V.inspection_session(enc;box=([-1,-1],[4,4]),slice_limit=2)
+    try
+        before = V.inspection_snapshot(bounded)
+        state = V.inspection_selection(bounded)
+        @test_throws ArgumentError V.select_inspection!(bounded;slice=line)
+        @test V.inspection_snapshot(bounded) === before
+        @test V.inspection_selection(bounded) == state
+        @test V.inspection_summary(bounded).slice_cache_entries == 0
+    finally
+        V.close_inspection!(bounded)
+    end
+    for bad_limit in (0,-1,true,1.5)
+        @test_throws ArgumentError V.inspection_session(enc;slice_limit=bad_limit)
+    end
+
+    # Geometry outside a represented grid cannot silently become zero space.
+    P = FF.ProductOfChainsPoset((2,2))
+    constant_module = MD.PModule{QQ}(P,ones(Int,4),
+        Dict(edge => reshape(QQ[1],1,1) for edge in FF.cover_edges(P));field=CM.QQField())
+    pi = EC.GridEncodingMap(P,([0,2],[0,2]))
+    grid_enc = RES.EncodingResult(P,constant_module,EC.compile_encoding(P,pi))
+    unknown = V.inspection_session(grid_enc;box=([-1,-1],[3,3]))
+    try
+        before = V.inspection_snapshot(unknown)
+        err = try
+            V.select_inspection!(unknown;slice=line)
+            nothing
+        catch caught
+            caught
+        end
+        @test err isa ArgumentError
+        @test occursin("unrepresented",sprint(showerror,err))
+        @test V.inspection_snapshot(unknown) === before
+        @test V.inspection_summary(unknown).slice_cache_entries == 0
+    finally
+        V.close_inspection!(unknown)
+    end
+    reversed = EC.GridEncodingMap(P,([0,2],[0,2]);orientation=(-1,1))
+    reversed_enc = RES.EncodingResult(P,constant_module,EC.compile_encoding(P,reversed))
+    reversed_session = V.inspection_session(reversed_enc;box=([-1,-1],[3,3]))
+    try
+        @test !V.inspection_summary(reversed_session).slice_available
+        @test_throws ArgumentError V.select_inspection!(reversed_session;slice=line)
+    finally
+        V.close_inspection!(reversed_session)
+    end
+end
+
+@testset "A40 A41 general polyhedral slices retain exact boundary semantics" begin
+    V = TamerOp.Visualization
+    PL = TamerOp.PLPolyhedra
+    AR = TamerOp.ExactReals.AlgebraicReal
+    # This oblique band exercises the general polyhedral encoder, rather than
+    # its axis-aligned box specialization. Along (t,t), 0 <= x+y <= 2 is [0,1].
+    up = PL.PLUpset(PL.poly_union(PL.make_hpoly(QQ[-1 -1],QQ[0])))
+    down = PL.PLDownset(PL.poly_union(PL.make_hpoly(QQ[1 1],QQ[2])))
+    fringe = PL.PLFringe([up],[down],reshape(QQ[1],1,1))
+    enc = TamerOp.encode(fringe,TOA.EncodingOptions(;backend=:pl,field=CM.QQField()))
+    @test RES.result_summary(enc).backend == :pl
+    s = V.inspection_session(enc;box=([-1,-1],[2,2]),
+        slice=(basepoint=(0,0),direction=(1,1)))
+    try
+        r = only(V.inspection_snapshot(s).metadata.slice_result.intervals)
+        @test (r.birth,r.death,r.left_closed,r.right_closed,r.multiplicity) == (0,1,true,true,1)
+        @test !r.left_clipped && !r.right_clipped
+        # x+y = 1/3+3t, so the exact interval is [-1/9,5/9].
+        line = (basepoint=(AR(1)/3,AR(0)),direction=(AR(1),AR(2)))
+        V.select_inspection!(s;slice=line)
+        result = V.inspection_snapshot(s).metadata.slice_result
+        @test result.line == (basepoint=(1//3,0//1),direction=(1//1,2//1))
+        @test all(x -> x isa Rational,(result.line.basepoint...,result.line.direction...))
+        r = only(result.intervals)
+        @test (r.birth,r.death,r.left_closed,r.right_closed) == (-1//9,5//9,true,true)
+        @test V.check_visual_spec(V.inspection_snapshot(s)).valid
+
+        # General PL verified queries currently accept rational coordinates.
+        # Unsupported irrational algebraic input must never be rounded silently.
+        radius = sqrt(AR(2))
+        for bad in ((basepoint=(radius,0),direction=(1,1)),
+                    (basepoint=(0,0),direction=(1,radius)))
+            state = V.inspection_selection(s)
+            picture = V.inspection_snapshot(s)
+            cache = V.inspection_summary(s).slice_cache_entries
+            @test !V.check_inspection_selection(s;slice=bad).valid
+            err = try
+                V.select_inspection!(s;slice=bad)
+                nothing
+            catch caught
+                caught
+            end
+            @test err isa ArgumentError
+            @test occursin("rational",sprint(showerror,err))
+            @test V.inspection_selection(s) == state
+            @test V.inspection_snapshot(s) === picture
+            @test V.inspection_summary(s).slice_cache_entries == cache
+        end
+    finally
+        V.close_inspection!(s)
+    end
+
+    # A complete, disjoint three-region partition independently specifies
+    # 0 <= x+y < 2. The strict facet belongs to the represented zero region.
+    regions = [PL.HPoly(2,QQ[1 1],QQ[0],nothing,BitVector([true]),zero(QQ)),
+               PL.HPoly(2,QQ[-1 -1;1 1],QQ[0,2],nothing,BitVector([false,true]),zero(QQ)),
+               PL.HPoly(2,QQ[-1 -1],QQ[-2],nothing,BitVector([false]),zero(QQ))]
+    pi = PL.PLEncodingMap(2,[BitVector() for _ in regions],
+        [BitVector() for _ in regions],regions,[(-1,0),(1//2,1//2),(2,1)])
+    P = chain_poset(3)
+    M = MD.PModule{QQ}(P,[0,1,0],
+        Dict((1,2)=>zeros(QQ,1,0),(2,3)=>zeros(QQ,0,1));field=CM.QQField())
+    half_open = RES.EncodingResult(P,M,EC.compile_encoding(P,pi))
+    strict = V.inspection_session(half_open;box=([-1,-1],[2,2]),
+        slice=(basepoint=(0,0),direction=(1,1)))
+    try
+        r = only(V.inspection_snapshot(strict).metadata.slice_result.intervals)
+        @test (r.birth,r.death,r.left_closed,r.right_closed,r.multiplicity) == (0,1,true,false,1)
+        @test !r.left_clipped && !r.right_clipped
+        @test EC.locate(pi,(0//1,0//1);mode=:verified) == 2
+        @test EC.locate(pi,(1//1,1//1);mode=:verified) == 3
+        @test V.check_visual_spec(V.inspection_snapshot(strict)).valid
+    finally
+        V.close_inspection!(strict)
+    end
+end
+
+@testset "A40 A41 live slice controls share exact interval selection" begin
+    if Base.find_package("WGLMakie") === nothing
+        @test_skip false
+    else
+        @eval import WGLMakie
+        V = TamerOp.Visualization
+        E = Base.get_extension(TamerOp,:TamerOpWGLMakieExt)
+        B, M = WGLMakie.Bonito, WGLMakie.Makie
+        s = V.inspection_session(_a40_closed_square_encoding();box=([-1,-1],[4,4]))
+        V.select_inspection!(s;point=(1//2,1//2))
+        app = V.visualize(s;backend=:wglmakie,size=(1000,480))
+        sibling = V.visualize(s;backend=:wglmakie,size=(900,440))
+        ui, other = E._inspection_ui(app), E._inspection_ui(sibling)
+        controls = ui.controls.slice
+        client = B.Session(B.NoConnection();asset_server=B.NoServer())
+        try
+            @test controls !== nothing
+            @test ui.slice.interval_disabled[]
+            @test ui.slice.figure[] === nothing
+            dom = B.session_dom(client,app;init=false)
+            html = sprint(show,MIME"text/html"(),dom)
+            for suffix in ("base-x","base-y","direction-x","direction-y","angle","offset","apply","disable","interval")
+                @test occursin(ui.dom_id * "-slice-" * suffix,html)
+            end
+            @test !isempty(B.serialize_binary(client,B.fused_messages!(client)))
+            controls.apply.value[] = true
+            @test isempty(ui.error_text[])
+            @test isempty(V.inspection_summary(s).listener_errors)
+            state = V.inspection_selection(s)
+            @test state.slice == (basepoint=(0,0),direction=(1,1))
+            @test state.query_points == ((1//2,1//2),)
+            @test !ui.slice.interval_disabled[]
+            @test ui.slice.figure[] !== nothing && other.slice.figure[] !== nothing
+            @test ui.slice.figure[] !== other.slice.figure[]
+            @test ui.slice.line_points[] == other.slice.line_points[]
+            M.update_state_before_display!(ui.slice.figure[])
+            @test ui.slice.callbacks.pick_interval(:barcode,(0.5,1.0)) == 1
+            @test ui.slice.callbacks.pick_interval(:diagram,(1.0,3.0)) == 2
+            events = M.events(ui.slice.figure[].scene)
+            function click_slice_data!(ax,point)
+                pixel = M.project(ax.scene,M.Point2d(point)) + minimum(M.viewport(ax.scene)[])
+                events.mouseposition[] = (Float64(pixel[1]),Float64(pixel[2]))
+                @test M.is_mouseinside(ax.scene)
+                events.mousebutton[] = M.MouseButtonEvent(M.Mouse.left,M.Mouse.press)
+                events.mousebutton[] = M.MouseButtonEvent(M.Mouse.left,M.Mouse.release)
+            end
+            # Dispatch native chart events to verify hit testing and the wired
+            # session callback, beyond exercising the picking helper directly.
+            click_slice_data!(ui.slice.axes[].diagram,(1.0,3.0))
+            @test V.inspection_selection(s).interval == 2
+            @test ui.slice.selected_bar[][] == [M.Point2d(1,2),M.Point2d(3,2)]
+            @test ui.slice.selected_point[][] == [M.Point2d(1,3)]
+            @test ui.slice.selected_region[] == [M.Point2d(1,1),M.Point2d(3,3)]
+            @test ui.slice.selected_bar[][] == other.slice.selected_bar[][]
+            @test ui.slice.selected_point[][] == other.slice.selected_point[][]
+            rebuilds = ui.slice.rebuild_count[]
+            misses = V.inspection_summary(s).slice_cache_misses
+            click_slice_data!(ui.slice.axes[].barcode,(0.5,1.0))
+            @test V.inspection_selection(s).interval == 1
+            @test ui.slice.selected_bar[][] == other.slice.selected_bar[][] == [M.Point2d(0,1),M.Point2d(2,1)]
+            controls.interval.value[] = 2
+            @test V.inspection_selection(s).interval == 2
+            @test ui.slice.rebuild_count[] == rebuilds
+            @test V.inspection_summary(s).slice_cache_misses == misses
+
+            # Sliders only draft approximate decimal coordinates. Their event
+            # callbacks do not run algebra or move the committed slice.
+            before = V.inspection_snapshot(s)
+            selection = V.inspection_selection(s)
+            controls.angle.value[] = 30
+            controls.offset.value[] = 20
+            @test V.inspection_snapshot(s) === before
+            @test V.inspection_selection(s) == selection
+            @test ui.slice.rebuild_count[] == rebuilds
+            @test occursin("Draft",ui.slice.draft_text[])
+            controls.base_x.value[] = "abc"
+            controls.apply.value[] = true
+            @test !isempty(ui.error_text[])
+            @test V.inspection_snapshot(s) === before
+            @test V.inspection_selection(s) == selection
+
+            for (control,text) in zip((controls.base_x,controls.base_y,controls.dir_x,controls.dir_y),
+                                     ("0","2","1","1"))
+                control.value[] = text
+            end
+            controls.apply.value[] = true
+            @test isempty(ui.error_text[])
+            @test V.inspection_selection(s).slice == (basepoint=(0,2),direction=(1,1))
+            @test V.inspection_selection(s).interval === nothing
+            @test V.inspection_selection(s).query_points == selection.query_points
+            @test all(r -> r.singleton,V.inspection_snapshot(s).metadata.slice_result.intervals)
+            @test ui.slice.callbacks.select_interval(1)
+            @test ui.slice.selected_region_point[] == [M.Point2d(0,2)]
+            @test ui.slice.selected_bar_point[][] == [M.Point2d(0,1)]
+            @test ui.slice.selected_region_point[] == other.slice.selected_region_point[]
+            ui.controls.reset.value[] = true
+            @test V.inspection_selection(s).slice == (basepoint=(0,2),direction=(1,1))
+            @test V.inspection_selection(s).interval === nothing
+            @test isempty(V.inspection_selection(s).query_points)
+            @test isempty(ui.slice.selected_region_point[])
+            @test isempty(ui.slice.selected_bar_point[][])
+
+            controls.disable.value[] = true
+            @test V.inspection_selection(s).slice === nothing
+            @test isempty(ui.slice.line_points[]) && isempty(ui.slice.selected_region_point[])
+            @test ui.slice.figure[] === nothing && other.slice.figure[] === nothing
+            @test isempty(ui.slice.chart_observers)
+            @test ui.slice.interval_disabled[]
+            controls.apply.value[] = true
+            @test ui.slice.figure[] !== nothing
+            V.close_inspection!(s)
+            @test ui.closed[] && other.closed[]
+            @test ui.slice.figure[] === nothing && ui.slice.axes[] === nothing
+            @test isempty(ui.slice.chart_observers)
+            @test ui.slice.interval_disabled[]
+            @test V.inspection_summary(s).listener_count == 0
+        finally
+            close(client)
+            V.close_inspection!(s)
+        end
+    end
+end
+
 using SparseArrays
 
 @testset "A04 MPPI visualizations identify sampled tracks" begin
@@ -354,11 +918,11 @@ end
     @test TamerOp.available_visuals(L) == (:mp_landscape, :landscape_slices)
     @test TamerOp.available_visuals(sb) == (:rectangles, :density_image)
     @test TamerOp.available_visuals(pm) == (:signed_atoms,)
-    @test TamerOp.available_visuals(slice_single) == (:barcode, :barcode_bank, :slice_family)
+    @test TamerOp.available_visuals(slice_single) == (:barcode, :persistence_diagram, :barcode_bank, :slice_family)
     @test TamerOp.available_visuals(arr) == (:fibered_arrangement, :fibered_query, :fibered_cell_highlight, :fibered_tie_break, :fibered_offset_intervals, :fibered_projected_comparison)
     @test TamerOp.available_visuals(fam) == (:fibered_family, :fibered_chain_cells, :fibered_family_contributions, :fibered_distance_diagnostic)
-    @test TamerOp.available_visuals(slice_res) == (:fibered_slice, :fibered_slice_overlay, :barcode)
-    @test TamerOp.available_visuals(cache_grid) == (:fibered_arrangement, :fibered_query, :fibered_cell_highlight, :fibered_tie_break, :fibered_offset_intervals, :fibered_projected_comparison, :fibered_family, :fibered_chain_cells, :fibered_family_contributions, :fibered_distance_diagnostic, :fibered_query_barcode)
+    @test TamerOp.available_visuals(slice_res) == (:fibered_slice, :fibered_slice_overlay, :barcode, :persistence_diagram)
+    @test TamerOp.available_visuals(cache_grid) == (:fibered_arrangement, :fibered_query, :fibered_cell_highlight, :fibered_tie_break, :fibered_offset_intervals, :fibered_projected_comparison, :fibered_family, :fibered_chain_cells, :fibered_family_contributions, :fibered_distance_diagnostic, :fibered_query_barcode, :barcode, :persistence_diagram)
     @test isempty(TamerOp.available_visuals(parr))
     @test TamerOp.available_visuals(parr_grid) == (:projected_arrangement,)
     @test_throws ArgumentError TOA.visual_spec(parr; kind=:projected_arrangement)
@@ -560,8 +1124,8 @@ end
     @test length(spec_cref.layers[1].points) == FF.nvertices(Pcommon)
 
     spec_bar = TOA.visual_spec(slice_single; kind=:barcode)
-    @test spec_bar.layers[1] isa TOA.BarcodeLayer
-    @test length(spec_bar.layers[1].intervals) == 1
+    @test spec_bar.layers[1] isa TOA.SegmentLayer
+    @test spec_bar.metadata.total_groups == 1
 
     spec_bank = TOA.visual_spec(slice_bank; kind=:barcode_bank)
     @test spec_bank.layers[1] isa TOA.HeatmapLayer
@@ -622,7 +1186,7 @@ end
     @test TOA.visual_kind(spec_slice_overlay) == :fibered_slice_overlay
     @test any(layer -> layer isa TOA.SegmentLayer, spec_slice_overlay.layers)
     spec_slice_bar = TOA.visual_spec(slice_res; kind=:barcode)
-    @test spec_slice_bar.layers[1] isa TOA.BarcodeLayer
+    @test spec_slice_bar.layers[1] isa TOA.SegmentLayer
 
     spec_query_bar = TOA.visual_spec(cache_grid; kind=:fibered_query_barcode, dir=[1.0, 1.0], offset=0.0)
     @test TOA.visual_kind(spec_query_bar) == :fibered_query_barcode
@@ -924,18 +1488,17 @@ end
     @test occursin("Float64 display", spec.subtitle)
     @test occursin("+Inf", spec.subtitle)
     @test spec.layers[2] isa VIZ.PointLayer
-    @test spec.layers[2].points == [(1/3, 5/3), (2.0, 3.0)]
-    @test spec.layers[3].points == [(0.0, metadata.essential_display_coordinate), (4.0, metadata.essential_display_coordinate)]
+    @test [p for (r,p) in zip(metadata.displayed_records,metadata.interval_points) if isfinite(r.death)] == [(1/3,5/3),(2.0,3.0)]
+    @test [p for (r,p) in zip(metadata.displayed_records,metadata.interval_points) if !isfinite(r.death)] == [(0.0,metadata.essential_display_coordinate),(4.0,metadata.essential_display_coordinate)]
     @test "+Inf" in spec.axes.yticks[2]
 
     bars = VIZ.visual_spec(diagram; kind=:barcode)
     @test bars.axes.aspect === :auto
-    @test bars.layers[1] isa VIZ.BarcodeLayer
-    @test bars.layers[1].intervals == [(1/3, 5/3), (2.0, 3.0)]
-    @test bars.layers[2].segments == [(0.0, 3.0, metadata.essential_display_coordinate, 3.0),
-                                     (4.0, 4.0, metadata.essential_display_coordinate, 4.0)]
-    @test length(bars.layers[3].paths) == 2
-    @test all(path -> path[1][1] < path[2][1] && path[3][1] < path[2][1], bars.layers[3].paths)
+    @test bars.layers[1] isa VIZ.SegmentLayer
+    @test [(seg[1],seg[3]) for (r,seg) in zip(bars.metadata.displayed_records,bars.metadata.interval_segments) if isfinite(r.death)] == [(1/3,5/3),(2.0,3.0)]
+    @test [(seg[1],seg[3]) for (r,seg) in zip(bars.metadata.displayed_records,bars.metadata.interval_segments) if !isfinite(r.death)] == [(0.0,metadata.essential_display_coordinate),(4.0,metadata.essential_display_coordinate)]
+    @test count(status -> last(status) === :essential,bars.metadata.endpoint_display) == 2
+    @test all(seg -> seg[1] <= seg[3],bars.metadata.interval_segments)
     @test VIZ.visual_spec(diagram; dim=1).metadata.finite_count == 0
     @test VIZ.visual_spec(diagram; dim=1).metadata.essential_count == 1
     @test VIZ.visual_spec(diagram; dim=7).metadata.essential_count == 0
@@ -954,24 +1517,26 @@ end
     super_diagram = OP.PersistenceDiagram(super_finite, [[0//1, 4//1]]; order=:superlevel)
     super_spec = VIZ.visual_spec(super_diagram)
     super_meta = super_spec.metadata
-    @test super_spec.layers[2].points == [(5/3, 1/3), (3.0, 2.0)]
+    @test [p for (r,p) in zip(super_meta.displayed_records,super_meta.interval_points) if isfinite(r.birth)] == [(5/3,1/3),(3.0,2.0)]
     @test super_meta.finite_intervals == super_finite[1]
     @test super_meta.essential_display_coordinate < 0
     @test super_meta.essential_direction == -1
     @test super_meta.interval_convention == "(death, birth]"
     @test "-Inf" in super_spec.axes.yticks[2]
     super_bars = VIZ.visual_spec(super_diagram; kind=:barcode)
-    @test all(path -> path[1][1] > path[2][1] && path[3][1] > path[2][1], super_bars.layers[3].paths)
-    @test super_bars.layers[1].intervals == [(5/3, 1/3), (3.0, 2.0)]
+    @test count(status -> first(status) === :essential,super_bars.metadata.endpoint_display) == 2
+    @test [(seg[1],seg[3]) for (r,seg) in zip(super_bars.metadata.displayed_records,super_bars.metadata.interval_segments) if isfinite(r.birth)] == [(1/3,5/3),(2.0,3.0)]
 
     signed_zeros = OP.PersistenceDiagram([Tuple{Float64,Float64}[]], [[-0.0, 0.0]])
     zero_spec = VIZ.visual_spec(signed_zeros)
     @test VIZ.check_visual_spec(zero_spec).valid
     @test zero_spec.metadata.essential_count == 2
     @test isequal(zero_spec.metadata.essential_births, [-0.0, 0.0])
-    @test length(zero_spec.layers[3].points) == 2
+    @test zero_spec.metadata.total_groups == 1
+    @test only(zero_spec.metadata.records).multiplicity == 2
     zero_bars = VIZ.visual_spec(signed_zeros; kind=:barcode)
-    @test length(zero_bars.layers[2].segments) == 2
+    @test length(zero_bars.metadata.interval_segments) == 1
+    @test zero_bars.metadata.total_multiplicity == 2
 
     large = big(2)^60
     close_endpoints = OP.PersistenceDiagram([[(large, large + 1)]], [BigInt[]])
@@ -1398,7 +1963,7 @@ end
     @test spec.interaction.labels
     @test spec.interaction.mode == :static
     @test !spec.interaction.requires_live_julia
-    @test VIZ.visual_summary(spec).rendering.renderer_keywords == (:figure, :size)
+    @test VIZ.visual_summary(spec).rendering.renderer_keywords == (:figure, :size, :style)
     @test_throws ArgumentError VIZ.visualize(spec; kind=:barcode)
     @test_throws ArgumentError VIZ.render(spec; linewidth=10)
     @test_throws ArgumentError VIZ.render(spec; size=(-1, 400))
@@ -1407,7 +1972,7 @@ end
 
     # The receiver has no kwargs splat: recipe keywords must never leak to it.
     VIZ._register_visual_backend!(:a81_capture;
-        render=(spec; display, figure, size) -> (; spec, display, figure, size))
+        render=(spec; display, figure, size, style) -> (; spec, display, figure, size, style))
     try
         rendered = VIZ.visualize(pc; kind=:knn_graph, k=1, backend=:a81_capture, size=(601, 407))
         @test rendered.size == (601, 407)
@@ -1927,8 +2492,8 @@ end
         makie.update_state_before_display!(fig)
         labels = [String(item.text[]) for item in fig.content if item isa makie.Label]
         @test "1/3" in labels
-        @test "e1 @ 1" in labels
-        @test "e1 @ 2" in labels
+        @test "e1 @ 1 [source]" in labels
+        @test "e1 @ 2 [target]" in labels
         @test "target / source" in labels
         ax = only(item for item in fig.content if item isa makie.Axis)
         @test !ax.xticklabelsvisible[] && !ax.yticklabelsvisible[]
@@ -2040,9 +2605,9 @@ end
     full = only(p for p in spec.panels if p.title == "Full coefficient matrix Phi")
     @test full.metadata.matrix == QQ[1 0; 0 1]
     @test only(full.layers).entries == ["1" "0"; "0" "1"]
-    @test full.metadata.row_colors == [:gray55, :seagreen]
-    @test full.metadata.column_colors == [:seagreen, :gray55]
-    @test full.metadata.cell_colors == [:gray55 :gray55; :seagreen :gray55]
+    @test full.metadata.row_roles == [:inactive, :selected]
+    @test full.metadata.column_roles == [:selected, :inactive]
+    @test full.metadata.cell_roles == [:inactive :inactive; :selected :inactive]
     block = only(p for p in spec.panels if p.title == "Selected stalk: active block")
     @test only(block.layers).row_labels == ["D2"]
     @test only(block.layers).column_labels == ["U1"]
@@ -2068,7 +2633,8 @@ end
                 x = sum(first, polygon) / length(polygon)
                 y = sum(last, polygon) / length(polygon)
                 member = panel.metadata.family === :upset ? x >= 0 && y >= 0 : x <= 3 && y <= 3
-                @test layer.fill_color == (member ? :seagreen : :gray80)
+                @test layer.fill_color isa V._VisualRole
+                @test layer.fill_color.kind == (member ? :support : :absent)
             end
         end
     end
@@ -2119,9 +2685,9 @@ end
     @test IR.induced_map(maps[(2, 3)]) * IR.induced_map(maps[(1, 2)]) == IR.induced_map(maps[(1, 3)])
     colored = V.visual_spec(H; pair=(1, 3))
     full = only(p for p in colored.panels if p.title == "Full coefficient matrix Phi")
-    @test full.metadata.cell_colors == [:royalblue :gray55; :purple :firebrick]
-    @test full.metadata.row_colors == [:royalblue, :purple]
-    @test full.metadata.column_colors == [:purple, :firebrick]
+    @test full.metadata.cell_roles == [:source :inactive; :both :target]
+    @test full.metadata.row_roles == [:source, :both]
+    @test full.metadata.column_roles == [:both, :target]
 
     limited = V.visual_spec(H; vertex=3, basis=true, upset=2, downset=1, matrix_limit=(1, 2))
     up, down = limited.panels[1:2]
@@ -2139,9 +2705,9 @@ end
     limited_full = only(p for p in limited.panels if p.title == "Full coefficient matrix Phi")
     @test size(limited_full.metadata.matrix) == (2, 2)
     @test size(only(limited_full.layers).entries) == (1, 2)
-    @test size(limited_full.metadata.cell_colors) == (1, 2)
-    @test length(limited_full.metadata.row_colors) == 1
-    @test length(limited_full.metadata.column_colors) == 2
+    @test size(limited_full.metadata.cell_roles) == (1, 2)
+    @test length(limited_full.metadata.row_roles) == 1
+    @test length(limited_full.metadata.column_roles) == 2
     active = only(p for p in limited.panels if p.title == "Selected stalk: active block")
     @test only(active.layers).row_labels == ["D2"]
     @test only(active.layers).entries == ["0" "1"]
@@ -2246,13 +2812,14 @@ end
         labels = [item for item in fig.content if item isa makie.Label]
         texts = [String(item.text[]) for item in labels]
         @test "downset / upset" in texts
-        @test "D2" in texts && "U1" in texts
+        @test any(startswith("D2"), texts) && any(startswith("U1"), texts)
         @test any(occursin("Empty matrix (1 x 0): the image has no basis vectors"), texts)
         @test "Active downset coordinates: D2" in texts
+        active_color = makie.to_color(V._visual_color(V.VisualStyle(), V._VisualRole(:selected)))
         @test any(item -> item.text[] == "0" &&
-            makie.to_color(item.color[]) == makie.to_color(:seagreen), labels)
-        @test any(item -> item.text[] == "D2" &&
-            makie.to_color(item.color[]) == makie.to_color(:seagreen), labels)
+            makie.to_color(item.color[]) == active_color, labels)
+        @test any(item -> startswith(item.text[], "D2") &&
+            makie.to_color(item.color[]) == active_color, labels)
         axes = [item for item in fig.content if item isa makie.Axis]
         for ax in (item for item in fig.content if item isa makie.Axis)
             isempty(ax.subtitle[]) && continue
@@ -2401,4 +2968,1275 @@ end
     @test viz.check_visual_spec(spec).valid
     @test !viz.check_visual_request(enc; kind=:presentation_inspector, point=(0, 0, 0)).valid
     @test_throws ArgumentError TOA.visual_spec(enc; kind=:presentation_inspector, point=(0, 0, 0))
+end
+
+# A function boundary keeps LLVM from optimizing five field implementations
+# into one very large test thunk; the package uses ordinary compilation.
+@noinline function _check_linked_inspection_field(field, ::Type{K}) where {K}
+    V = TamerOp.Visualization
+    P = chain_poset(3)
+    # The two intervals [1,2] and [2,3] have dimensions 1,2,1.
+    # Both adjacent maps have rank one, but the composite is zero.
+    H = FF.FringeModule{K}(P,
+        [FF.Upset(P, BitVector([1,1,1])), FF.Upset(P, BitVector([0,1,1]))],
+        [FF.Downset(P, BitVector([1,1,0])), FF.Downset(P, BitVector([1,1,1]))],
+        K[1 0; 0 1]; field)
+    M = TOA.pmodule_from_fringe(H)
+    enc = RES.EncodingResult(P, M, nothing; H)
+    session = TamerOp.inspection_session(enc; cache_limit=2)
+    @test session isa TOA.InspectionSession
+    @test V.inspection_summary(session).supported_views == (:module, :presentation)
+    @test !V.inspection_summary(session).geometry_available
+    @test V.inspection_selection(session).selector == :none
+    @test V.inspection_snapshot(session).metadata.inspection.kind == :overview
+    @test V.check_inspection_session(session).valid
+    @test V.describe(session).closed == false
+    @test occursin("InspectionSession", sprint(show, session))
+    @test occursin("InspectionSession", sprint(show, MIME"text/plain"(), session))
+    for q in 1:3
+        V.select_inspection!(session; vertex=q)
+        @test V.inspection_selection(session).vertex == q
+        @test V.inspection_snapshot(session).metadata.inspection.dimension == (1,2,1)[q]
+    end
+    expected = (((1,2), reshape(K[1,0], 2,1)),
+                ((2,3), reshape(K[0,1], 1,2)),
+                ((1,3), reshape(K[0], 1,1)))
+    actual = Matrix{K}[]
+    for (pair, matrix) in expected
+        V.select_inspection!(session; pair)
+        snap = V.inspection_snapshot(session)
+        @test snap.metadata.inspection.defined
+        @test snap.metadata.inspection.matrix == matrix
+        @test V.check_visual_spec(snap).valid
+        push!(actual, snap.metadata.inspection.matrix)
+        # Switching interpretation preserves the actual selected labels.
+        V.select_inspection!(session; view=:presentation)
+        ps = V.inspection_snapshot(session)
+        @test V.inspection_selection(session).pair == pair
+        @test IR.induced_map(ps.metadata.presentation_map) == matrix
+        @test only(filter(p -> p.kind == :hasse, ps.panels)).metadata.selected_pair == pair
+        V.select_inspection!(session; view=:module)
+    end
+    @test actual[2] * actual[1] == actual[3] == zeros(K,1,1)
+    V.select_inspection!(session; pair=(3,1))
+    @test !V.inspection_snapshot(session).metadata.inspection.defined
+    @test V.inspection_snapshot(session).metadata.inspection.matrix === nothing
+    V.select_inspection!(session; pair=(2,2))
+    @test V.inspection_snapshot(session).metadata.inspection.matrix == K[1 0; 0 1]
+    # Repeating the selected query uses bounded retained algebra.
+    hits = V.inspection_summary(session).cache_hits
+    V.select_inspection!(session; pair=(2,2))
+    @test V.inspection_summary(session).cache_hits > hits
+    @test V.inspection_summary(session).cache_entries <= 2
+    old = V.inspection_snapshot(session)
+    V.close_inspection!(session)
+    @test V.inspection_summary(session).closed
+    @test V.inspection_snapshot(session) === old
+    @test V.inspection_summary(session).cache_entries == 0
+    @test_throws ArgumentError V.select_inspection!(session; vertex=1)
+    @test V.close_inspection!(session) === session
+end
+
+@testset "A37 linked inspection keeps maps and field semantics" begin
+    for field in FIELDS_FULL
+        _check_linked_inspection_field(field, CM.coeff_type(field))
+    end
+end
+
+@testset "A37 selection transactions and finite-only contracts" begin
+    V = TamerOp.Visualization
+    P = chain_poset(2)
+    M = MD.PModule{QQ}(P, [1,1], Dict((1,2) => reshape(QQ[1],1,1)); field=CM.QQField())
+    s = TamerOp.inspection_session(M)
+    @test V.inspection_summary(s).supported_views == (:module,)
+    @test TamerOp.available_visuals(s) == (:linked_inspector,)
+    @test V.check_visual_request(s).valid
+    @test V.check_visual_request(s).rendering.selection
+    @test V.check_visual_request(s).rendering.hover
+    @test !V.check_visual_request(s; backend=:cairomakie).valid
+    @test !V.check_visual_request(s; vertex=1).valid
+    for kwargs in ((; vertex=0), (; vertex=true), (; vertex=3), (; pair=(1,3)),
+                   (; vertex=1,pair=(1,2)), (; point=(0,0)),
+                   (; view=:presentation), (; view=:imaginary), (; basis=true),
+                   (; input=:imaginary))
+        before, picture = V.inspection_selection(s), V.inspection_snapshot(s)
+        @test !V.check_inspection_selection(s; kwargs...).valid
+        @test_throws ArgumentError V.select_inspection!(s; kwargs...)
+        @test V.inspection_selection(s) == before
+        @test V.inspection_snapshot(s) === picture
+    end
+    @test_throws ArgumentError TamerOp.inspection_session(M; box=([0,0],[1,1]))
+    @test_throws ArgumentError TamerOp.inspection_session(M; cache_limit=-1)
+    @test_throws ArgumentError TamerOp.inspection_session(M; matrix_limit=(0,3))
+    calls = Tuple{Int,Symbol}[]
+    token = V._on_inspection(s, changed -> push!(calls,
+        (V.inspection_selection(changed).revision, V.inspection_selection(changed).selector)))
+    V.select_inspection!(s; vertex=2)
+    @test last(calls)[2] == :vertex
+    V.reset_inspection!(s)
+    @test last(calls)[2] == :none
+    @test length(calls) == 2 && calls[2][1] > calls[1][1]
+    V._off_inspection!(s, token)
+    V.select_inspection!(s; pair=(1,2))
+    @test length(calls) == 2
+    # Failed listener work cannot roll back the successfully selected vertex.
+    reentrant = V._on_inspection(s, changed -> V.reset_inspection!(changed))
+    V.select_inspection!(s; vertex=1)
+    @test V.inspection_selection(s).vertex == 1
+    V._off_inspection!(s, reentrant)
+    closed_seen = Ref(false)
+    V._on_inspection(s, changed -> (closed_seen[] = V.inspection_summary(changed).closed))
+    live = V.visual_spec(s)
+    @test live.kind == :linked_inspector
+    @test live.interaction.requires_live_julia && !live.interaction.offline_widgets
+    @test V.check_visual_spec(live).valid
+    @test_throws ArgumentError V.render(live; backend=:cairomakie)
+    mktempdir() do dir
+        @test_throws ArgumentError TamerOp.save_visual(joinpath(dir,"live.html"), live)
+        @test !isfile(joinpath(dir,"live.html"))
+    end
+    V.close_inspection!(s)
+    @test closed_seen[]
+    @test !V.check_visual_spec(live).valid
+    @test V.check_visual_spec(V.inspection_snapshot(s)).valid
+end
+
+@testset "A37 exact coordinate entry cannot execute code" begin
+    V = TamerOp.Visualization
+    for (text, number) in (("2",2//1), ("-3/4",-3//4), (" 5//2 ",5//2),
+                           ("0.1",1//10), ("-1.25",-5//4), ("1e-3",1//1000))
+        @test V._parse_inspection_coordinate(text) == number
+    end
+    for text in ("", "NaN", "Inf", "1/0", "1/2/3", "sqrt(2)",
+                 "1; error(\"executed\")", "begin 1 end")
+        @test_throws ArgumentError V._parse_inspection_coordinate(text)
+    end
+end
+
+@testset "A37 linked parameter queries preserve boundaries and ambient order" begin
+    V = TamerOp.Visualization
+    opts = TOA.EncodingOptions(; backend=:pl_backend, poset_kind=:signature, field=CM.QQField())
+    enc = TamerOp.encode([TOA.BoxUpset([0.0,0.0]), TOA.BoxUpset([1.0,1.0])],
+        [TOA.BoxDownset([2.0,2.0]), TOA.BoxDownset([3.0,3.0])], QQ[1 0;0 1], opts)
+    s = TamerOp.inspection_session(enc; box=([-1,-1],[4,4]), cache_limit=3)
+    @test V.inspection_summary(s).geometry_available
+    for (point, dimension) in (((1//2,1//2),1), ((3//2,3//2),2),
+                               ((5//2,5//2),1), ((1//2,5//2),0))
+        V.select_inspection!(s; point)
+        state = V.inspection_selection(s)
+        @test only(state.query_points) == point
+        @test state.vertex == EC.locate(TamerOp.encoding_map(enc), point)
+        @test V.inspection_snapshot(s).metadata.inspection.dimension == dimension
+    end
+    V.select_inspection!(s; view=:presentation, upset=1, downset=2)
+    active_zero = V.inspection_snapshot(s)
+    stalk = only(active_zero.metadata.stalks)
+    @test IR.active_rows(stalk) == [2] && IR.active_columns(stalk) == [1]
+    @test IR.presentation_matrix(stalk) == reshape(QQ[0],1,1)
+    @test IR.image_basis(stalk) === nothing
+    V.select_inspection!(s; basis=true)
+    @test size(IR.image_basis(only(V.inspection_snapshot(s).metadata.stalks))) == (1,0)
+    @test V.inspection_selection(s).downset == 2
+    a, b = (5//4,7//4), (7//4,5//4)
+    @test EC.locate(TamerOp.encoding_map(enc), a) == EC.locate(TamerOp.encoding_map(enc), b)
+    V.select_inspection!(s; parameter_pair=((5//4,5//4),(7//4,7//4)), basis=false)
+    @test V.inspection_snapshot(s).metadata.defined
+    @test IR.induced_map(V.inspection_snapshot(s).metadata.presentation_map) == QQ[1 0;0 1]
+    V.select_inspection!(s; parameter_pair=(a,b), basis=false)
+    @test V.inspection_selection(s).parameter_relation == :incomparable
+    @test !V.inspection_snapshot(s).metadata.defined
+    @test V.inspection_snapshot(s).metadata.presentation_map === nothing
+    q = EC.locate(TamerOp.encoding_map(enc), a)
+    V.select_inspection!(s; pair=(q,q))
+    @test V.inspection_snapshot(s).metadata.defined
+    @test IR.induced_map(V.inspection_snapshot(s).metadata.presentation_map) == QQ[1 0;0 1]
+    # Switching back to point input retains the supplied rational exactly.
+    p = (1//1 + 1//(big(1)<<70),3//2)
+    V.select_inspection!(s; point=p, view=:module)
+    @test only(V.inspection_selection(s).query_points) == p
+    @test only(V.inspection_selection(s).query_points)[1] > 1
+    V.select_inspection!(s; point=(1.0,1.5), input=:pointer)
+    @test V.inspection_selection(s).input == :pointer
+    V.close_inspection!(s)
+end
+
+@testset "A37 native linked controls and static snapshots" begin
+    V = TamerOp.Visualization
+    if Base.find_package("WGLMakie") === nothing || Base.find_package("CairoMakie") === nothing
+        @test_skip false
+    else
+        @eval import WGLMakie
+        @eval import CairoMakie
+        E = Base.get_extension(TamerOp, :TamerOpWGLMakieExt)
+        @test E !== nothing
+        opts = TOA.EncodingOptions(; backend=:pl_backend, poset_kind=:signature, field=CM.QQField())
+        enc = TamerOp.encode([TOA.BoxUpset([0.0,0.0]), TOA.BoxUpset([1.0,1.0])],
+            [TOA.BoxDownset([2.0,2.0]), TOA.BoxDownset([3.0,3.0])], QQ[1 0;0 1], opts)
+        s = TamerOp.inspection_session(enc; box=([-1,-1],[4,4]))
+        app = TamerOp.visualize(s; backend=:wglmakie)
+        @test app isa WGLMakie.Bonito.App
+        ui = E._inspection_ui(app)
+        controls = ui.controls
+        graph = ui.axes.hasse
+        before = V.inspection_summary(s)
+        hovered = ui.callbacks.hover(; point=(1.5,1.5))
+        @test hovered.dimension == 2 && hovered.approximate
+        @test V.inspection_summary(s).revision == before.revision
+        @test V.inspection_summary(s).cache_misses == before.cache_misses
+        controls.point_x.value[] = "1/2"
+        controls.point_y.value[] = "5/2"
+        controls.select_point.value[] = true
+        @test isempty(ui.error_text[])
+        @test only(V.inspection_selection(s).query_points) == (1//2,5//2)
+        @test V.inspection_snapshot(s).metadata.inspection.dimension == 0
+        controls.view.option_index[] = 2
+        controls.downset.option_index[] = 2
+        controls.basis.value[] = true
+        @test isempty(ui.error_text[])
+        @test size(IR.image_basis(only(V.inspection_snapshot(s).metadata.stalks))) == (1,0)
+        @test !ui.basis_disabled[]
+        @test length(ui.markers.hasse.stalk[]) == 1
+        @test length(ui.markers.region.stalk[]) == 1
+        @test ui.axes.hasse === graph
+        selected = V.inspection_selection(s)
+        controls.point_x.value[] = "error(\"not a number\")"
+        controls.select_point.value[] = true
+        @test !isempty(ui.error_text[])
+        @test V.inspection_selection(s) == selected
+        # These are the same live callbacks consumed by WGL mouse picking.
+        controls.endpoint.option_index[] = 2
+        @test ui.callbacks.choose(:point,(0.5,0.5); input=:pointer)
+        controls.endpoint.option_index[] = 3
+        @test ui.callbacks.choose(:point,(2.5,2.5); input=:pointer)
+        @test isempty(ui.error_text[])
+        @test V.inspection_selection(s).selector == :parameter_pair
+        @test V.inspection_selection(s).input == :pointer
+        @test V.inspection_snapshot(s).metadata.defined
+        @test IR.induced_map(V.inspection_snapshot(s).metadata.presentation_map) == reshape(QQ[0],1,1)
+        @test ui.basis_disabled[]
+        @test length(ui.markers.hasse.source[]) == length(ui.markers.hasse.target[]) == 1
+        @test length(ui.markers.region.source[]) == length(ui.markers.region.target[]) == 1
+        @test ui.preparation_count == 1
+        controls.source_x.value[] = "5/4"
+        controls.source_y.value[] = "7/4"
+        controls.target_x.value[] = "7/4"
+        controls.target_y.value[] = "5/4"
+        controls.select_points.value[] = true
+        @test !V.inspection_snapshot(s).metadata.defined
+        @test V.inspection_selection(s).parameter_relation == :incomparable
+        @test isempty(ui.error_text[])
+        controls.reset.value[] = true
+        @test V.inspection_selection(s).selector == :none
+        @test isempty(ui.markers.region.source[]) && isempty(ui.markers.region.target[])
+        controls.endpoint.option_index[] = 1
+        controls.vertex.value[] = "1"
+        controls.select_vertex.value[] = true
+        controls.next_vertex.value[] = true
+        @test V.inspection_selection(s).vertex == 2
+        @test isempty(V.inspection_selection(s).query_points)
+        @test isempty(ui.markers.region.stalk[])
+        @test isempty(ui.error_text[])
+        @test isempty(V.inspection_summary(s).listener_errors)
+        @test V.inspection_summary(s).geometry_preparations == 1
+        @test V.inspection_summary(s).hasse_preparations == 1
+        mktempdir() do dir
+            # Direct static export of a live specification captures current
+            # selection, and reports the kind that was actually saved.
+            saved = TamerOp.save_visual(dir, "selected", V.visual_spec(s); format=:svg)
+            @test TamerOp.export_kind(saved) == V.inspection_snapshot(s).kind
+            @test filesize(TamerOp.export_path(saved)) > 1000
+            @test occursin("<svg", read(TamerOp.export_path(saved), String))
+        end
+        final_snapshot = V.inspection_snapshot(s)
+        controls.close.value[] = true
+        @test V.inspection_summary(s).closed
+        @test ui.closed[] && ui.disabled[]
+        @test isempty(ui.observers)
+        @test V.inspection_summary(s).listener_count == 0
+        @test V.inspection_snapshot(s) === final_snapshot
+        @test !haskey(E._INSPECTION_UI_HANDLES, app)
+        @test !ui.callbacks.choose(:vertex,1)
+        @test V.inspection_snapshot(s) === final_snapshot
+    end
+end
+
+@testset "A37 Bonito serialization and independent viewer lifecycle" begin
+    if Base.find_package("WGLMakie") === nothing
+        @test_skip false
+    else
+        @eval import WGLMakie
+        V, A = TamerOp.Visualization, TamerOp.Advanced
+        B, M = WGLMakie.Bonito, WGLMakie.Makie
+        E = Base.get_extension(TamerOp, :TamerOpWGLMakieExt)
+        opts = A.EncodingOptions(; backend=:pl_backend, poset_kind=:signature,
+            field=TamerOp.CoreModules.QQField())
+        enc = TamerOp.encode([A.BoxUpset([0.0,0.0]), A.BoxUpset([1.0,1.0])],
+            [A.BoxDownset([2.0,2.0]), A.BoxDownset([3.0,3.0])], TamerOp.QQ[1 0;0 1], opts)
+        s = TamerOp.inspection_session(enc; box=([-1,-1],[4,4]))
+        app1 = TamerOp.visualize(s; backend=:wglmakie)
+        ui1 = E._inspection_ui(app1)
+        client1 = B.Session(B.NoConnection(); asset_server=B.NoServer())
+        rejected_client = B.Session(B.NoConnection(); asset_server=B.NoServer())
+        client2 = B.Session(B.NoConnection(); asset_server=B.NoServer())
+        try
+            # Bonito's own tests use this no-connection path. It renders native
+            # controls, serializes WGL scenes and registers lifecycle callbacks;
+            # it does not execute JavaScript or emulate a browser click.
+            dom1 = B.session_dom(client1, app1; init=false)
+            html1 = sprint(show, MIME"text/html"(), dom1)
+            @test occursin(ui1.dom_id * "-point-x", html1)
+            @test occursin("<canvas", html1)
+            @test occursin("Live Julia session required", html1)
+            bytes1 = B.serialize_binary(client1, B.fused_messages!(client1))
+            @test !isempty(bytes1)
+            @test ui1.browser_client[] === client1
+
+            refused = B.session_dom(rejected_client, app1; init=false)
+            refused_html = sprint(show, MIME"text/html"(), refused)
+            @test occursin("already has a browser client", refused_html)
+            # Bonito may HTML-escape parentheses in ordinary text nodes.
+            has_reopen_guidance = occursin(r"visualize(?:\(|&#40;)session(?:\)|&#41;)", refused_html)
+            @test has_reopen_guidance
+            @test !occursin("<canvas", refused_html)
+            @test ui1.browser_client[] === client1
+            @test app1.session[] === client1
+            close(rejected_client)
+            @test !ui1.closed[] && !V.inspection_summary(s).closed
+
+            # An independent returned App has independent WGL scenes and still
+            # follows the same core selection session.
+            app2 = TamerOp.visualize(s; backend=:wglmakie)
+            ui2 = E._inspection_ui(app2)
+            dom2 = B.session_dom(client2, app2; init=false)
+            @test occursin(ui2.dom_id * "-point-x", sprint(show, MIME"text/html"(), dom2))
+            @test !isempty(B.serialize_binary(client2, B.fused_messages!(client2)))
+            @test ui1.figure !== ui2.figure
+            @test V.inspection_summary(s).listener_count == 2
+
+            close(client1)
+            @test ui1.closed[] && isempty(ui1.observers)
+            @test isempty(ui1.figure.content)
+            @test !haskey(E._INSPECTION_UI_HANDLES, app1)
+            @test !ui2.closed[] && !M.isclosed(ui2.figure.scene)
+            @test !V.inspection_summary(s).closed
+            @test V.inspection_summary(s).listener_count == 1
+
+            V.select_inspection!(s; point=(1//2,5//2), view=:presentation, basis=true)
+            @test isempty(V.inspection_summary(s).listener_errors)
+            @test length(ui2.markers.region.stalk[]) == 1
+            @test occursin("presentation", ui2.selection_text[])
+            @test !isempty(B.serialize_binary(client2, B.fused_messages!(client2)))
+            initial_child_count = length(client2.children)
+            for support_id in (2,1,2)
+                old_figure = ui2.support_figure[]
+                V.select_inspection!(s; downset=support_id)
+                @test isempty(V.inspection_summary(s).listener_errors)
+                @test old_figure !== ui2.support_figure[]
+                @test isempty(old_figure.content)
+                @test length(client2.children) == initial_child_count
+                @test !isempty(B.serialize_binary(client2, B.fused_messages!(client2)))
+            end
+
+            snapshot = V.inspection_snapshot(s)
+            V.close_inspection!(s)
+            @test ui2.closed[] && isempty(ui2.observers)
+            @test isempty(ui2.figure.content)
+            @test ui2.support_figure[] === nothing
+            @test V.inspection_snapshot(s) === snapshot
+            @test V.inspection_summary(s).listener_count == 0
+            @test isempty(V.inspection_summary(s).listener_errors)
+            @test !haskey(E._INSPECTION_UI_HANDLES, app2)
+        finally
+            close(rejected_client)
+            close(client1)
+            close(client2)
+            V.close_inspection!(s)
+        end
+    end
+end
+
+@testset "A37 server embedding renders native inspector controls" begin
+    if Base.find_package("WGLMakie") === nothing
+        @test_skip false
+    else
+        @eval import WGLMakie
+        V, A = TamerOp.Visualization, TamerOp.Advanced
+        B = WGLMakie.Bonito
+        E = Base.get_extension(TamerOp, :TamerOpWGLMakieExt)
+        opts = A.EncodingOptions(; backend=:pl_backend, poset_kind=:signature,
+            field=TamerOp.CoreModules.QQField())
+        enc = TamerOp.encode([A.BoxUpset([0.0,0.0]), A.BoxUpset([1.0,1.0])],
+            [A.BoxDownset([2.0,2.0]), A.BoxDownset([3.0,3.0])], TamerOp.QQ[1 0;0 1], opts)
+        s = TamerOp.inspection_session(enc; box=([-1,-1],[4,4]))
+        viewers = B.App[]
+        # A server route is reusable, but each inspector viewer has one client.
+        # Expand the inner App so the outer render pass processes all its DOM.
+        # Returning the App directly printed Dropdown objects and caused other
+        # widgets to fall back to independent HTML displays in a real browser.
+        wrapper = B.App() do browser_session
+            V.inspection_summary(s).closed && return B.DOM.p("Inspection session closed.")
+            viewer = TamerOp.visualize(s; backend=:wglmakie)
+            push!(viewers, viewer)
+            return B.jsrender(browser_session, viewer)
+        end
+        clients = [B.Session(B.NoConnection(); asset_server=B.NoServer()) for _ in 1:3]
+        try
+            for client in clients[1:2]
+                dom = B.session_dom(client, wrapper; init=false, html_document=true)
+                html = sprint(show, MIME"text/html"(), dom)
+                viewer = last(viewers)
+                ui = E._inspection_ui(viewer)
+                @test !occursin("Bonito.Dropdown", html)
+                @test length(collect(eachmatch(r"<html\b", html))) == 1
+                native_selects = (("endpoint", ("Stalk", "Source", "Target")),
+                        ("view", ("Module coordinates", "Presentation image coordinates")),
+                        ("upset", ("U1", "U2")), ("downset", ("D1", "D2")),
+                        ("slice-interval", ("No selected interval",)),
+                        ("slice-scope", ("Viewing-window restriction", "Whole line (certified endpoints)")))
+                @test length(collect(eachmatch(r"<select\b", html))) == length(native_selects)
+                for (suffix, choices) in native_selects
+                    element = match(Regex("<select\\b[^>]*\\bid=\"" * ui.dom_id *
+                        "-" * suffix * "\"[^>]*>(.*?)</select>", "s"), html)
+                    @test element !== nothing
+                    if element !== nothing
+                        @test occursin("class=", element.match)
+                        for choice in choices
+                            @test occursin("<option", element.captures[1])
+                            # Bonito escapes parentheses in visible option text.
+                            option_text = replace(element.captures[1], "&#40;" => "(", "&#41;" => ")")
+                            @test occursin(choice, option_text)
+                        end
+                    end
+                end
+                for suffix in ("vertex", "label-source", "label-target", "point-x", "point-y",
+                        "source-x", "source-y", "target-x", "target-y", "basis")
+                    @test occursin(Regex("<input\\b[^>]*\\bid=\"" * ui.dom_id * "-" * suffix * "\""), html)
+                end
+                for suffix in ("select-vertex", "previous-vertex", "next-vertex", "select-labels",
+                        "select-point", "select-points", "reset", "close")
+                    @test occursin(Regex("<button\\b[^>]*\\bid=\"" * ui.dom_id * "-" * suffix * "\""), html)
+                end
+                @test occursin("<canvas", html)
+                @test !isempty(B.serialize_binary(client, B.fused_messages!(client)))
+                @test ui.browser_client[] === client
+                @test viewer.session[] === client
+            end
+            first_ui, second_ui = E._inspection_ui.(viewers)
+            @test first_ui.figure !== second_ui.figure
+            @test first_ui.dom_id != second_ui.dom_id
+            @test V.inspection_summary(s).listener_count == 2
+            V.select_inspection!(s; parameter_pair=((1//2,1//2), (5//2,5//2)))
+            @test occursin("Supplied", first_ui.selection_text[])
+            @test first_ui.selection_text[] == second_ui.selection_text[]
+            @test V.inspection_snapshot(s).metadata.inspection.matrix == zeros(QQ, 1, 1)
+            close(clients[1])
+            @test first_ui.closed[]
+            @test !second_ui.closed[]
+            @test !V.inspection_summary(s).closed
+            @test V.inspection_summary(s).listener_count == 1
+            V.close_inspection!(s)
+            @test second_ui.closed[]
+            @test V.inspection_summary(s).listener_count == 0
+            closed_dom = B.session_dom(clients[3], wrapper; init=false)
+            @test occursin("Inspection session closed", sprint(show, MIME"text/html"(), closed_dom))
+            @test length(viewers) == 2
+        finally
+            V.close_inspection!(s)
+            foreach(close, clients)
+        end
+    end
+end
+
+@testset "A37 oriented grid outside labels and equivalent selections" begin
+    V = TamerOp.Visualization
+    P = FF.ProductOfChainsPoset((2, 2))
+    grid = EC.GridEncodingMap(P, ([0, 2], [1, 4]); orientation=(-1, 1))
+    U, D = FF.Upset(P, trues(4)), FF.Downset(P, trues(4))
+    H = FF.FringeModule{QQ}(P, [U, U], [D, D], QQ[1 0; 0 1]; field=CM.QQField())
+    enc = RES.EncodingResult(P, TOA.pmodule_from_fringe(H), EC.compile_encoding(P, grid); H)
+    s = TamerOp.inspection_session(enc; box=([-3, 0], [2, 5]), cache_limit=16)
+    prepared = V._inspection_scene(s)
+    geometry = prepared.region.metadata.geometry
+    positions = prepared.hasse.metadata.positions
+    for view in (:module, :presentation)
+        V.select_inspection!(s; view, point=(1, 1))
+        @test V.inspection_selection(s).vertex == 0
+        outside = V.inspection_snapshot(s)
+        if view === :module
+            @test outside.metadata.inspection.kind == :outside
+            @test outside.metadata.inspection.dimension === nothing
+        else
+            @test outside.metadata.relation == :outside
+            @test only(outside.metadata.stalks) === nothing
+        end
+        region = first(p for p in outside.panels if haskey(p.metadata, :geometry))
+        @test only(region.metadata.query_readout).region_id == 0
+        @test region.metadata.geometry === geometry
+        @test only(p for p in outside.panels if p.kind == :hasse).metadata.positions === positions
+
+        # This pair is forward in the oriented parameter order but its source
+        # is unrepresented. It must never be presented as a zero matrix.
+        V.select_inspection!(s; parameter_pair=((1, 1), (0, 1)))
+        missing = V.inspection_snapshot(s)
+        @test V.inspection_selection(s).parameter_relation == :comparable
+        @test first(V.inspection_selection(s).pair) == 0
+        if view === :module
+            @test !missing.metadata.inspection.defined
+            @test missing.metadata.inspection.matrix === nothing
+            @test missing.metadata.inspection.source_dimension === nothing
+            @test missing.metadata.inspection.target_dimension == 2
+        else
+            @test !missing.metadata.defined && missing.metadata.presentation_map === nothing
+            @test first(missing.metadata.stalks) === nothing
+            @test IR.presentation_summary(last(missing.metadata.stalks)).dimension == 2
+            @test IR.image_basis(last(missing.metadata.stalks)) === nothing
+        end
+
+        # Orientation (-1,+1) means decreasing x and increasing y is forward.
+        V.select_inspection!(s; parameter_pair=((0, 1), (-2, 4)))
+        forward = V.inspection_snapshot(s)
+        @test V.inspection_selection(s).parameter_relation == :comparable
+        if view === :module
+            @test forward.metadata.inspection.defined
+            @test forward.metadata.inspection.matrix == QQ[1 0; 0 1]
+        else
+            @test forward.metadata.defined
+            @test IR.induced_map(forward.metadata.presentation_map) == QQ[1 0; 0 1]
+        end
+        V.select_inspection!(s; parameter_pair=((-2, 4), (0, 1)))
+        reverse = V.inspection_snapshot(s)
+        @test V.inspection_selection(s).parameter_relation == :reverse_comparable
+        if view === :module
+            @test !reverse.metadata.inspection.defined
+            @test reverse.metadata.inspection.matrix === nothing
+        else
+            @test !reverse.metadata.defined && reverse.metadata.presentation_map === nothing
+        end
+    end
+
+    # Exact query coordinates differ while the selected algebra is identical.
+    a, b = (-1//4, 2//1), (-1//2, 3//1)
+    @test EC.locate(grid, a) == EC.locate(grid, b)
+    V.select_inspection!(s; point=a)
+    stalk = only(V.inspection_snapshot(s).metadata.stalks)
+    before = V.inspection_summary(s)
+    V.select_inspection!(s; point=b)
+    after = V.inspection_summary(s)
+    @test after.cache_hits == before.cache_hits + 1
+    @test after.cache_misses == before.cache_misses
+    @test only(V.inspection_selection(s).query_points) == b
+    @test only(V.inspection_snapshot(s).metadata.stalks) === stalk
+    panel = first(p for p in V.inspection_snapshot(s).panels if haskey(p.metadata, :query_readout))
+    @test only(panel.metadata.query_readout).point == b
+    @test only(panel.metadata.query_readout).region_id == EC.locate(grid, b)
+    V.select_inspection!(s; upset=2, downset=2)
+    @test V.inspection_summary(s).cache_hits == after.cache_hits + 1
+    @test V.inspection_summary(s).cache_misses == after.cache_misses
+    @test only(V.inspection_snapshot(s).metadata.stalks) === stalk
+    @test V.inspection_selection(s).upset == V.inspection_selection(s).downset == 2
+    supports = filter(p -> p.kind == :presentation_support, V.inspection_snapshot(s).panels)
+    @test length(supports) == 2 && all(p -> p.metadata.support_id == 2, supports)
+    @test V.inspection_summary(s).geometry_preparations == 1
+    @test V.inspection_summary(s).hasse_preparations == 1
+    V.close_inspection!(s)
+end
+
+@testset "A37 failed listeners do not stop later listeners or cleanup" begin
+    V = TamerOp.Visualization
+    P = chain_poset(2)
+    M = MD.PModule{QQ}(P, [1, 1], Dict((1,2) => reshape(QQ[1], 1, 1)); field=CM.QQField())
+    s = TamerOp.inspection_session(M)
+    observed = Int[]
+    failed = V._on_inspection(s, changed -> V.reset_inspection!(changed))
+    V._on_inspection(s, changed -> push!(observed, V.inspection_selection(changed).revision))
+    V.select_inspection!(s; vertex=2)
+    @test V.inspection_selection(s).vertex == 2
+    @test observed == [V.inspection_selection(s).revision]
+    @test !isempty(V.inspection_summary(s).listener_errors)
+    @test !V.inspection_summary(s).updating
+    @test V.check_inspection_session(s).valid
+    V._off_inspection!(s, failed)
+    snapshot = V.inspection_snapshot(s)
+    V.close_inspection!(s)
+    @test length(observed) == 2 # The surviving listener also sees closure.
+    @test V.inspection_summary(s).listener_count == 0
+    @test V.check_inspection_session(s).valid
+    @test V.inspection_snapshot(s) === snapshot
+end
+
+@testset "A37 zero-capacity and evicted algebra caches" begin
+    V = TamerOp.Visualization
+    P = chain_poset(2)
+    M = MD.PModule{QQ}(P, [1, 1], Dict((1,2) => reshape(QQ[1], 1, 1)); field=CM.QQField())
+    uncached = TamerOp.inspection_session(M; cache_limit=0)
+    for _ in 1:2
+        V.select_inspection!(uncached; pair=(1, 2))
+        @test V.inspection_snapshot(uncached).metadata.inspection.matrix == reshape(QQ[1], 1, 1)
+    end
+    @test V.inspection_summary(uncached).cache_entries == 0
+    @test V.inspection_summary(uncached).cache_hits == 0
+    @test V.inspection_summary(uncached).cache_misses == 2
+    @test V.check_inspection_session(uncached).valid
+    V.close_inspection!(uncached)
+
+    bounded = TamerOp.inspection_session(M; cache_limit=1)
+    for pair in ((1, 1), (1, 2), (1, 1))
+        V.select_inspection!(bounded; pair)
+        @test V.inspection_summary(bounded).cache_entries == 1
+        @test V.inspection_snapshot(bounded).metadata.inspection.target == pair[2]
+    end
+    @test V.inspection_summary(bounded).cache_misses == 3
+    @test V.inspection_summary(bounded).cache_hits == 0
+    V.select_inspection!(bounded; pair=(1, 1))
+    @test V.inspection_summary(bounded).cache_hits == 1
+    @test V.inspection_summary(bounded).cache_misses == 3
+    @test V.check_inspection_session(bounded).valid
+    V.close_inspection!(bounded)
+end
+
+@testset "A37 native Makie pointer event routing" begin
+    V = TamerOp.Visualization
+    if Base.find_package("WGLMakie") === nothing
+        @test_skip false
+    else
+        @eval import WGLMakie
+        E = Base.get_extension(TamerOp, :TamerOpWGLMakieExt)
+        M = WGLMakie.Makie
+        opts = TOA.EncodingOptions(; backend=:pl_backend, poset_kind=:signature, field=CM.QQField())
+        enc = TamerOp.encode([TOA.BoxUpset([0.0,0.0])],
+            [TOA.BoxDownset([2.0,2.0])], reshape(QQ[1],1,1), opts)
+        s = TamerOp.inspection_session(enc; box=([-1,-1],[4,4]))
+        app = TamerOp.visualize(s; backend=:wglmakie)
+        ui = E._inspection_ui(app)
+        try
+            # Exercise the event consumers, including viewport hit testing and
+            # nearest-vertex picking. This does not execute browser JavaScript.
+            M.update_state_before_display!(ui.figure)
+            events = M.events(ui.figure.scene)
+            region, hasse = ui.axes.region, ui.axes.hasse
+            @test region !== nothing
+            @test ui.controls.endpoint.value[] == "Stalk"
+            function move_to_data!(ax, point)
+                # Makie.project(scene, point) yields scene-local pixels; native
+                # mouse events and is_mouseinside use figure-global pixels.
+                local_pixel = M.project(ax.scene, M.Point2d(point))
+                pixel = local_pixel + minimum(M.viewport(ax.scene)[])
+                events.mouseposition[] = (Float64(pixel[1]), Float64(pixel[2]))
+            end
+            function left_click!()
+                events.mousebutton[] = M.MouseButtonEvent(M.Mouse.left, M.Mouse.press)
+                events.mousebutton[] = M.MouseButtonEvent(M.Mouse.left, M.Mouse.release)
+            end
+            hover_work(d) = (d.revision, d.cache_hits, d.cache_misses, d.cache_entries,
+                d.snapshot_builds, d.module_materialized, d.geometry_preparations, d.hasse_preparations)
+
+            inside = (1.0,1.0)
+            inside_label = EC.locate(TamerOp.encoding_map(enc), inside)
+            outside_label = EC.locate(TamerOp.encoding_map(enc), (3.0,1.0))
+            dims = TamerOp.dimensions(enc)
+            @test dims[inside_label] == 1 && dims[outside_label] == 0
+            before_hover = hover_work(V.inspection_summary(s))
+            move_to_data!(region, inside)
+            @test M.is_mouseinside(region.scene)
+            @test !M.is_mouseinside(hasse.scene)
+            @test hover_work(V.inspection_summary(s)) == before_hover
+            @test occursin("Vertex $inside_label; dimension 1.", ui.hover_text[])
+            left_click!()
+            selected = V.inspection_selection(s)
+            @test selected.selector == :point && selected.input == :pointer
+            @test selected.vertex == inside_label
+            @test all(isapprox.(only(selected.query_points), inside; atol=1e-5))
+            @test V.inspection_snapshot(s).metadata.inspection.dimension == 1
+            @test length(ui.markers.region.stalk[]) == length(ui.markers.hasse.stalk[]) == 1
+
+            # The label is obtained from the actual encoder, and only its
+            # schematic position is taken from the prepared Hasse layout.
+            position = V._inspection_scene(s).hasse.metadata.positions[outside_label]
+            before_hover = hover_work(V.inspection_summary(s))
+            move_to_data!(hasse, position)
+            @test M.is_mouseinside(hasse.scene)
+            @test !M.is_mouseinside(region.scene)
+            @test hover_work(V.inspection_summary(s)) == before_hover
+            @test occursin("Vertex $outside_label; dimension 0.", ui.hover_text[])
+            left_click!()
+            selected = V.inspection_selection(s)
+            @test selected.selector == :vertex && selected.input == :pointer
+            @test selected.vertex == outside_label && isempty(selected.query_points)
+            @test V.inspection_snapshot(s).metadata.inspection.dimension == 0
+            @test length(ui.markers.hasse.stalk[]) == 1
+            @test isempty(ui.markers.region.stalk[])
+
+            # Outside both viewports there is no selection or algebra work.
+            before_hover = hover_work(V.inspection_summary(s))
+            events.mouseposition[] = (-100.0,-100.0)
+            left_click!()
+            @test V.inspection_selection(s) == selected
+            @test hover_work(V.inspection_summary(s)) == before_hover
+            # Hasse picking must not overwrite the captured vertex TextField.
+            ui.controls.vertex.value[] = string(inside_label)
+            ui.controls.select_vertex.value[] = true
+            @test V.inspection_selection(s).vertex == inside_label
+            @test V.inspection_selection(s).input == :provided
+            ui.controls.next_vertex.value[] = true
+            @test V.inspection_selection(s).vertex == min(inside_label + 1, length(dims))
+            @test isempty(ui.error_text[])
+            @test isempty(V.inspection_summary(s).listener_errors)
+        finally
+            V.close_inspection!(s)
+        end
+    end
+end
+
+@testset "A37 pending endpoints survive display changes" begin
+    if Base.find_package("WGLMakie") === nothing
+        @test_skip false
+    else
+        @eval import WGLMakie
+        V, A = TamerOp.Visualization, TamerOp.Advanced
+        E = Base.get_extension(TamerOp, :TamerOpWGLMakieExt)
+        opts = A.EncodingOptions(; backend=:pl_backend, poset_kind=:signature,
+            field=TamerOp.CoreModules.QQField())
+        enc = TamerOp.encode([A.BoxUpset([0.0,0.0]), A.BoxUpset([1.0,1.0])],
+            [A.BoxDownset([2.0,2.0]), A.BoxDownset([3.0,3.0])], TamerOp.QQ[1 0;0 1], opts)
+        s = TamerOp.inspection_session(enc; box=([-1,-1],[4,4]))
+        app = TamerOp.visualize(s; backend=:wglmakie)
+        ui = E._inspection_ui(app)
+        c = ui.controls
+        a, b, replacement = (1//2,1//2), (5//2,5//2), (3//4,3//4)
+        qa = TamerOp.EncodingCore.locate(TamerOp.encoding_map(enc), a)
+        qb = TamerOp.EncodingCore.locate(TamerOp.encoding_map(enc), b)
+        function point_control!(role, point)
+            c.endpoint.option_index[] = role
+            c.point_x.value[] = string(point[1])
+            c.point_y.value[] = string(point[2])
+            c.select_point.value[] = true
+        end
+        function vertex_control!(role, q)
+            c.endpoint.option_index[] = role
+            c.vertex.value[] = string(q)
+            c.select_vertex.value[] = true
+        end
+        try
+            point_control!(2, a) # Source first.
+            c.view.option_index[] = 2
+            c.upset.option_index[] = 2
+            c.downset.option_index[] = 2
+            c.basis.value[] = true
+            @test only(V.inspection_selection(s).query_points) == a
+            point_control!(3, b)
+            @test V.inspection_selection(s).selector == :parameter_pair
+            @test V.inspection_selection(s).query_points == (a,b)
+            @test !V.inspection_selection(s).basis
+
+            c.reset.value[] = true
+            point_control!(3, b) # Target first also retains its role.
+            c.view.option_index[] = 1
+            point_control!(2, a)
+            @test V.inspection_selection(s).query_points == (a,b)
+
+            c.reset.value[] = true
+            vertex_control!(2, qa)
+            c.view.option_index[] = 2
+            c.downset.option_index[] = 1
+            vertex_control!(3, qb)
+            @test V.inspection_selection(s).selector == :pair
+            @test V.inspection_selection(s).pair == (qa,qb)
+            @test isempty(V.inspection_selection(s).query_points)
+
+            c.reset.value[] = true
+            point_control!(2, a)
+            c.downset.option_index[] = 2
+            before = V.inspection_selection(s)
+            vertex_control!(3, qb) # Retention must not allow mixed domains.
+            @test V.inspection_selection(s) == before
+            @test occursin("both endpoints", ui.error_text[])
+            point_control!(3, b)
+            @test V.inspection_selection(s).query_points == (a,b)
+            @test isempty(ui.error_text[])
+
+            # Same finite label does not make a different ambient point the
+            # same endpoint. External replacement clears the pending source.
+            c.reset.value[] = true
+            point_control!(2, a)
+            @test TamerOp.EncodingCore.locate(TamerOp.encoding_map(enc), replacement) == qa
+            V.select_inspection!(s; point=replacement)
+            point_control!(3, b)
+            @test V.inspection_selection(s).selector == :point
+            @test V.inspection_selection(s).query_points == (b,)
+
+            c.reset.value[] = true
+            point_control!(2, a)
+            V.select_inspection!(s; vertex=qa) # Same label, changed domain.
+            point_control!(3, b)
+            @test V.inspection_selection(s).selector == :point
+            @test V.inspection_selection(s).query_points == (b,)
+
+            c.reset.value[] = true
+            point_control!(2, a)
+            V.select_inspection!(s; point=a, input=:pointer) # Changed input origin.
+            point_control!(3, b)
+            @test V.inspection_selection(s).selector == :point
+            @test V.inspection_selection(s).query_points == (b,)
+
+            c.reset.value[] = true
+            point_control!(2, a)
+            c.reset.value[] = true
+            point_control!(3, b)
+            @test V.inspection_selection(s).selector == :point
+            @test V.inspection_selection(s).query_points == (b,)
+            @test isempty(ui.error_text[])
+            @test isempty(V.inspection_summary(s).listener_errors)
+        finally
+            V.close_inspection!(s)
+        end
+    end
+end
+
+@testset "A35 style contracts and request propagation" begin
+    V = TamerOp.Visualization
+    style = TamerOp.VisualStyle(; fontsize=22, linewidth_scale=2,
+        markersize_scale=1.5, gap=18, padding=24,
+        colors=(source="#123456", target=:darkorange))
+    gray = TamerOp.VisualStyle(; palette=:grayscale)
+    @test TamerOp.Advanced.VisualStyle === TamerOp.VisualStyle
+    @test !ismutabletype(typeof(style))
+    @test TamerOp.describe(style).fontsize == 22
+    @test TamerOp.describe(gray).palette == :grayscale
+    @test style == TamerOp.VisualStyle(; fontsize=22, linewidth_scale=2,
+        markersize_scale=1.5, gap=18, padding=24,
+        colors=(source="#123456", target=:darkorange))
+    @test occursin("VisualStyle", sprint(show, style))
+    for options in ((; palette=:unknown), (; palette=missing), (; fontsize=0), (; fontsize=Inf),
+                    (; fontsize=true), (; linewidth_scale=-1), (; markersize_scale=0),
+                    (; gap=-1), (; padding=NaN), (; font=""), (; mono_font=""),
+                    (; colors=(unknown=:blue,)), (; colors=(source="not a color",)))
+        @test_throws ArgumentError TamerOp.VisualStyle(; options...)
+    end
+
+    pc = TamerOp.DataTypes.PointCloud([0.0 0.0; 1.0 2.0; 3.0 1.0])
+    spec = V.visual_spec(pc; kind=:points_2d)
+    @test !V.check_visual_request(pc; kind=:points_2d, style).valid
+    @test_throws ArgumentError V.visual_spec(pc; kind=:points_2d, style)
+    @test :style in V.visual_summary(spec).rendering.renderer_keywords
+    for metadata in ((; row_roles=[:source,:target]), (; column_roles=[:unknown]),
+                     (; cell_roles=fill(missing,1,1)))
+        invalid = V.VisualizationSpec(:a35_invalid_roles;
+            layers=V.AbstractVisualizationLayer[V.MatrixLayer(reshape(["1"],1,1), ["t1"], ["s1"])],
+            metadata)
+        @test !V.check_visual_spec(invalid).valid
+        @test_throws ArgumentError V.check_visual_spec(invalid; throw=true)
+    end
+    captured = NamedTuple[]
+    V._register_visual_backend!(:a35_capture;
+        render=(spec; display, figure, size, style) -> begin
+            push!(captured, (; operation=:render, spec, style))
+            (; spec, style, size)
+        end,
+        save=(path, spec; figure, size, style) -> begin
+            push!(captured, (; operation=:save, spec, style))
+            write(path, "A35 renderer-option propagation fixture")
+            path
+        end)
+    try
+        rendered = V.visualize(pc; kind=:knn_graph, k=1, backend=:a35_capture, style)
+        @test rendered.style === style
+        @test rendered.spec.kind == :knn_graph
+        @test V.render(spec; backend=:a35_capture, style=gray).style === gray
+        @test V.render(spec; backend=:a35_capture).style == TamerOp.VisualStyle()
+        # A bad renderer option is rejected before even dispatching the
+        # intentionally unsupported mathematical object to a recipe.
+        @test_throws ArgumentError V.visualize(nothing; backend=:a35_capture, style=:bad)
+        @test_throws ArgumentError V.render(spec; backend=:a35_capture, style=:bad)
+        mktempdir() do dir
+            invalid_dir = joinpath(dir, "invalid")
+            before = length(captured)
+            @test_throws ArgumentError V.save_visual(joinpath(invalid_dir, "one.txt"), nothing;
+                backend=:a35_capture, style=:bad)
+            @test_throws ArgumentError V.save_visual(invalid_dir, "one", nothing;
+                backend=:a35_capture, format=:txt, style=:bad)
+            @test_throws ArgumentError V.save_visuals(invalid_dir,
+                [(; stem="one", obj=nothing)]; backend=:a35_capture, format=:txt, style=:bad)
+            @test !ispath(invalid_dir)
+            @test length(captured) == before
+            batch = V.save_visuals(dir, [
+                (; stem="inherited", obj=spec),
+                (; stem="overridden", obj=spec, style=gray),
+            ]; backend=:a35_capture, format=:txt, style)
+            @test length(batch) == 2
+            @test all(r -> isfile(V.export_path(r)), batch)
+            saved = filter(x -> x.operation === :save, captured)
+            @test saved[end-1].style === style
+            @test saved[end].style === gray
+            @test saved[end].spec === spec
+        end
+    finally
+        delete!(V._VISUAL_RENDERERS, :a35_capture)
+        delete!(V._VISUAL_SAVERS, :a35_capture)
+    end
+end
+
+@testset "A35 default text contrast" begin
+    # Independent sRGB contrast calculation from WCAG 2.2 SC 1.4.3:
+    # https://www.w3.org/WAI/WCAG22/Understanding/contrast-minimum.html
+    # This checks default text colors on their two default surfaces only;
+    # custom palettes and complete accessibility require separate review.
+    linear_srgb(c) = c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055)^2.4
+    function relative_luminance(hex_color)
+        rgb = ntuple(i -> parse(Int, hex_color[(2*i):(2*i+1)]; base=16) / 255, 3)
+        r, g, b = linear_srgb.(rgb)
+        return 0.2126*r + 0.7152*g + 0.0722*b
+    end
+    function contrast_ratio(foreground, background)
+        first_luminance, second_luminance = relative_luminance(foreground), relative_luminance(background)
+        return (max(first_luminance,second_luminance) + 0.05) /
+            (min(first_luminance,second_luminance) + 0.05)
+    end
+    @test relative_luminance("#000000") == 0.0
+    @test isapprox(relative_luminance("#FFFFFF"),1.0)
+    @test isapprox(contrast_ratio("#000000","#FFFFFF"),21.0)
+    @test contrast_ratio("#FFFFFF","#FFFFFF") == 1.0
+    @test contrast_ratio("#767676","#FFFFFF") >= 4.5
+    @test contrast_ratio("#777777","#FFFFFF") < 4.5
+    text_roles = (:source,:target,:both,:selected,:inactive,:foreground,:muted,:support,:error)
+    for palette in (:accessible,:grayscale)
+        colors = TamerOp.VisualStyle(; palette).colors
+        for background in (:background,:surface), role in text_roles
+            @test contrast_ratio(getproperty(colors,role),getproperty(colors,background)) >= 4.5
+        end
+    end
+end
+
+@testset "A35 two-square mathematics survives palette changes" begin
+    V, A = TamerOp.Visualization, TamerOp.Advanced
+    opts = A.EncodingOptions(; backend=:pl_backend, poset_kind=:signature, field=CM.QQField())
+    enc = TamerOp.encode([A.BoxUpset([0.0,0.0]), A.BoxUpset([1.0,1.0])],
+        [A.BoxDownset([2.0,2.0]), A.BoxDownset([3.0,3.0])], QQ[1 0;0 1], opts)
+    a, b, c = (1//2,1//2), (3//2,3//2), (5//2,5//2)
+    specs = [V.visual_spec(enc; kind=:module_inspector, parameter_pair=pair,
+        box=([-1,-1],[4,4])) for pair in ((a,b), (b,c), (a,c))]
+    maps = [copy(spec.metadata.inspection.matrix) for spec in specs]
+    @test size.(maps) == [(2,1), (1,2), (1,1)]
+    @test [spec.metadata.inspection.rank for spec in specs] == [1,1,0]
+    @test maps[2] * maps[1] == maps[3] == reshape(QQ[0], 1, 1)
+    collision = V.VisualStyle(; colors=(source=:black, target=:black, both=:black))
+    styles = (V.VisualStyle(), V.VisualStyle(; palette=:grayscale), collision)
+    @test V._visual_color(collision, V._VisualRole(:source)) ==
+        V._visual_color(collision, V._VisualRole(:target))
+    @test V._visual_marker(V._VisualRole(:source)) != V._visual_marker(V._VisualRole(:target))
+    @test !(V._visual_marker(V._VisualRole(:both)) in
+        (V._visual_marker(V._VisualRole(:source)), V._visual_marker(V._VisualRole(:target))))
+    V._register_visual_backend!(:a35_math_capture;
+        render=(spec; display, figure, size, style) -> (; spec, style))
+    try
+        for (i, spec) in enumerate(specs), style in styles
+            inspection = spec.metadata.inspection
+            table = only(layer for layer in last(spec.panels).layers if layer isa V.MatrixLayer)
+            entries, rows, columns = copy(table.entries), copy(table.row_labels), copy(table.column_labels)
+            rendered = V.render(spec; backend=:a35_math_capture, style)
+            @test rendered.spec === spec
+            @test spec.metadata.inspection === inspection
+            @test inspection.matrix == maps[i]
+            @test (table.entries, table.row_labels, table.column_labels) == (entries, rows, columns)
+        end
+        presentation = V.visual_spec(enc; kind=:presentation_inspector, parameter_pair=(a,c),
+            box=([-1,-1],[4,4]))
+        full = only(p for p in presentation.panels if p.title == "Full coefficient matrix Phi")
+        roles = copy(full.metadata.cell_roles)
+        @test :source in roles && :target in roles
+        for style in styles
+            V.render(presentation; backend=:a35_math_capture, style)
+            @test full.metadata.cell_roles == roles
+            @test full.metadata.matrix == QQ[1 0;0 1]
+        end
+        # Equal endpoints share one visible role without losing either exact
+        # query. Equality is mathematical, not equality after drawing rounds.
+        for kind in (:module_inspector, :presentation_inspector)
+            same = V.visual_spec(enc; kind, parameter_pair=(a,a), box=([-1,-1],[4,4]))
+            panels = filter(p -> p.kind in (:query_overlay,:presentation_support), same.panels)
+            @test !isempty(panels)
+            for panel in panels
+                markers = [layer for layer in panel.layers if layer isa V.PointLayer &&
+                    layer.color isa V._VisualRole && layer.color.kind in (:source,:target,:both)]
+                @test length(markers) == 1
+                @test only(markers).color.kind === :both
+                @test only(markers).points == [(0.5,0.5)]
+                @test length(panel.metadata.query_readout) == 2
+                @test all(q -> q.point == a, panel.metadata.query_readout)
+            end
+        end
+        epsilon = 1 // (big(1) << 56)
+        nearby = (a[1]+epsilon,a[2]+epsilon)
+        rounded = V.visual_spec(enc; kind=:module_inspector,
+            parameter_pair=(a,nearby), box=([-1,-1],[4,4]))
+        region = only(p for p in rounded.panels if p.kind === :query_overlay)
+        markers = [layer for layer in region.layers if layer isa V.PointLayer &&
+            layer.color isa V._VisualRole && layer.color.kind in (:source,:target,:both)]
+        @test [layer.color.kind for layer in markers] == [:source,:target]
+        @test markers[1].points == markers[2].points
+        @test region.metadata.query_readout[1].point != region.metadata.query_readout[2].point
+        @test !isempty(region.metadata.query_collisions)
+    finally
+        delete!(V._VISUAL_RENDERERS, :a35_math_capture)
+    end
+end
+
+@testset "A35 native style attributes and SVG exports" begin
+    if Base.find_package("CairoMakie") === nothing
+        @test_skip false
+    else
+        @eval import CairoMakie
+        V, M = TamerOp.Visualization, CairoMakie.Makie
+        point_panel = V.VisualizationSpec(:a35_roles; title="Style panel",
+            subtitle="Source and target remain distinguishable when their colors coincide.",
+            layers=V.AbstractVisualizationLayer[
+                V.PointLayer([(0.0,0.0)], V._VisualRole(:source), 1.0, 8.0),
+                V.PointLayer([(1.0,1.0)], V._VisualRole(:target), 1.0, 8.0),
+                V.SegmentLayer([(0.0,0.0,1.0,1.0)], V._VisualRole(:edge), 1.0, 2.0),
+            ])
+        matrix_panel = V.VisualizationSpec(:a35_matrix; title="Exact coefficients",
+            layers=V.AbstractVisualizationLayer[V.MatrixLayer(reshape(["1/3"],1,1), ["t1"], ["s1"])],
+            metadata=(; panel_style=:matrix, row_roles=[:target], column_roles=[:source]))
+        spec = V.VisualizationSpec(:a35_panels; panels=[point_panel, matrix_panel])
+        default = V.VisualStyle()
+        enlarged = V.VisualStyle(; fontsize=24, linewidth_scale=2, markersize_scale=1.5,
+            gap=18, padding=24, colors=(source=:black, target=:black))
+        figures = [V.render(spec; backend=:cairomakie, style, size=(1000,650))
+            for style in (default, enlarged)]
+        for fig in figures
+            M.update_state_before_display!(fig)
+        end
+        axes = [only(item for item in fig.content if item isa M.Axis) for fig in figures]
+        @test isapprox(axes[2].xlabelsize[] / axes[1].xlabelsize[],1.5)
+        scatters = [[p for p in ax.scene.plots if p isa M.Scatter] for ax in axes]
+        @test length.(scatters) == [2,2]
+        @test all(isapprox.(scatters[2][1].markersize[], 1.5 .* scatters[1][1].markersize[]))
+        @test scatters[2][1].marker[] != scatters[2][2].marker[]
+        @test M.to_color(scatters[2][1].color[]) == M.to_color(scatters[2][2].color[])
+        lines = [only(p for p in ax.scene.plots if p isa M.Lines) for ax in axes]
+        @test isapprox(lines[2].linewidth[] / lines[1].linewidth[],2)
+        labels = [[item for item in fig.content if item isa M.Label] for fig in figures]
+        entries = [only(item for item in blocks if item.text[] == "1/3") for blocks in labels]
+        @test isapprox(entries[2].fontsize[] / entries[1].fontsize[],1.5)
+        @test M.to_font(entries[2].font[]) == M.to_font(enlarged.mono_font)
+        texts = [String(item.text[]) for item in labels[2]]
+        @test any(t -> startswith(t,"s1") && occursin("source",t), texts)
+        @test any(t -> startswith(t,"t1") && occursin("target",t), texts)
+        title = only(item for item in labels[2] if item.text[] == "Style panel")
+        @test title.word_wrap[]
+        @test !title.tellwidth[]
+        supplied = M.Figure(; size=(811,509), figure_padding=1, backgroundcolor=:black)
+        supplied_spec = V.VisualizationSpec(:a35_supplied; title="Supplied figure",
+            panels=spec.panels)
+        @test V.render(supplied_spec; backend=:cairomakie, figure=supplied, style=enlarged) === supplied
+        M.update_state_before_display!(supplied)
+        @test Tuple(M.widths(M.viewport(supplied.scene)[])) == (811,509)
+        @test M.to_color(supplied.scene.backgroundcolor[]) == M.to_color(enlarged.colors.background)
+        padding = supplied.layout.alignmode[].padding
+        @test all(value -> value == enlarged.padding,
+            (padding.left,padding.right,padding.bottom,padding.top))
+        @test !isempty(supplied.layout.addedrowgaps)
+        @test !isempty(supplied.layout.addedcolgaps)
+        @test all(gap -> gap.x == enlarged.gap, supplied.layout.addedrowgaps)
+        @test all(gap -> gap.x == enlarged.gap, supplied.layout.addedcolgaps)
+        gray = V.VisualStyle(; palette=:grayscale)
+        grayfig = V.render(point_panel; backend=:cairomakie, style=gray)
+        grayax = only(item for item in grayfig.content if item isa M.Axis)
+        for plot in grayax.scene.plots
+            plot isa M.Scatter || continue
+            color = M.to_color(plot.color[])
+            @test isapprox(color.r,color.g)
+            @test isapprox(color.g,color.b)
+        end
+        # Rendering a custom style does not leak a global theme into the next
+        # ordinary figure.
+        next_default = V.render(point_panel; backend=:cairomakie)
+        defaultax = only(item for item in next_default.content if item isa M.Axis)
+        defaultscatter = first(p for p in defaultax.scene.plots if p isa M.Scatter)
+        @test defaultax.xlabelsize[] == axes[1].xlabelsize[]
+        @test defaultscatter.markersize[] == scatters[1][1].markersize[]
+        @test M.to_color(defaultscatter.color[]) == M.to_color(scatters[1][1].color[])
+
+        # A data-space disk is geometry, so changing the UI marker scale must
+        # not change its radius or turn it into a source/target selection glyph.
+        data_spec = V.VisualizationSpec(:a35_data_marker;
+            layers=V.AbstractVisualizationLayer[V.PointLayer([(0.0,0.0)],
+                V._VisualRole(:target), 1.0, 0.25, :viridis, :data)])
+        datafig = V.render(data_spec; backend=:cairomakie, style=enlarged)
+        dataax = only(item for item in datafig.content if item isa M.Axis)
+        disk = only(p for p in dataax.scene.plots if p isa M.Scatter)
+        @test disk.markerspace[] === :data
+        @test all(value -> isapprox(value,0.25), disk.markersize[])
+        @test disk.marker[] == scatters[1][1].marker[]
+
+        # Missing cells and zero are different mathematical observations.
+        # Numerical colormap overrides affect colors, never the plotted values.
+        values = [0.0 NaN; 1.0 2.0]
+        heatmap_spec = V.VisualizationSpec(:a35_heatmap;
+            layers=V.AbstractVisualizationLayer[V.HeatmapLayer([0.0,1.0], [0.0,1.0],
+                values, :viridis, 1.0, "dimension", false)])
+        for (appearance, expected_map) in ((gray,:grays),
+                (V.VisualStyle(; palette=:grayscale, colormap=:plasma),:plasma))
+            heatfig = V.render(heatmap_spec; backend=:cairomakie, style=appearance)
+            heatax = only(item for item in heatfig.content if item isa M.Axis)
+            heat = only(p for p in heatax.scene.plots if p isa M.Heatmap)
+            @test isequal(heat[3][],permutedims(values))
+            @test isequal(only(heatmap_spec.layers).values,values)
+            @test M.to_colormap(heat.colormap[]) == M.to_colormap(expected_map)
+            @test M.to_color(heat.nan_color[]) != first(M.to_colormap(expected_map))
+        end
+        mktempdir() do dir
+            path = joinpath(dir,"style.svg")
+            @test V.save_visual(path, spec; backend=:cairomakie, style=enlarged) == path
+            @test occursin("<svg", read(path,String))
+            @test filesize(path) > 1000
+            batch = V.save_visuals(dir, [
+                (; stem="accessible", obj=point_panel),
+                (; stem="grayscale", obj=point_panel, style=gray),
+            ]; backend=:cairomakie, format=:svg, style=enlarged)
+            @test length(batch) == 2
+            @test all(r -> occursin("<svg", read(V.export_path(r),String)), batch)
+        end
+    end
+end
+
+@testset "A35 query annotations preserve mathematical coordinates" begin
+    if Base.find_package("CairoMakie") === nothing
+        @test_skip false
+    else
+        @eval import CairoMakie
+        V, A, M = TamerOp.Visualization, TamerOp.Advanced, CairoMakie.Makie
+        opts = A.EncodingOptions(; backend=:pl_backend, poset_kind=:signature, field=CM.QQField())
+        enc = TamerOp.encode([A.BoxUpset([0.0,0.0]), A.BoxUpset([1.0,1.0])],
+            [A.BoxDownset([2.0,2.0]), A.BoxDownset([3.0,3.0])], QQ[1 0;0 1], opts)
+        point = (1//2,5//2)
+        presentation = V.visual_spec(enc; kind=:presentation_inspector, point,
+            upset=1, downset=2, box=([-1,-1],[4,4]))
+        support = first(panel for panel in presentation.panels if panel.kind === :presentation_support)
+        label_index = support.metadata.query_label_layer
+        @test label_index isa Int
+        query_layer = support.layers[label_index]
+        @test query_layer isa V.TextLayer
+        @test query_layer.positions == [(0.5,2.5)]
+        membership_layer = only(layer for (i,layer) in enumerate(support.layers) if
+            layer isa V.TextLayer && i != label_index)
+        membership_positions = copy(membership_layer.positions)
+        @test (0.5,2.5) in membership_positions
+        @test only(support.metadata.query_readout).point == point
+        @test only(support.metadata.query_readout).display_point == (0.5,2.5)
+        full = only(panel for panel in presentation.panels if panel.title == "Full coefficient matrix Phi")
+        coefficients = copy(full.metadata.matrix)
+        styles = (V.VisualStyle(), V.VisualStyle(; fontsize=24,markersize_scale=2))
+        query_offsets = Any[]
+        membership_offsets = Any[]
+        for style in styles
+            figure = V.render(support; backend=:cairomakie, style, size=(720,560))
+            axis = only(block for block in figure.content if block isa M.Axis)
+            textplots = [plot for plot in axis.scene.plots if plot isa M.Text]
+            @test length(textplots) == length(membership_layer.labels) + 1
+            query = last(textplots)
+            # Makie normalizes positional text arguments into input_text;
+            # text is the separate keyword fallback, unused by this renderer.
+            @test query.input_text[] == query_layer.labels
+            @test query.space[] === :data
+            @test query.markerspace[] === :pixel
+            @test query.offset[][1] > 0 && query.offset[][2] > 0
+            push!(query_offsets,query.offset[])
+            # Support membership and query annotations occupy opposite sides
+            # of their data anchors; their coordinates are never nudged.
+            for membership in textplots[1:end-1]
+                @test membership.space[] === :data
+                @test membership.markerspace[] === :pixel
+                @test membership.offset[][1] < 0 && membership.offset[][2] < 0
+            end
+            push!(membership_offsets,first(textplots).offset[])
+            @test query_layer.positions == [(0.5,2.5)]
+            @test membership_layer.positions == membership_positions
+            @test only(support.metadata.query_readout).point == point
+            @test full.metadata.matrix == coefficients == QQ[1 0;0 1]
+        end
+        @test all(isapprox.(query_offsets[2],2 .* query_offsets[1]))
+        @test all(isapprox.(membership_offsets[2],2 .* membership_offsets[1]))
+        ordinary = V.VisualizationSpec(:a35_unmarked_text;
+            layers=V.AbstractVisualizationLayer[V.TextLayer(["ordinary annotation"],
+                [(0.5,2.5)], V._VisualRole(:foreground), 10.0)])
+        figure = V.render(ordinary; backend=:cairomakie, style=last(styles))
+        axis = only(block for block in figure.content if block isa M.Axis)
+        textplot = only(plot for plot in axis.scene.plots if plot isa M.Text)
+        @test all(iszero,textplot.offset[])
+        @test only(ordinary.layers).positions == [(0.5,2.5)]
+    end
+end
+
+@testset "A35 live styles and native HTML controls" begin
+    if Base.find_package("WGLMakie") === nothing
+        @test_skip false
+    else
+        @eval import WGLMakie
+        V, A = TamerOp.Visualization, TamerOp.Advanced
+        E = Base.get_extension(TamerOp, :TamerOpWGLMakieExt)
+        B, M = WGLMakie.Bonito, WGLMakie.Makie
+        opts = A.EncodingOptions(; backend=:pl_backend, poset_kind=:signature, field=CM.QQField())
+        enc = TamerOp.encode([A.BoxUpset([0.0,0.0]), A.BoxUpset([1.0,1.0])],
+            [A.BoxDownset([2.0,2.0]), A.BoxDownset([3.0,3.0])], QQ[1 0;0 1], opts)
+        s = V.inspection_session(enc; box=([-1,-1],[4,4]))
+        V.select_inspection!(s; parameter_pair=((1//2,1//2),(5//2,5//2)), view=:presentation)
+        before = V.inspection_selection(s)
+        style = V.VisualStyle(; palette=:grayscale, fontsize=22, gap=18, padding=24,
+            markersize_scale=1.5, colors=(source=:black,target=:black))
+        app = V.visualize(s; backend=:wglmakie, style, size=(960,480))
+        ui = E._inspection_ui(app)
+        client = B.Session(B.NoConnection(); asset_server=B.NoServer())
+        try
+            @test ui.style === style
+            @test ui.figure_size == (960,480)
+            @test V.inspection_selection(s) == before
+            M.update_state_before_display!(ui.figure)
+            @test Tuple(M.widths(M.viewport(ui.figure.scene)[])) == (960,480)
+            # Native DOM and WGL serialization exercise the actual controls;
+            # this is deliberately not a claim about browser JavaScript events.
+            dom = B.session_dom(client, app; init=false)
+            html = sprint(show,MIME"text/html"(),dom)
+            @test occursin("<canvas",html)
+            @test occursin(ui.dom_id * "-point-x",html)
+            @test occursin(r"font-size:\s*22(?:\.0)?px",html)
+            @test occursin("DejaVu Sans",html)
+            @test occursin("DejaVu Sans Mono",html)
+            @test occursin("source",lowercase(html)) && occursin("target",lowercase(html))
+            @test !isempty(B.serialize_binary(client,B.fused_messages!(client)))
+            ui.controls.point_x.value[] = "1/2"
+            ui.controls.point_y.value[] = "5/2"
+            ui.controls.endpoint.option_index[] = 1
+            ui.controls.select_point.value[] = true
+            @test only(V.inspection_selection(s).query_points) == (1//2,5//2)
+            @test isempty(ui.error_text[])
+            @test isempty(V.inspection_summary(s).listener_errors)
+            @test ui.style === style
+            # Signed zero is the same mathematical parameter even though
+            # isequal distinguishes its floating representations.
+            V.select_inspection!(s; parameter_pair=((0.0,0.0),(-0.0,0.0)), input=:pointer)
+            selected_points = V.inspection_selection(s).query_points
+            @test selected_points[1] == selected_points[2]
+            @test !isequal(selected_points[1],selected_points[2])
+            @test length(ui.markers.region.both[]) == 1
+            @test isempty(ui.markers.region.source[]) && isempty(ui.markers.region.target[])
+            @test isempty(V.inspection_summary(s).listener_errors)
+            supplied = M.Figure(; size=(845,455), figure_padding=1, backgroundcolor=:black)
+            supplied_app = V.visualize(s; backend=:wglmakie, figure=supplied, style)
+            supplied_ui = E._inspection_ui(supplied_app)
+            M.update_state_before_display!(supplied)
+            @test supplied_ui.figure === supplied
+            @test supplied_ui.figure_size == (845,455)
+            @test Tuple(M.widths(M.viewport(supplied.scene)[])) == (845,455)
+            @test M.to_color(supplied.scene.backgroundcolor[]) == M.to_color(style.colors.background)
+            padding = supplied.layout.alignmode[].padding
+            @test all(value -> value == style.padding,
+                (padding.left,padding.right,padding.bottom,padding.top))
+            @test !isempty(supplied.layout.addedcolgaps)
+            @test all(gap -> gap.x == style.gap, supplied.layout.addedcolgaps)
+            @test isequal(V.inspection_selection(s).query_points,selected_points)
+        finally
+            close(client)
+            V.close_inspection!(s)
+        end
+    end
 end

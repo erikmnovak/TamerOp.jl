@@ -12,17 +12,17 @@ parameter for each cell. Its current reduction backend works over
 two; other coefficient fields and symbolic field aliases are rejected.
 
 ```julia
-using TamerOp
+import TamerOp as OP
 
 # A square ring appears at 0 and is filled at 5.
 values = zeros(Int, 3, 3)
 values[2, 2] = 5
-D = cubical_persistence(values)
-finite_intervals(D; dim=1)       # [(0, 5)]
-essential_births(D; dim=0)       # [0]
-persistence_intervals(D; dim=0)  # [(0, Inf)]
-describe(D)
-provenance(D)
+D = OP.cubical_persistence(values)
+OP.finite_intervals(D; dim=1)       # [(0, 5)]
+OP.essential_births(D; dim=0)       # [0]
+OP.persistence_intervals(D; dim=0)  # [(0, Inf)]
+OP.describe(D)
+OP.provenance(D)
 ```
 
 The result records connected components in degree `H_0`, holes bounded by
@@ -50,9 +50,9 @@ the zero persistence module and are omitted from the returned barcode. There
 is no diagnostic option that changes this barcode convention.
 
 ```julia
-upper = cubical_persistence(5 .- values; order=:superlevel)
-finite_intervals(upper; dim=1)       # [(5, 0)]
-persistence_intervals(upper; dim=0)  # [(5, -Inf)]
+upper = OP.cubical_persistence(5 .- values; order=:superlevel)
+OP.finite_intervals(upper; dim=1)       # [(5, 0)]
+OP.persistence_intervals(upper; dim=0)  # [(5, -Inf)]
 ```
 
 Finite endpoints and essential births retain the supplied grade type, including
@@ -81,11 +81,11 @@ with a single cell; two periodic axes give a torus. Nonperiodic axes retain thei
 boundary. Inputs must be nonempty and have finite values.
 
 ```julia
-torus = cubical_persistence(fill(2//3, 1, 1); periodic=(true, true))
-essential_births(torus; dim=0)   # [2//3]
-essential_births(torus; dim=1)   # [2//3, 2//3]
-essential_births(torus; dim=2)   # [2//3]
-check_torus_persistence(torus; throw=true)
+torus = OP.cubical_persistence(fill(2//3, 1, 1); periodic=(true, true))
+OP.essential_births(torus; dim=0)   # [2//3]
+OP.essential_births(torus; dim=1)   # [2//3, 2//3]
+OP.essential_births(torus; dim=2)   # [2//3]
+OP.check_torus_persistence(torus; throw=true)
 ```
 
 `check_torus_persistence` checks the diagram and its expected essential counts
@@ -107,8 +107,8 @@ Pass a one-parameter `GradedComplex` directly to `persistence_diagram`, or pass
 data and a typed filtration to construct the complex first:
 
 ```julia
-D = persistence_diagram([0.0 2.0; 2.0 0.0], RipsFiltration(max_dim=1))
-finite_intervals(D; dim=0)  # [(0.0, 2.0)]
+D = OP.persistence_diagram([0.0 2.0; 2.0 0.0], OP.RipsFiltration(max_dim=1))
+OP.finite_intervals(D; dim=0)  # [(0.0, 2.0)]
 ```
 
 A direct complex is checked before reduction: packed cell dimensions and sparse
@@ -132,6 +132,81 @@ and any substitution are reported as `:not_recorded`, rather than inferred from
 the requested filtration name. A hand-built `PersistenceDiagram` likewise
 reports its computation history as `:not_recorded` unless metadata was supplied;
 constructing stored intervals does not claim that the reducer ran.
+
+## Which cells represent an interval?
+
+The ring's interval `[0,5)` tells us when its hole exists. To inspect a chain of
+edges representing that hole, retain the reduction's choices during computation.
+A **cycle** is a chain whose boundary is zero. Here its homology class remains
+nonzero from parameter zero until parameter five, when it becomes the boundary
+of a chain of squares. That latter chain explains the interval's death.
+
+Representative inspection is an advanced operation, so import the `Advanced`
+namespace alongside the ordinary workflow:
+
+```julia
+import TamerOp.Advanced as OA
+
+retained = OP.cubical_persistence(values; representatives=true)
+OP.persistence_diagram_summary(retained).representatives_available  # true
+selected = OA.persistence_representative(retained; dim=1, kind=:finite, index=1)
+selected.available              # true
+selected.interval               # (0, 5)
+selected.cycle.cell_indices     # Positions among the one-dimensional cells
+selected.cycle.cell_ids         # Their original labels in the constructed complex
+selected.cycle.coefficients     # Coefficients modulo two
+selected.bounding_chain         # A two-dimensional chain bounding this cycle at 5
+```
+
+Both chain records include their dimension and exact cell grades. Indices refer
+to positions within that chain dimension; IDs are the labels supplied by the
+complex. IDs can repeat in different dimensions and do not establish pixel,
+point-cloud, or other source geometry. For cubical inputs these records refer
+to the constructed cubical complex. Drawing its cells on the original image
+requires an additional geometric correspondence.
+
+The returned cycle is a noncanonical choice made by the `F2` reduction: changing
+the ordering of tied cells can change it. There is no shortest-cycle or preferred
+geometric-shape guarantee. A finite interval's `bounding_chain` has this cycle
+as its boundary at death. An essential interval has `bounding_chain=nothing`,
+because it never becomes a boundary in the supplied finite complex. For
+superlevels the same statements hold as the parameter decreases; birth remains
+included and finite death excluded.
+
+Retention is opt-in because tracking change-of-basis columns can substantially
+increase memory during reduction. The default result keeps interval data:
+
+```julia
+intervals_only = OP.cubical_persistence(values)
+OA.persistence_representative(intervals_only; dim=1).reason  # :not_retained
+```
+
+An unavailable response has `available=false` and no cycle. A hand-built
+diagram containing only endpoints has no retained representative either;
+adding descriptive provenance does not supply the missing chains. Invalid
+dimensions, interval kinds, and member indices are errors. Pass
+`representatives=true` to `persistence_diagram` as well when starting from a
+graded complex or a data-and-filtration pair.
+
+Equal intervals need an additional choice. The one-cell torus has two essential
+degree-one classes born at `2//3`; their common endpoints do not identify one
+of the two cycles:
+
+```julia
+retained_torus = OP.cubical_persistence(fill(2//3, 1, 1);
+    periodic=true, representatives=true)
+first_cycle = OA.persistence_representative(retained_torus;
+    dim=1, kind=:essential, index=1)
+second_cycle = OA.persistence_representative(retained_torus;
+    dim=1, kind=:essential, index=2)
+```
+
+`index` refers to the original member in `finite_intervals` or `essential_births`,
+according to `kind`. It is local to that diagram. In a grouped visualization,
+first select the interval group, then choose an original member before requesting
+its cycle. These choices do not identify classes between different slices or
+separate computations. The [visualization guide](visualization.md) explains
+how the barcode, diagram and representative readout share this selection.
 
 ## Results and figures
 

@@ -9,6 +9,7 @@ This submodule should contain:
 - precomputed multiplication tables/caches (when appropriate)
 """
 module Algebras
+    import ...FieldLinAlg
     import ..DerivedFunctors: provenance, _validate_native_derived_options
     using LinearAlgebra
     using SparseArrays
@@ -182,7 +183,7 @@ module Algebras
 
         @inline function _accum_scaled_matvec!(block::AbstractVector{K}, A::AbstractMatrix{K},
                                                x::AbstractVector{K}, c::K, tmp::AbstractVector{K}) where {K}
-            mul!(tmp, A, x)
+            FieldLinAlg._matmul!(tmp, A, x)
             @inbounds for t in eachindex(block)
                 block[t] += c * tmp[t]
             end
@@ -346,14 +347,21 @@ module Algebras
     as poset-modules (same fibers and structure maps).
     """
     function yoneda_product(E_MN::ExtSpaceProjective{K},
-                            p::Int,
-                            beta_coords::AbstractVector{K},
+                            p::Int, beta_coords::AbstractVector{K},
                             E_LM::ExtSpaceProjective{K},
-                            q::Int,
-                            alpha_coords::AbstractVector{K};
+                            q::Int, alpha_coords::AbstractVector{K};
                             ELN::Union{Nothing,ExtSpaceProjective{K}}=nothing,
                             return_cocycle::Bool=false) where {K}
+        target, source, transfer = _yoneda_models(E_MN, p, E_LM, q, ELN)
+        beta = representative(E_MN, p, beta_coords)
+        alpha = representative(E_LM, q, alpha_coords)
+        F = _lift_cocycle_to_chainmap_coeff(E_LM.res, E_MN.res, E_LM, q, alpha; upto=p)
+        coords, cocycle = _yoneda_compose(E_MN, p, beta, E_LM, q, F[p+1],
+                                          target, source, transfer)
+        return return_cocycle ? (target, coords, cocycle) : (target, coords)
+    end
 
+    function _yoneda_models(E_MN, p, E_LM, q, ELN)
         if p < 0 || q < 0
             error("yoneda_product: degrees p and q must be >= 0.")
         end
@@ -384,19 +392,11 @@ module Algebras
             end
         end
 
-        # Convert coordinates to explicit cocycles.
-        beta_cocycle  = representative(E_MN, p, beta_coords)
-        alpha_cocycle = reshape(representative(E_LM, q, alpha_coords), :, 1)
-
-        # Lift alpha to a degree-q chain map into the projective resolution of M, up to component p.
-        F = _lift_cocycle_to_chainmap_coeff(resL, resM, E_LM, q, alpha_cocycle; upto=p)
-        Fp = F[p+1]  # P_{p+q}(L) -> P_p(M)
-
         # The composition is initially a cochain on resL, even if the requested
         # target uses a differently based or nonminimal resolution of L.
         same_model = _same_projective_resolution_model(resL, ELN_use.res)
         source_model = same_model ? ELN_use : Ext(resL, N; maxdeg=p+q)
-        cocycle = _compose_into_module_cocycle(resL, resM, N, p, q, Fp, beta_cocycle, E_MN, source_model)
+        transfer = nothing
         if !same_model
             # Ext is contravariant in the resolved module: lift id_L from the
             # requested target resolution to resL, then precompose the cocycle.
@@ -412,16 +412,65 @@ module Algebras
                 N, ELN_use.res.gens[p+q+1], resL.gens[p+q+1],
                 ELN_use.offsets[p+q+1], source_model.offsets[p+q+1],
                 comparison[p+q+1])
-            cocycle = transfer * cocycle
         end
 
-        coords = coordinates(ELN_use, p+q, cocycle)
+        return ELN_use, source_model, transfer
+    end
 
-        if return_cocycle
-            return (ELN_use, coords, cocycle)
-        else
-            return (ELN_use, coords)
+    function _yoneda_compose(E_MN, p, beta, E_LM, q, Fp, target, source, transfer)
+        cocycle = _compose_into_module_cocycle(E_LM.res, E_MN.res, E_MN.N,
+                                               p, q, Fp, beta, E_MN, source)
+        transfer === nothing || (cocycle = FieldLinAlg._matmul(transfer, cocycle))
+        return coordinates(target, p+q, cocycle), cocycle
+    end
+
+    """
+        yoneda_product(E_MN, p, B::AbstractMatrix, E_LM, q, A::AbstractMatrix;
+                       ELN=nothing, return_cocycle=false)
+
+    Multiply every column of `B` in Ext^p(M,N) by every column of `A` in
+    Ext^q(L,M). Returns `(E_LN, C)`, where `C[:, j, i]` gives the coordinates
+    of `B[:, j]` composed with `A[:, i]`. Thus `size(C)` is
+    `(dim(E_LN,p+q), size(B,2), size(A,2))`.
+
+    Once a finite module and its Ext spaces are available, this form answers
+    several product questions together: each right-hand class is lifted once
+    and used with all left-hand classes. This preparation lasts only for the
+    request. No earlier product answers are needed. All columns must use the
+    same bases as the corresponding scalar call.
+
+    With `return_cocycle=true`, returns `(E_LN, C, Z)`, where `Z[:,j,i]` is
+    the corresponding cocycle in the returned target resolution. Empty column
+    collections are allowed. Degree, module and coordinate-size checks still
+    apply. For repeated multiplication within Ext^*(M,M), use `ExtAlgebra`,
+    which retains its completed basis product tables.
+    """
+    function yoneda_product(E_MN::ExtSpaceProjective{K},
+                            p::Int, B::AbstractMatrix{K},
+                            E_LM::ExtSpaceProjective{K},
+                            q::Int, A::AbstractMatrix{K};
+                            ELN::Union{Nothing,ExtSpaceProjective{K}}=nothing,
+                            return_cocycle::Bool=false) where {K}
+        target, source, transfer = _yoneda_models(E_MN, p, E_LM, q, ELN)
+        size(B, 1) == dim(E_MN, p) || throw(DimensionMismatch("yoneda_product: wrong number of rows in beta coordinates"))
+        size(A, 1) == dim(E_LM, q) || throw(DimensionMismatch("yoneda_product: wrong number of rows in alpha coordinates"))
+        nb, na = size(B, 2), size(A, 2)
+        products = Array{K}(undef, dim(target, p+q), nb, na)
+        cocycles = return_cocycle ? Array{K}(undef, target.offsets[p+q+1][end], nb, na) : nothing
+        if nb > 0 && na > 0
+            betas = FieldLinAlg._matmul(E_MN.cohom[p+1].Hrep, B)
+            for i in axes(A, 2)
+                alpha = representative(E_LM, q, view(A, :, i))
+                F = _lift_cocycle_to_chainmap_coeff(E_LM.res, E_MN.res, E_LM, q, alpha; upto=p)
+                for j in axes(B, 2)
+                    coords, cocycle = _yoneda_compose(E_MN, p, view(betas, :, j),
+                        E_LM, q, F[p+1], target, source, transfer)
+                    products[:, j, i] = coords
+                    return_cocycle && (cocycles[:, j, i] = cocycle)
+                end
+            end
         end
+        return return_cocycle ? (target, products, cocycles) : (target, products)
     end
 
     # =============================================================================
@@ -877,24 +926,12 @@ module Algebras
             return lock(() -> get!(A.mult_cache, key, MU), A.lock)
         end
 
-        # Precompute all products of basis elements e_i in Ext^p and e_j in Ext^q.
-        # Each product is computed by the trusted "mathematical core" `yoneda_product`,
-        # then stored as a column of MU in the kron(x,y) ordering.
-        ei = zeros(K, dp)
-        ej = zeros(K, dq)
-
-        for i in 1:dp
-            fill!(ei, zero(K))
-            ei[i] = one(K)
-            for j in 1:dq
-                fill!(ej, zero(K))
-                ej[j] = one(K)
-
-                # Multiply e_i (degree p) by e_j (degree q) in Ext(M,M).
-                _, coords = yoneda_product(A.E, p, ei, A.E, q, ej; ELN=A.E)
-
-                MU[:, (i - 1) * dq + j] = coords
-            end
+        # A table request lifts each right basis class once. Preserve the
+        # existing kron(x,y) column order: the right index varies fastest.
+        _, products = yoneda_product(A.E, p, Matrix{K}(I, dp, dp),
+                                     A.E, q, Matrix{K}(I, dq, dq); ELN=A.E)
+        for i in 1:dp, j in 1:dq
+            MU[:, (i - 1) * dq + j] = view(products, :, i, j)
         end
 
         return lock(() -> get!(A.mult_cache, key, MU), A.lock)
@@ -921,7 +958,7 @@ module Algebras
 
         # kron(x,y) uses exactly the ordering we used for MU columns.
         v = kron(Vector{K}(x), Vector{K}(y))
-        out = MU * v
+        out = FieldLinAlg._matmul(MU, v)
         return Vector{K}(out)
     end
 

@@ -5077,3 +5077,66 @@ end
     @test B == savedB
     @test cycles == saved_cycles
 end
+@testset "Prime quotient factors are local checked and reusable" begin
+    for p in (2,3,5,101)
+        field = CM.PrimeField(p); K = CM.coeff_type(field)
+        # Integral unimodular changes of basis remain invertible in every field.
+        G = K[1 1 0 0; 0 1 2 0; 0 0 1 1; 0 0 0 1]
+        graph = vcat(Matrix{K}(I,4,4),K[1 2 3 4; 2 1 0 1])
+        Z = graph*G
+        C = K[1 0; 2 0; 0 1; 1 3]
+        B = Z*C
+        reps = Z[:,[2,4]]
+        weights = K[1 2 0; 3 1 2]
+        cycles = reps*weights+B*K[2 0 1; 1 2 3]
+        invalid = copy(cycles);invalid[6,2] += one(K)
+        for build in (CC._cohomology_data_from_bases,CC._homology_data_from_bases)
+            H = build(K,1,6,copy(Z),copy(B);field=field,lazy_reps=true)
+            ref = H isa CC.CohomologyData ? H.Kfactor : H.Zfactor
+            @test (ref[] !== nothing) == (p > 3)
+            @test CC.coordinates(H,cycles) == weights
+            fac = ref[]
+            @test (fac !== nothing) == (p > 3)
+            @test CC.coordinates(H,cycles[:,2]) == weights[:,2:2]
+            @test CC.coordinates(H,sparse(cycles)) == weights
+            @test CC.coordinates(H,B) == zeros(K,2,2)
+            @test CC.basis(H) == reps
+            @test ref[] === fac
+            @test_throws ErrorException CC.coordinates(H,invalid)
+            @test CC.coordinates(H,zeros(K,6,0)) == zeros(K,2,0)
+            fresh = build(K,1,6,copy(Z),copy(B);field=field,lazy_reps=true)
+            freshref = fresh isa CC.CohomologyData ? fresh.Kfactor : fresh.Zfactor
+            @test (freshref[] !== nothing) == (p > 3)
+            freshref[] = nothing
+            if p > 3 && Threads.nthreads() > 1
+                tasks = [Threads.@spawn CC.coordinates(fresh,cycles) for _ in 1:8]
+                @test all(x->x==weights,fetch.(tasks))
+                freshref = fresh isa CC.CohomologyData ? fresh.Kfactor : fresh.Zfactor
+                @test freshref[] !== fac
+                @test freshref[].invB == fac.invB
+            end
+            allboundaries = build(K,1,6,copy(Z),copy(Z);field=field)
+            @test isempty(CC.coordinates(allboundaries,cycles))
+            @test_throws ErrorException CC.coordinates(allboundaries,invalid)
+            emptycycles = build(K,1,6,zeros(K,6,0),zeros(K,6,0);field=field)
+            @test isempty(CC.coordinates(emptycycles,zeros(K,6,2)))
+            @test_throws ErrorException CC.coordinates(emptycycles,ones(K,6))
+        end
+        SQ = CC.subquotient_data(Z,B;field=field)
+        @test CC.subquotient_coordinates(SQ,cycles) == weights
+        @test_throws ErrorException CC.subquotient_coordinates(SQ,invalid)
+    end
+    # Existing operation-specific Nemo routing still owns large prime solves.
+    saved = FL.FP_NEMO_SOLVE_THRESHOLD[]
+    try
+        FL.FP_NEMO_SOLVE_THRESHOLD[] = 0
+        field = CM.PrimeField(101); K = CM.coeff_type(field)
+        Z = K[1 0; 0 1; 1 2; 2 1; 1 1];B=Z[:,1:1]
+        H = CC._cohomology_data_from_bases(K,1,5,Z,B;field=field)
+        @test CC.coordinates(H,Z[:,2]) == ones(K,1,1)
+        @test H.Kfactor[] === nothing
+        @test haskey(FL._NEMO_FULLCOLUMN_FACTOR_CACHE_FP, Z)
+    finally
+        FL.FP_NEMO_SOLVE_THRESHOLD[] = saved
+    end
+end

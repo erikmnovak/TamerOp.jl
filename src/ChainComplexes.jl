@@ -4,7 +4,7 @@ using LinearAlgebra
 using SparseArrays
 import Base.Threads
 
-using ..CoreModules: AbstractCoeffField, RealField, QQField, QQ, coeff_type, field_from_eltype
+using ..CoreModules: AbstractCoeffField, RealField, QQField, PrimeField, FpElem, QQ, coeff_type, field_from_eltype
 using ..Options: FiltrationSpec, ConstructionBudget, ConstructionOptions, DataFileOptions,
                  PipelineOptions, EncodingOptions, ResolutionOptions, InvariantOptions,
                  DerivedFunctorOptions, ModuleOptions, _option_describe
@@ -868,8 +868,8 @@ mutable struct CohomologyData{K}
     _Hrep::Union{Nothing,Matrix{K}}   # cocycle representatives: K * Q
     _coord_rows::Union{Nothing,Vector{Int}}
     _coord_proj::Union{Nothing,Matrix{K}}
-    Kfactor::Base.RefValue{Union{Nothing,FieldLinAlg.FullColumnFactor{QQ}}}
-    Bfull_factor::Base.RefValue{Union{Nothing,FieldLinAlg.FullColumnFactor{QQ}}}
+    Kfactor::Base.RefValue{Union{Nothing,FieldLinAlg.FullColumnFactor{K}}}
+    Bfull_factor::Base.RefValue{Union{Nothing,FieldLinAlg.FullColumnFactor{K}}}
     _checked_coord_plan::Union{Nothing,_CheckedQuotientCoordPlan{K}}
     field::AbstractCoeffField
 end
@@ -910,17 +910,20 @@ function _zero_cohomology_data(::Type{K}, t::Int;
     _validate_complex_field(K, field)
     Z0 = _empty_mat(K, 0, 0)
     return CohomologyData{K}(ReentrantLock(), t, 0, 0, 0, 0, Z0, Z0, Z0, Z0, Z0, Z0, nothing, nothing,
-                             Ref{Union{Nothing,FieldLinAlg.FullColumnFactor{QQ}}}(nothing),
-                             Ref{Union{Nothing,FieldLinAlg.FullColumnFactor{QQ}}}(nothing), nothing, field)
+                             Ref{Union{Nothing,FieldLinAlg.FullColumnFactor{K}}}(nothing),
+                             Ref{Union{Nothing,FieldLinAlg.FullColumnFactor{K}}}(nothing), nothing, field)
 end
 
-@inline _fullcolumn_factor_ref() = Ref{Union{Nothing,FieldLinAlg.FullColumnFactor{QQ}}}(nothing)
+@inline _fullcolumn_factor_ref(::Type{K}) where {K} = Ref{Union{Nothing,FieldLinAlg.FullColumnFactor{K}}}(nothing)
 
-@inline function _fullcolumn_factor!(field::AbstractCoeffField, B, ref::Base.RefValue{Union{Nothing,FieldLinAlg.FullColumnFactor{QQ}}})
-    field isa QQField || return nothing
+@inline function _fullcolumn_factor!(field::AbstractCoeffField, B, ref::Base.RefValue{Union{Nothing,FieldLinAlg.FullColumnFactor{K}}}) where {K}
+    native_prime = field isa PrimeField && field.p > 3 &&
+                   FieldLinAlg._choose_linalg_backend(field, B; op=:solve) != :nemo
+    (field isa QQField || native_prime) || return nothing
     factor = lock(() -> ref[], _FULLCOLUMN_FACTOR_LOCK)
     if factor === nothing && size(B, 2) > 0
-        computed = FieldLinAlg._factor_fullcolumnQQ(B)
+        computed = field isa QQField ? FieldLinAlg._factor_fullcolumnQQ(B) :
+                                      FieldLinAlg._factor_fullcolumn_fp(B)
         factor = lock(_FULLCOLUMN_FACTOR_LOCK) do
             ref[] === nothing && (ref[] = computed)
             ref[]
@@ -1153,20 +1156,20 @@ function _cohomology_data_from_bases(::Type{K},
         Bcoords = _empty_mat(K, dimZ, 0)
         if lazy_reps
             return CohomologyData{K}(ReentrantLock(), t, dimCt, dimZ, 0, dimZ, Z, B, Bcoords, nothing, nothing, nothing, nothing, nothing,
-                                     _fullcolumn_factor_ref(),
-                                     _fullcolumn_factor_ref(), nothing, field)
+                                     _fullcolumn_factor_ref(K),
+                                     _fullcolumn_factor_ref(K), nothing, field)
         end
         Bfull = _eye_mat(K, dimZ)
         return CohomologyData{K}(ReentrantLock(), t, dimCt, dimZ, 0, dimZ, Z, B, Bcoords, Bfull, Bfull, Z, nothing, nothing,
-                                 _fullcolumn_factor_ref(),
-                                 _fullcolumn_factor_ref(), nothing, field)
+                                 _fullcolumn_factor_ref(K),
+                                 _fullcolumn_factor_ref(K), nothing, field)
     end
 
     # Differential-derived exact bases satisfy Z = ker(d). Checking d*B = 0
     # certifies B ⊆ Z without constructing its coordinates. The bases-only
     # caller has no such certificate. RealField keeps the original checked
     # solve, whose residual tolerance need not agree with a check on d*B.
-    cycle_factor = _fullcolumn_factor_ref()
+    cycle_factor = _fullcolumn_factor_ref(K)
     Cx = if lazy_reps && cycle_differential !== nothing && !(field isa RealField)
         all(iszero, cycle_differential * B) || error(
             "cohomology_data: incoming boundaries are not cycles in degree $t")
@@ -1178,7 +1181,7 @@ function _cohomology_data_from_bases(::Type{K},
     dimB <= dimZ || error("cohomology_data: boundary dimension exceeds cycle dimension")
     H = CohomologyData{K}(ReentrantLock(), t, dimCt, dimZ, dimB, dimZ - dimB,
                           Z, B, Cx, nothing, nothing, nothing, nothing, nothing,
-                          cycle_factor, _fullcolumn_factor_ref(), nothing, field)
+                          cycle_factor, _fullcolumn_factor_ref(K), nothing, field)
     lazy_reps || _ensure_cohomology_reps!(H)
     return H
 end
@@ -1489,13 +1492,13 @@ function induced_map_on_cohomology(src::CohomologyData{K}, tgt::CohomologyData{K
     if _use_batched_coordinate_solves(K, src.dimH, tgt.dimH) ||
        _use_exact_batched_coordinate_solves(K, src.dimH, tgt.dimH)
         Y = Matrix{K}(undef, tgt.dimC, src.dimH)
-        mul!(Y, f, src.Hrep)
+        FieldLinAlg._matmul!(Y, f, src.Hrep)
         return _cohomology_coordinates_from_cocycles(tgt, Y)
     end
     M = zeros(K, tgt.dimH, src.dimH)
     y = Vector{K}(undef, tgt.dimC)
     for j in 1:src.dimH
-        mul!(y, f, @view src.Hrep[:, j])
+        FieldLinAlg._matmul!(y, f, @view src.Hrep[:, j])
         M[:, j] = _cohomology_coordinates_vector(tgt, y)
     end
     return M
@@ -1530,8 +1533,8 @@ mutable struct HomologyData{K}
     _Q::Union{Nothing,Matrix{K}}      # complement in Z-coordinates
     _Bfull::Union{Nothing,Matrix{K}}
     _Hrep::Union{Nothing,Matrix{K}}   # cycle representatives in C_s
-    Zfactor::Base.RefValue{Union{Nothing,FieldLinAlg.FullColumnFactor{QQ}}}
-    Bfull_factor::Base.RefValue{Union{Nothing,FieldLinAlg.FullColumnFactor{QQ}}}
+    Zfactor::Base.RefValue{Union{Nothing,FieldLinAlg.FullColumnFactor{K}}}
+    Bfull_factor::Base.RefValue{Union{Nothing,FieldLinAlg.FullColumnFactor{K}}}
     _checked_coord_plan::Union{Nothing,_CheckedQuotientCoordPlan{K}}
     field::AbstractCoeffField
 end
@@ -1541,7 +1544,7 @@ function _zero_homology_data(::Type{K}, s::Int;
     _validate_complex_field(K, field)
     Z0 = _empty_mat(K, 0, 0)
     return HomologyData{K}(ReentrantLock(), s, 0, 0, 0, 0, Z0, Z0, Z0, Z0, Z0, Z0,
-                           _fullcolumn_factor_ref(), _fullcolumn_factor_ref(), nothing, field)
+                           _fullcolumn_factor_ref(K), _fullcolumn_factor_ref(K), nothing, field)
 end
 
 function _ensure_homology_reps!(H::HomologyData{K}) where {K}
@@ -1615,11 +1618,11 @@ function induced_map_on_homology(src::HomologyData{K}, tgt::HomologyData{K}, f::
     end
     if _use_batched_coordinate_solves(K, src.dimH, tgt.dimH) ||
        _use_exact_batched_coordinate_solves(K, src.dimH, tgt.dimH)
-        return homology_coordinates(tgt, f * src.Hrep)
+        return homology_coordinates(tgt, FieldLinAlg._matmul(f, src.Hrep))
     end
     H = zeros(K, tgt.dimH, src.dimH)
     for i in 1:src.dimH
-        y = f * src.Hrep[:, i]
+        y = FieldLinAlg._matmul(f, view(src.Hrep, :, i))
         H[:, i] .= vec(homology_coordinates(tgt, y))
     end
     return H
@@ -1646,18 +1649,18 @@ function _homology_data_from_bases(::Type{K},
         Bcoords = _empty_mat(K, dimZ, 0)
         if lazy_reps
             return HomologyData{K}(ReentrantLock(), s, dimCs, dimZ, 0, dimZ, Z, B, Bcoords, nothing, nothing, nothing,
-                                   _fullcolumn_factor_ref(),
-                                   _fullcolumn_factor_ref(), nothing, field)
+                                   _fullcolumn_factor_ref(K),
+                                   _fullcolumn_factor_ref(K), nothing, field)
         end
         Bfull = _eye_mat(K, dimZ)
         return HomologyData{K}(ReentrantLock(), s, dimCs, dimZ, 0, dimZ, Z, B, Bcoords, Bfull, Bfull, Z,
-                               _fullcolumn_factor_ref(),
-                               _fullcolumn_factor_ref(), nothing, field)
+                               _fullcolumn_factor_ref(K),
+                               _fullcolumn_factor_ref(K), nothing, field)
     end
 
     # As in the cohomology path, the coordinate matrix X in Z * X = B already has
     # full column rank because Z and B are bases and B subseteq span(Z).
-    cycle_factor = _fullcolumn_factor_ref()
+    cycle_factor = _fullcolumn_factor_ref(K)
     field isa QQField && (cycle_factor[] = FieldLinAlg._cached_fullcolumn_factorQQ(Z))
     Cx = _solve_fullcolumn_cached(field, Z, B, cycle_factor)
     rB = size(Cx, 2)
@@ -1665,20 +1668,20 @@ function _homology_data_from_bases(::Type{K},
         Bfull = extend_to_basis_from_basis(Cx; field=field)
         return HomologyData{K}(ReentrantLock(), s, dimCs, dimZ, rB, 0, Z, B, Cx, _empty_mat(K, dimZ, 0), Bfull, _empty_mat(K, dimCs, 0),
                                cycle_factor,
-                               _fullcolumn_factor_ref(), nothing, field)
+                               _fullcolumn_factor_ref(K), nothing, field)
     end
 
     dimH = dimZ - rB
     if lazy_reps
         return HomologyData{K}(ReentrantLock(), s, dimCs, dimZ, rB, dimH, Z, B, Cx, nothing, nothing, nothing,
                                cycle_factor,
-                               _fullcolumn_factor_ref(), nothing, field)
+                               _fullcolumn_factor_ref(K), nothing, field)
     end
     Bfull, Q, comp_rows = _cohomology_completion_from_basis(Cx; field=field)
     Hrep = Z[:, comp_rows]
     return HomologyData{K}(ReentrantLock(), s, dimCs, dimZ, rB, dimH, Z, B, Cx, Q, Bfull, Hrep,
                            cycle_factor,
-                           _fullcolumn_factor_ref(), nothing, field)
+                           _fullcolumn_factor_ref(K), nothing, field)
 end
 
 function _homology_data_from_diffs(::Type{K},
@@ -2878,8 +2881,8 @@ struct SubquotientData{K}
     Hrep::Matrix{K}     # ambient_dim x dimH
     Zsolve_rows::UnitRange{Int}
     Zsolve_basis::Matrix{K}
-    Zsolve_factor::Base.RefValue{Union{Nothing,FieldLinAlg.FullColumnFactor{QQ}}}
-    Bfull_factor::Base.RefValue{Union{Nothing,FieldLinAlg.FullColumnFactor{QQ}}}
+    Zsolve_factor::Base.RefValue{Union{Nothing,FieldLinAlg.FullColumnFactor{K}}}
+    Bfull_factor::Base.RefValue{Union{Nothing,FieldLinAlg.FullColumnFactor{K}}}
     field::AbstractCoeffField
 end
 
@@ -2906,18 +2909,20 @@ end
     return FieldLinAlg._solve_fullcolumn_factorQQ(B, factor, Y; check_rhs=check_rhs)
 end
 
+@inline function _solve_fullcolumn_cached(field::PrimeField, B::AbstractMatrix{FpElem{p}}, Y,
+                                          factor::FieldLinAlg.FullColumnFactor{FpElem{p}};
+                                          check_rhs::Bool=true) where {p}
+    return FieldLinAlg._solve_fullcolumn_factor_fp(B, factor, Y; check_rhs=check_rhs)
+end
+
 @inline function _solve_fullcolumn_cached(field::AbstractCoeffField,
-                                          B,
-                                          Y,
-                                          factor_ref::Base.RefValue{Union{Nothing,FieldLinAlg.FullColumnFactor{QQ}}};
-                                          check_rhs::Bool=true)
-    if field isa QQField
-        factor = _fullcolumn_factor!(field, B, factor_ref)
-        return factor === nothing ?
-            _solve_fullcolumn_cached(field, B, Y; check_rhs=check_rhs) :
-            _solve_fullcolumn_cached(field, B, Y, factor; check_rhs=check_rhs)
-    end
-    return _solve_fullcolumn_cached(field, B, Y; check_rhs=check_rhs)
+                                          B, Y,
+                                          factor_ref::Base.RefValue{Union{Nothing,FieldLinAlg.FullColumnFactor{K}}};
+                                          check_rhs::Bool=true) where {K}
+    factor = _fullcolumn_factor!(field, B, factor_ref)
+    return factor === nothing ?
+        _solve_fullcolumn_cached(field, B, Y; check_rhs=check_rhs) :
+        _solve_fullcolumn_cached(field, B, Y, factor; check_rhs=check_rhs)
 end
 
 function _subquotient_data_from_coords(Zbasis::AbstractMatrix{K},
@@ -2936,7 +2941,7 @@ function _subquotient_data_from_coords(Zbasis::AbstractMatrix{K},
         return SubquotientData{K}(ambient_dim, 0, 0, 0,
                                   Z0, Z0, zeros(K, 0, 0), zeros(K, 0, 0),
                                   zeros(K, 0, 0), Z0, Zsolve_rows, Zsolve,
-                                  _fullcolumn_factor_ref(), _fullcolumn_factor_ref(), field)
+                                  _fullcolumn_factor_ref(K), _fullcolumn_factor_ref(K), field)
     end
 
     if size(Bcoords_in_Z, 2) == 0
@@ -2954,8 +2959,8 @@ function _subquotient_data_from_coords(Zbasis::AbstractMatrix{K},
     return SubquotientData{K}(ambient_dim, dimZ, dimB, dimH,
                               Zmat, Bbasis, Bcoords, Bfull, Hcoords, Hrep,
                               Zsolve_rows, Zsolve,
-                              _fullcolumn_factor_ref(),
-                              _fullcolumn_factor_ref(), field)
+                              _fullcolumn_factor_ref(K),
+                              _fullcolumn_factor_ref(K), field)
 end
 
 function subquotient_data(Zbasis::AbstractMatrix{K}, Bgens::AbstractMatrix{K};
@@ -5151,7 +5156,7 @@ function _ss_zero_subquotient(::Type{K}, ambient_dim::Int;
     Z0 = zeros(K, ambient_dim, 0)
     return SubquotientData{K}(ambient_dim, 0, 0, 0,
                               Z0, Z0, zeros(K, 0, 0), zeros(K, 0, 0),
-                              zeros(K, 0, 0), Z0, 1:ambient_dim, Z0, _fullcolumn_factor_ref(), _fullcolumn_factor_ref(), field)
+                              zeros(K, 0, 0), Z0, 1:ambient_dim, Z0, _fullcolumn_factor_ref(K), _fullcolumn_factor_ref(K), field)
 end
 
 """

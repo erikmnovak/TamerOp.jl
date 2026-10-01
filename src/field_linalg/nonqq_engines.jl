@@ -877,6 +877,36 @@ end
 _nullspace_fp(A::Transpose{FpElem{p},<:SparseMatrixCSC{FpElem{p},Int}}) where {p} = _nullspace_fp_from_transposed_parent(parent(A))
 _nullspace_fp(A::Adjoint{FpElem{p},<:SparseMatrixCSC{FpElem{p},Int}})  where {p} = _nullspace_fp_from_transposed_parent(parent(A))
 
+# Reusable native prime-field factor for a fixed full-column-rank matrix.
+# Kept by the owning homology/cohomology result, not a process-wide cache.
+function _factor_fullcolumn_fp(B::AbstractMatrix{FpElem{p}}) where {p}
+    m, n = size(B)
+    n == 0 && return FullColumnFactor{FpElem{p}}(Int[], zeros(FpElem{p}, 0, 0))
+    if m == n
+        rows = collect(1:n)
+    else
+        _, pivots = _rref_fp(transpose(B); pivots=true)
+        rows = collect(pivots)
+        length(rows) == n || error("solve_fullcolumn_fp: expected full column rank")
+    end
+    inverse = _solve_fullcolumn_fp(B[rows, :], Matrix{FpElem{p}}(I, n, n); check_rhs=false)
+    return FullColumnFactor{FpElem{p}}(rows, inverse)
+end
+
+function _solve_fullcolumn_factor_fp(B::AbstractMatrix{FpElem{p}}, factor,
+                                      Y::AbstractVecOrMat{FpElem{p}};
+                                      check_rhs::Bool=true) where {p}
+    m, n = size(B)
+    size(Y, 1) == m || throw(DimensionMismatch("B and Y must have same row count"))
+    length(factor.rows) == n || error("stale full-column factor: wrong row set length")
+    Ymat = Y isa AbstractVector ? reshape(Y, :, 1) : Y
+    X = factor.invB * view(Ymat, factor.rows, :)
+    if check_rhs
+        B * X == Ymat || error("solve_fullcolumn_fp: RHS is not in column space of B")
+    end
+    return Y isa AbstractVector ? vec(X) : X
+end
+
 function _solve_fullcolumn_fp(B::AbstractMatrix{FpElem{p}},
                               Y::AbstractVecOrMat{FpElem{p}};
                               check_rhs::Bool=true) where {p}

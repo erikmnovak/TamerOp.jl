@@ -5571,6 +5571,14 @@ target_binding = "TamerOp.Advanced.filtration_order"
 target_matches_owner = true
 [[curated_binding_rows]]
 declaration_owner = "TamerOp.OrdinaryPersistence"
+name = "persistence_representative"
+owner_binding = "TamerOp.OrdinaryPersistence.persistence_representative"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.persistence_representative"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.OrdinaryPersistence"
 name = "persistence_validation_summary"
 owner_binding = "TamerOp.OrdinaryPersistence.persistence_validation_summary"
 owner_defined = true
@@ -7683,6 +7691,22 @@ target_binding = "TamerOp.Advanced.HeatmapLayer"
 target_matches_owner = true
 [[curated_binding_rows]]
 declaration_owner = "TamerOp.Visualization"
+name = "InspectionSession"
+owner_binding = "TamerOp.Visualization.InspectionSession"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.InspectionSession"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Visualization"
+name = "IntervalInspectionSession"
+owner_binding = "TamerOp.Visualization.IntervalInspectionSession"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.IntervalInspectionSession"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Visualization"
 name = "MatrixLayer"
 owner_binding = "TamerOp.Visualization.MatrixLayer"
 owner_defined = true
@@ -7763,6 +7787,14 @@ target_binding = "TamerOp.Advanced.VisualExportResult"
 target_matches_owner = true
 [[curated_binding_rows]]
 declaration_owner = "TamerOp.Visualization"
+name = "VisualStyle"
+owner_binding = "TamerOp.Visualization.VisualStyle"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.VisualStyle"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Visualization"
 name = "VisualizationSpec"
 owner_binding = "TamerOp.Visualization.VisualizationSpec"
 owner_defined = true
@@ -7779,6 +7811,22 @@ target_binding = "TamerOp.Advanced.VisualizationValidationSummary"
 target_matches_owner = true
 [[curated_binding_rows]]
 declaration_owner = "TamerOp.Visualization"
+name = "check_inspection_selection"
+owner_binding = "TamerOp.Visualization.check_inspection_selection"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.check_inspection_selection"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Visualization"
+name = "check_inspection_session"
+owner_binding = "TamerOp.Visualization.check_inspection_session"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.check_inspection_session"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Visualization"
 name = "check_visual_request"
 owner_binding = "TamerOp.Visualization.check_visual_request"
 owner_defined = true
@@ -7792,6 +7840,14 @@ owner_binding = "TamerOp.Visualization.check_visual_spec"
 owner_defined = true
 table = "ADVANCED_ONLY_API_BINDINGS"
 target_binding = "TamerOp.Advanced.check_visual_spec"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Visualization"
+name = "close_inspection!"
+owner_binding = "TamerOp.Visualization.close_inspection!"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.close_inspection!"
 target_matches_owner = true
 [[curated_binding_rows]]
 declaration_owner = "TamerOp.Visualization"
@@ -7835,11 +7891,51 @@ target_binding = "TamerOp.Advanced.export_stem"
 target_matches_owner = true
 [[curated_binding_rows]]
 declaration_owner = "TamerOp.Visualization"
+name = "inspection_selection"
+owner_binding = "TamerOp.Visualization.inspection_selection"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.inspection_selection"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Visualization"
+name = "inspection_snapshot"
+owner_binding = "TamerOp.Visualization.inspection_snapshot"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.inspection_snapshot"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Visualization"
+name = "inspection_summary"
+owner_binding = "TamerOp.Visualization.inspection_summary"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.inspection_summary"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Visualization"
 name = "render"
 owner_binding = "TamerOp.Visualization.render"
 owner_defined = true
 table = "ADVANCED_ONLY_API_BINDINGS"
 target_binding = "TamerOp.Advanced.render"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Visualization"
+name = "reset_inspection!"
+owner_binding = "TamerOp.Visualization.reset_inspection!"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.reset_inspection!"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Visualization"
+name = "select_inspection!"
+owner_binding = "TamerOp.Visualization.select_inspection!"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.select_inspection!"
 target_matches_owner = true
 [[curated_binding_rows]]
 declaration_owner = "TamerOp.Visualization"
@@ -9403,6 +9499,14 @@ target_binding = "TamerOp.VisualExportResult"
 target_matches_owner = true
 [[curated_binding_rows]]
 declaration_owner = "TamerOp.Visualization"
+name = "VisualStyle"
+owner_binding = "TamerOp.Visualization.VisualStyle"
+owner_defined = true
+table = "SIMPLE_API_BINDINGS"
+target_binding = "TamerOp.VisualStyle"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Visualization"
 name = "available_visuals"
 owner_binding = "TamerOp.Visualization.available_visuals"
 owner_defined = true
@@ -9448,6 +9552,14 @@ owner_binding = "TamerOp.Visualization.export_stem"
 owner_defined = true
 table = "SIMPLE_API_BINDINGS"
 target_binding = "TamerOp.export_stem"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Visualization"
+name = "inspection_session"
+owner_binding = "TamerOp.Visualization.inspection_session"
+owner_defined = true
+table = "SIMPLE_API_BINDINGS"
+target_binding = "TamerOp.inspection_session"
 target_matches_owner = true
 [[curated_binding_rows]]
 declaration_owner = "TamerOp.Visualization"
@@ -40729,6 +40841,41 @@ tiers = ["simple", "advanced", "qualified"]
     qualified_name = "TamerOp.persistence_intervals"
     scope = "root"
 [[objects]]
+aliases = ["TamerOp.Advanced.persistence_representative", "TamerOp.OrdinaryPersistence.persistence_representative"]
+canonical_binding = "TamerOp.OrdinaryPersistence.persistence_representative"
+canonical_owner = "TamerOp.OrdinaryPersistence"
+declaration_owners = ["TamerOp.OrdinaryPersistence"]
+defining_module = "TamerOp.OrdinaryPersistence"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "persistence_representative"
+    qualified_name = "TamerOp.Advanced.persistence_representative"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.OrdinaryPersistence"
+    name = "persistence_representative"
+    qualified_name = "TamerOp.OrdinaryPersistence.persistence_representative"
+    scope = "owner"
+[[objects]]
 aliases = ["TamerOp.Advanced.persistence_validation_summary", "TamerOp.OrdinaryPersistence.persistence_validation_summary"]
 canonical_binding = "TamerOp.OrdinaryPersistence.persistence_validation_summary"
 canonical_owner = "TamerOp.OrdinaryPersistence"
@@ -50980,6 +51127,76 @@ tiers = ["advanced", "qualified"]
     qualified_name = "TamerOp.Visualization.HeatmapLayer"
     scope = "owner"
 [[objects]]
+aliases = ["TamerOp.Advanced.InspectionSession", "TamerOp.Visualization.InspectionSession"]
+canonical_binding = "TamerOp.Visualization.InspectionSession"
+canonical_owner = "TamerOp.Visualization"
+declaration_owners = ["TamerOp.Visualization"]
+defining_module = "TamerOp.Visualization"
+has_docstring = true
+intended_public = true
+kind = "type"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = false
+    module = "TamerOp.Advanced"
+    name = "InspectionSession"
+    qualified_name = "TamerOp.Advanced.InspectionSession"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Visualization"
+    name = "InspectionSession"
+    qualified_name = "TamerOp.Visualization.InspectionSession"
+    scope = "owner"
+[[objects]]
+aliases = ["TamerOp.Advanced.IntervalInspectionSession", "TamerOp.Visualization.IntervalInspectionSession"]
+canonical_binding = "TamerOp.Visualization.IntervalInspectionSession"
+canonical_owner = "TamerOp.Visualization"
+declaration_owners = ["TamerOp.Visualization"]
+defining_module = "TamerOp.Visualization"
+has_docstring = true
+intended_public = true
+kind = "type"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = false
+    module = "TamerOp.Advanced"
+    name = "IntervalInspectionSession"
+    qualified_name = "TamerOp.Advanced.IntervalInspectionSession"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Visualization"
+    name = "IntervalInspectionSession"
+    qualified_name = "TamerOp.Visualization.IntervalInspectionSession"
+    scope = "owner"
+[[objects]]
 aliases = ["TamerOp.Advanced.MatrixLayer", "TamerOp.Visualization.MatrixLayer"]
 canonical_binding = "TamerOp.Visualization.MatrixLayer"
 canonical_owner = "TamerOp.Visualization"
@@ -51342,6 +51559,53 @@ tiers = ["simple", "advanced", "qualified"]
     qualified_name = "TamerOp.Visualization.VisualExportResult"
     scope = "owner"
 [[objects]]
+aliases = ["TamerOp.Advanced.VisualStyle", "TamerOp.VisualStyle", "TamerOp.Visualization.VisualStyle"]
+canonical_binding = "TamerOp.Visualization.VisualStyle"
+canonical_owner = "TamerOp.Visualization"
+declaration_owners = ["TamerOp.Visualization"]
+defining_module = "TamerOp.Visualization"
+has_docstring = true
+intended_public = true
+kind = "type"
+tiers = ["simple", "advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = false
+    module = "TamerOp.Advanced"
+    name = "VisualStyle"
+    qualified_name = "TamerOp.Advanced.VisualStyle"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["SIMPLE_API_BINDINGS"]
+    declaration_sources = ["SIMPLE_API"]
+    declared_advanced = false
+    declared_simple = true
+    defined = true
+    exported = true
+    has_docstring = false
+    module = "TamerOp"
+    name = "VisualStyle"
+    qualified_name = "TamerOp.VisualStyle"
+    scope = "root"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS", "SIMPLE_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Visualization"
+    name = "VisualStyle"
+    qualified_name = "TamerOp.Visualization.VisualStyle"
+    scope = "owner"
+[[objects]]
 aliases = ["TamerOp.Advanced.VisualizationSpec", "TamerOp.Visualization.VisualizationSpec"]
 canonical_binding = "TamerOp.Visualization.VisualizationSpec"
 canonical_owner = "TamerOp.Visualization"
@@ -51459,6 +51723,76 @@ tiers = ["simple", "advanced", "qualified"]
     qualified_name = "TamerOp.available_visuals"
     scope = "root"
 [[objects]]
+aliases = ["TamerOp.Advanced.check_inspection_selection", "TamerOp.Visualization.check_inspection_selection"]
+canonical_binding = "TamerOp.Visualization.check_inspection_selection"
+canonical_owner = "TamerOp.Visualization"
+declaration_owners = ["TamerOp.Visualization"]
+defining_module = "TamerOp.Visualization"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "check_inspection_selection"
+    qualified_name = "TamerOp.Advanced.check_inspection_selection"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Visualization"
+    name = "check_inspection_selection"
+    qualified_name = "TamerOp.Visualization.check_inspection_selection"
+    scope = "owner"
+[[objects]]
+aliases = ["TamerOp.Advanced.check_inspection_session", "TamerOp.Visualization.check_inspection_session"]
+canonical_binding = "TamerOp.Visualization.check_inspection_session"
+canonical_owner = "TamerOp.Visualization"
+declaration_owners = ["TamerOp.Visualization"]
+defining_module = "TamerOp.Visualization"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "check_inspection_session"
+    qualified_name = "TamerOp.Advanced.check_inspection_session"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Visualization"
+    name = "check_inspection_session"
+    qualified_name = "TamerOp.Visualization.check_inspection_session"
+    scope = "owner"
+[[objects]]
 aliases = ["TamerOp.Advanced.check_visual_request", "TamerOp.Visualization.check_visual_request"]
 canonical_binding = "TamerOp.Visualization.check_visual_request"
 canonical_owner = "TamerOp.Visualization"
@@ -51527,6 +51861,41 @@ tiers = ["advanced", "qualified"]
     module = "TamerOp.Visualization"
     name = "check_visual_spec"
     qualified_name = "TamerOp.Visualization.check_visual_spec"
+    scope = "owner"
+[[objects]]
+aliases = ["TamerOp.Advanced.close_inspection!", "TamerOp.Visualization.close_inspection!"]
+canonical_binding = "TamerOp.Visualization.close_inspection!"
+canonical_owner = "TamerOp.Visualization"
+declaration_owners = ["TamerOp.Visualization"]
+defining_module = "TamerOp.Visualization"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "close_inspection!"
+    qualified_name = "TamerOp.Advanced.close_inspection!"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Visualization"
+    name = "close_inspection!"
+    qualified_name = "TamerOp.Visualization.close_inspection!"
     scope = "owner"
 [[objects]]
 aliases = ["TamerOp.Advanced.export_backend", "TamerOp.Visualization.export_backend", "TamerOp.export_backend"]
@@ -51764,6 +52133,158 @@ tiers = ["simple", "advanced", "qualified"]
     qualified_name = "TamerOp.export_stem"
     scope = "root"
 [[objects]]
+aliases = ["TamerOp.Advanced.inspection_selection", "TamerOp.Visualization.inspection_selection"]
+canonical_binding = "TamerOp.Visualization.inspection_selection"
+canonical_owner = "TamerOp.Visualization"
+declaration_owners = ["TamerOp.Visualization"]
+defining_module = "TamerOp.Visualization"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "inspection_selection"
+    qualified_name = "TamerOp.Advanced.inspection_selection"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Visualization"
+    name = "inspection_selection"
+    qualified_name = "TamerOp.Visualization.inspection_selection"
+    scope = "owner"
+[[objects]]
+aliases = ["TamerOp.Advanced.inspection_session", "TamerOp.Visualization.inspection_session", "TamerOp.inspection_session"]
+canonical_binding = "TamerOp.Visualization.inspection_session"
+canonical_owner = "TamerOp.Visualization"
+declaration_owners = ["TamerOp.Visualization"]
+defining_module = "TamerOp.Visualization"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["simple", "advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = []
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "inspection_session"
+    qualified_name = "TamerOp.Advanced.inspection_session"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["SIMPLE_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Visualization"
+    name = "inspection_session"
+    qualified_name = "TamerOp.Visualization.inspection_session"
+    scope = "owner"
+    [[objects.bindings]]
+    curated_sources = ["SIMPLE_API_BINDINGS"]
+    declaration_sources = ["SIMPLE_API"]
+    declared_advanced = false
+    declared_simple = true
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp"
+    name = "inspection_session"
+    qualified_name = "TamerOp.inspection_session"
+    scope = "root"
+[[objects]]
+aliases = ["TamerOp.Advanced.inspection_snapshot", "TamerOp.Visualization.inspection_snapshot"]
+canonical_binding = "TamerOp.Visualization.inspection_snapshot"
+canonical_owner = "TamerOp.Visualization"
+declaration_owners = ["TamerOp.Visualization"]
+defining_module = "TamerOp.Visualization"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "inspection_snapshot"
+    qualified_name = "TamerOp.Advanced.inspection_snapshot"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Visualization"
+    name = "inspection_snapshot"
+    qualified_name = "TamerOp.Visualization.inspection_snapshot"
+    scope = "owner"
+[[objects]]
+aliases = ["TamerOp.Advanced.inspection_summary", "TamerOp.Visualization.inspection_summary"]
+canonical_binding = "TamerOp.Visualization.inspection_summary"
+canonical_owner = "TamerOp.Visualization"
+declaration_owners = ["TamerOp.Visualization"]
+defining_module = "TamerOp.Visualization"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "inspection_summary"
+    qualified_name = "TamerOp.Advanced.inspection_summary"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Visualization"
+    name = "inspection_summary"
+    qualified_name = "TamerOp.Visualization.inspection_summary"
+    scope = "owner"
+[[objects]]
 aliases = ["TamerOp.Advanced.render", "TamerOp.Visualization.render"]
 canonical_binding = "TamerOp.Visualization.render"
 canonical_owner = "TamerOp.Visualization"
@@ -51797,6 +52318,41 @@ tiers = ["advanced", "qualified"]
     module = "TamerOp.Visualization"
     name = "render"
     qualified_name = "TamerOp.Visualization.render"
+    scope = "owner"
+[[objects]]
+aliases = ["TamerOp.Advanced.reset_inspection!", "TamerOp.Visualization.reset_inspection!"]
+canonical_binding = "TamerOp.Visualization.reset_inspection!"
+canonical_owner = "TamerOp.Visualization"
+declaration_owners = ["TamerOp.Visualization"]
+defining_module = "TamerOp.Visualization"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "reset_inspection!"
+    qualified_name = "TamerOp.Advanced.reset_inspection!"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Visualization"
+    name = "reset_inspection!"
+    qualified_name = "TamerOp.Visualization.reset_inspection!"
     scope = "owner"
 [[objects]]
 aliases = ["TamerOp.Advanced.save_visual", "TamerOp.Visualization.save_visual", "TamerOp.save_visual"]
@@ -51892,6 +52448,41 @@ tiers = ["simple", "advanced", "qualified"]
     name = "save_visuals"
     qualified_name = "TamerOp.save_visuals"
     scope = "root"
+[[objects]]
+aliases = ["TamerOp.Advanced.select_inspection!", "TamerOp.Visualization.select_inspection!"]
+canonical_binding = "TamerOp.Visualization.select_inspection!"
+canonical_owner = "TamerOp.Visualization"
+declaration_owners = ["TamerOp.Visualization"]
+defining_module = "TamerOp.Visualization"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "select_inspection!"
+    qualified_name = "TamerOp.Advanced.select_inspection!"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Visualization"
+    name = "select_inspection!"
+    qualified_name = "TamerOp.Visualization.select_inspection!"
+    scope = "owner"
 [[objects]]
 aliases = ["TamerOp.Advanced.visual_axes", "TamerOp.Visualization.visual_axes"]
 canonical_binding = "TamerOp.Visualization.visual_axes"
@@ -66363,7 +66954,7 @@ undefined_curated_owner_bindings = []
 
 [source]
 algorithm = "sha256"
-fingerprint = "076f501bb6b7d57e13025f3d21628fd062bb7fa9b72feb0cb6b54d841be143db"
+fingerprint = "cbe7dbb517cd3028be097bfe6c4e002c13ea3428df1d6f9e43aa19bdaa9b8efd"
 
     [source.files]
     "Project.toml" = "3930da0bd8edb7066b4eafa858feb2be11350799b7c54a08973fdabe8e5dde07"
@@ -66381,11 +66972,14 @@ fingerprint = "076f501bb6b7d57e13025f3d21628fd062bb7fa9b72feb0cb6b54d841be143db"
     "ext/TamerOpParquet2Ext.jl" = "9fa38fe2d4fec466793f32f23d5f1d302e45dd3fa39b71eeef9bcdbfe268120b"
     "ext/TamerOpProgressLoggingExt.jl" = "e7dcb7dd63d2209563f0509f7e46d3d5678beda995fe7da674cfe2982ac5f5d4"
     "ext/TamerOpTablesExt.jl" = "dd15be7a229c9a21fcdf7fdd95e7d0361bb7286d992ba88421ba578f112e05d3"
-    "ext/TamerOpWGLMakieExt.jl" = "ad45465baef341f793637663a150017274d71f43095f376963311a02313b3f41"
-    "ext/visualization_makie_common.jl" = "f2c084bff23eaba28f23fc7f1a3994af6505ad6d2d09d0c61f0abaf39e9e63ef"
-    "src/APISurface.jl" = "eefdcd255be9d024d9ba925b1a37fc8861a6b4374705a317f6bd917056ea804e"
-    "src/AbelianCategories.jl" = "1557f782dbf5de42aa77679436e1d4c34896f6a60d7117ca451a44e11e2ba513"
-    "src/ChainComplexes.jl" = "653a58bce3c75ed132d872ee499648f8162ecdad307ac5607be53f1b676fc3be"
+    "ext/TamerOpWGLMakieExt.jl" = "c380107c68fbeeaef1ecdc3fd800b0b3c7f424ba2ea6f5d5783708cf37a15706"
+    "ext/visualization_makie_common.jl" = "29f7cb828aeceb834fe1ee4f9d389b106aa2b22c5feb1989ce024aaca82570fc"
+    "ext/visualization_wgl_inspection.jl" = "24655adc667a0a35fa070df9205a478723e3921a87c32a0f986151f15ddd8984"
+    "ext/visualization_wgl_intervals.jl" = "c0b7e1dba51f4f6456977ada7c232c1754c1538b8864b474d379138563ac9ad1"
+    "ext/visualization_wgl_slices.jl" = "71b9420b96fcfd3ee62161bc0aee1b1831b025229c4dffabd9face1d3f82b6f5"
+    "src/APISurface.jl" = "27c1af47e4784ade11c73712c1fe720f1202f5f0f1806076d36a6cd7513796f5"
+    "src/AbelianCategories.jl" = "c66a6f892920c031e673045b3bf8950ccc6ea5dfbfe0c57db986e1d8515a35c7"
+    "src/ChainComplexes.jl" = "630405dd36767c296de2eb3a368dfdbe12f840f8ceb2f4ce012e2d9eed9baec7"
     "src/ChangeOfPosets.jl" = "3909e66df5ad7f885caa0d8a972969a0c9d622b011ca04932be4d68e3a0e9c46"
     "src/CoreModules.jl" = "efe72cad9c88607b7a803ce78cfa5dfeb213c17f44b2959d36761aaaa310e881"
     "src/DataFileIO.jl" = "60fbfcca56ad6889d3d61bfce23a78658b4d961a54791db1090984d8f2e1694c"
@@ -66405,10 +66999,10 @@ fingerprint = "076f501bb6b7d57e13025f3d21628fd062bb7fa9b72feb0cb6b54d841be143db"
     "src/InvariantCore.jl" = "1e9721048655aa8b8a2b982116034c3d2665babef86e7fd6a3d98a1cb8d98885"
     "src/Invariants.jl" = "423e77e417b030c5105337a8a9481ce83c064f7a60bb04e38313374951e9e6bb"
     "src/ModuleComplexes.jl" = "edb988f1d09cc0db5fa8c4bab63490842b63df73031aa57cf2850dfade6f3d90"
-    "src/Modules.jl" = "71531f6306936c2f5dba6017f29e2fee0fd5880047c6b169c7f6d8402e1a62d3"
+    "src/Modules.jl" = "6215503c689af6fedd8cc412be2c820fd3dddea015f3416440abfb0cb17eae12"
     "src/MultiparameterImages.jl" = "bcff50aa2e3ee078ea0f3ce72140469f5faded4a4ae27dd53de6a484ebe61ad4"
     "src/Options.jl" = "11012e23da27a8da44d9a38350d1582a0a766657abeb5283438f92b9c51c810c"
-    "src/OrdinaryPersistence.jl" = "e53abc36e76bf36dae3d487853328b10b4ec190ce09146bd6218e808eff50631"
+    "src/OrdinaryPersistence.jl" = "51bc186add27c809e9c0ec5f5088228984fe7590e360f9056fc64ecc6c4eee9e"
     "src/PLBackend.jl" = "363a9a45cab9a9b63758e4cea7c405f48936ba7e9ecc854377fd0c356b15c9e0"
     "src/PLPolyhedra.jl" = "e9d6c0c64ebf969a053d3ac4b02b2574f04995f50bfa8f61db45892c03eff5c6"
     "src/RegionGeometry.jl" = "b49b56cb37b589dbf12db28d8fe0d1d2f6d7c43bad82c2893ad04516a3da3eb4"
@@ -66420,7 +67014,7 @@ fingerprint = "076f501bb6b7d57e13025f3d21628fd062bb7fa9b72feb0cb6b54d841be143db"
     "src/Stats.jl" = "5dd777f4143962b57221bc1f524a51b88a1bc8ed16aeed0ac1ececa6dc5ef668"
     "src/SyntheticData.jl" = "b7f6b0c438fc5a513d9ab0c6067a5f1f16eb08e9fde2a677afb8278251feb4e7"
     "src/TamerOp.jl" = "4b5154fc8fba40595ef929efa717bf2bf3445832c744128c8b6a58130b35fe56"
-    "src/Visualization.jl" = "bc46acee681ae5cd9a08665e60a363494c6f673c05ed7b5fa003b941c886d462"
+    "src/Visualization.jl" = "77ed8289024ca13b878e98a3f258169c77993b8cd01b9ff383e4a4f0f5158e87"
     "src/Workflow.jl" = "3986495e1f9e8221188ca503a8734274d98776e4fe84ce658e27794304d87cbe"
     "src/ZnEncoding.jl" = "d2c58dca25a61a87dffd6981eee479b1a7477b850d5ae56354057098864af256"
     "src/data_ingestion/cech_core.jl" = "4bc17f3a7f6cd7c3603b8404fa1ff4173e160272af894496be98069861431aea"
@@ -66435,10 +67029,10 @@ fingerprint = "076f501bb6b7d57e13025f3d21628fd062bb7fa9b72feb0cb6b54d841be143db"
     "src/data_ingestion/rhomboid_depth.jl" = "3e3fdd7d124ffa4bce4ff2d6a8fef11b8b554d9f1e58fadebbb50a5a4b0c881b"
     "src/data_ingestion/rhomboid_incremental.jl" = "fac04d1a9c2dc76432b2ec5a3f5e611bae802f6758ddceac30ba0c90e4a23561"
     "src/data_ingestion/subdivision_cech.jl" = "47b5f478af71f7651a147becc99d5ecf5395a8e2d79f60212f72ef14b5bc2b70"
-    "src/derived_functors/algebras.jl" = "a9d3f2611eaab7d629dc950c5b9ff93f23255edc804aa865f0104b71037168d5"
+    "src/derived_functors/algebras.jl" = "e9b321aadc1ffd1f84b26cea6684204f538844efb6115aa159a22544c25917bb"
     "src/derived_functors/backends.jl" = "20ceb2049164855d4e34d1a6ab1964f7b64693ba6cdeba1d4a8414c43ec8496f"
-    "src/derived_functors/ext_tor_spaces.jl" = "6bcc0e7ee0b9c0bf0fb6c75ba93ca471e879864a3ceade29ec4eefffaa32ffe2"
-    "src/derived_functors/functoriality.jl" = "97ab8958952149404fb88c8f1232b717bbcf16522795dcbe1576d8674ffb87ef"
+    "src/derived_functors/ext_tor_spaces.jl" = "da8b033915554abda827c8c5b8db759bb281aa2bcf09381fe8b6256b69097a51"
+    "src/derived_functors/functoriality.jl" = "6f8370f3d2a77108e654cde15b12a760f66c749e1d026c7dac99e56b7951ef5c"
     "src/derived_functors/graded_spaces.jl" = "889a1f782f0104a50712fb2436b0a5a5fa4785f71a3894f0032b994e4dbd6743"
     "src/derived_functors/hom_ext_engine.jl" = "377b5f7275bc18faf662298ba75ef131b6146989d7d110d5d337f81ad9176ce7"
     "src/derived_functors/public_api.jl" = "94b942c588feff636725133b22e6a20ce07c92214192894e8e88666c3201e512"
@@ -66450,11 +67044,11 @@ fingerprint = "076f501bb6b7d57e13025f3d21628fd062bb7fa9b72feb0cb6b54d841be143db"
     "src/fibered2d/exact_matching.jl" = "a20581df145b2fb03baba06957717ecd9320fa8a02fbad82de250966382c5961"
     "src/field_linalg/autotune.jl" = "82f5beaf1bdaa65762466d047558b5723e5a0fa245049b95de28bfeaaffbb989"
     "src/field_linalg/backend_routing.jl" = "f94f6cb90c2e75bb5a22ac6149e31cda66e177cb38017b1c452197177c365343"
-    "src/field_linalg/nonqq_engines.jl" = "e3c7358222027805a67f974e18c9ec2244ba7b0b683b8cf3d37c590227412359"
+    "src/field_linalg/nonqq_engines.jl" = "26dce12404dc40ae43a6aa86543ca94f0ea92eb7ab957e03eebe208b348dd00c"
     "src/field_linalg/public_api.jl" = "3c945a641667c467a300484b1e44d4c56a98dac8491d1358a035362b9e658003"
-    "src/field_linalg/qq_engine.jl" = "66602927e730fbc5c0968164f644407392e59a6f30c859321c5efd3e5b4c0583"
+    "src/field_linalg/qq_engine.jl" = "ad1603d88cc1934739aab79cfcea2d3507199cf9f99f782491ebd97fa4ae889b"
     "src/field_linalg/sparse_rref.jl" = "c8078072fa8ca092845a16466eb33b556dc72c043806150e425160cca52756f0"
-    "src/field_linalg/thresholds.jl" = "e8be6482d9d862a201b5ba7b98c17913e3520c79ca757f56e73b4a67d405db7e"
+    "src/field_linalg/thresholds.jl" = "b897891245e73edabb484fd12cdebc019fbaa475b4d0bbb172a470824f1b4c44"
     "src/finite_fringe/fringe_module_and_fiber.jl" = "e35fe76df20dd57ad877fd3687fcbb01a860ba655bb1a5a311cecd2105243255"
     "src/finite_fringe/hom.jl" = "24cfd4f40d0e8fde322642a61e69b0608609719faa77bd770cd5932cae918fbd"
     "src/finite_fringe/posets.jl" = "57671af32d57cef4d4ba839a81bf7c1e7ad84711afabeb12646f40ebae4e9f39"
@@ -66484,47 +67078,54 @@ fingerprint = "076f501bb6b7d57e13025f3d21628fd062bb7fa9b72feb0cb6b54d841be143db"
     "src/serialization/owned_mppi.jl" = "142bd796df725d214970d7f6668da7c3dc0287d1ed92975d02777176a8a2a74c"
     "src/serialization/shared.jl" = "b3dcdcaa8d817ac86c722491c336485e0ab78adff40220589e9f3c23c361ae07"
     "src/slice_invariants/exact_grades.jl" = "d3b8822e033156e2349953e492e1c801d62e2b12ae2d9ec7d7c09151296f3544"
-    "src/visualization/builders_encoding.jl" = "0f46929d8e40c45f917b7fbef137aa8cf9cf7e8157c2aac0607010143b0c8e7d"
+    "src/visualization/builders_encoding.jl" = "b23e51b3cf135cfde3fe709a38f4801a48e3c41e41600c26de4b111c9b8615c2"
     "src/visualization/builders_ingestion.jl" = "94ee1bfc87b844a4e0007c8cdca60b239bb59146c17bc2235535b67bd1fc1ad2"
-    "src/visualization/builders_invariants.jl" = "18593633552a03f987a6e52432483b2f9903946d9fd98b67cdbcecdd412b76c0"
-    "src/visualization/builders_modules.jl" = "3772f346facd189dad06e576274f7063481ae3ad831bf3f08e5215eaef9ee05c"
-    "src/visualization/builders_presentations.jl" = "351e329f401cd47da0e930198697ead50a9128ebe97d5f5461166cdda78b1881"
-    "src/visualization/hasse_layout.jl" = "f960b5be16ea2e72daf2183b734f3fc76865bd1fbd9d4b038e3227e64f707dcf"
-    "src/visualization/region_geometry.jl" = "b060206e3126d934f4cf00486d22c906144f22cb70b8d9d06f31402a050f67c1"
-    "src/visualization/rendering.jl" = "688d67ce2cb6f3b9e9e47e99837d1f8f6c4c3f5bc48bf360a8a0b522ccdb624f"
-    "src/visualization/types.jl" = "995fa1b90e48e2f3893ccd56808ea6c7c64f4751a1c0b9fc33a9fb3d73898c2b"
-    "src/visualization/validation.jl" = "74010b445a3f7ba0173ede99c0b3503c9693538e84a07cfe9e8c4c740189c5f6"
+    "src/visualization/builders_invariants.jl" = "e4db14d3a9d56bb4f22f0e707a22f714d8aeb896e3eeb05984406ca08c8b719d"
+    "src/visualization/builders_modules.jl" = "74432f697124a868860bc8054d0f2f5bcb090e4dbd213e896586c80375d2a815"
+    "src/visualization/builders_presentations.jl" = "17852011608575cd33f8673aebcd129083381006407ae6c047f60c9759a2d300"
+    "src/visualization/builders_slices.jl" = "24406d6b830f601538492c4d6063fca6ecd253e871217871fd18061eb3176345"
+    "src/visualization/hasse_layout.jl" = "1ac980228b59e437fddbd03f70c2f2e6805218584b42672b1327fdb390e49c33"
+    "src/visualization/inspection_intervals.jl" = "8d99f85e7206a07a5eee5df2e5937ef1ad24d210a9d3c557b8d673567507c2d7"
+    "src/visualization/inspection_rendering.jl" = "7bebfd23f7402dce048b57074146fc9bf356568b1d422a9301cd3192db1e413f"
+    "src/visualization/inspection_session.jl" = "5638f7b35652ef7fb790df94d2ec100d76784b3e19c7710f8a09a78f3254d2fc"
+    "src/visualization/inspection_slices.jl" = "6bd80ab9698185e02093ea828387a5f3a9b15fcffde0c1349720fa99044fe5c9"
+    "src/visualization/interval_views.jl" = "50c3286d29c3786b03152aa9f0f4883576aafa4719d9be168614e955c873396a"
+    "src/visualization/region_geometry.jl" = "94119445b218c43fcc4d688f95abc94a1dec70ddf1119f700aabe6823bf78f77"
+    "src/visualization/rendering.jl" = "58534070aa5f1ab5452faaecd670eba0d4ddab68f3155fc909bd7d81c2d24a9d"
+    "src/visualization/style.jl" = "c2941bde8d6ebd1f4ccf6466497bb42f8315aafafeb88124a19a9cafe73f24be"
+    "src/visualization/types.jl" = "9286b0b23f498975faede64df73080386728b05e54a99124cfae867313765448"
+    "src/visualization/validation.jl" = "88ce37314d20f1e300cf29fc7416f5f82386cee5023c7ed4f19867180d89bc58"
 
 [totals]
-advanced_binding_names = 1007
-advanced_binding_rows = 1016
-advanced_declarations = 1046
+advanced_binding_names = 1019
+advanced_binding_rows = 1028
+advanced_declarations = 1059
 advanced_exported_constants = 0
-advanced_exported_functions = 909
+advanced_exported_functions = 919
 advanced_exported_modules = 37
-advanced_exported_types = 274
+advanced_exported_types = 277
 advanced_exported_undefineds = 0
-advanced_exports = 1220
+advanced_exports = 1233
 canonical_constants = 2
-canonical_functions = 920
+canonical_functions = 930
 canonical_modules = 38
-canonical_objects = 1234
-canonical_objects_with_docstrings = 913
-canonical_types = 274
+canonical_objects = 1247
+canonical_objects_with_docstrings = 926
+canonical_types = 277
 canonical_undefineds = 0
-intended_public_objects = 1233
-intended_public_objects_with_docstrings = 912
-inventoried_bindings = 2629
+intended_public_objects = 1246
+intended_public_objects_with_docstrings = 925
+inventoried_bindings = 2657
 owner_candidates = 758
-public_bindings = 2628
-qualified_curated_owner_bindings = 1201
+public_bindings = 2656
+qualified_curated_owner_bindings = 1214
 reconciliation_only_objects = 1
 root_exported_constants = 2
-root_exported_functions = 129
+root_exported_functions = 130
 root_exported_modules = 1
-root_exported_types = 75
+root_exported_types = 76
 root_exported_undefineds = 0
-root_exports = 207
-simple_binding_names = 204
-simple_binding_rows = 204
-simple_declarations = 204
+root_exports = 209
+simple_binding_names = 206
+simple_binding_rows = 206
+simple_declarations = 206

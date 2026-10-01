@@ -130,5 +130,58 @@ is reused by the same result. A vector outside the cycle space is rejected even
 when the quotient has dimension zero; numerical coefficients retain their
 supplied tolerance rules.
 
+Over a prime field with characteristic greater than three, native coordinate
+solves now retain their factors on the homology, cohomology or subquotient
+result. A factor records work needed to solve the same left-hand matrix
+again. Later vectors are still checked against the full represented subspace.
+A new result does its own preparation, and discarding the result releases its local
+factors. The specialized F2/F3 engines and the existing Nemo backend selection
+continue to apply.
+
 Validators and explicit mathematical queries are separate from passive
 inspection: they can perform the work required by their documented contracts.
+
+## Asking for several extension products together
+
+Retaining the finite module also lets us ask how its extension classes compose.
+Suppose `E_LM`, `E_MN` and `E_LN` are projective Ext results for modules L, M
+and N on the same finite poset. A class from Ext^q(L,M) can be composed with
+one from Ext^p(M,N), giving a class in Ext^(p+q)(L,N). These computations use
+[the finite-poset category](math_categories.md).
+
+For one pair, use coordinate vectors with `yoneda_product`. For a table, put
+each collection of coordinate vectors into the columns of a matrix:
+
+```julia
+import TamerOp as OP
+using LinearAlgebra
+DF = OP.DerivedFunctors
+
+# Here K is the coefficient type of the already constructed Ext results.
+# E_LM and E_LN must include degree p+q; E_MN must include degree p.
+B = Matrix{K}(I, DF.dim(E_MN, p), DF.dim(E_MN, p))
+A = Matrix{K}(I, DF.dim(E_LM, q), DF.dim(E_LM, q))
+target, products = DF.yoneda_product(E_MN, p, B, E_LM, q, A; ELN=E_LN)
+```
+
+`products[:, j, i]` is the coordinate vector for column `B[:, j]` composed
+with column `A[:, i]`. Identity matrices request every pair of basis classes;
+other columns request the combinations you supply. Over exact fields, the
+product has exactly the same coordinates as the corresponding scalar call.
+Numerical fields retain their tolerance contract. If the supplied target uses
+another projective resolution, the result is transported into that model.
+
+To compose extension classes, the computation first expresses a class as
+compatible maps between resolution terms, called a lift. A table request builds
+each right-hand class's lift once and reuses it across the left-hand classes.
+Those lifts are local to the call. Each product
+still undergoes its checked coordinate calculation. Set `return_cocycle=true`
+only if you also need the explicit cocycles: the third return value has the
+same two column indices, with its first index running over cochain coordinates
+in the returned target model.
+
+For repeated multiplication in Ext^*(M,M), use `ExtAlgebra` and its homogeneous
+elements. Its first product in a pair of degrees now builds the basis table
+with the same preparation; later products reuse that completed table. This
+retained-answer workflow is distinct from benchmarking a new computation after
+clearing mathematical results, as explained in the [benchmarking guide](benchmarking.md).

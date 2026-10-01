@@ -2805,6 +2805,15 @@ end
             changed_target = DF.Ext(changed_res, target)
             _, changed_product, changed_cocycle = DF.yoneda_product(
                 E24, 1, K[1], E12, 1, K[1]; ELN=changed_target, return_cocycle=true)
+            # Batch preparation must perform the same target-resolution
+            # transport, including the sign over odd characteristics.
+            _, table, cocycles = DF.yoneda_product(E24, 1, reshape(K[1,-1,0],1,:),
+                E12, 1, reshape(K[1,-1],1,:); ELN=changed_target, return_cocycle=true)
+            for i in 1:2, j in 1:3
+                scale = K[1,-1,0][j] * K[1,-1][i]
+                @test equal_coefficients(table[:,j,i], scale .* changed_product)
+                @test equal_coefficients(cocycles[:,j,i], scale .* changed_cocycle)
+            end
             @test equal_coefficients(changed_product, -base_product)
             @test equal_coefficients(changed_cocycle, -DF.representative(E14, 2, base_product))
             @test equal_coefficients(DF.coordinates(changed_target, 2, changed_cocycle), changed_product)
@@ -4491,6 +4500,52 @@ end
             inverse_pullback = Matrix(DF.ext_map_first(E, base, to_original; t=1))
             @test pullback * inverse_pullback == Matrix{K}(I, 4, 4)
             @test inverse_pullback * pullback == Matrix{K}(I, 4, 4)
+        end
+    end
+end
+
+@testset "Batched Yoneda products preserve ordering units and validation" begin
+    for field in (CM.QQField(), CM.PrimeField(2), CM.PrimeField(3), CM.PrimeField(101), CM.RealField(Float64))
+        K = CM.coeff_type(field)
+        P = diamond_poset()
+        eq(x,y) = field isa CM.RealField ? isapprox(x,y;atol=field.atol,rtol=field.rtol) : x == y
+        simple(v) = _derived_window_interval(P,v,v,field)
+        S1, S2, S4 = simple(1), simple(2), simple(4)
+        M = MD.direct_sum(MD.direct_sum(S1,S2), S4)
+        alg = DF.ExtAlgebra(M, OPT.DerivedFunctorOptions(maxdeg=2,model=:projective))
+        E = DF.underlying_ext_space(alg)
+        for (p,q) in ((0,0),(0,1),(1,0),(1,1))
+            dp,dq = DF.dim(E,p), DF.dim(E,q)
+            B = hcat(Matrix{K}(I,dp,dp), fill(-one(K),dp), zeros(K,dp))
+            A = hcat(Matrix{K}(I,dq,dq), fill(one(K),dq))
+            target, table, cocycles = DF.yoneda_product(E,p,B,E,q,A;ELN=E,return_cocycle=true)
+            @test target === E
+            @test size(table) == (DF.dim(E,p+q),dp+2,dq+1)
+            for i in axes(A,2), j in axes(B,2)
+                _,scalar,z = DF.yoneda_product(E,p,B[:,j],E,q,A[:,i];ELN=E,return_cocycle=true)
+                @test eq(table[:,j,i],scalar)
+                @test eq(cocycles[:,j,i],z)
+                @test eq(DF.coordinates(E,p+q,cocycles[:,j,i]),scalar)
+                @test eq(DF.multiply(alg,p,B[:,j],q,A[:,i]),scalar)
+            end
+            _, emptytable = DF.yoneda_product(E,p,zeros(K,dp,0),E,q,A;ELN=E)
+            @test size(emptytable) == (DF.dim(E,p+q),0,dq+1)
+            @test_throws DimensionMismatch DF.yoneda_product(E,p,zeros(K,dp+1,0),E,q,A;ELN=E)
+            @test_throws DimensionMismatch DF.yoneda_product(E,p,B,E,q,zeros(K,dq+1,0);ELN=E)
+        end
+        @test_throws ErrorException DF.yoneda_product(E,-1,zeros(K,0,0),E,1,zeros(K,0,0);ELN=E)
+        @test_throws ErrorException DF.yoneda_product(E,2,zeros(K,0,0),E,1,zeros(K,0,0);ELN=E)
+        # A different middle module must be rejected even for an empty batch.
+        other = DF.Ext(S1,S4,OPT.DerivedFunctorOptions(maxdeg=2,model=:projective))
+        @test_throws ErrorException DF.yoneda_product(E,1,zeros(K,DF.dim(E,1),0),other,1,zeros(K,DF.dim(other,1),0))
+        # Arbitrary rational coordinates (not just basis columns).
+        if field isa CM.QQField
+            B = K[1//3 -5//7; 2//11 0]
+            A = K[7//13 2//17 -3//5; -2//19 0 1//23]
+            _, table = DF.yoneda_product(E,1,B,E,1,A;ELN=E)
+            for i in axes(A,2),j in axes(B,2)
+                @test table[:,j,i] == last(DF.yoneda_product(E,1,B[:,j],E,1,A[:,i];ELN=E))
+            end
         end
     end
 end

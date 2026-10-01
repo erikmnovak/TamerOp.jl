@@ -13,6 +13,27 @@ import ..ChainComplexes: describe
 import ..FiniteFringe: field
 import ..Results: provenance, result_summary
 
+# Retained F2 chains use dimension-local indices, not potentially repeated cell
+# labels. This storage is produced only by the reduction below; provenance text
+# alone never enables representative selection.
+struct _PersistenceChain{T}
+    indices::Vector{Int}
+    ids::Vector{Int}
+    grades::Vector{T}
+end
+
+struct _PersistenceRepresentative{T}
+    birth::T
+    death::Union{Nothing,T}
+    cycle::_PersistenceChain{T}
+    bounding_chain::Union{Nothing,_PersistenceChain{T}}
+end
+
+struct _PersistenceRepresentatives{T}
+    finite::Vector{Vector{_PersistenceRepresentative{T}}}
+    essential::Vector{Vector{_PersistenceRepresentative{T}}}
+end
+
 """
     PersistenceDiagram(finite_by_dim, essential_by_dim; field=F2(), order=:sublevel)
 
@@ -24,7 +45,9 @@ floating-point approximation merely to represent infinity.
 For sublevels, a finite pair `(b,d)` represents `[b,d)`; for superlevels, it
 represents `(d,b]` in the original parameter units. Empty (zero-length) bars
 are omitted. Use `finite_intervals`, `essential_births`, `persistence_intervals`,
-`field`, `filtration_order`, and `provenance` to inspect a diagram.
+`field`, `filtration_order`, and `provenance` to inspect a diagram. Computing with
+`representatives=true` also retains reduction cycles inspected by
+`persistence_representative`; hand-built endpoint diagrams have none.
 """
 struct PersistenceDiagram{T<:Real,M<:NamedTuple}
     finite_by_dim::Vector{Vector{Tuple{T,T}}}
@@ -32,7 +55,12 @@ struct PersistenceDiagram{T<:Real,M<:NamedTuple}
     field::PrimeField
     order::Symbol
     meta::M
+    retained_representatives::Union{Nothing,_PersistenceRepresentatives{T}}
 end
+
+PersistenceDiagram(finite::Vector{Vector{Tuple{T,T}}}, essential::Vector{Vector{T}},
+                   field::PrimeField, order::Symbol, meta::NamedTuple) where {T<:Real} =
+    PersistenceDiagram(finite, essential, field, order, meta, nothing)
 
 function PersistenceDiagram(finite_by_dim::AbstractVector{<:AbstractVector{Tuple{T,T}}},
                             essential_by_dim::AbstractVector{<:AbstractVector{T}};
@@ -104,6 +132,71 @@ function persistence_intervals(diag::PersistenceDiagram{T}; dim::Integer) where 
     return bars
 end
 
+function _representative_chain(G::GradedComplex{N,T}, offsets, dim, indices) where {N,T}
+    ordered = sort(indices)
+    return _PersistenceChain{T}(ordered .- (offsets[dim + 1] - 1),
+        getfield(G, :cell_ids)[ordered], T[G.grades[i][1] for i in ordered])
+end
+
+function _representative_chain_record(chain::_PersistenceChain, dim::Int)
+    return (; dimension=dim, cell_indices=Tuple(chain.indices), cell_ids=Tuple(chain.ids),
+        cell_grades=Tuple(chain.grades), coefficients=Tuple(fill(1, length(chain.indices))))
+end
+
+"""
+    persistence_representative(diag; dim, kind=:finite, index=1)
+
+Inspect one original interval member's retained `F2` cycle. Opt in when computing
+the diagram with `representatives=true`; the default interval-only computation
+does not retain change-of-basis columns. `kind` is `:finite` or `:essential`, and
+`index` indexes `finite_intervals(diag; dim)` or `essential_births(diag; dim)`.
+Equal intervals have separate member indices and potentially different cycles.
+
+The result reports `available` and `reason`. An unavailable result has no cycle;
+setting a provenance flag on a hand-built diagram does not create one. Invalid
+dimensions, kinds and indices are errors even when cycles were not retained.
+
+An available `cycle` records dimension-local cell indices, original cell IDs,
+exact cell grades, and coefficients modulo two. Its class is nonzero throughout
+the returned interval, including birth and excluding finite death in filtration
+order. A finite interval also has a `bounding_chain` whose boundary is this cycle
+at death. Essential intervals have no such chain in the supplied finite complex.
+These are deterministic reduction choices, not canonical, optimized, or geometric
+representatives. Source-cell IDs do not assert an embedding in the original data.
+The input diagram and its retained storage must be treated as read-only.
+"""
+function persistence_representative(diag::PersistenceDiagram; dim::Integer,
+                                   kind::Symbol=:finite, index::Integer=1)
+    slot = _degree_slot(dim)
+    kind in (:finite, :essential) || throw(ArgumentError("kind must be :finite or :essential."))
+    !(index isa Bool) && 1 <= index <= typemax(Int) ||
+        throw(ArgumentError("index must be a positive interval member index fitting Int."))
+    values = kind === :finite ? diag.finite_by_dim : diag.essential_by_dim
+    slot <= length(values) && index <= length(values[slot]) ||
+        throw(ArgumentError("index is outside the stored $kind intervals in dimension $dim."))
+    birth = kind === :finite ? values[slot][index][1] : values[slot][index]
+    death = kind === :finite ? values[slot][index][2] :
+        (diag.order === :sublevel ? Inf : -Inf)
+    retained = diag.retained_representatives
+    context = (; dimension=Int(dim), kind, index=Int(index), interval=(birth, death),
+        field=diag.field, order=diag.order, birth_included=true, death_included=false,
+        valid_parameters=diag.order === :sublevel ? "birth <= t < death" : "death < t <= birth",
+        choice=retained === nothing ? :not_available : :noncanonical_f2_column_reduction,
+        source_geometry=:not_asserted)
+    retained === nothing && return merge(context, (; available=false, reason=:not_retained,
+        cycle=nothing, bounding_chain=nothing))
+    records = kind === :finite ? retained.finite : retained.essential
+    slot <= length(records) && index <= length(records[slot]) ||
+        throw(ArgumentError("retained representatives disagree with the diagram's interval storage."))
+    record = records[slot][index]
+    record.birth == birth && (kind === :essential ? record.death === nothing : record.death == death) ||
+        throw(ArgumentError("retained representative endpoints disagree with the diagram; recompute after mutation."))
+    chain = record.bounding_chain
+    return merge(context, (; available=true, reason=:retained,
+        cycle=_representative_chain_record(record.cycle, Int(dim)),
+        bounding_chain=chain === nothing ? nothing : _representative_chain_record(chain, Int(dim) + 1)))
+end
+
 """Return the coefficient field actually used for ordinary persistence."""
 field(diag::PersistenceDiagram) = diag.field
 
@@ -127,7 +220,8 @@ function provenance(diag::PersistenceDiagram{T}) where {T}
         orientation=diag.order === :sublevel ? (1,) : (-1,), order=diag.order,
         interval_convention=diag.order === :sublevel ? :left_closed_right_open : :left_open_right_closed,
         zero_length_intervals=:omitted, essential_death=diag.order === :sublevel ? Inf : -Inf,
-        grade_type=T, window=:unrestricted))
+        grade_type=T, window=:unrestricted,
+        representatives=diag.retained_representatives === nothing ? :not_retained : :retained_reduction_cycles))
 end
 
 function _diagram_summary(diag::PersistenceDiagram)
@@ -135,6 +229,7 @@ function _diagram_summary(diag::PersistenceDiagram)
         dimensions=Tuple(0:(length(diag.finite_by_dim) - 1)),
         finite_counts=Tuple(length.(diag.finite_by_dim)),
         essential_counts=Tuple(length.(diag.essential_by_dim)),
+        representatives_available=diag.retained_representatives !== nothing,
         provenance=provenance(diag))
 end
 
@@ -210,6 +305,41 @@ function check_persistence_diagram(diag::PersistenceDiagram; throw::Bool=false)
     end
     for (slot, births) in enumerate(diag.essential_by_dim), b in births
         isfinite(b) || push!(issues, "dimension $(slot - 1): essential birth must be finite.")
+    end
+    retained = diag.retained_representatives
+    if retained !== nothing
+        for (kind, intervals, records) in ((:finite, diag.finite_by_dim, retained.finite),
+                                           (:essential, diag.essential_by_dim, retained.essential))
+            if length(intervals) != length(records)
+                push!(issues, "retained $kind representatives cover different homological dimensions.")
+                continue
+            end
+            for slot in eachindex(intervals)
+                if length(intervals[slot]) != length(records[slot])
+                    push!(issues, "dimension $(slot - 1): retained $kind representative count disagrees with intervals.")
+                    continue
+                end
+                for i in eachindex(records[slot])
+                    r = records[slot][i]
+                    expected = kind === :finite ? intervals[slot][i] : (intervals[slot][i], nothing)
+                    (r.birth, r.death) == expected ||
+                        push!(issues, "dimension $(slot - 1): retained $kind representative endpoints disagree with interval $i.")
+                    (r.bounding_chain !== nothing) == (kind === :finite) ||
+                        push!(issues, "dimension $(slot - 1): retained $kind representative has an invalid bounding-chain contract.")
+                    for chain in (r.cycle, r.bounding_chain)
+                        chain === nothing && continue
+                        length(chain.indices) == length(chain.ids) == length(chain.grades) ||
+                            push!(issues, "retained chain indices, cell IDs and grades have different lengths.")
+                        !isempty(chain.indices) && issorted(chain.indices) && allunique(chain.indices) && all(>(0), chain.indices) ||
+                            push!(issues, "retained chains require nonempty, distinct positive cell indices in increasing order.")
+                        level = chain === r.cycle ? r.birth : r.death
+                        level === nothing && continue
+                        all(g -> isfinite(g) && (diag.order === :sublevel ? g <= level : g >= level), chain.grades) ||
+                            push!(issues, "retained chain has a cell outside its birth/death filtration stage.")
+                    end
+                end
+            end
+        end
     end
     valid = isempty(issues)
     throw && !valid && Base.throw(ArgumentError(join(issues, " ")))
@@ -493,7 +623,7 @@ function _top_cell_complex_2d(vals::AbstractMatrix{T},
 end
 
 """
-    persistence_diagram(G::GradedComplex; order=:sublevel, field=F2())
+    persistence_diagram(G::GradedComplex; order=:sublevel, field=F2(), representatives=false)
 
 Reduce a finite, one-parameter graded chain complex over `F2()`. Integer
 boundary coefficients are read modulo two. The input must have finite real
@@ -504,11 +634,15 @@ before reduction.
 Sublevels use increasing grades. Superlevels use decreasing grades without
 negating or converting the grade values. Births are included and deaths
 excluded in filtration order; zero-length intervals are omitted.
+Opt in with `representatives=true` to retain selected-interval cycles and finite
+death bounding chains for [`persistence_representative`](@ref). This tracks sparse
+change-of-basis columns during reduction and can substantially increase memory.
 """
 function persistence_diagram(G::GradedComplex{N,T};
-                             order::Symbol=:sublevel, field=F2()) where {N,T}
+                             order::Symbol=:sublevel, field=F2(), representatives=false) where {N,T}
     _normalize_order(order)
     _normalize_field(field)
+    representatives isa Bool || throw(ArgumentError("representatives must be true or false."))
     offsets = _validate_complex(G, order)
     dims = _cell_dimensions(offsets)
     total = length(G.grades)
@@ -531,34 +665,62 @@ function persistence_diagram(G::GradedComplex{N,T};
     has_reduced = falses(total)
     positive = falses(total)
     alive = falses(total)
+    changes = representatives ? Vector{Vector{Int}}(undef, total) : nothing
+    finite_reps = representatives ? [_PersistenceRepresentative{T}[] for _ in 1:nd] : nothing
+    essential_reps = representatives ? [_PersistenceRepresentative{T}[] for _ in 1:nd] : nothing
     for cell in perm
         col = _boundary_column_f2(G, dims, offsets, rank, cell)
+        change = representatives ? Int[cell] : nothing
         while !isempty(col)
             pivot = col[end]
             has_reduced[pivot] || break
             col = _xor_columns(col, reduced[pivot], rank)
+            representatives && (change = _xor_columns(change, changes[pivot], rank))
         end
         if isempty(col)
             positive[cell] = true
             alive[cell] = true
+            representatives && (changes[cell] = change)
         else
             pivot = col[end]
             has_reduced[pivot] = true
             reduced[pivot] = col
             positive[pivot] || throw(ArgumentError("ordinary persistence internal inconsistency: pivot did not birth a class."))
             alive[pivot] = false
+            if representatives
+                # The reduced death column is a cycle already present at the
+                # pivot's birth. Its tracked column bounds it exactly at death.
+                changes[pivot] = change
+                if values[pivot] != values[cell]
+                    dim = dims[pivot]
+                    push!(finite_reps[dim + 1], _PersistenceRepresentative{T}(
+                        values[pivot], values[cell],
+                        _representative_chain(G, offsets, dim, col),
+                        _representative_chain(G, offsets, dim + 1, change)))
+                end
+            end
             values[pivot] == values[cell] ||
                 push!(intervals[dims[pivot] + 1], (values[pivot], values[cell]))
         end
     end
     for cell in 1:total
-        alive[cell] && push!(essential[dims[cell] + 1], values[cell])
+        if alive[cell]
+            push!(essential[dims[cell] + 1], values[cell])
+            representatives && push!(essential_reps[dims[cell] + 1], _PersistenceRepresentative{T}(
+                values[cell], nothing, _representative_chain(G, offsets, dims[cell], changes[cell]), nothing))
+        end
     end
-    for bars in intervals
-        sort!(bars; rev=order === :superlevel)
-    end
-    for births in essential
-        sort!(births; rev=order === :superlevel)
+    for (values_by_dim, reps_by_dim) in ((intervals, finite_reps), (essential, essential_reps))
+        for slot in eachindex(values_by_dim)
+            values_at_dim = values_by_dim[slot]
+            if representatives
+                permutation = sortperm(values_at_dim; rev=order === :superlevel)
+                values_by_dim[slot] = values_at_dim[permutation]
+                reps_by_dim[slot] = reps_by_dim[slot][permutation]
+            else
+                sort!(values_at_dim; rev=order === :superlevel)
+            end
+        end
     end
     # The reducer established these invariants; avoid revalidating its output.
     meta = (construction=(requested=:graded_chain_complex, effective=:graded_chain_complex,
@@ -567,11 +729,13 @@ function persistence_diagram(G::GradedComplex{N,T};
             chain_validation=:boundary_squared_zero_mod_two,
             backend=:f2_column_reduction, approximation=:none_in_reduction,
             discretization=:none)
-    return PersistenceDiagram(intervals, essential, field, order, meta)
+    retained = representatives ? _PersistenceRepresentatives{T}(finite_reps, essential_reps) : nothing
+    return PersistenceDiagram(intervals, essential, field, order, meta, retained)
 end
 
 """
-    persistence_diagram(data, filtration; order=:sublevel, field=F2(), cache=nothing)
+    persistence_diagram(data, filtration; order=:sublevel, field=F2(), cache=nothing,
+                        representatives=false)
 
 Build a one-parameter complex with `build_graded_complex` and compute ordinary
 persistent homology. The filtration must actually be compatible with `order`;
@@ -580,18 +744,20 @@ upper-star construction. Cubical vertex data have a dedicated upper-star route.
 Grade precision on other ingestion routes is that of their constructed complex.
 """
 function persistence_diagram(data, filtration::DataIngestion.AbstractFiltration;
-                             order::Symbol=:sublevel, field=F2(), cache=nothing)
+                             order::Symbol=:sublevel, field=F2(), cache=nothing, representatives=false)
     _normalize_order(order)
     _normalize_field(field)
+    representatives isa Bool || throw(ArgumentError("representatives must be true or false."))
     build = DataIngestion.build_graded_complex(data, filtration; cache=cache)
-    diag = persistence_diagram(DataIngestion.graded_complex(build); order=order, field=field)
+    diag = persistence_diagram(DataIngestion.graded_complex(build); order, field, representatives)
     kind = DataIngestion.filtration_kind(filtration)
     # The public build result records grades and orientation, but not the
     # executed construction/backend. Do not infer an identity construction:
     # some supported requests deliberately substitute a different model.
     meta = merge(diag.meta, (construction=(requested=kind, effective=:not_recorded, substitution=:not_recorded),
                             source=typeof(data), geometry=:ingestion_contract))
-    return PersistenceDiagram(diag.finite_by_dim, diag.essential_by_dim, diag.field, diag.order, meta)
+    return PersistenceDiagram(diag.finite_by_dim, diag.essential_by_dim, diag.field, diag.order,
+                              meta, diag.retained_representatives)
 end
 
 function _periodic_tuple(periodic, ::Val{N}) where {N}
@@ -631,7 +797,7 @@ end
 
 """
     cubical_persistence(values; periodic=false, order=:sublevel,
-                        input=:top_cells, field=F2())
+                        input=:top_cells, field=F2(), representatives=false)
 
 Ordinary cubical persistence. `input=:top_cells` supports two-dimensional arrays;
 entries grade squares, and their faces receive the minimum incident value for
@@ -646,41 +812,48 @@ a circle. Two periodic axes give a torus, including a 1-by-1 torus.
 Finite bars are `[birth,death)` for sublevels and `(death,birth]` for superlevels.
 The combined interval accessor reports essential death at `Inf` or `-Inf`,
 respectively. Zero-length intervals are omitted.
+`representatives=true` retains cell-chain cycles and finite death bounding
+chains; inspect them with [`persistence_representative`](@ref). Cell indices refer
+to the constructed cubical complex, not pixel coordinates.
 """
 function cubical_persistence(values::AbstractArray{<:Real}; periodic=false,
                              order::Symbol=:sublevel, input::Symbol=:top_cells,
-                             field=F2())
+                             field=F2(), representatives=false)
     _normalize_order(order)
     _normalize_field(field)
+    representatives isa Bool || throw(ArgumentError("representatives must be true or false."))
     _validate_cubical_values(values)
     per = _periodic_tuple(periodic, Val(ndims(values)))
     if input === :vertices
         return _vertex_cubical_persistence(values, per, order, field,
-            DataIngestion.construction_mode(DataIngestion.CubicalFiltration()), nothing)
+            DataIngestion.construction_mode(DataIngestion.CubicalFiltration()), nothing, representatives)
     end
     input === :top_cells || throw(ArgumentError("cubical persistence input must be :top_cells or :vertices."))
     ndims(values) == 2 || throw(ArgumentError("cubical persistence input=:top_cells supports two-dimensional arrays."))
     G = _top_cell_complex_2d(values, per, order)
-    diag = persistence_diagram(G; order=order, field=field)
+    diag = persistence_diagram(G; order, field, representatives)
     meta = merge(diag.meta, (construction=(requested=:cubical_top_cells, effective=:cubical_top_cells,
         substitution=:none), source=(shape=size(values), periodic=per),
         grade_arithmetic=:exact_input_values, geometry=:cubical_cells))
-    return PersistenceDiagram(diag.finite_by_dim, diag.essential_by_dim, diag.field, diag.order, meta)
+    return PersistenceDiagram(diag.finite_by_dim, diag.essential_by_dim, diag.field, diag.order,
+                              meta, diag.retained_representatives)
 end
 
-function _vertex_cubical_persistence(values, per, order, field, construction, cache)
+function _vertex_cubical_persistence(values, per, order, field, construction, cache, representatives)
     G = _vertex_cubical_complex(values, per, order, construction, cache)
-    diag = persistence_diagram(G; order=order, field=field)
+    diag = persistence_diagram(G; order, field, representatives)
     meta = merge(diag.meta, (construction=(requested=:cubical_vertices, effective=:cubical_vertices,
         substitution=:none), source=(shape=size(values), periodic=per),
         grade_arithmetic=:exact_input_values, geometry=:cubical_cells))
-    return PersistenceDiagram(diag.finite_by_dim, diag.essential_by_dim, diag.field, diag.order, meta)
+    return PersistenceDiagram(diag.finite_by_dim, diag.essential_by_dim, diag.field, diag.order,
+                              meta, diag.retained_representatives)
 end
 
 function persistence_diagram(data::ImageNd, filtration::DataIngestion.CubicalFiltration;
-                             order::Symbol=:sublevel, field=F2(), cache=nothing)
+                             order::Symbol=:sublevel, field=F2(), cache=nothing, representatives=false)
     _normalize_order(order)
     _normalize_field(field)
+    representatives isa Bool || throw(ArgumentError("representatives must be true or false."))
     params = DataIngestion.filtration_parameters(filtration)
     channels = get(params, :channels, nothing)
     values = if channels === nothing
@@ -694,7 +867,7 @@ function persistence_diagram(data::ImageNd, filtration::DataIngestion.CubicalFil
     _validate_cubical_values(values)
     per = _periodic_tuple(params.periodic, Val(ndims(values)))
     return _vertex_cubical_persistence(values, per, order, field,
-                                      DataIngestion.construction_mode(filtration), cache)
+                                      DataIngestion.construction_mode(filtration), cache, representatives)
 end
 
 """

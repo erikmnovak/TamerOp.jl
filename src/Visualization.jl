@@ -58,10 +58,11 @@ using ..Results: EncodingResult, CohomologyDimsResult, ModuleTranslationResult, 
 using ..ChangeOfPosets: CommonRefinementTranslationResult, common_poset, projection_maps
 using ..FlangeZn: Flange, active_flats, active_injectives, flats, injectives
 using ..FieldLinAlg: rank_restricted
+using ..InvariantCore: PackedBarcode
 using ..Invariants: RankInvariantResult, value_at, source_poset, check_rank_query_points
 using ..PLBackend: PLEncodingMapBoxes
 using ..PLPolyhedra: PLEncodingMap
-using ..ZnEncoding: ZnEncodingMap
+using ..ZnEncoding: ZnEncodingMap, critical_coordinates
 using ..SliceInvariants: SliceBarcodesResult, slice_barcodes, slice_weights, slice_directions, slice_offsets,
                          bottleneck_distance
 using ..Fibered2D: FiberedArrangement2D, FiberedBarcodeCache2D, FiberedSliceFamily2D, FiberedSliceResult,
@@ -70,7 +71,7 @@ using ..Fibered2D: FiberedArrangement2D, FiberedBarcodeCache2D, FiberedSliceFami
                    ncells, computed_cell_count, source_arrangement, slice_direction,
                    slice_offset_interval, slice_offset, slice_chain_id, fibered_values, stores_values,
                    projections, projection_indices,
-                   projection_directions, projected_distances, shared_arrangement,
+                   projection_directions, projected_barcodes, projected_distances, shared_arrangement,
                    fibered_query_summary, backend, fibered_barcode_cache_2d,
                    slice_chain, slice_values, slice_barcode, fibered_slice,
                    fibered_slice_family_2d, _arr2d_cell_offset_interval, _fibered_dir_cell_index, _arr2d_compute_cell!
@@ -86,7 +87,9 @@ using ..MultiparameterImages: MPPLineSpec, MPPDecomposition, MPPImage, MPLandsca
                               decomposition, landscape_grid, landscape_values,
                               landscape_layers, slice_weights, slice_directions,
                               slice_offsets, ndirections, noffsets, landscape_slice
+include("visualization/style.jl")
 include("visualization/types.jl")
+include("visualization/interval_views.jl")
 include("visualization/validation.jl")
 include("visualization/rendering.jl")
 include("visualization/region_geometry.jl")
@@ -95,6 +98,11 @@ include("visualization/builders_invariants.jl")
 include("visualization/hasse_layout.jl")
 include("visualization/builders_modules.jl")
 include("visualization/builders_presentations.jl")
+include("visualization/builders_slices.jl")
 include("visualization/builders_ingestion.jl")
+include("visualization/inspection_slices.jl")
+include("visualization/inspection_session.jl")
+include("visualization/inspection_intervals.jl")
+include("visualization/inspection_rendering.jl")
 
 end # module Visualization

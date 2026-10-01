@@ -532,7 +532,7 @@ module Functoriality
 
     function _solve_particular(plan::_ExactParticularSolvePlan{K}, B::AbstractMatrix{K}) where {K}
         size(B, 1) == size(plan.transform, 2) || error("_solve_particular: row mismatch")
-        Y = plan.transform * Matrix(B)
+        Y = FieldLinAlg._matmul(plan.transform, Matrix(B))
         if plan.rank < size(Y, 1)
             @inbounds for j in 1:size(Y, 2), i in (plan.rank + 1):size(Y, 1)
                 iszero(Y[i, j]) || error("solve_particular: inconsistent system")
@@ -1641,7 +1641,7 @@ module Functoriality
             DkM  = Matrix(resM.d_mat[k])          # P_k(M) -> P_{k-1}(M)
             DqkL = Matrix(resL.d_mat[q + k])      # P_{q+k}(L) -> P_{q+k-1}(L)
 
-            RHS = F[k] * DqkL                     # matrix in Hom(P_{q+k}(L), P_{k-1}(M))
+            RHS = FieldLinAlg._matmul(F[k], DqkL)                     # matrix in Hom(P_{q+k}(L), P_{k-1}(M))
 
             cod_bases_k  = resM.gens[k+1]         # summands in P_k(M) (these are the columns of DkM)
             dom_bases_qk = resL.gens[q+k+1]       # summands in P_{q+k}(L)

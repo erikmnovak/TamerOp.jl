@@ -3641,3 +3641,156 @@ end
     end
 
 end
+
+@testset "Exact products preserve dense sparse and view arithmetic" begin
+    FL = TamerOp.FieldLinAlg
+    K = Rational{BigInt}
+    rng = MersenneTwister(7091)
+    for (m, k, n) in ((0, 3, 2), (3, 0, 2), (3, 2, 0), (1, 1, 1), (5, 7, 3), (32, 24, 16))
+        A = K.(rand(rng, -9:9, m, k)) ./ K.(rand(rng, 1:7, m, k))
+        B = K.(rand(rng, -9:9, k, n)) ./ K.(rand(rng, 1:7, k, n))
+        expected = [sum((A[i,t]*B[t,j] for t in 1:k); init=zero(K)) for i in 1:m, j in 1:n]
+        for a in (A, sparse(A), transpose(copy(transpose(A))), view(A, :, :)),
+            b in (B, sparse(B), transpose(copy(transpose(B))), view(B, :, :))
+            @test FL._matmul(a, b) == expected
+            C = fill(K(37), m+2, n+2)
+            dst = view(C, 2:m+1, 2:n+1)
+            @test FL._matmul!(dst, a, b) === dst
+            @test dst == expected
+            @test all(==(K(37)), C[[1,end], :])
+            @test all(==(K(37)), C[:, [1,end]])
+        end
+        n == 0 && continue
+        @test FL._matmul(A, B[:,1]) == expected[:,1]
+        v = fill(K(37), m)
+        @test FL._matmul!(v, sparse(A), view(B,:,1)) === v
+        @test v == expected[:,1]
+    end
+    A = K[1 0; 0 1]
+    @test issparse(FL._matmul(sparse(A), sparse(A)))
+    dst = fill(K(17), 2, 2)
+    @test_throws DimensionMismatch FL._matmul!(dst, A, zeros(K,3,2))
+    @test_throws DimensionMismatch FL._matmul!(dst, A, zeros(K,2,3))
+    @test dst == fill(K(17),2,2)
+    # Unit and zero columns, with large numerators and denominators.
+    h = big(2)^129
+    A = K[h//7 0; 1//h -3//5]
+    @test FL._matmul(A, Matrix{K}(I,2,2)) == A
+    @test iszero(FL._matmul(A, zeros(K,2,3)))
+end
+
+@testset "Exact products reject nonfinite coefficients behind zeros" begin
+    FL = TamerOp.FieldLinAlg
+    MD = TamerOp.Modules
+    K = Rational{BigInt}
+    field = TamerOp.CoreModules.QQField()
+    invalid = reshape(K[1//0], 1, 1)
+    z = zeros(K,1,1)
+    for A in (invalid,sparse(invalid),view(invalid,:,:)), B in (z,sparse(z),view(z,:,:))
+        dst = fill(K(37),1,1)
+        @test_throws ArgumentError FL._matmul(A,B)
+        @test_throws ArgumentError FL._matmul(B,A)
+        @test_throws ArgumentError FL._matmul!(dst,A,B)
+        @test dst == fill(K(37),1,1)
+        @test_throws ArgumentError MD._coefficient_product_zero(field,A,B)
+        @test_throws ArgumentError MD._coefficient_products_equal(field,A,B,B,B)
+    end
+    @test_throws ArgumentError FL._matmul(invalid,zeros(K,1))
+    @test_throws ArgumentError FL._matmul(z,K[1//0])
+    @test_throws ArgumentError FL._matmul(zeros(K,0,1),invalid)
+    @test_throws ArgumentError FL._matmul(invalid,zeros(K,1,0))
+    # Public complex validation must not accept a differential merely because
+    # its neighbor is zero; infinity is not a rational coefficient.
+    Q = TamerOp.FiniteFringe.FinitePoset(trues(1,1))
+    M = MD.PModule{K}(Q,[1],Dict{Tuple{Int,Int},Matrix{K}}();field)
+    bad = MD.PMorphism(M,M,[invalid])
+    zero_map = MD.PMorphism(M,M,[z])
+    @test_throws ArgumentError TamerOp.ModuleComplexes.ModuleCochainComplex(
+        [M,M,M],[bad,zero_map];tmin=0,check=true)
+end
+
+@testset "Exact products preserve structured multiplication and storage" begin
+    FL = TamerOp.FieldLinAlg
+    K = Rational{BigInt}
+    n = 24
+    d = K[i//(i+1) for i in 1:n]
+    A = K[(i-j)//(i+j) for i in 1:n,j in 1:n]
+    dense = K[(i+2j)//(i+j+1) for i in 1:n,j in 1:3]
+    structured = (Diagonal(d), Bidiagonal(d,d[1:end-1],:U),
+        Tridiagonal(d[1:end-1],d,d[1:end-1]), SymTridiagonal(d,d[1:end-1]),
+        UpperTriangular(A),LowerTriangular(A),UnitUpperTriangular(A),UnitLowerTriangular(A),
+        Symmetric(A),Hermitian(A),transpose(sparse(A)),adjoint(sparse(A)))
+    for S in structured
+        oracle = Matrix(S)*dense
+        @test FL._matmul(S,dense) == oracle
+        @test FL._matmul(transpose(dense),S) == transpose(dense)*Matrix(S)
+        out=similar(dense)
+        @test FL._matmul!(out,S,dense) === out
+        @test out == oracle
+        @test FL._matmul(S,dense[:,1]) == oracle[:,1]
+    end
+    D = Diagonal(d)
+    @test FL._matmul(D,D) isa Diagonal
+    @test FL._matmul(D,D) == D*D
+    @test issparse(FL._matmul(transpose(sparse(A)),sparse(A)))
+    @test FL._matmul(A,sparse(d)) == A*d
+    bad = Diagonal(K[1//0;d[2:end]])
+    @test_throws ArgumentError FL._matmul(bad,zeros(K,n))
+    @test_throws ArgumentError FL._matmul(transpose(sparse(bad)),zeros(K,n,2))
+end
+@testset "Sparse rational Hom echelon preserves canonical kernel" begin
+    rng = MersenneTwister(719032)
+    for (m,n) in ((0,0),(0,5),(5,0),(1,1),(7,11),(24,16),(32,40)), trial in 1:6
+        A = QQ[rand(rng) < 0.65 ? 0 : BigInt(rand(rng,-9:9)) // BigInt(rand(rng,1:19)) for i in 1:m,j in 1:n]
+        if trial > 3 && m > 0 && n > 0
+            A .*= (BigInt(2)^79 + 13) // (BigInt(2)^89 + 31)
+        end
+        # Dense Gaussian reduction is independent of the integer streaming path.
+        expected = FL.nullspace(CM.QQField(), A; backend=:julia_exact)
+        for order in (collect(1:m), randperm(rng,m))
+            reducer = FL._SparseQQEchelon(n)
+            rows = FL._sparse_rows(sparse(A))
+            originals = deepcopy(rows)
+            for i in order
+                FL._sparse_kernel_push!(reducer,rows[i])
+            end
+            actual = FL._nullspace_from_pivots(reducer,n)
+            @test actual == expected
+            @test all(iszero,A*actual)
+            @test all(i->rows[i].idx == originals[i].idx && rows[i].val == originals[i].val,eachindex(rows))
+            @test sort(reducer.pivot_cols) == collect(last(FL.rref(CM.QQField(),A;backend=:julia_exact)))
+            @test_throws DimensionMismatch FL._nullspace_from_pivots(reducer,n+1)
+        end
+    end
+    bad = FL.SparseRow{QQ}([1],[BigInt(1)//BigInt(0)])
+    @test_throws ArgumentError FL._sparse_kernel_push!(FL._SparseQQEchelon(1),bad)
+end
+
+@testset "Native prime factors preserve checked solve contracts" begin
+    for p in (5,101)
+        field = CM.PrimeField(p); K = CM.coeff_type(field)
+        B = K[1 2 0; 0 1 1; 1 3 1; 0 0 1; 2 4 0]
+        X = K[1 0 2; 3 1 0; 2 3 1]; Y = B*X
+        for storage in (B,sparse(B),view(B,:,:))
+            fac = FL._factor_fullcolumn_fp(storage)
+            @test FL._solve_fullcolumn_factor_fp(storage,fac,Y) == X
+            @test FL._solve_fullcolumn_factor_fp(storage,fac,view(Y,:,2)) == X[:,2]
+            @test FL._solve_fullcolumn_factor_fp(storage,fac,sparse(Y)) == X
+            @test FL._solve_fullcolumn_factor_fp(storage,fac,zeros(K,5,0)) == zeros(K,3,0)
+            bad = copy(Y);bad[5,2] += one(K)
+            @test_throws ErrorException FL._solve_fullcolumn_factor_fp(storage,fac,bad)
+            @test_throws DimensionMismatch FL._solve_fullcolumn_factor_fp(storage,fac,Y[1:4,:])
+            @test FL._solve_fullcolumn_factor_fp(storage,fac,bad;check_rhs=false) == X
+        end
+        @test_throws ErrorException FL._factor_fullcolumn_fp(hcat(B,B[:,1]))
+        @test_throws ErrorException FL._factor_fullcolumn_fp(zeros(K,3,3))
+        @test_throws ErrorException FL._factor_fullcolumn_fp(zeros(K,2,3))
+        for m in (0,4)
+            Z = zeros(K,m,0);fac = FL._factor_fullcolumn_fp(Z)
+            @test FL._solve_fullcolumn_factor_fp(Z,fac,zeros(K,m,3)) == zeros(K,0,3)
+            if m > 0
+                @test_throws ErrorException FL._solve_fullcolumn_factor_fp(Z,fac,ones(K,m))
+            end
+        end
+    end
+end

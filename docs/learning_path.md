@@ -25,15 +25,25 @@ for later exploration without replacing the first path's square.
 [Tameness and scope](tameness.md) connects constant subdivisions, finite
 encodings, and finite fringe presentations, and uses a module of constant
 dimension one to show why controlling stalk dimensions alone is insufficient.
-Their static diagrams are available; the interactive views described there
-remain planned.
+Their static diagrams are available. The inspection notebook now adds linked
+parameter, poset, and matrix selection; following chosen vectors and linking
+source representatives remain planned.
 
 The square's inspection lesson now has a
 [canonical teaching notebook](tutorials/inspect_encoding.ipynb). It follows
 original parameters into the actual finite poset, checks stalks and maps, and
 exports a combined figure through the package API. Two overlapping squares
-show why nonzero successive maps can have zero composite. This supplies the
-square portion of pages 4-6; connecting it to the ring lesson and publishing
+show why nonzero successive maps can have zero composite. A live WGLMakie
+session then lets the reader change the selection and switch between module
+and presentation views, with static snapshot export. All 23 notebook code cells
+have passed under headless display capture, and the static figures have passed
+visual review. The 550 inspector assertions pass across five coefficient fields,
+including native callback and lifecycle checks; 116 additional checks cover
+server embedding. The author reports that the two-square live-server browser
+checklist passes, including pointer/keyboard controls, exact queries, linked
+tabs and lifecycle behavior. The notebook frontend remains separately
+unverified. This supplies the square portion of pages 4-6; connecting it
+to the ring lesson and publishing
 the complete site remain separate steps.
 
 ## Page briefs
@@ -154,6 +164,11 @@ the complete site remain separate steps.
   panels. Explain that a dimension heatmap alone does not display the maps.
   Introduce `available_visuals`, `visualize`, and `save_visual` through the
   supported recipe actually selected and executed during implementation.
+  After checking the mathematics, introduce `inspection_session`: select an
+  exact parameter or finite label, preserve the query when switching between
+  module and presentation views, and save `inspection_snapshot`. Explain why
+  pointer coordinates are approximate and why the WGLMakie controls need live
+  Julia. Keep basis computation an explicit single-stalk choice.
 - **Expected conclusion:** The reader can trace a parameter through its label
   to a space, interpret an arrow, and state what the figure omits. They can
   save a figure and reopen the canonical notebook.
@@ -161,8 +176,16 @@ the complete site remain separate steps.
   with larger spaces and nontrivial matrices behave? These are later paths.
 - **Acceptance:** Executed notebook, downloaded notebook, and published figure
   agree. Captions state the field, domain, closed support, and meaning of arrows.
-  The renderer/recipe and browser review remain to be implemented; a successful
-  mathematical oracle is not evidence that a figure has been rendered.
+  Static A42a/A83 recipes and exports have passed native rendering review.
+  The expanded notebook's 23 code cells pass under headless display capture;
+  its selected-state exports have also passed static visual review. All 550
+  inspector assertions pass across five fields, including native callback and
+  lifecycle checks; 116 additional server-embedding checks pass. The author
+  reports successful manual acceptance of the local live-server two-square
+  inspector, including layout, exact queries, pointer/keyboard controls, view
+  changes, error recovery, reset, reload, linked tabs and closure. Actual
+  notebook-frontend acceptance remains separate; captured notebook displays
+  do not establish that integration.
 
 ## Mathematical specification before tutorial cells
 

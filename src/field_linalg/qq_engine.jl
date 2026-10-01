@@ -307,23 +307,107 @@ end
 # temporaries for every dense entry. Factors and cycle bases commonly contain
 # many zeros; skip them without changing the selected solver backend.
 function _mulQQ(A::AbstractMatrix{QQ}, B::AbstractVecOrMat{QQ})
-    m, k = size(A)
-    size(B, 1) == k || throw(DimensionMismatch("A and B inner dimensions must match"))
-    n = size(B, 2)
-    C = B isa AbstractVector ? zeros(QQ, m) : zeros(QQ, m, n)
-    @inbounds for j in 1:n
-        for t in 1:k
-            b = B[t, j]
-            iszero(b) && continue
-            for i in 1:m
-                a = A[i, t]
-                iszero(a) && continue
-                C[i, j] += a * b
-            end
-        end
+    C = B isa AbstractVector ? Vector{QQ}(undef, size(A, 1)) :
+                              Matrix{QQ}(undef, size(A, 1), size(B, 2))
+    return _mulQQ!(C, A, B)
+end
+
+# Skip structural zeros in both operands. Sparse columns are traversed by
+# their stored entries; dense matrices, transposes and views use the same
+# exact arithmetic and coefficient order.
+@inline function _qq_accum_column!(C, A::AbstractMatrix{QQ}, t, j, b)
+    @inbounds for i in axes(A, 1)
+        a = A[i, t]
+        iszero(a) && continue
+        C[i, j] += a * b
+    end
+end
+@inline function _qq_accum_column!(C, A::SparseMatrixCSC{QQ}, t, j, b)
+    @inbounds for k in nzrange(A, t)
+        a = nonzeros(A)[k]
+        iszero(a) && continue
+        C[rowvals(A)[k], j] += a * b
+    end
+end
+function _qq_accum_product!(C, A, B::AbstractVecOrMat{QQ})
+    @inbounds for j in axes(B, 2), t in axes(B, 1)
+        b = B[t, j]
+        iszero(b) && continue
+        _qq_accum_column!(C, A, t, j, b)
     end
     return C
 end
+function _qq_accum_product!(C, A, B::SparseMatrixCSC{QQ})
+    @inbounds for j in axes(B, 2), k in nzrange(B, j)
+        b = nonzeros(B)[k]
+        iszero(b) && continue
+        _qq_accum_column!(C, A, rowvals(B)[k], j, b)
+    end
+    return C
+end
+# Respect native algorithms for structured matrices and sparse wrappers.
+# In particular, a diagonal or banded matrix-vector product must stay linear
+# in its stored coefficients instead of scanning an implicit dense matrix.
+@inline function _native_QQ_product_operand(A)
+    return A isa Union{Diagonal,Bidiagonal,Tridiagonal,SymTridiagonal,
+                       UpperTriangular,LowerTriangular,UnitUpperTriangular,
+                       UnitLowerTriangular,Symmetric,Hermitian} ||
+           (issparse(A) && !(A isa SparseMatrixCSC))
+end
+@inline _finite_QQ_product_operand(A) = all(isfinite, A)
+@inline _finite_QQ_product_operand(A::SparseMatrixCSC) = all(isfinite, nonzeros(A))
+@inline _finite_QQ_product_operand(A::SparseVector) = all(isfinite, nonzeros(A))
+@inline _finite_QQ_product_operand(A::Diagonal) = all(isfinite, A.diag)
+@inline _finite_QQ_product_operand(A::Union{Bidiagonal,SymTridiagonal}) =
+    all(isfinite, A.dv) && all(isfinite, A.ev)
+@inline _finite_QQ_product_operand(A::Tridiagonal) =
+    all(isfinite, A.dl) && all(isfinite, A.d) && all(isfinite, A.du)
+@inline _finite_QQ_product_operand(A::Union{Transpose,Adjoint}) =
+    _finite_QQ_product_operand(parent(A))
+
+@inline function _check_finite_QQ_product(A, B)
+    _finite_QQ_product_operand(A) && _finite_QQ_product_operand(B) || throw(ArgumentError(
+        "matrix product: coefficients must be finite rational numbers"))
+    return nothing
+end
+
+function _mulQQ!(C::AbstractVecOrMat{QQ}, A::AbstractMatrix{QQ}, B::AbstractVecOrMat{QQ})
+    Base.require_one_based_indexing(C, A, B)
+    size(A, 2) == size(B, 1) || throw(DimensionMismatch("A and B inner dimensions must match"))
+    size(C, 1) == size(A, 1) && size(C, 2) == size(B, 2) ||
+        throw(DimensionMismatch("destination has the wrong product dimensions"))
+    # A structural zero must not conceal an invalid coefficient (Inf * 0).
+    # Validate before touching the destination, including empty products.
+    _check_finite_QQ_product(A, B)
+    if _native_QQ_product_operand(A) || _native_QQ_product_operand(B)
+        return mul!(C, A, B)
+    end
+    fill!(C, zero(QQ))
+    return _qq_accum_product!(C, A, B)
+end
+
+function _matmul(A::AbstractMatrix{QQ}, B::AbstractMatrix{QQ})
+    if _native_QQ_product_operand(A) || _native_QQ_product_operand(B)
+        _check_finite_QQ_product(A, B)
+        return A * B
+    end
+    return _mulQQ(A, B)
+end
+function _matmul(A::AbstractMatrix{QQ}, B::AbstractVector{QQ})
+    if _native_QQ_product_operand(A) || _native_QQ_product_operand(B)
+        _check_finite_QQ_product(A, B)
+        return A * B
+    end
+    return _mulQQ(A, B)
+end
+# Preserve sparse storage when both operands are sparse. The mutating path
+# below also supports a dense destination for sparse inputs.
+function _matmul(A::SparseMatrixCSC{QQ}, B::SparseMatrixCSC{QQ})
+    _check_finite_QQ_product(A, B)
+    return A * B
+end
+_matmul!(C::AbstractVecOrMat{QQ}, A::AbstractMatrix{QQ}, B::AbstractVecOrMat{QQ}) =
+    _mulQQ!(C, A, B)
 
 # Fast solve using factor data
 function _solve_fullcolumn_factorQQ(B::AbstractMatrix{<:QQ}, fac::FullColumnFactor{QQ},
@@ -1608,4 +1692,91 @@ function _solve_fullcolumn_tiny(field::AbstractCoeffField, B, Y; check_rhs::Bool
         _rhs_ok(field, BX, Matrix(Ymat)) || error("solve_fullcolumn: RHS check failed in tiny solve path")
     end
     return want_vec ? vec(X) : X
+end
+
+# Sparse rational kernel by primitive integer echelon rows. Clearing denominators
+# does not change a homogeneous equation. Reducing only the leading pivot avoids
+# maintaining RREF after every insertion; back substitution below recovers the
+# same ordered free-variable basis as rational RREF.
+mutable struct _SparseQQEchelon
+    nvars::Int
+    pivot_pos::Vector{Int}
+    pivot_cols::Vector{Int}
+    pivot_rows::Vector{SparseRow{BigInt}}
+    tmp_idx::Vector{Int}
+    tmp_val::Vector{BigInt}
+end
+_SparseQQEchelon(n::Int) = _SparseQQEchelon(n, zeros(Int, n), Int[], SparseRow{BigInt}[], Int[], BigInt[])
+
+function _primitive_integer_row!(row::SparseRow{BigInt})
+    isempty(row) && return row
+    g = abs(row.val[1])
+    for i in 2:length(row.val)
+        isone(g) && break
+        g = gcd(g, row.val[i])
+    end
+    if !isone(g)
+        @inbounds for i in eachindex(row.val)
+            row.val[i] = div(row.val[i], g)
+        end
+    end
+    return row
+end
+
+function _integer_equation(row::SparseRow{QQ})
+    d = BigInt(1)
+    for x in row.val
+        isfinite(x) || throw(ArgumentError("rational elimination requires finite coefficients"))
+        isone(denominator(x)) || (d = lcm(d, denominator(x)))
+    end
+    vals = BigInt[numerator(x) * div(d, denominator(x)) for x in row.val]
+    return _primitive_integer_row!(SparseRow{BigInt}(copy(row.idx), vals))
+end
+
+function _sparse_kernel_push!(R::_SparseQQEchelon, source::SparseRow{QQ})
+    row = _integer_equation(source)
+    while !isempty(row)
+        p = row.idx[1]
+        pos = R.pivot_pos[p]
+        if pos == 0
+            push!(R.pivot_cols, p)
+            push!(R.pivot_rows, row)
+            R.pivot_pos[p] = length(R.pivot_rows)
+            return true
+        end
+        other = R.pivot_rows[pos]
+        g = gcd(row.val[1], other.val[1])
+        a, b = div(other.val[1], g), -div(row.val[1], g)
+        # Scaling a whole equation is exact; no per-entry rational normalization.
+        if !isone(a)
+            @inbounds for i in eachindex(row.val)
+                row.val[i] *= a
+            end
+        end
+        R.tmp_idx, R.tmp_val = _row_axpy!(row, b, other, R.tmp_idx, R.tmp_val)
+        _primitive_integer_row!(row)
+    end
+    return false
+end
+_sparse_kernel_push!(R::_SparseRREF, row::SparseRow) = _sparse_rref_push_homogeneous!(R, row)
+
+function _nullspace_from_pivots(R::_SparseQQEchelon, nvars::Int)
+    nvars == R.nvars || throw(DimensionMismatch("wrong kernel column count"))
+    free = findall(iszero, R.pivot_pos)
+    Z = zeros(QQ, nvars, length(free))
+    for (k, j) in enumerate(free)
+        Z[j, k] = 1
+    end
+    for p in sort(R.pivot_cols; rev=true)
+        row = R.pivot_rows[R.pivot_pos[p]]
+        for k in eachindex(free)
+            v = zero(QQ)
+            @inbounds for i in 2:length(row.idx)
+                z = Z[row.idx[i], k]
+                iszero(z) || (v -= row.val[i] * z)
+            end
+            iszero(v) || (Z[p, k] = v / row.val[1])
+        end
+    end
+    return Z
 end

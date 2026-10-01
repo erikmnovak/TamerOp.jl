@@ -912,7 +912,7 @@ function _kernel_with_inclusion_cached(
             Xraw = if is_selector_u && is_selector_v
                 T[rows_v, rows_u]
             else
-                Im = is_selector_u ? T[:, rows_u] : T * basisK[u]
+                Im = is_selector_u ? T[:, rows_u] : FieldLinAlg._matmul(T, basisK[u])
                 if is_selector_v
                     Im[rows_v, :]
                 elseif indegree[v] <= 1
@@ -1103,7 +1103,7 @@ function _image_with_inclusion_cached(f::PMorphism{K}, cc::CoverCache) where {K}
             if selector_is_std[u]
                 view(rhs_all, :, c0:c1) .= view(storeN.maps_to_succ[u][su], :, selector_rows[u])
             else
-                mul!(view(rhs_all, :, c0:c1), storeN.maps_to_succ[u][su], bases[u])
+                FieldLinAlg._matmul!(view(rhs_all, :, c0:c1), storeN.maps_to_succ[u][su], bases[u])
             end
         end
 
@@ -1485,7 +1485,7 @@ function _cokernel_module_cached(
                     elseif selector_is_std[v]
                         rhs .= transpose(view(maps_u[j], selector_rows[v], :))
                     else
-                        mul!(rhs, transpose(maps_u[j]), qtrans[v])
+                        FieldLinAlg._matmul!(rhs, transpose(maps_u[j]), qtrans[v])
                     end
                     X = if qq_factor === nothing
                         FieldLinAlg.solve_fullcolumn(field, q_u_t_mat, rhs;
@@ -2386,12 +2386,12 @@ matrices in the pushout builder.
     bv::Int,
 ) where {K}
     if bu > 0
-        mul!(view(rhs, 1:bu, :), transpose(Buv), view(qv_t, 1:bv, :))
+        FieldLinAlg._matmul!(view(rhs, 1:bu, :), transpose(Buv), view(qv_t, 1:bv, :))
     end
     cu = size(rhs, 1) - bu
     cv = size(qv_t, 1) - bv
     if cu > 0
-        mul!(view(rhs, bu + 1:bu + cu, :), transpose(Cuv), view(qv_t, bv + 1:bv + cv, :))
+        FieldLinAlg._matmul!(view(rhs, bu + 1:bu + cu, :), transpose(Cuv), view(qv_t, bv + 1:bv + cv, :))
     end
     return rhs
 end
@@ -2414,12 +2414,12 @@ This is the pullback companion to `_mul_pushout_rhs!`.
 ) where {K}
     du = size(Ku, 2)
     if bv > 0
-        mul!(view(im, 1:bv, 1:du), Buv, view(Ku, 1:bu, :))
+        FieldLinAlg._matmul!(view(im, 1:bv, 1:du), Buv, view(Ku, 1:bu, :))
     end
     cu = size(Ku, 1) - bu
     cv = size(im, 1) - bv
     if cv > 0
-        mul!(view(im, bv + 1:bv + cv, 1:du), Cuv, view(Ku, bu + 1:bu + cu, :))
+        FieldLinAlg._matmul!(view(im, bv + 1:bv + cv, 1:du), Cuv, view(Ku, bu + 1:bu + cu, :))
     end
     return im
 end
@@ -2719,7 +2719,7 @@ function _pushout_cokernel_module(
                     raw = if selector_is_std[v]
                         _blockdiag_extract(K, Buv, Cuv, selector_rows[v], rows_u, bu, B.dims[v])
                     else
-                        qcomps[v] * _blockdiag_selected_cols(K, Buv, Cuv, rows_u, bu)
+                        FieldLinAlg._matmul(qcomps[v], _blockdiag_selected_cols(K, Buv, Cuv, rows_u, bu))
                     end
                     _to_store_map(OutMatT, raw)
                 end

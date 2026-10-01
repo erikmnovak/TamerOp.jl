@@ -10,6 +10,22 @@ to obtain while preserving the existing basis conventions and the
 
 ### Algebra and performance
 
+- Compute rational Hom constraints with sparse integer echelon rows and final
+  back substitution. Clearing denominators avoids repeated fraction reduction
+  while preserving the ordered basis of actual module maps.
+- Reuse result-owned factors for native prime-field quotient coordinates above
+  characteristic three. Every checked query still verifies its full input;
+  new results start with their own factors. F2/F3 and Nemo routing are retained.
+- Construct Ext and Tor representatives with the shared exact rational product
+  path, skipping structural zeros without changing their coordinates.
+- Add matrix-coordinate Yoneda products for whole tables, reusing each lift
+  within the request. `ExtAlgebra` uses this preparation when building its
+  multiplication tables. Scalar products, signs and comparison maps between
+  target resolutions retain their contracts.
+- Use the same rational products for module-map composition, induced homology
+  and cohomology maps, and exact relation checks. Keep sparse output where both
+  factors are sparse, preserve native diagonal/banded/triangular algorithms,
+  and retain the numerical-field validation tolerances.
 - Defer boundary coordinates and quotient representatives for exact cohomology
   dimension queries, while still checking at construction that boundaries are
   cycles. Later queries reuse the same result.
@@ -36,6 +52,12 @@ behavior. No new public cache option or query-count threshold is required.
 
 ### Correctness and validation
 
+- Reject nonfinite rational coefficients before skipping zero products, so a
+  malformed differential cannot pass a relation check just because the adjacent
+  map is zero. Check before modifying a supplied product destination.
+- Check scalar and batched Yoneda products over QQ, F2, F3, F101 and Real64,
+  including units, ordering, empty batches, invalid inputs and transport into
+  another target resolution. Preserve strict associativity checks.
 - Fix projective/injective Ext comparison checks over `RealField` to use the
   configured numerical tolerances in both inverse directions. Exact fields
   continue to require exact equality.
@@ -48,13 +70,58 @@ behavior. No new public cache option or query-count threshold is required.
   Boolean three-cube and a 4-by-4 grid, with exact and numerical coefficients.
   Retain checks of products, associativity and comparisons between resolutions.
 
-A targeted algebra integration run passed 12,466 assertions with Julia 1.12.1,
-four threads, and QQ, F2, F3, F5 and Real64 selected. Independent exact checks
+An earlier targeted algebra integration run passed 12,466 assertions with
+Julia 1.12.1, four threads, and QQ, F2, F3, F5 and Real64 selected. Independent exact checks
 also verified complete Hom kernels and unchanged ordered Ext representatives
 on 16 before/after fixture exports. This was a focused run, not a rerun of the
 full repository suite; see [testing](docs/testing.md) for validation scope.
 
+For the shared-product and Yoneda-table implementation, focused product and
+integration runs passed 24,525 assertions. After the finite-coefficient and
+structured-storage review, the final kernel and complex-validation run passed
+another 1,380 assertions (some repeat earlier checks). These maintained-runner
+checks include randomized module-map oracles, exact/numerical fields, threaded
+parity and backendized storage; they do not replace the full suite.
+
+The rational Hom and native prime-coordinate follow-up passed 7,863 focused
+assertions, including independent rational kernels, checked finite-field solves,
+threaded quotient coordinates, backend routing and strict Yoneda identities.
+It uses the maintained test runner; the full repository suite was not rerun.
+
 ### Measured performance scope
+
+The rational Hom and native prime-coordinate follow-up verified 520 fresh-result
+samples and ten identical, independently checked before/after answers. The
+large-coefficient rational Hom request improves by 1.39–2.08× with 64% fewer
+allocated bytes; F101 Yoneda tables improve by 1.72–2.90× with 40% fewer allocated
+bytes. The full F101 tensor request ranges from near parity to 1.62× faster.
+These are two shared-host TamerOp process pairs, not a new QPA comparison.
+
+Keep the tradeoffs visible: a size-16 rational cohomology scalar control adds
+2.23–2.27 ms in both pairs, and several other controls are mixed. A separate
+240-sample prime-coordinate diagnostic finds 4.60–6.36× faster retained scalar
+queries at size 16, but first requests add 23–126 μs and retain 4,592 extra bytes.
+Retained 32-column queries are 4–19% slower. These changes target repeated
+coordinate work within complete computations; they do not make every query
+faster or close the broader optimization study.
+
+The shared-product and Yoneda-table changes improved a rational cube product
+request by 23.8–27.3× and a rational grid request by 2.83–4.20× in two shared-host
+passes with compiled code and verified mathematical resets. The cube request's
+allocation traffic fell from about 164 MiB to 4.1 MiB. All nineteen selected
+before/after answers were identical and independently checked. These are TamerOp
+before/after results, not new QPA comparison results.
+
+The initial study recorded dense and small-request losses; its final baseline
+reached the time cap before completing four dense controls' second passes.
+A completed follow-up with symmetric timing-only workers verified 380 samples.
+The cube gain remains 22.9–24.4× and complete grid Hom/Ext improves by 1.11–1.16×.
+The small F3 product adds 0.18–0.65 ms. Two larger dense cells remain slower in
+standalone timings, while interleaved rollback and CPU-time checks do not
+consistently reproduce a major extra multiplication cost. Retained dense storage
+is unchanged. Keep these shared-host losses and uncertainties visible; the
+follow-up introduces no speculative gate or further production change. The
+broader optimization study remains open.
 
 For the final factor-reuse and projection changes, one dense rational
 cohomology fixture improved from 8.4–9.2 ms to 3.2–4.5 ms for its first coordinate
@@ -68,6 +135,37 @@ computations on the grid fixtures took longer. In the measured dense fixture,
 a conventional checked solve was cheaper for one isolated scalar query, while
 the retained plan reduced repeated-query times relative to those solves. These
 measurements do not establish a speedup for every operation or input.
+
+### Visualization
+
+- Share exact interval records across barcode and persistence-diagram recipes
+  for ordinary, packed, sliced and projected results. Keep multiplicity groups,
+  original member references, display counts and finite clipping separate from
+  essential infinity and unknown window endpoints.
+- Certify whole-line endpoints for supported planar encodings with
+  `slice_scope=:global`. The drawing window no longer limits the mathematical
+  restriction; incomplete domain coverage is rejected explicitly.
+- Add linked interval-only inspection with selection from either chart,
+  display budgets, exact readouts and explicit choice among repeated intervals.
+  Ordinary F2 persistence can retain noncanonical cycles and bounding chains
+  with `representatives=true`; `Advanced.persistence_representative` retrieves
+  an original interval's representative. Retention is off by default.
+- Link a movable planar slice to decorated barcode and persistence-diagram
+  views in the inspector. Preserve open/closed endpoints, singleton intervals
+  and multiplicities, and mark finite-window cuts without inferring essential
+  classes. Exact line controls, bounded reuse and shared interval selection
+  also work with static snapshots.
+- Add `VisualStyle` for shared typography, spacing, colors and marker emphasis
+  across static figures, the live inspector and saved exports. Styles apply to
+  each call without changing the mathematical specification or global themes.
+- Keep source and target roles recognizable through labels and marker shapes
+  in accessible and grayscale palettes. Preserve exact matrix coefficients,
+  empty spaces, boundary conventions and data-space marker extents.
+- Apply the shared style to existing module/presentation inspection panels,
+  barcode and persistence-diagram views, and numerical heatmaps. Batch exports
+  accept a default style and a separate override for each requested figure.
+
+See [visualization](docs/visualization.md#rendering-and-saving) for examples.
 
 ### Documentation
 

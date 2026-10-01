@@ -312,6 +312,11 @@ end
     return A * B
 end
 
+# Vector and mutating products share the same field-specific dispatch as
+# matrix products. The destination must not alias either input, as with mul!.
+@inline _matmul(A::AbstractMatrix, b::AbstractVector) = A * b
+@inline _matmul!(C::AbstractVecOrMat, A::AbstractMatrix, B::AbstractVecOrMat) = mul!(C, A, B)
+
 struct _RowLocatorDict
     rowpos::Dict{Int,Int}
 end

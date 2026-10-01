@@ -20,10 +20,12 @@ function check_visual_spec(spec::VisualizationSpec; throw::Bool=false)
     haskey(spec.axes, :ylabel) || push!(issues, "axes must define :ylabel")
     haskey(spec.axes, :xlimits) || push!(issues, "axes must define :xlimits")
     haskey(spec.axes, :ylimits) || push!(issues, "axes must define :ylimits")
-    get(spec.interaction, :hover, false) && push!(issues, "Hover callbacks are not implemented by the visualization renderers.")
-    get(spec.interaction, :clicks, false) && push!(issues, "Selection callbacks are not implemented by the visualization renderers.")
+    linked = spec.kind === :linked_inspector
+    linked && _check_linked_inspection!(issues, spec)
+    !linked && get(spec.interaction, :hover, false) && push!(issues, "Hover callbacks require a linked inspector.")
+    !linked && get(spec.interaction, :clicks, false) && push!(issues, "Selection callbacks require a linked inspector.")
     widgets = get(spec.interaction, :widgets, ())
-    if !isempty(widgets)
+    if !linked && !isempty(widgets)
         widgets == (:slice_index,) && get(spec.interaction, :notebook, nothing) === :widget_viewer ||
             push!(issues, "The only implemented widget is :slice_index in a standalone slice viewer.")
         haskey(spec.metadata, :volume) && haskey(spec.metadata, :view_dims) && haskey(spec.metadata, :fixed_indices) ||
@@ -58,6 +60,17 @@ function check_visual_spec(spec::VisualizationSpec; throw::Bool=false)
                 colors = spec.metadata[key]
                 colors isa AbstractArray && size(colors) == dims ||
                     push!(issues, "$key must match the displayed matrix dimensions.")
+            end
+            for (key, dims) in ((:row_roles, (size(layer.entries,1),)),
+                                (:column_roles, (size(layer.entries,2),)),
+                                (:cell_roles, size(layer.entries)))
+                haskey(spec.metadata, key) || continue
+                roles = spec.metadata[key]
+                if !(roles isa AbstractArray && size(roles) == dims)
+                    push!(issues, "$key must match the displayed matrix dimensions.")
+                elseif !all(role -> role isa Symbol && role in _VISUAL_COLOR_ROLES, roles)
+                    push!(issues, "$key contains an unknown mathematical display role.")
+                end
             end
             for key in (:matrix_corner, :matrix_row_heading, :empty_matrix_reason)
                 get(spec.metadata, key, "") isa AbstractString ||
@@ -129,7 +142,7 @@ Check recipe availability, prerequisites, and effective recipe keywords without
 constructing the picture. The report includes `supported_keywords`, qualitative
 construction cost, and renderer availability. `backend=:auto` permits building
 specifications without an activated renderer; a named backend must be activated.
-Renderer controls (`figure`, `size`) belong to `render`/`visualize`/`save_visual`,
+Renderer controls (`figure`, `size`, `style`) belong to `render`/`visualize`/`save_visual`,
 not to recipe construction. Unsupported keywords are errors, including keywords
 that apply to a different kind on the same object.
 """
@@ -148,6 +161,8 @@ function check_visual_request(obj; kind::Symbol=:auto, backend::Symbol=:auto,
     end
     backend === :auto || _visual_backend_available(backend) ||
         push!(issues, "visualization backend $(backend) is not activated. $(get(_VISUAL_BACKEND_HELP, backend, ""))")
+    requested === :linked_inspector && !(backend in (:auto, :wglmakie)) &&
+        push!(issues, "Live linked inspection requires WGLMakie; render inspection_snapshot(session) for a static view.")
     try
         _append_visual_request_issues!(issues, obj, requested; kwargs...)
     catch err
@@ -162,7 +177,7 @@ function check_visual_request(obj; kind::Symbol=:auto, backend::Symbol=:auto,
                                 supported_kinds=supported,
                                 supported_keywords=keywords,
                                 construction_cost=_visual_request_cost(obj, requested),
-                                rendering=_visual_render_capabilities(),
+                                rendering=_visual_render_capabilities(; kind=requested),
                                 issues=issues)
 end
 
@@ -176,13 +191,22 @@ _visual_request_keywords(obj::Flange, kind::Symbol) =
     kind === :regions ? (:box, :alpha_up, :alpha_dn) : (:box,)
 _visual_request_keywords(obj::CohomologyDimsResult, kind::Symbol) =
     kind in (:cohomology_support, :cohomology_support_plane) ? (:box,) : ()
+const _INTERVAL_DISPLAY_KEYWORDS = (:window, :interval, :max_intervals)
+_visual_request_keywords(obj::Union{AbstractDict{<:Tuple{<:Real,<:Real},<:Integer},
+    AbstractVector{<:Tuple{<:Real,<:Real}},PackedBarcode}, kind::Symbol) =
+    kind in (:barcode,:persistence_diagram) ? _INTERVAL_DISPLAY_KEYWORDS : ()
 _visual_request_keywords(obj::InvariantResult, kind::Symbol) =
+    obj.which in (:slice_barcode,:slice_barcodes) ? _visual_request_keywords(invariant_value(obj),kind) :
     kind === :rank_query_overlay ? (:box, :pair, :pairs) :
     kind === :hilbert_heatmap ? (:box,) : ()
-_visual_request_keywords(obj::SliceBarcodesResult, kind::Symbol) = kind === :barcode ? (:index,) : ()
+_visual_request_keywords(obj::Union{SliceBarcodesResult,ProjectedBarcodesResult}, kind::Symbol) =
+    kind in (:barcode,:persistence_diagram) ? (:index,_INTERVAL_DISPLAY_KEYWORDS...) : ()
 _visual_request_keywords(obj::FiberedSliceResult, kind::Symbol) =
+    kind in (:barcode,:persistence_diagram) ? _INTERVAL_DISPLAY_KEYWORDS :
     kind === :fibered_slice_overlay ? (:arrangement, :dir, :offset, :basepoint, :tie_break) : ()
 function _visual_request_keywords(obj::Union{FiberedArrangement2D,FiberedBarcodeCache2D}, kind::Symbol)
+    obj isa FiberedBarcodeCache2D && kind in (:barcode,:persistence_diagram) &&
+        return (:dir,:offset,:basepoint,:tie_break,_INTERVAL_DISPLAY_KEYWORDS...)
     kind in (:fibered_query, :fibered_cell_highlight, :fibered_tie_break, :fibered_query_barcode) &&
         return (:dir, :offset, :basepoint, :tie_break)
     kind === :fibered_offset_intervals && return (:dir,)
@@ -196,7 +220,7 @@ _visual_request_keywords(obj::MPPLineSpec, kind::Symbol) = (:box,)
 _visual_request_keywords(obj::MPPDecomposition, kind::Symbol) = (:layout,)
 _visual_request_keywords(obj::MPLandscape, kind::Symbol) =
     kind === :landscape_slices ? (:idir, :ioff, :layer) : ()
-_visual_request_keywords(obj::OrdinaryPersistence.PersistenceDiagram, kind::Symbol) = (:dim,)
+_visual_request_keywords(obj::OrdinaryPersistence.PersistenceDiagram, kind::Symbol) = (:dim,_INTERVAL_DISPLAY_KEYWORDS...)
 function _visual_request_keywords(obj::DataTypes.PointCloud, kind::Symbol)
     kind === :points_3d && return (:dims, :color_values)
     kind === :point_density && return (:dims, :labels, :color_values)
@@ -255,6 +279,29 @@ function _visual_request_cost(obj, kind::Symbol)
 end
 
 _append_visual_request_issues!(issues::Vector{String}, obj, kind::Symbol; kwargs...) = issues
+
+function _interval_request_issues!(issues; window=nothing,interval=nothing,max_intervals=200,kwargs...)
+    window === nothing || _interval_window((),window)
+    interval === nothing || (interval isa Integer && !(interval isa Bool) && 0 < interval <= typemax(Int)) ||
+        push!(issues,"interval must be a positive integer group ID or nothing.")
+    max_intervals isa Integer && !(max_intervals isa Bool) && 0 < max_intervals <= typemax(Int) ||
+        push!(issues,"max_intervals must be a positive integer fitting Int.")
+    return issues
+end
+
+function _append_visual_request_issues!(issues::Vector{String},
+        obj::Union{AbstractDict{<:Tuple{<:Real,<:Real},<:Integer},AbstractVector{<:Tuple{<:Real,<:Real}},PackedBarcode},
+        kind::Symbol; kwargs...)
+    kind in (:barcode,:persistence_diagram) || return issues
+    _interval_request_issues!(issues;kwargs...)
+    # Validate the supplied intervals without constructing layers or evaluating algebra.
+    entries = obj isa AbstractVector ? ((iv,1) for iv in obj) : obj
+    for (iv,mult) in entries
+        length(iv) == 2 || throw(ArgumentError("Barcode entries require two endpoints."))
+        _interval_record(iv[1],iv[2],mult)
+    end
+    return issues
+end
 
 function _append_visual_request_issues!(issues::Vector{String}, obj::Union{Flange,MPPLineSpec}, kind::Symbol; kwargs...)
     box = get(kwargs, :box, nothing)
@@ -380,7 +427,12 @@ end
 
 function _append_visual_request_issues!(issues::Vector{String}, obj::Union{FiberedArrangement2D,FiberedBarcodeCache2D}, kind::Symbol; kwargs...)
     params = (; kwargs...)
-    if kind in (:fibered_query, :fibered_cell_highlight, :fibered_tie_break, :fibered_query_barcode)
+    if obj isa FiberedBarcodeCache2D && kind in (:barcode,:persistence_diagram)
+        _interval_request_issues!(issues;kwargs...)
+        _require_all!(issues,(:dir,),params,string(kind))
+        _require_one_of!(issues,(:offset,:basepoint),params,string(kind))
+        get(params,:tie_break,:up) in (:up,:down,:center) || push!(issues,"tie_break must be :up, :down, or :center.")
+    elseif kind in (:fibered_query, :fibered_cell_highlight, :fibered_tie_break, :fibered_query_barcode)
         _require_all!(issues, (:dir,), params, string(kind))
         _require_one_of!(issues, (:offset, :basepoint), params, string(kind))
         if kind === :fibered_tie_break && isempty(issues)
@@ -433,7 +485,9 @@ end
 
 function _append_visual_request_issues!(issues::Vector{String}, obj::FiberedSliceResult, kind::Symbol; kwargs...)
     params = (; kwargs...)
-    if kind === :fibered_slice_overlay
+    if kind in (:barcode,:persistence_diagram)
+        _interval_request_issues!(issues;kwargs...)
+    elseif kind === :fibered_slice_overlay
         _require_all!(issues, (:arrangement, :dir), params, string(kind))
         _require_one_of!(issues, (:offset, :basepoint), params, string(kind))
         arr = get(params, :arrangement, nothing)
@@ -442,13 +496,11 @@ function _append_visual_request_issues!(issues::Vector{String}, obj::FiberedSlic
     return issues
 end
 
-function _append_visual_request_issues!(issues::Vector{String}, obj::SliceBarcodesResult, kind::Symbol; kwargs...)
-    params = (; kwargs...)
-    if kind === :barcode
-        bars = slice_barcodes(obj)
-        count = length(bars)
-        count == 1 || get(params, :index, nothing) !== nothing ||
-            push!(issues, "barcode view on a SliceBarcodesResult with multiple barcodes requires keyword index.")
+function _append_visual_request_issues!(issues::Vector{String}, obj::Union{SliceBarcodesResult,ProjectedBarcodesResult}, kind::Symbol; kwargs...)
+    if kind in (:barcode,:persistence_diagram)
+        _interval_request_issues!(issues;kwargs...)
+        bars = obj isa SliceBarcodesResult ? slice_barcodes(obj) : projected_barcodes(obj)
+        _interval_family_index(bars,get(kwargs,:index,nothing),string(nameof(typeof(obj))))
     end
     return issues
 end
@@ -481,6 +533,8 @@ function _append_visual_request_issues!(issues::Vector{String}, obj::MPPDecompos
 end
 
 function _append_visual_request_issues!(issues::Vector{String}, obj::InvariantResult, kind::Symbol; kwargs...)
+    obj.which in (:slice_barcode,:slice_barcodes) &&
+        return _append_visual_request_issues!(issues,invariant_value(obj),kind;kwargs...)
     params = (; kwargs...)
     get(params, :box, nothing) === nothing || _visual_box_2d(params.box)
     if kind === :rank_query_overlay

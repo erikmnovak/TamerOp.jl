@@ -1,25 +1,7 @@
 # Invariant visualization builders.
 
-function _expand_barcode_intervals(bar)
-    if bar isa AbstractDict{<:Tuple{<:Real,<:Real},<:Integer}
-        intervals = NTuple{2,Float64}[]
-        multiplicities = Int[]
-        for (iv, mult) in pairs(bar)
-            push!(intervals, (float(iv[1]), float(iv[2])))
-            push!(multiplicities, Int(mult))
-        end
-        sort!(eachindex(intervals), by=i -> (intervals[i][1], intervals[i][2]))
-        return intervals, multiplicities
-    elseif bar isa AbstractVector{<:Tuple{<:Real,<:Real}}
-        return NTuple{2,Float64}[(float(iv[1]), float(iv[2])) for iv in bar], ones(Int, length(bar))
-    else
-        throw(ArgumentError("Unsupported barcode payload $(typeof(bar)); use unpacked slice barcodes for visualization."))
-    end
-end
-
 function _barcode_count(bar)
-    ivs, mults = _expand_barcode_intervals(bar)
-    return sum(mults)
+    return _interval_multiplicity(_barcode_records(bar))
 end
 
 const _INVARIANT_VALUE_COLORS = (
@@ -260,29 +242,14 @@ function _collect_rank_query_pairs(; pair=nothing, pairs=nothing)
     return out
 end
 
-function _barcode_spec(bar; title::AbstractString="Barcode")
-    intervals, multiplicities = _expand_barcode_intervals(bar)
-    isempty(intervals) && (intervals = NTuple{2,Float64}[(0.0, 0.0)]; multiplicities = [0])
-    births = [iv[1] for iv in intervals]
-    deaths = [iv[2] for iv in intervals]
-    ycount = max(1, sum(multiplicities))
-    return VisualizationSpec(:barcode;
-                             title=title,
-                             subtitle="1-parameter interval decomposition",
-                             layers=AbstractVisualizationLayer[
-                                 BarcodeLayer(intervals, multiplicities, :navy, 2.0, 1.0, 1.0),
-                             ],
-                             axes=_default_axes_2d(xlabel="birth", ylabel="interval index",
-                                                   xlimits=(minimum(births), maximum(deaths)),
-                                                   ylimits=(0.0, float(ycount + 1)),
-                                                   aspect=:auto),
-                             metadata=(; barcode_count=length(intervals), total_multiplicity=sum(multiplicities)))
+function _barcode_spec(bar; title::AbstractString="Barcode", kwargs...)
+    return _interval_payload_spec(_interval_payload(bar), :barcode; barcode_title=title, kwargs...)
 end
 
-available_visuals(::AbstractDict{<:Tuple{<:Real,<:Real},<:Integer}) = (:barcode,)
-available_visuals(::AbstractVector{<:Tuple{<:Real,<:Real}}) = (:barcode,)
-_visual_spec(bar::AbstractDict{<:Tuple{<:Real,<:Real},<:Integer}, kind::Symbol; kwargs...) = kind === :barcode ? _barcode_spec(bar; title="Barcode") : throw(ArgumentError("Unsupported barcode visualization kind $(kind)."))
-_visual_spec(bar::AbstractVector{<:Tuple{<:Real,<:Real}}, kind::Symbol; kwargs...) = kind === :barcode ? _barcode_spec(bar; title="Barcode") : throw(ArgumentError("Unsupported barcode visualization kind $(kind)."))
+available_visuals(::_RawVisualBarcode) = (:barcode, :persistence_diagram)
+function _visual_spec(bar::_RawVisualBarcode, kind::Symbol; kwargs...)
+    return _interval_payload_spec(_interval_payload(bar), kind; kwargs...)
+end
 
 available_visuals(::RankInvariantResult) = (:rank_heatmap, :rank_rectangles)
 available_visuals(res::CohomologyDimsResult) =
@@ -299,6 +266,8 @@ function available_visuals(inv::InvariantResult)
         _has_hilbert_heatmap_geometry(encoding_map(inv)) && push!(kinds, :hilbert_heatmap)
         append!(kinds, [:hilbert_bars, :restricted_hilbert_curve])
         return Tuple(kinds)
+    elseif inv.which in (:slice_barcode, :slice_barcodes)
+        return available_visuals(val)
     end
     return ()
 end
@@ -366,7 +335,9 @@ end
 function _visual_spec(inv::InvariantResult, kind::Symbol; pair=nothing, pairs=nothing, kwargs...)
     _ = kwargs
     val = invariant_value(inv)
-    if inv.which === :rank_invariant && val isa RankInvariantResult
+    if inv.which in (:slice_barcode, :slice_barcodes)
+        return _visual_spec(val, kind; kwargs...)
+    elseif inv.which === :rank_invariant && val isa RankInvariantResult
         if kind === :rank_query_overlay
             pi = encoding_map(inv)
             _has_rank_query_geometry(pi) || throw(ArgumentError("rank_query_overlay requires an invariant result with 2D query geometry in its encoding provenance."))
@@ -436,23 +407,17 @@ function _visual_spec(inv::InvariantResult, kind::Symbol; pair=nothing, pairs=no
     throw(ArgumentError("Unsupported invariant visualization kind $(kind) for InvariantResult(which=$(inv.which))."))
 end
 
-available_visuals(::SliceBarcodesResult) = (:barcode, :barcode_bank, :slice_family)
+available_visuals(::SliceBarcodesResult) = (:barcode, :persistence_diagram, :barcode_bank, :slice_family)
 
 function _slice_barcode_at(result::SliceBarcodesResult, index)
     bars = slice_barcodes(result)
-    if index === nothing
-        if length(bars) != 1
-            throw(ArgumentError("SliceBarcodesResult contains multiple barcodes; pass index=(i,j) or index=i."))
-        end
-        return first(bars)
-    end
-    return bars[index]
+    return bars[_interval_family_index(bars,index,"SliceBarcodesResult")]
 end
 
 function _visual_spec(result::SliceBarcodesResult, kind::Symbol; index=nothing, kwargs...)
-    if kind === :barcode
-        bar = _slice_barcode_at(result, index)
-        return _barcode_spec(bar; title="Slice barcode")
+    if kind in (:barcode, :persistence_diagram)
+        return _interval_payload_spec(_interval_payload(result; index), kind;
+            barcode_title="Slice barcode", diagram_title="Slice persistence diagram", kwargs...)
     elseif kind === :barcode_bank
         bars = slice_barcodes(result)
         counts = map(_barcode_count, bars)
@@ -520,12 +485,12 @@ available_visuals(::FiberedArrangement2D) = (:fibered_arrangement, :fibered_quer
 available_visuals(::FiberedBarcodeCache2D) = (:fibered_arrangement, :fibered_query, :fibered_cell_highlight, :fibered_tie_break,
                                              :fibered_offset_intervals, :fibered_projected_comparison,
                                              :fibered_family, :fibered_chain_cells, :fibered_family_contributions,
-                                             :fibered_distance_diagnostic, :fibered_query_barcode)
+                                             :fibered_distance_diagnostic, :fibered_query_barcode, :barcode, :persistence_diagram)
 available_visuals(::FiberedSliceFamily2D) = (:fibered_family, :fibered_chain_cells, :fibered_family_contributions, :fibered_distance_diagnostic)
-available_visuals(::FiberedSliceResult) = (:fibered_slice, :fibered_slice_overlay, :barcode)
+available_visuals(::FiberedSliceResult) = (:fibered_slice, :fibered_slice_overlay, :barcode, :persistence_diagram)
 available_visuals(arr::ProjectedArrangement) =
     all(proj -> length(proj.dir) == 2, projections(arr)) ? (:projected_arrangement,) : ()
-available_visuals(::ProjectedBarcodesResult) = (:barcode_bank,)
+available_visuals(::ProjectedBarcodesResult) = (:barcode_bank, :barcode, :persistence_diagram)
 available_visuals(::ProjectedDistancesResult) = (:projected_distances,)
 
 @inline function _line_basepoint_from_offset_2d(dir::AbstractVector{<:Real}, off::Real)
@@ -946,8 +911,9 @@ end
 
 function _visual_spec(result::FiberedSliceResult, kind::Symbol; arrangement=nothing, dir=nothing, offset=nothing, basepoint=nothing, tie_break::Symbol=:up, kwargs...)
     _ = kwargs
-    if kind === :barcode
-        return _barcode_spec(slice_barcode(result); title="Fibered slice barcode")
+    if kind in (:barcode, :persistence_diagram)
+        return _interval_payload_spec(_interval_payload(result), kind;
+            barcode_title="Fibered slice barcode", diagram_title="Fibered slice diagram", kwargs...)
     elseif kind === :fibered_slice_overlay
         arrangement isa FiberedArrangement2D || throw(ArgumentError("fibered_slice_overlay requires keyword arrangement=<FiberedArrangement2D>."))
         dir === nothing && throw(ArgumentError("fibered_slice_overlay requires keyword dir."))
@@ -1243,7 +1209,16 @@ function _visual_spec(arr::FiberedArrangement2D, kind::Symbol; dir=nothing, offs
 end
 
 function _visual_spec(cache::FiberedBarcodeCache2D, kind::Symbol; caches=nothing, dir=nothing, offset=nothing, basepoint=nothing, projected=nothing, kwargs...)
-    if kind in (:fibered_family, :fibered_chain_cells, :fibered_family_contributions, :fibered_distance_diagnostic)
+    if kind in (:barcode,:persistence_diagram)
+        dir === nothing && throw(ArgumentError("A fibered cache interval view requires dir."))
+        arg = offset === nothing ? basepoint : offset
+        arg === nothing && throw(ArgumentError("A fibered cache interval view requires offset or basepoint."))
+        tie_break = get(kwargs,:tie_break,:up)
+        slice = fibered_slice(cache,dir,arg;tie_break)
+        return _visual_spec(slice,kind;
+            window=get(kwargs,:window,nothing),interval=get(kwargs,:interval,nothing),
+            max_intervals=get(kwargs,:max_intervals,200))
+    elseif kind in (:fibered_family, :fibered_chain_cells, :fibered_family_contributions, :fibered_distance_diagnostic)
         fam = fibered_slice_family_2d(shared_arrangement(cache))
         return _visual_spec(fam, kind; caches=(caches === nothing ? nothing : caches), kwargs...)
     elseif kind === :fibered_query_barcode
@@ -1340,8 +1315,12 @@ function _visual_spec(arr::ProjectedArrangement, kind::Symbol; kwargs...)
                              metadata=(; object=:projected_arrangement, nprojections=length(dirs)))
 end
 
-function _visual_spec(result::ProjectedBarcodesResult, kind::Symbol; kwargs...)
-    kind === :barcode_bank || throw(ArgumentError("ProjectedBarcodesResult supports kind=:barcode_bank only."))
+function _visual_spec(result::ProjectedBarcodesResult, kind::Symbol; index=nothing, kwargs...)
+    if kind in (:barcode,:persistence_diagram)
+        return _interval_payload_spec(_interval_payload(result;index), kind;
+            barcode_title="Projected barcode", diagram_title="Projected persistence diagram", kwargs...)
+    end
+    kind === :barcode_bank || throw(ArgumentError("ProjectedBarcodesResult supports :barcode_bank, :barcode, or :persistence_diagram."))
     _ = kwargs
     vals = reshape(Float64.([_barcode_count(bar) for bar in result.barcodes]), 1, :)
     x = Float64[1:size(vals, 2);]
@@ -1723,6 +1702,7 @@ function _append_visual_request_issues!(issues::Vector{String},
                                       diag::OrdinaryPersistence.PersistenceDiagram,
                                       kind::Symbol; dim=0, kwargs...)
     append!(issues, OrdinaryPersistence.check_persistence_diagram(diag).issues)
+    _interval_request_issues!(issues;kwargs...)
     if !(dim isa Integer) || dim isa Bool || !(0 <= dim < typemax(Int))
         push!(issues, "dim must be a nonnegative homological dimension fitting Int.")
     end
@@ -1773,65 +1753,12 @@ function visual_spec(diag::OrdinaryPersistence.PersistenceDiagram;
     haskey(kwargs, :backend) && throw(ArgumentError("backend belongs to visualize/render; visual_spec constructs backend-independent data."))
     cache === :auto || throw(ArgumentError("visual_spec does not support a cache override"))
     report = check_visual_request(diag; kind=kind, dim=dim, kwargs..., throw=true)
-    return _visual_spec(diag, report.requested_kind; dim=dim)
+    return _visual_spec(diag, report.requested_kind; dim=dim, kwargs...)
 end
 
 function _visual_spec(diag::OrdinaryPersistence.PersistenceDiagram, kind::Symbol;
                       dim::Integer=0, kwargs...)
-    kind in (:persistence_diagram, :barcode) ||
-        throw(ArgumentError("Ordinary persistence supports kind=:persistence_diagram or :barcode."))
-    data = _ordinary_display_data(diag, dim)
-    essential_label = data.order === :sublevel ? "+Inf" : "-Inf"
-    convention = data.order === :sublevel ? "[birth, death)" : "(death, birth]"
-    subtitle = "$(data.order), H_$(dim), $(convention); Float64 display; essential classes continue to $(essential_label)"
-    metadata = (; homological_dimension=Int(dim), order=data.order,
-                 finite_intervals=copy(data.finite), essential_births=copy(data.essential),
-                 finite_count=length(data.finite), essential_count=length(data.essential),
-                 display_coordinates=:float64, rounded_endpoint_count=data.rounded_endpoint_count,
-                 essential_display_coordinate=data.lane, essential_direction=data.order === :sublevel ? 1 : -1,
-                 interval_convention=convention, figure_size=(760, 560))
-    layers = AbstractVisualizationLayer[]
-    legend = (; visible=true, title="", entries=(
-        finite=(; label="finite intervals", color=:steelblue, style=:marker),
-        essential=(; label="essential intervals", color=:darkorange, style=:marker)))
-    if kind === :persistence_diagram
-        lo, hi = data.limits
-        push!(layers, SegmentLayer([(lo, lo, hi, hi)], :gray, 0.6, 1.0))
-        push!(layers, PointLayer(data.finite_display, :steelblue, 1.0, 9.0))
-        push!(layers, PointLayer([(b, data.lane) for b in data.essential_display], :darkorange, 1.0, 10.0))
-        if !isempty(data.essential)
-            push!(layers, SegmentLayer([(lo, data.lane, hi, data.lane)], :darkorange, 0.35, 1.0))
-        end
-        ticks = isempty(data.essential) ? nothing : begin
-            endpoints = vcat([v for iv in data.finite_display for v in iv], data.essential_display)
-            bounds = isempty(endpoints) ? (0.0, 1.0) : extrema(endpoints)
-            finite_ticks = bounds[1] == bounds[2] ? [bounds[1]] : collect(range(bounds[1], bounds[2]; length=4))
-            positions = vcat(finite_ticks, [data.lane])
-            labels = vcat([string(round(v; sigdigits=5)) for v in finite_ticks], [essential_label])
-            perm = sortperm(positions)
-            (positions[perm], labels[perm])
-        end
-        axes = merge(_default_axes_2d(xlabel="birth", ylabel="death", xlimits=data.limits,
-                                      ylimits=data.limits), (; yticks=ticks))
-        return VisualizationSpec(kind; title="Persistence diagram in dimension $(dim)",
-                                 subtitle=subtitle, layers=layers, axes=axes, legend=legend, metadata=metadata)
-    end
-
-    push!(layers, BarcodeLayer(data.finite_display, ones(Int, length(data.finite_display)), :steelblue, 3.0, 1.0, 1.0))
-    essential_segments = NTuple{4,Float64}[]
-    arrowheads = Vector{NTuple{2,Float64}}[]
-    direction = data.order === :sublevel ? 1.0 : -1.0
-    for (i, birth) in enumerate(data.essential_display)
-        y = Float64(length(data.finite_display) + i)
-        push!(essential_segments, (birth, y, data.lane, y))
-        head_base = data.lane - direction * data.span / 30
-        push!(arrowheads, [(head_base, y - 0.12), (data.lane, y), (head_base, y + 0.12)])
-    end
-    push!(layers, SegmentLayer(essential_segments, :darkorange, 1.0, 3.0))
-    push!(layers, PolylineLayer(arrowheads, :darkorange, 1.0, 2.0, false))
-    n = length(data.finite_display) + length(data.essential_display)
-    axes = _default_axes_2d(xlabel="filtration parameter", ylabel="interval", xlimits=data.limits,
-                           ylimits=(0.0, Float64(max(n + 1, 2))), aspect=:auto)
-    return VisualizationSpec(kind; title="Persistence barcode in dimension $(dim)",
-                             subtitle=subtitle, layers=layers, axes=axes, legend=legend, metadata=metadata)
+    return _interval_payload_spec(_interval_payload(diag;dim), kind;
+        barcode_title="Persistence barcode in dimension $(dim)",
+        diagram_title="Persistence diagram in dimension $(dim)", kwargs...)
 end

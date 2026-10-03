@@ -48,6 +48,7 @@ committed and pushed.
 - [Update or reproduce your environment](#update-or-reproduce-your-environment)
 - [Troubleshooting](#troubleshooting)
 - [Advanced users and performance settings](#advanced-users-and-performance-settings)
+- [Benchmark results](docs/benchmarks/index.md)
 - [Optional plotting and integrations](#optional-plotting-and-integrations)
 - [Mathematical scope and provenance](#mathematical-scope-and-provenance)
 - [Releases and citation](#releases-and-citation)
@@ -445,6 +446,15 @@ explicit persistence, the same function accepts a writable `path` with
 `save=true`. The canonical developer profile remains `linalg_thresholds.toml`
 at the repository root. Saving to another path does not automatically select
 that file on a future import; normal users can simply use the defaults.
+
+The [benchmark results](docs/benchmarks/index.md) report comparisons by
+mathematical task, with machine specifications, timing boundaries, figures,
+and downloadable data. The first report covers a fixed 220-request QPA suite:
+TamerOp was faster on all 200 requests completed correctly by both tools,
+with a weighted geometric mean of **135.70×** for compiled, uncached native
+construction plus query. The remaining 20 QPA tensor-evaluation failures
+have no speed ratio. See the [QPA report](docs/benchmarks/qpa.md) for the
+tested development snapshot, memory costs, and scope.
 
 For measuring or improving performance, use the [benchmarking manual](docs/benchmarking.md).
 It separates compilation from uncached computation and reuse, explains fair

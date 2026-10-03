@@ -2,3 +2,7 @@
 * text=auto eol=lf
 *.pdf binary
 *.bin binary
+
+# Preserve the archived CSV checksum and generated SVG path formatting.
+docs/benchmarks/qpa_v1/timings.csv -text whitespace=cr-at-eol
+docs/benchmarks/qpa_v1/*.svg whitespace=-blank-at-eol

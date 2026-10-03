@@ -46,6 +46,12 @@ package. Preserve losses and coverage gaps: they identify what to improve next.
 | Plan a reproducible release | [Preserve and release the evidence](#preserve-and-release-the-evidence) |
 | Begin a study | [Study brief and completion checks](#study-brief-and-completion-checks) |
 
+Completed comparisons are collected in [Benchmark results](benchmarks/index.md),
+starting with [QPA](benchmarks/qpa.md). Those pages present the measured
+outcomes; this manual explains how to obtain and interpret them. Public
+results and figures do not by themselves constitute a runnable reproduction
+bundle.
+
 ## Define the question and output
 
 For example, fix a finite poset, field, and modules M and N with specified spaces

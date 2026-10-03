@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "study": "QPA v1 fixed 220-request confirmation",
+  "report_date": "2026-10-03",
+  "candidate_id": "qpa-v1-529681519b5d1b40",
+  "base_git_commit": "7bd0a7c9bb361be022ce6acf2544b803dc8f5577",
+  "source_status": "Contains tested uncommitted changes; identify the candidate by its hashes and snapshot, not HEAD alone.",
+  "source_snapshot_sha256": "7c20bde87eb3f46350d63bd6fdd1dc6319a4f102855ef17e5a9923f9bd35e538",
+  "candidate_record_sha256": "b3c82e178e9f43760b06c849c76a9975abac7ed4e4765026acef789da290e98f",
+  "production_patch_sha256": "670da03e531e3d5edaa63ee3485c26e9b50ef8714956dc266ec742795ccd3d4a",
+  "dependency_manifest_sha256": "246ebb30a4df74742fe1555faf3b2881372715804c80c8a6be89c3a86036ac10",
+  "suite_manifest_sha256": "96fdf54fdeb76eb146d2fcb426dd141bc20c1ef1fd7b2f4d24245de1a8063337",
+  "local_evidence_checksum_manifest_sha256": "379e920f37ce85950e850d3cd2b3608d82a1d686088f4c220459305d732a7fb6",
+  "machine_record_sha256": "995da09b9ce2373d8de196ea4c89b440dc0ec9954c2f87c84682125cd3744607",
+  "machine": {
+    "captured_at_utc": "2026-10-03T08:04:07Z",
+    "cpu_model": "13th Gen Intel(R) Core(TM) i7-1365U",
+    "physical_cores": 10,
+    "logical_cpus": 12,
+    "ram_kib": 32504468,
+    "ram_gib": 30.998676300048828,
+    "platform": "Linux-6.8.0-106-generic-x86_64-with-glibc2.35",
+    "exclusive_host": false,
+    "host_load_1m": {
+      "min": 1.14404296875,
+      "median": 1.55322265625,
+      "max": 3.263671875
+    },
+    "fixed_cpu_frequency_claimed": false
+  },
+  "software": {
+    "Julia": "1.12.1",
+    "GAP": "4.16.1",
+    "QPA": "1.37",
+    "Nemo": "0.54.1",
+    "AbstractAlgebra": "0.48.2",
+    "FLINT_jll": "301.400.1+0",
+    "OpenBLAS_jll": "0.3.29+0"
+  },
+  "execution": {
+    "paired_passes": 5,
+    "samples_per_tool_case_phase_pass": 3,
+    "julia_threads": 1,
+    "blas_threads": 1,
+    "workers_serialized": true,
+    "regime": "compiled code, uncached mathematics",
+    "primary_phase": "construction_and_query",
+    "operation_limit_seconds": 60,
+    "worker_limit_seconds": 900,
+    "process_rss_limit_mib": 4096,
+    "gap_build": {
+      "source_modified": false,
+      "qpa_source_modified": false,
+      "configure_arguments": [
+        "--without-readline"
+      ],
+      "make_cppflags": "-D_GNU_SOURCE -include time.h",
+      "purpose": "Enable the released runtime's existing monotonic clock_gettime timer."
+    }
+  },
+  "publication": {
+    "scope": "Reviewed result summaries, per-pass medians, figures, and selected provenance; not a runnable benchmark bundle.",
+    "original_result_files_sha256": {
+      "results.json": "3bfe85fd092d11c176b1b0961b1f5aac127028378c061f81131c11e2764cf302",
+      "observations.json": "6b887e602a5b97eb41626ea111d847520b73b6c1ad8b407dac0c3c1158f0d5ed",
+      "timings.csv": "61122b6ce88f2e43fec50e7d57f048819fc0a13810803c11715a420b8b12956b",
+      "performance_profile.svg": "50cd94f86279a980aaaec8ca6b3ddd4b6b554eaf7a6fed8fb574de0480fa3ae9",
+      "input_sizes.svg": "2461d5b4f800838e6a223ae2e10e8baef86400bab13360ea5631770fb3b6baa6"
+    },
+    "transformation": "Result files copied byte-for-byte. Machine and source metadata selected without local paths or unrelated host details.",
+    "raw_samples_and_runnable_suite_public": false
+  }
+}

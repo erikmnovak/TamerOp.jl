@@ -347,9 +347,9 @@ approximate distances, and broader algebra workflows add more conventions and
 validation work.
 
 QPA is ranked 12 for *remaining* effort: its existing harnesses and verified
-algebra save substantial work. All adapters are implemented and the bounded
-development pilot has run. Optimization assessment and the main confirmation
-campaign remain. QPA stays the active priority. multipers is ranked 21 because of the
+algebra save substantial work. That ranking preceded completion: QPA v1 is now
+closed with the 2026-10-03 confirmation below. Its fixed cases need not be
+expanded merely because other inputs exist. multipers is ranked 21 because of the
 breadth of the planned filtration-to-invariant and feature workflows. Existing
 ingestion/invariant comparison scripts are a starting point; review their
 versions, output contracts and reset behavior before counting them as completed
@@ -364,7 +364,19 @@ new mathematical features solely to make a comparison possible. If no equivalent
 request exists, record the capability difference and the supported subset rather
 than treating missing functionality as an indefinitely large benchmark task.
 
-### QPA progress and remaining work
+### QPA results and development record
+
+Read the [public QPA benchmark report](benchmarks/qpa.md) for the final
+results, machine specifications, figures, and downloadable data. The
+[results index](benchmarks/index.md) will collect completed comparisons
+with other programs. This section retains the development record.
+
+**QPA v1 is complete as of 2026-10-03.** All 220 fixed requests were attempted
+in five paired passes. TamerOp returned independently verified answers for all
+220; QPA returned matching answers for 200. QPA's elementary-tensor evaluation
+failed on the other 20 requests. Those cases remain in the suite with no speed
+ratio. The paragraphs below retain the development history; the final results
+appear at the end of this section.
 
 As of 2026-09-30, **all 220 task adapters are implemented**. All 96 Q1–Q5
 cases and all 80 Q6–Q7 cases have passed mathematical verification in both
@@ -514,16 +526,56 @@ on the larger controls. Julia allocation counters omit FLINT allocations, and
 no process-memory improvement is claimed. These are development diagnostics on
 a machine without exclusive reservation, not confirmation confidence intervals.
 
-The subsequent acceptance review is complete, but **M3 remains open**. Sixteen
-profiles of the current dense paths and 384 accepted, zero-compilation samples
-identify two further feasible improvements on existing controls. Using the
+The acceptance review of that version found two further feasible improvements
+on existing controls. Sixteen dense profiles and 384 accepted, zero-compilation
+samples support them. Using the
 selected dense product for the complete exact membership check improves
 32-column requests by 2.21–2.38×. Trying the leading square inverse before
 general row selection, with fallback when singular, improves scalar requests
 by 1.59–1.71×. Their combined full-request gains are 1.58–3.59×. Factors and
 answers agree exactly. These are disposable experiments, not implemented
 improvements or QPA speed ratios. Small controls and unfavorable results remain
-included. Implement and validate the two changes together before acceptance.
+included. That review kept M3 open until both changes were implemented and
+validated.
+
+The two follow-up optimizations are now implemented and verified. Eligible
+rational batches use the selected exact product for their complete membership
+certificate; explicit Julia-only solves keep their chosen backend. Eligible
+dense factors try the leading square inverse and retain general row selection
+when it is singular. Exact rows, coordinates, checks and storage are preserved.
+
+The focused runner passes 11,133 assertions. Independent checks verify seventeen
+workflow answers and sixteen dense formulas; 492 accepted complete/retained
+samples and 264 kernel samples have zero timed compilation and verified resets.
+Complete size-16 requests improve by 1.35–3.91× in two process pairs. Separately
+retained batch8 queries improve by 3.47–5.02×; retained scalar queries remain
+approximately unchanged. Reachable mathematical storage is unchanged for every
+dense and retained control. Julia allocations exclude native FLINT memory.
+
+Tradeoffs remain visible. A singular-leading factor adds 0.261–0.842 ms before
+fallback, and rejecting an invalid first entry in a wide RHS rises from about
+23 μs to 1.15–1.41 ms because the dense certificate computes the full product.
+Size-4 complete controls add at most 0.234 ms. Other workflows are mixed, with a
+largest observed addition of 2.080 ms. QQ Hom and kernel/image/cokernel cases
+lose in both pairs; this study does not establish the cause. These small absolute
+losses remain in the evidence and do not by themselves require another campaign.
+
+The two demonstrated dense opportunities are closed. Residual sampling records
+conversion, native exact arithmetic and remaining narrow certificates; sampled
+cost alone does not demonstrate a further removable bottleneck or its combined
+benefit. The 2026-10-03 acceptance review closes M3 for the fixed suite and
+freezes this tested candidate. It accepts the documented small absolute losses
+in exchange for the larger dense gains. No diagnosed feasible major opportunity
+remains unresolved in the reviewed evidence. This is an empirical stopping
+decision; it does not establish that every possible future optimization is minor.
+
+A candidate image-preparation attempt reached its remaining budget. Both timing
+variants used existing usable images or source loading, warmed methods, and
+rejected timed compilation; these results make no startup claim. A later tool
+session interrupted one candidate worker. Its partial rows remain separate,
+its full allowance was charged against the original budget, and a replacement
+completed. The machine was not exclusively reserved; all raw variation and
+unfavorable cases are retained. No final QPA or reserved-case timings were added.
 
 The GAP timing prerequisite is now resolved with a disclosed configured build
 of unchanged GAP 4.16.1 and QPA 1.37. Its existing monotonic clock passes two
@@ -532,17 +584,72 @@ old/new request pairs return identical independently verified answers; two
 retain the same declared tensor failures. The benchmark adapters reject the
 old nonmonotonic clock before collecting timings. The configured executable,
 source hashes, compiler flags, failed attempts and preflight evidence must be
-retained with the eventual environment record. This is runtime and harness
-verification; the final QPA comparison has not run. Candidate freeze remains
-pending, and no fixtures, size endpoints, weights or reserved cases change.
+retained with the environment record. These acceptance checks established
+runtime and harness readiness; the final comparison follows below. The local candidate archive
+pins the tested source, dependency/configuration files, all 220 tasks, adapter
+sources and runtime identities. It includes three runner-compatible candidate
+records and a restorable source snapshot. The 184 development and 36 reserved
+cases, weights, endpoints, resource limits and scoring rules are unchanged.
 
-The final performance campaign remains open. Implement and reassess diagnosed
-major feasible TamerOp improvements within the fixed suite, then freeze the
-candidate for confirmation and reserved evaluation. Neither adapter
-qualification nor this pilot establishes a full-suite speed result. Existing historical timing evidence
-continues to count within its original scope. Known QPA tensor-evaluation
-failures remain recorded outcomes, not infinite speedups or deleted cases.
-The existing QPA allocation, size bounds, budgets and scoring remain unchanged.
+#### Final confirmation, 2026-10-03
+
+The fixed campaign is complete. Strict package-image preparation and a fresh
+strict load passed before timing; the frozen source and configured monotonic
+GAP clock were checked before and after the campaign. All 120 workers finished
+within their limits. Independent exact checks verified 220 TamerOp answers and
+200 matching QPA answers. All 19,200 accepted timing rows pass the reset checks,
+and accepted Julia samples record zero compilation or recompilation. All 36
+reserved evaluation cases were assessed after the freeze.
+
+For the 200 requests completed correctly by both tools, TamerOp is faster by
+more than the 10% practical margin in every pass. The original-weight geometric
+mean of QPA/TamerOp construction-plus-query time is **135.70×**, with an
+approximate paired-block 95% interval of **134.64–136.77×**. Uniform-case
+weighting gives 129.08×. The smallest primary point ratio is 1.76×. These are
+results for the completed pairs, covering 90% of the original fixed weight.
+
+| Requested answer | Matched cases | Weighted QPA/TamerOp time |
+| --- | ---: | ---: |
+| Complete Hom basis | 12 | 3.60× |
+| Ext¹ dimension | 12 | 292.93× |
+| Complete Hom/Ext query | 12 | 308.10× |
+| Kernel, image and cokernel | 20 | 78.40× |
+| Projective/injective resolutions | 40 | 739.15× |
+| Pushouts and pullbacks | 40 | 23.48× |
+| Homology and mapping cones | 40 | 132.87× |
+| Yoneda product tables | 12 | 601.71× |
+| Induced Ext maps | 12 | 1387.50× |
+| Balanced tensor with elementary evaluations | 0 of 20 | No ratio: QPA evaluation errors |
+
+Construction and query are also measured separately: their completed-pair
+geometric means are 3.94× and 201.62×. Construction alone is more variable;
+eight cases favor QPA in at least one pass. These do not change the directly
+measured complete-request results. The 32 matched reserved cases give 111.82×;
+the other four reserved cases are among QPA's tensor failures.
+
+The full-suite numeric speed criterion remains unmet solely because those 20
+requests have no valid paired ratio. With the unchanged full weights, the
+outcome is 90% practical wins and 10% unresolved comparisons. The study closes
+with a verified advantage on all 200 completed pairs and a separate completion
+advantage; failed requests are not infinite speedups.
+
+This comparison starts from the declared prepared finite category and decoded
+input. Category construction, scalar decoding, package loading and compilation
+are outside the primary timer. It is a comparison of compiled computation with
+uncached mathematics over QQ, F₂, F₃ and F₁₀₁, not startup latency or every
+possible module. The five-pass interval describes variation on the fixed
+synthetic suite and this shared host. It does not establish a hardware- or
+population-wide guarantee.
+
+Peak sampled process RSS was 1494.5 MiB for TamerOp and 138.7 MiB for QPA.
+These include runtime and temporary storage; retained mathematical storage was
+not remeasured, and Julia's allocation counter excludes native FLINT memory.
+The new campaign and initial report used 9.46 hours of the remaining allowance,
+within the original combined 15-hour cap. Raw outputs, failed tensor attempts,
+plots, independent calculation checks, source/runtime identities and integrity
+checks are archived locally. A portable public reproduction bundle remains a
+separate release task. M4 and M5 are complete; QPA v1 is closed without changing
+its tasks, size bounds, weights or competitor implementation.
 
 ### Turn each planned comparison into a finished study
 

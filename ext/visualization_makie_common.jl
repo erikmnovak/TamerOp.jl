@@ -198,6 +198,7 @@ function _visual_makie_handlers(TO, MakieMod; allow_save::Bool=true)
         query_label_layer = get(Viz.visual_metadata(spec), :query_label_layer, nothing)
         annotation_scale = max(style.fontsize / 16, style.markersize_scale)
         interval_annotation_layers = get(Viz.visual_metadata(spec), :interval_annotation_layers, ())
+        barcode_endpoint_layers = get(Viz.visual_metadata(spec), :barcode_endpoint_layers, (left=(),right=()))
         interval_labels = String[]
         interval_anchors = NTuple{2,Float64}[]
         for (layer_index, layer) in enumerate(layers)
@@ -301,7 +302,14 @@ function _visual_makie_handlers(TO, MakieMod; allow_save::Bool=true)
                     elseif spec.kind in (:slice_diagram, :persistence_diagram)
                         (; align=(:left, :bottom), offset=(10, 10) .* annotation_scale)
                     elseif spec.kind in (:slice_barcode, :barcode)
-                        (; align=(:center, :center))
+                        # Endpoint labels grow inward and above the bar, leaving
+                        # room for the live selection stroke (6 scaled pixels).
+                        # The offset is in pixels; data anchors stay unchanged.
+                        horizontal = layer_index in barcode_endpoint_layers.left ? :left :
+                            layer_index in barcode_endpoint_layers.right ? :right : :center
+                        horizontal === :center ? (; align=(:center,:center)) :
+                            (; align=(horizontal,:bottom),
+                                offset=(0,3 * style.linewidth_scale + _textsize(style,2)))
                     else
                         NamedTuple()
                     end
@@ -352,6 +360,26 @@ function _visual_makie_handlers(TO, MakieMod; allow_save::Bool=true)
             MakieMod.annotation!(ax, offsets, anchors; options..., labelspace=:relative_pixel)
         end
         _apply_axis_limits!(ax, spec)
+        if spec.kind in (:slice_diagram, :persistence_diagram)
+            # Infinity lanes can be closer than two horizontal labels are wide.
+            # Measure the unrotated glyphs, so deciding their orientation never
+            # depends on the rotation being updated. Keep every tick and its
+            # mathematical coordinate; y labels are separated vertically already.
+            tick_axis = ax.xaxis
+            MakieMod.onany(ax.scene, tick_axis.tickpositions, tick_axis.ticklabels,
+                          ax.xticklabelfont, ax.xticklabelsize; update=true) do positions, labels, font, fontsize
+                length(positions) == length(labels) || return nothing
+                widths = [MakieMod.widths(MakieMod.Makie.text_bb(label,MakieMod.to_font(font),fontsize))[1]
+                          for label in labels]
+                crowded = any(1:(length(positions)-1)) do i
+                    abs(positions[i+1][1]-positions[i][1]) <
+                        (widths[i]+widths[i+1])/2 + fontsize/6
+                end
+                rotation = crowded ? pi/2 : 0.0
+                ax.xticklabelrotation[] == rotation || (ax.xticklabelrotation[] = rotation)
+                return nothing
+            end
+        end
         return colorbars
     end
 

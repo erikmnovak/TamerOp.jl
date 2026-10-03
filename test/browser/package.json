@@ -1,0 +1,14 @@
+{
+  "name": "tamerop-browser-checks",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed"
+  },
+  "devDependencies": {
+    "@playwright/mcp": "0.0.83",
+    "@playwright/test": "1.63.0",
+    "playwright": "1.63.0"
+  }
+}

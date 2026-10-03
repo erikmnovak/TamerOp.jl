@@ -1,0 +1,13 @@
+[deps]
+JSON3 = "0f8b85d8-7281-11e9-16c2-39a750bddbf1"
+SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
+TamerOp = "40830518-3340-46e0-bdcb-56edef4036ff"
+WGLMakie = "276b4fcb-3e11-5398-bf8b-a0c2d153d008"
+
+[sources]
+TamerOp = {path = "../.."}
+
+[compat]
+JSON3 = "1"
+WGLMakie = "0.13"
+julia = "1.12"

@@ -922,7 +922,7 @@ end
     (field isa QQField || native_prime) || return nothing
     factor = lock(() -> ref[], _FULLCOLUMN_FACTOR_LOCK)
     if factor === nothing && size(B, 2) > 0
-        computed = field isa QQField ? FieldLinAlg._factor_fullcolumnQQ(B) :
+        computed = field isa QQField ? FieldLinAlg._factor_fullcolumnQQ(B; backend=:auto) :
                                       FieldLinAlg._factor_fullcolumn_fp(B)
         factor = lock(_FULLCOLUMN_FACTOR_LOCK) do
             ref[] === nothing && (ref[] = computed)
@@ -1175,7 +1175,7 @@ function _cohomology_data_from_bases(::Type{K},
             "cohomology_data: incoming boundaries are not cycles in degree $t")
         nothing
     else
-        field isa QQField && (cycle_factor[] = FieldLinAlg._cached_fullcolumn_factorQQ(Z))
+        field isa QQField && (cycle_factor[] = FieldLinAlg._cached_fullcolumn_factorQQ(Z; backend=:auto))
         _solve_fullcolumn_cached(field, Z, B, cycle_factor)
     end
     dimB <= dimZ || error("cohomology_data: boundary dimension exceeds cycle dimension")
@@ -1661,7 +1661,7 @@ function _homology_data_from_bases(::Type{K},
     # As in the cohomology path, the coordinate matrix X in Z * X = B already has
     # full column rank because Z and B are bases and B subseteq span(Z).
     cycle_factor = _fullcolumn_factor_ref(K)
-    field isa QQField && (cycle_factor[] = FieldLinAlg._cached_fullcolumn_factorQQ(Z))
+    field isa QQField && (cycle_factor[] = FieldLinAlg._cached_fullcolumn_factorQQ(Z; backend=:auto))
     Cx = _solve_fullcolumn_cached(field, Z, B, cycle_factor)
     rB = size(Cx, 2)
     if rB == dimZ
@@ -2906,7 +2906,7 @@ numerical tolerances, is retained for later representative/coordinate queries.
 end
 
 @inline function _solve_fullcolumn_cached(field::QQField, B, Y, factor::FieldLinAlg.FullColumnFactor{QQ}; check_rhs::Bool=true)
-    return FieldLinAlg._solve_fullcolumn_factorQQ(B, factor, Y; check_rhs=check_rhs)
+    return FieldLinAlg._solve_fullcolumn_factorQQ(B, factor, Y; check_rhs=check_rhs, backend=:auto)
 end
 
 @inline function _solve_fullcolumn_cached(field::PrimeField, B::AbstractMatrix{FpElem{p}}, Y,

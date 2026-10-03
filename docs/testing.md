@@ -139,8 +139,73 @@ visualization regressions, API guards and runner contracts. The final renderer
 run passes 806 checks, including 344 label-bound, separation and resize checks
 in Cairo and WGL. Eight static examples were exported in PNG, SVG and PDF;
 the PNG figures passed visual review. These are focused checks, not a full
-package-suite run. Manual browser acceptance of the new controls remains open;
-earlier finite-window acceptance does not close this check.
+package-suite run.
+
+**Browser acceptance, 3 October 2026:** all five maintained scenarios passed
+in one fresh-server Chromium 153 run (24.4 minutes). The runner exited with
+status zero, without a termination signal. Julia completed normal shutdown;
+the fixture process was gone, ports 8848/8849 were closed, and the stop marker
+was removed. This supersedes the scope of the 2 October evidence, which first
+covered two scenarios and later covered four main-run cases plus a separate
+zoom rerun.
+
+The interval-diagram tick correction passed **958/958 focused native
+assertions** in Cairo and WGL at font sizes 18 and 24, including narrow widths
+and resizing. Crowded x-axis labels rotate vertically and return to horizontal
+when space permits; every tick value, exact interval endpoint and diagram
+point is retained. Review of the actual 24px band browser canvas and its
+narrow, horizontally scrolled view confirms separated finite/infinity labels
+and readable headings. Very small standalone figures may still require more
+height for wrapped headings; the native tick checks do not certify an entire
+figure's layout at arbitrary dimensions.
+
+The earlier barcode correction places endpoint text inward and above selection
+strokes. Its 2 October owner-file run passed 1,228/1,228 native assertions. These
+native results overlap earlier checks and must not be summed into a new total;
+they are also separate from the five browser scenarios.
+
+The maintained [browser suite](../test/browser/README.md) now contains five
+scenarios. The three additional scenarios reproduce the two-square examples
+from the earlier manual acceptance, using the finite encoding of
+`k_[0,2]^2` plus `k_[1,3]^2` over the rational numbers:
+
+| Scenario | Mathematical and browser checks |
+| --- | --- |
+| Ordinary intervals | Triangle intervals `[0,1)` with multiplicity two and `[0,Inf)`; original members and retained chains; actual barcode/diagram picks, errors and linked-view lifecycle |
+| Whole-line band slices | `(-Inf,1)`, `(-Inf,Inf)` and `[0,Inf)`, with finite censored window cuts; draft/apply behavior, scope changes, linked charts and lifecycle |
+| Square spaces, maps and presentations | Dimensions `1,2,1` in the first square, overlap and second square; exact closed-boundary membership; two rank-one maps with zero composite; incomparable parameters sharing a label; active `[0]` block with a `1 x 0` image basis; pointer/hover, view/support changes and lifecycle |
+| Finite-window square slices | Diagonal `[0,2]`, `[1,3]`; translated `[0,1]`, `[1,2]`; tangent singleton intervals; empty and missed-window lines; invalid-input rollback, independent stalk/map selection, reset/hide and linked tabs |
+| Large grayscale square inspector | The same zero-map and incomparable-parameter answers; source/target labels and marker shapes, visible keyboard focus, scroll access and chart picks at 150% and 200% browser zoom |
+
+The two historical square scenarios use accessible styling at 18px; the
+grayscale scenario uses 24px. The ordinary and band fixtures use the configured
+font size. A hidden, read-only fixture record exposes committed Julia state,
+matrix shapes and values, hover text and rendered target coordinates. Tests
+change selections through actual controls and mouse events. Hover checks
+compare the mathematical selection and computation counters before and after
+pointer motion, so merely displaying a tooltip must not trigger new algebra.
+
+At 640px viewport width, keyboard arrow keys scroll each visible plot container
+to both ends. The suite then picks the right-hand diagram and the barcode to
+verify that both remain reachable. It also checks page overflow and preserves
+the independent mathematical query. The grayscale scenario loads a local
+extension into full Chromium with a temporary profile and calls Chrome's
+`tabs.setZoom` at factors `1.5` and `2`. It reads the zoom factor back, checks the
+device-pixel-ratio change, and verifies that the visual viewport has not been
+pinch-zoomed. This exercises page zoom separately from changing plot text size
+or viewport width; setup and implementation references are in the browser guide.
+
+The five-case run independently reproduces the earlier manual two-square
+results and verifies keyboard scroll access with actual chart picks. Screenshot
+acceptance is recorded separately from interaction assertions: the actual band
+canvas, its narrow-right view, and all six zoom viewport captures passed visual
+review. The zoom captures show controls and both chart ends at 150% and 200%.
+
+The broader checklist below remains open for the torus, superlevel and raw
+interval fixtures, coincident picks, display budgets, incompletely represented
+domains, and the remaining visual checks. Notebook frontends and other browsers
+remain separate acceptance work. The new page-zoom scenario is limited to the
+grayscale square fixture; it does not establish zoom behavior for every recipe.
 
 For a manual check, display a fresh `visualize(session; backend=:wglmakie)` widget
 in the live frontend or local Bonito server being tested. Keep Julia running;
@@ -160,7 +225,7 @@ viewer = OP.visualize(session; backend=:wglmakie)
 display(viewer)
 ```
 
-Check the following sequence:
+The following manual sequence extends the automated fixture coverage:
 
 1. Select the interval group in either chart and in **Selected interval group**.
    Both charts should highlight the same group, with birth `2/3`, essential death

@@ -60,27 +60,16 @@ module Utils
 
     # Solve A*X = B (particular solution, free vars set to 0).
     function solve_particular(field::AbstractCoeffField, A::AbstractMatrix, B::AbstractMatrix)
-        A0 = Matrix(A)
-        B0 = Matrix(B)
-        m, n = size(A0)
-        @assert size(B0, 1) == m
-        Aug = hcat(A0, B0)
-        R, pivs_all = FieldLinAlg.rref(field, Aug)
-        rhs = size(B0, 2)
-        for i in 1:m
-            if all(R[i, 1:n] .== 0)
-                if any(R[i, n+1:n+rhs] .!= 0)
-                    error("solve_particular: inconsistent system")
-                end
-            end
-        end
-        pivs = Int[]
-        for p in pivs_all
-            p <= n && push!(pivs, p)
-        end
-        X = zeros(eltype(A0), n, rhs)
-        for (row, pcol) in enumerate(pivs)
-            X[pcol, :] = R[row, n+1:n+rhs]
+        m, n = size(A)
+        @assert size(B, 1) == m
+        R, pivs = FieldLinAlg.rref(field, hcat(A, B))
+        # Over an exact field, a pivot in the augmented columns is precisely
+        # an inconsistent RHS. Free variables retain the same zero convention.
+        any(p -> p > n, pivs) && error("solve_particular: inconsistent system")
+        rhs = size(B, 2)
+        X = zeros(eltype(A), n, rhs)
+        for (row, pcol) in enumerate(pivs), j in 1:rhs
+            X[pcol, j] = R[row, n + j]
         end
         return X
     end

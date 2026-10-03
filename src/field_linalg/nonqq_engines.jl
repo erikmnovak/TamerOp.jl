@@ -1288,6 +1288,28 @@ function _rank_restricted_f2(A::SparseMatrixCSC{FpElem{2},Int},
     return length(pivs)
 end
 
+# Apply the selected inverse minor to all RHS columns. One packed scratch
+# vector suffices for the whole call; each output entry is assigned once.
+function _apply_fullcolumn_factor_f2(fact::F2FullColumnFactor, Y::AbstractMatrix{FpElem{2}})
+    n, rhs = fact.n, size(Y, 2)
+    X = Matrix{FpElem{2}}(undef, n, rhs)
+    v = zeros(UInt64, _f2_blocks(n))
+    @inbounds for j in 1:rhs
+        fill!(v, UInt64(0))
+        for i in 1:n
+            iszero(Y[fact.rows[i], j]) || _f2_setbit!(v, i)
+        end
+        for i in 1:n
+            acc = UInt64(0)
+            for k in eachindex(fact.invB[i])
+                acc = xor(acc, fact.invB[i][k] & v[k])
+            end
+            X[i, j] = FpElem{2}(isodd(count_ones(acc)))
+        end
+    end
+    return X
+end
+
 function _solve_fullcolumn_f2(B::AbstractMatrix{FpElem{2}},
                               Y::AbstractVecOrMat{FpElem{2}};
                               check_rhs::Bool=true,
@@ -1324,42 +1346,7 @@ function _solve_fullcolumn_f2(B::AbstractMatrix{FpElem{2}},
         end
     end
 
-    X = Matrix{FpElem{2}}(undef, n, rhs)
-    z = FpElem{2}(0)
-    o = FpElem{2}(1)
-    @inbounds for i in 1:n, j in 1:rhs
-        X[i, j] = z
-    end
-
-    # Compute X = invB * Y[rows, :]
-    rows = fact.rows
-    invB = fact.invB
-    for j in 1:rhs
-        # Build packed vector of Y[rows, j].
-        v = fill(UInt64(0), _f2_blocks(n))
-        @inbounds for i in 1:n
-            if Ymat[rows[i], j].val != 0
-                _f2_setbit!(v, i)
-            end
-        end
-
-        @inbounds for i in 1:n
-            acc = UInt64(0)
-            for k in eachindex(invB[i])
-                acc = xor(acc, invB[i][k] & v[k])
-            end
-            # parity of acc
-            acc = xor(acc, acc >>> 32)
-            acc = xor(acc, acc >>> 16)
-            acc = xor(acc, acc >>> 8)
-            acc = xor(acc, acc >>> 4)
-            acc = xor(acc, acc >>> 2)
-            acc = xor(acc, acc >>> 1)
-            if acc & UInt64(1) != 0
-                X[i, j] = o
-            end
-        end
-    end
+    X = _apply_fullcolumn_factor_f2(fact, Ymat)
 
     if check_rhs
         # Verify B * X == Y (over F2).
@@ -1412,39 +1399,7 @@ function _solve_fullcolumn_f2(B::SparseMatrixCSC{FpElem{2},Int},
         end
     end
 
-    X = Matrix{FpElem{2}}(undef, n, rhs)
-    z = FpElem{2}(0)
-    o = FpElem{2}(1)
-    @inbounds for i in 1:n, j in 1:rhs
-        X[i, j] = z
-    end
-
-    rows = fact.rows
-    invB = fact.invB
-    for j in 1:rhs
-        v = fill(UInt64(0), _f2_blocks(n))
-        @inbounds for i in 1:n
-            if Ymat[rows[i], j].val != 0
-                _f2_setbit!(v, i)
-            end
-        end
-
-        @inbounds for i in 1:n
-            acc = UInt64(0)
-            for k in eachindex(invB[i])
-                acc = xor(acc, invB[i][k] & v[k])
-            end
-            acc = xor(acc, acc >>> 32)
-            acc = xor(acc, acc >>> 16)
-            acc = xor(acc, acc >>> 8)
-            acc = xor(acc, acc >>> 4)
-            acc = xor(acc, acc >>> 2)
-            acc = xor(acc, acc >>> 1)
-            if acc & UInt64(1) != 0
-                X[i, j] = o
-            end
-        end
-    end
+    X = _apply_fullcolumn_factor_f2(fact, Ymat)
 
     if check_rhs
         for i in 1:m

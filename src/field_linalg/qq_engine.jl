@@ -205,13 +205,49 @@ const _NEMO_FULLCOLUMN_FACTOR_CACHE_FP = WeakKeyDict{Any,Any}()
 # Pivot-column detection for QQ matrices (dense or sparse)
 # ---------------------------------------------------------------
 
-# Dense pivot columns via _rrefQQ
+# Pivot columns need forward elimination only. The left-to-right pivot scan
+# selects the same columns as RREF, without reducing above each pivot or
+# normalizing rows whose reduced entries will never be returned.
 function _pivot_columnsQQ(A::AbstractMatrix{QQ})
-    _, pivs = _rrefQQ(A)
-    return pivs
+    M = Matrix{QQ}(A)
+    all(isfinite, M) || throw(ArgumentError("rref: entries must be finite rational numbers"))
+    m, n = size(M)
+    pivs = Int[]
+    row = 1
+    for col in 1:n
+        pivrow = 0
+        @inbounds for r in row:m
+            if !iszero(M[r, col])
+                pivrow = r
+                break
+            end
+        end
+        pivrow == 0 && continue
+        push!(pivs, col)
+        row == m && break
+        if pivrow != row
+            @inbounds for j in col:n
+                M[row, j], M[pivrow, j] = M[pivrow, j], M[row, j]
+            end
+        end
+        pivot = M[row, col]
+        @inbounds for r in row+1:m
+            value = M[r, col]
+            iszero(value) && continue
+            fac = isone(pivot) ? value : value / pivot
+            M[r, col] = zero(QQ)
+            unit_factor = isone(fac)
+            for j in col+1:n
+                value = M[row, j]
+                iszero(value) && continue
+                M[r, j] -= unit_factor ? value : fac * value
+            end
+        end
+        row += 1
+    end
+    return Tuple(pivs)
 end
 
-# Sparse pivot columns via sparse RREF streaming
 # Sparse pivot columns via sparse RREF streaming
 function _pivot_columnsQQ(A::SparseMatrixCSC{QQ,Int})
     m, n = size(A)
@@ -235,14 +271,54 @@ end
 _pivot_columnsQQ(A::Transpose{QQ,<:SparseMatrixCSC{QQ,Int}}) = _pivot_columnsQQ(sparse(A))
 _pivot_columnsQQ(A::Adjoint{QQ,<:SparseMatrixCSC{QQ,Int}})  = _pivot_columnsQQ(sparse(A))
 
+# Only array-backed dense storage is eligible. Row-indexed views used by
+# coordinate plans qualify, while sparse/structured/custom storage keeps its
+# native algorithms. Count actual nonzeros so a dense identity stays native.
+# A sparse leading square block also stays native: graph embeddings [I; A]
+# already have inexpensive pivot selection and an identity inverse, even when
+# the lower block makes the complete matrix dense.
+@inline _dense_QQ_storage(A) = A isa StridedArray
+@inline _dense_QQ_storage(A::Union{SubArray,Transpose,Adjoint,Base.ReshapedArray}) =
+    _dense_QQ_storage(parent(A))
+function _QQ_at_least_half_nonzero(A)
+    required = cld(length(A), 2)
+    count = 0
+    for x in A
+        count += !iszero(x)
+        count >= required && return true
+    end
+    return false
+end
+@inline function _use_nemo_QQ_factor(B)
+    return _have_nemo() && size(B, 1) >= size(B, 2) >= _QQ_NEMO_FACTOR_MIN_COLS[] &&
+           _dense_QQ_storage(B) &&
+           _QQ_at_least_half_nonzero(view(B, 1:size(B, 2), :)) &&
+           _QQ_at_least_half_nonzero(B)
+end
+@inline function _use_nemo_QQ_product(A, B)
+    return _have_nemo() && size(A, 2) >= _QQ_NEMO_PRODUCT_MIN_INNER[] &&
+           size(A, 1) >= 4 && size(B, 2) >= 4 &&
+           widemul(length(A), size(B, 2)) >= _QQ_NEMO_PRODUCT_MIN_WORK[] &&
+           _dense_QQ_storage(A) && _dense_QQ_storage(B) &&
+           _QQ_at_least_half_nonzero(A) && _QQ_at_least_half_nonzero(B)
+end
+
 """
-    _factor_fullcolumnQQ(B::AbstractMatrix{<:QQ}) -> FullColumnFactor{QQ}
+    _factor_fullcolumnQQ(B::AbstractMatrix{<:QQ}; backend=:julia_exact) -> FullColumnFactor{QQ}
 
 Build reusable factorization data for solving `B * X = Y` when B has full column rank.
 
-Most users should call `_solve_fullcolumnQQ(B,Y)`; caching is automatic for mutable matrices.
+The native solve path uses `backend=:julia_exact`. Coordinate owners may request
+`:auto` to construct a dense factor through Nemo, converting the inverse back
+once so the result-local storage and subsequent coordinate convention stay the
+same. Explicit `:nemo` is also available for parity checks.
 """
-function _factor_fullcolumnQQ(B::AbstractMatrix{<:QQ})::FullColumnFactor{QQ}
+function _factor_fullcolumnQQ(B::AbstractMatrix{<:QQ}; backend::Symbol=:julia_exact)::FullColumnFactor{QQ}
+    backend in (:auto, :julia_exact, :nemo) || throw(ArgumentError("unsupported QQ factor backend $backend"))
+    if backend == :nemo || (backend == :auto && _use_nemo_QQ_factor(B))
+        fac = _factor_fullcolumn_nemoQQ(B)
+        return FullColumnFactor{QQ}(fac.rows, _from_fmpq_mat(fac.invB))
+    end
     m, n = size(B)
     n == 0 && return FullColumnFactor{QQ}(Int[], Matrix{QQ}(I, 0, 0))
 
@@ -302,14 +378,13 @@ function _solve_fullcolumn_rrefQQ(B::AbstractMatrix{<:QQ}, Y::AbstractVecOrMat{<
     return want_vec ? vec(X) : X
 end
 
-# Exact products for Julia QQ solve factors. Generic matrix multiplication
-# performs rational arithmetic even on structural zeros, creating BigInt
-# temporaries for every dense entry. Factors and cycle bases commonly contain
-# many zeros; skip them without changing the selected solver backend.
-function _mulQQ(A::AbstractMatrix{QQ}, B::AbstractVecOrMat{QQ})
+# Exact products choose Nemo only for dense matrix-matrix work that amortizes
+# conversions. Sparse/structured and small products skip structural zeros in
+# Julia; explicitly selected Julia solve factors keep their requested backend.
+function _mulQQ(A::AbstractMatrix{QQ}, B::AbstractVecOrMat{QQ}; backend::Symbol=:auto)
     C = B isa AbstractVector ? Vector{QQ}(undef, size(A, 1)) :
                               Matrix{QQ}(undef, size(A, 1), size(B, 2))
-    return _mulQQ!(C, A, B)
+    return _mulQQ!(C, A, B; backend=backend)
 end
 
 # Skip structural zeros in both operands. Sparse columns are traversed by
@@ -371,7 +446,9 @@ end
     return nothing
 end
 
-function _mulQQ!(C::AbstractVecOrMat{QQ}, A::AbstractMatrix{QQ}, B::AbstractVecOrMat{QQ})
+function _mulQQ!(C::AbstractVecOrMat{QQ}, A::AbstractMatrix{QQ}, B::AbstractVecOrMat{QQ};
+                 backend::Symbol=:auto)
+    backend in (:auto, :julia_exact, :nemo) || throw(ArgumentError("unsupported QQ product backend $backend"))
     Base.require_one_based_indexing(C, A, B)
     size(A, 2) == size(B, 1) || throw(DimensionMismatch("A and B inner dimensions must match"))
     size(C, 1) == size(A, 1) && size(C, 2) == size(B, 2) ||
@@ -381,6 +458,12 @@ function _mulQQ!(C::AbstractVecOrMat{QQ}, A::AbstractMatrix{QQ}, B::AbstractVecO
     _check_finite_QQ_product(A, B)
     if _native_QQ_product_operand(A) || _native_QQ_product_operand(B)
         return mul!(C, A, B)
+    end
+    if backend == :nemo || (backend == :auto && _use_nemo_QQ_product(A, B))
+        rhs = B isa AbstractVector ? reshape(B, :, 1) : B
+        product = _from_fmpq_mat(_to_fmpq_mat(A) * _to_fmpq_mat(rhs))
+        copyto!(C, C isa AbstractVector ? vec(product) : product)
+        return C
     end
     fill!(C, zero(QQ))
     return _qq_accum_product!(C, A, B)
@@ -412,14 +495,14 @@ _matmul!(C::AbstractVecOrMat{QQ}, A::AbstractMatrix{QQ}, B::AbstractVecOrMat{QQ}
 # Fast solve using factor data
 function _solve_fullcolumn_factorQQ(B::AbstractMatrix{<:QQ}, fac::FullColumnFactor{QQ},
                                     Y::AbstractVecOrMat{<:QQ};
-                                    check_rhs::Bool=true)
+                                    check_rhs::Bool=true, backend::Symbol=:julia_exact)
     m, n = size(B)
     length(fac.rows) == n || error("stale FullColumnFactor: wrong row set length")
     if Y isa AbstractVector
         length(Y) == m || throw(DimensionMismatch("B and Y must have same row count"))
         ysub = Vector{QQ}(undef, n)
         _gather_rows!(ysub, Y, fac.rows)
-        x = _mulQQ(fac.invB, ysub)
+        x = _mulQQ(fac.invB, ysub; backend=backend)
         if check_rhs && !_verify_solveQQ(B, x, Y)
             error("right-hand side is not in column space of B")
         end
@@ -430,11 +513,11 @@ function _solve_fullcolumn_factorQQ(B::AbstractMatrix{<:QQ}, fac::FullColumnFact
     size(Ymat, 1) == m || throw(DimensionMismatch("B and Y must have same row count"))
     rhs = size(Ymat, 2)
     X = if rhs < _QQ_FACTOR_GATHER_MIN_RHS[]
-        _mulQQ(fac.invB, view(Ymat, fac.rows, :))
+        _mulQQ(fac.invB, view(Ymat, fac.rows, :); backend=backend)
     else
         Ysub = Matrix{QQ}(undef, n, rhs)
         _gather_rows!(Ysub, Ymat, fac.rows)
-        _mulQQ(fac.invB, Ysub)
+        _mulQQ(fac.invB, Ysub; backend=backend)
     end
 
     if check_rhs && !_verify_solveQQ(B, X, Ymat)
@@ -446,13 +529,13 @@ end
 
 # Share the same factor with result-local owners of a checked solve. The weak
 # cache can also reuse it for another equal matrix while the original key lives.
-function _cached_fullcolumn_factorQQ(B::AbstractMatrix{<:QQ})::FullColumnFactor{QQ}
+function _cached_fullcolumn_factorQQ(B::AbstractMatrix{<:QQ}; backend::Symbol=:julia_exact)::FullColumnFactor{QQ}
     if _can_weak_cache_key(B)
         return get!(_FULLCOLUMN_FACTOR_CACHE, B) do
-            _factor_fullcolumnQQ(B)
+            _factor_fullcolumnQQ(B; backend=backend)
         end
     end
-    return _factor_fullcolumnQQ(B)
+    return _factor_fullcolumnQQ(B; backend=backend)
 end
 
 """
@@ -508,6 +591,8 @@ function _clear_fullcolumn_cache!()
 end
 
 function _factor_fullcolumn_nemoQQ(B::AbstractMatrix{<:QQ})::NemoFullColumnFactorQQ
+    Base.require_one_based_indexing(B)
+    all(isfinite, B) || throw(ArgumentError("factor: entries must be finite rational numbers"))
     m, n = size(B)
     n == 0 && return NemoFullColumnFactorQQ(Int[], Nemo.matrix(Nemo.QQ, Matrix{QQ}(I, 0, 0)))
 

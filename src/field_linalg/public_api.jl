@@ -234,7 +234,8 @@ Use the result with `solve_fullcolumn(field, B, Y; factor=fac)`. For `QQ`,
 routing, since modular solves do not currently expose a reusable factor.
 """
 function factor_fullcolumn(field::QQField, B; backend::Symbol=:auto, cache::Bool=true, summary=nothing)
-    be = _choose_solve_backend(field, B; backend=backend, factor=nothing)
+    be = backend == :auto && _use_nemo_QQ_factor(B) ? :nemo :
+         _choose_solve_backend(field, B; backend=backend, factor=nothing)
     if be == :modular
         be = _have_nemo() ? :nemo : (_is_sparse_like(B) ? :julia_sparse : :julia_exact)
     end

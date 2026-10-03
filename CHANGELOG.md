@@ -8,8 +8,31 @@ repeating work. These updates make dimensions, bases and coordinates cheaper
 to obtain while preserving the existing basis conventions and the
 [finite-poset interpretation of Ext and Tor](docs/math_categories.md).
 
+### Visualization
+
+- Keep barcode infinity, censoring and continuation labels inside the plotting
+  area and clear of selection strokes at larger text sizes, preserving their
+  exact interval anchors.
+- Rotate crowded persistence-diagram x-axis tick labels when needed, using
+  measured text widths and restoring horizontal labels when space permits.
+  Tick values and interval coordinates stay unchanged.
+- Add maintained Playwright checks for live interval and encoding inspectors,
+  including the earlier two-square manual cases, keyboard scrolling and actual
+  browser zoom. The optional harness starts and stops its own Julia server.
+
 ### Algebra and performance
 
+- Select Nemo for sufficiently dense rational factors and matrix products,
+  including coordinate setup. Preserve exact selected rows, bases, membership
+  checks and explicit backend choices. Small, sparse and structured work retains
+  its native paths; factor storage and existing sharing remain in place.
+- Select rational pivot columns by forward elimination, preserving the same
+  ordered basis without computing a full reduced matrix just to discard it.
+- Remove copied row slices and redundant input copies from exact particular
+  solves. Detect inconsistent right-hand sides from augmented pivot columns;
+  preserve the free-variable convention and numerical-field behavior.
+- Share packed F2 factor application between dense and sparse solves, reusing
+  one scratch vector within each call while retaining full RHS checks.
 - Compute rational Hom constraints with sparse integer echelon rows and final
   back substitution. Clearing denominators avoids repeated fraction reduction
   while preserving the ordered basis of actual module maps.
@@ -89,6 +112,19 @@ threaded quotient coordinates, backend routing and strict Yoneda identities.
 It uses the maintained test runner; the full repository suite was not rerun.
 
 ### Measured performance scope
+
+Selective dense rational routing passes 10,565 focused assertions and independent
+checks of 17 development workflows and 16 dense controls. Two process pairs yield
+492 accepted samples with verified resets and zero measured compilation.
+Complete size-16 coordinate requests improve by 2.07–4.06×; retained checked
+queries improve by 1.45–2.06×. These controls start from supplied cycle and
+boundary bases, with result construction and the requested answer timed together.
+
+The largest observed size-4 addition is 0.026 ms. Other module workflows are
+mixed, with a largest observed addition of 0.517 ms in one pair. Reachable
+size-16 result/cache storage is smaller, but Julia allocation counters omit
+FLINT allocations; no process-memory reduction is claimed. These are TamerOp
+before/after diagnostics, not a new QPA comparison or a full-suite test run.
 
 The rational Hom and native prime-coordinate follow-up verified 520 fresh-result
 samples and ten identical, independently checked before/after answers. The

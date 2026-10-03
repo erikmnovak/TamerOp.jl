@@ -3794,3 +3794,215 @@ end
         end
     end
 end
+
+@testset "QQ forward pivot selection preserves ordered bases" begin
+    rng = MersenneTwister(100101)
+    # Leading zeros, a dependent column between pivots, and row swaps give a
+    # known lexicographically first basis. Keep the original column vectors.
+    A = QQ[0 0 0 2 6; 0 3 6 0 3; 0 0 0 0 0]
+    @test FL._pivot_columnsQQ(A) == (2, 4)
+    @test FL._colspaceQQ(A) == A[:, [2, 4]]
+    for m in (0, 1, 3, 7), n in (0, 1, 4, 9), trial in 1:3
+        A = [QQ(rand(rng, -5:5), big(2)^(trial == 3 ? 80 : 2) + rand(rng, 1:7))
+             for i in 1:m, j in 1:n]
+        n >= 3 && (A[:, 3] = 2 .* A[:, 1])
+        before = deepcopy(A)
+        expected = last(FL._rrefQQ(A))
+        for B in (A, view(A, :, :), copy(transpose(copy(transpose(A)))))
+            @test FL._pivot_columnsQQ(B) == expected
+            @test FL._colspaceQQ(B) == A[:, collect(expected)]
+        end
+        @test A == before
+        @test FL._pivot_columnsQQ(transpose(A)) == last(FL._rrefQQ(transpose(A)))
+    end
+    B = QQ[0 0; 2 1; 4 2; 1 -1; 0 0]
+    factor = FL._factor_fullcolumnQQ(B)
+    @test factor.rows == [2, 4]
+    @test factor.invB * B[factor.rows, :] == Matrix{QQ}(I, 2, 2)
+    X = QQ[2//7 -3; 5//11 2]
+    @test FL._solve_fullcolumnQQ(B, B * X; cache=false) == X
+    @test_throws ErrorException FL._factor_fullcolumnQQ(B[:, [1, 1]])
+    @test_throws ArgumentError FL._pivot_columnsQQ(reshape(QQ[1//0], 1, 1))
+end
+
+@testset "F2 packed factor application preserves checked coordinates" begin
+    field = CM.F2(); K = CM.coeff_type(field)
+    rng = MersenneTwister(100102)
+    for n in (0, 1, 7, 65, 129), rhs in (0, 1, 8)
+        # A nontrivial invertible minor crossing packed-word boundaries, one
+        # dependent row, and a zero row with a known inconsistency witness.
+        B = zeros(K, n + 2, n)
+        for i in 1:n
+            B[i, i] = one(K)
+            i > 1 && (B[i, i-1] = one(K))
+            B[n+1, i] = K(isodd(i))
+        end
+        X = K.(rand(rng, 0:1, n, rhs)); Y = B * X
+        savedB, savedY = copy(B), copy(Y)
+        for storage in (B, sparse(B), view(B, :, :))
+            FL._clear_f2_fullcolumn_cache!()
+            @test FL._solve_fullcolumn_f2(storage, Y; cache=false) == X
+            @test FL._solve_fullcolumn_f2(storage, Y; cache=true) == X
+            @test FL._solve_fullcolumn_f2(storage, Y; cache=true) == X
+            if rhs > 0
+                @test FL._solve_fullcolumn_f2(storage, Y[:, 1]; cache=false) == X[:, 1]
+                bad = copy(Y); bad[end, end] = one(K)
+                @test_throws ErrorException FL._solve_fullcolumn_f2(storage, bad; cache=false)
+                @test FL._solve_fullcolumn_f2(storage, bad; cache=false, check_rhs=false) == X
+            end
+        end
+        @test B == savedB && Y == savedY
+    end
+    FL._clear_f2_fullcolumn_cache!()
+end
+
+@testset "Selective dense rational Nemo routing preserves exact algebra" begin
+    field = CM.QQField()
+    saved_thresholds = FL._current_linalg_thresholds()
+    saved_enabled = FL._NEMO_ENABLED[]
+    try
+        FL._NEMO_ENABLED[] = true
+        FL._QQ_NEMO_FACTOR_MIN_COLS[] = 16
+        FL._QQ_NEMO_PRODUCT_MIN_INNER[] = 16
+        FL._QQ_NEMO_PRODUCT_MIN_WORK[] = 1024
+        for n in (4, 15, 16)
+            I_n = Matrix{QQ}(I, n, n)
+            u = QQ[i for i in 1:n]; v = QQ[1//(i+2) for i in 1:n]
+            U = I_n + u * transpose(v)
+            inverseU = I_n - u * transpose(v) / (1 + dot(v,u))
+            G = QQ[(i+2j)//(i+j+2) for i in 1:n,j in 1:n]
+            B = vcat(I_n,G)*U
+            X = QQ[(i-2j)//(i+j+1) for i in 1:n,j in 1:8]
+            Y = B*X
+            beforeB,beforeY = deepcopy(B),deepcopy(Y)
+            for input in (B, view(B,collect(1:2n),:), transpose(copy(transpose(B))),
+                          U, sparse(B))
+                @test FL._use_nemo_QQ_factor(input) == (n>=16 && !issparse(input))
+                for backend in (:auto,:nemo,:julia_exact)
+                    FL._reset_conversion_counters!()
+                    fac = FL._factor_fullcolumnQQ(input;backend)
+                    @test fac.rows == collect(1:n)
+                    @test fac.invB == inverseU
+                    @test fac.invB isa Matrix{QQ}
+                    expected_nemo = backend==:nemo || (backend==:auto && FL._use_nemo_QQ_factor(input))
+                    @test (FL._conversion_counters().qq_to_nemo>0) == expected_nemo
+                    @test FL._solve_fullcolumn_factorQQ(input,fac,input*X;backend=:auto) == X
+                end
+            end
+            # Same factors/answers under public explicit backend choices.
+            for backend in (:julia_exact,:nemo,:auto)
+                FL._reset_conversion_counters!()
+                fac = FL.factor_fullcolumn(field,B;backend,cache=false)
+                expected = backend==:auto ? (FL._use_nemo_QQ_factor(B) ? :nemo : FL._choose_solve_backend(field,B)) : backend
+                @test FL.factor_backend(fac) == expected
+                @test FL.solve_fullcolumn(field,B,Y;factor=fac,backend=expected) == X
+                expected==:julia_exact && @test FL._conversion_counters().qq_to_nemo == 0
+                bad=copy(Y);bad[end,1]+=1
+                @test_throws ErrorException FL.solve_fullcolumn(field,B,bad;factor=fac)
+            end
+            for A in (U,view(B,collect(1:n),:),transpose(U))
+                for backend in (:auto,:nemo,:julia_exact)
+                    FL._reset_conversion_counters!()
+                    C=fill(QQ(-1),n,8)
+                    @test FL._mulQQ!(C,A,X;backend) === C
+                    @test C == A*X
+                    expected_nemo = backend==:nemo || (backend==:auto && FL._use_nemo_QQ_product(A,X))
+                    @test (FL._conversion_counters().qq_to_nemo>0) == expected_nemo
+                end
+            end
+            @test !FL._use_nemo_QQ_factor(I_n)
+            @test !FL._use_nemo_QQ_product(I_n,X)
+            @test !FL._use_nemo_QQ_product(U,X[:,1])
+            @test B==beforeB && Y==beforeY
+        end
+        n=16;A=QQ[(i+2j)//(i+j+1) for i in 1:n,j in 1:n];X=ones(QQ,n,8)
+        for input in (sparse(A), transpose(sparse(A)), view(sparse(A),:,:),
+                      Diagonal(ones(QQ,n)),UpperTriangular(A),Symmetric(A))
+            @test !FL._use_nemo_QQ_factor(input)
+            @test !FL._use_nemo_QQ_product(input,X)
+            FL._reset_conversion_counters!()
+            @test FL._matmul(input,X) == input*X
+            @test FL._conversion_counters().qq_to_nemo==0
+        end
+        for backend in (:auto,:nemo,:julia_exact)
+            invalid=copy(A);invalid[end,end]=QQ(1,0);dest=fill(QQ(-2),n,8)
+            @test_throws ArgumentError FL._mulQQ!(dest,invalid,X;backend)
+            @test dest==fill(QQ(-2),n,8)
+            @test_throws ArgumentError FL._factor_fullcolumnQQ(invalid;backend)
+            @test_throws ErrorException FL._factor_fullcolumnQQ(ones(QQ,n,n);backend)
+            @test_throws DimensionMismatch FL._mulQQ!(dest,A,X[1:end-1,:];backend)
+            @test_throws DimensionMismatch FL._mulQQ!(zeros(QQ,n,7),A,X;backend)
+            @test FL._mulQQ(zeros(QQ,3,0),zeros(QQ,0,2);backend)==zeros(QQ,3,2)
+            @test FL._mulQQ(zeros(QQ,0,3),zeros(QQ,3,2);backend)==zeros(QQ,0,2)
+            @test size(FL._factor_fullcolumnQQ(zeros(QQ,3,0);backend).invB)==(0,0)
+        end
+        @test_throws ArgumentError FL._mulQQ(A,X;backend=:invalid)
+        @test_throws ArgumentError FL._factor_fullcolumnQQ(A;backend=:invalid)
+        FL._NEMO_ENABLED[]=false
+        @test !FL._use_nemo_QQ_factor(A)
+        @test !FL._use_nemo_QQ_product(A,X)
+        FL._reset_conversion_counters!()
+        @test FL._mulQQ(A,X)==A*X
+        @test FL._conversion_counters().qq_to_nemo==0
+        FL._NEMO_ENABLED[]=true
+        beforeA,beforeX=deepcopy(A),deepcopy(X)
+        answers=fetch.([Threads.@spawn FL._mulQQ(A,X) for _ in 1:8])
+        @test all(==(A*X),answers)
+        @test A==beforeA && X==beforeX
+        # Threshold changes roundtrip through the existing persistence surface.
+        mktempdir() do dir
+            path=joinpath(dir,"thresholds.toml")
+            FL._QQ_NEMO_FACTOR_MIN_COLS[]=17
+            FL._QQ_NEMO_PRODUCT_MIN_INNER[]=18
+            FL._QQ_NEMO_PRODUCT_MIN_WORK[]=2048
+            FL._save_linalg_thresholds!(;path)
+            FL._QQ_NEMO_FACTOR_MIN_COLS[]=99
+            @test FL._load_linalg_thresholds!(;path)
+            @test FL._QQ_NEMO_FACTOR_MIN_COLS[]==17
+            @test FL._QQ_NEMO_PRODUCT_MIN_INNER[]==18
+            @test FL._QQ_NEMO_PRODUCT_MIN_WORK[]==2048
+            @test !FL._use_nemo_QQ_factor(A)
+            @test !FL._use_nemo_QQ_product(A,X)
+        end
+    finally
+        FL._apply_linalg_thresholds!(saved_thresholds)
+        FL._NEMO_ENABLED[]=saved_enabled
+        FL._clear_fullcolumn_cache!()
+    end
+end
+
+@testset "Dense rational routing retains nonconsecutive selected rows" begin
+    n=16;I_n=Matrix{QQ}(I,n,n)
+    u=QQ[i for i in 1:n];v=QQ[1//(i+2) for i in 1:n]
+    U=I_n+u*transpose(v);inverseU=I_n-u*transpose(v)/(1+dot(v,u))
+    B=zeros(QQ,2n+2,n);rows=collect(2:2:2n)
+    B[rows,:]=U
+    for j in 1:n
+        B[2j+1,:]=U[j,:] # Repeats the preceding independent row.
+    end
+    B[end,:]=vec(sum(U;dims=1))
+    X=QQ[(i-2j)//(i+j+1) for i in 1:n,j in 1:4];Y=B*X
+    for backend in (:julia_exact,:nemo,:auto)
+        fac=FL._factor_fullcolumnQQ(B;backend)
+        @test fac.rows==rows
+        @test fac.invB==inverseU
+        @test FL._solve_fullcolumn_factorQQ(B,fac,Y;backend)==X
+        invalid=copy(Y);invalid[1,1]=1
+        @test_throws ErrorException FL._solve_fullcolumn_factorQQ(B,fac,invalid;backend)
+    end
+    for build in (CC._homology_data_from_bases,CC._cohomology_data_from_bases)
+        H=build(QQ,1,2n+2,copy(B),B[:,2:2:n];field=CM.QQField())
+        @test CC.coordinates(H,Y)==X[1:2:n,:]
+        @test getfield(H,:_checked_coord_plan).rows==rows
+        @test CC.basis(H)==B[:,1:2:n]
+        invalid=copy(Y);invalid[1,1]=1
+        @test_throws ErrorException CC.coordinates(H,invalid)
+    end
+    canonical=vcat(I_n,QQ[(i+2j)//(i+j+2) for i in 1:n,j in 1:n])
+    @test !FL._use_nemo_QQ_factor(canonical)
+    FL._reset_conversion_counters!()
+    fac=FL._factor_fullcolumnQQ(canonical;backend=:auto)
+    @test fac.invB==I_n
+    @test FL._conversion_counters().qq_to_nemo==0
+    FL._clear_fullcolumn_cache!()
+end

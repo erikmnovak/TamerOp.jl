@@ -156,18 +156,20 @@ function _interval_panels(records; window=nothing, interval=nothing, max_interva
     view = _interval_view(records; window,interval,max_intervals,order)
     lo, hi = Float64.(view.window)
     bars = AbstractVisualizationLayer[]
+    endpoint_layers = (left=Int[], right=Int[])
     diagram = AbstractVisualizationLayer[SegmentLayer([(lo,lo,hi,hi)], _VisualRole(:muted),0.6,1.0,:dash)]
     labels = Dict{NTuple{2,Float64},Vector{String}}()
     for (r,seg,point,statuses) in zip(view.displayed_records,view.bar_segments,view.diagram_points,view.endpoint_display)
         color = _VisualRole(:categorical,r.id)
         push!(bars,SegmentLayer([seg],color,1.0,highlight && r.id == interval ? 5.0 : 2.5))
-        for (x,closed,status,arrow) in ((seg[1],r.left_closed,statuses[1],"<"),(seg[3],r.right_closed,statuses[2],">"))
+        for (x,closed,status,arrow,side) in ((seg[1],r.left_closed,statuses[1],"<",:left),(seg[3],r.right_closed,statuses[2],">",:right))
             if status === :finite
                 push!(bars,PointLayer([(x,seg[2])],color,1.0,9.0))
                 closed || push!(bars,PointLayer([(x,seg[2])],_VisualRole(:background),1.0,5.0))
             else
                 glyph = status === :essential ? (arrow == "<" ? "< -Inf" : "> +Inf") : status === :censored ? "?" : arrow
                 push!(bars,TextLayer([glyph],[(x,seg[2])],color,13.0))
+                push!(getproperty(endpoint_layers,side),length(bars))
             end
         end
         push!(diagram,PointLayer([point],color,1.0,highlight && r.id == interval ? 16.0 : 10.0))
@@ -212,7 +214,9 @@ function _interval_panels(records; window=nothing, interval=nothing, max_interva
         layers=bars,axes=_default_axes_2d(xlabel="Parameter",ylabel="Interval group",xlimits=view.limits,
             ylimits=(0.3,max(1,view.displayed_groups)+0.7),aspect=:auto,xticks=ticks,
             yticks=(Float64.(1:view.displayed_groups),["#$(r.id) x$(r.multiplicity)" for r in view.displayed_records])),
-        metadata=merge(common,(;interval_segments=view.bar_segments)),interaction=_default_interaction(labels=true))
+        metadata=merge(common,(;interval_segments=view.bar_segments,
+            barcode_endpoint_layers=(left=Tuple(endpoint_layers.left),right=Tuple(endpoint_layers.right)))),
+        interaction=_default_interaction(labels=true))
     diagram_spec = VisualizationSpec(diagram_kind;title=diagram_title,subtitle=count_text*"\n"*evidence_text*precision,
         layers=diagram,axes=_default_axes_2d(xlabel="Birth",ylabel="Death",xlimits=view.limits,ylimits=view.limits,
             aspect=:equal,xticks=ticks,yticks=ticks),metadata=merge(common,(;interval_points=view.diagram_points,

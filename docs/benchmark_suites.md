@@ -387,9 +387,9 @@ The 90-minute cap left the second rational pass incomplete. Four QPA tensor
 errors and two requests without matching timing passes remain explicit gaps.
 No reserved cases were timed.
 
-These are development diagnostics on a shared machine. The installed GAP timer
-uses a nonmonotonic wall clock; a supported monotonic timing route or stock
-runtime build must be verified before confirmation, without changing QPA.
+These are development diagnostics on a shared machine. That pilot used a
+nonmonotonic GAP clock; the subsequent configured-runtime preflight described
+below resolves this prerequisite for future confirmation without changing QPA.
 Final verification was separately bounded and recorded after the timing cap.
 
 Development profiling covers seventeen existing cases and all thirteen request
@@ -454,6 +454,87 @@ are optimization candidates rather than measured removable costs. Retained
 not justify reversing useful factor reuse. Shared-host variation, empty profiles
 and earlier losses remain explicit. No new production change or QPA ranking is
 claimed, and M3 remains open.
+
+The next bounded implementation removes full RREF from rational pivot-only
+selection, removes temporary arrays from exact particular solves, and shares a
+typed packed F2 application routine. All 9,237 focused assertions pass. Two
+process pairs provide 396 verified-reset, zero-compilation main samples, with
+all seventeen answers independently checked; 1,320 separate kernel samples
+also pass. The size-16 rational factor kernel improves by 1.38–1.39× with about
+26% fewer allocated bytes. Complete F2 and F101 product requests show observed
+ratios of 1.53–2.32× and 1.20–2.00×; dense homology batch8 improves by 1.24–1.25×.
+
+The dense cohomology scalar control is 0.99 ms slower in one pair and near
+parity in the other; several other timings are mixed. Shared-host drift is
+visible even on lightly affected controls, so the exact workflow ratios are
+not isolated causal estimates. Stable kernel gains and reduced allocation
+traffic support retaining these simple changes without adding caches or
+thresholds. The initial kernel-driver logging failure and corrected rerun are
+retained separately within the declared budget. This does not close M3 or
+replace fixed-suite confirmation.
+
+The subsequent residual-cost review collects 42 profiles with at least 128
+snapshots each, then tests existing exact arithmetic routes in disposable
+processes. All seventeen workflows and ten dense controls pass independent
+checks; 336 feasibility samples pass reset and zero-compilation checks. The
+size-16 dense coordinate controls improve by 2.50–4.88× when native exact
+factorization and multiplication are combined, with conversions charged and
+identical factors and coordinates. These are experiments, not implemented
+package improvements or QPA speed ratios. Shared-host variation remains visible.
+
+That review identified selective dense rational factor/product routing as the
+remaining major target. Tiny-map and column-space changes showed modest or
+inconsistent benefits; sending every small dense RREF through Nemo generally
+lost. No additional major removable prime-coordinate or sparse-Hom cost was
+demonstrated. The combined dense opportunity kept M3 open at that stage.
+
+Selective routing is now implemented, including eager coordinate construction
+and later queries. Dense factors use Nemo when both the whole matrix and its
+leading square block are sufficiently dense; simple identity-block embeddings
+stay native. Dense matrix products charge all conversions each call. Existing
+factor storage, sharing, selected bases, checked membership and explicit backend
+choices are preserved. Sparse and structured storage retain their native paths.
+No new cache is introduced.
+
+The final focused run passes 10,565 assertions. Two process pairs produce 492
+accepted, zero-compilation samples, with verified resets for fresh results and
+separate retained-plan timings. Independent checks verify all seventeen workflow
+answers and sixteen dense formulas. Complete size-16 controls improve by
+2.07–4.06×; retained checked queries improve by 1.45–2.06×. Dense controls supply
+cycle and boundary bases; their timers include result construction and the
+requested answer, not deriving those bases from a complex.
+
+The final 600 kernel samples support the selection rules; an initial 300-sample
+pilot and its identity-block regression remain recorded separately. Size-4
+complete controls add at most 0.026 ms in the observed pairs. Other workflows
+are mixed, with a largest observed addition of 0.517 ms in one pair. Unchanged
+prime-field timings also drift, so their apparent gains are not credited to
+rational routing. Reachable storage is unchanged on small controls and smaller
+on the larger controls. Julia allocation counters omit FLINT allocations, and
+no process-memory improvement is claimed. These are development diagnostics on
+a machine without exclusive reservation, not confirmation confidence intervals.
+
+The subsequent acceptance review is complete, but **M3 remains open**. Sixteen
+profiles of the current dense paths and 384 accepted, zero-compilation samples
+identify two further feasible improvements on existing controls. Using the
+selected dense product for the complete exact membership check improves
+32-column requests by 2.21–2.38×. Trying the leading square inverse before
+general row selection, with fallback when singular, improves scalar requests
+by 1.59–1.71×. Their combined full-request gains are 1.58–3.59×. Factors and
+answers agree exactly. These are disposable experiments, not implemented
+improvements or QPA speed ratios. Small controls and unfavorable results remain
+included. Implement and validate the two changes together before acceptance.
+
+The GAP timing prerequisite is now resolved with a disclosed configured build
+of unchanged GAP 4.16.1 and QPA 1.37. Its existing monotonic clock passes two
+fresh-process checks. Across all thirteen request variants in QQ and F3, 24
+old/new request pairs return identical independently verified answers; two
+retain the same declared tensor failures. The benchmark adapters reject the
+old nonmonotonic clock before collecting timings. The configured executable,
+source hashes, compiler flags, failed attempts and preflight evidence must be
+retained with the eventual environment record. This is runtime and harness
+verification; the final QPA comparison has not run. Candidate freeze remains
+pending, and no fixtures, size endpoints, weights or reserved cases change.
 
 The final performance campaign remains open. Implement and reassess diagnosed
 major feasible TamerOp improvements within the fixed suite, then freeze the

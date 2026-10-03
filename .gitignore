@@ -39,3 +39,10 @@ tamerop_outputs/
 
 # Optional local env files
 .env
+
+# Optional browser acceptance tooling and generated evidence
+/test/browser/node_modules/
+/test/browser/test-results/
+/test/browser/playwright-report/
+/test/browser/Manifest.toml
+/test/browser/.stop-server

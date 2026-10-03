@@ -4549,3 +4549,31 @@ end
         end
     end
 end
+
+@testset "Exact particular solves preserve free variables and inconsistency" begin
+    for field in (CM.QQField(), CM.F2(), CM.F3(), CM.Fp(101))
+        K = CM.coeff_type(field)
+        # Independent columns 2 and 4, with a duplicate free column and two
+        # independent consistency conditions. Coefficients work in every field.
+        A = K[0 0 0 1 0; 0 1 1 0 1; 0 1 1 1 1; 0 0 0 0 0]
+        expected = zeros(K, 5, 3)
+        expected[2, :] = K[1, 0, -1]; expected[4, :] = K[0, 1, 1]
+        B = A * expected
+        beforeA, beforeB = copy(A), copy(B)
+        for a in (A, sparse(A), view(A, :, :)), b in (B, sparse(B), view(B, :, :))
+            actual = DF.Utils.solve_particular(field, a, b)
+            @test actual == expected
+            @test a * actual == b
+            @test DF.Utils.solve_particular(field, a, zeros(K, 4, 0)) == zeros(K, 5, 0)
+        end
+        for i in (3, 4)
+            bad = copy(B); bad[i, end] += one(K)
+            @test_throws ErrorException DF.Utils.solve_particular(field, A, bad)
+        end
+        @test DF.Utils.solve_particular(field, zeros(K, 0, 3), zeros(K, 0, 2)) == zeros(K, 3, 2)
+        @test DF.Utils.solve_particular(field, zeros(K, 2, 0), zeros(K, 2, 3)) == zeros(K, 0, 3)
+        @test_throws ErrorException DF.Utils.solve_particular(field, zeros(K, 2, 0), ones(K, 2, 1))
+        @test_throws AssertionError DF.Utils.solve_particular(field, A, zeros(K, 3, 1))
+        @test A == beforeA && B == beforeB
+    end
+end

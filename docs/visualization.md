@@ -286,27 +286,34 @@ their block is `[0]`; the image-basis shape is `1 x 0`. It also checks
 
 ## Explore the same encoding in a live session
 
-**Validation status (updated 1 October 2026):** all 23 notebook code cells pass with
-display calls captured headlessly, and the exported static figures have passed
-visual review. All 550 inspector assertions pass across `QQ`, `F2`, `F3`, `F5`
-and `Real64`, including native controls, callback routing and lifecycle checks.
-The server-embedding follow-up adds 116 passing regression checks. The author
-reports that the local live-server browser checklist passes: rendering, exact
-queries, pointer/keyboard controls, view changes, error recovery, reset, reload,
-linked tabs and closure. This is manual acceptance of the two-square example;
-the notebook frontend and other browser environments have not been tested.
-The static inspectors retain their separate A42a/A83 evidence. The author has
-also confirmed the separate A40/A41 movable-slice checklist: exact mathematical
-cases, draft/apply behavior, linked interval selection, error recovery,
-reset/hide, narrow and zoomed layouts, keyboard access, linked tabs, reload
-and closure.
-That acceptance covers the earlier viewing-window slice controls. Whole-line
-certification, the additional interval-result views, and retained ordinary
-representative selection have since passed 1,173 dedicated mathematical, session
-and native-rendering/interaction assertions. Eight static examples passed visual
-review, including infinity lanes, superlevel order, duplicate members and a
-retained ring cycle. Actual browser acceptance of the new controls remains
-pending and separate from the earlier finite-window acceptance.
+**Validation status (updated 3 October 2026):** all five maintained Chromium
+153 browser scenarios passed in one fresh-server run, with exit status zero
+and verified fixture cleanup. The tests cover ordinary intervals and retained
+representatives, whole-line band slices, the two-square space/map/presentation
+inspector, finite-window square slices, and the large grayscale inspector at
+actual 150%/200% browser zoom. Keyboard scrolling and real chart clicks verify
+access to both charts at narrow widths. These checks reproduce the earlier
+manual two-square results, including the zero composite, incomparable pairs,
+active zero block, tangent singleton intervals and empty slices.
+
+The renderer keeps barcode endpoint text inward and above selection strokes.
+Crowded diagram x-tick labels rotate vertically, returning to horizontal when
+space permits; tick values, interval endpoints and diagram points remain
+unchanged. The focused diagram run passed 958/958 native assertions in Cairo
+and WGL, and the actual 24px band canvas and narrow-right browser view passed
+visual review. All six zoom captures—controls and both chart ends at 150% and
+200%—also passed review. Very small standalone figures may need additional height for
+wrapped headings; no arbitrary figure-size guarantee is implied.
+
+Earlier evidence remains historical: the 2 October browser checks passed four
+main-run cases plus a focused zoom rerun, and the barcode owner-file run passed
+1,228/1,228 native assertions. These native totals overlap and are not additive.
+The teaching notebook's 23 code cells passed under headless display capture,
+and its static exports passed visual review; its actual notebook frontend
+remains unverified. Other browsers and the
+[broader A41 fixture checklist](testing.md#a41-interval-semantics-and-retained-representatives)
+remain separate acceptance work. The [browser harness](../test/browser/README.md)
+provides reproducible setup, scope and evidence instructions.
 
 Once you know what a selected space or map should mean, a linked inspector
 lets you explore nearby choices. A session keeps one selection shared by the
@@ -525,6 +532,9 @@ picture. Displayed/total group and multiplicity counts explain omissions from
 the window or rendering budget without changing the underlying interval data.
 Diagram labels can move to remain readable. Their connector lines point to the
 plotted intervals; moving a label changes neither its endpoints nor its selection.
+Barcode endpoint labels grow inward from their anchors and sit above the bar,
+so the selection highlight does not cover their text. These are drawing choices;
+the exact interval endpoints and their inclusion remain in the readout.
 
 For a window restriction, the computation uses the prepared exact planar
 geometry. For a global restriction, it enumerates all classifier changes along

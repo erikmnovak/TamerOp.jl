@@ -5140,3 +5140,78 @@ end
         FL.FP_NEMO_SOLVE_THRESHOLD[] = saved
     end
 end
+
+@testset "Dense Nemo coordinate routing preserves factors maps and membership" begin
+    field=CM.QQField();saved=FL._current_linalg_thresholds();enabled=FL._NEMO_ENABLED[]
+    try
+        FL._QQ_NEMO_FACTOR_MIN_COLS[]=16
+        FL._QQ_NEMO_PRODUCT_MIN_INNER[]=16
+        FL._QQ_NEMO_PRODUCT_MIN_WORK[]=1024
+        for n in (4,16)
+            I_n=Matrix{QQ}(I,n,n)
+            u=QQ[i for i in 1:n];v=QQ[1//(i+1) for i in 1:n]
+            U=I_n+u*transpose(v)
+            invU=I_n-u*transpose(v)/(1+dot(v,u))
+            graph=QQ[(i+2j)//(i+j+2) for i in 1:n,j in 1:n]
+            Z=vcat(I_n,graph)*U
+            bc=collect(2:2:n);hc=collect(1:2:n);k=length(hc)
+            B=Z[:,bc];R=Z[:,hc]
+            weights=QQ[(i-2j)//(i+j+1) for i in 1:k,j in 1:8]
+            boundary_weights=QQ[(i+j)//(i+2j+1) for i in 1:k,j in 1:8]
+            cycles=R*weights+B*boundary_weights
+            action=Matrix{QQ}(I,k,k);action[1,end]+=2
+            block=copy(I_n);block[hc,hc]=action
+            # This map has the prescribed action in the cycle basis and fixes B.
+            ambient=zeros(QQ,2n,2n);ambient[:,1:n]=Z*block*invU
+            @test ambient*B==B
+            @test ambient*R==R*action
+            invalid=copy(cycles);invalid[end,1]+=1
+            beforeZ,beforeB,beforeCycles=deepcopy(Z),deepcopy(B),deepcopy(cycles)
+            for build in (CC._cohomology_data_from_bases,CC._homology_data_from_bases), use_nemo in (false,true)
+                FL._clear_fullcolumn_cache!();FL._NEMO_ENABLED[]=use_nemo
+                FL._reset_conversion_counters!()
+                H=build(QQ,1,2n,copy(Z),copy(B);field)
+                fac=(H isa CC.CohomologyData ? H.Kfactor : H.Zfactor)[]
+                @test fac.rows==collect(1:n)
+                @test fac.invB==invU
+                @test fac.invB isa Matrix{QQ}
+                @test (FL._conversion_counters().qq_to_nemo>0)==(use_nemo && n==16)
+                @test_throws ErrorException CC.coordinates(H,invalid)
+                @test getfield(H,:_checked_coord_plan)===nothing
+                @test CC.coordinates(H,cycles)==weights
+                @test CC.coordinates(H,cycles[:,2])==weights[:,2:2]
+                @test CC.coordinates(H,B)==zeros(QQ,k,k)
+                @test CC.coordinates(H,zeros(QQ,2n,0))==zeros(QQ,k,0)
+                plan=getfield(H,:_checked_coord_plan)
+                @test plan.check==graph
+                @test plan.proj==invU[hc,:]
+                @test H.Bfull_factor[]===nothing
+                @test getfield(H,:_Hrep)===nothing
+                again=build(QQ,1,2n,copy(Z),copy(B);field)
+                @test (again isa CC.CohomologyData ? again.Kfactor : again.Zfactor)[]===fac
+                @test CC.basis(H)==R
+                mapped=H isa CC.CohomologyData ?
+                    CC.induced_map_on_cohomology(H,H,ambient) : CC.induced_map_on_homology(H,H,ambient)
+                @test mapped==action
+                @test CC.coordinates(H,ambient*cycles)==action*weights
+                @test getfield(H,:_checked_coord_plan)===plan
+                @test all(==(weights),fetch.([Threads.@spawn CC.coordinates(H,cycles) for _ in 1:8]))
+                @test fac.invB==invU
+                @test_throws ErrorException CC.coordinates(H,invalid)
+                # A deferred factor exercises concurrent first coordinate queries.
+                free=build(QQ,1,2n,copy(Z),zeros(QQ,2n,0);field)
+                alpha=QQ[(i+j)//(i+2j+3) for i in 1:n,j in 1:8];z=Z*alpha
+                @test all(==(alpha),fetch.([Threads.@spawn CC.coordinates(free,z) for _ in 1:8]))
+                @test getfield(free,:_Hrep)===nothing
+                # Homology zero still requires membership checking.
+                zeroH=build(QQ,1,2n,copy(Z),copy(Z);field)
+                @test CC.coordinates(zeroH,cycles)==zeros(QQ,0,8)
+                @test_throws ErrorException CC.coordinates(zeroH,invalid)
+            end
+            @test Z==beforeZ && B==beforeB && cycles==beforeCycles
+        end
+    finally
+        FL._NEMO_ENABLED[]=enabled;FL._apply_linalg_thresholds!(saved)
+        FL._clear_fullcolumn_cache!()
+    end
+end

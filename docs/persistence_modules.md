@@ -6,8 +6,8 @@ does a class observed at one parameter continue to another? A persistence
 module records the vector spaces in which these classes live and the linear
 maps that follow them through the changes.
 
-This page develops that idea from the ring in the
-[first computation](../README.md#your-first-computation). We will see why
+This page develops that idea from the [ring lesson](tutorials/ring.ipynb).
+We will see why
 several parameters lead to a partially ordered set, what a module over that
 set contains, and why keeping only the dimensions loses information. These
 are the ingredients needed to understand the next step: a
@@ -16,6 +16,11 @@ are the ingredients needed to understand the next step: a
 You need familiarity with vectors, linear maps, and matrix multiplication.
 No Julia installation or previous knowledge of homology is needed to follow
 the examples.
+
+If you have just finished the [ring notebook](tutorials/ring.ipynb),
+[why two parameters change the problem](two_parameters.md) offers a shorter
+route to the square example. This chapter provides the fuller development,
+including the module axioms and why compositions must agree.
 
 ## Begin with a ring that fills in
 
@@ -131,12 +136,10 @@ explains how TamerOp computes these intervals over F₂. That direct barcode
 calculation returns a persistence diagram; it does not require constructing
 an `EncodingResult`.
 
-> **Coming visualization: follow the ring class.** An interactive view will
-> let you move $t$ through the filtration while the shape, its $H_1$ space,
-> and the interval $[0,5)$ update together. Selecting an earlier and a later
-> parameter will show the induced map and highlight the class becoming zero
-> when the later parameter reaches 5. The static schematic above supplies the
-> three stages in the meantime.
+> **Figure placeholder: follow the ring class.** A linked view will show
+> the shape, its $H_1$ space, and the interval $[0,5)$ at the same parameter.
+> Selecting an earlier and a later parameter will display the induced map,
+> highlighting how the class becomes zero when the later parameter reaches 5.
 
 ## What changes with two parameters?
 
@@ -263,18 +266,10 @@ can be indexed by real pairs while its vector spaces are over F₂ or ℚ.
 In the examples here the stalks are finite dimensional, although the poset
 indexing them can be infinite.
 
-> **Coming visualization: compare two parameters.** A view of the parameter
-> plane will let you select a source and a target and see whether they are
-> comparable. For a worked module, it will display their stalks and, when the
-> source precedes the target, the corresponding matrix. An incomparable
-> selection will be labelled as having no prescribed structure map. A
-> four-point selection will show the two compositions around a square and
-> their common result.
-
-For a static version of the pair comparison, the
-[square inspection notebook](tutorials/inspect_encoding.ipynb) already shows
-selected stalks and matrices, including incomparable parameters with no map.
-The four-point interaction described above remains future work.
+> **Figure placeholder: compare two routes around a square.** Four selected
+> comparable parameters will be linked to their stalks and structure matrices.
+> Following a vector along either two-step route will show why the two
+> compositions agree, making the compatibility equation visible.
 
 ## Equal dimensions can hide different behavior
 
@@ -326,6 +321,9 @@ description applies at an original parameter. That is the purpose of a
 finite encoding. Such a description requires hypotheses on the module;
 it is not available for every arbitrary assignment satisfying the module
 axioms.
+
+The finite filtrations used here supply the needed finiteness through their
+construction.
 
 Continue with [finite encodings](finite_encodings.md), where a module
 supported on the closed square $[0,2]^2$ supplies the next worked example.

@@ -161,8 +161,8 @@ exact. The finite algorithm terminates if its work budget permits it.
 ## A module pair whose maximum needs a cost switch
 
 Let `I(R)` denote the rectangle interval module, with identity maps within
-the rectangle and zero maps outside it. The test fixtures use upper-open
-rectangles; endpoint decorations do not affect the bottleneck values below.
+the rectangle and zero maps outside it. Endpoint inclusion does not affect
+the bottleneck values below.
 In the window `[0,4] × [0,4]`, take
 
 ```text
@@ -170,8 +170,7 @@ M = I([0,3] × [1,4]) ⊕ I([1,4] × [0,4]),
 N = I([1,3] × [1,3]).
 ```
 
-Their exact weighted matching distance is `5/4`. This is an independent
-module-level oracle, not an assignment of synthetic affine barcode formulas.
+Their exact weighted matching distance is `5/4`.
 To see the upper bound, parameterize any positive line in weighted units as
 `x=a*t`, `y=b*t+h`, with `a,b>=1` and `min(a,b)=1`. The rectangle of `N`
 lies in both rectangles of `M`. Each endpoint moves by at most one weighted
@@ -208,35 +207,6 @@ is deleted. No integer grid event coincides on this line: it is inside a
 barcode-combinatorics cell. The diagonal is a seam between the implementation's
 two slope charts, not a boundary in the space of positive lines. Thus a
 geometric-event-only optimizer misses the actual source of the maximum.
-
-## Proof-to-implementation checklist
-
-The private owner is
-[`src/fibered2d/exact_matching.jl`](../src/fibered2d/exact_matching.jl).
-The public overloads and shared barcode caches are in
-[`src/Fibered2D.jl`](../src/Fibered2D.jl); the encoding-result forwarding path
-is in [`src/Workflow.jl`](../src/Workflow.jl).
-
-| Obligation | Implementation | Independent validation target |
-| --- | --- | --- |
-| Both normalizations have the stated weight | `_check_exact_matching_weight`; weighted `u` chart | Same hand-derived distance with both pairs; invalid pair rejected |
-| Every event-order wall and window boundary is present | `_exact_matching_coordinates`, `_exact_matching_cells` | Windows cutting through grid cells; translated and rectangular windows |
-| Cell representatives are strictly interior and faithfully located | Vertex centroid in `_exact_matching_cell_bars`, `_exact_matching_locate` | Distinct exact cuts with the same `Float64` representation; algebraic cuts |
-| Restriction uses maps, not just dimensions | `_index_packed_for_chain!` and finite-chain rank barcode | Rectangle modules with explicit identity/zero maps; multiplicity examples |
-| Every matching change is included | All signed endpoint differences, half-lifetimes and pairwise equalities in `_exact_matching_candidates` | Public module pairs whose maximum requires an interior cost switch |
-| Every vertex of every refined cell is tested | Polygon vertices and all in-polygon supporting-line intersections | Boundary/tied candidates; synthetic switch test retained as a local check |
-| Diagonal matching has enough capacity | `_exact_matching_bottleneck` delegates to the shared augmented matching engine | Independent exhaustive partial-matching oracle, including unequal cardinalities |
-| Boundary values agree with slice limits | Closed-cell affine endpoints; zero-length bars cost zero | Grid-vertex lines, near-coincident crossings, diagonal direction |
-| Essential bars are clipped rather than silently compared at infinity | Window endpoints in `bounds`, including the final index death | Constant module versus zero in two differently sized windows |
-| Axis limits and degenerate windows contribute zero | `q==0` skip with lifespan bound; zero-width check | Degenerate-window and shallow/swapped-chart examples |
-| Budget failure cannot become an approximate answer | `_exact_matching_charge!` throws before exceeding the limit | Public low-budget rejection |
-| Threads do not mutate barcode caches during optimization | Sequential work construction; indexed independent `_exact_matching_cell_max` calls | Serial/threaded and cached/uncached equality |
-| Public calls preserve classifier, field and window | Owner/cache/Workflow validation and forwarding | Direct owner, cache and encoding-result oracle calls |
-
-The A73 tests live with the existing A03 and A64 tests in
-[`test/test_invariants.jl`](../test/test_invariants.jl). Test counts and actual
-execution settings belong in the audit evidence; this checklist does not
-assert that every possible module has been tested.
 
 ## Literature and limits
 

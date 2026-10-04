@@ -49,8 +49,7 @@ position in the region of geometry they compute. The incremental route also
 computes prerequisite levels below `lo`; degeneracy there can prevent that
 route. `:auto` uses incremental enumeration for affine dimension two with at
 least 32 sites and an explicit window ending at depth two; other requests use
-exhaustive enumeration. This conservative choice follows the measured
-workload regimes. The executed backend is visible in provenance, and neither
+exhaustive enumeration. The executed backend is visible in provenance, and neither
 choice changes the input.
 
 The incremental implementation uses the subset-label recovery of
@@ -154,10 +153,10 @@ The native rhomboid comparison is developed by
 [Corbet, Kerber, Lesnick and Osang](https://arxiv.org/html/2103.07823v3); the
 [bounded-depth guide](rhomboid_depth.md) gives the explicit terminal attachment.
 
-Native degenerate polyhedral cells remain a separate research extension.
-For example, opposite-pair labels in a square have the same geometric
+For degenerate inputs, retaining the site labels matters. For example,
+opposite-pair labels in a square have the same geometric
 barycenter; treating them as independent cube vertices would give the wrong
-incidence. The implemented exact fallback retains the labels and uses
+incidence. The subdivision-Cech construction retains the labels and uses
 simplicial flags, whose boundaries are well defined over every supported
 coefficient field.
 

@@ -10,20 +10,25 @@ The programs may represent the input differently and use different algorithms;
 what must agree is the requested answer. We report computation time, completion
 and correctness checks, and memory separately.
 
+The ordinary-persistence comparison follows another natural endpoint: when a
+complete one-parameter barcode is the requested answer, TamerOp computes it
+directly from the filtered complex.
+
 ## Available comparisons
 
 | Comparison | Mathematical scope | Latest study | Result |
 | --- | --- | --- | --- |
-| [TamerOp and QPA](qpa.md) | Maps, constructions, resolutions, diagrams, complexes, and derived operations on finite-poset modules | 2026-10-03; fixed suite of 220 requests | TamerOp was faster on all 200 requests completed correctly by both tools; weighted geometric mean speed ratio **135.70×** for construction plus query. QPA's 20 tensor-evaluation failures have no speed ratio. |
+| [TamerOp and QPA](qpa.md) | Maps, constructions, resolutions, diagrams, complexes, and derived operations on finite-poset modules | 2026-10-03; fixed suite of 220 requests | TamerOp **135.70× as fast in the weighted aggregate** for construction plus query on the 200 matched requests; even the smallest case-level ratio is **1.76×**. QPA's 20 tensor-evaluation failures have no speed ratio. |
+| [TamerOp and PHAT](phat.md) | Complete ordinary F₂ barcodes from supplied filtered boundary data | PHAT v2, 2026-10-04; 48 medium/large cases across sixteen structural variants | TamerOp **1.33× as fast in the balanced aggregate** for construction plus complete barcode; all 48 medium/large requests completed correctly in both tools. |
 
-The QPA result measures **compiled code computing fresh mathematical results**.
+Both comparisons measure **compiled code computing fresh mathematical results**.
 Package loading and compilation are outside the timer, and results from earlier
-queries are discarded. The report gives the exact timing boundary, tested
+queries are discarded. Each report gives its exact timing boundary, tested
 development snapshot, machine, input sizes, and all incomplete comparisons.
 It is not an estimate of how long a newly launched Julia session takes to
 produce its first answer.
 
-QPA is the first completed comparison in this section. Other programs will get
+QPA and PHAT are completed comparisons. Other programs will get
 their own reports when their studies are complete. The
 [comparison roadmap](../benchmark_suites.md#planned-competitor-comparisons)
 lists planned studies; a place on that list is not a measured result.
@@ -35,6 +40,15 @@ the same request. A ratio of 2 means that TamerOp took half as long. An aggregat
 ratio summarizes the declared suite; individual requests can behave quite
 differently, so each report also provides results by task and downloadable
 measurements. Missing or incorrect answers never become infinite speedups.
+
+We emphasize how much time a user saves, not just which number is smaller.
+Close timings are described as similar performance, with the measured edge
+stated. These studies use a declared practical band from 1/1.10 to 1.10;
+being inside it is not a statistical proof of equivalence. A microsecond gap
+and a saving of several seconds should not carry the same narrative weight
+just because each counts as one case. The reports retain absolute times,
+uncertainty and substantial losses alongside TamerOp's strengths. See the
+[presentation guidance](../benchmarking.md#practical-significance-and-presentation).
 
 Computing with retained maps is one part of TamerOp's pipeline. A comparison
 of finite algebra does not also measure constructing a geometric encoding,

@@ -76,6 +76,27 @@ The picture is an approximation of coordinates, not a replacement classifier.
 and vertex inclusion. A rank-query overlay similarly retains exact pairs,
 region IDs, and computed ranks in `metadata.query_results`.
 
+## Start with the question
+
+After loading CairoMakie, a first barcode needs only its view and degree:
+
+```julia
+OP.visualize(diagram; kind=:barcode, dim=1)
+```
+
+The default figure includes a title, parameter labels, endpoint conventions
+and readable margins. Small barcodes use a compact canvas; persistence diagrams
+keep equal coordinate units. Symbols for infinity, censoring or clipping are
+explained when present. Omitted groups and display-precision limitations remain
+visible; the underlying exact records and full metadata are retained.
+
+Use `window=(low, high)` on each call when comparing intervals on the same
+scale. Cosmetic options such as `style=OP.VisualStyle(fontsize=18)` and
+`size=(760, 360)` are useful for sharing a figure and need not appear in every
+exploratory call. A style applies only to calls where it is supplied.
+The [ring lesson](tutorials/ring.ipynb) develops this progression and finishes
+with an optional preview/export section.
+
 ## Choosing a view
 
 | Object and question | Recipe | Effective selections | Scope and work |
@@ -99,9 +120,22 @@ length is even. The exception is a three-dimensional array with at most four
 entries along axis 3: when that axis is fixed, its default is index 1, treating
 it as a channel axis. Supply `slice_indices` to choose another slice explicitly.
 
-This table covers the corrected shared paths. `available_visuals(obj)` and
+For comparable image snapshots, pass the same `colorrange=(low, high)` to
+each request. The limits must be finite and strictly increasing; `nothing`
+keeps automatic scaling. This matters for constant masks: an all-zero image
+and an all-one image must not both be rescaled to the same colour. `title`
+and `colorbar_label` describe the quantity actually shown. These controls
+also propagate to channel panels and live slice updates. Image axes include
+the full half-index border of the outer pixels and use equal coordinate units.
+The [ring notebook](tutorials/ring.ipynb) uses these controls for its empty,
+ring and filled masks, all with `colorrange=(0, 1)`.
+Two-dimensional images label their row and column indices; small image axes
+show integer cell indices. A bare image call chooses the image recipe and
+its canvas without needing `kind`, `view_dims` or `size` overrides.
+
+`available_visuals(obj)` and
 `OA.check_visual_request(obj; kind=...)` give the full contract for a particular
-object, including existing point-cloud, graph, barcode, and slice-family views.
+object, including point-cloud, graph, barcode, and slice-family views.
 Higher-dimensional encoding maps are not advertised as planar region views.
 Geometry construction does not materialize module bases or cycle
 representatives. Some other recipes, such as slice barcode queries, perform
@@ -196,7 +230,7 @@ behavior.
 
 ## From a presentation matrix to its image
 
-The presentation inspector answers the preceding lesson's next question:
+The presentation inspector asks a further question:
 **how did the input produce this space?** At a parameter, its active upsets
 select source columns and its active downsets select target rows. The image
 of that restricted matrix is the stalk. Support membership alone does not
@@ -285,35 +319,6 @@ their block is `[0]`; the image-basis shape is `1 x 0`. It also checks
 `Bv * C == R * Bu` and the zero composite along the three-point path.
 
 ## Explore the same encoding in a live session
-
-**Validation status (updated 3 October 2026):** all five maintained Chromium
-153 browser scenarios passed in one fresh-server run, with exit status zero
-and verified fixture cleanup. The tests cover ordinary intervals and retained
-representatives, whole-line band slices, the two-square space/map/presentation
-inspector, finite-window square slices, and the large grayscale inspector at
-actual 150%/200% browser zoom. Keyboard scrolling and real chart clicks verify
-access to both charts at narrow widths. These checks reproduce the earlier
-manual two-square results, including the zero composite, incomparable pairs,
-active zero block, tangent singleton intervals and empty slices.
-
-The renderer keeps barcode endpoint text inward and above selection strokes.
-Crowded diagram x-tick labels rotate vertically, returning to horizontal when
-space permits; tick values, interval endpoints and diagram points remain
-unchanged. The focused diagram run passed 958/958 native assertions in Cairo
-and WGL, and the actual 24px band canvas and narrow-right browser view passed
-visual review. All six zoom captures—controls and both chart ends at 150% and
-200%—also passed review. Very small standalone figures may need additional height for
-wrapped headings; no arbitrary figure-size guarantee is implied.
-
-Earlier evidence remains historical: the 2 October browser checks passed four
-main-run cases plus a focused zoom rerun, and the barcode owner-file run passed
-1,228/1,228 native assertions. These native totals overlap and are not additive.
-The teaching notebook's 23 code cells passed under headless display capture,
-and its static exports passed visual review; its actual notebook frontend
-remains unverified. Other browsers and the
-[broader A41 fixture checklist](testing.md#a41-interval-semantics-and-retained-representatives)
-remain separate acceptance work. The [browser harness](../test/browser/README.md)
-provides reproducible setup, scope and evidence instructions.
 
 Once you know what a selected space or map should mean, a linked inspector
 lets you explore nearby choices. A session keeps one selection shared by the
@@ -418,10 +423,9 @@ and cache. The last static snapshot
 remains inspectable. Closing is safe to repeat; create a new session to resume
 live selection afterward.
 
-This first linked inspector requires a running Julia process and WGLMakie.
+The linked inspector requires a running Julia process and WGLMakie.
 Exporting the live session to HTML is rejected; its controls do not work
-offline. Following a chosen vector through arbitrary module maps remains a
-later step. Retained ordinary persistence cycles can be inspected separately
+offline. Retained ordinary persistence cycles can be inspected separately
 through the interval inspector below; they do not identify source cycles for
 an arbitrary finite encoding.
 
@@ -544,7 +548,7 @@ change the classifier is constant, so those outer intervals certify any
 infinite tails. The finite chain of spaces and maps determines the barcode,
 preserving singleton intervals and endpoint inclusion. Coefficients use the
 encoding's field; `RealField` retains its usual numerical rank semantics.
-Reversed grid axes are currently excluded.
+Reversed grid axes are excluded.
 General polyhedral classifiers require rational line and viewing-box coordinates;
 irrational algebraic inputs are rejected explicitly.
 
@@ -653,12 +657,10 @@ An ordinary diagram computed without retention reports the representative
 as unavailable; raw and slice barcodes without source correspondence do the
 same. Neither case invents a cycle from the plotted bar.
 
-The existing snapshot, reset, linked-view and close operations work for these
+The snapshot, reset, linked-view and close operations work for these
 interval sessions. Export `OA.inspection_snapshot(cycle_session)` to keep the
-selection and its literal readout. The next question for a general encoded
-module is how to retain an analogous correspondence to its original data;
-ordinary representative retention does not by itself supply that information
-for arbitrary multiparameter slices.
+selection and its literal readout. Ordinary representative retention does not
+by itself supply source-cell correspondences for arbitrary multiparameter slices.
 
 ## Rendering and saving
 
@@ -724,9 +726,8 @@ CairoMakie produces static figures. WGLMakie produces a browser scene; volume
 slice sliders require a live Julia session. Exporting `:slice_viewer` to HTML
 raises an error because offline Julia callbacks are unavailable; use `:image`
 to export the selected slice instead. The linked inspector also requires live
-Julia; export its `inspection_snapshot` to keep a static selection. General
-hover inspection across other recipes is not implemented. Static query labels
-are drawn annotations: changing `point`, `vertex`, or a pair in `visual_spec`
+Julia; export its `inspection_snapshot` to keep a static selection. Static query
+labels are drawn annotations: changing `point`, `vertex`, or a pair in `visual_spec`
 builds a new view, whereas an inspection session updates its linked panels.
 Renderer controls are `figure`, `size`, and `style`;
 recipe options belong to specification construction. See
@@ -736,5 +737,4 @@ The [notebook](tutorials/inspect_encoding.ipynb) constructs the square, checks
 selected spaces and maps, explains the two-square presentation through active
 blocks and image bases, and exports PNG and SVG figures through the public
 API. Its final section reuses the same example in a live inspection session,
-checks a programmatic selection, and saves the selected state. Following a
-user-selected vector remains future work.
+checks a programmatic selection, and saves the selected state.

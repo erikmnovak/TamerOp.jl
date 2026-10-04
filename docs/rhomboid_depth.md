@@ -113,11 +113,9 @@ enumeration route. These choices feed the same carrier-radius and boundary
 construction; they do not define different multicover approximations. The
 result provenance records both the requested and executed backend.
 
-The measured default `backend=:auto` selects incremental enumeration only for
+The default `backend=:auto` selects incremental enumeration only for
 affine dimension two, at least 32 sites, and an explicit depth window ending
-at two. Other requests use exhaustive enumeration. Local paired measurements
-found both wins and regressions; small and full-depth weighted hulls did not
-show a consistent improvement.
+at two. Other requests use exhaustive enumeration.
 
 For a subset `Q` of `k` sites, form the exact lifted point
 

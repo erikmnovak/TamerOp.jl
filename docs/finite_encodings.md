@@ -1,10 +1,9 @@
 # Finite encodings: recovering a module from finite data
 
-The [previous background page](persistence_modules.md) explained what a
-persistence module retains: a vector space at each parameter and a compatible
-linear map for each comparison. Over the real plane, there are infinitely
-many parameters. How can we keep the whole module in a form that a computer
-can use?
+A persistence module retains a vector space at each parameter and a
+compatible linear map for each comparison. Over the real plane, there are
+infinitely many parameters. How can we keep the whole module in a form that
+a computer can use?
 
 A **finite encoding** answers this question by assigning parameters to
 finitely many labels. The labels form a poset, and a module on that poset
@@ -12,10 +11,12 @@ supplies the spaces and maps. The assignment tells us how to recover them at
 the original parameters. It is an essential part of the description.
 
 We will build two encodings of the same square-supported module and check
-what they recover. You need the previous page's notions of a poset, a
-structure map, and composition, together with basic linear algebra. No Julia
-installation is needed; the final sections connect the mathematics to
-TamerOp's result objects.
+what they recover. You need the notions of a poset, a structure map, and
+composition, together with basic linear algebra. The short bridge
+[why two parameters change the problem](two_parameters.md) introduces these
+ideas; [persistence modules](persistence_modules.md) develops the definitions
+in detail. Either route leads here. No Julia installation is needed; the
+final sections connect the mathematics to TamerOp's result objects.
 
 ## Specify the module before encoding it
 
@@ -229,13 +230,6 @@ when we start with a valid comparison in $Q$. Order preservation is a
 one-way implication; it does not reconstruct the order of the original
 parameters from their labels.
 
-> **Available now: recover a space and a map.** The
-> [inspection notebook](tutorials/inspect_encoding.ipynb) shows the parameter
-> plane, the returned finite poset, and a selected matrix in one figure.
-> It checks included boundary points, exterior zero spaces, and incomparable
-> parameters with no prescribed structure map. Selections are code arguments;
-> clicking across linked panels remains planned.
-
 ## Another valid encoding has four labels
 
 The nine-label model is convenient to draw, but a finite encoding is not
@@ -325,15 +319,15 @@ the zero space, which is also its unique zero map. Checking the labels and
 the maps establishes the comparison; counting nine versus four vertices
 would not establish it.
 
-> **Coming visualization: compare the two encodings.** A linked view will
-> color the nine regions by their four signatures. Selecting a point or a
-> comparable pair will trace both routes through $\pi_9$, $\rho$, and
-> $\pi_4$, displaying the same recovered spaces and maps. The two separated
-> pieces with signature $(0,1)$ will share a color and an explicit label.
+> **Figure placeholder: compare the two encodings.** A linked view will color
+> the nine regions by their four signatures. Selecting a point or a comparable
+> pair will trace both routes through $\pi_9$, $\rho$, and $\pi_4$, displaying
+> the same recovered spaces and maps. The separated pieces with signature
+> $(0,1)$ will share a color and an explicit label.
 
 ## What the package returns for this example
 
-The [verified mathematical example](build_scripts/check_first_encoding.jl)
+The [inspection notebook](tutorials/inspect_encoding.ipynb)
 constructs the square using a region defined by lower bounds, a region
 defined by upper bounds, and a one-by-one coefficient matrix $[1]$ over ℚ. With
 `backend=:pl_backend` and `poset_kind=:signature`, the encoder returns a
@@ -350,15 +344,14 @@ nine-region schematic nor a particular ordering of the four signatures is
 a requirement on all encoders. A different representation can still satisfy
 the same recovery equations.
 
-The existing example check covers both boundaries, interior and exterior
-points, comparable-pair maps, and their compositions. It also checks an
-incomparable pair with a shared label. Those finite checks support the
-implementation on the example; the constructions and arguments above
-establish why the two mathematical models recover the module on all of ℝ².
-The checked geometric endpoints and query coordinates are exactly representable
-as `Float64`, while the linear algebra uses ℚ. This example makes no claim
-that arbitrary real geometric inputs are represented exactly by floating-point
-coordinates; see [exact grades](exact_grades.md) for the supported contracts.
+The notebook follows boundary, interior, and exterior points into the returned
+model, then recovers maps for comparable pairs. It also distinguishes an
+incomparable pair that shares a label. The arguments above explain why the
+models recover the module throughout ℝ², beyond those selected queries.
+The geometric endpoints and query coordinates in this example are exactly
+representable as `Float64`, while the linear algebra uses ℚ. Arbitrary real
+geometric inputs need not be represented exactly by floating-point coordinates;
+see [exact grades](exact_grades.md) for the supported contracts.
 
 ## What recovery guarantees
 
@@ -387,8 +380,8 @@ category and comparison hypotheses; the
 ## Why the name TamerOp?
 
 TamerOp stands for **Toolkit for Algebraic Module Encodings over
-$\mathbb{R}^n$ and Other Posets**. The project began as an implementation of
-Ezra Miller's theory of modules over posets. Finite encodings remain the
+$\mathbb{R}^n$ and Other Posets**. It implements constructions from
+Ezra Miller's theory of modules over posets. Finite encodings are the
 central objects connecting its constructions, algebra, and summaries.
 
 The name also recalls **tameness**, a finiteness condition on how a module
@@ -405,6 +398,13 @@ is an additional requirement on the labels. The
 the connections to presentations and resolutions.
 The theorem's generality does not imply an implemented encoder for every
 abstract input.
+
+For the square, the construction already supplies the required finiteness.
+Filtrations of a fixed finite complex also supply it automatically. The
+follow-on explanation [why finite computations stay tame](practical_tameness.md)
+shows why, and how encoding the relevant maps lets kernels, images, and
+homology remain finite. You can read it directly from this chapter or after
+the full tameness development.
 
 ## From an input to the encoded object
 
@@ -432,32 +432,16 @@ distinction. A request for an intermediate `stage`, or a direct
 [ordinary-persistence calculation](ordinary_persistence.md), should not be
 mistaken for a completed `EncodingResult`.
 
-## From this encoding to the next question
+## Recover the square in a computation
 
-In this example we specified the spaces and maps first, then built a finite
-model by hand. A practical next question is how to describe a module so that
-an encoder can construct such a model. For the square, the region defined
-by the lower bounds $x\geq0,y\geq0$ and the region defined by the upper
-bounds $x\leq2,y\leq2$, linked by the coefficient $1$, provide exactly
-that description. Continue with
-[**indicator presentations**](indicator_presentations.md): what these
-region-supported pieces mean, how the image of their map produces the
-square module, and how two overlapping summands produce larger spaces
-with inclusion and projection maps.
+We have built two finite models by hand and identified the data a package
+result must retain. Continue with [inspect spaces and maps](tutorials/inspect_encoding.ipynb)
+to follow an original parameter into the returned finite poset, recover its
+space, and inspect the map for a comparable pair. The square gives known
+answers against which to interpret each query and figure.
 
-For existing guides that continue in other directions:
-
-- [Data and filtrations](ingestion_options.md) explains fields, axes, stages,
-  and construction choices; [multicover](multicover.md) develops radius and
-  coverage count as parameters.
-- [Inspection and explicit computation](lazy_inspection.md) explains how to
-  examine a result before requesting heavier objects.
-- [Categories and comparison](math_categories.md) explains where algebraic
-  computations take place; [numerical algebra](numerical_algebra.md) covers
-  floating-point coefficients.
-- [Exact matching](exact_matching.md) explains comparisons by slices in a
-  stated finite window.
-- [Optional integrations](optional_integrations.md) and the
-  [first-figure walkthrough](../README.md#make-your-first-figure) explain
-  available plotting and export routes. The linked interactive views
-  described on this page remain planned.
+To understand the input construction first, read
+[indicator presentations](indicator_presentations.md). It explains how the
+square's lower and upper regions, linked by the coefficient $1$, specify the
+module, then combines two overlapping squares to produce inclusion and
+projection maps.

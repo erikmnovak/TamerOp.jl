@@ -34,7 +34,8 @@ Write a proposed claim such as:
 > represented by suite S, once code is compiled.
 
 The named suite defines the evidence. A short headline can be followed by its
-balanced speedup, fraction of wins, tested versions, and a link to full results.
+balanced speedup, representative runtimes, tested versions, and a link to full
+results. Counts of faster and similar cases provide secondary context.
 It need not enumerate every exception. A whole workflow family with a consistent
 loss belongs in the accompanying explanation, not only in a supplementary CSV.
 “Better” without a criterion is less informative than “generally faster.”
@@ -173,9 +174,13 @@ Report unweighted counts too.
 
 The report needs:
 
-- Weighted win, near-tie, loss and unresolved shares, and correct completion rates.
+- A practical interpretation led by TamerOp's demonstrated strengths, following
+  the [presentation guidance](benchmarking.md#practical-significance-and-presentation).
 - A geometric mean of ratios, with its exact eligible-case denominator.
-- Results by workflow and field, including absolute times and the largest losses.
+- Results by workflow, field and size, including absolute times, meaningful
+  savings, similar performance and the largest losses.
+- Weighted win, near-tie, loss and unresolved shares, and correct completion
+  rates, as supporting detail rather than a substitute for the effect sizes.
 - A performance profile or equivalent distribution of ratios, plus the bounded
   scaling curves. A profile shows the fraction of cases a tool solves within a
   given factor of the faster tool; failures remain unsolved.
@@ -309,15 +314,17 @@ study still needs its bounded charter; these ranks do not set case counts,
 machine-hour budgets or deadlines. The C01–C21 identifiers stay fixed when the
 effort order changes.
 
-**Status:** C01 is in progress. C02–C21 are planned bounded comparisons under
-this guide. “Planned” does not erase earlier exploratory measurements: inventory
+**Status (2026-10-04):** C01 (QPA v1) and C18 (PHAT v2) are complete at their
+fixed scopes. The [current PHAT result report](benchmarks/phat.md) covers
+48 medium/large inputs across sixteen structural variants. The other comparisons
+remain planned under this guide. “Planned” does not erase earlier exploratory measurements: inventory
 and credit compatible evidence before deciding what remains to run. The scope
 column identifies candidate common requests, not a completed certification that
 every listed operation is already comparable in both implementations.
 
 | Effort rank | ID | Library | Intended comparison scope | What must be aligned before timing |
 | ---: | --- | --- | --- | --- |
-| 1 | C18 | [PHAT](https://github.com/blazs/phat) | Supplied filtered boundary matrices to persistence pairs over F2. | Same matrix and ordering; include required output conversion and do not require unrequested module data. |
+| 1 | C18 | [PHAT](https://bitbucket.org/phat-code/phat/) | Supplied filtered boundary matrices to complete ordinary barcodes over F₂. | Same matrix and ordering; match finite and essential intervals, tied grades, and all supplied homology degrees; charge native and output conversion. |
 | 2 | C14 | [Ripser](https://ripser.github.io/ripser/) | Vietoris–Rips persistence from metric data to ordinary barcodes. | Same metric, threshold, field and homology degrees; a barcode-only request does not require a full encoding. |
 | 3 | C16 | [PersistenceDiagrams.jl](https://mtsch.github.io/PersistenceDiagrams.jl/stable/) | Diagram distances/matchings, landscapes, images, Betti curves and plotting. | Same diagrams, endpoint/essential-bar conventions, feature parameters and sampling grid. |
 | 4 | C04 | [FlangePresentations.jl](https://gitlab.com/flenzen/flangepresentations.jl) | Construct flat-injective presentations of finite-dimensional persistence modules from free resolutions. | Match supported module classes and starting information; verify represented spaces and maps, and charge any required resolution construction. |
@@ -651,6 +658,130 @@ checks are archived locally. A portable public reproduction bundle remains a
 separate release task. M4 and M5 are complete; QPA v1 is closed without changing
 its tasks, size bounds, weights or competitor implementation.
 
+### PHAT implementation and development pilot, 2026-10-03
+
+The next comparison asks for the complete ordinary barcode of a supplied
+filtered chain complex over F₂. This exercises TamerOp's direct
+[ordinary-persistence route](ordinary_persistence.md): it does not require
+constructing a general finite encoding to answer a one-parameter question.
+
+The fixed suite contains 48 cases across graphs, simplicial complexes, cubical
+complexes and algebraically constructed chain complexes, with three sizes and
+four variants per family. Ten cases are reserved for evaluation after tuning.
+Eight additional small controls check known answers, including essential
+classes, higher homology, equal-grade events and empty input.
+
+The adapters use unmodified PHAT v1.7's default twist reduction and TamerOp's
+public barcode API. An independent checker derives barcodes from the ranks of
+homology maps and verifies every input differential. Native construction, the
+complete query, and construction plus query are measured separately. Each
+request starts from verified fresh mathematical state; Julia measurements with
+compilation are excluded from the computation summary. All 56 inputs matched
+the independent oracle in TamerOp and in PHAT's twist and standard reductions. The 12-case development
+pilot completed two process passes per tool with 432 accepted timing samples.
+PHAT was faster on every pilot case for construction plus the complete query
+under the declared pilot conditions. Development profiling has since identified
+grade-conversion dispatch, column-reduction allocation, and native sparse
+conversion as optimization targets. Those three changes are now implemented and
+verified. On 16 existing development cases, construction plus the complete query
+improves by 1.56–2.20× under the original collection policy, allocating 37–95%
+fewer Julia bytes. Batches of fresh computations with normal allocator reuse
+improve by 1.65–3.14×; they do not reuse previous barcodes. All 56 barcode checks
+and 112 sublevel/superlevel representative comparisons agree with the baseline.
+The constructor and ingestion checks passed alongside the ordinary-persistence
+suite; a final run on the measured package image passed 7,793 ordinary-persistence
+and typed-constructor assertions.
+
+Some query-only cases have small absolute regressions, retained in the evidence.
+Unchanged PHAT had the lower combined median in that refreshed 16-case
+single-request comparison. Its collection policy and the subsequent study's
+policy are recorded separately.
+
+A second development study implemented clearing, a reusable binary-column
+workspace, filtration-position indexing, faster exact chain validation, and a
+graph route based on component merging and cycle births. Representative-producing
+requests retain their selected cycles and filling chains. The final ordinary
+owner suite passed 13,076 assertions; all 56 independent-oracle barcodes and
+112 retained-representative fingerprints matched the previous implementation.
+
+This follow-up measured the same 16 development inputs and a fixed supplement
+of twelve larger inputs, with two process passes and five accepted samples per
+phase. Full collection occurs before phase warmup; natural collections within
+requests are charged, with fresh mathematical state for every computation.
+Construction plus query improved on all 28 cases: geometric mean gains are
+2.17× on the original inputs and 6.60× on the larger inputs. The largest
+simplicial computation fell from 38.48 s to 6.62 s. These are changes relative
+to the already improved implementation, not the original development pilot.
+
+Against unchanged PHAT under this protocol, larger graph cases favor TamerOp
+by 3.22–6.09×. Larger simplicial cases are near parity to modestly faster
+(1.05–1.24× by median); PHAT remains faster on the larger cubical and algebraic
+cases and on 15 of the 16 original small cases. The larger simplicial/cubical
+inputs have checked chain identities, cross-tool barcodes and known terminal
+Betti numbers, but lack a full independent barcode oracle. These are development
+observations, not a general performance claim. Julia's peak process RSS did not
+improve; input and answer retained sizes are unchanged.
+
+A focused follow-up on 2026-10-04 confirmed column-addition and integer-ordering
+costs. Whole-word addition for sufficiently dense pivot columns, local pivot
+search, and stable integer sorting improved complete requests on 27 of the 28
+existing development cases. Geometric mean gains against a fresh baseline are
+1.20× on the original cases and 1.41× on the larger cases; the largest simplicial
+case fell from 7.29 s to 4.53 s. The one small regression adds 1.9 microseconds.
+The same adapter is used before and after: construction experiments and a SIMD
+validation hint were not adopted because gains were inconsistent. All 13,696
+focused assertions, 56 original oracle barcodes, and 112 retained-representative
+comparisons passed. PHAT was not retimed in this follow-up, so it supplies no
+new contemporaneous competitor ratio.
+
+A subsequent bottleneck review retained this measured candidate. Two residual
+proposals—precomputing every saved-column word mask despite storage growth, and
+removing redundant indexing checks inside the validated reduction loop—were
+tested separately and together. They established no repeatable substantial gain
+on the reviewed development cases, so neither was installed. All 56 original
+oracle barcodes passed in each of four variants, and 192 accepted diagnostic
+samples had zero compilation/recompilation. Other Julia activity arose during
+these probes; their shared-host timings do not establish precise effect sizes
+or a bound on undiscovered improvements. The large simplicial reduction remains
+a major computational cost, not a proven unavoidable one.
+
+A further cubical-focused study adopted bulk extraction of completed binary
+columns and pooled storage for saved pivot columns. Two alternating before/after
+processes covered all 28 existing development fixtures, with five accepted
+samples for construction, query and complete work: 1,680 accepted measurements,
+zero reported compilation/recompilation, verified fresh mathematical state and
+matching output digests. Complete-request medians improved on 24/28 cases
+(13/16 original and 11/12 larger), including all 21 cases using the changed
+reducer. All four observed losses belong to the unchanged graph route and
+remain in the record. Geometric mean ratios were 1.065× and 1.117× for the
+original and larger groups.
+
+On the largest changed cases, complete requests went from 51.3 to 47.2 ms
+(cubical, 262,144 cells), 4.16 to 3.64 s (simplicial, 396,606 cells), and 2.36 to
+1.98 ms (algebraic, 1,548 cells). These are shared-host development results;
+variation in the unchanged graph control cautions against treating the modest
+cubical ratio as an exact isolated-machine gain. Pooling raises temporary
+allocation on those cases: about 55.5 to 62.0 MB for the largest cubical request,
+for example. Retained input and answer sizes are unchanged. The selected source
+passed 14,307 owner assertions, the 56 original oracle cases and 112 exact
+retained-representative comparisons. PHAT was not retimed in this study.
+
+Same-grade filtered compression was also implemented and verified, including
+independent homology-map rank checks. Explicit quotient construction creates
+substantial boundary fill on the largest simplicial case. Projecting boundaries
+on demand avoids that large intermediate, but still loses to extraction plus
+pooling on the large controls. The largest cubical complex shrinks from 262,144
+to 17,850 cells, yet computing the projection costs more than the subsequent
+reduction saves. None of the three tested compression variants was installed;
+no inactive alternate path remains in the library.
+
+The reviewed optimization work is complete at this scope. Final harness qualification
+must reconcile the original worker's per-request collection with the later
+before-warmup collection policy, record the actual routes, and fix the final
+source and run configuration before a candidate freeze. The ten reserved cases
+still have no recorded performance results, and confirmation remains outstanding.
+No final 48-case PHAT performance claim is established yet.
+
 ### Turn each planned comparison into a finished study
 
 For every entry, first identify the mathematical object both tools can actually
@@ -701,3 +832,125 @@ Diagnostic run limits and costs, separate from the confirmation budget:
 Completed-evidence credit and remaining implementation milestones:
 Closure checklist, reproduction package and next-version triggers:
 ```
+
+The next bounded cubical experiment retained two further changes: component
+merging for H0 inside higher-dimensional complexes, and a reversed graph
+calculation for a top boundary whose rows have at most two odd incidences.
+Eligibility comes from the actual boundary matrix, including periodic
+identifications; essential top-dimensional classes and arbitrary-chain fallbacks
+are preserved. Direct packed-column storage was tested but not selected: it
+helped the small dense algebraic control while hurting the target cubical case.
+A subsequent cleanup of the shared graph helper also lacked a repeatable gain.
+
+The selected implementation passed 18,022 ordinary-persistence assertions,
+56 original independent barcode oracles, and 112 unchanged representative
+fingerprints. Its two-pass comparison contains 1,680 accepted samples on the
+same 28 development cases. All seven cubical complete medians improve: about
+1.25–1.58× on the original controls and 1.12–1.28× on the larger supplement.
+The largest cube changes from 46.49 to 36.42 ms, with allocation falling from
+61.99 to 56.32 MB. The largest simplicial median is essentially unchanged;
+the largest graph is 7.4% slower in the main comparison, with mixed results in
+a further diagnostic. Across all 28 cases, 16 improve and 12 do not. These are
+shared-machine development results, not a uniform performance improvement or a
+new PHAT comparison. The applied source matches the tested snapshot. No
+reserved timings, PHAT rerun, final-suite freeze, or confirmation campaign was
+performed by this follow-up; the final PHAT steps above remain outstanding.
+
+A subsequent workspace follow-up tested deferred allocation, full degree-specific
+indexing, and a simpler version that compacts only the active boundary's rows.
+None was adopted. Deferred allocation saves about 10% of 2D allocated bytes but
+does not establish a consistent larger-case speedup. Full degree indexing slows
+the largest cube in both passes and adds about 1.5 MB of allocation. Row-only
+indexing lowers its allocation by about 1.1 MB, with mixed elapsed-time results.
+It improves the intermediate 13,824- and 64,000-cell cube medians by about 1.06×
+and 1.20× and helps the algebraic control; these positive results remain recorded
+alongside the largest-case losses and variation. They do not justify a new
+default or a size threshold selected from favorable cases.
+
+The follow-up contains 1,980 accepted compiled-code, fresh-state samples over
+eleven existing development cases, with two independent passes per experiment
+and exact-source controls. Every variant matches the 56 original independent
+barcode oracles. Two current profiles place the largest cube's middle-degree
+matrix reduction at about 15.4 ms, versus about 0.011 ms for empty workspace
+allocation. These are diagnostic stage times, not whole-request speedups.
+Exact-source controls show substantial variation, so the results retain the
+shared-host qualification. Production source and owner tests are unchanged;
+previous correctness evidence remains credited without a redundant owner rerun.
+These workspace hypotheses are closed without claiming optimality. The remaining
+PHAT harness qualification and confirmation steps are unchanged.
+
+
+### PHAT candidate freeze, 2026-10-04
+
+The implementation and measurement protocol are now frozen for the final
+comparison. This fixes the code and conditions under which each tool will
+recover an ordinary barcode. It does not establish a final speed advantage.
+
+The isolated candidate matches the source with 18,022 passing owner assertions
+and 112 unchanged representative fingerprints. Final harness qualification
+checks all 56 original inputs and all twelve larger inputs in TamerOp and both
+PHAT reduction methods. Eleven harness tests and 22 native reset assertions
+pass. A two-pass development-only smoke supplies 432 accepted measurements with
+zero compilation or recompilation; none of the ten reserved cases was timed.
+The full package suite was not rerun for this source-identical candidate.
+
+The final harness records actual public backend provenance, verifies fresh
+mathematical state with a linear traversal, collects before phase warmup and
+charges natural collections during requests. Separate freeze records lock the
+source, fixtures, unchanged PHAT v1.7 binary, Julia runtime, harness and complete
+run configuration. Both pass launch validation without starting measurements.
+The candidate is an archived source snapshot, not a new Git tag or release.
+
+Confirmation will use five paired process passes for the original 48 scored
+cases and, separately, the existing twelve larger inputs. Native construction,
+complete query, and construction plus query remain distinct measurements.
+Results will retain losses and uncertainty; the larger supplement will not
+alter the primary score. The final campaigns and public PHAT result report
+remain to be completed. Host availability must be checked when timing starts.
+
+The local archive is `audit/2026-10-04/phat_freeze/`, with acceptance evidence and
+exact launch commands. It preserves the earlier qualification attempt and the
+final corrected harness separately. The larger geometric cases retain their
+stated limitation: cross-tool barcode agreement and terminal Betti checks,
+rather than a complete independent barcode oracle.
+
+
+### PHAT v2 final confirmation and closure, 2026-10-04
+
+C18 / PHAT v2 is **closed** for comparison candidate `phat-v2-2026-10-04`, using
+the accepted implementation `phat-2026-10-04`. The expanded suite has 48 requests:
+four equally weighted families, four structural variants each and three sizes.
+All proposed endpoints passed the pilot and were retained. No implementation
+tuning, favorable case selection or weight changes followed that pilot.
+
+TamerOp **1.33× as fast in the balanced aggregate** for construction plus complete barcode; all 48 medium/large requests completed correctly in both tools.
+The PHAT/TamerOp aggregate is **1.329×**, with a 95% paired-process interval
+of **1.290–1.370**.
+The [current report](benchmarks/phat.md) presents the actual times, family and
+variant differences, scaling curves, uncertainty, machine and resource evidence.
+
+Five paired process passes produced 4,320 accepted samples and
+2,880 warmups. All resets and complete barcode comparisons passed;
+accepted compilation/recompilation counters were zero. There were
+0 rejected compilation-contaminated attempts. No worker failed or
+hit a resource limit. All 56 qualification inputs agreed in TamerOp and PHAT's
+twist and standard reductions. The 15 harness checks passed.
+
+The feasibility pilot took 6.1 minutes and final confirmation
+19.1 minutes, within the roughly two-hour timing allowance.
+Generation, qualification and publication are separate costs. New endpoints were
+chosen to cover larger inputs, not to consume the whole time budget.
+
+Independent full-barcode evidence covers graph and algebraic inputs and the
+small controls. Larger simplicial/cubical inputs have exact chain/filtration
+checks, known terminal topology and complete cross-tool agreement, a narrower
+form of evidence than a separate full barcode oracle.
+
+As requested, v2 **replaces the earlier public PHAT results**. Previous raw
+evidence is retained only in the local audit archive; the public page and data
+present this new size distribution without pooling old samples. A changed
+aggregate across different workloads is not itself an implementation speedup.
+The new evidence is in `audit/2026-10-04/phat_v2/`, with the older accepted
+source remaining in its sealed `phat_freeze/` archive. A portable executable
+reproduction bundle remains separate publication work. Earlier development
+and freeze notes above retain their original dates and status.

@@ -4006,3 +4006,94 @@ end
     @test FL._conversion_counters().qq_to_nemo==0
     FL._clear_fullcolumn_cache!()
 end
+
+@testset "Dense certificates and leading minors preserve exact solutions" begin
+    saved = FL._current_linalg_thresholds()
+    enabled = FL._NEMO_ENABLED[]
+    field = CM.QQField()
+    try
+        FL._NEMO_ENABLED[] = true
+        FL._QQ_NEMO_FACTOR_MIN_COLS[] = 16
+        FL._QQ_NEMO_PRODUCT_MIN_INNER[] = 16
+        FL._QQ_NEMO_PRODUCT_MIN_WORK[] = 1024
+        for n in (4, 15, 16)
+            eye = Matrix{QQ}(I,n,n)
+            u = QQ[i for i in 1:n]; v = QQ[1//(i+2) for i in 1:n]
+            U = eye + u*transpose(v)
+            inverseU = eye - u*transpose(v)/(1+dot(v,u))
+            graph = QQ[(i+2j)//(i+j+3) for i in 1:n,j in 1:n]
+            full = vcat(U,graph*U)
+            # All rows of the leading block are dense, but the last repeats
+            # the first. Full column rank is recovered by the following row.
+            singular_leading = vcat(U[1:n-1,:],U[1:1,:],U[n:n,:],graph*U)
+            @test full[1:n,:]*inverseU == eye
+            for (B,rows) in ((full,collect(1:n)),
+                             (singular_leading,vcat(collect(1:n-1),n+1)))
+                @test FL._use_nemo_QQ_factor(B) == (n==16)
+                X = QQ[(i-2j)//(i+j+1) for i in 1:n,j in 1:32]
+                Y = B*X
+                before = deepcopy((B,X,Y))
+                for backend in (:auto,:julia_exact,:nemo)
+                    fac = FL._factor_fullcolumnQQ(B;backend)
+                    @test fac.rows == rows
+                    @test fac.invB == inverseU
+                    @test FL._solve_fullcolumn_factorQQ(B,fac,Y;backend) == X
+                    @test FL._solve_fullcolumn_factorQQ(B,fac,Y[:,3];backend) == X[:,3]
+                    for row in (1,size(B,1)), col in (1,size(Y,2))
+                        bad = copy(Y); bad[row,col] += 1
+                        @test !FL._verify_solveQQ(B,X,bad;backend)
+                        @test_throws ErrorException FL._solve_fullcolumn_factorQQ(B,fac,bad;backend)
+                    end
+                    # Public solver, both stored-factor and uncached routes.
+                    nativefac = FL.factor_fullcolumn(field,B;backend,cache=false)
+                    @test FL.solve_fullcolumn(field,B,Y;factor=nativefac,backend) == X
+                    @test FL.solve_fullcolumn(field,B,Y;cache=false,backend) == X
+                    @test !FL._verify_solveQQ(B,X,Y[:,1:1];backend)
+                    @test !FL._verify_solveQQ(B,X[:,1],Y[:,1:1];backend)
+                    @test !FL._verify_solveQQ(B,X[:,1:1],Y[:,1];backend)
+                end
+                for input in (B,view(B,collect(1:size(B,1)),:),transpose(copy(transpose(B))),
+                              sparse(B),transpose(sparse(transpose(B))))
+                    @test FL._verify_solveQQ(input,X,Y)
+                    @test !FL._verify_solveQQ(input,X,Y[1:end-1,:])
+                    @test !FL._verify_solveQQ(input,X[1:end-1,:],Y)
+                    @test FL._verify_solveQQ(input,zeros(QQ,n,0),zeros(QQ,size(B,1),0))
+                    FL._reset_conversion_counters!()
+                    @test FL._verify_solveQQ(input,X,Y;backend=:julia_exact)
+                    @test FL._conversion_counters().qq_to_nemo == 0
+                end
+                FL._reset_conversion_counters!()
+                @test FL._verify_solveQQ(B,X,Y)
+                @test (FL._conversion_counters().qq_to_nemo>0) == (n==16)
+                FL._NEMO_ENABLED[] = false
+                FL._reset_conversion_counters!()
+                @test FL._verify_solveQQ(B,X,Y)
+                @test FL._conversion_counters().qq_to_nemo == 0
+                FL._NEMO_ENABLED[] = true
+                @test all(fetch.([Threads.@spawn FL._verify_solveQQ(B,X,Y) for _ in 1:8]))
+                factors = fetch.([Threads.@spawn FL._factor_fullcolumn_nemoQQ(B) for _ in 1:8])
+                @test all(f->f.rows==rows && FL._from_fmpq_mat(f.invB)==inverseU,factors)
+                @test (B,X,Y) == before
+            end
+            for B in (ones(QQ,2n,n),U[1:n-1,:])
+                @test_throws ErrorException FL._factor_fullcolumn_nemoQQ(B)
+            end
+            X = ones(QQ,n,32)
+            for B in (eye,Diagonal(ones(QQ,n)),sparse(eye))
+                FL._reset_conversion_counters!()
+                @test FL._verify_solveQQ(B,X,X)
+                @test FL._conversion_counters().qq_to_nemo == 0
+            end
+        end
+        @test FL._verify_solveQQ(zeros(QQ,3,0),zeros(QQ,0,4),zeros(QQ,3,4))
+        @test !FL._verify_solveQQ(zeros(QQ,3,0),zeros(QQ,0,4),ones(QQ,3,4))
+        @test FL._verify_solveQQ(zeros(QQ,0,16),ones(QQ,16,4),zeros(QQ,0,4))
+        for B in (ones(QQ,2,1),sparse(ones(QQ,2,1))), X in (ones(QQ,1),ones(QQ,1,4))
+            @test_throws ArgumentError FL._verify_solveQQ(B,X,B*X;backend=:invalid)
+        end
+    finally
+        FL._apply_linalg_thresholds!(saved)
+        FL._NEMO_ENABLED[] = enabled
+        FL._clear_fullcolumn_cache!()
+    end
+end

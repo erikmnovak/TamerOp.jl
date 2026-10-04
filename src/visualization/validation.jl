@@ -238,7 +238,8 @@ _visual_request_keywords(obj::DataTypes.GraphData, kind::Symbol) =
     kind === :graph_3d ? (:dims,) : (:dims, :labels)
 _visual_request_keywords(obj::DataTypes.EmbeddedPlanarGraph2D, kind::Symbol) = (:labels,)
 _visual_request_keywords(obj::DataTypes.ImageNd, kind::Symbol) =
-    kind === :channels ? (:view_dims, :colormap) : (:view_dims, :slice_indices, :colormap)
+    kind === :channels ? (:view_dims, :colormap, :colorrange, :colorbar_label, :title) :
+        (:view_dims, :slice_indices, :colormap, :colorrange, :colorbar_label, :title)
 
 function _visual_request_cost(obj, kind::Symbol)
     if kind === :presentation_inspector
@@ -368,6 +369,10 @@ function _append_visual_request_issues!(issues::Vector{String}, obj::DataTypes.I
     _image_view_selection(obj, kind; view_dims=get(params, :view_dims, nothing),
                            slice_indices=get(params, :slice_indices, nothing))
     get(params, :colormap, :magma) isa Symbol || push!(issues, "colormap must be a Symbol naming a Makie colormap.")
+    _image_colorrange(get(params, :colorrange, nothing))
+    for key in (:title, :colorbar_label)
+        get(params, key, "") isa AbstractString || push!(issues, "$key must be text.")
+    end
     return issues
 end
 

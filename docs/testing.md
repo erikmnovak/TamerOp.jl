@@ -286,6 +286,36 @@ and source revision alongside the result.
 
 ## Public onboarding checks and local tutorials
 
+The tracked [ring notebook](tutorials/ring.ipynb) has a separate
+[documentation publication workflow](README.md). It executes once through
+IJulia, verifies its mathematical assertions and required static figures, then
+generates Documenter HTML and an executed download. Conversion checks cover
+code/math separation, output order, portable links, optional-section folding
+and missing/error outputs;
+site checks inspect local links, anchors, figures and source/download hashes.
+Reading-map checks cover converging and separate routes, cycle detection,
+link resolution, escaping, and invalid layouts. Review its native card links,
+arrow placement, text outline, keyboard focus, and narrow-screen scrolling
+in the browser; the map needs no live Julia session or JavaScript renderer.
+This workflow is required in documentation CI and does not treat missing
+plotting dependencies as a passing skip.
+
+The focused `A44 image comparison` testset checks fixed colour ranges for empty
+and filled masks, complete pixel borders, labels and native CairoMakie values.
+Run it alongside the image-axis regression in the documentation environment:
+
+```sh
+julia --startup-file=no --threads=1 --project=docs test/runtests.jl --file=test_visualization.jl --prefix='A44 image comparison' --prefix='A81 ingestion axes' --fields=F2
+```
+
+The `A45 informative defaults` testset checks the short public barcode call
+against the ring's exact endpoints, visible clipping/censoring/truncation
+notices, compact native layout, image indices, and per-call styling without
+global side effects. Run `--prefix=A45` in the same owner/environment for these
+checks and the small-interval tick checks. Review the optional website section
+both collapsed and expanded, including keyboard access, and execute the main
+notebook path with optional cells omitted to check its independence.
+
 The published package does not contain the local `examples/`, `audit/`, or
 `benchmark/` directories. Its required tests are self-contained.
 `test_examples.jl` always checks the public first-computation API against the
@@ -353,10 +383,16 @@ For an extension environment, install the desired dependencies there, and use
 `--require-extension=TamerOpCairoMakieExt` (or another declared extension) to
 make its absence a failure. Run the same checks in a second fresh process after
 precompilation: runtime registrations must survive native cached loading.
-The ordinary persistence owner needs no optional packages. It checks all
+The ordinary persistence owner needs no optional packages. Its binary-column tests
+check complete supports, workspace reuse, and mixed sparse/packed columns after
+shared storage grows, using independent set arithmetic. It checks all
 persistence-map ranks against a separately constructed cubical chain oracle,
 including periodic axes of length one and two, upper stars, essential classes,
-and exact rational grades that have the same Float64 approximation.
+and exact rational grades that have the same Float64 approximation. Additional random chain complexes check
+persistent-map ranks for the component and dual-boundary shortcuts, including
+one-ended algebraic boundaries that need general reduction, rows with more than
+two cofacets, and exact large grades. Closed periodic examples retain their
+essential top-dimensional classes.
 
 The related cache-ownership regression checks left and right Kan structure
 maps and identity morphisms on equal, separately stored posets. Run its five

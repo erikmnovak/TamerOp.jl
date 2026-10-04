@@ -7,7 +7,7 @@ the boundary squares form a ring at zero, and the center fills its hole at five.
 
 `persistence_diagram` computes the persistent homology of a finite
 one-parameter chain complex: cells with boundary maps and a single birth
-parameter for each cell. Its current reduction backend works over
+parameter for each cell. Its reduction backend works over
 `TamerOp.CoreModules.F2()` only. Integer boundary coefficients are read modulo
 two; other coefficient fields and symbolic field aliases are rejected.
 
@@ -127,11 +127,57 @@ grade-precision contracts; exact reduction does not certify their geometry.
 `provenance(D)` records the field, homological convention, filtration direction,
 interval convention, grade type and reduction backend. Cubical routes also
 record array shape, periodicity and input convention. A generic ingestion build
-does not currently carry execution provenance, so its effective construction
+does not carry execution provenance, so its effective construction
 and any substitution are reported as `:not_recorded`, rather than inferred from
 the requested filtration name. A hand-built `PersistenceDiagram` likewise
 reports its computation history as `:not_recorded` unless metadata was supplied;
 constructing stored intervals does not claim that the reducer ran.
+
+## Computing a barcode without retaining chains
+
+A barcode records births and deaths. Computing it does not require retaining
+all the chains used to establish those events. The default request therefore
+uses a reduction organized by homological degree. Once a birth is paired with
+a death in the next degree, its column is known to reduce to zero and can be
+skipped. This is called **clearing**. A reusable binary workspace handles column
+additions. Stored columns use individual entries when sparse and groups of
+binary coefficients when several entries share a machine word. Adding a group
+at once performs the same arithmetic over F₂ with less bookkeeping. These
+choices preserve the barcode; they do not approximate the grades or boundaries.
+Completed columns are extracted in one traversal, and saved columns share
+storage within the current computation. This avoids repeated bookkeeping and
+individual column-array objects; it does not cache a barcode for a later call.
+
+Connected-component persistence depends only on vertices and edges, even when
+the complex also contains squares, cubes, or other higher-dimensional cells.
+When each edge has zero or two boundary coefficients that are nonzero modulo
+two, the computation tracks components directly: joining two components kills
+the younger one. In a graph, closing a cycle creates an essential degree-one
+class. With higher-dimensional cells present, the pairings already found in
+higher degrees determine which of those cycles eventually die.
+
+The highest boundary can sometimes use the same idea in reverse. If each of
+its rows has at most two nonzero coefficients modulo two, regard the
+highest-dimensional cells as vertices and their shared faces as edges, then
+process this graph in reverse filtration order. A bookkeeping vertex handles
+faces with only one incident cell; it contributes no reported class. Real
+unpaired top-dimensional classes remain in the barcode, including those on
+periodic grids. Eligibility is checked from the supplied boundary matrix;
+arbitrary algebraic boundaries retain general reduction when the condition
+fails. These shortcuts preserve all finite and essential intervals.
+
+The usual input checks remain enabled. In particular, the double boundary must
+vanish exactly modulo two. Dense, sufficiently reused boundary columns can use
+packed binary products for this check; sparse inputs use direct parity checks.
+Neither route performs floating-point arithmetic on the boundary coefficients.
+
+Requesting `representatives=true` retains the column reduction that constructs
+cycles and filling chains. Its selected representatives are preserved. You can
+inspect the executed route with `provenance(D).backend`: barcode-only requests
+report `:f2_clearing` for the degree-organized route, which may use the component
+shortcuts above, or `:f2_graph_union_find` for a graph-only complex. Requests
+retaining chains report
+`:f2_column_reduction`. The public call and interval conventions are the same.
 
 ## Which cells represent an interval?
 
@@ -228,5 +274,5 @@ inspecting a diagram does not require a plotting package.
 This is a direct route from a one-parameter filtered complex to its barcode;
 it does not require constructing an `EncodingResult`. With several parameters,
 we need to retain vector spaces and their maps to support a wider range of
-questions. The [finite-encoding introduction](finite_encodings.md) explains
-that next step and how a finite model relates to the original parameters.
+questions. Continue with [why two parameters change the problem](two_parameters.md)
+to see why a barcode no longer gives the same kind of complete description.

@@ -492,7 +492,7 @@ end
     @test TamerOp.essential_births(diagram; dim=0) == [0]
     @test TamerOp.describe(diagram) == OP.persistence_diagram_summary(diagram)
     @test TamerOp.provenance(diagram) == RES.provenance(diagram)
-    @test TamerOp.provenance(diagram).backend === :f2_column_reduction
+    @test TamerOp.provenance(diagram).backend === :f2_clearing
     @test TamerOp.provenance(diagram).approximation === :none_in_reduction
     @test TamerOp.provenance(diagram).discretization === :none
     @test TamerOp.result_summary(diagram) == OP.persistence_diagram_summary(diagram)
@@ -611,4 +611,353 @@ end
     @test OP.persistence_representative(rips; dim=0, kind=:essential).available
     @test OP.check_persistence_diagram(rips).valid
     @test TOA.persistence_representative === OP.persistence_representative
+end
+
+@testset "Ordinary persistence scratch columns preserve symmetric differences" begin
+    rng = MersenneTwister(0xf20103)
+    scratch = Int[]
+    for n in (0, 1, 8, 65, 200), _ in 1:40
+        rank = randperm(rng, n)
+        a = sort!(findall(rand(rng, Bool, n)); by=i -> rank[i])
+        b = sort!(findall(rand(rng, Bool, n)); by=i -> rank[i])
+        saved_a, saved_b = copy(a), copy(b)
+        expected = sort!(collect(symdiff(Set(a), Set(b))); by=i -> rank[i])
+        @test OP._xor_columns!(scratch, a, b, rank) == expected
+        @test a == saved_a && b == saved_b
+        @test isempty(OP._xor_columns!(scratch, a, a, rank))
+        @test OP._xor_columns!(scratch, Int[], b, rank) == b
+    end
+end
+
+@testset "Ordinary clearing agrees with retained reductions" begin
+    rng = MersenneTwister(0xc1ea)
+    for shape in ((2, 3), (3, 4), (2, 2, 2)), order in (:sublevel, :superlevel), trial in 1:8
+        values = reshape(rand(rng, -2:2, prod(shape)), shape)
+        periodic = ntuple(_ -> rand(rng, Bool), length(shape))
+        plain = OP.cubical_persistence(values; periodic, order, input=:vertices)
+        retained = OP.cubical_persistence(values; periodic, order, input=:vertices, representatives=true)
+        @test plain.finite_by_dim == retained.finite_by_dim
+        @test plain.essential_by_dim == retained.essential_by_dim
+        @test plain.meta.backend === :f2_clearing
+        @test retained.meta.backend === :f2_column_reduction
+    end
+end
+
+@testset "Ordinary active parity columns" begin
+    rng = MersenneTwister(0xb17)
+    for n in (0, 1, 63, 64, 65, 4096, 4097, 270000)
+        column = OP._ParityColumn(n)
+        expected = Set{Int}()
+        for _ in 1:400
+            n == 0 && break
+            i = rand(rng, 1:n)
+            OP._toggle_entry!(column, i)
+            i in expected ? delete!(expected, i) : push!(expected, i)
+            @test OP._column_pivot(column) == maximum(expected; init=0)
+        end
+        while !isempty(expected)
+            i = maximum(expected)
+            @test OP._column_pivot(column) == i
+            OP._toggle_entry!(column, i)
+            delete!(expected, i)
+        end
+        @test OP._column_pivot(column) == 0
+        @test all(words -> all(iszero, words), column.levels)
+    end
+end
+
+@testset "Ordinary exact sparse and packed chain validation" begin
+    rng = MersenneTwister(0xd020)
+    for rows in (0, 1, 63, 64, 65, 129), k in (1, 12, 48)
+        C = rand(rng, 0:1, rows, k)
+        rows > 0 && (C[1, 1] = 1)
+        X = rand(rng, 0:1, k, 20)
+        A = sparse(hcat(C, C)); B = sparse(vcat(X, X))
+        @test OP._double_boundary_zero_sparse(A, B)
+        @test OP._double_boundary_zero_packed(A, B)
+        @test all(iseven, Matrix(A) * Matrix(B))
+        if rows > 0
+            B[1, 1] = 1 - B[1, 1]
+            @test !OP._double_boundary_zero_sparse(A, B)
+            @test !OP._double_boundary_zero_packed(A, B)
+            @test any(isodd, Matrix(A) * Matrix(B))
+        end
+        # Signed odd entries and extreme even integers must use parity only.
+        A.nzval .= [isodd(i) ? typemax(Int) : -3 for i in eachindex(A.nzval)]
+        B.nzval .= [iszero(x) ? typemin(Int) : -5 for x in B.nzval]
+        expected = all(iseven, Int.(isodd.(Matrix(A))) * Int.(isodd.(Matrix(B))))
+        @test OP._double_boundary_zero_sparse(A, B) == expected
+        @test OP._double_boundary_zero_packed(A, B) == expected
+    end
+    C = ones(Int, 129, 48); X = ones(Int, 48, 20)
+    G = DT.GradedComplex([collect(1:129), collect(1:96), collect(1:20)],
+        [sparse(hcat(C,C)), sparse(vcat(X,X))],
+        vcat(fill((0,),129), fill((1,),96), fill((2,),20)))
+    diagram = OP.persistence_diagram(G)
+    retained = OP.persistence_diagram(G; representatives=true)
+    @test diagram.finite_by_dim == retained.finite_by_dim
+    @test diagram.essential_by_dim == retained.essential_by_dim
+    G.boundaries[2][1,1] = 0
+    @test_throws ArgumentError OP.persistence_diagram(G)
+end
+
+@testset "Ordinary graph barcodes preserve filtration and algebraic fallback" begin
+    rng = MersenneTwister(0x9aaf)
+    for nv in (1, 2, 9, 32), order in (:sublevel, :superlevel), trial in 1:8
+        ne = 3nv
+        grades = rand(rng, -3:3, nv)
+        B = zeros(Int, nv, ne)
+        edge_grades = Int[]
+        for j in 1:ne
+            a, b = rand(rng, 1:nv, 2)
+            B[a,j] += 1; B[b,j] -= 1
+            push!(edge_grades, max(grades[a],grades[b]) + rand(rng,0:2))
+        end
+        gs = vcat(grades,edge_grades)
+        order === :superlevel && (gs = -gs)
+        G = DT.GradedComplex([collect(1:nv), collect(1:ne)], [sparse(B)], [(x,) for x in gs])
+        plain = OP.persistence_diagram(G; order)
+        retained = OP.persistence_diagram(G; order, representatives=true)
+        @test plain.meta.backend === :f2_graph_union_find
+        @test plain.finite_by_dim == retained.finite_by_dim
+        @test plain.essential_by_dim == retained.essential_by_dim
+        # Independent H0 ranks at every filtration event.
+        for level in unique(gs)
+            vertices = findall(x -> order === :sublevel ? x <= level : x >= level, gs[1:nv])
+            edges = findall(x -> order === :sublevel ? x <= level : x >= level, gs[nv+1:end])
+            r = _a21_binary_rank(B[vertices, edges])
+            @test _a21_barcode_map_rank(plain,0,level,level,order) == length(vertices)-r
+            @test _a21_barcode_map_rank(plain,1,level,level,order) == length(edges)-r
+        end
+    end
+    one_endpoint = DT.GradedComplex([[1],[1]], [sparse(reshape([3],1,1))], [(0,), (2,)])
+    diagram = OP.persistence_diagram(one_endpoint)
+    @test diagram.meta.backend === :f2_clearing
+    @test OP.finite_intervals(diagram; dim=0) == [(0,2)]
+    @test isempty(OP.essential_births(diagram; dim=0))
+    signed = DT.GradedComplex([[1,2],[1,2]], [sparse([3 typemin(Int); -5 0])], [(0,),(0,),(1,),(2,)])
+    diagram = OP.persistence_diagram(signed)
+    @test diagram.meta.backend === :f2_graph_union_find
+    @test OP.finite_intervals(diagram; dim=0) == [(0,1)]
+    @test OP.essential_births(diagram; dim=1) == [2]
+end
+
+@testset "Ordinary stored binary columns preserve exact supports" begin
+    rng = MersenneTwister(0x50484154)
+    for n in (1, 63, 64, 65, 4096, 4097, 270000)
+        for mode in (:sparse, :dense), repetition in 1:8
+            selected = if mode === :sparse
+                sort!(unique(rand(rng, 1:n, min(n, 8))); rev=true)
+            else
+                first = rand(rng, 1:n)
+                sort!(unique(vcat(collect(first:min(n, first + 160)),
+                                 collect(max(1, n - 140):n))); rev=true)
+            end
+            stored = OP._BarcodeColumns(1)
+            OP._store_barcode_column!(stored, 1, selected)
+            active = OP._ParityColumn(n)
+            expected = Set(rand(rng, 1:n, min(n, 20)))
+            for row in expected
+                OP._toggle_entry!(active, row)
+            end
+            previous = max(maximum(expected; init=0), maximum(selected; init=0))
+            OP._add_barcode_column!(active, stored, 1)
+            symdiff!(expected, selected)
+            @test OP._column_pivot(active) == maximum(expected; init=0)
+            @test OP._column_pivot(active, previous) == maximum(expected; init=0)
+            # Drain every coefficient, not just the largest one.
+            actual = Int[]
+            while (row = OP._column_pivot(active)) != 0
+                push!(actual, row)
+                OP._toggle_entry!(active, row)
+            end
+            @test actual == sort!(collect(expected); rev=true)
+            @test all(words -> all(iszero, words), active.levels)
+            # Repeated addition cancels, including all occupancy levels.
+            OP._add_barcode_column!(active, stored, 1)
+            OP._add_barcode_column!(active, stored, 1)
+            @test all(words -> all(iszero, words), active.levels)
+        end
+    end
+    stored = OP._BarcodeColumns(2)
+    OP._store_barcode_column!(stored, 1, [193, 129, 65, 1])
+    OP._store_barcode_column!(stored, 2, collect(192:-1:1))
+    @test stored.spans[1] == (1, 4)
+    @test stored.spans[2] == (1, -3)
+    @test sum(count_ones(bits) for (_, bits) in stored.words) == 192
+    # Growth of either payload must preserve every previously saved span.
+    active = OP._ParityColumn(193)
+    for slot in (1, 2, 1, 2)
+        OP._add_barcode_column!(active, stored, slot)
+    end
+    @test OP._column_pivot(active) == 0
+end
+
+@testset "Ordinary integer filtration sorting retains ties and extreme grades" begin
+    for T in (Int, UInt, Int128, BigInt)
+        low = T === BigInt ? -big(2)^200 : typemin(T)
+        high = T === BigInt ? big(2)^200 : typemax(T)
+        # Both vertices are born together; the same second vertex dies at
+        # the edge. Its cycle/filling convention must match in either order.
+        for order in (:sublevel, :superlevel)
+            birth, death = order === :sublevel ? (low, high) : (high, low)
+            g = DT.GradedComplex([[1, 2], [3]],
+                [sparse([1, 2], [1, 1], [1, 1], 2, 1)], [(birth,), (birth,), (death,)])
+            diagram = OP.persistence_diagram(g; order, representatives=true)
+            @test OP.finite_intervals(diagram; dim=0) == [(birth, death)]
+            @test OP.essential_births(diagram; dim=0) == [birth]
+            rep = OP.persistence_representative(diagram; dim=0)
+            @test rep.cycle.cell_indices == (1, 2)
+            @test rep.bounding_chain.cell_indices == (1,)
+            essential = OP.persistence_representative(diagram; dim=0, kind=:essential)
+            @test essential.cycle.cell_indices == (1,)
+            plain = OP.persistence_diagram(g; order)
+            @test plain.finite_by_dim == diagram.finite_by_dim
+            @test plain.essential_by_dim == diagram.essential_by_dim
+        end
+    end
+end
+
+@testset "Ordinary finished columns drain and reuse every hierarchy level" begin
+    rng = MersenneTwister(0x64726169)
+    for n in (0, 1, 63, 64, 65, 4096, 4097, 270000)
+        active = OP._ParityColumn(n)
+        out = [999]
+        for trial in 1:12
+            support = n == 0 ? Int[] : unique(rand(rng, 1:n, min(n, trial * 91)))
+            for row in support
+                OP._toggle_entry!(active, row)
+            end
+            @test OP._drain_column!(out, active) === out
+            @test out == sort(support; rev=true)
+            @test all(words -> all(iszero, words), active.levels)
+            @test OP._column_pivot(active) == 0
+            OP._drain_column!(out, active)
+            @test isempty(out)
+        end
+    end
+end
+
+@testset "Ordinary pooled columns survive interleaved payload growth" begin
+    rng = MersenneTwister(0x706f6f6c)
+    n = 8193
+    stored = OP._BarcodeColumns(128)
+    supports = Vector{Int}[]
+    for slot in 1:128
+        support = if isodd(slot)
+            first = rand(rng, 1:n-255)
+            collect(first:first+255)
+        else
+            unique(rand(rng, 1:n, 9))
+        end
+        push!(supports, sort!(support; rev=true))
+        OP._store_barcode_column!(stored, slot, supports[end])
+    end
+    active = OP._ParityColumn(n)
+    expected = Set{Int}()
+    for slot in shuffle(rng, 1:128)
+        OP._add_barcode_column!(active, stored, slot)
+        symdiff!(expected, supports[slot])
+        @test OP._column_pivot(active) == maximum(expected; init=0)
+    end
+    actual = Int[]
+    OP._drain_column!(actual, active)
+    @test actual == sort!(collect(expected); rev=true)
+    @test all(words -> all(iszero, words), active.levels)
+    for _ in 1:2, slot in 1:128
+        OP._add_barcode_column!(active, stored, slot)
+    end
+    @test all(words -> all(iszero, words), active.levels)
+end
+
+# Appended to the owner suite after selecting a production candidate. The rank
+# oracle above is independent binary Gaussian elimination on persistent maps.
+@testset "Ordinary mixed-dimensional component reduction" begin
+    rng = MersenneTwister(0x683066)
+    for nv in (1, 3, 7), order in (:sublevel, :superlevel), trial in 1:6
+        ne = 2nv + 2
+        B1 = zeros(Int, nv, ne)
+        vg = rand(rng, 0:2, nv)
+        eg = Int[]
+        for j in 1:ne
+            a, b = rand(rng, 1:nv, 2)
+            B1[a,j] += 3; B1[b,j] -= 5
+            push!(eg, max(vg[a], vg[b]) + rand(rng, 0:2))
+        end
+        Z = _a21_binary_cycles(B1)
+        B2 = mod.(Int.(Z) * rand(rng, 0:1, size(Z,2), 4), 2)
+        fg = [maximum(eg[findall(isodd, B2[:,j])];init=0) + rand(rng,0:2) for j in 1:4]
+        gs = [vg, eg, fg]
+        order === :superlevel && (gs = [-v for v in gs])
+        G = DT.GradedComplex([collect(1:nv),collect(1:ne),collect(1:4)],
+            [sparse(B1),sparse(B2)], [(x,) for x in vcat(gs...)])
+        diag = OP.persistence_diagram(G;order)
+        retained = OP.persistence_diagram(G;order,representatives=true)
+        @test diag.finite_by_dim == retained.finite_by_dim
+        @test diag.essential_by_dim == retained.essential_by_dim
+        reference = (;boundaries=[B1,B2],grades=gs)
+        levels = sort!(unique(vcat(gs...));rev=order===:superlevel)
+        for h in 0:2, (i,s) in enumerate(levels), t in levels[i:end]
+            @test _a21_barcode_map_rank(diag,h,s,t,order) ==
+                  _a21_homology_map_rank(reference,h,s,t,order)
+        end
+    end
+    # A one-ended algebraic edge kills H0 outright; it is not a graph edge.
+    # The independent 2-cell must not enable the graph shortcut by dimension.
+    G = DT.GradedComplex([[1],[1],[1]], [sparse(reshape([3],1,1)),spzeros(Int,1,1)],
+        [(0,), (2,), (3,)])
+    diag = OP.persistence_diagram(G)
+    @test OP.finite_intervals(diag;dim=0) == [(0,2)]
+    @test isempty(OP.essential_births(diag;dim=0))
+    @test OP.essential_births(diag;dim=2) == [3]
+end
+
+
+@testset "Ordinary dual top boundary preserves persistent maps" begin
+    rng = MersenneTwister(0x6475616c)
+    for nr in (0,1,3,7), nc in (0,1,2,5), order in (:sublevel,:superlevel), trial in 1:3
+        B = zeros(Int,nr,nc)
+        eg = rand(rng,0:2,nr)
+        for i in 1:nr
+            endpoints = randperm(rng,nc)[1:min(nc,rand(rng,0:2))]
+            for j in endpoints;B[i,j]=rand(rng,(-5,3));end
+        end
+        fg=[maximum(eg[findall(isodd,B[:,j])];init=0)+rand(rng,0:2) for j in 1:nc]
+        gs=[Int[0],eg,fg]
+        order===:superlevel && (gs=[-v for v in gs])
+        G=DT.GradedComplex([[1],collect(1:nr),collect(1:nc)],
+            [spzeros(Int,1,nr),sparse(B)],[(x,) for x in vcat(gs...)])
+        diag=OP.persistence_diagram(G;order)
+        retained=OP.persistence_diagram(G;order,representatives=true)
+        @test diag.finite_by_dim==retained.finite_by_dim
+        @test diag.essential_by_dim==retained.essential_by_dim
+        reference=(;boundaries=[zeros(Int,1,nr),B],grades=gs)
+        levels=sort!(unique(vcat(gs...));rev=order===:superlevel)
+        for h in 0:2,(i,s) in enumerate(levels),t in levels[i:end]
+            @test _a21_barcode_map_rank(diag,h,s,t,order)==
+                  _a21_homology_map_rank(reference,h,s,t,order)
+        end
+    end
+    # Two equal top boundaries create an essential top class when the later
+    # cell arrives. A missing exterior component must not delete that class.
+    for T in (Int,BigInt,Rational{BigInt}), order in (:sublevel,:superlevel)
+        levels=T===Int ? [0,1,2,3] : T.([big(2)^70+i for i in 0:3])
+        order===:superlevel && reverse!(levels)
+        G=DT.GradedComplex([[1],[1],[1,2]], [spzeros(Int,1,1),sparse(reshape([3,-5],1,2))],
+            [(x,) for x in levels])
+        diag=OP.persistence_diagram(G;order)
+        @test OP.finite_intervals(diag;dim=1)==[(levels[2],levels[3])]
+        @test OP.essential_births(diag;dim=2)==[levels[4]]
+        @test OP.essential_births(diag;dim=0)==[levels[1]]
+    end
+    # Three cofacets have no graph interpretation: retain general reduction.
+    G=DT.GradedComplex([[1],[1],[1,2,3]],
+        [spzeros(Int,1,1),sparse(reshape([1,3,-5],1,3))],[(0,),(1,),(2,),(3,),(4,)])
+    diag=OP.persistence_diagram(G)
+    @test OP.finite_intervals(diag;dim=1)==[(1,2)]
+    @test OP.essential_births(diag;dim=2)==[3,4]
+    offsets=G.dim_offsets;values=first.(G.grades);perm=sortperm(values);rank=invperm(perm)
+    finite=[Tuple{Int,Int}[] for _ in 1:3];essential=[Int[] for _ in 1:3];cleared=falses(5)
+    @test !OP._dual_top_barcode!(finite,essential,G,offsets,values,perm,rank,cleared,2)
+    @test all(isempty,finite) && all(isempty,essential) && !any(cleared)
 end

@@ -9583,3 +9583,39 @@ end
         end
     end
 end
+
+
+@testset "GradedComplex typed conversion preserves grades and ownership" begin
+    boundary = sparse(reshape([1, -1], 2, 1))
+    for T in (Int, UInt, Rational{BigInt}, Float64)
+        grades = [(convert(T, 0),), (convert(T, 1),), (convert(T, 2),)]
+        g = @inferred DT.GradedComplex([[11, 12], [21]], [boundary], grades;
+                                       cell_dims=[0, 0, 1])
+        @test g isa DT.GradedComplex{1,T}
+        @test g.grades == grades
+        @test g.grades !== grades
+        saved = copy(g.grades)
+        grades[1] = (convert(T, 7),)
+        @test g.grades == saved
+        empty = @inferred DT.GradedComplex([Int[], Int[]], [spzeros(Int, 0, 0)], NTuple{2,T}[])
+        @test empty isa DT.GradedComplex{2,T}
+        @test isempty(empty.grades)
+    end
+    # Abstract containers retain the conversion convention of their first grade.
+    mixed = Tuple[(1,), (2.0,)]
+    @test DT.GradedComplex([[1, 2]], SparseMatrixCSC{Int,Int}[], mixed).grades == [(1,), (2,)]
+    @test_throws InexactError DT.GradedComplex([[1, 2]], SparseMatrixCSC{Int,Int}[], Tuple[(1,), (2.5,)])
+    for grades in ([(1, 2), (3, 4)], [[1, 2], [3, 4]])
+        g = DT.GradedComplex([[1, 2]], SparseMatrixCSC{Int,Int}[], grades)
+        @test g isa DT.GradedComplex{2,Int}
+        @test g.grades == [(1, 2), (3, 4)]
+    end
+    for bad in (Tuple[(1,), (2, 3)], [[1], [2, 3]])
+        @test_throws ErrorException DT.GradedComplex([[1, 2]], SparseMatrixCSC{Int,Int}[], bad)
+    end
+    @test_throws ArgumentError DT.GradedComplex([Int[]], SparseMatrixCSC{Int,Int}[], Tuple[])
+    @test_throws ArgumentError DT.GradedComplex([Int[]], SparseMatrixCSC{Int,Int}[], Vector{Int}[])
+    @test_throws ArgumentError DT.GradedComplex([Int[], Int[]], SparseMatrixCSC{Int,Int}[], NTuple{1,Int}[])
+    @test_throws ArgumentError DT.GradedComplex([Int[], Int[]], [spzeros(Int, 1, 0)], NTuple{1,Int}[])
+    @test_throws ErrorException DT.GradedComplex([[1]], SparseMatrixCSC{Int,Int}[], [(0,)]; cell_dims=[1])
+end

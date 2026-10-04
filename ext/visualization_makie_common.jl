@@ -205,6 +205,7 @@ function _visual_makie_handlers(TO, MakieMod; allow_save::Bool=true)
             if layer isa Viz.HeatmapLayer
                 hm = MakieMod.heatmap!(ax, layer.x, layer.y, permutedims(layer.values);
                                        colormap=Viz._visual_colormap(style, layer.colormap),
+                                       colorrange=something(get(spec.metadata, :colorrange, nothing), MakieMod.Makie.automatic),
                                        nan_color=_role_color(style, :missing),
                                        alpha=layer.alpha)
                 layer.show_colorbar && push!(colorbars, (; plot=hm, label=layer.colorbar_label))
@@ -454,6 +455,11 @@ function _visual_makie_handlers(TO, MakieMod; allow_save::Bool=true)
             subtitle=headings ? spec.subtitle : "", subtitlefont=style.font,
             subtitlesize=_textsize(style, 12), subtitlecolor=_role_color(style, :muted),
             spinewidth=style.linewidth_scale)
+        if get(Viz.visual_metadata(spec), :minimal_axes, false)
+            MakieMod.hidespines!(ax, :t, :r)
+            ax.xgridvisible[] = false
+            ax.ygridvisible[] = false
+        end
         if get(Viz.visual_metadata(spec), :hide_decorations, false)
             MakieMod.hidedecorations!(ax)
             MakieMod.hidespines!(ax)
@@ -523,10 +529,12 @@ function _visual_makie_handlers(TO, MakieMod; allow_save::Bool=true)
                                1:size(zobs[], 2),
                                zobs;
                                colormap=Viz._visual_colormap(style, get(spec.metadata, :colormap, :magma)),
+                               colorrange=something(get(spec.metadata, :colorrange, nothing), MakieMod.Makie.automatic),
                                nan_color=_role_color(style, :missing),
                                alpha=1.0)
         _apply_axis_limits!(ax, spec)
-        _colorbar!(grid[plot_row, 2], hm, "intensity", style)
+        colorbar_label = get(spec.metadata, :colorbar_label, "intensity")
+        isempty(colorbar_label) || _colorbar!(grid[plot_row, 2], hm, colorbar_label, style)
         for (row, dim) in enumerate(control_dims)
             MakieMod.Label(fig[row + 1, 1], "slice dim $dim";
                 font=style.font, fontsize=style.fontsize,

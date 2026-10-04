@@ -13,6 +13,12 @@
 .ipynb_checkpoints/
 **/.ipynb_checkpoints/
 
+# Documentation environments and generated publication output
+/docs/.venv/
+/docs/.build/
+/docs/build/
+/docs/Manifest.toml
+
 # Local development material (keep on disk; do not publish)
 /AGENTS.md
 /examples/

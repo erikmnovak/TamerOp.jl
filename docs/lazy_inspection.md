@@ -131,11 +131,11 @@ when the quotient has dimension zero; numerical coefficients retain their
 supplied tolerance rules.
 
 Over a prime field with characteristic greater than three, native coordinate
-solves now retain their factors on the homology, cohomology or subquotient
+solves retain their factors on the homology, cohomology or subquotient
 result. A factor records work needed to solve the same left-hand matrix
 again. Later vectors are still checked against the full represented subspace.
 A new result does its own preparation, and discarding the result releases its local
-factors. The specialized F2/F3 engines and the existing Nemo backend selection
+factors. The specialized F2/F3 engines and Nemo backend selection
 continue to apply.
 
 Validators and explicit mathematical queries are separate from passive
@@ -181,7 +181,5 @@ same two column indices, with its first index running over cochain coordinates
 in the returned target model.
 
 For repeated multiplication in Ext^*(M,M), use `ExtAlgebra` and its homogeneous
-elements. Its first product in a pair of degrees now builds the basis table
-with the same preparation; later products reuse that completed table. This
-retained-answer workflow is distinct from benchmarking a new computation after
-clearing mathematical results, as explained in the [benchmarking guide](benchmarking.md).
+elements. Its first product in a pair of degrees builds the basis table
+with the same preparation; later products reuse that completed table.

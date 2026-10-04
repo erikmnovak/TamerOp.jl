@@ -1,0 +1,222 @@
+# One source for the map, lesson continuations and site footer.
+# next/alternate are canonical paths, checked against each lesson ending.
+# The diagram emphasizes entry choices; support/reference nodes stay off its routes.
+# Before extending it, read writing.md#preserve-choices-as-the-reading-map-grows
+# and README.md#map-expansion-checklist. Preserve reader choices, not coordinates.
+width = 800
+height = 1120
+node_width = 240
+node_height = 128
+
+[[nodes]]
+id = "ring"
+entry = true
+entry_label = "Start with an example"
+title = "A hole appears and disappears"
+question = "When is the hole alive?"
+source = "tutorials/ring.ipynb"
+next = "two_parameters.md"
+alternate = "ordinary_persistence.md"
+kind = "Tutorial"
+x = 32
+y = 40
+
+[[nodes]]
+id = "modules"
+entry = true
+entry_label = "Start with definitions"
+title = "Persistence modules"
+question = "What are spaces and maps?"
+source = "persistence_modules.md"
+next = "finite_encodings.md"
+kind = "Explanation"
+x = 528
+y = 40
+
+[[nodes]]
+id = "install"
+display = "support"
+entry = false
+label = "To run the notebook"
+title = "Install and reopen"
+question = "How do I run a lesson?"
+source = "src/start/install.md"
+next = "tutorials/ring.ipynb"
+kind = "Guide"
+x = 296
+y = 68
+width = 208
+height = 76
+
+[[nodes]]
+id = "bridge"
+title = "Why two parameters?"
+question = "Which parameters can we compare?"
+source = "two_parameters.md"
+next = "finite_encodings.md"
+alternate = "persistence_modules.md"
+kind = "Explanation"
+x = 32
+y = 224
+
+[[nodes]]
+id = "encoding"
+title = "Finite encodings"
+question = "How can finite data recover a module?"
+source = "finite_encodings.md"
+next = "tutorials/inspect_encoding.ipynb"
+alternate = "indicator_presentations.md"
+kind = "Explanation"
+x = 280
+y = 408
+
+[[nodes]]
+id = "inspect"
+title = "Inspect spaces and maps"
+question = "What does the square's encoding contain?"
+source = "tutorials/inspect_encoding.ipynb"
+next = "tameness.md"
+alternate = "visualization.md"
+kind = "Notebook"
+x = 32
+y = 592
+
+[[nodes]]
+id = "indicators"
+title = "Indicator presentations"
+question = "How do regions and a matrix define spaces?"
+source = "indicator_presentations.md"
+next = "tameness.md"
+alternate = "tutorials/inspect_encoding.ipynb"
+kind = "Explanation"
+x = 528
+y = 592
+
+[[nodes]]
+id = "tameness"
+title = "Tameness and scope"
+question = "When do finite descriptions exist?"
+source = "tameness.md"
+next = "practical_tameness.md"
+kind = "Explanation"
+x = 280
+y = 776
+
+[[nodes]]
+id = "practical-tameness"
+title = "Why computations stay tame"
+question = "Why do finite computations stay finite?"
+source = "practical_tameness.md"
+next = "math_categories.md"
+kind = "Explanation"
+x = 280
+y = 960
+
+[[nodes]]
+id = "ordinary"
+display = "reference"
+entry = false
+title = "Ordinary persistence"
+question = "Which conventions do intervals use?"
+source = "ordinary_persistence.md"
+next = "two_parameters.md"
+kind = "Guide"
+
+[[edges]]
+source = "ring"
+target = "bridge"
+path = "M 152 168 V 222"
+
+[[edges]]
+source = "bridge"
+target = "encoding"
+path = "M 152 352 V 376 H 400 V 406"
+
+[[edges]]
+source = "modules"
+target = "encoding"
+path = "M 648 168 V 472 H 522"
+
+[[edges]]
+source = "bridge"
+target = "modules"
+kind = "optional"
+label = "Explore the full definitions"
+label_x = 408
+label_y = 262
+path = "M 272 288 H 500 V 156 H 526"
+
+[[edges]]
+source = "encoding"
+target = "inspect"
+path = "M 352 536 V 564 H 152 V 590"
+
+[[edges]]
+source = "encoding"
+target = "indicators"
+path = "M 448 536 V 564 H 648 V 590"
+
+[[edges]]
+source = "indicators"
+target = "inspect"
+kind = "optional"
+label = "Or inspect the result"
+label_x = 400
+label_y = 634
+path = "M 528 656 H 274"
+
+[[edges]]
+source = "inspect"
+target = "tameness"
+path = "M 152 720 V 840 H 278"
+
+[[edges]]
+source = "indicators"
+target = "tameness"
+path = "M 648 720 V 840 H 522"
+
+[[edges]]
+source = "tameness"
+target = "practical-tameness"
+path = "M 400 904 V 958"
+
+[[groups]]
+id = "data-and-geometry"
+title = "Bring in data"
+description = "Start with the choices that determine an ingested module. For radius and coverage depth, continue through multicover construction, exact grades, and depth windows."
+links = [
+    {title = "Ingestion options", source = "ingestion_options.md"},
+    {title = "Multicover computation", source = "multicover.md"},
+    {title = "Exact radius grades", source = "exact_grades.md"},
+    {title = "Coverage-depth windows", source = "rhomboid_depth.md"},
+]
+
+[[groups]]
+id = "algebra-and-inspection"
+title = "Work with the retained algebra"
+description = "First identify the category in which a calculation takes place. Then choose which objects to materialize and, for floating coefficients, how to assess numerical rank decisions."
+links = [
+    {title = "Categories and derived computations", source = "math_categories.md"},
+    {title = "Inspection and explicit computation", source = "lazy_inspection.md"},
+    {title = "Numerical derived algebra", source = "numerical_algebra.md"},
+]
+
+[[groups]]
+id = "comparison-and-figures"
+title = "Compare and show results"
+description = "Use the visualization guide to choose a view of the encoded object. For comparing two compatible encodings, the matching-distance guide explains the finite-window question and its hypotheses."
+links = [
+    {title = "Ordinary persistence", source = "ordinary_persistence.md"},
+    {title = "Visualization and export", source = "visualization.md"},
+    {title = "Exact matching distance", source = "exact_matching.md"},
+]
+
+[[groups]]
+id = "reproducible-work"
+title = "Choose tools and reproduce work"
+description = "Add the integration your task needs, check what its options change, and use the benchmarking methodology when measuring computational cost."
+links = [
+    {title = "Optional integrations", source = "optional_integrations.md"},
+    {title = "Option contracts", source = "option_contracts.md"},
+    {title = "Benchmarking methodology", source = "benchmarking.md"},
+]

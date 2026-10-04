@@ -9,6 +9,12 @@ explains the starting object. This guide identifies the category in which
 each calculation takes place and when a comparison with another category is
 justified.
 
+For the preceding question of why finite constructions and compatible
+kernels, images, and homology remain tame, read
+[why finite computations stay tame](practical_tameness.md). This guide starts
+where that explanation ends: identifying the category and comparison needed
+for a particular algebraic calculation.
+
 TamerOp computes Hom, Ext, resolutions, and Yoneda products in the category
 `Rep_k(P)` of finite-dimensional covariant representations of the **actual finite
 input poset** `P`. Here a representation assigns a finite-dimensional vector
@@ -56,7 +62,7 @@ indicator resolutions required for its advertised interpretation.
 
 The default `backend=:auto` preserves closed boundary classes when selecting an
 encoder. The fast axis-aligned `:pl_backend` stores full-dimensional grid cells;
-it currently cannot represent an additional signature supported only on a shared
+it cannot represent an additional signature supported only on a shared
 birth/death threshold. For example, the presentation with one birth at `0`, one
 death at `0`, and coefficient `1` is a nonzero point module. Such inputs use the
 general `:pl` encoder automatically, including intersections of boundary faces
@@ -78,7 +84,7 @@ signatures. Each resulting cell is convex; original generator membership is
 retained as the signature prefix. This prevents disconnected or nonconvex
 pieces with the same original signature from being silently discarded. Input
 pieces must have nonpositive normals for upsets and nonnegative normals for
-downsets. Strict input generator pieces are currently rejected. Region budgets
+downsets. Strict input generator pieces are rejected. Region budgets
 are enforced with an error, without returning a partial encoding.
 
 Conversion of rational polyhedral generators to the fast box backend also
@@ -194,14 +200,12 @@ identity block in the nullspace's free rows to obtain `J`, then dualizes it in
 exactly this way. Right Kan extension instead uses a kernel inclusion and its
 left inverse, so that construction has the opposite roles.
 
-This audit repaired an existing left-Kan defect: using `N` itself as a section
-and an arbitrary left inverse as the quotient did not ensure that relations
-were killed. On the V-shaped poset `1<2, 1<3` collapsed to a point, the map
-from `(0,k,k)` into the constant diagram `(k,k,k)`, identity at vertices `2,3`,
-must induce the fold `k⊕k -> k`. The old construction could return the zero map
-despite correct colimit dimensions. The independent oracle now checks this
-nonzero fold through the canonical unit and counit maps, together with
-`Q*Rel=0` and `Q*W=I` over every supported field.
+For example, collapse the V-shaped poset `1<2, 1<3` to a point. The diagram
+`(0,k,k)` has colimit `k⊕k`, while the constant diagram `(k,k,k)` has colimit
+`k`. The map between them that is the identity at vertices `2,3` induces the
+fold `(x,y) ↦ x+y`. Computing the two colimit dimensions would not determine
+this map: the quotient coordinates and their compatibility with the diagram
+relations are essential.
 
 The abstract Cartesian product `P1 × P2` provides projection maps to two finite
 bases, even when no shared ambient source is known. If actual maps
@@ -316,16 +320,3 @@ module, but its image after reduction modulo two is zero. Loading with a changed
 field records `:reinterpret_stored_fringe_presentation`, clears the original
 homology-degree claim, and retains the original producer contract as `source`.
 To compute homology over the new field, re-encode the original filtered complex.
-
-The A75 encoding tests use unimodular integral changes of basis, so their
-independently specified natural maps exist over every tested field. They check
-all comparable structure maps and noncommuting endomorphism compositions through
-serialization, explicit base identifications, realized joint refinement, and
-fresh/reused translation caches. This is a shared integral oracle, not an
-assertion that arbitrary homology is independent of characteristic.
-
-The finite comparison and counterexample oracles live in
-`test/test_encoding.jl`; owner provenance and encoded spectral-budget
-contracts are tested in `test/test_derived_functors.jl`. These tests establish
-the stated finite comparisons and reject overbroad interpretations. They do
-not certify arbitrary ambient categories or uncomputed degrees.

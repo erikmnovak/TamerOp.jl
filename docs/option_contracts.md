@@ -15,7 +15,7 @@ These option types are available from `TamerOp.Options` and the curated
 
 ## Finite encoding
 
-`EncodingOptions(poset_kind=:dense)` now selects a dense finite poset through
+`EncodingOptions(poset_kind=:dense)` selects a dense finite poset through
 both direct owner calls and workflow calls. Omitting the explicit `poset_kind`
 keyword uses the value in the options object; an explicit keyword overrides it.
 Geometric poset-only operations do not use a coefficient field. Operations that
@@ -25,7 +25,7 @@ A Zn flange call without explicit options preserves the flange's field. Passing
 an `EncodingOptions` object explicitly selects its field, whose default is QQ.
 Changing characteristic can change ranks and homology; it is not an invariance
 claim. Rational coefficients whose denominators vanish in the target field are
-rejected by the existing field conversion contract.
+rejected by the field conversion contract.
 
 `strict_eps` belongs to general PL geometry. The default `nothing` certifies
 strict feasibility over the rationals, including arbitrarily narrow cells. An
@@ -59,10 +59,9 @@ minimality assertion when checking is enabled. `check=false` explicitly skips
 those diagnostics, and negative length bounds are rejected.
 
 Use `ExtDoubleComplex(M, N; maxlen=...)` and
-`ExtSpectralSequence(M, N; maxlen=...)` directly. Their former
-`ResolutionOptions` overloads were removed because they forwarded only `maxlen`
-and ignored the remaining controls. The first constructs the specified bounded
-bicomplex; the second still requires complete resolutions for its Ext abutment.
+`ExtSpectralSequence(M, N; maxlen=...)` directly. The first constructs the
+specified bounded bicomplex; the second requires complete resolutions for its
+Ext abutment.
 
 ## Module construction and queries
 
@@ -75,6 +74,5 @@ identity maps and empty batches.
 always validate indices and comparability and reject that opt-out. Default
 constructor validation also covers reused map storage.
 
-The unused `FiniteFringeOptions` container was removed. Finite-fringe
-constructors retain their actual scalar, checking and storage arguments; use
-those directly.
+Finite-fringe constructors accept scalar, checking and storage arguments
+directly.

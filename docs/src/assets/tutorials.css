@@ -1,0 +1,202 @@
+/* Figures carry their explanation in nearby prose and descriptive alt text. */
+#documenter-page img { max-width: 100%; height: auto; }
+#documenter-page pre { overflow-x: auto; }
+
+/* A branching curriculum has a map and a motivated next page, no linear back link. */
+.docs-footer .lesson-continuation {
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: .75rem 1.5rem;
+    width: 100%;
+    margin-bottom: 1rem;
+}
+
+/* Native disclosure remains keyboard-accessible and works without JavaScript. */
+#documenter-page details.optional-lesson {
+    border: 1px solid #8886;
+    border-radius: 0.35rem;
+    padding: 0.8rem 1rem;
+    margin: 1.5rem 0;
+}
+#documenter-page details.optional-lesson > summary {
+    cursor: pointer;
+    font-weight: 600;
+}
+#documenter-page details.optional-lesson > summary:focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: 4px;
+}
+
+/* The reading map uses native links; its outline shares the same source graph. */
+#documenter-page {
+    --reading-map-bg: #fff;
+    --reading-map-soft: #f5f8fb;
+    --reading-map-text: #1e3040;
+    --reading-map-muted: #506273;
+    --reading-map-line: #526e82;
+    --reading-map-border: #92a5b5;
+    --reading-map-accent: #245c99;
+}
+html.theme--documenter-dark #documenter-page {
+    --reading-map-bg: #253036;
+    --reading-map-soft: #20292e;
+    --reading-map-text: #edf4fa;
+    --reading-map-muted: #c1d0dc;
+    --reading-map-line: #a0b8c8;
+    --reading-map-border: #8ba4b5;
+    --reading-map-accent: #92c6ff;
+}
+.reading-map-scroll {
+    max-width: 100%;
+    overflow-x: auto;
+    padding: 3px;
+    margin: 1.5rem 0 1rem;
+    border: 1px solid var(--reading-map-border);
+    border-radius: .6rem;
+    background: var(--reading-map-soft);
+}
+.reading-map-canvas { position: relative; margin-inline: auto; }
+.reading-map-mobile-starts { display: none; }
+.reading-map-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .5rem 1.5rem;
+    color: var(--reading-map-muted);
+    font-size: .85rem;
+    margin-top: 1.5rem;
+}
+.reading-map-legend + .reading-map-scroll { margin-top: .5rem; }
+.reading-map-legend span::before {
+    content: "";
+    display: inline-block;
+    width: 1.75rem;
+    margin-right: .5rem;
+    vertical-align: middle;
+    border-top: 2px solid var(--reading-map-line);
+}
+.reading-map-legend span + span::before { border-top-style: dashed; }
+.reading-map-lines {
+    position: absolute;
+    inset: 0;
+    color: var(--reading-map-line);
+    pointer-events: none;
+}
+.reading-map-edge { fill: none; stroke: currentColor; stroke-width: 2; }
+.reading-map-edge.reading-map-optional { stroke-dasharray: 5 5; }
+.reading-map-edge-label {
+    fill: var(--reading-map-muted);
+    font-family: inherit;
+    font-size: 13px;
+    paint-order: stroke;
+    stroke: var(--reading-map-soft);
+    stroke-width: 5px;
+    stroke-linejoin: round;
+}
+.reading-map-entry-label {
+    color: var(--reading-map-accent);
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.3;
+}
+#documenter-page .reading-map-support {
+    position: absolute;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 4px;
+    padding-left: 12px;
+    border-left: 1px solid var(--reading-map-border);
+    box-sizing: border-box;
+    font-size: 14px;
+}
+#documenter-page .reading-map-support span { color: var(--reading-map-muted); }
+#documenter-page a.reading-map-node {
+    position: absolute;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 4px;
+    box-sizing: border-box;
+    padding: 12px;
+    border: 1.5px solid var(--reading-map-border);
+    border-radius: .5rem;
+    background: var(--reading-map-bg);
+    color: var(--reading-map-text);
+    text-decoration: none;
+}
+.reading-map-kind {
+    display: block;
+    color: var(--reading-map-muted);
+    font-size: 11px;
+    line-height: 1.3;
+}
+#documenter-page .reading-map-node strong {
+    color: var(--reading-map-accent);
+    font-size: 18px;
+    line-height: 1.2;
+}
+.reading-map-question { font-size: 14px; line-height: 1.3; }
+#documenter-page a.reading-map-node[data-node="encoding"] {
+    border: 2px solid var(--reading-map-accent);
+}
+#documenter-page a.reading-map-node[data-entry="true"] {
+    border-color: var(--reading-map-accent);
+}
+#documenter-page a.reading-map-node:hover {
+    border-color: var(--reading-map-accent);
+    box-shadow: 0 0 0 1px var(--reading-map-accent);
+}
+#documenter-page a.reading-map-node:hover strong { text-decoration: underline; }
+.reading-map-scroll:focus-visible,
+#documenter-page a.reading-map-node:focus-visible,
+.reading-map-outline > summary:focus-visible {
+    outline: 3px solid var(--reading-map-accent);
+    outline-offset: 3px;
+}
+.reading-map-outline {
+    padding: .8rem 1rem;
+    margin: 1rem 0 2rem;
+    border: 1px solid var(--reading-map-border);
+    border-radius: .4rem;
+}
+.reading-map-outline > summary { cursor: pointer; font-weight: 600; }
+.reading-map-outline li { margin-block: .65rem; }
+.reading-map-groups {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1rem;
+}
+.reading-map-group {
+    padding: 1rem;
+    border: 1px solid var(--reading-map-border);
+    border-radius: .4rem;
+}
+#documenter-page .reading-map-group h3 { margin-top: 0; }
+.reading-map-group li { margin-block: .45rem; }
+.reading-map-location { display: block; color: var(--reading-map-muted); font-size: .8rem; }
+@media (max-width: 640px) {
+    .reading-map-groups { grid-template-columns: 1fr; }
+    /* Show both starts before any sideways scrolling of the full diagram. */
+    .reading-map-mobile-starts {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: .75rem;
+        margin-top: 1.5rem;
+    }
+    .reading-map-mobile-starts > a {
+        display: flex;
+        flex-direction: column;
+        gap: .4rem;
+        padding: .75rem;
+        border: 1px solid var(--reading-map-accent);
+        border-radius: .5rem;
+        text-decoration: none;
+    }
+    .reading-map-mobile-starts > a span {
+        color: var(--reading-map-muted);
+        font-size: .8rem;
+    }
+    .reading-map-mobile-starts > a strong { font-size: 1rem; line-height: 1.3; }
+    .reading-map-mobile-starts > p { grid-column: 1 / -1; margin: 0; font-size: .85rem; }
+}

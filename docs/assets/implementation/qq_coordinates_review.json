@@ -1,0 +1,39 @@
+{
+  "review_date": "2026-10-04",
+  "scope": "Exact rational full-column coordinates implementation reference",
+  "checkout_commit": "6b5b8ea3856b934a0375677855521456131bb6c8",
+  "reviewed_worktree_is_dirty": true,
+  "note": "Hashes identify reviewed local content, not a published source release. No new performance measurements were made. Historical benchmark numbers come from the named public narratives, not from this source snapshot.",
+  "sha256": {
+    "src/field_linalg/qq_engine.jl": "72e083ad007b4c2e5404ee73ea969b73c7dcb3fa2bad60c8c5c27459d9eca906",
+    "src/field_linalg/public_api.jl": "43e1d1bb1cac40272c367afe229dcb7af8fb3ae7e173d810df356626bde343ff",
+    "src/field_linalg/thresholds.jl": "d77054153f2b7c9e86ae78df45911016a9404c5a48947812beba193f7845ed93",
+    "src/field_linalg/backend_routing.jl": "f94f6cb90c2e75bb5a22ac6149e31cda66e177cb38017b1c452197177c365343",
+    "src/ChainComplexes.jl": "639e9695c33f7e45538c0c6035f08f82abd5cb7d1dcdeb5ebd7a96f715775de3",
+    "test/test_field_linalg.jl": "84b9db9fe1cd1de4174673d9287499dd8fc2c57760e0616dc27cb060ca9a66b1",
+    "docs/benchmark_suites.md": "28061b94ca272c2333f321454a1d3b8fe7e5ff27561a035213ee2eef23914c2b",
+    "docs/benchmarks/qpa.md": "e88a7eb0b2a5ba40497119c3eda2a3ad7caca655d10f35148863fee12542b817"
+  },
+  "local_environments": {
+    "Manifest.toml": {
+      "sha256": "246ebb30a4df74742fe1555faf3b2881372715804c80c8a6be89c3a86036ac10",
+      "julia_version": "1.12.1",
+      "packages": {
+        "Nemo": "0.54.1",
+        "AbstractAlgebra": "0.48.2",
+        "FLINT_jll": "301.400.1+0"
+      },
+      "role": "Dependency environment inspected during source review; not a substitute for each benchmark run environment."
+    },
+    "docs/Manifest.toml": {
+      "sha256": "5a2c80fa8ca6725836a7a8c337257c0487f4f8a9fd822810e9091e11e794a330",
+      "julia_version": "1.12.1",
+      "packages": {
+        "Nemo": "0.54.2",
+        "AbstractAlgebra": "0.48.6",
+        "FLINT_jll": "301.400.1+0"
+      },
+      "role": "Dependency environment inspected during source review; not a substitute for each benchmark run environment."
+    }
+  }
+}

@@ -43,14 +43,57 @@ package. Preserve losses and coverage gaps: they identify what to improve next.
 | Measure actual computation | [Measure compiled code with uncached mathematics](#measure-compiled-code-with-uncached-mathematics) |
 | Investigate first use | [Measure and improve compilation](#measure-and-improve-compilation) |
 | Diagnose storage | [Measure memory separately](#measure-memory-separately) |
+| Explain what the timings mean | [Practical significance and presentation](#practical-significance-and-presentation) |
 | Plan a reproducible release | [Preserve and release the evidence](#preserve-and-release-the-evidence) |
 | Begin a study | [Study brief and completion checks](#study-brief-and-completion-checks) |
 
 Completed comparisons are collected in [Benchmark results](benchmarks/index.md),
-starting with [QPA](benchmarks/qpa.md). Those pages present the measured
+including [QPA](benchmarks/qpa.md) and [PHAT](benchmarks/phat.md). Those pages present the measured
 outcomes; this manual explains how to obtain and interpret them. Public
 results and figures do not by themselves constitute a runnable reproduction
 bundle.
+
+## Practical significance and presentation
+
+Write from the perspective of someone considering TamerOp: lead with its
+demonstrated strengths and explain what the timings mean for their work.
+A count of wins and losses is supporting evidence, not the main conclusion.
+It gives a microsecond edge and a saving of several seconds the same visual
+importance. Lead instead with the magnitude of the difference, actual runtimes,
+input sizes and the workflows where the benefit matters.
+
+For close comparisons, say that performance is similar, then state the measured
+edge. A modest TamerOp improvement can lead the sentence; a modest competitor
+improvement can follow the statement of comparable performance. For example:
+
+| Measured times | Suggested wording |
+| --- | --- |
+| TamerOp 1.1 s; competitor 1.2 s | TamerOp used about 8% less time; both completed the request in roughly a second. |
+| TamerOp 1.2 s; competitor 1.1 s | Performance was similar, with the competitor slightly faster: 1.1 s versus TamerOp's 1.2 s, about 8% less time. |
+
+This emphasis should carry through headlines, tables, captions, summaries and
+the website. Use the same practical band for both tools. Keep the suite's
+predeclared thresholds, weights, denominators and claim criteria unchanged;
+do not move the boundary after seeing a result. The usual band is a speed ratio
+from 1/1.10 to 1.10. Prefer “similar” in prose and “within the practical band”
+in tables; the archived `win`, `near_tie` and `loss` fields remain reproducible
+classification labels. A near tie is not a statistical equivalence test, and
+uncertainty crossing the band should remain visible.
+
+Small absolute differences need context. A 0.1-second difference may be
+unimportant for an occasional query but meaningful across a large batch.
+Likewise, a large ratio on a microsecond task can have little effect on a user's
+workflow. Explain both scales; do not describe a substantial relative slowdown
+as a near tie merely because the input was small. Preserve material losses,
+family-wide weaknesses, failures and incomplete comparisons in the report.
+Separate populations stay separate, even when the larger workloads favor us.
+
+State percentage reductions with their baseline. If the speed ratio is
+`r = competitor_time / tamerop_time`, TamerOp's time reduction relative to the
+competitor is `100 * (1 - 1/r)` percent. Thus 1.10× as fast means about 9.1%
+less time, not 10%. Prefer “less time” or “× as fast” over an ambiguous
+percentage “faster.” Editorial revisions may improve the explanation without
+rerunning benchmarks or altering the measurements and their sealed evidence.
 
 ## Define the question and output
 

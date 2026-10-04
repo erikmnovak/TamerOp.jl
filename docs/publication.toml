@@ -1,0 +1,29 @@
+# Authored notebooks are executed once; site pages and downloads are derived.
+[[notebooks]]
+source = "tutorials/ring.ipynb"
+page = "tutorials/ring.md"
+timeout = 900
+
+[reading_map]
+source = "reading_map.toml"
+page = "reading_map.md"
+
+# Existing chapters retain their canonical locations during site migration.
+[guides]
+"two_parameters.md" = "explanations/two_parameters.md"
+"persistence_modules.md" = "persistence_modules.md"
+"finite_encodings.md" = "finite_encodings.md"
+"indicator_presentations.md" = "indicator_presentations.md"
+"tameness.md" = "tameness.md"
+"practical_tameness.md" = "practical_tameness.md"
+"ordinary_persistence.md" = "ordinary_persistence.md"
+"writing.md" = "contributing/writing.md"
+"implementation/index.md" = "implementation/index.md"
+"implementation/qq_coordinates.md" = "implementation/qq_coordinates.md"
+"implementation/references.md" = "implementation/references.md"
+
+"benchmarks/index.md" = "benchmarks/index.md"
+"benchmarks/qpa.md" = "benchmarks/qpa.md"
+"benchmarks/qpa_v1/README.md" = "benchmarks/qpa_v1/README.md"
+"benchmarks/phat.md" = "benchmarks/phat.md"
+"benchmarks/phat_v2/README.md" = "benchmarks/phat_v2/README.md"

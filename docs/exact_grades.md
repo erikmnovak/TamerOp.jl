@@ -48,8 +48,8 @@ explicit coarse grid or quantization deliberately changes grade placement;
 An exact radius is not a squared-radius coordinate. Replacing `r` by `r^2`
 preserves the filtration order, but changes straight slices and metric values.
 The slicing and matching paths preserve the radius coordinate. The exact 2D
-matching optimizer retains its existing finite-window and positively oriented
-classifier contract. The default rhomboid classifier has orientation `(1,-1)`
+matching optimizer requires a finite window and a positively oriented
+classifier. The default rhomboid classifier has orientation `(1,-1)`
 and is rejected by that optimizer. To compare in increasing coordinates
 `(r,-k)`, use a classifier with orientation `(1,1)` on the same stored axes and
 finite poset, and express the matching window in those coordinates. Its
@@ -66,8 +66,8 @@ another grid. Request arrays are snapshotted into immutable keys; later edits
 cannot change an already-stored key. Different exact values remain distinct
 even when their hashes coincide.
 For a hand-built grid, use `AlgebraicReal.(axis)` on each axis to select the
-same exact slice-arrangement arithmetic. This guide does not change the
-geometry-arithmetic contract of every other classifier family.
+same exact slice-arrangement arithmetic. Other classifier families have their
+own geometry-arithmetic contracts.
 
 Featurizer constructors retain exact query directions, offsets, slice bounds
 `tmin`/`tmax`, barcode-clipping `window` bounds and supplied invariant-query

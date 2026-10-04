@@ -11,6 +11,12 @@ of its spaces. We will make that requirement precise, revisit the square,
 and examine one module whose stalks all have dimension one but which has
 no finite encoding.
 
+For the finite constructions in these lessons, the condition comes from the
+construction itself. The follow-on chapter,
+[why finite computations stay tame](practical_tameness.md), explains that
+practical argument and the role of abelian categories. Here we establish
+exactly what the condition means and which descriptions it guarantees.
+
 You need the preceding chapters' definitions of modules, finite encodings,
 and fringe presentations. We use a fixed coefficient field $\mathbb{k}$;
 take $\mathbb{k}=\mathbb{Q}$ in the examples. The general statements apply
@@ -173,7 +179,7 @@ rows and columns of the coefficient matrix and take its image. Between
 comparable patterns, restrict the appropriate target-coordinate projection
 to the image.
 
-The [previous chapter](indicator_presentations.md#how-the-presentation-leads-to-a-finite-encoding)
+The [indicator-presentations chapter](indicator_presentations.md#how-the-presentation-leads-to-a-finite-encoding)
 explained why these spaces and maps recover the presented module. The
 construction uses the fixed scalar coefficients as well as the regions;
 membership patterns alone would lose the linear algebra.
@@ -321,12 +327,11 @@ The restriction is tame, while the module on all of $\mathbb{R}$ is not.
 A finite drawing or a finite collection of successful queries cannot
 settle the global claim; the proof above does.
 
-> **Coming visualization: compare maps with the dimension profile.**
-> A selectable pair of parameters will show the two stalks, their interval
-> labels, and the identity or zero structure matrix. Widening the displayed
-> window will reveal more intervals without changing the dimension profile.
-> The display will distinguish the finite window from the full real-line
-> module; this interactive view is not implemented yet.
+> **Figure placeholder: compare maps with the dimension profile.** A pair of
+> selected parameters will show the two stalks, their interval labels, and the
+> identity or zero structure matrix. Widening the displayed window will reveal
+> more intervals while the dimension stays one. The view will distinguish the
+> finite window from the full real-line module.
 
 ### Distinguish this from q-tameness
 
@@ -379,7 +384,15 @@ construction. Likewise, neither the existence theorem nor a successful
 example asserts that the returned encoding is minimal or inexpensive for
 every supported input.
 
-## What the foundation now lets us do
+The full syzygy theorem also relates tameness to finite indicator
+resolutions. A resolution organizes successive relations among simpler
+modules.
+Existence of such resolutions does not identify every computation over
+different base posets. In particular, finite-base Ext and Tor require
+the [category and comparison hypotheses](math_categories.md) described
+in their guide.
+
+## Why do finite constructions meet this condition?
 
 We can recognize a tame module through compatible constant regions,
 finite encoding data, or a finite fringe presentation. The square exhibits
@@ -387,17 +400,8 @@ all three descriptions. The real-line counterexample explains why finite
 stalk dimensions and an informative-looking dimension plot do not replace
 the map compatibility requirement.
 
-The full syzygy theorem also relates tameness to finite indicator
-resolutions. A resolution organizes successive relations among simpler
-modules; developing those constructions is a later algebraic step.
-Existence of such resolutions does not identify every computation over
-different base posets. In particular, finite-base Ext and Tor require
-the [category and comparison hypotheses](math_categories.md) described
-in their guide.
-
-The immediate next step is practical: follow a parameter through the
-square's returned classifier to its space, then follow a comparable pair
-to its map. The [inspection notebook](tutorials/inspect_encoding.ipynb) now
-performs that calculation and produces the combined figure; the
-[first learning path](learning_path.md) places it in the wider route.
-Its purpose is to make the finite description, and what it recovers, visible.
+The remaining question has a practical payoff: why do
+our finite inputs meet this condition, and why do subsequent calculations
+preserve it? Continue with [why finite computations stay tame](practical_tameness.md)
+for the finite-complex argument, a square-module calculation, and the
+closure theorems of Ezra Miller and Lukas Waas.

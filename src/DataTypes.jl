@@ -791,13 +791,7 @@ function GradedComplex(cells_by_dim::AbstractVector{<:AbstractVector{<:Integer}}
     cell_dims === nothing || _validate_cell_dims(cell_dims, dim_offsets, "GradedComplex")
     isempty(grades) && throw(ArgumentError("An empty GradedComplex needs typed tuple grades, for example NTuple{2,Float64}[]."))
     N = length(grades[1])
-    ng = Vector{NTuple{N,T}}(undef, length(grades))
-    for i in eachindex(grades)
-        length(grades[i]) == N || error("GradedComplex: grade $i has wrong length.")
-        # Conversion preserves existing BigFloat precision; T(value) can round.
-        ng[i] = ntuple(j -> convert(T, grades[i][j]), N)
-    end
-    return GradedComplex{N,T}(cell_ids, dim_offsets, boundaries, ng)
+    return _graded_complex_with_grades(cell_ids, dim_offsets, boundaries, grades, Val(N), T)
 end
 
 function GradedComplex(cells_by_dim::AbstractVector{<:AbstractVector{<:Integer}},
@@ -823,11 +817,18 @@ function GradedComplex(cells_by_dim::AbstractVector{<:AbstractVector{<:Integer}}
         N = length(grades[1])
         T = eltype(grades[1])
     end
+    return _graded_complex_with_grades(cell_ids, dim_offsets, boundaries, grades, Val(N), T)
+end
+
+# Keep runtime grade-shape discovery outside this shared conversion loop. In
+# particular, T must be a type parameter, not a boxed variable captured by ntuple.
+function _graded_complex_with_grades(cell_ids, dim_offsets, boundaries, grades,
+                                     ::Val{N}, ::Type{T}) where {N,T}
     ng = Vector{NTuple{N,T}}(undef, length(grades))
     for i in eachindex(grades)
         length(grades[i]) == N || error("GradedComplex: grade $i has wrong length.")
         # Conversion preserves existing BigFloat precision; T(value) can round.
-        ng[i] = ntuple(j -> convert(T, grades[i][j]), N)
+        ng[i] = ntuple(j -> convert(T, grades[i][j]), Val(N))
     end
     return GradedComplex{N,T}(cell_ids, dim_offsets, boundaries, ng)
 end

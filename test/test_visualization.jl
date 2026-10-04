@@ -1,3 +1,123 @@
+@testset "A44 image comparison ranges and full cells" begin
+    V, D = TamerOp.Visualization, TamerOp.DataTypes
+    values = [0 5 2; 4 1 3]
+    spec = V.visual_spec(D.ImageNd(values); kind=:image, view_dims=(2,1),
+        colorrange=(0,5), title="Appearance", colorbar_label="grade")
+    @test V.visual_layers(spec)[1].values == Float64.(values)
+    @test V.visual_axes(spec).xlimits == (0.5,3.5)
+    @test V.visual_axes(spec).ylimits == (0.5,2.5)
+    @test V.visual_axes(spec).aspect == :equal
+    @test spec.title == "Appearance"
+    @test V.visual_layers(spec)[1].colorbar_label == "grade"
+    @test V.visual_metadata(spec).colorrange == (0.0,5.0)
+    for limits in ((0,0), (1,0), (0,Inf), (NaN,1), (false,true), (0,1,2), "auto")
+        @test_throws ArgumentError V.visual_spec(D.ImageNd(values); kind=:image, colorrange=limits)
+    end
+    @test_throws ArgumentError V.visual_spec(D.ImageNd(values); kind=:image, title=1)
+    volume = D.ImageNd(cat(zeros(2,3), ones(2,3); dims=3))
+    channels = V.visual_spec(volume; kind=:channels, colorrange=(0,1))
+    @test all(p.metadata.colorrange == (0.0,1.0) for p in V.visual_panels(channels))
+    viewer = V.visual_spec(volume; kind=:slice_viewer, colorrange=(0,1), colorbar_label="present")
+    @test viewer.metadata.colorrange == (0.0,1.0)
+    @test viewer.metadata.colorbar_label == "present"
+    if Base.find_package("CairoMakie") === nothing
+        @test_skip false
+    else
+        @eval import CairoMakie
+        M = CairoMakie.Makie
+        for value in (0,1)
+            figure = V.visualize(D.ImageNd(fill(value,3,3)); kind=:image,
+                colorrange=(0,1), backend=:cairomakie)
+            M.update_state_before_display!(figure)
+            axis = only(item for item in figure.content if item isa M.Axis)
+            heat = only(p for p in axis.scene.plots if p isa M.Heatmap)
+            @test Tuple(heat.colorrange[]) == (0.0,1.0)
+            @test all(==(value), heat[3][])
+        end
+    end
+end
+
+@testset "A45 readable ring interval coordinates" begin
+    V = TamerOp.Visualization
+    diagram = TamerOp.cubical_persistence([0 0 0; 0 5 0; 0 0 0])
+    for kind in (:barcode, :persistence_diagram)
+        spec = V.visual_spec(diagram; kind, dim=1, window=(-1,6))
+        @test spec.axes.xticks[1] == [-1,0,5,6]
+        @test spec.axes.xticks[2] == ["-1","0","5","6"]
+        @test spec.metadata.records[1].birth == 0
+        @test spec.metadata.records[1].death == 5
+    end
+    essential = V.visual_spec(diagram; kind=:barcode, dim=0, window=(-1,6))
+    @test 0 in essential.axes.xticks[1]
+    @test last(essential.axes.xticks[2]) == "+Inf"
+    crowded = V.visual_spec(Dict((i//100, (i+1)//100)=>1 for i in 1:20); kind=:barcode, window=(0,1))
+    @test crowded.axes.xticks[1] == [0,1]
+end
+
+@testset "A45 informative defaults without presentation options" begin
+    V, D = TamerOp.Visualization, TamerOp.DataTypes
+    values = [0 0 0; 0 5 0; 0 0 0]
+    diagram = TamerOp.cubical_persistence(values)
+    bars = V.visual_spec(diagram; kind=:barcode, dim=1)
+    points = V.visual_spec(diagram; kind=:persistence_diagram, dim=1)
+    @test bars.metadata.interval_segments == ((0.0,1.0,5.0,1.0),)
+    @test points.metadata.interval_points == ((0.0,5.0),)
+    @test bars.axes.xticks == ([0.0,5.0],["0","5"])
+    @test bars.axes.yticks == ([1.0],["#1"])
+    @test bars.axes.xlimits[1] < 0 < 5 < bars.axes.xlimits[2]
+    @test occursin("1 interval", bars.subtitle)
+    @test occursin("Filled/open", bars.subtitle)
+    @test !occursin("Filled/open", points.subtitle)
+    @test occursin("Brackets", points.subtitle)
+    @test all(!occursin(word,bars.subtitle) for word in ("censored","Inf","Float64","max_intervals"))
+    @test bars.metadata.figure_size[2] < points.metadata.figure_size[2]
+    essential = V.visual_spec(diagram; kind=:barcode, dim=0)
+    @test occursin("continues indefinitely",essential.subtitle)
+    @test last(essential.axes.xticks[2]) == "+Inf"
+    @test only(essential.metadata.records).death == Inf
+    clipped = V.visual_spec(Dict((0,5)=>2,(6,8)=>1,(9,10)=>1);
+        kind=:barcode,window=(1,7),max_intervals=1,interval=3)
+    for word in ("4 intervals", "3 groups", "outside window", "hidden by max_intervals",
+                 "Selected #3", "finite endpoint beyond the view")
+        @test occursin(word,clipped.subtitle)
+    end
+    @test clipped.axes.yticks[2] == ["#1 x2"]
+    censored = first(V._interval_panels(V._group_interval_records([
+        V._interval_record(0,1,1;right_status=:censored)])))
+    @test occursin("continuation is unknown",censored.subtitle)
+    @test !occursin("continues indefinitely",censored.subtitle)
+    empty = V.visual_spec(Tuple{Int,Int}[];kind=:barcode)
+    @test empty.subtitle == "0 intervals"
+    @test any(layer -> layer isa V.TextLayer && "No nonzero intervals" in layer.labels,empty.layers)
+    image = V.visual_spec(D.ImageNd(values))
+    @test image.axes.xticks == ([1.0,2.0,3.0],["1","2","3"])
+    @test image.axes.xlabel == "Column index" && image.axes.ylabel == "Row index"
+    @test isempty(image.subtitle)
+    @test image.layers[1].values == Float64.(values)
+    if Base.find_package("CairoMakie") === nothing
+        @test_skip false
+    else
+        @eval import CairoMakie
+        M = CairoMakie.Makie
+        # Exercise the public short calls, then verify the actual scene data.
+        fig = TamerOp.visualize(diagram;kind=:barcode,dim=1)
+        M.update_state_before_display!(fig)
+        ax = only(item for item in fig.content if item isa M.Axis)
+        @test Tuple(M.widths(M.viewport(fig.scene)[])) == bars.metadata.figure_size
+        @test !ax.topspinevisible[] && !ax.rightspinevisible[]
+        @test !ax.xgridvisible[] && !ax.ygridvisible[]
+        @test ax.xticks[] == bars.axes.xticks
+        @test M.widths(M.viewport(ax.scene)[])[1] > 0.75 * bars.metadata.figure_size[1]
+        @test M.widths(M.viewport(ax.scene)[])[2] > 0.5 * bars.metadata.figure_size[2]
+        custom = TamerOp.visualize(diagram;kind=:barcode,dim=1,
+            style=TamerOp.VisualStyle(fontsize=18),size=(760,360))
+        custom_axis = only(item for item in custom.content if item isa M.Axis)
+        @test custom_axis.xlabelsize[] == 18
+        again = TamerOp.visualize(diagram;kind=:barcode,dim=1)
+        @test only(item for item in again.content if item isa M.Axis).xlabelsize[] == 16
+    end
+end
+
 @testset "A16 native visualization activation and honest failures" begin
     VIZ = TamerOp.Visualization
     spec = VIZ.VisualizationSpec(:activation_test;
@@ -207,7 +327,7 @@ end
         @test barcode.metadata.interval_segments == ((0.0,1.0,1.0,1.0),(0.0,2.0,1.0,2.0))
         annotation = only(layer for layer in diagram.layers if layer isa V.TextLayer)
         @test annotation.positions == [(0.0,1.0)]
-        @test Set(split(only(annotation.labels),'\n')) == Set(("#1 [] x1","#2 [) x2"))
+        @test Set(split(only(annotation.labels),'\n')) == Set(("#1 []","#2 [) x2"))
         @test V.check_visual_spec(barcode).valid && V.check_visual_spec(diagram).valid
     end
 end
@@ -1486,7 +1606,7 @@ end
     @test metadata.essential_display_coordinate > 4
     @test metadata.interval_convention == "[birth, death)"
     @test occursin("Float64 display", spec.subtitle)
-    @test occursin("+Inf", spec.subtitle)
+    @test occursin("Inf: continues indefinitely", spec.subtitle)
     @test spec.layers[2] isa VIZ.PointLayer
     @test [p for (r,p) in zip(metadata.displayed_records,metadata.interval_points) if isfinite(r.death)] == [(1/3,5/3),(2.0,3.0)]
     @test [p for (r,p) in zip(metadata.displayed_records,metadata.interval_points) if !isfinite(r.death)] == [(0.0,metadata.essential_display_coordinate),(4.0,metadata.essential_display_coordinate)]

@@ -17,11 +17,14 @@ plan = "docs/learning_path.md"
 reference_status = "backlog"
 review_status = "mathematical_oracle_available; prose_and_reader_review_pending"
 reference_pages = ["docs/src/reference/first_learning_path.md"]
-example_sources = ["docs/build_scripts/check_first_encoding.jl", "docs/tutorials/inspect_encoding.ipynb"]
+example_sources = ["docs/build_scripts/check_first_encoding.jl", "docs/tutorials/ring.ipynb", "docs/tutorials/inspect_encoding.ipynb"]
+ring_publication_status = "IJulia_16_cells_10_figures_verified; optional_cells_skipped_in_separate_main_path_run; Documenter_links_downloads_optional_sections_passed; Chromium_desktop_mobile_keyboard_passed; saved_figures_and_optional_cells_rendered_in_Jupyter; local_Jupyter_checkpoint_errors_remain; deployment_pending"
+ring_publication_guide = "docs/README.md"
 rendering_status = "A42a_A83_static_inspection_notebook_executed; native_rendering_and_figures_verified; A37_A40_23_notebook_cells_headless_executed; static_figures_visually_verified; native_inspector_550_checks_passed_five_fields; server_embedding_116_additional_checks_passed; local_live_server_browser_checklist_passed_author_report_before_A35; A35_shared_style_native_math_API_checks_passed; A35_static_gallery_reviewed; A35_local_browser_visual_checks_passed_user_report; A40_A41_finite_window_slice_phase_implemented; A40_A41_native_slice_401_embedding_124_API_guards_2324_passed; A40_A41_six_static_gallery_figures_reviewed; A40_A41_local_browser_checklist_passed_user_report; A41_dedicated_1173_checks_passed; A41_eight_static_gallery_figures_reviewed; A41_Chromium153_local_Bonito_triangle_band_browser_checks_passed_2026_10_02; A41_barcode_endpoint_bounds_and_selection_stroke_native_owner_1228_passed; A41_barcode_infinity_browser_screenshots_reviewed; A35_A37_A40_A41_five_browser_scenarios_passed_four_plus_focused_zoom_2026_10_02; A41_tick_layout_native_focused_958_passed; A35_A37_A40_A41_single_five_scenario_Chromium153_run_exit0_cleanup_verified_2026_10_03; A41_broader_browser_matrix_pending; notebook_frontend_unverified"
 bindings = [
   "TamerOp.cubical_persistence", "TamerOp.PersistenceDiagram",
   "TamerOp.finite_intervals", "TamerOp.essential_births",
+  "TamerOp.persistence_intervals", "TamerOp.ImageNd", "TamerOp.VisualStyle",
   "TamerOp.describe", "TamerOp.provenance",
   "TamerOp.encode", "TamerOp.EncodingResult", "TamerOp.QQ",
   "TamerOp.CoreModules.QQField", "TamerOp.CoreModules.F2",
@@ -91,8 +94,8 @@ question = "How do a filtered complex and its homology give spaces or intervals?
 owners = ["TamerOp.ChainComplexes", "TamerOp.OrdinaryPersistence", "TamerOp.ModuleComplexes"]
 reference_pages = ["docs/src/reference/complexes.md", "docs/src/reference/ordinary_persistence.md"]
 guides = ["docs/persistence_modules.md", "docs/ordinary_persistence.md", "docs/lazy_inspection.md"]
-example_sources = ["docs/build_scripts/check_first_encoding.jl"]
-example_status = "ring_oracle_verified; complex_tutorial_pending"
+example_sources = ["docs/build_scripts/check_first_encoding.jl", "docs/tutorials/ring.ipynb"]
+example_status = "ring_oracle_verified; ring_notebook_and_publication_workflow_added; complex_tutorial_pending"
 reference_status = "backlog"
 review_status = "first_path_subset_selected; degree_conventions_pending; A41_ordinary_representative_retention_oracles_passed"
 review_notes = "A41 adds opt-in F2 reduction cycles and finite-death bounding chains, indexed by distinct original interval members. The visualization guide explains their noncanonical choice, literal cell IDs, parameter validity, unavailable-data reports and shared interval inspection. Retained-cycle and bounding-chain oracles pass. On 2026-10-02, Chromium 153 with local Bonito passed the filtered-triangle browser scenario for distinct original members, retained cycles and bounding chains, actual canvas selection, invalid-input recovery, keyboard access and linked-view lifecycle. The torus, superlevel, unavailable-representative and other fixtures in the broader manual checklist remain pending; reproduction instructions are in test/browser/README.md."

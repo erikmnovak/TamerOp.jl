@@ -6,3 +6,5 @@
 # Preserve the archived CSV checksum and generated SVG path formatting.
 docs/benchmarks/qpa_v1/timings.csv -text whitespace=cr-at-eol
 docs/benchmarks/qpa_v1/*.svg whitespace=-blank-at-eol
+docs/benchmarks/phat_v2/timings.csv -text whitespace=cr-at-eol
+docs/benchmarks/phat_v2/*.svg whitespace=-blank-at-eol

@@ -1759,6 +1759,6 @@ end
 function _visual_spec(diag::OrdinaryPersistence.PersistenceDiagram, kind::Symbol;
                       dim::Integer=0, kwargs...)
     return _interval_payload_spec(_interval_payload(diag;dim), kind;
-        barcode_title="Persistence barcode in dimension $(dim)",
-        diagram_title="Persistence diagram in dimension $(dim)", kwargs...)
+        barcode_title="Barcode (degree $(dim))",
+        diagram_title="Persistence diagram (degree $(dim))", kwargs...)
 end

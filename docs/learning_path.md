@@ -1,10 +1,43 @@
 # Implementing the first learning path
 
-This is the authoring brief for the first complete route through the proposed
-documentation site. Its order is fixed:
+This is the authoring brief for the first complete practical route through the
+documentation site:
 
-**Install → ring example → why a second parameter changes the problem → finite
+**Ring example → why a second parameter changes the problem → finite
 encoding → inspect spaces and maps → interpret a figure.**
+
+Installation supports running the notebook; it is not a prerequisite for reading
+the lesson and its saved figures. The definitions offer an equally valid starting
+point: **persistence modules → finite encodings**. Readers coming from the ring
+may also take the optional branch from “Why two parameters?” through persistence
+modules before continuing to finite encodings.
+
+Readers can see the available routes on the [linked reading map](src/reading_map.md).
+Show both starting points with equal visual prominence, label the optional
+branch, and place installation beside the notebook as support. Reference guides
+remain grouped by task instead of appearing as required stops. The diagram and
+linked outline share `reading_map.toml`; repository treatments are labeled, and unwritten lessons
+remain in this authoring brief rather than appearing as working map links.
+
+As this plan grows, apply the
+[map design principles](writing.md#preserve-choices-as-the-reading-map-grows)
+and the [expansion checklist](README.md#map-expansion-checklist). New lessons
+must justify their place by the reader's question; the plan's completeness
+must not turn the overview into a crowded catalog or a compulsory sequence.
+
+Each lesson closes with one motivated primary continuation and at most one
+alternative. `reading_map.toml` declares those destinations; the publication
+build checks the closing prose and uses the same next destination in the footer.
+After inspecting and interpreting the square, the computational route continues
+to tameness. The theoretical route goes through indicator presentations first;
+both reach practical tameness, then category-specific algebra. Supporting guides
+remain references that readers can consult when their question arises.
+
+Lessons contain no implementation status, development chronology, validation
+reports, or general feature roadmaps. Clearly labeled figure placeholders may
+describe a missing visual and its mathematical purpose. This brief and the testing/backlog
+documents hold that material. Keep actual assumptions and operational constraints
+in the lessons where readers need them.
 
 The intended reader knows vectors, matrices, and the idea of a hole in a shape,
 but need not know Julia, posets, or persistence modules. Follow the
@@ -12,7 +45,29 @@ but need not know Julia, posets, or persistence modules. Follow the
 supplies the mathematical narrative; preserve it when adapting material into
 the site. The destinations below are planned paths, not published pages.
 
-Four background chapters are now available without requiring installation.
+The [ring notebook](tutorials/ring.ipynb) and the first local Documenter site
+scaffold are now implemented. The [publication workflow](README.md) executes
+the canonical notebook once, then generates a website lesson and an executed
+download with ten static figures. Its 16 code cells include exact interval
+and component assertions. Nine figures belong to the main lesson; one previews
+the optional styling/export section. Short public plotting calls use the
+package defaults; shared scales are introduced when comparing results.
+The website folds the optional section while the notebook retains its cells.
+Installation, the ring lesson, the [two-parameter bridge](two_parameters.md),
+and the existing mathematical chapters form the initial navigation; deployment, the complete
+square-notebook publication and first-path reference entries remain pending.
+
+The bridge is a short entry point into the existing mathematical sequence,
+not a replacement for those chapters. Readers can follow the practical route
+from the ring through the bridge to the square, consulting the full
+persistence-module definitions as needed. Readers wanting the mathematical
+development can follow persistence modules → finite encodings → indicator
+presentations → tameness → why finite computations stay tame. Both routes use
+the same examples and the same canonical chapter sources. In particular, the bridge
+reuses the chapter's parameter-order diagram; finite-encoding constructions
+and their hypotheses remain in the existing chapters.
+
+Five background chapters are available without requiring installation.
 [Persistence modules over posets](persistence_modules.md) develops the ring,
 spaces and maps, and comparable parameters for pages 2 and 3 below.
 [Finite encodings](finite_encodings.md) follows with the square module,
@@ -25,6 +80,10 @@ for later exploration without replacing the first path's square.
 [Tameness and scope](tameness.md) connects constant subdivisions, finite
 encodings, and finite fringe presentations, and uses a module of constant
 dimension one to show why controlling stalk dimensions alone is insufficient.
+[Why finite computations stay tame](practical_tameness.md) then explains how
+finite constructions supply the condition and how compatible algebraic
+operations preserve it. Readers with the finite-encoding definition can also
+enter that practical explanation directly before following the full theory.
 Their static diagrams are available. The inspection notebook now adds linked
 parameter, poset, and matrix selection; following chosen vectors and linking
 source representatives remain planned.
@@ -45,6 +104,59 @@ tabs and lifecycle behavior. The notebook frontend remains separately
 unverified. This supplies the square portion of pages 4-6; connecting it
 to the ring lesson and publishing
 the complete site remain separate steps.
+
+## Keep the mathematical chapters distinct
+
+The short bridge and the full foundations are alternative entry routes. The
+later chapters answer different questions about the same finite description;
+they should link to established explanations instead of repeating their proofs.
+The [reading map](src/reading_map.md) shows suggested continuations, while this
+table records the boundaries authors should preserve.
+
+| Treatment | Reader's question | Owns this explanation | Leaves to the next treatment |
+| --- | --- | --- | --- |
+| [Two parameters](two_parameters.md) | Which parameters can we compare? | A short route from the ring to partial order, spaces, and maps | Full module axioms and finite-encoding constructions |
+| [Persistence modules](persistence_modules.md) | What are spaces and maps? | The full definition, composition, and why dimensions lose information | How finite data recover an infinite parameter family |
+| [Finite encodings](finite_encodings.md) | How can finite data recover a module? | The square's classifier, finite poset, spaces, maps, and recovery | Constructing presentations and proving general existence |
+| [Indicator presentations](indicator_presentations.md) | How do regions and a matrix define spaces? | Upsets, downsets, active matrix blocks, images, and induced maps | The equivalence between finite descriptions |
+| [Tameness and scope](tameness.md) | When do finite descriptions exist? | Constant subdivisions, finite encodings, finite fringe presentations, and the counterexample | Why standard finite constructions satisfy the condition and preserve it |
+| [Why finite computations stay tame](practical_tameness.md) | Why do finite computations stay finite? | Finiteness supplied by construction, closure under compatible maps, and the relevant abelian-category result | Category-specific interpretations of derived computations |
+| [Categories and derived computations](math_categories.md) | In which category does this calculation take place? | The package's actual finite-base operations and comparison hypotheses | Operation-specific guides and reference entries |
+
+### Follow-on brief: why finite computations stay tame
+
+- **Source:** [practical_tameness.md](practical_tameness.md). Its normal place is
+  after tameness; an optional entry from finite encodings answers the practical
+  question early without making category theory a prerequisite for the first
+  computation.
+- **Prerequisites:** Finite encodings and basic matrix kernels and images.
+  Recall the needed meaning of tameness and explain an abelian category through
+  the operations it permits.
+- **Starting objects:** A filtration by subcomplexes of a fixed finite complex,
+  and the square module already used throughout the foundations.
+- **Content:** Show how finite input supplies an encoding of a complex and its
+  differentials. Follow kernels, images, quotients, and homology through that
+  encoding. Use the square map `M ⊕ M → M` with matrix `[1 1]` as a small
+  calculation, and introduce the precise abelian-category theorem only after
+  the reader understands the closure question. State the allowed regions and
+  morphisms alongside any theorem that depends on them.
+- **Expected conclusion:** An established finite construction can discharge
+  the tameness hypothesis. Finite encodings of two objects alone do not justify
+  arbitrary morphism or closure claims, and the conclusion concerns the
+  represented model on its stated domain.
+- **Visual checkpoint:** A static diagram should connect the finite complex,
+  its boundary maps, and the encoded homology; the square calculation should
+  expose the actual kernel and image. Captions distinguish mathematical
+  schematics from package output.
+- **Transition:** Once these operations remain finite, which category does
+  TamerOp use for Hom, Ext, and Tor? Link the category guide without suggesting
+  that exact recovery or abelian closure establishes ambient derived
+  equivalence.
+- **Acceptance:** Check the square calculation by hand, verify the theorem's
+  object and morphism hypotheses against its primary source, and retain the
+  distinction between a finite computational model and an arbitrary continuum
+  module. A short program or finitely many sampled queries is not itself a
+  finite-encoding proof.
 
 ## Page briefs
 
@@ -85,6 +197,9 @@ the complete site remain separate steps.
 ### 3. Explain why a second parameter changes the problem
 
 - **Destination:** `explanations/two_parameters.md`.
+- **Source and status:** [two_parameters.md](two_parameters.md), implemented
+  as a short static explanation on 4 October 2026. The publication manifest
+  places it after the ring; it joins the existing finite-encodings chapter.
 - **Reader's question:** Why can I no longer arrange all parameter choices on one line?
 - **Prerequisites:** Page 2; comparisons of pairs of real numbers.
 - **Starting object:** A schematic two-parameter filtration with its coordinate
@@ -100,6 +215,10 @@ the complete site remain separate steps.
 - **Transition:** Can infinitely many spaces and maps have a finite description?
 - **Acceptance:** The reader identifies `(1/4,3/2)` and `(3/2,1/4)` as incomparable,
   although both lie in the square used on the next page.
+  The local ten-page publication build passes link, anchor, image, and notebook
+  checks. Chromium review confirms rendered equations and the shared diagram,
+  no overflow at 1280px and 390px, and working ring → bridge → finite-encodings
+  links. Reader explanation of the exercise remains a separate acceptance check.
 
 ### 4. Construct a finite encoding of the square module
 
@@ -187,6 +306,40 @@ the complete site remain separate steps.
   notebook-frontend acceptance remains separate; captured notebook displays
   do not establish that integration.
 
+## Visual checkpoints for notebook publication
+
+The first path keeps its existing sequence and mathematical examples. Apply
+the [notebook writing guidance](writing.md#plan-the-visible-result-of-a-notebook)
+by planning the visible result alongside each question. The ring and changed
+ring now supply their figures through the publication build. Remaining rows
+continue to specify authoring and publication acceptance for their lessons.
+
+| Lesson | Required visible result | Prediction or interpretation to check |
+| --- | --- | --- |
+| Ring | Input top-cell grades; active-cell masks at grades `-1`, `0`, and `5` with the same orientation; the degree-one barcode and diagram, with the essential degree-zero interval explained separately | The complex is empty at `-1`, has one hole at `0`, and has filled that hole at `5`; the degree-one interval is `[0,5)`. These masks describe the stated cubical fixture, not an arbitrary complex renderer. |
+| Change one input | Original center grade `5` and changed grade `3`, with directly comparable barcodes | The hole dies earlier, giving `[0,3)`; the essential component still begins at `0`. Ask for the prediction before showing the changed result. |
+| Second parameter and square | A small parameter-plane diagram with comparable and incomparable pairs; the actual returned finite-poset view alongside a selected stalk/map | A two-dimensional dimension plot does not determine the maps; nine illustrative regions are not a required encoder output. |
+| Overlapping squares | Static selected-map views for `a → b`, `b → c`, and `a → c`, retaining the same parameter window and labels, with the three small matrices displayed explicitly | Both adjacent maps have rank one, but their composite is zero. The existing notebook computes this; publication should make all three answers easy to compare. |
+| Indicator presentation | Overlap and active-zero cases, showing the supports, labelled active rows/columns, coefficient block and its image dimension | Presence in the supports is insufficient: the active block can be `[0]`. An empty image basis has a mathematical meaning. Existing presentation recipes supply these views. |
+| Live inspection and export | The previously explained static selection, then its live inspector, followed by an exported snapshot of a specified selection | Identify what changed, what the figure retains, and which interaction needs live Julia. A saved figure is still useful after that session ends. |
+
+Use image, interval, module and presentation recipes already available for the
+first pass. A full filtered-complex viewer, automatic cross-panel annotations,
+or a verified source-cycle overlay is not a prerequisite for publishing the
+ring and square lessons. If a planned view needs one of those capabilities,
+describe the coming figure and its purpose explicitly; do not substitute an
+unlabelled surrogate.
+
+On 4 October 2026, the committed `inspect_encoding.ipynb` contains 23 code
+cells but no saved PNG/SVG outputs. Earlier headless execution and separately
+reviewed exports remain valid evidence in their stated scope. The publication
+pipeline now generates the ring's readable page and executed download; the
+square notebook still needs integration into it. Keep one canonical notebook source, capture static
+outputs before optional live widgets, and check captions, mathematical answers
+and images together. This supplements the existing execution and reader-review
+requirements; the ring's per-build execution evidence is in the generated
+`downloads/publication.json` described in the build guide.
+
 ## Mathematical specification before tutorial cells
 
 Fix coordinatewise order on ℝ² and coefficient field ℚ. Let
@@ -260,15 +413,16 @@ julia --startup-file=no --project=. docs/build_scripts/check_indicator_presentat
 
 Keep installation verification, mathematical checks, rendering checks, and
 reader review separate. The background chapters, mathematical oracles, and
-square inspection notebook are available. The documentation site, the linked
-ring-to-square narrative, first-path reference prose, and reader review remain
-to be completed.
+square inspection notebook are available. The initial local site and ring
+publication pipeline are implemented. Square publication, the complete linked
+ring-to-square route, first-path reference prose, reader review and deployment
+remain to be completed.
 
 1. Reconcile the [API inventory and backlog](api_coverage.toml); use the selected
    first-path bindings to constrain the first reference-writing pass.
-2. Add the documentation environment, site build, and navigation containing
-   only finished pages. Move existing explanations with links and redirects
-   where needed, preserving their mathematical qualifications.
+2. Extend the documentation environment and site scaffold already added for
+   the ring. Stage further explanations with links and stable anchors where
+   needed, preserving their mathematical qualifications.
 3. Integrate the canonical square inspection notebook into this route and
    connect the ring calculation to it. Generate displayed cells, outputs, and
    downloads from the notebook source; do not maintain competing examples.

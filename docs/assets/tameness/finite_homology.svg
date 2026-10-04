@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="520" height="446" viewBox="0 0 520 446" role="img" aria-labelledby="title desc">
+  <title id="title">Homology before and after pullback</title>
+  <desc id="desc">The left column is a chain complex, its cycles and boundaries, and its homology on a finite poset P. The right column recovers the same objects on the original parameter poset Q. Each horizontal arrow is pullback along pi. Taking homology commutes with this pullback when the differential maps are encoded too.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#536575"/>
+    </marker>
+  </defs>
+  <rect width="520" height="446" rx="12" fill="#fff"/>
+  <g font-family="DejaVu Sans, sans-serif" text-anchor="middle" fill="#172b3a">
+    <text x="121" y="32" font-size="19" font-weight="600">Finite poset P</text>
+    <text x="399" y="32" font-size="19" font-weight="600">Parameters Q</text>
+    <g stroke="#a5becd" stroke-width="1.5" fill="#f0f6f9">
+      <rect x="16" y="55" width="210" height="86" rx="8"/>
+      <rect x="294" y="55" width="210" height="86" rx="8"/>
+      <rect x="16" y="202" width="210" height="86" rx="8"/>
+      <rect x="294" y="202" width="210" height="86" rx="8"/>
+      <rect x="16" y="349" width="210" height="74" rx="8" fill="#eaf5ee" stroke="#72a687"/>
+      <rect x="294" y="349" width="210" height="74" rx="8" fill="#eaf5ee" stroke="#72a687"/>
+    </g>
+    <g font-size="22">
+      <text x="121" y="88">C<tspan baseline-shift="sub" font-size="15">•</tspan> with d</text>
+      <text x="399" y="88">π*C<tspan baseline-shift="sub" font-size="15">•</tspan> with π*d</text>
+      <text x="121" y="234">ker d<tspan baseline-shift="sub" font-size="15">h</tspan></text>
+      <text x="121" y="269">im d<tspan baseline-shift="sub" font-size="15">h+1</tspan></text>
+      <text x="399" y="234">π*(ker d<tspan baseline-shift="sub" font-size="15">h</tspan>)</text>
+      <text x="399" y="269">π*(im d<tspan baseline-shift="sub" font-size="15">h+1</tspan>)</text>
+      <text x="121" y="394">H<tspan baseline-shift="sub" font-size="15">h</tspan>(C<tspan baseline-shift="sub" font-size="15">•</tspan>)</text>
+      <text x="399" y="394">π*H<tspan baseline-shift="sub" font-size="15">h</tspan>(C<tspan baseline-shift="sub" font-size="15">•</tspan>)</text>
+    </g>
+    <g font-size="16">
+      <text x="121" y="119">spaces and maps</text>
+      <text x="399" y="119">spaces and maps</text>
+      <text x="121" y="180">cycles / boundaries</text>
+      <text x="399" y="180">cycles / boundaries</text>
+      <text x="121" y="327">take the quotient</text>
+      <text x="399" y="327">take the quotient</text>
+      <text x="260" y="82">π*</text>
+      <text x="260" y="229">π*</text>
+      <text x="260" y="370">π*</text>
+    </g>
+  </g>
+  <g fill="none" stroke="#536575" stroke-width="2" marker-end="url(#arrow)">
+    <path d="M 233 98 H 286"/>
+    <path d="M 233 245 H 286"/>
+    <path d="M 233 386 H 286"/>
+    <path d="M 121 144 V 158 M 121 188 V 198"/>
+    <path d="M 399 144 V 158 M 399 188 V 198"/>
+    <path d="M 121 291 V 305 M 121 335 V 345"/>
+    <path d="M 399 291 V 305 M 399 335 V 345"/>
+  </g>
+</svg>

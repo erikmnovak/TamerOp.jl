@@ -3,6 +3,7 @@
 
 _interval_value(x::Rational) = denominator(x) == 1 ? string(numerator(x)) :
     string(numerator(x), "/", denominator(x))
+_interval_value(x::AbstractFloat) = replace(string(x), r"\.0$" => "")
 _interval_value(x) = string(x)
 
 function _interval_record(b, d, mult; left_closed=true, right_closed=false,
@@ -148,6 +149,36 @@ function _interval_view(records; window=nothing, interval=nothing, max_intervals
         displayed_multiplicity=_interval_multiplicity(displayed), order)
 end
 
+function _interval_caption(view; diagram::Bool=false)
+    grouped = view.total_groups != view.total_multiplicity
+    count = "$(view.total_multiplicity) " * (view.total_multiplicity == 1 ? "interval" : "intervals")
+    grouped && (count *= " in $(view.total_groups) groups")
+    view.displayed_groups < view.total_groups && (count *= "; showing $(view.displayed_groups) of $(view.total_groups) groups")
+    notes = String[count]
+    view.offscreen_groups > 0 && push!(notes, "$(view.offscreen_groups) groups outside window.")
+    view.omitted_groups > 0 && push!(notes, "$(view.omitted_groups) groups hidden by max_intervals.")
+    view.selected_interval !== nothing && !(view.selected_interval in view.interval_ids) &&
+        push!(notes, "Selected #$(view.selected_interval) is outside window.")
+    statuses = Set(s for pair in view.endpoint_display for s in pair)
+    if !isempty(statuses)
+        if diagram
+            push!(notes, "Brackets include [ ] or exclude ( ) endpoints.")
+        elseif :finite in statuses
+            closed = Set(included for (record,pair) in zip(view.displayed_records,view.endpoint_display)
+                for (status,included) in zip(pair,(record.left_closed,record.right_closed)) if status === :finite)
+            push!(notes, length(closed) == 2 ? "Filled/open circles include/exclude endpoints." :
+                true in closed ? "Filled circles include endpoints." : "Open circles exclude endpoints.")
+        end
+        :essential in statuses && push!(notes, "Inf: continues indefinitely.")
+        :censored in statuses && push!(notes, "?: censored endpoint; continuation is unknown.")
+        :offscreen in statuses && push!(notes, diagram ? "outside: finite endpoint beyond the view." :
+            "< or >: finite endpoint beyond the view.")
+    end
+    isempty(view.coordinate_collisions) ||
+        push!(notes, "Distinct exact endpoints coincide in the drawing; inspect exact records.")
+    return join(notes, "\n")
+end
+
 function _interval_panels(records; window=nothing, interval=nothing, max_intervals=200, order=:sublevel,
                           barcode_kind=:barcode, diagram_kind=:persistence_diagram,
                           barcode_title="Barcode", diagram_title="Persistence diagram",
@@ -174,7 +205,8 @@ function _interval_panels(records; window=nothing, interval=nothing, max_interva
         end
         push!(diagram,PointLayer([point],color,1.0,highlight && r.id == interval ? 16.0 : 10.0))
         evidence = join((s === :censored ? "?" : s === :offscreen ? "outside" : s === :essential ? "Inf" : "" for s in statuses)," ")
-        label = "#$(r.id) " * (r.left_closed ? "[" : "(") * (r.right_closed ? "]" : ")") * " x$(r.multiplicity)"
+        label = "#$(r.id) " * (r.left_closed ? "[" : "(") * (r.right_closed ? "]" : ")")
+        r.multiplicity == 1 || (label *= " x$(r.multiplicity)")
         isempty(strip(evidence)) || (label *= " " * strip(evidence))
         push!(get!(Vector{String},labels,point),label)
         if highlight && r.id == interval
@@ -198,28 +230,33 @@ function _interval_panels(records; window=nothing, interval=nothing, max_interva
     negative = any(r -> _interval_status(r,:left) === :essential,view.displayed_records)
     positive = any(r -> _interval_status(r,:right) === :essential,view.displayed_records)
     tick_positions = unique([lo,hi])
+    # Small examples should let a reader read the actual births and deaths.
+    # Keep dense/near-coincident diagrams on the bounded window ticks instead.
+    finite_ticks = sort!(unique(vcat(tick_positions,
+        Float64[x for r in view.displayed_records for x in (r.birth,r.death)
+            if isfinite(x) && lo <= x <= hi])))
+    if length(finite_ticks) <= 8 && all(gap -> gap >= 0.1*(hi-lo), diff(finite_ticks))
+        tick_positions = finite_ticks
+    end
     tick_labels = _interval_value.(tick_positions)
     negative && (pushfirst!(tick_positions,view.infinity_lanes.negative); pushfirst!(tick_labels,"-Inf"))
     positive && (push!(tick_positions,view.infinity_lanes.positive); push!(tick_labels,"+Inf"))
     ticks = (tick_positions,tick_labels)
-    count_text = "$(view.displayed_groups) / $(view.total_groups) interval groups; $(view.total_multiplicity) intervals counting multiplicity."
-    view.offscreen_groups > 0 && (count_text *= " $(view.offscreen_groups) outside window.")
-    view.omitted_groups > 0 && (count_text *= " $(view.omitted_groups) hidden by max_intervals.")
-    interval !== nothing && !(interval in view.interval_ids) && (count_text *= " Selected #$interval is outside window.")
-    precision = isempty(view.coordinate_collisions) ? "" : "\nDistinct exact endpoints coincide in the drawing; inspect exact records."
-    evidence_text = "Filled/open circles include/exclude endpoints.\n< or >: finite endpoint outside view; ?: censored; Inf: certified infinity."
     common = merge(metadata,view,(; endpoint_semantics,essential_status,display_coordinates=:float64,
-        barcode_count=length(records),figure_size=(1000,650),legend_position=:none))
-    barcode = VisualizationSpec(barcode_kind;title=barcode_title,subtitle=count_text*"\n"*evidence_text*precision,
-        layers=bars,axes=_default_axes_2d(xlabel="Parameter",ylabel="Interval group",xlimits=view.limits,
+        barcode_count=length(records),minimal_axes=true,legend_position=:none))
+    barcode = VisualizationSpec(barcode_kind;title=barcode_title,subtitle=_interval_caption(view),
+        layers=bars,axes=_default_axes_2d(xlabel="Parameter",
+            ylabel=view.total_groups == view.total_multiplicity ? "Interval" : "Interval group",xlimits=view.limits,
             ylimits=(0.3,max(1,view.displayed_groups)+0.7),aspect=:auto,xticks=ticks,
-            yticks=(Float64.(1:view.displayed_groups),["#$(r.id) x$(r.multiplicity)" for r in view.displayed_records])),
+            yticks=(Float64.(1:view.displayed_groups),["#$(r.id)" * (r.multiplicity == 1 ? "" : " x$(r.multiplicity)") for r in view.displayed_records])),
         metadata=merge(common,(;interval_segments=view.bar_segments,
+            figure_size=(760,clamp(300 + 24*view.displayed_groups,360,780)),
             barcode_endpoint_layers=(left=Tuple(endpoint_layers.left),right=Tuple(endpoint_layers.right)))),
         interaction=_default_interaction(labels=true))
-    diagram_spec = VisualizationSpec(diagram_kind;title=diagram_title,subtitle=count_text*"\n"*evidence_text*precision,
+    diagram_spec = VisualizationSpec(diagram_kind;title=diagram_title,subtitle=_interval_caption(view;diagram=true),
         layers=diagram,axes=_default_axes_2d(xlabel="Birth",ylabel="Death",xlimits=view.limits,ylimits=view.limits,
             aspect=:equal,xticks=ticks,yticks=ticks),metadata=merge(common,(;interval_points=view.diagram_points,
+                figure_size=(640,560),
                 interval_annotation_layers=Tuple(annotation_layers))),
         interaction=_default_interaction(labels=true))
     return (barcode,diagram_spec)
@@ -323,8 +360,9 @@ function _interval_payload_spec(payload,kind;window=nothing,interval=nothing,max
     spec = panels[kind === :barcode ? 1 : 2]
     if get(payload.metadata,:source,nothing) === :ordinary_persistence
         lane = payload.order === :sublevel ? spec.metadata.infinity_lanes.positive : spec.metadata.infinity_lanes.negative
-        subtitle = "$(payload.order); Float64 display; certified essential endpoints at " *
-            (payload.order === :sublevel ? "+Inf" : "-Inf") * ".\n" * spec.subtitle
+        subtitle = (payload.order === :sublevel ? "Sublevel" : "Superlevel") * " · " * spec.subtitle
+        rounded = get(payload.metadata,:rounded_endpoint_count,0)
+        rounded > 0 && (subtitle *= "\nFloat64 display rounds $rounded endpoints; exact values remain in metadata.")
         return VisualizationSpec(spec.kind;title=spec.title,subtitle,layers=spec.layers,axes=spec.axes,
             legend=spec.legend,interaction=spec.interaction,
             metadata=merge(spec.metadata,(;essential_display_coordinate=lane)))

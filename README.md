@@ -186,6 +186,11 @@ This direct barcode routine introduces births and deaths; the
 [finite-encoding introduction](docs/finite_encodings.md) then explains how we
 retain the module when moving to several parameters.
 
+The [ring teaching notebook](docs/tutorials/ring.ipynb) develops this example
+with filtration snapshots, a barcode, a persistence diagram and a prediction
+exercise. The [documentation build](docs/README.md) generates its website
+lesson and a downloadable notebook containing the computed figures.
+
 Run this in **Julia**, after installing the package:
 
 ```julia
@@ -455,6 +460,11 @@ with a weighted geometric mean of **135.70×** for compiled, uncached native
 construction plus query. The remaining 20 QPA tensor-evaluation failures
 have no speed ratio. See the [QPA report](docs/benchmarks/qpa.md) for the
 tested development snapshot, memory costs, and scope.
+
+The [PHAT report](docs/benchmarks/phat.md) compares complete ordinary F₂
+barcodes on 48 medium/large inputs across sixteen structural variants.
+TamerOp **1.33× as fast in the balanced aggregate** for construction plus complete barcode; all 48 medium/large requests completed correctly in both tools. The report includes variant-by-variant scaling curves and the
+machine, verification and measurement details.
 
 For measuring or improving performance, use the [benchmarking manual](docs/benchmarking.md).
 It separates compilation from uncached computation and reuse, explains fair

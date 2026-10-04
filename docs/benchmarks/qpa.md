@@ -2,10 +2,12 @@
 
 **Study completed 2026-10-03.** TamerOp returned independently verified answers
 for all **220** fixed requests. QPA returned matching answers for **200**.
-On those 200 completed comparisons, TamerOp was faster in every paired pass,
-with a weighted geometric mean speed ratio of **135.70×** for native
-construction plus the complete query. The approximate 95% interval is
-**134.64–136.77×**.
+On those 200 completed comparisons, TamerOp was **135.70× as fast in the
+weighted aggregate** for native construction plus the complete query
+(approximate 95% interval **134.64–136.77×**). The advantage is substantial
+rather than a collection of marginal timing differences: even the smallest
+case-level primary ratio is **1.76×**. TamerOp was faster in every paired pass
+on all 200 matched requests.
 
 These are measurements of compiled computation with previous mathematical
 results discarded. They concern the development snapshot and machine specified
@@ -96,10 +98,17 @@ tensors, not just returning a tensor-space dimension. Higher-degree Tor is
 outside this comparison.
 
 All 200 matched primary comparisons exceed the predeclared 10% practical
-speed margin in every pass. The smallest case-level primary ratio is **1.76×**.
-Construction alone is less uniform: **eight cases favor QPA in at least one
-pass**. Those measurements remain in the downloads rather than being removed
-from the study.
+speed margin in every pass. The smallest case-level primary ratio, **1.76×**,
+corresponds to about **43% less time** for TamerOp. Thus the complete-request
+advantage is meaningful in relative terms even at the low end; the runtimes
+below show the absolute scale.
+
+Construction alone varies more: **eight cases favor QPA in at least one pass**.
+This does not establish eight consistently slower cases or change the
+complete-request result. Construction timings and pass ranges remain available
+alongside the query and combined measurements. As in the
+[reporting guidance](../benchmarking.md#practical-significance-and-presentation),
+the magnitude and consistency of a difference matter more than a binary count.
 
 ![Performance profile: TamerOp completes all 220 requests; QPA has verified complete timings for 200.](qpa_v1/performance_profile.svg)
 
@@ -222,8 +231,9 @@ approximate 95% interval uses a t interval on those five log aggregates
 this host, not uncertainty over all possible modules or machines. Giving all
 matched cases equal weight instead produces **129.08×**.
 
-The matched pairs account for **90% of the original weight**. That 90% consists
-of practical wins; the remaining 10% is unresolved. The predeclared requirement
+The matched pairs account for **90% of the original weight**, all with TamerOp
+gains exceeding the practical margin; the remaining 10% is unresolved. The
+predeclared requirement
 for a numerical score over all 220 cases was therefore not met. The 135.70×
 result is conditional on the 200 completed pairs, alongside a separate
 completion advantage. It is not a 220-case speed score.

@@ -503,7 +503,7 @@ function _solve_fullcolumn_factorQQ(B::AbstractMatrix{<:QQ}, fac::FullColumnFact
         ysub = Vector{QQ}(undef, n)
         _gather_rows!(ysub, Y, fac.rows)
         x = _mulQQ(fac.invB, ysub; backend=backend)
-        if check_rhs && !_verify_solveQQ(B, x, Y)
+        if check_rhs && !_verify_solveQQ(B, x, Y; backend)
             error("right-hand side is not in column space of B")
         end
         return x
@@ -520,7 +520,7 @@ function _solve_fullcolumn_factorQQ(B::AbstractMatrix{<:QQ}, fac::FullColumnFact
         _mulQQ(fac.invB, Ysub; backend=backend)
     end
 
-    if check_rhs && !_verify_solveQQ(B, X, Ymat)
+    if check_rhs && !_verify_solveQQ(B, X, Ymat; backend)
         error("right-hand side is not in column space of B")
     end
 
@@ -595,6 +595,26 @@ function _factor_fullcolumn_nemoQQ(B::AbstractMatrix{<:QQ})::NemoFullColumnFacto
     all(isfinite, B) || throw(ArgumentError("factor: entries must be finite rational numbers"))
     m, n = size(B)
     n == 0 && return NemoFullColumnFactorQQ(Int[], Nemo.matrix(Nemo.QQ, Matrix{QQ}(I, 0, 0)))
+
+    # If the leading n rows are independent, they are already the first
+    # independent rows selected by RREF of transpose(B). Reuse their inverse
+    # directly instead of reducing the whole transpose just to find them.
+    # Keep the existing dense gate: sparse/structured and tiny factors do not
+    # pay for a speculative inverse. A singular leading minor is not evidence
+    # that B is rank deficient; continue with general row selection below.
+    if _use_nemo_QQ_factor(B)
+        leading_inverse = try
+            inv(_to_fmpq_mat(view(B, 1:n, :)))
+        catch err
+            # Nemo's exact QQ inverse reports singularity with this error.
+            # Do not conceal an unrelated conversion or arithmetic failure.
+            err isa ErrorException && err.msg == "Matrix not invertible" || rethrow()
+            nothing
+        end
+        if leading_inverse !== nothing
+            return NemoFullColumnFactorQQ(collect(1:n), leading_inverse)
+        end
+    end
 
     _, rows_tup = _nemo_rref(QQField(), transpose(B); pivots=true)
     rows = collect(rows_tup)
@@ -1351,17 +1371,23 @@ function _verify_nullspaceQQ(A::AbstractMatrix{QQ}, N::AbstractMatrix{QQ})::Bool
     Matrix{QQ}(A * N) == zeros(QQ, size(A, 1), size(N, 2))
 end
 
-function _verify_solveQQ(B::AbstractMatrix{QQ}, X::AbstractVecOrMat{QQ}, Y::AbstractVecOrMat{QQ})::Bool
-    # Keep vector and matrix RHS contracts distinct. Dense certificates stream
-    # each dot product, skipping structural zeros and avoiding a full product
-    # allocation. Sparse wrappers keep Julia's sparse multiplication; direct
-    # CSC inputs use the column-streaming methods below.
+function _verify_solveQQ(B::AbstractMatrix{QQ}, X::AbstractVecOrMat{QQ}, Y::AbstractVecOrMat{QQ};
+                         backend::Symbol=:auto)::Bool
+    backend in (:auto, :julia_exact, :nemo) || throw(ArgumentError("unsupported QQ certificate backend $backend"))
+    # Keep vector and matrix RHS contracts distinct. Eligible dense batches
+    # use the existing exact product with conversions charged on every call.
+    # Small/structured inputs stream dot products; sparse wrappers and direct
+    # CSC inputs retain their native certificates. Explicit Julia solve factors
+    # pass their backend here so validation respects the same choice.
     ndims(X) == ndims(Y) || return false
     size(X, 1) == size(B, 2) || return false
     size(Y, 1) == size(B, 1) || return false
     size(X, 2) == size(Y, 2) || return false
     isempty(X) && return all(iszero, Y)
     issparse(B) && return B * X == Y
+    if backend == :nemo || (backend == :auto && _use_nemo_QQ_product(B, X))
+        return _mulQQ(B, X; backend) == Y
+    end
     @inbounds for j in axes(Y, 2)
         for i in axes(Y, 1)
             value = zero(QQ)
@@ -1378,7 +1404,9 @@ function _verify_solveQQ(B::AbstractMatrix{QQ}, X::AbstractVecOrMat{QQ}, Y::Abst
     return true
 end
 
-function _verify_solveQQ(B::SparseMatrixCSC{QQ,Int}, X::AbstractVector{QQ}, Y::AbstractVector{QQ})::Bool
+function _verify_solveQQ(B::SparseMatrixCSC{QQ,Int}, X::AbstractVector{QQ}, Y::AbstractVector{QQ};
+                         backend::Symbol=:auto)::Bool
+    backend in (:auto, :julia_exact, :nemo) || throw(ArgumentError("unsupported QQ certificate backend $backend"))
     m, n = size(B)
     length(X) == n || return false
     length(Y) == m || return false
@@ -1398,7 +1426,9 @@ function _verify_solveQQ(B::SparseMatrixCSC{QQ,Int}, X::AbstractVector{QQ}, Y::A
     return true
 end
 
-function _verify_solveQQ(B::SparseMatrixCSC{QQ,Int}, X::AbstractMatrix{QQ}, Y::AbstractMatrix{QQ})::Bool
+function _verify_solveQQ(B::SparseMatrixCSC{QQ,Int}, X::AbstractMatrix{QQ}, Y::AbstractMatrix{QQ};
+                         backend::Symbol=:auto)::Bool
+    backend in (:auto, :julia_exact, :nemo) || throw(ArgumentError("unsupported QQ certificate backend $backend"))
     m, n = size(B)
     size(X, 1) == n || return false
     size(Y, 1) == m || return false

@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="460" height="550" viewBox="0 0 460 550" role="img" aria-labelledby="title desc">
+  <title id="title">Selected-row coordinates, complete membership check</title>
+  <desc id="desc">For a fixed basis B, select independent rows I and retain the inverse S inverse of B on those rows. For each right-hand side Y, form candidate coordinates X from S inverse times Y on the selected rows. Check B times X equals Y using all rows. Return X on equality; reject inconsistent input otherwise.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="#475569"/></marker>
+  </defs>
+  <rect x="1" y="1" width="458" height="548" rx="16" fill="#fff" stroke="#d5dde7"/>
+  <g font-family="system-ui, sans-serif" text-anchor="middle" fill="#172d40">
+    <text x="230" y="33" font-size="16" font-weight="700">PREPARE ONCE · FIXED BASIS B</text>
+    <rect x="40" y="48" width="380" height="101" rx="10" fill="#edf5fb" stroke="#5083a5"/>
+    <text x="230" y="78" font-size="19">Choose independent rows I</text>
+    <text x="230" y="113" font-size="23">Retain S⁻¹, where S = B[I, :]</text>
+    <path d="M230 149V185" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+    <text x="230" y="217" font-size="16" font-weight="700">EACH QUERY · NEW VECTORS Y</text>
+    <rect x="40" y="235" width="380" height="84" rx="10" fill="#f5f7fa" stroke="#8b9daf"/>
+    <text x="230" y="264" font-size="19">Recover candidate coordinates</text>
+    <text x="230" y="298" font-size="24">X = S⁻¹ Y[I, :]</text>
+    <path d="M230 319V349" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+    <rect x="40" y="359" width="380" height="84" rx="10" fill="#edf7f2" stroke="#48866b"/>
+    <text x="230" y="388" font-size="19">Check every original row</text>
+    <text x="230" y="422" font-size="24">Does B X = Y?</text>
+    <path d="M125 443V484" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+    <path d="M335 443V484" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+    <text x="125" y="472" dx="-26" font-size="15">yes</text>
+    <text x="335" y="472" dx="-25" font-size="15">no</text>
+    <text x="125" y="519" font-size="22" font-weight="600">Return X</text>
+    <text x="335" y="519" font-size="22" font-weight="600">Reject input</text>
+  </g>
+</svg>

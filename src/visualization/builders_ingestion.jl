@@ -667,13 +667,35 @@ function _image_slice_values(A::AbstractArray, view_dims::Tuple{Int,Int}, fixed:
     return view_dims[2] < view_dims[1] ? slice : permutedims(slice)
 end
 
+function _image_colorrange(value)
+    value === nothing && return nothing
+    value isa Tuple && length(value) == 2 &&
+        all(x -> x isa Real && !(x isa Bool) && isfinite(x), value) ||
+        throw(ArgumentError("colorrange must be nothing or two finite real limits."))
+    limits = Float64.(value)
+    all(isfinite, limits) && limits[1] < limits[2] ||
+        throw(ArgumentError("colorrange limits must remain finite and strictly increasing in display coordinates."))
+    return limits
+end
+
 function _image_spec(img::DataTypes.ImageNd; kind::Symbol=:image, view_dims=nothing,
-                     slice_indices=nothing, colormap::Symbol=:magma, kwargs...)
+                     slice_indices=nothing, colormap::Symbol=:magma,
+                     colorrange=nothing, colorbar_label::AbstractString="intensity",
+                     title::AbstractString=(kind === :channels ? "Image channels" : "Image"), kwargs...)
     _ = kwargs
     A = _image_array(img)
     vd, fixed = _image_view_selection(img, kind; view_dims=view_dims, slice_indices=slice_indices)
+    limits = _image_colorrange(colorrange)
     x = Float64.(1:size(A, vd[1]))
     y = Float64.(1:size(A, vd[2]))
+    # Tiny arrays should show cell indices, not fractional positions between them.
+    xticks = length(x) <= 12 ? (x, string.(1:length(x))) : nothing
+    yticks = length(y) <= 12 ? (y, string.(1:length(y))) : nothing
+    labels = ndims(A) == 2 ? ("Row index", "Column index") : nothing
+    axes = _default_axes_2d(xlabel=labels === nothing ? "axis $(vd[1])" : labels[vd[1]],
+        ylabel=labels === nothing ? "axis $(vd[2])" : labels[vd[2]],
+        xlimits=(first(x)-0.5,last(x)+0.5), ylimits=(first(y)-0.5,last(y)+0.5),
+        aspect=:equal, xticks=xticks, yticks=yticks)
     if kind === :channels
         panels = VisualizationSpec[]
         for c in 1:size(A, 3)
@@ -681,35 +703,33 @@ function _image_spec(img::DataTypes.ImageNd; kind::Symbol=:image, view_dims=noth
             push!(panels, VisualizationSpec(:channels;
                                             title="channel $c",
                                             layers=AbstractVisualizationLayer[
-                                                HeatmapLayer(x, y, vals, colormap, 1.0, "intensity"),
+                                                HeatmapLayer(x, y, vals, colormap, 1.0, colorbar_label),
                                             ],
-                                            axes=_default_axes_2d(xlabel="axis $(vd[1])", ylabel="axis $(vd[2])",
-                                                                  xlimits=(minimum(x), maximum(x)),
-                                                                  ylimits=(minimum(y), maximum(y))),
-                                            metadata=(; view_dims=vd, fixed_indices=Dict(3 => c))))
+                                            axes=axes,
+                                            metadata=(; view_dims=vd, fixed_indices=Dict(3 => c), colorrange=limits,
+                                                minimal_axes=true)))
         end
         return VisualizationSpec(:channels;
-                                 title="Image channels",
+                                 title=title,
                                  subtitle="one panel per stored axis-3 slice",
                                  panels=panels,
-                                 metadata=(; shape=size(A), nchannels=size(A, 3), view_dims=vd,
+                                 metadata=(; shape=size(A), nchannels=size(A, 3), view_dims=vd, colorrange=limits,
                                              coordinate_convention=:array_indices, channel_axis=3))
     end
     vals = _image_slice_values(A, vd, fixed)
     widgets = kind === :slice_viewer ? (:slice_index,) : ()
-    subtitle = kind === :slice_viewer ? "slice controls require a live Julia session" : "heatmap preview"
+    subtitle = kind === :slice_viewer ? "slice controls require a live Julia session" : ""
     metadata = (; shape=size(A), view_dims=vd, fixed_indices=copy(fixed), colormap,
-                 coordinate_convention=:array_indices)
+                 colorrange=limits, colorbar_label=String(colorbar_label),
+                 coordinate_convention=:array_indices, minimal_axes=true, figure_size=(640,440))
     kind === :slice_viewer && (metadata = (; metadata..., volume=A, requires_live_julia=true))
     return VisualizationSpec(kind;
-                             title="Image preview",
+                             title=title,
                              subtitle=subtitle,
                              layers=AbstractVisualizationLayer[
-                                 HeatmapLayer(x, y, vals, colormap, 1.0, "intensity"),
+                                 HeatmapLayer(x, y, vals, colormap, 1.0, colorbar_label),
                              ],
-                             axes=_default_axes_2d(xlabel="axis $(vd[1])", ylabel="axis $(vd[2])",
-                                                   xlimits=(minimum(x), maximum(x)),
-                                                   ylimits=(minimum(y), maximum(y))),
+                             axes=axes,
                              metadata=metadata,
                              interaction=_default_interaction(widgets=widgets, notebook=kind === :slice_viewer ? :widget_viewer : :summary_card))
 end

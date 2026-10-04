@@ -42,7 +42,7 @@ encoding families and is not an ingestion grid representation.
 | `field` | Sets the coefficient field. Supply an actual field object, such as `QQField()`, `F2()`, `Fp(5)`, or `RealField()`. An explicit `encode(...; field=...)` keyword takes precedence. The default is QQ. |
 
 A supplied or coarsened grid that omits a cell's critical grade uses the
-existing **floor placement** contract: the grade is placed at the preceding
+**floor placement** contract: the grade is placed at the preceding
 grid coordinate. It is not restriction of the original persistence module to
 those grid points. The result provenance reports `:floor_snapped` when this
 happens. To retain the original filtration exactly, include every critical
@@ -65,8 +65,8 @@ Session caches distinguish poset representations, coefficient fields and
 constructed chain data. Reusing a session therefore does not change an
 explicit representation or field request. Pipeline JSON schema version 3 stores field objects
 with their prime or numerical tolerances, so replaying it preserves the same
-choice. Earlier schema versions are rejected by the strict loader; regenerate
-pre-release pipeline files with the current writer.
+choice. The strict loader requires schema version 3; use the writer to create
+a compatible pipeline file.
 
 The Julia options constructor requires integer orientation signs. At the JSON
 boundary, exactly integral numbers normalize to integers: `1.0` and `1` both

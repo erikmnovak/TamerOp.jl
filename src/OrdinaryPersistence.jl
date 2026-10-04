@@ -354,6 +354,49 @@ function _cell_dimensions(offsets::Vector{Int})
     return dims
 end
 
+# Exact double-boundary checks share no reduction state with the barcode.
+function _double_boundary_zero_sparse(A, B)
+    parity = zeros(Bool, size(A, 1))
+    for col in axes(B, 2)
+        nonzero = 0
+        @inbounds for p in nzrange(B, col)
+            isodd(B.nzval[p]) || continue
+            for q in nzrange(A, B.rowval[p])
+                isodd(A.nzval[q]) || continue
+                row = A.rowval[q]
+                old = parity[row]
+                nonzero += old ? -1 : 1
+                parity[row] = !old
+            end
+        end
+        nonzero == 0 || return false
+        # A zero result leaves the accumulator empty for the next column.
+    end
+    return true
+end
+
+function _double_boundary_zero_packed(A, B)
+    nwords = cld(size(A, 1), 64)
+    packed = zeros(UInt64, nwords, size(A, 2))
+    @inbounds for col in axes(A, 2), p in nzrange(A, col)
+        isodd(A.nzval[p]) || continue
+        row = A.rowval[p] - 1
+        packed[(row >>> 6) + 1, col] ⊻= UInt64(1) << (row & 63)
+    end
+    accumulator = zeros(UInt64, nwords)
+    for col in axes(B, 2)
+        @inbounds for p in nzrange(B, col)
+            isodd(B.nzval[p]) || continue
+            source = B.rowval[p]
+            for word in 1:nwords
+                accumulator[word] ⊻= packed[word, source]
+            end
+        end
+        all(iszero, accumulator) || return false
+    end
+    return true
+end
+
 # Validate mutable hand-built storage before any unchecked reduction access.
 function _validate_complex(G::GradedComplex{N,T}, order::Symbol) where {N,T}
     N == 1 || throw(ArgumentError("ordinary persistence requires a one-parameter GradedComplex; got $N parameters."))
@@ -395,22 +438,15 @@ function _validate_complex(G::GradedComplex{N,T}, order::Symbol) where {N,T}
     # overflow and sparse multiplication's coefficient/type conventions.
     for d in 2:length(G.boundaries)
         A, B = G.boundaries[d - 1], G.boundaries[d]
-        parity = falses(size(A, 1))
-        touched = Int[]
-        for col in 1:size(B, 2)
-            empty!(touched)
-            for p in nzrange(B, col)
-                isodd(B.nzval[p]) || continue
-                for q in nzrange(A, B.rowval[p])
-                    isodd(A.nzval[q]) || continue
-                    row = A.rowval[q]
-                    parity[row] = !parity[row]
-                    push!(touched, row)
-                end
-            end
-            any(row -> parity[row], touched) &&
-                throw(ArgumentError("boundary squared is nonzero over F2 in chain degree $d."))
-        end
+        # Measured sparse/dense controls favor packing once columns contain
+        # at least three entries per word and B reuses A columns four times
+        # on average. Packing single-use columns loses to direct parity.
+        # Packed storage stays below one third of sparse index storage.
+        words = cld(size(A, 1), 64)
+        packed = words > 0 && nnz(A) ÷ max(1, size(A, 2)) >= 3 * words &&
+                 nnz(B) >= 4 * size(A, 2)
+        valid = packed ? _double_boundary_zero_packed(A, B) : _double_boundary_zero_sparse(A, B)
+        valid || throw(ArgumentError("boundary squared is nonzero over F2 in chain degree $d."))
     end
     return offsets
 end
@@ -433,9 +469,10 @@ function _canonical_column!(col::Vector{Int}, rank::Vector{Int})
     return col
 end
 
-function _xor_columns(a::Vector{Int}, b::Vector{Int}, rank::Vector{Int})
-    out = Vector{Int}()
-    sizehint!(out, max(length(a), length(b)))
+# The destination is scratch storage, distinct from both sorted source columns.
+function _xor_columns!(out::Vector{Int}, a::Vector{Int}, b::Vector{Int}, rank::Vector{Int})
+    resize!(out, length(a) + length(b))
+    k = 1
     i = 1
     j = 1
     @inbounds while i <= length(a) && j <= length(b)
@@ -447,38 +484,39 @@ function _xor_columns(a::Vector{Int}, b::Vector{Int}, rank::Vector{Int})
             i += 1
             j += 1
         elseif ra < rb
-            push!(out, ai)
+            out[k] = ai; k += 1
             i += 1
         else
-            push!(out, bj)
+            out[k] = bj; k += 1
             j += 1
         end
     end
     @inbounds while i <= length(a)
-        push!(out, a[i])
+        out[k] = a[i]; k += 1
         i += 1
     end
     @inbounds while j <= length(b)
-        push!(out, b[j])
+        out[k] = b[j]; k += 1
         j += 1
     end
+    resize!(out, k - 1)
     return out
 end
 
-function _boundary_column_f2(G::GradedComplex,
+function _boundary_column_f2!(col::Vector{Int}, G::GradedComplex,
                              dims::Vector{Int},
                              offsets::Vector{Int},
                              rank::Vector{Int},
                              cell::Int)
+    empty!(col)
     d = dims[cell]
-    d == 0 && return Int[]
+    d == 0 && return col
     B = G.boundaries[d]
     local_col = cell - offsets[d + 1] + 1
     prev_offset = offsets[d]
     lo = B.colptr[local_col]
     hi = B.colptr[local_col + 1] - 1
-    col = Int[]
-    sizehint!(col, max(0, hi - lo + 1))
+    sizehint!(col, max(0, hi - lo + 1); shrink=false)
     @inbounds for ptr in lo:hi
         isodd(B.nzval[ptr]) || continue
         row_global = prev_offset + B.rowval[ptr] - 1
@@ -622,6 +660,325 @@ function _top_cell_complex_2d(vals::AbstractMatrix{T},
     return GradedComplex(cells, SparseMatrixCSC{Int,Int}[b1, b2], grades)
 end
 
+# One active binary column; each higher level marks nonempty words below it.
+# Saved pivot columns use sparse indices or packed words. Finding the largest
+# entry skips empty ranges without rescanning or copying the active destination
+# on each addition.
+struct _ParityColumn
+    levels::Vector{Vector{UInt64}}
+end
+
+function _ParityColumn(n::Int)
+    levels = Vector{UInt64}[]
+    words = max(1, cld(n, 64))
+    while true
+        push!(levels, zeros(UInt64, words))
+        words == 1 && break
+        words = cld(words, 64)
+    end
+    return _ParityColumn(levels)
+end
+
+# Change a whole coefficient word, propagating occupancy only if needed.
+@inline function _xor_word!(column::_ParityColumn, word::Int, mask::UInt64)
+    @inbounds begin
+        words = column.levels[1]
+        before = words[word]
+        after = before ⊻ mask
+        words[word] = after
+        iszero(before) == iszero(after) && return nothing
+        index = word
+        for level in 2:length(column.levels)
+            words = column.levels[level]
+            word = ((index - 1) >>> 6) + 1
+            mask = UInt64(1) << ((index - 1) & 63)
+            before = words[word]
+            after = before ⊻ mask
+            words[word] = after
+            iszero(before) == iszero(after) && break
+            index = word
+        end
+    end
+    return nothing
+end
+
+@inline function _toggle_entry!(column::_ParityColumn, index::Int)
+    _xor_word!(column, ((index - 1) >>> 6) + 1, UInt64(1) << ((index - 1) & 63))
+end
+
+@inline function _column_pivot(column::_ParityColumn)
+    iszero(column.levels[end][1]) && return 0
+    index = 1
+    @inbounds for level in length(column.levels):-1:1
+        word = column.levels[level][index]
+        index = ((index - 1) << 6) + 64 - leading_zeros(word)
+    end
+    return index
+end
+
+# After canceling a pivot, no entry above it can have appeared. Usually the
+# next pivot is in the same word, avoiding a walk down the entire hierarchy.
+@inline function _column_pivot(column::_ParityColumn, previous::Int)
+    word = ((previous - 1) >>> 6) + 1
+    @inbounds bits = column.levels[1][word]
+    return iszero(bits) ? _column_pivot(column) : ((word - 1) << 6) + 64 - leading_zeros(bits)
+end
+
+# A finished column is consumed as a whole. Visit each occupied hierarchy
+# word once, instead of repairing occupancy after removing each coefficient.
+function _drain_level!(out::Vector{Int}, levels::Vector{Vector{UInt64}}, level::Int, index::Int)
+    @inbounds bits = levels[level][index]
+    @inbounds levels[level][index] = 0
+    offset = (index - 1) << 6
+    while !iszero(bits)
+        bit = 64 - leading_zeros(bits)
+        bits ⊻= UInt64(1) << (bit - 1)
+        if level == 1
+            push!(out, offset + bit)
+        else
+            _drain_level!(out, levels, level - 1, offset + bit)
+        end
+    end
+    return nothing
+end
+
+function _drain_column!(out::Vector{Int}, column::_ParityColumn)
+    empty!(out)
+    _drain_level!(out, column.levels, length(column.levels), 1)
+    return out
+end
+
+# Saved columns share two append-only payloads. A positive span length denotes
+# sparse indices; a negative length denotes packed (word, mask) pairs. Keeping
+# the same density rule avoids making sparse additions pay for empty bits.
+struct _BarcodeColumns
+    spans::Vector{Tuple{Int,Int}}
+    rows::Vector{Int}
+    words::Vector{Tuple{Int,UInt64}}
+end
+_BarcodeColumns(n::Int) = _BarcodeColumns(Vector{Tuple{Int,Int}}(undef, n), Int[], Tuple{Int,UInt64}[])
+
+function _store_barcode_column!(stored::_BarcodeColumns, pivot::Int, col::Vector{Int})
+    nwords = 0
+    previous = 0
+    for row in col
+        word = ((row - 1) >>> 6) + 1
+        nwords += word != previous
+        previous = word
+    end
+    if length(col) < 2 * nwords
+        start = length(stored.rows) + 1
+        append!(stored.rows, col)
+        stored.spans[pivot] = (start, length(col))
+    else
+        start = length(stored.words) + 1
+        previous = 0
+        mask = UInt64(0)
+        for row in col
+            word = ((row - 1) >>> 6) + 1
+            if word != previous
+                previous > 0 && push!(stored.words, (previous, mask))
+                previous = word
+                mask = UInt64(0)
+            end
+            mask |= UInt64(1) << ((row - 1) & 63)
+        end
+        previous > 0 && push!(stored.words, (previous, mask))
+        stored.spans[pivot] = (start, -nwords)
+    end
+    return nothing
+end
+
+@inline function _add_barcode_column!(active::_ParityColumn, stored::_BarcodeColumns, pivot::Int)
+    @inbounds start, count = stored.spans[pivot]
+    if count > 0
+        @inbounds for i in start:(start + count - 1)
+            _toggle_entry!(active, stored.rows[i])
+        end
+    else
+        @inbounds for i in start:(start - count - 1)
+            word, mask = stored.words[i]
+            _xor_word!(active, word, mask)
+        end
+    end
+    return nothing
+end
+
+@inline function _component_root!(parent, vertex)
+    @inbounds while parent[vertex] != vertex
+        parent[vertex] = parent[parent[vertex]]
+        vertex = parent[vertex]
+    end
+    return vertex
+end
+
+# Graph incidence in degree one determines H0 even in higher-dimensional
+# complexes. A clearing set from higher degrees identifies edges already paired
+# with faces; only the remaining cycle edges represent essential H1 classes.
+# A graph-only caller supplies nothing for that set.
+function _graph_barcode!(intervals, essential, G, offsets, values, perm, rank,
+                         cleared::Union{Nothing,BitVector})
+    boundary = isempty(G.boundaries) ? nothing : G.boundaries[1]
+    if boundary !== nothing
+      for col in axes(boundary, 2)
+        count = 0
+        @inbounds for ptr in nzrange(boundary, col)
+            count += isodd(boundary.nzval[ptr])
+        end
+        count in (0, 2) || return false
+      end
+    end
+    nvertices = length(offsets) >= 2 ? offsets[2] - 1 : 0
+    lastedge = length(offsets) >= 3 ? offsets[3] - 1 : nvertices
+    parent = collect(1:nvertices)
+    sizes = ones(Int, nvertices)
+    elder = copy(parent)
+    for position in eachindex(perm)
+        cell = perm[position]
+        nvertices < cell <= lastedge || continue
+        cleared !== nothing && cleared[position] && continue
+        col = cell - nvertices
+        a = 0
+        b = 0
+        @inbounds for ptr in nzrange(boundary, col)
+            isodd(boundary.nzval[ptr]) || continue
+            a == 0 ? (a = boundary.rowval[ptr]) : (b = boundary.rowval[ptr])
+        end
+        if a == 0
+            push!(essential[2], values[cell])
+            continue
+        end
+        ra = _component_root!(parent, a)
+        rb = _component_root!(parent, b)
+        if ra == rb
+            push!(essential[2], values[cell])
+            continue
+        end
+        born_a, born_b = elder[ra], elder[rb]
+        older, younger = rank[born_a] < rank[born_b] ? (born_a, born_b) : (born_b, born_a)
+        values[younger] == values[cell] || push!(intervals[1], (values[younger], values[cell]))
+        if sizes[ra] < sizes[rb]
+            ra, rb = rb, ra
+        end
+        parent[rb] = ra
+        sizes[ra] += sizes[rb]
+        elder[ra] = older
+    end
+    for vertex in 1:nvertices
+        parent[vertex] == vertex && push!(essential[1], values[elder[vertex]])
+    end
+    return true
+end
+
+# Reverse the top boundary: its cells are dual vertices and its rows are
+# dual edges when each has at most two odd incidences. A one-ended edge
+# meets a distinguished auxiliary vertex. It has no reported essential class.
+function _dual_top_barcode!(intervals, essential, G, offsets, values, perm, rank,
+                            cleared, dim::Int)
+    dim >= 2 || return false
+    boundary = G.boundaries[dim]
+    nfaces, ntop = size(boundary)
+    first = zeros(Int,nfaces)
+    second = zeros(Int,nfaces)
+    for col in axes(boundary,2)
+        @inbounds for ptr in nzrange(boundary,col)
+            isodd(boundary.nzval[ptr]) || continue
+            row = boundary.rowval[ptr]
+            if first[row] == 0
+                first[row] = col
+            elseif second[row] == 0
+                second[row] = col
+            else
+                return false
+            end
+        end
+    end
+    # Eligibility is now established; no fallback can observe partial outputs.
+    auxiliary = ntop + 1
+    parent = collect(1:auxiliary)
+    sizes = ones(Int,auxiliary)
+    elder = copy(parent)
+    topoffset = offsets[dim+1] - 1
+    faceoffset = offsets[dim] - 1
+    for position in reverse(eachindex(perm))
+        face = perm[position]
+        faceoffset < face <= faceoffset+nfaces || continue
+        row = face - faceoffset
+        a = first[row]
+        a == 0 && continue
+        b = second[row] == 0 ? auxiliary : second[row]
+        ra = _component_root!(parent,a)
+        rb = _component_root!(parent,b)
+        ra == rb && continue
+        ea, eb = elder[ra], elder[rb]
+        # Older in reverse order means later in the original order. The
+        # auxiliary vertex is older than every actual top-dimensional cell.
+        aolder = ea == auxiliary || (eb != auxiliary && rank[topoffset+ea] > rank[topoffset+eb])
+        older, younger = aolder ? (ea,eb) : (eb,ea)
+        topcell = topoffset + younger
+        values[face] == values[topcell] || push!(intervals[dim],(values[face],values[topcell]))
+        cleared[position] = true
+        if sizes[ra] < sizes[rb]
+            ra, rb = rb, ra
+        end
+        parent[rb] = ra
+        sizes[ra] += sizes[rb]
+        elder[ra] = older
+    end
+    for vertex in 1:ntop
+        parent[vertex] == vertex || continue
+        survivor = elder[vertex]
+        survivor == auxiliary || push!(essential[dim+1],values[topoffset+survivor])
+    end
+    return true
+end
+
+# Descending chain degrees allow a paired birth column to be cleared without
+# reducing it to zero. This shortcut computes barcodes, not retained cycles.
+function _reduce_barcode!(intervals, essential, G, dims, offsets, values, perm, rank)
+    total = length(perm)
+    cleared = falses(total)
+    has_reduced = falses(total)
+    reduced = _BarcodeColumns(total)
+    col = Int[]
+    active = _ParityColumn(total)
+    # The entire reduction uses filtration positions. Cell identities are
+    # translated only on input and when materializing barcode endpoints.
+    for dim in (length(offsets) - 2):-1:0
+        dim == length(offsets)-2 && _dual_top_barcode!(intervals, essential, G, offsets, values, perm, rank, cleared, dim) && continue
+        dim == 1 && _graph_barcode!(intervals, essential, G, offsets, values, perm, rank, cleared) && return nothing
+        for position in eachindex(perm)
+            cell = perm[position]
+            dims[cell] == dim && !cleared[position] || continue
+            if dim != 0
+                boundary = G.boundaries[dim]
+                local_col = cell - offsets[dim + 1] + 1
+                @inbounds for ptr in nzrange(boundary, local_col)
+                    isodd(boundary.nzval[ptr]) || continue
+                    _toggle_entry!(active, rank[offsets[dim] + boundary.rowval[ptr] - 1])
+                end
+            end
+            pivot_rank = _column_pivot(active)
+            while pivot_rank != 0 && has_reduced[pivot_rank]
+                _add_barcode_column!(active, reduced, pivot_rank)
+                pivot_rank = _column_pivot(active, pivot_rank)
+            end
+            if pivot_rank == 0
+                push!(essential[dim + 1], values[cell])
+            else
+                pivot = perm[pivot_rank]
+                _drain_column!(col, active)
+                has_reduced[pivot_rank] = true
+                _store_barcode_column!(reduced, pivot_rank, col)
+                cleared[pivot_rank] = true
+                values[pivot] == values[cell] ||
+                    push!(intervals[dim], (values[pivot], values[cell]))
+            end
+        end
+    end
+    return nothing
+end
+
 """
     persistence_diagram(G::GradedComplex; order=:sublevel, field=F2(), representatives=false)
 
@@ -647,12 +1004,18 @@ function persistence_diagram(G::GradedComplex{N,T};
     dims = _cell_dimensions(offsets)
     total = length(G.grades)
     values = T[g[1] for g in G.grades]
-    perm = collect(1:total)
-    # Grade comparisons avoid negating unsigned integers and typemin(Int).
-    # At equal grade, faces precede cofaces; cell index settles remaining ties.
-    sort!(perm; lt=(a, b) -> values[a] == values[b] ?
-        (dims[a] == dims[b] ? a < b : dims[a] < dims[b]) :
-        (order === :sublevel ? values[a] < values[b] : values[a] > values[b]))
+    # Integer grades use Julia's stable permutation sort. Cell storage is
+    # already grouped by dimension, so stable ties put faces before cofaces
+    # and then preserve cell identity. Other real grades retain the comparator
+    # below, including its equality convention for signed floating-point zero.
+    perm = if T <: Integer
+        sortperm(values; rev=order === :superlevel)
+    else
+        indices = collect(1:total)
+        sort!(indices; lt=(a, b) -> values[a] == values[b] ?
+            (dims[a] == dims[b] ? a < b : dims[a] < dims[b]) :
+            (order === :sublevel ? values[a] < values[b] : values[a] > values[b]))
+    end
     rank = Vector{Int}(undef, total)
     for (r, cell) in enumerate(perm)
         rank[cell] = r
@@ -661,53 +1024,76 @@ function persistence_diagram(G::GradedComplex{N,T};
     nd = length(offsets) - 1
     intervals = [Tuple{T,T}[] for _ in 1:nd]
     essential = [T[] for _ in 1:nd]
-    reduced = Vector{Vector{Int}}(undef, total)
-    has_reduced = falses(total)
-    positive = falses(total)
-    alive = falses(total)
-    changes = representatives ? Vector{Vector{Int}}(undef, total) : nothing
     finite_reps = representatives ? [_PersistenceRepresentative{T}[] for _ in 1:nd] : nothing
     essential_reps = representatives ? [_PersistenceRepresentative{T}[] for _ in 1:nd] : nothing
-    for cell in perm
-        col = _boundary_column_f2(G, dims, offsets, rank, cell)
-        change = representatives ? Int[cell] : nothing
-        while !isempty(col)
-            pivot = col[end]
-            has_reduced[pivot] || break
-            col = _xor_columns(col, reduced[pivot], rank)
-            representatives && (change = _xor_columns(change, changes[pivot], rank))
-        end
-        if isempty(col)
-            positive[cell] = true
-            alive[cell] = true
-            representatives && (changes[cell] = change)
+    backend = :f2_column_reduction
+    if !representatives
+        if last(offsets) == offsets[min(3, length(offsets))] &&
+           _graph_barcode!(intervals, essential, G, offsets, values, perm, rank, nothing)
+            backend = :f2_graph_union_find
         else
-            pivot = col[end]
-            has_reduced[pivot] = true
-            reduced[pivot] = col
-            positive[pivot] || throw(ArgumentError("ordinary persistence internal inconsistency: pivot did not birth a class."))
-            alive[pivot] = false
+            _reduce_barcode!(intervals, essential, G, dims, offsets, values, perm, rank)
+            backend = :f2_clearing
+        end
+    else
+        reduced = Vector{Vector{Int}}(undef, total)
+        has_reduced = falses(total)
+        positive = falses(total)
+        alive = falses(total)
+        changes = representatives ? Vector{Vector{Int}}(undef, total) : nothing
+        col, column_scratch = Int[], Int[]
+        change = representatives ? Int[] : nothing
+        change_scratch = representatives ? Int[] : nothing
+        for cell in perm
+            _boundary_column_f2!(col, G, dims, offsets, rank, cell)
             if representatives
-                # The reduced death column is a cycle already present at the
-                # pivot's birth. Its tracked column bounds it exactly at death.
-                changes[pivot] = change
-                if values[pivot] != values[cell]
-                    dim = dims[pivot]
-                    push!(finite_reps[dim + 1], _PersistenceRepresentative{T}(
-                        values[pivot], values[cell],
-                        _representative_chain(G, offsets, dim, col),
-                        _representative_chain(G, offsets, dim + 1, change)))
+                empty!(change)
+                push!(change, cell)
+            end
+            while !isempty(col)
+                pivot = col[end]
+                has_reduced[pivot] || break
+                # Both work buffers remain reusable. Only completed columns are
+                # copied into the pivot table or retained representative changes.
+                _xor_columns!(column_scratch, col, reduced[pivot], rank)
+                col, column_scratch = column_scratch, col
+                if representatives
+                    _xor_columns!(change_scratch, change, changes[pivot], rank)
+                    change, change_scratch = change_scratch, change
                 end
             end
-            values[pivot] == values[cell] ||
-                push!(intervals[dims[pivot] + 1], (values[pivot], values[cell]))
+            if isempty(col)
+                positive[cell] = true
+                alive[cell] = true
+                representatives && (changes[cell] = copy(change))
+            else
+                pivot = col[end]
+                has_reduced[pivot] = true
+                reduced[pivot] = copy(col)
+                positive[pivot] || throw(ArgumentError("ordinary persistence internal inconsistency: pivot did not birth a class."))
+                alive[pivot] = false
+                if representatives
+                    # The reduced death column is a cycle already present at the
+                    # pivot's birth. Its tracked column bounds it exactly at death.
+                    changes[pivot] = copy(change)
+                    if values[pivot] != values[cell]
+                        dim = dims[pivot]
+                        push!(finite_reps[dim + 1], _PersistenceRepresentative{T}(
+                            values[pivot], values[cell],
+                            _representative_chain(G, offsets, dim, col),
+                            _representative_chain(G, offsets, dim + 1, change)))
+                    end
+                end
+                values[pivot] == values[cell] ||
+                    push!(intervals[dims[pivot] + 1], (values[pivot], values[cell]))
+            end
         end
-    end
-    for cell in 1:total
-        if alive[cell]
-            push!(essential[dims[cell] + 1], values[cell])
-            representatives && push!(essential_reps[dims[cell] + 1], _PersistenceRepresentative{T}(
-                values[cell], nothing, _representative_chain(G, offsets, dims[cell], changes[cell]), nothing))
+        for cell in 1:total
+            if alive[cell]
+                push!(essential[dims[cell] + 1], values[cell])
+                representatives && push!(essential_reps[dims[cell] + 1], _PersistenceRepresentative{T}(
+                    values[cell], nothing, _representative_chain(G, offsets, dims[cell], changes[cell]), nothing))
+            end
         end
     end
     for (values_by_dim, reps_by_dim) in ((intervals, finite_reps), (essential, essential_reps))
@@ -727,7 +1113,7 @@ function persistence_diagram(G::GradedComplex{N,T};
                           substitution=:none), source=:graded_complex,
             grade_arithmetic=:exact_stored_values, geometry=:not_recorded,
             chain_validation=:boundary_squared_zero_mod_two,
-            backend=:f2_column_reduction, approximation=:none_in_reduction,
+            backend=backend, approximation=:none_in_reduction,
             discretization=:none)
     retained = representatives ? _PersistenceRepresentatives{T}(finite_reps, essential_reps) : nothing
     return PersistenceDiagram(intervals, essential, field, order, meta, retained)

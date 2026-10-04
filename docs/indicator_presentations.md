@@ -356,17 +356,12 @@ Selecting a point or pair updates the finite-poset, support, and matrix views;
 changing between module and presentation views preserves the query. Exact
 coordinate entry resolves boundaries that a pointer cannot distinguish.
 These controls require WGLMakie and a running Julia process; the selected
-state can be saved as a static figure. All 23 notebook code cells pass under
-headless display capture, and the static figures have passed visual review.
-Native inspector checks pass across five coefficient fields; the
-[visualization guide](visualization.md#explore-the-same-encoding-in-a-live-session)
-records the still-unverified browser clicks, keyboard events and JavaScript
-display transport.
+state can be saved as a static figure.
 
-> **Coming interaction: follow a chosen vector.** Selecting a vector to
-> follow through its images and a linked three-point composition view remain
-> planned. The notebook already verifies the three-point composition through
-> explicit queries.
+> **Figure placeholder: follow a chosen vector.** A three-point view will
+> follow a vector from the first square into the overlap and then into the
+> second square. It will place each vector beside the matrix acting on it,
+> showing how two nonzero maps can have zero composite.
 
 ## How the presentation leads to a finite encoding
 
@@ -398,7 +393,7 @@ The package can organize the finite representation according to the chosen
 encoder. Use its returned classifier and poset rather than assuming a
 particular list or numbering of labels. In particular, the square's
 nine-region illustration remains valid even though the signature encoder
-used in our checks returns four labels.
+used in the notebook returns four labels.
 
 ## Recognize the construction in TamerOp
 
@@ -425,17 +420,7 @@ parameters, obtain `N = OP.encoding_module(enc)` and inspect its map with
 The matrix is expressed in the returned module's bases; relate those bases
 to any independently chosen mathematical bases before comparing entries.
 
-The self-contained
-[presentation check](build_scripts/check_indicator_presentations.jl)
-verifies the square and the overlapping-square construction through these
-public APIs. It checks dimensions, boundaries, zero spaces, comparable
-maps, and composition against the specified summands. The earlier
-[first-encoding check](build_scripts/check_first_encoding.jl) also verifies
-the square's four-signature representation. These are executable checks
-of particular examples; the arguments above explain their behavior over
-the entire parameter plane.
-
-The presentation check uses integer and half-integer geometric coordinates,
+The notebook uses integer and half-integer geometric coordinates,
 represented exactly as `Float64`. This is separate from the exact rational
 coefficient field. See [exact grades](exact_grades.md) for the package's
 broader geometric input contracts.
@@ -456,7 +441,7 @@ explains the finiteness hypotheses relating presentations, encodings, and
 resolutions, together with the distinction between existence theorems and
 implemented constructions.
 
-For computations beyond these examples, the
-[category guide](math_categories.md) explains why algebra over an encoding
-poset requires its own interpretation when compared with algebra over the
-original parameter poset.
+To work through the construction in Julia first, follow
+[inspect spaces and maps](tutorials/inspect_encoding.ipynb). It connects the
+active coefficient blocks, their image bases, and the induced maps in the
+overlapping-square example.

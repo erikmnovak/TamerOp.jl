@@ -24,13 +24,3 @@ fixed after initialization. Accessing and modifying backend objects through
 raw fields is outside the supported concurrent API. Input arrays must not be
 mutated while a computation reads them; clearing a PL geometry cache remains
 an exclusive maintenance operation after its users finish.
-
-The installed cddlib artifact has thread-local workspaces, but its LP statistics
-still use non-atomic process globals. That concrete race surface motivates the
-shared boundary; no incorrect geometric answer was observed in this review.
-Dependency finalizers are unchanged: the reviewed native free routines release
-object-owned allocations and do not update those globals. This is a scoped
-contract for the inspected dependency versions, not a proof that arbitrary
-CDD clients are safe together. The supporting source and artifact review,
-including its version records and focused checks, is maintained locally and
-is not included in the published library.

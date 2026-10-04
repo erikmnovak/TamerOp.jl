@@ -10,6 +10,13 @@ to obtain while preserving the existing basis conventions and the
 
 ### Visualization
 
+- Make default image and interval figures easier to read with compact layouts,
+  simple axes, integer pixel labels for small images, and explanations of the
+  endpoint symbols actually shown. Keep relevant display limitations visible.
+- Keep image comparisons on a chosen colour range, label their displayed
+  quantity, and show complete outer pixels. Small interval plots now label
+  well-separated births and deaths inside the viewing window.
+
 - Keep barcode infinity, censoring and continuation labels inside the plotting
   area and clear of selection strokes at larger text sizes, preserving their
   exact interval anchors.
@@ -20,12 +27,80 @@ to obtain while preserving the existing basis conventions and the
   including the earlier two-square manual cases, keyboard scrolling and actual
   browser zoom. The optional harness starts and stops its own Julia server.
 
+### Documentation
+
+- Publish the expanded PHAT ordinary-barcode comparison across 48 medium/large
+  inputs and sixteen structural variants, with timing tables, scaling curves,
+  machine details and verified downloadable results. Replace the earlier public
+  PHAT result set while retaining its raw evidence locally. Present practical
+  timing differences and actual savings before win/loss counts; include PHAT
+  and QPA reports and data in the documentation site.
+
+- Give the reading map equally visible example-first and definitions-first
+  starts, labeled optional detours, and installation alongside the ring.
+  Keep reference material off the main diagram and both starts visible on
+  narrow screens.
+- Align lesson endings, the reading map and website footer around explicit
+  reading routes. Remove development history and validation status from
+  teaching pages, retaining mathematical requirements and clearly labeled
+  placeholders for future figures.
+- Explain why finite constructions supply tameness and preserve it through
+  compatible algebraic operations, with a worked square morphism, a homology
+  diagram, and precise links to the closure results of Ezra Miller and Lukas
+  Waas. Extend the reading map and clarify each foundation chapter's role.
+- Add a linked reading map with practical and mathematical routes, an accessible
+  text outline, and grouped links to further guides. Both map views share one
+  source, with published pages and repository treatments clearly labeled.
+- Connect the ring lesson to finite encodings with a short two-parameter
+  explanation, reusing the parameter-order diagram and preserving the existing
+  mathematical chapter sequence as the full development.
+- Teach plotting options as they become useful, keeping comparison scales
+  explicit and moving styling/export to an optional section. Codify this in
+  the writing guide; the website folds optional notebook sections while the
+  executed download retains their cells and figures.
+- Add a ring teaching notebook with saved filtration snapshots, interval
+  figures and a prediction exercise. A separate documentation environment
+  builds a Documenter lesson and executed download from the same source,
+  with mathematical checks, figure/link validation and CI review artifacts.
+
 ### Algebra and performance
 
+- Use component merging for ordinary F2 connected-component persistence inside
+  higher-dimensional complexes, and a reversed dual graph for eligible top
+  boundaries. Preserve periodic essential classes, exact grades, input checks,
+  algebraic fallbacks and the existing representative-producing reduction.
+- Extract finished binary columns in bulk and share storage across saved pivot
+  columns within each ordinary F2 barcode computation. Preserve exact supports,
+  filtration order, input validation and retained representatives.
+- Add densely occupied binary pivot columns by whole words during ordinary F2
+  barcode reduction, and reuse the previous pivot's word when locating its
+  successor. Keep sparse columns sparse and preserve retained representatives.
+- Use stable integer-grade ordering for ordinary persistence, preserving ties,
+  unsigned and extreme grades, and the existing conventions for other real grades.
+- Compute ordinary F2 barcodes with clearing and a reusable binary-column
+  workspace indexed by filtration order. Graph-shaped degree-one complexes use
+  component merging and cycle births. Keep the existing representative-producing
+  reduction and report the executed route in result provenance.
+- Speed up exact double-boundary validation with direct parity accumulation and
+  packed binary products selected by column density and reuse. Preserve all
+  storage, filtration and chain checks, including signed/even coefficients.
+- Speed up graded-complex construction by keeping grade conversion specialized
+  on its dimension and scalar type. Preserve exact grades, existing `BigFloat`
+  precision, empty-input checks and independent grade storage.
+- Reuse scratch buffers during ordinary F2 persistence reduction, including
+  representative tracking. Preserve the selected cycles, bounding chains and
+  boundary validation while reducing temporary column allocations.
 - Select Nemo for sufficiently dense rational factors and matrix products,
   including coordinate setup. Preserve exact selected rows, bases, membership
   checks and explicit backend choices. Small, sparse and structured work retains
   its native paths; factor storage and existing sharing remain in place.
+- Speed up complete membership checks for eligible dense rational batches with
+  the same exact product backend. Explicit Julia-only solves keep Julia checks;
+  scalar, sparse and structured inputs retain their existing paths.
+- Factor eligible dense rational matrices directly from an invertible leading
+  square block. Preserve the canonical selected rows and use general row
+  selection when that block is singular, including full-rank matrices with
+  nonconsecutive selected rows.
 - Select rational pivot columns by forward elimination, preserving the same
   ordered basis without computing a full reduced matrix just to discard it.
 - Remove copied row slices and redundant input copies from exact particular
@@ -110,6 +185,12 @@ The rational Hom and native prime-coordinate follow-up passed 7,863 focused
 assertions, including independent rational kernels, checked finite-field solves,
 threaded quotient coordinates, backend routing and strict Yoneda identities.
 It uses the maintained test runner; the full repository suite was not rerun.
+
+The dense certificate and leading-block follow-up passes 11,133 focused
+assertions, including hand-derived exact inverses, singular leading blocks,
+invalid first and last entries, explicit backend choices and threaded checks.
+Existing homology, cohomology, Ext/Tor and strict Yoneda checks are included;
+this is not a full-suite rerun.
 
 ### Measured performance scope
 

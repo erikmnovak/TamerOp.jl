@@ -1,0 +1,288 @@
+{
+  "study": "PHAT v2",
+  "completed": "2026-10-04",
+  "candidate": "phat-v2-2026-10-04",
+  "mathematical_scope": "Complete ordinary sublevel F2 barcodes from supplied filtered boundary data; no representative cycles.",
+  "timing": "Compiled code; verified fresh mathematics; construction and complete output conversion charged.",
+  "coverage": {
+    "eligible_cases": 48,
+    "fixed_cases": 48,
+    "families": {
+      "algebraic": {
+        "fixed_cases": 12,
+        "counts": {
+          "win": 4,
+          "near_tie": 3,
+          "loss": 5,
+          "unresolved": 0
+        },
+        "timing": {
+          "ratio": 0.9552919738448394,
+          "ci95": [
+            0.8783184275770313,
+            1.0390112818307378
+          ],
+          "pass_range": [
+            0.8738077884603819,
+            1.0492156465934466
+          ],
+          "passes": 5
+        }
+      },
+      "cubical": {
+        "fixed_cases": 12,
+        "counts": {
+          "win": 7,
+          "near_tie": 5,
+          "loss": 0,
+          "unresolved": 0
+        },
+        "timing": {
+          "ratio": 1.28384351960264,
+          "ci95": [
+            1.2048684926166926,
+            1.367995090689169
+          ],
+          "pass_range": [
+            1.2277179207863576,
+            1.391876613146486
+          ],
+          "passes": 5
+        }
+      },
+      "graph": {
+        "fixed_cases": 12,
+        "counts": {
+          "win": 12,
+          "near_tie": 0,
+          "loss": 0,
+          "unresolved": 0
+        },
+        "timing": {
+          "ratio": 2.031179599801065,
+          "ci95": [
+            1.9119831848063238,
+            2.157806930224614
+          ],
+          "pass_range": [
+            1.8782338727431758,
+            2.1437897409515783
+          ],
+          "passes": 5
+        }
+      },
+      "simplicial": {
+        "fixed_cases": 12,
+        "counts": {
+          "win": 6,
+          "near_tie": 4,
+          "loss": 2,
+          "unresolved": 0
+        },
+        "timing": {
+          "ratio": 1.253971693003427,
+          "ci95": [
+            1.2007065787609998,
+            1.3095997262515835
+          ],
+          "pass_range": [
+            1.1971790695868418,
+            1.3114727057852873
+          ],
+          "passes": 5
+        }
+      }
+    },
+    "aggregate": {
+      "ratio": 1.329447128380245,
+      "ci95": [
+        1.28969465095461,
+        1.3704249031739864
+      ],
+      "pass_range": [
+        1.2767196369079434,
+        1.3631088558291808
+      ],
+      "passes": 5
+    },
+    "generally_faster": false,
+    "claim_scope": "fixed synthetic suite, compiled code and uncached mathematics",
+    "equal_case_sensitivity": {
+      "ratio": 1.329447128380245,
+      "ci95": [
+        1.2896946509546097,
+        1.3704249031739864
+      ],
+      "pass_range": [
+        1.2767196369079432,
+        1.3631088558291808
+      ],
+      "passes": 5
+    },
+    "weighted_practical_win_share": 0.6041666666666666,
+    "families_favoring_share": 0.75
+  },
+  "phases": {
+    "construction": {
+      "ratio": 0.5082399847193805,
+      "ci95": [
+        0.45229442590270036,
+        0.5711056057169374
+      ],
+      "pass_range": [
+        0.46735685281273553,
+        0.5741492084240839
+      ],
+      "passes": 5
+    },
+    "query": {
+      "ratio": 1.6286212072229553,
+      "ci95": [
+        1.5730213215825826,
+        1.6861863219678597
+      ],
+      "pass_range": [
+        1.569933756691411,
+        1.6681194552388452
+      ],
+      "passes": 5
+    },
+    "combined": {
+      "ratio": 1.329447128380245,
+      "ci95": [
+        1.2896946509546097,
+        1.3704249031739864
+      ],
+      "pass_range": [
+        1.2767196369079432,
+        1.3631088558291808
+      ],
+      "passes": 5
+    }
+  },
+  "counts": {
+    "warmup": 2880,
+    "measurement": 4320,
+    "verified_barcode_rows": 4800
+  },
+  "workers": [
+    {
+      "tool": "tamerop",
+      "pass_id": 1,
+      "elapsed_seconds": 119.06793925500824,
+      "sampled_peak_worker_rss_bytes": 1481080832
+    },
+    {
+      "tool": "phat",
+      "pass_id": 1,
+      "elapsed_seconds": 104.86533233101363,
+      "sampled_peak_worker_rss_bytes": 163348480
+    },
+    {
+      "tool": "tamerop",
+      "pass_id": 2,
+      "elapsed_seconds": 118.19759594797506,
+      "sampled_peak_worker_rss_bytes": 1615355904
+    },
+    {
+      "tool": "phat",
+      "pass_id": 2,
+      "elapsed_seconds": 105.85279447201174,
+      "sampled_peak_worker_rss_bytes": 163377152
+    },
+    {
+      "tool": "tamerop",
+      "pass_id": 3,
+      "elapsed_seconds": 119.6514692879864,
+      "sampled_peak_worker_rss_bytes": 1468350464
+    },
+    {
+      "tool": "phat",
+      "pass_id": 3,
+      "elapsed_seconds": 105.11268320097588,
+      "sampled_peak_worker_rss_bytes": 163356672
+    },
+    {
+      "tool": "tamerop",
+      "pass_id": 4,
+      "elapsed_seconds": 119.2517780509952,
+      "sampled_peak_worker_rss_bytes": 1471528960
+    },
+    {
+      "tool": "phat",
+      "pass_id": 4,
+      "elapsed_seconds": 107.02685448201373,
+      "sampled_peak_worker_rss_bytes": 163344384
+    },
+    {
+      "tool": "tamerop",
+      "pass_id": 5,
+      "elapsed_seconds": 118.6936561059847,
+      "sampled_peak_worker_rss_bytes": 1459703808
+    },
+    {
+      "tool": "phat",
+      "pass_id": 5,
+      "elapsed_seconds": 105.99615843399079,
+      "sampled_peak_worker_rss_bytes": 163377152
+    }
+  ],
+  "memory": {
+    "tamerop": {
+      "sampled_peak_worker_rss_bytes": [
+        1481080832,
+        1615355904,
+        1468350464,
+        1471528960,
+        1459703808
+      ],
+      "range_bytes": [
+        1459703808,
+        1615355904
+      ]
+    },
+    "phat": {
+      "sampled_peak_worker_rss_bytes": [
+        163348480,
+        163377152,
+        163356672,
+        163344384,
+        163377152
+      ],
+      "range_bytes": [
+        163344384,
+        163377152
+      ]
+    }
+  },
+  "host_monitoring": {
+    "user_confirmed_heavy_work_paused": true,
+    "sample_count": 230,
+    "first_utc": "2026-10-04T15:10:38.831220+00:00",
+    "last_utc": "2026-10-04T15:29:44.064191+00:00",
+    "min_available_memory_bytes": 7931449344,
+    "load_one_minute_range": [
+      1.4169921875,
+      2.33154296875
+    ],
+    "aggregate_cpu_busy_fraction_median": 0.13937867338371113,
+    "aggregate_cpu_busy_fraction_max": 0.2367846954186944,
+    "maximum_pressure_avg10_percent": {
+      "cpu": 0.12,
+      "memory": 0.36,
+      "io": 0.0
+    },
+    "swap_pages_delta": {
+      "pswpin": 677,
+      "pswpout": 65418
+    },
+    "limitation": "Monitored shared desktop, not an isolated dedicated benchmark host."
+  },
+  "elapsed_seconds": {
+    "generation": 118.90442522300873,
+    "qualification": 67.03662810500828,
+    "pilot": 366.7449593759957,
+    "confirmation": 1145.9525406620232
+  },
+  "compilation_rejections": []
+}

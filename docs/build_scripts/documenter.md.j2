@@ -1,0 +1,13 @@
+{% extends 'markdown/index.md.j2' %}
+
+{% block markdowncell scoped %}
+{{ cell.source | documenter_markdown }}
+{% endblock markdowncell %}
+
+{% block data_png %}
+[![{{ output.metadata.figure_alt | figure_alt }}]({{ output.metadata.filenames['image/png'] | path2url }})]({{ output.metadata.filenames['image/png'] | path2url }})
+{% endblock data_png %}
+
+{% block data_svg %}
+[![{{ output.metadata.figure_alt | figure_alt }}]({{ output.metadata.filenames['image/svg+xml'] | path2url }})]({{ output.metadata.filenames['image/svg+xml'] | path2url }})
+{% endblock data_svg %}

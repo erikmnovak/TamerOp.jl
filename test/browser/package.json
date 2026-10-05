@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "test": "playwright test",
-    "test:headed": "playwright test --headed"
+    "test:headed": "playwright test --headed",
+    "test:docs": "node documentation.mjs"
   },
   "devDependencies": {
     "@playwright/mcp": "0.0.83",

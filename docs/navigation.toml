@@ -1,0 +1,69 @@
+# Display choices only. Article identities, titles, questions and topic membership
+# belong to article_inventory.toml; publication.toml owns source-to-page routes.
+schema_version = 1
+sidebar_threshold = 10
+
+[anchors]
+home = "index.html"
+install = "start/install.html"
+learning = "reading_map.html"
+topics = "topic_map.html"
+contributing = "contributing/index.html"
+
+[[collections]]
+id = "mathematics"
+title = "Mathematics"
+page = "collections/mathematics.html"
+types = ["lesson"]
+order = ["ring", "two_parameters", "persistence_modules", "finite_encodings", "square", "indicator_presentations", "tameness", "practical_tameness", "math_categories"]
+
+[[collections]]
+id = "using"
+title = "Using TamerOp"
+page = "collections/using.html"
+types = ["library_guide", "recipe"]
+order = ["guide_spaces_maps", "ordinary_persistence", "visualization", "lazy_inspection"]
+
+[[collections]]
+id = "api"
+title = "API reference"
+page = "collections/api.html"
+types = ["api_reference"]
+order = []
+
+[[collections]]
+id = "implementation"
+title = "Implementation accounts"
+page = "implementation/index.html"
+types = ["implementation_account"]
+order = ["B01"]
+
+[[collections]]
+id = "benchmarks"
+title = "Benchmark results"
+page = "benchmarks/index.html"
+types = ["benchmark_report"]
+order = ["C01", "C18"]
+
+[[collections]]
+id = "contributing"
+title = "Contributing"
+page = "contributing/index.html"
+types = ["contributor_guide"]
+order = ["contributing", "writing", "testing", "documentation_build", "benchmarking", "benchmark_suites", "benchmark_style", "releasing"]
+primary = false
+
+# Supporting records stay attached to their owners, outside article lists.
+[[resources]]
+id = "implementation_bibliography"
+collection = "implementation"
+
+[[resources]]
+id = "qpa_data"
+collection = "benchmarks"
+owner = "C01"
+
+[[resources]]
+id = "phat_data"
+collection = "benchmarks"
+owner = "C18"

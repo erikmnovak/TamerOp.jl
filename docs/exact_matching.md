@@ -223,7 +223,9 @@ either paper's complete algorithm or claim their asymptotic performance.
 cost pairs and intersection pairs, including rejected intersections. Exceeding
 it throws rather than returning a partial or sampled maximum. The arrangement
 has a separate `max_cells` budget. These are combinatorial work guards, not
-wall-clock or peak-memory bounds. Geometry and pair-dependent switches are
-rebuilt for each exact call; cached index barcodes can be reused. Use the
+wall-clock or peak-memory bounds. Pass `cache=session` with a retained
+`SessionCache()` to reuse the arrangement and module index-barcode caches
+across compatible encoding queries. The optimizer's exact geometric cells
+and pair-dependent cost switches are rebuilt for each exact call. Use the
 explicit sampled API for exploratory queries when this exhaustive optimizer
 is too costly.

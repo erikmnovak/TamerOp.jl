@@ -17,8 +17,9 @@ completion criteria. Existing adequate evidence earns credit; another possible
 input size or operation does not automatically extend the current study.
 
 The [comparison roadmap](benchmark_suites.md#planned-competitor-comparisons)
-tracks QPA and the other libraries planned for comparison, with their intended
-overlap and remaining scope checks. Consult it when choosing the next study.
+tracks the completed QPA and PHAT studies and the remaining planned comparisons,
+with their intended overlap and scope checks. Consult it when choosing the next
+study.
 
 **The primary measure of computational efficiency is compiled code performing
 the requested mathematics without reusing results from an earlier query.**
@@ -44,6 +45,7 @@ package. Preserve losses and coverage gaps: they identify what to improve next.
 | Investigate first use | [Measure and improve compilation](#measure-and-improve-compilation) |
 | Diagnose storage | [Measure memory separately](#measure-memory-separately) |
 | Explain what the timings mean | [Practical significance and presentation](#practical-significance-and-presentation) |
+| Style a public report and its figures | [QPA-based visual standard](benchmark_style.md) |
 | Plan a reproducible release | [Preserve and release the evidence](#preserve-and-release-the-evidence) |
 | Begin a study | [Study brief and completion checks](#study-brief-and-completion-checks) |
 
@@ -94,6 +96,10 @@ competitor is `100 * (1 - 1/r)` percent. Thus 1.10× as fast means about 9.1%
 less time, not 10%. Prefer “less time” or “× as fast” over an ambiguous
 percentage “faster.” Editorial revisions may improve the explanation without
 rerunning benchmarks or altering the measurements and their sealed evidence.
+
+Use the [benchmark visual style](benchmark_style.md) for page layout, tables,
+colors, typography and exported figures. QPA is the aesthetic reference;
+different comparisons can use different plot types within that shared style.
 
 ## Define the question and output
 
@@ -595,9 +601,11 @@ and disclose the amortization, rather than repeatedly rebuilding it on one side.
 ## Preserve and release the evidence
 
 Plan reproducibility from the first local run. The current repository policy
-keeps benchmarks, audits and examples local. This public manual does not change
-that policy or announce a benchmark release. A later authorized bundle or
-companion repository should run without private directories or sibling projects.
+keeps the `benchmark/`, `audit/` and `examples/` directories local. The tracked
+[benchmark reports and result downloads](benchmarks/index.md) already support
+inspection and recomputation of their summaries. Portable executable
+reproduction bundles remain separate publication work: they must run without
+private directories or sibling projects.
 
 Map the study's file layout to these roles:
 

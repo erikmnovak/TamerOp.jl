@@ -1,4 +1,4 @@
-"""Check local HTML links, images and downloadable executed notebook evidence."""
+"""Check published navigation, local HTML links and executed notebook evidence."""
 from html.parser import HTMLParser
 import json
 from pathlib import Path
@@ -9,6 +9,7 @@ import nbformat
 
 from publish import DOCS, sha256, validate_outputs
 from navigation import continuation_links, published_pages, validate_continuations
+from site_shell import Structure
 
 
 class Links(HTMLParser):
@@ -40,6 +41,164 @@ class Links(HTMLParser):
             self.links.append(attrs.get('src', ''))
             if not attrs.get('alt', '').strip():
                 raise ValueError('Image has no description')
+
+
+def check_notebooks(manifest, html, root, docs=DOCS):
+    """Require an executed download and its configured page for every lesson."""
+    expected = {lesson['source']: lesson for lesson in manifest['notebooks']}
+    if len(expected) != len(manifest['notebooks']):
+        raise ValueError('Duplicate notebook source in publication.toml')
+    record = json.loads((root / 'downloads/publication.json').read_text())
+    recorded = [lesson['source'] for lesson in record['notebooks']]
+    if len(set(recorded)) != len(recorded) or set(recorded) != set(expected):
+        raise ValueError('Notebook publication record does not match publication.toml; rebuild every lesson')
+    for lesson in record['notebooks']:
+        source = docs / lesson['source']
+        download = root / 'downloads' / source.name
+        if not download.is_file():
+            raise ValueError(f'Missing executed download: {source.name}')
+        if sha256(source) != lesson['sha256'] or sha256(download) != lesson['download_sha256']:
+            raise ValueError(f'Stale source or modified download: {source.name}')
+        notebook = nbformat.read(download, as_version=4)
+        figures = validate_outputs(notebook)
+        if sum(cell.cell_type == 'code' for cell in notebook.cells) != lesson['code_cells']:
+            raise ValueError(f'Incorrect executed-cell record: {source.name}')
+        page = (root / Path(expected[lesson['source']]['page']).with_suffix('.html')).resolve()
+        if page not in html:
+            raise ValueError(f'Missing published lesson: {page.relative_to(root)}')
+        if figures != lesson['figures'] or html[page].images < figures:
+            raise ValueError(f'Missing published figures: {source.name}')
+        download_links = [(page.parent / unquote(urlsplit(link).path)).resolve()
+                          for link in html[page].links
+                          if not urlsplit(link).scheme and not urlsplit(link).netloc]
+        if download.resolve() not in download_links:
+            raise ValueError(f'Missing executed-notebook link: {source.name}')
+        sections = [cell.metadata.get('tamerop', {}).get('optional_section') for cell in notebook.cells]
+        groups = sum(section is not None and (i == 0 or section != sections[i-1])
+                     for i, section in enumerate(sections))
+        if html[page].optional_sections != groups:
+            raise ValueError(f'Missing optional sections: {source.name}')
+
+
+def check_catalog(catalog, root, pages=None):
+    """Check published navigation and local outlines without changing page HTML."""
+    root = root.resolve()
+
+    def target(page, href):
+        url = urlsplit(href)
+        if url.scheme or url.netloc:
+            raise ValueError(f'{page.relative_to(root)}: catalog navigation must use local links')
+        destination = (page.parent / unquote(url.path)).resolve() if url.path else page
+        if not destination.is_relative_to(root):
+            raise ValueError(f'{page.relative_to(root)}: catalog link leaves the built site')
+        return destination, unquote(url.fragment)
+
+    def published(route):
+        destination, fragment = target(root / 'index.html', route)
+        if fragment or not destination.is_file() or destination.suffix != '.html':
+            raise ValueError(f'Missing published catalog page: {route}')
+        return destination
+
+    collections = [item for item in catalog['collections'] if item['id'] != 'contributing']
+    identities = [item['id'] for item in collections]
+    roots = [item['page'] for item in collections]
+    if len(collections) != 5 or len(set(identities)) != 5 or len(set(roots)) != 5:
+        raise ValueError('Catalog must define five distinct main collection roots')
+    for route in [*catalog['pages'], *roots, *catalog['anchors'].values()]:
+        published(route)
+
+    def inside(node, parent):
+        return parent.inner <= node.start < parent.stop
+
+    def links(parsed, parent):
+        return [node for node in parsed.elements if node.tag == 'a'
+                and 'href' in node.attrs and inside(node, parent)]
+
+    pages = list(root.rglob('*.html')) if pages is None else pages
+    structures = {}
+    for raw_page in pages:
+        page = raw_page.resolve()
+        route = page.relative_to(root).as_posix()
+        parsed = Structure(page.read_text())
+        structures[page] = parsed
+        navigation = parsed.one(tag='nav', id='site-navigation')
+        entries = parsed.one(class_name='site-entry-links')
+        footer = parsed.one(class_name='site-nav-bottom')
+        if not inside(entries, navigation) or not inside(footer, navigation):
+            raise ValueError(f'{route}: permanent navigation is outside the sidebar')
+        actual_entries = [target(page, node.attrs['href']) for node in links(parsed, entries)]
+        expected_entries = [(published(catalog['anchors'][key]), '')
+                            for key in ('home', 'install', 'learning', 'topics')]
+        if actual_entries != expected_entries:
+            raise ValueError(f'{route}: missing or reordered permanent entry links')
+        contributor = (published(catalog['anchors']['contributing']), '')
+        if [target(page, node.attrs['href']) for node in links(parsed, footer)].count(contributor) != 1:
+            raise ValueError(f'{route}: missing or duplicated contributor footer link')
+
+        branches = [node for node in parsed.elements if node.tag == 'details'
+                    and 'data-collection' in node.attrs and inside(node, navigation)]
+        if [node.attrs['data-collection'] for node in branches] != identities:
+            raise ValueError(f'{route}: sidebar does not contain the five collection roots')
+        requested = catalog['pages'].get(route, {}).get('collection')
+        active = [item['id'] for item in collections
+                  if requested == item['id'] or route == item['page']]
+        opened = [node.attrs['data-collection'] for node in branches if 'open' in node.attrs]
+        if opened != active or len(active) > 1:
+            raise ValueError(f'{route}: only the current collection may start open')
+        current_links = []
+        for branch, collection in zip(branches, collections):
+            branch_links = links(parsed, branch)
+            if [target(page, node.attrs['href']) for node in branch_links].count(
+                    (published(collection['page']), '')) != 1:
+                raise ValueError(f'{route}: missing or duplicated collection overview link')
+            marked = [node for node in branch_links if node.attrs.get('aria-current') == 'page']
+            if marked and collection['id'] not in active:
+                raise ValueError(f'{route}: current-page marker is outside the current collection')
+            current_links.extend(marked)
+        if len(current_links) != len(active) or any(
+                target(page, node.attrs['href']) != (page, '') for node in current_links):
+            raise ValueError(f'{route}: collection current-page marker is missing or incorrect')
+
+        article = parsed.one(tag='article', id='documenter-page')
+        headings = [node.attrs['id'] for node in parsed.elements
+                    if node.tag in {'h2', 'h3'} and inside(node, article)
+                    and node.attrs.get('id') and ''.join(node.text).strip()]
+        headings = list(dict.fromkeys(headings))
+        outline = parsed.one(class_name='site-outline', required=False)
+        if outline is not None and (inside(outline, navigation) or inside(outline, article)):
+            raise ValueError(f'{route}: local outline must be separate from collection navigation and article')
+        actual_outline = ([target(page, node.attrs['href']) for node in links(parsed, outline)]
+                          if outline is not None else [])
+        if actual_outline != [(page, heading) for heading in headings]:
+            raise ValueError(f'{route}: local outline does not match the article H2/H3 anchors')
+
+    def topic_links(route, required):
+        if route not in catalog['pages']:
+            raise ValueError(f'Generated topic destination is absent from the catalog: {route}')
+        page = published(route)
+        parsed = structures.get(page) or Structure(page.read_text())
+        article = parsed.one(tag='article', id='documenter-page')
+        destinations = set()
+        for node in links(parsed, article):
+            destination, fragment = target(page, node.attrs['href'])
+            if not destination.is_file():
+                raise ValueError(f'{route}: broken generated topic link {node.attrs["href"]}')
+            if fragment:
+                linked = structures.get(destination) or Structure(destination.read_text())
+                if not any(item.attrs.get('id') == fragment for item in linked.elements):
+                    raise ValueError(f'{route}: missing generated topic anchor {node.attrs["href"]}')
+            destinations.add(destination)
+        for expected in required:
+            if expected not in catalog['pages'] or published(expected) not in destinations:
+                raise ValueError(f'{route}: missing published topic treatment {expected}')
+
+    topics = catalog['topics']
+    topic_links(catalog['anchors']['topics'], [item['page'] for item in topics])
+    for topic in topics:
+        topic_links(topic['page'], [item['page'] for item in topic['articles']])
+    for collection in collections:
+        for group in collection.get('topic_groups', []):
+            topic_links(group['page'], [item['page'] for item in group['items']])
 
 
 def check_site():
@@ -74,23 +233,9 @@ def check_site():
                 raise ValueError(f'{page.relative_to(root)}: broken link {link}')
             if url.fragment and target in html and unquote(url.fragment) not in html[target].ids:
                 raise ValueError(f'{page.relative_to(root)}: missing anchor {link}')
-    record = json.loads((root / 'downloads/publication.json').read_text())
-    for lesson in record['notebooks']:
-        source = DOCS / lesson['source']
-        download = root / 'downloads' / source.name
-        if sha256(source) != lesson['sha256'] or sha256(download) != lesson['download_sha256']:
-            raise ValueError(f'Stale source or modified download: {source.name}')
-        notebook = nbformat.read(download, as_version=4)
-        figures = validate_outputs(notebook)
-        page = root / 'tutorials' / f'{source.stem}.html'
-        if figures != lesson['figures'] or html[page.resolve()].images < figures:
-            raise ValueError(f'Missing published figures: {source.name}')
-        sections = [cell.metadata.get('tamerop', {}).get('optional_section') for cell in notebook.cells]
-        groups = sum(section is not None and (i == 0 or section != sections[i-1])
-                     for i, section in enumerate(sections))
-        if html[page.resolve()].optional_sections != groups:
-            raise ValueError(f'Missing optional sections: {source.name}')
-    print(f'Publication checks passed: {len(html)} HTML pages; reading continuations, local links, anchors, images and notebook downloads.')
+    check_notebooks(manifest, html, root)
+    check_catalog(json.loads((root / 'catalog.json').read_text()), root, html)
+    print(f'Publication checks passed: {len(html)} HTML pages; catalog navigation, local outlines, reading continuations, local links, anchors, images and notebook downloads.')
 
 
 if __name__ == '__main__':

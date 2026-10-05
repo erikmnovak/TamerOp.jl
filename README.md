@@ -2,6 +2,10 @@
 
 **Toolkit for Algebraic Module Encodings over $\mathbb{R}^n$ and Other Posets.**
 
+[Documentation](https://erikmnovak.github.io/TamerOp.jl/) ·
+[Learning map](https://erikmnovak.github.io/TamerOp.jl/reading_map.html) ·
+[Browse topics](https://erikmnovak.github.io/TamerOp.jl/topic_map.html)
+
 TamerOp is a Julia library built around the **finite encoding**. A persistence
 module describes information at different parameter values and the linear
 maps that relate those values. A finite encoding represents such a module

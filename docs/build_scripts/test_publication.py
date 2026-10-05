@@ -6,10 +6,36 @@ import unittest
 
 import nbformat as nbf
 
-from publish import DOCS, documenter_markdown, export_lesson, rewrite_links, validate_outputs
+from publish import (DOCS, captured_notebook, documenter_markdown, export_lesson,
+                     rewrite_links, sha256, validate_capture, validate_outputs)
 
 
 class PublicationTests(unittest.TestCase):
+    def test_reuse_restores_outputs_but_keeps_canonical_prose(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source, saved = Path(tmp) / 'source.ipynb', Path(tmp) / 'saved.ipynb'
+            nb = self.fixture()
+            validate_outputs(nb)
+            nbf.write(nb, source)
+            nb.cells[0].source = '# Portable download\n\nA rewritten repository link.'
+            nbf.write(nb, saved)
+            evidence = {'sha256': sha256(source), 'download_sha256': sha256(saved), 'figures': 1}
+            restored = captured_notebook(source, saved, evidence)
+            self.assertIn('Test lesson', restored.cells[0].source)
+            self.assertEqual(restored.cells[1].outputs, nb.cells[1].outputs)
+            source.write_text(source.read_text() + '\n')
+            with self.assertRaisesRegex(ValueError, 'Changed notebook'):
+                captured_notebook(source, saved, evidence)
+
+    def test_reuse_rejects_changed_computation_or_notebook_set(self):
+        record = {'package_source_sha256': {'src/TamerOp.jl': 'a'},
+                  'docs_manifest_sha256': 'manifest', 'notebooks': [{'source': 'one.ipynb'}]}
+        with self.assertRaisesRegex(ValueError, 'Package or documentation environment changed'):
+            validate_capture(record, Path('/unused'), {}, {'src/TamerOp.jl': 'b'}, 'manifest')
+        with self.assertRaisesRegex(ValueError, 'Notebook publication set changed'):
+            validate_capture(record, Path('/unused'), {'notebooks': [{'source': 'two.ipynb'}]},
+                             record['package_source_sha256'], 'manifest')
+
     def test_math_and_code_remain_distinct(self):
         text = 'Read $[0,5)$ and `$not_math`.\n\n$$H_1(K_t)$$\n\n```julia\n"$literal"\n```'
         result = documenter_markdown(text)

@@ -1,13 +1,11 @@
 using Documenter
 using TOML
 
-reading_map = TOML.parsefile(joinpath(@__DIR__, "reading_map.toml"))
-lesson_titles = Dict(node["id"] => node["title"] for node in reading_map["nodes"])
-
 # Notebook execution/conversion precedes this step. Formatting never reruns cells.
 source = joinpath(@__DIR__, ".build", "src")
-isfile(joinpath(source, "tutorials", "ring.md")) ||
-    error("Run python docs/build_scripts/publish.py first; see docs/README.md.")
+publication = TOML.parsefile(joinpath(@__DIR__, "publication.toml"))
+all(isfile(joinpath(source, lesson["page"])) for lesson in publication["notebooks"]) ||
+    error("Run python docs/build_scripts/publish.py first to capture every lesson; see docs/README.md.")
 
 makedocs(;
     root=@__DIR__, source, build="build", sitename="TamerOp.jl",
@@ -15,37 +13,19 @@ makedocs(;
     format=Documenter.HTML(; prettyurls=false, edit_link="main",
         repolink="https://github.com/erikmnovak/TamerOp.jl",
         assets=["assets/tutorials.css", "assets/reading_map.js"]),
-    pages=[
-        "Home" => "index.md",
-        "Choose a reading path" => "reading_map.md",
-        "Start here" => [lesson_titles["install"] => "start/install.md",
-                         lesson_titles["ring"] => "tutorials/ring.md",
-                         lesson_titles["bridge"] => "explanations/two_parameters.md"],
-        "The finite-encoding story" => [lesson_titles["modules"] => "persistence_modules.md",
-            lesson_titles["encoding"] => "finite_encodings.md",
-            lesson_titles["indicators"] => "indicator_presentations.md",
-            lesson_titles["tameness"] => "tameness.md",
-            lesson_titles["practical-tameness"] => "practical_tameness.md"],
-        "Supporting guides" => [lesson_titles["ordinary"] => "ordinary_persistence.md"],
-        "Implementation reference" => ["About these accounts" => "implementation/index.md",
-            "Exact rational coordinates" => "implementation/qq_coordinates.md",
-            "Bibliography" => "implementation/references.md"],
-        "Benchmark results" => ["Overview" => "benchmarks/index.md",
-            "Finite algebra: QPA" => "benchmarks/qpa.md",
-            "Ordinary persistence: PHAT" => "benchmarks/phat.md",
-            "QPA data dictionary" => "benchmarks/qpa_v1/README.md",
-            "PHAT data dictionary" => "benchmarks/phat_v2/README.md"],
-        "Contributing" => ["Writing and teaching" => "contributing/writing.md"],
-    ],
+    # The inventory and publication routes generate this catalog. Sidebar groups
+    # and the separate article outline are rendered by site_shell.py below.
+    pages=[entry["title"] => entry["source"] for entry in
+           TOML.parsefile(joinpath(source, "catalog_pages.toml"))["pages"]],
 )
 
-# This unversioned preview has no deployment-generated version registry.
+# The current site is unversioned, both locally and on GitHub Pages.
 write(joinpath(@__DIR__, "build", "siteinfo.js"),
     "var DOCUMENTER_VERSION_SELECTOR_DISABLED = true;\n")
 write(joinpath(@__DIR__, "build", "versions.js"),
-    "// No published versions in this local preview.\n")
+    "// This site has no published version registry.\n")
 # Documenter expects versions.js one level above a versioned site. Keep this
-# self-contained preview's reference inside its build folder instead.
+# self-contained site's reference inside its build folder instead.
 for (dir, _, files) in walkdir(joinpath(@__DIR__, "build")), file in files
     endswith(file, ".html") || continue
     path = joinpath(dir, file)
@@ -58,3 +38,5 @@ end
 # Use the publication interpreter when called from publish.py (including venvs).
 python = get(ENV, "TAMEROP_DOCS_PYTHON", "python")
 run(`$python $(joinpath(@__DIR__, "build_scripts", "navigation.py"))`)
+
+run(`$python $(joinpath(@__DIR__, "build_scripts", "site_shell.py"))`)

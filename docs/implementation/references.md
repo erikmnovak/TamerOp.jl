@@ -1,10 +1,6 @@
 # Implementation bibliography
 
-This is the shared citation list for the implementation accounts. Each entry
-states its connection to the code or argument and links to its use. It begins
-with [exact rational coordinates](qq_coordinates.md); it is not yet a complete
-bibliography of TamerOp. Related methods are distinguished from algorithms
-implemented locally and software used directly.
+Academic and software references cited in the [implementation accounts](index.md).
 
 ## Nemo and Hecke
 
@@ -30,8 +26,7 @@ The FLINT team. **FLINT: Fast Library for Number Theory.**
 **Role:** exact-arithmetic implementation used through Nemo, and a precise
 reference for reconstruction bounds. The online matrix manual describes
 multiple solving algorithms; listing them is not a claim about which one
-a particular TamerOp request invokes. The web manual is a moving reference,
-not the dependency version of a benchmark.
+a particular TamerOp request invokes.
 [Use in the coordinate account](qq_coordinates.md#where-native-exact-arithmetic-earns-its-conversion-cost).
 
 ## Rational reconstruction
@@ -46,7 +41,7 @@ Paul S. Wang, M. J. T. Guy, and J. H. Davenport.
 reconstructing small rational numbers from modular residues. It supports the
 uniqueness argument; the implementation additionally checks the original
 matrix equation. No claim of direct code derivation is made.
-[Use in the coordinate account](qq_coordinates.md#a-separate-route-through-modular-arithmetic).
+[Use in the coordinate account](qq_coordinates.md#when-the-modular-route-is-selected).
 
 ## Dixon lifting
 
@@ -58,29 +53,4 @@ John D. Dixon. **Exact solution of linear equations using p-adic expansions.**
 available algorithms. Lifting through powers of one prime differs from
 TamerOp's local independent-prime CRT route. This entry does not claim a
 local Dixon implementation.
-[Use in the coordinate account](qq_coordinates.md#a-separate-route-through-modular-arithmetic).
-
-## Rank-one inverse identities
-
-William W. Hager. **Updating the Inverse of a Matrix.** *SIAM Review*
-**31**(2), 221–239, 1989.
-[DOI: 10.1137/1031049](https://doi.org/10.1137/1031049) ·
-[Author's copy](https://people.clas.ufl.edu/hager/files/update-1.pdf).
-
-**Role:** mathematical reference for the Sherman–Morrison rank-one identity
-used to construct independent exact test answers. This is not a claim that
-TamerOp's production factorization updates inverses with that formula.
-[Use in the coordinate account](qq_coordinates.md#how-the-contract-is-tested).
-
-## QPA
-
-QPA developers. **QPA — Quivers and Path Algebras**, manual,
-Chapter 7: *Homomorphisms of Right Modules over Path Algebras*.
-[Official manual](https://gap-packages.github.io/qpa/doc/chap7.html) ·
-[Project](https://gap-packages.github.io/qpa/).
-
-**Role:** independent comparison software and a source for its matrix
-conventions. QPA uses row-vector module conventions. It is neither a TamerOp
-dependency nor an asserted source of the coordinate solver.
-[Use in the coordinate account](qq_coordinates.md#what-the-benchmark-iterations-changed) ·
-[TamerOp comparison](../benchmarks/qpa.md).
+[Use in the coordinate account](qq_coordinates.md#when-the-modular-route-is-selected).

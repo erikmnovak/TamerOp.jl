@@ -114,8 +114,10 @@ performance work. Its primary comparison measures compiled code recomputing the
 mathematics without prior results; startup and reuse have separate measurements.
 Use its study brief to define outputs, valid inputs, cache state, correctness
 checks and evidence. External tools may use different algorithms for the same
-verified answer. The guide also plans a future reproducible benchmark release;
-local benchmark and audit files remain excluded from the public package.
+verified answer. [Completed reports and result downloads](docs/benchmarks/index.md)
+are tracked documentation; portable executable reproduction bundles remain
+separate work. The local `benchmark/` and `audit/` directories remain excluded
+from the public package.
 
 ## Write explanations that teach
 

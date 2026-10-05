@@ -1,0 +1,31 @@
+{
+  "revision": "qpa-style-1",
+  "scope": "Presentation only; no new timings, cases, weights or statistical estimates.",
+  "measurement_candidate": "phat-v2-2026-10-04",
+  "inputs_sha256": {
+    "results.json": "25a190420618b46fee0da49a209862fc113df23c9ffb9f0bc6988d530e8d87eb",
+    "observations.json": "258936cc01334d6b19548321e14d8136bab33bd01d690ab1758c3acd736225b6",
+    "timings.csv": "ed02e297badae467955219683c2d08956aa94f75716531efaf635674a5914765",
+    "provenance.json": "1f48469c5960d61c56efa3098dbd717fa220830ab088f289d288c35ad3b893f9",
+    "SHA256SUMS": "d03b541d887407c90bf2f03b7f2468151ef32a87d02eb50c7df721bb60d50d51"
+  },
+  "renderer": "docs/build_scripts/render_phat_figures.py",
+  "renderer_sha256": "ea19b4e0dfaf86128d0ed24f0e9edddc2997d83a47a913e306d0e55bfa7ae7ab",
+  "style": "docs/assets/benchmarks/report.mplstyle",
+  "style_sha256": "66eadf3f51973d2851a4e0f7bbba17faa6f6f84468a7ffe25b63b715bf0d347c",
+  "python": "3.12.3",
+  "matplotlib": "3.9.3",
+  "figure_semantics": {
+    "scaling": "All 48 combined-phase cases, milliseconds; each series joins one variant's three size levels. Panel scales vary.",
+    "ratios": "Unchanged paired geometric case ratios and recorded family 95% intervals; practical band [1/1.10, 1.10].",
+    "profile": "Equal weight over all 48 cases, using paired geometric case ratios as in the original profile; actual step jumps."
+  },
+  "figures_sha256": {
+    "family_ratios.svg": "2ec23fb974fb32bcbf18368b061fc366acd2c689cf561e1985eaad315c5c4b7c",
+    "graph_scaling.svg": "91ae0b95af3f53b03c74d527f624370baa1cd1ea01b60c09b9a9f6786004a529",
+    "simplicial_scaling.svg": "2d51000f5888980538d9f56e3b31431f3fe01aee2876d3f527945b5ee62afe49",
+    "cubical_scaling.svg": "0f8f20efc57965e213ff3c6de6c53dd84b4531b26ea1dbb72a3553feeea41738",
+    "algebraic_scaling.svg": "0199c2165934ffb75d0dd0d1c31b952d39d36b27e625aa23161167b8ae35fc18",
+    "performance_profile.svg": "f5736aa6a6de2906a1672ad1a07ce92f651f8827f768f75d0e384574a93f1a1f"
+  }
+}

@@ -2,9 +2,9 @@ name: Documentation
 
 on:
   push:
-    paths: ['docs/**', 'src/**', 'ext/**', 'Project.toml', '.github/workflows/Documentation.yml']
+    paths: ['docs/**', 'src/**', 'ext/**', 'Project.toml', 'CONTRIBUTING.md', 'CITATION.cff', '.github/workflows/Documentation.yml']
   pull_request:
-    paths: ['docs/**', 'src/**', 'ext/**', 'Project.toml', '.github/workflows/Documentation.yml']
+    paths: ['docs/**', 'src/**', 'ext/**', 'Project.toml', 'CONTRIBUTING.md', 'CITATION.cff', '.github/workflows/Documentation.yml']
   workflow_dispatch:
 
 permissions:
@@ -43,9 +43,35 @@ jobs:
           name: teaching-site
           path: docs/build
           if-no-files-found: error
+      - name: Upload site for GitHub Pages
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: docs/build
+          retention-days: 7
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
           name: notebook-failure
           path: docs/.build/*-failed.ipynb
           if-no-files-found: ignore
+
+  deploy:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      # Enable Settings > Pages > GitHub Actions once before the first deployment.
+      # Keep this after the build so a settings issue does not discard its artifact.
+      - name: Read Pages configuration
+        uses: actions/configure-pages@v5
+      - name: Deploy documentation
+        id: deployment
+        uses: actions/deploy-pages@v4

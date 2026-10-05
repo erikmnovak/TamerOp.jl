@@ -14,12 +14,16 @@ The ordinary-persistence comparison follows another natural endpoint: when a
 complete one-parameter barcode is the requested answer, TamerOp computes it
 directly from the filtered complex.
 
-## Available comparisons
+## Results at a glance
 
 | Comparison | Mathematical scope | Latest study | Result |
 | --- | --- | --- | --- |
 | [TamerOp and QPA](qpa.md) | Maps, constructions, resolutions, diagrams, complexes, and derived operations on finite-poset modules | 2026-10-03; fixed suite of 220 requests | TamerOp **135.70× as fast in the weighted aggregate** for construction plus query on the 200 matched requests; even the smallest case-level ratio is **1.76×**. QPA's 20 tensor-evaluation failures have no speed ratio. |
 | [TamerOp and PHAT](phat.md) | Complete ordinary F₂ barcodes from supplied filtered boundary data | PHAT v2, 2026-10-04; 48 medium/large cases across sixteen structural variants | TamerOp **1.33× as fast in the balanced aggregate** for construction plus complete barcode; all 48 medium/large requests completed correctly in both tools. |
+
+## Explore the reports
+
+<!-- COLLECTION: benchmarks -->
 
 Both comparisons measure **compiled code computing fresh mathematical results**.
 Package loading and compilation are outside the timer, and results from earlier

@@ -342,7 +342,7 @@ The package exposes these ingredients through `presentation_stalk`,
 `presentation_map` with `source` and `target` returns the endpoint stalks,
 `ambient_projection`, and `induced_map`. A stalk query computes only the
 active block and its rank unless `basis=true`; a map query computes the bases
-it needs. See the [visualization guide](visualization.md#from-a-presentation-matrix-to-its-image)
+it needs. See the [spaces-and-maps guide](spaces_and_maps.md#look-inside-a-retained-presentation)
 for calling conventions and supported inputs.
 
 These queries inspect the finite presentation retained by the encoding, in

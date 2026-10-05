@@ -7,8 +7,10 @@ package maintainer; library users should follow
 
 When release notes or a paper make performance claims, follow the
 [benchmarking manual](benchmarking.md), including its evidence and reproducible
-bundle requirements. Publishing benchmark artifacts is a separate planned
-release; this does not change the current local-only benchmark/audit policy.
+bundle requirements. [Benchmark reports and result downloads](benchmarks/index.md)
+are already tracked documentation. Releasing portable executable reproduction
+bundles is separate work; the local `benchmark/` and `audit/` directories remain
+excluded from the public package.
 
 The first planned release is **0.1.0**. Until its registration has merged,
 users install from the GitHub URL. A GitHub repository, a Git tag, and a General

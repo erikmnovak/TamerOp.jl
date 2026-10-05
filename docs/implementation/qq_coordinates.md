@@ -13,15 +13,9 @@ while retaining a check against the original problem. Its performance depends
 on where that work happens, which data can be reused, and when conversion to
 a native exact-arithmetic library pays for itself.
 
-The discussion describes the source reviewed on **4 October 2026**.
-[Source locations and the review fingerprint](#source-and-review-record)
-identify that implementation; the benchmark section separately identifies
-historical development measurements. The main external connections are
-[Nemo/Hecke](https://doi.org/10.1145/3087604.3087611),
-[FLINT](https://flintlib.org/doc/fmpq_mat.html), and
-[rational reconstruction](https://doi.org/10.1145/1089292.1089293).
-Their roles are made explicit below and collected in the
-[implementation bibliography](references.md).
+The reusable-factor path is developed first.
+[Backend selection](#when-the-modular-route-is-selected) explains when a
+direct solve takes the modular route instead.
 
 ## The problem and its certificate
 
@@ -104,8 +98,8 @@ The explicit backend makes this an example of the retained Julia factor
 path. With automatic routing, problems whose relevant dimensions are all
 at most four take a specialized tiny solver before factor dispatch, even
 if a factor was supplied. That solver uses the same minor-inverse idea,
-enumerating small row subsets. This distinction matters when measuring reuse;
-it does not change the answer.
+enumerating small row subsets. The explicit choice here ensures that the
+supplied factor is used even for this small example.
 
 ## What factor construction actually does
 
@@ -127,14 +121,13 @@ here belongs to the dense path.
 
 After selection, the implementation obtains $S^{-1}$ by reducing
 $[S\mid I_n]$. A square input takes a shorter route: reduce $[B\mid I_n]$
-once, both checking invertibility and obtaining the inverse. These are exact
-rational elimination routines. They are not an implementation of the
-fraction-free Bareiss algorithm.
+once, both checking invertibility and obtaining the inverse. This uses exact
+rational Gauss–Jordan elimination.
 
 The explicit inverse is a choice for repeated application. A new right-hand
 side needs row selection and matrix multiplication, without another solve
-against $S$. This choice can create dense data and large rational coefficients;
-it is not a claim that an explicit inverse is optimal for every exact system.
+against $S$. The resulting inverse can be dense and contain large rational
+coefficients, so its storage cost matters alongside the saved computation.
 
 ### Try a likely minor before searching for one
 
@@ -151,8 +144,8 @@ activate this optimization. Only the backend's specific noninvertibility
 error is caught; unrelated failures are propagated.
 
 This attempt trades a possible failed inverse for avoiding row selection
-when the leading block works. Its unfavorable case was measured, rather
-than assumed negligible.
+when the leading block works. The choice was made after benchmarking the
+alternatives.
 
 ## Where native exact arithmetic earns its conversion cost
 
@@ -178,14 +171,15 @@ These are local crossover heuristics, not mathematical restrictions or a
 complete description of public backend routing. The public solver also has
 separate operation, shape, and sparsity thresholds. Explicit backend choices
 remain meaningful, and explicit Julia-only solves retain their backend.
+The dense eligibility rules were chosen after benchmarking different options.
 
 The leading-block density condition is especially deliberate. An embedding
 $B=[I_n;A]$ has an immediately available identity minor even when the lower
 block makes the whole matrix dense. Converting such a problem to a general
 dense backend can lose badly. Requiring density in the leading block keeps
-these inexpensive embeddings out of this additional dense factor path. Counting actual nonzeros
-also avoids treating a dense array containing an identity matrix as a dense
-arithmetic problem.
+these inexpensive embeddings out of this additional dense factor path.
+Counting actual nonzeros also avoids treating a dense array containing an
+identity matrix as a dense arithmetic problem.
 
 The native multiplication routines skip zero contributions and traverse stored
 entries of CSC sparse matrices. Structured and sparse inputs therefore need
@@ -194,10 +188,9 @@ decision as much as a size decision.
 
 [FLINT's rational-matrix documentation](https://flintlib.org/doc/fmpq_mat.html)
 describes denominator clearing and several exact solving strategies, including
-fraction-free, Dixon, and multimodular methods. Those are relevant backend
-capabilities. This account does not infer which internal FLINT routine a
-particular Nemo operation selects; that requires inspecting the pinned
-dependency and the operation being called.
+fraction-free, Dixon, and multimodular methods. Selecting Nemo delegates the
+exact operation to that library stack; it does not select TamerOp's separate
+modular solver, described below.
 
 ## Applying a factor without weakening the contract
 
@@ -228,16 +221,43 @@ altered vector in the example can no longer be expected to be rejected.
 Rank-deficient bases are not a request for a particular solution: they violate
 this solver's full-column contract.
 
-### A separate route through modular arithmetic
+## When the modular route is selected
 
-The direct rational solver also has a modular route, distinct from reusable
-factor construction. It solves over several independent prime fields,
-combines residues with the Chinese remainder theorem, reconstructs rational
-entries, and, under the default `check_rhs=true`, checks the candidate over
-$\mathbb Q$. Unusable prime images
-are skipped. If the bounded reconstruction attempt does not produce an
-accepted answer, the public solve falls back to exact elimination. Requesting
-a reusable factor selects a reusable native or Nemo factor instead.
+The solver selects a backend for each request; it does not alternate between
+rational elimination and modular arithmetic as successive queries arrive.
+The retained-factor path above uses a Julia or Nemo factor. TamerOp's separate
+modular solver is an alternative for a direct solve without such a factor.
+
+For `solve_fullcolumn(field, B, Y)`, the selection rules are:
+
+| Request | Selected route |
+| :--- | :--- |
+| `backend=:auto`, with a retained factor | Use the factor's backend, except that the tiny solver described above runs first |
+| `backend=:auto`, no supplied factor, dense $B$, default thresholds, Nemo enabled | Julia for $mn<50{,}000$; Nemo for $mn\ge50{,}000$, after the tiny shortcut |
+| `backend=:auto`, no supplied factor, dense $B$, default thresholds, Nemo disabled | Julia for $mn<120{,}000$; a modular attempt for $mn\ge120{,}000$, after the tiny shortcut |
+| `backend=:auto`, no supplied factor, recognized sparse storage | Julia or Nemo according to the sparse routing rules; no automatic modular attempt |
+| `backend=:modular`, without a retained factor | Attempt modular solving; a plain `SparseMatrixCSC` instead goes directly to Julia exact solving |
+
+Thus the automatic dense route does not reach the separate modular solver
+with the default thresholds while Nemo is enabled: the Nemo condition is
+checked first. A configured threshold profile can change the crossover
+values; modular solving is then selected if the Nemo condition fails and
+the modular threshold is met. These direct-solve thresholds are separate
+from the dense factor and product gates above.
+
+`factor_fullcolumn` always constructs a reusable Julia or Nemo factor, even
+if its routing would otherwise choose modular solving. Apart from the automatic
+tiny shortcut, subsequent solves with that public factor keep its backend;
+an explicit conflicting backend is rejected. Enabling `cache=true` alone does
+not request modular arithmetic.
+
+Once selected, the modular algorithm solves over several independent prime
+fields, combines residues with the Chinese remainder theorem, and reconstructs
+rational entries. Unusable prime images are skipped. Under the default
+`check_rhs=true`, it checks the reconstructed candidate against $BX=Y$ over
+$\mathbb Q$. If the bounded attempt produces no accepted answer, that request
+falls back to Julia exact solving. This is a fallback within one request,
+not an alternation between methods on repeated queries.
 
 Rational reconstruction asks for a small fraction compatible with a residue.
 The Euclidean reconstruction method and its uniqueness bounds are classical;
@@ -245,14 +265,13 @@ see [Wang, Guy, and Davenport (1982)](https://doi.org/10.1145/1089292.1089293).
 For bounds $|u|\le N$ and $0<v\le D$, with the denominator invertible modulo
 $M$, the condition $2ND<M$ guarantees uniqueness of a reduced compatible
 fraction. [FLINT states this contract explicitly](https://flintlib.org/doc/fmpq.html#modular-reduction-and-rational-reconstruction).
-With that default, TamerOp still checks the resulting matrix equation: uniqueness within a bound
-does not establish that the reconstructed entries solve the original problem.
+Uniqueness within a bound does not establish that the reconstructed entries
+solve the original problem; this is why the default route still checks the
+matrix equation.
 
-This is a mathematical connection to an implemented technique, not evidence
-that the local code was transcribed from that paper. It should also be
-distinguished from [Dixon's p-adic method](https://doi.org/10.1007/BF01459082),
-which lifts using successive powers of one prime. TamerOp's local modular
-route combines independent primes. The names are not interchangeable.
+[Dixon's p-adic method](https://doi.org/10.1007/BF01459082) instead lifts using
+successive powers of one prime. TamerOp's local modular route combines
+independent primes, so the two methods have different reconstruction steps.
 
 ## Specializing the idea for homology coordinates
 
@@ -310,9 +329,9 @@ plans. Publication uses a shared lock for factor slots and a per-result lock
 for coordinate plans. Factor computation occurs outside the lock, so concurrent
 first requests may duplicate computation before one complete result is kept.
 There are also weak factor caches in `FieldLinAlg`. Their values do not keep
-the input matrix alive. These dictionaries do not provide a blanket guarantee
-for concurrent global cached solves; they should not be confused with the
-locking of owned state or tested read-only reuse of an explicit factor.
+the input matrix alive. The weak dictionaries have no cache-level lock, so
+the synchronization of result-owned plans does not extend to concurrent access
+to these global caches.
 
 All reuse assumes an unchanged basis matrix. The factor contains no mutation
 fingerprint and does not automatically repair itself after an entry of $B$
@@ -320,94 +339,7 @@ changes. Cache eligibility also depends on the input's Julia representation;
 immutable wrappers are not necessarily cached. An explicitly retained factor
 is the clearest way to state the intended reuse.
 
-Memory measurements must distinguish this reachable mathematical state from
-temporary allocation and process memory. Julia allocation counts do not
-include all native FLINT allocations. A reduction in Julia allocation bytes
-therefore does not, by itself, establish a smaller total-memory footprint.
-
-## What the benchmark iterations changed
-
-The following are **TamerOp before/after development measurements**, taken
-from the [QPA development record](../benchmark_suites.md#qpa-results-and-development-record).
-They describe successive historical candidates on the recorded size-16
-controls, not a fresh benchmark of the source reviewed for this page.
-Different rows have different baselines; their speedups must not be multiplied.
-
-| Decision | Observation supporting it | Boundary or unfavorable result |
-| :--- | :--- | :--- |
-| Use forward elimination when only pivot indices are needed | Rational factor kernel: 1.38–1.39× faster, about 26% fewer Julia allocation bytes | Complete workflows were mixed; unchanged controls also showed host drift |
-| Selectively use Nemo for dense factors and products, charging conversion | Complete dense controls: 2.07–4.06×; retained queries: 1.45–2.06× | Broad conversion regressed on identity-block embeddings; small and other workflows did not uniformly improve |
-| Try the leading inverse and use a dense complete certificate | Complete size-16 requests: 1.35–3.91×; retained batches of eight: 3.47–5.02× | Retained scalar queries were approximately unchanged; the measured gains combine both changes |
-| Keep fallback and measure failure paths | Singular leading blocks still returned the same factors and answers | Failed inverse added 0.261–0.842 ms before fallback |
-| Accept loss of early exit on eligible wide certificates | Valid wide queries benefited from the complete-product path | Rejection at the first invalid entry rose from about 23 μs to 1.15–1.41 ms |
-
-The dense controls supplied cycle and boundary bases. Their complete timers
-included result construction and the requested answer, not deriving those
-bases from a chain complex. Retained-query timers began with reusable
-mathematical state already available. Accepted samples excluded timed
-compilation and checked their reset conditions. The machine was not
-exclusively reserved, and the reported ranges are observations across process
-pairs, not confirmation confidence intervals.
-
-These observations explain the selection rules and the split between factor
-construction and repeated application. They do not establish a universal
-matrix-size crossover. They also retain meaningful losses: the final combined
-study reported mixed workflow results, including rational Hom and
-kernel/image/cokernel cases that lost in both pairs, without establishing
-their cause. Reachable storage was unchanged across its dense and retained
-controls; the improvement was in computation, not a smaller mathematical
-representation.
-
-The separate [completed QPA comparison](../benchmarks/qpa.md) concerns full
-matched algebraic requests. Its aggregate ratios cannot be attributed to
-this coordinate kernel. QPA is an independent comparator, not a dependency
-or a documented source of this implementation. Its
-[module-homomorphism manual](https://gap-packages.github.io/qpa/doc/chap7.html)
-also makes its row-vector convention explicit; comparisons must account for
-that convention when translating matrices.
-
-The [public QPA evidence bundle](../benchmarks/qpa_v1/README.md) permits
-inspection and reaggregation of the final comparison. It does not contain
-every development runner or raw sample behind the historical table above.
-Those rows are supported here by the public development narrative, a weaker
-reproducibility record than a published executable experiment.
-
-## How the contract is tested
-
-The maintained [field-linear-algebra tests](../../test/test_field_linalg.jl)
-exercise independent mathematical answers as well as agreement between routes.
-For example, dense factors use the known identity
-
-$$
-(I+uv^\mathsf T)^{-1}
-=I-\frac{uv^\mathsf T}{1+v^\mathsf T u},
-\qquad 1+v^\mathsf T u\ne0,
-$$
-
-This is the rank-one inverse identity commonly called the Sherman–Morrison
-formula; [Hager's account](https://doi.org/10.1137/1031049) gives the formula
-and its history. Here it supplies an independent test answer, not an update
-algorithm in the production solver. A matching result therefore does not
-merely compare two calls to the same routine.
-Other cases prescribe $X$, form $Y=BX$, and introduce an inconsistency in a
-row that the selected minor cannot see.
-
-The testsets **“Selective dense rational Nemo routing preserves exact algebra”** and
-**“Dense certificates and leading minors preserve exact solutions”** cover
-sizes around the dense gate, singular leading blocks with full-rank fallback,
-exact factor/coordinate agreement, and backend conversion behavior. Nearby
-tests cover large denominators, sparse matrices and wrappers, views,
-vector/matrix shapes, empty right-hand sides, nonfinite rational coefficients,
-and both sides of the selected-row gathering threshold. Coordinate tests
-also preserve the chosen homology basis and reject invalid inputs even when
-the quotient is zero.
-
-This is the implementation's validation design, not a claim that timing
-alone establishes correctness. The full-row certificate is part of the
-operation itself; the tests check that shortcuts preserve it and that the
-represented answer retains its conventions.
-
-## Source and review record
+## Implementation locations
 
 | Concern | Source and useful symbols |
 | :--- | :--- |
@@ -415,18 +347,5 @@ represented answer retains its conventions.
 | Ordered rows, inverse payloads, products, complete certificates | [`qq_engine.jl`](../../src/field_linalg/qq_engine.jl): `_pivot_columnsQQ`, `_factor_fullcolumnQQ`, `_solve_fullcolumnQQ`, `_verify_solveQQ` |
 | Dense conversion gates and general routing | [`thresholds.jl`](../../src/field_linalg/thresholds.jl), [`backend_routing.jl`](../../src/field_linalg/backend_routing.jl) |
 | Homology/cohomology plans and ownership | [`ChainComplexes.jl`](../../src/ChainComplexes.jl): `_fullcolumn_factor!`, `_checked_quotient_coordinates`, `coordinates` |
-| Exact regression oracles | [`test_field_linalg.jl`](../../test/test_field_linalg.jl) |
 
-The [review fingerprint](../assets/implementation/qq_coordinates_review.json)
-records hashes of these local source files and the public benchmark narratives,
-plus the checkout and dependency manifests inspected. The source links above
-follow the repository; the hashes distinguish this reviewed content from
-later revisions. They identify files but do not replace an archived source
-release. This review used existing performance evidence and made no new
-performance measurements.
-
-The [bibliography](references.md) records the external algorithms, software,
-and comparison conventions discussed here. In particular, the retained minor,
-layout gates, and quotient plan are explained from the implementation and
-their algebra; no undocumented historical attribution is asserted for those
-local design choices.
+[Bibliography](references.md).

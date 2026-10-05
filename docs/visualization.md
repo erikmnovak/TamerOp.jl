@@ -1,33 +1,34 @@
-# Seeing an encoding, its spaces, and its maps
+# Choosing views and inspecting intervals
 
-An encoding assigns each parameter to a label in a finite poset. A picture of
-that assignment should let you answer a concrete question: **which region
-contains this point?** A dimension picture then attaches the dimension of the
-space at that label. To understand how a vector continues from one parameter
-to another, inspect the corresponding structure map. The
-[executable square notebook](tutorials/inspect_encoding.ipynb) follows that
-whole path, starting from the module in [finite encodings](finite_encodings.md).
+A view should answer a question about the object you have computed: where
+its spaces live, which vectors continue, or what an interval's endpoints
+establish. This guide explains how to choose that view, read its conventions,
+explore slices and existing barcodes, and save the result.
 
-Start by inspecting the available views of your particular object:
+For the workflow from an encoding to selected spaces, maps and presentation
+bases, use [Exploring spaces and maps](spaces_and_maps.md). It also introduces
+the linked inspector's selection controls and lifecycle. The
+[square notebook](tutorials/inspect_encoding.ipynb) develops the mathematical
+example with saved figures; the [ring notebook](tutorials/ring.ipynb) begins
+with ordinary intervals.
+
+The examples use the following imports. For parameter-plane and styling
+examples, `enc` is the square constructed in the
+[spaces-and-maps guide](spaces_and_maps.md#start-from-a-recognizable-object).
+The slice and interval examples below supply their own inputs.
 
 ```julia
 import TamerOp as OP
 import TamerOp.Advanced as OA
-
-OP.available_visuals(enc)
-OA.check_visual_request(enc; kind=:query_overlay, point=[1//1, 1//1],
-                        box=([-1, -1], [3, 3]))
-spec = OA.visual_spec(enc; kind=:query_overlay, point=[1//1, 1//1],
-                      box=([-1, -1], [3, 3]))
-OA.visual_summary(spec)
 ```
 
-Here `enc` is a two-parameter encoding result, for example the square from the
-finite-encoding lesson. Building a specification needs no plotting package.
-The request report lists supported recipe keywords, the qualitative work
-required to construct the view, and activated renderers. It does not estimate
-elapsed time. Unknown keywords and options that would have no effect on the
-chosen recipe are errors.
+`OP.available_visuals(object)` lists the views for a particular result.
+`OA.check_visual_request(object; kind=...)` reports accepted keywords and
+qualitative computation costs, without estimating elapsed time. Unknown
+keywords and options that would have no effect on a recipe are errors.
+Building a mathematical specification with `OA.visual_spec` needs no plotting
+package; load CairoMakie to render a static figure, or WGLMakie for the live
+sessions below.
 
 ## Reading the parameter plane
 
@@ -78,9 +79,11 @@ region IDs, and computed ranks in `metadata.query_results`.
 
 ## Start with the question
 
-After loading CairoMakie, a first barcode needs only its view and degree:
+For an ordinary result `diagram`, a first barcode needs only its view and
+degree after loading CairoMakie:
 
 ```julia
+import CairoMakie
 OP.visualize(diagram; kind=:barcode, dim=1)
 ```
 
@@ -141,293 +144,18 @@ Geometry construction does not materialize module bases or cycle
 representatives. Some other recipes, such as slice barcode queries, perform
 additional mathematics; their request reports identify that work.
 
-## From a parameter to a space and a map
+## Follow a selected space or map
 
-The module inspector shows how the finite representation answers a question
-about the original parameters. For the square encoding, choose two parameters
-inside the support:
-
-```julia
-spec = OA.visual_spec(enc; kind=:module_inspector,
-    parameter_pair=((1//2, 1//2), (3//2, 3//2)),
-    box=([-1, -1], [3, 3]))
-inspection = OA.visual_metadata(spec).inspection
-inspection.matrix       # a 1 x 1 matrix [1] over QQ
-inspection.rank         # 1
-inspection.kernel_dimension # 0
-```
-
-The left panel shows the original parameter plane. Colors and IDs agree with
-the middle panel, which draws the finite poset actually returned by the
-encoder. Its arrows are **cover relations**: an arrow from `u` to `v` says
-`u < v` with no finite label strictly between them. Vertical position indicates
-order; horizontal and vertical plot coordinates are schematic, not original
-parameters. The right panel shows the selected map. Its **columns are source
-coordinates and its rows are target coordinates**. The field, matrix size,
-rank, kernel dimension, and image dimension accompany the entries.
-
-The chapter's nine-region grid and the package's signature poset are different
-finite descriptions of the square. The inspector draws the returned poset and
-looks up its labels; it never treats either label count or numeric ordering as
-the definition of the square. A color can therefore occur on disconnected
-pieces of the parameter plane.
-
-To inspect one space, use `point=(1//1,1//1)`. To ask directly about the finite
-model, use `vertex=q` or `pair=(u,v)`, with actual IDs from that model. Choose
-one selection form at a time. For example:
-
-```julia
-classifier = OP.encoding_map(enc)
-q = OA.locate(classifier, (1//1, 1//1))
-stalk = OA.visual_spec(enc; kind=:module_inspector, vertex=q)
-order = OA.visual_spec(OP.encoding_poset(enc); kind=:hasse)
-```
-
-The stalk readout describes coordinates in the module's stored basis. It does
-not identify those basis vectors with input cycles or with an embedding into
-the target of the indicator presentation. Use the presentation inspector below
-to examine that embedding when a finite fringe is retained.
-
-For a comparable non-cover pair, the poset view adds a dashed, bent arrow for
-the selection while retaining the solid cover arrows. Equal labels give the
-identity of their space, including the `0 x 0` identity of a zero space. An
-incomparable pair, or a pair ordered only in reverse, has **no structure map
-in the requested direction**; the readout does not substitute a zero matrix.
-
-This distinction also applies before assigning finite labels. In the square,
-`(1//4,3//2)` and `(3//2,1//4)` share a label but are incomparable in the original
-coordinatewise order. Selecting them with `parameter_pair` correctly reports
-that there is no ambient structure map. Selecting `pair=(q,q)` instead asks
-for a map of the finite model and returns its identity. For grid encodings,
-ambient comparisons honor the classifier's axis orientation.
-
-Arbitrary finite posets and `PModule` objects need no geometric coordinates:
-their inspector has the poset and readout panels. An encoding adds a parameter
-panel only when its classifier supports the planar region recipes above.
-
-### Cost and what the matrix means
-
-`:hasse` and a stalk-only or unselected inspector use dimensions and leave lazy
-structure maps uncomputed. Selecting a defined pair obtains the encoded
-module and its structure map. For a lazy result, this can first materialize
-the module's cover maps. No recipe requests the full table of all comparable
-pairs. Cover extraction and region clipping still have costs of their own.
-
-`matrix_limit=(12,12)` limits the number of displayed rows and columns. The
-readout identifies truncation and retains the full selected matrix in
-`OA.visual_metadata(spec).inspection.matrix`; rank and kernel dimension use
-that full matrix. Coefficients are printed as field elements, including exact
-rational or finite-field entries. With `RealField`, rank follows the stated
-numerical tolerances. A matrix is a snapshot in the stored module's coordinate
-bases; it is not a canonical representative under arbitrary basis changes.
-
-The notebook adds two overlapping square summands to make the maps matter.
-Along an increasing path, the spaces have dimensions `1 -> 2 -> 1`. Both
-successive maps have rank one, yet their composite is zero: the vector coming
-from the first square disappears before the endpoint in the second square.
-The inspector can show these matrices; dimensions alone cannot explain this
-behavior.
-
-## From a presentation matrix to its image
-
-The presentation inspector asks a further question:
-**how did the input produce this space?** At a parameter, its active upsets
-select source columns and its active downsets select target rows. The image
-of that restricted matrix is the stalk. Support membership alone does not
-determine its dimension: an active matrix can be zero.
-
-For the square encoding above, inspect the retained finite presentation and
-then select an interior stalk:
-
-```julia
-H = OP.encoding_presentation(enc)
-q = OA.locate(OP.encoding_map(enc), (1//1, 1//1))
-s = OA.presentation_stalk(enc; vertex=q)
-OA.active_rows(s), OA.active_columns(s)
-OA.presentation_matrix(s)
-OA.presentation_summary(s).dimension
-
-with_basis = OA.presentation_stalk(enc; vertex=q, basis=true)
-OA.image_basis(with_basis)
-
-presentation_spec = OA.visual_spec(enc; kind=:presentation_inspector,
-    point=(1//1, 1//1), basis=true, upset=1, downset=1,
-    box=([-1, -1], [3, 3]))
-```
-
-The default stalk query computes the active block and its rank, leaving the
-image basis uncomputed. With `basis=true`, each basis column is a vector in
-the active downset coordinates; its row labels identify those coordinates.
-Thus a zero-dimensional image in a one-dimensional target has a `1 x 0`
-basis matrix, whereas a zero-dimensional target has no coordinate rows.
-
-The figure shows the selected upset and downset, identifies active rows and
-columns of the full coefficient matrix, and displays the active block and,
-when requested, its image basis. `upset` and `downset` choose support panels;
-they do not restrict the algebraic calculation to those two indicators.
-On supported planar encodings, membership is colored on the actual
-classifier geometry. Boundary styles describe those encoding regions,
-including their viewing-window cuts; they are not newly inferred boundaries
-of a merged support. With no supported ambient geometry, the figure reports
-membership on finite labels. It does not invent spatial coordinates.
-
-`OP.encoding_presentation(enc)` returns the retained finite fringe or
-`nothing` when none is available. It does not reconstruct a presentation from
-a module. Original input data or historical presentation metadata are not a
-substitute: the finite witness must belong to the current poset and field.
-Presentation queries also accept a finite `FringeModule` directly. They inspect
-its image, whose chosen bases need not match the stored module's bases in an
-arbitrary hand-built encoding result.
-
-### Inspect the induced map
-
-For a comparable pair, the target indicator coordinates project onto the
-downsets still active at the later label. Let `R` denote that projection,
-`Bu` and `Bv` the endpoint image bases, and `C` the induced map. They satisfy
-`Bv * C == R * Bu`: project in downset coordinates, then express the result in
-the target image basis.
-
-```julia
-u = OA.locate(OP.encoding_map(enc), (1//2, 1//2))
-v = OA.locate(OP.encoding_map(enc), (3//2, 3//2))
-m = OA.presentation_map(enc; source=u, target=v)
-Bu = OA.image_basis(OA.source_stalk(m))
-Bv = OA.image_basis(OA.target_stalk(m))
-R, C = OA.ambient_projection(m), OA.induced_map(m)
-@assert Bv * C == R * Bu   # exact rational coefficients in this example
-
-map_spec = OA.visual_spec(enc; kind=:presentation_inspector,
-    parameter_pair=((1//2, 1//2), (3//2, 3//2)),
-    upset=1, downset=1, box=([-1, -1], [3, 3]))
-```
-
-A pair query explicitly computes the endpoint bases required for this map;
-`basis=true` is only a single-stalk option. The map view shows endpoint blocks,
-image bases, the ambient projection, and the induced matrix. Finite-label
-selection asks about the finite presentation; `parameter_pair` also checks
-order in the original parameters. An unordered pair has no forward map.
-
-An unselected overview does not compute image bases. `matrix_limit` limits
-displayed entries, not matrix construction, rank, or basis computation.
-Coefficients remain field-valued text, and numerical-field ranks and bases
-follow the supplied tolerances. The equality above is exact over `QQ`;
-numerical comparisons require those tolerances.
-
-The [notebook](tutorials/inspect_encoding.ipynb) applies this calculation to
-the two squares. At `(1//2,5//2)`, row `D2` and column `U1` are active but
-their block is `[0]`; the image-basis shape is `1 x 0`. It also checks
-`Bv * C == R * Bu` and the zero composite along the three-point path.
-
-## Explore the same encoding in a live session
-
-Once you know what a selected space or map should mean, a linked inspector
-lets you explore nearby choices. A session keeps one selection shared by the
-parameter picture, the actual finite poset, and the mathematical readout.
-Start with the same encoding used above:
-
-```julia
-session = OP.inspection_session(enc; box=([-1, -1], [3, 3]))
-OA.select_inspection!(session; point=(1//1, 1//1))
-OA.inspection_selection(session)
-OA.inspection_summary(session)
-
-import WGLMakie
-OP.visualize(session; backend=:wglmakie)
-```
-
-For spaces and maps, `inspection_session` accepts an `EncodingResult` or a `PModule`. A finite
-module has finite-label controls and a Hasse diagram; a supported planar
-encoding also has a parameter picture. Geometry is prepared for the chosen
-viewing box and reused as the selection changes. Stalk and map queries still
-refer to the original encoded module. The optional slice charts below compute
-either its restriction to the part of a line inside that box, or a certified
-restriction to the whole line. Existing barcodes also have their own linked
-interval inspector, introduced below.
-
-Choose **Selection endpoint** to set whether a click selects a stalk, source,
-or target. **Coordinate view** switches between module coordinates and
-presentation image coordinates. Hovering reports the finite label and stalk
-dimension; clicking updates the linked selection. **Finite vertex**, its
-previous/next buttons, and the finite source/target fields provide selection
-without pointing at a small region or node.
-
-Clicking a parameter picture supplies approximate drawing coordinates; it
-does not recover an arbitrary exact rational from a pixel. For an exact point,
-enter one number in each **Exact point x/y** field and press **Inspect exact
-point**. For a map, fill **Exact source x/y** and **Exact target x/y**, then
-press **Inspect exact parameter pair**. These fields accept integers, fractions
-such as `1/2` or `1//2`, and decimal or scientific notation interpreted exactly
-as entered. They accept numbers, not Julia arithmetic expressions. Use them
-for a boundary or two points that coincide at screen precision. The selection
-records its input origin as `:pointer` or `:provided`, and retains the coordinates
-used for classification. Use Tab and Shift-Tab to move between controls and
-Enter or Space to activate a focused button.
-
-The same choices can be made directly in Julia:
-
-```julia
-OA.select_inspection!(session;
-    parameter_pair=((1//2, 1//2), (3//2, 3//2)))
-OA.select_inspection!(session; view=:presentation)
-OA.inspection_selection(session)
-
-OA.select_inspection!(session; point=(1//1, 1//1), basis=true,
-                      upset=1, downset=1)
-```
-
-Only one of `point`, `parameter_pair`, `vertex`, or `pair` may be supplied in
-a selection update. Omitting all four preserves the current query; this is
-how a view or support change keeps its mathematical location. Presentation
-view requires a current retained finite fringe. It shows the same finite
-poset alongside the support and matrix panels. Changing `upset` or `downset`
-changes the membership panels, not the active block. Presentation image bases
-remain distinct from the module's stored coordinate bases when the view
-changes; the selection does not identify those bases with each other.
-
-A presentation stalk computes an image basis only with the explicit
-`basis=true` option. A comparable presentation pair computes the endpoint
-bases needed for its induced map. Module view and pair selections do not use
-the single-stalk basis toggle. Incomparable or unrepresented parameter pairs do
-not become maps merely because their finite labels agree. The readout
-separates an undefined map from a defined zero map.
-
-A session reuses selected algebraic results in a bounded cache; `cache_limit=16`
-is the default entry limit for each of the algebra and slice caches. This is not a byte limit or
-a bound on the cost of a single query. As for a static inspector,
-`matrix_limit=(12,12)` limits displayed entries, not algebraic work. An
-unselected overview leaves image bases uncomputed.
-
-Use the latest ordinary specification when you want to keep a figure:
-
-```julia
-snapshot = OA.inspection_snapshot(session)
-import CairoMakie
-OP.save_visual("selected-map.svg", snapshot; backend=:cairomakie)
-```
-
-This snapshot has no live callbacks and can be rendered independently of the
-session. `OA.reset_inspection!(session)` clears the stalk/map and interval
-selections, retaining any active slice line.
-
-Each `OP.visualize(session; backend=:wglmakie)` call creates an independent
-viewer linked to the same session. Display its returned App in one browser
-client. To open another client or notebook output at the same time, call
-`visualize` again instead of redisplaying that App; the viewers share the
-session's selection. When a viewer's last browser client closes, that viewer
-is disposed, while the core session stays open. Call `visualize` again to
-open a replacement view.
-
-When finished with the whole session, `OA.close_inspection!(session)` or the
-**Close inspector** button closes all its viewers and releases its callbacks
-and cache. The last static snapshot
-remains inspectable. Closing is safe to repeat; create a new session to resume
-live selection afterward.
-
-The linked inspector requires a running Julia process and WGLMakie.
-Exporting the live session to HTML is rejected; its controls do not work
-offline. Retained ordinary persistence cycles can be inspected separately
-through the interval inspector below; they do not identify source cycles for
-an arbitrary finite encoding.
+Use the [spaces-and-maps guide](spaces_and_maps.md#connect-the-answer-to-a-figure)
+to connect parameters, finite labels and matrix readouts. Its
+[presentation branch](spaces_and_maps.md#look-inside-a-retained-presentation)
+explains active blocks, image bases and induced maps. Its
+[live session](spaces_and_maps.md#explore-nearby-selections-in-a-live-session)
+section covers exact entry, linked viewers, snapshots, reset and close.
+Those same session operations apply to the slice and interval inspectors
+below. A finite encoding alone need not retain cycles in its original data;
+ordinary representative inspection requires the explicit retention described
+in the barcode section.
 
 ## Move a line and read its intervals
 
@@ -443,6 +171,8 @@ summands have supports `[0,2]^2` and `[1,3]^2`. On the diagonal
 half-open barcode convention that would discard the first class at that point.
 
 ```julia
+import WGLMakie
+
 opts = OA.EncodingOptions(; backend=:pl_backend, poset_kind=:signature,
                           field=OP.CoreModules.QQField())
 enc2 = OP.encode([OA.BoxUpset([0,0]), OA.BoxUpset([1,1])],
@@ -592,6 +322,8 @@ one barcode. A raw barcode supplies its own endpoints; displaying an explicit
 infinity does not add a proof about an unrecorded source computation.
 
 ```julia
+import WGLMakie
+
 bars = Dict((0,2) => 2, (1,Inf) => 1, (8,9) => 1)
 interval_session = OP.inspection_session(bars;
     window=(-1,4), max_intervals=200)
@@ -670,6 +402,9 @@ interval endpoints and selected query stay the same. Create a fresh session
 and select a map in the square:
 
 ```julia
+import WGLMakie
+import CairoMakie
+
 session = OP.inspection_session(enc; box=([-1,-1], [3,3]))
 OA.select_inspection!(session; parameter_pair=((0,0), (1,1)))
 style = OP.VisualStyle(fontsize=18, linewidth_scale=1.2)
@@ -717,7 +452,7 @@ overrides it. Unknown settings and invalid sizes are rejected. Pass `style` to
 `visualize`, `render`, or an export call, rather than to `visual_spec`.
 
 ```julia
-using CairoMakie
+import CairoMakie
 OP.visualize(spec; size=(1500, 650))
 OP.save_visual("square.svg", spec; size=(1500, 650))
 ```
@@ -736,5 +471,7 @@ recipe options belong to specification construction. See
 The [notebook](tutorials/inspect_encoding.ipynb) constructs the square, checks
 selected spaces and maps, explains the two-square presentation through active
 blocks and image bases, and exports PNG and SVG figures through the public
-API. Its final section reuses the same example in a live inspection session,
-checks a programmatic selection, and saves the selected state.
+API. An optional section provides commands for exploring the same example in
+a live inspection session, with exact point and map selections and a static
+snapshot. The published lesson displays the saved static figures without
+requiring a live Julia session.

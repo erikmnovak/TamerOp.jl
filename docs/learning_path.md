@@ -6,8 +6,8 @@ documentation site:
 **Ring example → why a second parameter changes the problem → finite
 encoding → inspect spaces and maps → interpret a figure.**
 
-Installation supports running the notebook; it is not a prerequisite for reading
-the lesson and its saved figures. The definitions offer an equally valid starting
+Installation supports running the notebooks; it is not a prerequisite for reading
+the lessons and their saved figures. The definitions offer an equally valid starting
 point: **persistence modules → finite encodings**. Readers coming from the ring
 may also take the optional branch from “Why two parameters?” through persistence
 modules before continuing to finite encodings.
@@ -43,7 +43,8 @@ The intended reader knows vectors, matrices, and the idea of a hole in a shape,
 but need not know Julia, posets, or persistence modules. Follow the
 [writing guide](writing.md). The existing [finite-encoding introduction](finite_encodings.md)
 supplies the mathematical narrative; preserve it when adapting material into
-the site. The destinations below are planned paths, not published pages.
+the site. The briefs below describe teaching steps; square construction,
+inspection and figure interpretation share one canonical notebook and site page.
 
 The [ring notebook](tutorials/ring.ipynb) and the first local Documenter site
 scaffold are now implemented. The [publication workflow](README.md) executes
@@ -53,9 +54,12 @@ and component assertions. Nine figures belong to the main lesson; one previews
 the optional styling/export section. Short public plotting calls use the
 package defaults; shared scales are introduced when comparing results.
 The website folds the optional section while the notebook retains its cells.
-Installation, the ring lesson, the [two-parameter bridge](two_parameters.md),
-and the existing mathematical chapters form the initial navigation; deployment, the complete
-square-notebook publication and first-path reference entries remain pending.
+Installation, both notebooks, the [two-parameter bridge](two_parameters.md),
+and the existing mathematical chapters now have publication destinations and
+navigation. Both static lessons and their saved notebook outputs have passed
+publication and rendered review, as recorded below. Live WGLMakie controls
+inside notebook frontends, first-path reference entries, reader walkthroughs
+and deployment remain separate completion checks.
 
 The bridge is a short entry point into the existing mathematical sequence,
 not a replacement for those chapters. Readers can follow the practical route
@@ -84,26 +88,38 @@ dimension one to show why controlling stalk dimensions alone is insufficient.
 finite constructions supply the condition and how compatible algebraic
 operations preserve it. Readers with the finite-encoding definition can also
 enter that practical explanation directly before following the full theory.
-Their static diagrams are available. The inspection notebook now adds linked
-parameter, poset, and matrix selection; following chosen vectors and linking
-source representatives remain planned.
+Their static diagrams are available. The inspection notebook supplies static
+parameter, poset and matrix views plus optional instructions for linked live
+selection. Following a chosen vector through a multiparameter module and
+linking general multiparameter classes to source representatives remain planned.
+Ordinary persistence already retains optional cycles, finite-death filling
+chains and scale-specific cocycles; that is a separate, supported workflow.
 
 The square's inspection lesson now has a
 [canonical teaching notebook](tutorials/inspect_encoding.ipynb). It follows
 original parameters into the actual finite poset, checks stalks and maps, and
-exports a combined figure through the package API. Two overlapping squares
+exports the selected endpoint-map figure through the package API. Two overlapping squares
 show why nonzero successive maps can have zero composite. A live WGLMakie
-session then lets the reader change the selection and switch between module
-and presentation views, with static snapshot export. All 23 notebook code cells
-have passed under headless display capture, and the static figures have passed
-visual review. The 550 inspector assertions pass across five coefficient fields,
-including native callback and lifecycle checks; 116 additional checks cover
-server embedding. The author reports that the two-square live-server browser
-checklist passes, including pointer/keyboard controls, exact queries, linked
-tabs and lifecycle behavior. The notebook frontend remains separately
-unverified. This supplies the square portion of pages 4-6; connecting it
-to the ring lesson and publishing
-the complete site remain separate steps.
+session lets the reader change the selection and switch between module
+and presentation views. The revised lesson captures the required figures with
+CairoMakie. Optional Markdown examples explain live inspection and a session
+snapshot; a separate optional section exports PNG and SVG directly from the
+encoding, without creating a session. Publication executes all code cells,
+including these static exports; it preserves the live examples without running them.
+The revised publication was checked on 2026-10-04: all 30 code cells executed,
+all 11 static figures were captured in the site and notebook download, and the
+main path passed with optional sections omitted. The existing square and
+presentation oracles passed 8,710 and 43,134 assertions, respectively. Browser
+review covered desktop and narrow layouts, light and dark themes, optional
+sections, equations, and saved outputs in JupyterLab. The final publication
+used an isolated working-source copy while other library work continued;
+its package and environment fingerprints are retained in the build record.
+
+These are static-publication checks. Earlier native and standalone-browser
+inspector checks retain their own scope; interactive WGLMakie controls inside
+a notebook frontend still require separate acceptance. The source supplies
+teaching steps 4–6 below, and `publication.toml` connects it to the ring-to-square
+route.
 
 ## Keep the mathematical chapters distinct
 
@@ -168,8 +184,9 @@ table records the boundaries authors should preserve.
 - **Starting object:** An empty working directory and a supported Julia installation.
 - **Content:** Adapt the README's installation, project activation, import, and
   reopening instructions. Distinguish terminal commands from Julia commands;
-  explain the purpose of `Project.toml` and `Manifest.toml`. Keep plotting
-  dependencies for page 6. Verify the distribution instructions when publishing.
+  explain the purpose of `Project.toml` and `Manifest.toml`. CairoMakie supports
+  both lessons' static figures; WGLMakie belongs only to the square's optional
+  live instructions. Verify the distribution instructions when publishing.
 - **Expected conclusion:** The reader can load `TamerOp` as `OP` in their own
   environment and reopen it without reinstalling the package.
 - **Transition:** What small calculation has an answer I can recognize?
@@ -222,7 +239,8 @@ table records the boundaries authors should preserve.
 
 ### 4. Construct a finite encoding of the square module
 
-- **Destination:** `tutorials/finite_encoding.md`.
+- **Destination:** Construction section of `tutorials/inspect_encoding.md`,
+  generated from the canonical inspection notebook.
 - **Reader's question:** What finite object can recover this module on ℝ²?
 - **Prerequisites:** Page 3; the meaning of an identity and a zero linear map.
 - **Starting object:** Exactly the closed square-supported module from
@@ -249,15 +267,14 @@ table records the boundaries authors should preserve.
 - **Prerequisites:** Page 4; matrix sizes and multiplication.
 - **Starting object:** The same square `EncodingResult`; do not reconstruct a
   disconnected example or substitute an identity encoding of a finite input.
-- **Content:** Start with `describe`, `provenance`, and `dimensions`, then use
-  `encoding_poset`, `encoding_map`, and `encoding_module`. Explain the boundary
-  between the root workflow and the advanced `locate`, `leq`, `dim_at`, and
-  `structure_map` queries. Explain source columns and target rows. Inspect
-  maps as well as dimensions; compare two compositions to their direct map.
-  For these objects, `dimensions(enc)` returns the stalk-dimension vector,
-  whereas `dimensions(M)` returns a summary with a `stalks` entry; explain
-  method-specific return values instead of treating them as interchangeable.
-  The implemented notebook also follows `encoding_presentation` into the active
+- **Content:** Display the returned encoding, check its coefficient field through
+  `provenance`, and use `encoding_poset`, `encoding_map`, `dimensions`, and
+  `encoding_module`. Explain that `dimensions(enc)` gives the stalk-dimension
+  vector indexed by finite labels. Distinguish the root workflow from advanced
+  `locate` and `structure_map` queries. Explain source columns and target rows.
+  Inspect maps as well as dimensions; in the two-square variation, compare the
+  composite of the adjacent maps with the direct map. The optional presentation
+  section follows `encoding_presentation` into the active
   downset rows and upset columns. It explains why the image of the restricted
   matrix is the stalk, explicitly requests embedded image bases, and checks
   the induced-map equation and the two-square zero composite. An active-zero
@@ -272,22 +289,26 @@ table records the boundaries authors should preserve.
 
 ### 6. Interpret a figure of the same encoding
 
-- **Destination:** `tutorials/interpret_encoding_figure.md`.
+- **Destination:** Figure sections of `tutorials/inspect_encoding.md`, generated
+  from the same notebook as construction and inspection.
 - **Reader's question:** Which parts of the module does this picture show, and
   what do I still need to query?
-- **Prerequisites:** Page 5; optional renderer installation introduced here.
+- **Prerequisites:** Step 5; CairoMakie from the installation guide. Introduce
+  WGLMakie only for optional live inspection.
 - **Starting object:** The same verified square encoding and its query results.
 - **Content:** Prepare a parameter-plane support picture and a finite-poset
   diagram using labels obtained from the result. Mark the square's included
   boundary and show the spaces and representative maps. Reuse labels across
   panels. Explain that a dimension heatmap alone does not display the maps.
-  Introduce `available_visuals`, `visualize`, and `save_visual` through the
-  supported recipe actually selected and executed during implementation.
-  After checking the mathematics, introduce `inspection_session`: select an
-  exact parameter or finite label, preserve the query when switching between
-  module and presentation views, and save `inspection_snapshot`. Explain why
-  pointer coordinates are approximate and why the WGLMakie controls need live
-  Julia. Keep basis computation an explicit single-stalk choice.
+  Introduce `visualize` with each mathematical selection; use `visual_spec` and
+  `visual_metadata` to distinguish an incomparable pair from a zero map.
+  After checking the mathematics, offer live `inspection_session` and
+  `inspection_snapshot` instructions in Markdown. Explain exact parameter
+  selection, preservation of the query between module and presentation views,
+  approximate pointer coordinates and the running Julia requirement. Keep basis
+  computation an explicit single-stalk choice. A separate optional export section
+  uses `save_visual` directly on the encoding with the endpoint pair selected,
+  so it works without the live section.
 - **Expected conclusion:** The reader can trace a parameter through its label
   to a space, interpret an arrow, and state what the figure omits. They can
   save a figure and reopen the canonical notebook.
@@ -296,8 +317,8 @@ table records the boundaries authors should preserve.
 - **Acceptance:** Executed notebook, downloaded notebook, and published figure
   agree. Captions state the field, domain, closed support, and meaning of arrows.
   Static A42a/A83 recipes and exports have passed native rendering review.
-  The expanded notebook's 23 code cells pass under headless display capture;
-  its selected-state exports have also passed static visual review. All 550
+  An earlier notebook version's 23 code cells passed headless display capture;
+  its selected-state exports also passed static visual review. All 550
   inspector assertions pass across five fields, including native callback and
   lifecycle checks; 116 additional server-embedding checks pass. The author
   reports successful manual acceptance of the local live-server two-square
@@ -310,18 +331,18 @@ table records the boundaries authors should preserve.
 
 The first path keeps its existing sequence and mathematical examples. Apply
 the [notebook writing guidance](writing.md#plan-the-visible-result-of-a-notebook)
-by planning the visible result alongside each question. The ring and changed
-ring now supply their figures through the publication build. Remaining rows
-continue to specify authoring and publication acceptance for their lessons.
+by planning the visible result alongside each question. Both canonical notebooks
+now belong to the publication build. These rows specify the figures and
+interpretations to review in their generated pages and executed downloads.
 
 | Lesson | Required visible result | Prediction or interpretation to check |
 | --- | --- | --- |
 | Ring | Input top-cell grades; active-cell masks at grades `-1`, `0`, and `5` with the same orientation; the degree-one barcode and diagram, with the essential degree-zero interval explained separately | The complex is empty at `-1`, has one hole at `0`, and has filled that hole at `5`; the degree-one interval is `[0,5)`. These masks describe the stated cubical fixture, not an arbitrary complex renderer. |
 | Change one input | Original center grade `5` and changed grade `3`, with directly comparable barcodes | The hole dies earlier, giving `[0,3)`; the essential component still begins at `0`. Ask for the prediction before showing the changed result. |
 | Second parameter and square | A small parameter-plane diagram with comparable and incomparable pairs; the actual returned finite-poset view alongside a selected stalk/map | A two-dimensional dimension plot does not determine the maps; nine illustrative regions are not a required encoder output. |
-| Overlapping squares | Static selected-map views for `a → b`, `b → c`, and `a → c`, retaining the same parameter window and labels, with the three small matrices displayed explicitly | Both adjacent maps have rank one, but their composite is zero. The existing notebook computes this; publication should make all three answers easy to compare. |
-| Indicator presentation | Overlap and active-zero cases, showing the supports, labelled active rows/columns, coefficient block and its image dimension | Presence in the supports is insufficient: the active block can be `[0]`. An empty image basis has a mathematical meaning. Existing presentation recipes supply these views. |
-| Live inspection and export | The previously explained static selection, then its live inspector, followed by an exported snapshot of a specified selection | Identify what changed, what the figure retains, and which interaction needs live Julia. A saved figure is still useful after that session ends. |
+| Overlapping squares | Static selected-map views for `a → b`, `b → c`, and `a → c`, retaining the same parameter window and labels, with the three small matrices displayed explicitly | Both adjacent maps have rank one, but their composite is zero. Check all three answers together in the generated page and download. |
+| Indicator presentation | The overlap's active block and image basis as displayed matrices; a figure of the active-zero stalk; a figure of the `b → c` presentation map with its bases and ambient projection | Presence in the supports is insufficient: the active block can be `[0]`. An empty image basis has a mathematical meaning, and the induced map satisfies `B_c C = R B_b`. |
+| Live inspection and export | Optional Markdown instructions for a live selection and snapshot; separate PNG/SVG exports of the selected endpoint map directly from the encoding | Identify what the static figure retains and which interaction needs live Julia. Publication executes the direct exports without creating a live session; the session snapshot example and live notebook acceptance remain separate. |
 
 Use image, interval, module and presentation recipes already available for the
 first pass. A full filtered-complex viewer, automatic cross-panel annotations,
@@ -330,15 +351,16 @@ ring and square lessons. If a planned view needs one of those capabilities,
 describe the coming figure and its purpose explicitly; do not substitute an
 unlabelled surrogate.
 
-On 4 October 2026, the committed `inspect_encoding.ipynb` contains 23 code
-cells but no saved PNG/SVG outputs. Earlier headless execution and separately
-reviewed exports remain valid evidence in their stated scope. The publication
-pipeline now generates the ring's readable page and executed download; the
-square notebook still needs integration into it. Keep one canonical notebook source, capture static
-outputs before optional live widgets, and check captions, mathematical answers
-and images together. This supplements the existing execution and reader-review
-requirements; the ring's per-build execution evidence is in the generated
-`downloads/publication.json` described in the build guide.
+The publication manifest includes both canonical notebooks. Their source files
+may have cleared outputs; the build must execute the code and capture all
+declared static figures before producing pages and downloads. Earlier headless
+execution and separately reviewed exports remain evidence only for the versions
+and contexts tested. Check captions, mathematical answers and images together
+in a fresh build of the revised square lesson, including the optional static
+export and the main path with optional cells skipped. Live instructions remain
+Markdown examples, so static publication does not establish live notebook
+acceptance. Per-build execution evidence for both lessons belongs in the
+generated `downloads/publication.json` described in the build guide.
 
 ## Mathematical specification before tutorial cells
 
@@ -383,6 +405,61 @@ representation while retaining the stalk, map, boundary, and composition
 requirements. Finite sampling checks the implementation on the example; the
 argument above explains the module over its entire domain.
 
+## After the first encoding: the mathematical curriculum
+
+The first route establishes an object we can continue to study: a finite
+poset, its spaces and maps, and the classifier relating them to the parameter
+domain. Mathematical lessons should develop what happens **before** that
+description and what becomes possible **after** it. The post-encoding material
+is not reserved for library guides. Its purpose is to explain new mathematical
+questions, objects and conclusions, with the same approachable prose, short
+computations and interpreted figures as the introductory lessons.
+
+The [article inventory](article_inventory.toml) owns the titles, scopes and
+editorial actions. The stable IDs below identify planned treatments; they are
+not links to finished articles. This brief describes their intended teaching
+relationships rather than a second article-status list.
+
+| Branch | Proposed teaching relationships | What the reader should understand |
+| --- | --- | --- |
+| Modules and their maps | Start with `diamond_maps`; branch into `module_operations`, `hom_spaces` and `universal_constructions`. | A map between modules must respect structure maps; pointwise linear algebra must assemble into a compatible object. Combining modules and imposing agreement are different operations. |
+| Resolutions and derived algebra | Use maps and exact sequences to motivate `resolutions_lesson`; develop `module_complexes` as needed before `derived_functors`, then optional `products_lesson` and `complexes_spectral_sequences`. | Resolutions and complexes make new questions computable. Derived groups, products and page diagrams require their category, grading and interpretation, not just a returned dimension. |
+| Changing the description or base | Begin `change_of_posets` after understanding the classifier. Add `pushforwards_lesson` using the diagrams from `universal_constructions`; consult `math_categories` for comparison hypotheses. | Restriction, refinement and pushforward do different things. Comparison maps need not be isomorphisms; retaining the ambient module does not identify every finite-category derived result with an ambient one. |
+| Invariants and summaries | Begin `slices_invariants` directly after the square, then choose `slice_barcodes`, `signed_summaries` or `support_geometry_lesson` according to the question. | Dimensions, ranks, restrictions, signed reconstructions and region measurements retain different information. The classifier matters for geometric measurements. Advanced algebra is not a prerequisite for this branch. |
+| Support and decompositions | After module maps and sums, develop `algebraic_support` and `decomposition_lesson`; consult resolutions for the Betti/Bass part. | Nonzero support, generators, terminal classes, genuine direct summands, signed contributions and approximate tracks are distinct descriptions. |
+| Comparisons and numerical features | From a chosen invariant or slice, enter `distances_stability` or `features_lesson`; these are related choices rather than a compulsory order. | Identify what is compared and what sampling, smoothing, normalization and vectorization preserve or discard. State the hypotheses for any stability claim. |
+| Interpreting pictures | Enter `reading_module_figures` after the square for its basic views; revisit its optional synthesis after selected invariant or feature lessons. | A figure represents a particular object or transformation. Poset layout, classifier geometry, dimension colors, intervals, signed weights and feature pixels support different conclusions. |
+
+These are suggested branches, not a demand to read every article in a row or
+every predecessor before continuing. Each authored lesson should state the
+knowledge actually needed for its example. In particular, the invariants and
+features route remains available without the derived-algebra branch.
+
+Use the square and the two-square variation wherever they show the phenomenon
+clearly. A small diamond is useful for branching maps; a short exact sequence
+or module pair may be needed to make an algebraic distinction visible. Introduce
+that object and the expected behavior explicitly. Do not force an uninformative
+example to carry every new construction.
+
+Visualization accompanies all branches. The interpretation lesson gives a
+later synthesis, with optional deeper sections; it does not postpone figures
+until after vectorization or make every reader study every kind of plot.
+Its boundary with the library guide is mathematical meaning versus selecting
+views, controlling interaction and exporting files.
+
+Keep the article inventory's `related` entries as associations. When a lesson
+is authored and reviewed, add its actual continuation choices to
+`reading_map.toml` and align its closing prose. Do not add links to unwritten
+pages. Extend the main diagram with a few meaningful branch choices and use
+focused branch views if detail becomes crowded. The separate topic map can
+gather lessons, usage guides, reference, implementation and reports about each
+area without turning them all into stops in this learning progression.
+
+The next mathematical continuation to draft is `diamond_maps`: it makes the
+transition from inspecting maps inside one module to constructing maps between
+modules. The independently approachable `slices_invariants` branch can follow
+without waiting for the more advanced algebra lessons.
+
 ## Executable evidence and authoring order
 
 The self-contained [mathematical oracle](build_scripts/check_first_encoding.jl)
@@ -413,19 +490,22 @@ julia --startup-file=no --project=. docs/build_scripts/check_indicator_presentat
 
 Keep installation verification, mathematical checks, rendering checks, and
 reader review separate. The background chapters, mathematical oracles, and
-square inspection notebook are available. The initial local site and ring
-publication pipeline are implemented. Square publication, the complete linked
-ring-to-square route, first-path reference prose, reader review and deployment
-remain to be completed.
+square inspection notebook are available. The site publication manifest and
+navigation include both notebooks and the linked ring-to-square route.
+The revised square publication has passed execution and rendered review,
+including its saved outputs in JupyterLab. First-path reference prose,
+live-widget notebook acceptance, reader review, and deployment remain separate
+work.
 
 1. Reconcile the [API inventory and backlog](api_coverage.toml); use the selected
    first-path bindings to constrain the first reference-writing pass.
 2. Extend the documentation environment and site scaffold already added for
    the ring. Stage further explanations with links and stable anchors where
    needed, preserving their mathematical qualifications.
-3. Integrate the canonical square inspection notebook into this route and
-   connect the ring calculation to it. Generate displayed cells, outputs, and
-   downloads from the notebook source; do not maintain competing examples.
+3. Preserve the completed square publication as the route grows. Generate
+   displayed cells, outputs, and downloads from its canonical source; recheck
+   selected maps, optional sections and the continuation into tameness when
+   those parts change, without maintaining competing examples.
 4. Write only the reference entries needed for this route initially. Include
    the specific method families, field/grade conventions, options, returned
    objects, and meaningful errors. Keep other families in the manifest backlog.

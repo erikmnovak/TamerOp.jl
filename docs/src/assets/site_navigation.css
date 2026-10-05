@@ -1,0 +1,164 @@
+/* Catalog navigation is independent of the mathematical reading route.
+ * Scope layout overrides to the installed shell: the two IDs in this selector
+ * outrank Documenter's html.theme--* rules without enumerating every theme.
+ * Enhancement state belongs to body because themeswap replaces html.className.
+ */
+:root {
+    --site-nav-bg: #f5f7fa;
+    --site-nav-text: #203347;
+    --site-nav-muted: #536475;
+    --site-nav-line: #c8d1da;
+    --site-nav-accent: #1e5d87;
+    --site-nav-active: #e3edf5;
+}
+html.theme--documenter-dark,
+html.theme--catppuccin-frappe,
+html.theme--catppuccin-macchiato,
+html.theme--catppuccin-mocha {
+    --site-nav-bg: #202a34;
+    --site-nav-text: #e9f0f6;
+    --site-nav-muted: #b5c3d0;
+    --site-nav-line: #52606e;
+    --site-nav-accent: #a1cff1;
+    --site-nav-active: #324555;
+}
+#documenter:has(> #site-navigation) .site-sidebar {
+    width: 17.5rem;
+    left: 0;
+    height: 100vh;
+    height: 100dvh;
+    display: flex;
+    overflow: hidden;
+    flex-direction: column;
+    background: var(--site-nav-bg);
+    color: var(--site-nav-text);
+    border-color: var(--site-nav-line);
+    font-size: .9rem;
+}
+.site-nav-top, .site-nav-bottom { flex: 0 0 auto; padding: .6rem .85rem; }
+#documenter:has(> #site-navigation) .site-sidebar .docs-package-name { text-align: left; padding: .25rem .4rem .6rem; font-size: 1.3rem; }
+#documenter:has(> #site-navigation) .site-sidebar .docs-package-name a { color: var(--site-nav-text); }
+.site-entry-links { display: grid; gap: .1rem; }
+.site-sidebar a { display: block; color: var(--site-nav-text); border-radius: .25rem; padding: .4rem .55rem; line-height: 1.4; overflow-wrap: anywhere; }
+.site-sidebar a:hover { color: var(--site-nav-accent); background: var(--site-nav-active); }
+.site-sidebar a[aria-current="page"] { background: var(--site-nav-active); font-weight: 650; color: var(--site-nav-accent); border-left: 3px solid var(--site-nav-accent); }
+#documenter:has(> #site-navigation) .site-sidebar #documenter-search-query {
+    width: 100%;
+    margin: .7rem 0 .15rem !important;
+    height: auto;
+    min-height: 2.25rem;
+    white-space: normal;
+    color: var(--site-nav-muted);
+    background: transparent;
+    border-color: var(--site-nav-line);
+    box-shadow: none;
+}
+#documenter:has(> #site-navigation) .site-collections {
+    flex: 1 1 auto;
+    min-height: 3rem;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    padding: .75rem .85rem;
+    margin: 0;
+    border-block: 1px solid var(--site-nav-line);
+}
+.site-collection { margin: 0 0 .45rem; }
+.site-collection > summary {
+    padding: .55rem .35rem;
+    cursor: pointer;
+    font-weight: 650;
+    line-height: 1.3;
+    overflow-wrap: anywhere;
+}
+.site-collection > summary::marker { color: var(--site-nav-muted); font-size: .8em; }
+.site-collection > ul { margin: .1rem 0 .7rem .5rem; padding: 0 0 0 .45rem; border-left: 1px solid var(--site-nav-line); list-style: none; }
+.site-collection li { margin: .1rem 0; padding: 0; }
+.site-current-article { border-top: 1px solid var(--site-nav-line); padding-top: .4rem !important; margin-top: .5rem !important; }
+.site-link-detail { display: block; margin-top: .25rem; font-size: .75rem; font-weight: 400; color: var(--site-nav-muted); }
+.site-nav-bottom { font-size: .86rem; }
+#documenter:has(> #site-navigation) .site-sidebar .docs-version-selector { border: 0; padding: .3rem 0 0; }
+.site-nav-close, #documenter:has(> #site-navigation) .site-nav-toggle { display: none; }
+@media (min-width: 1056px) {
+    #documenter:has(> #site-navigation) .docs-main header.docs-navbar .site-nav-toggle { display: none; }
+}
+.site-sidebar a:focus-visible, .site-sidebar summary:focus-visible,
+.site-outline a:focus-visible, .site-outline summary:focus-visible,
+.site-nav-close:focus-visible, #documenter:has(> #site-navigation) .site-nav-toggle:focus-visible {
+    outline: 3px solid var(--site-nav-accent);
+    outline-offset: 2px;
+}
+.site-skip-link { position: fixed; top: -8rem; left: 1rem; z-index: 100; padding: .75rem 1rem; background: var(--site-nav-bg); color: var(--site-nav-text); border: 2px solid var(--site-nav-accent); }
+.site-skip-link:focus { top: .5rem; }
+#documenter:has(> #site-navigation) .docs-main { min-width: 0; max-width: 66rem; margin-left: 19rem; margin-right: 1.5rem; padding-right: 0; }
+#documenter:has(> #site-navigation) .docs-main > article { max-width: none; min-width: 0; }
+.site-outline { color: var(--site-nav-muted); padding: 0 1rem; margin: .5rem 0 1.5rem; font-size: .86rem; line-height: 1.45; }
+.site-outline-disclosure { border: 1px solid var(--site-nav-line); border-radius: .3rem; padding: .6rem .8rem; }
+.site-outline summary { cursor: pointer; font-weight: 600; }
+.site-outline ul { margin: .65rem 0 0; padding: 0; list-style: none; }
+.site-outline li { padding: 0; margin: 0 0 .5rem; }
+.site-outline a { color: inherit; display: block; padding: .15rem 0; overflow-wrap: anywhere; }
+.site-outline a:hover { color: var(--site-nav-accent); }
+.site-outline .site-outline-h3 { padding-left: .9rem; font-size: .95em; }
+.site-result-context { display: flex; flex-wrap: wrap; gap: .3rem .65rem; font-size: .78rem; line-height: 1.4; }
+.site-result-type { color: var(--site-nav-accent); font-weight: 600; }
+.site-result-topics { color: var(--site-nav-muted); }
+.topic-clusters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; margin: 1.5rem 0; }
+#documenter-page .topic-cluster { min-width: 0; padding: 1rem 1.2rem; border: 1px solid var(--site-nav-line); border-radius: .55rem; background: var(--site-nav-bg); color: var(--site-nav-text); }
+#documenter-page .topic-cluster h2 { font-size: 1.15rem; margin: 0 0 .75rem; }
+#documenter-page .topic-cluster h2 a { color: var(--site-nav-accent); }
+#documenter-page .topic-cluster p { font-size: .9rem; margin-bottom: .4rem; }
+.topic-types, .article-type { color: var(--site-nav-muted); font-size: .85rem; }
+.topic-outline { border: 1px solid var(--site-nav-line); border-radius: .35rem; padding: .8rem 1rem; margin: 1rem 0; }
+.topic-outline > summary { cursor: pointer; font-weight: 600; }
+.topic-outline li { margin-bottom: .7rem; }
+.topic-outline .article-type { display: inline-block; margin-left: .5rem; }
+.site-nav-backdrop { display: none; }
+body:not(.site-js) #documenter-search-query { display: none; }
+
+@media (min-width: 1440px) {
+    #documenter:has(> #site-navigation) .docs-main:has(.site-outline) { max-width: 66rem; margin-right: 16rem; }
+    .site-outline { position: fixed; right: 1rem; top: 6rem; width: 13rem; max-height: calc(100vh - 7rem); overflow-y: auto; margin: 0; padding: 0 .4rem; }
+    .site-outline-disclosure { border: 0; border-left: 1px solid var(--site-nav-line); border-radius: 0; padding: .4rem 0 .4rem 1rem; }
+    .site-outline summary { list-style: none; cursor: default; }
+    .site-outline summary::-webkit-details-marker { display: none; }
+    .site-outline-disclosure:not([open]) > ul { display: block; }
+}
+@media (max-width: 1055px) {
+    /* Without scripts the native disclosures remain an ordinary visible menu. */
+    #documenter:has(> #site-navigation) .site-sidebar { position: relative; width: 100%; height: auto; left: auto; border-right: 0; border-bottom: 1px solid var(--site-nav-line); box-shadow: none; }
+    #documenter:has(> #site-navigation) .site-collections { overflow: visible; }
+    #documenter:has(> #site-navigation) .docs-main { width: 100%; max-width: 100%; margin: 0; }
+    body.site-js #documenter:has(> #site-navigation) .site-sidebar { position: fixed; top: 0; left: -19rem; width: min(18rem, calc(100vw - 2.5rem)); height: 100vh; height: 100dvh; z-index: 42; border-right: 1px solid var(--site-nav-line); visibility: hidden; transition: left .18s ease, visibility .18s; }
+    body.site-js #documenter:has(> #site-navigation) .site-sidebar.visible { left: 0; visibility: visible; }
+    body.site-js #documenter:has(> #site-navigation) .site-collections { overflow-y: auto; }
+    body.site-js #documenter:has(> #site-navigation) .site-nav-toggle { display: inline-flex; align-items: center; justify-content: center; padding: .3rem; min-width: 2rem; background: transparent; color: inherit; border: 0; cursor: pointer; }
+    body.site-js .site-nav-close { display: block; float: right; margin-top: -2.5rem; padding: .3rem .5rem; border: 1px solid var(--site-nav-line); border-radius: .25rem; background: var(--site-nav-bg); color: var(--site-nav-text); font-size: .8rem; cursor: pointer; }
+    body.site-js .site-sidebar .docs-package-name { padding-right: 3.2rem !important; }
+    body.site-nav-open { overflow: hidden; }
+    html:has(> body.site-nav-open) { overflow: hidden; }
+    body.site-nav-open .site-nav-backdrop { display: block; position: fixed; inset: 0; background: #0007; z-index: 41; border: 0; width: 100%; height: 100%; }
+    #documenter:has(> #site-navigation) .docs-main header.docs-navbar { gap: .3rem; padding-inline: .65rem; }
+    #documenter:has(> #site-navigation) .docs-main header.docs-navbar .docs-right { gap: .15rem; }
+    #documenter:has(> #site-navigation) .docs-main header.docs-navbar .docs-navbar-link { margin: 0; }
+    #documenter:has(> #site-navigation) .docs-main header.docs-navbar .breadcrumb { min-width: 0; }
+}
+@media (max-width: 640px) {
+    .topic-clusters { grid-template-columns: minmax(0, 1fr); }
+    #documenter-page .topic-cluster { padding: .85rem 1rem; }
+}
+@media (max-height: 540px) and (min-width: 1056px) {
+    #documenter:has(> #site-navigation) .site-sidebar { overflow-y: auto; }
+    #documenter:has(> #site-navigation) .site-collections { min-height: auto; flex: 0 0 auto; overflow: visible; }
+}
+@media (max-height: 540px) and (max-width: 1055px) {
+    body.site-js #documenter:has(> #site-navigation) .site-sidebar { overflow-y: auto; }
+    body.site-js #documenter:has(> #site-navigation) .site-collections { min-height: auto; flex: 0 0 auto; overflow: visible; }
+}
+@media (prefers-reduced-motion: reduce) {
+    body.site-js #documenter:has(> #site-navigation) .site-sidebar { transition: none; }
+}
+@media print {
+    .site-sidebar, .site-outline, .site-nav-backdrop, .site-skip-link { display: none !important; }
+    #documenter:has(> #site-navigation) .docs-main { margin: 0 !important; width: 100% !important; max-width: none !important; }
+}

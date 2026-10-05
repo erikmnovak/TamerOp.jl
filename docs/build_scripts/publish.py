@@ -27,6 +27,7 @@ from traitlets.config import Config
 
 from reading_map import render_reading_map
 from navigation import validate_continuations
+from site_catalog import prepare_catalog
 
 DOCS = Path(__file__).resolve().parents[1]
 ROOT = DOCS.parent
@@ -183,7 +184,46 @@ def export_lesson(nb, source: Path, page: Path, pages: dict, stage: Path) -> Non
                     + title + "\n\n" + notice + rest, encoding="utf-8")
 
 
-def publish(julia: str) -> None:
+def captured_notebook(source: Path, saved: Path, evidence: dict):
+    """Reuse outputs only for the exact canonical lesson that produced them.
+
+    Downloads have portable links, so restore their outputs onto the canonical
+    cells before applying this build's publication routes.
+    """
+    if sha256(source) != evidence["sha256"] or sha256(saved) != evidence["download_sha256"]:
+        raise ValueError(f"Changed notebook or captured download: {source.name}; execute a fresh publication.")
+    authored = nbformat.read(source, as_version=4)
+    executed = nbformat.read(saved, as_version=4)
+    if len(authored.cells) != len(executed.cells):
+        raise ValueError(f"Captured cell count differs: {source.name}")
+    for cell, output in zip(authored.cells, executed.cells):
+        if cell.cell_type != output.cell_type or cell.id != output.id:
+            raise ValueError(f"Captured cell identity differs: {source.name}")
+        if cell.cell_type == "code":
+            if cell.source != output.source:
+                raise ValueError(f"Captured code differs: {source.name}")
+            cell.outputs = copy.deepcopy(output.outputs)
+            cell.execution_count = output.execution_count
+    if validate_outputs(authored) != evidence["figures"]:
+        raise ValueError(f"Captured figures differ: {source.name}")
+    return authored
+
+
+def validate_capture(record: dict, previous: Path, config: dict,
+                     source_hashes: dict, manifest_hash: str) -> None:
+    """Fail closed when a formatting-only build would reuse stale execution."""
+    if record["package_source_sha256"] != source_hashes or record["docs_manifest_sha256"] != manifest_hash:
+        raise ValueError("Package or documentation environment changed; execute a fresh publication.")
+    expected = {lesson["source"] for lesson in config["notebooks"]}
+    recorded = [lesson["source"] for lesson in record["notebooks"]]
+    if len(recorded) != len(set(recorded)) or set(recorded) != expected:
+        raise ValueError("Notebook publication set changed; execute a fresh publication.")
+    for name in ("Project.toml", "requirements.txt"):
+        if sha256(DOCS / name) != sha256(previous / "environment" / name):
+            raise ValueError(f"Execution environment changed ({name}); execute a fresh publication.")
+
+
+def publish(julia: str, reuse_executed: bool = False) -> None:
     manifest = DOCS / "Manifest.toml"
     if not manifest.exists():
         raise RuntimeError("Instantiate docs/Project.toml first; see docs/README.md.")
@@ -194,6 +234,11 @@ def publish(julia: str) -> None:
     manifest_hash = sha256(manifest)
     build = DOCS / ".build"
     build.mkdir(exist_ok=True)
+    previous = build / "src" / "downloads"
+    capture = None
+    if reuse_executed:
+        capture = json.loads((previous / "publication.json").read_text())
+        validate_capture(capture, previous, config, source_hashes, manifest_hash)
     env = {**os.environ, "JULIA_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1",
            "JULIA_NUM_PRECOMPILE_TASKS": "1", "TAMEROP_DOCS_PYTHON": sys.executable}
     with tempfile.TemporaryDirectory(prefix="publication-", dir=build) as temporary:
@@ -201,7 +246,10 @@ def publish(julia: str) -> None:
         stage = temporary / "src"
         shutil.copytree(DOCS / "src", stage)
         downloads = stage / "downloads"
-        downloads.mkdir()
+        if reuse_executed:
+            shutil.copytree(previous, downloads)
+        else:
+            downloads.mkdir()
         pages = {(DOCS / "src" / p.relative_to(stage)).resolve(): p
                  for p in stage.rglob("*.md")}
         pages.update({(DOCS / src).resolve(): stage / dest for src, dest in config["guides"].items()})
@@ -228,8 +276,10 @@ def publish(julia: str) -> None:
             validate_continuations(reading_config, DOCS)
             map_html = render_reading_map(
                 reading_config,
-                pages, stage, map_page, DOCS, REPO)
+                {source: destination for source, destination in pages.items()
+                 if source.is_relative_to(DOCS)}, stage, map_page, DOCS, REPO)
             map_page.write_text(map_template.replace(marker, f"```@raw html\n{map_html}\n```"))
+        prepare_catalog(DOCS, stage)
         # Private kernel specification: no global Jupyter kernel is installed/changed.
         kernel_dir = temporary / "kernels" / "tamerop-docs"
         kernel_dir.mkdir(parents=True)
@@ -242,6 +292,13 @@ def publish(julia: str) -> None:
         for lesson in config["notebooks"]:
             source = DOCS / lesson["source"]
             notebook_hash = sha256(source)
+            if reuse_executed:
+                evidence = next(item for item in capture["notebooks"] if item["source"] == lesson["source"])
+                nb = captured_notebook(source, downloads / source.name, evidence)
+                export_lesson(nb, source, stage / lesson["page"], pages, stage)
+                records.append(evidence)
+                print(f"Reusing verified execution of {source.relative_to(ROOT)}", flush=True)
+                continue
             nb = nbformat.read(source, as_version=4)
             for cell in nb.cells:
                 if cell.cell_type == "code":
@@ -283,12 +340,13 @@ def publish(julia: str) -> None:
                 "figures": figures, "seconds": round(elapsed, 3),
                 "download_sha256": sha256(downloads / source.name)})
         environment = downloads / "environment"
-        environment.mkdir()
-        for name in ("Project.toml", "Manifest.toml", "requirements.txt", "publication.toml"):
-            shutil.copy2(DOCS / name, environment / name)
+        if not reuse_executed:
+            environment.mkdir()
+            for name in ("Project.toml", "Manifest.toml", "requirements.txt", "publication.toml"):
+                shutil.copy2(DOCS / name, environment / name)
         if source_hashes != {p.relative_to(ROOT).as_posix(): sha256(p) for p in package_files} or sha256(manifest) != manifest_hash:
             raise ValueError("Package source or documentation environment changed during execution; rebuild.")
-        record = {"notebooks": records,
+        record = capture if reuse_executed else {"notebooks": records,
             "git_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
             "working_tree_dirty": bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT)),
             "julia": subprocess.check_output([julia, "--startup-file=no", "--version"], env=env, text=True).strip(),
@@ -319,7 +377,9 @@ def publish(julia: str) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--julia", default=shutil.which("julia"), help="Julia executable (default: PATH)")
+    parser.add_argument("--reuse-executed", action="store_true",
+                        help="Rebuild prose/navigation using verified unchanged notebook executions")
     args = parser.parse_args()
     if not args.julia:
         parser.error("Julia is not on PATH; supply --julia /path/to/julia")
-    publish(args.julia)
+    publish(args.julia, reuse_executed=args.reuse_executed)

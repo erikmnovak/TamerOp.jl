@@ -6,16 +6,206 @@ A reader should be able to follow the argument, interpret a result, and
 choose a sensible next step.
 
 Two principles govern documentation contributions: develop a connected
-finite-encoding narrative, and teach in approachable language. Apply them
-to tutorials, mathematical explanations, reference entries, and figures.
+finite-encoding learning narrative, and teach in approachable language.
+Lessons develop that narrative; independently consulted guides, reference
+entries and reports begin with their own reader question and link the context
+needed to answer it. Every family should explain its objects and claims clearly.
 
 The [first learning-path brief](learning_path.md) records the initial page
 sequence, reader questions, and expected mathematical answers. The
 [API inventory guide](api_inventory.md) explains how to maintain the generated
 binding inventory and the explicit reference-writing backlog.
 
+Benchmark reports also follow the shared [visual standard](benchmark_style.md),
+using QPA as the aesthetic reference. Its page, table and figure conventions
+complement the narrative guidance here without requiring identical plot types
+for different studies.
+
+## Choose an article's purpose before its format
+
+Use the [article inventory](article_inventory.md) for existing and planned
+treatments. Assign one primary editorial family and a clear reader question.
+Topic membership, learning-route membership and publication format are separate
+choices. A notebook, its generated website lesson and its executed download
+have one canonical authored source and one article identity.
+
+| Family | Reader's question | What the article should accomplish |
+| --- | --- | --- |
+| Mathematical chapter or worked lesson | What does this mean, and why does it matter? | Develop understanding through definitions, examples, computations and interpreted figures. Allow both example-first and definitions-first entrances. |
+| Library guide | What can TamerOp do here, and how do I use its capabilities together? | Develop a workflow, explain returned objects and meaningful choices, then explore a few useful variations. |
+| Task recipe | How do I accomplish this particular task? | Give a focused procedure, essential conditions and a recognizable result. Installation and operational support belong here. |
+| API reference | What exactly does this operation accept, return and guarantee? | Specify arguments, defaults, domains, shapes, boundary behavior, errors and mathematical scope, with small examples. |
+| Implementation account | How is this computed, and why this design? | Explain representations, execution choices, correctness conditions, reuse and costs, with sources credited where used. |
+| Benchmark report | What does the measured evidence establish? | Explain the comparison question, matched outputs, conditions, results and limitations. |
+| Contributor or maintainer guide | How do I change, document, test, benchmark or release this project consistently? | Give procedures and standards for project work without making them prerequisites for library users. |
+
+The glossary, bibliography, maps, data dictionaries, changelog and planning
+records are supporting resources. Inventory them without forcing them into
+a narrative genre. A gallery indexes figures and their canonical treatments;
+a worked application takes its family from the question it teaches or solves.
+
+Library guides retain the approachable style of the lessons, with the library's
+capabilities as their subject. Start with a meaningful public workflow and
+interpret its result before introducing additional choices. Figures should
+show actual results, comparisons or the consequences of a choice. Reveal
+options progressively, and keep styling and export details skippable. Link
+the mathematical treatment and precise API contract at the point of need.
+Do not turn the guide into a keyword catalog or repeat the introductory story.
+
+A topic need not receive an article in every family. A short recipe can be a
+section of a guide; split it when independent lookup benefits the reader.
+Split an existing article when its purpose changes substantially, not whenever
+it contains mathematics, code or implementation context. Keep necessary
+assumptions beside the operation even when a longer explanation lives elsewhere.
+
+### Continue the mathematics after encoding
+
+Mathematical lessons cover both construction of a finite encoding and the
+questions it makes possible. They include algebraic operations, categorical
+transport, invariants, summaries, vectorization and the interpretation of
+figures. An advanced topic or an executable computation does not by itself
+turn a lesson into a library guide. The lesson teaches the operation's meaning
+and consequences; a library guide teaches how to choose and combine the
+available software workflows.
+
+Treat the retained encoding as a junction for several mathematical branches.
+Readers can investigate ranks, slices and features without first completing
+resolutions or derived algebra. Reuse a recognizable object where it teaches
+the next idea, and introduce a small new example when necessary. State the
+base category, hypotheses and retained information at each transition; ambient
+recovery does not establish ambient invariance of finite-category Ext or Tor.
+
+Use visuals throughout, and allow a later interpretation lesson to bring views
+together. A dimension heatmap, a signed summary, an interval approximation and
+a module decomposition assert different things. Explain the transformation
+from object to summary to numerical feature or displayed image; identify what
+is preserved and what is lost. A stable feature claim needs its stated metric
+and hypotheses, not merely a smooth-looking picture.
+
+The [learning brief](learning_path.md#after-the-first-encoding-the-mathematical-curriculum)
+plans these branches. Add their cards to the reader-facing map when the
+treatments exist, with routes that expose choices rather than turning the
+inventory into a mandatory reading list.
+
+### Use boundary examples to prevent duplication
+
+For structure maps, different treatments answer different questions:
+
+| Family | Boundary example |
+| --- | --- |
+| Lesson | Why dimensions alone do not determine a persistence module. |
+| Library guide | How to explore the spaces and maps of a constructed object and choose what to inspect. |
+| Recipe | How to recover a map at two supplied comparable parameters. |
+| API reference | Which inputs are labels or parameters, when they are comparable, and the returned matrix's shape and field. |
+| Implementation account | How map storage, composition, coordinate recovery and caching work. |
+| Benchmark report | What a defined measurement establishes about map construction, queries or reuse. |
+| Contributor guide | How to extend or validate the map-query subsystem. |
+
+Coefficient choice is another useful test: theory explains field dependence;
+a guide helps choose exact or numerical computation; reference gives supported
+fields and tolerance semantics; implementation explains arithmetic algorithms
+and actual routing. These examples define ownership of explanations, not a
+requirement to write every possible treatment. Prefer one full explanation
+with contextual links and brief reminders over several accounts that drift.
+
+## Keep collections, topics and page outlines distinct
+
+The upper sidebar always offers **Introduction**, **Installation**, the
+**Learning map** and the **Topic map**. Beneath those entrances, five collections
+organize the usable articles by purpose:
+
+| Collection | What readers find |
+| --- | --- |
+| Mathematics | Mathematical chapters and worked lessons, including the questions made possible by a finite encoding. |
+| Using TamerOp | Library guides and focused task recipes. |
+| API reference | Precise operation and shared-contract reference. |
+| Implementation | Accounts of how coherent computations work. |
+| Benchmarks | Completed comparisons and their evidence. |
+
+Only the current collection's branch starts open. Readers can open another
+branch deliberately; keep the hierarchy shallow and add a grouped landing
+page when a collection grows. Contributor guidance is reached through the
+persistent sidebar footer link. Link a relevant testing or authoring guide within an
+article when the reader needs it, without making contributor procedures part
+of the main learning sequence.
+
+The local page outline contains that article's H2 and H3 headings. Keep it
+separate from the collection hierarchy: a section heading is not another
+article. Search identifies article type and topic so that a lesson, a usage
+guide and an algorithm account with similar titles remain distinguishable.
+
+The site derives collection and topic membership from `article_inventory.toml`
+and published destinations from `publication.toml` and authored site pages.
+`navigation.toml` supplies display grouping and order; it must not become a
+second list of articles. Public collections show authored, usable treatments.
+Keep proposals and migration notes in the inventory, and retain one canonical
+source even when an article appears through several topic links. The
+[site maintenance guide](README.md#maintain-site-navigation) explains the build
+and review responsibilities.
+
+## Separate learning routes from topic exploration
+
+Maintain two complementary navigation views. The reading map answers which
+direction a reader can take to understand the mathematics. A topic map answers
+where the documents related to an area can be found. Article families determine
+editorial purpose; topic clusters organize subjects, not levels of difficulty.
+
+The topic map is a mind map of mathematical and computational areas. Each
+cluster gathers available lessons, library guides, API entries, implementation
+accounts and reports about that area, with restrained text labels for type.
+Use short titles and reader questions to explain what each link offers. An area
+need not contain every kind of article.
+
+- Start with a small cluster overview and let the reader open or enter a topic
+  to see its documents. Add space or a topic landing view before shrinking text
+  or drawing a dense web of every cross-reference.
+- Use enclosures or undirected branches for membership. Related-topic links
+  express relevance, not prerequisites. Do not borrow the reading map's
+  directional continuation arrows for these relationships.
+- Keep one inventory identity and canonical source for an article belonging to
+  several topics. Cross-topic shortcuts refer to that record; do not maintain
+  separate summaries or copies in each cluster.
+- Derive membership from the article inventory and resolve destinations from
+  publication metadata or clearly labeled repository sources. Public maps
+  include accessible authored material; planned treatments stay in the
+  inventory. Source existence alone does not establish publication readiness.
+- Provide a linked outline with the same destinations, keyboard navigation,
+  visible focus and readable narrow-screen and light/dark layouts. Type and
+  meaning must not depend on color or an interactive renderer.
+- Keep the two maps separate and mutually discoverable. A topic cluster can
+  reveal practical and deeper accounts without making them required stops on
+  the mathematical route.
+
+The generated topic map and topic landing pages use this same article metadata.
+Their links expose published treatments across the collections. The overview,
+linked topic listings and search must agree without another independently
+authored article list. The learning map keeps its own selective progression;
+topic membership never creates a learning arrow or changes a lesson's footer.
+
+## Maintain the article inventory during gradual changes
+
+Record the intended type, reader question, topics, canonical source and next
+editorial action before writing or restructuring a treatment. Keep individual
+migration decisions in the inventory and enduring principles in this guide.
+An existing page can remain useful while awaiting adaptation; its age or
+directory does not establish that it should be removed.
+
+Revise one coherent area at a time. Preserve accurate explanations and essential
+assumptions, split or merge only where purpose warrants it, and update incoming
+links when moving content. Keep one authoritative source. Review nearby pages
+for duplicated explanations and conflicting terminology. Record completion and
+validation in contributor records, not in the lessons themselves.
+
+Article metadata does not replace the specialized manifests: learning routes
+belong to `reading_map.toml`, build routes to `publication.toml`, API-family
+coverage to `api_coverage.toml`, and observed symbols to the generated runtime
+inventory. `navigation.toml` owns display grouping only. Preserve those
+responsibilities and link related records.
+
+## Connect lessons along the reading route
+
 The [reader-facing map](src/reading_map.md) makes these routes visible. When
-adding a teaching page, record its question and suggested continuations in
+adding a lesson to a reading route, record its question and continuations in
 `reading_map.toml`, using its canonical source path. Keep the graph acyclic,
 and distinguish suggested routes from mandatory prerequisites. The site uses
 one graph for the linked diagram and text outline, and labels repository
@@ -23,7 +213,8 @@ destinations separately. Add unwritten lessons to the backlog; add their
 cards when the treatments exist. See the [map maintenance guide](README.md#maintain-the-reading-map)
 for layout and browser checks.
 
-End a lesson with a motivated next question and one primary continuation.
+End a lesson on a declared route with a motivated next question and one primary
+continuation.
 Offer at most one alternative when it serves a different reader's purpose.
 Record these destinations as `next` and, if needed, `alternate` in the map;
 the final section (or final notebook Markdown cell) links to them in that order.
@@ -103,6 +294,112 @@ a live Julia session. Distinguish a mathematical schematic from a computed
 plot. Omitting development status must never imply that an unsupported operation
 exists or that an unproved claim holds.
 
+## Explain implementation rather than its development history
+
+Implementation references answer how an algorithm works and why its choices
+make sense. The [exact rational coordinates account](implementation/qq_coordinates.md)
+is a model for their depth and explanatory style. Preserve its principles;
+adapt the section order, examples and amount of detail to the operation.
+There is no required chapter outline, figure count or code quota.
+
+These accounts form their own category, outside the reading map and supporting
+usage guides. A reader may arrive directly with a question about an algorithm.
+Briefly establish its mathematical purpose and prerequisites, linking to the
+relevant theory or usage page without repeating that treatment. Scope each
+account around a coherent computation or implementation decision; a source
+file or API family need not correspond to one chapter.
+
+### Follow the operation from mathematics to execution
+
+Begin with the question the computation answers and why it occurs in the
+library. State the input, returned mathematical object, assumptions and choices
+that affect the answer. Introduce dimensions, notation and basis conventions
+where needed. Then explain the central mechanism before expanding into
+specializations. Follow the dependencies of the argument rather than the order
+of functions in a source file.
+
+Make the connection between equations and stored data explicit: what is
+constructed, retained, recomputed and returned? Explain why a shortcut preserves
+the required result. Keep runtime correctness checks and their mathematical
+justification: they are part of the algorithm. Separate a candidate from a
+certificate, an exact guarantee from a heuristic, and a default check from a
+precondition that the caller must satisfy when that check is disabled.
+
+Choose small worked examples that expose a consequential design choice. In
+the coordinate account, dependent leading rows explain why row selection needs
+a fallback; changing an unselected entry of the right-hand side explains why
+the candidate still needs a membership check. Carry the same example far enough
+to explain the mechanism.
+A second example is useful when it reveals a different issue, not merely to
+increase coverage. Say when a small illustration does not activate the actual
+optimization's size threshold.
+
+Use short executable examples when they connect the explanation to a real
+entrypoint. Identify owner APIs and internal structures as such, explain any
+explicit options needed to reach the illustrated path, and interpret the result.
+Pseudocode can clarify a longer algorithm without reproducing its implementation.
+Link shared machinery to its existing account instead of explaining it again
+in every consumer's chapter.
+
+### Explain choices, reuse and costs precisely
+
+Whenever multiple methods appear, explain how execution reaches each one:
+the default route, explicit choices, thresholds, retained-state overrides and
+fallback conditions. Distinguish selection between requests from a fallback
+within one request, and distinguish package-level routing from algorithms
+inside a dependency. A list of available methods alone does not explain the
+implementation. A compact decision table can make precedence easier to see.
+Label configurable thresholds as defaults and distinguish empirical crossover
+rules from mathematical restrictions.
+
+Explain the resulting tradeoffs: which work is saved, which conversion or
+temporary allocation is introduced, and which inputs benefit or incur extra
+cost. Separate construction from repeated queries and retained storage from
+temporary work. State ownership, invalidation and concurrency constraints when
+they affect safe reuse. Distinguish a small internal payload from the complete
+returned object. Give meaningful cost estimates with their assumptions; counts
+of field operations or stored entries do not by themselves bound the cost of
+large exact coefficients.
+
+### Use figures and sources to support the explanation
+
+Include a diagram when it clarifies data flow, reuse, a representation or a
+decision that prose leaves difficult to follow. Keep mathematical labels
+consistent with the equations, distinguish preparation from repeated work,
+and show relevant return, rejection or fallback branches. Use readable labels,
+useful alternative text and a caption that states what the reader should
+notice. A matrix example or a short table may be more informative than a
+diagram. Let each visual resolve a specific explanatory need.
+
+Link source locations and useful symbols where they let readers follow the
+mechanism; a compact source table near the end can support this without
+interrupting the argument. Cite papers and software beside the ideas they
+support, especially specialized algorithms, bounds and less familiar
+constructions. Distinguish directly used software, implemented or adapted
+methods, mathematical background, and related alternatives. Verify the
+attribution against both source and implementation; similarity alone does not
+establish historical inspiration or mean that a paper's whole method is used.
+Maintain these citations in the shared [bibliography](implementation/references.md),
+and end the account with a simple bibliography link.
+
+### Keep the account about the algorithm
+
+Keep benchmark campaigns, before/after timing tables, test-suite accounts,
+review dates, source hashes and other audit bookkeeping in the separate
+benchmarking or contributor material. When an otherwise arbitrary choice needs
+context, a brief statement that it was chosen after benchmarking alternatives
+is enough. Explain the resulting tradeoff rather than recounting the experiments.
+Apply this distinction throughout the prose, including introductions, captions
+and closing paragraphs, not just when choosing sections.
+
+Supporting evidence remains necessary for authoring, but its collection and
+review process are not the subject of the account. Avoid closing commentary
+about the document's provenance or why its bibliography exists. Read the
+finished explanation for continuity: can someone follow the operation, see
+why its important choices work, identify which route their call takes, and
+understand its costs and limitations? Use these questions to judge the page;
+do not turn them into mandatory reader-facing sections.
+
 ## Follow the mathematical question
 
 The [finite-encoding introduction](finite_encodings.md) gives the shared
@@ -117,9 +414,11 @@ tameness and finite descriptions when introducing the name or the architecture.
 Separate the theory's general statements from the library's supported
 constructions and their assumptions.
 
-Each substantial page should answer a question that the earlier explanation
-has made meaningful. Say what object we begin with, what we learn or
-construct, and why the next question follows. Carry a worked example across
+Each lesson on a reading route should answer a question that the earlier
+explanation has made meaningful. Say what object we begin with, what we learn
+or construct, and why the next question follows. Independently consulted
+articles establish their own question and link relevant context without
+requiring readers to traverse the curriculum. Carry a worked example across
 related pages where it helps readers recognize the same object.
 
 A reference entry can do this briefly: begin with the mathematical purpose,
@@ -294,13 +593,13 @@ well as the generated page; folding must never replace output capture.
 
 Before considering a page finished, check:
 
-1. Why is the reader encountering this topic now?
+1. What question brings the reader here, and does the article's family fit it?
 2. What object do we start with, and what do we learn or construct?
-3. How does this fit into the finite-encoding workflow?
+3. Is the relevant mathematical or practical context clear without forcing an unrelated learning sequence?
 4. Are new terms, symbols, options, and returned results explained?
 5. Does the example show why the answer makes sense?
 6. Are the necessary assumptions clear and accurate?
-7. Does the next step follow from a question the page has raised?
+7. For a lesson, does its next step follow from a question it raised? For a guide or reference, do contextual links support the task without imposing an artificial sequence?
 
 Review related pages together for notation and continuity. Passing examples
 and complete API listings are useful checks, but neither establishes that

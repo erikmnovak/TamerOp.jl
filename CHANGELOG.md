@@ -29,6 +29,9 @@ to obtain while preserving the existing basis conventions and the
 
 ### Documentation
 
+- Publish validated documentation from `main` through GitHub Pages, with
+  separate deployment permissions and browser checks under the project URL.
+
 - Publish the expanded PHAT ordinary-barcode comparison across 48 medium/large
   inputs and sixteen structural variants, with timing tables, scaling curves,
   machine details and verified downloadable results. Replace the earlier public

@@ -286,10 +286,12 @@ and source revision alongside the result.
 
 ## Public onboarding checks and local tutorials
 
-The tracked [ring notebook](tutorials/ring.ipynb) has a separate
-[documentation publication workflow](README.md). It executes once through
-IJulia, verifies its mathematical assertions and required static figures, then
-generates Documenter HTML and an executed download. Conversion checks cover
+The tracked [ring notebook](tutorials/ring.ipynb) and
+[first encoding inspection](tutorials/inspect_encoding.ipynb) are selected in
+`publication.toml` for the [documentation publication workflow](README.md).
+The workflow executes each notebook once through IJulia, verifies its
+mathematical assertions and required static figures, then generates Documenter
+HTML and an executed download. Conversion checks cover
 code/math separation, output order, portable links, optional-section folding
 and missing/error outputs;
 site checks inspect local links, anchors, figures and source/download hashes.
@@ -299,6 +301,14 @@ arrow placement, text outline, keyboard focus, and narrow-screen scrolling
 in the browser; the map needs no live Julia session or JavaScript renderer.
 This workflow is required in documentation CI and does not treat missing
 plotting dependencies as a passing skip.
+
+The independent [spaces-and-maps guide](spaces_and_maps.md) has a focused
+example renderer, `docs/build_scripts/render_spaces_maps.jl`. It executes the
+guide's 15 static Julia blocks directly from their canonical Markdown, checks
+the square's dimensions and maps, distinguishes an incomparable parameter
+pair, and verifies a redundant presentation's rank, deferred basis and induced
+map equation. It exports the two figures used on the page. This is separate
+from notebook execution and from live WGLMakie interaction checks.
 
 The focused `A44 image comparison` testset checks fixed colour ranges for empty
 and filled masks, complete pixel borders, labels and native CairoMakie values.

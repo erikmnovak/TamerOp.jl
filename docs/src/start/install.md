@@ -1,4 +1,4 @@
-# Install and open the ring notebook
+# Install and open a lesson notebook
 
 You need Julia 1.12 or a compatible newer Julia 1.x release. If necessary,
 follow the [official Julia installation instructions](https://julialang.org/install/).
@@ -25,11 +25,12 @@ TamerOp is installed from its GitHub source. The notebook's publication record
 identifies the checkout used to produce the displayed results; installing the
 current repository can select a different revision.
 
-## Open and run the notebook
+## Open and run a notebook
 
-Download the [executed ring notebook](../downloads/ring.ipynb) into your work
-folder. It already contains its static figures. To edit and rerun it, start
-Jupyter from the environment you just created:
+Download the [executed ring notebook](../downloads/ring.ipynb) or the
+[square inspection notebook](../downloads/inspect_encoding.ipynb) into your
+work folder. Both already contain their static figures. To edit and rerun one,
+start Jupyter from the environment you just created:
 
 ```julia
 import IJulia
@@ -37,10 +38,11 @@ IJulia.notebook(dir=workdir)
 ```
 
 IJulia can offer to install Jupyter if it is missing. In the browser, open
-`ring.ipynb`, select a Julia kernel, and run the cells from the top. The first
-package load and figure may take longer while Julia compiles them. The notebook
-uses CairoMakie for static figures; it does not require a live visualization
-server or WGLMakie.
+the downloaded notebook, select a Julia kernel, and run the cells from the top.
+The first package load and figure may take longer while Julia compiles them. The notebook
+uses CairoMakie for static figures. The square lesson's optional live inspector
+explains how to add WGLMakie and run its examples in a live Julia session;
+the saved figures and main computation need only the packages installed above.
 
 If the kernel cannot find a package, activate your work folder in a cell before
 the lesson's imports:

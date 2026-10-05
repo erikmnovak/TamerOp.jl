@@ -1,0 +1,51 @@
+# QPA-based appearance for public benchmark reports.
+# Semantic rules and review guidance: docs/benchmark_style.md.
+# Apply inside matplotlib.pyplot.style.context(...).
+# Assign colors explicitly by tool identity when some series are absent.
+# Hex colors omit # because Matplotlib style files use it for comments.
+axes.prop_cycle: cycler('color', ['156b91', 'd36935'])
+figure.facecolor: white
+axes.facecolor: white
+savefig.facecolor: white
+savefig.transparent: False
+font.family: sans-serif
+font.sans-serif: DejaVu Sans
+font.size: 10
+font.weight: normal
+text.color: black
+axes.labelcolor: black
+axes.labelsize: 10
+axes.labelweight: normal
+axes.titlesize: 12
+axes.titleweight: normal
+figure.titlesize: 11
+figure.titleweight: normal
+xtick.color: black
+ytick.color: black
+xtick.labelsize: 10
+ytick.labelsize: 10
+xtick.direction: out
+ytick.direction: out
+axes.edgecolor: black
+axes.linewidth: 0.8
+axes.spines.top: True
+axes.spines.right: True
+axes.spines.bottom: True
+axes.spines.left: True
+axes.axisbelow: True
+axes.grid: True
+axes.grid.which: major
+grid.color: b0b0b0
+grid.alpha: 0.2
+grid.linewidth: 0.8
+grid.linestyle: -
+lines.linewidth: 2
+lines.markersize: 5
+legend.fontsize: 10
+legend.facecolor: white
+legend.edgecolor: cccccc
+legend.framealpha: 0.8
+legend.frameon: True
+figure.figsize: 7, 4
+savefig.dpi: 160
+svg.fonttype: none

@@ -4,9 +4,11 @@ After constructing an encoding, first ask what is already known and which
 calculation your next question requires. Its finite poset and parameter map
 may be available before all vector spaces and structure maps have been computed.
 Such a result is *lazy*: it keeps enough data to carry out the deferred work
-when requested. The [finite-encoding introduction](finite_encodings.md)
-describes these mathematical pieces; this guide explains how to inspect them
-and deliberately request more.
+when requested. This guide follows that distinction across encodings, algebra
+and geometry, including what repeated queries reuse. For a concrete workflow
+from parameters to spaces, matrices and figures, use
+[Exploring spaces and maps](spaces_and_maps.md); the
+[finite-encoding introduction](finite_encodings.md) explains the underlying object.
 
 Displaying a mathematical object should not silently solve another mathematical
 problem. `show`, `describe`, and owner summary functions inspect stored data.
@@ -15,7 +17,8 @@ fiber ranks, spectral pages, homology representatives, or geometry caches.
 Inspection is not necessarily constant time: summarizing an existing dimension
 vector or sparse support still scans its entries.
 
-For an ingestion encoding `enc`, choose the computation you need:
+For a lazy ingestion encoding `enc`, observe how an explicit query changes
+what the result retains:
 
 ```julia
 describe(enc)              # stored metadata, provenance, materialized status

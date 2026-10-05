@@ -1,143 +1,140 @@
 # Ordinary persistence: TamerOp and PHAT
 
-**PHAT v2, completed 2026-10-04.** Both programs returned verified complete
-barcodes on all **48 medium/large inputs**, spanning four families and sixteen
-structural variants. TamerOp was **1.33× as fast in the balanced aggregate**, corresponding to about **25% less time** under the declared weighting.
-The aggregate PHAT/TamerOp ratio is **1.329×**, with an approximate 95%
-interval of **1.290–1.370**.
-Graphs show the strongest family aggregate, with TamerOp **2.03× as fast**.
+**Study completed 2026-10-04.** Both programs returned verified complete
+barcodes for all **48** fixed inputs. TamerOp was **1.33× as fast in the balanced
+aggregate** for native construction plus the complete query, corresponding to
+about **25% less time** (approximate 95% ratio interval **1.290–1.370×**).
+Graphs show the strongest family advantage; the algebraic controls have
+similar aggregate performance, with PHAT slightly faster.
 
-Inputs range from **387 to 1,048,576 cells**.
-The largest complete 3-skeleton takes about
-**3.86 s in TamerOp** and **7.14 s in PHAT**.
-These are compiled computations with fresh mathematical results, not cached
-answers or startup measurements. Individual variants differ; the tables and
-curves show the practical scale of both advantages and slower cases.
+These are compiled computations with previous mathematical results discarded.
+Inputs range from 387 to 1,048,576 cells. The largest complete 3-skeleton takes
+about **3.86 s in TamerOp and 7.14 s in PHAT**. Individual results vary, and
+several favor PHAT. The supported conclusion is an aggregate and family-specific
+advantage; the study's predeclared criteria for “generally faster on this suite”
+were not met.
 
-This is the current PHAT report. It replaces the earlier smaller-workload
-comparison with a newly declared size distribution and freshly measured data.
-The implementation remains the accepted `phat-2026-10-04` snapshot; a different
-aggregate across new workloads is not itself an implementation speedup.
+[All benchmark results](index.md) · [Runtimes and sizes](#actual-runtimes-and-input-sizes) ·
+[Scaling curves](#how-runtime-changes-with-input-size) ·
+[Machine and versions](#machine-and-versions) ·
+[Download the results](#data-and-reproducibility)
 
-[All benchmark results](index.md) · [Actual runtimes](#phat-v2-runtimes-and-input-sizes) ·
-[Scaling curves](#phat-v2-scaling-by-structural-variant) ·
-[Machine](#machine-used-for-phat-v2) · [Data](#phat-v2-measurement-records)
-
-## The ordinary-persistence question in this study
+## Why compare ordinary persistence?
 
 As a filtration grows, components, holes and higher-dimensional classes appear
-and disappear. Their lifetimes form the ordinary barcode. Both tools receive
-identical decoded cell dimensions, integer filtration grades and boundary
+and disappear. Their lifetimes form the ordinary barcode. This is a natural
+complete-result comparison: both programs receive the same filtered boundary
+matrix and must recover the same intervals in every supplied degree.
+
+The inputs specify cell dimensions, integer filtration grades and boundary
 columns over F₂. The answer contains every nonempty finite interval and every
-essential birth, in every supplied degree. Equal-grade, zero-length pairs are
-omitted; surviving classes are neither discarded nor clipped.
+essential birth. Equal-grade, zero-length pairs are omitted; surviving classes
+are neither discarded nor clipped. For this finite one-parameter problem,
+the complete barcode determines the persistence module up to isomorphism.
 
-For this finite one-parameter problem, the complete barcode determines the
-persistence module up to isomorphism. TamerOp answers it directly from a
-`GradedComplex` through public `persistence_diagram(...; representatives=false)`.
-This benchmark does not construct an `EncodingResult`. Finite encodings remain
-central when later questions need the retained module and maps, especially
-with several parameters. See [ordinary persistence](../ordinary_persistence.md)
-and [finite encodings](../finite_encodings.md).
+TamerOp answers directly from a `GradedComplex` through public
+`persistence_diagram(...; representatives=false)`. This route does not construct
+an `EncodingResult`. Finite encodings remain central when later questions need
+the retained module and maps, especially with several parameters; see
+[ordinary persistence](../ordinary_persistence.md) and
+[finite encodings](../finite_encodings.md).
 
-The competitor is unchanged [upstream PHAT](https://bitbucket.org/phat-code/phat/)
-v1.7, using its default twist reduction with bit-tree pivot columns, on one
-thread. This is a comparison with that supported default route; it does not
-survey every PHAT algorithm or threaded configuration.
+The comparison uses unchanged [upstream PHAT](https://bitbucket.org/phat-code/phat/)
+v1.7 with its default twist reduction and bit-tree pivot columns, on one thread.
+It concerns that supported default route, rather than a survey of all PHAT
+algorithms or threaded configurations.
 
-## PHAT v2 timing boundary
+## What was measured?
 
-Native construction converts shared decoded boundary data to each program's
+Native construction converts shared decoded boundary data into each program's
 representation. The query reduces it and materializes a sorted complete barcode.
 PHAT's conversion from cell pairs and recovery of essential births are charged.
-TamerOp's ordinary public validation remains enabled. The combined phase times
-construction and query together; it is the primary comparison.
+TamerOp's ordinary public validation remains enabled. The primary measurement
+includes construction and the complete query in one timer.
 
 | Phase | PHAT/TamerOp (95% interval) |
-| --- | --- |
+| :--- | ---: |
 | Native construction | 0.508 (0.452–0.571) |
 | Complete barcode query | 1.629 (1.573–1.686) |
 | Construction plus query | 1.329 (1.290–1.370) |
 
-All ratios divide **PHAT time by TamerOp time**; above one favors TamerOp.
-Intervals use five paired process passes. The combined result is directly
-measured, not the sum of separate phase medians. Parsing, fixture generation,
-independent checks, reset inspection, serialization, package loading and
-compilation are outside the timers. Filtration construction from raw images or
-point clouds is outside this supplied-boundary comparison.
+All ratios divide **PHAT time by TamerOp time**; values above one favor TamerOp.
+The intervals use five paired process passes. The combined measurement is taken
+directly, not obtained by adding separately measured medians. PHAT spends less
+time on native construction, while TamerOp's lower query times produce the
+combined advantage on this suite.
 
-Each phase uses two fresh warmups and three accepted measurements. Each request
-starts from verified fresh mathematical state: an unreduced PHAT matrix or an
-input-only TamerOp complex, with no previous barcode or reduction reused.
-Negative controls require corrupted native inputs to fail reset checks. Normal
-reuse inside one computation is allowed. Julia performs a full collection
-before phase warmup and charges natural collections during requests.
+Parsing, fixture generation, independent checks, reset inspection, answer
+serialization, package loading and compilation are outside the timers.
+Filtration construction from raw images or point clouds is also outside this
+supplied-boundary comparison.
 
-Five serial paired process passes produced **4,320 accepted samples**
-and **2,880 warmup rows**. Every accepted measurement recorded zero
-compilation and recompilation; **0 contaminated attempts were rejected**.
-Tools and case order reverse in alternating passes. Every produced barcode,
-including warmups, is checked outside the timer.
+Each phase uses two fresh warmups and three accepted measurements per process
+pass. Every request begins with an unreduced PHAT matrix or an input-only
+TamerOp complex, with no previous barcode or reduction reused. Reset checks
+reject corrupted native inputs. Both programs may reuse intermediate work
+within a request. Julia performs a full collection before phase warmup and
+charges natural collections during requests.
 
-## PHAT v2 results by family
+Five serial paired passes produced 4,320 accepted samples and 2,880 warmup rows.
+Every accepted measurement recorded zero compilation and recompilation; no
+contaminated attempts were rejected. Tool and case order reverse in alternating
+passes. Every produced barcode, including warmups, is checked outside the timer.
+
+## Results by input family
+
+The ratios below use construction plus the complete query. Each family contains
+four structural variants at three measured sizes, with equal declared weight.
+The confidence intervals describe variation across the five paired passes.
 
 | Family | Cases | PHAT/TamerOp (95% interval) | Practical interpretation |
-| --- | --- | --- | --- |
+| :--- | ---: | ---: | :--- |
 | Graph | 12 | 2.031 (1.912–2.158) | TamerOp 2.03× as fast |
 | Simplicial | 12 | 1.254 (1.201–1.310) | TamerOp 1.25× as fast |
 | Cubical | 12 | 1.284 (1.205–1.368) | TamerOp 1.28× as fast |
 | Algebraic | 12 | 0.955 (0.878–1.039) | Similar; PHAT about 4.5% less time |
 
-The largest displayed case-median saving for TamerOp is about
-**3.28 seconds** on the complete 3-skeleton above.
-The largest saving for PHAT is about **0.53 ms**,
-on the middle-sized joined-sphere input: **3.67 ms versus
-4.19 ms**. These are differences between each tool's
-displayed case medians, not a sum or estimate for an unmeasured workload.
+The largest displayed case-median saving for TamerOp is about **3.28 seconds**
+on the largest complete 3-skeleton. PHAT's largest saving is about **0.53 ms**
+on the middle-sized joined-sphere input: 3.67 ms versus TamerOp's 4.19 ms.
+These differences describe the measured requests, not an estimated total for
+an unmeasured workload.
 
-Similar family aggregates can contain individual differences. PHAT retains a
-substantial relative advantage on the low-density algebraic controls; the
-smallest takes about **0.049 ms versus 0.087 ms**,
-with a paired ratio of **0.559**. That is a small absolute
-cost for one request, but it can accumulate in frequent batches. The per-variant
-curves and complete data retain these cases.
+A similar family aggregate can conceal substantial individual differences.
+PHAT has a clear relative advantage on the low-density algebraic controls.
+The smallest takes about 0.049 ms in PHAT and 0.087 ms in TamerOp, with a paired
+ratio of 0.559. That absolute difference is small for one request but may matter
+across frequent batches.
 
-![PHAT v2 individual case ratios and family aggregates with 95 percent intervals; the shaded band marks similar point estimates.](phat_v2/family_ratios.svg)
+![Individual PHAT/TamerOp time ratios in gray and family aggregates as blue diamonds with 95% intervals. Ratios above one favor TamerOp; the algebraic aggregate is near parity.](phat_v2/presentation/family_ratios.svg)
 
-The four families have equal weight; each family's four variants and three
-sizes divide its weight equally. Case ratios are geometric means of paired
-process-median ratios. Aggregate uncertainty uses five paired-block log ratios
-and a t interval with four degrees of freedom. It describes repeat-run variation
-on these fixed inputs, not performance on arbitrary future data.
+The blue diamonds summarize ratios, not standalone TamerOp runtimes. Gray points
+retain all twelve cases per family. The vertical line marks equal time; the pale
+band spans the declared practical range from 1/1.10 to 1.10. It indicates similar
+point estimates, not statistical equivalence. The spread of algebraic cases
+explains why its aggregate alone is insufficient.
+[Open the full-size figure](phat_v2/presentation/family_ratios.svg).
 
-We lead with magnitudes and actual times. Point estimates from 1/1.10 to 1.10
-are described as similar performance, with the measured edge explicit; this is
-a practical band, not a statistical proof of equivalence. Larger relative gaps
-remain explicit even when their absolute cost is small. Supplementary case
-counts use those same frozen thresholds:
+![Step performance profile for all 48 complete requests, with solid blue TamerOp and dashed orange PHAT curves. Both curves reach full coverage.](phat_v2/presentation/performance_profile.svg)
 
-| Family | TamerOp faster | Within the practical band | PHAT faster |
-| --- | --- | --- | --- |
-| Graph | 12 | 0 | 0 |
-| Simplicial | 6 | 4 | 2 |
-| Cubical | 7 | 5 | 0 |
-| Algebraic | 4 | 3 | 5 |
+The horizontal axis allows a larger factor of the fastest paired-case time;
+the vertical axis is the fraction of all 48 requests within that factor.
+The profile uses the same paired geometric case ratios as the family comparison,
+with equal weight for each case. TamerOp reaches full coverage at a smaller
+factor, while both programs complete every request. This describes relative
+time and coverage; the tables below show the actual waiting times.
+[Open the full-size figure](phat_v2/presentation/performance_profile.svg).
 
-Counts do not assign the same practical importance to a microsecond gap and a
-saving of several seconds. The broad claim gate requires at least 80% weighted
-practical advantages, 80% of families favoring TamerOp, and an aggregate lower
-interval above 1.10, also supported by pass ranges and equal-case sensitivity.
-**The predeclared criteria for “generally faster on this suite” are not satisfied; the supported conclusion is the aggregate and family-specific account above.**
+## Actual runtimes and input sizes
 
-## PHAT v2 runtimes and input sizes
+All times in this table and the scaling figures are **milliseconds**
+(1,000 ms = 1 second). Each time cell gives the median across the four structural
+variants at a family/size level, followed by the minimum and maximum in
+parentheses. Each case time is itself the median of five process medians.
+These ranges describe different inputs, not timing confidence intervals.
 
-All times are **milliseconds**. A time cell is the median across four structural
-variants at that family/size level, followed by their minimum–maximum range.
-Each individual case time is the median of five process medians. These ranges
-describe different inputs, not timing confidence intervals.
-
-| Family / level | Cells | Boundary entries | Output bars | TamerOp ms: median (range) | PHAT ms: median (range) |
-| --- | --- | --- | --- | --- | --- |
+| Family / level | Cells | Boundary entries | Output bars | TamerOp ms | PHAT ms |
+| :--- | ---: | ---: | ---: | ---: | ---: |
 | Graph / 1 | 8,191–20,480 | 8,190–32,768 | 2,817–13,587 | 0.439 (0.418–1.303) | 0.632 (0.582–6.478) |
 | Graph / 2 | 32,767–81,920 | 32,766–131,072 | 11,427–54,064 | 2.092 (1.933–6.324) | 2.900 (2.706–38.809) |
 | Graph / 3 | 131,071–327,680 | 131,070–524,288 | 45,622–216,621 | 9.381 (8.983–26.870) | 13.217 (13.009–246.669) |
@@ -151,15 +148,16 @@ describe different inputs, not timing confidence intervals.
 | Algebraic / 2 | 771–780 | 4,729–38,762 | 294–314 | 0.415 (0.206–0.586) | 0.463 (0.120–0.796) |
 | Algebraic / 3 | 1,539–1,548 | 11,470–157,959 | 575–607 | 1.307 (0.492–2.199) | 1.948 (0.330–4.679) |
 
-Cell counts include generators in all supplied degrees. Boundary entries count
-nonzero coefficients; output bars include finite intervals and essential births.
-The algebraic controls have fewer cells but much denser boundaries. Size level
-is a position within a variant's declared ladder, not a common geometric scale.
+Cells count generators in all supplied degrees; boundary entries count nonzero
+coefficients. Output bars include finite intervals and essential births.
+Algebraic controls have fewer cells but much denser boundaries. A size level
+is a position within a variant's ladder, not a shared geometric scale.
 
-For a more direct view, these are the **largest inputs of all sixteen variants**:
+For a direct comparison of the endpoints, these are the largest inputs of
+all sixteen variants:
 
 | Family / variant | Cells | Boundary entries | TamerOp ms | PHAT ms | PHAT/TamerOp |
-| --- | --- | --- | --- | --- | --- |
+| :--- | ---: | ---: | ---: | ---: | ---: |
 | Graph / Path forest | 131,071 | 131,070 | 9.197 | 13.009 | 1.366 |
 | Graph / Single cycle | 131,072 | 131,072 | 8.983 | 13.212 | 1.455 |
 | Graph / Disconnected cycles | 131,072 | 131,072 | 9.564 | 13.223 | 1.226 |
@@ -177,38 +175,69 @@ For a more direct view, these are the **largest inputs of all sixteen variants**
 | Algebraic / 8 transvections/cell | 1,545 | 119,270 | 1.706 | 2.946 | 1.625 |
 | Algebraic / 16 transvections/cell | 1,548 | 157,959 | 2.199 | 4.679 | 1.953 |
 
-Dividing displayed medians can differ from the reported ratio, which pairs
-process passes before aggregation. The [complete CSV](phat_v2/timings.csv)
-contains every size and all three timing phases.
+Dividing the displayed medians can differ from the reported ratio: ratios pair
+process passes before aggregation, whereas these times summarize each tool
+separately. The [complete CSV](phat_v2/timings.csv) retains every size and all
+three timing phases.
 
-## PHAT v2 scaling by structural variant
+## How runtime changes with input size
 
-Each panel joins three measured sizes of one structural variant. Both axes use
-logarithmic scales. The lines guide the eye; they are not asymptotic predictions.
+Each panel follows one structural variant through its three measured sizes.
+TamerOp is the solid blue line with circles; PHAT is the dashed orange line
+with squares. Both axes are logarithmic, and panel limits vary to keep each
+sequence legible. The lines guide the eye between observations; they are not
+asymptotic predictions. All panels include native construction and the complete
+barcode query. The [per-case data](phat_v2/timings.csv) provide the exact values.
 
-![Runtime versus input cells for path forests, single cycles, disconnected cycles and graphs with extra edges.](phat_v2/graph_scaling.svg)
+### Graphs
 
-![Runtime versus input cells for complete two-skeleta, triangulated disks, joined sphere boundaries and complete three-skeleta.](phat_v2/simplicial_scaling.svg)
+![Four graph variants at three sizes. Solid blue circles show TamerOp and dashed orange squares show PHAT; all graph cases favor TamerOp, with the largest separation for graphs with extra edges.](phat_v2/presentation/graph_scaling.svg)
 
-![Runtime versus input cells for open and periodic grids in two and three dimensions.](phat_v2/cubical_scaling.svg)
+Every graph case favors TamerOp beyond the practical band. The largest relative
+separation occurs for graphs with extra edges: at the largest size, the programs
+take about 26.87 ms and 246.67 ms, respectively. The simpler graph variants have
+smaller but consistent advantages.
+[Open the full-size figure](phat_v2/presentation/graph_scaling.svg).
 
-![Runtime versus input cells for algebraic interval controls with four densities of filtered basis changes.](phat_v2/algebraic_scaling.svg)
+### Simplicial inputs
 
-![Performance profile showing the fraction of the fixed 48 requests completed within each factor of the faster tool.](phat_v2/performance_profile.svg)
+![Runtime curves for complete two-skeleta, triangulated disks, joined sphere boundaries and complete three-skeleta. The three-skeleton has the largest absolute time difference; the largest disk and joined-sphere cases are close.](phat_v2/presentation/simplicial_scaling.svg)
 
-Both profile curves reach one: all requests completed correctly. This plot uses
-the same fixed population as the tables. No earlier pilot or comparison timings
-are pooled into the score.
+The complete 3-skeleton accounts for the largest absolute saving in the suite.
+The largest disk and joined-sphere inputs have similar runtimes instead, and
+the middle-sized joined-sphere input favors PHAT. These differences would be
+lost in a single curve joining all simplicial inputs.
+[Open the full-size figure](phat_v2/presentation/simplicial_scaling.svg).
 
-## PHAT v2 correctness and selection
+### Cubical grids
 
-The examples are synthetic and cover different topology and boundary structure.
-The algebraic family applies compatible filtered basis changes to elementary
-intervals, changing arithmetic difficulty while retaining a known barcode.
-Graph, simplicial and cubical families provide structurally different inputs.
+![Open and periodic grids in two and three dimensions. Blue TamerOp and orange PHAT curves separate more for the two-dimensional grids; the largest three-dimensional cases have similar times.](phat_v2/presentation/cubical_scaling.svg)
+
+The two-dimensional grids show a larger separation than the three-dimensional
+grids. At the largest sizes, TamerOp uses about 99–101 ms for the two-dimensional
+grids and PHAT about 145–154 ms. The largest three-dimensional cases fall
+within the practical band, with TamerOp's measured times slightly lower.
+[Open the full-size figure](phat_v2/presentation/cubical_scaling.svg).
+
+### Algebraic controls
+
+![Four densities of filtered basis changes at three sizes each. PHAT is faster on the lowest-density controls, while TamerOp gains an advantage on the larger, denser cases.](phat_v2/presentation/algebraic_scaling.svg)
+
+These controls change the density of the boundary matrices while retaining a
+known barcode. PHAT is faster on all three lowest-density inputs. With eight
+or sixteen transvections per cell, the larger inputs favor TamerOp instead.
+Cell count alone does not explain the computational difficulty.
+[Open the full-size figure](phat_v2/presentation/algebraic_scaling.svg).
+
+## How were answers and aggregates checked?
+
+The examples are synthetic and cover four families with different topology and
+boundary structure. Algebraic controls apply compatible filtered basis changes
+to elementary intervals, changing arithmetic difficulty while retaining a known
+barcode. The independent evidence varies by family:
 
 | Inputs | Independent evidence in addition to complete cross-tool agreement |
-| --- | --- |
+| :--- | :--- |
 | All 48 cases | Exact filtration, dimensions and d² = 0 checks. |
 | 12 graph cases | Complete barcode derived from DFS component-map ranks and graph cycle counts. |
 | 12 algebraic cases | Known complete barcode preserved by compatible filtered changes of basis. |
@@ -216,21 +245,52 @@ Graph, simplicial and cubical families provide structurally different inputs.
 | Eight unscored small controls | Complete rank-invariant oracle and hand-derived answers. |
 
 All 56 qualification inputs matched in TamerOp and PHAT's twist and standard
-reductions. Only twist is timed. All 15 harness tests passed, including malformed
-inputs, incorrect barcodes, incomplete records, cache-reset guards, compilation
-rejection and fixed-suite selection. Source-identical library acceptance checks
-were credited; the package-wide test suite was not rerun for this comparison.
+reductions; only twist is timed. Fifteen harness checks passed, covering malformed
+inputs, incorrect or incomplete answers, cache resets, compilation rejection
+and fixed-suite selection. Source-identical library acceptance checks were
+credited; the package-wide suite was not rerun for this comparison.
 
-The sixteen largest cases underwent a bounded feasibility pilot. All proposed
-endpoints fit the budget and were retained. No implementation tuning, favorable
-case selection or weight changes followed these measurements. Source, fixtures,
-adapters, protocol and runtime identities were frozen before final confirmation.
-There is no separate held-out performance claim for this suite.
+Each family receives one quarter of the total weight, divided equally among
+its four variants and three sizes. Within a pass, each tool's median of three
+samples gives its time. Case ratios are geometric means of the five paired
+PHAT/TamerOp process-median ratios. Family and overall aggregates use those
+fixed weights. The approximate 95% intervals are t intervals on five paired-block
+log aggregates, with four degrees of freedom. They describe repeat-run variation
+on these fixed inputs and this host, not uncertainty over arbitrary future data.
 
-## Machine used for PHAT v2
+For the combined measurement, the aggregate is 1.329 with interval 1.290–1.370
+and a pass range of 1.277–1.363. Equal-case weighting gives the same result
+because the families and variants contain equal numbers of cases. The
+supplementary classification counts use the predeclared practical band:
+
+| Family | TamerOp faster | Within the practical band | PHAT faster |
+| :--- | ---: | ---: | ---: |
+| Graph | 12 | 0 | 0 |
+| Simplicial | 6 | 4 | 2 |
+| Cubical | 7 | 5 | 0 |
+| Algebraic | 4 | 3 | 5 |
+
+The counts support the interpretation of the ratios; a saving of several seconds
+and a microsecond difference do not have equal practical importance. The broad
+claim gate requires at least 80% weighted practical advantages, 80% of families
+favoring TamerOp, and an aggregate lower interval above 1.10, supported by pass
+ranges and equal-case sensitivity. Here the first two shares are 60.4% and 75%.
+**The predeclared criteria for “generally faster on this suite” are not met.**
+The supported conclusion is the aggregate and family-specific comparison above.
+
+The sixteen largest inputs underwent a bounded feasibility pilot. Every proposed
+endpoint fit the budget and was retained. No implementation tuning, favorable
+case selection or weight changes followed those measurements. Source, fixtures,
+adapters, protocol and runtime identities were frozen before confirmation.
+There is no separate held-out performance claim. No pilot or earlier-study
+timings enter the reported score.
+
+## Machine and versions
+
+These specifications describe the actual measured candidate and run.
 
 | Component | Recorded configuration |
-| --- | --- |
+| :--- | :--- |
 | CPU | 13th Gen Intel(R) Core(TM) i7-1365U |
 | Logical CPUs / usable RAM | 12 / 31.00 GiB reported by Linux |
 | OS | x86-64 Linux 6.8.0-106-generic |
@@ -240,65 +300,85 @@ There is no separate held-out performance claim for this suite.
 | C++ build | g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0; `-O3 -DNDEBUG -std=c++17` |
 | Parallelism | One computation thread; serial workers; one Julia/BLAS thread |
 
-The Git base alone does not identify the measured implementation. Exact source,
-adapter, runtime and input identities are in [provenance.json](phat_v2/provenance.json).
-The ordinary-persistence source SHA256 is
-`8ae5e1b1addbc51f313801a4c4aa839a75f1880cb44721c8e8953931494df11e`.
+This was a shared desktop with five-second resource monitoring. During final
+confirmation, one-minute load ranged from 1.42 to 2.33 and available memory
+stayed above 7.39 GiB. System pressure and swap observations are retained in the
+metadata; they cannot be attributed to either tool alone.
 
-The user confirmed that other heavy computations could remain paused. This was
-a shared desktop with five-second resource monitoring. During final confirmation,
-one-minute load ranged from 1.42 to
-2.33; available memory stayed above
-7.39 GiB. Full pressure and system-wide swap
-observations remain in the downloadable metadata; they are not measurements
-attributed to either tool alone.
+Limits were 60 seconds per operation, 900 seconds per worker and 4 GiB sampled
+worker RSS, with 20 minutes for the pilot and 100 for confirmation. The operation
+watchdog includes untimed setup and checks, so it is not an exact query-time
+cutoff. No worker failed or reached a resource limit. Fixture generation,
+qualification, the pilot and confirmation took about 2.0, 1.1, 6.1 and 19.1
+minutes, respectively; preparation and report building are outside the timing
+allowance.
 
-Fixture generation took 2.0 minutes and qualification
-1.1 minutes. The pilot took 6.1 minutes;
-final confirmation took 19.1 minutes. The approximately two-hour
-timing allowance was a cap, not a target to fill. Preparation and report building
-are outside it. Limits were 60 seconds per operation, 900 seconds per worker,
-4 GiB sampled worker RSS, 20 minutes for the pilot and 100 for confirmation.
-The operation watchdog includes untimed setup/checks, so it is not an exact
-query-time cutoff. No worker failed or reached a resource limit.
+The source snapshot includes changes beyond its Git base and is not a tagged
+release. The [provenance record](phat_v2/provenance.json) identifies the exact
+source, adapters, runtime and inputs. PHAT v2 uses a different workload
+distribution from the earlier small-input comparison, with the same accepted
+implementation snapshot. A changed aggregate across those studies is not itself
+an implementation speedup.
 
-## PHAT v2 memory measurements
+## Memory
+
+TamerOp used substantially more process memory despite its lower aggregate
+computation time:
 
 | Tool | Sampled peak worker RSS (MiB) |
-| --- | --- |
-| tamerop | 1,392.1–1,540.5 |
-| phat | 155.8–155.8 |
+| :--- | ---: |
+| TamerOp | 1,392.1–1,540.5 |
+| PHAT | 155.8–155.8 |
 
-These are sampled peaks for entire workers, including runtime, compiled code,
-temporary storage and untimed work. They are not retained mathematical storage;
-brief peaks can be missed. Julia also provides separate per-request counters:
+These are ranges of sampled peak worker RSS, including the runtime, compiled
+code, temporary storage and untimed work. They are not retained mathematical
+storage, and brief peaks may be missed. Julia supplies separate per-request
+measurements:
 
 | Julia measurement | Range across complete requests (MiB) |
-| --- | --- |
+| :--- | ---: |
 | Allocation traffic during the request | 0.109–176.912 |
 | Retained native input | 0.043–54.001 |
 | Retained normalized barcode | 0.003–8.131 |
 
-Allocation traffic measures bytes allocated over the call, not simultaneous
-memory usage. Retained input and barcode are separate `Base.summarysize` roots.
-PHAT allocation and retained-object counters are unavailable and appear as null,
-not zero. The speed comparison remains separate from these memory observations.
+Allocation traffic counts bytes allocated during the call, not simultaneous
+memory usage. Retained input and barcode sizes are separate `Base.summarysize`
+roots. PHAT's allocation and retained-object counters are unavailable and remain
+null rather than zero. The speed comparison and these memory measurements
+answer different questions.
 
-## PHAT v2 measurement records
+## Data and reproducibility
 
-- [Data dictionary](phat_v2/README.md)
-- [All 144 case/phase summaries](phat_v2/timings.csv)
-- [Per-pass times, allocations and retained sizes](phat_v2/observations.json)
-- [Aggregates, completion, memory and host observations](phat_v2/results.json)
-- [Versions, source identity and raw-evidence hashes](phat_v2/provenance.json)
-- [Download checksums](phat_v2/SHA256SUMS)
+The public results accompany this page:
 
-The public records reproduce the summaries and figures. Exact inputs, validators,
-raw rows, source snapshots and commands remain in the local audit archive.
-These downloads are not yet a licensed executable reproduction bundle or an
+- [Summary JSON](phat_v2/results.json): aggregates, completion, memory and host observations.
+- [Per-case CSV](phat_v2/timings.csv): all 144 case/phase summaries, with exact sizes, times and ratios.
+- [Per-pass observations](phat_v2/observations.json): times, allocations and retained sizes.
+- [Provenance and machine metadata](phat_v2/provenance.json) and
+  [original download checksums](phat_v2/SHA256SUMS).
+- [Data dictionary](phat_v2/README.md): units, row meanings, uncertainty and missing values.
+- [Figure presentation record](phat_v2/presentation/presentation.json) and
+  [figure checksums](phat_v2/presentation/SHA256SUMS): the QPA-style exports used here.
+- Original sealed figures: [ratios](phat_v2/family_ratios.svg),
+  [profile](phat_v2/performance_profile.svg), [graphs](phat_v2/graph_scaling.svg),
+  [simplicial inputs](phat_v2/simplicial_scaling.svg),
+  [cubical grids](phat_v2/cubical_scaling.svg), and
+  [algebraic controls](phat_v2/algebraic_scaling.svg).
+
+The figures are rendered from the unchanged PHAT v2 summaries using the
+[shared benchmark style](../benchmark_style.md). The
+[figure renderer](../build_scripts/render_phat_figures.py) can regenerate them
+with Python and Matplotlib, without running benchmarks. Its presentation record
+identifies the input summaries, style and renderer; the original sealed files
+remain available alongside the new exports.
+
+The downloads support inspection and recomputation of the summaries. Exact
+inputs, validators, raw rows, source snapshots and commands remain in the local
+evidence archive; this is not yet an executable reproduction bundle or an
 independent clean-machine replication.
 
-**PHAT v2 is closed at this scope.** It measures complete ordinary F₂ barcodes
-from supplied boundaries. It does not compare raw-data ingestion, representative
-cycles, other fields, cohomology, relative/extended persistence, zigzags,
-incremental updates, multiparameter computations, startup or every PHAT setting.
+The study covers complete ordinary F₂ barcodes from supplied boundaries. It
+does not compare raw-data ingestion, representative cycles, other fields,
+cohomology, relative or extended persistence, zigzags, incremental updates,
+multiparameter computations, startup or every PHAT setting. For measuring
+your own workload, follow the [benchmarking manual](../benchmarking.md).

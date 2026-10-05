@@ -197,6 +197,7 @@ title = "Work with the retained algebra"
 description = "First identify the category in which a calculation takes place. Then choose which objects to materialize and, for floating coefficients, how to assess numerical rank decisions."
 links = [
     {title = "Categories and derived computations", source = "math_categories.md"},
+    {title = "Exploring spaces and maps", source = "spaces_and_maps.md"},
     {title = "Inspection and explicit computation", source = "lazy_inspection.md"},
     {title = "Numerical derived algebra", source = "numerical_algebra.md"},
 ]

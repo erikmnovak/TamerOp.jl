@@ -24,7 +24,7 @@ page = "collections/using.html"
 types = ["library_guide"]
 topic_pages = true
 related_topics = ["getting_started", "performance"]
-order = ["guide_spaces_maps", "ordinary_persistence", "visualization", "lazy_inspection"]
+order = ["guide_inputs", "guide_spaces_maps", "ordinary_persistence", "visualization", "lazy_inspection"]
 
 [[collections]]
 id = "recipes"

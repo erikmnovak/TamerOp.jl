@@ -1,13 +1,17 @@
 # Exploring spaces and maps
 
-You have an encoding. Which space belongs to a parameter you care about, and
-what happens to its vectors when you move to another parameter? TamerOp lets
-you answer these questions numerically, examine the corresponding matrices,
-and connect the answer to a picture of the finite representation.
+An encoding can come from a filtration of data or from a module described
+directly by geometric regions. In either case, which space belongs to a
+parameter you care about, and what happens to its vectors when you move to
+another parameter? TamerOp lets you compute these spaces and maps, examine
+their matrices, and connect the answer to a picture of the finite representation.
 
 This guide starts with an `EncodingResult` and follows those choices. You need
 the meaning of a [space and structure map](persistence_modules.md), but need
-not work through another construction lesson first. The
+not work through another construction lesson first. To construct your starting
+object, [start from a filtration](tutorials/inputs_to_objects.ipynb#start-from-a-filtration)
+or [define a module by regions](tutorials/inputs_to_objects.ipynb#define-a-module-by-regions).
+That guide uses the same kinds of queries for both routes. The
 [square notebook](tutorials/inspect_encoding.ipynb) develops the mathematics
 through a complete worked example; here the emphasis is on choosing queries
 you can reuse with your own encoding. If you already have a finite `PModule`,

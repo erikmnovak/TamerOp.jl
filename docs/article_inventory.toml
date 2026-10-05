@@ -70,7 +70,7 @@ topics = ["getting_started"]
 question = "Which entrance fits what I want to learn or accomplish?"
 state = "existing"
 source = "docs/src/index.md"
-related = ["reading_map", "installation", "ring"]
+related = ["reading_map", "installation", "ring", "guide_inputs"]
 migration = "retain"
 
 [[articles]]
@@ -588,12 +588,13 @@ migration = "retain"
 id = "guide_inputs"
 title = "From inputs to computed objects"
 type = "library_guide"
-topics = ["encodings", "geometry", "persistence"]
+topics = ["encodings", "geometry", "persistence", "algebra"]
 question = "Which construction route should I choose, and what object will it return?"
-state = "planned"
-scope = "Compare a few purposeful entry routes, their returned objects, and choices that change the mathematical problem; include direct ordinary routes without pretending they construct encodings."
-related = ["ingestion_options", "ordinary_persistence", "square", "ref_inputs", "ref_encodings"]
-migration = "author"
+state = "existing"
+source = "docs/tutorials/inputs_to_objects.ipynb"
+scope = "A small filtration and an exact diagonal-strip presentation lead to finite encodings, shared space/map queries, and finite-module algebra with a supplied morphism. Explain represented domains, direct ordinary routes and the finite base of algebraic operations; site and executed download derive from this notebook."
+related = ["guide_spaces_maps", "ingestion_options", "ordinary_persistence", "square", "indicator_presentations", "math_categories", "ref_inputs", "ref_encodings"]
+migration = "retain"
 
 [[articles]]
 id = "guide_spaces_maps"
@@ -604,7 +605,7 @@ question = "How do I investigate a constructed object and request deeper informa
 state = "existing"
 source = "docs/spaces_and_maps.md"
 scope = "Parameter and finite-label queries, dimensions and selected maps, defined zero versus undefined or unavailable results, static inspectors, retained presentation blocks and opt-in bases, and live selection. A square and a redundant-generator variation supply the worked results."
-related = ["square", "lazy_inspection", "visualization", "query_structure_map", "ref_modules", "ref_results"]
+related = ["guide_inputs", "square", "lazy_inspection", "visualization", "query_structure_map", "ref_modules", "ref_results"]
 migration = "retain"
 
 [[articles]]

@@ -9,6 +9,11 @@ source = "tutorials/inspect_encoding.ipynb"
 page = "tutorials/inspect_encoding.md"
 timeout = 900
 
+[[notebooks]]
+source = "tutorials/inputs_to_objects.ipynb"
+page = "guides/inputs_to_objects.md"
+timeout = 900
+
 [reading_map]
 source = "reading_map.toml"
 page = "reading_map.md"

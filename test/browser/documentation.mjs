@@ -41,6 +41,10 @@ try {
   const page = await context.newPage();
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
+  page.on('console', message => {
+    if (message.type() === 'error' && /KaTeX|MathJax|ParseError/i.test(message.text()))
+      errors.push(message.text());
+  });
   page.on('response', response => {
     if (response.url().startsWith(new URL(base).origin) && response.status() >= 400)
       errors.push(`${response.status()} ${response.url()}`);
@@ -48,23 +52,29 @@ try {
   const routes = ['index.html', 'reading_map.html', 'topic_map.html',
     'topics/encodings.html', 'collections/mathematics.html', 'collections/using.html',
     'collections/recipes.html', 'start/install.html', 'guides/optional_integrations.html',
-    'collections/api.html', 'guides/spaces_and_maps.html',
+    'collections/api.html', 'guides/inputs_to_objects.html', 'guides/spaces_and_maps.html',
     'implementation/qq_coordinates.html', 'benchmarks/phat.html',
     'contributing/index.html', 'tutorials/ring.html'];
+  async function checkPageRendering(label) {
+    await page.evaluate(() => document.fonts.ready);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false, label);
+    const brokenImages = await page.locator('article img').evaluateAll(async images => {
+      await Promise.all(images.map(image => image.decode().catch(() => {})));
+      return images.filter(image => !image.complete || !image.naturalWidth).map(image => image.src);
+    });
+    assert.deepEqual(brokenImages, [], label);
+    assert.equal(await page.locator('.katex-error, mjx-merror').count(), 0, `${label}: mathematics renders`);
+  }
   for (const route of routes) {
     await page.goto(base + route);
     await page.locator('#site-navigation').waitFor();
-    await page.evaluate(() => document.fonts.ready);
+    await checkPageRendering(route);
     assert.equal(await page.locator('.site-entry-links a').count(), 4, route);
     assert.deepEqual(await page.locator('.site-collection').evaluateAll(elements =>
       elements.map(element => element.dataset.collection)),
       ['mathematics', 'using', 'recipes', 'api', 'implementation', 'benchmarks'], route);
     assert.equal(await page.locator('#documenter-sidebar-button').isVisible(), false, route);
     assert.equal(await page.locator('.site-nav-bottom a').filter({ hasText: 'Contributors' }).count(), 1);
-    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false, route);
-    const brokenImages = await page.locator('article img').evaluateAll(images =>
-      images.filter(image => !image.complete || !image.naturalWidth).map(image => image.src));
-    assert.deepEqual(brokenImages, [], route);
     await page.screenshot({ path: path.join(output, route.replaceAll('/', '-') + '.png') });
     checked.push(route);
   }
@@ -79,7 +89,7 @@ try {
   assert.equal(await page.locator('.home-opening').count(), 1);
 
   // Downloaded notebooks must work from the same nested deployment location.
-  for (const lesson of ['ring', 'inspect_encoding']) {
+  for (const lesson of ['ring', 'inspect_encoding', 'inputs_to_objects']) {
     const response = await context.request.get(base + `downloads/${lesson}.ipynb`);
     assert.equal(response.status(), 200);
     const notebook = await response.json();
@@ -168,6 +178,67 @@ try {
   assert.equal(await page.locator('.site-nav-close').isVisible(), true);
   await page.keyboard.press('Escape');
   assert.equal(await page.locator('#documenter-sidebar-button').isVisible(), true);
+
+  // Review both construction routes where readers enter them, including saved figures.
+  // Viewport screenshots keep the long guide readable at its actual display size.
+  for (const theme of ['documenter-light', 'documenter-dark']) {
+    const themeName = theme.replace('documenter-', '');
+    await page.locator('#documenter-settings-button').click();
+    await page.locator('#documenter-themepicker').selectOption(theme);
+    await page.locator('#documenter-settings button.delete').click();
+    for (const width of [1440, 390, 320]) {
+      await page.setViewportSize({ width, height: width === 1440 ? 1050 : 844 });
+      await page.goto(base + 'index.html');
+      await page.locator('.katex').first().waitFor();
+      await checkPageRendering(`homepage ${themeName} ${width}`);
+      await page.screenshot({ path: path.join(output, `homepage-${themeName}-${width}.png`) });
+      const entrances = page.locator('.home-start');
+      assert.equal(await entrances.count(), 2);
+      // At narrow widths both learning choices remain side by side.
+      const entranceBoxes = await Promise.all([0, 1].map(i => entrances.nth(i).boundingBox()));
+      assert.ok(entranceBoxes.every(box => box && box.x >= 0 && box.x + box.width <= width));
+      assert.ok(Math.abs(entranceBoxes[0].y - entranceBoxes[1].y) < 2 || width === 1440);
+      const viewportHeight = page.viewportSize().height;
+      assert.ok(entranceBoxes.every(box => box.y >= 0 && box.y + box.height <= viewportHeight),
+        `Both learning entrances fit the initial ${width}×${viewportHeight} viewport`);
+      await page.locator('.home-workflow').scrollIntoViewIfNeeded();
+      await page.screenshot({ path: path.join(output, `homepage-workflow-${themeName}-${width}.png`) });
+      await page.locator('.home-perspectives').scrollIntoViewIfNeeded();
+      await page.screenshot({ path: path.join(output, `homepage-capabilities-${themeName}-${width}.png`) });
+
+      // Follow a real homepage entrance rather than opening the guide only by URL.
+      await page.locator('.home-returning a').click();
+      assert.equal(page.url(), base + 'guides/inputs_to_objects.html');
+      await page.locator('.katex').first().waitFor();
+      await checkPageRendering(`inputs guide ${themeName} ${width}`);
+      assert.equal(await page.locator('.site-collection[open]').getAttribute('data-collection'), 'using');
+      await page.screenshot({ path: path.join(output, `inputs-${themeName}-${width}.png`) });
+      const figures = page.locator('article img');
+      assert.ok(await figures.count() >= 2, 'Both input routes have a saved visual result');
+      const selectedFigures = [...new Set([0, (await figures.count()) - 1])];
+      for (const i of selectedFigures) {
+        assert.ok((await figures.nth(i).getAttribute('alt'))?.trim(), 'Teaching figures have descriptions');
+        await figures.nth(i).scrollIntoViewIfNeeded();
+        await page.screenshot({ path: path.join(output, `inputs-figure-${i + 1}-${themeName}-${width}.png`) });
+      }
+      // The computed matrices should be readable as matrices, not a long tuple.
+      for (const [name, shape] of [['addition', /2×4 Matrix/], ['inclusion', /4×2 Matrix/]]) {
+        const matrixResult = page.locator('article pre').filter({ hasText: shape }).first();
+        await matrixResult.scrollIntoViewIfNeeded();
+        await page.screenshot({ path: path.join(output, `inputs-${name}-${themeName}-${width}.png`) });
+        assert.equal(await matrixResult.evaluate(element => element.scrollHeight > element.clientHeight + 1), false,
+          `The ${name} matrix rows remain visible at ${width}px`);
+      }
+      const algebraDiagram = page.locator('article .katex-display').last();
+      await algebraDiagram.scrollIntoViewIfNeeded();
+      assert.ok((await algebraDiagram.innerText()).trim(), 'The algebra continuation has a rendered diagram');
+      assert.equal(await algebraDiagram.locator('.katex-error').count(), 0);
+      await checkPageRendering(`inputs algebra diagram ${themeName} ${width}`);
+      await page.screenshot({ path: path.join(output, `inputs-algebra-${themeName}-${width}.png`) });
+      assert.equal(await algebraDiagram.evaluate(element => element.scrollWidth > element.clientWidth + 1), false,
+        `The algebra diagram fits its displayed width at ${width}px`);
+    }
+  }
   assert.deepEqual(errors, [], 'Browser JavaScript errors');
   await context.close();
 

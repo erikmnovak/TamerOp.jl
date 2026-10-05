@@ -1,8 +1,9 @@
 # Build the teaching site
 
-The canonical lessons are [the ring](tutorials/ring.ipynb) and
-[inspecting spaces and maps](tutorials/inspect_encoding.ipynb).
-One execution of each produces a website lesson with static figures and a
+The canonical notebooks are the lessons [the ring](tutorials/ring.ipynb) and
+[inspecting spaces and maps](tutorials/inspect_encoding.ipynb), and the library
+guide [From inputs to computed objects](tutorials/inputs_to_objects.ipynb).
+One execution of each produces a website page with static figures and a
 downloadable executed notebook containing those same results. Edit the notebook,
 not its generated Markdown. Existing mathematical chapters remain in their current
 tracked locations and are copied into the build according to
@@ -43,8 +44,8 @@ docs/.venv/bin/python docs/build_scripts/check_site.py
 python docs/build_scripts/preview.py
 ```
 
-Open <http://localhost:8000/> and follow both lessons. The HTML also uses
-ordinary `.html` links so `docs/build/index.html` can be opened directly.
+Open <http://localhost:8000/> and follow the lessons and the input-routes guide.
+The HTML also uses ordinary `.html` links so `docs/build/index.html` can be opened directly.
 The preview disables browser caching and serves the same introduction at `/`
 and `/index.html`. If an older preview left a cached copy, reload that URL once
 with Ctrl+Shift+R (Cmd+Shift+R on macOS). Use `--port 8765` for another port.
@@ -58,6 +59,12 @@ label, space and selected map; compare the three overlapping-square maps on
 the same window, and check that the active-zero presentation has zero image.
 Review collapsed and expanded optional sections, including the saved static
 exports. Live inspector instructions require their own frontend review.
+
+For the input-routes guide, follow both the filtration and diagonal-strip
+construction into parameter queries. Check that the displayed spaces and maps
+agree with the stated support and coefficients, then read the kernel example
+over its declared finite base. Review the strip boundary and the distinction
+between its unbounded mathematical support and the finite plotting window.
 
 The ring's assertions check `[0,5)`, the essential component born at zero,
 and the changed interval `[0,3)`. The square's assertions check the closed
@@ -98,7 +105,8 @@ reachable from the homepage, catching abandoned pages and disconnected groups.
 Outputs:
 
 - `docs/build/tutorials/ring.html` and `docs/build/tutorials/inspect_encoding.html`:
-  website lessons.
+  website lessons; `docs/build/guides/inputs_to_objects.html` is the practical
+  input-routes guide.
 - `docs/build/reading_map.html`: linked overview of the available reading routes.
 - `docs/build/topic_map.html` and `docs/build/topics/`: subject overview and
   topic pages linking related treatments across article families.
@@ -107,8 +115,8 @@ Outputs:
 - `docs/build/contributing/index.html`: contributor procedures and project credit.
 - `docs/build/explanations/two_parameters.html`: short bridge into the existing
   mathematical chapters, staged from `docs/two_parameters.md`.
-- `docs/build/downloads/ring.ipynb` and `docs/build/downloads/inspect_encoding.ipynb`:
-  notebooks with saved figures.
+- `docs/build/downloads/ring.ipynb`, `docs/build/downloads/inspect_encoding.ipynb`
+  and `docs/build/downloads/inputs_to_objects.ipynb`: notebooks with saved figures.
 - `docs/build/downloads/figures/`: separate exports made by the notebook.
 - `docs/build/downloads/publication.json`: source hashes, checkout/dirty status,
   execution timing, figure counts and tool versions.
@@ -218,16 +226,29 @@ Task recipes give focused procedures for defined results. Follow the
 when expanding those introductions; do not turn them into a required sequence.
 
 Its responsive workflow figure adapts the thesis's many-inputs, finite-object,
-many-questions architecture. The inline SVG gives it a concrete square example:
+many-questions architecture. Make both starting routes visible: filtered data
+and directly specified modules. Pair familiar filtration inputs with supported
+geometric presentations and general finite posets, then show the spaces, maps,
+algebra and summaries available afterward. The inline SVG gives the finite
+model a concrete square example:
 the selected parameter maps to the one-dimensional space in the four-label
 encoding. Keep the caption, space labels, upward order arrows, and accessible
 description consistent. The figure describes the finite-encoding workflow;
 direct ordinary-barcode routines need not pass through it. All figure content
 is authored here; the site has no dependency on thesis files.
 
-Distinguish the ambition of comprehensive coverage and competitive performance
-from measured results. Link scoped comparison reports at the point of a
-performance claim and preserve results favoring other tools. Review the
+The compact capability passages should explain both routes through concrete
+questions. A sloped strip illustrates exact geometric support beyond a finite
+axis-aligned grid; its plotted window must not be mistaken for a truncation of
+the module. Filtration-derived encodings also support finite-module algebra.
+Link these claims to [the executable input-routes guide](tutorials/inputs_to_objects.ipynb),
+keeping the finite base explicit for derived operations. Preserve the equally
+prominent learning entrances and keep this practical guide outside the
+mathematical reading map.
+
+Distinguish supported capabilities from measured performance. Link scoped
+comparison reports at the point of a performance claim and preserve results
+favoring other tools. Review the
 homepage in light and dark themes, at narrow widths, and with keyboard access;
 the diagram should reflow without requiring horizontal scrolling. Its styles
 must not change the layout of lessons or reports.
@@ -251,11 +272,21 @@ does not complete an existing page's editorial migration.
 ## Library guide examples
 
 The **Using TamerOp** site section publishes the
+[input-routes guide](tutorials/inputs_to_objects.ipynb) from its canonical
+notebook, followed by the
 [spaces-and-maps pilot](spaces_and_maps.md),
 [deferred-computation guide](lazy_inspection.md), and
 [view and interval guide](visualization.md) from their canonical Markdown.
 These independently consulted guides share the site's navigation without
 adding required stops to the mathematical route.
+
+The input guide compares two constructions and returns to the same space/map
+questions before continuing with a supplied morphism and its kernel. It owns
+that choice of starting route; the spaces-and-maps guide owns the deeper query
+and inspection workflow. Keep both under their existing article identities
+and route the notebook's page and executed download through `publication.toml`.
+Publish this notebook with the normal build after editing it; its captured
+figures and assertions are reviewed together with the displayed explanation.
 
 The pilot's figures come from its own static Julia blocks. To check the
 hand-computable answers and regenerate both figures through the package API:
@@ -465,7 +496,7 @@ canonical full explanations; the bridge
 reuses their parameter-order diagram and motivates the square lesson.
 The site leaves room for the full finite-encoding learning path, API reference
 and galleries.
-Both canonical notebooks are listed in `publication.toml` and use the same
+All canonical notebooks are listed in `publication.toml` and use the same
 execution, figure capture, download and navigation checks. A fresh publication
 build and rendered review must establish acceptance for a changed lesson;
 earlier notebook execution or separate exports do not establish it. Live widgets

@@ -43,9 +43,10 @@ develops the interpretation with figures.
 
 ## Open and run a notebook
 
-Download the [executed ring notebook](../downloads/ring.ipynb) or the
-[square inspection notebook](../downloads/inspect_encoding.ipynb). Both already
-contain their static figures, which you can read without running the code.
+Download the [executed ring notebook](../downloads/ring.ipynb), the
+[square inspection notebook](../downloads/inspect_encoding.ipynb), or the
+[input-routes guide](../downloads/inputs_to_objects.ipynb). Each already contains
+its static figures, which you can read without running the code.
 
 To rerun these website notebooks, use the development version: the registered
 0.1.0 release does not include their `VisualStyle` and module-inspector APIs.

@@ -7,14 +7,13 @@
 
 # Keep the module, make its description finite
 
-When a shape changes with scale, density, or several choices at once, which
-features persist? How do they relate? TamerOp gives these questions a common
-mathematical home.
+How do persistent features relate as parameters change? Start with a filtration
+of points, images, graphs, or cells—or describe a module using geometric regions,
+a presentation, or a finite poset.
 
 The central idea is a **finite encoding**: a finite model of a persistence
-module's vector spaces and linear maps, together with the link back to the
-original parameters. Keep that structure available, and more questions become
-possible.
+module's spaces and maps, linked to the original parameters. Keep that structure
+available, and more questions become computable.
 
 ```@raw html
 </header>
@@ -34,8 +33,8 @@ possible.
     To run them, <a href="start/install.html">install and open a notebook</a>.</p>
 </nav>
 </div>
-<p class="home-returning">Already have an object?
-  <a href="guides/spaces_and_maps.html">Explore its spaces and maps <span aria-hidden="true">→</span></a>
+<p class="home-returning">Ready to compute?
+  <a href="guides/inputs_to_objects.html">Go from an input to a module and its maps <span aria-hidden="true">→</span></a>
 </p>
 
 <figure class="home-workflow" aria-labelledby="home-workflow-title home-workflow-caption">
@@ -46,9 +45,8 @@ possible.
   <div class="home-flow">
     <div class="home-flow-inputs">
       <p class="home-flow-label">Begin with</p>
-      <div class="home-flow-item"><strong>Data</strong><span>Points, graphs, images</span></div>
-      <div class="home-flow-item"><strong>Filtered complexes</strong><span>Cells and their grades</span></div>
-      <div class="home-flow-item"><strong>Presentations</strong><span>Regions and matrices</span></div>
+      <a class="home-flow-item" href="guides/inputs_to_objects.html"><strong>Build from filtered data <span aria-hidden="true">↗</span></strong><span>Points, images, graphs, or cells with grades</span></a>
+      <a class="home-flow-item" href="guides/inputs_to_objects.html"><strong>Define a module directly <span aria-hidden="true">↗</span></strong><span>Sloped polyhedral regions, presentations, or finite posets</span></a>
     </div>
     <div class="home-flow-arrow" aria-hidden="true"><span>prepare<br> and encode</span><b>→</b></div>
     <a class="home-model" href="finite_encodings.html" aria-label="Understand finite encodings through the square example">
@@ -87,9 +85,9 @@ possible.
     <div class="home-flow-arrow home-flow-arrow-out" aria-hidden="true"><span>ask</span><b>→</b></div>
     <div class="home-flow-outputs">
       <p class="home-flow-label">What next?</p>
-      <a class="home-flow-item" href="topics/algebra.html"><strong>Algebra &amp; transport <span aria-hidden="true">↗</span></strong><span>Construct and relate modules</span></a>
-      <a class="home-flow-item" href="topics/invariants.html"><strong>Invariants &amp; comparisons <span aria-hidden="true">↗</span></strong><span>Ask what a summary preserves</span></a>
-      <a class="home-flow-item" href="guides/visualization.html"><strong>Features &amp; figures <span aria-hidden="true">↗</span></strong><span>Measure, inspect, and share</span></a>
+      <a class="home-flow-item" href="guides/spaces_and_maps.html"><strong>Inspect spaces and maps <span aria-hidden="true">↗</span></strong><span>Recover a space or a map between parameters</span></a>
+      <a class="home-flow-item" href="topics/algebra.html"><strong>Construct and relate modules <span aria-hidden="true">↗</span></strong><span>Use morphisms, kernels, cokernels, and resolutions</span></a>
+      <a class="home-flow-item" href="topics/invariants.html"><strong>Compute summaries <span aria-hidden="true">↗</span></strong><span>Explore ranks, slices, and numerical features</span></a>
     </div>
   </div>
   <figcaption id="home-workflow-caption">The finite model keeps both spaces and maps, with an assignment from the original parameters.
@@ -97,35 +95,57 @@ possible.
     The <a href="tutorials/inspect_encoding.html">square lesson</a> works out how to recover maps as well.</figcaption>
 </figure>
 <div class="home-perspectives">
-<section class="home-ambition" aria-labelledby="one-place-to-follow-the-question">
+<section class="home-capability" aria-labelledby="start-from-a-filtration">
 ```
 
-## One place to follow the question
+## Start from a filtration
 
-Our ambition is an **all-in-one environment for multiparameter persistence**:
-from preparing data and constructing a filtration to manipulating modules,
-computing invariants, building numerical features, and visualizing the result.
-We want those stages to work together, so that a new question can build on the
-mathematical object already in hand.
+Turn filtered data into a persistence module, compute ranks and slices, and
+inspect how classes continue between parameters. The retained finite module
+also supports further algebra: with a module morphism, examine its kernel or
+image; with a chosen finite base, build a resolution. These operations are
+available for filtration-derived modules too.
 
-The project grows out of **Ezra Miller's theory of modules over posets**.
-[Finite encodings](finite_encodings.md) make its organizing idea concrete:
-under the encoding's hypotheses, the finite model recovers the represented
-module's spaces and maps. The same retained object connects mathematical
-questions to practical computations.
+For an ordinary one-parameter barcode, the
+[direct persistence routines](../ordinary_persistence.md) also provide a path
+from a filtered complex straight to intervals.
 
 ```@raw html
 </section>
+<section class="home-capability" aria-labelledby="describe-a-module-directly">
+```
+
+## Describe a module directly
+
+Work with a module specified by regions and linear maps, or over a finite
+poset. For example, a module supported on the diagonal strip
+``0 \leq x+y \leq 1`` has a small exact region encoding, including its sloped
+boundaries. This description keeps the entire strip, rather than only sampled
+parameter values.
+
+The encoding lets you recover spaces and maps at original parameters and use
+the same finite-module operations. You can therefore investigate modules whose
+starting description is geometric or algebraic, as well as those built from data.
+
+```@raw html
+</section>
+</div>
+<p class="home-capability-next">Try both routes in
+  <a href="guides/inputs_to_objects.html">From inputs to computed objects</a>.
+  The <a href="finite_encodings.html">finite-encoding explanation</a> develops the
+  connection to Ezra Miller's theory of modules over posets.</p>
 <section class="home-evidence" aria-labelledby="performance-you-can-examine">
 ```
 
 ## Performance you can examine
 
-We aim to make that breadth competitive with, and where possible faster than,
-specialized suites. Our extensive [benchmark reports](../benchmarks/index.md)
-put this ambition to an empirical test: matched mathematical requests,
-independently checked answers, timings, memory measurements, and downloadable
-results.
+```@raw html
+<div class="home-evidence-copy">
+```
+
+The [benchmark reports](../benchmarks/index.md) compare matched mathematical
+requests, with independently checked answers, timings, memory measurements,
+and downloadable results.
 
 The [QPA comparison](../benchmarks/qpa.md) shows a substantial advantage in
 the matched finite-module algebra tasks. The [PHAT comparison](../benchmarks/phat.md)
@@ -138,8 +158,8 @@ For the algorithms behind the results, read the
 [implementation accounts](../implementation/index.md).
 
 ```@raw html
-</section>
 </div>
+</section>
 <section class="home-spectrum" aria-labelledby="from-theory-to-application">
 ```
 

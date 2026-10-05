@@ -14,6 +14,15 @@ Run these commands from the repository root with Julia 1.12 and Python 3.11
 or newer. The isolated documentation environment uses the current checkout of
 TamerOp. It does not add plotting or website dependencies to the core package.
 
+Reader-facing setup starts with `Pkg.add("TamerOp")` from General. A website
+build against the checkout does not establish compatibility with the registered
+release: check the registry's source tree when changing installation examples.
+Keep the README's first computation usable with that release. If a downloadable
+lesson needs newer APIs, explain its separate development environment in the
+[installation page](src/start/install.md); do not quietly make source tracking
+the default for ordinary users. Revisit that distinction when a new release
+includes those APIs.
+
 ```sh
 python -m venv docs/.venv
 docs/.venv/bin/python -m pip install -r docs/requirements.txt

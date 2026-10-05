@@ -3,7 +3,7 @@
 Use this guide to prepare and verify a release candidate, register that exact
 commit, and confirm that users can install the registered release. It is for the
 package maintainer; library users should follow
-[the installation walkthrough](../README.md#install-tamerop).
+[the installation walkthrough](src/start/install.md).
 
 When release notes or a paper make performance claims, follow the
 [benchmarking manual](benchmarking.md), including its evidence and reproducible
@@ -12,11 +12,13 @@ are already tracked documentation. Releasing portable executable reproduction
 bundles is separate work; the local `benchmark/` and `audit/` directories remain
 excluded from the public package.
 
-The first planned release is **0.1.0**. Until its registration has merged,
-users install from the GitHub URL. A GitHub repository, a Git tag, and a General
-registry entry serve different purposes: General is what makes name-only
-`Pkg.add("TamerOp")` work. TagBot creates tags and GitHub releases after
-registration; it does not register the package.
+TamerOp is registered in
+[Julia's General registry](https://github.com/JuliaRegistries/General/tree/master/T/TamerOp),
+so ordinary installation uses `Pkg.add("TamerOp")`. A GitHub repository, a Git tag,
+and a General registry entry serve different purposes: pushing changes to
+`main` does not update the registered release. Each new version needs its own
+registration. TagBot creates tags and GitHub releases after registration; it
+does not register the package.
 [General registration](https://github.com/JuliaRegistries/General#registering-a-package-in-general),
 [TagBot](https://github.com/JuliaRegistries/TagBot).
 
@@ -29,9 +31,10 @@ Keep these package identifiers unchanged:
 | Julia package name | `TamerOp` |
 | Repository | `https://github.com/erikmnovak/TamerOp.jl` |
 | Package UUID | `40830518-3340-46e0-bdcb-56edef4036ff` |
-| First planned version | `0.1.0` |
 | License | MIT, in the root `LICENSE` file |
 
+Select a new version in `Project.toml`; do not reuse a version already listed in
+[General's release entries](https://github.com/JuliaRegistries/General/blob/master/T/TamerOp/Versions.toml).
 Review `Project.toml`, the beginner instructions, and `CHANGELOG.md` together.
 For each new required or optional dependency, update its UUID, compatibility
 bound, extension declaration where applicable, and installation guidance.
@@ -134,10 +137,9 @@ tag to hide a mismatch.
 Read the [General requirements](https://github.com/JuliaRegistries/General)
 and [AutoMerge checks](https://juliaregistries.github.io/RegistryCI.jl/stable/guidelines/)
 before requesting registration. They check the package name, repository URL,
-license, dependency bounds, download, installation and loading. A source check
-of General on 24 September 2026 found neither the case-insensitive name
-`TamerOp` nor this UUID. That is not a reservation: check again when submitting,
-and address any name-similarity review.
+license, dependency bounds, download, installation and loading. For an existing
+package, keep its registered name and UUID and request the new version from
+the validated commit.
 
 Open the **validated commit's page** on GitHub, rather than an arbitrary issue
 or a moving branch. After the release checks pass, add this comment:
@@ -146,38 +148,41 @@ or a moving branch. After the release checks pass, add this comment:
 @JuliaRegistrator register
 
 Release notes:
-Initial TamerOp 0.1.0 release. See CHANGELOG.md in this commit for capabilities,
-mathematical scope, installation and compatibility information.
+See CHANGELOG.md in this commit for the changes, mathematical scope and
+compatibility information for this version.
 ```
 
 Registrator reads that commit's `Project.toml` and opens a registration pull
 request in General. Follow its link and inspect the checks and review feedback.
 If a repair is needed, commit it, repeat the affected validation, and trigger
-registration on the replacement commit. Do not announce name-only installation
-while the pull request is pending.
+registration on the replacement commit. Do not announce that the new version
+is available through General while its pull request is pending.
 [Registrator instructions](https://github.com/JuliaRegistries/Registrator.jl#via-the-github-app).
 
-New packages have a minimum three-day AutoMerge waiting period for community
-feedback; passing automated checks does not guarantee immediate acceptance.
+Follow the waiting period and review requirements for a new version of an
+existing package; passing automated checks does not guarantee immediate acceptance.
 [General's waiting periods](https://github.com/JuliaRegistries/General#automatic-merging-of-pull-requests).
 
 ## 5. Confirm the released package
 
 After the registration pull request merges, allow the registry and package
-servers to update. Check the TagBot run and the GitHub release. The `v0.1.0`
+servers to update. Check the TagBot run and the GitHub release. The version's
 tag must refer to the registered commit, and the registry's source-tree hash
 must match the validated tree. If necessary, use **Actions → TagBot → Run
 workflow** to retry after correcting its configuration.
 
-In a fresh Julia session, run this **only after registration has merged**:
+After that version's registration has merged, verify it in a fresh Julia session.
+Set `release_version` to the version being checked; `0.1.0` below is an existing
+registered release:
 
 ```julia
 import Pkg
+release_version = v"0.1.0"
 Pkg.activate(; temp=true)
 Pkg.Registry.update()
-Pkg.add(Pkg.PackageSpec(name="TamerOp", version="0.1.0"))
+Pkg.add(Pkg.PackageSpec(name="TamerOp", version=release_version))
 import TamerOp as OP
-@assert Base.pkgversion(OP) == v"0.1.0"
+@assert Base.pkgversion(OP) == release_version
 values = zeros(Int, 3, 3)
 values[2, 2] = 5
 diagram = OP.cubical_persistence(values)
@@ -191,8 +196,8 @@ temporary environment here is only a release check. Confirm the reported
 package source and dependency versions. A missing registry entry immediately
 after a merge can reflect propagation delay; update the registry and retry.
 
-Once this succeeds, update the README's distribution status and make the main
-installation command `Pkg.add("TamerOp")`. Existing URL installations can use
+Keep the README and installation page aligned with the released package, with
+`Pkg.add("TamerOp")` as the ordinary installation command. Existing URL installations can use
 `Pkg.free("TamerOp")` in their analysis environment to return to registry-managed
 versions. Keep a manifest for reproducible analyses. Instructions and version
 selection follow the [Pkg guide](https://pkgdocs.julialang.org/v1/managing-packages/).

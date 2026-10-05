@@ -2,9 +2,10 @@
 
 **Toolkit for Algebraic Module Encodings over $\mathbb{R}^n$ and Other Posets.**
 
-[Documentation](https://erikmnovak.github.io/TamerOp.jl/) ·
-[Learning map](https://erikmnovak.github.io/TamerOp.jl/reading_map.html) ·
-[Browse topics](https://erikmnovak.github.io/TamerOp.jl/topic_map.html)
+[Documentation](https://tamerop.com/) ·
+[Installation](https://tamerop.com/start/install.html) ·
+[Learning map](https://tamerop.com/reading_map.html) ·
+[Browse topics](https://tamerop.com/topic_map.html)
 
 TamerOp is a Julia library built around the **finite encoding**. A persistence
 module describes information at different parameter values and the linear
@@ -22,39 +23,54 @@ compare modules, study their algebra, choose numerical summaries, and produce
 figures. Supported starting points include point clouds, images, graphs, and
 mathematical presentations that describe a module directly.
 
-Read [why finite encodings matter](#mathematical-background) below, or go
-directly to [installation](#install-tamerop). The
-[finite-encoding introduction](docs/finite_encodings.md) develops the idea
-with a small example and connects it to the detailed guides.
-For a fuller mathematical starting point, read
-[persistence modules over posets](docs/persistence_modules.md), which follows
-the ring example through vector spaces, linear maps, and several parameters.
+Our ambition is an all-in-one environment for multiparameter persistence:
+from constructing a filtration to algebra, invariants, numerical features and
+visualization, with a shared mathematical object connecting those stages.
+We assess performance against specialized tools through
+[benchmark reports](https://tamerop.com/benchmarks/index.html) with matched
+outputs, timings, memory measurements and downloadable evidence. The reports
+state what each comparison establishes and where its conclusions stop.
+
+Start with [a hole that appears and disappears](https://tamerop.com/tutorials/ring.html),
+or begin with [persistence modules](https://tamerop.com/persistence_modules.html).
+Both lead toward the finite-encoding story. If you already have an object,
+[explore its spaces and maps](https://tamerop.com/guides/spaces_and_maps.html).
+The lessons include saved figures you can read without installing Julia.
+
+## Find the kind of answer you need
+
+| Collection | What it helps you do |
+| --- | --- |
+| [Mathematics](https://tamerop.com/collections/mathematics.html) | Understand the objects, constructions and what results mean. |
+| [Using TamerOp](https://tamerop.com/collections/using.html) | Explore capabilities, compare choices and combine operations. |
+| [Task recipes](https://tamerop.com/collections/recipes.html) | Follow a focused procedure to a defined result. |
+| [API reference](https://tamerop.com/collections/api.html) | Find precise calling conventions and mathematical contracts. |
+| [Implementation accounts](https://tamerop.com/implementation/index.html) | Follow how a computation works and why it is organized that way. |
+| [Benchmark results](https://tamerop.com/benchmarks/index.html) | Examine measured comparisons with other software. |
+
+**Mathematics → Using TamerOp → Task recipes** moves from understanding ideas
+to exploring capabilities to completing a chosen task. These are independent
+entrances, not required steps. The [learning map](https://tamerop.com/reading_map.html)
+suggests mathematical continuations; the [topic map](https://tamerop.com/topic_map.html)
+collects related treatments across these families.
 
 **Requirements:** Julia **1.12 or a compatible later 1.x version** and an internet
 connection for the initial installation. Julia 1.12 is the version currently
 used by the package's tests. You do not need to clone this repository or install
 its mathematical dependencies individually.
 
-**Distribution status:** install from GitHub using the instructions below.
-Name-only installation with `Pkg.add("TamerOp")` is the goal after registration
-in Julia's General registry; this README does not claim that registration has
-already happened. GitHub installation retrieves the committed, published source.
-Local changes on the author's computer become available only after they are
-committed and pushed.
+TamerOp is registered in [Julia's General registry](https://github.com/JuliaRegistries/General/tree/master/T/TamerOp).
+Install it by name with `Pkg.add("TamerOp")`. The website follows development
+on `main`; its [installation guide](https://tamerop.com/start/install.html)
+distinguishes the registered package from the environment needed for newer
+notebook features.
 
 - [Why finite encodings?](#mathematical-background)
 - [Install TamerOp](#install-tamerop)
 - [Your first computation](#your-first-computation)
-- [Save and run a script](#save-and-run-a-script)
 - [Make your first figure](#make-your-first-figure)
-- [Reopen your project](#reopen-your-project)
-- [Choose an import style](#choose-an-import-style)
 - [Update or reproduce your environment](#update-or-reproduce-your-environment)
 - [Troubleshooting](#troubleshooting)
-- [Advanced users and performance settings](#advanced-users-and-performance-settings)
-- [Benchmark results](docs/benchmarks/index.md)
-- [Optional plotting and integrations](#optional-plotting-and-integrations)
-- [Mathematical scope and provenance](#mathematical-scope-and-provenance)
 - [Releases and citation](#releases-and-citation)
 - [Developing TamerOp](#developing-tamerop)
 
@@ -95,7 +111,7 @@ identifies the theory that makes a finite description possible even when the
 parameter domain is infinite. Supported inputs and constructions have explicit
 hypotheses; the name does not promise an encoder for every abstract poset module.
 
-The [introduction](docs/finite_encodings.md) shows these pieces in a small
+The [introduction](https://tamerop.com/finite_encodings.html) shows these pieces in a small
 example. It also distinguishes preserving a represented module from earlier
 choices such as selecting a filtration or a grid. Derived computations such
 as Ext and Tor have an additional category dependence, explained in the
@@ -145,10 +161,11 @@ workdir = joinpath(homedir(), "tamerop-work")
 mkpath(workdir)
 cd(workdir)
 Pkg.activate(workdir)
-Pkg.add(url="https://github.com/erikmnovak/TamerOp.jl.git")
+Pkg.add("TamerOp")
 ```
 
-`Pkg` is Julia's built-in package manager. It downloads TamerOp and its required
+`Pkg` is Julia's built-in package manager. It resolves a compatible registered
+TamerOp release through General, downloads the package and its required
 dependencies and records them in this folder's `Project.toml` and `Manifest.toml`.
 Keep those two files. You normally do not need to edit them yourself.
 
@@ -168,7 +185,7 @@ If you already know which environment you want, the installation itself is just:
 
 ```julia
 import Pkg
-Pkg.add(url="https://github.com/erikmnovak/TamerOp.jl.git")
+Pkg.add("TamerOp")
 ```
 
 ### 3. Load the library
@@ -187,13 +204,14 @@ files, change `LOAD_PATH`, or assemble a long setup block.
 
 Start with a small one-parameter computation whose answer we can see by hand.
 This direct barcode routine introduces births and deaths; the
-[finite-encoding introduction](docs/finite_encodings.md) then explains how we
+[finite-encoding introduction](https://tamerop.com/finite_encodings.html) then explains how we
 retain the module when moving to several parameters.
 
-The [ring teaching notebook](docs/tutorials/ring.ipynb) develops this example
+The [ring lesson](https://tamerop.com/tutorials/ring.html) develops this example
 with filtration snapshots, a barcode, a persistence diagram and a prediction
-exercise. The [documentation build](docs/README.md) generates its website
-lesson and a downloadable notebook containing the computed figures.
+exercise. Read its saved figures in the browser or download the executed
+notebook from the lesson. The computation below works with the registered
+package; the installation guide gives the setup for the full notebook.
 
 Run this in **Julia**, after installing the package:
 
@@ -229,7 +247,7 @@ OP.provenance(diagram)
 ```
 
 `describe` gives a short summary. `provenance` records the mathematical
-conventions used. The [ordinary persistence guide](docs/ordinary_persistence.md)
+conventions used. The [ordinary persistence guide](https://tamerop.com/ordinary_persistence.html)
 explains interval endpoints, superlevels and periodic images.
 
 ## Save and run a script
@@ -304,7 +322,7 @@ Save the plotting block above as `first_plot.jl` in your work folder to rerun
 it. The saved figures are written to the current working folder.
 
 Use `WGLMakie` for interactive HTML figures and install other adapters only when
-needed. See the [optional integration guide](docs/optional_integrations.md).
+needed. See the [optional integration guide](https://tamerop.com/guides/optional_integrations.html).
 Importing a renderer activates its integration with TamerOp in that session.
 Installing it without importing it is not enough.
 
@@ -363,10 +381,10 @@ For function help, type `?` at an empty Julia prompt, then `OP.encode`, or use:
 
 Start multiparameter workflows with `OP.encode`, then inspect the encoded
 object before choosing an invariant or algebraic operation. The
-[finite-encoding introduction](docs/finite_encodings.md) explains what that
-object contains. The [ingestion options guide](docs/ingestion_options.md)
+[finite-encoding introduction](https://tamerop.com/finite_encodings.html) explains what that
+object contains. The [ingestion options guide](https://tamerop.com/guides/ingestion_options.html)
 explains coefficient fields, grids and output stages; the
-[multicover guide](docs/multicover.md) follows a point cloud through a
+[multicover guide](https://tamerop.com/guides/multicover.html) follows a point cloud through a
 radius-and-coverage construction.
 
 ## Update or reproduce your environment
@@ -379,23 +397,29 @@ Pkg.status()
 Pkg.update("TamerOp")
 ```
 
-The GitHub installation tracks a branch, so updating may bring in changes from
-that branch and adjust compatible dependencies. Restart Julia after updating
-before importing the new code. This project is pre-release; save your environment
-files before updating an analysis that must remain reproducible.
+For a registry installation, `Pkg.update` selects registered versions allowed
+by your environment's compatibility constraints and may update dependencies.
+Restart Julia before importing the updated package. Save your environment
+files before changing an analysis that must remain reproducible.
 
 Keep your analysis code, input data, `Project.toml` and `Manifest.toml` together.
 The manifest records the resolved dependency versions and the installed source
 revision. On another machine, activate that folder and run `Pkg.instantiate()`.
-Preserving the manifest is particularly important while TamerOp is installed
-from an unregistered repository. See
+This applies to registered releases as well as deliberate source checkouts. See
 [Julia's package-management guide](https://pkgdocs.julialang.org/v1/managing-packages/).
 
-For a deliberately fixed revision, use `Pkg.add(url=..., rev=...)` with an actual
-commit identifier or published tag from the repository. No unreleased tag is
-assumed by these instructions. After General registration, new users will be
-able to use `Pkg.add("TamerOp")`; existing URL installations can then use
-`Pkg.free("TamerOp")` to return to registry-managed versions.
+If this environment previously installed TamerOp from a GitHub URL or a local
+development checkout, return it to registry-managed releases with:
+
+```julia
+Pkg.free("TamerOp")
+Pkg.update("TamerOp")
+```
+
+Use a separate environment when deliberately working with development code.
+`Pkg.add(name="TamerOp", rev="main")` follows the repository's development
+branch; updates then follow that branch rather than registered releases.
+An actual commit identifier in `rev` selects a fixed source revision.
 
 ## Troubleshooting
 
@@ -403,7 +427,7 @@ able to use `Pkg.add("TamerOp")`; existing URL installations can then use
 | --- | --- |
 | `julia` is not recognized in your terminal | Open the Julia application, or finish the PATH setup described by the official installer. Restart the terminal after installing. |
 | `Package TamerOp not found in current path` | Activate the environment where you installed TamerOp. Inspect `Base.active_project()` and `Pkg.status()`. |
-| `TamerOp` cannot be found by `Pkg.add("TamerOp")` | Use the GitHub URL above until registration is complete. |
+| `TamerOp` cannot be found by `Pkg.add("TamerOp")` | Check the capitalization and run `Pkg.Registry.update()`, then retry. If General is absent from `Pkg.Registry.status()`, add it with `Pkg.Registry.add("General")`. |
 | A Julia-version compatibility error | Check `VERSION`. This package requires Julia 1.12 or a compatible newer 1.x version. |
 | `UndefVarError: OP not defined` | Run `import TamerOp as OP` in this session or at the start of the script. |
 | A plotting backend is unavailable | Install the requested renderer in the active environment, then import it in this session. |
@@ -456,21 +480,21 @@ explicit persistence, the same function accepts a writable `path` with
 at the repository root. Saving to another path does not automatically select
 that file on a future import; normal users can simply use the defaults.
 
-The [benchmark results](docs/benchmarks/index.md) report comparisons by
+The [benchmark results](https://tamerop.com/benchmarks/index.html) report comparisons by
 mathematical task, with machine specifications, timing boundaries, figures,
 and downloadable data. The first report covers a fixed 220-request QPA suite:
 TamerOp was faster on all 200 requests completed correctly by both tools,
 with a weighted geometric mean of **135.70×** for compiled, uncached native
 construction plus query. The remaining 20 QPA tensor-evaluation failures
-have no speed ratio. See the [QPA report](docs/benchmarks/qpa.md) for the
+have no speed ratio. See the [QPA report](https://tamerop.com/benchmarks/qpa.html) for the
 tested development snapshot, memory costs, and scope.
 
-The [PHAT report](docs/benchmarks/phat.md) compares complete ordinary F₂
+The [PHAT report](https://tamerop.com/benchmarks/phat.html) compares complete ordinary F₂
 barcodes on 48 medium/large inputs across sixteen structural variants.
 TamerOp **1.33× as fast in the balanced aggregate** for construction plus complete barcode; all 48 medium/large requests completed correctly in both tools. The report includes variant-by-variant scaling curves and the
 machine, verification and measurement details.
 
-For measuring or improving performance, use the [benchmarking manual](docs/benchmarking.md).
+For measuring or improving performance, use the [benchmarking manual](https://tamerop.com/contributing/benchmarking.html).
 It separates compilation from uncached computation and reuse, explains fair
 comparisons with other tools, and describes how to preserve reproducible evidence.
 
@@ -479,9 +503,9 @@ comparisons with other tools, and describes how to preserve reproducible evidenc
 The mathematical core loads with `using TamerOp`. Plotting and ecosystem
 adapters are optional packages activated by explicit imports, for example
 `using TamerOp, CairoMakie` after installing CairoMakie in your environment.
-See [optional integrations](docs/optional_integrations.md) for installation,
+See [optional integrations](https://tamerop.com/guides/optional_integrations.html) for installation,
 backend selection and export instructions, and
-[ordinary persistence](docs/ordinary_persistence.md) for exact F₂ barcodes,
+[ordinary persistence](https://tamerop.com/ordinary_persistence.html) for exact F₂ barcodes,
 sublevel/superlevel intervals and periodic cubical examples.
 
 ## Mathematical scope and provenance
@@ -493,12 +517,12 @@ This setting is called its *representation category*. The `tor` operation
 uses the associated incidence algebra, which records the order relations.
 Different encodings of the same ambient module can have different
 finite-category Ext/Tor groups. Resolution independence does not establish
-encoding independence; see the [category and comparison guide](docs/math_categories.md)
+encoding independence; see the [category and comparison guide](https://tamerop.com/math_categories.html)
 for precise hypotheses, explicit comparison maps and a counterexample.
 
-The [exact matching guide](docs/exact_matching.md) states the finite-window
+The [exact matching guide](https://tamerop.com/guides/exact_matching.html) states the finite-window
 contract and explains why geometric cells and barcode-cost switches suffice.
-The [numerical algebra guide](docs/numerical_algebra.md) explains `RealField`
+The [numerical algebra guide](https://tamerop.com/guides/numerical_algebra.html) explains `RealField`
 rank decisions, solve residuals and the limits of near-singular computations.
 
 A result's *provenance* records how it was obtained and which mathematical
@@ -517,7 +541,7 @@ dimension vector for reuse, while `encoding_module(result)` explicitly
 constructs the module and its structure maps. This distinction matters:
 a table of dimensions does not tell us how classes move between parameters.
 Axes queries do not enumerate grid representatives.
-See [inspection and explicit computation](docs/lazy_inspection.md) for spectral
+See [inspection and explicit computation](https://tamerop.com/guides/lazy_inspection.html) for spectral
 pages, representative data, and cache behavior.
 
 High-dimensional alpha and Delaunay lower-star inputs reject unsupported
@@ -565,12 +589,12 @@ Source coordinates must admit exact rational conversion (integers, rationals
 or finite floating-point values); irrational algebraic input coordinates are
 not supported.
 Distinct critical grades survive encoding, queries and JSON round trips, even
-when their floating displays coincide. See the [exact-grade guide](docs/exact_grades.md)
+when their floating displays coincide. See the [exact-grade guide](https://tamerop.com/guides/exact_grades.html)
 for radius semantics, oriented axes and sliced computations. Native backends
 require distinct sites in general position; `backend=:subdivision_cech`
 supports degenerate and repeated sites with an explicit construction budget.
 `depth_range=(lo,hi)` constructs a capped model of the requested coverage
-window. See the [multicover guide](docs/multicover.md) for backend choices,
+window. See the [multicover guide](https://tamerop.com/guides/multicover.html) for backend choices,
 mathematical comparisons and examples.
 
 The native default `max_dim=nothing` retains all cellular dimensions through
@@ -602,11 +626,11 @@ See the [function-Delaunay paper](https://arxiv.org/abs/2310.15902),
 
 ## Releases and citation
 
-[The changelog](CHANGELOG.md) describes the planned 0.1.0 release and its scope.
-An unreleased candidate is not a registered release: continue using the GitHub
-installation instructions until this README announces otherwise. The
-[maintainer release guide](docs/releasing.md) explains the checks and General
-registration needed to enable `Pkg.add("TamerOp")`.
+[General's version record](https://github.com/JuliaRegistries/General/blob/master/T/TamerOp/Versions.toml)
+identifies registered releases. [The changelog](CHANGELOG.md) describes changes;
+unreleased changes on `main` are separate from a registered package version.
+The [maintainer release guide](https://tamerop.com/contributing/releasing.html) explains how each new candidate
+is checked, registered and verified from a clean user environment.
 
 If TamerOp contributes to your research, cite **Erik Novak, TamerOp.jl:
 Toolkit for Algebraic Module Encodings over R^n and Other Posets**, with the
@@ -614,7 +638,6 @@ Toolkit for Algebraic Module Encodings over R^n and Other Posets**, with the
 or Git commit used. [CITATION.cff](CITATION.cff) contains the software citation
 metadata. GitHub can use this file to provide a **Cite this repository** button
 with APA and BibTeX formats; see [GitHub's citation guide](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-citation-files).
-No release date or DOI is claimed for the candidate.
 
 To see the package installed in your current Julia analysis environment:
 
@@ -624,14 +647,14 @@ Pkg.status("TamerOp")
 ```
 
 Keep that environment's `Project.toml` and `Manifest.toml` with your analysis.
-The manifest records the source revision for a GitHub installation as well as
-dependency versions. A citation credits the software; those environment files
+The manifest records the selected package and dependency versions, including
+source revisions for development installations. A citation credits the software; those environment files
 help someone reproduce the computation.
 
 ## Developing TamerOp
 
 This section is for contributors editing the library. The
-[contributor guide](CONTRIBUTING.md) explains how to report a problem, set up a
+[contributor guide](https://tamerop.com/contributing/contributing.html) explains how to report a problem, set up a
 checkout, and send a pull request. Users running analyses can follow the
 installation instructions above without cloning the repository.
 
@@ -641,7 +664,7 @@ From a clone, instantiate its development environment, then run selected tests:
 julia --project=. -e 'import Pkg; Pkg.instantiate()'
 ```
 
-Focused correctness checks use the maintained [test runner](docs/testing.md):
+Focused correctness checks use the maintained [test runner](https://tamerop.com/contributing/testing.html):
 
 ```sh
 julia --project=. test/runtests.jl --file=test_data_pipeline.jl --prefix=A14
@@ -649,10 +672,10 @@ julia --project=. test/runtests.jl --file=test_data_pipeline.jl --prefix=A14
 
 The runner also supports field selection, required extensions and threaded runs.
 
-See [option contracts](docs/option_contracts.md) and
-[ingestion options](docs/ingestion_options.md) for representation, coefficient-field,
+See [option contracts](https://tamerop.com/reference/option_contracts.html) and
+[ingestion options](https://tamerop.com/guides/ingestion_options.html) for representation, coefficient-field,
 stage and validation choices.
 
-Documentation contributions follow the [writing guide](docs/writing.md).
+Documentation contributions follow the [writing guide](https://tamerop.com/contributing/writing.html).
 It explains the shared finite-encoding narrative, how to introduce unfamiliar
 terms, and how to check that an explanation helps its intended reader.

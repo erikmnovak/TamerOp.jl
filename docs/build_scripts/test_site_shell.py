@@ -33,9 +33,12 @@ def catalog():
         "anchors": dict(home="index.html", install="start/install.html", learning="reading_map.html",
                         topics="topics/index.html", contributing="contributing/index.html"),
         "collections": [dict(id="using", title="Using TamerOp", page="collections/using.html",
+                             grouped_sidebar=False,
                              items=[dict(page="guides/current.html", **record)]),
-                        dict(id="implementation", title="Implementation", page="implementation/index.html", items=[]),
-                        dict(id="contributing", title="Contributing", page="contributing/index.html", items=[])],
+                        dict(id="implementation", title="Implementation", page="implementation/index.html",
+                             grouped_sidebar=False, items=[]),
+                        dict(id="contributing", title="Contributing", page="contributing/index.html",
+                             grouped_sidebar=False, items=[])],
         "topics": [dict(id="encodings", title="Finite encodings", page="topics/encodings.html", articles=[])]}
 
 
@@ -86,6 +89,7 @@ class ShellTests(unittest.TestCase):
     def test_large_catalog_uses_scoped_topics_not_an_unbounded_sidebar(self):
         config = catalog()
         group = config["collections"][0]
+        group["grouped_sidebar"] = True
         group["items"].extend(dict(page=f"guides/extra{i}.html", title=f"Other article {i}", topics=["encodings"])
                               for i in range(70))
         group["topic_groups"] = [dict(id="encodings", title="Finite encodings",
@@ -103,6 +107,28 @@ class ShellTests(unittest.TestCase):
         topic_output = transform(HTML, group_page, config)
         topic_structure = Structure(topic_output)
         self.assertEqual(len([n for n in topic_structure.elements if n.attrs.get("aria-current") == "page"]), 1)
+
+    def test_retained_subject_pages_do_not_force_a_small_collection_into_groups(self):
+        config = catalog()
+        group = config["collections"][0]
+        subject_page = "collections/using/topics/encodings.html"
+        group["topic_groups"] = [dict(id="encodings", title="Finite encodings",
+                                      page=subject_page, items=group["items"])]
+        config["pages"][subject_page] = dict(title="Finite encodings", collection="using", type="resource")
+        output = transform(HTML, "guides/current.html", config)
+        menu = Structure(output).one(class_name="site-collections")
+        contents = output[menu.start:menu.end]
+        active = [n for n in Structure(output).elements if n.attrs.get("aria-current") == "page"]
+        self.assertEqual([n.attrs["href"] for n in active], ["current.html"])
+        self.assertNotIn('href="../collections/using/topics/encodings.html"', contents)
+        self.assertNotIn('Current page', contents)
+
+        subject_output = transform(HTML, subject_page, config)
+        parsed = Structure(subject_output)
+        active = [n for n in parsed.elements if n.attrs.get("aria-current") == "page"]
+        self.assertEqual(len(active), 1)
+        self.assertEqual(active[0].attrs["href"], "encodings.html")
+        self.assertIn('data-collection="using" open', subject_output)
 
     def test_supporting_resource_retains_current_collection_context(self):
         config = catalog()

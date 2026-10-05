@@ -102,6 +102,8 @@ order = []
         math, using = data["collections"]
         self.assertEqual([a["id"] for a in math["items"]], ["second", "first"])
         self.assertEqual(math["topic_groups"], [])
+        self.assertFalse(math["grouped_sidebar"])
+        self.assertTrue(using["grouped_sidebar"])
         grouped = [a["id"] for group in using["topic_groups"] for a in group["items"]]
         self.assertCountEqual(grouped, ["a", "b", "c"])
         self.assertEqual(len(grouped), len(set(grouped)))
@@ -115,6 +117,66 @@ order = []
         self.assertIn("2 articles.", overview)
         self.assertNotIn("guides/a.md", overview)
         self.assertIn("[Second](../second.md)", (self.stage / "collections/mathematics.md").read_text())
+
+    def test_published_subject_routes_survive_collection_shrinking_below_sidebar_threshold(self):
+        self.navigation += 'topic_pages = true\n'
+        for identity, topic in (("a", "geometry"), ("b", "algebra"), ("c", "geometry")):
+            self.article(identity, f"docs/{identity}.md", "library_guide", [topic])
+            self.guides[f"{identity}.md"] = f"guides/{identity}.md"
+        large = self.stage_catalog()["collections"][1]
+        self.assertTrue(large["grouped_sidebar"])
+        published_subjects = {group["page"] for group in large["topic_groups"]}
+
+        # A reclassified or unpublished article reduces the collection size.
+        del self.guides["c.md"]
+        shutil.rmtree(self.stage)
+        data = self.stage_catalog()
+        small = data["collections"][1]
+        self.assertFalse(small["grouped_sidebar"])
+        self.assertEqual({group["page"] for group in small["topic_groups"]}, published_subjects)
+        self.assertTrue(published_subjects <= data["pages"].keys())
+        overview = (self.stage / "collections/using.md").read_text()
+        self.assertIn("[A](../guides/a.md)", overview)
+        self.assertIn("[B](../guides/b.md)", overview)
+        self.assertIn('<details class="collection-subjects"><summary>Browse by subject</summary>', overview)
+        self.assertIn('href="using/topics/geometry.html"', overview)
+        self.assertNotIn("Choose a subject", overview)
+        for page in published_subjects:
+            self.assertTrue((self.stage / page.replace(".html", ".md")).is_file())
+        self.assertNotIn("guides/c.md", (self.stage / "collections/using/topics/geometry.md").read_text())
+
+    def test_topic_page_display_setting_requires_a_boolean(self):
+        self.navigation += 'topic_pages = "true"\n'
+        with self.assertRaisesRegex(ValueError, "topic_pages must be a boolean"):
+            self.stage_catalog()
+
+    def test_related_subject_page_links_to_recipes_under_their_current_editorial_type(self):
+        self.navigation += 'topic_pages = true\nrelated_topics = ["geometry"]\n'
+        self.navigation += '''[[collections]]
+id = "recipes"
+title = "Task recipes"
+page = "collections/recipes.html"
+types = ["recipe"]
+'''
+        self.article("recipes", "docs/src/collections/recipes.md", "resource")
+        self.article("guide", "docs/guide.md", "library_guide", ["algebra"])
+        self.article("export", "docs/export.md", "recipe", ["geometry"])
+        self.guides.update({"guide.md": "guides/guide.md", "export.md": "guides/export.md"})
+        data = self.stage_catalog()
+        using, recipes = data["collections"][1:]
+        self.assertEqual([item["id"] for item in using["items"]], ["guide"])
+        self.assertEqual([item["id"] for item in recipes["items"]], ["export"])
+        self.assertEqual(data["pages"]["guides/export.html"]["collection"], "recipes")
+        content = (self.stage / "collections/using/topics/geometry.md").read_text()
+        self.assertIn("Related treatments from other collections.", content)
+        self.assertIn("[Export](../../../guides/export.md) — Task recipe.", content)
+        self.assertNotIn("Using TamerOp articles in this area.", content)
+        self.assertIn('href="using/topics/geometry.html"', (self.stage / "collections/using.md").read_text())
+
+    def test_related_subjects_require_known_topic_ids(self):
+        self.navigation += 'related_topics = ["unknown"]\n'
+        with self.assertRaisesRegex(ValueError, "related_topics must list known topics"):
+            self.stage_catalog()
 
     def test_notebook_routes_exist_before_export_and_toml_covers_every_page_once(self):
         self.article("first", "docs/tutorials/first.ipynb", "lesson", content="{}")

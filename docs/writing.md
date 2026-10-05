@@ -58,6 +58,52 @@ Split an existing article when its purpose changes substantially, not whenever
 it contains mathematics, code or implementation context. Keep necessary
 assumptions beside the operation even when a longer explanation lives elsewhere.
 
+### Move from understanding to exploration to a defined task
+
+**Mathematics → Using TamerOp → Task recipes** describes a spectrum from
+understanding an idea, through exploring the library's capabilities and choices,
+to accomplishing a particular task. It is a distinction in reader purpose,
+not a prerequisite chain or a ranking of difficulty. Readers can enter any of
+these collections directly. A demanding algebraic recipe can be more advanced
+than an introductory mathematical lesson.
+
+A lesson might show why dimensions do not determine a persistence module.
+A library guide explores the spaces, maps and coordinate views available for
+an encoded object, helping readers decide what to inspect. A recipe starts with
+two supplied parameters and ends with their structure-map matrix and its rank.
+Give each treatment enough local context to be useful and link its neighbors
+where their explanation becomes relevant. The introduction should make these
+three purposes visible without presenting them as a course everyone must finish.
+
+### Write recipes around an attainable result
+
+A recipe serves someone who already knows what they want to do. Use a concrete,
+task-oriented title, identify the starting object or data and intended result,
+then give a runnable procedure. Make success recognizable through an expected
+value, a displayed result, a saved artifact or a check that the reader can
+interpret. Prefer a small self-contained input; when a prepared object is
+necessary, link precisely to its construction and state what it must contain.
+
+Let code carry the procedure, with concise explanations of consequential choices
+and outputs. Keep necessary mathematical hypotheses beside the step that uses
+them. A structure-map recipe, for example, must distinguish a zero map between
+comparable parameters from the absence of a prescribed map between incomparable
+ones. State required packages and execution context; avoid hidden notebook state,
+unexplained helper wrappers and an exhaustive option catalog.
+
+Use a figure when it helps the reader inspect the result, rather than requiring
+one for every task. Link to a guide for choosing among capabilities, to theory
+for the underlying argument, and to reference for exact contracts at the point
+of need. Include a small variation or recovery note when it resolves a likely
+obstacle; broader exploration belongs in the guide. These responsibilities do
+not prescribe a fixed section template, code-to-prose ratio or page length.
+
+Installation remains a recipe with a permanent upper-sidebar entrance. Existing
+recipe classifications record an editorial home, not proof that the page
+already follows this style. Use inventory migration notes for unfinished
+adaptations and planned records for independently useful procedures. Do not
+create a page for every keyword or mirror all guides with shortened copies.
+
 ### Continue the mathematics after encoding
 
 Mathematical lessons cover both construction of a finite encoding and the
@@ -111,13 +157,14 @@ with contextual links and brief reminders over several accounts that drift.
 ## Keep collections, topics and page outlines distinct
 
 The upper sidebar always offers **Introduction**, **Installation**, the
-**Learning map** and the **Topic map**. Beneath those entrances, five collections
+**Learning map** and the **Topic map**. Beneath those entrances, six collections
 organize the usable articles by purpose:
 
 | Collection | What readers find |
 | --- | --- |
 | Mathematics | Mathematical chapters and worked lessons, including the questions made possible by a finite encoding. |
-| Using TamerOp | Library guides and focused task recipes. |
+| Using TamerOp | Library guides that explore capabilities, returned objects and consequential choices. |
+| Task recipes | Focused procedures for accomplishing a defined task and recognizing its result. |
 | API reference | Precise operation and shared-contract reference. |
 | Implementation | Accounts of how coherent computations work. |
 | Benchmarks | Completed comparisons and their evidence. |
@@ -128,6 +175,11 @@ page when a collection grows. Contributor guidance is reached through the
 persistent sidebar footer link. Link a relevant testing or authoring guide within an
 article when the reader needs it, without making contributor procedures part
 of the main learning sequence.
+
+Installation stays permanently above the collections even though its editorial
+family is `recipe`. Its upper link and recipe listing resolve to the same
+canonical article. The six collections express purpose; their display order
+does not impose a reading sequence.
 
 The local page outline contains that article's H2 and H3 headings. Keep it
 separate from the collection hierarchy: a section heading is not another
@@ -142,6 +194,12 @@ Keep proposals and migration notes in the inventory, and retain one canonical
 source even when an article appears through several topic links. The
 [site maintenance guide](README.md#maintain-site-navigation) explains the build
 and review responsibilities.
+
+Simplifying a sidebar should not remove a published subject index. Keep useful
+subject landings reachable through the collection even when a shorter article
+list no longer needs grouped navigation. If their articles move to a different
+editorial family, make that distinction clear in the links. Each index continues
+to point to the canonical articles; there is no need to duplicate their content.
 
 ## Separate learning routes from topic exploration
 

@@ -12,7 +12,7 @@ makedocs(;
     remotes=nothing,
     format=Documenter.HTML(; prettyurls=false, edit_link="main",
         repolink="https://github.com/erikmnovak/TamerOp.jl",
-        assets=["assets/tutorials.css", "assets/reading_map.js"]),
+        assets=["assets/tutorials.css", "assets/home.css", "assets/reading_map.js"]),
     # The inventory and publication routes generate this catalog. Sidebar groups
     # and the separate article outline are rendered by site_shell.py below.
     pages=[entry["title"] => entry["source"] for entry in

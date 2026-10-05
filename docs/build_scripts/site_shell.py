@@ -118,7 +118,7 @@ def sidebar(catalog: dict, current: str, brand: str, search: str, version: str) 
         pieces.append(f'<summary>{html.escape(collection["title"])}</summary><ul>')
         pieces.append('<li>' + link(current, collection["page"], "Overview") + '</li>')
         items = [item for item in collection["items"] if item["page"] != collection["page"]]
-        if not collection.get("topic_groups"):
+        if not collection["grouped_sidebar"]:
             for item in items:
                 pieces.append('<li>' + link(current, item["page"], item["title"]) + '</li>')
             visible_pages = {item["page"] for item in items}

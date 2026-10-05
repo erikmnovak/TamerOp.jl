@@ -47,6 +47,7 @@ try {
   });
   const routes = ['index.html', 'reading_map.html', 'topic_map.html',
     'topics/encodings.html', 'collections/mathematics.html', 'collections/using.html',
+    'collections/recipes.html', 'start/install.html', 'guides/optional_integrations.html',
     'collections/api.html', 'guides/spaces_and_maps.html',
     'implementation/qq_coordinates.html', 'benchmarks/phat.html',
     'contributing/index.html', 'tutorials/ring.html'];
@@ -55,7 +56,9 @@ try {
     await page.locator('#site-navigation').waitFor();
     await page.evaluate(() => document.fonts.ready);
     assert.equal(await page.locator('.site-entry-links a').count(), 4, route);
-    assert.equal(await page.locator('.site-collection').count(), 5, route);
+    assert.deepEqual(await page.locator('.site-collection').evaluateAll(elements =>
+      elements.map(element => element.dataset.collection)),
+      ['mathematics', 'using', 'recipes', 'api', 'implementation', 'benchmarks'], route);
     assert.equal(await page.locator('#documenter-sidebar-button').isVisible(), false, route);
     assert.equal(await page.locator('.site-nav-bottom a').filter({ hasText: 'Contributors' }).count(), 1);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false, route);
@@ -65,6 +68,15 @@ try {
     await page.screenshot({ path: path.join(output, route.replaceAll('/', '-') + '.png') });
     checked.push(route);
   }
+
+  // The directory entrance and every nested Introduction link share one page.
+  await page.goto(base);
+  const introduction = await page.locator('#documenter-page').innerText();
+  await page.goto(base + 'guides/spaces_and_maps.html');
+  await page.locator('.site-entry-links a').filter({ hasText: /^Introduction$/ }).click();
+  assert.equal(page.url(), base + 'index.html');
+  assert.equal(await page.locator('#documenter-page').innerText(), introduction);
+  assert.equal(await page.locator('.home-opening').count(), 1);
 
   // Downloaded notebooks must work from the same nested deployment location.
   for (const lesson of ['ring', 'inspect_encoding']) {
@@ -107,6 +119,8 @@ try {
     const toggle = page.locator('#documenter-sidebar-button');
     await toggle.focus(); await page.keyboard.press('Enter');
     assert.equal(await toggle.getAttribute('aria-expanded'), 'true');
+    await page.waitForFunction(() =>
+      document.getElementById('site-navigation').getBoundingClientRect().left === 0);
     await page.locator('.site-nav-bottom a').scrollIntoViewIfNeeded();
     await page.screenshot({ path: path.join(output, `navigation-${width}.png`) });
     await page.keyboard.press('Escape');

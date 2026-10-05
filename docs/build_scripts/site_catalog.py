@@ -159,8 +159,17 @@ def prepare_catalog(docs: Path, stage: Path) -> dict:
             claimed.add(item["page"])
             item["collection"] = cid
         pages[page]["collection"] = cid
+        topic_pages = config.get("topic_pages", False)
+        if not isinstance(topic_pages, bool):
+            raise ValueError(f"topic_pages must be a boolean for collection: {cid}")
+        related_topics = config.get("related_topics", [])
+        if not isinstance(related_topics, list) or any(
+                topic not in inventory["topics"] for topic in related_topics):
+            raise ValueError(f"related_topics must list known topics for collection: {cid}")
         collections.append({"id": cid, "title": config["title"], "page": page,
                             "primary": config.get("primary", True),
+                            "topic_pages": topic_pages,
+                            "related_topics": related_topics,
                             "items": [_summary_record(item) for item in members],
                             "resources": [], "topic_groups": []})
 
@@ -208,25 +217,34 @@ def prepare_catalog(docs: Path, stage: Path) -> dict:
     if not isinstance(threshold, int) or threshold < 1:
         raise ValueError("sidebar_threshold must be a positive integer")
     for collection in collections:
-        if len(collection["items"]) <= threshold:
+        collection["grouped_sidebar"] = len(collection["items"]) > threshold
+        # Published subject pages can outlive a change in sidebar density.
+        if not collection["grouped_sidebar"] and not collection["topic_pages"] and not collection["related_topics"]:
             continue
         # One home cluster per article makes the sidebar a partition. Other
         # topic memberships remain available through the cross-family atlas.
         for tid, title in inventory["topics"].items():
             members = [item for item in collection["items"] if item["topics"] and item["topics"][0] == tid]
+            related = not members and tid in collection["related_topics"]
+            if related:
+                members = [_summary_record(item) for item in published_articles
+                           if tid in item["topics"] and item["collection"] != collection["id"]]
             if not members:
                 continue
             page = f"collections/{collection['id']}/topics/{tid}.html"
             if page in pages:
                 raise ValueError(f"Generated collection topic collides with authored page: {page}")
             pages[page] = _generated_page(page, title,
-                f"Which {collection['title'].lower()} articles concern {title.lower()}?",
+                (f"Which related treatments concern {title.lower()}?" if related else
+                 f"Which {collection['title'].lower()} articles concern {title.lower()}?"),
                 topics=[tid], collection=collection["id"])
             group = {"id": tid, "title": title, "page": page, "items": members}
             collection["topic_groups"].append(group)
             target = stage / _source_page(page)
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(f"# {title}\n\n{collection['title']} articles in this area.\n\n"
+            introduction = ("Related treatments from other collections." if related else
+                            f"{collection['title']} articles in this area.")
+            target.write_text(f"# {title}\n\n{introduction}\n\n"
                 + _article_list(members, page) + "\n\n"
                 + f"[All {collection['title'].lower()}]({_href(page, collection['page'])}) · "
                 + f"[Treatments across article types]({_href(page, f'topics/{tid}.html')}).\n")
@@ -240,13 +258,22 @@ def prepare_catalog(docs: Path, stage: Path) -> dict:
             if cid not in by_collection:
                 raise ValueError(f"Unknown collection marker: {cid}")
             collection = by_collection[cid]
-            if collection["topic_groups"]:
+            if collection["grouped_sidebar"]:
                 body = "Choose a subject to see its annotated article list:\n\n" + "\n".join(
                     f"- [{_md(group['title'])}]({_href(current, group['page'])}) — "
                     + f"{len(group['items'])} " + ("article." if len(group['items']) == 1 else "articles.")
                     for group in collection["topic_groups"])
             else:
                 body = _article_list(collection["items"], current, typed=True)
+                if collection["topic_groups"]:
+                    links = "\n".join(
+                        '<li><a href="'
+                        + html.escape(_href(current, group["page"], html_output=True), quote=True)
+                        + '">' + html.escape(group["title"]) + '</a></li>'
+                        for group in collection["topic_groups"])
+                    body += ('\n\n```@raw html\n<details class="collection-subjects">'
+                             '<summary>Browse by subject</summary>\n<ul>\n'
+                             + links + '\n</ul>\n</details>\n```')
             if collection["resources"]:
                 body += "\n\nSupporting resources:\n\n" + _article_list(collection["resources"], current, typed=False)
             return body

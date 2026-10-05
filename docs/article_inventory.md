@@ -83,11 +83,16 @@ footer pass, `site_shell.py` applies the shared collection navigation, separate
 local heading outline and article metadata used by search. Generated pages and
 HTML are build outputs; edit the responsible source or manifest instead.
 
-The five collections are Mathematics, Using TamerOp, API reference,
-Implementation and Benchmarks. Library guides and recipes share Using TamerOp;
-their editorial types remain distinct. Contributor resources have a sidebar footer
-entrance. Topic pages cross these collection boundaries without making their
-articles prerequisites for one another. See
+The six collections are Mathematics, Using TamerOp, Task recipes, API reference,
+Implementation and Benchmarks. Using TamerOp contains `library_guide` records;
+Task recipes contains `recipe` records. Installation remains permanently
+accessible above the collections, with both entrances resolving to the same
+article. Contributor resources have a sidebar footer entrance. Topic pages
+cross these collection boundaries without making their articles prerequisites
+for one another. The first three collections distinguish understanding a
+concept, exploring library capabilities and choices, and accomplishing a
+defined task; they are independent entrances along a theory-to-application
+spectrum. See
 [site navigation maintenance](README.md#maintain-site-navigation) for review
 checks.
 
@@ -96,8 +101,9 @@ checks.
 Before adding an article, look for the same reader question and review its
 related records. Several views of a topic are useful when they serve different
 purposes: a lesson explains why structure maps matter, a library guide explores
-their queries, reference specifies the contract, and an implementation account
-explains how maps are recovered. They should link to each other's authoritative
+their queries, a recipe obtains a particular map and checks its result,
+reference specifies the contract, and an implementation account explains how
+maps are recovered. They should link to each other's authoritative
 explanations instead of retelling the same treatment.
 
 Start a planned record when there is a coherent reader question and bounded
@@ -106,6 +112,14 @@ source file. Collection indexes can be planned before their individual case
 studies are chosen, but a future case study gets its own record only when its
 question and data are defined. A new algorithm's documentation plan must remain
 conditional until there is an implemented method to explain.
+
+Plan recipes by a concrete task with a clear starting input and stopping point.
+Record the essential hypotheses, intended output and boundary with its related
+guide in `scope`. Keep the recipe backlog in this catalog rather than creating
+a parallel list. An existing `recipe` record can still need migration to a
+runnable, focused procedure: record that work without implying it has already
+happened. The [recipe-writing guidance](writing.md#write-recipes-around-an-attainable-result)
+sets the intended style without requiring a separate article for every option.
 
 When revising an existing hybrid, retain its useful explanations and correct
 assumptions. Move a passage only when its new authoritative home is ready, then

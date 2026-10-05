@@ -31,11 +31,15 @@ downloads. The Python direct dependencies are pinned in `requirements.txt`.
 docs/.venv/bin/python -m unittest discover -s docs/build_scripts -p 'test_*.py'
 docs/.venv/bin/python docs/build_scripts/publish.py
 docs/.venv/bin/python docs/build_scripts/check_site.py
-python -m http.server 8000 --directory docs/build
+python docs/build_scripts/preview.py
 ```
 
 Open <http://localhost:8000/> and follow both lessons. The HTML also uses
 ordinary `.html` links so `docs/build/index.html` can be opened directly.
+The preview disables browser caching and serves the same introduction at `/`
+and `/index.html`. If an older preview left a cached copy, reload that URL once
+with Ctrl+Shift+R (Cmd+Shift+R on macOS). Use `--port 8765` for another port.
+Rebuild after editing sources; refreshing alone does not regenerate HTML.
 Check the appearance-grade image, all three masks, the interval's included
 birth/excluded death, the essential component, and the original/changed bars
 on the same axis. Check narrow-screen layout, equations, syntax highlighting,
@@ -79,6 +83,8 @@ on `PATH` or a particular executable is needed.
 `check_site.py` requires a matching publication record, page, executed download,
 figures and optional sections for every notebook in `publication.toml`. It
 rejects a download built from an older source and checks each lesson's download link.
+It also requires the built HTML to match the catalog and every page to be
+reachable from the homepage, catching abandoned pages and disconnected groups.
 
 Outputs:
 
@@ -87,7 +93,7 @@ Outputs:
 - `docs/build/reading_map.html`: linked overview of the available reading routes.
 - `docs/build/topic_map.html` and `docs/build/topics/`: subject overview and
   topic pages linking related treatments across article families.
-- `docs/build/collections/`: Mathematics, Using TamerOp and API reference
+- `docs/build/collections/`: Mathematics, Using TamerOp, Task recipes and API reference
   landings; Implementation and Benchmarks use their existing index pages.
 - `docs/build/contributing/index.html`: contributor procedures and project credit.
 - `docs/build/explanations/two_parameters.html`: short bridge into the existing
@@ -113,8 +119,8 @@ package's individual source hashes; the commit alone does not identify it.
 ## Maintain site navigation
 
 The sidebar keeps Introduction, Installation, Learning map and Topic map above
-five collections: Mathematics, Using TamerOp, API reference, Implementation and
-Benchmarks. Only the current collection's branch starts expanded. Contributor
+six collections: Mathematics, Using TamerOp, Task recipes, API reference,
+Implementation and Benchmarks. Only the current collection's branch starts expanded. Contributor
 guidance is available from the sidebar footer. A separate local outline follows each
 article's H2/H3 headings; it must not inflate the collection hierarchy.
 
@@ -132,6 +138,16 @@ still has one canonical source and destination. Use shallow topic groups and
 landing pages as a collection grows; do not solve growth by exposing every
 article and section at once. Relevant guides can also be linked thematically
 from the page that needs them.
+
+Sidebar grouping must not determine whether a published URL continues to exist.
+Set `topic_pages = true` on a collection with published subject landings to keep
+those pages when its article count falls below `sidebar_threshold`. The smaller
+collection keeps its direct article list and offers its subject indexes under
+a collapsed “Browse by subject” section. If a subject's articles move to another
+collection, `related_topics` can retain an index pointing to those treatments
+with their current editorial labels. Both options use inventory topics, never
+another list of article sources. Keep the pages useful and reachable, without
+duplicate articles or empty placeholders.
 
 Learning routes remain independent. `reading_map.toml` owns their arrows and
 lesson footer continuations; collection order and topic membership cannot
@@ -156,7 +172,7 @@ Review these behaviors in the browser:
 
 1. Follow all four permanent entrances and the sidebar's contributor footer link from a
    lesson, a guide and a deeply nested page.
-2. Check the five collection labels and initial disclosure state. Open other
+2. Check the six collection labels and initial disclosure state. Open other
    branches with the keyboard and verify visible focus and the current-page
    indication.
 3. Follow a subject from the topic overview to treatments of different types.
@@ -173,6 +189,55 @@ Review these behaviors in the browser:
 Edit the authored sources and metadata rather than generated HTML. Structural
 checks establish consistency; rendered review establishes whether readers can
 recognize and use these choices.
+
+## Maintain the homepage
+
+The introduction lives in `src/index.md`; its scoped presentation lives in
+`src/assets/home.css`. Keep the motivating question, finite encoding, and the
+equally prominent example-first and definitions-first entrances together.
+Installation supports execution; reading saved results does not require it.
+The overview has its own compact navigation instead of an article outline.
+`/` and `/index.html` serve this one page. If they appear different, check the
+preview's browser cache and build before changing navigation or making another
+introduction. Compare the local and deployed sites separately: rebuilding a
+local preview does not publish it to GitHub Pages.
+
+Its theory-to-application spectrum offers independent entrances: Mathematics
+develops understanding, Using TamerOp explores capabilities and choices, and
+Task recipes give focused procedures for defined results. Follow the
+[editorial boundaries](writing.md#move-from-understanding-to-exploration-to-a-defined-task)
+when expanding those introductions; do not turn them into a required sequence.
+
+Its responsive workflow figure adapts the thesis's many-inputs, finite-object,
+many-questions architecture. The inline SVG gives it a concrete square example:
+the selected parameter maps to the one-dimensional space in the four-label
+encoding. Keep the caption, space labels, upward order arrows, and accessible
+description consistent. The figure describes the finite-encoding workflow;
+direct ordinary-barcode routines need not pass through it. All figure content
+is authored here; the site has no dependency on thesis files.
+
+Distinguish the ambition of comprehensive coverage and competitive performance
+from measured results. Link scoped comparison reports at the point of a
+performance claim and preserve results favoring other tools. Review the
+homepage in light and dark themes, at narrow widths, and with keyboard access;
+the diagram should reflow without requiring horizontal scrolling. Its styles
+must not change the layout of lessons or reports.
+
+## Maintain the task-recipe collection
+
+`src/collections/recipes.md` introduces the collection. Its article list is
+generated from published `recipe` records in `article_inventory.toml`, while
+Using TamerOp lists `library_guide` records. Keep Installation pinned among the
+permanent upper links and linked from the recipe landing; it has one canonical
+page and does not need a duplicate sidebar item inside the collection.
+
+Keep intended recipes in the inventory, with a defined task and scope, rather
+than adding empty public pages. Follow the
+[recipe-writing guidance](writing.md#write-recipes-around-an-attainable-result)
+when authoring or adapting one. Confirm that its collection, topic links and
+search label agree, that its procedure yields the stated result, and that
+necessary assumptions remain beside the code. A changed navigation label alone
+does not complete an existing page's editorial migration.
 
 ## Library guide examples
 

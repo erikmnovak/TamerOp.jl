@@ -21,8 +21,17 @@ order = ["ring", "two_parameters", "persistence_modules", "finite_encodings", "s
 id = "using"
 title = "Using TamerOp"
 page = "collections/using.html"
-types = ["library_guide", "recipe"]
+types = ["library_guide"]
+topic_pages = true
+related_topics = ["getting_started", "performance"]
 order = ["guide_spaces_maps", "ordinary_persistence", "visualization", "lazy_inspection"]
+
+[[collections]]
+id = "recipes"
+title = "Task recipes"
+page = "collections/recipes.html"
+types = ["recipe"]
+order = ["optional_integrations", "cdd_concurrency"]
 
 [[collections]]
 id = "api"

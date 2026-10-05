@@ -195,7 +195,7 @@ state = "existing"
 source = "docs/math_categories.md"
 related = ["practical_tameness", "hom_spaces", "derived_functors", "change_of_posets", "pushforwards_lesson", "B15", "B33", "ref_derived"]
 migration = "split"
-migration_note = "Keep the category argument and comparison hypotheses together; move exhaustive operation contracts to reference and operational recipes to library guides."
+migration_note = "Keep the category argument and comparison hypotheses together; move exhaustive operation contracts to reference, capability choices to library guides, and bounded procedures to task recipes."
 
 [[articles]]
 id = "ordinary_persistence"
@@ -341,7 +341,7 @@ state = "existing"
 source = "docs/cdd_concurrency.md"
 related = ["B49", "benchmarking"]
 migration = "split"
-migration_note = "Keep task-level restrictions and external-library interaction accessible; let B49 own internal lock ordering and cache mechanics."
+migration_note = "Add a runnable task-level procedure with explicit input ownership and a recognizable result; the current page mostly states concurrency restrictions. Keep external-library interaction accessible and let B49 own internal lock ordering and cache mechanics."
 
 [[articles]]
 id = "benchmarking"
@@ -604,7 +604,7 @@ question = "How do I investigate a constructed object and request deeper informa
 state = "existing"
 source = "docs/spaces_and_maps.md"
 scope = "Parameter and finite-label queries, dimensions and selected maps, defined zero versus undefined or unavailable results, static inspectors, retained presentation blocks and opt-in bases, and live selection. A square and a redundant-generator variation supply the worked results."
-related = ["square", "lazy_inspection", "visualization", "ref_modules", "ref_results"]
+related = ["square", "lazy_inspection", "visualization", "query_structure_map", "ref_modules", "ref_results"]
 migration = "retain"
 
 [[articles]]
@@ -615,7 +615,7 @@ topics = ["visualization", "data_io"]
 question = "How do I choose a view, explore a result and share a faithful saved output?"
 state = "planned"
 scope = "Connect static and interactive exploration to export and retained results; explain what each saved form preserves."
-related = ["visualization", "optional_integrations", "save_reload", "ref_visualization", "ref_io"]
+related = ["visualization", "optional_integrations", "save_reload", "export_figure", "ref_visualization", "ref_io"]
 migration = "author"
 migration_note = "Coordinate with visualization and saving recipes; the existing guide can be reshaped into this scope rather than producing parallel manuals."
 
@@ -957,7 +957,7 @@ topics = ["performance", "encodings", "features"]
 question = "What can I reuse when asking related questions or comparing many results?"
 state = "planned"
 scope = "SessionCache and retained results, repeated queries, batching, reproducible parameters and cache ownership; keep mathematical reuse separate from first-use compilation."
-related = ["lazy_inspection", "benchmarking", "B49", "ref_results", "ref_features"]
+related = ["lazy_inspection", "repeat_queries", "benchmarking", "B49", "ref_results", "ref_features"]
 migration = "author"
 
 [[articles]]
@@ -973,24 +973,79 @@ migration = "author"
 
 [[articles]]
 id = "save_reload"
-title = "Save and reload a mathematical result"
+title = "Save an encoding and recover a parameter query"
 type = "recipe"
 topics = ["data_io", "encodings"]
-question = "How do I save an encoding or experiment and recover what matters later?"
+question = "How do I save an encoding, reload it, and recover the same spaces and map at chosen parameters?"
 state = "planned"
-scope = "Owned data/pipeline/encoding/feature forms, field and grade preservation, maps and provenance, and natural-isomorphism rather than literal basis identity where applicable."
-related = ["guide_visualize_share", "B48", "ref_io"]
+scope = "Use one supported encoding JSON round trip, retaining the classifier needed for parameter queries. Recover chosen dimensions and a map after loading; explain which coordinates, field and grade data survive and when equivalence means natural isomorphism rather than literal matrix equality. State the accepted encoding kind and required retained data. Leave other serialization formats and experiment bundles to their own contracts instead of making this an interchange survey."
+related = ["guide_visualize_share", "query_structure_map", "B48", "ref_io"]
 migration = "author"
 
 [[articles]]
 id = "external_data"
-title = "Inspect and load external data"
+title = "Load selected point coordinates from a table"
 type = "recipe"
 topics = ["data_io", "geometry"]
-question = "How can I identify an input format and load the intended mathematical data?"
+question = "How do I load a CSV table as a point cloud with the intended coordinate columns?"
 state = "planned"
-scope = "Inspect ambiguous files before loading; explain supported adapters, conventions and optional dependencies."
+scope = "Start from a small explicit CSV fixture, inspect its format, select coordinate columns and a missing-value policy, and load with an explicit point-cloud kind. Confirm the point count, ambient dimension and a known coordinate. Link format contracts and optional activation instructions; do not turn the procedure into a catalog of all adapters or silently reinterpret a table as a distance matrix."
 related = ["guide_inputs", "optional_integrations", "ref_io"]
+migration = "author"
+
+[[articles]]
+id = "query_structure_map"
+title = "Recover a structure map between two parameters"
+type = "recipe"
+topics = ["encodings", "algebra"]
+question = "How do I obtain the matrix and rank of the map between two supplied comparable parameters?"
+state = "planned"
+scope = "Given an encoding with a classifier and a materialized or explicitly requested module, check parameter comparability and coverage, obtain finite labels, and recover the structure map through semantic accessors. Show its source and target dimensions, matrix and field-appropriate rank. Distinguish a defined zero map from incomparable parameters or an unrepresented query. Link the broader exploration guide and the mathematical explanation instead of reconstructing the square lesson."
+related = ["guide_spaces_maps", "finite_encodings", "contract_errors", "ref_encodings", "ref_modules"]
+migration = "author"
+
+[[articles]]
+id = "export_figure"
+title = "Save a selected view as a publication figure"
+type = "recipe"
+topics = ["visualization", "data_io"]
+question = "How do I export the result I am looking at as a readable SVG or PDF?"
+state = "planned"
+scope = "Start from an existing visualizable result, choose one view and save it with CairoMakie. Show the saved figure, units and meaningful labels; introduce only necessary output sizing and optional print styling after the first successful export. Include a short branch for freezing a live selection with inspection_snapshot, explaining that a static export retains the selected mathematical view but no live callbacks. Leave view selection and the complete style surface in their guide and reference homes."
+related = ["visualization", "guide_visualize_share", "optional_integrations", "ref_visualization"]
+migration = "author"
+
+[[articles]]
+id = "chosen_slice"
+title = "Compute the barcode along a chosen line"
+type = "recipe"
+topics = ["invariants", "encodings", "visualization"]
+question = "How do I specify a line through my encoded module and obtain its barcode?"
+state = "planned"
+scope = "Use a supported planar encoding and one explicit basepoint and positive direction. State whether the query covers a finite window or the whole line and use the supported exact restriction route for that classifier. Read endpoint inclusion, multiplicity and any window censoring from the returned result, with one static figure as confirmation. Keep sampled queries explicitly separate and do not imply a partial classifier supplies an unknown global tail. Link the slice lesson and visualization guide for interpretation and exploratory controls."
+related = ["slice_barcodes", "visualization", "repeat_queries", "ref_invariants"]
+migration = "author"
+
+[[articles]]
+id = "repeat_queries"
+title = "Reuse a session for repeated slice queries"
+type = "recipe"
+topics = ["performance", "invariants", "encodings"]
+question = "How do I retain reusable slice planning while asking several related questions?"
+state = "planned"
+scope = "Carry one explicit SessionCache through a small repeated slice_barcodes workflow on supported input. Hold the encoding and mathematical choices fixed for the repeated request, then change one query deliberately and verify the requested results. Show which retained result can be queried directly and which new call needs computation; link the broader cache ownership and mutation contracts. Do not infer saved work from wall time alone or promise a particular speedup, memory bound or reuse after arbitrary mutation."
+related = ["reuse_computations", "lazy_inspection", "chosen_slice", "ref_results", "ref_invariants"]
+migration = "author"
+
+[[articles]]
+id = "feature_table"
+title = "Build a feature matrix with comparable columns"
+type = "recipe"
+topics = ["features", "data_io", "invariants"]
+question = "How do I turn several compatible persistence results into a matrix whose columns mean the same thing for every sample?"
+state = "planned"
+scope = "Apply one supported typed featurizer specification to a small batch using a shared grid, axes and mathematical settings. Inspect sample IDs, feature names and the samples-by-features matrix; keep unsupported samples explicit rather than silently changing row correspondence. Save one portable table together with the metadata needed to interpret its columns. State that comparing feature rows does not recover a distance between original modules. Link the feature lesson for the choice of summary and reference for other transforms."
+related = ["features_lesson", "reuse_computations", "optional_integrations", "ref_features", "ref_io"]
 migration = "author"
 
 [[articles]]
@@ -2426,9 +2481,22 @@ id = "using_collection"
 title = "Using TamerOp"
 type = "resource"
 topics = ["getting_started"]
-question = "Which workflow will help me use the object I have constructed?"
+question = "Which library capabilities and workflow choices fit the object I want to investigate?"
 state = "existing"
 source = "docs/src/collections/using.md"
+related = ["recipes_collection"]
+migration = "retain"
+
+[[articles]]
+id = "recipes_collection"
+title = "Task recipes"
+type = "resource"
+topics = ["getting_started"]
+question = "Which focused procedure gets me from my input to the result I need?"
+state = "existing"
+source = "docs/src/collections/recipes.md"
+scope = "Index authored, published task recipes independently of capability guides; installation keeps its permanent upper navigation link and is linked here without a second canonical page. Planned recipes remain internal backlog records."
+related = ["installation", "using_collection", "article_inventory"]
 migration = "retain"
 
 [[articles]]

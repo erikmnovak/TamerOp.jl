@@ -80,7 +80,7 @@ def check_notebooks(manifest, html, root, docs=DOCS):
             raise ValueError(f'Missing optional sections: {source.name}')
 
 
-def check_catalog(catalog, root, pages=None):
+def check_catalog(catalog, root):
     """Check published navigation and local outlines without changing page HTML."""
     root = root.resolve()
 
@@ -102,10 +102,14 @@ def check_catalog(catalog, root, pages=None):
     collections = [item for item in catalog['collections'] if item['id'] != 'contributing']
     identities = [item['id'] for item in collections]
     roots = [item['page'] for item in collections]
-    if len(collections) != 5 or len(set(identities)) != 5 or len(set(roots)) != 5:
-        raise ValueError('Catalog must define five distinct main collection roots')
+    if len(collections) != 6 or len(set(identities)) != 6 or len(set(roots)) != 6:
+        raise ValueError('Catalog must define six distinct main collection roots')
     for route in [*catalog['pages'], *roots, *catalog['anchors'].values()]:
         published(route)
+    pages = sorted(root.rglob('*.html'))
+    extra = {page.relative_to(root).as_posix() for page in pages} - set(catalog['pages'])
+    if extra:
+        raise ValueError('Built HTML pages are absent from the catalog: ' + ', '.join(sorted(extra)))
 
     def inside(node, parent):
         return parent.inner <= node.start < parent.stop
@@ -114,7 +118,6 @@ def check_catalog(catalog, root, pages=None):
         return [node for node in parsed.elements if node.tag == 'a'
                 and 'href' in node.attrs and inside(node, parent)]
 
-    pages = list(root.rglob('*.html')) if pages is None else pages
     structures = {}
     for raw_page in pages:
         page = raw_page.resolve()
@@ -138,7 +141,7 @@ def check_catalog(catalog, root, pages=None):
         branches = [node for node in parsed.elements if node.tag == 'details'
                     and 'data-collection' in node.attrs and inside(node, navigation)]
         if [node.attrs['data-collection'] for node in branches] != identities:
-            raise ValueError(f'{route}: sidebar does not contain the five collection roots')
+            raise ValueError(f'{route}: sidebar does not contain the six collection roots')
         requested = catalog['pages'].get(route, {}).get('collection')
         active = [item['id'] for item in collections
                   if requested == item['id'] or route == item['page']]
@@ -200,6 +203,30 @@ def check_catalog(catalog, root, pages=None):
         for group in collection.get('topic_groups', []):
             topic_links(group['page'], [item['page'] for item in group['items']])
 
+    # An orphan group can link to itself and back to the site without giving
+    # readers any path into it. Follow actual anchors from the home page.
+    visited, pending = set(), [published(catalog['anchors']['home'])]
+    while pending:
+        page = pending.pop()
+        if page in visited:
+            continue
+        visited.add(page)
+        for node in structures[page].elements:
+            if node.tag != 'a' or 'href' not in node.attrs:
+                continue
+            url = urlsplit(node.attrs['href'])
+            if url.scheme or url.netloc:
+                continue
+            destination, _ = target(page, node.attrs['href'])
+            if destination.is_dir():
+                destination /= 'index.html'
+            if destination in structures and destination not in visited:
+                pending.append(destination)
+    unreachable = set(structures) - visited
+    if unreachable:
+        routes = sorted(page.relative_to(root).as_posix() for page in unreachable)
+        raise ValueError('Catalog pages are unreachable from the home page: ' + ', '.join(routes))
+
 
 def check_site():
     root = DOCS / 'build'
@@ -234,8 +261,8 @@ def check_site():
             if url.fragment and target in html and unquote(url.fragment) not in html[target].ids:
                 raise ValueError(f'{page.relative_to(root)}: missing anchor {link}')
     check_notebooks(manifest, html, root)
-    check_catalog(json.loads((root / 'catalog.json').read_text()), root, html)
-    print(f'Publication checks passed: {len(html)} HTML pages; catalog navigation, local outlines, reading continuations, local links, anchors, images and notebook downloads.')
+    check_catalog(json.loads((root / 'catalog.json').read_text()), root)
+    print(f'Publication checks passed: {len(html)} HTML pages; catalog coverage and reachability, navigation, local outlines, reading continuations, local links, anchors, images and notebook downloads.')
 
 
 if __name__ == '__main__':

@@ -125,7 +125,7 @@ class CatalogSiteTests(unittest.TestCase):
                         'learning': 'reading_map.html', 'topics': 'topic_map.html',
                         'contributing': 'contributing/index.html'}
         self.collections = [{'id': identity, 'page': f'collections/{identity}.html'}
-                            for identity in ('mathematics', 'using', 'api', 'implementation', 'benchmarks')]
+                            for identity in ('mathematics', 'using', 'recipes', 'api', 'implementation', 'benchmarks')]
         self.catalog = {'anchors': self.anchors, 'collections': self.collections + [
             {'id': 'contributing', 'page': self.anchors['contributing']}],
             'pages': {route: {} for route in self.anchors.values()},
@@ -192,8 +192,53 @@ class CatalogSiteTests(unittest.TestCase):
             self.check(changed)
         changed = copy.deepcopy(self.catalog)
         changed['collections'].pop(0)
-        with self.assertRaisesRegex(ValueError, 'five distinct main collection roots'):
+        with self.assertRaisesRegex(ValueError, 'six distinct main collection roots'):
             self.check(changed)
+
+    def test_stale_built_html_without_a_catalog_record_fails(self):
+        (self.root / 'old_introduction.html').write_text('<h1>Old introduction</h1>')
+        with self.assertRaisesRegex(ValueError, 'absent from the catalog: old_introduction.html'):
+            self.check()
+
+    def test_orphan_cycle_fails_even_when_every_page_has_an_incoming_link(self):
+        for route, other in [('notes/first.html', 'second.html'),
+                             ('notes/second.html', 'first.html')]:
+            self.catalog['pages'][route] = {}
+            self.write_page(route)
+            page = self.root / route
+            page.write_text(page.read_text().replace('</article>',
+                            f'<a href="{other}">Related note</a></article>'))
+        with self.assertRaisesRegex(ValueError,
+                'unreachable from the home page: notes/first.html, notes/second.html'):
+            self.check()
+
+    def test_reachable_nested_pages_allow_queries_fragments_and_encoded_paths(self):
+        for route in ['notes/first note.html', 'notes/second.html']:
+            self.catalog['pages'][route] = {}
+            self.write_page(route)
+        home = self.root / 'index.html'
+        home.write_text(home.read_text().replace('</article>',
+                        '<a href="notes/first%20note.html?view=full#detail">Note</a></article>'))
+        first = self.root / 'notes/first note.html'
+        first.write_text(first.read_text().replace('</article>',
+                         '<p id="detail">Detail</p>'
+                         '<a href="second.html?view=full">Next note</a></article>'))
+        self.check()
+
+    def test_assets_and_external_links_do_not_make_a_page_reachable(self):
+        route = 'notes/unlisted.html'
+        self.catalog['pages'][route] = {}
+        self.write_page(route)
+        home = self.root / 'index.html'
+        home.write_text(home.read_text().replace('</article>',
+                        '<img src="notes/unlisted.html" alt="Not a navigation link">'
+                        '<a href="https://example.test/notes/unlisted.html">External</a>'
+                        '<a href="//example.test/notes/unlisted.html">External</a></article>'))
+        with self.assertRaisesRegex(ValueError, 'unreachable from the home page: notes/unlisted.html'):
+            self.check()
+        home.write_text(home.read_text().replace('</article>',
+                        '<a href="notes/unlisted.html">Read the note</a></article>'))
+        self.check()
 
     def test_missing_permanent_or_contributor_link_fails(self):
         page = self.root / 'index.html'
@@ -211,7 +256,7 @@ class CatalogSiteTests(unittest.TestCase):
     def test_sidebar_cannot_omit_a_catalog_collection(self):
         page = self.root / 'index.html'
         page.write_text(page.read_text().replace('data-collection="api"', 'data-collection="unknown"'))
-        with self.assertRaisesRegex(ValueError, 'five collection roots'):
+        with self.assertRaisesRegex(ValueError, 'six collection roots'):
             self.check()
 
     def test_resource_assigned_to_a_main_collection_needs_current_page_context(self):

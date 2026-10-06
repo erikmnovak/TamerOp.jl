@@ -1,7 +1,9 @@
 # Implementing the first learning path
 
-This is the authoring brief for the first complete practical route through the
-documentation site:
+The [full documentation programme](documentation_plan.md) owns the overall
+curriculum, complete mathematical-map relation and integration across the five
+article families. This brief develops worked examples and teaching acceptance
+for the first complete practical route through the documentation site:
 
 **Ring example → why a second parameter changes the problem → finite
 encoding → inspect spaces and maps → interpret a figure.**
@@ -16,8 +18,9 @@ Readers can see the available routes on the [linked reading map](src/reading_map
 Show both starting points with equal visual prominence, label the optional
 branch, and place installation beside the notebook as support. Reference guides
 remain grouped by task instead of appearing as required stops. The diagram and
-linked outline share `reading_map.toml`; repository treatments are labeled, and unwritten lessons
-remain in this authoring brief rather than appearing as working map links.
+linked outline share `reading_map.toml`; repository treatments are labeled, and
+unwritten lessons remain in the catalog and authoring plans rather than appearing
+as working map links.
 
 As this plan grows, apply the
 [map design principles](writing.md#preserve-choices-as-the-reading-map-grows)
@@ -425,7 +428,7 @@ relationships rather than a second article-status list.
 | Modules and their maps | Start with `diamond_maps`; branch into `module_operations`, `hom_spaces` and `universal_constructions`. | A map between modules must respect structure maps; pointwise linear algebra must assemble into a compatible object. Combining modules and imposing agreement are different operations. |
 | Resolutions and derived algebra | Use maps and exact sequences to motivate `resolutions_lesson`; develop `module_complexes` as needed before `derived_functors`, then optional `products_lesson` and `complexes_spectral_sequences`. | Resolutions and complexes make new questions computable. Derived groups, products and page diagrams require their category, grading and interpretation, not just a returned dimension. |
 | Changing the description or base | Begin `change_of_posets` after understanding the classifier. Add `pushforwards_lesson` using the diagrams from `universal_constructions`; consult `math_categories` for comparison hypotheses. | Restriction, refinement and pushforward do different things. Comparison maps need not be isomorphisms; retaining the ambient module does not identify every finite-category derived result with an ambient one. |
-| Invariants and summaries | Begin `slices_invariants` directly after the square, then choose `slice_barcodes`, `signed_summaries` or `support_geometry_lesson` according to the question. | Dimensions, ranks, restrictions, signed reconstructions and region measurements retain different information. The classifier matters for geometric measurements. Advanced algebra is not a prerequisite for this branch. |
+| Invariants and summaries | Begin `slices_invariants` directly after the square, then choose `slice_barcodes`, `signed_summaries`, `generalized_rank_lesson` or `support_geometry_lesson` according to the question. | Dimensions, ranks, restrictions, signed reconstructions and region measurements retain different information. The classifier matters for geometric measurements. Advanced algebra is not a prerequisite for this branch. |
 | Support and decompositions | After module maps and sums, develop `algebraic_support` and `decomposition_lesson`; consult resolutions for the Betti/Bass part. | Nonzero support, generators, terminal classes, genuine direct summands, signed contributions and approximate tracks are distinct descriptions. |
 | Comparisons and numerical features | From a chosen invariant or slice, enter `distances_stability` or `features_lesson`; these are related choices rather than a compulsory order. | Identify what is compared and what sampling, smoothing, normalization and vectorization preserve or discard. State the hypotheses for any stability claim. |
 | Interpreting pictures | Enter `reading_module_figures` after the square for its basic views; revisit its optional synthesis after selected invariant or feature lessons. | A figure represents a particular object or transformation. Poset layout, classifier geometry, dimension colors, intervals, signed weights and feature pixels support different conclusions. |
@@ -513,3 +516,117 @@ work.
    render and inspect the figure, then ask a reader with the stated prerequisites
    to explain the result. Publish the first path when these checks pass; the
    remaining reference backlog does not block it.
+
+### Generalized rank and GRIL: planned teaching branch
+
+After the reader can follow maps on the finite encoding, `generalized_rank_lesson`
+should ask what persists through an entire branching region. Use the two-source
+fork with coincident versus transverse images: all stalk dimensions and pairwise
+ranks agree, but the generalized ranks differ. Introduce compatible vectors and
+the quotient identifying transported vectors through that calculation. Place
+connectedness, convexity and the finite-label interpretation beside the first
+query, before moving to ambient regions.
+
+Carry the branch into a signed finite-family example with coefficient -1, then
+an expanding continuous worm. Pair the worm with a rank-versus-width staircase
+and mark its supremum; use exact rectangle and quadrant answers to explain
+levels, lengths, endpoint attainment and the grid extension's boundary behavior.
+The viewer should distinguish a signed reconstruction from a decomposition,
+and an exact width at selected probes from a complete description of the module.
+Keep these figures mathematical; no new visualization API is a prerequisite.
+
+The separate `guide_generalized_rank` explores query choices, witnesses,
+validation, resource bounds and feature-vector use. B54 explains the actual
+constraint/quotient solver, fiber contraction and critical-width algorithm.
+Its authored source is `docs/implementation/generalized_rank.md`; runnable
+examples live in `docs/examples/generalized_rank.jl`. The catalog owns source
+presence and article identity. Add lesson routes and public navigation only
+when those articles are authored and published. Learned selection and
+end-to-end differentiation remain the separate P3 research addition A122;
+fixed user-chosen GRIL probes are within A54.
+
+
+### Ordinary results as an optional analysis branch (A116)
+
+After the ring, readers who want a comparison can take `ordinary_analysis`,
+the canonical notebook at `docs/tutorials/ordinary_analysis.ipynb`. Its three
+points give two mergers that can be predicted before computation. Carry that
+same result through a moved point, bottleneck/Wasserstein comparison, an explicit
+essential-bar choice, tents, a sampled image and a saved result with a retained
+cocycle. This is an optional practical branch; it does not add a prerequisite to
+the main finite-encoding route.
+
+The existing `ordinary_persistence` library guide owns the operational choices.
+Keep the planned mathematics in `distances_stability` and `features_lesson`:
+diagonal/essential matching, reflection of superlevel time, multiplicities,
+tents versus weighted averages, Gaussian grid sampling and information lost by
+features. B39 explains matching and numerical assignment, B43 explains feature
+computation, and B48 explains the owned exact-data schema and its validation
+limits. Expand those existing implementation identities instead of creating a
+second ordinary-analysis algorithm chapter. Reference contracts remain assigned
+by `api_coverage.toml`. The notebook source is available now; website routing and
+rendered publication must be added and verified separately before advertising a
+public lesson route. The article catalog records that distinction.
+
+## Teaching the next computational families
+
+The [full documentation programme](documentation_plan.md) and its complete
+lesson relation now govern this expansion, including visual mathematics.
+The [catalog](article_inventory.toml) owns individual scopes. These example
+briefs supplement that plan; they are not a second inventory or execution order.
+Every published mathematical article belongs in a focused map view and the
+shared outline. Keep the introductory diagram small and branch ordinary
+variants directly from filtration mathematics where appropriate.
+
+- **Inputs and variants.** In `image_lesson`, use a hollow voxel block and its
+  filling to distinguish top-cell grades from vertex samples; the `voxel_cavity`
+  recipe predicts its interval before executing. In `relative_extended_lesson`,
+  an interval/endpoints or disk/boundary example introduces quotient chains and
+  a connecting map. Then `extended_persistence_lesson` follows an ordinary-to-
+  relative filtration with typed intervals: replacing infinity by a cap does
+  not give the same construction. The ordinary guide explains the supported
+  practical choices without absorbing either mathematical lesson.
+- **Algebra from actual maps.** In `diamond_maps` and `module_operations`,
+  propagate a supplied vector on a branching module, construct its generated
+  submodule and inclusion, and test whether a submodule splits. The guide and
+  recipe use the same witness. A two-square sum supplies known multiplicities;
+  a bipath example retains its gluing maps. Universal constructions have their
+  separate pullback/pushout question.
+- **Resolutions and induced information.** Compare a short ordinary resolution
+  with a bounded hook-family rank-exact calculation. Explain maps, category and
+  exact structure before reading its table. For morphism-induced matchings,
+  follow identity and zero maps with a pair for which image data alone do not
+  determine the additive matching. A bottleneck optimizer answers another
+  question. Cheap selected outputs remain visible in the companion guides.
+- **Cohomology and time.** Pair a cocycle with a cycle before using cohomological
+  products or coordinates. Equal graded dimensions with different multiplication
+  motivate persistent products. Circular coordinates require their own lift,
+  solve and gauge explanation. A tiny add/delete sequence teaches temporal
+  arrows and hand-derived intervals; its all-forward case checks agreement
+  with ordinary persistence. Incremental reuse and certified correspondence
+  receive separate explanations.
+- **Certified approximation and richer summaries.** Check both interleaving
+  equations on an exact and a failed supplied witness. Distinguish geometric
+  sparsification, interval-support approximation and a pruned subquotient.
+  A contour example should expose nonadditivity of stable rank. HN slopes and
+  retained weights need a central-charge example; Jordan blocks need a separate
+  ranks-of-powers example with coefficient assumptions stated locally.
+- **Features, uncertainty and selection.** A few signed atoms give a checkable
+  transport and explicit-grid convolution. Aligned replicates distinguish
+  descriptive spread from confidence claims. Compare fixed GRIL probes with
+  eventual learned selection; differentiation, ties and training claims require
+  the supported P3 contract. B71 owns that computation and B72 owns ensemble
+  alignment/statistical calculations, with individual transforms in B43.
+
+Use diagrams to expose the mathematical distinction: actual voxel cells,
+commuting maps, quotient/connecting maps, typed intervals, a short zigzag,
+a cocycle pairing or a failed witness. Static figures can teach these ideas
+before the corresponding interactive viewers exist. Caption what is computed
+and preserved; keep common session/export mechanics in the shared usage guides.
+
+Keep exploratory computations notebook-first. Small examples need independent
+expected answers, maps and hypotheses, not only plausible figures. The optional
+Python recipe starts with one array and checks equality with native Julia.
+Publish coherent groups when their source, execution, editorial and site checks
+are ready. Internal performance changes extend their algorithm accounts and
+measured evidence without creating a new lesson per optimization.

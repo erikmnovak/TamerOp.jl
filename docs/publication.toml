@@ -14,6 +14,16 @@ source = "tutorials/inputs_to_objects.ipynb"
 page = "guides/inputs_to_objects.md"
 timeout = 900
 
+[[notebooks]]
+source = "tutorials/resolutions.ipynb"
+page = "guides/resolutions.md"
+timeout = 900
+
+[[notebooks]]
+source = "tutorials/distance_witness.ipynb"
+page = "recipes/distance_witness.md"
+timeout = 900
+
 [reading_map]
 source = "reading_map.toml"
 page = "reading_map.md"
@@ -52,6 +62,7 @@ page = "reading_map.md"
 "api_inventory.md" = "contributing/api_inventory.md"
 "implementation/index.md" = "implementation/index.md"
 "implementation/qq_coordinates.md" = "implementation/qq_coordinates.md"
+"implementation/visual_specs.md" = "implementation/visual_specs.md"
 "implementation/references.md" = "implementation/references.md"
 
 "benchmarks/index.md" = "benchmarks/index.md"
@@ -59,3 +70,5 @@ page = "reading_map.md"
 "benchmarks/qpa_v1/README.md" = "benchmarks/qpa_v1/README.md"
 "benchmarks/phat.md" = "benchmarks/phat.md"
 "benchmarks/phat_v2/README.md" = "benchmarks/phat_v2/README.md"
+"benchmarks/ripser.md" = "benchmarks/ripser.md"
+"benchmarks/ripser_v1/README.md" = "benchmarks/ripser_v1/README.md"

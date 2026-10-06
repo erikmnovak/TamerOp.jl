@@ -1014,8 +1014,8 @@ function _cohomology_boundary_coordinates(H::CohomologyData{K}) where {K}
     Cx = lock(() -> getfield(H, :_Cx), getfield(H, :_cache_lock))
     Cx !== nothing && return Cx::Matrix{K}
 
-    # A differential-derived exact complex already checked B ⊆ ker(d). Keep
-    # the solve's independent membership check when coordinates are requested.
+    # A differential-derived exact complex already checked B lies in ker(d).
+    # Keep the solve's independent membership check when coordinates are requested.
     computed = _solve_fullcolumn_cached(H.field, H.K, H.B, H.Kfactor)
     return lock(getfield(H, :_cache_lock)) do
         Cx = getfield(H, :_Cx)
@@ -1166,7 +1166,7 @@ function _cohomology_data_from_bases(::Type{K},
     end
 
     # Differential-derived exact bases satisfy Z = ker(d). Checking d*B = 0
-    # certifies B ⊆ Z without constructing its coordinates. The bases-only
+    # certifies B lies in Z without constructing its coordinates. The bases-only
     # caller has no such certificate. RealField keeps the original checked
     # solve, whose residual tolerance need not agree with a check on d*B.
     cycle_factor = _fullcolumn_factor_ref(K)

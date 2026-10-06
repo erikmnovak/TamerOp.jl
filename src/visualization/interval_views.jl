@@ -334,9 +334,14 @@ function _interval_payload(diag::OrdinaryPersistence.PersistenceDiagram;dim=0,in
             members=((;dim=Int(dim),kind=:essential,index=i),)))
     end
     retained = OrdinaryPersistence.persistence_diagram_summary(diag).representatives_available
+    context = OrdinaryPersistence.provenance(diag)
+    restricted = get(context, :essential_interpretation, nothing) in (:survives_radius_cutoff,:survives_threshold_cutoff)
     return (;records=_group_interval_records(records),order=data.order,
-        endpoint_semantics=:ordinary_half_open,essential_status=:certified,
+        endpoint_semantics=:ordinary_half_open,
+        essential_status=restricted ? context.essential_interpretation : :certified,
         metadata=(;source=:ordinary_persistence,homological_dimension=Int(dim),order=data.order,
+            restriction_window=restricted ? context.window : nothing,
+            cutoff_parameter=haskey(context,:weighted_flag) ? :threshold : :radius,
             finite_intervals=copy(data.finite),essential_births=copy(data.essential),
             finite_count=length(data.finite),essential_count=length(data.essential),
             rounded_endpoint_count=data.rounded_endpoint_count,
@@ -360,7 +365,9 @@ function _interval_payload_spec(payload,kind;window=nothing,interval=nothing,max
     spec = panels[kind === :barcode ? 1 : 2]
     if get(payload.metadata,:source,nothing) === :ordinary_persistence
         lane = payload.order === :sublevel ? spec.metadata.infinity_lanes.positive : spec.metadata.infinity_lanes.negative
-        subtitle = (payload.order === :sublevel ? "Sublevel" : "Superlevel") * " · " * spec.subtitle
+        subtitle = (payload.order === :sublevel ? "Sublevel" : "Superlevel") * " \u00b7 " * spec.subtitle
+        restriction = get(payload.metadata, :restriction_window, nothing)
+        restriction === nothing || (subtitle *= "\nSurviving bars are known through $(get(payload.metadata,:cutoff_parameter,:radius)) $(restriction[2]).")
         rounded = get(payload.metadata,:rounded_endpoint_count,0)
         rounded > 0 && (subtitle *= "\nFloat64 display rounds $rounded endpoints; exact values remain in metadata.")
         return VisualizationSpec(spec.kind;title=spec.title,subtitle,layers=spec.layers,axes=spec.axes,

@@ -445,6 +445,18 @@ function inspect_json(path::AbstractString)
             profile_hint = _owned_profile_hint(pretty_hint),
             size_bytes = size_bytes,
         )
+    elseif kind == "PersistenceDiagram"
+        (
+            kind = kind, schema_version = schema,
+            field = "Fp",
+            field_characteristic = get(obj, "field_characteristic", missing),
+            order = get(obj, "order", missing),
+            finite_counts = get(obj, "finite_counts", missing),
+            essential_counts = get(obj, "essential_counts", missing),
+            representatives_available = get(obj, "representatives_available", missing),
+            cocycles_available = get(obj, "cocycles_available", missing),
+            profile_hint = _owned_profile_hint(pretty_hint), size_bytes = size_bytes,
+        )
     elseif kind == "MPPDecomposition"
         (
             kind = kind,

@@ -20,19 +20,20 @@ directly from the filtered complex.
 | --- | --- | --- | --- |
 | [TamerOp and QPA](qpa.md) | Maps, constructions, resolutions, diagrams, complexes, and derived operations on finite-poset modules | 2026-10-03; fixed suite of 220 requests | TamerOp **135.70× as fast in the weighted aggregate** for construction plus query on the 200 matched requests; even the smallest case-level ratio is **1.76×**. QPA's 20 tensor-evaluation failures have no speed ratio. |
 | [TamerOp and PHAT](phat.md) | Complete ordinary F₂ barcodes from supplied filtered boundary data | PHAT v2, 2026-10-04; 48 medium/large cases across sixteen structural variants | TamerOp **1.33× as fast in the balanced aggregate** for construction plus complete barcode; all 48 medium/large requests completed correctly in both tools. |
+| [TamerOp and Ripser.py](ripser.md) | Ordinary Rips barcodes, retained cocycles and landmark selection from clouds and supplied distances | Ripser v1, 2026-10-05; 31 development and six separate evaluation requests | All 37 requests completed with verified outputs. The 1,024-point circle query takes **7.01 s versus 30.4 s**; planar H₂ is also a strength. Landmark and small-control results are mixed. |
 
 ## Explore the reports
 
 <!-- COLLECTION: benchmarks -->
 
-Both comparisons measure **compiled code computing fresh mathematical results**.
+These comparisons measure **compiled code computing fresh mathematical results**.
 Package loading and compilation are outside the timer, and results from earlier
 queries are discarded. Each report gives its exact timing boundary, tested
 development snapshot, machine, input sizes, and all incomplete comparisons.
 It is not an estimate of how long a newly launched Julia session takes to
 produce its first answer.
 
-QPA and PHAT are completed comparisons. Other programs will get
+QPA, PHAT and Ripser.py v1 are completed comparisons. Other programs will get
 their own reports when their studies are complete. The
 [comparison roadmap](../benchmark_suites.md#planned-competitor-comparisons)
 lists planned studies; a place on that list is not a measured result.

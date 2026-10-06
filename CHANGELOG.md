@@ -8,7 +8,110 @@ repeating work. These updates make dimensions, bases and coordinates cheaper
 to obtain while preserving the existing basis conventions and the
 [finite-poset interpretation of Ext and Tor](docs/math_categories.md).
 
+### Distance and matching inspection
+
+- Add reusable matching diagrams, aligned barcodes and pair costs with diagonal
+  assignments, essential endpoints, duplicate-member IDs and linked selection.
+- Compare common slices through two encoded modules, inspect a bounded sampled
+  cost map, and explicitly request the exact finite-window optimum.
+- Retain the exact value, line and numerical-owner assignment with
+  `matching_distance_exact_2d(...; witness=true)` while keeping the scalar default.
+- Add a focused matching recipe and extend the finite-window comparison guide.
+
+### Resolution inspection
+
+- Inspect finite-poset Betti/Bass multiplicities, selected differentials and
+  principal supports, with explicit minimality, truncation and category scope.
+- Add supplied grade-plane views and certified graded basis changes for
+  resolution and presentation incidence; distinguish cokernels, kernels and
+  fringe images. Rendering consumes prepared mathematical data.
+- Add a resolution usage notebook and method reference in their planned homes.
+  Projective lift views now use explicit `kind=:resolution_lift`; the default
+  resolution view is the cheap multiplicity table.
+
+### Benchmarks
+
+- Added the final Ripser.py comparison: ordinary barcodes, cocycles and landmark workflows across 37 requests, with separate reserved evaluation, machine details and downloadable results. Independent checks now certify nontriviality of the sampled larger H2 cocycles.
+
+### Generalized rank and GRIL
+
+- Add exact generalized rank on selected connected convex finite subposets,
+  with optional limit/colimit witnesses over rational and prime fields.
+- Add signed summaries on declared finite interval families, with total-diagram
+  compression and reconstruction restricted to that family.
+- Compute continuous-worm GRIL at fixed probes on positive 2D grid encodings,
+  using exact critical widths and explicit extension and resource contracts.
+  Include independent mathematical oracles, executable examples, and an
+  implementation account; plan separate mathematical and library-usage lessons.
+
+### Ordinary persistence
+
+- Analyze `PersistenceDiagram` directly by degree with bottleneck/Wasserstein
+  distances, landscapes, images, silhouettes, entropy and scalar summaries.
+  Make essential-bar handling, superlevel reflection and numerical grids explicit.
+- Save and load owned diagram results with exact grades, field, provenance and
+  retained cycle/cocycle data; add a checked novice analysis notebook.
+- Repair shared Wasserstein auction refinement and exact-rational bottleneck
+  comparisons involving essential intervals, with independent matching oracles.
+
+- Fuse farthest-landmark selection with distance updates and accelerate native
+  floating-point distance checks while preserving selection ties and errors.
+- Reuse certified-radius neighbor lists for Rips coface searches while retaining
+  the original catalog rows and exact filtration grades.
+- Reduce F2 queue work with sorted batches, in-place sorting and buffer reuse
+  within a query. Keep compact term heaps when a terminal radius removes neighbors,
+  and signed coefficient heaps over odd prime fields.
+
+- Find immediate equal-grade coface cancellations before filling Rips queues.
+  Build complete graph rows directly, reuse sorted sparse rows, and avoid
+  boxing the H0 clearing set. Preserve exact grades, signs and cocycle outputs.
+- Check landmark finiteness in the existing distance-validation traversal,
+  retaining complete input checks without a second full scan.
+
+- Store one-term Rips reduction columns compactly, share edge ordering between
+  connected components and H1, and reconstruct apparent pairs when needed.
+  Preserve signed prime-field computation, signed-zero tie ordering and opt-in
+  cocycle representatives.
+- Stop eligible bounded Rips barcode requests at a certified cone radius, with
+  the certificate recorded in provenance. Keep requested budgets, user cutoffs,
+  retained cocycles and truncated-skeleton semantics intact.
+- Pack triangle catalogs without narrowing Float64 grades or changing the
+  simplex tie order, reducing catalog storage and sorting work.
+
+- Reduce implicit Rips work with direct complete-graph distance lookup, direct
+  triangle enumeration and preallocated dense catalogs. Compact F2 queue records
+  omit redundant coefficients while preserving parity cancellation, signed
+  odd-prime reduction and opt-in cocycle representatives.
+- Validate dense distance matrices in cache-local tiles, improving landmark
+  selection while retaining symmetry, diagonal, sign and conversion checks.
+
+- Retain landmark selection order, insertion radii, nearest-point assignments
+  and covering radius, with an optional full distance table and a conditional
+  metric Rips approximation bound. Preserve distinct coincident input indices.
+- Extend `EdgeWeightedFiltration` with vertex births, clique dimensions and an
+  inclusive threshold. Accept graph inputs and dense/sparse matrices with
+  diagonal vertex births, using the implicit barcode/cocycle route through H2
+  and explicit construction for higher degrees or homology representatives.
+
+- Add opt-in persistent cocycles over prime fields, with a scale-specific
+  accessor, restriction conventions, exact stored grades and source-cell
+  coefficients. Implicit Rips also retains oriented input vertex identities.
+  Homology cycles and death fillings remain a separate option; barcode-only
+  calls retain their existing reduction paths.
+
 ### Visualization
+
+- Add anchored rank sections with a fixed source or target, exact parameter-order
+  masks, selected-map readouts and small multiples sharing a scale. Linked
+  inspectors reuse bounded rank rows and columns while preserving exact anchor
+  geometry, reversed axes and the distinction between zero and undefined maps.
+
+- Add algebra inspection for module morphisms, naturality squares, computed
+  kernels/images/cokernels, and exact sequences. Display selected Hom basis
+  maps, supplied chain maps and homotopies, and projective-resolution lifts
+  with their actual equations and induced-map comparisons. Support overlays
+  require a shared classifier; numerical identities show residuals and
+  tolerances. All views share static Cairo/WGL rendering and export.
 
 - Make default image and interval figures easier to read with compact layouts,
   simple axes, integer pixel labels for small images, and explanations of the
@@ -67,6 +170,23 @@ to obtain while preserving the existing basis conventions and the
   with mathematical checks, figure/link validation and CI review artifacts.
 
 ### Algebra and performance
+
+- Compute Rips barcodes through H₂ directly from point clouds and dense/sparse
+  distance graphs, generating signed cofaces as needed instead of materializing
+  boundary matrices. Support all prime fields, radius limits, landmarks and
+  existing construction budgets; retain explicit construction for cycle
+  representatives and higher degrees. Record the executed route and graph
+  selection in provenance.
+
+- Give sparse Rips distance matrices explicit missing-edge and zero-distance
+  semantics, reusing budgeted clique construction. Check requested homology
+  degrees against available filling dimensions, record radius restrictions,
+  and apply radius cutoffs to nearest-neighbor graphs consistently.
+
+- Extend direct ordinary persistence to prime fields, including F₃ and F₁₀₁,
+  with signed modular boundaries, exact stored grades and optional coefficient-bearing
+  cycles and death fillings. Preserve the F₂ fast paths and basis conventions;
+  validate chain and filtration conditions in the selected field.
 
 - Use component merging for ordinary F2 connected-component persistence inside
   higher-dimensional complexes, and a reversed dual graph for eligible top

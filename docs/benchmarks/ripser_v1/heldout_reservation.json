@@ -1,0 +1,57 @@
+{
+  "created": "2026-10-05T13:16:28.577098+00:00",
+  "seed": 51005,
+  "status": "reserved; not generated or measured",
+  "fixtures": [
+    {
+      "family": "cloud",
+      "n": 512,
+      "shape": "jittered circle",
+      "prime": 2,
+      "degree": 1,
+      "cocycles": true
+    },
+    {
+      "family": "dense",
+      "n": 128,
+      "shape": "random planar",
+      "prime": 101,
+      "degree": 2,
+      "cocycles": false
+    },
+    {
+      "family": "dense",
+      "n": 96,
+      "shape": "random sphere",
+      "prime": 3,
+      "degree": 2,
+      "cocycles": true
+    },
+    {
+      "family": "sparse",
+      "n": 4096,
+      "shape": "permuted grid",
+      "prime": 2,
+      "degree": 1,
+      "cocycles": false
+    },
+    {
+      "family": "weighted",
+      "n": 96,
+      "shape": "permuted octahedra",
+      "prime": 101,
+      "degree": 2,
+      "cocycles": true
+    },
+    {
+      "family": "landmark",
+      "n": 2048,
+      "m": 128,
+      "shape": "dyadic Linfinity",
+      "prime": 2,
+      "degree": 1,
+      "cocycles": false
+    }
+  ],
+  "recipe": "NumPy default_rng(seed + fixture index); jitter circle angles by uniform(-0.2,0.2) times 2pi/n; planar uniform(0,1); sphere standard normal then normalize; permuted sparse/weighted original pilot graphs by rng.permutation(n); landmark choice 16384 dyadic coordinates without replacement as pilot. Fields and grades unchanged; dense metrics rounded through Float32. Reserved for later acceptance, not development tuning."
+}

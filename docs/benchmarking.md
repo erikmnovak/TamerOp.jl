@@ -50,7 +50,8 @@ package. Preserve losses and coverage gaps: they identify what to improve next.
 | Begin a study | [Study brief and completion checks](#study-brief-and-completion-checks) |
 
 Completed comparisons are collected in [Benchmark results](benchmarks/index.md),
-including [QPA](benchmarks/qpa.md) and [PHAT](benchmarks/phat.md). Those pages present the measured
+including [QPA](benchmarks/qpa.md), [PHAT](benchmarks/phat.md) and
+[Ripser.py](benchmarks/ripser.md). Those pages present the measured
 outcomes; this manual explains how to obtain and interpret them. Public
 results and figures do not by themselves constitute a runnable reproduction
 bundle.

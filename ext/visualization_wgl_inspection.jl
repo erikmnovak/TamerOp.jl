@@ -48,7 +48,7 @@ function _inspection_dom_readout(snapshot; style=VIZ.VisualStyle())
     surface = _inspection_css_color(style, VIZ._VisualRole(:surface))
     heading_style = "font-family:'$(style.font)',sans-serif;font-size:$(1.125 * style.fontsize)px;margin:0 0 $(style.gap/2)px;overflow-wrap:anywhere"
     for panel in VIZ.visual_panels(snapshot)
-        panel.kind in (:hasse, :regions, :region_labels, :query_overlay, :presentation_support,
+        panel.kind in (:hasse, :regions, :region_labels, :query_overlay, :presentation_support, :rank_section_plane, :rank_section_hasse,
             :slice_barcode, :slice_diagram, :barcode, :persistence_diagram) && continue
         content = Any[B.DOM.h3(panel.title; style=heading_style),
                       B.DOM.p(panel.subtitle; style="white-space:pre-line")]
@@ -222,6 +222,10 @@ function _render_linked_inspector(spec; display::Symbol=:inline, figure=nothing,
     support_key = Ref{Any}(nothing)
     support_figure = Ref{Any}(nothing)
     support_markers = Any[]
+    rank_content = M.Observable{Any}(B.DOM.div())
+    rank_figure = Ref{Any}(nothing)
+    rank_axis = Ref{Any}(nothing)
+    rank_observers = Any[]
     draft_source, draft_target = Ref{Any}(nothing), Ref{Any}(nothing)
     app_ref = Ref(WeakRef(nothing))
     observers = Any[]
@@ -239,7 +243,9 @@ function _render_linked_inspector(spec; display::Symbol=:inline, figure=nothing,
     attrs(name) = (; id="$dom_id-$name", disabled, style=control_style)
     endpoint = B.Dropdown(["Stalk", "Source", "Target"]; attrs("endpoint")...)
     views = summary.supported_views
-    view = B.Dropdown(collect(views); option_to_string=x -> x === :module ? "Module coordinates" : "Presentation image coordinates",
+    view_names = Dict(:module=>"Module coordinates", :presentation=>"Presentation image coordinates",
+        :rank_from=>"Rank from source", :rank_to=>"Rank to target")
+    view = B.Dropdown(collect(views); option_to_string=x -> view_names[x],
         attrs("view")...)
     vertex = B.TextField("1"; attrs("vertex")...)
     select_vertex = B.Button("Inspect vertex"; attrs("select-vertex")...)
@@ -339,6 +345,12 @@ function _render_linked_inspector(spec; display::Symbol=:inline, figure=nothing,
         # This also avoids waiting for a never-connected frontend during cleanup.
         navigation_content[] = B.DOM.p("Inspector closed.")
         support_content[] = B.DOM.div()
+        rank_content[] = B.DOM.div()
+        foreach(M.off, rank_observers)
+        empty!(rank_observers)
+        rank_figure[] === nothing || empty!(rank_figure[])
+        rank_figure[] = nothing
+        rank_axis[] = nothing
         slice_ui[] === nothing || slice_ui[].dispose()
         foreach(delete!, navigation_blocks)
         empty!(navigation_blocks)
@@ -408,6 +420,59 @@ function _render_linked_inspector(spec; display::Symbol=:inline, figure=nothing,
             "Pointer selection: coordinates are approximate. Use the exact fields to decide boundary membership." :
             "Supplied selection; exact coordinate text is classified before drawing conversion."
         support_style[] = selection.view === :presentation ? "display:block" : "display:none"
+        foreach(M.off, rank_observers)
+        empty!(rank_observers)
+        if selection.view in (:rank_from, :rank_to) && !isempty(snapshot.metadata.rank_sections)
+            panels = filter(p -> p.kind in (:rank_section_plane, :rank_section_hasse), snapshot.panels)
+            section = VIZ.VisualizationSpec(:rank_section; title=snapshot.title,
+                subtitle=snapshot.subtitle * "\nClick this section to select the varying endpoint; its anchor stays fixed.",
+                panels, legend=snapshot.legend, metadata=(; panel_columns=1, panel_row_weights=[1],
+                    figure_size=(figure_size[1], max(780, figure_size[2])), legend_position=:bottom))
+            old_figure = rank_figure[]
+            rank_figure[] = _HANDLERS.render(section; style)
+            rank_content[] = rank_figure[]
+            old_figure === nothing || empty!(old_figure)
+            rank_axis[] = only(filter(block -> block isa M.Axis, rank_figure[].content))
+            chosen = VIZ._inspection_rank_anchor(selection)
+            function rank_pick()
+                ax = rank_axis[]
+                ax === nothing && return nothing
+                M.is_mouseinside(ax.scene) || return nothing
+                if chosen.domain === :parameter
+                    p = M.mouseposition(ax.scene)
+                    return (Float64(p[1]), Float64(p[2]))
+                end
+                return _inspection_nearest_vertex(ax, positions)
+            end
+            push!(rank_observers, M.on(M.events(rank_figure[].scene).mouseposition) do _
+                closed[] && return nothing
+                picked = rank_pick()
+                picked === nothing && return nothing
+                chosen.domain === :parameter ? hover(; point=picked) : hover(; vertex=picked)
+                return nothing
+            end)
+            push!(rank_observers, M.on(M.events(rank_figure[].scene).mousebutton; priority=100) do event
+                closed[] && return M.Consume(false)
+                if event.button == M.Mouse.left && event.action == M.Mouse.press
+                    picked = rank_pick()
+                    if picked !== nothing
+                        pair = chosen.from ? (chosen.anchor, picked) : (picked, chosen.anchor)
+                        commit() do
+                            chosen.domain === :parameter ?
+                                VIZ.select_inspection!(session; parameter_pair=pair, input=:pointer) :
+                                VIZ.select_inspection!(session; pair, input=:pointer)
+                        end
+                        return M.Consume(true)
+                    end
+                end
+                return M.Consume(false)
+            end)
+        else
+            rank_content[] = B.DOM.div()
+            rank_figure[] === nothing || empty!(rank_figure[])
+            rank_figure[] = nothing
+            rank_axis[] = nothing
+        end
         if selection.view === :presentation
             key = (selection.upset, selection.downset)
             if support_key[] != key
@@ -559,7 +624,7 @@ function _render_linked_inspector(spec; display::Symbol=:inline, figure=nothing,
         B.DOM.h2("Linked spaces, maps, and presentations";
             style="font:inherit;font-size:$(1.5 * style.fontsize)px;font-weight:700;margin:0 0 $(style.gap)px"),
         B.DOM.p("Live Julia session required. Click a region or a finite-poset vertex; use exact fields for boundary questions. Hover reads only labels and dimensions."),
-        row(label("Selection endpoint", endpoint), label("Coordinate view", view),
+        row(label("Selection endpoint", endpoint), label("View", view),
             label("Compute selected image basis", basis), reset_button, close_button),
         row(label("Finite vertex", vertex), select_vertex, previous_vertex, next_vertex),
         row(label("Finite source label", label_source), label("Finite target label", label_target), select_labels),
@@ -573,8 +638,10 @@ function _render_linked_inspector(spec; display::Symbol=:inline, figure=nothing,
             var"aria-label"="Parameter regions and finite poset"),
         B.DOM.div(B.DOM.div(support_content; style="max-width:100%;overflow:auto", tabindex="0",
             var"aria-label"="Presentation support figures"); style=support_style),
-        slice_ui[].dom,
-        B.DOM.div(readout; id="$dom_id-readout");
+        B.DOM.div(rank_content; style="max-width:100%;overflow:auto", tabindex="0",
+            var"aria-label"="Anchored rank section"),
+        B.DOM.div(readout; id="$dom_id-readout"),
+        slice_ui[].dom;
         id=dom_id,
         style="box-sizing:border-box;font-family:'$(style.font)',sans-serif;font-size:$(style.fontsize)px;line-height:1.45;color:$foreground_css;background:$background_css;padding:$(style.padding)px;width:100%;max-width:$(figure_size[1] + 2 * style.padding)px;min-width:0;overflow-wrap:anywhere")
     app = B.App(; title="TamerOp linked inspector") do browser_session
@@ -607,6 +674,7 @@ function _render_linked_inspector(spec; display::Symbol=:inline, figure=nothing,
         axes=(; region=region_axis, hasse=hasse_axis), markers=(; region=region_markers, hasse=hasse_markers),
         callbacks, dispose, closed, disabled, basis_disabled, observers, session_token,
         error_text, status_text, selection_text, hover_text, readout, support_figure, support_markers,
+        rank_figure, rank_axis, rank_observers,
         preparation_count=1, browser_client, navigation_content, dom_id, style, figure_size,
         slice=slice_ui[])
     return app

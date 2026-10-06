@@ -13,7 +13,7 @@ informed by the literature. They are not academic certification thresholds.
 
 The [planned competitor comparisons](#planned-competitor-comparisons) below
 record the libraries we intend to compare, their mathematical overlap, and the
-current order of work.
+dated effort estimates alongside the current completion status.
 
 ## Choose the claim before the suite
 
@@ -294,15 +294,15 @@ the scoped study is complete.
 
 ## Planned competitor comparisons
 
-Roadmap recorded 2026-09-30. **All 21 libraries below are in the planned
-comparison programme**, including the current QPA study. Each comparison should
-help us understand a part of the finite-encoding workflow: constructing a
+Roadmap recorded 2026-09-30. **All 21 libraries below are in the comparison
+programme**; the status below distinguishes completed studies from planned work.
+Each comparison should help us understand a part of the finite-encoding workflow: constructing a
 module, retaining and analyzing its maps, or obtaining an invariant or figure.
 Specialized tools also give useful comparisons for direct filtration and
 barcode tasks that do not require constructing an encoding.
 
-Finish QPA v1 before starting the next comparison. The table is ordered by
-**estimated remaining work, from least to most**, as of 2026-09-30. This includes
+The table preserves the order of **estimated remaining work, from least to
+most**, as of 2026-09-30, before QPA v1 and PHAT v2 were completed. This includes
 adapters, independent correctness checks, warmup/reset verification, timing and
 reporting for the intended overlap. It credits existing work rather than
 estimating every study from scratch. It is a planning judgment, not a measured
@@ -314,10 +314,12 @@ study still needs its bounded charter; these ranks do not set case counts,
 machine-hour budgets or deadlines. The C01–C21 identifiers stay fixed when the
 effort order changes.
 
-**Status (2026-10-04):** C01 (QPA v1) and C18 (PHAT v2) are complete at their
-fixed scopes. The [current PHAT result report](benchmarks/phat.md) covers
-48 medium/large inputs across sixteen structural variants. The other comparisons
-remain planned under this guide. “Planned” does not erase earlier exploratory measurements: inventory
+**Status (2026-10-05):** C01 (QPA v1), C18 (PHAT v2) and C14 (Ripser.py v1)
+are complete at their fixed scopes. The [PHAT report](benchmarks/phat.md)
+covers 48 medium/large inputs across sixteen structural variants. The
+[Ripser.py report](benchmarks/ripser.md) covers 31 development requests and six
+separately reported reserved evaluation cases, with four paired process passes.
+The other comparisons remain planned under this guide. “Planned” does not erase earlier exploratory measurements: inventory
 and credit compatible evidence before deciding what remains to run. The scope
 column identifies candidate common requests, not a completed certification that
 every listed operation is already comparable in both implementations.
@@ -325,7 +327,7 @@ every listed operation is already comparable in both implementations.
 | Effort rank | ID | Library | Intended comparison scope | What must be aligned before timing |
 | ---: | --- | --- | --- | --- |
 | 1 | C18 | [PHAT](https://bitbucket.org/phat-code/phat/) | Supplied filtered boundary matrices to complete ordinary barcodes over F₂. | Same matrix and ordering; match finite and essential intervals, tied grades, and all supplied homology degrees; charge native and output conversion. |
-| 2 | C14 | [Ripser](https://ripser.github.io/ripser/) | Vietoris–Rips persistence from metric data to ordinary barcodes. | Same metric, threshold, field and homology degrees; a barcode-only request does not require a full encoding. |
+| 2 | C14 | [Ripser.py](https://ripser.scikit-tda.org/en/latest/) | Vietoris–Rips persistence from point clouds and dense/sparse distances, weighted vertices, landmark selection and supported cocycles. The selected comparator uses the Ripser engine through Ripser.py's public interface. | Same metric, threshold, field and homology degrees; keep barcode-only and cocycle-retaining requests separate. The intended final comparison includes supported representative outputs, matched by field, scale and class checks rather than literal coefficient equality. A barcode-only request does not require a full encoding. |
 | 3 | C16 | [PersistenceDiagrams.jl](https://mtsch.github.io/PersistenceDiagrams.jl/stable/) | Diagram distances/matchings, landscapes, images, Betti curves and plotting. | Same diagrams, endpoint/essential-bar conventions, feature parameters and sampling grid. |
 | 4 | C04 | [FlangePresentations.jl](https://gitlab.com/flenzen/flangepresentations.jl) | Construct flat-injective presentations of finite-dimensional persistence modules from free resolutions. | Match supported module classes and starting information; verify represented spaces and maps, and charge any required resolution construction. |
 | 5 | C07 | [mpfree](https://alexanderrolle.github.io/) | Bifiltered chain complexes to minimal presentations of persistent homology. | Match homology degree, coefficient field, grading and minimality; validate the presented module. |
@@ -371,12 +373,142 @@ new mathematical features solely to make a comparison possible. If no equivalent
 request exists, record the capability difference and the supported subset rather
 than treating missing functionality as an indefinitely large benchmark task.
 
+### Ripser.py development scope, 2026-10-04
+
+C14 begins with **24 fixed development cases**, using Ripser.py 0.6.15
+compiled with its documented Robin Hood hashing option and `-O3`. That is a
+verified supported optimized build; it is not a claim that every possible
+compiler configuration has been ranked. Both algorithms remained unchanged
+during the pilot. **The pilot is complete:** all 24 cases completed both paired
+process passes, with 288 accepted timed queries and 48 matched output checks.
+No case timed out or exceeded its memory limit. Superseded adapter-development
+measurements are excluded from the corrected baseline.
+
+The six groups are native Euclidean point clouds, supplied dense distances,
+supplied sparse distances, weighted vertices, landmark selection with its
+coverage information, and small mathematical controls. Each group has four
+cases. The fields are F2, F3 and F101; requests mostly include H0 through H1
+or H2, with one explicit H3 control. Barcode-only requests and requests that
+retain cocycles remain distinct. The largest inputs include 1,024 dense
+points, 4,096 sparse/weighted vertices, and 128 landmarks from 2,048 points.
+
+The primary timer covers the complete public query with compiled code and
+fresh mathematical state. Native-container construction is recorded separately;
+construction-plus-query is their measured sum. Two serial process passes
+reverse tool order and collect three accepted samples per case and tool.
+Julia compilation-contaminated samples are retained but excluded. Every worker
+has an 8 GiB RSS ceiling, a 180-second phase limit and a 420-second startup
+allowance. Failures stay in the record.
+
+Ripser.py converts filtration grades to Float32. Supplied matrices therefore
+use exactly shared representable grades, while native-cloud requests form a
+separate numerical lane with an explicit rounding tolerance. Complete interval
+multisets, essential bars and landmark metadata are checked. Independent
+boundary reduction and graph-homology formulas provide additional controls.
+Selected cocycles are checked as classes, including common class-space checks
+on small examples; coefficients need not agree. Large connected H2 examples
+still need stronger independent class identification before a broad claim
+about all representative outputs.
+
+Separate TamerOp profiles identify substantial costs in dense coface/queue
+processing, landmark distance validation, and H2 clique catalogs. These are
+development observations, not the final public comparison. Address the measured
+major costs and settle a finite final suite.
+Reserve genuinely untouched evaluation inputs before optimizing; the observed
+pilot cases cannot become held-out evidence. Do not expand into unrelated
+ordinary-persistence variants merely to enlarge this comparison. Keep the
+existing case and resource boundaries until a final charter explicitly
+replaces them.
+
+The October 5 development rerun completed the same 24 cases in both process
+passes after optimizing complete-graph distance lookup, F2 queue storage,
+triangle catalogs and dense distance validation. All 288 timed samples were
+compilation-free, all 48 matched output checks passed, and TamerOp's 48 exports
+matched the previous baseline exactly. Focused Julia verification passed
+1,111,406 checks. The largest dense circle improved from 29.2 s to 17.7 s;
+the 512-point cocycle request from 2.72 s to 1.55 s; and the largest landmark
+request from 46.2 ms to 21.8 ms. Planar H2 allocation traffic fell from 178 MB
+to 76.8 MB, while its runtime improvement was modest and variable. Ripser.py
+remains faster on that planar request, landmarks and several small controls.
+The six evaluation recipes reserved before these changes remain unmeasured;
+this is still development evidence, not a final confirmatory suite.
+
+A further staged development study on seven existing requests implemented
+compact reduction columns, shared edge ordering, a certified terminal radius,
+reconstructed apparent pairs and compact triangle catalogs. New reversed-order
+before/after passes measured 1.57 s to 0.219 s and 8.46 s to 0.757 s on the
+256- and 384-point planar H0-H2 requests over F101; the 2,048-landmark workflow
+fell from 4.41 s to 1.80 s. The final cohort contains 96 compilation-free samples.
+All 31 existing development inputs matched their saved complete barcodes and
+landmark exports, with selected cocycle witnesses also preserved. Independent
+signed-zero loop and sphere checks caught and corrected an apparent-pair
+ordering defect during development. Later unchanged-Ripser checks passed on
+all seven timed requests; the tiny weighted-cycle control still favors Ripser.
+Host activity varied, so these remain development observations. The six
+reserved evaluation recipes remain untouched, and the final comparative
+suite is still to be settled.
+
+The remaining 24 of those 31 development requests have now been retimed on
+that same accepted source in two reversed-order paired passes. All 288 samples
+were compilation-free, all 48 cross-tool checks passed, and all 48 TamerOp
+exports matched the preceding verified outputs. The 512-point planar H0-H2
+request takes 1.85 s versus Ripser.py's 8.35 s; the 1,024-point circle takes
+12.22 s versus 20.21 s. Landmark results remain mixed: 4,096/3,072 takes
+4.05 s versus 5.15 s, while 2,048/128 takes 14.89 ms versus 5.27 ms and
+4,096/512 takes 141.77 ms versus 101.51 ms. These 24 requests and the seven
+earlier timings remain separate development cohorts, with no pooled final score.
+
+Current-path profiles on four existing workloads identify substantial remaining
+costs in large-circle queue removal, landmark input checking/selection, H2
+catalogs and coface processing. Several preparation costs also add up on the
+many-landmark workflow. The review is complete, but optimization closure and a
+candidate freeze are not justified yet. No package implementation changed in
+this review. The large-component H2 representative gap and the six untouched
+evaluation recipes remain separate pending work; no final comparison was run.
+
+A subsequent four-target optimization retained early equal-grade coface search,
+fused landmark finiteness checks and cheaper graph/clearing preparation.
+Its 31-case source-snapshot cohort passed all output checks, but a Zoom meeting
+ended just before the final baseline; those time ratios are retained as
+confounded development observations. A separate confirmation then alternated
+both sources on the same CPU core in two independent process pairs, covering
+six existing cases with 72 compilation-free samples. The 1,024-point circle
+changed from 15.7 s to 13.4 s; the 4,096-point / 2,048-landmark query
+changed from 2.26 s to 1.55 s. These are matched TamerOp
+before/after measurements, separate from all earlier Ripser comparisons.
+
+The canonical focused tests passed 1,133,859 assertions; all saved barcodes,
+landmark outputs and selected cocycle exports were preserved across the 31
+inputs. Four-child and bottom-up heaps, custom radix sorting, native QuickSort
+and colex enumeration with stable grade sorting did not justify replacement.
+That round retained the existing heap and catalog sort, with major costs still
+visible in profiles. The large-H2 representative gap, reserved evaluation inputs and
+final comparison remain pending.
+
+A later follow-up retained fused landmark selection and native-float validation,
+certified-radius coface neighbor lists, and sorted F2 batches with reusable
+buffers and in-place sorting. Actually pruned neighbor graphs retain the
+compact F2 heap; odd-prime reduction remains unchanged. Applying batches
+everywhere slowed the largest landmark request, so that broader routing was
+rejected, along with the triangle-capacity experiment.
+
+The selected implementation passed 132 compilation-free samples in two
+independent, reversed-order source comparisons, plus all 31 saved development
+output checks. The 1,024-point circle changed from 11.2 s to
+5.41 s; the 4,096-point / 3,072-landmark query changed from
+4.37 s to 4.03 s. Host activity varied: these are paired
+development observations, separate from prior comparator timings. Large
+landmark queries allocate about 7-8% more; circle queries allocate less. Canonical
+focused Rips, A115 and A117 tests passed on the integration snapshot, preserving
+concurrent project changes. The final comparison and reserved evaluation work
+remain pending.
+
 ### QPA results and development record
 
 Read the [public QPA benchmark report](benchmarks/qpa.md) for the final
 results, machine specifications, figures, and downloadable data. The
-[results index](benchmarks/index.md) will collect completed comparisons
-with other programs. This section retains the development record.
+[results index](benchmarks/index.md) collects the completed QPA and PHAT
+comparisons. This section retains the development record.
 
 **QPA v1 is complete as of 2026-10-03.** All 220 fixed requests were attempted
 in five paired passes. TamerOp returned independently verified answers for all
@@ -660,7 +792,11 @@ its tasks, size bounds, weights or competitor implementation.
 
 ### PHAT implementation and development pilot, 2026-10-03
 
-The next comparison asks for the complete ordinary barcode of a supplied
+The development and freeze entries record their status at the time. PHAT v2
+has since [completed final confirmation](#phat-v2-final-confirmation-and-closure-2026-10-04);
+the [result report](benchmarks/phat.md) gives its current conclusion.
+
+The comparison asks for the complete ordinary barcode of a supplied
 filtered chain complex over F₂. This exercises TamerOp's direct
 [ordinary-persistence route](ordinary_persistence.md): it does not require
 constructing a general finite encoding to answer a one-parameter question.
@@ -775,12 +911,13 @@ to 17,850 cells, yet computing the projection costs more than the subsequent
 reduction saves. None of the three tested compression variants was installed;
 no inactive alternate path remains in the library.
 
-The reviewed optimization work is complete at this scope. Final harness qualification
-must reconcile the original worker's per-request collection with the later
-before-warmup collection policy, record the actual routes, and fix the final
+At this development checkpoint, the reviewed optimization work was complete
+at its scope. Final harness qualification still had to reconcile the original
+worker's per-request collection with the later before-warmup collection policy,
+record the actual routes, and fix the final
 source and run configuration before a candidate freeze. The ten reserved cases
-still have no recorded performance results, and confirmation remains outstanding.
-No final 48-case PHAT performance claim is established yet.
+had no recorded performance results, and confirmation was outstanding.
+No final 48-case PHAT performance claim had been established at that checkpoint.
 
 ### Turn each planned comparison into a finished study
 
@@ -854,7 +991,8 @@ a further diagnostic. Across all 28 cases, 16 improve and 12 do not. These are
 shared-machine development results, not a uniform performance improvement or a
 new PHAT comparison. The applied source matches the tested snapshot. No
 reserved timings, PHAT rerun, final-suite freeze, or confirmation campaign was
-performed by this follow-up; the final PHAT steps above remain outstanding.
+performed by this follow-up; the final PHAT steps above were still outstanding
+at that checkpoint.
 
 A subsequent workspace follow-up tested deferred allocation, full degree-specific
 indexing, and a simpler version that compacts only the active boundary's rows.
@@ -876,15 +1014,15 @@ allocation. These are diagnostic stage times, not whole-request speedups.
 Exact-source controls show substantial variation, so the results retain the
 shared-host qualification. Production source and owner tests are unchanged;
 previous correctness evidence remains credited without a redundant owner rerun.
-These workspace hypotheses are closed without claiming optimality. The remaining
-PHAT harness qualification and confirmation steps are unchanged.
+These workspace hypotheses were closed without claiming optimality. This
+follow-up did not perform the subsequent harness qualification or confirmation.
 
 
 ### PHAT candidate freeze, 2026-10-04
 
-The implementation and measurement protocol are now frozen for the final
-comparison. This fixes the code and conditions under which each tool will
-recover an ordinary barcode. It does not establish a final speed advantage.
+This entry records the candidate freeze before the final comparison. It fixed
+the code and conditions under which each tool would recover an ordinary barcode;
+the freeze itself did not establish a final speed advantage.
 
 The isolated candidate matches the source with 18,022 passing owner assertions
 and 112 unchanged representative fingerprints. Final harness qualification
@@ -901,12 +1039,13 @@ source, fixtures, unchanged PHAT v1.7 binary, Julia runtime, harness and complet
 run configuration. Both pass launch validation without starting measurements.
 The candidate is an archived source snapshot, not a new Git tag or release.
 
-Confirmation will use five paired process passes for the original 48 scored
-cases and, separately, the existing twelve larger inputs. Native construction,
+The frozen confirmation plan used five paired process passes for the original
+48 scored cases and, separately, the existing twelve larger inputs. Native construction,
 complete query, and construction plus query remain distinct measurements.
-Results will retain losses and uncertainty; the larger supplement will not
-alter the primary score. The final campaigns and public PHAT result report
-remain to be completed. Host availability must be checked when timing starts.
+The plan retained losses and uncertainty without letting the larger supplement
+alter the primary score. At freeze time, the final campaigns and public PHAT
+result report were pending, and host availability still required a check before
+timing. The closure entry below records the later PHAT v2 scope and results.
 
 The local archive is `audit/2026-10-04/phat_freeze/`, with acceptance evidence and
 exact launch commands. It preserves the earlier qualification attempt and the
@@ -954,3 +1093,39 @@ The new evidence is in `audit/2026-10-04/phat_v2/`, with the older accepted
 source remaining in its sealed `phat_freeze/` archive. A portable executable
 reproduction bundle remains separate publication work. Earlier development
 and freeze notes above retain their original dates and status.
+
+
+### Ripser.py v1 final confirmation and closure, 2026-10-05
+
+The [public report](benchmarks/ripser.md) closes C14's fixed v1 comparison.
+All **37 requests** completed in both tools across four paired process passes:
+the 31 existing development requests and six recipes reserved before tuning.
+All **888 accepted samples** satisfy the fresh-mathematics, reset,
+output-consistency and zero-Julia-compilation checks. All **148 paired
+mathematical checks** pass. The reserved cases are reported separately and
+were not used for post-freeze optimization.
+
+The final candidate retains the measured landmark validation/selection,
+coface and selective F2 queue improvements; unsuccessful alternatives remain
+in their development archives. Remaining whole-matrix validation has a real
+quadratic input-checking cost, and workload-specific losses are retained.
+This is a practical closure of the fixed comparison, not a proof that no
+future optimization can exist. No library code was tuned during final evaluation.
+
+Independent sparse coboundary solvability closes the previous nontriviality
+gap for the sampled large connected H2 witnesses in both tools. Verification
+still samples at most six longest positive-degree cocycles per degree; it does
+not certify every returned cochain or compare all large-output bases.
+
+Query time, native construction and their per-sample sum are separate. The
+1,024-point circle takes 7.01 s versus 30.4 s;
+the 512-point planar H0-H2 request takes 2.15 s versus
+11.7 s. Family summaries, all individual losses, paired-pass
+ranges, machine details and memory measurements are in the report and downloads.
+No development timing is pooled with the final measurements. The earlier
+paragraphs are historical development records superseded by this closure.
+
+The local archive is `audit/2026-10-05/ripser_final_v1/`. Public data live under
+`docs/benchmarks/ripser_v1/`; a portable computational reproduction bundle is
+still a separate release task. Future feature additions do not reopen this
+version: use a new scoped study when the compared request changes.

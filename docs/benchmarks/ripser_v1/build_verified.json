@@ -1,0 +1,10 @@
+{
+  "ripser_version": "0.6.15",
+  "robinhood": "3.11.5",
+  "optimization": "-O3",
+  "coefficient_support": true,
+  "robinhood_macro_verified": true,
+  "binaries": {
+    "venv/lib/python3.12/site-packages/pyRipser.cpython-312-x86_64-linux-gnu.so": "f5f84f3221821cef58c020bbd066a76c0afa946e93c8168de8b56c32f62d3522"
+  }
+}

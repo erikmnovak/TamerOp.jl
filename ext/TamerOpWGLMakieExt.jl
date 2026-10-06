@@ -14,11 +14,12 @@ const _BASE_WGL_RENDER = _HANDLERS.render
 
 include("visualization_wgl_inspection.jl")
 include("visualization_wgl_intervals.jl")
+include("visualization_wgl_matchings.jl")
 
 function _render_wgl_visual(spec; kwargs...)
     WGLMakie.activate!(; use_html_widgets=true)
     if spec.kind === :linked_inspector
-        return spec.metadata.session isa VIZ.IntervalInspectionSession ?
+        return spec.metadata.session isa VIZ.MatchingInspectionSession ? _render_matching_inspector(spec;kwargs...) : spec.metadata.session isa VIZ.IntervalInspectionSession ?
             _render_interval_inspector(spec; kwargs...) : _render_linked_inspector(spec; kwargs...)
     end
     return Base.invokelatest(_BASE_WGL_RENDER, spec; kwargs...)

@@ -162,7 +162,7 @@ end
                         end
                     end
                     if fixture == 1 && fontsize == 24
-                        dimensions == (420,420) && (@test ax.xticklabelrotation[] ≈ pi/2)
+                        dimensions == (420,420) && (@test isapprox(ax.xticklabelrotation[], pi/2))
                         dimensions == (760,640) && (@test ax.xticklabelrotation[] == 0)
                     end
                     rotation = ax.xticklabelrotation[]

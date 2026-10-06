@@ -1,0 +1,24 @@
+cloudpickle==3.1.2
+contourpy==1.4.0
+cycler==0.12.1
+Cython==3.3.0
+Deprecated==3.0.0
+fonttools==4.66.1
+hopcroftkarp==1.2.5
+joblib==1.6.0
+kiwisolver==1.5.1
+matplotlib==3.11.2
+narwhals==2.26.0
+numpy==2.5.3
+packaging==26.3
+persim==0.3.8
+pillow==12.3.0
+pip==24.0
+pyparsing==3.3.3
+python-dateutil==2.9.0.post0
+ripser @ file:///home/eriknovak/Documents/projects/TamerOp.jl/audit/2026-10-04/ripser_pilot/ripser-0.6.15
+scikit-learn==1.9.1
+scipy==1.18.1
+six==1.17.0
+threadpoolctl==3.7.0
+wrapt==2.5.0

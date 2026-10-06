@@ -39,7 +39,7 @@ function _squares_encoding()
     A = TamerOp.Advanced
     options = A.EncodingOptions(;backend=:pl_backend,poset_kind=:signature,
         field=TamerOp.CoreModules.QQField())
-    # k_[0,2]^2 ⊕ k_[1,3]^2, with its retained indicator presentation.
+    # k_[0,2]^2 direct-sum k_[1,3]^2, with its retained indicator presentation.
     return TamerOp.encode([A.BoxUpset([0,0]),A.BoxUpset([1,1])],
         [A.BoxDownset([2,2]),A.BoxDownset([3,3])],QQ[1 0;0 1],options)
 end
@@ -135,6 +135,23 @@ function _pick_targets(figure, axes, data)
     return targets
 end
 
+function _rank_navigation_state(ui, data, snapshot)
+    data === nothing && return nothing
+    haskey(snapshot.metadata, :domain) || return nothing
+    figure = ui.rank_figure[]
+    axis = ui.rank_axis[]
+    (figure === nothing || axis === nothing || ui.closed[]) && return nothing
+    width,height = M.widths(M.viewport(figure.scene)[])
+    targets = NamedTuple[]
+    items = snapshot.metadata.domain === :parameter ? data.regions :
+        [(;id=q,point,vertex=q,dimension=data.dimensions[q]) for (q,point) in enumerate(data.positions)]
+    for item in items
+        pixel = M.project(axis.scene,M.Point2d(item.point)) + minimum(M.viewport(axis.scene)[])
+        push!(targets,merge(item,(;x=Float64(pixel[1]/width),y=Float64(1-pixel[2]/height))))
+    end
+    return (;pick_targets=targets,figure_size=(width,height),mouseposition=M.events(figure.scene).mouseposition[])
+end
+
 function _browser_state(session,ui,last_figure,navigation,fixture)
     summary = V.inspection_summary(session)
     snapshot = V.inspection_snapshot(session)
@@ -162,10 +179,13 @@ function _browser_state(session,ui,last_figure,navigation,fixture)
         records,selected_record=selected === nothing ? nothing : records[selected],
         representative=get(snapshot.metadata,:selected_representative,nothing),
         inspection=get(snapshot.metadata,:inspection,nothing),
+        rank_sections=get(snapshot.metadata,:rank_sections,nothing),
+        rank_anchors=get(snapshot.metadata,:anchors,nothing),
         presentation=_presentation_state(snapshot),
         panels=[(;title=panel.title,kind=panel.kind,
             matrix=_matrix_state(get(panel.metadata,:matrix,nothing))) for panel in snapshot.panels],
         main_ui=_navigation_state(ui,navigation),
+        rank_ui=interval_fixture ? nothing : _rank_navigation_state(ui,navigation,snapshot),
         slice=result === nothing ? nothing : (;
             scope=result.scope,domain=result.domain,window=result.window,
             line=result.line,endpoint_semantics=result.endpoint_semantics,
@@ -235,6 +255,8 @@ function _port(name,default)
     return value
 end
 
+include("matching-fixtures.jl")
+
 function _main()
     interval_port = _port("TAMEROP_BROWSER_INTERVAL_PORT",8848)
     slice_port = _port("TAMEROP_BROWSER_SLICE_PORT",8849)
@@ -274,11 +296,14 @@ function _main()
         # Construct them only when its first browser requests the corresponding URL.
         for (path,fixture,title,slice,route_style) in (
                 ("/squares",:squares,"A37 spaces, maps and presentations",false,TamerOp.VisualStyle(;fontsize=18)),
+                ("/rank-sections",:squares,"A84 anchored rank sections",false,TamerOp.VisualStyle(;fontsize=18)),
                 ("/squares-slices",:squares_slices,"A40 finite-window square slices",true,TamerOp.VisualStyle(;fontsize=18)),
                 ("/squares-grayscale",:squares_grayscale,"A35 large grayscale inspector",true,TamerOp.VisualStyle(;fontsize=24,palette=:grayscale)))
             B.route!(servers[2],path => _lazy_squares_app(sessions,tick;
                 title,style=route_style,fixture,slice))
         end
+        B.route!(servers[2],"/matching" => _matching_browser_app(sessions,tick))
+        B.route!(servers[2],"/matching-slices" => _matching_browser_app(sessions,tick;fibered=true))
         println("TAMEROP_BROWSER_READY intervals=http://127.0.0.1:$interval_port slices=http://127.0.0.1:$slice_port")
         flush(stdout)
         while !isfile(stop_file)
@@ -296,9 +321,11 @@ function _main()
     end
 end
 
-Base.exit_on_sigint(false)
-try
-    _main()
-catch err
-    err isa InterruptException || rethrow()
+if abspath(PROGRAM_FILE) == @__FILE__
+    Base.exit_on_sigint(false)
+    try
+        _main()
+    catch err
+        err isa InterruptException || rethrow()
+    end
 end

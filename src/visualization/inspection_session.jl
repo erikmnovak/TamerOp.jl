@@ -82,7 +82,7 @@ function _inspection_prepare(obj, box)
         presentation_available=H !== nothing,
         nupsets=H === nothing ? 0 : length(FiniteFringe.birth_upsets(H)),
         ndownsets=H === nothing ? 0 : length(FiniteFringe.death_downsets(H)),
-        supported_views=H === nothing ? (:module,) : (:module, :presentation),
+        supported_views=H === nothing ? (:module, :rank_from, :rank_to) : (:module, :presentation, :rank_from, :rank_to),
         geometry_preparations=geometry_available ? 1 : 0, hasse_preparations=1)
     return (; dims, hasse, geometry, region, graph, presentation=H), capabilities
 end
@@ -110,7 +110,23 @@ function _inspection_graph(obj, prepared, state)
         prepared=prepared.hasse, field_label=_inspection_field_label(_inspection_field(obj)))
 end
 
-function _inspection_algebra(obj, prepared, state, graph, matrix_limit)
+function _inspection_rank_anchor(state)
+    from = state.view === :rank_from
+    index = state.pair === nothing ? 1 : from ? 1 : 2
+    label = state.pair === nothing ? state.vertex : state.pair[index]
+    domain = isempty(state.query_points) ? :finite : :parameter
+    anchor = domain === :finite ? label : state.query_points[index]
+    return (; from, label, domain, anchor)
+end
+
+function _inspection_algebra(obj, prepared, state, graph, matrix_limit; rank_row=nothing)
+    if state.view in (:rank_from, :rank_to)
+        chosen = _inspection_rank_anchor(state)
+        row = chosen.label === nothing ? nothing : rank_row === nothing ?
+            _rank_section_row(obj, prepared.dims, chosen.label, chosen.from) : rank_row
+        return (; row, readout=_inspection_readout(obj, prepared.dims, state,
+            graph.metadata.relation, matrix_limit))
+    end
     if state.view === :module
         return (; readout=_inspection_readout(obj, prepared.dims, state,
             graph.metadata.relation, matrix_limit))
@@ -123,6 +139,21 @@ function _inspection_build_snapshot(obj, prepared, state, graph, algebra, matrix
     spec = if state.view === :module
         _module_visual_spec(obj, :module_inspector; prepared, selection=state, graph,
             inspection_data=algebra.readout, matrix_limit, materialized_before)
+    elseif state.view in (:rank_from, :rank_to)
+        chosen = _inspection_rank_anchor(state)
+        if chosen.label === nothing
+            VisualizationSpec(:rank_section; title="Choose a rank anchor",
+                subtitle=chosen.from ? "Fix a source; vary the target." : "Fix a target; vary the source.",
+                panels=[_inspection_text_panel("Select a point or finite vertex",
+                    ["A single selection fixes the anchor.",
+                     "A source/target pair also displays the selected structure map.",
+                     "Unordered points are masked; they do not have rank zero."])],
+                metadata=(; inspection=(; kind=:overview), rank_sections=NamedTuple[],
+                    rank_queries=0, all_pairs_table=false))
+        else
+            _rank_section_snapshot(obj, prepared, [chosen.anchor], chosen.domain,
+                [algebra.row], [state], [algebra.readout])
+        end
     else
         _presentation_visual_spec(obj; prepared, selection=state, graph,
             presentation_data=algebra, matrix_limit, basis=state.basis,
@@ -156,10 +187,19 @@ maps. Supported planar encodings also show their actual classifier geometry.
 `view=:presentation` requires a retained current-poset fringe witness; its
 image coordinates are distinct from the stored module's coordinates.
 
+`view=:rank_from` fixes the source of the ordinary pair rank; `view=:rank_to`
+fixes the target. Select a single point/vertex as anchor, or a source/target
+pair to inspect its actual map alongside the section. Parameter sections mask
+unordered pairs in the original axis orientations, even within one classifier
+fiber. Both coordinates of the chosen endpoint stay fixed. The bounded cache
+retains rank rows/columns, never a full pair table. Changing an exact anchor
+inside a fiber reuses the ranks but rebuilds its order mask.
+
 The optional finite planar `box` fixes the viewport for the session. The
 `matrix_limit` limits displayed entries, not mathematical matrix construction.
 `cache_limit` bounds each of the selected-algebra and selected-slice caches;
 zero disables caching.
+Rank rows/columns share the selected-algebra cache budget with map readouts.
 `upset` and `downset` choose displayed presentation supports, defaulting to the
 first support in each nonempty family. They do not restrict the algebra.
 
@@ -189,7 +229,7 @@ encodings, whose classifiers retain them exactly.
 function inspection_session(obj::Union{Modules.PModule,EncodingResult}; view=:module,
                             box=nothing, matrix_limit=(12,12), cache_limit=16,
                             upset=nothing, downset=nothing, slice=nothing, slice_scope=:window, slice_limit=512)
-    view isa Symbol || throw(ArgumentError("view must be :module or :presentation."))
+    view isa Symbol || throw(ArgumentError("view must name an available inspection view."))
     (matrix_limit isa Tuple || matrix_limit isa AbstractVector) && length(matrix_limit) == 2 ||
         throw(ArgumentError("matrix_limit must contain row and column counts."))
     limit = (_inspection_integer(matrix_limit[1], :matrix_rows; lower=1),
@@ -263,6 +303,7 @@ function inspection_summary(s::InspectionSession)
             module_materialized=get(s.snapshot.metadata, :module_materialized_after, true),
             cost=(; dimensions=:prepared_once, geometry=:prepared_once_when_available,
                 hasse_layout=:prepared_once, selected_algebra=:bounded_cache,
+                rank_sections=:bounded_rows_or_columns_with_exact_order_masks,
                 slices=:exact_event_strata_with_bounded_cache,
                 snapshot=:static, updates=:synchronous)))
     end
@@ -446,13 +487,26 @@ function _inspection_update!(s, candidate_builder)
                     _inspection_slice_result(s.object, s.prepared, state.slice, s.slice_limit; scope=state.slice_scope) : cached_slice)
             _inspection_slice_validate_interval(slice_result, state.interval)
             graph = _inspection_graph(s.object, s.prepared, state)
+            # Rank rows depend on finite labels; their geometric order mask
+            # depends on exact parameters and is rebuilt for every snapshot.
+            rank_key = nothing
+            cached_row = nothing
+            if state.view in (:rank_from, :rank_to) && selected
+                anchor = _inspection_rank_anchor(state)
+                rank_key = (anchor.from ? :rank_from_values : :rank_to_values,
+                    anchor.label, nothing, :not_applicable, false)
+                cached_row = get(s.cache, rank_key, nothing)
+            end
             algebra = cached === nothing ?
-                _inspection_algebra(s.object, s.prepared, state, graph, s.matrix_limit) : cached
+                _inspection_algebra(s.object, s.prepared, state, graph, s.matrix_limit;
+                    rank_row=cached_row) : cached
             snapshot = _inspection_build_snapshot(s.object, s.prepared, state, graph, algebra, s.matrix_limit;
                 materialized_before, slice_result)
             # Commit only after every mathematical and display operation has
             # succeeded. Underlying owners may maintain their own benign caches.
             selected && _inspection_commit_cache!(s, key, algebra, cached !== nothing)
+            rank_key === nothing || _inspection_commit_cache!(s, rank_key, algebra.row,
+                cached_row !== nothing || cached !== nothing)
             slice_requested && _inspection_commit_slice_cache!(s, slice_key, slice_result, cached_slice !== nothing)
             s.slice_result = slice_result
             s.state, s.snapshot = state, snapshot

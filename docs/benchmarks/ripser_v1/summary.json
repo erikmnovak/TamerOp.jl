@@ -1,0 +1,4264 @@
+{
+  "cases": [
+    {
+      "id": "cloud_circle96_f2",
+      "family": "cloud",
+      "cohort": "development",
+      "n": 96,
+      "prime": 2,
+      "degree": 1,
+      "cocycles": false,
+      "landmarks": null,
+      "shape": "circle",
+      "status": "verified",
+      "tamerop_seconds": 0.005805637,
+      "tamerop_construction_seconds": 4.365e-06,
+      "tamerop_construction_plus_query_seconds": 0.0058103435,
+      "tamerop_pass_medians": [
+        {
+          "seconds": 0.004663483,
+          "construction_seconds": 3.743e-06,
+          "construction_plus_query_seconds": 0.0046670850000000005
+        },
+        {
+          "seconds": 0.006243695,
+          "construction_seconds": 4.207e-06,
+          "construction_plus_query_seconds": 0.006249182
+        },
+        {
+          "seconds": 0.011337899,
+          "construction_seconds": 8.155e-06,
+          "construction_plus_query_seconds": 0.011346054
+        },
+        {
+          "seconds": 0.005367579,
+          "construction_seconds": 4.523e-06,
+          "construction_plus_query_seconds": 0.0053715049999999995
+        }
+      ],
+      "tamerop_retained_output_bytes_estimate": 2872.0,
+      "tamerop_rss_bytes": 2052710400,
+      "tamerop_allocation_bytes": 2039488.0,
+      "ripser_seconds": 0.01995667449955363,
+      "ripser_construction_seconds": 5.646399949910119e-05,
+      "ripser_construction_plus_query_seconds": 0.02001313849905273,
+      "ripser_pass_medians": [
+        {
+          "seconds": 0.013300241000251845,
+          "construction_seconds": 3.629800630733371e-05,
+          "construction_plus_query_seconds": 0.013336539006559178
+        },
+        {
+          "seconds": 0.02313559099275153,
+          "construction_seconds": 6.162699719425291e-05,
+          "construction_plus_query_seconds": 0.023197217989945784
+        },
+        {
+          "seconds": 0.02526054000190925,
+          "construction_seconds": 6.539800961036235e-05,
+          "construction_plus_query_seconds": 0.025328349001938477
+        },
+        {
+          "seconds": 0.016777758006355725,
+          "construction_seconds": 5.1301001803949475e-05,
+          "construction_plus_query_seconds": 0.016829059008159675
+        }
+      ],
+      "ripser_retained_output_bytes_estimate": 75879.0,
+      "ripser_rss_bytes": 288915456,
+      "ratio_seconds": 2.9289596546696024,
+      "ratio_seconds_pass_range": [
+        2.227973630908976,
+        3.705432599246365
+      ],
+      "ratio_seconds_passes": [
+        2.8519973162230556,
+        3.705432599246365,
+        2.227973630908976,
+        3.1257589327247395
+      ],
+      "ratio_construction_seconds": 10.66167195743859,
+      "ratio_construction_seconds_pass_range": [
+        8.019375795262091,
+        14.648680103221515
+      ],
+      "ratio_construction_seconds_passes": [
+        9.697570480185334,
+        14.648680103221515,
+        8.019375795262091,
+        11.342251117388786
+      ],
+      "ratio_construction_plus_query_seconds": 2.93483717098349,
+      "ratio_construction_plus_query_seconds_pass_range": [
+        2.23234870924627,
+        3.712040710279487
+      ],
+      "ratio_construction_plus_query_seconds_passes": [
+        2.857573626055488,
+        3.712040710279487,
+        2.23234870924627,
+        3.1330249172549736
+      ],
+      "practical_category": "TamerOp faster",
+      "intervals_by_degree": [
+        96,
+        1
+      ],
+      "interval_count": 97,
+      "exported_witnesses": 0
+    },
+    {
+      "id": "cloud_sphere64_cocycles_f3",
+      "family": "cloud",
+      "cohort": "development",
+      "n": 64,
+      "prime": 3,
+      "degree": 2,
+      "cocycles": true,
+      "landmarks": null,
+      "shape": "sphere",
+      "status": "verified",
+      "tamerop_seconds": 0.013758195,
+      "tamerop_construction_seconds": 3.6804999999999997e-06,
+      "tamerop_construction_plus_query_seconds": 0.0137616925,
+      "tamerop_pass_medians": [
+        {
+          "seconds": 0.010083032,
+          "construction_seconds": 3.244e-06,
+          "construction_plus_query_seconds": 0.010086169
+        },
+        {
+          "seconds": 0.013881518,
+          "construction_seconds": 4.093e-06,
+          "construction_plus_query_seconds": 0.013885340000000001
+        },
+        {
+          "seconds": 0.021907585,
+          "construction_seconds": 5.893e-06,
+          "construction_plus_query_seconds": 0.021914704
+        },
+        {
+          "seconds": 0.013634872,
+          "construction_seconds": 3.268e-06,
+          "construction_plus_query_seconds": 0.013638045
+        }
+      ],
+      "tamerop_retained_output_bytes_estimate": 115008.0,
+      "tamerop_rss_bytes": 2052710400,
+      "tamerop_allocation_bytes": 3777712.0,
+      "ripser_seconds": 0.04178987799969036,
+      "ripser_construction_seconds": 5.330100248102099e-05,
+      "ripser_construction_plus_query_seconds": 0.04184219500166364,
+      "ripser_pass_medians": [
+        {
+          "seconds": 0.02905842500331346,
+          "construction_seconds": 3.542799095157534e-05,
+          "construction_plus_query_seconds": 0.029096231010043994
+        },
+        {
+          "seconds": 0.04795808999915607,
+          "construction_seconds": 5.893799243494868e-05,
+          "construction_plus_query_seconds": 0.04801759899419267
+        },
+        {
+          "seconds": 0.055175208995933644,
+          "construction_seconds": 6.075199053157121e-05,
+          "construction_plus_query_seconds": 0.055235960986465216
+        },
+        {
+          "seconds": 0.03562166600022465,
+          "construction_seconds": 4.766401252709329e-05,
+          "construction_plus_query_seconds": 0.03566679100913461
+        }
+      ],
+      "ripser_retained_output_bytes_estimate": 37191.0,
+      "ripser_rss_bytes": 288915456,
+      "ratio_seconds": 2.844982647204907,
+      "ratio_seconds_pass_range": [
+        2.518543645770798,
+        3.4548159645909093
+      ],
+      "ratio_seconds_passes": [
+        2.8819133970132653,
+        3.4548159645909093,
+        2.518543645770798,
+        2.612541283865712
+      ],
+      "ratio_construction_seconds": 12.400465093895367,
+      "ratio_construction_seconds_pass_range": [
+        10.309178776781131,
+        14.585071152721326
+      ],
+      "ratio_construction_seconds_passes": [
+        10.92108229086786,
+        14.399704968225919,
+        10.309178776781131,
+        14.585071152721326
+      ],
+      "ratio_construction_plus_query_seconds": 2.8476601651076305,
+      "ratio_construction_plus_query_seconds_pass_range": [
+        2.520497698096457,
+        3.458150754262601
+      ],
+      "ratio_construction_plus_query_seconds_passes": [
+        2.8847653663193618,
+        3.458150754262601,
+        2.520497698096457,
+        2.61524221463814
+      ],
+      "practical_category": "TamerOp faster",
+      "intervals_by_degree": [
+        64,
+        16,
+        1
+      ],
+      "interval_count": 81,
+      "exported_witnesses": 7
+    },
+    {
+      "id": "cloud_sphere128_f101",
+      "family": "cloud",
+      "cohort": "development",
+      "n": 128,
+      "prime": 101,
+      "degree": 2,
+      "cocycles": false,
+      "landmarks": null,
+      "shape": "sphere",
+      "status": "verified",
+      "tamerop_seconds": 0.1564310925,
+      "tamerop_construction_seconds": 0.00025384400000000003,
+      "tamerop_construction_plus_query_seconds": 0.1567739585,
+      "tamerop_pass_medians": [
+        {
+          "seconds": 0.117868387,
+          "construction_seconds": 0.000180421,
+          "construction_plus_query_seconds": 0.118120976
+        },
+        {
+          "seconds": 0.168263449,
+          "construction_seconds": 0.000245941,
+          "construction_plus_query_seconds": 0.16850879700000002
+        },
+        {
+          "seconds": 0.264815094,
+          "construction_seconds": 0.000265518,
+          "construction_plus_query_seconds": 0.265090232
+        },
+        {
+          "seconds": 0.144598736,
+          "construction_seconds": 0.000261747,
+          "construction_plus_query_seconds": 0.14503912
+        }
+      ],
+      "tamerop_retained_output_bytes_estimate": 5096.0,
+      "tamerop_rss_bytes": 2306940928,
+      "tamerop_allocation_bytes": 56840936.0,
+      "ripser_seconds": 0.529771872497804,
+      "ripser_construction_seconds": 7.03055047779344e-05,
+      "ripser_construction_plus_query_seconds": 0.5298420389954117,
+      "ripser_pass_medians": [
+        {
+          "seconds": 0.34765901300124824,
+          "construction_seconds": 5.490200419444591e-05,
+          "construction_plus_query_seconds": 0.34772095100197475
+        },
+        {
+          "seconds": 0.598027143991203,
+          "construction_seconds": 7.74100044509396e-05,
+          "construction_plus_query_seconds": 0.598104553995654
+        },
+        {
+          "seconds": 0.6802388060023077,
+          "construction_seconds": 8.413600153289735e-05,
+          "construction_plus_query_seconds": 0.680323207998299
+        },
+        {
+          "seconds": 0.46151660100440495,
+          "construction_seconds": 6.320100510492921e-05,
+          "construction_plus_query_seconds": 0.46157952399516944
+        }
+      ],
+      "ripser_retained_output_bytes_estimate": 133671.0,
+      "ripser_rss_bytes": 290066432,
+      "ratio_seconds": 3.0447889191009434,
+      "ratio_seconds_pass_range": [
+        2.5687312446106554,
+        3.5541120043914174
+      ],
+      "ratio_seconds_passes": [
+        2.9495526480840724,
+        3.5541120043914174,
+        2.5687312446106554,
+        3.1917056384531945
+      ],
+      "ratio_construction_seconds": 0.2925831834796472,
+      "ratio_construction_seconds_pass_range": [
+        0.24145837432684694,
+        0.3168749445721094
+      ],
+      "ratio_construction_seconds_passes": [
+        0.3042994119001996,
+        0.31475030373520313,
+        0.3168749445721094,
+        0.24145837432684694
+      ],
+      "ratio_construction_plus_query_seconds": 3.0393822702846998,
+      "ratio_construction_plus_query_seconds_pass_range": [
+        2.566383539919717,
+        3.549396616935399
+      ],
+      "ratio_construction_plus_query_seconds_passes": [
+        2.943769707778022,
+        3.549396616935399,
+        2.566383539919717,
+        3.182448459389229
+      ],
+      "practical_category": "TamerOp faster",
+      "intervals_by_degree": [
+        128,
+        37,
+        1
+      ],
+      "interval_count": 166,
+      "exported_witnesses": 0
+    },
+    {
+      "id": "dense_circle1024_f2",
+      "family": "dense",
+      "cohort": "development",
+      "n": 1024,
+      "prime": 2,
+      "degree": 1,
+      "cocycles": false,
+      "landmarks": null,
+      "shape": "circle",
+      "status": "verified",
+      "tamerop_seconds": 7.0133622175,
+      "tamerop_construction_seconds": 0.010539748,
+      "tamerop_construction_plus_query_seconds": 7.0239419210000005,
+      "tamerop_pass_medians": [
+        {
+          "seconds": 4.91957943,
+          "construction_seconds": 0.008314457,
+          "construction_plus_query_seconds": 4.927504684
+        },
+        {
+          "seconds": 7.359873843,
+          "construction_seconds": 0.010834311,
+          "construction_plus_query_seconds": 7.370438513
+        },
+        {
+          "seconds": 9.432905104,
+          "construction_seconds": 0.010275702,
+          "construction_plus_query_seconds": 9.442169044
+        },
+        {
+          "seconds": 6.666850592,
+          "construction_seconds": 0.010803794,
+          "construction_plus_query_seconds": 6.677445329
+        }
+      ],
+      "tamerop_retained_output_bytes_estimate": 22616.0,
+      "tamerop_rss_bytes": 2394267648,
+      "tamerop_allocation_bytes": 1130721264.0,
+      "ripser_seconds": 30.39034863049892,
+      "ripser_construction_seconds": 0.024096960500173736,
+      "ripser_construction_plus_query_seconds": 30.413896928999748,
+      "ripser_pass_medians": [
+        {
+          "seconds": 27.62269371098955,
+          "construction_seconds": 0.0244022609986132,
+          "construction_plus_query_seconds": 27.646243433991913
+        },
+        {
+          "seconds": 33.15800355000829,
+          "construction_seconds": 0.02379166000173427,
+          "construction_plus_query_seconds": 33.18155042400758
+        },
+        {
+          "seconds": 40.46932986700267,
+          "construction_seconds": 0.04390732100000605,
+          "construction_plus_query_seconds": 40.510585496012936
+        },
+        {
+          "seconds": 26.28412590100197,
+          "construction_seconds": 0.023637546997633763,
+          "construction_plus_query_seconds": 26.30966714800161
+        }
+      ],
+      "ripser_retained_output_bytes_estimate": 8398183.0,
+      "ripser_rss_bytes": 314167296,
+      "ratio_seconds": 4.548072243716883,
+      "ratio_seconds_pass_range": [
+        3.9425101160272065,
+        5.614848607290309
+      ],
+      "ratio_seconds_passes": [
+        5.614848607290309,
+        4.505240749682819,
+        4.290229724652033,
+        3.9425101160272065
+      ],
+      "ratio_construction_seconds": 2.786074934572508,
+      "ratio_construction_seconds_pass_range": [
+        2.187893160276266,
+        4.272926657468857
+      ],
+      "ratio_construction_seconds_passes": [
+        2.9349193818205084,
+        2.195955054431636,
+        4.272926657468857,
+        2.187893160276266
+      ],
+      "ratio_construction_plus_query_seconds": 4.545729069062838,
+      "ratio_construction_plus_query_seconds_pass_range": [
+        3.9400797538153243,
+        5.610597088575373
+      ],
+      "ratio_construction_plus_query_seconds_passes": [
+        5.610597088575373,
+        4.501977781305939,
+        4.290389772438492,
+        3.9400797538153243
+      ],
+      "practical_category": "TamerOp faster",
+      "intervals_by_degree": [
+        1024,
+        1
+      ],
+      "interval_count": 1025,
+      "exported_witnesses": 0
+    },
+    {
+      "id": "dense_sphere96_cocycles_f3",
+      "family": "dense",
+      "cohort": "development",
+      "n": 96,
+      "prime": 3,
+      "degree": 2,
+      "cocycles": true,
+      "landmarks": null,
+      "shape": "sphere",
+      "status": "verified",
+      "tamerop_seconds": 0.0395884625,
+      "tamerop_construction_seconds": 0.00027768949999999997,
+      "tamerop_construction_plus_query_seconds": 0.0398724815,
+      "tamerop_pass_medians": [
+        {
+          "seconds": 0.027812925,
+          "construction_seconds": 0.000230958,
+          "construction_plus_query_seconds": 0.028043883
+        },
+        {
+          "seconds": 0.04295002,
+          "construction_seconds": 0.000293012,
+          "construction_plus_query_seconds": 0.043255079
+        },
+        {
+          "seconds": 0.059798588,
+          "construction_seconds": 0.000262367,
+          "construction_plus_query_seconds": 0.060060955
+        },
+        {
+          "seconds": 0.036226905,
+          "construction_seconds": 0.000315587,
+          "construction_plus_query_seconds": 0.036489884
+        }
+      ],
+      "tamerop_retained_output_bytes_estimate": 228288.0,
+      "tamerop_rss_bytes": 2297937920,
+      "tamerop_allocation_bytes": 12233448.0,
+      "ripser_seconds": 0.1620056405008654,
+      "ripser_construction_seconds": 0.0002653210030985065,
+      "ripser_construction_plus_query_seconds": 0.16227284400520148,
+      "ripser_pass_medians": [
+        {
+          "seconds": 0.14757948099577334,
+          "construction_seconds": 0.0002422290126560256,
+          "construction_plus_query_seconds": 0.14782171000842936
+        },
+        {
+          "seconds": 0.17547896099858917,
+          "construction_seconds": 0.000265256006969139,
+          "construction_plus_query_seconds": 0.1757442170055583
+        },
+        {
+          "seconds": 0.21574518900888506,
+          "construction_seconds": 0.00044765400525648147,
+          "construction_plus_query_seconds": 0.21619284301414154
+        },
+        {
+          "seconds": 0.14853232000314165,
+          "construction_seconds": 0.000265385999227874,
+          "construction_plus_query_seconds": 0.14880147100484464
+        }
+      ],
+      "ripser_retained_output_bytes_estimate": 80455.0,
+      "ripser_rss_bytes": 288915456,
+      "ratio_seconds": 4.231752215438053,
+      "ratio_seconds_pass_range": [
+        3.6078642694520657,
+        5.306147447482541
+      ],
+      "ratio_seconds_passes": [
+        5.306147447482541,
+        4.085654930977661,
+        3.6078642694520657,
+        4.1000554699094955
+      ],
+      "ratio_construction_seconds": 1.0803544977327995,
+      "ratio_construction_seconds_pass_range": [
+        0.8409281726683101,
+        1.7062130727434528
+      ],
+      "ratio_construction_seconds_passes": [
+        1.0488011355139273,
+        0.9052735279413096,
+        1.7062130727434528,
+        0.8409281726683101
+      ],
+      "ratio_construction_plus_query_seconds": 4.2107257627898935,
+      "ratio_construction_plus_query_seconds_pass_range": [
+        3.5995572000835074,
+        5.271085676988075
+      ],
+      "ratio_construction_plus_query_seconds_passes": [
+        5.271085676988075,
+        4.062972974932222,
+        3.5995572000835074,
+        4.077882818285874
+      ],
+      "practical_category": "TamerOp faster",
+      "intervals_by_degree": [
+        96,
+        30,
+        2
+      ],
+      "interval_count": 128,
+      "exported_witnesses": 8
+    },
+    {
+      "id": "dense_planar128_f101",
+      "family": "dense",
+      "cohort": "development",
+      "n": 128,
+      "prime": 101,
+      "degree": 2,
+      "cocycles": false,
+      "landmarks": null,
+      "shape": "planar",
+      "status": "verified",
+      "tamerop_seconds": 0.0293180855,
+      "tamerop_construction_seconds": 0.0002726645,
+      "tamerop_construction_plus_query_seconds": 0.0296027065,
+      "tamerop_pass_medians": [
+        {
+          "seconds": 0.019765489,
+          "construction_seconds": 0.000223055,
+          "construction_plus_query_seconds": 0.020004281999999998
+        },
+        {
+          "seconds": 0.029677983,
+          "construction_seconds": 0.00029547,
+          "construction_plus_query_seconds": 0.029973453
+        },
+        {
+          "seconds": 0.044379969,
+          "construction_seconds": 0.000269168,
+          "construction_plus_query_seconds": 0.044667909
+        },
+        {
+          "seconds": 0.028958188,
+          "construction_seconds": 0.000276161,
+          "construction_plus_query_seconds": 0.029231959999999998
+        }
+      ],
+      "tamerop_retained_output_bytes_estimate": 3448.0,
+      "tamerop_rss_bytes": 2029809664,
+      "tamerop_allocation_bytes": 11219904.0,
+      "ripser_seconds": 0.13258337399747688,
+      "ripser_construction_seconds": 0.00042068250331794843,
+      "ripser_construction_plus_query_seconds": 0.13299985949561233,
+      "ripser_pass_medians": [
+        {
+          "seconds": 0.13118583901086822,
+          "construction_seconds": 0.00041414199222344905,
+          "construction_plus_query_seconds": 0.13160138700914104
+        },
+        {
+          "seconds": 0.13258387299720198,
+          "construction_seconds": 0.0004182030097581446,
+          "construction_plus_query_seconds": 0.13299660600023344
+        },
+        {
+          "seconds": 0.18425067298812792,
+          "construction_seconds": 0.0007838129968149588,
+          "construction_plus_query_seconds": 0.18504511899664067
+        },
+        {
+          "seconds": 0.1325828749977518,
+          "construction_seconds": 0.00042316199687775224,
+          "construction_plus_query_seconds": 0.1330031129909912
+        }
+      ],
+      "ripser_retained_output_bytes_estimate": 133671.0,
+      "ripser_rss_bytes": 288915456,
+      "ratio_seconds": 4.872405925668347,
+      "ratio_seconds_pass_range": [
+        4.151662949294262,
+        6.63711578351885
+      ],
+      "ratio_seconds_passes": [
+        6.63711578351885,
+        4.467415221485974,
+        4.151662949294262,
+        4.578424416532961
+      ],
+      "ratio_construction_seconds": 1.8504872745303165,
+      "ratio_construction_seconds_pass_range": [
+        1.4153823053377488,
+        2.911984325086781
+      ],
+      "ratio_construction_seconds_passes": [
+        1.8566810527603015,
+        1.4153823053377488,
+        2.911984325086781,
+        1.5323017981458362
+      ],
+      "ratio_construction_plus_query_seconds": 4.843193158911902,
+      "ratio_construction_plus_query_seconds_pass_range": [
+        4.142685949249173,
+        6.578660859167105
+      ],
+      "ratio_construction_plus_query_seconds_passes": [
+        6.578660859167105,
+        4.437146631061608,
+        4.142685949249173,
+        4.549921147640843
+      ],
+      "practical_category": "TamerOp faster",
+      "intervals_by_degree": [
+        128,
+        26,
+        0
+      ],
+      "interval_count": 154,
+      "exported_witnesses": 0
+    },
+    {
+      "id": "sparse_grid16_f2",
+      "family": "sparse",
+      "cohort": "development",
+      "n": 256,
+      "prime": 2,
+      "degree": 1,
+      "cocycles": false,
+      "landmarks": null,
+      "shape": "grid",
+      "status": "verified",
+      "tamerop_seconds": 0.000469475,
+      "tamerop_construction_seconds": 0.000116314,
+      "tamerop_construction_plus_query_seconds": 0.0005853905,
+      "tamerop_pass_medians": [
+        {
+          "seconds": 0.000377916,
+          "construction_seconds": 0.000112072,
+          "construction_plus_query_seconds": 0.000496058
+        },
+        {
+          "seconds": 0.000473848,
+          "construction_seconds": 0.000111275,
+          "construction_plus_query_seconds": 0.000585123
+        },
+        {
+          "seconds": 0.000517634,
+          "construction_seconds": 0.000129046,
+          "construction_plus_query_seconds": 0.00064668
+        },
+        {
+          "seconds": 0.000465102,
+          "construction_seconds": 0.000120556,
+          "construction_plus_query_seconds": 0.000585658
+        }
+      ],
+      "tamerop_retained_output_bytes_estimate": 13472.0,
+      "tamerop_rss_bytes": 2031230976,
+      "tamerop_allocation_bytes": 292960.0,
+      "ripser_seconds": 0.00034124399826396257,
+      "ripser_construction_seconds": 0.00027332249737810344,
+      "ripser_construction_plus_query_seconds": 0.0006176879978738725,
+      "ripser_pass_medians": [
+        {
+          "seconds": 0.00034069899993482977,
+          "construction_seconds": 0.0002654349955264479,
+          "construction_plus_query_seconds": 0.0006126719963504001
+        },
+        {
+          "seconds": 0.0003269440057920292,
+          "construction_seconds": 0.00025187300343532115,
+          "construction_plus_query_seconds": 0.0005757010076195002
+        },
+        {
+          "seconds": 0.0005402980023063719,
+          "construction_seconds": 0.000402291989303194,
+          "construction_plus_query_seconds": 0.0009425899916095659
+        },
+        {
+          "seconds": 0.00034178899659309536,
+          "construction_seconds": 0.000281209999229759,
+          "construction_plus_query_seconds": 0.0006227039993973449
+        }
+      ],
+      "ripser_retained_output_bytes_estimate": 3351.0,
+      "ripser_rss_bytes": 288915456,
+      "ratio_seconds": 0.8311082360750576,
+      "ratio_seconds_pass_range": [
+        0.6899765447823547,
+        1.0437838362749972
+      ],
+      "ratio_seconds_passes": [
+        0.9015204435240365,
+        0.6899765447823547,
+        1.0437838362749972,
+        0.7348689031504817
+      ],
+      "ratio_construction_seconds": 2.498739376736142,
+      "ratio_construction_seconds_pass_range": [
+        2.263518341364378,
+        3.1174309107077627
+      ],
+      "ratio_construction_seconds_passes": [
+        2.3684327532876,
+        2.263518341364378,
+        3.1174309107077627,
+        2.3326089056518047
+      ],
+      "ratio_construction_plus_query_seconds": 1.1714643870692285,
+      "ratio_construction_plus_query_seconds_pass_range": [
+        0.9838974157903555,
+        1.4575833358223016
+      ],
+      "ratio_construction_plus_query_seconds_passes": [
+        1.2350813742554303,
+        0.9838974157903555,
+        1.4575833358223016,
+        1.063255345948224
+      ],
+      "practical_category": "Ripser.py faster",
+      "intervals_by_degree": [
+        256,
+        225
+      ],
+      "interval_count": 481,
+      "exported_witnesses": 0
+    },
+    {
+      "id": "sparse_cycle96_cocycles_f3",
+      "family": "sparse",
+      "cohort": "development",
+      "n": 96,
+      "prime": 3,
+      "degree": 1,
+      "cocycles": true,
+      "landmarks": null,
+      "shape": "cycle",
+      "status": "verified",
+      "tamerop_seconds": 0.0003633695,
+      "tamerop_construction_seconds": 7.5135e-06,
+      "tamerop_construction_plus_query_seconds": 0.0003707785,
+      "tamerop_pass_medians": [
+        {
+          "seconds": 0.000333894,
+          "construction_seconds": 7.167e-06,
+          "construction_plus_query_seconds": 0.000341061
+        },
+        {
+          "seconds": 0.000373654,
+          "construction_seconds": 7.86e-06,
+          "construction_plus_query_seconds": 0.000381319
+        },
+        {
+          "seconds": 0.000394695,
+          "construction_seconds": 7.931e-06,
+          "construction_plus_query_seconds": 0.00040262599999999995
+        },
+        {
+          "seconds": 0.000353085,
+          "construction_seconds": 7.153e-06,
+          "construction_plus_query_seconds": 0.000360238
+        }
+      ],
+      "tamerop_retained_output_bytes_estimate": 44976.0,
+      "tamerop_rss_bytes": 2031308800,
+      "tamerop_allocation_bytes": 185888.0,
+      "ripser_seconds": 0.0001443874934921041,
+      "ripser_construction_seconds": 0.00019273600628366694,
+      "ripser_construction_plus_query_seconds": 0.000336895500367973,
+      "ripser_pass_medians": [
+        {
+          "seconds": 0.0001402280031470582,
+          "construction_seconds": 0.00018896300753112882,
+          "construction_plus_query_seconds": 0.000329191010678187
+        },
+        {
+          "seconds": 0.0001448299881303683,
+          "construction_seconds": 0.00018850700871553272,
+          "construction_plus_query_seconds": 0.000333336996845901
+        },
+        {
+          "seconds": 0.00020926599972881377,
+          "construction_seconds": 0.00030082800367381424,
+          "construction_plus_query_seconds": 0.0005062700074631721
+        },
+        {
+          "seconds": 0.00014394499885383993,
+          "construction_seconds": 0.00019650900503620505,
+          "construction_plus_query_seconds": 0.000340454003890045
+        }
+      ],
+      "ripser_retained_output_bytes_estimate": 2231.0,
+      "ripser_rss_bytes": 288915456,
+      "ratio_seconds": 0.4331041434735771,
+      "ratio_seconds_pass_range": [
+        0.38760454358943913,
+        0.5301967335000792
+      ],
+      "ratio_seconds_passes": [
+        0.4199776071060222,
+        0.38760454358943913,
+        0.5301967335000792,
+        0.40767803462010543
+      ],
+      "ratio_construction_seconds": 28.490969111124503,
+      "ratio_construction_seconds_pass_range": [
+        23.98307998925353,
+        37.93065233562151
+      ],
+      "ratio_construction_seconds_passes": [
+        26.36570497155418,
+        23.98307998925353,
+        37.93065233562151,
+        27.472250109912633
+      ],
+      "ratio_construction_plus_query_seconds": 1.0006681371316737,
+      "ratio_construction_plus_query_seconds_pass_range": [
+        0.8741683389652783,
+        1.2574200559903537
+      ],
+      "ratio_construction_plus_query_seconds_passes": [
+        0.9651968729294379,
+        0.8741683389652783,
+        1.2574200559903537,
+        0.9450807629679406
+      ],
+      "practical_category": "Ripser.py faster",
+      "intervals_by_degree": [
+        96,
+        1
+      ],
+      "interval_count": 97,
+      "exported_witnesses": 1
+    },
+    {
+      "id": "sparse_octa16_cocycles_f101",
+      "family": "sparse",
+      "cohort": "development",
+      "n": 96,
+      "prime": 101,
+      "degree": 2,
+      "cocycles": true,
+      "landmarks": null,
+      "shape": "octa",
+      "status": "verified",
+      "tamerop_seconds": 0.0005979,
+      "tamerop_construction_seconds": 0.00011680599999999999,
+      "tamerop_construction_plus_query_seconds": 0.0007498235,
+      "tamerop_pass_medians": [
+        {
+          "seconds": 0.00053478,
+          "construction_seconds": 0.000102624,
+          "construction_plus_query_seconds": 0.000637404
+        },
+        {
+          "seconds": 0.000645491,
+          "construction_seconds": 0.000130988,
+          "construction_plus_query_seconds": 0.000889403
+        },
+        {
+          "seconds": 0.00063302,
+          "construction_seconds": 9.8629e-05,
+          "construction_plus_query_seconds": 0.000746873
+        },
+        {
+          "seconds": 0.00056278,
+          "construction_seconds": 0.000156839,
+          "construction_plus_query_seconds": 0.000752774
+        }
+      ],
+      "tamerop_retained_output_bytes_estimate": 49456.0,
+      "tamerop_rss_bytes": 2031468544,
+      "tamerop_allocation_bytes": 324992.0,
+      "ripser_seconds": 0.0004988175060134381,
+      "ripser_construction_seconds": 0.0002230555037385784,
+      "ripser_construction_plus_query_seconds": 0.0007237610116135329,
+      "ripser_pass_medians": [
+        {
+          "seconds": 0.0005007880099583417,
+          "construction_seconds": 0.00020615500397980213,
+          "construction_plus_query_seconds": 0.0007138120126910508
+        },
+        {
+          "seconds": 0.0004904329980490729,
+          "construction_seconds": 0.0002075910015264526,
+          "construction_plus_query_seconds": 0.0006980239995755255
+        },
+        {
+          "seconds": 0.0007348369981627911,
+          "construction_seconds": 0.00031321200367528945,
+          "construction_plus_query_seconds": 0.0010433309944346547
+        },
+        {
+          "seconds": 0.0004968470020685345,
+          "construction_seconds": 0.00023852000595070422,
+          "construction_plus_query_seconds": 0.000733710010536015
+        }
+      ],
+      "ripser_retained_output_bytes_estimate": 4439.0,
+      "ripser_rss_bytes": 288915456,
+      "ratio_seconds": 0.9240733908191348,
+      "ratio_seconds_pass_range": [
+        0.7597828599454879,
+        1.1608432563944127
+      ],
+      "ratio_seconds_passes": [
+        0.9364374321372185,
+        0.7597828599454879,
+        1.1608432563944127,
+        0.8828440990591963
+      ],
+      "ratio_construction_seconds": 1.9801888812920856,
+      "ratio_construction_seconds_pass_range": [
+        1.5207952483164533,
+        3.1756583122133395
+      ],
+      "ratio_construction_seconds_passes": [
+        2.008838127336706,
+        1.5848093071613631,
+        3.1756583122133395,
+        1.5207952483164533
+      ],
+      "ratio_construction_plus_query_seconds": 1.0459092503319767,
+      "ratio_construction_plus_query_seconds_pass_range": [
+        0.7848230774750317,
+        1.3969322688524752
+      ],
+      "ratio_construction_plus_query_seconds_passes": [
+        1.1198737577596793,
+        0.7848230774750317,
+        1.3969322688524752,
+        0.9746750160553035
+      ],
+      "practical_category": "similar",
+      "intervals_by_degree": [
+        96,
+        0,
+        16
+      ],
+      "interval_count": 112,
+      "exported_witnesses": 6
+    },
+    {
+      "id": "weighted_grid16_cocycles_f2",
+      "family": "weighted",
+      "cohort": "development",
+      "n": 256,
+      "prime": 2,
+      "degree": 1,
+      "cocycles": true,
+      "landmarks": null,
+      "shape": "grid",
+      "status": "verified",
+      "tamerop_seconds": 0.0007944919999999999,
+      "tamerop_construction_seconds": 0.0003533125,
+      "tamerop_construction_plus_query_seconds": 0.0011347815,
+      "tamerop_pass_medians": [
+        {
+          "seconds": 0.000712162,
+          "construction_seconds": 0.000478379,
+          "construction_plus_query_seconds": 0.001155443
+        },
+        {
+          "seconds": 0.000856184,
+          "construction_seconds": 0.000228246,
+          "construction_plus_query_seconds": 0.0011141200000000001
+        },
+        {
+          "seconds": 0.000868872,
+          "construction_seconds": 0.000536619,
+          "construction_plus_query_seconds": 0.0013829480000000002
+        },
+        {
+          "seconds": 0.0007328,
+          "construction_seconds": 0.000187688,
+          "construction_plus_query_seconds": 0.000907306
+        }
+      ],
+      "tamerop_retained_output_bytes_estimate": 202488.0,
+      "tamerop_rss_bytes": 2031775744,
+      "tamerop_allocation_bytes": 913368.0,
+      "ripser_seconds": 0.001256687995919492,
+      "ripser_construction_seconds": 0.0003282549951109104,
+      "ripser_construction_plus_query_seconds": 0.0015685719990869984,
+      "ripser_pass_medians": [
+        {
+          "seconds": 0.001215590993524529,
+          "construction_seconds": 0.0003156769962515682,
+          "construction_plus_query_seconds": 0.0015343549894168973
+        },
+        {
+          "seconds": 0.0012592279963428155,
+          "construction_seconds": 0.0003028189967153594,
+          "construction_plus_query_seconds": 0.0015497569984290749
+        },
+        {
+          "seconds": 0.0022545879910467193,
+          "construction_seconds": 0.0004913599987048656,
+          "construction_plus_query_seconds": 0.0027520479925442487
+        },
+        {
+          "seconds": 0.0012541479954961687,
+          "construction_seconds": 0.0003408329939702526,
+          "construction_plus_query_seconds": 0.001587386999744922
+        }
+      ],
+      "ripser_retained_output_bytes_estimate": 34007.0,
+      "ripser_rss_bytes": 289947648,
+      "ratio_seconds": 1.8272802651962232,
+      "ratio_seconds_pass_range": [
+        1.4707446020280868,
+        2.5948447999782696
+      ],
+      "ratio_seconds_passes": [
+        1.706902353010311,
+        1.4707446020280868,
+        2.5948447999782696,
+        1.7114465004041604
+      ],
+      "ratio_construction_seconds": 1.0984300647087395,
+      "ratio_construction_seconds_pass_range": [
+        0.6598889086928318,
+        1.8159551701241026
+      ],
+      "ratio_construction_seconds_passes": [
+        0.6598889086928318,
+        1.3267220311215064,
+        0.9156589660538773,
+        1.8159551701241026
+      ],
+      "ratio_construction_plus_query_seconds": 1.5924728514603097,
+      "ratio_construction_plus_query_seconds_pass_range": [
+        1.3279365485072803,
+        1.9899866029266815
+      ],
+      "ratio_construction_plus_query_seconds_passes": [
+        1.3279365485072803,
+        1.3910144315056499,
+        1.9899866029266815,
+        1.749560787369335
+      ],
+      "practical_category": "TamerOp faster",
+      "intervals_by_degree": [
+        256,
+        225
+      ],
+      "interval_count": 481,
+      "exported_witnesses": 6
+    },
+    {
+      "id": "weighted_grid64_f2",
+      "family": "weighted",
+      "cohort": "development",
+      "n": 4096,
+      "prime": 2,
+      "degree": 1,
+      "cocycles": false,
+      "landmarks": null,
+      "shape": "grid",
+      "status": "verified",
+      "tamerop_seconds": 0.004155733,
+      "tamerop_construction_seconds": 0.000405735,
+      "tamerop_construction_plus_query_seconds": 0.004566759,
+      "tamerop_pass_medians": [
+        {
+          "seconds": 0.003042241,
+          "construction_seconds": 0.000340413,
+          "construction_plus_query_seconds": 0.0034231590000000003
+        },
+        {
+          "seconds": 0.004239459,
+          "construction_seconds": 0.000449334,
+          "construction_plus_query_seconds": 0.004709205
+        },
+        {
+          "seconds": 0.004072007,
+          "construction_seconds": 0.000378802,
+          "construction_plus_query_seconds": 0.004450809
+        },
+        {
+          "seconds": 0.004250041,
+          "construction_seconds": 0.000432668,
+          "construction_plus_query_seconds": 0.004682709
+        }
+      ],
+      "tamerop_retained_output_bytes_estimate": 190240.0,
+      "tamerop_rss_bytes": 2031849472,
+      "tamerop_allocation_bytes": 5657480.0,
+      "ripser_seconds": 0.004148487496422604,
+      "ripser_construction_seconds": 0.0018373790007899515,
+      "ripser_construction_plus_query_seconds": 0.005985866497212555,
+      "ripser_pass_medians": [
+        {
+          "seconds": 0.004047515991260298,
+          "construction_seconds": 0.0017818539927247912,
+          "construction_plus_query_seconds": 0.005849298002431169
+        },
+        {
+          "seconds": 0.004149749991483986,
+          "construction_seconds": 0.0018191919953096658,
+          "construction_plus_query_seconds": 0.005968941986793652
+        },
+        {
+          "seconds": 0.007079171002260409,
+          "construction_seconds": 0.00310660399554763,
+          "construction_plus_query_seconds": 0.010167066007852554
+        },
+        {
+          "seconds": 0.004147225001361221,
+          "construction_seconds": 0.0018555660062702373,
+          "construction_plus_query_seconds": 0.006002791007631458
+        }
+      ],
+      "ripser_retained_output_bytes_estimate": 34071.0,
+      "ripser_rss_bytes": 289947648,
+      "ratio_seconds": 1.2191614007831977,
+      "ratio_seconds_pass_range": [
+        0.9758082336996797,
+        1.7384967664005513
+      ],
+      "ratio_seconds_passes": [
+        1.330438972869111,
+        0.9788395150145305,
+        1.7384967664005513,
+        0.9758082336996797
+      ],
+      "ratio_construction_seconds": 5.225076150120186,
+      "ratio_construction_seconds_pass_range": [
+        4.048640866949008,
+        8.2011288101637
+      ],
+      "ratio_construction_seconds_passes": [
+        5.2343887945665735,
+        4.048640866949008,
+        8.2011288101637,
+        4.288660141887631
+      ],
+      "ratio_construction_plus_query_seconds": 1.5869373948918304,
+      "ratio_construction_plus_query_seconds_pass_range": [
+        1.2675052342791728,
+        2.284318650351555
+      ],
+      "ratio_construction_plus_query_seconds_passes": [
+        1.708742714677048,
+        1.2675052342791728,
+        2.284318650351555,
+        1.2819056250626417
+      ],
+      "practical_category": "TamerOp faster",
+      "intervals_by_degree": [
+        4096,
+        3969
+      ],
+      "interval_count": 8065,
+      "exported_witnesses": 0
+    },
+    {
+      "id": "weighted_octa16_cocycles_f101",
+      "family": "weighted",
+      "cohort": "development",
+      "n": 96,
+      "prime": 101,
+      "degree": 2,
+      "cocycles": true,
+      "landmarks": null,
+      "shape": "octa",
+      "status": "verified",
+      "tamerop_seconds": 0.0006578160000000001,
+      "tamerop_construction_seconds": 0.00012457199999999999,
+      "tamerop_construction_plus_query_seconds": 0.0007876615,
+      "tamerop_pass_medians": [
+        {
+          "seconds": 0.000549829,
+          "construction_seconds": 0.000114502,
+          "construction_plus_query_seconds": 0.000692932
+        },
+        {
+          "seconds": 0.000693977,
+          "construction_seconds": 0.000134642,
+          "construction_plus_query_seconds": 0.000813424
+        },
+        {
+          "seconds": 0.000705352,
+          "construction_seconds": 0.00011256,
+          "construction_plus_query_seconds": 0.00086986
+        },
+        {
+          "seconds": 0.000621655,
+          "construction_seconds": 0.000145441,
+          "construction_plus_query_seconds": 0.0007618989999999999
+        }
+      ],
+      "tamerop_retained_output_bytes_estimate": 52144.0,
+      "tamerop_rss_bytes": 2031927296,
+      "tamerop_allocation_bytes": 329376.0,
+      "ripser_seconds": 0.0005098199981148355,
+      "ripser_construction_seconds": 0.00022699900000588968,
+      "ripser_construction_plus_query_seconds": 0.0007350830055656843,
+      "ripser_pass_medians": [
+        {
+          "seconds": 0.00048657599836587906,
+          "construction_seconds": 0.0002151200023945421,
+          "construction_plus_query_seconds": 0.000703066005371511
+        },
+        {
+          "seconds": 0.0005056679947301745,
+          "construction_seconds": 0.00022391699894797057,
+          "construction_plus_query_seconds": 0.0007261130085680634
+        },
+        {
+          "seconds": 0.000740080009563826,
+          "construction_seconds": 0.0003265619889134541,
+          "construction_plus_query_seconds": 0.0010821560135809705
+        },
+        {
+          "seconds": 0.0005139720014994964,
+          "construction_seconds": 0.0002300810010638088,
+          "construction_plus_query_seconds": 0.0007440530025633052
+        }
+      ],
+      "ripser_retained_output_bytes_estimate": 4439.0,
+      "ripser_rss_bytes": 289947648,
+      "ratio_seconds": 0.8648216592254403,
+      "ratio_seconds_pass_range": [
+        0.7286523829034313,
+        1.0492350054495145
+      ],
+      "ratio_seconds_passes": [
+        0.8849587751207721,
+        0.7286523829034313,
+        1.0492350054495145,
+        0.8267801296530976
+      ],
+      "ratio_construction_seconds": 1.9459757396749597,
+      "ratio_construction_seconds_pass_range": [
+        1.581954201798728,
+        2.9012259142986325
+      ],
+      "ratio_construction_seconds_passes": [
+        1.8787444969916867,
+        1.663054611101815,
+        2.9012259142986325,
+        1.581954201798728
+      ],
+      "ratio_construction_plus_query_seconds": 1.0242003641548758,
+      "ratio_construction_plus_query_seconds_pass_range": [
+        0.8926623858750952,
+        1.2440576800645742
+      ],
+      "ratio_construction_plus_query_seconds_passes": [
+        1.0146248194216907,
+        0.8926623858750952,
+        1.2440576800645742,
+        0.9765769512275319
+      ],
+      "practical_category": "Ripser.py faster",
+      "intervals_by_degree": [
+        96,
+        0,
+        16
+      ],
+      "interval_count": 112,
+      "exported_witnesses": 6
+    },
+    {
+      "id": "landmark_256_32_f2",
+      "family": "landmark",
+      "cohort": "development",
+      "n": 256,
+      "prime": 2,
+      "degree": 1,
+      "cocycles": false,
+      "landmarks": 32,
+      "shape": "planar",
+      "status": "verified",
+      "tamerop_seconds": 0.0005457975,
+      "tamerop_construction_seconds": 0.0005647965,
+      "tamerop_construction_plus_query_seconds": 0.001128754,
+      "tamerop_pass_medians": [
+        {
+          "seconds": 0.00047287,
+          "construction_seconds": 0.000497795,
+          "construction_plus_query_seconds": 0.000970665
+        },
+        {
+          "seconds": 0.000567503,
+          "construction_seconds": 0.000614959,
+          "construction_plus_query_seconds": 0.001182462
+        },
+        {
+          "seconds": 0.000603823,
+          "construction_seconds": 0.000574073,
+          "construction_plus_query_seconds": 0.0011778959999999999
+        },
+        {
+          "seconds": 0.000524092,
+          "construction_seconds": 0.00055552,
+          "construction_plus_query_seconds": 0.001079612
+        }
+      ],
+      "tamerop_retained_output_bytes_estimate": 71800.0,
+      "tamerop_rss_bytes": 2031927296,
+      "tamerop_allocation_bytes": 230608.0,
+      "ripser_seconds": 0.0007205465008155443,
+      "ripser_construction_seconds": 0.001609537001058925,
+      "ripser_construction_plus_query_seconds": 0.0023438830030499958,
+      "ripser_pass_medians": [
+        {
+          "seconds": 0.0006630949937971309,
+          "construction_seconds": 0.0015459700080100447,
+          "construction_plus_query_seconds": 0.0022090650018071756
+        },
+        {
+          "seconds": 0.0007106510020093992,
+          "construction_seconds": 0.001613382002688013,
+          "construction_plus_query_seconds": 0.002315336008905433
+        },
+        {
+          "seconds": 0.0009193389996653423,
+          "construction_seconds": 0.00273369399656076,
+          "construction_plus_query_seconds": 0.003653032996226102
+        },
+        {
+          "seconds": 0.0007304419996216893,
+          "construction_seconds": 0.0016056919994298369,
+          "construction_plus_query_seconds": 0.0023724299971945584
+        }
+      ],
+      "ripser_retained_output_bytes_estimate": 67183.0,
+      "ripser_rss_bytes": 290996224,
+      "ratio_seconds": 1.3893658155298443,
+      "ratio_seconds_pass_range": [
+        1.2522418419099093,
+        1.5225306085812271
+      ],
+      "ratio_seconds_passes": [
+        1.4022775684588382,
+        1.2522418419099093,
+        1.5225306085812271,
+        1.393728581282846
+      ],
+      "ratio_construction_seconds": 3.2542186190250493,
+      "ratio_construction_seconds_pass_range": [
+        2.6235602742426942,
+        4.7619274840669386
+      ],
+      "ratio_construction_seconds_passes": [
+        3.1056358702077054,
+        2.6235602742426942,
+        4.7619274840669386,
+        2.8904305865312443
+      ],
+      "ratio_construction_plus_query_seconds": 2.3475214942025557,
+      "ratio_construction_plus_query_seconds_pass_range": [
+        1.958063776176683,
+        3.1013204868902706
+      ],
+      "ratio_construction_plus_query_seconds_passes": [
+        2.2758263683218987,
+        1.958063776176683,
+        3.1013204868902706,
+        2.197483908287939
+      ],
+      "practical_category": "TamerOp faster",
+      "intervals_by_degree": [
+        32,
+        9
+      ],
+      "interval_count": 41,
+      "exported_witnesses": 0
+    },
+    {
+      "id": "landmark_2048_128_f2",
+      "family": "landmark",
+      "cohort": "development",
+      "n": 2048,
+      "prime": 2,
+      "degree": 1,
+      "cocycles": false,
+      "landmarks": 128,
+      "shape": "planar",
+      "status": "verified",
+      "tamerop_seconds": 0.013851151499999999,
+      "tamerop_construction_seconds": 0.053846020499999994,
+      "tamerop_construction_plus_query_seconds": 0.067697172,
+      "tamerop_pass_medians": [
+        {
+          "seconds": 0.010532069,
+          "construction_seconds": 0.03708094,
+          "construction_plus_query_seconds": 0.047390233000000004
+        },
+        {
+          "seconds": 0.021978966,
+          "construction_seconds": 0.069338706,
+          "construction_plus_query_seconds": 0.089645709
+        },
+        {
+          "seconds": 0.013855892,
+          "construction_seconds": 0.050303586,
+          "construction_plus_query_seconds": 0.06415947799999999
+        },
+        {
+          "seconds": 0.013846411,
+          "construction_seconds": 0.057388455,
+          "construction_plus_query_seconds": 0.071234866
+        }
+      ],
+      "tamerop_retained_output_bytes_estimate": 2137288.0,
+      "tamerop_rss_bytes": 2032455680,
+      "tamerop_allocation_bytes": 4424464.0,
+      "ripser_seconds": 0.007662240001081955,
+      "ripser_construction_seconds": 0.1008905029957532,
+      "ripser_construction_plus_query_seconds": 0.108540510002058,
+      "ripser_pass_medians": [
+        {
+          "seconds": 0.007545176005805843,
+          "construction_seconds": 0.10207911199540831,
+          "construction_plus_query_seconds": 0.10962428800121415
+        },
+        {
+          "seconds": 0.007754838006803766,
+          "construction_seconds": 0.09970189399609808,
+          "construction_plus_query_seconds": 0.10745673200290184
+        },
+        {
+          "seconds": 0.010499188996618614,
+          "construction_seconds": 0.18052184399857651,
+          "construction_plus_query_seconds": 0.19091639599355403
+        },
+        {
+          "seconds": 0.0075696419953601435,
+          "construction_seconds": 0.09879340601037256,
+          "construction_plus_query_seconds": 0.10636304800573271
+        }
+      ],
+      "ripser_retained_output_bytes_estimate": 2099567.0,
+      "ripser_rss_bytes": 416825344,
+      "ratio_seconds": 0.5688465578278663,
+      "ratio_seconds_pass_range": [
+        0.3528299742036894,
+        0.7577418326166668
+      ],
+      "ratio_seconds_passes": [
+        0.7164001684574838,
+        0.3528299742036894,
+        0.7577418326166668,
+        0.5466862131537295
+      ],
+      "ratio_construction_seconds": 2.223755403100915,
+      "ratio_construction_seconds_pass_range": [
+        1.4378966633167063,
+        3.5886476164656833
+      ],
+      "ratio_construction_seconds_passes": [
+        2.752872823488518,
+        1.4378966633167063,
+        3.5886476164656833,
+        1.721485724095074
+      ],
+      "ratio_construction_plus_query_seconds": 1.8734868883009899,
+      "ratio_construction_plus_query_seconds_pass_range": [
+        1.198682382030152,
+        2.9756538230182303
+      ],
+      "ratio_construction_plus_query_seconds_passes": [
+        2.3132253433152385,
+        1.198682382030152,
+        2.9756538230182303,
+        1.4931318605376855
+      ],
+      "practical_category": "Ripser.py faster",
+      "intervals_by_degree": [
+        128,
+        58
+      ],
+      "interval_count": 186,
+      "exported_witnesses": 0
+    },
+    {
+      "id": "landmark_256_64_cocycles_f3",
+      "family": "landmark",
+      "cohort": "development",
+      "n": 256,
+      "prime": 3,
+      "degree": 1,
+      "cocycles": true,
+      "landmarks": 64,
+      "shape": "planar",
+      "status": "verified",
+      "tamerop_seconds": 0.002282785,
+      "tamerop_construction_seconds": 0.0006043435,
+      "tamerop_construction_plus_query_seconds": 0.0028988595,
+      "tamerop_pass_medians": [
+        {
+          "seconds": 0.001810073,
+          "construction_seconds": 0.000563183,
+          "construction_plus_query_seconds": 0.002344875
+        },
+        {
+          "seconds": 0.003642308,
+          "construction_seconds": 0.000813003,
+          "construction_plus_query_seconds": 0.00446303
+        },
+        {
+          "seconds": 0.002434037,
+          "construction_seconds": 0.000621082,
+          "construction_plus_query_seconds": 0.0030551190000000002
+        },
+        {
+          "seconds": 0.002131533,
+          "construction_seconds": 0.000587605,
+          "construction_plus_query_seconds": 0.0027426
+        }
+      ],
+      "tamerop_retained_output_bytes_estimate": 189944.0,
+      "tamerop_rss_bytes": 2032480256,
+      "tamerop_allocation_bytes": 1077528.0,
+      "ripser_seconds": 0.0023482975011575036,
+      "ripser_construction_seconds": 0.001849561493145302,
+      "ripser_construction_plus_query_seconds": 0.004202686992357485,
+      "ripser_pass_medians": [
+        {
+          "seconds": 0.002705058010178618,
+          "construction_seconds": 0.002135477989213541,
+          "construction_plus_query_seconds": 0.004840535999392159
+        },
+        {
+          "seconds": 0.001983875990845263,
+          "construction_seconds": 0.0015425379970110953,
+          "construction_plus_query_seconds": 0.0035264139878563583
+        },
+        {
+          "seconds": 0.003052190993912518,
+          "construction_seconds": 0.002743107994319871,
+          "construction_plus_query_seconds": 0.005795298988232389
+        },
+        {
+          "seconds": 0.001991536992136389,
+          "construction_seconds": 0.0015636449970770627,
+          "construction_plus_query_seconds": 0.0035648379853228107
+        }
+      ],
+      "ripser_retained_output_bytes_estimate": 136431.0,
+      "ripser_rss_bytes": 288202752,
+      "ratio_seconds": 0.9882112612252797,
+      "ratio_seconds_pass_range": [
+        0.5446755164157625,
+        1.4944469146706338
+      ],
+      "ratio_seconds_passes": [
+        1.4944469146706338,
+        0.5446755164157625,
+        1.253962447535727,
+        0.9343214447706834
+      ],
+      "ratio_construction_seconds": 3.0323824974631735,
+      "ratio_construction_seconds_pass_range": [
+        1.897333708499348,
+        4.416659948798824
+      ],
+      "ratio_construction_seconds_passes": [
+        3.791801224847947,
+        1.897333708499348,
+        4.416659948798824,
+        2.661047807757018
+      ],
+      "ratio_construction_plus_query_seconds": 1.4161216813156814,
+      "ratio_construction_plus_query_seconds_pass_range": [
+        0.7901389835731237,
+        2.0643044935837342
+      ],
+      "ratio_construction_plus_query_seconds_passes": [
+        2.0643044935837342,
+        0.7901389835731237,
+        1.896914322562358,
+        1.2998023719546454
+      ],
+      "practical_category": "similar",
+      "intervals_by_degree": [
+        64,
+        25
+      ],
+      "interval_count": 89,
+      "exported_witnesses": 6
+    },
+    {
+      "id": "landmark_512_96_cocycles_f101",
+      "family": "landmark",
+      "cohort": "development",
+      "n": 512,
+      "prime": 101,
+      "degree": 1,
+      "cocycles": true,
+      "landmarks": 96,
+      "shape": "planar",
+      "status": "verified",
+      "tamerop_seconds": 0.005290773,
+      "tamerop_construction_seconds": 0.002337507,
+      "tamerop_construction_plus_query_seconds": 0.007722753000000001,
+      "tamerop_pass_medians": [
+        {
+          "seconds": 0.003891028,
+          "construction_seconds": 0.001890214,
+          "construction_plus_query_seconds": 0.005781242
+        },
+        {
+          "seconds": 0.007507454,
+          "construction_seconds": 0.002414207,
+          "construction_plus_query_seconds": 0.009967538
+        },
+        {
+          "seconds": 0.00552852,
+          "construction_seconds": 0.002260807,
+          "construction_plus_query_seconds": 0.007802932
+        },
+        {
+          "seconds": 0.005053026,
+          "construction_seconds": 0.002524024,
+          "construction_plus_query_seconds": 0.007642574000000001
+        }
+      ],
+      "tamerop_retained_output_bytes_estimate": 491872.0,
+      "tamerop_rss_bytes": 2032513024,
+      "tamerop_allocation_bytes": 2387520.0,
+      "ripser_seconds": 0.00502986551146023,
+      "ripser_construction_seconds": 0.0069741055049235,
+      "ripser_construction_plus_query_seconds": 0.012051253012032248,
+      "ripser_pass_medians": [
+        {
+          "seconds": 0.005799472011858597,
+          "construction_seconds": 0.007966250006575137,
+          "construction_plus_query_seconds": 0.013868066016584635
+        },
+        {
+          "seconds": 0.004234405991155654,
+          "construction_seconds": 0.005968129000393674,
+          "construction_plus_query_seconds": 0.010202534991549328
+        },
+        {
+          "seconds": 0.00651780900079757,
+          "construction_seconds": 0.01096158400468994,
+          "construction_plus_query_seconds": 0.01747939300548751
+        },
+        {
+          "seconds": 0.004260259011061862,
+          "construction_seconds": 0.005981961003271863,
+          "construction_plus_query_seconds": 0.010234440007479861
+        }
+      ],
+      "ripser_retained_output_bytes_estimate": 400815.0,
+      "ripser_rss_bytes": 289251328,
+      "ratio_seconds": 0.9560933180023224,
+      "ratio_seconds_pass_range": [
+        0.5640268979544403,
+        1.4904729577527063
+      ],
+      "ratio_seconds_passes": [
+        1.4904729577527063,
+        0.5640268979544403,
+        1.178942827519403,
+        0.8431104472967014
+      ],
+      "ratio_construction_seconds": 3.307818292051028,
+      "ratio_construction_seconds_pass_range": [
+        2.3700095574653264,
+        4.848527098814688
+      ],
+      "ratio_construction_seconds_passes": [
+        4.214469899479708,
+        2.472086693640468,
+        4.848527098814688,
+        2.3700095574653264
+      ],
+      "ratio_construction_plus_query_seconds": 1.647411052298835,
+      "ratio_construction_plus_query_seconds_pass_range": [
+        1.023576232320291,
+        2.3988039277000746
+      ],
+      "ratio_construction_plus_query_seconds_passes": [
+        2.3988039277000746,
+        1.023576232320291,
+        2.2401057712008137,
+        1.3391352190348251
+      ],
+      "practical_category": "similar",
+      "intervals_by_degree": [
+        96,
+        40
+      ],
+      "interval_count": 136,
+      "exported_witnesses": 6
+    },
+    {
+      "id": "control_sphere3_f2",
+      "family": "control",
+      "cohort": "development",
+      "n": 8,
+      "prime": 2,
+      "degree": 3,
+      "cocycles": false,
+      "landmarks": null,
+      "shape": "crosspoly",
+      "status": "verified",
+      "tamerop_seconds": 0.0014478745,
+      "tamerop_construction_seconds": 5.7775e-06,
+      "tamerop_construction_plus_query_seconds": 0.0014536195,
+      "tamerop_pass_medians": [
+        {
+          "seconds": 0.001161383,
+          "construction_seconds": 5.61e-06,
+          "construction_plus_query_seconds": 0.001166993
+        },
+        {
+          "seconds": 0.001680568,
+          "construction_seconds": 7.642e-06,
+          "construction_plus_query_seconds": 0.001688368
+        },
+        {
+          "seconds": 0.001367428,
+          "construction_seconds": 5.945e-06,
+          "construction_plus_query_seconds": 0.001373373
+        },
+        {
+          "seconds": 0.001528321,
+          "construction_seconds": 5.545e-06,
+          "construction_plus_query_seconds": 0.001533866
+        }
+      ],
+      "tamerop_retained_output_bytes_estimate": 872.0,
+      "tamerop_rss_bytes": 2032824320,
+      "tamerop_allocation_bytes": 296648.0,
+      "ripser_seconds": 0.00018790800822898746,
+      "ripser_construction_seconds": 0.00019364850595593452,
+      "ripser_construction_plus_query_seconds": 0.0003818245095317252,
+      "ripser_pass_medians": [
+        {
+          "seconds": 0.00020416700863279402,
+          "construction_seconds": 0.00021075700351502746,
+          "construction_plus_query_seconds": 0.0004149240121478215
+        },
+        {
+          "seconds": 0.0001709970092633739,
+          "construction_seconds": 0.0001522719976492226,
+          "construction_plus_query_seconds": 0.0003232690069125965
+        },
+        {
+          "seconds": 0.00025371699302922934,
+          "construction_seconds": 0.0002456049987813458,
+          "construction_plus_query_seconds": 0.0004993219918105751
+        },
+        {
+          "seconds": 0.0001716490078251809,
+          "construction_seconds": 0.00017654000839684159,
+          "construction_plus_query_seconds": 0.0003487250069156289
+        }
+      ],
+      "ripser_retained_output_bytes_estimate": 1751.0,
+      "ripser_rss_bytes": 287866880,
+      "ratio_seconds": 0.13894841032552346,
+      "ratio_seconds_pass_range": [
+        0.10174953305273808,
+        0.1855432191159091
+      ],
+      "ratio_seconds_passes": [
+        0.17579645012265036,
+        0.10174953305273808,
+        0.1855432191159091,
+        0.1123121437349751
+      ],
+      "ratio_construction_seconds": 31.500306192077357,
+      "ratio_construction_seconds_pass_range": [
+        19.925673599741245,
+        41.31286775127768
+      ],
+      "ratio_construction_seconds_passes": [
+        37.56809331818672,
+        19.925673599741245,
+        41.31286775127768,
+        31.837693128375395
+      ],
+      "ratio_construction_plus_query_seconds": 0.2738869145782633,
+      "ratio_construction_plus_query_seconds_pass_range": [
+        0.19146833327366813,
+        0.3635734733466983
+      ],
+      "ratio_construction_plus_query_seconds_passes": [
+        0.3555497009389272,
+        0.19146833327366813,
+        0.3635734733466983,
+        0.22735037279373094
+      ],
+      "practical_category": "Ripser.py faster",
+      "intervals_by_degree": [
+        8,
+        0,
+        0,
+        1
+      ],
+      "interval_count": 9,
+      "exported_witnesses": 0
+    },
+    {
+      "id": "control_sphere2_cocycles_f3",
+      "family": "control",
+      "cohort": "development",
+      "n": 6,
+      "prime": 3,
+      "degree": 2,
+      "cocycles": true,
+      "landmarks": null,
+      "shape": "octa",
+      "status": "verified",
+      "tamerop_seconds": 0.000312814,
+      "tamerop_construction_seconds": 6.8415e-06,
+      "tamerop_construction_plus_query_seconds": 0.0003195615,
+      "tamerop_pass_medians": [
+        {
+          "seconds": 0.000229324,
+          "construction_seconds": 6.084e-06,
+          "construction_plus_query_seconds": 0.000235408
+        },
+        {
+          "seconds": 0.000356654,
+          "construction_seconds": 7.599e-06,
+          "construction_plus_query_seconds": 0.000364253
+        },
+        {
+          "seconds": 0.000268974,
+          "construction_seconds": 5.878e-06,
+          "construction_plus_query_seconds": 0.00027487000000000003
+        },
+        {
+          "seconds": 0.000405073,
+          "construction_seconds": 7.78e-06,
+          "construction_plus_query_seconds": 0.00041285299999999997
+        }
+      ],
+      "tamerop_retained_output_bytes_estimate": 4096.0,
+      "tamerop_rss_bytes": 2032824320,
+      "tamerop_allocation_bytes": 47928.0,
+      "ripser_seconds": 0.00012783650163328275,
+      "ripser_construction_seconds": 0.00017556449893163517,
+      "ripser_construction_plus_query_seconds": 0.00030758249340578914,
+      "ripser_pass_medians": [
+        {
+          "seconds": 0.0001303409953834489,
+          "construction_seconds": 0.0001859640033217147,
+          "construction_plus_query_seconds": 0.0003163049987051636
+        },
+        {
+          "seconds": 0.0001185910077765584,
+          "construction_seconds": 0.00015650599380023777,
+          "construction_plus_query_seconds": 0.0002782780065899715
+        },
+        {
+          "seconds": 0.00019648099259939045,
+          "construction_seconds": 0.00025841999740805477,
+          "construction_plus_query_seconds": 0.0004511029983405024
+        },
+        {
+          "seconds": 0.0001253320078831166,
+          "construction_seconds": 0.00016516499454155564,
+          "construction_plus_query_seconds": 0.0002988599881064147
+        }
+      ],
+      "ripser_retained_output_bytes_estimate": 1703.0,
+      "ripser_rss_bytes": 287866880,
+      "ratio_seconds": 0.4546150218994293,
+      "ratio_seconds_pass_range": [
+        0.30940597838689965,
+        0.7304832162193761
+      ],
+      "ratio_seconds_passes": [
+        0.5683704949479728,
+        0.3325099614095409,
+        0.7304832162193761,
+        0.30940597838689965
+      ],
+      "ratio_construction_seconds": 27.68613227613797,
+      "ratio_construction_seconds_pass_range": [
+        20.595603868961415,
+        43.96393286969288
+      ],
+      "ratio_construction_seconds_passes": [
+        30.566075496665796,
+        20.595603868961415,
+        43.96393286969288,
+        21.22943374570124
+      ],
+      "ratio_construction_plus_query_seconds": 1.0508611130944365,
+      "ratio_construction_plus_query_seconds_pass_range": [
+        0.7238895880771478,
+        1.641150355951913
+      ],
+      "ratio_construction_plus_query_seconds_passes": [
+        1.3436459198717274,
+        0.7639690176607234,
+        1.641150355951913,
+        0.7238895880771478
+      ],
+      "practical_category": "Ripser.py faster",
+      "intervals_by_degree": [
+        6,
+        0,
+        1
+      ],
+      "interval_count": 7,
+      "exported_witnesses": 1
+    },
+    {
+      "id": "control_ties_f101",
+      "family": "control",
+      "cohort": "development",
+      "n": 8,
+      "prime": 101,
+      "degree": 2,
+      "cocycles": true,
+      "landmarks": null,
+      "shape": "ties",
+      "status": "verified",
+      "tamerop_seconds": 0.000310445,
+      "tamerop_construction_seconds": 5.9955000000000004e-06,
+      "tamerop_construction_plus_query_seconds": 0.000316341,
+      "tamerop_pass_medians": [
+        {
+          "seconds": 0.00025576,
+          "construction_seconds": 5.552e-06,
+          "construction_plus_query_seconds": 0.000261279
+        },
+        {
+          "seconds": 0.000377216,
+          "construction_seconds": 8.247e-06,
+          "construction_plus_query_seconds": 0.000385463
+        },
+        {
+          "seconds": 0.000291198,
+          "construction_seconds": 6.012e-06,
+          "construction_plus_query_seconds": 0.00029721
+        },
+        {
+          "seconds": 0.000329692,
+          "construction_seconds": 5.979e-06,
+          "construction_plus_query_seconds": 0.00033547199999999996
+        }
+      ],
+      "tamerop_retained_output_bytes_estimate": 4592.0,
+      "tamerop_rss_bytes": 2032869376,
+      "tamerop_allocation_bytes": 50776.0,
+      "ripser_seconds": 0.000121110504551325,
+      "ripser_construction_seconds": 0.0001766520072123967,
+      "ripser_construction_plus_query_seconds": 0.00029734850977547467,
+      "ripser_pass_medians": [
+        {
+          "seconds": 0.00012420800339896232,
+          "construction_seconds": 0.00018308901053387672,
+          "construction_plus_query_seconds": 0.00030729701393283904
+        },
+        {
+          "seconds": 0.0001134790072683245,
+          "construction_seconds": 0.00015499100845772773,
+          "construction_plus_query_seconds": 0.0002684700157260522
+        },
+        {
+          "seconds": 0.00017768899851944298,
+          "construction_seconds": 0.000254553000559099,
+          "construction_plus_query_seconds": 0.000432241999078542
+        },
+        {
+          "seconds": 0.00011801300570368767,
+          "construction_seconds": 0.0001702150038909167,
+          "construction_plus_query_seconds": 0.0002874000056181103
+        }
+      ],
+      "ripser_retained_output_bytes_estimate": 1559.0,
+      "ripser_rss_bytes": 287866880,
+      "ratio_seconds": 0.42265304144676624,
+      "ratio_seconds_pass_range": [
+        0.30083296378818636,
+        0.6101999276074801
+      ],
+      "ratio_seconds_passes": [
+        0.4856428034053891,
+        0.30083296378818636,
+        0.6101999276074801,
+        0.3579492547701724
+      ],
+      "ratio_construction_seconds": 29.39936607459323,
+      "ratio_construction_seconds_pass_range": [
+        18.793622948675605,
+        42.340818456270625
+      ],
+      "ratio_construction_seconds_passes": [
+        32.977127257542634,
+        18.793622948675605,
+        42.340818456270625,
+        28.46880814365558
+      ],
+      "ratio_construction_plus_query_seconds": 1.0051138131248543,
+      "ratio_construction_plus_query_seconds_pass_range": [
+        0.6964871225670226,
+        1.454331950736994
+      ],
+      "ratio_construction_plus_query_seconds_passes": [
+        1.176125957052955,
+        0.6964871225670226,
+        1.454331950736994,
+        0.8567034077899507
+      ],
+      "practical_category": "Ripser.py faster",
+      "intervals_by_degree": [
+        8,
+        0,
+        0
+      ],
+      "interval_count": 8,
+      "exported_witnesses": 0
+    },
+    {
+      "id": "control_stored_zero_cocycles_f2",
+      "family": "control",
+      "cohort": "development",
+      "n": 6,
+      "prime": 2,
+      "degree": 1,
+      "cocycles": true,
+      "landmarks": null,
+      "shape": "zero_ring",
+      "status": "verified",
+      "tamerop_seconds": 0.0002623305,
+      "tamerop_construction_seconds": 5.212e-06,
+      "tamerop_construction_plus_query_seconds": 0.000267241,
+      "tamerop_pass_medians": [
+        {
+          "seconds": 0.000235109,
+          "construction_seconds": 4.759e-06,
+          "construction_plus_query_seconds": 0.00023983700000000001
+        },
+        {
+          "seconds": 0.000343159,
+          "construction_seconds": 6.705e-06,
+          "construction_plus_query_seconds": 0.000349677
+        },
+        {
+          "seconds": 0.000267335,
+          "construction_seconds": 5.328e-06,
+          "construction_plus_query_seconds": 0.000272325
+        },
+        {
+          "seconds": 0.000257326,
+          "construction_seconds": 5.096e-06,
+          "construction_plus_query_seconds": 0.000262157
+        }
+      ],
+      "tamerop_retained_output_bytes_estimate": 3208.0,
+      "tamerop_rss_bytes": 2033061888,
+      "tamerop_allocation_bytes": 39768.0,
+      "ripser_seconds": 9.700850205263123e-05,
+      "ripser_construction_seconds": 0.00017127650062320754,
+      "ripser_construction_plus_query_seconds": 0.00026693500694818795,
+      "ripser_pass_medians": [
+        {
+          "seconds": 9.507100912742317e-05,
+          "construction_seconds": 0.0001735600089887157,
+          "construction_plus_query_seconds": 0.0002686310181161389
+        },
+        {
+          "seconds": 9.20610036700964e-05,
+          "construction_seconds": 0.00014864600962027907,
+          "construction_plus_query_seconds": 0.0002415429917164147
+        },
+        {
+          "seconds": 0.0001297590060858056,
+          "construction_seconds": 0.00023069199232850224,
+          "construction_plus_query_seconds": 0.00036045099841430783
+        },
+        {
+          "seconds": 9.894599497783929e-05,
+          "construction_seconds": 0.00016899299225769937,
+          "construction_plus_query_seconds": 0.000265238995780237
+        }
+      ],
+      "ripser_retained_output_bytes_estimate": 1511.0,
+      "ripser_rss_bytes": 287866880,
+      "ratio_seconds": 0.3772149097884463,
+      "ratio_seconds_pass_range": [
+        0.26827506686432934,
+        0.48537978972377577
+      ],
+      "ratio_seconds_passes": [
+        0.40436992683148315,
+        0.26827506686432934,
+        0.48537978972377577,
+        0.384516119544233
+      ],
+      "ratio_construction_seconds": 32.824566786111774,
+      "ratio_construction_seconds_pass_range": [
+        22.169427236432373,
+        43.29804660820238
+      ],
+      "ratio_construction_seconds_passes": [
+        36.46984849521238,
+        22.169427236432373,
+        43.29804660820238,
+        33.16189016045906
+      ],
+      "ratio_construction_plus_query_seconds": 1.0089055157370121,
+      "ratio_construction_plus_query_seconds_pass_range": [
+        0.6907603065583802,
+        1.3236059796724788
+      ],
+      "ratio_construction_plus_query_seconds_passes": [
+        1.120056613934209,
+        0.6907603065583802,
+        1.3236059796724788,
+        1.0117562978682126
+      ],
+      "practical_category": "Ripser.py faster",
+      "intervals_by_degree": [
+        4,
+        1
+      ],
+      "interval_count": 5,
+      "exported_witnesses": 1
+    },
+    {
+      "id": "dense_planar512_f101",
+      "family": "dense",
+      "cohort": "development",
+      "n": 512,
+      "prime": 101,
+      "degree": 2,
+      "cocycles": false,
+      "landmarks": null,
+      "shape": "planar",
+      "status": "verified",
+      "tamerop_seconds": 2.152383429,
+      "tamerop_construction_seconds": 0.0023070385,
+      "tamerop_construction_plus_query_seconds": 2.1546724155,
+      "tamerop_pass_medians": [
+        {
+          "seconds": 1.349044786,
+          "construction_seconds": 0.001864092,
+          "construction_plus_query_seconds": 1.3509267360000001
+        },
+        {
+          "seconds": 3.436849488,
+          "construction_seconds": 0.002465265,
+          "construction_plus_query_seconds": 3.439295784
+        },
+        {
+          "seconds": 2.123823059,
+          "construction_seconds": 0.0023692,
+          "construction_plus_query_seconds": 2.1261922589999998
+        },
+        {
+          "seconds": 2.180943799,
+          "construction_seconds": 0.002244877,
+          "construction_plus_query_seconds": 2.183152572
+        }
+      ],
+      "tamerop_retained_output_bytes_estimate": 11496.0,
+      "tamerop_rss_bytes": 2053193728,
+      "tamerop_allocation_bytes": 687236800.0,
+      "ripser_seconds": 11.673441145998368,
+      "ripser_construction_seconds": 0.0061373999997158535,
+      "ripser_construction_plus_query_seconds": 11.679670366997016,
+      "ripser_pass_medians": [
+        {
+          "seconds": 12.205119824997382,
+          "construction_seconds": 0.006443790000048466,
+          "construction_plus_query_seconds": 12.211619570996845
+        },
+        {
+          "seconds": 10.257371521001915,
+          "construction_seconds": 0.005831009999383241,
+          "construction_plus_query_seconds": 10.263350817011087
+        },
+        {
+          "seconds": 16.105734741009655,
+          "construction_seconds": 0.010571211998467334,
+          "construction_plus_query_seconds": 16.116305953008123
+        },
+        {
+          "seconds": 11.141762466999353,
+          "construction_seconds": 0.005698605993529782,
+          "construction_plus_query_seconds": 11.147721162997186
+        }
+      ],
+      "ripser_retained_output_bytes_estimate": 2102823.0,
+      "ripser_rss_bytes": 289931264,
+      "ratio_seconds": 5.687098116255593,
+      "ratio_seconds_pass_range": [
+        2.9845274158255237,
+        9.047231012386405
+      ],
+      "ratio_seconds_passes": [
+        9.047231012386405,
+        2.9845274158255237,
+        7.583369373808864,
+        5.1086884825312975
+      ],
+      "ratio_construction_seconds": 3.1021538857947535,
+      "ratio_construction_seconds_pass_range": [
+        2.3652670197253607,
+        4.461933141341944
+      ],
+      "ratio_construction_seconds_passes": [
+        3.4567982696393025,
+        2.3652670197253607,
+        4.461933141341944,
+        2.5384936428720954
+      ],
+      "ratio_construction_plus_query_seconds": 5.684359336827989,
+      "ratio_construction_plus_query_seconds_pass_range": [
+        2.9841431099812286,
+        9.039438813058508
+      ],
+      "ratio_construction_plus_query_seconds_passes": [
+        9.039438813058508,
+        2.9841431099812286,
+        7.5798911809546405,
+        5.106249240649584
+      ],
+      "practical_category": "TamerOp faster",
+      "intervals_by_degree": [
+        512,
+        129,
+        2
+      ],
+      "interval_count": 643,
+      "exported_witnesses": 0
+    },
+    {
+      "id": "landmark_4096_512_f2",
+      "family": "landmark",
+      "cohort": "development",
+      "n": 4096,
+      "prime": 2,
+      "degree": 1,
+      "cocycles": false,
+      "landmarks": 512,
+      "shape": "planar",
+      "status": "verified",
+      "tamerop_seconds": 0.132600643,
+      "tamerop_construction_seconds": 0.3448873695,
+      "tamerop_construction_plus_query_seconds": 0.478248891,
+      "tamerop_pass_medians": [
+        {
+          "seconds": 0.096089983,
+          "construction_seconds": 0.281976707,
+          "construction_plus_query_seconds": 0.379644161
+        },
+        {
+          "seconds": 0.132408007,
+          "construction_seconds": 0.33456619,
+          "construction_plus_query_seconds": 0.468495954
+        },
+        {
+          "seconds": 0.132793279,
+          "construction_seconds": 0.355208549,
+          "construction_plus_query_seconds": 0.48800182799999997
+        },
+        {
+          "seconds": 0.163014895,
+          "construction_seconds": 0.374096242,
+          "construction_plus_query_seconds": 0.541819288
+        }
+      ],
+      "tamerop_retained_output_bytes_estimate": 16869320.0,
+      "tamerop_rss_bytes": 2483642368,
+      "tamerop_allocation_bytes": 52649752.0,
+      "ripser_seconds": 0.1546427124994807,
+      "ripser_construction_seconds": 0.4463144615001511,
+      "ripser_construction_plus_query_seconds": 0.6008525645011105,
+      "ripser_pass_medians": [
+        {
+          "seconds": 0.17626029800157994,
+          "construction_seconds": 0.509734715000377,
+          "construction_plus_query_seconds": 0.685995013001957
+        },
+        {
+          "seconds": 0.13153470899851527,
+          "construction_seconds": 0.38289420799992513,
+          "construction_plus_query_seconds": 0.515710116000264
+        },
+        {
+          "seconds": 0.1965329840022605,
+          "construction_seconds": 0.671170973990229,
+          "construction_plus_query_seconds": 0.8703469650063198
+        },
+        {
+          "seconds": 0.13302512699738145,
+          "construction_seconds": 0.3734195080032805,
+          "construction_plus_query_seconds": 0.5048794799949974
+        }
+      ],
+      "ripser_retained_output_bytes_estimate": 16782703.0,
+      "ripser_rss_bytes": 1012723712,
+      "ratio_seconds": 1.217985344189953,
+      "ratio_seconds_pass_range": [
+        0.8160305044356926,
+        1.834325415601124
+      ],
+      "ratio_seconds_passes": [
+        1.834325415601124,
+        0.9934044925131701,
+        1.4799919505132524,
+        0.8160305044356926
+      ],
+      "ratio_construction_seconds": 1.4054738975596592,
+      "ratio_construction_seconds_pass_range": [
+        0.9981910163194863,
+        1.8895124452374286
+      ],
+      "ratio_construction_seconds_passes": [
+        1.8077192276749903,
+        1.1444497963166127,
+        1.8895124452374286,
+        0.9981910163194863
+      ],
+      "ratio_construction_plus_query_seconds": 1.3483792703552548,
+      "ratio_construction_plus_query_seconds_pass_range": [
+        0.9318226411958176,
+        1.806942088072723
+      ],
+      "ratio_construction_plus_query_seconds_passes": [
+        1.806942088072723,
+        1.100778163817961,
+        1.7834911983287076,
+        0.9318226411958176
+      ],
+      "practical_category": "TamerOp faster",
+      "intervals_by_degree": [
+        512,
+        254
+      ],
+      "interval_count": 766,
+      "exported_witnesses": 0
+    },
+    {
+      "id": "landmark_4096_1024_f2",
+      "family": "landmark",
+      "cohort": "development",
+      "n": 4096,
+      "prime": 2,
+      "degree": 1,
+      "cocycles": false,
+      "landmarks": 1024,
+      "shape": "planar",
+      "status": "verified",
+      "tamerop_seconds": 0.3456122755,
+      "tamerop_construction_seconds": 0.2901784085,
+      "tamerop_construction_plus_query_seconds": 0.665263278,
+      "tamerop_pass_medians": [
+        {
+          "seconds": 0.26496051,
+          "construction_seconds": 0.229632401,
+          "construction_plus_query_seconds": 0.506076514
+        },
+        {
+          "seconds": 0.314245223,
+          "construction_seconds": 0.303281071,
+          "construction_plus_query_seconds": 0.6609879599999999
+        },
+        {
+          "seconds": 0.376979328,
+          "construction_seconds": 0.277075746,
+          "construction_plus_query_seconds": 0.669538596
+        },
+        {
+          "seconds": 0.452431052,
+          "construction_seconds": 0.433982419,
+          "construction_plus_query_seconds": 0.886413471
+        }
+      ],
+      "tamerop_retained_output_bytes_estimate": 33673224.0,
+      "tamerop_rss_bytes": 2758385664,
+      "tamerop_allocation_bytes": 198272480.0,
+      "ripser_seconds": 0.6175367464966257,
+      "ripser_construction_seconds": 0.3807846994968713,
+      "ripser_construction_plus_query_seconds": 0.9955772129978868,
+      "ripser_pass_medians": [
+        {
+          "seconds": 0.6037833529990166,
+          "construction_seconds": 0.3791791229887167,
+          "construction_plus_query_seconds": 0.9780425750068389
+        },
+        {
+          "seconds": 0.6019561470020562,
+          "construction_seconds": 0.37716026400448754,
+          "construction_plus_query_seconds": 0.9814582219987642
+        },
+        {
+          "seconds": 0.8711755510012154,
+          "construction_seconds": 0.6682646600092994,
+          "construction_plus_query_seconds": 1.5394402110105148
+        },
+        {
+          "seconds": 0.6312901399942348,
+          "construction_seconds": 0.38239027600502595,
+          "construction_plus_query_seconds": 1.0096962039970094
+        }
+      ],
+      "ripser_retained_output_bytes_estimate": 33564015.0,
+      "ripser_rss_bytes": 1010466816,
+      "ratio_seconds": 1.9369357918641386,
+      "ratio_seconds_pass_range": [
+        1.3953289395225568,
+        2.310937195477242
+      ],
+      "ratio_seconds_passes": [
+        2.2787673264933583,
+        1.9155618063350996,
+        2.310937195477242,
+        1.3953289395225568
+      ],
+      "ratio_construction_seconds": 1.4453370681844788,
+      "ratio_construction_seconds_pass_range": [
+        0.8811192787167398,
+        2.411848274909271
+      ],
+      "ratio_construction_seconds_passes": [
+        1.651243994042098,
+        1.2435997497664057,
+        2.411848274909271,
+        0.8811192787167398
+      ],
+      "ratio_construction_plus_query_seconds": 1.6557332025673497,
+      "ratio_construction_plus_query_seconds_pass_range": [
+        1.1390803919732053,
+        2.299255368111019
+      ],
+      "ratio_construction_plus_query_seconds_passes": [
+        1.9325982296163993,
+        1.4848352487370031,
+        2.299255368111019,
+        1.1390803919732053
+      ],
+      "practical_category": "TamerOp faster",
+      "intervals_by_degree": [
+        1024,
+        524
+      ],
+      "interval_count": 1548,
+      "exported_witnesses": 0
+    },
+    {
+      "id": "landmark_4096_3072_f2",
+      "family": "landmark",
+      "cohort": "development",
+      "n": 4096,
+      "prime": 2,
+      "degree": 1,
+      "cocycles": false,
+      "landmarks": 3072,
+      "shape": "planar",
+      "status": "verified",
+      "tamerop_seconds": 3.020446066,
+      "tamerop_construction_seconds": 0.3361781505,
+      "tamerop_construction_plus_query_seconds": 3.4106812205,
+      "tamerop_pass_medians": [
+        {
+          "seconds": 2.552162433,
+          "construction_seconds": 0.28724953,
+          "construction_plus_query_seconds": 2.839411963
+        },
+        {
+          "seconds": 2.751470826,
+          "construction_seconds": 0.33459012,
+          "construction_plus_query_seconds": 3.115316436
+        },
+        {
+          "seconds": 3.824985232,
+          "construction_seconds": 0.337766181,
+          "construction_plus_query_seconds": 4.169804171
+        },
+        {
+          "seconds": 3.289421306,
+          "construction_seconds": 0.383295156,
+          "construction_plus_query_seconds": 3.706046005
+        }
+      ],
+      "tamerop_retained_output_bytes_estimate": 100850056.0,
+      "tamerop_rss_bytes": 3133562880,
+      "tamerop_allocation_bytes": 1610395888.0,
+      "ripser_seconds": 6.789894813999126,
+      "ripser_construction_seconds": 0.39245063249836676,
+      "ripser_construction_plus_query_seconds": 7.182345446497493,
+      "ripser_pass_medians": [
+        {
+          "seconds": 6.7288349690061295,
+          "construction_seconds": 0.3870466939988546,
+          "construction_plus_query_seconds": 7.115881663004984
+        },
+        {
+          "seconds": 6.850954658992123,
+          "construction_seconds": 0.3978545709978789,
+          "construction_plus_query_seconds": 7.248809229990002
+        },
+        {
+          "seconds": 9.98512040800415,
+          "construction_seconds": 0.724599131004652,
+          "construction_plus_query_seconds": 10.726127339003142
+        },
+        {
+          "seconds": 6.413926022010855,
+          "construction_seconds": 0.37432940500730183,
+          "construction_plus_query_seconds": 6.788255427018157
+        }
+      ],
+      "ripser_retained_output_bytes_estimate": 100689263.0,
+      "ripser_rss_bytes": 1068347392,
+      "ratio_seconds": 2.404287695284333,
+      "ratio_seconds_pass_range": [
+        1.9498645583378658,
+        2.6365230057463704
+      ],
+      "ratio_seconds_passes": [
+        2.6365230057463704,
+        2.489924513919641,
+        2.6104990744717598,
+        1.9498645583378658
+      ],
+      "ratio_construction_seconds": 1.3535658332575053,
+      "ratio_construction_seconds_pass_range": [
+        0.9766087547615703,
+        2.1452684483075943
+      ],
+      "ratio_construction_seconds_passes": [
+        1.3474232455623327,
+        1.189080451622059,
+        2.1452684483075943,
+        0.9766087547615703
+      ],
+      "ratio_construction_plus_query_seconds": 2.2894695299370236,
+      "ratio_construction_plus_query_seconds_pass_range": [
+        1.8316705777153883,
+        2.5723335914911343
+      ],
+      "ratio_construction_plus_query_seconds_passes": [
+        2.5061110383879104,
+        2.326829193408461,
+        2.5723335914911343,
+        1.8316705777153883
+      ],
+      "practical_category": "TamerOp faster",
+      "intervals_by_degree": [
+        3072,
+        1354
+      ],
+      "interval_count": 4426,
+      "exported_witnesses": 0
+    },
+    {
+      "id": "cloud_circle512_cocycles_f2",
+      "family": "cloud",
+      "cohort": "development",
+      "n": 512,
+      "prime": 2,
+      "degree": 1,
+      "cocycles": true,
+      "landmarks": null,
+      "shape": "circle",
+      "status": "verified",
+      "tamerop_seconds": 0.6426134345000001,
+      "tamerop_construction_seconds": 0.0006964615,
+      "tamerop_construction_plus_query_seconds": 0.6432495340000001,
+      "tamerop_pass_medians": [
+        {
+          "seconds": 0.617621084,
+          "construction_seconds": 0.000565691,
+          "construction_plus_query_seconds": 0.6181790410000001
+        },
+        {
+          "seconds": 0.616037338,
+          "construction_seconds": 0.000698139,
+          "construction_plus_query_seconds": 0.6165396310000001
+        },
+        {
+          "seconds": 1.571524939,
+          "construction_seconds": 0.000962666,
+          "construction_plus_query_seconds": 1.5724876049999998
+        },
+        {
+          "seconds": 0.667605785,
+          "construction_seconds": 0.000694784,
+          "construction_plus_query_seconds": 0.668320027
+        }
+      ],
+      "tamerop_retained_output_bytes_estimate": 1781768.0,
+      "tamerop_rss_bytes": 2402377728,
+      "tamerop_allocation_bytes": 161536112.0,
+      "ripser_seconds": 2.846599287506251,
+      "ripser_construction_seconds": 0.0001334730040980503,
+      "ripser_construction_plus_query_seconds": 2.8467254470087937,
+      "ripser_pass_medians": [
+        {
+          "seconds": 2.7681151930009946,
+          "construction_seconds": 0.0001330719969701022,
+          "construction_plus_query_seconds": 2.768253956994158
+        },
+        {
+          "seconds": 2.817935483006295,
+          "construction_seconds": 0.00011400099901948124,
+          "construction_plus_query_seconds": 2.8180563100177096
+        },
+        {
+          "seconds": 4.2396437489951495,
+          "construction_seconds": 0.00020842600497417152,
+          "construction_plus_query_seconds": 4.239852175000124
+        },
+        {
+          "seconds": 2.8752630920062074,
+          "construction_seconds": 0.0001338740112259984,
+          "construction_plus_query_seconds": 2.875394583999878
+        }
+      ],
+      "ripser_retained_output_bytes_estimate": 2102791.0,
+      "ripser_rss_bytes": 304328704,
+      "ratio_seconds": 3.9286008877236807,
+      "ratio_seconds_pass_range": [
+        2.697789671535814,
+        4.574293324743726
+      ],
+      "ratio_seconds_passes": [
+        4.481898796384021,
+        4.574293324743726,
+        2.697789671535814,
+        4.3068277067224745
+      ],
+      "ratio_construction_seconds": 0.20007794828465586,
+      "ratio_construction_seconds_pass_range": [
+        0.16329269532210813,
+        0.2352379602470292
+      ],
+      "ratio_construction_seconds_passes": [
+        0.2352379602470292,
+        0.16329269532210813,
+        0.2165091578742487,
+        0.19268436122017546
+      ],
+      "ratio_construction_plus_query_seconds": 3.9254476969431,
+      "ratio_construction_plus_query_seconds_pass_range": [
+        2.6962706488234125,
+        4.570762637670098
+      ],
+      "ratio_construction_plus_query_seconds_passes": [
+        4.478077989373563,
+        4.570762637670098,
+        2.6962706488234125,
+        4.302421695945792
+      ],
+      "practical_category": "TamerOp faster",
+      "intervals_by_degree": [
+        512,
+        1
+      ],
+      "interval_count": 513,
+      "exported_witnesses": 1
+    },
+    {
+      "id": "dense_circle256_f2",
+      "family": "dense",
+      "cohort": "development",
+      "n": 256,
+      "prime": 2,
+      "degree": 1,
+      "cocycles": false,
+      "landmarks": null,
+      "shape": "circle",
+      "status": "verified",
+      "tamerop_seconds": 0.059382962,
+      "tamerop_construction_seconds": 0.0009956655,
+      "tamerop_construction_plus_query_seconds": 0.060400978999999994,
+      "tamerop_pass_medians": [
+        {
+          "seconds": 0.058206103,
+          "construction_seconds": 0.000906231,
+          "construction_plus_query_seconds": 0.059112334
+        },
+        {
+          "seconds": 0.059265422,
+          "construction_seconds": 0.000974534,
+          "construction_plus_query_seconds": 0.060284659
+        },
+        {
+          "seconds": 0.133311378,
+          "construction_seconds": 0.001253576,
+          "construction_plus_query_seconds": 0.13456495400000001
+        },
+        {
+          "seconds": 0.059500502,
+          "construction_seconds": 0.001016797,
+          "construction_plus_query_seconds": 0.060517299
+        }
+      ],
+      "tamerop_retained_output_bytes_estimate": 9272.0,
+      "tamerop_rss_bytes": 2066726912,
+      "tamerop_allocation_bytes": 28061912.0,
+      "ripser_seconds": 0.30377685399434995,
+      "ripser_construction_seconds": 0.0015797669984749518,
+      "ripser_construction_plus_query_seconds": 0.30537739349529147,
+      "ripser_pass_medians": [
+        {
+          "seconds": 0.2989372259908123,
+          "construction_seconds": 0.0015415410016430542,
+          "construction_plus_query_seconds": 0.30047876699245535
+        },
+        {
+          "seconds": 0.2987825169984717,
+          "construction_seconds": 0.001533072005258873,
+          "construction_plus_query_seconds": 0.30031558900373057
+        },
+        {
+          "seconds": 0.4746736060042167,
+          "construction_seconds": 0.0027540380106074736,
+          "construction_plus_query_seconds": 0.4774276440148242
+        },
+        {
+          "seconds": 0.3086164819978876,
+          "construction_seconds": 0.0016179929953068495,
+          "construction_plus_query_seconds": 0.3102760199981276
+        }
+      ],
+      "ripser_retained_output_bytes_estimate": 527719.0,
+      "ripser_rss_bytes": 302231552,
+      "ratio_seconds": 4.676252004647766,
+      "ratio_seconds_pass_range": [
+        3.5606383575467704,
+        5.1867878694181035
+      ],
+      "ratio_seconds_passes": [
+        5.135839896218654,
+        5.041430684463391,
+        3.5606383575467704,
+        5.1867878694181035
+      ],
+      "ratio_construction_seconds": 1.7488833433774007,
+      "ratio_construction_seconds_pass_range": [
+        1.5731334209569632,
+        2.196945387122499
+      ],
+      "ratio_construction_seconds_passes": [
+        1.7010464237518406,
+        1.5731334209569632,
+        2.196945387122499,
+        1.5912645250790958
+      ],
+      "ratio_construction_plus_query_seconds": 4.63273815967222,
+      "ratio_construction_plus_query_seconds_pass_range": [
+        3.5479345091205854,
+        5.127063255055841
+      ],
+      "ratio_construction_plus_query_seconds_passes": [
+        5.083182250804973,
+        4.981625408277263,
+        3.5479345091205854,
+        5.127063255055841
+      ],
+      "practical_category": "TamerOp faster",
+      "intervals_by_degree": [
+        256,
+        1
+      ],
+      "interval_count": 257,
+      "exported_witnesses": 0
+    },
+    {
+      "id": "sparse_grid64_f2",
+      "family": "sparse",
+      "cohort": "development",
+      "n": 4096,
+      "prime": 2,
+      "degree": 1,
+      "cocycles": false,
+      "landmarks": null,
+      "shape": "grid",
+      "status": "verified",
+      "tamerop_seconds": 0.002662287,
+      "tamerop_construction_seconds": 0.0003730265,
+      "tamerop_construction_plus_query_seconds": 0.00303052,
+      "tamerop_pass_medians": [
+        {
+          "seconds": 0.002654856,
+          "construction_seconds": 0.000380593,
+          "construction_plus_query_seconds": 0.003035449
+        },
+        {
+          "seconds": 0.002571993,
+          "construction_seconds": 0.00036546,
+          "construction_plus_query_seconds": 0.002936266
+        },
+        {
+          "seconds": 0.005583222,
+          "construction_seconds": 0.000445432,
+          "construction_plus_query_seconds": 0.006028654
+        },
+        {
+          "seconds": 0.002669718,
+          "construction_seconds": 0.000358761,
+          "construction_plus_query_seconds": 0.0030255910000000002
+        }
+      ],
+      "tamerop_retained_output_bytes_estimate": 157400.0,
+      "tamerop_rss_bytes": 2066726912,
+      "tamerop_allocation_bytes": 5216816.0,
+      "ripser_seconds": 0.004074529497302137,
+      "ripser_construction_seconds": 0.001772080002410803,
+      "ripser_construction_plus_query_seconds": 0.005821717997605447,
+      "ripser_pass_medians": [
+        {
+          "seconds": 0.004094297997653484,
+          "construction_seconds": 0.0017485459975432605,
+          "construction_plus_query_seconds": 0.005842843995196745
+        },
+        {
+          "seconds": 0.00405476099695079,
+          "construction_seconds": 0.0017669560038484633,
+          "construction_plus_query_seconds": 0.005800592000014149
+        },
+        {
+          "seconds": 0.008144872001139447,
+          "construction_seconds": 0.0037670649908250198,
+          "construction_plus_query_seconds": 0.011930456996196881
+        },
+        {
+          "seconds": 0.004019940010039136,
+          "construction_seconds": 0.0017772040009731427,
+          "construction_plus_query_seconds": 0.0057971440110122785
+        }
+      ],
+      "ripser_retained_output_bytes_estimate": 34071.0,
+      "ripser_rss_bytes": 302231552,
+      "ratio_seconds": 1.5201865182661778,
+      "ratio_seconds_pass_range": [
+        1.4588121341296205,
+        1.5765054558666336
+      ],
+      "ratio_seconds_passes": [
+        1.542192118010726,
+        1.5765054558666336,
+        1.4588121341296205,
+        1.505754544127558
+      ],
+      "ratio_construction_seconds": 5.523177197204541,
+      "ratio_construction_seconds_pass_range": [
+        4.5942673605222915,
+        8.457104543061611
+      ],
+      "ratio_construction_seconds_passes": [
+        4.5942673605222915,
+        4.834882076967283,
+        8.457104543061611,
+        4.9537268570807385
+      ],
+      "ratio_construction_plus_query_seconds": 1.9486314867292447,
+      "ratio_construction_plus_query_seconds_pass_range": [
+        1.916036903537946,
+        1.9789586524947163
+      ],
+      "ratio_construction_plus_query_seconds_passes": [
+        1.9248697623306288,
+        1.9754994949415854,
+        1.9789586524947163,
+        1.916036903537946
+      ],
+      "practical_category": "TamerOp faster",
+      "intervals_by_degree": [
+        4096,
+        3969
+      ],
+      "interval_count": 8065,
+      "exported_witnesses": 0
+    },
+    {
+      "id": "weighted_cycle96_cocycles_f3",
+      "family": "weighted",
+      "cohort": "development",
+      "n": 96,
+      "prime": 3,
+      "degree": 1,
+      "cocycles": true,
+      "landmarks": null,
+      "shape": "cycle",
+      "status": "verified",
+      "tamerop_seconds": 0.0003712575,
+      "tamerop_construction_seconds": 7.3155e-06,
+      "tamerop_construction_plus_query_seconds": 0.000378573,
+      "tamerop_pass_medians": [
+        {
+          "seconds": 0.000373924,
+          "construction_seconds": 7.301e-06,
+          "construction_plus_query_seconds": 0.00038122499999999996
+        },
+        {
+          "seconds": 0.000368591,
+          "construction_seconds": 7.33e-06,
+          "construction_plus_query_seconds": 0.000375921
+        },
+        {
+          "seconds": 0.000545035,
+          "construction_seconds": 1.0433e-05,
+          "construction_plus_query_seconds": 0.000555468
+        },
+        {
+          "seconds": 0.00035823,
+          "construction_seconds": 6.842e-06,
+          "construction_plus_query_seconds": 0.00036507200000000003
+        }
+      ],
+      "tamerop_retained_output_bytes_estimate": 45816.0,
+      "tamerop_rss_bytes": 2066771968,
+      "tamerop_allocation_bytes": 191656.0,
+      "ripser_seconds": 0.00014510099572362378,
+      "ripser_construction_seconds": 0.00019940549827879295,
+      "ripser_construction_plus_query_seconds": 0.00034191799932159483,
+      "ripser_pass_medians": [
+        {
+          "seconds": 0.0001439019979443401,
+          "construction_seconds": 0.00020270099048502743,
+          "construction_plus_query_seconds": 0.0003428780037211254
+        },
+        {
+          "seconds": 0.00014202400052454323,
+          "construction_seconds": 0.00017983200086746365,
+          "construction_plus_query_seconds": 0.00032450399885419756
+        },
+        {
+          "seconds": 0.00023564200091641396,
+          "construction_seconds": 0.00029500899836421013,
+          "construction_plus_query_seconds": 0.0005306509992806241
+        },
+        {
+          "seconds": 0.00014629999350290745,
+          "construction_seconds": 0.00019611000607255846,
+          "construction_plus_query_seconds": 0.00034095799492206424
+        }
+      ],
+      "ripser_retained_output_bytes_estimate": 2231.0,
+      "ripser_rss_bytes": 302231552,
+      "ratio_seconds": 0.40225624053505704,
+      "ratio_seconds_pass_range": [
+        0.384842903756753,
+        0.4323428787443264
+      ],
+      "ratio_seconds_passes": [
+        0.384842903756753,
+        0.3853159749547418,
+        0.4323428787443264,
+        0.40839682188233106
+      ],
+      "ratio_construction_seconds": 27.258052004802416,
+      "ratio_construction_seconds_pass_range": [
+        24.53369725340568,
+        28.662672620952712
+      ],
+      "ratio_construction_seconds_passes": [
+        27.763455757434247,
+        24.53369725340568,
+        28.27652624980448,
+        28.662672620952712
+      ],
+      "ratio_construction_plus_query_seconds": 0.9123017400584145,
+      "ratio_construction_plus_query_seconds_pass_range": [
+        0.8632239189994642,
+        0.9553223575086667
+      ],
+      "ratio_construction_plus_query_seconds_passes": [
+        0.8994111186861445,
+        0.8632239189994642,
+        0.9553223575086667,
+        0.933947262244336
+      ],
+      "practical_category": "Ripser.py faster",
+      "intervals_by_degree": [
+        96,
+        1
+      ],
+      "interval_count": 97,
+      "exported_witnesses": 1
+    },
+    {
+      "id": "dense_planar256_f101",
+      "family": "dense",
+      "cohort": "development",
+      "n": 256,
+      "prime": 101,
+      "degree": 2,
+      "cocycles": false,
+      "landmarks": null,
+      "shape": "planar",
+      "status": "verified",
+      "tamerop_seconds": 0.18857761350000002,
+      "tamerop_construction_seconds": 0.0006987425,
+      "tamerop_construction_plus_query_seconds": 0.1892747415,
+      "tamerop_pass_medians": [
+        {
+          "seconds": 0.162260934,
+          "construction_seconds": 0.000653676,
+          "construction_plus_query_seconds": 0.162953102
+        },
+        {
+          "seconds": 0.164740208,
+          "construction_seconds": 0.000687694,
+          "construction_plus_query_seconds": 0.165424673
+        },
+        {
+          "seconds": 0.37825908,
+          "construction_seconds": 0.000848861,
+          "construction_plus_query_seconds": 0.379107941
+        },
+        {
+          "seconds": 0.212415019,
+          "construction_seconds": 0.000709791,
+          "construction_plus_query_seconds": 0.21312481
+        }
+      ],
+      "tamerop_retained_output_bytes_estimate": 11448.0,
+      "tamerop_rss_bytes": 2066771968,
+      "tamerop_allocation_bytes": 89558568.0,
+      "ripser_seconds": 1.1343992814945523,
+      "ripser_construction_seconds": 0.0015947720021358691,
+      "ripser_construction_plus_query_seconds": 1.1359762664942537,
+      "ripser_pass_medians": [
+        {
+          "seconds": 1.1096670370025095,
+          "construction_seconds": 0.0015830199990887195,
+          "construction_plus_query_seconds": 1.1112500570015982
+        },
+        {
+          "seconds": 1.1187732819962548,
+          "construction_seconds": 0.0015474459942197427,
+          "construction_plus_query_seconds": 1.1203207279904746
+        },
+        {
+          "seconds": 1.5668933870038018,
+          "construction_seconds": 0.002667371998541057,
+          "construction_plus_query_seconds": 1.5695607590023428
+        },
+        {
+          "seconds": 1.1500252809928497,
+          "construction_seconds": 0.0016065240051830187,
+          "construction_plus_query_seconds": 1.1516318049980327
+        }
+      ],
+      "ripser_retained_output_bytes_estimate": 527911.0,
+      "ripser_rss_bytes": 302231552,
+      "ratio_seconds": 5.680981312358848,
+      "ratio_seconds_pass_range": [
+        4.142381425460564,
+        6.838781274379386
+      ],
+      "ratio_seconds_passes": [
+        6.838781274379386,
+        6.791136757556205,
+        4.142381425460564,
+        5.414048810705093
+      ],
+      "ratio_construction_seconds": 2.4950943131139383,
+      "ratio_construction_seconds_pass_range": [
+        2.25019557276891,
+        3.142295379975116
+      ],
+      "ratio_construction_seconds_passes": [
+        2.4217196272904613,
+        2.25019557276891,
+        3.142295379975116,
+        2.2633761278785145
+      ],
+      "ratio_construction_plus_query_seconds": 5.669523185013989,
+      "ratio_construction_plus_query_seconds_pass_range": [
+        4.140142131716368,
+        6.819447088534702
+      ],
+      "ratio_construction_plus_query_seconds_passes": [
+        6.819447088534702,
+        6.772391975594079,
+        4.140142131716368,
+        5.403555808439349
+      ],
+      "practical_category": "TamerOp faster",
+      "intervals_by_degree": [
+        256,
+        57,
+        0
+      ],
+      "interval_count": 313,
+      "exported_witnesses": 0
+    },
+    {
+      "id": "dense_planar384_f101",
+      "family": "dense",
+      "cohort": "development",
+      "n": 384,
+      "prime": 101,
+      "degree": 2,
+      "cocycles": false,
+      "landmarks": null,
+      "shape": "planar",
+      "status": "verified",
+      "tamerop_seconds": 0.66258178,
+      "tamerop_construction_seconds": 0.001182377,
+      "tamerop_construction_plus_query_seconds": 0.6637814305,
+      "tamerop_pass_medians": [
+        {
+          "seconds": 0.535855636,
+          "construction_seconds": 0.001031502,
+          "construction_plus_query_seconds": 0.536887138
+        },
+        {
+          "seconds": 0.554285255,
+          "construction_seconds": 0.001138054,
+          "construction_plus_query_seconds": 0.555423309
+        },
+        {
+          "seconds": 1.408393657,
+          "construction_seconds": 0.001486491,
+          "construction_plus_query_seconds": 1.4098906789999999
+        },
+        {
+          "seconds": 0.770878305,
+          "construction_seconds": 0.0012267,
+          "construction_plus_query_seconds": 0.772139552
+        }
+      ],
+      "tamerop_retained_output_bytes_estimate": 11448.0,
+      "tamerop_rss_bytes": 2066771968,
+      "tamerop_allocation_bytes": 257758980.0,
+      "ripser_seconds": 4.400887046496791,
+      "ripser_construction_seconds": 0.0034751429993775673,
+      "ripser_construction_plus_query_seconds": 4.404288525991433,
+      "ripser_pass_medians": [
+        {
+          "seconds": 4.316912284994032,
+          "construction_seconds": 0.0034055529977194965,
+          "construction_plus_query_seconds": 4.320182228984777
+        },
+        {
+          "seconds": 4.278798766012187,
+          "construction_seconds": 0.0033799969969550148,
+          "construction_plus_query_seconds": 4.28229999501491
+        },
+        {
+          "seconds": 4.733484258002136,
+          "construction_seconds": 0.0038168000028235838,
+          "construction_plus_query_seconds": 4.737156568997307
+        },
+        {
+          "seconds": 4.48486180799955,
+          "construction_seconds": 0.003544733001035638,
+          "construction_plus_query_seconds": 4.488394822998089
+        }
+      ],
+      "ripser_retained_output_bytes_estimate": 1184295.0,
+      "ripser_rss_bytes": 302231552,
+      "ratio_seconds": 5.9051851527306285,
+      "ratio_seconds_pass_range": [
+        3.3609099518985808,
+        8.056110629382337
+      ],
+      "ratio_seconds_passes": [
+        8.056110629382337,
+        7.719488706247809,
+        3.3609099518985808,
+        5.817859678901653
+      ],
+      "ratio_construction_seconds": 2.920541112418284,
+      "ratio_construction_seconds_pass_range": [
+        2.567657660102607,
+        3.30154764384315
+      ],
+      "ratio_construction_seconds_passes": [
+        3.30154764384315,
+        2.9699794534837665,
+        2.567657660102607,
+        2.8896494668913655
+      ],
+      "ratio_construction_plus_query_seconds": 5.899971334004734,
+      "ratio_construction_plus_query_seconds_pass_range": [
+        3.3599460153586187,
+        8.046723274240138
+      ],
+      "ratio_construction_plus_query_seconds_passes": [
+        8.046723274240138,
+        7.709975302845833,
+        3.3599460153586187,
+        5.812932145973127
+      ],
+      "practical_category": "TamerOp faster",
+      "intervals_by_degree": [
+        384,
+        93,
+        0
+      ],
+      "interval_count": 477,
+      "exported_witnesses": 0
+    },
+    {
+      "id": "landmark_4096_2048_f2",
+      "family": "landmark",
+      "cohort": "development",
+      "n": 4096,
+      "prime": 2,
+      "degree": 1,
+      "cocycles": false,
+      "landmarks": 2048,
+      "shape": "planar",
+      "status": "verified",
+      "tamerop_seconds": 1.158656175,
+      "tamerop_construction_seconds": 0.3404513515,
+      "tamerop_construction_plus_query_seconds": 1.5133980355,
+      "tamerop_pass_medians": [
+        {
+          "seconds": 0.97878307,
+          "construction_seconds": 0.277153312,
+          "construction_plus_query_seconds": 1.252321654
+        },
+        {
+          "seconds": 1.048743497,
+          "construction_seconds": 0.334834261,
+          "construction_plus_query_seconds": 1.383577758
+        },
+        {
+          "seconds": 1.907363387,
+          "construction_seconds": 0.346068442,
+          "construction_plus_query_seconds": 2.253431829
+        },
+        {
+          "seconds": 1.268568853,
+          "construction_seconds": 0.37464946,
+          "construction_plus_query_seconds": 1.6432183130000002
+        }
+      ],
+      "tamerop_retained_output_bytes_estimate": 67295624.0,
+      "tamerop_rss_bytes": 2604773376,
+      "tamerop_allocation_bytes": 647388216.0,
+      "ripser_seconds": 3.0730646349911694,
+      "ripser_construction_seconds": 0.42741050800395897,
+      "ripser_construction_plus_query_seconds": 3.5044771960019716,
+      "ripser_pass_medians": [
+        {
+          "seconds": 2.973231422001845,
+          "construction_seconds": 0.4086251240078127,
+          "construction_plus_query_seconds": 3.381856546009658
+        },
+        {
+          "seconds": 3.1097511269908864,
+          "construction_seconds": 0.42720080399885774,
+          "construction_plus_query_seconds": 3.5449560370034305
+        },
+        {
+          "seconds": 3.298608804005198,
+          "construction_seconds": 0.46013069299806375,
+          "construction_plus_query_seconds": 3.758739497003262
+        },
+        {
+          "seconds": 3.0363781429914525,
+          "construction_seconds": 0.4276202120090602,
+          "construction_plus_query_seconds": 3.4639983550005127
+        }
+      ],
+      "ripser_retained_output_bytes_estimate": 67126639.0,
+      "ripser_rss_bytes": 1065717760,
+      "ratio_seconds": 2.471066600125749,
+      "ratio_seconds_pass_range": [
+        1.7294076348993053,
+        3.037681702036229
+      ],
+      "ratio_seconds_passes": [
+        3.037681702036229,
+        2.9652161237581303,
+        1.7294076348993053,
+        2.393546188534279
+      ],
+      "ratio_construction_seconds": 1.2998399209866645,
+      "ratio_construction_seconds_pass_range": [
+        1.1413875039591947,
+        1.4743649320265482
+      ],
+      "ratio_construction_seconds_passes": [
+        1.4743649320265482,
+        1.2758575025237866,
+        1.329594488127478,
+        1.1413875039591947
+      ],
+      "ratio_construction_plus_query_seconds": 2.2209137700585786,
+      "ratio_construction_plus_query_seconds_pass_range": [
+        1.6680067480325191,
+        2.700469591983641
+      ],
+      "ratio_construction_plus_query_seconds_passes": [
+        2.700469591983641,
+        2.5621661063182763,
+        1.6680067480325191,
+        2.108057296827675
+      ],
+      "practical_category": "TamerOp faster",
+      "intervals_by_degree": [
+        2048,
+        1023
+      ],
+      "interval_count": 3071,
+      "exported_witnesses": 0
+    },
+    {
+      "id": "evaluation_01_cloud_f2",
+      "family": "cloud",
+      "cohort": "evaluation",
+      "n": 512,
+      "prime": 2,
+      "degree": 1,
+      "cocycles": true,
+      "landmarks": null,
+      "shape": "jittered circle",
+      "status": "verified",
+      "tamerop_seconds": 0.853800414,
+      "tamerop_construction_seconds": 0.0005647355,
+      "tamerop_construction_plus_query_seconds": 0.8541618055,
+      "tamerop_pass_medians": [
+        {
+          "seconds": 0.574095965,
+          "construction_seconds": 0.000617817,
+          "construction_plus_query_seconds": 0.574713782
+        },
+        {
+          "seconds": 0.968399891,
+          "construction_seconds": 0.000580052,
+          "construction_plus_query_seconds": 0.969022568
+        },
+        {
+          "seconds": 1.33155266,
+          "construction_seconds": 0.000549419,
+          "construction_plus_query_seconds": 1.331852174
+        },
+        {
+          "seconds": 0.739200937,
+          "construction_seconds": 0.000287915,
+          "construction_plus_query_seconds": 0.739301043
+        }
+      ],
+      "tamerop_retained_output_bytes_estimate": 1811904.0,
+      "tamerop_rss_bytes": 2336325632,
+      "tamerop_allocation_bytes": 164854960.0,
+      "ripser_seconds": 3.5092893465043744,
+      "ripser_construction_seconds": 0.00016502349899383262,
+      "ripser_construction_plus_query_seconds": 3.5094543700033682,
+      "ripser_pass_medians": [
+        {
+          "seconds": 3.0871964800026035,
+          "construction_seconds": 0.00012943000183440745,
+          "construction_plus_query_seconds": 3.0873339219979243
+        },
+        {
+          "seconds": 4.183920576004311,
+          "construction_seconds": 0.00018598099995870143,
+          "construction_plus_query_seconds": 4.184073491007439
+        },
+        {
+          "seconds": 3.475378150003962,
+          "construction_seconds": 0.0001657760003581643,
+          "construction_plus_query_seconds": 3.4755439260043204
+        },
+        {
+          "seconds": 3.5432005430047866,
+          "construction_seconds": 0.00016427099762950093,
+          "construction_plus_query_seconds": 3.543364814002416
+        }
+      ],
+      "ripser_retained_output_bytes_estimate": 2102791.0,
+      "ripser_rss_bytes": 316706816,
+      "ratio_seconds": 4.129013997587464,
+      "ratio_seconds_pass_range": [
+        2.6100193063366808,
+        5.377492036549331
+      ],
+      "ratio_seconds_passes": [
+        5.377492036549331,
+        4.320447177749952,
+        2.6100193063366808,
+        4.793284701971078
+      ],
+      "ratio_construction_seconds": 0.32792372208483866,
+      "ratio_construction_seconds_pass_range": [
+        0.20949569505922863,
+        0.5705538010506604
+      ],
+      "ratio_construction_seconds_passes": [
+        0.20949569505922863,
+        0.3206281505084052,
+        0.30172964596813057,
+        0.5705538010506604
+      ],
+      "ratio_construction_plus_query_seconds": 4.127049502413813,
+      "ratio_construction_plus_query_seconds_pass_range": [
+        2.6095568215848557,
+        5.371950384161702
+      ],
+      "ratio_construction_plus_query_seconds_passes": [
+        5.371950384161702,
+        4.317828737098555,
+        2.6095568215848557,
+        4.792857858855227
+      ],
+      "practical_category": "TamerOp faster",
+      "intervals_by_degree": [
+        512,
+        1
+      ],
+      "interval_count": 513,
+      "exported_witnesses": 1
+    },
+    {
+      "id": "evaluation_02_dense_f101",
+      "family": "dense",
+      "cohort": "evaluation",
+      "n": 128,
+      "prime": 101,
+      "degree": 2,
+      "cocycles": false,
+      "landmarks": null,
+      "shape": "random planar",
+      "status": "verified",
+      "tamerop_seconds": 0.0254344785,
+      "tamerop_construction_seconds": 0.000302877,
+      "tamerop_construction_plus_query_seconds": 0.02574531,
+      "tamerop_pass_medians": [
+        {
+          "seconds": 0.018797353,
+          "construction_seconds": 0.000236231,
+          "construction_plus_query_seconds": 0.019033584
+        },
+        {
+          "seconds": 0.028182735,
+          "construction_seconds": 0.000342025,
+          "construction_plus_query_seconds": 0.028438278
+        },
+        {
+          "seconds": 0.041913879,
+          "construction_seconds": 0.000263729,
+          "construction_plus_query_seconds": 0.042225345000000004
+        },
+        {
+          "seconds": 0.022686222,
+          "construction_seconds": 0.000355065,
+          "construction_plus_query_seconds": 0.023052342
+        }
+      ],
+      "tamerop_retained_output_bytes_estimate": 3448.0,
+      "tamerop_rss_bytes": 2067812352,
+      "tamerop_allocation_bytes": 10933048.0,
+      "ripser_seconds": 0.12705390550399898,
+      "ripser_construction_seconds": 0.0004636825033230707,
+      "ripser_construction_plus_query_seconds": 0.12752835850551492,
+      "ripser_pass_medians": [
+        {
+          "seconds": 0.11383410000416916,
+          "construction_seconds": 0.00042197000584565103,
+          "construction_plus_query_seconds": 0.1142593010008568
+        },
+        {
+          "seconds": 0.14921045499795582,
+          "construction_seconds": 0.0005700740002794191,
+          "construction_plus_query_seconds": 0.14978052899823524
+        },
+        {
+          "seconds": 0.12775098800193518,
+          "construction_seconds": 0.00045874201168771833,
+          "construction_plus_query_seconds": 0.12822032600524835
+        },
+        {
+          "seconds": 0.12635682300606277,
+          "construction_seconds": 0.0004686229949584231,
+          "construction_plus_query_seconds": 0.12683639100578148
+        }
+      ],
+      "ripser_retained_output_bytes_estimate": 133671.0,
+      "ripser_rss_bytes": 315658240,
+      "ratio_seconds": 4.830128477786989,
+      "ratio_seconds_pass_range": [
+        3.0479399914747853,
+        6.055857971288253
+      ],
+      "ratio_seconds_passes": [
+        6.055857971288253,
+        5.294392293649137,
+        3.0479399914747853,
+        5.569760491899567
+      ],
+      "ratio_construction_seconds": 1.616910973315463,
+      "ratio_construction_seconds_pass_range": [
+        1.3198231167769932,
+        1.7862600837555234
+      ],
+      "ratio_construction_seconds_passes": [
+        1.7862600837555234,
+        1.6667612024835001,
+        1.7394447015220866,
+        1.3198231167769932
+      ],
+      "ratio_construction_plus_query_seconds": 4.7941198472758915,
+      "ratio_construction_plus_query_seconds_pass_range": [
+        3.036572608352835,
+        6.003036580018603
+      ],
+      "ratio_construction_plus_query_seconds_passes": [
+        6.003036580018603,
+        5.26686352099924,
+        3.036572608352835,
+        5.502104341753279
+      ],
+      "practical_category": "TamerOp faster",
+      "intervals_by_degree": [
+        128,
+        31,
+        0
+      ],
+      "interval_count": 159,
+      "exported_witnesses": 0
+    },
+    {
+      "id": "evaluation_03_dense_f3",
+      "family": "dense",
+      "cohort": "evaluation",
+      "n": 96,
+      "prime": 3,
+      "degree": 2,
+      "cocycles": true,
+      "landmarks": null,
+      "shape": "random sphere",
+      "status": "verified",
+      "tamerop_seconds": 0.049741982500000004,
+      "tamerop_construction_seconds": 0.0003441125,
+      "tamerop_construction_plus_query_seconds": 0.0503216965,
+      "tamerop_pass_medians": [
+        {
+          "seconds": 0.032583694,
+          "construction_seconds": 0.000214405,
+          "construction_plus_query_seconds": 0.032833033000000005
+        },
+        {
+          "seconds": 0.058697839,
+          "construction_seconds": 0.000516211,
+          "construction_plus_query_seconds": 0.058981238
+        },
+        {
+          "seconds": 0.074474384,
+          "construction_seconds": 0.000261955,
+          "construction_plus_query_seconds": 0.07469342300000001
+        },
+        {
+          "seconds": 0.040786126,
+          "construction_seconds": 0.00042627,
+          "construction_plus_query_seconds": 0.041662155
+        }
+      ],
+      "tamerop_retained_output_bytes_estimate": 276456.0,
+      "tamerop_rss_bytes": 2067824640,
+      "tamerop_allocation_bytes": 16814184.0,
+      "ripser_seconds": 0.18569167050736723,
+      "ripser_construction_seconds": 0.00028392200329108164,
+      "ripser_construction_plus_query_seconds": 0.18598334950365825,
+      "ripser_pass_medians": [
+        {
+          "seconds": 0.164626119993045,
+          "construction_seconds": 0.0002712360001169145,
+          "construction_plus_query_seconds": 0.1648978139855899
+        },
+        {
+          "seconds": 0.2166623319935752,
+          "construction_seconds": 0.00035924999974668026,
+          "construction_plus_query_seconds": 0.2170215819933219
+        },
+        {
+          "seconds": 0.1875787450117059,
+          "construction_seconds": 0.00027922600565943867,
+          "construction_plus_query_seconds": 0.1878784240107052
+        },
+        {
+          "seconds": 0.18380459600302856,
+          "construction_seconds": 0.0002886180009227246,
+          "construction_plus_query_seconds": 0.1840882749966113
+        }
+      ],
+      "ripser_retained_output_bytes_estimate": 79943.0,
+      "ripser_rss_bytes": 315662336,
+      "ratio_seconds": 3.814345998166583,
+      "ratio_seconds_pass_range": [
+        2.518701531142653,
+        5.052408115330477
+      ],
+      "ratio_seconds_passes": [
+        5.052408115330477,
+        3.691146653517776,
+        2.518701531142653,
+        4.506547054825177
+      ],
+      "ratio_construction_seconds": 0.8928169777263909,
+      "ratio_construction_seconds_pass_range": [
+        0.677077910532584,
+        1.2650637817071173
+      ],
+      "ratio_construction_seconds_passes": [
+        1.2650637817071173,
+        0.6959363511174311,
+        1.0659311929890196,
+        0.677077910532584
+      ],
+      "ratio_construction_plus_query_seconds": 3.785671887489378,
+      "ratio_construction_plus_query_seconds_pass_range": [
+        2.5153275410969607,
+        5.022314386416566
+      ],
+      "ratio_construction_plus_query_seconds_passes": [
+        5.022314386416566,
+        3.6795019798214796,
+        2.5153275410969607,
+        4.418597045606769
+      ],
+      "practical_category": "TamerOp faster",
+      "intervals_by_degree": [
+        96,
+        26,
+        2
+      ],
+      "interval_count": 124,
+      "exported_witnesses": 8
+    },
+    {
+      "id": "evaluation_04_sparse_f2",
+      "family": "sparse",
+      "cohort": "evaluation",
+      "n": 4096,
+      "prime": 2,
+      "degree": 1,
+      "cocycles": false,
+      "landmarks": null,
+      "shape": "permuted grid",
+      "status": "verified",
+      "tamerop_seconds": 0.0041900675,
+      "tamerop_construction_seconds": 0.0006282315,
+      "tamerop_construction_plus_query_seconds": 0.0049114365,
+      "tamerop_pass_medians": [
+        {
+          "seconds": 0.003184124,
+          "construction_seconds": 0.00041469,
+          "construction_plus_query_seconds": 0.003598814
+        },
+        {
+          "seconds": 0.00414433,
+          "construction_seconds": 0.000700996,
+          "construction_plus_query_seconds": 0.004845326
+        },
+        {
+          "seconds": 0.006231935,
+          "construction_seconds": 0.000555467,
+          "construction_plus_query_seconds": 0.0067847079999999995
+        },
+        {
+          "seconds": 0.004235805,
+          "construction_seconds": 0.000747483,
+          "construction_plus_query_seconds": 0.004977547000000001
+        }
+      ],
+      "tamerop_retained_output_bytes_estimate": 157400.0,
+      "tamerop_rss_bytes": 2067824640,
+      "tamerop_allocation_bytes": 5216736.0,
+      "ripser_seconds": 0.007692557999689598,
+      "ripser_construction_seconds": 0.0020253914990462363,
+      "ripser_construction_plus_query_seconds": 0.00971338500676211,
+      "ripser_pass_medians": [
+        {
+          "seconds": 0.006859178000013344,
+          "construction_seconds": 0.0018304469995200634,
+          "construction_plus_query_seconds": 0.008689624999533407
+        },
+        {
+          "seconds": 0.010072923003463075,
+          "construction_seconds": 0.002511094993678853,
+          "construction_plus_query_seconds": 0.012480282995966263
+        },
+        {
+          "seconds": 0.007658928996534087,
+          "construction_seconds": 0.0020205949986120686,
+          "construction_plus_query_seconds": 0.009689394006272778
+        },
+        {
+          "seconds": 0.0077261870028451085,
+          "construction_seconds": 0.002030187999480404,
+          "construction_plus_query_seconds": 0.009737376007251441
+        }
+      ],
+      "ripser_retained_output_bytes_estimate": 34071.0,
+      "ripser_rss_bytes": 314630144,
+      "ratio_seconds": 1.850927541569903,
+      "ratio_seconds_pass_range": [
+        1.2289808857977638,
+        2.4305311120164355
+      ],
+      "ratio_seconds_passes": [
+        2.154180553274101,
+        2.4305311120164355,
+        1.2289808857977638,
+        1.8240185756532958
+      ],
+      "ratio_construction_seconds": 3.5353652296937557,
+      "ratio_construction_seconds_pass_range": [
+        2.7160323371640613,
+        4.414012875931571
+      ],
+      "ratio_construction_seconds_passes": [
+        4.414012875931571,
+        3.5821816296795603,
+        3.637650839045467,
+        2.7160323371640613
+      ],
+      "ratio_construction_plus_query_seconds": 2.0416616569238175,
+      "ratio_construction_plus_query_seconds_pass_range": [
+        1.42812247870841,
+        2.5757364924395727
+      ],
+      "ratio_construction_plus_query_seconds_passes": [
+        2.4145801921225734,
+        2.5757364924395727,
+        1.42812247870841,
+        1.9562599825278275
+      ],
+      "practical_category": "TamerOp faster",
+      "intervals_by_degree": [
+        4096,
+        3969
+      ],
+      "interval_count": 8065,
+      "exported_witnesses": 0
+    },
+    {
+      "id": "evaluation_05_weighted_f101",
+      "family": "weighted",
+      "cohort": "evaluation",
+      "n": 96,
+      "prime": 101,
+      "degree": 2,
+      "cocycles": true,
+      "landmarks": null,
+      "shape": "permuted octahedra",
+      "status": "verified",
+      "tamerop_seconds": 0.0007474784999999999,
+      "tamerop_construction_seconds": 0.0004952405,
+      "tamerop_construction_plus_query_seconds": 0.0013474575,
+      "tamerop_pass_medians": [
+        {
+          "seconds": 0.00062576,
+          "construction_seconds": 0.00011583,
+          "construction_plus_query_seconds": 0.000739416
+        },
+        {
+          "seconds": 0.000750162,
+          "construction_seconds": 0.000990545,
+          "construction_plus_query_seconds": 0.001844966
+        },
+        {
+          "seconds": 0.000959639,
+          "construction_seconds": 0.000135157,
+          "construction_plus_query_seconds": 0.0010947959999999999
+        },
+        {
+          "seconds": 0.000744795,
+          "construction_seconds": 0.000855324,
+          "construction_plus_query_seconds": 0.001600119
+        }
+      ],
+      "tamerop_retained_output_bytes_estimate": 53200.0,
+      "tamerop_rss_bytes": 2067824640,
+      "tamerop_allocation_bytes": 335016.0,
+      "ripser_seconds": 0.000620640508714132,
+      "ripser_construction_seconds": 0.0002395470000919886,
+      "ripser_construction_plus_query_seconds": 0.0008628875002614222,
+      "ripser_pass_medians": [
+        {
+          "seconds": 0.0005888190062250942,
+          "construction_seconds": 0.00022798900317866355,
+          "construction_plus_query_seconds": 0.0008168080094037578
+        },
+        {
+          "seconds": 0.0007090589933795854,
+          "construction_seconds": 0.00027687700639944524,
+          "construction_plus_query_seconds": 0.00097579401335679
+        },
+        {
+          "seconds": 0.0006081830069888383,
+          "construction_seconds": 0.00022593699395656586,
+          "construction_plus_query_seconds": 0.0008415719930781052
+        },
+        {
+          "seconds": 0.0006330980104394257,
+          "construction_seconds": 0.00025110499700531363,
+          "construction_plus_query_seconds": 0.0008842030074447393
+        }
+      ],
+      "ripser_retained_output_bytes_estimate": 4439.0,
+      "ripser_rss_bytes": 314630144,
+      "ratio_seconds": 0.8319849678997021,
+      "ratio_seconds_pass_range": [
+        0.6337622866399119,
+        0.9452078262823037
+      ],
+      "ratio_seconds_passes": [
+        0.9409661950669492,
+        0.9452078262823037,
+        0.6337622866399119,
+        0.8500298880086812
+      ],
+      "ratio_construction_seconds": 0.7208497562709681,
+      "ratio_construction_seconds_pass_range": [
+        0.2795198667394669,
+        1.9683070290828246
+      ],
+      "ratio_construction_seconds_passes": [
+        1.9683070290828246,
+        0.2795198667394669,
+        1.6716632801598574,
+        0.29357880406175163
+      ],
+      "ratio_construction_plus_query_seconds": 0.7058130369967774,
+      "ratio_construction_plus_query_seconds_pass_range": [
+        0.5288953906775463,
+        1.1046663980814018
+      ],
+      "ratio_construction_plus_query_seconds_passes": [
+        1.1046663980814018,
+        0.5288953906775463,
+        0.7687021080439691,
+        0.5525857810854938
+      ],
+      "practical_category": "Ripser.py faster",
+      "intervals_by_degree": [
+        96,
+        0,
+        16
+      ],
+      "interval_count": 112,
+      "exported_witnesses": 6
+    },
+    {
+      "id": "evaluation_06_landmark_f2",
+      "family": "landmark",
+      "cohort": "evaluation",
+      "n": 2048,
+      "prime": 2,
+      "degree": 1,
+      "cocycles": false,
+      "landmarks": 128,
+      "shape": "dyadic Linfinity",
+      "status": "verified",
+      "tamerop_seconds": 0.0156664415,
+      "tamerop_construction_seconds": 0.062255755499999996,
+      "tamerop_construction_plus_query_seconds": 0.0792784185,
+      "tamerop_pass_medians": [
+        {
+          "seconds": 0.010103601,
+          "construction_seconds": 0.043060531,
+          "construction_plus_query_seconds": 0.053288923
+        },
+        {
+          "seconds": 0.015635008,
+          "construction_seconds": 0.074486136,
+          "construction_plus_query_seconds": 0.09072681399999999
+        },
+        {
+          "seconds": 0.018286057,
+          "construction_seconds": 0.050025375,
+          "construction_plus_query_seconds": 0.067830023
+        },
+        {
+          "seconds": 0.015697875,
+          "construction_seconds": 0.09581217,
+          "construction_plus_query_seconds": 0.109707475
+        }
+      ],
+      "tamerop_retained_output_bytes_estimate": 2137288.0,
+      "tamerop_rss_bytes": 2067824640,
+      "tamerop_allocation_bytes": 4409360.0,
+      "ripser_seconds": 0.007900026503193658,
+      "ripser_construction_seconds": 0.11025416399934329,
+      "ripser_construction_plus_query_seconds": 0.11836467550165253,
+      "ripser_pass_medians": [
+        {
+          "seconds": 0.007029868997051381,
+          "construction_seconds": 0.09740264900028706,
+          "construction_plus_query_seconds": 0.10443241300527006
+        },
+        {
+          "seconds": 0.009155570005532354,
+          "construction_seconds": 0.13571510899055284,
+          "construction_plus_query_seconds": 0.14479522198962513
+        },
+        {
+          "seconds": 0.007901864999439567,
+          "construction_seconds": 0.11007541199796833,
+          "construction_plus_query_seconds": 0.1179772769974079
+        },
+        {
+          "seconds": 0.007898188006947748,
+          "construction_seconds": 0.11043291600071825,
+          "construction_plus_query_seconds": 0.11875207400589716
+        }
+      ],
+      "ripser_retained_output_bytes_estimate": 2099567.0,
+      "ripser_rss_bytes": 442937344,
+      "ratio_seconds": 0.5455550942791674,
+      "ratio_seconds_pass_range": [
+        0.4321251431863942,
+        0.6957785642021473
+      ],
+      "ratio_seconds_passes": [
+        0.6957785642021473,
+        0.5855814084349912,
+        0.4321251431863942,
+        0.5031373996128615
+      ],
+      "ratio_construction_seconds": 1.7980654368784617,
+      "ratio_construction_seconds_pass_range": [
+        1.1525980050417213,
+        2.261993680484039
+      ],
+      "ratio_construction_seconds_passes": [
+        2.261993680484039,
+        1.8220183819248301,
+        2.200391541252181,
+        1.1525980050417213
+      ],
+      "ratio_construction_plus_query_seconds": 1.5577565357347236,
+      "ratio_construction_plus_query_seconds_pass_range": [
+        1.0824428691472223,
+        1.9597396067709993
+      ],
+      "ratio_construction_plus_query_seconds_passes": [
+        1.9597396067709993,
+        1.5959473898160377,
+        1.7393076366406053,
+        1.0824428691472223
+      ],
+      "practical_category": "Ripser.py faster",
+      "intervals_by_degree": [
+        128,
+        59
+      ],
+      "interval_count": 187,
+      "exported_witnesses": 0
+    }
+  ],
+  "development_families": [
+    {
+      "family": "cloud",
+      "cases": 4,
+      "ratio_seconds": 3.1597085695031994,
+      "ratio_seconds_passes": [
+        3.2285837693272814,
+        3.798216700333232,
+        2.4971611572366332,
+        3.2549906322292976
+      ],
+      "ratio_seconds_pass_range": [
+        2.4971611572366332,
+        3.798216700333232
+      ],
+      "ratio_construction_seconds": 1.6679305719847246,
+      "ratio_construction_seconds_passes": [
+        1.6593358091741308,
+        1.8145596575333807,
+        1.5432354889293618,
+        1.6656131372131424
+      ],
+      "ratio_construction_seconds_pass_range": [
+        1.5432354889293618,
+        1.8145596575333807
+      ],
+      "ratio_construction_plus_query_seconds": 3.1599970194952136,
+      "ratio_construction_plus_query_seconds_passes": [
+        3.2286863103472823,
+        3.7988309097620374,
+        2.497947730232252,
+        3.2545243867854
+      ],
+      "ratio_construction_plus_query_seconds_pass_range": [
+        2.497947730232252,
+        3.7988309097620374
+      ]
+    },
+    {
+      "family": "dense",
+      "cases": 7,
+      "ratio_seconds": 5.049164358963429,
+      "ratio_seconds_passes": [
+        6.5298620615152965,
+        4.868868622727512,
+        4.228146053030891,
+        4.8349945376093135
+      ],
+      "ratio_seconds_pass_range": [
+        4.228146053030891,
+        6.5298620615152965
+      ],
+      "ratio_construction_seconds": 2.1611679652846365,
+      "ratio_construction_seconds_passes": [
+        2.223498776205412,
+        1.8346644221550008,
+        2.888849275070171,
+        1.8511246691348602
+      ],
+      "ratio_construction_seconds_pass_range": [
+        1.8346644221550008,
+        2.888849275070171
+      ],
+      "ratio_construction_plus_query_seconds": 5.03170799996729,
+      "ratio_construction_plus_query_seconds_passes": [
+        6.500638344204014,
+        4.84863564527278,
+        4.2225365954507605,
+        4.816291270473246
+      ],
+      "ratio_construction_plus_query_seconds_pass_range": [
+        4.2225365954507605,
+        6.500638344204014
+      ]
+    },
+    {
+      "family": "sparse",
+      "cases": 4,
+      "ratio_seconds": 0.8432635269470342,
+      "ratio_seconds_passes": [
+        0.8599134457677529,
+        0.7523190156721727,
+        0.9839094713251991,
+        0.7944038603746053
+      ],
+      "ratio_seconds_pass_range": [
+        0.7523190156721727,
+        0.9839094713251991
+      ],
+      "ratio_construction_seconds": 5.282395864178546,
+      "ratio_construction_seconds_passes": [
+        4.899654012334735,
+        4.51609395114359,
+        7.506900405079761,
+        4.68742941582386
+      ],
+      "ratio_construction_seconds_pass_range": [
+        4.51609395114359,
+        7.506900405079761
+      ],
+      "ratio_construction_plus_query_seconds": 1.2432564482217041,
+      "ratio_construction_plus_query_seconds_passes": [
+        1.2661071873385668,
+        1.0746038573836694,
+        1.5003115818709387,
+        1.1704221992349213
+      ],
+      "ratio_construction_plus_query_seconds_pass_range": [
+        1.0746038573836694,
+        1.5003115818709387
+      ]
+    },
+    {
+      "family": "weighted",
+      "cases": 4,
+      "ratio_seconds": 0.9382615711737566,
+      "ratio_seconds_passes": [
+        0.9377833971455373,
+        0.7973454865140616,
+        1.196042436476798,
+        0.8665628118892185
+      ],
+      "ratio_seconds_pass_range": [
+        0.7973454865140616,
+        1.196042436476798
+      ],
+      "ratio_construction_seconds": 4.177094669781815,
+      "ratio_construction_seconds_passes": [
+        3.6636966939332543,
+        3.8475978820846617,
+        4.982000276293432,
+        4.3349524300074025
+      ],
+      "ratio_construction_seconds_pass_range": [
+        3.6636966939332543,
+        4.982000276293432
+      ],
+      "ratio_construction_plus_query_seconds": 1.2396206866771626,
+      "ratio_construction_plus_query_seconds_passes": [
+        1.1995805995808995,
+        1.07962522854418,
+        1.524576861313879,
+        1.195923715765578
+      ],
+      "ratio_construction_plus_query_seconds_pass_range": [
+        1.07962522854418,
+        1.524576861313879
+      ]
+    },
+    {
+      "family": "landmark",
+      "cases": 8,
+      "ratio_seconds": 1.3411388693549295,
+      "ratio_seconds_passes": [
+        1.7152129903077662,
+        1.0840380393241877,
+        1.5051043915794664,
+        1.1560211934417903
+      ],
+      "ratio_seconds_pass_range": [
+        1.0840380393241877,
+        1.7152129903077662
+      ],
+      "ratio_construction_seconds": 2.003330340233582,
+      "ratio_construction_seconds_passes": [
+        2.3097876623299456,
+        1.5767564478311626,
+        2.8818060373759393,
+        1.534648269276838
+      ],
+      "ratio_construction_seconds_pass_range": [
+        1.534648269276838,
+        2.8818060373759393
+      ],
+      "ratio_construction_plus_query_seconds": 1.8125039911481982,
+      "ratio_construction_plus_query_seconds_passes": [
+        2.2320626148932092,
+        1.4400847860713362,
+        2.263880875725217,
+        1.483091274312205
+      ],
+      "ratio_construction_plus_query_seconds_pass_range": [
+        1.4400847860713362,
+        2.263880875725217
+      ]
+    },
+    {
+      "family": "control",
+      "cases": 4,
+      "ratio_seconds": 0.3167871475128061,
+      "ratio_seconds_passes": [
+        0.37426943210658564,
+        0.22859183024859803,
+        0.447612589064413,
+        0.262980082815506
+      ],
+      "ratio_seconds_pass_range": [
+        0.22859183024859803,
+        0.447612589064413
+      ],
+      "ratio_construction_seconds": 30.288551782152588,
+      "ratio_construction_seconds_passes": [
+        34.280835942125755,
+        20.334716927024285,
+        42.71715865947215,
+        28.263252680108213
+      ],
+      "ratio_construction_seconds_pass_range": [
+        20.334716927024285,
+        42.71715865947215
+      ],
+      "ratio_construction_plus_query_seconds": 0.7350139566862338,
+      "ratio_construction_plus_query_seconds_passes": [
+        0.8906759820595203,
+        0.5150546257446179,
+        1.0352391955098694,
+        0.6145661033717522
+      ],
+      "ratio_construction_plus_query_seconds_pass_range": [
+        0.5150546257446179,
+        1.0352391955098694
+      ]
+    }
+  ],
+  "development_balanced_aggregate": {
+    "seconds": {
+      "ratio": 1.323018287889313,
+      "pass_range": [
+        1.1835690507473111,
+        1.4893472236857583
+      ],
+      "pass_ratios": [
+        1.4893472236857583,
+        1.1835690507473111,
+        1.424933290345781,
+        1.2197737877186428
+      ]
+    },
+    "construction_seconds": {
+      "ratio": 4.110870585708196,
+      "pass_range": [
+        3.5052086954527435,
+        5.232566605651428
+      ],
+      "pass_ratios": [
+        4.1681812395834585,
+        3.5052086954527435,
+        5.232566605651428,
+        3.735596671285584
+      ]
+    },
+    "construction_plus_query_seconds": {
+      "ratio": 1.7877400352503816,
+      "pass_range": [
+        1.5849128302933315,
+        1.9967237330297567
+      ],
+      "pass_ratios": [
+        1.9967237330297567,
+        1.5849128302933315,
+        1.9591317308104177,
+        1.6475191227690145
+      ]
+    }
+  },
+  "accepted_samples": 888,
+  "rejected_samples": 0,
+  "paired_checks": 148,
+  "witness_checks": 520,
+  "large_witness_certificates": 40,
+  "loadavg_one_minute": {
+    "min": 1.29,
+    "median": 4.12,
+    "max": 7.02
+  },
+  "max_monitored_worker_rss_bytes": 3315793920,
+  "summed_worker_seconds": 3211.3765425120073,
+  "policy": "Median within each process; median of four process medians for times. Geometric mean of four paired process ratios per case. Development family ratios geometric means of case ratios; six development families equally weighted only in labeled suite aggregate. Six evaluation cases reported separately and never pooled. Min/max paired-pass ratios are descriptive ranges, not confidence intervals.",
+  "limitations": [
+    "Development and evaluation populations are separate.",
+    "Paired-pass ranges are descriptive, not confidence intervals.",
+    "Representative checks sample at most six positive-degree witnesses per degree.",
+    "No installed-package startup claim.",
+    "One host and supported build; no universal ranking."
+  ]
+}

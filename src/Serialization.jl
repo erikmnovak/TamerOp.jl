@@ -37,6 +37,7 @@ Private fragment layout
 5) `serialization/external_interop.jl`
 6) `serialization/external_cas.jl`
 7) `serialization/owned_mppi.jl`
+8) `serialization/owned_persistence.jl` (ordinary diagrams and retained data)
 
 Keep the owner file thin and place subsystem logic in the private fragments.
 """
@@ -82,5 +83,6 @@ include("serialization/owned_encodings.jl")
 include("serialization/external_interop.jl")
 include("serialization/external_cas.jl")
 include("serialization/owned_mppi.jl")
+include("serialization/owned_persistence.jl")
 
 end # module Serialization

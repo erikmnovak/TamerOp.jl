@@ -3042,6 +3042,14 @@ repeated module comparisons; use the sampled method for quick exploration.
 The final `Float64` conversion can underflow or overflow at extreme scales;
 exact optimization does not enlarge that output format's numerical range.
 See `docs/exact_matching.md` for the proof and its implementation checklist.
+
+Set `witness=true` to return a `MatchingDistanceResult2D` retaining the exact
+scalar, chosen line, its weight and the actual bottleneck assignment. The default
+remains a `Float64`. `slice_query(result)` uses `basepoint + t*direction`;
+`matching_witness(result)` uses the same normalized parameter `t`, without a
+rounded boundary re-query. Positive-area windows have an attained optimum;
+zero-area windows return `:degenerate_window` with no asserted slice. The
+assignment is one deterministic choice, not a uniqueness certificate.
 """
 function matching_distance_exact_2d(
     M::PModule{K}, N::PModule{K}, pi::PLikeEncodingMap, opts::InvariantOptions;
@@ -3050,7 +3058,8 @@ function matching_distance_exact_2d(
     max_candidates::Int=200_000,
     max_cells::Int=5_000_000,
     arrangement=nothing,
-)::Float64 where {K}
+    witness::Bool=false,
+) where {K}
     _check_exact_matching_weight(normalize_dirs, weight)
     max_candidates > 0 || throw(ArgumentError("matching_distance_exact_2d: max_candidates must be positive"))
     pi0 = _unwrap_compiled(pi)
@@ -3071,7 +3080,7 @@ function matching_distance_exact_2d(
     cacheM = fibered_barcode_cache_2d(M, arr; precompute=:none)
     cacheN = fibered_barcode_cache_2d(N, arr; precompute=:none)
     return matching_distance_exact_2d(cacheM, cacheN;
-        weight=weight, max_candidates=max_candidates, threads=threads0)
+        weight=weight, max_candidates=max_candidates, threads=threads0, witness=witness)
 end
 
 function matching_distance_exact_2d(
@@ -3079,14 +3088,15 @@ function matching_distance_exact_2d(
     weight::Symbol=:lesnick_l1,
     max_candidates::Int=200_000,
     threads::Bool=(Threads.nthreads() > 1),
-)::Float64
+    witness::Bool=false,
+)
     cacheM.arrangement === cacheN.arrangement ||
         throw(ArgumentError("matching_distance_exact_2d: caches must share the same arrangement"))
     cacheM.M.Q === cacheN.M.Q || throw(ArgumentError("matching_distance_exact_2d: modules must share the same poset"))
     cacheM.M.field == cacheN.M.field || throw(ArgumentError("matching_distance_exact_2d: modules must share the same coefficient field"))
     _check_exact_matching_weight(cacheM.arrangement.normalize_dirs, weight)
     return _matching_distance_box_exact_2d(cacheM, cacheN;
-        max_candidates=max_candidates, threads=threads)
+        max_candidates=max_candidates, threads=threads, witness=witness)
 end
 
 function _matching_distance_sampled_2d_from_caches(

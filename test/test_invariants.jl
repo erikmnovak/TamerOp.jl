@@ -4753,6 +4753,11 @@ end
             for (normalization,weight) in ((:L1,:lesnick_l1),(:Linf,:lesnick_linf))
                 @test isapprox(F2D.matching_distance_exact_2d(M,N,pi,opts;
                     normalize_dirs=normalization,weight),expected;rtol=1e-13,atol=0)
+                witness = F2D.matching_distance_exact_2d(M,N,pi,opts;
+                    normalize_dirs=normalization,weight,witness=true)
+                @test witness.exact_distance == 5scale/4
+                @test F2D.check_matching_result_2d(witness).valid
+                @test F2D.slice_query(witness).weight * F2D.matching_witness(witness).distance == 5scale/4
                 @test isapprox(TO.Workflow.matching_distance_exact_2d(encM,encN;
                     opts,cache=session,normalize_dirs=normalization,weight),
                     expected;rtol=1e-13,atol=0)
@@ -6493,3 +6498,363 @@ end
 end
 
 end # with_fields
+
+# A54 uses independent dense elimination and all comparable pairs as its oracle.
+# Production uses sparse cover presentations and kernel/cokernel bases.
+function _a54_rank(A)
+    B = copy(A)
+    row = 1
+    for col in axes(B,2)
+        pivot = findfirst(i -> !iszero(B[i,col]), row:size(B,1))
+        isnothing(pivot) && continue
+        pivot += row-1
+        B[row,:], B[pivot,:] = copy(B[pivot,:]), copy(B[row,:])
+        B[row,:] ./= B[row,col]
+        for i in axes(B,1)
+            i == row && continue
+            c = B[i,col]
+            B[i,:] .-= c .* B[row,:]
+        end
+        row += 1
+        row > size(B,1) && break
+    end
+    return row-1
+end
+
+function _a54_comparison_oracle(M, labels; edges=nothing, anchor=1)
+    # The coefficient field determines arithmetic in this independent oracle.
+    K = CM.coeff_type(M.field)
+    ds = M.dims[labels]; off = cumsum([0;ds]); d = sum(ds)
+    isnothing(edges) && (edges = [(a,b) for a in eachindex(labels), b in eachindex(labels)
+                                  if a != b && FF.leq(M.Q,labels[a],labels[b])])
+    C = zeros(K,sum(ds[b] for (a,b) in edges; init=0),d)
+    R = zeros(K,d,sum(ds[a] for (a,b) in edges; init=0))
+    r = 0; c = 0
+    for (a,b) in edges
+        A = Matrix(MD.map_leq(M,labels[a],labels[b]))
+        C[r+1:r+ds[b],off[a]+1:off[a+1]] .= A
+        R[off[b]+1:off[b+1],c+1:c+ds[a]] .= -A
+        for i in 1:ds[b]; C[r+i,off[b]+i] = -one(K); end
+        for i in 1:ds[a]; R[off[a]+i,c+i] = one(K); end
+        r += ds[b]; c += ds[a]
+    end
+    E = zeros(K,d,d)
+    for i in off[anchor]+1:off[anchor+1]; E[i,i] = one(K); end
+    return _a54_rank([R E; zeros(K,size(C,1),size(R,2)) C]) - _a54_rank(R) - _a54_rank(C)
+end
+
+function _a54_interval_sum(P, supports, field; sparse_maps=false)
+    K = CM.coeff_type(field)
+    active = [findall(I -> v in I,supports) for v in 1:FF.nvertices(P)]
+    maps = Dict{Tuple{Int,Int},Matrix{K}}()
+    for (a,b) in FF.cover_edges(P)
+        maps[a,b] = K[i == j for i in active[b], j in active[a]]
+    end
+    if sparse_maps
+        return MD.PModule{K}(P,length.(active),Dict(e=>sparse(A) for (e,A) in maps);field=field)
+    end
+    return MD.PModule{K}(P,length.(active),maps;field=field)
+end
+
+@testset "A54 exact generalized rank and independent canonical-map oracles" begin
+    fork = FF.FinitePoset(Bool[1 0 1; 0 1 1; 0 0 1])
+    for field in (CM.QQField(),CM.F2(),CM.F3(),CM.Fp(5),CM.Fp(101))
+        K = CM.coeff_type(field)
+        parallel = MD.PModule{K}(fork,[1,1,2],Dict((1,3)=>reshape(K[1,0],2,1),
+                         (2,3)=>reshape(K[1,0],2,1));field=field)
+        transverse = MD.PModule{K}(fork,[1,1,2],Dict((1,3)=>reshape(K[1,0],2,1),
+                         (2,3)=>reshape(K[0,1],2,1));field=field)
+        @test Dict(Inv.rank_invariant(parallel)) == Dict(Inv.rank_invariant(transverse))
+        @test Inv.generalized_rank(parallel;vertices=1:3) == 1
+        @test Inv.generalized_rank(transverse;vertices=1:3) == 0
+        for M in (parallel,transverse), labels in ([1],[3],[1,3],[2,3],[1,2,3])
+            r = Inv.generalized_rank(M;vertices=labels,witnesses=true)
+            @test Inv.generalized_rank(r) == _a54_comparison_oracle(M,labels)
+            for a in eachindex(labels)
+                @test Inv.generalized_rank(r) == _a54_comparison_oracle(M,labels;anchor=a)
+            end
+            L = Inv.limit_basis(r); Q = Inv.colimit_projection(r)
+            off = cumsum([0; M.dims[labels]])
+            for a in eachindex(labels), b in eachindex(labels)
+                FF.leq(M.Q,labels[a],labels[b]) || continue
+                A = MD.map_leq(M,labels[a],labels[b])
+                ia = off[a]+1:off[a+1]; ib = off[b]+1:off[b+1]
+                @test A * L[ia,:] == L[ib,:]
+                @test Q[:,ib]*A == Q[:,ia]
+                @test Q[:,ia]*L[ia,:] == Inv.comparison_map(r)
+            end
+            @test _a54_rank(L) == size(L,2)
+            @test _a54_rank(Q) == size(Q,1)
+            @test Inv.describe(r).rank == Inv.generalized_rank(r)
+            @test Inv.source_poset(r) === M.Q
+            @test Inv.selected_vertices(r) == labels
+            @test occursin("GeneralizedRankResult",sprint(show,r))
+            empty!(Inv.selected_vertices(r))
+            @test Inv.selected_vertices(r) == labels
+        end
+        # Three nonzero arrows into a 2D stalk give a negative Mobius coefficient.
+        P = FF.FinitePoset(Bool[1 0 0 1; 0 1 0 1; 0 0 1 1; 0 0 0 1])
+        M = MD.PModule{K}(P,[1,1,1,2],Dict((1,4)=>reshape(K[1,0],2,1),
+             (2,4)=>reshape(K[0,1],2,1),(3,4)=>reshape(K[1,1],2,1));field=field)
+        summary = Inv.interval_rank_summary(M;family=[[4],[1,4],[2,4],[3,4]])
+        @test Inv.interval_coefficients(summary) == [-1,1,1,1]
+        @test [Inv.reconstruct_rank(summary;vertices=I) for I in Inv.interval_family(summary)] == [2,1,1,1]
+        @test Inv.describe(summary).reconstruction === :declared_family
+        @test Inv.describe(summary).compression === :total
+        @test_throws ArgumentError Inv.reconstruct_rank(summary;vertices=[1,2,4])
+        @test Inv.nentries(summary) == 4
+        @test_throws ArgumentError Inv.reconstruct_rank(summary;vertices=[4.0])
+        @test_throws ArgumentError Inv.reconstruct_rank(summary;vertices=[4,4])
+        @test_throws ArgumentError Inv.reconstruct_rank(summary;vertices=:all)
+        @test occursin("IntervalRankSummary",sprint(show,summary))
+        @test Inv.nentries(Inv.interval_rank_summary(M;family=[])) == 0
+        @test_throws ArgumentError Inv.interval_rank_summary(M;family=[[4],[4]])
+        @test_throws ArgumentError Inv.interval_rank_summary(M;family=[[4]],compression=:source_sink)
+    end
+    # Arithmetic genuinely depends on the field, although all edge ranks equal one.
+    for p in (2,3,5), field in (CM.QQField(),CM.Fp(p))
+        K = CM.coeff_type(field)
+        M = MD.PModule{K}(fork,[1,1,2],Dict((1,3)=>reshape(K[1,0],2,1),
+                          (2,3)=>reshape(K[1,p],2,1));field=field)
+        @test Inv.generalized_rank(M;vertices=1:3) == (field isa CM.QQField ? 0 : 1)
+    end
+    # Interval-sum oracle, including zero-dimensional stalks and sparse storage.
+    rng = MersenneTwister(5401)
+    for P in (chain_poset(4),fork,FF.ProductOfChainsPoset((2,2))), field in (CM.QQField(),CM.F2(),CM.F3(),CM.Fp(5))
+        n = FF.nvertices(P)
+        constant = _a54_interval_sum(P,[collect(1:n)],field)
+        regions = [findall(i -> !iszero(mask & (1<<(i-1))),1:n) for mask in 1:2^n-1]
+        filter!(I -> Inv.check_generalized_rank_region(constant;vertices=I).valid,regions)
+        for trial in 1:4
+            supports = rand(rng,regions,5)
+            M = _a54_interval_sum(P,supports,field;sparse_maps=iseven(trial))
+            for I in regions
+                expected = count(J -> issubset(I,J),supports)
+                @test Inv.generalized_rank(M;vertices=reverse(I)) == expected
+                @test _a54_comparison_oracle(M,I) == expected
+            end
+            s = Inv.interval_rank_summary(M;family=reverse(regions))
+            @test all(I -> Inv.reconstruct_rank(s;vertices=I) == count(J -> issubset(I,J),supports),regions)
+        end
+    end
+end
+
+@testset "A54 generalized-rank validation and budgets" begin
+    P = chain_poset(3); M = _a54_interval_sum(P,[[1,2,3]],CM.QQField())
+    for bad in ([],[0],[4],[1,1],[1.0],[true],[1,3],:all)
+        report = Inv.check_generalized_rank_region(M;vertices=bad)
+        @test !report.valid
+        @test !isempty(report.issues)
+        @test Inv.describe(report).valid == false
+        @test occursin("valid=false",sprint(show,report))
+        @test_throws ArgumentError Inv.check_generalized_rank_region(M;vertices=bad,throw=true)
+        @test_throws ArgumentError Inv.generalized_rank(M;vertices=bad)
+    end
+    fork = FF.FinitePoset(Bool[1 0 1;0 1 1;0 0 1])
+    N = _a54_interval_sum(fork,[[1,2,3]],CM.QQField())
+    @test !Inv.check_generalized_rank_region(N;vertices=[1,2]).valid
+    @test_throws ArgumentError Inv.GeneralizedRankBudget(max_queries=0)
+    @test_throws ArgumentError Inv.GeneralizedRankBudget(max_vertices=1.0)
+    for budget in (Inv.GeneralizedRankBudget(max_vertices=2),
+                   Inv.GeneralizedRankBudget(max_dimension=2),
+                   Inv.GeneralizedRankBudget(max_matrix_entries=1),
+                   Inv.GeneralizedRankBudget(max_order_checks=1))
+        @test_throws ArgumentError Inv.generalized_rank(M;vertices=1:3,budget=budget)
+    end
+    @test_throws ArgumentError Inv.interval_rank_summary(M;family=[[1],[2]],budget=Inv.GeneralizedRankBudget(max_queries=1))
+    realmodule = _a54_interval_sum(P,[[1,2,3]],CM.RealField(Float64))
+    @test_throws ArgumentError Inv.generalized_rank(realmodule;vertices=1:3)
+end
+
+@testset "A54 GRIL rectangle-sum mathematical oracles" begin
+    axes = (QQ[0,1,3,4], QQ[-1,0,2,5])
+    P = FF.ProductOfChainsPoset((4,4)); grid = EC.GridEncodingMap(P,axes)
+    rectangles = [(0,4,-1,5),(1,3,0,2),(0,3,0,5)]
+    supports = [[i+(j-1)*4 for j in 1:4 for i in 1:4
+                if a <= axes[1][i] < b && c <= axes[2][j] < d] for (a,b,c,d) in rectangles]
+    centers = [(2,1),(1,0),(0,0),(5,1),(-1,1),(5//2,3//2)]
+    levels = [3,1,2,4]; lengths = [1,2,3]
+    for field in (CM.QQField(),CM.F2(),CM.F3(),CM.Fp(5))
+        M = _a54_interval_sum(P,supports,field)
+        result = Inv.gril(M,grid;centers=centers,levels=levels,lengths=lengths)
+        for (ci,(x,y)) in enumerate(centers), k in levels, ell in lengths
+            survival = sort([max(0,min(x-a,b-x,y-c,d-y))/QQ(ell) for (a,b,c,d) in rectangles];rev=true)
+            expected = k <= length(survival) ? survival[k] : zero(QQ)
+            @test Inv.value_at(result;center=ci,level=k,length=ell) == expected
+        end
+        for p in centers, ell in lengths, delta in (0,1//4,1//2,1,2)
+            expected = count(rectangles) do (a,b,c,d)
+                a <= p[1]-ell*delta && p[1]+ell*delta < b &&
+                c <= p[2]-ell*delta && p[2]+ell*delta < d
+            end
+            @test Inv.worm_rank(M,grid;center=p,width=delta,length=ell) == expected
+        end
+        @test Inv.gril_centers(result) == centers
+        @test Inv.gril_levels(result) == levels
+        @test Inv.gril_lengths(result) == lengths
+        @test Inv.feature_vector(result) == vec(Inv.gril_values(result))
+        @test Inv.describe(result).exact
+        @test Inv.describe(result).worm === :continuous
+        @test occursin("GRILResult",sprint(show,result))
+        copy_values = Inv.gril_values(result); fill!(copy_values,-1)
+        @test all(>=(0),Inv.gril_values(result))
+        @test_throws ArgumentError Inv.value_at(result;center=1,level=9,length=1)
+        @test_throws ArgumentError Inv.value_at(result;center=1,level=1,length=9)
+    end
+end
+
+@testset "A54 GRIL geometry, continuous worms, and public workflows" begin
+    # This single-bin module is an infinite quadrant. No artificial top cutoff.
+    P = FF.ProductOfChainsPoset((1,1)); grid = EC.GridEncodingMap(P,([0],[0]))
+    M = _a54_interval_sum(P,[[1]],CM.QQField())
+    r = Inv.gril(M,grid;centers=[(4,6)],levels=[1,2],lengths=[1,2,4])
+    @test Inv.gril_values(r) == reshape(QQ[4,0,2,0,1,0],1,2,3)
+    @test Inv.worm_rank(M,grid;center=(4,6),width=4) == 1
+    @test Inv.worm_rank(M,grid;center=(4,6),width=401//100) == 0
+    compiled = EC.compile_encoding(P,grid)
+    enc = TamerOp.EncodingResult(P,M,compiled)
+    sc = TamerOp.SessionCache()
+    for cache in (:auto,sc)
+        @test TamerOp.generalized_rank(enc;vertices=[1],cache=cache) == 1
+        @test TamerOp.generalized_rank(TamerOp.generalized_rank(M;vertices=[1],witnesses=true)) == 1
+        @test Inv.interval_coefficients(TamerOp.interval_rank_summary(enc;family=[[1]],cache=cache)) == [1]
+        @test Inv.gril_values(TamerOp.gril(enc;centers=[(4,6)],cache=cache)) == fill(QQ(4),1,1,1)
+        @test TamerOp.invariant(enc;which=:generalized_rank,vertices=[1],cache=cache).value == 1
+        @test Inv.gril_values(TamerOp.invariant(enc;which=:gril,centers=[(4,6)],cache=cache).value) == fill(QQ(4),1,1,1)
+    end
+    badmetadata = EC.GridEncodingMap{2,Int,typeof(P)}(P,([0],[0]),(1,1),(2,1),(1,2))
+    @test !Inv.check_gril_query(M,badmetadata;centers=[(1,1)]).valid
+    @test TOA.GeneralizedRankBudget === Inv.GeneralizedRankBudget
+    @test TOA.worm_rank === Inv.worm_rank
+    @test TOA.check_gril_query === Inv.check_gril_query
+    @test Inv.check_gril_query(M,grid;centers=[(1,1)]).valid
+    @test !Inv.check_gril_query(M,grid;centers=[(NaN,1)]).valid
+    @test !Inv.check_gril_query(M,grid;centers=[(pi,1)]).valid
+    @test_throws ArgumentError Inv.check_gril_query(M,grid;centers=[(1,1)],levels=[0],throw=true)
+    @test_throws ArgumentError Inv.gril(M,grid;centers=[(1,1)],budget=Inv.GeneralizedRankBudget(max_events=1))
+    @test_throws ArgumentError Inv.gril(M,EC.GridEncodingMap(FF.ProductOfChainsPoset((2,1)),([0,0],[0]));centers=[(1,1)])
+    @test_throws ArgumentError Inv.gril(M,EC.GridEncodingMap(FF.ProductOfChainsPoset((2,1)),([0,1],[0]));centers=[(1,1)])
+    @test Inv.gril_values(Inv.gril(M,grid;centers=[])) == zeros(QQ,0,1,1)
+    for kwargs in ((centers=[(Inf,1)],),(centers=[(1,)],),(centers=[(1,1)],levels=[0]),
+                   (centers=[(1,1)],lengths=[1,1]),(centers=[(1,1)],lengths=[1.5]))
+        @test_throws ArgumentError Inv.gril(M,grid;kwargs...)
+    end
+    @test_throws ArgumentError Inv.worm_rank(M,grid;center=(1,1),width=-1)
+    @test_throws ArgumentError Inv.gril(M,EC.GridEncodingMap(P,([0],[0]);orientation=(-1,1));centers=[(1,1)])
+    @test_throws ArgumentError Inv.gril(M,EC.GridEncodingMap(P,([0],));centers=[(1,1)])
+    @test_throws ArgumentError Inv.gril(M,grid;centers=[(1,1)],levels=[1,2],budget=Inv.GeneralizedRankBudget(max_queries=1))
+    @test_throws ArgumentError Inv.gril(M,grid;centers=[(1,1)],budget=Inv.GeneralizedRankBudget(max_order_checks=1))
+    # A continuous worm meets an off-diagonal grid cell missed by a union of
+    # only 2ell-1 squares. All finite stalks there are zero: rank must vanish.
+    axes = (QQ[-2,7//4,3],QQ[-2,5//4,3])
+    P2 = FF.ProductOfChainsPoset((3,3)); g2 = EC.GridEncodingMap(P2,axes)
+    # Downset x < 7/4 OR y < 5/4; the worm at (1,1), ell=2,d=1/2
+    # reaches (7/4,5/4), whereas the three-square substitute misses it.
+    support = [i+(j-1)*3 for j in 1:3 for i in 1:3 if axes[1][i] < 7//4 || axes[2][j] < 5//4]
+    N = _a54_interval_sum(P2,[support],CM.QQField())
+    @test Inv.worm_rank(N,g2;center=(1,1),width=1//2,length=2) == 0
+    @test Inv.gril_values(Inv.gril(N,g2;centers=[(1,1)],lengths=[2])) == fill(QQ(1,2),1,1,1)
+end
+
+@testset "A54 invariance under stalk bases and poset labels" begin
+    P = FF.ProductOfChainsPoset((2,2))
+    for field in (CM.QQField(),CM.F2(),CM.F3(),CM.Fp(5))
+        K = CM.coeff_type(field)
+        M = _a54_interval_sum(P,[[1,2,3,4],[2,3,4],[2,4],[3,4]],field)
+        bases = Matrix{K}[]; inverses = Matrix{K}[]
+        for d in M.dims
+            N = zeros(K,d,d)
+            for i in 1:d-1; N[i,i+1] = K(i); end
+            B = Matrix{K}(I,d,d)+N
+            inverse = Matrix{K}(I,d,d); power = copy(inverse)
+            for j in 1:d-1; power = -power*N; inverse += power; end
+            @test B*inverse == Matrix{K}(I,d,d)
+            push!(bases,B); push!(inverses,inverse)
+        end
+        changed = MD.PModule{K}(P,M.dims,Dict((a,b)=>bases[b]*MD.map_leq(M,a,b)*inverses[a]
+                                  for (a,b) in FF.cover_edges(P));field=field)
+        permutation = [4,2,1,3]
+        relabeledP = FF.FinitePoset([FF.leq(P,a,b) for a in permutation,b in permutation])
+        relabeled = MD.PModule{K}(relabeledP,M.dims[permutation],Dict((a,b)=>Matrix(MD.map_leq(M,permutation[a],permutation[b]))
+                                      for (a,b) in FF.cover_edges(relabeledP));field=field)
+        for labels in ([1,2,3,4],[2,3,4],[1,2,3],[2,4],[3],[4])
+            expected = _a54_comparison_oracle(M,labels)
+            @test Inv.generalized_rank(changed;vertices=labels) == expected
+            relabeledI = [findfirst(==(a),permutation) for a in labels]
+            @test Inv.generalized_rank(relabeled;vertices=relabeledI) == expected
+        end
+    end
+end
+
+# Independent three-variable linear-program vertex enumeration. This minimizes
+# worm width at which a complement cell is met, without production fiber
+# contraction, endpoint arrangements, nullspaces, or binary search.
+_a54_det3(A) = A[1,1]*(A[2,2]*A[3,3]-A[2,3]*A[3,2]) -
+              A[1,2]*(A[2,1]*A[3,3]-A[2,3]*A[3,1]) +
+              A[1,3]*(A[2,1]*A[3,2]-A[2,2]*A[3,1])
+function _a54_cell_entry(ax,p,ell,i,j,cap)
+    xlo,ylo = ax[1][i],ax[2][j]
+    xhi = i < length(ax[1]) ? ax[1][i+1] : p[1]+ell*cap
+    yhi = j < length(ax[2]) ? ax[2][j+1] : p[2]+ell*cap
+    # A*(x,y,delta) <= b, with cell closure: entry infima ignore attainment.
+    A = QQ[-1 0 0; 1 0 0; 0 -1 0; 0 1 0; 0 0 -1;
+            1 0 -ell; -1 0 -ell; 0 1 -ell; 0 -1 -ell;
+            1 1 -2; -1 -1 -2]
+    b = QQ[-xlo,xhi,-ylo,yhi,0,p[1],-p[1],p[2],-p[2],sum(p),-sum(p)]
+    answer = QQ(cap)
+    for a in 1:size(A,1)-2, c in a+1:size(A,1)-1, d in c+1:size(A,1)
+        rows = [a,c,d]; S = A[rows,:]; determinant = _a54_det3(S)
+        iszero(determinant) && continue
+        candidate = QQ[]
+        for column in 1:3
+            T = copy(S); T[:,column] = b[rows]
+            push!(candidate,_a54_det3(T)/determinant)
+        end
+        candidate[3] < answer && all(A*candidate .<= b) && (answer=candidate[3])
+    end
+    return answer
+end
+
+@testset "A54 GRIL independent polyhedral distance oracle and refinement" begin
+    ax = (QQ[0,1,3],QQ[0,2,4]); P = FF.ProductOfChainsPoset((3,3))
+    grid = EC.GridEncodingMap(P,ax)
+    # Order-convex staircase supports, including unbounded upper tails.
+    supports = [[v for v in 1:9 if (FF.leq(P,v,6) || FF.leq(P,v,8))],
+                [v for v in 1:9 if FF.leq(P,2,v) || FF.leq(P,4,v)],
+                [v for v in 1:9 if FF.leq(P,2,v) && FF.leq(P,v,9)],
+                [1,2,4,5,7,8]]
+    points = [(3//2,5//2),(5//2,7//2)]
+    lengths = [1,2,3]
+    expected = zeros(QQ,2,4,3)
+    for (c,p) in enumerate(points),(l,ell) in enumerate(lengths)
+        cap = min(p[1],p[2])/ell
+        # Compute each complement cell's entry once, independently of the module.
+        entries = [_a54_cell_entry(ax,p,ell,i,j,cap) for j in 1:3 for i in 1:3]
+        survival = sort([minimum([QQ(cap); [entries[v] for v in 1:9 if !(v in support)]])
+                         for support in supports];rev=true)
+        expected[c,:,l] = survival
+    end
+    for field in (CM.QQField(),CM.F3())
+        M = _a54_interval_sum(P,supports,field)
+        result = Inv.gril(M,grid;centers=points,levels=1:4,lengths=lengths)
+        @test Inv.gril_values(result) == expected
+        finer = (QQ[0,1//2,1,2,3],QQ[0,1,2,3,4])
+        Q = FF.ProductOfChainsPoset((5,5)); pi = EC.GridEncodingMap(Q,finer)
+        labels = [searchsortedlast(ax[1],x)+3*(searchsortedlast(ax[2],y)-1) for y in finer[2] for x in finer[1]]
+        K = CM.coeff_type(field)
+        N = MD.PModule{K}(Q,M.dims[labels],Dict((a,b)=>Matrix(MD.map_leq(M,labels[a],labels[b]))
+                             for (a,b) in FF.cover_edges(Q));field=field)
+        @test Inv.gril_values(Inv.gril(N,pi;centers=points,levels=1:4,lengths=lengths)) == expected
+        for p in points,ell in lengths,delta in (1//8,1//4,3//8)
+            @test Inv.worm_rank(M,grid;center=p,width=delta,length=ell) ==
+                  Inv.worm_rank(N,pi;center=p,width=delta,length=ell)
+        end
+    end
+end
+
+@testset "A54 executable documentation examples" begin
+    include(joinpath(@__DIR__,"..","docs","examples","generalized_rank.jl"))
+    @test TamerOp.generalized_rank(GRExamples.witness) == 1
+    @test Inv.interval_coefficients(GRExamples.signed) == [-1,1,1,1]
+    @test Inv.gril_values(GRExamples.landscape) == reshape(QQ[4,0,2,0,1,0],1,2,3)
+end

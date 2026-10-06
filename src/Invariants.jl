@@ -11,6 +11,8 @@ modules.
 
 Private fragments loaded here:
 - `src/invariants/basics.jl`: rank/Hilbert primitives
+- `src/invariants/generalized_rank.jl`: selected-domain ranks and signed interval families
+- `src/invariants/gril.jl`: exact continuous-worm landscapes on grid encodings
 - `src/invariants/module_stats.jl`: module-size summaries and interface measures
 - `src/invariants/geometry_stats.jl`: geometry/asymptotic summaries
 - `src/invariants/algebraic_support.jl`: pretty printing, Betti/Bass support,
@@ -22,6 +24,8 @@ Private fragments loaded here:
 
 using LinearAlgebra
 using JSON3
+using SparseArrays: sparse
+using ..CoreModules: QQ, QQField, PrimeField
 using ..CoreModules: _foreach_workchunk, EncodingCache, AbstractCoeffField, RegionPosetCachePayload,
                      AbstractSlicePlanCache
 using ..Options: InvariantOptions
@@ -141,6 +145,8 @@ import ..ChainComplexes: describe
 
 include("invariants/basics.jl")
 include("invariants/summary_types.jl")
+include("invariants/generalized_rank.jl")
+include("invariants/gril.jl")
 include("invariants/module_stats.jl")
 include("invariants/geometry_stats.jl")
 include("invariants/algebraic_support.jl")

@@ -52,7 +52,7 @@ id = "benchmarks"
 title = "Benchmark results"
 page = "benchmarks/index.html"
 types = ["benchmark_report"]
-order = ["C01", "C18"]
+order = ["C01", "C18", "C14"]
 
 [[collections]]
 id = "contributing"
@@ -76,3 +76,8 @@ owner = "C01"
 id = "phat_data"
 collection = "benchmarks"
 owner = "C18"
+
+[[resources]]
+id = "ripser_data"
+collection = "benchmarks"
+owner = "C14"

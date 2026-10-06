@@ -46,6 +46,28 @@ requests the full table of transitive maps. All selections are static API
 arguments, not hover or click callbacks. Use `visualize` / `save_visual` to
 render the resulting specification with an optional backend.
 
+# Anchored ordinary rank
+
+    visual_spec(M; kind=:rank_section, source=1, vertex=nothing)
+    visual_spec(enc; kind=:rank_section, source=(x,y), point=nothing, box=nothing)
+
+Fix exactly one `source` or `target`. The remaining endpoint varies over the
+finite poset or the parameter plane. A finite-ID collection on a `PModule`, or
+a collection of planar points on an encoding, gives small multiples sharing
+one rank scale. An integer anchor on an encoding explicitly selects the finite
+model, not an invented parameter representative.
+
+`vertex` or `point` selects the other endpoint and displays its actual matrix,
+endpoint dimensions and rank. Unordered parameters are masked before finite
+label lookup, including within a single fiber. Zero rank and unrepresented
+parameters have separate meanings. Grid axis orientations and exact boundaries
+are retained. This is ordinary pair rank, not generalized rank.
+
+Each distinct anchor label computes a rank row or column; no all-pairs table
+or collection of row matrices is retained. Queries may materialize a lazy
+module. Use `inspection_session(obj; view=:rank_from)` or `view=:rank_to` for
+linked browser selection, with bounded row/column reuse.
+
 # Indicator presentations
 
     visual_spec(H::FringeModule; kind=:presentation_inspector, vertex=nothing,
@@ -75,6 +97,77 @@ with separately stored module coordinates is asserted. Exact coefficients and
 full matrices remain in metadata; `matrix_limit` only truncates their display.
 `RealField` rank and solve semantics use its recorded tolerances. Selections are
 static API arguments. Click/hover linkage is not part of this view.
+
+# Morphisms and exact sequences
+
+    visual_spec(f::PMorphism; kind=:morphism_inspector, vertex=nothing,
+                pair=nothing, matrix_limit=(12,12))
+    visual_spec(f::PMorphism; kind=:naturality, pair, matrix_limit=(12,12))
+    visual_spec(f::PMorphism; kind=:kernel_image_cokernel, vertex,
+                matrix_limit=(12,12))
+    visual_spec(f::PMorphism; kind=:morphism_support, encoding, box=nothing)
+    visual_spec(ses::ShortExactSequence; kind=:exact_sequence, vertex=nothing,
+                matrix_limit=(12,12))
+
+A component `f(q)` goes between two modules at the same finite label; it is
+not a structure map between two labels. The default view aligns source and
+target diagrams and checks cover naturality. Select `vertex=q` for the actual
+component or `pair=(p,q)` for its commuting square and both composites.
+Incomparable/reversed pairs have no forward square, not a zero square.
+
+The subquotient recipe explicitly constructs three modules with their inclusion
+and projection morphisms. No direct-summand claim follows. An exact-sequence
+view performs fresh algebra-owner checks, including the image/kernel equation;
+cached status or matching dimensions alone is not accepted as a certificate.
+For `RealField`, equation panels retain residuals and declared tolerances.
+
+Support plots require an `EncodingResult` whose finite poset is the identical
+base of the supplied morphism. Both modules are pulled back along its supported
+planar classifier; a finite `box` limits only the picture. Source/target support
+overlap alone supplies neither a morphism nor its image. A classifier from an
+unrelated encoding with similar labels is rejected.
+
+Selected Hom basis morphisms, supplied cochain maps and homotopies, and supplied
+projective-resolution lifts have the additional recipes `:hom_basis`,
+`:chain_map`, `:homotopy_comparison`, and `:resolution_lift` respectively.
+`HomSpace` accepts `basis_index` (the first element by default, or an informative
+empty view for zero Hom) and the same `vertex`/`pair` selections. A cochain map
+accepts `degree`, `vertex=1`, and `induced=false`; opt in to compute its induced
+cohomology-module map. A cochain homotopy also accepts `induced_maps=(a,b)`;
+these supplied maps are checked against recomputed maps in compatible quotient
+bases. Its witness is `f-g=d h+h d`, with differentials increasing degree.
+
+For the explicit `kind=:resolution_lift` view of `ProjectiveResolution`, supply
+`target_resolution`, `morphism`, and `lift`
+(a vector of generator coefficient matrices, starting at homological degree 0).
+Choose `degree=0`, `vertex=1`, and optionally `comparison_lift` and `homotopy`.
+Both lifts must cover the same supplied degree range and lift the same module
+map. The witness matrix `homotopy[k+1]` maps `P_k` to `Q_(k+1)`; its equation is
+`F_k-G_k=d_Q h_k+h_(k-1) d_P` with `h_(-1)=0`. Uncomputed tails are not certified.
+All these recipes accept `matrix_limit` and retain their chosen bases/degree
+conventions. These are static API selections; a WGL export does not add live
+selection callbacks. `matrix_limit` caps displayed coefficients, not algebraic
+computation. Full selected matrices are copied into specification metadata.
+
+Resolution objects (including `ResolutionResult`) default to `:betti_table` or
+`:bass_table`, counting stored principal summands without algebra. With
+`verify=true`, check the augmented prefix, minimal covers/hulls and terminal
+kernel/cokernel freshly. Unstored degrees remain unknown. `:resolution` accepts
+`degree=0`, `summand=nothing`, `vertex=nothing`, `matrix_limit=(12,12)`,
+`support_sheets=false`, `grades=nothing` and an optional supplied
+`basis_change=(; source=S, target=T)` on a positive-degree differential.
+Projective degree k selects d_k; injective degree k selects d^(k-1).
+Support sheets separate summands of a term schematically, not the resolved
+module. Grade-plane kinds `:betti_degrees`/`:bass_degrees` require one supplied
+planar order-embedding coordinate pair per finite vertex and accept `degree`
+and `verify`; they make no ambient multigraded free-resolution claim.
+
+`UpsetPresentation` and `DownsetCopresentation` have `:presentation_incidence`:
+principal supports, target rows/source columns, marked order-forced zeros,
+selected active stalks, and an optional invertible graded basis change satisfying
+A*S=T*B. Degree 0/1 selects generators/relations (dually cogenerators/corelations).
+Their represented constructions are cokernel/kernel, not the fringe image.
+See `docs/src/reference/visualization.md` and the executable resolution guide.
 """
 function visual_spec(obj; kind::Symbol=:auto, cache=:auto, kwargs...)
     haskey(kwargs, :backend) && throw(ArgumentError("backend belongs to visualize/render, not visual_spec"))
@@ -345,14 +438,15 @@ function available_visuals(enc::CompiledEncoding)
 end
 
 function _visual_spec(res::EncodingResult, kind::Symbol; kwargs...)
+    kind === :rank_section && return _rank_section_spec(res; kwargs...)
     kind in (:hasse, :module_inspector) && return _module_visual_spec(res, kind; kwargs...)
     kind === :presentation_inspector && return _presentation_visual_spec(res; kwargs...)
     return _visual_spec(encoding_map(res), kind; kwargs...)
 end
 
 available_visuals(res::EncodingResult) = Results.encoding_presentation(res) === nothing ?
-    (available_visuals(encoding_map(res))..., :hasse, :module_inspector) :
-    (available_visuals(encoding_map(res))..., :hasse, :module_inspector, :presentation_inspector)
+    (available_visuals(encoding_map(res))..., :hasse, :module_inspector, :rank_section) :
+    (available_visuals(encoding_map(res))..., :hasse, :module_inspector, :presentation_inspector, :rank_section)
 
 function _poset_coordinates_2d(P::ProductOfChainsPoset{2})
     pts = Vector{NTuple{2,Float64}}(undef, nvertices(P))

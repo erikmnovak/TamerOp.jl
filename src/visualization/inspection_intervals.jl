@@ -55,7 +55,7 @@ function _interval_inspection_readout(payload, state, representative)
         push!(lines,"Representative unavailable: $(representative.reason).")
         push!(lines,"For ordinary diagrams, compute persistence with representatives=true to retain reduction cycles.")
     else
-        push!(lines,"F2 reduction representative; this choice is not canonical and carries no geometric embedding.")
+        push!(lines,"F$(representative.field.p) reduction representative; this choice is not canonical and carries no geometric embedding.")
         for (name,chain) in (("Cycle",representative.cycle),("Bounding chain at death",representative.bounding_chain))
             chain === nothing && continue
             shown = min(length(chain.cell_ids),12)

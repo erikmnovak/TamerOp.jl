@@ -1,25 +1,29 @@
 # =============================================================================
 # OrdinaryPersistence.jl
 #
-# One-parameter persistence of finite filtered chain complexes over F2.
+# One-parameter persistence of finite filtered chain complexes over prime fields.
 # =============================================================================
 module OrdinaryPersistence
 
 using SparseArrays
-using ..CoreModules: F2, PrimeField
+using ..CoreModules: F2, PrimeField, FpElem, coeff_type, QQ
+using ..ExactReals: AlgebraicReal
+import ..SliceInvariants: bottleneck_distance, bottleneck_matching, wasserstein_distance,
+    persistence_landscape, persistence_image, persistence_silhouette, barcode_entropy, barcode_summary
 using ..DataTypes: GradedComplex, ImageNd
 import ..DataIngestion
 import ..ChainComplexes: describe
 import ..FiniteFringe: field
 import ..Results: provenance, result_summary
 
-# Retained F2 chains use dimension-local indices, not potentially repeated cell
+# Retained chains use dimension-local indices, not potentially repeated cell
 # labels. This storage is produced only by the reduction below; provenance text
 # alone never enables representative selection.
 struct _PersistenceChain{T}
     indices::Vector{Int}
     ids::Vector{Int}
     grades::Vector{T}
+    coefficients::Vector{Int}
 end
 
 struct _PersistenceRepresentative{T}
@@ -34,10 +38,25 @@ struct _PersistenceRepresentatives{T}
     essential::Vector{Vector{_PersistenceRepresentative{T}}}
 end
 
+# A fixed cochain is restricted to active cells when queried. Its full support
+# can include cells later than birth. It is a cocycle only before finite death.
+struct _PersistenceCocycle{T}
+    birth::T
+    death::Union{Nothing,T}
+    cochain::_PersistenceChain{T}
+    vertices::Union{Nothing,Vector{Vector{Int}}}
+end
+
+struct _PersistenceCocycles{T}
+    finite::Vector{Vector{_PersistenceCocycle{T}}}
+    essential::Vector{Vector{_PersistenceCocycle{T}}}
+    indexing::Symbol
+end
+
 """
     PersistenceDiagram(finite_by_dim, essential_by_dim; field=F2(), order=:sublevel)
 
-Ordinary persistent homology over `F2()`. Homological dimensions are zero-based.
+Ordinary persistent homology over a prime field (`F2()` by default). Homological dimensions are zero-based.
 Finite endpoints and essential births retain their original scalar type.
 Essential deaths are stored separately, so exact grades never acquire a
 floating-point approximation merely to represent infinity.
@@ -47,7 +66,9 @@ represents `(d,b]` in the original parameter units. Empty (zero-length) bars
 are omitted. Use `finite_intervals`, `essential_births`, `persistence_intervals`,
 `field`, `filtration_order`, and `provenance` to inspect a diagram. Computing with
 `representatives=true` also retains reduction cycles inspected by
-`persistence_representative`; hand-built endpoint diagrams have none.
+`persistence_representative`. Opt in with `cocycles=true` for scale-specific
+cohomology representatives from `persistence_cocycle`. Hand-built endpoint
+diagrams retain neither kind of representative.
 """
 struct PersistenceDiagram{T<:Real,M<:NamedTuple}
     finite_by_dim::Vector{Vector{Tuple{T,T}}}
@@ -56,11 +77,16 @@ struct PersistenceDiagram{T<:Real,M<:NamedTuple}
     order::Symbol
     meta::M
     retained_representatives::Union{Nothing,_PersistenceRepresentatives{T}}
+    retained_cocycles::Union{Nothing,_PersistenceCocycles{T}}
 end
 
 PersistenceDiagram(finite::Vector{Vector{Tuple{T,T}}}, essential::Vector{Vector{T}},
                    field::PrimeField, order::Symbol, meta::NamedTuple) where {T<:Real} =
     PersistenceDiagram(finite, essential, field, order, meta, nothing)
+
+PersistenceDiagram(finite::Vector{Vector{Tuple{T,T}}}, essential::Vector{Vector{T}},
+                   field::PrimeField, order::Symbol, meta::NamedTuple, representatives) where {T<:Real} =
+    PersistenceDiagram(finite, essential, field, order, meta, representatives, nothing)
 
 function PersistenceDiagram(finite_by_dim::AbstractVector{<:AbstractVector{Tuple{T,T}}},
                             essential_by_dim::AbstractVector{<:AbstractVector{T}};
@@ -81,8 +107,8 @@ end
 end
 
 @inline function _normalize_field(F)
-    F isa PrimeField && F == F2() ||
-        throw(ArgumentError("ordinary persistence supports field=F2() only; coefficients are reduced modulo 2."))
+    F isa PrimeField ||
+        throw(ArgumentError("ordinary persistence requires a PrimeField, such as F2(), F3() or Fp(101); boundary coefficients are reduced modulo its prime."))
     return F
 end
 
@@ -92,14 +118,23 @@ end
     return Int(dim) + 1
 end
 
+function _diagram_degree_slot(diag::PersistenceDiagram, dim::Integer)
+    slot = _degree_slot(dim)
+    requested = get(diag.meta, :requested_max_homology_dim, nothing)
+    requested === nothing || dim <= requested ||
+        throw(ArgumentError("this diagram was requested only through homology degree $requested; degree $dim was not returned."))
+    return slot
+end
+
 """
     finite_intervals(diag; dim)
 
 Finite nonempty intervals in homological dimension `dim`, preserving exact
-endpoint types. A nonnegative dimension above the stored range has no bars.
+endpoint types. A nonnegative dimension above the stored range has no bars, unless an explicit
+`max_homology_dim` request excluded that degree; excluded degrees are rejected.
 """
 function finite_intervals(diag::PersistenceDiagram{T}; dim::Integer) where {T}
-    slot = _degree_slot(dim)
+    slot = _diagram_degree_slot(diag, dim)
     return slot <= length(diag.finite_by_dim) ? copy(diag.finite_by_dim[slot]) : Tuple{T,T}[]
 end
 
@@ -109,7 +144,7 @@ end
 Birth values of essential homology classes, preserving their scalar type.
 """
 function essential_births(diag::PersistenceDiagram{T}; dim::Integer) where {T}
-    slot = _degree_slot(dim)
+    slot = _diagram_degree_slot(diag, dim)
     return slot <= length(diag.essential_by_dim) ? copy(diag.essential_by_dim[slot]) : T[]
 end
 
@@ -135,18 +170,18 @@ end
 function _representative_chain(G::GradedComplex{N,T}, offsets, dim, indices) where {N,T}
     ordered = sort(indices)
     return _PersistenceChain{T}(ordered .- (offsets[dim + 1] - 1),
-        getfield(G, :cell_ids)[ordered], T[G.grades[i][1] for i in ordered])
+        getfield(G, :cell_ids)[ordered], T[G.grades[i][1] for i in ordered], ones(Int, length(ordered)))
 end
 
 function _representative_chain_record(chain::_PersistenceChain, dim::Int)
     return (; dimension=dim, cell_indices=Tuple(chain.indices), cell_ids=Tuple(chain.ids),
-        cell_grades=Tuple(chain.grades), coefficients=Tuple(fill(1, length(chain.indices))))
+        cell_grades=Tuple(chain.grades), coefficients=Tuple(chain.coefficients))
 end
 
 """
     persistence_representative(diag; dim, kind=:finite, index=1)
 
-Inspect one original interval member's retained `F2` cycle. Opt in when computing
+Inspect one original interval member's retained prime-field cycle. Opt in when computing
 the diagram with `representatives=true`; the default interval-only computation
 does not retain change-of-basis columns. `kind` is `:finite` or `:essential`, and
 `index` indexes `finite_intervals(diag; dim)` or `essential_births(diag; dim)`.
@@ -157,7 +192,8 @@ setting a provenance flag on a hand-built diagram does not create one. Invalid
 dimensions, kinds and indices are errors even when cycles were not retained.
 
 An available `cycle` records dimension-local cell indices, original cell IDs,
-exact cell grades, and coefficients modulo two. Its class is nonzero throughout
+exact cell grades, and canonical integer coefficients in `1:p-1` for the
+recorded prime field. Zero coefficients are omitted. Its class is nonzero throughout
 the returned interval, including birth and excluding finite death in filtration
 order. A finite interval also has a `bounding_chain` whose boundary is this cycle
 at death. Essential intervals have no such chain in the supplied finite complex.
@@ -167,7 +203,7 @@ The input diagram and its retained storage must be treated as read-only.
 """
 function persistence_representative(diag::PersistenceDiagram; dim::Integer,
                                    kind::Symbol=:finite, index::Integer=1)
-    slot = _degree_slot(dim)
+    slot = _diagram_degree_slot(diag, dim)
     kind in (:finite, :essential) || throw(ArgumentError("kind must be :finite or :essential."))
     !(index isa Bool) && 1 <= index <= typemax(Int) ||
         throw(ArgumentError("index must be a positive interval member index fitting Int."))
@@ -181,7 +217,8 @@ function persistence_representative(diag::PersistenceDiagram; dim::Integer,
     context = (; dimension=Int(dim), kind, index=Int(index), interval=(birth, death),
         field=diag.field, order=diag.order, birth_included=true, death_included=false,
         valid_parameters=diag.order === :sublevel ? "birth <= t < death" : "death < t <= birth",
-        choice=retained === nothing ? :not_available : :noncanonical_f2_column_reduction,
+        choice=retained === nothing ? :not_available :
+            diag.field.p == 2 ? :noncanonical_f2_column_reduction : :noncanonical_prime_column_reduction,
         source_geometry=:not_asserted)
     retained === nothing && return merge(context, (; available=false, reason=:not_retained,
         cycle=nothing, bounding_chain=nothing))
@@ -220,8 +257,10 @@ function provenance(diag::PersistenceDiagram{T}) where {T}
         orientation=diag.order === :sublevel ? (1,) : (-1,), order=diag.order,
         interval_convention=diag.order === :sublevel ? :left_closed_right_open : :left_open_right_closed,
         zero_length_intervals=:omitted, essential_death=diag.order === :sublevel ? Inf : -Inf,
-        grade_type=T, window=:unrestricted,
-        representatives=diag.retained_representatives === nothing ? :not_retained : :retained_reduction_cycles))
+        grade_type=T, window=get(recorded, :window, :unrestricted),
+        representatives=diag.retained_representatives === nothing ? :not_retained : :retained_reduction_cycles,
+        cocycles=diag.retained_cocycles === nothing ? :not_retained : :retained_restriction_cochains,
+        cohomology_variance=:contravariant, cohomology_duality=:finite_dimensional_field_dual))
 end
 
 function _diagram_summary(diag::PersistenceDiagram)
@@ -230,6 +269,7 @@ function _diagram_summary(diag::PersistenceDiagram)
         finite_counts=Tuple(length.(diag.finite_by_dim)),
         essential_counts=Tuple(length.(diag.essential_by_dim)),
         representatives_available=diag.retained_representatives !== nothing,
+        cocycles_available=diag.retained_cocycles !== nothing,
         provenance=provenance(diag))
 end
 
@@ -294,7 +334,6 @@ barcode contract; it does not reconstruct a source filtration.
 """
 function check_persistence_diagram(diag::PersistenceDiagram; throw::Bool=false)
     issues = String[]
-    diag.field == F2() || push!(issues, "ordinary persistence requires F2().")
     diag.order in (:sublevel, :superlevel) || push!(issues, "invalid filtration order.")
     length(diag.finite_by_dim) == length(diag.essential_by_dim) ||
         push!(issues, "finite and essential storage must cover the same homological dimensions.")
@@ -328,10 +367,12 @@ function check_persistence_diagram(diag::PersistenceDiagram; throw::Bool=false)
                         push!(issues, "dimension $(slot - 1): retained $kind representative has an invalid bounding-chain contract.")
                     for chain in (r.cycle, r.bounding_chain)
                         chain === nothing && continue
-                        length(chain.indices) == length(chain.ids) == length(chain.grades) ||
-                            push!(issues, "retained chain indices, cell IDs and grades have different lengths.")
+                        length(chain.indices) == length(chain.ids) == length(chain.grades) == length(chain.coefficients) ||
+                            push!(issues, "retained chain indices, cell IDs, grades and coefficients have different lengths.")
                         !isempty(chain.indices) && issorted(chain.indices) && allunique(chain.indices) && all(>(0), chain.indices) ||
                             push!(issues, "retained chains require nonempty, distinct positive cell indices in increasing order.")
+                        all(c -> 0 < c < diag.field.p, chain.coefficients) ||
+                            push!(issues, "retained chain coefficients must be nonzero canonical residues in the diagram field.")
                         level = chain === r.cycle ? r.birth : r.death
                         level === nothing && continue
                         all(g -> isfinite(g) && (diag.order === :sublevel ? g <= level : g >= level), chain.grades) ||
@@ -341,6 +382,7 @@ function check_persistence_diagram(diag::PersistenceDiagram; throw::Bool=false)
             end
         end
     end
+    _check_cocycle_storage!(issues, diag)
     valid = isempty(issues)
     throw && !valid && Base.throw(ArgumentError(join(issues, " ")))
     return (kind=:persistence_diagram_validation, valid=valid, issues=issues)
@@ -381,7 +423,7 @@ function _double_boundary_zero_packed(A, B)
     @inbounds for col in axes(A, 2), p in nzrange(A, col)
         isodd(A.nzval[p]) || continue
         row = A.rowval[p] - 1
-        packed[(row >>> 6) + 1, col] ⊻= UInt64(1) << (row & 63)
+        packed[(row >>> 6) + 1, col] = xor(packed[(row >>> 6) + 1, col], UInt64(1) << (row & 63))
     end
     accumulator = zeros(UInt64, nwords)
     for col in axes(B, 2)
@@ -389,7 +431,7 @@ function _double_boundary_zero_packed(A, B)
             isodd(B.nzval[p]) || continue
             source = B.rowval[p]
             for word in 1:nwords
-                accumulator[word] ⊻= packed[word, source]
+                accumulator[word] = xor(accumulator[word], packed[word, source])
             end
         end
         all(iszero, accumulator) || return false
@@ -398,7 +440,8 @@ function _double_boundary_zero_packed(A, B)
 end
 
 # Validate mutable hand-built storage before any unchecked reduction access.
-function _validate_complex(G::GradedComplex{N,T}, order::Symbol) where {N,T}
+function _validate_complex(G::GradedComplex{N,T}, order::Symbol,
+                           ::Type{K}=FpElem{2}) where {N,T,K}
     N == 1 || throw(ArgumentError("ordinary persistence requires a one-parameter GradedComplex; got $N parameters."))
     T <: Real && isconcretetype(T) || throw(ArgumentError("ordinary persistence requires a concrete real grade type."))
     offsets = getfield(G, :dim_offsets)
@@ -426,7 +469,7 @@ function _validate_complex(G::GradedComplex{N,T}, order::Symbol) where {N,T}
                 row = B.rowval[ptr]
                 row > previous || throw(ArgumentError("boundary $d sparse rows must be strictly increasing in each column."))
                 previous = row
-                isodd(B.nzval[ptr]) || continue
+                iszero(K(B.nzval[ptr])) && continue
                 face = G.grades[offsets[d] + row - 1][1]
                 cell = G.grades[offsets[d + 1] + col - 1][1]
                 (order === :sublevel ? face <= cell : face >= cell) ||
@@ -434,8 +477,8 @@ function _validate_complex(G::GradedComplex{N,T}, order::Symbol) where {N,T}
             end
         end
     end
-    # Compute each double boundary modulo two directly, avoiding integer
-    # overflow and sparse multiplication's coefficient/type conventions.
+    # Compute each double boundary in the selected field without integer
+    # overflow. The binary paths retain their existing specialized kernels.
     for d in 2:length(G.boundaries)
         A, B = G.boundaries[d - 1], G.boundaries[d]
         # Measured sparse/dense controls favor packing once columns contain
@@ -443,10 +486,14 @@ function _validate_complex(G::GradedComplex{N,T}, order::Symbol) where {N,T}
         # on average. Packing single-use columns loses to direct parity.
         # Packed storage stays below one third of sparse index storage.
         words = cld(size(A, 1), 64)
-        packed = words > 0 && nnz(A) ÷ max(1, size(A, 2)) >= 3 * words &&
+        packed = words > 0 && div(nnz(A), max(1, size(A, 2))) >= 3 * words &&
                  nnz(B) >= 4 * size(A, 2)
-        valid = packed ? _double_boundary_zero_packed(A, B) : _double_boundary_zero_sparse(A, B)
-        valid || throw(ArgumentError("boundary squared is nonzero over F2 in chain degree $d."))
+        valid = if K === FpElem{2}
+            packed ? _double_boundary_zero_packed(A, B) : _double_boundary_zero_sparse(A, B)
+        else
+            _double_boundary_zero_prime(A, B, K)
+        end
+        valid || throw(ArgumentError("boundary squared is nonzero over $K in chain degree $d."))
     end
     return offsets
 end
@@ -684,7 +731,7 @@ end
     @inbounds begin
         words = column.levels[1]
         before = words[word]
-        after = before ⊻ mask
+        after = xor(before, mask)
         words[word] = after
         iszero(before) == iszero(after) && return nothing
         index = word
@@ -693,7 +740,7 @@ end
             word = ((index - 1) >>> 6) + 1
             mask = UInt64(1) << ((index - 1) & 63)
             before = words[word]
-            after = before ⊻ mask
+            after = xor(before, mask)
             words[word] = after
             iszero(before) == iszero(after) && break
             index = word
@@ -732,7 +779,7 @@ function _drain_level!(out::Vector{Int}, levels::Vector{Vector{UInt64}}, level::
     offset = (index - 1) << 6
     while !iszero(bits)
         bit = 64 - leading_zeros(bits)
-        bits ⊻= UInt64(1) << (bit - 1)
+        bits = xor(bits, UInt64(1) << (bit - 1))
         if level == 1
             push!(out, offset + bit)
         else
@@ -979,12 +1026,19 @@ function _reduce_barcode!(intervals, essential, G, dims, offsets, values, perm, 
     return nothing
 end
 
-"""
-    persistence_diagram(G::GradedComplex; order=:sublevel, field=F2(), representatives=false)
+include("ordinary_persistence/prime.jl")
+include("ordinary_persistence/cohomology.jl")
+include("ordinary_persistence/implicit_rips.jl")
+include("ordinary_persistence/analysis.jl")
+include("ordinary_persistence/result_data.jl")
 
-Reduce a finite, one-parameter graded chain complex over `F2()`. Integer
-boundary coefficients are read modulo two. The input must have finite real
-grades, correctly shaped boundaries, zero double boundary modulo two, and
+"""
+    persistence_diagram(G::GradedComplex; order=:sublevel, field=F2(), representatives=false, cocycles=false)
+
+Reduce a finite, one-parameter graded chain complex over `F2()`, `F3()` or
+`Fp(p)` for a prime fitting `Int`. Integer boundary coefficients are read modulo
+that prime, including their signs. The input must have finite real
+grades, correctly shaped boundaries, zero double boundary in the selected field, and
 boundary maps compatible with the selected order. These conditions are checked
 before reduction.
 
@@ -994,13 +1048,18 @@ excluded in filtration order; zero-length intervals are omitted.
 Opt in with `representatives=true` to retain selected-interval cycles and finite
 death bounding chains for [`persistence_representative`](@ref). This tracks sparse
 change-of-basis columns during reduction and can substantially increase memory.
+`cocycles=true` instead performs direct coboundary reduction and retains cochains
+for [`persistence_cocycle`](@ref). Both controls can be enabled; this runs both
+reductions and keeps independently chosen cycles and cocycles. Neither changes
+the interval multiset over these fields.
 """
 function persistence_diagram(G::GradedComplex{N,T};
-                             order::Symbol=:sublevel, field=F2(), representatives=false) where {N,T}
+                             order::Symbol=:sublevel, field=F2(), representatives=false, cocycles=false) where {N,T}
     _normalize_order(order)
     _normalize_field(field)
     representatives isa Bool || throw(ArgumentError("representatives must be true or false."))
-    offsets = _validate_complex(G, order)
+    cocycles isa Bool || throw(ArgumentError("cocycles must be true or false."))
+    offsets = _validate_complex(G, order, coeff_type(field))
     dims = _cell_dimensions(offsets)
     total = length(G.grades)
     values = T[g[1] for g in G.grades]
@@ -1027,7 +1086,15 @@ function persistence_diagram(G::GradedComplex{N,T};
     finite_reps = representatives ? [_PersistenceRepresentative{T}[] for _ in 1:nd] : nothing
     essential_reps = representatives ? [_PersistenceRepresentative{T}[] for _ in 1:nd] : nothing
     backend = :f2_column_reduction
-    if !representatives
+    cohomology = cocycles ? _reduce_cohomology(G, offsets, dims, values, perm, rank, field, order) : nothing
+    if cocycles && !representatives
+        return cohomology
+    end
+    if field.p != 2
+        _reduce_prime!(intervals, essential, finite_reps, essential_reps,
+                       G, dims, offsets, values, perm, rank, coeff_type(field), Val(representatives))
+        backend = :prime_column_reduction
+    elseif !representatives
         if last(offsets) == offsets[min(3, length(offsets))] &&
            _graph_barcode!(intervals, essential, G, offsets, values, perm, rank, nothing)
             backend = :f2_graph_union_find
@@ -1112,38 +1179,172 @@ function persistence_diagram(G::GradedComplex{N,T};
     meta = (construction=(requested=:graded_chain_complex, effective=:graded_chain_complex,
                           substitution=:none), source=:graded_complex,
             grade_arithmetic=:exact_stored_values, geometry=:not_recorded,
-            chain_validation=:boundary_squared_zero_mod_two,
+            chain_validation=field.p == 2 ? :boundary_squared_zero_mod_two : :boundary_squared_zero_mod_prime,
             backend=backend, approximation=:none_in_reduction,
             discretization=:none)
     retained = representatives ? _PersistenceRepresentatives{T}(finite_reps, essential_reps) : nothing
-    return PersistenceDiagram(intervals, essential, field, order, meta, retained)
+    if cocycles
+        intervals == cohomology.finite_by_dim && essential == cohomology.essential_by_dim ||
+            error("homology and cohomology interval multisets disagree.")
+    end
+    return PersistenceDiagram(intervals, essential, field, order, meta, retained,
+        cocycles ? cohomology.retained_cocycles : nothing)
 end
 
 """
-    persistence_diagram(data, filtration; order=:sublevel, field=F2(), cache=nothing,
-                        representatives=false)
+    landmark_selection(diagram)
 
-Build a one-parameter complex with `build_graded_complex` and compute ordinary
-persistent homology. The filtration must actually be compatible with `order`;
+Return the landmark coverage recorded by a Rips computation, or `nothing` when
+no subset was selected. Inspect it with `landmark_indices`, `covering_radius`,
+and `describe`. Its metric approximation bound concerns the full Rips
+filtrations, not extra neighbor pruning or cutoff-censored essential bars.
+"""
+landmark_selection(diag::PersistenceDiagram) = get(diag.meta,:landmarks,nothing)
+
+
+"""
+    persistence_diagram(data, filtration; order=:sublevel, field=F2(), cache=nothing,
+                        representatives=false, max_homology_dim=nothing, method=:auto)
+
+Compute ordinary persistent homology from a typed filtration. For Rips point
+clouds and dense/sparse distance matrices, `method=:auto` uses implicit signed
+coboundary reduction through H2 over any supported
+prime field. Cofaces are generated as needed; no boundary matrix is built.
+`method=:explicit` retains construction with `build_graded_complex`, also used
+automatically for representatives or higher degrees. `method=:implicit` rejects
+requests outside its declared scope. `cocycles=true` retains scale-specific
+cochains on this implicit route too, including degree zero. Method selection
+applies to Rips and `EdgeWeightedFiltration` inputs. Cocycle retention requires
+`collapse=:none` until cochain lifting through ingestion collapses is available.
+
+The filtration must actually be compatible with `order`;
 changing this keyword does not turn a general lower-star construction into an
 upper-star construction. Cubical vertex data have a dedicated upper-star route.
 Grade precision on other ingestion routes is that of their constructed complex.
+
+For `RipsFiltration`, `LandmarkRipsFiltration` and `EdgeWeightedFiltration`,
+`max_homology_dim=q` returns degrees 0:q and requires
+`filtration.max_dim >= q+1`, so filling simplices are present. `max_dim` remains
+an explicit construction limit. Without this keyword the result describes the
+constructed skeleton, including its top-dimensional homology. A finite radius
+limits the claim to that filtration window; surviving bars need not survive
+beyond it. Sparse matrix entries omitted from storage are absent edges; stored
+zeros are edges at zero. See `provenance(diag).rips` for the recorded input and
+dimension conventions. Weighted-vertex inputs use `threshold` and report
+original vertex indices in
+`provenance(diag).weighted_flag`. Other typed filtrations do not accept a bounded
+degree request; pass a constructed complex for its full homology.
+
+The implicit route uses only the required dimensions (through q+1 for a bounded
+request). Simplex/memory construction budgets trigger a streamed clique-count
+check; the memory budget remains the ingestion estimate, not a process-RSS cap.
+Graph choices, executed dimensions and reduction statistics are recorded in
+provenance. An EncodingCache is accepted but this route keeps no cross-call
+mathematical state. Cochains are retained for public queries only when
+`cocycles=true`; selected simplices then record original vertex indices.
 """
 function persistence_diagram(data, filtration::DataIngestion.AbstractFiltration;
-                             order::Symbol=:sublevel, field=F2(), cache=nothing, representatives=false)
+                             order::Symbol=:sublevel, field=F2(), cache=nothing, representatives=false,
+                             max_homology_dim=nothing, method::Symbol=:auto, cocycles=false)
     _normalize_order(order)
     _normalize_field(field)
     representatives isa Bool || throw(ArgumentError("representatives must be true or false."))
-    build = DataIngestion.build_graded_complex(data, filtration; cache=cache)
-    diag = persistence_diagram(DataIngestion.graded_complex(build); order, field, representatives)
-    kind = DataIngestion.filtration_kind(filtration)
+    cocycles isa Bool || throw(ArgumentError("cocycles must be true or false."))
+    source_data, source_filtration = data, filtration
+    weighted = filtration isa DataIngestion.EdgeWeightedFiltration
+    rips = weighted || filtration isa Union{DataIngestion.RipsFiltration,DataIngestion.LandmarkRipsFiltration}
+    if rips
+        weighted ? DataIngestion._validate_weighted_params(DataIngestion.filtration_parameters(filtration)) :
+            DataIngestion._validate_rips_params(DataIngestion.filtration_parameters(filtration))
+    end
+    landmark_info = nothing
+    if rips && !weighted
+        data,spec,landmark_info = DataIngestion._rips_landmark_input(data,DataIngestion._filtration_spec(filtration))
+        filtration = DataIngestion.to_filtration(spec)
+    end
+    method in (:auto, :explicit, :implicit) ||
+        throw(ArgumentError("persistence method must be :auto, :explicit or :implicit."))
+    !rips && method !== :auto && throw(ArgumentError("method selection is supported for Rips and EdgeWeightedFiltration requests."))
+    if max_homology_dim !== nothing
+        rips || throw(ArgumentError("max_homology_dim is supported for Rips and EdgeWeightedFiltration requests."))
+        max_homology_dim isa Integer || throw(ArgumentError("max_homology_dim must be a nonnegative integer."))
+        _degree_slot(max_homology_dim)
+        get(DataIngestion.filtration_parameters(filtration), :max_dim, 1) > max_homology_dim ||
+            throw(ArgumentError("H_$max_homology_dim deaths require a flag filtration with max_dim >= $(big(max_homology_dim)+1); max_dim counts simplex dimensions."))
+    end
+    if rips
+        order === :sublevel || throw(ArgumentError("Rips and weighted flag filtrations use increasing birth thresholds; request order=:sublevel."))
+    end
+    if cocycles && DataIngestion.construction_mode(filtration).collapse !== :none
+        throw(ArgumentError("cocycles require collapse=:none; cochain lifting through ingestion collapses is not implemented."))
+    end
+    degree = rips ? Int(something(max_homology_dim,
+        get(DataIngestion.filtration_parameters(filtration), :max_dim, 1))) : 0
+    implicit = rips && method !== :explicit && !representatives && degree <= 2
+    if method === :implicit && !implicit
+        throw(ArgumentError("implicit flag persistence supports barcodes and cocycles through H2; use method=:explicit for higher degrees or homology representatives."))
+    end
+    if implicit
+        (cache === nothing || cache isa DataIngestion.EncodingCache) ||
+            throw(ArgumentError("cache must be nothing or an EncodingCache."))
+        diag = _implicit_rips_diagram(data, filtration, field, degree, max_homology_dim, Val(cocycles);landmarks=landmark_info)
+    else
+        build = DataIngestion.build_graded_complex(data, filtration; cache=cache)
+        diag = persistence_diagram(DataIngestion.graded_complex(build); order, field, representatives, cocycles)
+    end
+    kind = DataIngestion.filtration_kind(source_filtration)
     # The public build result records grades and orientation, but not the
     # executed construction/backend. Do not infer an identity construction:
     # some supported requests deliberately substitute a different model.
-    meta = merge(diag.meta, (construction=(requested=kind, effective=:not_recorded, substitution=:not_recorded),
-                            source=typeof(data), geometry=:ingestion_contract))
+    meta = merge(diag.meta, (construction=implicit ? merge(diag.meta.construction,(requested=kind,)) :
+                                (requested=kind, effective=:not_recorded, substitution=:not_recorded),
+                            source=typeof(source_data), geometry=:ingestion_contract))
+    if landmark_info !== nothing
+        meta = merge(meta,(landmarks=landmark_info, approximation=:landmark_restriction,
+            landmark_bound_scope=:full_metric_rips_before_neighbor_selection_or_cutoff))
+    end
+    if rips
+        params = DataIngestion.filtration_parameters(source_filtration)
+        radius_raw = get(params, weighted ? :threshold : :radius, nothing)
+        radius = radius_raw === nothing ? Inf : Float64(radius_raw)
+        max_dim = get(params, :max_dim, 1)
+        sparse_input = source_data isa AbstractMatrix && issparse(source_data)
+        meta = merge(meta, (requested_max_homology_dim=max_homology_dim,
+            window=isfinite(radius) ? (weighted ? -Inf : 0.0, radius) : :unrestricted,
+            essential_interpretation=isfinite(radius) ? (weighted ? :survives_threshold_cutoff : :survives_radius_cutoff) : :survives_constructed_filtration))
+        if weighted
+            source_ids = implicit ? diag.meta.input_selection.source_indices :
+                findall(<=(radius),DataIngestion._weighted_vertex_births(source_data,DataIngestion._filtration_spec(source_filtration)))
+            meta = merge(meta,(weighted_flag=(
+                input=source_data isa DataIngestion.GraphData ? :graph : sparse_input ? :sparse_matrix : :dense_matrix,
+                vertex_births=:supplied_or_zero,edge_births=:supplied,
+                simplex_birth=:maximum_face_birth, source_vertex_indices=source_ids,
+                max_simplex_dim=max_dim,complete_homology_through=max_dim-1,
+                missing_edges=:absent,stored_zero_edge=:birth_at_zero,
+                threshold=radius,cutoff_inclusive=true,grades=:Float64),))
+        else
+            meta = merge(meta,(rips=(input=sparse_input ? :sparse_distances : source_data isa AbstractMatrix ? :dense_distances : :point_cloud,
+                missing_distances=sparse_input ? :absent_edges : :not_applicable,
+                stored_zero_distance=:edge_at_zero,max_simplex_dim=max_dim,
+                complete_homology_through=max_dim-1,graph_selection=DataIngestion.construction_mode(filtration).sparsify,
+                radius_cutoff=radius,cutoff_inclusive=true,distance_arithmetic=:Float64),))
+        end
+        if max_homology_dim !== nothing
+            slots = Int(max_homology_dim) + 1
+            resize!(diag.finite_by_dim, slots)
+            resize!(diag.essential_by_dim, slots)
+            if diag.retained_cocycles !== nothing
+                resize!(diag.retained_cocycles.finite, slots)
+                resize!(diag.retained_cocycles.essential, slots)
+            end
+            if diag.retained_representatives !== nothing
+                resize!(diag.retained_representatives.finite, slots)
+                resize!(diag.retained_representatives.essential, slots)
+            end
+        end
+    end
     return PersistenceDiagram(diag.finite_by_dim, diag.essential_by_dim, diag.field, diag.order,
-                              meta, diag.retained_representatives)
+                              meta, diag.retained_representatives, diag.retained_cocycles)
 end
 
 function _periodic_tuple(periodic, ::Val{N}) where {N}
@@ -1183,9 +1384,10 @@ end
 
 """
     cubical_persistence(values; periodic=false, order=:sublevel,
-                        input=:top_cells, field=F2(), representatives=false)
+                        input=:top_cells, field=F2(), representatives=false, cocycles=false)
 
-Ordinary cubical persistence. `input=:top_cells` supports two-dimensional arrays;
+Ordinary cubical persistence over `F2()`, `F3()` or `Fp(p)`.
+`input=:top_cells` supports two-dimensional arrays;
 entries grade squares, and their faces receive the minimum incident value for
 sublevels or maximum for superlevels. `input=:vertices` supports arbitrary
 positive array dimension; cells receive the maximum vertex value for sublevels
@@ -1204,42 +1406,46 @@ to the constructed cubical complex, not pixel coordinates.
 """
 function cubical_persistence(values::AbstractArray{<:Real}; periodic=false,
                              order::Symbol=:sublevel, input::Symbol=:top_cells,
-                             field=F2(), representatives=false)
+                             field=F2(), representatives=false, cocycles=false)
     _normalize_order(order)
     _normalize_field(field)
     representatives isa Bool || throw(ArgumentError("representatives must be true or false."))
+    cocycles isa Bool || throw(ArgumentError("cocycles must be true or false."))
     _validate_cubical_values(values)
     per = _periodic_tuple(periodic, Val(ndims(values)))
     if input === :vertices
         return _vertex_cubical_persistence(values, per, order, field,
-            DataIngestion.construction_mode(DataIngestion.CubicalFiltration()), nothing, representatives)
+            DataIngestion.construction_mode(DataIngestion.CubicalFiltration()), nothing, representatives, cocycles)
     end
     input === :top_cells || throw(ArgumentError("cubical persistence input must be :top_cells or :vertices."))
     ndims(values) == 2 || throw(ArgumentError("cubical persistence input=:top_cells supports two-dimensional arrays."))
     G = _top_cell_complex_2d(values, per, order)
-    diag = persistence_diagram(G; order, field, representatives)
+    diag = persistence_diagram(G; order, field, representatives, cocycles)
     meta = merge(diag.meta, (construction=(requested=:cubical_top_cells, effective=:cubical_top_cells,
         substitution=:none), source=(shape=size(values), periodic=per),
         grade_arithmetic=:exact_input_values, geometry=:cubical_cells))
     return PersistenceDiagram(diag.finite_by_dim, diag.essential_by_dim, diag.field, diag.order,
-                              meta, diag.retained_representatives)
+                              meta, diag.retained_representatives, diag.retained_cocycles)
 end
 
-function _vertex_cubical_persistence(values, per, order, field, construction, cache, representatives)
+function _vertex_cubical_persistence(values, per, order, field, construction, cache, representatives, cocycles)
+    cocycles && construction.collapse !== :none &&
+        throw(ArgumentError("cocycles require collapse=:none; cochain lifting is not implemented."))
     G = _vertex_cubical_complex(values, per, order, construction, cache)
-    diag = persistence_diagram(G; order, field, representatives)
+    diag = persistence_diagram(G; order, field, representatives, cocycles)
     meta = merge(diag.meta, (construction=(requested=:cubical_vertices, effective=:cubical_vertices,
         substitution=:none), source=(shape=size(values), periodic=per),
         grade_arithmetic=:exact_input_values, geometry=:cubical_cells))
     return PersistenceDiagram(diag.finite_by_dim, diag.essential_by_dim, diag.field, diag.order,
-                              meta, diag.retained_representatives)
+                              meta, diag.retained_representatives, diag.retained_cocycles)
 end
 
 function persistence_diagram(data::ImageNd, filtration::DataIngestion.CubicalFiltration;
-                             order::Symbol=:sublevel, field=F2(), cache=nothing, representatives=false)
+                             order::Symbol=:sublevel, field=F2(), cache=nothing, representatives=false, cocycles=false)
     _normalize_order(order)
     _normalize_field(field)
     representatives isa Bool || throw(ArgumentError("representatives must be true or false."))
+    cocycles isa Bool || throw(ArgumentError("cocycles must be true or false."))
     params = DataIngestion.filtration_parameters(filtration)
     channels = get(params, :channels, nothing)
     values = if channels === nothing
@@ -1253,7 +1459,7 @@ function persistence_diagram(data::ImageNd, filtration::DataIngestion.CubicalFil
     _validate_cubical_values(values)
     per = _periodic_tuple(params.periodic, Val(ndims(values)))
     return _vertex_cubical_persistence(values, per, order, field,
-                                      DataIngestion.construction_mode(filtration), cache, representatives)
+                                      DataIngestion.construction_mode(filtration), cache, representatives, cocycles)
 end
 
 """

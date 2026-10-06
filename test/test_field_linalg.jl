@@ -3618,7 +3618,7 @@ end
             @test_throws ErrorException FL._solve_fullcolumnQQ(B, invalid; factor=factor)
         end
     end
-    # Rational{BigInt} can represent ±1//0, but these are not elements of QQ.
+    # Rational{BigInt} can represent +/-1//0, but these are not elements of QQ.
     # Skipping 0*x, x/x or pivot cancellation must not turn such inputs into
     # apparently valid field reductions, including nonfinite free entries.
     for sign in (-1, 1)

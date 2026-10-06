@@ -1,0 +1,2666 @@
+[
+  {
+    "kind": "first_use",
+    "case": "cloud_circle96_f2",
+    "seconds": 5.305125326,
+    "compile_seconds": 5.299262406,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "cloud_circle96_f2",
+    "seconds": 0.006154016,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "cloud_circle96_f2",
+    "seconds": 12.911124637,
+    "compile_seconds": 12.898242672,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "cloud_circle96_f2",
+    "seconds": 0.005078064,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "cloud_circle96_f2",
+    "seconds": 0.01628990299650468,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "cloud_circle96_f2",
+    "seconds": 0.023123878010665067,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "cloud_circle96_f2",
+    "seconds": 0.031144945009145886,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "cloud_circle96_f2",
+    "seconds": 0.016714820987544954,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "cloud_sphere64_cocycles_f3",
+    "seconds": 3.596979547,
+    "compile_seconds": 3.587437191,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "cloud_sphere64_cocycles_f3",
+    "seconds": 0.014540768,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "cloud_sphere64_cocycles_f3",
+    "seconds": 9.357586953,
+    "compile_seconds": 9.334839557,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "cloud_sphere64_cocycles_f3",
+    "seconds": 0.012096044,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "cloud_sphere64_cocycles_f3",
+    "seconds": 0.029090295007335953,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "cloud_sphere64_cocycles_f3",
+    "seconds": 0.047745500996825285,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "cloud_sphere64_cocycles_f3",
+    "seconds": 0.051215646002674475,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "cloud_sphere64_cocycles_f3",
+    "seconds": 0.037075774002005346,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "cloud_sphere128_f101",
+    "seconds": 0.908819335,
+    "compile_seconds": 0.787119475,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "cloud_sphere128_f101",
+    "seconds": 0.322038668,
+    "compile_seconds": 0.153946549,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "cloud_sphere128_f101",
+    "seconds": 2.226865596,
+    "compile_seconds": 1.943087828,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "cloud_sphere128_f101",
+    "seconds": 0.296029314,
+    "compile_seconds": 0.146842493,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "cloud_sphere128_f101",
+    "seconds": 0.34835844799818005,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "cloud_sphere128_f101",
+    "seconds": 0.6026766459981445,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "cloud_sphere128_f101",
+    "seconds": 0.6965946020063711,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "cloud_sphere128_f101",
+    "seconds": 0.4654466899955878,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_circle1024_f2",
+    "seconds": 6.185836517,
+    "compile_seconds": 1.044118631,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_circle1024_f2",
+    "seconds": 7.674088684,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_circle1024_f2",
+    "seconds": 16.022634913,
+    "compile_seconds": 2.666292977,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_circle1024_f2",
+    "seconds": 6.737737924,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_circle1024_f2",
+    "seconds": 20.73985785098921,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_circle1024_f2",
+    "seconds": 26.526093874999788,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_circle1024_f2",
+    "seconds": 40.14119279899751,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_circle1024_f2",
+    "seconds": 26.67485194199253,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_sphere96_cocycles_f3",
+    "seconds": 0.136799231,
+    "compile_seconds": 0.109434231,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_sphere96_cocycles_f3",
+    "seconds": 0.042990008,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_sphere96_cocycles_f3",
+    "seconds": 0.310261122,
+    "compile_seconds": 0.24773397,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_sphere96_cocycles_f3",
+    "seconds": 0.038689003,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_sphere96_cocycles_f3",
+    "seconds": 0.15144290500029456,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_sphere96_cocycles_f3",
+    "seconds": 0.15350307400512975,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_sphere96_cocycles_f3",
+    "seconds": 0.21695452499261592,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_sphere96_cocycles_f3",
+    "seconds": 0.14987430100154597,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_planar128_f101",
+    "seconds": 0.019378784,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_planar128_f101",
+    "seconds": 0.03020417,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_planar128_f101",
+    "seconds": 0.042783494,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_planar128_f101",
+    "seconds": 0.028534531,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_planar128_f101",
+    "seconds": 0.13094552999245934,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_planar128_f101",
+    "seconds": 0.13419104799686465,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_planar128_f101",
+    "seconds": 0.19572874000004958,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_planar128_f101",
+    "seconds": 0.13376428101037163,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "sparse_grid16_f2",
+    "seconds": 1.237186176,
+    "compile_seconds": 1.236312048,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "sparse_grid16_f2",
+    "seconds": 0.000483173,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "sparse_grid16_f2",
+    "seconds": 2.905265329,
+    "compile_seconds": 2.903782755,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "sparse_grid16_f2",
+    "seconds": 0.000435474,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "sparse_grid16_f2",
+    "seconds": 0.0003141170018352568,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "sparse_grid16_f2",
+    "seconds": 0.0003492760006338358,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "sparse_grid16_f2",
+    "seconds": 0.0005418910004664212,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "sparse_grid16_f2",
+    "seconds": 0.00037555399467237294,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "sparse_cycle96_cocycles_f3",
+    "seconds": 0.617851331,
+    "compile_seconds": 0.617249058,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "sparse_cycle96_cocycles_f3",
+    "seconds": 0.356541086,
+    "compile_seconds": 0.355972573,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "sparse_cycle96_cocycles_f3",
+    "seconds": 0.994507047,
+    "compile_seconds": 0.993738746,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "sparse_cycle96_cocycles_f3",
+    "seconds": 0.336879008,
+    "compile_seconds": 0.336298673,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "sparse_cycle96_cocycles_f3",
+    "seconds": 0.00014885098789818585,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "sparse_cycle96_cocycles_f3",
+    "seconds": 0.00013546200352720916,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "sparse_cycle96_cocycles_f3",
+    "seconds": 0.00021411299530882388,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "sparse_cycle96_cocycles_f3",
+    "seconds": 0.0001431960117770359,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "sparse_octa16_cocycles_f101",
+    "seconds": 1.756865399,
+    "compile_seconds": 1.756109452,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "sparse_octa16_cocycles_f101",
+    "seconds": 0.810122279,
+    "compile_seconds": 0.809199818,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "sparse_octa16_cocycles_f101",
+    "seconds": 2.768002369,
+    "compile_seconds": 2.76699329,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "sparse_octa16_cocycles_f101",
+    "seconds": 0.716912066,
+    "compile_seconds": 0.716081322,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "sparse_octa16_cocycles_f101",
+    "seconds": 0.0004951029986841604,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "sparse_octa16_cocycles_f101",
+    "seconds": 0.0004918830090900883,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "sparse_octa16_cocycles_f101",
+    "seconds": 0.0007267260079970583,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "sparse_octa16_cocycles_f101",
+    "seconds": 0.0004882399953203276,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "weighted_grid16_cocycles_f2",
+    "seconds": 2.141279751,
+    "compile_seconds": 2.139462044,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "weighted_grid16_cocycles_f2",
+    "seconds": 1.166175755,
+    "compile_seconds": 1.165124597,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "weighted_grid16_cocycles_f2",
+    "seconds": 3.492525109,
+    "compile_seconds": 3.490297026,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "weighted_grid16_cocycles_f2",
+    "seconds": 1.27488685,
+    "compile_seconds": 1.273806556,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "weighted_grid16_cocycles_f2",
+    "seconds": 0.0012608580000232905,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "weighted_grid16_cocycles_f2",
+    "seconds": 0.001293602996156551,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "weighted_grid16_cocycles_f2",
+    "seconds": 0.0022080839989939705,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "weighted_grid16_cocycles_f2",
+    "seconds": 0.0013091250002617016,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "weighted_grid64_f2",
+    "seconds": 0.103577462,
+    "compile_seconds": 0.100619006,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "weighted_grid64_f2",
+    "seconds": 0.159240307,
+    "compile_seconds": 0.154841755,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "weighted_grid64_f2",
+    "seconds": 0.160410899,
+    "compile_seconds": 0.156110626,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "weighted_grid64_f2",
+    "seconds": 0.14423961,
+    "compile_seconds": 0.140428165,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "weighted_grid64_f2",
+    "seconds": 0.004080493003129959,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "weighted_grid64_f2",
+    "seconds": 0.004184874007478356,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "weighted_grid64_f2",
+    "seconds": 0.007093238993547857,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "weighted_grid64_f2",
+    "seconds": 0.004211162013234571,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "weighted_octa16_cocycles_f101",
+    "seconds": 0.856631119,
+    "compile_seconds": 0.855904927,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "weighted_octa16_cocycles_f101",
+    "seconds": 0.000702867,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "weighted_octa16_cocycles_f101",
+    "seconds": 1.329997488,
+    "compile_seconds": 1.329012091,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "weighted_octa16_cocycles_f101",
+    "seconds": 0.000600935,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "weighted_octa16_cocycles_f101",
+    "seconds": 0.00048252999840769917,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "weighted_octa16_cocycles_f101",
+    "seconds": 0.0005284939979901537,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "weighted_octa16_cocycles_f101",
+    "seconds": 0.0007716279942542315,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "weighted_octa16_cocycles_f101",
+    "seconds": 0.0005178650026209652,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_256_32_f2",
+    "seconds": 0.00041294,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_256_32_f2",
+    "seconds": 0.000644907,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_256_32_f2",
+    "seconds": 0.00066441,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_256_32_f2",
+    "seconds": 0.000594915,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_256_32_f2",
+    "seconds": 0.002684239996597171,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_256_32_f2",
+    "seconds": 0.000754233988118358,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_256_32_f2",
+    "seconds": 0.0009968880040105432,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_256_32_f2",
+    "seconds": 0.0007652770000277087,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_2048_128_f2",
+    "seconds": 0.010853365,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_2048_128_f2",
+    "seconds": 0.027052002,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_2048_128_f2",
+    "seconds": 0.014992247,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_2048_128_f2",
+    "seconds": 0.012717687,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_2048_128_f2",
+    "seconds": 0.007542926003225148,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_2048_128_f2",
+    "seconds": 0.007591631991090253,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_2048_128_f2",
+    "seconds": 0.010249063998344354,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_2048_128_f2",
+    "seconds": 0.007515946010244079,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_256_64_cocycles_f3",
+    "seconds": 0.00161881,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_256_64_cocycles_f3",
+    "seconds": 0.003328081,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_256_64_cocycles_f3",
+    "seconds": 0.002413648,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_256_64_cocycles_f3",
+    "seconds": 0.002102384,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_256_64_cocycles_f3",
+    "seconds": 0.0026095219946000725,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_256_64_cocycles_f3",
+    "seconds": 0.002090034991852008,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_256_64_cocycles_f3",
+    "seconds": 0.0030578660080209374,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_256_64_cocycles_f3",
+    "seconds": 0.0020463560067582875,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_512_96_cocycles_f101",
+    "seconds": 0.320613635,
+    "compile_seconds": 0.316676202,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_512_96_cocycles_f101",
+    "seconds": 0.008200321,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_512_96_cocycles_f101",
+    "seconds": 0.491006314,
+    "compile_seconds": 0.485118894,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_512_96_cocycles_f101",
+    "seconds": 0.006575401,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_512_96_cocycles_f101",
+    "seconds": 0.005887945997528732,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_512_96_cocycles_f101",
+    "seconds": 0.004241816001012921,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_512_96_cocycles_f101",
+    "seconds": 0.0064370960026280954,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_512_96_cocycles_f101",
+    "seconds": 0.004258003013092093,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "control_sphere3_f2",
+    "seconds": 3.417181148,
+    "compile_seconds": 3.415789563,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "control_sphere3_f2",
+    "seconds": 7.708071577,
+    "compile_seconds": 7.705872884,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "control_sphere3_f2",
+    "seconds": 5.387189074,
+    "compile_seconds": 5.38549498,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "control_sphere3_f2",
+    "seconds": 4.942443596,
+    "compile_seconds": 4.940677622,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "control_sphere3_f2",
+    "seconds": 0.000214889005292207,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "control_sphere3_f2",
+    "seconds": 0.00016779299767222255,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "control_sphere3_f2",
+    "seconds": 0.0002535370003897697,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "control_sphere3_f2",
+    "seconds": 0.00017863498942460865,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "control_sphere2_cocycles_f3",
+    "seconds": 0.000236351,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "control_sphere2_cocycles_f3",
+    "seconds": 0.000345972,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "control_sphere2_cocycles_f3",
+    "seconds": 0.000319673,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "control_sphere2_cocycles_f3",
+    "seconds": 0.000333941,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "control_sphere2_cocycles_f3",
+    "seconds": 0.00014484699931927025,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "control_sphere2_cocycles_f3",
+    "seconds": 0.0001221330021508038,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "control_sphere2_cocycles_f3",
+    "seconds": 0.00018155400175601244,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "control_sphere2_cocycles_f3",
+    "seconds": 0.0001348249934380874,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "control_ties_f101",
+    "seconds": 0.460044522,
+    "compile_seconds": 0.459668003,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "control_ties_f101",
+    "seconds": 2.659776024,
+    "compile_seconds": 2.658947101,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "control_ties_f101",
+    "seconds": 0.699716382,
+    "compile_seconds": 0.699300992,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "control_ties_f101",
+    "seconds": 2.060577976,
+    "compile_seconds": 2.059858263,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "control_ties_f101",
+    "seconds": 0.000130201005958952,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "control_ties_f101",
+    "seconds": 0.00012242700904607773,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "control_ties_f101",
+    "seconds": 0.00017129399930126965,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "control_ties_f101",
+    "seconds": 0.000125810009194538,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "control_stored_zero_cocycles_f2",
+    "seconds": 1.133126566,
+    "compile_seconds": 1.131965633,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "control_stored_zero_cocycles_f2",
+    "seconds": 2.227664312,
+    "compile_seconds": 2.225965299,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "control_stored_zero_cocycles_f2",
+    "seconds": 1.715718233,
+    "compile_seconds": 1.714373297,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "control_stored_zero_cocycles_f2",
+    "seconds": 2.256422478,
+    "compile_seconds": 2.254553688,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "control_stored_zero_cocycles_f2",
+    "seconds": 0.00010613299673423171,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "control_stored_zero_cocycles_f2",
+    "seconds": 8.700499893166125e-05,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "control_stored_zero_cocycles_f2",
+    "seconds": 0.00013145200500730425,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "control_stored_zero_cocycles_f2",
+    "seconds": 9.961500472854823e-05,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_planar512_f101",
+    "seconds": 1.347779659,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_planar512_f101",
+    "seconds": 3.439904621,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_planar512_f101",
+    "seconds": 2.195289229,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_planar512_f101",
+    "seconds": 2.142804393,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_planar512_f101",
+    "seconds": 12.487421886005905,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_planar512_f101",
+    "seconds": 10.179963396003586,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_planar512_f101",
+    "seconds": 16.256126873995527,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_planar512_f101",
+    "seconds": 10.252765575991361,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_4096_512_f2",
+    "seconds": 0.097615768,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_4096_512_f2",
+    "seconds": 0.141817995,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_4096_512_f2",
+    "seconds": 0.132195545,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_4096_512_f2",
+    "seconds": 0.14077355,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_4096_512_f2",
+    "seconds": 0.26028280399623327,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_4096_512_f2",
+    "seconds": 0.1377911470044637,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_4096_512_f2",
+    "seconds": 0.20221454599231947,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_4096_512_f2",
+    "seconds": 0.135783931997139,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_4096_1024_f2",
+    "seconds": 0.266666609,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_4096_1024_f2",
+    "seconds": 0.706934712,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_4096_1024_f2",
+    "seconds": 0.369587563,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_4096_1024_f2",
+    "seconds": 0.431956603,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_4096_1024_f2",
+    "seconds": 0.6694995110010495,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_4096_1024_f2",
+    "seconds": 0.620905285992194,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_4096_1024_f2",
+    "seconds": 0.8672460960078752,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_4096_1024_f2",
+    "seconds": 0.6372809339954983,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_4096_3072_f2",
+    "seconds": 2.652319604,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_4096_3072_f2",
+    "seconds": 2.733132012,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_4096_3072_f2",
+    "seconds": 3.902514318,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_4096_3072_f2",
+    "seconds": 3.420888659,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_4096_3072_f2",
+    "seconds": 6.914469751005527,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_4096_3072_f2",
+    "seconds": 7.972466507999343,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_4096_3072_f2",
+    "seconds": 9.855532210000092,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_4096_3072_f2",
+    "seconds": 6.382416293999995,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "cloud_circle512_cocycles_f2",
+    "seconds": 1.199772994,
+    "compile_seconds": 0.583795066,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "cloud_circle512_cocycles_f2",
+    "seconds": 0.618630469,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "cloud_circle512_cocycles_f2",
+    "seconds": 3.090690811,
+    "compile_seconds": 1.457718054,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "cloud_circle512_cocycles_f2",
+    "seconds": 0.612420492,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "cloud_circle512_cocycles_f2",
+    "seconds": 2.7761070989945438,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "cloud_circle512_cocycles_f2",
+    "seconds": 2.7736851919908077,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "cloud_circle512_cocycles_f2",
+    "seconds": 4.377329566996195,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "cloud_circle512_cocycles_f2",
+    "seconds": 2.8301555390062276,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_circle256_f2",
+    "seconds": 0.058572553,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_circle256_f2",
+    "seconds": 0.060395739,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_circle256_f2",
+    "seconds": 0.132077219,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_circle256_f2",
+    "seconds": 0.06092491,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_circle256_f2",
+    "seconds": 0.30013335701369215,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_circle256_f2",
+    "seconds": 0.29990873800124973,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_circle256_f2",
+    "seconds": 0.4909277650003787,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_circle256_f2",
+    "seconds": 0.30575085201417096,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "sparse_grid64_f2",
+    "seconds": 0.00238813,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "sparse_grid64_f2",
+    "seconds": 0.002392147,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "sparse_grid64_f2",
+    "seconds": 0.005274456,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "sparse_grid64_f2",
+    "seconds": 0.002470117,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "sparse_grid64_f2",
+    "seconds": 0.004102497987332754,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "sparse_grid64_f2",
+    "seconds": 0.003969392011640593,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "sparse_grid64_f2",
+    "seconds": 0.007342908007558435,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "sparse_grid64_f2",
+    "seconds": 0.0041295219998573884,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "weighted_cycle96_cocycles_f3",
+    "seconds": 0.539414989,
+    "compile_seconds": 0.538966057,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "weighted_cycle96_cocycles_f3",
+    "seconds": 0.788634293,
+    "compile_seconds": 0.788170253,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "weighted_cycle96_cocycles_f3",
+    "seconds": 1.235481139,
+    "compile_seconds": 1.234682169,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "weighted_cycle96_cocycles_f3",
+    "seconds": 1.193713394,
+    "compile_seconds": 1.193061142,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "weighted_cycle96_cocycles_f3",
+    "seconds": 0.00014386199472937733,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "weighted_cycle96_cocycles_f3",
+    "seconds": 0.00022358600108418614,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "weighted_cycle96_cocycles_f3",
+    "seconds": 0.00023303000489249825,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "weighted_cycle96_cocycles_f3",
+    "seconds": 0.00015105900820344687,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_planar256_f101",
+    "seconds": 0.163370423,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_planar256_f101",
+    "seconds": 0.164322891,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_planar256_f101",
+    "seconds": 0.3863682,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_planar256_f101",
+    "seconds": 0.218789488,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_planar256_f101",
+    "seconds": 1.1696010290033882,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_planar256_f101",
+    "seconds": 1.1166234199918108,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_planar256_f101",
+    "seconds": 1.6208202609996079,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_planar256_f101",
+    "seconds": 1.1305488639918622,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_planar384_f101",
+    "seconds": 0.53486255,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_planar384_f101",
+    "seconds": 0.605876077,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_planar384_f101",
+    "seconds": 1.35029031,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_planar384_f101",
+    "seconds": 0.95421024,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_planar384_f101",
+    "seconds": 4.612582884001313,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_planar384_f101",
+    "seconds": 4.232586732003256,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_planar384_f101",
+    "seconds": 4.683839680001256,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "dense_planar384_f101",
+    "seconds": 4.312144851006451,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_4096_2048_f2",
+    "seconds": 0.95251657,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_4096_2048_f2",
+    "seconds": 1.460147903,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_4096_2048_f2",
+    "seconds": 1.992796034,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_4096_2048_f2",
+    "seconds": 1.731905335,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_4096_2048_f2",
+    "seconds": 2.911299177008914,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_4096_2048_f2",
+    "seconds": 3.622623843999463,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_4096_2048_f2",
+    "seconds": 3.3519952990027377,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "landmark_4096_2048_f2",
+    "seconds": 3.005076890010969,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "evaluation_01_cloud_f2",
+    "seconds": 0.570169034,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "evaluation_01_cloud_f2",
+    "seconds": 5.585454096,
+    "compile_seconds": 4.624564714,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "evaluation_01_cloud_f2",
+    "seconds": 1.424101516,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "evaluation_01_cloud_f2",
+    "seconds": 4.449654971,
+    "compile_seconds": 3.65724928,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "evaluation_01_cloud_f2",
+    "seconds": 3.157672236993676,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "evaluation_01_cloud_f2",
+    "seconds": 4.2096811039955355,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "evaluation_01_cloud_f2",
+    "seconds": 3.549706330988556,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "evaluation_01_cloud_f2",
+    "seconds": 3.54063841199968,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "evaluation_02_dense_f101",
+    "seconds": 0.018047302,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "evaluation_02_dense_f101",
+    "seconds": 0.728634902,
+    "compile_seconds": 0.699387996,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "evaluation_02_dense_f101",
+    "seconds": 0.041717192,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "evaluation_02_dense_f101",
+    "seconds": 0.567451511,
+    "compile_seconds": 0.54432566,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "evaluation_02_dense_f101",
+    "seconds": 0.1137025889911456,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "evaluation_02_dense_f101",
+    "seconds": 0.15028371001244523,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "evaluation_02_dense_f101",
+    "seconds": 0.12800324300769717,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "evaluation_02_dense_f101",
+    "seconds": 0.12774706400523428,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "evaluation_03_dense_f3",
+    "seconds": 0.032418768,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "evaluation_03_dense_f3",
+    "seconds": 4.619399828,
+    "compile_seconds": 4.565717984,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "evaluation_03_dense_f3",
+    "seconds": 0.072255851,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "evaluation_03_dense_f3",
+    "seconds": 3.368973611,
+    "compile_seconds": 3.324067426,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "evaluation_03_dense_f3",
+    "seconds": 0.16444522498932201,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "evaluation_03_dense_f3",
+    "seconds": 0.22908043400093447,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "evaluation_03_dense_f3",
+    "seconds": 0.18018721300177276,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "evaluation_03_dense_f3",
+    "seconds": 0.18553325600805692,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "evaluation_04_sparse_f2",
+    "seconds": 0.002867087,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "evaluation_04_sparse_f2",
+    "seconds": 1.192246169,
+    "compile_seconds": 1.187056179,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "evaluation_04_sparse_f2",
+    "seconds": 0.006347408,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "evaluation_04_sparse_f2",
+    "seconds": 1.093154279,
+    "compile_seconds": 1.08815617,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "evaluation_04_sparse_f2",
+    "seconds": 0.007009255001321435,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "evaluation_04_sparse_f2",
+    "seconds": 0.009647957995184697,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "evaluation_04_sparse_f2",
+    "seconds": 0.0078007720003370196,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "evaluation_04_sparse_f2",
+    "seconds": 0.0076762310054618865,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "evaluation_05_weighted_f101",
+    "seconds": 0.000604787,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "evaluation_05_weighted_f101",
+    "seconds": 8.057346883,
+    "compile_seconds": 8.054690976,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "evaluation_05_weighted_f101",
+    "seconds": 0.000993698,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "evaluation_05_weighted_f101",
+    "seconds": 7.530602537,
+    "compile_seconds": 7.528249519,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "evaluation_05_weighted_f101",
+    "seconds": 0.0005681269976776093,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "evaluation_05_weighted_f101",
+    "seconds": 0.0007811849936842918,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "evaluation_05_weighted_f101",
+    "seconds": 0.0006200360076036304,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "evaluation_05_weighted_f101",
+    "seconds": 0.0006512349937111139,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "evaluation_06_landmark_f2",
+    "seconds": 0.009593699,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "evaluation_06_landmark_f2",
+    "seconds": 7.987885864,
+    "compile_seconds": 7.969865376,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "evaluation_06_landmark_f2",
+    "seconds": 0.01879029,
+    "compile_seconds": 0.0,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "evaluation_06_landmark_f2",
+    "seconds": 7.360498328,
+    "compile_seconds": 7.340593302,
+    "recompile_seconds": 0.0,
+    "scope": "same fixture; mathematical result discarded",
+    "tool": "tamerop",
+    "pass_id": 4
+  },
+  {
+    "kind": "first_use",
+    "case": "evaluation_06_landmark_f2",
+    "seconds": 0.007039236996206455,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 1
+  },
+  {
+    "kind": "first_use",
+    "case": "evaluation_06_landmark_f2",
+    "seconds": 0.010902850001002662,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 2
+  },
+  {
+    "kind": "first_use",
+    "case": "evaluation_06_landmark_f2",
+    "seconds": 0.007603759004268795,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 3
+  },
+  {
+    "kind": "first_use",
+    "case": "evaluation_06_landmark_f2",
+    "seconds": 0.00891102799505461,
+    "scope": "same fixture, result discarded; not measured sample",
+    "tool": "ripser",
+    "pass_id": 4
+  }
+]

@@ -262,10 +262,13 @@ function _visual_makie_handlers(TO, MakieMod; allow_save::Bool=true)
                              (; color=(_color(style, layer.color), layer.alpha), markersize,
                                 markerspace=layer.markerspace,
                                 marker=layer.markerspace === :data ? :circle : Viz._visual_marker(layer.color))
-                    MakieMod.scatter!(ax,
+                    plot = MakieMod.scatter!(ax,
                                       [p[1] for p in layer.points],
                                       [p[2] for p in layer.points];
                                       kwargs...)
+                    label = get(spec.metadata, :point_colorbar_label, "")
+                    layer.color isa AbstractVector && !isempty(label) &&
+                        push!(colorbars, (; plot, label))
                 end
             elseif layer isa Viz.Point3Layer
                 isempty(layer.points) || begin
@@ -572,7 +575,14 @@ function _visual_makie_handlers(TO, MakieMod; allow_save::Bool=true)
             widget_fig === nothing || return widget_fig
         end
         panels = Viz.visual_panels(spec)
-        ncols = isempty(panels) ? 1 : Int(clamp(get(Viz.visual_metadata(spec), :panel_columns, min(3, length(panels))), 1, max(length(panels), 1)))
+        positions = get(Viz.visual_metadata(spec), :panel_positions, nothing)
+        ncols = if isempty(panels)
+            1
+        elseif positions === nothing
+            Int(clamp(get(Viz.visual_metadata(spec), :panel_columns, min(3, length(panels))), 1, length(panels)))
+        else
+            maximum(position -> last(position[2]), positions)
+        end
         if isempty(panels)
             grid = fig[1, 1] = MakieMod.GridLayout()
             _render_spec_into_grid!(fig, grid, spec; style)
@@ -593,10 +603,35 @@ function _visual_makie_handlers(TO, MakieMod; allow_save::Bool=true)
             first_panel_row += 1
         end
         for (idx, panel) in enumerate(panels)
-            row = first_panel_row + div(idx - 1, ncols)
-            col = 1 + mod(idx - 1, ncols)
-            grid = fig[row, col] = MakieMod.GridLayout()
+            rows, cols = if positions === nothing
+                row, col = div(idx - 1, ncols) + 1, mod(idx - 1, ncols) + 1
+                (row:row, col:col)
+            else
+                positions[idx]
+            end
+            figure_rows = (first_panel_row + first(rows) - 1):(first_panel_row + last(rows) - 1)
+            grid = fig[figure_rows, cols] = MakieMod.GridLayout()
             _render_spec_into_grid!(fig, grid, panel; style)
+        end
+        weights = get(Viz.visual_metadata(spec), :panel_row_weights, nothing)
+        if weights !== nothing
+            for (idx, weight) in enumerate(weights)
+                # Auto(false, weight) apportions only the height remaining
+                # after the heading rows and gaps have taken their space.
+                MakieMod.rowsize!(fig.layout, first_panel_row + idx - 1,
+                                 MakieMod.Auto(false, weight))
+            end
+        end
+        # A composite can share one key across its panels without reducing
+        # just one plot's viewport to make room for a repeated legend.
+        panel_rows = positions === nothing ? cld(length(panels), ncols) :
+            maximum(position -> last(position[1]), positions)
+        last_panel_row = first_panel_row + panel_rows - 1
+        legend_position = get(Viz.visual_metadata(spec), :legend_position, :bottom)
+        if legend_position === :right
+            _render_legend!(fig, fig[first_panel_row:last_panel_row, ncols + 1], spec, style)
+        elseif legend_position !== :none
+            _render_legend!(fig, fig[last_panel_row + 1, 1:ncols], spec, style)
         end
         return _style_figure!(fig, style)
     end

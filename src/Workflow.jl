@@ -1856,6 +1856,14 @@ if exhausted. The optimizer is intended for modest coordinate grids.
 
 `cache=sc::SessionCache` reuses arrangements and module barcode caches.
 `opts.threads` controls parallel optimization after sequential cache population.
+
+Set `witness=true` to return a `MatchingDistanceResult2D` retaining the exact
+scalar, chosen line, its weight and the actual bottleneck assignment. The default
+remains a `Float64`. `slice_query(result)` uses `basepoint + t*direction`;
+`matching_witness(result)` uses the same normalized parameter `t`, without a
+rounded boundary re-query. Positive-area windows have an attained optimum;
+zero-area windows return `:degenerate_window` with no asserted slice. The
+assignment is one deterministic choice, not a uniqueness certificate.
 """
 matching_distance_exact_2d(M::PModule{K}, N::PModule{K}, pi,
                            opts::InvariantOptions; kwargs...) where {K} =
@@ -1876,7 +1884,8 @@ function matching_distance_exact_2d(encA::EncodingResult, encB::EncodingResult;
                                     normalize_dirs::Symbol=:L1,
                                     max_candidates::Int=200_000,
                                     max_cells::Int=5_000_000,
-                                    arrangement=nothing)
+                                    arrangement=nothing,
+                                    witness::Bool=false)
     encA.P === encB.P ||
         error("matching_distance_exact_2d: encodings are on different posets; common-encode first.")
     encA.pi === encB.pi ||
@@ -1904,7 +1913,7 @@ function matching_distance_exact_2d(encA::EncodingResult, encB::EncodingResult;
     cacheN = _workflow_fibered2d_barcode_cache(pmodule(encB2), arr, enc_cache)
     threads0 = opts.threads === nothing ? (Threads.nthreads() > 1) : opts.threads
     return Fibered2D.matching_distance_exact_2d(cacheM, cacheN;
-        weight=weight, max_candidates=max_candidates, threads=threads0)
+        weight=weight, max_candidates=max_candidates, threads=threads0, witness=witness)
 end
 
 """
@@ -2913,6 +2922,49 @@ end
 slice_barcodes(M::PModule{K}, slices;
                opts::InvariantOptions=InvariantOptions(), kwargs...) where {K} =
     slice_barcodes(M, slices, opts; kwargs...)
+
+"""
+    generalized_rank(M; vertices, witnesses=false, budget=Advanced.GeneralizedRankBudget())
+    generalized_rank(enc::EncodingResult; vertices, cache=:auto, kwargs...)
+
+Exact limit-to-colimit rank on selected connected convex finite labels. Encoding
+queries use the encoding's finite base, not an implicit ambient geometric region.
+See `Invariants.generalized_rank` for witness and resource contracts.
+"""
+generalized_rank(M::PModule; kwargs...) = Invariants.generalized_rank(M; kwargs...)
+generalized_rank(r::Invariants.GeneralizedRankResult) = Invariants.generalized_rank(r)
+function generalized_rank(enc::EncodingResult; cache=:auto, kwargs...)
+    enc2 = _encoding_with_session_cache(enc, _resolve_workflow_session_cache(cache))
+    return Invariants.generalized_rank(pmodule(enc2); kwargs...)
+end
+
+"""
+    interval_rank_summary(M; family, compression=:total, budget=Advanced.GeneralizedRankBudget())
+    interval_rank_summary(enc::EncodingResult; family, cache=:auto, kwargs...)
+
+Signed Mobius summary on a declared finite family of connected convex label
+sets. Reconstruction is certified on that family, with the total-diagram
+compression contract. See `Invariants.interval_rank_summary`.
+"""
+interval_rank_summary(M::PModule; kwargs...) = Invariants.interval_rank_summary(M; kwargs...)
+function interval_rank_summary(enc::EncodingResult; cache=:auto, kwargs...)
+    enc2 = _encoding_with_session_cache(enc, _resolve_workflow_session_cache(cache))
+    return Invariants.interval_rank_summary(pmodule(enc2); kwargs...)
+end
+
+"""
+    gril(M, grid; centers, levels=(1,), lengths=(1,), budget=Advanced.GeneralizedRankBudget())
+    gril(enc::EncodingResult; centers, cache=:auto, kwargs...)
+
+Exact continuous-worm GRIL on positively oriented 2D grid encodings, at fixed
+user-chosen probes. The represented ambient module is right-continuous, zero
+below the first axes, and constant in the upper tails. See `Invariants.gril`.
+"""
+gril(M::PModule, pi; kwargs...) = Invariants.gril(M, pi; kwargs...)
+function gril(enc::EncodingResult; cache=:auto, kwargs...)
+    enc2 = _encoding_with_session_cache(enc, _resolve_workflow_session_cache(cache))
+    return Invariants.gril(pmodule(enc2), enc2.pi; kwargs...)
+end
 
 rank_invariant(enc::EncodingResult; opts::InvariantOptions=InvariantOptions(), kwargs...) =
     invariant(enc; which=:rank_invariant, opts=opts, kwargs...).value

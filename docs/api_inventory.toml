@@ -5,7 +5,7 @@ docstring_policy = "Docs.hasdoc, including alias and method documentation; prese
 generator = "docs/build_scripts/api_inventory.jl"
 generator_version = 1
 julia_version = "1.12.1"
-loaded_optional_extensions = []
+loaded_optional_extensions = ["TamerOpCairoMakieExt", "TamerOpDelaunayTriangulationExt", "TamerOpTablesExt", "TamerOpWGLMakieExt"]
 package_version = "0.1.0"
 schema_version = 1
 
@@ -2963,6 +2963,14 @@ target_binding = "TamerOp.Advanced.FiberedSliceResult"
 target_matches_owner = true
 [[curated_binding_rows]]
 declaration_owner = "TamerOp.Fibered2D"
+name = "MatchingDistanceResult2D"
+owner_binding = "TamerOp.Fibered2D.MatchingDistanceResult2D"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.MatchingDistanceResult2D"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Fibered2D"
 name = "ProjectedArrangement"
 owner_binding = "TamerOp.Fibered2D.ProjectedArrangement"
 owner_defined = true
@@ -3088,6 +3096,14 @@ owner_binding = "TamerOp.Fibered2D.check_fibered_slice_family_2d"
 owner_defined = true
 table = "ADVANCED_ONLY_API_BINDINGS"
 target_binding = "TamerOp.Advanced.check_fibered_slice_family_2d"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Fibered2D"
+name = "check_matching_result_2d"
+owner_binding = "TamerOp.Fibered2D.check_matching_result_2d"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.check_matching_result_2d"
 target_matches_owner = true
 [[curated_binding_rows]]
 declaration_owner = "TamerOp.Fibered2D"
@@ -3307,6 +3323,22 @@ target_binding = "TamerOp.Advanced.matching_distance_slices_2d"
 target_matches_owner = true
 [[curated_binding_rows]]
 declaration_owner = "TamerOp.Fibered2D"
+name = "matching_summary"
+owner_binding = "TamerOp.Fibered2D.matching_summary"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.matching_summary"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Fibered2D"
+name = "matching_witness"
+owner_binding = "TamerOp.Fibered2D.matching_witness"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.matching_witness"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Fibered2D"
 name = "ncells"
 owner_binding = "TamerOp.Fibered2D.ncells"
 owner_defined = true
@@ -3480,6 +3512,14 @@ owner_binding = "TamerOp.Fibered2D.slice_offset_interval"
 owner_defined = true
 table = "ADVANCED_ONLY_API_BINDINGS"
 target_binding = "TamerOp.Advanced.slice_offset_interval"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Fibered2D"
+name = "slice_query"
+owner_binding = "TamerOp.Fibered2D.slice_query"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.slice_query"
 target_matches_owner = true
 [[curated_binding_rows]]
 declaration_owner = "TamerOp.Fibered2D"
@@ -4531,6 +4571,46 @@ target_binding = "TamerOp.Advanced.BettiSupportMeasuresSummary"
 target_matches_owner = true
 [[curated_binding_rows]]
 declaration_owner = "TamerOp.Invariants"
+name = "GRILResult"
+owner_binding = "TamerOp.Invariants.GRILResult"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.GRILResult"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Invariants"
+name = "GeneralizedRankBudget"
+owner_binding = "TamerOp.Invariants.GeneralizedRankBudget"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.GeneralizedRankBudget"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Invariants"
+name = "GeneralizedRankResult"
+owner_binding = "TamerOp.Invariants.GeneralizedRankResult"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.GeneralizedRankResult"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Invariants"
+name = "GeneralizedRankValidationSummary"
+owner_binding = "TamerOp.Invariants.GeneralizedRankValidationSummary"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.GeneralizedRankValidationSummary"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Invariants"
+name = "IntervalRankSummary"
+owner_binding = "TamerOp.Invariants.IntervalRankSummary"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.IntervalRankSummary"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Invariants"
 name = "ModuleGeometryAsymptoticsSummary"
 owner_binding = "TamerOp.Invariants.ModuleGeometryAsymptoticsSummary"
 owner_defined = true
@@ -4611,6 +4691,22 @@ target_binding = "TamerOp.Advanced.SupportMeasureSummary"
 target_matches_owner = true
 [[curated_binding_rows]]
 declaration_owner = "TamerOp.Invariants"
+name = "check_generalized_rank_region"
+owner_binding = "TamerOp.Invariants.check_generalized_rank_region"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.check_generalized_rank_region"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Invariants"
+name = "check_gril_query"
+owner_binding = "TamerOp.Invariants.check_gril_query"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.check_gril_query"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Invariants"
 name = "check_rank_query_points"
 owner_binding = "TamerOp.Invariants.check_rank_query_points"
 owner_defined = true
@@ -4643,6 +4739,22 @@ target_binding = "TamerOp.Advanced.check_support_window"
 target_matches_owner = true
 [[curated_binding_rows]]
 declaration_owner = "TamerOp.Invariants"
+name = "colimit_projection"
+owner_binding = "TamerOp.Invariants.colimit_projection"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.colimit_projection"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Invariants"
+name = "comparison_map"
+owner_binding = "TamerOp.Invariants.comparison_map"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.comparison_map"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Invariants"
 name = "component_sizes"
 owner_binding = "TamerOp.Invariants.component_sizes"
 owner_defined = true
@@ -4659,11 +4771,83 @@ target_binding = "TamerOp.Advanced.components"
 target_matches_owner = true
 [[curated_binding_rows]]
 declaration_owner = "TamerOp.Invariants"
+name = "generalized_rank_summary"
+owner_binding = "TamerOp.Invariants.generalized_rank_summary"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.generalized_rank_summary"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Invariants"
+name = "gril_centers"
+owner_binding = "TamerOp.Invariants.gril_centers"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.gril_centers"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Invariants"
+name = "gril_lengths"
+owner_binding = "TamerOp.Invariants.gril_lengths"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.gril_lengths"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Invariants"
+name = "gril_levels"
+owner_binding = "TamerOp.Invariants.gril_levels"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.gril_levels"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Invariants"
+name = "gril_summary"
+owner_binding = "TamerOp.Invariants.gril_summary"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.gril_summary"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Invariants"
+name = "gril_values"
+owner_binding = "TamerOp.Invariants.gril_values"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.gril_values"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Invariants"
+name = "interval_coefficients"
+owner_binding = "TamerOp.Invariants.interval_coefficients"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.interval_coefficients"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Invariants"
+name = "interval_family"
+owner_binding = "TamerOp.Invariants.interval_family"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.interval_family"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Invariants"
 name = "largest_component"
 owner_binding = "TamerOp.Invariants.largest_component"
 owner_defined = true
 table = "ADVANCED_ONLY_API_BINDINGS"
 target_binding = "TamerOp.Advanced.largest_component"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Invariants"
+name = "limit_basis"
+owner_binding = "TamerOp.Invariants.limit_basis"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.limit_basis"
 target_matches_owner = true
 [[curated_binding_rows]]
 declaration_owner = "TamerOp.Invariants"
@@ -4691,6 +4875,22 @@ target_binding = "TamerOp.Advanced.nonzero_pairs"
 target_matches_owner = true
 [[curated_binding_rows]]
 declaration_owner = "TamerOp.Invariants"
+name = "reconstruct_rank"
+owner_binding = "TamerOp.Invariants.reconstruct_rank"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.reconstruct_rank"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Invariants"
+name = "selected_vertices"
+owner_binding = "TamerOp.Invariants.selected_vertices"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.selected_vertices"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Invariants"
 name = "store_zeros"
 owner_binding = "TamerOp.Invariants.store_zeros"
 owner_defined = true
@@ -4712,6 +4912,14 @@ owner_binding = "TamerOp.Invariants.value_at"
 owner_defined = true
 table = "ADVANCED_ONLY_API_BINDINGS"
 target_binding = "TamerOp.Advanced.value_at"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Invariants"
+name = "worm_rank"
+owner_binding = "TamerOp.Invariants.worm_rank"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.worm_rank"
 target_matches_owner = true
 [[curated_binding_rows]]
 declaration_owner = "TamerOp.ModuleComplexes"
@@ -5568,6 +5776,30 @@ owner_binding = "TamerOp.OrdinaryPersistence.filtration_order"
 owner_defined = true
 table = "ADVANCED_ONLY_API_BINDINGS"
 target_binding = "TamerOp.Advanced.filtration_order"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.OrdinaryPersistence"
+name = "persistence_cocycle"
+owner_binding = "TamerOp.OrdinaryPersistence.persistence_cocycle"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.persistence_cocycle"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.OrdinaryPersistence"
+name = "persistence_diagram_data"
+owner_binding = "TamerOp.OrdinaryPersistence.persistence_diagram_data"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.persistence_diagram_data"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.OrdinaryPersistence"
+name = "persistence_diagram_from_data"
+owner_binding = "TamerOp.OrdinaryPersistence.persistence_diagram_from_data"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.persistence_diagram_from_data"
 target_matches_owner = true
 [[curated_binding_rows]]
 declaration_owner = "TamerOp.OrdinaryPersistence"
@@ -6475,6 +6707,14 @@ target_binding = "TamerOp.Advanced.check_mpp_image_json"
 target_matches_owner = true
 [[curated_binding_rows]]
 declaration_owner = "TamerOp.Serialization"
+name = "check_persistence_diagram_json"
+owner_binding = "TamerOp.Serialization.check_persistence_diagram_json"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.check_persistence_diagram_json"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Serialization"
 name = "check_pipeline_json"
 owner_binding = "TamerOp.Serialization.check_pipeline_json"
 owner_defined = true
@@ -6632,6 +6872,14 @@ owner_binding = "TamerOp.Serialization.parse_pl_fringe_json"
 owner_defined = true
 table = "ADVANCED_ONLY_API_BINDINGS"
 target_binding = "TamerOp.Advanced.parse_pl_fringe_json"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Serialization"
+name = "persistence_diagram_json_summary"
+owner_binding = "TamerOp.Serialization.persistence_diagram_json_summary"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.persistence_diagram_json_summary"
 target_matches_owner = true
 [[curated_binding_rows]]
 declaration_owner = "TamerOp.Serialization"
@@ -7707,6 +7955,14 @@ target_binding = "TamerOp.Advanced.IntervalInspectionSession"
 target_matches_owner = true
 [[curated_binding_rows]]
 declaration_owner = "TamerOp.Visualization"
+name = "MatchingInspectionSession"
+owner_binding = "TamerOp.Visualization.MatchingInspectionSession"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.MatchingInspectionSession"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Visualization"
 name = "MatrixLayer"
 owner_binding = "TamerOp.Visualization.MatrixLayer"
 owner_defined = true
@@ -8491,6 +8747,14 @@ target_binding = "TamerOp.LandmarkRipsFiltration"
 target_matches_owner = true
 [[curated_binding_rows]]
 declaration_owner = "TamerOp.DataIngestion"
+name = "LandmarkSelection"
+owner_binding = "TamerOp.DataIngestion.LandmarkSelection"
+owner_defined = true
+table = "SIMPLE_API_BINDINGS"
+target_binding = "TamerOp.LandmarkSelection"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.DataIngestion"
 name = "PointCodensityResult"
 owner_binding = "TamerOp.DataIngestion.PointCodensityResult"
 owner_defined = true
@@ -8587,6 +8851,14 @@ target_binding = "TamerOp.construction_mode"
 target_matches_owner = true
 [[curated_binding_rows]]
 declaration_owner = "TamerOp.DataIngestion"
+name = "covering_radius"
+owner_binding = "TamerOp.DataIngestion.covering_radius"
+owner_defined = true
+table = "SIMPLE_API_BINDINGS"
+target_binding = "TamerOp.covering_radius"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.DataIngestion"
 name = "criticality"
 owner_binding = "TamerOp.DataIngestion.criticality"
 owner_defined = true
@@ -8643,6 +8915,22 @@ target_binding = "TamerOp.filtration_spec_summary"
 target_matches_owner = true
 [[curated_binding_rows]]
 declaration_owner = "TamerOp.DataIngestion"
+name = "landmark_distances"
+owner_binding = "TamerOp.DataIngestion.landmark_distances"
+owner_defined = true
+table = "SIMPLE_API_BINDINGS"
+target_binding = "TamerOp.landmark_distances"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.DataIngestion"
+name = "landmark_indices"
+owner_binding = "TamerOp.DataIngestion.landmark_indices"
+owner_defined = true
+table = "SIMPLE_API_BINDINGS"
+target_binding = "TamerOp.landmark_indices"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.DataIngestion"
 name = "neighbor_count"
 owner_binding = "TamerOp.DataIngestion.neighbor_count"
 owner_defined = true
@@ -8688,6 +8976,14 @@ owner_binding = "TamerOp.DataIngestion.registered_filtration_families"
 owner_defined = true
 table = "SIMPLE_API_BINDINGS"
 target_binding = "TamerOp.registered_filtration_families"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.DataIngestion"
+name = "select_landmarks"
+owner_binding = "TamerOp.DataIngestion.select_landmarks"
+owner_defined = true
+table = "SIMPLE_API_BINDINGS"
+target_binding = "TamerOp.select_landmarks"
 target_matches_owner = true
 [[curated_binding_rows]]
 declaration_owner = "TamerOp.DataTypes"
@@ -9235,6 +9531,14 @@ target_binding = "TamerOp.PersistenceDiagram"
 target_matches_owner = true
 [[curated_binding_rows]]
 declaration_owner = "TamerOp.OrdinaryPersistence"
+name = "analysis_barcode"
+owner_binding = "TamerOp.OrdinaryPersistence.analysis_barcode"
+owner_defined = true
+table = "SIMPLE_API_BINDINGS"
+target_binding = "TamerOp.analysis_barcode"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.OrdinaryPersistence"
 name = "check_torus_persistence"
 owner_binding = "TamerOp.OrdinaryPersistence.check_torus_persistence"
 owner_defined = true
@@ -9264,6 +9568,14 @@ owner_binding = "TamerOp.OrdinaryPersistence.finite_intervals"
 owner_defined = true
 table = "SIMPLE_API_BINDINGS"
 target_binding = "TamerOp.finite_intervals"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.OrdinaryPersistence"
+name = "landmark_selection"
+owner_binding = "TamerOp.OrdinaryPersistence.landmark_selection"
+owner_defined = true
+table = "SIMPLE_API_BINDINGS"
+target_binding = "TamerOp.landmark_selection"
 target_matches_owner = true
 [[curated_binding_rows]]
 declaration_owner = "TamerOp.OrdinaryPersistence"
@@ -9459,6 +9771,14 @@ target_binding = "TamerOp.load_encoding_json"
 target_matches_owner = true
 [[curated_binding_rows]]
 declaration_owner = "TamerOp.Serialization"
+name = "load_persistence_diagram_json"
+owner_binding = "TamerOp.Serialization.load_persistence_diagram_json"
+owner_defined = true
+table = "SIMPLE_API_BINDINGS"
+target_binding = "TamerOp.load_persistence_diagram_json"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Serialization"
 name = "load_pipeline_json"
 owner_binding = "TamerOp.Serialization.load_pipeline_json"
 owner_defined = true
@@ -9483,11 +9803,83 @@ target_binding = "TamerOp.save_encoding_json"
 target_matches_owner = true
 [[curated_binding_rows]]
 declaration_owner = "TamerOp.Serialization"
+name = "save_persistence_diagram_json"
+owner_binding = "TamerOp.Serialization.save_persistence_diagram_json"
+owner_defined = true
+table = "SIMPLE_API_BINDINGS"
+target_binding = "TamerOp.save_persistence_diagram_json"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Serialization"
 name = "save_pipeline_json"
 owner_binding = "TamerOp.Serialization.save_pipeline_json"
 owner_defined = true
 table = "SIMPLE_API_BINDINGS"
 target_binding = "TamerOp.save_pipeline_json"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.SliceInvariants"
+name = "barcode_entropy"
+owner_binding = "TamerOp.SliceInvariants.barcode_entropy"
+owner_defined = true
+table = "SIMPLE_API_BINDINGS"
+target_binding = "TamerOp.barcode_entropy"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.SliceInvariants"
+name = "barcode_summary"
+owner_binding = "TamerOp.SliceInvariants.barcode_summary"
+owner_defined = true
+table = "SIMPLE_API_BINDINGS"
+target_binding = "TamerOp.barcode_summary"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.SliceInvariants"
+name = "bottleneck_distance"
+owner_binding = "TamerOp.SliceInvariants.bottleneck_distance"
+owner_defined = true
+table = "SIMPLE_API_BINDINGS"
+target_binding = "TamerOp.bottleneck_distance"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.SliceInvariants"
+name = "bottleneck_matching"
+owner_binding = "TamerOp.SliceInvariants.bottleneck_matching"
+owner_defined = true
+table = "SIMPLE_API_BINDINGS"
+target_binding = "TamerOp.bottleneck_matching"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.SliceInvariants"
+name = "persistence_image"
+owner_binding = "TamerOp.SliceInvariants.persistence_image"
+owner_defined = true
+table = "SIMPLE_API_BINDINGS"
+target_binding = "TamerOp.persistence_image"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.SliceInvariants"
+name = "persistence_landscape"
+owner_binding = "TamerOp.SliceInvariants.persistence_landscape"
+owner_defined = true
+table = "SIMPLE_API_BINDINGS"
+target_binding = "TamerOp.persistence_landscape"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.SliceInvariants"
+name = "persistence_silhouette"
+owner_binding = "TamerOp.SliceInvariants.persistence_silhouette"
+owner_defined = true
+table = "SIMPLE_API_BINDINGS"
+target_binding = "TamerOp.persistence_silhouette"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.SliceInvariants"
+name = "wasserstein_distance"
+owner_binding = "TamerOp.SliceInvariants.wasserstein_distance"
+owner_defined = true
+table = "SIMPLE_API_BINDINGS"
+target_binding = "TamerOp.wasserstein_distance"
 target_matches_owner = true
 [[curated_binding_rows]]
 declaration_owner = "TamerOp.Visualization"
@@ -9683,6 +10075,22 @@ target_binding = "TamerOp.ext_algebra"
 target_matches_owner = true
 [[curated_binding_rows]]
 declaration_owner = "TamerOp.Workflow"
+name = "generalized_rank"
+owner_binding = "TamerOp.Workflow.generalized_rank"
+owner_defined = true
+table = "SIMPLE_API_BINDINGS"
+target_binding = "TamerOp.generalized_rank"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Workflow"
+name = "gril"
+owner_binding = "TamerOp.Workflow.gril"
+owner_defined = true
+table = "SIMPLE_API_BINDINGS"
+target_binding = "TamerOp.gril"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Workflow"
 name = "hom"
 owner_binding = "TamerOp.Workflow.hom"
 owner_defined = true
@@ -9712,6 +10120,14 @@ owner_binding = "TamerOp.Workflow.hypertor"
 owner_defined = true
 table = "SIMPLE_API_BINDINGS"
 target_binding = "TamerOp.hypertor"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Workflow"
+name = "interval_rank_summary"
+owner_binding = "TamerOp.Workflow.interval_rank_summary"
+owner_defined = true
+table = "SIMPLE_API_BINDINGS"
+target_binding = "TamerOp.interval_rank_summary"
 target_matches_owner = true
 [[curated_binding_rows]]
 declaration_owner = "TamerOp.Workflow"
@@ -16891,7 +17307,7 @@ canonical_binding = "TamerOp.DataIngestion.EdgeWeightedFiltration"
 canonical_owner = "TamerOp.DataIngestion"
 declaration_owners = ["TamerOp.DataIngestion"]
 defining_module = "TamerOp.DataIngestion"
-has_docstring = false
+has_docstring = true
 intended_public = true
 kind = "type"
 tiers = ["simple", "advanced", "qualified"]
@@ -16915,7 +17331,7 @@ tiers = ["simple", "advanced", "qualified"]
     declared_simple = false
     defined = true
     exported = false
-    has_docstring = false
+    has_docstring = true
     module = "TamerOp.DataIngestion"
     name = "EdgeWeightedFiltration"
     qualified_name = "TamerOp.DataIngestion.EdgeWeightedFiltration"
@@ -17637,6 +18053,53 @@ tiers = ["simple", "advanced", "qualified"]
     qualified_name = "TamerOp.LandmarkRipsFiltration"
     scope = "root"
 [[objects]]
+aliases = ["TamerOp.Advanced.LandmarkSelection", "TamerOp.DataIngestion.LandmarkSelection", "TamerOp.LandmarkSelection"]
+canonical_binding = "TamerOp.DataIngestion.LandmarkSelection"
+canonical_owner = "TamerOp.DataIngestion"
+declaration_owners = ["TamerOp.DataIngestion"]
+defining_module = "TamerOp.DataIngestion"
+has_docstring = true
+intended_public = true
+kind = "type"
+tiers = ["simple", "advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = []
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "LandmarkSelection"
+    qualified_name = "TamerOp.Advanced.LandmarkSelection"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["SIMPLE_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.DataIngestion"
+    name = "LandmarkSelection"
+    qualified_name = "TamerOp.DataIngestion.LandmarkSelection"
+    scope = "owner"
+    [[objects.bindings]]
+    curated_sources = ["SIMPLE_API_BINDINGS"]
+    declaration_sources = ["SIMPLE_API"]
+    declared_advanced = false
+    declared_simple = true
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp"
+    name = "LandmarkSelection"
+    qualified_name = "TamerOp.LandmarkSelection"
+    scope = "root"
+[[objects]]
 aliases = ["TamerOp.Advanced.PointCodensityResult", "TamerOp.DataIngestion.PointCodensityResult", "TamerOp.PointCodensityResult"]
 canonical_binding = "TamerOp.DataIngestion.PointCodensityResult"
 canonical_owner = "TamerOp.DataIngestion"
@@ -17830,7 +18293,7 @@ canonical_binding = "TamerOp.DataIngestion.RipsFiltration"
 canonical_owner = "TamerOp.DataIngestion"
 declaration_owners = ["TamerOp.DataIngestion"]
 defining_module = "TamerOp.DataIngestion"
-has_docstring = false
+has_docstring = true
 intended_public = true
 kind = "type"
 tiers = ["simple", "advanced", "qualified"]
@@ -17854,7 +18317,7 @@ tiers = ["simple", "advanced", "qualified"]
     declared_simple = false
     defined = true
     exported = false
-    has_docstring = false
+    has_docstring = true
     module = "TamerOp.DataIngestion"
     name = "RipsFiltration"
     qualified_name = "TamerOp.DataIngestion.RipsFiltration"
@@ -18549,6 +19012,53 @@ tiers = ["simple", "advanced", "qualified"]
     module = "TamerOp"
     name = "construction_mode"
     qualified_name = "TamerOp.construction_mode"
+    scope = "root"
+[[objects]]
+aliases = ["TamerOp.Advanced.covering_radius", "TamerOp.DataIngestion.covering_radius", "TamerOp.covering_radius"]
+canonical_binding = "TamerOp.DataIngestion.covering_radius"
+canonical_owner = "TamerOp.DataIngestion"
+declaration_owners = ["TamerOp.DataIngestion"]
+defining_module = "TamerOp.DataIngestion"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["simple", "advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = []
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "covering_radius"
+    qualified_name = "TamerOp.Advanced.covering_radius"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["SIMPLE_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.DataIngestion"
+    name = "covering_radius"
+    qualified_name = "TamerOp.DataIngestion.covering_radius"
+    scope = "owner"
+    [[objects.bindings]]
+    curated_sources = ["SIMPLE_API_BINDINGS"]
+    declaration_sources = ["SIMPLE_API"]
+    declared_advanced = false
+    declared_simple = true
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp"
+    name = "covering_radius"
+    qualified_name = "TamerOp.covering_radius"
     scope = "root"
 [[objects]]
 aliases = ["TamerOp.Advanced.criticality", "TamerOp.DataIngestion.criticality", "TamerOp.criticality"]
@@ -19440,6 +19950,100 @@ tiers = ["advanced", "qualified"]
     qualified_name = "TamerOp.DataIngestion.ingestion_validation_summary"
     scope = "owner"
 [[objects]]
+aliases = ["TamerOp.Advanced.landmark_distances", "TamerOp.DataIngestion.landmark_distances", "TamerOp.landmark_distances"]
+canonical_binding = "TamerOp.DataIngestion.landmark_distances"
+canonical_owner = "TamerOp.DataIngestion"
+declaration_owners = ["TamerOp.DataIngestion"]
+defining_module = "TamerOp.DataIngestion"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["simple", "advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = []
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "landmark_distances"
+    qualified_name = "TamerOp.Advanced.landmark_distances"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["SIMPLE_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.DataIngestion"
+    name = "landmark_distances"
+    qualified_name = "TamerOp.DataIngestion.landmark_distances"
+    scope = "owner"
+    [[objects.bindings]]
+    curated_sources = ["SIMPLE_API_BINDINGS"]
+    declaration_sources = ["SIMPLE_API"]
+    declared_advanced = false
+    declared_simple = true
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp"
+    name = "landmark_distances"
+    qualified_name = "TamerOp.landmark_distances"
+    scope = "root"
+[[objects]]
+aliases = ["TamerOp.Advanced.landmark_indices", "TamerOp.DataIngestion.landmark_indices", "TamerOp.landmark_indices"]
+canonical_binding = "TamerOp.DataIngestion.landmark_indices"
+canonical_owner = "TamerOp.DataIngestion"
+declaration_owners = ["TamerOp.DataIngestion"]
+defining_module = "TamerOp.DataIngestion"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["simple", "advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = []
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "landmark_indices"
+    qualified_name = "TamerOp.Advanced.landmark_indices"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["SIMPLE_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.DataIngestion"
+    name = "landmark_indices"
+    qualified_name = "TamerOp.DataIngestion.landmark_indices"
+    scope = "owner"
+    [[objects.bindings]]
+    curated_sources = ["SIMPLE_API_BINDINGS"]
+    declaration_sources = ["SIMPLE_API"]
+    declared_advanced = false
+    declared_simple = true
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp"
+    name = "landmark_indices"
+    qualified_name = "TamerOp.landmark_indices"
+    scope = "root"
+[[objects]]
 aliases = ["TamerOp.Advanced.multicritical_mode", "TamerOp.DataIngestion.multicritical_mode"]
 canonical_binding = "TamerOp.DataIngestion.multicritical_mode"
 canonical_owner = "TamerOp.DataIngestion"
@@ -20141,6 +20745,53 @@ tiers = ["advanced", "qualified"]
     name = "run_ingestion"
     qualified_name = "TamerOp.DataIngestion.run_ingestion"
     scope = "owner"
+[[objects]]
+aliases = ["TamerOp.Advanced.select_landmarks", "TamerOp.DataIngestion.select_landmarks", "TamerOp.select_landmarks"]
+canonical_binding = "TamerOp.DataIngestion.select_landmarks"
+canonical_owner = "TamerOp.DataIngestion"
+declaration_owners = ["TamerOp.DataIngestion"]
+defining_module = "TamerOp.DataIngestion"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["simple", "advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = []
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "select_landmarks"
+    qualified_name = "TamerOp.Advanced.select_landmarks"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["SIMPLE_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.DataIngestion"
+    name = "select_landmarks"
+    qualified_name = "TamerOp.DataIngestion.select_landmarks"
+    scope = "owner"
+    [[objects.bindings]]
+    curated_sources = ["SIMPLE_API_BINDINGS"]
+    declaration_sources = ["SIMPLE_API"]
+    declared_advanced = false
+    declared_simple = true
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp"
+    name = "select_landmarks"
+    qualified_name = "TamerOp.select_landmarks"
+    scope = "root"
 [[objects]]
 aliases = ["TamerOp.Advanced.source_data", "TamerOp.DataIngestion.source_data"]
 canonical_binding = "TamerOp.DataIngestion.source_data"
@@ -28736,6 +29387,41 @@ tiers = ["advanced", "qualified"]
     qualified_name = "TamerOp.Fibered2D.FiberedSliceResult"
     scope = "owner"
 [[objects]]
+aliases = ["TamerOp.Advanced.MatchingDistanceResult2D", "TamerOp.Fibered2D.MatchingDistanceResult2D"]
+canonical_binding = "TamerOp.Fibered2D.MatchingDistanceResult2D"
+canonical_owner = "TamerOp.Fibered2D"
+declaration_owners = ["TamerOp.Fibered2D"]
+defining_module = "TamerOp.Fibered2D"
+has_docstring = true
+intended_public = true
+kind = "type"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = false
+    module = "TamerOp.Advanced"
+    name = "MatchingDistanceResult2D"
+    qualified_name = "TamerOp.Advanced.MatchingDistanceResult2D"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Fibered2D"
+    name = "MatchingDistanceResult2D"
+    qualified_name = "TamerOp.Fibered2D.MatchingDistanceResult2D"
+    scope = "owner"
+[[objects]]
 aliases = ["TamerOp.Advanced.ProjectedArrangement", "TamerOp.Fibered2D.ProjectedArrangement"]
 canonical_binding = "TamerOp.Fibered2D.ProjectedArrangement"
 canonical_owner = "TamerOp.Fibered2D"
@@ -29294,6 +29980,41 @@ tiers = ["advanced", "qualified"]
     module = "TamerOp.Fibered2D"
     name = "check_fibered_slice_family_2d"
     qualified_name = "TamerOp.Fibered2D.check_fibered_slice_family_2d"
+    scope = "owner"
+[[objects]]
+aliases = ["TamerOp.Advanced.check_matching_result_2d", "TamerOp.Fibered2D.check_matching_result_2d"]
+canonical_binding = "TamerOp.Fibered2D.check_matching_result_2d"
+canonical_owner = "TamerOp.Fibered2D"
+declaration_owners = ["TamerOp.Fibered2D"]
+defining_module = "TamerOp.Fibered2D"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "check_matching_result_2d"
+    qualified_name = "TamerOp.Advanced.check_matching_result_2d"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Fibered2D"
+    name = "check_matching_result_2d"
+    qualified_name = "TamerOp.Fibered2D.check_matching_result_2d"
     scope = "owner"
 [[objects]]
 aliases = ["TamerOp.Advanced.check_projected_arrangement", "TamerOp.Fibered2D.check_projected_arrangement"]
@@ -30217,6 +30938,76 @@ tiers = ["advanced", "qualified"]
     qualified_name = "TamerOp.Fibered2D.matching_distance_slices_2d"
     scope = "owner"
 [[objects]]
+aliases = ["TamerOp.Advanced.matching_summary", "TamerOp.Fibered2D.matching_summary"]
+canonical_binding = "TamerOp.Fibered2D.matching_summary"
+canonical_owner = "TamerOp.Fibered2D"
+declaration_owners = ["TamerOp.Fibered2D"]
+defining_module = "TamerOp.Fibered2D"
+has_docstring = false
+intended_public = true
+kind = "function"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = false
+    module = "TamerOp.Advanced"
+    name = "matching_summary"
+    qualified_name = "TamerOp.Advanced.matching_summary"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = false
+    module = "TamerOp.Fibered2D"
+    name = "matching_summary"
+    qualified_name = "TamerOp.Fibered2D.matching_summary"
+    scope = "owner"
+[[objects]]
+aliases = ["TamerOp.Advanced.matching_witness", "TamerOp.Fibered2D.matching_witness"]
+canonical_binding = "TamerOp.Fibered2D.matching_witness"
+canonical_owner = "TamerOp.Fibered2D"
+declaration_owners = ["TamerOp.Fibered2D"]
+defining_module = "TamerOp.Fibered2D"
+has_docstring = false
+intended_public = true
+kind = "function"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = false
+    module = "TamerOp.Advanced"
+    name = "matching_witness"
+    qualified_name = "TamerOp.Advanced.matching_witness"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = false
+    module = "TamerOp.Fibered2D"
+    name = "matching_witness"
+    qualified_name = "TamerOp.Fibered2D.matching_witness"
+    scope = "owner"
+[[objects]]
 aliases = ["TamerOp.Advanced.ncells", "TamerOp.Fibered2D.ncells"]
 canonical_binding = "TamerOp.Fibered2D.ncells"
 canonical_owner = "TamerOp.Fibered2D"
@@ -30985,6 +31776,41 @@ tiers = ["advanced", "qualified"]
     module = "TamerOp.Fibered2D"
     name = "slice_offset_interval"
     qualified_name = "TamerOp.Fibered2D.slice_offset_interval"
+    scope = "owner"
+[[objects]]
+aliases = ["TamerOp.Advanced.slice_query", "TamerOp.Fibered2D.slice_query"]
+canonical_binding = "TamerOp.Fibered2D.slice_query"
+canonical_owner = "TamerOp.Fibered2D"
+declaration_owners = ["TamerOp.Fibered2D"]
+defining_module = "TamerOp.Fibered2D"
+has_docstring = false
+intended_public = true
+kind = "function"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = false
+    module = "TamerOp.Advanced"
+    name = "slice_query"
+    qualified_name = "TamerOp.Advanced.slice_query"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = false
+    module = "TamerOp.Fibered2D"
+    name = "slice_query"
+    qualified_name = "TamerOp.Fibered2D.slice_query"
     scope = "owner"
 [[objects]]
 aliases = ["TamerOp.Advanced.slice_values", "TamerOp.Fibered2D.slice_values"]
@@ -35644,6 +36470,181 @@ tiers = ["advanced", "qualified"]
     qualified_name = "TamerOp.Invariants.BettiSupportMeasuresSummary"
     scope = "owner"
 [[objects]]
+aliases = ["TamerOp.Advanced.GRILResult", "TamerOp.Invariants.GRILResult"]
+canonical_binding = "TamerOp.Invariants.GRILResult"
+canonical_owner = "TamerOp.Invariants"
+declaration_owners = ["TamerOp.Invariants"]
+defining_module = "TamerOp.Invariants"
+has_docstring = true
+intended_public = true
+kind = "type"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "GRILResult"
+    qualified_name = "TamerOp.Advanced.GRILResult"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Invariants"
+    name = "GRILResult"
+    qualified_name = "TamerOp.Invariants.GRILResult"
+    scope = "owner"
+[[objects]]
+aliases = ["TamerOp.Advanced.GeneralizedRankBudget", "TamerOp.Invariants.GeneralizedRankBudget"]
+canonical_binding = "TamerOp.Invariants.GeneralizedRankBudget"
+canonical_owner = "TamerOp.Invariants"
+declaration_owners = ["TamerOp.Invariants"]
+defining_module = "TamerOp.Invariants"
+has_docstring = true
+intended_public = true
+kind = "type"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "GeneralizedRankBudget"
+    qualified_name = "TamerOp.Advanced.GeneralizedRankBudget"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Invariants"
+    name = "GeneralizedRankBudget"
+    qualified_name = "TamerOp.Invariants.GeneralizedRankBudget"
+    scope = "owner"
+[[objects]]
+aliases = ["TamerOp.Advanced.GeneralizedRankResult", "TamerOp.Invariants.GeneralizedRankResult"]
+canonical_binding = "TamerOp.Invariants.GeneralizedRankResult"
+canonical_owner = "TamerOp.Invariants"
+declaration_owners = ["TamerOp.Invariants"]
+defining_module = "TamerOp.Invariants"
+has_docstring = true
+intended_public = true
+kind = "type"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = false
+    module = "TamerOp.Advanced"
+    name = "GeneralizedRankResult"
+    qualified_name = "TamerOp.Advanced.GeneralizedRankResult"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Invariants"
+    name = "GeneralizedRankResult"
+    qualified_name = "TamerOp.Invariants.GeneralizedRankResult"
+    scope = "owner"
+[[objects]]
+aliases = ["TamerOp.Advanced.GeneralizedRankValidationSummary", "TamerOp.Invariants.GeneralizedRankValidationSummary"]
+canonical_binding = "TamerOp.Invariants.GeneralizedRankValidationSummary"
+canonical_owner = "TamerOp.Invariants"
+declaration_owners = ["TamerOp.Invariants"]
+defining_module = "TamerOp.Invariants"
+has_docstring = true
+intended_public = true
+kind = "type"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = false
+    module = "TamerOp.Advanced"
+    name = "GeneralizedRankValidationSummary"
+    qualified_name = "TamerOp.Advanced.GeneralizedRankValidationSummary"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Invariants"
+    name = "GeneralizedRankValidationSummary"
+    qualified_name = "TamerOp.Invariants.GeneralizedRankValidationSummary"
+    scope = "owner"
+[[objects]]
+aliases = ["TamerOp.Advanced.IntervalRankSummary", "TamerOp.Invariants.IntervalRankSummary"]
+canonical_binding = "TamerOp.Invariants.IntervalRankSummary"
+canonical_owner = "TamerOp.Invariants"
+declaration_owners = ["TamerOp.Invariants"]
+defining_module = "TamerOp.Invariants"
+has_docstring = true
+intended_public = true
+kind = "type"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = false
+    module = "TamerOp.Advanced"
+    name = "IntervalRankSummary"
+    qualified_name = "TamerOp.Advanced.IntervalRankSummary"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Invariants"
+    name = "IntervalRankSummary"
+    qualified_name = "TamerOp.Invariants.IntervalRankSummary"
+    scope = "owner"
+[[objects]]
 aliases = ["TamerOp.Advanced.ModuleGeometryAsymptoticsSummary", "TamerOp.Invariants.ModuleGeometryAsymptoticsSummary"]
 canonical_binding = "TamerOp.Invariants.ModuleGeometryAsymptoticsSummary"
 canonical_owner = "TamerOp.Invariants"
@@ -35994,6 +36995,76 @@ tiers = ["advanced", "qualified"]
     qualified_name = "TamerOp.Invariants.SupportMeasureSummary"
     scope = "owner"
 [[objects]]
+aliases = ["TamerOp.Advanced.check_generalized_rank_region", "TamerOp.Invariants.check_generalized_rank_region"]
+canonical_binding = "TamerOp.Invariants.check_generalized_rank_region"
+canonical_owner = "TamerOp.Invariants"
+declaration_owners = ["TamerOp.Invariants"]
+defining_module = "TamerOp.Invariants"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "check_generalized_rank_region"
+    qualified_name = "TamerOp.Advanced.check_generalized_rank_region"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Invariants"
+    name = "check_generalized_rank_region"
+    qualified_name = "TamerOp.Invariants.check_generalized_rank_region"
+    scope = "owner"
+[[objects]]
+aliases = ["TamerOp.Advanced.check_gril_query", "TamerOp.Invariants.check_gril_query"]
+canonical_binding = "TamerOp.Invariants.check_gril_query"
+canonical_owner = "TamerOp.Invariants"
+declaration_owners = ["TamerOp.Invariants"]
+defining_module = "TamerOp.Invariants"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "check_gril_query"
+    qualified_name = "TamerOp.Advanced.check_gril_query"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Invariants"
+    name = "check_gril_query"
+    qualified_name = "TamerOp.Invariants.check_gril_query"
+    scope = "owner"
+[[objects]]
 aliases = ["TamerOp.Advanced.check_rank_query_points", "TamerOp.Invariants.check_rank_query_points"]
 canonical_binding = "TamerOp.Invariants.check_rank_query_points"
 canonical_owner = "TamerOp.Invariants"
@@ -36134,6 +37205,76 @@ tiers = ["advanced", "qualified"]
     qualified_name = "TamerOp.Invariants.check_support_window"
     scope = "owner"
 [[objects]]
+aliases = ["TamerOp.Advanced.colimit_projection", "TamerOp.Invariants.colimit_projection"]
+canonical_binding = "TamerOp.Invariants.colimit_projection"
+canonical_owner = "TamerOp.Invariants"
+declaration_owners = ["TamerOp.Invariants"]
+defining_module = "TamerOp.Invariants"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "colimit_projection"
+    qualified_name = "TamerOp.Advanced.colimit_projection"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Invariants"
+    name = "colimit_projection"
+    qualified_name = "TamerOp.Invariants.colimit_projection"
+    scope = "owner"
+[[objects]]
+aliases = ["TamerOp.Advanced.comparison_map", "TamerOp.Invariants.comparison_map"]
+canonical_binding = "TamerOp.Invariants.comparison_map"
+canonical_owner = "TamerOp.Invariants"
+declaration_owners = ["TamerOp.Invariants"]
+defining_module = "TamerOp.Invariants"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "comparison_map"
+    qualified_name = "TamerOp.Advanced.comparison_map"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Invariants"
+    name = "comparison_map"
+    qualified_name = "TamerOp.Invariants.comparison_map"
+    scope = "owner"
+[[objects]]
 aliases = ["TamerOp.Advanced.component_sizes", "TamerOp.Invariants.component_sizes"]
 canonical_binding = "TamerOp.Invariants.component_sizes"
 canonical_owner = "TamerOp.Invariants"
@@ -36204,6 +37345,286 @@ tiers = ["advanced", "qualified"]
     qualified_name = "TamerOp.Invariants.components"
     scope = "owner"
 [[objects]]
+aliases = ["TamerOp.Advanced.generalized_rank_summary", "TamerOp.Invariants.generalized_rank_summary"]
+canonical_binding = "TamerOp.Invariants.generalized_rank_summary"
+canonical_owner = "TamerOp.Invariants"
+declaration_owners = ["TamerOp.Invariants"]
+defining_module = "TamerOp.Invariants"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "generalized_rank_summary"
+    qualified_name = "TamerOp.Advanced.generalized_rank_summary"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Invariants"
+    name = "generalized_rank_summary"
+    qualified_name = "TamerOp.Invariants.generalized_rank_summary"
+    scope = "owner"
+[[objects]]
+aliases = ["TamerOp.Advanced.gril_centers", "TamerOp.Invariants.gril_centers"]
+canonical_binding = "TamerOp.Invariants.gril_centers"
+canonical_owner = "TamerOp.Invariants"
+declaration_owners = ["TamerOp.Invariants"]
+defining_module = "TamerOp.Invariants"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "gril_centers"
+    qualified_name = "TamerOp.Advanced.gril_centers"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Invariants"
+    name = "gril_centers"
+    qualified_name = "TamerOp.Invariants.gril_centers"
+    scope = "owner"
+[[objects]]
+aliases = ["TamerOp.Advanced.gril_lengths", "TamerOp.Invariants.gril_lengths"]
+canonical_binding = "TamerOp.Invariants.gril_lengths"
+canonical_owner = "TamerOp.Invariants"
+declaration_owners = ["TamerOp.Invariants"]
+defining_module = "TamerOp.Invariants"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "gril_lengths"
+    qualified_name = "TamerOp.Advanced.gril_lengths"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Invariants"
+    name = "gril_lengths"
+    qualified_name = "TamerOp.Invariants.gril_lengths"
+    scope = "owner"
+[[objects]]
+aliases = ["TamerOp.Advanced.gril_levels", "TamerOp.Invariants.gril_levels"]
+canonical_binding = "TamerOp.Invariants.gril_levels"
+canonical_owner = "TamerOp.Invariants"
+declaration_owners = ["TamerOp.Invariants"]
+defining_module = "TamerOp.Invariants"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "gril_levels"
+    qualified_name = "TamerOp.Advanced.gril_levels"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Invariants"
+    name = "gril_levels"
+    qualified_name = "TamerOp.Invariants.gril_levels"
+    scope = "owner"
+[[objects]]
+aliases = ["TamerOp.Advanced.gril_summary", "TamerOp.Invariants.gril_summary"]
+canonical_binding = "TamerOp.Invariants.gril_summary"
+canonical_owner = "TamerOp.Invariants"
+declaration_owners = ["TamerOp.Invariants"]
+defining_module = "TamerOp.Invariants"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "gril_summary"
+    qualified_name = "TamerOp.Advanced.gril_summary"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Invariants"
+    name = "gril_summary"
+    qualified_name = "TamerOp.Invariants.gril_summary"
+    scope = "owner"
+[[objects]]
+aliases = ["TamerOp.Advanced.gril_values", "TamerOp.Invariants.gril_values"]
+canonical_binding = "TamerOp.Invariants.gril_values"
+canonical_owner = "TamerOp.Invariants"
+declaration_owners = ["TamerOp.Invariants"]
+defining_module = "TamerOp.Invariants"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "gril_values"
+    qualified_name = "TamerOp.Advanced.gril_values"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Invariants"
+    name = "gril_values"
+    qualified_name = "TamerOp.Invariants.gril_values"
+    scope = "owner"
+[[objects]]
+aliases = ["TamerOp.Advanced.interval_coefficients", "TamerOp.Invariants.interval_coefficients"]
+canonical_binding = "TamerOp.Invariants.interval_coefficients"
+canonical_owner = "TamerOp.Invariants"
+declaration_owners = ["TamerOp.Invariants"]
+defining_module = "TamerOp.Invariants"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "interval_coefficients"
+    qualified_name = "TamerOp.Advanced.interval_coefficients"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Invariants"
+    name = "interval_coefficients"
+    qualified_name = "TamerOp.Invariants.interval_coefficients"
+    scope = "owner"
+[[objects]]
+aliases = ["TamerOp.Advanced.interval_family", "TamerOp.Invariants.interval_family"]
+canonical_binding = "TamerOp.Invariants.interval_family"
+canonical_owner = "TamerOp.Invariants"
+declaration_owners = ["TamerOp.Invariants"]
+defining_module = "TamerOp.Invariants"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "interval_family"
+    qualified_name = "TamerOp.Advanced.interval_family"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Invariants"
+    name = "interval_family"
+    qualified_name = "TamerOp.Invariants.interval_family"
+    scope = "owner"
+[[objects]]
 aliases = ["TamerOp.Advanced.largest_component", "TamerOp.Invariants.largest_component"]
 canonical_binding = "TamerOp.Invariants.largest_component"
 canonical_owner = "TamerOp.Invariants"
@@ -36237,6 +37658,41 @@ tiers = ["advanced", "qualified"]
     module = "TamerOp.Invariants"
     name = "largest_component"
     qualified_name = "TamerOp.Invariants.largest_component"
+    scope = "owner"
+[[objects]]
+aliases = ["TamerOp.Advanced.limit_basis", "TamerOp.Invariants.limit_basis"]
+canonical_binding = "TamerOp.Invariants.limit_basis"
+canonical_owner = "TamerOp.Invariants"
+declaration_owners = ["TamerOp.Invariants"]
+defining_module = "TamerOp.Invariants"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "limit_basis"
+    qualified_name = "TamerOp.Advanced.limit_basis"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Invariants"
+    name = "limit_basis"
+    qualified_name = "TamerOp.Invariants.limit_basis"
     scope = "owner"
 [[objects]]
 aliases = ["TamerOp.Advanced.ncomponents", "TamerOp.Invariants.ncomponents"]
@@ -36344,6 +37800,76 @@ tiers = ["advanced", "qualified"]
     qualified_name = "TamerOp.Invariants.nonzero_pairs"
     scope = "owner"
 [[objects]]
+aliases = ["TamerOp.Advanced.reconstruct_rank", "TamerOp.Invariants.reconstruct_rank"]
+canonical_binding = "TamerOp.Invariants.reconstruct_rank"
+canonical_owner = "TamerOp.Invariants"
+declaration_owners = ["TamerOp.Invariants"]
+defining_module = "TamerOp.Invariants"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "reconstruct_rank"
+    qualified_name = "TamerOp.Advanced.reconstruct_rank"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Invariants"
+    name = "reconstruct_rank"
+    qualified_name = "TamerOp.Invariants.reconstruct_rank"
+    scope = "owner"
+[[objects]]
+aliases = ["TamerOp.Advanced.selected_vertices", "TamerOp.Invariants.selected_vertices"]
+canonical_binding = "TamerOp.Invariants.selected_vertices"
+canonical_owner = "TamerOp.Invariants"
+declaration_owners = ["TamerOp.Invariants"]
+defining_module = "TamerOp.Invariants"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "selected_vertices"
+    qualified_name = "TamerOp.Advanced.selected_vertices"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Invariants"
+    name = "selected_vertices"
+    qualified_name = "TamerOp.Invariants.selected_vertices"
+    scope = "owner"
+[[objects]]
 aliases = ["TamerOp.Advanced.store_zeros", "TamerOp.Invariants.store_zeros"]
 canonical_binding = "TamerOp.Invariants.store_zeros"
 canonical_owner = "TamerOp.Invariants"
@@ -36447,6 +37973,41 @@ tiers = ["advanced", "qualified"]
     module = "TamerOp.Invariants"
     name = "value_at"
     qualified_name = "TamerOp.Invariants.value_at"
+    scope = "owner"
+[[objects]]
+aliases = ["TamerOp.Advanced.worm_rank", "TamerOp.Invariants.worm_rank"]
+canonical_binding = "TamerOp.Invariants.worm_rank"
+canonical_owner = "TamerOp.Invariants"
+declaration_owners = ["TamerOp.Invariants"]
+defining_module = "TamerOp.Invariants"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "worm_rank"
+    qualified_name = "TamerOp.Advanced.worm_rank"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Invariants"
+    name = "worm_rank"
+    qualified_name = "TamerOp.Invariants.worm_rank"
     scope = "owner"
 [[objects]]
 aliases = ["TamerOp.Advanced.DerivedTensor", "TamerOp.ModuleComplexes.DerivedTensor"]
@@ -40442,6 +42003,53 @@ tiers = ["advanced", "qualified"]
     qualified_name = "TamerOp.OrdinaryPersistence.PersistenceValidationSummary"
     scope = "owner"
 [[objects]]
+aliases = ["TamerOp.Advanced.analysis_barcode", "TamerOp.OrdinaryPersistence.analysis_barcode", "TamerOp.analysis_barcode"]
+canonical_binding = "TamerOp.OrdinaryPersistence.analysis_barcode"
+canonical_owner = "TamerOp.OrdinaryPersistence"
+declaration_owners = ["TamerOp.OrdinaryPersistence"]
+defining_module = "TamerOp.OrdinaryPersistence"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["simple", "advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = []
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "analysis_barcode"
+    qualified_name = "TamerOp.Advanced.analysis_barcode"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["SIMPLE_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.OrdinaryPersistence"
+    name = "analysis_barcode"
+    qualified_name = "TamerOp.OrdinaryPersistence.analysis_barcode"
+    scope = "owner"
+    [[objects.bindings]]
+    curated_sources = ["SIMPLE_API_BINDINGS"]
+    declaration_sources = ["SIMPLE_API"]
+    declared_advanced = false
+    declared_simple = true
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp"
+    name = "analysis_barcode"
+    qualified_name = "TamerOp.analysis_barcode"
+    scope = "root"
+[[objects]]
 aliases = ["TamerOp.Advanced.check_persistence_diagram", "TamerOp.OrdinaryPersistence.check_persistence_diagram"]
 canonical_binding = "TamerOp.OrdinaryPersistence.check_persistence_diagram"
 canonical_owner = "TamerOp.OrdinaryPersistence"
@@ -40700,6 +42308,88 @@ tiers = ["simple", "advanced", "qualified"]
     qualified_name = "TamerOp.finite_intervals"
     scope = "root"
 [[objects]]
+aliases = ["TamerOp.Advanced.landmark_selection", "TamerOp.OrdinaryPersistence.landmark_selection", "TamerOp.landmark_selection"]
+canonical_binding = "TamerOp.OrdinaryPersistence.landmark_selection"
+canonical_owner = "TamerOp.OrdinaryPersistence"
+declaration_owners = ["TamerOp.OrdinaryPersistence"]
+defining_module = "TamerOp.OrdinaryPersistence"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["simple", "advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = []
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "landmark_selection"
+    qualified_name = "TamerOp.Advanced.landmark_selection"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["SIMPLE_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.OrdinaryPersistence"
+    name = "landmark_selection"
+    qualified_name = "TamerOp.OrdinaryPersistence.landmark_selection"
+    scope = "owner"
+    [[objects.bindings]]
+    curated_sources = ["SIMPLE_API_BINDINGS"]
+    declaration_sources = ["SIMPLE_API"]
+    declared_advanced = false
+    declared_simple = true
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp"
+    name = "landmark_selection"
+    qualified_name = "TamerOp.landmark_selection"
+    scope = "root"
+[[objects]]
+aliases = ["TamerOp.Advanced.persistence_cocycle", "TamerOp.OrdinaryPersistence.persistence_cocycle"]
+canonical_binding = "TamerOp.OrdinaryPersistence.persistence_cocycle"
+canonical_owner = "TamerOp.OrdinaryPersistence"
+declaration_owners = ["TamerOp.OrdinaryPersistence"]
+defining_module = "TamerOp.OrdinaryPersistence"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "persistence_cocycle"
+    qualified_name = "TamerOp.Advanced.persistence_cocycle"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.OrdinaryPersistence"
+    name = "persistence_cocycle"
+    qualified_name = "TamerOp.OrdinaryPersistence.persistence_cocycle"
+    scope = "owner"
+[[objects]]
 aliases = ["TamerOp.Advanced.persistence_diagram", "TamerOp.OrdinaryPersistence.persistence_diagram", "TamerOp.persistence_diagram"]
 canonical_binding = "TamerOp.OrdinaryPersistence.persistence_diagram"
 canonical_owner = "TamerOp.OrdinaryPersistence"
@@ -40746,6 +42436,76 @@ tiers = ["simple", "advanced", "qualified"]
     name = "persistence_diagram"
     qualified_name = "TamerOp.persistence_diagram"
     scope = "root"
+[[objects]]
+aliases = ["TamerOp.Advanced.persistence_diagram_data", "TamerOp.OrdinaryPersistence.persistence_diagram_data"]
+canonical_binding = "TamerOp.OrdinaryPersistence.persistence_diagram_data"
+canonical_owner = "TamerOp.OrdinaryPersistence"
+declaration_owners = ["TamerOp.OrdinaryPersistence"]
+defining_module = "TamerOp.OrdinaryPersistence"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "persistence_diagram_data"
+    qualified_name = "TamerOp.Advanced.persistence_diagram_data"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.OrdinaryPersistence"
+    name = "persistence_diagram_data"
+    qualified_name = "TamerOp.OrdinaryPersistence.persistence_diagram_data"
+    scope = "owner"
+[[objects]]
+aliases = ["TamerOp.Advanced.persistence_diagram_from_data", "TamerOp.OrdinaryPersistence.persistence_diagram_from_data"]
+canonical_binding = "TamerOp.OrdinaryPersistence.persistence_diagram_from_data"
+canonical_owner = "TamerOp.OrdinaryPersistence"
+declaration_owners = ["TamerOp.OrdinaryPersistence"]
+defining_module = "TamerOp.OrdinaryPersistence"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "persistence_diagram_from_data"
+    qualified_name = "TamerOp.Advanced.persistence_diagram_from_data"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.OrdinaryPersistence"
+    name = "persistence_diagram_from_data"
+    qualified_name = "TamerOp.OrdinaryPersistence.persistence_diagram_from_data"
+    scope = "owner"
 [[objects]]
 aliases = ["TamerOp.Advanced.persistence_diagram_summary", "TamerOp.OrdinaryPersistence.persistence_diagram_summary", "TamerOp.persistence_diagram_summary"]
 canonical_binding = "TamerOp.OrdinaryPersistence.persistence_diagram_summary"
@@ -45478,6 +47238,41 @@ tiers = ["advanced", "qualified"]
     qualified_name = "TamerOp.Serialization.check_mpp_image_json"
     scope = "owner"
 [[objects]]
+aliases = ["TamerOp.Advanced.check_persistence_diagram_json", "TamerOp.Serialization.check_persistence_diagram_json"]
+canonical_binding = "TamerOp.Serialization.check_persistence_diagram_json"
+canonical_owner = "TamerOp.Serialization"
+declaration_owners = ["TamerOp.Serialization"]
+defining_module = "TamerOp.Serialization"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "check_persistence_diagram_json"
+    qualified_name = "TamerOp.Advanced.check_persistence_diagram_json"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Serialization"
+    name = "check_persistence_diagram_json"
+    qualified_name = "TamerOp.Serialization.check_persistence_diagram_json"
+    scope = "owner"
+[[objects]]
 aliases = ["TamerOp.Advanced.check_pipeline_json", "TamerOp.Serialization.check_pipeline_json"]
 canonical_binding = "TamerOp.Serialization.check_pipeline_json"
 canonical_owner = "TamerOp.Serialization"
@@ -46109,6 +47904,53 @@ tiers = ["advanced", "qualified"]
     qualified_name = "TamerOp.Serialization.load_mpp_image_json"
     scope = "owner"
 [[objects]]
+aliases = ["TamerOp.Advanced.load_persistence_diagram_json", "TamerOp.Serialization.load_persistence_diagram_json", "TamerOp.load_persistence_diagram_json"]
+canonical_binding = "TamerOp.Serialization.load_persistence_diagram_json"
+canonical_owner = "TamerOp.Serialization"
+declaration_owners = ["TamerOp.Serialization"]
+defining_module = "TamerOp.Serialization"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["simple", "advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = []
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "load_persistence_diagram_json"
+    qualified_name = "TamerOp.Advanced.load_persistence_diagram_json"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["SIMPLE_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Serialization"
+    name = "load_persistence_diagram_json"
+    qualified_name = "TamerOp.Serialization.load_persistence_diagram_json"
+    scope = "owner"
+    [[objects.bindings]]
+    curated_sources = ["SIMPLE_API_BINDINGS"]
+    declaration_sources = ["SIMPLE_API"]
+    declared_advanced = false
+    declared_simple = true
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp"
+    name = "load_persistence_diagram_json"
+    qualified_name = "TamerOp.load_persistence_diagram_json"
+    scope = "root"
+[[objects]]
 aliases = ["TamerOp.Advanced.load_pipeline_json", "TamerOp.Serialization.load_pipeline_json", "TamerOp.load_pipeline_json"]
 canonical_binding = "TamerOp.Serialization.load_pipeline_json"
 canonical_owner = "TamerOp.Serialization"
@@ -46364,6 +48206,41 @@ tiers = ["advanced", "qualified"]
     module = "TamerOp.Serialization"
     name = "parse_pl_fringe_json"
     qualified_name = "TamerOp.Serialization.parse_pl_fringe_json"
+    scope = "owner"
+[[objects]]
+aliases = ["TamerOp.Advanced.persistence_diagram_json_summary", "TamerOp.Serialization.persistence_diagram_json_summary"]
+canonical_binding = "TamerOp.Serialization.persistence_diagram_json_summary"
+canonical_owner = "TamerOp.Serialization"
+declaration_owners = ["TamerOp.Serialization"]
+defining_module = "TamerOp.Serialization"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "persistence_diagram_json_summary"
+    qualified_name = "TamerOp.Advanced.persistence_diagram_json_summary"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Serialization"
+    name = "persistence_diagram_json_summary"
+    qualified_name = "TamerOp.Serialization.persistence_diagram_json_summary"
     scope = "owner"
 [[objects]]
 aliases = ["TamerOp.Advanced.pipeline_json_summary", "TamerOp.Serialization.pipeline_json_summary"]
@@ -46634,6 +48511,53 @@ tiers = ["advanced", "qualified"]
     name = "save_mpp_image_json"
     qualified_name = "TamerOp.Serialization.save_mpp_image_json"
     scope = "owner"
+[[objects]]
+aliases = ["TamerOp.Advanced.save_persistence_diagram_json", "TamerOp.Serialization.save_persistence_diagram_json", "TamerOp.save_persistence_diagram_json"]
+canonical_binding = "TamerOp.Serialization.save_persistence_diagram_json"
+canonical_owner = "TamerOp.Serialization"
+declaration_owners = ["TamerOp.Serialization"]
+defining_module = "TamerOp.Serialization"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["simple", "advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = []
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "save_persistence_diagram_json"
+    qualified_name = "TamerOp.Advanced.save_persistence_diagram_json"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["SIMPLE_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Serialization"
+    name = "save_persistence_diagram_json"
+    qualified_name = "TamerOp.Serialization.save_persistence_diagram_json"
+    scope = "owner"
+    [[objects.bindings]]
+    curated_sources = ["SIMPLE_API_BINDINGS"]
+    declaration_sources = ["SIMPLE_API"]
+    declared_advanced = false
+    declared_simple = true
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp"
+    name = "save_persistence_diagram_json"
+    qualified_name = "TamerOp.save_persistence_diagram_json"
+    scope = "root"
 [[objects]]
 aliases = ["TamerOp.Advanced.save_pipeline_json", "TamerOp.Serialization.save_pipeline_json", "TamerOp.save_pipeline_json"]
 canonical_binding = "TamerOp.Serialization.save_pipeline_json"
@@ -47837,7 +49761,101 @@ tiers = ["advanced", "qualified"]
     qualified_name = "TamerOp.SliceInvariants.SlicePlanCache"
     scope = "owner"
 [[objects]]
-aliases = ["TamerOp.Advanced.bottleneck_distance", "TamerOp.SliceInvariants.bottleneck_distance"]
+aliases = ["TamerOp.Advanced.barcode_entropy", "TamerOp.SliceInvariants.barcode_entropy", "TamerOp.barcode_entropy"]
+canonical_binding = "TamerOp.SliceInvariants.barcode_entropy"
+canonical_owner = "TamerOp.SliceInvariants"
+declaration_owners = ["TamerOp.SliceInvariants"]
+defining_module = "TamerOp.SliceInvariants"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["simple", "advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = []
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "barcode_entropy"
+    qualified_name = "TamerOp.Advanced.barcode_entropy"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["SIMPLE_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.SliceInvariants"
+    name = "barcode_entropy"
+    qualified_name = "TamerOp.SliceInvariants.barcode_entropy"
+    scope = "owner"
+    [[objects.bindings]]
+    curated_sources = ["SIMPLE_API_BINDINGS"]
+    declaration_sources = ["SIMPLE_API"]
+    declared_advanced = false
+    declared_simple = true
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp"
+    name = "barcode_entropy"
+    qualified_name = "TamerOp.barcode_entropy"
+    scope = "root"
+[[objects]]
+aliases = ["TamerOp.Advanced.barcode_summary", "TamerOp.SliceInvariants.barcode_summary", "TamerOp.barcode_summary"]
+canonical_binding = "TamerOp.SliceInvariants.barcode_summary"
+canonical_owner = "TamerOp.SliceInvariants"
+declaration_owners = ["TamerOp.SliceInvariants"]
+defining_module = "TamerOp.SliceInvariants"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["simple", "advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = []
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "barcode_summary"
+    qualified_name = "TamerOp.Advanced.barcode_summary"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["SIMPLE_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.SliceInvariants"
+    name = "barcode_summary"
+    qualified_name = "TamerOp.SliceInvariants.barcode_summary"
+    scope = "owner"
+    [[objects.bindings]]
+    curated_sources = ["SIMPLE_API_BINDINGS"]
+    declaration_sources = ["SIMPLE_API"]
+    declared_advanced = false
+    declared_simple = true
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp"
+    name = "barcode_summary"
+    qualified_name = "TamerOp.barcode_summary"
+    scope = "root"
+[[objects]]
+aliases = ["TamerOp.Advanced.bottleneck_distance", "TamerOp.SliceInvariants.bottleneck_distance", "TamerOp.bottleneck_distance"]
 canonical_binding = "TamerOp.SliceInvariants.bottleneck_distance"
 canonical_owner = "TamerOp.SliceInvariants"
 declaration_owners = ["TamerOp.SliceInvariants"]
@@ -47845,7 +49863,7 @@ defining_module = "TamerOp.SliceInvariants"
 has_docstring = true
 intended_public = true
 kind = "function"
-tiers = ["advanced", "qualified"]
+tiers = ["simple", "advanced", "qualified"]
 
     [[objects.bindings]]
     curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
@@ -47860,7 +49878,7 @@ tiers = ["advanced", "qualified"]
     qualified_name = "TamerOp.Advanced.bottleneck_distance"
     scope = "advanced"
     [[objects.bindings]]
-    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS", "SIMPLE_API_BINDINGS"]
     declaration_sources = []
     declared_advanced = false
     declared_simple = false
@@ -47871,8 +49889,20 @@ tiers = ["advanced", "qualified"]
     name = "bottleneck_distance"
     qualified_name = "TamerOp.SliceInvariants.bottleneck_distance"
     scope = "owner"
+    [[objects.bindings]]
+    curated_sources = ["SIMPLE_API_BINDINGS"]
+    declaration_sources = ["SIMPLE_API"]
+    declared_advanced = false
+    declared_simple = true
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp"
+    name = "bottleneck_distance"
+    qualified_name = "TamerOp.bottleneck_distance"
+    scope = "root"
 [[objects]]
-aliases = ["TamerOp.Advanced.bottleneck_matching", "TamerOp.SliceInvariants.bottleneck_matching"]
+aliases = ["TamerOp.Advanced.bottleneck_matching", "TamerOp.SliceInvariants.bottleneck_matching", "TamerOp.bottleneck_matching"]
 canonical_binding = "TamerOp.SliceInvariants.bottleneck_matching"
 canonical_owner = "TamerOp.SliceInvariants"
 declaration_owners = ["TamerOp.SliceInvariants"]
@@ -47880,7 +49910,7 @@ defining_module = "TamerOp.SliceInvariants"
 has_docstring = true
 intended_public = true
 kind = "function"
-tiers = ["advanced", "qualified"]
+tiers = ["simple", "advanced", "qualified"]
 
     [[objects.bindings]]
     curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
@@ -47895,7 +49925,7 @@ tiers = ["advanced", "qualified"]
     qualified_name = "TamerOp.Advanced.bottleneck_matching"
     scope = "advanced"
     [[objects.bindings]]
-    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS", "SIMPLE_API_BINDINGS"]
     declaration_sources = []
     declared_advanced = false
     declared_simple = false
@@ -47906,6 +49936,18 @@ tiers = ["advanced", "qualified"]
     name = "bottleneck_matching"
     qualified_name = "TamerOp.SliceInvariants.bottleneck_matching"
     scope = "owner"
+    [[objects.bindings]]
+    curated_sources = ["SIMPLE_API_BINDINGS"]
+    declaration_sources = ["SIMPLE_API"]
+    declared_advanced = false
+    declared_simple = true
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp"
+    name = "bottleneck_matching"
+    qualified_name = "TamerOp.bottleneck_matching"
+    scope = "root"
 [[objects]]
 aliases = ["TamerOp.Advanced.cached_barcode_plan_count", "TamerOp.SliceInvariants.cached_barcode_plan_count"]
 canonical_binding = "TamerOp.SliceInvariants.cached_barcode_plan_count"
@@ -49202,6 +51244,53 @@ tiers = ["advanced", "qualified"]
     qualified_name = "TamerOp.SliceInvariants.packed_barcodes"
     scope = "owner"
 [[objects]]
+aliases = ["TamerOp.Advanced.persistence_image", "TamerOp.SliceInvariants.persistence_image", "TamerOp.persistence_image"]
+canonical_binding = "TamerOp.SliceInvariants.persistence_image"
+canonical_owner = "TamerOp.SliceInvariants"
+declaration_owners = ["TamerOp.SliceInvariants"]
+defining_module = "TamerOp.SliceInvariants"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["simple", "advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = []
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "persistence_image"
+    qualified_name = "TamerOp.Advanced.persistence_image"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["SIMPLE_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.SliceInvariants"
+    name = "persistence_image"
+    qualified_name = "TamerOp.SliceInvariants.persistence_image"
+    scope = "owner"
+    [[objects.bindings]]
+    curated_sources = ["SIMPLE_API_BINDINGS"]
+    declaration_sources = ["SIMPLE_API"]
+    declared_advanced = false
+    declared_simple = true
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp"
+    name = "persistence_image"
+    qualified_name = "TamerOp.persistence_image"
+    scope = "root"
+[[objects]]
 aliases = ["TamerOp.Advanced.persistence_image_summary", "TamerOp.SliceInvariants.persistence_image_summary"]
 canonical_binding = "TamerOp.SliceInvariants.persistence_image_summary"
 canonical_owner = "TamerOp.SliceInvariants"
@@ -49236,6 +51325,100 @@ tiers = ["advanced", "qualified"]
     name = "persistence_image_summary"
     qualified_name = "TamerOp.SliceInvariants.persistence_image_summary"
     scope = "owner"
+[[objects]]
+aliases = ["TamerOp.Advanced.persistence_landscape", "TamerOp.SliceInvariants.persistence_landscape", "TamerOp.persistence_landscape"]
+canonical_binding = "TamerOp.SliceInvariants.persistence_landscape"
+canonical_owner = "TamerOp.SliceInvariants"
+declaration_owners = ["TamerOp.SliceInvariants"]
+defining_module = "TamerOp.SliceInvariants"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["simple", "advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = []
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "persistence_landscape"
+    qualified_name = "TamerOp.Advanced.persistence_landscape"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["SIMPLE_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.SliceInvariants"
+    name = "persistence_landscape"
+    qualified_name = "TamerOp.SliceInvariants.persistence_landscape"
+    scope = "owner"
+    [[objects.bindings]]
+    curated_sources = ["SIMPLE_API_BINDINGS"]
+    declaration_sources = ["SIMPLE_API"]
+    declared_advanced = false
+    declared_simple = true
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp"
+    name = "persistence_landscape"
+    qualified_name = "TamerOp.persistence_landscape"
+    scope = "root"
+[[objects]]
+aliases = ["TamerOp.Advanced.persistence_silhouette", "TamerOp.SliceInvariants.persistence_silhouette", "TamerOp.persistence_silhouette"]
+canonical_binding = "TamerOp.SliceInvariants.persistence_silhouette"
+canonical_owner = "TamerOp.SliceInvariants"
+declaration_owners = ["TamerOp.SliceInvariants"]
+defining_module = "TamerOp.SliceInvariants"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["simple", "advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = []
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "persistence_silhouette"
+    qualified_name = "TamerOp.Advanced.persistence_silhouette"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["SIMPLE_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.SliceInvariants"
+    name = "persistence_silhouette"
+    qualified_name = "TamerOp.SliceInvariants.persistence_silhouette"
+    scope = "owner"
+    [[objects.bindings]]
+    curated_sources = ["SIMPLE_API_BINDINGS"]
+    declaration_sources = ["SIMPLE_API"]
+    declared_advanced = false
+    declared_simple = true
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp"
+    name = "persistence_silhouette"
+    qualified_name = "TamerOp.persistence_silhouette"
+    scope = "root"
 [[objects]]
 aliases = ["TamerOp.Advanced.plan_directions", "TamerOp.SliceInvariants.plan_directions"]
 canonical_binding = "TamerOp.SliceInvariants.plan_directions"
@@ -50076,6 +52259,53 @@ tiers = ["advanced", "qualified"]
     name = "total_weight"
     qualified_name = "TamerOp.SliceInvariants.total_weight"
     scope = "owner"
+[[objects]]
+aliases = ["TamerOp.Advanced.wasserstein_distance", "TamerOp.SliceInvariants.wasserstein_distance", "TamerOp.wasserstein_distance"]
+canonical_binding = "TamerOp.SliceInvariants.wasserstein_distance"
+canonical_owner = "TamerOp.SliceInvariants"
+declaration_owners = ["TamerOp.SliceInvariants"]
+defining_module = "TamerOp.SliceInvariants"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["simple", "advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = []
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "wasserstein_distance"
+    qualified_name = "TamerOp.Advanced.wasserstein_distance"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["SIMPLE_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.SliceInvariants"
+    name = "wasserstein_distance"
+    qualified_name = "TamerOp.SliceInvariants.wasserstein_distance"
+    scope = "owner"
+    [[objects.bindings]]
+    curated_sources = ["SIMPLE_API_BINDINGS"]
+    declaration_sources = ["SIMPLE_API"]
+    declared_advanced = false
+    declared_simple = true
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp"
+    name = "wasserstein_distance"
+    qualified_name = "TamerOp.wasserstein_distance"
+    scope = "root"
 [[objects]]
 aliases = ["TamerOp.Advanced.SyntheticBoxFringe", "TamerOp.SyntheticData.SyntheticBoxFringe"]
 canonical_binding = "TamerOp.SyntheticData.SyntheticBoxFringe"
@@ -51195,6 +53425,41 @@ tiers = ["advanced", "qualified"]
     module = "TamerOp.Visualization"
     name = "IntervalInspectionSession"
     qualified_name = "TamerOp.Visualization.IntervalInspectionSession"
+    scope = "owner"
+[[objects]]
+aliases = ["TamerOp.Advanced.MatchingInspectionSession", "TamerOp.Visualization.MatchingInspectionSession"]
+canonical_binding = "TamerOp.Visualization.MatchingInspectionSession"
+canonical_owner = "TamerOp.Visualization"
+declaration_owners = ["TamerOp.Visualization"]
+defining_module = "TamerOp.Visualization"
+has_docstring = true
+intended_public = true
+kind = "type"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "MatchingInspectionSession"
+    qualified_name = "TamerOp.Advanced.MatchingInspectionSession"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Visualization"
+    name = "MatchingInspectionSession"
+    qualified_name = "TamerOp.Visualization.MatchingInspectionSession"
     scope = "owner"
 [[objects]]
 aliases = ["TamerOp.Advanced.MatrixLayer", "TamerOp.Visualization.MatrixLayer"]
@@ -53410,6 +55675,100 @@ tiers = ["advanced", "qualified"]
     qualified_name = "TamerOp.Workflow.fringe_presentation"
     scope = "owner"
 [[objects]]
+aliases = ["TamerOp.Advanced.generalized_rank", "TamerOp.Workflow.generalized_rank", "TamerOp.generalized_rank"]
+canonical_binding = "TamerOp.Workflow.generalized_rank"
+canonical_owner = "TamerOp.Workflow"
+declaration_owners = ["TamerOp.Workflow"]
+defining_module = "TamerOp.Workflow"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["simple", "advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = []
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "generalized_rank"
+    qualified_name = "TamerOp.Advanced.generalized_rank"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["SIMPLE_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Workflow"
+    name = "generalized_rank"
+    qualified_name = "TamerOp.Workflow.generalized_rank"
+    scope = "owner"
+    [[objects.bindings]]
+    curated_sources = ["SIMPLE_API_BINDINGS"]
+    declaration_sources = ["SIMPLE_API"]
+    declared_advanced = false
+    declared_simple = true
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp"
+    name = "generalized_rank"
+    qualified_name = "TamerOp.generalized_rank"
+    scope = "root"
+[[objects]]
+aliases = ["TamerOp.Advanced.gril", "TamerOp.Workflow.gril", "TamerOp.gril"]
+canonical_binding = "TamerOp.Workflow.gril"
+canonical_owner = "TamerOp.Workflow"
+declaration_owners = ["TamerOp.Workflow"]
+defining_module = "TamerOp.Workflow"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["simple", "advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = []
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "gril"
+    qualified_name = "TamerOp.Advanced.gril"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["SIMPLE_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Workflow"
+    name = "gril"
+    qualified_name = "TamerOp.Workflow.gril"
+    scope = "owner"
+    [[objects.bindings]]
+    curated_sources = ["SIMPLE_API_BINDINGS"]
+    declaration_sources = ["SIMPLE_API"]
+    declared_advanced = false
+    declared_simple = true
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp"
+    name = "gril"
+    qualified_name = "TamerOp.gril"
+    scope = "root"
+[[objects]]
 aliases = ["TamerOp.Advanced.hom", "TamerOp.Workflow.hom", "TamerOp.hom"]
 canonical_binding = "TamerOp.Workflow.hom"
 canonical_owner = "TamerOp.Workflow"
@@ -53596,6 +55955,53 @@ tiers = ["simple", "advanced", "qualified"]
     module = "TamerOp"
     name = "hypertor"
     qualified_name = "TamerOp.hypertor"
+    scope = "root"
+[[objects]]
+aliases = ["TamerOp.Advanced.interval_rank_summary", "TamerOp.Workflow.interval_rank_summary", "TamerOp.interval_rank_summary"]
+canonical_binding = "TamerOp.Workflow.interval_rank_summary"
+canonical_owner = "TamerOp.Workflow"
+declaration_owners = ["TamerOp.Workflow"]
+defining_module = "TamerOp.Workflow"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["simple", "advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = []
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "interval_rank_summary"
+    qualified_name = "TamerOp.Advanced.interval_rank_summary"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["SIMPLE_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Workflow"
+    name = "interval_rank_summary"
+    qualified_name = "TamerOp.Workflow.interval_rank_summary"
+    scope = "owner"
+    [[objects.bindings]]
+    curated_sources = ["SIMPLE_API_BINDINGS"]
+    declaration_sources = ["SIMPLE_API"]
+    declared_advanced = false
+    declared_simple = true
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp"
+    name = "interval_rank_summary"
+    qualified_name = "TamerOp.interval_rank_summary"
     scope = "root"
 [[objects]]
 aliases = ["TamerOp.Advanced.invariant", "TamerOp.Workflow.invariant", "TamerOp.invariant"]
@@ -62895,6 +65301,21 @@ qualified_name = "TamerOp.Invariants.fit_total"
 reason = "nonunderscore_local_binding_requires_intent_review"
 review_required = true
 [[owner_candidates]]
+candidate_identity = "TamerOp.Invariants.generalized_rank"
+canonical_binding = ""
+explicit_public = false
+exported = false
+has_docstring = true
+imported_from_child = false
+intended_public = false
+kind = "function"
+known_public_object = false
+module = "TamerOp.Invariants"
+name = "generalized_rank"
+qualified_name = "TamerOp.Invariants.generalized_rank"
+reason = "documented_local_binding_outside_curated_tables"
+review_required = true
+[[owner_candidates]]
 candidate_identity = "TamerOp.Invariants.graph_connected_components"
 canonical_binding = ""
 explicit_public = false
@@ -62953,6 +65374,21 @@ module = "TamerOp.Invariants"
 name = "graph_stats"
 qualified_name = "TamerOp.Invariants.graph_stats"
 reason = "nonunderscore_local_binding_requires_intent_review"
+review_required = true
+[[owner_candidates]]
+candidate_identity = "TamerOp.Invariants.gril"
+canonical_binding = ""
+explicit_public = false
+exported = false
+has_docstring = true
+imported_from_child = false
+intended_public = false
+kind = "function"
+known_public_object = false
+module = "TamerOp.Invariants"
+name = "gril"
+qualified_name = "TamerOp.Invariants.gril"
+reason = "documented_local_binding_outside_curated_tables"
 review_required = true
 [[owner_candidates]]
 candidate_identity = "TamerOp.Invariants.hilbert_distance"
@@ -63042,6 +65478,21 @@ known_public_object = false
 module = "TamerOp.Invariants"
 name = "interface_measure_dim_changes"
 qualified_name = "TamerOp.Invariants.interface_measure_dim_changes"
+reason = "documented_local_binding_outside_curated_tables"
+review_required = true
+[[owner_candidates]]
+candidate_identity = "TamerOp.Invariants.interval_rank_summary"
+canonical_binding = ""
+explicit_public = false
+exported = false
+has_docstring = true
+imported_from_child = false
+intended_public = false
+kind = "function"
+known_public_object = false
+module = "TamerOp.Invariants"
+name = "interval_rank_summary"
+qualified_name = "TamerOp.Invariants.interval_rank_summary"
 reason = "documented_local_binding_outside_curated_tables"
 review_required = true
 [[owner_candidates]]
@@ -65925,36 +68376,6 @@ qualified_name = "TamerOp.SliceInvariants.SliceLandscapeCacheKey"
 reason = "nonunderscore_local_binding_requires_intent_review"
 review_required = true
 [[owner_candidates]]
-candidate_identity = "TamerOp.SliceInvariants.barcode_entropy"
-canonical_binding = ""
-explicit_public = false
-exported = false
-has_docstring = true
-imported_from_child = false
-intended_public = false
-kind = "function"
-known_public_object = false
-module = "TamerOp.SliceInvariants"
-name = "barcode_entropy"
-qualified_name = "TamerOp.SliceInvariants.barcode_entropy"
-reason = "documented_local_binding_outside_curated_tables"
-review_required = true
-[[owner_candidates]]
-candidate_identity = "TamerOp.SliceInvariants.barcode_summary"
-canonical_binding = ""
-explicit_public = false
-exported = false
-has_docstring = true
-imported_from_child = false
-intended_public = false
-kind = "function"
-known_public_object = false
-module = "TamerOp.SliceInvariants"
-name = "barcode_summary"
-qualified_name = "TamerOp.SliceInvariants.barcode_summary"
-reason = "documented_local_binding_outside_curated_tables"
-review_required = true
-[[owner_candidates]]
 candidate_identity = "TamerOp.SliceInvariants.clear_slice_module_cache!"
 canonical_binding = ""
 explicit_public = false
@@ -66165,51 +68586,6 @@ qualified_name = "TamerOp.SliceInvariants.offset_weight"
 reason = "documented_local_binding_outside_curated_tables"
 review_required = true
 [[owner_candidates]]
-candidate_identity = "TamerOp.SliceInvariants.persistence_image"
-canonical_binding = ""
-explicit_public = false
-exported = false
-has_docstring = true
-imported_from_child = false
-intended_public = false
-kind = "function"
-known_public_object = false
-module = "TamerOp.SliceInvariants"
-name = "persistence_image"
-qualified_name = "TamerOp.SliceInvariants.persistence_image"
-reason = "documented_local_binding_outside_curated_tables"
-review_required = true
-[[owner_candidates]]
-candidate_identity = "TamerOp.SliceInvariants.persistence_landscape"
-canonical_binding = ""
-explicit_public = false
-exported = false
-has_docstring = true
-imported_from_child = false
-intended_public = false
-kind = "function"
-known_public_object = false
-module = "TamerOp.SliceInvariants"
-name = "persistence_landscape"
-qualified_name = "TamerOp.SliceInvariants.persistence_landscape"
-reason = "documented_local_binding_outside_curated_tables"
-review_required = true
-[[owner_candidates]]
-candidate_identity = "TamerOp.SliceInvariants.persistence_silhouette"
-canonical_binding = ""
-explicit_public = false
-exported = false
-has_docstring = true
-imported_from_child = false
-intended_public = false
-kind = "function"
-known_public_object = false
-module = "TamerOp.SliceInvariants"
-name = "persistence_silhouette"
-qualified_name = "TamerOp.SliceInvariants.persistence_silhouette"
-reason = "documented_local_binding_outside_curated_tables"
-review_required = true
-[[owner_candidates]]
 candidate_identity = "TamerOp.SliceInvariants.restrict_to_chain"
 canonical_binding = ""
 explicit_public = false
@@ -66328,21 +68704,6 @@ module = "TamerOp.SliceInvariants"
 name = "uniform2d"
 qualified_name = "TamerOp.SliceInvariants.uniform2d"
 reason = "documented_local_binding_outside_curated_tables"
-review_required = true
-[[owner_candidates]]
-candidate_identity = "TamerOp.SliceInvariants.wasserstein_distance"
-canonical_binding = ""
-explicit_public = false
-exported = false
-has_docstring = false
-imported_from_child = false
-intended_public = false
-kind = "function"
-known_public_object = false
-module = "TamerOp.SliceInvariants"
-name = "wasserstein_distance"
-qualified_name = "TamerOp.SliceInvariants.wasserstein_distance"
-reason = "nonunderscore_local_binding_requires_intent_review"
 review_required = true
 [[owner_candidates]]
 candidate_identity = "TamerOp.SliceInvariants.wasserstein_kernel"
@@ -66954,7 +69315,7 @@ undefined_curated_owner_bindings = []
 
 [source]
 algorithm = "sha256"
-fingerprint = "cbe7dbb517cd3028be097bfe6c4e002c13ea3428df1d6f9e43aa19bdaa9b8efd"
+fingerprint = "e84120f357e95074a383f8f92e793cfe23ab854b7e99e326412d60603f978a52"
 
     [source.files]
     "Project.toml" = "3930da0bd8edb7066b4eafa858feb2be11350799b7c54a08973fdabe8e5dde07"
@@ -66972,63 +69333,67 @@ fingerprint = "cbe7dbb517cd3028be097bfe6c4e002c13ea3428df1d6f9e43aa19bdaa9b8efd"
     "ext/TamerOpParquet2Ext.jl" = "9fa38fe2d4fec466793f32f23d5f1d302e45dd3fa39b71eeef9bcdbfe268120b"
     "ext/TamerOpProgressLoggingExt.jl" = "e7dcb7dd63d2209563f0509f7e46d3d5678beda995fe7da674cfe2982ac5f5d4"
     "ext/TamerOpTablesExt.jl" = "dd15be7a229c9a21fcdf7fdd95e7d0361bb7286d992ba88421ba578f112e05d3"
-    "ext/TamerOpWGLMakieExt.jl" = "c380107c68fbeeaef1ecdc3fd800b0b3c7f424ba2ea6f5d5783708cf37a15706"
-    "ext/visualization_makie_common.jl" = "29f7cb828aeceb834fe1ee4f9d389b106aa2b22c5feb1989ce024aaca82570fc"
-    "ext/visualization_wgl_inspection.jl" = "24655adc667a0a35fa070df9205a478723e3921a87c32a0f986151f15ddd8984"
+    "ext/TamerOpWGLMakieExt.jl" = "1bf0caa784498d713c7413b4b5af76d054749f5c291fc99f22ad4ead875fe058"
+    "ext/visualization_makie_common.jl" = "bcaa8f2f2d97846a166e43c57bab90aa6e0ba9b7e82a43f34bb4afbe89f79df6"
+    "ext/visualization_wgl_inspection.jl" = "2db286530f60a06c8525ef4be4eb7e6fc446d3678936ba6d2fc9bdeac48b0f6a"
     "ext/visualization_wgl_intervals.jl" = "c0b7e1dba51f4f6456977ada7c232c1754c1538b8864b474d379138563ac9ad1"
+    "ext/visualization_wgl_matchings.jl" = "246c00a86efed7a156fe7530b0e16094ee29e91c83ee6b8711c6026bf6f36abb"
     "ext/visualization_wgl_slices.jl" = "71b9420b96fcfd3ee62161bc0aee1b1831b025229c4dffabd9face1d3f82b6f5"
-    "src/APISurface.jl" = "27c1af47e4784ade11c73712c1fe720f1202f5f0f1806076d36a6cd7513796f5"
+    "src/APISurface.jl" = "df0989f5d7b1521b40f3de0facd1a8130696a711fcd8d3a78bf3817b2d348349"
     "src/AbelianCategories.jl" = "c66a6f892920c031e673045b3bf8950ccc6ea5dfbfe0c57db986e1d8515a35c7"
-    "src/ChainComplexes.jl" = "630405dd36767c296de2eb3a368dfdbe12f840f8ceb2f4ce012e2d9eed9baec7"
+    "src/ChainComplexes.jl" = "fdf14298440c06256dd1fd9a42a9a6a8001178097f96f2fd39f00aa34f26928d"
     "src/ChangeOfPosets.jl" = "3909e66df5ad7f885caa0d8a972969a0c9d622b011ca04932be4d68e3a0e9c46"
     "src/CoreModules.jl" = "efe72cad9c88607b7a803ce78cfa5dfeb213c17f44b2959d36761aaaa310e881"
     "src/DataFileIO.jl" = "60fbfcca56ad6889d3d61bfce23a78658b4d961a54791db1090984d8f2e1694c"
-    "src/DataIngestion.jl" = "ea436bd6b42f2ff1c1a8cbd980e2b6545bc0348cc5d9cec6da742ebd77d96f59"
-    "src/DataTypes.jl" = "258bedeb03535866aad2653e533d6c99941808fa904a4b9f8ec8e73a89ea6adc"
+    "src/DataIngestion.jl" = "d4e704061dc3a09d582b55444b49a02513abd66f264db886b3b3220500248ab5"
+    "src/DataTypes.jl" = "d42396037e45cf6545fc98fb7b4cdacfb6c6eb8bcb9324da56aa4caf69c63604"
     "src/DerivedFunctors.jl" = "9b5076d8c527610f0e25414adfaec462894446fe9d86c12510019e49b2ce35b1"
     "src/Encoding.jl" = "525c86dc1af29a043d481b515578df181a4ee9adc71ab20d73a315e2cd5ef29f"
     "src/EncodingCore.jl" = "53bc7c490616386a4ff51b997fb7f09ae195455f1bd0f59249a91a2009c1f821"
     "src/ExactReals.jl" = "c2a5513a6cc93c643b54ad4888ac4d78a9f794d0cfd2df240f6a2ad02788467f"
     "src/Featurizers.jl" = "a0aea88e002cf0fa8a0744954b9c857c3ee1c58e230bef3a49d5273fc85360ca"
-    "src/Fibered2D.jl" = "3ef4ceb13ac053ee4c5c3726aeef228c570b5c02a51b9e9912e0cdb6b1203782"
+    "src/Fibered2D.jl" = "20c8981d5eb9e840d0b6a12cc12b159fb0e68caaec329eedc31e48895b6f0d52"
     "src/FieldLinAlg.jl" = "a21e5a32192e06b468336d69dd4bde5f8da182411d197098a9b02c6d80615cce"
     "src/FiniteFringe.jl" = "8c595168e66d34127006cc0da4bb3137b0f5459135e51b728677edd83de5f766"
     "src/FlangeZn.jl" = "32faac991d39fc01916c3e8d1a97c05013afd4790b9d5de25bef273c727a993f"
     "src/IndicatorResolutions.jl" = "5b7103776e098d596d6474ba0c2d9354fd5e32aaacee87439e12537454ed2de6"
     "src/IndicatorTypes.jl" = "2193c139e277beb971de4db281d0f99180a8631a61349582fe1535377e1628ed"
     "src/InvariantCore.jl" = "1e9721048655aa8b8a2b982116034c3d2665babef86e7fd6a3d98a1cb8d98885"
-    "src/Invariants.jl" = "423e77e417b030c5105337a8a9481ce83c064f7a60bb04e38313374951e9e6bb"
+    "src/Invariants.jl" = "c1f6d5be072c916a761e86a5a37ac3e5bde270e6a1be04c1e70ad15439d13767"
     "src/ModuleComplexes.jl" = "edb988f1d09cc0db5fa8c4bab63490842b63df73031aa57cf2850dfade6f3d90"
     "src/Modules.jl" = "6215503c689af6fedd8cc412be2c820fd3dddea015f3416440abfb0cb17eae12"
     "src/MultiparameterImages.jl" = "bcff50aa2e3ee078ea0f3ce72140469f5faded4a4ae27dd53de6a484ebe61ad4"
     "src/Options.jl" = "11012e23da27a8da44d9a38350d1582a0a766657abeb5283438f92b9c51c810c"
-    "src/OrdinaryPersistence.jl" = "51bc186add27c809e9c0ec5f5088228984fe7590e360f9056fc64ecc6c4eee9e"
+    "src/OrdinaryPersistence.jl" = "bb380dbaacb810c64fbb94ab657e5ffe964e7cc5587d870cecd2f13ee1e63236"
     "src/PLBackend.jl" = "363a9a45cab9a9b63758e4cea7c405f48936ba7e9ecc854377fd0c356b15c9e0"
     "src/PLPolyhedra.jl" = "e9d6c0c64ebf969a053d3ac4b02b2574f04995f50bfa8f61db45892c03eff5c6"
     "src/RegionGeometry.jl" = "b49b56cb37b589dbf12db28d8fe0d1d2f6d7c43bad82c2893ad04516a3da3eb4"
     "src/Results.jl" = "6c2aa3cb7ee2ef27cbd47b49a83ef5821ca104d701a57dd698f1ed2d4f54ccb4"
-    "src/Serialization.jl" = "35deddb4a9d0cb26bdb561f99dbdfdccccc496161beed83768b1f91a4bdb2dc6"
+    "src/Serialization.jl" = "0e6c57984f777f3e2666c45bf7bdcaffd26e5d2ae3a32e2dee8036d709c29d2f"
     "src/SignedMeasures.jl" = "028b6d41d8c3cfc7757bb4d492917aef47b0f664c3cc6419cd0a7f4a7d133b5e"
     "src/SimplicialReduction.jl" = "0eec400bcd7e1dc57ee5ea681f6dee8b4e66c262eee32cbee1911b4282a15f53"
-    "src/SliceInvariants.jl" = "0d240fb23996460c2f5de21506a76e8c52eea8b204e8c523122aef5bb5b22018"
+    "src/SliceInvariants.jl" = "8e3483db0378554951931dd9daabcc36cf126181cf05fade854a5c105659503e"
     "src/Stats.jl" = "5dd777f4143962b57221bc1f524a51b88a1bc8ed16aeed0ac1ececa6dc5ef668"
     "src/SyntheticData.jl" = "b7f6b0c438fc5a513d9ab0c6067a5f1f16eb08e9fde2a677afb8278251feb4e7"
     "src/TamerOp.jl" = "4b5154fc8fba40595ef929efa717bf2bf3445832c744128c8b6a58130b35fe56"
-    "src/Visualization.jl" = "77ed8289024ca13b878e98a3f258169c77993b8cd01b9ff383e4a4f0f5158e87"
-    "src/Workflow.jl" = "3986495e1f9e8221188ca503a8734274d98776e4fe84ce658e27794304d87cbe"
+    "src/Visualization.jl" = "9369021d73a93f4685475b064ec7812939d6016221268ea3143c993b29d9646a"
+    "src/Workflow.jl" = "027c48ef6b9b37a7b8f9464cb07025cb45744738c8d434c53baf2be7c93def82"
     "src/ZnEncoding.jl" = "d2c58dca25a61a87dffd6981eee479b1a7477b850d5ae56354057098864af256"
     "src/data_ingestion/cech_core.jl" = "4bc17f3a7f6cd7c3603b8404fa1ff4173e160272af894496be98069861431aea"
     "src/data_ingestion/core_bifiltrations.jl" = "5ab4a6912b04b6a286560998ef9274a32a1318c2037903b22c6436aad2d718fc"
+    "src/data_ingestion/distance_matrices.jl" = "a1db8a123bf9632f6bc570ff90525b3cac8cafe04cb15659cb18e7e2231346e5"
     "src/data_ingestion/enclosing_geometry.jl" = "37d6916c0a00fde3471dcb4bee18db7c3dbd6df1d4fc4abf738b9aaa22ea9fae"
     "src/data_ingestion/exact_euler_backends.jl" = "0cc36d9ac0132c1874f5a7ee28620eabab7c5a261d720305e7bf8b8fbedb9d67"
     "src/data_ingestion/exact_h0_backends.jl" = "8bb0ad0996cca5a2ed53be6a52ab612a62bf225b288cb81c7465e62814cfa9d1"
     "src/data_ingestion/function_delaunay.jl" = "1702dcbee55eb15ddc5c1ea62848e244fe504eb1027f98e18af7583627432ce6"
     "src/data_ingestion/inspection.jl" = "a2529919a3398b5848622ab867f95ce5beb423f4cd8570b35d55238b602ad194"
+    "src/data_ingestion/landmarks.jl" = "13ebfbba0ab011f1049f3e079a47d45cdb12fa00ef7ca71923e664aa4f72bcc1"
     "src/data_ingestion/provenance.jl" = "5d1ca45684422a531156ff7438ce7e30914f1400f3a70767ba17a39044324950"
     "src/data_ingestion/rhomboid.jl" = "a31f6bfff045e60e021a0f573c72ace5d1665d6e21b2ff55ce6e9ec29147da19"
     "src/data_ingestion/rhomboid_depth.jl" = "3e3fdd7d124ffa4bce4ff2d6a8fef11b8b554d9f1e58fadebbb50a5a4b0c881b"
     "src/data_ingestion/rhomboid_incremental.jl" = "fac04d1a9c2dc76432b2ec5a3f5e611bae802f6758ddceac30ba0c90e4a23561"
     "src/data_ingestion/subdivision_cech.jl" = "47b5f478af71f7651a147becc99d5ecf5395a8e2d79f60212f72ef14b5bc2b70"
+    "src/data_ingestion/weighted_flags.jl" = "bdafef9998912314d66e4015133895e8157329a9a17d9bab7d40a12bbc50d982"
     "src/derived_functors/algebras.jl" = "e9b321aadc1ffd1f84b26cea6684204f538844efb6115aa159a22544c25917bb"
     "src/derived_functors/backends.jl" = "20ceb2049164855d4e34d1a6ab1964f7b64693ba6cdeba1d4a8414c43ec8496f"
     "src/derived_functors/ext_tor_spaces.jl" = "da8b033915554abda827c8c5b8db759bb281aa2bcf09381fe8b6256b69097a51"
@@ -67039,16 +69404,16 @@ fingerprint = "cbe7dbb517cd3028be097bfe6c4e002c13ea3428df1d6f9e43aa19bdaa9b8efd"
     "src/derived_functors/resolutions.jl" = "f45d406ec4e9162d6e79abc4ebbb5af0eb29c09ad2a7b1dd0435dacb61921357"
     "src/derived_functors/shared.jl" = "3c8a9dc46efac8cc5d0496d67218c9d2f5d718a7aeb730ff2ebeb9217d06c332"
     "src/derived_functors/spectral_sequences.jl" = "0f085b7360b30b14889836c0b6e20c32f000c7b494821e8e24a10e1d86f812d0"
-    "src/derived_functors/utils.jl" = "d3c0ce78e602226ba1b20a8d28c04ed6d2e79488431b99f95db7b6acb7fe0d07"
+    "src/derived_functors/utils.jl" = "ce74bae1270b30d850874dbd5fed8898bd739fae25e90e7a02a99186a948c566"
     "src/fibered2d/exact_grades.jl" = "2444062e01a0b50f7e4f431333b036bc8b61c2031f4b2a65b525acb6c3c63500"
-    "src/fibered2d/exact_matching.jl" = "a20581df145b2fb03baba06957717ecd9320fa8a02fbad82de250966382c5961"
+    "src/fibered2d/exact_matching.jl" = "f38cd59c3d5e94e2b484a0573549922bad117c6874dc3489fa5e417056b9adde"
     "src/field_linalg/autotune.jl" = "82f5beaf1bdaa65762466d047558b5723e5a0fa245049b95de28bfeaaffbb989"
     "src/field_linalg/backend_routing.jl" = "f94f6cb90c2e75bb5a22ac6149e31cda66e177cb38017b1c452197177c365343"
-    "src/field_linalg/nonqq_engines.jl" = "26dce12404dc40ae43a6aa86543ca94f0ea92eb7ab957e03eebe208b348dd00c"
-    "src/field_linalg/public_api.jl" = "3c945a641667c467a300484b1e44d4c56a98dac8491d1358a035362b9e658003"
-    "src/field_linalg/qq_engine.jl" = "ad1603d88cc1934739aab79cfcea2d3507199cf9f99f782491ebd97fa4ae889b"
+    "src/field_linalg/nonqq_engines.jl" = "08725c6070a7a8d0dba222461c26cc7a587e04f84bf0bc6939900d0eea869956"
+    "src/field_linalg/public_api.jl" = "43e1d1bb1cac40272c367afe229dcb7af8fb3ae7e173d810df356626bde343ff"
+    "src/field_linalg/qq_engine.jl" = "72e083ad007b4c2e5404ee73ea969b73c7dcb3fa2bad60c8c5c27459d9eca906"
     "src/field_linalg/sparse_rref.jl" = "c8078072fa8ca092845a16466eb33b556dc72c043806150e425160cca52756f0"
-    "src/field_linalg/thresholds.jl" = "b897891245e73edabb484fd12cdebc019fbaa475b4d0bbb172a470824f1b4c44"
+    "src/field_linalg/thresholds.jl" = "d77054153f2b7c9e86ae78df45911016a9404c5a48947812beba193f7845ed93"
     "src/finite_fringe/fringe_module_and_fiber.jl" = "e35fe76df20dd57ad877fd3687fcbb01a860ba655bb1a5a311cecd2105243255"
     "src/finite_fringe/hom.jl" = "24cfd4f40d0e8fde322642a61e69b0608609719faa77bd770cd5932cae918fbd"
     "src/finite_fringe/posets.jl" = "57671af32d57cef4d4ba839a81bf7c1e7ad84711afabeb12646f40ebae4e9f39"
@@ -67063,11 +69428,18 @@ fingerprint = "cbe7dbb517cd3028be097bfe6c4e002c13ea3428df1d6f9e43aa19bdaa9b8efd"
     "src/invariants/algebraic_support.jl" = "fe90b000deeed3faea26867ed21bcf645f3abbee5d3badc569f7f09f61709969"
     "src/invariants/basics.jl" = "c8ec197c9d06b1025c912285332799bc0b4e81c283e1cac21037fd649ac6f03e"
     "src/invariants/exact_backends.jl" = "9a08033da45769278efba89d58f296a5dab40192ac450ae88c1d19e1d33d1b58"
+    "src/invariants/generalized_rank.jl" = "1c6f671620cca82072fa356c7682a3f2057553f7148ea22a333bd44c32df57c2"
     "src/invariants/geometry_stats.jl" = "bd95fedf2397694c0c333f98575c1710f468e906756745fe07102fe9148d3a63"
+    "src/invariants/gril.jl" = "e64ba17fc9cbd2e6ad2df6caf749149eac1922be9da6e264bf14f63ec8514568"
     "src/invariants/module_stats.jl" = "0743d62d029fe95885e191fcccdfa0cac5836a8c1fb3cf09a8eb75c9b29933f5"
     "src/invariants/summary_types.jl" = "e7ce6850ac7d9e2a2ed3770291c1120773ba206dd4c35b197b1b96a81c5c7836"
     "src/invariants/support_geometry.jl" = "60a16c960054b98889d0d25140f0bea4e90350e1a89a58f8fdc1128ac82f58c9"
     "src/invariants/wrappers.jl" = "9a2c67f44320f57c095364d735fc3c92be9e338b54b3684a15ab318176680915"
+    "src/ordinary_persistence/analysis.jl" = "64f99c53d81fc7da0f26bb69a4bed7075a3149fcd1fae33216d5634c553d41d4"
+    "src/ordinary_persistence/cohomology.jl" = "9b5559cea8ee07d08a553578f44733d69e00df3cc022a4725d85158dd8c198f4"
+    "src/ordinary_persistence/implicit_rips.jl" = "53a4da3e9be68b87d0aadb04b8e2c8d4eeaea30eb0be66e891b5f8314be80921"
+    "src/ordinary_persistence/prime.jl" = "cf13c9ed53af1813850438ef65c0e7d9b8a3094dba6ada27ec4720b6a2d014d2"
+    "src/ordinary_persistence/result_data.jl" = "e1f3da37437980bf1b10ec8060a980bf2f613dd2e5ee856c82b0c185d624c65e"
     "src/precompile_workloads.jl" = "ea91ba06b5ef486f2a62cffba46389aaf74631f9e7ff9a21f9b87fc9dc719b0d"
     "src/results/provenance.jl" = "521c84d32b5cb1b3236f7434a21219929940f47d896949e263ecb041037e985d"
     "src/serialization/coordinates.jl" = "46ed9775e37578ed9518d1d8fba10ceec102a2130973797a375da402f90b4bc9"
@@ -67076,56 +69448,63 @@ fingerprint = "cbe7dbb517cd3028be097bfe6c4e002c13ea3428df1d6f9e43aa19bdaa9b8efd"
     "src/serialization/owned_datasets.jl" = "564d2e39fe11e56a1a821bca73f6a8302344d752d19bbf663e4bae2160bc02bd"
     "src/serialization/owned_encodings.jl" = "843ef3b6c11996c7a6f6dd365e575f1ed5b62d17c4c7d7d2aedfc316663aab0b"
     "src/serialization/owned_mppi.jl" = "142bd796df725d214970d7f6668da7c3dc0287d1ed92975d02777176a8a2a74c"
-    "src/serialization/shared.jl" = "b3dcdcaa8d817ac86c722491c336485e0ab78adff40220589e9f3c23c361ae07"
+    "src/serialization/owned_persistence.jl" = "989186da6ec2a728f837911b565cdef7f744ac25d28c1f9b7aa3c693cbeae2c2"
+    "src/serialization/shared.jl" = "2c9fd3805600c8d83c60d7e8395707f998077f0fdf36fd29b9b2bf9dfa5ae6ea"
     "src/slice_invariants/exact_grades.jl" = "d3b8822e033156e2349953e492e1c801d62e2b12ae2d9ec7d7c09151296f3544"
-    "src/visualization/builders_encoding.jl" = "b23e51b3cf135cfde3fe709a38f4801a48e3c41e41600c26de4b111c9b8615c2"
-    "src/visualization/builders_ingestion.jl" = "94ee1bfc87b844a4e0007c8cdca60b239bb59146c17bc2235535b67bd1fc1ad2"
-    "src/visualization/builders_invariants.jl" = "e4db14d3a9d56bb4f22f0e707a22f714d8aeb896e3eeb05984406ca08c8b719d"
-    "src/visualization/builders_modules.jl" = "74432f697124a868860bc8054d0f2f5bcb090e4dbd213e896586c80375d2a815"
+    "src/visualization/builders_encoding.jl" = "76cd2c5698135d697880870367a1bcfda32155605d2e9350a781e8deb7e0da7c"
+    "src/visualization/builders_ingestion.jl" = "975b7114a28cc5b787bf3916a20bdcfd0e0eb2a44414763d673b1e69cb74d105"
+    "src/visualization/builders_invariants.jl" = "f440e400f754fa8bf30b54ae40f36962deab40fba95a6089b264ab83d532cd5e"
+    "src/visualization/builders_matchings.jl" = "ae93a5b92c8371f22ec9e08e159ec5f0fa9aed56bd86f794b1efa5cefa987b63"
+    "src/visualization/builders_modules.jl" = "b2bc95f6a3d792f192b58975c4c946c25aba410acc7c0f8c865128c4adb1f733"
+    "src/visualization/builders_morphism_comparisons.jl" = "c56bec041d4e25b856d4b35f1a71a52a0da0793cd5fb6d9f9fe797d0ba36d05b"
+    "src/visualization/builders_morphisms.jl" = "eb312595a108e85570c76cb36eda0fa3ca8ce9031a1bf92a96eacda16510062d"
     "src/visualization/builders_presentations.jl" = "17852011608575cd33f8673aebcd129083381006407ae6c047f60c9759a2d300"
-    "src/visualization/builders_slices.jl" = "24406d6b830f601538492c4d6063fca6ecd253e871217871fd18061eb3176345"
+    "src/visualization/builders_rank_sections.jl" = "91f8bb7a125b27103310dff8f41bae940133ce4be4bc2ee6c4c03be0567d1f31"
+    "src/visualization/builders_resolutions.jl" = "35b742703c76c6c9efd555f590f71b7f1a71851eaf756d18f718b5ff1af3e9e5"
+    "src/visualization/builders_slices.jl" = "6c4e2c03b913fdfcc775a25c4e0e0e0b54fcb8cfa6b9fba8d1dbf97eb4b5a9e1"
     "src/visualization/hasse_layout.jl" = "1ac980228b59e437fddbd03f70c2f2e6805218584b42672b1327fdb390e49c33"
-    "src/visualization/inspection_intervals.jl" = "8d99f85e7206a07a5eee5df2e5937ef1ad24d210a9d3c557b8d673567507c2d7"
-    "src/visualization/inspection_rendering.jl" = "7bebfd23f7402dce048b57074146fc9bf356568b1d422a9301cd3192db1e413f"
-    "src/visualization/inspection_session.jl" = "5638f7b35652ef7fb790df94d2ec100d76784b3e19c7710f8a09a78f3254d2fc"
+    "src/visualization/inspection_intervals.jl" = "9b47f804a98d29ccdaf6949ded9fb3da7dd54d0a17a38d13559ea1e11a7f56a0"
+    "src/visualization/inspection_matchings.jl" = "93689a1181d61e58a1fe270dc1cd19d12c4c3e83531790d8428614e87090bab7"
+    "src/visualization/inspection_rendering.jl" = "1192e60a30266ed2c4aba8298309c3d91f296b8db542516331b2823825e4edf1"
+    "src/visualization/inspection_session.jl" = "a766cfb53c57f778e0cb59ae586cab7b400ab61a934f22b79ebf8b781002a604"
     "src/visualization/inspection_slices.jl" = "6bd80ab9698185e02093ea828387a5f3a9b15fcffde0c1349720fa99044fe5c9"
-    "src/visualization/interval_views.jl" = "50c3286d29c3786b03152aa9f0f4883576aafa4719d9be168614e955c873396a"
+    "src/visualization/interval_views.jl" = "cf707d9dd1379c4b33c35e715b12b332ba17437dd78cc132cee4b84a45364d46"
     "src/visualization/region_geometry.jl" = "94119445b218c43fcc4d688f95abc94a1dec70ddf1119f700aabe6823bf78f77"
     "src/visualization/rendering.jl" = "58534070aa5f1ab5452faaecd670eba0d4ddab68f3155fc909bd7d81c2d24a9d"
     "src/visualization/style.jl" = "c2941bde8d6ebd1f4ccf6466497bb42f8315aafafeb88124a19a9cafe73f24be"
     "src/visualization/types.jl" = "9286b0b23f498975faede64df73080386728b05e54a99124cfae867313765448"
-    "src/visualization/validation.jl" = "88ce37314d20f1e300cf29fc7416f5f82386cee5023c7ed4f19867180d89bc58"
+    "src/visualization/validation.jl" = "8304bd12ac2c97d52b5789dd859f7230f0ead456dbc74f36a4fb9959eccae3d4"
 
 [totals]
-advanced_binding_names = 1019
-advanced_binding_rows = 1028
-advanced_declarations = 1059
+advanced_binding_names = 1051
+advanced_binding_rows = 1060
+advanced_declarations = 1109
 advanced_exported_constants = 0
-advanced_exported_functions = 919
+advanced_exported_functions = 961
 advanced_exported_modules = 37
-advanced_exported_types = 277
+advanced_exported_types = 285
 advanced_exported_undefineds = 0
-advanced_exports = 1233
+advanced_exports = 1283
 canonical_constants = 2
-canonical_functions = 930
+canonical_functions = 972
 canonical_modules = 38
-canonical_objects = 1247
-canonical_objects_with_docstrings = 926
-canonical_types = 277
+canonical_objects = 1297
+canonical_objects_with_docstrings = 975
+canonical_types = 285
 canonical_undefineds = 0
-intended_public_objects = 1246
-intended_public_objects_with_docstrings = 925
-inventoried_bindings = 2657
-owner_candidates = 758
-public_bindings = 2656
-qualified_curated_owner_bindings = 1214
+intended_public_objects = 1296
+intended_public_objects_with_docstrings = 974
+inventoried_bindings = 2777
+owner_candidates = 755
+public_bindings = 2776
+qualified_curated_owner_bindings = 1264
 reconciliation_only_objects = 1
 root_exported_constants = 2
-root_exported_functions = 130
+root_exported_functions = 149
 root_exported_modules = 1
-root_exported_types = 76
+root_exported_types = 77
 root_exported_undefineds = 0
-root_exports = 209
-simple_binding_names = 206
-simple_binding_rows = 206
-simple_declarations = 206
+root_exports = 229
+simple_binding_names = 226
+simple_binding_rows = 226
+simple_declarations = 226

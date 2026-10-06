@@ -1,0 +1,11 @@
+{
+  "cases": 37,
+  "evaluation_cases": 6,
+  "accepted_samples": 888,
+  "expected_samples": 888,
+  "paired_checks": 148,
+  "zero_compilation": true,
+  "all_reset_and_output_checks": true,
+  "all_sampled_witnesses_nontrivial": true,
+  "source_hashes_match": true
+}

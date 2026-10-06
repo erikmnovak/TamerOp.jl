@@ -100,12 +100,237 @@ exploratory call. A style applies only to calls where it is supplied.
 The [ring lesson](tutorials/ring.ipynb) develops this progression and finishes
 with an optional preview/export section.
 
+## Which vectors survive from here?
+
+Stalk dimensions describe how much is present at each parameter. They do not
+say how much survives a move to another parameter. Fixing a source point `p`
+lets us ask that second question over the whole parameter plane:
+
+```julia
+OP.visualize(enc; kind=:rank_section, source=(1, 1))
+```
+
+At each comparable target `q`, the figure shows the rank of `M(p ≤ q)`:
+how many independent vectors from the source remain independent in the target.
+Both coordinates of `p` are fixed; both coordinates of `q` vary along the axes.
+Labels give ranks and varying stalk dimensions in nonzero stalk regions;
+repeated geometric cells share one label. For the closed square module,
+the rank is one while both points remain in its support and zero after the
+class has died. The source itself is marked in the plane.
+
+The white region has rank zero. The gray order mask contains no forward map;
+it is not evidence that a class has died. An unrepresented region is unknown
+and has its own pale-gray appearance. This distinction is made in the original
+parameter order, before replacing points with finite labels. Two incomparable
+points in the same classifier region still have no structure map. Reversed
+grid axes retain their declared order, which is stated on the axes.
+
+To understand one value, select its target:
+
+```julia
+OP.visualize(enc; kind=:rank_section, source=(1, 1), point=(2, 2))
+```
+
+The adjacent panel displays the actual matrix with source columns and target
+rows, both endpoint dimensions, and its rank. For the dual question, use
+`target=(2, 2)`: the target stays fixed and the source varies. These are
+sections of the ordinary rank invariant on comparable pairs. They are not
+generalized ranks over intervals, nor do they identify or track individual
+homology classes.
+
+A few anchors can reveal what one view misses. They share a numerical scale:
+
+```julia
+OP.visualize(enc; kind=:rank_section, source=[(0, 0), (1, 1), (2, 2)])
+```
+
+For a finite module `M`, `source=1` or `target=3` selects a finite vertex and
+shows a schematic Hasse diagram. Use `source=[1, 2, 3]` for finite small
+multiples and `vertex=3` to select the other endpoint. An integer anchor on an
+encoding also selects its finite model; it does not choose a representative
+parameter. Use `OP.encoding_module(enc)` when comparing several finite anchors.
+
+The linked inspector offers the same questions without rebuilding the session:
+
+```julia
+session = OP.inspection_session(enc; view=:rank_from)
+OP.visualize(session)  # load WGLMakie for the live browser view
+```
+
+Choose **Rank from source** or **Rank to target** in the View control. A single
+point or vertex sets the anchor. A source/target pair also selects the map;
+its source is the anchor in the first view, its target in the second. Select
+points in the navigation panels or use the exact coordinate fields to settle
+boundary questions. Clicking the rank section itself selects the varying
+endpoint while retaining its anchor. The section keeps both coordinates of the chosen endpoint
+fixed. Reset clears the anchor; the usual module and presentation views remain
+available in the same session.
+
+Each distinct anchor label requests one rank row or column, without constructing
+the full pair table. Live sessions retain these rows in their bounded cache.
+Moving an anchor inside one fiber reuses the ranks but recomputes its exact
+order mask. Only a selected map is copied into the readout; querying ranks may
+materialize a lazy encoded module. Numerical fields use their declared rank
+tolerances. A `box` clips the drawing, without changing the mathematical ranks.
+
+## Maps between modules
+
+A structure map moves between two spaces inside one module. A module morphism
+`f : M → N` instead supplies a map `f(q) : M(q) → N(q)` at every finite label,
+compatible with the structure maps. When you have constructed such a morphism,
+start with its two modules and one component:
+
+```julia
+OP.visualize(f; vertex=2)
+```
+
+The source and target use the same poset layout. The selected matrix has source
+coordinates in its columns and target coordinates in its rows. Its rank,
+kernel dimension and cokernel dimension describe that component. The diagrams
+are schematic: their horizontal and vertical positions are not filtration
+parameters. The overview checks compatibility on the cover relations; it does
+not infer a morphism from overlapping supports.
+As with the algebra routines, the input modules are assumed to satisfy their
+own composition laws.
+
+To inspect compatibility along a comparable pair, select a naturality square:
+
+```julia
+OP.visualize(f; kind=:naturality, pair=(1, 4))
+```
+
+The four displayed maps satisfy
+
+```math
+N(p\leq q)\,f_p=f_q\,M(p\leq q).
+```
+
+The two products appear in the same source and target bases, so their comparison
+has a precise meaning. Incomparable or reversed labels have no forward square.
+With rational or finite-field coefficients the equality is exact; a numerical
+field reports the residual and tolerance. A selected square establishes only
+that equation, while the morphism overview checks all cover squares.
+
+### Inspect what the morphism kills and reaches
+
+```julia
+OP.visualize(f; kind=:kernel_image_cokernel, vertex=2)
+```
+
+This request constructs the kernel, image and cokernel modules. It shows their
+spaces over the common poset and the actual maps
+`ker(f) → M`, `im(f) → N`, and `N → coker(f)` at the selected label. These matrices
+use the bases chosen by the algebra routines. The computed modules retain their
+own structure maps; their existence does not assert a direct-sum decomposition.
+Use `OA.visual_spec` when you want to retain the inspectable result before
+rendering or saving it. Matrix display limits cap the figure, not the underlying
+computation.
+
+For a supplied short exact sequence, the analogous view is:
+
+```julia
+ses = OA.short_exact_sequence(inclusion, projection)
+OP.visualize(ses; vertex=2)
+```
+
+The sequence view checks the actual maps afresh, including naturality,
+injectivity, surjectivity, zero composition and equality of the middle image
+and kernel.
+Matching dimensions alone does not prove exactness. An unchecked sequence
+container that fails these conditions is displayed with its failed checks.
+Numerical-field results carry the owner's tolerance-dependent meaning.
+
+### Relate a supplied map to geometric supports
+
+If `enc` retains a supported planar classifier on the **same finite poset
+object** as `f`, use it to interpret both modules on that parameter domain:
+
+```julia
+OP.visualize(f; kind=:morphism_support, encoding=enc, box=([0, 0], [2, 2]))
+```
+
+The panels show the source support, target support, their overlay, and support
+of the image. A zero morphism between nonzero modules has an empty image even where
+the first two supports overlap. Both modules are pulled back along the supplied
+classifier; similar vertex numbers in separately constructed encodings are not
+sufficient. Relate their finite bases explicitly before making this comparison.
+The window clips the drawing, while the classifier retains boundary and domain
+semantics. Unrepresented regions remain distinct from represented zero spaces.
+
+### Choose a Hom map or compare lifts
+
+A computed ordinary Hom space supplies actual morphisms. Select a basis element
+and then inspect it with the same component or square controls:
+
+```julia
+H = OP.hom(M, N)
+OP.visualize(H; basis_index=1, vertex=2)
+```
+
+This choice materializes the Hom basis and uses the coordinate choices made by
+the computation. A basis element is not canonical, and this is ordinary Hom in
+the stated finite-poset category.
+
+For a supplied cochain map `f`, the view follows its differential square in one
+degree. Request the induced cohomology map explicitly when that is your question:
+
+```julia
+OP.visualize(f; kind=:chain_map, degree=0, vertex=2, induced=true)
+```
+
+For a supplied `ModuleCochainHomotopy`, compare its two maps with
+`kind=:homotopy_comparison`. The witness equation is `f-g = d h+h d`, with
+cohomological differentials increasing degree. `induced=true` also computes the
+two cohomology maps in compatible quotient bases. Supplied `induced_maps=(a,b)`
+are checked against that computation rather than accepted on appearance.
+
+A projective resolution has the separate `:resolution_lift` view. Supply its
+`target_resolution`, resolved `morphism`, and coefficient-matrix `lift`, then
+choose `degree` and `vertex`. An optional `comparison_lift` is checked against
+the same module map; `homotopy` supplies the actual homological witness between
+them. Here degree `k` means `P_k`, and `homotopy[k+1]` goes from `P_k` to
+`Q_(k+1)`. The view checks the supplied augmentation and chain equations, displays
+the permitted generator-labelled coefficients and selected stalk maps, and
+states the verified degree range. Generator labels name actual finite-poset
+vertices, not invented geometric grades. A dagger marks a zero forced by the
+order relation; an ordinary `0` is an allowed coefficient that happens to vanish.
+A truncated lift does not certify an uncomputed tail. Different chain-level
+coefficients can induce the same map;
+no uniqueness of lifts is assumed.
+
+All of these views use selections supplied in Julia. Static exports and WGL
+browser figures retain those selections; they do not add live selection
+controls. Their matrices, diagrams and numerical checks can be examined before
+rendering through `OA.visual_spec(...)` and saved with `OP.save_visual(...)`.
+
+## Inspect resolution terms and their maps
+
+A resolution already stores finite algebraic data that can be inspected without
+returning to an input filtration. Its default view is a degree-by-vertex table:
+`visualize(resolution)` counts stored projective or injective summands.
+Use `verify=true` to check exactness, minimality and completion of that prefix.
+For a selected differential, use `kind=:resolution`, `degree`, `summand` and
+`vertex`; its coefficient rows/columns and support panels share summand IDs.
+
+The [resolution guide](tutorials/resolutions.ipynb) develops a diamond example,
+its injective dual, truncation, supplied grades and graded basis changes.
+The [reference](src/reference/visualization.md#resolutions-and-presentation-incidence)
+gives the precise contracts. Grade-plane views require supplied coordinates;
+a finite-poset resolution does not become an ambient multigraded free resolution
+just because it can be drawn in a plane.
+
 ## Choosing a view
 
 | Object and question | Recipe | Effective selections | Scope and work |
 | --- | --- | --- | --- |
 | Finite poset, module, or encoding: what is its order? | `:hasse` | `vertex` or `pair` in finite labels | Actual cover relations in a schematic layout; module inputs add dimensions without querying structure maps |
 | Module or encoding: what space or map did I construct? | `:module_inspector` | `vertex` or `pair`; planar encodings also accept `point`, `parameter_pair`, and `box`; `matrix_limit` | Finite-poset and readout panels, plus actual planar regions when available; a defined pair requests its matrix and rank |
+| Module morphism: how do its components fit together? | `:morphism_inspector`, `:naturality` | `vertex` or `pair`; `matrix_limit` | Shared source/target layout, component matrix, and actual naturality composites |
+| Module morphism: what does it kill or reach? | `:kernel_image_cokernel`, `:morphism_support` | `vertex` for subquotient matrices; `encoding` and `box` for supports | Constructs actual subquotients or pulls supports back through an explicit common classifier |
+| Short exact sequence: do these maps make it exact? | `:exact_sequence` | Optional `vertex`; `matrix_limit` | Fresh checks from the maps, plus selected inclusion, projection and composite |
+| Ordinary Hom space: what does a basis map do? | `:hom_basis` | `basis_index`, `vertex` or `pair`; `matrix_limit` | Materializes the Hom basis and inspects the selected morphism |
+| Supplied cochain map or homotopy: what descends to cohomology? | `:chain_map`, `:homotopy_comparison` | `degree`, `vertex`; opt-in `induced`; `matrix_limit` | Verifies the supplied equations; induced-map computation uses explicit quotient bases |
+| Projective resolution: how does a supplied lift represent a module map? | `:resolution_lift` | `target_resolution`, `morphism`, `lift`; optional comparison/witness; `degree`, `vertex` | Verifies supplied augmented-chain equations and displays actual generator coefficients |
 | Retained finite fringe: how does its matrix produce a space or map? | `:presentation_inspector` | `vertex` or `pair`; supported planar encodings also accept `point`, `parameter_pair`, and `box`; `upset`, `downset`, `matrix_limit`; single-stalk `basis=true` | Support membership, full coefficients and active blocks; optional embedded image basis, or endpoint bases and induced map for a defined pair |
 | Live inspection session: how do these panels describe the same selection? | `:linked_inspector` | Change selections with `select_inspection!` or the live controls | WGLMakie with live Julia; module and retained-presentation views share a selection; use `inspection_snapshot` for static export |
 | Encoding: which region contains a parameter? | `:regions`, `:region_labels`, `:query_overlay` | `box`; `point` or `points` for queries | Two-parameter grid, box, polyhedral, and integer encodings; materializes clipped geometry |
@@ -369,8 +594,9 @@ cycle.bounding_chain.cell_ids
 
 The hole has interval `[0,5)`. Its retained cycle is nonzero in homology at
 birth and remains nonzero before five. At five it becomes the boundary of the
-returned two-dimensional bounding chain. Coefficients are in `F2`; the readout
-shows literal source-cell IDs, dimension-local indices, grades and coefficients.
+returned two-dimensional bounding chain. This example uses the default `F2`.
+With another prime field, the readout names that field and retains its actual
+coefficients. It shows literal source-cell IDs, dimension-local indices, grades and coefficients.
 It shows at most twelve cells per chain with displayed/total counts; the
 accessor and snapshot metadata retain the full chains. These are deterministic
 choices made by the reduction, rather than canonical or geometrically
@@ -475,3 +701,15 @@ API. An optional section provides commands for exploring the same example in
 a live inspection session, with exact point and map selections and a static
 snapshot. The published lesson displays the saved static figures without
 requiring a live Julia session.
+
+
+## Inspect a distance witness
+
+`visualize(witness)` accepts the result of `bottleneck_matching(a, b)` and shows
+its actual pair assignments, aligned barcodes and pair costs. A live
+`inspection_session(a, b)` links those views; ordinary diagrams require an
+explicit `dim`. Repeated intervals retain separate member IDs and essential
+endpoints retain their infinite costs. Start with the
+[distance-witness recipe](tutorials/distance_witness.ipynb) for a small checked
+calculation. The [finite-window matching guide](exact_matching.md#retain-and-inspect-the-witness)
+owns comparison of slices, sampled cost maps and exact optimizer witnesses.

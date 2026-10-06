@@ -36,19 +36,26 @@ UX can stay stable even when no Makie backend is installed.
 module Visualization
 
 using Statistics
+using SparseArrays
 
 import ..ChainComplexes: describe, cohomology_dims, dimensions
 import ..FiniteFringe
 import ..Modules
+import ..AbelianCategories
+import ..DerivedFunctors
+import ..ModuleComplexes
 import ..Results
 import ..CoreModules
 import ..FieldLinAlg
+import ..InvariantCore
 import ..IndicatorResolutions
+import ..IndicatorTypes
 using ..ExactReals: AlgebraicReal
 using ..FiniteFringe: AbstractPoset, ProductOfChainsPoset, GridPoset, ProductPoset, nvertices, leq
 import ..DataTypes
 import ..DataIngestion
 import ..OrdinaryPersistence
+import ..Fibered2D
 using ..EncodingCore: AbstractPLikeEncodingMap, CompiledEncoding, GridEncodingMap,
                       encoding_axes, encoding_map,
                       encoding_representatives, locate
@@ -64,7 +71,7 @@ using ..PLBackend: PLEncodingMapBoxes
 using ..PLPolyhedra: PLEncodingMap
 using ..ZnEncoding: ZnEncodingMap, critical_coordinates
 using ..SliceInvariants: SliceBarcodesResult, slice_barcodes, slice_weights, slice_directions, slice_offsets,
-                         bottleneck_distance
+                         bottleneck_distance, bottleneck_matching
 using ..Fibered2D: FiberedArrangement2D, FiberedBarcodeCache2D, FiberedSliceFamily2D, FiberedSliceResult,
                    ProjectedArrangement, ProjectedBarcodesResult, ProjectedDistancesResult,
                    source_encoding, working_box, direction_representatives, slope_breaks,
@@ -98,11 +105,17 @@ include("visualization/builders_invariants.jl")
 include("visualization/hasse_layout.jl")
 include("visualization/builders_modules.jl")
 include("visualization/builders_presentations.jl")
+include("visualization/builders_morphisms.jl")
+include("visualization/builders_morphism_comparisons.jl")
+include("visualization/builders_resolutions.jl")
+include("visualization/builders_rank_sections.jl")
 include("visualization/builders_slices.jl")
 include("visualization/builders_ingestion.jl")
 include("visualization/inspection_slices.jl")
 include("visualization/inspection_session.jl")
 include("visualization/inspection_intervals.jl")
+include("visualization/builders_matchings.jl")
+include("visualization/inspection_matchings.jl")
 include("visualization/inspection_rendering.jl")
 
 end # module Visualization

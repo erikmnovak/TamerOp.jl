@@ -7,6 +7,118 @@ const _ExactMatchingPoint2D{T} = NTuple{2,T}
 const _ExactMatchingAffine2D{T} = NTuple{3,T}
 const _ExactMatchingBar2D{T} = NTuple{2,_ExactMatchingAffine2D{T}}
 
+"""
+    MatchingDistanceResult2D
+
+Opt-in result of `matching_distance_exact_2d(...; witness=true)`. `describe`
+retains the exact value, scope and attainment status; `matching_witness` returns
+the bottleneck assignment and `slice_query` its line `basepoint + t*direction`.
+The endpoints in the assignment use this same normalized parameter `t`.
+The weight times the bottleneck cost is the exact finite-window distance.
+Zero-width windows have status `:degenerate_window` and no slice or assignment.
+Assignments are deterministic choices; uniqueness is not asserted.
+"""
+struct MatchingDistanceResult2D{T,Q,W,B}
+    exact_distance::T
+    status::Symbol
+    query::Q
+    matching::W
+    box::B
+    normalization::Symbol
+    weight_convention::Symbol
+end
+
+matching_witness(r::MatchingDistanceResult2D) = r.matching
+slice_query(r::MatchingDistanceResult2D) = r.query
+working_box(r::MatchingDistanceResult2D) = r.box
+matching_summary(r::MatchingDistanceResult2D) = (; kind=:matching_distance_result_2d,
+    distance=Float64(r.exact_distance), exact_distance=r.exact_distance, status=r.status,
+    scope=:finite_window, query=r.query, box=r.box, normalization=r.normalization,
+    weight_convention=r.weight_convention, uniqueness=:not_asserted)
+describe(r::MatchingDistanceResult2D) = matching_summary(r)
+Base.show(io::IO, r::MatchingDistanceResult2D) = print(io,
+    "MatchingDistanceResult2D(distance=", r.exact_distance, ", status=", r.status,
+    ", scope=finite_window)")
+
+"""
+    check_matching_result_2d(result; throw=false)
+
+Check the retained line, normalization, assignment and exact weighted cost.
+This checks internal witness consistency; it does not rerun the global optimizer
+or prove that a hand-built result is optimal. Wrap with
+`fibered2d_validation_summary` for a compact validation display.
+"""
+function check_matching_result_2d(r::MatchingDistanceResult2D; throw::Bool=false)
+    issues=String[]
+    try
+        isfinite(r.exact_distance) && r.exact_distance >= 0 || push!(issues,"Distance must be finite and nonnegative.")
+        length(r.box)==2 && all(length(c)==2 && all(isfinite,c) for c in r.box) &&
+            all(r.box[1][i]<=r.box[2][i] for i in 1:2) || push!(issues,"Invalid finite window.")
+        _check_exact_matching_weight(r.normalization,r.weight_convention)
+        if r.status === :degenerate_window
+            r.query === nothing && r.matching === nothing && iszero(r.exact_distance) &&
+                any(r.box[1][i]==r.box[2][i] for i in 1:2) || push!(issues,"Invalid degenerate-window result.")
+        elseif r.status === :attained
+            q,w=r.query,r.matching
+            length(q.direction)==length(q.basepoint)==2 && q.parameter===:normalized_line &&
+                all(>(0),q.direction) && all(isfinite,q.direction) && all(isfinite,q.basepoint) ||
+                push!(issues,"An attained slice requires a finite positive direction and basepoint.")
+            all(r.box[1][i]<r.box[2][i] for i in 1:2) || push!(issues,"Attained status requires a positive-area window.")
+            lower=maximum((r.box[1][i]-q.basepoint[i])/q.direction[i] for i in 1:2)
+            upper=minimum((r.box[2][i]-q.basepoint[i])/q.direction[i] for i in 1:2)
+            lower<=upper || push!(issues,"The witness line misses the comparison window.")
+            (r.normalization === :L1 ? sum(q.direction) : maximum(q.direction)) == 1 ||
+                push!(issues,"Direction is not normalized.")
+            q.weight==minimum(q.direction) && q.weight*w.distance==r.exact_distance ||
+                push!(issues,"Weighted witness cost disagrees with the optimum.")
+            length(w.points_a)==length(w.a_to_b) && length(w.points_b)==length(w.b_to_a) ||
+                push!(issues,"Assignment lengths disagree with interval counts.")
+            owner=getfield(parentmodule(@__MODULE__),:SliceInvariants)
+            cost=zero(r.exact_distance)
+            for (points,indices,other,reverse) in ((w.points_a,w.a_to_b,w.points_b,w.b_to_a),
+                                                  (w.points_b,w.b_to_a,w.points_a,w.a_to_b))
+                for (i,j) in enumerate(indices)
+                    owner._check_bottleneck_interval(points[i])
+                    lower<=points[i][1]<=points[i][2]<=upper || push!(issues,"A witness interval leaves the clipped line window.")
+                    0<=j<=length(other) || throw(ArgumentError("Invalid witness index."))
+                    j==0 || reverse[j]==i || push!(issues,"Assignment maps are not inverse.")
+                    cost=max(cost,j==0 ? owner._diag_cost(points[i]) : owner._linf_dist(points[i],other[j]))
+                end
+            end
+            cost==w.distance || push!(issues,"Pair costs disagree with the bottleneck value.")
+        else
+            push!(issues,"Unknown attainment status.")
+        end
+    catch err
+        err isa InterruptException && rethrow()
+        push!(issues,sprint(showerror,err))
+    end
+    valid=isempty(issues)
+    throw && !valid && _throw_invalid_fibered2d(:check_matching_result_2d,issues)
+    return (;kind=:matching_result_2d,valid,issues)
+end
+
+function _exact_matching_result(arr, value, point, swapped, A, B)
+    normalization = arr.normalize_dirs
+    convention = normalization === :L1 ? :lesnick_l1 : :lesnick_linf
+    box = Tuple.(arr.input_box)
+    point === nothing && return MatchingDistanceResult2D(value,:degenerate_window,
+        nothing,nothing,box,normalization,convention)
+    q,h = point
+    scale = normalization === :L1 ? 1+q : one(q)
+    weight = q/scale
+    direction = swapped ? (q/scale,1/scale) : (1/scale,q/scale)
+    basepoint = swapped ? (h,zero(h)) : (zero(h),h)
+    owner = getfield(parentmodule(@__MODULE__), :SliceInvariants)
+    # Keep exact endpoints and thresholds, including at optimizer switch walls.
+    pa = [(a/weight,b/weight) for (a,b) in A if a < b]
+    pb = [(a/weight,b/weight) for (a,b) in B if a < b]
+    assignment = owner._bottleneck_matching_points(pa,pb)
+    matching = (;assignment...,points_a=pa,points_b=pb)
+    query = (;basepoint,direction,weight,parameter=:normalized_line)
+    return MatchingDistanceResult2D(value,:attained,query,matching,box,normalization,convention)
+end
+
 mutable struct _ExactMatchingBudget2D
     used::Int
     limit::Int
@@ -243,9 +355,10 @@ struct _ExactMatchingWork2D{T<:Real}
     barsN::Vector{_ExactMatchingBar2D{T}}
 end
 
-function _exact_matching_cell_max(work::_ExactMatchingWork2D{T}) where {T}
+function _exact_matching_cell_max(work::_ExactMatchingWork2D{T}; witness::Bool=false) where {T}
     best = zero(T)
-    for p in work.candidates
+    chosen = 0
+    for (index,p) in enumerate(work.candidates)
         # Compactifying the slope chart contributes zero: clipped bars have
         # weighted lifespan at most q times the finite horizontal box width.
         iszero(p[1]) && continue
@@ -255,15 +368,19 @@ function _exact_matching_cell_max(work::_ExactMatchingWork2D{T}) where {T}
         # barcode, without a rounded boundary query. See docs/exact_matching.md.
         A = [(_exact_matching_value(a,p),_exact_matching_value(b,p)) for (a,b) in work.barsM]
         B = [(_exact_matching_value(a,p),_exact_matching_value(b,p)) for (a,b) in work.barsN]
-        best = max(best,_exact_matching_bottleneck(A,B))
+        distance = _exact_matching_bottleneck(A,B)
+        if chosen == 0 || distance > best
+            best,chosen = distance,index
+        end
     end
-    return best
+    return witness ? (best,chosen) : best
 end
 
 function _matching_distance_box_exact_2d(cacheM::FiberedBarcodeCache2D,
                                         cacheN::FiberedBarcodeCache2D;
                                         max_candidates::Int=200_000,
-                                        threads::Bool=false)::Float64
+                                        threads::Bool=false,
+                                        witness::Bool=false)
     arr = cacheM.arrangement
     arr === cacheN.arrangement || throw(ArgumentError("matching_distance_exact_2d: caches must share an arrangement"))
     arr.backend === :boxes && hasproperty(arr.pi,:coords) || throw(ArgumentError(
@@ -283,7 +400,7 @@ function _matching_distance_box_exact_2d(cacheM::FiberedBarcodeCache2D,
     all(isfinite,a) && all(isfinite,b) || throw(ArgumentError(
         "matching_distance_exact_2d requires a finite window"))
     all(a .<= b) || throw(ArgumentError("matching_distance_exact_2d requires ordered window endpoints"))
-    any(a .== b) && return 0.0
+    any(a .== b) && return witness ? _exact_matching_result(arr,zero(eltype(a)),nothing,false,[],[]) : 0.0
     T = eltype(a)
     ax = [T(x) for x in a]
     bx = [T(x) for x in b]
@@ -291,6 +408,7 @@ function _matching_distance_box_exact_2d(cacheM::FiberedBarcodeCache2D,
     ys = _exact_matching_coordinates(arr.pi.coords[2],ax[2],bx[2])
     budget = _ExactMatchingBudget2D(0,max_candidates)
     work = _ExactMatchingWork2D{T}[]
+    charts = Bool[]
     for swapped in (false,true)
         cx,cy = swapped ? (ys,xs) : (xs,ys)
         for poly in _exact_matching_cells(cx,cy,budget)
@@ -298,19 +416,38 @@ function _matching_distance_box_exact_2d(cacheM::FiberedBarcodeCache2D,
             isempty(barsM) && isempty(barsN) && continue
             candidates = _exact_matching_candidates(poly,barsM,barsN,budget)
             push!(work,_ExactMatchingWork2D(candidates,barsM,barsN))
+            witness && push!(charts,swapped)
         end
     end
     # All cache mutation and algebra happens above. Workers own their diagrams
     # and matching graphs, and write only to their deterministic result index.
     maxima = fill(zero(T),length(work))
-    if threads && Threads.nthreads() > 1
-        Threads.@threads for i in eachindex(work)
-            maxima[i] = _exact_matching_cell_max(work[i])
-        end
-    else
-        for i in eachindex(work)
+    chosen = witness ? zeros(Int,length(work)) : Int[]
+    function evaluate(i)
+        if witness
+            maxima[i],chosen[i] = _exact_matching_cell_max(work[i];witness=true)
+        else
             maxima[i] = _exact_matching_cell_max(work[i])
         end
     end
-    return Float64(maximum(maxima;init=zero(T)))
+    if threads && Threads.nthreads() > 1
+        Threads.@threads for i in eachindex(work)
+            evaluate(i)
+        end
+    else
+        for i in eachindex(work)
+            evaluate(i)
+        end
+    end
+    best = maximum(maxima;init=zero(T))
+    witness || return Float64(best)
+    if isempty(work)
+        point = (one(T),(a[2]+b[2]-a[1]-b[1])/2)
+        return _exact_matching_result(arr,best,point,false,NTuple{2,T}[],NTuple{2,T}[])
+    end
+    i = argmax(maxima)
+    p = work[i].candidates[chosen[i]]
+    A = [(_exact_matching_value(a,p),_exact_matching_value(b,p)) for (a,b) in work[i].barsM]
+    B = [(_exact_matching_value(a,p),_exact_matching_value(b,p)) for (a,b) in work[i].barsN]
+    return _exact_matching_result(arr,best,p,charts[i],A,B)
 end

@@ -67,7 +67,7 @@ check sends no signal. Playwright retains a signal fallback if normal teardown
 fails. When `TAMEROP_BROWSER_REUSE_SERVER=1`, teardown leaves the manually
 started server running.
 
-The five scenarios use two loopback addresses. The additional square routes are
+The fixture families use two loopback addresses. The additional square routes are
 constructed when first requested and have independent mathematical sessions:
 
 | Address | Fixture and checks | Style |
@@ -218,3 +218,25 @@ browser zoom are different conditions; evidence for one does not certify the
 others. Record the source revision, browser version, command, and result when
 reporting acceptance. Keep notebook integration, other browsers, and untested
 items from the A41 checklist explicitly separate.
+
+## Anchored rank sections
+
+`rank-sections.spec.mjs` uses an independent two-square session at `/rank-sections` to check both
+anchored directions, the selected matrices, zero composites and incomparable
+points within one fiber. It also checks real pointer selection, hover without
+new algebra, input recovery, narrow layout, view switching, reset and closure.
+The section canvas is additional to the navigation canvas; both remain linked
+to the same Julia selection.
+
+
+For the distance explorer, `matching.spec.mjs` exercises `/matching` and
+`/matching-slices` on the slice server. The first fixture has repeated finite
+intervals, a diagonal assignment and an essential match. The second has two
+endpoint samples of cost one and an exact maximizing slice of cost `5/4`.
+The exact button must change the scope label; sampled and selected values do
+not certify an optimum. Pair selection and hover must leave the mathematical
+query count unchanged. Test telemetry only observes state and plot coordinates.
+The matching scenario opens an independent linked viewer, verifies shared
+selection and disconnect cleanup, and uses keyboard arrows to reach both ends
+of the charts at a narrow viewport. Bonito's reconnect grace is allowed before
+requiring the disconnected viewer to be disposed.

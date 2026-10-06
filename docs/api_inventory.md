@@ -8,6 +8,14 @@ we intend to explain them and what work remains. The
 pass. Completing the other families is not a prerequisite for publishing that
 finished path.
 
+For the complete manual, use the [documentation programme](documentation_plan.md)
+to group reader questions and the [article catalog](article_inventory.toml) to
+locate each canonical reference. Comparison, decomposition, persistence variants
+and visual-session contracts have planned homes within the existing owner-family
+coverage. This subdivision does not reassign bindings or establish that new
+methods exist. Review concrete method families when features land; link related
+topics to one precise contract instead of duplicating signatures and defaults.
+
 ## Reproduce the inventory
 
 Run these commands from the package root in its instantiated environment:

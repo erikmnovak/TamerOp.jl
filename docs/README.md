@@ -1,13 +1,21 @@
 # Build the teaching site
 
 The canonical notebooks are the lessons [the ring](tutorials/ring.ipynb) and
-[inspecting spaces and maps](tutorials/inspect_encoding.ipynb), and the library
-guide [From inputs to computed objects](tutorials/inputs_to_objects.ipynb).
+[inspecting spaces and maps](tutorials/inspect_encoding.ipynb), the library
+guides [From inputs to computed objects](tutorials/inputs_to_objects.ipynb) and
+[Choosing and inspecting resolutions](tutorials/resolutions.ipynb), and the
+recipe [Explain a distance through its matching](tutorials/distance_witness.ipynb).
 One execution of each produces a website page with static figures and a
 downloadable executed notebook containing those same results. Edit the notebook,
 not its generated Markdown. Existing mathematical chapters remain in their current
 tracked locations and are copied into the build according to
 `publication.toml`; they are not independently authored website copies.
+
+The [documentation programme](documentation_plan.md) is the authoring plan for
+the full mathematical, computational and visual scope. It coordinates the five
+main article families, examples, future map views and existing-page migrations.
+Use it with the [article inventory](article_inventory.md) and
+[writing guide](writing.md); a planned record creates no publication route.
 
 ## Prepare the tools
 
@@ -321,8 +329,15 @@ that source is published and labels other destinations as repository links.
 
 The [map design principles](writing.md#preserve-choices-as-the-reading-map-grows)
 govern future additions: equal entry choices, meaningful optional branches,
-finite encodings as the shared destination, and a selective, accessible diagram.
+finite encodings as the shared destination, and accessible overview/focused views.
 Preserve these choices in the rendering as well as the introductory prose.
+
+The [full map plan](documentation_plan.md#one-graph-several-views-complete-mathematical-coverage)
+extends coverage to every published mathematical lesson, including advanced
+chapters, through focused views and a complete linked outline of one graph.
+The current fixed-coordinate renderer does not yet implement that expansion.
+Join article identity, publication availability and learning-route metadata;
+do not maintain independent route graphs for each view or add missing pages.
 
 Arrows suggest next readings. Incoming arrows offer alternative routes,
 not a list of mandatory prerequisites. Keep cycles out of this progression
@@ -346,9 +361,9 @@ map has been scrolled sideways; the linked outline also works without scripts.
 ### Map expansion checklist
 
 1. State the new page's reader question, the knowledge it needs, and the next
-   question it makes meaningful. Decide whether it belongs on the main route,
-   beside a lesson as support, or among the grouped references. Add a diagram
-   card only when it improves a reader's choice.
+   question it makes meaningful. Give each mathematical lesson a node in a
+   focused view and the shared outline; select only orienting junctions for
+   the overview. Supporting setup and references remain separately identified.
 2. Update the canonical source and routes in `reading_map.toml`, together with
    affected lesson endings. Set entry status explicitly: an optional incoming
    arrow must not demote a starting point. Use `display = "support"` for setup
@@ -357,8 +372,8 @@ map has been scrolled sideways; the linked outline also works without scripts.
    with a purposeful label.
 3. Check that both starts retain equal prominence, direct routes remain visible,
    and no new arrow makes setup or an optional treatment look compulsory.
-   Prefer a grouped reference or a focused branch map to crowded cards,
-   crossing connectors, repeated instructions, or smaller text.
+   Prefer a focused branch map to crowded cards, crossing connectors,
+   repeated instructions, or smaller text. Group nonlesson references separately.
 4. Build from the authored sources and run the publication checks. Review the
    actual diagram and outline at desktop and narrow widths, in light and dark
    themes. Check card text and arrow labels for clipping and overlap. Verify
@@ -368,6 +383,12 @@ map has been scrolled sideways; the linked outline also works without scripts.
    prose explains the same choice, including repository destinations. Ask the
    newcomer questions in the writing guide; passing link, cycle, and bounding-box
    checks does not establish that the map communicates the intended choices.
+6. As the expanded route model is implemented, check complete published-lesson
+   coverage against the article catalog, unique identities across views, and
+   agreement of diagram links, accessible outline and local neighborhoods.
+   Keep the knowledge relation separate from suggested reading edges and the
+   topic map. Cover definition-led chapters such as `math_categories`, not
+   only the executed notebook route.
 
 Edit authored Markdown, TOML, styles, and the renderer; generated HTML is an
 output. Keep review evidence in contributor material rather than adding status
@@ -406,9 +427,10 @@ website folding only.
 ## Benchmark result pages
 
 [Benchmark results](benchmarks/index.md) collects completed comparisons, with
-[QPA](benchmarks/qpa.md) for finite-module algebra and
-[PHAT](benchmarks/phat.md) for ordinary barcodes on the expanded medium/large
-workloads. Each report has its own scope,
+[QPA](benchmarks/qpa.md) for finite-module algebra,
+[PHAT](benchmarks/phat.md) for ordinary barcodes on supplied boundary data, and
+[Ripser.py](benchmarks/ripser.md) for Rips barcodes, cocycles and landmark workflows.
+Each report has its own scope,
 versions, machine record, timing tables, figures and compact downloadable data.
 Keep these accounts separate from the mathematical learning path.
 
@@ -505,6 +527,23 @@ notebook-frontend acceptance.
 
 ## Publish on GitHub Pages
 
+As new computational families arrive, publish small coherent groups through
+this existing pipeline. Their article records and API-family backlog can be
+planned first; add routes only after canonical sources are ready. Keep the
+current collections and topic pages, using their generated listings instead of
+adding a sidebar item for every implementation task. A guide, mathematical
+lesson and algorithm account about one feature answer different questions and
+should link to each other without repeating their contents.
+
+With parallel implementation, one integration owner updates shared publication,
+navigation, reading-route and API manifests after the code and examples merge.
+The feature owner supplies the examples and article changes. Regenerate and
+check the site from that integrated tree; a successful build on either feature
+branch does not establish the combined result. Existing-but-unpublished
+sources, such as a newly executed notebook, still need routing and rendered
+review. See the [catalog integration guidance](article_inventory.md#plan-documentation-with-a-computational-addition)
+and [later teaching branches](learning_path.md#teaching-the-next-computational-families).
+
 The [Documentation workflow](../.github/workflows/Documentation.yml) builds and
 checks the site before publishing `main` at
 <https://erikmnovak.github.io/TamerOp.jl/>. Pull requests and other branches
@@ -532,3 +571,24 @@ This publishes the current documentation without versioned `dev` or `stable`
 directories. Release-specific documentation needs a separate versioning policy.
 Generated output and environments stay ignored by Git; public builds need no
 `audit/`, `examples/`, `benchmark/` or sibling-project files.
+
+## Check the resolution guide
+
+`tutorials/resolutions.ipynb` is the canonical usage guide for finite-poset
+resolution tables, selected incidence, support and grade views. Its article
+home is `guide_resolutions`; the precise contracts are in
+`src/reference/visualization.md`, and the shared implementation explanation is
+`implementation/visual_specs.md`. This is a usage guide, not another
+mathematical lesson or a duplicate general plotting manual.
+
+Run its maintained executor against the checkout's documentation environment:
+
+```sh
+julia --startup-file=no --project=docs docs/build_scripts/check_resolution_views.jl --record
+```
+
+The command runs the code cells in order, including independent expected
+multiplicities and equations, and retains actual text/PNG outputs. An optional
+`--gallery=PATH` exports PNG/SVG pairs from those same figure cells for review.
+Article source, execution, site routing and public deployment remain distinct;
+add a route only with the corresponding publication review.

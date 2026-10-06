@@ -23,6 +23,15 @@ julia --project=. test/runtests.jl --file=test_data_pipeline.jl --prefix=A14
 julia --project=. --threads=4 test/runtests.jl --file=test_derived_functors.jl --prefix=A14 --fields=QQ,F3,Real64
 ```
 
+The generalized-rank and GRIL checks use independent canonical-map elimination,
+closed-form support examples, an independent polyhedral distance oracle, and
+redundant-grid refinement. They also execute the maintained example script:
+
+```sh
+julia --project=. test/runtests.jl --file=test_invariants.jl --prefix=A54
+julia --project=. docs/examples/generalized_rank.jl
+```
+
 Repeat `--file` to select several owner files and `--prefix` to select several
 families. Names are case sensitive. Unknown files, arguments, fields and unmatched
 prefixes fail. Prefixes match the runtime testset description, including field
@@ -477,3 +486,209 @@ The [release guide](releasing.md) also covers registration and tagging. The
 release suite does not need the ignored local tutorials or audit drivers; their
 absent tutorial checks remain explicit skips, while self-contained public
 mathematical checks still run.
+
+
+## Persistent cocycle verification
+
+Run the direct cohomology checks with:
+
+```sh
+julia --project=. test/runtests.jl --file=test_ordinary_persistence.jl --prefix=A117
+```
+
+These compare cohomology barcodes with homology and use independent dense
+BigInt modular algebra to check cocycle equations, non-coboundary classes,
+simultaneous bases, restriction maps and failure to extend a dying class.
+Fixtures include signed basis changes, characteristic-dependent cellular
+complexes, implicit flag complexes, exact grades, periodic cubical inputs and
+landmarks whose original vertex indices are not sorted. The tests distinguish
+cochains on selected input simplices from constructed-cell labels and reject
+requests for unsupported cochain lifting through collapse.
+
+The [ordinary persistence guide](ordinary_persistence.md#measuring-a-hole-with-a-cocycle)
+explains the public workflow. A cocycle is not an integer lift, a circular
+coordinate or a cup product; those require separate verification.
+
+### Landmark coverage and weighted-vertex input
+
+Run the focused input checks with:
+
+```sh
+julia --project=. test/runtests.jl --file=test_ordinary_persistence.jl --prefix='Rips inputs:'
+```
+
+These tests check landmark order, ties, coincident points, insertion radii,
+nearest assignments, optional distance retention and the nearest-point distance
+inequality behind the conditional metric bound. Implicit/explicit and encoding
+routes share the same selected input and report its coverage. Weighted-vertex
+examples use independently enumerated simplices and signed boundary matrices;
+independent BigInt linear algebra checks persistence-map ranks over F2, F3 and
+F101. Cochain equations, non-coboundaries and restrictions are checked as well
+as intervals. Negative births, cutoffs, isolated vertices, sparse stored zeros,
+conflicting edges and construction budgets have explicit cases. These checks
+are separate from a comparative Ripser timing study.
+
+
+## Algebra visualization checks
+
+Run the morphism and comparison owners through the package-mode runner:
+
+```sh
+julia --project=. test/runtests.jl --file=test_visualization_a42b.jl --file=test_visualization_a42b_comparisons.jl
+```
+
+The core fixtures check component and naturality matrices over rationals,
+prime fields and a numerical field; nonzero maps with zero composites; empty
+spaces; and the actual kernel/image/cokernel inclusions and projections.
+Two candidate exact sequences have identical dimensions and component ranks,
+but a nonzero composite makes one fail. Rechecking after mutation must not
+reuse a stale exactness claim. Numerical equations straddle declared tolerances.
+Support tests distinguish overlap from the image of a supplied map and reject
+an unrelated classifier with coincidentally matching label numbers.
+
+The comparison fixtures select actual Hom basis morphisms and inspect supplied
+cochain maps, homotopies and projective-resolution lifts. Their oracles compare
+augmentation, chain and homotopy equations and independently known induced
+maps. Malformed witnesses, forbidden generator coefficients, incompatible
+coordinates and unrepresented degrees must fail explicitly.
+
+The native rendering test exercises PNG, SVG, PDF and WGL HTML exports when
+those extensions are available. It checks coefficient strings, zero-space
+matrices and the shared spanned-panel layout. These recipes use static API
+selections; they introduce no new live browser callbacks. Numerical tests and
+successful file creation are supplemented by visual review of the exported
+figures, including grayscale and larger type.
+
+### Resolution tables and incidence
+
+Run the resolution owner and the supplied-lift regression together:
+
+```sh
+julia --project=. test/runtests.jl --file=test_visualization_a42c.jl --file=test_visualization_a42b_comparisons.jl
+```
+
+The diamond's bottom simple has independently predicted projective
+multiplicities `(1,2,1)`; the top simple gives the injective dual. The fixtures
+check their actual degree-by-vertex tables, indicator-resolution parity,
+nonzero differentials and augmented equations over QQ, F2, F3, F5 and a real
+field. One-vertex resolutions with a contractible extra summand distinguish
+exactness from minimality. Zero modules, truncated prefixes, malformed stored
+matrices, nonprincipal supports, order-forbidden coefficients, singular or
+ungraded basis changes, numerical tolerance boundaries and grade-coordinate
+collisions have separate assertions. Cropped incidence must retain a selected
+summand's global label and preserve the full mathematical matrix in metadata.
+
+For native rendering, use an environment with CairoMakie and WGLMakie installed
+and append both `--require-extension=TamerOpCairoMakieExt` and
+`--require-extension=TamerOpWGLMakieExt`. A run that skips optional renderers
+does not establish backend coverage. The owner checks actual axis viewports
+and PNG/SVG/PDF production; the canonical
+[resolution guide](tutorials/resolutions.ipynb) supplies the figures for visual
+review. Execute it with the [maintained notebook check](README.md#check-the-resolution-guide).
+These resolution selections are static Julia arguments; live notebook controls
+and spectral-page views require their own tests.
+
+## Anchored rank sections
+
+`test/test_visualization_a84.jl` checks ordinary pair ranks over QQ, F2, F3,
+F5 and Real64. Its independent oracles include two maps of rank one whose
+composite is zero, a second module with the same stalk dimensions and a
+nonzero composite, and a matrix whose rank changes in characteristic two.
+The square fixtures check actual endpoint dimensions and boundary ranks.
+Exact parameter masks are checked separately from finite-label rank rows:
+incomparable points in one fiber, reversed axes, unrepresented parameters,
+and distinct exact anchors that collapse to the same drawing coordinate.
+Pointer anchors use the exact represented values of their floating coordinates
+for clipping; their original approximate-input status remains visible.
+
+The same file checks bounded live-cache reuse, transactional failures and
+reset/close behavior. With CairoMakie and WGLMakie available it also renders
+static SVGs in both palettes and exercises native Bonito controls. Run that
+optional lane with both extensions required so missing dependencies cannot
+silently substitute a skip for rendering evidence:
+
+```sh
+julia --project=. test/runtests.jl --file=test_visualization_a84.jl \
+  --require-extension=TamerOpCairoMakieExt --require-extension=TamerOpWGLMakieExt
+```
+
+Use an environment containing both backends and the current checkout (the
+browser environment alone may need CairoMakie added). The dependency-free
+mathematical lane can use `--project=.` without extension requirements.
+
+`test/browser/rank-sections.spec.mjs` checks the live square fixture through
+Chromium: both rank directions, rank-one adjacent maps and their zero
+composite, same-fiber incomparability, invalid-input recovery, real pointer
+selection, hover without rank work, narrow layout and closure. Its screenshots
+retain the displayed sections. Run from `test/browser` with the setup and
+environment controls in its [README](../test/browser/README.md):
+
+```sh
+npx playwright test rank-sections.spec.mjs
+```
+
+When reviewing a figure, check that its axes name the varying endpoint and
+its heading identifies both fixed coordinates. The order mask must pass
+through a classifier fiber when the anchor lies inside that fiber. It must
+not inherit the whole finite label's support. White rank-zero regions, gray
+unordered regions and unrepresented regions must remain distinguishable.
+The selected matrix must agree with the rank and both endpoint dimensions;
+a schematic finite-poset drawing must make no ambient-coordinate claim.
+Check that repeated cells do not crowd the rank labels and that selection
+markers leave those labels readable. The native live-view test also checks
+that headings and the legend leave a usable plot viewport. The grayscale
+check keeps every positive-rank shade darker than the no-map mask; review
+small multiples as well as single-anchor figures for this distinction.
+
+
+## Ordinary diagram analysis and saved results (A116)
+
+Run the diagram adapters and the canonical novice notebook with:
+
+```sh
+julia --project=. test/runtests.jl --file=test_ordinary_persistence.jl --prefix=A116
+julia --project=. docs/build_scripts/check_ordinary_analysis.jl
+```
+
+The distance oracle enumerates partial bijections independently, including all
+unused-point diagonal costs. It checks each ground norm, Wasserstein exponents
+and assignment backend, repeated bars, reflected superlevels and separately
+matched essential births. Moderate repeated fixtures exercise the automatic
+auction route. Direct tent, Gaussian, weighted-average and Shannon formulas
+check the features. Extreme exact grades test subtraction before conversion,
+explicit rescaling and rejection of collapsed numerical grids.
+
+Owned-result checks preserve scalar grade types, prime fields, orientation,
+provenance and retained homology/cohomology data. After loading, the independent
+boundary/rank oracles check cycles, death fillings and cocycle restrictions
+against the supplied complexes. Implicit Rips and landmark source indices are
+checked separately. Rejection tests cover schema/version/header disagreement,
+unknown tags, malformed data and unsupported metadata without overwriting a
+pre-existing file. These tests do not claim that loading alone proves source
+chain equations.
+
+The notebook runner executes the actual public-API code cells in source order,
+including their hand-derived answers and save/load checks. `--record` refreshes
+its small text outputs without a plotting or Jupyter runtime dependency. Source
+execution and documentation publication are separate checks.
+
+
+### Matching witnesses and comparisons
+
+Run the focused mathematical/session checks with
+`julia --project=. test/runtests.jl --file=test_visualization_a85.jl`.
+They cover independently calculated diagonal and essential costs, duplicate
+members, exact versus sampled slice values, the interior `5/4` optimum,
+normalization and field parity, rejected-update recovery and lifecycle. Require
+`TamerOpCairoMakieExt` and `TamerOpWGLMakieExt` in a rendering environment to
+include native figures and PNG/SVG/PDF exports. A skipped rendering test is not
+rendering evidence. Use two Julia threads to exercise optimizer parity.
+
+`test/browser/matching.spec.mjs` uses the maintained browser harness. Its two
+scenarios operate the actual controls and canvases: coincident-member cycling,
+diagonal/essential readouts, independent linked viewers and disconnect cleanup,
+invalid input recovery, narrow-screen keyboard scrolling, a sampled value of
+one versus the exact interior optimum `5/4`, reset and close.
+The recipe is canonical in `docs/tutorials/distance_witness.ipynb` and executes
+through the publication workflow; static output does not establish live
+notebook-frontend compatibility.

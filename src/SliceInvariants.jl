@@ -997,13 +997,28 @@ end
 # Wasserstein distance and kernels for 1-parameter barcodes.
 #--------------------------------------------------------------------
 
+# Keep exact endpoint differences until conversion; numerical assignment cannot
+# distinguish a cost rounded to zero or infinity from the corresponding limit.
+function _wasserstein_float_cost(x)
+    y = Float64(x)
+    isfinite(y) && (iszero(x) || y > 0) ||
+        throw(ArgumentError("Wasserstein costs exceed Float64 range; rescale coordinates"))
+    return y
+end
+function _wasserstein_power(x,p)
+    y = x^p
+    isfinite(y) && (iszero(x) || y > 0) ||
+        throw(ArgumentError("powered Wasserstein costs exceed Float64 range; rescale coordinates"))
+    return y
+end
+
 function _point_distance(a::Tuple{<:Real,<:Real}, b::Tuple{<:Real,<:Real}, q::Real)
-    dx = Float64(abs(a[1] - b[1]))
-    dy = Float64(abs(a[2] - b[2]))
+    dx = _wasserstein_float_cost(abs(a[1] - b[1]))
+    dy = _wasserstein_float_cost(abs(a[2] - b[2]))
     if q == Inf
         return max(dx, dy)
     elseif q == 2
-        return sqrt(dx * dx + dy * dy)
+        return hypot(dx, dy)
     elseif q == 1
         return dx + dy
     else
@@ -1012,11 +1027,15 @@ function _point_distance(a::Tuple{<:Real,<:Real}, b::Tuple{<:Real,<:Real}, q::Re
 end
 
 function _diag_distance(a::Tuple{<:Real,<:Real}, q::Real)
-    d = Float64(abs(a[2] - a[1]))
+    d = _wasserstein_float_cost(abs(a[2] - a[1]))
     if q == Inf
-        return d / 2
+        value = d / 2
+        iszero(d) || value > 0 || throw(ArgumentError("diagonal cost underflows Float64; rescale coordinates"))
+        return value
     elseif q == 2
-        return d / sqrt(2)
+        value = d / sqrt(2)
+        iszero(d) || value > 0 || throw(ArgumentError("diagonal cost underflows Float64; rescale coordinates"))
+        return value
     elseif q == 1
         return d
     else
@@ -1141,7 +1160,7 @@ function _auction_assignment(P::AbstractVector{<:Tuple},
                              Q::AbstractVector{<:Tuple};
                              p::Real=2, q::Real=Inf,
                              eps_factor::Real=5.0,
-                             eps_min::Real=1e-6,
+                             eps_min::Real=1e-12,
                              max_iters::Int=0)
     m = length(P)
     n = length(Q)
@@ -1170,31 +1189,25 @@ function _auction_assignment(P::AbstractVector{<:Tuple},
     end
     max_cost == 0.0 && return zeros(Int, N), 0.0
 
-    epsilon = max_cost / 4
-    eps_min = max(eps_min, max_cost * 1e-9)
-
-    prices = zeros(Float64, N)
-    owner = zeros(Int, N)   # item -> bidder
-    assign = zeros(Int, N)  # bidder -> item
-
-    max_iters == 0 && (max_iters = 10 * N * N)
-
-    # Even sub-tolerance diagrams need one assignment pass. Otherwise small
-    # positive exact-coordinate costs leave every assignment equal to zero.
-    first_phase = true
-    while first_phase || epsilon > eps_min
-        first_phase = false
-        unassigned = Int[]
-        for i in 1:N
-            if assign[i] == 0
-                push!(unassigned, i)
-            end
-        end
+    # Scale powered costs to avoid overflow in prices; eps_min is relative to
+    # the largest cost. Every phase must reconsider ALL bidders, retaining only
+    # prices. Keeping the previous complete assignment skips epsilon refinement.
+    epsilon = 0.25
+    eps_min = max(Float64(eps_min),eps(Float64))
+    prices = zeros(Float64,N)
+    owner = zeros(Int,N)
+    assign = zeros(Int,N)
+    max_iters == 0 && (max_iters = max(100,50*N*N))
+    while true
+        fill!(owner,0)
+        fill!(assign,0)
+        prices .-= minimum(prices)
+        unassigned = collect(1:N)
 
         iters = 0
         while !isempty(unassigned)
             iters += 1
-            iters > max_iters && break
+            iters > max_iters && throw(ArgumentError("Wasserstein auction did not converge; use backend=:hungarian"))
 
             i = pop!(unassigned)
             best = 0
@@ -1202,7 +1215,7 @@ function _auction_assignment(P::AbstractVector{<:Tuple},
             min2 = Inf
 
             @inbounds for j in 1:N
-                c = _wasserstein_cost(i, j, P, Q, m, n, diagP, diagQ, q, p) + prices[j]
+                c = _wasserstein_cost(i, j, P, Q, m, n, diagP, diagQ, q, p)/max_cost + prices[j]
                 if c < min1
                     min2 = min1
                     min1 = c
@@ -1225,7 +1238,8 @@ function _auction_assignment(P::AbstractVector{<:Tuple},
             end
         end
 
-        epsilon /= eps_factor
+        epsilon <= eps_min && break
+        epsilon = max(eps_min,epsilon/eps_factor)
     end
 
     total = 0.0
@@ -1243,14 +1257,43 @@ Compute the p-Wasserstein distance between two 1-parameter barcodes (persistence
 `backend` options:
 - `:auto`     (default): Hungarian for small diagrams, auction for larger ones
 - `:hungarian`: always use Hungarian assignment
-- `:auction`  : use auction algorithm with epsilon-scaling
+- `:auction`  : use auction algorithm with epsilon-scaling, to relative
+  powered-cost tolerance 1e-12; nonconvergence raises an error.
+
+Essential intervals must have finite births and death `Inf`. Equal essential
+counts are matched by sorted births; unequal counts give `Inf`. `p=Inf`
+selects bottleneck and requires `q=Inf`. Finite powered costs that overflow or
+underflow Float64 are rejected rather than mistaken for infinite/zero costs.
 """
 function _wasserstein_distance_points(
     P::AbstractVector{<:Tuple},
     Q::AbstractVector{<:Tuple};
     p::Real=2, q::Real=Inf, backend::Symbol=:auto,
 )
-    p >= 1 || error("wasserstein_distance: expected p >= 1")
+    p >= 1 && !isnan(p) || throw(ArgumentError("wasserstein_distance: expected p >= 1"))
+    q in (1,2,Inf) || throw(ArgumentError("wasserstein_distance: q must be 1, 2, or Inf"))
+    backend in (:auto,:hungarian,:auction) || throw(ArgumentError("invalid Wasserstein backend"))
+    for (b,d) in Iterators.flatten((P,Q))
+        isfinite(b) && !isnan(d) && b <= d || throw(ArgumentError("Wasserstein intervals need finite births and ordered, non-NaN deaths"))
+    end
+    if isinf(p)
+        q == Inf || throw(ArgumentError("p=Inf requires q=Inf"))
+        return bottleneck_distance(P,Q)
+    end
+    ep = sort!([x[1] for x in P if !isfinite(x[2])])
+    eq = sort!([x[1] for x in Q if !isfinite(x[2])])
+    if !isempty(ep) || !isempty(eq)
+        length(ep) == length(eq) || return Inf
+        # Monotone matching minimizes convex p-costs between essential births.
+        ecost = sum((_wasserstein_power(_wasserstein_float_cost(abs(a-b)),p) for (a,b) in zip(ep,eq));init=0.0)
+        finite = _wasserstein_distance_points(filter(x->isfinite(x[2]),P),filter(x->isfinite(x[2]),Q);p,q,backend)
+        total = _wasserstein_power(finite,p)+ecost
+        isfinite(total) || throw(ArgumentError("Wasserstein sum exceeds Float64 range; rescale coordinates"))
+        return total^(1/p)
+    end
+    # Validate powered costs for both solvers, including the auction route.
+    for x in P, y in Q; _wasserstein_power(_point_distance(x,y,q),p); end
+    for x in Iterators.flatten((P,Q)); _wasserstein_power(_diag_distance(x,q),p); end
 
     m = length(P)
     n = length(Q)
@@ -1279,9 +1322,11 @@ function _wasserstein_distance_points(
         end
 
         _, cost = _hungarian(C)
+        isfinite(cost) || throw(ArgumentError("Wasserstein sum exceeds Float64 range; rescale coordinates"))
         return cost^(1 / p)
     elseif backend == :auction || backend == :auto
         _, cost = _auction_assignment(P, Q; p=p, q=q)
+        isfinite(cost) || throw(ArgumentError("Wasserstein sum exceeds Float64 range; rescale coordinates"))
         return cost^(1 / p)
     else
         error("wasserstein_distance: unknown backend=$(backend)")
@@ -1883,8 +1928,10 @@ end
 # two essential bars match at the difference of their finite birth times.
 @inline function _linf_dist(p::Tuple{<:Real,<:Real}, q::Tuple{<:Real,<:Real})
     z = zero(p[1])
-    return max(p[1] == q[1] ? z : (!isfinite(p[1]) || !isfinite(q[1])) ? Inf : abs(p[1] - q[1]),
-               p[2] == q[2] ? z : (!isfinite(p[2]) || !isfinite(q[2])) ? Inf : abs(p[2] - q[2]))
+    dx = p[1] == q[1] ? z : (!isfinite(p[1]) || !isfinite(q[1])) ? Inf : abs(p[1] - q[1])
+    dy = p[2] == q[2] ? z : (!isfinite(p[2]) || !isfinite(q[2])) ? Inf : abs(p[2] - q[2])
+    # max(QQ, Inf) promotes to BigFloat; retain the exact/sentinel union.
+    return dx >= dy ? dx : dy
 end
 
 @inline _bottleneck_cost_endpoint(::Type{T}, x::Real) where {T<:Real} = T(x)

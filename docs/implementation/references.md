@@ -54,3 +54,37 @@ available algorithms. Lifting through powers of one prime differs from
 TamerOp's local independent-prime CRT route. This entry does not claim a
 local Dixon implementation.
 [Use in the coordinate account](qq_coordinates.md#when-the-modular-route-is-selected).
+
+## Generalized rank
+
+Woojin Kim and Facundo Mémoli. **Generalized Persistence Diagrams for
+Persistence Modules over Posets.** *Journal of Applied and Computational
+Topology* **5**, 533–581, 2021.
+[DOI: 10.1007/s41468-021-00075-1](https://doi.org/10.1007/s41468-021-00075-1).
+
+**Role:** the mathematical limit-to-colimit rank and generalized persistence
+diagram framework. TamerOp constructs finite constraint and relation matrices
+locally, and limits signed reconstruction to the caller's declared family.
+
+## Generalized-rank invariant landscapes
+
+Cheng Xin, Soham Mukherjee, Shreyas N. Samaga, and Tamal K. Dey.
+**GRIL: A 2-parameter Persistence Based Vectorization for Machine Learning.**
+*Proceedings of Machine Learning Research* **221**, 2023.
+[Paper and proceedings record](https://proceedings.mlr.press/v221/xin23a.html).
+
+**Role:** the continuous worm and landscape definition. TamerOp's supported-grid
+implementation contracts constant fibers and searches exact critical widths;
+it does not reuse the paper's filtration-level zigzag implementation.
+
+## Bigraded Betti numbers and presentation diagrams
+
+The RIVET developers. **Mathematical preliminaries**, RIVET documentation.
+[Invariant definitions](https://rivet.readthedocs.io/en/latest/preliminaries.html#invariants-of-a-bipersistence-module).
+
+**Role:** mathematical and visualization context for minimal multigraded free
+resolutions and their Betti numbers. The finite-poset resolution views use
+TamerOp's own stored projective/injective terms and verification algorithms;
+supplied grade coordinates alone do not identify those terms with an ambient
+free resolution. No RIVET algorithm or code is used by the renderer.
+[Use in the visual-specification account](visual_specs.md#resolve-storage-conventions-before-drawing-an-arrow).

@@ -4583,7 +4583,7 @@ end
             @test getfield(H, :_Cx) !== nothing
             @test norm(H.K * H.Cx - H.B) <= numerical.atol
             @test FL.rank(numerical, CC.coordinates(H, [1.0, 0.0, 0.0])) == 1
-            @test CC.coordinates(H, CC.basis(H)) ≈ ones(1, 1)
+            @test isapprox(CC.coordinates(H, CC.basis(H)), ones(1, 1))
         else
             @test_throws ErrorException CC.cohomology_data(C, 1)
         end
@@ -4756,7 +4756,7 @@ end
     u = QQ[1, 2, -1, 3]
     v = QQ[1//2, -1//3, 2//5, 1//7]
     gauge = Matrix{QQ}(I, 4, 4) + u * transpose(v)
-    @test 1 + dot(v, u) != 0 # exact Sherman–Morrison invertibility condition
+    @test 1 + dot(v, u) != 0 # exact Sherman-Morrison invertibility condition
     Z = graph * gauge
     B = Z[:, [2, 4]]
     reps = Z[:, [1, 3]]
@@ -4905,7 +4905,7 @@ end
     Zreal = reshape([1.0, 0.0], 2, 1)
     for build in builders
         H = build(Float64, 0, 2, Zreal, zeros(2, 0); field=numerical)
-        @test CC.coordinates(H, [2.0, 1e-10]) ≈ reshape([2.0], 1, 1)
+        @test isapprox(CC.coordinates(H, [2.0, 1e-10]), reshape([2.0], 1, 1))
         @test_throws ErrorException CC.coordinates(H, [2.0, 1e-5])
         @test getfield(H, :_checked_coord_plan) === nothing
     end

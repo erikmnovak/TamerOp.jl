@@ -58,7 +58,7 @@ function _inspection_slice_snapshot(spec, result, interval)
     view = _inspection_slice_view(result, interval)
     panels = VisualizationSpec[]
     for panel in spec.panels
-        if panel.kind in (:regions, :region_labels, :query_overlay) && length(view.line_points) == 2
+        if panel.kind in (:regions, :region_labels, :query_overlay, :rank_section_plane) && length(view.line_points) == 2
             a, b = view.line_points
             layers = copy(panel.layers)
             push!(layers, SegmentLayer([(a[1],a[2],b[1],b[2])], _VisualRole(:foreground), 0.9, 2.0, :dash))
@@ -86,8 +86,12 @@ function _inspection_slice_snapshot(spec, result, interval)
         " Results are restricted to the viewing box; window endpoints are censored."
     subtitle = spec.subtitle * "\nSlice: " * line_label * scope_label
     interval === nothing || (subtitle *= "\nSelected " * _inspection_slice_record_label(result.intervals[interval]))
+    layout = haskey(spec.metadata, :panel_positions) ?
+        (; panel_positions=[((1+div(i-1,2)):(1+div(i-1,2)),
+            (1+mod(i-1,2)):(1+mod(i-1,2))) for i in eachindex(panels)],
+           panel_row_weights=fill(450, cld(length(panels),2))) : NamedTuple()
     return VisualizationSpec(spec.kind; title=spec.title, subtitle, panels,
         axes=spec.axes, legend=spec.legend, interaction=spec.interaction,
-        metadata=merge(spec.metadata, (; slice_result=result, slice_view=view,
+        metadata=merge(spec.metadata, layout, (; slice_result=result, slice_view=view,
             panel_columns=2, figure_size=(1800,max(1100,450*cld(length(panels),2))))))
 end

@@ -236,7 +236,10 @@ Each matrix entry gives the appearance value of a square. At parameter `0`,
 the eight outer squares form a ring. At parameter `5`, the central square
 fills its hole. The interval `[0,5)` records that one-dimensional homology class.
 Here `dim=1` asks about holes; `dim=0` asks about connected components. Ordinary
-persistence currently computes over the two-element field, F₂.
+persistence defaults to the two-element field, F₂. Prime fields such as
+F₃ and F₁₀₁ are also supported; see [choosing coefficients](https://tamerop.com/ordinary_persistence.html#choosing-coefficients).
+For computations that need more than endpoints, opt in to
+[cycles or scale-specific cocycles](https://tamerop.com/ordinary_persistence.html#measuring-a-hole-with-a-cocycle).
 
 There is also one connected component that never dies:
 
@@ -494,6 +497,13 @@ barcodes on 48 medium/large inputs across sixteen structural variants.
 TamerOp **1.33× as fast in the balanced aggregate** for construction plus complete barcode; all 48 medium/large requests completed correctly in both tools. The report includes variant-by-variant scaling curves and the
 machine, verification and measurement details.
 
+The [Ripser.py report](https://tamerop.com/benchmarks/ripser.html) covers Rips
+barcodes, retained cocycles and landmark workflows across 37 requests. The
+1,024-point circle takes **7.01 seconds versus 30.4 seconds**; larger planar
+computations also favor TamerOp, while small-landmark and small-control results
+are mixed. The report separates development from reserved evaluation cases and
+includes all timings, paired-pass ranges and verification details.
+
 For measuring or improving performance, use the [benchmarking manual](https://tamerop.com/contributing/benchmarking.html).
 It separates compilation from uncached computation and reuse, explains fair
 comparisons with other tools, and describes how to preserve reproducible evidence.
@@ -505,7 +515,7 @@ adapters are optional packages activated by explicit imports, for example
 `using TamerOp, CairoMakie` after installing CairoMakie in your environment.
 See [optional integrations](https://tamerop.com/guides/optional_integrations.html) for installation,
 backend selection and export instructions, and
-[ordinary persistence](https://tamerop.com/ordinary_persistence.html) for exact F₂ barcodes,
+[ordinary persistence](https://tamerop.com/ordinary_persistence.html) for prime-field barcodes with exact stored endpoints,
 sublevel/superlevel intervals and periodic cubical examples.
 
 ## Mathematical scope and provenance
@@ -564,7 +574,7 @@ For finite point clouds in one or two ambient dimensions:
 - `FunctionDelaunayFiltration(vertex_values=...)` implements the incremental
   Delaunay-Cech model of function-sublevel offsets, including insertion cofaces.
   Its grades use minimum enclosing-ball radii. Exact cocircular insertion
-  degeneracies are currently rejected explicitly; collinear clouds are supported.
+  degeneracies are rejected explicitly; collinear clouds are supported.
 - `CoreFiltration(beta=1.0, k_values=nothing)` constructs the Cech nerve of
   nearest-neighbor core balls. `CoreDelaunayFiltration(...)` restricts those
   balls to full-cloud Voronoi cells, including full cocircular intersections.

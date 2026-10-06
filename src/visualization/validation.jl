@@ -37,6 +37,38 @@ function check_visual_spec(spec::VisualizationSpec; throw::Bool=false)
         push!(issues, "A matrix panel must contain exactly one MatrixLayer and no other layers.")
     get(spec.metadata, :panel_style, nothing) === :matrix && matrix_layers != 1 &&
         push!(issues, "A matrix panel requires one MatrixLayer.")
+    positions = get(spec.metadata, :panel_positions, nothing)
+    valid_positions = false
+    if haskey(spec.metadata, :panel_positions)
+        if isempty(spec.panels)
+            push!(issues, "panel_positions requires child panels.")
+        elseif !(positions isa AbstractVector && length(positions) == length(spec.panels))
+            push!(issues, "panel_positions must contain one (rowrange, columnrange) tuple per panel.")
+        elseif !all(position -> position isa Tuple && length(position) == 2 &&
+                    all(r -> r isa UnitRange{Int} && !isempty(r) && first(r) > 0, position), positions)
+            push!(issues, "panel_positions must use nonempty, positive UnitRange{Int} row and column ranges.")
+        else
+            valid_positions = true
+            # Compare interval endpoints without enumerating large spans.
+            for j in eachindex(positions), i in firstindex(positions):(j - 1)
+                a, b = positions[i], positions[j]
+                overlap = all(k -> max(first(a[k]), first(b[k])) <= min(last(a[k]), last(b[k])), 1:2)
+                overlap && push!(issues, "panel_positions for panels $i and $j overlap.")
+            end
+        end
+    end
+    if haskey(spec.metadata, :panel_row_weights)
+        weights = spec.metadata.panel_row_weights
+        haskey(spec.metadata, :panel_positions) ||
+            push!(issues, "panel_row_weights requires panel_positions.")
+        if !(weights isa AbstractVector && !isempty(weights) &&
+             all(w -> w isa Real && !(w isa Bool) && isfinite(w) && w > 0 &&
+                      isfinite(Float64(w)) && Float64(w) > 0, weights))
+            push!(issues, "panel_row_weights must be a vector of positive finite real numbers.")
+        elseif valid_positions && length(weights) != maximum(position -> last(position[1]), positions)
+            push!(issues, "panel_row_weights must contain one weight per layout row.")
+        end
+    end
     for (idx, layer) in enumerate(spec.layers)
         if layer isa HeatmapLayer
             xok = size(layer.values, 2) == length(layer.x) || size(layer.values, 2) + 1 == length(layer.x)
@@ -242,6 +274,12 @@ _visual_request_keywords(obj::DataTypes.ImageNd, kind::Symbol) =
         (:view_dims, :slice_indices, :colormap, :colorrange, :colorbar_label, :title)
 
 function _visual_request_cost(obj, kind::Symbol)
+    if kind === :rank_section
+        return (; work=:one_rank_row_or_column_per_distinct_anchor_label,
+            all_pairs_table=false, selected_matrices=:selected_pair_only,
+            cache_reuse=:within_call_or_bounded_inspection_session,
+            lazy_encoding=:rank_queries_may_materialize, timing=:not_measured)
+    end
     if kind === :presentation_inspector
         return (; work=:selected_presentation_fibers, timing=:not_measured,
             cache_reuse=:none, default=:supports_and_coefficients_without_ranks,

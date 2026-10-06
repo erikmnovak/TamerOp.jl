@@ -962,22 +962,49 @@ struct GradedFiltration <: AbstractFiltration end
 struct RipsFiltration{P<:NamedTuple} <: AbstractFiltration
     params::P
 end
-RipsFiltration(; max_dim::Int=1,
-               radius::Union{Nothing,Real}=nothing,
-               knn::Union{Nothing,Int}=nothing,
-               n_landmarks::Union{Nothing,Int}=nothing,
-               nn_backend::Symbol=:auto,
-               nn_approx_candidates::Int=0,
-               construction::ConstructionOptions=ConstructionOptions()) =
-    RipsFiltration((;
-        max_dim,
-        radius = radius === nothing ? nothing : Float64(radius),
-        knn,
-        n_landmarks,
-        nn_backend,
-        nn_approx_candidates,
-        construction,
-    ))
+function _validate_rips_params(p::NamedTuple)
+    d = get(p, :max_dim, 1)
+    d isa Integer && !(d isa Bool) && 0 <= d < typemax(Int) - 1 ||
+        throw(ArgumentError("RipsFiltration max_dim is a nonnegative simplex dimension fitting Int, not a homology degree."))
+    radius = get(p, :radius, nothing)
+    if radius !== nothing
+        radius isa Real && !(radius isa Bool) && radius >= 0 &&
+            (!isfinite(radius) || isfinite(Float64(radius))) ||
+            throw(ArgumentError("RipsFiltration radius must be nonnegative and representable as Float64 (or +Inf for no cutoff)."))
+    end
+    k = get(p, :knn, nothing)
+    (k === nothing || (k isa Integer && !(k isa Bool) && 0 < k <= typemax(Int))) ||
+        throw(ArgumentError("RipsFiltration knn must be a positive integer or nothing."))
+    return nothing
+end
+
+"""
+    RipsFiltration(; max_dim=1, radius=nothing, construction=ConstructionOptions(), ...)
+
+Build the flag filtration whose simplex value is its largest edge distance.
+`max_dim` is the largest simplex dimension constructed: edges need 1, triangles
+need 2. Ordinary H_q deaths require construction through dimension q+1.
+`radius` is an inclusive distance cutoff, not a ball radius to be doubled.
+
+Dense distance matrices use all finite entries. Sparse matrices use only stored
+edges: missing entries are absent, whereas stored zero distances are genuine
+edges. Supply either triangle or consistent mirrored entries; the matrix size
+retains isolated vertices. Positive infinity denotes absence. Distances and
+grades use Float64; symmetry and nonnegativity have tolerance 1e-10.
+No triangle-inequality certification is performed. Budgets limit construction
+and throw on exhaustion; they never silently discard simplices.
+"""
+function RipsFiltration(; max_dim=1,
+                         radius::Union{Nothing,Real}=nothing,
+                         knn::Union{Nothing,Int}=nothing,
+                         n_landmarks::Union{Nothing,Int}=nothing,
+                         nn_backend::Symbol=:auto,
+                         nn_approx_candidates::Int=0,
+                         construction::ConstructionOptions=ConstructionOptions())
+    p = (; max_dim, radius, knn, n_landmarks, nn_backend, nn_approx_candidates, construction)
+    _validate_rips_params(p)
+    return RipsFiltration(merge(p, (; max_dim=Int(max_dim), radius=radius === nothing ? nothing : Float64(radius))))
+end
 
 struct RipsDensityFiltration{P<:NamedTuple} <: AbstractFiltration
     params::P
@@ -1115,9 +1142,31 @@ CliqueLowerStarFiltration(; max_dim::Int=2,
 struct EdgeWeightedFiltration{P<:NamedTuple} <: AbstractFiltration
     params::P
 end
-EdgeWeightedFiltration(; edge_weights,
-                        construction::ConstructionOptions=ConstructionOptions()) =
-    EdgeWeightedFiltration((; edge_weights, construction))
+"""
+    EdgeWeightedFiltration(; vertex_births=nothing, edge_weights=nothing,
+                            max_dim=1, threshold=nothing, construction=ConstructionOptions())
+
+A filtered graph, optionally filled into its flag (clique) complex through
+`max_dim`. On `GraphData`, vertices default to birth zero; supply `vertex_births`
+for other values and use the graph's `weights` or `edge_weights` for edge births.
+On matrix input the diagonal gives vertex births and off-diagonal entries give
+edge births. Dense matrices must be symmetric. Sparse input may store either
+triangle: omitted off-diagonal entries are absent edges, stored zeros are edges,
+and an omitted diagonal means birth zero. Conflicting mirrors are rejected.
+
+Every edge must appear at or after both endpoints. A clique is born at the
+largest birth of its vertices and edges. Negative births are allowed. Finite
+values use Float64; +Inf denotes an absent edge. `threshold` includes only cells
+born at or before that value, including removal of later vertices. Ordinary
+H_q deaths require `max_dim >= q+1`. The default `max_dim=1` keeps a graph.
+This is a filtration-value interface, distinct from a metric distance matrix.
+"""
+function EdgeWeightedFiltration(; edge_weights=nothing, vertex_births=nothing,
+        max_dim=1, threshold=nothing, construction::ConstructionOptions=ConstructionOptions())
+    p = (;edge_weights,vertex_births,max_dim,threshold,construction)
+    _validate_weighted_params(p)
+    return EdgeWeightedFiltration(p)
+end
 
 struct GraphCentralityFiltration{P<:NamedTuple} <: AbstractFiltration
     params::P
@@ -1763,6 +1812,7 @@ function _validate_collapse_spec(spec::FiltrationSpec)
 end
 
 function _validate_construction_request(data, spec::FiltrationSpec)
+    spec.kind === :rips && _validate_rips_params(spec.params)
     construction = _construction_from_params(spec.params)
     if construction.sparsify !== :none && spec.kind in _BUILTIN_FILTRATION_KINDS
         supported = if data isa PointCloud
@@ -1770,15 +1820,16 @@ function _validate_construction_request(data, spec::FiltrationSpec)
              !(spec.kind === :landmark_rips && construction.sparsify === :greedy_perm)) ||
                 (spec.kind in (:alpha, :delaunay_lower_star) && construction.sparsify === :greedy_perm)
         else
-            data isa AbstractMatrix{<:Real} && spec.kind === :rips &&
-                construction.sparsify in (:knn, :radius)
+            data isa AbstractMatrix{<:Real} && spec.kind in (:rips,:landmark_rips) &&
+                (construction.sparsify in (:knn, :radius) ||
+                 (spec.kind === :rips && !issparse(data) && construction.sparsify === :greedy_perm))
         end
         supported || throw(ArgumentError(
             "construction.sparsify=$(construction.sparsify) is unsupported for $(_ingestion_data_kind(data)) with filtration kind=$(spec.kind)."))
     end
     _validate_collapse_spec(spec)
     construction.collapse == :none && return nothing
-    (data isa PointCloud || (data isa AbstractMatrix{<:Real} && spec.kind == :rips)) ||
+    (data isa PointCloud || (data isa AbstractMatrix{<:Real} && spec.kind in (:rips,:landmark_rips))) ||
         throw(ArgumentError("collapse=:dominated_edges supports point-cloud or distance-matrix Rips input, not $(_ingestion_data_kind(data))."))
     return nothing
 end
@@ -2147,6 +2198,7 @@ function _filtration_spec(::GradedFiltration)
 end
 
 function _filtration_spec(f::RipsFiltration)
+    _validate_rips_params(f.params)
     p = _params_with_nonnothing(f.params)
     return FiltrationSpec(; kind=:rips, p...)
 end
@@ -2389,8 +2441,8 @@ function to_filtration(spec::FiltrationSpec)::AbstractFiltration
         )
     elseif k === :edge_weighted
         edge_weights = get(p, :edge_weights, nothing)
-        edge_weights === nothing && error("to_filtration: edge_weighted requires edge_weights.")
-        return EdgeWeightedFiltration(; edge_weights=edge_weights, construction=construction)
+        return EdgeWeightedFiltration(; edge_weights, vertex_births=get(p,:vertex_births,nothing),
+            max_dim=get(p,:max_dim,1), threshold=get(p,:threshold,nothing), construction)
     elseif k === :graph_centrality
         return GraphCentralityFiltration(;
             centrality = get(p, :centrality, :degree),
@@ -2806,33 +2858,7 @@ function _construction_precheck_combination_candidates!(n::Int,
 end
 
 function _greedy_perm_indices(points::AbstractVector{<:AbstractVector{<:Real}}, m::Int)
-    n = length(points)
-    n == 0 && return Int[]
-    m = max(1, min(n, m))
-    chosen = Int[1]
-    min_d = fill(Inf, n)
-    for i in 1:n
-        min_d[i] = _euclidean_distance(points[i], points[1])
-    end
-    min_d[1] = 0.0
-    while length(chosen) < m
-        best = 1
-        bestd = -Inf
-        for i in 1:n
-            di = min_d[i]
-            if di > bestd
-                bestd = di
-                best = i
-            end
-        end
-        push!(chosen, best)
-        for i in 1:n
-            d = _euclidean_distance(points[i], points[best])
-            d < min_d[i] && (min_d[i] = d)
-        end
-        min_d[best] = 0.0
-    end
-    return sort(unique(chosen))
+    return landmark_indices(select_landmarks(PointCloud(points);count=m))
 end
 
 function _point_cloud_sparsify_edge_driven(points::AbstractVector{<:AbstractVector{<:Real}},
@@ -2852,6 +2878,11 @@ function _point_cloud_sparsify_edge_driven(points::AbstractVector{<:AbstractVect
         k = Int(get(spec.params, :knn, 8))
         k > 0 || error("construction.sparsify=:knn requires knn > 0.")
         edges, dists, kdist = _point_cloud_knn_graph(points, k; backend=backend, approx_candidates=approx_candidates)
+        radius = get(spec.params, :radius, nothing)
+        if radius !== nothing
+            keep = findall(d -> d <= radius, dists)
+            edges, dists = edges[keep], dists[keep]
+        end
         _construction_cap_edges!(edges, spec)
         return edges, dists, kdist
     end
@@ -2875,6 +2906,11 @@ function _point_cloud_sparsify_edge_driven(points::AbstractMatrix{<:Real},
         k = Int(get(spec.params, :knn, 8))
         k > 0 || error("construction.sparsify=:knn requires knn > 0.")
         edges, dists, kdist = _point_cloud_knn_graph(points, k; backend=backend, approx_candidates=approx_candidates)
+        radius = get(spec.params, :radius, nothing)
+        if radius !== nothing
+            keep = findall(d -> d <= radius, dists)
+            edges, dists = edges[keep], dists[keep]
+        end
         _construction_cap_edges!(edges, spec)
         return edges, dists, kdist
     end
@@ -3043,7 +3079,8 @@ function _estimate_graph_cell_counts(data::GraphData,
     n = data.n
     m = length(data.edges)
     kind = spec.kind
-    if kind == :graph_lower_star || kind == :edge_weighted || kind == :graph_core ||
+    kind === :edge_weighted && return _estimate_weighted_flag_counts(data,spec;warnings,strict)
+    if kind == :graph_lower_star || kind == :graph_core ||
        kind == :graph_centrality || kind == :graph_geodesic || kind == :graph_function_geodesic_bifiltration
         lift = Symbol(get(spec.params, :lift, :lower_star))
         if lift == :clique
@@ -3168,6 +3205,8 @@ function _estimate_cell_counts(data, spec::FiltrationSpec;
                                                exact_pairwise_limit=exact_pairwise_limit,
                                                warnings=warnings,
                                                strict=strict)
+    elseif data isa AbstractMatrix{<:Real}
+        return _estimate_distance_matrix_cell_counts(data, spec; warnings, strict)
     elseif data isa GraphData
         return _estimate_graph_cell_counts(data, spec; warnings=warnings, strict=strict)
     elseif data isa ImageNd
@@ -9538,216 +9577,9 @@ function _graph_centrality_values(data::GraphData, spec::FiltrationSpec)
     throw(ArgumentError("Unsupported centrality=$(cent). Supported: :degree, :closeness, :betweenness, :pagerank, :eigenvector"))
 end
 
-function _validate_distance_matrix(data::AbstractMatrix{<:Real};
-                                   symmetry_tol::Real=1.0e-10)
-    size(data, 1) == size(data, 2) ||
-        throw(ArgumentError("distance-matrix Rips ingestion expects a square matrix; got size $(size(data))."))
-    n = size(data, 1)
-    n > 0 || throw(ArgumentError("distance-matrix Rips ingestion expects at least one point."))
-    tol = Float64(symmetry_tol)
-    @inbounds for i in 1:n
-        dii = Float64(data[i, i])
-        isfinite(dii) || throw(ArgumentError("distance matrix diagonal entry ($i,$i) is not finite."))
-        abs(dii) <= tol ||
-            throw(ArgumentError("distance matrix diagonal entry ($i,$i) must be zero within tolerance $tol; got $dii."))
-        for j in (i + 1):n
-            dij = Float64(data[i, j])
-            dji = Float64(data[j, i])
-            (isfinite(dij) && isfinite(dji)) ||
-                throw(ArgumentError("distance matrix entry ($i,$j) or ($j,$i) is not finite."))
-            (dij >= -tol && dji >= -tol) ||
-                throw(ArgumentError("distance matrix entries must be nonnegative within tolerance $tol."))
-            abs(dij - dji) <= tol ||
-                throw(ArgumentError("distance matrix is not symmetric within tolerance $tol at ($i,$j)."))
-        end
-    end
-    return n
-end
-
-@inline _dm_packed_key(n::Int, i::Int, j::Int) = _packed_pair_index(n, i, j)
-
-function _distance_matrix_edges_within_radius(data::AbstractMatrix{<:Real},
-                                              radius::Float64)
-    n = size(data, 1)
-    edges = NTuple{2,Int}[]
-    dists = Float64[]
-    hint = min(max(0, 4n), div(n * max(n - 1, 0), 2))
-    sizehint!(edges, hint)
-    sizehint!(dists, hint)
-    @inbounds for i in 1:(n - 1)
-        for j in (i + 1):n
-            d = max(0.0, Float64(data[i, j]))
-            d <= radius || continue
-            push!(edges, (i, j))
-            push!(dists, d)
-        end
-    end
-    return edges, dists
-end
-
-function _distance_matrix_knn_edges(data::AbstractMatrix{<:Real}, k::Int)
-    n = size(data, 1)
-    k > 0 || throw(ArgumentError("distance-matrix Rips knn sparsification expects knn > 0."))
-    edges = Set{Int}()
-    @inbounds for i in 1:n
-        order = collect(1:n)
-        sort!(order, by = j -> (j == i ? Inf : Float64(data[i, j])))
-        for t in 1:min(k, n - 1)
-            j = order[t]
-            j == i && continue
-            a, b = i < j ? (i, j) : (j, i)
-            push!(edges, _dm_packed_key(n, a, b))
-        end
-    end
-    out_edges = NTuple{2,Int}[]
-    out_dists = Float64[]
-    sizehint!(out_edges, length(edges))
-    sizehint!(out_dists, length(edges))
-    @inbounds for i in 1:(n - 1)
-        for j in (i + 1):n
-            _dm_packed_key(n, i, j) in edges || continue
-            push!(out_edges, (i, j))
-            push!(out_dists, max(0.0, Float64(data[i, j])))
-        end
-    end
-    return out_edges, out_dists
-end
-
-@inline function _distance_matrix_simplex_diameter(data::AbstractMatrix{<:Real},
-                                                   simplex::AbstractVector{Int})
-    md = 0.0
-    @inbounds for a in 1:(length(simplex) - 1)
-        ia = simplex[a]
-        for b in (a + 1):length(simplex)
-            d = Float64(data[ia, simplex[b]])
-            d > md && (md = d)
-        end
-    end
-    return md
-end
-
-function _distance_matrix_triangles_from_edges(data::AbstractMatrix{<:Real},
-                                               edges::Vector{NTuple{2,Int}},
-                                               radius::Float64)
-    n = size(data, 1)
-    edge_keys = Set{Int}()
-    adj_hi = [Int[] for _ in 1:n]
-    @inbounds for (i, j) in edges
-        push!(edge_keys, _dm_packed_key(n, i, j))
-        push!(adj_hi[i], j)
-    end
-    triangles = Vector{Vector{Int}}()
-    tri_diams = Float64[]
-    @inbounds for i in 1:(n - 2)
-        nbrs = adj_hi[i]
-        ln = length(nbrs)
-        for a in 1:(ln - 1)
-            j = nbrs[a]
-            for b in (a + 1):ln
-                k = nbrs[b]
-                _dm_packed_key(n, j, k) in edge_keys || continue
-                d = max(Float64(data[i, j]), max(Float64(data[i, k]), Float64(data[j, k])))
-                d <= radius || continue
-                push!(triangles, [i, j, k])
-                push!(tri_diams, d)
-            end
-        end
-    end
-    return triangles, tri_diams
-end
-
-function _graded_complex_from_distance_matrix(data::AbstractMatrix{<:Real},
-                                              spec::FiltrationSpec;
-                                              return_simplex_tree::Bool=false)
-    _validate_geometric_filtration_request(data, spec)
-    _validate_construction_request(data, spec)
-    spec.kind == :rips ||
-        throw(ArgumentError("distance-matrix ingestion currently supports RipsFiltration / kind=:rips, got kind=$(spec.kind)."))
-    n = _validate_distance_matrix(data)
-    max_dim = max(Int(get(spec.params, :max_dim, 1)), 0)
-    construction = _construction_from_params(spec.params)
-    radius_raw = get(spec.params, :radius, nothing)
-    radius = radius_raw === nothing ? Inf : Float64(radius_raw)
-    radius >= 0 || throw(ArgumentError("RipsFiltration radius must be nonnegative."))
-
-    simplices = Vector{Vector{Vector{Int}}}(undef, max_dim + 1)
-    simplices[1] = [[i] for i in 1:n]
-    total = big(n)
-
-    edge_dists = Float64[]
-    if max_dim >= 1
-        edges, dists = if construction.sparsify == :knn
-            k = Int(get(spec.params, :knn, 8))
-            _distance_matrix_knn_edges(data, k)
-        elseif construction.sparsify == :radius
-            isfinite(radius) || throw(ArgumentError("construction.sparsify=:radius requires RipsFiltration radius."))
-            _distance_matrix_edges_within_radius(data, radius)
-        elseif construction.sparsify == :none
-            _distance_matrix_edges_within_radius(data, radius)
-        else
-            throw(ArgumentError("distance-matrix Rips supports construction.sparsify=:none, :radius, or :knn."))
-        end
-        _construction_check_max_edges!(length(edges), spec)
-        if construction.collapse == :dominated_edges || construction.sparsify != :none
-            _construction_check_max_simplices!(big(n), 0, spec)
-            return _materialize_flag_output(edges, fill((0.0,), n), [(d,) for d in dists], spec;
-                                             return_simplex_tree=return_simplex_tree)
-        end
-        simplices[2] = [Int[e[1], e[2]] for e in edges]
-        edge_dists = dists
-        total += length(edges)
-        _construction_check_max_simplices!(total, 1, spec)
-    end
-
-    tri_diams = Float64[]
-    if max_dim >= 2
-        if max_dim == 2 && isfinite(radius)
-            edges_t = NTuple{2,Int}[(s[1], s[2]) for s in simplices[2]]
-            tris, tri_diams = _distance_matrix_triangles_from_edges(data, edges_t, radius)
-            simplices[3] = tris
-            total += length(tris)
-            _construction_check_max_simplices!(total, 2, spec)
-        else
-            for k in 3:(max_dim + 1)
-                count_k = _construction_precheck_combination_enumeration!(n, k, total, spec)
-                sims = Vector{Vector{Int}}()
-                sizehint!(sims, count_k)
-                for s in _combinations(n, k)
-                    d = _distance_matrix_simplex_diameter(data, s)
-                    d <= radius || continue
-                    push!(sims, s)
-                    k == 3 && push!(tri_diams, d)
-                end
-                simplices[k] = sims
-                total += length(sims)
-            end
-        end
-    end
-
-    _construction_check_memory_budget!(
-        _estimate_dense_bytes_from_cell_counts(BigInt[length(s) for s in simplices]),
-        spec,
-    )
-
-    grades = Vector{NTuple{1,Float64}}()
-    total <= 10_000_000 && sizehint!(grades, Int(total))
-    for _ in simplices[1]
-        push!(grades, (0.0,))
-    end
-    if max_dim >= 1
-        for d in edge_dists
-            push!(grades, (d,))
-        end
-    end
-    for k in 3:(max_dim + 1)
-        for (idx, s) in enumerate(simplices[k])
-            d = (k == 3 && length(tri_diams) == length(simplices[k])) ?
-                tri_diams[idx] : _distance_matrix_simplex_diameter(data, s)
-            push!(grades, (d,))
-        end
-    end
-    return _materialize_simplicial_output(simplices, grades, spec; return_simplex_tree=return_simplex_tree)
-end
+include("data_ingestion/distance_matrices.jl")
+include("data_ingestion/landmarks.jl")
+include("data_ingestion/weighted_flags.jl")
 
 function _graph_sources(spec::FiltrationSpec, n::Int)
     haskey(spec.params, :sources) || error("graph_geodesic filtration requires sources.")
@@ -10811,7 +10643,8 @@ struct _PointCloudLowdimLazyPayload
     orientation::Any
 end
 
-function _point_cloud_lowdim_edge_payload(data::PointCloud, spec::FiltrationSpec)
+function _point_cloud_lowdim_edge_payload(data::PointCloud, spec::FiltrationSpec;
+                                            expansion_budget::Bool=true)
     points = data.points
     pmat = point_matrix(data)
     n = length(points)
@@ -10820,7 +10653,7 @@ function _point_cloud_lowdim_edge_payload(data::PointCloud, spec::FiltrationSpec
     max_dim = Int(get(spec.params, :max_dim, 1))
     include_edge_dim = max_dim >= 1
     _construction_check_max_simplices!(big(n), 0, spec)
-    will_reduce = construction.collapse == :dominated_edges && max_dim >= 2
+    will_reduce = !expansion_budget || (construction.collapse == :dominated_edges && max_dim >= 2)
     if include_edge_dim && construction.sparsify == :none &&
        !isfinite(Float64(get(spec.params, :radius, Inf)))
         edge_count = if will_reduce
@@ -10891,6 +10724,45 @@ function _point_cloud_lowdim_edge_payload(data::PointCloud, spec::FiltrationSpec
         edge_dists,
         kdist,
     )
+end
+
+# Shared graph preparation for direct Rips persistence. Geometry and graph
+# selection stay in ingestion; the ordinary owner handles implicit algebra.
+function _rips_persistence_graph(data, filtration, max_simplex_dim::Int)
+    spec = _filtration_spec(filtration)
+    if spec.kind === :edge_weighted
+        return _weighted_flag_graph(data,spec)
+    end
+    _validate_rips_params(spec.params)
+    _validate_construction_request(data, spec)
+    original_n = data isa PointCloud ? length(data.points) : size(data, 1)
+    data, spec, selection = _rips_landmark_input(data,spec)
+    source_indices = selection === nothing ? nothing : landmark_indices(selection)
+    if data isa PointCloud
+        isempty(data.points) && throw(ArgumentError("PointCloud has no points."))
+        all(point -> all(x -> isfinite(x) && isfinite(Float64(x)), point), data.points) ||
+            throw(ArgumentError("implicit Rips requires finite point coordinates representable as Float64."))
+        params = merge(spec.params, (;max_dim=max_simplex_dim))
+        spec = FiltrationSpec(;kind=:rips, params...)
+        payload = _point_cloud_lowdim_edge_payload(data, spec; expansion_budget=false)
+        n, edges, dists = payload.n, payload.edges, payload.edge_dists
+    elseif data isa AbstractMatrix{<:Real}
+        params = merge(spec.params, (;max_dim=max_simplex_dim))
+        spec = FiltrationSpec(;kind=:rips, params...)
+        n, edges, dists = _distance_matrix_rips_edges(data, spec)
+    else
+        throw(ArgumentError("implicit Rips requires a PointCloud or real distance matrix."))
+    end
+    all(d -> isfinite(d) && d >= 0, dists) ||
+        throw(ArgumentError("Rips edge distances must be finite, nonnegative Float64 values."))
+    input_edges = length(edges)
+    construction = _construction_from_params(spec.params)
+    if construction.collapse === :dominated_edges && max_simplex_dim >= 2
+        kept = _collapse_dominated_edges(edges, [(d,) for d in dists], n, max_simplex_dim)
+        edges, dists = edges[kept], dists[kept]
+    end
+    return (;n, edges, dists, spec, source_indices, original_n, input_edges,
+        graph_selection=construction.sparsify, collapse=construction.collapse)
 end
 
 function _point_cloud_lowdim_grades_by_dim(payload::_PointCloudLowdimEdgePayload,
@@ -11256,7 +11128,9 @@ function _graded_complex_from_point_cloud(data::PointCloud, spec::FiltrationSpec
     if kind == :landmark_rips
         landmarks = get(spec.params, :landmarks, nothing)
         landmarks === nothing && error("landmark_rips requires landmarks.")
-        length(landmarks) > 0 || error("landmark_rips: landmarks cannot be empty.")
+        landmarks isa AbstractVector && !isempty(landmarks) &&
+            all(i -> i isa Integer && !(i isa Bool) && 1 <= i <= n,landmarks) && allunique(landmarks) ||
+            throw(ArgumentError("landmarks must be a nonempty vector of distinct valid point indices."))
         construction_lm = if construction.sparsify == :none && get(spec.params, :radius, nothing) !== nothing
             ConstructionOptions(;
                 sparsify = :radius,
@@ -11568,20 +11442,7 @@ function _graded_complex_from_graph(data::GraphData, spec::FiltrationSpec;
             n, true, packed_edges, grades, spec; return_simplex_tree=return_simplex_tree
         )
     elseif kind == :edge_weighted
-        weights = get(spec.params, :edge_weights, nothing)
-        weights === nothing && error("edge_weighted requires edge_weights.")
-        length(weights) == length(edges) || error("edge_weights length mismatch.")
-        grades = Vector{NTuple{1,Float64}}()
-        for _ in 1:n
-            push!(grades, (0.0,))
-        end
-        for w in weights
-            push!(grades, (Float64(w),))
-        end
-        simplices0 = [ [i] for i in 1:n ]
-        simplices1 = [ [u, v] for (u, v) in edges ]
-        simplices = [simplices0, simplices1]
-        return _materialize_simplicial_output(simplices, grades, spec; return_simplex_tree=return_simplex_tree)
+        return _graded_complex_from_weighted_graph(data,spec;return_simplex_tree)
     else
         error("Unsupported graph filtration kind: $(kind).")
     end

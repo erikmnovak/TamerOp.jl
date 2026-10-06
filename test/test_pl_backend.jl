@@ -277,7 +277,7 @@ end
 end
 
 @testset "Publication branching: independent images require a partial order" begin
-    # M = k_U ⊕ k_V, U={x+(1+delta)y >= 0}, V={(1+delta)x+y >= 0}.
+    # M = direct_sum(k_U, k_V), U={x+(1+delta)y >= 0}, V={(1+delta)x+y >= 0}.
     # Membership is monotone; the structure maps include the active coordinate
     # lines into the constant k^2 module. At p=(-1,1), q=(1,-1), r=(1,1)
     # the two incoming images are independent. In any pullback from a total

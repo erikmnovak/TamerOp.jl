@@ -1030,7 +1030,7 @@ end
     @test TamerOp.available_visuals(nothing) == ()
     @test TamerOp.available_visuals(grid_pi) == (:regions, :region_labels, :query_overlay)
     @test TamerOp.available_visuals(compiled_grid) == (:regions, :region_labels, :query_overlay)
-    @test TamerOp.available_visuals(enc_result) == (:regions, :region_labels, :query_overlay, :hasse, :module_inspector)
+    @test TamerOp.available_visuals(enc_result) == (:regions, :region_labels, :query_overlay, :hasse, :module_inspector, :rank_section)
     @test TamerOp.available_visuals(emap) == (:regions, :region_labels, :pushforward_overlay)
     @test TamerOp.available_visuals(cref) == (:common_refinement,)
     @test TamerOp.available_visuals(trans) == (:pushforward_overlay,)
@@ -2340,7 +2340,7 @@ end
         M = MD.PModule{K}(P, [1, 2, 1],
             Dict((1, 2) => injection, (2, 3) => projection); field=field)
         @test V.visual_spec(M).kind == :hasse
-        @test Set(V.available_visuals(M)) == Set((:hasse, :module_inspector))
+        @test Set(V.available_visuals(M)) == Set((:hasse, :module_inspector, :rank_section))
         cases = [
             (pair=(1, 2), matrix=injection, rank=1, nullity=0),
             (pair=(2, 3), matrix=projection, rank=1, nullity=1),
@@ -2657,7 +2657,7 @@ end
     enc = RES.EncodingResult(P, M, nothing; H)
     @test TamerOp.encoding_presentation(enc) === H
     @test V.available_visuals(H) == (:presentation_inspector,)
-    @test V.available_visuals(enc) == (:hasse, :module_inspector, :presentation_inspector)
+    @test V.available_visuals(enc) == (:hasse, :module_inspector, :presentation_inspector, :rank_section)
     @test !(:presentation_inspector in V.available_visuals(M))
     @test V.visual_spec(H).kind == :presentation_inspector
     before = (H.fiber_queries[], H.fiber_dims[])
@@ -2709,7 +2709,7 @@ end
         [TOA.BoxDownset([2.0, 2.0]), TOA.BoxDownset([3.0, 3.0])], QQ[1 0; 0 1], opts)
     pi = TamerOp.encoding_map(enc)
     @test V.available_visuals(enc) == (:regions, :region_labels, :query_overlay,
-        :hasse, :module_inspector, :presentation_inspector)
+        :hasse, :module_inspector, :presentation_inspector, :rank_section)
     t = (1//2, 5//2)
     qt = EC.locate(pi, t)
     spec = V.visual_spec(enc; kind=:presentation_inspector, point=t,
@@ -3105,7 +3105,7 @@ end
     enc = RES.EncodingResult(P, M, nothing; H)
     session = TamerOp.inspection_session(enc; cache_limit=2)
     @test session isa TOA.InspectionSession
-    @test V.inspection_summary(session).supported_views == (:module, :presentation)
+    @test V.inspection_summary(session).supported_views == (:module, :presentation, :rank_from, :rank_to)
     @test !V.inspection_summary(session).geometry_available
     @test V.inspection_selection(session).selector == :none
     @test V.inspection_snapshot(session).metadata.inspection.kind == :overview
@@ -3168,7 +3168,7 @@ end
     P = chain_poset(2)
     M = MD.PModule{QQ}(P, [1,1], Dict((1,2) => reshape(QQ[1],1,1)); field=CM.QQField())
     s = TamerOp.inspection_session(M)
-    @test V.inspection_summary(s).supported_views == (:module,)
+    @test V.inspection_summary(s).supported_views == (:module, :rank_from, :rank_to)
     @test TamerOp.available_visuals(s) == (:linked_inspector,)
     @test V.check_visual_request(s).valid
     @test V.check_visual_request(s).rendering.selection

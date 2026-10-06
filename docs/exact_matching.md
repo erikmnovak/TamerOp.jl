@@ -12,10 +12,10 @@ This summarizes differences between the two retained modules; see the
 `matching_distance_exact_2d` computes the supremum of weighted bottleneck
 distances over all positive-slope lines, with both slice barcodes clipped to
 the same finite rectangle. The optimization uses exact arithmetic; the public
-answer is its conversion to `Float64`.
+default answer is its conversion to `Float64`; request a witness to retain the exact value and the optimizing line.
 
 ```julia
-opts = InvariantOptions(box=([xmin, ymin], [xmax, ymax]), threads=false)
+opts = TamerOp.Advanced.InvariantOptions(box=([xmin, ymin], [xmax, ymax]), threads=false)
 d = matching_distance_exact_2d(encM, encN; opts)
 ```
 
@@ -24,6 +24,101 @@ window is inferred by `encoding_box`; choose it explicitly when it is part of
 the mathematical question. `:L1` with `:lesnick_l1` and `:Linf` with
 `:lesnick_linf` give the same weighted quantity. The API rejects other
 normalization/weight pairings.
+
+## Retain and inspect the witness
+
+The scalar answers how far apart the windowed slice summaries can be. A witness
+answers a more specific question: **which slice and which interval costs produce
+that value?** Keep the two compatible encodings and the same `opts` as above.
+
+```julia
+const OA = TamerOp.Advanced
+result = matching_distance_exact_2d(encM, encN; opts, witness=true)
+describe(result)
+```
+
+`OA.slice_query(result)` gives a basepoint, direction and weight. Its line is
+`basepoint + t * direction`; the endpoints in `OA.matching_witness(result)` use
+that same parameter `t`. Consequently, weight times the largest pair cost is
+the exact windowed answer. The optimizer retains its exact endpoints even when
+the best line lies on a cost switch. The displayed line uses floating coordinates;
+rounding that line and asking a new query is not the definition of its witness.
+
+```julia
+using CairoMakie
+visualize(result)
+```
+
+Read the panels together: the parameter window locates the common line, the
+barcodes show its restrictions, the diagram draws the owner's actual assignment,
+and the cost panel identifies its largest costs. A missing partner is paired
+to the diagonal at half its finite interval length. The figure retains separate
+member IDs for repeated intervals. Equal members and tied costs can leave more
+than one optimal assignment; the returned deterministic choice does not establish
+uniqueness or identify source cycles. For a small calculation with a predicted
+answer, use [Explain a distance through its matching](tutorials/distance_witness.ipynb).
+
+For a positive-area window under this solver's hypotheses, the result reports
+`:attained`. A zero-area window reports `:degenerate_window`, with value zero
+and no asserted maximizing line. These statuses concern the declared finite
+window. They do not claim an attained maximum for a different, unrestricted
+problem, and matching distance is not a computed interleaving distance.
+
+### Explore before requesting the optimum
+
+A live comparison starts with a diagonal slice and a small map of explicit
+sampled queries. The two encodings must share the same classifier and poset;
+placing pictures on the same axes does not establish that correspondence.
+
+```julia
+using WGLMakie
+session = inspection_session(encM, encN; opts)
+visualize(session; backend=:wglmakie)
+```
+
+Click a diagram point or barcode row to select its pair. The same pair is
+highlighted in the charts and its exact endpoints and cost appear in the
+readout. Coincident points cycle through their separate members. A pair-ID
+field reaches every retained pair, including those outside the display budget.
+
+Open **Compare slices and search the window** to select a sample, enter a common
+positive direction and basepoint, or request the exact window optimum. The default
+sample family has five angles and three normal offsets per angle. Its map shows
+discrete costs, without interpolating between samples or certifying an error
+bound. **Best sample** chooses the largest of those measured values. The exact
+button invokes the numerical optimizer with its candidate budget; exhaustion is
+an error and leaves the previous selection in place.
+
+The distinction matters even on small examples. For two rectangular summands
+`[0,3) × [1,4)` and `[1,4) × [0,4)`, compared with `[1,3) × [1,3)`, diagonal
+lines `y = x + h`, with `0 ≤ h ≤ 1`, give weighted costs
+
+```math
+\min(1+h/2,\;3/2-h/2).
+```
+
+The endpoint samples `h=0` and `h=1` both give one. Their cost switch at `h=1/2`
+gives `5/4`; no grid-crossing order changes there. An attractive sample map can
+therefore miss a larger value between its points.
+
+The same controls are available from Julia:
+
+```julia
+OA.select_inspection!(session; sample=1)
+OA.select_inspection!(session; slice=(basepoint=(0, 1//2), direction=(1, 1)))
+OA.select_inspection!(session; optimum=true)
+OA.select_inspection!(session; pair=1)
+```
+
+Pair selection and hover reuse the retained assignment. Selected-slice queries
+compute only the requested pair of barcodes; the exact optimization is explicit
+and reused within the session. `max_pairs` limits the drawing, not the matching.
+Pass `samples=[]` when no sample map is wanted, or supply a bounded vector of
+`(basepoint=..., direction=...)` queries. Cache inputs share their arrangement's
+fixed window. `OA.inspection_snapshot(session)` gives a static exportable view;
+`OA.close_inspection!(session)` releases live inputs and callbacks.
+The live inspector owns its canvas; use the snapshot when composing the selected
+view into a supplied Makie figure.
 
 ## Scope and hypotheses
 
@@ -63,8 +158,8 @@ Enlarging the window changes the question.
 The final `Float64` conversion is a numerical output boundary. A positive
 exact result below its representable range can round to zero, and a large
 finite result can round to infinity. Within that range the result is rounded;
-the API does not expose an exact scalar or a certified interval. Exactness
-here concerns exhaustive optimization before that conversion.
+the default scalar does not expose a certified interval. With `witness=true`,
+`describe(result).exact_distance` retains the exact optimum before conversion.
 
 ## Proof of coverage
 

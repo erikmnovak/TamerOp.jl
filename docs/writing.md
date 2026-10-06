@@ -128,10 +128,19 @@ from object to summary to numerical feature or displayed image; identify what
 is preserved and what is lost. A stable feature claim needs its stated metric
 and hypotheses, not merely a smooth-looking picture.
 
-The [learning brief](learning_path.md#after-the-first-encoding-the-mathematical-curriculum)
-plans these branches. Add their cards to the reader-facing map when the
+The [documentation programme](documentation_plan.md) plans the complete set of
+branches; the [learning brief](learning_path.md#after-the-first-encoding-the-mathematical-curriculum)
+develops the opening examples. Add cards to the reader-facing map when the
 treatments exist, with routes that expose choices rather than turning the
 inventory into a mandatory reading list.
+
+Keep direct finite diagrams, lattice presentations and geometric region
+presentations visible alongside filtered points, images, graphs and complexes.
+Use algebraic and categorical operations as substantive investigations with
+their own examples. They should not appear only as advanced appendices to a
+filtration-to-invariant pipeline. The shared encoding joins these entrances;
+supported direct ordinary-persistence computations retain their honest shorter
+route.
 
 ### Use boundary examples to prevent duplication
 
@@ -153,6 +162,22 @@ fields and tolerance semantics; implementation explains arithmetic algorithms
 and actual routing. These examples define ownership of explanations, not a
 requirement to write every possible treatment. Prefer one full explanation
 with contextual links and brief reminders over several accounts that drift.
+
+### Give optimization a stable explanatory home
+
+A faster computation normally updates an existing implementation account.
+Explain the representation, algorithm, output-sensitive work, materialization,
+reuse and remaining costs there. A usage guide owns choices the reader can
+make; reference owns their observable contracts. Mathematics changes when the
+represented object, hypotheses or guarantees change. Measured timings and
+ratios belong to a versioned benchmark report under its declared protocol.
+Link those accounts instead of copying measurements into several pages or
+creating a mathematical lesson for every kernel optimization.
+
+For lazy or cached work, distinguish first use, compiled computation with
+uncached mathematics, declared shared preparation and retained-result queries.
+Explain what is retained and what is recomputed. Memory and startup costs have
+their own meaning; a cheap query does not establish a cheap complete workflow.
 
 ## Keep collections, topics and page outlines distinct
 
@@ -237,7 +262,7 @@ need not contain every kind of article.
 The generated topic map and topic landing pages use this same article metadata.
 Their links expose published treatments across the collections. The overview,
 linked topic listings and search must agree without another independently
-authored article list. The learning map keeps its own selective progression;
+authored article list. The learning map keeps its own suggested progression;
 topic membership never creates a learning arrow or changes a lesson's footer.
 
 ## Maintain the article inventory during gradual changes
@@ -285,7 +310,17 @@ at the end of each lesson. Supporting references need no artificial sequence.
 
 The map helps a reader choose a useful next question. Its visual arrangement
 must communicate that choice without requiring a paragraph to correct a
-misleading impression. Preserve these principles when adding or moving pages:
+misleading impression.
+
+The target is complete mathematical coverage through several views of one
+graph: every published lesson appears in at least one focused diagram and in
+the shared accessible outline. This includes advanced definition-led chapters.
+The overview is selective, not the underlying collection. Keep minimum
+knowledge, suggested continuations and thematic cross-links distinct. The
+[full programme](documentation_plan.md#one-graph-several-views-complete-mathematical-coverage)
+specifies this expansion; it requires extending the current renderer and route
+model as the branches are authored, not putting unwritten pages into live maps.
+Preserve these principles when adding or moving pages:
 
 - **Make alternative starts equally visible.** Keep the example-first and
   definitions-first routes at the same visual level, with comparable card size

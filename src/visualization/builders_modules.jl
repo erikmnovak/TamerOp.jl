@@ -1,7 +1,7 @@
 # Finite-poset modules: schematic covers, selected stalks/maps, and encoding panels.
 
 available_visuals(::AbstractPoset) = (:hasse,)
-available_visuals(::Modules.PModule) = (:hasse, :module_inspector)
+available_visuals(::Modules.PModule) = (:hasse, :module_inspector, :rank_section)
 
 _inspection_poset(P::AbstractPoset) = P
 _inspection_poset(M::Modules.PModule) = M.Q
@@ -27,8 +27,10 @@ function _inspection_field_label(field)
 end
 
 _visual_request_keywords(::Union{AbstractPoset,Modules.PModule}, kind::Symbol) =
+    kind === :rank_section ? (:source, :target, :vertex, :matrix_limit) :
     kind === :module_inspector ? (:vertex, :pair, :matrix_limit) : (:vertex, :pair)
 function _visual_request_keywords(enc::EncodingResult, kind::Symbol)
+    kind === :rank_section && return (:source, :target, :vertex, :point, :box, :matrix_limit)
     kind === :presentation_inspector && return _presentation_request_keywords(enc)
     kind === :hasse && return (:vertex, :pair)
     if kind === :module_inspector
@@ -71,10 +73,12 @@ function _check_module_selection!(issues, obj, kind; kwargs...)
 end
 
 function _append_visual_request_issues!(issues::Vector{String}, obj::Union{AbstractPoset,Modules.PModule}, kind::Symbol; kwargs...)
+    kind === :rank_section && return _check_rank_section!(issues, obj; kwargs...)
     return _check_module_selection!(issues, obj, kind; kwargs...)
 end
 
 function _append_visual_request_issues!(issues::Vector{String}, enc::EncodingResult, kind::Symbol; kwargs...)
+    kind === :rank_section && return _check_rank_section!(issues, enc; kwargs...)
     kind === :presentation_inspector && return _check_presentation_selection!(issues, enc; kwargs...)
     if kind in (:hasse, :module_inspector)
         return _check_module_selection!(issues, enc, kind; kwargs...)
@@ -88,6 +92,7 @@ function _visual_spec(P::AbstractPoset, kind::Symbol; vertex=nothing, pair=nothi
 end
 
 function _visual_spec(M::Modules.PModule, kind::Symbol; kwargs...)
+    kind === :rank_section && return _rank_section_spec(M; kwargs...)
     return _module_visual_spec(M, kind; kwargs...)
 end
 

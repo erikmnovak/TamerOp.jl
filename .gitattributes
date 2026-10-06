@@ -8,3 +8,5 @@ docs/benchmarks/qpa_v1/timings.csv -text whitespace=cr-at-eol
 docs/benchmarks/qpa_v1/*.svg whitespace=-blank-at-eol
 docs/benchmarks/phat_v2/timings.csv -text whitespace=cr-at-eol
 docs/benchmarks/phat_v2/*.svg whitespace=-blank-at-eol
+docs/benchmarks/ripser_v1/summary.csv -text whitespace=cr-at-eol
+docs/benchmarks/ripser_v1/presentation/*.svg whitespace=-blank-at-eol

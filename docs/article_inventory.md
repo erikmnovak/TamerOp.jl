@@ -7,6 +7,12 @@ article or plan a gradual revision of an existing one. The
 [writing guide](writing.md) explains the editorial boundaries and the principles
 for the learning map and topic atlas.
 
+The [documentation programme](documentation_plan.md) develops the whole catalog
+vertically within its five main article families and horizontally by subject.
+Consult it before adding a page: it records intended groupings, shared examples,
+the complete mathematical map design, and boundaries for future optimization
+writing. The catalog remains authoritative for each article's scope and source.
+
 An inventory entry is an article, not a function, source-code module, figure,
 website route, or development task. A canonical notebook has one record: its
 website lesson and executed download are generated presentations of that same
@@ -18,7 +24,7 @@ type because they need an owner without being forced into a prose genre.
 
 | Field | Meaning |
 | :--- | :--- |
-| `id` | Stable article identity. Descriptive names are usual; B01–B70 preserve the implementation-account identities, and C01–C21 preserve the comparison identities. Renaming a title or moving its source does not change this ID. |
+| `id` | Stable article identity. Descriptive names are usual; B01–B72 preserve the implementation-account identities, and C01–C21 preserve the comparison identities. Renaming a title or moving its source does not change this ID. |
 | `title` | Existing heading or working title. A planned title can change as its reader question becomes sharper. |
 | `type` | Primary editorial purpose: `lesson`, `library_guide`, `recipe`, `api_reference`, `implementation_account`, `benchmark_report`, or `contributor_guide`. `resource` covers supporting indexes and records. |
 | `topics` | Controlled subject IDs from the catalog's `[topics]` table. The first is the home cluster; further values are cross-topic membership. These are associations, not prerequisites. |
@@ -42,10 +48,12 @@ contracts when drafting; the article catalog does not track feature completion.
 The `lesson` family includes the mathematical world after encoding as well as
 its construction: algebraic operations, changes of poset, invariants, summaries,
 numerical features and interpretation of figures. The
-[post-encoding learning brief](learning_path.md#after-the-first-encoding-the-mathematical-curriculum)
-describes the intended branches around that shared object. `related` records
-remain associations; proposed teaching relationships stay in the brief until
-authored lessons receive actual routes in `reading_map.toml`.
+[documentation programme](documentation_plan.md) describes the full set of
+branches, with worked examples developed in the
+[learning brief](learning_path.md#after-the-first-encoding-the-mathematical-curriculum).
+`related` records remain associations; the proposed complete lesson relation
+stays in the programme until authored lessons receive actual routes in
+`reading_map.toml`.
 
 ## Keep metadata with its owner
 
@@ -55,6 +63,7 @@ answer more specialized questions:
 | Owner | Authoritative information |
 | :--- | :--- |
 | [Article catalog](article_inventory.toml) | Article identities, reader questions, editorial types, topic membership, canonical source presence, and migration intent. |
+| [Documentation programme](documentation_plan.md) | Composition across and within the five main article families, shared examples, complete mathematical-map design, and staged migration/publication principles. No separate implementation or article-status ledger. |
 | [Reading routes](reading_map.toml) | Curricular nodes, suggested continuations, optional detours, and lesson footer destinations. The arrows do not encode mandatory prerequisites; articles state those where needed. Topic membership does not create a reading-map arrow. |
 | [Publication manifest](publication.toml) | Canonical-source-to-site routes, notebook execution, and generated page/download relationships. `existing` in the catalog does not mean published. |
 | [Navigation display](navigation.toml) | Collection labels, grouping and display order. It refers to catalog types and topics; it does not duplicate article sources or decide learning continuations. |
@@ -97,6 +106,27 @@ spectrum. See
 checks.
 
 ## Maintain the collection gradually
+
+### Plan documentation with a computational addition
+
+Associate an implementation task with existing article identities before
+creating new ones. A new input convention can extend its construction account
+and usage guide; an internal optimization may need only an account revision
+and performance evidence. A new mathematical question can justify a lesson,
+and a new operational choice can justify a guide or bounded recipe. Do not
+allocate a fixed number of pages per A-item. Preserve B-series identities and
+keep research-dependent scopes conditional until there is an algorithm to
+explain.
+
+During parallel implementation, each feature owner supplies the mathematical
+scope, example, reference-method changes and article IDs with the code. One
+integration owner applies shared catalog, API-coverage and publication changes
+against the combined source tree. Keep implementation verification, example
+execution, source presence, editorial review and publication as distinct facts;
+`state` continues to record source presence only. Schedule and completion
+evidence belong to development records, not catalog fields or lesson prose.
+
+### Add or revise an article
 
 Before adding an article, look for the same reader question and review its
 related records. Several views of a topic are useful when they serve different
@@ -189,7 +219,7 @@ for target in targets:
     matches = [item for item in articles
                if target in (item.get("source"), item.get("planned_source"))]
     assert len(matches) == 1, (target, len(matches))
-assert {f"B{i:02}" for i in range(1, 71)} <= ids
+assert {f"B{i:02}" for i in range(1, 73)} <= ids
 assert {f"C{i:02}" for i in range(1, 22)} <= ids
 print(f"Validated {len(articles)} article and resource records.")
 PY

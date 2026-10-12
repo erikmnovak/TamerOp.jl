@@ -85,8 +85,8 @@ notebook so you can reopen the environment. From a terminal in that folder,
 
 ## Update your installation
 
-With your work environment active, `Pkg.status("TamerOp")` shows the installed
-source revision. To obtain the latest version, run:
+With your work environment active, run the following to obtain the latest
+version of TamerOp:
 
 ```julia
 import Pkg

@@ -5,9 +5,13 @@
 {% endblock markdowncell %}
 
 {% block data_png %}
-[![{{ output.metadata.figure_alt | figure_alt }}]({{ output.metadata.filenames['image/png'] | path2url }})]({{ output.metadata.filenames['image/png'] | path2url }})
+```@raw html
+<a href="{{ output.metadata.filenames['image/png'] | path2url | e }}"><img src="{{ output.metadata.filenames['image/png'] | path2url | e }}" alt="{{ output.metadata.figure_alt | figure_alt }}"></a>
+```
 {% endblock data_png %}
 
 {% block data_svg %}
-[![{{ output.metadata.figure_alt | figure_alt }}]({{ output.metadata.filenames['image/svg+xml'] | path2url }})]({{ output.metadata.filenames['image/svg+xml'] | path2url }})
+```@raw html
+<a href="{{ output.metadata.filenames['image/svg+xml'] | path2url | e }}"><img src="{{ output.metadata.filenames['image/svg+xml'] | path2url | e }}" alt="{{ output.metadata.figure_alt | figure_alt }}"></a>
+```
 {% endblock data_svg %}

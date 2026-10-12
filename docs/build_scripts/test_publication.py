@@ -1,10 +1,15 @@
 """Focused conversion/failure-contract checks, independent of Julia compilation."""
 import copy
+import json
 from pathlib import Path
+import shutil
 import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 import nbformat as nbf
+import publish as publication
 
 from publish import (DOCS, captured_notebook, documenter_markdown, export_lesson,
                      rewrite_links, sha256, validate_capture, validate_outputs)
@@ -108,7 +113,7 @@ class PublicationTests(unittest.TestCase):
             page = stage / 'tutorials/ring.md'
             export_lesson(nb, DOCS / 'tutorials/ring.ipynb', page, {}, stage)
             text = page.read_text()
-            self.assertLess(text.index('display(figure)'), text.index('![A checked mathematical figure.]'))
+            self.assertLess(text.index('display(figure)'), text.index('alt="A checked mathematical figure."'))
             self.assertIn('```julia', text)
             self.assertNotIn('not the figure', text)
             self.assertIn('docs/tutorials/ring.ipynb', text)
@@ -132,7 +137,7 @@ class PublicationTests(unittest.TestCase):
             self.assertIn('Style &amp; export &lt;figures&gt;</summary>', text)
             self.assertNotIn('<details open', text)
             self.assertLess(text.index('<details'), text.index('```julia'))
-            self.assertLess(text.index('![A checked'), text.index('</details>'))
+            self.assertLess(text.index('alt="A checked'), text.index('</details>'))
             self.assertLess(text.index('</details>'), text.index('Continue the main lesson'))
             self.assertEqual(nb.cells[2].source, original.cells[2].source)
             self.assertEqual(len(nb.cells), len(original.cells))
@@ -167,6 +172,274 @@ class PublicationTests(unittest.TestCase):
             self.assertIn('id="optional-prepare-a-figure"', text)
             self.assertIn('Keep this explanation.', text)
             self.assertTrue(nb.cells[1].source.startswith('### ' + title))
+
+
+class UnchangedPublicationTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.docs = self.root / 'docs'
+        self.previous = self.docs / '.build/src/downloads'
+        for folder in ('src', 'ext', 'docs/src', 'docs/tutorials', 'docs/build_scripts'):
+            (self.root / folder).mkdir(parents=True)
+        self.previous.mkdir(parents=True)
+        (self.root / 'Project.toml').write_text('name = "Fixture"\n')
+        (self.root / 'src/Fixture.jl').write_text('module Fixture\nend\n')
+        (self.root / 'src/table.bin').write_bytes(b'checked binary table')
+        (self.root / 'ext/FixtureExt.jl').write_text('# Extension fixture\n')
+        (self.docs / 'src/index.md').write_text('# Index\n\nA fixture.\n')
+        shutil.copy2(DOCS / 'build_scripts/documenter.md.j2', self.docs / 'build_scripts/documenter.md.j2')
+        for name in ('Project.toml', 'Manifest.toml', 'requirements.txt'):
+            (self.docs / name).write_text('# Pinned fixture environment\n')
+        self.config = {'guides': {}, 'notebooks': [
+            {'source': f'tutorials/{name}.ipynb', 'page': f'tutorials/{name}.md', 'timeout': 1}
+            for name in ('one', 'two')]}
+        self.write_config()
+        self.runtime = {'julia': 'julia version fixture',
+                        'python_packages': {name: '1.0' for name in publication.PYTHON_PACKAGES}}
+        self.current = {'git_commit': 'current', 'working_tree_dirty': True}
+        self.executed = []
+        self.on_execute = lambda: None
+        fixture = PublicationTests().fixture()
+        records = []
+        for lesson in self.config['notebooks']:
+            source = self.docs / lesson['source']
+            executed = copy.deepcopy(fixture)
+            executed.cells[0].source = '# ' + source.stem
+            canonical = copy.deepcopy(executed)
+            canonical.cells[1].outputs = []
+            canonical.cells[1].execution_count = None
+            nbf.write(canonical, source)
+            nbf.write(executed, self.previous / source.name)
+            records.append({'source': lesson['source'], 'sha256': sha256(source),
+                            'download_sha256': sha256(self.previous / source.name),
+                            'code_cells': 1, 'figures': 1, 'seconds': 1.0})
+            exports = self.previous / 'figures' / source.stem
+            exports.mkdir(parents=True)
+            (exports / 'old.svg').write_text('<svg>old export</svg>')
+        environment = self.previous / 'environment'
+        environment.mkdir()
+        for name in ('Project.toml', 'Manifest.toml', 'requirements.txt', 'publication.toml'):
+            shutil.copy2(self.docs / name, environment / name)
+        self.addCleanup(patch.stopall)
+        patch.multiple(publication, ROOT=self.root, DOCS=self.docs).start()
+        self.record = {'notebooks': records, 'git_commit': 'previous', 'working_tree_dirty': False,
+                       **copy.deepcopy(self.runtime), 'package_source_sha256': publication.package_source_hashes(),
+                       'docs_manifest_sha256': sha256(self.docs / 'Manifest.toml')}
+        self.save_record()
+        patch.object(publication, 'runtime_versions', side_effect=lambda *args: copy.deepcopy(self.runtime)).start()
+        patch.object(publication, 'checkout_state', side_effect=lambda: dict(self.current)).start()
+        patch.object(publication, 'prepare_catalog').start()
+        patch.object(publication.subprocess, 'run').start()
+        outer = self
+
+        class Client:
+            def __init__(self, notebook, **kwargs):
+                self.nb = notebook
+            def create_kernel_manager(self):
+                return SimpleNamespace()
+            def execute(self):
+                outer.executed.append(self.nb.cells[0].source)
+                for cell in self.nb.cells:
+                    if cell.cell_type == 'code':
+                        cell.execution_count = 1
+                        cell.outputs = copy.deepcopy(fixture.cells[1].outputs)
+                outer.on_execute()
+
+        patch.object(publication, 'NotebookClient', Client).start()
+
+    def write_config(self):
+        text = '[guides]\n'
+        for lesson in self.config['notebooks']:
+            text += '\n[[notebooks]]\n' + ''.join(f'{key} = {json.dumps(value)}\n' for key, value in lesson.items())
+        (self.docs / 'publication.toml').write_text(text)
+
+    def save_record(self):
+        (self.previous / 'publication.json').write_text(json.dumps(self.record))
+
+    def change_second(self, kind='code'):
+        source = self.docs / self.config['notebooks'][1]['source']
+        nb = nbf.read(source, as_version=4)
+        if kind == 'code': nb.cells[1].source += '\n# Changed computation'
+        elif kind == 'prose': nb.cells[0].source += '\n\nChanged prose.'
+        elif kind == 'metadata': nb.metadata['purpose'] = 'Changed metadata'
+        nbf.write(nb, source)
+        if kind == 'bytes': source.write_text(source.read_text() + '\n')
+
+    def build(self, **kwargs):
+        publication.publish('julia-fixture', **kwargs)
+        return json.loads((self.previous / 'publication.json').read_text())
+
+    def test_mixed_reuse_and_successive_provenance(self):
+        self.change_second()
+        previous_hash = sha256(self.previous / 'publication.json')
+        before = copy.deepcopy(self.record)
+        record = self.build(reuse_unchanged=True)
+        self.assertEqual(self.executed, ['# two'])
+        one, two = record['notebooks']
+        self.assertEqual(record['git_commit'], 'current')
+        self.assertEqual(one['execution_origin']['git_commit'], 'previous')
+        self.assertFalse(one['execution_origin']['working_tree_dirty'])
+        self.assertEqual(one['reuse_history'][0]['publication_sha256'], previous_hash)
+        self.assertEqual(two['execution_origin']['git_commit'], 'current')
+        self.assertEqual(two['reuse_history'], [])
+        self.assertTrue((self.previous / 'figures/one/old.svg').is_file())
+        self.assertFalse((self.previous / 'figures/two').exists())
+        self.assertEqual(self.record, before)
+        next_hash = sha256(self.previous / 'publication.json')
+        self.current['git_commit'] = 'later'
+        self.executed.clear()
+        next_record = self.build(reuse_unchanged=True)
+        self.assertEqual(self.executed, [])
+        self.assertEqual(next_record['git_commit'], 'later')
+        for old, new in zip(record['notebooks'], next_record['notebooks']):
+            self.assertEqual(new['execution_origin'], old['execution_origin'])
+            self.assertEqual(new['reuse_history'][-1]['publication_sha256'], next_hash)
+            self.assertEqual(new['reuse_history'][-1]['reused_for_git_commit'], 'later')
+
+    def test_noop_reuse_records_current_build_and_original_executions(self):
+        record = self.build(reuse_unchanged=True)
+        self.assertEqual(self.executed, [])
+        self.assertEqual(record['git_commit'], 'current')
+        self.assertEqual([item['execution_origin']['git_commit'] for item in record['notebooks']],
+                         ['previous', 'previous'])
+
+    def test_any_notebook_byte_change_executes_fresh(self):
+        for kind in ('prose', 'metadata', 'bytes'):
+            with self.subTest(kind=kind):
+                self.change_second(kind)
+                self.executed.clear()
+                self.build(reuse_unchanged=True)
+                self.assertEqual(len(self.executed), 1)
+
+    def test_strict_mode_still_rejects_changed_notebook(self):
+        self.change_second('prose')
+        with self.assertRaisesRegex(ValueError, 'Changed notebook'):
+            self.build(reuse_executed=True)
+        self.assertEqual(self.executed, [])
+
+    def test_strict_mode_keeps_existing_runtime_and_provenance_semantics(self):
+        self.runtime['julia'] = 'another runtime'
+        self.assertEqual(self.build(reuse_executed=True), self.record)
+        self.assertEqual(self.executed, [])
+
+    def test_modes_are_mutually_exclusive(self):
+        with self.assertRaisesRegex(ValueError, 'only one'):
+            self.build(reuse_executed=True, reuse_unchanged=True)
+
+    def test_corrupt_execution_origin_and_history_fail_closed(self):
+        self.record = self.build(reuse_unchanged=True)
+        original = copy.deepcopy(self.record['notebooks'][0])
+        good = original['reuse_history'][0]
+        for history in (None, ['invalid'], [{}], [{**good, 'publication_sha256': 'invalid'}],
+                        [{**good, 'publication_git_commit': ''}],
+                        [{**good, 'reused_for_working_tree_dirty': 'false'}]):
+            with self.subTest(history=history):
+                self.record['notebooks'][0] = copy.deepcopy(original)
+                self.record['notebooks'][0]['reuse_history'] = history
+                self.save_record()
+                with self.assertRaisesRegex(ValueError, 'Invalid reuse history'):
+                    self.build(reuse_unchanged=True)
+        self.record['notebooks'][0] = copy.deepcopy(original)
+        self.record['notebooks'][0]['execution_origin']['julia'] = 'wrong execution environment'
+        self.save_record()
+        with self.assertRaisesRegex(ValueError, 'execution environment differs'):
+            self.build(reuse_unchanged=True)
+        self.assertEqual(self.executed, [])
+
+    def test_checkout_changes_during_execution_preserve_previous_capture(self):
+        self.change_second()
+        previous_hash = sha256(self.previous / 'publication.json')
+        self.on_execute = lambda: self.current.update(git_commit='different checkout')
+        with self.assertRaisesRegex(ValueError, 'Git checkout changed during'):
+            self.build(reuse_unchanged=True)
+        self.assertEqual(sha256(self.previous / 'publication.json'), previous_hash)
+
+    def test_colliding_capture_names_fail_before_execution(self):
+        self.config['notebooks'][1]['source'] = 'other/one.ipynb'
+        (self.docs / 'other').mkdir()
+        shutil.copy2(self.docs / 'tutorials/two.ipynb', self.docs / 'other/one.ipynb')
+        self.write_config()
+        shutil.copy2(self.docs / 'publication.toml', self.previous / 'environment/publication.toml')
+        self.record['notebooks'][1]['source'] = 'other/one.ipynb'
+        self.save_record()
+        with self.assertRaisesRegex(ValueError, 'names collide'):
+            self.build(reuse_unchanged=True)
+        self.assertEqual(self.executed, [])
+
+    def test_changed_lesson_still_requires_a_complete_prior_capture(self):
+        self.change_second()
+        saved = self.previous / 'two.ipynb'
+        original = saved.read_bytes()
+        for kind in ('missing', 'hash', 'unexecuted', 'error', 'figure', 'cell_count', 'figure_count'):
+            with self.subTest(kind=kind):
+                saved.write_bytes(original)
+                self.record['notebooks'][1].update(code_cells=1, figures=1)
+                if kind == 'missing': saved.unlink()
+                elif kind == 'hash': saved.write_bytes(original + b'\n')
+                elif kind in ('cell_count', 'figure_count'):
+                    self.record['notebooks'][1]['code_cells' if kind == 'cell_count' else 'figures'] = 2
+                else:
+                    nb = nbf.read(saved, as_version=4)
+                    if kind == 'unexecuted': nb.cells[1].execution_count = None
+                    elif kind == 'error': nb.cells[1].outputs = [nbf.v4.new_output('error', ename='Failure', evalue='', traceback=[])]
+                    else: nb.cells[1].outputs = []
+                    nbf.write(nb, saved)
+                    self.record['notebooks'][1]['download_sha256'] = sha256(saved)
+                self.save_record()
+                with self.assertRaises((ValueError, FileNotFoundError)):
+                    self.build(reuse_unchanged=True)
+                self.assertEqual(self.executed, [])
+                self.record['notebooks'][1]['download_sha256'] = publication.hashlib.sha256(original).hexdigest()
+
+    def test_package_binary_environment_and_runtime_changes_fail_closed(self):
+        cases = [(self.root / path) for path in
+                 ('Project.toml', 'src/Fixture.jl', 'src/table.bin', 'ext/FixtureExt.jl',
+                  'docs/Project.toml', 'docs/Manifest.toml', 'docs/requirements.txt',
+                  'docs/.build/src/downloads/environment/Manifest.toml')]
+        for path in cases:
+            with self.subTest(path=path):
+                original = path.read_bytes()
+                path.write_bytes(original + b'\n')
+                with self.assertRaises(ValueError): self.build(reuse_unchanged=True)
+                self.assertEqual(self.executed, [])
+                path.write_bytes(original)
+        for key in ('julia', 'python_packages'):
+            with self.subTest(runtime=key):
+                old = copy.deepcopy(self.runtime[key])
+                self.runtime[key] = 'changed' if key == 'julia' else {'nbclient': 'changed'}
+                with self.assertRaisesRegex(ValueError, 'runtime changed'):
+                    self.build(reuse_unchanged=True)
+                self.runtime[key] = old
+
+    def test_notebook_set_and_missing_capture_fail_closed(self):
+        original = (self.docs / 'publication.toml').read_bytes()
+        self.config['notebooks'].pop()
+        self.write_config()
+        with self.assertRaisesRegex(ValueError, 'publication set changed'):
+            self.build(reuse_unchanged=True)
+        (self.docs / 'publication.toml').write_bytes(original)
+        (self.previous / 'publication.json').unlink()
+        with self.assertRaises(FileNotFoundError): self.build(reuse_unchanged=True)
+        self.assertEqual(self.executed, [])
+
+    def test_source_changes_during_execution_preserve_the_previous_capture(self):
+        self.change_second()
+        previous_hash = sha256(self.previous / 'publication.json')
+        for kind in ('earlier_notebook', 'new_package_source', 'new_binary', 'environment'):
+            with self.subTest(kind=kind):
+                path = {'earlier_notebook': self.docs / 'tutorials/one.ipynb',
+                        'new_package_source': self.root / 'src/Added.jl',
+                        'new_binary': self.root / 'src/added.bin',
+                        'environment': self.docs / 'requirements.txt'}[kind]
+                original = path.read_bytes() if path.exists() else None
+                self.on_execute = lambda p=path, data=original: p.write_bytes((data or b'') + b'\n')
+                with self.assertRaisesRegex(ValueError, 'changed during'):
+                    self.build(reuse_unchanged=True)
+                self.assertEqual(sha256(self.previous / 'publication.json'), previous_hash)
+                if original is None: path.unlink()
+                else: path.write_bytes(original)
 
 
 if __name__ == '__main__':

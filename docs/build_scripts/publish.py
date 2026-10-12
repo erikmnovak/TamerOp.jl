@@ -32,6 +32,9 @@ from site_catalog import prepare_catalog
 DOCS = Path(__file__).resolve().parents[1]
 ROOT = DOCS.parent
 REPO = "https://github.com/erikmnovak/TamerOp.jl/blob/main/"
+PYTHON_PACKAGES = ("nbclient", "nbconvert", "nbformat", "jupyter_client")
+ORIGIN_FIELDS = ("git_commit", "working_tree_dirty", "julia", "python_packages",
+                 "package_source_sha256", "docs_manifest_sha256")
 
 
 def sha256(path: Path) -> str:
@@ -68,7 +71,7 @@ def documenter_markdown(text: str) -> str:
 
 
 def figure_alt(text: str) -> str:
-    return text.replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]").replace("\n", " ")
+    return html.escape(text.replace("\n", " "), quote=True)
 
 
 def rewrite_links(text: str, source: Path, destination: Path | None,
@@ -223,15 +226,110 @@ def validate_capture(record: dict, previous: Path, config: dict,
             raise ValueError(f"Execution environment changed ({name}); execute a fresh publication.")
 
 
-def publish(julia: str, reuse_executed: bool = False) -> None:
+def package_source_hashes() -> dict:
+    files = [ROOT / "Project.toml", *sorted((ROOT / "src").rglob("*.jl")),
+             *sorted((ROOT / "src").rglob("*.bin")), *sorted((ROOT / "ext").rglob("*.jl"))]
+    return {path.relative_to(ROOT).as_posix(): sha256(path) for path in files}
+
+
+def runtime_versions(julia: str, env: dict) -> dict:
+    return {"julia": subprocess.check_output(
+                [julia, "--startup-file=no", "--version"], env=env, text=True).strip(),
+            "python_packages": {name: importlib.metadata.version(name) for name in PYTHON_PACKAGES}}
+
+
+def checkout_state() -> dict:
+    return {"git_commit": subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
+            "working_tree_dirty": bool(subprocess.check_output(
+                ["git", "status", "--porcelain"], cwd=ROOT))}
+
+
+def execution_origin(record: dict, evidence: dict) -> dict:
+    """Keep the execution's checkout/environment, including legacy captures."""
+    origin = evidence.get("execution_origin", {key: record[key] for key in ORIGIN_FIELDS})
+    if (not isinstance(origin, dict) or any(key not in origin for key in ORIGIN_FIELDS)
+            or not isinstance(origin["git_commit"], str) or not origin["git_commit"]
+            or type(origin["working_tree_dirty"]) is not bool):
+        raise ValueError("Incomplete notebook execution origin; execute a fresh publication.")
+    for key in ORIGIN_FIELDS[2:]:
+        if origin[key] != record[key]:
+            raise ValueError("Notebook execution environment differs from its capture; execute a fresh publication.")
+    return copy.deepcopy(origin)
+
+
+def unchanged_capture_plan(record: dict, previous: Path, config: dict,
+                           source_hashes: dict, manifest_hash: str,
+                           runtime: dict, notebook_hashes: dict) -> dict[str, bool]:
+    """Validate the complete prior capture before selecting any reused lesson."""
+    validate_capture(record, previous, config, source_hashes, manifest_hash)
+    if any(record[key] != runtime[key] for key in ("julia", "python_packages")):
+        raise ValueError("Julia or Python runtime changed; execute a fresh publication.")
+    if sha256(previous / "environment" / "Manifest.toml") != manifest_hash:
+        raise ValueError("Captured documentation environment changed; execute a fresh publication.")
+    saved_config = tomllib.loads((previous / "environment" / "publication.toml").read_text())
+    expected = [lesson["source"] for lesson in config["notebooks"]]
+    saved_set = [lesson["source"] for lesson in saved_config["notebooks"]]
+    if len(expected) != len(set(expected)) or len(saved_set) != len(set(saved_set)) or set(saved_set) != set(expected):
+        raise ValueError("Notebook publication set changed; execute a fresh publication.")
+    for part in (lambda name: Path(name).name, lambda name: Path(name).stem):
+        if len({part(name) for name in expected}) != len(expected):
+            raise ValueError("Notebook download or export names collide; execute a fresh publication.")
+    plan = {}
+    for evidence in record["notebooks"]:
+        name = evidence["source"]
+        saved = previous / Path(name).name
+        if (not isinstance(evidence["sha256"], str)
+                or re.fullmatch(r"[0-9a-f]{64}", evidence["sha256"]) is None
+                or sha256(saved) != evidence["download_sha256"]):
+            raise ValueError(f"Changed captured download or source evidence: {name}; execute a fresh publication.")
+        executed = nbformat.read(saved, as_version=4)
+        nbformat.validate(executed)
+        figures = validate_outputs(executed)
+        code_cells = sum(cell.cell_type == "code" for cell in executed.cells)
+        if (type(evidence["figures"]) is not int or evidence["figures"] != figures
+                or type(evidence["code_cells"]) is not int or evidence["code_cells"] != code_cells):
+            raise ValueError(f"Captured output counts differ: {name}; execute a fresh publication.")
+        execution_origin(record, evidence)
+        history = evidence.get("reuse_history", [])
+        if not isinstance(history, list):
+            raise ValueError(f"Invalid reuse history: {name}; execute a fresh publication.")
+        for item in history:
+            if (not isinstance(item, dict)
+                    or not isinstance(item.get("publication_sha256"), str)
+                    or re.fullmatch(r"[0-9a-f]{64}", item["publication_sha256"]) is None
+                    or any(not isinstance(item.get(key), str) or not item[key]
+                           for key in ("publication_git_commit", "reused_for_git_commit"))
+                    or type(item.get("reused_for_working_tree_dirty")) is not bool):
+                raise ValueError(f"Invalid reuse history: {name}; execute a fresh publication.")
+        if type(evidence["seconds"]) not in (int, float) or not 0 <= evidence["seconds"] < float("inf"):
+            raise ValueError(f"Invalid captured execution time: {name}; execute a fresh publication.")
+        plan[name] = notebook_hashes[name] == evidence["sha256"]
+        if plan[name]:
+            captured_notebook(DOCS / name, saved, evidence)
+    return plan
+
+
+def reused_notebook_record(evidence: dict, capture: dict,
+                           capture_hash: str, current: dict) -> dict:
+    result = copy.deepcopy(evidence)
+    result["execution_origin"] = execution_origin(capture, evidence)
+    result["reuse_history"] = [*result.get("reuse_history", []), {
+        "publication_sha256": capture_hash,
+        "publication_git_commit": capture["git_commit"],
+        "reused_for_git_commit": current["git_commit"],
+        "reused_for_working_tree_dirty": current["working_tree_dirty"]}]
+    return result
+
+
+def publish(julia: str, reuse_executed: bool = False, reuse_unchanged: bool = False) -> None:
+    if reuse_executed and reuse_unchanged:
+        raise ValueError("Choose only one notebook reuse mode.")
     manifest = DOCS / "Manifest.toml"
     if not manifest.exists():
         raise RuntimeError("Instantiate docs/Project.toml first; see docs/README.md.")
     config = tomllib.loads((DOCS / "publication.toml").read_text())
-    package_files = [ROOT / "Project.toml", *sorted((ROOT / "src").rglob("*.jl")),
-                     *sorted((ROOT / "src").rglob("*.bin")),
-                     *sorted((ROOT / "ext").rglob("*.jl"))]
-    source_hashes = {p.relative_to(ROOT).as_posix(): sha256(p) for p in package_files}
+    source_hashes = package_source_hashes()
     manifest_hash = sha256(manifest)
     build = DOCS / ".build"
     build.mkdir(exist_ok=True)
@@ -242,12 +340,24 @@ def publish(julia: str, reuse_executed: bool = False) -> None:
         validate_capture(capture, previous, config, source_hashes, manifest_hash)
     env = {**os.environ, "JULIA_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1",
            "JULIA_NUM_PRECOMPILE_TASKS": "1", "TAMEROP_DOCS_PYTHON": sys.executable}
+    if reuse_unchanged:
+        capture_bytes = (previous / "publication.json").read_bytes()
+        capture = json.loads(capture_bytes)
+        capture_hash = hashlib.sha256(capture_bytes).hexdigest()
+        runtime = runtime_versions(julia, env)
+        notebook_hashes = {lesson["source"]: sha256(DOCS / lesson["source"]) for lesson in config["notebooks"]}
+        environment_hashes = {name: sha256(DOCS / name) for name in
+                              ("Project.toml", "Manifest.toml", "requirements.txt", "publication.toml")}
+        reuse_plan = unchanged_capture_plan(capture, previous, config, source_hashes,
+                                            manifest_hash, runtime, notebook_hashes)
+        current = {**checkout_state(), **runtime, "package_source_sha256": source_hashes,
+                   "docs_manifest_sha256": manifest_hash}
     with tempfile.TemporaryDirectory(prefix="publication-", dir=build) as temporary:
         temporary = Path(temporary)
         stage = temporary / "src"
         shutil.copytree(DOCS / "src", stage)
         downloads = stage / "downloads"
-        if reuse_executed:
+        if reuse_executed or reuse_unchanged:
             shutil.copytree(previous, downloads)
         else:
             downloads.mkdir()
@@ -293,13 +403,19 @@ def publish(julia: str, reuse_executed: bool = False) -> None:
         for lesson in config["notebooks"]:
             source = DOCS / lesson["source"]
             notebook_hash = sha256(source)
-            if reuse_executed:
+            if reuse_executed or (reuse_unchanged and reuse_plan[lesson["source"]]):
                 evidence = next(item for item in capture["notebooks"] if item["source"] == lesson["source"])
                 nb = captured_notebook(source, downloads / source.name, evidence)
                 export_lesson(nb, source, stage / lesson["page"], pages, stage)
-                records.append(evidence)
+                records.append(reused_notebook_record(evidence, capture, capture_hash, current)
+                               if reuse_unchanged else evidence)
                 print(f"Reusing verified execution of {source.relative_to(ROOT)}", flush=True)
                 continue
+            if reuse_unchanged:
+                # A changed lesson may no longer produce its former exports.
+                exports = downloads / "figures" / source.stem
+                if exports.exists():
+                    shutil.rmtree(exports)
             nb = nbformat.read(source, as_version=4)
             for cell in nb.cells:
                 if cell.cell_type == "code":
@@ -340,21 +456,33 @@ def publish(julia: str, reuse_executed: bool = False) -> None:
                 "code_cells": sum(c.cell_type == "code" for c in nb.cells),
                 "figures": figures, "seconds": round(elapsed, 3),
                 "download_sha256": sha256(downloads / source.name)})
+            if reuse_unchanged:
+                records[-1].update(execution_origin=copy.deepcopy(current), reuse_history=[])
         environment = downloads / "environment"
         if not reuse_executed:
-            environment.mkdir()
+            environment.mkdir(exist_ok=reuse_unchanged)
             for name in ("Project.toml", "Manifest.toml", "requirements.txt", "publication.toml"):
                 shutil.copy2(DOCS / name, environment / name)
-        if source_hashes != {p.relative_to(ROOT).as_posix(): sha256(p) for p in package_files} or sha256(manifest) != manifest_hash:
+        final_sources = (package_source_hashes() if reuse_unchanged else
+                         {name: sha256(ROOT / name) for name in source_hashes})
+        if source_hashes != final_sources or sha256(manifest) != manifest_hash:
             raise ValueError("Package source or documentation environment changed during execution; rebuild.")
+        if reuse_unchanged:
+            if (any(sha256(DOCS / name) != digest for name, digest in notebook_hashes.items())
+                    or any(sha256(DOCS / name) != digest for name, digest in environment_hashes.items())
+                    or runtime_versions(julia, env) != runtime):
+                raise ValueError("Notebook or execution environment changed during publication; rebuild.")
+            if checkout_state() != {key: current[key] for key in ("git_commit", "working_tree_dirty")}:
+                raise ValueError("Git checkout changed during publication; rebuild.")
         record = capture if reuse_executed else {"notebooks": records,
-            "git_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
-            "working_tree_dirty": bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT)),
-            "julia": subprocess.check_output([julia, "--startup-file=no", "--version"], env=env, text=True).strip(),
-            "python_packages": {p: importlib.metadata.version(p) for p in
-                ("nbclient", "nbconvert", "nbformat", "jupyter_client")},
+            **({key: current[key] for key in ("git_commit", "working_tree_dirty")}
+               if reuse_unchanged else checkout_state()),
+            **(runtime if reuse_unchanged else runtime_versions(julia, env)),
             "package_source_sha256": source_hashes,
             "docs_manifest_sha256": manifest_hash}
+        if reuse_unchanged:
+            record.update(reuse_mode="unchanged", previous_publication={
+                "sha256": capture_hash, "git_commit": capture["git_commit"]})
         (downloads / "publication.json").write_text(json.dumps(record, indent=2) + "\n")
         target = build / "src"
         if target.exists():
@@ -378,9 +506,12 @@ def publish(julia: str, reuse_executed: bool = False) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--julia", default=shutil.which("julia"), help="Julia executable (default: PATH)")
-    parser.add_argument("--reuse-executed", action="store_true",
-                        help="Rebuild prose/navigation using verified unchanged notebook executions")
+    reuse = parser.add_mutually_exclusive_group()
+    reuse.add_argument("--reuse-executed", action="store_true",
+                       help="Rebuild prose/navigation using verified unchanged notebook executions")
+    reuse.add_argument("--reuse-unchanged", action="store_true",
+                       help="Reuse validated exact notebook matches and execute changed notebooks")
     args = parser.parse_args()
     if not args.julia:
         parser.error("Julia is not on PATH; supply --julia /path/to/julia")
-    publish(args.julia, reuse_executed=args.reuse_executed)
+    publish(args.julia, reuse_executed=args.reuse_executed, reuse_unchanged=args.reuse_unchanged)

@@ -104,10 +104,27 @@ docs/.venv/bin/python docs/build_scripts/check_site.py
 
 This checks notebook source/download hashes, the selected notebook set, package
 sources and the declared documentation execution environment before reusing
-saved outputs. It preserves their original execution evidence. Run the normal
-publication command after changing notebook code or prose, package sources or
-that environment. Both modes accept `--julia /path/to/julia` when Julia is not
-on `PATH` or a particular executable is needed.
+saved outputs. It preserves their original execution evidence and rejects any
+change to notebook bytes, including Markdown.
+
+When a batch changes some notebooks, a complete previous capture can supply
+outputs for those whose source files are exactly unchanged:
+
+```sh
+docs/.venv/bin/python docs/build_scripts/publish.py --reuse-unchanged
+docs/.venv/bin/python docs/build_scripts/check_site.py
+```
+
+This mode validates every previous notebook download before starting a kernel.
+It requires the same package sources and binary assets, declared documentation
+environment, notebook set, Julia version and recorded versions of the four
+pinned Python packages. Each changed notebook runs in a fresh kernel, including
+notebooks with only prose or metadata edits. The new publication record identifies
+the current checkout while retaining each reused notebook's execution origin and
+a hash link to its previous publication record. Use a normal build when these
+requirements do not hold or a complete capture is unavailable. All modes accept
+`--julia /path/to/julia` when Julia is not on `PATH` or a particular executable is
+needed; the two reuse options cannot be combined.
 
 `check_site.py` requires a matching publication record, page, executed download,
 figures and optional sections for every notebook in `publication.toml`. It

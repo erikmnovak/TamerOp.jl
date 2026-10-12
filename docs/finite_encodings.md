@@ -5,12 +5,13 @@ compatible linear map for each comparison. Over the real plane, there are
 infinitely many parameters. How can we keep the whole module in a form that
 a computer can use?
 
-A **finite encoding** answers this question by assigning parameters to
-finitely many labels. The labels form a poset, and a module on that poset
-supplies the spaces and maps. The assignment tells us how to recover them at
-the original parameters. It is an essential part of the description.
+A **finite encoding** assigns the parameters to finitely many labels,
+organized into a poset. A module on that finite poset supplies the spaces
+and maps, while the assignment tells us which of them to use at an original
+parameter. We can therefore keep the finite module and the assignment
+together, instead of listing infinitely many spaces separately.
 
-We will build two encodings of the same square-supported module and check
+We will build two encodings of the same module supported on a square and check
 what they recover. You need the notions of a poset, a structure map, and
 composition, together with basic linear algebra. The short bridge
 [why two parameters change the problem](two_parameters.md) introduces these
@@ -33,11 +34,11 @@ M(q)=
 \end{cases}
 $$
 
-The coefficient field has changed from F₂ in the ring example to ℚ here.
-The parameters still range over all real pairs; coefficients inside a vector
-space are a separate choice from the coordinates indexing that space.
-We are specifying this module directly, without claiming that the earlier
-ring calculation produced it.
+We are specifying this module directly. Its coefficient field is ℚ, rather
+than the F₂ used for the ring, while its parameters range over all real
+pairs. These choices serve different purposes: the field supplies the
+scalars inside a vector space, and the parameter domain tells us where
+those spaces are assigned.
 
 We must also specify the maps. For $q\leq r$, let $M(q\leq r)$ be the
 identity on $\mathbb{k}$ when both points lie in $S$. Otherwise it is the
@@ -63,12 +64,11 @@ endpoint coordinates. The three maps are identities. In every other case
 at least one endpoint space is zero, so both the direct map and the composite
 are zero. A subset with this between-points property is called **order-convex**.
 
-The square is the module's **support**, meaning the set where its stalks are
-nonzero. It is not a restriction on the query domain. Points outside the
-square still have well-defined zero spaces. The boundary also matters:
-$(0,0)$, $(2,2)$, and every point along the four edges belong to the support.
-This is a closed square, distinct from the half-open interval $[0,5)$ in the
-ring example.
+The square is the module's **support**, the set where its stalks are nonzero.
+The module remains defined outside it, with a zero space at every such
+parameter. All four edges and corners belong to the support, including
+$(0,0)$ and $(2,2)$. Keeping these boundaries in view will help us check the
+encoding: changing a closed boundary to an open one would change the module.
 
 ## A finite model with nine labels
 
@@ -102,9 +102,9 @@ here the fibers are exactly the nine regions specified by the band pairs.
 
 ![A parameter plane divided into nine band-pair regions and the matching nine-label finite poset. The closed central square and label (C,C) carry a copy of the rational field; all other labels carry zero spaces.](assets/finite_encodings/nine_region_encoding.svg)
 
-*The left panel shows part of the original plane; its outer regions extend
+*The upper panel shows part of the original plane; its outer regions extend
 beyond the displayed window. Coordinates equal to 0 or 2 belong to band C.
-The right panel is the finite poset of labels, with spaces attached. Arrows
+The lower panel is the finite poset of labels, with spaces attached. Arrows
 show its immediate comparisons, called covers; longer comparisons follow
 by composition.
 This is an authored schematic, not a claim about the number or numbering of
@@ -133,22 +133,22 @@ $(1,3/2)\leq(3,3/2)$, use the finite map from $(C,C)$ to $(H,C)$: the
 zero map from $\mathbb{k}$ to zero. For $(-1,1)\leq(0,1)$, use the
 map from $(L,C)$ to $(C,C)$, whose matrix has one row and no columns.
 
-An infinite collection of space and map queries is now answered by a finite
-module together with an explicit rule for finding labels. The rule works
-throughout ℝ²; this construction is not limited to the sample points in the
-table.
+The inequalities defining $b$ let us make these lookups anywhere in ℝ².
+Although the table illustrates only a few queries, the same finite module
+and assignment answer every space query and every map query at comparable
+parameters.
 
 ## What the definition requires
 
 For a module $M$ on a poset $Q$, a **finite encoding** consists of a finite
 poset $P$, a module $N$ on $P$ with finite-dimensional stalks, and an
-order-preserving map $\pi:Q\to P$, such that
+order preserving map $\pi:Q\to P$, such that
 
 $$
 M\cong\pi^*N=N\circ\pi.
 $$
 
-This is the finite-encoding definition in
+This is the definition of a finite encoding in
 [Ezra Miller's *Homological algebra of modules over posets*, Definition 4.1](https://arxiv.org/html/2008.00063#S4.SS1).
 The map $\pi$ is often called the **encoding map** or **classifier**: it
 assigns an original parameter to a finite label.
@@ -197,15 +197,16 @@ parameter. Keeping $P$ and $\pi$ without the maps of $N$ would leave us unable
 to follow vectors. The finite poset, its module, and the encoding map all
 contribute to the representation.
 
-The definition makes the poset and its vector-space data finite. Computation
-also needs a usable description of $\pi$, such as the inequality tests in
-our example. The existence of an abstract encoding alone does not supply
-an algorithm for evaluating its classifier.
+The definition makes the poset and its linear algebra finite. To compute
+with it, we also need a usable description of $\pi$, such as the inequality
+tests in our example. An existence theorem can establish that an encoding
+is available without giving an algorithm for evaluating its classifier.
 
 ## Why equal dimensions do not define the labels
 
-The square has only two stalk dimensions, zero and one. Could we therefore
-use just an exterior label $z$ and an interior label $a$?
+The square has only two stalk dimensions, zero and one, so it is tempting
+to use an exterior label $z$ and an interior label $a$. The order tells us
+why this assignment fails.
 
 Consider the comparable chain
 
@@ -232,8 +233,9 @@ parameters from their labels.
 
 ## Another valid encoding has four labels
 
-The nine-label model is convenient to draw, but a finite encoding is not
-unique. For this same square, record two yes-or-no facts about $q=(x,y)$:
+The model with nine labels is convenient to draw, though some of those
+labels can be combined. For the same square, record two facts about
+$q=(x,y)$, each with value zero or one:
 
 $$
 u(q)=
@@ -272,15 +274,16 @@ recovers maps between comparable points inside the square. Both routes
 around the diamond compose to the unique map between its zero endpoint
 spaces.*
 
-The condition $u=1,c=0$ is exactly $0\leq x\leq2$ and $0\leq y\leq2$.
-Thus stalk lookup recovers $M$ everywhere. For comparable points inside the
-square it recovers an identity; in every other case it recovers the required
-zero map. This proves that the four-label construction encodes the same
-module as the nine-label construction.
+The condition $u=1,c=0$ is exactly $0\leq x\leq2$ and $0\leq y\leq2$,
+so looking up a stalk recovers $M$ everywhere. Comparable points inside
+the square share the label $(1,0)$ and hence recover its identity map.
+Every other comparable pair has at least one zero endpoint space, giving
+the required zero map. This checks the spaces and maps for the new encoding
+throughout the plane.
 
 A label need not describe one connected geometric region. The signature
-$(0,1)$ covers both the upper-left region $x<0,y>2$ and the lower-right
-region $x>2,y<0$. These disconnected pieces can share a label in this
+$(0,1)$ covers both the region at upper left, $x<0,y>2$, and the region at
+lower right, $x>2,y<0$. These disconnected pieces can share a label in this
 encoding. There is no requirement that the regions be rectangular cells or
 that the finite diagram reproduce their Euclidean positions.
 
@@ -319,30 +322,41 @@ the zero space, which is also its unique zero map. Checking the labels and
 the maps establishes the comparison; counting nine versus four vertices
 would not establish it.
 
-> **Figure placeholder: compare the two encodings.** A linked view will color
-> the nine regions by their four signatures. Selecting a point or a comparable
-> pair will trace both routes through $\pi_9$, $\rho$, and $\pi_4$, displaying
-> the same recovered spaces and maps. The separated pieces with signature
-> $(0,1)$ will share a color and an explicit label.
+![The nine band regions are colored and labelled by their four signatures. The upper left and lower right regions both carry signature (0,1). A lookup triangle sends (1,1) to band label (C,C), then by rho to (1,0), agreeing with the direct assignment pi four.](assets/finite_encodings/compare_encodings.svg)
+
+*Each region is labelled first by its band pair and then by its signature;
+matching colours help us see which labels $\rho$ combines. Coordinates
+equal to 0 or 2 belong to the central band, so the outlined square is closed.
+The triangle follows one parameter through the two assignments. Its arrows
+assign labels; they are not structure maps between vector spaces. This is
+a schematic of the two specified encodings, with the outer regions cropped.*
+
+To compare maps as well as labels, take $(1,1)\leq(3,1)$. The first
+encoding gives the comparison $(C,C)\leq(H,C)$, and applying $\rho$ gives
+$(1,0)\leq(1,1)$, exactly as $\pi_4$ does directly. Both finite modules
+assign the zero map $\mathbb{k}\to0$, with matrix shape $0\times1$.
+For $(1,1)\leq(2,2)$, both endpoints instead have the central band label
+and signature $(1,0)$, so both routes recover $[1]$. Including the boundary
+point $(2,2)$ checks the closed square used throughout this chapter.
 
 ## What the package returns for this example
 
 The [inspection notebook](tutorials/inspect_encoding.ipynb)
 constructs the square using a region defined by lower bounds, a region
-defined by upper bounds, and a one-by-one coefficient matrix $[1]$ over ℚ. With
+defined by upper bounds, and a $1\times1$ coefficient matrix $[1]$ over ℚ. With
 `backend=:pl_backend` and `poset_kind=:signature`, the encoder returns a
 poset with the four signatures just described, ordered as the diamond.
 The second bit records the **complement** of membership in the region
 defined by the upper bounds. Taking the complement makes that bit increase
 with the parameters.
-The [indicator-presentations chapter](indicator_presentations.md) explains
+The [indicator presentations chapter](indicator_presentations.md) explains
 this input construction.
 
-The returned numeric vertex IDs are bookkeeping choices. Find labels with
-the returned encoding map and inspect the actual poset. Neither the
-nine-region schematic nor a particular ordering of the four signatures is
-a requirement on all encoders. A different representation can still satisfy
-the same recovery equations.
+The returned numeric vertex IDs depend on how the encoder constructs its
+poset. We therefore find them through the returned encoding map, rather
+than assuming that a number denotes a particular signature. The two models
+above show why the same recovery equations can hold for different finite
+representations.
 
 The notebook follows boundary, interior, and exterior points into the returned
 model, then recovers maps for comparable pairs. It also distinguishes an
@@ -350,7 +364,7 @@ incomparable pair that shares a label. The arguments above explain why the
 models recover the module throughout ℝ², beyond those selected queries.
 The geometric endpoints and query coordinates in this example are exactly
 representable as `Float64`, while the linear algebra uses ℚ. Arbitrary real
-geometric inputs need not be represented exactly by floating-point coordinates;
+geometric inputs need not be represented exactly by floating point coordinates;
 see [exact grades](exact_grades.md) for the supported contracts.
 
 ## What recovery guarantees
@@ -360,8 +374,8 @@ stalks and its structure maps up to the compatible identifications described
 above. In particular, it recovers the dimensions of stalks and the ranks of
 maps at specified comparable parameters. The finite labels themselves are
 not persistent classes, and an encoding is not an interval decomposition:
-one label can carry a higher-dimensional space and nontrivial matrices can
-connect different labels in other examples.
+one label can carry a space of dimension greater than one, and nontrivial
+matrices can connect different labels in other examples.
 
 Earlier modeling choices still matter. Selecting a filtration, truncating
 a complex, or changing the grid used to define an input can change $M$.
@@ -386,11 +400,11 @@ central objects connecting its constructions, algebra, and summaries.
 
 The name also recalls **tameness**, a finiteness condition on how a module
 varies, including its maps. For modules with finite-dimensional stalks, Ezra
-Miller's [finite-encoding theorem](https://arxiv.org/html/2008.00063#S4.SS4)
+Miller's [finite encoding theorem](https://arxiv.org/html/2008.00063#S4.SS4)
 relates finite encodings to finite constant subdivisions: partitions into
 finitely many regions whose spaces can be identified while keeping the maps
 between regions consistent. Encoding fibers form such a subdivision,
-with the additional organization supplied by an order-preserving map.
+with the additional organization supplied by an order preserving map.
 A given constant subdivision need not itself provide these fibers.
 Grouping all exterior zero spaces above illustrates why order compatibility
 is an additional requirement on the labels. The
@@ -401,7 +415,7 @@ abstract input.
 
 For the square, the construction already supplies the required finiteness.
 Filtrations of a fixed finite complex also supply it automatically. The
-follow-on explanation [why finite computations stay tame](practical_tameness.md)
+explanation [why finite computations stay tame](practical_tameness.md)
 shows why, and how encoding the relevant maps lets kernels, images, and
 homology remain finite. You can read it directly from this chapter or after
 the full tameness development.
@@ -411,7 +425,8 @@ the full tameness development.
 The mathematical description helps us recognize what a package result must
 contain. Inputs can come from a point cloud, graph, or image with a chosen
 filtration, or from a presentation specifying a module through algebraic
-pieces and maps. An already finite-poset module is another starting point.
+pieces and maps. A module already defined on a finite poset is another
+starting point.
 For supported inputs, the public workflow `encode` produces an
 `EncodingResult` connecting the finite object to its parameter domain and
 recorded construction.
@@ -429,7 +444,7 @@ Some ingestion results defer expensive calculations: `dimensions` computes
 the dimensions, while `encoding_module` explicitly computes the module and
 its maps if needed. The [inspection guide](lazy_inspection.md) explains this
 distinction. A request for an intermediate `stage`, or a direct
-[ordinary-persistence calculation](ordinary_persistence.md), should not be
+[ordinary persistence calculation](ordinary_persistence.md), should not be
 mistaken for a completed `EncodingResult`.
 
 ## Recover the square in a computation

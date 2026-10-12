@@ -1,14 +1,17 @@
 # API reference and operation help
 
-Use reference material when you know the operation you need and want its
-accepted arguments, return object, mathematical scope or validation behavior.
-For a connected workflow with interpreted results, begin with
-[Using TamerOp](using.md).
+When you know which operation you need, its reference explains the arguments
+it accepts, the object it returns and the conditions under which the result
+has the stated meaning. It also describes how to check your inputs. To see
+how several operations work together on an example, begin with
+[Using TamerOp](using.md), where the guides follow and interpret the computation.
 
 ## Find an operation's contract
 
-Julia's help mode reads the method documentation shipped with the package.
-Import TamerOp, then type `?` at the Julia prompt to enter help mode:
+An operation's contract is the combination of its accepted inputs, guarantees
+and requirements. Julia's help mode reads the method documentation shipped
+with the package, so you can consult these details in the version you are
+using. Import TamerOp, then type `?` at the Julia prompt to enter help mode:
 
 ```julia
 import TamerOp as OP
@@ -21,11 +24,14 @@ help?> OP.encoding_module
 help?> OA.structure_map
 ```
 
-`OP` exposes the main workflows and result accessors. `OA` exposes detailed
-constructors, queries and validators. Subsystem owners also provide qualified
-APIs, for example `OP.FieldLinAlg.solve_fullcolumn`; look up the method you
-intend to call rather than inferring its contract from another overload.
-Help displays method signatures, mathematical meaning and applicable options.
+`OP` gives you the main workflows and operations for inspecting results.
+`OA` gives access to more detailed ways of constructing, querying and checking
+objects. Some operations belong to a particular part of the library, as in
+`OP.FieldLinAlg.solve_fullcolumn` for a linear algebra calculation. A Julia
+function can have several methods for different kinds of arguments; consult
+the method you intend to call, since its conditions may differ from those of
+another method. Help displays these calling forms, their mathematical meaning
+and the available options.
 
 ## Operations in context
 

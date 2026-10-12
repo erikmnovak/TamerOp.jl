@@ -1,19 +1,23 @@
 # Why finite computations stay tame
 
-The [tameness chapter](tameness.md) characterized modules that admit finite
-encodings. It also showed that a module can have one-dimensional stalks
-everywhere and still fail that condition. Does this mean we must prove a
-new tameness theorem before every calculation?
+In the [tameness chapter](tameness.md), a module with a line at every
+parameter failed to admit a finite encoding because its maps kept changing.
+That example gives us a reason to ask where the finiteness comes from in
+the constructions we actually use. For a filtration of a fixed finite
+complex, we can read the answer from the complex itself. For our square,
+we already have an explicit encoding.
 
-For the finite constructions used throughout these lessons, the construction
-already supplies the reason. A filtration of a fixed finite complex has a
-finite encoding. Our square comes with one explicitly. Once the relevant
-maps are encoded too, taking kernels, images, quotients, and homology keeps
-us in the finite setting. This is the practical justification for building
-on Ezra Miller's framework.
+We can then follow what happens when we calculate with those finite data.
+If a map between modules is encoded along with its source and target, its
+kernel and image can be computed on the same finite poset. The same
+reasoning applies to quotients and homology. Working through this mechanism
+will explain how Ezra Miller's framework supports a sequence of algebraic
+calculations without a new finiteness argument at every step.
 
-We will first see that mechanism, then explain the stronger closure results
-involving **abelian categories**. You need spaces, structure maps, and
+After a small calculation on the square, we will see how this leads to
+closure results for **abelian categories**, where these algebraic
+operations remain within the chosen class of objects and maps. We need
+spaces, structure maps, and
 [recovery by pullback](finite_encodings.md#what-the-definition-requires).
 The preceding chapter supplies the full equivalence theorem; here, remember
 that “tame” means admitting a finite encoding with finite-dimensional spaces.
@@ -42,10 +46,11 @@ Those three states already give an encoding; their first homology is
 $0,\mathbb{F}_2,0$. The two-parameter variant still selects subcomplexes
 of the same finite collection of cells, so the argument still applies.
 
-Listing every subcomplex is a proof of existence, not an efficient
-implementation prescription. An encoder can retain far fewer labels.
-The argument also concerns the mathematical filtration: a direct ordinary
-persistence call need not construct a TamerOp `EncodingResult`.
+We used every subcomplex to make the existence argument transparent. An
+encoder can often use far fewer labels, since many of those subcomplexes
+never appear in the filtration. This mathematical argument also applies
+when we compute ordinary persistence directly, without constructing a
+TamerOp `EncodingResult`.
 
 ## Follow one map on the square
 
@@ -63,8 +68,9 @@ interior comparisons use identities, and comparisons entering or leaving
 the support give zero on both routes. Thus $f$ is a **module morphism**,
 a compatible family of linear maps between two modules.
 
-Before computing, predict which pairs map to zero. At every point of the
-square, the answer is the line spanned by $(1,-1)$.
+Inside the square, a pair maps to zero precisely when $a+b=0$. We can
+therefore write every such pair as $a(1,-1)$, giving the kernel line in
+the following table.
 
 | Operation on $f_q$ | Inside the square | Outside |
 | --- | --- | --- |
@@ -72,14 +78,18 @@ square, the answer is the line spanned by $(1,-1)$.
 | Image: vectors reached in the target | $\mathbb{k}$ | $0$ |
 | Cokernel: target modulo the image | $0$ | $0$ |
 
-Following a comparable pair inside the square carries $(1,-1)$ to
-$(1,-1)$. Leaving it sends that vector to zero. We have checked the maps,
-so $\ker f\cong M$ as a module, not merely a match of dimensions. Likewise
-$\operatorname{im}f\cong M$ and $\operatorname{coker}f=0$.
+We can follow that line through the parameter plane. A comparison inside
+the square carries $(1,-1)$ to itself, while a comparison leaving the
+square sends it to zero. These are exactly the maps of $M$, under the
+identification $a\mapsto a(1,-1)$, so $\ker f\cong M$ as a module.
+The image has the same support and identity maps, giving
+$\operatorname{im}f\cong M$, and the cokernel is zero everywhere.
 
-The same finite labels that describe the square describe all these answers.
-In this example, we can reuse either of its earlier encodings: at the square
-label use $[\,1\ \ 1\,]$, and at the zero labels use the empty matrix.
+Either of the square's earlier encodings can carry this calculation. At
+the label representing the square, use the matrix $[\,1\ \ 1\,]$; at
+the labels carrying zero spaces, use the empty matrix. Taking its kernel,
+image and cokernel at those labels gives the answers we just followed on
+the whole parameter plane.
 
 ## Why the finite calculation recovers the original one
 
@@ -99,7 +109,8 @@ Images work the same way. This property is called **exactness of pullback**.
 It explains why we can do these operations on the finite model and recover
 the answer on the original domain.
 
-For homology, retain a chain complex $C_\bullet$ on $P$: modules $C_h$ with
+For homology, let $C_\bullet$ be a chain complex on $P$ whose terms
+have finite-dimensional stalks. It consists of modules $C_h$ with
 boundary morphisms $d_h:C_h\to C_{h-1}$ satisfying $d_h d_{h+1}=0$.
 Its cycles are $\ker d_h$, its boundaries are $\operatorname{im}d_{h+1}$,
 and its homology is their quotient. Thus
@@ -110,25 +121,28 @@ $$
 
 ![Two routes give the same homology module: take cycles modulo boundaries on a finite poset and then pull back, or pull back the chain complex with its differentials first and take homology on the original parameters.](assets/tameness/finite_homology.svg)
 
-*Schematic of the calculation, not a package plot. Horizontal arrows mean
+*This schematic follows the calculation. Horizontal arrows mean
 pullback along the same classifier $\pi$. Vertical arrows mean taking
 cycles and boundaries, then their quotient. The differential maps belong
 to the encoded data, which is why both routes recover the same answer.*
 
-For any fixed degree, finite-dimensional terms at the finitely many labels
-give finite-dimensional homology there. No new global subdivision argument
-is needed after taking homology. The square calculation above is the small
-linear-algebra version of this mechanism.
+At any fixed degree, the terms at each of the finitely many labels are
+finite dimensional, so their homology is too. Pullback then recovers the
+homology module throughout $Q$. The finite description has survived the
+calculation for the same reason that the kernel line survived our addition
+map on the square.
 
 ## The role of abelian categories
 
-A category specifies objects and the maps allowed between them. For our
-purposes, the useful consequence of being **abelian** is that finite direct
-sums, kernels, cokernels, and images exist internally, with the usual
-relation between image and quotient. Homology can therefore be formed
-without leaving the category. Modules of finite-dimensional vector spaces
-on a fixed finite poset have this property: the operations are performed
-label by label and the induced maps fit together.
+A **category** specifies objects and the maps between them, together with
+identity maps and composition. Here the objects are modules and the maps
+are module morphisms. In an **abelian category**, maps can be added,
+finite direct sums and kernels and cokernels exist within the category,
+and the quotient of a source by its kernel agrees with the image in its
+target. These properties make the usual construction of homology
+available. Modules of finite-dimensional vector spaces on a fixed finite
+poset have this property: perform the operations at each label, and the
+induced maps fit together as we have just seen.
 
 There is a distinction when starting with modules on an infinite domain.
 Encoding two objects need not encode every morphism between them. Ezra
@@ -137,15 +151,18 @@ their components are constant under compatible identifications on a common
 finite subdivision. See
 [Definition 4.27 and Proposition 4.31](https://arxiv.org/html/2008.00063#S4.SS5).
 
-For the square, the map $f$ meets that requirement explicitly. For a complex
-already supplied over a finite poset, the differential matrices do too.
-Merely knowing that its terms are tame, while leaving its differentials
-uncontrolled, would not establish the homology conclusion.
+Our addition map on the square meets this requirement: its matrix is
+constant on the support and zero outside. A complex supplied over a finite
+poset already retains its differential matrices on that same base. This
+is why the homology argument needed the differentials along with the
+terms; tameness of the terms alone would leave out the maps whose kernels
+and images we take.
 
 ### When all morphisms are covered
 
-Waas strengthens this through **connective encoding structures**, whose
-[set-closure conditions](https://arxiv.org/html/2407.08666v1#S2.SS2) govern
+Lukas Waas obtains a stronger conclusion through **connective encoding
+structures**, whose
+[closure conditions on sets](https://arxiv.org/html/2407.08666v1#S2.SS2) govern
 the allowed fibers. Each allowed order-convex set must have finitely many
 components connected by zigzags of comparable points, also allowed.
 Order-convex means containing every point between comparable endpoints.
@@ -157,9 +174,12 @@ morphisms correspond bijectively to maps on this finite model.
 
 On $\mathbb{R}^n$, [Theorem 1.1](https://arxiv.org/html/2407.08666v1#S1)
 covers fibers formed by finite Boolean combinations of topologically closed
-piecewise-linear upsets, or closed semialgebraic upsets. Boolean combinations
-use finite unions, intersections, and complements. These are sufficient
-hypotheses; arbitrary piecewise-linear fibers do not suffice, as
+piecewise linear upsets, or closed semialgebraic upsets. Piecewise linear
+sets are built from finitely many polyhedral pieces; semialgebraic sets
+are specified by finite Boolean combinations of polynomial equations and
+inequalities. Here Boolean combinations mean finite unions,
+intersections and complements. These are sufficient hypotheses;
+arbitrary piecewise linear fibers do not suffice, as
 [Example 3.1](https://arxiv.org/html/2407.08666v1#S3) demonstrates.
 
 A particularly useful class allows finite unions of axis-aligned boxes,
@@ -167,20 +187,21 @@ including open or closed endpoints and unbounded intervals. Modules encoded
 with these fibers form a full abelian subcategory; see Barbara Giunti,
 John S. Nolan, Nina Otter, and Lukas Waas,
 [Example 3.8, Remark 3.20, and Corollary 3.23](https://arxiv.org/html/2107.09036v5#S3).
-Our closed square belongs to this class: its nine-region encoding uses
+Our closed square belongs to this class: its encoding by nine regions uses
 products of the bands $(-\infty,0)$, $[0,2]$, and $(2,\infty)$.
 Consequently the closure statement covers every morphism between modules
-in this box-encoded class, beyond the particular addition map we checked.
+in this class of modules encoded by boxes, beyond the particular addition map we checked.
 
 Endpoint conventions remain part of these statements. The general
-closed-upset theorem and the box class just described are different choices
+theorem based on closed upsets and the box class just described are different choices
 of allowed geometry. We use the latter for the square, preserving its
 closed upper boundary.
 
-These results explain the practical advantage: within an established
-construction and its allowed operations, the finiteness argument can be
-settled once and reused. They do not assert that every module is tame or
-that every supplied encoding already encodes all ambient morphisms.
+Within one of these classes, we can establish the finiteness argument
+once and then use its closure under the allowed operations. The
+hypotheses tell us which objects and maps are covered. In particular,
+the existence of a suitable common encoding does not say that every
+encoding we happen to have chosen already represents all ambient maps.
 
 ## What the construction settles for a TamerOp user
 
@@ -216,12 +237,13 @@ already shows why that broader condition does not supply a finite encoding.
 
 ## Which category does the calculation use?
 
-The square's construction supplies tameness, and its retained finite data
-support the calculations we have described. Exact pullback and the closure
-results explain why kernels, images, quotients, and homology stay within
-this framework. They do not automatically identify Ext or Tor over an
-arbitrary finite encoding with ambient derived functors.
+The operations above use kernels and quotients of maps that we have
+already retained. Derived operations such as Ext and Tor introduce a
+further choice: they use resolutions, whose terms must have appropriate
+properties in the category where we compute. Pulling a resolution back
+keeps it exact, but need not preserve those properties.
 
-Continue with [categories and comparison](math_categories.md) to identify
-the category in which an algebraic computation takes place and the
-hypotheses needed to compare its answer with one over another poset.
+The [categories and comparison chapter](math_categories.md) explains
+this distinction through a small finite example. It will let us identify
+what an algebraic computation on a chosen encoding establishes, and what
+we need before comparing it with a computation on another poset.

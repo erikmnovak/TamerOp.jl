@@ -1,19 +1,24 @@
 # Install and open a lesson notebook
 
-You need Julia 1.12 or a compatible newer Julia 1.x release. If necessary,
-follow the [official Julia installation instructions](https://julialang.org/install/).
-The commands below labelled `julia` belong in Julia; the `sh` command belongs
-in a terminal.
+The lessons include saved figures, so you can read them before installing
+anything. To run their computations, you need Julia 1.12 or a compatible newer
+Julia 1.x release; follow the
+[official Julia installation instructions](https://julialang.org/install/)
+if needed. The blocks labelled `julia` below belong at the Julia prompt,
+while terminal commands are labelled `sh`.
 
-Install TamerOp by name from [Julia's General registry](https://github.com/JuliaRegistries/General/tree/master/T/TamerOp).
-You do not need to clone its repository or install its dependencies individually.
-Plotting and notebooks are optional additions.
+We will first install the registered TamerOp package and check it with the
+ring example. The notebook setup then adds the plotting and notebook packages
+and selects the development version used by the website. Julia's package
+manager obtains TamerOp and its dependencies from
+[General](https://github.com/JuliaRegistries/General/tree/master/T/TamerOp),
+its package registry, so you can install by name without cloning the repository.
 
 ## Create an environment
 
-A Julia environment records the packages used by your work. In Julia, create
-one in a folder of your choice. This example uses `tamerop-work` under your
-home directory:
+A Julia environment records the packages used by your work, allowing you to
+reopen it later with the same versions. Create one in a folder of your choice;
+this example uses `tamerop-work` under your home directory:
 
 ```julia
 import Pkg
@@ -26,8 +31,9 @@ Pkg.add("TamerOp")
 
 `Pkg` selects a compatible registered release and records the environment in
 `Project.toml` and `Manifest.toml`. Keep those files with your work. Installation
-and initial precompilation can take several minutes; you do not need to repeat
-`Pkg.add` each time you start Julia.
+can take several minutes while Julia downloads dependencies and precompiles
+code for later use. Once it finishes, later sessions can load the package
+without repeating `Pkg.add`.
 
 Check the installation with a small computation:
 
@@ -45,7 +51,7 @@ develops the interpretation with figures.
 
 Download the [executed ring notebook](../downloads/ring.ipynb), the
 [square inspection notebook](../downloads/inspect_encoding.ipynb), or the
-[input-routes guide](../downloads/inputs_to_objects.ipynb). Each already contains
+[guide from inputs to computed objects](../downloads/inputs_to_objects.ipynb). Each already contains
 its static figures, which you can read without running the code.
 
 To rerun these website notebooks, use the development version: the registered
@@ -63,9 +69,9 @@ Pkg.add(name="TamerOp", rev="main")
 Pkg.add(["CairoMakie", "IJulia"])
 ```
 
-This explicitly tracks the repository's development branch rather than a
-registered release. Restart Julia if TamerOp was already loaded, then activate
-the lesson environment and start Jupyter:
+The lesson environment now follows the repository's development branch, so
+later updates will obtain changes from `main`. If TamerOp was already loaded,
+restart Julia before activating this environment and starting Jupyter:
 
 ```julia
 import Pkg
@@ -75,13 +81,16 @@ import IJulia
 IJulia.notebook(dir=lessondir)
 ```
 
-Save the downloaded notebook in `tamerop-lessons`. IJulia can offer to install
-Jupyter if it is missing. In the browser, open
-the downloaded notebook, select a Julia kernel, and run the cells from the top.
-The first package load and figure may take longer while Julia compiles them. The notebook
-uses CairoMakie for static figures. The square lesson's optional live inspector
-explains how to add WGLMakie and run its examples in a live Julia session;
-the saved figures and main computation need only the packages installed above.
+Save the downloaded notebook in `tamerop-lessons`. IJulia connects Julia to the
+Jupyter notebook interface and can offer to install Jupyter if it is missing.
+In the browser, open the notebook, select a Julia kernel (the Julia process
+that runs its code), and run the cells from the top. The first package load
+and figure may take longer while Julia compiles them.
+
+CairoMakie draws the static figures used in the main lesson. The square
+lesson has an optional section explaining how to add WGLMakie and inspect
+the example in a live Julia session. You can follow the main computation
+and read its saved figures with the packages installed above.
 
 If the kernel cannot find a package, activate your lesson folder in a cell before
 the lesson's imports:
@@ -117,6 +126,7 @@ If name-only installation cannot find TamerOp, check the capitalization and run
 
 ## Read before running
 
-The [ring lesson](../../tutorials/ring.ipynb) and downloaded notebook both show
-the computed figures without Julia. Begin by predicting which squares are
-present and when their hole fills. Running the code then checks your prediction.
+In the [ring lesson](../../tutorials/ring.ipynb), nine squares appear at two
+different thresholds. Before running the cells, use their assigned values
+to predict when the hole forms and fills. The figures and returned interval
+let you check that prediction as you read.

@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="500" height="714" viewBox="0 0 500 714" role="img" aria-labelledby="title description">
+<title id="title">A vector enters the overlap and then maps to zero</title>
+<desc id="description">An authored schematic over k in the summand bases of the two closed squares. At p=(one half, one half), the selected vector is one. The column (1,0) sends it to (1,0) at q=(three halves, three halves). The row (0,1) sends it to zero at r=(five halves, five halves). The target space at r is k, belonging to the second square.</desc>
+<!-- Authored schematic; regenerate with docs/build_scripts/render_foundation_details.py. -->
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M 1 1 L 9 5 L 1 9" fill="none" stroke="#0f766e" stroke-width="1.5"/></marker></defs>
+<rect width="500" height="714" fill="white"/>
+<g font-family="DejaVu Sans, sans-serif" fill="#172b42" text-anchor="middle">
+<text x="250" y="36" font-size="25" fill="#172b42" text-anchor="middle">Follow the first square's vector</text>
+<rect x="35" y="85" width="430" height="108" fill="#f8fafc" stroke="#245c99" stroke-width="2" rx="7" stroke-dasharray=""/>
+<text x="250" y="120" font-size="24" fill="#172b42" text-anchor="middle">p = (½, ½): M(p) = k</text>
+<text x="250" y="165" font-size="27" fill="#245c99" text-anchor="middle">chosen vector: 1</text>
+<rect x="35" y="305" width="430" height="108" fill="#f8fafc" stroke="#245c99" stroke-width="2" rx="7" stroke-dasharray=""/>
+<text x="250" y="340" font-size="24" fill="#172b42" text-anchor="middle">q = (³⁄₂, ³⁄₂): M(q) = k²</text>
+<text x="250" y="385" font-size="27" fill="#245c99" text-anchor="middle">image: (1, 0)</text>
+<rect x="35" y="525" width="430" height="108" fill="#f8fafc" stroke="#245c99" stroke-width="2" rx="7" stroke-dasharray=""/>
+<text x="250" y="560" font-size="24" fill="#172b42" text-anchor="middle">r = (⁵⁄₂, ⁵⁄₂): M(r) = k</text>
+<text x="250" y="605" font-size="27" fill="#475569" text-anchor="middle">image: 0</text>
+<path d="M 140 199 L 140 299" fill="none" stroke="#0f766e" stroke-width="2.5" stroke-dasharray="" marker-end="url(#arrow)"/>
+<text x="250" y="234" font-size="24" fill="#172b42" text-anchor="middle">1</text>
+<text x="250" y="262" font-size="24" fill="#172b42" text-anchor="middle">0</text>
+<path d="M 234 213 H 227 V 268 H 234" fill="none" stroke="#172b42" stroke-width="2"/>
+<path d="M 266 213 H 273 V 268 H 266" fill="none" stroke="#172b42" stroke-width="2"/>
+<text x="366" y="253" font-size="23" fill="#0f766e" text-anchor="middle">inclusion</text>
+<path d="M 140 419 L 140 519" fill="none" stroke="#0f766e" stroke-width="2.5" stroke-dasharray="" marker-end="url(#arrow)"/>
+<text x="250" y="478" font-size="25" fill="#172b42" text-anchor="middle">[0  1]</text>
+<text x="372" y="478" font-size="23" fill="#0f766e" text-anchor="middle">projection</text>
+<text x="250" y="678" font-size="22" fill="#172b42" text-anchor="middle">M(r) contains the second square's vectors.</text>
+</g></svg>

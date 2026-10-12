@@ -183,18 +183,18 @@ path = "M 400 904 V 958"
 [[groups]]
 id = "data-and-geometry"
 title = "Bring in data"
-description = "Start with the choices that determine an ingested module. For radius and coverage depth, continue through multicover construction, exact grades, and depth windows."
+description = "Choose how your data will determine a module. For computations with radius and coverage depth, the guides explain the multicover construction, exact grades and the part of the depth range being represented."
 links = [
     {title = "Ingestion options", source = "ingestion_options.md"},
     {title = "Multicover computation", source = "multicover.md"},
     {title = "Exact radius grades", source = "exact_grades.md"},
-    {title = "Coverage-depth windows", source = "rhomboid_depth.md"},
+    {title = "Coverage depth windows", source = "rhomboid_depth.md"},
 ]
 
 [[groups]]
 id = "algebra-and-inspection"
-title = "Work with the retained algebra"
-description = "First identify the category in which a calculation takes place. Then choose which objects to materialize and, for floating coefficients, how to assess numerical rank decisions."
+title = "Work with modules and maps"
+description = "The category determines which objects and maps a calculation concerns. With that setting specified, choose the spaces and maps to compute; when using floating coefficients, examine how numerical rank decisions affect the answer."
 links = [
     {title = "Categories and derived computations", source = "math_categories.md"},
     {title = "Exploring spaces and maps", source = "spaces_and_maps.md"},
@@ -205,7 +205,7 @@ links = [
 [[groups]]
 id = "comparison-and-figures"
 title = "Compare and show results"
-description = "Use the visualization guide to choose a view of the encoded object. For comparing two compatible encodings, the matching-distance guide explains the finite-window question and its hypotheses."
+description = "The visualization guide helps you choose a view of the spaces, maps or summaries you want to examine. To compare two compatible encodings, the matching distance guide develops the question over a finite window and explains the required hypotheses."
 links = [
     {title = "Ordinary persistence", source = "ordinary_persistence.md"},
     {title = "Visualization and export", source = "visualization.md"},
@@ -218,6 +218,6 @@ title = "Choose tools and reproduce work"
 description = "Add the integration your task needs, check what its options change, and use the benchmarking methodology when measuring computational cost."
 links = [
     {title = "Optional integrations", source = "optional_integrations.md"},
-    {title = "Option contracts", source = "option_contracts.md"},
+    {title = "Options and their effects", source = "option_contracts.md"},
     {title = "Benchmarking methodology", source = "benchmarking.md"},
 ]

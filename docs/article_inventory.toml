@@ -65,7 +65,7 @@ migration = "retain"
 
 [[articles]]
 id = "site_home"
-title = "Keep the module, make its description finite"
+title = "TamerOp"
 type = "resource"
 topics = ["getting_started"]
 question = "Which entrance fits what I want to learn or accomplish?"

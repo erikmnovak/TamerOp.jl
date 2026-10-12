@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="560" height="620" viewBox="0 0 560 620" role="img" aria-labelledby="title desc">
+<title id="title">The same constant module, two categories for Ext</title>
+<desc id="desc">On the left, the poset Q has minima 1 and 2, maxima 3 and 4, and an arrow from each minimum to each maximum. Every stalk of its constant module C is k and all four arrow maps are identities. The crossing of the diagonal arrows is not a vertex. On the right, a one-point poset has the vector space k. The map q sends all four labels to the point; pullback recovers C. Over Q, applying Hom to the displayed projective resolution gives the matrix with rows (1, minus 1) and (1, minus 1), of rank one, so Ext in degree one is k. Over a point every short exact sequence of vector spaces splits, so Ext in degree one is zero.</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M1 1L9 5L1 9" fill="none" stroke="#156b91" stroke-width="1.5"/></marker></defs>
+<rect width="560" height="620" fill="white"/>
+<g font-family="DejaVu Sans,sans-serif" fill="#173147" text-anchor="middle">
+<text x="280" y="35" font-size="24">Ext depends on the chosen category</text>
+<text x="170" y="80" font-size="22">Four labels in Q</text><text x="453" y="80" font-size="22">One point</text>
+<g fill="none" stroke="#156b91" stroke-width="2" marker-end="url(#arrow)"><path d="M80 234V134"/><path d="M260 234V134"/><path d="M89 234L249 134"/><path d="M249 234L89 134"/></g>
+<g fill="white" stroke="#156b91" stroke-width="2"><circle cx="80" cy="115" r="20"/><circle cx="260" cy="115" r="20"/><circle cx="80" cy="255" r="20"/><circle cx="260" cy="255" r="20"/><circle cx="453" cy="185" r="25"/></g>
+<g font-size="23"><text x="80" y="122">k</text><text x="260" y="122">k</text><text x="80" y="262">k</text><text x="260" y="262">k</text><text x="453" y="193">k</text></g>
+<g font-size="19"><text x="48" y="121">3</text><text x="292" y="121">4</text><text x="48" y="262">1</text><text x="292" y="262">2</text></g>
+<g font-size="20"><text x="170" y="307">Every arrow is [1]</text><text x="453" y="240">q(i) = *</text></g>
+<text x="280" y="346" font-size="20">Pulling k back along q recovers C.</text>
+<path d="M25 369H535" stroke="#bdced9"/>
+<text x="280" y="404" font-size="22">The resolutions belong to different categories</text>
+<g font-size="21"><text x="280" y="442">Over Q:  k² → k² has rank one</text><text x="280" y="476">δ(a, b) = (a − b, a − b)</text><text x="280" y="514">Ext¹(C, C) ≅ k</text></g>
+<g font-size="21"><text x="280" y="560">Over the point, vector space sequences split:</text><text x="280" y="595">Ext¹(k, k) = 0</text></g>
+</g></svg>

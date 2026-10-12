@@ -1,21 +1,22 @@
 # Persistence modules over posets
 
-When a shape changes with a parameter, we can ask how many connected
-components or holes it has. We can also ask a more revealing question: how
-does a class observed at one parameter continue to another? A persistence
-module records the vector spaces in which these classes live and the linear
-maps that follow them through the changes.
+When a shape changes with a parameter, a hole we saw earlier may still be
+present, or it may have filled in. Counting holes at each stage leaves this
+continuation unresolved: we would like to know what becomes of a particular
+class as the shape grows. A persistence module records the vector spaces in
+which these classes live and the linear maps that follow them through the
+changes.
 
-This page develops that idea from the [ring lesson](tutorials/ring.ipynb).
-We will see why
-several parameters lead to a partially ordered set, what a module over that
-set contains, and why keeping only the dimensions loses information. These
-are the ingredients needed to understand the next step: a
-[finite encoding](finite_encodings.md).
+Starting from the [ring lesson](tutorials/ring.ipynb), we will work out which
+changes of parameter give us a map and why the maps must agree when two
+routes meet. This leads to the definition of a module over a partially
+ordered set. Once we know what information it contains, we can ask how a
+[finite encoding](finite_encodings.md) keeps that information in a finite
+description.
 
-You need familiarity with vectors, linear maps, and matrix multiplication.
-No Julia installation or previous knowledge of homology is needed to follow
-the examples.
+Some familiarity with vectors, linear maps and matrix multiplication is enough
+to follow the examples; we will introduce the homology needed for the ring
+as we go. The argument can be read without a Julia installation.
 
 If you have just finished the [ring notebook](tutorials/ring.ipynb),
 [why two parameters change the problem](two_parameters.md) offers a shorter
@@ -104,42 +105,45 @@ $$
 \underbrace{M(5)}_{0}.
 $$
 
-The final arrow is the unique linear map from a one-dimensional space to
-the zero space. Its matrix has zero rows and one column; the label $0$
-denotes that zero map. The direct map from parameter 1 to parameter 5 is
-also zero: following the class in two steps gives the same answer as following
-it in one step.
+The final arrow sends every vector to the zero space. Its matrix has zero
+rows and one column, so the label $0$ denotes the map rather than a matrix
+with a single zero entry. The direct map from parameter 1 to parameter 5 is
+zero as well: following the class in two steps gives the same answer as
+following it in one step.
 
 This example explains why an inclusion of shapes can induce a homology map
 that is not injective. The loop remains present as a geometric curve inside
 the filled square, but its homology class has become zero.
 
-The **barcode interval** $[0,5)$ packages the life of this class. It includes
+![The same loop surrounds the missing center at parameter 1 and bounds the new center square at parameter 5. Its first homology class maps from the generator of F₂ to zero. Below, the interval begins at 0 and ends just before 5; parameters 1 and 4 lie inside it.](assets/persistence_modules/ring_class.svg)
+
+*The orange loop is the boundary of the center square. Before that square
+enters, the loop represents a nonzero class; after it enters, the same
+curve bounds a filled cell and represents zero. This schematic follows a
+chosen loop with coefficients in F₂. The bar below records the parameters where its class
+is nonzero, with a filled endpoint at 0 and an open endpoint at 5.*
+
+The **barcode interval** $[0,5)$ records the life of this class. It includes
 0 because the ring is already present there, and excludes 5 because the
 hole is already filled there. An interval module places one copy of the
 field at each parameter in its interval, zero elsewhere, and identity maps
 between parameters inside the interval. It therefore specifies maps as well
 as dimensions.
 
-For a one-parameter filtration of a finite simplicial or cubical complex,
+For a filtration of a finite simplicial or cubical complex by one parameter,
 homology over a field has a barcode that describes the resulting persistence
 module up to compatible changes of basis: the module is a direct sum of
 interval modules. The interval decomposition
-theorem extends to real-indexed modules whose vector space at every parameter
-is finite dimensional. See William Crawley-Boevey's
+theorem extends to modules indexed by the real line whose vector space at
+every parameter is finite dimensional. See William Crawley-Boevey's
 [decomposition theorem](https://arxiv.org/abs/1210.0819).
 
 We have concentrated on $H_1$. In degree zero, which records connected
 components, this example has one class born at 0 that persists forever. Its
-interval is $[0,\infty)$. The [ordinary-persistence guide](ordinary_persistence.md)
+interval is $[0,\infty)$. The [ordinary persistence guide](ordinary_persistence.md)
 explains how TamerOp computes these intervals over F₂. That direct barcode
 calculation returns a persistence diagram; it does not require constructing
 an `EncodingResult`.
-
-> **Figure placeholder: follow the ring class.** A linked view will show
-> the shape, its $H_1$ space, and the interval $[0,5)$ at the same parameter.
-> Selecting an earlier and a later parameter will display the induced map,
-> highlighting how the class becomes zero when the later parameter reaches 5.
 
 ## What changes with two parameters?
 
@@ -154,12 +158,11 @@ a\leq a'\ \text{and}\ b\leq b'
 X_{(a,b)}\subseteq X_{(a',b')}.
 $$
 
-These directions are part of the construction. A rule that retains points
-*above* a density threshold instead shrinks its selected set when that
-threshold increases. To use increasing coordinates throughout, we would
-reverse that coordinate's order or reparameterize it, for example by negating
-the threshold. We must choose the order to agree with the direction of the
-inclusions.
+The direction of each comparison comes from the inclusion rule. If a rule
+retains points *above* a density threshold, raising that threshold shrinks
+the selected set. We would then reverse the order on that coordinate, or
+negate the threshold, so that increasing our chosen coordinates continues
+to mean enlarging the shape.
 
 For two increasing coordinates, write
 
@@ -205,12 +208,11 @@ If $q\leq r$ and $r\leq q$, then $q=r$ (antisymmetry). If $q\leq r$ and
 $r\leq s$, then $q\leq s$ (transitivity). These rules describe a consistent
 order without requiring that every pair be comparable.
 
-The real line with its usual order is a poset in which every pair can be
-compared, also called a **total order**. The coordinatewise order on ℝ² is
-a partial order that is not total. A finite chain or the four selected
-points above, with their inherited comparisons, is also a poset. The same
-language can therefore describe one-parameter persistence, several
-parameters, and finite sets of comparisons.
+When every pair can be compared, as on the real line, the order is called
+a **total order**. The coordinatewise order on ℝ² allows incomparable pairs,
+while the four selected points above inherit a finite partial order from
+that plane. We can use the same definition of a module for all of these
+parameter sets.
 
 The elements of $Q$ are parameters or labels; they are not the points of the
 shape $X_q$. For example, $(a,b)$ is a pair of thresholds specifying a shape,
@@ -251,12 +253,35 @@ This is what it means to say that the square **commutes**. Choosing a matrix
 for each drawn arrow is not enough: the two matrix products must agree.
 The omitted direct map is determined by either product.
 
+For a concrete example, put $\mathbb{k}$ at $p$ and $s$, and
+$\mathbb{k}^2$ at $q$ and $r$. Along one route, send a scalar $a$ to
+$(a,0)$ and then add the two coordinates; along the other, send it to
+$(0,a)$ and again add the coordinates. Both routes return $a$:
+
+$$
+\begin{bmatrix}1&1\end{bmatrix}
+\begin{bmatrix}1\\0\end{bmatrix}
+=[1]
+=\begin{bmatrix}1&1\end{bmatrix}
+\begin{bmatrix}0\\1\end{bmatrix}.
+$$
+
+![A commuting square has the field k at p and s and k squared at q and r. The maps from p insert a scalar into the first or second coordinate; both maps to s add the coordinates. The selected vector 1 follows either route to 1.](assets/persistence_modules/commuting_square.svg)
+
+*The vectors inside the boxes show the image of $1$ along each route. The
+displayed matrix products agree on every scalar, so they specify the same
+map $M(p\leq s)=[1]$. This is a module constructed on the four chosen
+parameters, over any field $\mathbb{k}$; it is not an additional claim about
+the ring's homology. The layout records comparisons rather than coordinates
+in the parameter plane.*
+
 For a filtration, this agreement comes from the inclusions of shapes: both
 routes include $X_p$ into the same $X_s$, and homology respects their
 composition. The abstract definition also allows modules to be specified
 directly by spaces and compatible maps, without first constructing shapes.
-In categorical language, it says that $M$ is a *functor* from the poset to
-vector spaces. Ezra Miller gives this formulation and the filtration
+In categorical language, an assignment preserving these identities and
+compositions is a **functor**, so $M$ is a functor from the poset to vector
+spaces. Ezra Miller gives this formulation and the filtration
 construction in [Definition 2.1 and Example 2.3 of *Homological algebra of
 modules over posets*](https://arxiv.org/html/2008.00063#S2.SS1).
 
@@ -265,11 +290,6 @@ inside a stalk; it is a separate choice from the parameter domain. A module
 can be indexed by real pairs while its vector spaces are over F₂ or ℚ.
 In the examples here the stalks are finite dimensional, although the poset
 indexing them can be infinite.
-
-> **Figure placeholder: compare two routes around a square.** Four selected
-> comparable parameters will be linked to their stalks and structure matrices.
-> Following a vector along either two-step route will show why the two
-> compositions agree, making the compatibility equation visible.
 
 ## Equal dimensions can hide different behavior
 
@@ -310,10 +330,10 @@ does not exist in the coordinatewise order.
 
 ## How can we keep this object in finite form?
 
-We now know what must be retained: a space at each parameter and a
-compatible map for each comparison. Over ℝ², that is an infinite collection.
-A dimension heatmap would omit the maps; a single increasing path would
-inspect only some of the parameters and comparisons.
+Over ℝ², retaining a space at each parameter and a map for each comparison
+appears to require an infinite collection of data. A plot of the dimensions
+would omit the maps, while a single increasing path would reach only some
+of the parameters and comparisons.
 
 The next question is when we can describe all of this with finitely many
 spaces and maps, together with a rule telling us which part of that finite
@@ -322,10 +342,8 @@ finite encoding. Such a description requires hypotheses on the module;
 it is not available for every arbitrary assignment satisfying the module
 axioms.
 
-The finite filtrations used here supply the needed finiteness through their
-construction.
-
-Continue with [finite encodings](finite_encodings.md), where a module
-supported on the closed square $[0,2]^2$ supplies the next worked example.
-There we can check exactly how a finite model recovers both its spaces and
-its structure maps.
+For the filtrations used here, the finite collection of cells gives us a
+reason to expect such a description. The [finite encodings chapter](finite_encodings.md)
+works out the recovery in a module supported on the closed square
+$[0,2]^2$. We will specify that module directly, so its spaces and maps give
+us known answers against which to check the finite model.

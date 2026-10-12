@@ -1,13 +1,16 @@
 # Mathematics and worked lessons
 
-A persistence module keeps both its spaces and the maps relating them. A
-finite encoding makes that description computable without discarding the
-information carried by those maps. These lessons develop the mathematics
-through definitions, examples and interpreted computations.
+A persistence module assigns a vector space to each parameter and a linear
+map to each comparison of parameters. The maps tell us how a vector at one
+parameter continues at another. When the module admits a finite encoding, we
+can recover these spaces and maps from a finite collection of them, together
+with an assignment of the original parameters to that collection. These lessons
+develop that description through examples, definitions and computations whose
+answers we can interpret.
 
-The [reading map](../reading_map.md) offers example-first and definitions-first
-entrances. It shows useful continuations, while this collection lets you open
-a treatment directly. [Install TamerOp](../start/install.md) when you want to
+The [reading map](../reading_map.md) offers a starting example and a route
+through the definitions, with continuations for both. You can also open a
+lesson directly from this collection. [Install TamerOp](../start/install.md) when you want to
 run a lesson; the mathematical explanations and saved figures can be read
 without a Julia session.
 
@@ -15,5 +18,5 @@ without a Julia session.
 
 For a workflow using an object you already understand, consult
 [Using TamerOp](using.md). The [topic map](../topic_map.md) brings together
-lessons, usage, precise contracts, implementation accounts and measured
-comparisons around shared subjects.
+lessons, guides, details of individual operations, implementation accounts and
+measured comparisons around shared subjects.

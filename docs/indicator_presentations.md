@@ -1,16 +1,16 @@
 # Indicator presentations: building a module from regions and a matrix
 
-The [finite-encodings chapter](finite_encodings.md) began with a module
+The [finite encodings chapter](finite_encodings.md) began with a module
 supported on a square and explained how finite data recover its spaces and
 maps. To give that module to an encoder, we need a finite description of
 the input itself. How can regions and a small matrix specify a module over
 the whole real plane?
 
-We will construct the square from two simpler modules, then combine two
-overlapping squares. The second example has spaces of dimensions one, two,
-and one along an increasing path. Its maps will explain why the vector
-visible at the start does not survive to the end, even though neither of
-the two successive maps is zero.
+We can build the square from the region above its lower bounds and the
+region below its upper bounds, with a coefficient telling us how their
+associated modules are related. Once that construction is in place, we
+will combine two overlapping squares. Following a vector through the
+overlap will let us see how two nonzero maps can have zero composite.
 
 You need the previous chapters' notions of a poset, a module, and compatible
 structure maps, together with matrix multiplication. We continue with
@@ -66,18 +66,19 @@ For a comparison $q\leq r$, its map is the identity if both points lie in
 $U$, and the unique zero map otherwise. Define $\mathbb{k}[D]$ by the
 same rule with $D$ in place of $U$.
 
-These are modules, including their maps. Along an increasing sequence of
-parameters, the upset indicator can change from $0$ to $\mathbb{k}$ but
-cannot leave its support once it enters. The downset indicator can change
-from $\mathbb{k}$ to $0$ but cannot reenter after leaving. Consequently,
-the identity and zero maps compose as required. More generally, an
-intersection of an upset and a downset is order-convex, the property used
-to check the square module in the previous chapter.
+The closure properties make these assignments into modules. Along an
+increasing sequence of parameters, the upset indicator can change from
+$0$ to $\mathbb{k}$, but once it enters its support it stays there. The
+downset indicator can leave its support but cannot reenter. Neither can
+leave and return, so a composite of their identity and zero maps agrees
+with the direct map. An intersection of an upset and a downset is
+order-convex: it contains every parameter between two of its points, as
+we used when checking the square module in the previous chapter.
 
-The bracket notation means a module, rather than just the numerical
-function recording membership. It includes structure maps. The
-coefficient $1$ below is also different from a membership bit: it specifies
-a linear map over $\mathbb{k}$.
+The bracket notation $\mathbb{k}[U]$ includes these structure maps along
+with the spaces. When we introduce the coefficient $1$ below, it will
+specify a linear map over $\mathbb{k}$; it is separate from the zero or
+one used to record membership in a region.
 
 ## Recover the square as an image
 
@@ -123,10 +124,10 @@ $\operatorname{im}\varphi_r$. We recover the earlier square module:
 identity maps between comparable points in $S$, and correctly shaped zero
 maps otherwise.
 
-The compact input is therefore **one upset, one downset, and the
-one-by-one matrix $[1]$**. The module is the image of the map they describe.
-Changing $[1]$ to $[0]$ gives the zero module on the entire plane; the
-regions alone do not determine the answer.
+We have described the whole module using one upset, one downset and the
+$1\times1$ matrix $[1]$, by taking the image of their map. The coefficient
+matters: changing it to $[0]$ leaves the regions in place but makes the
+image zero throughout the plane.
 
 ## Several indicators and one coefficient matrix
 
@@ -146,8 +147,8 @@ vectors, even if the regions overlap geometrically.
 An $n\times m$ matrix $A=(a_{ji})$ specifies a map
 $\varphi:F\to E$: the block from $\mathbb{k}[U_i]$ to
 $\mathbb{k}[D_j]$ multiplies by $a_{ji}$ throughout $U_i\cap D_j$.
-Outside that intersection its pointwise map is zero. We use **target
-downsets as rows and source upsets as columns**, so matrices act on column
+Outside that intersection its pointwise map is zero. We use target
+downsets as rows and source upsets as columns, so matrices act on column
 vectors. If an intersection is empty, its block is zero; take the
 corresponding coefficient to be zero as well.
 
@@ -155,19 +156,20 @@ The same compatibility argument as for the square works for every block.
 We can therefore define $M=\operatorname{im}\varphi$. A module isomorphic
 to this image is also said to have the specified presentation.
 
-This particular kind of indicator presentation is called a **fringe
-presentation**. In Ezra Miller's terminology, its component maps are
-*connected*: each uses one scalar throughout its intersection. For an
+This kind of indicator presentation is called a **fringe presentation**.
+In Ezra Miller's terminology, its component maps are **connected**, meaning
+that each uses one scalar throughout its intersection. For an
 arbitrary poset, a general map between two indicators can have different
 scalars on components that cannot be joined by a zigzag of comparisons
-within the intersection. The single-scalar requirement is part of this
+within the intersection. The requirement of one scalar is part of this
 presentation convention.
 See [Definitions 3.14–3.17 in *Homological algebra of modules over posets*](https://arxiv.org/html/2008.00063#S3.SS2).
 
-If you know presentations by generators and relations, keep the output
-operation in view: here $M$ is an **image**. A usual presentation
-$F_1\to F_0\to M\to0$ describes $M$ as a cokernel. These are different
-ways to specify a module. The terms “birth upsets” and “death downsets”
+If you know presentations by generators and relations, there is a useful
+distinction here. A usual presentation $F_1\to F_0\to M\to0$ describes
+$M$ as the **cokernel**, obtained by quotienting $F_0$ by the image of the
+relation map. Our fringe presentation instead takes an image inside $E$.
+The terms “birth upsets” and “death downsets”
 describe the two sides of the fringe construction; they do not assert
 that its rows and columns are a minimal list of topological events.
 
@@ -253,12 +255,12 @@ Here $\mathbb{k}[S_i]$ uses the identity and zero maps already defined for
 a square. The dimension is two on the closed overlap $[1,2]^2$, one where
 exactly one square is present, and zero outside their union.
 
-![Two offset squares overlap in a dimension-two region. Three increasing points have spaces k, k squared, and k, with inclusion followed by projection and zero composite.](assets/indicator_presentations/overlapping_summands.svg)
+![Two offset closed squares overlap in a region of dimension two. Three increasing parameters p, q and r have spaces k, k squared, and k: first square only, overlap, then second square only.](assets/indicator_presentations/overlapping_summands.svg)
 
-*This schematic shows the two summands in different colors. The map diagram
-uses the summand bases: first-square coordinate first, second-square
-coordinate second. The zero composite follows from which coordinate
-survives.*
+*The two colours show the supports of the square summands. At $q$ both
+coordinates are present, with the first square's coordinate listed first.
+The arrows compare parameters; to see what happens to a vector along them,
+we still need to compute the maps.*
 
 Follow the comparable points
 $p=(\tfrac12,\tfrac12)\leq q=(\tfrac32,\tfrac32)\leq
@@ -285,8 +287,9 @@ $$
 \mathbb{k}.
 $$
 
-The first map preserves the first-square vector in the overlap. The second
-retains only the second-square vector after the first square has ended.
+The first map preserves the vector from the first square in the overlap.
+The second retains only the second square's coordinate after the first
+square has ended.
 Thus both maps have rank one, but
 
 $$
@@ -296,10 +299,18 @@ M(p\leq r)=M(q\leq r)\,M(p\leq q)
 =\begin{bmatrix}0\end{bmatrix}.
 $$
 
-The last matrix is a $1\times1$ zero map between nonzero spaces. It differs
-from a map whose source or target is zero. The vector at $p$ has disappeared
-by $r$; the nonzero space at $r$ belongs to the other summand. A dimension
-plot by itself does not show this.
+The last matrix is $1\times1$, so both its source and target are nonzero
+spaces. Nevertheless, the vector from $p$ has zero image at $r$, where the
+remaining space belongs to the other summand. We can follow that vector
+through each step:
+
+![At p=(1/2,1/2), the chosen vector is 1 in the first square. Inclusion sends it to (1,0) in the two-dimensional overlap at q=(3/2,3/2). Projection onto the second coordinate sends it to zero at r=(5/2,5/2), although M(r) is still the one-dimensional space of the second square.](assets/indicator_presentations/chosen_vector.svg)
+
+*In this schematic the vectors use the stated summand bases. The column
+matrix inserts the first coordinate into the overlap; the row matrix
+keeps only the second coordinate on leaving it. Each map has rank one,
+but their composite kills the chosen vector. The zero at the end is its
+image inside a nonzero target space.*
 
 ### Check a point away from the diagonal
 
@@ -321,8 +332,8 @@ remains all of $\mathbb{R}^2$, including parameters outside the support.
 ### Inspect the calculation in the package
 
 The [inspection notebook](tutorials/inspect_encoding.ipynb) constructs these
-two square summands and follows the hand calculation with the reusable
-`:presentation_inspector` recipe. A static selection shows membership in a
+two square summands and follows the hand calculation with the
+`:presentation_inspector` view. A static selection shows membership in a
 chosen upset and downset on the actual encoding regions, identifies active
 rows and columns of the full coefficient matrix, and displays their block.
 Requesting an image basis adds its embedding in the active target coordinates.
@@ -342,7 +353,7 @@ The package exposes these ingredients through `presentation_stalk`,
 `presentation_map` with `source` and `target` returns the endpoint stalks,
 `ambient_projection`, and `induced_map`. A stalk query computes only the
 active block and its rank unless `basis=true`; a map query computes the bases
-it needs. See the [spaces-and-maps guide](spaces_and_maps.md#look-inside-a-retained-presentation)
+it needs. See the [spaces and maps guide](spaces_and_maps.md#look-inside-a-retained-presentation)
 for calling conventions and supported inputs.
 
 These queries inspect the finite presentation retained by the encoding, in
@@ -352,16 +363,11 @@ does not invent a presentation when none is retained. It also works from
 finite labels without a geometric parameter picture.
 
 The notebook also connects these panels through a live inspection session.
-Selecting a point or pair updates the finite-poset, support, and matrix views;
+Selecting a point or pair updates the views of the finite poset, supports and matrices;
 changing between module and presentation views preserves the query. Exact
 coordinate entry resolves boundaries that a pointer cannot distinguish.
 These controls require WGLMakie and a running Julia process; the selected
 state can be saved as a static figure.
-
-> **Figure placeholder: follow a chosen vector.** A three-point view will
-> follow a vector from the first square into the overlap and then into the
-> second square. It will place each vector beside the matrix acting on it,
-> showing how two nonzero maps can have zero composite.
 
 ## How the presentation leads to a finite encoding
 
@@ -378,8 +384,9 @@ means $x>2$ or $y>2$, with strict inequalities.
 
 For a general finite fringe presentation, collect one such bit for each
 upset and each complemented downset. The resulting map into a finite
-Boolean poset is order-preserving. A pattern determines the active rows
-and columns, their image space, and the coordinate projections for
+Boolean poset, ordered by comparing its zero or one entries, is order
+preserving. A pattern determines the active rows and columns, their image
+space, and the coordinate projections for
 comparable patterns. These data give a finite module whose pullback
 recovers the presented module.
 
@@ -433,10 +440,10 @@ and general upsets and downsets need not bound rectangles. A fringe
 presentation does not assert a rectangle decomposition or provide a
 multiparameter barcode classification.
 
-We can now distinguish three tasks: describe a module by regions and a
-map, construct a finite encoding of it, and inspect the recovered spaces
-and maps. The next mathematical question is which modules admit such
-finite descriptions. The [**tameness and scope** chapter](tameness.md)
+Both examples began with a finite list of regions and a matrix, from which
+we could construct an encoding and recover the spaces and maps. For a module
+given in another way, we would first need to know whether a finite
+description of this kind exists. The [tameness and scope chapter](tameness.md)
 explains the finiteness hypotheses relating presentations, encodings, and
 resolutions, together with the distinction between existence theorems and
 implemented constructions.

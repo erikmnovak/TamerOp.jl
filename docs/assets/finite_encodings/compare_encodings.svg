@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="500" height="858" viewBox="0 0 500 858" role="img" aria-labelledby="title description">
+<title id="title">Nine band labels reduce to four signatures</title>
+<desc id="description">An authored schematic of the closed square on the whole real plane. A cropped three by three grid labels each region by its band pair and signature. L means less than zero, C means zero through two inclusive, and H means greater than two. The disconnected upper left and lower right regions share signature (0,1). Below, pi nine sends (1,1) to (C,C), rho sends it to (1,0), and pi four gives (1,0) directly.</desc>
+<!-- Authored schematic; regenerate with docs/build_scripts/render_foundation_details.py. -->
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M 1 1 L 9 5 L 1 9" fill="none" stroke="#0f766e" stroke-width="1.5"/></marker></defs>
+<rect width="500" height="858" fill="white"/>
+<g font-family="DejaVu Sans, sans-serif" fill="#172b42" text-anchor="middle">
+<text x="250" y="36" font-size="25" fill="#172b42" text-anchor="middle">Nine labels, four signatures</text>
+<text x="250" y="72" font-size="23" fill="#475569" text-anchor="middle">Cropped parameter plane</text>
+<rect x="85" y="104" width="110" height="110" fill="#ffedd5" stroke="#94a3b8" stroke-width="1" rx="0" stroke-dasharray=""/>
+<text x="140" y="147" font-size="23" fill="#172b42" text-anchor="middle">(L, H)</text>
+<text x="140" y="184" font-size="23" fill="#172b42" text-anchor="middle">(0, 1)</text>
+<rect x="85" y="214" width="110" height="110" fill="#e2e8f0" stroke="#94a3b8" stroke-width="1" rx="0" stroke-dasharray=""/>
+<text x="140" y="257" font-size="23" fill="#172b42" text-anchor="middle">(L, C)</text>
+<text x="140" y="294" font-size="23" fill="#172b42" text-anchor="middle">(0, 0)</text>
+<rect x="85" y="324" width="110" height="110" fill="#e2e8f0" stroke="#94a3b8" stroke-width="1" rx="0" stroke-dasharray=""/>
+<text x="140" y="367" font-size="23" fill="#172b42" text-anchor="middle">(L, L)</text>
+<text x="140" y="404" font-size="23" fill="#172b42" text-anchor="middle">(0, 0)</text>
+<rect x="195" y="104" width="110" height="110" fill="#d1fae5" stroke="#94a3b8" stroke-width="1" rx="0" stroke-dasharray=""/>
+<text x="250" y="147" font-size="23" fill="#172b42" text-anchor="middle">(C, H)</text>
+<text x="250" y="184" font-size="23" fill="#172b42" text-anchor="middle">(1, 1)</text>
+<rect x="195" y="214" width="110" height="110" fill="#dbeafe" stroke="#94a3b8" stroke-width="1" rx="0" stroke-dasharray=""/>
+<text x="250" y="257" font-size="23" fill="#172b42" text-anchor="middle">(C, C)</text>
+<text x="250" y="294" font-size="23" fill="#172b42" text-anchor="middle">(1, 0)</text>
+<rect x="195" y="324" width="110" height="110" fill="#e2e8f0" stroke="#94a3b8" stroke-width="1" rx="0" stroke-dasharray=""/>
+<text x="250" y="367" font-size="23" fill="#172b42" text-anchor="middle">(C, L)</text>
+<text x="250" y="404" font-size="23" fill="#172b42" text-anchor="middle">(0, 0)</text>
+<rect x="305" y="104" width="110" height="110" fill="#d1fae5" stroke="#94a3b8" stroke-width="1" rx="0" stroke-dasharray=""/>
+<text x="360" y="147" font-size="23" fill="#172b42" text-anchor="middle">(H, H)</text>
+<text x="360" y="184" font-size="23" fill="#172b42" text-anchor="middle">(1, 1)</text>
+<rect x="305" y="214" width="110" height="110" fill="#d1fae5" stroke="#94a3b8" stroke-width="1" rx="0" stroke-dasharray=""/>
+<text x="360" y="257" font-size="23" fill="#172b42" text-anchor="middle">(H, C)</text>
+<text x="360" y="294" font-size="23" fill="#172b42" text-anchor="middle">(1, 1)</text>
+<rect x="305" y="324" width="110" height="110" fill="#ffedd5" stroke="#94a3b8" stroke-width="1" rx="0" stroke-dasharray=""/>
+<text x="360" y="367" font-size="23" fill="#172b42" text-anchor="middle">(H, L)</text>
+<text x="360" y="404" font-size="23" fill="#172b42" text-anchor="middle">(0, 1)</text>
+<rect x="85" y="104" width="330" height="330" fill="none" stroke="#64748b" stroke-width="1.5" rx="0" stroke-dasharray="5 5"/>
+<rect x="195" y="214" width="110" height="110" fill="none" stroke="#245c99" stroke-width="4" rx="0" stroke-dasharray=""/>
+<path d="M 65 454 L 441 454" fill="none" stroke="#0f766e" stroke-width="2.5" stroke-dasharray="" marker-end="url(#arrow)"/>
+<path d="M 65 454 L 65 91" fill="none" stroke="#0f766e" stroke-width="2.5" stroke-dasharray="" marker-end="url(#arrow)"/>
+<path d="M 195 449 L 195 459" fill="none" stroke="#475569" stroke-width="1.5" stroke-dasharray=""/>
+<path d="M 60 324 L 70 324" fill="none" stroke="#475569" stroke-width="1.5" stroke-dasharray=""/>
+<text x="195" y="486" font-size="23" fill="#172b42" text-anchor="middle">0</text>
+<text x="44" y="332" font-size="23" fill="#172b42" text-anchor="middle">0</text>
+<path d="M 305 449 L 305 459" fill="none" stroke="#475569" stroke-width="1.5" stroke-dasharray=""/>
+<path d="M 60 214 L 70 214" fill="none" stroke="#475569" stroke-width="1.5" stroke-dasharray=""/>
+<text x="305" y="486" font-size="23" fill="#172b42" text-anchor="middle">2</text>
+<text x="44" y="222" font-size="23" fill="#172b42" text-anchor="middle">2</text>
+<text x="460" y="462" font-size="24" fill="#172b42" text-anchor="middle">x</text>
+<text x="65" y="77" font-size="24" fill="#172b42" text-anchor="middle">y</text>
+<text x="250" y="524" font-size="23" fill="#172b42" text-anchor="middle">0 and 2 belong to band C.</text>
+<text x="250" y="565" font-size="25" fill="#172b42" text-anchor="middle">One parameter, two lookups</text>
+<rect x="163" y="586" width="174" height="56" fill="#f8fafc" stroke="#245c99" stroke-width="2" rx="7" stroke-dasharray=""/>
+<text x="250" y="622" font-size="26" fill="#172b42" text-anchor="middle">(1, 1)</text>
+<path d="M 211 648 L 125 709" fill="none" stroke="#0f766e" stroke-width="2.5" stroke-dasharray="" marker-end="url(#arrow)"/>
+<text x="130" y="672" font-size="28" fill="#0f766e" text-anchor="middle">π₉</text>
+<path d="M 289 648 L 375 709" fill="none" stroke="#0f766e" stroke-width="2.5" stroke-dasharray="" marker-end="url(#arrow)"/>
+<text x="370" y="672" font-size="28" fill="#0f766e" text-anchor="middle">π₄</text>
+<rect x="22" y="716" width="174" height="66" fill="#dbeafe" stroke="#245c99" stroke-width="2" rx="7" stroke-dasharray=""/>
+<rect x="304" y="716" width="174" height="66" fill="#dbeafe" stroke="#245c99" stroke-width="2" rx="7" stroke-dasharray=""/>
+<text x="109" y="758" font-size="27" fill="#172b42" text-anchor="middle">(C, C)</text>
+<text x="391" y="758" font-size="27" fill="#172b42" text-anchor="middle">(1, 0)</text>
+<path d="M 202 749 L 298 749" fill="none" stroke="#0f766e" stroke-width="2.5" stroke-dasharray="" marker-end="url(#arrow)"/>
+<text x="250" y="730" font-size="28" fill="#0f766e" text-anchor="middle">ρ</text>
+<text x="250" y="829" font-size="24" fill="#172b42" text-anchor="middle">Both recover M(1, 1) = ℚ.</text>
+</g></svg>

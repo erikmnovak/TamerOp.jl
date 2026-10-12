@@ -1,18 +1,20 @@
 # Tameness and scope: when finite descriptions exist
 
-The [indicator-presentations chapter](indicator_presentations.md) described
+The [chapter on indicator presentations](indicator_presentations.md) described
 the square module using two regions and a coefficient matrix. The
-[finite-encodings chapter](finite_encodings.md) recovered the same module
+[chapter on finite encodings](finite_encodings.md) recovered the same module
 from a finite poset, its spaces and maps, and a classifier on the parameter
 plane. When can a module have descriptions like these?
 
-The answer depends on controlling how its maps vary, as well as the size
-of its spaces. We will make that requirement precise, revisit the square,
-and examine one module whose stalks all have dimension one but which has
-no finite encoding.
+The square suggests that we should look for regions on which the same
+spaces and maps can be used throughout. To understand what this requires,
+we will describe its regions more carefully and then compare it with a
+module whose spaces all have dimension one. That second module keeps
+changing its maps as we move along the real line, and those changes will
+prevent any finite encoding.
 
-For the finite constructions in these lessons, the condition comes from the
-construction itself. The follow-on chapter,
+Our finite constructions already supply the condition we need. The next
+chapter,
 [why finite computations stay tame](practical_tameness.md), explains that
 practical argument and the role of abelian categories. Here we establish
 exactly what the condition means and which descriptions it guarantees.
@@ -46,8 +48,8 @@ which two regions contain their endpoints:
 | $R_0$ | $R_1$ | Zero map $0\to\mathbb{k}$ |
 | $R_0$ | $R_0$ | Unique map $0\to0$, also its identity |
 
-This is more than a partition by dimensions: it describes the maps
-consistently too.
+The table tells us how to recover each map once we know the endpoint
+regions. A partition by stalk dimensions would leave those maps unspecified.
 
 For a general module, choose a partition $Q=\bigsqcup_i R_i$, a vector
 space $V_i$ for each region, and isomorphisms
@@ -59,14 +61,15 @@ $$
 $$
 
 is independent of the chosen comparable pair $q\in R_i$, $r\in R_j$.
-This includes $i=j$ and self-comparisons. This is the compatibility
-condition in [Ezra Miller's Definition 2.6](https://arxiv.org/html/2008.00063#S2.SS2).
+We require this even when $i=j$, including the comparison of a point with
+itself. This is the compatibility condition in [Ezra Miller's Definition 2.6](https://arxiv.org/html/2008.00063#S2.SS2).
 
-The equation starts with a vector in $V_i$, sends it to $M(q)$, applies
-the module map, then expresses the answer in the target region's common
-space $V_j$. All comparisons use the same chosen identifications. Choosing
-unrelated bases separately for each arrow would not establish this property.
-The condition is called **no monodromy** in the cited definition.
+To read the equation, start with a vector in $V_i$ and follow it through
+$M(q)$ and $M(r)$. The last isomorphism expresses the answer in the common
+space $V_j$. We use the same identifications for every comparison, so the
+answer must agree even when we choose different endpoints in the two
+regions. Choosing a fresh pair of bases for each arrow would evade that
+requirement. The cited definition calls this compatibility **no monodromy**.
 
 For points in the same region, comparison with a self-map forces the
 displayed map to be the identity on $V_i$. Thus any structure map between
@@ -85,10 +88,11 @@ In this chapter, **tame** means pointwise finite-dimensional and admitting
 a constant subdivision with finitely many regions. Both requirements
 belong to [Definition 2.11](https://arxiv.org/html/2008.00063#S2.SS2).
 
-The square is tame: the two regions above work, and their common spaces
-have dimensions one and zero. Tameness concerns the whole stated parameter
-domain, here all of $\mathbb{R}^2$. Finite does not mean a bounded domain
-or bounded regions.
+The square is tame because the two regions above work and their common
+spaces have dimensions one and zero. This describes the module on all of
+$\mathbb{R}^2$, including its unbounded exterior. The word “finite” counts
+the regions and the dimensions of their spaces; it places no bound on the
+parameter domain.
 
 The two requirements control different things. Finite-dimensional stalks
 limit the size of each individual space. A finite constant subdivision
@@ -99,8 +103,9 @@ below will show that even a uniform bound of one does not suffice by itself.
 
 ## A constant subdivision is not yet an encoding
 
-The square's two-region subdivision is valid, but those two regions cannot
-be the fibers of an order-preserving map to a two-element poset. Indeed,
+The square's two regions describe its constant data, but we cannot use
+those same two pieces as the fibers of a map that preserves order. To see the
+obstruction, follow the three comparable points
 
 $$
 (-1,1)\leq(1,1)\leq(3,1).
@@ -111,9 +116,11 @@ If $z$ labels the exterior and $a$ labels the square, monotonicity would
 force $z\leq a\leq z$. Antisymmetry then gives $z=a$, incompatible with
 the different stalk dimensions.
 
-The constant-subdivision condition did not require its two region names
-to form a poset. An encoding does. This is the extra organization that
-lets a finite module supply the required maps.
+The constant subdivision allowed us to record the map for each pair of
+region names without ordering the names themselves. An encoding requires
+that order, because its labels must support a module whose structure maps
+recover the original ones. We therefore need to separate some parts of the
+exterior.
 
 For this square we already have a suitable refinement. Record
 
@@ -126,17 +133,19 @@ Both bits increase with the parameters, so $\pi(x,y)=(u(x,y),c(x,y))$
 is order-preserving into $\{0<1\}^2$. Its four fibers split the exterior
 into three pieces and retain the square as the fiber labeled $(1,0)$.
 Give that label the space $\mathbb{k}$ and the other three labels zero.
-This is the four-label encoding developed earlier.
+This is the encoding on four labels developed earlier.
 
 | Description of the same square module | What is finite? |
 | --- | --- |
 | Constant subdivision | Two regions with compatible identifications of spaces and maps |
 | Signature encoding | Four labels, their ordered module, and the classifier $\pi$ |
-| Nine-region encoding | Nine labels, their ordered module, and the band classifier |
+| Encoding by nine regions | Nine labels, their ordered module, and the band classifier |
 | Fringe presentation | One upset, one downset, and the coefficient matrix $[1]$ |
 
-The counts measure different ingredients. They are not competing counts
-of persistent classes, and none of these constructions asserts minimality.
+Each count refers to a different part of the description, so comparing
+two regions with four labels tells us nothing about the number of persistent
+classes. We have constructed useful descriptions without claiming that any
+of them is the smallest possible one.
 
 ## Three equivalent ways to have finite data
 
@@ -176,30 +185,30 @@ For each upset, record membership; for each downset, record membership in
 its complement. This produces finitely many increasing bits. Their
 patterns form a finite ordered set. At each pattern, select the active
 rows and columns of the coefficient matrix and take its image. Between
-comparable patterns, restrict the appropriate target-coordinate projection
+comparable patterns, restrict the appropriate projection onto the remaining target coordinates
 to the image.
 
-The [indicator-presentations chapter](indicator_presentations.md#how-the-presentation-leads-to-a-finite-encoding)
+The [chapter on indicator presentations](indicator_presentations.md#how-the-presentation-leads-to-a-finite-encoding)
 explained why these spaces and maps recover the presented module. The
 construction uses the fixed scalar coefficients as well as the regions;
 membership patterns alone would lose the linear algebra.
 
 ### From a constant subdivision to an encoding
 
-This is the substantive step supplied by the finite-encoding theorem:
-the compatible regional data admit a suitable finite ordered model.
-Its construction uses upsets derived from the constant regions to obtain
-order-preserving labels.
+Here we use the finite encoding theorem to organize the compatible
+regional data into a finite ordered model. The construction forms upsets
+from the constant regions and uses membership in those upsets to obtain
+labels that respect the original order.
 
-The new fibers need not be the original pieces. Nor should the theorem
-be read as saying that every arbitrarily chosen subdivision can be retained
-by merely splitting its pieces. It produces an encoding of the module.
-For the particular square subdivision above, the explicit four-fiber
-refinement does work.
+The conclusion concerns an encoding of the module. Its fibers may differ
+from the given pieces, so we should not assume that an arbitrary chosen
+subdivision will survive the construction as a refinement. For our square,
+we can see directly that the four fibers above do refine the original
+two regions.
 
 ### Why a finite encoding also yields a fringe presentation
 
-There is a finite linear-algebra construction that explains this direction.
+There is a finite construction using linear algebra that explains this direction.
 Start with the finite module $N$ on $P$. At a label $x$, form
 
 $$
@@ -268,10 +277,12 @@ V(\tfrac34\leq1)=[0],\qquad
 V(1\leq\tfrac32)=[1].
 $$
 
-This is a module. For $s\leq t\leq u$, the floors are nondecreasing.
-If the endpoint floors agree, all three agree and the maps are identities.
-Otherwise at least one of the two successive maps is zero, and both the
-composite and the direct map are zero. Self-maps are identities.
+We can check the module axioms directly. If $s\leq t\leq u$, their
+floors are nondecreasing. When the endpoint floors agree, the middle one
+must agree too, so all the maps are identities. When the endpoint floors
+differ, at least one of the two successive maps is zero, making their
+composite zero just like the direct map. A point always has the same floor
+as itself, which gives the identity self-map.
 
 Equivalently, writing $I_n=[n,n+1)$,
 
@@ -284,11 +295,14 @@ $[n,n+1)$. Exactly one summand is present at each
 parameter. At an integer, one summand ends and the next begins, so the
 stalk is still $\mathbb{k}$.
 
-![A flat dimension profile sits above successive half-open unit intervals; maps within an interval are identities and maps crossing a boundary are zero.](assets/tameness/constant_dimension_changing_maps.svg)
+![The dimension is one throughout the displayed interval. Half-open bars show successive unit intervals. The selected parameters one quarter and three quarters both have label zero and structure matrix [1]; three quarters and one have labels zero and one and structure matrix [0].](assets/tameness/constant_dimension_changing_maps.svg)
 
-*Only a finite window of the construction is drawn. The unit intervals
-continue in both directions. Open right endpoints belong to the ending
-summand's convention; they do not mark zero stalks of the whole module.*
+*The upper line records dimensions, while the bars below show which
+summand supplies the space. At $t=1$ the first bar ends and the next begins,
+so the stalk remains $\mathbb{k}$ even though the map from $3/4$ is zero.
+Filled and open endpoints mean included and excluded, respectively. This
+is a schematic of a finite window; the unit intervals continue in both
+directions.*
 
 ### Why no finite constant subdivision can work
 
@@ -308,9 +322,9 @@ then be recovered from $N(p\leq p)=\operatorname{id}_{N(p)}$ and would
 be an isomorphism, again contradicting the zero map. The equivalence
 theorem also rules out a finite fringe presentation.
 
-Thus even **constant dimension one everywhere** does not guarantee any
-of these finite descriptions. A dimension plot loses precisely the
-distinction between the identity and zero maps in this example.
+The dimension remains one everywhere, but a finite description would
+have to identify two of these intervals in a way their zero map forbids.
+The dimension plot hides exactly the distinction used in the proof.
 
 ### A short rule and a finite window are different claims
 
@@ -324,14 +338,10 @@ If we restrict the domain to a fixed bounded interval, only finitely many
 unit intervals meet it. Restricting the floor classifier to that finite
 set of integer labels gives a finite encoding of the restricted module.
 The restriction is tame, while the module on all of $\mathbb{R}$ is not.
-A finite drawing or a finite collection of successful queries cannot
-settle the global claim; the proof above does.
-
-> **Figure placeholder: compare maps with the dimension profile.** A pair of
-> selected parameters will show the two stalks, their interval labels, and the
-> identity or zero structure matrix. Widening the displayed window will reveal
-> more intervals while the dimension stays one. The view will distinguish the
-> finite window from the full real-line module.
+If we widen the window, more integer labels appear while the dimension
+profile stays flat. Every bounded restriction still uses only finitely many
+labels. The obstruction on the whole line comes from needing infinitely
+many of them at once, as the preceding proof shows.
 
 ### Distinguish this from q-tameness
 
@@ -339,7 +349,7 @@ In one-parameter persistence, **q-tame** usually means that every map
 $V(s\leq t)$ with $s<t$ has finite rank; see
 [Frédéric Chazal, William Crawley-Boevey, and Vin de Silva, Section 1.4](https://arxiv.org/html/1405.5644#S1.SS4).
 Our counterexample has ranks zero or one, so it is q-tame. It is not tame
-in the finite-constant-subdivision sense used in this chapter. The two
+in the sense of finite constant subdivisions used in this chapter. The two
 terms impose different requirements.
 
 ## From an existence theorem to an implemented construction
@@ -353,8 +363,9 @@ descriptions or an algorithm for testing membership.
 The square supplies both kinds of information: its finite presentation
 has the coefficient $[1]$, and four explicit inequalities describe its
 regions. The selected encoder can construct the finite model and classify
-queries. The theorem alone is not an interface accepting an arbitrary
-mathematically specified module and deciding whether it is tame.
+queries. To use the theorem computationally, we need this additional representation
+of the regions. It does not supply a general procedure that accepts an
+arbitrary module and decides whether it is tame.
 
 Some concrete TamerOp entry routes are:
 
@@ -365,14 +376,15 @@ Some concrete TamerOp entry routes are:
 | A supported polyhedral presentation | Presentation encoding using the applicable geometric backend, with that backend's generator and arithmetic requirements. |
 | Typed data together with a supported filtration | Data ingestion through `encode`, requesting the completed encoding stage when an `EncodingResult` is wanted. |
 
-The first row is not a promise of an `encode(module)` method. Mathematically
-the identity map of a finite poset is an encoding of its module, while the
-software can operate on that finite module directly.
+In the first row, the identity map of the finite poset already gives an
+encoding in the mathematical sense, and the software can operate on the
+finite module directly. There is no need to turn that observation into an
+`encode(module)` call.
 
 For geometric presentations, consult the
 [geometry contracts](math_categories.md#geometric-encoding-and-boundary-classes).
 For data, the [ingestion guide](ingestion_options.md) explains filtration,
-degree, grid, truncation, and intermediate-stage choices. These determine
+degree, grid, truncation, and choices of intermediate stages. These determine
 which module is represented. A finite encoding recovers that chosen module;
 it does not undo a change made when constructing the input.
 
@@ -384,24 +396,19 @@ construction. Likewise, neither the existence theorem nor a successful
 example asserts that the returned encoding is minimal or inexpensive for
 every supported input.
 
-The full syzygy theorem also relates tameness to finite indicator
-resolutions. A resolution organizes successive relations among simpler
-modules.
-Existence of such resolutions does not identify every computation over
-different base posets. In particular, finite-base Ext and Tor require
+The full syzygy theorem also gives finite indicator resolutions, which
+organize successive relations among simpler modules. To use a resolution
+for a derived computation, we still need to know which category contains
+its terms and maps. In particular, Ext and Tor over the finite base require
 the [category and comparison hypotheses](math_categories.md) described
 in their guide.
 
 ## Why do finite constructions meet this condition?
 
-We can recognize a tame module through compatible constant regions,
-finite encoding data, or a finite fringe presentation. The square exhibits
-all three descriptions. The real-line counterexample explains why finite
-stalk dimensions and an informative-looking dimension plot do not replace
-the map compatibility requirement.
-
-The remaining question has a practical payoff: why do
-our finite inputs meet this condition, and why do subsequent calculations
-preserve it? Continue with [why finite computations stay tame](practical_tameness.md)
-for the finite-complex argument, a square-module calculation, and the
+The square has now given us a concrete version of each description in
+the theorem, and the module on the real line has shown why the maps have
+to be part of the finiteness condition. We can next ask how much of this
+reasoning needs to be repeated when we work with a new finite input or
+perform another calculation on an encoded module. Continue with [why finite computations stay tame](practical_tameness.md)
+for the argument using a finite complex, a calculation on the square, and the
 closure theorems of Ezra Miller and Lukas Waas.

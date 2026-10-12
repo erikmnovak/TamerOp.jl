@@ -1,43 +1,29 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="820" height="625" viewBox="0 0 820 625" role="img" aria-labelledby="title description">
-  <title id="title">Four semantic signatures and their encoded vector spaces</title>
-  <desc id="description">An authored schematic of the four-element Boolean poset P four. Each label is a pair of semantic signature bits u, c. The bit u is one exactly when both parameter coordinates x and y are at least zero. The bit c is one exactly when at least one coordinate is greater than two. Each bit is zero otherwise. The bottom label zero, zero has vector space zero. The middle left label one, zero has vector space Q. The middle right label zero, one has vector space zero. The top label one, one has vector space zero. The four upward arrows are the cover relations, increasing one bit from zero to one. The two middle labels are incomparable. Node positions are a layout of the finite poset, not points in the original parameter plane.</desc>
-  <defs>
-    <marker id="order-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
-      <path d="M 1 1 L 9 5 L 1 9" fill="none" stroke="#0f766e" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-    </marker>
-  </defs>
-  <rect width="820" height="625" fill="#ffffff"/>
-  <g font-family="DejaVu Sans, sans-serif" fill="#172b42" text-anchor="middle">
-    <text x="410" y="40" font-size="29">Four signatures in P₄</text>
-    <text x="410" y="78" font-size="21" fill="#475569">Labels are semantic signatures (u, c).</text>
-
-    <g fill="none" stroke="#0f766e" stroke-width="2.7" marker-end="url(#order-arrow)">
-      <path d="M 359 413 L 281 345"/>
-      <path d="M 461 413 L 539 345"/>
-      <path d="M 281 255 L 359 187"/>
-      <path d="M 539 255 L 461 187"/>
-    </g>
-    <g fill="#ffffff" stroke="#245c99" stroke-width="2">
-      <rect x="345" y="98" width="130" height="88" rx="8"/>
-      <rect x="165" y="256" width="130" height="88" rx="8" fill="#dbeafe"/>
-      <rect x="525" y="256" width="130" height="88" rx="8"/>
-      <rect x="345" y="414" width="130" height="88" rx="8"/>
-    </g>
-    <g font-size="27">
-      <text x="410" y="132">(1, 1)</text>
-      <text x="230" y="290">(1, 0)</text>
-      <text x="590" y="290">(0, 1)</text>
-      <text x="410" y="448">(0, 0)</text>
-    </g>
-    <g font-size="28">
-      <text x="410" y="168">0</text>
-      <text x="230" y="326" fill="#245c99">ℚ</text>
-      <text x="590" y="326">0</text>
-      <text x="410" y="484">0</text>
-    </g>
-    <g font-size="21" fill="#475569">
-      <text x="410" y="558">u = 1 if x ≥ 0 and y ≥ 0; otherwise 0.</text>
-      <text x="410" y="593">c = 1 if x &gt; 2 or y &gt; 2; otherwise 0.</text>
-    </g>
-  </g>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="500" height="640" viewBox="0 0 500 640" role="img" aria-labelledby="title description">
+<title id="title">Four signatures and their vector spaces</title>
+<desc id="description">An authored schematic of the Boolean poset on signatures (u,c). The bottom label (0,0) and top label (1,1) carry zero. The incomparable middle labels (1,0) and (0,1) carry Q and zero respectively. Arrows point upward and increase one bit. These positions are finite-poset layout, not coordinates in the original plane.</desc>
+<!-- Authored schematic; regenerate with docs/build_scripts/render_foundation_details.py. -->
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M 1 1 L 9 5 L 1 9" fill="none" stroke="#0f766e" stroke-width="1.5"/></marker></defs>
+<rect width="500" height="640" fill="white"/>
+<g font-family="DejaVu Sans, sans-serif" fill="#172b42" text-anchor="middle">
+<text x="250" y="36" font-size="25" fill="#172b42" text-anchor="middle">Four signatures in P₄</text>
+<text x="250" y="75" font-size="23" fill="#475569" text-anchor="middle">Each label records (u, c).</text>
+<path d="M 220 417 L 140 347" fill="none" stroke="#0f766e" stroke-width="2.5" stroke-dasharray="" marker-end="url(#arrow)"/>
+<path d="M 280 417 L 360 347" fill="none" stroke="#0f766e" stroke-width="2.5" stroke-dasharray="" marker-end="url(#arrow)"/>
+<path d="M 140 253 L 220 183" fill="none" stroke="#0f766e" stroke-width="2.5" stroke-dasharray="" marker-end="url(#arrow)"/>
+<path d="M 360 253 L 280 183" fill="none" stroke="#0f766e" stroke-width="2.5" stroke-dasharray="" marker-end="url(#arrow)"/>
+<rect x="185" y="95" width="130" height="86" fill="white" stroke="#245c99" stroke-width="2" rx="7" stroke-dasharray=""/>
+<text x="250" y="130" font-size="26" fill="#172b42" text-anchor="middle">(1, 1)</text>
+<text x="250" y="167" font-size="28" fill="#172b42" text-anchor="middle">0</text>
+<rect x="45" y="257" width="130" height="86" fill="#dbeafe" stroke="#245c99" stroke-width="2" rx="7" stroke-dasharray=""/>
+<text x="110" y="292" font-size="26" fill="#172b42" text-anchor="middle">(1, 0)</text>
+<text x="110" y="329" font-size="28" fill="#245c99" text-anchor="middle">ℚ</text>
+<rect x="325" y="257" width="130" height="86" fill="white" stroke="#245c99" stroke-width="2" rx="7" stroke-dasharray=""/>
+<text x="390" y="292" font-size="26" fill="#172b42" text-anchor="middle">(0, 1)</text>
+<text x="390" y="329" font-size="28" fill="#172b42" text-anchor="middle">0</text>
+<rect x="185" y="419" width="130" height="86" fill="white" stroke="#245c99" stroke-width="2" rx="7" stroke-dasharray=""/>
+<text x="250" y="454" font-size="26" fill="#172b42" text-anchor="middle">(0, 0)</text>
+<text x="250" y="491" font-size="28" fill="#172b42" text-anchor="middle">0</text>
+<text x="250" y="554" font-size="23" fill="#172b42" text-anchor="middle">u = 1 when x ≥ 0 and y ≥ 0</text>
+<text x="250" y="589" font-size="23" fill="#172b42" text-anchor="middle">c = 1 when x &gt; 2 or y &gt; 2</text>
+<text x="250" y="626" font-size="22" fill="#475569" text-anchor="middle">Each bit is zero otherwise.</text>
+</g></svg>

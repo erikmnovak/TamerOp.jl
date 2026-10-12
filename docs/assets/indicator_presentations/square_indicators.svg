@@ -1,88 +1,67 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="500" viewBox="0 0 1000 500" role="img" aria-labelledby="title description">
-  <title id="title">An upset and a downset meet in a closed square</title>
-  <desc id="description">Three authored parameter-plane schematics with horizontal coordinate x and vertical coordinate y, each increasing in its usual direction. The first panel shades the upset U, where x and y are both at least zero, in blue. It continues upward and rightward beyond the dashed drawing window. The second shades the downset D, where x and y are both at most two, in teal. It continues leftward and downward beyond the window. The third shades their intersection, the closed square from zero to two in both coordinates. Solid colored lines mark included boundaries. Dashed outer frames only crop the drawings; they are not boundaries of U or D.</desc>
-  <defs>
-    <marker id="axis-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
-      <path d="M 1 1 L 9 5 L 1 9" fill="none" stroke="#64748b" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-    </marker>
-  </defs>
-  <rect width="1000" height="500" fill="#ffffff"/>
-  <g font-family="DejaVu Sans, sans-serif" fill="#172b42" text-anchor="middle">
-    <text x="500" y="39" font-size="29">An upset and a downset meet in a square</text>
-    <g transform="translate(25 0)">
-      <text x="145" y="90" font-size="24" fill="#245c99">U: x ≥ 0, y ≥ 0</text>
-      <rect x="30" y="125" width="240" height="240" fill="#f8fafc"/>
-      <rect x="90" y="125" width="180" height="180" fill="#dbeafe"/>
-      <path d="M 90 125 V 305 H 270" fill="none" stroke="#245c99" stroke-width="2.5"/>
-      <rect x="30" y="125" width="240" height="240" fill="none" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="5 5"/>
-      <g fill="none" stroke="#64748b" stroke-width="1.8" marker-end="url(#axis-arrow)">
-        <path d="M 15 385 H 285"/>
-        <path d="M 15 385 V 112"/>
-      </g>
-      <g fill="none" stroke="#64748b" stroke-width="1.5">
-        <path d="M 90 381 V 390 M 210 381 V 390"/>
-        <path d="M 10 305 H 20 M 10 185 H 20"/>
-      </g>
-      <g font-size="20" fill="#475569">
-        <text x="90" y="412">0</text>
-        <text x="210" y="412">2</text>
-        <text x="0" y="312">0</text>
-        <text x="0" y="192">2</text>
-        <text x="300" y="393" font-size="24">x</text>
-        <text x="4" y="107" font-size="24">y</text>
-      </g>
-      <text x="180" y="231" font-size="30" fill="#245c99">U</text>
-      <text x="150" y="447" font-size="21" fill="#245c99">Continues ↑ and →</text>
-    </g>
-    <g transform="translate(355 0)">
-      <text x="145" y="90" font-size="24" fill="#0f766e">D: x ≤ 2, y ≤ 2</text>
-      <rect x="30" y="125" width="240" height="240" fill="#f8fafc"/>
-      <rect x="30" y="185" width="180" height="180" fill="#d5eee9"/>
-      <path d="M 30 185 H 210 V 365" fill="none" stroke="#0f766e" stroke-width="2.5"/>
-      <rect x="30" y="125" width="240" height="240" fill="none" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="5 5"/>
-      <g fill="none" stroke="#64748b" stroke-width="1.8" marker-end="url(#axis-arrow)">
-        <path d="M 15 385 H 285"/>
-        <path d="M 15 385 V 112"/>
-      </g>
-      <g fill="none" stroke="#64748b" stroke-width="1.5">
-        <path d="M 90 381 V 390 M 210 381 V 390"/>
-        <path d="M 10 305 H 20 M 10 185 H 20"/>
-      </g>
-      <g font-size="20" fill="#475569">
-        <text x="90" y="412">0</text>
-        <text x="210" y="412">2</text>
-        <text x="0" y="312">0</text>
-        <text x="0" y="192">2</text>
-        <text x="300" y="393" font-size="24">x</text>
-        <text x="4" y="107" font-size="24">y</text>
-      </g>
-      <text x="120" y="291" font-size="30" fill="#0f766e">D</text>
-      <text x="150" y="447" font-size="21" fill="#0f766e">Continues ← and ↓</text>
-    </g>
-    <g transform="translate(685 0)">
-      <text x="145" y="90" font-size="24">U ∩ D = [0, 2]²</text>
-      <rect x="30" y="125" width="240" height="240" fill="#f8fafc"/>
-      <rect x="90" y="185" width="120" height="120" fill="#b7d6dd" stroke="#245c99" stroke-width="2.5"/>
-      <rect x="30" y="125" width="240" height="240" fill="none" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="5 5"/>
-      <g fill="none" stroke="#64748b" stroke-width="1.8" marker-end="url(#axis-arrow)">
-        <path d="M 15 385 H 285"/>
-        <path d="M 15 385 V 112"/>
-      </g>
-      <g fill="none" stroke="#64748b" stroke-width="1.5">
-        <path d="M 90 381 V 390 M 210 381 V 390"/>
-        <path d="M 10 305 H 20 M 10 185 H 20"/>
-      </g>
-      <g font-size="20" fill="#475569">
-        <text x="90" y="412">0</text>
-        <text x="210" y="412">2</text>
-        <text x="0" y="312">0</text>
-        <text x="0" y="192">2</text>
-        <text x="300" y="393" font-size="24">x</text>
-        <text x="4" y="107" font-size="24">y</text>
-      </g>
-      <text x="150" y="256" font-size="27">U ∩ D</text>
-      <text x="150" y="447" font-size="21">All four edges included</text>
-    </g>
-    <text x="500" y="485" font-size="20" fill="#475569">Dashed frames crop the drawings. Solid colored boundaries are included.</text>
-  </g>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="500" height="1420" viewBox="0 0 500 1420" role="img" aria-labelledby="title description">
+<title id="title">An upset and a downset meet in a closed square</title>
+<desc id="description">Three stacked authored schematics use the same coordinate scale. The upset U includes x and y at least zero and continues upward and rightward. The downset D includes x and y at most two and continues downward and leftward. Their intersection is the closed square from zero to two. Solid colored boundaries are included. Dashed frames crop unbounded regions.</desc>
+<!-- Authored schematic; regenerate with docs/build_scripts/render_foundation_details.py. -->
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M 1 1 L 9 5 L 1 9" fill="none" stroke="#0f766e" stroke-width="1.5"/></marker></defs>
+<rect width="500" height="1420" fill="white"/>
+<g font-family="DejaVu Sans, sans-serif" fill="#172b42" text-anchor="middle">
+<text x="250" y="36" font-size="25" fill="#172b42" text-anchor="middle">A square from two regions</text>
+<text x="250" y="81" font-size="25" fill="#245c99" text-anchor="middle">U: x ≥ 0, y ≥ 0</text>
+<rect x="110" y="112" width="280" height="280" fill="#f8fafc" stroke="none" stroke-width="2" rx="0" stroke-dasharray=""/>
+<rect x="180" y="112" width="210" height="210" fill="#dbeafe" stroke="none" stroke-width="2" rx="0" stroke-dasharray=""/>
+<path d="M 180 112 L 180 322" fill="none" stroke="#245c99" stroke-width="3" stroke-dasharray=""/>
+<path d="M 180 322 L 390 322" fill="none" stroke="#245c99" stroke-width="3" stroke-dasharray=""/>
+<text x="280" y="227" font-size="31" fill="#245c99" text-anchor="middle">U</text>
+<rect x="110" y="112" width="280" height="280" fill="none" stroke="#94a3b8" stroke-width="1.5" rx="0" stroke-dasharray="5 5"/>
+<path d="M 90 410 L 420 410" fill="none" stroke="#0f766e" stroke-width="2.5" stroke-dasharray="" marker-end="url(#arrow)"/>
+<path d="M 90 410 L 90 100" fill="none" stroke="#0f766e" stroke-width="2.5" stroke-dasharray="" marker-end="url(#arrow)"/>
+<path d="M 180 405 L 180 415" fill="none" stroke="#475569" stroke-width="1.5" stroke-dasharray=""/>
+<path d="M 85 322 L 95 322" fill="none" stroke="#475569" stroke-width="1.5" stroke-dasharray=""/>
+<text x="180" y="442" font-size="23" fill="#172b42" text-anchor="middle">0</text>
+<text x="69" y="330" font-size="23" fill="#172b42" text-anchor="middle">0</text>
+<path d="M 320 405 L 320 415" fill="none" stroke="#475569" stroke-width="1.5" stroke-dasharray=""/>
+<path d="M 85 182 L 95 182" fill="none" stroke="#475569" stroke-width="1.5" stroke-dasharray=""/>
+<text x="320" y="442" font-size="23" fill="#172b42" text-anchor="middle">2</text>
+<text x="69" y="190" font-size="23" fill="#172b42" text-anchor="middle">2</text>
+<text x="439" y="418" font-size="24" fill="#172b42" text-anchor="middle">x</text>
+<text x="90" y="87" font-size="24" fill="#172b42" text-anchor="middle">y</text>
+<text x="250" y="485" font-size="22" fill="#245c99" text-anchor="middle">Continues upward and rightward</text>
+<text x="250" y="531" font-size="25" fill="#0f766e" text-anchor="middle">D: x ≤ 2, y ≤ 2</text>
+<rect x="110" y="562" width="280" height="280" fill="#f8fafc" stroke="none" stroke-width="2" rx="0" stroke-dasharray=""/>
+<rect x="110" y="632" width="210" height="210" fill="#d5eee9" stroke="none" stroke-width="2" rx="0" stroke-dasharray=""/>
+<path d="M 110 632 L 320 632" fill="none" stroke="#0f766e" stroke-width="3" stroke-dasharray=""/>
+<path d="M 320 632 L 320 842" fill="none" stroke="#0f766e" stroke-width="3" stroke-dasharray=""/>
+<text x="210" y="747" font-size="31" fill="#0f766e" text-anchor="middle">D</text>
+<rect x="110" y="562" width="280" height="280" fill="none" stroke="#94a3b8" stroke-width="1.5" rx="0" stroke-dasharray="5 5"/>
+<path d="M 90 860 L 420 860" fill="none" stroke="#0f766e" stroke-width="2.5" stroke-dasharray="" marker-end="url(#arrow)"/>
+<path d="M 90 860 L 90 550" fill="none" stroke="#0f766e" stroke-width="2.5" stroke-dasharray="" marker-end="url(#arrow)"/>
+<path d="M 180 855 L 180 865" fill="none" stroke="#475569" stroke-width="1.5" stroke-dasharray=""/>
+<path d="M 85 772 L 95 772" fill="none" stroke="#475569" stroke-width="1.5" stroke-dasharray=""/>
+<text x="180" y="892" font-size="23" fill="#172b42" text-anchor="middle">0</text>
+<text x="69" y="780" font-size="23" fill="#172b42" text-anchor="middle">0</text>
+<path d="M 320 855 L 320 865" fill="none" stroke="#475569" stroke-width="1.5" stroke-dasharray=""/>
+<path d="M 85 632 L 95 632" fill="none" stroke="#475569" stroke-width="1.5" stroke-dasharray=""/>
+<text x="320" y="892" font-size="23" fill="#172b42" text-anchor="middle">2</text>
+<text x="69" y="640" font-size="23" fill="#172b42" text-anchor="middle">2</text>
+<text x="439" y="868" font-size="24" fill="#172b42" text-anchor="middle">x</text>
+<text x="90" y="537" font-size="24" fill="#172b42" text-anchor="middle">y</text>
+<text x="250" y="935" font-size="22" fill="#0f766e" text-anchor="middle">Continues downward and leftward</text>
+<text x="250" y="981" font-size="25" fill="#172b42" text-anchor="middle">U ∩ D = [0, 2]²</text>
+<rect x="110" y="1012" width="280" height="280" fill="#f8fafc" stroke="none" stroke-width="2" rx="0" stroke-dasharray=""/>
+<rect x="180" y="1082" width="140" height="140" fill="#b7d6dd" stroke="#245c99" stroke-width="3" rx="0" stroke-dasharray=""/>
+<text x="250" y="1162" font-size="28" fill="#172b42" text-anchor="middle">U ∩ D</text>
+<rect x="110" y="1012" width="280" height="280" fill="none" stroke="#94a3b8" stroke-width="1.5" rx="0" stroke-dasharray="5 5"/>
+<path d="M 90 1310 L 420 1310" fill="none" stroke="#0f766e" stroke-width="2.5" stroke-dasharray="" marker-end="url(#arrow)"/>
+<path d="M 90 1310 L 90 1000" fill="none" stroke="#0f766e" stroke-width="2.5" stroke-dasharray="" marker-end="url(#arrow)"/>
+<path d="M 180 1305 L 180 1315" fill="none" stroke="#475569" stroke-width="1.5" stroke-dasharray=""/>
+<path d="M 85 1222 L 95 1222" fill="none" stroke="#475569" stroke-width="1.5" stroke-dasharray=""/>
+<text x="180" y="1342" font-size="23" fill="#172b42" text-anchor="middle">0</text>
+<text x="69" y="1230" font-size="23" fill="#172b42" text-anchor="middle">0</text>
+<path d="M 320 1305 L 320 1315" fill="none" stroke="#475569" stroke-width="1.5" stroke-dasharray=""/>
+<path d="M 85 1082 L 95 1082" fill="none" stroke="#475569" stroke-width="1.5" stroke-dasharray=""/>
+<text x="320" y="1342" font-size="23" fill="#172b42" text-anchor="middle">2</text>
+<text x="69" y="1090" font-size="23" fill="#172b42" text-anchor="middle">2</text>
+<text x="439" y="1318" font-size="24" fill="#172b42" text-anchor="middle">x</text>
+<text x="90" y="987" font-size="24" fill="#172b42" text-anchor="middle">y</text>
+<text x="250" y="1385" font-size="22" fill="#172b42" text-anchor="middle">All four edges and corners are included</text>
+</g></svg>

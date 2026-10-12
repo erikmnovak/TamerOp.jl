@@ -1,31 +1,31 @@
 # TamerOp
 
-**Toolkit for Algebraic Module Encodings over $\mathbb{R}^n$ and Other Posets.**
+Toolkit for Algebraic Module Encodings over $\mathbb{R}^n$ and Other Posets.
 
 [Documentation](https://tamerop.com/) ·
 [Installation](https://tamerop.com/start/install.html) ·
 [Learning map](https://tamerop.com/reading_map.html) ·
 [Browse topics](https://tamerop.com/topic_map.html)
 
-TamerOp is a Julia library built around the **finite encoding**. A persistence
-module describes information at different parameter values and the linear
-maps that relate those values. A finite encoding represents such a module
-using a finite collection of vector spaces and maps, together with an
-assignment from the original parameters to that finite model.
+TamerOp is a Julia library for working with persistence modules. Such a module
+records a vector space at each parameter and linear maps that follow its
+vectors as parameters change. A **finite encoding** represents the module
+using spaces and maps on a finite partially ordered set of labels, or poset,
+together with an assignment from the original parameters to those labels.
+The order records which labels can be compared. We can then recover a space
+or map at the parameters we want to study.
 
 The project began as an implementation of Ezra Miller's
 [Homological algebra of modules over posets](https://arxiv.org/abs/2008.00063).
-That theory remains its mathematical foundation. The name also recalls
-*tameness*, the finiteness condition that makes these descriptions possible.
+That theory explains when such a finite description exists through a condition
+called *tameness*, which the library's name recalls.
 
-Once the encoded object has been constructed, we can keep working with it:
-compare modules, study their algebra, choose numerical summaries, and produce
-figures. Supported starting points include point clouds, images, graphs, and
-mathematical presentations that describe a module directly.
+Keeping this encoded object available lets us compare modules, study their
+algebra, choose numerical summaries and produce figures. We can begin with
+points, images or graphs that determine a growing family of shapes, called a
+filtration, or give an algebraic description of a module directly. The aim is
+to let these different starting points lead into the same mathematical work.
 
-Our ambition is an all-in-one environment for multiparameter persistence:
-from constructing a filtration to algebra, invariants, numerical features and
-visualization, with a shared mathematical object connecting those stages.
 We assess performance against specialized tools through
 [benchmark reports](https://tamerop.com/benchmarks/index.html) with matched
 outputs, timings, memory measurements and downloadable evidence. The reports
@@ -33,7 +33,7 @@ state what each comparison establishes and where its conclusions stop.
 
 Start with [a hole that appears and disappears](https://tamerop.com/tutorials/ring.html),
 or begin with [persistence modules](https://tamerop.com/persistence_modules.html).
-Both lead toward the finite-encoding story. If you already have an object,
+Both develop the idea of a finite encoding. If you already have an object,
 [explore its spaces and maps](https://tamerop.com/guides/spaces_and_maps.html).
 The lessons include saved figures you can read without installing Julia.
 
@@ -44,17 +44,17 @@ The lessons include saved figures you can read without installing Julia.
 | [Mathematics](https://tamerop.com/collections/mathematics.html) | Understand the objects, constructions and what results mean. |
 | [Using TamerOp](https://tamerop.com/collections/using.html) | Explore capabilities, compare choices and combine operations. |
 | [Task recipes](https://tamerop.com/collections/recipes.html) | Follow a focused procedure to a defined result. |
-| [API reference](https://tamerop.com/collections/api.html) | Find precise calling conventions and mathematical contracts. |
+| [API reference](https://tamerop.com/collections/api.html) | Find the inputs, outputs and mathematical guarantees of an operation. |
 | [Implementation accounts](https://tamerop.com/implementation/index.html) | Follow how a computation works and why it is organized that way. |
 | [Benchmark results](https://tamerop.com/benchmarks/index.html) | Examine measured comparisons with other software. |
 
-**Mathematics → Using TamerOp → Task recipes** moves from understanding ideas
-to exploring capabilities to completing a chosen task. These are independent
-entrances, not required steps. The [learning map](https://tamerop.com/reading_map.html)
-suggests mathematical continuations; the [topic map](https://tamerop.com/topic_map.html)
-collects related treatments across these families.
+You can enter through the mathematics, explore the library's capabilities, or
+go straight to a recipe for a task you already have in mind. The
+[learning map](https://tamerop.com/reading_map.html) suggests mathematical
+continuations; the [topic map](https://tamerop.com/topic_map.html) brings together
+related treatments of a subject.
 
-**Requirements:** Julia **1.12 or a compatible later 1.x version** and an internet
+You need Julia 1.12 or a compatible later 1.x version and an internet
 connection for the initial installation. Julia 1.12 is the version currently
 used by the package's tests. You do not need to clone this repository or install
 its mathematical dependencies individually.
@@ -76,10 +76,13 @@ notebook features.
 
 ## Mathematical background
 
-Why build a library around finite encodings? In ordinary persistence, we follow
-a shape as one parameter changes. For familiar finite filtrations, a barcode
-records when independent homology classes appear and disappear. It gives a
-complete description of the resulting one-parameter module.
+In ordinary persistence, we follow a shape as one parameter changes. Homology
+describes its connected components, loops around holes and higher dimensional
+counterparts using vector spaces. For a filtration of a finite complex, a
+**barcode** records when independent classes appear and disappear. Over a
+chosen coefficient field, which supplies the scalars for the vector spaces,
+these intervals describe the resulting persistence module completely,
+including its maps, up to compatible changes of basis.
 
 With two or more parameters, some parameter values cannot be compared: one
 coordinate can increase while another decreases. There is generally no
@@ -92,24 +95,26 @@ with. We construct a finite partially ordered set, or *poset*, recording which
 labels can be compared. We keep the module's vector spaces and maps on that
 poset, along with a map assigning original parameter values to finite labels.
 For a valid encoding of the represented module, these pieces recover both its
-spaces and its structure maps.
+spaces and its structure maps, the linear maps assigned to parameter comparisons.
 
 Ezra Miller's theory supplies the connection between these finite descriptions.
 Under its hypotheses, tameness can be expressed through finite encodings,
 presentations using regions called upsets and downsets, and resolutions built
-from such region-supported modules. These are related ways of describing the
-same controlled variation over a poset; see
+from modules supported on these regions. Membership in an upset persists as
+the parameter increases in the order; membership in a downset persists as it
+decreases. A presentation uses maps between such modules to specify the module
+we want, while a resolution continues the description through relations and
+relations among relations. These finite descriptions are related by the
+theorems in
 [Sections 4 and 6 of the paper](https://arxiv.org/html/2008.00063).
 TamerOp grew from making this theory computational, and its later data,
 invariant, and visualization tools continue to work around the encoded object.
 
-The expanded name describes that purpose. **Algebraic Module Encodings** are
-the objects the toolkit constructs and works with. **Over $\mathbb{R}^n$ and
-Other Posets** includes supported presentations over real parameter spaces,
-integer lattices, and finite partially ordered sets. The echo of **tame**
-identifies the theory that makes a finite description possible even when the
-parameter domain is infinite. Supported inputs and constructions have explicit
-hypotheses; the name does not promise an encoder for every abstract poset module.
+The expanded name describes that purpose: we construct and work with algebraic
+module encodings over supported real parameter spaces, integer lattices and
+finite posets. The parameter domain may be infinite even though the encoding
+is finite. Each supported input and construction has hypotheses specifying
+when that description can be obtained.
 
 The [introduction](https://tamerop.com/finite_encodings.html) shows these pieces in a small
 example. It also distinguishes preserving a represented module from earlier
@@ -164,19 +169,19 @@ Pkg.activate(workdir)
 Pkg.add("TamerOp")
 ```
 
-`Pkg` is Julia's built-in package manager. It resolves a compatible registered
+`Pkg` is Julia's package manager. It resolves a compatible registered
 TamerOp release through General, downloads the package and its required
 dependencies and records them in this folder's `Project.toml` and `Manifest.toml`.
 Keep those two files. You normally do not need to edit them yourself.
 
 The first installation may take several minutes while Julia downloads binary
-dependencies and **precompiles** code for later use. Plotting packages take
+dependencies and precompiles code, preparing it for later use. Plotting packages take
 additional time if you choose to install them. Let the operation finish and
 wait for the `julia>` prompt to return. Installation messages and precompilation
 progress are normal; an `ERROR:` message needs attention.
 
-You install a package once per environment. You do **not** put `Pkg.add(...)`
-at the top of every analysis script. Package storage is shared between
+Once a package is installed in an environment, scripts using that environment
+can import it without repeating `Pkg.add(...)`. Package storage is shared between
 environments, so using the same package version in another project normally
 reuses its downloaded files. See Julia's
 [environment guide](https://pkgdocs.julialang.org/v1/environments/).
@@ -197,14 +202,14 @@ import TamerOp as OP
 ```
 
 `OP` is a short name for the library in your code. Import it again in each new
-Julia session or standalone script. There is no need to import internal source
-files, change `LOAD_PATH`, or assemble a long setup block.
+Julia session or standalone script; this loads the package and makes its
+operations available through that name.
 
 ## Your first computation
 
 Start with a small one-parameter computation whose answer we can see by hand.
 This direct barcode routine introduces births and deaths; the
-[finite-encoding introduction](https://tamerop.com/finite_encodings.html) then explains how we
+[introduction to finite encodings](https://tamerop.com/finite_encodings.html) then explains how we
 retain the module when moving to several parameters.
 
 The [ring lesson](https://tamerop.com/tutorials/ring.html) develops this example
@@ -235,11 +240,14 @@ The expected answer is:
 Each matrix entry gives the appearance value of a square. At parameter `0`,
 the eight outer squares form a ring. At parameter `5`, the central square
 fills its hole. The interval `[0,5)` records that one-dimensional homology class.
-Here `dim=1` asks about holes; `dim=0` asks about connected components. Ordinary
-persistence defaults to the two-element field, F₂. Prime fields such as
+Here `dim=1` asks about loop classes around holes; `dim=0` asks about connected
+components. Ordinary persistence defaults to the field F₂, whose coefficients
+are zero and one and whose addition is modulo two. Prime fields such as
 F₃ and F₁₀₁ are also supported; see [choosing coefficients](https://tamerop.com/ordinary_persistence.html#choosing-coefficients).
-For computations that need more than endpoints, opt in to
-[cycles or scale-specific cocycles](https://tamerop.com/ordinary_persistence.html#measuring-a-hole-with-a-cocycle).
+To examine a class geometrically, retain a cycle representing it. A cocycle
+instead evaluates classes at a chosen scale; see
+[cycles and cocycles](https://tamerop.com/ordinary_persistence.html#measuring-a-hole-with-a-cocycle)
+for these additional outputs.
 
 There is also one connected component that never dies:
 
@@ -272,8 +280,8 @@ From the Julia session where you activated that folder and used `cd(workdir)`:
 include("first_analysis.jl")
 ```
 
-This `include` runs **your own script**; it is not how TamerOp itself is loaded.
-Alternatively, open a **terminal** in `tamerop-work` and run:
+The call to `include` runs your saved script in the current Julia session.
+You can also open a terminal in `tamerop-work` and run it in a new session:
 
 ```sh
 julia --project=. first_analysis.jl
@@ -384,11 +392,11 @@ For function help, type `?` at an empty Julia prompt, then `OP.encode`, or use:
 
 Start multiparameter workflows with `OP.encode`, then inspect the encoded
 object before choosing an invariant or algebraic operation. The
-[finite-encoding introduction](https://tamerop.com/finite_encodings.html) explains what that
+[introduction to finite encodings](https://tamerop.com/finite_encodings.html) explains what that
 object contains. The [ingestion options guide](https://tamerop.com/guides/ingestion_options.html)
 explains coefficient fields, grids and output stages; the
 [multicover guide](https://tamerop.com/guides/multicover.html) follows a point cloud through a
-radius-and-coverage construction.
+construction indexed by radius and coverage.
 
 ## Update or reproduce your environment
 
@@ -449,8 +457,8 @@ or data before posting.
 
 ## Advanced users and performance settings
 
-The concise import does not remove advanced functionality. The curated advanced
-surface is `OP.Advanced`; subsystem modules remain available for specialist use:
+The library also provides detailed constructors and operations through
+`OP.Advanced`. Individual subsystem modules remain available for specialist use:
 
 ```julia
 import TamerOp as OP
@@ -461,7 +469,7 @@ import TamerOp.DerivedFunctors as DF
 @doc DF.Ext
 ```
 
-Use the public task-oriented functions for ordinary analysis. Import modules or
+Use the public functions for ordinary analysis. Import modules or
 named functions rather than individual implementation files. The library's
 internal underscore-prefixed helpers are not a user API.
 
@@ -481,27 +489,32 @@ This runs benchmarks and can take time; it is not an installation step. For
 explicit persistence, the same function accepts a writable `path` with
 `save=true`. The canonical developer profile remains `linalg_thresholds.toml`
 at the repository root. Saving to another path does not automatically select
-that file on a future import; normal users can simply use the defaults.
+that file on a future import. The defaults are sufficient when you do not need a
+machine-specific profile.
 
 The [benchmark results](https://tamerop.com/benchmarks/index.html) report comparisons by
 mathematical task, with machine specifications, timing boundaries, figures,
-and downloadable data. The first report covers a fixed 220-request QPA suite:
-TamerOp was faster on all 200 requests completed correctly by both tools,
-with a weighted geometric mean of **135.70×** for compiled, uncached native
-construction plus query. The remaining 20 QPA tensor-evaluation failures
-have no speed ratio. See the [QPA report](https://tamerop.com/benchmarks/qpa.html) for the
-tested development snapshot, memory costs, and scope.
+and downloadable data. In the fixed QPA suite, the weighted geometric mean
+of QPA time divided by TamerOp time was 135.70 for native construction plus
+query, with compilation completed and previous mathematical answers discarded.
+This comparison uses the 200 requests for which both tools returned verified
+answers. QPA failed during tensor evaluation on the other 20 requests, so those
+have no speed ratio. The [QPA report](https://tamerop.com/benchmarks/qpa.html)
+explains the requested answers, checks, development snapshot and memory costs.
 
 The [PHAT report](https://tamerop.com/benchmarks/phat.html) compares complete ordinary F₂
-barcodes on 48 medium/large inputs across sixteen structural variants.
-TamerOp **1.33× as fast in the balanced aggregate** for construction plus complete barcode; all 48 medium/large requests completed correctly in both tools. The report includes variant-by-variant scaling curves and the
-machine, verification and measurement details.
+barcodes on 48 medium and large inputs across sixteen structural variants.
+TamerOp was 1.33 times as fast in the balanced aggregate for construction plus
+the complete barcode. Both tools returned verified answers for those inputs;
+the report explains the checks and shows scaling curves for each variant,
+with machine and measurement details.
 
 The [Ripser.py report](https://tamerop.com/benchmarks/ripser.html) covers Rips
 barcodes, retained cocycles and landmark workflows across 37 requests. The
-1,024-point circle takes **7.01 seconds versus 30.4 seconds**; larger planar
-computations also favor TamerOp, while small-landmark and small-control results
-are mixed. The report separates development from reserved evaluation cases and
+1,024-point circle takes 7.01 seconds with TamerOp and 30.4 seconds with
+Ripser.py. Larger planar computations also favor TamerOp, while requests
+with few landmarks and small control cases give mixed results. The report
+separates development from reserved evaluation cases and
 includes all timings, paired-pass ranges and verification details.
 
 For measuring or improving performance, use the [benchmarking manual](https://tamerop.com/contributing/benchmarking.html).
@@ -515,23 +528,30 @@ adapters are optional packages activated by explicit imports, for example
 `using TamerOp, CairoMakie` after installing CairoMakie in your environment.
 See [optional integrations](https://tamerop.com/guides/optional_integrations.html) for installation,
 backend selection and export instructions, and
-[ordinary persistence](https://tamerop.com/ordinary_persistence.html) for prime-field barcodes with exact stored endpoints,
+[ordinary persistence](https://tamerop.com/ordinary_persistence.html) for barcodes over prime fields with exact stored endpoints,
 sublevel/superlevel intervals and periodic cubical examples.
 
 ## Mathematical scope and provenance
 
-The finite encoding gives us a module on which we can perform algebra.
-The choice of finite poset remains part of that computation: `hom`, `ext`,
-resolutions and Yoneda products use modules on the reported finite poset.
-This setting is called its *representation category*. The `tor` operation
-uses the associated incidence algebra, which records the order relations.
-Different encodings of the same ambient module can have different
-finite-category Ext/Tor groups. Resolution independence does not establish
-encoding independence; see the [category and comparison guide](https://tamerop.com/math_categories.html)
-for precise hypotheses, explicit comparison maps and a counterexample.
+The finite encoding gives us a module on which we can perform algebra, with
+the finite poset remaining part of the calculation. The modules on that poset
+and the compatible maps between them form its *representation category*.
+Here `hom` computes the space of compatible maps. The operations `ext` and
+`tor` use resolutions to measure how Hom and the tensor product fail to
+preserve exact sequences. Yoneda products compose the extension classes
+represented by Ext. These computations take place in the reported finite
+category; `tor` uses its incidence algebra, whose multiplication records
+composition of order relations.
 
-The [exact matching guide](https://tamerop.com/guides/exact_matching.html) states the finite-window
-contract and explains why geometric cells and barcode-cost switches suffice.
+Different encodings of the same module on the original parameter domain can
+give different Ext and Tor groups on their finite posets. Changing a resolution
+within one category and changing the category require separate arguments.
+The [category and comparison guide](https://tamerop.com/math_categories.html)
+develops these definitions, the hypotheses for comparison and a counterexample.
+
+The [exact matching guide](https://tamerop.com/guides/exact_matching.html) states
+the hypotheses and finite parameter window for its distance calculation,
+then explains the geometric cells and changes in matching cost that it examines.
 The [numerical algebra guide](https://tamerop.com/guides/numerical_algebra.html) explains `RealField`
 rank decisions, solve residuals and the limits of near-singular computations.
 
@@ -540,12 +560,14 @@ conventions were retained. Use `provenance(result)` or
 `describe(result).provenance` to inspect the actual coefficient field, finite
 poset, degree convention and recorded construction. Ingestion
 results also report their window, orientation, executed backends, grade
-arithmetic, sparsification and whether a chosen grid floor-snapped births. This
-inspection does not materialize a lazy module. Information not retained by a
-raw object is explicitly marked as unknown.
+arithmetic and sparsification, meaning a deliberate reduction of the retained
+edges or cells. They also record whether a grid assigned each birth to the
+preceding threshold. Inspecting this information leaves deferred calculations
+uncomputed; information absent from the stored object is marked as unknown.
 
-Inspection preserves lazy computation. `show(result)` and `describe(result)`
-report stored information; an uncomputed dimension is shown as `not computed`.
+An object is called *lazy* when it keeps enough data to carry out a calculation
+later, when requested. `show(result)` and `describe(result)` report what is
+already stored; an uncomputed dimension is shown as `not computed`.
 For an ingestion encoding, `dimensions(result)` computes and stores only the
 dimension vector for reuse, while `encoding_module(result)` explicitly
 constructs the module and its structure maps. This distinction matters:
@@ -599,7 +621,7 @@ Source coordinates must admit exact rational conversion (integers, rationals
 or finite floating-point values); irrational algebraic input coordinates are
 not supported.
 Distinct critical grades survive encoding, queries and JSON round trips, even
-when their floating displays coincide. See the [exact-grade guide](https://tamerop.com/guides/exact_grades.html)
+when their floating displays coincide. See the [guide to exact grades](https://tamerop.com/guides/exact_grades.html)
 for radius semantics, oriented axes and sliced computations. Native backends
 require distinct sites in general position; `backend=:subdivision_cech`
 supports degenerate and repeated sites with an explicit construction budget.
@@ -683,9 +705,9 @@ julia --project=. test/runtests.jl --file=test_data_pipeline.jl --prefix=A14
 The runner also supports field selection, required extensions and threaded runs.
 
 See [option contracts](https://tamerop.com/reference/option_contracts.html) and
-[ingestion options](https://tamerop.com/guides/ingestion_options.html) for representation, coefficient-field,
+[ingestion options](https://tamerop.com/guides/ingestion_options.html) for representation, coefficient field,
 stage and validation choices.
 
 Documentation contributions follow the [writing guide](https://tamerop.com/contributing/writing.html).
-It explains the shared finite-encoding narrative, how to introduce unfamiliar
+It explains the shared narrative about finite encodings, how to introduce unfamiliar
 terms, and how to check that an explanation helps its intended reader.

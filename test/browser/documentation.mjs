@@ -81,10 +81,12 @@ try {
 
   // The directory entrance and every nested Introduction link share one page.
   await page.goto(base);
+  await page.locator('article .katex').first().waitFor();
   const introduction = await page.locator('#documenter-page').innerText();
   await page.goto(base + 'guides/spaces_and_maps.html');
   await page.locator('.site-entry-links a').filter({ hasText: /^Introduction$/ }).click();
   assert.equal(page.url(), base + 'index.html');
+  await page.locator('article .katex').first().waitFor();
   assert.equal(await page.locator('#documenter-page').innerText(), introduction);
   assert.equal(await page.locator('.home-opening').count(), 1);
 

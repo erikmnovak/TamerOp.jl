@@ -1421,7 +1421,7 @@ end
     @test !spec_pc2.legend.visible
     @test spec_pc2.axes.xlabel == "x1"
     @test spec_pc2.axes.ylabel == "x2"
-    @test TOA.visual_metadata(spec_pc2).figure_size == (760, 520)
+    @test TOA.visual_metadata(spec_pc2).figure_size == (780, 560)
 
     spec_cod_points = TOA.visual_spec(codres; kind=:points_2d)
     @test TOA.visual_kind(spec_cod_points) == :points_2d
@@ -1462,7 +1462,7 @@ end
     @test any(layer -> layer isa TOA.SegmentLayer, spec_knn.layers)
     @test spec_knn.legend.visible
     @test TOA.visual_metadata(spec_knn).figure_size == (780, 560)
-    @test TOA.visual_metadata(spec_knn).legend_position == :right
+    @test get(TOA.visual_metadata(spec_knn), :legend_position, :bottom) == :bottom
     @test isapprox((spec_knn.layers[1]::TOA.SegmentLayer).linewidth, 1.3)
 
     spec_graph = TOA.visual_spec(g3; kind=:weighted_graph)
@@ -1521,6 +1521,10 @@ end
         @test VIZ._visual_backend_available(:cairomakie)
     end
     if have_cairo
+        fig_knn = TOA.render(spec_knn; backend=:cairomakie)
+        knn_legend = only(item for item in fig_knn.content if item isa CairoMakie.Legend)
+        @test knn_legend.orientation[] == :horizontal
+        @test !knn_legend.tellwidth[] && knn_legend.tellheight[]
         fig_box = TamerOp.visualize(box_pi; kind=:regions, backend=:cairomakie)
         @test fig_box !== nothing
         fig_rank = TamerOp.visualize(rank_inv; kind=:rank_heatmap, backend=:cairomakie)

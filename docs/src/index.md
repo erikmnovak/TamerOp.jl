@@ -12,12 +12,11 @@ and Other Posets, a Julia library for studying how mathematical objects change
 with one or more parameters.
 
 A persistence module records a vector space at each parameter and linear maps
-that follow its vectors as the parameters change. We work with a **finite
-encoding**: spaces and maps on a finite set of labels, together with an
-assignment from the original parameters to those labels. The labels form a
-partially ordered set, or **poset**, which records which ones can be compared.
-This finite description lets us recover spaces and maps at the original
-parameters and use them in further calculations.
+that follow its vectors as the parameters change. We describe it through a
+**finite encoding**: spaces and maps on finitely many labels, together with an
+assignment from parameters to labels. These labels form a partially ordered
+set, or **poset**, recording which ones can be compared. The finite description
+lets us recover the original spaces and maps.
 
 ```@raw html
 </header>

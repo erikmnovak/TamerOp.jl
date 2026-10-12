@@ -2830,7 +2830,10 @@ end
 
 @testset "A116 novice tutorial executes from public API" begin
     include(joinpath(@__DIR__,"..","docs","build_scripts","check_ordinary_analysis.jl"))
-    @test OrdinaryAnalysisNotebook.check() == 15
+    notebook = JSON3.read(read(OrdinaryAnalysisNotebook.NOTEBOOK, String), Dict{String,Any})
+    expected_cells = count(cell -> cell["cell_type"] == "code", notebook["cells"])
+    @test expected_cells > 0
+    @test OrdinaryAnalysisNotebook.check() == expected_cells
 end
 
 

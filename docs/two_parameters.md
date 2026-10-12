@@ -1,73 +1,87 @@
 # Why two parameters change the problem
 
-In the [ring lesson](tutorials/ring.ipynb), one number controlled which
-squares were present. The interval $[0,5)$ told us when the hole appeared
-and when it filled in. What changes when two independently varying
-measurements determine which squares enter?
+In the [ring lesson](tutorials/ring.ipynb), we could watch the shape grow by
+increasing a single number. Its hole appeared at zero and filled in at five,
+giving the interval $[0,5)$. Suppose now that we want to choose squares using
+two measurements, each with its own threshold. We can still follow what
+happens as the shape grows, though we first need to understand which changes
+of threshold make it grow.
 
-This short bridge needs only the ring example and familiarity with vectors
-and linear maps. By the end, you should be able to decide which parameter
-pairs can be compared and explain why we need maps as well as counts. No
-Julia session is needed. The [persistence-modules chapter](persistence_modules.md)
-develops the definitions and arguments in more detail.
+The ring example, together with some familiarity with vectors and linear
+maps, gives us enough to work this out on paper. Along the way we will see
+why counting holes leaves part of the story unresolved, and how linear maps
+keep the information we need. The [chapter on persistence modules](persistence_modules.md)
+develops the definitions and arguments further; no Julia session is needed here.
 
 ## From one threshold to two
 
-Imagine giving each square two values, $f$ and $g$. At the parameter pair
-$(a,b)$, include a square when **both** $f\leq a$ and $g\leq b$, together
-with its edges and vertices. Write $X_{(a,b)}$ for the resulting shape.
-Increasing either threshold can add squares but cannot remove them. Thus
+Give each square two values, $f$ and $g$, and choose thresholds $a$ and $b$.
+Include a square when both $f\leq a$ and $g\leq b$, together with its edges
+and vertices, and write $X_{(a,b)}$ for the resulting shape. If we increase
+either threshold while holding the other fixed, every square already
+included still meets both conditions. The shape can therefore gain squares
+without losing any. This suggests the comparison
 
 $$
 (a,b)\leq(a',b')\quad\text{means}\quad a\leq a'\text{ and }b\leq b',
 $$
 
-and this comparison guarantees $X_{(a,b)}\subseteq X_{(a',b')}$.
-This is **coordinatewise order**. We have described a possible construction;
-the ring computation supplied only one measurement, so it has not already
-computed this two-parameter family.
+called **coordinatewise order**: we compare each threshold with its
+counterpart, requiring neither to decrease. It guarantees the inclusion
+$X_{(a,b)}\subseteq X_{(a',b')}$. We are imagining a second measurement here;
+the earlier ring computation supplied only one, so constructing this new
+family would require choosing that additional measurement.
 
-The directions matter. If a measurement instead retains cells *above* a
-threshold, raising that threshold removes cells. Reverse that coordinate's
-order, or negate the threshold, before using the increasing-coordinate
-convention here.
+The direction of each comparison comes from the rule for including squares.
+If a measurement retains cells above a threshold, raising that threshold
+removes cells. In that case we reverse the order on that coordinate, or
+negate the threshold, so that increasing the coordinates used here continues
+to mean enlarging the shape.
 
 ## Which choices can we compare?
 
-Consider these four parameter pairs. They are thresholds selecting shapes,
-not positions of squares inside a shape.
+We can see what this order allows by choosing four pairs of thresholds.
+Each point in the picture selects an entire shape through its two threshold
+values; the axes describe these choices rather than locations within the shape.
 
 ![Four sampled parameters: p=(1/4,1/4), q=(1/4,3/2), r=(3/2,1/4), and s=(3/2,3/2). Arrows run from p to q and r, and from q and r to s. No order relation connects q and r.](assets/persistence_modules/coordinatewise_order.svg)
 
-*Moving right or up increases a threshold. The arrows show comparisons
-among four sampled parameters; $p\leq s$ also holds through either route.
-This schematic is a sample of the parameter plane, not a finite encoding.*
+*Moving right or up increases a threshold, so the shape selected at the tail
+of an arrow is contained in the one at its head. We also have $p\leq s$
+through either route. These four sample points illustrate the order on the
+parameter plane; they do not yet give a finite encoding.*
 
-**Before reading on:** can we continue from $p$ to $q$? From $r$ to $s$?
-What about from $q=(1/4,3/2)$ to $r=(3/2,1/4)$?
+For example, moving from $p$ to $q$ raises the second threshold and keeps
+the first fixed, so $p\leq q$. The same reasoning gives $r\leq s$. Moving
+from $q=(1/4,3/2)$ to $r=(3/2,1/4)$ is different: the first threshold
+increases while the second decreases. Neither $q\leq r$ nor $r\leq q$
+holds, and we call the pair **incomparable**. A partially ordered set, or
+**poset**, records comparisons of this kind while allowing some pairs to
+be incomparable. Sorting the four points into a list would not supply the
+comparisons needed for a prescribed sequence of inclusions.
 
-The first two comparisons hold: neither coordinate decreases. In the last
-pair, one coordinate increases while the other decreases. Neither $q\leq r$
-nor $r\leq q$ holds. Such a pair is **incomparable**. A partially ordered
-set, or **poset**, records comparisons while allowing incomparable pairs.
-Sorting these points into a list would not turn that list into a sequence
-of prescribed inclusions.
+## How classes continue between parameters
 
-## Follow classes, not just their number
+To follow the holes, fix a coefficient field $\mathbb{k}$, which supplies
+the scalars for our vector spaces and linear maps. The ring lesson used
+$\mathbb{F}_2$, the field with two elements. At a parameter $u$, write
+$M(u)$ for the vector space of hole classes. A class records a linear
+combination of loops, with combinations identified when their difference
+bounds a combination of filled cells. For comparable parameters $u\leq v$,
+the inclusion of shapes induces a linear map $M(u)\to M(v)$. This
+**structure map** tells us what
+becomes of each class in the larger shape. A loop may bound a filled region
+there, sending its class to zero even though it was nonzero in the earlier
+shape. The map can therefore send distinct classes to the same class.
 
-Fix one coefficient field, as we used F₂ in the ring lesson. At each
-parameter $q$, let $M(q)$ be the vector space of hole classes. For a
-comparison $q\leq r$, the inclusion of shapes induces a linear map
-$M(q)\to M(r)$ telling us what becomes of those classes. This is a
-**structure map**. An inclusion can fill a hole, so its map on hole classes
-need not be injective.
+This helps explain why a zero map and a missing comparison mean different
+things. A zero structure map says that every class from the earlier
+parameter becomes zero at the later one. Between the incomparable $q$ and
+$r$ in our picture, the order prescribes no structure map at all.
 
-There is no prescribed structure map between the incomparable $q$ and $r$
-above. That is different from a zero structure map, which belongs to an
-existing comparison and sends every vector to zero.
-
-Even knowing the number of independent classes at every parameter leaves
-out how they continue. On two ordered parameters $u<v$, compare
+We can isolate the information carried by a map in a small example. Take
+two ordered parameters $u<v$ and put a vector space of dimension one at
+each. There are already two possibilities:
 
 $$
 \mathbb{k}\xrightarrow{[1]}\mathbb{k}
@@ -75,40 +89,59 @@ $$
 \mathbb{k}\xrightarrow{[0]}\mathbb{k}.
 $$
 
-Here $\mathbb{k}$ denotes the chosen field, viewed as a one-dimensional
-vector space. Both examples have dimension one at each parameter. In the
-first, the earlier vector survives; in the second, every earlier vector
-maps to zero, even though the target has nonzero vectors. A dimension plot
-cannot distinguish them. This loss already occurs with one parameter;
-the ring's barcode records continuation as well as dimensions.
+Here we view the field $\mathbb{k}$ as a vector space over itself. The
+matrix $[1]$ gives the identity map, which sends each scalar to itself;
+$[0]$ gives the zero map, which sends every scalar to zero. Their
+**images**, the sets of vectors reached in the target, show the difference.
 
-The spaces and maps must also agree along different routes. Following a
-class from $p$ through $q$ to $s$ must give the same answer as following it
-through $r$ to $s$. Staying at one parameter leaves its vectors unchanged.
-Spaces with these compatible maps form a **persistence module**; a space at
-one parameter is also called a **stalk**. The
+![Two modules on u less than v, each with dimension one at both parameters. The identity map has image all of the target field k and sends 1 to 1. The zero map has image consisting only of zero and sends 1 to 0, although its target is still the field k.](assets/persistence_modules/continuation_maps.svg)
+
+*The spaces have the same dimensions in both examples. Under the identity
+map every target vector is reached from the source. Under the zero map the
+image is just zero, even though the target still contains nonzero vectors.
+The boxes denote vector spaces; this is a schematic, not a picture of the
+underlying shapes.*
+
+A dimension plot therefore gives the same answer for these two examples,
+while their maps tell us different things about continuation. We needed
+only two ordered parameters to see this, so the loss of information already
+occurs with one parameter. The ring's barcode retains the continuation
+information that the dimensions alone omit.
+
+Returning to the four points in the parameter plane, we can follow a class
+from $p$ to $s$ through either $q$ or $r$. Both routes come from the same
+inclusion of shapes, so composing their maps must give the same answer.
+Staying at one parameter leaves its vectors unchanged. A collection of
+spaces and maps satisfying these rules is a **persistence module**, and
+the space at an individual parameter is often called its **stalk**. The
 [full definition](persistence_modules.md#the-spaces-and-maps-must-fit-together)
-makes these rules precise. General two-parameter modules have no ordinary
-barcode that classifies them all; retaining the module keeps the spaces
-and their continuation maps available.
+makes the compatibility rules precise. For general modules with two
+parameters, an ordinary barcode cannot provide a complete classification.
+Keeping the spaces and their maps gives us an object we can continue to
+investigate even when that familiar description is unavailable.
 
 ## Can infinitely many spaces and maps have a finite description?
 
-Over the real parameter plane, we have infinitely many spaces and
-comparisons. A finite encoding uses finitely many labels, spaces, and maps,
-together with an assignment from original parameters to those labels, to
-recover the module. Such a description requires assumptions; it does not
-exist for every persistence module.
+There is now a practical question: how can we work with a space at every
+point of the real parameter plane, and a map for every comparison? For our
+fixed finite collection of squares, the shapes change only when a threshold
+passes one of the finitely many assigned values. Between those changes,
+the same cells and inclusions recur. This gives us a reason to look for a
+finite description that recovers both the spaces and their maps.
 
-For a filtration of our fixed finite collection of cells, that finiteness
-is supplied by the construction itself.
+A **finite encoding** supplies such a description through a finite poset
+of labels, a vector space at each label and compatible maps between
+comparable labels. An assignment of the original parameters to those labels
+must respect their order so that we can recover the maps as well as the
+spaces. Our construction from finitely many cells supplies the needed
+finiteness; an arbitrary persistence module need not admit this description.
 
-Continue with [finite encodings](finite_encodings.md). That chapter specifies
-a module supported on the closed square $[0,2]^2$ over rational coefficients
-and shows how finite data recover its spaces and maps. The square is a new,
-directly specified module whose answers we can check by hand. Both of our
-incomparable parameters lie inside it: both having a nonzero stalk still
-does not make the original parameters comparable.
+The [finite encodings chapter](finite_encodings.md) works out the recovery
+in a module supported on the closed square $[0,2]^2$ over rational
+coefficients. This is a new module specified directly, with answers we can
+check by hand. Both incomparable parameters from our picture lie inside
+its support, so it will also let us see how nonzero spaces can occur at
+parameters with no prescribed map between them.
 
 For a fuller account of the spaces and compatibility rules before continuing,
 read [persistence modules](persistence_modules.md). It leads to the same

@@ -6,10 +6,15 @@ A reader should be able to follow the argument, interpret a result, and
 choose a sensible next step.
 
 Two principles govern documentation contributions: develop a connected
-finite-encoding learning narrative, and teach in approachable language.
+finite encoding learning narrative, and teach in approachable language.
 Lessons develop that narrative; independently consulted guides, reference
 entries and reports begin with their own reader question and link the context
 needed to answer it. Every family should explain its objects and claims clearly.
+
+This guide covers article purpose, composition and the relationships between
+pages. [Make the explanation approachable](#make-the-explanation-approachable)
+gives the prose principles that apply within any of those structures. A style
+preference does not prescribe an article outline or a fixed paragraph length.
 
 The [first learning-path brief](learning_path.md) records the initial page
 sequence, reader questions, and expected mathematical answers. The
@@ -139,7 +144,7 @@ presentations visible alongside filtered points, images, graphs and complexes.
 Use algebraic and categorical operations as substantive investigations with
 their own examples. They should not appear only as advanced appendices to a
 filtration-to-invariant pipeline. The shared encoding joins these entrances;
-supported direct ordinary-persistence computations retain their honest shorter
+supported direct ordinary persistence computations retain their honest shorter
 route.
 
 ### Use boundary examples to prevent duplication
@@ -495,7 +500,7 @@ do not turn them into mandatory reader-facing sections.
 
 ## Follow the mathematical question
 
-The [finite-encoding introduction](finite_encodings.md) gives the shared
+The [finite encoding introduction](finite_encodings.md) gives the shared
 progression. Begin with what ordinary persistence can describe. Explain what
 changes with several parameters and why summaries leave questions unanswered.
 Introduce finite encoding as a way to retain the module in a finite model,
@@ -517,7 +522,7 @@ related pages where it helps readers recognize the same object.
 A reference entry can do this briefly: begin with the mathematical purpose,
 then explain its arguments, returned object, and assumptions. A utility
 description should explain its actual role. Do not imply that every direct
-ordinary-persistence call constructs an encoding.
+ordinary persistence call constructs an encoding.
 
 ## Make the explanation approachable
 
@@ -536,9 +541,38 @@ and how to interpret the answer. Distinguish Julia commands from terminal
 commands. Prefer the documented public operations and accessors so readers
 can recognize the same steps in their own work.
 
-Use short, connected paragraphs. Give a small example before a broad catalog.
-Avoid using “obvious,” “trivial,” or “simply” in place of an explanation.
+Let a paragraph follow an idea far enough for the reader to understand it.
+Vary sentence length with the reasoning, allowing room for an example or a
+qualification without breaking every thought into a short declaration. A
+warm, explanatory tone can carry precise definitions and proofs. Interest in
+the subject should come through in what we help the reader notice and work
+out. Avoid using “obvious,” “trivial,” or “simply” in place of an explanation.
 Advanced mathematics deserves the same care as introductory material.
+
+Use accepted mathematical terminology, defining it where it first matters.
+Keep the chosen terms consistent. Explain unfamiliar software vocabulary
+when it is necessary for a task; avoid borrowing specialist language to give
+an ordinary mathematical idea a new label. A coined term needs an exceptional
+explanatory benefit that established terms cannot supply.
+
+Use hyphens sparingly: ordinary persistence, multiparameter persistence and
+finite encoding do not need them. Preserve established names, notation and
+literal code. Avoid em dashes and emphatic formulas such as “not just X, but
+also Y.” Explain necessary mathematical distinctions directly. Remove habitual
+evaluations such as “genuine,” “unusual” or “powerful” when they add no precise
+meaning, and avoid conclusions that merely announce a result's importance.
+
+Look for opportunities to explain through diagrams throughout the argument.
+Label their objects and arrows, use the prose's notation, and give captions
+that help the reader see the relationship being discussed. Several small
+pictures can make successive steps easier to follow. Check label readability
+at narrow widths as well as on a large display, and provide alternative text.
+
+When discussing evidence, explain what was tested, how the expected answer was
+established and what the comparison supports. A large assertion count does
+not establish that the cases are demanding or that the algorithm is correct
+in general. Keep such records in the appropriate testing or benchmark account;
+a lesson needs the reasoning that makes its example understandable.
 
 ## Preserve the mathematics
 
